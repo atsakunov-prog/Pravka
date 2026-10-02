@@ -191,7 +191,16 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val shelfLayout: String = LAYOUT_GRID,
         /** Порядок книг на полке: последние, по автору, по названию, по сериям. */
         val shelfSort: String = SORT_RECENT,
+        /**
+         * Имя этого устройства в синхронизации мест: у каждого устройства свой
+         * файл мест. Пусто - модель телефона.
+         */
+        val deviceName: String = "",
     ) {
+        /** Как устройство подписывает свои места: имя из настроек или модель. */
+        val device: String
+            get() = deviceName.ifBlank { android.os.Build.MODEL.orEmpty().ifBlank { "устройство" } }
+
         /** Облако настроено: есть куда и с чем ходить. */
         val cloudReady: Boolean
             get() = cloudUrl.isNotBlank() && cloudUser.isNotBlank() && cloudPass.isNotBlank()
@@ -299,6 +308,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 streamCacheMb = p[KEY_STREAM_CACHE]?.takeIf { it in CACHE_SIZES_MB } ?: 2048,
                 shelfLayout = p[KEY_SHELF_LAYOUT]?.takeIf { it in LAYOUTS } ?: LAYOUT_GRID,
                 shelfSort = p[KEY_SHELF_SORT]?.takeIf { it in SORTS } ?: SORT_RECENT,
+                deviceName = p[KEY_DEVICE_NAME] ?: "",
             )
         }
         .stateIn(scope, SharingStarted.Eagerly, Prefs())
@@ -411,6 +421,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setStreamCacheMb(v: Int) = edit { if (v in CACHE_SIZES_MB) it[KEY_STREAM_CACHE] = v }
     suspend fun setShelfLayout(v: String) = edit { if (v in LAYOUTS) it[KEY_SHELF_LAYOUT] = v }
     suspend fun setShelfSort(v: String) = edit { if (v in SORTS) it[KEY_SHELF_SORT] = v }
+    suspend fun setDeviceName(v: String) = edit { it[KEY_DEVICE_NAME] = v.trim() }
 
     companion object {
         // Модели - в ask/Models.kt: там же имена, цены и «по умолчанию».
@@ -771,6 +782,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_STREAM_CACHE = intPreferencesKey("stream_cache_mb")
         private val KEY_SHELF_LAYOUT = stringPreferencesKey("shelf_layout")
         private val KEY_SHELF_SORT = stringPreferencesKey("shelf_sort")
+        private val KEY_DEVICE_NAME = stringPreferencesKey("device_name")
     }
 }
 

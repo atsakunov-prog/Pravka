@@ -74,8 +74,49 @@ class GuideEngine(
         )
     }
 
-    /** Заказать справочник: пакет уезжает, состояние - «готовится». */
-    suspend fun start(book: Book, text: BookText): Result<GuideState> = lock.withLock {
+    /**
+     * Чей-то заказ справочника книги: кто, с какого устройства, когда. Лежит
+     * в папке книги на сервере, пока справочник готовится, - чтобы его не
+     * заказали второй раз: ни Марианна со своего телефона, ни сервер ночью.
+     */
+    data class Claim(val by: String, val device: String, val at: Long, val batchId: String) {
+        val fresh: Boolean get() = System.currentTimeMillis() - at < CLAIM_FRESH_MS
+    }
+
+    /** Справочник уже кто-то готовит: заказывать второй - платить дважды. */
+    class ClaimedException(val claim: Claim) : Exception(
+        "Справочник уже готовит ${claim.by}" +
+            (if (claim.device.isNotBlank() && claim.device != claim.by) " (${claim.device})" else "") +
+            ": он придёт сам и ляжет в папку книги на сервере",
+    )
+
+    /** Заказ на сервере, если он свежий; null - никто не готовит. */
+    suspend fun claimOf(book: Book): Claim? = withContext(Dispatchers.IO) {
+        val raw = dir.readServer(book, CLAIM) ?: return@withContext null
+        runCatching {
+            val o = JSONObject(raw)
+            Claim(o.optString("by"), o.optString("device"), o.optLong("at"), o.optString("batch"))
+        }.getOrNull()?.takeIf { it.fresh }
+    }
+
+    /**
+     * Заказать справочник: пакет уезжает, состояние - «готовится».
+     *
+     * Сперва - не готов ли он уже: на сервере мог появиться (его сделал сервер
+     * ночью или заказал кто-то другой) - тогда он и берётся, даром. Потом - не
+     * готовит ли его кто-то сейчас: тогда заказ не уходит ([ClaimedException]),
+     * разве что [force] - «всё равно».
+     */
+    suspend fun start(book: Book, text: BookText, force: Boolean = false): Result<GuideState> = lock.withLock {
+        withContext(Dispatchers.IO) { readFromBook(book) }?.let { (ready, fit) ->
+            if (fit.fits(book, text)) return@withLock Result.success(put(book.id, ready))
+        }
+        if (!force) {
+            val mine = settings.now().let { it.profile to it.device }
+            claimOf(book)?.takeIf { (it.by to it.device) != mine }?.let {
+                return@withLock Result.failure(ClaimedException(it))
+            }
+        }
         val p = settings.now()
         val model = p.guideModel
         val chapters = chaptersOf(text)
@@ -118,6 +159,19 @@ class GuideEngine(
                 by = p.profile.ifBlank { "без имени" },
             )
             put(book.id, state)
+            // Метка «готовится» - в папку книги на сервере: другие не закажут.
+            withContext(Dispatchers.IO) {
+                dir.writeServer(
+                    book, CLAIM,
+                    JSONObject()
+                        .put("by", p.profile.ifBlank { "без имени" })
+                        .put("device", p.device)
+                        .put("at", System.currentTimeMillis())
+                        .put("batch", batch.id)
+                        .put("model", model)
+                        .toString(),
+                )
+            }
             state
         }
     }
@@ -243,8 +297,10 @@ class GuideEngine(
                 )
             }
             put(book.id, state)
-            if (state.status == GuideState.Status.READY) {
-                withContext(Dispatchers.IO) { writeToBook(book, state, text) }
+            withContext(Dispatchers.IO) {
+                if (state.status == GuideState.Status.READY) writeToBook(book, state, text)
+                // Готов или не вышел - метка «готовится» больше не нужна.
+                dir.deleteServer(book, CLAIM)
             }
             state
         }
@@ -253,7 +309,10 @@ class GuideEngine(
     fun forget(book: Book) {
         store.delete(book.id)
         _states.value = _states.value - book.id
-        forgetScope.launch { runCatching { dir.delete(book, FILE) } }
+        forgetScope.launch {
+            runCatching { dir.delete(book, FILE) }
+            runCatching { dir.deleteServer(book, CLAIM) }
+        }
     }
 
     private val forgetScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
@@ -343,6 +402,15 @@ class GuideEngine(
 
         /** Имя файла в папке книги - рядом с `слушалка-разметка.json`. */
         const val FILE = "слушалка-справочник.json"
+
+        /** Метка «справочник готовится» в папке книги на сервере: кто, когда, какой пакет. */
+        const val CLAIM = "слушалка-справочник.заказ.json"
+
+        /**
+         * Заказ свежее этого - его ждём; старше - брошен (пакет живёт сутки):
+         * можно заказывать заново.
+         */
+        const val CLAIM_FRESH_MS = 36 * 3600_000L
 
         /** Восемьсот тысяч знаков - около 320 тысяч токенов на часть. */
         private const val PART_CHARS = 800_000

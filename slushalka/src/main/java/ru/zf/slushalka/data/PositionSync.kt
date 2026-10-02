@@ -25,10 +25,32 @@ import ru.zf.slushalka.library.documentUri
  * Файлы одни и те же для двух дорог: папка библиотеки (SAF, её возит
  * сторонняя синхронизация) и облако по WebDAV ([Cloud]). Поэтому тела файлов
  * собираются и разбираются в companion, а SAF здесь - только транспорт.
+ *
+ * С 03.10 места пишутся ещё и файлом `места-<имя>@<устройство>.json` - по
+ * файлу на человека И устройство. Один файл на человека затирался: телефон и
+ * Boox Саши писали его по очереди целиком, и каждое устройство возвращало
+ * поверх свои устаревшие места других книг. Теперь у файла один писатель, а
+ * читающий сливает все файлы человека по книге и по каждому месту отдельно:
+ * место в записи - самое свежее по времени слушания, место чтения - по
+ * времени чтения. Прежний `позиции-<имя>.json` пишется дальше - для копий
+ * приложения, которые ещё не обновились, - а новые его, записанный новыми же,
+ * не читают: правда - в файлах мест.
  */
 class PositionSync(private val context: Context) {
 
-    data class Remote(val profile: String, val states: Map<String, BookState>, val at: Long)
+    data class Remote(
+        val profile: String,
+        val states: Map<String, BookState>,
+        val at: Long,
+        /** Чьё устройство; пусто - прежний файл на человека, без устройства. */
+        val device: String = "",
+    )
+
+    /** Свои места на этом устройстве - файлом мест рядом с прежним файлом позиций. */
+    fun pushPlaces(treeUri: Uri, profile: String, device: String, states: Map<String, BookState>) {
+        if (profile.isBlank()) return
+        write(treeUri, placesFileName(profile, device), placesJson(profile, device, states))
+    }
 
     fun push(treeUri: Uri, profile: String, states: Map<String, BookState>) {
         if (profile.isBlank()) return
@@ -60,11 +82,11 @@ class PositionSync(private val context: Context) {
         val rootId = DocumentsContract.getTreeDocumentId(treeUri)
         val dirId = findChild(treeUri, rootId, DIR) ?: return emptyList()
         children(treeUri, dirId)
-            .filter { isPositions(it.second) }
-            .mapNotNull { (docId, _) ->
+            .filter { isPositions(it.second) || isPlaces(it.second) }
+            .mapNotNull { (docId, name) ->
                 context.contentResolver.openInputStream(documentUri(treeUri, docId))
                     ?.use { it.readBytes().toString(Charsets.UTF_8) }
-                    ?.let(::parseRemote)
+                    ?.let { if (isPlaces(name)) parsePlaces(it) else parseRemote(it) }
             }
     }.getOrDefault(emptyList())
 
@@ -143,9 +165,78 @@ class PositionSync(private val context: Context) {
 
         fun isPositions(name: String): Boolean = name.startsWith(PREFIX) && name.endsWith(".json")
 
+        /** Места одного человека на одном устройстве: «места-Саша@Pixel 9.json». */
+        const val PLACES_PREFIX = "места-"
+
+        fun placesFileName(profile: String, device: String): String {
+            fun clean(s: String) = s.filter { it.isLetterOrDigit() || it == ' ' || it == '-' || it == '_' }.trim()
+            return PLACES_PREFIX + clean(profile).ifBlank { "без-имени" } + "@" + clean(device).ifBlank { "устройство" } + ".json"
+        }
+
+        fun isPlaces(name: String): Boolean = name.startsWith(PLACES_PREFIX) && name.endsWith(".json")
+
+        /**
+         * Места человека на устройстве - два места у каждой книги, у каждого своё
+         * время: `listen` - где остановился звук и когда слушали, `read` - где
+         * остановились глаза, сколько всего знаков и когда читали. Книги, которые
+         * не слушали и не читали, не пишутся.
+         */
+        fun placesJson(profile: String, device: String, states: Map<String, BookState>): String = JSONObject().apply {
+            put("v", 2)
+            put("profile", profile)
+            put("device", device)
+            put("at", System.currentTimeMillis())
+            put("books", JSONObject().apply {
+                states.forEach { (id, s) ->
+                    if (s.listenAt <= 0 && s.readAt <= 0 && !s.finished) return@forEach
+                    put(id, JSONObject().apply {
+                        if (s.listenAt > 0) {
+                            put("listen", JSONObject()
+                                .put("file", s.fileIndex).put("pos", s.posMs).put("abs", s.absMs).put("at", s.listenAt))
+                        }
+                        if (s.readChar >= 0 && s.readAt > 0) {
+                            put("read", JSONObject().put("char", s.readChar).put("of", s.textChars).put("at", s.readAt))
+                        }
+                        put("finished", s.finished)
+                        put("at", s.updatedAt)
+                    })
+                }
+            })
+        }.toString()
+
+        fun parsePlaces(text: String): Remote? = runCatching {
+            val o = JSONObject(text)
+            val books = o.optJSONObject("books") ?: JSONObject()
+            Remote(
+                profile = o.optString("profile"),
+                at = o.optLong("at"),
+                device = o.optString("device"),
+                states = books.keys().asSequence().associateWith { id ->
+                    val b = books.getJSONObject(id)
+                    val l = b.optJSONObject("listen")
+                    val r = b.optJSONObject("read")
+                    BookState(
+                        bookId = id,
+                        fileIndex = l?.optInt("file") ?: 0,
+                        posMs = l?.optLong("pos") ?: 0L,
+                        absMs = l?.optLong("abs") ?: 0L,
+                        listenAt = l?.optLong("at") ?: 0L,
+                        readChar = r?.optInt("char", -1) ?: -1,
+                        textChars = r?.optInt("of") ?: 0,
+                        readAt = r?.optLong("at") ?: 0L,
+                        finished = b.optBoolean("finished"),
+                        updatedAt = b.optLong("at"),
+                    )
+                }.toMap(),
+            )
+        }.getOrNull()
+
         fun positionsJson(profile: String, states: Map<String, BookState>): String = JSONObject().apply {
             put("profile", profile)
             put("at", System.currentTimeMillis())
+            // Писан копией, которая пишет и файлы мест: новые копии читают их, а
+            // этот оставляют прежним - время у него одно на оба места.
+            put("places", true)
             put("books", JSONObject().apply {
                 states.forEach { (id, s) ->
                     put(id, JSONObject()
@@ -160,6 +251,8 @@ class PositionSync(private val context: Context) {
 
         fun parseRemote(text: String): Remote? = runCatching {
             val o = JSONObject(text)
+            // Его писала новая копия - её места есть и файлом мест, точнее.
+            if (o.optBoolean("places")) return null
             val books = o.optJSONObject("books") ?: JSONObject()
             Remote(
                 profile = o.optString("profile"),
@@ -174,6 +267,9 @@ class PositionSync(private val context: Context) {
                         updatedAt = b.optLong("at"),
                         finished = b.optBoolean("finished"),
                         readChar = b.optInt("read", -1),
+                        // Прежний файл знает одно время на оба места.
+                        listenAt = b.optLong("at"),
+                        readAt = if (b.optInt("read", -1) >= 0) b.optLong("at") else 0L,
                     )
                 }.toMap(),
             )

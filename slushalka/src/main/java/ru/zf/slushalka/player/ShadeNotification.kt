@@ -113,6 +113,19 @@ class ShadePlayer(
     override fun getSeekBackIncrement(): Long = step * 1000L
 
     override fun getSeekForwardIncrement(): Long = step * 1000L
+
+    // Ползунок на экране блокировки и в шторке двигает ExoPlayer напрямую,
+    // мимо PlayerHolder.seekTo: без отметки такое место на паузе не записалось
+    // бы, и плеер в приложении потом вернул бы прежнее.
+    override fun seekTo(positionMs: Long) {
+        super.seekTo(positionMs)
+        holder.movedByHand()
+    }
+
+    override fun seekTo(mediaItemIndex: Int, positionMs: Long) {
+        super.seekTo(mediaItemIndex, positionMs)
+        holder.movedByHand()
+    }
 }
 
 /**

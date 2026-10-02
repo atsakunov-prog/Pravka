@@ -33,7 +33,18 @@ data class BookState(
      * полке не разбирают, это долго.
      */
     val textChars: Int = 0,
+    /**
+     * Когда место в записи поставлено слушанием (или рукой в плеере). Не
+     * трогается, когда запись лишь подтянули к странице: так видно, что было
+     * позже - слушали или читали, - и книга открывается там, где остановился
+     * последним, а не там, куда её довела арифметика пересчёта.
+     */
+    val listenAt: Long = 0,
+    /** Когда место чтения поставлено чтением: листанием или озвучкой. */
+    val readAt: Long = 0,
 ) {
+    /** Слушали позже, чем читали: место в записи главнее места в тексте. */
+    val listenedLast: Boolean get() = listenAt > readAt
     /** Доля прочитанного глазами; 0 - не открывали или длина неизвестна. */
     val readShare: Float
         get() = if (textChars > 0 && readChar > 0) (readChar.toFloat() / textChars).coerceIn(0f, 1f) else 0f
@@ -49,6 +60,8 @@ data class BookState(
         .put("finished", finished)
         .put("read", readChar)
         .put("chars", textChars)
+        .put("listenAt", listenAt)
+        .put("readAt", readAt)
         .put("history", JSONArray().apply {
             history.forEach { put(JSONObject().put("abs", it.absMs).put("at", it.at)) }
         })
@@ -68,6 +81,10 @@ data class BookState(
                 finished = o.optBoolean("finished"),
                 readChar = o.optInt("read", -1),
                 textChars = o.optInt("chars"),
+                // Позиции до 03.10 знали одно время на оба места: оно и
+                // становится временем каждого.
+                listenAt = o.optLong("listenAt", o.optLong("at")),
+                readAt = o.optLong("readAt", if (o.optInt("read", -1) >= 0) o.optLong("at") else 0L),
                 history = (0 until h.length()).map {
                     val m = h.getJSONObject(it)
                     Mark(m.optLong("abs"), m.optLong("at"))
@@ -75,6 +92,40 @@ data class BookState(
             )
         }
     }
+}
+
+/** Что изменило слияние: место в записи, место чтения или ничего. */
+data class Merged(val listen: Boolean, val read: Boolean, val before: BookState) {
+    val any: Boolean get() = listen || read
+}
+
+/**
+ * Слить своё место с другого устройства - каждое место по своему времени:
+ * слушал позже на планшете - место в записи оттуда, читал позже здесь -
+ * место чтения здешнее. Раньше было одно время на оба места, и чтение на
+ * одном устройстве затирало слушание на другом. Отметки «я тут» и история -
+ * хозяйство этого телефона, они не едут. Старый файл без места чтения (-1)
+ * своё место не стирает. «Дочитано» едет вместе с более свежим временем.
+ */
+fun mergeStates(local: BookState, remote: BookState): Pair<BookState, Merged> {
+    val listen = remote.listenAt > local.listenAt
+    val read = remote.readChar >= 0 && remote.readAt > local.readAt
+    val finishedNews = remote.updatedAt > local.updatedAt && remote.finished != local.finished
+    if (!listen && !read && !finishedNews) return local to Merged(false, false, local)
+    var s = local
+    if (listen) {
+        s = s.copy(fileIndex = remote.fileIndex, posMs = remote.posMs, absMs = remote.absMs, listenAt = remote.listenAt)
+    }
+    if (read) {
+        s = s.copy(
+            readChar = remote.readChar,
+            readAt = remote.readAt,
+            textChars = if (remote.textChars > 0) remote.textChars else s.textChars,
+        )
+    }
+    if (remote.updatedAt > local.updatedAt) s = s.copy(finished = remote.finished)
+    s = s.copy(updatedAt = maxOf(local.updatedAt, remote.updatedAt, s.listenAt, s.readAt))
+    return s to Merged(listen, read, local)
 }
 
 /**
@@ -110,13 +161,19 @@ class PositionStore(context: Context) {
 
     fun lastBook(): String? = lastBookId
 
-    /** Отметка в истории ставится не чаще раза в две минуты. */
+    /**
+     * Записать место в записи. [listened] - его поставило слушание или рука в
+     * плеере: у места новое время, книга - последняя тронутая. Иначе (запись
+     * подтянули к странице, сменили скорость) время места прежнее: «тронуто» -
+     * это когда слушали или читали, а не когда приложение что-то пересчитало.
+     * Отметка в истории ставится не чаще раза в две минуты.
+     */
     @Synchronized
-    fun save(state: BookState, markHistory: Boolean = false) {
+    fun save(state: BookState, markHistory: Boolean = false, listened: Boolean = false) {
         val now = System.currentTimeMillis()
         val prev = states[state.bookId]
         var history = state.history
-        if (markHistory) {
+        if (markHistory && listened) {
             val last = history.lastOrNull()
             if (last == null || now - last.at > 2 * 60_000) {
                 history = (history + Mark(state.absMs, now)).takeLast(40)
@@ -125,39 +182,65 @@ class PositionStore(context: Context) {
         // Пустая позиция поверх непустой - это не «начал заново», а баг:
         // так же, как лента Правки не умеет стираться целиком.
         if (prev != null && prev.absMs > 60_000 && state.absMs == 0L && !state.finished) return
-        states[state.bookId] = state.copy(updatedAt = now, history = history)
-        lastBookId = state.bookId
+        val listenAt = if (listened) now else prev?.listenAt ?: state.listenAt
+        states[state.bookId] = state.copy(
+            listenAt = listenAt,
+            readAt = prev?.readAt ?: state.readAt,
+            updatedAt = maxOf(listenAt, prev?.readAt ?: state.readAt, if (listened) now else prev?.updatedAt ?: 0L),
+            history = history,
+        )
+        if (listened) lastBookId = state.bookId
         persist()
     }
 
     @Synchronized
-    fun merge(bookId: String, remote: BookState) {
-        val local = states[bookId]
-        if (local != null && local.updatedAt >= remote.updatedAt) return
-        // Из чужого устройства приезжает только позиция - в записи и в тексте;
-        // отметки «я тут» и история - хозяйство этого телефона. Старый файл без
-        // места чтения (-1) своё место не стирает.
-        states[bookId] = (local ?: BookState(bookId)).copy(
-            fileIndex = remote.fileIndex,
-            posMs = remote.posMs,
-            absMs = remote.absMs,
-            updatedAt = remote.updatedAt,
-            finished = remote.finished,
-            readChar = if (remote.readChar >= 0) remote.readChar else local?.readChar ?: -1,
+    fun merge(bookId: String, remote: BookState): Merged {
+        val local = states[bookId] ?: BookState(bookId)
+        val (merged, m) = mergeStates(local, remote)
+        if (!m.any && merged == local) return m
+        states[bookId] = merged
+        persist()
+        return m
+    }
+
+    /** Вернуть место, как было до слияния, - и сделать его самым свежим, чтобы оно и уехало. */
+    @Synchronized
+    fun restore(before: BookState) {
+        val now = System.currentTimeMillis()
+        val cur = states[before.bookId] ?: BookState(before.bookId)
+        states[before.bookId] = cur.copy(
+            fileIndex = before.fileIndex,
+            posMs = before.posMs,
+            absMs = before.absMs,
+            readChar = before.readChar,
+            finished = before.finished,
+            listenAt = now,
+            readAt = if (before.readChar >= 0) now else cur.readAt,
+            updatedAt = now,
         )
         persist()
     }
 
-    /** Место в читалке пишется тем же порядком, что и место в записи. */
+    /** Место в читалке: поставлено чтением - листанием или озвучкой. */
     @Synchronized
     fun setReadChar(bookId: String, offset: Int, textChars: Int = 0) {
         val s = states[bookId] ?: BookState(bookId)
         if (s.readChar == offset && (textChars <= 0 || s.textChars == textChars)) return
+        val now = System.currentTimeMillis()
         states[bookId] = s.copy(
             readChar = offset,
             textChars = if (textChars > 0) textChars else s.textChars,
-            updatedAt = System.currentTimeMillis(),
+            readAt = if (s.readChar != offset) now else s.readAt,
+            updatedAt = if (s.readChar != offset) now else s.updatedAt,
         )
+        lastBookId = bookId
+        persist()
+    }
+
+    /** Книгу открыли: она - последняя, даже если ещё не слушали и не листали. */
+    @Synchronized
+    fun touchLast(bookId: String) {
+        if (lastBookId == bookId) return
         lastBookId = bookId
         persist()
     }

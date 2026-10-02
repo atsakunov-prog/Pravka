@@ -81,6 +81,11 @@ class SlushalkaApp : Application() {
         server = ru.zf.slushalka.data.ServerLibrary(this, settings, cloud, scope)
         // Разметка и справочник - в папке книги, а у книги со звуком на сервере ещё и там.
         val bookDir = ru.zf.slushalka.data.BookDir(this, settings, cloud)
+        // Есть ли книга на сервере - по оглавлению: своя копия книги из
+        // библиотеки делит с ней справочник и разметку.
+        bookDir.serverDirOf = { b ->
+            b.remoteDir.ifBlank { null } ?: server.index.value?.let { idx -> idx.byFolder(b.folderName)?.let(idx::dirOf) }
+        }
         markup = Markup(bookDir)
         updater = Updater(this, settings)
         speaker = Speaker(this)

@@ -56,6 +56,7 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
 
     var key by remember { mutableStateOf(prefs.apiKey) }
     var profile by remember { mutableStateOf(prefs.profile) }
+    var device by remember { mutableStateOf(prefs.deviceName) }
     var flibusta by remember { mutableStateOf(prefs.flibustaUrl) }
     var showGallery by remember { mutableStateOf(false) }
     val current by state.current.collectAsState()
@@ -128,10 +129,24 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
+            OutlinedTextField(
+                value = device,
+                onValueChange = {
+                    device = it
+                    scope.launch { state.settings.setDeviceName(it) }
+                },
+                label = { Text("Это устройство") },
+                placeholder = { Text(prefs.device) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
             Note(
-                "В корне библиотеки заводится папка «_Слушалка», и это имя становится твоей " +
-                    "дорожкой в ней. Если папка синхронизируется между устройствами, книга " +
-                    "продолжается там, где остановилась, а на карточке видно, докуда дошёл второй."
+                "Имя - твоя дорожка: у каждого человека свои места в каждой книге, отдельно где " +
+                    "слушал и где читал. Устройство - чьё это место: у каждого устройства свой файл " +
+                    "«места-${prefs.profile.ifBlank { "имя" }}@${prefs.device}.json» в «_Слушалка», и " +
+                    "телефон с Boox больше не затирают места друг друга. Книга открывается там, где " +
+                    "остановился последним - глазами или ушами, - на каком бы устройстве это ни было; " +
+                    "место уезжает на сервер через несколько секунд после страницы и сразу на паузе."
             )
             Toggle("Синхронизировать позиции", prefs.syncPositions) {
                 scope.launch { state.settings.setSyncPositions(it) }

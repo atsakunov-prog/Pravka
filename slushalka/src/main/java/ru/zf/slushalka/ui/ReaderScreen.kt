@@ -407,6 +407,16 @@ fun ReaderScreen(
         }
     }
 
+    // Место чтения приехало с другого устройства, пока книга открыта, - туда:
+    // иначе следующая страница записала бы здешнее поверх приехавшего.
+    val jump by state.readJump.collectAsState()
+    LaunchedEffect(jump) {
+        val at = jump ?: return@LaunchedEffect
+        state.takeReadJump()
+        target = at
+        place = at
+    }
+
     // Справочник: заказанный пакетом - проверить, готовый - положить файлом в
     // папку книги, чужой из папки - подхватить. Всё при открытии книги, чтобы
     // в лист идти уже за готовым.
@@ -480,6 +490,7 @@ fun ReaderScreen(
         state.saveReadChar(readPlace())
     }
     DisposableEffect(Unit) {
+        state.readerOpened()
         onDispose {
             state.saveReadChar(readPlace())
             // Ушли с экрана - чтение глазами кончилось, журнал подходов об этом узнаёт.

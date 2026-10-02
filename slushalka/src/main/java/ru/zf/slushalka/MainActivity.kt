@@ -12,6 +12,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -338,6 +341,14 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
+            // Место книги приехало с другого своего устройства: строка поверх
+            // любого экрана - взяли самое свежее, а если здешнее было вернее,
+            // «Вернуть».
+            val moved by state.moved.collectAsState()
+            moved?.let { m ->
+                MovedBar(m, Modifier.align(androidx.compose.ui.Alignment.BottomCenter))
+            }
+
             // Звук с сервера упёрся в мобильную сеть при «спрашивать»: вопрос
             // поверх любого экрана - пуск мог быть и из шторки, и с гарнитуры.
             val askMobile by app.streaming.askMobile.collectAsState()
@@ -354,6 +365,48 @@ class MainActivity : ComponentActivity() {
                     quote = askQuote,
                     handsFree = askHandsFree,
                 )
+            }
+        }
+    }
+
+    /**
+     * «Место с Boox»: что приехало и откуда, «Вернуть» - здешнее. Сама гаснет
+     * через десять секунд: место уже взято, строка - только известие.
+     */
+    @Composable
+    private fun MovedBar(m: ru.zf.slushalka.ui.AppState.Moved, modifier: Modifier) {
+        LaunchedEffect(m) {
+            kotlinx.coroutines.delay(10_000)
+            app.state.dismissMoved()
+        }
+        val where = buildList {
+            if (m.listen) add("звук ${ru.zf.slushalka.ui.formatClock(m.now.absMs)}")
+            if (m.read && m.now.readChar >= 0) add("стр. ${m.now.readChar / ru.zf.slushalka.data.Settings.PAGE_CHARS + 1}")
+        }.joinToString(", ")
+        val at = maxOf(if (m.listen) m.now.listenAt else 0L, if (m.read) m.now.readAt else 0L)
+        androidx.compose.material3.Surface(
+            modifier = modifier
+                .padding(horizontal = 12.dp, vertical = 16.dp)
+                .navigationBarsPadding(),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.inverseSurface,
+            contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+            shadowElevation = 6.dp,
+        ) {
+            androidx.compose.foundation.layout.Row(
+                Modifier.padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.Text(
+                    "«${m.title}»: место с ${m.device} - $where" +
+                        if (at > 0) " (${ru.zf.slushalka.ui.formatAgo(at)})" else "",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 3,
+                )
+                androidx.compose.material3.TextButton(onClick = { app.state.undoMoved() }) {
+                    androidx.compose.material3.Text("Вернуть", color = MaterialTheme.colorScheme.inversePrimary)
+                }
             }
         }
     }

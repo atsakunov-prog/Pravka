@@ -47,18 +47,66 @@ class AppState(private val app: SlushalkaApp) {
     private val _alignment = MutableStateFlow<Alignment?>(null)
     val alignment: StateFlow<Alignment?> = _alignment
 
-    /** Докуда дошёл второй слушатель: секунда записи и знак текста. */
-    data class OtherPlace(val who: String, val absMs: Long, val readChar: Int)
+    /**
+     * Докуда дошёл другой человек: место в записи и место чтения, у каждого
+     * своё время, - самые свежие с любого его устройства.
+     */
+    data class OtherPlace(
+        val who: String,
+        val absMs: Long,
+        val readChar: Int,
+        val listenAt: Long = 0,
+        val readAt: Long = 0,
+        /** Длина текста, как её видела его читалка: доля прочитанного. */
+        val textChars: Int = 0,
+    ) {
+        val listenedLast: Boolean get() = listenAt > readAt
+        val readShare: Float get() = if (textChars > 0 && readChar > 0) (readChar.toFloat() / textChars).coerceIn(0f, 1f) else 0f
+    }
 
     /** Докуда дошли на других устройствах и у второго слушателя. */
     private val _others = MutableStateFlow<Map<String, List<OtherPlace>>>(emptyMap())
     val others: StateFlow<Map<String, List<OtherPlace>>> = _others
 
-    /** Своя дорожка с другого устройства ушла дальше: [readChar] - место чтения, -1 - не передано. */
-    data class ResumeOffer(val bookId: String, val absMs: Long, val readChar: Int, val from: String, val at: Long)
+    /**
+     * Место книги приехало с другого своего устройства и заметно отличается от
+     * здешнего. Не спрашиваем, как раньше («продолжить там?» - и не тот ответ
+     * сбивал место), а берём самое свежее и говорим об этом строкой с «Вернуть».
+     */
+    data class Moved(
+        val bookId: String,
+        val title: String,
+        val device: String,
+        /** Что поменялось: место в записи, место чтения. */
+        val listen: Boolean,
+        val read: Boolean,
+        val now: BookState,
+        /** Как было здесь - для «Вернуть». */
+        val before: BookState,
+    )
 
-    private val _resumeOffer = MutableStateFlow<ResumeOffer?>(null)
-    val resumeOffer: StateFlow<ResumeOffer?> = _resumeOffer
+    private val _moved = MutableStateFlow<Moved?>(null)
+    val moved: StateFlow<Moved?> = _moved
+
+    /**
+     * Место чтения открытой книги приехало с другого устройства, пока читалка
+     * открыта: она переходит туда. Иначе следующая же страница записала бы
+     * здешнюю со свежим временем - и приехавшее место пропало бы.
+     */
+    private val _readJump = MutableStateFlow<Int?>(null)
+    val readJump: StateFlow<Int?> = _readJump
+
+    fun takeReadJump() {
+        _readJump.value = null
+    }
+
+    /** Читалка на экране: только ей и прыгать на приехавшее место. */
+    @Volatile
+    private var readerVisible = false
+
+    fun readerOpened() {
+        readerVisible = true
+    }
 
     private val _recapOffer = MutableStateFlow(false)
     val recapOffer: StateFlow<Boolean> = _recapOffer
@@ -336,6 +384,12 @@ class AppState(private val app: SlushalkaApp) {
             if (app.readAloud.state.value.active && app.readAloud.state.value.bookId != book.id) {
                 app.readAloud.stop()
             }
+            // Свежее место - с сервера, но книга его не ждёт: открывается по
+            // здешнему сразу, а приехавшее место подхватят плеер на паузе
+            // (adopt) и открытая читалка (readJump). Обычно оно уже здесь -
+            // приём идёт при открытии приложения.
+            syncPull()
+            app.positions.touchLast(book.id)
             val ready = ensureDurations(withServerAudio(book))
             _current.value = ready
             _text.value = null
@@ -352,9 +406,6 @@ class AppState(private val app: SlushalkaApp) {
                 // книга - ставим на паузу, как при любом переходе к чтению.
                 app.player.pauseForAsking()
             }
-            // Книгу открыли руками - вопрос «продолжить с другого устройства?»
-            // про неё уже неактуален.
-            if (_resumeOffer.value?.bookId == ready.id) _resumeOffer.value = null
             offerRecapIfDue(ready)
             loadText(ready)
             // Открытая книга - теперь последняя: виджет показывает её.
@@ -376,6 +427,9 @@ class AppState(private val app: SlushalkaApp) {
             if (t != null && book.hasAudio) {
                 _alignment.value = Alignment.build(book, t, app.positions.get(book.id).anchors)
                 loadMarkup(book, t)
+                // Читали позже, чем слушали (здесь или на другом устройстве), -
+                // запись встаёт к странице: пуск звука продолжит с прочитанного.
+                followLaterReading(book)
                 // Текст разобран - теперь шторке есть что показать вместо обложки.
                 app.player.refreshArtwork(force = true)
             }
@@ -890,17 +944,35 @@ class AppState(private val app: SlushalkaApp) {
         followReading(book, offset)
         app.positions.setReadChar(book.id, offset, _text.value?.length ?: 0)
         noteReading(book, offset)
-        // В папку библиотеки - тем же шагом, что плеер на ходу: раз в две
-        // минуты. Иначе после часа чтения второе устройство знало бы место
-        // только с последней паузы звука.
-        val now = System.currentTimeMillis()
-        if (now - lastReadSyncAt > READ_SYNC_EVERY_MS) {
-            lastReadSyncAt = now
-            app.scope.launch { syncPush(book.id) }
+        // На сервер - когда листание успокоилось: каждая страница уезжает через
+        // несколько секунд, а не раз в две минуты, как раньше, - второе
+        // устройство знает место чтения почти сразу.
+        schedulePush(book.id)
+    }
+
+    private var pushJob: kotlinx.coroutines.Job? = null
+
+    /** Отправить места чуть погодя: подряд идущие страницы уезжают одной отправкой. */
+    fun schedulePush(bookId: String, delayMs: Long = PUSH_DEBOUNCE_MS) {
+        pushJob?.cancel()
+        pushJob = app.scope.launch {
+            kotlinx.coroutines.delay(delayMs)
+            syncPush(bookId)
         }
     }
 
-    private var lastReadSyncAt = 0L
+    /**
+     * Запись - к прочитанному, если читали позже, чем слушали: место чтения
+     * приехало с другого устройства или книгу закрыли из читалки, а плеер
+     * открылся на месте звука.
+     */
+    private fun followLaterReading(book: Book) {
+        val st = app.positions.get(book.id)
+        val align = _alignment.value ?: return
+        // Строго позже: равное время - место из версии до 03.10, кто последним, неизвестно.
+        if (st.readChar < 0 || st.readAt <= st.listenAt) return
+        if (app.player.isOpen(book.id)) app.player.followReading(align.audioAt(st.readChar))
+    }
 
     /**
      * Страница в журнал подходов - но только когда её читают глазами. Пока
@@ -917,6 +989,8 @@ class AppState(private val app: SlushalkaApp) {
 
     /** Читалку закрыли: чтение глазами остановилось, время до возвращения не в зачёт. */
     fun readerClosed() {
+        readerVisible = false
+        _readJump.value = null
         val book = _current.value ?: return
         val speech = app.readAloud.state.value
         // Озвучка продолжает и с закрытой читалкой - её подход не трогаем.
@@ -943,26 +1017,43 @@ class AppState(private val app: SlushalkaApp) {
     /** Откуда открыть читалку. [fromAudio] - место взято из записи, его стоит сверить. */
     data class ReadStart(val offset: Int, val fromAudio: Boolean)
 
+    /**
+     * С какого места открыть читалку: где остановился последним - глазами или
+     * ушами. У каждого места своё время, и решает оно, а не догадка «запись
+     * ушла от страницы дальше минуты»: читал, потом дослушал главу - читалка
+     * открывается после прослушанного; слушал, потом дочитал - на своей
+     * странице.
+     */
     fun readingStart(): ReadStart {
         val book = _current.value ?: return ReadStart(0, false)
-        val saved = app.positions.get(book.id).readChar
+        val st = app.positions.get(book.id)
+        val saved = st.readChar
         val align = _alignment.value ?: return ReadStart(saved.coerceAtLeast(0), false)
-        val absMs = app.player.state.value.absMs
-        // Запись стоит там, куда её довели глаза (откат при открытии книги -
-        // самое большее полминуты): продолжаем со своей страницы, сверять по
-        // звуку нечего. Ушла дальше - с тех пор слушали, и правда теперь у неё.
-        return if (saved >= 0 && kotlin.math.abs(align.audioAt(saved) - absMs) <= READ_FRESH_MS) {
-            ReadStart(saved, false)
-        } else {
-            ReadStart(align.charAt(absMs), true)
+        val absMs = if (app.player.isOpen(book.id)) app.player.state.value.absMs else st.absMs
+        return when {
+            // Читалку не открывали - с места звука.
+            saved < 0 -> ReadStart(align.charAt(absMs), true)
+            // Читали после того, как слушали, - своя страница, сверять нечего.
+            st.readAt > st.listenAt -> ReadStart(saved, false)
+            // Слушали позже (или время одно - место из версии до 03.10), но звук
+            // стоит у той же страницы: своя страница точнее карты.
+            kotlin.math.abs(align.audioAt(saved) - absMs) <= READ_FRESH_MS -> ReadStart(saved, false)
+            else -> ReadStart(align.charAt(absMs), true)
         }
     }
 
 
     // ---------------------------------------------------- синхронизация мест
 
+    /**
+     * Отправить свои места: в папку библиотеки (её возит сторонняя
+     * синхронизация) и в облако. Файл мест - свой у этого устройства, другие
+     * его не пишут; прежний файл на человека - для копий, которые ещё не
+     * обновились. Не вышло (нет сети) - отправится со следующей переменой или
+     * при следующем открытии приложения.
+     */
     suspend fun syncPush(bookId: String) {
-        val tree = treeUri() ?: return
+        val tree = treeUri()
         val p = prefs.value
         if (!p.syncPositions || p.profile.isBlank()) return
         app.player.saveNow()
@@ -973,20 +1064,30 @@ class AppState(private val app: SlushalkaApp) {
         val asks = if (asksRev != pushedAsksRev) app.askLog.all() else null
         val notesRev = app.notes.revision.value
         val notes = if (notesRev != pushedNotesRev) app.notes.all() else null
-        withContext(Dispatchers.IO) {
-            app.sync.push(tree, p.profile, all)
-            if (asks != null) app.sync.pushAsks(tree, p.profile, asks)
-            if (notes != null) app.sync.pushNotes(tree, p.profile, notes)
+        if (tree != null) {
+            withContext(Dispatchers.IO) {
+                app.sync.pushPlaces(tree, p.profile, p.device, all)
+                app.sync.push(tree, p.profile, all)
+                if (asks != null) app.sync.pushAsks(tree, p.profile, asks)
+                if (notes != null) app.sync.pushNotes(tree, p.profile, notes)
+            }
         }
         // Те же файлы - в облако, если оно настроено: тогда синхронизация
-        // идёт без сторонней программы, которая возит папку библиотеки.
+        // идёт без сторонней программы, которая возит папку библиотеки. Файл
+        // мест - через .partial: читающий не увидит половину.
+        var ok = true
         if (p.cloudReady && p.cloudSync) {
             val dir = ru.zf.slushalka.data.Cloud.SYNC_DIR
             fun path(prefix: String) = dir + "/" + PositionSync.fileName(prefix, p.profile)
+            ok = app.cloud.putTextAtomic(
+                dir + "/" + PositionSync.placesFileName(p.profile, p.device),
+                PositionSync.placesJson(p.profile, p.device, all),
+            ).isSuccess
             app.cloud.putText(path(PositionSync.PREFIX), PositionSync.positionsJson(p.profile, all))
             if (asks != null) app.cloud.putText(path(PositionSync.ASKS_PREFIX), PositionSync.asksJson(p.profile, asks))
             if (notes != null) app.cloud.putText(path(PositionSync.NOTES_PREFIX), PositionSync.notesJson(p.profile, notes))
         }
+        pushPending = !ok
         if (asks != null) pushedAsksRev = asksRev
         if (notes != null) pushedNotesRev = notesRev
         bump()
@@ -995,89 +1096,152 @@ class AppState(private val app: SlushalkaApp) {
     private var pushedAsksRev = -1
     private var pushedNotesRev = -1
 
+    /** Последняя отправка не дошла: дошлём при следующем приёме. */
+    private var pushPending = false
+
+    private val pullLock = kotlinx.coroutines.sync.Mutex()
+    private var pullJob: kotlinx.coroutines.Job? = null
+
     fun syncPull() {
-        val tree = treeUri() ?: return
+        syncPullJob()
+    }
+
+    /** Приём мест: идущий не дублируется - второй вызов ждёт тот же. */
+    private fun syncPullJob(): kotlinx.coroutines.Job {
+        pullJob?.takeIf { it.isActive }?.let { return it }
+        return app.scope.launch { pullLock.withLockSafe { syncPullNow() } }.also { pullJob = it }
+    }
+
+    private suspend fun <T> kotlinx.coroutines.sync.Mutex.withLockSafe(block: suspend () -> T): T {
+        lock()
+        try {
+            return block()
+        } finally {
+            unlock()
+        }
+    }
+
+    /**
+     * Принять места: свои с других устройств и чужие.
+     *
+     * Свои сливаются по книге и по каждому месту отдельно (см.
+     * [ru.zf.slushalka.data.PositionStore.merge]): самое свежее слушание и
+     * самое свежее чтение, с какого бы устройства они ни были. Заметно
+     * сдвинулось место книги - строка «место с Boox» с «Вернуть»; открытый
+     * плеер на паузе встаёт туда же. Чужие - самые свежие места каждого
+     * человека со всех его устройств: их видно на полке.
+     */
+    private suspend fun syncPullNow() {
         val p = prefs.value
         if (!p.syncPositions) return
-        app.scope.launch {
-            // Дорожки из папки библиотеки и из облака; одна дорожка в двух
-            // местах - берётся свежая.
-            val remotes = (withContext(Dispatchers.IO) { app.sync.pull(tree) } + cloudRemotes(p))
-                .groupBy { it.profile.lowercase() }
-                .map { (_, same) -> same.maxBy { it.at } }
-            val mine = remotes.firstOrNull { it.profile.equals(p.profile, true) }
-            val others = remotes.filter { !it.profile.equals(p.profile, true) }
-            val hasAudio = _books.value.associate { it.id to it.hasAudio }
+        val tree = treeUri()
+        val remotes = (if (tree != null) withContext(Dispatchers.IO) { app.sync.pull(tree) } else emptyList()) +
+            cloudRemotes(p)
+        val mine = remotes.filter { it.profile.equals(p.profile, true) && p.profile.isNotBlank() }
+        val others = remotes.filter { !it.profile.equals(p.profile, true) }
 
-            // Своя же дорожка с другого устройства: молча не подменяем - вдруг
-            // там кто-то листал. Спрашиваем, если расхождение больше минуты
-            // записи, а у книги без записи - больше страницы текста. Место, где
-            // здесь ещё не открывали, подхватывается без вопросов.
-            mine?.states?.forEach { (id, remote) ->
-                val local = app.positions.get(id)
-                val far = if (hasAudio[id] != false) {
-                    kotlin.math.abs(remote.absMs - local.absMs) > 30_000
-                } else {
-                    local.readChar >= 0 && remote.readChar >= 0 &&
-                        kotlin.math.abs(remote.readChar - local.readChar) > Settings.PAGE_CHARS
-                }
-                if (remote.updatedAt > local.updatedAt + 60_000 && far) {
-                    if (_resumeOffer.value == null) {
-                        _resumeOffer.value = ResumeOffer(id, remote.absMs, remote.readChar, p.profile, remote.updatedAt)
-                    }
-                } else if (remote.updatedAt > local.updatedAt) {
-                    app.positions.merge(id, remote)
+        // Свои: от старых к свежим - последнее слово за самым свежим.
+        var moved: Moved? = null
+        for (r in mine.sortedBy { it.at }) {
+            for ((id, remote) in r.states) {
+                val m = app.positions.merge(id, remote)
+                if (!m.any) continue
+                val now = app.positions.get(id)
+                if (m.listen) app.player.adopt(id, now.absMs)
+                if (m.read && readerVisible && _current.value?.id == id && now.readChar >= 0) _readJump.value = now.readChar
+                // Своё же устройство (файл, записанный отсюда) - не новость.
+                if (r.device.isNotBlank() && r.device == p.device) continue
+                if (far(id, m.before, now)) {
+                    val title = bookById(id)?.title ?: id.substringAfterLast('/')
+                    moved = Moved(id, title, r.device.ifBlank { "другого устройства" }, m.listen, m.read, now, m.before)
                 }
             }
+        }
+        if (moved != null) _moved.value = moved
 
-            _others.value = others
-                .flatMap { r -> r.states.map { (id, s) -> id to OtherPlace(r.profile, s.absMs, s.readChar) } }
-                .groupBy({ it.first }, { it.second })
+        // Чужие: по человеку и книге - свежайшее слушание и свежайшее чтение.
+        _others.value = others
+            .groupBy { it.profile.trim() }
+            .flatMap { (who, list) ->
+                list.flatMap { it.states.entries }
+                    .groupBy({ it.key }, { it.value })
+                    .map { (id, states) ->
+                        val l = states.maxBy { it.listenAt }
+                        val rd = states.filter { it.readChar >= 0 }.maxByOrNull { it.readAt }
+                        id to OtherPlace(
+                            who = who,
+                            absMs = l.absMs,
+                            readChar = rd?.readChar ?: -1,
+                            listenAt = l.listenAt,
+                            readAt = rd?.readAt ?: 0L,
+                            textChars = rd?.textChars ?: 0,
+                        )
+                    }
+            }
+            .groupBy({ it.first }, { it.second })
 
-            // Вопросы, заданные с другого устройства, - в свою историю.
+        bump()
+        // Вопросы и пометки - отдельно и после: места нужны сразу, а эти файлы
+        // потолще и ждать их незачем.
+        app.scope.launch { pullAsksAndNotes(p, tree) }
+        // Прошлая отправка не дошла - сеть, похоже, есть: дошлём.
+        if (pushPending) app.positions.lastBook()?.let { schedulePush(it, 0) }
+    }
+
+    private suspend fun pullAsksAndNotes(p: Settings.Prefs, tree: Uri?) {
+        // Вопросы, заданные с другого устройства, - в свою историю.
+        if (tree != null) {
             val asks = withContext(Dispatchers.IO) { app.sync.pullAsks(tree, p.profile) }
             asks?.forEach { (id, list) -> app.askLog.merge(id, list) }
             // И пометки на полях: одна книга - одни поля на всех устройствах.
             val notes = withContext(Dispatchers.IO) { app.sync.pullNotes(tree, p.profile) }
             notes?.forEach { (id, list) -> app.notes.merge(id, list) }
-            if (p.cloudReady && p.cloudSync && p.profile.isNotBlank()) {
-                val dir = ru.zf.slushalka.data.Cloud.SYNC_DIR
-                app.cloud.getText(dir + "/" + PositionSync.fileName(PositionSync.ASKS_PREFIX, p.profile)).getOrNull()
-                    ?.let(PositionSync::parseAsks)?.forEach { (id, list) -> app.askLog.merge(id, list) }
-                app.cloud.getText(dir + "/" + PositionSync.fileName(PositionSync.NOTES_PREFIX, p.profile)).getOrNull()
-                    ?.let(PositionSync::parseNotes)?.forEach { (id, list) -> app.notes.merge(id, list) }
-            }
-            bump()
         }
+        if (p.cloudReady && p.cloudSync && p.profile.isNotBlank()) {
+            val dir = ru.zf.slushalka.data.Cloud.SYNC_DIR
+            app.cloud.getText(dir + "/" + PositionSync.fileName(PositionSync.ASKS_PREFIX, p.profile)).getOrNull()
+                ?.let(PositionSync::parseAsks)?.forEach { (id, list) -> app.askLog.merge(id, list) }
+            app.cloud.getText(dir + "/" + PositionSync.fileName(PositionSync.NOTES_PREFIX, p.profile)).getOrNull()
+                ?.let(PositionSync::parseNotes)?.forEach { (id, list) -> app.notes.merge(id, list) }
+        }
+        bump()
     }
 
-    /** Дорожки позиций из облака; пусто - облако не настроено или не ответило. */
+    /** Сдвиг, о котором стоит сказать: больше полминуты записи или страницы текста. */
+    private fun far(id: String, before: BookState, now: BookState): Boolean {
+        val listen = kotlin.math.abs(now.absMs - before.absMs) > 30_000 && before.listenAt > 0
+        val read = before.readChar >= 0 && kotlin.math.abs(now.readChar - before.readChar) > Settings.PAGE_CHARS
+        return listen || read
+    }
+
+    /** Места из облака - и файлы мест, и прежние файлы позиций; пусто - облака нет или оно молчит. */
     private suspend fun cloudRemotes(p: Settings.Prefs): List<PositionSync.Remote> {
         if (!p.cloudReady || !p.cloudSync) return emptyList()
         val dir = ru.zf.slushalka.data.Cloud.SYNC_DIR
-        val names = app.cloud.list(dir).getOrNull().orEmpty().filter { !it.dir && PositionSync.isPositions(it.name) }
+        val names = app.cloud.list(dir).getOrNull().orEmpty()
+            .filter { !it.dir && (PositionSync.isPositions(it.name) || PositionSync.isPlaces(it.name)) }
         return names.mapNotNull { item ->
-            app.cloud.getText("$dir/${item.name}").getOrNull()?.let(PositionSync::parseRemote)
+            app.cloud.getText("$dir/${item.name}").getOrNull()?.let {
+                if (PositionSync.isPlaces(item.name)) PositionSync.parsePlaces(it) else PositionSync.parseRemote(it)
+            }
         }
     }
 
-    fun acceptResume() {
-        val offer = _resumeOffer.value ?: return
-        _resumeOffer.value = null
-        val book = bookById(offer.bookId) ?: return
-        // Место чтения - сразу в позиции: книга без записи откроется на той
-        // странице, а у аудиокниги читалка сверит его со звуком, как всегда.
-        if (offer.readChar >= 0) app.positions.setReadChar(book.id, offer.readChar)
-        if (!book.hasAudio) {
-            bump()
-            return
-        }
-        app.scope.launch {
-            val ready = ensureDurations(book)
-            _current.value = ready
-            app.player.open(treeOf(ready) ?: return@launch, ready, startAbsMs = offer.absMs)
-            loadText(ready)
-        }
+    fun dismissMoved() {
+        _moved.value = null
+    }
+
+    /**
+     * «Вернуть»: здешнее место было правильным. Оно становится самым свежим и
+     * уезжает - иначе следующий приём снова принёс бы приехавшее.
+     */
+    fun undoMoved() {
+        val m = _moved.value ?: return
+        _moved.value = null
+        app.positions.restore(m.before)
+        app.player.adopt(m.bookId, m.before.absMs)
+        bump()
+        app.scope.launch { syncPush(m.bookId) }
     }
 
     companion object {
@@ -1100,15 +1264,7 @@ class AppState(private val app: SlushalkaApp) {
         private const val READ_FRESH_MS = 60_000L
         /** Серии читаются пачками по столько книг: полка обновляется между пачками. */
         private const val SERIES_BATCH = 12
-        /** Место чтения уезжает в папку библиотеки не чаще, чем место слушания. */
-        private const val READ_SYNC_EVERY_MS = 120_000L
-    }
-
-    fun declineResume() {
-        val offer = _resumeOffer.value ?: return
-        _resumeOffer.value = null
-        // Отказ - тоже решение: пишем своё место поверх чужого, чтобы вопрос
-        // не всплывал заново на каждом запуске.
-        app.scope.launch { syncPush(offer.bookId) }
+        /** Перелистнул - места уезжают через столько, если листание успокоилось. */
+        private const val PUSH_DEBOUNCE_MS = 5_000L
     }
 }

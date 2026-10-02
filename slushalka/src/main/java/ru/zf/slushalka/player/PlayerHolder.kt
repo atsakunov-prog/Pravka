@@ -14,7 +14,6 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import ru.zf.slushalka.data.BookState
 import ru.zf.slushalka.stats.Journal
 import ru.zf.slushalka.data.PositionStore
 import ru.zf.slushalka.data.Settings
@@ -69,6 +68,13 @@ class PlayerHolder(
     private var book: Book? = null
     private var treeUri: Uri? = null
     private var lastPauseAt = 0L
+    /**
+     * С последней записи звук шёл или плеер двигали рукой - место в записи
+     * поставлено слушанием, у него новое время.
+     */
+    private var heard = false
+    /** Плеер подтянули к странице - место сменилось, но не слушанием: время прежнее. */
+    private var drifted = false
     private var lastSaveAt = 0L
     private var lastSyncAt = 0L
     private var listenedAcc = 0L
@@ -130,6 +136,7 @@ class PlayerHolder(
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             if (isPlaying) {
                 lastTickAt = System.currentTimeMillis()
+                heard = true
                 // Подход начался (или продолжился после короткой паузы).
                 book?.let { journal.listening(it.id, absNow()) }
                 scheduleTick()
@@ -229,7 +236,13 @@ class PlayerHolder(
         player.setMediaItems(items)
         shownArt = coverUri
         lastArtAt = 0L
-        val target = startAbsMs ?: rewound(saved)
+        // Ровно туда, где остановились, - без отката. Откат здесь при каждом
+        // открытии отодвигал место назад, а уход из приложения записывал
+        // отодвинутое: открыл книгу три раза, не слушая, - и полторы минуты
+        // долой, а читалка потом сочла запись «ушедшей» и открылась не там.
+        // Откат делает пуск звука (applyRewindAfterPause): от того, когда
+        // слушали последний раз.
+        val target = startAbsMs ?: saved.absMs
         val (index, inFile) = b.locate(target)
         player.seekTo(index, inFile)
         player.setPlaybackSpeed(if (saved.speed > 0f) saved.speed else settings.now().speed)
@@ -237,7 +250,9 @@ class PlayerHolder(
         player.prepare()
         player.playWhenReady = false
         listenedAcc = saved.listenedMs
-        lastPauseAt = 0L
+        lastPauseAt = saved.listenAt.takeIf { it > 0 } ?: saved.updatedAt
+        heard = false
+        drifted = false
         // Новая книга: подкачка прежней больше ни к чему.
         streaming.prefetch(null)
         push()
@@ -302,24 +317,6 @@ class PlayerHolder(
         }
     }
 
-    /**
-     * Умный откат при возвращении. Через пять минут паузы хватает трёх секунд,
-     * через неделю нужно полминуты - иначе включаешься в середину фразы и
-     * половину главы вспоминаешь, о чём вообще речь.
-     */
-    private fun rewound(saved: BookState): Long {
-        if (!settings.now().autoRewind || saved.absMs <= 0) return saved.absMs
-        val gap = System.currentTimeMillis() - saved.updatedAt
-        val back = when {
-            gap < 15_000 -> 0L
-            gap < 60_000 -> 3_000L
-            gap < 30 * 60_000L -> 10_000L
-            gap < 6 * 3600_000L -> 20_000L
-            else -> 30_000L
-        }
-        return (saved.absMs - back).coerceAtLeast(0L)
-    }
-
     // -------------------------------------------------------------- команды
 
     fun playPause() {
@@ -337,6 +334,12 @@ class PlayerHolder(
         }
     }
 
+    /**
+     * Умный откат при возвращении. Через пять минут паузы хватает трёх секунд,
+     * через неделю нужно полминуты - иначе включаешься в середину фразы и
+     * половину главы вспоминаешь, о чём вообще речь. Делается на пуске, а не
+     * при открытии книги: открыл и не стал слушать - место не тронуто.
+     */
     private fun applyRewindAfterPause() {
         if (!settings.now().autoRewind || lastPauseAt == 0L) return
         val gap = System.currentTimeMillis() - lastPauseAt
@@ -355,13 +358,41 @@ class PlayerHolder(
         seekTo(absNow() + seconds * 1000L)
     }
 
-    fun seekTo(absMs: Long) {
+    /**
+     * Перемотка. [byHand] - её сделал человек (ползунок, «±15», глава, «слушать
+     * отсюда»): это место слушания, у него новое время. Нет - плеер подтянули
+     * к странице: место сменилось, а время слушания прежнее.
+     */
+    fun seekTo(absMs: Long, byHand: Boolean = true) {
         val b = book ?: return
         val target = absMs.coerceIn(0L, (b.totalMs - 1000).coerceAtLeast(0L))
         val (index, inFile) = b.locate(target)
         player.seekTo(index, inFile)
-        saveNow(markHistory = true)
+        if (byHand) heard = true else drifted = true
+        saveNow(markHistory = byHand)
         refreshArtwork(force = true)
+        push()
+    }
+
+    /** Плеер двинули рукой снаружи (шторка, экран блокировки): это место слушания. */
+    fun movedByHand() {
+        heard = true
+        saveNow(markHistory = true)
+        push()
+    }
+
+    /**
+     * Место приехало с другого устройства и уже лежит в позициях: плеер на
+     * паузе встаёт туда же, ничего не записывая. Играет - пусть играет: его
+     * слушание свежее и само запишется поверх.
+     */
+    fun adopt(bookId: String, absMs: Long) {
+        val b = book ?: return
+        if (b.id != bookId || player.mediaItemCount == 0 || player.playWhenReady) return
+        if (kotlin.math.abs(absNow() - absMs) < 1_000) return
+        val (index, inFile) = b.locate(absMs.coerceIn(0L, (b.totalMs - 1000).coerceAtLeast(0L)))
+        player.seekTo(index, inFile)
+        lastPauseAt = positions.get(bookId).listenAt
         push()
     }
 
@@ -385,7 +416,7 @@ class PlayerHolder(
         if (book == null || player.mediaItemCount == 0) return
         if (player.playWhenReady) return
         if (kotlin.math.abs(absNow() - absMs) < 1_000) return
-        seekTo(absMs)
+        seekTo(absMs, byHand = false)
         lastPauseAt = 0L
     }
 
@@ -445,6 +476,7 @@ class PlayerHolder(
         override fun run() {
             val now = System.currentTimeMillis()
             if (player.isPlaying) {
+                heard = true
                 listenedAcc += (now - lastTickAt).coerceIn(0, 2000)
                 lastTickAt = now
                 // Журналу - место в записи каждым тиком: из шага между тиками
@@ -494,11 +526,22 @@ class PlayerHolder(
         return b.offsetOf(player.currentMediaItemIndex) + player.currentPosition.coerceAtLeast(0L)
     }
 
+    /**
+     * Место в позиции. Звук не шёл и плеер не двигали - место в позициях
+     * правдивее плеера: его могли поставить чтение или другое устройство, а
+     * плеер о них не знает. Раньше уход из приложения записывал место плеера
+     * поверх в любом случае - со свежим временем, - и оно перебивало то, что
+     * было на самом деле последним.
+     */
     fun saveNow(markHistory: Boolean = false) {
         val b = book ?: return
         if (player.mediaItemCount == 0) return
         lastSaveAt = System.currentTimeMillis()
         val prev = positions.get(b.id)
+        if (!heard && !drifted) {
+            if (listenedAcc != prev.listenedMs) positions.save(prev.copy(listenedMs = listenedAcc))
+            return
+        }
         positions.save(
             prev.copy(
                 fileIndex = player.currentMediaItemIndex,
@@ -507,12 +550,16 @@ class PlayerHolder(
                 listenedMs = listenedAcc,
             ),
             markHistory = markHistory,
+            listened = heard,
         )
+        // Играет - слушание продолжается: следующий тик снова поднимет флаг.
+        heard = false
+        drifted = false
     }
 
     private fun finishBook() {
         val b = book ?: return
-        positions.save(positions.get(b.id).copy(absMs = b.totalMs, finished = true))
+        positions.save(positions.get(b.id).copy(absMs = b.totalMs, finished = true), listened = true)
         book?.id?.let(onSyncDue)
     }
 
@@ -583,7 +630,8 @@ class PlayerHolder(
         /** Тик записи на диск. Владелец просил «раз в минуту-две» - берём чаще. */
         private const val SAVE_EVERY_MS = 20_000L
         /** В папку библиотеки пишем реже: это уже настоящий файловый обмен. */
-        private const val SYNC_EVERY_MS = 120_000L
+        /** Место на сервер - раз в минуту, пока играет, и сразу на паузе. */
+        private const val SYNC_EVERY_MS = 60_000L
         private const val FADE_MS = 20_000L
         /** Реже, чем тик: картинка в книге меняется раз в несколько страниц. */
         private const val ART_EVERY_MS = 3_000L

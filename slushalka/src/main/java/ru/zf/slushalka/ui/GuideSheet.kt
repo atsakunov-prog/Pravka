@@ -112,6 +112,12 @@ fun GuideSheet(
     // пакета - всё одним вызовом.
     LaunchedEffect(b?.id, t) { b?.let { app.guide.sync(it, t).onFailure { e -> error = e.message } } }
     val st = b?.let { states[it.id] }
+    // Справочник уже кто-то готовит (Марианна, Boox, сервер ночью) - видно до
+    // кнопки заказа: второй пакет - вторая оплата.
+    var claim by remember(b?.id) { mutableStateOf<ru.zf.slushalka.ask.GuideEngine.Claim?>(null) }
+    LaunchedEffect(b?.id, st?.status) {
+        claim = if (b != null && st == null) app.guide.claimOf(b) else null
+    }
 
     // Пакет считается - проверяем раз в минуту, пока лист открыт.
     LaunchedEffect(st?.status, b?.id) {
@@ -186,17 +192,38 @@ fun GuideSheet(
                         "той же папки, получит его даром. Модель меняется в настройках, раздел «Модели».",
                 )
                 Spacer(Modifier.height(16.dp))
+                val c = claim
+                if (c != null) {
+                    PaperCard {
+                        Text(
+                            "Справочник уже готовит ${c.by}" +
+                                (if (c.device.isNotBlank() && c.device != c.by) " (${c.device})" else "") +
+                                ", заказан ${stamp(c.at)}. Он придёт сам: ляжет в папку книги на сервере, " +
+                                "и при следующем открытии книги подхватится здесь даром.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                }
                 PaperButton(
-                    if (busy) "Отправляю книгу…" else "Составить справочник · ≈ %.2f $".format(est.usd),
+                    when {
+                        busy -> "Отправляю книгу…"
+                        c != null -> "Заказать всё равно · ≈ %.2f $".format(est.usd)
+                        else -> "Составить справочник · ≈ %.2f $".format(est.usd)
+                    },
                     icon = Glyphs.AutoAwesome,
-                    primary = true,
+                    primary = c == null,
                     enabled = !busy,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     busy = true
                     error = null
                     coroutine.launch {
-                        app.guide.start(b, t).onFailure { error = it.message ?: "Не вышло заказать" }
+                        app.guide.start(b, t, force = c != null).onFailure { e ->
+                            // Пока лист был открыт, заказал кто-то другой - так и скажем.
+                            if (e is ru.zf.slushalka.ask.GuideEngine.ClaimedException) claim = e.claim
+                            else error = e.message ?: "Не вышло заказать"
+                        }
                         busy = false
                     }
                 }

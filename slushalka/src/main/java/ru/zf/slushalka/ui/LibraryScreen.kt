@@ -38,7 +38,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -96,7 +98,6 @@ fun LibraryScreen(
     val busy by state.busy.collectAsState()
     val notice by state.notice.collectAsState()
     val others by state.others.collectAsState()
-    val offer by state.resumeOffer.collectAsState()
     val rev by state.positionsRev.collectAsState()
     val prefs by state.prefs.collectAsState()
     val update by app.updater.status.collectAsState()
@@ -306,15 +307,66 @@ fun LibraryScreen(
             else shownBooks.filter { b -> seriesOf(b)?.name?.let(BookMeta::key) == seriesKey }
         }
         val top = last.takeIf { seriesKey == null }
+        // Свёрнутые группы - по ключу: серия или фамилия.
+        var collapsed by rememberSaveable { mutableStateOf(listOf<String>()) }
         val counts = remember(progress, base) {
             Shelf.entries.associateWith { sh -> base.count { sh.holds(progress.getValue(it.id)) } }
         }
+        // По сериям и по автору полка - группами с заголовками; в группе книга
+        // стоит на своём месте, даже если она же наверху в «Продолжить».
+        val grouped = seriesKey == null &&
+            (prefs.shelfSort == Settings.SORT_SERIES || prefs.shelfSort == Settings.SORT_AUTHOR)
         val shown = remember(base, progress, shelf, top, seriesKey, prefs.shelfSort) {
-            base.filter { it.id != top?.id && shelf.holds(progress.getValue(it.id)) }
+            base.filter { (grouped || it.id != top?.id) && shelf.holds(progress.getValue(it.id)) }
                 .sortedWith(
                     if (seriesKey != null) compareBy<Book>({ BookMeta.order(seriesOf(it)?.number) }).then(TitleOrder)
                     else shelfOrder(prefs.shelfSort, progress, ::seriesOf, ::surnameOf)
                 )
+        }
+
+        val groups: List<ShelfGroup>? = remember(shown, grouped, prefs.shelfSort, progress) {
+            if (!grouped) null
+            else if (prefs.shelfSort == Settings.SORT_SERIES) groupBySeries(shown, progress, ::seriesOf)
+            else groupByAuthor(shown, progress, ::surnameOf)
+        }
+
+        // Книга на полке - плиткой или строкой; одна и та же в простом порядке и в группах.
+        val bookCell: @Composable (Book) -> Unit = { book ->
+            val entry = if (inServer) entryOf[book.id] else null
+            val place = if (inServer) entry?.where?.label else phonePlace(book)
+            val onClick = {
+                // С сервера своё: книга не на телефоне спрашивает, как её взять.
+                if (entry != null && entry.local == null) serverMenu = entry else onOpen(book)
+            }
+            val onLongClick = { if (entry != null) serverMenu = entry else menuFor = book }
+            if (listView) {
+                BookRow(
+                    app = app,
+                    book = book,
+                    progress = progress.getValue(book.id),
+                    others = others[book.id].orEmpty(),
+                    place = place,
+                    format = formatOf(book),
+                    series = seriesOf(book),
+                    onSeries = pickSeries,
+                    download = downloadFor(book),
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                )
+            } else {
+                BookTile(
+                    app = app,
+                    book = book,
+                    progress = progress.getValue(book.id),
+                    others = others[book.id].orEmpty(),
+                    place = place,
+                    series = seriesOf(book),
+                    onSeries = pickSeries,
+                    download = downloadFor(book),
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                )
+            }
         }
 
         Refreshable(
@@ -448,6 +500,13 @@ fun LibraryScreen(
                     item(key = "shelves", span = { GridItemSpan(maxLineSpan) }) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.weight(1f)) { ShelfChips(shelf, counts) { shelf = it } }
+                            // Группы - свернуть разом или развернуть: обзор серий одним экраном.
+                            if (groups != null && groups.size > 1) {
+                                val allFolded = groups.all { it.key in collapsed }
+                                TextButton(onClick = {
+                                    collapsed = if (allFolded) emptyList() else groups.map { it.key }
+                                }) { Text(if (allFolded) "Развернуть" else "Свернуть") }
+                            }
                             // Внутри серии порядок один - по номерам: выбор порядка там не нужен.
                             if (seriesKey == null) {
                                 SortButton(prefs.shelfSort) { v -> scope.launch { app.settings.setShelfSort(v) } }
@@ -466,41 +525,18 @@ fun LibraryScreen(
                         }
                     }
                 }
-                items(shown, key = { it.id }) { book ->
-                    val entry = if (inServer) entryOf[book.id] else null
-                    val place = if (inServer) entry?.where?.label else phonePlace(book)
-                    val onClick = {
-                        // С сервера своё: книга не на телефоне спрашивает, как её взять.
-                        if (entry != null && entry.local == null) serverMenu = entry else onOpen(book)
-                    }
-                    val onLongClick = { if (entry != null) serverMenu = entry else menuFor = book }
-                    if (listView) {
-                        BookRow(
-                            app = app,
-                            book = book,
-                            progress = progress.getValue(book.id),
-                            others = others[book.id].orEmpty(),
-                            place = place,
-                            format = formatOf(book),
-                            series = seriesOf(book),
-                            onSeries = pickSeries,
-                            download = downloadFor(book),
-                            onClick = onClick,
-                            onLongClick = onLongClick,
-                        )
-                    } else {
-                        BookTile(
-                            app = app,
-                            book = book,
-                            progress = progress.getValue(book.id),
-                            others = others[book.id].orEmpty(),
-                            place = place,
-                            series = seriesOf(book),
-                            onSeries = pickSeries,
-                            download = downloadFor(book),
-                            onClick = onClick,
-                            onLongClick = onLongClick,
-                        )
+                val g = groups
+                if (g == null) {
+                    items(shown, key = { it.id }) { book -> bookCell(book) }
+                } else {
+                    g.forEach { group ->
+                        val folded = group.key in collapsed
+                        item(key = "g:" + group.key, span = { GridItemSpan(maxLineSpan) }) {
+                            GroupHeader(group, folded) {
+                                collapsed = if (folded) collapsed - group.key else collapsed + group.key
+                            }
+                        }
+                        if (!folded) items(group.books, key = { it.id }) { book -> bookCell(book) }
                     }
                 }
                 if (shownBooks.isNotEmpty() && shown.isEmpty()) {
@@ -536,6 +572,7 @@ fun LibraryScreen(
                 { menuFor = null; app.cloudBooks.upload(book, toRoot = index != null) }
             } else null,
             onDelete = if (book.onPhone) { { menuFor = null; deleteAsk = book } } else null,
+            places = placesOf(app, book, others[book.id].orEmpty(), prefs.profile),
             onClose = { menuFor = null },
         )
     }
@@ -563,6 +600,7 @@ fun LibraryScreen(
                 { serverMenu = null; app.cloudBooks.downloadText(idx, sb) }
             } else null,
             onDelete = entry.local?.takeIf { it.onPhone }?.let { local -> { serverMenu = null; deleteAsk = local } },
+            places = placesOf(app, entry.shown, others[entry.shown.id].orEmpty(), prefs.profile),
             onClose = { serverMenu = null },
         )
     }
@@ -576,31 +614,6 @@ fun LibraryScreen(
         )
     }
 
-    offer?.let { o ->
-        val book = state.bookById(o.bookId)
-        AlertDialog(
-            onDismissRequest = { state.declineResume() },
-            title = { Text("Продолжить с другого устройства?") },
-            text = {
-                // У книги без записи место - страница, а не секунда.
-                val where = if (book?.hasAudio == false && o.readChar >= 0) {
-                    "стр. ${o.readChar / Settings.PAGE_CHARS + 1}"
-                } else {
-                    formatClock(o.absMs)
-                }
-                Text(
-                    "«${book?.title ?: o.bookId}» — там остановились на $where " +
-                        "(${formatAgo(o.at)}). Здесь место другое."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { state.acceptResume() }) { Text("Перейти туда") }
-            },
-            dismissButton = {
-                TextButton(onClick = { state.declineResume() }) { Text("Остаться здесь") }
-            },
-        )
-    }
 }
 
 /** Где книга библиотеки: целиком на телефоне, только текст или только на сервере. */
@@ -809,6 +822,80 @@ private fun shelfOrder(
         { progress.getValue(it.id).touchedAt <= 0L },
         { -progress.getValue(it.id).touchedAt },
     ).then(TitleOrder)
+}
+
+/** Группа полки: серия или автор, сколько в ней и что пройдено, книги по порядку. */
+private class ShelfGroup(val key: String, val title: String, val note: String, val books: List<Book>)
+
+/** «10 книг · прочитано 3 · в процессе 1». */
+private fun groupNote(books: List<Book>, progress: Map<String, Progress>): String {
+    val done = books.count { progress[it.id]?.done == true }
+    val now = books.count { progress[it.id]?.started == true }
+    return listOfNotNull(
+        booksWord(books.size, "").trim(),
+        if (done > 0) "прочитано $done" else null,
+        if (now > 0) "в процессе $now" else null,
+    ).joinToString(" · ")
+}
+
+/**
+ * По сериям: серия - заголовок, под ним книги по номерам; серии по алфавиту,
+ * книги вне серий - последней группой. Порядок внутри уже задан сортировкой.
+ */
+private fun groupBySeries(
+    shown: List<Book>,
+    progress: Map<String, Progress>,
+    series: (Book) -> BookMeta.Series?,
+): List<ShelfGroup> {
+    val by = shown.groupBy { series(it)?.name?.let(BookMeta::key).orEmpty() }
+    val named = by.filterKeys { it.isNotEmpty() }
+        .map { (k, books) -> ShelfGroup("s:$k", series(books.first())!!.name, groupNote(books, progress), books) }
+        .sortedWith { a, b -> ru.zf.slushalka.library.NaturalOrder.compare(a.title, b.title) }
+    val loose = by[""]?.let { ShelfGroup("s:", "Без серии", groupNote(it, progress), it) }
+    return named + listOfNotNull(loose)
+}
+
+/**
+ * По автору: автор - заголовок (по фамилии, так что «Борис Акунин» и
+ * «Акунин Борис» - один автор), под ним его серии по номерам и остальное;
+ * книги без автора - последней группой.
+ */
+private fun groupByAuthor(
+    shown: List<Book>,
+    progress: Map<String, Progress>,
+    surname: (Book) -> String,
+): List<ShelfGroup> {
+    val by = shown.groupBy { surname(it).trim().lowercase() }
+    val named = by.filterKeys { it.isNotEmpty() }.map { (k, books) ->
+        // Имя в заголовке - как оно чаще написано у его книг.
+        val name = books.groupingBy { it.author.trim() }.eachCount().maxBy { it.value }.key
+        ShelfGroup("a:$k", name, groupNote(books, progress), books)
+    }.sortedWith { a, b -> ru.zf.slushalka.library.NaturalOrder.compare(a.key, b.key) }
+    val loose = by[""]?.let { ShelfGroup("a:", "Автор не указан", groupNote(it, progress), it) }
+    return named + listOfNotNull(loose)
+}
+
+/** Заголовок группы: стрелка, имя, сколько книг; нажатие сворачивает и разворачивает. */
+@Composable
+private fun GroupHeader(group: ShelfGroup, folded: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onToggle)
+            .padding(top = 10.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (folded) Icons.AutoMirrored.Filled.KeyboardArrowRight else Icons.Default.KeyboardArrowDown,
+            contentDescription = if (folded) "Развернуть" else "Свернуть",
+        )
+        Spacer(Modifier.width(6.dp))
+        Column(Modifier.weight(1f)) {
+            Text(group.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(group.note, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }
 
 /** Выбор порядка: значок и меню с галочкой у выбранного. */
@@ -1225,10 +1312,13 @@ private fun statusLine(book: Book, progress: Progress, others: List<AppState.Oth
         withSpan && !book.hasText -> "без текста"
         else -> ""
     }
+    // У другого - его последнее место: слушал позже - по записи, читал позже - по тексту.
     val theirs = others.joinToString(" · ") { o ->
         when {
-            book.totalMs > 0 -> "${o.who} ${(o.absMs * 100 / book.totalMs).toInt()}%"
+            o.listenedLast && book.totalMs > 0 -> "${o.who} ${(o.absMs * 100 / book.totalMs).toInt()}%"
+            o.readChar >= 0 && o.readShare > 0f -> "${o.who} ${(o.readShare * 100).toInt()}%"
             o.readChar >= 0 -> "${o.who} стр. ${o.readChar / Settings.PAGE_CHARS + 1}"
+            book.totalMs > 0 -> "${o.who} ${(o.absMs * 100 / book.totalMs).toInt()}%"
             else -> o.who
         }
     }
@@ -1373,6 +1463,8 @@ private fun BookMenu(
     onUpload: (() -> Unit)?,
     /** Удалить папку книги с телефона; null - папки на телефоне нет. */
     onDelete: (() -> Unit)?,
+    /** Свои места и места других - видно, кто где. */
+    places: List<PlaceLine>,
     onClose: () -> Unit,
 ) {
     AlertDialog(
@@ -1390,6 +1482,7 @@ private fun BookMenu(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                PlacesBlock(places)
                 if (series != null) SeriesMenuLink(series, onSeries)
                 if (progress.canRemind) {
                     Spacer(Modifier.height(10.dp))
@@ -1447,6 +1540,7 @@ private fun ServerBookMenu(
     /** Скачать текст, а звук слушать с сервера; null - не к этой книге. */
     onTextOnly: (() -> Unit)?,
     onDelete: (() -> Unit)?,
+    places: List<PlaceLine>,
     onClose: () -> Unit,
 ) {
     val book = entry.shown
@@ -1484,6 +1578,7 @@ private fun ServerBookMenu(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                PlacesBlock(places)
                 if (series != null) SeriesMenuLink(series, onSeries)
                 if (onStream != null) {
                     Spacer(Modifier.height(10.dp))
@@ -1535,6 +1630,49 @@ private fun ServerBookMenu(
         },
         dismissButton = { TextButton(onClick = onClose) { Text("Закрыть") } },
     )
+}
+
+/** Строка «кто где» в меню книги: чьё место, что и когда. */
+private data class PlaceLine(val who: String, val text: String)
+
+/**
+ * Места в книге: свои (слушал и читал - каждое со своим временем) и других
+ * людей - самые свежие с любого их устройства. Чтобы было видно, что место
+ * не сбилось, и где сейчас Марианна.
+ */
+private fun placesOf(app: SlushalkaApp, book: Book, others: List<AppState.OtherPlace>, me: String): List<PlaceLine> {
+    fun listen(absMs: Long, at: Long): String? =
+        if (at <= 0 || !book.hasAudio) null
+        else "слушал до ${formatClock(absMs)}" +
+            (if (book.totalMs > 0) " (${(absMs * 100 / book.totalMs).toInt()}%)" else "") + ", ${formatAgo(at)}"
+    fun read(char: Int, of: Int, at: Long): String? =
+        if (char < 0 || at <= 0) null
+        else "читал стр. ${char / Settings.PAGE_CHARS + 1}" +
+            (if (of > 0) " (${(char * 100L / of).toInt()}%)" else "") + ", ${formatAgo(at)}"
+    val mine = app.state.stateOf(book.id)
+    val out = ArrayList<PlaceLine>()
+    listOfNotNull(listen(mine.absMs, mine.listenAt), read(mine.readChar, mine.textChars, mine.readAt))
+        .takeIf { it.isNotEmpty() }
+        ?.let { out += PlaceLine(me.ifBlank { "Я" }, it.joinToString("; ")) }
+    others.forEach { o ->
+        listOfNotNull(listen(o.absMs, o.listenAt), read(o.readChar, o.textChars, o.readAt))
+            .takeIf { it.isNotEmpty() }
+            ?.let { out += PlaceLine(o.who, it.joinToString("; ")) }
+    }
+    return out
+}
+
+@Composable
+private fun PlacesBlock(places: List<PlaceLine>) {
+    if (places.isEmpty()) return
+    Spacer(Modifier.height(8.dp))
+    places.forEach { p ->
+        Text(
+            "${p.who}: ${p.text}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 /** Серия в меню книги: «Серия «Дюна», книга 2 - вся серия». */
