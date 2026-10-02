@@ -21,17 +21,28 @@ object BookMeta {
 
     data class Series(val name: String, val number: String?)
 
-    /** Серия из файла текста. null - серии нет или файл не открылся. */
-    fun series(context: Context, uri: Uri, fileName: String): Series? = runCatching {
+    /**
+     * Что полка берёт из головы файла: серию и фамилию автора. Фамилия -
+     * для сортировки «по автору»: в имени папки автор бывает и «Имя
+     * Фамилия», и «Фамилия Имя», а в fb2 фамилия размечена отдельно.
+     */
+    data class Meta(val series: Series?, val surname: String?)
+
+    /** Серия и фамилия из файла текста. null - файл не открылся. */
+    fun read(context: Context, uri: Uri, fileName: String): Meta? = runCatching {
         val lower = fileName.lowercase()
         context.contentResolver.openInputStream(uri)?.use { input ->
             when {
-                lower.endsWith(".fb2") -> fb2Series(decodeHead(readHead(input)))
+                lower.endsWith(".fb2") -> fb2Meta(decodeHead(readHead(input)))
                 // .epub, .fb2.zip, .zip: внутри fb2 или OPF, что попадётся первым.
-                else -> zipSeries(input)
+                else -> zipMeta(input)
             }
         }
     }.getOrNull()
+
+    fun fb2Meta(text: String) = Meta(fb2Series(text), fb2Surname(text))
+
+    fun opfMeta(text: String) = Meta(opfSeries(text), opfSurname(text))
 
     /** Сначала голова: описание fb2 и OPF умещаются в четверть мегабайта с запасом. */
     private fun readHead(input: InputStream, max: Int = HEAD_BYTES): ByteArray {
@@ -45,15 +56,15 @@ object BookMeta {
         return if (got == max) out else out.copyOf(got)
     }
 
-    private fun zipSeries(input: InputStream): Series? {
+    private fun zipMeta(input: InputStream): Meta? {
         val zip = ZipInputStream(input)
         var seen = 0
         while (seen++ < MAX_ENTRIES) {
             val e = zip.nextEntry ?: return null
             val name = e.name.lowercase()
             when {
-                name.endsWith(".fb2") -> return fb2Series(decodeHead(readHead(zip)))
-                name.endsWith(".opf") -> return opfSeries(decodeHead(readHead(zip)))
+                name.endsWith(".fb2") -> return fb2Meta(decodeHead(readHead(zip)))
+                name.endsWith(".opf") -> return opfMeta(decodeHead(readHead(zip)))
             }
         }
         return null
@@ -80,18 +91,40 @@ object BookMeta {
         return String(bytes, charset)
     }
 
-    /** Серия из описания fb2: первый `<sequence>` в `<title-info>`. */
-    fun fb2Series(text: String): Series? {
+    /** Описание книги в fb2 - `<title-info>` без издательских сведений. null - его нет. */
+    private fun titleInfo(text: String): String? {
         val start = Regex("<(?:\\w+:)?title-info\\b[^>]*>").find(text) ?: return null
-        // Пустой <title-info/> - описания нет, и серии в нём тоже.
         if (start.value.endsWith("/>")) return null
-        // Конец - закрывающий тег, а если голова обрезана раньше, то хотя бы
-        // начало издательских сведений: их серия - не серия книги.
         val end = listOfNotNull(
             Regex("</(?:\\w+:)?title-info>").find(text, start.range.last)?.range?.first,
             Regex("<(?:\\w+:)?(?:publish-info|src-title-info|document-info)\\b").find(text, start.range.last)?.range?.first,
         ).minOrNull() ?: text.length
-        val info = text.substring(start.range.last + 1, end)
+        return text.substring(start.range.last + 1, end)
+    }
+
+    /** Фамилия первого автора fb2: `<author><last-name>`. */
+    fun fb2Surname(text: String): String? {
+        val info = titleInfo(text) ?: return null
+        val author = Regex("<(?:\\w+:)?author\\b[^>]*>(.*?)</(?:\\w+:)?author>", RegexOption.DOT_MATCHES_ALL).find(info)
+            ?.groupValues?.get(1) ?: return null
+        return Regex("<(?:\\w+:)?last-name>([^<]*)</(?:\\w+:)?last-name>").find(author)?.groupValues?.get(1)
+            ?.let(TextExtract::decodeEntities)?.trim()?.takeIf { it.isNotBlank() }
+    }
+
+    /** Фамилия из OPF: «Акунин, Борис» в `file-as` у автора - до запятой. */
+    fun opfSurname(text: String): String? {
+        val fileAs = Regex("<dc:creator\\b[^>]*\\bfile-as\\s*=\\s*([\"'])(.*?)\\1").find(text)?.groupValues?.get(2)
+            ?: Regex("<(?:\\w+:)?meta\\b[^>]*property\\s*=\\s*[\"']file-as[\"'][^>]*>([^<]*)</").find(text)?.groupValues?.get(1)
+            ?: return null
+        return TextExtract.decodeEntities(fileAs).substringBefore(',').trim().takeIf { it.isNotBlank() }
+    }
+
+    /** Серия из описания fb2: первый `<sequence>` в `<title-info>`. */
+    fun fb2Series(text: String): Series? {
+        // Пустой <title-info/> - описания нет, и серии в нём тоже. Конец - закрывающий
+        // тег, а если голова обрезана раньше, то хотя бы начало издательских
+        // сведений: их серия - не серия книги.
+        val info = titleInfo(text) ?: return null
         val tag = Regex("<(?:\\w+:)?sequence\\b([^>]*)>").find(info) ?: return null
         val attrs = tag.groupValues[1]
         val name = attr(attrs, "name")?.let(TextExtract::decodeEntities)?.trim()?.takeIf { it.isNotBlank() }

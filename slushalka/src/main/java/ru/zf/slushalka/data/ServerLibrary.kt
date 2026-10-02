@@ -252,9 +252,7 @@ class ServerLibrary(
                     audio = entries(b.optJSONArray("audio")).sortedWith(AudioOrder),
                     audioMs = b.optLong("audio_ms"),
                     other = entries(b.optJSONArray("other")),
-                    series = str(b, "series", "sequence")?.takeIf { it.isNotBlank() },
-                    seriesNum = number(b, "series_index", "series_number", "sequence_number"),
-                )
+                ).let { book -> seriesOf(b)?.let { (name, num) -> book.copy(series = name, seriesNum = num) } ?: book }
             }
             return Index(
                 generated = o.optString("generated"),
@@ -262,6 +260,30 @@ class ServerLibrary(
                 books = books.distinctBy { folderKey(it.folder) },
                 fetchedAt = fetchedAt,
             )
+        }
+
+        /**
+         * Серия книги в оглавлении. Сервер может положить её строкой с номером
+         * рядом (`series` + `series_index`), объектом (`{"name", "number"}`) или
+         * списком таких объектов, как `<sequence>` в fb2, - берётся первая.
+         */
+        private fun seriesOf(b: JSONObject): Pair<String, String?>? {
+            for (key in listOf("series", "sequence")) {
+                if (!b.has(key) || b.isNull(key)) continue
+                val obj = when (val v = b.opt(key)) {
+                    is JSONObject -> v
+                    is JSONArray -> v.optJSONObject(0)
+                    else -> null
+                }
+                if (obj != null) {
+                    val name = str(obj, "name", "title")?.takeIf { it.isNotBlank() } ?: continue
+                    return name to number(obj, "number", "index", "num", "position")
+                }
+                val name = str(b, key)?.takeIf { it.isNotBlank() } ?: continue
+                return name to number(b, "series_index", "series_number", "series_num", "sequence_number", "sequence_index")
+            }
+            return str(b, "series_name")?.takeIf { it.isNotBlank() }
+                ?.let { it to number(b, "series_index", "series_number", "series_num") }
         }
 
         /** Строка из первого поля, что есть и не null: имя поля у сервера могли выбрать любое из похожих. */

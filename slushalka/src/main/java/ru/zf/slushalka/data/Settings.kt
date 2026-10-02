@@ -189,6 +189,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val streamCacheMb: Int = 2048,
         /** Полка плитками с крупными обложками или списком с маленькими. */
         val shelfLayout: String = LAYOUT_GRID,
+        /** Порядок книг на полке: последние, по автору, по названию, по сериям. */
+        val shelfSort: String = SORT_RECENT,
     ) {
         /** Облако настроено: есть куда и с чем ходить. */
         val cloudReady: Boolean
@@ -296,6 +298,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 streamMobile = p[KEY_STREAM_MOBILE]?.takeIf { it in MOBILES } ?: MOBILE_ASK,
                 streamCacheMb = p[KEY_STREAM_CACHE]?.takeIf { it in CACHE_SIZES_MB } ?: 2048,
                 shelfLayout = p[KEY_SHELF_LAYOUT]?.takeIf { it in LAYOUTS } ?: LAYOUT_GRID,
+                shelfSort = p[KEY_SHELF_SORT]?.takeIf { it in SORTS } ?: SORT_RECENT,
             )
         }
         .stateIn(scope, SharingStarted.Eagerly, Prefs())
@@ -407,6 +410,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setStreamMobile(v: String) = edit { if (v in MOBILES) it[KEY_STREAM_MOBILE] = v }
     suspend fun setStreamCacheMb(v: Int) = edit { if (v in CACHE_SIZES_MB) it[KEY_STREAM_CACHE] = v }
     suspend fun setShelfLayout(v: String) = edit { if (v in LAYOUTS) it[KEY_SHELF_LAYOUT] = v }
+    suspend fun setShelfSort(v: String) = edit { if (v in SORTS) it[KEY_SHELF_SORT] = v }
 
     companion object {
         // Модели - в ask/Models.kt: там же имена, цены и «по умолчанию».
@@ -481,6 +485,20 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         const val LAYOUT_GRID = "grid"
         const val LAYOUT_LIST = "list"
         val LAYOUTS = listOf(LAYOUT_GRID, LAYOUT_LIST)
+
+        // Порядок полки. «Последние» - заводской: приложение открывают продолжить.
+        const val SORT_RECENT = "recent"
+        const val SORT_AUTHOR = "author"
+        const val SORT_TITLE = "title"
+        const val SORT_SERIES = "series"
+        val SORTS = listOf(SORT_RECENT, SORT_AUTHOR, SORT_TITLE, SORT_SERIES)
+
+        fun sortLabel(v: String): String = when (v) {
+            SORT_AUTHOR -> "По автору"
+            SORT_TITLE -> "По названию"
+            SORT_SERIES -> "По сериям"
+            else -> "Последние"
+        }
 
         /** Ступени кэша записи: от полугига до восьми. */
         val CACHE_SIZES_MB = listOf(512, 1024, 2048, 4096, 8192)
@@ -752,6 +770,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_STREAM_MOBILE = stringPreferencesKey("stream_mobile")
         private val KEY_STREAM_CACHE = intPreferencesKey("stream_cache_mb")
         private val KEY_SHELF_LAYOUT = stringPreferencesKey("shelf_layout")
+        private val KEY_SHELF_SORT = stringPreferencesKey("shelf_sort")
     }
 }
 

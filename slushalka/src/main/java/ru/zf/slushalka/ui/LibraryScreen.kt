@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -150,13 +151,28 @@ fun LibraryScreen(
             ?: serverByFolder[ServerLibrary.folderKey(book.folderName)]?.let { ServerEntry(it, book.takeIf { b -> b.onPhone }) }
 
     /**
-     * Серия книги: своя (из файла текста), а нет - с сервера: у книги без
-     * текста на телефоне или ещё не прочитанной серия оттуда.
+     * Серия книги: сперва из библиотеки - сервер разбирает серии сам и
+     * называет их одинаково у всех книг; нет там - своя, из файла текста.
      */
     fun seriesOf(book: Book): BookMeta.Series? {
-        book.series?.takeIf { it.isNotBlank() }?.let { return BookMeta.Series(it, book.seriesNum) }
-        val s = serverByFolder[ServerLibrary.folderKey(book.folderName)] ?: return null
-        return s.series?.takeIf { it.isNotBlank() }?.let { BookMeta.Series(it, s.seriesNum) }
+        serverByFolder[ServerLibrary.folderKey(book.folderName)]?.let { s ->
+            s.series?.takeIf { it.isNotBlank() }?.let { return BookMeta.Series(it, s.seriesNum) }
+        }
+        return book.series?.takeIf { it.isNotBlank() }?.let { BookMeta.Series(it, book.seriesNum) }
+    }
+
+    /**
+     * Фамилия автора для порядка «по автору». Из разметки fb2/epub, если она
+     * там есть; иначе по имени: сервер раскладывает папки «Имя Фамилия», а
+     * Флибуста и прежние папки на телефоне - «Фамилия Имя».
+     */
+    fun surnameOf(book: Book): String {
+        book.authorKey?.takeIf { it.isNotBlank() }?.let { return it }
+        val first = book.author.split(',', ';').first().trim()
+        val words = first.split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (words.size <= 1) return first
+        val serverStyle = !book.onPhone || serverByFolder.containsKey(ServerLibrary.folderKey(book.folderName))
+        return if (serverStyle) words.last() else words.first()
     }
 
     /** Что можно скачать у книги и как: целиком, только текст, докачать звук. null - нечего. */
@@ -293,11 +309,11 @@ fun LibraryScreen(
         val counts = remember(progress, base) {
             Shelf.entries.associateWith { sh -> base.count { sh.holds(progress.getValue(it.id)) } }
         }
-        val shown = remember(base, progress, shelf, top, seriesKey) {
+        val shown = remember(base, progress, shelf, top, seriesKey, prefs.shelfSort) {
             base.filter { it.id != top?.id && shelf.holds(progress.getValue(it.id)) }
                 .sortedWith(
-                    if (seriesKey != null) compareBy<Book>({ BookMeta.order(seriesOf(it)?.number) }, { it.title.lowercase() })
-                    else shelfOrder(progress)
+                    if (seriesKey != null) compareBy<Book>({ BookMeta.order(seriesOf(it)?.number) }).then(TitleOrder)
+                    else shelfOrder(prefs.shelfSort, progress, ::seriesOf, ::surnameOf)
                 )
         }
 
@@ -432,6 +448,10 @@ fun LibraryScreen(
                     item(key = "shelves", span = { GridItemSpan(maxLineSpan) }) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.weight(1f)) { ShelfChips(shelf, counts) { shelf = it } }
+                            // Внутри серии порядок один - по номерам: выбор порядка там не нужен.
+                            if (seriesKey == null) {
+                                SortButton(prefs.shelfSort) { v -> scope.launch { app.settings.setShelfSort(v) } }
+                            }
                             // Плитки или список - значок того, во что переключит.
                             IconButton(onClick = {
                                 scope.launch {
@@ -749,12 +769,73 @@ private enum class Shelf(val label: String, val empty: String) {
     }
 }
 
-/** Начатые - по свежести, за ними новые по названию, в конце пройденные. */
-private fun shelfOrder(progress: Map<String, Progress>) = compareBy<Book>(
-    { b -> progress.getValue(b.id).let { if (it.started) 0 else if (!it.done) 1 else 2 } },
-    { b -> progress.getValue(b.id).let { if (it.started || it.done) -it.touchedAt else 0L } },
-    { b -> b.title.lowercase() },
-)
+/** Название для порядка: кавычки и скобки впереди не в счёт, «2» раньше «10». */
+private val TitleOrder = Comparator<Book> { a, b ->
+    ru.zf.slushalka.library.NaturalOrder.compare(
+        a.title.trimStart { !it.isLetterOrDigit() },
+        b.title.trimStart { !it.isLetterOrDigit() },
+    )
+}
+
+/**
+ * Порядок полки.
+ * - Последние: что открывали, по свежести; нетронутые - за ними по названию.
+ * - По автору: по фамилии, у одного автора - серии по номерам, потом
+ *   остальное по названию; книги без автора - в конце.
+ * - По названию.
+ * - По сериям: серии по алфавиту, внутри по номерам; книги вне серий - в конце.
+ */
+private fun shelfOrder(
+    sort: String,
+    progress: Map<String, Progress>,
+    series: (Book) -> BookMeta.Series?,
+    surname: (Book) -> String,
+): Comparator<Book> = when (sort) {
+    Settings.SORT_AUTHOR -> compareBy<Book>(
+        { surname(it).isBlank() },
+        { surname(it).lowercase() },
+        { it.author.lowercase() },
+        { series(it) == null },
+        { series(it)?.name?.let(BookMeta::key).orEmpty() },
+        { BookMeta.order(series(it)?.number) },
+    ).then(TitleOrder)
+    Settings.SORT_TITLE -> TitleOrder
+    Settings.SORT_SERIES -> compareBy<Book>(
+        { series(it) == null },
+        { series(it)?.name?.let(BookMeta::key).orEmpty() },
+        { BookMeta.order(series(it)?.number) },
+    ).then(TitleOrder)
+    else -> compareBy<Book>(
+        { progress.getValue(it.id).touchedAt <= 0L },
+        { -progress.getValue(it.id).touchedAt },
+    ).then(TitleOrder)
+}
+
+/** Выбор порядка: значок и меню с галочкой у выбранного. */
+@Composable
+private fun SortButton(sort: String, onPick: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) {
+            Icon(Glyphs.Sort, contentDescription = "Порядок: " + Settings.sortLabel(sort))
+        }
+        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            Settings.SORTS.forEach { v ->
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text(Settings.sortLabel(v)) },
+                    leadingIcon = {
+                        if (v == sort) Icon(androidx.compose.material.icons.Icons.Default.Check, contentDescription = null)
+                        else Spacer(Modifier.size(24.dp))
+                    },
+                    onClick = {
+                        open = false
+                        onPick(v)
+                    },
+                )
+            }
+        }
+    }
+}
 
 private fun booksWord(n: Int, where: String): String {
     val tail = n % 100

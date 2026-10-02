@@ -201,6 +201,7 @@ class AppState(private val app: SlushalkaApp) {
                 // Серия читалась из того же файла текста - второй раз незачем.
                 series = if (b.textDocId == old.textDocId) old.series else null,
                 seriesNum = if (b.textDocId == old.textDocId) old.seriesNum else null,
+                authorKey = if (b.textDocId == old.textDocId) old.authorKey else null,
             )
         }
         app.library.replace(tree.toString(), merged)
@@ -228,29 +229,36 @@ class AppState(private val app: SlushalkaApp) {
     private var seriesJob: kotlinx.coroutines.Job? = null
 
     /**
-     * Серии книг полки - из головы файла текста, по одному разу на книгу:
-     * прочитанное переносится через перечитывание папки, а «серии нет»
-     * помнится пустой строкой. Пачками, чтобы полка показывала серии по мере
-     * того, как они находятся, а не после всех ста книг.
+     * Серии и фамилии авторов книг полки - из головы файла текста, по одному
+     * разу на книгу: прочитанное переносится через перечитывание папки, а
+     * «нет» помнится пустой строкой. Пачками, чтобы полка показывала их по
+     * мере того, как они находятся, а не после всех ста книг.
      */
     private fun fillSeries() {
         if (seriesJob?.isActive == true) return
         seriesJob = app.scope.launch {
             while (true) {
-                val todo = _books.value.filter { it.series == null && it.textDocId != null }.take(SERIES_BATCH)
+                val todo = _books.value
+                    .filter { it.textDocId != null && (it.series == null || it.authorKey == null) }
+                    .take(SERIES_BATCH)
                 if (todo.isEmpty()) break
                 val found = withContext(Dispatchers.IO) {
                     todo.associate { b ->
                         val tree = treeOf(b)
                         val docId = b.textDocId
                         b.id to if (tree != null && docId != null) {
-                            ru.zf.slushalka.text.BookMeta.series(app, documentUri(tree, docId), b.textName.orEmpty())
+                            ru.zf.slushalka.text.BookMeta.read(app, documentUri(tree, docId), b.textName.orEmpty())
                         } else null
                     }
                 }
                 val updated = _books.value.map { b ->
-                    if (b.id in found && b.series == null) {
-                        b.copy(series = found[b.id]?.name ?: "", seriesNum = found[b.id]?.number)
+                    if (b.id in found && (b.series == null || b.authorKey == null)) {
+                        val m = found[b.id]
+                        b.copy(
+                            series = m?.series?.name ?: "",
+                            seriesNum = m?.series?.number,
+                            authorKey = m?.surname ?: "",
+                        )
                     } else b
                 }
                 _books.value = updated

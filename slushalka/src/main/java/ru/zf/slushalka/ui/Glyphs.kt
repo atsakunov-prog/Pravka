@@ -664,6 +664,17 @@ object Glyphs {
         }
     }
 
+    /** Порядок полки: три полосы, длинная сверху (Material sort). */
+    val Sort: ImageVector by lazy {
+        materialIcon(name = "Glyphs.Sort") {
+            materialPath {
+                moveTo(3.0f, 18.0f); horizontalLineToRelative(6.0f); verticalLineToRelative(-2.0f); horizontalLineTo(3.0f); close()
+                moveTo(3.0f, 6.0f); verticalLineToRelative(2.0f); horizontalLineToRelative(18.0f); verticalLineTo(6.0f); close()
+                moveTo(3.0f, 13.0f); horizontalLineToRelative(12.0f); verticalLineToRelative(-2.0f); horizontalLineTo(3.0f); close()
+            }
+        }
+    }
+
     /** Полка плитками: четыре квадрата (Material grid_view). */
     val GridView: ImageVector by lazy {
         materialIcon(name = "Glyphs.GridView") {

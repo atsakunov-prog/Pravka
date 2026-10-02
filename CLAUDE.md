@@ -106,8 +106,10 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     Телефон и сервер сравнивают книги по имени папки без регистра
     (`ServerLibrary.folderKey`). Серия — `Book.series/seriesNum` (null — не
     смотрели, "" — нет): `text/BookMeta.kt` читает голову fb2/epub,
-    `AppState.fillSeries` — в фоне пачками; у сервера — `series`/
-    `series_index` в `index.json`. На полке — `SeriesLink` (фильтр), плашка
+    `AppState.fillSeries` — в фоне пачками, заодно фамилия автора
+    `Book.authorKey`; у сервера — `series`/`series_index` в `index.json`
+    (`ServerLibrary.seriesOf` понимает и объект, и список), его серия
+    главнее. Порядок — `Prefs.shelfSort`, `shelfOrder` + `SortButton`. На полке — `SeriesLink` (фильтр), плашка
     `SeriesBar`; вид `Prefs.shelfLayout` (плитки `BookTile` / список
     `BookRow`), «скачать» — `DownloadButton` + `DownloadOffer`. «Только текст» — `CloudBooks.downloadText`
     + метка `слушалка-звук.json` (`ServerLibrary.MARKER`), её читает

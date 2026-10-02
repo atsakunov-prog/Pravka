@@ -80,6 +80,11 @@ data class Book(
     val series: String? = null,
     /** Номер в серии, как в книге: «3», «1.5»; null - без номера. */
     val seriesNum: String? = null,
+    /**
+     * Фамилия автора для сортировки - из разметки fb2/epub. null - не
+     * смотрели, пустая строка - в файле её нет, полка угадает по имени.
+     */
+    val authorKey: String? = null,
 ) {
     val totalMs: Long get() = files.sumOf { it.durationMs }
     val durationsReady: Boolean get() = files.isNotEmpty() && files.all { it.durationMs > 0 }
@@ -138,6 +143,7 @@ data class Book(
             coverRemote?.let { put("coverRemote", it) }
             series?.let { put("series", it) }
             seriesNum?.let { put("seriesNum", it) }
+            authorKey?.let { put("authorKey", it) }
         }
 
     companion object {
@@ -159,6 +165,7 @@ data class Book(
                 // Пустая серия - «смотрели, нет»: её надо отличить от «не смотрели».
                 series = if (o.has("series") && !o.isNull("series")) o.optString("series") else null,
                 seriesNum = o.optString("seriesNum").takeIf { o.has("seriesNum") && !o.isNull("seriesNum") && it.isNotBlank() },
+                authorKey = if (o.has("authorKey") && !o.isNull("authorKey")) o.optString("authorKey") else null,
             )
         }
     }

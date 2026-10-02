@@ -108,4 +108,18 @@ class ServerLibraryTest {
         assertEquals("История Российского государства", book.series)
         assertEquals("9", book.seriesNum)
     }
+
+    @Test
+    fun seriesAsObjectOrList() {
+        val idx = ServerLibrary.parse(
+            """{"books": [
+                {"folder": "А", "series": {"name": "Ведьмак", "number": 3}},
+                {"folder": "Б", "sequence": [{"name": "Основание", "number": "2"}]}
+            ]}"""
+        )
+        assertEquals("Ведьмак", idx.books[0].series)
+        assertEquals("3", idx.books[0].seriesNum)
+        assertEquals("Основание", idx.books[1].series)
+        assertEquals("2", idx.books[1].seriesNum)
+    }
 }

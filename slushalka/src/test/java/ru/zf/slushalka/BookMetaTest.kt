@@ -51,4 +51,16 @@ class BookMetaTest {
         val sorted = listOf(null, "10", "2", "1.5").sortedBy { BookMeta.order(it) }
         assertEquals(listOf("1.5", "2", "10", null), sorted)
     }
+
+    @Test
+    fun surnameForSorting() {
+        val fb2 = """<FictionBook><description><title-info>
+            <author><first-name>Борис</first-name><last-name>Акунин</last-name></author>
+            <book-title>Азазель</book-title></title-info></description></FictionBook>"""
+        assertEquals("Акунин", BookMeta.fb2Meta(fb2).surname)
+        val opf = """<package><metadata>
+            <dc:creator opf:file-as="Герберт, Фрэнк" opf:role="aut">Фрэнк Герберт</dc:creator>
+            </metadata></package>"""
+        assertEquals("Герберт", BookMeta.opfMeta(opf).surname)
+    }
 }
