@@ -72,6 +72,14 @@ data class Book(
     val textRemote: String? = null,
     /** Обложка на сервере - у книги, которой нет на телефоне. */
     val coverRemote: String? = null,
+    /**
+     * Серия: из головы файла текста ([ru.zf.slushalka.text.BookMeta]) или из
+     * оглавления сервера. null - ещё не смотрели, пустая строка - смотрели,
+     * серии нет: второй раз файл не читается.
+     */
+    val series: String? = null,
+    /** Номер в серии, как в книге: «3», «1.5»; null - без номера. */
+    val seriesNum: String? = null,
 ) {
     val totalMs: Long get() = files.sumOf { it.durationMs }
     val durationsReady: Boolean get() = files.isNotEmpty() && files.all { it.durationMs > 0 }
@@ -128,6 +136,8 @@ data class Book(
             if (remoteDir.isNotBlank()) put("remoteDir", remoteDir)
             textRemote?.let { put("textRemote", it) }
             coverRemote?.let { put("coverRemote", it) }
+            series?.let { put("series", it) }
+            seriesNum?.let { put("seriesNum", it) }
         }
 
     companion object {
@@ -146,6 +156,9 @@ data class Book(
                 remoteDir = o.optString("remoteDir"),
                 textRemote = o.optString("textRemote").takeIf { it.isNotBlank() },
                 coverRemote = o.optString("coverRemote").takeIf { it.isNotBlank() },
+                // Пустая серия - «смотрели, нет»: её надо отличить от «не смотрели».
+                series = if (o.has("series") && !o.isNull("series")) o.optString("series") else null,
+                seriesNum = o.optString("seriesNum").takeIf { o.has("seriesNum") && !o.isNull("seriesNum") && it.isNotBlank() },
             )
         }
     }

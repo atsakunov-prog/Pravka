@@ -90,4 +90,22 @@ class ServerLibraryTest {
         assertEquals(true, book.streams)
         assertNotNull(idx.byFolder("БОРИС АКУНИН - СЕМНАДЦАТЫЙ ВЕК"))
     }
+
+    @Test
+    fun seriesFromIndex() {
+        val idx = ServerLibrary.parse(
+            """{"books_dir": "Книги", "books": [
+                {"folder": "А", "series": "История Российского государства", "series_index": 9.0},
+                {"folder": "Б", "series": "Дюна", "series_index": "1.5"},
+                {"folder": "В", "series": null, "series_index": null}
+            ]}"""
+        )
+        assertEquals("История Российского государства", idx.books[0].series)
+        assertEquals("9", idx.books[0].seriesNum)
+        assertEquals("1.5", idx.books[1].seriesNum)
+        assertNull(idx.books[2].series)
+        val book = ServerLibrary.toBook(idx, idx.books[0], "Books", "")
+        assertEquals("История Российского государства", book.series)
+        assertEquals("9", book.seriesNum)
+    }
 }

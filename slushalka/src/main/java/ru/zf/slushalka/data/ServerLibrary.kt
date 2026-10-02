@@ -58,6 +58,9 @@ class ServerLibrary(
         val audio: List<Entry>,
         val audioMs: Long,
         val other: List<Entry>,
+        /** Серия и номер в ней - если сервер их кладёт в оглавление (`series`, `series_index`). */
+        val series: String? = null,
+        val seriesNum: String? = null,
     ) {
         val audioBytes: Long get() = audio.sumOf { it.size }
 
@@ -249,6 +252,8 @@ class ServerLibrary(
                     audio = entries(b.optJSONArray("audio")).sortedWith(AudioOrder),
                     audioMs = b.optLong("audio_ms"),
                     other = entries(b.optJSONArray("other")),
+                    series = str(b, "series", "sequence")?.takeIf { it.isNotBlank() },
+                    seriesNum = number(b, "series_index", "series_number", "sequence_number"),
                 )
             }
             return Index(
@@ -257,6 +262,20 @@ class ServerLibrary(
                 books = books.distinctBy { folderKey(it.folder) },
                 fetchedAt = fetchedAt,
             )
+        }
+
+        /** Строка из первого поля, что есть и не null: имя поля у сервера могли выбрать любое из похожих. */
+        private fun str(o: JSONObject, vararg keys: String): String? =
+            keys.firstOrNull { o.has(it) && !o.isNull(it) }?.let { o.optString(it).trim() }
+
+        /** Номер в серии: сервер может прислать и числом, и строкой; «2.0» - это «2». */
+        private fun number(o: JSONObject, vararg keys: String): String? {
+            val key = keys.firstOrNull { o.has(it) && !o.isNull(it) } ?: return null
+            val raw = o.opt(key)
+            val d = (raw as? Number)?.toDouble() ?: raw.toString().trim().replace(',', '.').toDoubleOrNull()
+                ?: return raw.toString().trim().takeIf { it.isNotBlank() }
+            if (d <= 0.0) return null
+            return if (d == Math.floor(d)) d.toLong().toString() else d.toString()
         }
 
         private fun entries(a: JSONArray?): List<Entry> {
@@ -319,6 +338,8 @@ class ServerLibrary(
                 remoteDir = dir,
                 textRemote = text?.let { "$dir/${it.path}" },
                 coverRemote = b.cover?.let { "$dir/$it" },
+                series = b.series,
+                seriesNum = b.seriesNum,
             )
         }
 

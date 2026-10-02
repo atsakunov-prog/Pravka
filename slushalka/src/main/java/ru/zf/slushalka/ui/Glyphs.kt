@@ -664,6 +664,36 @@ object Glyphs {
         }
     }
 
+    /** Полка плитками: четыре квадрата (Material grid_view). */
+    val GridView: ImageVector by lazy {
+        materialIcon(name = "Glyphs.GridView") {
+            materialPath {
+                moveTo(3.0f, 3.0f); verticalLineToRelative(8.0f); horizontalLineToRelative(8.0f); verticalLineTo(3.0f); close()
+                moveTo(9.0f, 9.0f); horizontalLineTo(5.0f); verticalLineTo(5.0f); horizontalLineToRelative(4.0f); close()
+                moveTo(3.0f, 13.0f); verticalLineToRelative(8.0f); horizontalLineToRelative(8.0f); verticalLineToRelative(-8.0f); close()
+                moveTo(9.0f, 19.0f); horizontalLineTo(5.0f); verticalLineToRelative(-4.0f); horizontalLineToRelative(4.0f); close()
+                moveTo(13.0f, 3.0f); verticalLineToRelative(8.0f); horizontalLineToRelative(8.0f); verticalLineTo(3.0f); close()
+                moveTo(19.0f, 9.0f); horizontalLineToRelative(-4.0f); verticalLineTo(5.0f); horizontalLineToRelative(4.0f); close()
+                moveTo(13.0f, 13.0f); verticalLineToRelative(8.0f); horizontalLineToRelative(8.0f); verticalLineToRelative(-8.0f); close()
+                moveTo(19.0f, 19.0f); horizontalLineToRelative(-4.0f); verticalLineToRelative(-4.0f); horizontalLineToRelative(4.0f); close()
+            }
+        }
+    }
+
+    /** Полка списком: строки с квадратиком слева (Material view_list). */
+    val ViewList: ImageVector by lazy {
+        materialIcon(name = "Glyphs.ViewList") {
+            materialPath {
+                moveTo(3.0f, 14.0f); horizontalLineToRelative(4.0f); verticalLineToRelative(-4.0f); horizontalLineTo(3.0f); close()
+                moveTo(3.0f, 19.0f); horizontalLineToRelative(4.0f); verticalLineToRelative(-4.0f); horizontalLineTo(3.0f); close()
+                moveTo(3.0f, 9.0f); horizontalLineToRelative(4.0f); verticalLineTo(5.0f); horizontalLineTo(3.0f); close()
+                moveTo(8.0f, 14.0f); horizontalLineToRelative(13.0f); verticalLineToRelative(-4.0f); horizontalLineTo(8.0f); close()
+                moveTo(8.0f, 19.0f); horizontalLineToRelative(13.0f); verticalLineToRelative(-4.0f); horizontalLineTo(8.0f); close()
+                moveTo(8.0f, 5.0f); verticalLineToRelative(4.0f); horizontalLineToRelative(13.0f); verticalLineTo(5.0f); close()
+            }
+        }
+    }
+
     val CloudDownload: ImageVector by lazy {
         materialIcon(name = "Glyphs.CloudDownload") {
             materialPath {

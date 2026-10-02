@@ -90,7 +90,11 @@ class AppState(private val app: SlushalkaApp) {
             val p = settings.flow.first { it.loaded }
             if (p.libraryUri.isNotBlank()) {
                 _books.value = app.library.books(p.libraryUris)
-                if (_books.value.isEmpty()) rescan() else syncPull()
+                if (_books.value.isEmpty()) rescan() else {
+                    syncPull()
+                    // Полка из прежней версии - без серий: дочитать их в фоне.
+                    fillSeries()
+                }
             }
         }
         // Оглавление сервера пришло или сменилось - книги сервера пересобираются.
@@ -194,6 +198,9 @@ class AppState(private val app: SlushalkaApp) {
                 },
                 title = b.title.ifBlank { old.title },
                 author = b.author.ifBlank { old.author },
+                // Серия читалась из того же файла текста - второй раз незачем.
+                series = if (b.textDocId == old.textDocId) old.series else null,
+                seriesNum = if (b.textDocId == old.textDocId) old.seriesNum else null,
             )
         }
         app.library.replace(tree.toString(), merged)
@@ -215,6 +222,41 @@ class AppState(private val app: SlushalkaApp) {
         rootName = null
         rebuildServerBooks()
         syncPull()
+        fillSeries()
+    }
+
+    private var seriesJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Серии книг полки - из головы файла текста, по одному разу на книгу:
+     * прочитанное переносится через перечитывание папки, а «серии нет»
+     * помнится пустой строкой. Пачками, чтобы полка показывала серии по мере
+     * того, как они находятся, а не после всех ста книг.
+     */
+    private fun fillSeries() {
+        if (seriesJob?.isActive == true) return
+        seriesJob = app.scope.launch {
+            while (true) {
+                val todo = _books.value.filter { it.series == null && it.textDocId != null }.take(SERIES_BATCH)
+                if (todo.isEmpty()) break
+                val found = withContext(Dispatchers.IO) {
+                    todo.associate { b ->
+                        val tree = treeOf(b)
+                        val docId = b.textDocId
+                        b.id to if (tree != null && docId != null) {
+                            ru.zf.slushalka.text.BookMeta.series(app, documentUri(tree, docId), b.textName.orEmpty())
+                        } else null
+                    }
+                }
+                val updated = _books.value.map { b ->
+                    if (b.id in found && b.series == null) {
+                        b.copy(series = found[b.id]?.name ?: "", seriesNum = found[b.id]?.number)
+                    } else b
+                }
+                _books.value = updated
+                treeUri()?.let { app.library.replace(it.toString(), updated) }
+            }
+        }
     }
 
     /**
@@ -1048,6 +1090,8 @@ class AppState(private val app: SlushalkaApp) {
         /** Запись не дальше минуты от места чтения - значит, с тех пор не слушали.
          * Полминуты из этой минуты съедает откат при открытии книги. */
         private const val READ_FRESH_MS = 60_000L
+        /** Серии читаются пачками по столько книг: полка обновляется между пачками. */
+        private const val SERIES_BATCH = 12
         /** Место чтения уезжает в папку библиотеки не чаще, чем место слушания. */
         private const val READ_SYNC_EVERY_MS = 120_000L
     }

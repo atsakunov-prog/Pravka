@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -69,6 +70,7 @@ import kotlinx.coroutines.launch
 import ru.zf.slushalka.data.ServerLibrary
 import ru.zf.slushalka.data.Settings
 import ru.zf.slushalka.library.Book
+import ru.zf.slushalka.text.BookMeta
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -102,6 +104,10 @@ fun LibraryScreen(
     var menuFor by remember { mutableStateOf<Book?>(null) }
     var serverMenu by remember { mutableStateOf<ServerEntry?>(null) }
     var deleteAsk by remember { mutableStateOf<Book?>(null) }
+    // Серия, по которой отобрана полка: плашка с крестиком наверху. Помнится
+    // по имени - ключ сравнения из него и выводится.
+    var seriesPick by rememberSaveable { mutableStateOf<String?>(null) }
+    val listView = prefs.shelfLayout == Settings.LAYOUT_LIST
 
     // Переключатель «На телефоне / В библиотеке» есть, когда настроено облако:
     // библиотека - это его оглавление. Без облака полка - только телефон.
@@ -132,6 +138,71 @@ fun LibraryScreen(
     }
     val entries = remember(serverBooks, localByFolder) {
         serverBooks.map { ServerEntry(it, localByFolder[ServerLibrary.folderKey(it.folderName)]) }
+    }
+    val entryOf = remember(entries) { entries.associateBy { it.shown.id } }
+    val serverByFolder = remember(serverBooks) {
+        serverBooks.associateBy { ServerLibrary.folderKey(it.folderName) }
+    }
+
+    /** Книга и её пара на сервере: метки, «скачать», серия. null - на сервере такой нет. */
+    fun entryFor(book: Book): ServerEntry? =
+        entryOf[book.id]?.takeIf { inServer }
+            ?: serverByFolder[ServerLibrary.folderKey(book.folderName)]?.let { ServerEntry(it, book.takeIf { b -> b.onPhone }) }
+
+    /**
+     * Серия книги: своя (из файла текста), а нет - с сервера: у книги без
+     * текста на телефоне или ещё не прочитанной серия оттуда.
+     */
+    fun seriesOf(book: Book): BookMeta.Series? {
+        book.series?.takeIf { it.isNotBlank() }?.let { return BookMeta.Series(it, book.seriesNum) }
+        val s = serverByFolder[ServerLibrary.folderKey(book.folderName)] ?: return null
+        return s.series?.takeIf { it.isNotBlank() }?.let { BookMeta.Series(it, s.seriesNum) }
+    }
+
+    /** Что можно скачать у книги и как: целиком, только текст, докачать звук. null - нечего. */
+    fun downloadFor(book: Book): DownloadOffer? {
+        val e = entryFor(book) ?: return null
+        if (e.where == Where.PHONE) return null
+        val idx = index ?: return null
+        val sb = idx.byFolder(e.server.folderName) ?: return null
+        val tr = transfer
+        val mine = tr != null && !tr.finished && !tr.upload && ServerLibrary.folderKey(tr.name) == ServerLibrary.folderKey(sb.folder)
+        val options = buildList {
+            if (e.where == Where.TEXT) {
+                add("Докачать звук · ${formatBytes(sb.audioBytes)}" to {
+                    app.cloudBooks.download(sb.folder, idx.booksDir, into = e.local)
+                })
+            } else {
+                add("Скачать целиком · ${formatBytes(sb.audioBytes + sb.textBytes)}" to {
+                    app.cloudBooks.download(sb.folder, idx.booksDir)
+                })
+                if (sb.mainText != null && sb.audio.isNotEmpty()) {
+                    add("Только текст · ${formatBytes(sb.textBytes)}, звук потоком" to {
+                        app.cloudBooks.downloadText(idx, sb)
+                    })
+                }
+            }
+        }
+        return DownloadOffer(options, progress = if (mine) tr!!.share else null, busy = tr != null && !tr.finished && !mine)
+    }
+
+    /** Что в книге есть: текст, звук или оба - своё или на сервере. */
+    fun formatOf(book: Book): String {
+        val server = entryFor(book)?.server
+        val text = book.hasText || server?.hasText == true
+        val audio = book.hasAudio || server?.hasAudio == true
+        val span = (book.totalMs.takeIf { it > 0 } ?: server?.totalMs ?: 0L).takeIf { audio && it > 0 }
+        return when {
+            text && audio -> "текст + аудио"
+            audio -> "только аудио"
+            else -> "только текст"
+        } + (span?.let { " · " + formatSpan(it) } ?: "")
+    }
+
+    /** Нажали на серию: полка - только она, по номерам; полки сбрасываются на «Все». */
+    val pickSeries: (String) -> Unit = { name ->
+        seriesPick = name
+        shelf = Shelf.ALL
     }
     /** Что о книге на телефоне знает сервер: метка под обложкой. null - сервера нет. */
     fun phonePlace(book: Book): String? {
@@ -211,14 +282,24 @@ fun LibraryScreen(
         val progress = remember(shownBooks, last, rev) {
             (shownBooks + listOfNotNull(last)).associate { it.id to progressOf(app, it) }
         }
-        val counts = remember(progress, shownBooks) {
-            Shelf.entries.associateWith { sh -> shownBooks.count { sh.holds(progress.getValue(it.id)) } }
+        // Отобрана серия - на полке только она, целиком: «Продолжить» не
+        // выдёргивает из неё книгу наверх, порядок - по номерам.
+        val seriesKey = seriesPick?.let(BookMeta::key)
+        val base = remember(shownBooks, seriesKey, serverByFolder) {
+            if (seriesKey == null) shownBooks
+            else shownBooks.filter { b -> seriesOf(b)?.name?.let(BookMeta::key) == seriesKey }
         }
-        val shown = remember(shownBooks, progress, shelf, last) {
-            shownBooks.filter { it.id != last?.id && shelf.holds(progress.getValue(it.id)) }
-                .sortedWith(shelfOrder(progress))
+        val top = last.takeIf { seriesKey == null }
+        val counts = remember(progress, base) {
+            Shelf.entries.associateWith { sh -> base.count { sh.holds(progress.getValue(it.id)) } }
         }
-        val entryOf = remember(entries) { entries.associateBy { it.shown.id } }
+        val shown = remember(base, progress, shelf, top, seriesKey) {
+            base.filter { it.id != top?.id && shelf.holds(progress.getValue(it.id)) }
+                .sortedWith(
+                    if (seriesKey != null) compareBy<Book>({ BookMeta.order(seriesOf(it)?.number) }, { it.title.lowercase() })
+                    else shelfOrder(progress)
+                )
+        }
 
         Refreshable(
             enabled = inServer && !prefs.readerEink,
@@ -227,11 +308,12 @@ fun LibraryScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
         ) {
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(TILE_MIN),
+                // Список - строками во всю ширину; на раскрытом экране - в две колонки.
+                columns = GridCells.Adaptive(if (listView) ROW_MIN else TILE_MIN),
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp),
+                verticalArrangement = Arrangement.spacedBy(if (listView) 10.dp else 18.dp),
             ) {
                 // Новая версия - первой строкой: чтобы обновиться, не надо ничего
                 // никуда закидывать, довольно одной кнопки.
@@ -258,10 +340,15 @@ fun LibraryScreen(
                 transfer?.let { tr ->
                     item(key = "transfer", span = { GridItemSpan(maxLineSpan) }) { TransferCard(app, tr) }
                 }
-                if (last != null) {
+                seriesPick?.let { name ->
+                    item(key = "series", span = { GridItemSpan(maxLineSpan) }) {
+                        SeriesBar(name, base.size) { seriesPick = null }
+                    }
+                }
+                if (top != null) {
                     item(key = "continue", span = { GridItemSpan(maxLineSpan) }) {
                         ContinueCard(
-                            app, last, progress.getValue(last.id), prefs.recapAfterHours,
+                            app, top, progress.getValue(top.id), prefs.recapAfterHours,
                             onOpen = onOpen, onRemind = remind,
                         )
                     }
@@ -343,28 +430,66 @@ fun LibraryScreen(
                     }
                 } else if (shownBooks.isNotEmpty()) {
                     item(key = "shelves", span = { GridItemSpan(maxLineSpan) }) {
-                        ShelfChips(shelf, counts) { shelf = it }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.weight(1f)) { ShelfChips(shelf, counts) { shelf = it } }
+                            // Плитки или список - значок того, во что переключит.
+                            IconButton(onClick = {
+                                scope.launch {
+                                    app.settings.setShelfLayout(if (listView) Settings.LAYOUT_GRID else Settings.LAYOUT_LIST)
+                                }
+                            }) {
+                                Icon(
+                                    if (listView) Glyphs.GridView else Glyphs.ViewList,
+                                    contentDescription = if (listView) "Плитками" else "Списком",
+                                )
+                            }
+                        }
                     }
                 }
                 items(shown, key = { it.id }) { book ->
                     val entry = if (inServer) entryOf[book.id] else null
-                    BookTile(
-                        app = app,
-                        book = book,
-                        progress = progress.getValue(book.id),
-                        others = others[book.id].orEmpty(),
-                        place = if (inServer) entry?.where?.label else phonePlace(book),
-                        onClick = {
-                            // С сервера своё: книга не на телефоне спрашивает, как её взять.
-                            if (entry != null && entry.local == null) serverMenu = entry else onOpen(book)
-                        },
-                        onLongClick = { if (entry != null) serverMenu = entry else menuFor = book },
-                    )
+                    val place = if (inServer) entry?.where?.label else phonePlace(book)
+                    val onClick = {
+                        // С сервера своё: книга не на телефоне спрашивает, как её взять.
+                        if (entry != null && entry.local == null) serverMenu = entry else onOpen(book)
+                    }
+                    val onLongClick = { if (entry != null) serverMenu = entry else menuFor = book }
+                    if (listView) {
+                        BookRow(
+                            app = app,
+                            book = book,
+                            progress = progress.getValue(book.id),
+                            others = others[book.id].orEmpty(),
+                            place = place,
+                            format = formatOf(book),
+                            series = seriesOf(book),
+                            onSeries = pickSeries,
+                            download = downloadFor(book),
+                            onClick = onClick,
+                            onLongClick = onLongClick,
+                        )
+                    } else {
+                        BookTile(
+                            app = app,
+                            book = book,
+                            progress = progress.getValue(book.id),
+                            others = others[book.id].orEmpty(),
+                            place = place,
+                            series = seriesOf(book),
+                            onSeries = pickSeries,
+                            download = downloadFor(book),
+                            onClick = onClick,
+                            onLongClick = onLongClick,
+                        )
+                    }
                 }
                 if (shownBooks.isNotEmpty() && shown.isEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
                         Text(
-                            shelf.empty,
+                            if (seriesKey != null) {
+                                if (inServer) "В библиотеке книг этой серии нет."
+                                else "На телефоне книг этой серии нет - загляни в библиотеку."
+                            } else shelf.empty,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -380,6 +505,8 @@ fun LibraryScreen(
             book = book,
             progress = progressOf(app, book),
             place = phonePlace(book),
+            series = seriesOf(book),
+            onSeries = { name -> menuFor = null; pickSeries(name) },
             onOpen = { menuFor = null; onOpen(book) },
             onRemind = { menuFor = null; remind(book) },
             onTalk = { menuFor = null; onTalk(book) },
@@ -399,6 +526,8 @@ fun LibraryScreen(
         ServerBookMenu(
             entry = entry,
             server = sb,
+            series = seriesOf(entry.shown),
+            onSeries = { name -> serverMenu = null; pickSeries(name) },
             progress = progressOf(app, entry.shown),
             busy = transfer?.finished == false,
             onOpen = entry.local?.let { local -> { serverMenu = null; onOpen(local) } },
@@ -569,6 +698,9 @@ private fun NoticeBar(text: String, onClose: () -> Unit) {
 
 /** Самая узкая плитка: на телефоне выходит три в ряд, на раскрытом - пять-шесть. */
 private val TILE_MIN = 104.dp
+
+/** Строка списка не уже этого: на телефоне одна колонка, на раскрытом - две. */
+private val ROW_MIN = 330.dp
 
 /**
  * Где книга по пути: сколько пройдено (звуком или глазами), когда трогали,
@@ -793,8 +925,10 @@ private fun ContinueCard(
 private const val COVER_RATIO = 2f / 3f
 
 /**
- * Книга на полке: обложка с полоской пройденного, название, автор и где
- * остановились (свои и чужие устройства). Долгое нажатие - меню книги.
+ * Книга на полке: обложка с полоской пройденного, название, серия, автор и
+ * где остановились (свои и чужие устройства). В углу обложки - «скачать»,
+ * если книги на телефоне нет или она там только текстом. Долгое нажатие -
+ * меню книги.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -805,6 +939,9 @@ private fun BookTile(
     others: List<AppState.OtherPlace>,
     /** Где книга: на телефоне, на сервере, текстом. null - сервера нет, и говорить не о чем. */
     place: String?,
+    series: BookMeta.Series?,
+    onSeries: (String) -> Unit,
+    download: DownloadOffer?,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
@@ -822,24 +959,7 @@ private fun BookTile(
                 .clip(RoundedCornerShape(10.dp)),
         ) {
             CoverTile(app, book, Modifier.fillMaxSize())
-            if (progress.started) {
-                // Полоска по нижнему краю обложки: сколько пройдено, видно с
-                // первого взгляда, не читая цифр.
-                Box(
-                    Modifier
-                        .align(Alignment.BottomStart)
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .background(Color.Black.copy(alpha = 0.35f)),
-                ) {
-                    Box(
-                        Modifier
-                            .fillMaxHeight()
-                            .fillMaxWidth(progress.share.coerceIn(0.02f, 1f))
-                            .background(MaterialTheme.colorScheme.primary),
-                    )
-                }
-            }
+            if (progress.started) ProgressStrip(progress.share, Modifier.align(Alignment.BottomStart), 4.dp)
             if (progress.done) {
                 Text(
                     "✓",
@@ -867,6 +987,11 @@ private fun BookTile(
                         .padding(horizontal = 5.dp, vertical = 1.dp),
                 )
             }
+            // «Скачать» - в нижнем углу, над полоской пройденного: верхние
+            // заняты «✓» и «текст».
+            if (download != null) {
+                DownloadButton(download, Modifier.align(Alignment.BottomEnd).padding(end = 5.dp, bottom = 9.dp), onCover = true)
+            }
         }
         Spacer(Modifier.height(6.dp))
         Text(
@@ -875,6 +1000,7 @@ private fun BookTile(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
+        if (series != null) SeriesLink(series, onSeries)
         if (book.author.isNotBlank()) {
             Text(
                 book.author,
@@ -884,21 +1010,7 @@ private fun BookTile(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        val mine = when {
-            progress.done -> if (book.hasAudio) "дослушано" else "прочитано"
-            progress.started -> "${(progress.share * 100).toInt().coerceAtLeast(1)}%"
-            book.hasAudio && book.totalMs > 0 -> formatSpan(book.totalMs)
-            !book.hasText -> "без текста"
-            else -> ""
-        }
-        val theirs = others.joinToString(" · ") { o ->
-            when {
-                book.totalMs > 0 -> "${o.who} ${(o.absMs * 100 / book.totalMs).toInt()}%"
-                o.readChar >= 0 -> "${o.who} стр. ${o.readChar / Settings.PAGE_CHARS + 1}"
-                else -> o.who
-            }
-        }
-        val line = listOf(mine, theirs).filter { it.isNotBlank() }.joinToString(" · ")
+        val line = statusLine(book, progress, others)
         if (line.isNotBlank()) {
             Text(
                 line,
@@ -921,6 +1033,249 @@ private fun BookTile(
     }
 }
 
+/**
+ * Книга строкой списка: маленькая обложка, название, серия, автор, что в
+ * книге есть (текст, звук или оба) и сколько пройдено, где она. «Скачать» -
+ * справа, кнопкой во весь рост строки: в списке до угла обложки не дотянуться.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BookRow(
+    app: SlushalkaApp,
+    book: Book,
+    progress: Progress,
+    others: List<AppState.OtherPlace>,
+    place: String?,
+    /** «текст + аудио · 12 ч», «только текст» - что в книге есть. */
+    format: String,
+    series: BookMeta.Series?,
+    onSeries: (String) -> Unit,
+    download: DownloadOffer?,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .width(56.dp)
+                .aspectRatio(COVER_RATIO)
+                .shadow(3.dp, RoundedCornerShape(6.dp))
+                .clip(RoundedCornerShape(6.dp)),
+        ) {
+            CoverTile(app, book, Modifier.fillMaxSize())
+            if (progress.started) ProgressStrip(progress.share, Modifier.align(Alignment.BottomStart), 3.dp)
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                book.title,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (series != null) SeriesLink(series, onSeries)
+            if (book.author.isNotBlank()) {
+                Text(
+                    book.author,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                format,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val line = listOf(
+                if (progress.done) (if (book.hasAudio) "дослушано ✓" else "прочитано ✓")
+                else statusLine(book, progress, others, withSpan = false),
+                place.orEmpty(),
+            ).filter { it.isNotBlank() }.joinToString(" · ")
+            if (line.isNotBlank()) {
+                Text(
+                    line,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (progress.started) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (download != null) DownloadButton(download, Modifier.padding(start = 4.dp), onCover = false)
+    }
+}
+
+/** Полоска пройденного по нижнему краю обложки: видно с первого взгляда, не читая цифр. */
+@Composable
+private fun ProgressStrip(share: Float, modifier: Modifier, height: androidx.compose.ui.unit.Dp) {
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(height)
+            .background(Color.Black.copy(alpha = 0.35f)),
+    ) {
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(share.coerceIn(0.02f, 1f))
+                .background(MaterialTheme.colorScheme.primary),
+        )
+    }
+}
+
+/** Свой процент и где остальные: «37% · Марианна 52%». */
+private fun statusLine(book: Book, progress: Progress, others: List<AppState.OtherPlace>, withSpan: Boolean = true): String {
+    val mine = when {
+        progress.done -> if (book.hasAudio) "дослушано" else "прочитано"
+        progress.started -> "${(progress.share * 100).toInt().coerceAtLeast(1)}%"
+        withSpan && book.hasAudio && book.totalMs > 0 -> formatSpan(book.totalMs)
+        withSpan && !book.hasText -> "без текста"
+        else -> ""
+    }
+    val theirs = others.joinToString(" · ") { o ->
+        when {
+            book.totalMs > 0 -> "${o.who} ${(o.absMs * 100 / book.totalMs).toInt()}%"
+            o.readChar >= 0 -> "${o.who} стр. ${o.readChar / Settings.PAGE_CHARS + 1}"
+            else -> o.who
+        }
+    }
+    return listOf(mine, theirs).filter { it.isNotBlank() }.joinToString(" · ")
+}
+
+/** Серия под названием - ссылкой: нажал, и на полке вся серия по порядку. */
+@Composable
+private fun SeriesLink(series: BookMeta.Series, onSeries: (String) -> Unit) {
+    Text(
+        series.name + (series.number?.let { " · $it" } ?: ""),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.primary,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .clickable { onSeries(series.name) }
+            .padding(vertical = 2.dp),
+    )
+}
+
+/** Плашка отобранной серии: имя, сколько книг и крестик - снова все книги. */
+@Composable
+private fun SeriesBar(name: String, count: Int, onClear: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .padding(start = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+            Text(
+                "СЕРИЯ",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
+            )
+            Text(
+                name,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                booksWord(count, "").trim(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
+            )
+        }
+        IconButton(onClick = onClear) {
+            Icon(Icons.Default.Close, contentDescription = "Все книги", tint = MaterialTheme.colorScheme.onSecondaryContainer)
+        }
+    }
+}
+
+/**
+ * Что можно скачать у книги: пункты меню «Скачать целиком», «Только текст»,
+ * «Докачать звук»; [progress] - эта книга качается сейчас; [busy] - качается
+ * другая, вторая передача разом не начнётся.
+ */
+private class DownloadOffer(
+    val options: List<Pair<String, () -> Unit>>,
+    val progress: Float?,
+    val busy: Boolean,
+)
+
+/**
+ * Кнопка «скачать»: кружок в углу обложки или значок в строке списка.
+ * Нажатие - меню способов с объёмом каждого: гигабайт звука случайным тапом
+ * не поедет. Идёт скачивание этой книги - вместо значка его доля.
+ */
+@Composable
+private fun DownloadButton(offer: DownloadOffer, modifier: Modifier, onCover: Boolean) {
+    var open by remember { mutableStateOf(false) }
+    Box(modifier) {
+        val size = if (onCover) 30.dp else 40.dp
+        Box(
+            Modifier
+                .size(size)
+                .clip(CircleShape)
+                .background(if (onCover) Color.Black.copy(alpha = 0.55f) else Color.Transparent)
+                .clickable(enabled = offer.progress == null) { open = true },
+            contentAlignment = Alignment.Center,
+        ) {
+            val tint = if (onCover) Color.White else MaterialTheme.colorScheme.primary
+            val p = offer.progress
+            if (p != null) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    progress = { p },
+                    modifier = Modifier.size(size - 8.dp),
+                    color = tint,
+                    strokeWidth = 2.5.dp,
+                )
+            } else {
+                Icon(
+                    Glyphs.CloudDownload,
+                    contentDescription = "Скачать",
+                    tint = tint.copy(alpha = if (offer.busy) 0.5f else 1f),
+                    modifier = Modifier.size(if (onCover) 18.dp else 24.dp),
+                )
+            }
+        }
+        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            if (offer.busy) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("Идёт другая передача - эта подождёт") },
+                    onClick = { open = false },
+                    enabled = false,
+                )
+            }
+            offer.options.forEach { (label, action) ->
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text(label) },
+                    enabled = !offer.busy,
+                    leadingIcon = { Icon(Glyphs.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    onClick = {
+                        open = false
+                        action()
+                    },
+                )
+            }
+        }
+    }
+}
+
 /** Долгое нажатие по книге: открыть или напомнить, о чём там. */
 @Composable
 private fun BookMenu(
@@ -928,6 +1283,8 @@ private fun BookMenu(
     progress: Progress,
     /** Где книга относительно сервера; null - сервера нет. */
     place: String?,
+    series: BookMeta.Series?,
+    onSeries: (String) -> Unit,
     onOpen: () -> Unit,
     onRemind: () -> Unit,
     onTalk: () -> Unit,
@@ -952,6 +1309,7 @@ private fun BookMenu(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (series != null) SeriesMenuLink(series, onSeries)
                 if (progress.canRemind) {
                     Spacer(Modifier.height(10.dp))
                     FilledTonalButton(onClick = onRemind, modifier = Modifier.fillMaxWidth()) {
@@ -996,6 +1354,8 @@ private fun BookMenu(
 private fun ServerBookMenu(
     entry: ServerEntry,
     server: ServerLibrary.ServerBook?,
+    series: BookMeta.Series?,
+    onSeries: (String) -> Unit,
     progress: Progress,
     /** Идёт другая передача: вторая разом не начинается. */
     busy: Boolean,
@@ -1043,6 +1403,7 @@ private fun ServerBookMenu(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (series != null) SeriesMenuLink(series, onSeries)
                 if (onStream != null) {
                     Spacer(Modifier.height(10.dp))
                     Button(onClick = onStream, modifier = Modifier.fillMaxWidth()) {
@@ -1093,6 +1454,18 @@ private fun ServerBookMenu(
         },
         dismissButton = { TextButton(onClick = onClose) { Text("Закрыть") } },
     )
+}
+
+/** Серия в меню книги: «Серия «Дюна», книга 2 - вся серия». */
+@Composable
+private fun SeriesMenuLink(series: BookMeta.Series, onSeries: (String) -> Unit) {
+    TextButton(onClick = { onSeries(series.name) }, modifier = Modifier.fillMaxWidth()) {
+        Text(
+            "Серия «${series.name}»" + (series.number?.let { ", книга $it" } ?: "") + " - вся серия",
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 /**

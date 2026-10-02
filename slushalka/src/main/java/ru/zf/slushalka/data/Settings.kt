@@ -187,6 +187,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val streamMobile: String = MOBILE_ASK,
         /** Сколько записи с сервера держать на телефоне, мегабайт. */
         val streamCacheMb: Int = 2048,
+        /** Полка плитками с крупными обложками или списком с маленькими. */
+        val shelfLayout: String = LAYOUT_GRID,
     ) {
         /** Облако настроено: есть куда и с чем ходить. */
         val cloudReady: Boolean
@@ -293,6 +295,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 libraryView = p[KEY_LIB_VIEW]?.takeIf { it in VIEWS } ?: VIEW_PHONE,
                 streamMobile = p[KEY_STREAM_MOBILE]?.takeIf { it in MOBILES } ?: MOBILE_ASK,
                 streamCacheMb = p[KEY_STREAM_CACHE]?.takeIf { it in CACHE_SIZES_MB } ?: 2048,
+                shelfLayout = p[KEY_SHELF_LAYOUT]?.takeIf { it in LAYOUTS } ?: LAYOUT_GRID,
             )
         }
         .stateIn(scope, SharingStarted.Eagerly, Prefs())
@@ -403,6 +406,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setLibraryView(v: String) = edit { if (v in VIEWS) it[KEY_LIB_VIEW] = v }
     suspend fun setStreamMobile(v: String) = edit { if (v in MOBILES) it[KEY_STREAM_MOBILE] = v }
     suspend fun setStreamCacheMb(v: Int) = edit { if (v in CACHE_SIZES_MB) it[KEY_STREAM_CACHE] = v }
+    suspend fun setShelfLayout(v: String) = edit { if (v in LAYOUTS) it[KEY_SHELF_LAYOUT] = v }
 
     companion object {
         // Модели - в ask/Models.kt: там же имена, цены и «по умолчанию».
@@ -472,6 +476,11 @@ class Settings(private val context: Context, scope: CoroutineScope) {
             MOBILE_ASK -> "Спрашивать"
             else -> "Только Wi-Fi"
         }
+
+        // Полка: плитки с крупными обложками или список.
+        const val LAYOUT_GRID = "grid"
+        const val LAYOUT_LIST = "list"
+        val LAYOUTS = listOf(LAYOUT_GRID, LAYOUT_LIST)
 
         /** Ступени кэша записи: от полугига до восьми. */
         val CACHE_SIZES_MB = listOf(512, 1024, 2048, 4096, 8192)
@@ -742,6 +751,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_LIB_VIEW = stringPreferencesKey("library_view")
         private val KEY_STREAM_MOBILE = stringPreferencesKey("stream_mobile")
         private val KEY_STREAM_CACHE = intPreferencesKey("stream_cache_mb")
+        private val KEY_SHELF_LAYOUT = stringPreferencesKey("shelf_layout")
     }
 }
 
