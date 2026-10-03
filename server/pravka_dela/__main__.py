@@ -114,10 +114,29 @@ def cmd_pair(args, ask=input) -> int:
         if hasattr(os, "startfile"):
             os.startfile(str(png))  # type: ignore[attr-defined]
         print(f"QR открыт: {png}. В Правке: Настройки → Подключения → Дела → «Сканировать QR с компа».")
-        ask("Отсканировал? Enter — картинка удалится (в ней токен). ")
+        if not args.wait:
+            ask("Отсканировал? Enter — картинка удалится (в ней токен). ")
+            return 0
+        # Без консоли (запуск из Claude): ждём, пока телефон сам проверит токен
+        # (GET /api/me), и убираем картинку. Не дождались — токен отзываем.
+        import time
+
+        deadline = time.time() + args.wait
+        while time.time() < deadline:
+            with db.session(cfg.db_url, "system", "svc:pair") as conn:
+                seen = conn.execute(
+                    "SELECT last_seen_at FROM crm.tokens WHERE token_hash = %s", (tokens._hash(tok),)
+                ).fetchone()["last_seen_at"]
+            if seen:
+                print("телефон подключился — картинка удалена")
+                return 0
+            time.sleep(2)
+        with db.session(cfg.db_url, "system", "svc:pair") as conn:
+            conn.execute("UPDATE crm.tokens SET revoked_at = now() WHERE token_hash = %s", (tokens._hash(tok),))
+        print("телефон так и не подключился — токен отозван, картинка удалена")
+        return 1
     finally:
         png.unlink(missing_ok=True)
-    return 0
 
 
 def cmd_invite(args) -> int:
@@ -241,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("pair")
     p.add_argument("--user", default="sasha")
     p.add_argument("--name", default="телефон")
+    p.add_argument("--wait", type=int, default=0, help="ждать подключения телефона N секунд вместо Enter")
     p.set_defaults(fn=cmd_pair)
 
     iv = sub.add_parser("invite")
