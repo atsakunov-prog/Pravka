@@ -23,6 +23,7 @@ APP_TABLES = {
     "crm.orgs": "SELECT, INSERT, UPDATE",
     "crm.people": "SELECT, INSERT, UPDATE",
     "crm.projects": "SELECT, INSERT, UPDATE",
+    "crm.deals": "SELECT, INSERT, UPDATE",
     "crm.project_access": "SELECT, INSERT, UPDATE, DELETE",
     "crm.access_revoked": "SELECT",
     "crm.interactions": "SELECT, INSERT, UPDATE",

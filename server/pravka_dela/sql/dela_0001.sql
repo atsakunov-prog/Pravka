@@ -117,38 +117,61 @@ COMMENT ON COLUMN crm.people.hub IS 'Через этого человека по
 ALTER TABLE crm.users ADD FOREIGN KEY (person_id) REFERENCES crm.people;
 
 CREATE TABLE crm.projects (
+    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name          text NOT NULL CHECK (btrim(name) <> ''),
+    aliases       text[] NOT NULL DEFAULT '{}',
+    sphere        text NOT NULL CHECK (sphere IN ('work', 'home')),
+    kind          text NOT NULL CHECK (kind IN ('client', 'internal', 'personal')),
+    org_id        uuid REFERENCES crm.orgs,
+    owner_id      text NOT NULL REFERENCES crm.users,
+    money_default text NOT NULL DEFAULT 'none' CHECK (money_default IN ('paid', 'potential', 'none')),
+    note          text,
+    import_ref    text UNIQUE,
+    archived_at   timestamptz,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    updated_at    timestamptz NOT NULL DEFAULT now(),
+    rev           integer NOT NULL DEFAULT 1,
+    seq           bigint NOT NULL DEFAULT 0,
+    CHECK (kind <> 'client' OR sphere = 'work')
+);
+COMMENT ON TABLE crm.projects IS 'Проекты без подпроектов: клиент (как корневой проект Todoist), служебные (ЗФ, Люди), личные (Семья, Личное). Сделки клиента — в crm.deals.';
+COMMENT ON COLUMN crm.projects.money_default IS 'paid — оплата согласована, potential — развитие бизнеса, none — остальное. Задачи наследуют, если у них пусто.';
+COMMENT ON COLUMN crm.projects.import_ref IS 'id проекта в Todoist (todoist:<id>).';
+
+CREATE TABLE crm.deals (
     id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id     uuid NOT NULL REFERENCES crm.projects,
     name           text NOT NULL CHECK (btrim(name) <> ''),
-    aliases        text[] NOT NULL DEFAULT '{}',
-    sphere         text NOT NULL CHECK (sphere IN ('work', 'home')),
-    kind           text NOT NULL CHECK (kind IN ('client', 'internal', 'personal')),
-    org_id         uuid REFERENCES crm.orgs,
-    owner_id       text NOT NULL REFERENCES crm.users,
-    money_default  text NOT NULL DEFAULT 'none' CHECK (money_default IN ('paid', 'potential', 'none')),
-    stage          text CHECK (stage IN ('lead', 'proposal', 'mandate', 'active', 'closing', 'archive')),
+    stage          text NOT NULL DEFAULT 'lead'
+                   CHECK (stage IN ('lead', 'proposal', 'mandate', 'active', 'closing', 'archive')),
     deal_type      text,
     lead_person_id uuid REFERENCES crm.people,
+    person_ids     uuid[] NOT NULL DEFAULT '{}',
     fee_kop        bigint CHECK (fee_kop >= 0),
     deadline       date,
     wheel          boolean NOT NULL DEFAULT false,
+    ball           text,
+    next_step      text,
     my_view        text,
     ideas          text,
-    note           text,
+    log            text,
     notion_id      text UNIQUE,
-    archived_at    timestamptz,
     created_at     timestamptz NOT NULL DEFAULT now(),
     updated_at     timestamptz NOT NULL DEFAULT now(),
     rev            integer NOT NULL DEFAULT 1,
-    seq            bigint NOT NULL DEFAULT 0,
-    CHECK (kind <> 'client' OR sphere = 'work')
+    seq            bigint NOT NULL DEFAULT 0
 );
-COMMENT ON TABLE crm.projects IS 'Проекты без подпроектов. У клиентского проекта — поля сделки (бывшая база «Сделки» в Notion).';
-COMMENT ON COLUMN crm.projects.money_default IS 'paid — оплата согласована, potential — развитие бизнеса, none — остальное. Задачи наследуют, если у них пусто.';
-COMMENT ON COLUMN crm.projects.stage IS 'Воронка: lead (Лид), proposal (КП), mandate (Мандат), active (В работе), closing (Закрытие), archive (Архив).';
-COMMENT ON COLUMN crm.projects.lead_person_id IS 'Ответственный в ЗФ.';
-COMMENT ON COLUMN crm.projects.fee_kop IS 'Потенциальный fee ЗФ, копейки.';
-COMMENT ON COLUMN crm.projects.wheel IS '«Колесо крутится?» — дело движется само.';
-COMMENT ON COLUMN crm.projects.my_view IS '«Статус как я вижу» — субъективная оценка Саши.';
+COMMENT ON TABLE crm.deals IS 'Сделки внутри проекта-клиента (бывшая база «Сделки» Notion): у Стеллара — фонды, buy-side M&A, банковский advisory.';
+COMMENT ON COLUMN crm.deals.stage IS 'Воронка: lead (Лид), proposal (КП), mandate (Мандат), active (В работе), closing (Закрытие), archive (Архив).';
+COMMENT ON COLUMN crm.deals.lead_person_id IS 'Ответственный в ЗФ.';
+COMMENT ON COLUMN crm.deals.person_ids IS 'Участники со стороны клиента и партнёров.';
+COMMENT ON COLUMN crm.deals.fee_kop IS 'Потенциальный fee ЗФ, копейки.';
+COMMENT ON COLUMN crm.deals.wheel IS '«Колесо крутится?» — дело движется само.';
+COMMENT ON COLUMN crm.deals.ball IS 'У кого мяч — текстом, как было в Notion. Живой мяч — у задач.';
+COMMENT ON COLUMN crm.deals.next_step IS 'Следующий шаг текстом (из Notion). Живой следующий шаг — открытая задача с этой сделкой.';
+COMMENT ON COLUMN crm.deals.my_view IS '«Статус как я вижу» — субъективная оценка Саши.';
+COMMENT ON COLUMN crm.deals.log IS 'Хронология «[ДД.ММ] что произошло» из Notion. Новое — в crm.interactions.';
+CREATE INDEX deals_project ON crm.deals (project_id);
 
 CREATE TABLE crm.project_access (
     project_id uuid NOT NULL REFERENCES crm.projects ON DELETE CASCADE,
@@ -179,6 +202,7 @@ CREATE TABLE crm.interactions (
     summary    text NOT NULL CHECK (btrim(summary) <> ''),
     next_step  text,
     project_id uuid REFERENCES crm.projects,
+    deal_id    uuid REFERENCES crm.deals,
     person_ids uuid[] NOT NULL DEFAULT '{}',
     source     text NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'meeting', 'digest', 'userbot', 'phone', 'raznoska', 'import')),
     source_ref text,
@@ -208,6 +232,7 @@ CREATE TABLE tasks.tasks (
     title         text NOT NULL CHECK (btrim(title) <> ''),
     notes         text,
     project_id    uuid REFERENCES crm.projects,
+    deal_id       uuid REFERENCES crm.deals,
     owner_id      text NOT NULL REFERENCES crm.users,
     ball          text NOT NULL DEFAULT 'mine' CHECK (ball IN ('mine', 'waiting', 'agenda')),
     person_id     uuid REFERENCES crm.people,
@@ -412,6 +437,10 @@ BEGIN
        AND (SELECT u.settings ->> 'assign' FROM crm.users u WHERE u.id = NEW.owner_id) = 'ask' THEN
         RAISE EXCEPTION 'Дела: дело на % ставится только с согласия — через предложение', NEW.owner_id;
     END IF;
+    IF NEW.deal_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM crm.deals d WHERE d.id = NEW.deal_id AND d.project_id IS NOT DISTINCT FROM NEW.project_id) THEN
+        RAISE EXCEPTION 'Дела: сделка дела должна быть из его проекта';
+    END IF;
     IF NEW.ball = 'waiting' AND NEW.waiting_since IS NULL
        AND (TG_OP = 'INSERT' OR OLD.ball <> 'waiting') THEN
         NEW.waiting_since := crm.today();
@@ -484,7 +513,7 @@ DO $$
 DECLARE
     t text;
 BEGIN
-    FOREACH t IN ARRAY ARRAY['crm.users', 'crm.orgs', 'crm.people', 'crm.projects', 'crm.interactions',
+    FOREACH t IN ARRAY ARRAY['crm.users', 'crm.orgs', 'crm.people', 'crm.projects', 'crm.deals', 'crm.interactions',
                              'tasks.tasks', 'tasks.comments', 'tasks.suggestions'] LOOP
         EXECUTE format('CREATE TRIGGER zz_stamp BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION crm.stamp()', t);
         EXECUTE format('CREATE TRIGGER journal AFTER INSERT OR UPDATE OR DELETE ON %s FOR EACH ROW EXECUTE FUNCTION crm.journal()', t);
@@ -547,7 +576,7 @@ SET search_path = crm, pg_temp AS $$
         SELECT 1 FROM tasks.tasks t
         WHERE (t.person_id = p OR t.requested_by = p) AND crm.sees_task(u, t.project_id, t.owner_id))
     OR EXISTS (
-        SELECT 1 FROM crm.projects pr WHERE pr.lead_person_id = p AND crm.sees_project(u, pr.id))
+        SELECT 1 FROM crm.deals d WHERE (d.lead_person_id = p OR p = ANY (d.person_ids)) AND crm.sees_project(u, d.project_id))
     OR EXISTS (
         SELECT 1 FROM crm.users us WHERE us.person_id = p)
 $$;
@@ -583,6 +612,7 @@ ALTER TABLE crm.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE crm.orgs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE crm.people ENABLE ROW LEVEL SECURITY;
 ALTER TABLE crm.projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE crm.deals ENABLE ROW LEVEL SECURITY;
 ALTER TABLE crm.project_access ENABLE ROW LEVEL SECURITY;
 ALTER TABLE crm.access_revoked ENABLE ROW LEVEL SECURITY;
 ALTER TABLE crm.interactions ENABLE ROW LEVEL SECURITY;
@@ -618,6 +648,11 @@ CREATE POLICY upd ON crm.projects FOR UPDATE
     USING (crm.me() IN (owner_id, 'system') OR crm.has_access(crm.me(), id, true))
     WITH CHECK (crm.me() IN (owner_id, 'system') OR crm.has_access(crm.me(), id, true));
 
+CREATE POLICY see ON crm.deals FOR SELECT USING (crm.sees_project(crm.me(), project_id));
+CREATE POLICY ins ON crm.deals FOR INSERT WITH CHECK (crm.edits_project(crm.me(), project_id));
+CREATE POLICY upd ON crm.deals FOR UPDATE USING (crm.edits_project(crm.me(), project_id))
+    WITH CHECK (crm.edits_project(crm.me(), project_id));
+
 CREATE POLICY see ON crm.project_access FOR SELECT
     USING (crm.me() IN (user_id, 'system') OR EXISTS (
         SELECT 1 FROM crm.projects p WHERE p.id = project_id AND p.owner_id = crm.me()));
@@ -650,7 +685,8 @@ CREATE POLICY ins ON tasks.comments FOR INSERT
     WITH CHECK (crm.me() IN (author_id, 'system') AND crm.sees_task_id(crm.me(), task_id));
 CREATE POLICY upd ON tasks.comments FOR UPDATE USING (crm.me() IN (author_id, 'system'));
 
-CREATE POLICY see ON tasks.suggestions FOR SELECT USING (crm.me() IN (for_user, 'system'));
+-- Автор видит своё предложение: принял ли его тот, кому оно адресовано.
+CREATE POLICY see ON tasks.suggestions FOR SELECT USING (crm.me() IN (for_user, created_by, 'system'));
 CREATE POLICY ins ON tasks.suggestions FOR INSERT WITH CHECK (crm.me() IS NOT NULL);
 CREATE POLICY upd ON tasks.suggestions FOR UPDATE USING (crm.me() IN (for_user, 'system'));
 
@@ -670,6 +706,7 @@ SELECT t.*,
        coalesce(p.sphere, 'inbox') AS sphere,
        p.name AS project_name,
        p.kind AS project_kind,
+       d.name AS deal_name,
        pe.short AS person_short,
        pe.name AS person_name,
        rq.short AS requested_by_short,
@@ -677,6 +714,7 @@ SELECT t.*,
        (t.focus_on = crm.today()) AS now_
 FROM tasks.tasks t
 LEFT JOIN crm.projects p ON p.id = t.project_id
+LEFT JOIN crm.deals d ON d.id = t.deal_id
 LEFT JOIN crm.people pe ON pe.id = t.person_id
 LEFT JOIN crm.people rq ON rq.id = t.requested_by;
 COMMENT ON VIEW tasks.v_tasks IS 'Задача с наследованными деньгами, сферой проекта и именами людей.';
@@ -730,3 +768,18 @@ END $$;
 -- Владелец Дел (тот же человек, чей архив).
 CREATE FUNCTION crm.owner_id() RETURNS text LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = crm, pg_temp AS $$ SELECT id FROM crm.users WHERE role = 'owner' ORDER BY id LIMIT 1 $$;
+
+-- Часы проекта из ленты Засечки (архив владельца): только суммы по суткам,
+-- без текстов. Лента — одного человека, поэтому и ответ — только ему.
+-- plpgsql и EXECUTE: схему life архив пересобирает целиком, ссылка в теле
+-- не должна держать её и не должна падать, если архива в базе нет.
+CREATE FUNCTION crm.project_minutes(p uuid) RETURNS TABLE (day date, minutes bigint)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = crm, pg_temp AS $$
+BEGIN
+    IF crm.me() IS DISTINCT FROM crm.owner_id() OR to_regclass('life.work_time') IS NULL THEN
+        RETURN;
+    END IF;
+    RETURN QUERY EXECUTE
+        'SELECT day, sum(minutes)::bigint FROM life.work_time WHERE project_id = $1 GROUP BY day ORDER BY day'
+        USING p;
+END $$;

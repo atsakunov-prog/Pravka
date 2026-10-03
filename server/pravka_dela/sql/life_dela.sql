@@ -6,7 +6,7 @@
 
 CREATE OR REPLACE VIEW life.tasks AS
 SELECT t.num, t.title, t.notes, t.status,
-       p.name AS project, coalesce(p.sphere, 'inbox') AS sphere,
+       p.name AS project, d.name AS deal, coalesce(p.sphere, 'inbox') AS sphere,
        t.owner_id AS owner, t.ball, pe.short AS person, t.waiting_since, t.nudge_on,
        rq.short AS requested_by, t.due_date, t.due_time, t.estimate_min,
        coalesce(t.money, p.money_default, 'none') AS money,
@@ -16,22 +16,33 @@ SELECT t.num, t.title, t.notes, t.status,
        t.id, t.project_id, t.person_id
 FROM tasks.tasks t
 LEFT JOIN crm.projects p ON p.id = t.project_id
+LEFT JOIN crm.deals d ON d.id = t.deal_id
 LEFT JOIN crm.people pe ON pe.id = t.person_id
 LEFT JOIN crm.people rq ON rq.id = t.requested_by
 WHERE crm.sees_task(crm.owner_id(), t.project_id, t.owner_id);
 COMMENT ON VIEW life.tasks IS 'Дела владельца (сервис «Дела»). num — короткий номер «#57». status: open, done, cancelled. ball: mine — моё, waiting — мяч у person, agenda — поднять при встрече с person. money — paid (оплата согласована), potential (развитие), none; пусто у задачи = как у проекта. project пусто — «Входящие». Менять дела — инструментами dela_*, не SQL.';
 
 CREATE OR REPLACE VIEW life.projects AS
-SELECT p.name, p.aliases, p.sphere, p.kind, o.name AS org, p.owner_id AS owner, p.money_default,
-       p.stage, p.deal_type, lp.short AS lead, round(p.fee_kop / 100.0) AS fee_rub, p.deadline,
-       p.wheel, p.my_view, p.ideas, p.note, p.archived_at,
+SELECT p.name, p.aliases, p.sphere, p.kind, o.name AS org, p.owner_id AS owner, p.money_default, p.note, p.archived_at,
        (SELECT count(*) FROM tasks.tasks t WHERE t.project_id = p.id AND t.status = 'open') AS open_tasks,
+       (SELECT count(*) FROM crm.deals d WHERE d.project_id = p.id AND d.stage <> 'archive') AS live_deals,
        p.id, p.org_id
 FROM crm.projects p
 LEFT JOIN crm.orgs o ON o.id = p.org_id
-LEFT JOIN crm.people lp ON lp.id = p.lead_person_id
 WHERE crm.sees_project(crm.owner_id(), p.id);
-COMMENT ON VIEW life.projects IS 'Проекты и сделки (бывшие «Сделки» Notion). stage: lead, proposal (КП), mandate, active, closing, archive. fee_rub — потенциальный fee ЗФ. wheel — «колесо крутится».';
+COMMENT ON VIEW life.projects IS 'Проекты Дел: клиенты (как корневые проекты Todoist), служебные (ЗФ, Люди), личные. money_default — paid (оплата согласована), potential (развитие), none. Сделки клиента — life.deals.';
+
+CREATE OR REPLACE VIEW life.deals AS
+SELECT d.name, p.name AS project, d.stage, d.deal_type, lp.short AS lead,
+       ARRAY(SELECT pe.short FROM crm.people pe WHERE pe.id = ANY (d.person_ids)) AS people,
+       round(d.fee_kop / 100.0) AS fee_rub, d.deadline, d.wheel, d.ball, d.next_step, d.my_view, d.ideas, d.log,
+       (SELECT count(*) FROM tasks.tasks t WHERE t.deal_id = d.id AND t.status = 'open') AS open_tasks,
+       d.updated_at, d.id, d.project_id
+FROM crm.deals d
+JOIN crm.projects p ON p.id = d.project_id
+LEFT JOIN crm.people lp ON lp.id = d.lead_person_id
+WHERE crm.sees_project(crm.owner_id(), d.project_id);
+COMMENT ON VIEW life.deals IS 'Сделки (бывшие «Сделки» Notion). stage: lead, proposal (КП), mandate, active, closing, archive. fee_rub — потенциальный fee ЗФ. wheel — «колесо крутится». log — хронология из Notion.';
 
 CREATE OR REPLACE VIEW life.people AS
 SELECT pe.name, pe.short, pe.aliases, o.name AS org, pe.role, pe.phones, pe.emails, pe.telegram_username,
@@ -53,11 +64,12 @@ COMMENT ON VIEW life.orgs IS 'Организации: клиенты, партн
 
 CREATE OR REPLACE VIEW life.interactions AS
 SELECT i.at, (i.at AT TIME ZONE 'Europe/Moscow')::date AS day, i.kind, i.summary, i.next_step,
-       p.name AS project,
+       p.name AS project, d.name AS deal,
        ARRAY(SELECT pe.short FROM crm.people pe WHERE pe.id = ANY (i.person_ids)) AS people,
        i.source, i.source_ref, i.id, i.project_id
 FROM crm.interactions i
 LEFT JOIN crm.projects p ON p.id = i.project_id
+LEFT JOIN crm.deals d ON d.id = i.deal_id
 WHERE i.owner_id = crm.owner_id() OR (i.project_id IS NOT NULL AND crm.sees_project(crm.owner_id(), i.project_id));
 COMMENT ON VIEW life.interactions IS 'Хронология контактов: звонки, встречи, переписка, заметки (бывший «Лог взаимодействий» Notion).';
 
