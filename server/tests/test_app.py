@@ -153,3 +153,24 @@ def test_wrong_passwords_lock_the_door_for_everyone(client):
     # Шестой раз закрыто даже верным паролем: адреса клиента нет, ограничение общее.
     locked = client.post("/login", data={"txn": txn, "password": "верный-пароль-архива"}, follow_redirects=False)
     assert locked.status_code == 429
+
+
+def test_dela_tools_appear_with_dela_db(cfg, clean, dela_url):
+    """С адресом базы Дел у Claude появляются инструменты дел и работают сквозь вход."""
+    from test_dela_schema import as_  # noqa: F401  (тот же модуль фикстур)
+    from pravka_dela import db as dela_db
+
+    with dela_db.session(dela_url, "system", "test") as c:
+        c.execute("INSERT INTO crm.users (id, name, role) VALUES ('sasha', 'Саша', 'owner') ON CONFLICT DO NOTHING")
+    app_cfg = dataclasses.replace(cfg, dela_db_url=dela_url)
+    with TestClient(asgi(app_cfg), base_url="http://192.168.1.77") as client:
+        tok = login(client)["access_token"]
+        init = rpc(client, tok, "initialize", {
+            "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}})
+        assert "Дела — задачи" in init["result"]["instructions"]
+        names = {t["name"] for t in rpc(client, tok, "tools/list", rid=2)["result"]["tools"]}
+        assert {"dela_view", "dela_task", "dela_add", "dela_change", "dela_decide", "dela_note"} <= names
+        out = rpc(client, tok, "tools/call", {"name": "dela_add", "arguments": {"title": "Проверка: из Claude"}}, rid=3)
+        assert out["result"]["content"][0]["text"].startswith("Записал: #"), out
+        out = rpc(client, tok, "tools/call", {"name": "dela_view", "arguments": {"view": "search", "query": "Проверка"}}, rid=4)
+        assert "Проверка: из Claude" in out["result"]["content"][0]["text"]

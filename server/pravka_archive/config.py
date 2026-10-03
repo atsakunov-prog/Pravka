@@ -46,6 +46,8 @@ class Config:
     profile: str = "sasha"
     proxies: str = "127.0.0.1"
     phone_url: str = ""
+    # Дела (pravka_dela): адрес базы ролью службы Дел. Пусто — инструментов дел у Claude нет.
+    dela_db_url: str = ""
 
     @property
     def mcp_url(self) -> str:
@@ -78,7 +80,7 @@ class Config:
 def load(env_file: str | None = None) -> Config:
     path = env_file or os.environ.get("PRAVKA_ENV_FILE") or DEFAULT_ENV_FILE
     values = read_env_file(path)
-    values.update({k: v for k, v in os.environ.items() if k.startswith(("PRAVKA_", "ICU_"))})
+    values.update({k: v for k, v in os.environ.items() if k.startswith(("PRAVKA_", "ICU_", "DELA_DB_URL"))})
 
     def get(name: str, default: str = "") -> str:
         return values.get(name, default).strip()
@@ -105,4 +107,5 @@ def load(env_file: str | None = None) -> Config:
         # PRAVKA_PUBLIC_URL смотрит на вход через VPS; телефону этот крюк через
         # Нидерланды ни к чему — ему прямой адрес роутера (CrazeDNS, 8443).
         phone_url=get("PRAVKA_PHONE_URL").rstrip("/"),
+        dela_db_url=get("DELA_DB_URL"),
     )
