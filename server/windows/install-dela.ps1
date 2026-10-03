@@ -289,9 +289,13 @@ print("обработчик встреч перезапустится, когд�
         Ok 'сборщик «Дома» перезапущен: плашка «Дела»'
     }
 
+    $inviteFile = Join-Path $Secrets 'invite-sasha.txt'
+    Py 'ссылка входа' @('-m', 'pravka_dela', '--env', $DelaEnv, 'invite', 'sasha', '--base', $PhoneUrl, '--out', $inviteFile)
+
     Write-Host ''
     Write-Host 'ГОТОВО.' -ForegroundColor Green
     Write-Host "  Дальше в роутере: CrazeDNS → Add → dela → 192.168.1.77, HTTP, порт $Port, unrestricted."
+    Write-Host "  Потом веб: ссылка входа — в $inviteFile (одноразовая, двое суток)."
 } catch {
     Write-Host ''
     Write-Host "ОШИБКА: $($_.Exception.Message)" -ForegroundColor Red

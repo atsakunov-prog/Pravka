@@ -210,3 +210,25 @@ def test_todoist_api_export_feeds_import(tmp_path):
     t = loaded["tasks"][0]
     assert (t["priority"], t["due"], t["project"]) == ("p1", "2026-10-06", "p1")
     assert loaded["projects"][0]["inbox"] and loaded["comments"][0]["content"] == "созвонились"
+
+
+def test_web_invite_cookie_and_forgery_guard(dela):
+    client = TestClient(api.build(Config(db_url=dela, public_url="http://test")))
+    assert "Дела" in client.get("/").text and client.get("/static/app.js").status_code == 200
+    assert client.get("/static/../db.py").status_code == 404
+    code = tokens.invite(dela, "natasha")
+    assert client.post("/auth/redeem", json={"code": code}).status_code == 400  # без нашего заголовка
+    r = client.post("/auth/redeem", json={"code": code}, headers={"X-Dela": "1"})
+    assert r.status_code == 200 and r.json()["user"] == "natasha"
+    assert client.post("/auth/redeem", json={"code": code}, headers={"X-Dela": "1"}).status_code == 403  # одноразовая
+    assert client.get("/api/me").json()["user"] == "natasha"
+    op = {"ops": [{"op": "task.create", "task": {"title": "Наташа: своё"}}]}
+    # Кука без заголовка — запрос не с нашей страницы: не пускаем.
+    assert client.post("/api/ops", json=op).status_code == 401
+    res = client.post("/api/ops", json=op, headers={"X-Dela": "1"}).json()["results"][0]
+    assert res["ok"] and res["task"]["owner_id"] == "natasha"
+    with mcp_tools.db.session(dela, "system", "t") as c:
+        h = c.execute("SELECT actor, via, after FROM crm.history WHERE entity = 'tasks.tasks' ORDER BY id DESC LIMIT 1").fetchone()
+    assert (h["actor"], h["via"]) == ("natasha", "web") and "due_date" not in h["after"]  # пустое в журнал не пишется
+    client.post("/auth/logout", headers={"X-Dela": "1"})
+    assert client.get("/api/me").status_code == 401

@@ -6,6 +6,7 @@
   user     завести или поправить пользователя
   token    выдать токен службе или устройству (печатается один раз)
   pair     QR для телефона: адрес и новый токен устройства
+  invite   одноразовая ссылка входа в веб для пользователя
   revoke   отозвать токены по имени
   import   перенос из Todoist, Notion и ленты (сухой прогон по умолчанию)
   export-todoist  выгрузка Todoist по API (с комментариями) для переноса
@@ -119,6 +120,21 @@ def cmd_pair(args, ask=input) -> int:
     return 0
 
 
+def cmd_invite(args) -> int:
+    """Одноразовая ссылка входа в веб (двое суток). Отдать человеку лично."""
+    cfg = config_mod.load(args.env)
+    code = tokens.invite(cfg.db_url, args.user)
+    base = args.base or cfg.public_url or f"http://127.0.0.1:{cfg.listen_port}"
+    link = f"{base}/#invite={code}"
+    if args.out:
+        Path(args.out).write_text(link + "
+", encoding="utf-8")
+        print(f"ссылка входа для {args.user} — в {args.out} (одноразовая, двое суток)")
+    else:
+        print(link)
+    return 0
+
+
 def cmd_revoke(args) -> int:
     cfg = config_mod.load(args.env)
     print("отозвано:", tokens.revoke(cfg.db_url, args.name))
@@ -227,6 +243,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--user", default="sasha")
     p.add_argument("--name", default="телефон")
     p.set_defaults(fn=cmd_pair)
+
+    iv = sub.add_parser("invite")
+    iv.add_argument("user")
+    iv.add_argument("--base", help="адрес веба (с завода DELA_PUBLIC_URL)")
+    iv.add_argument("--out", help="записать ссылку в файл, а не на экран")
+    iv.set_defaults(fn=cmd_invite)
 
     r = sub.add_parser("revoke")
     r.add_argument("name")

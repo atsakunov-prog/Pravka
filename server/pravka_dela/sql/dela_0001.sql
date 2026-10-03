@@ -475,6 +475,9 @@ BEGIN
     END IF;
     o := CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) - noise END;
     n := CASE WHEN TG_OP <> 'DELETE' THEN to_jsonb(NEW) - noise END;
+    IF TG_OP = 'INSERT' THEN
+        n := jsonb_strip_nulls(n);  -- при создании пустые поля журналу не нужны
+    END IF;
     IF TG_NARGS = 0 THEN
         key_id := coalesce(n, o) ->> 'id';
     ELSE
