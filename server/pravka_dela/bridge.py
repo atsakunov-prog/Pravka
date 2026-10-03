@@ -66,9 +66,11 @@ def pull_new(url: str, data: dict) -> list[str]:
         label_people = dec.get("label_people", {})
         title_people = dec.get("title_people", {})
         merge = dec.get("merge_projects", {})
+        # Что перенос нарочно не сделал делом (дни рождения у людей, явные пропуски), мост не воскрешает.
+        skip = set(dec.get("birthdays", {})) | set(dec.get("skip_todoist", []))
         projects = {p["id"]: p for p in data["projects"]}
         for t in data["tasks"]:
-            if t.get("checked") or t.get("is_deleted"):
+            if t.get("checked") or t.get("is_deleted") or t["id"] in skip:
                 continue
             tid = sid("task", "todoist", t["id"])
             if conn.execute("SELECT 1 FROM tasks.tasks WHERE id = %s", (tid,)).fetchone():
@@ -120,7 +122,8 @@ def pull_new(url: str, data: dict) -> list[str]:
 
 def save_decisions(url: str, dec: dict) -> None:
     """Решения владельца — в базу, чтобы мост в службе их видел (C:\\Bot ей закрыт)."""
-    slim = {k: dec[k] for k in ("label_people", "title_people", "merge_projects", "personal_project") if k in dec}
+    keys = ("label_people", "title_people", "merge_projects", "personal_project", "birthdays", "skip_todoist")
+    slim = {k: dec[k] for k in keys if k in dec}
     with db.session(url, "system", "svc:import", via="import") as conn:
         conn.execute(
             "INSERT INTO crm.state (key, value) VALUES ('import_decisions', %s) "

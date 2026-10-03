@@ -157,7 +157,8 @@ def test_todoist_bridge_takes_only_new(dela):
     p = project(dela, "sasha", "Дельта", aliases=["Дельта ООО"])
     with mcp_tools.db.session(dela, "system", "t") as c:
         c.execute("INSERT INTO crm.people (name, short, aliases, owner_id) VALUES ('Пётр Сомов', 'Пётр', '{}', 'sasha')")
-    bridge.save_decisions(dela, {"label_people": {"петя": "Пётр"}, "title_people": {}, "personal_project": None})
+    bridge.save_decisions(dela, {"label_people": {"петя": "Пётр"}, "title_people": {}, "personal_project": None,
+                                 "birthdays": {"a3": {"person": "Пётр", "day": 1, "month": 1}}})
 
     def handler(request):
         path = request.url.path.rsplit("/", 1)[-1]
@@ -167,6 +168,7 @@ def test_todoist_bridge_takes_only_new(dela):
                 {"id": "a1", "content": "Пётр: прислать счёт", "project_id": "pd", "labels": ["жду", "петя"],
                  "priority": 4, "due": {"date": "2026-10-06"}},
                 {"id": "a2", "content": "Купить марки", "project_id": "pi", "labels": ["быстр"], "priority": 1},
+                {"id": "a3", "content": "Поздравить Петра", "project_id": "pi", "labels": [], "priority": 1},
             ],
         }[path]
         return httpx.Response(200, json={"results": data, "next_cursor": None})
