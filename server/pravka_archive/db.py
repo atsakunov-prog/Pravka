@@ -66,6 +66,12 @@ def migrate(cfg: Config) -> list[str]:
                 "SELECT kind, key, part, domain, day, at, time_local, ref, text FROM core.said_source"
             )
         done.append("life.sql")
+        # life только что снесена целиком — вместе с видами Дел (life.tasks и
+        # др.). Возвращаем их, если Дела уже стоят в этой базе.
+        from pravka_dela import db as dela_db
+
+        if dela_db.life_views(conn, reader):
+            done.append("life_dela.sql")
     return done
 
 

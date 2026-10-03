@@ -72,6 +72,24 @@ def cfg(admin_dsn: str, tmp_path_factory) -> Config:
         conn.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(dbname)))
         conn.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(reader)))
         conn.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(owner)))
+        conn.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(f"pa_dela_{suffix}")))
+
+
+@pytest.fixture(scope="session")
+def dela_url(cfg: Config, admin_dsn: str) -> str:
+    """Дела в той же тестовой базе: своя роль службы, миграции, виды в life.
+
+    Роль сносит cfg в конце сессии (по тому же суффиксу)."""
+    from pravka_dela import db as dela_db
+
+    suffix = urlparse(cfg.db_url).path.rsplit("_", 1)[-1]
+    role, pw = f"pa_dela_{suffix}", secrets.token_hex(8)
+    dbname = urlparse(cfg.db_url).path.lstrip("/")
+    with psycopg.connect(admin_dsn, autocommit=True) as conn:
+        conn.execute(sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(sql.Identifier(role), sql.Literal(pw)))
+        conn.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(sql.Identifier(dbname), sql.Identifier(role)))
+    dela_db.migrate(cfg.db_url, role, cfg.reader_role)
+    return _with(admin_dsn, role, pw, dbname)
 
 
 @pytest.fixture()
