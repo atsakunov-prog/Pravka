@@ -439,6 +439,7 @@ function taskRow(t, by) {
   pick.addEventListener('click', (e) => { e.stopPropagation(); togglePick(t.id, e.shiftKey); });
   return el('div', {
     class: 'task' + (isOpen(t) ? '' : ' done') + (S.cardId === t.id ? ' open-now' : '') + (S.sel.has(t.id) ? ' sel' : ''),
+    'data-id': t.id,
     onclick: () => openCard(t.id),
   },
   pick,
@@ -450,17 +451,58 @@ function taskRow(t, by) {
 }
 
 // ── Действия ────────────────────────────────────────────────────────────
+// Сделанное сразу получает галку и зачёркивание, а из списка уходит через секунду:
+// видно, что отметил именно то. Щелчок по галке в эту секунду — передумал, вернуть.
+const DONE_LINGER = 1000;
+const finishing = new Set();
+const inflight = new Map(); // id → отправленная «сделано»: «вернуть» ждёт её, а не обгоняет
+const rowOf = (id) => document.querySelector(`.task[data-id="${id}"]`);
+function markDone(id, on) {
+  const r = rowOf(id);
+  if (!r) return;
+  r.classList.toggle('done', on);
+  r.classList.toggle('finishing', on);
+  r.querySelector('.tick')?.classList.toggle('done', on);
+}
+
 async function toggleDone(list) {
+  const again = list.filter((t) => finishing.has(t.id));
+  if (again.length) {
+    again.forEach((t) => { finishing.delete(t.id); markDone(t.id, false); });
+    await Promise.allSettled(again.map((t) => inflight.get(t.id)));
+    try {
+      await ops(again.map((t) => ({ op: 'task.reopen', id: t.id })));
+      toast('Вернул в работу');
+    } catch (e) { fail(e); }
+    render();
+    return;
+  }
   const open = list.filter(isOpen);
   const target = open.length ? open : list;
   const opName = open.length ? 'task.done' : 'task.reopen';
+  const started = Date.now();
+  if (open.length) target.forEach((t) => { finishing.add(t.id); markDone(t.id, true); });
   try {
-    await ops(target.map((t) => ({ op: opName, id: t.id })));
+    const sent = ops(target.map((t) => ({ op: opName, id: t.id })));
+    target.forEach((t) => inflight.set(t.id, sent));
+    await sent.finally(() => target.forEach((t) => { if (inflight.get(t.id) === sent) inflight.delete(t.id); }));
+    if (open.length && !target.some((t) => finishing.has(t.id))) return; // передумал, пока сервер отвечал
     S.sel.clear();
-    render();
+    renderBulk();
     toast(open.length ? (target.length > 1 ? `Сделано: ${target.length}` : 'Сделано: ' + target[0].title) : 'Вернул в работу',
-      () => ops(target.map((t) => ({ op: open.length ? 'task.reopen' : 'task.done', id: t.id }))));
-  } catch (e) { fail(e); render(); }
+      () => { target.forEach((t) => finishing.delete(t.id)); return ops(target.map((t) => ({ op: open.length ? 'task.reopen' : 'task.done', id: t.id }))); });
+    if (!open.length) { render(); return; }
+    setTimeout(() => {
+      const gone = target.filter((t) => finishing.has(t.id));
+      if (!gone.length) return; // успел передумать
+      gone.forEach((t) => rowOf(t.id)?.classList.add('leaving'));
+      setTimeout(() => { gone.forEach((t) => finishing.delete(t.id)); render(); }, 250);
+    }, Math.max(0, DONE_LINGER - (Date.now() - started)));
+  } catch (e) {
+    target.forEach((t) => { finishing.delete(t.id); markDone(t.id, false); });
+    fail(e);
+    render();
+  }
 }
 
 async function setFields(ids, set, msg) {
