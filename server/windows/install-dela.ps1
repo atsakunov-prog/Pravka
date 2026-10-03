@@ -1,0 +1,231 @@
+﻿#Requires -Version 5.1
+<#
+  Дела: установить или переустановить службу ZF-Dela на домашнем компе.
+
+  Запускать в PowerShell ОТ ИМЕНИ АДМИНИСТРАТОРА:
+
+    powershell -ExecutionPolicy Bypass -File D:\PravkaArchive\repo\server\windows\install-dela.ps1
+
+  По шагам (повтор безвреден):
+    1. код: git pull ветки pravka и переустановка архива (update.ps1);
+    2. роль базы dela_app: своя, без доступа к life и core;
+    3. секреты C:\ProgramData\ZF-Dela\secrets\dela.env (пароль роли, адреса);
+       адрес базы Дел — ещё и в server.env архива: так у Claude в коннекторе
+       «Правка» появляются инструменты дел;
+    4. схемы crm и tasks (migrate ролью владельца базы);
+    5. служба ZF-Dela (NSSM), виртуальная учётка NT SERVICE\ZF-Dela с типом
+       SID restricted: писать может только в свои папки, C:\Bot ей закрыт,
+       server.env архива она не видит;
+    6. брандмауэр: порт 8102 только от роутера;
+    7. запуск, /health, самопроверка; перезапуск архива.
+  Итог — в D:\PravkaArchive\logs\install-dela-<дата>.log.
+#>
+param(
+    [string]$Root = 'D:\PravkaArchive',
+    [string]$Python = 'C:\Program Files\Python314\python.exe',
+    [int]$Port = 8102,
+    [string]$PublicUrl = 'https://dela.greenfieldnotes.com',
+    [string]$PhoneUrl = 'https://dela.znakomiy.netcraze.pro:8443',
+    [switch]$NoUpdate
+)
+
+$ErrorActionPreference = 'Stop'
+$Svc      = 'ZF-Dela'
+$Ac       = "NT SERVICE\$Svc"
+$Rule     = "ZF-Dela (TCP $Port, router only)"
+$Server   = Join-Path $Root 'repo\server'
+$VenvPy   = Join-Path $Server '.venv\Scripts\python.exe'
+$OwnerEnv = Join-Path $Root 'secrets\server.env'
+$PgPass   = Join-Path $Root 'secrets\postgres.txt'
+$Data     = 'C:\ProgramData\ZF-Dela'
+$Secrets  = Join-Path $Data 'secrets'
+$DelaEnv  = Join-Path $Secrets 'dela.env'
+$Logs     = 'C:\Bot\ZFbot\logs\dela'
+$Nssm     = 'C:\Bot\ZFbot\nssm\nssm.exe'
+$Owner    = 'alex'
+$System   = '*S-1-5-18'
+$Admins   = '*S-1-5-32-544'
+
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host 'НУЖНЫ ПРАВА АДМИНИСТРАТОРА. Откройте PowerShell от имени администратора и запустите снова.' -ForegroundColor Red
+    exit 1
+}
+
+New-Item -ItemType Directory -Force -Path (Join-Path $Root 'logs') | Out-Null
+$Log = Join-Path $Root ('logs\install-dela-{0:yyyy-MM-dd-HHmmss}.log' -f (Get-Date))
+$env:PYTHONIOENCODING = 'utf-8'
+$env:PYTHONDONTWRITEBYTECODE = '1'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+Start-Transcript -Path $Log | Out-Null
+
+function Step([string]$text) { Write-Host ''; Write-Host "== $text" -ForegroundColor Cyan }
+function Ok([string]$text) { Write-Host "   $text" -ForegroundColor Green }
+function Warn([string]$text) { Write-Host "   $text" -ForegroundColor Yellow }
+
+function Read-Env([string]$path) {
+    $map = [ordered]@{}
+    if (Test-Path -LiteralPath $path) {
+        foreach ($line in Get-Content -LiteralPath $path -Encoding UTF8) {
+            if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') { $map[$Matches[1]] = $Matches[2].Trim() }
+        }
+    }
+    return $map
+}
+
+function Set-EnvLine([string]$path, [string]$name, [string]$value) {
+    # Строку NAME=… заменить или дописать; файл — UTF-8 без BOM и с LF, как его пишет установщик архива.
+    $lines = @()
+    if (Test-Path -LiteralPath $path) { $lines = @(Get-Content -LiteralPath $path -Encoding UTF8) }
+    $lines = @($lines | Where-Object { $_ -notmatch "^\s*$name\s*=" }) + "$name=$value"
+    [IO.File]::WriteAllText($path, (($lines -join "`n") + "`n"), (New-Object Text.UTF8Encoding($false)))
+}
+
+function Py([string]$what, [string[]]$pyArgs) {
+    # Предупреждения Python идут в stderr: при Stop они оборвали бы скрипт.
+    $ErrorActionPreference = 'Continue'
+    $out = & $VenvPy @pyArgs 2>&1
+    $code = $LASTEXITCODE
+    $out | ForEach-Object { Write-Host "   $_" }
+    if ($code -ne 0) { throw "$what — код $code" }
+}
+
+try {
+    Step '1/7 Код'
+    if (-not $NoUpdate) {
+        & powershell -ExecutionPolicy Bypass -File (Join-Path $Server 'windows\update.ps1')
+        if ($LASTEXITCODE -ne 0) { throw "update.ps1 — код $LASTEXITCODE" }
+    }
+    foreach ($need in $VenvPy, $Nssm, $OwnerEnv, $PgPass, (Join-Path $Server 'pravka_dela\__main__.py')) {
+        if (-not (Test-Path -LiteralPath $need)) { throw "нет $need" }
+    }
+    Ok "код: $(git -C (Join-Path $Root 'repo') log --oneline -1)"
+
+    Step '2/7 Роль базы dela_app'
+    New-Item -ItemType Directory -Force -Path $Secrets, $Logs | Out-Null
+    $dela = Read-Env $DelaEnv
+    $pw = $null
+    if ($dela['DELA_DB_URL'] -match '^postgresql://dela_app:([^@]+)@') { $pw = $Matches[1] }
+    if (-not $pw) {
+        $bytes = New-Object byte[] 24
+        [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+        $pw = ([Convert]::ToBase64String($bytes) -replace '[+/=]', 'x')
+    }
+    # Роль заводит суперпользователь; пароль уходит в Python через окружение, не в командную строку.
+    $env:DELA_SUPER_PW = (Get-Content -LiteralPath $PgPass -Raw).Trim()
+    $env:DELA_APP_PW = $pw
+    $code = @'
+import os, psycopg
+from psycopg import sql
+dsn = os.environ["DELA_SUPER_PW"]
+if not dsn.startswith("postgresql://"):
+    dsn = "postgresql://postgres:%s@127.0.0.1:5432/postgres" % dsn
+with psycopg.connect(dsn, autocommit=True) as c:
+    have = c.execute("SELECT 1 FROM pg_roles WHERE rolname = 'dela_app'").fetchone()
+    verb = "ALTER" if have else "CREATE"
+    c.execute(sql.SQL(verb + " ROLE dela_app LOGIN PASSWORD {}").format(sql.Literal(os.environ["DELA_APP_PW"])))
+    c.execute("ALTER ROLE dela_app SET statement_timeout = '30s'")
+    c.execute("GRANT CONNECT ON DATABASE pravka TO dela_app")
+    print("роль dela_app:", "обновлена" if have else "заведена")
+'@
+    # Код — файлом: PowerShell 5.1 портит кавычки внутри аргументов внешней программы.
+    $tmp = Join-Path $env:TEMP 'dela-role.py'
+    [IO.File]::WriteAllText($tmp, $code, (New-Object Text.UTF8Encoding($false)))
+    try { Py 'роль dela_app' @($tmp) } finally {
+        Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+        Remove-Item Env:\DELA_SUPER_PW, Env:\DELA_APP_PW -ErrorAction SilentlyContinue
+    }
+
+    Step '3/7 Секреты'
+    $url = "postgresql://dela_app:$pw@127.0.0.1:5432/pravka"
+    Set-EnvLine $DelaEnv 'DELA_DB_URL' $url
+    Set-EnvLine $DelaEnv 'DELA_LISTEN' "0.0.0.0:$Port"
+    Set-EnvLine $DelaEnv 'DELA_PUBLIC_URL' $PublicUrl
+    Set-EnvLine $DelaEnv 'DELA_PHONE_URL' $PhoneUrl
+    Set-EnvLine $DelaEnv 'DELA_LOGS' $Logs
+    Set-EnvLine $DelaEnv 'DELA_DATA' $Data
+    Set-EnvLine $OwnerEnv 'DELA_DB_URL' $url
+    Ok "$DelaEnv (пароль роли — $($pw.Substring(0, 4))…); DELA_DB_URL дописан в server.env архива"
+
+    Step '4/7 Схемы crm и tasks'
+    Py 'migrate' @('-m', 'pravka_dela', '--env', $DelaEnv, 'migrate', '--owner-env', $OwnerEnv)
+
+    Step '5/7 Служба ZF-Dela'
+    $svcObj = Get-Service -Name $Svc -ErrorAction SilentlyContinue
+    if ($svcObj -and $svcObj.Status -ne 'Stopped') {
+        & $Nssm stop $Svc | Out-Null
+        try { $svcObj.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30)) } catch {}
+    }
+    if (-not $svcObj) { & $Nssm install $Svc $VenvPy | Out-Null }
+    & $Nssm set $Svc Application $VenvPy | Out-Null
+    New-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\$Svc\Parameters" -Name AppParameters `
+        -PropertyType ExpandString -Force -Value "-m pravka_dela --env `"$DelaEnv`" serve" | Out-Null
+    & $Nssm set $Svc AppDirectory $Server | Out-Null
+    & $Nssm set $Svc DisplayName 'ZF Dela (дела и CRM)' | Out-Null
+    & $Nssm set $Svc Description "Дела: задачи, люди, проекты и сделки. API для Правки, веба и ботов. Порт $Port, вход по токену" | Out-Null
+    & $Nssm set $Svc Start SERVICE_AUTO_START | Out-Null
+    & $Nssm set $Svc AppStdout "$Logs\service-stdout.log" | Out-Null
+    & $Nssm set $Svc AppStderr "$Logs\service-stderr.log" | Out-Null
+    & $Nssm set $Svc AppRotateFiles 1 | Out-Null
+    & $Nssm set $Svc AppRotateBytes 5000000 | Out-Null
+    & $Nssm set $Svc AppExit Default Restart | Out-Null
+    & $Nssm set $Svc AppRestartDelay 5000 | Out-Null
+    & $Nssm set $Svc AppEnvironmentExtra 'PYTHONIOENCODING=utf-8' 'PYTHONDONTWRITEBYTECODE=1' | Out-Null
+    sc.exe config $Svc obj= $Ac | Out-Null
+    sc.exe sidtype $Svc restricted | Out-Null
+
+    icacls $Data /inheritance:r /grant:r "${System}:(OI)(CI)F" "${Admins}:(OI)(CI)F" "${Owner}:(OI)(CI)M" /Q | Out-Null
+    icacls $Secrets /inheritance:r /grant:r "${System}:(OI)(CI)F" "${Admins}:(OI)(CI)F" "${Owner}:(OI)(CI)M" "${Ac}:(OI)(CI)R" /Q | Out-Null
+    icacls $Server /grant "${Ac}:(OI)(CI)RX" /Q | Out-Null
+    icacls $Logs /grant "${Ac}:(OI)(CI)M" /Q | Out-Null
+    icacls 'C:\Bot\ZFbot\nssm' /grant "${Ac}:(OI)(CI)RX" /Q | Out-Null
+    Write-Host '   закрываю C:\Bot для службы (на больших папках — до минуты)…'
+    icacls 'C:\Bot' /deny "${Ac}:(OI)(CI)F" /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) { Warn "запрет на C:\Bot выставился не везде (icacls $LASTEXITCODE)" }
+
+    # alex перезапускает службу сам: правки кода применяются без администратора.
+    $sid = (New-Object Security.Principal.NTAccount($Owner)).Translate([Security.Principal.SecurityIdentifier]).Value
+    $sd = (sc.exe sdshow $Svc | Where-Object { $_ -match '^D:' } | Select-Object -First 1).Trim()
+    if ($sd -notmatch [regex]::Escape($sid)) {
+        sc.exe sdset $Svc ($sd -replace '^D:([A-Z]*)', ('D:$1' + "(A;;CCLCSWRPWPDTLOCRRC;;;$sid)")) | Out-Null
+    }
+    Ok "$Svc — учётка $((Get-CimInstance Win32_Service -Filter "Name='$Svc'").StartName)"
+
+    Step '6/7 Брандмауэр'
+    Get-NetFirewallRule -DisplayName $Rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+    New-NetFirewallRule -DisplayName $Rule -Direction Inbound -Action Allow -Protocol TCP `
+        -LocalPort $Port -RemoteAddress '192.168.1.1' -Program $Python -Profile Any | Out-Null
+    Ok "порт $Port — только от роутера 192.168.1.1"
+
+    Step '7/7 Запуск и проверка'
+    & $Nssm start $Svc | Out-Null
+    $up = $false
+    $deadline = (Get-Date).AddSeconds(40)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $h = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 3
+            if ($h.service -eq 'pravka-dela') { $up = $true; break }
+        } catch {}
+        Start-Sleep -Seconds 2
+    }
+    if ($up) { Ok 'служба отвечает' } else { throw "служба не отвечает — смотрите $Logs" }
+    $code401 = try { (Invoke-WebRequest -Uri "http://127.0.0.1:$Port/api/sync" -UseBasicParsing -TimeoutSec 3).StatusCode } catch { $_.Exception.Response.StatusCode.value__ }
+    if ($code401 -eq 401) { Ok 'без токена данные не отдаются (401)' } else { Warn "/api/sync без токена ответил $code401 вместо 401" }
+    Py 'check' @('-m', 'pravka_dela', '--env', $DelaEnv, 'check')
+
+    Stop-ScheduledTask -TaskName 'Pravka Archive' -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 8  # служба архива замечает уход сторожа за 5 с и освобождает порт
+    Start-ScheduledTask -TaskName 'Pravka Archive'
+    Ok 'архив перезапущен: в коннекторе «Правка» появятся инструменты дел (dela_*)'
+
+    Write-Host ''
+    Write-Host 'ГОТОВО.' -ForegroundColor Green
+    Write-Host "  Дальше в роутере: CrazeDNS → Add → dela → 192.168.1.77, HTTP, порт $Port, unrestricted."
+} catch {
+    Write-Host ''
+    Write-Host "ОШИБКА: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Журнал: $Log — скажите Claude."
+} finally {
+    Stop-Transcript | Out-Null
+}

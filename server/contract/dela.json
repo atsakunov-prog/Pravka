@@ -1,0 +1,71 @@
+{
+  "_": "Контракт Дел с телефоном: примеры запросов и ответов. Сервер — server/pravka_dela, тесты сервера держат эту форму. Данные выдуманные.",
+  "pair_qr": "pravka-dela:{\"url\":\"https://dela.example.netcraze.pro:8443\",\"token\":\"<43 знака>\"}",
+  "auth": "Authorization: Bearer <токен устройства>",
+  "sync_request": "GET /api/sync?since=0",
+  "sync_response": {
+    "ok": true,
+    "full": true,
+    "seq": 1042,
+    "today": "2026-10-04",
+    "tasks": [
+      {
+        "id": "2b1f0c9e-6a51-4f3e-9c3a-0d6f1b2a7e10", "num": 57, "title": "Иван: прислать модель", "notes": null,
+        "project_id": "8c0e2f1a-1d2b-4c3d-8e4f-5a6b7c8d9e0f", "project_name": "Бета Групп", "project_kind": "client",
+        "deal_id": null, "deal_name": null, "sphere": "work",
+        "owner_id": "sasha", "ball": "waiting", "person_id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", "person_short": "Иван",
+        "person_name": "Иван Петров", "waiting_since": "2026-10-03", "nudge_on": "2026-10-08", "requested_by": null,
+        "requested_by_short": null, "due_date": "2026-10-10", "due_time": null, "estimate_min": 10,
+        "money": null, "money_eff": "paid", "want": false, "focus_on": null, "now_": false, "overdue": false,
+        "labels": ["звонок"], "status": "open", "source": "voice", "source_ref": null,
+        "created_by": "sasha", "created_at": "2026-10-03T21:10:00+03:00", "updated_at": "2026-10-03T21:10:00+03:00",
+        "completed_at": null, "import_ref": null, "rev": 1, "seq": 1040
+      }
+    ],
+    "projects": [{"id": "8c0e2f1a-1d2b-4c3d-8e4f-5a6b7c8d9e0f", "name": "Бета Групп", "aliases": ["Бета"], "sphere": "work", "kind": "client", "org_id": null, "owner_id": "sasha", "money_default": "paid", "note": null, "import_ref": null, "archived_at": null, "rev": 1, "seq": 1001}],
+    "deals": [],
+    "people": [{"id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", "name": "Иван Петров", "short": "Иван", "aliases": ["Ваня"], "phones": ["+79001112233"], "rev": 1, "seq": 1002}],
+    "orgs": [],
+    "comments": [],
+    "suggestions": [],
+    "access": [],
+    "users": [{"id": "sasha", "name": "Саша", "person_id": null, "role": "owner", "seq": 1}],
+    "labels": [{"name": "звонок", "color": null}]
+  },
+  "ops_request": {
+    "ops": [
+      {"op": "task.create", "op_id": "c4c1a7d2-0b8e-4f61-9e3c-2a5d7f9b1e33",
+       "task": {"id": "2b1f0c9e-6a51-4f3e-9c3a-0d6f1b2a7e10", "title": "Иван: прислать модель", "project_id": "8c0e2f1a-1d2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "ball": "waiting", "person_id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", "due_date": "2026-10-10", "estimate_min": 10,
+                "labels": ["звонок"], "source": "voice"}},
+      {"op": "task.set", "op_id": "5e9f2b10-7c4d-4a8e-b1f3-6d0c2e4a8b77", "id": "57",
+       "set": {"due_date": "2026-10-12"}, "was": {"due_date": "2026-10-10"}},
+      {"op": "task.done", "op_id": "9a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d", "id": "2b1f0c9e-6a51-4f3e-9c3a-0d6f1b2a7e10"},
+      {"op": "comment.add", "op_id": "0f1e2d3c-4b5a-4968-8776-5a4b3c2d1e0f", "comment": {"task_id": "57", "text": "⏱ 3 октября, 19:30–20:42 · 1 ч 12 м"}},
+      {"op": "suggestion.decide", "op_id": "aa11bb22-cc33-4d44-8e55-ff6677889900", "id": "<id предложения>", "decision": "reject", "reason": "это идея, не дело"}
+    ]
+  },
+  "ops_response": {
+    "ok": true,
+    "seq": 1046,
+    "results": [
+      {"op_id": "c4c1a7d2-0b8e-4f61-9e3c-2a5d7f9b1e33", "ok": true, "task": {"num": 57, "rev": 1}},
+      {"op_id": "5e9f2b10-7c4d-4a8e-b1f3-6d0c2e4a8b77", "ok": true, "task": {"num": 57, "rev": 2}, "conflicts": []},
+      {"op_id": "9a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d", "ok": true, "task": {"status": "done"}},
+      {"op_id": "0f1e2d3c-4b5a-4968-8776-5a4b3c2d1e0f", "ok": true, "comment": {"id": "…"}},
+      {"op_id": "aa11bb22-cc33-4d44-8e55-ff6677889900", "ok": false, "error": "предложение уже разобрано или не твоё"}
+    ]
+  },
+  "ops_list": ["task.create", "task.set", "task.done", "task.reopen", "task.cancel", "comment.add", "comment.delete",
+               "suggestion.decide", "person.create", "person.set", "project.create", "project.set", "deal.create", "deal.set",
+               "org.create", "org.set", "access.set", "interaction.add", "interaction.set"],
+  "views": ["morning", "new", "waiting", "person?person_id=", "quick", "now", "project?project_id=", "week", "search?q="],
+  "rules": [
+    "op_id — uuid на операцию, телефон хранит его в очереди: повтор отдаёт прежний ответ, дублей нет.",
+    "id нового дела телефон может создать сам (uuid) — офлайн-создание; номер num приходит с ответом.",
+    "was — значения полей, которые телефон видел до правки: сервер вернёт conflicts, если их успели поменять другие.",
+    "ok: false — ошибка формата или прав, повтор не поможет: показать словами и снять из очереди.",
+    "since — seq из прошлого ответа. full: true — выбросить кэш и взять ответ целиком.",
+    "Сутки и сроки — даты владельца (Москва), без времени; сервер отдаёт today."
+  ]
+}
