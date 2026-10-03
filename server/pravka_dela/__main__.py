@@ -127,8 +127,7 @@ def cmd_invite(args) -> int:
     base = args.base or cfg.public_url or f"http://127.0.0.1:{cfg.listen_port}"
     link = f"{base}/#invite={code}"
     if args.out:
-        Path(args.out).write_text(link + "
-", encoding="utf-8")
+        Path(args.out).write_text(link + chr(10), encoding="utf-8")
         print(f"ссылка входа для {args.user} — в {args.out} (одноразовая, двое суток)")
     else:
         print(link)

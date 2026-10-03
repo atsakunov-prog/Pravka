@@ -63,6 +63,10 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Root 'logs') | Out-Null
 $Log = Join-Path $Root ('logs\install-dela-{0:yyyy-MM-dd-HHmmss}.log' -f (Get-Date))
 $env:PYTHONIOENCODING = 'utf-8'
 $env:PYTHONDONTWRITEBYTECODE = '1'
+# Пакеты pravka_dela и pravka_archive не ставятся в venv, а лежат в папке сервера:
+# python -m их находит, только если эта папка в пути поиска (03.10: «No module named pravka_dela»).
+$env:PYTHONPATH = $Server
+Set-Location -LiteralPath $Server
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 Start-Transcript -Path $Log | Out-Null
 

@@ -232,3 +232,19 @@ def test_web_invite_cookie_and_forgery_guard(dela):
     assert (h["actor"], h["via"]) == ("natasha", "web") and "due_date" not in h["after"]  # пустое в журнал не пишется
     client.post("/auth/logout", headers={"X-Dela": "1"})
     assert client.get("/api/me").status_code == 401
+
+
+def test_every_module_compiles_and_cli_parses():
+    """Тесты не грузят __main__ и bridge напрямую — 03.10 там жила синтаксическая ошибка."""
+    import compileall
+    import pathlib
+
+    from pravka_dela import __main__ as cli
+
+    root = pathlib.Path(cli.__file__).parent
+    assert compileall.compile_dir(str(root), quiet=1, force=True, legacy=False)
+    for argv in (["migrate", "--help"], ["import", "--help"], ["invite", "--help"], ["export-todoist", "--help"]):
+        try:
+            cli.main(argv)
+        except SystemExit as e:
+            assert e.code == 0, argv
