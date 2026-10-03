@@ -100,8 +100,17 @@ function Py([string]$what, [string[]]$pyArgs) {
 try {
     Step '1/9 Код'
     if (-not $NoUpdate) {
-        & powershell -ExecutionPolicy Bypass -File (Join-Path $Server 'windows\update.ps1')
-        if ($LASTEXITCODE -ne 0) { throw "update.ps1 — код $LASTEXITCODE" }
+        # Как update.ps1, но расхождение с GitHub не останавливает установку: код Дел мог
+        # приехать на комп раньше, чем на GitHub, — тогда ставится то, что лежит на компе.
+        $repo = Join-Path $Root 'repo'
+        git config --global --add safe.directory ($repo -replace '\\', '/') 2>$null
+        $ErrorActionPreference = 'Continue'
+        git -C $repo pull --ff-only 2>&1 | ForEach-Object { Write-Host "   $_" }
+        $pulled = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        if ($pulled -ne 0) { Warn 'git pull не прошёл (код на компе и на GitHub разошлись) — ставлю то, что на компе' }
+        & (Join-Path $Server 'windows\install.ps1') -Root $Root -Python $Python
+        if ($LASTEXITCODE -ne 0) { throw "install.ps1 архива — код $LASTEXITCODE" }
     }
     foreach ($need in $VenvPy, $Nssm, $OwnerEnv, $PgPass, (Join-Path $Server 'pravka_dela\__main__.py')) {
         if (-not (Test-Path -LiteralPath $need)) { throw "нет $need" }
