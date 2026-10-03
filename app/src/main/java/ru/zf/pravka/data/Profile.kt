@@ -45,7 +45,7 @@ internal data class Profile(
     /** Режимы, которые профиль умеет выключать. Правки среди них нет. */
     enum class Mode(val key: String, val title: String, val hint: String) {
         ZASECHKA("zasechka", "Засечка", "лента дня, напоминания, автопилот, телефон по дням"),
-        DELA("dela", "Дела", "Todoist и кнопка «Д»"),
+        DELA("dela", "Дела", "свой сервер дел (или Todoist) и кнопка «Д»"),
         SPORT("sport", "Спорт", "тренировки, силовые, план, intervals.icu"),
         FOOD("food", "Еда", "КБЖУ, дневник еды, кнопка «Е»"),
         MONEY("money", "Деньги", "траты, выписки, пуши банка, кнопка «₽»"),

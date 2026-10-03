@@ -248,7 +248,11 @@ internal fun ReportTab(app: PravkaApp) {
     val workouts by app.sportStore.workoutsFlow.collectAsState()
     val gtg by app.strengthStore.gtgFlow.collectAsState()
     val sessions by app.strengthStore.sessionsFlow.collectAsState()
-    val tasks by app.todoistStore.tasksFlow.collectAsState()
+    val todoistTasks by app.todoistStore.tasksFlow.collectAsState()
+    // Дела на сервере или Todoist — сроки открытых дел для строки «на сегодня».
+    val onDelaServer by app.delaServer.collectAsState()
+    val delaSnap by app.delaStore.view.collectAsState()
+    val dueDates = if (onDelaServer) delaSnap.tasks.values.filter { it.open }.map { it.dueDate } else todoistTasks.map { it.due }
     val kcalTarget by app.settings.foodKcalFlow.collectAsState(initial = 0)
     val proteinTarget by app.settings.foodProteinFlow.collectAsState(initial = 0)
     val fatTarget by app.settings.foodFatFlow.collectAsState(initial = 0)
@@ -267,6 +271,7 @@ internal fun ReportTab(app: PravkaApp) {
         runCatching { app.sportStore.load() }
         runCatching { app.strengthStore.load() }
         runCatching { app.todoistStore.load() }
+        runCatching { app.delaStore.load() }
         runCatching { app.phoneStore.trackedApps() }
         usageGranted = PhoneSweeper.hasUsageAccess(context)
         if (usageGranted) runCatching { app.phoneSweeper.sweep() }
@@ -471,7 +476,7 @@ internal fun ReportTab(app: PravkaApp) {
                 dayStart = dayStart,
                 isToday = isToday,
                 now = now,
-                tasks = tasks,
+                dueDates = dueDates,
                 costs = costs,
                 dictations = dictations,
             )
@@ -1745,7 +1750,7 @@ private fun TasksAppCard(
     dayStart: Long,
     isToday: Boolean,
     now: Long,
-    tasks: List<ru.zf.pravka.data.TodoistStore.Task>,
+    dueDates: List<String>,
     costs: Map<String, Double>,
     dictations: Map<String, Pair<Int, Long>>,
 ) {
@@ -1756,10 +1761,10 @@ private fun TasksAppCard(
         info = "Сколько Правка сама стоила и сколько было наговорено — то, чего в ленте нет: там это лежит как «Систематизация».",
     ) {
         val starts = DayReport.todoistStarts(pool, window)
-        val dueToday = tasks.count { it.due == dateKey }
-        val overdue = tasks.count { it.due.isNotBlank() && it.due < todayKey }
+        val dueToday = dueDates.count { it == dateKey }
+        val overdue = dueDates.count { it.isNotBlank() && it < todayKey }
         Text(
-            "Дел из Todoist запущено в ленте: $starts" +
+            "Дел запущено в ленте: $starts" +
                 (if (isToday) " · в списке на сегодня $dueToday · просрочено $overdue" else ""),
             style = MaterialTheme.typography.bodySmall,
         )

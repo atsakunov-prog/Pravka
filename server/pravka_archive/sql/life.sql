@@ -53,6 +53,8 @@ SELECT (e->>'id')::bigint                    AS id,
        e->>'source'                          AS source,
        NULLIF(e->>'raw', '')                 AS raw,
        NULLIF(e->>'comment', '')             AS comment,
+       NULLIF(e->>'task', '')                AS task_id,
+       NULLIF(e->>'project', '')             AS project_id,
        COALESCE((e->>'pomodoros')::int, 0)   AS pomodoros,
        NULLIF((e->>'rating')::int, 0)        AS rating,
        (e->>'end') IS NULL                   AS open,
@@ -62,13 +64,15 @@ FROM core.records r
 CROSS JOIN LATERAL jsonb_array_elements(r.data->'entries') e
 LEFT JOIN life.categories c ON lower(c.name) = lower(e->>'category')
 WHERE r.kind = 'zasechka.day' AND NOT r.deleted;
-COMMENT ON VIEW life.entries IS 'Лента Засечки: что владелец делал, кусками времени. Сумма minutes за полные сутки = 1440. source: voice/text — сказал или набрал, edit — правил руками, auto — телефон или часы (сон, тренировка), gap — заполнитель «не размечено», todoist — запуск из задачи, nfc, autopilot, calendar.';
+COMMENT ON VIEW life.entries IS 'Лента Засечки: что владелец делал, кусками времени. Сумма minutes за полные сутки = 1440. source: voice/text — сказал или набрал, edit — правил руками, auto — телефон или часы (сон, тренировка), gap — заполнитель «не размечено», task — запуск из дела (task_id, project_id; прежнее имя — todoist), nfc, autopilot, calendar.';
 COMMENT ON COLUMN life.entries.day IS 'Сутки владельца (по поясу телефона). Группировать и сравнивать дни — только по нему.';
 COMMENT ON COLUMN life.entries.minutes IS 'Минуты суток куска сверх более ранних: нахлёст с предыдущим куском (дубль, секунды на стыке) второй раз не считается, поэтому сумма за полные сутки — 1440. Нахлёст виден по start/end; у дубля minutes = 0. Пусто у идущего дела.';
 COMMENT ON COLUMN life.entries.raw IS 'Что владелец сказал дословно, с ошибками распознавания. Строки «КБЖУ: …» дописала Еда.';
 COMMENT ON COLUMN life.entries.comment IS 'Слова владельца о деле, уже осознанные: что было внутри и чем кончилось. Весит больше надиктовки.';
 COMMENT ON COLUMN life.entries.points IS 'Очки = часы × ценность часа категории (по нынешнему справочнику). Пусто, если категории нет в справочнике: справочник присылает телефон (zasechka.reference), своего на сервере нет — второй источник правды разошёлся бы с телефоном.';
 COMMENT ON COLUMN life.entries.open IS 'Дело идёт сейчас: конца ещё нет.';
+COMMENT ON COLUMN life.entries.task_id IS 'id дела в Делах (life.tasks.id), если запись начата тапом по делу. Связь ставит телефон; у остальных записей пусто.';
+COMMENT ON COLUMN life.entries.project_id IS 'id проекта Дел (life.projects.id) у записи из дела или с клиентом из справочника. Пусто — клиент свободным текстом (сопоставление по алиасам — life.work_time).';
 
 -- ---------------------------------------------------------------- Телефон
 

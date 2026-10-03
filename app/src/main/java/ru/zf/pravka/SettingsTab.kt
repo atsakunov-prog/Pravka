@@ -100,7 +100,7 @@ internal enum class SettingsGroup(
     PROFILE("Кто пользуется", "имя, род, какие режимы включены", SettingsShelf.MODES, { Glyphs.Tune }),
     PRAVKA("Правка", "проза, контекст, правила в промпте", SettingsShelf.MODES, { Glyphs.Pravka }, ModeDecor.PRAVKA),
     ZASECHKA("Засечка", "напоминания, категории, автопилот, NFC", SettingsShelf.MODES, { Glyphs.Zasechka }, ModeDecor.ZASECHKA),
-    DELA("Дела", "кнопка «Д», Todoist", SettingsShelf.MODES, { Glyphs.Delo }, ModeDecor.DELA),
+    DELA("Дела", "кнопка «Д», сервер или Todoist", SettingsShelf.MODES, { Glyphs.Delo }, ModeDecor.DELA),
     SPORT("Спорт", "отдых, выгрузка, цель веса, справочник", SettingsShelf.MODES, { Glyphs.Sport }, ModeDecor.SPORT),
     FOOD("Еда", "цели КБЖУ, лента, intervals", SettingsShelf.MODES, { Glyphs.Food }, ModeDecor.FOOD),
     MONEY("Деньги", "пуши банка", SettingsShelf.MODES, { Glyphs.Money }, ModeDecor.MONEY),
@@ -108,7 +108,8 @@ internal enum class SettingsGroup(
     MODELS("Модели", "какая модель и с каким усилием", SettingsShelf.VOICE, { Glyphs.Spark }),
     NET("Связь с облаками", "проверка Google и Claude, журнал, неделя доступа", SettingsShelf.VOICE, { Glyphs.Wifi }),
     ANTHROPIC("Anthropic", "ключ API", SettingsShelf.LINKS, { Glyphs.Key }),
-    TODOIST("Todoist", "дела и разноска", SettingsShelf.LINKS, { Glyphs.Delo }, ModeDecor.DELA),
+    DELA_SERVER("Дела", "свой сервер дел, QR, выбор Todoist / Дела", SettingsShelf.LINKS, { Glyphs.Delo }, ModeDecor.DELA),
+    TODOIST("Todoist", "запасная дорога дел", SettingsShelf.LINKS, { Glyphs.Delo }, ModeDecor.DELA),
     NOTION("Notion", "план, Дневник, «Вся жизнь»", SettingsShelf.LINKS, { Glyphs.Scroll }),
     INTERVALS("intervals.icu", "тренировки, сон, вес", SettingsShelf.LINKS, { Glyphs.Activity }, ModeDecor.SPORT),
     SHEETS("Google Sheets", "таймшит из ленты", SettingsShelf.LINKS, { Glyphs.ListLines }, ModeDecor.ZASECHKA),
@@ -208,7 +209,7 @@ internal fun SettingsTab(
 private val SettingsGroup.modes: Set<ru.zf.pravka.data.Profile.Mode>
     get() = when (this) {
         SettingsGroup.ZASECHKA, SettingsGroup.SHEETS -> setOf(ru.zf.pravka.data.Profile.Mode.ZASECHKA)
-        SettingsGroup.DELA, SettingsGroup.TODOIST -> setOf(ru.zf.pravka.data.Profile.Mode.DELA)
+        SettingsGroup.DELA, SettingsGroup.TODOIST, SettingsGroup.DELA_SERVER -> setOf(ru.zf.pravka.data.Profile.Mode.DELA)
         SettingsGroup.SPORT -> setOf(ru.zf.pravka.data.Profile.Mode.SPORT)
         SettingsGroup.FOOD -> setOf(ru.zf.pravka.data.Profile.Mode.FOOD)
         SettingsGroup.MONEY -> setOf(ru.zf.pravka.data.Profile.Mode.MONEY)
@@ -242,7 +243,19 @@ private fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
         }
         SettingsGroup.TODOIST -> {
             val token by s.todoistTokenFlow.collectAsState(initial = "")
-            keyStatus(token.isNotBlank())
+            val onServer by app.delaServer.collectAsState()
+            if (onServer && token.isNotBlank()) GroupStatus("запас") else keyStatus(token.isNotBlank())
+        }
+        SettingsGroup.DELA_SERVER -> {
+            val link by app.delaSync.link.collectAsState()
+            val st by app.delaSync.status.collectAsState()
+            val onServer by app.delaServer.collectAsState()
+            when {
+                link == null -> GroupStatus(if (onServer) "не подключено" else "Todoist", ok = if (onServer) false else null, dot = onServer)
+                st.lastError.isNotBlank() && st.lastErrorAt >= st.lastOk -> GroupStatus("ошибка", ok = false, dot = true)
+                !onServer -> GroupStatus("подключено · Todoist")
+                else -> GroupStatus("подключено", ok = true, dot = true)
+            }
         }
         SettingsGroup.NOTION -> {
             val token by s.notionTokenFlow.collectAsState(initial = "")
@@ -480,6 +493,7 @@ private fun GroupContent(
         SettingsGroup.NET -> NetProbeSettings(app)
         SettingsGroup.ANTHROPIC -> AnthropicSettings(app)
         SettingsGroup.TODOIST -> TodoistSettings(app)
+        SettingsGroup.DELA_SERVER -> DelaServerSettings(app)
         SettingsGroup.NOTION -> NotionSettings(app)
         SettingsGroup.INTERVALS -> IntervalsSettings(app)
         SettingsGroup.SHEETS -> ZasechkaSheetsSettings(app)
@@ -771,7 +785,7 @@ private fun ButtonsSettings(app: PravkaApp) {
         PaperToggle("Засечка «З»", z && zOn, { v -> scope.launch { settings.setZEnabled(v) } },
             hint = if (zOn) "видна всегда, в любом приложении" else off, enabled = zOn)
         PaperToggle("Дело «Д»", d && dOn, { v -> scope.launch { settings.setREnabled(v) } },
-            hint = if (dOn) "наговорил — задачи в Todoist" else off, enabled = dOn)
+            hint = if (dOn) "наговорил — задачи в Дела" else off, enabled = dOn)
         PaperToggle("Деньги «₽»", m && mOn, { v -> scope.launch { settings.setMEnabled(v) } },
             hint = if (mOn) "наговорил трату — плашка с суммой и «ОК»" else off, enabled = mOn)
         PaperToggle(
@@ -1631,10 +1645,21 @@ private fun DelaSettings(app: PravkaApp, onOpen: (SettingsGroup) -> Unit) {
             hint = "наговорил — задачи разложились по проектам",
         )
     }
+    val onServer by app.delaServer.collectAsState()
+    val link by app.delaSync.link.collectAsState()
     PaperCard(label = "подключение") {
         PaperRow(
+            title = "Дела — свой сервер",
+            hint = if (onServer) "дела ходят сюда" else "QR с компа, выбор Todoist / Дела",
+            icon = Glyphs.Delo,
+            badgeTint = MaterialTheme.colorScheme.primary,
+            status = if (link != null) "подключено" else "нет",
+            trailing = { StatusDot(if (link != null) true else null) },
+            onClick = { onOpen(SettingsGroup.DELA_SERVER) },
+        )
+        PaperRow(
             title = "Todoist",
-            hint = "токен",
+            hint = if (onServer) "запасная дорога" else "токен — дела ходят сюда",
             icon = Glyphs.Delo,
             badgeTint = MaterialTheme.colorScheme.primary,
             status = if (token.isNotBlank()) "есть" else "нет ключа",

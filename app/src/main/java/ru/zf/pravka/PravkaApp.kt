@@ -5,6 +5,8 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -371,8 +373,33 @@ class PravkaApp : Application() {
         ru.zf.pravka.data.TodoistSync(settings, todoistStore, zasechkaStore, httpClient, eventLog)
     }
 
-    // Разноска: наговор -> дела в Todoist. Разобранное лежит на диске до
-    // того, как Todoist его примет (raznoska.json).
+    // Дела на домашнем сервере (03.10.2026, docs/dela-server.md): копия и
+    // очередь операций на телефоне, связь — QR с компа. Какой путь у режима
+    // «Дела» — Todoist или сервер — выбор в «Подключениях»
+    // (settings.delaBackendFlow); Todoist пока не удалён, чтобы было куда
+    // откатиться.
+    val delaStore by lazy { ru.zf.pravka.data.DelaStore(this) }
+    val delaSync by lazy {
+        ru.zf.pravka.data.DelaSync(this, httpClient, delaStore, appScope) { eventLog.add(it) }
+    }
+    /** Режим «Дела» ходит в домашний сервер, а не в Todoist — для экрана и службы. */
+    val delaServer: kotlinx.coroutines.flow.StateFlow<Boolean> by lazy {
+        settings.delaBackendFlow
+            .map { it == Settings.DELA_BACKEND_SERVER }
+            .stateIn(appScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, false)
+    }
+    /** То же, но прочитанное из настроек сейчас: для решений, а не для картинки. */
+    suspend fun delaOnServer(): Boolean = settings.delaBackend() == Settings.DELA_BACKEND_SERVER
+
+    /** Правка Дел: в очередь (на диск сразу) и на сервер через десять секунд тишины. */
+    suspend fun delaDo(ops: List<org.json.JSONObject>) {
+        if (ops.isEmpty()) return
+        delaStore.enqueue(ops)
+        delaSync.poke()
+    }
+
+    // Разноска: наговор -> дела в Todoist или Дела. Разобранное лежит на диске
+    // до того, как дорога наружу его примет (raznoska.json).
     val raznoskaStore by lazy { ru.zf.pravka.data.RaznoskaStore(this) }
     val raznoskaRoutes by lazy { ru.zf.pravka.data.RaznoskaRoutes(this) }
     val raznoskaEngine by lazy {
@@ -386,6 +413,9 @@ class PravkaApp : Application() {
             todoistSync = todoistSync,
             stats = stats,
             eventLog = eventLog,
+            delaStore = delaStore,
+            delaSync = delaSync,
+            delaOn = { delaOnServer() },
         )
     }
 

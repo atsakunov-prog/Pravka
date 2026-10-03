@@ -385,9 +385,9 @@ object DayReport {
         return ms.entries.sortedByDescending { it.value }.map { it.key to msToMin(it.value) }
     }
 
-    /** Дел, начатых из Todoist в окне. */
+    /** Дел, начатых тапом по делу (Todoist или Дела) в окне. */
     fun todoistStarts(entries: List<ZasechkaStore.Entry>, w: Window): Int =
-        entries.count { it.source == "todoist" && it.start >= w.from && it.start < w.to }
+        entries.count { (it.source == "todoist" || it.source == "task") && it.start >= w.from && it.start < w.to }
 
     // ---- База для сравнения ----
 

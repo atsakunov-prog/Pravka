@@ -131,6 +131,7 @@ class Settings(private val context: Context) {
         private val KEY_ICU_ATHLETE = stringPreferencesKey("icu_athlete_id")
         private val KEY_ICU_KEY = stringPreferencesKey("icu_api_key")
         private val KEY_TODOIST_TOKEN = stringPreferencesKey("todoist_token")
+        private val KEY_DELA_BACKEND = stringPreferencesKey("dela_backend")
 
         // Спорт: вкладка живёт кэшем intervals.icu, глубина - в днях.
         private val KEY_SPORT_DAYS = intPreferencesKey("sport_days")
@@ -195,6 +196,8 @@ class Settings(private val context: Context) {
         const val FAB_ALPHA_DEFAULT = 0.35f
         /** Ширина бегущей строки у кнопок, dp (владелец, 15.09: «размер плашки по горизонтали — в общие настройки»). */
         const val TICKER_WIDTH_DEFAULT = 340
+        const val DELA_BACKEND_TODOIST = "todoist"
+        const val DELA_BACKEND_SERVER = "dela"
         const val TICKER_WIDTH_MIN = 160
         const val TICKER_WIDTH_MAX = 900
 
@@ -903,6 +906,16 @@ class Settings(private val context: Context) {
     suspend fun todoistToken(): String = todoistTokenFlow.first()
     suspend fun setTodoistToken(value: String) {
         context.dataStore.edit { it[KEY_TODOIST_TOKEN] = value.trim() }
+    }
+
+    // Куда ходит режим «Дела» (03.10.2026, docs/dela-server.md): «todoist» —
+    // как было, «dela» — домашний сервер Дел. Todoist пока не удалён — выбор в
+    // «Подключениях», чтобы было куда откатиться. С завода — Todoist: Дела
+    // включаются сами, когда владелец отсканировал QR сервера.
+    val delaBackendFlow = context.dataStore.data.map { it[KEY_DELA_BACKEND] ?: DELA_BACKEND_TODOIST }
+    suspend fun delaBackend(): String = delaBackendFlow.first()
+    suspend fun setDelaBackend(value: String) {
+        context.dataStore.edit { it[KEY_DELA_BACKEND] = value }
     }
 
     // Разноска: кнопка «Д» на экране. Включена по умолчанию - она и есть

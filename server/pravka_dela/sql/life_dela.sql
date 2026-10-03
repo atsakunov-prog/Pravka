@@ -80,14 +80,22 @@ FROM tasks.suggestions s
 WHERE s.for_user = crm.owner_id();
 COMMENT ON VIEW life.suggestions IS '«Новое» в Делах: что предложила автоматика. status pending — ждёт владельца; rejected — с причиной.';
 
-CREATE OR REPLACE VIEW life.work_time AS
+-- Связь записи с делом ставит телефон (поля task и project записи, 03.10.2026):
+-- она сильнее сопоставления текста. Порядок: проект записи → проект её дела →
+-- клиент текстом по алиасам. id сравниваются текстом: строка записи пришла с
+-- телефона, и кривой id не должен ронять вид целиком. Колонки поменялись —
+-- поэтому DROP: Дела мигрируют этот файл и поверх старого вида.
+DROP VIEW IF EXISTS life.work_time;
+CREATE VIEW life.work_time AS
 SELECT e.day, e.start_local, e.end_local, e.minutes, e.title, e.category, e.client,
        p.name AS project, o.name AS org, pe.short AS person,
-       m.project_id, m.org_id, m.person_id
+       p.id AS project_id, coalesce(p.org_id, m.org_id) AS org_id, m.person_id,
+       t.num AS task_num, t.id AS task_id
 FROM life.entries e
 LEFT JOIN LATERAL crm.match_name(e.client) m ON true
-LEFT JOIN crm.projects p ON p.id = m.project_id
-LEFT JOIN crm.orgs o ON o.id = m.org_id
+LEFT JOIN tasks.tasks t ON t.id::text = e.task_id
+LEFT JOIN crm.projects p ON p.id::text = coalesce(e.project_id, t.project_id::text, m.project_id::text)
+LEFT JOIN crm.orgs o ON o.id = coalesce(p.org_id, m.org_id)
 LEFT JOIN crm.people pe ON pe.id = m.person_id
-WHERE e.client IS NOT NULL;
-COMMENT ON VIEW life.work_time IS 'Лента с клиентом, сопоставленным со справочником Дел: проект, организация, человек. Часы на клиента = sum(minutes)/60 по project или org.';
+WHERE e.client IS NOT NULL OR e.project_id IS NOT NULL OR e.task_id IS NOT NULL;
+COMMENT ON VIEW life.work_time IS 'Лента с клиентом, сопоставленным со справочником Дел: проект, организация, человек, дело. Запись, начатая из дела, несёт его проект сама (task_num — «#57»); остальные — по алиасам клиента. Часы на клиента = sum(minutes)/60 по project или org.';

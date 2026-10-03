@@ -715,10 +715,16 @@ internal fun ZasechkaTab(app: PravkaApp) {
         if (service == null) Feedback.toast(context, context.getString(R.string.toast_no_service))
         else service.onZasechkaTap(editTargetId = target.id)
     }
+    // Клиент — из справочника Дел, свободный текст — запасом (docs/dela-server.md).
+    val delaOn by app.delaServer.collectAsState()
+    val delaSnap by app.delaStore.view.collectAsState()
+    val delaProjects = if (delaOn) delaSnap.liveProjects() else emptyList()
     editing?.let { entry ->
         EditEntryDialog(
             entry = entry,
             categories = categoryNames,
+            projects = delaProjects,
+            taskTitle = delaSnap.tasks[entry.task]?.let { "${it.numLabel} ${it.title}" }.orEmpty(),
             onDismiss = { editing = null },
             onDictate = { editing = null; dictateEdit(entry) },
             onSave = { updated ->
@@ -749,6 +755,8 @@ internal fun ZasechkaTab(app: PravkaApp) {
         EditEntryDialog(
             entry = shown,
             categories = categoryNames,
+            projects = delaProjects,
+            taskTitle = delaSnap.tasks[first.task]?.let { "${it.numLabel} ${it.title}" }.orEmpty(),
             onDismiss = { editingChain = null },
             onDictate = { editingChain = null; dictateEdit(first) },
             onSave = { updated ->
@@ -764,6 +772,7 @@ internal fun ZasechkaTab(app: PravkaApp) {
                             title = updated.title,
                             category = updated.category,
                             client = updated.client,
+                            project = updated.project,
                             useful = updated.useful,
                             source = "edit",
                         )
@@ -2980,6 +2989,10 @@ private fun CommentDialog(
 private fun EditEntryDialog(
     entry: ZasechkaStore.Entry,
     categories: List<String>,
+    /** Справочник Дел: клиент выбирается чипом, свободный текст — запасом. Пусто — Дела не на сервере. */
+    projects: List<ru.zf.pravka.core.Dela.Project> = emptyList(),
+    /** Дело, из которого начата запись («#57 Иван: прислать модель»), — для подписи. */
+    taskTitle: String = "",
     onDismiss: () -> Unit,
     onSave: (ZasechkaStore.Entry) -> Unit,
     onDelete: () -> Unit,
@@ -2989,6 +3002,7 @@ private fun EditEntryDialog(
     var title by remember { mutableStateOf(entry.title) }
     var category by remember { mutableStateOf(entry.category) }
     var client by remember { mutableStateOf(entry.client) }
+    var project by remember { mutableStateOf(entry.project) }
     var comment by remember { mutableStateOf(entry.comment) }
     var startText by remember { mutableStateOf(fmtTime(entry.start)) }
     var endText by remember { mutableStateOf(if (entry.open) "" else fmtTime(entry.end)) }
@@ -3015,6 +3029,7 @@ private fun EditEntryDialog(
                 title = title.trim(),
                 category = category.trim(),
                 client = client.trim(),
+                project = project,
                 comment = comment.trim(),
                 start = newStart,
                 end = if (newEnd > 0) newEnd.coerceAtLeast(newStart) else newEnd,
@@ -3060,7 +3075,32 @@ private fun EditEntryDialog(
         }
         PaperField(value = title, onValueChange = { title = it }, label = "Дело")
         CategoryPicker(selected = category, options = categories, onSelect = { category = it })
-        PaperField(value = client, onValueChange = { client = it }, label = "Клиент/проект")
+        PaperField(
+            value = client,
+            onValueChange = { text ->
+                client = text
+                // Свободный текст: связь с проектом — только при точном имени или алиасе.
+                val n = ru.zf.pravka.core.Dela.norm(text)
+                project = projects.firstOrNull { p ->
+                    n != null && (ru.zf.pravka.core.Dela.norm(p.name) == n || p.aliases.any { ru.zf.pravka.core.Dela.norm(it) == n })
+                }?.id.orEmpty()
+            },
+            label = if (project.isNotBlank()) "Клиент/проект · из справочника" else "Клиент/проект",
+        )
+        if (projects.isNotEmpty()) {
+            val n = ru.zf.pravka.core.Dela.norm(client)
+            val shown = projects.filter { p -> p.sphere == "work" && p.id != project }
+                .filter { p -> n == null || ru.zf.pravka.core.Dela.norm(p.name + " " + p.aliases.joinToString(" "))?.contains(n) == true }
+                .take(8)
+            if (shown.isNotEmpty()) {
+                ru.zf.pravka.ui.ChipRow {
+                    for (p in shown) {
+                        ru.zf.pravka.ui.PaperChip(p.name, selected = false, onClick = { client = p.name; project = p.id })
+                    }
+                }
+            }
+        }
+        if (taskTitle.isNotBlank()) PaperHint("Из дела: $taskTitle")
         // Комментарий — обычное поле: тап по «П» надиктует прямо сюда,
         // со словарём и чисткой, как в любое поле любого приложения.
         PaperField(

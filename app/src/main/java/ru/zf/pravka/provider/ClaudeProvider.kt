@@ -513,6 +513,8 @@ $listing
         val tokensOut: Int,
         val model: String,
         val latencyMs: Long,
+        /** Дела на сервере: «не дела» с проектом и людьми — каждая заметкой в хронологию. */
+        val noteItems: List<ru.zf.pravka.core.ParsedNote> = emptyList(),
     )
 
     /** Деньги: наговор, разобранный на траты (`ClaudeMoney.parseMoney`). */

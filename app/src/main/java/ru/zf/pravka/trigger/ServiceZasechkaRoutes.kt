@@ -224,7 +224,7 @@ private fun PravkaAccessibilityService.zasechkaFood(text: String, spoken: Boolea
 }
 
 /**
- * Дела: тот же разбор, что у «Д», и сразу в Todoist — без плашки «ОК»:
+ * Дела: тот же разбор, что у «Д», и сразу в Todoist или Дела — без плашки «ОК»:
  * «записал дела» должно быть правдой, а тапнуть с гарнитуры нечем. Отмена —
  * «Отменить отправку» в меню «Д» и вкладка «Дела». Не ушло — дела ждут там
  * же, причина целиком на записке.
@@ -248,6 +248,15 @@ private fun PravkaAccessibilityService.zasechkaTasks(text: String, spoken: Boole
             return@launch
         }
         val tasks = draft.live
+        if (tasks.isEmpty() && draft.noteItems.isNotEmpty() && app.delaOnServer()) {
+            // Дел нет, а заметки есть — в хронологию Дел, как с «Д».
+            runCatching { app.raznoskaEngine.send(draft.id) }
+            zButton?.setBusy(false)
+            Haptics.success(this@zasechkaTasks)
+            zButton?.showNote("Дел нет — заметки ушли в хронологию Дел", ok = true, holdMs = 3_000)
+            if (spoken) say("записал заметку")
+            return@launch
+        }
         if (tasks.isEmpty()) {
             zButton?.setBusy(false)
             Haptics.error(this@zasechkaTasks)
@@ -271,7 +280,8 @@ private fun PravkaAccessibilityService.zasechkaTasks(text: String, spoken: Boole
             sent.ok -> {
                 Haptics.success(this@zasechkaTasks)
                 zButton?.showResult(
-                    summary = "В Todoist: ${raznCount(sent.created)}\n$titles",
+                    summary = (if (sent.queued > 0) "В очереди Дел (нет связи): " else "В ${sent.to}: ") +
+                        "${raznCount(sent.created)}\n$titles",
                     rows = tasks.map { task ->
                         DictationPill.ResultRow(
                             title = task.content,

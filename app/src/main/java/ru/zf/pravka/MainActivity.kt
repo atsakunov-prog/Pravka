@@ -844,7 +844,10 @@ private fun MainScreen(
                                             SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.DELA)) }
                                         },
                                     )
-                                    TodoistTab(app)
+                                    // Дела на домашнем сервере или Todoist — выбор в
+                                    // «Подключениях» (03.10.2026); Todoist — запасной путь.
+                                    val onServer by app.delaServer.collectAsState()
+                                    if (onServer) DelaTab(app) else TodoistTab(app)
                                 }
                                 Tab.SPORT -> {
                                     TabHeader(
@@ -2188,6 +2191,7 @@ private val promptTitles = mapOf(
     PromptStore.PromptId.PROSE to R.string.prompt_title_prose,
     PromptStore.PromptId.MEETING to R.string.prompt_title_meeting,
     PromptStore.PromptId.TASKS to R.string.prompt_title_tasks,
+    PromptStore.PromptId.TASKS_DELA to R.string.prompt_title_tasks_dela,
     PromptStore.PromptId.ZASECHKA_FORK to R.string.prompt_title_zasechka_fork,
     PromptStore.PromptId.FOOD to R.string.prompt_title_food,
     PromptStore.PromptId.MONEY to R.string.prompt_title_money,

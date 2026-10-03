@@ -128,6 +128,19 @@ internal object HistoryFixes {
             val r = app.icuSweeper.fixBjjHistory()
             Result(r.looked, r.icu + r.ribbon, r.note)
         },
+        // Дела переехали на домашний сервер (docs/dela-server.md): запись,
+        // начатая из дела, теперь source = «task» и хранит id дела. Старые
+        // «todoist» — то же самое по смыслу; таких записей ноль (таймер из
+        // задачи ни разу не запускали), шаг формальный — чтобы в ленте не
+        // жили два слова для одного.
+        Step(
+            id = "2026-10-03-todoist-to-task",
+            title = "Лента: запись из дела — «task» вместо «todoist»",
+            files = listOf(ru.zf.pravka.data.ZasechkaStore.FILE_NAME),
+        ) { app ->
+            val n = app.zasechkaStore.renameSource("todoist", "task")
+            Result(app.zasechkaStore.all().size, n)
+        },
     )
 
     private const val FILE = "history-fixes.json"

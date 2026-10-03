@@ -1,14 +1,15 @@
 package ru.zf.pravka.core
 
 // One task extracted from a "наговор" (Разноска). Lives from the moment Opus
-// splits the dictation until Todoist accepts it - and stays on disk in between,
-// so a parsed set is never lost to a process death or a dead network.
+// splits the dictation until Todoist (or the home Dela server) accepts it - and
+// stays on disk in between, so a parsed set is never lost to a process death
+// or a dead network.
 data class ParsedTask(
     val id: Long,
     val content: String,
     val description: String = "",
-    // Resolved against the live Todoist catalogue. projectId empty = the model
-    // named a project we could not match; the owner picks one in the editor.
+    // Resolved against the live catalogue (Todoist or Dela). projectId empty =
+    // the model named a project we could not match; the owner picks one in the editor.
     val projectId: String = "",
     val projectName: String = "",
     val labels: List<String> = emptyList(),
@@ -21,10 +22,26 @@ data class ParsedTask(
     val repeat: String = "",
     // Local near-duplicate found among the owner's open tasks (title only).
     val duplicateOf: String = "",
-    // Filled once Todoist created it: a retry must never create it twice.
+    // Filled once Todoist created it (or the Dela queue took it): a retry must
+    // never create it twice.
     val sentId: String = "",
     // The owner threw this one out in the editor - kept for the record, not sent.
     val dropped: Boolean = false,
+    // ---- Дела на домашнем сервере (03.10.2026, docs/dela-server.md) ----
+    // Мяч и человек вместо меток «жду», «обещал», «повестка» и имён команды:
+    // «обещал Ивану» — это ball = mine и Иван, а не метка, которую выбрасывали.
+    val ball: String = Dela.MINE,
+    val personId: String = "",
+    val personName: String = "",
+    val estimateMin: Int = 0,
+    // "paid" — оплата согласована, "potential" — развитие, "" — как у проекта.
+    val money: String = "",
+    val want: Boolean = false,
+    // id дела и op_id операции — телефона, с первой секунды разбора: повтор
+    // отправки (сеть, смерть процесса) уходит с теми же ключами, и сервер
+    // отдаёт прежний ответ вместо дубля. Вместо sentId и X-Request-Id Todoist.
+    val delaId: String = "",
+    val opId: String = "",
 ) {
     val sent: Boolean get() = sentId.isNotBlank()
 
@@ -50,3 +67,17 @@ data class ParsedTask(
         }
     }
 }
+
+/**
+ * «Не дело» из наговора для Дел на сервере: факт, статус, мысль вслух — с
+ * проектом и людьми, если модель их узнала. Уходит в хронологию CRM заметкой
+ * (`interaction.add`, kind = note); id и op_id — с разбора, как у дел.
+ */
+data class ParsedNote(
+    val text: String,
+    val projectId: String = "",
+    val projectName: String = "",
+    val personIds: List<String> = emptyList(),
+    val id: String = "",
+    val opId: String = "",
+)

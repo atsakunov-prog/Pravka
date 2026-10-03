@@ -72,6 +72,9 @@ internal fun RaznoskaSection(app: PravkaApp) {
     val drafts by app.raznoskaStore.draftsFlow.collectAsState()
     val projectList by app.todoistStore.projectsFlow.collectAsState()
     val labelList by app.todoistStore.labelsFlow.collectAsState()
+    // Дела на сервере (03.10.2026): отправка — в очередь Дел, редактор — карточка Дел.
+    val onDela by app.delaServer.collectAsState()
+    val delaSnap by app.delaStore.view.collectAsState()
     var editing by remember { mutableStateOf<Pair<Long, ParsedTask>?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = app.appScope
@@ -162,7 +165,8 @@ internal fun RaznoskaSection(app: PravkaApp) {
                 if (draft.notes.isNotBlank()) {
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "Не дела (в CRM):",
+                        if (onDela) (if (draft.notesSent) "Не дела — ушли в хронологию:" else "Не дела — уйдут в хронологию с делами:")
+                        else "Не дела (в CRM):",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -186,10 +190,10 @@ internal fun RaznoskaSection(app: PravkaApp) {
                     if (draft.costUsd > 0) PaperHint(String.format(Locale.US, "%.3f", draft.costUsd) + " $")
                     Spacer(Modifier.weight(1f))
                     PaperButton(
-                        if (busy) "…" else "Отправить в Todoist",
+                        if (busy) "…" else if (onDela) "Отправить в Дела" else "Отправить в Todoist",
                         icon = Glyphs.Send,
                         primary = true,
-                        enabled = !busy && draft.pendingCount > 0,
+                        enabled = !busy && (draft.pendingCount > 0 || (onDela && !draft.notesSent && draft.noteItems.isNotEmpty())),
                         onClick = {
                             busy = true
                             scope.launch {
@@ -198,7 +202,8 @@ internal fun RaznoskaSection(app: PravkaApp) {
                                 Feedback.toast(
                                     app,
                                     when {
-                                        outcome.ok -> "✓ " + countWord(outcome.created) + " в Todoist"
+                                        outcome.ok && outcome.queued > 0 -> "✓ " + countWord(outcome.created) + " в очереди Дел — нет связи, уйдут сами"
+                                        outcome.ok -> "✓ " + countWord(outcome.created) + " в " + outcome.to
                                         outcome.created > 0 ->
                                             "Отправлено ${outcome.created}, осталось ${outcome.failed}"
                                         else -> "Не отправилось: " + outcome.error
@@ -214,7 +219,65 @@ internal fun RaznoskaSection(app: PravkaApp) {
     }
 
     val edit = editing
-    if (edit != null) {
+    if (edit != null && onDela) {
+        // Дело наговора правится той же карточкой, что и дело на сервере.
+        val p = edit.second
+        DelaTaskSheet(
+            app = app,
+            task = ru.zf.pravka.core.Dela.Task(
+                id = p.delaId.ifBlank { "draft" },
+                title = p.content,
+                notes = p.description,
+                projectId = p.projectId,
+                ball = p.ball,
+                personId = p.personId,
+                dueDate = p.due,
+                estimateMin = p.estimateMin,
+                money = p.money,
+                want = p.want,
+                labels = p.labels,
+            ),
+            snap = delaSnap,
+            isNew = true,
+            title = "Дело из наговора",
+            saveText = "Готово",
+            warn = if (p.duplicateOf.isNotBlank()) "В Делах уже есть похожее: " + p.duplicateOf
+            else if (p.projectId.isBlank() && p.projectName.isNotBlank()) "Модель назвала «${p.projectName}» — такого проекта в справочнике нет"
+            else "",
+            onDismiss = { editing = null },
+            onSave = { t ->
+                editing = null
+                val updated = p.copy(
+                    content = t.title,
+                    description = t.notes,
+                    projectId = t.projectId,
+                    projectName = delaSnap.projects[t.projectId]?.name.orEmpty(),
+                    ball = t.ball,
+                    personId = t.personId,
+                    personName = delaSnap.people[t.personId]?.label.orEmpty(),
+                    due = t.dueDate,
+                    estimateMin = t.estimateMin,
+                    money = t.money,
+                    want = t.want,
+                    labels = t.labels,
+                )
+                scope.launch {
+                    val draft = app.raznoskaStore.byId(edit.first) ?: return@launch
+                    app.raznoskaStore.replaceTasks(edit.first, draft.tasks.map { if (it.id == updated.id) updated else it })
+                    runCatching { app.raznoskaEngine.learnRoute(p, updated) }
+                }
+            },
+            onStatus = { editing = null },
+            onStart = { editing = null },
+            onDrop = {
+                editing = null
+                scope.launch {
+                    val draft = app.raznoskaStore.byId(edit.first) ?: return@launch
+                    app.raznoskaStore.replaceTasks(edit.first, draft.tasks.map { if (it.id == p.id) it.copy(dropped = true) else it })
+                }
+            },
+        )
+    } else if (edit != null) {
         TaskDialog(
             task = edit.second,
             projects = projectPaths,
@@ -544,6 +607,12 @@ private fun priorityColor(priority: Int) = when (priority) {
 private fun taskMeta(task: ParsedTask): String {
     val parts = mutableListOf<String>()
     if (task.projectName.isNotBlank()) parts.add("#" + task.projectName)
+    when (task.ball) {
+        ru.zf.pravka.core.Dela.WAITING -> parts.add("жду: " + task.personName.ifBlank { "?" })
+        ru.zf.pravka.core.Dela.AGENDA -> parts.add("при встрече: " + task.personName.ifBlank { "?" })
+        else -> if (task.personName.isNotBlank()) parts.add("для: " + task.personName)
+    }
+    if (task.estimateMin > 0) parts.add("${task.estimateMin} мин")
     if (task.labels.isNotEmpty()) parts.add(task.labels.joinToString(" ") { "@" + it })
     if (task.repeat.isNotBlank()) parts.add(task.repeat)
     else if (task.due.isNotBlank()) parts.add(task.due)

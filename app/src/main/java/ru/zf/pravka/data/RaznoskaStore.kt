@@ -10,10 +10,11 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import ru.zf.pravka.core.ParsedNote
 import ru.zf.pravka.core.ParsedTask
 
 // Разноска: каждый наговор, разобранный на дела, лежит на диске с той секунды,
-// как Опус его разобрал, и до того, как Todoist их принял. Отправленные
+// как Опус его разобрал, и до того, как Todoist (или очередь Дел) их принял. Отправленные
 // остаются журналом.
 //
 // Правило, ради которого этот стор и существует: разобранный наговор не
@@ -37,6 +38,10 @@ class RaznoskaStore(private val context: Context) {
         val error: String = "",
         val costUsd: Double = 0.0,
         val model: String = "",
+        // Дела на сервере: «не дела» поштучно, с проектом и людьми, — каждая
+        // уходит в хронологию заметкой; notesSent — уже в очереди Дел.
+        val noteItems: List<ParsedNote> = emptyList(),
+        val notesSent: Boolean = false,
     ) {
         val live: List<ParsedTask> get() = tasks.filter { !it.dropped }
         // Пустой набор — тоже «сделано»: наговор без дел (или тот, где все
@@ -63,6 +68,7 @@ class RaznoskaStore(private val context: Context) {
         tasks: List<ParsedTask>,
         costUsd: Double,
         model: String,
+        noteItems: List<ParsedNote> = emptyList(),
     ): Draft = mutex.withLock {
         ensureLoaded()
         val now = System.currentTimeMillis()
@@ -74,6 +80,7 @@ class RaznoskaStore(private val context: Context) {
             tasks = tasks,
             costUsd = costUsd,
             model = model,
+            noteItems = noteItems,
         )
         write(listOf(draft) + _draftsFlow.value)
         draft
@@ -89,7 +96,7 @@ class RaznoskaStore(private val context: Context) {
         write(_draftsFlow.value.map { if (it.id == draftId) it.copy(error = error) else it })
     }
 
-    /** Todoist создал дело - отметка, ради которой повтор безопасен. */
+    /** Todoist создал дело (или очередь Дел его взяла) - отметка, ради которой повтор безопасен. */
     suspend fun markSent(draftId: Long, taskId: Long, todoistId: String) = mutex.withLock {
         ensureLoaded()
         write(
@@ -113,6 +120,12 @@ class RaznoskaStore(private val context: Context) {
                 else d.copy(tasks = d.tasks.map { if (it.id == taskId) it.copy(sentId = "") else it })
             }
         )
+    }
+
+    /** Заметки наговора встали в очередь Дел — второй раз не пойдут. */
+    suspend fun markNotesSent(draftId: Long) = mutex.withLock {
+        ensureLoaded()
+        write(_draftsFlow.value.map { if (it.id == draftId) it.copy(notesSent = true) else it })
     }
 
     suspend fun delete(draftId: Long) = mutex.withLock {
@@ -172,6 +185,14 @@ class RaznoskaStore(private val context: Context) {
                             duplicateOf = t.optString("dup"),
                             sentId = t.optString("sentId"),
                             dropped = t.optBoolean("dropped", false),
+                            ball = t.optString("ball").ifBlank { ru.zf.pravka.core.Dela.MINE },
+                            personId = t.optString("personId"),
+                            personName = t.optString("personName"),
+                            estimateMin = t.optInt("estimate", 0),
+                            money = t.optString("money"),
+                            want = t.optBoolean("want", false),
+                            delaId = t.optString("delaId"),
+                            opId = t.optString("opId"),
                         )
                     )
                 }
@@ -186,6 +207,21 @@ class RaznoskaStore(private val context: Context) {
                     error = o.optString("error"),
                     costUsd = o.optDouble("cost", 0.0),
                     model = o.optString("model"),
+                    noteItems = o.optJSONArray("noteItems")?.let { na ->
+                        (0 until na.length()).mapNotNull { k ->
+                            val n = na.optJSONObject(k) ?: return@mapNotNull null
+                            val ids = n.optJSONArray("personIds")
+                            ParsedNote(
+                                text = n.optString("text"),
+                                projectId = n.optString("projectId"),
+                                projectName = n.optString("projectName"),
+                                personIds = if (ids == null) emptyList() else (0 until ids.length()).map { ids.optString(it) },
+                                id = n.optString("id"),
+                                opId = n.optString("opId"),
+                            )
+                        }
+                    } ?: emptyList(),
+                    notesSent = o.optBoolean("notesSent", false),
                 )
             )
         }
@@ -202,6 +238,17 @@ class RaznoskaStore(private val context: Context) {
                 put("error", d.error)
                 put("cost", d.costUsd)
                 put("model", d.model)
+                if (d.noteItems.isNotEmpty()) put(
+                    "noteItems",
+                    JSONArray().apply {
+                        for (n in d.noteItems) put(
+                            JSONObject().put("text", n.text).put("projectId", n.projectId).put("projectName", n.projectName)
+                                .put("personIds", JSONArray().apply { n.personIds.forEach { put(it) } })
+                                .put("id", n.id).put("opId", n.opId)
+                        )
+                    }
+                )
+                if (d.notesSent) put("notesSent", true)
                 put(
                     "tasks",
                     JSONArray().apply {
@@ -219,6 +266,15 @@ class RaznoskaStore(private val context: Context) {
                                 put("dup", t.duplicateOf)
                                 put("sentId", t.sentId)
                                 put("dropped", t.dropped)
+                                // Поля Дел — только когда есть: файл Todoist-поры читается как был.
+                                if (t.ball != ru.zf.pravka.core.Dela.MINE) put("ball", t.ball)
+                                if (t.personId.isNotBlank()) put("personId", t.personId)
+                                if (t.personName.isNotBlank()) put("personName", t.personName)
+                                if (t.estimateMin > 0) put("estimate", t.estimateMin)
+                                if (t.money.isNotBlank()) put("money", t.money)
+                                if (t.want) put("want", true)
+                                if (t.delaId.isNotBlank()) put("delaId", t.delaId)
+                                if (t.opId.isNotBlank()) put("opId", t.opId)
                             }
                         )
                     }

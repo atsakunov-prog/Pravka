@@ -1,0 +1,938 @@
+package ru.zf.pravka.core
+
+import java.time.LocalDate
+import java.time.OffsetDateTime
+import java.util.UUID
+import org.json.JSONArray
+import org.json.JSONObject
+
+/**
+ * Дела на домашнем сервере (docs/dela-server.md, контракт с телефоном —
+ * server/contract/dela.json). Здесь — то, что не знает ни про сеть, ни про
+ * диск, и поэтому живёт под JVM-тестами: строки синка, слияние «после seq»,
+ * наложение неотправленной очереди, виды и операции.
+ *
+ * Почему виды считаются на телефоне, а не берутся готовыми с `/api/view`:
+ * владелец открывает «Дела» в метро и в машине. Вкладка обязана открываться
+ * мгновенно из кэша и работать без сети, а свою правку видеть сразу, до
+ * ответа сервера. Логика видов повторяет `store.py` буква в букву — сервер
+ * остаётся источником правды, телефон только смотрит на свою копию его
+ * данных тем же взглядом.
+ */
+object Dela {
+
+    const val MINE = "mine"
+    const val WAITING = "waiting"
+    const val AGENDA = "agenda"
+    const val INBOX = "inbox"
+    const val OPEN = "open"
+    const val DONE = "done"
+    const val CANCELLED = "cancelled"
+
+    // ------------------------------------------------------------ строки
+
+    /** Дело — строка `tasks.v_tasks`: своё плюс имена и наследованное из вида. */
+    data class Task(
+        val id: String,
+        val num: Int = 0,
+        val title: String,
+        val notes: String = "",
+        val projectId: String = "",
+        val dealId: String = "",
+        val ownerId: String = "",
+        val ball: String = MINE,
+        val personId: String = "",
+        val waitingSince: String = "",
+        val nudgeOn: String = "",
+        val requestedBy: String = "",
+        val dueDate: String = "",
+        val dueTime: String = "",
+        val estimateMin: Int = 0,
+        /** "" — как у проекта (money_default). */
+        val money: String = "",
+        val want: Boolean = false,
+        val focusOn: String = "",
+        val labels: List<String> = emptyList(),
+        val status: String = OPEN,
+        val source: String = "manual",
+        val sourceRef: String = "",
+        val createdBy: String = "",
+        val createdAt: String = "",
+        val updatedAt: String = "",
+        val completedAt: String = "",
+        val rev: Int = 0,
+        val seq: Long = 0,
+        // Из вида: телефон пересчитывает их сам из справочника (derive), а
+        // присланное сервером — запас, если проекта в справочнике нет.
+        val projectName: String = "",
+        val projectKind: String = "",
+        val dealName: String = "",
+        val sphere: String = INBOX,
+        val moneyEff: String = "none",
+        val personShort: String = "",
+        val personName: String = "",
+        val requestedByShort: String = "",
+        /** Есть правка телефона, которую сервер ещё не принял. */
+        val local: Boolean = false,
+    ) {
+        val open: Boolean get() = status == OPEN
+        /** Как человек называется в строке: короткое имя, иначе полное. */
+        val who: String get() = personShort.ifBlank { personName }
+        /** «#57», пока дело не дошло до сервера — «новое». */
+        val numLabel: String get() = if (num > 0) "#$num" else "новое"
+    }
+
+    data class Project(
+        val id: String,
+        val name: String,
+        val aliases: List<String> = emptyList(),
+        val sphere: String = "work",
+        val kind: String = "client",
+        val orgId: String = "",
+        val ownerId: String = "",
+        val moneyDefault: String = "none",
+        val note: String = "",
+        val archivedAt: String = "",
+        val rev: Int = 0,
+        val seq: Long = 0,
+    ) {
+        val live: Boolean get() = archivedAt.isBlank()
+    }
+
+    data class Deal(
+        val id: String,
+        val projectId: String,
+        val name: String,
+        val stage: String = "",
+        val rev: Int = 0,
+        val seq: Long = 0,
+    )
+
+    data class Person(
+        val id: String,
+        val name: String,
+        val short: String = "",
+        val aliases: List<String> = emptyList(),
+        val orgId: String = "",
+        val phones: List<String> = emptyList(),
+        val archivedAt: String = "",
+        val rev: Int = 0,
+        val seq: Long = 0,
+    ) {
+        val label: String get() = short.ifBlank { name }
+        val live: Boolean get() = archivedAt.isBlank()
+    }
+
+    data class Org(
+        val id: String,
+        val name: String,
+        val aliases: List<String> = emptyList(),
+        val archivedAt: String = "",
+        val rev: Int = 0,
+        val seq: Long = 0,
+    )
+
+    data class Comment(
+        val id: String,
+        val taskId: String,
+        val authorId: String = "",
+        val text: String,
+        val deletedAt: String = "",
+        val createdAt: String = "",
+        val rev: Int = 0,
+        val seq: Long = 0,
+        val local: Boolean = false,
+    )
+
+    /** «Новое»: предложение автоматики. Задачи нет, пока человек не принял. */
+    data class Suggestion(
+        val id: String,
+        val forUser: String = "",
+        val kind: String = "create",
+        val taskId: String = "",
+        /** JSON предложенного дела строкой: поля задачи или имена (project_name, person_name). */
+        val payload: String = "{}",
+        val source: String = "",
+        val sourceRef: String = "",
+        val quote: String = "",
+        val batchRef: String = "",
+        val batchTitle: String = "",
+        val status: String = "pending",
+        val reason: String = "",
+        val expiresAt: String = "",
+        val createdAt: String = "",
+        val decidedAt: String = "",
+        val rev: Int = 0,
+        val seq: Long = 0,
+        val local: Boolean = false,
+    ) {
+        val pending: Boolean get() = status == "pending"
+        fun payloadObj(): JSONObject = runCatching { JSONObject(payload) }.getOrElse { JSONObject() }
+        /** Что предложено, одной строкой. */
+        val title: String
+            get() = payloadObj().let { p -> p.str("title").ifBlank { p.str("text") } }.ifBlank {
+                when (kind) {
+                    "close" -> "закрыть дело"
+                    "assign" -> "взять дело"
+                    else -> "предложение"
+                }
+            }
+    }
+
+    data class User(val id: String, val name: String, val personId: String = "", val role: String = "member", val seq: Long = 0)
+
+    /** Копия сервера на телефоне: всё, что видит владелец, плюс номер последнего изменения. */
+    data class Snapshot(
+        val seq: Long = 0,
+        val today: String = "",
+        val tasks: Map<String, Task> = emptyMap(),
+        val projects: Map<String, Project> = emptyMap(),
+        val deals: Map<String, Deal> = emptyMap(),
+        val people: Map<String, Person> = emptyMap(),
+        val orgs: Map<String, Org> = emptyMap(),
+        val comments: Map<String, Comment> = emptyMap(),
+        val suggestions: Map<String, Suggestion> = emptyMap(),
+        val users: Map<String, User> = emptyMap(),
+        val labels: List<String> = emptyList(),
+        val syncedAt: Long = 0,
+    ) {
+        val empty: Boolean
+            get() = tasks.isEmpty() && projects.isEmpty() && people.isEmpty() && suggestions.isEmpty()
+
+        fun task(ref: String): Task? {
+            val s = ref.trim().removePrefix("#")
+            tasks[s]?.let { return it }
+            val n = s.toIntOrNull() ?: return null
+            return tasks.values.firstOrNull { it.num == n }
+        }
+
+        fun liveProjects(): List<Project> = projects.values.filter { it.live }.sortedBy { it.name.lowercase() }
+        fun livePeople(): List<Person> = people.values.filter { it.live }.sortedBy { it.label.lowercase() }
+        fun dealsOf(projectId: String): List<Deal> =
+            deals.values.filter { it.projectId == projectId && it.stage != "archive" }.sortedBy { it.name.lowercase() }
+        fun commentsOf(taskId: String): List<Comment> =
+            comments.values.filter { it.taskId == taskId && it.deletedAt.isBlank() }.sortedBy { it.createdAt }
+    }
+
+    // ------------------------------------------------------------ JSON
+
+    /** Строка поля: JSON null — пустая строка, а не «null» (`optString` отдал бы «null»). */
+    fun JSONObject.str(key: String): String =
+        if (!has(key) || isNull(key)) "" else opt(key)?.toString().orEmpty()
+
+    private fun JSONObject.int(key: String): Int = if (!has(key) || isNull(key)) 0 else optInt(key, 0)
+    private fun JSONObject.long(key: String): Long = if (!has(key) || isNull(key)) 0L else optLong(key, 0L)
+    private fun JSONObject.bool(key: String): Boolean = !isNull(key) && optBoolean(key, false)
+    private fun JSONObject.strings(key: String): List<String> {
+        val a = optJSONArray(key) ?: return emptyList()
+        return (0 until a.length()).mapNotNull { i -> if (a.isNull(i)) null else a.optString(i).trim().takeIf { it.isNotEmpty() } }
+    }
+
+    private fun nul(s: String): Any = s.ifBlank { null } ?: JSONObject.NULL
+    private fun arr(items: List<String>): JSONArray = JSONArray().apply { items.forEach { put(it) } }
+
+    fun task(o: JSONObject): Task? {
+        val id = o.str("id").ifBlank { return null }
+        return Task(
+            id = id, num = o.int("num"), title = o.str("title"), notes = o.str("notes"),
+            projectId = o.str("project_id"), dealId = o.str("deal_id"), ownerId = o.str("owner_id"),
+            ball = o.str("ball").ifBlank { MINE }, personId = o.str("person_id"),
+            waitingSince = o.str("waiting_since"), nudgeOn = o.str("nudge_on"), requestedBy = o.str("requested_by"),
+            dueDate = o.str("due_date"), dueTime = o.str("due_time"), estimateMin = o.int("estimate_min"),
+            money = o.str("money"), want = o.bool("want"), focusOn = o.str("focus_on"), labels = o.strings("labels"),
+            status = o.str("status").ifBlank { OPEN }, source = o.str("source").ifBlank { "manual" },
+            sourceRef = o.str("source_ref"), createdBy = o.str("created_by"), createdAt = o.str("created_at"),
+            updatedAt = o.str("updated_at"), completedAt = o.str("completed_at"), rev = o.int("rev"), seq = o.long("seq"),
+            projectName = o.str("project_name"), projectKind = o.str("project_kind"), dealName = o.str("deal_name"),
+            sphere = o.str("sphere").ifBlank { INBOX }, moneyEff = o.str("money_eff").ifBlank { "none" },
+            personShort = o.str("person_short"), personName = o.str("person_name"),
+            requestedByShort = o.str("requested_by_short"), local = o.bool("_local"),
+        )
+    }
+
+    fun json(t: Task): JSONObject = JSONObject()
+        .put("id", t.id).put("num", t.num).put("title", t.title).put("notes", nul(t.notes))
+        .put("project_id", nul(t.projectId)).put("deal_id", nul(t.dealId)).put("owner_id", t.ownerId)
+        .put("ball", t.ball).put("person_id", nul(t.personId)).put("waiting_since", nul(t.waitingSince))
+        .put("nudge_on", nul(t.nudgeOn)).put("requested_by", nul(t.requestedBy)).put("due_date", nul(t.dueDate))
+        .put("due_time", nul(t.dueTime)).put("estimate_min", if (t.estimateMin > 0) t.estimateMin else JSONObject.NULL)
+        .put("money", nul(t.money)).put("want", t.want).put("focus_on", nul(t.focusOn)).put("labels", arr(t.labels))
+        .put("status", t.status).put("source", t.source).put("source_ref", nul(t.sourceRef))
+        .put("created_by", t.createdBy).put("created_at", nul(t.createdAt)).put("updated_at", nul(t.updatedAt))
+        .put("completed_at", nul(t.completedAt)).put("rev", t.rev).put("seq", t.seq)
+        .put("project_name", nul(t.projectName)).put("project_kind", nul(t.projectKind)).put("deal_name", nul(t.dealName))
+        .put("sphere", t.sphere).put("money_eff", t.moneyEff).put("person_short", nul(t.personShort))
+        .put("person_name", nul(t.personName)).put("requested_by_short", nul(t.requestedByShort))
+        .apply { if (t.local) put("_local", true) }
+
+    fun project(o: JSONObject): Project? {
+        val id = o.str("id").ifBlank { return null }
+        return Project(
+            id, o.str("name"), o.strings("aliases"), o.str("sphere").ifBlank { "work" }, o.str("kind").ifBlank { "client" },
+            o.str("org_id"), o.str("owner_id"), o.str("money_default").ifBlank { "none" }, o.str("note"),
+            o.str("archived_at"), o.int("rev"), o.long("seq"),
+        )
+    }
+
+    fun json(p: Project): JSONObject = JSONObject().put("id", p.id).put("name", p.name).put("aliases", arr(p.aliases))
+        .put("sphere", p.sphere).put("kind", p.kind).put("org_id", nul(p.orgId)).put("owner_id", p.ownerId)
+        .put("money_default", p.moneyDefault).put("note", nul(p.note)).put("archived_at", nul(p.archivedAt))
+        .put("rev", p.rev).put("seq", p.seq)
+
+    fun deal(o: JSONObject): Deal? {
+        val id = o.str("id").ifBlank { return null }
+        return Deal(id, o.str("project_id"), o.str("name"), o.str("stage"), o.int("rev"), o.long("seq"))
+    }
+
+    fun json(d: Deal): JSONObject = JSONObject().put("id", d.id).put("project_id", d.projectId).put("name", d.name)
+        .put("stage", nul(d.stage)).put("rev", d.rev).put("seq", d.seq)
+
+    fun person(o: JSONObject): Person? {
+        val id = o.str("id").ifBlank { return null }
+        return Person(
+            id, o.str("name"), o.str("short"), o.strings("aliases"), o.str("org_id"), o.strings("phones"),
+            o.str("archived_at"), o.int("rev"), o.long("seq"),
+        )
+    }
+
+    fun json(p: Person): JSONObject = JSONObject().put("id", p.id).put("name", p.name).put("short", nul(p.short))
+        .put("aliases", arr(p.aliases)).put("org_id", nul(p.orgId)).put("phones", arr(p.phones))
+        .put("archived_at", nul(p.archivedAt)).put("rev", p.rev).put("seq", p.seq)
+
+    fun org(o: JSONObject): Org? {
+        val id = o.str("id").ifBlank { return null }
+        return Org(id, o.str("name"), o.strings("aliases"), o.str("archived_at"), o.int("rev"), o.long("seq"))
+    }
+
+    fun json(o: Org): JSONObject = JSONObject().put("id", o.id).put("name", o.name).put("aliases", arr(o.aliases))
+        .put("archived_at", nul(o.archivedAt)).put("rev", o.rev).put("seq", o.seq)
+
+    fun comment(o: JSONObject): Comment? {
+        val id = o.str("id").ifBlank { return null }
+        return Comment(
+            id, o.str("task_id"), o.str("author_id"), o.str("text"), o.str("deleted_at"), o.str("created_at"),
+            o.int("rev"), o.long("seq"), o.bool("_local"),
+        )
+    }
+
+    fun json(c: Comment): JSONObject = JSONObject().put("id", c.id).put("task_id", c.taskId).put("author_id", c.authorId)
+        .put("text", c.text).put("deleted_at", nul(c.deletedAt)).put("created_at", nul(c.createdAt))
+        .put("rev", c.rev).put("seq", c.seq).apply { if (c.local) put("_local", true) }
+
+    fun suggestion(o: JSONObject): Suggestion? {
+        val id = o.str("id").ifBlank { return null }
+        val payload = o.optJSONObject("payload")?.toString() ?: o.str("payload").ifBlank { "{}" }
+        return Suggestion(
+            id, o.str("for_user"), o.str("kind").ifBlank { "create" }, o.str("task_id"), payload, o.str("source"),
+            o.str("source_ref"), o.str("quote"), o.str("batch_ref"), o.str("batch_title"),
+            o.str("status").ifBlank { "pending" }, o.str("reason"), o.str("expires_at"), o.str("created_at"),
+            o.str("decided_at"), o.int("rev"), o.long("seq"), o.bool("_local"),
+        )
+    }
+
+    fun json(s: Suggestion): JSONObject = JSONObject().put("id", s.id).put("for_user", s.forUser).put("kind", s.kind)
+        .put("task_id", nul(s.taskId)).put("payload", runCatching { JSONObject(s.payload) }.getOrElse { JSONObject() })
+        .put("source", s.source).put("source_ref", nul(s.sourceRef)).put("quote", nul(s.quote))
+        .put("batch_ref", nul(s.batchRef)).put("batch_title", nul(s.batchTitle)).put("status", s.status)
+        .put("reason", nul(s.reason)).put("expires_at", nul(s.expiresAt)).put("created_at", nul(s.createdAt))
+        .put("decided_at", nul(s.decidedAt)).put("rev", s.rev).put("seq", s.seq)
+        .apply { if (s.local) put("_local", true) }
+
+    fun user(o: JSONObject): User? {
+        val id = o.str("id").ifBlank { return null }
+        return User(id, o.str("name").ifBlank { id }, o.str("person_id"), o.str("role").ifBlank { "member" }, o.long("seq"))
+    }
+
+    fun json(u: User): JSONObject =
+        JSONObject().put("id", u.id).put("name", u.name).put("person_id", nul(u.personId)).put("role", u.role).put("seq", u.seq)
+
+    private fun <T> rows(o: JSONObject, key: String, parse: (JSONObject) -> T?): List<T> {
+        val a = o.optJSONArray(key) ?: return emptyList()
+        return (0 until a.length()).mapNotNull { i -> a.optJSONObject(i)?.let(parse) }
+    }
+
+    private fun labels(o: JSONObject): List<String>? {
+        val a = o.optJSONArray("labels") ?: return null
+        return (0 until a.length()).mapNotNull { i ->
+            when (val v = a.opt(i)) {
+                is JSONObject -> v.str("name")
+                is String -> v
+                else -> null
+            }?.trim()?.takeIf { it.isNotEmpty() }
+        }.distinct().sorted()
+    }
+
+    /** Кэш на диск: та же форма, что у ответа синка, плюс когда он пришёл. */
+    fun toJson(s: Snapshot): JSONObject = JSONObject()
+        .put("v", 1).put("seq", s.seq).put("today", s.today).put("syncedAt", s.syncedAt)
+        .put("tasks", JSONArray().apply { s.tasks.values.forEach { put(json(it)) } })
+        .put("projects", JSONArray().apply { s.projects.values.forEach { put(json(it)) } })
+        .put("deals", JSONArray().apply { s.deals.values.forEach { put(json(it)) } })
+        .put("people", JSONArray().apply { s.people.values.forEach { put(json(it)) } })
+        .put("orgs", JSONArray().apply { s.orgs.values.forEach { put(json(it)) } })
+        .put("comments", JSONArray().apply { s.comments.values.forEach { put(json(it)) } })
+        .put("suggestions", JSONArray().apply { s.suggestions.values.forEach { put(json(it)) } })
+        .put("users", JSONArray().apply { s.users.values.forEach { put(json(it)) } })
+        .put("labels", arr(s.labels))
+
+    fun fromJson(o: JSONObject): Snapshot = Snapshot(
+        seq = o.long("seq"),
+        today = o.str("today"),
+        tasks = rows(o, "tasks", ::task).associateBy { it.id },
+        projects = rows(o, "projects", ::project).associateBy { it.id },
+        deals = rows(o, "deals", ::deal).associateBy { it.id },
+        people = rows(o, "people", ::person).associateBy { it.id },
+        orgs = rows(o, "orgs", ::org).associateBy { it.id },
+        comments = rows(o, "comments", ::comment).associateBy { it.id },
+        suggestions = rows(o, "suggestions", ::suggestion).associateBy { it.id },
+        users = rows(o, "users", ::user).associateBy { it.id },
+        labels = labels(o).orEmpty(),
+        syncedAt = o.long("syncedAt"),
+    )
+
+    // ------------------------------------------------------------ синк
+
+    /**
+     * Ответ `/api/sync` поверх копии. `full` — выбросить всё и взять ответ
+     * целиком (первый синк, новый или снятый доступ). Иначе — строки поверх
+     * своих по id: окно перекрытия сервера присылает и уже виденное, поэтому
+     * строка не моложе своей (`rev`) просто переписывается — повтор безвреден.
+     * Удалений нет: строки на сервере не удаляются (дело — done/cancelled).
+     */
+    fun merge(old: Snapshot, resp: JSONObject, now: Long): Snapshot {
+        val fresh = fromJson(resp)
+        if (resp.optBoolean("full", false)) {
+            return derive(fresh.copy(syncedAt = now, labels = labels(resp) ?: old.labels))
+        }
+        fun <T> up(have: Map<String, T>, got: Map<String, T>, rev: (T) -> Long): Map<String, T> {
+            if (got.isEmpty()) return have
+            val out = LinkedHashMap(have)
+            for ((id, row) in got) {
+                val was = out[id]
+                if (was == null || rev(row) >= rev(was)) out[id] = row
+            }
+            return out
+        }
+        return derive(
+            Snapshot(
+                seq = maxOf(old.seq, fresh.seq),
+                today = fresh.today.ifBlank { old.today },
+                tasks = up(old.tasks, fresh.tasks) { it.rev.toLong() },
+                projects = up(old.projects, fresh.projects) { it.rev.toLong() },
+                deals = up(old.deals, fresh.deals) { it.rev.toLong() },
+                people = up(old.people, fresh.people) { it.rev.toLong() },
+                orgs = up(old.orgs, fresh.orgs) { it.rev.toLong() },
+                comments = up(old.comments, fresh.comments) { it.rev.toLong() },
+                suggestions = up(old.suggestions, fresh.suggestions) { it.rev.toLong() },
+                users = up(old.users, fresh.users) { it.seq },
+                labels = labels(resp) ?: old.labels,
+                syncedAt = now,
+            )
+        )
+    }
+
+    /**
+     * Имена и наследованное у дел — из справочника, как в виде `v_tasks`:
+     * переименованный проект или человек переименовывается и в делах сразу,
+     * а дело, созданное офлайн, получает имя проекта до ответа сервера.
+     */
+    fun derive(s: Snapshot): Snapshot {
+        if (s.tasks.isEmpty()) return s
+        val tasks = s.tasks.mapValues { (_, t) -> deriveTask(t, s) }
+        return s.copy(tasks = tasks)
+    }
+
+    private fun deriveTask(t: Task, s: Snapshot): Task {
+        val p = s.projects[t.projectId]
+        val d = s.deals[t.dealId]
+        val pe = s.people[t.personId]
+        val rq = s.people[t.requestedBy]
+        return t.copy(
+            projectName = if (t.projectId.isBlank()) "" else p?.name ?: t.projectName,
+            projectKind = if (t.projectId.isBlank()) "" else p?.kind ?: t.projectKind,
+            sphere = if (t.projectId.isBlank()) INBOX else p?.sphere ?: t.sphere,
+            moneyEff = t.money.ifBlank { if (t.projectId.isBlank()) "none" else p?.moneyDefault ?: t.moneyEff.ifBlank { "none" } },
+            dealName = if (t.dealId.isBlank()) "" else d?.name ?: t.dealName,
+            personShort = if (t.personId.isBlank()) "" else pe?.short ?: t.personShort,
+            personName = if (t.personId.isBlank()) "" else pe?.name ?: t.personName,
+            requestedByShort = if (t.requestedBy.isBlank()) "" else rq?.label ?: t.requestedByShort,
+        )
+    }
+
+    // ------------------------------------------------------------ очередь поверх копии
+
+    /**
+     * Неотправленные операции — поверх копии сервера, по порядку: телефон
+     * видит свою правку сразу, а когда сервер её примет, следующий синк
+     * привезёт ту же строку с новым `rev`. Принятое предложение просто
+     * исчезает из «Нового»: дело с ним создаст сервер, и id его знает только он.
+     */
+    fun overlay(s: Snapshot, ops: List<JSONObject>, me: String, today: String, nowIso: String): Snapshot {
+        if (ops.isEmpty()) return s
+        val tasks = LinkedHashMap(s.tasks)
+        val comments = LinkedHashMap(s.comments)
+        val suggestions = LinkedHashMap(s.suggestions)
+        fun find(ref: String): Task? {
+            tasks[ref]?.let { return it }
+            val n = ref.trim().removePrefix("#").toIntOrNull() ?: return null
+            return tasks.values.firstOrNull { it.num == n }
+        }
+        for (op in ops) {
+            when (op.str("op")) {
+                "task.create" -> {
+                    val t = op.optJSONObject("task") ?: continue
+                    val id = t.str("id").takeIf { it.isNotBlank() } ?: continue
+                    if (tasks.containsKey(id)) continue
+                    val base = Task(id = id, title = t.str("title"), ownerId = me, createdBy = me, createdAt = nowIso, updatedAt = nowIso, local = true)
+                    tasks[id] = applyFields(base, t, today, nowIso)
+                }
+                "task.set" -> {
+                    val t = find(op.str("id")) ?: continue
+                    val set = op.optJSONObject("set") ?: continue
+                    tasks[t.id] = applyFields(t, set, today, nowIso).copy(local = true)
+                }
+                "task.done", "task.reopen", "task.cancel" -> {
+                    val t = find(op.str("id")) ?: continue
+                    val status = when (op.str("op")) { "task.done" -> DONE; "task.cancel" -> CANCELLED; else -> OPEN }
+                    tasks[t.id] = t.copy(status = status, completedAt = if (status == OPEN) "" else nowIso, local = true)
+                }
+                "comment.add" -> {
+                    val c = op.optJSONObject("comment") ?: continue
+                    val task = find(c.str("task_id")) ?: continue
+                    val id = c.str("id").ifBlank { op.str("op_id") }
+                    if (comments.containsKey(id)) continue
+                    comments[id] = Comment(id, task.id, me, c.str("text"), createdAt = nowIso, local = true)
+                }
+                "comment.delete" -> {
+                    val c = comments[op.str("id")] ?: continue
+                    comments[c.id] = c.copy(deletedAt = nowIso, local = true)
+                }
+                "suggestion.decide" -> {
+                    val sg = suggestions[op.str("id")] ?: continue
+                    if (!sg.pending) continue
+                    val status = if (op.str("decision") == "reject") "rejected" else "accepted"
+                    suggestions[sg.id] = sg.copy(status = status, reason = op.str("reason"), decidedAt = nowIso, local = true)
+                }
+            }
+        }
+        return derive(s.copy(tasks = tasks, comments = comments, suggestions = suggestions))
+    }
+
+    /** Поля операции — в дело. Та же механика, что у триггера сервера: «жду с» ставится само. */
+    fun applyFields(t: Task, f: JSONObject, today: String, nowIso: String): Task {
+        var out = t
+        for (k in f.keys()) {
+            out = when (k) {
+                "title" -> out.copy(title = f.str(k))
+                "notes" -> out.copy(notes = f.str(k))
+                "project_id" -> out.copy(projectId = f.str(k), dealId = if (f.str(k) != out.projectId && !f.has("deal_id")) "" else out.dealId)
+                "deal_id" -> out.copy(dealId = f.str(k))
+                "owner_id" -> out.copy(ownerId = f.str(k).ifBlank { out.ownerId })
+                "ball" -> out.copy(ball = f.str(k).ifBlank { MINE })
+                "person_id" -> out.copy(personId = f.str(k))
+                "nudge_on" -> out.copy(nudgeOn = f.str(k))
+                "requested_by" -> out.copy(requestedBy = f.str(k))
+                "due_date" -> out.copy(dueDate = f.str(k), dueTime = if (f.str(k).isBlank()) "" else out.dueTime)
+                "due_time" -> out.copy(dueTime = f.str(k))
+                "estimate_min" -> out.copy(estimateMin = if (f.isNull(k)) 0 else f.optInt(k, 0))
+                "money" -> out.copy(money = f.str(k))
+                "want" -> out.copy(want = f.bool(k))
+                "focus_on" -> out.copy(focusOn = f.str(k))
+                "labels" -> out.copy(labels = f.strings(k))
+                "status" -> {
+                    val st = f.str(k).ifBlank { OPEN }
+                    out.copy(status = st, completedAt = if (st == OPEN) "" else out.completedAt.ifBlank { nowIso })
+                }
+                "source" -> out.copy(source = f.str(k).ifBlank { out.source })
+                "source_ref" -> out.copy(sourceRef = f.str(k))
+                else -> out
+            }
+        }
+        if (out.ball == WAITING && t.ball != WAITING && out.waitingSince.isBlank()) out = out.copy(waitingSince = today)
+        if (out.ball == WAITING && out.waitingSince.isBlank()) out = out.copy(waitingSince = today)
+        if (out.ball != WAITING) out = out.copy(waitingSince = "")
+        return out.copy(updatedAt = nowIso)
+    }
+
+    // ------------------------------------------------------------ операции
+
+    fun newId(): String = UUID.randomUUID().toString()
+
+    /**
+     * Постоянный uuid из семени: тот же вход — тот же id. Для операций, у
+     * которых ключ выводится, а не хранится (отмена дела Разноски). На
+     * сервере `op_id` — uuid: строка другой формы роняет всю пачку (500), и
+     * очередь встаёт навсегда.
+     */
+    fun stableId(seed: String): String = UUID.nameUUIDFromBytes(seed.toByteArray(Charsets.UTF_8)).toString()
+
+    /** Похоже ли на uuid — то, что сервер примет в op_id и id. */
+    fun isUuid(s: String): Boolean = runCatching { UUID.fromString(s); s.length == 36 }.getOrDefault(false)
+
+    /** Поля дела, которые правит телефон: остальное — имена и служебное. */
+    val EDITABLE = listOf(
+        "title", "notes", "project_id", "deal_id", "ball", "person_id", "nudge_on", "requested_by",
+        "due_date", "due_time", "estimate_min", "money", "want", "focus_on", "labels",
+    )
+
+    /** Значение поля дела так, как его ждёт сервер: пусто — null. */
+    fun field(t: Task, key: String): Any = when (key) {
+        "title" -> t.title
+        "notes" -> nul(t.notes)
+        "project_id" -> nul(t.projectId)
+        "deal_id" -> nul(t.dealId)
+        "ball" -> t.ball
+        "person_id" -> nul(t.personId)
+        "nudge_on" -> nul(t.nudgeOn)
+        "requested_by" -> nul(t.requestedBy)
+        "due_date" -> nul(t.dueDate)
+        "due_time" -> nul(t.dueTime)
+        "estimate_min" -> if (t.estimateMin > 0) t.estimateMin else JSONObject.NULL
+        "money" -> nul(t.money)
+        "want" -> t.want
+        "focus_on" -> nul(t.focusOn)
+        "labels" -> arr(t.labels)
+        else -> JSONObject.NULL
+    }
+
+    private fun same(a: Any, b: Any): Boolean = a.toString() == b.toString()
+
+    /** Что поменялось между тем, что телефон видел, и тем, что сохранил: set и was. */
+    fun diff(before: Task, after: Task): Pair<JSONObject, JSONObject> {
+        val set = JSONObject()
+        val was = JSONObject()
+        for (k in EDITABLE) {
+            val a = field(before, k)
+            val b = field(after, k)
+            if (!same(a, b)) {
+                set.put(k, b)
+                was.put(k, a)
+            }
+        }
+        return set to was
+    }
+
+    /**
+     * Новое дело с телефона: id создаёт сам телефон (офлайн-создание, номер
+     * придёт с ответом), op_id — его постоянный ключ: повтор пачки не плодит
+     * дублей ни в очереди, ни на сервере.
+     */
+    fun createOp(t: Task, opId: String = newId()): JSONObject {
+        val task = JSONObject().put("id", t.id).put("title", t.title.trim())
+        for (k in EDITABLE) {
+            if (k == "title") continue
+            val v = field(t, k)
+            if (v == JSONObject.NULL || (k == "want" && v == false) || (k == "labels" && t.labels.isEmpty())) continue
+            if (k == "ball" && v == MINE) continue
+            task.put(k, v)
+        }
+        if (t.source.isNotBlank()) task.put("source", t.source)
+        if (t.sourceRef.isNotBlank()) task.put("source_ref", t.sourceRef)
+        return JSONObject().put("op", "task.create").put("op_id", opId).put("task", task)
+    }
+
+    fun setOp(id: String, set: JSONObject, was: JSONObject, opId: String = newId()): JSONObject =
+        JSONObject().put("op", "task.set").put("op_id", opId).put("id", id).put("set", set).put("was", was)
+
+    fun statusOp(op: String, id: String, opId: String = newId()): JSONObject =
+        JSONObject().put("op", op).put("op_id", opId).put("id", id)
+
+    fun commentOp(taskId: String, text: String, commentId: String = newId(), opId: String = newId()): JSONObject =
+        JSONObject().put("op", "comment.add").put("op_id", opId)
+            .put("comment", JSONObject().put("id", commentId).put("task_id", taskId).put("text", text.trim()))
+
+    fun decideOp(id: String, accept: Boolean, reason: String = "", set: JSONObject? = null, opId: String = newId()): JSONObject =
+        JSONObject().put("op", "suggestion.decide").put("op_id", opId).put("id", id)
+            .put("decision", if (accept) "accept" else "reject")
+            .apply {
+                if (reason.isNotBlank()) put("reason", reason.trim())
+                if (set != null && set.length() > 0) put("set", set)
+            }
+
+    /**
+     * «Не дела» из Разноски — в хронологию CRM заметкой (`interaction.add`,
+     * kind = note), а не в поле, которое никто не видит.
+     */
+    fun noteOp(
+        id: String,
+        text: String,
+        atIso: String,
+        projectId: String,
+        personIds: List<String>,
+        sourceRef: String,
+        opId: String,
+    ): JSONObject {
+        val data = JSONObject().put("id", id).put("at", atIso).put("kind", "note").put("summary", text.trim())
+            .put("source", "raznoska").put("person_ids", arr(personIds))
+        if (projectId.isNotBlank()) data.put("project_id", projectId)
+        if (sourceRef.isNotBlank()) data.put("source_ref", sourceRef)
+        return JSONObject().put("op", "interaction.add").put("op_id", opId).put("data", data)
+    }
+
+    /** Операция словами — для журнала и для «сервер не принял: …». */
+    fun describe(op: JSONObject, s: Snapshot): String {
+        fun taskName(ref: String): String = s.task(ref)?.let { "«${it.title.take(60)}»" } ?: "дело"
+        return when (op.str("op")) {
+            "task.create" -> "новое дело «${op.optJSONObject("task")?.str("title").orEmpty().take(60)}»"
+            "task.set" -> "правка: ${taskName(op.str("id"))}"
+            "task.done" -> "закрыть ${taskName(op.str("id"))}"
+            "task.reopen" -> "вернуть ${taskName(op.str("id"))}"
+            "task.cancel" -> "отменить ${taskName(op.str("id"))}"
+            "comment.add" -> "комментарий к ${taskName(op.optJSONObject("comment")?.str("task_id").orEmpty())}"
+            "comment.delete" -> "убрать комментарий"
+            "suggestion.decide" -> (if (op.str("decision") == "reject") "отклонить" else "принять") + " предложение"
+            "interaction.add" -> "заметка в хронологию"
+            else -> op.str("op")
+        }
+    }
+
+    // ------------------------------------------------------------ виды
+
+    /** Сфера дела в переключателе: «Входящие» — и в Работе, и в Доме. */
+    fun inSphere(t: Task, sphere: String): Boolean =
+        sphere == "all" || sphere.isBlank() || t.sphere == sphere || t.sphere == INBOX
+
+    /** Порядок `store.ORDER`: срок (пустой — в конец), время, оплаченное выше, давнее выше. */
+    val ORDER: Comparator<Task> = compareBy<Task>({ it.dueDate.isBlank() }, { it.dueDate }, { it.dueTime.isBlank() }, { it.dueTime })
+        .thenByDescending { it.moneyEff == "paid" }
+        .thenBy { it.createdAt }
+
+    data class Morning(
+        val now: List<Task>,
+        val today: List<Task>,
+        val nudge: List<Task>,
+        val paidUndated: List<Task>,
+        val fromOthers: List<Task>,
+        val newCount: Int,
+    ) {
+        val total: Int get() = now.size + today.size + nudge.size + paidUndated.size + fromOthers.size
+    }
+
+    private fun mineOpen(s: Snapshot, me: String, sphere: String): List<Task> =
+        s.tasks.values.filter { it.open && (me.isBlank() || it.ownerId == me) && inSphere(it, sphere) }
+
+    private fun le(date: String, today: String): Boolean = date.isNotBlank() && date <= today
+
+    private fun ms(iso: String): Long? = runCatching { OffsetDateTime.parse(iso).toInstant().toEpochMilli() }.getOrNull()
+
+    private fun minusDays(today: String, n: Long): String =
+        runCatching { LocalDate.parse(today).minusDays(n).toString() }.getOrDefault("")
+
+    /**
+     * «Утро» — `view_morning`. Дело попадает в первый подходящий раздел и
+     * ниже не повторяется: на телефоне повтор читается как два дела.
+     */
+    fun morning(s: Snapshot, me: String, today: String, sphere: String, now: Long): Morning {
+        val open = mineOpen(s, me, sphere)
+        val seen = HashSet<String>()
+        fun take(p: (Task) -> Boolean): List<Task> = open.filter { it.id !in seen && p(it) }.sortedWith(ORDER).also { l -> l.forEach { seen += it.id } }
+        val nowList = take { it.focusOn == today }
+        val todayList = take { it.ball == MINE && le(it.dueDate, today) }
+        val nudge = take { it.ball == WAITING && (le(it.nudgeOn, today) || le(it.dueDate, today)) }
+        val paid = take { it.ball == MINE && it.moneyEff == "paid" && it.dueDate.isBlank() }
+        val others = take { it.createdBy.isNotBlank() && it.createdBy != it.ownerId && (ms(it.createdAt) ?: 0L) > now - 3 * DAY_MS }
+        return Morning(nowList, todayList, nudge, paid, others, newOnes(s, me).size)
+    }
+
+    /** Неразобранные предложения владельцу — «Новое». */
+    fun newOnes(s: Snapshot, me: String): List<Suggestion> =
+        s.suggestions.values.filter { it.pending && (me.isBlank() || it.forUser == me) }
+
+    data class Batch(val ref: String, val title: String, val items: List<Suggestion>)
+
+    /** «Новое» пачками: предложения одной встречи — одна карточка (`view_new`). */
+    fun newBatches(s: Snapshot, me: String): List<Batch> {
+        val rows = newOnes(s, me).sortedWith(compareBy<Suggestion>({ it.batchRef.isNotBlank() }, { it.batchRef }, { it.createdAt }))
+        val out = LinkedHashMap<String, MutableList<Suggestion>>()
+        val titles = HashMap<String, String>()
+        for (r in rows) {
+            val key = r.batchRef.ifBlank { "one:" + r.id }
+            out.getOrPut(key) { mutableListOf() } += r
+            if (r.batchTitle.isNotBlank()) titles[key] = r.batchTitle
+        }
+        return out.map { (k, items) -> Batch(if (k.startsWith("one:")) "" else k, titles[k].orEmpty(), items) }
+    }
+
+    data class Waiting(val personId: String, val person: String, val items: List<Task>)
+
+    /** «Жду» по людям (`view_waiting`): у кого мяч и с какого дня. */
+    fun waiting(s: Snapshot, me: String, sphere: String): List<Waiting> {
+        val rows = mineOpen(s, me, sphere).filter { it.ball == WAITING }
+            .sortedWith(compareBy<Task>({ it.who.isBlank() }, { it.who.lowercase() }, { it.waitingSince.isBlank() }, { it.waitingSince }))
+        val out = LinkedHashMap<String, MutableList<Task>>()
+        for (t in rows) out.getOrPut(t.personId.ifBlank { "-" }) { mutableListOf() } += t
+        return out.map { (k, items) ->
+            Waiting(if (k == "-") "" else k, items.first().who.ifBlank { "без человека" }, items)
+        }
+    }
+
+    data class PersonView(
+        val person: Person?,
+        val agenda: List<Task>,
+        val waiting: List<Task>,
+        val asked: List<Task>,
+        val mineAbout: List<Task>,
+    )
+
+    /** «По человеку» (`view_person`): поднять при встрече, жду, просил, моё про него. */
+    fun person(s: Snapshot, personId: String): PersonView {
+        val open = s.tasks.values.filter { it.open }
+        return PersonView(
+            s.people[personId],
+            open.filter { it.ball == AGENDA && it.personId == personId }.sortedWith(ORDER),
+            open.filter { it.ball == WAITING && it.personId == personId }.sortedWith(ORDER),
+            open.filter { it.requestedBy == personId }.sortedWith(ORDER),
+            open.filter { it.ball == MINE && it.personId == personId }.sortedWith(ORDER),
+        )
+    }
+
+    /** «Быстрое» (`view_quick`): моё на десять минут. */
+    fun quick(s: Snapshot, me: String, sphere: String): List<Task> =
+        mineOpen(s, me, sphere).filter { it.ball == MINE && it.estimateMin in 1..10 }.sortedWith(ORDER)
+
+    data class ProjectView(val project: Project?, val deals: List<Deal>, val open: List<Task>, val done: List<Task>)
+
+    /** «Проект» (`view_project`): открытое, сделки и тридцать последних закрытых. */
+    fun project(s: Snapshot, projectId: String): ProjectView {
+        val all = s.tasks.values.filter { it.projectId == projectId }
+        return ProjectView(
+            s.projects[projectId],
+            s.dealsOf(projectId),
+            all.filter { it.open }.sortedWith(ORDER),
+            all.filter { !it.open }.sortedByDescending { it.completedAt }.take(30),
+        )
+    }
+
+    data class Week(
+        val stale: List<Task>,
+        val waitingStale: List<Task>,
+        val noNextStep: List<Project>,
+        val expired: List<Suggestion>,
+    )
+
+    /**
+     * «Неделя» (`view_week`): залежалое, молчащие «жду», деньги без следующего
+     * шага и то, что погасло в «Новом» неразобранным. Условие отказа от
+     * Todoist — неделя только на Делах.
+     */
+    fun week(s: Snapshot, me: String, today: String, sphere: String, now: Long): Week {
+        val open = mineOpen(s, me, sphere)
+        val twoWeeks = minusDays(today, 14)
+        val oneWeek = minusDays(today, 7)
+        val stale = open.filter {
+            (it.dueDate.isNotBlank() && twoWeeks.isNotBlank() && it.dueDate < twoWeeks) ||
+                ((ms(it.updatedAt) ?: Long.MAX_VALUE) < now - 21 * DAY_MS)
+        }.sortedWith(ORDER)
+        val waitingStale = open.filter {
+            it.ball == WAITING && it.waitingSince.isNotBlank() && oneWeek.isNotBlank() && it.waitingSince < oneWeek &&
+                (it.nudgeOn.isBlank() || it.nudgeOn < today)
+        }.sortedWith(ORDER)
+        val withNext = s.tasks.values.filter { it.open && it.ball == MINE }.map { it.projectId }.toSet()
+        val noNext = s.projects.values.filter {
+            it.live && (me.isBlank() || it.ownerId == me) && it.moneyDefault in setOf("paid", "potential") && it.id !in withNext &&
+                (sphere == "all" || sphere.isBlank() || it.sphere == sphere)
+        }.sortedWith(compareBy<Project>({ it.moneyDefault }, { it.name.lowercase() }))
+        val expired = s.suggestions.values.filter {
+            (me.isBlank() || it.forUser == me) && it.status == "expired" && (ms(it.decidedAt) ?: 0L) > now - 7 * DAY_MS
+        }
+        return Week(stale, waitingStale, noNext, expired)
+    }
+
+    /** Поиск по названию и заметкам, без регистра и «ё». */
+    fun search(s: Snapshot, q: String, withClosed: Boolean = false): List<Task> {
+        val n = norm(q) ?: return emptyList()
+        return s.tasks.values.filter { (withClosed || it.open) && (norm(it.title + " " + it.notes)?.contains(n) == true) }
+            .sortedWith(compareBy<Task> { !it.open }.then(ORDER)).take(50)
+    }
+
+    /** Все открытые по проектам: «Входящие» первыми, дальше по имени — для тапа в Засечку. */
+    fun byProject(s: Snapshot, me: String, sphere: String): List<Pair<Project?, List<Task>>> {
+        val open = mineOpen(s, me, sphere)
+        return open.groupBy { it.projectId }.toList()
+            .sortedWith(compareBy<Pair<String, List<Task>>>({ it.first.isNotBlank() }, { s.projects[it.first]?.name?.lowercase() ?: it.second.first().projectName.lowercase() }))
+            .map { (pid, list) -> s.projects[pid] to list.sortedWith(ORDER) }
+    }
+
+    private const val DAY_MS = 86_400_000L
+
+    // ------------------------------------------------------------ справочник
+
+    /** Та же нормализация, что `crm.norm` на сервере: регистр, «ё», пробелы. */
+    fun norm(s: String?): String? =
+        s?.trim()?.lowercase()?.replace('ё', 'е')?.replace(Regex("\\s+"), " ")?.takeIf { it.isNotEmpty() }
+
+    private fun named(n: String, name: String, aliases: List<String>, extra: String = ""): Boolean =
+        n == norm(name) || (extra.isNotBlank() && n == norm(extra)) || aliases.any { norm(it) == n }
+
+    /** Проект по имени или алиасу; не нашлось однозначно — однозначный префикс; иначе null. */
+    fun findProject(s: Snapshot, text: String): Project? {
+        val n = norm(text.trim().trim('#')) ?: return null
+        val live = s.projects.values.filter { it.live }
+        live.filter { named(n, it.name, it.aliases) }.let { if (it.size == 1) return it.first() }
+        // Модель могла дописать хвост («Бета Групп / сделка») — берём голову.
+        val head = norm(n.substringBefore(" / ").substringBefore('/'))
+        if (head != null && head != n) live.filter { named(head, it.name, it.aliases) }.let { if (it.size == 1) return it.first() }
+        return live.filter { p -> norm(p.name)?.startsWith(n) == true }.singleOrNull()
+    }
+
+    /** Человек по короткому имени, полному или алиасу. */
+    fun findPerson(s: Snapshot, text: String): Person? {
+        val n = norm(text.trim().trim('@')) ?: return null
+        val live = s.people.values.filter { it.live }
+        live.filter { named(n, it.name, it.aliases, it.short) }.let { if (it.size == 1) return it.first() }
+        return live.filter { p -> norm(p.label)?.startsWith(n) == true || norm(p.name)?.startsWith(n) == true }.singleOrNull()
+    }
+
+    /**
+     * Справочник для промпта Разноски: проекты с алиасами, люди с короткими
+     * именами и метки — вместо живого каталога Todoist и команды, вписанной в
+     * промпт руками. Только имена: что они значат, написано в самом промпте.
+     */
+    fun promptCatalog(s: Snapshot, maxPeople: Int = 400): String {
+        val sb = StringBuilder()
+        val projects = s.liveProjects()
+        if (projects.isNotEmpty()) {
+            sb.append("ПРОЕКТЫ (project — ровно одно имя из списка; в скобках — как ещё называют):\n")
+            for (p in projects) {
+                sb.append("— ").append(p.name)
+                if (p.aliases.isNotEmpty()) sb.append(" (").append(p.aliases.joinToString(", ")).append(')')
+                sb.append(" · ").append(if (p.sphere == "home") "дом" else "работа")
+                if (p.kind == "client") sb.append(" · клиент")
+                sb.append('\n')
+            }
+        }
+        val people = s.livePeople().take(maxPeople)
+        if (people.isNotEmpty()) {
+            sb.append("\nЛЮДИ (person — короткое имя из списка; в скобках — полное и как ещё зовут):\n")
+            for (p in people) {
+                sb.append("— ").append(p.label)
+                val more = listOfNotNull(p.name.takeIf { it != p.label && it.isNotBlank() }) + p.aliases
+                if (more.isNotEmpty()) sb.append(" (").append(more.joinToString(", ")).append(')')
+                sb.append('\n')
+            }
+        }
+        if (s.labels.isNotEmpty()) {
+            sb.append("\nМЕТКИ (только свободные контексты из этого списка, новых не выдумывать):\n")
+            sb.append(s.labels.joinToString(", ")).append('\n')
+        }
+        return sb.toString().trim()
+    }
+
+    /**
+     * Предложение «create» — в черновик дела для карточки: поля задачи как
+     * есть, имена (project_name, person_name) — в id по справочнику, как
+     * `store._names` на сервере. Не нашлось — поле пустое, человек поправит.
+     */
+    fun draftOf(sg: Suggestion, s: Snapshot, me: String): Task {
+        val p = sg.payloadObj()
+        val base = s.tasks[sg.taskId]
+        var t = base ?: Task(id = "suggestion:" + sg.id, title = "", ownerId = me, createdBy = me)
+        val fields = JSONObject()
+        for (k in EDITABLE) if (p.has(k)) fields.put(k, p.opt(k))
+        t = applyFields(t, fields, s.today, t.updatedAt)
+        if (t.projectId.isBlank()) findProject(s, p.str("project_name"))?.let { t = t.copy(projectId = it.id) }
+        if (t.personId.isBlank()) findPerson(s, p.str("person_name"))?.let { t = t.copy(personId = it.id) }
+        if (sg.kind == "close") t = t.copy(status = DONE)
+        return deriveTask(t, s)
+    }
+}

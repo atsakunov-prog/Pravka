@@ -46,6 +46,7 @@ object Prompts {
 
     // ---- Разноска: наговор -> дела в Todoist. Runs on Opus (the split is the (…см. prompts/PromptsRaznoska.kt)
     val TASKS: String get() = ru.zf.pravka.core.prompts.PromptsRaznoska.TASKS
+    val TASKS_DELA: String get() = ru.zf.pravka.core.prompts.PromptsRaznoska.TASKS_DELA
 
     // ---- Деньги: наговор -> траты (Опус) и подсказки сверки (…см. prompts/PromptsMoney.kt)
     val MONEY: String get() = ru.zf.pravka.core.prompts.PromptsMoney.MONEY

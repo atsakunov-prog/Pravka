@@ -180,6 +180,13 @@ class ZasechkaStore(private val context: Context) {
         // надиктовка, из которой дело родилось, и её читает обучение; сюда
         // еда ничего не приписывает. Пустая строка — комментария нет.
         val comment: String = "",
+        // Связь с Делами на домашнем сервере (03.10.2026, docs/dela-server.md,
+        // решение 4): запись, начатая из дела, хранит id дела и проекта. Связь
+        // делает телефон — на сервере `life` вид поверх журнала телефона, и
+        // колонку туда не добавить. Пусто — записи без дела (сырой текст
+        // клиента не переписывается: старые сопоставляются по алиасам там).
+        val task: String = "",
+        val project: String = "",
     ) {
         val open: Boolean get() = end == 0L
         /** Exact span in ms - the only honest unit for adding a day up. */
@@ -351,6 +358,8 @@ class ZasechkaStore(private val context: Context) {
         client: String,
         useful: Int,
         source: String,
+        task: String = "",
+        project: String = "",
     ): Entry = mutex.withLock {
         ensureLoaded()
         snapshotLocked("запись «${title.trim().ifBlank { "без названия" }}»")
@@ -374,6 +383,8 @@ class ZasechkaStore(private val context: Context) {
             source = source,
             synced = false,
             createdAt = nowMs,
+            task = task.trim(),
+            project = project.trim(),
         )
         entries.add(opened)
         normalizeLocked()
@@ -1089,6 +1100,24 @@ class ZasechkaStore(private val context: Context) {
         true
     }
 
+    /**
+     * Переименовать источник у всех записей (шаг HistoryFixes «todoist → task»).
+     * Только поле source: время, текст и решения владельца не трогаются.
+     * Возвращает, сколько записей поменялось; ноль — файл не пишется.
+     */
+    suspend fun renameSource(from: String, to: String): Int = mutex.withLock {
+        ensureLoaded()
+        var n = 0
+        for (i in entries.indices) {
+            if (entries[i].source == from) {
+                entries[i] = entries[i].copy(source = to, synced = false, notionSynced = false)
+                n++
+            }
+        }
+        if (n > 0) persist()
+        n
+    }
+
     /** Entries overlapping [from, to) - for the day view and the digests. */
     suspend fun forRange(from: Long, to: Long): List<Entry> = mutex.withLock {
         ensureLoaded()
@@ -1581,6 +1610,8 @@ class ZasechkaStore(private val context: Context) {
                     pomodoros = o.optInt("pomodoros", 0),
                     notionSynced = o.optBoolean("notionSynced", false),
                     comment = o.optString("comment", ""),
+                    task = o.optString("task", ""),
+                    project = o.optString("project", ""),
                 )
             )
         }
@@ -1801,6 +1832,8 @@ class ZasechkaStore(private val context: Context) {
                             // Как pomodoros: пишется только когда есть, старый
                             // файл читается без миграции.
                             if (e.comment.isNotBlank()) put("comment", e.comment)
+                            if (e.task.isNotBlank()) put("task", e.task)
+                            if (e.project.isNotBlank()) put("project", e.project)
                         }
                     )
                 }

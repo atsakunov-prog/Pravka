@@ -382,20 +382,33 @@ class ZasechkaEngine(
     }
 
     /**
-     * Дело из Todoist становится текущей записью. Название берём ЕГО - буква
-     * в букву, как в Todoist: тогда лента, коммент в задаче и таблица говорят
-     * об одном и том же деле. Категорию ищем сначала в собственной истории
-     * (это же дело он уже трекал - и, возможно, правил категорию руками), и
-     * только если такого дела ещё не было, спрашиваем Сонета. Никакой правки
-     * и удаления здесь быть не может: тап по делу - всегда новая запись.
+     * Дело (Todoist или Дела) становится текущей записью. Название берём ЕГО -
+     * буква в букву: тогда лента, дело и таблица говорят об одном и том же.
+     * Категорию ищем сначала в собственной истории (это же дело он уже
+     * трекал - и, возможно, правил категорию руками), и только если такого
+     * дела ещё не было, спрашиваем Сонета. Никакой правки и удаления здесь
+     * быть не может: тап по делу - всегда новая запись.
+     *
+     * Дела на сервере (03.10.2026): запись хранит [task] (id дела) и
+     * [project] (id проекта) — связь видна в архиве, и комментарий со
+     * временем в дело больше не нужен. Клиент — из справочника ([clientName],
+     * имя проекта-клиента), а не догадкой модели.
      */
-    suspend fun startTask(title: String): ZasechkaStore.Entry {
+    suspend fun startTask(
+        title: String,
+        task: String = "",
+        project: String = "",
+        clientName: String = "",
+    ): ZasechkaStore.Entry {
         val now = System.currentTimeMillis()
         val clean = title.trim().take(120)
         val known = store.all()
-            .lastOrNull { it.title.trim().equals(clean, ignoreCase = true) && it.category.isNotBlank() }
+            .lastOrNull {
+                (task.isNotBlank() && it.task == task && it.category.isNotBlank()) ||
+                    (it.title.trim().equals(clean, ignoreCase = true) && it.category.isNotBlank())
+            }
         var category = known?.category.orEmpty()
-        var client = known?.client.orEmpty()
+        var client = clientName.ifBlank { known?.client.orEmpty() }
         if (category.isBlank()) {
             val categories = store.categories()
             val parsed = claude.zasechka(
@@ -410,7 +423,8 @@ class ZasechkaEngine(
             if (parsed != null) {
                 category = categories.map { it.name }
                     .firstOrNull { it.equals(parsed.category, ignoreCase = true) } ?: parsed.category
-                client = parsed.client
+                // Клиент из справочника Дел сильнее догадки модели.
+                if (client.isBlank()) client = parsed.client
             }
         }
         val entry = store.startEntry(
@@ -420,9 +434,13 @@ class ZasechkaEngine(
             category = category,
             client = client,
             useful = 0,
-            source = "todoist",
+            // «task» — запись из дела, откуда бы дело ни пришло (было «todoist»,
+            // шаг HistoryFixes переименовал старые).
+            source = "task",
+            task = task,
+            project = project,
         )
-        eventLog.add("засечка ← todoist: «${entry.title}» [${entry.category.ifBlank { "без категории" }}]")
+        eventLog.add("засечка ← дело: «${entry.title}» [${entry.category.ifBlank { "без категории" }}]" + if (task.isNotBlank()) " · дело $task" else "")
         sync.kickSoon(scope)
         return entry
     }

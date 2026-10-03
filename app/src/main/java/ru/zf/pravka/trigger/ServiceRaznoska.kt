@@ -31,7 +31,7 @@ import ru.zf.pravka.ui.Haptics
 // Разноска в службе: тап «Д», наговор -> дела, плашка с решением по каждому делу,
 // отправка и отмена. Расширения PravkaAccessibilityService.
 
-// ---- Разноска: тап -> наговор -> дела в Todoist (ни поля, ни ленты) ----
+// ---- Разноска: тап -> наговор -> дела в Todoist или Дела (ни поля, ни ленты) ----
 
 /** Кнопка «Д» (и вкладка «Дела»): старт наговора, второй тап — разбор. */
 fun PravkaAccessibilityService.onRaznoskaTap() {
@@ -58,6 +58,53 @@ fun PravkaAccessibilityService.onRaznoskaTap() {
         return
     }
     startRaznoskaCapture()
+}
+
+/**
+ * Причина отказа от предложения голосом (вкладка «Дела», «Новое»): тот же
+ * движок и та же пилюля, что у «Д», но текст отдаётся [onText], а не в
+ * разбор. false — не стартовало (микрофон занят, нет разрешения), причина
+ * уже сказана тостом.
+ */
+fun PravkaAccessibilityService.listenForDelaReason(onText: (String) -> Unit): Boolean {
+    if (rSession != null || rWhisperRecording || googleSession != null || zSession != null || zWhisperRecording ||
+        eSession != null || eWhisperRecording || mSession != null || mWhisperRecording || DictationService.recording
+    ) {
+        Haptics.error(this)
+        Feedback.toast(this, getString(R.string.r_busy))
+        return false
+    }
+    if (!hasMicPermission()) {
+        requestMicPermission()
+        return false
+    }
+    rTabSink = onText
+    startRaznoskaCapture()
+    if (rSession == null && !rWhisperRecording) {
+        rTabSink = null
+        return false
+    }
+    return true
+}
+
+/**
+ * Вкладка сама остановила причину: «готово» — текст придёт, «отмена» — нет.
+ * false — останавливать было нечего (запись уже кончилась сама или упала).
+ */
+fun PravkaAccessibilityService.finishDelaReason(keep: Boolean): Boolean {
+    if (rSession == null && !(rWhisperRecording && DictationService.recording)) {
+        rTabSink = null
+        return false
+    }
+    if (!keep) {
+        cancelRaznoskaTake()
+        return true
+    }
+    if (rSession != null) stopRaznoskaLive() else {
+        rButton?.setBusy(true)
+        stopDictation()
+    }
+    return true
 }
 
 /** Приглашение говорить в бегущей строке «Д» — одно на оба движка. */
@@ -88,10 +135,17 @@ internal fun PravkaAccessibilityService.startRaznoskaCapture() {
     scope.launch { runCatching { app.raznoskaEngine.warmCatalog() } }
 }
 
-// Имена проектов и меток Todoist: распознаватель должен слышать «Стеллар»
-// и «Мармакс», а не «стеллаж» и «Марк Макс».
+// Имена проектов и меток (Todoist или справочник Дел с алиасами и людьми):
+// распознаватель должен слышать «Стеллар» и «Мармакс», а не «стеллаж» и «Марк Макс».
 internal fun PravkaAccessibilityService.raznBiasing(): List<String> = runCatching {
-    app.todoistStore.projectsFlow.value.map { it.name } + app.todoistStore.labelsFlow.value
+    if (app.delaServer.value) {
+        val s = app.delaStore.view.value
+        (s.liveProjects().flatMap { listOf(it.name) + it.aliases } +
+            s.livePeople().flatMap { listOf(it.label, it.name) + it.aliases } + s.labels)
+            .filter { it.length in 3..40 }.distinct().take(400)
+    } else {
+        app.todoistStore.projectsFlow.value.map { it.name } + app.todoistStore.labelsFlow.value
+    }
 }.getOrDefault(emptyList())
 
 internal fun PravkaAccessibilityService.startRaznoskaGoogle() {
@@ -191,6 +245,7 @@ internal fun PravkaAccessibilityService.onRaznoskaLiveDone(text: String) {
     if (rDiscard) {
         rDiscard = false
         rTypeInstead = false
+        rTabSink = null
         rButton?.setBusy(false)
         app.eventLog.add("разноска: наговор отменён (${text.length} зн.)")
         Feedback.toast(this, "Отменено")
@@ -208,6 +263,7 @@ internal fun PravkaAccessibilityService.onRaznoskaLiveDone(text: String) {
 internal fun PravkaAccessibilityService.onRaznoskaLiveError(msg: String) {
     rSession = null
     rDiscard = false
+    rTabSink = null
     runCatching { stopMicHold() }
     rButton?.hideTicker()
     rButton?.hideCancelBubble()
@@ -231,6 +287,14 @@ internal fun PravkaAccessibilityService.onRaznoskaLiveError(msg: String) {
  */
 internal fun PravkaAccessibilityService.onRaznoskaText(raw: String, review: Boolean = false) {
     val text = raw.trim()
+    // Наговор заказала вкладка «Дела» (причина отказа) — текст ей, не в разбор.
+    val sink = rTabSink
+    if (sink != null) {
+        rTabSink = null
+        rButton?.setBusy(false)
+        if (text.isNotEmpty()) sink(text)
+        return
+    }
     if (text.isBlank()) {
         rButton?.setBusy(false)
         Haptics.error(this)
@@ -257,6 +321,18 @@ internal fun PravkaAccessibilityService.onRaznoskaText(raw: String, review: Bool
             return@launch
         }
         Haptics.success(this@onRaznoskaText)
+        if (draft.tasks.isEmpty() && draft.noteItems.isNotEmpty() && app.delaOnServer()) {
+            // Дел нет, а заметки есть: на сервере Дел им место — хронология,
+            // туда они и уходят, без плашки (сказанное вслух — решение).
+            val sent = runCatching { app.raznoskaEngine.send(draft.id) }.getOrNull()
+            rButton?.showResult(
+                if (sent != null && sent.queued == 0 && app.delaStore.queued.value.isEmpty()) "Дел нет — заметки ушли в хронологию Дел"
+                else "Дел нет — заметки в очереди Дел, уйдут сами",
+                ok = true,
+                onOpen = { openTodoistTab() },
+            )
+            return@launch
+        }
         if (draft.tasks.isEmpty()) {
             // Дел не нашлось - наговор всё равно записан: заметки видно
             // во вкладке «Дела», ничего не пропало.
@@ -301,7 +377,8 @@ internal fun PravkaAccessibilityService.sendRaznoskaNow(draftId: Long) {
             sent.ok -> {
                 Haptics.success(this@sendRaznoskaNow)
                 rButton?.showResult(
-                    summary = "В Todoist: " + raznCount(sent.created) +
+                    // Очередь Дел без связи — правда словами: дела уйдут сами.
+                    summary = (if (sent.queued > 0) "В очереди Дел (нет связи): " else "В ${sent.to}: ") + raznCount(sent.created) +
                         (if (tasks.size == 1) " — " + tasks[0].content else ""),
                     rows = rows,
                     action = DictationPill.ResultAction("Отменить") { undoRaznoska() },
@@ -333,6 +410,12 @@ internal fun PravkaAccessibilityService.sendRaznoskaNow(draftId: Long) {
 internal fun PravkaAccessibilityService.raznMeta(task: ru.zf.pravka.core.ParsedTask): String {
     val meta = mutableListOf<String>()
     if (task.projectName.isNotBlank()) meta.add("#" + task.projectName)
+    // Дела: у кого мяч — словами, а не меткой.
+    when (task.ball) {
+        ru.zf.pravka.core.Dela.WAITING -> meta.add("жду: " + task.personName.ifBlank { "?" })
+        ru.zf.pravka.core.Dela.AGENDA -> meta.add("при встрече: " + task.personName.ifBlank { "?" })
+        else -> if (task.personName.isNotBlank()) meta.add("для: " + task.personName)
+    }
     if (task.labels.isNotEmpty()) meta.add(task.labels.joinToString(" ") { "@" + it })
     if (task.repeat.isNotBlank()) meta.add(task.repeat)
     else if (task.due.isNotBlank()) meta.add(raznDate(task.due))
@@ -389,7 +472,7 @@ internal fun PravkaAccessibilityService.sendRaznoskaTasks(draftId: Long, taskIds
                 )
             }
         if (!quiet) rButton?.setBusy(false)
-        reportRaznoskaSend(outcome.created, outcome.failed, outcome.error)
+        reportRaznoskaSend(outcome.created, outcome.failed, outcome.error, outcome.to, outcome.queued)
     }
 }
 
@@ -445,6 +528,8 @@ internal fun PravkaAccessibilityService.sendRaznoska(draftIds: List<Long>) {
     scope.launch {
         var created = 0
         var failed = 0
+        var queued = 0
+        var to = "Todoist"
         var error = ""
         for (id in draftIds) {
             val outcome = runCatching { app.raznoskaEngine.send(id) }
@@ -456,10 +541,12 @@ internal fun PravkaAccessibilityService.sendRaznoska(draftIds: List<Long>) {
                 }
             created += outcome.created
             failed += outcome.failed
+            queued += outcome.queued
+            to = outcome.to
             if (error.isBlank() && outcome.error.isNotBlank()) error = outcome.error
         }
         rButton?.setBusy(false)
-        reportRaznoskaSend(created, failed, error)
+        reportRaznoskaSend(created, failed, error, to, queued)
     }
 }
 
@@ -467,8 +554,18 @@ internal fun PravkaAccessibilityService.sendRaznoska(draftIds: List<Long>) {
  * Итог отправки одним местом: успех - записка с ручкой отмены, частичный
  * успех и провал - тост, из которого понятно, где остались дела.
  */
-internal fun PravkaAccessibilityService.reportRaznoskaSend(created: Int, failed: Int, error: String) {
+internal fun PravkaAccessibilityService.reportRaznoskaSend(
+    created: Int,
+    failed: Int,
+    error: String,
+    to: String = "Todoist",
+    queued: Int = 0,
+) {
     when {
+        failed == 0 && created > 0 && queued > 0 -> {
+            Haptics.success(this)
+            Feedback.toast(this, "✓ " + raznCount(created) + " в очереди Дел — нет связи, уйдут сами", long = true)
+        }
         failed == 0 && created > 0 -> {
             Haptics.success(this)
             // Тост, а не записка. Владелец: «после того, как дело записано,
@@ -476,7 +573,7 @@ internal fun PravkaAccessibilityService.reportRaznoskaSend(created: Int, failed:
             // Он дело только что одобрил сам, подтверждать ему нечего.
             // Отмена не потеряна: она живёт во вкладке «Дела», где видно,
             // что именно откатываешь.
-            Feedback.toast(this, "✓ " + raznCount(created) + " в Todoist")
+            Feedback.toast(this, "✓ " + raznCount(created) + " в " + to)
         }
         created > 0 -> {
             Haptics.error(this)
@@ -570,7 +667,7 @@ internal fun PravkaAccessibilityService.undoRaznoska() {
                 Haptics.success(this@undoRaznoska)
                 Feedback.toast(
                     this@undoRaznoska,
-                    "↩︎ " + raznCount(outcome.deleted) + " убрано из Todoist",
+                    "↩︎ " + raznCount(outcome.deleted) + " отменено",
                 )
                 // Дела снова ждут - показываем разбор, чтобы поправить и
                 // отправить заново. Без «сам»: после «Отменить» тишина
@@ -581,7 +678,7 @@ internal fun PravkaAccessibilityService.undoRaznoska() {
                 Haptics.error(this@undoRaznoska)
                 Feedback.toast(
                     this@undoRaznoska,
-                    "Убрал ${outcome.deleted}, ${outcome.failed} не поддались — глянь в Todoist",
+                    "Убрал ${outcome.deleted}, ${outcome.failed} не поддались — глянь во вкладке «Дела»",
                     long = true,
                 )
             }

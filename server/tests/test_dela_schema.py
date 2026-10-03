@@ -192,3 +192,41 @@ def test_life_tasks_for_claude_shows_only_owner_view(dela, cfg):
     with psycopg.connect(cfg.reader_url) as r:
         rows = r.execute("SELECT title, project, money FROM life.tasks").fetchall()
     assert rows == [("Закрыть акт", "Стаффджет", "paid")]
+
+
+def test_work_time_takes_project_from_entry_then_task_then_alias(dela, clean, batch, cfg):
+    """Запись Засечки из дела несёт task и project (телефон, 03.10.2026): связь
+    сильнее сопоставления текста клиента; без project — проект её дела."""
+    from pravka_archive.ingest import ingest_batch
+
+    beta = project(dela, "sasha", "Бета Групп", aliases=["Тестовый клиент"])
+    gamma = project(dela, "sasha", "Гамма")
+    t = task(dela, "sasha", "Иван: прислать модель", project_id=gamma)
+    day = next(e for e in batch["events"] if e["kind"] == "zasechka.day")
+    entries = day["data"]["entries"]
+    for e in entries:
+        if e.get("task"):
+            # Запись контракта с клиентом «Тестовый клиент»: проект записи — Гамма,
+            # хотя текст клиента по алиасу — Бета.
+            e["task"] = str(t["id"])
+            e["project"] = str(gamma)
+        elif e["title"] == "завтрак с детьми":
+            e["task"] = str(t["id"])  # только дело — проект берётся у него
+    ingest_batch(clean, batch, "sasha")
+    with psycopg.connect(cfg.reader_url) as r:
+        rows = r.execute("SELECT title, project, task_num FROM life.work_time ORDER BY start_local").fetchall()
+        ids = r.execute("SELECT task_id, project_id FROM life.entries WHERE title = 'разбор отчётности'").fetchone()
+    assert ("разбор отчётности", "Гамма", t["num"]) in rows
+    assert ("завтрак с детьми", "Гамма", t["num"]) in rows
+    assert ids == (str(t["id"]), str(gamma))
+    # Без связи — по-старому, алиасом клиента.
+    for e in entries:
+        e.pop("task", None)
+        e.pop("project", None)
+    day["eid"] = day["eid"] + "b"
+    day["seq"] = day["seq"] + 1000
+    ingest_batch(clean, batch, "sasha")
+    with psycopg.connect(cfg.reader_url) as r:
+        row = r.execute("SELECT project, task_num FROM life.work_time WHERE title = 'разбор отчётности'").fetchone()
+    assert row == ("Бета Групп", None)
+    assert beta

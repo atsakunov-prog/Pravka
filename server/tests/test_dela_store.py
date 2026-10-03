@@ -168,3 +168,38 @@ def test_suggestion_names_resolve_on_accept(dela):
         "for_user": "natasha", "kind": "create", "source": "bot", "payload": {"title": "x", "project_name": "Альфа"}}})[0]["suggestion"]
     t2 = ops(dela, "natasha", {"op": "suggestion.decide", "id": s2["id"], "decision": "accept"})[0]["task"]
     assert t2["project_id"] is None
+
+
+def test_phone_ops_as_pravka_sends_them(dela):
+    """Операции ровно той формы, что собирает Правка (`core/Dela.kt`): id дела
+    и op_id — телефона, пустое — null, у правки — was, заметка Разноски —
+    interaction.add с person_ids строками uuid."""
+    from test_dela_schema import as_
+
+    p = project(dela, "sasha", "Бета Групп")
+    with as_(dela, "sasha") as c:
+        pe = c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Иван Петров', 'Иван', 'sasha') RETURNING id").fetchone()["id"]
+    tid, cid, nid = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    res = ops(
+        dela, "sasha",
+        {"op": "task.create", "op_id": str(uuid.uuid4()), "task": {
+            "id": tid, "title": "Иван: прислать модель", "project_id": str(p), "ball": "waiting", "person_id": str(pe),
+            "due_date": "2026-10-10", "estimate_min": 10, "labels": ["звонок"], "source": "voice", "source_ref": "raznoska:1"}},
+        {"op": "task.set", "op_id": str(uuid.uuid4()), "id": tid,
+         "set": {"due_date": "2026-10-12", "estimate_min": None, "labels": []},
+         "was": {"due_date": "2026-10-10", "estimate_min": 10, "labels": ["звонок"]}},
+        {"op": "comment.add", "op_id": str(uuid.uuid4()), "comment": {"id": cid, "task_id": tid, "text": "звонил"}},
+        {"op": "interaction.add", "op_id": str(uuid.uuid4()), "data": {
+            "id": nid, "at": "2026-10-03T21:10:00+03:00", "kind": "note", "summary": "комитет пройден",
+            "source": "raznoska", "person_ids": [str(pe)], "project_id": str(p), "source_ref": "raznoska:1:0"}},
+        {"op": "interaction.add", "op_id": str(uuid.uuid4()), "data": {
+            "id": str(uuid.uuid4()), "at": "2026-10-03T21:10:00+03:00", "kind": "note", "summary": "без людей",
+            "source": "raznoska", "person_ids": []}},
+        {"op": "task.cancel", "op_id": str(uuid.uuid4()), "id": tid},
+    )
+    assert all(r["ok"] for r in res), res
+    assert res[1]["conflicts"] == []
+    out = store.sync(dela, "sasha", 0)
+    t = next(x for x in out["tasks"] if x["id"] == tid)
+    assert t["due_date"] == "2026-10-12" and t["estimate_min"] is None and t["labels"] == [] and t["status"] == "cancelled"
+    assert any(c["id"] == cid for c in out["comments"])

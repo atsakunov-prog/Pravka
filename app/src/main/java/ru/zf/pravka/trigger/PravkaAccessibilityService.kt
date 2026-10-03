@@ -168,7 +168,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var zClientsCached: List<String> = emptyList()
 
     // Разноска: третья кнопка и свой захват. Наговор не касается ни поля, ни
-    // ленты - он уезжает Опусу на разбор и оттуда делами в Todoist.
+    // ленты - он уезжает Опусу на разбор и оттуда делами в Todoist или Дела.
     internal var rButton: RaznoskaButtonController? = null
     internal var rSession: GoogleSpeechSession? = null
     @Volatile internal var rWhisperRecording = false
@@ -177,6 +177,11 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var rDiscard = false
     @Volatile internal var cachedREnabled = true
     internal var micRequestForRaznoska = false
+    /**
+     * Наговор, заказанный вкладкой «Дела» (причина отказа от предложения):
+     * текст уходит сюда, а не в разбор Разноски. Движок тот же, что у «Д».
+     */
+    internal var rTabSink: ((String) -> Unit)? = null
 
     // Деньги: четвёртая кнопка на диске, «₽» (23.09.2026). Тот же контроллер,
     // что у «Д» (`RaznoskaButtonController` со своим лицом): наговор уезжает
@@ -3010,9 +3015,15 @@ class PravkaAccessibilityService : AccessibilityService() {
             // Подходы: ждут активность от часов и уезжают, как только она
             // появится. Свой дроссель на десять минут внутри.
             if (sport) scope.launch { runCatching { app.strengthEngine.syncPending() } }
-            // Закрылось дело, пришедшее из Todoist - в задачу уезжает время.
-            // Время берётся из ленты — нужны и Дела, и Засечка.
-            if (dela && zasechka) scope.launch { runCatching { app.todoistSync.flushLinks() } }
+            // Дела на сервере: очередь операций — на сервер, новое — в копию
+            // (докачивает то, что не ушло на 10-секундной тишине). На Todoist —
+            // по-старому: закрылось дело из Todoist — в задачу уезжает время
+            // (время из ленты — нужны и Дела, и Засечка). На сервере коммент со
+            // временем не нужен: запись ленты сама помнит дело.
+            if (dela) scope.launch {
+                if (app.delaOnServer()) runCatching { app.delaSync.tick() }
+                else if (zasechka) runCatching { app.todoistSync.flushLinks() }
+            }
             // Копии на диск: сама проверка стоит один listFiles, копирование
             // уходит на writer-поток и случается раз в час (имя файла = часовая
             // засечка), так что тик может дёргать её сколько угодно.

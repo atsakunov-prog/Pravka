@@ -133,7 +133,13 @@ object ArchiveEvents {
                         "pomodoros" to e.pomodoros,
                         "rating" to e.useful,
                         "created" to clock.iso(e.createdAt),
-                    )
+                    ).apply {
+                        // Связь с Делами (контракт архива, 03.10.2026): только у
+                        // записей из дела — у остальных отпечаток суток прежний,
+                        // и архиву не приходится принимать всю историю заново.
+                        if (e.task.isNotBlank()) put("task", e.task)
+                        if (e.project.isNotBlank()) put("project", e.project)
+                    }
                 }),
             ))
         }

@@ -130,6 +130,23 @@ class ArchiveEventsTest {
     }
 
     @Test
+    fun `запись из дела везёт task и project, остальные — без этих ключей`() {
+        val plain = ZasechkaStore.Entry(
+            id = 1, start = t0, end = t0 + 600_000, raw = "", title = "Отчёт", category = "Работа", client = "",
+            useful = 0, source = "voice", synced = false, createdAt = t0,
+        )
+        val fromTask = plain.copy(id = 2, start = t0 + 600_000, end = t0 + 1_200_000, source = "task", task = "t-1", project = "p-1")
+        val entries = ArchiveEvents.zasechkaDays(listOf(plain, fromTask), clock, t0 + 3_600_000L).single().data.getJSONArray("entries")
+        assertTrue(!entries.getJSONObject(0).has("task") && !entries.getJSONObject(0).has("project"))
+        assertEquals("t-1", entries.getJSONObject(1).getString("task"))
+        assertEquals("p-1", entries.getJSONObject(1).getString("project"))
+        // Контракт архива знает эти поля (запись «разбор отчётности»).
+        val day = contract().getValue("zasechka.day").getJSONArray("entries")
+        val keys = (0 until day.length()).flatMap { day.getJSONObject(it).keys().asSequence().toList() }.toSet()
+        assertTrue(keys.containsAll(setOf("task", "project")))
+    }
+
+    @Test
     fun `время — с поясом телефона, сутки — по нему же`() {
         assertEquals("2026-09-07T07:30:00.000+03:00", clock.iso(t0))
         assertEquals("2026-09-07", clock.day(t0))
