@@ -1,0 +1,7 @@
+pravka=3.0.751
+versionName=3.0.751
+apk=pravka-debug.apk
+versionCode=751
+commit=6288d02687366bb7e4178f4d086cb465e802ef5c
+branch=pravka
+builtAt=2026-10-03T17:16Z
