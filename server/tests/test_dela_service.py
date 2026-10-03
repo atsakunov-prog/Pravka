@@ -133,6 +133,7 @@ def test_import_dry_and_apply_idempotent(dela, tmp_path):
         assert set(tasks) == {"Коля: прислать договор", "Петров: позвонить", "Купить кофе"}
         t1 = tasks["Коля: прислать договор"]
         assert (t1["ball"], t1["person_short"], t1["money"], t1["money_eff"]) == ("waiting", "Коля", None, "paid")
+        assert str(t1["waiting_since"]) == "2026-09-05"  # с создания в Todoist, не с дня переноса
         t2 = tasks["Петров: позвонить"]
         assert t2["deal_name"] == "Альфа: аудит" and t2["estimate_min"] == 10 and t2["labels"] == ["звонок"]
         assert t2["money"] == "potential"

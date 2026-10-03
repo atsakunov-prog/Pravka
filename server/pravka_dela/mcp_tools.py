@@ -38,8 +38,8 @@ def line(t: dict, today: dt.date | None = None) -> str:
     if t.get("deal_name"):
         where += f" / {t['deal_name']}"
     bits.append(where)
-    if t["ball"] != "mine" or t.get("person_short"):
-        who = t.get("person_short") or "?"
+    if t["ball"] != "mine" or t.get("person_id"):
+        who = t.get("person_short") or t.get("person_name") or "кого — не указано"
         b = f"{BALL[t['ball']]} {who}" if t["ball"] != "mine" else f"с {who}"
         if t["ball"] == "waiting" and t.get("waiting_since"):
             b += f" с {_d(t['waiting_since'])}"

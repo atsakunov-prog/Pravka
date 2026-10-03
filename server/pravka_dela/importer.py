@@ -394,6 +394,8 @@ def build(todoist: dict | None, deals: list[dict], contacts: list[dict], clients
                 "id": sid("task", "todoist", t["id"]), "title": title, "notes": t["description"] or None,
                 "project_id": p["id"] if p else None, "deal_id": deal["id"] if deal else None, "owner_id": owner, "ball": ball,
                 "person_id": person["id"] if person else None, "due_date": t["due"],
+                # Ждём с тех пор, как задачу завели, а не с дня переноса.
+                "waiting_since": (t["added"] or "")[:10] or None if ball == "waiting" else None,
                 "estimate_min": 10 if "быстр" in labels else None, "_money": money,
                 "labels": sorted(l for l in labels if l in labels_keep),
                 "status": "done" if t.get("checked") else "open", "completed_at": t.get("completed"),
@@ -506,7 +508,7 @@ COLUMNS = {
     "crm.projects": ["id", "name", "aliases", "sphere", "kind", "org_id", "owner_id", "money_default", "import_ref"],
     "crm.deals": ["id", "project_id", "name", "stage", "deal_type", "lead_person_id", "person_ids", "fee_kop", "deadline",
                   "wheel", "ball", "next_step", "my_view", "ideas", "log", "notion_id"],
-    "tasks.tasks": ["id", "title", "notes", "project_id", "deal_id", "owner_id", "ball", "person_id", "due_date",
+    "tasks.tasks": ["id", "title", "notes", "project_id", "deal_id", "owner_id", "ball", "person_id", "waiting_since", "due_date",
                     "estimate_min", "money", "labels", "status", "completed_at", "source", "import_ref", "created_by", "created_at"],
     "tasks.comments": ["id", "task_id", "author_id", "text", "created_at", "import_ref"],
     "crm.interactions": ["id", "at", "kind", "summary", "person_ids", "source", "source_ref", "owner_id"],
