@@ -572,7 +572,10 @@ def run(cfg, args) -> int:
     out.write_text(text, encoding="utf-8")
     print(f"отчёт: {out}")
     if args.apply:
+        from . import bridge
+
         print("записано:", apply(cfg.db_url, plan))
+        bridge.save_decisions(cfg.db_url, dec)
     else:
         print("сухой прогон: база не тронута (--apply — записать)")
     return 0

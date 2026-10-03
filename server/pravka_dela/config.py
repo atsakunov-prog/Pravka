@@ -27,6 +27,8 @@ class Config:
     phone_url: str = ""
     logs: Path = Path(r"C:\Bot\ZFbot\logs\dela")
     data: Path = Path(r"C:\ProgramData\ZF-Dela")
+    # Мост из Todoist до переезда телефона: токен — забирать новые задачи; пусто — моста нет.
+    todoist_token: str = ""
 
     @property
     def app_role(self) -> str:
@@ -60,4 +62,5 @@ def load(env_file: str | None = None) -> Config:
         phone_url=get("DELA_PHONE_URL").rstrip("/"),
         logs=Path(get("DELA_LOGS", r"C:\Bot\ZFbot\logs\dela")),
         data=Path(get("DELA_DATA", r"C:\ProgramData\ZF-Dela")),
+        todoist_token=get("DELA_TODOIST_TOKEN"),
     )

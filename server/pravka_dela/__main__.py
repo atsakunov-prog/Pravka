@@ -138,6 +138,18 @@ def cmd_serve(args) -> int:
         return 2
     _logging(cfg)
 
+    async def bridge_loop():
+        # До переезда телефона: новые задачи Todoist — в Дела, раз в 10 минут.
+        from . import bridge
+
+        while cfg.todoist_token:
+            try:
+                data = await asyncio.to_thread(bridge.fetch, cfg.todoist_token)
+                await asyncio.to_thread(bridge.pull_new, cfg.db_url, data)
+            except Exception as e:
+                log.warning("мост Todoist: %s", e)
+            await asyncio.sleep(600)
+
     async def chores():
         # Раз в час: неразобранные предложения старше недели гаснут.
         while True:
@@ -154,7 +166,7 @@ def cmd_serve(args) -> int:
             api.build(cfg), host=cfg.listen_host, port=cfg.listen_port,
             log_level="info", log_config=None, proxy_headers=False, server_header=False,
         ))
-        await asyncio.gather(server.serve(), chores())
+        await asyncio.gather(server.serve(), chores(), bridge_loop())
 
     log.info("Дела: слушаю %s:%d", cfg.listen_host, cfg.listen_port)
     asyncio.run(main())
