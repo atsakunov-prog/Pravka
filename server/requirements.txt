@@ -4,3 +4,5 @@ psycopg[binary]==3.3.6
 uvicorn==0.54.0
 httpx==0.28.1
 segno==1.6.6
+# Дела: разбор текста в дела (кнопка Claude в вебе). 1.x тянет httpx2 рядом с httpx.
+anthropic==1.11.0

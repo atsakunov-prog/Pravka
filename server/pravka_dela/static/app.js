@@ -15,6 +15,7 @@ const S = {
   sphere: LS.get('sphere', ''), groups: LS.get('groups', {}), favs: LS.get('favs', []), closed: LS.get('closed', {}),
   showDone: false, upNoDate: false, upMineOnly: false, dealFilter: null,
   sel: new Set(), order: [], lastPick: null, cardId: null, draft: null, sideOpen: false,
+  parse: null, quickDraft: null, // идёт разбор Claude; текст, вернувшийся после неудачи
 };
 const BALL = { mine: 'моё', waiting: 'жду', agenda: 'повестка' };
 const MONEY = { paid: 'оплачено', potential: 'развитие', none: 'без денег' };
@@ -222,15 +223,19 @@ async function boot() {
   if (!S.me) { try { S.me = await api('/api/me'); } catch (e) { return; } }
   await sync(true);
   render();
-  setInterval(() => { if (!document.hidden) sync().then(render).catch(() => {}); }, 30000);
-  window.addEventListener('focus', () => sync().then(render).catch(() => {}));
+  // Пока человек набирает новое дело, фон только подтягивает данные, а не перерисовывает.
+  const typing = () => document.activeElement?.id === 'quick' && document.activeElement.value;
+  const refresh = () => sync().then(() => { if (!typing()) render(); }).catch(() => {});
+  setInterval(() => { if (!document.hidden) refresh(); }, 30000);
+  window.addEventListener('focus', refresh);
 }
 
 // ── Каркас ──────────────────────────────────────────────────────────────
 function render() {
   if (!S.me) return;
   const r = route();
-  const focused = document.activeElement && document.activeElement.id === 'quick' ? document.getElementById('quick').value : null;
+  const q0 = document.activeElement && document.activeElement.id === 'quick' ? document.activeElement : null;
+  const focused = q0 ? { value: q0.value, a: q0.selectionStart, b: q0.selectionEnd } : null;
   const shell = el('div', { class: 'shell' + (S.cardId || S.draft ? ' with-card' : '') + (S.sideOpen ? ' side-open' : '') + (S.sel.size ? ' selecting' : '') });
   shell.append(renderSide(r), el('main', { class: 'list' }, renderMain(r)));
   if (S.cardId || S.draft) shell.append(renderCard());
@@ -238,7 +243,10 @@ function render() {
   $app.replaceChildren(shell);
   if (S.sideOpen) $app.append(el('div', { class: 'scrim', onclick: () => { S.sideOpen = false; render(); } }));
   shell.querySelector('main.list').scrollTop = scroll;
-  if (focused !== null) { const q = document.getElementById('quick'); if (q) { q.value = focused; q.focus(); } }
+  if (focused) {
+    const q = document.getElementById('quick');
+    if (q && !q.disabled) { q.value = focused.value; q.focus(); q.setSelectionRange(focused.a, focused.b); q.dispatchEvent(new Event('input')); }
+  }
   renderBulk();
 }
 
@@ -539,26 +547,32 @@ function renderBulk() {
 
 // ── Быстрый ввод (как Quick Add Magic в Vikunja, по-русски) ──────────────
 const WD_WORDS = ['понедельник', 'вторник', 'сред', 'четверг', 'пятниц', 'суббот', 'воскресень'];
+/** Единственный по имени: сперва точное совпадение, потом начало. Двое — значит, никто. */
+function findIn(list, name, keys) {
+  const n = norm(name);
+  const exact = list.filter((x) => keys(x).some((k) => norm(k) === n));
+  if (exact.length === 1) return exact[0];
+  const pre = list.filter((x) => keys(x).some((k) => norm(k).startsWith(n)));
+  return pre.length === 1 ? pre[0] : null;
+}
+const liveProjects = () => [...S.projects.values()].filter((x) => !x.archived_at);
+const livePeople = () => [...S.people.values()].filter((x) => !x.archived_at);
+const projectKeys = (x) => [x.name, ...(x.aliases || [])];
+const personKeys = (x) => [x.name, x.short || '', ...(x.aliases || [])].filter(Boolean);
+
 function parseQuick(text, defaults) {
   const out = { title: text, set: { ...defaults }, tags: [] };
   if (/^".*"$/.test(text.trim())) { out.title = text.trim().slice(1, -1); return out; } // в кавычках — без разбора
   let s = ' ' + text + ' ';
   const take = (re, fn) => { s = s.replace(re, (...m) => (fn(...m) === false ? m[0] : ' ')); };
-  const findIn = (list, name, keys) => {
-    const n = norm(name);
-    const exact = list.filter((x) => keys(x).some((k) => norm(k) === n));
-    if (exact.length === 1) return exact[0];
-    const pre = list.filter((x) => keys(x).some((k) => norm(k).startsWith(n)));
-    return pre.length === 1 ? pre[0] : null;
-  };
   take(/\s\+(?:"([^"]+)"|(\S+))/g, (m, q, w) => {
-    const p = findIn([...S.projects.values()].filter((x) => !x.archived_at), q || w, (x) => [x.name, ...(x.aliases || [])]);
+    const p = findIn(liveProjects(), q || w, projectKeys);
     if (!p) return false;
     out.set.project_id = p.id; out.tags.push('проект: ' + p.name);
     return true;
   });
   take(/\s@(?:"([^"]+)"|(\S+))/g, (m, q, w) => {
-    const p = findIn([...S.people.values()].filter((x) => !x.archived_at), q || w, (x) => [x.name, x.short || '', ...(x.aliases || [])].filter(Boolean));
+    const p = findIn(livePeople(), q || w, personKeys);
     if (!p) return false;
     out.set.person_id = p.id; out.tags.push('человек: ' + personName(p));
     return true;
@@ -604,20 +618,136 @@ function parseQuick(text, defaults) {
   return out;
 }
 
+// ── Подсказки при вводе: +проект, @человек, *метка, !команда ─────────────
+const COMMANDS = [
+  ['жду', 'мяч у человека: жду от него'], ['повестка', 'поднять при встрече или звонке'],
+  ['сейчас', 'в фокус на сегодня'], ['хочу', 'делаю, потому что сам хочу'],
+  ['5м', 'оценка: 5 минут'], ['15м', 'оценка: 15 минут'], ['30м', 'оценка: полчаса'], ['60м', 'оценка: час'],
+  ['оплачено', 'деньги: оплата согласована'], ['развитие', 'деньги: развитие бизнеса'],
+];
+const AC_HEAD = { '+': 'Проекты', '@': 'Люди', '*': 'Метки', '!': 'Команды' };
+
+/** Слово под кареткой, если оно начинается со знака подсказки: {kind, q, start}. */
+function acToken(text, caret) {
+  const m = text.slice(0, caret).match(/(^|\s)([+@*!])(?:"([^"]*)|([^\s"]*))$/);
+  return m ? { kind: m[2], q: m[3] ?? m[4] ?? '', start: m.index + m[1].length } : null;
+}
+
+/** Как вставить имя, чтобы разбор потом узнал именно его (тёзкам — полное имя). */
+function acValue(kind, x) {
+  let name = x;
+  if (kind === '@') {
+    const all = livePeople();
+    name = [x.short, x.name, ...(x.aliases || [])].filter(Boolean).find((k) => findIn(all, k, personKeys) === x) || x.name;
+  }
+  return /\s/.test(name) ? `"${name}"` : name;
+}
+
+function acItems(kind, q) {
+  const n = norm(q);
+  const rank = (keys) => { // 0 — с начала имени, 1 — с начала слова, 2 — внутри, -1 — мимо
+    let best = -1;
+    for (const k of keys) {
+      const v = norm(k);
+      if (!v) continue;
+      const r = v.startsWith(n) ? 0 : v.split(/[\s\-–«»"().,]+/).some((w) => w.startsWith(n)) ? 1 : v.includes(n) ? 2 : -1;
+      if (r >= 0 && (best < 0 || r < best)) best = r;
+    }
+    return best;
+  };
+  let list = [];
+  if (kind === '+') list = liveProjects().map((p) => ({ label: p.name, insert: acValue('+', p.name), keys: projectKeys(p),
+    hint: [(p.aliases || []).join(', '), p.sphere === 'home' ? 'дом' : ''].filter(Boolean).join(' · '), fav: S.favs.includes(p.id) }));
+  if (kind === '@') list = livePeople().map((p) => ({ label: personName(p), insert: acValue('@', p), keys: personKeys(p),
+    hint: [p.short && p.short !== p.name ? p.name : '', ...(p.aliases || [])].filter(Boolean).join(', ') }));
+  if (kind === '*') list = S.labels.map((l) => ({ label: l, insert: acValue('*', l), keys: [l] }));
+  if (kind === '!') list = COMMANDS.map(([c, h]) => ({ label: '!' + c, insert: c, keys: [c], hint: h }));
+  const out = list.map((x, i) => ({ ...x, i, r: n ? rank(x.keys) : 0 })).filter((x) => x.r >= 0);
+  out.sort((a, b) => a.r - b.r || (kind === '!' ? a.i - b.i : (b.fav | 0) - (a.fav | 0) || a.label.localeCompare(b.label, 'ru')));
+  return out.slice(0, 8);
+}
+
+// ── Значок Claude: лучистая звёздочка ───────────────────────────────────
+function claudeIcon(size = 18) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  for (const [k, v] of Object.entries({ viewBox: '0 0 24 24', width: size, height: size, fill: 'none', stroke: 'currentColor',
+    'stroke-width': '2.1', 'stroke-linecap': 'round', class: 'claude-ico' })) svg.setAttribute(k, v);
+  let d = '';
+  for (let i = 0; i < 12; i++) {
+    const a = i * Math.PI / 6 + 0.12, r2 = i % 2 ? 7.2 : 10;
+    d += `M${(12 + 2.4 * Math.cos(a)).toFixed(2)} ${(12 + 2.4 * Math.sin(a)).toFixed(2)}`
+       + `L${(12 + r2 * Math.cos(a)).toFixed(2)} ${(12 + r2 * Math.sin(a)).toFixed(2)}`;
+  }
+  const p = document.createElementNS(ns, 'path');
+  p.setAttribute('d', d);
+  svg.append(p);
+  return svg;
+}
+
+// ── Быстрый ввод: «+» — одно дело с разметкой, Claude — разбор текста на дела ──
 function quickAdd(defaults) {
-  const input = el('input', { id: 'quick', placeholder: 'Новое дело: «Иван: прислать модель +Альфа @Иван !жду в пятницу»', autocomplete: 'off' });
+  const busy = !!S.parse;
+  const input = el('textarea', { id: 'quick', rows: 1, autocomplete: 'off', disabled: busy,
+    placeholder: 'Новое дело: «Иван: прислать модель +Альфа @Иван !жду в пятницу» или текст для Claude' });
+  if (busy) input.value = S.parse.text;
+  else if (S.quickDraft) { input.value = S.quickDraft; S.quickDraft = null; }
   const preview = el('div', { class: 'preview' });
-  const help = el('div', { class: 'help hidden' }, '+проект  @человек  *метка  !жду  !повестка  !сейчас  !хочу  !15м  !оплачено · даты: сегодня, завтра, в пятницу, через 3 дня, 12.10, 12 октября · «в кавычках» — без разбора');
+  const help = el('div', { class: 'help hidden' },
+    'Enter — одно дело · Ctrl+Enter или звёздочка — Claude разберёт текст на несколько дел · Shift+Enter — новая строка · ',
+    '+проект  @человек  *метка  !жду  !повестка  !сейчас  !хочу  !15м  !оплачено · сегодня, завтра, в пятницу, через 3 дня, 12.10 · «в кавычках» — без разбора');
+  const status = busy ? el('div', { class: 'claude-status' }, 'Claude разбирает… Можно уходить на другие страницы — дела появятся сами.') : null;
+  const ac = el('div', { class: 'ac hidden' });
+  let acState = null; // {kind, q, start, items, at}
+
+  // Растёт по тексту; пустое — в одну строку (подсказка-плейсхолдер высоту не задаёт).
+  const grow = () => {
+    input.style.height = '';
+    input.style.overflowY = '';
+    if (input.value.includes('\n') || input.scrollHeight > input.clientHeight + 2) input.style.height = Math.min(input.scrollHeight, 320) + 'px';
+    if (input.scrollHeight > 320) input.style.overflowY = 'auto';
+  };
+  const closeAc = () => { acState = null; ac.classList.add('hidden'); ac.replaceChildren(); };
+  const drawAc = () => {
+    const { kind, items, at } = acState;
+    ac.replaceChildren(el('div', { class: 'ac-head' }, AC_HEAD[kind]),
+      ...(items.length ? items.map((x, i) => el('button', { type: 'button', class: i === at ? 'on' : null,
+        onmousedown: (e) => { e.preventDefault(); pickAc(i); } },
+        el('span', { class: 'ac-label' }, x.label), x.hint ? el('span', { class: 'ac-hint' }, x.hint) : null))
+        : [el('div', { class: 'ac-empty' }, kind === '*' ? 'Такой метки нет — будет новая' : 'Не нашлось')]));
+    ac.classList.remove('hidden');
+    ac.querySelector('button.on')?.scrollIntoView({ block: 'nearest' });
+  };
+  const updateAc = () => {
+    const t = document.activeElement === input && input.selectionStart === input.selectionEnd
+      ? acToken(input.value, input.selectionStart) : null;
+    if (!t) { closeAc(); return; }
+    acState = { ...t, items: acItems(t.kind, t.q), at: 0 };
+    drawAc();
+  };
   const update = () => {
     const p = parseQuick(input.value, defaults);
     preview.replaceChildren(...p.tags.map((t) => el('span', {}, t)));
     help.classList.toggle('hidden', !input.value);
+    grow();
+    updateAc();
   };
-  input.addEventListener('input', update);
-  input.addEventListener('keydown', async (e) => {
-    if (e.key === 'Escape') { input.value = ''; update(); input.blur(); e.stopPropagation(); }
-    if (e.key !== 'Enter' || !input.value.trim()) return;
-    const p = parseQuick(input.value, defaults);
+  const pickAc = (i) => {
+    const x = acState?.items[i];
+    if (!x) return;
+    const v = input.value;
+    let end = input.selectionStart;
+    while (end < v.length && !/\s/.test(v[end])) end++;
+    const ins = acState.kind + x.insert + ' ';
+    const pos = acState.start + ins.length;
+    input.value = v.slice(0, acState.start) + ins + v.slice(end).replace(/^ /, '');
+    input.setSelectionRange(pos, pos);
+    closeAc();
+    update();
+  };
+  const addOne = async () => {
+    if (!input.value.trim()) { input.focus(); return; }
+    const p = parseQuick(input.value.replace(/\s*\n\s*/g, ' '), defaults);
     if (!p.title) { toast('Нужно название'); return; }
     try {
       const r = await op1({ op: 'task.create', task: { ...p.set, title: p.title, source: 'web' } });
@@ -626,8 +756,97 @@ function quickAdd(defaults) {
       document.getElementById('quick')?.focus();
       toast('Записал: #' + r.task.num + ' ' + r.task.title);
     } catch (err) { fail(err); }
+  };
+
+  input.addEventListener('input', update);
+  input.addEventListener('click', updateAc);
+  input.addEventListener('blur', () => setTimeout(closeAc, 150));
+  input.addEventListener('keydown', (e) => {
+    if (acState) {
+      const n = acState.items.length;
+      if (e.key === 'ArrowDown' && n) { e.preventDefault(); acState.at = (acState.at + 1) % n; drawAc(); return; }
+      if (e.key === 'ArrowUp' && n) { e.preventDefault(); acState.at = (acState.at - 1 + n) % n; drawAc(); return; }
+      if ((e.key === 'Enter' || e.key === 'Tab') && n && !e.shiftKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); pickAc(acState.at); return; }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeAc(); return; }
+    }
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) setTimeout(updateAc);
+    if (e.key === 'Escape') { input.value = ''; update(); input.blur(); e.stopPropagation(); return; }
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    e.preventDefault();
+    // Ctrl+Enter — Claude; несколько строк — тоже ему: одно дело из абзаца не выйдет.
+    if (e.ctrlKey || e.metaKey || input.value.trim().includes('\n')) claudeParse(input, defaults);
+    else addOne();
   });
-  return el('div', { class: 'quick' }, el('span', { class: 'plus' }, '+'), input, preview, help);
+
+  const plusBtn = el('button', { type: 'button', class: 'q-btn plus', title: 'Записать одно дело (Enter)', disabled: busy, onclick: addOne }, '+');
+  const claudeBtn = el('button', { type: 'button', class: 'q-btn claude-btn' + (busy ? ' busy' : ''), disabled: busy,
+    title: S.me.claude ? 'Claude: разобрать текст на дела — люди, проекты, сроки, заметки (Ctrl+Enter)' : 'Claude на сервере ещё не настроен',
+    onclick: () => claudeParse(input, defaults) }, claudeIcon());
+  if (input.value) setTimeout(grow);
+  return el('div', { class: 'quick' },
+    el('div', { class: 'quick-wrap' }, el('div', { class: 'quick-box' + (busy ? ' busy' : '') }, plusBtn, input, claudeBtn), ac),
+    status, preview, help);
+}
+
+// ── Разбор Claude: задание на сервере, ответ — дела и заметки ───────────
+async function claudeParse(input, defaults) {
+  const text = input.value.trim();
+  if (S.parse) return;
+  if (!text) { toast('Напиши или надиктуй, что разобрать: Claude разложит на дела'); input.focus(); return; }
+  const body = { text };
+  for (const k of ['project_id', 'person_id']) if (defaults[k]) body[k] = defaults[k];
+  S.parse = { text };
+  render();
+  try {
+    const { job } = await api('/api/parse', body);
+    let d;
+    for (let i = 0; ; i++) {
+      await new Promise((r) => setTimeout(r, i < 15 ? 1000 : 2500));
+      d = await api('/api/parse/' + job);
+      if (d.status !== 'run') break;
+      if (i > 150) throw new Error('Claude думает дольше пяти минут — дела появятся сами, когда он закончит');
+    }
+    S.parse = null;
+    for (const t of d.tasks) S.tasks.set(t.id, t);
+    await sync().catch(() => {});
+    render();
+    claudeResult(d);
+  } catch (e) {
+    S.quickDraft = S.parse && S.parse.text;
+    S.parse = null;
+    render();
+    fail(e);
+  }
+}
+
+/** Что сделал Claude: дела (открываются карточкой), заметки, отмена одним движением. */
+function claudeResult(d) {
+  document.querySelectorAll('.claude-result').forEach((x) => x.remove());
+  const n = d.tasks.length, m = d.notes.length;
+  const box = el('div', { class: 'claude-result', role: 'status' });
+  const close = () => box.remove();
+  const meta = (t) => [project(t.project_id)?.name,
+    t.person_id ? ((t.ball !== 'mine' ? BALL[t.ball] + ' ' : '') + personName(person(t.person_id))) : null,
+    t.due_date ? dueLabel(t).text : null, t.estimate_min ? t.estimate_min + ' мин' : null].filter(Boolean).join(' · ');
+  const said = [n ? plural(n, 'дело', 'дела', 'дел') : null, m ? plural(m, 'заметка', 'заметки', 'заметок') : null].filter(Boolean).join(' и ');
+  box.append(...[
+    el('div', { class: 'cr-head' }, claudeIcon(16), el('span', {}, said ? 'Claude записал ' + said : 'Claude не нашёл тут дел'),
+      el('button', { class: 'icon-btn', title: 'Закрыть', onclick: close }, icon('x', 14))),
+    d.tasks.map((t) => el('button', { class: 'cr-task', onclick: () => openCard(t.id) },
+      el('div', {}, '#' + t.num + ' ' + t.title), meta(t) ? el('div', { class: 'cr-meta' }, meta(t)) : null)),
+    m ? el('div', { class: 'cr-sub' }, 'В хронологию:') : null,
+    d.notes.map((x) => el('div', { class: 'cr-note' }, x.summary,
+      project(x.project_id) ? el('span', { class: 'cr-meta' }, ' · ' + project(x.project_id).name) : null)),
+    d.errors && d.errors.length ? el('div', { class: 'cr-err' }, 'Не записались: ' + d.errors.join('; ')) : null,
+    el('div', { class: 'cr-acts' },
+      n ? el('button', { onclick: async () => {
+        try {
+          await ops(d.tasks.map((t) => ({ op: 'task.cancel', id: t.id })));
+          close(); render(); toast('Отменил ' + plural(n, 'дело', 'дела', 'дел') + (m ? '; заметки остались в хронологии' : ''));
+        } catch (e) { fail(e); }
+      } }, 'Отменить дела') : null,
+      el('button', { onclick: close }, 'Хорошо'))].flat().filter(Boolean));
+  document.body.append(box);
 }
 
 // ── Проект, человек, поиск, «Новое», «Неделя» ───────────────────────────

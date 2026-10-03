@@ -17,13 +17,19 @@
 | POST /api/ops | пачка операций с op_id (офлайн-очередь) |
 | GET  /api/view/<имя> | готовый список: morning, new, waiting, person, quick, now, project, week, search |
 | GET  /api/task/<id или номер> | дело с комментариями и журналом |
+| POST /api/parse | {"text", "project_id"?, "person_id"?} — Claude режет текст на дела и заводит их; ответ — номер задания |
+| GET  /api/parse/<номер> | run, пока думает; потом done с делами и заметками или error |
 """
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import json
 import logging
+import secrets
+import time
+import uuid
 from importlib import resources
 
 import anyio
@@ -32,13 +38,14 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import db, store, tokens
+from . import db, parse, store, tokens
 from .config import Config
 
 log = logging.getLogger("dela.api")
 
 MAX_BODY = 8 * 1024 * 1024
 MAX_OPS = 2000
+JOB_TTL = 15 * 60  # готовый разбор ждёт, пока веб его заберёт
 COOKIE = "dela_session"
 SECURITY = {
     "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; "
@@ -124,7 +131,7 @@ def build(cfg: Config) -> Starlette:
         if not who:
             return _err("нужен вход", 401)
         name = await anyio.to_thread.run_sync(_user_name, url, who.user)
-        return _json({"ok": True, "user": who.user, "name": name, "kind": who.kind})
+        return _json({"ok": True, "user": who.user, "name": name, "kind": who.kind, "claude": bool(cfg.anthropic_key)})
 
     async def sync(request: Request):
         who = await auth(request)
@@ -170,6 +177,73 @@ def build(cfg: Config) -> Starlette:
             return _err(str(e), 400)
         return _json({"ok": True, **out})
 
+    # Разбор Claude — заданием: ответ модели бывает дольше минуты, а роутер и nginx
+    # долгие запросы рвут. POST отдаёт номер сразу, веб спрашивает GET по номеру;
+    # оборванная связь не плодит повторов — дела заводит задание, а не запрос.
+    # Два разбора разом на весь сервис; ограничитель — внутри цикла событий.
+    jobs: dict[str, dict] = {}
+    slots: list[anyio.CapacityLimiter] = []
+
+    async def run_parse(job: dict, who: tokens.Who, text: str, defaults: dict) -> None:
+        try:
+            out = await anyio.to_thread.run_sync(
+                lambda: parse.run(url, who.user, text, defaults, cfg.anthropic_key, cfg.claude_proxy,
+                                  via=who.via, actor=who.actor),
+                limiter=slots[0],
+            )
+            job.update(status="done", result=store.jsonable(out))
+            log.info("разбор %s: %d знаков, дел %d, заметок %d, токены %s",
+                     who.name, len(text), len(out["tasks"]), len(out["notes"]), out.get("usage"))
+        except parse.ParseError as e:
+            job.update(status="error", error=str(e))
+        except Exception as e:  # сеть, ключ, лимит — человеку коротко, в журнал подробно
+            log.exception("разбор %s", who.name)
+            job.update(status="error", error=f"Claude недоступен: {type(e).__name__}")
+
+    async def parse_start(request: Request):
+        who = await auth(request)
+        if not who:
+            return _err("нужен вход", 401)
+        try:
+            body = await request.json()
+            text = str(body.get("text") or "").strip()
+        except (ValueError, AttributeError):
+            return _err("ожидается JSON {\"text\": ...}", 400)
+        if not text:
+            return _err("пусто — нечего разбирать", 422)
+        if not cfg.anthropic_key:
+            return _err("разбор Claude не настроен: нет ключа в dela.env", 422)
+        defaults = {}
+        for k in ("project_id", "person_id"):
+            v = body.get(k)
+            if v:
+                try:
+                    defaults[k] = str(uuid.UUID(str(v)))
+                except ValueError:
+                    return _err(f"{k} — не uuid", 400)
+        now = time.monotonic()
+        for k in [k for k, j in jobs.items() if now - j["at"] > JOB_TTL and j["status"] != "run"]:
+            del jobs[k]
+        if not slots:
+            slots.append(anyio.CapacityLimiter(2))
+        jid = secrets.token_urlsafe(12)
+        job = jobs[jid] = {"user": who.user, "status": "run", "at": now}
+        job["task"] = asyncio.get_running_loop().create_task(run_parse(job, who, text, defaults))
+        return _json({"ok": True, "job": jid}, 202)
+
+    async def parse_poll(request: Request):
+        who = await auth(request)
+        if not who:
+            return _err("нужен вход", 401)
+        job = jobs.get(request.path_params["job"])
+        if not job or job["user"] != who.user:
+            return _err("нет такого разбора", 404)
+        if job["status"] == "run":
+            return _json({"ok": True, "status": "run"})
+        if job["status"] == "error":
+            return _json({"ok": False, "status": "error", "error": job["error"]})
+        return _json({"ok": True, "status": "done", **job["result"]})
+
     async def task(request: Request):
         who = await auth(request)
         if not who:
@@ -190,6 +264,8 @@ def build(cfg: Config) -> Starlette:
         Route("/api/ops", ops, methods=["POST"]),
         Route("/api/view/{name}", view),
         Route("/api/task/{ref}", task),
+        Route("/api/parse", parse_start, methods=["POST"]),
+        Route("/api/parse/{job}", parse_poll),
     ])
 
 

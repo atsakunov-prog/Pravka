@@ -12,7 +12,8 @@ Todoist и Notion CRM целиком. Спецификация и причины
 | `sql/life_dela.sql` | виды для Claude в `life`: только видимое владельцу |
 | `db.py` | миграции `dela_NNNN.sql` (общая `core.migrations`), права роли службы, сессия с `dela.user` / `dela.actor` / `dela.via` |
 | `store.py` | вся логика: операции с `op_id`, синк, виды. Один код для API, MCP и импорта |
-| `api.py` | HTTP API службы (Starlette): `/api/sync`, `/api/ops`, `/api/view/<имя>`, `/api/task/<ref>` |
+| `api.py` | HTTP API службы (Starlette): `/api/sync`, `/api/ops`, `/api/view/<имя>`, `/api/task/<ref>`, `/api/parse` |
+| `parse.py` | разбор текста в дела Claude (кнопка рядом с «+» в вебе): промпт = `TASKS_DELA` телефона, справочник — только видимое человеку |
 | `tokens.py` | токены устройств и служб, в базе — sha256 |
 | `mcp_tools.py` | инструменты Claude (`dela_*`), регистрирует архив в `pravka_archive/app.py`, если задан `DELA_DB_URL` |
 | `importer.py` | перенос из Todoist, Notion и ленты; решения владельца — в его локальном файле, не здесь |

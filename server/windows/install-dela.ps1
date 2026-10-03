@@ -9,7 +9,8 @@
   По шагам (повтор безвреден):
     1. код: git pull ветки pravka и переустановка архива (update.ps1);
     2. роль базы dela_app: своя, без доступа к life и core;
-    3. секреты C:\ProgramData\ZF-Dela\secrets\dela.env (пароль роли, адреса);
+    3. секреты C:\ProgramData\ZF-Dela\secrets\dela.env (пароль роли, адреса,
+       ключ Claude для разбора текста — берётся у встреч);
        адрес базы Дел — ещё и в server.env архива: так у Claude в коннекторе
        «Правка» появляются инструменты дел;
     4. схемы crm и tasks (migrate ролью владельца базы);
@@ -46,6 +47,7 @@ $PgPass   = Join-Path $Root 'secrets\postgres.txt'
 $Data     = 'C:\ProgramData\ZF-Dela'
 $Secrets  = Join-Path $Data 'secrets'
 $DelaEnv  = Join-Path $Secrets 'dela.env'
+$MeetKey  = 'D:\Meetings\secrets\anthropic.env'
 $Logs     = 'C:\Bot\ZFbot\logs\dela'
 $Nssm     = 'C:\Bot\ZFbot\nssm\nssm.exe'
 $Owner    = 'alex'
@@ -166,6 +168,12 @@ with psycopg.connect(dsn, autocommit=True) as c:
     Set-EnvLine $DelaEnv 'DELA_DATA' $Data
     Set-EnvLine $OwnerEnv 'DELA_DB_URL' $url
     Ok "$DelaEnv (пароль роли — $($pw.Substring(0, 4))…); DELA_DB_URL дописан в server.env архива"
+    # Кнопка Claude в вебе (разбор текста в дела): ключ встреч, если своего ещё нет.
+    if (-not (Read-Env $DelaEnv)['ANTHROPIC_API_KEY']) {
+        $key = (Read-Env $MeetKey)['ANTHROPIC_API_KEY']
+        if ($key) { Set-EnvLine $DelaEnv 'ANTHROPIC_API_KEY' $key; Ok "ключ Claude взят у встреч ($($key.Substring(0, 4))…)" }
+        else { Warn "в $MeetKey нет ANTHROPIC_API_KEY — кнопка Claude в вебе работать не будет" }
+    } else { Ok 'ключ Claude уже есть' }
 
     Step '4/9 Схемы crm и tasks'
     Py 'migrate' @('-m', 'pravka_dela', '--env', $DelaEnv, 'migrate', '--owner-env', $OwnerEnv)

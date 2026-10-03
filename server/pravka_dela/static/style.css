@@ -18,6 +18,7 @@
   --bad: #e5604f;
   --paid: #3fb27f;
   --potential: #b48cff;
+  --claude: #d97757;
   --radius: 10px;
   --side-w: 264px;
   --card-w: 440px;
@@ -39,6 +40,7 @@
     --accent-ink: #ffffff;
     --paid: #1f8a5b;
     --potential: #7a4fd6;
+    --claude: #c15f3c;
     color-scheme: light;
   }
 }
@@ -116,15 +118,72 @@ section.card-pane { border-left: 1px solid var(--line); background: var(--panel)
 }
 .chip-btn.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 
-.quick { margin: 12px 0 2px; position: relative; }
-.quick input {
-  width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 9px 12px 9px 34px;
+/* ── Быстрый ввод: «+» слева, Claude справа, подсказки под полем ── */
+.quick { margin: 12px 0 2px; }
+.quick-wrap { position: relative; }
+.quick-box {
+  display: flex; align-items: flex-start; gap: 2px; padding: 3px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
 }
-.quick input:focus { outline: none; border-color: var(--accent); }
-.quick .plus { position: absolute; left: 12px; top: 8px; color: var(--accent); font-size: 17px; }
+.quick-box:focus-within { border-color: var(--accent); }
+.quick-box.busy { border-color: var(--claude); }
+.quick-box textarea {
+  flex: 1; min-width: 0; resize: none; border: 0; background: none; padding: 6px 4px; line-height: 1.45;
+  height: 32px; max-height: 320px; overflow-y: hidden; display: block;
+}
+.quick-box textarea:focus { outline: none; }
+.quick-box textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--faint); }
+.quick-box textarea:disabled { color: var(--muted); }
+.q-btn {
+  flex: none; width: 32px; height: 32px; border: 0; border-radius: 7px; background: none;
+  display: grid; place-items: center; color: var(--accent); font-size: 20px; line-height: 1;
+}
+.q-btn:hover:not(:disabled) { background: var(--hover); }
+.q-btn:disabled { cursor: default; opacity: .55; }
+.q-btn.claude-btn { color: var(--claude); }
+.q-btn.claude-btn.busy { opacity: 1; }
+.claude-btn.busy .claude-ico { animation: dela-spin 1.6s linear infinite; }
+@keyframes dela-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .claude-btn.busy .claude-ico { animation: none; } }
+.claude-status { font-size: 12.5px; color: var(--claude); margin-top: 6px; }
 .quick .preview { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 12.5px; }
+.quick .preview:empty { display: none; }
 .quick .preview span { background: var(--accent-soft); color: var(--accent); border-radius: 6px; padding: 1px 8px; }
 .quick .help { font-size: 12px; color: var(--faint); margin-top: 4px; }
+
+.ac {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 26; max-height: 310px; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 28px rgba(0,0,0,.35); padding: 4px;
+}
+.ac-head { font-size: 11.5px; color: var(--faint); padding: 4px 10px 3px; }
+.ac button {
+  display: flex; align-items: baseline; gap: 12px; width: 100%; border: 0; background: none; text-align: left;
+  padding: 6px 10px; border-radius: 7px;
+}
+.ac button.on, .ac button:hover { background: var(--accent-soft); }
+.ac .ac-label { flex: none; }
+.ac .ac-hint { margin-left: auto; min-width: 0; color: var(--faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac .ac-empty { padding: 6px 10px; color: var(--faint); font-size: 13px; }
+
+/* ── Итог разбора Claude ── */
+.claude-result {
+  position: fixed; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom)); z-index: 35;
+  width: min(420px, calc(100% - 32px)); max-height: 60vh; overflow-y: auto; padding: 10px 12px 12px;
+  background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--claude); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.4);
+}
+.cr-head { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 6px; }
+.cr-head .claude-ico { color: var(--claude); flex: none; }
+.cr-head .icon-btn { margin-left: auto; }
+.cr-task { display: block; width: 100%; border: 0; background: none; text-align: left; padding: 6px 6px; border-radius: 7px; }
+.cr-task:hover { background: var(--hover); }
+.cr-meta { font-size: 12px; color: var(--muted); margin-top: 1px; }
+.cr-sub { font-size: 12px; color: var(--faint); margin: 8px 6px 2px; }
+.cr-note { font-size: 13px; padding: 3px 8px; margin: 3px 6px; border-left: 2px solid var(--line); }
+.cr-err { font-size: 12.5px; color: var(--bad); margin: 8px 6px 0; }
+.cr-acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+.cr-acts button { border: 1px solid var(--line); background: var(--panel-2); border-radius: 8px; padding: 5px 12px; }
+.cr-acts button:hover { background: var(--hover); }
 
 .body { padding: 8px 22px 120px; max-width: 980px; }
 .group { margin-top: 18px; }
