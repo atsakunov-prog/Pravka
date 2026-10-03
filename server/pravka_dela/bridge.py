@@ -128,3 +128,28 @@ def save_decisions(url: str, dec: dict) -> None:
             (Jsonb(slim),),
         )
 
+
+
+def export(token: str, client: httpx.Client | None = None) -> dict:
+    """Всё открытое в Todoist для переноса: проекты, задачи, метки и комментарии (API v1)."""
+    own = client is None
+    client = client or httpx.Client(timeout=30)
+    try:
+        data = fetch(token, client)
+        h = {"Authorization": f"Bearer {token}"}
+        r = client.get(f"{API}/labels", params={"limit": 200}, headers=h)
+        r.raise_for_status()
+        data["labels"] = [x["name"] for x in r.json().get("results", [])]
+        comments = []
+        for t in data["tasks"]:
+            if not t.get("note_count"):
+                continue
+            r = client.get(f"{API}/comments", params={"task_id": t["id"], "limit": 200}, headers=h)
+            r.raise_for_status()
+            comments += [{"id": c["id"], "task_id": t["id"], "content": c.get("content", ""), "posted_at": c.get("posted_at")}
+                         for c in r.json().get("results", [])]
+        data["comments"] = comments
+        return data
+    finally:
+        if own:
+            client.close()

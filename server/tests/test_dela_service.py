@@ -181,3 +181,31 @@ def test_todoist_bridge_takes_only_new(dela):
         t = c.execute("SELECT * FROM tasks.v_tasks WHERE id = %s", (tid,)).fetchone()
         assert (t["status"], t["project_id"], t["person_short"], t["ball"], t["money"]) == ("done", p, "Пётр", "waiting", "paid")
         assert c.execute("SELECT estimate_min, project_id FROM tasks.tasks WHERE title = 'Купить марки'").fetchone() == {"estimate_min": 10, "project_id": None}
+
+
+def test_todoist_api_export_feeds_import(tmp_path):
+    import httpx
+
+    from pravka_dela import bridge
+
+    def handler(request):
+        path = request.url.path.rsplit("/", 1)[-1]
+        if path == "comments":
+            return httpx.Response(200, json={"results": [{"id": "c1", "content": "созвонились", "posted_at": "2026-09-06T10:00:00Z"}]})
+        data = {
+            "projects": [{"id": "pi", "name": "Inbox", "inbox_project": True}, {"id": "p1", "name": "Альфа"}],
+            "tasks": [{"id": "a1", "content": "Коля: договор", "project_id": "p1", "labels": ["жду"], "priority": 4,
+                       "due": {"date": "2026-10-06", "is_recurring": False}, "note_count": 1, "added_at": "2026-09-01T10:00:00Z"}],
+            "labels": [{"name": "жду"}],
+        }[path]
+        return httpx.Response(200, json={"results": data, "next_cursor": None})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        data = bridge.export("t" * 40, client)
+    assert data["labels"] == ["жду"] and data["comments"][0]["task_id"] == "a1"
+    f = tmp_path / "api.json"
+    f.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    loaded = importer.load_todoist(f)
+    t = loaded["tasks"][0]
+    assert (t["priority"], t["due"], t["project"]) == ("p1", "2026-10-06", "p1")
+    assert loaded["projects"][0]["inbox"] and loaded["comments"][0]["content"] == "созвонились"

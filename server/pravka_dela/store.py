@@ -265,6 +265,7 @@ def op_suggestion_decide(conn, user, op):
     task = None
     if s["kind"] == "create":
         fields = {k: v for k, v in payload.items() if k in TASK_FIELDS}
+        fields.update(_names(conn, payload))
         fields.update(fix)
         fields.setdefault("source", _task_source(s["source"]))
         fields.setdefault("source_ref", s["source_ref"])
@@ -288,6 +289,25 @@ def op_suggestion_decide(conn, user, op):
         "result": Jsonb(jsonable({k: task[k] for k in TASK_FIELDS if task and k in task})),
     })
     return {"suggestion": row, "task": task}
+
+
+def _names(conn, payload: dict) -> dict:
+    """Имена из автоматики («Алфавит», «Дмитрий Шерстобитов») — в id по справочнику.
+
+    Встречи и юзербот не знают id: шлют project_name и person_name. Не нашлось
+    или проект не виден принимающему — поле остаётся пустым, человек поправит.
+    """
+    out: dict = {}
+    for key, col in (("project_name", "project_id"), ("person_name", "person_id")):
+        name = payload.get(key)
+        if not name or payload.get(col):
+            continue
+        r = conn.execute(f"SELECT {col} FROM crm.match_name(%s)", (name,)).fetchone()
+        if r and r[col]:
+            table = "crm.projects" if col == "project_id" else "crm.people"
+            if conn.execute(f"SELECT 1 FROM {table} WHERE id = %s", (r[col],)).fetchone():
+                out[col] = r[col]
+    return out
 
 
 def _task_source(s: str) -> str:

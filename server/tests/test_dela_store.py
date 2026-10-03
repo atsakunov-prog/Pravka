@@ -151,3 +151,20 @@ def test_expire_suggestions(dela, conn):
         "expires_at": "2020-01-01T00:00:00+03:00"}})[0]["suggestion"]
     assert store.expire_suggestions(dela) == 1
     assert conn.execute("SELECT status FROM tasks.suggestions WHERE id = %s", (s["id"],)).fetchone()[0] == "expired"
+
+
+def test_suggestion_names_resolve_on_accept(dela):
+    p = project(dela, "sasha", "Альфа Групп", aliases=["Альфа"])
+    with store.db.session(dela, "system", "t") as c:
+        c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Дмитрий Орлов', 'Орлов', 'sasha')")
+    s = ops(dela, "system", {"op": "suggestion.create", "suggestion": {
+        "for_user": "sasha", "kind": "create", "source": "meeting", "batch_ref": "meeting:9",
+        "payload": {"title": "Дмитрий Орлов: посмотреть презентацию", "ball": "waiting",
+                    "person_name": "Дмитрий Орлов", "project_name": "Альфа"}}})[0]["suggestion"]
+    t = ops(dela, "sasha", {"op": "suggestion.decide", "id": s["id"], "decision": "accept"})[0]["task"]
+    assert (t["project_id"], t["person_short"], t["ball"]) == (str(p), "Орлов", "waiting")
+    # Чужой проект по имени не подставится: Наташе он не виден.
+    s2 = ops(dela, "system", {"op": "suggestion.create", "suggestion": {
+        "for_user": "natasha", "kind": "create", "source": "bot", "payload": {"title": "x", "project_name": "Альфа"}}})[0]["suggestion"]
+    t2 = ops(dela, "natasha", {"op": "suggestion.decide", "id": s2["id"], "decision": "accept"})[0]["task"]
+    assert t2["project_id"] is None

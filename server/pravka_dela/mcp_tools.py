@@ -186,8 +186,8 @@ def view(url: str, name: str = "morning", sphere: str | None = None, person: str
             out.append(f"{b['title'] or 'Без пачки'}:")
             for s in b["items"]:
                 p = s["payload"] or {}
-                q = f" — «{s['quote'][:120]}»" if s.get("quote") else ""
-                out.append(f"  [{s['id'][:8]}] {s['kind']}: {p.get('title') or ''}{q}")
+                hint = " · ".join(x for x in (p.get("project_name"), p.get("person_name"), BALL.get(p.get("ball", "mine")), p.get("due_date")) if x)
+                out.append(f"  [{s['id'][:8]}] {s['kind']}: {p.get('title') or ''}" + (f" ({hint})" if hint else ""))
             out.append("")
         if not v["batches"]:
             out.append("Пусто.")

@@ -17,7 +17,12 @@
        SID restricted: писать может только в свои папки, C:\Bot ей закрыт,
        server.env архива она не видит;
     6. брандмауэр: порт 8102 только от роутера;
-    7. запуск, /health, самопроверка; перезапуск архива.
+    7. перенос из Todoist, Notion и ленты (если в -Import лежат выгрузки и
+       решения владельца; токен Todoist — по желанию: с ним перенос берёт и
+       комментарии, а мост забирает новые задачи до переезда телефона);
+    8. запуск, /health, самопроверка; перезапуск архива;
+    9. встречи: токен службы и мягкий перезапуск обработчика — задачи из
+       разборов поедут в «Новое»; плашка «Дела» на «Доме».
   Итог — в D:\PravkaArchive\logs\install-dela-<дата>.log.
 #>
 param(
@@ -26,6 +31,7 @@ param(
     [int]$Port = 8102,
     [string]$PublicUrl = 'https://dela.greenfieldnotes.com',
     [string]$PhoneUrl = 'https://dela.znakomiy.netcraze.pro:8443',
+    [string]$Import = 'C:\Bot\Dela\import',
     [switch]$NoUpdate
 )
 
@@ -92,7 +98,7 @@ function Py([string]$what, [string[]]$pyArgs) {
 }
 
 try {
-    Step '1/7 Код'
+    Step '1/9 Код'
     if (-not $NoUpdate) {
         & powershell -ExecutionPolicy Bypass -File (Join-Path $Server 'windows\update.ps1')
         if ($LASTEXITCODE -ne 0) { throw "update.ps1 — код $LASTEXITCODE" }
@@ -102,7 +108,7 @@ try {
     }
     Ok "код: $(git -C (Join-Path $Root 'repo') log --oneline -1)"
 
-    Step '2/7 Роль базы dela_app'
+    Step '2/9 Роль базы dela_app'
     New-Item -ItemType Directory -Force -Path $Secrets, $Logs | Out-Null
     $dela = Read-Env $DelaEnv
     $pw = $null
@@ -137,7 +143,7 @@ with psycopg.connect(dsn, autocommit=True) as c:
         Remove-Item Env:\DELA_SUPER_PW, Env:\DELA_APP_PW -ErrorAction SilentlyContinue
     }
 
-    Step '3/7 Секреты'
+    Step '3/9 Секреты'
     $url = "postgresql://dela_app:$pw@127.0.0.1:5432/pravka"
     Set-EnvLine $DelaEnv 'DELA_DB_URL' $url
     Set-EnvLine $DelaEnv 'DELA_LISTEN' "0.0.0.0:$Port"
@@ -148,10 +154,36 @@ with psycopg.connect(dsn, autocommit=True) as c:
     Set-EnvLine $OwnerEnv 'DELA_DB_URL' $url
     Ok "$DelaEnv (пароль роли — $($pw.Substring(0, 4))…); DELA_DB_URL дописан в server.env архива"
 
-    Step '4/7 Схемы crm и tasks'
+    Step '4/9 Схемы crm и tasks'
     Py 'migrate' @('-m', 'pravka_dela', '--env', $DelaEnv, 'migrate', '--owner-env', $OwnerEnv)
 
-    Step '5/7 Служба ZF-Dela'
+    Step '5/9 Перенос из Todoist, Notion и ленты'
+    $decisions = Join-Path $Import 'decisions.json'
+    if (Test-Path -LiteralPath $decisions) {
+        $dela = Read-Env $DelaEnv
+        if (-not $dela['DELA_TODOIST_TOKEN']) {
+            Write-Host '   Токен Todoist (Todoist → Настройки → Интеграции → Разработчик → API-токен).'
+            Write-Host '   С ним перенос возьмёт и комментарии, а новые задачи с телефона будут доезжать в Дела до переезда Правки.'
+            Write-Host '   Просто Enter — перенести по снимку без комментариев, моста не будет (можно запустить скрипт ещё раз).'
+            $sec = Read-Host '   Токен' -AsSecureString
+            $tok = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)).Trim()
+            if ($tok) { Set-EnvLine $DelaEnv 'DELA_TODOIST_TOKEN' $tok; Ok "токен Todoist записан ($($tok.Substring(0, 4))…)" }
+        }
+        $source = Join-Path $Import 'todoist-snapshot.json'
+        if ((Read-Env $DelaEnv)['DELA_TODOIST_TOKEN']) {
+            $api = Join-Path $Import 'todoist-api.json'
+            Py 'выгрузка Todoist' @('-m', 'pravka_dela', '--env', $DelaEnv, 'export-todoist', '--out', $api)
+            $source = $api
+        }
+        Py 'перенос' @('-m', 'pravka_dela', '--env', $DelaEnv, 'import', '--apply', '--todoist', $source,
+            '--notion', $Import, '--clients', (Join-Path $Import 'ledger-clients.json'), '--plan', $decisions,
+            '--report', (Join-Path $Import 'report-apply.md'))
+        Ok "отчёт переноса — $(Join-Path $Import 'report-apply.md')"
+    } else {
+        Warn "в $Import нет decisions.json — перенос пропущен"
+    }
+
+    Step '6/9 Служба ZF-Dela'
     $svcObj = Get-Service -Name $Svc -ErrorAction SilentlyContinue
     if ($svcObj -and $svcObj.Status -ne 'Stopped') {
         & $Nssm stop $Svc | Out-Null
@@ -192,13 +224,13 @@ with psycopg.connect(dsn, autocommit=True) as c:
     }
     Ok "$Svc — учётка $((Get-CimInstance Win32_Service -Filter "Name='$Svc'").StartName)"
 
-    Step '6/7 Брандмауэр'
+    Step '7/9 Брандмауэр'
     Get-NetFirewallRule -DisplayName $Rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
     New-NetFirewallRule -DisplayName $Rule -Direction Inbound -Action Allow -Protocol TCP `
         -LocalPort $Port -RemoteAddress '192.168.1.1' -Program $Python -Profile Any | Out-Null
     Ok "порт $Port — только от роутера 192.168.1.1"
 
-    Step '7/7 Запуск и проверка'
+    Step '8/9 Запуск и проверка'
     & $Nssm start $Svc | Out-Null
     $up = $false
     $deadline = (Get-Date).AddSeconds(40)
@@ -218,6 +250,35 @@ with psycopg.connect(dsn, autocommit=True) as c:
     Start-Sleep -Seconds 8  # служба архива замечает уход сторожа за 5 с и освобождает порт
     Start-ScheduledTask -TaskName 'Pravka Archive'
     Ok 'архив перезапущен: в коннекторе «Правка» появятся инструменты дел (dela_*)'
+
+    Step '9/9 Встречи и «Дом»'
+    $meetEnv = 'D:\Meetings\secrets\dela.env'
+    if ((Test-Path 'D:\Meetings\secrets') -and -not (Read-Env $meetEnv)['DELA_TOKEN']) {
+        $tmpTok = Join-Path $env:TEMP 'dela-meetings.tok'
+        Py 'токен встреч' @('-m', 'pravka_dela', '--env', $DelaEnv, 'token', '--user', 'sasha', '--kind', 'service', '--name', 'meetings', '--out', $tmpTok)
+        Set-EnvLine $meetEnv 'DELA_URL' "http://127.0.0.1:$Port"
+        Set-EnvLine $meetEnv 'DELA_TOKEN' ((Get-Content -LiteralPath $tmpTok -Raw).Trim())
+        Set-EnvLine $meetEnv 'DELA_SINCE' (Get-Date -Format 'yyyy-MM-dd')
+        Remove-Item -LiteralPath $tmpTok -Force
+        Ok 'встречи получили токен: задачи свежих разборов поедут в «Новое»'
+    }
+    # Обработчик встреч перезапускается мягко: дорабатывает текущее задание (как кнопка в вебе).
+    $restart = @'
+import json, sqlite3, time, datetime
+c = sqlite3.connect(r"D:\Meetings\db\meetings.db", timeout=30)
+c.execute("INSERT INTO kv(key, value, updated_at) VALUES('restart:worker', ?, ?) "
+          "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+          (json.dumps({"ts": time.time()}), datetime.datetime.now(datetime.timezone.utc).isoformat()))
+c.commit()
+print("обработчик встреч перезапустится, когда допишет текущее")
+'@
+    $tmp = Join-Path $env:TEMP 'dela-meetings-restart.py'
+    [IO.File]::WriteAllText($tmp, $restart, (New-Object Text.UTF8Encoding($false)))
+    try { Py 'перезапуск встреч' @($tmp) } finally { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue }
+    if (Get-Service -Name 'ZF-Home-Collector' -ErrorAction SilentlyContinue) {
+        & $Nssm restart ZF-Home-Collector | Out-Null
+        Ok 'сборщик «Дома» перезапущен: плашка «Дела»'
+    }
 
     Write-Host ''
     Write-Host 'ГОТОВО.' -ForegroundColor Green

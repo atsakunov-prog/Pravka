@@ -8,6 +8,7 @@
   pair     QR для телефона: адрес и новый токен устройства
   revoke   отозвать токены по имени
   import   перенос из Todoist, Notion и ленты (сухой прогон по умолчанию)
+  export-todoist  выгрузка Todoist по API (с комментариями) для переноса
 """
 
 from __future__ import annotations
@@ -180,6 +181,20 @@ def cmd_import(args) -> int:
     return importer.run(cfg, args)
 
 
+def cmd_export_todoist(args) -> int:
+    """Выгрузка Todoist по API в файл — для переноса с комментариями. Токен — из dela.env."""
+    from . import bridge
+
+    cfg = config_mod.load(args.env)
+    if not cfg.todoist_token:
+        print("DELA_TODOIST_TOKEN в dela.env пуст — выгружать нечем")
+        return 1
+    data = bridge.export(cfg.todoist_token)
+    Path(args.out).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"Todoist: проектов {len(data['projects'])}, задач {len(data['tasks'])}, комментариев {len(data['comments'])} — {args.out}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="pravka_dela", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--env", help=f"файл секретов Дел (с завода {config_mod.DEFAULT_ENV_FILE})")
@@ -225,6 +240,10 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("--apply", action="store_true", help="записать в базу (без него — только отчёт)")
     i.add_argument("--report", help="куда положить отчёт (Markdown)")
     i.set_defaults(fn=cmd_import)
+
+    e = sub.add_parser("export-todoist")
+    e.add_argument("--out", required=True)
+    e.set_defaults(fn=cmd_export_todoist)
 
     args = ap.parse_args(argv)
     return args.fn(args)
