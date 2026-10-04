@@ -330,8 +330,15 @@ class AppState(private val app: SlushalkaApp) {
      * оно есть: метка в папке писалась в день скачивания, а сервер мог с тех
      * пор переложить файлы. Без оглавления - как в метке.
      */
-    private fun withServerAudio(book: Book): Book {
-        if (!book.streams || !book.onPhone) return book
+    /**
+     * Своя копия книги со звуком на сервере - звук оттуда потоком: и у взятой
+     * «только текстом» (метка звука), и у копии вовсе без звука, если звук на
+     * сервере появился позже - озвучили нейросетью ночью или пришла живая
+     * запись. Иначе заказал озвучку из карточки своей книги, а утром она всё
+     * так же открывается одной читалкой. Свой звук на телефоне главнее.
+     */
+    fun withServerAudio(book: Book): Book {
+        if (!book.onPhone || (book.hasAudio && !book.streams)) return book
         val index = app.server.index.value ?: return book
         val sb = index.byFolder(book.folderName) ?: return book
         val files = ru.zf.slushalka.data.ServerLibrary.toBook(index, sb, "", "").files

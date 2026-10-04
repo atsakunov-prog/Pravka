@@ -55,6 +55,8 @@ class SlushalkaApp : Application() {
     lateinit var guide: GuideEngine; private set
     /** Разбор книги сервером: лист «Разбор», «что было раньше», заказ. */
     lateinit var razbor: ru.zf.slushalka.ask.RazborEngine; private set
+    /** Озвучка книги нейросетью на сервере: заказ, статус, пометка «озвучено нейросетью». */
+    lateinit var nightVoice: ru.zf.slushalka.data.NightVoice; private set
     /** «Книга за 15 минут» - короткая запись с сервера мимо плеера книги. */
     lateinit var clip: ru.zf.slushalka.player.ClipPlayer; private set
     lateinit var search: ru.zf.slushalka.ask.MeaningSearch; private set
@@ -91,6 +93,7 @@ class SlushalkaApp : Application() {
             b.remoteDir.ifBlank { null } ?: server.index.value?.let { idx -> idx.byFolder(b.folderName)?.let(idx::dirOf) }
         }
         markup = Markup(bookDir)
+        nightVoice = ru.zf.slushalka.data.NightVoice(settings, bookDir, server)
         updater = Updater(this, settings)
         speaker = Speaker(this)
         recognizer = ChunkRecognizer(this)

@@ -82,6 +82,9 @@ class ServerLibrary(
             }
 
         val textBytes: Long get() = mainText?.size ?: 0L
+
+        /** Озвучена нейросетью на сервере: в папке лежит [MACHINE_MARK] (см. NightVoice). */
+        val machineVoiced: Boolean get() = other.any { it.path == MACHINE_MARK }
     }
 
     data class Index(
@@ -232,6 +235,13 @@ class ServerLibrary(
          * книгу и без сети.
          */
         const val MARKER = "слушалка-звук.json"
+
+        /**
+         * Признак машинной озвучки в папке книги: его кладёт служба озвучки
+         * сервера вместе с главами и убирает, когда приходит живая запись.
+         * Содержимое приложению не нужно - хватает самого факта.
+         */
+        const val MACHINE_MARK = "озвучка.json"
 
         fun folderKey(folder: String): String = folder.trim().lowercase()
 

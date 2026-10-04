@@ -187,7 +187,10 @@ class MainActivity : ComponentActivity() {
         fun afterReader(): Screen = if (current?.hasAudio == false) Screen.LIBRARY else Screen.PLAYER
 
         // Книга со звуком открывается плеером, книга из каталога - сразу читалкой.
-        val openBook: (Book) -> Unit = { book ->
+        val openBook: (Book) -> Unit = { picked ->
+            // Звук мог появиться на сервере уже после того, как книгу взяли
+            // текстом: тогда она открывается плеером, а не читалкой.
+            val book = state.withServerAudio(picked)
             state.open(book)
             if (book.hasAudio) {
                 startPlayback()
@@ -208,7 +211,7 @@ class MainActivity : ComponentActivity() {
             // Последняя книга могла быть и с сервера, не с полки.
             val last = state.bookById(app.positions.lastBook()) ?: return@LaunchedEffect
             if (current?.id == last.id) {
-                screen = if (last.hasAudio) Screen.PLAYER else Screen.READER
+                screen = if (current?.hasAudio == true) Screen.PLAYER else Screen.READER
             } else {
                 openBook(last)
             }

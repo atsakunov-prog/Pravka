@@ -85,6 +85,7 @@ fun PlayerScreen(
     val bookText by state.text.collectAsState()
     val recapRequest by state.recapRequest.collectAsState()
     val razbors by app.razbor.states.collectAsState()
+    val serverIndex by app.server.index.collectAsState()
     val razborRequest by state.razborRequest.collectAsState()
     val scope = rememberCoroutineScope()
 
@@ -183,6 +184,15 @@ fun PlayerScreen(
                         Text(
                             b.author,
                             style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    // Машинный голос - так и сказано, мелко: живая запись и
+                    // нейросеть звучат по-разному, и слушатель вправе знать.
+                    if (serverIndex?.byFolder(b.folderName)?.machineVoiced == true) {
+                        Text(
+                            "озвучено нейросетью",
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }

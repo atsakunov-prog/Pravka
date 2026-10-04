@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.dp
 import ru.zf.slushalka.SlushalkaApp
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import ru.zf.slushalka.data.NightVoice
 import ru.zf.slushalka.data.ServerLibrary
 import ru.zf.slushalka.data.Settings
 import ru.zf.slushalka.library.Book
@@ -218,9 +219,10 @@ fun LibraryScreen(
         val text = book.hasText || server?.hasText == true
         val audio = book.hasAudio || server?.hasAudio == true
         val span = (book.totalMs.takeIf { it > 0 } ?: server?.totalMs ?: 0L).takeIf { audio && it > 0 }
+        val machine = audio && app.nightVoice.isMachine(book)
         return when {
-            text && audio -> "текст + аудио"
-            audio -> "только аудио"
+            text && audio -> if (machine) "текст + аудио нейросети" else "текст + аудио"
+            audio -> if (machine) "аудио нейросети" else "только аудио"
             else -> "только текст"
         } + (span?.let { " · " + formatSpan(it) } ?: "")
     }
@@ -573,6 +575,8 @@ fun LibraryScreen(
             onOpen = { menuFor = null; onOpen(book) },
             onRemind = { menuFor = null; remind(book) },
             onRazbor = razborOf(book)?.let { go -> { menuFor = null; go() } },
+            machine = app.nightVoice.isMachine(book),
+            voice = if (app.nightVoice.canOrder(book)) { { VoiceOrderBlock(app, book) } } else null,
             onTalk = { menuFor = null; onTalk(book) },
             // Уже лежит на сервере - выгружать незачем: в корне сервер принял бы
             // её за новую и отправил в «_Исходники».
@@ -598,6 +602,7 @@ fun LibraryScreen(
             onOpen = entry.local?.let { local -> { serverMenu = null; onOpen(local) } },
             // Своя копия - её и открыть; нет - книга сервера, как «Слушать с сервера».
             onRazbor = razborOf(entry.local ?: entry.server)?.let { go -> { serverMenu = null; go() } },
+            voice = if (app.nightVoice.canOrder(entry.shown)) { { VoiceOrderBlock(app, entry.shown) } } else null,
             // Не скачивая: текст - во временный кэш, звук - потоком.
             onStream = if (entry.local == null) { { serverMenu = null; onOpen(entry.server) } } else null,
             onDownload = if (sb != null && idx != null && entry.where != Where.PHONE) {
@@ -1455,6 +1460,10 @@ private fun BookMenu(
     onRemind: () -> Unit,
     /** Открыть разбор сервера; null - разбора у книги нет. */
     onRazbor: (() -> Unit)?,
+    /** Звук книги - машинная озвучка сервера. */
+    machine: Boolean,
+    /** «Озвучить нейросетью» и статус заказа; null - книге озвучка не положена. */
+    voice: (@Composable () -> Unit)?,
     onTalk: () -> Unit,
     /** Выгрузить в облако; null - облако не настроено или книга там уже есть. */
     onUpload: (() -> Unit)?,
@@ -1475,7 +1484,8 @@ private fun BookMenu(
                         progress.done -> "Пройдена до конца."
                         progress.started -> "Пройдено ${(progress.share * 100).toInt()}%."
                         else -> "Ещё не начата."
-                    } + (place?.let { " ${it.replaceFirstChar(Char::uppercase)}." } ?: ""),
+                    } + (place?.let { " ${it.replaceFirstChar(Char::uppercase)}." } ?: "") +
+                        (if (machine) " Озвучено нейросетью." else ""),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1493,6 +1503,7 @@ private fun BookMenu(
                     Spacer(Modifier.height(6.dp))
                     RazborButton(onRazbor)
                 }
+                voice?.invoke()
                 if (book.hasText && (progress.done || progress.started)) {
                     Spacer(Modifier.height(6.dp))
                     FilledTonalButton(onClick = onTalk, modifier = Modifier.fillMaxWidth()) {
@@ -1537,6 +1548,8 @@ private fun ServerBookMenu(
     onOpen: (() -> Unit)?,
     /** Открыть разбор сервера; null - разбора у книги нет. */
     onRazbor: (() -> Unit)?,
+    /** «Озвучить нейросетью» и статус заказа; null - книге озвучка не положена. */
+    voice: (@Composable () -> Unit)?,
     /** Слушать и читать прямо с сервера; null - книга и так на телефоне. */
     onStream: (() -> Unit)?,
     onDownload: (() -> Unit)?,
@@ -1560,6 +1573,7 @@ private fun ServerBookMenu(
                     }
                     server?.mainText?.let { add("текст ${it.name.substringAfterLast('.', "").lowercase()} · ${formatBytes(it.size)}") }
                     if (server != null && server.audio.isEmpty()) add("без записи")
+                    if (server?.machineVoiced == true && server.audio.isNotEmpty()) add("озвучено нейросетью")
                 }
                 if (facts.isNotEmpty()) {
                     Text(
@@ -1625,6 +1639,7 @@ private fun ServerBookMenu(
                     Spacer(Modifier.height(6.dp))
                     RazborButton(onRazbor)
                 }
+                voice?.invoke()
                 if (onDelete != null) {
                     TextButton(onClick = onDelete, modifier = Modifier.fillMaxWidth()) {
                         Text("Удалить с телефона", color = MaterialTheme.colorScheme.error)
@@ -1646,6 +1661,125 @@ private fun RazborButton(onClick: () -> Unit) {
         Icon(Glyphs.Lightbulb, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(6.dp))
         Text("Разбор книги")
+    }
+}
+
+/**
+ * «Озвучить нейросетью» в карточке книги без звука. Пока сервер ведёт заказ -
+ * вместо кнопки его статус (раз в минуту, пока карточка открыта). Новый заказ
+ * - в два нажатия: первое читает текст и показывает прикидку (часы звука,
+ * ночи, цена правки), второе заказывает. «Повторить» после ошибки и заказ
+ * поверх замолчавшего - сразу: прикидку уже видели, сервер продолжит с того
+ * же куска.
+ */
+@Composable
+private fun VoiceOrderBlock(app: SlushalkaApp, book: Book) {
+    val orders by app.nightVoice.orders.collectAsState()
+    val order = orders[ServerLibrary.folderKey(book.folderName)]
+    val scope = rememberCoroutineScope()
+    var estimate by remember(book.id) {
+        mutableStateOf(app.texts.cached(book.id)?.let { NightVoice.estimate(it.length) })
+    }
+    var noEstimate by remember(book.id) { mutableStateOf(false) }
+    var preparing by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(book.id) {
+        var o = app.nightVoice.orderOf(book)
+        while (o?.alive == true) {
+            kotlinx.coroutines.delay(60_000)
+            o = app.nightVoice.orderOf(book)
+        }
+        // Готово, а в оглавлении глав ещё нет - взять свежее: книга станет аудиокнигой.
+        if (o?.doneOk == true) app.scope.launch { app.server.refresh() }
+    }
+    fun place() {
+        busy = true
+        error = null
+        scope.launch {
+            app.nightVoice.order(book).onFailure { error = it.message ?: "Не вышло заказать" }
+            busy = false
+        }
+    }
+    val dim = MaterialTheme.colorScheme.onSurfaceVariant
+    Spacer(Modifier.height(6.dp))
+    val o = order
+    when {
+        o != null && o.alive -> Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Glyphs.RecordVoiceOver, contentDescription = null, modifier = Modifier.size(18.dp), tint = dim)
+            Spacer(Modifier.width(8.dp))
+            Column {
+                Text(o.line, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Нейросетью на сервере · заказал ${o.who}" +
+                        (if (o.hours > 0) " · ≈ ${String.format(java.util.Locale.forLanguageTag("ru"), "%.1f", o.hours)} ч звука" else ""),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = dim,
+                )
+            }
+        }
+        o != null && o.doneOk -> Text(
+            "Озвучено нейросетью - главы появятся в библиотеке через минуту.",
+            style = MaterialTheme.typography.bodySmall,
+            color = dim,
+        )
+        else -> {
+            if (o?.failed == true) {
+                Text(o.line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            if (o?.silent == true) {
+                Text(
+                    "Заказ озвучки от ${formatDate(o.at)} молчит дольше шести часов. Можно заказать заново - " +
+                        "сервер продолжит с того же места.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = dim,
+                )
+            }
+            val again = o?.failed == true || o?.silent == true
+            val est = estimate
+            FilledTonalButton(
+                onClick = {
+                    when {
+                        again || est != null || noEstimate -> place()
+                        else -> {
+                            preparing = true
+                            scope.launch {
+                                val tree = app.state.treeOf(book)
+                                val text = tree?.let { runCatching { app.texts.textFor(it, book) }.getOrNull() }
+                                if (text != null) estimate = NightVoice.estimate(text.length) else noEstimate = true
+                                preparing = false
+                            }
+                        }
+                    }
+                },
+                enabled = !busy && !preparing,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Glyphs.RecordVoiceOver, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    when {
+                        preparing -> "Читаю текст для прикидки…"
+                        busy -> "Кладу заказ…"
+                        o?.failed == true -> "Повторить озвучку"
+                        o?.silent == true -> "Заказать озвучку заново"
+                        est != null -> "Заказать озвучку · ≈ " +
+                            String.format(java.util.Locale.forLanguageTag("ru"), "%.1f", est.usd) + " $"
+                        noEstimate -> "Заказать озвучку"
+                        else -> "Озвучить нейросетью"
+                    },
+                )
+            }
+            when {
+                est != null && !again -> Text(est.caption, style = MaterialTheme.typography.bodySmall, color = dim)
+                noEstimate && !again -> Text(
+                    "Прикинуть не вышло - текст не прочитался. Сервер озвучит и так: ночью, сам.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = dim,
+                )
+            }
+            error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+        }
     }
 }
 
