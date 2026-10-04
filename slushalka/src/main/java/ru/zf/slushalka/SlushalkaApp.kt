@@ -53,6 +53,10 @@ class SlushalkaApp : Application() {
     lateinit var streaming: ru.zf.slushalka.player.Streaming; private set
     lateinit var ask: AskEngine; private set
     lateinit var guide: GuideEngine; private set
+    /** Разбор книги сервером: лист «Разбор», «что было раньше», заказ. */
+    lateinit var razbor: ru.zf.slushalka.ask.RazborEngine; private set
+    /** «Книга за 15 минут» - короткая запись с сервера мимо плеера книги. */
+    lateinit var clip: ru.zf.slushalka.player.ClipPlayer; private set
     lateinit var search: ru.zf.slushalka.ask.MeaningSearch; private set
     lateinit var talk: ru.zf.slushalka.ask.BookTalk; private set
     lateinit var speaker: Speaker; private set
@@ -93,10 +97,12 @@ class SlushalkaApp : Application() {
         val claude = ClaudeClient(settings)
         ask = AskEngine(settings, claude, askLog)
         guide = GuideEngine(this, settings, claude, GuideStore(this), askLog, bookDir)
+        razbor = ru.zf.slushalka.ask.RazborEngine(settings, ru.zf.slushalka.data.RazborStore(this), bookDir, guide)
         advisor = Advisor(this, claude)
         search = ru.zf.slushalka.ask.MeaningSearch(claude, settings, askLog)
         talk = ru.zf.slushalka.ask.BookTalk(claude, settings, askLog)
         streaming = ru.zf.slushalka.player.Streaming(this, settings, cloud)
+        clip = ru.zf.slushalka.player.ClipPlayer(this, streaming, cloud, scope)
         player = PlayerHolder(this, settings, positions, journal, streaming) { bookId ->
             scope.launch { state.syncPush(bookId) }
         }

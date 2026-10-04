@@ -17,6 +17,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -152,6 +154,8 @@ fun ReaderScreen(
     val speech by app.readAloud.state.collectAsState()
     val recapOffer by state.recapOffer.collectAsState()
     val recapRequest by state.recapRequest.collectAsState()
+    val razbors by app.razbor.states.collectAsState()
+    val razborRequest by state.razborRequest.collectAsState()
 
     var bars by remember { mutableStateOf(true) }
     var showRate by remember { mutableStateOf(false) }
@@ -159,6 +163,7 @@ fun ReaderScreen(
     var showRecap by remember { mutableStateOf(false) }
     var showChapters by remember { mutableStateOf(false) }
     var showGuide by remember { mutableStateOf(false) }
+    var showRazbor by remember { mutableStateOf(false) }
     var guideQuery by remember { mutableStateOf("") }
     // «Обвести и спросить»: режим включён из листа Claude, росчерк
     // превращается в диапазон знаков по раскладке текста (см. Lasso.kt).
@@ -503,6 +508,11 @@ fun ReaderScreen(
     LaunchedEffect(recapRequest, shownEnd) {
         if (shownEnd > 0 && state.takeRecapRequest(bk.id)) showRecap = true
     }
+    // «Разбор» с полки - так же, когда место встало и разбор прочитан.
+    val razbor = razbors[bk.id]
+    LaunchedEffect(razborRequest, razbor, shownEnd) {
+        if (shownEnd > 0 && razbor != null && state.takeRazborRequest(bk.id)) showRazbor = true
+    }
 
     LaunchedEffect(notice) {
         if (notice != null) {
@@ -837,6 +847,8 @@ fun ReaderScreen(
                                     guideQuery = ""
                                     showGuide = true
                                 }
+                                // Разбор есть не у каждой книги - и кнопка только у тех, где он есть.
+                                if (razbor != null) BarAction(Glyphs.Lightbulb, "Разбор", palette) { showRazbor = true }
                                 BarAction(Glyphs.EditNote, "Пометки", palette, badge = notes.size) { showNotes = true }
                             }
                             if (!bk.hasAudio) {
@@ -878,6 +890,10 @@ fun ReaderScreen(
         // Раньше это спрашивал только плеер, а книгу без записи - никто.
         if (recapOffer && !showRecap) {
             val drop = with(LocalDensity.current) { if (bars && selection == null) topBarPx.toDp() else 0.dp }
+            // Разбор сервера знает, что было до этой главы: это сразу и даром,
+            // а пересказ Claude остаётся «подробнее».
+            val chapterNo = t.chapterIndexAt(readPlace()) + 1
+            val before = razbor?.chapter(chapterNo)?.before?.takeIf { it.isNotBlank() }
             Box(
                 Modifier
                     .align(Alignment.TopCenter)
@@ -886,18 +902,53 @@ fun ReaderScreen(
                     .padding(horizontal = maxOf(card.side, BAR_INSET) + 12.dp),
             ) {
                 BarCard(palette, Modifier.padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 4.dp)) {
-                    Text(
-                        "Давно не открывал. Напомнить, на чём остановился?",
-                        color = palette.fg,
-                        fontSize = 13.sp,
-                    )
-                    Row {
-                        Spacer(Modifier.weight(1f))
-                        TextButton(onClick = { state.dismissRecap() }) { Text("Не надо", color = palette.dim) }
-                        TextButton(onClick = {
-                            state.dismissRecap()
-                            showRecap = true
-                        }) { Text("Напомни", color = palette.fg) }
+                    if (before != null) {
+                        var expanded by remember { mutableStateOf(false) }
+                        Text(
+                            "Что было раньше · до главы $chapterNo",
+                            color = palette.fg,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(end = 10.dp),
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            before,
+                            color = palette.fg,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            maxLines = if (expanded) Int.MAX_VALUE else 5,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .padding(end = 10.dp)
+                                .then(
+                                    if (expanded) Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())
+                                    else Modifier,
+                                )
+                                .clickable { expanded = !expanded },
+                        )
+                        Row {
+                            Spacer(Modifier.weight(1f))
+                            TextButton(onClick = {
+                                state.dismissRecap()
+                                showRecap = true
+                            }) { Text("Подробнее", color = palette.dim) }
+                            TextButton(onClick = { state.dismissRecap() }) { Text("Понятно", color = palette.fg) }
+                        }
+                    } else {
+                        Text(
+                            "Давно не открывал. Напомнить, на чём остановился?",
+                            color = palette.fg,
+                            fontSize = 13.sp,
+                        )
+                        Row {
+                            Spacer(Modifier.weight(1f))
+                            TextButton(onClick = { state.dismissRecap() }) { Text("Не надо", color = palette.dim) }
+                            TextButton(onClick = {
+                                state.dismissRecap()
+                                showRecap = true
+                            }) { Text("Напомни", color = palette.fg) }
+                        }
                     }
                 }
             }
@@ -945,6 +996,12 @@ fun ReaderScreen(
                 ClaudeAction(Glyphs.MenuBook, "Справочник", "Герои, места и словарь - по прочитанным главам") {
                     guideQuery = ""
                     showGuide = true
+                },
+            ) + listOfNotNull(
+                razbor?.let {
+                    ClaudeAction(Glyphs.Lightbulb, "Разбор", "От сервера: о книге, идеи, линзы, книга за 15 минут") {
+                        showRazbor = true
+                    }
                 },
             ),
             onClose = { showClaude = false },
@@ -1053,6 +1110,20 @@ fun ReaderScreen(
                 }
             },
             onClose = { showGuide = false },
+        )
+    }
+    if (showRazbor) {
+        RazborSheet(
+            app = app,
+            cutoffChar = readPlace(),
+            onGo = { at, exact ->
+                showRazbor = false
+                place = null
+                target = at
+                // Место найдено по цитате - фраза коротко подсвечивается, как у поиска.
+                if (exact) pendingHighlight = at
+            },
+            onClose = { showRazbor = false },
         )
     }
     if (showSearch) {

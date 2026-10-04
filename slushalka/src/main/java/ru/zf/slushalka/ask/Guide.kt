@@ -321,6 +321,13 @@ data class GuideState(
 ) {
     enum class Status { PENDING, READY, FAILED }
 
+    /**
+     * Справочник положил разбор сервера (`"by": "сервер: разбор книги"`):
+     * сервер читал книгу целиком, и такой справочник побеждает свой, если он
+     * новее (см. GuideEngine.sync).
+     */
+    val fromServer: Boolean get() = by.startsWith(SERVER_BY)
+
     fun toJson(): JSONObject = JSONObject()
         .put("status", status.name)
         .put("batch", batchId)
@@ -334,6 +341,9 @@ data class GuideState(
         .apply { guide?.let { put("guide", it.toJson()) } }
 
     companion object {
+        /** Начало подписи `by` у справочника, который положил разбор сервера. */
+        const val SERVER_BY = "сервер: разбор"
+
         fun fromJson(o: JSONObject): GuideState = GuideState(
             status = runCatching { Status.valueOf(o.optString("status")) }.getOrDefault(Status.FAILED),
             batchId = o.optString("batch"),

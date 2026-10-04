@@ -99,6 +99,8 @@ fun GuideSheet(
     var showAll by remember { mutableStateOf(false) }
     var open by remember { mutableStateOf<GuideEntry?>(null) }
     var openChapter by remember { mutableStateOf<GuideChapter?>(null) }
+    // Заказ разбора у сервера - страницей в том же листе, как статья.
+    var ordering by remember { mutableStateOf(false) }
     /** О чём спрашивают и какого оно вида: 0 герой, 1 место, 2 слово, 3 глава. */
     var askFor by remember { mutableStateOf<Pair<GuideEntry, Int>?>(null) }
     // Придуманные моделью вопросы про статью - на время листа, чтобы второе
@@ -137,6 +139,7 @@ fun GuideSheet(
     // Статья, глава и вопрос открываются в том же листе, а не диалогом
     // поверх него: стрелка назад возвращает к списку на том же месте.
     val detailTitle = when {
+        ordering -> "Разбор на сервере"
         askFor != null -> "Спросить про «${askFor!!.first.name}»"
         open != null -> open!!.name
         openChapter != null -> "Глава ${openChapter!!.chapter}" +
@@ -145,6 +148,7 @@ fun GuideSheet(
     }
     fun back() {
         when {
+            ordering -> ordering = false
             askFor != null -> askFor = null
             open != null -> open = null
             else -> openChapter = null
@@ -174,11 +178,38 @@ fun GuideSheet(
         }
         Spacer(Modifier.height(12.dp))
 
+        // Книга домашней библиотеки: её может разобрать сервер - справочник
+        // придёт вместе с разбором, и это лучше своего пакета (сервер читает
+        // книгу целиком и делает всё разом).
+        val server = app.razbor.canOrder(b)
+        if (ordering) {
+            if (ready) {
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) { RazborOrderPanel(app, b, t) }
+            } else {
+                RazborOrderPanel(app, b, t)
+            }
+            return@PaperSheet
+        }
+
         when (st?.status) {
             null -> {
+                val orders by app.razbor.orders.collectAsState()
+                if (server) {
+                    Text(
+                        "Справочника по этой книге ещё нет. Книга есть в домашней библиотеке - её может " +
+                            "разобрать сервер, и справочник придёт вместе с разбором.",
+                        style = bookBody(),
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    RazborOrderPanel(app, b, t)
+                    // Сервер уже считает - свой пакет был бы второй оплатой за то же.
+                    if (orders[b.id]?.waiting == true) return@PaperSheet
+                    PaperLabel("Или своим пакетом")
+                }
                 val est = remember(t, prefs.guideModel) { app.guide.estimate(t, prefs.guideModel) }
                 Text(
-                    "Справочника по этой книге ещё нет. ${Settings.modelLabel(prefs.guideModel)} прочтёт её " +
+                    (if (server) "" else "Справочника по этой книге ещё нет. ") +
+                        "${Settings.modelLabel(prefs.guideModel)} прочтёт её " +
                         "целиком - ${est.pages} стр." + (if (est.parts > 1) " в ${est.parts} частях" else "") +
                         " - и составит краткое содержание каждой главы и статьи о героях, местах и словах, " +
                         "каждую с привязкой к главе. Ты увидишь только то, что уже дочитал.",
@@ -212,7 +243,7 @@ fun GuideSheet(
                         else -> "Составить справочник · ≈ %.2f $".format(est.usd)
                     },
                     icon = Glyphs.AutoAwesome,
-                    primary = c == null,
+                    primary = c == null && !server,
                     enabled = !busy,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -261,7 +292,11 @@ fun GuideSheet(
                     )
                 }
                 Spacer(Modifier.height(12.dp))
-                PaperButton("Заказать заново", icon = Icons.Default.Refresh, primary = true) { app.guide.forget(b) }
+                PaperButton("Заказать заново", icon = Icons.Default.Refresh, primary = !server) { app.guide.forget(b) }
+                if (server) {
+                    PaperLabel("Или разбором на сервере")
+                    RazborOrderPanel(app, b, t)
+                }
             }
 
             GuideState.Status.READY -> {
@@ -357,7 +392,9 @@ fun GuideSheet(
                                     // Старый справочник: хронологии в нём нет вовсе, а не «пока пусто».
                                     tab == 4 && guide.events.isEmpty() ->
                                         "Этот справочник составлен до того, как в нём появилась хронология и " +
-                                            "связи героев. «Пересобрать» внизу закажет его заново - с ними."
+                                            "связи героев. " +
+                                            (if (server) "«Разобрать на сервере» внизу" else "«Пересобрать» внизу") +
+                                            " закажет его заново - с ними."
                                     query.isNotBlank() -> "Ничего похожего в дочитанных главах."
                                     readChapters == 0 -> "Откроется, когда дочитаешь первую главу."
                                     else -> "В дочитанных главах здесь пока пусто."
@@ -416,7 +453,10 @@ fun GuideSheet(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.weight(1f),
                             )
-                            MiniAction(Icons.Default.Refresh, "Пересобрать") { app.guide.forget(b) }
+                            // Книгу домашней библиотеки пересобирает сервер - разбором: так
+                            // выходит полный справочник, а заодно и разбор.
+                            if (server) MiniAction(Glyphs.Lightbulb, "Разобрать на сервере") { ordering = true }
+                            else MiniAction(Icons.Default.Refresh, "Пересобрать") { app.guide.forget(b) }
                         }
                         if (st.error.isNotBlank()) {
                             Text(

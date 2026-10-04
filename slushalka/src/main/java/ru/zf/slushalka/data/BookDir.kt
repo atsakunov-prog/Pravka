@@ -81,17 +81,18 @@ class BookDir(
         serverDir(book)?.let { dir -> cloud.delete("$dir/$name").isSuccess } ?: true
 
     suspend fun delete(book: Book, name: String): Boolean = withContext(Dispatchers.IO) {
-        var ok = true
-        if (book.onPhone) {
-            val tree = treeOf(book)
-            val docId = tree?.let { Saf.findChild(context, it, book.folderDocId, name) }
-            if (tree != null && docId != null) {
-                ok = runCatching {
-                    DocumentsContract.deleteDocument(context.contentResolver, documentUri(tree, docId))
-                }.getOrDefault(false)
-            }
-        }
+        var ok = deletePhone(book, name)
         serverDir(book)?.let { dir -> ok = cloud.delete("$dir/$name").isSuccess && ok }
         ok
+    }
+
+    /** Только копию на телефоне: подлинник на сервере нужен другим (справочник разбора сервера). */
+    suspend fun deletePhone(book: Book, name: String): Boolean = withContext(Dispatchers.IO) {
+        if (!book.onPhone) return@withContext true
+        val tree = treeOf(book) ?: return@withContext true
+        val docId = Saf.findChild(context, tree, book.folderDocId, name) ?: return@withContext true
+        runCatching {
+            DocumentsContract.deleteDocument(context.contentResolver, documentUri(tree, docId))
+        }.getOrDefault(false)
     }
 }

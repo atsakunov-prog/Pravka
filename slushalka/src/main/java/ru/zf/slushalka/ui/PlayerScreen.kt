@@ -22,6 +22,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -82,6 +84,8 @@ fun PlayerScreen(
     val markup by state.markupProgress.collectAsState()
     val bookText by state.text.collectAsState()
     val recapRequest by state.recapRequest.collectAsState()
+    val razbors by app.razbor.states.collectAsState()
+    val razborRequest by state.razborRequest.collectAsState()
     val scope = rememberCoroutineScope()
 
     var showChapters by remember { mutableStateOf(false) }
@@ -90,6 +94,7 @@ fun PlayerScreen(
     var showMarks by remember { mutableStateOf(false) }
     var showRecap by remember { mutableStateOf(false) }
     var showGuide by remember { mutableStateOf(false) }
+    var showRazbor by remember { mutableStateOf(false) }
     var showGallery by remember { mutableStateOf(false) }
     var fullPicture by remember { mutableStateOf<ShownPicture?>(null) }
 
@@ -98,6 +103,12 @@ fun PlayerScreen(
     LaunchedEffect(recapRequest, bookText, b?.id) {
         val id = b?.id ?: return@LaunchedEffect
         if (bookText != null && state.takeRecapRequest(id)) showRecap = true
+    }
+    // «Разбор» с полки - как только разбор прочитан (он ждёт текста книги).
+    val razbor = b?.let { razbors[it.id] }
+    LaunchedEffect(razborRequest, razbor, b?.id) {
+        val id = b?.id ?: return@LaunchedEffect
+        if (razbor != null && state.takeRazborRequest(id)) showRazbor = true
     }
     if (b == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Книга не выбрана") }
@@ -234,6 +245,7 @@ fun PlayerScreen(
                                 Text("Напомнить")
                             }
                             TextButton(onClick = { showGuide = true }) { Text("Справочник") }
+                            if (razbor != null) TextButton(onClick = { showRazbor = true }) { Text("Разбор") }
                             TextButton(onClick = onTalk) { Text("Поговорить о книге") }
                         }
                     }
@@ -336,17 +348,57 @@ fun PlayerScreen(
                             ),
                             modifier = Modifier.fillMaxWidth(),
                         ) {
+                            // Разбор сервера знает, что было до этой главы, - это
+                            // даром и сразу; пересказ Claude - «подробнее».
+                            val chapterNo = remember(bookText, alignment, play.absMs / 10_000) {
+                                val at = alignment?.charAt(play.absMs)
+                                if (at == null) 0 else (bookText?.chapterIndexAt(at) ?: -1) + 1
+                            }
+                            val before = razbor?.chapter(chapterNo)?.before?.takeIf { it.isNotBlank() }
                             Column(Modifier.padding(14.dp)) {
-                                Text(
-                                    "Возвращаешься после перерыва. Напомнить, чем кончилось?",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                )
-                                Row {
-                                    TextButton(onClick = {
-                                        showRecap = true
-                                        state.dismissRecap()
-                                    }) { Text("Напомни") }
-                                    TextButton(onClick = { state.dismissRecap() }) { Text("Не надо") }
+                                if (before != null) {
+                                    var expanded by remember { mutableStateOf(false) }
+                                    Row(
+                                        Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            "Что было раньше · до главы $chapterNo",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        Icon(
+                                            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                            contentDescription = if (expanded) "Свернуть" else "Раскрыть",
+                                        )
+                                    }
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        before,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = if (expanded) Int.MAX_VALUE else 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.clickable { expanded = !expanded },
+                                    )
+                                    Row {
+                                        TextButton(onClick = {
+                                            showRecap = true
+                                            state.dismissRecap()
+                                        }) { Text("Напомни подробнее") }
+                                        TextButton(onClick = { state.dismissRecap() }) { Text("Понятно") }
+                                    }
+                                } else {
+                                    Text(
+                                        "Возвращаешься после перерыва. Напомнить, чем кончилось?",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                    Row {
+                                        TextButton(onClick = {
+                                            showRecap = true
+                                            state.dismissRecap()
+                                        }) { Text("Напомни") }
+                                        TextButton(onClick = { state.dismissRecap() }) { Text("Не надо") }
+                                    }
                                 }
                             }
                         }
@@ -435,6 +487,18 @@ fun PlayerScreen(
             cutoffChar = cutoff,
             onAsk = { q -> showGuide = false; onAsk(null, q) },
             onClose = { showGuide = false },
+        )
+    }
+    if (showRazbor) {
+        // Барьер - тот же, что у справочника: по месту записи с запасом.
+        val margin = prefs.spoilerMarginSec * 1000L
+        val cutoff = alignment?.charAt((play.absMs - margin).coerceAtLeast(0L)) ?: 0
+        RazborSheet(
+            app = app,
+            cutoffChar = cutoff,
+            // К месту - как «Слушать отсюда»: запись встаёт туда по разметке.
+            onGo = { at, _ -> showRazbor = false; state.listenFrom(at) },
+            onClose = { showRazbor = false },
         )
     }
     if (showGallery) {

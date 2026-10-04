@@ -402,6 +402,18 @@ class AppState(private val app: SlushalkaApp) {
             _busy.value = null
             if (_current.value?.id != book.id) return@launch
             _text.value = t
+            // Разбор сервера - когда текст разобран: без текста не сверить, к
+            // нему ли он. Заказ ещё считается - движок последит за ним сам.
+            if (t != null) {
+                app.scope.launch {
+                    // Разбор не прочитался (нет сети и копии, другое издание) -
+                    // просьба с полки гаснет, а не стреляет при следующем открытии.
+                    if (app.razbor.sync(book, t) == null && _razborRequest.value == book.id) {
+                        _razborRequest.value = null
+                    }
+                    app.razbor.checkOrder(book, t)
+                }
+            }
             // Книге без записи карта «звук ↔ текст» не нужна: без неё читалка
             // открывается на сохранённой странице и ничего не сверяет по звуку.
             if (t != null && book.hasAudio) {
@@ -487,6 +499,21 @@ class AppState(private val app: SlushalkaApp) {
         if (_recapRequest.value != bookId) return false
         _recapRequest.value = null
         _recapOffer.value = false
+        return true
+    }
+
+    // Разбор, открытый с полки: книга открывается, и экран, на который она
+    // попала, показывает лист «Разбор», как только разбор прочитан.
+    private val _razborRequest = MutableStateFlow<String?>(null)
+    val razborRequest: StateFlow<String?> = _razborRequest
+
+    fun requestRazbor(bookId: String) {
+        _razborRequest.value = bookId
+    }
+
+    fun takeRazborRequest(bookId: String): Boolean {
+        if (_razborRequest.value != bookId) return false
+        _razborRequest.value = null
         return true
     }
 

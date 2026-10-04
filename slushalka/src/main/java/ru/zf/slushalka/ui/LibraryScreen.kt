@@ -132,6 +132,16 @@ fun LibraryScreen(
         state.requestRecap(book.id)
         onOpen(book)
     }
+    // Разбор - тем же порядком: книга открывается, и лист «Разбор» встаёт сам,
+    // когда разбор прочитан - ему нужен текст книги, чтобы ссылки вели к месту.
+    val razborOf: (Book) -> (() -> Unit)? = { book ->
+        if (book.hasText && app.razbor.known(book, index?.byFolder(book.folderName))) {
+            {
+                state.requestRazbor(book.id)
+                onOpen(book)
+            }
+        } else null
+    }
 
     // Телефон и сервер узнают одну книгу по имени папки, без учёта регистра.
     val localByFolder = remember(books) {
@@ -562,6 +572,7 @@ fun LibraryScreen(
             onSeries = { name -> menuFor = null; pickSeries(name) },
             onOpen = { menuFor = null; onOpen(book) },
             onRemind = { menuFor = null; remind(book) },
+            onRazbor = razborOf(book)?.let { go -> { menuFor = null; go() } },
             onTalk = { menuFor = null; onTalk(book) },
             // Уже лежит на сервере - выгружать незачем: в корне сервер принял бы
             // её за новую и отправил в «_Исходники».
@@ -585,6 +596,8 @@ fun LibraryScreen(
             progress = progressOf(app, entry.shown),
             busy = transfer?.finished == false,
             onOpen = entry.local?.let { local -> { serverMenu = null; onOpen(local) } },
+            // Своя копия - её и открыть; нет - книга сервера, как «Слушать с сервера».
+            onRazbor = razborOf(entry.local ?: entry.server)?.let { go -> { serverMenu = null; go() } },
             // Не скачивая: текст - во временный кэш, звук - потоком.
             onStream = if (entry.local == null) { { serverMenu = null; onOpen(entry.server) } } else null,
             onDownload = if (sb != null && idx != null && entry.where != Where.PHONE) {
@@ -1440,6 +1453,8 @@ private fun BookMenu(
     onSeries: (String) -> Unit,
     onOpen: () -> Unit,
     onRemind: () -> Unit,
+    /** Открыть разбор сервера; null - разбора у книги нет. */
+    onRazbor: (() -> Unit)?,
     onTalk: () -> Unit,
     /** Выгрузить в облако; null - облако не настроено или книга там уже есть. */
     onUpload: (() -> Unit)?,
@@ -1473,6 +1488,10 @@ private fun BookMenu(
                         Spacer(Modifier.width(6.dp))
                         Text("Напомнить, о чём там")
                     }
+                }
+                if (onRazbor != null) {
+                    Spacer(Modifier.height(6.dp))
+                    RazborButton(onRazbor)
                 }
                 if (book.hasText && (progress.done || progress.started)) {
                     Spacer(Modifier.height(6.dp))
@@ -1516,6 +1535,8 @@ private fun ServerBookMenu(
     /** Идёт другая передача: вторая разом не начинается. */
     busy: Boolean,
     onOpen: (() -> Unit)?,
+    /** Открыть разбор сервера; null - разбора у книги нет. */
+    onRazbor: (() -> Unit)?,
     /** Слушать и читать прямо с сервера; null - книга и так на телефоне. */
     onStream: (() -> Unit)?,
     onDownload: (() -> Unit)?,
@@ -1600,6 +1621,10 @@ private fun ServerBookMenu(
                         )
                     }
                 }
+                if (onRazbor != null) {
+                    Spacer(Modifier.height(6.dp))
+                    RazborButton(onRazbor)
+                }
                 if (onDelete != null) {
                     TextButton(onClick = onDelete, modifier = Modifier.fillMaxWidth()) {
                         Text("Удалить с телефона", color = MaterialTheme.colorScheme.error)
@@ -1612,6 +1637,16 @@ private fun ServerBookMenu(
         },
         dismissButton = { TextButton(onClick = onClose) { Text("Закрыть") } },
     )
+}
+
+/** «Разбор книги» в карточке: сервер разобрал её - о книге, идеи, линзы, книга за 15 минут. */
+@Composable
+private fun RazborButton(onClick: () -> Unit) {
+    FilledTonalButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Icon(Glyphs.Lightbulb, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("Разбор книги")
+    }
 }
 
 /** Строка «где я» в меню книги: что и когда. */

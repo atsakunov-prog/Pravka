@@ -192,18 +192,37 @@ class GuideEngine(
             // Текст передаётся дальше: пакет, добравшийся до конца именно
             // сейчас, запишется в папку книги вместе с меткой «к какому тексту».
             GuideState.Status.PENDING -> refreshLocked(book, local, text)
-            GuideState.Status.READY -> {
-                withContext(Dispatchers.IO) {
-                    // Файла нет - положить. Лежит без метки текста (записан, когда
-                    // текст ещё не был разобран) - переписать с меткой: до 08.09
-                    // второе устройство такой файл молча отбрасывало.
-                    val fit = fitInBook(book)
-                    if (fit == null || (text != null && !fit.marked)) writeToBook(book, local, text)
+            GuideState.Status.READY, GuideState.Status.FAILED -> {
+                val inBook = withContext(Dispatchers.IO) { dir.read(book, FILE) }
+                    ?.let { runCatching { JSONObject(it) }.getOrNull() }
+                val fit = inBook?.let(::fitOf)
+                // Справочник из разбора сервера побеждает свой, если он к этому
+                // тексту и новее: сервер читал книгу целиком, и в его справочнике
+                // всё - главы, связи, хронология. Иначе свой старый справочник
+                // (06.09, без глав) заслонял бы его навсегда.
+                serverGuide(book, inBook, fit, text)
+                    ?.takeIf { local.status == GuideState.Status.FAILED || it.createdAt > local.createdAt }
+                    ?.let { return@withLock Result.success(put(book.id, it)) }
+                // Файла нет - положить. Лежит без метки текста (записан, когда
+                // текст ещё не был разобран) - переписать с меткой: до 08.09
+                // второе устройство такой файл молча отбрасывало.
+                if (local.status == GuideState.Status.READY && (fit == null || (text != null && !fit.marked))) {
+                    withContext(Dispatchers.IO) { writeToBook(book, local, text) }
                 }
                 Result.success(local)
             }
-            GuideState.Status.FAILED -> Result.success(local)
         }
+    }
+
+    /**
+     * Справочник, который положил в папку книги разбор сервера, - если он
+     * готов и подходит к тексту. Без текста не сверить, подходит ли, - и
+     * заменять им свой нельзя.
+     */
+    private fun serverGuide(book: Book, inBook: JSONObject?, fit: Fit?, text: BookText?): GuideState? {
+        if (inBook == null || fit == null || text == null || !fit.fits(book, text)) return null
+        return runCatching { GuideState.fromJson(inBook) }.getOrNull()
+            ?.takeIf { it.fromServer && it.status == GuideState.Status.READY && it.guide != null }
     }
 
     /**
@@ -280,6 +299,15 @@ class GuideEngine(
                 askLog.add(LOG_KEY, Ask(System.currentTimeMillis(), 0L, "Справочник: «${book.title}»", "", cost))
             }
             val now = System.currentTimeMillis()
+            // Пока пакет считался, книгу разобрал сервер: его справочник новее
+            // заказа и полнее - он и берётся, а свой не пишется поверх него.
+            val inBook = withContext(Dispatchers.IO) { dir.read(book, FILE) }
+                ?.let { runCatching { JSONObject(it) }.getOrNull() }
+            serverGuide(book, inBook, inBook?.let(::fitOf), text)?.takeIf { it.createdAt > current.createdAt }?.let { server ->
+                put(book.id, server)
+                withContext(Dispatchers.IO) { dir.deleteServer(book, CLAIM) }
+                return@mapCatching server
+            }
             val state = if (guide.isEmpty) {
                 current.copy(
                     status = GuideState.Status.FAILED,
@@ -305,12 +333,20 @@ class GuideEngine(
             state
         }
 
-    /** Забыть справочник - и свой, и файл в папке книги, - чтобы заказать заново. */
+    /**
+     * Забыть справочник - и свой, и файл в папке книги, - чтобы заказать
+     * заново. Справочник разбора сервера на сервере не стирается: он стоил
+     * пару долларов и нужен всем, кто читает книгу; уходит только копия на
+     * телефоне.
+     */
     fun forget(book: Book) {
         store.delete(book.id)
         _states.value = _states.value - book.id
         forgetScope.launch {
-            runCatching { dir.delete(book, FILE) }
+            val serverMade = runCatching {
+                dir.readServer(book, FILE)?.let { GuideState.fromJson(JSONObject(it)).fromServer } == true
+            }.getOrDefault(false)
+            runCatching { if (serverMade) dir.deletePhone(book, FILE) else dir.delete(book, FILE) }
             runCatching { dir.deleteServer(book, CLAIM) }
         }
     }
@@ -339,12 +375,6 @@ class GuideEngine(
             chapters == text.chapters.size -> true
             else -> kotlin.math.abs(chars - text.length) * 50 < text.length
         }
-    }
-
-    /** Что за файл лежит в папке книги; null - файла нет (или папки библиотеки уже нет). */
-    private suspend fun fitInBook(book: Book): Fit? {
-        val raw = dir.read(book, FILE) ?: return null
-        return runCatching { fitOf(JSONObject(raw)) }.getOrNull()
     }
 
     private fun fitOf(o: JSONObject) = Fit(o.optInt("chars", -1), o.optInt("главы", -1), o.optString("text"))
