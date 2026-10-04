@@ -445,6 +445,7 @@ details summary:hover { color: var(--muted); }
 .sug:hover { background: var(--hover); }
 .sug .main { flex: 1; min-width: 0; }
 .sug .hint { color: var(--muted); font-size: 12.5px; margin-top: 1px; }
+.sug .add { font-size: 13px; margin: 3px 0 1px; padding: 1px 0 1px 9px; border-left: 2px solid color-mix(in srgb, var(--warn) 60%, transparent); }
 .sug.close .main > div:first-child { color: var(--ok); }
 .sug.update .main > div:first-child { color: var(--warn); }
 .group h2 .src { font-size: 12px; font-weight: 500; color: var(--accent); text-decoration: none; }

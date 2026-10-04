@@ -170,6 +170,30 @@ def test_suggestion_names_resolve_on_accept(dela):
     assert t2["project_id"] is None
 
 
+def test_close_and_refine_from_meeting_leave_a_trace(dela):
+    """Встреча не только заводит дела: закрывает и уточняет открытые — мяч к другому
+    человеку по имени, новая формулировка, подробности. Основание остаётся комментарием."""
+    with store.db.session(dela, "system", "t") as c:
+        c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Ольга Смирнова', 'Ольга', 'sasha')")
+    a = ops(dela, "sasha", {"op": "task.create", "task": {"title": "Список фондов"}})[0]["task"]
+    b = ops(dela, "sasha", {"op": "task.create", "task": {"title": "Тизер"}})[0]["task"]
+    mk = lambda kind, t, payload, quote: ops(dela, "system", {"op": "suggestion.create", "suggestion": {  # noqa: E731
+        "for_user": "sasha", "kind": kind, "task_id": t["id"], "source": "meeting", "batch_ref": "meeting:7",
+        "batch_title": "Бета: статус · 05.10", "quote": quote, "payload": payload}})[0]["suggestion"]
+    up = mk("update", a, {"title": "Ольга: список фондов с обоснованием", "ball": "waiting", "person_name": "Ольга",
+                          "note": "нужно 40 фондов, не 20; Катя добавит два своих"}, "Ольга пришлёт список к пятнице")
+    cl = mk("close", b, {}, "тизер ушёл инвесторам")
+    t = ops(dela, "sasha", {"op": "suggestion.decide", "id": up["id"], "decision": "accept"})[0]["task"]
+    assert (t["title"], t["ball"], t["person_short"]) == ("Ольга: список фондов с обоснованием", "waiting", "Ольга")
+    t2 = ops(dela, "sasha", {"op": "suggestion.decide", "id": cl["id"], "decision": "accept"})[0]["task"]
+    assert t2["status"] == "done"
+    def texts(t):
+        with store.db.session(dela, "sasha", "t") as c:
+            return [r["text"] for r in c.execute("SELECT text FROM tasks.comments WHERE task_id = %s ORDER BY created_at", (t["id"],))]
+    assert texts(a) == ["Бета: статус · 05.10: нужно 40 фондов, не 20; Катя добавит два своих"]
+    assert texts(b) == ["Бета: статус · 05.10: тизер ушёл инвесторам"]
+
+
 def test_phone_ops_as_pravka_sends_them(dela):
     """Операции ровно той формы, что собирает Правка (`core/Dela.kt`): id дела
     и op_id — телефона, пустое — null, у правки — was, заметка Разноски —

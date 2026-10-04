@@ -286,10 +286,12 @@ def op_suggestion_decide(conn, user, op):
         task = op_task_create(conn, user, {"task": fields})["task"]
     elif s["kind"] in ("close", "update"):
         fields = {k: v for k, v in payload.items() if k in TASK_FIELDS}
+        fields.update(_names(conn, payload))  # «уточнить»: мяч перешёл к другому человеку — по имени
         if s["kind"] == "close":
             fields.setdefault("status", "done")
         fields.update(fix)
         task = op_task_set(conn, user, {"id": s["task_id"], "set": fields})["task"]
+        _trace(conn, user, s, task)
     elif s["kind"] == "assign":
         fields = {"owner_id": user, **fix}
         task = op_task_set(conn, user, {"id": s["task_id"], "set": fields})["task"]
@@ -303,6 +305,19 @@ def op_suggestion_decide(conn, user, op):
         "result": Jsonb(jsonable({k: task[k] for k in TASK_FIELDS if task and k in task})),
     })
     return {"suggestion": row, "task": task}
+
+
+def _trace(conn, user, s: dict, task: dict | None) -> None:
+    """Принятое «закрыть» или «поправить» оставляет при деле комментарий: откуда и почему.
+
+    Уточнение из встречи или переписки (payload.note — новые подробности) иначе осталось бы
+    только в «Новом», а через неделю там его уже не найти; у закрытого — основание (quote).
+    """
+    text = ((s.get("payload") or {}).get("note") or s.get("quote") or "").strip()
+    if not text or not task:
+        return
+    head = s.get("batch_title") or {"meeting": "Встреча", "telegram": "Telegram"}.get(s.get("source"), s.get("source") or "")
+    op_comment_add(conn, user, {"comment": {"task_id": task["id"], "text": f"{head}: {text}" if head else text}})
 
 
 def _names(conn, payload: dict) -> dict:

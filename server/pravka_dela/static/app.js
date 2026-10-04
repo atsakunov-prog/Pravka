@@ -1044,9 +1044,12 @@ function sugText(s) {
   const ref = t ? `#${t.num} ${t.title}` : 'дело не видно';
   if (s.kind === 'close') return { title: 'Закрыть: ' + ref, hint: t?.project_name || '' };
   if (s.kind === 'assign') return { title: 'Взять себе: ' + ref, hint: t?.project_name || '' };
-  const what = [p.due_date ? 'срок ' + (t?.due_date ? D.ddmm(t.due_date) + ' → ' : '') + D.ddmm(p.due_date) : null,
-    p.ball ? 'мяч: ' + BALL[p.ball] : null].filter(Boolean).join(', ');
-  return { title: 'Поправить: ' + ref, hint: what };
+  // Уточнение: что поменяется в деле; подробности (note) при принятии лягут комментарием.
+  const what = [p.title ? `название: «${p.title}»` : null,
+    p.due_date ? 'срок ' + (t?.due_date ? D.ddmm(t.due_date) + ' → ' : '') + D.ddmm(p.due_date) : null,
+    p.ball ? 'мяч: ' + BALL[p.ball] + (p.person_name ? ' ' + p.person_name : '') : (p.person_name ? 'человек: ' + p.person_name : null)]
+    .filter(Boolean).join(' · ');
+  return { title: 'Уточнить: ' + ref, hint: what, add: p.note || null };
 }
 // Пачки — по дате встречи, свежие сверху; без даты — по времени появления.
 const sugAt = (s) => (s.payload && s.payload.meeting_at) || s.created_at.slice(0, 10);
@@ -1072,9 +1075,10 @@ function renderNew() {
           el('button', { class: 'chip-btn', onclick: () => decide(ids, 'accept') }, 'Принять все'), ' ',
           el('button', { class: 'chip-btn', onclick: () => decide(ids, 'reject') }, 'Отклонить все')) : null),
       b.items.map((s) => {
-        const { title, hint } = sugText(s);
+        const { title, hint, add } = sugText(s);
         return el('div', { class: 'sug' + (s.kind !== 'create' ? ' ' + s.kind : '') },
           el('div', { class: 'main' }, el('div', {}, title), hint ? el('div', { class: 'hint' }, hint) : null,
+            add ? el('div', { class: 'add' }, add) : null,
             s.quote && s.quote !== title ? el('div', { class: 'hint' }, '«' + s.quote.slice(0, 200) + '»') : null),
           el('div', { class: 'acts' },
             el('button', { class: 'btn small ok', onclick: () => decide([s.id], 'accept') }, 'Принять'),
