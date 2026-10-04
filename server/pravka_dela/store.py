@@ -38,6 +38,8 @@ PROJECT_FIELDS = {"name", "aliases", "sphere", "kind", "org_id", "money_default"
 DEAL_FIELDS = {
     "project_id", "name", "stage", "deal_type", "lead_person_id", "person_ids", "fee_kop", "deadline",
     "wheel", "ball", "next_step", "my_view", "ideas", "log",
+    "outcome", "lost_reason", "closed_on", "fee_kind", "retainer_kop", "success_pct", "probability", "expected_on",
+    "source_person_id", "team_ids",
 }
 PERSON_FIELDS = {
     "name", "short", "aliases", "org_id", "role", "phones", "emails", "telegram_id", "telegram_username",
@@ -45,7 +47,8 @@ PERSON_FIELDS = {
     "note", "archived_at",
 }
 ORG_FIELDS = {"name", "aliases", "kind", "note", "archived_at"}
-INTERACTION_FIELDS = {"at", "kind", "summary", "next_step", "project_id", "deal_id", "person_ids", "source", "source_ref"}
+INTERACTION_FIELDS = {"at", "kind", "summary", "next_step", "project_id", "deal_id", "person_ids", "source", "source_ref", "duration_min"}
+PAYMENT_FIELDS = {"deal_id", "kind", "title", "amount_kop", "due_on", "invoiced_on", "paid_on", "cancelled_at", "note"}
 SUGGESTION_FIELDS = {"kind", "task_id", "payload", "source", "source_ref", "quote", "batch_ref", "batch_title", "dup_of", "for_user", "expires_at"}
 
 SUGGESTION_TTL = dt.timedelta(days=7)
@@ -216,6 +219,17 @@ def _entity(table: str, fields: set[str], what: str, owner_col: str | None = "ow
     return create, update
 
 
+def op_user_settings(conn, user, op):
+    """Свои настройки (вид, скрытые клиенты Засечки) — слиянием. Роль и доступ так не поменять."""
+    data = op.get("settings")
+    if not isinstance(data, dict) or not data:
+        raise OpError("настройки — словарь")
+    row = conn.execute(
+        "UPDATE crm.users SET settings = settings || %s WHERE id = %s RETURNING id, settings", (Jsonb(data), user)
+    ).fetchone()
+    return {"row": row}
+
+
 def op_access_set(conn, user, op):
     pid, uid, role = op.get("project_id"), op.get("user_id"), op.get("role")
     if role is None:
@@ -321,8 +335,32 @@ def db_owner(conn) -> str:
 org_create, org_set = _entity("crm.orgs", ORG_FIELDS, "организация")
 person_create, person_set = _entity("crm.people", PERSON_FIELDS, "человек")
 project_create, project_set = _entity("crm.projects", PROJECT_FIELDS, "проект", extra=("id", "import_ref"))
-deal_create, deal_set = _entity("crm.deals", DEAL_FIELDS, "сделка", owner_col=None)
+_deal_create, _deal_set = _entity("crm.deals", DEAL_FIELDS, "сделка", owner_col=None)
 interaction_create, interaction_set = _entity("crm.interactions", INTERACTION_FIELDS, "взаимодействие")
+payment_create, payment_set = _entity("crm.payments", PAYMENT_FIELDS, "оплата", owner_col=None, extra=("id",))
+
+
+def _shown_deal(conn, did) -> dict:
+    """Сделка в ответе — из вида, а не из RETURNING: деньги и личная оценка
+    владельца не должны уйти тому, кому они закрыты."""
+    return conn.execute("SELECT * FROM crm.v_deals WHERE id = %s", (did,)).fetchone()
+
+
+def deal_create(conn, user, op):
+    return {"row": _shown_deal(conn, _deal_create(conn, user, op)["row"]["id"])}
+
+
+def deal_set(conn, user, op):
+    return {"row": _shown_deal(conn, _deal_set(conn, user, op)["row"]["id"])}
+
+
+def op_interaction_delete(conn, user, op):
+    row = conn.execute(
+        "UPDATE crm.interactions SET deleted_at = now() WHERE id = %s AND deleted_at IS NULL RETURNING *", (op.get("id"),)
+    ).fetchone()
+    if not row:
+        raise OpError("нет такой записи хронологии или её нельзя убрать")
+    return {"row": row}
 
 HANDLERS: dict[str, Callable] = {
     "task.create": op_task_create,
@@ -341,8 +379,12 @@ HANDLERS: dict[str, Callable] = {
     "deal.create": deal_create,
     "deal.set": deal_set,
     "access.set": op_access_set,
+    "user.settings": op_user_settings,
     "interaction.add": interaction_create,
     "interaction.set": interaction_set,
+    "interaction.delete": op_interaction_delete,
+    "payment.create": payment_create,
+    "payment.set": payment_set,
     "suggestion.create": op_suggestion_create,
     "suggestion.decide": op_suggestion_decide,
 }
@@ -399,13 +441,14 @@ def apply_ops(url: str, user: str, ops: list[dict], via: str, actor: str | None 
 SYNC_TABLES = {
     "tasks": "SELECT * FROM tasks.v_tasks WHERE seq > %s",
     "projects": "SELECT * FROM crm.projects WHERE seq > %s",
-    "deals": "SELECT * FROM crm.deals WHERE seq > %s",
+    "deals": "SELECT * FROM crm.v_deals WHERE seq > %s",
+    "payments": "SELECT * FROM crm.payments WHERE seq > %s",
     "people": "SELECT * FROM crm.people WHERE seq > %s",
     "orgs": "SELECT * FROM crm.orgs WHERE seq > %s",
     "comments": "SELECT * FROM tasks.comments WHERE seq > %s",
     "suggestions": "SELECT * FROM tasks.suggestions WHERE seq > %s",
     "access": "SELECT * FROM crm.project_access WHERE seq > %s",
-    "users": "SELECT id, name, person_id, role, seq FROM crm.users WHERE seq > %s",
+    "users": "SELECT id, name, person_id, role, clients, sees_money, seq FROM crm.users WHERE seq > %s",
 }
 
 
@@ -526,7 +569,7 @@ def view_project(conn, user, project_id=None, **_):
         hours = conn.execute("SELECT * FROM crm.project_minutes(%s)", (project_id,)).fetchall()
     return {
         "project": project,
-        "deals": conn.execute("SELECT * FROM crm.deals WHERE project_id = %s ORDER BY stage = 'archive', name", (project_id,)).fetchall(),
+        "deals": conn.execute("SELECT * FROM crm.v_deals WHERE project_id = %s ORDER BY stage = 'archive', name", (project_id,)).fetchall(),
         "open": _list(conn, "status = 'open' AND project_id = %s", [project_id]),
         "done": _list(conn, "status <> 'open' AND project_id = %s", [project_id], order=" ORDER BY completed_at DESC LIMIT 30"),
         "minutes": hours,
@@ -583,6 +626,7 @@ VIEWS: dict[str, Callable] = {
 
 
 def view(url: str, user: str, name: str, **params) -> dict:
+    from . import crm  # noqa: F401  CRM-виды (свой модуль) встают в VIEWS при импорте
     fn = VIEWS.get(name)
     if fn is None:
         raise OpError(f"нет такого вида: {name}")

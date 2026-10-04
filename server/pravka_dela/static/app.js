@@ -12,6 +12,8 @@ const LS = {
 const S = {
   me: null, today: null, seq: 0,
   tasks: new Map(), projects: new Map(), people: new Map(), deals: new Map(), sugs: new Map(), labels: [],
+  orgs: new Map(), pays: new Map(), dealId: null, // CRM: организации, оплаты, открытая сделка
+  crmList: LS.get('crmList', false), crmMine: false, crmStale: false, clientQ: '', clientArch: false, clientTab: 'tasks',
   sphere: LS.get('sphere', ''), groups: LS.get('groups', {}), favs: LS.get('favs', []), closed: LS.get('closed', {}),
   showDone: false, upNoDate: false, upMineOnly: false, dealFilter: null,
   sel: new Set(), order: [], lastPick: null, cardId: null, draft: null, sideOpen: false,
@@ -47,6 +49,7 @@ const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
 async function ops(items) {
   const d = await api('/api/ops', { ops: items.map((o) => ({ op_id: uuid(), ...o })) });
   for (const r of d.results) if (r.ok && r.task) S.tasks.set(r.task.id, r.task);
+  crmDirty(); // виды CRM считает сервер: после правки — заново (старое видно, пока грузится)
   const bad = d.results.filter((r) => !r.ok);
   await sync();
   if (bad.length) throw new Error(bad[0].error + (bad.length > 1 ? ` (и ещё ${bad.length - 1})` : ''));
@@ -56,12 +59,14 @@ const op1 = async (item) => (await ops([item]))[0];
 
 async function sync(full) {
   const d = await api('/api/sync?since=' + (full ? 0 : S.seq));
-  if (d.full) { S.tasks.clear(); S.projects.clear(); S.people.clear(); S.deals.clear(); S.sugs.clear(); }
+  if (d.full) { S.tasks.clear(); S.projects.clear(); S.people.clear(); S.deals.clear(); S.sugs.clear(); S.orgs.clear(); S.pays.clear(); }
   for (const t of d.tasks) S.tasks.set(t.id, t);
   for (const p of d.projects) S.projects.set(p.id, p);
   for (const p of d.people) S.people.set(p.id, p);
   for (const x of d.deals) S.deals.set(x.id, x);
   for (const s of d.suggestions) S.sugs.set(s.id, s);
+  for (const o of d.orgs || []) S.orgs.set(o.id, o);
+  for (const x of d.payments || []) S.pays.set(x.id, x);
   S.labels = d.labels.map((l) => l.name);
   S.seq = d.seq;
   S.today = d.today;
@@ -200,6 +205,7 @@ function route() {
   if (kind === 'p' && id) return { kind: 'project', id };
   if (kind === 'h' && id) return { kind: 'person', id };
   if (kind === 'search') return { kind: 'search', q: decodeURIComponent(id || '') };
+  if (CRM_VIEWS[kind]) return { kind };
   return { kind: VIEWS[kind] ? kind : 'morning' };
 }
 const go = (hash) => { location.hash = hash; };
@@ -236,11 +242,16 @@ function render() {
   const r = route();
   const q0 = document.activeElement && document.activeElement.id === 'quick' ? document.activeElement : null;
   const focused = q0 ? { value: q0.value, a: q0.selectionStart, b: q0.selectionEnd } : null;
-  const shell = el('div', { class: 'shell' + (S.cardId || S.draft ? ' with-card' : '') + (S.sideOpen ? ' side-open' : '') + (S.sel.size ? ' selecting' : '') });
+  const shell = el('div', { class: 'shell' + (S.cardId || S.draft || S.dealId ? ' with-card' : '') + (S.sideOpen ? ' side-open' : '') + (S.sel.size ? ' selecting' : '') });
   shell.append(renderSide(r), el('main', { class: 'list' }, renderMain(r)));
-  if (S.cardId || S.draft) shell.append(renderCard());
+  if (S.dealId && !S.cardId && !S.draft) shell.append(renderDealCard());
+  else if (S.cardId || S.draft) shell.append(renderCard());
   const scroll = document.querySelector('main.list')?.scrollTop || 0;
+  const old = document.querySelector('section.card-pane');
+  const cardScroll = old ? [old.dataset.key, old.scrollTop] : null;
   $app.replaceChildren(shell);
+  const pane = shell.querySelector('section.card-pane');
+  if (pane && cardScroll && pane.dataset.key === cardScroll[0]) pane.scrollTop = cardScroll[1];
   if (S.sideOpen) $app.append(el('div', { class: 'scrim', onclick: () => { S.sideOpen = false; render(); } }));
   shell.querySelector('main.list').scrollTop = scroll;
   if (focused) {
@@ -286,7 +297,9 @@ function renderSide(r) {
       el('div', { class: 'items' }, items));
   };
   const favs = live.filter((p) => S.favs.includes(p.id));
-  const groups = [group('fav', 'Избранное', favs.map(projItem))];
+  const crmNav = crmOn() ? Object.entries(CRM_VIEWS).filter(([, v]) => !v.money || S.me.money)
+    .map(([k, v]) => navItem('#/' + k, icon(v.icon), v.title, null, r.kind === k)) : [];
+  const groups = [group('crm', 'CRM', crmNav), group('fav', 'Избранное', favs.map(projItem))];
   for (const [kind, title] of Object.entries(KIND)) {
     groups.push(group('k-' + kind, title, live.filter((p) => p.kind === kind && !S.favs.includes(p.id)).map(projItem)));
   }
@@ -330,6 +343,10 @@ function renderMain(r) {
   if (r.kind === 'search') return renderSearch(r.q);
   if (r.kind === 'new') return renderNew();
   if (r.kind === 'week') return renderWeek();
+  if (r.kind === 'crm') return renderPipeline();
+  if (r.kind === 'clients') return renderClients();
+  if (r.kind === 'ties') return renderTies();
+  if (r.kind === 'money') return renderMoney();
   const v = VIEWS[r.kind];
   if (r.kind === 'morning') {
     const secs = v.sections();
@@ -912,6 +929,15 @@ function renderProject(id) {
     onclick: () => { S.dealFilter = S.dealFilter === d.id ? null : d.id; render(); },
   }, el('div', {}, d.name), el('div', { class: 'stage' }, STAGE[d.stage] || d.stage, d.fee_kop ? ' · fee ' + Math.round(d.fee_kop / 100).toLocaleString('ru') + ' ₽' : ''),
   d.next_step ? el('div', { class: 'next' }, d.next_step.length > 110 ? d.next_step.slice(0, 110) + '…' : d.next_step) : null))) : null;
+  if (p.kind === 'client' && crmOn()) {
+    const c = clientBlock(p);
+    sub.push(...c.info);
+    return [head(p.name, sub, star),
+      el('div', { class: 'body' }, c.dealBox, c.peopleBox, c.tabs,
+        c.timeline || [el('div', { class: 'toolbar' }, picker, doneToggle()),
+          quickAdd({ project_id: id, ...(S.dealFilter ? { deal_id: S.dealFilter } : {}) }),
+          items.length ? grouped(items, g) : el('div', { class: 'empty' }, 'Дел нет. Следующий шаг — в строке выше.')])];
+  }
   return [head(p.name, sub, star),
     el('div', { class: 'body' }, dealBox, el('div', { class: 'toolbar' }, picker, doneToggle()),
       quickAdd({ project_id: id, ...(S.dealFilter ? { deal_id: S.dealFilter } : {}) }),
@@ -943,7 +969,8 @@ function renderPerson(id) {
     el('div', { class: 'body' }, info.length ? el('div', { class: 'person-info' }, info) : null,
       quickAdd({ person_id: id }),
       secs.map(([t, items]) => (items.length ? groupBox(t, items.sort(sortTasks)) : null)),
-      secs.every(([, i]) => !i.length) ? el('div', { class: 'empty' }, 'Открытых дел с ним нет.') : null)];
+      secs.every(([, i]) => !i.length) ? el('div', { class: 'empty' }, 'Открытых дел с ним нет.') : null,
+      crmOn() && !p.user_id ? personCrmBlock(p) : null)];
 }
 
 function renderSearch(q) {
@@ -1034,7 +1061,7 @@ async function decide(ids, decision, reason, set) {
 }
 
 // ── Карточка дела (справа; на телефоне — лист снизу) ─────────────────────
-function openCard(id) { S.cardId = id; S.draft = null; render(); loadCardExtras(id); }
+function openCard(id) { S.cardId = id; S.draft = null; S.dealId = null; render(); loadCardExtras(id); }
 const extras = new Map(); // комментарии и журнал — по требованию
 async function loadCardExtras(id) {
   const t = S.tasks.get(id);
@@ -1144,14 +1171,517 @@ function renderCard() {
     };
     add.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
     card.append(el('h3', {}, 'Комментарии'),
-      (x ? x.comments : []).map((c) => el('div', { class: 'comment' }, el('div', { class: 'who' }, `${c.author_id} · ${c.created_at.slice(0, 16).replace('T', ' ')}`), c.text)),
+      el('div', {}, (x ? x.comments : []).map((c) => el('div', { class: 'comment' }, el('div', { class: 'who' }, `${c.author_id} · ${c.created_at.slice(0, 16).replace('T', ' ')}`), c.text))),
       el('div', { class: 'add-comment' }, add, el('button', { class: 'btn small', onclick: send }, 'Добавить')));
     if (x) {
       card.append(el('details', {}, el('summary', {}, 'Журнал правок'), x.history.map((h) =>
         el('div', { class: 'hist' }, `${h.at.slice(0, 16).replace('T', ' ')} · ${h.actor} (${h.via}) · ${h.op === 'update' ? Object.keys(h.after || {}).join(', ') : h.op}`))));
     }
   }
-  return el('section', { class: 'card-pane' }, card);
+  return el('section', { class: 'card-pane', 'data-key': 'task:' + (S.cardId || 'draft') }, card);
+}
+
+// ── CRM: воронка, клиенты, связи, деньги, карточка сделки ───────────────
+// Сделки, люди, проекты и оплаты уже в памяти (синк); то, что считает сервер
+// (последний контакт, следующее дело, время из Засечки, хронология, журнал), —
+// видами /api/view/<имя> по требованию, с коротким кэшем.
+const OUTCOME = { won: 'выиграли', lost: 'проиграли', paused: 'заморожено' };
+const FEE_KIND = { fixed: 'фикс', retainer: 'ретейнер', success: 'success fee', hourly: 'почасово', mixed: 'смешанная' };
+const PAY_KIND = { advance: 'аванс', stage: 'этап', final: 'финал', success: 'success fee', retainer: 'ретейнер', extra: 'допработы' };
+const DEAL_TYPES = ['M&A', 'Банковский advisory', 'Управленка', 'Косткаттинг', 'Финансирование', 'Сопровождение'];
+const IKIND = { call: 'звонок', meeting: 'встреча', zoom: 'Zoom', telegram: 'Telegram', email: 'почта', whatsapp: 'WhatsApp', note: 'заметка', other: 'другое' };
+const CADENCE = { month: 'раз в месяц', quarter: 'раз в квартал', year: 'раз в год', none: 'не видимся' };
+const OPEN_STAGES = ['lead', 'proposal', 'mandate', 'active', 'closing'];
+const CRM_VIEWS = {
+  crm: { title: 'Воронка', icon: 'funnel' },
+  clients: { title: 'Клиенты', icon: 'building' },
+  ties: { title: 'Связи', icon: 'link' },
+  money: { title: 'Деньги', icon: 'coin', money: true },
+};
+Object.assign(ICONS, {
+  funnel: 'M3 5h18l-7 8v6l-4 2v-8z',
+  building: 'M4 21V5l8-3 8 3v16M9 21v-4h6v4M8 8h2M14 8h2M8 12h2M14 12h2',
+  link: 'M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1',
+  coin: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM9 9h4.5a2 2 0 0 1 0 4H9v4M8 15h6',
+  clock: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2',
+  plus: 'M12 5v14M5 12h14',
+});
+const narrow = () => window.matchMedia('(max-width: 900px)').matches; // телефон: пустые колонки воронки не показываем
+const crmOn = () => S.me && (S.me.role === 'owner' || S.me.clients !== 'own');
+const rub = (kop) => (kop ? Math.round(kop / 100).toLocaleString('ru') + ' ₽' : '');
+const rubShort = (kop) => {
+  if (!kop) return '0';
+  const r = kop / 100;
+  return r >= 1e6 ? (r / 1e6).toFixed(r >= 1e7 ? 0 : 1).replace('.', ',') + ' млн' : Math.round(r / 1000) + ' тыс';
+};
+const hrs = (m) => (!m ? '' : m >= 60 ? `${Math.floor(m / 60)} ч ${String(m % 60).padStart(2, '0')} мин` : m + ' мин');
+const ago = (iso) => {
+  if (!iso) return null;
+  const n = D.diff(S.today, iso.slice(0, 10));
+  return n <= 0 ? 'сегодня' : n === 1 ? 'вчера' : n < 30 ? n + ' дн. назад' : D.ddmm(iso.slice(0, 10));
+};
+const stageWord = (d) => (d.stage === 'archive' && d.outcome ? OUTCOME[d.outcome] : STAGE[d.stage] || d.stage);
+const pName = (id) => personName(person(id)) || '?';
+/** Команда ЗФ — пользователи и те, кто уже ведёт сделки или в их командах. */
+function teamPeople() {
+  const ids = new Set([...S.people.values()].filter((p) => p.user_id).map((p) => p.id));
+  for (const d of S.deals.values()) { if (d.lead_person_id) ids.add(d.lead_person_id); (d.team_ids || []).forEach((x) => ids.add(x)); }
+  return [...ids].map(person).filter(Boolean).sort((a, b) => personName(a).localeCompare(personName(b), 'ru'));
+}
+
+// Кэш видов сервера: ключ — путь. Пустой ответ — «грузится», дальше рисуем ещё раз.
+const crmCache = new Map();
+function crmGet(path, maxAge = 30000) {
+  const c = crmCache.get(path);
+  if (c && c.data && Date.now() - c.at < maxAge) return c.data;
+  if (!c || !c.loading) {
+    crmCache.set(path, { ...(c || {}), loading: true });
+    api(path).then((d) => { crmCache.set(path, { data: d, at: Date.now() }); render(); })
+      .catch((e) => { crmCache.set(path, { data: c && c.data, at: Date.now(), error: e.message }); render(); });
+  }
+  return c ? c.data : null;
+}
+const crmDirty = () => { for (const c of crmCache.values()) c.at = 0; };
+const loading = () => el('div', { class: 'empty' }, 'Загружаю…');
+
+async function dealOp(op) {
+  try { const r = await op1(op); crmDirty(); render(); return r; } catch (e) { fail(e); render(); return null; }
+}
+const setDeal = (id, set) => dealOp({ op: 'deal.set', id, set });
+
+function openDeal(id) { S.dealId = id; S.cardId = null; S.draft = null; render(); }
+async function newDeal(projectId) {
+  const name = prompt('Название сделки («Клиент: тема»)', (project(projectId)?.name || '') + ': ');
+  if (!name || !name.trim()) return;
+  const r = await dealOp({ op: 'deal.create', data: { project_id: projectId, name: name.trim(), stage: 'lead' } });
+  if (r && r.row) openDeal(r.row.id);
+}
+
+// ── Воронка ─────────────────────────────────────────────────────────────
+function dealTile(d) {
+  const meta = [];
+  if (d.fee_kop) meta.push(el('span', { class: 'money' }, rubShort(d.fee_kop) + (d.p_eff != null && ['lead', 'proposal'].includes(d.stage) ? ` · ${d.p_eff}%` : '')));
+  if (d.lead_person_id) meta.push(el('span', {}, pName(d.lead_person_id)));
+  if (d.minutes_30) meta.push(el('span', { title: 'время из Засечки за 30 дней' }, hrs(d.minutes_30)));
+  const next = d.next_task
+    ? el('div', { class: 'next' }, `#${d.next_task.num} ${d.next_task.title}` + (d.next_task.due_date ? ' · ' + D.ddmm(d.next_task.due_date) : ''))
+    : (d.stage !== 'archive' ? el('div', { class: 'next none' }, 'нет следующего дела') : null);
+  const quiet = d.stage !== 'archive' && d.quiet_days > 30 ? el('span', { class: 'quiet' }, `тишина ${d.quiet_days} дн.`) : null;
+  return el('div', { class: 'dtile' + (S.dealId === d.id ? ' on' : '') + (d.stale ? ' stale' : ''), onclick: () => openDeal(d.id) },
+    el('div', { class: 'dname' }, d.name),
+    el('div', { class: 'dclient' }, d.project_name, d.deal_type ? ' · ' + d.deal_type : ''),
+    meta.length || quiet ? el('div', { class: 'dmeta' }, meta, quiet) : null, next,
+    d.stage === 'archive' ? el('div', { class: 'dmeta' }, el('span', { class: 'out-' + (d.outcome || 'none') }, stageWord(d)),
+      d.closed_on ? el('span', {}, D.ddmm(d.closed_on)) : null, d.lost_reason ? el('span', {}, d.lost_reason) : null) : null);
+}
+
+function renderPipeline() {
+  const v = crmGet('/api/view/pipeline');
+  if (!v) return [head('Воронка'), el('div', { class: 'body' }, loading())];
+  const mine = S.me.person_id || [...S.people.values()].find((p) => p.user_id === S.me.user)?.id;
+  let deals = v.deals;
+  if (S.crmMine && mine) deals = deals.filter((d) => d.lead_person_id === mine || (d.team_ids || []).includes(mine));
+  const t = v.totals;
+  const sub = [plural(t.live, 'живая сделка', 'живые сделки', 'живых сделок')];
+  if (v.money) sub.push('воронка взвешенно ' + rubShort(t.pipeline_kop), 'подписано, получить ' + rubShort(t.to_get_kop));
+  if (t.stale) sub.push(el('span', { class: 'late' }, `застыли или без следующего дела: ${t.stale}`));
+  const tb = el('div', { class: 'toolbar' },
+    el('button', { class: 'chip-btn' + (S.crmList ? '' : ' on'), onclick: () => { S.crmList = false; LS.set('crmList', false); render(); } }, 'Доска'),
+    el('button', { class: 'chip-btn' + (S.crmList ? ' on' : ''), onclick: () => { S.crmList = true; LS.set('crmList', true); render(); } }, 'Списком'),
+    mine ? el('button', { class: 'chip-btn' + (S.crmMine ? ' on' : ''), onclick: () => { S.crmMine = !S.crmMine; render(); } }, 'Только мои') : null,
+    el('button', { class: 'chip-btn' + (S.crmStale ? ' on' : ''), onclick: () => { S.crmStale = !S.crmStale; render(); } }, 'Застывшие'));
+  if (S.crmStale) deals = deals.filter((d) => d.stale);
+  const live = deals.filter((d) => d.stage !== 'archive');
+  const closed = deals.filter((d) => d.stage === 'archive').sort((a, b) => (b.closed_on || '').localeCompare(a.closed_on || ''));
+  const col = (s) => {
+    const items = live.filter((d) => d.stage === s).sort((a, b) => (b.fee_kop || 0) - (a.fee_kop || 0));
+    const st = v.stages.find((x) => x.stage === s) || {};
+    return el('div', { class: 'col' },
+      el('div', { class: 'col-h' }, el('b', {}, STAGE[s]), el('span', { class: 'n' }, items.length),
+        v.money && st.fee_kop ? el('span', { class: 'sum' }, rubShort(st.fee_kop)) : null),
+      items.map(dealTile));
+  };
+  const body = S.crmList
+    ? OPEN_STAGES.map((s) => { const items = live.filter((d) => d.stage === s); return items.length ? el('div', { class: 'group' }, el('h2', {}, STAGE[s], el('span', { class: 'n' }, items.length)), el('div', { class: 'dlist' }, items.map(dealTile))) : null; })
+    : el('div', { class: 'board' }, OPEN_STAGES.filter((s) => !narrow() || live.some((d) => d.stage === s)).map(col));
+  return [head('Воронка', sub),
+    el('div', { class: 'body wide' }, tb, body,
+      closed.length ? el('div', { class: 'group' }, el('h2', {}, 'Закрыты за 90 дней', el('span', { class: 'n' }, closed.length)),
+        el('div', { class: 'dlist' }, closed.map(dealTile))) : null,
+      !live.length && !closed.length ? el('div', { class: 'empty' }, 'Сделок нет. Новая — со страницы клиента, кнопкой «+ Сделка».') : null)];
+}
+
+// ── Клиенты ─────────────────────────────────────────────────────────────
+function renderClients() {
+  const v = crmGet('/api/view/clients');
+  if (!v) return [head('Клиенты'), el('div', { class: 'body' }, loading())];
+  const q = norm(S.clientQ || '');
+  let rows = v.clients.filter((c) => (S.clientArch ? true : !c.archived_at));
+  if (q) rows = rows.filter((c) => norm(c.name + ' ' + (c.aliases || []).join(' ') + ' ' + (c.org || '')).includes(q));
+  const search = el('input', { class: 'inline-search', type: 'search', placeholder: 'Найти клиента', value: S.clientQ || '' });
+  search.addEventListener('input', () => { S.clientQ = search.value; const pos = search.selectionStart; render(); const s2 = document.querySelector('.inline-search'); if (s2) { s2.focus(); s2.setSelectionRange(pos, pos); } });
+  const tb = el('div', { class: 'toolbar' }, search,
+    el('button', { class: 'chip-btn' + (S.clientArch ? ' on' : ''), onclick: () => { S.clientArch = !S.clientArch; render(); } }, 'И архив'),
+    el('button', { class: 'chip-btn', onclick: () => newClient() }, '+ Клиент'));
+  const row = (c) => {
+    const bits = [];
+    if (c.stages && c.stages.length) bits.push(el('span', {}, c.stages.map((s) => STAGE[s]).join(', ')));
+    else bits.push(el('span', { class: 'faint' }, c.all_deals ? 'сделки в архиве' : 'без сделок'));
+    bits.push(el('span', { class: c.last_touch && D.diff(S.today, c.last_touch.slice(0, 10)) > 45 ? 'late' : '' }, c.last_touch ? 'контакт ' + ago(c.last_touch) : 'контактов нет'));
+    if (v.money && c.paid_year_kop) bits.push(el('span', { class: 'money' }, 'за год ' + rubShort(c.paid_year_kop)));
+    if (v.money && c.invoiced_kop) bits.push(el('span', { class: 'late' }, 'ждём ' + rubShort(c.invoiced_kop)));
+    if (c.minutes_90) bits.push(el('span', { title: 'Засечка, 90 дней' }, hrs(c.minutes_90)));
+    return el('div', { class: 'crow', onclick: () => go('#/p/' + c.id) },
+      el('div', { class: 'main' },
+        el('div', { class: 'title' }, c.name, c.org && norm(c.org) !== norm(c.name) ? el('span', { class: 'faint' }, ' · ' + c.org) : null, c.archived_at ? el('span', { class: 'faint' }, ' · архив') : null),
+        el('div', { class: 'chips' }, bits),
+        c.next_task ? el('div', { class: 'next' }, `#${c.next_task.num} ${c.next_task.title}` + (c.next_task.due_date ? ' · ' + D.ddmm(c.next_task.due_date) : ''))
+          : (c.live_deals ? el('div', { class: 'next none' }, 'нет следующего дела') : null)));
+  };
+  const out = [tb, rows.length ? el('div', { class: 'group' }, rows.map(row)) : el('div', { class: 'empty' }, 'Не нашлось.')];
+  if (v.unmatched && v.unmatched.length && !q) out.push(renderUnmatched(v.unmatched));
+  return [head('Клиенты', [plural(rows.filter((c) => !c.archived_at).length, 'клиент', 'клиента', 'клиентов')]), el('div', { class: 'body' }, out)];
+}
+
+async function newClient(name) {
+  name = (name || prompt('Клиент (как зовёте в делах)') || '').trim();
+  if (!name) return null;
+  try {
+    const org = (await op1({ op: 'org.create', data: { name, kind: 'client' } })).row;
+    const p = (await op1({ op: 'project.create', data: { name, sphere: 'work', kind: 'client', org_id: org.id, money_default: 'potential' } })).row;
+    crmDirty();
+    toast('Клиент заведён: ' + name);
+    go('#/p/' + p.id);
+    return p;
+  } catch (e) { fail(e); return null; }
+}
+
+/** Клиенты Засечки, которых нет в справочнике: завести, привязать алиасом, скрыть. */
+function renderUnmatched(list) {
+  const hide = async (name) => {
+    const cur = (S.me.settings && S.me.settings.time_ignore) || [];
+    try { await op1({ op: 'user.settings', settings: { time_ignore: [...cur, name] } }); S.me.settings = { ...(S.me.settings || {}), time_ignore: [...cur, name] }; crmDirty(); render(); } catch (e) { fail(e); }
+  };
+  const alias = (anchor, name) => setTimeout(() => {
+    const projs = liveProjects().filter((p) => p.kind === 'client').sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    const ppl = livePeople().sort((a, b) => personName(a).localeCompare(personName(b), 'ru'));
+    const sel = el('select', {}, el('option', { value: '' }, 'выбрать…'),
+      el('optgroup', { label: 'Клиенты' }, projs.map((p) => el('option', { value: 'p:' + p.id }, p.name))),
+      el('optgroup', { label: 'Люди' }, ppl.map((p) => el('option', { value: 'h:' + p.id }, p.name))));
+    sel.addEventListener('change', async () => {
+      if (!sel.value) return;
+      closePop();
+      const [k, id] = sel.value.split(':');
+      const x = k === 'p' ? project(id) : person(id);
+      try {
+        await op1({ op: k === 'p' ? 'project.set' : 'person.set', id, set: { aliases: [...(x.aliases || []), name] } });
+        crmDirty(); toast(`«${name}» теперь ${k === 'p' ? 'клиент' : 'человек'} ${x.name} — часы встали на место`); render();
+      } catch (e) { fail(e); }
+    });
+    popAt(anchor, [el('div', { class: 'pop-h' }, `«${name}» — это:`), sel]);
+  }, 0);
+  return el('div', { class: 'group' },
+    el('h2', {}, 'Засечка знает, справочник нет', el('span', { class: 'n' }, list.length)),
+    el('div', { class: 'hint-line' }, 'Клиенты из ленты времени, которых нет в справочнике. Заведи клиентом или привяжи к существующему — прошлые часы сами встанут на место.'),
+    list.map((u) => el('div', { class: 'crow static' },
+      el('div', { class: 'main' }, el('div', { class: 'title' }, u.client),
+        el('div', { class: 'chips' }, el('span', {}, hrs(u.minutes)), el('span', {}, plural(u.entries, 'запись', 'записи', 'записей')), el('span', {}, 'последняя ' + D.ddmm(u.last_day)))),
+      el('div', { class: 'acts-inline' },
+        el('button', { class: 'btn small', onclick: () => newClient(u.client) }, 'Новый клиент'),
+        el('button', { class: 'btn small', onclick: (e) => alias(e.currentTarget, u.client) }, 'Это…'),
+        el('button', { class: 'btn small', onclick: () => hide(u.client) }, 'Скрыть')))));
+}
+
+// ── Связи ───────────────────────────────────────────────────────────────
+function renderTies() {
+  const v = crmGet('/api/view/ties');
+  if (!v) return [head('Связи'), el('div', { class: 'body' }, loading())];
+  const due = v.people.filter((p) => p.due), rest = v.people.filter((p) => !p.due);
+  const bday = v.people.filter((p) => p.birthday_in != null && p.birthday_in <= 14).sort((a, b) => a.birthday_in - b.birthday_in);
+  const row = (p) => el('div', { class: 'crow', onclick: () => go('#/h/' + p.id) },
+    el('div', { class: 'main' },
+      el('div', { class: 'title' }, p.name, p.org ? el('span', { class: 'faint' }, ' · ' + p.org) : null),
+      el('div', { class: 'chips' },
+        p.cadence && CADENCE[p.cadence] ? el('span', {}, CADENCE[p.cadence]) : null, p.hub ? el('span', { class: 'badge potential' }, 'хаб') : null,
+        el('span', { class: p.due ? 'late' : '' }, p.since_days != null ? 'контакт ' + (p.since_days === 0 ? 'сегодня' : p.since_days + ' дн. назад') : 'контактов не записано'),
+        p.brought ? el('span', {}, 'привёл сделок: ' + p.brought) : null,
+        p.agenda ? el('span', { class: 'ball-agenda' }, 'повестка: ' + p.agenda) : null,
+        p.birthday_in != null && p.birthday_in <= 14 ? el('span', { class: 'today' }, p.birthday_in ? `день рождения через ${p.birthday_in} дн.` : 'день рождения сегодня') : null)),
+    el('div', { class: 'acts-inline' },
+      el('button', { class: 'btn small', title: 'Записать, что поговорили', onclick: (e) => { e.stopPropagation(); quickNote({ person_ids: [p.id] }, p.name); } }, 'Поговорили')));
+  return [head('Связи', ['кому пора напомнить о себе: по теплоте из карточки человека (раз в месяц, квартал, год) и по последнему контакту в хронологии']),
+    el('div', { class: 'body' },
+      bday.length ? el('div', { class: 'group' }, el('h2', {}, 'Дни рождения в ближайшие две недели', el('span', { class: 'n' }, bday.length)), bday.map(row)) : null,
+      el('div', { class: 'group' }, el('h2', { class: due.length ? 'late' : '' }, 'Пора напомнить о себе', el('span', { class: 'n' }, due.length)), due.length ? due.map(row) : el('div', { class: 'empty' }, 'Со всеми на связи.')),
+      rest.length ? el('div', { class: 'group' }, el('h2', {}, 'На связи', el('span', { class: 'n' }, rest.length)), rest.map(row)) : null,
+      el('div', { class: 'hint-line' }, 'Теплота и «хаб» ставятся на странице человека. Сюда попадают и те, кто приводил сделки.'))];
+}
+
+async function quickNote(base, who) {
+  const text = prompt(`Что было${who ? ' с ' + who : ''}? (коротко — уйдёт в хронологию)`);
+  if (!text || !text.trim()) return;
+  try {
+    await op1({ op: 'interaction.add', data: { at: new Date().toISOString(), kind: base.kind || 'note', summary: text.trim(), source: 'web', ...base } });
+    crmDirty(); toast('Записано в хронологию'); render();
+  } catch (e) { fail(e); }
+}
+
+// ── Деньги ──────────────────────────────────────────────────────────────
+function payRow(p, withDeal) {
+  const st = p.paid_on ? el('span', { class: 'ok' }, 'получено ' + D.ddmm(p.paid_on))
+    : p.invoiced_on ? el('span', { class: (p.due_on || p.invoiced_on) < S.today ? 'late' : 'today' }, 'счёт ' + D.ddmm(p.invoiced_on) + (p.due_on ? ', срок ' + D.ddmm(p.due_on) : ''))
+      : el('span', {}, p.due_on ? 'ждём ' + D.ddmm(p.due_on) : 'без даты');
+  const acts = [];
+  if (!p.paid_on && !p.cancelled_at) {
+    if (!p.invoiced_on) acts.push(el('button', { class: 'btn small', onclick: (e) => { e.stopPropagation(); payOp(p.id, { invoiced_on: S.today }, 'Счёт выставлен'); } }, 'Счёт выставлен'));
+    acts.push(el('button', { class: 'btn small ok', onclick: (e) => { e.stopPropagation(); payOp(p.id, { paid_on: S.today }, 'Оплата получена'); } }, 'Оплачено'));
+  }
+  return el('div', { class: 'prow' + (p.cancelled_at ? ' cancelled' : ''), onclick: withDeal ? () => openDeal(p.deal_id) : null },
+    el('div', { class: 'main' },
+      el('div', {}, el('b', {}, rub(p.amount_kop)), ' ', PAY_KIND[p.kind] || p.kind, p.title ? ' · ' + p.title : '',
+        withDeal ? el('span', { class: 'faint' }, ' · ' + p.project_name + ' / ' + p.deal_name) : null),
+      el('div', { class: 'chips' }, st, p.cancelled_at ? el('span', {}, 'отменено') : null, p.note ? el('span', {}, p.note) : null)),
+    acts.length ? el('div', { class: 'acts-inline' }, acts) : null);
+}
+async function payOp(id, set, msg) {
+  try { await op1({ op: 'payment.set', id, set }); crmDirty(); toast(msg); render(); } catch (e) { fail(e); }
+}
+
+function renderMoney() {
+  if (!S.me.money) return [head('Деньги'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Деньги фирмы тебе не открыты.'))];
+  const v = crmGet('/api/view/money');
+  if (!v) return [head('Деньги'), el('div', { class: 'body' }, loading())];
+  const t = v.totals;
+  const tile = (label, kop, cls) => el('div', { class: 'tile ' + (cls || '') }, el('div', { class: 'tl' }, label), el('div', { class: 'tv' }, kop ? rub(kop) : '—'));
+  const sec = (title, list, cls) => (list.length ? el('div', { class: 'group' }, el('h2', { class: cls || '' }, title, el('span', { class: 'n' }, list.length),
+    el('span', { class: 'sum' }, rub(list.reduce((s, p) => s + p.amount_kop, 0)))), list.map((p) => payRow(p, true))) : null);
+  return [head('Деньги', ['деньги фирмы по сделкам: что получено, что должны, чего ждём']),
+    el('div', { class: 'body' },
+      el('div', { class: 'tiles' },
+        tile('Получено за месяц', t.paid_month, 'ok'), tile('За квартал', t.paid_quarter), tile('За год', t.paid_year),
+        tile('Должны (счета)', t.receivable, t.receivable ? 'warn' : ''), tile('Ждём за 30 дней', t.expected_30),
+        tile('Подписано, получить', t.to_get), tile('Воронка взвешенно', t.pipeline)),
+      sec('Просрочено — счёт выставлен, срок прошёл', v.overdue, 'late'),
+      sec('Счёт выставлен', v.invoiced),
+      sec('Ждём в ближайший месяц', v.expected),
+      sec('Позже или без даты', v.later),
+      v.unplanned.length ? el('div', { class: 'group' }, el('h2', {}, 'Подписано, а оплаты расписаны не на всю сумму', el('span', { class: 'n' }, v.unplanned.length)),
+        el('div', { class: 'dlist' }, v.unplanned.map(dealTile))) : null,
+      sec('Пришло за 4 месяца', v.paid),
+      !v.overdue.length && !v.invoiced.length && !v.expected.length && !v.later.length && !v.paid.length
+        ? el('div', { class: 'empty' }, 'Оплат пока нет. Их заводят в карточке сделки: аванс, этапы, ретейнер, success fee.') : null)];
+}
+
+// ── Хронология ──────────────────────────────────────────────────────────
+/** Записи хронологии и (владельцу) куски Засечки вперемешку, свежие сверху. */
+function timelineBox(items, entries, base, opts = {}) {
+  const kind = el('select', {}, Object.entries(IKIND).map(([k, l]) => el('option', { value: k, selected: k === (opts.kind || 'call') }, l)));
+  const when = el('input', { type: 'date', value: S.today });
+  const text = el('textarea', { rows: 2, placeholder: 'Что было: звонок, встреча, переписка — коротко, с сутью и договорённостями' });
+  const add = async () => {
+    if (!text.value.trim()) return;
+    const at = when.value === S.today ? new Date().toISOString() : when.value + 'T12:00:00+03:00';
+    try {
+      await op1({ op: 'interaction.add', data: { at, kind: kind.value, summary: text.value.trim(), source: 'web', ...base } });
+      text.value = ''; crmDirty(); toast('Записано в хронологию'); render();
+    } catch (e) { fail(e); }
+  };
+  text.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) add(); });
+  const rows = [
+    ...(items || []).map((i) => ({ at: i.at, i })),
+    ...(entries || []).map((e) => ({ at: e.day + 'T' + (e.start_local || '00:00').slice(-5) + ':00', e })),
+  ].sort((a, b) => b.at.localeCompare(a.at)).slice(0, opts.limit || 150);
+  const line = (r) => {
+    if (r.e) {
+      const e = r.e;
+      return el('div', { class: 'tl-row work' }, el('div', { class: 'tl-when' }, D.ddmm(e.day)),
+        el('div', { class: 'tl-what' }, el('span', { class: 'tl-kind' }, icon('clock', 12), ' ' + hrs(e.minutes)), ' ', e.title || 'работа',
+          e.task_num ? el('span', { class: 'faint' }, ' · #' + e.task_num) : null));
+    }
+    const i = r.i;
+    const who = (i.person_ids || []).map((x) => personName(person(x))).filter(Boolean);
+    return el('div', { class: 'tl-row' }, el('div', { class: 'tl-when' }, D.ddmm(i.at.slice(0, 10))),
+      el('div', { class: 'tl-what' },
+        el('span', { class: 'tl-kind' }, IKIND[i.kind] || i.kind), ' ', i.summary,
+        i.next_step ? el('div', { class: 'tl-next' }, '→ ' + i.next_step) : null,
+        el('div', { class: 'tl-meta' }, [opts.showDeal && i.deal_name, who.length && who.join(', '), i.duration_min && i.duration_min + ' мин',
+          i.source === 'meeting' && 'из встречи', i.source === 'notion' && 'Notion'].filter(Boolean).join(' · '),
+          i.source_ref && /^https:\/\//.test(i.source_ref) ? el('a', { class: 'src', href: i.source_ref, target: '_blank', rel: 'noopener noreferrer' }, ' открыть') : null)),
+      el('button', { class: 'icon-btn tl-del', title: 'Убрать из хронологии', onclick: async () => {
+        if (!confirm('Убрать запись из хронологии? Она останется в журнале.')) return;
+        await dealOp({ op: 'interaction.delete', id: i.id });
+      } }, icon('x', 12)));
+  };
+  return el('div', { class: 'timeline' },
+    el('div', { class: 'tl-add' }, el('div', { class: 'tl-add-row' }, kind, when), text,
+      el('div', { class: 'tl-add-row' }, el('span', { class: 'faint' }, 'Ctrl+Enter'), el('button', { class: 'btn small', onclick: add }, 'Записать'))),
+    rows.length ? rows.map(line) : el('div', { class: 'faint pad' }, 'Пока пусто.'));
+}
+
+// ── Клиент на странице проекта ──────────────────────────────────────────
+function clientBlock(p) {
+  const v = crmGet('/api/view/client?project_id=' + p.id);
+  const deals = [...S.deals.values()].filter((d) => d.project_id === p.id)
+    .sort((a, b) => (a.stage === 'archive') - (b.stage === 'archive') || OPEN_STAGES.indexOf(a.stage) - OPEN_STAGES.indexOf(b.stage));
+  const full = v ? new Map(v.deals.map((d) => [d.id, d])) : new Map();
+  const dealBox = el('div', { class: 'dlist' }, deals.map((d) => dealTile({ ...d, project_name: p.name, ...(full.get(d.id) || {}) })),
+    el('button', { class: 'dtile add', onclick: () => newDeal(p.id) }, icon('plus', 14), ' Сделка'));
+  const info = [];
+  if (v && v.months && v.months.length) {
+    const total = v.months.reduce((s, m) => s + m.minutes, 0);
+    info.push(el('span', { title: 'время из Засечки' }, icon('clock', 12), ' ' + hrs(total) + ' всего · ' + v.months.slice(0, 3).map((m) => `${MONTHS[+m.month.slice(5) - 1].slice(0, 3)} ${hrs(m.minutes)}`).join(', ')));
+  }
+  const peopleBox = v && v.people.length ? el('div', { class: 'people-line' }, 'Люди: ', v.people.map((x, k) => [k ? ', ' : '', el('a', { class: 'link', href: '#/h/' + x.id }, x.name + (x.role ? ` (${x.role})` : ''))])) : null;
+  const tabs = el('div', { class: 'seg tabs' }, [['tasks', 'Дела'], ['timeline', 'Хронология']].map(([k, l]) =>
+    el('button', { class: (S.clientTab || 'tasks') === k ? 'on' : '', onclick: () => { S.clientTab = k; render(); } }, l)));
+  return { dealBox, info, peopleBox, tabs, timeline: (S.clientTab === 'timeline')
+    ? (v ? timelineBox(v.timeline, v.entries, { project_id: p.id }, { showDeal: true }) : loading()) : null };
+}
+
+// ── Карточка сделки ─────────────────────────────────────────────────────
+function renderDealCard() {
+  const close = () => { S.dealId = null; render(); };
+  const d0 = S.deals.get(S.dealId);
+  const v = crmGet('/api/view/deal?deal_id=' + S.dealId, 15000);
+  if (!d0) return el('section', { class: 'card-pane' }, el('div', { class: 'card' }, el('div', { class: 'top' }, el('span', { class: 'num' }, 'Сделка'),
+    el('button', { class: 'icon-btn', onclick: close }, icon('x', 16))), el('div', { class: 'empty' }, 'Сделка не видна.')));
+  const d = { ...d0, ...(v ? v.deal : {}) };
+  const p = project(d.project_id);
+  const money = S.me.money;
+  const save = (field, value) => setDeal(d.id, { [field]: value });
+  const sel = (field, options, value, empty = '—') => {
+    const s = el('select', {}, [['', empty], ...options].map(([k, l]) => el('option', { value: k, selected: String(value ?? '') === String(k) }, l)));
+    s.addEventListener('change', () => save(field, s.value || null));
+    return s;
+  };
+  const inp = (field, type, value, conv) => {
+    const i = el('input', { type, value: value ?? '' });
+    i.addEventListener('change', () => save(field, i.value === '' ? null : conv ? conv(i.value) : i.value));
+    return i;
+  };
+  const rubIn = (field) => inp(field, 'number', d[field] != null ? Math.round(d[field] / 100) : '', (x) => Math.round(+x * 100));
+  const peopleSel = (field, list) => {
+    const ids = d[field] || [];
+    const box = el('div', { class: 'multi' }, ids.map((x) => el('span', { class: 'pill' }, pName(x),
+      el('button', { title: 'Убрать', onclick: () => save(field, ids.filter((y) => y !== x)) }, '×'))));
+    const add = el('select', {}, el('option', { value: '' }, '+ добавить'), list.filter((x) => !ids.includes(x.id)).map((x) => el('option', { value: x.id }, x.short && x.short !== x.name ? `${x.short} — ${x.name}` : x.name)));
+    add.addEventListener('change', () => add.value && save(field, [...ids, add.value]));
+    box.append(add);
+    return box;
+  };
+  const team = teamPeople();
+  const ppl = livePeople().sort((a, b) => personName(a).localeCompare(personName(b), 'ru'));
+  const clientPeople = ppl.filter((x) => !team.includes(x));
+
+  const title = el('textarea', { class: 'title-edit', rows: 2 }, d.name);
+  title.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } });
+  title.addEventListener('change', () => title.value.trim() && save('name', title.value.trim()));
+
+  const stages = el('div', { class: 'stages' }, OPEN_STAGES.map((s) => el('button', { class: d.stage === s ? 'on' : '', onclick: () => save('stage', s) }, STAGE[s])));
+  const closeDeal = (anchor) => setTimeout(() => popAt(anchor, [
+    ...Object.entries(OUTCOME).map(([k, l]) => el('button', { onclick: () => {
+      closePop();
+      const why = k === 'won' ? '' : prompt(k === 'lost' ? 'Почему проиграли? (учит воронку, можно пусто)' : 'Почему заморозили? (можно пусто)');
+      if (why === null) return;
+      setDeal(d.id, { outcome: k, lost_reason: why || null });
+    } }, l))]), 0);
+  const stageRow = d.stage === 'archive'
+    ? el('div', { class: 'stage-closed' }, el('span', { class: 'out-' + (d.outcome || 'none') }, d.outcome ? OUTCOME[d.outcome] : 'архив'),
+      d.closed_on ? ' · ' + D.ddmm(d.closed_on) : '', d.lost_reason ? ' · ' + d.lost_reason : '',
+      el('button', { class: 'btn small', onclick: () => save('stage', 'active') }, 'Вернуть в работу'))
+    : el('div', { class: 'stage-row' }, stages, el('button', { class: 'btn small', onclick: (e) => closeDeal(e.currentTarget) }, 'Закрыть…'));
+
+  const props = el('div', { class: 'props' },
+    el('span', {}, 'Клиент'), p ? el('a', { class: 'link', href: '#/p/' + p.id }, p.name) : el('span', {}, '—'),
+    el('span', {}, 'Тип'), sel('deal_type', DEAL_TYPES.map((x) => [x, x]).concat(d.deal_type && !DEAL_TYPES.includes(d.deal_type) ? [[d.deal_type, d.deal_type]] : []), d.deal_type),
+    el('span', {}, 'Ведёт'), sel('lead_person_id', team.map((x) => [x.id, personName(x)]), d.lead_person_id),
+    el('span', {}, 'Команда'), peopleSel('team_ids', team),
+    el('span', {}, 'Люди клиента'), peopleSel('person_ids', clientPeople),
+    el('span', {}, 'Привёл'), sel('source_person_id', ppl.map((x) => [x.id, x.name]), d.source_person_id),
+    el('span', {}, 'Вероятность, %'), inp('probability', 'number', d.probability, (x) => Math.max(0, Math.min(100, Math.round(+x)))),
+    el('span', {}, 'Решение ждём'), inp('expected_on', 'date', d.expected_on),
+    el('span', {}, 'Дедлайн'), inp('deadline', 'date', d.deadline));
+
+  const card = el('div', { class: 'card deal-card' },
+    el('div', { class: 'top' }, el('span', { class: 'num' }, 'Сделка · ' + stageWord(d)), el('button', { class: 'icon-btn', title: 'Закрыть (Esc)', onclick: close }, icon('x', 16))),
+    title, stageRow, props);
+
+  if (money) {
+    const pays = v ? v.payments : [...S.pays.values()].filter((x) => x.deal_id === d.id);
+    const live = pays.filter((x) => !x.cancelled_at);
+    const sum = (f) => live.filter(f).reduce((s, x) => s + x.amount_kop, 0);
+    const paid = sum((x) => x.paid_on), inv = sum((x) => !x.paid_on && x.invoiced_on), plan = sum((x) => !x.paid_on && !x.invoiced_on);
+    const kind = el('select', {}, Object.entries(PAY_KIND).map(([k, l]) => el('option', { value: k }, l)));
+    const amount = el('input', { type: 'number', placeholder: 'сумма, ₽' });
+    const due = el('input', { type: 'date' });
+    const addPay = async () => {
+      if (!(+amount.value > 0)) { toast('Сумма?'); return; }
+      try { await op1({ op: 'payment.create', data: { deal_id: d.id, kind: kind.value, amount_kop: Math.round(+amount.value * 100), due_on: due.value || null } }); crmDirty(); render(); } catch (e) { fail(e); }
+    };
+    card.append(el('h3', {}, 'Деньги'),
+      el('div', { class: 'props' },
+        el('span', {}, 'Модель'), sel('fee_kind', Object.entries(FEE_KIND), d.fee_kind),
+        el('span', {}, 'Гонорар, ₽'), rubIn('fee_kop'),
+        el('span', {}, 'Ретейнер, ₽/мес'), rubIn('retainer_kop'),
+        el('span', {}, 'Успех, %'), inp('success_pct', 'number', d.success_pct, (x) => +x)),
+      el('div', { class: 'money-sum' }, [paid && 'получено ' + rub(paid), inv && 'счета ' + rub(inv), plan && 'план ' + rub(plan),
+        d.fee_kop && ['mandate', 'active', 'closing'].includes(d.stage) ? 'осталось ' + rub(Math.max(d.fee_kop - paid, 0)) : null,
+        d.fee_kop && paid + inv + plan < d.fee_kop && d.stage !== 'archive' ? 'не расписано ' + rub(d.fee_kop - paid - inv - plan) : null].filter(Boolean).join(' · ') || 'оплат пока нет'),
+      el('div', { class: 'pays' }, pays.map((x) => payRow(x, false))),
+      el('div', { class: 'pay-add' }, kind, amount, due, el('button', { class: 'btn small', onclick: addPay }, '+ Оплата')));
+  }
+
+  // Следующий шаг — открытое дело сделки.
+  const open = (v ? v.open : all().filter((t) => t.deal_id === d.id && isOpen(t)));
+  const next = el('input', { placeholder: 'Следующее дело по сделке… (Enter)' });
+  next.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter' || !next.value.trim()) return;
+    const parsed = parseQuick(next.value.trim(), {});
+    try { await op1({ op: 'task.create', task: { title: parsed.title, ...parsed.set, project_id: d.project_id, deal_id: d.id, source: 'web' } }); next.value = ''; crmDirty(); render(); } catch (err) { fail(err); }
+  });
+  card.append(el('h3', {}, 'Следующий шаг'),
+    el('div', {}, open.length ? open.map((t) => el('div', { class: 'mini-task', onclick: () => openCard(t.id) },
+      el('button', { class: 'tick', title: 'Сделано', onclick: (e) => { e.stopPropagation(); toggleDone([S.tasks.get(t.id) || t]).then(() => { crmDirty(); render(); }); } }),
+      el('span', {}, '#' + t.num + ' ' + t.title), t.due_date ? el('span', { class: t.due_date < S.today ? 'late' : 'faint' }, ' · ' + D.ddmm(t.due_date)) : null))
+      : (d.stage !== 'archive' ? el('div', { class: 'next none' }, 'Нет следующего дела — сделка без шага застынет.') : null)),
+    el('div', { class: 'add-comment' }, next));
+  if (v && v.done.length) card.append(el('details', {}, el('summary', {}, `Сделано по сделке (${v.done.length})`),
+    v.done.map((t) => el('div', { class: 'hist' }, `#${t.num} ${t.title}` + (t.completed_at ? ' · ' + D.ddmm(t.completed_at.slice(0, 10)) : '')))));
+
+  card.append(el('h3', {}, 'Хронология'), v ? timelineBox(v.timeline, v.entries, { project_id: d.project_id, deal_id: d.id, person_ids: d.person_ids || [] }) : loading());
+  if (v && v.minutes_all) card.append(el('div', { class: 'hint-line' }, icon('clock', 12), ' Время из Засечки по делам сделки: ' + hrs(v.minutes_all)));
+
+  const legacy = [d.my_view != null || S.me.role === 'owner' ? ['Как я вижу (только мне)', 'my_view', true] : null, ['Идеи', 'ideas', true],
+    d.next_step ? ['Следующий шаг (Notion)', 'next_step', false] : null, d.ball ? ['Мяч (Notion)', 'ball', false] : null,
+    d.log ? ['Хронология (Notion)', 'log', false] : null].filter(Boolean);
+  card.append(el('details', { open: d.my_view || d.ideas ? true : null }, el('summary', {}, 'Заметки и тексты из Notion'),
+    legacy.map(([label, f, edit]) => {
+      const ta = el('textarea', { class: 'notes', readonly: edit ? null : true }, d[f] || '');
+      if (edit) ta.addEventListener('change', () => save(f, ta.value.trim() || null));
+      return el('div', { class: 'legacy' }, el('div', { class: 'faint' }, label), ta);
+    })));
+  if (v && v.history.length) {
+    card.append(el('details', {}, el('summary', {}, 'Журнал сделки'), v.history.map((h) => {
+      const a = h.after || {};
+      const what = h.op === 'insert' ? 'заведена' : a.stage ? 'стадия: ' + (STAGE[a.stage] || a.stage) + (a.outcome ? ' — ' + OUTCOME[a.outcome] : '') : Object.keys(a).join(', ');
+      return el('div', { class: 'hist' }, `${h.at.slice(0, 16).replace('T', ' ')} · ${h.actor} · ${what}`);
+    })));
+  }
+  return el('section', { class: 'card-pane', 'data-key': 'deal:' + S.dealId }, card);
+}
+
+// ── Человек в CRM (на его странице) ─────────────────────────────────────
+function personCrmBlock(p) {
+  const v = crmGet('/api/view/dossier?person_id=' + p.id);
+  const cad = el('select', {}, [['', '—'], ...Object.entries(CADENCE)].map(([k, l]) => el('option', { value: k, selected: (p.cadence || '') === k }, l)));
+  cad.addEventListener('change', async () => { try { await op1({ op: 'person.set', id: p.id, set: { cadence: cad.value || null } }); crmDirty(); render(); } catch (e) { fail(e); } });
+  const hub = el('input', { type: 'checkbox' });
+  hub.checked = !!p.hub;
+  hub.addEventListener('change', async () => { try { await op1({ op: 'person.set', id: p.id, set: { hub: hub.checked } }); crmDirty(); } catch (e) { fail(e); } });
+  return el('div', { class: 'crm-person' },
+    el('div', { class: 'toolbar' }, el('label', {}, 'Теплота', cad), el('label', {}, hub, 'хаб — через него идут темы')),
+    v && v.deals.length ? el('div', { class: 'group' }, el('h2', {}, 'Сделки', el('span', { class: 'n' }, v.deals.length)), el('div', { class: 'dlist' }, v.deals.map(dealTile))) : null,
+    el('div', { class: 'group' }, el('h2', {}, 'Хронология'), v ? timelineBox(v.timeline, null, { person_ids: [p.id] }, { showDeal: true }) : loading()));
 }
 
 // ── Клавиши ─────────────────────────────────────────────────────────────
@@ -1159,7 +1689,7 @@ document.addEventListener('keydown', (e) => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);
   if (e.key === 'Escape') {
     if (document.querySelector('.pop')) { closePop(); return; }
-    if (S.cardId || S.draft) { S.cardId = null; S.draft = null; render(); return; }
+    if (S.cardId || S.draft || S.dealId) { S.cardId = null; S.draft = null; S.dealId = null; render(); return; }
     if (S.sel.size) { S.sel.clear(); render(); }
     return;
   }

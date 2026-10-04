@@ -54,7 +54,12 @@ DELA_INSTRUCTIONS = """
 - Менять: dela_add, dela_change, dela_decide («Новое»), dela_note (хронология клиента). Дело называется коротким номером «57».
 - Формат названия — «Кто: действие». Мяч: mine — моё, waiting — жду от person, agenda — поднять при встрече с person. Деньги: paid — оплата согласована, potential — развитие, пусто — как у проекта.
 - Даты пиши сам: YYYY-MM-DD, сегодняшняя дата — в первой строке dela_view.
-- Задачу на Марианну не ставь: только с её согласия, через неё саму."""
+- Задачу на Марианну не ставь: только с её согласия, через неё саму.
+
+CRM ЗФ — в тех же Делах: клиент = проект, внутри сделки со стадиями (lead, proposal — КП, mandate, active, closing, archive с итогом won/lost/paused), гонорар, оплаты (план, счёт, получено), хронология контактов, время из Засечки.
+- Смотреть: crm_view (pipeline — воронка, clients — клиенты и «чужие» клиенты Засечки, client, deal, person, ties — кому пора напомнить о себе, money — деньги фирмы). Для счёта — sql по life.deals, life.payments, life.interactions, life.work_time.
+- Менять: crm_deal (завести или поправить сделку: стадия, итог, гонорар, команда, кто привёл), crm_payment (оплаты), dela_note (запись в хронологию). Следующий шаг сделки — открытое дело с этой сделкой (dela_add с project и deal), а не текст.
+- Деньги фирмы (life.payments) — не деньги семьи (life.money_live)."""
 
 
 def build(cfg: Config) -> tuple[FastMCP, OwnerAuth]:
@@ -317,6 +322,37 @@ def _dela_tools(mcp: FastMCP, url: str) -> None:
         """Разобрать «Новое». suggestion — id из dela_view view=new (первых 8 знаков хватит) или «batch:<пачка>» — вся пачка встречи. decision: accept или reject. reason — почему отклонил (это учит разбор). Поля title, project, person, ball, due_date — принять с поправкой."""
         return await run(dela.decide, suggestion, decision, reason, title=title, project=project, person=person,
                          ball=ball, due_date=due_date)
+
+    from pravka_dela import crm_tools as crm
+
+    @mcp.tool()
+    async def crm_view(view: str = "pipeline", project: str | None = None, deal: str | None = None,
+                       person: str | None = None) -> str:
+        """CRM ЗФ. view: pipeline (воронка по стадиям: гонорар, взвешенно, следующее дело, тишина, время), clients (клиенты: контакт, следующее дело, деньги за год, время за 90 дней; плюс клиенты из Засечки, которых нет в справочнике), client (клиент целиком: сделки, хронология, время по месяцам — нужен project), deal (сделка: модель гонорара, команда, дела, оплаты с id, хронология — нужны project и deal), person (человек: сделки и хронология — нужен person), ties (связи: кому пора напомнить о себе по теплоте, кто приводит сделки, дни рождения), money (деньги фирмы: дебиторка, ждём, получено, портфель, воронка)."""
+        return await run(crm.view, view, project, deal, person)
+
+    @mcp.tool()
+    async def crm_deal(project: str, deal: str | None = None, name: str | None = None, stage: str | None = None,
+                       outcome: str | None = None, lost_reason: str | None = None, deal_type: str | None = None,
+                       lead: str | None = None, team: list[str] | None = None, people: list[str] | None = None,
+                       source: str | None = None, fee_kind: str | None = None, fee_rub: float | None = None,
+                       retainer_rub: float | None = None, success_pct: float | None = None, probability: int | None = None,
+                       expected_on: str | None = None, deadline: str | None = None, my_view: str | None = None,
+                       ideas: str | None = None) -> str:
+        """Завести сделку клиента (project + name) или поправить (project + deal). stage: lead, proposal (КП), mandate, active, closing, archive; outcome: won (сделали), lost (проиграли), paused (заморожено) — сам уводит в архив, lost_reason — почему. deal_type: M&A, Банковский advisory, Управленка, Косткаттинг, Финансирование, Сопровождение. lead — ответственный в ЗФ, team — команда ЗФ, people — люди клиента, source — кто привёл. fee_kind: fixed, retainer, success, hourly, mixed; fee_rub — гонорар всего, retainer_rub — в месяц, success_pct — процент успеха; probability — %, expected_on — когда решение (YYYY-MM-DD). my_view — «как я вижу» (видит только Саша). Пустая строка — очистить поле. Ответственный и команда видят клиента в Делах; деньги — только кому открыты."""
+        return await run(crm.deal, project, deal=deal, name=name, lead=lead, team=team, people=people, source=source,
+                         fee_rub=fee_rub, retainer_rub=retainer_rub, success_pct=success_pct, stage=stage, outcome=outcome,
+                         lost_reason=lost_reason, deal_type=deal_type, fee_kind=fee_kind, probability=probability,
+                         expected_on=expected_on, deadline=deadline, my_view=my_view, ideas=ideas)
+
+    @mcp.tool()
+    async def crm_payment(project: str, deal: str, amount_rub: float | None = None, kind: str | None = None,
+                          title: str | None = None, due_on: str | None = None, invoiced_on: str | None = None,
+                          paid_on: str | None = None, payment: str | None = None, cancel: bool = False,
+                          note: str | None = None) -> str:
+        """Оплата по сделке ЗФ: новая (amount_rub) или правка старой (payment — id из crm_view view=deal). kind: advance (аванс), stage (этап), final, success (success fee), retainer (за месяц), extra (допработы). due_on — когда ждём, invoiced_on — счёт выставлен, paid_on — деньги пришли (YYYY-MM-DD). cancel — оплаты не будет (строка остаётся)."""
+        return await run(crm.payment, project, deal, amount_rub=amount_rub, kind=kind, title=title, due_on=due_on,
+                         invoiced_on=invoiced_on, paid_on=paid_on, payment=payment, cancel=cancel, note=note)
 
     @mcp.tool()
     async def dela_note(summary: str, kind: str = "note", project: str | None = None, deal: str | None = None,

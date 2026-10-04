@@ -15,7 +15,7 @@
 | GET  /api/me | кто я |
 | GET  /api/sync?since=N | всё изменившееся после N (телефон, веб) |
 | POST /api/ops | пачка операций с op_id (офлайн-очередь) |
-| GET  /api/view/<имя> | готовый список: morning, new, waiting, person, quick, now, project, week, search |
+| GET  /api/view/<имя> | готовый список: morning, new, waiting, person, quick, now, project, week, search; CRM — pipeline, clients, client, deal (с журналом), dossier, ties, money |
 | GET  /api/task/<id или номер> | дело с комментариями и журналом |
 | POST /api/parse | {"text", "project_id"?, "person_id"?} — Claude режет текст на дела и заводит их; ответ — номер задания |
 | GET  /api/parse/<номер> | run, пока думает; потом done с делами и заметками или error |
@@ -130,8 +130,8 @@ def build(cfg: Config) -> Starlette:
         who = await auth(request)
         if not who:
             return _err("нужен вход", 401)
-        name = await anyio.to_thread.run_sync(_user_name, url, who.user)
-        return _json({"ok": True, "user": who.user, "name": name, "kind": who.kind, "claude": bool(cfg.anthropic_key)})
+        info = await anyio.to_thread.run_sync(_user_info, url, who.user)
+        return _json({"ok": True, "user": who.user, **info, "kind": who.kind, "claude": bool(cfg.anthropic_key)})
 
     async def sync(request: Request):
         who = await auth(request)
@@ -170,7 +170,8 @@ def build(cfg: Config) -> Starlette:
         if not who:
             return _err("нужен вход", 401)
         name = request.path_params["name"]
-        params = {k: v for k, v in request.query_params.items() if k in {"sphere", "person_id", "project_id", "q", "status"}}
+        params = {k: v for k, v in request.query_params.items()
+                  if k in {"sphere", "person_id", "project_id", "deal_id", "q", "status", "closed_days"}}
         try:
             out = await anyio.to_thread.run_sync(lambda: store.view(url, who.user, name, **params))
         except store.OpError as e:
@@ -269,10 +270,16 @@ def build(cfg: Config) -> Starlette:
     ])
 
 
-def _user_name(url: str, user: str) -> str:
+def _user_info(url: str, user: str) -> dict:
+    """Имя и что человеку открыто: веб по этому прячет «Деньги» и время Засечки."""
     with db.session(url, user, via="view") as conn:
-        row = conn.execute("SELECT name FROM crm.users WHERE id = %s", (user,)).fetchone()
-    return row["name"] if row else user
+        row = conn.execute(
+            "SELECT name, role, clients, crm.money_ok(id) AS money, settings FROM crm.users WHERE id = %s", (user,)
+        ).fetchone()
+    if not row:
+        return {"name": user, "role": "member", "clients": "own", "money": False, "settings": {}}
+    return {"name": row["name"], "role": row["role"], "clients": row["clients"], "money": row["money"],
+            "settings": row["settings"] or {}}
 
 
 def task_card(url: str, user: str, ref: str) -> dict | None:

@@ -581,3 +581,99 @@ def run(cfg, args) -> int:
     else:
         print("сухой прогон: база не тронута (--apply — записать)")
     return 0
+
+
+# ── Лог взаимодействий Notion (хронология CRM) ──────────────────────────
+
+LOG_KINDS = {"Звонок": "call", "Встреча": "meeting", "Zoom": "zoom", "Telegram": "telegram", "Email": "email", "WhatsApp": "whatsapp"}
+PLACEHOLDER = "Последний контакт (по Notion)"
+
+
+def hex_id(s: str | None) -> str | None:
+    """id страницы Notion — последние 32 шестнадцатеричных знака ссылки, в любом её виде."""
+    h = re.sub(r"[^0-9a-f]", "", (s or "").lower())
+    return h[-32:] if len(h) >= 32 else None
+
+
+def log_at(row: dict) -> dt.datetime:
+    """Дата записи: со временем — как есть, без времени — полдень по Москве (сутки не съедут)."""
+    raw = row.get("date") or row.get("created")
+    if row.get("is_datetime") and raw and "T" in raw:
+        return dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    day = dt.date.fromisoformat(raw[:10])
+    created = dt.date.fromisoformat((row.get("created") or raw)[:10])
+    if (created - day).days > 200:  # «28.04.2025» в записи, заведённой 28.04.2026, — опечатка в годе
+        try:
+            day = day.replace(year=created.year)
+        except ValueError:
+            pass
+    return dt.datetime.combine(day, dt.time(12), tzinfo=dt.timezone(dt.timedelta(hours=3)))
+
+
+def notion_log(url: str, path: Path, apply_: bool) -> str:
+    """Хронология из Notion: строка лога — запись crm.interactions (source = notion).
+
+    Контакт и сделка — по id страниц Notion, которые помнят люди и сделки
+    справочника. Нет ни того, ни другого — клиент ищется по началу записи
+    «Бета/Иван: …» через алиасы справочника (crm.match_name). Повтор безвреден:
+    id записи выводится из id строки Notion. Заглушки «Последний контакт
+    (по Notion)» из первого переноса убираются (deleted_at) у людей, у кого
+    теперь есть настоящая запись не раньше.
+    """
+    rows = json.loads(path.read_text(encoding="utf-8"))["results"]
+    stats: Counter = Counter()
+    unmatched: list[str] = []
+    with db.session(url, "system", "svc:import", via="import") as conn:
+        owner = conn.execute("SELECT crm.owner_id() AS id").fetchone()["id"]
+        people = {hex_id(r["notion_id"]): r["id"] for r in conn.execute("SELECT id, notion_id FROM crm.people WHERE notion_id IS NOT NULL")}
+        deals = {hex_id(r["notion_id"]): (r["id"], r["project_id"])
+                 for r in conn.execute("SELECT id, project_id, notion_id FROM crm.deals WHERE notion_id IS NOT NULL")}
+        for r in rows:
+            person_ids = [str(people[h]) for h in r.get("contacts") or [] if h in people]
+            stats["контакт не найден"] += sum(1 for h in r.get("contacts") or [] if h not in people)
+            deal_id = project_id = None
+            for h in r.get("deals") or []:
+                if h in deals:
+                    deal_id, project_id = deals[h]
+                    break
+            else:
+                if r.get("deals"):
+                    stats["сделка не найдена"] += 1
+            summary = (r.get("summary") or "").strip()
+            if not project_id and ":" in summary[:80]:
+                # «Альфа: …», «Бета/Иван: …», «Гамма / Ольга: …»
+                for part in re.split(r"\s*/\s*", summary.split(":", 1)[0]):
+                    m = conn.execute("SELECT * FROM crm.match_name(%s)", (part,)).fetchone()
+                    if m["project_id"] and not project_id:
+                        project_id = m["project_id"]
+                        stats["клиент по началу записи"] += 1
+                    if m["person_id"] and str(m["person_id"]) not in person_ids:
+                        person_ids.append(str(m["person_id"]))
+            if not project_id and not person_ids:
+                unmatched.append(f"{r.get('date', '')[:10]} {summary[:90]}")
+            stats["записей"] += 1
+            if not apply_ or not summary:
+                continue
+            conn.execute(
+                "INSERT INTO crm.interactions (id, at, kind, summary, next_step, project_id, deal_id, person_ids, source, source_ref, "
+                "owner_id, notion_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'notion', %s, %s, %s) "
+                "ON CONFLICT (id) DO UPDATE SET at = EXCLUDED.at, kind = EXCLUDED.kind, summary = EXCLUDED.summary, "
+                "next_step = EXCLUDED.next_step, project_id = EXCLUDED.project_id, deal_id = EXCLUDED.deal_id, "
+                "person_ids = EXCLUDED.person_ids, source_ref = EXCLUDED.source_ref",
+                (sid("interaction", "notion-log", r["id"]), log_at(r), LOG_KINDS.get(r.get("kind") or "", "other"), summary,
+                 (r.get("next") or "").strip() or None, project_id, deal_id, person_ids, r.get("src"), owner,
+                 f"https://app.notion.com/p/{r['id']}"),
+            )
+        if apply_:
+            stats["заглушек убрано"] = conn.execute(
+                "UPDATE crm.interactions z SET deleted_at = now() WHERE z.summary = %s AND z.source = 'import' AND z.deleted_at IS NULL "
+                "AND EXISTS (SELECT 1 FROM crm.interactions i WHERE i.source = 'notion' AND i.deleted_at IS NULL "
+                "            AND i.person_ids && z.person_ids AND i.at >= z.at - interval '1 day')",
+                (PLACEHOLDER,),
+            ).rowcount
+    out = [f"# Лог взаимодействий Notion → хронология CRM ({'записано' if apply_ else 'сухой прогон'})", ""]
+    out += [f"- {k}: {v}" for k, v in stats.items()]
+    if unmatched:
+        out += ["", f"## Без клиента и человека ({len(unmatched)}) — остаются в общей хронологии владельца", ""]
+        out += [f"- {u}" for u in unmatched]
+    return "\n".join(out) + "\n"

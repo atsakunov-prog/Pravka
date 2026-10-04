@@ -27,6 +27,7 @@ APP_TABLES = {
     "crm.project_access": "SELECT, INSERT, UPDATE, DELETE",
     "crm.access_revoked": "SELECT",
     "crm.interactions": "SELECT, INSERT, UPDATE",
+    "crm.payments": "SELECT, INSERT, UPDATE",
     "tasks.labels": "SELECT, INSERT",
     "tasks.tasks": "SELECT, INSERT, UPDATE",
     "tasks.comments": "SELECT, INSERT, UPDATE",
@@ -39,7 +40,7 @@ APP_TABLES = {
     "crm.state": "SELECT, INSERT, UPDATE",
     "crm.history": "SELECT",
 }
-APP_VIEWS = ["tasks.v_tasks"]
+APP_VIEWS = ["tasks.v_tasks", "crm.v_deals"]
 APP_SEQUENCES = ["tasks.task_num"]
 
 

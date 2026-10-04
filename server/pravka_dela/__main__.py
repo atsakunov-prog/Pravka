@@ -69,17 +69,38 @@ def cmd_check(args) -> int:
 
 
 def cmd_user(args) -> int:
+    """Завести или поправить пользователя. Доступ к клиентам и деньгам — только так
+    (самому человеку база их менять не даёт)."""
     cfg = config_mod.load(args.env)
     settings = json.loads(args.settings) if args.settings else {}
     with db.session(cfg.db_url, "system", "svc:cli") as conn:
+        person = None
+        if args.person:
+            found = conn.execute(
+                "SELECT id, name FROM crm.people WHERE archived_at IS NULL AND (id::text = %s OR crm.norm(name) = crm.norm(%s) "
+                "OR crm.norm(short) = crm.norm(%s))", (args.person, args.person, args.person)
+            ).fetchall()
+            if len(found) != 1:
+                print(f"человек «{args.person}» не определился: " + (", ".join(r["name"] for r in found) or "нет такого"))
+                return 1
+            person = found[0]["id"]
         conn.execute(
-            "INSERT INTO crm.users (id, name, role, telegram_id, settings) VALUES (%s, %s, %s, %s, %s) "
+            "INSERT INTO crm.users (id, name, role, telegram_id, settings, person_id, clients, sees_money) "
+            "VALUES (%s, %s, %s, %s, %s, %s, coalesce(%s, 'own'), coalesce(%s, false)) "
             "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role, "
             "telegram_id = coalesce(EXCLUDED.telegram_id, crm.users.telegram_id), "
-            "settings = crm.users.settings || EXCLUDED.settings",
-            (args.id, args.name, args.role, args.telegram, json.dumps(settings)),
+            "settings = crm.users.settings || EXCLUDED.settings, "
+            "person_id = coalesce(%s, crm.users.person_id), "
+            "clients = coalesce(%s, crm.users.clients), sees_money = coalesce(%s, crm.users.sees_money)",
+            (args.id, args.name, args.role, args.telegram, json.dumps(settings), person, args.clients, args.money,
+             person, args.clients, args.money),
         )
-    print(f"пользователь {args.id} записан")
+        if person:
+            conn.execute("UPDATE crm.people SET user_id = %s WHERE id = %s AND user_id IS DISTINCT FROM %s",
+                         (args.id, person, args.id))
+        u = conn.execute("SELECT clients, sees_money, person_id FROM crm.users WHERE id = %s", (args.id,)).fetchone()
+    print(f"пользователь {args.id} записан: клиенты — {u['clients']}, деньги — {'да' if u['sees_money'] else 'нет'}"
+          + ("" if u["person_id"] else " (не связан с человеком справочника: --person)"))
     return 0
 
 
@@ -215,6 +236,18 @@ def cmd_import(args) -> int:
     return importer.run(cfg, args)
 
 
+def cmd_import_log(args) -> int:
+    """Лог взаимодействий Notion — в хронологию CRM. Без --apply — только отчёт."""
+    from . import importer
+
+    cfg = config_mod.load(args.env)
+    text = importer.notion_log(cfg.db_url, Path(args.file), args.apply)
+    out = Path(args.report or "notion-log-report.md")
+    out.write_text(text, encoding="utf-8")
+    print(f"отчёт: {out}" + ("" if args.apply else " (сухой прогон: база не тронута, --apply — записать)"))
+    return 0
+
+
 def cmd_export_todoist(args) -> int:
     """Выгрузка Todoist по API в файл — для переноса с комментариями. Токен — из dela.env."""
     from . import bridge
@@ -248,6 +281,11 @@ def main(argv: list[str] | None = None) -> int:
     u.add_argument("--role", default="member", choices=["owner", "member"])
     u.add_argument("--telegram", type=int)
     u.add_argument("--settings", help='JSON, например {"assign": "ask", "reminders": false}')
+    u.add_argument("--clients", choices=["own", "team", "all"],
+                   help="own — только своё; team — клиенты, где он на сделке; all — все клиенты фирмы")
+    u.add_argument("--money", type=lambda v: v.lower() in ("1", "yes", "да", "true"), metavar="да|нет",
+                   help="видит гонорары и оплаты")
+    u.add_argument("--person", help="кто он в справочнике людей (имя или короткое имя)")
     u.set_defaults(fn=cmd_user)
 
     t = sub.add_parser("token")
@@ -281,6 +319,12 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("--apply", action="store_true", help="записать в базу (без него — только отчёт)")
     i.add_argument("--report", help="куда положить отчёт (Markdown)")
     i.set_defaults(fn=cmd_import)
+
+    il = sub.add_parser("import-log", help="лог взаимодействий Notion в хронологию CRM")
+    il.add_argument("--file", required=True, help="notion-log.json")
+    il.add_argument("--apply", action="store_true")
+    il.add_argument("--report")
+    il.set_defaults(fn=cmd_import_log)
 
     e = sub.add_parser("export-todoist")
     e.add_argument("--out", required=True)
