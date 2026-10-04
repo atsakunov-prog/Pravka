@@ -49,6 +49,9 @@ try {
         [Security.Principal.WindowsBuiltInRole]::Administrator)
     if (-not $isAdmin) { throw 'нужен запуск от имени администратора (правой кнопкой → «Запуск от имени администратора»)' }
     foreach ($need in $VenvPy, $DelaEnv) { if (-not (Test-Path -LiteralPath $need)) { throw "нет $need" } }
+    # Вывод Python перехватывается — без UTF-8 он пишет в cp1252 и падает на кириллице (как в установщике).
+    $env:PYTHONIOENCODING = 'utf-8'
+    [Console]::OutputEncoding = [Text.Encoding]::UTF8
     $env:PYTHONPATH = $Server
     Set-Location $Server
 
