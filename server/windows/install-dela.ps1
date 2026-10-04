@@ -323,13 +323,18 @@ print("обработчик встреч перезапустится, когд�
         Ok 'сборщик «Дома» перезапущен: плашка «Дела»'
     }
 
+    # Ссылка входа — на основной адрес веба: кука живёт на том адресе, где вошёл
+    # (на адресе роутера или старом greenfieldnotes вход с kovcheg.am не виден).
     $inviteFile = Join-Path $Secrets 'invite-sasha.txt'
-    Py 'ссылка входа' @('-m', 'pravka_dela', '--env', $DelaEnv, 'invite', 'sasha', '--base', $PhoneUrl, '--out', $inviteFile)
+    Py 'ссылка входа' @('-m', 'pravka_dela', '--env', $DelaEnv, 'invite', 'sasha', '--base', $PublicUrl, '--out', $inviteFile)
+    $link = (Get-Content -LiteralPath $inviteFile -Raw).Trim()
+    try { Set-Clipboard -Value $link } catch {}
+    try { Start-Process $link } catch {}
 
     Write-Host ''
     Write-Host 'ГОТОВО.' -ForegroundColor Green
-    Write-Host "  Дальше в роутере: CrazeDNS → Add → dela → 192.168.1.77, HTTP, порт $Port, unrestricted."
-    Write-Host "  Потом веб: ссылка входа — в $inviteFile (одноразовая, двое суток)."
+    Write-Host "  Веб: ссылка входа открыта в браузере и скопирована в буфер — $PublicUrl."
+    Write-Host '  Не открылась — вставьте из буфера в Chrome. Ссылка одноразовая, двое суток; вход живёт полгода.'
 } catch {
     Write-Host ''
     Write-Host "ОШИБКА: $($_.Exception.Message)" -ForegroundColor Red
