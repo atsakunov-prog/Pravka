@@ -66,18 +66,26 @@ def migrate(owner_url: str, app_role: str, reader_role: str | None = None) -> li
             raise RuntimeError(
                 f"Роли {app_role} нет: её заводит установщик Дел (install-dela.ps1) от суперпользователя."
             )
-        applied = {r[0] for r in conn.execute("SELECT name FROM core.migrations")}
-        for name in sorted(n for n in files if n.startswith("dela_")):
-            if name in applied:
-                continue
-            with conn.transaction():
-                conn.execute(files[name])
-                conn.execute("INSERT INTO core.migrations (name) VALUES (%s)", (name,))
-            done.append(name)
+        done += apply_pending(conn, files)
         with conn.transaction():
             grant_app(conn, app_role)
         if reader_role and life_views(conn, reader_role):
             done.append("life_dela.sql")
+    return done
+
+
+def apply_pending(conn: psycopg.Connection, files: dict[str, str] | None = None) -> list[str]:
+    """Недостающие dela_NNNN.sql по порядку, каждая своей транзакцией. Роль — владелец базы."""
+    files = files if files is not None else dict(_sql_files())
+    applied = {r[0] for r in conn.execute("SELECT name FROM core.migrations")}
+    done = []
+    for name in sorted(n for n in files if n.startswith("dela_")):
+        if name in applied:
+            continue
+        with conn.transaction():
+            conn.execute(files[name])
+            conn.execute("INSERT INTO core.migrations (name) VALUES (%s)", (name,))
+        done.append(name)
     return done
 
 
@@ -102,6 +110,10 @@ def life_views(conn: psycopg.Connection, reader_role: str) -> bool:
     if have < 2:
         return False
     files = dict(_sql_files())
+    # Виды life читают колонки новых миграций Дел, а migrate архива (он идёт
+    # первым в установщике) пересобирает life раньше, чем migrate Дел: поэтому
+    # недостающие миграции Дел — здесь же. Права роли службы раздаст migrate Дел.
+    apply_pending(conn, files)
     with conn.transaction():
         conn.execute(files["life_dela.sql"])
         r = sql.Identifier(reader_role)

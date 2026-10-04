@@ -229,3 +229,13 @@ def test_claude_tools_deal_payment_and_views(team):
     card = crm_tools.view(url, "deal", project="Тета", deal="оценка")
     assert "аванс" in card and "Модель: фикс" in card, card
     assert "Не вышло" in crm_tools.view(url, "client", project="Нет такого")
+
+
+def test_life_views_apply_pending_dela_migrations_first(dela, conn):
+    """Установщик зовёт migrate архива раньше migrate Дел: виды life не должны упасть на новых колонках."""
+    try:
+        assert dela_db.apply_pending(conn, {"dela_9999.sql": "CREATE TABLE crm.zz_probe (x int)"}) == ["dela_9999.sql"]
+        assert dela_db.apply_pending(conn, {"dela_9999.sql": "CREATE TABLE crm.zz_probe (x int)"}) == []
+    finally:
+        conn.execute("DROP TABLE IF EXISTS crm.zz_probe")
+        conn.execute("DELETE FROM core.migrations WHERE name = 'dela_9999.sql'")
