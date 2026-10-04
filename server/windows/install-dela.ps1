@@ -31,7 +31,7 @@ param(
     [string]$Root = 'D:\PravkaArchive',
     [string]$Python = 'C:\Program Files\Python314\python.exe',
     [int]$Port = 8102,
-    [string]$PublicUrl = 'https://dela.greenfieldnotes.com',
+    [string]$PublicUrl = 'https://dela.kovcheg.am',
     [string]$PhoneUrl = 'https://dela.znakomiy.netcraze.pro:8443',
     [string]$Import = 'C:\Bot\Dela\import',
     [switch]$NoUpdate
