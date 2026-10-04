@@ -23,7 +23,8 @@
        комментарии, а мост забирает новые задачи до переезда телефона);
     8. запуск, /health, самопроверка; перезапуск архива;
     9. встречи: токен службы и мягкий перезапуск обработчика — задачи из
-       разборов поедут в «Новое»; плашка «Дела» на «Доме».
+       разборов поедут в «Новое»; токен дайджеста Telegram (C:\Bot\Digest\secrets,
+       только alex) — разноска переписки; плашка «Дела» на «Доме».
   Итог — в D:\PravkaArchive\logs\install-dela-<дата>.log.
 #>
 param(
@@ -279,9 +280,30 @@ with psycopg.connect(dsn, autocommit=True) as c:
         Py 'токен встреч' @('-m', 'pravka_dela', '--env', $DelaEnv, 'token', '--user', 'sasha', '--kind', 'service', '--name', 'meetings', '--out', $tmpTok)
         Set-EnvLine $meetEnv 'DELA_URL' "http://127.0.0.1:$Port"
         Set-EnvLine $meetEnv 'DELA_TOKEN' ((Get-Content -LiteralPath $tmpTok -Raw).Trim())
-        Set-EnvLine $meetEnv 'DELA_SINCE' (Get-Date -Format 'yyyy-MM-dd')
         Remove-Item -LiteralPath $tmpTok -Force
         Ok 'встречи получили токен: задачи свежих разборов поедут в «Новое»'
+    }
+    # Дайджест Telegram (слушатель C:\Bot\Digest от alex): свой токен — разноска переписки в «Новое».
+    $digestDir = 'C:\Bot\Digest'
+    $digestEnv = Join-Path $digestDir 'secrets\dela.env'
+    if ((Test-Path $digestDir) -and -not (Read-Env $digestEnv)['DELA_TOKEN']) {
+        $sec = Join-Path $digestDir 'secrets'
+        New-Item -ItemType Directory -Force -Path $sec | Out-Null
+        # Папка только для alex, администраторов и SYSTEM — без наследования от C:\Bot.
+        $acl = New-Object Security.AccessControl.DirectorySecurity
+        $acl.SetAccessRuleProtection($true, $false)
+        $inh = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+        $none = [Security.AccessControl.PropagationFlags]::None
+        foreach ($who in @(@($Owner, 'Modify'), @('BUILTIN\Administrators', 'FullControl'), @('NT AUTHORITY\SYSTEM', 'FullControl'))) {
+            $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($who[0], $who[1], $inh, $none, 'Allow')))
+        }
+        Set-Acl -LiteralPath $sec -AclObject $acl
+        $tmpTok = Join-Path $env:TEMP 'dela-digest.tok'
+        Py 'токен дайджеста' @('-m', 'pravka_dela', '--env', $DelaEnv, 'token', '--user', 'sasha', '--kind', 'service', '--name', 'digest', '--out', $tmpTok)
+        Set-EnvLine $digestEnv 'DELA_URL' "http://127.0.0.1:$Port"
+        Set-EnvLine $digestEnv 'DELA_TOKEN' ((Get-Content -LiteralPath $tmpTok -Raw).Trim())
+        Remove-Item -LiteralPath $tmpTok -Force
+        Ok 'дайджест получил токен: дела из переписки поедут в «Новое» со следующим дайджестом'
     }
     # Обработчик встреч перезапускается мягко: дорабатывает текущее задание (как кнопка в вебе).
     $restart = @'
