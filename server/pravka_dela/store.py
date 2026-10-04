@@ -466,8 +466,13 @@ def view_morning(conn, user, sphere=None, **_):
 
 
 def view_new(conn, user, **_):
+    # Пачки — по дате встречи, свежие сверху; у «закрыть» и «поправить» — номер и название дела.
     rows = conn.execute(
-        "SELECT * FROM tasks.suggestions WHERE for_user = %s AND status = 'pending' ORDER BY batch_ref NULLS FIRST, created_at",
+        "SELECT s.*, t.num AS task_num, t.title AS task_title FROM tasks.suggestions s "
+        "LEFT JOIN tasks.tasks t ON t.id = s.task_id "
+        "WHERE s.for_user = %s AND s.status = 'pending' "
+        "ORDER BY max(coalesce(s.payload ->> 'meeting_at', s.created_at::date::text)) "
+        "         OVER (PARTITION BY coalesce(s.batch_ref, s.id::text)) DESC, s.batch_ref, s.created_at",
         (user,),
     ).fetchall()
     batches: dict[str, dict] = {}

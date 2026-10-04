@@ -67,6 +67,18 @@ def test_mcp_decide_batch(dela):
     out = mcp_tools.decide(dela, "batch:meeting:7", "accept")
     assert out.startswith("Разобрано: 2 из 2."), out
 
+    # Сверка встреч предлагает закрыть и поправить дела; свежая встреча — выше старой.
+    t = store.apply_ops(dela, "sasha", [{"op": "task.create", "task": {"title": "Иван: прислать модель"}}], via="app")["results"][0]["task"]
+    for ref, at, kind, payload in (("meeting:8", "2026-09-03", "close", {}), ("meeting:9", "2026-09-28", "update", {"due_date": "2026-10-10"})):
+        store.apply_ops(dela, "system", [{"op": "suggestion.create", "suggestion": {
+            "for_user": "sasha", "kind": kind, "task_id": t["id"], "source": "meeting", "batch_ref": ref,
+            "batch_title": ref, "quote": "Иван прислал модель", "payload": {"meeting_at": at, **payload}}}], via="meetings")
+    v = mcp_tools.view(dela, "new")
+    assert f"закрыть: #{t['num']} Иван: прислать модель" in v and "«Иван прислал модель»" in v, v
+    assert f"поправить: #{t['num']}" in v and "срок 2026-10-10" in v and v.index("meeting:9") < v.index("meeting:8"), v
+    out = mcp_tools.decide(dela, "batch:meeting:8", "accept")
+    assert "сделано" in mcp_tools.card(dela, str(t["num"])), out
+
 
 def _write(tmp, name, data):
     p = tmp / name

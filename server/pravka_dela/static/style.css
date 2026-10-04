@@ -309,6 +309,10 @@ details summary { cursor: pointer; color: var(--faint); font-size: 12.5px; margi
 .sug:hover { background: var(--hover); }
 .sug .main { flex: 1; }
 .sug .hint { color: var(--muted); font-size: 12.5px; }
+.sug.close .main > div:first-child { color: var(--ok); }
+.sug.update .main > div:first-child { color: var(--warn); }
+.group h2 .src { font-size: 12px; font-weight: 500; color: var(--accent); text-decoration: none; }
+.group h2 .src:hover { text-decoration: underline; }
 .sug .acts { display: flex; gap: 4px; flex: none; }
 
 /* ── Проект и человек ── */

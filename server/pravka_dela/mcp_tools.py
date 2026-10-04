@@ -186,8 +186,15 @@ def view(url: str, name: str = "morning", sphere: str | None = None, person: str
             out.append(f"{b['title'] or 'Без пачки'}:")
             for s in b["items"]:
                 p = s["payload"] or {}
-                hint = " · ".join(x for x in (p.get("project_name"), p.get("person_name"), BALL.get(p.get("ball", "mine")), p.get("due_date")) if x)
-                out.append(f"  [{s['id'][:8]}] {s['kind']}: {p.get('title') or ''}" + (f" ({hint})" if hint else ""))
+                if s["kind"] == "create":
+                    what = p.get("title") or ""
+                    hint = " · ".join(x for x in (p.get("project_name"), p.get("person_name"), BALL.get(p.get("ball", "mine")), p.get("due_date")) if x)
+                else:
+                    ref = f"#{s['task_num']} {s['task_title']}" if s.get("task_num") else "дело не видно"
+                    what = {"close": "закрыть", "update": "поправить", "assign": "взять себе"}.get(s["kind"], s["kind"]) + ": " + ref
+                    hint = " · ".join(x for x in (p.get("due_date") and "срок " + p["due_date"], p.get("ball") and BALL.get(p["ball"])) if x)
+                out.append(f"  [{s['id'][:8]}] {what}" + (f" ({hint})" if hint else "")
+                           + (f" — «{s['quote'][:160]}»" if s.get("quote") and s["quote"] != what else ""))
             out.append("")
         if not v["batches"]:
             out.append("Пусто.")

@@ -972,32 +972,53 @@ function renderWeek() {
       !stale.length && !waitStale.length && !noStep.length ? el('div', { class: 'empty' }, 'Чисто. Неделя разобрана.') : null)];
 }
 
+/** Что предлагает автоматика — словами: завести, закрыть или поправить дело. */
+function sugText(s) {
+  const p = s.payload || {};
+  if (s.kind === 'create') {
+    return { title: p.title || s.quote || '',
+      hint: [p.project_name, p.person_name, p.ball !== 'mine' ? BALL[p.ball] : null, p.due_date && 'срок ' + D.ddmm(p.due_date)].filter(Boolean).join(' · ') };
+  }
+  const t = S.tasks.get(s.task_id);
+  const ref = t ? `#${t.num} ${t.title}` : 'дело не видно';
+  if (s.kind === 'close') return { title: 'Закрыть: ' + ref, hint: t?.project_name || '' };
+  if (s.kind === 'assign') return { title: 'Взять себе: ' + ref, hint: t?.project_name || '' };
+  const what = [p.due_date ? 'срок ' + (t?.due_date ? D.ddmm(t.due_date) + ' → ' : '') + D.ddmm(p.due_date) : null,
+    p.ball ? 'мяч: ' + BALL[p.ball] : null].filter(Boolean).join(', ');
+  return { title: 'Поправить: ' + ref, hint: what };
+}
+// Пачки — по дате встречи, свежие сверху; без даты — по времени появления.
+const sugAt = (s) => (s.payload && s.payload.meeting_at) || s.created_at.slice(0, 10);
+
 function renderNew() {
-  const list = pendingSugs().sort((a, b) => (a.batch_ref || '').localeCompare(b.batch_ref || '') || a.created_at.localeCompare(b.created_at));
+  const list = pendingSugs().sort((a, b) => a.created_at.localeCompare(b.created_at));
   const batches = new Map();
   for (const s of list) {
     const key = s.batch_ref || 'one:' + s.id;
-    if (!batches.has(key)) batches.set(key, { title: s.batch_title, items: [] });
-    batches.get(key).items.push(s);
+    if (!batches.has(key)) batches.set(key, { title: s.batch_title, ref: s.source_ref, at: '', items: [] });
+    const b = batches.get(key);
+    b.items.push(s);
+    if (sugAt(s) > b.at) b.at = sugAt(s);
   }
   const box = el('div', { class: 'body' });
   if (!list.length) box.append(el('div', { class: 'empty' }, 'Новых предложений нет.'));
-  for (const b of batches.values()) {
+  for (const b of [...batches.values()].sort((x, y) => y.at.localeCompare(x.at))) {
     const ids = b.items.map((s) => s.id);
     box.append(el('div', { class: 'group' },
-      el('h2', {}, b.title || 'Без пачки', el('span', { class: 'n' }, b.items.length), ids.length > 1 ? el('span', { class: 'act' },
-        el('button', { class: 'chip-btn', onclick: () => decide(ids, 'accept') }, 'Принять все'), ' ',
-        el('button', { class: 'chip-btn', onclick: () => decide(ids, 'reject') }, 'Отклонить все')) : null),
+      el('h2', {}, b.title || 'Без пачки', el('span', { class: 'n' }, b.items.length),
+        b.ref && /^https:\/\//.test(b.ref) ? el('a', { class: 'src', href: b.ref, target: '_blank', rel: 'noopener noreferrer' }, 'встреча') : null,
+        ids.length > 1 ? el('span', { class: 'act' },
+          el('button', { class: 'chip-btn', onclick: () => decide(ids, 'accept') }, 'Принять все'), ' ',
+          el('button', { class: 'chip-btn', onclick: () => decide(ids, 'reject') }, 'Отклонить все')) : null),
       b.items.map((s) => {
-        const p = s.payload || {};
-        const hint = [p.project_name, p.person_name, BALL[p.ball], p.due_date && 'срок ' + D.ddmm(p.due_date)].filter(Boolean).join(' · ');
-        return el('div', { class: 'sug' },
-          el('div', { class: 'main' }, el('div', {}, s.kind === 'create' ? p.title : `${s.kind}: ${p.title || ''}`), hint ? el('div', { class: 'hint' }, hint) : null,
-            s.quote && s.quote !== p.title ? el('div', { class: 'hint' }, '«' + s.quote.slice(0, 160) + '»') : null),
+        const { title, hint } = sugText(s);
+        return el('div', { class: 'sug' + (s.kind !== 'create' ? ' ' + s.kind : '') },
+          el('div', { class: 'main' }, el('div', {}, title), hint ? el('div', { class: 'hint' }, hint) : null,
+            s.quote && s.quote !== title ? el('div', { class: 'hint' }, '«' + s.quote.slice(0, 200) + '»') : null),
           el('div', { class: 'acts' },
             el('button', { class: 'btn small ok', onclick: () => decide([s.id], 'accept') }, 'Принять'),
-            el('button', { class: 'btn small', onclick: () => { S.draft = s; S.cardId = null; render(); } }, 'Поправить'),
-            el('button', { class: 'btn small bad', onclick: () => { const r = prompt('Почему не дело? (можно пусто)'); if (r !== null) decide([s.id], 'reject', r || null); } }, 'Отклонить')));
+            s.kind === 'create' ? el('button', { class: 'btn small', onclick: () => { S.draft = s; S.cardId = null; render(); } }, 'Поправить') : null,
+            el('button', { class: 'btn small bad', onclick: () => { const r = prompt(s.kind === 'create' ? 'Почему не дело? (можно пусто)' : 'Почему нет? (можно пусто)'); if (r !== null) decide([s.id], 'reject', r || null); } }, 'Отклонить')));
       })));
   }
   return [head('Новое', ['что предложила автоматика: встречи, Telegram — дела появятся, когда примешь']), box];
