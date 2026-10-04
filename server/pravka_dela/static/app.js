@@ -20,7 +20,6 @@ const S = {
   parse: null, quickDraft: null, // идёт разбор Claude; текст, вернувшийся после неудачи
 };
 const BALL = { mine: 'моё', waiting: 'жду', agenda: 'повестка' };
-const MONEY = { paid: 'оплачено', potential: 'развитие', none: 'без денег' };
 const KIND = { client: 'Клиенты', internal: 'Внутреннее', personal: 'Личное' };
 const STAGE = { lead: 'лид', proposal: 'КП', mandate: 'мандат', active: 'в работе', closing: 'закрытие', archive: 'архив' };
 const WD = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'];
@@ -101,14 +100,12 @@ const project = (id) => (id ? S.projects.get(id) : null);
 const person = (id) => (id ? S.people.get(id) : null);
 const sphereOf = (t) => (project(t.project_id) ? project(t.project_id).sphere : 'inbox');
 const inSphere = (t) => !S.sphere || sphereOf(t) === S.sphere || sphereOf(t) === 'inbox';
-const moneyOf = (t) => t.money || (project(t.project_id) ? project(t.project_id).money_default : 'none') || 'none';
 const isLate = (t) => isOpen(t) && t.due_date && t.due_date < S.today;
 const isNow = (t) => t.focus_on === S.today;
 const personName = (p) => (p ? p.short || p.name : '');
 function sortTasks(a, b) {
   return (a.due_date || '9999').localeCompare(b.due_date || '9999')
     || (a.due_time || '99').localeCompare(b.due_time || '99')
-    || (moneyOf(b) === 'paid') - (moneyOf(a) === 'paid')
     || a.num - b.num;
 }
 const all = () => [...S.tasks.values()];
@@ -116,26 +113,27 @@ const openMine = () => all().filter((t) => isOpen(t) && isMine(t) && inSphere(t)
 
 const VIEWS = {
   morning: {
-    title: 'Утро', icon: 'sun',
+    title: 'Утро', icon: 'sun', color: '#f5b544',
     sections() {
       const m = openMine();
       const from = new Date(Date.now() - 3 * 86400e3).toISOString();
+      // [заголовок, дела, значок, цвет значка]
       return [
-        ['Сейчас', m.filter(isNow)],
-        ['На сегодня и просроченное', m.filter((t) => t.ball === 'mine' && t.due_date && t.due_date <= S.today && !isNow(t))],
-        ['Пора напомнить', m.filter((t) => t.ball === 'waiting' && ((t.nudge_on && t.nudge_on <= S.today) || (t.due_date && t.due_date <= S.today)))],
-        ['Оплачено, без даты', m.filter((t) => t.ball === 'mine' && moneyOf(t) === 'paid' && !t.due_date && !isNow(t))],
-        ['Поставили другие', m.filter((t) => t.created_by !== t.owner_id && t.created_at > from)],
+        ['Сейчас', m.filter(isNow), 'bolt', 'var(--now)'],
+        ['На сегодня и просроченное', m.filter((t) => t.ball === 'mine' && t.due_date && t.due_date <= S.today && !isNow(t)), 'date', '#f2706a'],
+        ['Пора напомнить', m.filter((t) => t.ball === 'waiting' && ((t.nudge_on && t.nudge_on <= S.today) || (t.due_date && t.due_date <= S.today))), 'hourglass', 'var(--waiting)'],
+        ['Поставили другие', m.filter((t) => t.created_by !== t.owner_id && t.created_at > from), 'person', '#a78bfa'],
       ];
     },
     count: () => openMine().filter((t) => (t.ball === 'mine' && t.due_date && t.due_date <= S.today) || isNow(t)).length,
   },
-  upcoming: { title: 'Предстоящее', icon: 'cal', count: () => openMine().filter((t) => t.due_date && t.due_date > S.today && t.due_date <= D.add(S.today, 7)).length },
-  new: { title: 'Новое', icon: 'inbox-in', count: () => pendingSugs().length },
-  waiting: { title: 'Жду', icon: 'hourglass', count: () => openMine().filter((t) => t.ball === 'waiting').length },
-  week: { title: 'Неделя', icon: 'broom' },
-  inbox: { title: 'Входящие', icon: 'tray', count: () => openMine().filter((t) => !t.project_id).length },
-  all: { title: 'Все дела', icon: 'list' },
+  // У каждого вида свой цвет значка — как у умных списков Things: глаз находит пункт раньше, чем читает.
+  upcoming: { title: 'Предстоящее', icon: 'cal', color: '#f2706a', count: () => openMine().filter((t) => t.due_date && t.due_date > S.today && t.due_date <= D.add(S.today, 7)).length },
+  new: { title: 'Новое', icon: 'inbox-in', color: '#5b9dff', count: () => pendingSugs().length },
+  waiting: { title: 'Жду', icon: 'hourglass', color: '#6fb8ff', count: () => openMine().filter((t) => t.ball === 'waiting').length },
+  week: { title: 'Неделя', icon: 'broom', color: '#3fbf8f' },
+  inbox: { title: 'Входящие', icon: 'tray', color: '#8b93ff', count: () => openMine().filter((t) => !t.project_id).length },
+  all: { title: 'Все дела', icon: 'list', color: '#9aa3b2' },
 };
 const pendingSugs = () => [...S.sugs.values()].filter((s) => s.status === 'pending' && s.for_user === S.me.user);
 
@@ -153,6 +151,9 @@ const ICONS = {
   date: 'M4 6h16v14H4zM4 10h16M8 3v4M16 3v4M9 15h2',
   bolt: 'M13 2L4 14h7l-1 8 9-12h-7z',
   x: 'M6 6l12 12M18 6L6 18',
+  chat: 'M5 5h14v10H10l-5 4z',
+  search: 'M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14zM20 20l-4-4',
+  check: 'M5 12.5l4.5 4.5L19 7.5',
 };
 function icon(name, size = 15) {
   const ns = 'http://www.w3.org/2000/svg';
@@ -198,6 +199,18 @@ function toast(text, undo) {
 const fail = (e) => toast('Не вышло: ' + e.message);
 const norm = (s) => (s || '').toLowerCase().replace(/ё/g, 'е').trim();
 
+// ── Цвета: у проекта и человека свой оттенок — по id, чтобы не менялся от переименования ──
+const HUES = ['#f87171', '#fb923c', '#f5b544', '#a3d65c', '#34d399', '#2dd4bf', '#38bdf8', '#7c9cff', '#a78bfa', '#e879f9', '#f472b6'];
+const hueOf = (id) => { let h = 0; for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return HUES[h % HUES.length]; };
+/** Цвет — переменной --c (CSSOM, CSP не мешает); в светлой теме CSS сам темнит его. */
+const tint = (node, c) => { node.classList.add('tinted'); node.style.setProperty('--c', c); return node; };
+const dot = (id) => tint(el('span', { class: 'pdot' }), hueOf(id));
+function avatar(p, cls) {
+  const name = (p && (p.name || p.short)) || '?';
+  const ini = name.split(/\s+/).map((w) => (w.match(/[\p{L}\p{N}]/u) || [''])[0]).filter(Boolean).slice(0, 2).join('').toUpperCase();
+  return tint(el('span', { class: 'ava' + (cls ? ' ' + cls : ''), title: name, 'aria-hidden': 'true' }, ini || '?'), hueOf(p ? p.id : name));
+}
+
 // ── Маршрут ─────────────────────────────────────────────────────────────
 function route() {
   const h = location.hash.replace(/^#\/?/, '');
@@ -213,7 +226,7 @@ window.addEventListener('hashchange', () => { S.sel.clear(); S.dealFilter = null
 
 // ── Вход ────────────────────────────────────────────────────────────────
 function renderLogin(msg) {
-  $app.replaceChildren(el('div', { class: 'login' }, el('h1', {}, 'Дела'),
+  $app.replaceChildren(el('div', { class: 'login' }, el('img', { class: 'login-logo', src: '/static/icon.svg', alt: '' }), el('h1', {}, 'Дела'),
     el('p', { class: 'muted' }, msg || 'Вход — по ссылке-приглашению. Попроси её у Саши: ссылка одноразовая, дальше страница помнит вход полгода.')));
 }
 
@@ -261,10 +274,10 @@ function render() {
   renderBulk();
 }
 
-function navItem(hash, ico, label, count, on, extra) {
+function navItem(hash, ico, label, count, on, extra, hot) {
   return el('button', { class: 'nav-item' + (on ? ' on' : ''), onclick: () => go(hash) },
     el('span', { class: 'ico' }, ico), el('span', { class: 'label' }, label), extra || null,
-    count ? el('span', { class: 'n' }, count) : null);
+    count ? el('span', { class: 'n' + (hot ? ' hot' : ''), title: hot ? 'есть просроченные' : null }, count) : null);
 }
 
 function renderSide(r) {
@@ -275,7 +288,7 @@ function renderSide(r) {
   const nav = Object.entries(VIEWS).map(([k, v]) => {
     const n = v.count ? v.count() : 0;
     const badge = k === 'new' && n ? el('span', { class: 'badge-new' }, n) : null;
-    return navItem('#/' + k, icon(v.icon), v.title, k === 'new' ? null : n, r.kind === k, badge);
+    return navItem('#/' + k, tint(icon(v.icon), v.color), v.title, k === 'new' ? null : n, r.kind === k, badge);
   });
 
   // Проекты: избранные сверху, дальше по видам; число открытых и точка просрочки.
@@ -287,8 +300,8 @@ function renderSide(r) {
   }
   const live = [...S.projects.values()].filter((p) => !p.archived_at && (!S.sphere || p.sphere === S.sphere))
     .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-  const projItem = (p) => navItem('#/p/' + p.id, icon('folder', 14), p.name, openBy.get(p.id), r.kind === 'project' && r.id === p.id,
-    lateBy.has(p.id) ? el('span', { class: 'dot', title: 'есть просроченные' }) : null);
+  // Цвет проекта — точкой; просрочка — красным числом (красная точка рядом с цветной путала бы).
+  const projItem = (p) => navItem('#/p/' + p.id, dot(p.id), p.name, openBy.get(p.id), r.kind === 'project' && r.id === p.id, null, lateBy.has(p.id));
   const group = (key, title, items) => {
     if (!items.length) return null;
     return el('div', { class: 'side-group' + (S.closed[key] ? ' closed' : '') },
@@ -298,7 +311,7 @@ function renderSide(r) {
   };
   const favs = live.filter((p) => S.favs.includes(p.id));
   const crmNav = crmOn() ? Object.entries(CRM_VIEWS).filter(([, v]) => !v.money || S.me.money)
-    .map(([k, v]) => navItem('#/' + k, icon(v.icon), v.title, null, r.kind === k)) : [];
+    .map(([k, v]) => navItem('#/' + k, tint(icon(v.icon), v.color), v.title, null, r.kind === k)) : [];
   const groups = [group('crm', 'CRM', crmNav), group('fav', 'Избранное', favs.map(projItem))];
   for (const [kind, title] of Object.entries(KIND)) {
     groups.push(group('k-' + kind, title, live.filter((p) => p.kind === kind && !S.favs.includes(p.id)).map(projItem)));
@@ -307,24 +320,39 @@ function renderSide(r) {
   const byPerson = new Map();
   for (const t of all()) if (isOpen(t) && t.person_id) byPerson.set(t.person_id, (byPerson.get(t.person_id) || 0) + 1);
   const people = [...byPerson.entries()].sort((a, b) => b[1] - a[1]).map(([id, n]) => [person(id), n]).filter(([p]) => p);
-  groups.push(group('people', 'Люди', people.map(([p, n]) => navItem('#/h/' + p.id, icon('person', 14), personName(p), n, r.kind === 'person' && r.id === p.id))));
+  groups.push(group('people', 'Люди', people.map(([p, n]) => navItem('#/h/' + p.id, avatar(p), personName(p), n, r.kind === 'person' && r.id === p.id))));
   const archived = [...S.projects.values()].filter((p) => p.archived_at).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   if (S.closed.arch === undefined) S.closed.arch = true;
   groups.push(group('arch', 'Архив', archived.map(projItem)));
 
+  const me = person(S.me.person_id) || { id: S.me.user, name: S.me.name };
   return el('aside', { class: 'side' },
-    el('div', { class: 'brand' }, el('b', {}, 'Дела'), el('span', { class: 'who' }, S.me.name)),
+    el('div', { class: 'brand' }, el('img', { src: '/static/icon.svg', alt: '' }), el('b', {}, 'Дела'),
+      el('span', { class: 'who' }, S.me.name), avatar(me)),
     search, sphere, nav, groups,
     el('div', { class: 'side-foot' }, el('span', {}, el('span', { class: 'kbd' }, 'n'), ' новое · ', el('span', { class: 'kbd' }, '/'), ' поиск'),
       el('button', { onclick: async () => { await api('/auth/logout', {}); location.reload(); } }, 'Выйти')));
 }
 
 // ── Основная колонка ────────────────────────────────────────────────────
+/** Значок перед заголовком: цвет вида, проекта или аватар человека — по маршруту. */
+function headIcon() {
+  const r = route();
+  const v = VIEWS[r.kind] || CRM_VIEWS[r.kind];
+  const box = (name, c) => tint(el('span', { class: 'h-ico' }, icon(name, 18)), c);
+  if (v) return box(v.icon, v.color);
+  if (r.kind === 'project' && project(r.id)) return box('folder', hueOf(r.id));
+  if (r.kind === 'person' && person(r.id)) return avatar(person(r.id), 'big');
+  if (r.kind === 'search') return box('search', '#9aa3b2');
+  return null;
+}
+
 function head(title, sub, extra) {
-  return el('div', { class: 'list-head' },
+  const lead = headIcon();
+  return el('div', { class: 'list-head' + (lead ? ' has-ico' : '') },
     el('div', { class: 'row1' },
       el('button', { class: 'burger', onclick: () => { S.sideOpen = true; render(); } }, '☰'),
-      el('h1', {}, title), extra || null),
+      el('h1', {}, lead, el('span', { class: 'h-t' }, title)), extra || null),
     sub ? el('div', { class: 'sub' }, [].concat(sub).filter(Boolean).map((x) => (x.nodeType ? x : el('span', {}, x)))) : null);
 }
 
@@ -351,7 +379,7 @@ function renderMain(r) {
   if (r.kind === 'morning') {
     const secs = v.sections();
     const body = el('div', { class: 'body' }, quickAdd({}),
-      secs.map(([t, items]) => (items.length ? groupBox(t, items.sort(sortTasks), { late: false }) : null)));
+      secs.map(([t, items, ic, c]) => (items.length ? groupBox(t, items.sort(sortTasks), { lead: tint(icon(ic, 14), c) }) : null)));
     if (!secs.some(([, i]) => i.length)) body.append(el('div', { class: 'empty' }, 'На сегодня пусто. Загляни в «Предстоящее».'));
     const n = pendingSugs().length;
     return [head('Утро', [D.long(S.today), n ? el('a', { class: 'link', href: '#/new' }, `в «Новом» ждут решения: ${n}`) : null]), body];
@@ -394,6 +422,7 @@ function grouped(items, by) {
     if (!buckets.has(key)) buckets.set(key, { title, items: [], ...extra });
     buckets.get(key).items.push(t);
   };
+  const day = (main, iso) => [main, el('span', { class: 'gsub' }, D.long(iso))];
   for (const t of items) {
     if (by === 'date') {
       if (!isOpen(t)) put('9done', 'Сделано', t);
@@ -401,18 +430,18 @@ function grouped(items, by) {
       else {
         const n = D.diff(t.due_date, S.today);
         if (n < 0) put('0late', 'Просрочено', t, { late: true });
-        else if (n === 0) put('1today', 'Сегодня · ' + D.long(S.today), t);
-        else if (n === 1) put('2tomorrow', 'Завтра · ' + D.long(t.due_date), t);
+        else if (n === 0) put('1today', day('Сегодня', S.today), t);
+        else if (n === 1) put('2tomorrow', day('Завтра', t.due_date), t);
         else if (n < 7) put('3' + t.due_date, D.long(t.due_date), t);
         else if (n < 14) put('5next', 'Следующая неделя', t);
         else put('6later', 'Позже', t);
       }
     } else if (by === 'project') {
       const p = project(t.project_id);
-      put(p ? '1' + p.name : '0', p ? p.name : 'Входящие', t, { href: p ? '#/p/' + p.id : '#/inbox' });
+      put(p ? '1' + p.name : '0', p ? p.name : 'Входящие', t, { href: p ? '#/p/' + p.id : '#/inbox', lead: () => (p ? dot(p.id) : tint(icon('tray', 14), VIEWS.inbox.color)) });
     } else if (by === 'person') {
       const p = person(t.person_id);
-      put(p ? '1' + personName(p) : '2', p ? personName(p) : 'Без человека', t, { href: p ? '#/h/' + p.id : null });
+      put(p ? '1' + personName(p) : '2', p ? personName(p) : 'Без человека', t, { href: p ? '#/h/' + p.id : null, lead: p ? () => avatar(p) : null });
     } else if (by === 'ball') {
       put({ mine: '1', agenda: '2', waiting: '3' }[t.ball], { mine: 'Моё', agenda: 'Повестка', waiting: 'Жду' }[t.ball], t);
     } else if (by === 'deal') {
@@ -424,47 +453,53 @@ function grouped(items, by) {
 }
 
 function groupBox(title, items, opts = {}, by) {
-  const h = title ? el('h2', { class: opts.late ? 'late' : '' },
+  const lead = typeof opts.lead === 'function' ? opts.lead() : opts.lead;
+  const h = title ? el('h2', { class: opts.late ? 'late' : '' }, lead || null,
     opts.href ? el('a', { class: 'link', href: opts.href }, title) : title, el('span', { class: 'n' }, items.length),
     opts.late && items.length > 1 ? el('span', { class: 'act' },
       el('button', { class: 'chip-btn', onclick: (e) => reschedulePop(e.currentTarget, items.map((t) => t.id)) }, 'Перенести все')) : null) : null;
   return el('div', { class: 'group' }, h, items.map((t) => taskRow(t, by)));
 }
 
+// Строка дела. Слева — выбор, «Сейчас» и галка: их места заняты всегда, при наведении они только
+// проявляются, поэтому строка не прыгает. Номер — справа, бледно: на него ссылаются, но читать не мешает.
 function taskRow(t, by) {
   S.order.push(t.id);
   const p = project(t.project_id);
   const who = person(t.person_id);
   const due = dueLabel(t);
+  const now = isNow(t);
+  const stop = (e) => e.stopPropagation();
+  const m = (cls, ic, ...kids) => el('span', { class: 'm' + (cls ? ' ' + cls : '') }, ic ? icon(ic, 12) : null, ...kids);
   const chips = [];
-  if (by !== 'project' && route().kind !== 'project') chips.push(p ? el('a', { class: 'link', href: '#/p/' + p.id, onclick: (e) => e.stopPropagation() }, p.name) : el('span', {}, 'Входящие'));
-  const dl = t.deal_id ? S.deals.get(t.deal_id) : null;
-  if (dl && by !== 'deal') chips.push(el('span', {}, dl.name));
-  if (t.ball !== 'mine' && by !== 'ball') {
-    chips.push(el('span', { class: 'ball-' + t.ball }, BALL[t.ball] + (who ? ' ' + personName(who) : '') + (t.ball === 'waiting' && t.waiting_since ? ' · ' + D.diff(S.today, t.waiting_since) + ' дн.' : '')));
-  } else if (who && by !== 'person') {
-    chips.push(el('a', { class: 'link', href: '#/h/' + who.id, onclick: (e) => e.stopPropagation() }, '@' + personName(who)));
+  if (due && (by !== 'date' || due.cls === 'late')) chips.push(m(due.cls, 'date', due.text));
+  if (by !== 'project' && route().kind !== 'project') {
+    chips.push(p ? el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, dot(p.id), p.name) : m('', 'tray', 'Входящие'));
   }
-  if (due && (by !== 'date' || due.cls === 'late')) chips.push(el('span', { class: due.cls }, due.text));
-  if (t.estimate_min) chips.push(el('span', {}, t.estimate_min + ' мин'));
-  const m = moneyOf(t);
-  if (m === 'paid' || m === 'potential') chips.push(el('span', { class: 'badge ' + m }, MONEY[m]));
-  if (isNow(t)) chips.push(el('span', { class: 'badge now' }, 'сейчас'));
-  for (const l of t.labels || []) chips.push(el('span', {}, '*' + l));
+  const dl = t.deal_id ? S.deals.get(t.deal_id) : null;
+  if (dl && by !== 'deal') chips.push(m('', 'funnel', dl.name));
+  if (t.ball !== 'mine' && by !== 'ball') {
+    chips.push(m('ball-' + t.ball, t.ball === 'waiting' ? 'hourglass' : 'chat',
+      BALL[t.ball] + (who ? ' ' + personName(who) : '') + (t.ball === 'waiting' && t.waiting_since ? ' · ' + D.diff(S.today, t.waiting_since) + ' дн.' : '')));
+  } else if (who && by !== 'person') {
+    chips.push(el('a', { class: 'm link', href: '#/h/' + who.id, onclick: stop }, '@' + personName(who)));
+  }
+  if (t.estimate_min) chips.push(m('', 'clock', t.estimate_min + ' мин'));
+  for (const l of t.labels || []) chips.push(el('span', { class: 'tag' }, l));
   const pick = el('input', { type: 'checkbox', class: 'pick', title: 'Выбрать (Shift — диапазон)' });
   pick.checked = S.sel.has(t.id);
   pick.addEventListener('click', (e) => { e.stopPropagation(); togglePick(t.id, e.shiftKey); });
   return el('div', {
-    class: 'task' + (isOpen(t) ? '' : ' done') + (S.cardId === t.id ? ' open-now' : '') + (S.sel.has(t.id) ? ' sel' : ''),
+    class: 'task ball-' + t.ball + (isOpen(t) ? '' : ' done') + (now ? ' now' : '') + (S.cardId === t.id ? ' open-now' : '') + (S.sel.has(t.id) ? ' sel' : ''),
     'data-id': t.id,
     onclick: () => openCard(t.id),
   },
   pick,
+  el('button', { class: 'now-btn' + (now ? ' on' : ''), title: now ? 'Убрать из «Сейчас»' : 'В «Сейчас» — на сегодня',
+    onclick: (e) => { e.stopPropagation(); setFields([t.id], { focus_on: now ? null : S.today }); } }, icon('bolt', 15)),
   el('button', { class: 'tick' + (isOpen(t) ? '' : ' done'), title: isOpen(t) ? 'Сделано' : 'Вернуть', onclick: (e) => { e.stopPropagation(); toggleDone([t]); } }),
-  el('div', { class: 'main' }, el('div', { class: 'title' }, el('span', { class: 'num' }, '#' + t.num), t.title), chips.length ? el('div', { class: 'chips' }, chips) : null),
-  el('div', { class: 'acts' },
-    el('button', { class: 'icon-btn', title: 'Перенести', onclick: (e) => { e.stopPropagation(); reschedulePop(e.currentTarget, [t.id]); } }, icon('date', 14)),
-    el('button', { class: 'icon-btn', title: isNow(t) ? 'Убрать из «Сейчас»' : 'В «Сейчас»', onclick: (e) => { e.stopPropagation(); setFields([t.id], { focus_on: isNow(t) ? null : S.today }); } }, icon('bolt', 14))));
+  el('div', { class: 'main' }, el('div', { class: 'title' }, t.title), chips.length ? el('div', { class: 'chips' }, chips) : null),
+  el('span', { class: 'num' }, '#' + t.num));
 }
 
 // ── Действия ────────────────────────────────────────────────────────────
@@ -682,7 +717,6 @@ const COMMANDS = [
   ['жду', 'мяч у человека: жду от него'], ['повестка', 'поднять при встрече или звонке'],
   ['сейчас', 'в фокус на сегодня'], ['хочу', 'делаю, потому что сам хочу'],
   ['5м', 'оценка: 5 минут'], ['15м', 'оценка: 15 минут'], ['30м', 'оценка: полчаса'], ['60м', 'оценка: час'],
-  ['оплачено', 'деньги: оплата согласована'], ['развитие', 'деньги: развитие бизнеса'],
 ];
 const AC_HEAD = { '+': 'Проекты', '@': 'Люди', '*': 'Метки', '!': 'Команды' };
 
@@ -754,7 +788,7 @@ function quickAdd(defaults) {
   const preview = el('div', { class: 'preview' });
   const help = el('div', { class: 'help hidden' },
     'Enter — одно дело · Ctrl+Enter или звёздочка — Claude разберёт текст на несколько дел · Shift+Enter — новая строка · ',
-    '+проект  @человек  *метка  !жду  !повестка  !сейчас  !хочу  !15м  !оплачено · сегодня, завтра, в пятницу, через 3 дня, 12.10 · «в кавычках» — без разбора');
+    '+проект  @человек  *метка  !жду  !повестка  !сейчас  !хочу  !15м · сегодня, завтра, в пятницу, через 3 дня, 12.10 · «в кавычках» — без разбора');
   const status = busy ? el('div', { class: 'claude-status' }, 'Claude разбирает… Можно уходить на другие страницы — дела появятся сами.') : null;
   const ac = el('div', { class: 'ac hidden' });
   let acState = null; // {kind, q, start, items, at}
@@ -920,7 +954,7 @@ function renderProject(id) {
   const fav = S.favs.includes(id);
   const star = el('button', { class: 'star' + (fav ? ' on' : ''), title: fav ? 'Убрать из избранного' : 'В избранное',
     onclick: () => { S.favs = fav ? S.favs.filter((x) => x !== id) : [...S.favs, id]; LS.set('favs', S.favs); render(); } }, fav ? '★' : '☆');
-  const sub = [KIND[p.kind] || p.kind, 'деньги по умолчанию: ' + MONEY[p.money_default], plural(open.length, 'открытое', 'открытых', 'открытых')];
+  const sub = [KIND[p.kind] || p.kind, plural(open.length, 'открытое', 'открытых', 'открытых')];
   const late = open.filter(isLate).length;
   if (late) sub.push(el('span', { class: 'late' }, 'просрочено: ' + late));
   if (p.aliases && p.aliases.length) sub.push('ещё зовут: ' + p.aliases.join(', '));
@@ -994,8 +1028,8 @@ function renderWeek() {
     el('div', { class: 'body' },
       stale.length ? groupBox('Протухшее — закрыть, перенести или отпустить', stale.sort(sortTasks), { late: true }) : null,
       waitStale.length ? groupBox('Жду без движения больше недели', waitStale.sort(sortTasks)) : null,
-      noStep.length ? el('div', { class: 'group' }, el('h2', {}, 'Проекты с деньгами без моего следующего шага', el('span', { class: 'n' }, noStep.length)),
-        noStep.map((p) => navItem('#/p/' + p.id, icon('folder', 14), p.name, MONEY[p.money_default], false))) : null,
+      noStep.length ? el('div', { class: 'group' }, el('h2', {}, 'Проекты в работе без моего следующего шага', el('span', { class: 'n' }, noStep.length)),
+        noStep.map((p) => navItem('#/p/' + p.id, dot(p.id), p.name, null, false))) : null,
       !stale.length && !waitStale.length && !noStep.length ? el('div', { class: 'empty' }, 'Чисто. Неделя разобрана.') : null)];
 }
 
@@ -1129,11 +1163,14 @@ function renderCard() {
     el('span', {}, 'Срок'), date('due_date'), el('span', {}), quickDates,
     el('span', {}, 'Напомнить ему'), date('nudge_on'),
     el('span', {}, 'Минут'), num,
-    el('span', {}, 'Деньги'), sel('money', [['', 'как у проекта'], ['paid', 'оплачено'], ['potential', 'развитие'], ['none', 'без денег']], src.money),
     el('span', {}, 'Метки'), labels);
 
+  const cp = project(src.project_id);
+  const crumb = cp ? el('a', { class: 'crumb', href: '#/p/' + cp.id }, dot(cp.id), cp.name)
+    : el('span', { class: 'crumb' }, tint(icon('tray', 13), VIEWS.inbox.color), 'Входящие');
   const card = el('div', { class: 'card' },
-    el('div', { class: 'top' }, el('span', { class: 'num' }, t ? '#' + t.num + (t.status !== 'open' ? ' · ' + (t.status === 'done' ? 'сделано' : 'отменено') : '') : 'Предложение'),
+    el('div', { class: 'top' }, sug ? el('span', { class: 'crumb' }, tint(icon('inbox-in', 13), VIEWS.new.color), 'Предложение') : crumb,
+      t ? el('span', { class: 'num' }, '#' + t.num + (t.status !== 'open' ? ' · ' + (t.status === 'done' ? 'сделано' : 'отменено') : '')) : null,
       el('button', { class: 'icon-btn', title: 'Закрыть (Esc)', onclick: close }, icon('x', 16))),
     title, props,
     el('div', { class: 'checks' }, chk('focus_on', 'Сейчас — на сегодня', isNow(src), S.today), chk('want', 'Хочу сам', src.want, true)),
@@ -1141,12 +1178,11 @@ function renderCard() {
   const btns = el('div', { class: 'btns' });
   if (t) {
     btns.append(isOpen(t)
-      ? el('button', { class: 'btn main', onclick: () => toggleDone([t]) }, 'Сделано')
+      ? el('button', { class: 'btn main', onclick: () => toggleDone([t]) }, icon('check', 15), 'Сделано')
       : el('button', { class: 'btn', onclick: () => toggleDone([t]) }, 'Вернуть в работу'));
     if (isOpen(t)) btns.append(el('button', { class: 'btn bad', onclick: async () => { if (confirm('Отменить дело? Оно останется в журнале.')) { try { await op1({ op: 'task.cancel', id: t.id }); render(); } catch (e) { fail(e); } } } }, 'Отменить дело'));
-    const p = project(t.project_id), who = person(t.person_id);
-    if (p) btns.append(el('a', { class: 'btn', href: '#/p/' + p.id }, p.name + ' →'));
-    if (who) btns.append(el('a', { class: 'btn', href: '#/h/' + who.id }, personName(who) + ' →'));
+    const who = person(t.person_id); // проект — ссылкой наверху карточки
+    if (who) btns.append(el('a', { class: 'btn', href: '#/h/' + who.id }, avatar(who), personName(who) + ' →'));
   } else {
     btns.append(el('button', {
       class: 'btn main',
@@ -1193,10 +1229,10 @@ const IKIND = { call: 'звонок', meeting: 'встреча', zoom: 'Zoom', t
 const CADENCE = { month: 'раз в месяц', quarter: 'раз в квартал', year: 'раз в год', none: 'не видимся' };
 const OPEN_STAGES = ['lead', 'proposal', 'mandate', 'active', 'closing'];
 const CRM_VIEWS = {
-  crm: { title: 'Воронка', icon: 'funnel' },
-  clients: { title: 'Клиенты', icon: 'building' },
-  ties: { title: 'Связи', icon: 'link' },
-  money: { title: 'Деньги', icon: 'coin', money: true },
+  crm: { title: 'Воронка', icon: 'funnel', color: '#f39a4a' },
+  clients: { title: 'Клиенты', icon: 'building', color: '#2fc5c0' },
+  ties: { title: 'Связи', icon: 'link', color: '#e57bd1' },
+  money: { title: 'Деньги', icon: 'coin', color: '#45c07a', money: true },
 };
 Object.assign(ICONS, {
   funnel: 'M3 5h18l-7 8v6l-4 2v-8z',
@@ -1242,7 +1278,7 @@ function crmGet(path, maxAge = 30000) {
   return c ? c.data : null;
 }
 const crmDirty = () => { for (const c of crmCache.values()) c.at = 0; };
-const loading = () => el('div', { class: 'empty' }, 'Загружаю…');
+const loading = () => el('div', { class: 'empty loading' }, 'Загружаю…');
 
 async function dealOp(op) {
   try { const r = await op1(op); crmDirty(); render(); return r; } catch (e) { fail(e); render(); return null; }
