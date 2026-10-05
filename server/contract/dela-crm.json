@@ -46,6 +46,7 @@
    "op": "interaction.add",
    "op_id": "<uuid>",
    "data": {
+    "id": "<uuid телефона — запись видна до ответа и не удваивается>",
     "at": "2026-10-05T12:30:00+03:00",
     "kind": "call",
     "summary": "Обсудили тизер, ждут к пятнице",
@@ -700,30 +701,32 @@
    "response": {
     "people": [
      {
-      "id": "02ecd0f2-dd80-4a97-aa45-47126a266723",
-      "name": "Иван Петров",
-      "short": "Иван",
+      "id": "34ec95f8-5e37-453b-9bee-7611a629b09d",
+      "name": "Ольга Смирнова",
+      "short": "Ольга",
       "org_id": null,
       "org": null,
       "role": null,
-      "cadence": "month",
-      "hub": true,
+      "cadence": "quarter",
+      "hub": false,
       "telegram_username": null,
       "phones": [],
-      "birth_day": null,
-      "birth_month": null,
+      "birth_day": 10,
+      "birth_month": 10,
       "seeks": null,
       "offers": null,
-      "last_touch": "2026-10-04T19:10:25+03:00",
-      "brought": 1,
-      "agenda": 0,
-      "since_days": 1,
+      "last_touch": "2026-08-26T20:12:03+03:00",
+      "brought": 0,
+      "agenda": 1,
+      "since_days": 40,
       "due": false,
-      "overdue_days": -29
+      "overdue_days": -50,
+      "birthday_in": 5
      }
     ],
     "today": "2026-10-05"
-   }
+   },
+   "_": "birthday_in — дней до дня рождения; есть только у тех, у кого он записан"
   },
   "money": {
    "request": "GET /api/view/money",
@@ -963,6 +966,73 @@
      }
     ]
    }
+  },
+  "stats": {
+   "request": "GET /api/view/stats",
+   "response": {
+    "today": "2026-10-05",
+    "points": {
+     "total": 685,
+     "today": 25,
+     "week": 175,
+     "prev_week": 195
+    },
+    "streak": {
+     "current": 2,
+     "best": 5,
+     "today_done": true
+    },
+    "days": [
+     {
+      "day": "2026-10-04",
+      "done": 2,
+      "cancelled": 0,
+      "triage": 0,
+      "points": 30
+     },
+     {
+      "day": "2026-10-05",
+      "done": 2,
+      "cancelled": 0,
+      "triage": 0,
+      "points": 25
+     }
+    ],
+    "month": {
+     "done": 46,
+     "on_time": 32,
+     "with_due": 46
+    },
+    "by_project": [
+     {
+      "name": "Входящие",
+      "done": 45
+     },
+     {
+      "name": "Гамма Капитал",
+      "done": 1
+     }
+    ],
+    "by_source": [
+     {
+      "name": "руками",
+      "done": 46
+     }
+    ],
+    "open": {
+     "open": 14,
+     "overdue": 2,
+     "now_": 1
+    },
+    "since": "2026-09-14",
+    "rules": {
+     "done": 10,
+     "promised": 5,
+     "cancel": 2,
+     "triage": 2
+    }
+   },
+   "_": "Путь и статистика (05.10): очки только за доведённое, серия — дни с закрытым делом, суббота не рвёт. Уровень считает клиент по points.total: имена и пороги — THEMES и levelOf в server/pravka_dela/static/app.js; тема — users.settings.game_theme (torah | greek). days — 30 дней, здесь урезано до двух."
   }
  },
  "ask": {
@@ -1020,7 +1090,83 @@
    "errors": [],
    "model": "claude-sonnet-5-5"
   },
-  "done_new": "route = new — команда целиком про новые дела, сервер отдал её разбору (как /api/parse): tasks и notes — что заведено.",
+  "done_new": {
+   "ok": true,
+   "status": "done",
+   "route": "new",
+   "reply": "",
+   "changed": [],
+   "tasks": [
+    {
+     "id": "ae27811a-432d-4c25-9f7b-e0937b361844",
+     "num": 60,
+     "title": "Заведи позвонить Ивану завтра",
+     "notes": null,
+     "project_id": null,
+     "deal_id": null,
+     "owner_id": "sasha",
+     "ball": "mine",
+     "person_id": "cc0bee65-8f74-4507-8cef-5d71658d0f64",
+     "waiting_since": null,
+     "nudge_on": null,
+     "requested_by": null,
+     "due_date": "2026-10-06",
+     "due_time": null,
+     "estimate_min": 10,
+     "money": null,
+     "want": false,
+     "focus_on": null,
+     "labels": [
+      "звонок"
+     ],
+     "status": "open",
+     "source": "web",
+     "source_ref": null,
+     "created_by": "sasha",
+     "created_at": "2026-10-05T20:16:43+03:00",
+     "updated_at": "2026-10-05T20:16:43+03:00",
+     "completed_at": null,
+     "import_ref": null,
+     "rev": 1,
+     "seq": 199,
+     "money_eff": "none",
+     "sphere": "inbox",
+     "project_name": null,
+     "project_kind": null,
+     "deal_name": null,
+     "person_short": "Иван",
+     "person_name": "Иван Петров",
+     "requested_by_short": null,
+     "overdue": false,
+     "now_": null
+    }
+   ],
+   "notes": [
+    {
+     "id": "beec1b0f-3330-4443-8812-460fab12a103",
+     "at": "2026-10-05T20:16:43+03:00",
+     "kind": "note",
+     "summary": "Итог: комитет пройден",
+     "next_step": null,
+     "project_id": null,
+     "deal_id": null,
+     "person_ids": [],
+     "source": "raznoska",
+     "source_ref": null,
+     "owner_id": "sasha",
+     "notion_id": null,
+     "created_at": "2026-10-05T20:16:43+03:00",
+     "updated_at": "2026-10-05T20:16:43+03:00",
+     "rev": 1,
+     "seq": 200,
+     "duration_min": null,
+     "deleted_at": null
+    }
+   ],
+   "errors": [],
+   "usage": null,
+   "_": "route = new — команда целиком про новые дела, сервер отдал её разбору (как /api/parse): tasks — строки дел (как в синке, v_tasks), notes — записи хронологии (заметки)."
+  },
   "undo": "«Вернуть всё»: для каждого changed — task.set с before (если не пусто) и по status[0]: open → task.reopen, done → task.done, cancelled → task.cancel; для tasks — task.cancel."
  },
  "settings": {
