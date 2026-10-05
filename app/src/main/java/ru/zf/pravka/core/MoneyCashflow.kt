@@ -229,13 +229,58 @@ object MoneyCashflow {
      */
     fun accountOf(e: MoneyEntry, cardToAccount: Map<String, String>): String? = when (e.source) {
         MoneyEntry.Source.TINKOFF -> "Т-Банк · " + stripCard(e.account).ifBlank { "счёт" }
-        MoneyEntry.Source.PUSH -> cardToAccount[BankPush.cardOf(e.account)] ?: "Т-Банк · счёт"
+        MoneyEntry.Source.PUSH -> pushAccount(e.account, cardToAccount) ?: TBANK_UNNAMED
         MoneyEntry.Source.ALFA -> "Альфа · " + stripCard(e.account).ifBlank { "счёт" }
         MoneyEntry.Source.MKB -> "МКБ"
         MoneyEntry.Source.TBIZ -> TBIZ_NAME
         // Записи со слов владельца на именованный счёт (касса ЗФ) — этот счёт.
         MoneyEntry.Source.MANUAL -> e.account.takeIf { it.isNotBlank() && it != MoneyEntry.CASH && it != NATASHA_DEBT }
         else -> null // голос и наличные — не счёт банка; «Плати по миру» — в валюте, отдельно
+    }
+
+    /**
+     * Главный рублёвый счёт Т-Банка. Пуш без карты «…, счет RUB» — его: по
+     * цепочке «Доступно» такие пуши идут ровно между пушами карт этого счёта
+     * (сверено по архиву 05.10.2026). Имя — как его даёт выписка.
+     */
+    const val TBANK_MAIN = "Т-Банк · Black Premium"
+
+    /** Копилка Т-Банка: пуш «…, накоп. счет.» — её. */
+    const val TBANK_SAVINGS = "Т-Банк · Накопительный счет"
+
+    /** Пуш, чей счёт не узнан: карты нет в выписках и сам он счёт не назвал. */
+    const val TBANK_UNNAMED = "Т-Банк · счёт"
+
+    /**
+     * Счёт баланса пуша Т-Банка по счёту его записи: карта — по строкам
+     * выписки, без карты — по слову пуша («счет RUB», «накоп. счет»). Не
+     * узнан — null: якорь такому пушу не ставится, запись встаёт на
+     * [TBANK_UNNAMED].
+     */
+    fun pushAccount(account: String, cardToAccount: Map<String, String>): String? {
+        val card = BankPush.cardOf(account)
+        if (card.isNotEmpty()) return cardToAccount[card]
+        return when (BankPush.acctOf(account)) {
+            BankPush.Acct.RUB -> TBANK_MAIN
+            BankPush.Acct.SAVINGS -> TBANK_SAVINGS
+            null -> null
+        }
+    }
+
+    /**
+     * Якорь из пуша Т-Банка: «Доступно …» — остаток счёта его записи после
+     * операции. Счёт не узнан — якоря нет (не гадаем). Только на счёт-актив:
+     * у кредитки «Доступно» — свободный лимит, а не остаток, и пуш «Перевод …
+     * *5018. Доступно 0 ₽» (04.10.2026) обнулял долг по ней. Долговой счёт
+     * двигают только снимок и вписанное владельцем (так и на сервере).
+     */
+    fun pushAnchor(title: String, text: String, ts: Long, key: String, cardToAccount: Map<String, String>): Anchor? {
+        val parsed = (BankPush.parse(title, text) as? BankPush.Outcome.Money)?.p ?: return null
+        val bal = parsed.balanceKop ?: return null
+        val entry = BankPush.entry(parsed, ts, "", title, text)
+        val account = pushAccount(entry.account, cardToAccount) ?: return null
+        if (isDebtAccount(account)) return null
+        return Anchor(account, ts, bal, "пуш «$title»", covers = setOf("push-$key"), origin = Origin.PUSH)
     }
 
     /** Счета ЗФ из файла остатков: строки «счёт ЗФ | Т-Банк · Счет для бизнеса». */
@@ -362,7 +407,7 @@ object MoneyCashflow {
     const val LOAN_DEBT = "Займ от ЗФ (долг)"
     const val LOAN_ASSET = "Займ владельцу (у ЗФ)"
 
-    /** Долг Наташе — 30 % прибыли ЗФ (`ZfPartner`); всё выплаченное ей его гасит. */
+    /** Долг Наташе — зафиксированный на 05.10.2026 плюс 30 % прибыли ЗФ с этого дня (`ZfPartner`); выплаты гасят. */
     const val NATASHA_DEBT = "Долг Наташе (доля ЗФ)"
 
     /**
@@ -380,9 +425,10 @@ object MoneyCashflow {
         val usable = entries.filter { !it.draft && !it.dropped && it.replacedBy.isEmpty() }
         val bank = usable.mapNotNull { e -> accountOf(e, cards)?.let { it to e } }.groupBy({ it.first }, { it.second })
         val wallet = walletMoves(entries)
-        // Долг Наташе — по правилу партнёрства (`ZfPartner`): 30 % прибыли ЗФ
-        // минус всё выплаченное ей. С нуля, а не от якоря: так он верен в
-        // любой месяц. Прежние «Долг: начислено» сюда больше не идут.
+        // Долг Наташе — по правилу партнёрства (`ZfPartner`): до дня фиксации
+        // прежние «Долг: начислено» минус переводы ей, с него — 30 % прибыли
+        // ЗФ минус всё выплаченное. С нуля, а не от якоря: так он верен в
+        // любой месяц.
         val share = ZfPartner.moves(usable)
         // Займ — со стороны ЗФ (там он весь): выдала 200 000 — у Саши долг −200 000, у ЗФ требование +200 000.
         val loan = usable.filter { it.category == "zf_loan" && MoneyMatch.zfSide(it) }

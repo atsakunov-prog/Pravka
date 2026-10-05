@@ -326,11 +326,7 @@ class MoneyEngine(
         val s = store.stateFlow.value
         val cards = MoneyCashflow.cardMap(s.entries)
         val fromPushes = s.pushes.filter { it.result == MoneyStore.MONEY }.mapNotNull { p ->
-            val parsed = (BankPush.parse(p.title, p.text) as? BankPush.Outcome.Money)?.p ?: return@mapNotNull null
-            val bal = parsed.balanceKop ?: return@mapNotNull null
-            // Без карты («счет RUB») не знаем, какой это счёт, — не гадаем.
-            val account = cards[parsed.card] ?: return@mapNotNull null
-            MoneyCashflow.Anchor(account, p.ts, bal, "пуш «${p.title}»", covers = setOf("push-" + p.key), origin = MoneyCashflow.Origin.PUSH)
+            MoneyCashflow.pushAnchor(p.title, p.text, p.ts, p.key, cards)
         }
         return factoryBalances() + s.balances + fromPushes
     }

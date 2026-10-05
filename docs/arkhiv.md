@@ -138,7 +138,7 @@ Notion повторял это окно: выпавшее из телефона 
 | `money.entry` | id записи | операция со всеми полями и `live`; счёт баланса `balance_account`, у округления — `roundup_from` (05.10.2026) | `MoneyStore`, `MoneyCashflow.places` |
 | `money.reference` | `all` | категории (с полкой), справочник, якоря-снимки и вписанные (`anchors`), реестр счетов (`accounts`), что покрывают выписки (`statements`), счета ЗФ | `MoneyStore`, `MoneyCategories`, `MoneyEngine.anchors` |
 | `money.take` | `<id>` | сырая надиктовка денег | `MoneyStore` |
-| `money.push` | ключ пуша | сырое уведомление банка; «Доступно» с узнанной картой — якорем `anchor` | `MoneyStore`, `MoneyEngine.anchors` |
+| `money.push` | ключ пуша | сырое уведомление банка; «Доступно» с узнанным счётом-активом (по карте или слову «счет RUB») — якорем `anchor` | `MoneyStore`, `MoneyCashflow.pushAnchor` |
 | `pravka.take` | `<ts>` | каждая диктовка: распознанный текст, движок, звук | `TranscriptionLog` |
 | `pravka.clean` | `<ts>` | чистка моделью: вход и выход | `HistoryLog` |
 | `pravka.correction` | `<id>` | правка владельца после модели | `CorrectionsLog` |

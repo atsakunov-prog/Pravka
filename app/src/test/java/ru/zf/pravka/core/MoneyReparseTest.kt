@@ -45,6 +45,17 @@ class MoneyReparseTest {
         assertEquals("cash", m.entries.single().category)
     }
 
+    @Test fun cardlessPushMovesToTheAccountItNames() {
+        // Разбор до 05.10.2026: счёт записи — голое «Т-Банк», в балансе — безымянный счёт.
+        val old = yesterday(MoneyEntry.CategoryBy.RULE, "cash").copy(what = "Банкомат", account = "Т-Банк")
+        assertEquals(MoneyCashflow.TBANK_UNNAMED, MoneyCashflow.accountOf(old, emptyMap()))
+        val out = MoneyReparse.pushes(listOf(old), listOf(raw), "sasha")
+        assertEquals(1, out.changed)
+        assertEquals("Т-Банк, счет RUB", out.entries.single().account)
+        // «счет RUB» — главный рублёвый счёт: туда запись и встаёт.
+        assertEquals(MoneyCashflow.TBANK_MAIN, MoneyCashflow.places(out.entries)[id]!!.account)
+    }
+
     @Test fun ownersDecisionIsKept() {
         val out = MoneyReparse.pushes(listOf(yesterday(MoneyEntry.CategoryBy.OWNER, "inc_zf")), listOf(raw), "sasha")
         val e = out.entries.single()

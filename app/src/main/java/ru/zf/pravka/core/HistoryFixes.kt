@@ -158,6 +158,42 @@ internal object HistoryFixes {
                 Result(r.entries.size, r.classified, "в «ЗФ: выплата доли Наташе»: ${r.entries.count { it.category == "zf_partner" }}")
             }
         },
+        // Пуш без карты называет счёт словами: «счет RUB» — главный рублёвый
+        // (Black Premium), «накоп. счет.» — копилка. Раньше такие пуши стояли
+        // на безымянном «Т-Банк · счёт», их «Доступно» якорем не становилось,
+        // у копилки получателем выходило «счет.», а «Баланс 0 ₽» — местом.
+        // Счёт записи теперь из слова пуша — переразбор всех пушей из сырья.
+        Step(
+            id = "2026-10-05-push-account-word",
+            title = "Пуши Т-Банка без карты: «счет RUB» — главный счёт, «накоп. счет» — копилка",
+            files = listOf(MoneyStore.FILE_NAME),
+        ) { app ->
+            if (!app.profileStore.has(ru.zf.pravka.data.Profile.Mode.MONEY)) Result(0, 0, "Деньги выключены")
+            else {
+                app.moneyStore.load()
+                val o = app.moneyEngine.reparsePushes()
+                val left = o.entries.count { it.source == MoneyEntry.Source.PUSH && it.replacedBy.isEmpty() && BankPush.cardOf(it.account).isEmpty() && BankPush.acctOf(it.account) == null }
+                Result(o.looked, o.changed + o.added, "без узнанного счёта осталось: $left")
+            }
+        },
+        // Безымянные строки реестра на счёте ЗФ («Зарплата согласно реестру №…»,
+        // «Компенсация согласно реестру №…») — зарплата владельца, а не команда
+        // (05.10.2026): правило справочника теперь «ЗФ: выплата владельцу».
+        // Сверка ставит его и старым строкам; строки папы с тем же реестром в
+        // примечании остаются командой. Решения владельца сверка не трогает.
+        Step(
+            id = "2026-10-05-zf-registry-owner",
+            title = "Деньги: зарплата по реестру ЗФ без имени — выплата владельцу, а не команда",
+            files = listOf(MoneyStore.FILE_NAME),
+        ) { app ->
+            if (!app.profileStore.has(ru.zf.pravka.data.Profile.Mode.MONEY)) Result(0, 0, "Деньги выключены")
+            else {
+                app.moneyStore.load()
+                val r = app.moneyEngine.reconcile()
+                val registry = r.entries.count { it.source == MoneyEntry.Source.TBIZ && it.category == "zf_owner" && MoneyRules.norm(it.what).contains("согласно реестру") }
+                Result(r.entries.size, r.classified, "строк реестра в «ЗФ: выплата владельцу»: $registry")
+            }
+        },
     )
 
     private const val FILE = "history-fixes.json"

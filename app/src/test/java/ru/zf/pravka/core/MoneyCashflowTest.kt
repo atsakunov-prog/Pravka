@@ -147,39 +147,134 @@ class MoneyCashflowTest {
         assertEquals("Доля Наташи (ЗФ)", bp.byCategory.single().first)
     }
 
-    // Наташа — партнёр на 30 % прибыли ЗФ, не на зарплате (владелец, 05.10.2026).
-    @Test fun natashaDebtIsShareOfZfProfitMinusPayouts() {
+    // Наташа — партнёр на 30 % прибыли ЗФ, не на зарплате (владелец, 05.10.2026):
+    // долг зафиксирован на этот день по прежнему правилу, дальше — 30 % прибыли.
+    @Test fun natashaDebtIsFixedByOldRuleThenShareOfZfProfit() {
         val zf = MoneyEntry.Source.TBIZ
+        fun owed(id: String, d: String, rub: Long) = MoneyEntry(id = id, owner = "sasha", source = MoneyEntry.Source.MANUAL,
+            ts = at(d), rubKop = rub * 100, what = "доля", account = MoneyCashflow.NATASHA_DEBT, category = "owed")
         val all = listOf(
-            e("rev", "2026-02-10", 1_000_000, "zf_revenue", acc = "ЗФ", src = zf),
-            e("team", "2026-03-10", -200_000, "zf_team", acc = "ЗФ", src = zf),
-            // Расход ЗФ по назначению — и с личной карты.
-            e("soft", "2026-03-11", -50_000, "subs_work"),
+            // ---- До фиксации: прежнее правило, начисления минус переводы с личных карт.
+            owed("owed1", "2026-08-20", -100_000),
+            owed("owed2", "2026-09-22", -50_000),
+            e("share0", "2026-09-23", -60_000, "zf_share"),
+            // Надиктованный перевод, склеенный с банком, второй раз не гасит.
+            e("share0v", "2026-09-23", -60_000, "zf_share", acc = "", src = MoneyEntry.Source.VOICE).copy(matchId = "share0"),
+            // Прибыль ЗФ и платежи ей со счёта ЗФ до фиксации в долг не идут.
+            e("rev0", "2026-09-10", 200_000, "zf_revenue", acc = "ЗФ", src = zf),
+            e("team0", "2026-09-11", -5_000, "zf_team", acc = "ЗФ", src = zf),
+            e("part0", "2026-04-01", -10_000, "zf_partner", acc = "ЗФ", src = zf),
+            // ---- С дня фиксации: 30 % каждой операции прибыли минус выплаты.
+            // Расход ЗФ по назначению — и с личной карты, в сам день фиксации.
+            e("soft", "2026-10-05", -1_000, "subs_work"),
+            e("rev", "2026-10-10", 10_000, "zf_revenue", acc = "ЗФ", src = zf),
+            e("team", "2026-10-11", -2_000, "zf_team", acc = "ЗФ", src = zf),
             // Выплата семье из ЗФ — не расход (так и на сервере).
-            e("owner", "2026-03-12", -300_000, "zf_owner", acc = "ЗФ", src = zf),
-            // Выплаты Наташе: со счёта ЗФ и с личной карты.
-            e("part", "2026-04-01", -100_000, "zf_partner", acc = "ЗФ", src = zf),
-            e("share", "2026-04-02", -40_000, "zf_share"),
-            // Прежнее начисление — в долг больше не идёт.
-            MoneyEntry(id = "owed", owner = "sasha", source = MoneyEntry.Source.MANUAL, ts = at("2026-03-20"), rubKop = -55_200_000,
-                what = "доля", account = MoneyCashflow.NATASHA_DEBT, category = "owed"),
-            // До начала партнёрства — не в счёт.
-            e("old", "2025-12-20", 9_000_000, "zf_revenue", acc = "ЗФ", src = zf),
+            e("owner", "2026-10-12", -5_000, "zf_owner", acc = "ЗФ", src = zf),
+            // Не разложенное на счёте ЗФ — в прибыль, как на сервере; на личной карте — нет.
+            e("unk", "2026-10-13", -1_000, "", acc = "ЗФ", src = zf),
+            e("unkMine", "2026-10-13", -700, ""),
+            // Прежних начислений после фиксации нет: если и есть — не в счёт.
+            owed("owed3", "2026-10-14", -999),
+            // Выплаты ей: со счёта ЗФ и с личной карты.
+            e("part", "2026-10-15", -4_000, "zf_partner", acc = "ЗФ", src = zf),
+            e("share", "2026-10-16", -500, "zf_share"),
         )
         val debt = MoneyCashflow.Anchor(MoneyCashflow.NATASHA_DEBT, at("2026-01-01", 0), 0, "с нуля")
-        val acc = MoneyCashflow.balances(all, listOf(debt), at("2026-09-30"), at("2026-01-01")).first { it.name == MoneyCashflow.NATASHA_DEBT }
-        // Прибыль 1 000 000 − 200 000 − 50 000 = 750 000; доля 225 000; выплачено 140 000; долг 85 000.
-        assertEquals(-8_500_000L, acc.kop)
-        // На 1 марта: доля только с выручки февраля.
-        val feb = MoneyCashflow.balances(all, listOf(debt), at("2026-03-01", 0), at("2026-01-01")).first { it.name == MoneyCashflow.NATASHA_DEBT }
-        assertEquals(-30_000_000L, feb.kop)
-        assertEquals(ZfPartner.START, java.time.LocalDate.of(2026, 1, 1))
+        fun debtAt(t: Long) = MoneyCashflow.balances(all, listOf(debt), t, at("2026-01-01")).first { it.name == MoneyCashflow.NATASHA_DEBT }.kop
+        // На день фиксации: −100 000 − 50 000 + 60 000 = −90 000 — из журнала, без константы.
+        assertEquals(-9_000_000L, debtAt(at("2026-10-05", 0)))
+        // В тот же день: 30 % расхода ЗФ его уменьшают.
+        assertEquals(-9_000_000L + 30_000, debtAt(at("2026-10-06", 0)))
+        // Конец месяца: +300 − 3 000 + 600 + 300 + 4 000 + 500.
+        assertEquals(-9_000_000L + 30_000 - 300_000 + 60_000 + 30_000 + 400_000 + 50_000, debtAt(at("2026-10-31")))
+        // До фиксации история не пересчитывается: на 1 сентября — одно начисление августа.
+        assertEquals(-10_000_000L, debtAt(at("2026-09-01", 0)))
+
+        assertEquals(LocalDate.of(2026, 10, 5), ZfPartner.START)
         assertTrue(!ZfPartner.FAMILY_SALARY_IS_EXPENSE)
         assertEquals(8L, ZfPartner.share(25L))   // 7,5 копейки — до копейки вверх
+        assertEquals("зафиксирован на 05.10.2026, дальше 30 % прибыли ЗФ минус выплаты · точный — в «Деньгах» на компе", ZfPartner.HINT)
         // В ДДС ЗФ выплата доли — финансовая деятельность, не расход.
-        val zfRows = MoneyCashflow.build(all, listOf(YearMonth.of(2026, 4)), MoneyScope.ZF.copy(zfAccounts = setOf(MoneyCashflow.TBIZ_NAME)))
-        assertEquals(-10_000_000L, row(zfRows, "Выплата доли партнёру").values[0])
-        assertEquals(-10_000_000L, row(zfRows, "Финансовый поток").values[0])
+        val zfRows = MoneyCashflow.build(all, listOf(YearMonth.of(2026, 10)), MoneyScope.ZF.copy(zfAccounts = setOf(MoneyCashflow.TBIZ_NAME)))
+        assertEquals(-400_000L, row(zfRows, "Выплата доли партнёру").values[0])
+        assertEquals(-400_000L, row(zfRows, "Финансовый поток").values[0])
+    }
+
+    // Безымянная строка реестра на счёте ЗФ — зарплата владельца (05.10.2026),
+    // строка папы с тем же реестром в примечании — расход ЗФ.
+    @Test fun unnamedRegistrySalaryIsOwnersPayout() {
+        // Имён в тесте нет: имя папы берётся из самого заводского справочника.
+        val rules = MoneyRules.parseText(asset("money_payees.txt")).rules
+        val papaName = rules.single { it.source == "tbiz" && it.category == "zf_team" && it.comment.contains("папа") }
+            .pattern.split('|').first().trim().uppercase()
+        val zf = MoneyEntry.Source.TBIZ
+        val salary = e("Зарплата согласно реестру №1 от 10.08.2026", "2026-08-10", -100_000, "", acc = "ЗФ", src = zf)
+            .copy(note = "Зарплата согласно реестру №1 от 10.08.2026")
+        val comp = e("Компенсация согласно реестру №2 от 17.08.2026", "2026-08-17", -3_000, "", acc = "ЗФ", src = zf)
+        val papa = e(papaName, "2026-08-10", -50_000, "", acc = "ЗФ", src = zf).copy(id = "papa", note = "Зарплата согласно реестру №3 от 10.08.2026")
+        // Тот же рубль на карте Саши — «Доход от ЗФ».
+        val got = e("got", "2026-08-11", 100_000, "inc_zf")
+        val r = MoneyMatch.run(listOf(salary, comp, papa, got), rules, at("2026-09-24")).entries.associateBy { it.id }
+        assertEquals("zf_owner", r[salary.id]!!.category)
+        assertEquals("sasha", r[salary.id]!!.who)
+        assertEquals("zf_owner", r[comp.id]!!.category)
+        assertEquals("zf_team", r["papa"]!!.category)
+        // Выплата ЗФ владельцу клеится с его «Доходом от ЗФ» — ВГО, а не расход.
+        assertEquals("inc_zf", r["got"]!!.category)
+        assertEquals("got", r[salary.id]!!.matchId)
+        // Правило — только счёт ЗФ: та же строка на личной карте его не берёт.
+        val mine = MoneyMatch.run(listOf(salary.copy(id = "mine", source = MoneyEntry.Source.TINKOFF, account = "Black Premium *1519")), rules, at("2026-09-24"))
+        assertTrue(mine.entries.single().category != "zf_owner")
+        // В долге Наташе после фиксации: зарплата Саши — не расход ЗФ, папина — расход.
+        val after = r.values.map { it.copy(ts = it.ts + (at("2026-10-10") - at("2026-08-10"))) }
+        assertEquals(listOf("papa~доля"), ZfPartner.moves(after).map { it.id })
+    }
+
+    @Test fun cardlessPushNamesItsAccount() {
+        val rub = BankPush.entry((BankPush.parse("Ozon", "Оплата через СБП на 100 ₽, счет RUB\nДоступно 1 000 ₽") as BankPush.Outcome.Money).p,
+            at("2026-10-01"), "sasha", "Ozon", "Оплата через СБП на 100 ₽, счет RUB\nДоступно 1 000 ₽")
+        assertEquals("Т-Банк, счет RUB", rub.account)
+        assertEquals(MoneyCashflow.TBANK_MAIN, MoneyCashflow.accountOf(rub, emptyMap()))
+        val text = "Перевод на 100 ₽, накоп. счет.\nБаланс 0 ₽"
+        val sav = BankPush.entry((BankPush.parse("", text) as BankPush.Outcome.Money).p, at("2026-10-01"), "sasha", "", text)
+        assertEquals(MoneyCashflow.TBANK_SAVINGS, MoneyCashflow.accountOf(sav, emptyMap()))
+        // Получателя нет: «что» — сама копилка, а не «счет.»; «Баланс 0 ₽» — не место.
+        assertEquals("Накопительный счет", sav.what)
+        assertEquals("", sav.note)
+        // Карта сильнее слова; не узнанная карта и пуш без слова — безымянный счёт.
+        val card = rub.copy(account = "Т-Банк *1519")
+        assertEquals("Т-Банк · Black Premium", MoneyCashflow.accountOf(card, mapOf("1519" to "Т-Банк · Black Premium")))
+        assertEquals(MoneyCashflow.TBANK_UNNAMED, MoneyCashflow.accountOf(card, emptyMap()))
+        assertEquals(MoneyCashflow.TBANK_UNNAMED, MoneyCashflow.accountOf(rub.copy(account = "Т-Банк"), emptyMap()))
+        assertEquals(MoneyCashflow.TBANK_MAIN, MoneyCashflow.places(listOf(rub))[rub.id]!!.account)
+    }
+
+    // «Доступно» у кредитки — свободный лимит, а не остаток (пуш 04.10.2026 обнулял долг по ней).
+    @Test fun pushAnchorOnlyOnAssetAccounts() {
+        val cards = mapOf("7777" to "Т-Банк · Платинум", "1519" to "Т-Банк · Black Premium")
+        val credit = "Перевод на 100 ₽, счет карты *7777\nДоступно 0 ₽"
+        assertNull(MoneyCashflow.pushAnchor("Перевод", credit, at("2026-10-04"), BankPush.key("Перевод", credit), cards))
+        val debit = "Покупка на 100 ₽, счет карты *1519\nДоступно 5 000 ₽"
+        val a = MoneyCashflow.pushAnchor("Лавка", debit, at("2026-10-04"), BankPush.key("Лавка", debit), cards)!!
+        assertEquals("Т-Банк · Black Premium", a.account)
+        assertEquals(500_000L, a.kop)
+        assertEquals(setOf("push-" + BankPush.key("Лавка", debit)), a.covers)
+        assertEquals(MoneyCashflow.Origin.PUSH, a.origin)
+        // Пуш без карты: «счет RUB» — якорь главного счёта; неузнанная карта — не гадаем.
+        val sbp = "Оплата через СБП на 100 ₽, счет RUB\nДоступно 4 900 ₽"
+        assertEquals(MoneyCashflow.TBANK_MAIN, MoneyCashflow.pushAnchor("Ozon", sbp, at("2026-10-04"), BankPush.key("Ozon", sbp), cards)!!.account)
+        assertNull(MoneyCashflow.pushAnchor("Лавка", debit, at("2026-10-04"), BankPush.key("Лавка", debit), emptyMap()))
+        // Долговой счёт стоит в балансе от снимка: пуш с «Доступно 0» его не обнуляет.
+        val snap = MoneyCashflow.Anchor("Т-Банк · Платинум", at("2026-09-23"), -50_000_000, "снимок")
+        val stmt = e("stmt", "2026-09-01", -1, "own", acc = "Платинум *7777")
+        val push = BankPush.entry((BankPush.parse("Перевод", credit) as BankPush.Outcome.Money).p, at("2026-10-04"), "sasha", "Перевод", credit)
+        val list = listOf(stmt, push)
+        val fromList = MoneyCashflow.cardMap(list)
+        assertEquals("Т-Банк · Платинум", fromList["7777"])
+        val anchors = listOf(snap) + listOfNotNull(MoneyCashflow.pushAnchor("Перевод", credit, push.ts, BankPush.key("Перевод", credit), fromList))
+        val b = MoneyCashflow.balances(list, anchors, at("2026-10-05"), at("2026-09-01")).single { it.name == "Т-Банк · Платинум" }
+        assertEquals(-50_000_000L - 10_000, b.kop)
     }
 
     @Test fun natashaPaymentsOnZfAccountAreHerShare() {

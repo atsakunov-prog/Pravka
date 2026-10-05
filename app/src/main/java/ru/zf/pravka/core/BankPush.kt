@@ -11,7 +11,12 @@ package ru.zf.pravka.core
 //    «Перевод на 1 500 ₽, от Марианна Ц., счет карты *0292. Диана Т.\nДоступно …»
 //      — «от» здесь держатель карты (у Марианны своя карта *0292 на счёте
 //      Саши), получатель — после последней точки;
-//    «Оплата через СБП на 9 096,3 ₽, счет RUB» с заголовком «Плати по миру».
+//    «Оплата через СБП на 9 096,3 ₽, счет RUB» с заголовком «Плати по миру»;
+//    «Перевод на 1 000 ₽, накоп. счет.\nБаланс 0 ₽» — без карты и без
+//    получателя.
+//    Без карты пуш называет сам счёт ([Acct]): «счет RUB» — главный рублёвый,
+//    «накоп. счет» — накопительный. Какой это счёт баланса — решает
+//    `MoneyCashflow.pushAccount`.
 //  Т-Банк, старый вид: заголовок «Покупка», текст
 //    «Карта *8958. 14.00 RUB. Остаток овердрафта: 1176.26 RUB. YANDEX*HELP»;
 //    заголовок «Платежи»: «Отказ YANDEX*4121*TAXI. Карта *8958. Недостаточно
@@ -46,7 +51,28 @@ object BankPush {
         val kind: String,
         /** «Доступно 13 630,02 ₽» — остаток счёта после операции: якорь баланса. */
         val balanceKop: Long? = null,
+        /** Счёт без карты, как его назвал пуш; с картой — null (карта точнее). */
+        val acct: Acct? = null,
     )
+
+    /**
+     * Счёт пуша без карты — словами самого пуша. [label] ложится в счёт записи
+     * («Т-Банк, счет RUB»): по нему баланс узнаёт счёт и у старых записей.
+     */
+    enum class Acct(val label: String) { RUB("счет RUB"), SAVINGS("накоп. счет") }
+
+    // «…, счет RUB» и «…, накоп. счет.»; не «\b»: у Java он кириллицу буквами не считает.
+    private val ACCT_RUB = Regex("""(?<![А-ЯЁа-яё])сч[её]т\s+RUB""", RegexOption.IGNORE_CASE)
+    private val ACCT_SAVINGS = Regex("""(?<![А-ЯЁа-яё])накоп\.?\s*сч[её]т""", RegexOption.IGNORE_CASE)
+
+    private fun acctIn(s: String): Acct? = when {
+        ACCT_SAVINGS.containsMatchIn(s) -> Acct.SAVINGS
+        ACCT_RUB.containsMatchIn(s) -> Acct.RUB
+        else -> null
+    }
+
+    /** Счёт записи пуша без карты — обратно в [Acct]: «Т-Банк, счет RUB» → [Acct.RUB]. */
+    fun acctOf(account: String): Acct? = if (cardOf(account).isNotEmpty()) null else acctIn(account)
 
     /** Почему пуш не стал записью — для журнала событий и экрана «пойманные пуши». */
     sealed class Outcome {
@@ -121,18 +147,22 @@ object BankPush {
                 else -> return Outcome.Skip("незнакомое действие «${m.groupValues[1]}»")
             }
             val card = CARD.find(first)?.let { it.groupValues[1].ifEmpty { it.groupValues[2] } }.orEmpty()
+            val acct = if (card.isEmpty()) acctIn(first) else null
             // Перевод: получатель — после последней точки строки («…*0292. Диана Т.»),
             // а заголовок — банк получателя; у покупки заголовок и есть магазин.
             // Точку не срезаем: «Диана Т.» — так же пишет и выписка, и справочник.
-            val tail = first.substringAfterLast(". ", "").trim()
+            // Точка внутри «накоп. счет.» — не граница получателя: иначе им
+            // становилось «счет.» (05.10.2026).
+            val tail = ACCT_SAVINGS.replace(first, "накоп счет").substringAfterLast(". ", "").trim()
             val holder = FROM.find(first)?.groupValues?.get(1)?.trim().orEmpty()
             val isTransfer = verb.startsWith("перевод")
             // Строка-пояснение между первой и «Доступно»: «Банкомат.» у пополнения
             // наличными (пуш владельца, 25.09.2026: «Пополнение на 195 000 ₽, счет
             // RUB. / Банкомат. / Доступно 232 483,72 ₽» — без магазина в заголовке).
             // Когда заголовок пуст или это сам банк, место операции — оно: по нему
-            // справочник узнаёт банкомат и ведёт сумму из кошелька.
-            val detail = lines.drop(1).firstOrNull { !it.startsWith("Доступно", ignoreCase = true) }
+            // справочник узнаёт банкомат и ведёт сумму из кошелька. «Баланс 0 ₽»
+            // (так пишут копилка и возврат) — остаток, как «Доступно», не место.
+            val detail = lines.drop(1).firstOrNull { !it.startsWith("Доступно", ignoreCase = true) && !it.startsWith("Баланс", ignoreCase = true) }
                 ?.trim()?.trimEnd('.')?.trim().orEmpty()
             // Место бывает и на той же строке, после точки: «Пополнение на 195 000 ₽,
             // счет RUB. Банкомат.» (настоящий пуш владельца, 25.09.2026).
@@ -145,6 +175,9 @@ object BankPush {
             val what = when {
                 isTransfer && tail.isNotBlank() -> tail
                 bankTitle && place.isNotBlank() -> place
+                // Перевод с копилки без получателя: «что» — сама копилка, а не
+                // голое «Перевод», которое сгребло бы в один вопрос чужие переводы.
+                acct == Acct.SAVINGS && bankTitle -> "Накопительный счет"
                 else -> t.ifBlank { tail.ifBlank { m.groupValues[1] } }
             }
             val note = buildList {
@@ -154,7 +187,7 @@ object BankPush {
                 if (verb.contains("сбп")) add("СБП")
             }.joinToString(", ")
             val available = AVAILABLE.find(body)?.let { kop(it.groupValues[1]) }
-            return Outcome.Money(Parsed(sign * amount, what, card, note, verb, available))
+            return Outcome.Money(Parsed(sign * amount, what, card, note, verb, available, acct))
         }
 
         OLD.find(body)?.let { m ->
@@ -185,7 +218,11 @@ object BankPush {
         rubKop = p.rubKop,
         what = p.what,
         note = p.note,
-        account = if (p.card.isNotBlank()) "Т-Банк *${p.card}" else "Т-Банк",
+        account = when {
+            p.card.isNotBlank() -> "Т-Банк *${p.card}"
+            p.acct != null -> "Т-Банк, ${p.acct.label}"
+            else -> "Т-Банк"
+        },
     )
 
     /** Отпечаток пуша: заголовок и текст целиком (с остатком — две одинаковые покупки подряд различает он). */
