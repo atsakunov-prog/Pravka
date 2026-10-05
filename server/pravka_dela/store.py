@@ -671,7 +671,7 @@ VIEWS: dict[str, Callable] = {
 
 
 def view(url: str, user: str, name: str, **params) -> dict:
-    from . import crm  # noqa: F401  CRM-виды (свой модуль) встают в VIEWS при импорте
+    from . import crm, stats  # noqa: F401  CRM-виды и статистика (свои модули) встают в VIEWS при импорте
     fn = VIEWS.get(name)
     if fn is None:
         raise OpError(f"нет такого вида: {name}")

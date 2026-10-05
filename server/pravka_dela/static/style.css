@@ -663,3 +663,44 @@ details summary:hover { color: var(--muted); }
   .tl-del { opacity: 1; }
   .crow { flex-wrap: wrap; }
 }
+
+/* ── Путь: карточка в боковой панели и «Статистика» ── */
+.game-card {
+  display: block; width: 100%; text-align: left; margin: 0 0 12px; padding: 9px 10px 8px; border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--line-soft); transition: border-color .12s;
+}
+.game-card:hover, .game-card.on { border-color: color-mix(in srgb, var(--now) 55%, transparent); }
+.gc-top { display: flex; align-items: baseline; gap: 6px; }
+.gc-top b { flex: 1; min-width: 0; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gc-top span { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.gc-bar, .lv-bar { height: 4px; border-radius: 99px; background: var(--hover-2); margin: 6px 0 5px; overflow: hidden; }
+.gc-bar span, .lv-bar span { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--now), color-mix(in srgb, var(--now) 60%, var(--claude))); }
+.gc-sub { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.gc-sub svg { color: var(--now); }
+.gc-sub.warn { color: var(--warn); }
+.stats .lv-card {
+  margin-top: 16px; padding: 16px 18px; border-radius: 16px; border: 1px solid var(--line-soft);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--now) 10%, var(--panel)), var(--panel) 60%);
+}
+.lv-step { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.lv-name { font: 700 26px/1.2 var(--font-display); letter-spacing: -.02em; margin-top: 2px; }
+.lv-note { color: var(--muted); margin-top: 2px; }
+.lv-bar { height: 7px; margin: 12px 0 6px; }
+.lv-next { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lv-path { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 12px; }
+.lv-path .pt { width: 10px; height: 10px; border-radius: 50%; background: var(--hover-2); }
+.lv-path .pt.done { background: color-mix(in srgb, var(--now) 70%, transparent); }
+.lv-path .pt.here { background: var(--now); box-shadow: 0 0 0 3px color-mix(in srgb, var(--now) 30%, transparent); }
+.tile .ts { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.day-chart { width: 100%; height: auto; display: block; margin-top: 6px; }
+.day-chart .bar { fill: color-mix(in srgb, var(--accent) 70%, transparent); }
+.day-chart .bar.today { fill: var(--now); }
+.day-chart .bar:hover { fill: var(--accent); }
+.day-chart .sat { fill: var(--hover); }
+.day-chart .lbl { fill: var(--faint); font-size: 10px; }
+.hrow { display: grid; grid-template-columns: minmax(120px, 220px) 1fr 36px; gap: 10px; align-items: center; padding: 3px 4px; font-size: 13.5px; }
+.hn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hbar { height: 8px; border-radius: 99px; background: var(--hover); overflow: hidden; }
+.hb { display: block; height: 100%; background: color-mix(in srgb, var(--accent) 65%, transparent); border-radius: 99px; }
+.hv { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.stats .rules { margin-top: 18px; line-height: 1.5; }

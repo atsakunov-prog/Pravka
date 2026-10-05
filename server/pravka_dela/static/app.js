@@ -229,6 +229,7 @@ function route() {
   if (kind === 'search') return { kind: 'search', q: decodeURIComponent(id || '') };
   if (kind === 'new' && id) return { kind: 'new', batch: decodeURIComponent(id) }; // ссылка из Telegram — одна пачка
   if (kind === 'settings') return { kind: 'settings' };
+  if (kind === 'stats') return { kind: 'stats' };
   if (CRM_VIEWS[kind]) return { kind };
   return { kind: VIEWS[kind] ? kind : 'morning' };
 }
@@ -344,6 +345,7 @@ function renderSide(r) {
   return el('aside', { class: 'side' },
     el('div', { class: 'brand' }, el('img', { src: '/static/icon.svg', alt: '' }), el('b', {}, 'Дела'),
       el('span', { class: 'who' }, S.me.name), avatar(me)),
+    gameCard(),
     search, sphere, nav, groups,
     el('div', { class: 'side-foot' },
       el('button', { class: 'settings-btn' + (r.kind === 'settings' ? ' on' : ''), onclick: () => go('#/settings') }, icon('gear', 14), 'Настройки'),
@@ -362,6 +364,7 @@ function headIcon() {
   if (r.kind === 'person' && person(r.id)) return avatar(person(r.id), 'big');
   if (r.kind === 'search') return box('search', '#9aa3b2');
   if (r.kind === 'settings') return box('gear', '#9aa3b2');
+  if (r.kind === 'stats') return box('chart', '#7c9cff');
   return null;
 }
 
@@ -389,6 +392,7 @@ function renderMain(r) {
   if (r.kind === 'search') return renderSearch(r.q);
   if (r.kind === 'new') return renderNew(r.batch);
   if (r.kind === 'settings') return renderSettings();
+  if (r.kind === 'stats') return renderStats();
   if (r.kind === 'week') return renderWeek();
   if (r.kind === 'crm') return renderPipeline();
   if (r.kind === 'clients') return renderClients();
@@ -565,7 +569,8 @@ async function toggleDone(list) {
     if (open.length && !target.some((t) => finishing.has(t.id))) return; // передумал, пока сервер отвечал
     S.sel.clear();
     renderBulk();
-    toast(open.length ? (target.length > 1 ? `Сделано: ${target.length}` : 'Сделано: ' + target[0].title) : 'Вернул в работу',
+    const pts = open.length ? target.reduce((sum, t) => sum + pointsFor(t), 0) : 0;
+    toast((open.length ? (target.length > 1 ? `Сделано: ${target.length}` : 'Сделано: ' + target[0].title) : 'Вернул в работу') + (pts ? ` · +${pts}` : ''),
       () => { target.forEach((t) => finishing.delete(t.id)); return ops(target.map((t) => ({ op: open.length ? 'task.reopen' : 'task.done', id: t.id }))); });
     if (!open.length) { render(); return; }
     setTimeout(() => {
@@ -1366,6 +1371,9 @@ function renderSettings() {
         el('div', { class: 'set-label' }, 'Пауза, после которой команда сказана'),
         choices('voicePause', { 1500: ['1,5 с', 'говорю коротко'], 2500: ['2,5 с', 'обычно'], 4000: ['4 с', 'думаю на ходу'] }, voicePause(), Number),
         el('div', { class: 'hint-line' }, 'Речь распознаёт браузер (Chrome — и на телефоне). На компьютере можно диктовать и Wispr Flow прямо в поле.')),
+      el('div', { class: 'group' }, el('h2', {}, tint(icon('flame', 14), 'var(--now)'), 'Путь: очки, серия, уровень'),
+        el('div', { class: 'hint-line' }, 'Очки — только за доведённое: закрыл, отменил ненужное, разобрал «Новое». Карточка пути — вверху боковой панели, подробно — «Статистика».'),
+        choices('game_theme', { torah: ['Тора', '42 стоянки странствий, серия — манна; суббота не рвёт'], greek: ['Греция', 'подвиги Геракла и путь Одиссея, серия — огонь Прометея'] }, s.game_theme || 'torah')),
       cost ? el('div', { class: 'group' }, el('h2', {}, tint(icon('coin', 14), '#45c07a'), 'Траты Claude в Делах'),
         el('div', { class: 'tiles' },
           el('div', { class: 'tile' }, el('div', { class: 'tl' }, 'Сегодня'), el('div', { class: 'tv' }, usd(cost.today))),
@@ -2008,6 +2016,150 @@ function personCrmBlock(p) {
     el('div', { class: 'toolbar' }, el('label', {}, 'Теплота', cad), el('label', {}, hub, 'хаб — через него идут темы')),
     v && v.deals.length ? el('div', { class: 'group' }, el('h2', {}, 'Сделки', el('span', { class: 'n' }, v.deals.length)), el('div', { class: 'dlist' }, v.deals.map(dealTile))) : null,
     el('div', { class: 'group' }, el('h2', {}, 'Хронология'), v ? timelineBox(v.timeline, null, { person_ids: [p.id] }, { showDeal: true }) : loading()));
+}
+
+// ── Путь: очки, серия, уровень (считает сервер, вид stats; имена — тут) ─
+// Тора — 42 стоянки странствий (Бемидбар 33, глава Масэй): путь, а не люди — уровни не ранжируют
+// праотцов. Серия — манна: падает каждый день, в Шаббат — нет, поэтому суббота серию не рвёт.
+// Греция — 12 подвигов Геракла и путь Одиссея домой; серия — огонь Прометея. Выбор — в «Настройках».
+const THEMES = {
+  torah: {
+    title: 'Тора · 42 стоянки', step: 'стоянка', streak: 'манна', end: 'Ярден перейдён — новый круг',
+    levels: [
+      ['Раамсес', 'вышли «рукой высокой» — начало пути'], ['Суккот', 'облака славы укрыли народ'],
+      ['Эйтам', 'на краю пустыни'], ['Пи-Ахирот', 'у моря; дальше — сквозь море'],
+      ['Мара', 'горькую воду сделали сладкой'], ['Эйлим', 'двенадцать источников и семьдесят пальм'],
+      ['Ям-Суф', 'снова у моря'], ['Пустыня Син', 'с неба пошла манна'], ['Дофка', ''], ['Алуш', ''],
+      ['Рефидим', 'вода из скалы; война с Амалеком'], ['Синай', 'дарование Торы'],
+      ['Киврот-Атаава', '«гробы прихоти»: захотели мяса'], ['Хацерот', 'Мирьям ждали семь дней'],
+      ['Ритма', 'по Раши — память о злословии разведчиков'], ['Римон-Перец', ''], ['Ливна', ''], ['Риса', ''],
+      ['Кеэлата', ''], ['Гора Шефер', ''], ['Харада', ''], ['Макэлот', ''], ['Тахат', ''], ['Тарах', ''],
+      ['Митка', ''], ['Хашмона', ''], ['Мосерот', ''], ['Бней-Яакан', ''], ['Хор-Агидгад', ''], ['Йотвата', ''],
+      ['Аврона', ''], ['Эцйон-Гевер', ''], ['Кадеш', 'пустыня Цин: умерла Мирьям, вода из скалы'],
+      ['Гора Ор', 'умер Аарон'], ['Цальмона', ''], ['Пунон', ''], ['Овот', 'после медного змея'],
+      ['Ийей-Аварим', ''], ['Дивон-Гад', ''], ['Алмон-Дивлатайма', ''], ['Горы Аварим', ''],
+      ['Равнины Моава', 'у Иордана напротив Йерихо: здесь Мойше пересказал Тору'],
+    ],
+  },
+  greek: {
+    title: 'Греция · подвиги и путь Одиссея', step: 'шаг', streak: 'огонь Прометея', end: 'Итака — новый круг',
+    levels: [
+      ['Немейский лев', 'шкура, которую не берёт стрела'], ['Лернейская гидра', 'отрубил одну — выросли две'],
+      ['Керинейская лань', 'год погони'], ['Эриманфский вепрь', 'загнать в снег'],
+      ['Авгиевы конюшни', 'разгрести завал за день'], ['Стимфалийские птицы', 'спугнуть и сбить'],
+      ['Критский бык', ''], ['Кони Диомеда', ''], ['Пояс Ипполиты', ''], ['Коровы Гериона', 'на край света'],
+      ['Яблоки Гесперид', 'подержал небо за Атланта'], ['Кербер', 'вернулся из Аида'],
+      ['Троя пала', 'теперь — домой'], ['Киконы', ''], ['Лотофаги', 'кто ел лотос — забывал дорогу домой'],
+      ['Полифем', '«Меня зовут Никто»'], ['Эол', 'мешок ветров развязали в шаге от дома'], ['Лестригоны', ''],
+      ['Цирцея', ''], ['Аид', ''], ['Сирены', 'привязан к мачте — не свернул'], ['Сцилла и Харибда', 'выбрать меньшее из двух'],
+      ['Остров Гелиоса', ''], ['Калипсо', 'семь лет'], ['Феаки', ''], ['Итака', 'дома'],
+    ],
+  },
+};
+Object.assign(ICONS, {
+  chart: 'M4 20V11M10 20V5M16 20v-6M3 20h18',
+  flame: 'M12 3c1 3 4 4.5 4 8.5a4 4 0 0 1-8 0c0-2 1-3 2-4 0 1.5 1 2.5 2 2.5 0-3-1-5 0-7z',
+});
+const LAP = 26000; // очков на весь путь: ~полтора года ровной работы
+const theme = () => THEMES[(S.me.settings || {}).game_theme] || THEMES.torah;
+/** Уровень по сумме очков: пороги растут квадратом, после последнего — новый круг. */
+function levelOf(total) {
+  const th = theme(), N = th.levels.length, K = LAP / (N * N);
+  const lap = Math.floor(total / LAP) + 1, inLap = total % LAP;
+  let i = Math.min(N - 1, Math.floor(Math.sqrt(inLap / K)));
+  const at = Math.round(K * i * i), next = Math.round(K * (i + 1) * (i + 1));
+  return { i, n: N, lap, name: th.levels[i][0], note: th.levels[i][1], at, next,
+    nextName: i < N - 1 ? th.levels[i + 1][0] : th.end, left: next - inLap, share: (inLap - at) / (next - at) };
+}
+const pointsFor = (t) => (isNow(t) || (t.due_date && t.due_date <= S.today) ? 15 : 10);
+
+/** Карточка пути в боковой панели: стоянка, полоска до следующей, серия. Новая стоянка — тост. */
+function gameCard() {
+  const v = crmGet('/api/view/stats', 60000);
+  if (!v) return null;
+  const lv = levelOf(v.points.total), th = theme(), st = v.streak;
+  const key = `${(S.me.settings || {}).game_theme || 'torah'}:${lv.lap}:${lv.i}`, was = LS.get('gameLevel', null);
+  if (was && was !== key && was.split(':')[0] === key.split(':')[0] && v.points.total > LS.get('gamePoints', 0)) {
+    setTimeout(() => toast(`Новая ${th.step}: ${lv.name}${lv.note ? ' — ' + lv.note : ''}`), 600);
+  }
+  LS.set('gameLevel', key);
+  LS.set('gamePoints', v.points.total);
+  const bar = el('div', { class: 'gc-bar' }, el('span', {}));
+  bar.firstChild.style.width = Math.round(lv.share * 100) + '%';
+  return el('button', { class: 'game-card' + (route().kind === 'stats' ? ' on' : ''), onclick: () => go('#/stats'), title: 'Статистика и путь' },
+    el('div', { class: 'gc-top' }, el('b', {}, lv.name), el('span', {}, `${lv.i + 1}/${lv.n}`)),
+    bar,
+    el('div', { class: 'gc-sub' + (st.current && !st.today_done ? ' warn' : '') },
+      icon('flame', 12), `${th.streak}: ${plural(st.current, 'день', 'дня', 'дней')}`,
+      st.current && !st.today_done ? ' · сегодня ещё нет' : st.today_done ? ' · сегодня есть' : ''));
+}
+
+/** Столбики по дням: очки, субботы — светлее; подпись — по наведению. */
+function dayChart(days) {
+  const ns = 'http://www.w3.org/2000/svg', W = 600, H = 120, bw = W / days.length;
+  const max = Math.max(15, ...days.map((d) => d.points));
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H + 16}`);
+  svg.setAttribute('class', 'day-chart');
+  days.forEach((d, k) => {
+    const wd = D.wd(d.day), h = d.points ? Math.max(3, (d.points / max) * H) : 0;
+    if (wd === 5) {
+      const bg = document.createElementNS(ns, 'rect');
+      for (const [a, b] of Object.entries({ x: k * bw, y: 0, width: bw, height: H, class: 'sat' })) bg.setAttribute(a, b);
+      svg.append(bg);
+    }
+    const r = document.createElementNS(ns, 'rect');
+    for (const [a, b] of Object.entries({ x: k * bw + 2, y: H - h, width: bw - 4, height: h, rx: 2, class: d.day === S.today ? 'bar today' : 'bar' })) r.setAttribute(a, b);
+    const tip = document.createElementNS(ns, 'title');
+    tip.textContent = `${D.ddmm(d.day)}, ${WD_SHORT[wd]}: ${d.points} очк. · закрыто ${d.done}` + (d.cancelled ? `, отменено ${d.cancelled}` : '') + (d.triage ? `, «Новое» ${d.triage}` : '');
+    r.append(tip);
+    svg.append(r);
+    if (k % 5 === 4 || d.day === S.today) {
+      const t = document.createElementNS(ns, 'text');
+      for (const [a, b] of Object.entries({ x: k * bw + bw / 2, y: H + 13, 'text-anchor': 'middle', class: 'lbl' })) t.setAttribute(a, b);
+      t.textContent = D.ddmm(d.day).slice(0, 5);
+      svg.append(t);
+    }
+  });
+  return svg;
+}
+
+function renderStats() {
+  const v = crmGet('/api/view/stats', 15000);
+  if (!v) return [head('Статистика'), el('div', { class: 'body' }, loading())];
+  const lv = levelOf(v.points.total), th = theme(), st = v.streak, p = v.points;
+  const delta = p.prev_week ? Math.round((p.week - p.prev_week) / p.prev_week * 100) : null;
+  const bar = el('div', { class: 'lv-bar' }, el('span', {}));
+  bar.firstChild.style.width = Math.round(lv.share * 100) + '%';
+  const path = el('div', { class: 'lv-path' }, th.levels.map(([name, note], k) =>
+    el('span', { class: 'pt' + (k < lv.i ? ' done' : k === lv.i ? ' here' : ''), title: `${k + 1}. ${name}${note ? ' — ' + note : ''}` })));
+  const tile = (label, value, sub, cls) => el('div', { class: 'tile ' + (cls || '') }, el('div', { class: 'tl' }, label), el('div', { class: 'tv' }, value), sub ? el('div', { class: 'ts' }, sub) : null);
+  const m = v.month;
+  return [head('Статистика', [th.title, v.since ? 'считаю с ' + D.ddmm(v.since) : 'считаю с первого закрытого дела']),
+    el('div', { class: 'body stats' },
+      el('div', { class: 'lv-card' },
+        el('div', { class: 'lv-step' }, `${th.step} ${lv.i + 1} из ${lv.n}` + (lv.lap > 1 ? ` · круг ${lv.lap}` : '')),
+        el('div', { class: 'lv-name' }, lv.name),
+        lv.note ? el('div', { class: 'lv-note' }, lv.note) : null,
+        bar,
+        el('div', { class: 'lv-next' }, `до «${lv.nextName}» — ${plural(lv.left, 'очко', 'очка', 'очков')} · всего ${p.total}`),
+        path),
+      el('div', { class: 'tiles' },
+        tile('Сегодня', p.today + ' очк.', st.today_done ? 'есть закрытое' : 'пока ничего не закрыто', st.today_done ? 'ok' : ''),
+        tile('За 7 дней', p.week + ' очк.', delta == null ? 'неделей раньше — 0' : (delta >= 0 ? '+' : '') + delta + '% к прошлой неделе', delta > 0 ? 'ok' : ''),
+        tile(th.streak[0].toUpperCase() + th.streak.slice(1), plural(st.current, 'день', 'дня', 'дней'), 'лучшая — ' + plural(st.best, 'день', 'дня', 'дней'), st.current && !st.today_done ? 'warn' : ''),
+        tile('Закрыто за 30 дней', String(m.done), m.with_due ? `в срок — ${Math.round(m.on_time / m.with_due * 100)}% (${m.on_time} из ${m.with_due})` : null),
+        tile('Сейчас открыто', String(v.open.open), `просрочено ${v.open.overdue} · в «Сейчас» ${v.open.now_}`, v.open.overdue ? 'warn' : '')),
+      el('div', { class: 'group' }, el('h2', {}, tint(icon('chart', 14), '#7c9cff'), 'Очки по дням', el('span', { class: 'gsub' }, '30 дней, субботы светлее')),
+        dayChart(v.days)),
+      v.by_project.length ? el('div', { class: 'group' }, el('h2', {}, 'Что закрывал за 30 дней'),
+        v.by_project.map((x) => {
+          const b = el('span', { class: 'hb' });
+          b.style.width = Math.round(x.done / v.by_project[0].done * 100) + '%';
+          return el('div', { class: 'hrow' }, el('span', { class: 'hn' }, x.name), el('span', { class: 'hbar' }, b), el('span', { class: 'hv' }, x.done));
+        }),
+        el('div', { class: 'hint-line' }, 'Откуда были дела: ' + v.by_source.map((x) => `${x.name} ${x.done}`).join(' · '))) : null,
+      el('div', { class: 'hint-line rules' }, `Очки: закрыл — ${v.rules.done}, обещанное (в «Сейчас» или срок пришёл) — ещё ${v.rules.promised}, отменил ненужное — ${v.rules.cancel}, разобрал «Новое» — ${v.rules.triage}. Заводить дела — бесплатно. ${th.streak[0].toUpperCase() + th.streak.slice(1)} — дни подряд с закрытым делом; суббота не рвёт.`))];
 }
 
 // ── Клавиши ─────────────────────────────────────────────────────────────
