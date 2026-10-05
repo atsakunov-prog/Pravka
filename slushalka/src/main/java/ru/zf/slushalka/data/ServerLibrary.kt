@@ -5,6 +5,7 @@ import java.io.File
 import java.security.MessageDigest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -182,30 +183,43 @@ class ServerLibrary(
         if (_status.value == Status.Loading) return _index.value
         _status.value = Status.Loading
         try {
-            val raw = cloud.getText(INDEX).getOrElse { e ->
-                _status.value = Status.Failed(e.message ?: "Сервер не ответил")
-                return _index.value
-            }
-            if (raw == null) {
-                // 404: в корне облака оглавления нет - это Яндекс.Диск или папка не та.
-                _index.value = null
-                _status.value = Status.Missing
-                return null
-            }
-            val now = System.currentTimeMillis()
-            val parsed = withContext(Dispatchers.Default) { runCatching { parse(raw, now) } }.getOrElse { e ->
-                _status.value = Status.Failed("Оглавление на сервере не разобралось: ${e.message}")
-                return _index.value
-            }
-            _index.value = parsed
-            _status.value = Status.Idle
-            withContext(Dispatchers.IO) {
-                runCatching {
-                    Store.writeAtomic(file, raw)
-                    Store.writeAtomic(sourceFile, sourceOf(p) + "\n" + now)
+            // Сервер переписывает оглавление на месте, а не через временный
+            // файл: попали в середину записи - приходит обрубок (05.10:
+            // «Unterminated string at character 111298», сгенерировано в ту же
+            // минуту). Через пару секунд файл уже целый, поэтому обрубок
+            // читается ещё раз, а не показывается ошибкой.
+            var attempt = 0
+            while (true) {
+                val raw = cloud.getText(INDEX).getOrElse { e ->
+                    _status.value = Status.Failed(e.message ?: "Сервер не ответил")
+                    return _index.value
+                } ?: run {
+                    // 404: в корне облака оглавления нет - это Яндекс.Диск или папка не та.
+                    _index.value = null
+                    _status.value = Status.Missing
+                    return null
                 }
+                val now = System.currentTimeMillis()
+                val got = withContext(Dispatchers.Default) { runCatching { parse(raw, now) } }
+                val parsed = got.getOrNull()
+                if (parsed == null) {
+                    if (attempt == REREAD_MS.size) {
+                        _status.value = Status.Failed(unreadable(raw, got.exceptionOrNull()))
+                        return _index.value
+                    }
+                    delay(REREAD_MS[attempt++])
+                    continue
+                }
+                _index.value = parsed
+                _status.value = Status.Idle
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        Store.writeAtomic(file, raw)
+                        Store.writeAtomic(sourceFile, sourceOf(p) + "\n" + now)
+                    }
+                }
+                return parsed
             }
-            return parsed
         } finally {
             // Отменили на полпути (ушли с экрана) - «читаю оглавление» не должно висеть вечно.
             if (_status.value == Status.Loading) _status.value = Status.Idle
@@ -265,6 +279,28 @@ class ServerLibrary(
          * Содержимое приложению не нужно - хватает самого факта.
          */
         const val MACHINE_MARK = "озвучка.json"
+
+        /**
+         * Паузы перед повторным чтением оборванного оглавления. Сервер пишет
+         * его доли секунды, но на медленном диске и под раскладкой книг -
+         * дольше; дальше семи секунд держать «читаю оглавление» незачем.
+         */
+        private val REREAD_MS = longArrayOf(2_000L, 5_000L)
+
+        /**
+         * Почему оглавление не прочлось - по-человечески, со строчной и без
+         * точки: строка встаёт в «Библиотека не обновилась: …». Ошибка org.json
+         * приклеивает к себе весь разобранный текст («… at character 111298
+         * of {…}»), и на полке вместо строки вставало оглавление целиком.
+         */
+        private fun unreadable(raw: String, e: Throwable?): String =
+            if (!raw.trimEnd().endsWith("}")) {
+                "оглавление пришло оборванным - сервер, похоже, как раз его переписывал. " +
+                    "Обнови полку через минуту"
+            } else {
+                "оглавление на сервере не разобралось (" +
+                    (e?.message?.substringBefore(" of ")?.take(120) ?: "не JSON") + ")"
+            }
 
         fun folderKey(folder: String): String = folder.trim().lowercase()
 

@@ -286,7 +286,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 recapModel = p[KEY_RECAP_MODEL]?.takeIf { it in MODELS } ?: MODEL_OPUS,
                 recapEffort = p[KEY_RECAP_EFFORT]?.takeIf { it in EFFORTS } ?: "",
                 guideModel = p[KEY_GUIDE_MODEL]?.takeIf { it in MODELS } ?: MODEL_OPUS,
-                flibustaUrl = p[KEY_FLIBUSTA]?.takeIf { it.isNotBlank() } ?: DEFAULT_FLIBUSTA_URL,
+                flibustaUrl = p[KEY_FLIBUSTA]?.takeIf { it.isNotBlank() && !isOldFlibusta(it) }
+                    ?: DEFAULT_FLIBUSTA_URL,
                 ttsRate = p[KEY_TTS_RATE] ?: 1.0f,
                 ttsVoice = p[KEY_TTS_VOICE] ?: "",
                 adviseModel = p[KEY_ADVISE_MODEL]?.takeIf { it in MODELS } ?: MODEL_OPUS,
@@ -452,7 +453,16 @@ class Settings(private val context: Context, scope: CoroutineScope) {
             "https://raw.githubusercontent.com/atsakunov-prog/Pravka/apk-builds/slushalka-build-info.txt"
 
         /** Адрес каталога Флибусты. Ленты OPDS лежат под `/opds`. */
-        const val DEFAULT_FLIBUSTA_URL = "https://flibusta.is"
+        const val DEFAULT_FLIBUSTA_URL = "https://flibusta.site"
+
+        /**
+         * Прежний заводской адрес. Поле настроек записывает всё, что в нём
+         * побывало, так что `flibusta.is` мог остаться и у тех, кто его не
+         * выбирал; 05.10 владелец перевёл каталог на `.site` - переезжают все,
+         * у кого записан прежний. Своё зеркало остаётся своим.
+         */
+        private fun isOldFlibusta(url: String): Boolean =
+            url.trim().substringAfter("://").trimEnd('/').removePrefix("www.").equals("flibusta.is", ignoreCase = true)
 
         /** WebDAV Яндекс.Диска: логин - почта, пароль - «пароль приложения» из id.yandex.ru. */
         const val DEFAULT_CLOUD_URL = "https://webdav.yandex.ru"

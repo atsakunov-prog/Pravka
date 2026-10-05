@@ -90,7 +90,7 @@ class FlibustaClient(private val settings: Settings) {
 
     /**
      * Качает файл во временный, сообщая проценты. Ссылка `/b/123/fb2` отвечает
-     * редиректом на static.flibusta.is - OkHttp идёт за ним сам.
+     * редиректом на static-сервер сайта - OkHttp идёт за ним сам.
      */
     suspend fun download(
         url: String,
