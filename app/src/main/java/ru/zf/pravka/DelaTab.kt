@@ -106,14 +106,8 @@ internal sealed class DelaPage {
     data class Deal(val id: String) : DelaPage()
 }
 
-/**
- * Копия телефона — родные экраны Дел поверх своей копии сервера: работают без
- * сети. С 05.10.2026 вкладка с завода показывает веб (`DelaWeb.kt`); сюда —
- * выключателем «копия телефона» или сама, если веб не открылся ([webNote] —
- * почему), [onWeb] — вернуться в веб.
- */
 @Composable
-internal fun DelaNativeTab(app: PravkaApp, webNote: String = "", onWeb: (() -> Unit)? = null) {
+fun DelaTab(app: PravkaApp) {
     val snap by app.delaStore.view.collectAsState()
     val queued by app.delaStore.queued.collectAsState()
     val notices by app.delaStore.noticesFlow.collectAsState()
@@ -402,7 +396,6 @@ internal fun DelaNativeTab(app: PravkaApp, webNote: String = "", onWeb: (() -> U
                             onClick = { askOpen = !askOpen },
                         )
                     }
-                    if (onWeb != null) GlyphButton(Glyphs.Link, "открыть веб Дел — как на ПК", onClick = onWeb)
                     GlyphButton(Glyphs.Plus, "новое дело руками", onClick = { newTask = true })
                     GlyphButton(
                         if (searching) Glyphs.Close else Glyphs.Search,
@@ -414,14 +407,6 @@ internal fun DelaNativeTab(app: PravkaApp, webNote: String = "", onWeb: (() -> U
                     )
                 }
                 if (searching || query.isNotEmpty()) PaperField(value = query, onValueChange = { query = it }, label = "Поиск по делам")
-                if (webNote.isNotBlank()) {
-                    Text(
-                        "$webNote — показываю копию телефона; веб — значком ссылки.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(start = 4.dp),
-                    )
-                }
                 if (link == null) {
                     Text(
                         "Дела не подключены — отсканируй QR сервера: «Настройки → Подключения → Дела». " +
