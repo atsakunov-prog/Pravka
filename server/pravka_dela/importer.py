@@ -3,8 +3,12 @@
 Сухой прогон по умолчанию: строится план и отчёт, база не трогается.
 С --apply план записывается от имени службы импорта (svc:import) — каждая
 строка в журнале. id строк выводятся из id источника (uuid5), поэтому
-повторный перенос не плодит дублей, а обновляет те же строки: так работает и
-зеркало Todoist до переезда.
+повторный перенос не плодит дублей и только дописывает новое: строка, которая
+уже есть в Делах, живёт своей жизнью, и перенос её не трогает. Раньше он писал
+поверх (ON CONFLICT DO UPDATE), а install-dela.ps1 зовёт его при каждой
+установке: 04–05.10 так трижды вернулись в работу закрытые дела, выигранные
+сделки — в «в работе», стёрлись оценки сделок, связи дел со сделками и людей с
+учётками. Мост Todoist (bridge.py) так же заводит только новое.
 
 Код общий: ни имён, ни клиентов здесь нет. Всё, что знает только владелец
 (кто есть кто, какие написания одно и то же, какой проект какой), лежит в
@@ -515,48 +519,52 @@ COLUMNS = {
 }
 
 
-def _upsert(conn, table: str, row: dict, keep_new: tuple = ()) -> None:
+def _insert_new(conn, table: str, row: dict) -> bool:
+    """Строку — только если её ещё нет; есть — не трогать (правда о ней уже в Делах). True — записана."""
     cols = [c for c in COLUMNS[table] if c in row]
     vals = [Jsonb(row[c]) if isinstance(row[c], dict) else row[c] for c in cols]
-    upd = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols if c not in ("id", "created_at", *keep_new))
-    conn.execute(
+    return conn.execute(
         f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))}) "
-        f"ON CONFLICT (id) DO UPDATE SET {upd}",
+        "ON CONFLICT (id) DO NOTHING RETURNING id",
         vals,
-    )
+    ).fetchone() is not None
 
 
 def apply(url: str, plan: Plan) -> dict:
+    """План → база, только новое. Ответ — сколько строк записано впервые."""
+    new = {"tasks": 0, "projects": 0, "people": 0, "deals": 0}
     with db.session(url, "system", "svc:import", via="import") as conn:
         for u in plan.users:
+            # Имя и роль после установки меняет только `user` из командной строки; из плана — лишь недостающие
+            # ключи настроек (свои у человека не перетираются).
             conn.execute(
                 "INSERT INTO crm.users (id, name, role, settings) VALUES (%s, %s, %s, %s) "
-                "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role, "
-                "settings = EXCLUDED.settings || crm.users.settings",
+                "ON CONFLICT (id) DO UPDATE SET settings = EXCLUDED.settings || crm.users.settings",
                 (u["id"], u["name"], u["role"], Jsonb(u["settings"])),
             )
         for o in plan.orgs:
-            _upsert(conn, "crm.orgs", o)
+            _insert_new(conn, "crm.orgs", o)
         for p in plan.people:
-            _upsert(conn, "crm.people", {k: v for k, v in p.items() if not k.startswith("_")})
+            new["people"] += _insert_new(conn, "crm.people", {k: v for k, v in p.items() if not k.startswith("_")})
         for u in plan.users:
             if u["person_id"]:
-                conn.execute("UPDATE crm.users SET person_id = %s WHERE id = %s", (u["person_id"], u["id"]))
+                conn.execute("UPDATE crm.users SET person_id = %s WHERE id = %s AND person_id IS NULL", (u["person_id"], u["id"]))
         for p in plan.projects:
-            _upsert(conn, "crm.projects", {k: v for k, v in p.items() if not k.startswith("_")})
-            if p.get("archived"):
-                conn.execute("UPDATE crm.projects SET archived_at = coalesce(archived_at, now()) WHERE id = %s", (p["id"],))
+            if _insert_new(conn, "crm.projects", {k: v for k, v in p.items() if not k.startswith("_")}):
+                new["projects"] += 1
+                if p.get("archived"):
+                    conn.execute("UPDATE crm.projects SET archived_at = now() WHERE id = %s", (p["id"],))
         for dl in plan.deals:
-            _upsert(conn, "crm.deals", {k: v for k, v in dl.items() if not k.startswith("_")})
+            new["deals"] += _insert_new(conn, "crm.deals", {k: v for k, v in dl.items() if not k.startswith("_")})
         for name in plan.labels:
             conn.execute("INSERT INTO tasks.labels (name) VALUES (%s) ON CONFLICT DO NOTHING", (name,))
         for t in plan.tasks:
-            _upsert(conn, "tasks.tasks", t)
+            new["tasks"] += _insert_new(conn, "tasks.tasks", t)
         for c in plan.comments:
-            _upsert(conn, "tasks.comments", c)
+            _insert_new(conn, "tasks.comments", c)
         for i in plan.interactions:
-            _upsert(conn, "crm.interactions", i)
-    return {"tasks": len(plan.tasks), "projects": len(plan.projects), "people": len(plan.people), "deals": len(plan.deals)}
+            _insert_new(conn, "crm.interactions", i)
+    return new
 
 
 def run(cfg, args) -> int:
@@ -576,7 +584,7 @@ def run(cfg, args) -> int:
     if args.apply:
         from . import bridge
 
-        print("записано:", apply(cfg.db_url, plan))
+        print("записано впервые (что уже было — не тронуто):", apply(cfg.db_url, plan))
         bridge.save_decisions(cfg.db_url, dec)
     else:
         print("сухой прогон: база не тронута (--apply — записать)")

@@ -22,7 +22,7 @@ Todoist и Notion CRM целиком. Спецификация и причины
 | `tokens.py` | токены устройств и служб, в базе — sha256 |
 | `mcp_tools.py` | инструменты Claude (`dela_*`), регистрирует архив в `pravka_archive/app.py`, если задан `DELA_DB_URL` |
 | `crm_tools.py` | инструменты Claude CRM (`crm_view`, `crm_deal`, `crm_payment`) |
-| `importer.py` | перенос из Todoist, Notion и ленты; решения владельца — в его локальном файле, не здесь |
+| `importer.py` | перенос из Todoist, Notion и ленты; решения владельца — в его локальном файле, не здесь. Только дописывает новое: `install-dela.ps1` зовёт его при каждой установке, а до 05.10 он писал поверх и откатывал сделанное в Делах (закрытия, выигранные сделки, оценки, связи) |
 | `config.py`, `__main__.py` | `C:\ProgramData\ZF-Dela\secrets\dela.env`; команды migrate, serve, check, user, token, pair, revoke, import |
 | `windows/install-dela.ps1` | установка службы ZF-Dela (владелец, от администратора) |
 | `tests/test_dela_*.py` | на настоящем PostgreSQL, как у архива |

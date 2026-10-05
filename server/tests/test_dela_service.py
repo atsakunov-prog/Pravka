@@ -159,6 +159,32 @@ def test_import_dry_and_apply_idempotent(dela, tmp_path):
         assert omega["archived_at"] is not None
         hist = c.execute("SELECT DISTINCT actor, via FROM crm.history WHERE entity = 'tasks.tasks'").fetchall()
         assert [(h["actor"], h["via"]) for h in hist] == [("svc:import", "import")]
+        deal = c.execute("SELECT id FROM crm.deals WHERE name = 'Альфа: аудит'").fetchone()["id"]
+
+    # Установка зовёт перенос каждый раз: сделанное в Делах он не откатывает (04–05.10 откатывал закрытия,
+    # выигранные сделки, оценки, связи), а новое из источника дописывает.
+    from pravka_dela import store
+
+    ops = [{"op": "task.done", "id": str(t1["id"])},
+           {"op": "task.set", "id": str(t2["id"]), "set": {"due_date": "2026-11-01", "deal_id": None}},
+           {"op": "deal.set", "id": str(deal), "set": {"stage": "archive", "outcome": "won", "my_view": "своя оценка"}},
+           {"op": "person.set", "id": str(kolya["id"]), "set": {"role": "CFO", "aliases": ["Коля", "Николай"]}}]
+    res = store.apply_ops(dela, "sasha", ops, "web")["results"]
+    assert all(r["ok"] for r in res), res
+    src = json.loads(todoist.read_text(encoding="utf-8"))
+    src["tasks"].append({"id": "t5", "content": "Новое из Todoist", "description": "", "priority": "p4", "projectId": "p3",
+                         "labels": [], "addedAt": "2026-10-05T10:00:00Z"})
+    todoist.write_text(json.dumps(src, ensure_ascii=False), encoding="utf-8")
+    importer.run(Config(db_url=dela), A)
+    with mcp_tools.db.session(dela, "system", "t") as c:
+        tasks = {r["title"]: r for r in c.execute("SELECT * FROM tasks.v_tasks")}
+        assert tasks["Коля: прислать договор"]["status"] == "done"
+        assert (str(tasks["Петров: позвонить"]["due_date"]), tasks["Петров: позвонить"]["deal_id"]) == ("2026-11-01", None)
+        assert "Новое из Todoist" in tasks
+        d = c.execute("SELECT stage, outcome, my_view FROM crm.deals WHERE id = %s", (deal,)).fetchone()
+        assert d == {"stage": "archive", "outcome": "won", "my_view": "своя оценка"}
+        k = c.execute("SELECT role, aliases FROM crm.people WHERE id = %s", (kolya["id"],)).fetchone()
+        assert k == {"role": "CFO", "aliases": ["Коля", "Николай"]}
 
 
 def test_todoist_bridge_takes_only_new(dela):
