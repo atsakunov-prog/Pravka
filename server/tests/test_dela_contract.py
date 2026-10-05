@@ -7,7 +7,7 @@ import datetime as dt
 import json
 from pathlib import Path
 
-from pravka_dela import ask, crm, store  # noqa: F401  (crm регистрирует свои виды в store.VIEWS)
+from pravka_dela import ask, crm, stats, store  # noqa: F401  (crm и stats регистрируют свои виды в store.VIEWS)
 from test_dela_schema import dela, project  # noqa: F401
 
 ROOT = Path(__file__).resolve().parents[1] / "contract"
@@ -85,3 +85,16 @@ def test_contract_examples_match_server(dela):
                                  ask_fn=lambda s, u: {"route": "new", "reply": "", "changes": [], "create": []}, parse_fn=parse_fn))
     example = {k: v for k, v in TWO["ask"]["done_new"].items() if k not in ("ok", "status", "_")}
     fields(example, out, "ask route=new")
+
+    # Правка словами в «Новом»: решения по предложениям (decided) — те поля, что в примере.
+    s = store.apply_ops(dela, "system", [{"op": "suggestion.create", "suggestion": {
+        "for_user": "sasha", "kind": "create", "source": "meeting", "batch_ref": "meeting:5", "batch_title": "Бета, 05.10",
+        "payload": {"title": "Иван: прислать модель", "person_name": "Иван", "ball": "waiting"}}}], "test")["results"][0]["suggestion"]
+    decision = {"n": 1, "decision": "accept", "reason": "", "title": "Иван: прислать модель к пятнице", "notes_add": "", "project": "",
+                "person": "", "due": "", "ball": "", "now": ""}
+    out = store.jsonable(ask.run(dela, "sasha", "первое прими", {"title": "Новое", "task_ids": [], "suggestion_ids": [s["id"]]}, "", None,
+                                 ask_fn=lambda s_, u: {"route": "edit", "reply": "Принял.", "changes": [], "create": [],
+                                                       "suggestions": [decision]}))
+    example = {k: v for k, v in TWO["ask"]["done_edit"].items() if k not in ("ok", "status", "_")}
+    fields(example, out, "ask route=edit, «Новое»")
+    assert TWO["ask"]["request"]["POST /api/ask"]["scope"]["suggestion_ids"]

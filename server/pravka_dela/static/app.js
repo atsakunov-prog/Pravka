@@ -387,6 +387,7 @@ const GROUPS = [['date', 'по датам'], ['project', 'по проектам'
 
 function renderMain(r) {
   S.order = [];
+  S.sugOrder = []; // предложения «Нового» в порядке экрана: П1, П2… — так их видит и Claude
   if (r.kind === 'project') return renderProject(r.id);
   if (r.kind === 'person') return renderPerson(r.id);
   if (r.kind === 'search') return renderSearch(r.q);
@@ -808,15 +809,17 @@ function claudeIcon(size = 18) {
 }
 
 // ── Быстрый ввод: «+» — одно дело с разметкой, Claude — разбор текста на дела ──
-function quickAdd(defaults) {
+// toClaude: Enter отдаёт Claude, а не заводит дело («Новое»: там пишут «первое прими», и это не дело).
+function quickAdd(defaults, { toClaude = false, placeholder = null } = {}) {
   const busy = !!S.parse;
   const input = el('textarea', { id: 'quick', rows: 1, autocomplete: 'off', disabled: busy,
-    placeholder: 'Новое дело — Enter. Claude (звёздочка или микрофон): «все просроченные — на завтра», надиктовка' });
+    placeholder: placeholder || 'Новое дело — Enter. Claude (звёздочка или микрофон): «все просроченные — на завтра», надиктовка' });
   if (busy) input.value = S.parse.text;
   else if (S.quickDraft) { input.value = S.quickDraft; S.quickDraft = null; }
   const preview = el('div', { class: 'preview' });
   const help = el('div', { class: 'help hidden' },
-    'Enter — одно дело · звёздочка, Ctrl+Enter или микрофон — Claude: поправит дела на экране или заведёт новые · Shift+Enter — новая строка · ',
+    toClaude ? 'Enter, звёздочка или микрофон — Claude: примет, отклонит или поправит предложения на экране · «+» — одно дело · Shift+Enter — новая строка · '
+      : 'Enter — одно дело · звёздочка, Ctrl+Enter или микрофон — Claude: поправит дела на экране или заведёт новые · Shift+Enter — новая строка · ',
     '+проект  @человек  *метка  !жду  !повестка  !сейчас  !хочу  !15м · сегодня, завтра, в пятницу, через 3 дня, 12.10 · «в кавычках» — без разбора');
   const status = busy ? el('div', { class: 'claude-status' }, 'Claude думает… Можно уходить на другие страницы — изменения появятся сами.')
     : rec && S.listenQuick ? el('div', { class: 'claude-status listening' }, 'Слушаю… замолчишь — отдам Claude. Нажми микрофон ещё раз, чтобы закончить сразу.') : null;
@@ -897,13 +900,15 @@ function quickAdd(defaults) {
     if (e.key !== 'Enter' || e.shiftKey) return;
     e.preventDefault();
     // Ctrl+Enter — Claude; несколько строк — тоже ему: одно дело из абзаца не выйдет.
-    if (e.ctrlKey || e.metaKey || input.value.trim().includes('\n')) claudeParse(input, defaults);
+    if (toClaude || e.ctrlKey || e.metaKey || input.value.trim().includes('\n')) claudeParse(input, defaults);
     else addOne();
   });
 
-  const plusBtn = el('button', { type: 'button', class: 'q-btn plus', title: 'Записать одно дело (Enter)', disabled: busy, onclick: addOne }, '+');
+  const plusBtn = el('button', { type: 'button', class: 'q-btn plus', title: 'Записать одно дело' + (toClaude ? '' : ' (Enter)'), disabled: busy, onclick: addOne }, '+');
   const claudeBtn = el('button', { type: 'button', class: 'q-btn claude-btn' + (busy ? ' busy' : ''), disabled: busy,
-    title: S.me.claude ? 'Claude: поправить дела на экране или разобрать текст на новые дела (Ctrl+Enter)' : 'Claude на сервере ещё не настроен',
+    title: !S.me.claude ? 'Claude на сервере ещё не настроен'
+      : toClaude ? 'Claude: принять, отклонить или поправить предложения на экране (Enter)'
+        : 'Claude: поправить дела на экране или разобрать текст на новые дела (Ctrl+Enter)',
     onclick: () => claudeParse(input, defaults) }, claudeIcon());
   // Микрофон: сказанное дописывается в поле и, когда человек замолчал, уходит Claude.
   const hearing = !!(rec && S.listenQuick);
@@ -979,13 +984,16 @@ async function runJob(path, body) {
   }
 }
 
-/** Что видит человек на этой странице — Claude видит то же: название и дела на экране. */
+/** Что видит человек на этой странице — Claude видит то же: название, дела и в «Новом» — предложения (П1, П2…). */
 function pageScope(defaults = {}) {
   const r = route();
   const p = r.kind === 'project' ? project(r.id) : null, h = r.kind === 'person' ? person(r.id) : null;
+  const one = r.kind === 'new' && r.batch ? pendingSugs().find((s) => s.batch_ref === r.batch) : null;
   const title = p ? `${KIND[p.kind] || 'Проект'}: ${p.name}` : h ? `Человек: ${h.name}` : r.kind === 'search' ? `Поиск: ${r.q}`
-    : (VIEWS[r.kind] || CRM_VIEWS[r.kind] || { title: 'Дела' }).title;
+    : r.kind === 'new' && r.batch ? `Новое: одна пачка — ${one?.batch_title || r.batch}`
+      : (VIEWS[r.kind] || CRM_VIEWS[r.kind] || { title: 'Дела' }).title;
   const scope = { title, task_ids: [...new Set(S.order)].slice(0, 300) };
+  if (r.kind === 'new') scope.suggestion_ids = S.sugOrder.slice(0, 150);
   for (const k of ['project_id', 'person_id']) if (defaults[k]) scope[k] = defaults[k];
   return scope;
 }
@@ -1088,32 +1096,51 @@ function describe(c) {
   return out.join(', ');
 }
 
-/** Итог правки: что сделал Claude, его слова, «Вернуть всё» одним движением. */
+const DECIDED = { create: 'заведено', close: 'закрыто', update: 'уточнено', assign: 'взято себе' };
+
+/** Итог правки: что сделал Claude, его слова, «Вернуть всё» одним движением.
+ *  В «Новом» ещё и решения по предложениям: принятое возвращается (заведённое — отменой, поправленное —
+ *  как было), отклонённое — нет: оно остаётся отклонённым вместе с причиной. */
 function askResult(d) {
   document.querySelectorAll('.claude-result').forEach((x) => x.remove());
-  const changed = d.changed || [], made = d.tasks || [];
+  const changed = d.changed || [], made = d.tasks || [], decided = d.decided || [];
+  const took = decided.filter((x) => x.decision === 'accept' && x.id);
+  const dropped = decided.filter((x) => x.decision === 'reject');
   const box = el('div', { class: 'claude-result', role: 'status' });
   const close = () => box.remove();
   const undo = async () => {
     const back = [];
-    for (const c of changed) {
+    for (const c of [...changed, ...took.filter((x) => !x.created)]) {
       if (Object.keys(c.before || {}).length) back.push({ op: 'task.set', id: c.id, set: c.before });
       if (c.status) back.push({ op: { open: 'task.reopen', done: 'task.done', cancelled: 'task.cancel' }[c.status[0]], id: c.id });
     }
-    for (const t of made) back.push({ op: 'task.cancel', id: t.id });
-    try { await ops(back); close(); render(); toast('Вернул как было'); } catch (e) { fail(e); }
+    for (const t of [...made, ...took.filter((x) => x.created)]) back.push({ op: 'task.cancel', id: t.id });
+    try { if (back.length) await ops(back); close(); render(); toast('Вернул как было'); } catch (e) { fail(e); }
   };
-  const n = changed.length + made.length;
+  const nTasks = changed.length + made.length, n = nTasks + decided.length, back = nTasks + took.length;
+  const what = [decided.length ? plural(decided.length, 'предложение', 'предложения', 'предложений') : null,
+    nTasks ? plural(nTasks, 'дело', 'дела', 'дел') : null].filter(Boolean).join(', ');
+  // Предложение словами — как в «Новом», пока оно есть у веба; иначе — как его видел Claude.
+  const sugTitle = (x) => (S.sugs.get(x.sid) ? sugText(S.sugs.get(x.sid)).title : x.what);
   box.append(...[
-    el('div', { class: 'cr-head' }, claudeIcon(16), el('span', {}, n ? `Claude: ${plural(n, 'дело', 'дела', 'дел')}` : 'Claude ничего не менял'),
+    el('div', { class: 'cr-head' }, claudeIcon(16), el('span', {}, n ? `Claude: ${what}` : 'Claude ничего не менял'),
       el('button', { class: 'icon-btn', title: 'Закрыть', onclick: close }, icon('x', 14))),
     d.reply ? el('div', { class: 'cr-reply' }, d.reply) : null,
+    decided.map((x) => (x.decision === 'accept'
+      ? el('button', { class: 'cr-task', onclick: () => x.id && openCard(x.id) },
+        el('div', {}, `П${x.n} ${DECIDED[x.kind] || 'принято'}` + (x.id ? `: #${x.num} ${x.title}` : '')),
+        describe(x) ? el('div', { class: 'cr-meta' }, describe(x)) : null)
+      : el('div', { class: 'cr-task' }, el('div', {}, `П${x.n} отклонено: ${sugTitle(x)}`),
+        x.reason ? el('div', { class: 'cr-meta' }, x.reason) : null))),
     changed.map((c) => el('button', { class: 'cr-task', onclick: () => openCard(c.id) },
       el('div', {}, `#${c.num} ${c.after?.title || c.title}`), el('div', { class: 'cr-meta' }, describe(c)))),
     made.length ? el('div', { class: 'cr-sub' }, 'Новые:') : null,
     made.map((t) => el('button', { class: 'cr-task', onclick: () => openCard(t.id) }, el('div', {}, '#' + t.num + ' ' + t.title))),
     d.errors && d.errors.length ? el('div', { class: 'cr-err' }, 'Не вышло: ' + d.errors.join('; ')) : null,
-    el('div', { class: 'cr-acts' }, n ? el('button', { onclick: undo }, 'Вернуть всё') : null, el('button', { onclick: close }, 'Хорошо')),
+    el('div', { class: 'cr-acts' },
+      back ? el('button', { onclick: undo, title: dropped.length ? 'Отклонённое остаётся отклонённым — вернуть его нельзя' : '' },
+        dropped.length ? 'Вернуть принятое' : 'Вернуть всё') : null,
+      el('button', { onclick: close }, 'Хорошо')),
   ].flat().filter(Boolean));
   document.body.append(box);
   if (!n && !(d.errors || []).length) setTimeout(close, 8000);
@@ -1277,10 +1304,11 @@ function renderNew(batch) {
     if (sugAt(s) > b.at) b.at = sugAt(s);
   }
   const box = el('div', { class: 'body' });
-  if (batch) {
-    box.append(el('div', { class: 'toolbar' }, el('a', { class: 'chip-btn', href: '#/new' }, `Всё «Новое»: ${all_.length}`)));
-    if (!list.length) box.append(el('div', { class: 'empty' }, 'Эта пачка уже разобрана.'));
-  } else if (!list.length) box.append(el('div', { class: 'empty' }, 'Новых предложений нет.'));
+  if (batch) box.append(el('div', { class: 'toolbar' }, el('a', { class: 'chip-btn', href: '#/new' }, `Всё «Новое»: ${all_.length}`)));
+  // Строка Claude: «первое прими, срок пятница; второе не надо» — П-номера ниже те же, что видит он.
+  box.append(quickAdd({}, list.length ? { toClaude: true, placeholder: 'Claude: «первое прими, срок пятница; второе не надо — делает Наташа»' } : {}));
+  if (batch && !list.length) box.append(el('div', { class: 'empty' }, 'Эта пачка уже разобрана.'));
+  else if (!list.length) box.append(el('div', { class: 'empty' }, 'Новых предложений нет.'));
   for (const b of [...batches.values()].sort((x, y) => y.at.localeCompare(x.at))) {
     const ids = b.items.map((s) => s.id);
     const [ic, col] = SRC[b.src] || ['inbox-in', VIEWS.new.color];
@@ -1292,8 +1320,10 @@ function renderNew(batch) {
           el('button', { class: 'chip-btn', onclick: () => decide(ids, 'reject') }, 'Отклонить все')) : null),
       b.items.map((s) => {
         const { title, hint, add } = sugText(s);
+        S.sugOrder.push(s.id);
         return el('div', { class: 'sug' + (s.kind !== 'create' ? ' ' + s.kind : '') },
-          el('div', { class: 'main' }, el('div', {}, title), hint ? el('div', { class: 'hint' }, hint) : null,
+          el('div', { class: 'main' }, el('div', {}, el('span', { class: 'sug-n', title: 'Номер для Claude: «П' + S.sugOrder.length + ' прими»' }, 'П' + S.sugOrder.length), title),
+            hint ? el('div', { class: 'hint' }, hint) : null,
             add ? el('div', { class: 'add' }, add) : null,
             s.quote && s.quote !== title ? el('div', { class: 'hint' }, '«' + s.quote.slice(0, 200) + '»') : null),
           el('div', { class: 'acts' },
@@ -1310,6 +1340,7 @@ function renderNew(batch) {
         el('span', { class: 'gsub' }, 'за неделю: очевидное из встреч и Telegram')),
       auto.map((s) => {
         const t = S.tasks.get(s.task_id);
+        if (t) S.order.push(t.id); // закрытое само — тоже дело на экране: «верни акт» Claude поймёт
         const reopen = async () => {
           try { await op1({ op: 'task.reopen', id: t.id }); toast('Вернул в работу: ' + t.title); render(); } catch (e) { fail(e); }
         };

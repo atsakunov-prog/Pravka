@@ -19,8 +19,8 @@
 | GET  /api/task/<id или номер> | дело с комментариями и журналом |
 | POST /api/parse | {"text", "project_id"?, "person_id"?} — Claude режет текст на дела и заводит их; ответ — номер задания |
 | GET  /api/parse/<номер> | run, пока думает; потом done с делами и заметками или error |
-| POST /api/ask | {"text", "scope": {"title", "task_ids", "focus"?, "project_id"?, "person_id"?}} — Claude правит дела страницы словами (ask.py); ответ — номер задания |
-| GET  /api/ask/<номер> | как у разбора; done — что поменялось (changed: как было и стало), новые дела, ответ Claude |
+| POST /api/ask | {"text", "scope": {"title", "task_ids", "focus"?, "project_id"?, "person_id"?, "suggestion_ids"?}} — Claude правит дела страницы словами, в «Новом» — и решает предложения на экране (ask.py); ответ — номер задания |
+| GET  /api/ask/<номер> | как у разбора; done — что поменялось (changed: как было и стало), новые дела, решения по «Новому» (decided), ответ Claude |
 """
 
 from __future__ import annotations
@@ -243,9 +243,11 @@ def build(cfg: Config) -> Starlette:
                 limiter=slots[0],
             )
             job.update(status="done", result=store.jsonable(out))
-            log.info("правка %s: %d знаков, дел на экране %d, путь %s, поправлено %d, заведено %d, токены %s",
-                     who.name, len(text), len(scope.get("task_ids") or []), out.get("route"),
-                     len(out.get("changed") or []), len(out.get("tasks") or []), out.get("usage"))
+            log.info("правка %s: %d знаков, дел на экране %d, предложений %d, путь %s, поправлено %d, заведено %d, "
+                     "решено в «Новом» %d, токены %s",
+                     who.name, len(text), len(scope.get("task_ids") or []), len(scope.get("suggestion_ids") or []),
+                     out.get("route"), len(out.get("changed") or []), len(out.get("tasks") or []),
+                     len(out.get("decided") or []), out.get("usage"))
         except (ask.AskError, parse.ParseError) as e:
             job.update(status="error", error=str(e))
         except Exception as e:  # сеть, ключ, лимит — человеку коротко, в журнал подробно
@@ -269,6 +271,7 @@ def build(cfg: Config) -> Starlette:
         scope: dict = {"title": str(raw.get("title") or "")[:200]}
         try:
             scope["task_ids"] = [str(uuid.UUID(str(x))) for x in (raw.get("task_ids") or [])][:ask.MAX_TASKS]
+            scope["suggestion_ids"] = [str(uuid.UUID(str(x))) for x in (raw.get("suggestion_ids") or [])][:ask.MAX_SUGS]
             for k in ("focus", "project_id", "person_id"):
                 if raw.get(k):
                     scope[k] = str(uuid.UUID(str(raw[k])))

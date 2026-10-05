@@ -1046,7 +1046,10 @@
      ],
      "focus": "<id дела у микрофона — по желанию>",
      "project_id": "<куда класть новые дела — по желанию>",
-     "person_id": null
+     "person_id": null,
+     "suggestion_ids": [
+      "<в «Новом»: id ждущих предложений на экране сверху вниз — сервер нумерует их П1, П2… в этом порядке; по желанию>"
+     ]
     }
    }
   },
@@ -1085,10 +1088,55 @@
      ]
     }
    ],
+   "decided": [
+    {
+     "n": 1,
+     "sid": "<id предложения>",
+     "kind": "create",
+     "decision": "accept",
+     "what": "завести: «Иван: прислать модель» · Бета Групп · жду от Иван Петров",
+     "reason": null,
+     "id": "<id заведённого дела>",
+     "num": 61,
+     "title": "Наташа: прислать модель",
+     "created": true,
+     "after": {
+      "title": "Наташа: прислать модель",
+      "due_date": "2026-10-09",
+      "person_id": "<id>"
+     }
+    },
+    {
+     "n": 2,
+     "sid": "<id предложения>",
+     "kind": "create",
+     "decision": "reject",
+     "what": "завести: «Идея: обзвон фондов»",
+     "reason": "просто мысль, не дело"
+    },
+    {
+     "n": 3,
+     "sid": "<id предложения>",
+     "kind": "close",
+     "decision": "accept",
+     "what": "закрыть #3 Закрыть акт — основание: «акт подписали»",
+     "reason": null,
+     "id": "<id дела>",
+     "num": 3,
+     "title": "Закрыть акт",
+     "before": {},
+     "after": {},
+     "status": [
+      "open",
+      "done"
+     ]
+    }
+   ],
    "tasks": [],
    "notes": [],
    "errors": [],
-   "model": "claude-sonnet-5-5"
+   "model": "claude-sonnet-5-5",
+   "_": "decided — решения по «Новому», только если в scope были suggestion_ids: n — П-номер (место в списке suggestion_ids с единицы), kind — create / close / update / assign, decision — accept или reject (reason — причина словами владельца). У принятого — дело: created — заведено им (after — правки Claude к предложению); иначе before / after / status, как у changed. Предложения — в синке (suggestions), статус уже не pending."
   },
   "done_new": {
    "ok": true,
@@ -1167,7 +1215,7 @@
    "usage": null,
    "_": "route = new — команда целиком про новые дела, сервер отдал её разбору (как /api/parse): tasks — строки дел (как в синке, v_tasks), notes — записи хронологии (заметки)."
   },
-  "undo": "«Вернуть всё»: для каждого changed — task.set с before (если не пусто) и по status[0]: open → task.reopen, done → task.done, cancelled → task.cancel; для tasks — task.cancel."
+  "undo": "«Вернуть всё»: для каждого changed и для decided с decision = accept без created — task.set с before (если не пусто) и по status[0]: open → task.reopen, done → task.done, cancelled → task.cancel; для tasks и для decided с created — task.cancel по id. Отклонённое (decision = reject) не возвращается: операции «обратно в Новое» нет — кнопку тогда звать «Вернуть принятое»."
  },
  "settings": {
   "GET /api/settings": {
