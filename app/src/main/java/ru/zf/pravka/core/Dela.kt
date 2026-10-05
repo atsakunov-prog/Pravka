@@ -99,14 +99,49 @@ object Dela {
         val live: Boolean get() = archivedAt.isBlank()
     }
 
+    /**
+     * Сделка — строка `crm.v_deals` (контракт, часть 2). Деньги (`fee_kop`)
+     * приходят только тем, кому они открыты: у остальных null — и здесь null,
+     * а не ноль: «гонорара нет» и «гонорар не твой» — разные вещи.
+     */
     data class Deal(
         val id: String,
         val projectId: String,
         val name: String,
         val stage: String = "",
+        val outcome: String = "",
+        val lostReason: String = "",
+        val closedOn: String = "",
+        val dealType: String = "",
+        val leadPersonId: String = "",
+        val teamIds: List<String> = emptyList(),
+        val personIds: List<String> = emptyList(),
+        val feeKop: Long? = null,
         val rev: Int = 0,
         val seq: Long = 0,
-    )
+        val local: Boolean = false,
+    ) {
+        val closed: Boolean get() = stage == "archive"
+    }
+
+    /** Оплата сделки (`crm.payments`): план, счёт, деньги; «не будет» — cancelled_at. */
+    data class Payment(
+        val id: String,
+        val dealId: String,
+        val kind: String = "",
+        val title: String = "",
+        val amountKop: Long = 0,
+        val dueOn: String = "",
+        val invoicedOn: String = "",
+        val paidOn: String = "",
+        val cancelledAt: String = "",
+        val note: String = "",
+        val rev: Int = 0,
+        val seq: Long = 0,
+        val local: Boolean = false,
+    ) {
+        val live: Boolean get() = cancelledAt.isBlank()
+    }
 
     data class Person(
         val id: String,
@@ -118,6 +153,16 @@ object Dela {
         val archivedAt: String = "",
         val rev: Int = 0,
         val seq: Long = 0,
+        val role: String = "",
+        /** Теплота: month, quarter, year, none; "" — не задана. */
+        val cadence: String = "",
+        /** «Хаб» — через него идут темы. */
+        val hub: Boolean = false,
+        val birthDay: Int = 0,
+        val birthMonth: Int = 0,
+        /** Человек — пользователь Дел (команда), а не контакт. */
+        val userId: String = "",
+        val local: Boolean = false,
     ) {
         val label: String get() = short.ifBlank { name }
         val live: Boolean get() = archivedAt.isBlank()
@@ -165,9 +210,22 @@ object Dela {
         val rev: Int = 0,
         val seq: Long = 0,
         val local: Boolean = false,
+        val decidedBy: String = "",
+        val resultTaskId: String = "",
     ) {
         val pending: Boolean get() = status == "pending"
         fun payloadObj(): JSONObject = runCatching { JSONObject(payload) }.getOrElse { JSONObject() }
+
+        /**
+         * «Закрыто само» (05.10.2026, правило 5 сервера): очевидное закрытие по
+         * свежей встрече или переписке сервер принял сам — `close`, `accepted`,
+         * `payload.auto`. Телефон показывает его с основанием и «Вернуть».
+         */
+        val autoClosed: Boolean
+            get() = kind == "close" && status == "accepted" && payloadObj().optBoolean("auto", false)
+
+        /** Дата встречи или переписки, иначе — когда предложение появилось: по ней пачки идут свежими сверху. */
+        val at: String get() = payloadObj().str("meeting_at").ifBlank { createdAt.take(10) }
         /** Что предложено, одной строкой. */
         val title: String
             get() = payloadObj().let { p -> p.str("title").ifBlank { p.str("text") } }.ifBlank {
@@ -179,7 +237,22 @@ object Dela {
             }
     }
 
-    data class User(val id: String, val name: String, val personId: String = "", val role: String = "member", val seq: Long = 0)
+    /**
+     * Пользователь Дел. `clients` — какие клиенты ему видны (own — только свои
+     * проекты, team — по ответственности в сделках, all — все), `seesMoney` —
+     * открыты ли деньги фирмы. Владельцу открыто всё по роли.
+     */
+    data class User(
+        val id: String,
+        val name: String,
+        val personId: String = "",
+        val role: String = "member",
+        val seq: Long = 0,
+        val clients: String = "own",
+        val seesMoney: Boolean = false,
+    ) {
+        val owner: Boolean get() = role == "owner"
+    }
 
     /** Копия сервера на телефоне: всё, что видит владелец, плюс номер последнего изменения. */
     data class Snapshot(
@@ -195,6 +268,7 @@ object Dela {
         val users: Map<String, User> = emptyMap(),
         val labels: List<String> = emptyList(),
         val syncedAt: Long = 0,
+        val payments: Map<String, Payment> = emptyMap(),
     ) {
         val empty: Boolean
             get() = tasks.isEmpty() && projects.isEmpty() && people.isEmpty() && suggestions.isEmpty()
@@ -210,6 +284,12 @@ object Dela {
         fun livePeople(): List<Person> = people.values.filter { it.live }.sortedBy { it.label.lowercase() }
         fun dealsOf(projectId: String): List<Deal> =
             deals.values.filter { it.projectId == projectId && it.stage != "archive" }.sortedBy { it.name.lowercase() }
+        /** Все сделки клиента: живые по ходу воронки, закрытые — в конце. */
+        fun allDealsOf(projectId: String): List<Deal> =
+            deals.values.filter { it.projectId == projectId }
+                .sortedWith(compareBy<Deal>({ it.closed }, { STAGES.indexOf(it.stage).let { i -> if (i < 0) 99 else i } }, { it.name.lowercase() }))
+        fun paymentsOf(dealId: String): List<Payment> =
+            payments.values.filter { it.dealId == dealId }.sortedWith(compareBy<Payment>({ it.dueOn.isBlank() }, { it.dueOn }))
         fun commentsOf(taskId: String): List<Comment> =
             comments.values.filter { it.taskId == taskId && it.deletedAt.isBlank() }.sortedBy { it.createdAt }
     }
@@ -220,16 +300,20 @@ object Dela {
     fun JSONObject.str(key: String): String =
         if (!has(key) || isNull(key)) "" else opt(key)?.toString().orEmpty()
 
-    private fun JSONObject.int(key: String): Int = if (!has(key) || isNull(key)) 0 else optInt(key, 0)
-    private fun JSONObject.long(key: String): Long = if (!has(key) || isNull(key)) 0L else optLong(key, 0L)
-    private fun JSONObject.bool(key: String): Boolean = !isNull(key) && optBoolean(key, false)
-    private fun JSONObject.strings(key: String): List<String> {
+    internal fun JSONObject.int(key: String): Int = if (!has(key) || isNull(key)) 0 else optInt(key, 0)
+    internal fun JSONObject.long(key: String): Long = if (!has(key) || isNull(key)) 0L else optLong(key, 0L)
+    /** Число, которого может не быть: деньги, закрытые человеку, сервер отдаёт null — это не ноль. */
+    internal fun JSONObject.longOrNull(key: String): Long? = if (!has(key) || isNull(key)) null else optLong(key)
+    internal fun JSONObject.intOrNull(key: String): Int? = if (!has(key) || isNull(key)) null else optInt(key)
+    internal fun JSONObject.bool(key: String): Boolean = !isNull(key) && optBoolean(key, false)
+    internal fun JSONObject.strings(key: String): List<String> {
         val a = optJSONArray(key) ?: return emptyList()
         return (0 until a.length()).mapNotNull { i -> if (a.isNull(i)) null else a.optString(i).trim().takeIf { it.isNotEmpty() } }
     }
 
-    private fun nul(s: String): Any = s.ifBlank { null } ?: JSONObject.NULL
-    private fun arr(items: List<String>): JSONArray = JSONArray().apply { items.forEach { put(it) } }
+    internal fun nul(s: String): Any = s.ifBlank { null } ?: JSONObject.NULL
+    internal fun arr(items: List<String>): JSONArray = JSONArray().apply { items.forEach { put(it) } }
+    private fun nulLong(v: Long?): Any = v ?: JSONObject.NULL
 
     fun task(o: JSONObject): Task? {
         val id = o.str("id").ifBlank { return null }
@@ -281,23 +365,53 @@ object Dela {
 
     fun deal(o: JSONObject): Deal? {
         val id = o.str("id").ifBlank { return null }
-        return Deal(id, o.str("project_id"), o.str("name"), o.str("stage"), o.int("rev"), o.long("seq"))
+        return Deal(
+            id = id, projectId = o.str("project_id"), name = o.str("name"), stage = o.str("stage"),
+            outcome = o.str("outcome"), lostReason = o.str("lost_reason"), closedOn = o.str("closed_on"),
+            dealType = o.str("deal_type"), leadPersonId = o.str("lead_person_id"), teamIds = o.strings("team_ids"),
+            personIds = o.strings("person_ids"), feeKop = o.longOrNull("fee_kop"), rev = o.int("rev"), seq = o.long("seq"),
+            local = o.bool("_local"),
+        )
     }
 
     fun json(d: Deal): JSONObject = JSONObject().put("id", d.id).put("project_id", d.projectId).put("name", d.name)
-        .put("stage", nul(d.stage)).put("rev", d.rev).put("seq", d.seq)
+        .put("stage", nul(d.stage)).put("outcome", nul(d.outcome)).put("lost_reason", nul(d.lostReason))
+        .put("closed_on", nul(d.closedOn)).put("deal_type", nul(d.dealType)).put("lead_person_id", nul(d.leadPersonId))
+        .put("team_ids", arr(d.teamIds)).put("person_ids", arr(d.personIds)).put("fee_kop", nulLong(d.feeKop))
+        .put("rev", d.rev).put("seq", d.seq).apply { if (d.local) put("_local", true) }
+
+    fun payment(o: JSONObject): Payment? {
+        val id = o.str("id").ifBlank { return null }
+        return Payment(
+            id = id, dealId = o.str("deal_id"), kind = o.str("kind"), title = o.str("title"), amountKop = o.long("amount_kop"),
+            dueOn = o.str("due_on"), invoicedOn = o.str("invoiced_on"), paidOn = o.str("paid_on"),
+            cancelledAt = o.str("cancelled_at"), note = o.str("note"), rev = o.int("rev"), seq = o.long("seq"),
+            local = o.bool("_local"),
+        )
+    }
+
+    fun json(p: Payment): JSONObject = JSONObject().put("id", p.id).put("deal_id", p.dealId).put("kind", p.kind)
+        .put("title", nul(p.title)).put("amount_kop", p.amountKop).put("due_on", nul(p.dueOn))
+        .put("invoiced_on", nul(p.invoicedOn)).put("paid_on", nul(p.paidOn)).put("cancelled_at", nul(p.cancelledAt))
+        .put("note", nul(p.note)).put("rev", p.rev).put("seq", p.seq).apply { if (p.local) put("_local", true) }
 
     fun person(o: JSONObject): Person? {
         val id = o.str("id").ifBlank { return null }
         return Person(
             id, o.str("name"), o.str("short"), o.strings("aliases"), o.str("org_id"), o.strings("phones"),
             o.str("archived_at"), o.int("rev"), o.long("seq"),
+            role = o.str("role"), cadence = o.str("cadence"), hub = o.bool("hub"),
+            birthDay = o.int("birth_day"), birthMonth = o.int("birth_month"), userId = o.str("user_id"), local = o.bool("_local"),
         )
     }
 
     fun json(p: Person): JSONObject = JSONObject().put("id", p.id).put("name", p.name).put("short", nul(p.short))
         .put("aliases", arr(p.aliases)).put("org_id", nul(p.orgId)).put("phones", arr(p.phones))
         .put("archived_at", nul(p.archivedAt)).put("rev", p.rev).put("seq", p.seq)
+        .put("role", nul(p.role)).put("cadence", nul(p.cadence)).put("hub", p.hub)
+        .put("birth_day", if (p.birthDay > 0) p.birthDay else JSONObject.NULL)
+        .put("birth_month", if (p.birthMonth > 0) p.birthMonth else JSONObject.NULL)
+        .put("user_id", nul(p.userId)).apply { if (p.local) put("_local", true) }
 
     fun org(o: JSONObject): Org? {
         val id = o.str("id").ifBlank { return null }
@@ -327,6 +441,7 @@ object Dela {
             o.str("source_ref"), o.str("quote"), o.str("batch_ref"), o.str("batch_title"),
             o.str("status").ifBlank { "pending" }, o.str("reason"), o.str("expires_at"), o.str("created_at"),
             o.str("decided_at"), o.int("rev"), o.long("seq"), o.bool("_local"),
+            decidedBy = o.str("decided_by"), resultTaskId = o.str("result_task_id"),
         )
     }
 
@@ -336,15 +451,20 @@ object Dela {
         .put("batch_ref", nul(s.batchRef)).put("batch_title", nul(s.batchTitle)).put("status", s.status)
         .put("reason", nul(s.reason)).put("expires_at", nul(s.expiresAt)).put("created_at", nul(s.createdAt))
         .put("decided_at", nul(s.decidedAt)).put("rev", s.rev).put("seq", s.seq)
+        .put("decided_by", nul(s.decidedBy)).put("result_task_id", nul(s.resultTaskId))
         .apply { if (s.local) put("_local", true) }
 
     fun user(o: JSONObject): User? {
         val id = o.str("id").ifBlank { return null }
-        return User(id, o.str("name").ifBlank { id }, o.str("person_id"), o.str("role").ifBlank { "member" }, o.long("seq"))
+        return User(
+            id, o.str("name").ifBlank { id }, o.str("person_id"), o.str("role").ifBlank { "member" }, o.long("seq"),
+            clients = o.str("clients").ifBlank { "own" }, seesMoney = o.bool("sees_money"),
+        )
     }
 
     fun json(u: User): JSONObject =
         JSONObject().put("id", u.id).put("name", u.name).put("person_id", nul(u.personId)).put("role", u.role).put("seq", u.seq)
+            .put("clients", u.clients).put("sees_money", u.seesMoney)
 
     private fun <T> rows(o: JSONObject, key: String, parse: (JSONObject) -> T?): List<T> {
         val a = o.optJSONArray(key) ?: return emptyList()
@@ -373,6 +493,7 @@ object Dela {
         .put("comments", JSONArray().apply { s.comments.values.forEach { put(json(it)) } })
         .put("suggestions", JSONArray().apply { s.suggestions.values.forEach { put(json(it)) } })
         .put("users", JSONArray().apply { s.users.values.forEach { put(json(it)) } })
+        .put("payments", JSONArray().apply { s.payments.values.forEach { put(json(it)) } })
         .put("labels", arr(s.labels))
 
     fun fromJson(o: JSONObject): Snapshot = Snapshot(
@@ -388,6 +509,7 @@ object Dela {
         users = rows(o, "users", ::user).associateBy { it.id },
         labels = labels(o).orEmpty(),
         syncedAt = o.long("syncedAt"),
+        payments = rows(o, "payments", ::payment).associateBy { it.id },
     )
 
     // ------------------------------------------------------------ синк
@@ -427,6 +549,7 @@ object Dela {
                 users = up(old.users, fresh.users) { it.seq },
                 labels = labels(resp) ?: old.labels,
                 syncedAt = now,
+                payments = up(old.payments, fresh.payments) { it.rev.toLong() },
             )
         )
     }
@@ -472,6 +595,9 @@ object Dela {
         val tasks = LinkedHashMap(s.tasks)
         val comments = LinkedHashMap(s.comments)
         val suggestions = LinkedHashMap(s.suggestions)
+        val deals = LinkedHashMap(s.deals)
+        val payments = LinkedHashMap(s.payments)
+        val people = LinkedHashMap(s.people)
         fun find(ref: String): Task? {
             tasks[ref]?.let { return it }
             val n = ref.trim().removePrefix("#").toIntOrNull() ?: return null
@@ -513,9 +639,52 @@ object Dela {
                     val status = if (op.str("decision") == "reject") "rejected" else "accepted"
                     suggestions[sg.id] = sg.copy(status = status, reason = op.str("reason"), decidedAt = nowIso, local = true)
                 }
+                "deal.set" -> {
+                    val d = deals[op.str("id")] ?: continue
+                    deals[d.id] = applyDeal(d, op.optJSONObject("set") ?: continue, today)
+                }
+                "payment.set" -> {
+                    val p = payments[op.str("id")] ?: continue
+                    val set = op.optJSONObject("set") ?: continue
+                    payments[p.id] = p.copy(
+                        invoicedOn = if (set.has("invoiced_on")) set.str("invoiced_on") else p.invoicedOn,
+                        paidOn = if (set.has("paid_on")) set.str("paid_on") else p.paidOn,
+                        cancelledAt = if (set.has("cancelled_at")) set.str("cancelled_at") else p.cancelledAt,
+                        local = true,
+                    )
+                }
+                "person.set" -> {
+                    val p = people[op.str("id")] ?: continue
+                    val set = op.optJSONObject("set") ?: continue
+                    people[p.id] = p.copy(
+                        cadence = if (set.has("cadence")) set.str("cadence") else p.cadence,
+                        hub = if (set.has("hub")) set.bool("hub") else p.hub,
+                        local = true,
+                    )
+                }
             }
         }
-        return derive(s.copy(tasks = tasks, comments = comments, suggestions = suggestions))
+        return derive(s.copy(tasks = tasks, comments = comments, suggestions = suggestions, deals = deals, payments = payments, people = people))
+    }
+
+    /**
+     * Правка сделки поверх строки — как у триггера сервера: итог (`outcome`)
+     * сам уводит сделку в архив с датой закрытия, а возврат в живую стадию
+     * итог снимает. Нужна телефону, чтобы стадия переключалась сразу, до ответа.
+     */
+    fun applyDeal(d: Deal, set: JSONObject, today: String): Deal {
+        var out = d
+        if (set.has("stage")) out = out.copy(stage = set.str("stage"))
+        if (set.has("outcome")) out = out.copy(outcome = set.str("outcome"))
+        if (set.has("lost_reason")) out = out.copy(lostReason = set.str("lost_reason"))
+        // Тот же порядок, что у crm.deal_rules: итог уводит в архив, живая стадия итог стирает.
+        if (out.outcome.isNotBlank() && set.has("outcome")) out = out.copy(stage = "archive")
+        out = if (out.stage == "archive") {
+            out.copy(closedOn = out.closedOn.ifBlank { if (d.stage != "archive") today else "" })
+        } else {
+            out.copy(outcome = "", lostReason = "", closedOn = "")
+        }
+        return out.copy(local = true)
     }
 
     /** Поля операции — в дело. Та же механика, что у триггера сервера: «жду с» ставится само. */
@@ -569,11 +738,36 @@ object Dela {
     /** Похоже ли на uuid — то, что сервер примет в op_id и id. */
     fun isUuid(s: String): Boolean = runCatching { UUID.fromString(s); s.length == 36 }.getOrDefault(false)
 
-    /** Поля дела, которые правит телефон: остальное — имена и служебное. */
+    /**
+     * Поля дела, которые правит карточка телефона: остальное — имена и служебное.
+     * Денег дела (`money`) здесь нет с 05.10.2026: владелец убрал их из
+     * интерфейса («тяжело смотреть, нагружает»). Поле в данных осталось, но
+     * карточка его не показывает — значит, и `task.set` не должен уметь его
+     * тронуть: невидимая правка денег читалась бы как поломка.
+     */
     val EDITABLE = listOf(
         "title", "notes", "project_id", "deal_id", "ball", "person_id", "nudge_on", "requested_by",
-        "due_date", "due_time", "estimate_min", "money", "want", "focus_on", "labels",
+        "due_date", "due_time", "estimate_min", "want", "focus_on", "labels",
     )
+
+    /**
+     * Поля нового дела: карточкины плюс деньги. Деньги ставит только Разноска —
+     * тот же промпт, что у разбора сервера (`TASKS_DELA`), который их по-прежнему
+     * пишет: данные не трогаем, только не показываем.
+     */
+    private val CREATE_FIELDS = EDITABLE + "money"
+
+    /**
+     * Время срока «9:30», «930», «18.00» — в «09:30»; не время — null. Сервер
+     * хранит его как `time` и отдаёт «09:30:00»: сравниваем первые пять знаков.
+     */
+    fun normTime(s: String): String? {
+        val m = Regex("^\\s*(\\d{1,2})[:.\\s]?(\\d{2})\\s*$").find(s) ?: return null
+        val h = m.groupValues[1].toInt()
+        val mi = m.groupValues[2].toInt()
+        if (h > 23 || mi > 59) return null
+        return String.format(java.util.Locale.ROOT, "%02d:%02d", h, mi)
+    }
 
     /** Значение поля дела так, как его ждёт сервер: пусто — null. */
     fun field(t: Task, key: String): Any = when (key) {
@@ -619,7 +813,7 @@ object Dela {
      */
     fun createOp(t: Task, opId: String = newId()): JSONObject {
         val task = JSONObject().put("id", t.id).put("title", t.title.trim())
-        for (k in EDITABLE) {
+        for (k in CREATE_FIELDS) {
             if (k == "title") continue
             val v = field(t, k)
             if (v == JSONObject.NULL || (k == "want" && v == false) || (k == "labels" && t.labels.isEmpty())) continue
@@ -682,6 +876,10 @@ object Dela {
             "comment.delete" -> "убрать комментарий"
             "suggestion.decide" -> (if (op.str("decision") == "reject") "отклонить" else "принять") + " предложение"
             "interaction.add" -> "заметка в хронологию"
+            "interaction.delete" -> "убрать запись хронологии"
+            "deal.set" -> "сделка «${s.deals[op.str("id")]?.name?.take(60) ?: "?"}»"
+            "payment.set" -> "оплата по сделке «${s.payments[op.str("id")]?.let { s.deals[it.dealId]?.name }?.take(60) ?: "?"}»"
+            "person.set" -> "человек «${s.people[op.str("id")]?.label ?: "?"}»"
             else -> op.str("op")
         }
     }
@@ -692,20 +890,23 @@ object Dela {
     fun inSphere(t: Task, sphere: String): Boolean =
         sphere == "all" || sphere.isBlank() || t.sphere == sphere || t.sphere == INBOX
 
-    /** Порядок `store.ORDER`: срок (пустой — в конец), время, оплаченное выше, давнее выше. */
+    /**
+     * Порядок: срок (пустой — в конец), время, давнее выше. С 05.10.2026 —
+     * как в вебе, без «оплаченное выше»: деньги дела владелец убрал из
+     * интерфейса, и порядок по ним читался бы как необъяснимая перестановка.
+     */
     val ORDER: Comparator<Task> = compareBy<Task>({ it.dueDate.isBlank() }, { it.dueDate }, { it.dueTime.isBlank() }, { it.dueTime })
-        .thenByDescending { it.moneyEff == "paid" }
         .thenBy { it.createdAt }
 
+    /** «Утро» — как в вебе: «сейчас», сегодня и просрочено, напомнить, от других. Раздела «оплачено, без срока» нет с 05.10.2026. */
     data class Morning(
         val now: List<Task>,
         val today: List<Task>,
         val nudge: List<Task>,
-        val paidUndated: List<Task>,
         val fromOthers: List<Task>,
         val newCount: Int,
     ) {
-        val total: Int get() = now.size + today.size + nudge.size + paidUndated.size + fromOthers.size
+        val total: Int get() = now.size + today.size + nudge.size + fromOthers.size
     }
 
     private fun mineOpen(s: Snapshot, me: String, sphere: String): List<Task> =
@@ -729,29 +930,86 @@ object Dela {
         val nowList = take { it.focusOn == today }
         val todayList = take { it.ball == MINE && le(it.dueDate, today) }
         val nudge = take { it.ball == WAITING && (le(it.nudgeOn, today) || le(it.dueDate, today)) }
-        val paid = take { it.ball == MINE && it.moneyEff == "paid" && it.dueDate.isBlank() }
         val others = take { it.createdBy.isNotBlank() && it.createdBy != it.ownerId && (ms(it.createdAt) ?: 0L) > now - 3 * DAY_MS }
-        return Morning(nowList, todayList, nudge, paid, others, newOnes(s, me).size)
+        return Morning(nowList, todayList, nudge, others, newOnes(s, me).size)
     }
 
-    /** Неразобранные предложения владельцу — «Новое». */
+    /** Неразобранные предложения владельцу — «Новое». Счётчик — только они. */
     fun newOnes(s: Snapshot, me: String): List<Suggestion> =
         s.suggestions.values.filter { it.pending && (me.isBlank() || it.forUser == me) }
 
-    data class Batch(val ref: String, val title: String, val items: List<Suggestion>)
+    /**
+     * Пачка «Нового»: одна встреча или одно окно дайджеста. `source` — откуда
+     * (встреча, Telegram): значок в заголовке, `at` — дата встречи для порядка.
+     */
+    data class Batch(val ref: String, val title: String, val items: List<Suggestion>, val source: String = "", val at: String = "")
 
-    /** «Новое» пачками: предложения одной встречи — одна карточка (`view_new`). */
+    /** «Новое» пачками, как в вебе: по дате встречи, свежие сверху; внутри — по времени появления. */
     fun newBatches(s: Snapshot, me: String): List<Batch> {
-        val rows = newOnes(s, me).sortedWith(compareBy<Suggestion>({ it.batchRef.isNotBlank() }, { it.batchRef }, { it.createdAt }))
+        val rows = newOnes(s, me).sortedBy { it.createdAt }
         val out = LinkedHashMap<String, MutableList<Suggestion>>()
-        val titles = HashMap<String, String>()
-        for (r in rows) {
-            val key = r.batchRef.ifBlank { "one:" + r.id }
-            out.getOrPut(key) { mutableListOf() } += r
-            if (r.batchTitle.isNotBlank()) titles[key] = r.batchTitle
-        }
-        return out.map { (k, items) -> Batch(if (k.startsWith("one:")) "" else k, titles[k].orEmpty(), items) }
+        for (r in rows) out.getOrPut(r.batchRef.ifBlank { "one:" + r.id }) { mutableListOf() } += r
+        return out.map { (k, items) ->
+            Batch(
+                ref = if (k.startsWith("one:")) "" else k,
+                title = items.firstOrNull { it.batchTitle.isNotBlank() }?.batchTitle.orEmpty(),
+                items = items,
+                source = items.first().source,
+                at = items.maxOf { it.at },
+            )
+        }.sortedByDescending { it.at }
     }
+
+    /**
+     * «Закрыто само» за [days] дней, свежие сверху (`autoClosed` веба): синк
+     * приносит эти строки (accepted), раньше телефон их просто не показывал.
+     */
+    fun autoClosed(s: Snapshot, me: String, now: Long, days: Int = 7): List<Suggestion> =
+        s.suggestions.values.filter {
+            it.autoClosed && (me.isBlank() || it.forUser == me) && (ms(it.decidedAt) ?: 0L) > now - days * DAY_MS
+        }.sortedByDescending { ms(it.decidedAt) ?: 0L }
+
+    /**
+     * «Уточнить: #N …» — что именно поменяется в деле, по полям предложения
+     * `update`: новое название, срок «было → стало», мяч с человеком (имя —
+     * как сказала автоматика: сервер сам найдёт человека при принятии) и
+     * отдельно подробности (`note`), которые лягут комментарием к делу.
+     */
+    data class Update(
+        val task: Task?,
+        val title: String,
+        val dueFrom: String,
+        val dueTo: String,
+        val ball: String,
+        val person: String,
+        val note: String,
+    ) {
+        val empty: Boolean get() = title.isBlank() && dueTo.isBlank() && ball.isBlank() && person.isBlank() && note.isBlank()
+    }
+
+    fun update(sg: Suggestion, s: Snapshot): Update {
+        val p = sg.payloadObj()
+        val t = s.tasks[sg.taskId]
+        return Update(
+            task = t,
+            title = p.str("title"),
+            dueFrom = if (p.str("due_date").isNotBlank()) t?.dueDate.orEmpty() else "",
+            dueTo = p.str("due_date"),
+            ball = p.str("ball"),
+            person = p.str("person_name"),
+            note = p.str("note"),
+        )
+    }
+
+    /** Видна ли человеку CRM: владелец по роли или тот, кому открыты клиенты (`clients ≠ own`). */
+    fun crmOn(s: Snapshot, me: String): Boolean = s.users[me]?.let { it.owner || it.clients != "own" } ?: false
+
+    /** Открыты ли деньги фирмы (гонорары, оплаты): `sees_money` или владелец. Сервер у остальных отдаёт null. */
+    fun moneyOn(s: Snapshot, me: String): Boolean = s.users[me]?.let { it.owner || it.seesMoney } ?: false
+
+    /** Стадии воронки по порядку; archive — закрытые (с итогом). */
+    val STAGES = listOf("lead", "proposal", "mandate", "active", "closing", "archive")
+    val OPEN_STAGES = STAGES.dropLast(1)
 
     data class Waiting(val personId: String, val person: String, val items: List<Task>)
 

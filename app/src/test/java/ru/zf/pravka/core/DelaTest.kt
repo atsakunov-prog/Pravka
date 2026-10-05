@@ -207,10 +207,12 @@ class DelaTest {
         // Входящие — и в Работе: «inbox» показывается в обеих сферах.
         assertEquals(listOf("stale", "overdue", "home"), m.today.map { it.id })
         assertEquals(listOf("nudge"), m.nudge.map { it.id })
-        assertEquals(listOf("paid"), m.paidUndated.map { it.id })
+        // Раздела «оплачено, без срока» нет с 05.10.2026 (деньги дела убраны
+        // из интерфейса): оплаченное без срока в «Утро» не просится.
+        assertTrue(m.now.plus(m.today).plus(m.nudge).plus(m.fromOthers).none { it.id == "paid" })
         assertEquals(listOf("other"), m.fromOthers.map { it.id })
         // Дело в первом подходящем разделе и больше нигде.
-        val shown = (m.now + m.today + m.nudge + m.paidUndated + m.fromOthers).map { it.id }
+        val shown = (m.now + m.today + m.nudge + m.fromOthers).map { it.id }
         assertEquals(shown.size, shown.toSet().size)
         assertEquals(listOf("quick"), Dela.quick(s2, "sasha", "all").map { it.id })
         assertTrue(Dela.morning(s2, "sasha", today, "home", now).today.map { it.id } == listOf("home"))

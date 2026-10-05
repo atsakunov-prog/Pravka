@@ -211,6 +211,86 @@ class DelaSync(
         }
     }
 
+    // ------------------------------------------------------------ CRM и Claude
+
+    /**
+     * CRM-вид с сервера (`/api/view/<путь>`, контракт — dela-crm.json,
+     * `views_crm`): ответ — в кэш на диске, экран открывается с ним и без сети.
+     * Не вышло — кэш прежний, причина целиком (правило 6).
+     */
+    suspend fun crmView(path: String): Result<JSONObject> = withContext(Dispatchers.IO) {
+        runCatching {
+            val l = _link.value ?: throw DelaException("Дела не подключены")
+            val o = get(l.url, l.token, "api/view/$path")
+            store.putView(path, o, System.currentTimeMillis())
+            o
+        }.onFailure { e -> log("дела: вид $path — ${why(e)}") }.recoverCatching { e -> throw DelaException(why(e)) }
+    }
+
+    /**
+     * Правка словами через сервер (`POST /api/ask`, docs/dela-phone-2.md, этап 1,
+     * пункт 3). Сначала — своя очередь на сервер: Claude правит то, что видит
+     * владелец, а не то, что сервер знал до метро. Ответ модели бывает дольше
+     * минуты, а роутер долгие запросы рвёт — поэтому задание и опрос: первые
+     * 15 раз раз в секунду, потом реже. Правка приходит уже применённой: в
+     * очередь она не ложится, после ответа — синк.
+     *
+     * Без сети команда не уходит — и это отказ словами, а не тишина: текст
+     * остаётся в поле у вызывающего.
+     */
+    suspend fun ask(text: String, scope: JSONObject): Result<ru.zf.pravka.core.DelaAsk.Result> = withContext(Dispatchers.IO) {
+        runCatching {
+            val l = _link.value ?: throw DelaException("Дела не подключены — команда не ушла")
+            val clean = text.trim()
+            if (clean.isEmpty()) throw DelaException("Скажи, что сделать с делами")
+            if (clean.length > ru.zf.pravka.core.DelaAsk.MAX_INPUT) {
+                throw DelaException("Команда длиннее ${ru.zf.pravka.core.DelaAsk.MAX_INPUT} знаков — для длинной надиктовки «говори дела»")
+            }
+            runCatching { sync("перед Claude") }
+            val start = post(l, "api/ask", ru.zf.pravka.core.DelaAsk.request(clean, scope))
+            val job = start.optString("job").takeIf { it.isNotBlank() && it != "null" }
+                ?: throw DelaException("Дела не дали номер задания: ${start.toString().take(200)}")
+            log("дела: Claude, ${clean.length} знаков, дел на экране ${scope.optJSONArray("task_ids")?.length() ?: 0}")
+            var misses = 0
+            for (i in 0 until ru.zf.pravka.core.DelaAsk.MAX_POLLS) {
+                delay(ru.zf.pravka.core.DelaAsk.pollDelayMs(i))
+                val d = try {
+                    get(l.url, l.token, "api/ask/" + URLEncoder.encode(job, "UTF-8"))
+                } catch (e: DelaException) {
+                    // 404 от самой службы на опросе — она перезапустилась и задание
+                    // потеряла (задания живут в памяти). 404 посредника — путь закрыт: как есть.
+                    if (e.code == 404 && e.ours) {
+                        throw DelaException("Задание Claude потерялось — служба Дел перезапустилась. Скажи ещё раз: текст остался")
+                    }
+                    throw e
+                } catch (e: java.io.IOException) {
+                    // Связь моргнула посреди ожидания — задание на сервере идёт дальше, спросим ещё.
+                    if (++misses > 3) throw e
+                    continue
+                }
+                misses = 0
+                if (d.optString("status") == "run") continue
+                val r = ru.zf.pravka.core.DelaAsk.parse(d)
+                log("дела: Claude ответил — ${r.route}, поправлено ${r.changed.size}, заведено ${r.tasks.size}, ошибок ${r.errors.size}")
+                pullAfterClaude()
+                return@runCatching r
+            }
+            throw DelaException("Claude думает дольше пяти минут — правка появится сама, когда он закончит")
+        }.recoverCatching { e -> throw DelaException(why(e)) }
+    }
+
+    /**
+     * Синк после правки Claude: она уже на сервере, телефон должен её увидеть.
+     * Идёт чужой проход (тик) — он мог взять синк до правки, поэтому ждём его и
+     * повторяем; не больше трёх раз.
+     */
+    private suspend fun pullAfterClaude() {
+        repeat(3) {
+            if (runCatching { sync("после Claude") }.getOrDefault(false)) return
+            delay(1_500L)
+        }
+    }
+
     // ------------------------------------------------------------ сеть
 
     private fun get(base: String, token: String, path: String): JSONObject {
@@ -231,14 +311,23 @@ class DelaSync(
         client.newCall(req).execute().use { r ->
             val text = r.body?.string().orEmpty()
             if (!r.isSuccessful) {
-                val msg = runCatching { JSONObject(text).optString("error") }.getOrNull().orEmpty().ifBlank { text.take(300) }
+                // Свой ответ служба даёт JSON с error; 404 без него — путь не пропустил
+                // посредник перед службой (закрытый список путей, 05.10.2026: так молча
+                // падали /api/ask и /api/settings в вебе), а не сама служба.
+                val ours = runCatching { JSONObject(text).optString("error") }.getOrNull().orEmpty()
+                val msg = ours.ifBlank { text.take(300) }
+                val path = req.url.encodedPath
                 throw DelaException(
-                    when (r.code) {
-                        401 -> "Дела не приняли токен — отсканируй QR из python -m pravka_dela pair заново ($msg)"
-                        403 -> "Дела отказали: $msg"
-                        404 -> "Дела ответили 404: $msg — адрес не тот или служба старая"
+                    when {
+                        r.code == 401 -> "Дела не приняли токен — отсканируй QR из python -m pravka_dela pair заново ($msg)"
+                        r.code == 403 -> "Дела отказали: $msg"
+                        r.code == 404 && ours.isNotBlank() -> "Дела ответили 404: $ours"
+                        r.code == 404 -> "Сервер не знает адрес $path (404) — путь не пропускает посредник перед Делами " +
+                            "(его надо добавить в список путей) или служба старая"
                         else -> "Дела ответили ${r.code}: $msg"
-                    }
+                    },
+                    code = r.code,
+                    ours = ours.isNotBlank(),
                 )
             }
             val o = runCatching { JSONObject(text) }.getOrElse { throw DelaException("Дела ответили не JSON: ${text.take(200)}") }
@@ -252,7 +341,8 @@ class DelaSync(
             .writeTimeout(60, TimeUnit.SECONDS).build()
     }
 
-    class DelaException(message: String) : Exception(message)
+    /** Ошибка словами; [code] — HTTP-код, [ours] — ответила сама служба (JSON с error), а не посредник. */
+    class DelaException(message: String, val code: Int = 0, val ours: Boolean = false) : Exception(message)
 
     private fun why(e: Throwable): String = when (e) {
         is DelaException -> e.message.orEmpty()
