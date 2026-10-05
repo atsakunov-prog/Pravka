@@ -64,4 +64,35 @@ class IcuFixesTest {
         assertEquals("Спорт: прочее", IcuFixes.ribbonCategory("Спорт: прочее"))
         assertEquals("Спорт: силовая", IcuFixes.ribbonCategory("Спорт: силовая"))
     }
+
+    // ---- три слоя одного BJJ (05.10.2026) ----
+
+    @Test
+    fun `слова о борьбе узнаются - у владельца, в календаре, у часов`() {
+        assertTrue(IcuFixes.saysBjj("бжж и занимаюсь с борьбой"))
+        assertTrue(IcuFixes.saysBjj("Занятие борьбой"))
+        assertTrue(IcuFixes.saysBjj("БЖЖ"))
+        assertTrue(IcuFixes.saysBjj("Поездка на бразильское джиу-джитсу"))
+        assertTrue(IcuFixes.saysBjj("Mixed Martial Arts"))
+        assertTrue(IcuFixes.saysBjj("BJJ: борьба"))
+        assertFalse(IcuFixes.saysBjj("Время с Борей"))
+        assertFalse(IcuFixes.saysBjj("Сборы детей"))
+    }
+
+    @Test
+    fun `часы BJJ поверх своей записи о борьбе - одно занятие, дорога - нет`() {
+        assertTrue(IcuFixes.sameActivity("BJJ: борьба", "Спорт: прочее", "Занятие борьбой", "Спорт: прочее"))
+        assertTrue(IcuFixes.sameActivity("BJJ: борьба", "Спорт: прочее", "BJJ: борьба", "Спорт: прочее"))
+        assertTrue(IcuFixes.sameActivity("BJJ: борьба", "Спорт: прочее", "Тренировка", "Спорт: прочее"))
+        assertFalse(IcuFixes.sameActivity("BJJ: борьба", "Спорт: прочее", "Поездка на велосипеде на борьбу", "Передвижение: вело"))
+        assertFalse(IcuFixes.sameActivity("BJJ: борьба", "Спорт: прочее", "Систематизация Правки", "Систематизация"))
+    }
+
+    @Test
+    fun `бег поверх «бегаю» - одно занятие, бег поверх работы - нет`() {
+        assertTrue(IcuFixes.sameActivity("Москва Бег", "Спорт: бег", "Пробежка", "Спорт: бег"))
+        assertFalse(IcuFixes.sameActivity("Москва Бег", "Спорт: бег", "Работа", "Работа: текущая"))
+        // Ходьба — передвижение, не спорт: прогулку с детьми она режет, как раньше.
+        assertFalse(IcuFixes.sameActivity("Москва Ходьба", "Передвижение: пешком", "Прогулка", "Передвижение: пешком"))
+    }
 }

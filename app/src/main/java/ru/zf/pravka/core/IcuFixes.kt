@@ -38,6 +38,32 @@ object IcuFixes {
         return n.equals(GARMIN_MMA, ignoreCase = true) || n == BJJ_NAME
     }
 
+    /**
+     * Слова о BJJ — у владельца («бжж и занимаюсь борьбой», «Занятие
+     * борьбой»), в календаре («БЖЖ») и у часов. По ним сходятся три слоя
+     * одного занятия (05.10.2026; владелец: «на это место будет аж три слоя…
+     * я сам напишу… в календаре это есть… и из-за Гармина как запись»).
+     */
+    fun saysBjj(text: String): Boolean {
+        if (isBjj(text)) return true
+        val t = text.lowercase().replace('ё', 'е')
+        return Regex("бжж|bjj|джиу|jiu|борьб|грэпплинг|grappling").containsMatchIn(t)
+    }
+
+    /**
+     * Тренировка с часов — то же занятие, что запись в ленте: BJJ со словами о
+     * борьбе или спортом «прочее», бег с бегом, вело с вело. Тогда часы ленту
+     * не режут — дописывают себя к записи (`IcuSweeper`): владелец сказал
+     * «бжж», календарь начал «BJJ: борьба» — это одно занятие, а не три. Дорога
+     * («Поездка на борьбу») — не занятие, её тренировка закрывает, как раньше.
+     */
+    fun sameActivity(workoutName: String, workoutCategory: String, entryTitle: String, entryCategory: String): Boolean {
+        if (AutoPilotRules.travelish(entryTitle, entryCategory)) return false
+        if (isBjj(workoutName)) return saysBjj(entryTitle) || entryCategory.equals(BJJ_CATEGORY, ignoreCase = true)
+        return workoutCategory.startsWith("Спорт", ignoreCase = true) &&
+            entryCategory.trim().equals(workoutCategory.trim(), ignoreCase = true)
+    }
+
     /** Что поменять у активности; null — менять нечего. */
     fun fix(type: String, name: String): Fix? {
         if (!isBjj(name)) return null

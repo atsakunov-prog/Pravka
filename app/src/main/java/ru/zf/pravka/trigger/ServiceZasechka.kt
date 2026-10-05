@@ -376,12 +376,12 @@ internal fun PravkaAccessibilityService.onZasechkaCommentText(
             }
         val cleaned = (target.result ?: text).trim().ifBlank { text }
         val entry = runCatching { app.zasechkaStore.entryById(entryId) }.getOrNull()
+        val joined = if (entry == null || entry.comment.isBlank()) cleaned else entry.comment + "\n" + cleaned
         val saved = entry != null && runCatching {
-            app.zasechkaStore.setComment(
-                entryId,
-                if (entry.comment.isBlank()) cleaned else entry.comment + "\n" + cleaned,
-            )
+            app.zasechkaStore.setComment(entryId, joined)
         }.getOrDefault(false)
+        // Запись начата из дела — мысль ложится и в само дело (05.10.2026).
+        if (saved && entry != null) runCatching { app.mirrorZasechkaComment(entry, entry.comment, joined) }
         zButton?.setBusy(false)
         if (entry == null || !saved) {
             // Сказанное не пропадает: оно в записке и в журнале словами.

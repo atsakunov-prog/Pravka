@@ -181,6 +181,18 @@ class IcuSweeper(
                         category = AutoPilotRules.activityCategory(category, type, elsewhere)
                     }
                 }
+                // То же занятие уже в ленте словами владельца или встречей из
+                // календаря («бжж и занимаюсь борьбой», «BJJ: борьба» по
+                // календарю): часы не режут его на три куска, а дописывают себя.
+                val host = zasechkaStore.forRange(start, end).firstOrNull { e ->
+                    e.source != "auto" && e.source != "gap" &&
+                        IcuFixes.sameActivity(name, category, e.title, e.category) &&
+                        (e.open || (min(e.end, end) - maxOf(e.start, start)).coerceAtLeast(0L) * 2 >= end - start)
+                }
+                if (host != null) {
+                    if (noteWatch(host, name, start, end)) inserted = true
+                    continue
+                }
                 if (zasechkaStore.coveredByOwner(start, end)) continue
                 val entry = zasechkaStore.insertInterruption(
                     start = start,
@@ -198,6 +210,21 @@ class IcuSweeper(
 
         runCatching { enrichSleep(now, athleteId, auth) }
         if (inserted) sync.kickSoon(scope)
+    }
+
+    /**
+     * Тренировка с часов дописывается к записи, которая уже держит это время
+     * (05.10.2026): строкой «Garmin: BJJ: борьба 13:20–14:19 · 59 мин» к
+     * надиктовке — как «КБЖУ» у еды. Второй раз ту же строку не пишет. true —
+     * запись поменялась.
+     */
+    private suspend fun noteWatch(host: ZasechkaStore.Entry, name: String, start: Long, end: Long): Boolean {
+        val mark = "Garmin: $name ${hm(start)}–${hm(end)}"
+        if (host.raw.contains(mark)) return false
+        val line = "$mark · ${(end - start + 30_000L) / 60_000L} мин"
+        val ok = zasechkaStore.annotate(host.id, if (host.raw.isBlank()) line else host.raw + "\n" + line)
+        if (ok) eventLog.add("icu: $name ${hm(start)}–${hm(end)} — уже в ленте «${host.title}», не режу, дописал к ней")
+        return ok
     }
 
     /**

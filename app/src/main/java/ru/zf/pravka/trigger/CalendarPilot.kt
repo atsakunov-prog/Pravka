@@ -14,7 +14,10 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.core.CalEvent
+import ru.zf.pravka.core.CalProject
+import ru.zf.pravka.core.CalSeen
 import ru.zf.pravka.core.CalendarRules
+import ru.zf.pravka.data.ZasechkaStore
 
 /** Календарь телефона — для списка с тумблерами в настройках автопилота. */
 data class CalendarInfo(val id: Long, val name: String, val account: String, val primary: Boolean)
@@ -37,6 +40,12 @@ data class CalendarInfo(val id: Long, val name: String, val account: String, val
  * пуша: «Отменить» у начала, «Ещё идёт» у конца, «Сказать» — везде, с якорем
  * в момент шва. Что уже начато и что уже решено — в `pravka_internal`, чтобы
  * перезапуск службы не начал ту же встречу второй раз.
+ *
+ * С 05.10.2026 встреча узнаёт себя в словах владельца (`CalendarRules.sameMeeting`):
+ * сказал «встречи в Птиц» до неё — новой записи нет, по концу закрывается его
+ * запись; сказал то же самое после её начала — его запись забирает начало
+ * встречи (`ZasechkaStore.absorb`). Клиент — проект Дел по имени или алиасу в
+ * названии. Записи автопилота — со своим источником `calendar`.
  */
 class CalendarPilot(
     private val service: PravkaAccessibilityService,
@@ -54,6 +63,11 @@ class CalendarPilot(
         private const val LOOK_AHEAD_MS = 15 * 60_000L
         /** Память о событии — сутки после его конца. */
         private const val KEEP_MS = 24 * 3_600_000L
+        /**
+         * Возвращаем прерванное дело, только если конец заметили вовремя:
+         * телефон спал час после встречи — что было потом, лента не знает.
+         */
+        private const val RESUME_LATE_MS = 30 * 60_000L
 
         fun hasPermission(ctx: Context): Boolean =
             ctx.checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
@@ -87,6 +101,79 @@ class CalendarPilot(
                 }
             }
             return out.sortedWith(compareByDescending<CalendarInfo> { it.primary }.thenBy { it.name })
+        }
+
+        /** Экземпляры событий, пересекающие [from, to], только из видимых календарей. */
+        fun query(ctx: Context, from: Long, to: Long): List<CalEvent> {
+            if (!hasPermission(ctx)) return emptyList()
+            val primaryById = calendars(ctx).associate { it.id to it.primary }
+            val uri = CalendarContract.Instances.CONTENT_URI.buildUpon()
+            ContentUris.appendId(uri, from)
+            ContentUris.appendId(uri, to)
+            val proj = arrayOf(
+                CalendarContract.Instances._ID,
+                CalendarContract.Instances.EVENT_ID,
+                CalendarContract.Instances.TITLE,
+                CalendarContract.Instances.BEGIN,
+                CalendarContract.Instances.END,
+                CalendarContract.Instances.ALL_DAY,
+                CalendarContract.Instances.SELF_ATTENDEE_STATUS,
+                CalendarContract.Instances.AVAILABILITY,
+                CalendarContract.Instances.CALENDAR_DISPLAY_NAME,
+                CalendarContract.Instances.VISIBLE,
+                CalendarContract.Instances.CALENDAR_ID,
+                CalendarContract.Instances.STATUS,
+            )
+            val out = ArrayList<CalEvent>()
+            ctx.contentResolver.query(uri.build(), proj, null, null, CalendarContract.Instances.BEGIN + " ASC")
+                ?.use { c ->
+                    while (c.moveToNext()) {
+                        if (c.getInt(9) != 1) continue
+                        if (c.getInt(11) == CalendarContract.Events.STATUS_CANCELED) continue
+                        val calId = c.getLong(10)
+                        out.add(
+                            CalEvent(
+                                id = c.getLong(0),
+                                eventId = c.getLong(1),
+                                title = c.getString(2).orEmpty(),
+                                start = c.getLong(3),
+                                end = c.getLong(4),
+                                allDay = c.getInt(5) == 1,
+                                declined = c.getInt(6) == CalendarContract.Attendees.ATTENDEE_STATUS_DECLINED,
+                                free = c.getInt(7) == CalendarContract.Events.AVAILABILITY_FREE,
+                                calendar = c.getString(8).orEmpty(),
+                                primary = primaryById[calId] ?: false,
+                            )
+                        )
+                    }
+                }
+            return out
+        }
+
+        /**
+         * Что автопилот видит сегодня — строкой в настройки: молчащий календарь
+         * читается как поломка (владелец, 05.10.2026: «я давно просил…» — а
+         * встречи с 27.09 ни разу не легли, и по экрану не понять почему).
+         */
+        fun todayLine(ctx: Context, watched: Set<String>?): String {
+            if (!hasPermission(ctx)) return "нет доступа к календарю"
+            val cal = java.util.Calendar.getInstance()
+            cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+            cal.set(java.util.Calendar.MINUTE, 0)
+            cal.set(java.util.Calendar.SECOND, 0)
+            cal.set(java.util.Calendar.MILLISECOND, 0)
+            val from = cal.timeInMillis
+            val all = runCatching { query(ctx, from, from + 86_400_000L) }.getOrElse { e ->
+                return "календарь не прочитался: ${e.javaClass.simpleName}: ${e.message}"
+            }
+            val mine = all.filter { CalendarRules.eligible(it, watched) && it.start >= from }
+            if (all.isEmpty()) return "сегодня в календарях телефона событий нет — если в Google они есть, " +
+                "проверь, что аккаунт синхронизирует календарь на телефоне"
+            if (mine.isEmpty()) return "сегодня событий ${all.size}, но в выбранных календарях встреч нет"
+            val hm = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US)
+            return "сегодня: " + mine.joinToString(" · ") { e ->
+                hm.format(java.util.Date(e.start)) + " " + CalendarRules.entryTitle(e)
+            }
         }
     }
 
@@ -129,11 +216,23 @@ class CalendarPilot(
     }
 
     /**
-     * Что помним о событии: [entryId] — запись, которую начали, [prevId] —
-     * что шло до неё, [end] — конец события, [done] — решено (закрыта или
-     * пропущена), больше не смотрим.
+     * Что помним о событии: [entryId] — запись встречи (начатая автопилотом
+     * или узнанная запись владельца — тогда [adopted]), [prevId] — что шло до
+     * неё, [resumedId] — что автопилот вернул после неё, [start]/[end] и
+     * [event] — время и название события (событие могли удалить из календаря,
+     * а решать по нему ещё надо), [done] — решено, больше не смотрим.
      */
-    private data class Mark(val entryId: Long, val prevId: Long, val end: Long, val title: String, val done: Boolean)
+    private data class Mark(
+        val entryId: Long,
+        val prevId: Long,
+        val start: Long,
+        val end: Long,
+        val title: String,
+        val event: String,
+        val done: Boolean,
+        val adopted: Boolean = false,
+        val resumedId: Long = 0L,
+    )
 
     private fun load(): MutableMap<String, Mark> {
         val raw = service.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_STATE, "").orEmpty()
@@ -146,9 +245,14 @@ class CalendarPilot(
                 out[key] = Mark(
                     entryId = m.optLong("entry"),
                     prevId = m.optLong("prev"),
+                    // Метки прежней сборки начала не помнят: ключ — «событие@начало».
+                    start = m.optLong("start").takeIf { it > 0L } ?: key.substringAfter('@').toLongOrNull() ?: 0L,
                     end = m.optLong("end"),
                     title = m.optString("title"),
+                    event = m.optString("event").ifBlank { m.optString("title") },
                     done = m.optBoolean("done"),
+                    adopted = m.optBoolean("adopted"),
+                    resumedId = m.optLong("resumed"),
                 )
             }
         }
@@ -160,62 +264,88 @@ class CalendarPilot(
         for ((key, m) in marks) {
             o.put(
                 key,
-                JSONObject().put("entry", m.entryId).put("prev", m.prevId).put("end", m.end)
-                    .put("title", m.title).put("done", m.done),
+                JSONObject().put("entry", m.entryId).put("prev", m.prevId).put("start", m.start).put("end", m.end)
+                    .put("title", m.title).put("event", m.event).put("done", m.done)
+                    .put("adopted", m.adopted).put("resumed", m.resumedId),
             )
         }
         service.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_STATE, o.toString()).apply()
     }
 
+    private fun ZasechkaStore.Entry.seen() = CalSeen(id, start, title, category, client, source)
+
+    /** Что идёт: заполнитель «не размечено» — не дело. */
+    private suspend fun openDeal(): ZasechkaStore.Entry? =
+        app.zasechkaStore.openEntry()?.takeIf { it.source != "gap" }
+
     private suspend fun sweep() {
         val now = System.currentTimeMillis()
-        val events = query(now - LOOK_BACK_MS, now + LOOK_AHEAD_MS)
+        val events = query(service, now - LOOK_BACK_MS, now + LOOK_AHEAD_MS)
         val marks = load()
 
-        // Сначала концы: встреча, которую начали, кончилась по календарю.
-        for ((key, mk) in marks.toList()) {
-            if (now - mk.end > KEEP_MS) {
+        // Сначала идущие встречи: слова владельца поверх догадки и концы.
+        for ((key, m0) in marks.toList()) {
+            if (now - m0.end > KEEP_MS) {
                 marks.remove(key)
                 continue
             }
-            if (mk.done) continue
-            // Событие могли подвинуть — конец берём свежий, если оно ещё видно.
-            val end = events.firstOrNull { it.key == key }?.end ?: mk.end
-            val open = app.zasechkaStore.openEntry()
-            when (CalendarRules.endVerdict(end, now, open?.id, mk.entryId)) {
+            if (m0.done) continue
+            var mk = m0
+            // Событие могли подвинуть — время берём свежее, если оно ещё видно.
+            val ev = events.firstOrNull { it.key == key }
+                ?: CalEvent(0L, 0L, mk.event, mk.start, mk.end, false, false, false, "", true)
+            mk = mk.copy(end = ev.end)
+            if (!mk.adopted) mk = absorbIfSaid(mk, ev)
+            val open = openDeal()
+            when (CalendarRules.endVerdict(ev, ev.end, now, open?.seen(), mk.entryId)) {
                 CalendarRules.End.CLOSE -> {
-                    closeMeeting(mk, end, now)
-                    marks[key] = mk.copy(end = end, done = true)
+                    val adopted = mk.adopted || open?.id != mk.entryId
+                    val resumed = closeMeeting(mk.copy(adopted = adopted), ev, now)
+                    marks[key] = mk.copy(done = true, adopted = adopted, resumedId = resumed)
                 }
                 CalendarRules.End.NONE -> {
                     app.eventLog.add("календарь: «${mk.title}» — в ленте уже другое, конец не трогаю")
-                    marks[key] = mk.copy(end = end, done = true)
+                    marks[key] = mk.copy(done = true)
                 }
-                CalendarRules.End.WAIT -> {}
+                CalendarRules.End.WAIT -> marks[key] = mk
             }
         }
 
         // Потом начала.
         val watch = watched
+        val own = marks.values.flatMap { listOf(it.entryId, it.resumedId) }.filter { it > 0L }.toSet()
         for (e in events.filter { CalendarRules.eligible(it, watch) }.sortedBy { it.start }) {
             if (marks.containsKey(e.key)) continue
-            val open = app.zasechkaStore.openEntry()
-            val latest = app.zasechkaStore.lastEntry()?.start ?: 0L
-            when (CalendarRules.startVerdict(e, now, open?.title, open?.category, latest)) {
+            val open = openDeal()
+            // Сказал владелец — не сам автопилот: его встречи и возвращённые
+            // после них дела словами владельца не считаются (иначе встреча
+            // в 12:00 сразу после встречи в 11:00 решила бы, что ты «уже сказал»).
+            val latest = app.zasechkaStore.all()
+                .filter { it.source != "gap" && it.source != "auto" && it.source != CalendarRules.SOURCE && it.id !in own }
+                .maxOfOrNull { it.start } ?: 0L
+            // Идущая встреча автопилота (или возвращённое им дело) — не слова
+            // владельца: две встречи с ПТИЦ подряд — две записи, а не одна.
+            val view = open?.takeIf { it.id !in own }?.seen()
+            when (CalendarRules.startVerdict(e, now, view, latest)) {
                 CalendarRules.Start.START -> {
                     val entry = startMeeting(e, open, now)
-                    marks[e.key] = Mark(entry.id, open?.id ?: 0L, e.end, entry.title, done = false)
+                    marks[e.key] = Mark(entry.id, open?.id ?: 0L, e.start, e.end, entry.title, e.title, done = false)
+                }
+                CalendarRules.Start.ADOPT -> {
+                    val o = open ?: continue
+                    lastFire = "«${e.title}» уже идёт твоим «${o.title}» — закрою в ${pilot.timeHm(e.end)}"
+                    app.eventLog.add(
+                        "календарь: «${e.title}» ${pilot.timeHm(e.start)} — уже в ленте твоим «${o.title}», " +
+                            "второй записи нет; по концу события закрою её"
+                    )
+                    marks[e.key] = Mark(o.id, 0L, e.start, e.end, o.title, e.title, done = false, adopted = true)
                 }
                 CalendarRules.Start.SKIP -> {
                     app.eventLog.add(
                         "календарь: «${e.title}» ${pilot.timeHm(e.start)} — пропущена: " +
-                            when {
-                                now - e.start > CalendarRules.LATE_MS -> "началась давно"
-                                open != null && ru.zf.pravka.core.AutoPilotRules.travelish(open.title, open.category) -> "в дороге"
-                                else -> "ты уже сказал, что делаешь («${open?.title ?: "—"}»)"
-                            }
+                            CalendarRules.skipWhy(e, now, view)
                     )
-                    marks[e.key] = Mark(0L, 0L, e.end, e.title, done = true)
+                    marks[e.key] = Mark(0L, 0L, e.start, e.end, e.title, e.title, done = true)
                 }
                 CalendarRules.Start.WAIT -> {}
             }
@@ -223,23 +353,62 @@ class CalendarPilot(
         save(marks)
     }
 
-    private suspend fun startMeeting(e: CalEvent, open: ru.zf.pravka.data.ZasechkaStore.Entry?, now: Long): ru.zf.pravka.data.ZasechkaStore.Entry {
+    /**
+     * Встреча началась сама, а владелец сказал то же своими словами («созвон с
+     * птицами» в 11:07 к «ПТИЦ - ЗФ» с 11:00): его запись забирает начало
+     * встречи, догадка уходит. Владелец сказал «с 11» — догадка уже погибла
+     * нулевым куском, а встреча — его запись: она узнаётся по концу события.
+     */
+    private suspend fun absorbIfSaid(mk: Mark, ev: CalEvent): Mark {
+        if (mk.entryId <= 0L) return mk
+        val all = app.zasechkaStore.all()
+        val guess = all.firstOrNull { it.id == mk.entryId } ?: return mk
+        if (guess.open) return mk
+        val said = all.firstOrNull {
+            it.id != guess.id && it.source != "gap" && it.source != "auto" &&
+                kotlin.math.abs(it.start - guess.end) < 60_000L
+        } ?: return mk
+        if (!CalendarRules.absorbs(ev, guess.seen(), guess.end, said.seen(), ev.end)) return mk
+        val merged = app.zasechkaStore.absorb(guess.id, said.id) ?: return mk
+        app.zasechkaSync.kickSoon(scope)
+        lastFire = "«${merged.title}» — твоими словами с ${pilot.timeHm(merged.start)}"
+        app.eventLog.add(
+            "календарь: «${guess.title}» с ${pilot.timeHm(guess.start)} — ты сказал «${said.title}», " +
+                "это та же встреча: твоя запись теперь с ${pilot.timeHm(merged.start)}"
+        )
+        return mk.copy(entryId = merged.id, title = merged.title, adopted = true)
+    }
+
+    private suspend fun startMeeting(e: CalEvent, open: ZasechkaStore.Entry?, now: Long): ZasechkaStore.Entry {
+        val title = CalendarRules.entryTitle(e)
+        // Владелец однажды поправил категорию этой встречи — так и дальше
+        // (регулярная по понедельникам приезжает с одним и тем же именем).
+        val learned = app.zasechkaStore.all()
+            .lastOrNull {
+                it.title.equals(title, ignoreCase = true) && it.category.isNotBlank() &&
+                    it.source != "gap" && it.source != "auto"
+            }?.category
+        val cat = learned ?: CalendarRules.entryCategory(e, category)
+        val project = if (CalendarRules.kind(e) == CalendarRules.Kind.MEETING) projectOf(e) else null
         val entry = app.zasechkaStore.startEntry(
             start = e.start,
             raw = "",
-            title = CalendarRules.entryTitle(e),
-            category = category,
-            client = "",
+            title = title,
+            category = cat,
+            client = project?.name.orEmpty(),
             useful = 0,
-            // Владельческий источник, как у поездки и дела места: встреча —
-            // дело владельца, робот лишь угадал название по календарю.
-            source = "voice",
+            // Свой источник: дело владельца (обвязка ленты считает его ручным,
+            // как поездку), но автопилот узнаёт свои записи и не принимает их
+            // за «владелец уже сказал».
+            source = CalendarRules.SOURCE,
+            project = project?.id.orEmpty(),
         )
         app.zasechkaSync.kickSoon(scope)
         lastFire = "встреча «${entry.title}» с ${pilot.timeHm(e.start)}"
         pilot.notify(
             "📅 ${entry.title}",
-            "С ${pilot.timeHm(e.start)} по календарю, до ${pilot.timeHm(e.end)} [$category]." +
+            "С ${pilot.timeHm(e.start)} по календарю, до ${pilot.timeHm(e.end)} [$cat]" +
+                (project?.let { ", клиент ${it.name}" } ?: "") + "." +
                 (open?.let { " «${it.title}» закрыто в ${pilot.timeHm(e.start)}, ${it.durationMin(e.start)} мин." } ?: "") +
                 " Не встреча — «Отменить»; другое — скажи, запишу с ${pilot.timeHm(e.start)}.",
             listOf(
@@ -248,26 +417,48 @@ class CalendarPilot(
             ),
         )
         app.eventLog.add(
-            "календарь: началась «${entry.title}» с ${pilot.timeHm(e.start)} [$category]" +
+            "календарь: началась «${entry.title}» с ${pilot.timeHm(e.start)} [$cat]" +
+                (project?.let { " · ${it.name}" } ?: "") +
                 (open?.let { ", закрыто «${it.title}»" } ?: "")
         )
         return entry
     }
 
+    /** Проект Дел по названию встречи: только клиенты, только когда Дела на своём сервере. */
+    private fun projectOf(e: CalEvent): CalProject? {
+        if (!app.delaServer.value) return null
+        val projects = app.delaStore.view.value.liveProjects()
+            .filter { it.sphere == "work" && it.kind == "client" }
+            .map { CalProject(it.id, it.name, it.aliases) }
+        return CalendarRules.projectOf(e.title, projects)
+    }
+
     /**
-     * Конец встречи: закрыть её концом события и вернуть дело, которое она
-     * прервала, — то, что кончилось ровно там, где встреча началась. Нечего
-     * возвращать — просто закрыть; «Ещё идёт» откроет встречу обратно.
+     * Конец встречи: закрыть её концом события. Встречу, которую начал сам
+     * автопилот, — с возвратом дела, которое она прервала (то, что кончилось
+     * ровно там, где встреча началась); узнанную запись владельца — без
+     * возврата: к ней он перешёл сам. Нечего возвращать — просто закрыть;
+     * «Ещё идёт» откроет встречу обратно. Возвращает id возвращённого дела.
      */
-    private suspend fun closeMeeting(mk: Mark, end: Long, now: Long) {
-        val closed = app.zasechkaStore.closeOpen(end) ?: return
+    private suspend fun closeMeeting(mk: Mark, ev: CalEvent, now: Long): Long {
+        val end = ev.end
+        val closed = app.zasechkaStore.closeOpen(end) ?: return 0L
         val all = app.zasechkaStore.all()
         val before = all
             .filter { !it.open && it.id != closed.id && it.end <= closed.start + 60_000L }
             .maxByOrNull { it.end }
         val resumed = before
-            ?.takeIf { CalendarRules.resumable(it.title, it.category, it.source, it.end, closed.start, closed.title) }
-            ?.let { app.zasechkaStore.startEntry(end, "", it.title, it.category, it.client, it.useful, "voice") }
+            ?.takeIf {
+                !mk.adopted && CalendarRules.kind(ev) == CalendarRules.Kind.MEETING &&
+                    now - end <= RESUME_LATE_MS &&
+                    CalendarRules.resumable(it.title, it.category, it.source, it.end, closed.start, closed.title)
+            }
+            ?.let {
+                app.zasechkaStore.startEntry(
+                    end, "", it.title, it.category, it.client, it.useful,
+                    source = it.source, task = it.task, project = it.project,
+                )
+            }
         app.zasechkaSync.kickSoon(scope)
         lastFire = "встреча «${closed.title}» закрыта ${pilot.timeHm(end)}"
         pilot.notify(
@@ -286,53 +477,9 @@ class CalendarPilot(
         )
         app.eventLog.add(
             "календарь: «${closed.title}» закрыта концом события ${pilot.timeHm(end)}" +
+                (if (mk.adopted) " (твоя запись — ты не переключился)" else "") +
                 (resumed?.let { ", снова «${it.title}»" } ?: "")
         )
-    }
-
-    /** Экземпляры событий, пересекающие [from, to], только из видимых календарей. */
-    private fun query(from: Long, to: Long): List<CalEvent> {
-        val primaryById = calendars(service).associate { it.id to it.primary }
-        val uri = CalendarContract.Instances.CONTENT_URI.buildUpon()
-        ContentUris.appendId(uri, from)
-        ContentUris.appendId(uri, to)
-        val proj = arrayOf(
-            CalendarContract.Instances._ID,
-            CalendarContract.Instances.EVENT_ID,
-            CalendarContract.Instances.TITLE,
-            CalendarContract.Instances.BEGIN,
-            CalendarContract.Instances.END,
-            CalendarContract.Instances.ALL_DAY,
-            CalendarContract.Instances.SELF_ATTENDEE_STATUS,
-            CalendarContract.Instances.AVAILABILITY,
-            CalendarContract.Instances.CALENDAR_DISPLAY_NAME,
-            CalendarContract.Instances.VISIBLE,
-            CalendarContract.Instances.CALENDAR_ID,
-            CalendarContract.Instances.STATUS,
-        )
-        val out = ArrayList<CalEvent>()
-        service.contentResolver.query(uri.build(), proj, null, null, CalendarContract.Instances.BEGIN + " ASC")
-            ?.use { c ->
-                while (c.moveToNext()) {
-                    if (c.getInt(9) != 1) continue
-                    if (c.getInt(11) == CalendarContract.Events.STATUS_CANCELED) continue
-                    val calId = c.getLong(10)
-                    out.add(
-                        CalEvent(
-                            id = c.getLong(0),
-                            eventId = c.getLong(1),
-                            title = c.getString(2).orEmpty(),
-                            start = c.getLong(3),
-                            end = c.getLong(4),
-                            allDay = c.getInt(5) == 1,
-                            declined = c.getInt(6) == CalendarContract.Attendees.ATTENDEE_STATUS_DECLINED,
-                            free = c.getInt(7) == CalendarContract.Events.AVAILABILITY_FREE,
-                            calendar = c.getString(8).orEmpty(),
-                            primary = primaryById[calId] ?: false,
-                        )
-                    )
-                }
-            }
-        return out
+        return resumed?.id ?: 0L
     }
 }

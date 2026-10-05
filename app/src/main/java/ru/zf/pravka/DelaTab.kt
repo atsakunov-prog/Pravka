@@ -130,15 +130,7 @@ fun DelaTab(app: PravkaApp) {
             if (starting.isBlank()) {
                 starting = t.id
                 scope.launch {
-                    val entry = runCatching {
-                        app.zasechkaEngine.startTask(
-                            t.title,
-                            task = t.id,
-                            project = t.projectId,
-                            // Клиент — из справочника: рабочий проект дела, а не догадка модели.
-                            clientName = if (t.sphere == "work") t.projectName else "",
-                        )
-                    }.getOrNull()
+                    val entry = runCatching { app.zasechkaEngine.startTask(t) }.getOrNull()
                     Feedback.toast(app, if (entry != null) "⏱ ${entry.title}" else "Не смог записать дело")
                     starting = ""
                 }
@@ -153,6 +145,11 @@ fun DelaTab(app: PravkaApp) {
         person = { id -> if (id.isNotBlank()) page = DelaPage.Person(id) },
         project = { id -> if (id.isNotBlank()) page = DelaPage.Project(id) },
         starting = starting,
+        // Связь с лентой видна у дела (05.10.2026): что идёт сейчас и сколько уже ушло.
+        running = if (running != null) running.task else "",
+        runningMs = running?.durationMs(now) ?: 0L,
+        spent = remember(ribbon, now) { ru.zf.pravka.core.ZasechkaTasks.spent(ribbon, now) },
+        stop = { scope.launch { app.zasechkaEngine.closeOpen() } },
     )
 
     val listState = rememberLazyListState()
@@ -423,6 +420,12 @@ private class DelaActions(
     val person: (String) -> Unit,
     val project: (String) -> Unit,
     val starting: String,
+    /** Дело, которое сейчас идёт в ленте; "" — никакое. */
+    val running: String = "",
+    val runningMs: Long = 0L,
+    /** Время в ленте по id дела. */
+    val spent: Map<String, Long> = emptyMap(),
+    val stop: () -> Unit = {},
 )
 
 /** «обновлено 20:42 · в очереди 2» или причина целиком — молчаливая очередь читается как поломка. */
@@ -771,12 +774,22 @@ private fun TaskRow(t: Dela.Task, actions: DelaActions, today: String) {
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            val meta = taskMeta(t, today)
+            val live = t.id == actions.running
+            val spentMs = actions.spent[t.id] ?: 0L
+            val meta = listOfNotNull(
+                ("идёт " + ru.zf.pravka.core.ZasechkaTasks.label(actions.runningMs)).takeIf { live },
+                taskMeta(t, today).takeIf { it.isNotBlank() },
+                ("в ленте " + ru.zf.pravka.core.ZasechkaTasks.label(spentMs)).takeIf { spentMs > 0L },
+            ).joinToString(" · ")
             if (meta.isNotBlank()) {
                 Text(
                     meta,
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (t.open && t.dueDate.isNotBlank() && t.dueDate < today) c.error else c.onSurfaceVariant,
+                    color = when {
+                        live -> c.primary
+                        t.open && t.dueDate.isNotBlank() && t.dueDate < today -> c.error
+                        else -> c.onSurfaceVariant
+                    },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -784,6 +797,14 @@ private fun TaskRow(t: Dela.Task, actions: DelaActions, today: String) {
         }
         if (actions.starting == t.id) {
             Text("…", style = MaterialTheme.typography.bodyMedium, color = c.primary)
+        } else if (t.open && t.id == actions.running) {
+            // Идёт сейчас — стоп вместо ▶: второй раз начинать нечего.
+            Icon(
+                Glyphs.Stop,
+                contentDescription = "остановить в ленте",
+                tint = c.error,
+                modifier = Modifier.size(28.dp).clip(CircleShape).clickable { actions.stop() }.padding(4.dp),
+            )
         } else if (t.open) {
             Icon(
                 Glyphs.Play,

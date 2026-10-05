@@ -167,7 +167,7 @@ class ZasechkaStore(private val context: Context) {
         val category: String,     // one of the category list ("" = unsorted)
         val client: String,       // "" when none
         val useful: Int,          // 1..5, 0 = not rated
-        val source: String,       // "voice" | "text" | "edit" | "auto"
+        val source: String,       // "voice" | "text" | "edit" | "auto" | "gap" | "task" | "calendar"
         val synced: Boolean,      // delivered to the Sheets webhook
         val createdAt: Long,
         // 🍅 помидоров, дозревших за делом, — история: таймер снят 09.09
@@ -1055,6 +1055,30 @@ class ZasechkaStore(private val context: Context) {
         normalizeLocked()
         persist()
         reopened
+    }
+
+    /**
+     * Слова владельца забирают догадку автопилота (05.10.2026): встреча из
+     * календаря началась сама в 11:00 ([guessId]), а в 11:07 владелец сказал
+     * «созвон с птицами» ([saidId]) — это одна встреча, и она его словами с
+     * 11:00. Догадка уходит, начало записи владельца становится её началом —
+     * ОДНИМ шагом под замком (двумя вызовами нормализация успела бы подложить
+     * заполнитель в щель). Только встык: запись владельца начинается там, где
+     * догадка кончилась, — иначе лента разошлась бы. Шаг отмены — как у правки.
+     */
+    suspend fun absorb(guessId: Long, saidId: Long): Entry? = mutex.withLock {
+        ensureLoaded()
+        val guess = entries.firstOrNull { it.id == guessId } ?: return@withLock null
+        val i = entries.indexOfFirst { it.id == saidId }
+        if (i < 0 || guess.open || kotlin.math.abs(entries[i].start - guess.end) >= 60_000L) return@withLock null
+        snapshotLocked("слияние «${guess.title.ifBlank { "без названия" }}»")
+        val merged = entries[i].copy(start = guess.start, synced = false, notionSynced = false)
+        entries[i] = merged
+        entries.removeAll { it.id == guessId }
+        normalizeLocked()
+        entries.sortBy { it.start }
+        persist()
+        entries.firstOrNull { it.id == saidId } ?: merged
     }
 
     /**

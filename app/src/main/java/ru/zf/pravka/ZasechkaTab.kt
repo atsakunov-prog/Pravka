@@ -342,6 +342,8 @@ internal fun ZasechkaTab(app: PravkaApp) {
     var sheetFor by remember { mutableStateOf<Long?>(null) }
     var draft by remember { mutableStateOf("") }
     var processing by remember { mutableStateOf(false) }
+    // Карточка дела из плашки «дела» (05.10.2026).
+    var openTask by remember { mutableStateOf<ru.zf.pravka.core.Dela.Task?>(null) }
 
     // The "идёт N мин" counters tick without any data changing.
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -434,6 +436,17 @@ internal fun ZasechkaTab(app: PravkaApp) {
                     sendEnabled = !processing && draft.isNotBlank(),
                     maxLines = 1,
                     busy = processing,
+                )
+            }
+            // Дела с ▶ — сразу под «чем занят?»: сказать словами или взяться
+            // за дело из списка (05.10.2026). Дел на сервере нет — плашки нет.
+            item(key = "tasks") {
+                ZasechkaTasksCard(
+                    app = app,
+                    entries = entries,
+                    now = now,
+                    onComment = { commenting = it },
+                    onOpen = { openTask = it },
                 )
             }
         }
@@ -671,6 +684,11 @@ internal fun ZasechkaTab(app: PravkaApp) {
         // Настройки режима — за шестерёнкой в шапке вкладки.
     }
 
+    // Клиент — из справочника Дел, свободный текст — запасом (docs/dela-server.md).
+    val delaOn by app.delaServer.collectAsState()
+    val delaSnap by app.delaStore.view.collectAsState()
+    val delaProjects = if (delaOn) delaSnap.liveProjects() else emptyList()
+
     // Лист записи — то, что раньше висело значками на каждой строке. Первым
     // стоит «Поправить»: это и делал тап по строке до листа.
     sheetFor?.let { headId ->
@@ -692,6 +710,7 @@ internal fun ZasechkaTab(app: PravkaApp) {
                 ),
                 points = pointsOf(worthOf(head.category), totalMs),
                 pieces = unit.fragments.size,
+                taskLabel = delaSnap.tasks[head.task]?.let { "${it.numLabel} ${it.title}" }.orEmpty(),
                 onDismiss = { sheetFor = null },
                 onEdit = {
                     sheetFor = null
@@ -715,10 +734,6 @@ internal fun ZasechkaTab(app: PravkaApp) {
         if (service == null) Feedback.toast(context, context.getString(R.string.toast_no_service))
         else service.onZasechkaTap(editTargetId = target.id)
     }
-    // Клиент — из справочника Дел, свободный текст — запасом (docs/dela-server.md).
-    val delaOn by app.delaServer.collectAsState()
-    val delaSnap by app.delaStore.view.collectAsState()
-    val delaProjects = if (delaOn) delaSnap.liveProjects() else emptyList()
     editing?.let { entry ->
         EditEntryDialog(
             entry = entry,
@@ -734,6 +749,7 @@ internal fun ZasechkaTab(app: PravkaApp) {
                     // отмены, без «edit» в источнике и без обучения Засечки.
                     if (onlyCommentChanged(entry, updated)) store.setComment(entry.id, updated.comment)
                     else store.update(updated)
+                    app.mirrorZasechkaComment(entry, entry.comment, updated.comment)
                     app.zasechkaSync.kickSoon(app.appScope)
                 }
             },
@@ -762,6 +778,7 @@ internal fun ZasechkaTab(app: PravkaApp) {
             onSave = { updated ->
                 editingChain = null
                 app.appScope.launch {
+                    app.mirrorZasechkaComment(first, first.comment, updated.comment)
                     if (onlyCommentChanged(shown, updated)) {
                         store.setComment(first.id, updated.comment)
                         app.zasechkaSync.kickSoon(app.appScope)
@@ -809,7 +826,37 @@ internal fun ZasechkaTab(app: PravkaApp) {
                 commenting = null
                 app.appScope.launch {
                     store.setComment(entry.id, text)
+                    // Запись из дела — дописанное уезжает и в само дело.
+                    app.mirrorZasechkaComment(entry, entry.comment, text)
                     app.zasechkaSync.kickSoon(app.appScope)
+                }
+            },
+        )
+    }
+
+    // Карточка дела из плашки «дела» — та же, что во вкладке «Дела».
+    openTask?.let { picked ->
+        val t = delaSnap.tasks[picked.id] ?: picked
+        DelaTaskSheet(
+            app = app,
+            task = t,
+            snap = delaSnap,
+            isNew = false,
+            onDismiss = { openTask = null },
+            onSave = { after ->
+                openTask = null
+                val (set, was) = ru.zf.pravka.core.Dela.diff(t, after)
+                if (set.length() > 0) app.appScope.launch { app.delaDo(listOf(ru.zf.pravka.core.Dela.setOp(t.id, set, was))) }
+            },
+            onStatus = { op ->
+                openTask = null
+                app.appScope.launch { app.delaDo(listOf(ru.zf.pravka.core.Dela.statusOp(op, t.id))) }
+            },
+            onStart = {
+                openTask = null
+                app.appScope.launch {
+                    val entry = runCatching { app.zasechkaEngine.startTask(t) }.getOrNull()
+                    Feedback.toast(app, if (entry != null) "⏱ ${entry.title}" else "Не смог записать дело")
                 }
             },
         )
@@ -1185,6 +1232,7 @@ private fun EntryRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                 )
+                SourceMark(entry)
                 val pts = pointsOf(worthOf(entry.category), entry.durationMs(now))
                 if (pts != 0) {
                     DotSep()
@@ -1270,6 +1318,7 @@ private fun ChainBlock(
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                 )
+                SourceMark(head)
                 val pts = pointsOf(
                     worthOf(head.category),
                     unit.fragments.sumOf { it.durationMs(now) },
@@ -1306,6 +1355,8 @@ private fun EntrySheet(
     subtitle: String,
     points: Int,
     pieces: Int,
+    /** «#57 Наташа: сверка» — запись начата из дела; пусто — нет. */
+    taskLabel: String = "",
     onDismiss: () -> Unit,
     onEdit: () -> Unit,
     onComment: () -> Unit,
@@ -1338,6 +1389,9 @@ private fun EntrySheet(
         if (pieces > 1) {
             PaperHint("Кусков: $pieces — правка и удаление действуют на всё дело целиком.")
         }
+        // Откуда запись: из дела (комментарий уедет и в дело) или из календаря.
+        if (taskLabel.isNotBlank()) PaperHint("Из дела: $taskLabel — заметка уедет и в дело")
+        else if (entry.source == ru.zf.pravka.core.CalendarRules.SOURCE) PaperHint("Из календаря — по концу события закроется сама")
         // Комментарий целиком: в ленте видны только две первые строки.
         if (entry.comment.isNotBlank()) {
             Text(entry.comment, style = MaterialTheme.typography.bodyMedium)
@@ -1987,7 +2041,7 @@ private fun AutoPilotSection(app: PravkaApp) {
             val calCategory by settings.autoCalCategoryFlow
                 .collectAsState(initial = ru.zf.pravka.core.CalendarRules.DEFAULT_CATEGORY)
             Text(
-                "Категория встреч",
+                "Категория встреч (БЖЖ — всегда спорт)",
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 6.dp),
             )
@@ -2024,6 +2078,15 @@ private fun AutoPilotSection(app: PravkaApp) {
                     )
                 }
             }
+            // Что автопилот видит сегодня: молчащий календарь читается как поломка.
+            var calToday by remember { mutableStateOf("") }
+            LaunchedEffect(permTick, chosen) {
+                calToday = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching { ru.zf.pravka.trigger.CalendarPilot.todayLine(context, chosen) }
+                        .getOrElse { "календарь не прочитался: ${it.message}" }
+                }
+            }
+            if (calToday.isNotBlank()) PaperHint(calToday.replaceFirstChar { it.uppercase() })
             val calLine = ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.calendarPilot?.lastFire.orEmpty()
             if (calLine.isNotBlank()) PaperHint("Последнее: $calLine")
         }
@@ -2101,9 +2164,14 @@ private const val CALENDAR_INFO =
         "закрывает текущее дело; по концу события закрывается и возвращает то, что " +
         "шло до неё, — как перерыв по метке NFC. Не встреча — «Отменить» в пуше; " +
         "затянулась — «Ещё идёт». Смотрятся только выбранные календари (с завода — " +
-        "основной), без событий на весь день, отклонённых и «свободен». Если ты сам " +
-        "сказал, что делаешь, за десять минут до начала или позже, — встреча не " +
-        "дублируется."
+        "основной), без событий на весь день, отклонённых и «свободен». Встреча узнаёт " +
+        "себя в твоих словах — по названию и клиенту: сказал «встречи в Птиц» — второй " +
+        "записи нет, а если забыл переключиться, по концу события она закроется сама. " +
+        "Сказал то же самое уже после начала — твоя запись заберёт её начало. Сказал " +
+        "другое за десять минут до начала или позже — встреча не пишется. БЖЖ — не " +
+        "созвон: «BJJ: борьба» спортом, и тренировка с часов дописывается к ней, а не " +
+        "режет. Клиент — проект Дел по имени или алиасу в названии встречи; своя " +
+        "сторона («ЗФ», «Знакомый Финансист») из названия уходит."
 
 /**
  * Дело места по приезду: название и категория; пустое название — дела нет.
@@ -2915,6 +2983,27 @@ private fun ImmersiveAppDialog(
 // Баббл 💬 в строке снят вместе с остальными значками (24.09.2026): что у
 // дела есть слова, видно по третьей строке, а «Заметка» в листе горит.
 // ---------------------------------------------------------------------------
+
+/**
+ * Откуда запись, значком после длительности: из дела — галочка дел, из
+ * календаря — календарь (05.10.2026: «понимать, что этим делом я занимаюсь»).
+ * Остальные — без значка: лента дышит.
+ */
+@Composable
+private fun SourceMark(e: ZasechkaStore.Entry) {
+    val glyph = when {
+        e.task.isNotBlank() -> Glyphs.Delo
+        e.source == ru.zf.pravka.core.CalendarRules.SOURCE -> Glyphs.Calendar
+        else -> return
+    }
+    Spacer(Modifier.width(5.dp))
+    Icon(
+        glyph,
+        contentDescription = if (e.task.isNotBlank()) "из дела" else "из календаря",
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.size(12.dp),
+    )
+}
 
 /** Третья строка записи — сам комментарий, той же бледностью, что дыры в ленте. */
 @Composable

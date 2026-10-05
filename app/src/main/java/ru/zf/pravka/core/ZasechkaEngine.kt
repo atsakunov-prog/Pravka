@@ -445,6 +445,18 @@ class ZasechkaEngine(
         return entry
     }
 
+    /**
+     * ▶ у дела Дел — одна дорога для вкладки «Дела» и плашки «дела» Засечки:
+     * запись с id дела и проекта, клиент — рабочий проект из справочника, а не
+     * догадка модели.
+     */
+    suspend fun startTask(t: Dela.Task): ZasechkaStore.Entry = startTask(
+        t.title,
+        task = t.id,
+        project = t.projectId,
+        clientName = if (t.sphere == "work") t.projectName else "",
+    )
+
     /** Closes the running entry ("перерыв"/"конец дня"). Null if none was open. */
     suspend fun closeOpen(): ZasechkaStore.Entry? {
         val now = System.currentTimeMillis()

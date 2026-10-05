@@ -398,6 +398,22 @@ class PravkaApp : Application() {
         delaSync.poke()
     }
 
+    /**
+     * Комментарий к записи ленты, начатой из дела, — и в само дело (05.10.2026;
+     * владелец: «понимать, что этим делом я занимаюсь… и можно ещё сделать
+     * какой-то комментарий»). Едет только дописанное (`ZasechkaTasks.added`):
+     * мысли к делу ложатся строкой ниже, и каждая — своим комментарием в
+     * деле; правка старых строк в дело не едет. Дела не на сервере или дела
+     * в копии нет — молчим: в ленте комментарий есть и так.
+     */
+    suspend fun mirrorZasechkaComment(entry: ru.zf.pravka.data.ZasechkaStore.Entry, before: String, after: String) {
+        if (entry.task.isBlank() || !delaOnServer()) return
+        if (delaStore.view.value.tasks[entry.task] == null) return
+        val added = ru.zf.pravka.core.ZasechkaTasks.added(before, after) ?: return
+        delaDo(listOf(ru.zf.pravka.core.Dela.commentOp(entry.task, "⏱ $added")))
+        eventLog.add("засечка → дело ${delaStore.view.value.tasks[entry.task]?.numLabel ?: entry.task}: комментарий «${added.take(60)}»")
+    }
+
     // Разноска: наговор -> дела в Todoist или Дела. Разобранное лежит на диске
     // до того, как дорога наружу его примет (raznoska.json).
     val raznoskaStore by lazy { ru.zf.pravka.data.RaznoskaStore(this) }
