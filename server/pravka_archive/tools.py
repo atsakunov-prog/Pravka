@@ -295,7 +295,7 @@ def _day_dela(conn, d, lim: int, full: bool) -> list[str]:
         out.append(f"\nХронология контактов: {len(talks)}:")
         cap = 50 if full else 15
         for kind, summary, project, people in talks[:cap]:
-            who = [x for x in [project, ", ".join(people or [])] if x]
+            who = [x for x in [project, ", ".join(p for p in people or [] if p)] if x]  # имя бывает пустым
             out.append(f"  {kind}" + "".join(f" · {x}" for x in who) + f" — {cell(summary, lim)}")
         if len(talks) > cap:
             out.append(f"  … ещё {len(talks) - cap} (life.interactions)")

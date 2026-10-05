@@ -202,18 +202,20 @@ def test_day_tool_shows_dela_done_created_and_timeline(dela, cfg):
     from pravka_dela import store
 
     p = project(dela, "sasha", "Стаффджет")
+    with as_(dela, "sasha") as c:  # без короткого имени: 05.10 такой человек ронял day() — имя было пустым
+        who = c.execute("INSERT INTO crm.people (name, owner_id) VALUES ('Горецкий', 'sasha') RETURNING id").fetchone()["id"]
     run = lambda *o: store.apply_ops(dela, "sasha", list(o), "web")["results"]  # noqa: E731
     a = run({"op": "task.create", "task": {"title": "Закрыть акт", "project_id": str(p)}})[0]["task"]
     run({"op": "task.done", "id": a["id"]},
         {"op": "task.create", "task": {"title": "Иван: прислать модель", "source": "meeting"}},
-        {"op": "interaction.add", "data": {"at": dt.datetime.now(dt.timezone.utc).isoformat(), "kind": "call",
+        {"op": "interaction.add", "data": {"at": dt.datetime.now(dt.timezone.utc).isoformat(), "kind": "call", "person_ids": [str(who)],
                                            "summary": "Обсудили акт и оплату", "project_id": str(p), "source": "web"}})
     today = dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).date().isoformat()
     out = tools.day(cfg, today)
     assert "Дела: сделано 1, заведено 2:" in out
     assert f"сделано #{a['num']} Закрыть акт · Стаффджет" in out
     assert "Иван: прислать модель · из встречи" in out
-    assert "Хронология контактов: 1:" in out and "call · Стаффджет — Обсудили акт и оплату" in out
+    assert "Хронология контактов: 1:" in out and "call · Стаффджет · Горецкий — Обсудили акт и оплату" in out
 
 
 def test_work_time_takes_project_from_entry_then_task_then_alias(dela, clean, batch, cfg):

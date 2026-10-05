@@ -88,7 +88,7 @@ DROP VIEW IF EXISTS life.interactions;
 CREATE VIEW life.interactions AS
 SELECT i.at, (i.at AT TIME ZONE 'Europe/Moscow')::date AS day, i.kind, i.summary, i.next_step, i.duration_min,
        p.name AS project, d.name AS deal,
-       ARRAY(SELECT pe.short FROM crm.people pe WHERE pe.id = ANY (i.person_ids)) AS people,
+       ARRAY(SELECT coalesce(pe.short, pe.name) FROM crm.people pe WHERE pe.id = ANY (i.person_ids)) AS people,
        i.source, i.source_ref, i.id, i.project_id
 FROM crm.interactions i
 LEFT JOIN crm.projects p ON p.id = i.project_id
