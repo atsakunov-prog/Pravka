@@ -42,8 +42,9 @@ class DelaStore(private val context: Context) {
         /** Видов клиента, сделки и человека бывает много — храним свежие. */
         private const val KEEP_VIEWS = 60
         /**
-         * Избранные проекты — выбор этого телефона, как звезда в вебе (у того —
-         * память браузера): на сервер не едет, с базой — едет.
+         * Выбор этого телефона, как память браузера у веба: избранные проекты
+         * (звезда) и группировка списков («по датам», «по проектам»…). На сервер
+         * не едет, с базой — едет.
          */
         const val FAVS_FILE = "dela-favs.json"
     }
@@ -88,12 +89,28 @@ class DelaStore(private val context: Context) {
     /** Избранные проекты — сверху «Проектов». */
     val favsFlow: StateFlow<Set<String>> = _favs
 
+    private val _groups = MutableStateFlow<Map<String, String>>(emptyMap())
+    /** Группировка списков по ключу списка («inbox», «all», «project») — как `S.groups` веба. */
+    val groupsFlow: StateFlow<Map<String, String>> = _groups
+
     /** Звезда у проекта: поставить или снять. Файл крошечный — пишется сразу. */
     suspend fun toggleFav(projectId: String) = mutex.withLock {
         ensureLoaded()
-        val next = _favs.value.let { if (projectId in it) it - projectId else it + projectId }
-        _favs.value = next
-        val text = JSONObject().put("v", 1).put("projects", JSONArray().apply { next.sorted().forEach { put(it) } }).toString()
+        _favs.value = _favs.value.let { if (projectId in it) it - projectId else it + projectId }
+        writePrefs()
+    }
+
+    suspend fun setGroup(list: String, by: String) = mutex.withLock {
+        ensureLoaded()
+        _groups.value = _groups.value + (list to by)
+        writePrefs()
+    }
+
+    private suspend fun writePrefs() {
+        val text = JSONObject().put("v", 1)
+            .put("projects", JSONArray().apply { _favs.value.sorted().forEach { put(it) } })
+            .put("groups", JSONObject().apply { for ((k, v) in _groups.value) put(k, v) })
+            .toString()
         withContext(Dispatchers.IO) { StoreFiles.writeAtomic(favsFile, text) }
     }
 
@@ -322,8 +339,11 @@ class DelaStore(private val context: Context) {
         }
         _views.value = LinkedHashMap(views)
         withContext(Dispatchers.IO) {
-            StoreFiles.readOrQuarantine(favsFile) { JSONObject(it) }?.optJSONArray("projects")?.let { a ->
-                _favs.value = (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.isNotBlank() } }.toSet()
+            StoreFiles.readOrQuarantine(favsFile) { JSONObject(it) }?.let { o ->
+                o.optJSONArray("projects")?.let { a ->
+                    _favs.value = (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.isNotBlank() } }.toSet()
+                }
+                o.optJSONObject("groups")?.let { g -> _groups.value = g.keys().asSequence().associateWith { g.optString(it) } }
             }
         }
         loaded = true

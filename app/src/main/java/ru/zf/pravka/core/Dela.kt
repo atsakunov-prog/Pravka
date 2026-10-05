@@ -163,6 +163,16 @@ object Dela {
         /** Человек — пользователь Дел (команда), а не контакт. */
         val userId: String = "",
         val local: Boolean = false,
+        // Карточка человека в вебе: почта, Telegram, год рождения, что ищет и
+        // предлагает, характер, откуда, заметка — синк приносит строку целиком.
+        val emails: List<String> = emptyList(),
+        val telegram: String = "",
+        val birthYear: Int = 0,
+        val seeks: String = "",
+        val offers: String = "",
+        val traits: String = "",
+        val source: String = "",
+        val note: String = "",
     ) {
         val label: String get() = short.ifBlank { name }
         val live: Boolean get() = archivedAt.isBlank()
@@ -402,6 +412,8 @@ object Dela {
             o.str("archived_at"), o.int("rev"), o.long("seq"),
             role = o.str("role"), cadence = o.str("cadence"), hub = o.bool("hub"),
             birthDay = o.int("birth_day"), birthMonth = o.int("birth_month"), userId = o.str("user_id"), local = o.bool("_local"),
+            emails = o.strings("emails"), telegram = o.str("telegram_username"), birthYear = o.int("birth_year"),
+            seeks = o.str("seeks"), offers = o.str("offers"), traits = o.str("traits"), source = o.str("source"), note = o.str("note"),
         )
     }
 
@@ -411,7 +423,10 @@ object Dela {
         .put("role", nul(p.role)).put("cadence", nul(p.cadence)).put("hub", p.hub)
         .put("birth_day", if (p.birthDay > 0) p.birthDay else JSONObject.NULL)
         .put("birth_month", if (p.birthMonth > 0) p.birthMonth else JSONObject.NULL)
-        .put("user_id", nul(p.userId)).apply { if (p.local) put("_local", true) }
+        .put("user_id", nul(p.userId)).put("emails", arr(p.emails)).put("telegram_username", nul(p.telegram))
+        .put("birth_year", if (p.birthYear > 0) p.birthYear else JSONObject.NULL).put("seeks", nul(p.seeks))
+        .put("offers", nul(p.offers)).put("traits", nul(p.traits)).put("source", nul(p.source)).put("note", nul(p.note))
+        .apply { if (p.local) put("_local", true) }
 
     fun org(o: JSONObject): Org? {
         val id = o.str("id").ifBlank { return null }
