@@ -156,6 +156,8 @@ const ICONS = {
   bolt: 'M13 2L4 14h7l-1 8 9-12h-7z',
   x: 'M6 6l12 12M18 6L6 18',
   chat: 'M5 5h14v10H10l-5 4z',
+  mic: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3',
+  send: 'M21 3L3 10.5l7 2.5 2.5 7zM21 3L10 13',
   search: 'M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14zM20 20l-4-4',
   check: 'M5 12.5l4.5 4.5L19 7.5',
 };
@@ -222,6 +224,7 @@ function route() {
   if (kind === 'p' && id) return { kind: 'project', id };
   if (kind === 'h' && id) return { kind: 'person', id };
   if (kind === 'search') return { kind: 'search', q: decodeURIComponent(id || '') };
+  if (kind === 'new' && id) return { kind: 'new', batch: decodeURIComponent(id) }; // ссылка из Telegram — одна пачка
   if (CRM_VIEWS[kind]) return { kind };
   return { kind: VIEWS[kind] ? kind : 'morning' };
 }
@@ -373,7 +376,7 @@ function renderMain(r) {
   if (r.kind === 'project') return renderProject(r.id);
   if (r.kind === 'person') return renderPerson(r.id);
   if (r.kind === 'search') return renderSearch(r.q);
-  if (r.kind === 'new') return renderNew();
+  if (r.kind === 'new') return renderNew(r.batch);
   if (r.kind === 'week') return renderWeek();
   if (r.kind === 'crm') return renderPipeline();
   if (r.kind === 'clients') return renderClients();
@@ -1059,22 +1062,31 @@ function sugText(s) {
 // Пачки — по дате встречи, свежие сверху; без даты — по времени появления.
 const sugAt = (s) => (s.payload && s.payload.meeting_at) || s.created_at.slice(0, 10);
 
-function renderNew() {
-  const list = pendingSugs().sort((a, b) => a.created_at.localeCompare(b.created_at));
+// Пачка — одна встреча или одно окно дайджеста; значок — откуда она.
+const SRC = { meeting: ['mic', '#e57bd1'], telegram: ['send', '#38bdf8'], userbot: ['send', '#38bdf8'], mcp: ['chat', '#d97757'] };
+
+/** «Новое» пачками; batch — одна пачка по ссылке из уведомления Telegram. */
+function renderNew(batch) {
+  const all_ = pendingSugs().sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const list = batch ? all_.filter((s) => s.batch_ref === batch) : all_;
   const batches = new Map();
   for (const s of list) {
     const key = s.batch_ref || 'one:' + s.id;
-    if (!batches.has(key)) batches.set(key, { title: s.batch_title, ref: s.source_ref, at: '', items: [] });
+    if (!batches.has(key)) batches.set(key, { title: s.batch_title, ref: s.source_ref, src: s.source, at: '', items: [] });
     const b = batches.get(key);
     b.items.push(s);
     if (sugAt(s) > b.at) b.at = sugAt(s);
   }
   const box = el('div', { class: 'body' });
-  if (!list.length) box.append(el('div', { class: 'empty' }, 'Новых предложений нет.'));
+  if (batch) {
+    box.append(el('div', { class: 'toolbar' }, el('a', { class: 'chip-btn', href: '#/new' }, `Всё «Новое»: ${all_.length}`)));
+    if (!list.length) box.append(el('div', { class: 'empty' }, 'Эта пачка уже разобрана.'));
+  } else if (!list.length) box.append(el('div', { class: 'empty' }, 'Новых предложений нет.'));
   for (const b of [...batches.values()].sort((x, y) => y.at.localeCompare(x.at))) {
     const ids = b.items.map((s) => s.id);
+    const [ic, col] = SRC[b.src] || ['inbox-in', VIEWS.new.color];
     box.append(el('div', { class: 'group' },
-      el('h2', {}, b.title || 'Без пачки', el('span', { class: 'n' }, b.items.length),
+      el('h2', {}, tint(icon(ic, 14), col), b.title || 'Без пачки', el('span', { class: 'n' }, b.items.length),
         b.ref && /^https:\/\//.test(b.ref) ? el('a', { class: 'src', href: b.ref, target: '_blank', rel: 'noopener noreferrer' }, 'встреча') : null,
         ids.length > 1 ? el('span', { class: 'act' },
           el('button', { class: 'chip-btn', onclick: () => decide(ids, 'accept') }, 'Принять все'), ' ',
@@ -1092,7 +1104,7 @@ function renderNew() {
       })));
   }
   // Очевидное автоматика закрывает сама — тут видно, что и почему, и можно вернуть.
-  const auto = autoClosed(7);
+  const auto = batch ? autoClosed(365).filter((s) => s.batch_ref === batch) : autoClosed(7);
   if (auto.length) {
     box.append(el('div', { class: 'group' },
       el('h2', {}, tint(icon('check', 14), 'var(--ok)'), 'Закрыто само', el('span', { class: 'n' }, auto.length),

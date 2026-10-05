@@ -185,6 +185,7 @@ section.card-pane { border-left: 1px solid var(--line-soft); background: var(--p
   transition: background-color .12s, color .12s, border-color .12s;
 }
 .chip-btn:hover { background: var(--hover); color: var(--text); }
+a.chip-btn { text-decoration: none; display: inline-block; }
 .chip-btn.on { border-color: color-mix(in srgb, var(--accent) 60%, transparent); color: var(--accent); background: var(--accent-soft); }
 
 /* ── Быстрый ввод: «+» слева, Claude справа, подсказки под полем ── */
