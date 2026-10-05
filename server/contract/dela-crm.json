@@ -1,0 +1,1071 @@
+{
+ "_": "Контракт Дел с телефоном, часть 2 (05.10.2026): CRM, «Новое» с «уточнить» и «закрыто само», правка словами, настройки. Часть 1 — dela.json. Примеры сняты с тестовой копии сервера (выдуманные данные), списки урезаны до одной записи. Деньги (fee_kop, paid_kop, оплаты, вид money) приходят только тем, кому они открыты (users.sees_money или владелец): у остальных — null или нет.",
+ "ops_list_additions": [
+  "payment.create",
+  "payment.set",
+  "interaction.delete",
+  "user.settings"
+ ],
+ "ops_examples": [
+  {
+   "op": "deal.set",
+   "op_id": "<uuid>",
+   "id": "<deal_id>",
+   "set": {
+    "stage": "mandate"
+   }
+  },
+  {
+   "op": "deal.set",
+   "op_id": "<uuid>",
+   "id": "<deal_id>",
+   "set": {
+    "outcome": "lost",
+    "lost_reason": "выбрали других"
+   }
+  },
+  {
+   "op": "payment.set",
+   "op_id": "<uuid>",
+   "id": "<payment_id>",
+   "set": {
+    "paid_on": "2026-10-05"
+   }
+  },
+  {
+   "op": "payment.create",
+   "op_id": "<uuid>",
+   "data": {
+    "deal_id": "<deal_id>",
+    "kind": "advance",
+    "amount_kop": 25000000,
+    "due_on": "2026-10-20"
+   }
+  },
+  {
+   "op": "interaction.add",
+   "op_id": "<uuid>",
+   "data": {
+    "at": "2026-10-05T12:30:00+03:00",
+    "kind": "call",
+    "summary": "Обсудили тизер, ждут к пятнице",
+    "project_id": "<project_id>",
+    "deal_id": "<deal_id>",
+    "person_ids": [
+     "<person_id>"
+    ],
+    "source": "phone"
+   }
+  },
+  {
+   "op": "interaction.delete",
+   "op_id": "<uuid>",
+   "id": "<interaction_id>"
+  },
+  {
+   "op": "person.set",
+   "op_id": "<uuid>",
+   "id": "<person_id>",
+   "set": {
+    "cadence": "month",
+    "hub": true
+   }
+  },
+  {
+   "op": "task.create",
+   "op_id": "<uuid>",
+   "task": {
+    "id": "<uuid телефона>",
+    "title": "Иван: прислать список фондов",
+    "project_id": "<project_id>",
+    "deal_id": "<deal_id>",
+    "ball": "waiting",
+    "person_id": "<person_id>",
+    "due_date": "2026-10-09",
+    "source": "manual"
+   }
+  }
+ ],
+ "sync_additions": {
+  "payments": [
+   {
+    "id": "d57d89e6-5cd4-4ea6-ae32-cedaa1d0681c",
+    "deal_id": "de2f9b8f-eb9b-443a-bfc8-992c5534fa85",
+    "kind": "advance",
+    "title": null,
+    "amount_kop": 25000000,
+    "due_on": "2026-09-10",
+    "invoiced_on": "2026-09-07",
+    "paid_on": "2026-09-15",
+    "cancelled_at": null,
+    "note": null,
+    "created_at": "2026-10-05T19:10:25+03:00",
+    "updated_at": "2026-10-05T19:10:25+03:00",
+    "rev": 1,
+    "seq": 31
+   }
+  ],
+  "deals": [
+   {
+    "id": "de2f9b8f-eb9b-443a-bfc8-992c5534fa85",
+    "project_id": "322793a7-617c-49e0-85d7-e4a98ec7838c",
+    "name": "Альфа: фонды",
+    "stage": "active",
+    "outcome": null,
+    "lost_reason": null,
+    "closed_on": null,
+    "deal_type": null,
+    "lead_person_id": "d3b48db2-59e2-498d-9c93-c691e9795d9c",
+    "team_ids": [],
+    "person_ids": [
+     "02ecd0f2-dd80-4a97-aa45-47126a266723"
+    ],
+    "source_person_id": null,
+    "fee_kind": "fixed",
+    "fee_kop": 50000000,
+    "retainer_kop": null,
+    "success_pct": null,
+    "probability": null,
+    "expected_on": null,
+    "deadline": null,
+    "wheel": false,
+    "ball": null,
+    "next_step": "Список фондов к пятнице",
+    "my_view": "Клиент живой, платит вовремя",
+    "ideas": null,
+    "log": null,
+    "notion_id": null,
+    "created_at": "2026-10-05T19:10:25+03:00",
+    "updated_at": "2026-10-05T19:10:25+03:00",
+    "rev": 2,
+    "seq": 24
+   }
+  ],
+  "users": [
+   {
+    "id": "sasha",
+    "name": "Саша",
+    "person_id": null,
+    "role": "owner",
+    "clients": "own",
+    "sees_money": false,
+    "seq": 1
+   },
+   {
+    "id": "member1",
+    "name": "Коля",
+    "person_id": null,
+    "role": "member",
+    "clients": "team",
+    "sees_money": false,
+    "seq": 2
+   }
+  ],
+  "suggestions": [
+   {
+    "id": "e9896512-f737-4bee-9b96-80330974b019",
+    "for_user": "sasha",
+    "kind": "update",
+    "task_id": "a8a6d096-255c-4a82-8bf9-c0372dc68477",
+    "payload": {
+     "ball": "waiting",
+     "note": "Нужны две версии: короткая на страницу и полная с цифрами Q3",
+     "title": "Ольга: тизер для фондов с цифрами Q3",
+     "due_date": "2026-10-11",
+     "meeting_at": "2026-09-23",
+     "person_name": "Ольга"
+    },
+    "source": "meeting",
+    "source_ref": "https://meetings.example/m/2",
+    "quote": "Тизер переносим на следующую неделю, Ольга доделает",
+    "batch_ref": "meeting:2",
+    "batch_title": "Бета: статус · 23.09",
+    "dup_of": [],
+    "status": "pending",
+    "reason": null,
+    "decided_by": null,
+    "decided_at": null,
+    "result_task_id": null,
+    "result": null,
+    "expires_at": "2026-10-12T19:10:26+03:00",
+    "created_by": "system",
+    "created_at": "2026-10-05T19:10:26+03:00",
+    "updated_at": "2026-10-05T19:10:26+03:00",
+    "rev": 1,
+    "seq": 58
+   },
+   {
+    "id": "caf4b9b5-0090-422d-98d9-067bbb5309cf",
+    "for_user": "sasha",
+    "kind": "close",
+    "task_id": "5a59065b-e8aa-4fe3-b0a4-770017ed9038",
+    "payload": {
+     "meeting_at": "2026-09-23"
+    },
+    "source": "meeting",
+    "source_ref": "https://meetings.example/m/2",
+    "quote": "Иван прислал модель в четверг",
+    "batch_ref": "meeting:2",
+    "batch_title": "Бета: статус · 23.09",
+    "dup_of": [],
+    "status": "pending",
+    "reason": null,
+    "decided_by": null,
+    "decided_at": null,
+    "result_task_id": null,
+    "result": null,
+    "expires_at": "2026-10-12T19:10:26+03:00",
+    "created_by": "system",
+    "created_at": "2026-10-05T19:10:26+03:00",
+    "updated_at": "2026-10-05T19:10:26+03:00",
+    "rev": 1,
+    "seq": 57
+   },
+   {
+    "id": "6a355cd6-eb3c-4577-8bc6-e32c0c543c8c",
+    "for_user": "sasha",
+    "kind": "close",
+    "task_id": "77f1248d-d409-48d8-968e-4e39997e6cc0",
+    "payload": {
+     "auto": true,
+     "meeting_at": "2026-10-05"
+    },
+    "source": "telegram",
+    "source_ref": null,
+    "quote": "Контур: «Лицензия продлена до 10.2027»",
+    "batch_ref": "digest:dev",
+    "batch_title": "Telegram · сегодня",
+    "dup_of": [],
+    "status": "accepted",
+    "reason": "закрыто само",
+    "decided_by": "sasha",
+    "decided_at": "2026-10-05T19:10:26+03:00",
+    "result_task_id": "77f1248d-d409-48d8-968e-4e39997e6cc0",
+    "result": {
+     "ball": "mine",
+     "want": false,
+     "money": null,
+     "notes": null,
+     "title": "Продлить Контур",
+     "labels": [],
+     "source": "manual",
+     "status": "done",
+     "deal_id": null,
+     "due_date": "2026-10-07",
+     "due_time": null,
+     "focus_on": null,
+     "nudge_on": null,
+     "owner_id": "sasha",
+     "person_id": null,
+     "project_id": null,
+     "source_ref": null,
+     "estimate_min": null,
+     "requested_by": null
+    },
+    "expires_at": "2026-10-12T19:10:26+03:00",
+    "created_by": "sasha",
+    "created_at": "2026-10-05T19:10:26+03:00",
+    "updated_at": "2026-10-05T19:10:26+03:00",
+    "rev": 2,
+    "seq": 63
+   }
+  ]
+ },
+ "views_crm": {
+  "pipeline": {
+   "request": "GET /api/view/pipeline",
+   "response": {
+    "deals": [
+     {
+      "id": "1082327c-9cee-49b9-94b6-ecd6d701d206",
+      "project_id": "322793a7-617c-49e0-85d7-e4a98ec7838c",
+      "name": "Альфа: модель",
+      "stage": "archive",
+      "outcome": "won",
+      "lost_reason": null,
+      "closed_on": "2026-10-05",
+      "deal_type": "Управленка",
+      "lead_person_id": null,
+      "team_ids": [],
+      "person_ids": [],
+      "source_person_id": null,
+      "fee_kind": null,
+      "fee_kop": 35000000,
+      "retainer_kop": null,
+      "success_pct": null,
+      "probability": null,
+      "expected_on": null,
+      "deadline": null,
+      "wheel": false,
+      "ball": null,
+      "next_step": null,
+      "my_view": null,
+      "ideas": null,
+      "log": null,
+      "notion_id": null,
+      "created_at": "2026-10-05T19:10:25+03:00",
+      "updated_at": "2026-10-05T19:10:25+03:00",
+      "rev": 1,
+      "seq": 30,
+      "project_name": "Альфа Групп",
+      "org_id": null,
+      "stage_since": "2026-10-05",
+      "open_tasks": 0,
+      "next_task": null,
+      "last_touch": null,
+      "last_task_move": null,
+      "paid_kop": null,
+      "invoiced_kop": null,
+      "planned_kop": null,
+      "p_eff": null,
+      "weighted_kop": null,
+      "last_move": "2026-10-05",
+      "quiet_days": 0,
+      "stale": false,
+      "minutes_30": null,
+      "minutes_all": null
+     }
+    ],
+    "stages": [
+     {
+      "stage": "lead",
+      "count": 1,
+      "fee_kop": 150000000,
+      "weighted_kop": 15000000
+     }
+    ],
+    "money": true,
+    "owner": true,
+    "totals": {
+     "live": 5,
+     "pipeline_kop": 27000000,
+     "to_get_kop": 90000000,
+     "stale": 3
+    }
+   }
+  },
+  "clients": {
+   "request": "GET /api/view/clients",
+   "response": {
+    "clients": [
+     {
+      "id": "322793a7-617c-49e0-85d7-e4a98ec7838c",
+      "name": "Альфа Групп",
+      "aliases": [],
+      "org_id": null,
+      "org": null,
+      "money_default": "paid",
+      "archived_at": null,
+      "owner_id": "sasha",
+      "note": null,
+      "live_deals": 2,
+      "all_deals": 3,
+      "stages": [
+       "active"
+      ],
+      "last_touch": "2026-10-04T19:10:25+03:00",
+      "open_tasks": 3,
+      "next_task": {
+       "id": "5a59065b-e8aa-4fe3-b0a4-770017ed9038",
+       "num": 1,
+       "title": "Иван: прислать модель",
+       "due_date": "2026-10-02",
+       "owner_id": "sasha",
+       "ball": "waiting"
+      },
+      "signed_fee_kop": 50000000,
+      "paid_kop": 25000000,
+      "paid_year_kop": 25000000,
+      "invoiced_kop": 15000000,
+      "minutes_90": null,
+      "minutes_all": null,
+      "last_work": null
+     }
+    ],
+    "money": true,
+    "owner": true,
+    "unmatched": []
+   }
+  },
+  "client": {
+   "request": "GET /api/view/client?project_id=<project_id>",
+   "response": {
+    "project": {
+     "id": "322793a7-617c-49e0-85d7-e4a98ec7838c",
+     "name": "Альфа Групп",
+     "aliases": [],
+     "sphere": "work",
+     "kind": "client",
+     "org_id": null,
+     "owner_id": "sasha",
+     "money_default": "paid",
+     "note": null,
+     "import_ref": null,
+     "archived_at": null,
+     "created_at": "2026-10-05T19:10:25+03:00",
+     "updated_at": "2026-10-05T19:10:25+03:00",
+     "rev": 1,
+     "seq": 4
+    },
+    "timeline": [
+     {
+      "id": "14a146fa-705e-4852-bddb-917cd4ab48d6",
+      "at": "2026-10-04T19:10:25+03:00",
+      "kind": "zoom",
+      "summary": "Созвон с Иваном: фонды готовы смотреть, нужен тизер к пятнице",
+      "next_step": "Тизер к пятнице",
+      "project_id": "322793a7-617c-49e0-85d7-e4a98ec7838c",
+      "deal_id": "de2f9b8f-eb9b-443a-bfc8-992c5534fa85",
+      "person_ids": [
+       "02ecd0f2-dd80-4a97-aa45-47126a266723"
+      ],
+      "source": "manual",
+      "source_ref": null,
+      "owner_id": "sasha",
+      "notion_id": null,
+      "created_at": "2026-10-05T19:10:25+03:00",
+      "updated_at": "2026-10-05T19:10:25+03:00",
+      "rev": 1,
+      "seq": 35,
+      "duration_min": null,
+      "deleted_at": null,
+      "deal_name": "Альфа: фонды",
+      "project_name": "Альфа Групп"
+     }
+    ],
+    "deals": [
+     {
+      "id": "1082327c-9cee-49b9-94b6-ecd6d701d206",
+      "project_id": "322793a7-617c-49e0-85d7-e4a98ec7838c",
+      "name": "Альфа: модель",
+      "stage": "archive",
+      "outcome": "won",
+      "lost_reason": null,
+      "closed_on": "2026-10-05",
+      "deal_type": "Управленка",
+      "lead_person_id": null,
+      "team_ids": [],
+      "person_ids": [],
+      "source_person_id": null,
+      "fee_kind": null,
+      "fee_kop": 35000000,
+      "retainer_kop": null,
+      "success_pct": null,
+      "probability": null,
+      "expected_on": null,
+      "deadline": null,
+      "wheel": false,
+      "ball": null,
+      "next_step": null,
+      "my_view": null,
+      "ideas": null,
+      "log": null,
+      "notion_id": null,
+      "created_at": "2026-10-05T19:10:25+03:00",
+      "updated_at": "2026-10-05T19:10:25+03:00",
+      "rev": 1,
+      "seq": 30,
+      "project_name": "Альфа Групп",
+      "org_id": null,
+      "stage_since": "2026-10-05",
+      "open_tasks": 0,
+      "next_task": null,
+      "last_touch": null,
+      "last_task_move": null,
+      "paid_kop": null,
+      "invoiced_kop": null,
+      "planned_kop": null,
+      "p_eff": null,
+      "weighted_kop": null,
+      "last_move": "2026-10-05",
+      "quiet_days": 0,
+      "stale": false
+     }
+    ],
+    "people": [
+     {
+      "id": "02ecd0f2-dd80-4a97-aa45-47126a266723",
+      "name": "Иван Петров",
+      "short": "Иван",
+      "aliases": [],
+      "org_id": null,
+      "role": null,
+      "phones": [],
+      "emails": [],
+      "telegram_id": null,
+      "telegram_username": null,
+      "birth_day": null,
+      "birth_month": null,
+      "birth_year": null,
+      "source": null,
+      "seeks": null,
+      "offers": null,
+      "traits": null,
+      "cadence": "month",
+      "hub": true,
+      "user_id": null,
+      "owner_id": "sasha",
+      "note": null,
+      "notion_id": null,
+      "archived_at": null,
+      "created_at": "2026-10-05T19:10:25+03:00",
+      "updated_at": "2026-10-05T19:10:25+03:00",
+      "rev": 2,
+      "seq": 22
+     }
+    ],
+    "money": true,
+    "owner": true,
+    "entries": [],
+    "months": []
+   }
+  },
+  "deal": {
+   "request": "GET /api/view/deal?deal_id=<deal_id>",
+   "response": {
+    "deal": {
+     "id": "de2f9b8f-eb9b-443a-bfc8-992c5534fa85",
+     "project_id": "322793a7-617c-49e0-85d7-e4a98ec7838c",
+     "name": "Альфа: фонды",
+     "stage": "active",
+     "outcome": null,
+     "lost_reason": null,
+     "closed_on": null,
+     "deal_type": null,
+     "lead_person_id": "d3b48db2-59e2-498d-9c93-c691e9795d9c",
+     "team_ids": [],
+     "person_ids": [
+      "02ecd0f2-dd80-4a97-aa45-47126a266723"
+     ],
+     "source_person_id": null,
+     "fee_kind": "fixed",
+     "fee_kop": 50000000,
+     "retainer_kop": null,
+     "success_pct": null,
+     "probability": null,
+     "expected_on": null,
+     "deadline": null,
+     "wheel": false,
+     "ball": null,
+     "next_step": "Список фондов к пятнице",
+     "my_view": "Клиент живой, платит вовремя",
+     "ideas": null,
+     "log": null,
+     "notion_id": null,
+     "created_at": "2026-10-05T19:10:25+03:00",
+     "updated_at": "2026-10-05T19:10:25+03:00",
+     "rev": 2,
+     "seq": 24,
+     "project_name": "Альфа Групп",
+     "org_id": null,
+     "stage_since": "2026-10-05",
+     "open_tasks": 2,
+     "next_task": {
+      "id": "5a59065b-e8aa-4fe3-b0a4-770017ed9038",
+      "num": 1,
+      "title": "Иван: прислать модель",
+      "due_date": "2026-10-02",
+      "owner_id": "sasha",
+      "ball": "waiting"
+     },
+     "last_touch": "2026-10-04T19:10:25+03:00",
+     "last_task_move": "2026-10-05T19:10:26+03:00",
+     "paid_kop": 25000000,
+     "invoiced_kop": 15000000,
+     "planned_kop": 10000000,
+     "p_eff": 90,
+     "weighted_kop": 45000000,
+     "to_get_kop": 25000000,
+     "last_move": "2026-10-05",
+     "quiet_days": 0,
+     "stale": false
+    },
+    "open": [
+     {
+      "id": "5a59065b-e8aa-4fe3-b0a4-770017ed9038",
+      "num": 1,
+      "title": "Иван: прислать модель",
+      "notes": null,
+      "project_id": "322793a7-617c-49e0-85d7-e4a98ec7838c",
+      "deal_id": "de2f9b8f-eb9b-443a-bfc8-992c5534fa85",
+      "owner_id": "sasha",
+      "ball": "waiting",
+      "person_id": "02ecd0f2-dd80-4a97-aa45-47126a266723",
+      "waiting_since": "2026-10-05",
+      "nudge_on": "2026-10-05",
+      "requested_by": null,
+      "due_date": "2026-10-02",
+      "due_time": null,
+      "estimate_min": null,
+      "money": null,
+      "want": false,
+      "focus_on": null,
+      "labels": [],
+      "status": "open",
+      "source": "manual",
+      "source_ref": null,
+      "created_by": "sasha",
+      "created_at": "2026-10-05T19:10:26+03:00",
+      "updated_at": "2026-10-05T19:10:26+03:00",
+      "completed_at": null,
+      "import_ref": null,
+      "rev": 1,
+      "seq": 39,
+      "money_eff": "paid",
+      "sphere": "work",
+      "project_name": "Альфа Групп",
+      "project_kind": "client",
+      "deal_name": "Альфа: фонды",
+      "person_short": "Иван",
+      "person_name": "Иван Петров",
+      "requested_by_short": null,
+      "overdue": true,
+      "now_": null
+     }
+    ],
+    "done": [],
+    "payments": [
+     {
+      "id": "d57d89e6-5cd4-4ea6-ae32-cedaa1d0681c",
+      "deal_id": "de2f9b8f-eb9b-443a-bfc8-992c5534fa85",
+      "kind": "advance",
+      "title": null,
+      "amount_kop": 25000000,
+      "due_on": "2026-09-10",
+      "invoiced_on": "2026-09-07",
+      "paid_on": "2026-09-15",
+      "cancelled_at": null,
+      "note": null,
+      "created_at": "2026-10-05T19:10:25+03:00",
+      "updated_at": "2026-10-05T19:10:25+03:00",
+      "rev": 1,
+      "seq": 31
+     }
+    ],
+    "timeline": [
+     {
+      "id": "14a146fa-705e-4852-bddb-917cd4ab48d6",
+      "at": "2026-10-04T19:10:25+03:00",
+      "kind": "zoom",
+      "summary": "Созвон с Иваном: фонды готовы смотреть, нужен тизер к пятнице",
+      "next_step": "Тизер к пятнице",
+      "project_id": "322793a7-617c-49e0-85d7-e4a98ec7838c",
+      "deal_id": "de2f9b8f-eb9b-443a-bfc8-992c5534fa85",
+      "person_ids": [
+       "02ecd0f2-dd80-4a97-aa45-47126a266723"
+      ],
+      "source": "manual",
+      "source_ref": null,
+      "owner_id": "sasha",
+      "notion_id": null,
+      "created_at": "2026-10-05T19:10:25+03:00",
+      "updated_at": "2026-10-05T19:10:25+03:00",
+      "rev": 1,
+      "seq": 35,
+      "duration_min": null,
+      "deleted_at": null,
+      "deal_name": "Альфа: фонды",
+      "project_name": "Альфа Групп"
+     }
+    ],
+    "history": [
+     {
+      "at": "2026-10-05T19:10:25+03:00",
+      "actor": "dev",
+      "via": "system",
+      "op": "insert",
+      "before": null,
+      "after": {
+       "id": "de2f9b8f-eb9b-443a-bfc8-992c5534fa85",
+       "name": "Альфа: фонды",
+       "stage": "active",
+       "wheel": false,
+       "fee_kop": 50000000,
+       "team_ids": [],
+       "next_step": "Список фондов к пятнице",
+       "created_at": "2026-10-05T19:10:25.870546+03:00",
+       "person_ids": [],
+       "project_id": "322793a7-617c-49e0-85d7-e4a98ec7838c"
+      }
+     }
+    ],
+    "money": true,
+    "owner": true,
+    "entries": [],
+    "minutes_all": null
+   }
+  },
+  "ties": {
+   "request": "GET /api/view/ties",
+   "response": {
+    "people": [
+     {
+      "id": "02ecd0f2-dd80-4a97-aa45-47126a266723",
+      "name": "Иван Петров",
+      "short": "Иван",
+      "org_id": null,
+      "org": null,
+      "role": null,
+      "cadence": "month",
+      "hub": true,
+      "telegram_username": null,
+      "phones": [],
+      "birth_day": null,
+      "birth_month": null,
+      "seeks": null,
+      "offers": null,
+      "last_touch": "2026-10-04T19:10:25+03:00",
+      "brought": 1,
+      "agenda": 0,
+      "since_days": 1,
+      "due": false,
+      "overdue_days": -29
+     }
+    ],
+    "today": "2026-10-05"
+   }
+  },
+  "money": {
+   "request": "GET /api/view/money",
+   "response": {
+    "overdue": [
+     {
+      "id": "260a8792-76a3-4c8e-a9e4-27c18b98d5d0",
+      "deal_id": "de2f9b8f-eb9b-443a-bfc8-992c5534fa85",
+      "kind": "stage",
+      "title": null,
+      "amount_kop": 15000000,
+      "due_on": "2026-10-02",
+      "invoiced_on": "2026-09-25",
+      "paid_on": null,
+      "cancelled_at": null,
+      "note": null,
+      "created_at": "2026-10-05T19:10:25+03:00",
+      "updated_at": "2026-10-05T19:10:25+03:00",
+      "rev": 1,
+      "seq": 32,
+      "deal_name": "Альфа: фонды",
+      "project_id": "322793a7-617c-49e0-85d7-e4a98ec7838c",
+      "project_name": "Альфа Групп"
+     }
+    ],
+    "invoiced": [],
+    "expected": [
+     {
+      "id": "4fe9151a-1ed2-4b5c-abaf-382e65c31b8c",
+      "deal_id": "8ec67c0d-3151-4384-9a9e-d06310fabec8",
+      "kind": "advance",
+      "title": null,
+      "amount_kop": 20000000,
+      "due_on": "2026-10-17",
+      "invoiced_on": null,
+      "paid_on": null,
+      "cancelled_at": null,
+      "note": null,
+      "created_at": "2026-10-05T19:10:25+03:00",
+      "updated_at": "2026-10-05T19:10:25+03:00",
+      "rev": 1,
+      "seq": 34,
+      "deal_name": "Гамма: банковский advisory",
+      "project_id": "b039d079-f505-47e4-92b4-617deb71bd1b",
+      "project_name": "Гамма Капитал"
+     }
+    ],
+    "later": [
+     {
+      "id": "eeeae163-306a-4a4c-bccd-9b4b347e940f",
+      "deal_id": "de2f9b8f-eb9b-443a-bfc8-992c5534fa85",
+      "kind": "final",
+      "title": null,
+      "amount_kop": 10000000,
+      "due_on": "2026-11-14",
+      "invoiced_on": null,
+      "paid_on": null,
+      "cancelled_at": null,
+      "note": null,
+      "created_at": "2026-10-05T19:10:25+03:00",
+      "updated_at": "2026-10-05T19:10:25+03:00",
+      "rev": 1,
+      "seq": 33,
+      "deal_name": "Альфа: фонды",
+      "project_id": "322793a7-617c-49e0-85d7-e4a98ec7838c",
+      "project_name": "Альфа Групп"
+     }
+    ],
+    "paid": [
+     {
+      "id": "d57d89e6-5cd4-4ea6-ae32-cedaa1d0681c",
+      "deal_id": "de2f9b8f-eb9b-443a-bfc8-992c5534fa85",
+      "kind": "advance",
+      "title": null,
+      "amount_kop": 25000000,
+      "due_on": "2026-09-10",
+      "invoiced_on": "2026-09-07",
+      "paid_on": "2026-09-15",
+      "cancelled_at": null,
+      "note": null,
+      "created_at": "2026-10-05T19:10:25+03:00",
+      "updated_at": "2026-10-05T19:10:25+03:00",
+      "rev": 1,
+      "seq": 31,
+      "deal_name": "Альфа: фонды",
+      "project_id": "322793a7-617c-49e0-85d7-e4a98ec7838c",
+      "project_name": "Альфа Групп"
+     }
+    ],
+    "totals": {
+     "paid_month": 0,
+     "paid_quarter": 0,
+     "paid_year": 25000000,
+     "receivable": 15000000,
+     "expected_30": 35000000,
+     "to_get": 90000000,
+     "pipeline": 27000000
+    },
+    "unplanned": [
+     {
+      "id": "8ec67c0d-3151-4384-9a9e-d06310fabec8",
+      "project_id": "b039d079-f505-47e4-92b4-617deb71bd1b",
+      "name": "Гамма: банковский advisory",
+      "stage": "mandate",
+      "outcome": null,
+      "lost_reason": null,
+      "closed_on": null,
+      "deal_type": "Банковский advisory",
+      "lead_person_id": "826857a5-92a6-4613-84d0-3ddafd42cbbf",
+      "team_ids": [],
+      "person_ids": [],
+      "source_person_id": null,
+      "fee_kind": "fixed",
+      "fee_kop": 40000000,
+      "retainer_kop": null,
+      "success_pct": null,
+      "probability": null,
+      "expected_on": null,
+      "deadline": null,
+      "wheel": false,
+      "ball": null,
+      "next_step": null,
+      "my_view": null,
+      "ideas": null,
+      "log": null,
+      "notion_id": null,
+      "created_at": "2026-10-05T19:10:25+03:00",
+      "updated_at": "2026-10-05T19:10:25+03:00",
+      "rev": 1,
+      "seq": 27,
+      "project_name": "Гамма Капитал",
+      "org_id": null,
+      "stage_since": "2026-10-05",
+      "open_tasks": 0,
+      "next_task": null,
+      "last_touch": "2026-10-02T19:10:25+03:00",
+      "last_task_move": null,
+      "paid_kop": null,
+      "invoiced_kop": null,
+      "planned_kop": 20000000,
+      "p_eff": 90,
+      "weighted_kop": 36000000,
+      "to_get_kop": 40000000,
+      "last_move": "2026-10-05",
+      "quiet_days": 0,
+      "stale": true
+     }
+    ]
+   }
+  },
+  "dossier": {
+   "request": "GET /api/view/dossier?person_id=<person_id>",
+   "response": {
+    "timeline": [
+     {
+      "id": "14a146fa-705e-4852-bddb-917cd4ab48d6",
+      "at": "2026-10-04T19:10:25+03:00",
+      "kind": "zoom",
+      "summary": "Созвон с Иваном: фонды готовы смотреть, нужен тизер к пятнице",
+      "next_step": "Тизер к пятнице",
+      "project_id": "322793a7-617c-49e0-85d7-e4a98ec7838c",
+      "deal_id": "de2f9b8f-eb9b-443a-bfc8-992c5534fa85",
+      "person_ids": [
+       "02ecd0f2-dd80-4a97-aa45-47126a266723"
+      ],
+      "source": "manual",
+      "source_ref": null,
+      "owner_id": "sasha",
+      "notion_id": null,
+      "created_at": "2026-10-05T19:10:25+03:00",
+      "updated_at": "2026-10-05T19:10:25+03:00",
+      "rev": 1,
+      "seq": 35,
+      "duration_min": null,
+      "deleted_at": null,
+      "deal_name": "Альфа: фонды",
+      "project_name": "Альфа Групп"
+     }
+    ],
+    "deals": [
+     {
+      "id": "de2f9b8f-eb9b-443a-bfc8-992c5534fa85",
+      "project_id": "322793a7-617c-49e0-85d7-e4a98ec7838c",
+      "name": "Альфа: фонды",
+      "stage": "active",
+      "outcome": null,
+      "lost_reason": null,
+      "closed_on": null,
+      "deal_type": null,
+      "lead_person_id": "d3b48db2-59e2-498d-9c93-c691e9795d9c",
+      "team_ids": [],
+      "person_ids": [
+       "02ecd0f2-dd80-4a97-aa45-47126a266723"
+      ],
+      "source_person_id": null,
+      "fee_kind": "fixed",
+      "fee_kop": 50000000,
+      "retainer_kop": null,
+      "success_pct": null,
+      "probability": null,
+      "expected_on": null,
+      "deadline": null,
+      "wheel": false,
+      "ball": null,
+      "next_step": "Список фондов к пятнице",
+      "my_view": "Клиент живой, платит вовремя",
+      "ideas": null,
+      "log": null,
+      "notion_id": null,
+      "created_at": "2026-10-05T19:10:25+03:00",
+      "updated_at": "2026-10-05T19:10:25+03:00",
+      "rev": 2,
+      "seq": 24,
+      "project_name": "Альфа Групп",
+      "org_id": null,
+      "stage_since": "2026-10-05",
+      "open_tasks": 2,
+      "next_task": {
+       "id": "5a59065b-e8aa-4fe3-b0a4-770017ed9038",
+       "num": 1,
+       "title": "Иван: прислать модель",
+       "due_date": "2026-10-02",
+       "owner_id": "sasha",
+       "ball": "waiting"
+      },
+      "last_touch": "2026-10-04T19:10:25+03:00",
+      "last_task_move": "2026-10-05T19:10:26+03:00",
+      "paid_kop": 25000000,
+      "invoiced_kop": 15000000,
+      "planned_kop": 10000000,
+      "p_eff": 90,
+      "weighted_kop": 45000000,
+      "to_get_kop": 25000000,
+      "last_move": "2026-10-05",
+      "quiet_days": 0,
+      "stale": false
+     }
+    ]
+   }
+  }
+ },
+ "ask": {
+  "request": {
+   "POST /api/ask": {
+    "text": "все просроченные на завтра, бюджет — первым делом",
+    "scope": {
+     "title": "Проект: Бета Групп",
+     "task_ids": [
+      "<id дел на экране>"
+     ],
+     "focus": "<id дела у микрофона — по желанию>",
+     "project_id": "<куда класть новые дела — по желанию>",
+     "person_id": null
+    }
+   }
+  },
+  "start_response": {
+   "ok": true,
+   "job": "<номер задания>"
+  },
+  "poll": "GET /api/ask/<номер>: {status: run} пока думает (спрашивать раз в 1 с, потом реже); потом done или {ok:false, status:error, error}",
+  "done_edit": {
+   "ok": true,
+   "status": "done",
+   "route": "edit",
+   "reply": "Перенёс два просроченных дела на завтра, 6 октября.",
+   "changed": [
+    {
+     "id": "<id>",
+     "num": 5,
+     "title": "Сверка с банком",
+     "before": {
+      "due_date": "2026-09-25"
+     },
+     "after": {
+      "due_date": "2026-10-06"
+     },
+     "status": null
+    },
+    {
+     "id": "<id>",
+     "num": 3,
+     "title": "Закрыть акт",
+     "before": {},
+     "after": {},
+     "status": [
+      "open",
+      "done"
+     ]
+    }
+   ],
+   "tasks": [],
+   "notes": [],
+   "errors": [],
+   "model": "claude-sonnet-5-5"
+  },
+  "done_new": "route = new — команда целиком про новые дела, сервер отдал её разбору (как /api/parse): tasks и notes — что заведено.",
+  "undo": "«Вернуть всё»: для каждого changed — task.set с before (если не пусто) и по status[0]: open → task.reopen, done → task.done, cancelled → task.cancel; для tasks — task.cancel."
+ },
+ "settings": {
+  "GET /api/settings": {
+   "settings": {
+    "claude_model": "opus"
+   },
+   "claude": true,
+   "models": {
+    "sonnet": "claude-sonnet-5-5",
+    "opus": "claude-opus-5-5"
+   },
+   "efforts": [
+    "low",
+    "medium",
+    "high"
+   ],
+   "default": {
+    "claude_model": "sonnet",
+    "claude_effort": "low"
+   },
+   "cost": {
+    "today": 0,
+    "month": 0,
+    "total": 0,
+    "by": {},
+    "models": {}
+   }
+  },
+  "change": {
+   "op": "user.settings",
+   "settings": {
+    "claude_model": "opus",
+    "claude_effort": "medium"
+   }
+  }
+ },
+ "rules": [
+  "«Новое»: kind update — уточнение целиком: payload может нести title, due_date, ball, person_name (сервер найдёт человека), note — подробности; при принятии note и quote ложатся комментарием к делу. Показывать, что именно поменяется.",
+  "«Закрыто само»: suggestion kind close, status accepted, payload.auto = true, reason «закрыто само» — сервер закрыл дело сам по свежей встрече или переписке. Показать за 7 дней с основанием (quote, batch_title) и «Вернуть» (task.reopen).",
+  "Деньги задачи (task.money, money_eff) владелец убрал из интерфейса 05.10: поле в синке осталось, не показывать и не править.",
+  "CRM видна, если users[я].role = owner или clients ≠ own; деньги (оплаты, гонорары, вид money) — если sees_money или owner.",
+  "Хронология (interactions) в синк не входит: её дают виды client, deal, dossier; писать — interaction.add, убрать — interaction.delete (строка не удаляется, deleted_at).",
+  "Стадии сделки: lead, proposal, mandate, active, closing, archive; закрыть — deal.set {outcome: won|lost|paused, lost_reason}; вернуть — deal.set {stage: active}. Следующий шаг сделки — её открытое дело (task.create с project_id и deal_id).",
+  "Оплаты: payment.create {deal_id, kind, amount_kop, due_on}; payment.set {invoiced_on} — счёт выставлен, {paid_on} — деньги пришли, {cancelled_at} — не будет.",
+  "Источник: у дела (task.source) — manual (руками) или voice (голосом); phone для дела база не примет. У хронологии (interaction.source) — phone."
+ ]
+}
