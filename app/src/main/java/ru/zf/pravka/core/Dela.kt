@@ -1103,6 +1103,55 @@ object Dela {
             .sortedWith(compareBy<Task> { !it.open }.then(ORDER)).take(50)
     }
 
+    /** Проект строкой списка: сколько в нём открытых дел и есть ли просроченное. */
+    data class ProjectRow(val project: Project, val open: Int, val late: Boolean)
+
+    /**
+     * «Проекты» — как боковая панель веба: избранные сверху, дальше по видам
+     * (клиенты, внутреннее, личное), «Люди» — с кем больше всего открытых дел,
+     * и архив. Число — открытые дела проекта (все, не только мои: так в вебе),
+     * просрочка — флагом: на экране она красит число, а не ставит вторую точку.
+     * Сфера отбирает живые проекты; люди и архив — без неё, как в вебе.
+     */
+    data class ProjectsNav(
+        val inbox: Int,
+        val inboxLate: Boolean,
+        val favorites: List<ProjectRow>,
+        val groups: List<Pair<String, List<ProjectRow>>>,
+        val people: List<Pair<Person, Int>>,
+        val archived: List<ProjectRow>,
+    )
+
+    val KINDS = listOf("client" to "Клиенты", "internal" to "Внутреннее", "personal" to "Личное")
+
+    fun projectsNav(s: Snapshot, me: String, today: String, sphere: String, favorites: Set<String>): ProjectsNav {
+        val open = s.tasks.values.filter { it.open }
+        val openBy = open.filter { it.projectId.isNotBlank() }.groupingBy { it.projectId }.eachCount()
+        val lateBy = open.filter { it.projectId.isNotBlank() && it.dueDate.isNotBlank() && it.dueDate < today }.map { it.projectId }.toSet()
+        fun row(p: Project) = ProjectRow(p, openBy[p.id] ?: 0, p.id in lateBy)
+        val live = s.projects.values.filter { it.live && (sphere == "all" || sphere.isBlank() || it.sphere == sphere) }
+            .sortedBy { it.name.lowercase() }
+        val favs = live.filter { it.id in favorites }
+        val groups = KINDS.map { (kind, title) -> title to live.filter { it.kind == kind && it.id !in favorites }.map(::row) }
+            .filter { it.second.isNotEmpty() }
+        // Проект незнакомого вида не теряется — отдельной группой «Другое».
+        val known = KINDS.map { it.first }.toSet()
+        val odd = live.filter { it.kind !in known && it.id !in favorites }.map(::row)
+        val withOdd = if (odd.isEmpty()) groups else groups + ("Другое" to odd)
+        val people = open.filter { it.personId.isNotBlank() }.groupingBy { it.personId }.eachCount()
+            .mapNotNull { (id, n) -> s.people[id]?.takeIf { it.live }?.let { it to n } }
+            .sortedWith(compareByDescending<Pair<Person, Int>> { it.second }.thenBy { it.first.label.lowercase() })
+        val inbox = mineOpen(s, me, "all").filter { it.projectId.isBlank() }
+        return ProjectsNav(
+            inbox = inbox.size,
+            inboxLate = inbox.any { it.dueDate.isNotBlank() && it.dueDate < today },
+            favorites = favs.map(::row),
+            groups = withOdd,
+            people = people,
+            archived = s.projects.values.filter { !it.live }.sortedBy { it.name.lowercase() }.map(::row),
+        )
+    }
+
     /** Все открытые по проектам: «Входящие» первыми, дальше по имени — для тапа в Засечку. */
     fun byProject(s: Snapshot, me: String, sphere: String): List<Pair<Project?, List<Task>>> {
         val open = mineOpen(s, me, sphere)

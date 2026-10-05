@@ -41,6 +41,11 @@ class DelaStore(private val context: Context) {
         private const val KEEP_NOTICES = 30
         /** Видов клиента, сделки и человека бывает много — храним свежие. */
         private const val KEEP_VIEWS = 60
+        /**
+         * Избранные проекты — выбор этого телефона, как звезда в вебе (у того —
+         * память браузера): на сервер не едет, с базой — едет.
+         */
+        const val FAVS_FILE = "dela-favs.json"
     }
 
     /** Ответ CRM-вида и когда он пришёл: экран открывается с ним без сети и обновляется. */
@@ -58,6 +63,7 @@ class DelaStore(private val context: Context) {
     private val file: File get() = File(DataRoot.dir(context), FILE_NAME)
     private val outboxFile: File get() = File(DataRoot.dir(context), OUTBOX_FILE)
     private val viewsFile: File get() = File(DataRoot.dir(context), VIEWS_FILE)
+    private val favsFile: File get() = File(DataRoot.dir(context), FAVS_FILE)
     private var loaded = false
 
     private var server = Dela.Snapshot()
@@ -77,6 +83,19 @@ class DelaStore(private val context: Context) {
 
     private val _notices = MutableStateFlow<List<Notice>>(emptyList())
     val noticesFlow: StateFlow<List<Notice>> = _notices
+
+    private val _favs = MutableStateFlow<Set<String>>(emptySet())
+    /** Избранные проекты — сверху «Проектов». */
+    val favsFlow: StateFlow<Set<String>> = _favs
+
+    /** Звезда у проекта: поставить или снять. Файл крошечный — пишется сразу. */
+    suspend fun toggleFav(projectId: String) = mutex.withLock {
+        ensureLoaded()
+        val next = _favs.value.let { if (projectId in it) it - projectId else it + projectId }
+        _favs.value = next
+        val text = JSONObject().put("v", 1).put("projects", JSONArray().apply { next.sorted().forEach { put(it) } }).toString()
+        withContext(Dispatchers.IO) { StoreFiles.writeAtomic(favsFile, text) }
+    }
 
     private var views = LinkedHashMap<String, CachedView>()
     private val _views = MutableStateFlow<Map<String, CachedView>>(emptyMap())
@@ -302,6 +321,11 @@ class DelaStore(private val context: Context) {
             }
         }
         _views.value = LinkedHashMap(views)
+        withContext(Dispatchers.IO) {
+            StoreFiles.readOrQuarantine(favsFile) { JSONObject(it) }?.optJSONArray("projects")?.let { a ->
+                _favs.value = (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.isNotBlank() } }.toSet()
+            }
+        }
         loaded = true
         publish()
     }

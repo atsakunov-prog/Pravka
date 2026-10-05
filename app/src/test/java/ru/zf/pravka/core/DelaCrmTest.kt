@@ -279,18 +279,23 @@ class DelaCrmTest {
 
     @Test
     fun `route new — новые дела как итог Разноски, отмена — task cancel`() {
-        val t = part1.getJSONObject("sync_response").getJSONArray("tasks").getJSONObject(0)
-        val note = JSONObject().put("id", "n1").put("summary", "комитет пройден").put("project_id", t.getString("project_id"))
-        val d = JSONObject().put("ok", true).put("status", "done").put("route", "new").put("reply", "").put("changed", JSONArray())
-            .put("tasks", JSONArray().put(t)).put("notes", JSONArray().put(note)).put("errors", JSONArray())
+        // Пример снят с сервера (05.10): tasks — строки дел как в синке, notes — записи хронологии.
+        val d = ask.getJSONObject("done_new")
         val r = DelaAsk.parse(d)
         assertTrue(r.isNew)
-        assertEquals(57, r.tasks.single().num)
-        assertEquals("комитет пройден", r.notes.single().summary)
+        assertTrue(r.changed.isEmpty())
+        val t = r.tasks.single()
+        assertEquals(60, t.num)
+        assertEquals("Заведи позвонить Ивану завтра", t.title)
+        assertEquals("2026-10-06", t.dueDate)
+        assertEquals("Иван", t.who)
+        assertEquals(listOf("звонок"), t.labels)
+        assertEquals("Итог: комитет пройден", r.notes.single().summary)
+        assertEquals("", r.notes.single().projectId)
+        assertEquals(1, r.count)
         val undo = DelaAsk.undoOps(r)
         assertEquals("task.cancel", undo.single().getString("op"))
-        assertEquals(t.getString("id"), undo.single().getString("id"))
-        assertTrue(ask.getString("done_new").contains("route = new"))
+        assertEquals(t.id, undo.single().getString("id"))
     }
 
     @Test
@@ -394,20 +399,24 @@ class DelaCrmTest {
         val v = DelaCrm.ties(view("ties"))
         assertEquals("2026-10-05", v.today)
         val p = v.people.single()
-        assertEquals("Иван Петров", p.name)
-        assertEquals(1, p.sinceDays)
+        assertEquals("Ольга Смирнова", p.name)
+        assertEquals("quarter", p.cadence)
+        assertEquals("раз в квартал", DelaCrm.CADENCE[p.cadence])
+        assertEquals(40, p.sinceDays)
         assertFalse(p.due)
-        assertEquals(-29, p.overdueDays)
-        assertEquals(1, p.brought)
-        assertNull(p.birthdayIn)  // день рождения не записан — поля у сервера нет
+        assertEquals(-50, p.overdueDays)
+        assertEquals(1, p.agenda)
+        assertEquals(5, p.birthdayIn)
         assertTrue(v.due.isEmpty())
         assertEquals(listOf(p), v.rest)
-        assertTrue(v.birthdays.isEmpty())
-        // Сервер кладёт birthday_in тем, у кого день рождения записан.
-        val withBd = JSONObject(view("ties").toString())
-        withBd.getJSONArray("people").getJSONObject(0).put("birth_day", 12).put("birth_month", 10).put("birthday_in", 7).put("due", true)
-        val v2 = DelaCrm.ties(withBd)
-        assertEquals(7, v2.birthdays.single().birthdayIn)
+        assertEquals(listOf(p), v.birthdays)
+        // birthday_in есть только у тех, у кого записан день рождения: нет поля — не в «днях рождения».
+        val noBd = JSONObject(view("ties").toString())
+        noBd.getJSONArray("people").getJSONObject(0).remove("birthday_in")
+        noBd.getJSONArray("people").getJSONObject(0).put("due", true)
+        val v2 = DelaCrm.ties(noBd)
+        assertNull(v2.people.single().birthdayIn)
+        assertTrue(v2.birthdays.isEmpty())
         assertEquals(1, v2.due.size)
     }
 
@@ -463,8 +472,8 @@ class DelaCrmTest {
 
         val add = DelaCrm.interactionOp("call", "Обсудили тизер", nowIso, projectId = Dela.newId(), dealId = dealId, personIds = listOf("p1", "p1"))
         assertEquals(keysOf(ex[4]), keysOf(add))
-        // Поля записи — подмножество полей контракта плюс id (его сервер берёт, запись видна до ответа).
-        assertTrue(keysOf(add.getJSONObject("data")).minus(keysOf(ex[4].getJSONObject("data")) + "id").isEmpty())
+        // Поля записи — ровно поля контракта, с id телефона (запись видна до ответа и не удваивается).
+        assertEquals(keysOf(ex[4].getJSONObject("data")), keysOf(add.getJSONObject("data")))
         assertEquals("phone", add.getJSONObject("data").getString("source"))
         assertEquals(1, add.getJSONObject("data").getJSONArray("person_ids").length())
         // Неизвестный вид — заметка, а не отказ сервера.

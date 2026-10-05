@@ -152,6 +152,55 @@ internal fun AskBar(
 }
 
 /**
+ * Поле команды под строкой дела — как `askBox` веба: что сказано (правится и
+ * руками), «Claude правит…», причина отказа красным. Текст не пропадает, пока
+ * Claude не ответил: не вышло — «Ещё раз» тем же касанием.
+ */
+@Composable
+internal fun AskInline(
+    text: String,
+    onText: (String) -> Unit,
+    listening: Boolean,
+    running: Boolean,
+    error: String,
+    onMic: () -> Unit,
+    onSend: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    val c = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth().padding(start = 32.dp, bottom = 6.dp)) {
+        PaperField(
+            value = text,
+            onValueChange = onText,
+            placeholder = if (listening) "Слушаю — что сделать с делом…" else "«сделано», «на пятницу», «это Наташе», «это не моё»",
+            singleLine = false,
+            maxLines = 3,
+            enabled = !running,
+        )
+        if (running) ThinkingLine("Claude правит…", Modifier.padding(top = 4.dp))
+        if (error.isNotBlank() && !running) PaperHint(error, c.error)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            GlyphButton(
+                if (listening) Glyphs.Stop else Glyphs.Mic,
+                if (listening) "хватит слушать" else "сказать голосом",
+                tint = c.primary,
+                enabled = !running,
+                onClick = onMic,
+                size = 34.dp,
+            )
+            Spacer(Modifier.weight(1f))
+            GlyphButton(Glyphs.Close, "закрыть", onClick = onClose, size = 34.dp)
+            PaperTextButton(
+                if (error.isNotBlank()) "Ещё раз" else "Отдать Claude",
+                icon = Glyphs.Ask,
+                enabled = text.isNotBlank() && !running,
+                onClick = { onSend(text.trim()) },
+            )
+        }
+    }
+}
+
+/**
  * Итог команды: слова Claude, что поменялось («срок 06.10, в «Сейчас»»), новые
  * дела и заметки — и «Вернуть всё» одним движением (контракт, `ask.undo`).
  * Ошибка у команды, чья карточка уже закрыта, — тоже здесь: с текстом и «Ещё раз».

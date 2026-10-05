@@ -238,6 +238,47 @@ class DelaTest {
     }
 
     @Test
+    fun `проекты — как боковая панель веба`() {
+        val s0 = snap()
+        val beta = s0.projects.values.single()
+        val ivan = s0.people.values.single()
+        val zf = Dela.Project(id = "zf", name = "ЗФ", kind = "internal", sphere = "work", ownerId = "sasha")
+        val family = Dela.Project(id = "fam", name = "Семья", kind = "personal", sphere = "home", ownerId = "sasha")
+        val old = Dela.Project(id = "old", name = "Старый клиент", kind = "client", archivedAt = "2026-05-01T00:00:00+03:00")
+        fun task(id: String, f: (Dela.Task) -> Dela.Task) = f(Dela.Task(id = id, title = id, ownerId = "sasha", createdBy = "sasha", createdAt = nowIso, updatedAt = nowIso))
+        val tasks = listOf(
+            task("late") { it.copy(projectId = beta.id, dueDate = "2026-10-01") },
+            task("fam1") { it.copy(projectId = "fam", personId = ivan.id) },
+            task("inbox") { it.copy(dueDate = "2026-10-02") },
+            task("closed") { it.copy(projectId = "zf", status = Dela.DONE) },
+        )
+        val s = Dela.derive(s0.copy(
+            projects = s0.projects + listOf(zf, family, old).associateBy { it.id },
+            tasks = s0.tasks + tasks.associateBy { it.id },
+        ))
+        val nav = Dela.projectsNav(s, "sasha", today, "all", setOf("zf"))
+        // Избранное сверху и в своих группах больше не повторяется.
+        assertEquals(listOf("ЗФ"), nav.favorites.map { it.project.name })
+        assertEquals(0, nav.favorites.single().open)  // закрытое не считается
+        assertEquals(listOf("Клиенты", "Личное"), nav.groups.map { it.first })
+        val betaRow = nav.groups.first { it.first == "Клиенты" }.second.single()
+        assertEquals(2, betaRow.open)  // #57 и просроченное
+        assertTrue(betaRow.late)
+        assertFalse(nav.groups.first { it.first == "Личное" }.second.single().late)
+        // Люди — с кем больше открытых дел; архив — отдельно; «Входящие» — моё без проекта.
+        assertEquals(listOf(ivan.id to 2), nav.people.map { it.first.id to it.second })
+        assertEquals(listOf("Старый клиент"), nav.archived.map { it.project.name })
+        assertEquals(1, nav.inbox)
+        assertTrue(nav.inboxLate)
+        // Сфера «Работа» прячет домашний проект, но не архив и не людей.
+        val work = Dela.projectsNav(s, "sasha", today, "work", emptySet())
+        assertEquals(listOf("Клиенты", "Внутреннее"), work.groups.map { it.first })
+        assertEquals(1, work.archived.size)
+        // «Входящие» — страница проекта с пустым id: дела без проекта.
+        assertEquals(listOf("inbox"), Dela.project(s, "").open.map { it.id })
+    }
+
+    @Test
     fun `справочник для промпта и поиск по алиасам`() {
         val s = snap()
         val block = Dela.promptCatalog(s)
