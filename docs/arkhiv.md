@@ -135,10 +135,10 @@ Notion повторял это окно: выпавшее из телефона 
 | `strength.session` | `s<id>` | сессия с упражнениями и подходами | `StrengthStore` |
 | `strength.gtg` | `ГГГГ-ММ-ДД` | день зарядки | `StrengthStore` |
 | `strength.take` | `<id>` | сырая надиктовка силовых | `StrengthStore` |
-| `money.entry` | id записи | операция со всеми полями и `live` | `MoneyStore` |
-| `money.reference` | `all` | категории (с полкой), справочник, остатки, счета ЗФ | `MoneyStore`, `MoneyCategories` |
+| `money.entry` | id записи | операция со всеми полями и `live`; счёт баланса `balance_account`, у округления — `roundup_from` (05.10.2026) | `MoneyStore`, `MoneyCashflow.places` |
+| `money.reference` | `all` | категории (с полкой), справочник, якоря-снимки и вписанные (`anchors`), реестр счетов (`accounts`), что покрывают выписки (`statements`), счета ЗФ | `MoneyStore`, `MoneyCategories`, `MoneyEngine.anchors` |
 | `money.take` | `<id>` | сырая надиктовка денег | `MoneyStore` |
-| `money.push` | ключ пуша | сырое уведомление банка | `MoneyStore` |
+| `money.push` | ключ пуша | сырое уведомление банка; «Доступно» с узнанной картой — якорем `anchor` | `MoneyStore`, `MoneyEngine.anchors` |
 | `pravka.take` | `<ts>` | каждая диктовка: распознанный текст, движок, звук | `TranscriptionLog` |
 | `pravka.clean` | `<ts>` | чистка моделью: вход и выход | `HistoryLog` |
 | `pravka.correction` | `<id>` | правка владельца после модели | `CorrectionsLog` |
@@ -231,8 +231,12 @@ Notion повторял это окно: выпавшее из телефона 
 - **Телефон:** `phone_days`, `phone_apps`, `phone_sites`, `phone_calls`.
 - **Еда:** `meals`, `meal_items`, `micro`, `micro_days`, `norms`.
 - **Силовые:** `strength`, `strength_sets`, `gtg`, сырые надиктовки — `takes`.
-- **Деньги:** `money`, `money_live`, `money_categories`, `money_rules`,
-  `money_balances`, `bank_pushes`.
+- **Деньги:** `money` (с `balance_account`, `roundup_from`), `money_live`,
+  `money_categories`, `money_rules`, `money_balances` (все якоря: снимок,
+  вписанные, пуши; `covers`), `money_accounts` (реестр счетов),
+  `money_statements` (что покрывает каждая выписка), `bank_pushes`. Их же
+  читает сервис «Деньги» на компе — телефон шлёт счёт и якоря такими, какими
+  считает их сам (`docs/dengi.md`, «Деньги в архиве»).
 - **Правка:** `dictations`, `cleanups`, `corrections`.
 - **Спорт:** `workouts` (+ `workout_streams`), `wellness`, `plan`, `coach`.
 - **Общее:**

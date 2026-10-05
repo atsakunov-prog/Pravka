@@ -141,6 +141,23 @@ internal object HistoryFixes {
             val n = app.zasechkaStore.renameSource("todoist", "task")
             Result(app.zasechkaStore.all().size, n)
         },
+        // Наташа — партнёр, не на зарплате (владелец, 05.10.2026): платежи ей
+        // со счёта ЗФ — «ЗФ: выплата доли Наташе», а не команда. Новое правило
+        // справочника ложится само на ближайшей сверке; шаг — чтобы не ждать
+        // пуша или выписки: одна сверка сразу после обновления. Решения
+        // владельца сверка не трогает.
+        Step(
+            id = "2026-10-05-zf-partner",
+            title = "Деньги: платежи Наташе со счёта ЗФ — выплата её доли, а не команда",
+            files = listOf(MoneyStore.FILE_NAME),
+        ) { app ->
+            if (!app.profileStore.has(ru.zf.pravka.data.Profile.Mode.MONEY)) Result(0, 0, "Деньги выключены")
+            else {
+                app.moneyStore.load()
+                val r = app.moneyEngine.reconcile()
+                Result(r.entries.size, r.classified, "в «ЗФ: выплата доли Наташе»: ${r.entries.count { it.category == "zf_partner" }}")
+            }
+        },
     )
 
     private const val FILE = "history-fixes.json"

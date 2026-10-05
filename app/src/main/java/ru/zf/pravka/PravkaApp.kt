@@ -551,10 +551,12 @@ class PravkaApp : Application() {
                     if (!profileStore.has(ru.zf.pravka.data.Profile.Mode.MONEY)) return emptyList()
                     val st = moneyStore.load()
                     // Черновик до «ОК» — ещё не факт: уйдёт, когда станет записью или будет вычеркнут.
-                    st.entries.filter { !it.draft }.map { ev.moneyEntry(it, clock) } +
-                        ev.moneyReference(st, clock) +
+                    // Якоря и счета ЗФ — те же, что у баланса вкладки: сервер видит то же, что телефон.
+                    val anchors = moneyEngine.anchors()
+                    ev.moneyEntries(st.entries, clock) +
+                        ev.moneyReference(st, clock, anchors, moneyEngine.zfAccounts(), profileStore.current?.id ?: "user") +
                         st.takes.map { ev.moneyTake(it, clock) } +
-                        st.pushes.map { ev.moneyPush(it, clock) }
+                        ev.moneyPushes(st.pushes, anchors, st.entries, clock)
                 }
                 ArchiveDomain.SPORT -> {
                     if (!profileStore.has(ru.zf.pravka.data.Profile.Mode.SPORT)) return emptyList()

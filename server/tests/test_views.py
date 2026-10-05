@@ -66,8 +66,42 @@ def test_money_live_and_shelves(full):
     rows = full.execute("SELECT id, source, live, category_title, shelf FROM life.money ORDER BY id").fetchall()
     assert ("t:3fa1c0d2e4b5a6978812", "tinkoff", True, "Продукты", "family") in rows
     assert ("v:1757240000000:0", "voice", False, "Продукты", "family") in rows
-    assert one(full, "SELECT count(*) FROM life.money_live")[0] == 1
-    assert one(full, "SELECT amount_rub FROM life.money_live")[0] == -2150
+    assert one(full, "SELECT count(*) FROM life.money_live WHERE category = 'groceries'")[0] == 1
+    assert one(full, "SELECT amount_rub FROM life.money_live WHERE category = 'groceries'")[0] == -2150
+
+
+def test_money_balance_accounts_anchors_and_statements(full):
+    # Счёт каждой записи — как у телефона; у голоса без наличных его нет.
+    acc = dict(full.execute("SELECT id, balance_account FROM life.money").fetchall())
+    assert acc["t:3fa1c0d2e4b5a6978812"] == "Т-Банк · Тестовая карта"
+    assert acc["v:1757240000000:0"] is None
+    # Округление: копилка получила, карта покупки отдала.
+    r = one(full, "SELECT balance_account, roundup_from FROM life.money WHERE category = 'roundup'")
+    assert r == ("Т-Банк · Тестовая копилка", "Т-Банк · Тестовая карта")
+    # Якоря всех видов, у пуша — что уже вошло в число.
+    # Снимок и вписанное — из справочника, «Доступно» — из записи пуша.
+    anchors = full.execute("SELECT account, source, kop, covers, note FROM life.money_balances ORDER BY account, at").fetchall()
+    assert [a[1] for a in anchors] == ["вписано", "снимок", "пуш"]
+    push = anchors[-1]
+    assert push[2] == 14800000 and push[3] == ["push-0011223344556677", "t:3fa1c0d2e4b5a6978812"]
+    assert push[4] == "пуш «Покупка»"
+    assert anchors[1][3] == []
+    # Реестр счетов: сторона, долг, карты.
+    accounts = {a[0]: a[1:] for a in full.execute("SELECT name, side, kind, currency, cards, owner FROM life.money_accounts")}
+    assert accounts["Т-Бизнес · ЗФ"] == ("zf", "asset", "RUB", ["2222"], "sasha")
+    assert accounts["Т-Банк · Кредитка"][1] == "debt"
+    assert accounts["Т-Банк · Тестовая карта"][3] == ["0000", "1111"]
+    # Что покрывает выписка — дни и строки.
+    st = one(full, "SELECT bank, day_from, day_to, rows, loaded_at FROM life.money_statements WHERE account = 'Т-Банк · Тестовая карта'")
+    assert st[0] == "Т-Банк" and str(st[1]) == "2026-09-01" and str(st[2]) == "2026-09-07" and st[3] == 42
+    assert st[4] is not None
+
+
+def test_reader_sees_new_money_views(full, cfg):
+    with psycopg.connect(cfg.reader_url, autocommit=True) as r:
+        for v in ("money_accounts", "money_statements", "money_balances"):
+            assert r.execute(f"SELECT count(*) FROM life.{v}").fetchone()[0] > 0
+        assert r.execute("SELECT count(*) FROM life.money WHERE balance_account IS NOT NULL").fetchone()[0] == 2
 
 
 def test_food_micro_and_norms(full):

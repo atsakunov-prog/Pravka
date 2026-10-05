@@ -298,7 +298,9 @@ SELECT r.key                                      AS id,
        COALESCE((d->>'live')::boolean, false)     AS live,
        NULLIF(d->>'match_id', '')                 AS match_id,
        NULLIF(d->>'replaced_by', '')              AS replaced_by,
-       NULLIF(d->>'take_id', '')                  AS take_id
+       NULLIF(d->>'take_id', '')                  AS take_id,
+       NULLIF(d->>'balance_account', '')          AS balance_account,
+       NULLIF(d->>'roundup_from', '')             AS roundup_from
 FROM core.records r
 CROSS JOIN LATERAL (SELECT r.data AS d) x
 LEFT JOIN life.money_categories mc ON mc.key = d->>'category'
@@ -306,6 +308,9 @@ WHERE r.kind = 'money.entry' AND NOT r.deleted;
 COMMENT ON VIEW life.money IS 'Деньги семьи: каждая операция из голоса, выписки, пуша банка или руками. Дубли не сливаются, а связываются: в счёт идёт только live (решает телефон). amount_kop со знаком: минус — ушло. owner — чей счёт или надиктовка (sasha, marianna). category_by: owner сильнее rule и model.';
 COMMENT ON COLUMN life.money.live IS 'Идёт в счёт: не черновик, не вычеркнута, не заменена выпиской, голос без пары с банком.';
 COMMENT ON COLUMN life.money.shelf IS 'family — траты семьи, zf — ЗФ, service — не трата.';
+COMMENT ON COLUMN life.money.account IS 'Счёт, как его назвал банк или сказал владелец («… *1519»). Счёт баланса — balance_account.';
+COMMENT ON COLUMN life.money.balance_account IS 'На каком счёте баланса запись стоит у телефона (life.money_accounts.name): «Т-Банк · …», «Т-Бизнес · ЗФ», «Наличные». Пусто — ни на каком (голос без наличных, «Плати по миру»). Банкомат — на счёте банка: кошелёк получает вторую половину сам.';
+COMMENT ON COLUMN life.money.roundup_from IS 'У округления в копилку: счёт покупки, отдавший эти деньги (у него строки нет — он теряет ту же сумму в ту же секунду).';
 
 CREATE VIEW life.money_live AS
 SELECT * FROM life.money WHERE live;
@@ -319,18 +324,50 @@ FROM core.records r, jsonb_array_elements(r.data->'rules') x
 WHERE r.kind = 'money.reference' AND r.key = 'all' AND NOT r.deleted;
 COMMENT ON VIEW life.money_rules IS 'Справочник получателей владельца: шаблон — категория.';
 
+-- Якоря двух мест: снимок и вписанные — в справочнике (меняются редко),
+-- «Доступно» пуша — в записи самого пуша: справочник шлётся целиком на каждую
+-- правку, и пятнадцать пушей в день переотправляли бы его пятнадцать раз.
 CREATE VIEW life.money_balances AS
-SELECT x->>'account' AS account, (x->>'at')::timestamptz AS at, (x->>'kop')::bigint AS kop, x->>'source' AS source
+SELECT x->>'account' AS account, (x->>'at')::timestamptz AS at, (x->>'kop')::bigint AS kop, x->>'source' AS source,
+       ARRAY(SELECT jsonb_array_elements_text(COALESCE(x->'covers', '[]'::jsonb))) AS covers,
+       NULLIF(x->>'note', '') AS note
 FROM core.records r, jsonb_array_elements(r.data->'anchors') x
+WHERE r.kind = 'money.reference' AND r.key = 'all' AND NOT r.deleted
+UNION ALL
+SELECT x->>'account', (x->>'at')::timestamptz, (x->>'kop')::bigint, COALESCE(NULLIF(x->>'source', ''), 'пуш'),
+       ARRAY(SELECT jsonb_array_elements_text(COALESCE(x->'covers', '[]'::jsonb))),
+       NULLIF(x->>'note', '')
+FROM core.records r CROSS JOIN LATERAL (SELECT r.data->'anchor' AS x) a
+WHERE r.kind = 'money.push' AND NOT r.deleted AND jsonb_typeof(r.data->'anchor') = 'object';
+COMMENT ON VIEW life.money_balances IS 'Якоря остатков счетов — все, что знает баланс телефона: снимок владельца, вписанные на телефоне и «Доступно» из каждого пуша Т-Банка с узнанной картой. Остаток на момент = самый поздний якорь счёта + движения life.money по balance_account после него, кроме записей из covers.';
+COMMENT ON COLUMN life.money_balances.source IS 'снимок — заводской снимок владельца, вписано — на телефоне, пуш — «Доступно» из уведомления банка.';
+COMMENT ON COLUMN life.money_balances.covers IS 'Номера записей life.money, уже вошедших в это число: пуш и строка выписки, его заменившая. Их к якорю не прибавлять.';
+
+CREATE VIEW life.money_accounts AS
+SELECT x->>'name' AS name, x->>'side' AS side, x->>'kind' AS kind, COALESCE(NULLIF(x->>'currency', ''), 'RUB') AS currency,
+       ARRAY(SELECT jsonb_array_elements_text(COALESCE(x->'cards', '[]'::jsonb))) AS cards,
+       NULLIF(x->>'owner', '') AS owner
+FROM core.records r, jsonb_array_elements(COALESCE(r.data->'accounts', '[]'::jsonb)) x
 WHERE r.kind = 'money.reference' AND r.key = 'all' AND NOT r.deleted;
-COMMENT ON VIEW life.money_balances IS 'Вписанные остатки счетов на момент.';
+COMMENT ON VIEW life.money_accounts IS 'Счета баланса телефона: с движениями, с якорем и отмеченные счетами ЗФ. name — то же имя, что life.money.balance_account и life.money_balances.account.';
+COMMENT ON COLUMN life.money_accounts.side IS 'zf — деньги ЗФ, personal — личные.';
+COMMENT ON COLUMN life.money_accounts.kind IS 'asset — актив, debt — долг (кредитка, кредит, займ от ЗФ, долг Наташе): и с нулём стоит в обязательствах.';
+COMMENT ON COLUMN life.money_accounts.cards IS 'Хвосты карт, которые ведут на этот счёт.';
+
+CREATE VIEW life.money_statements AS
+SELECT x->>'bank' AS bank, NULLIF(x->>'account', '') AS account,
+       (x->>'from')::date AS day_from, (x->>'to')::date AS day_to,
+       (x->>'rows')::int AS rows, (x->>'loaded_at')::timestamptz AS loaded_at
+FROM core.records r, jsonb_array_elements(COALESCE(r.data->'statements', '[]'::jsonb)) x
+WHERE r.kind = 'money.reference' AND r.key = 'all' AND NOT r.deleted;
+COMMENT ON VIEW life.money_statements IS 'Что покрывает каждая загруженная выписка: банк, счёт баланса, дни с первой по последнюю строку счёта, строк, когда загружена. День внутри day_from…day_to без операций счёта — операций не было; день вне всех выписок счёта — выписки нет, судить нельзя.';
 
 CREATE VIEW life.bank_pushes AS
 SELECT r.key AS key, (d->>'at')::timestamptz AS at, (d->>'day')::date AS day, d->>'pkg' AS pkg,
        d->>'title' AS title, d->>'text' AS text, NULLIF(d->>'result', '') AS result
 FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'money.push' AND NOT r.deleted;
-COMMENT ON VIEW life.bank_pushes IS 'Сырые уведомления банков, из которых выведены операции.';
+COMMENT ON VIEW life.bank_pushes IS 'Сырые уведомления банков, из которых выведены операции. «Доступно» из пуша как якорь остатка — в life.money_balances (source = пуш).';
 
 -- ---------------------------------------------------------------- Правка
 

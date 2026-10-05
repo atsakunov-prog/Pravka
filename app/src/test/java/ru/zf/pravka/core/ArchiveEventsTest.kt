@@ -80,11 +80,13 @@ class ArchiveEventsTest {
         )
         val money = MoneyEntry(
             id = "t:abc", owner = "sasha", source = MoneyEntry.Source.TINKOFF, ts = t0, rubKop = -45_000,
-            what = "ВкусВилл", category = "food", takeId = 0L,
+            what = "ВкусВилл", category = "food", takeId = 0L, account = "Карта *1111",
         )
         val state = MoneyStore.State(
+            entries = listOf(money),
             rules = listOf(MoneyRules.Rule("вкусвилл", "food")),
-            balances = listOf(MoneyCashflow.Anchor("Т-Банк", t0, 100_000, "push")),
+            balances = listOf(MoneyCashflow.Anchor("Т-Банк · Карта", t0, 100_000, "вписано")),
+            imports = listOf(MoneyStore.Import(t0 + 3_600_000L, "Тиньков", "sasha", 1, 1, t0, t0)),
             zfAccounts = setOf("*1111"),
             notZfAccounts = setOf("*2222"),
         )
@@ -111,7 +113,10 @@ class ArchiveEventsTest {
             ArchiveEvents.moneyReference(state, clock),
             ArchiveEvents.moneyEntry(money, clock),
             ArchiveEvents.moneyTake(MoneyStore.Take(t0, "кофе 300", 0.001, "m"), clock),
-            ArchiveEvents.moneyPush(MoneyStore.Push("push-1", t0, "com.idamob.tinkoff.android", "Покупка", "450 ₽", "ok"), clock),
+            ArchiveEvents.moneyPush(
+                MoneyStore.Push("push-1", t0, "com.idamob.tinkoff.android", "Покупка", "450 ₽", "ok"), clock,
+                MoneyCashflow.Anchor("Т-Банк · Карта", t0, 100_000, "пуш «Покупка»", covers = setOf("push-push-1"), origin = MoneyCashflow.Origin.PUSH),
+            ),
             ArchiveEvents.pravkaTake(take, clock)!!,
             ArchiveEvents.pravkaClean(clean, clock)!!,
             ArchiveEvents.correction(5, t0, "org.telegram", "сказал", "модель", "итог", "dict", clock),
@@ -127,6 +132,97 @@ class ArchiveEventsTest {
         for (u in made) {
             assertEquals("ключи вида ${u.kind}", shape(c.getValue(u.kind)), shape(u.data))
         }
+    }
+
+    // ------------------------------------------------------------------ Деньги: баланс для сервера
+
+    private fun tx(id: String, ts: Long, kop: Long, account: String, category: String = "groceries", src: MoneyEntry.Source = MoneyEntry.Source.TINKOFF) =
+        MoneyEntry(id = id, owner = "sasha", source = src, ts = ts, rubKop = kop, what = id, category = category, account = account)
+
+    @Test
+    fun `якоря — снимок и вписанные в справочнике, каждый пуш — в своей записи`() {
+        val push1 = tx("push-a", t0, -10_000, "Т-Банк *1111", src = MoneyEntry.Source.PUSH).copy(replacedBy = "t:row")
+        val row = tx("t:row", t0 + 30_000, -10_000, "Карта *1111")
+        val state = MoneyStore.State(entries = listOf(push1, row))
+        val anchors = listOf(
+            MoneyCashflow.Anchor("Т-Банк · Карта", t0 - 86_400_000L, 5_000_000, "снимок банка", origin = MoneyCashflow.Origin.SNAPSHOT),
+            MoneyCashflow.Anchor("Т-Банк · Карта", t0, 4_990_000, "пуш «А»", covers = setOf("push-a"), origin = MoneyCashflow.Origin.PUSH),
+            MoneyCashflow.Anchor("Т-Банк · Карта", t0 + 3_600_000L, 4_980_000, "пуш «Б»", covers = setOf("push-b"), origin = MoneyCashflow.Origin.PUSH),
+            MoneyCashflow.Anchor("Наличные", t0, 300_000, "вписано"),
+        )
+        val ref = ArchiveEvents.moneyReference(state, clock, anchors).data.getJSONArray("anchors")
+        val list = (0 until ref.length()).map { ref.getJSONObject(it) }
+        // Справочник — только снимок и вписанное: пуши в нём переотправляли бы его на каждый пуш.
+        assertEquals(listOf("вписано", "снимок"), list.map { it.getString("source") })
+        assertEquals("снимок банка", list[1].getString("note"))
+        val raw = listOf(
+            MoneyStore.Push("a", t0, "com.idamob.tinkoff.android", "Покупка", "…", "запись"),
+            MoneyStore.Push("b", t0 + 3_600_000L, "com.idamob.tinkoff.android", "Покупка", "…", "запись"),
+            MoneyStore.Push("c", t0 + 7_200_000L, "com.idamob.tinkoff.android", "Платежи", "Отказ", "отказ"),
+        )
+        val pushes = ArchiveEvents.moneyPushes(raw, anchors, state.entries, clock).associateBy { it.key }
+        val a = pushes.getValue("a").data.getJSONObject("anchor")
+        assertEquals("пуш", a.getString("source"))
+        assertEquals(4_990_000L, a.getLong("kop"))
+        assertEquals("Т-Банк · Карта", a.getString("account"))
+        // Пуш, который заменила строка выписки, несёт и её номер: в «Доступно» она уже вошла.
+        assertEquals(listOf("push-a", "t:row"), (0 until a.getJSONArray("covers").length()).map { a.getJSONArray("covers").getString(it) })
+        assertEquals(4_980_000L, pushes.getValue("b").data.getJSONObject("anchor").getLong("kop"))
+        // Отказ — без якоря.
+        assertTrue(pushes.getValue("c").data.isNull("anchor"))
+    }
+
+    @Test
+    fun `счёт каждой записи — как у баланса, округление помнит счёт покупки`() {
+        val buy = tx("t:buy", t0, -98_000, "Карта *1111")
+        val round = tx("t:round", t0, -2_000, "Копилка", category = "roundup").copy(rubKop = 2_000)
+        val cash = MoneyEntry(id = "v:1", owner = "sasha", source = MoneyEntry.Source.VOICE, ts = t0, rubKop = -50_000, what = "кофе", category = "cafe", account = MoneyEntry.CASH)
+        val voice = cash.copy(id = "v:2", account = "")
+        val draft = cash.copy(id = "v:3", draft = true)
+        val items = ArchiveEvents.moneyEntries(listOf(buy, round, cash, voice, draft), clock).associateBy { it.key }
+        assertEquals(setOf("t:buy", "t:round", "v:1", "v:2"), items.keys)
+        assertEquals("Т-Банк · Карта", items.getValue("t:buy").data.getString("balance_account"))
+        assertEquals("Т-Банк · Копилка", items.getValue("t:round").data.getString("balance_account"))
+        assertEquals("Т-Банк · Карта", items.getValue("t:round").data.getString("roundup_from"))
+        assertTrue(items.getValue("t:buy").data.isNull("roundup_from"))
+        assertEquals(MoneyCashflow.WALLET, items.getValue("v:1").data.getString("balance_account"))
+        assertTrue(items.getValue("v:2").data.isNull("balance_account"))
+    }
+
+    @Test
+    fun `реестр счетов и что покрывают выписки`() {
+        val bp = tx("t:1", t0, -10_000, "Карта *1111")
+        val bp2 = tx("t:2", t0 + 2 * 86_400_000L, -20_000, "Карта *2222")
+        val save = tx("t:3", t0 + 86_400_000L, 500, "Копилка", category = "roundup")
+        val zf = tx("z:1", t0, 1_000_000, "ЗФ", category = "zf_revenue", src = MoneyEntry.Source.TBIZ)
+        val alfa = tx("a:1", t0, -30_000, "Счёт", src = MoneyEntry.Source.ALFA).copy(owner = "marianna")
+        val state = MoneyStore.State(
+            entries = listOf(bp, bp2, save, zf, alfa),
+            imports = listOf(
+                MoneyStore.Import(t0 + 5 * 86_400_000L, "Тиньков", "sasha", 3, 3, t0, t0 + 2 * 86_400_000L),
+                MoneyStore.Import(t0 + 5 * 86_400_000L + 60_000, "ЗФ", "sasha", 1, 1, t0, t0),
+                MoneyStore.Import(t0 + 5 * 86_400_000L + 120_000, "Плати", "sasha", 4, 4, t0, t0),
+            ),
+        )
+        val anchors = listOf(MoneyCashflow.Anchor("Т-Банк · Платинум", t0, -7_000_000, "кредитка", origin = MoneyCashflow.Origin.SNAPSHOT))
+        val data = ArchiveEvents.moneyReference(state, clock, anchors, setOf(MoneyCashflow.TBIZ_NAME), "sasha").data
+        val acc = data.getJSONArray("accounts").let { a -> (0 until a.length()).map { a.getJSONObject(it) } }.associateBy { it.getString("name") }
+        assertEquals("zf", acc.getValue(MoneyCashflow.TBIZ_NAME).getString("side"))
+        assertEquals("debt", acc.getValue("Т-Банк · Платинум").getString("kind"))
+        assertEquals("asset", acc.getValue("Т-Банк · Карта").getString("kind"))
+        assertEquals("marianna", acc.getValue("Альфа · Счёт").getString("owner"))
+        assertEquals("personal", acc.getValue("Альфа · Счёт").getString("side"))
+        val cards = acc.getValue("Т-Банк · Карта").getJSONArray("cards")
+        assertEquals(listOf("1111", "2222"), (0 until cards.length()).map { cards.getString(it) })
+        val st = data.getJSONArray("statements").let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
+        // Выгрузка «все карты» — строка на счёт; чат «Плати» — не выписка банка.
+        assertEquals(listOf("Т-Банк · Карта", "Т-Банк · Копилка", MoneyCashflow.TBIZ_NAME), st.map { it.getString("account") })
+        assertEquals(listOf("Т-Банк", "Т-Банк", "Т-Бизнес"), st.map { it.getString("bank") })
+        assertEquals("2026-09-07", st[0].getString("from"))
+        assertEquals("2026-09-09", st[0].getString("to"))
+        assertEquals(2, st[0].getInt("rows"))
+        assertEquals("2026-09-08", st[1].getString("from"))
+        assertEquals(clock.iso(t0 + 5 * 86_400_000L), st[0].getString("loaded_at"))
     }
 
     @Test
