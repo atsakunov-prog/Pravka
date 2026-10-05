@@ -333,7 +333,7 @@ private fun FeedList(
 
 /** Та же книга, что и запись каталога: по имени папки, в которую её положили. */
 private fun sameBook(book: Book, entry: OpdsEntry): Boolean =
-    book.textDocId != null && book.id.endsWith("/${CatalogState.folderName(entry)}")
+    book.textDocId != null && "/${CatalogState.folderName(entry)}".let { book.phoneKey.endsWith(it) || book.id.endsWith(it) }
 
 @Composable
 private fun SectionLabel(text: String) {

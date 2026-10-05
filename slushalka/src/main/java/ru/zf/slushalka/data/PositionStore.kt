@@ -129,6 +129,34 @@ fun mergeStates(local: BookState, remote: BookState): Pair<BookState, Merged> {
 }
 
 /**
+ * Две копии одной книги в один ключ ([PositionStore.rekey]): у Синдбада и
+ * Джорджа места жили под двумя-тремя ключами. Каждое место - самое свежее
+ * по своему времени, как при слиянии с другим устройством; прослушанное
+ * складывается (это разные часы), история - вместе. Отметки «я тут» - одной
+ * копии целиком, смешивать нельзя: они про свою запись. [fromAnchors] -
+ * отметки копии [from] главнее (она - главная копия, её звук и играет).
+ */
+fun mergeCopies(into: BookState, from: BookState, fromAnchors: Boolean): BookState {
+    var s = mergeStates(into, from).first
+    val newer = if (from.updatedAt > into.updatedAt) from else into
+    val anchors = when {
+        fromAnchors && from.anchors.isNotEmpty() -> from.anchors
+        into.anchors.isNotEmpty() -> into.anchors
+        else -> from.anchors
+    }
+    s = s.copy(
+        bookId = into.bookId,
+        speed = newer.speed.takeIf { it > 0f } ?: into.speed.takeIf { it > 0f } ?: from.speed,
+        anchors = anchors,
+        listenedMs = into.listenedMs + from.listenedMs,
+        history = (into.history + from.history).sortedBy { it.at }.distinct().takeLast(40),
+        finished = newer.finished,
+        updatedAt = maxOf(into.updatedAt, from.updatedAt, s.updatedAt),
+    )
+    return s
+}
+
+/**
  * Позиции в книгах - самое незаменимое, что здесь есть.
  *
  * Пишется на диск не «когда-нибудь потом», а тиком раз в двадцать секунд плюс
@@ -235,6 +263,27 @@ class PositionStore(context: Context) {
         )
         lastBookId = bookId
         persist()
+    }
+
+    /**
+     * Данные книги - под другой ключ: копия на телефоне узнана как книга
+     * сервера. Под новым ключом уже что-то есть - сливается ([mergeCopies]).
+     * «Продолжить» переезжает вместе. true - что-то перенеслось.
+     */
+    @Synchronized
+    fun rekey(old: String, new: String, fromAnchors: Boolean): Boolean {
+        if (old == new) return false
+        val from = states.remove(old)
+        val last = lastBookId == old
+        if (from == null && !last) return false
+        if (from != null) {
+            val moved = from.copy(bookId = new)
+            val into = states[new]
+            states[new] = if (into == null) moved else mergeCopies(into, moved, fromAnchors)
+        }
+        if (last) lastBookId = new
+        persist()
+        return true
     }
 
     /** Книгу открыли: она - последняя, даже если ещё не слушали и не листали. */

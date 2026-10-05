@@ -280,7 +280,10 @@ class CatalogState(private val app: SlushalkaApp) {
      */
     fun inLibrary(entry: OpdsEntry): Book? {
         val suffix = "/${folderName(entry)}"
-        return app.state.books.value.firstOrNull { it.id.endsWith(suffix) && it.textDocId != null }
+        // Узнанная сервером книга живёт под его ключом - своя папка видна по пути телефона.
+        return app.state.books.value.firstOrNull {
+            (it.phoneKey.endsWith(suffix) || it.id.endsWith(suffix)) && it.textDocId != null
+        }
     }
 
     fun dismissDownload() {

@@ -154,6 +154,7 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
             }
 
             CloudSettings(app)
+            if (prefs.cloudReady) ShelfSyncSettings(app)
             if (prefs.cloudReady) StreamSettings(app)
 
             Section("Флибуста")
@@ -741,6 +742,43 @@ private fun CloudSettings(app: SlushalkaApp) {
  * 128 кбит/с - около 60 МБ: столько уходит и в трафик, и в кэш.
  */
 @OptIn(ExperimentalLayoutApi::class)
+/**
+ * Сверка с библиотекой: что сказал сервер о своих папках и журнал - что
+ * переименовано, перенесено, убрано и выгружено. Руками делать ничего не
+ * нужно; это - чтобы было видно, что происходит.
+ */
+@Composable
+private fun ShelfSyncSettings(app: SlushalkaApp) {
+    val status by app.shelf.status.collectAsState()
+    val log by app.shelf.log.collectAsState()
+    var all by remember { mutableStateOf(false) }
+    Section("Сверка с библиотекой")
+    Text(status.ifBlank { "Полка ещё не сверялась" }, style = MaterialTheme.typography.bodyMedium)
+    Note(
+        "Полка одна: книги библиотеки на сервере, своя папка на телефоне - их копия под тем же " +
+            "названием. Раз в десять минут после перемен телефон отправляет серверу список своих " +
+            "папок, сервер отвечает, какая это книга у него. Папка со старым именем " +
+            "переименовывается в серверное, места, вопросы и пометки переезжают к книге, лишняя " +
+            "копия убирается, когда у сервера есть всё, что в ней. Чего у сервера нет - звук, " +
+            "текст, книга целиком - уезжает туда сам, только по Wi-Fi."
+    )
+    TextButton(onClick = { app.shelf.checkNow() }) { Text("Сверить сейчас") }
+    if (log.isNotEmpty()) {
+        val lines = if (all) log.asReversed() else log.asReversed().take(6)
+        lines.forEach { line ->
+            Text(
+                line,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 2.dp),
+            )
+        }
+        if (log.size > 6) {
+            TextButton(onClick = { all = !all }) { Text(if (all) "Короче" else "Весь журнал · ${log.size}") }
+        }
+    }
+}
+
 @Composable
 private fun StreamSettings(app: SlushalkaApp) {
     val prefs by app.state.prefs.collectAsState()

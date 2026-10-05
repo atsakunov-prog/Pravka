@@ -31,6 +31,8 @@ class GuideStore(context: Context) {
         }
     }
 
+    fun has(bookId: String): Boolean = file(bookId).exists()
+
     private fun file(bookId: String): File {
         val md = MessageDigest.getInstance("SHA-1").digest(bookId.toByteArray())
         return File(dir, md.joinToString("") { "%02x".format(it) }.take(16) + ".json")

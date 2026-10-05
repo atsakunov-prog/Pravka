@@ -93,6 +93,17 @@ class RazborEngine(
 
     fun of(bookId: String): Razbor? = _states.value[bookId]
 
+    /** Копия разбора - под ключ сервера; прочитанное в памяти перечитается при открытии. */
+    fun rekey(old: String, new: String): Boolean {
+        val moved = store.rekey(old, new)
+        if (_states.value.containsKey(old) || _orders.value.containsKey(old)) {
+            _states.update { it - old }
+            _orders.update { it - old }
+            return true
+        }
+        return moved
+    }
+
     /**
      * Есть ли у книги разбор - не открывая её, для карточки на полке: его уже
      * читали (копия на телефоне) или сервер назвал файл в оглавлении.

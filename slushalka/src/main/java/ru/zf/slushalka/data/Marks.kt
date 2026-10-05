@@ -42,6 +42,16 @@ class Bookmarks(context: Context) {
         persist()
     }
 
+    /** Закладки книги - под ключ сервера, вместе с теми, что там уже есть. */
+    @Synchronized
+    fun rekey(old: String, new: String): Boolean {
+        if (old == new) return false
+        val from = byBook.remove(old) ?: return false
+        byBook[new] = (byBook[new].orEmpty() + from).distinctBy { it.absMs to it.at }.sortedBy { it.absMs }.toMutableList()
+        persist()
+        return true
+    }
+
     private fun persist() {
         val root = JSONObject()
         byBook.forEach { (id, list) ->
@@ -124,16 +134,27 @@ class AskLog(context: Context) {
     @Synchronized
     fun merge(bookId: String, remote: List<Ask>): Boolean {
         val list = byBook.getOrPut(bookId) { mutableListOf() }
-        val known = list.mapTo(HashSet()) { it.at }
-        val fresh = remote.filter { it.at !in known && it.question.isNotBlank() }
-        if (fresh.isEmpty()) return false
-        list.addAll(fresh)
-        list.sortBy { it.at }
-        while (list.size > KEEP) list.removeAt(0)
+        val merged = union(list, remote)
+        if (merged.size == list.size) return false
+        byBook[bookId] = merged.toMutableList()
         revision++
         persist()
         return true
     }
+
+    /** Вопросы книги - под ключ сервера: две копии одной книги - один разговор. */
+    @Synchronized
+    fun rekey(old: String, new: String): Boolean {
+        if (old == new) return false
+        val from = byBook.remove(old) ?: return false
+        byBook[new] = union(byBook[new].orEmpty(), from).toMutableList()
+        revision++
+        persist()
+        return true
+    }
+
+    @Synchronized
+    fun has(bookId: String): Boolean = byBook[bookId]?.isNotEmpty() == true
 
     @Synchronized
     fun totalUsd(): Double = byBook.values.sumOf { list -> list.sumOf { it.costUsd } }
@@ -142,8 +163,19 @@ class AskLog(context: Context) {
     @Synchronized
     fun count(): Int = byBook.values.sumOf { it.size }
 
-    private companion object {
-        const val KEEP = 50
+    companion object {
+        private const val KEEP = 50
+
+        /**
+         * Вопросы двух списков вместе. Один и тот же вопрос узнаётся по
+         * времени: два разных не задашь в одну миллисекунду. По времени, не
+         * больше полусотни последних.
+         */
+        fun union(a: List<Ask>, b: List<Ask>): List<Ask> {
+            val known = a.mapTo(HashSet()) { it.at }
+            val fresh = b.filter { it.at !in known && it.question.isNotBlank() }
+            return (a + fresh).sortedBy { it.at }.takeLast(KEEP)
+        }
     }
 
     private fun persist() {

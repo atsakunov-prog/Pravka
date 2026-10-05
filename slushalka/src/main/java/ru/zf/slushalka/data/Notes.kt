@@ -91,6 +91,16 @@ class Notes(context: Context) {
         return any
     }
 
+    /** Пометки книги - под ключ сервера, вместе с теми, что там уже есть. */
+    @Synchronized
+    fun rekey(old: String, new: String): Boolean {
+        if (old == new) return false
+        val from = byBook.remove(old) ?: return false
+        byBook[new] = union(byBook[new].orEmpty(), from).toMutableList()
+        changed()
+        return true
+    }
+
     private fun changed() {
         _revision.value = _revision.value + 1
         val root = JSONObject()
@@ -100,6 +110,16 @@ class Notes(context: Context) {
     }
 
     companion object {
+        /** Пометки двух списков: одна и та же узнаётся по [Note.id], свежая правка побеждает. */
+        fun union(a: List<Note>, b: List<Note>): List<Note> {
+            val out = LinkedHashMap<Long, Note>()
+            for (n in a + b) {
+                val had = out[n.id]
+                if (had == null || n.updatedAt > had.updatedAt) out[n.id] = n
+            }
+            return out.values.toList()
+        }
+
         fun toJson(list: List<Note>): JSONArray = JSONArray().apply {
             list.forEach {
                 put(

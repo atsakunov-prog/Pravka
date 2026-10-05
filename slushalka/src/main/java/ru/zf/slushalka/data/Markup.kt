@@ -80,7 +80,8 @@ class Markup(private val dir: BookDir) {
 
     suspend fun delete(book: Book): Boolean = dir.delete(book, FILE)
 
-    private companion object {
+    companion object {
+        /** Карта рядом с книгой - на телефоне и в её папке на сервере. */
         const val FILE = "слушалка-разметка.json"
     }
 }

@@ -22,6 +22,16 @@ class RazborStore(context: Context) {
         Store.post { Store.writeAtomic(file(bookId), raw) }
     }
 
+    /** Копия разбора - под ключ сервера, если там своей нет. */
+    fun rekey(old: String, new: String): Boolean {
+        val from = file(old)
+        if (old == new || !from.exists()) return false
+        val to = file(new)
+        if (!to.exists()) runCatching { from.copyTo(to, overwrite = false) }
+        from.delete()
+        return true
+    }
+
     private fun file(bookId: String): File {
         val md = MessageDigest.getInstance("SHA-1").digest(bookId.toByteArray())
         return File(dir, md.joinToString("") { "%02x".format(it) }.take(16) + ".json")

@@ -216,6 +216,28 @@ class Journal(context: Context) {
         return if (o == null) ArrayList(closed) else ArrayList(closed).also { it.add(o) }
     }
 
+    /** Подходы книги - под ключ сервера: статистика у копий одной книги общая. */
+    @Synchronized
+    fun rekey(old: String, new: String): Boolean {
+        if (old == new) return false
+        var any = false
+        for (i in closed.indices) {
+            if (closed[i].bookId == old) {
+                closed[i] = closed[i].copy(bookId = new)
+                any = true
+            }
+        }
+        open?.takeIf { it.bookId == old }?.let {
+            open = it.copy(bookId = new)
+            any = true
+        }
+        if (!any) return false
+        dirty = true
+        _rev.value = _rev.value + 1
+        persistMaybe(System.currentTimeMillis(), force = true)
+        return true
+    }
+
     // ---------------------------------------------------------------- запись
 
     /** Уход из приложения - записать, что накопилось. */

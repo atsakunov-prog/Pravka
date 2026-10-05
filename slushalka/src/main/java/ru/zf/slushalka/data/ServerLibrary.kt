@@ -61,6 +61,12 @@ class ServerLibrary(
         /** Серия и номер в ней - если сервер их кладёт в оглавление (`series`, `series_index`). */
         val series: String? = null,
         val seriesNum: String? = null,
+        /**
+         * Прежние имена книги: папки и ключи телефонов, под которыми она жила
+         * до раскладки сервером. Их кладёт сверка полки - по ним любое
+         * устройство узнаёт свою папку со старым именем без своей сверки.
+         */
+        val former: List<String> = emptyList(),
     ) {
         val audioBytes: Long get() = audio.sumOf { it.size }
 
@@ -102,6 +108,23 @@ class ServerLibrary(
         fun byFolder(folder: String): ServerBook? = keyed[folderKey(folder)]
 
         private val keyed: Map<String, ServerBook> by lazy { books.associateBy { folderKey(it.folder) } }
+
+        /**
+         * Книга, у которой это имя - прежнее: папка телефона до раскладки или
+         * ключ целиком (`Books/Папка`). Нынешнее имя другой книги главнее -
+         * его ищут через [byFolder] раньше.
+         */
+        fun byFormer(name: String): ServerBook? = formerKeyed[folderKey(name)]
+            ?: formerKeyed[folderKey(name.substringAfterLast('/'))]
+
+        private val formerKeyed: Map<String, ServerBook> by lazy {
+            val out = HashMap<String, ServerBook>()
+            for (b in books) for (f in b.former) {
+                out.putIfAbsent(folderKey(f), b)
+                out.putIfAbsent(folderKey(f.substringAfterLast('/')), b)
+            }
+            out
+        }
     }
 
     sealed interface Status {
@@ -262,6 +285,7 @@ class ServerLibrary(
                     audio = entries(b.optJSONArray("audio")).sortedWith(AudioOrder),
                     audioMs = b.optLong("audio_ms"),
                     other = entries(b.optJSONArray("other")),
+                    former = formerOf(b),
                 ).let { book -> seriesOf(b)?.let { (name, num) -> book.copy(series = name, seriesNum = num) } ?: book }
             }
             return Index(
@@ -294,6 +318,21 @@ class ServerLibrary(
             }
             return str(b, "series_name")?.takeIf { it.isNotBlank() }
                 ?.let { it to number(b, "series_index", "series_number", "series_num") }
+        }
+
+        /**
+         * Прежние имена: список строк или объектов с именем папки или ключом
+         * (`folder`, `key`, `name`) - сервер волен положить и так, и так.
+         */
+        private fun formerOf(b: JSONObject): List<String> {
+            val arr = b.optJSONArray("former") ?: return emptyList()
+            return (0 until arr.length()).mapNotNull { i ->
+                when (val v = arr.opt(i)) {
+                    is String -> v
+                    is JSONObject -> str(v, "folder", "key", "name")
+                    else -> null
+                }?.trim()?.trim('/')?.takeIf { it.isNotBlank() }
+            }.distinct()
         }
 
         /** Строка из первого поля, что есть и не null: имя поля у сервера могли выбрать любое из похожих. */

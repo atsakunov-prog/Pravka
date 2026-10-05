@@ -104,6 +104,9 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     транспорт между устройствами — сторонняя синхронизация папки или облако
     по WebDAV: `Cloud.kt` — клиент (PROPFIND/GET/PUT/MKCOL/MOVE, `stat`,
     запись через `.partial` + MOVE — `putTextAtomic`/`uploadAtomic`;
+    `Destination` — путь от корня сервера, на 502 — полный адрес, рабочая
+    форма помнится (`Cloud.moveVia`); MOVE не прошёл — текст PUT в конечное
+    имя и DELETE `.partial`, книги и звук — ошибка;
     Яндекс.Диск с паролем приложения; папка `/` — корень сервера,
     `Prefs.cloudAtRoot`), те же файлы в `<папка>/_Слушалка`, тела собирает
     companion `PositionSync`; книги в облаке — `CloudBooks.kt`, папки в
@@ -125,18 +128,34 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     `serverBooks`, `bookById` (полка, потом сервер), `deleteFromPhone`. У
     файла книги источник: `BookFile.remote` (путь от корня облака) или
     `docId`; у книги — `remoteDir`, `textRemote`, `coverRemote`,
-    `hasText`/`onPhone`/`streams`. Полка — переключатель
-    `Prefs.libraryView` (`ViewSwitch` в `LibraryScreen`), метки «на
-    телефоне / текст на телефоне / на сервере», меню `ServerBookMenu`.
-    Телефон и сервер сравнивают книги по имени папки без регистра
-    (`ServerLibrary.folderKey`). Серия — `Book.series/seriesNum` (null — не
+    `hasText`/`onPhone`/`streams`. **Полка одна** (05.10, владелец: «одна
+    правда на сервере») — книги `index.json` плюс книги телефона, которых
+    там нет; переключателя нет. Своя папка — копия книги сервера под её
+    ключом (`library/OneShelf.kt`: псевдоним сверки → то же имя без регистра
+    `ServerLibrary.folderKey` → `former` в оглавлении), в одежде сервера
+    (название, автор, серия, обложка; чего своего нет — звук/текст с
+    сервера); `Book.phoneId`/`phoneKey`/`phoneFolder` — своя папка, только
+    для сверки и переименования. `AppState`: `raw` (как нашёл сканер, на
+    диске — они) → `readopt()` → `books` + `adopted()` (главные, лишние
+    копии, `keyOf`), `canonicalOf` — ключ для мест/вопросов/пометок с
+    других устройств, `start()` — из конца `onCreate`. Сверка —
+    `data/ShelfSync.kt`: `полка-<имя>@<устр>.json` (запуск, перемены, не
+    чаще 10 мин, `checkNow`), ответ `сверка-…json` (`shelf_at` — на какую
+    полку), псевдонимы, уборка `tidy` (перенос данных `rekey` во всех
+    хранилищах, `renameDocument`, удаление лишней копии при пустом `need`,
+    справочник/разметка на сервер), докладка `need audio/text` во входящие
+    с `слушалка-куда.json` первым и `need book` — книга в корень, только
+    Wi-Fi; журнал — «Настройки → Сверка с библиотекой». На полке — значок
+    `CopyBadge` (телефон закрашенный / контуром / доля / стрелка вверх),
+    «только на телефоне» у неузнанной; тап по нескачанной — с сервера;
+    долгое — окно `BookSheet` (скачать, удалить копию). Серия — `Book.series/seriesNum` (null — не
     смотрели, "" — нет): `text/BookMeta.kt` читает голову fb2/epub,
     `AppState.fillSeries` — в фоне пачками, заодно фамилия автора
     `Book.authorKey`; у сервера — `series`/`series_index` в `index.json`
     (`ServerLibrary.seriesOf` понимает и объект, и список), его серия
     главнее. Порядок — `Prefs.shelfSort`, `shelfOrder` + `SortButton`. На полке — `SeriesLink` (фильтр), плашка
     `SeriesBar`; вид `Prefs.shelfLayout` (плитки `BookTile` / список
-    `BookRow`), «скачать» — `DownloadButton` + `DownloadOffer`. «Только текст» — `CloudBooks.downloadText`
+    `BookRow`). «Только текст» — `CloudBooks.downloadText`
     + метка `слушалка-звук.json` (`ServerLibrary.MARKER`), её читает
     `LibraryScanner` → файлы книги с `remote`. Поток — `player/Streaming.kt`:
     HTTP с Basic, `SimpleCache` в `cache/stream` (свой LRU-вытеснитель с

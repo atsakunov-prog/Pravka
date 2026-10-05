@@ -705,6 +705,45 @@ object Glyphs {
         }
     }
 
+    /** Книга на телефоне целиком: телефон закрашенный (силуэт Material smartphone). */
+    val PhoneFilled: ImageVector by lazy {
+        materialIcon(name = "Glyphs.PhoneFilled") {
+            materialPath {
+                moveTo(17.0f, 1.0f); horizontalLineTo(7.0f)
+                curveTo(5.9f, 1.0f, 5.0f, 1.9f, 5.0f, 3.0f); verticalLineToRelative(18.0f)
+                curveToRelative(0.0f, 1.1f, 0.9f, 2.0f, 2.0f, 2.0f); horizontalLineToRelative(10.0f)
+                curveToRelative(1.1f, 0.0f, 2.0f, -0.9f, 2.0f, -2.0f); verticalLineTo(3.0f)
+                curveTo(19.0f, 1.9f, 18.1f, 1.0f, 17.0f, 1.0f); close()
+            }
+        }
+    }
+
+    /** Только текст на телефоне, звук с сервера: телефон контуром (Material smartphone, outlined). */
+    val PhoneOutline: ImageVector by lazy {
+        materialIcon(name = "Glyphs.PhoneOutline") {
+            materialPath {
+                moveTo(17.0f, 1.01f); lineTo(7.0f, 1.0f)
+                curveToRelative(-1.1f, 0.0f, -2.0f, 0.9f, -2.0f, 2.0f); verticalLineToRelative(18.0f)
+                curveToRelative(0.0f, 1.1f, 0.9f, 2.0f, 2.0f, 2.0f); horizontalLineToRelative(10.0f)
+                curveToRelative(1.1f, 0.0f, 2.0f, -0.9f, 2.0f, -2.0f); verticalLineTo(3.0f)
+                curveToRelative(0.0f, -1.1f, -0.9f, -1.99f, -2.0f, -1.99f); close()
+                moveTo(17.0f, 21.0f); horizontalLineTo(7.0f); verticalLineTo(3.0f); horizontalLineToRelative(10.0f)
+                verticalLineToRelative(18.0f); close()
+            }
+        }
+    }
+
+    /** Уезжает в библиотеку: стрелка вверх (Material arrow_upward). */
+    val ArrowUp: ImageVector by lazy {
+        materialIcon(name = "Glyphs.ArrowUp") {
+            materialPath {
+                moveTo(4.0f, 12.0f); lineToRelative(1.41f, 1.41f); lineTo(11.0f, 7.83f); verticalLineTo(20.0f)
+                horizontalLineToRelative(2.0f); verticalLineTo(7.83f); lineToRelative(5.58f, 5.59f)
+                lineTo(20.0f, 12.0f); lineToRelative(-8.0f, -8.0f); lineToRelative(-8.0f, 8.0f); close()
+            }
+        }
+    }
+
     val CloudDownload: ImageVector by lazy {
         materialIcon(name = "Glyphs.CloudDownload") {
             materialPath {

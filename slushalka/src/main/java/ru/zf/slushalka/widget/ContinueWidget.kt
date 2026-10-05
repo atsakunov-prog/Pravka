@@ -59,9 +59,11 @@ class ContinueWidget : AppWidgetProvider() {
         private suspend fun render(app: SlushalkaApp, manager: AppWidgetManager, ids: IntArray) {
             val prefs = app.settings.flow.first { it.loaded }
             val lastId = app.positions.lastBook()
-            // Последней могла быть книга с сервера - её на полке нет.
-            val book = app.library.books(prefs.libraryUris).firstOrNull { it.id == lastId }
-                ?: app.state.bookById(lastId)
+            // Полка - под ключами сервера: её собирают при запуске, подождём чуть-чуть.
+            kotlinx.coroutines.withTimeoutOrNull(3_000) { app.state.booksLoaded.first { it } }
+            // Последней могла быть книга с сервера - её на полке с телефона нет.
+            val book = app.state.bookById(lastId)
+                ?: app.library.books(prefs.libraryUris).firstOrNull { it.id == lastId }
             val views = RemoteViews(app.packageName, R.layout.widget_continue)
 
             val open = Intent(app, MainActivity::class.java)

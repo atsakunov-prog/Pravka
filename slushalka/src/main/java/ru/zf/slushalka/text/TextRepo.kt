@@ -43,6 +43,43 @@ class TextRepo(private val context: Context, private val cloud: ru.zf.slushalka.
 
     fun coverFile(bookId: String): File = File(coverDir, key(bookId) + ".img")
 
+    /**
+     * Разобранный текст, обложка и картинки - под ключ сервера. Под новым
+     * ключом своё уже есть - прежнее просто убирается: разобрать заново
+     * недолго, а два кэша одной книги ни к чему.
+     */
+    @Synchronized
+    fun rekey(old: String, new: String): Boolean {
+        if (old == new) return false
+        val ko = key(old)
+        val kn = key(new)
+        var any = false
+        fun move(from: File, to: File) {
+            if (!from.exists()) return
+            any = true
+            if (!to.exists()) from.renameTo(to) else from.deleteRecursively()
+        }
+        val pics = File(context.filesDir, "images")
+        // Текст и его разметка - парой: половина пары под новым ключом бесполезна.
+        if (File(dir, "$kn.txt").exists()) {
+            move(File(dir, "$ko.txt"), File(dir, "$kn.txt"))
+            move(File(dir, "$ko.json"), File(dir, "$kn.json"))
+            move(File(pics, ko), File(pics, kn))
+        } else {
+            File(dir, "$kn.json").delete()
+            File(pics, kn).deleteRecursively()
+            move(File(dir, "$ko.txt"), File(dir, "$kn.txt"))
+            move(File(dir, "$ko.json"), File(dir, "$kn.json"))
+            move(File(pics, ko), File(pics, kn))
+        }
+        move(File(coverDir, "$ko.img"), File(coverDir, "$kn.img"))
+        val hadNew = memory.containsKey(new)
+        memory.remove(old)?.let { if (!hadNew) memory[new] = it }
+        memorySrc.remove(old)?.let { if (!hadNew) memorySrc[new] = it }
+        reports.remove(old)?.let { if (!reports.containsKey(new)) reports[new] = it }
+        return any
+    }
+
     /** Папка с картинками книги: карты, планы, портреты из fb2/epub. */
     fun picturesDir(bookId: String): File =
         File(File(context.filesDir, "images"), key(bookId)).apply { mkdirs() }
@@ -66,7 +103,8 @@ class TextRepo(private val context: Context, private val cloud: ru.zf.slushalka.
      * [onDownload] - доля скачанного, когда текст качается с сервера.
      */
     suspend fun textFor(treeUri: Uri, book: Book, onDownload: (Int) -> Unit = {}): BookText? = withContext(Dispatchers.IO) {
-        memory[book.id]?.let { return@withContext it }
+        val src = sourceOf(book)
+        memory[book.id]?.takeIf { memorySrc[book.id].let { s -> s == null || s == src } }?.let { return@withContext it }
         val k = key(book.id)
         val txt = File(dir, "$k.txt")
         val meta = File(dir, "$k.json")
@@ -76,10 +114,14 @@ class TextRepo(private val context: Context, private val cloud: ru.zf.slushalka.
                 // Кэш прежней версии разбирали, когда картинки ещё не доставали.
                 // Такой перечитываем заново, иначе они не появятся никогда.
                 if (json.optInt("v") < BookText.CACHE_VERSION) null
+                // Разобран из другого файла: под ключом сервера мог лежать текст
+                // сервера, а своя копия - другое издание.
+                else if (json.optString("src").let { it.isNotBlank() && it != src }) null
                 else BookText.fromMeta(txt.readText(), json)
             }.getOrNull()
             if (cached != null) {
                 memory[book.id] = cached
+                memorySrc[book.id] = src
                 reports[book.id] = runCatching {
                     ParseReport.fromJson(JSONObject(meta.readText()).optJSONObject("report"))
                 }.getOrDefault(ParseReport())
@@ -124,12 +166,19 @@ class TextRepo(private val context: Context, private val cloud: ru.zf.slushalka.
         reports[book.id] = report
         runCatching {
             txt.writeText(ready.plain)
-            meta.writeText(ready.metaJson().put("report", report.toJson()).toString())
+            meta.writeText(ready.metaJson().put("report", report.toJson()).put("src", src).toString())
             parsed.cover?.let { bytes -> if (bytes.size > 1000) coverFile(book.id).writeBytes(bytes) }
         }
         memory[book.id] = ready
+        memorySrc[book.id] = src
         ready
     }
+
+    /** Из какого файла разобран текст: своя копия и книга сервера под одним ключом бывают разными изданиями. */
+    private fun sourceOf(book: Book): String =
+        book.textName ?: book.textRemote?.substringAfterLast('/') ?: ""
+
+    private val memorySrc = HashMap<String, String>()
 
     /** Текст с сервера - во временный кэш, с долей скачанного. null - не скачался. */
     private suspend fun download(book: Book, remote: String, onProgress: (Int) -> Unit): File? {

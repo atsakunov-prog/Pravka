@@ -174,12 +174,6 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val cloudDir: String = DEFAULT_CLOUD_DIR,
         val cloudSync: Boolean = true,
         /**
-         * Что показывает полка: книги на телефоне или всю библиотеку домашнего
-         * сервера (`index.json` в корне облака). Помнится: кто слушает с
-         * сервера, тот и открывает приложение на нём.
-         */
-        val libraryView: String = VIEW_PHONE,
-        /**
          * Звук с сервера в мобильной сети: потоком, спрашивать или только по
          * Wi-Fi. Заводское - спрашивать: час mp3 на 128 кбит/с - это около
          * 60 МБ, и решать это должен человек, а не приложение.
@@ -303,7 +297,6 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 cloudPass = p[KEY_CLOUD_PASS] ?: "",
                 cloudDir = p[KEY_CLOUD_DIR]?.takeIf { it.isNotBlank() } ?: DEFAULT_CLOUD_DIR,
                 cloudSync = p[KEY_CLOUD_SYNC] ?: true,
-                libraryView = p[KEY_LIB_VIEW]?.takeIf { it in VIEWS } ?: VIEW_PHONE,
                 streamMobile = p[KEY_STREAM_MOBILE]?.takeIf { it in MOBILES } ?: MOBILE_ASK,
                 streamCacheMb = p[KEY_STREAM_CACHE]?.takeIf { it in CACHE_SIZES_MB } ?: 2048,
                 shelfLayout = p[KEY_SHELF_LAYOUT]?.takeIf { it in LAYOUTS } ?: LAYOUT_GRID,
@@ -416,7 +409,6 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         it[KEY_CLOUD_DIR] = if (t.isNotEmpty() && t.trim('/').isEmpty()) ROOT_DIR else t.trim('/')
     }
     suspend fun setCloudSync(v: Boolean) = edit { it[KEY_CLOUD_SYNC] = v }
-    suspend fun setLibraryView(v: String) = edit { if (v in VIEWS) it[KEY_LIB_VIEW] = v }
     suspend fun setStreamMobile(v: String) = edit { if (v in MOBILES) it[KEY_STREAM_MOBILE] = v }
     suspend fun setStreamCacheMb(v: Int) = edit { if (v in CACHE_SIZES_MB) it[KEY_STREAM_CACHE] = v }
     suspend fun setShelfLayout(v: String) = edit { if (v in LAYOUTS) it[KEY_SHELF_LAYOUT] = v }
@@ -474,11 +466,6 @@ class Settings(private val context: Context, scope: CoroutineScope) {
          * облака - набирать адрес на электронной книге мучительно.
          */
         const val HOME_LIBRARY_URL = "https://books.znakomiy.netcraze.pro:8443"
-
-        // Полка: что на телефоне или что в библиотеке на сервере.
-        const val VIEW_PHONE = "phone"
-        const val VIEW_SERVER = "server"
-        val VIEWS = listOf(VIEW_PHONE, VIEW_SERVER)
 
         // Звук с сервера в мобильной сети.
         const val MOBILE_STREAM = "stream"
@@ -777,7 +764,6 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_CLOUD_PASS = stringPreferencesKey("cloud_pass")
         private val KEY_CLOUD_DIR = stringPreferencesKey("cloud_dir")
         private val KEY_CLOUD_SYNC = booleanPreferencesKey("cloud_sync")
-        private val KEY_LIB_VIEW = stringPreferencesKey("library_view")
         private val KEY_STREAM_MOBILE = stringPreferencesKey("stream_mobile")
         private val KEY_STREAM_CACHE = intPreferencesKey("stream_cache_mb")
         private val KEY_SHELF_LAYOUT = stringPreferencesKey("shelf_layout")

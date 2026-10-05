@@ -60,6 +60,25 @@ class GuideEngine(
         return loaded
     }
 
+    /**
+     * Справочник книги - под ключ сервера: копия на телефоне узнана. Под
+     * новым ключом свой есть - остаётся он, разве что прежний готов, а этот
+     * нет: справочник стоит денег.
+     */
+    fun rekey(old: String, new: String): Boolean {
+        if (old == new) return false
+        val o = state(old) ?: return false
+        val n = state(new)
+        if (n == null || (n.status != GuideState.Status.READY && o.status == GuideState.Status.READY)) {
+            store.save(new, o)
+            _states.value = _states.value - old + (new to o)
+        } else {
+            _states.value = _states.value - old
+        }
+        store.delete(old)
+        return true
+    }
+
     data class Estimate(val parts: Int, val pages: Int, val usd: Double)
 
     /** Во что обойдётся справочник: половина обычной цены за вход книги и за длинный JSON на выходе. */

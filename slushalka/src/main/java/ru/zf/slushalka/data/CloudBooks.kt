@@ -205,13 +205,13 @@ class CloudBooks(private val app: SlushalkaApp) {
     fun upload(book: Book, toRoot: Boolean = false) {
         if (busy) return
         val tree = app.state.treeOf(book) ?: return
-        val name = book.id.substringAfterLast('/')
+        val name = book.phoneFolder
         val base = if (toRoot) name else "${Cloud.BOOKS_DIR}/$name"
         job = app.scope.launch {
             var t = Transfer(name, upload = true)
             _transfer.value = t
             runCatching {
-                val files = withContext(Dispatchers.IO) { walkLocal(tree, book.folderDocId, "") }
+                val files = withContext(Dispatchers.IO) { Saf.walk(app, tree, book.folderDocId) }
                     // Метка «звук на сервере» - про этот телефон, на сервере она ни к чему.
                     .filter { it.rel != ServerLibrary.MARKER }
                 t = t.copy(totalBytes = files.sumOf { it.size })
@@ -255,18 +255,6 @@ class CloudBooks(private val app: SlushalkaApp) {
                 else -> listOf("$prefix${item.name}" to item.size)
             }
         }
-    }
-
-    private data class LocalFile(val rel: String, val docId: String, val size: Long)
-
-    private fun walkLocal(tree: Uri, dirId: String, prefix: String, depth: Int = 0): List<LocalFile> {
-        val out = ArrayList<LocalFile>()
-        query(tree, dirId).forEach { (docId, name, mime, size) ->
-            if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-                if (depth < 2 && !name.startsWith("_")) out += walkLocal(tree, docId, "$prefix$name/", depth + 1)
-            } else out += LocalFile("$prefix$name", docId, size)
-        }
-        return out
     }
 
     private data class Row(val docId: String, val name: String, val mime: String, val size: Long)

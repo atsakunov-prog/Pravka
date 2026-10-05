@@ -46,7 +46,12 @@ data class BookFile(
 }
 
 data class Book(
-    /** Путь папки внутри библиотеки: он же ключ позиции и на других устройствах. */
+    /**
+     * Ключ книги: позиции, вопросы, пометки, статистика. У книги, которую
+     * знает сервер библиотеки, - серверный: `<имя главной папки>/<папка в
+     * Книги/>`, как бы ни называлась своя папка на телефоне; у книги только
+     * с телефона - путь её папки внутри библиотеки.
+     */
     val id: String,
     val folderDocId: String,
     /**
@@ -85,7 +90,19 @@ data class Book(
      * смотрели, пустая строка - в файле её нет, полка угадает по имени.
      */
     val authorKey: String? = null,
+    /**
+     * Путь своей папки внутри библиотеки (`Books/Перель Эстер - …`), когда
+     * книга живёт под ключом сервера и он другой. Пусто - совпадает с [id].
+     * Этим путём книга называется в полке для сверки (`полка-*.json`).
+     */
+    val phoneId: String = "",
 ) {
+    /** Ключ своей папки - как её видит телефон. */
+    val phoneKey: String get() = phoneId.ifBlank { id }
+
+    /** Имя своей папки на телефоне: в интерфейсе не показывается, только для сверки и переименования. */
+    val phoneFolder: String get() = phoneKey.substringAfterLast('/')
+
     val totalMs: Long get() = files.sumOf { it.durationMs }
     val durationsReady: Boolean get() = files.isNotEmpty() && files.all { it.durationMs > 0 }
 
@@ -107,8 +124,14 @@ data class Book(
     /** Звук идёт с сервера потоком, хотя бы частью. */
     val streams: Boolean get() = files.any { it.isRemote }
 
-    /** Имя папки книги - по нему телефон и сервер узнают одну книгу. */
+    /**
+     * Имя папки книги по ключу: у книги сервера - её папка в `Книги/`, у
+     * книги только с телефона - своя.
+     */
     val folderName: String get() = id.substringAfterLast('/')
+
+    /** Свой звук на телефоне, байт: по нему из нескольких копий одной книги выбирается главная. */
+    val ownAudioBytes: Long get() = files.filter { !it.isRemote }.sumOf { it.size }
 
     /** Смещение начала файла [index] от начала книги. */
     fun offsetOf(index: Int): Long {
@@ -144,6 +167,7 @@ data class Book(
             series?.let { put("series", it) }
             seriesNum?.let { put("seriesNum", it) }
             authorKey?.let { put("authorKey", it) }
+            if (phoneId.isNotBlank()) put("phoneId", phoneId)
         }
 
     companion object {
@@ -166,6 +190,7 @@ data class Book(
                 series = if (o.has("series") && !o.isNull("series")) o.optString("series") else null,
                 seriesNum = o.optString("seriesNum").takeIf { o.has("seriesNum") && !o.isNull("seriesNum") && it.isNotBlank() },
                 authorKey = if (o.has("authorKey") && !o.isNull("authorKey")) o.optString("authorKey") else null,
+                phoneId = o.optString("phoneId"),
             )
         }
     }

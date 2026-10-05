@@ -64,6 +64,8 @@ class SlushalkaApp : Application() {
     lateinit var speaker: Speaker; private set
     lateinit var recognizer: ChunkRecognizer; private set
     lateinit var state: AppState; private set
+    /** Сверка полки с сервером: какая своя папка - какая книга там, что доложить. */
+    lateinit var shelf: ru.zf.slushalka.data.ShelfSync; private set
     lateinit var catalog: CatalogState; private set
     lateinit var readAloud: ReadAloud; private set
     lateinit var advisor: Advisor; private set
@@ -109,10 +111,14 @@ class SlushalkaApp : Application() {
         player = PlayerHolder(this, settings, positions, journal, streaming) { bookId ->
             scope.launch { state.syncPush(bookId) }
         }
+        shelf = ru.zf.slushalka.data.ShelfSync(this)
         state = AppState(this)
         cloudBooks = ru.zf.slushalka.data.CloudBooks(this)
         catalog = CatalogState(this)
         readAloud = ReadAloud(this)
         player.artworkFor = { bookId, absMs -> state.pictureUriAt(bookId, absMs) }
+        // Полка поднимается последней: её пересборка зовёт сверку, а та - всё
+        // хозяйство выше.
+        state.start()
     }
 }

@@ -39,6 +39,9 @@ class Cloud(private val settings: Settings) {
 
     class CloudException(message: String) : Exception(message)
 
+    /** Чем кончился MOVE: форма, что прошла (null - никакая), и последний код. */
+    data class MoveOutcome(val form: String?, val code: Int, val tries: Int)
+
     private val http = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         // Книга качается файлами по сотне мегабайт: чтение без предела, иначе
@@ -142,19 +145,45 @@ class Cloud(private val settings: Settings) {
     }
 
     /**
+     * Какой формой `Destination` MOVE прошёл на этом сервере: адрес облака и
+     * «полным адресом». Роутер перед домашним сервером переписывает хост и
+     * на полный адрес отвечает 502 - тогда годится путь от корня; другой
+     * WebDAV, наоборот, хочет адрес целиком. Сработавшая форма идёт первой.
+     */
+    @Volatile
+    private var moveForm: Pair<String, Boolean>? = null
+
+    /**
      * Переложить внутри облака. Поверх лежащего - да: так докладывается
      * файл, залитый под временным именем.
+     *
+     * До 05.10 `Destination` уходил полным адресом, и через роутер каждый MOVE
+     * получал 502: все записи телефона застревали в `.partial` - места,
+     * справочники, заказы разбора. Теперь первым - путь от корня сервера, на
+     * 502 - вторая форма ([moveVia]).
      */
     suspend fun move(from: String, to: String): Result<Unit> = withContext(Dispatchers.IO) {
         guard {
-            val req = auth(Request.Builder().url(url(from)))
-                .method("MOVE", null)
-                .header("Destination", url(to))
-                .header("Overwrite", "T")
-                .build()
-            http.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) throw CloudException("Облако не переложило $from: ${resp.code}")
+            val base = settings.now().cloudUrl
+            val target = url(to)
+            val full = moveForm?.takeIf { it.first == base }?.second ?: false
+            val outcome = moveVia(destinations(target, preferFull = full)) { destination ->
+                val req = auth(Request.Builder().url(url(from)))
+                    .method("MOVE", null)
+                    .header("Destination", destination)
+                    .header("Overwrite", "T")
+                    .build()
+                try {
+                    http.newCall(req).execute().use { it.code }
+                } catch (e: java.io.IOException) {
+                    // Роутер рвёт соединение вместо ответа - тоже повод попробовать другую форму.
+                    NO_ANSWER
+                }
             }
+            val form = outcome.form ?: throw CloudException(
+                "Облако не переложило $from: " + if (outcome.code == NO_ANSWER) "нет ответа" else "${outcome.code}",
+            )
+            moveForm = base to (form == target)
         }
     }
 
@@ -162,16 +191,27 @@ class Cloud(private val settings: Settings) {
      * Записать так, чтобы на месте файл появился целиком: сперва `имя.partial`,
      * потом MOVE. PUT у rclone не атомарен - кто читает в эту секунду, увидел
      * бы половину, а сервер библиотеки `*.partial` не берёт в работу.
+     *
+     * MOVE не прошёл никакой формой - маленький файл ложится прямо под своим
+     * именем, а свой `.partial` удаляется: место, застрявшее во временном
+     * имени, не видно никому, а половину JSON читающий просто не разберёт и
+     * возьмёт в следующий раз.
      */
     suspend fun putTextAtomic(path: String, text: String): Result<Unit> {
         val temp = "$path$PARTIAL"
-        return putText(temp, text).mapCatching { move(temp, path).getOrThrow() }
+        putText(temp, text).onFailure { return Result.failure(it) }
+        if (move(temp, path).isSuccess) return Result.success(Unit)
+        return putText(path, text).onSuccess { delete(temp) }
     }
 
     /**
      * Большой файл тем же порядком: залить под `.partial`, сверить размер на
      * той стороне (оборванный PUT оставляет огрызок, а не ошибку) и только
      * тогда переложить на место.
+     *
+     * Запасного PUT в конечное имя здесь нет: оборванный mp3 по виду не
+     * отличить от целого, и сервер разложил бы огрызок. Не переложилось -
+     * выгрузка не удалась, свой `.partial` убирается.
      */
     suspend fun uploadAtomic(path: String, size: Long, open: () -> InputStream?): Result<Unit> {
         val temp = "$path$PARTIAL"
@@ -180,7 +220,10 @@ class Cloud(private val settings: Settings) {
             if (got != null && got != size) {
                 throw CloudException("Облако приняло $path не целиком: $got из $size байт")
             }
-            move(temp, path).getOrThrow()
+            move(temp, path).getOrElse { e ->
+                delete(temp)
+                throw e
+            }
         }
     }
 
@@ -319,6 +362,40 @@ class Cloud(private val settings: Settings) {
 
         /** Хвост временного имени: под ним файл льётся, без него лежит готовым. */
         const val PARTIAL = ".partial"
+
+        /** Код «ответа не было»: соединение оборвалось до ответа. */
+        const val NO_ANSWER = -1
+
+        /**
+         * Путь от корня сервера - адрес без схемы и хоста, закодированный как
+         * был: `https://host/dav/Книги/x` → `/dav/Книги/x`.
+         */
+        fun pathOf(url: String): String {
+            val rest = url.substringAfter("://", url)
+            val slash = rest.indexOf('/')
+            return if (slash < 0) "/" else rest.substring(slash)
+        }
+
+        /** Формы `Destination` по порядку: путём от корня (заводская) и полным адресом. */
+        fun destinations(url: String, preferFull: Boolean): List<String> =
+            if (preferFull) listOf(url, pathOf(url)) else listOf(pathOf(url), url)
+
+        /**
+         * MOVE с повтором: [send] шлёт запрос с данным `Destination` и отдаёт
+         * код ответа. Следующая форма - на 502 и прочие 5xx, на 400 (сервер не
+         * понял форму) и на обрыв; 401, 404, 409 - не про форму, второй раз
+         * то же самое.
+         */
+        fun moveVia(forms: List<String>, send: (String) -> Int): MoveOutcome {
+            var code = NO_ANSWER
+            for ((i, form) in forms.withIndex()) {
+                code = send(form)
+                if (code in 200..299) return MoveOutcome(form, code, i + 1)
+                val aboutForm = code == NO_ANSWER || code == 400 || code in 500..599
+                if (!aboutForm) return MoveOutcome(null, code, i + 1)
+            }
+            return MoveOutcome(null, code, forms.size)
+        }
 
         /** Сетевая ошибка словами: что случилось и куда смотреть. */
         fun human(e: Throwable): String = when (e) {

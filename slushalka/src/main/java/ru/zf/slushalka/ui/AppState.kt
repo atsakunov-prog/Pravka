@@ -15,6 +15,7 @@ import ru.zf.slushalka.data.Settings
 import ru.zf.slushalka.library.Book
 import ru.zf.slushalka.library.Durations
 import ru.zf.slushalka.library.LibraryScanner
+import ru.zf.slushalka.library.OneShelf
 import ru.zf.slushalka.library.documentUri
 import ru.zf.slushalka.player.AudioChunk
 import ru.zf.slushalka.text.Alignment
@@ -31,8 +32,33 @@ class AppState(private val app: SlushalkaApp) {
     val settings = app.settings
     val prefs: StateFlow<Settings.Prefs> = settings.flow
 
+    /**
+     * Книги с телефона по одной на ключ: узнанные сервером - под его ключом,
+     * с его названием, автором, серией и обложкой ([OneShelf]); остальные -
+     * как их нашёл сканер.
+     */
     private val _books = MutableStateFlow<List<Book>>(emptyList())
     val books: StateFlow<List<Book>> = _books
+
+    /** Книги прочитаны с диска (или их нет): виджету и «Продолжить» есть из чего выбирать. */
+    private val _booksLoaded = MutableStateFlow(false)
+    val booksLoaded: StateFlow<Boolean> = _booksLoaded
+
+    /**
+     * Книги телефона, как их нашёл сканер: ключ - путь папки. На диске лежат
+     * они (`library.json`), а полка - их же под ключами сервера.
+     */
+    @Volatile
+    private var raw: List<Book> = emptyList()
+
+    @Volatile
+    private var adopted = OneShelf.Adopted(emptyList(), emptyList(), emptyMap())
+
+    /** Последняя пересборка полки: главные копии, лишние, ключи телефона → ключи книг. */
+    fun adopted(): OneShelf.Adopted = adopted
+
+    /** Все свои папки книг - главные и лишние копии: это и уходит в полку для сверки. */
+    fun phoneCopies(): List<Book> = adopted.books.filter { it.onPhone } + adopted.extras
 
     /** Непустое - значит внизу экрана висит полоска «чем занят». */
     private val _busy = MutableStateFlow<String?>(null)
@@ -111,24 +137,86 @@ class AppState(private val app: SlushalkaApp) {
         _notice.value = null
     }
 
-    init {
+    /** Сказать строкой внизу экрана: «нет связи с библиотекой». */
+    fun say(text: String) {
+        _notice.value = text
+    }
+
+    /**
+     * Запуск - из конца `SlushalkaApp.onCreate`, когда всё хозяйство заведено:
+     * пересборка полки зовёт сверку, а та смотрит сюда же.
+     */
+    fun start() {
         app.scope.launch {
             // Первое значение из DataStore приезжает асинхронно: спросить
             // раньше - получить заводскую пустоту и решить, что книг нет.
             val p = settings.flow.first { it.loaded }
             if (p.libraryUri.isNotBlank()) {
-                _books.value = app.library.books(p.libraryUris)
-                if (_books.value.isEmpty()) rescan() else {
+                raw = app.library.books(p.libraryUris)
+                readopt()
+                _booksLoaded.value = true
+                if (raw.isEmpty()) rescan() else {
                     syncPull()
                     // Полка из прежней версии - без серий: дочитать их в фоне.
                     fillSeries()
                 }
+                // Полка для сверки - при каждом запуске; ответ на прежнюю - сразу.
+                app.shelf.changed()
+                launch { app.shelf.readAnswer() }
+            } else {
+                _booksLoaded.value = true
             }
         }
-        // Оглавление сервера пришло или сменилось - книги сервера пересобираются.
+        // Оглавление сервера пришло или сменилось, сверка узнала папку - полка
+        // пересобирается: книги сервера и свои под их ключами.
         app.scope.launch {
-            app.server.index.collect { rebuildServerBooks() }
+            kotlinx.coroutines.flow.combine(app.server.index, app.shelf.aliases) { i, a -> i to a }.collect {
+                rebuildServerBooks()
+                readopt()
+            }
         }
+        app.shelf.watchNetwork()
+    }
+
+    /**
+     * Свои книги - под ключи сервера ([OneShelf.adopt]): по псевдонимам
+     * сверки, по имени папки, по прежнему имени в оглавлении. Открытая
+     * книга, сменившая ключ, остаётся открытой со старым - она переедет при
+     * следующем открытии; данные переезжают уборкой сверки.
+     */
+    private fun readopt() {
+        val index = app.server.index.value
+        val root = rootName?.second ?: mainRootFromBooks()
+        val a = OneShelf.adopt(raw, index, root, app.shelf.aliases.value)
+        adopted = a
+        _books.value = a.books
+        app.shelf.tidy()
+    }
+
+    /** Имя главной папки - из ключей её же книг, без запроса к SAF. */
+    private fun mainRootFromBooks(): String? {
+        val main = treeUri()?.toString() ?: return null
+        return raw.firstOrNull { it.tree == main }?.phoneKey?.substringBefore('/')
+    }
+
+    /**
+     * Ключ книги для чужого файла: места, вопросы и пометки другого своего
+     * устройства могут лежать под старым именем папки - здесь они под ключом
+     * сервера.
+     */
+    fun canonicalOf(id: String): String = OneShelf.canonical(
+        id, adopted.keyOf, app.server.index.value, rootName?.second ?: mainRootFromBooks(), app.shelf.aliases.value,
+    )
+
+    /** Книга в работе: открыта, играет или читается вслух - её папку и ключ не трогаем. */
+    fun isBusy(key: String): Boolean =
+        _current.value?.id == key || app.player.state.value.bookId == key ||
+            (app.readAloud.state.value.active && app.readAloud.state.value.bookId == key)
+
+    /** Данные книг переехали на ключи сервера: полка перерисуется, места уедут на сервер. */
+    fun dataMoved() {
+        bump()
+        schedulePush(app.positions.lastBook().orEmpty(), 0)
     }
 
     /** Имя главной папки и для какого дерева оно узнано: папку могут сменить. */
@@ -155,7 +243,8 @@ class AppState(private val app: SlushalkaApp) {
     /** Книга по ключу: сперва с полки, потом с сервера - последняя могла быть оттуда. */
     fun bookById(id: String?): Book? {
         if (id == null) return null
-        return _books.value.firstOrNull { it.id == id } ?: _serverBooks.value.firstOrNull { it.id == id }
+        fun find(k: String) = _books.value.firstOrNull { it.id == k } ?: _serverBooks.value.firstOrNull { it.id == k }
+        return find(id) ?: canonicalOf(id).takeIf { it != id }?.let(::find)
     }
 
     /** Главная папка библиотеки: сюда качает каталог и здесь лежит `_Слушалка`. */
@@ -208,7 +297,10 @@ class AppState(private val app: SlushalkaApp) {
         val tree = treeUri() ?: return
         val trees = prefs.value.libraryUris
         _busy.value = "Читаю папку…"
-        val known = _books.value.associateBy { it.id }
+        val known = raw.associateBy { it.phoneKey }
+        // Переименованная папка - книга под новым путём: её длительности ищутся по прежнему.
+        val knownFiles = raw.flatMap { it.files }.filter { it.durationMs > 0 }.associateBy { it.relPath to it.size }
+        val before = shelfSignature(raw)
         val found = withContext(Dispatchers.IO) {
             val scanner = LibraryScanner(app)
             // Ключ книги - путь от имени папки; две папки с одним именем и одной
@@ -217,11 +309,17 @@ class AppState(private val app: SlushalkaApp) {
         }
         // Уже измеренные длительности переносим: мерить заново долго и незачем.
         val merged = found.map { b ->
-            val old = known[b.id] ?: return@map b
+            val old = known[b.id]
+            if (old == null) {
+                return@map b.copy(files = b.files.map { f ->
+                    val prev = knownFiles[f.relPath to f.size]
+                    if (f.durationMs <= 0 && prev != null && !f.isRemote) f.copy(durationMs = prev.durationMs) else f
+                })
+            }
             val byDoc = old.files.associateBy { it.key }
             b.copy(
                 files = b.files.map { f ->
-                    val prev = byDoc[f.key]
+                    val prev = byDoc[f.key] ?: knownFiles[f.relPath to f.size]
                     if (f.durationMs <= 0 && prev != null && prev.size == f.size) f.copy(durationMs = prev.durationMs) else f
                 },
                 title = b.title.ifBlank { old.title },
@@ -233,26 +331,34 @@ class AppState(private val app: SlushalkaApp) {
             )
         }
         app.library.replace(tree.toString(), merged)
-        _books.value = merged
+        raw = merged
+        // Имя главной папки узнаётся заново: её могли сменить, а книги сервера
+        // получают ключ от него.
+        rootName = null
+        rootName()
+        readopt()
         _busy.value = null
+        // Полка поменялась - сверка узнает об этом (не чаще раза в десять минут).
+        if (shelfSignature(merged) != before) app.shelf.changed()
         // Открытая книга сменилась на полке - докачала звук, взята текстом.
         // Плеер на паузе переезжает на новые файлы сам: иначе книга, уже
         // лежащая на телефоне, так и играла бы с сервера до перезапуска.
         val cur = _current.value
-        val fresh = cur?.let { c -> merged.firstOrNull { it.id == c.id } }
+        val fresh = cur?.let { c -> _books.value.firstOrNull { it.id == c.id } }
         if (cur != null && fresh != null && fresh != cur) {
             _current.value = fresh
             if (cur.streams && !fresh.streams && app.player.isOpen(fresh.id) && !app.player.state.value.playing) {
                 treeOf(fresh)?.let { app.player.open(it, fresh) }
             }
         }
-        // Имя главной папки узнаётся заново: её могли сменить, а книги сервера
-        // получают ключ от него.
-        rootName = null
         rebuildServerBooks()
         syncPull()
         fillSeries()
     }
+
+    /** Что на полке по папкам: поменялось - полка уходит на сверку. */
+    private fun shelfSignature(list: List<Book>): Set<String> =
+        list.mapTo(HashSet()) { "${it.phoneKey}|${it.files.size}|${it.files.sumOf { f -> f.size }}|${it.textName}" }
 
     private var seriesJob: kotlinx.coroutines.Job? = null
 
@@ -266,7 +372,7 @@ class AppState(private val app: SlushalkaApp) {
         if (seriesJob?.isActive == true) return
         seriesJob = app.scope.launch {
             while (true) {
-                val todo = _books.value
+                val todo = raw
                     .filter { it.textDocId != null && (it.series == null || it.authorKey == null) }
                     .take(SERIES_BATCH)
                 if (todo.isEmpty()) break
@@ -279,7 +385,7 @@ class AppState(private val app: SlushalkaApp) {
                         } else null
                     }
                 }
-                val updated = _books.value.map { b ->
+                val updated = raw.map { b ->
                     if (b.id in found && (b.series == null || b.authorKey == null)) {
                         val m = found[b.id]
                         b.copy(
@@ -289,8 +395,9 @@ class AppState(private val app: SlushalkaApp) {
                         )
                     } else b
                 }
-                _books.value = updated
+                raw = updated
                 treeUri()?.let { app.library.replace(it.toString(), updated) }
+                readopt()
             }
         }
     }
@@ -320,7 +427,12 @@ class AppState(private val app: SlushalkaApp) {
                     )
                 }.getOrDefault(false)
             }
-            _notice.value = if (ok) "«${book.title}» удалена с телефона" else "Папку книги удалить не вышло"
+            _notice.value = when {
+                !ok -> "Папку книги удалить не вышло"
+                // Книга сервера с полки не уходит: пропадает только значок телефона.
+                book.remoteDir.isNotBlank() -> "Копия «${book.title}» удалена с телефона - книга осталась в библиотеке"
+                else -> "«${book.title}» удалена с телефона"
+            }
             rescanNow()
         }
     }
@@ -356,7 +468,15 @@ class AppState(private val app: SlushalkaApp) {
             }
         }
         _busy.value = null
-        app.library.update(measured)
+        // На диске - книга, как её нашёл сканер: под своим путём и со своим
+        // названием; длительности - только своим файлам (звук с сервера потоком
+        // в папку не пишется).
+        val own = raw.firstOrNull { it.phoneKey == measured.phoneKey && measured.onPhone }
+        if (own != null && own.files.map { it.key } == measured.files.map { it.key }) {
+            val updated = own.copy(files = measured.files)
+            raw = raw.map { if (it.phoneKey == own.phoneKey) updated else it }
+            app.library.update(updated)
+        }
         _books.value = _books.value.map { if (it.id == measured.id) measured else it }
         return measured
     }
@@ -1157,7 +1277,10 @@ class AppState(private val app: SlushalkaApp) {
         // Свои: от старых к свежим - последнее слово за самым свежим.
         var moved: Moved? = null
         for (r in mine.sortedBy { it.at }) {
-            for ((id, remote) in r.states) {
+            for ((remoteId, state) in r.states) {
+                // С другого устройства - и под старым именем папки: здесь книга под ключом сервера.
+                val id = canonicalOf(remoteId)
+                val remote = state.copy(bookId = id)
                 val m = app.positions.merge(id, remote)
                 if (!m.any) continue
                 val now = app.positions.get(id)
@@ -1186,17 +1309,17 @@ class AppState(private val app: SlushalkaApp) {
         // Вопросы, заданные с другого устройства, - в свою историю.
         if (tree != null) {
             val asks = withContext(Dispatchers.IO) { app.sync.pullAsks(tree, p.profile) }
-            asks?.forEach { (id, list) -> app.askLog.merge(id, list) }
+            asks?.forEach { (id, list) -> app.askLog.merge(canonicalOf(id), list) }
             // И пометки на полях: одна книга - одни поля на всех устройствах.
             val notes = withContext(Dispatchers.IO) { app.sync.pullNotes(tree, p.profile) }
-            notes?.forEach { (id, list) -> app.notes.merge(id, list) }
+            notes?.forEach { (id, list) -> app.notes.merge(canonicalOf(id), list) }
         }
         if (p.cloudReady && p.cloudSync && p.profile.isNotBlank()) {
             val dir = ru.zf.slushalka.data.Cloud.SYNC_DIR
             app.cloud.getText(dir + "/" + PositionSync.fileName(PositionSync.ASKS_PREFIX, p.profile)).getOrNull()
-                ?.let(PositionSync::parseAsks)?.forEach { (id, list) -> app.askLog.merge(id, list) }
+                ?.let(PositionSync::parseAsks)?.forEach { (id, list) -> app.askLog.merge(canonicalOf(id), list) }
             app.cloud.getText(dir + "/" + PositionSync.fileName(PositionSync.NOTES_PREFIX, p.profile)).getOrNull()
-                ?.let(PositionSync::parseNotes)?.forEach { (id, list) -> app.notes.merge(id, list) }
+                ?.let(PositionSync::parseNotes)?.forEach { (id, list) -> app.notes.merge(canonicalOf(id), list) }
         }
         bump()
     }
