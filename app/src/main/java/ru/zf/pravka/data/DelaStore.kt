@@ -36,8 +36,15 @@ class DelaStore(private val context: Context) {
     companion object {
         const val FILE_NAME = "dela.json"
         const val OUTBOX_FILE = "dela-outbox.json"
+        /** Последние ответы CRM-видов (`/api/view/…`) — расходный кэш, как и копия. */
+        const val VIEWS_FILE = "dela-views.json"
         private const val KEEP_NOTICES = 30
+        /** Видов клиента, сделки и человека бывает много — храним свежие. */
+        private const val KEEP_VIEWS = 60
     }
+
+    /** Ответ CRM-вида и когда он пришёл: экран открывается с ним без сети и обновляется. */
+    data class CachedView(val at: Long, val data: JSONObject)
 
     /** Операция в очереди: сама операция с op_id, когда встала, сколько раз пробовали и чем кончилось. */
     data class Queued(val op: JSONObject, val at: Long, val tries: Int = 0, val error: String = "") {
@@ -50,6 +57,7 @@ class DelaStore(private val context: Context) {
     private val mutex = Mutex()
     private val file: File get() = File(DataRoot.dir(context), FILE_NAME)
     private val outboxFile: File get() = File(DataRoot.dir(context), OUTBOX_FILE)
+    private val viewsFile: File get() = File(DataRoot.dir(context), VIEWS_FILE)
     private var loaded = false
 
     private var server = Dela.Snapshot()
@@ -69,6 +77,29 @@ class DelaStore(private val context: Context) {
 
     private val _notices = MutableStateFlow<List<Notice>>(emptyList())
     val noticesFlow: StateFlow<List<Notice>> = _notices
+
+    private var views = LinkedHashMap<String, CachedView>()
+    private val _views = MutableStateFlow<Map<String, CachedView>>(emptyMap())
+    /**
+     * CRM-виды с сервера по пути («pipeline», «deal?deal_id=…»). Считает их
+     * сервер — логика общая с вебом; телефон показывает последний ответ и
+     * накладывает поверх свою очередь (`DelaCrm.overlay*`).
+     */
+    val viewsFlow: StateFlow<Map<String, CachedView>> = _views
+
+    /** Ответ вида — в кэш и на диск фоном. Пустой ответ — тоже ответ («клиентов нет»): он не стирает файл, а заменяет одну запись. */
+    suspend fun putView(path: String, data: JSONObject, at: Long) = mutex.withLock {
+        ensureLoaded()
+        views.remove(path)
+        views[path] = CachedView(at, data)
+        while (views.size > KEEP_VIEWS) views.remove(views.keys.first())
+        _views.value = LinkedHashMap(views)
+        val o = JSONObject().put("v", 1).put("views", JSONObject().apply {
+            for ((k, v) in views) put(k, JSONObject().put("at", v.at).put("data", v.data))
+        })
+        val text = o.toString()
+        DiskWriter.post { StoreFiles.writeAtomic(viewsFile, text) }
+    }
 
     suspend fun load() = mutex.withLock { ensureLoaded() }
 
@@ -105,6 +136,10 @@ class DelaStore(private val context: Context) {
         ensureLoaded()
         server = Dela.Snapshot()
         persist()
+        // Виды CRM — того сервера, которого больше нет: и они с нуля.
+        views.clear()
+        _views.value = emptyMap()
+        DiskWriter.post { StoreFiles.writeAtomic(viewsFile, JSONObject().put("v", 1).put("views", JSONObject()).toString()) }
         publish()
     }
 
@@ -219,6 +254,11 @@ class DelaStore(private val context: Context) {
         "due_time" -> "время"
         "estimate_min" -> "оценку"
         "money" -> "деньги"
+        "stage" -> "стадию"
+        "outcome" -> "итог"
+        "paid_on" -> "оплату"
+        "invoiced_on" -> "счёт"
+        "cadence" -> "теплоту"
         "focus_on" -> "«Сейчас»"
         "labels" -> "метки"
         "status" -> "статус"
@@ -253,7 +293,15 @@ class DelaStore(private val context: Context) {
                     }
                 }
             }
+            StoreFiles.readOrQuarantine(viewsFile) { JSONObject(it) }?.optJSONObject("views")?.let { v ->
+                for (k in v.keys()) {
+                    val c = v.optJSONObject(k) ?: continue
+                    val data = c.optJSONObject("data") ?: continue
+                    views[k] = CachedView(c.optLong("at"), data)
+                }
+            }
         }
+        _views.value = LinkedHashMap(views)
         loaded = true
         publish()
     }

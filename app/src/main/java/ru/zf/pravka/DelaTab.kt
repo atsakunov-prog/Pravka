@@ -43,6 +43,7 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
 import ru.zf.pravka.core.Dela
+import ru.zf.pravka.core.DelaAsk
 import ru.zf.pravka.trigger.PravkaAccessibilityService
 import ru.zf.pravka.trigger.finishDelaReason
 import ru.zf.pravka.trigger.listenForDelaReason
@@ -66,6 +67,7 @@ import ru.zf.pravka.ui.RowRule
 import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.Segments
 import ru.zf.pravka.ui.SummaryLine
+import ru.zf.pravka.ui.ThinkingLine
 import ru.zf.pravka.ui.VoiceInput
 import ru.zf.pravka.ui.scrollFade
 
@@ -79,14 +81,25 @@ import ru.zf.pravka.ui.scrollFade
 // мгновенно и работает без сети; правка ложится в очередь и видна сразу.
 // Карточка дела правит всё и закрывает (Todoist-вкладка только читала).
 // «Новое» — одним движением: принять, поправить, отклонить с причиной.
+//
+// С 05.10.2026 (docs/dela-phone-2.md) — как веб: «Новое» уточняет открытые
+// дела и показывает «закрыто само», денег у дел в интерфейсе нет, правка
+// словами — через сервер (микрофон в карточке и строка «Claude» над видом),
+// и CRM — воронка, клиенты, связи, сделка (`DelaCrmUi.kt`).
 
 private val VIEWS = listOf("Утро", "Новое", "Жду", "Неделя", "Все")
+private val VIEW_TITLES = listOf("Утро", "Новое", "Жду", "Неделя", "Все дела")
+private val CRM_VIEWS = listOf("Воронка", "Клиенты", "Связи")
 private val SPHERES = listOf("work" to "Работа", "home" to "Дом", "all" to "Всё")
 
-/** Страница поверх видов: человек или проект целиком. */
-private sealed class DelaPage {
+/**
+ * Страница поверх видов: человек, проект (клиент) или сделка целиком.
+ * Страницы — стопкой: воронка → сделка → клиент → человек, «назад» — на шаг.
+ */
+internal sealed class DelaPage {
     data class Person(val id: String) : DelaPage()
     data class Project(val id: String) : DelaPage()
+    data class Deal(val id: String) : DelaPage()
 }
 
 @Composable
@@ -101,17 +114,27 @@ fun DelaTab(app: PravkaApp) {
     val talking = ru.zf.pravka.ui.rememberRouteBusy(app.liveWork, "raznoska")
     val scope = app.appScope
 
+    val views by app.delaStore.viewsFlow.collectAsState()
+
     var view by rememberSaveable { mutableStateOf(0) }
     var sphere by rememberSaveable { mutableStateOf("all") }
+    // Дела или CRM; в CRM — Воронка, Клиенты, Связи.
+    var mode by rememberSaveable { mutableStateOf(0) }
+    var crmView by rememberSaveable { mutableStateOf(0) }
     var draft by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
-    var page by remember { mutableStateOf<DelaPage?>(null) }
+    var pages by remember { mutableStateOf(listOf<DelaPage>()) }
+    val page = pages.lastOrNull()
     var openTask by remember { mutableStateOf<Dela.Task?>(null) }
     var newTask by remember { mutableStateOf(false) }
     var editingSuggestion by remember { mutableStateOf<Dela.Suggestion?>(null) }
     var rejecting by remember { mutableStateOf<Dela.Suggestion?>(null) }
     var starting by remember { mutableStateOf("") }
+    // Правка словами: одна команда за раз, строка над видом и её текст.
+    val ask = remember { AskState() }
+    var askOpen by rememberSaveable { mutableStateOf(false) }
+    var askText by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(link) {
         app.delaStore.load()
@@ -123,6 +146,11 @@ fun DelaTab(app: PravkaApp) {
     val today = LocalDate.now().toString()
     val now = System.currentTimeMillis()
     val running = ribbon.firstOrNull { it.open }
+    // CRM — владельцу и тем, кому открыты клиенты; деньги фирмы — владельцу и sees_money.
+    val crmOn = Dela.crmOn(snap, me)
+    val moneyOn = Dela.moneyOn(snap, me)
+    val queuedOps = remember(queued) { queued.map { it.op } }
+    val push: (DelaPage) -> Unit = { p -> if (pages.lastOrNull() != p) pages = pages + p }
 
     val actions = DelaActions(
         open = { openTask = it },
@@ -142,8 +170,8 @@ fun DelaTab(app: PravkaApp) {
                 Feedback.toast(app, if (t.open) "✓ ${t.title.take(40)}" else "Дело снова открыто")
             }
         },
-        person = { id -> if (id.isNotBlank()) page = DelaPage.Person(id) },
-        project = { id -> if (id.isNotBlank()) page = DelaPage.Project(id) },
+        person = { id -> if (id.isNotBlank()) push(DelaPage.Person(id)) },
+        project = { id -> if (id.isNotBlank()) push(DelaPage.Project(id)) },
         starting = starting,
         // Связь с лентой видна у дела (05.10.2026): что идёт сейчас и сколько уже ушло.
         running = if (running != null) running.task else "",
@@ -151,6 +179,69 @@ fun DelaTab(app: PravkaApp) {
         spent = remember(ribbon, now) { ru.zf.pravka.core.ZasechkaTasks.spent(ribbon, now) },
         stop = { scope.launch { app.zasechkaEngine.closeOpen() } },
     )
+
+    // Что видит Claude с этого экрана — то же, что человек: название и дела в
+    // порядке показа. У «Нового» и CRM-списков дел на экране нет — строки нет.
+    val needle = query.trim()
+    val askScreen: AskScreen? = when (val pg = page) {
+        is DelaPage.Person -> Dela.person(snap, pg.id).let { v ->
+            val title = "Человек: " + (v.person?.name ?: "?")
+            AskScreen(title, DelaAsk.scope(title, (v.agenda + v.waiting + v.asked + v.mineAbout).map { it.id }, personId = pg.id))
+        }
+        is DelaPage.Project -> Dela.project(snap, pg.id).let { v ->
+            val title = "Проект: " + (v.project?.name ?: "?")
+            AskScreen(title, DelaAsk.scope(title, v.open.map { it.id }, projectId = pg.id))
+        }
+        is DelaPage.Deal -> snap.deals[pg.id].let { d ->
+            val title = "Сделка: " + (d?.name ?: "?")
+            val open = snap.tasks.values.filter { it.dealId == pg.id && it.open }.sortedWith(Dela.ORDER)
+            AskScreen(title, DelaAsk.scope(title, open.map { it.id }, projectId = d?.projectId.orEmpty()))
+        }
+        null -> when {
+            needle.isNotEmpty() -> AskScreen("Поиск: $needle", DelaAsk.scope("Поиск: $needle", Dela.search(snap, needle, withClosed = true).map { it.id }))
+            (crmOn && mode == 1) || view == 1 -> null
+            else -> {
+                val ids = when (view) {
+                    0 -> Dela.morning(snap, me, today, sphere, now).let { m -> m.now + m.today + m.nudge + m.fromOthers } + Dela.quick(snap, me, sphere)
+                    2 -> Dela.waiting(snap, me, sphere).flatMap { it.items }
+                    3 -> Dela.week(snap, me, today, sphere, now).let { it.stale + it.waitingStale }
+                    else -> Dela.byProject(snap, me, sphere).flatMap { it.second }
+                }.map { it.id }
+                AskScreen(VIEW_TITLES[view], DelaAsk.scope(VIEW_TITLES[view], ids))
+            }
+        }
+    }
+
+    /**
+     * Команда Claude: одна за раз. Получилось — итог листом поверх вкладки (и
+     * [onDone] — поле очищается); нет — причина у той стороны, что спросила, а
+     * текст остаётся. Ошибка у карточки, которую уже закрыли, — листом с текстом.
+     */
+    fun runAsk(key: String, text: String, scopeJson: org.json.JSONObject, onDone: () -> Unit = {}) {
+        if (ask.running.isNotBlank()) {
+            Feedback.toast(app, "Claude ещё правит прошлую команду")
+            return
+        }
+        ask.running = key
+        ask.errors = ask.errors - key
+        scope.launch {
+            val r = app.delaSync.ask(text, scopeJson)
+            ask.running = ""
+            r.onSuccess { res ->
+                onDone()
+                if (openTask != null && key == askTaskKey(openTask!!.id)) openTask = null
+                ask.shown = AskShown(key, text, scopeJson, result = res)
+            }.onFailure { e ->
+                val why = e.message.orEmpty().ifBlank { "Claude не ответил" }
+                ask.errors = ask.errors + (key to why)
+                val cardGone = key != ASK_SCREEN && openTask?.let { askTaskKey(it.id) } != key
+                if (cardGone || (key == ASK_SCREEN && !askOpen)) ask.shown = AskShown(key, text, scopeJson, error = why)
+            }
+        }
+    }
+
+    val crmUi = remember { CrmUiState() }
+    val crm = DelaCrmContext(app, snap, me, today, views, queuedOps, moneyOn, actions, push, back = { pages = pages.dropLast(1) }, ui = crmUi)
 
     val listState = rememberLazyListState()
     LazyColumn(
@@ -218,6 +309,14 @@ fun DelaTab(app: PravkaApp) {
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
+                    if (askScreen != null) {
+                        GlyphButton(
+                            Glyphs.Ask,
+                            if (askOpen) "убрать строку Claude" else "Claude: команда на дела этого экрана",
+                            tint = if (askOpen || ask.running == ASK_SCREEN) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            onClick = { askOpen = !askOpen },
+                        )
+                    }
                     GlyphButton(Glyphs.Plus, "новое дело руками", onClick = { newTask = true })
                     GlyphButton(
                         if (searching) Glyphs.Close else Glyphs.Search,
@@ -241,6 +340,20 @@ fun DelaTab(app: PravkaApp) {
             }
         }
 
+        if (askOpen && askScreen != null) {
+            item(key = "ask") {
+                AskBar(
+                    screen = askScreen,
+                    text = askText,
+                    onText = { askText = it },
+                    running = ask.running == ASK_SCREEN,
+                    error = ask.error(ASK_SCREEN),
+                    onSend = { text -> runAsk(ASK_SCREEN, text, askScreen.scope) { askText = "" } },
+                    onClose = { askOpen = false },
+                )
+            }
+        }
+
         if (notices.isNotEmpty()) {
             item(key = "notices") {
                 PaperCard(
@@ -257,16 +370,30 @@ fun DelaTab(app: PravkaApp) {
         val pg = page
         if (pg != null) {
             item(key = "back") {
-                PaperRow(title = "Назад к видам", icon = Glyphs.Back, onClick = { page = null })
+                PaperRow(
+                    title = if (pages.size > 1) "Назад" else "Назад к видам",
+                    icon = Glyphs.Back,
+                    onClick = { pages = pages.dropLast(1) },
+                )
             }
             when (pg) {
-                is DelaPage.Person -> personPage(Dela.person(snap, pg.id), actions)
-                is DelaPage.Project -> projectPage(Dela.project(snap, pg.id), actions)
+                is DelaPage.Person -> {
+                    personPage(Dela.person(snap, pg.id), actions)
+                    // Теплота, «хаб», сделки и хронология — тем, кому видна CRM; у пользователя Дел их нет.
+                    if (crmOn && snap.people[pg.id]?.userId.isNullOrBlank()) crmPersonBlock(crm, pg.id)
+                }
+                is DelaPage.Project -> {
+                    // Клиент из «Клиентов», которого копия ещё не знает, — тоже клиент: блок CRM спросит сервер сам.
+                    val pr = snap.projects[pg.id]
+                    val client = crmOn && (pr == null || pr.kind == "client")
+                    if (client) crmClientBlock(crm, pg.id)
+                    projectPage(Dela.project(snap, pg.id), actions, client)
+                }
+                is DelaPage.Deal -> crmDealPage(crm, pg.id)
             }
             return@LazyColumn
         }
 
-        val needle = query.trim()
         if (needle.isNotEmpty()) {
             val found = Dela.search(snap, needle, withClosed = true)
             item(key = "found") {
@@ -278,22 +405,38 @@ fun DelaTab(app: PravkaApp) {
             return@LazyColumn
         }
 
+        val crmMode = crmOn && mode == 1
         item(key = "views") {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                val fresh = Dela.newOnes(snap, me).size
-                Segments(
-                    options = VIEWS.mapIndexed { i, v -> if (i == 1 && fresh > 0) "$v · $fresh" else v },
-                    selected = view,
-                    onSelect = { view = it },
-                )
-                if (view != 1) {
+                // CRM — только тем, кому она видна: у остальных строки «Дела · CRM» нет совсем.
+                if (crmOn) Segments(options = listOf("Дела", "CRM"), selected = mode, onSelect = { mode = it })
+                if (crmMode) {
+                    Segments(options = CRM_VIEWS, selected = crmView, onSelect = { crmView = it })
+                } else {
+                    val fresh = Dela.newOnes(snap, me).size
                     Segments(
-                        options = SPHERES.map { it.second },
-                        selected = SPHERES.indexOfFirst { it.first == sphere }.coerceAtLeast(0),
-                        onSelect = { sphere = SPHERES[it].first },
+                        options = VIEWS.mapIndexed { i, v -> if (i == 1 && fresh > 0) "$v · $fresh" else v },
+                        selected = view,
+                        onSelect = { view = it },
                     )
+                    if (view != 1) {
+                        Segments(
+                            options = SPHERES.map { it.second },
+                            selected = SPHERES.indexOfFirst { it.first == sphere }.coerceAtLeast(0),
+                            onSelect = { sphere = SPHERES[it].first },
+                        )
+                    }
                 }
             }
+        }
+
+        if (crmMode) {
+            when (crmView) {
+                0 -> crmPipeline(crm)
+                1 -> crmClients(crm)
+                else -> crmTies(crm)
+            }
+            return@LazyColumn
         }
 
         // Разобранные наговоры, которые ещё ждут решения, — над видами.
@@ -303,7 +446,14 @@ fun DelaTab(app: PravkaApp) {
             0 -> morningView(Dela.morning(snap, me, today, sphere, now), Dela.quick(snap, me, sphere), actions) { view = 1 }
             1 -> newView(
                 batches = Dela.newBatches(snap, me),
+                autoClosed = Dela.autoClosed(snap, me, now),
                 snap = snap,
+                onReopen = { t ->
+                    scope.launch {
+                        app.delaDo(listOf(Dela.statusOp("task.reopen", t.id)))
+                        Feedback.toast(app, "Вернул в работу: ${t.title.take(40)}")
+                    }
+                },
                 onAccept = { items ->
                     scope.launch {
                         app.delaDo(items.map { Dela.decideOp(it.id, accept = true) })
@@ -352,6 +502,31 @@ fun DelaTab(app: PravkaApp) {
                 scope.launch { app.delaDo(listOf(Dela.statusOp(op, fresh.id))) }
             },
             onStart = { openTask = null; actions.start(fresh) },
+            // Микрофон у дела: команда про одно это дело, правит сервер.
+            onAsk = { text -> runAsk(askTaskKey(fresh.id), text, DelaAsk.taskScope(fresh.id)) },
+            asking = ask.running == askTaskKey(fresh.id),
+            askError = ask.error(askTaskKey(fresh.id)),
+        )
+    }
+    CrmSheets(crm)
+    val shown = ask.shown
+    if (shown != null) {
+        AskResultSheet(
+            shown = shown,
+            snap = snap,
+            running = ask.running == shown.key,
+            onDismiss = { ask.shown = null },
+            onOpen = { id -> snap.tasks[id]?.let { ask.shown = null; openTask = it } },
+            onUndo = { r ->
+                ask.shown = null
+                scope.launch {
+                    // Отмена — обычными операциями очереди с op_id: дошли не сразу — уйдут сами.
+                    app.delaStore.enqueue(DelaAsk.undoOps(r))
+                    val sent = app.delaSync.pushNow(4_000L)
+                    Feedback.toast(app, if (sent) "Вернул как было" else "Вернул как было — уйдёт на сервер, когда будет связь")
+                }
+            },
+            onRetry = { text -> runAsk(shown.key, text, shown.scope) },
         )
     }
     if (newTask) {
@@ -378,9 +553,11 @@ fun DelaTab(app: PravkaApp) {
             task = proposed,
             snap = snap,
             isNew = true,
-            title = "Предложение",
+            title = if (sg.kind == "update") "Уточнить ${proposed.numLabel}" else "Предложение",
             saveText = "Принять",
-            quote = sg.quote,
+            // У уточнения подробности (note) лягут комментарием к делу — видны и здесь.
+            quote = listOfNotNull(sg.payloadObj().optString("note").takeIf { sg.kind == "update" && it.isNotBlank() && it != "null" }, sg.quote.takeIf { it.isNotBlank() })
+                .joinToString(" · "),
             onDismiss = { editingSuggestion = null },
             onSave = { after ->
                 editingSuggestion = null
@@ -412,8 +589,8 @@ fun DelaTab(app: PravkaApp) {
     }
 }
 
-/** Что умеет строка дела — одним набором на все виды. */
-private class DelaActions(
+/** Что умеет строка дела — одним набором на все виды (и на страницах CRM). */
+internal class DelaActions(
     val open: (Dela.Task) -> Unit,
     val start: (Dela.Task) -> Unit,
     val done: (Dela.Task) -> Unit,
@@ -455,7 +632,7 @@ private fun delaStatusLine(
 
 // ---------------------------------------------------------------- виды
 
-private fun LazyListScope.section(key: String, label: String, list: List<Dela.Task>, actions: DelaActions, hint: String? = null) {
+internal fun LazyListScope.section(key: String, label: String, list: List<Dela.Task>, actions: DelaActions, hint: String? = null) {
     if (list.isEmpty()) return
     item(key = key) {
         PaperCard(label = "$label · ${list.size}", info = hint) { TaskRows(list, actions) }
@@ -481,7 +658,6 @@ private fun LazyListScope.morningView(
     section("m:now", "сейчас", m.now, actions, "Дела, отмеченные «Сейчас» на сегодня. Завтра отметка гаснет сама.")
     section("m:today", "сегодня и просрочено", m.today, actions)
     section("m:nudge", "напомнить", m.nudge, actions, "Мяч у человека, и пора напомнить: настал день напоминания или срок.")
-    section("m:paid", "оплачено, без срока", m.paidUndated, actions, "Моё по платным проектам, у которого нет срока: деньги без даты.")
     section("m:others", "от других", m.fromOthers, actions, "Дела, которые поставили тебе другие за последние три дня.")
     if (quick.isNotEmpty()) {
         item(key = "m:quick") {
@@ -500,19 +676,30 @@ private fun LazyListScope.morningView(
 
 private fun LazyListScope.newView(
     batches: List<Dela.Batch>,
+    autoClosed: List<Dela.Suggestion>,
     snap: Dela.Snapshot,
+    onReopen: (Dela.Task) -> Unit,
     onAccept: (List<Dela.Suggestion>) -> Unit,
     onEdit: (Dela.Suggestion) -> Unit,
     onReject: (Dela.Suggestion) -> Unit,
 ) {
     if (batches.isEmpty()) {
         item(key = "n:empty") { Box(Modifier.padding(start = 4.dp)) { PaperHint("Нового нет — всё разобрано.") } }
-        return
     }
     for (b in batches) {
         item(key = "n:" + (b.ref.ifBlank { b.items.first().id })) {
             val many = b.items.size > 1
-            PaperCard(label = (b.title.ifBlank { sourceWord(b.items.first().source) }).take(40) + if (many) " · ${b.items.size}" else "") {
+            // Пачка — одна встреча или окно дайджеста: заголовок и значок источника, как в вебе.
+            PaperCard(
+                label = (b.title.ifBlank { sourceWord(b.source) }).take(40) + if (many) " · ${b.items.size}" else "",
+                trailing = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(sourceWord(b.source), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.width(6.dp))
+                        Icon(sourceGlyph(b.source), contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                    }
+                },
+            ) {
                 b.items.forEachIndexed { i, sg ->
                     if (i > 0) RowRule()
                     SuggestionRow(sg, snap, onAccept = { onAccept(listOf(sg)) }, onEdit = { onEdit(sg) }, onReject = { onReject(sg) })
@@ -531,6 +718,51 @@ private fun LazyListScope.newView(
             }
         }
     }
+    // Очевидное автоматика закрывает сама (правило 5 сервера, 05.10.2026) —
+    // здесь видно, что и почему, и можно вернуть. Синк эти строки приносил
+    // всегда, телефон их раньше не показывал.
+    if (autoClosed.isNotEmpty()) {
+        item(key = "n:auto") {
+            PaperCard(
+                label = "закрыто само · ${autoClosed.size}",
+                info = "За неделю: очевидное из встреч и Telegram сервер закрыл сам — по свежей встрече или переписке, " +
+                    "только твои открытые дела. Основание легло комментарием к делу. Зря — «Вернуть».",
+            ) {
+                autoClosed.forEachIndexed { i, sg ->
+                    if (i > 0) RowRule()
+                    AutoClosedRow(sg, snap.tasks[sg.taskId], onReopen)
+                }
+            }
+        }
+    }
+}
+
+/** «#9 Продлить Контур», откуда и когда, основание — и «Вернуть», пока дело закрыто. */
+@Composable
+private fun AutoClosedRow(sg: Dela.Suggestion, t: Dela.Task?, onReopen: (Dela.Task) -> Unit) {
+    val c = MaterialTheme.colorScheme
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text(t?.let { "${it.numLabel} ${it.title}" } ?: "дело не видно", style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            val meta = listOf(sg.batchTitle.ifBlank { sourceWord(sg.source) }, delaDate(sg.decidedAt)).filter { it.isNotBlank() }.joinToString(" · ")
+            Text(meta, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, maxLines = 1)
+            if (sg.quote.isNotBlank()) {
+                Text("«${sg.quote.take(200)}»", style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        when {
+            t != null && t.status == Dela.DONE -> PaperTextButton("Вернуть", icon = Glyphs.Undo, onClick = { onReopen(t) })
+            t != null && t.open -> Text("вернул в работу", style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
+        }
+    }
+}
+
+/** Значок пачки — откуда она: встреча, Telegram, Claude. */
+private fun sourceGlyph(source: String) = when (source) {
+    "meeting" -> Glyphs.Mic
+    "telegram", "userbot" -> Glyphs.Send
+    "mcp" -> Glyphs.Ask
+    else -> Glyphs.Spark
 }
 
 private fun sourceWord(source: String): String = when (source) {
@@ -552,29 +784,57 @@ private fun SuggestionRow(
     onReject: () -> Unit,
 ) {
     val p = sg.payloadObj()
+    val c = MaterialTheme.colorScheme
+    // ✎ — у «завести» и «уточнить»: черновик правится той же карточкой. У «закрыть» правки нет — только да или нет.
+    val editable = sg.kind == "create" || sg.kind == "update"
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Column(Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).clickable(onClick = onEdit)) {
+        Column(Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).clickable(enabled = editable, onClick = onEdit)) {
+            val t = snap.tasks[sg.taskId]
+            val ref = t?.let { "${it.numLabel} ${it.title}" } ?: "дело не видно"
             val head = when (sg.kind) {
-                "close" -> "закрыть: " + (snap.tasks[sg.taskId]?.title ?: sg.title)
-                "assign" -> "взять: " + (snap.tasks[sg.taskId]?.title ?: sg.title)
-                "update" -> "поправить: " + (snap.tasks[sg.taskId]?.title ?: sg.title)
+                "close" -> "Закрыть: $ref"
+                "assign" -> "Взять себе: $ref"
+                "update" -> "Уточнить: $ref"
                 else -> sg.title
             }
             Text(head, style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            val meta = listOf(
-                p.optString("project_name").takeIf { it.isNotBlank() && it != "null" }?.let { "#$it" },
-                p.optString("person_name").takeIf { it.isNotBlank() && it != "null" },
-                p.optString("due_date").takeIf { it.isNotBlank() && it != "null" }?.let { "срок " + shortDate(it) },
-            ).filterNotNull().joinToString(" · ")
-            if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-            if (sg.quote.isNotBlank()) {
-                Text("«${sg.quote.take(160)}»", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            val meta = if (sg.kind == "update") {
+                // Что именно поменяется: название, срок «было → стало», мяч с человеком.
+                val u = Dela.update(sg, snap)
+                listOfNotNull(
+                    u.title.takeIf { it.isNotBlank() }?.let { "название: «$it»" },
+                    u.dueTo.takeIf { it.isNotBlank() }?.let { "срок " + (if (u.dueFrom.isNotBlank()) delaDate(u.dueFrom) + " → " else "") + delaDate(it) },
+                    if (u.ball.isNotBlank()) "мяч: " + ballWord(u.ball) + (if (u.person.isNotBlank()) " ${u.person}" else "")
+                    else u.person.takeIf { it.isNotBlank() }?.let { "человек: $it" },
+                ).joinToString(" · ")
+            } else if (sg.kind == "create") {
+                listOfNotNull(
+                    p.optString("project_name").takeIf { it.isNotBlank() && it != "null" }?.let { "#$it" },
+                    p.optString("person_name").takeIf { it.isNotBlank() && it != "null" },
+                    p.optString("ball").takeIf { it == Dela.WAITING || it == Dela.AGENDA }?.let { ballWord(it) },
+                    p.optString("due_date").takeIf { it.isNotBlank() && it != "null" }?.let { "срок " + delaDate(it) },
+                ).joinToString(" · ")
+            } else {
+                t?.projectName.orEmpty()
+            }
+            if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            // Подробности уточнения — отдельной строкой: при принятии лягут комментарием к делу.
+            val note = if (sg.kind == "update") p.optString("note").takeIf { it.isNotBlank() && it != "null" } else null
+            if (note != null) Text("+ $note", style = MaterialTheme.typography.bodySmall, color = c.primary, maxLines = 4, overflow = TextOverflow.Ellipsis)
+            if (sg.quote.isNotBlank() && sg.quote != sg.title) {
+                Text("«${sg.quote.take(200)}»", style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
         GlyphButton(Glyphs.Close, "отклонить", onClick = onReject, size = 36.dp)
-        GlyphButton(Glyphs.Edit, "поправить и принять", onClick = onEdit, size = 36.dp)
-        GlyphButton(Glyphs.Check, "принять", onClick = onAccept, size = 36.dp, tint = MaterialTheme.colorScheme.primary)
+        if (editable) GlyphButton(Glyphs.Edit, "поправить и принять", onClick = onEdit, size = 36.dp)
+        GlyphButton(Glyphs.Check, "принять", onClick = onAccept, size = 36.dp, tint = c.primary)
     }
+}
+
+private fun ballWord(ball: String): String = when (ball) {
+    Dela.WAITING -> "жду"
+    Dela.AGENDA -> "повестка"
+    else -> "моё"
 }
 
 private fun LazyListScope.waitingView(groups: List<Dela.Waiting>, today: String, actions: DelaActions) {
@@ -606,14 +866,10 @@ private fun LazyListScope.weekView(
     section("wk:wait", "жду дольше недели", w.waitingStale, actions, "Мяч у человека больше недели, и напомнить не назначено.")
     if (w.noNextStep.isNotEmpty()) {
         item(key = "wk:next") {
-            PaperCard(label = "деньги без следующего шага · ${w.noNextStep.size}", info = "Платные и перспективные проекты, где нет ни одного моего открытого дела.") {
+            PaperCard(label = "проекты без моего следующего шага · ${w.noNextStep.size}", info = "Проекты в работе, где нет ни одного моего открытого дела.") {
                 w.noNextStep.forEachIndexed { i, p ->
                     if (i > 0) RowRule()
-                    PaperRow(
-                        title = p.name,
-                        hint = if (p.moneyDefault == "paid") "оплачено" else "развитие",
-                        onClick = { actions.project(p.id) },
-                    )
+                    PaperRow(title = p.name, onClick = { actions.project(p.id) })
                 }
             }
         }
@@ -693,21 +949,22 @@ private fun LazyListScope.personPage(v: Dela.PersonView, actions: DelaActions) {
     }
 }
 
-private fun LazyListScope.projectPage(v: Dela.ProjectView, actions: DelaActions) {
+/** Проект: шапка и дела из копии. У клиента при открытой CRM сделки показывает блок CRM выше — здесь их не повторяем. */
+private fun LazyListScope.projectPage(v: Dela.ProjectView, actions: DelaActions, crmClient: Boolean = false) {
     item(key = "pr:head") {
-        PaperCard(label = "проект") {
-            Text(v.project?.name ?: "проект не найден", style = MaterialTheme.typography.titleMedium)
+        PaperCard(label = if (crmClient) "дела клиента" else "проект") {
+            if (!crmClient) Text(v.project?.name ?: "проект не найден", style = MaterialTheme.typography.titleMedium)
             val p = v.project
-            if (p != null) {
+            if (p != null && !crmClient) {
                 val bits = listOf(
                     if (p.sphere == "home") "дом" else "работа",
                     when (p.kind) { "client" -> "клиент"; "internal" -> "служебный"; else -> "личный" },
-                    when (p.moneyDefault) { "paid" -> "оплачено"; "potential" -> "развитие"; else -> "" },
-                ).filter { it.isNotBlank() }
+                )
                 PaperHint(bits.joinToString(" · ") + if (p.aliases.isNotEmpty()) " · зовут: " + p.aliases.joinToString(", ") else "")
                 if (p.note.isNotBlank()) PaperHint(p.note)
             }
-            if (v.deals.isNotEmpty()) PaperHint("сделки: " + v.deals.joinToString(" · ") { it.name + if (it.stage.isNotBlank()) " (${stageWord(it.stage)})" else "" })
+            if (v.deals.isNotEmpty() && !crmClient) PaperHint("сделки: " + v.deals.joinToString(" · ") { it.name + if (it.stage.isNotBlank()) " (${stageWord(it.stage)})" else "" })
+            if (crmClient && v.open.isEmpty()) PaperHint("Открытых дел нет. Следующий шаг сделки — дело в её карточке.")
         }
     }
     section("pr:open", "открытые", v.open, actions)
@@ -723,20 +980,12 @@ private fun LazyListScope.projectPage(v: Dela.ProjectView, actions: DelaActions)
     }
 }
 
-private fun stageWord(stage: String): String = when (stage) {
-    "lead" -> "лид"
-    "proposal" -> "предложение"
-    "mandate" -> "мандат"
-    "active" -> "в работе"
-    "closing" -> "закрытие"
-    "archive" -> "архив"
-    else -> stage
-}
+private fun stageWord(stage: String): String = ru.zf.pravka.core.DelaCrm.STAGE[stage] ?: stage
 
 // ---------------------------------------------------------------- строки
 
 @Composable
-private fun TaskRows(list: List<Dela.Task>, actions: DelaActions, today: String = LocalDate.now().toString()) {
+internal fun TaskRows(list: List<Dela.Task>, actions: DelaActions, today: String = LocalDate.now().toString()) {
     list.forEachIndexed { i, t ->
         if (i > 0) RowRule()
         TaskRow(t, actions, today)
@@ -746,7 +995,8 @@ private fun TaskRows(list: List<Dela.Task>, actions: DelaActions, today: String 
 /**
  * Дело строкой: кружок — закрыть одним касанием (как в Todoist), сама строка —
  * карточка, ▶ — запись в Засечке с id дела и проекта. Под названием — номер,
- * проект, у кого мяч, срок, оценка и деньги.
+ * проект, у кого мяч, срок и оценка. Денег дела нет с 05.10.2026: владелец —
+ * «тяжело смотреть, нагружает».
  */
 @Composable
 private fun TaskRow(t: Dela.Task, actions: DelaActions, today: String) {
@@ -760,7 +1010,7 @@ private fun TaskRow(t: Dela.Task, actions: DelaActions, today: String) {
             Modifier
                 .size(22.dp)
                 .clip(CircleShape)
-                .border(1.5.dp, if (t.moneyEff == "paid" && t.open) c.error else c.outline, CircleShape)
+                .border(1.5.dp, c.outline, CircleShape)
                 .clickable { actions.done(t) },
             contentAlignment = Alignment.Center,
         ) {
@@ -821,21 +1071,20 @@ private fun taskMeta(t: Dela.Task, today: String): String {
     parts += t.numLabel + if (t.local) " ⏳" else ""
     if (t.projectName.isNotBlank()) parts += t.projectName
     when (t.ball) {
-        Dela.WAITING -> parts += "жду: " + t.who.ifBlank { "?" } + if (t.waitingSince.isNotBlank()) " с " + shortDate(t.waitingSince) else ""
+        Dela.WAITING -> parts += "жду: " + t.who.ifBlank { "?" } + if (t.waitingSince.isNotBlank()) " с " + delaDate(t.waitingSince) else ""
         Dela.AGENDA -> parts += "при встрече: " + t.who.ifBlank { "?" }
         else -> if (t.who.isNotBlank()) parts += "для: " + t.who
     }
-    if (t.dueDate.isNotBlank()) parts += (if (t.dueDate < today && t.open) "просрочено " else "срок ") + shortDate(t.dueDate) +
+    if (t.dueDate.isNotBlank()) parts += (if (t.dueDate < today && t.open) "просрочено " else "срок ") + delaDate(t.dueDate) +
         if (t.dueTime.isNotBlank()) " " + t.dueTime.take(5) else ""
-    if (t.ball == Dela.WAITING && t.nudgeOn.isNotBlank()) parts += "напомнить " + shortDate(t.nudgeOn)
+    if (t.ball == Dela.WAITING && t.nudgeOn.isNotBlank()) parts += "напомнить " + delaDate(t.nudgeOn)
     if (t.estimateMin > 0) parts += "${t.estimateMin} мин"
-    if (t.moneyEff == "paid") parts += "₽" else if (t.moneyEff == "potential") parts += "₽?"
     if (t.focusOn == today) parts += "сейчас"
     if (t.status == Dela.DONE) parts += "закрыто" else if (t.status == Dela.CANCELLED) parts += "отменено"
     return parts.joinToString(" · ")
 }
 
-private fun shortDate(iso: String): String = runCatching {
+internal fun delaDate(iso: String): String = runCatching {
     LocalDate.parse(iso.take(10)).format(DateTimeFormatter.ofPattern("d MMM", Locale("ru")))
 }.getOrDefault(iso)
 
@@ -843,11 +1092,12 @@ private fun shortDate(iso: String): String = runCatching {
 
 /**
  * Карточка дела: всё правится — название, заметки, проект и сделка, мяч и
- * человек, срок и напоминание, оценка, деньги, «хочу сам», «сейчас», метки,
+ * человек, срок с временем и напоминание, оценка, «хочу сам», «сейчас», метки,
  * комментарии; дело закрывается, отменяется и возвращается. Сохранение — одна
  * операция `task.set` только с поменявшимися полями и тем, что телефон видел
  * до правки (`was`): если поле успели поменять другие, сервер скажет о споре.
- * Журнал правок — только с сервера, по кнопке.
+ * Журнал правок — только с сервера, по кнопке. Денег дела в карточке нет с
+ * 05.10.2026 (поле в данных осталось); микрофон — команда Claude про это дело.
  */
 @Composable
 internal fun DelaTaskSheet(
@@ -865,9 +1115,16 @@ internal fun DelaTaskSheet(
     /** Черновик Разноски: «убрать это дело» корзиной, без «Сейчас» (у черновика его нет). */
     onDrop: (() -> Unit)? = null,
     warn: String = "",
+    /** Команда Claude про это дело (сервер, `/api/ask`); null — микрофона нет (новое дело, черновик). */
+    onAsk: ((String) -> Unit)? = null,
+    asking: Boolean = false,
+    askError: String = "",
 ) {
     var f by remember(task.id) { mutableStateOf(task) }
     var picking by remember { mutableStateOf("") }
+    var askShown by remember(task.id) { mutableStateOf(askError.isNotBlank() || asking) }
+    var askText by remember(task.id) { mutableStateOf("") }
+    var listening by remember { mutableStateOf(false) }
     var comment by remember { mutableStateOf("") }
     var history by remember { mutableStateOf<List<String>?>(null) }
     var historyNote by remember { mutableStateOf("") }
@@ -881,10 +1138,30 @@ internal fun DelaTaskSheet(
         title = title ?: if (isNew) "Новое дело" else "Дело ${task.numLabel}",
         icon = Glyphs.Delo,
         subtitle = if (existing) listOfNotNull(
-            task.createdAt.take(10).takeIf { it.isNotBlank() }?.let { "заведено " + shortDate(it) },
+            task.createdAt.take(10).takeIf { it.isNotBlank() }?.let { "заведено " + delaDate(it) },
             sourceName(task.source),
         ).joinToString(" · ") else null,
         actions = {
+            if (existing && onAsk != null) {
+                GlyphButton(
+                    Glyphs.Mic,
+                    "сказать Claude, что сделать с этим делом",
+                    tint = if (askShown) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    onClick = {
+                        askShown = true
+                        // Сразу слушать — как микрофон у дела в вебе; набрать можно и руками.
+                        val service = PravkaAccessibilityService.instance
+                        if (!listening && !asking && service != null) {
+                            listening = service.listenForDelaReason { said ->
+                                listening = false
+                                val full = (askText.trim() + " " + said.trim()).trim()
+                                askText = full
+                                if (full.isNotBlank()) onAsk(full)
+                            }
+                        }
+                    },
+                )
+            }
             if (existing && task.open) GlyphButton(Glyphs.Play, "начать в ленте", onClick = onStart, tint = MaterialTheme.colorScheme.primary)
         },
         footer = {
@@ -900,6 +1177,34 @@ internal fun DelaTaskSheet(
             PaperButton(saveText, primary = true, enabled = f.title.isNotBlank(), onClick = { onSave(f.copy(title = f.title.trim(), notes = f.notes.trim())) })
         },
     ) {
+        if (askShown && onAsk != null) {
+            // Команда про это дело: «на пятницу, это Наташе, первым делом». Не вышло — текст остаётся.
+            PaperField(
+                value = askText,
+                onValueChange = { askText = it },
+                label = if (listening) "Слушаю — что сделать с делом…" else "Claude: «на пятницу, это Наташе»",
+                singleLine = false,
+                maxLines = 3,
+                enabled = !asking,
+            )
+            if (asking) ThinkingLine("Claude правит…")
+            if (askError.isNotBlank() && !asking) PaperHint(askError, MaterialTheme.colorScheme.error)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AskMic(listening, { listening = it }, enabled = !asking, onText = { said ->
+                    val full = (askText.trim() + " " + said.trim()).trim()
+                    askText = full
+                    if (full.isNotBlank()) onAsk(full)
+                })
+                Spacer(Modifier.weight(1f))
+                PaperTextButton(
+                    if (askError.isNotBlank()) "Ещё раз" else "Отдать Claude",
+                    icon = Glyphs.Ask,
+                    enabled = askText.isNotBlank() && !asking,
+                    onClick = { onAsk(askText.trim()) },
+                )
+            }
+            RowRule()
+        }
         if (quote.isNotBlank()) PaperHint("«${quote.take(300)}»")
         if (warn.isNotBlank()) PaperHint(warn, MaterialTheme.colorScheme.error)
         PaperField(value = f.title, onValueChange = { f = f.copy(title = it) }, label = "Кто: что сделать", singleLine = false)
@@ -935,8 +1240,13 @@ internal fun DelaTaskSheet(
         if (f.ball != Dela.MINE && f.personId.isBlank()) {
             PaperHint("Без человека «жду» и «при встрече» некого ждать — выбери, у кого мяч.", MaterialTheme.colorScheme.error)
         }
+        // Кто просил — как в вебе («Его просьбы ко мне»): строкой, если есть.
+        if (f.requestedBy.isNotBlank()) {
+            PaperHint("просил: " + (snap.people[f.requestedBy]?.label ?: task.requestedByShort.ifBlank { "?" }))
+        }
 
         DateLine("Срок", f.dueDate, today) { f = f.copy(dueDate = it, dueTime = if (it.isBlank()) "" else f.dueTime) }
+        if (f.dueDate.isNotBlank()) TimeLine(f.dueTime) { f = f.copy(dueTime = it) }
         if (f.ball == Dela.WAITING) DateLine("Напомнить", f.nudgeOn, today) { f = f.copy(nudgeOn = it) }
 
         PaperHint("Сколько займёт")
@@ -944,14 +1254,6 @@ internal fun DelaTaskSheet(
             for (m in listOf(5, 10, 30, 60, 120)) {
                 PaperChip(if (m < 60) "$m мин" else "${m / 60} ч", selected = f.estimateMin == m, onClick = { f = f.copy(estimateMin = if (f.estimateMin == m) 0 else m) })
             }
-        }
-        PaperHint("Деньги")
-        ChipRow {
-            val inherited = snap.projects[f.projectId]?.moneyDefault ?: "none"
-            PaperChip("как у проекта" + if (inherited == "paid") " (₽)" else if (inherited == "potential") " (₽?)" else "", selected = f.money.isBlank(), onClick = { f = f.copy(money = "") })
-            PaperChip("оплачено", selected = f.money == "paid", onClick = { f = f.copy(money = "paid") })
-            PaperChip("развитие", selected = f.money == "potential", onClick = { f = f.copy(money = "potential") })
-            PaperChip("без денег", selected = f.money == "none", onClick = { f = f.copy(money = "none") })
         }
         if (onDrop == null) PaperToggle(
             "Сейчас — на сегодня",
@@ -972,7 +1274,7 @@ internal fun DelaTaskSheet(
             PaperHint("Комментарии")
             for (cm in comments) {
                 Text(
-                    (snap.users[cm.authorId]?.name ?: cm.authorId).ifBlank { "—" } + " · " + shortDate(cm.createdAt) + (if (cm.local) " ⏳" else "") + "\n" + cm.text,
+                    (snap.users[cm.authorId]?.name ?: cm.authorId).ifBlank { "—" } + " · " + delaDate(cm.createdAt) + (if (cm.local) " ⏳" else "") + "\n" + cm.text,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -1064,7 +1366,7 @@ private fun DateLine(label: String, value: String, today: LocalDate, onChange: (
             text = v
             if (v.isBlank()) onChange("") else if (Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(v)) onChange(v)
         },
-        label = "$label ГГГГ-ММ-ДД" + if (value.isNotBlank()) " · " + shortDate(value) else "",
+        label = "$label ГГГГ-ММ-ДД" + if (value.isNotBlank()) " · " + delaDate(value) else "",
     )
     ChipRow {
         val friday = today.plusDays(((5 - today.dayOfWeek.value + 7) % 7).toLong().let { if (it == 0L) 7L else it })
@@ -1072,6 +1374,30 @@ private fun DateLine(label: String, value: String, today: LocalDate, onChange: (
             PaperChip(name, selected = value == d.toString(), onClick = { onChange(d.toString()) })
         }
         if (value.isNotBlank()) PaperChip("убрать", selected = false, onClick = { onChange("") })
+    }
+}
+
+/**
+ * Время срока ЧЧ:ММ — правится, а не только видно (паритет с вебом). Сервер
+ * хранит «10:00:00»; показываем и сравниваем первые пять знаков, пустое — без времени.
+ */
+@Composable
+private fun TimeLine(value: String, onChange: (String) -> Unit) {
+    var text by remember(value) { mutableStateOf(value.take(5)) }
+    val bad = text.isNotBlank() && Dela.normTime(text) == null
+    PaperField(
+        value = text,
+        onValueChange = { v ->
+            text = v
+            if (v.isBlank()) onChange("") else Dela.normTime(v)?.let { if (it != value.take(5)) onChange(it) }
+        },
+        label = "Время ЧЧ:ММ",
+        isError = bad,
+        supporting = if (bad) "например 9:30 или 18:00" else null,
+    )
+    ChipRow {
+        for (t in listOf("09:00", "12:00", "15:00", "18:00")) PaperChip(t, selected = value.take(5) == t, onClick = { onChange(t) })
+        if (value.isNotBlank()) PaperChip("без времени", selected = false, onClick = { onChange("") })
     }
 }
 
