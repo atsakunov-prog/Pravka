@@ -289,7 +289,22 @@ object ArchiveEvents {
 
     // ------------------------------------------------------------------ Деньги
 
-    fun moneyEntry(e: MoneyEntry, clock: Clock): Item =
+    /**
+     * Все записи журнала: черновик до «ОК» — ещё не факт, уйдёт, когда станет
+     * записью. Счёт каждой (`MoneyCashflow.places`) считается один раз на проход.
+     */
+    fun moneyEntries(entries: List<MoneyEntry>, clock: Clock): List<Item> {
+        val places = MoneyCashflow.places(entries)
+        return entries.filter { !it.draft }.map { moneyEntry(it, clock, places[it.id]) }
+    }
+
+    /**
+     * Операция со всеми полями. [place] — где она стоит в балансе телефона
+     * (05.10.2026): `balance_account` — счёт, `roundup_from` — у округления в
+     * копилку счёт покупки, отдавший деньги. Сервер «Деньги» считает остатки
+     * этим счётом, а не угадывает его по карте.
+     */
+    fun moneyEntry(e: MoneyEntry, clock: Clock, place: MoneyCashflow.Place? = null): Item =
         Item("money.entry", e.id, obj(
             "id" to e.id,
             "owner" to e.owner,
@@ -315,9 +330,30 @@ object ArchiveEvents {
             "match_id" to e.matchId,
             "replaced_by" to e.replacedBy,
             "take_id" to if (e.takeId == 0L) "" else e.takeId.toString(),
+            "balance_account" to place?.account,
+            "roundup_from" to place?.roundupFrom,
         ))
 
-    fun moneyReference(s: MoneyStore.State, clock: Clock): Item =
+    /**
+     * Справочники Денег одной записью. Кроме категорий и правил (05.10.2026,
+     * чтобы сервер «Деньги» видел то же, что телефон):
+     *  * `anchors` — якоря остатков, которые знает баланс телефона ([anchors] —
+     *    `MoneyEngine.anchors`): заводской снимок и вписанные. «Доступно» из
+     *    пушей едет в записи самого пуша (`moneyPushes`): запись «all» шлётся
+     *    целиком на каждую правку, и якорь каждого пуша здесь переотправлял бы
+     *    её по пятнадцать раз в день. Вид `life.money_balances` собирает оба;
+     *  * `accounts` — реестр счетов баланса (`MoneyCashflow.registry`);
+     *  * `statements` — что покрывает каждая загруженная выписка: банк, счёт,
+     *    дни, строки, когда загружена. Сервер по нему отличает «операций не
+     *    было» от «выписки за эти дни нет».
+     */
+    fun moneyReference(
+        s: MoneyStore.State,
+        clock: Clock,
+        anchors: List<MoneyCashflow.Anchor> = s.balances,
+        zfAccounts: Set<String> = s.zfAccounts,
+        owner: String = "",
+    ): Item =
         Item("money.reference", "all", obj(
             "categories" to arr(MoneyCategories.ALL.map { c ->
                 obj("key" to c.key, "title" to c.title, "group" to c.group, "shelf" to c.shelf.name.lowercase(), "income" to c.income)
@@ -328,12 +364,75 @@ object ArchiveEvents {
                     "owner" to r.owner, "comment" to r.comment, "source" to r.source, "mcc" to r.mcc, "amount_kop" to r.amountKop,
                 )
             }),
-            "anchors" to arr(s.balances.map { a ->
-                obj("account" to a.account, "at" to clock.iso(a.ts), "kop" to a.kop, "source" to a.source)
+            "anchors" to arr(
+                anchors.filter { it.origin != MoneyCashflow.Origin.PUSH }
+                    .sortedWith(compareBy({ it.account }, { it.ts }, { it.origin.ordinal }, { it.kop }))
+                    .map { anchorJson(it, clock, emptyMap()) }
+            ),
+            "accounts" to arr(MoneyCashflow.registry(s.entries, anchors, zfAccounts, owner).map { a ->
+                obj(
+                    "name" to a.name, "side" to a.side, "kind" to a.kind, "currency" to a.currency,
+                    "cards" to arr(a.cards), "owner" to a.owner,
+                )
             }),
+            "statements" to arr(statements(s.imports, s.entries, clock)),
             "zf_accounts" to arr(s.zfAccounts.sorted()),
             "not_zf_accounts" to arr(s.notZfAccounts.sorted()),
         ))
+
+    /**
+     * Якорь одной формы для справочника и для пуша. `covers` дополняется
+     * строкой выписки, которая заменила пуш ([replacedBy]): в «Доступно» уже
+     * вошла именно эта операция, и сервер не прибавит её второй раз.
+     */
+    private fun anchorJson(a: MoneyCashflow.Anchor, clock: Clock, replacedBy: Map<String, String>): JSONObject = obj(
+        "account" to a.account, "at" to clock.iso(a.ts), "kop" to a.kop, "source" to a.origin.key,
+        "covers" to arr((a.covers + a.covers.mapNotNull { replacedBy[it] }).sorted()), "note" to a.source,
+    )
+
+    /** Банк загрузки по её виду (`MoneyStore.Import.kind`) и чьи строки она приносит. */
+    private val STATEMENT_BANKS = mapOf(
+        "Тиньков" to ("Т-Банк" to MoneyEntry.Source.TINKOFF),
+        "Альфа" to ("Альфа" to MoneyEntry.Source.ALFA),
+        "МКБ" to ("МКБ" to MoneyEntry.Source.MKB),
+        "ЗФ" to ("Т-Бизнес" to MoneyEntry.Source.TBIZ),
+    )
+
+    /**
+     * Что покрывает каждая загруженная выписка — по журналу загрузок стора
+     * (`MoneyStore.imports`): он ведётся с первой выписки, а сырьё в
+     * `imports/` — только с 25.09.2026, и без журнала пропали бы самые
+     * большие выгрузки. Выгрузка Т-Банка «все карты» несёт несколько счетов —
+     * строка на каждый: счёт по строкам журнала в днях выписки
+     * (`accountOf`), его дни — от первой до последней его строки там, строк —
+     * сколько их у счёта в эти дни.
+     */
+    private fun statements(imports: List<MoneyStore.Import>, entries: List<MoneyEntry>, clock: Clock): List<JSONObject> {
+        val cards = MoneyCashflow.cardMap(entries)
+        val bySource = entries.filter { it.fromBank }.groupBy { it.source }
+        val out = ArrayList<JSONObject>()
+        for (i in imports.sortedBy { it.ts }) {
+            if (i.fromTs <= 0L || i.toTs < i.fromTs) continue
+            val (bank, source) = STATEMENT_BANKS[i.kind] ?: continue
+            val rows = bySource[source].orEmpty().filter { it.ts in i.fromTs..i.toTs }
+            val byAccount = rows.groupBy { MoneyCashflow.accountOf(it, cards) ?: bank }
+            if (byAccount.isEmpty()) {
+                out += obj(
+                    "bank" to bank, "account" to null, "from" to clock.day(i.fromTs), "to" to clock.day(i.toTs),
+                    "rows" to i.rows, "loaded_at" to clock.iso(i.ts),
+                )
+                continue
+            }
+            for ((account, list) in byAccount.toSortedMap()) {
+                out += obj(
+                    "bank" to bank, "account" to account,
+                    "from" to clock.day(list.minOf { it.ts }), "to" to clock.day(list.maxOf { it.ts }),
+                    "rows" to list.size, "loaded_at" to clock.iso(i.ts),
+                )
+            }
+        }
+        return out
+    }
 
     /** У надиктовки денег номер — время в миллисекундах; другого времени у неё нет. */
     fun moneyTake(t: MoneyStore.Take, clock: Clock): Item {
@@ -348,7 +447,25 @@ object ArchiveEvents {
         ))
     }
 
-    fun moneyPush(p: MoneyStore.Push, clock: Clock): Item =
+    /**
+     * Пойманные пуши. У пуша Т-Банка с «Доступно» и узнанной картой — его
+     * якорь остатка ([anchors] — `MoneyEngine.anchors`, пушевые находят свой
+     * пуш по `covers`). Якорь живёт в записи пуша, а не в справочнике: пуш
+     * пишется один раз и меняется, только когда его заменила строка выписки.
+     */
+    fun moneyPushes(pushes: List<MoneyStore.Push>, anchors: List<MoneyCashflow.Anchor>, entries: List<MoneyEntry>, clock: Clock): List<Item> {
+        val byPush = anchors.filter { it.origin == MoneyCashflow.Origin.PUSH }
+            .flatMap { a -> a.covers.map { it to a } }.toMap()
+        val replacedBy = entries.filter { it.replacedBy.isNotEmpty() }.associate { it.id to it.replacedBy }
+        return pushes.map { p -> moneyPush(p, clock, byPush["push-" + p.key], replacedBy) }
+    }
+
+    fun moneyPush(
+        p: MoneyStore.Push,
+        clock: Clock,
+        anchor: MoneyCashflow.Anchor? = null,
+        replacedBy: Map<String, String> = emptyMap(),
+    ): Item =
         Item("money.push", p.key, obj(
             "day" to clock.day(p.ts),
             "at" to clock.iso(p.ts),
@@ -356,6 +473,7 @@ object ArchiveEvents {
             "title" to p.title,
             "text" to p.text,
             "result" to p.result,
+            "anchor" to anchor?.let { anchorJson(it, clock, replacedBy) },
         ))
 
     // ------------------------------------------------------------------ Тренер

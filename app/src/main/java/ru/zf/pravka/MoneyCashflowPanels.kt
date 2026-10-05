@@ -38,6 +38,7 @@ import ru.zf.pravka.core.MoneyEntry
 import ru.zf.pravka.core.MoneyFormat
 import ru.zf.pravka.core.MoneyScope
 import ru.zf.pravka.core.MoneyStats
+import ru.zf.pravka.core.ZfPartner
 import ru.zf.pravka.ui.Glyphs
 import ru.zf.pravka.ui.PaperAlert
 import ru.zf.pravka.ui.PaperButton
@@ -402,7 +403,9 @@ private fun AccountRow(a: MoneyCashflow.Account, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(a.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             PaperHint(
-                a.anchor?.let { "${it.source} · " + SimpleDateFormat("d MMM, HH:mm", Locale.forLanguageTag("ru")).format(Date(it.ts)) }
+                // Долг Наташе — не от якоря, а по правилу партнёрства: так и подписан.
+                if (a.name == MoneyCashflow.NATASHA_DEBT) ZfPartner.HINT
+                else a.anchor?.let { "${it.source} · " + SimpleDateFormat("d MMM, HH:mm", Locale.forLanguageTag("ru")).format(Date(it.ts)) }
                     ?: ("за 90 дней: " + MoneyFormat.k(a.flowKop, sign = true))
             )
         }

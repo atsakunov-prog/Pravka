@@ -19,8 +19,10 @@ import androidx.compose.ui.unit.dp
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -200,12 +202,24 @@ internal fun MoneySyncCard(app: PravkaApp) {
             title = syncTitle(st, now),
             hint = syncHint(st),
             icon = Glyphs.Refresh,
-            trailing = { StatusDot(if (st.error.isNotBlank()) false else if (st.at > 0) true else null) },
+            trailing = { StatusDot(if (st.error.isNotBlank() || st.idle.isNotBlank()) false else if (st.at > 0) true else null) },
             onClick = null,
         )
         if (st.error.isNotBlank()) {
             Spacer(Modifier.height(4.dp))
             PaperHint("Не вышло: ${st.error}", MaterialTheme.colorScheme.error)
+        }
+        if (st.idle.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            PaperHint("Обмен стоит: ${st.idle}", MaterialTheme.colorScheme.error)
+        }
+        // Куда телефон выкладывает свой журнал — сменился адрес сервера, и это видно здесь.
+        if (st.server.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            PaperHint(
+                "Сервер: ${st.server}" + if (st.uploadedAt > 0) " · свой журнал там с " +
+                    SimpleDateFormat("d MMMM, HH:mm", Locale("ru")).format(Date(st.uploadedAt)) else ""
+            )
         }
         if (st.devices.size > 1) {
             Spacer(Modifier.height(4.dp))
@@ -271,7 +285,18 @@ private fun mb(bytes: Long): String =
 @Composable
 internal fun MoneySyncLine(app: PravkaApp) {
     val home by app.homeServer.saved.collectAsState()
-    if (home == null) return
+    if (home == null) {
+        // Облака нет, а свой журнал обмена есть — телефон уже менялся, и вход
+        // пропал: это поломка, о ней строка и скажет. Нет журнала — не
+        // настраивали, и строки нет.
+        var lost by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) { lost = withContext(Dispatchers.IO) { app.moneyCloudSync.hasOwnJournal() } }
+        if (lost) PaperHint(
+            "общие деньги · облако семьи отключено — обмен стоит. Подключи: Настройки → Подключения → Облако семьи",
+            MaterialTheme.colorScheme.error,
+        )
+        return
+    }
     val st by app.moneyCloudSync.status.collectAsState()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
@@ -284,12 +309,16 @@ internal fun MoneySyncLine(app: PravkaApp) {
             now = System.currentTimeMillis()
         }
     }
+    val busyMin = if (st.running && st.startedAt > 0) (now - st.startedAt) / 60_000 else 0
     val text = when {
-        st.running -> "общие деньги · меняюсь с сервером…"
-        st.error.isNotBlank() -> "общие деньги · не вышло: ${st.error}"
-        else -> "общие деньги · " + syncTitle(st, now) + syncHint(st).takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
+        st.running -> "общие деньги · меняюсь с сервером…" + if (busyMin >= 1) " уже $busyMin мин" else ""
+        st.idle.isNotBlank() -> "общие деньги · обмен стоит: ${st.idle}"
+        st.error.isNotBlank() -> "общие деньги · не вышло: ${st.error}" + st.server.takeIf { it.isNotBlank() }?.let { " · сервер $it" }.orEmpty()
+        else -> "общие деньги · " + syncTitle(st, now) + syncHint(st).takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty() +
+            st.server.takeIf { it.isNotBlank() }?.let { " · сервер $it" }.orEmpty()
     }
-    PaperHint(text, if (st.error.isNotBlank() && !st.running) MaterialTheme.colorScheme.error else null)
+    val alarm = !st.running && (st.error.isNotBlank() || st.idle.isNotBlank()) || busyMin >= 3
+    PaperHint(text, if (alarm) MaterialTheme.colorScheme.error else null)
 }
 
 private fun syncTitle(st: MoneyCloudSync.Status, now: Long): String {
@@ -307,6 +336,8 @@ private fun syncHint(st: MoneyCloudSync.Status): String {
     if (st.at == 0L) return ""
     val parts = ArrayList<String>()
     if (st.sent > 0) parts.add("отправлено ${st.sent}")
+    // Сервер подтвердил свои куски того же размера — журнал правда там, а не «запрос ушёл».
+    if (st.uploadedAt > 0) parts.add("свой журнал на сервере")
     for ((d, n) in st.from) if (n > 0) parts.add("${st.devices[d] ?: d} +$n")
     return parts.joinToString(" · ").ifEmpty { "изменений не было" }
 }

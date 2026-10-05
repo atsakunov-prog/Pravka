@@ -330,7 +330,7 @@ class MoneyEngine(
             val bal = parsed.balanceKop ?: return@mapNotNull null
             // Без карты («счет RUB») не знаем, какой это счёт, — не гадаем.
             val account = cards[parsed.card] ?: return@mapNotNull null
-            MoneyCashflow.Anchor(account, p.ts, bal, "пуш «${p.title}»", covers = setOf("push-" + p.key))
+            MoneyCashflow.Anchor(account, p.ts, bal, "пуш «${p.title}»", covers = setOf("push-" + p.key), origin = MoneyCashflow.Origin.PUSH)
         }
         return factoryBalances() + s.balances + fromPushes
     }

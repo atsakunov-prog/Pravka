@@ -44,6 +44,11 @@ class WebDav(private val http: OkHttpClient) {
 
     class WebDavException(message: String, val code: Int = 0) : Exception(message)
 
+    private companion object {
+        /** Предел на один запрос списка, чтения, переноса. */
+        const val CALL_MS = 3 * 60_000L
+    }
+
     /** Папка по пути от корня сервера; [create] — завести недостающие. Нет папки и не заводим — пусто. */
     suspend fun list(c: Config, path: List<String>, create: Boolean): List<Item> = withContext(Dispatchers.IO) {
         propfind(c, path)?.let { return@withContext it }
@@ -53,28 +58,28 @@ class WebDav(private val http: OkHttpClient) {
     }
 
     suspend fun read(c: Config, path: List<String>, name: String): ByteArray = withContext(Dispatchers.IO) {
-        http.newCall(request(c, url(c, path, name)).get().build()).execute().use { resp ->
+        call(request(c, url(c, path, name)).get().build()).execute().use { resp ->
             if (!resp.isSuccessful) throw fail(resp.code, resp.message, resp.body?.string().orEmpty(), "чтение ${path.joinToString("/")}/$name")
             resp.body?.bytes() ?: ByteArray(0)
         }
     }
 
     suspend fun write(c: Config, path: List<String>, name: String, bytes: ByteArray, mime: String) =
-        put(c, path, name, bytes.toRequestBody(mime.toMediaType()))
+        put(c, path, name, bytes.toRequestBody(mime.toMediaType()), limitFor(bytes.size.toLong()))
 
-    /** Большой файл (копия базы — десятки МБ) — потоком с диска. */
+    /** Большой файл (копия базы — десятки МБ) — потоком с диска; срока на весь запрос нет. */
     suspend fun upload(c: Config, path: List<String>, name: String, file: File, mime: String) =
-        put(c, path, name, file.asRequestBody(mime.toMediaType()))
+        put(c, path, name, file.asRequestBody(mime.toMediaType()), 0L)
 
     suspend fun delete(c: Config, path: List<String>, name: String) = withContext(Dispatchers.IO) {
-        http.newCall(request(c, url(c, path, name)).delete().build()).execute().use { resp ->
+        call(request(c, url(c, path, name)).delete().build()).execute().use { resp ->
             if (!resp.isSuccessful && resp.code != 404) throw fail(resp.code, resp.message, resp.body?.string().orEmpty(), "удаление $name")
         }
     }
 
-    private suspend fun put(c: Config, path: List<String>, name: String, body: RequestBody) = withContext(Dispatchers.IO) {
+    private suspend fun put(c: Config, path: List<String>, name: String, body: RequestBody, limitMs: Long) = withContext(Dispatchers.IO) {
         val tmp = Dav.tempName(name)
-        http.newCall(request(c, url(c, path, tmp)).put(body).build()).execute().use { resp ->
+        call(request(c, url(c, path, tmp)).put(body).build(), limitMs).execute().use { resp ->
             if (!resp.isSuccessful) {
                 // Папку могли удалить руками на сервере — завести и повторить один раз.
                 if (resp.code == 409 || resp.code == 404) return@use false
@@ -84,7 +89,7 @@ class WebDav(private val http: OkHttpClient) {
         }.let { ok ->
             if (!ok) {
                 mkdirs(c, path)
-                http.newCall(request(c, url(c, path, tmp)).put(body).build()).execute().use { resp ->
+                call(request(c, url(c, path, tmp)).put(body).build(), limitMs).execute().use { resp ->
                     if (!resp.isSuccessful) throw fail(resp.code, resp.message, resp.body?.string().orEmpty(), "запись $name")
                 }
             }
@@ -94,9 +99,9 @@ class WebDav(private val http: OkHttpClient) {
             .header("Destination", Dav.encodedPath(c.url, path, name))
             .header("Overwrite", "T")
             .build()
-        http.newCall(move).execute().use { resp ->
+        call(move).execute().use { resp ->
             if (!resp.isSuccessful) {
-                runCatching { http.newCall(request(c, url(c, path, tmp)).delete().build()).execute().close() }
+                runCatching { call(request(c, url(c, path, tmp)).delete().build()).execute().close() }
                 throw fail(resp.code, resp.message, resp.body?.string().orEmpty(), "перенос $name на место")
             }
         }
@@ -106,7 +111,7 @@ class WebDav(private val http: OkHttpClient) {
     private fun propfind(c: Config, path: List<String>): List<Item>? {
         val body = Dav.PROPFIND.toRequestBody("application/xml; charset=utf-8".toMediaType())
         val req = request(c, url(c, path, null)).method("PROPFIND", body).header("Depth", "1").build()
-        http.newCall(req).execute().use { resp ->
+        call(req).execute().use { resp ->
             if (resp.code == 404) return null
             val text = resp.body?.string().orEmpty()
             if (resp.code != 207) {
@@ -128,12 +133,24 @@ class WebDav(private val http: OkHttpClient) {
     private fun mkdirs(c: Config, path: List<String>) {
         for (i in path.indices) {
             val sub = path.subList(0, i + 1)
-            http.newCall(request(c, url(c, sub, null)).method("MKCOL", null).build()).execute().use { resp ->
+            call(request(c, url(c, sub, null)).method("MKCOL", null).build()).execute().use { resp ->
                 // 405 — уже есть (так отвечает большинство серверов; rclone — 201).
                 if (!resp.isSuccessful && resp.code != 405) throw fail(resp.code, resp.message, resp.body?.string().orEmpty(), "папка ${sub.joinToString("/")}")
             }
         }
     }
+
+    /**
+     * Запрос с пределом на ВЕСЬ вызов, а не только на тишину сокета: роутер,
+     * который отдаёт ответ по капле, держал бы обмен Денег часами — а пока он
+     * идёт, следующий не встаёт, и строка «общие деньги» молчит. [limitMs] 0 —
+     * без предела (копия базы по мобильной сети идёт долго честно).
+     */
+    private fun call(req: Request, limitMs: Long = CALL_MS): okhttp3.Call =
+        http.newCall(req).apply { if (limitMs > 0) timeout().timeout(limitMs, java.util.concurrent.TimeUnit.MILLISECONDS) }
+
+    /** Три минуты и ещё минута на каждый мегабайт: кусок журнала — килобайты, первый — мегабайты. */
+    private fun limitFor(bytes: Long): Long = CALL_MS + bytes / (1024 * 1024) * 60_000L
 
     private fun request(c: Config, url: String): Request.Builder =
         Request.Builder().url(url).header("Authorization", Credentials.basic(c.user, c.pass, Charsets.UTF_8))

@@ -278,6 +278,7 @@ private fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
             when {
                 home == null -> GroupStatus("не задано", ok = null, dot = true)
                 sync.error.isNotBlank() || copy.error.isNotBlank() -> GroupStatus("ошибка", ok = false, dot = true)
+                sync.idle.isNotBlank() -> GroupStatus("обмен стоит", ok = false, dot = true)
                 else -> GroupStatus("подключён", ok = true, dot = true)
             }
         }

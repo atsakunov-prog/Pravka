@@ -146,7 +146,8 @@ object MoneyCashflow {
         val op = add("Операционный поток", Kind.TOTAL, pick = opPick)
 
         // ---- Финансовый ----
-        val finPick = { k: String, _: Long -> k == "loan" || k == "zf_loan" }
+        // Выплата доли партнёру (Наташе, со счёта ЗФ) — раздача прибыли, не расход ЗФ.
+        val finPick = { k: String, _: Long -> k == "loan" || k == "zf_loan" || k == "zf_partner" }
         val fin = sum(finPick)
         // Займ, взятый и отданный в одном месяце, в сумме ноль — но раздел всё равно показываем.
         if (byMonth.any { l -> l.any { finPick(it.key, it.kop) } }) {
@@ -157,6 +158,7 @@ object MoneyCashflow {
             val zfView = !scope.personal
             if (nonZero(sum { k, v -> k == "zf_loan" && v > 0 })) add(if (zfView) "Займ владельцу погашен" else "Займ от ЗФ получен", Kind.LINE, "zf_loan") { k, v -> k == "zf_loan" && v > 0 }
             if (nonZero(sum { k, v -> k == "zf_loan" && v < 0 })) add(if (zfView) "Займ владельцу выдан" else "Займ ЗФ возвращён", Kind.LINE, "zf_loan") { k, v -> k == "zf_loan" && v < 0 }
+            if (nonZero(sum { k, _ -> k == "zf_partner" })) add("Выплата доли партнёру", Kind.LINE, "zf_partner") { k, _ -> k == "zf_partner" }
             add("Финансовый поток", Kind.TOTAL, pick = finPick)
         }
 
@@ -203,14 +205,22 @@ object MoneyCashflow {
 
     // ---- Баланс ----
 
-    /** Якорь остатка: на [ts] на счёте [account] было [kop]. [covers] — записи, уже вошедшие в это число. */
+    /**
+     * Якорь остатка: на [ts] на счёте [account] было [kop]. [covers] — записи,
+     * уже вошедшие в это число. [source] — пояснение словами (его видно под
+     * суммой), [origin] — откуда якорь: архив различает снимок, вписанное и пуш.
+     */
     data class Anchor(
         val account: String,
         val ts: Long,
         val kop: Long,
         val source: String,
         val covers: Set<String> = emptySet(),
+        val origin: Origin = Origin.WRITTEN,
     )
+
+    /** Откуда якорь — слово для архива (`money.reference.anchors[].source`). */
+    enum class Origin(val key: String) { SNAPSHOT("снимок"), WRITTEN("вписано"), PUSH("пуш") }
 
     /**
      * Счёт записи для баланса: «Т-Банк · Black Premium», «Альфа · …», «МКБ».
@@ -352,13 +362,13 @@ object MoneyCashflow {
     const val LOAN_DEBT = "Займ от ЗФ (долг)"
     const val LOAN_ASSET = "Займ владельцу (у ЗФ)"
 
-    /** Долг Наташе — её доля из выплат ЗФ: переводы «Доля Наташи» его гасят. */
+    /** Долг Наташе — 30 % прибыли ЗФ (`ZfPartner`); всё выплаченное ей его гасит. */
     const val NATASHA_DEBT = "Долг Наташе (доля ЗФ)"
 
     /**
      * Все движения по счетам: банковские строки — своим счетам, наличные и
-     * банкомат — кошельку, выплаты доли Наташи — ещё и долгу ей (с обратным
-     * знаком: заплатил 400 000 — долг меньше на 400 000).
+     * банкомат — кошельку; долгу Наташе — начисленная доля прибыли ЗФ и
+     * выплаты ей с обратным знаком (заплатил — долг меньше на столько же).
      */
     fun movesByAccount(entries: List<MoneyEntry>): Map<String, List<MoneyEntry>> {
         movesMemo?.takeIf { it.of === entries }?.let { return it.value }
@@ -370,33 +380,16 @@ object MoneyCashflow {
         val usable = entries.filter { !it.draft && !it.dropped && it.replacedBy.isEmpty() }
         val bank = usable.mapNotNull { e -> accountOf(e, cards)?.let { it to e } }.groupBy({ it.first }, { it.second })
         val wallet = walletMoves(entries)
-        // Долг Наташе: начисления доли (записи «Долг: начислено» на этот счёт)
-        // минус переводы ей — с нуля, а не от якоря: так он верен в любой месяц.
-        val share = usable.filter { it.category == "zf_share" && !(it.source == MoneyEntry.Source.VOICE && it.matchId.isNotBlank()) }
-            .map { it.copy(id = it.id + "~долг", rubKop = -it.rubKop) } +
-            usable.filter { it.account == NATASHA_DEBT }
+        // Долг Наташе — по правилу партнёрства (`ZfPartner`): 30 % прибыли ЗФ
+        // минус всё выплаченное ей. С нуля, а не от якоря: так он верен в
+        // любой месяц. Прежние «Долг: начислено» сюда больше не идут.
+        val share = ZfPartner.moves(usable)
         // Займ — со стороны ЗФ (там он весь): выдала 200 000 — у Саши долг −200 000, у ЗФ требование +200 000.
         val loan = usable.filter { it.category == "zf_loan" && MoneyMatch.zfSide(it) }
-        // Округления: копилка получила — счёт покупки отдал ту же сумму в ту же
-        // секунду (строки на нём нет). Чей счёт — по покупке рядом по времени.
-        // Покупки — по времени и со своим счётом, посчитанным один раз; округление
-        // ищет свою покупку двоичным поиском, а не перебором всех записей
-        // (1 662 округления × 4 600 строк — это и были секунды открытия).
-        val buys = usable.filter { it.source == MoneyEntry.Source.TINKOFF && it.category != "roundup" && it.rubKop < 0 }
-            .sortedBy { it.ts }
-        val buyTs = LongArray(buys.size) { buys[it].ts }
-        val buyAcc = Array(buys.size) { accountOf(buys[it], cards) }
-        val fallback = buyAcc.filterNotNull().groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
-        val rounds = usable.filter { it.category == "roundup" && it.source == MoneyEntry.Source.TINKOFF }.mapNotNull { r ->
-            val own = accountOf(r, cards)
-            var i = java.util.Arrays.binarySearch(buyTs, r.ts).let { if (it >= 0) { var j = it; while (j + 1 < buyTs.size && buyTs[j + 1] == r.ts) j++; j } else -it - 2 }
-            var acc: String? = null
-            while (i >= 0 && buyTs[i] >= r.ts - 10_000) {
-                if (buyAcc[i] != own) { acc = buyAcc[i]; break }
-                i--
-            }
-            (acc ?: fallback ?: return@mapNotNull null) to r.copy(id = r.id + "~округление", rubKop = -r.rubKop)
-        }.groupBy({ it.first }, { it.second })
+        val from = roundupFrom(usable, cards)
+        val rounds = usable.filter { it.id in from }
+            .map { r -> from.getValue(r.id) to r.copy(id = r.id + "~округление", rubKop = -r.rubKop) }
+            .groupBy({ it.first }, { it.second })
         val withRounds = bank.toMutableMap()
         rounds.forEach { (acc, list) -> withRounds[acc] = withRounds[acc].orEmpty() + list }
         // Записи со слов владельца на именованный счёт (касса ЗФ) уже здесь: их счёт даёт `accountOf`.
@@ -407,6 +400,95 @@ object MoneyCashflow {
                 LOAN_DEBT to loan.map { it.copy(id = it.id + "~долг") },
                 LOAN_ASSET to loan.map { it.copy(id = it.id + "~требование", rubKop = -it.rubKop) },
             ) else emptyMap())
+    }
+
+    /**
+     * Округления: копилка получила — счёт покупки отдал ту же сумму в ту же
+     * секунду (строки на нём нет). Чей счёт — по покупке рядом по времени.
+     * Покупки — по времени и со своим счётом, посчитанным один раз; округление
+     * ищет свою покупку двоичным поиском, а не перебором всех записей
+     * (1 662 округления × 4 600 строк — это и были секунды открытия).
+     * Итог — номер округления → счёт, отдавший деньги.
+     */
+    private fun roundupFrom(usable: List<MoneyEntry>, cards: Map<String, String>): Map<String, String> {
+        val buys = usable.filter { it.source == MoneyEntry.Source.TINKOFF && it.category != "roundup" && it.rubKop < 0 }
+            .sortedBy { it.ts }
+        val buyTs = LongArray(buys.size) { buys[it].ts }
+        val buyAcc = Array(buys.size) { accountOf(buys[it], cards) }
+        val fallback = buyAcc.filterNotNull().groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
+        val out = HashMap<String, String>()
+        for (r in usable) {
+            if (r.category != "roundup" || r.source != MoneyEntry.Source.TINKOFF) continue
+            val own = accountOf(r, cards)
+            var i = java.util.Arrays.binarySearch(buyTs, r.ts).let { if (it >= 0) { var j = it; while (j + 1 < buyTs.size && buyTs[j + 1] == r.ts) j++; j } else -it - 2 }
+            var acc: String? = null
+            while (i >= 0 && buyTs[i] >= r.ts - 10_000) {
+                if (buyAcc[i] != own) { acc = buyAcc[i]; break }
+                i--
+            }
+            (acc ?: fallback)?.let { out[r.id] = it }
+        }
+        return out
+    }
+
+    /**
+     * Где запись стоит в балансе — для архива (`money.entry.balance_account`):
+     * сервер считает остатки тем же счётом, что телефон, а не угадывает.
+     * [roundupFrom] — у округления в копилку: счёт покупки, отдавший эти деньги.
+     */
+    data class Place(val account: String?, val roundupFrom: String? = null)
+
+    /**
+     * Счёт каждой записи: банковская строка — свой счёт (`accountOf`),
+     * наличные — кошелёк. Голос без наличных и «Плати по миру» — ни на каком
+     * счёте баланса (null). Банкомат стоит на счёте банка: кошелёк получает
+     * его вторую половину сам.
+     */
+    fun places(entries: List<MoneyEntry>): Map<String, Place> {
+        val cards = cardMap(entries)
+        val usable = entries.filter { !it.draft && !it.dropped && it.replacedBy.isEmpty() }
+        val from = roundupFrom(usable, cards)
+        return entries.associate { e ->
+            val acc = accountOf(e, cards) ?: if (e.account == MoneyEntry.CASH) WALLET else null
+            e.id to Place(acc, from[e.id])
+        }
+    }
+
+    /** Счёт баланса для реестра архива: чей, актив или долг, карты (`money.reference.accounts`). */
+    data class AccountInfo(
+        val name: String,
+        /** «zf» — деньги ЗФ, «personal» — личные. */
+        val side: String,
+        /** «asset» или «debt»: долговой счёт и с нулём стоит в обязательствах. */
+        val kind: String,
+        val currency: String,
+        /** Хвосты карт, которые ведут на этот счёт: «1519», «0292». */
+        val cards: List<String>,
+        /** Чей счёт: профиль, чьи записи на нём (sasha, marianna). */
+        val owner: String,
+    )
+
+    /**
+     * Все счета баланса: с движениями, с якорем и отмеченные счетами ЗФ (в том
+     * числе строки «счёт ЗФ | …» заводского снимка). [zfAccounts] — счета ЗФ
+     * как их видит вкладка (заводские, отмеченные, минус снятые).
+     */
+    fun registry(entries: List<MoneyEntry>, anchors: List<Anchor>, zfAccounts: Set<String>, defaultOwner: String): List<AccountInfo> {
+        val moves = movesByAccount(entries)
+        val cards = cardMap(entries)
+        val names = (moves.keys + anchors.map { it.account } + zfAccounts).filter { it.isNotBlank() }.toSortedSet()
+        return names.map { name ->
+            val owner = moves[name].orEmpty().groupingBy { it.owner }.eachCount().maxByOrNull { it.value }?.key
+            AccountInfo(
+                name = name,
+                // Требование по займу и долг Наташе (доля прибыли ЗФ) — стороны ЗФ.
+                side = if (name in zfAccounts || name == LOAN_ASSET || name == NATASHA_DEBT) "zf" else "personal",
+                kind = if (isDebtAccount(name)) "debt" else "asset",
+                currency = "RUB",
+                cards = cards.filterValues { it == name }.keys.sorted(),
+                owner = owner?.ifBlank { null } ?: defaultOwner,
+            )
+        }
     }
 
     /** Остаток счёта на [at] от якоря [anchor] по его движениям [list]; null — якоря нет. */
@@ -500,7 +582,7 @@ object MoneyCashflow {
                 }.getOrNull()
             } ?: return@mapNotNull null
             val kop = MoneyFormat.parseKop(p[2]) ?: return@mapNotNull null
-            Anchor(p[1], ts, kop, p.getOrNull(3)?.ifBlank { null } ?: "файл остатков")
+            Anchor(p[1], ts, kop, p.getOrNull(3)?.ifBlank { null } ?: "файл остатков", origin = Origin.SNAPSHOT)
         }
 
     /**

@@ -488,13 +488,82 @@
         ],
         "anchors": [
           {
-            "account": "Т-Банк *1519",
+            "account": "Т-Банк · Тестовая карта",
             "at": "2026-09-01T00:00:00.000+03:00",
             "kop": 15000000,
-            "source": "owner"
+            "source": "снимок",
+            "covers": [],
+            "note": "снимок приложения банка"
+          },
+          {
+            "account": "Наличные",
+            "at": "2026-09-05T20:00:00.000+03:00",
+            "kop": 500000,
+            "source": "вписано",
+            "covers": [],
+            "note": "вписано"
           }
         ],
-        "zf_accounts": [],
+        "accounts": [
+          {
+            "name": "Наличные",
+            "side": "personal",
+            "kind": "asset",
+            "currency": "RUB",
+            "cards": [],
+            "owner": "sasha"
+          },
+          {
+            "name": "Т-Банк · Тестовая карта",
+            "side": "personal",
+            "kind": "asset",
+            "currency": "RUB",
+            "cards": [
+              "0000",
+              "1111"
+            ],
+            "owner": "sasha"
+          },
+          {
+            "name": "Т-Бизнес · ЗФ",
+            "side": "zf",
+            "kind": "asset",
+            "currency": "RUB",
+            "cards": [
+              "2222"
+            ],
+            "owner": "sasha"
+          },
+          {
+            "name": "Т-Банк · Кредитка",
+            "side": "personal",
+            "kind": "debt",
+            "currency": "RUB",
+            "cards": [],
+            "owner": "sasha"
+          }
+        ],
+        "statements": [
+          {
+            "bank": "Т-Банк",
+            "account": "Т-Банк · Тестовая карта",
+            "from": "2026-09-01",
+            "to": "2026-09-07",
+            "rows": 42,
+            "loaded_at": "2026-09-08T10:00:00.000+03:00"
+          },
+          {
+            "bank": "Т-Бизнес",
+            "account": "Т-Бизнес · ЗФ",
+            "from": "2026-09-02",
+            "to": "2026-09-06",
+            "rows": 5,
+            "loaded_at": "2026-09-08T10:01:00.000+03:00"
+          }
+        ],
+        "zf_accounts": [
+          "Т-Бизнес · ЗФ"
+        ],
         "not_zf_accounts": []
       }
     },
@@ -520,7 +589,7 @@
         "note": "",
         "mcc": "5411",
         "bank_category": "Супермаркеты",
-        "account": "Т-Банк *1519",
+        "account": "Тестовая карта *1111",
         "category": "groceries",
         "for_whom": "",
         "category_by": "rule",
@@ -529,7 +598,9 @@
         "live": true,
         "match_id": "",
         "replaced_by": "",
-        "take_id": ""
+        "take_id": "",
+        "balance_account": "Т-Банк · Тестовая карта",
+        "roundup_from": null
       }
     },
     {
@@ -563,7 +634,9 @@
         "live": false,
         "match_id": "t:3fa1c0d2e4b5a6978812",
         "replaced_by": "",
-        "take_id": "1757240000000"
+        "take_id": "1757240000000",
+        "balance_account": null,
+        "roundup_from": null
       }
     },
     {
@@ -594,8 +667,19 @@
         "at": "2026-09-07T13:05:30.000+03:00",
         "pkg": "com.idamob.tinkoff.android",
         "title": "Покупка",
-        "text": "Покупка 2 150 ₽ ВкусВилл. Доступно 148 000 ₽",
-        "result": "money"
+        "text": "Покупка на 2 150 ₽, счет карты *1111\nДоступно 148 000 ₽",
+        "result": "запись",
+        "anchor": {
+          "account": "Т-Банк · Тестовая карта",
+          "at": "2026-09-07T13:05:30.000+03:00",
+          "kop": 14800000,
+          "source": "пуш",
+          "covers": [
+            "push-0011223344556677",
+            "t:3fa1c0d2e4b5a6978812"
+          ],
+          "note": "пуш «Покупка»"
+        }
       }
     },
     {
@@ -671,6 +755,42 @@
         "answer": "Колено зелёное, TSB −7: завтра лёгкие 5 км в первой зоне можно.",
         "error": "",
         "cost_usd": 0.031
+      }
+    },
+    {
+      "eid": "sasha-3f9a2c:18",
+      "seq": 18,
+      "kind": "money.entry",
+      "key": "t:9b8a7c6d5e4f30211203",
+      "op": "put",
+      "at": "2026-09-07T13:06:00.000+03:00",
+      "data": {
+        "id": "t:9b8a7c6d5e4f30211203",
+        "owner": "sasha",
+        "source": "tinkoff",
+        "day": "2026-09-07",
+        "at": "2026-09-07T13:05:00.000+03:00",
+        "time_known": true,
+        "amount_kop": 5000,
+        "orig_minor": 5000,
+        "currency": "RUB",
+        "rub_basis": "bank",
+        "what": "Перевод округлений",
+        "note": "",
+        "mcc": "",
+        "bank_category": "Другое",
+        "account": "Тестовая копилка",
+        "category": "roundup",
+        "for_whom": "",
+        "category_by": "rule",
+        "draft": false,
+        "dropped": false,
+        "live": true,
+        "match_id": "",
+        "replaced_by": "",
+        "take_id": "",
+        "balance_account": "Т-Банк · Тестовая копилка",
+        "roundup_from": "Т-Банк · Тестовая карта"
       }
     }
   ]

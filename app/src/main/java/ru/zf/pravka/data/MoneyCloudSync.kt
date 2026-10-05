@@ -65,6 +65,16 @@ internal class MoneyCloudSync(
         val PATH = listOf("Правка", "Деньги")
         private const val DEVICE_FILE = "money-sync-device.txt"
         private const val MIME = "application/json"
+
+        /**
+         * Какие свои куски [own] (имя → размер у телефона) лежат на сервере не
+         * так ([server] — имя → размер по списку сервера): словами, по куску.
+         * Пусто — всё легло.
+         */
+        fun notLanded(own: List<Pair<String, Long>>, server: Map<String, Long>): List<String> =
+            own.filter { (name, size) -> server[name] != size }.map { (name, size) ->
+                "$name: у телефона $size байт, на сервере " + (server[name]?.let { "$it байт" } ?: "нет файла")
+            }
     }
 
     data class Status(
@@ -80,6 +90,17 @@ internal class MoneyCloudSync(
         val changed: Int = 0,
         /** Телефоны в общей папке: устройство → имя владельца. */
         val devices: Map<String, String> = emptyMap(),
+        /** С каким сервером меняемся — адрес без схемы: видно, ушёл ли телефон на новый адрес. */
+        val server: String = "",
+        /**
+         * Когда сервер последний раз подтвердил, что все свои куски лежат на
+         * нём того же размера, что у телефона. 0 — ещё не подтверждал.
+         */
+        val uploadedAt: Long = 0L,
+        /** Когда начался идущий обмен: висит дольше минуты — это видно в строке. */
+        val startedAt: Long = 0L,
+        /** Почему обмен не идёт вовсе (облако не задано, база недоступна…); пусто — идёт. */
+        val idle: String = "",
     )
 
     private val _status = MutableStateFlow(Status())
@@ -88,6 +109,7 @@ internal class MoneyCloudSync(
     private val mutex = Mutex()
     private var merged: MoneySync.Merged? = null
     private var lastLoggedError = ""
+    private var announced = ""
 
     private val dir: File get() = File(DataRoot.dir(context), DIR)
 
@@ -104,28 +126,54 @@ internal class MoneyCloudSync(
     private val passports = HashSet<String>()
 
     /** Можно ли меняться: облако задано, база читается, Деньги включены в профиле. */
-    fun ready(): Boolean =
-        cloud() != null &&
-            DataRoot.where.value != DataRoot.Where.FOLDER_NO_ACCESS &&
-            profile()?.has(Profile.Mode.MONEY) == true
+    fun ready(): Boolean = notReady() == null
+
+    /** Почему меняться нельзя — словами; null — можно. */
+    private fun notReady(): String? = when {
+        profile()?.has(Profile.Mode.MONEY) != true -> "Деньги выключены в профиле"
+        cloud() == null -> "облако семьи не подключено — Настройки → Подключения → Облако семьи"
+        DataRoot.where.value == DataRoot.Where.FOLDER_NO_ACCESS -> "нет доступа к папке базы — Настройки → База данных"
+        else -> null
+    }
+
+    /**
+     * Есть ли у этого телефона свой журнал обмена: значит, он уже менялся, и
+     * пропавшее облако — поломка, о которой надо сказать, а не «не настроено».
+     */
+    fun hasOwnJournal(): Boolean = chunks().any { MoneySync.parseChunk(it.name)?.device == device }
 
     /**
      * Один обмен. Второй, пока идёт первый, ничего не делает (null). [reason] —
      * для журнала: «тик», «правка», «кнопка».
      */
     suspend fun sync(reason: String): Status? {
-        if (!ready()) return null
+        // Обмен не идёт — молча стоять нельзя: строка «общие деньги» скажет почему.
+        val why = notReady()
+        if (why != null) {
+            if (_status.value.idle != why) {
+                _status.value = _status.value.copy(idle = why, running = false)
+                if (hasOwnJournal()) log("деньги: обмен стоит — $why")
+            }
+            return null
+        }
         val c = cloud() ?: return null
         if (!mutex.tryLock()) return null
-        _status.value = _status.value.copy(running = true)
+        val server = serverOf(c)
+        // Раз за запуск — в журнал, с кем и под каким именем телефон меняется:
+        // по этой строке видно, ушёл ли он на новый адрес и чей кусок его.
+        if (announced != server) {
+            log("деньги: обмен через ${c.title} $server, этот телефон — $device")
+            announced = server
+        }
+        _status.value = _status.value.copy(running = true, startedAt = System.currentTimeMillis(), idle = "", server = server)
         try {
-            val s = withContext(Dispatchers.IO) { exchange(c) }
+            val s = withContext(Dispatchers.IO) { exchange(c) }.copy(server = server)
             _status.value = s
             val got = s.from.values.sum()
             if (s.sent > 0 || got > 0 || s.added + s.changed > 0) {
                 val names = s.from.filterValues { it > 0 }.entries.joinToString { (d, n) -> "${s.devices[d] ?: d} $n" }
                 log(
-                    "деньги·${c.title} ($reason): отправлено событий ${s.sent}" +
+                    "деньги·${c.title} $server ($reason): отправлено событий ${s.sent}" +
                         (if (names.isNotEmpty()) ", получено: $names" else "") +
                         (if (s.added + s.changed > 0) " — записей добавлено ${s.added}, поправлено ${s.changed}" else "")
                 )
@@ -138,12 +186,12 @@ internal class MoneyCloudSync(
             // то, что уже легло в базу.
             merged = null
             if (e is kotlinx.coroutines.CancellationException) throw e
-            val why = FamilyCloud.why(e, c.title)
-            _status.value = _status.value.copy(running = false, error = why)
+            val failed = FamilyCloud.why(e, c.title)
+            _status.value = _status.value.copy(running = false, error = failed)
             // Ошибка раз в пять минут одна и та же — в журнал один раз.
-            if (why != lastLoggedError) {
-                log("деньги·${c.title} ($reason): не вышло — $why")
-                lastLoggedError = why
+            if (failed != lastLoggedError) {
+                log("деньги·${c.title} $server ($reason): не вышло — $failed")
+                lastLoggedError = failed
             }
             return _status.value
         } finally {
@@ -173,11 +221,23 @@ internal class MoneyCloudSync(
         // 2. В облако — свои изменившиеся куски и паспорт.
         val remote = c.list(PATH)
         val byName = remote.associateBy { it.name }
-        for (f in chunks().filter { MoneySync.parseChunk(it.name)?.device == me }) {
+        val own = chunks().filter { MoneySync.parseChunk(it.name)?.device == me }
+        var wrote = false
+        for (f in own) {
             val r = byName[f.name]
             if (r != null && same(f, r)) continue
             c.write(PATH, f.name, f.readBytes(), MIME)
+            wrote = true
         }
+        // Записали — спросить сервер, что у него теперь лежит: «отправлено»
+        // значит «лежит на сервере того же размера», а не «запрос ушёл».
+        // Владелец, 05.10.2026: кусок телефона на сервере не менялся с 27.09,
+        // а телефон молчал.
+        if (wrote) {
+            val bad = notLanded(own.map { it.name to it.length() }, c.list(PATH).associate { it.name to it.size })
+            if (bad.isNotEmpty()) throw FamilyCloud.CloudException("${c.title}: свой журнал не лёг на сервер — " + bad.joinToString())
+        }
+        val uploadedAt = System.currentTimeMillis()
         val passport = passport(me).toByteArray()
         val pName = MoneySync.deviceFileName(me)
         val pKey = c.id + "|" + pName + "|" + md5(passport)
@@ -241,8 +301,13 @@ internal class MoneyCloudSync(
             added = applied.added,
             changed = applied.changed,
             devices = devices(me, fresh),
+            uploadedAt = if (own.isNotEmpty()) uploadedAt else 0L,
         )
     }
+
+    /** Адрес сервера без схемы и слэшей — для строки и журнала. */
+    private fun serverOf(c: FamilyCloud): String =
+        c.id.substringAfter("://", c.id).trimEnd('/').ifBlank { c.title }
 
     private fun local(s: MoneyStore.State) =
         MoneySync.Local(s.entries, s.rules, s.balances, s.zfAccounts, s.notZfAccounts)
