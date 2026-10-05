@@ -257,8 +257,9 @@ class DelaSync(
                 val d = try {
                     get(l.url, l.token, "api/ask/" + URLEncoder.encode(job, "UTF-8"))
                 } catch (e: DelaException) {
-                    // 404 на опросе — служба перезапустилась и задание потеряла (задания живут в памяти).
-                    if (e.message.orEmpty().startsWith("Дела ответили 404")) {
+                    // 404 от самой службы на опросе — она перезапустилась и задание
+                    // потеряла (задания живут в памяти). 404 посредника — путь закрыт: как есть.
+                    if (e.code == 404 && e.ours) {
                         throw DelaException("Задание Claude потерялось — служба Дел перезапустилась. Скажи ещё раз: текст остался")
                     }
                     throw e
@@ -310,14 +311,23 @@ class DelaSync(
         client.newCall(req).execute().use { r ->
             val text = r.body?.string().orEmpty()
             if (!r.isSuccessful) {
-                val msg = runCatching { JSONObject(text).optString("error") }.getOrNull().orEmpty().ifBlank { text.take(300) }
+                // Свой ответ служба даёт JSON с error; 404 без него — путь не пропустил
+                // посредник перед службой (закрытый список путей, 05.10.2026: так молча
+                // падали /api/ask и /api/settings в вебе), а не сама служба.
+                val ours = runCatching { JSONObject(text).optString("error") }.getOrNull().orEmpty()
+                val msg = ours.ifBlank { text.take(300) }
+                val path = req.url.encodedPath
                 throw DelaException(
-                    when (r.code) {
-                        401 -> "Дела не приняли токен — отсканируй QR из python -m pravka_dela pair заново ($msg)"
-                        403 -> "Дела отказали: $msg"
-                        404 -> "Дела ответили 404: $msg — адрес не тот или служба старая"
+                    when {
+                        r.code == 401 -> "Дела не приняли токен — отсканируй QR из python -m pravka_dela pair заново ($msg)"
+                        r.code == 403 -> "Дела отказали: $msg"
+                        r.code == 404 && ours.isNotBlank() -> "Дела ответили 404: $ours"
+                        r.code == 404 -> "Сервер не знает адрес $path (404) — путь не пропускает посредник перед Делами " +
+                            "(его надо добавить в список путей) или служба старая"
                         else -> "Дела ответили ${r.code}: $msg"
-                    }
+                    },
+                    code = r.code,
+                    ours = ours.isNotBlank(),
                 )
             }
             val o = runCatching { JSONObject(text) }.getOrElse { throw DelaException("Дела ответили не JSON: ${text.take(200)}") }
@@ -331,7 +341,8 @@ class DelaSync(
             .writeTimeout(60, TimeUnit.SECONDS).build()
     }
 
-    class DelaException(message: String) : Exception(message)
+    /** Ошибка словами; [code] — HTTP-код, [ours] — ответила сама служба (JSON с error), а не посредник. */
+    class DelaException(message: String, val code: Int = 0, val ours: Boolean = false) : Exception(message)
 
     private fun why(e: Throwable): String = when (e) {
         is DelaException -> e.message.orEmpty()
