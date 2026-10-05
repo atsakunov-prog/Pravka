@@ -61,6 +61,8 @@ val buildBranch: String = (project.findProperty("buildBranch") as? String)?.take
         p.waitFor()
         if (p.exitValue() == 0) out else ""
     }.getOrDefault("")
+// Снимки экранов для дизайна — только по просьбе: ./gradlew … -Pshots=all (см. ниже).
+val shots = project.hasProperty("shots")
 val buildTimestamp: String = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").format(ZonedDateTime.now())
 
 
@@ -136,6 +138,25 @@ android {
         compose = true
         buildConfig = true
     }
+
+    // Снимки экранов для дизайна (app/src/shots, docs/design): Robolectric
+    // рисует настоящие экраны на JVM. Только с -Pshots — обычный прогон
+    // тестов не видит ни этих файлов, ни Robolectric (≈360 МБ образов Android
+    // на каждую свежую облачную сессию).
+    if (shots) {
+        sourceSets.getByName("test").java.srcDir("src/shots/java")
+        testOptions {
+            unitTests {
+                isIncludeAndroidResources = true
+                all { test ->
+                    test.maxHeapSize = "4g"
+                    test.systemProperty("pravka.shots", project.findProperty("shots")?.toString() ?: "")
+                    test.systemProperty("pravka.shotsDir", layout.buildDirectory.dir("shots").get().asFile.absolutePath)
+                    test.systemProperty("roborazzi.test.record", "true")
+                }
+            }
+        }
+    }
 }
 
 kotlin {
@@ -161,6 +182,12 @@ dependencies {
     // exercises.json тем же кодом, что приложение.
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    // Снимки экранов для дизайна: Robolectric с нативной графикой + Roborazzi
+    // (захват Compose на JVM без эмулятора — в облаке нет KVM). Только с -Pshots.
+    if (shots) {
+        testImplementation("org.robolectric:robolectric:4.17")
+        testImplementation("io.github.takahirom.roborazzi:roborazzi:1.76.0")
+    }
 }
 
 // ---------------------------------------------------------------------------

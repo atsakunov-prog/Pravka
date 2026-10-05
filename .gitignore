@@ -18,3 +18,5 @@ scripts/.adb-address
 # Python bytecode от tools/gen_reference.py
 __pycache__/
 *.pyc
+# Снимки экранов для дизайна: пересъёмка одной командой (tools/design_shots.py)
+docs/design/screens/
