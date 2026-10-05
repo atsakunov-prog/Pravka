@@ -194,6 +194,30 @@ def test_close_and_refine_from_meeting_leave_a_trace(dela):
     assert texts(b) == ["Бета: статус · 05.10: тизер ушёл инвесторам"]
 
 
+def test_obvious_close_from_fresh_meeting_closes_itself(dela):
+    """Очевидное закрытие по свежей встрече проходит само, с основанием в комментарии.
+    Старая встреча, сомнение и дело не самого владельца — по-прежнему в «Новое»."""
+    today = dt.date.today()
+    mk_task = lambda title, **kw: ops(dela, "sasha", {"op": "task.create", "task": {"title": title, **kw}})[0]["task"]  # noqa: E731
+    fresh, old, unsure = mk_task("Договор с Бетой"), mk_task("Тизер для фондов"), mk_task("Модель Альфы")
+
+    def close(t, at, auto=True):
+        return ops(dela, "sasha", {"op": "suggestion.create", "suggestion": {
+            "for_user": "sasha", "kind": "close", "task_id": t["id"], "source": "meeting", "batch_ref": "meeting:3",
+            "batch_title": "Бета: статус", "quote": "договор подписан", "payload": {"meeting_at": at, **({"auto": True} if auto else {})}}})[0]
+
+    r = close(fresh, today.isoformat())
+    assert r["ok"] and r["suggestion"]["status"] == "accepted" and r["suggestion"]["reason"] == store.AUTO_CLOSE_REASON
+    assert r["task"]["status"] == "done"
+    with store.db.session(dela, "sasha", "t") as c:
+        assert [x["text"] for x in c.execute("SELECT text FROM tasks.comments WHERE task_id = %s", (fresh["id"],))] == ["Бета: статус: договор подписан"]
+    assert close(old, (today - dt.timedelta(days=10)).isoformat())["suggestion"]["status"] == "pending"
+    assert close(unsure, today.isoformat(), auto=False)["suggestion"]["status"] == "pending"
+    with store.db.session(dela, "sasha", "t") as c:
+        st = {r["title"]: r["status"] for r in c.execute("SELECT title, status FROM tasks.tasks")}
+    assert (st["Тизер для фондов"], st["Модель Альфы"]) == ("open", "open")
+
+
 def test_phone_ops_as_pravka_sends_them(dela):
     """Операции ровно той формы, что собирает Правка (`core/Dela.kt`): id дела
     и op_id — телефона, пустое — null, у правки — was, заметка Разноски —

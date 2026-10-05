@@ -136,6 +136,10 @@ const VIEWS = {
   all: { title: 'Все дела', icon: 'list', color: '#9aa3b2' },
 };
 const pendingSugs = () => [...S.sugs.values()].filter((s) => s.status === 'pending' && s.for_user === S.me.user);
+/** Очевидные закрытия, которые сервер принял сам (store._auto_close), — за days дней, свежие сверху. */
+const autoClosed = (days) => [...S.sugs.values()].filter((s) => s.kind === 'close' && s.status === 'accepted' && (s.payload || {}).auto
+  && s.for_user === S.me.user && s.decided_at && Date.now() - Date.parse(s.decided_at) < days * 86400e3)
+  .sort((a, b) => b.decided_at.localeCompare(a.decided_at));
 
 // ── Иконки (свой штрих, без шрифтов и эмодзи) ───────────────────────────
 const ICONS = {
@@ -381,8 +385,9 @@ function renderMain(r) {
     const body = el('div', { class: 'body' }, quickAdd({}),
       secs.map(([t, items, ic, c]) => (items.length ? groupBox(t, items.sort(sortTasks), { lead: tint(icon(ic, 14), c) }) : null)));
     if (!secs.some(([, i]) => i.length)) body.append(el('div', { class: 'empty' }, 'На сегодня пусто. Загляни в «Предстоящее».'));
-    const n = pendingSugs().length;
-    return [head('Утро', [D.long(S.today), n ? el('a', { class: 'link', href: '#/new' }, `в «Новом» ждут решения: ${n}`) : null]), body];
+    const n = pendingSugs().length, self = autoClosed(1).length;
+    return [head('Утро', [D.long(S.today), n ? el('a', { class: 'link', href: '#/new' }, `в «Новом» ждут решения: ${n}`) : null,
+      self ? el('a', { class: 'link', href: '#/new' }, `закрылось само за сутки: ${self}`) : null]), body];
   }
   if (r.kind === 'upcoming') {
     let items = openMine();
@@ -1086,7 +1091,26 @@ function renderNew() {
             el('button', { class: 'btn small bad', onclick: () => { const r = prompt(s.kind === 'create' ? 'Почему не дело? (можно пусто)' : 'Почему нет? (можно пусто)'); if (r !== null) decide([s.id], 'reject', r || null); } }, 'Отклонить')));
       })));
   }
-  return [head('Новое', ['что предложила автоматика: встречи, Telegram — дела появятся, когда примешь']), box];
+  // Очевидное автоматика закрывает сама — тут видно, что и почему, и можно вернуть.
+  const auto = autoClosed(7);
+  if (auto.length) {
+    box.append(el('div', { class: 'group' },
+      el('h2', {}, tint(icon('check', 14), 'var(--ok)'), 'Закрыто само', el('span', { class: 'n' }, auto.length),
+        el('span', { class: 'gsub' }, 'за неделю: очевидное из встреч и Telegram')),
+      auto.map((s) => {
+        const t = S.tasks.get(s.task_id);
+        const reopen = async () => {
+          try { await op1({ op: 'task.reopen', id: t.id }); toast('Вернул в работу: ' + t.title); render(); } catch (e) { fail(e); }
+        };
+        return el('div', { class: 'sug auto' },
+          el('div', { class: 'main' }, el('div', {}, t ? `#${t.num} ${t.title}` : 'дело не видно'),
+            el('div', { class: 'hint' }, [s.batch_title, D.ddmm(s.decided_at.slice(0, 10))].filter(Boolean).join(' · ')),
+            s.quote ? el('div', { class: 'hint' }, '«' + s.quote.slice(0, 200) + '»') : null),
+          el('div', { class: 'acts' }, t && t.status === 'done' ? el('button', { class: 'btn small', onclick: reopen }, 'Вернуть')
+            : el('span', { class: 'faint' }, t && t.status === 'open' ? 'вернул в работу' : '')));
+      })));
+  }
+  return [head('Новое', ['что предложила автоматика: встречи, Telegram — дела появятся, когда примешь; очевидные закрытия проходят сами']), box];
 }
 
 async function decide(ids, decision, reason, set) {

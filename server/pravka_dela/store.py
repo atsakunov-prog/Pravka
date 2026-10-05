@@ -258,7 +258,37 @@ def op_suggestion_create(conn, user, op):
         ).fetchone()
         if same:
             return {"suggestion": same}
-    return {"suggestion": _insert(conn, "tasks.suggestions", data)}
+    row = _insert(conn, "tasks.suggestions", data)
+    if _auto_close(conn, user, row):
+        return op_suggestion_decide(conn, user, {"id": row["id"], "decision": "accept", "reason": AUTO_CLOSE_REASON})
+    return {"suggestion": row}
+
+
+AUTO_CLOSE_DAYS = 3
+AUTO_CLOSE_REASON = "закрыто само"
+
+
+def _auto_close(conn, user, s: dict) -> bool:
+    """Очевидное «закрыть» проходит само (решение владельца 05.10.2026), остальное — в «Новое».
+
+    Само — только когда автоматика уверена (payload.auto), основание названо (quote), дело —
+    открытое и самого владельца токена, а встреча или переписка свежая (AUTO_CLOSE_DAYS) и не
+    старше самого дела: разбор архива и чужие дела по-прежнему ждут решения человека.
+    Основание ложится комментарием к делу (_trace), «Вернуть» — в «Новом», «Закрыто само».
+    """
+    p = s.get("payload") or {}
+    if s.get("kind") != "close" or p.get("auto") is not True or user != s.get("for_user") or not s.get("quote"):
+        return False
+    try:
+        at = dt.date.fromisoformat(str(p.get("meeting_at") or "")[:10])
+    except ValueError:
+        return False
+    row = conn.execute(
+        "SELECT %s >= crm.today() - %s AND %s >= (created_at AT TIME ZONE 'Europe/Moscow')::date AS ok "
+        "FROM tasks.tasks WHERE id = %s AND status = 'open' AND owner_id = %s",
+        (at, AUTO_CLOSE_DAYS, at, s["task_id"], user),
+    ).fetchone()
+    return bool(row and row["ok"])
 
 
 def op_suggestion_decide(conn, user, op):
