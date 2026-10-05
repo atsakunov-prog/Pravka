@@ -194,6 +194,28 @@ def test_life_tasks_for_claude_shows_only_owner_view(dela, cfg):
     assert rows == [("Закрыть акт", "Стаффджет", "paid")]
 
 
+def test_day_tool_shows_dela_done_created_and_timeline(dela, cfg):
+    """«Что у меня было» в чате: сутки архива видят и работу — сделанное, заведённое, контакты."""
+    import datetime as dt
+
+    from pravka_archive import tools
+    from pravka_dela import store
+
+    p = project(dela, "sasha", "Стаффджет")
+    run = lambda *o: store.apply_ops(dela, "sasha", list(o), "web")["results"]  # noqa: E731
+    a = run({"op": "task.create", "task": {"title": "Закрыть акт", "project_id": str(p)}})[0]["task"]
+    run({"op": "task.done", "id": a["id"]},
+        {"op": "task.create", "task": {"title": "Иван: прислать модель", "source": "meeting"}},
+        {"op": "interaction.add", "data": {"at": dt.datetime.now(dt.timezone.utc).isoformat(), "kind": "call",
+                                           "summary": "Обсудили акт и оплату", "project_id": str(p), "source": "web"}})
+    today = dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).date().isoformat()
+    out = tools.day(cfg, today)
+    assert "Дела: сделано 1, заведено 2:" in out
+    assert f"сделано #{a['num']} Закрыть акт · Стаффджет" in out
+    assert "Иван: прислать модель · из встречи" in out
+    assert "Хронология контактов: 1:" in out and "call · Стаффджет — Обсудили акт и оплату" in out
+
+
 def test_work_time_takes_project_from_entry_then_task_then_alias(dela, clean, batch, cfg):
     """Запись Засечки из дела несёт task и project (телефон, 03.10.2026): связь
     сильнее сопоставления текста клиента; без project — проект её дела."""

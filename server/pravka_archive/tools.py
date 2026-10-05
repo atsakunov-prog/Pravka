@@ -258,6 +258,50 @@ def _rub(kop: Any) -> str:
     return f"{sign}{abs(r):,.0f} ₽".replace(",", " ")
 
 
+TASK_FROM = {"meeting": "из встречи", "telegram": "из Telegram", "mcp": "Claude", "import": "перенос"}
+
+
+def _day_dela(conn, d, lim: int, full: bool) -> list[str]:
+    """Дела за сутки: что сделано и заведено, и хронология контактов (встречи, звонки, переписка).
+
+    У дела нет поля day, как у записей телефона: сутки — московская дата отметки, как в самих Делах.
+    Без этого «что у меня было» отвечало бы лентой и едой, но без работы.
+    """
+    out: list[str] = []
+    msk = "(%s AT TIME ZONE 'Europe/Moscow')::date = %%s"
+    done = conn.execute(
+        f"SELECT num, title, project FROM life.tasks WHERE status = 'done' AND {msk % 'completed_at'} ORDER BY completed_at", (d,)
+    ).fetchall()
+    new = conn.execute(
+        f"SELECT num, title, project, source, status FROM life.tasks WHERE {msk % 'created_at'} ORDER BY created_at", (d,)
+    ).fetchall()
+    if done or new:
+        out.append(f"\nДела: сделано {len(done)}, заведено {len(new)}:")
+        cap = 100 if full else 25
+        for num, title, project in done[:cap]:
+            out.append(f"  сделано #{num} {cell(title, lim)}" + (f" · {project}" if project else ""))
+        if len(done) > cap:
+            out.append(f"  … ещё {len(done) - cap} сделанных (life.tasks)")
+        cap = 60 if full else 12
+        for num, title, project, source, status in new[:cap]:
+            tail = [project, TASK_FROM.get(source), {"done": "уже сделано", "cancelled": "отменено"}.get(status)]
+            out.append(f"  заведено #{num} {cell(title, lim)}" + "".join(f" · {x}" for x in tail if x))
+        if len(new) > cap:
+            out.append(f"  … ещё {len(new) - cap} заведённых (life.tasks, created_at)")
+    talks = conn.execute(
+        "SELECT kind, summary, project, people FROM life.interactions WHERE day = %s ORDER BY at", (d,)
+    ).fetchall()
+    if talks:
+        out.append(f"\nХронология контактов: {len(talks)}:")
+        cap = 50 if full else 15
+        for kind, summary, project, people in talks[:cap]:
+            who = [x for x in [project, ", ".join(people or [])] if x]
+            out.append(f"  {kind}" + "".join(f" · {x}" for x in who) + f" — {cell(summary, lim)}")
+        if len(talks) > cap:
+            out.append(f"  … ещё {len(talks) - cap} (life.interactions)")
+    return out
+
+
 def day(cfg: Config, date: str, full: bool = False) -> str:
     lim = 4000 if full else 220
     with _reader(cfg) as conn:
@@ -285,6 +329,10 @@ def day(cfg: Config, date: str, full: bool = False) -> str:
                     out.append(f"      сказал: {cell(raw.split(chr(10) + 'КБЖУ:')[0], lim)}")
                 if comment:
                     out.append(f"      комментарий: {cell(comment, lim)}")
+
+        # Дела и хронология — только если виды Дел есть (архив бывает и без них).
+        if conn.execute("SELECT to_regclass('life.tasks') IS NOT NULL AND to_regclass('life.interactions') IS NOT NULL").fetchone()[0]:
+            out += _day_dela(conn, d, lim, full)
 
         meals = conn.execute(
             "SELECT m.time_local, m.kind, m.kcal, m.protein_g, m.fat_g, m.carbs_g, m.confidence, m.raw, "
