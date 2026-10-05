@@ -119,13 +119,30 @@ def test_ask_api(dela, monkeypatch):
     r = client.post("/api/ask", headers=h, json={"text": "на завтра", "scope": {"task_ids": [t["id"]]}})
     assert r.status_code == 422 and "нет ключа" in r.json()["error"]
     monkeypatch.setattr(ask, "client", lambda key, proxy: object())
-    monkeypatch.setattr(ask, "ask", lambda cl, s, u: {"route": "edit", "reply": "Готово", "create": [],
-                                                      "changes": [item(t["num"], estimate_min=15)]})
+    seen = {}
+
+    def fake(cl, s, u, model, effort):
+        seen["model"], seen["effort"] = model, effort
+        return {"route": "edit", "reply": "Готово", "create": [], "changes": [item(t["num"], estimate_min=15)],
+                "_usage": {"model": model, "input": 500, "output": 100, "cache_write": 0, "cache_read": 0}}
+
+    monkeypatch.setattr(ask, "ask", fake)
+    nat = {"Authorization": f"Bearer {tokens.issue(dela, 'natasha', 'device', 'телефон Наташи')}"}
     with TestClient(api.build(Config(db_url=dela, anthropic_key="sk-test"))) as client:
         assert client.post("/api/ask", headers=h, json={"text": "x", "scope": {"task_ids": ["nope"]}}).status_code == 400
         assert client.post("/api/ask", json={"text": "x"}).status_code == 401
         done = _wait(client, h, client.post("/api/ask", headers=h, json={"text": "15 минут", "scope": {"focus": t["id"]}}).json()["job"])
         assert done["status"] == "done" and done["reply"] == "Готово" and done["changed"][0]["after"] == {"estimate_min": 15}
+        assert (seen["model"], seen["effort"]) == ("claude-sonnet-5-5", "low")  # по умолчанию
+        # «Настройки»: Opus и «вдумчиво» — у этого человека; траты видит только владелец.
+        store.apply_ops(dela, "sasha", [{"op": "user.settings", "settings": {"claude_model": "opus", "claude_effort": "medium"}}], "web")
+        _wait(client, h, client.post("/api/ask", headers=h, json={"text": "15 минут", "scope": {"focus": t["id"]}}).json()["job"])
+        assert (seen["model"], seen["effort"]) == ("claude-opus-5-5", "medium")
+        mine = client.get("/api/settings", headers=h).json()
+        assert mine["settings"]["claude_model"] == "opus" and mine["cost"]["by"]["ask"] > 0
+        assert "claude-opus-5-5" in mine["cost"]["models"] and mine["cost"]["today"] == mine["cost"]["total"]
+        theirs = client.get("/api/settings", headers=nat).json()
+        assert "cost" not in theirs and theirs["default"]["claude_model"] == "sonnet"
 
 
 def test_schema_is_strict():

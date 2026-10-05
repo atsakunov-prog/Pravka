@@ -40,7 +40,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import ask, db, parse, store, tokens
+from . import ask, db, llm, parse, store, tokens
 from .config import Config
 
 log = logging.getLogger("dela.api")
@@ -297,6 +297,19 @@ def build(cfg: Config) -> Starlette:
             return _json({"ok": False, "status": "error", "error": job["error"]})
         return _json({"ok": True, "status": "done", **job["result"]})
 
+    async def settings(request: Request):
+        """«Настройки» веба: свои настройки; владельцу — ещё траты Claude в Делах."""
+        who = await auth(request)
+        if not who:
+            return _err("нужен вход", 401)
+        info = await anyio.to_thread.run_sync(_user_info, url, who.user)
+        out = {"ok": True, "settings": info.get("settings") or {}, "claude": bool(cfg.anthropic_key),
+               "models": {k: v for k, v in llm.MODELS.items()}, "efforts": list(llm.EFFORTS),
+               "default": {"claude_model": "sonnet", "claude_effort": ask.EFFORT}}
+        if info.get("role") == "owner":
+            out["cost"] = await anyio.to_thread.run_sync(llm.spent, url)
+        return _json(out)
+
     async def task(request: Request):
         who = await auth(request)
         if not who:
@@ -321,6 +334,7 @@ def build(cfg: Config) -> Starlette:
         Route("/api/parse/{job}", parse_poll),
         Route("/api/ask", ask_start, methods=["POST"]),
         Route("/api/ask/{job}", parse_poll),  # задания общие с разбором
+        Route("/api/settings", settings),
     ])
 
 

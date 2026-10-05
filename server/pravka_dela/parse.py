@@ -19,7 +19,7 @@ import json
 import logging
 import re
 
-from . import db, store
+from . import db, llm, store
 
 log = logging.getLogger("dela.parse")
 
@@ -233,9 +233,7 @@ def ask(cl, system: str, user_text: str) -> dict:
         data = json.loads(text)
     except ValueError as e:
         raise ParseError(f"Claude ответил не JSON ({e})") from e
-    u = msg.usage
-    data["_usage"] = {"input": u.input_tokens, "output": u.output_tokens,
-                      "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0}
+    data["_usage"] = llm.usage_of(msg, MODEL)
     return data
 
 
@@ -315,6 +313,8 @@ def run(url: str, user: str, text: str, defaults: dict, key: str, proxy: str | N
         cl = client(key, proxy)
         ask_fn = lambda s, u: ask(cl, s, u)  # noqa: E731
     data = ask_fn(system, user_text)
+    usage = data.get("_usage")
+    llm.account(url, "parse", llm.cost(usage, MODEL), (usage or {}).get("model") or MODEL)
     ops = to_ops(data, index, defaults or {}, source)
     res = store.apply_ops(url, user, ops, via, actor) if ops else {"results": []}
     tasks = [r["task"] for r in res["results"] if r.get("ok") and r.get("task")]

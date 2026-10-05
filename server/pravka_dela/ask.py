@@ -9,9 +9,11 @@
 Команда целиком про новые дела («завтра позвонить Ивану, Наташе сверку к пятнице») уходит в
 разбор parse.py — тот же промпт, что у телефона; короткое новое дело внутри правки Claude заводит сам.
 
-Sonnet 5.5 — решение владельца (05.10.2026): правка короткая, ждать её не хочется. Справочник —
-в кэше (одинаков между командами одного человека), дела страницы и команда — после него.
-Траты — в crm.state 'llm_cost' (всего, по дням, по видам).
+Модель и глубина — в «Настройках» веба, у каждого свои (crm.users.settings: claude_model —
+sonnet или opus, claude_effort — low, medium, high). По умолчанию Sonnet 5.5 и low — решение
+владельца (05.10.2026): правка короткая, ждать её не хочется. Справочник — в кэше (одинаков между
+командами одного человека и одной модели), дела страницы и команда — после него.
+Траты — в crm.state 'llm_cost' (llm.py).
 """
 
 from __future__ import annotations
@@ -21,15 +23,12 @@ import json
 import logging
 import re
 
-from psycopg.types.json import Jsonb
-
-from . import db, parse, store
+from . import db, llm, parse, store
 
 log = logging.getLogger("dela.ask")
 
-MODEL = "claude-sonnet-5-5"
-EFFORT = "low"                 # правка короткая; ошибается — поднять до medium
-PRICE = {"in": 2.0, "out": 10.0, "cache_write": 2.5, "cache_read": 0.20}  # $ за 1 млн, C:\Bot\README.md §5.1
+MODEL = "claude-sonnet-5-5"    # по умолчанию; в настройках — llm.MODELS
+EFFORT = "low"                 # правка короткая; ошибается — «Вдумчиво» в настройках
 MAX_INPUT = 4000
 MAX_TASKS = 300
 NOTE_CHARS = 100
@@ -294,13 +293,13 @@ def client(key: str, proxy: str | None):
     return parse.client(key, proxy)
 
 
-def ask(cl, system: str, user_text: str) -> dict:
-    """Один запрос Sonnet 5.5: справочник в кэше, ответ — строго по схеме."""
+def ask(cl, system: str, user_text: str, model: str = MODEL, effort: str = EFFORT) -> dict:
+    """Один запрос: справочник в кэше, ответ — строго по схеме. Модель и глубина — из настроек человека."""
     with cl.beta.messages.stream(
-        model=MODEL,
+        model=model,
         max_tokens=16000,
         system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-        output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": SCHEMA}},
+        output_config={"effort": effort, "format": {"type": "json_schema", "schema": SCHEMA}},
         messages=[{"role": "user", "content": user_text}],
         # Отказ модели — повтор на резервной внутри того же запроса (как у разбора и встреч).
         betas=[parse.FALLBACK_BETA],
@@ -316,38 +315,18 @@ def ask(cl, system: str, user_text: str) -> dict:
         data = json.loads(text)
     except ValueError as e:
         raise AskError(f"Claude ответил не JSON ({e})") from e
-    u = msg.usage
-    data["_usage"] = {"model": getattr(msg, "model", MODEL), "input": u.input_tokens, "output": u.output_tokens,
-                      "cache_write": getattr(u, "cache_creation_input_tokens", 0) or 0,
-                      "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0}
+    data["_usage"] = llm.usage_of(msg, model)
     return data
 
 
-def cost(usage: dict | None) -> float:
-    if not usage:
-        return 0.0
-    return (usage.get("input", 0) * PRICE["in"] + usage.get("output", 0) * PRICE["out"]
-            + usage.get("cache_write", 0) * PRICE["cache_write"] + usage.get("cache_read", 0) * PRICE["cache_read"]) / 1e6
+cost = llm.cost
 
 
-def account(url: str, what: str, usd: float) -> None:
-    """Траты Claude в Делах — в crm.state 'llm_cost': всего, по дням, по видам (видит «Дом» и Claude)."""
-    if usd <= 0:
-        return
-    try:
-        with db.session(url, "system", via="claude") as conn:
-            day = conn.execute("SELECT crm.today()::text AS d").fetchone()["d"]
-            row = conn.execute("SELECT value FROM crm.state WHERE key = 'llm_cost' FOR UPDATE").fetchone()
-            v = dict(row["value"]) if row else {}
-            days, by = v.setdefault("days", {}), v.setdefault("by", {})
-            v["total"] = round(v.get("total", 0) + usd, 4)
-            days[day] = round(days.get(day, 0) + usd, 4)
-            by[what] = round(by.get(what, 0) + usd, 4)
-            v["days"] = dict(sorted(days.items())[-120:])
-            conn.execute("INSERT INTO crm.state (key, value) VALUES ('llm_cost', %s) "
-                         "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (Jsonb(v),))
-    except Exception:  # noqa: BLE001 — учёт не роняет правку
-        log.exception("учёт трат Claude")
+def settings_of(conn, user: str) -> tuple[str, str]:
+    """Модель и глубина из «Настроек» человека; чужое значение — по умолчанию."""
+    row = conn.execute("SELECT settings FROM crm.users WHERE id = %s", (user,)).fetchone()
+    s = (row and row["settings"]) or {}
+    return llm.MODELS.get(s.get("claude_model"), MODEL), s.get("claude_effort") if s.get("claude_effort") in llm.EFFORTS else EFFORT
 
 
 def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None,
@@ -370,6 +349,7 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
         cat, index = _catalog(conn)
         today = conn.execute("SELECT crm.today() AS d").fetchone()["d"]
         me = conn.execute("SELECT name, id = crm.owner_id() AS owner FROM crm.users WHERE id = %s", (user,)).fetchone()
+        model, effort = settings_of(conn, user)
         rows = conn.execute("SELECT * FROM tasks.v_tasks WHERE id = ANY(%s::uuid[])", (ids,)).fetchall() if ids else []
     order = {i: k for k, i in enumerate(ids)}
     rows.sort(key=lambda r: order.get(str(r["id"]), 0))
@@ -388,10 +368,10 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
         if not key:
             raise AskError("Claude не настроен: нет ключа в dela.env")
         cl = client(key, proxy)
-        ask_fn = lambda s, u: ask(cl, s, u)  # noqa: E731
+        ask_fn = lambda s, u: ask(cl, s, u, model, effort)  # noqa: E731
     data = ask_fn(system, "\n".join(msg))
     usage = data.get("_usage")
-    account(url, "ask", cost(usage))
+    llm.account(url, "ask", llm.cost(usage, model), (usage or {}).get("model") or model)
     if data.get("route") == "new" and not focused:
         # Команда целиком про новые дела — разбор надиктовки, как у звёздочки (тот же промпт, что у телефона).
         defaults = {k: scope[k] for k in ("project_id", "person_id") if scope.get(k)}
@@ -405,4 +385,4 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
     if errors:
         log.warning("правка: не прошли %d из %d: %s", len(errors), len(ops), errors[0])
     return {"route": "edit", "reply": (data.get("reply") or "").strip(), "changed": undo, "tasks": created,
-            "notes": [], "errors": errors + miss, "usage": usage}
+            "notes": [], "errors": errors + miss, "usage": usage, "model": (usage or {}).get("model") or model}

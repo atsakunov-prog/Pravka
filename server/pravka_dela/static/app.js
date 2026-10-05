@@ -158,6 +158,7 @@ const ICONS = {
   x: 'M6 6l12 12M18 6L6 18',
   chat: 'M5 5h14v10H10l-5 4z',
   mic: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3',
+  gear: 'M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6zM12 2.5l1.6 2.6 3-.6.6 3 2.6 1.6-1.4 2.9 1.4 2.9-2.6 1.6-.6 3-3-.6L12 21.5l-1.6-2.6-3 .6-.6-3-2.6-1.6 1.4-2.9-1.4-2.9 2.6-1.6.6-3 3 .6z',
   send: 'M21 3L3 10.5l7 2.5 2.5 7zM21 3L10 13',
   search: 'M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14zM20 20l-4-4',
   check: 'M5 12.5l4.5 4.5L19 7.5',
@@ -226,6 +227,7 @@ function route() {
   if (kind === 'h' && id) return { kind: 'person', id };
   if (kind === 'search') return { kind: 'search', q: decodeURIComponent(id || '') };
   if (kind === 'new' && id) return { kind: 'new', batch: decodeURIComponent(id) }; // ссылка из Telegram — одна пачка
+  if (kind === 'settings') return { kind: 'settings' };
   if (CRM_VIEWS[kind]) return { kind };
   return { kind: VIEWS[kind] ? kind : 'morning' };
 }
@@ -342,8 +344,10 @@ function renderSide(r) {
     el('div', { class: 'brand' }, el('img', { src: '/static/icon.svg', alt: '' }), el('b', {}, 'Дела'),
       el('span', { class: 'who' }, S.me.name), avatar(me)),
     search, sphere, nav, groups,
-    el('div', { class: 'side-foot' }, el('span', {}, el('span', { class: 'kbd' }, 'n'), ' новое · ', el('span', { class: 'kbd' }, '/'), ' поиск'),
-      el('button', { onclick: async () => { await api('/auth/logout', {}); location.reload(); } }, 'Выйти')));
+    el('div', { class: 'side-foot' },
+      el('button', { class: 'settings-btn' + (r.kind === 'settings' ? ' on' : ''), onclick: () => go('#/settings') }, icon('gear', 14), 'Настройки'),
+      el('button', { onclick: async () => { await api('/auth/logout', {}); location.reload(); } }, 'Выйти')),
+    el('div', { class: 'side-keys' }, el('span', { class: 'kbd' }, 'n'), ' новое · ', el('span', { class: 'kbd' }, '/'), ' поиск'));
 }
 
 // ── Основная колонка ────────────────────────────────────────────────────
@@ -356,6 +360,7 @@ function headIcon() {
   if (r.kind === 'project' && project(r.id)) return box('folder', hueOf(r.id));
   if (r.kind === 'person' && person(r.id)) return avatar(person(r.id), 'big');
   if (r.kind === 'search') return box('search', '#9aa3b2');
+  if (r.kind === 'settings') return box('gear', '#9aa3b2');
   return null;
 }
 
@@ -382,6 +387,7 @@ function renderMain(r) {
   if (r.kind === 'person') return renderPerson(r.id);
   if (r.kind === 'search') return renderSearch(r.q);
   if (r.kind === 'new') return renderNew(r.batch);
+  if (r.kind === 'settings') return renderSettings();
   if (r.kind === 'week') return renderWeek();
   if (r.kind === 'crm') return renderPipeline();
   if (r.kind === 'clients') return renderClients();
@@ -909,7 +915,7 @@ function quickAdd(defaults) {
       }, (txt) => {
         S.listenQuick = false;
         const q = document.getElementById('quick');
-        if (q && txt && q.value.trim()) { S.quickDraft = null; claudeParse(q, defaults); } else render();
+        if (q && txt && q.value.trim() && voiceAuto()) { S.quickDraft = null; claudeParse(q, defaults); } else render();
       });
       if (!ok) S.listenQuick = false;
       render();
@@ -924,7 +930,6 @@ function quickAdd(defaults) {
 const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null; // одна запись на страницу
 const LISTEN_START = 7000; // столько ждём, пока человек начнёт говорить
-const LISTEN_PAUSE = 2500; // пауза после слов — команда сказана
 function stopListening() { if (rec) { try { rec.stop(); } catch (e) { /* уже стоит */ } } }
 /** Слушать: onText — текст по ходу речи, onDone — итог, когда человек замолчал или нажал ещё раз. */
 function listen(onText, onDone) {
@@ -943,7 +948,7 @@ function listen(onText, onDone) {
     }
     last = (final + interim).replace(/\s+/g, ' ').trim();
     onText(last);
-    wait(LISTEN_PAUSE);
+    wait(voicePause());
   };
   r.onerror = (e) => {
     if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('Браузер не дал микрофон — разреши его для этой страницы');
@@ -1010,7 +1015,7 @@ function openAsk(t) {
   const go = () => document.getElementById('ask-' + t.id);
   go()?.focus();
   listen((txt) => { S.askText = txt; const i = go(); if (i) i.value = txt; },
-    (txt) => { if (S.askTask === t.id && txt) askTask(t.id, txt); else render(); });
+    (txt) => { if (S.askTask === t.id && txt && voiceAuto()) askTask(t.id, txt); else render(); });
   render();
   go()?.focus();
 }
@@ -1311,6 +1316,62 @@ function renderNew(batch) {
       })));
   }
   return [head('Новое', ['что предложила автоматика: встречи, Telegram — дела появятся, когда примешь; очевидные закрытия проходят сами']), box];
+}
+
+// ── Настройки: Claude (у человека на сервере), голос (на этом устройстве), траты (владельцу) ──
+const voiceAuto = () => LS.get('voiceAuto', true);
+const voicePause = () => LS.get('voicePause', 2500);
+const MODEL_INFO = {
+  sonnet: ['Sonnet 5.5', 'дешевле: 3–5 с, около 0,4 цента за команду'],
+  opus: ['Opus 5.5', 'умнее в запутанных командах: 4–6 с, около 0,7 цента за команду'],
+};
+const EFFORT_INFO = {
+  low: ['Быстро', 'обычные правки: сроки, люди, проекты'],
+  medium: ['Вдумчиво', 'много дел сразу или сложная команда'],
+  high: ['Глубоко', 'редко нужно: заметно дольше и дороже'],
+};
+const usd = (x) => '$' + (x || 0).toFixed(x >= 10 ? 0 : 2).replace('.', ',');
+
+function renderSettings() {
+  const v = crmGet('/api/settings', 10000);
+  if (!v) return [head('Настройки'), el('div', { class: 'body' }, loading())];
+  const s = { ...v.default, ...(v.settings || {}) };
+  const save = async (patch, what) => {
+    try {
+      await op1({ op: 'user.settings', settings: patch });
+      S.me.settings = { ...(S.me.settings || {}), ...patch };
+      crmDirty(); toast('Сохранил: ' + what); render();
+    } catch (e) { fail(e); }
+  };
+  const choices = (key, info, cur, local) => el('div', { class: 'choices' }, Object.entries(info).map(([val, [title, hint]]) =>
+    el('button', { class: 'choice' + (String(cur) === String(val) ? ' on' : ''), onclick: () => {
+      if (String(cur) === String(val)) return;
+      if (local) { LS.set(key, local(val)); toast('Сохранил: ' + title); render(); } else save({ [key]: val }, title);
+    } }, el('b', {}, title), el('span', {}, hint))));
+  const auto = el('input', { type: 'checkbox' });
+  auto.checked = voiceAuto();
+  auto.addEventListener('change', () => { LS.set('voiceAuto', auto.checked); render(); });
+  const cost = v.cost;
+  const kinds = { ask: 'правка словами', parse: 'разбор надиктовки' };
+  return [head('Настройки', ['Claude в Делах, голос и траты']),
+    el('div', { class: 'body settings' },
+      el('div', { class: 'group' }, el('h2', {}, tint(claudeIcon(14), 'var(--claude)'), 'Claude правит дела словами'),
+        el('div', { class: 'hint-line' }, 'Микрофон у дела, звёздочка и микрофон в поле наверху. Новые дела из надиктовки всегда разбирает Opus 5.5.'),
+        v.claude ? null : el('div', { class: 'cr-err' }, 'Claude на сервере не настроен — нет ключа.'),
+        el('div', { class: 'set-label' }, 'Модель'), choices('claude_model', MODEL_INFO, s.claude_model),
+        el('div', { class: 'set-label' }, 'Глубина'), choices('claude_effort', EFFORT_INFO, s.claude_effort)),
+      el('div', { class: 'group' }, el('h2', {}, tint(icon('mic', 14), 'var(--bad)'), 'Голос', el('span', { class: 'gsub' }, 'на этом устройстве')),
+        el('label', { class: 'set-check' }, auto, 'Отдавать Claude сам, когда замолчал', el('span', { class: 'faint' }, ' — иначе текст ждёт Enter или звёздочку')),
+        el('div', { class: 'set-label' }, 'Пауза, после которой команда сказана'),
+        choices('voicePause', { 1500: ['1,5 с', 'говорю коротко'], 2500: ['2,5 с', 'обычно'], 4000: ['4 с', 'думаю на ходу'] }, voicePause(), Number),
+        el('div', { class: 'hint-line' }, 'Речь распознаёт браузер (Chrome — и на телефоне). На компьютере можно диктовать и Wispr Flow прямо в поле.')),
+      cost ? el('div', { class: 'group' }, el('h2', {}, tint(icon('coin', 14), '#45c07a'), 'Траты Claude в Делах'),
+        el('div', { class: 'tiles' },
+          el('div', { class: 'tile' }, el('div', { class: 'tl' }, 'Сегодня'), el('div', { class: 'tv' }, usd(cost.today))),
+          el('div', { class: 'tile' }, el('div', { class: 'tl' }, 'За 30 дней'), el('div', { class: 'tv' }, usd(cost.month))),
+          el('div', { class: 'tile' }, el('div', { class: 'tl' }, 'Всего с 05.10'), el('div', { class: 'tv' }, usd(cost.total)))),
+        el('div', { class: 'hint-line' }, [...Object.entries(cost.by || {}).map(([k, x]) => `${kinds[k] || k} ${usd(x)}`),
+          ...Object.entries(cost.models || {}).map(([k, x]) => `${k.replace('claude-', '').replace(/-(\d)-(\d)$/, ' $1.$2')} ${usd(x)}`)].join(' · ') || 'Пока ничего.')) : null)];
 }
 
 async function decide(ids, decision, reason, set) {
