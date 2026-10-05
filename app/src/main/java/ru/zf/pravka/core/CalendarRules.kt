@@ -116,7 +116,7 @@ object CalendarRules {
     /** Что за событие: встреча или занятие спортом со своим именем и категорией. */
     enum class Kind { MEETING, SPORT }
 
-    /** «БЖЖ» в календаре (каждый пн, ср, чт) — BJJ, а не созвон. */
+    /** «БЖЖ» в календаре (вторник и четверг) — BJJ, а не созвон. */
     fun kind(e: CalEvent): Kind = if (IcuFixes.saysBjj(e.title)) Kind.SPORT else Kind.MEETING
 
     enum class Start {
