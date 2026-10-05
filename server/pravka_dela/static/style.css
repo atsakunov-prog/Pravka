@@ -255,6 +255,7 @@ a.chip-btn { text-decoration: none; display: inline-block; }
 .cr-task { display: block; width: 100%; border: 0; background: none; text-align: left; padding: 6px 6px; border-radius: 8px; }
 .cr-task:hover { background: var(--hover); }
 .cr-meta { font-size: 12px; color: var(--muted); margin-top: 1px; }
+.cr-reply { font-size: 13.5px; margin: 0 6px 8px; line-height: 1.45; }
 .cr-sub { font-size: 12px; color: var(--faint); margin: 8px 6px 2px; }
 .cr-note { font-size: 13px; padding: 3px 8px; margin: 3px 6px; border-left: 2px solid var(--line); }
 .cr-err { font-size: 12.5px; color: var(--bad); margin: 8px 6px 0; }
@@ -308,6 +309,36 @@ a.chip-btn { text-decoration: none; display: inline-block; }
 .now-btn.on { opacity: 1; color: var(--now); }
 .now-btn.on svg { fill: currentColor; }
 .task.done .now-btn { visibility: hidden; }
+/* Левый столбик: «Сейчас» и под ним микрофон — сказать Claude, что сделать с делом. */
+.task .lead { flex: none; display: flex; flex-direction: column; align-items: center; margin-top: -2px; }
+.task .lead .now-btn { margin-top: 0; width: 22px; height: 20px; }
+.mic-btn {
+  width: 22px; height: 20px; padding: 0; border: 0; border-radius: 6px; background: none;
+  display: grid; place-items: center; color: var(--faint); opacity: 0; transition: opacity .12s, color .12s, background-color .12s;
+}
+.task:hover .mic-btn, .mic-btn:focus-visible { opacity: 1; }
+.mic-btn:hover { color: var(--claude); background: var(--hover-2); }
+.mic-btn.on { opacity: 1; color: var(--bad); }
+.task.done .mic-btn { visibility: hidden; }
+.ask-inline {
+  display: flex; align-items: center; gap: 2px; margin-top: 7px; padding: 3px; cursor: default;
+  background: var(--panel); border: 1px solid color-mix(in srgb, var(--claude) 60%, transparent); border-radius: 10px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--claude) 12%, transparent);
+}
+.ask-inline.busy { border-color: var(--claude); }
+.ask-input { flex: 1; min-width: 0; border: 0; background: none; padding: 5px 7px; font-size: 13.5px; }
+.ask-input:focus { outline: none; }
+.ask-input::placeholder { color: var(--faint); }
+.ask-status { display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; color: var(--claude); font-size: 12.5px; }
+.ask-status .claude-ico { animation: dela-spin 1.6s linear infinite; }
+.ask-inline .q-btn { width: 28px; height: 28px; }
+.q-btn.mic { color: var(--muted); }
+.q-btn.mic:hover:not(:disabled) { color: var(--text); }
+.q-btn.mic.on { color: #fff; background: var(--bad); animation: mic-pulse 1.4s ease-in-out infinite; }
+@keyframes mic-pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--bad) 25%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .q-btn.mic.on, .ask-status .claude-ico { animation: none; } }
+.quick-box.hearing { border-color: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 14%, transparent); }
+.claude-status.listening { color: var(--bad); }
 .tick {
   flex: none; width: 18px; height: 18px; margin: 1px 4px 0 2px; border-radius: 50%; padding: 0;
   border: 1.6px solid var(--tick); background: none; position: relative;
@@ -510,8 +541,8 @@ details summary:hover { color: var(--muted); }
 }
 /* Без мыши наводить нечем — «Сейчас» виден всегда, бледно. */
 @media (hover: none) {
-  .now-btn { opacity: .45; }
-  .now-btn.on { opacity: 1; }
+  .now-btn, .mic-btn { opacity: .45; }
+  .now-btn.on, .mic-btn.on { opacity: 1; }
 }
 .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 24; }
 

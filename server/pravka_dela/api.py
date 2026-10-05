@@ -19,6 +19,8 @@
 | GET  /api/task/<id или номер> | дело с комментариями и журналом |
 | POST /api/parse | {"text", "project_id"?, "person_id"?} — Claude режет текст на дела и заводит их; ответ — номер задания |
 | GET  /api/parse/<номер> | run, пока думает; потом done с делами и заметками или error |
+| POST /api/ask | {"text", "scope": {"title", "task_ids", "focus"?, "project_id"?, "person_id"?}} — Claude правит дела страницы словами (ask.py); ответ — номер задания |
+| GET  /api/ask/<номер> | как у разбора; done — что поменялось (changed: как было и стало), новые дела, ответ Claude |
 """
 
 from __future__ import annotations
@@ -38,7 +40,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import db, parse, store, tokens
+from . import ask, db, parse, store, tokens
 from .config import Config
 
 log = logging.getLogger("dela.api")
@@ -232,6 +234,56 @@ def build(cfg: Config) -> Starlette:
         job["task"] = asyncio.get_running_loop().create_task(run_parse(job, who, text, defaults))
         return _json({"ok": True, "job": jid}, 202)
 
+    # Правка словами (микрофон у дела, строка Claude) — тем же заданием, что разбор.
+    async def run_ask(job: dict, who: tokens.Who, text: str, scope: dict) -> None:
+        try:
+            out = await anyio.to_thread.run_sync(
+                lambda: ask.run(url, who.user, text, scope, cfg.anthropic_key, cfg.claude_proxy,
+                                via=who.via, actor=who.actor),
+                limiter=slots[0],
+            )
+            job.update(status="done", result=store.jsonable(out))
+            log.info("правка %s: %d знаков, дел на экране %d, путь %s, поправлено %d, заведено %d, токены %s",
+                     who.name, len(text), len(scope.get("task_ids") or []), out.get("route"),
+                     len(out.get("changed") or []), len(out.get("tasks") or []), out.get("usage"))
+        except (ask.AskError, parse.ParseError) as e:
+            job.update(status="error", error=str(e))
+        except Exception as e:  # сеть, ключ, лимит — человеку коротко, в журнал подробно
+            log.exception("правка %s", who.name)
+            job.update(status="error", error=f"Claude недоступен: {type(e).__name__}")
+
+    async def ask_start(request: Request):
+        who = await auth(request)
+        if not who:
+            return _err("нужен вход", 401)
+        try:
+            body = await request.json()
+            text = str(body.get("text") or "").strip()
+        except (ValueError, AttributeError):
+            return _err("ожидается JSON {\"text\": ..., \"scope\": ...}", 400)
+        if not text:
+            return _err("пусто — скажи, что сделать", 422)
+        if not cfg.anthropic_key:
+            return _err("Claude не настроен: нет ключа в dela.env", 422)
+        raw = body.get("scope") or {}
+        scope: dict = {"title": str(raw.get("title") or "")[:200]}
+        try:
+            scope["task_ids"] = [str(uuid.UUID(str(x))) for x in (raw.get("task_ids") or [])][:ask.MAX_TASKS]
+            for k in ("focus", "project_id", "person_id"):
+                if raw.get(k):
+                    scope[k] = str(uuid.UUID(str(raw[k])))
+        except (ValueError, TypeError):
+            return _err("scope: id — не uuid", 400)
+        now = time.monotonic()
+        for k in [k for k, j in jobs.items() if now - j["at"] > JOB_TTL and j["status"] != "run"]:
+            del jobs[k]
+        if not slots:
+            slots.append(anyio.CapacityLimiter(2))
+        jid = secrets.token_urlsafe(12)
+        job = jobs[jid] = {"user": who.user, "status": "run", "at": now}
+        job["task"] = asyncio.get_running_loop().create_task(run_ask(job, who, text, scope))
+        return _json({"ok": True, "job": jid}, 202)
+
     async def parse_poll(request: Request):
         who = await auth(request)
         if not who:
@@ -267,6 +319,8 @@ def build(cfg: Config) -> Starlette:
         Route("/api/task/{ref}", task),
         Route("/api/parse", parse_start, methods=["POST"]),
         Route("/api/parse/{job}", parse_poll),
+        Route("/api/ask", ask_start, methods=["POST"]),
+        Route("/api/ask/{job}", parse_poll),  # задания общие с разбором
     ])
 
 

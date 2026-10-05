@@ -15,7 +15,8 @@ Todoist и Notion CRM целиком. Спецификация и причины
 | `store.py` | вся логика: операции с `op_id`, синк, виды. Один код для API, MCP и импорта |
 | `api.py` | HTTP API службы (Starlette): `/api/sync`, `/api/ops`, `/api/view/<имя>`, `/api/task/<ref>`, `/api/parse` |
 | `crm.py` | CRM-виды: pipeline, clients, client, deal (с журналом), dossier, ties, money — регистрируются в `store.VIEWS` |
-| `parse.py` | разбор текста в дела Claude (кнопка рядом с «+» в вебе): промпт = `TASKS_DELA` телефона, справочник — только видимое человеку |
+| `parse.py` | разбор текста в дела Claude (Opus): промпт = `TASKS_DELA` телефона, справочник — только видимое человеку; зовёт его `ask.py`, когда команда целиком про новые дела |
+| `ask.py` | правка дел словами — Sonnet 5.5 (`/api/ask`): микрофон у дела и звёздочка/микрофон в поле наверху. Видит дела на экране, справочник (в кэше) и календарь; правки проверяет и применяет сразу, отдаёт «как было» для «Вернуть всё». Траты — `crm.state` `llm_cost` |
 | `tokens.py` | токены устройств и служб, в базе — sha256 |
 | `mcp_tools.py` | инструменты Claude (`dela_*`), регистрирует архив в `pravka_archive/app.py`, если задан `DELA_DB_URL` |
 | `crm_tools.py` | инструменты Claude CRM (`crm_view`, `crm_deal`, `crm_payment`) |

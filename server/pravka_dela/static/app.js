@@ -18,6 +18,7 @@ const S = {
   showDone: false, upNoDate: false, upMineOnly: false, dealFilter: null,
   sel: new Set(), order: [], lastPick: null, cardId: null, draft: null, sideOpen: false,
   parse: null, quickDraft: null, // идёт разбор Claude; текст, вернувшийся после неудачи
+  askTask: null, askText: '', asking: null, // микрофон у дела: какое открыто, текст, идёт правка
 };
 const BALL = { mine: 'моё', waiting: 'жду', agenda: 'повестка' };
 const KIND = { client: 'Клиенты', internal: 'Внутреннее', personal: 'Личное' };
@@ -250,7 +251,7 @@ async function boot() {
   await sync(true);
   render();
   // Пока человек набирает новое дело, фон только подтягивает данные, а не перерисовывает.
-  const typing = () => document.activeElement?.id === 'quick' && document.activeElement.value;
+  const typing = () => rec || S.askTask || (document.activeElement?.id === 'quick' && document.activeElement.value);
   const refresh = () => sync().then(() => { if (!typing()) render(); }).catch(() => {});
   setInterval(() => { if (!document.hidden) refresh(); }, 30000);
   window.addEventListener('focus', refresh);
@@ -260,8 +261,9 @@ async function boot() {
 function render() {
   if (!S.me) return;
   const r = route();
-  const q0 = document.activeElement && document.activeElement.id === 'quick' ? document.activeElement : null;
-  const focused = q0 ? { value: q0.value, a: q0.selectionStart, b: q0.selectionEnd } : null;
+  const ae = document.activeElement;
+  const q0 = ae && (ae.id === 'quick' || ae.classList?.contains('ask-input')) ? ae : null;
+  const focused = q0 ? { id: q0.id, value: q0.value, a: q0.selectionStart, b: q0.selectionEnd } : null;
   const shell = el('div', { class: 'shell' + (S.cardId || S.draft || S.dealId ? ' with-card' : '') + (S.sideOpen ? ' side-open' : '') + (S.sel.size ? ' selecting' : '') });
   shell.append(renderSide(r), el('main', { class: 'list' }, renderMain(r)));
   if (S.dealId && !S.cardId && !S.draft) shell.append(renderDealCard());
@@ -275,8 +277,11 @@ function render() {
   if (S.sideOpen) $app.append(el('div', { class: 'scrim', onclick: () => { S.sideOpen = false; render(); } }));
   shell.querySelector('main.list').scrollTop = scroll;
   if (focused) {
-    const q = document.getElementById('quick');
-    if (q && !q.disabled) { q.value = focused.value; q.focus(); q.setSelectionRange(focused.a, focused.b); q.dispatchEvent(new Event('input')); }
+    const q = document.getElementById(focused.id);
+    if (q && !q.disabled) {
+      q.value = focused.value; q.focus(); q.setSelectionRange(focused.a, focused.b);
+      if (focused.id === 'quick') q.dispatchEvent(new Event('input'));
+    }
   }
   renderBulk();
 }
@@ -405,7 +410,7 @@ function renderMain(r) {
   if (r.kind === 'waiting') {
     const items = openMine().filter((t) => t.ball === 'waiting');
     return [head('Жду', ['что должны другие — по людям, с давностью']),
-      el('div', { class: 'body' }, items.length ? grouped(items, 'person') : el('div', { class: 'empty' }, 'Ни от кого ничего не ждём.'))];
+      el('div', { class: 'body' }, quickAdd({}), items.length ? grouped(items, 'person') : el('div', { class: 'empty' }, 'Ни от кого ничего не ждём.'))];
   }
   if (r.kind === 'inbox' || r.kind === 'all') {
     const key = r.kind;
@@ -503,10 +508,14 @@ function taskRow(t, by) {
     onclick: () => openCard(t.id),
   },
   pick,
-  el('button', { class: 'now-btn' + (now ? ' on' : ''), title: now ? 'Убрать из «Сейчас»' : 'В «Сейчас» — на сегодня',
-    onclick: (e) => { e.stopPropagation(); setFields([t.id], { focus_on: now ? null : S.today }); } }, icon('bolt', 15)),
+  el('div', { class: 'lead' },
+    el('button', { class: 'now-btn' + (now ? ' on' : ''), title: now ? 'Убрать из «Сейчас»' : 'В «Сейчас» — на сегодня',
+      onclick: (e) => { e.stopPropagation(); setFields([t.id], { focus_on: now ? null : S.today }); } }, icon('bolt', 15)),
+    el('button', { class: 'mic-btn' + (S.askTask === t.id ? ' on' : ''), title: 'Сказать Claude, что сделать с этим делом',
+      onclick: (e) => { e.stopPropagation(); if (S.askTask === t.id && rec) stopListening(); else openAsk(t); } }, icon('mic', 14))),
   el('button', { class: 'tick' + (isOpen(t) ? '' : ' done'), title: isOpen(t) ? 'Сделано' : 'Вернуть', onclick: (e) => { e.stopPropagation(); toggleDone([t]); } }),
-  el('div', { class: 'main' }, el('div', { class: 'title' }, t.title), chips.length ? el('div', { class: 'chips' }, chips) : null),
+  el('div', { class: 'main' }, el('div', { class: 'title' }, t.title), chips.length ? el('div', { class: 'chips' }, chips) : null,
+    S.askTask === t.id ? askBox(t) : null),
   el('span', { class: 'num' }, '#' + t.num));
 }
 
@@ -790,14 +799,15 @@ function claudeIcon(size = 18) {
 function quickAdd(defaults) {
   const busy = !!S.parse;
   const input = el('textarea', { id: 'quick', rows: 1, autocomplete: 'off', disabled: busy,
-    placeholder: 'Новое дело: «Иван: прислать модель +Альфа @Иван !жду в пятницу» или текст для Claude' });
+    placeholder: 'Новое дело — Enter. Claude (звёздочка или микрофон): «все просроченные — на завтра», надиктовка' });
   if (busy) input.value = S.parse.text;
   else if (S.quickDraft) { input.value = S.quickDraft; S.quickDraft = null; }
   const preview = el('div', { class: 'preview' });
   const help = el('div', { class: 'help hidden' },
-    'Enter — одно дело · Ctrl+Enter или звёздочка — Claude разберёт текст на несколько дел · Shift+Enter — новая строка · ',
+    'Enter — одно дело · звёздочка, Ctrl+Enter или микрофон — Claude: поправит дела на экране или заведёт новые · Shift+Enter — новая строка · ',
     '+проект  @человек  *метка  !жду  !повестка  !сейчас  !хочу  !15м · сегодня, завтра, в пятницу, через 3 дня, 12.10 · «в кавычках» — без разбора');
-  const status = busy ? el('div', { class: 'claude-status' }, 'Claude разбирает… Можно уходить на другие страницы — дела появятся сами.') : null;
+  const status = busy ? el('div', { class: 'claude-status' }, 'Claude думает… Можно уходить на другие страницы — изменения появятся сами.')
+    : rec && S.listenQuick ? el('div', { class: 'claude-status listening' }, 'Слушаю… замолчишь — отдам Claude. Нажми микрофон ещё раз, чтобы закончить сразу.') : null;
   const ac = el('div', { class: 'ac hidden' });
   let acState = null; // {kind, q, start, items, at}
 
@@ -881,43 +891,221 @@ function quickAdd(defaults) {
 
   const plusBtn = el('button', { type: 'button', class: 'q-btn plus', title: 'Записать одно дело (Enter)', disabled: busy, onclick: addOne }, '+');
   const claudeBtn = el('button', { type: 'button', class: 'q-btn claude-btn' + (busy ? ' busy' : ''), disabled: busy,
-    title: S.me.claude ? 'Claude: разобрать текст на дела — люди, проекты, сроки, заметки (Ctrl+Enter)' : 'Claude на сервере ещё не настроен',
+    title: S.me.claude ? 'Claude: поправить дела на экране или разобрать текст на новые дела (Ctrl+Enter)' : 'Claude на сервере ещё не настроен',
     onclick: () => claudeParse(input, defaults) }, claudeIcon());
+  // Микрофон: сказанное дописывается в поле и, когда человек замолчал, уходит Claude.
+  const hearing = !!(rec && S.listenQuick);
+  const micBtn = el('button', { type: 'button', class: 'q-btn mic' + (hearing ? ' on' : ''), disabled: busy,
+    title: hearing ? 'Хватит слушать — отдать Claude' : 'Сказать Claude голосом: что поправить в делах на экране или что завести',
+    onclick: () => {
+      if (hearing) { stopListening(); return; }
+      const base = input.value.trim();
+      S.listenQuick = true;
+      S.quickDraft = base || null;
+      const ok = listen((txt) => {
+        const q = document.getElementById('quick');
+        S.quickDraft = (base ? base + ' ' : '') + txt; // перерисовка вернёт его в поле
+        if (q) { q.value = S.quickDraft; q.dispatchEvent(new Event('input')); }
+      }, (txt) => {
+        S.listenQuick = false;
+        const q = document.getElementById('quick');
+        if (q && txt && q.value.trim()) { S.quickDraft = null; claudeParse(q, defaults); } else render();
+      });
+      if (!ok) S.listenQuick = false;
+      render();
+    } }, icon('mic', 17));
   if (input.value) setTimeout(grow);
   return el('div', { class: 'quick' },
-    el('div', { class: 'quick-wrap' }, el('div', { class: 'quick-box' + (busy ? ' busy' : '') }, plusBtn, input, claudeBtn), ac),
+    el('div', { class: 'quick-wrap' }, el('div', { class: 'quick-box' + (busy ? ' busy' : '') + (hearing ? ' hearing' : '') }, plusBtn, input, micBtn, claudeBtn), ac),
     status, preview, help);
 }
 
-// ── Разбор Claude: задание на сервере, ответ — дела и заметки ───────────
+// ── Голос: распознавание браузера (Chrome — по-русски, сразу), своего сервера не нужно ──
+const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null; // одна запись на страницу
+const LISTEN_START = 7000; // столько ждём, пока человек начнёт говорить
+const LISTEN_PAUSE = 2500; // пауза после слов — команда сказана
+function stopListening() { if (rec) { try { rec.stop(); } catch (e) { /* уже стоит */ } } }
+/** Слушать: onText — текст по ходу речи, onDone — итог, когда человек замолчал или нажал ещё раз. */
+function listen(onText, onDone) {
+  if (!Speech) { toast('Этот браузер не распознаёт речь — напиши текстом (в Chrome микрофон работает)'); return false; }
+  stopListening();
+  const r = new Speech();
+  r.lang = 'ru-RU';
+  r.interimResults = true;
+  r.continuous = true;
+  let final = '', last = '', idle;
+  const wait = (ms) => { clearTimeout(idle); idle = setTimeout(() => { try { r.stop(); } catch (e) { /* стоит */ } }, ms); };
+  r.onresult = (e) => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) final += e.results[i][0].transcript; else interim += e.results[i][0].transcript;
+    }
+    last = (final + interim).replace(/\s+/g, ' ').trim();
+    onText(last);
+    wait(LISTEN_PAUSE);
+  };
+  r.onerror = (e) => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('Браузер не дал микрофон — разреши его для этой страницы');
+    else if (e.error !== 'no-speech' && e.error !== 'aborted') toast('Распознавание: ' + e.error);
+  };
+  // Итог — до перерисовки: она пересоздаёт поля, и надиктованное в несфокусированном поле пропало бы.
+  r.onend = () => { clearTimeout(idle); if (rec === r) rec = null; onDone(last); };
+  rec = r;
+  r.start();
+  wait(LISTEN_START);
+  return true;
+}
+
+// ── Задания Claude на сервере: POST отдаёт номер, ответ спрашиваем по номеру ──
+async function runJob(path, body) {
+  const { job } = await api(path, body);
+  for (let i = 0; ; i++) {
+    await new Promise((r) => setTimeout(r, i < 15 ? 800 : 2500));
+    const d = await api(path + '/' + job);
+    if (d.status !== 'run') return d;
+    if (i > 150) throw new Error('Claude думает дольше пяти минут — всё появится само, когда он закончит');
+  }
+}
+
+/** Что видит человек на этой странице — Claude видит то же: название и дела на экране. */
+function pageScope(defaults = {}) {
+  const r = route();
+  const p = r.kind === 'project' ? project(r.id) : null, h = r.kind === 'person' ? person(r.id) : null;
+  const title = p ? `${KIND[p.kind] || 'Проект'}: ${p.name}` : h ? `Человек: ${h.name}` : r.kind === 'search' ? `Поиск: ${r.q}`
+    : (VIEWS[r.kind] || CRM_VIEWS[r.kind] || { title: 'Дела' }).title;
+  const scope = { title, task_ids: [...new Set(S.order)].slice(0, 300) };
+  for (const k of ['project_id', 'person_id']) if (defaults[k]) scope[k] = defaults[k];
+  return scope;
+}
+
+// ── Claude: команда или надиктовка из поля наверху — правка дел на экране или новые дела ──
 async function claudeParse(input, defaults) {
   const text = input.value.trim();
   if (S.parse) return;
-  if (!text) { toast('Напиши или надиктуй, что разобрать: Claude разложит на дела'); input.focus(); return; }
-  const body = { text };
-  for (const k of ['project_id', 'person_id']) if (defaults[k]) body[k] = defaults[k];
+  if (!text) { toast('Скажи или напиши Claude: новые дела или что поправить в делах на экране'); input.focus(); return; }
+  const scope = pageScope(defaults);
   S.parse = { text };
   render();
   try {
-    const { job } = await api('/api/parse', body);
-    let d;
-    for (let i = 0; ; i++) {
-      await new Promise((r) => setTimeout(r, i < 15 ? 1000 : 2500));
-      d = await api('/api/parse/' + job);
-      if (d.status !== 'run') break;
-      if (i > 150) throw new Error('Claude думает дольше пяти минут — дела появятся сами, когда он закончит');
-    }
+    const d = await runJob('/api/ask', { text, scope });
     S.parse = null;
-    for (const t of d.tasks) S.tasks.set(t.id, t);
+    for (const t of d.tasks || []) S.tasks.set(t.id, t);
     await sync().catch(() => {});
     render();
-    claudeResult(d);
+    if (d.route === 'new') claudeResult(d); else askResult(d);
   } catch (e) {
     S.quickDraft = S.parse && S.parse.text;
     S.parse = null;
     render();
     fail(e);
   }
+}
+
+// ── Микрофон у дела: сказал — Claude поправил именно это дело ────────────
+function openAsk(t) {
+  S.askTask = t.id;
+  S.askText = '';
+  render();
+  const go = () => document.getElementById('ask-' + t.id);
+  go()?.focus();
+  listen((txt) => { S.askText = txt; const i = go(); if (i) i.value = txt; },
+    (txt) => { if (S.askTask === t.id && txt) askTask(t.id, txt); else render(); });
+  render();
+  go()?.focus();
+}
+async function askTask(id, text) {
+  text = (text || '').trim();
+  if (!text || S.asking) return;
+  stopListening();
+  S.asking = { id, text };
+  render();
+  try {
+    const d = await runJob('/api/ask', { text, scope: { title: 'Одно дело', task_ids: [id], focus: id } });
+    S.asking = null;
+    S.askTask = null;
+    S.askText = '';
+    for (const t of d.tasks || []) S.tasks.set(t.id, t);
+    await sync().catch(() => {});
+    render();
+    askResult(d);
+  } catch (e) {
+    S.asking = null;
+    S.askText = text;
+    render();
+    fail(e);
+  }
+}
+function askBox(t) {
+  const busy = S.asking && S.asking.id === t.id;
+  const stop = (e) => e.stopPropagation();
+  const input = el('input', { class: 'ask-input', id: 'ask-' + t.id, value: busy ? S.asking.text : S.askText || '', disabled: busy,
+    placeholder: rec ? 'Говори: «на пятницу, это Наташе, первым делом»…' : 'Что сделать с делом: «на пятницу, это Наташе»' });
+  input.addEventListener('click', stop);
+  input.addEventListener('input', () => { S.askText = input.value; });
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); askTask(t.id, input.value); }
+    if (e.key === 'Escape') { stopListening(); S.askTask = null; render(); }
+  });
+  return el('div', { class: 'ask-inline' + (busy ? ' busy' : ''), onclick: stop },
+    input,
+    busy ? el('span', { class: 'ask-status' }, claudeIcon(15), 'правит…') : [
+      el('button', { class: 'q-btn mic' + (rec ? ' on' : ''), type: 'button', title: rec ? 'Хватит слушать' : 'Сказать голосом',
+        onclick: () => { if (rec) stopListening(); else openAsk(t); } }, icon('mic', 16)),
+      el('button', { class: 'q-btn claude-btn', type: 'button', title: 'Отдать Claude (Enter)', onclick: () => askTask(t.id, input.value) }, claudeIcon(16)),
+      el('button', { class: 'icon-btn', type: 'button', title: 'Закрыть (Esc)', onclick: () => { stopListening(); S.askTask = null; render(); } }, icon('x', 13))]);
+}
+
+/** Что поменялось — словами: «срок 07.10, в «Сейчас», жду Наташа». */
+function describe(c) {
+  const a = c.after || {}, out = [];
+  if ('title' in a) out.push(`название «${a.title}»`);
+  if ('due_date' in a) out.push(a.due_date ? 'срок ' + D.ddmm(a.due_date) + (a.due_time ? ' ' + a.due_time : '') : 'без срока');
+  else if ('due_time' in a) out.push(a.due_time ? 'время ' + a.due_time : 'без времени');
+  if ('focus_on' in a) out.push(a.focus_on ? 'в «Сейчас»' : 'из «Сейчас»');
+  if ('project_id' in a) out.push(a.project_id ? 'проект ' + (project(a.project_id)?.name || '?') : 'во «Входящие»');
+  if (a.deal_id) out.push('сделка ' + (S.deals.get(a.deal_id)?.name || '?'));
+  if ('ball' in a || 'person_id' in a) {
+    const who = 'person_id' in a ? personName(person(a.person_id)) : '';
+    out.push(('ball' in a ? BALL[a.ball] : 'человек') + (who ? ' ' + who : ''));
+  }
+  if ('notes' in a) out.push('дописал заметку');
+  if ('estimate_min' in a) out.push(a.estimate_min ? a.estimate_min + ' мин' : 'без оценки');
+  if ('labels' in a) out.push(a.labels.length ? 'метки ' + a.labels.join(', ') : 'без меток');
+  if (c.status) out.push({ done: 'сделано', cancelled: 'отменено', open: 'в работу' }[c.status[1]]);
+  return out.join(', ');
+}
+
+/** Итог правки: что сделал Claude, его слова, «Вернуть всё» одним движением. */
+function askResult(d) {
+  document.querySelectorAll('.claude-result').forEach((x) => x.remove());
+  const changed = d.changed || [], made = d.tasks || [];
+  const box = el('div', { class: 'claude-result', role: 'status' });
+  const close = () => box.remove();
+  const undo = async () => {
+    const back = [];
+    for (const c of changed) {
+      if (Object.keys(c.before || {}).length) back.push({ op: 'task.set', id: c.id, set: c.before });
+      if (c.status) back.push({ op: { open: 'task.reopen', done: 'task.done', cancelled: 'task.cancel' }[c.status[0]], id: c.id });
+    }
+    for (const t of made) back.push({ op: 'task.cancel', id: t.id });
+    try { await ops(back); close(); render(); toast('Вернул как было'); } catch (e) { fail(e); }
+  };
+  const n = changed.length + made.length;
+  box.append(...[
+    el('div', { class: 'cr-head' }, claudeIcon(16), el('span', {}, n ? `Claude: ${plural(n, 'дело', 'дела', 'дел')}` : 'Claude ничего не менял'),
+      el('button', { class: 'icon-btn', title: 'Закрыть', onclick: close }, icon('x', 14))),
+    d.reply ? el('div', { class: 'cr-reply' }, d.reply) : null,
+    changed.map((c) => el('button', { class: 'cr-task', onclick: () => openCard(c.id) },
+      el('div', {}, `#${c.num} ${c.after?.title || c.title}`), el('div', { class: 'cr-meta' }, describe(c)))),
+    made.length ? el('div', { class: 'cr-sub' }, 'Новые:') : null,
+    made.map((t) => el('button', { class: 'cr-task', onclick: () => openCard(t.id) }, el('div', {}, '#' + t.num + ' ' + t.title))),
+    d.errors && d.errors.length ? el('div', { class: 'cr-err' }, 'Не вышло: ' + d.errors.join('; ')) : null,
+    el('div', { class: 'cr-acts' }, n ? el('button', { onclick: undo }, 'Вернуть всё') : null, el('button', { onclick: close }, 'Хорошо')),
+  ].flat().filter(Boolean));
+  document.body.append(box);
+  if (!n && !(d.errors || []).length) setTimeout(close, 8000);
 }
 
 /** Что сделал Claude: дела (открываются карточкой), заметки, отмена одним движением. */
@@ -1022,7 +1210,7 @@ function renderSearch(q) {
     return words.every((w) => hay.includes(w)) && (S.showDone || isOpen(t));
   }) : [];
   return [head('Поиск: ' + q, [plural(items.length, 'дело', 'дела', 'дел')]),
-    el('div', { class: 'body' }, el('div', { class: 'toolbar' }, doneToggle()), items.length ? grouped(items, 'project') : el('div', { class: 'empty' }, 'Ничего не нашлось.'))];
+    el('div', { class: 'body' }, el('div', { class: 'toolbar' }, doneToggle()), quickAdd({}), items.length ? grouped(items, 'project') : el('div', { class: 'empty' }, 'Ничего не нашлось.'))];
 }
 
 function renderWeek() {
@@ -1033,7 +1221,7 @@ function renderWeek() {
   const busy = new Set(all().filter((t) => isOpen(t) && t.ball === 'mine' && t.project_id).map((t) => t.project_id));
   const noStep = [...S.projects.values()].filter((p) => !p.archived_at && p.owner_id === S.me.user && ['paid', 'potential'].includes(p.money_default) && !busy.has(p.id));
   return [head('Неделя', ['раз в неделю: что протухло, кто молчит, где нет следующего шага']),
-    el('div', { class: 'body' },
+    el('div', { class: 'body' }, quickAdd({}),
       stale.length ? groupBox('Протухшее — закрыть, перенести или отпустить', stale.sort(sortTasks), { late: true }) : null,
       waitStale.length ? groupBox('Жду без движения больше недели', waitStale.sort(sortTasks)) : null,
       noStep.length ? el('div', { class: 'group' }, el('h2', {}, 'Проекты в работе без моего следующего шага', el('span', { class: 'n' }, noStep.length)),
@@ -1765,6 +1953,7 @@ document.addEventListener('keydown', (e) => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);
   if (e.key === 'Escape') {
     if (document.querySelector('.pop')) { closePop(); return; }
+    if (rec || S.askTask) { stopListening(); S.askTask = null; S.listenQuick = false; render(); return; }
     if (S.cardId || S.draft || S.dealId) { S.cardId = null; S.draft = null; S.dealId = null; render(); return; }
     if (S.sel.size) { S.sel.clear(); render(); }
     return;
