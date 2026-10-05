@@ -39,7 +39,8 @@ async function api(path, body) {
   let d = {};
   try { d = await r.json(); } catch (e) { /* пусто */ }
   if (r.status === 401) { S.me = null; renderLogin(); throw new Error('нужен вход'); }
-  if (!r.ok || d.ok === false) throw new Error(d.error || ('ошибка ' + r.status));
+  // 404 без нашего JSON — путь не пропустил сайт-посредник (закрытый список путей), а не сама служба.
+  if (!r.ok || d.ok === false) throw new Error(d.error || (r.status === 404 ? 'сервер не знает этот адрес (404) — нужен путь в настройках сайта' : 'ошибка ' + r.status));
   return d;
 }
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
