@@ -359,4 +359,19 @@ class ArchiveEventsTest {
         assertTrue(ArchiveSync.Ledger.read(f).kinds.isEmpty())
         dir.deleteRecursively()
     }
+
+    @Test
+    fun `с кем было дело — person в записи суток, только когда есть`() {
+        val call = ZasechkaStore.Entry(
+            id = 2, start = t0, end = t0 + 12 * 60_000, raw = "", title = "Звонок: Женя Соколов",
+            category = "Работа: звонки", client = "Ромашка-банк", useful = 0, source = "auto", synced = false,
+            createdAt = t0, project = "p-romashka", person = "c2f8",
+        )
+        val row = ArchiveEvents.zasechkaDays(listOf(call), clock, t0 + 3_600_000L).single().data.getJSONArray("entries").getJSONObject(0)
+        assertEquals("c2f8", row.getString("person"))
+        assertEquals("p-romashka", row.getString("project"))
+        val plain = ArchiveEvents.zasechkaDays(listOf(call.copy(person = "", project = "")), clock, t0 + 3_600_000L).single()
+            .data.getJSONArray("entries").getJSONObject(0)
+        assertTrue(!plain.has("person"))
+    }
 }

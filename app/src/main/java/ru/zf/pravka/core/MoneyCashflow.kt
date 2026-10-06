@@ -367,7 +367,7 @@ object MoneyCashflow {
      * «Счетов», — а журнал между ними тот же. Владелец, 24.09.2026: «секунды
      * 3–4 она открывается».
      */
-    private class Memo<T>(val of: List<MoneyEntry>, val value: T)
+    private class Memo<T>(val of: List<MoneyEntry>, val value: T, val partner: ZfPartner.Rules? = null)
     @Volatile private var cardsMemo: Memo<Map<String, String>>? = null
     @Volatile private var movesMemo: Memo<Map<String, List<MoneyEntry>>>? = null
 
@@ -416,8 +416,10 @@ object MoneyCashflow {
      * выплаты ей с обратным знаком (заплатил — долг меньше на столько же).
      */
     fun movesByAccount(entries: List<MoneyEntry>): Map<String, List<MoneyEntry>> {
-        movesMemo?.takeIf { it.of === entries }?.let { return it.value }
-        return computeMoves(entries).also { movesMemo = Memo(entries, it) }
+        // Правила партнёрства меняются из Свода («Деньги») — и счёт долга вместе с ними.
+        val partner = ZfPartner.rules()
+        movesMemo?.takeIf { it.of === entries && it.partner === partner }?.let { return it.value }
+        return computeMoves(entries).also { movesMemo = Memo(entries, it, partner) }
     }
 
     private fun computeMoves(entries: List<MoneyEntry>): Map<String, List<MoneyEntry>> {

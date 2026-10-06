@@ -116,7 +116,8 @@
             "rating": 0,
             "created": "2026-09-07T07:40:02.000+03:00",
             "task": "2b1f0c9e-6a51-4f3e-9c3a-0d6f1b2a7e10",
-            "project": "8c0e2f1a-1d2b-4c3d-8e4f-5a6b7c8d9e0f"
+            "project": "8c0e2f1a-1d2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "person": "c2f8a1d0-3b4e-4f5a-9c6d-7e8f9a0b1c2d"
           },
           {
             "id": 1757235600000,

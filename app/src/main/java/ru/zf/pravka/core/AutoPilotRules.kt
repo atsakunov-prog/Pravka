@@ -484,5 +484,5 @@ interface AutoWitness {
      * пуш — тихая копия в шторку; не узнан — вопрос плашкой или громко.
      * [cut] — какое дело звонок разрезал (пусто — ничего не шло).
      */
-    fun callInRibbon(entryId: Long, title: String, category: String, client: String, start: Long, end: Long, cut: String, sure: Boolean) {}
+    fun callInRibbon(entryId: Long, title: String, category: String, client: String, start: Long, end: Long, cut: String, sure: Boolean, candidates: List<CallRules.Candidate> = emptyList()) {}
 }

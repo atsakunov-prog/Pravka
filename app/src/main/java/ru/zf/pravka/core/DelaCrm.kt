@@ -402,6 +402,24 @@ object DelaCrm {
     }
 
     /**
+     * Дописать человеку другие имена или номера (`person.add`, контракт
+     * svod.json): сервер не затирает и не дублирует. Пусто — null.
+     */
+    fun personAddOp(personId: String, aliases: List<String> = emptyList(), phones: List<String> = emptyList(), opId: String = Dela.newId()): JSONObject? {
+        val a = aliases.map { it.trim() }.filter { it.isNotEmpty() }
+        val ph = phones.map { it.trim() }.filter { it.isNotEmpty() }
+        if (a.isEmpty() && ph.isEmpty()) return null
+        val add = JSONObject()
+        if (a.isNotEmpty()) add.put("aliases", org.json.JSONArray(a))
+        if (ph.isNotEmpty()) add.put("phones", org.json.JSONArray(ph))
+        return op("person.add", opId).put("id", personId).put("add", add)
+    }
+
+    /** «Это тот же, что…»: [dupId] уходит в архив с `merged_into`, ссылки — на [intoId]. */
+    fun personMergeOp(dupId: String, intoId: String, opId: String = Dela.newId()): JSONObject =
+        op("person.merge", opId).put("id", dupId).put("into", intoId)
+
+    /**
      * «Следующее дело…» сделки — открытое дело с проектом и сделкой: так сервер
      * видит у сделки следующий шаг (правило 12). Источник — `manual`:
      * `phone` база у дела не примет.

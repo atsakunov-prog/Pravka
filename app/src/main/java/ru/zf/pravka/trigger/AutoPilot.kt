@@ -34,6 +34,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.R
+import ru.zf.pravka.callIsWho
 import ru.zf.pravka.core.AutoPilotRules
 import ru.zf.pravka.core.AutoWitness
 import ru.zf.pravka.core.Leave
@@ -368,6 +369,8 @@ class AutoPilot(
         const val WHAT_CALL_CAT = "call_cat"
         /** Звонок в ленте — «Убрать»: врезка уходит, дело сшивается обратно. */
         const val WHAT_CALL_DROP = "call_drop"
+        /** Звонок в ленте — «это он»: id человека Дел — в `to` (docs/svod-phone.md, 3.3). */
+        const val WHAT_CALL_WHO = "call_who"
 
         /** Сон, начатый автопилотом: с какого мига (0 — нет). Переживает перезапуск службы. */
         private const val KEY_AUTO_SLEEP_FROM = "z_auto_sleep_from"
@@ -1205,19 +1208,34 @@ class AutoPilot(
      * поправить одним касанием можно. Не узнан — вопросом плашкой или
      * громко: «с кем это?» и есть то, чего роботу не знать.
      */
-    override fun callInRibbon(entryId: Long, title: String, category: String, client: String, start: Long, end: Long, cut: String, sure: Boolean) {
+    override fun callInRibbon(
+        entryId: Long, title: String, category: String, client: String, start: Long, end: Long, cut: String, sure: Boolean,
+        candidates: List<ru.zf.pravka.core.CallRules.Candidate>,
+    ) {
         val min = ((end - start + 30_000L) / 60_000L).coerceAtLeast(1L)
         val rules = ru.zf.pravka.core.CallRules
+        val who = title.removePrefix("Звонок: ")
+        // Не уверены, но есть на кого подумать (ответ «кто это» сервера):
+        // кандидаты кнопками — ответ ставит человека записи и учит сервер.
+        val ask = !sure && candidates.isNotEmpty()
         val choices = buildList {
-            if (category != rules.WORK) add(action("Работа", WHAT_CALL_CAT, start, "", id = entryId, to = rules.WORK))
-            if (category != rules.FAMILY) add(action("Семья", WHAT_CALL_CAT, start, "", id = entryId, to = rules.FAMILY))
+            if (ask) {
+                candidates.take(2).forEach { c -> add(action(c.name.take(24), WHAT_CALL_WHO, start, "", id = entryId, to = c.id)) }
+            } else {
+                if (category != rules.WORK) add(action("Работа", WHAT_CALL_CAT, start, "", id = entryId, to = rules.WORK))
+                if (category != rules.FAMILY) add(action("Семья", WHAT_CALL_CAT, start, "", id = entryId, to = rules.FAMILY))
+            }
             add(action("Убрать", WHAT_CALL_DROP, start, "", id = entryId))
         }
-        val head = "📞 ${title.removePrefix("Звонок: ")}, $min мин"
+        val head = if (ask) "📞 Звонок $min мин: «$who» — это кто?" else "📞 $who, $min мин"
         val text = "${timeHm(start)}–${timeHm(end)} [$category]" +
             (if (client.isNotBlank()) ", клиент $client" else "") + "." +
             (if (cut.isNotBlank()) " «$cut» разрезано звонком и идёт дальше." else "") +
-            if (sure) "" else " С кем это — работа или семья? Отвечу так и в следующий раз."
+            when {
+                ask -> " Выбери человека — запомню его номер и имя контакта для всех."
+                sure -> ""
+                else -> " С кем это — работа или семья? Отвечу так и в следующий раз."
+            }
         lastFire = "звонок ${timeHm(start)} [$category]"
         notify(head, text, choices, quiet = sure)
     }
@@ -1953,6 +1971,11 @@ class AutoPilot(
                         Feedback.toast(app, "📞 ${call.title} — $toPlace; дальше так и буду")
                         app.eventLog.add("звонок: «${call.title}» → [$toPlace] кнопкой")
                     }
+                }
+                WHAT_CALL_WHO -> {
+                    val said = app.callIsWho(id, toPlace)
+                    app.zasechkaSync.kickSoon(scope)
+                    Feedback.toast(app, said)
                 }
                 WHAT_CALL_DROP -> {
                     val call = app.zasechkaStore.entryById(id)

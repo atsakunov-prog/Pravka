@@ -15,8 +15,8 @@ internal object PromptsRaznoska {
 
 Кто говорит: Саша — финансовый советник. Его мир: сделки M&A,
 банковский advisory, управленческая отчётность, финмодели,
-финансирование, налоги; своя команда (Наташа, Алёна, Арина, Лена,
-папа Сергей); клиенты и их собственники; семья; свои приложения.
+финансирование, налоги; своя команда ({TEAM});
+клиенты и их собственники; семья; свои приложения.
 Он наговаривает на ходу: несколько дел подряд, а между ними факты,
 мысли вслух и оговорки.
 
@@ -119,5 +119,11 @@ notes короткими строками: они пойдут в CRM, а не �
 {INPUT}
 """.trimIndent()
 
-    val TASKS_DELA: String by lazy { SharedPrompts.raznoska + "\n\n" + TASKS_DELA_TAIL }
+    val TASKS_DELA: String by lazy { withTail(SharedPrompts.raznoska) }
+
+    /** Общие правила разбора (файл или запись Свода `prompt.raznoska`) плюс хвост телефона. */
+    fun withTail(rules: String): String = rules + "\n\n" + TASKS_DELA_TAIL
+
+    /** Обратное: из полного текста — только общие правила (то, что живёт в Своде). */
+    fun stripTail(full: String): String = full.removeSuffix(TASKS_DELA_TAIL).trimEnd()
 }

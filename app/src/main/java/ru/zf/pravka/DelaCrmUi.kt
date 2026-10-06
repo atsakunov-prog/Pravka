@@ -34,6 +34,7 @@ import ru.zf.pravka.ui.ChipRow
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.GlyphButton
 import ru.zf.pravka.ui.Glyphs
+import ru.zf.pravka.ui.PaperAlert
 import ru.zf.pravka.ui.PaperButton
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperChip
@@ -44,6 +45,7 @@ import ru.zf.pravka.ui.PaperSheet
 import ru.zf.pravka.ui.PaperTextButton
 import ru.zf.pravka.ui.PaperToggle
 import ru.zf.pravka.ui.RowRule
+import ru.zf.pravka.ui.SheetAction
 import ru.zf.pravka.ui.SummaryLine
 
 // CRM на телефоне (05.10.2026, docs/dela-phone-2.md, этап 2): воронка,
@@ -650,6 +652,11 @@ internal fun LazyListScope.crmPersonBlock(ctx: DelaCrmContext, personId: String)
             Freshness(ctx, path)
         }
     }
+    // Одна карточка (06.10.2026, docs/svod-phone.md, 3.6): другие имена и номера —
+    // по ним звонок, встреча и Telegram узнают того же человека.
+    if (p != null && ru.zf.pravka.core.Svod.FEATURE_PEOPLE in ctx.snap.features) {
+        item(key = "crm:person:names") { PersonNamesCard(ctx, p, path) }
+    }
     val deals = v?.deals.orEmpty().map { DelaCrm.overlayDeal(it, ctx.ops, ctx.today) }
     if (deals.isNotEmpty()) {
         item(key = "crm:person:deals") {
@@ -661,6 +668,61 @@ internal fun LazyListScope.crmPersonBlock(ctx: DelaCrmContext, personId: String)
     item(key = "crm:person:tl") {
         val items = DelaCrm.overlayTimeline(v?.timeline.orEmpty(), ctx.ops, ctx.snap) { personId in it.personIds }
         TimelineCard(ctx, items, TalkTarget(p?.name.orEmpty(), personIds = listOf(personId), refresh = listOf(path, DelaCrm.TIES)), loaded = v != null, showDeal = true)
+    }
+}
+
+/**
+ * «Другие имена» и «Номера» человека — показать и дописать (`person.add`);
+ * «Это тот же, что…» — слить дубль в живую карточку (`person.merge`) после
+ * подтверждения листом: слияние уводит дубль в архив, ссылки переезжают.
+ */
+@Composable
+private fun PersonNamesCard(ctx: DelaCrmContext, p: Dela.Person, path: String) {
+    var text by remember(p.id) { mutableStateOf("") }
+    var picking by remember(p.id) { mutableStateOf(false) }
+    var query by remember(p.id) { mutableStateOf("") }
+    var into by remember(p.id) { mutableStateOf<Dela.Person?>(null) }
+    PaperCard(
+        label = "имена и номера",
+        info = "По другим именам и номерам человека узнают звонок, встреча и Telegram: «Женя Соколов» из контакта — " +
+            "тот же «Евгений Соколов». Дописанное уходит на сервер для всех.",
+    ) {
+        PaperHint("Другие имена: " + p.aliases.joinToString(", ").ifBlank { "нет" })
+        PaperHint("Номера: " + p.phones.joinToString(", ").ifBlank { "нет" })
+        PaperField(value = text, onValueChange = { text = it }, placeholder = "имя или номер")
+        Row {
+            Spacer(Modifier.weight(1f))
+            val t = text.trim()
+            val isPhone = t.count { it.isDigit() } >= 7 && t.none { it.isLetter() }
+            PaperTextButton(if (isPhone) "Дописать номер" else "Дописать имя", icon = Glyphs.Plus, onClick = {
+                val op = if (isPhone) DelaCrm.personAddOp(p.id, phones = listOf(t)) else DelaCrm.personAddOp(p.id, aliases = listOf(t))
+                if (op != null) ctx.run(listOf(op), listOf(path), if (isPhone) "Номер дописан" else "Имя дописано")
+                text = ""
+            })
+        }
+        RowRule()
+        PaperTextButton(if (picking) "Не сливать" else "Это тот же, что…", onClick = { picking = !picking })
+        if (picking) {
+            PaperField(value = query, onValueChange = { query = it }, placeholder = "найти карточку")
+            val n = Dela.normName(query)
+            val found = ctx.snap.livePeople().filter { it.id != p.id && n.length >= 2 && Dela.normName(it.name + " " + it.short + " " + it.aliases.joinToString(" ")).contains(n) }.take(6)
+            for (o in found) {
+                PaperTextButton(o.name + if (o.short.isNotBlank()) " (${o.short})" else "", onClick = { into = o })
+            }
+        }
+    }
+    into?.let { o ->
+        PaperAlert(
+            onDismiss = { into = null },
+            title = "Слить «${p.name}» с «${o.name}»?",
+            icon = Glyphs.Check,
+            subtitle = "«${p.name}» уйдёт в архив; дела, сделки и хронология переедут к «${o.name}», имена и номера допишутся.",
+            confirm = SheetAction("Слить", icon = Glyphs.Check) {
+                ctx.run(listOf(DelaCrm.personMergeOp(p.id, o.id)), listOf(path, DelaCrm.TIES), "Слито с «${o.name}»")
+                into = null
+                picking = false
+            },
+        ) {}
     }
 }
 

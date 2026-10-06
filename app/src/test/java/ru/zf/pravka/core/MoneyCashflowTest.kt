@@ -2,6 +2,8 @@ package ru.zf.pravka.core
 
 import java.time.LocalDate
 import java.time.YearMonth
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -201,34 +203,45 @@ class MoneyCashflowTest {
         assertEquals(-400_000L, row(zfRows, "Финансовый поток").values[0])
     }
 
-    // Безымянная строка реестра на счёте ЗФ — зарплата владельца (05.10.2026),
-    // строка папы с тем же реестром в примечании — расход ЗФ.
+    // Безымянная строка реестра на счёте ЗФ — зарплата владельца (05.10.2026).
+    // Зарплату папы со счёта ЗФ с 06.10.2026 решает сервер: правило «Денег»
+    // (`money.partner.payee_rules`) сильнее заводского справочника, и с 05.10
+    // это расход из доли владельца, а не ЗФ (docs/svod-phone.md, 2.1).
     @Test fun unnamedRegistrySalaryIsOwnersPayout() {
-        // Имён в тесте нет: имя папы берётся из самого заводского справочника.
-        val rules = MoneyRules.parseText(asset("money_payees.txt")).rules
-        val papaName = rules.single { it.source == "tbiz" && it.category == "zf_team" && it.comment.contains("папа") }
-            .pattern.split('|').first().trim().uppercase()
+        val partner = JSONObject()
+            .put("pct", 30).put("fixed_on", "2026-10-05")
+            .put("family_pay_patterns", JSONArray().put("ИВАНОВ ПЁТР"))
+            .put("family_pay_is_cost", false)
+            .put("payee_rules", JSONArray().put(JSONObject().put("side", "zf").put("re", "ИВАНОВ\\s+ПЁТР").put("line", "ЗФ: команда и подрядчики")))
+        // Правила «Денег» идут впереди заводского слоя — как в MoneyEngine.
+        val rules = MoneyRules.fromPartner(partner.getJSONArray("payee_rules")) + MoneyRules.parseText(asset("money_payees.txt")).rules
+        assertTrue("строки папы в заводском справочнике больше нет", rules.none { it.comment.contains("папа") && it.category == "zf_team" })
         val zf = MoneyEntry.Source.TBIZ
         val salary = e("Зарплата согласно реестру №1 от 10.08.2026", "2026-08-10", -100_000, "", acc = "ЗФ", src = zf)
             .copy(note = "Зарплата согласно реестру №1 от 10.08.2026")
         val comp = e("Компенсация согласно реестру №2 от 17.08.2026", "2026-08-17", -3_000, "", acc = "ЗФ", src = zf)
-        val papa = e(papaName, "2026-08-10", -50_000, "", acc = "ЗФ", src = zf).copy(id = "papa", note = "Зарплата согласно реестру №3 от 10.08.2026")
+        val papa = e("ИВАНОВ ПЁТР", "2026-08-10", -50_000, "", acc = "ЗФ", src = zf).copy(id = "papa", note = "Зарплата согласно реестру №3 от 10.08.2026")
         // Тот же рубль на карте Саши — «Доход от ЗФ».
         val got = e("got", "2026-08-11", 100_000, "inc_zf")
         val r = MoneyMatch.run(listOf(salary, comp, papa, got), rules, at("2026-09-24")).entries.associateBy { it.id }
         assertEquals("zf_owner", r[salary.id]!!.category)
         assertEquals("sasha", r[salary.id]!!.who)
         assertEquals("zf_owner", r[comp.id]!!.category)
-        assertEquals("zf_team", r["papa"]!!.category)
+        assertEquals("правило «Денег» по регэкспу", "zf_team", r["papa"]!!.category)
         // Выплата ЗФ владельцу клеится с его «Доходом от ЗФ» — ВГО, а не расход.
         assertEquals("inc_zf", r["got"]!!.category)
         assertEquals("got", r[salary.id]!!.matchId)
         // Правило — только счёт ЗФ: та же строка на личной карте его не берёт.
         val mine = MoneyMatch.run(listOf(salary.copy(id = "mine", source = MoneyEntry.Source.TINKOFF, account = "Black Premium *1519")), rules, at("2026-09-24"))
         assertTrue(mine.entries.single().category != "zf_owner")
-        // В долге Наташе после фиксации: зарплата Саши — не расход ЗФ, папина — расход.
+        val minePapa = MoneyMatch.run(listOf(papa.copy(id = "mp", source = MoneyEntry.Source.TINKOFF, account = "Black Premium *1519")), rules, at("2026-09-24"))
+        assertTrue("сторона zf: на личной карте правило «Денег» молчит", minePapa.entries.single().category != "zf_team")
+        // В долге партнёру после фиксации: ни зарплата Саши, ни папина — не расход ЗФ.
         val after = r.values.map { it.copy(ts = it.ts + (at("2026-10-10") - at("2026-08-10"))) }
-        assertEquals(listOf("papa~доля"), ZfPartner.moves(after).map { it.id })
+        val svodRules = ZfPartner.parse(partner)!!
+        assertEquals(emptyList<String>(), ZfPartner.moves(after, svodRules).map { it.id })
+        // Без правил «Денег» (запас сборки) строка папы — команда, расход ЗФ: уменьшает долг.
+        assertEquals(listOf("papa~доля"), ZfPartner.moves(after, ZfPartner.FACTORY).map { it.id })
     }
 
     @Test fun cardlessPushNamesItsAccount() {

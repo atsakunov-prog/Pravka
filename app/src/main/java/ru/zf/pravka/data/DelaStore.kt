@@ -243,6 +243,9 @@ class DelaStore(private val context: Context) {
             done += id
             val what = Dela.describe(q.op, _view.value)
             if (!r.optBoolean("ok", false)) {
+                // «На сервере уже версии N» у записи Свода — не отказ, а повод
+                // слить своё со свежим: это делает SvodStore, владельцу шуметь незачем.
+                if (q.op.optString("op") == "svod.set" && ru.zf.pravka.core.Svod.isStale(r.optString("error"))) continue
                 notices.add(0, Notice(now, "Сервер не принял $what: ${r.optString("error").ifBlank { "без причины" }}", true))
                 continue
             }

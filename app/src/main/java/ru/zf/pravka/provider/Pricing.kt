@@ -32,8 +32,38 @@ object Pricing {
         Settings.MODEL_FABLE to Price(10.0, 50.0, cacheRead = 0.25),
     )
 
+    /**
+     * Цены из Свода (`claude.prices`, 06.10.2026): `{model: {in, out,
+     * cache_write_5m, cache_write_1h, cache_read}}`, $ за миллион. Их держит
+     * сервер по прайсу Anthropic — смена цены доходит до телефона без сборки.
+     * Нет записи или модели в ней — своя строка ниже.
+     */
+    private class SvodPrice(val input: Double, val output: Double, val write1h: Double, val read: Double)
+
+    @Volatile private var svodMemo: Pair<Any?, Map<String, SvodPrice>>? = null
+
+    private fun svodPrices(): Map<String, SvodPrice> {
+        val e = ru.zf.pravka.core.Svod.current[ru.zf.pravka.core.Svod.PRICES]
+        svodMemo?.takeIf { it.first === e }?.let { return it.second }
+        val o = e?.json() as? org.json.JSONObject
+        val out = HashMap<String, SvodPrice>()
+        if (o != null) for (m in o.keys()) {
+            val p = o.optJSONObject(m) ?: continue
+            val input = p.optDouble("in", Double.NaN)
+            val output = p.optDouble("out", Double.NaN)
+            if (input.isNaN() || output.isNaN()) continue
+            out[m] = SvodPrice(
+                input, output,
+                write1h = p.optDouble("cache_write_1h", input * 2.0).takeIf { !it.isNaN() } ?: (input * 2.0),
+                read = p.optDouble("cache_read", input * 0.1).takeIf { !it.isNaN() } ?: (input * 0.1),
+            )
+        }
+        svodMemo = e to out
+        return out
+    }
+
     /** Есть ли у модели строка прайса — иначе её вызовы считались бы бесплатными. */
-    fun knows(model: String): Boolean = model in prices
+    fun knows(model: String): Boolean = model in prices || model in svodPrices()
 
     fun costUsd(
         model: String,
@@ -42,6 +72,10 @@ object Pricing {
         cacheWriteTokens: Int = 0,
         cacheReadTokens: Int = 0,
     ): Double {
+        svodPrices()[model]?.let { sp ->
+            return (inputTokens * sp.input + cacheWriteTokens * sp.write1h + cacheReadTokens * sp.read +
+                outputTokens * sp.output) / 1_000_000.0
+        }
         val p = prices[model] ?: return 0.0
         val inputCost =
             (inputTokens + 2.0 * cacheWriteTokens) / 1_000_000.0 * p.input +

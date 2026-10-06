@@ -15,6 +15,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -319,7 +320,18 @@ internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>, ms: MoneySco
         PaperCard(label = "баланс · " + MoneyFormat.K) { PaperHint("считаю…") }
         return
     }
-    val (accounts, loans, lenders) = data
+    val (ownAccounts, loans, lenders) = data
+    // Долг партнёру — числом «Денег» (Свод, `money.summary`), когда оно свежее;
+    // своё расхождение больше рубля — строкой в журнал, а не тихо.
+    val svodView by app.svodStore.view.collectAsState()
+    val summary = remember(svodView) { ru.zf.pravka.core.MoneySummary.current() }
+    val summaryFresh = ru.zf.pravka.core.MoneySummary.fresh(summary, now)
+    val accounts = ownAccounts.map { a ->
+        if (a.name == MoneyCashflow.NATASHA_DEBT && summaryFresh && summary?.debtKop != null) {
+            if (a.kop != null) noteDivergence(app, a.kop, summary)
+            a.copy(kop = -summary.debtKop)
+        } else a
+    }
     var editing by remember { mutableStateOf<String?>(null) }
     var shown by remember { mutableStateOf<Breakdown?>(null) }
     fun open(a: MoneyCashflow.Account) {
@@ -351,7 +363,7 @@ internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>, ms: MoneySco
         TotalRow("Итого активы", assetSum, incomeColor())
         Spacer(Modifier.height(8.dp))
         Text("Обязательства", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-        for (a in debts) AccountRow(a) { open(a) }
+        for (a in debts) AccountRow(a, if (a.name == MoneyCashflow.NATASHA_DEBT) partnerHint(summary, summaryFresh) else null) { open(a) }
         // Займы у людей — по каждому, кто давал: получено минус возвращено по журналу.
         for ((who, kop) in lenders.filter { it.second > 0 }) {
             Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
@@ -364,7 +376,15 @@ internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>, ms: MoneySco
         }
         TotalRow("Итого долги", debtSum, spentColor())
         HorizontalDivider(Modifier.padding(vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant)
-        TotalRow("Чистые активы", assetSum + debtSum, if (assetSum + debtSum < 0) spentColor() else incomeColor(), big = true)
+        // Чистые активы всей семьи — числом «Денег»; своё — подписано прикидкой.
+        val serverNet = summary?.networthKop?.takeIf { summaryFresh && ms.both }
+        if (serverNet != null) {
+            TotalRow("Чистые активы", serverNet, if (serverNet < 0) spentColor() else incomeColor(), big = true)
+            PaperHint(ru.zf.pravka.core.MoneySummary.label(summary!!) + " · прикидка телефона " + MoneyFormat.k(assetSum + debtSum))
+        } else {
+            TotalRow("Чистые активы", assetSum + debtSum, if (assetSum + debtSum < 0) spentColor() else incomeColor(), big = true)
+            if (ms.both) PaperHint("прикидка телефона" + if (summary != null) " · у «Денег» запись старше суток" else "")
+        }
         if (unknown.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
             Text("Остаток неизвестен", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -397,14 +417,30 @@ internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>, ms: MoneySco
     }
 }
 
+/** Подпись долга партнёру: число «Денег» с временем или своя прикидка по правилам. */
+private fun partnerHint(s: ru.zf.pravka.core.MoneySummary.Summary?, fresh: Boolean): String =
+    if (s != null && fresh && s.debtKop != null) ru.zf.pravka.core.MoneySummary.label(s) + " · " + ZfPartner.HINT
+    else "прикидка телефона · " + ZfPartner.HINT
+
+/** Своё расходится с «Деньгами» больше рубля — один раз на запись «Денег» строкой в журнал службы. */
+private val toldDivergence = java.util.Collections.synchronizedSet(HashSet<String>())
+
+private fun noteDivergence(app: PravkaApp, ownKop: Long, s: ru.zf.pravka.core.MoneySummary.Summary) {
+    if (!ru.zf.pravka.core.MoneySummary.diverges(ownKop, s) || !toldDivergence.add(s.at)) return
+    app.eventLog.add(
+        "деньги: долг партнёру у телефона ${MoneyFormat.rub(-ownKop)}, у «Денег» ${MoneyFormat.rub(s.debtKop ?: 0)} (${s.at}) — " +
+            "расходятся больше рубля; во вкладке — число «Денег»"
+    )
+}
+
 @Composable
-private fun AccountRow(a: MoneyCashflow.Account, onClick: () -> Unit) {
+private fun AccountRow(a: MoneyCashflow.Account, hint: String? = null, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(a.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             PaperHint(
                 // Долг Наташе — не от якоря, а по правилу партнёрства: так и подписан.
-                if (a.name == MoneyCashflow.NATASHA_DEBT) ZfPartner.HINT
+                hint ?: if (a.name == MoneyCashflow.NATASHA_DEBT) ZfPartner.HINT
                 else a.anchor?.let { "${it.source} · " + SimpleDateFormat("d MMM, HH:mm", Locale.forLanguageTag("ru")).format(Date(it.ts)) }
                     ?: ("за 90 дней: " + MoneyFormat.k(a.flowKop, sign = true))
             )

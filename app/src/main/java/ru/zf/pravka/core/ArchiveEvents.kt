@@ -139,6 +139,8 @@ object ArchiveEvents {
                         // и архиву не приходится принимать всю историю заново.
                         if (e.task.isNotBlank()) put("task", e.task)
                         if (e.project.isNotBlank()) put("project", e.project)
+                        // С кем (06.10.2026): карточка человека Дел — так же, только когда есть.
+                        if (e.person.isNotBlank()) put("person", e.person)
                     }
                 }),
             ))

@@ -183,6 +183,11 @@ object Dela {
         val traits: String = "",
         val source: String = "",
         val note: String = "",
+        /**
+         * Дубль, слитый в живую карточку (`person.merge`, 06.10.2026): такой
+         * человек в архиве, и все ссылки телефона на него — на этот id.
+         */
+        val mergedInto: String = "",
     ) {
         val label: String get() = short.ifBlank { name }
         val live: Boolean get() = archivedAt.isBlank()
@@ -315,6 +320,17 @@ object Dela {
 
         fun liveProjects(): List<Project> = projects.values.filter { it.live }.sortedBy { it.name.lowercase() }
         fun livePeople(): List<Person> = people.values.filter { it.live }.sortedBy { it.label.lowercase() }
+
+        /**
+         * Человек по id с учётом слияний: ссылка на дубль ведёт к живой
+         * карточке (`merged_into`), цепочка — до конца, круг не вешает.
+         */
+        fun person(id: String): Person? {
+            var p = people[id] ?: return null
+            val seen = HashSet<String>()
+            while (p.mergedInto.isNotBlank() && seen.add(p.id)) p = people[p.mergedInto] ?: break
+            return p
+        }
         fun dealsOf(projectId: String): List<Deal> =
             deals.values.filter { it.projectId == projectId && it.stage != "archive" }.sortedBy { it.name.lowercase() }
         /** Все сделки клиента: живые по ходу воронки, закрытые — в конце. */
@@ -440,6 +456,7 @@ object Dela {
             birthDay = o.int("birth_day"), birthMonth = o.int("birth_month"), userId = o.str("user_id"), local = o.bool("_local"),
             emails = o.strings("emails"), telegram = o.str("telegram_username"), birthYear = o.int("birth_year"),
             seeks = o.str("seeks"), offers = o.str("offers"), traits = o.str("traits"), source = o.str("source"), note = o.str("note"),
+            mergedInto = o.str("merged_into"),
         )
     }
 
@@ -452,6 +469,7 @@ object Dela {
         .put("user_id", nul(p.userId)).put("emails", arr(p.emails)).put("telegram_username", nul(p.telegram))
         .put("birth_year", if (p.birthYear > 0) p.birthYear else JSONObject.NULL).put("seeks", nul(p.seeks))
         .put("offers", nul(p.offers)).put("traits", nul(p.traits)).put("source", nul(p.source)).put("note", nul(p.note))
+        .put("merged_into", nul(p.mergedInto))
         .apply { if (p.local) put("_local", true) }
 
     fun org(o: JSONObject): Org? {
@@ -714,6 +732,30 @@ object Dela {
                         local = true,
                     )
                 }
+                // Дописать имена и номера — как сервер: что уже есть, не дублируется.
+                "person.add" -> {
+                    val p = people[op.str("id")] ?: continue
+                    val add = op.optJSONObject("add") ?: continue
+                    people[p.id] = p.copy(
+                        aliases = p.aliases + addNew(p.aliases + p.name + p.short, add.strings("aliases"), ::normName),
+                        phones = p.phones + addNew(p.phones, add.strings("phones"), CallRules::digits),
+                        emails = p.emails + addNew(p.emails, add.strings("emails")) { it.trim().lowercase() },
+                        telegram = p.telegram.ifBlank { add.str("telegram_username").removePrefix("@") },
+                        local = true,
+                    )
+                }
+                "person.merge" -> {
+                    val dup = people[op.str("id")] ?: continue
+                    val into = people[op.str("into")] ?: continue
+                    people[dup.id] = dup.copy(archivedAt = nowIso, mergedInto = into.id, local = true)
+                    people[into.id] = into.copy(
+                        aliases = into.aliases + (listOf(dup.name) + dup.aliases)
+                            .filter { a -> a.isNotBlank() && normName(a) != normName(into.name) && into.aliases.none { normName(it) == normName(a) } }
+                            .distinctBy(::normName),
+                        phones = into.phones + dup.phones.filter { d -> into.phones.none { CallRules.digits(it) == CallRules.digits(d) } },
+                        local = true,
+                    )
+                }
             }
         }
         return derive(s.copy(tasks = tasks, comments = comments, suggestions = suggestions, deals = deals, payments = payments, people = people))
@@ -812,6 +854,14 @@ object Dela {
 
     /** Что сервер умеет сверх контракта части 1 — `features` ответа синка. */
     const val FEATURE_REMIND = "remind"
+
+    /** Что из [add] ещё нет в [have] (по [norm]: регистр, ё, форма номера не важны) — без повторов. */
+    fun addNew(have: List<String>, add: List<String>, norm: (String) -> String): List<String> {
+        val seen = have.filter { it.isNotBlank() }.map(norm).toHashSet()
+        return add.map { it.trim() }.filter { it.isNotEmpty() && seen.add(norm(it)) }
+    }
+
+    fun normName(s: String): String = s.trim().lowercase().replace('ё', 'е').replace(Regex("\\s+"), " ")
 
     /** Наговорки: `dictation.add` и вид `dictations` (06.10.2026, docs/dela-phone-3.md). */
     const val FEATURE_DICTATIONS = "dictations"
@@ -966,6 +1016,9 @@ object Dela {
             "deal.set" -> "сделка «${s.deals[op.str("id")]?.name?.take(60) ?: "?"}»"
             "payment.set" -> "оплата по сделке «${s.payments[op.str("id")]?.let { s.deals[it.dealId]?.name }?.take(60) ?: "?"}»"
             "person.set" -> "человек «${s.people[op.str("id")]?.label ?: "?"}»"
+            "person.add" -> "имена и номера человека «${s.people[op.str("id")]?.label ?: "?"}»"
+            "person.merge" -> "слить «${s.people[op.str("id")]?.label ?: "?"}» с «${s.people[op.str("into")]?.label ?: "?"}»"
+            "svod.set" -> "запись Свода «${op.str("key")}»"
             else -> op.str("op")
         }
     }

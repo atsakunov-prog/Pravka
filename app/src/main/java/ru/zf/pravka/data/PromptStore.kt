@@ -82,16 +82,56 @@ class PromptStore(private val context: Context) {
         PromptId.PATTERNS -> Prompts.PATTERNS
     }
 
+    // ---- Свод (06.10.2026, docs/svod-phone.md, 1.3–1.4) ----
+    //
+    // Правда о промптах — на сервере: запись Свода `prompt.<storageKey>`
+    // (Разноска — `prompt.raznoska`, только её общие правила). Есть запись —
+    // она и действует; нет — своя правка этой установки, потом заводской.
+    // Правка пишется в Свод, когда сервер его знает, — для всех, а не
+    // «своя копия»; без Свода — как раньше, своей правкой.
+
+    /** Свод телефона и умеет ли его сервер — ставит приложение. */
+    @Volatile var svod: SvodStore? = null
+    @Volatile var svodOn: () -> Boolean = { false }
+
+    /** Текст из Свода: для Разноски — общие правила плюс свой хвост (словарь, наговор). */
+    private fun fromSvod(id: PromptId): String? {
+        val body = ru.zf.pravka.core.Svod.current[svodKey(id)]?.body?.takeIf { it.isNotBlank() } ?: return null
+        return if (id == PromptId.TASKS_DELA) ru.zf.pravka.core.prompts.PromptsRaznoska.withTail(body) else body
+    }
+
+    /** Версия записи в Своде (0 — записи нет): `base_rev` автоматов. */
+    fun svodRev(id: PromptId): Int = ru.zf.pravka.core.Svod.current[svodKey(id)]?.rev ?: 0
+
+    /** Текст действует из Свода — экран так и пишет. */
+    fun inSvod(id: PromptId): Boolean = fromSvod(id) != null
+
     fun overrideFlow(id: PromptId): Flow<String?> =
         context.promptDataStore.data.map { it[stringPreferencesKey(id.storageKey)] }
 
     suspend fun effective(id: PromptId): String =
-        overrideFlow(id).first() ?: factory(id)
+        ru.zf.pravka.core.Svod.withTeam(raw(id), TEAM_FALLBACK)
+
+    /** Текст как он хранится — с метками вроде `{TEAM}`: его показывает и правит редактор. */
+    suspend fun raw(id: PromptId): String = fromSvod(id) ?: overrideFlow(id).first() ?: factory(id)
 
     suspend fun effective(mode: ProofreadMode): String =
         effective(PromptId.of(mode))
 
-    suspend fun setOverride(id: PromptId, text: String) {
+    /** Свой текст (без Свода) — то, что первое знакомство отдаст серверу. */
+    suspend fun local(id: PromptId): String = overrideFlow(id).first() ?: factory(id)
+
+    /**
+     * Правка промпта. Свод есть — новая версия записи (`author`: phone —
+     * редактор, tuner — недельная правка с [baseRev]); нет — своя правка.
+     */
+    suspend fun setOverride(id: PromptId, text: String, author: String = "phone", reason: String = "", baseRev: Int? = null) {
+        val sv = svod
+        if (sv != null && svodOn()) {
+            val body = if (id == PromptId.TASKS_DELA) ru.zf.pravka.core.prompts.PromptsRaznoska.stripTail(text) else text
+            sv.set(svodKey(id), body = body, author = author, reason = reason, baseRev = baseRev)
+            return
+        }
         context.promptDataStore.edit { it[stringPreferencesKey(id.storageKey)] = text }
     }
 
@@ -116,9 +156,28 @@ class PromptStore(private val context: Context) {
         return known.size
     }
 
-    /** "Вернуть заводской": removes the override, factory text applies again. */
-    suspend fun resetToFactory(id: PromptId) {
+    /**
+     * "Вернуть заводской": removes the override, factory text applies again.
+     * В Своде записи не удаляются — заводской текст ложится новой версией.
+     */
+    suspend fun resetToFactory(id: PromptId, author: String = "phone") {
         context.promptDataStore.edit { it.remove(stringPreferencesKey(id.storageKey)) }
+        val sv = svod
+        if (sv != null && svodOn() && ru.zf.pravka.core.Svod.current.containsKey(svodKey(id))) {
+            setOverride(id, factory(id), author = author, reason = "вернуть заводской")
+        }
+    }
+
+    companion object {
+        /** Ключ Свода промпта: `prompt.<storageKey>`; Разноска — общий `prompt.raznoska`. */
+        fun svodKey(id: PromptId): String =
+            if (id == PromptId.TASKS_DELA) ru.zf.pravka.core.Svod.RAZNOSKA else "prompt." + id.storageKey
+
+        /**
+         * Команда в промпте Разноски без Свода (`{TEAM}`): заводская строка,
+         * какой она была в тексте до Свода.
+         */
+        const val TEAM_FALLBACK = "Наташа, Алёна, Арина, Лена, папа Сергей"
     }
 }
 

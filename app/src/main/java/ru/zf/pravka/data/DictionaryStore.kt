@@ -36,6 +36,12 @@ class DictionaryStore(private val context: Context) {
     // слова владельца идут впереди семени, а у самой записи признака нет.
     @Volatile private var seedKeys: Set<Pair<String, DictMode>> = emptySet()
 
+    /**
+     * Словарь правили (слово, правка, ночной разбор, импорт) — не счётчик:
+     * Свод отправит `dict.main` через тишину (docs/svod-phone.md, 1.5).
+     */
+    @Volatile var onEdit: (() -> Unit)? = null
+
     private val _entriesFlow = MutableStateFlow<List<DictEntry>>(emptyList())
     val entriesFlow: StateFlow<List<DictEntry>> = _entriesFlow
 
@@ -61,6 +67,7 @@ class DictionaryStore(private val context: Context) {
         )
         entries.add(entry)
         persist()
+        onEdit?.invoke()
         entry
     }
 
@@ -70,12 +77,16 @@ class DictionaryStore(private val context: Context) {
         if (index >= 0) {
             entries[index] = entry
             persist()
+            onEdit?.invoke()
         }
     }
 
     suspend fun delete(id: Long): Unit = mutex.withLock {
         ensureLoaded()
-        if (entries.removeAll { it.id == id }) persist()
+        if (entries.removeAll { it.id == id }) {
+            persist()
+            onEdit?.invoke()
+        }
     }
 
     suspend fun incrementHits(ids: Collection<Long>): Unit = mutex.withLock {
@@ -108,8 +119,34 @@ class DictionaryStore(private val context: Context) {
                 added++
             }
         }
-        if (added > 0) persist()
+        if (added > 0) {
+            persist()
+            onEdit?.invoke()
+        }
         added
+    }
+
+    suspend fun seedVersion(): Int = mutex.withLock { ensureLoaded(); seedVersion }
+
+    /**
+     * Словарь целиком из Свода (новая версия с сервера или слитое своё):
+     * счётчики — свои, по `id`, а у новых — по слову и виду. Пустой список
+     * поверх непустого словаря не ложится: это поломка, а не правка
+     * (железное правило 1). Отклика «поменялось» нет — это и есть сервер.
+     */
+    suspend fun replaceFromSvod(list: List<DictEntry>): Boolean = mutex.withLock {
+        ensureLoaded()
+        if (list.isEmpty() && entries.isNotEmpty()) return@withLock false
+        val byId = entries.associateBy { it.id }
+        val byWord = entries.associateBy { it.from.lowercase() to it.mode }
+        entries = list.map { e ->
+            val hits = byId[e.id]?.takeIf { it.from.equals(e.from, ignoreCase = true) }?.hits
+                ?: byWord[e.from.lowercase() to e.mode]?.hits ?: e.hits
+            e.copy(hits = hits, createdAt = if (e.createdAt == 0L) System.currentTimeMillis() else e.createdAt)
+        }.toMutableList()
+        nextId = (entries.maxOfOrNull { it.id } ?: 0L) + 1
+        persist()
+        true
     }
 
     private suspend fun ensureLoaded() {

@@ -43,6 +43,10 @@ class DelaSync(
     private val store: DelaStore,
     private val scope: CoroutineScope,
     private val log: (String) -> Unit,
+    /** Свод (docs/svod-phone.md): едет тем же синком — массив `svod` и операции `svod.set`. */
+    private val svod: SvodStore? = null,
+    /** Что телефон отдаёт Своду при первом знакомстве: ключ → (текст, JSON). */
+    private val svodSeed: suspend () -> Map<String, Pair<String?, String?>> = { emptyMap() },
 ) {
 
     data class Link(val url: String, val token: String, val user: String, val name: String, val at: Long)
@@ -184,6 +188,7 @@ class DelaSync(
             val reply = post(l, "api/ops", body)
             val results = reply.optJSONArray("results") ?: throw DelaException("Дела ответили без results: ${reply.toString().take(200)}")
             val acked = store.ack(results)
+            svod?.ack(chunk.map { it.op }, results)
             log("дела: отправлено ${chunk.size}, ответ на $acked")
             // Сервер ответил не на всё — повторять тот же кусок по кругу незачем:
             // неотвеченное уйдёт следующим проходом.
@@ -196,6 +201,72 @@ class DelaSync(
         val resp = get(l.url, l.token, "api/sync?since=$since")
         val refused = store.applySync(resp, System.currentTimeMillis())
         if (refused.isNotBlank()) throw DelaException(refused)
+        svod?.let { sv -> pullSvod(l, sv, resp) }
+    }
+
+    /**
+     * Свод после синка: записи поверх кэша; впервые увидев умение — весь Свод
+     * видом (записи «Денег» могли лечь раньше, чем телефон начал о нём
+     * спрашивать, и в синк «после seq» они уже не попадут), потом первое
+     * знакомство. Сбой Свода синк дел не роняет — он словами в журнал.
+     */
+    private suspend fun pullSvod(l: Link, sv: SvodStore, resp: JSONObject) {
+        runCatching {
+            sv.applySync(resp)
+            if (ru.zf.pravka.core.Svod.FEATURE !in store.view.value.features) return
+            if (sv.needsFetch()) fetchSvod(l, sv, fresh = false)
+            sv.seedIfNeeded(ru.zf.pravka.BuildConfig.VERSION_CODE, svodSeed)
+            sv.resend()
+        }.onFailure { e -> log("свод: ${why(e)}") }
+    }
+
+    private suspend fun fetchSvod(l: Link, sv: SvodStore, fresh: Boolean) {
+        val o = get(l.url, l.token, "api/view/svod")
+        val a = o.optJSONArray("items") ?: JSONArray()
+        val items = (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(ru.zf.pravka.core.Svod::entry) }
+        sv.applyAll(items, System.currentTimeMillis(), fresh)
+        log("свод: с сервера ${items.size} записей" + if (fresh) " — взял заново" else "")
+    }
+
+    /** «Взять с сервера заново» (Настройки → Свод): весь Свод видом, своё неотправленное снимается. */
+    suspend fun refetchSvod(): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val l = _link.value ?: throw DelaException("Дела не подключены — Свод живёт на их сервере")
+            val sv = svod ?: throw DelaException("Свода нет")
+            fetchSvod(l, sv, fresh = true)
+        }.recoverCatching { e -> throw DelaException(why(e)) }
+    }
+
+    // ------------------------------------------------------------ кто это
+
+    private val whoCache = HashMap<String, Pair<Long, ru.zf.pravka.core.CallRules.Who>>()
+
+    /**
+     * Кто это (`GET /api/view/who`, контракт svod.json, `people.who`): одно
+     * правило на всех — номер, потом имя с уменьшительными, падежами,
+     * «Фамилия Имя» и компанией. Ответ по номеру помним сутки; без сети и
+     * без умения `people` — null, и звонок узнаётся прежним точным
+     * сопоставлением по синку.
+     */
+    suspend fun who(phone: String, name: String): ru.zf.pravka.core.CallRules.Who? = withContext(Dispatchers.IO) {
+        val l = _link.value ?: return@withContext null
+        if (ru.zf.pravka.core.Svod.FEATURE_PEOPLE !in store.view.value.features) return@withContext null
+        val d = ru.zf.pravka.core.CallRules.digits(phone)
+        val key = d + "|" + name.trim().lowercase()
+        val now = System.currentTimeMillis()
+        synchronized(whoCache) { whoCache[key]?.takeIf { now - it.first < WHO_TTL_MS }?.let { return@withContext it.second } }
+        val q = buildList {
+            if (d.length >= 7) add("phone=" + URLEncoder.encode(phone.trim(), "UTF-8"))
+            if (name.isNotBlank()) add("q=" + URLEncoder.encode(name.trim(), "UTF-8"))
+        }
+        if (q.isEmpty()) return@withContext null
+        // Свип звонков не ждёт сервер дольше десяти секунд: не ответил — точное сопоставление.
+        val path = "api/view/who?" + q.joinToString("&")
+        val job = scope.async(Dispatchers.IO) { runCatching { ru.zf.pravka.core.CallRules.parseWho(get(l.url, l.token, path)) } }
+        (withTimeoutOrNull(WHO_WAIT_MS) { job.await() } ?: Result.failure(DelaException("не ответил за ${WHO_WAIT_MS / 1000} с")))
+            .onFailure { e -> log("дела: кто это ($name) — ${why(e)}") }
+            .getOrNull()
+            ?.also { w -> synchronized(whoCache) { whoCache[key] = now to w } }
     }
 
     /** Комментарии и журнал дела — только с сервера, по запросу карточки. */
@@ -357,6 +428,9 @@ class DelaSync(
         const val LINK_FILE = "dela-link.json"
         const val PAIR_PREFIX = "pravka-dela:"
         private const val POKE_QUIET_MS = 10_000L
+        /** Ответ «кто это» по номеру — на сутки (docs/svod-phone.md, 3.2). */
+        private const val WHO_TTL_MS = 24 * 3_600_000L
+        private const val WHO_WAIT_MS = 10_000L
         /** Потолок пачки у сервера — 2000 операций; берём с запасом. */
         private const val MAX_OPS = 500
 

@@ -106,6 +106,7 @@ internal enum class SettingsGroup(
     MONEY("Деньги", "пуши банка", SettingsShelf.MODES, { Glyphs.Money }, ModeDecor.MONEY),
     VOICE("Микрофон и распознавание", "телефон или гарнитура, движок", SettingsShelf.VOICE, { Glyphs.Mic }),
     MODELS("Модели", "какая модель и с каким усилием", SettingsShelf.VOICE, { Glyphs.Spark }),
+    SVOD("Свод", "промпты, словарь, правила — правда на сервере", SettingsShelf.VOICE, { Glyphs.Archive }),
     NET("Связь с облаками", "проверка Google и Claude, журнал, неделя доступа", SettingsShelf.VOICE, { Glyphs.Wifi }),
     ANTHROPIC("Anthropic", "ключ API", SettingsShelf.LINKS, { Glyphs.Key }),
     DELA_SERVER("Дела", "свой сервер дел, QR, выбор Todoist / Дела", SettingsShelf.LINKS, { Glyphs.Delo }, ModeDecor.DELA),
@@ -236,6 +237,14 @@ private fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
         SettingsGroup.MODELS -> {
             val changed by remember { s.modelChoicesChangedFlow() }.collectAsState(initial = 0)
             if (changed > 0) GroupStatus("своих: $changed") else GroupStatus("заводские")
+        }
+        SettingsGroup.SVOD -> {
+            val v by app.svodStore.view.collectAsState()
+            when {
+                v.pending.isNotEmpty() -> GroupStatus("ждёт отправки: ${v.pending.size}")
+                v.entries.isEmpty() -> GroupStatus("пусто")
+                else -> GroupStatus("записей: ${v.entries.size}", ok = true, dot = true)
+            }
         }
         SettingsGroup.ANTHROPIC -> {
             val key by s.apiKeyFlow.collectAsState(initial = "")
@@ -491,6 +500,7 @@ private fun GroupContent(
         SettingsGroup.MONEY -> MoneySettings(app)
         SettingsGroup.VOICE -> VoiceSettings(app)
         SettingsGroup.MODELS -> ModelsSettings(app)
+        SettingsGroup.SVOD -> SvodSettings(app)
         SettingsGroup.NET -> NetProbeSettings(app)
         SettingsGroup.ANTHROPIC -> AnthropicSettings(app)
         SettingsGroup.TODOIST -> TodoistSettings(app)

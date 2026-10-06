@@ -70,47 +70,74 @@ class RulesStore(
         loaded = true
         // A corrupt file is quarantined, never silently replaced by the next
         // persist: these rules are the learning loop's whole memory.
-        val parsed = StoreFiles.readOrQuarantine(file()) { text ->
-            val array = JSONArray(text)
-            val out = mutableListOf<Rule>()
-            for (i in 0 until array.length()) {
-                val o = array.optJSONObject(i) ?: continue
-                val t = o.optString("text").trim()
-                if (t.isEmpty()) continue
-                out.add(
-                    Rule(
-                        id = o.optLong("id"),
-                        text = t,
-                        enabled = o.optBoolean("enabled", true),
-                        createdTs = o.optLong("created"),
-                        exampleBefore = o.optString("before"),
-                        exampleAfter = o.optString("after"),
-                        pending = o.optBoolean("pending", false),
-                    )
-                )
-            }
-            out
-        }
+        val parsed = StoreFiles.readOrQuarantine(file()) { text -> parse(text) }
         if (parsed != null) rules.addAll(parsed)
     }
 
-    private fun persist() {
-        runCatching {
-            val array = JSONArray()
-            rules.forEach { r ->
-                array.put(
-                    JSONObject().apply {
-                        put("id", r.id)
-                        put("text", r.text)
-                        put("enabled", r.enabled)
-                        put("created", r.createdTs)
-                        put("before", r.exampleBefore)
-                        put("after", r.exampleAfter)
-                        if (r.pending) put("pending", true)
-                    }
+    private fun parse(text: String): List<Rule> {
+        val array = JSONArray(text)
+        val out = mutableListOf<Rule>()
+        for (i in 0 until array.length()) {
+            val o = array.optJSONObject(i) ?: continue
+            val t = o.optString("text").trim()
+            if (t.isEmpty()) continue
+            out.add(
+                Rule(
+                    id = o.optLong("id"),
+                    text = t,
+                    enabled = o.optBoolean("enabled", true),
+                    createdTs = o.optLong("created"),
+                    exampleBefore = o.optString("before"),
+                    exampleAfter = o.optString("after"),
+                    pending = o.optBoolean("pending", false),
                 )
-            }
-            StoreFiles.writeAtomic(file(), array.toString())
+            )
+        }
+        return out
+    }
+
+    /**
+     * Правили (добавили, одобрили, выключили, сжали) — Свод отправит
+     * `rules.pravka` через тишину (docs/svod-phone.md, 1.6).
+     */
+    @Volatile var onEdit: (() -> Unit)? = null
+
+    private fun persist(edited: Boolean = true) {
+        runCatching { StoreFiles.writeAtomic(file(), toJson()) }
+        if (edited) onEdit?.invoke()
+    }
+
+    private fun toJson(): String {
+        val array = JSONArray()
+        rules.forEach { r ->
+            array.put(
+                JSONObject().apply {
+                    put("id", r.id)
+                    put("text", r.text)
+                    put("enabled", r.enabled)
+                    put("created", r.createdTs)
+                    put("before", r.exampleBefore)
+                    put("after", r.exampleAfter)
+                    if (r.pending) put("pending", true)
+                }
+            )
+        }
+        return array.toString()
+    }
+
+    /** Правила целиком — как файл: запись Свода. */
+    suspend fun exportJson(): String = withContext(Dispatchers.IO) { mutex.withLock { ensureLoaded(); toJson() } }
+
+    /** Правила из Свода целиком. Пустое поверх непустого не ложится (железное правило 1). */
+    suspend fun replaceFromJson(text: String): Boolean = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            ensureLoaded()
+            val got = runCatching { parse(text) }.getOrNull() ?: return@withLock false
+            if (got.isEmpty() && rules.isNotEmpty()) return@withLock false
+            rules.clear()
+            rules.addAll(got)
+            persist(edited = false)
+            true
         }
     }
 

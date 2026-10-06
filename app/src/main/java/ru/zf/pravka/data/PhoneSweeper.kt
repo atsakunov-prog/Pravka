@@ -52,6 +52,12 @@ class PhoneSweeper(
     private val witness: () -> AutoWitness? = { null },
     /** Люди Дел с телефонами и клиентом — по ним звонок узнаёт работу (пусто — Дела не на сервере). */
     private val callPeople: suspend () -> List<ru.zf.pravka.core.CallRules.Person> = { emptyList() },
+    /** «Кто это» сервера по номеру и имени контакта (null — нет сети, старый сервер). */
+    private val callWho: suspend (phone: String, name: String) -> CallRules.Who? = { _, _ -> null },
+    /** Люди семьи по карточкам Дел: `people.family` Свода или пользователи Дел. */
+    private val callFamilyIds: suspend () -> Set<String> = { emptySet() },
+    /** Операции Дел (`person.add`, `interaction.add`) — в очередь и на сервер. */
+    private val delaOps: suspend (List<org.json.JSONObject>) -> Unit = {},
 ) {
 
     companion object {
@@ -522,7 +528,10 @@ class PhoneSweeper(
             .lastOrNull { it.title.equals(title, ignoreCase = true) && it.category.isNotBlank() && it.source != "gap" }
             ?.takeIf { !it.category.equals(rules.UNKNOWN, ignoreCase = true) }
             ?.let { CallRules.Learned(it.category, it.client, it.project) }
-        val verdict = rules.verdict(c, rules.familyList(settings.zCallFamilyFlow.first()), runCatching { callPeople() }.getOrDefault(emptyList()), learned)
+        val people = runCatching { callPeople() }.getOrDefault(emptyList())
+        val who = runCatching { callWho(c.number, c.name) }.getOrNull()
+        val familyIds = runCatching { callFamilyIds() }.getOrDefault(emptySet())
+        val verdict = rules.verdict(c, rules.familyList(settings.zCallFamilyFlow.first()), people, learned, who, familyIds)
         val cut = overlaps.lastOrNull { it.source != "gap" && it.start <= c.start }
         val entry = zasechkaStore.insertInterruption(
             start = c.start,
@@ -532,18 +541,31 @@ class PhoneSweeper(
             resumePrevious = true,
             client = verdict.client,
             project = verdict.project,
+            person = verdict.personId,
         ) ?: return
         sync.kickSoon(scope)
         eventLog.add(
             "звонок: «${entry.title}» ${hm(entry.start)}–${hm(entry.end)} [${entry.category}]" +
                 (if (entry.client.isNotBlank()) " · ${entry.client}" else "") +
-                " — ${verdict.why.name.lowercase()}" + (cut?.let { ", разрезал «${it.title}»" } ?: "")
+                " — ${verdict.why.name.lowercase()}" + (cut?.let { ", разрезал «${it.title}»" } ?: "") +
+                (if (verdict.personId.isBlank() && verdict.candidates.isNotEmpty()) ", спрошу, кто это" else "")
         )
+        // Узнали человека — телефон учит сервер номеру и имени контакта, а
+        // разговор с человеком клиента ложится в хронологию CRM.
+        val p = people.firstOrNull { it.id == verdict.personId && it.id.isNotBlank() }
+        val ops = listOfNotNull(
+            p?.let { rules.learnOp(it, c) },
+            if (verdict.category != rules.FAMILY) rules.interactionOp(c, entry.title, verdict.personId, verdict.project, iso(c.start)) else null,
+        )
+        if (ops.isNotEmpty()) runCatching { delaOps(ops) }.onFailure { eventLog.add("звонок: в Дела не ушло — ${it.message}") }
         witness()?.callInRibbon(
             entry.id, entry.title, entry.category, entry.client, entry.start, entry.end,
-            cut?.title.orEmpty(), verdict.sure,
+            cut?.title.orEmpty(), verdict.sure, verdict.candidates,
         )
     }
+
+    private fun iso(ms: Long): String =
+        java.time.OffsetDateTime.ofInstant(java.time.Instant.ofEpochMilli(ms), java.time.ZoneId.systemDefault()).withNano(0).toString()
 
     private fun excludedPackages(): Set<String> {
         val set = hashSetOf(

@@ -58,6 +58,13 @@ class PravkaApp : Application() {
         // файлы в DataRoot.dir, и здесь же закрепляется переезд, подготовленный
         // кнопкой «Перенести базу в папку» (пока в папки ещё никто не пишет).
         ru.zf.pravka.data.DataRoot.init(this)
+        // Свод — сразу за базой: промпты и цены читают его кэш с первого запроса.
+        appScope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { svodStore.load() } }
+        // Имена людей Дел — PROTECT в промпте чистки (docs/svod-phone.md, 3.7).
+        ru.zf.pravka.core.DictionaryApplier.peopleNames = {
+            if (!delaServer.value) emptyList()
+            else delaStore.view.value.people.values.filter { it.live }.flatMap { listOf(it.name, it.short) + it.aliases }.filter { it.isNotBlank() }
+        }
         // Падение процесса — в crash.log рядом с базой, синхронно: журнал
         // событий пишет асинхронно и до диска не доезжает. Служба при
         // следующем подъёме назовёт причину в «Обновлениях и службе».
@@ -381,8 +388,19 @@ class PravkaApp : Application() {
     // откатиться.
     val delaStore by lazy { ru.zf.pravka.data.DelaStore(this) }
     val delaSync by lazy {
-        ru.zf.pravka.data.DelaSync(this, httpClient, delaStore, appScope) { eventLog.add(it) }
+        ru.zf.pravka.data.DelaSync(
+            this, httpClient, delaStore, appScope, { eventLog.add(it) },
+            svod = svodStore,
+            svodSeed = { svodSeedTexts() },
+        )
     }
+
+    /**
+     * Свод (06.10.2026, docs/svod-phone.md): одна правда на сервере Дел —
+     * промпты, словарь, правила, модели, справочники; телефон держит кэш.
+     * Зеркала сторов и первое знакомство — в SvodWiring.kt.
+     */
+    val svodStore: ru.zf.pravka.data.SvodStore by lazy { buildSvod() }
     /** Режим «Дела» ходит в домашний сервер, а не в Todoist — для экрана и службы. */
     val delaServer: kotlinx.coroutines.flow.StateFlow<Boolean> by lazy {
         settings.delaBackendFlow
@@ -511,15 +529,26 @@ class PravkaApp : Application() {
             // про владельца и его семью: чужой установке их не показываем и в
             // Claude не отправляем.
             owner = { profileStore.current?.id ?: "user" },
-            factory = { if (profileStore.owner) moneyFactoryRules else emptyList() },
-            factoryBalances = { if (profileStore.owner) moneyFactoryBalances else emptyList() },
+            // Свод (06.10.2026, docs/svod-phone.md, часть 2): справочник, якоря и
+            // ручные записи — записи Свода, когда они есть; файлы APK — запас.
+            // Правила получателей из «Денег» (`money.partner.payee_rules`) сильнее заводского слоя.
+            factory = { moneyPartnerPayeeRules() + (moneySvodRules() ?: if (profileStore.owner) moneyFactoryRules else emptyList()) },
+            factoryBalances = {
+                ru.zf.pravka.core.Svod.text(ru.zf.pravka.core.Svod.MONEY_ANCHORS, "").takeIf { it.isNotBlank() }
+                    ?.let { ru.zf.pravka.core.MoneyCashflow.parseAnchors(it) }
+                    ?: if (profileStore.owner) moneyFactoryBalances else emptyList()
+            },
             factoryAccountsText = {
-                if (!profileStore.owner) ""
-                else runCatching { assets.open("money_balances.txt").bufferedReader().use { it.readText() } }.getOrDefault("")
+                ru.zf.pravka.core.Svod.text(ru.zf.pravka.core.Svod.MONEY_ANCHORS, "").ifBlank {
+                    if (!profileStore.owner) ""
+                    else runCatching { assets.open("money_balances.txt").bufferedReader().use { it.readText() } }.getOrDefault("")
+                }
             },
             factoryManual = {
-                if (!profileStore.owner) ""
-                else runCatching { assets.open("money_manual.txt").bufferedReader().use { it.readText() } }.getOrDefault("")
+                ru.zf.pravka.core.Svod.text(ru.zf.pravka.core.Svod.MONEY_MANUAL, "").ifBlank {
+                    if (!profileStore.owner) ""
+                    else runCatching { assets.open("money_manual.txt").bufferedReader().use { it.readText() } }.getOrDefault("")
+                }
             },
             keepImport = { bytes -> importArchive.keep(bytes) },
         )
@@ -833,6 +862,9 @@ class PravkaApp : Application() {
             // Нашёл ночь — автопилот решает про дело по подъёму (сборы детей в будни).
             witness = { ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.autoWitness() },
             callPeople = { callPeople() },
+            callWho = { phone, name -> delaSync.who(phone, name) },
+            callFamilyIds = { callFamilyIds() },
+            delaOps = { ops -> delaDo(ops) },
         )
     }
 
@@ -854,6 +886,8 @@ class PravkaApp : Application() {
                 phones = p.phones,
                 client = client?.name.orEmpty(),
                 projectId = client?.id.orEmpty(),
+                id = p.id,
+                userId = p.userId,
             )
         }
     }

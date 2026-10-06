@@ -254,9 +254,13 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
         write(_state.value.copy(platiLog = text))
     }
 
+    /** Справочник правили (настройки, ответ сверки) — Свод отправит `money.payees` (docs/svod-phone.md, 2.3). */
+    @Volatile var onRules: (() -> Unit)? = null
+
     suspend fun setRules(rules: List<MoneyRules.Rule>) = mutex.withLock {
         ensureLoaded()
         write(_state.value.copy(rules = rules))
+        onRules?.invoke()
     }
 
     /** Одно правило из ответа на вопрос сверки: то же название впредь раскладывается само. */
@@ -267,6 +271,7 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
             MoneyRules.norm(it.pattern) == MoneyRules.norm(rule.pattern) && it.sign == rule.sign && it.owner == rule.owner
         }
         write(s.copy(rules = rest + rule))
+        onRules?.invoke()
     }
 
     private suspend fun ensureLoaded() {

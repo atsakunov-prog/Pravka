@@ -39,8 +39,16 @@ object MoneyRules {
         val source: String = "",
         val mcc: String = "",
         val amountKop: Long = 0L,
+        /**
+         * Правило «Денег» (`money.partner.payee_rules`, 06.10.2026): регэксп по
+         * описанию вместо куска названия и сторона — `zf` (счёт ЗФ) или `own`
+         * (личные). Пусто — обычное правило справочника.
+         */
+        val regex: String = "",
+        val side: String = "",
     ) {
         private val parts: List<String> = pattern.split('|').map { norm(it) }.filter { it.isNotEmpty() }
+        private val re: Regex? = regex.takeIf { it.isNotBlank() }?.let { runCatching { Regex(it, RegexOption.IGNORE_CASE) }.getOrNull() }
 
         /**
          * Насколько правило подходит записи, 0 — не подходит. Длина самого
@@ -54,6 +62,13 @@ object MoneyRules {
             if (source.isNotEmpty() && source != entry.source.key) return 0
             if (mcc.isNotEmpty() && mcc != entry.mcc.trim().removeSuffix(".0")) return 0
             if (amountKop > 0 && amountKop != kotlin.math.abs(entry.rubKop)) return 0
+            if (side == "zf" && !MoneyMatch.zfSide(entry)) return 0
+            if ((side == "own" || side == "personal") && MoneyMatch.zfSide(entry)) return 0
+            if (regex.isNotBlank()) {
+                // Правило «Денег» решает сервер: оно сильнее любого куска названия.
+                val m = re?.find(entry.what) ?: return 0
+                return 100 + m.value.length
+            }
             val name = if (parts.isEmpty()) {
                 if (mcc.isEmpty() && amountKop == 0L) return 0
                 1
@@ -256,5 +271,32 @@ object MoneyRules {
         val who = if (r.who.isNotEmpty()) " · " + MoneyCategories.whoTitle(r.who) else ""
         val comment = if (r.comment.isNotEmpty()) " # " + r.comment else ""
         "$sign$owner$source$filters = ${MoneyCategories.title(r.category)}$who$comment"
+    }
+
+    /**
+     * `payee_rules` из `money.partner` (их пишут «Деньги» из своих «Правил»):
+     * `[{side, re, line}]`, где line — правая часть строки справочника
+     * («ЗФ: команда и подрядчики · Сергей») или строка целиком с «=».
+     * Непонятное пропускается: справочник «Денег» не должен ронять раскладку.
+     */
+    fun fromPartner(rules: org.json.JSONArray?): List<Rule> {
+        rules ?: return emptyList()
+        val out = ArrayList<Rule>()
+        for (i in 0 until rules.length()) {
+            val o = rules.optJSONObject(i) ?: continue
+            val re = o.optString("re").ifBlank { o.optString("regex") }.trim()
+            if (re.isEmpty() || runCatching { Regex(re) }.isFailure) continue
+            val line = o.optString("line").substringAfter('=').substringBefore(" # ")
+            val right = line.split('·', ',').map { it.trim() }
+            val cat = MoneyCategories.find(right.getOrNull(0).orEmpty()) ?: continue
+            val who = right.getOrNull(1)?.let { MoneyCategories.findWho(it) }.orEmpty()
+            val side = when (o.optString("side").lowercase()) {
+                "zf", "зф" -> "zf"
+                "own", "personal", "личное", "семья" -> "own"
+                else -> ""
+            }
+            out += Rule(pattern = "", category = cat.key, who = who, regex = re, side = side, comment = "правило «Денег»")
+        }
+        return out
     }
 }

@@ -44,7 +44,19 @@ class DictionaryApplier(private val store: DictionaryStore) {
         fired += hints.map { it.id }
         fired += protects.map { it.id }
 
-        return Prepared(text, buildDictBlock(hints, protects), fired)
+        // Люди из Дел (06.10.2026, docs/svod-phone.md, 3.7): имена, короткие и
+        // другие имена — PROTECT на лету, только встреченные в тексте. В словарь
+        // (`dict.main`) их не кладём: карточки живут в Делах и меняются там.
+        val known = protects.map { it.from.lowercase() }.toHashSet()
+        val people = peopleNames().asSequence()
+            .map { it.trim() }
+            .filter { it.length >= 3 && known.add(it.lowercase()) }
+            .filter { boundaryRegex(it, withRussianEndings = true)?.containsMatchIn(text) == true }
+            .take(MAX_PEOPLE)
+            .map { DictEntry(from = it, mode = DictMode.PROTECT, note = "человек из Дел", createdAt = 0L) }
+            .toList()
+
+        return Prepared(text, buildDictBlock(hints, protects + people), fired)
     }
 
     private fun buildDictBlock(hints: List<DictEntry>, protects: List<DictEntry>): String {
@@ -75,6 +87,15 @@ class DictionaryApplier(private val store: DictionaryStore) {
     }
 
     companion object {
+        /**
+         * Имена людей Дел для PROTECT — ставит приложение (живые карточки
+         * синка). Пусто — Дела не на сервере.
+         */
+        @Volatile var peopleNames: () -> List<String> = { emptyList() }
+
+        /** Потолок имён в одном запросе: длинная встреча не должна раздувать промпт. */
+        private const val MAX_PEOPLE = 20
+
         // Word boundaries via lookarounds - \b is unreliable for Cyrillic.
         // Endings tolerance is used for DETECTION only, never for HARD
         // replacement (suffix-swallowing "осу" -> "осуди" would be a disaster).

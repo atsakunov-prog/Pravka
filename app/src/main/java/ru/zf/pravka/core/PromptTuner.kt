@@ -157,7 +157,9 @@ class PromptTuner(
         val run = Run(
             id = nowMs, kind = PromptTunePolicy.KIND, startedAt = nowMs, fromMs = from, toMs = nowMs,
             stage = PromptTunePolicy.STAGE_PROPOSE, manual = manual, analysisBatchId = batchId, lastPollAt = nowMs,
-            evidence = mapOf("prompt_old" to current, "rollback" to rollbackNote),
+            // Версия записи Свода, на которой мерили: принятая правка уйдёт с
+            // этим base_rev, и чужая правка за неделю не затрётся (docs/svod-phone.md, 1.4).
+            evidence = mapOf("prompt_old" to current, "rollback" to rollbackNote, "svod_rev" to prompts.svodRev(PromptStore.PromptId.CLEAN_CLAUDE).toString()),
             progress = "предложение: батч отправлен ${timeFmt.format(Date(nowMs))}",
         )
         store.save(run)
@@ -197,10 +199,11 @@ class PromptTuner(
     private suspend fun revert(active: PromptVersions.Version, why: String) {
         val previous = versions.all().filter { it.at < active.at && it.status == "superseded" && it.source == "tuner" }.maxByOrNull { it.at }
         if (previous != null) {
-            prompts.setOverride(PromptStore.PromptId.CLEAN_CLAUDE, previous.text)
+            // Откат — тоже новая версия Свода, не «удаление».
+            prompts.setOverride(PromptStore.PromptId.CLEAN_CLAUDE, previous.text, author = "tuner", reason = "откат: $why")
             versions.save(previous.copy(status = "active", statusNote = "возвращена ${dayFmt.format(Date(System.currentTimeMillis()))}"))
         } else {
-            prompts.resetToFactory(PromptStore.PromptId.CLEAN_CLAUDE)
+            prompts.resetToFactory(PromptStore.PromptId.CLEAN_CLAUDE, author = "tuner")
         }
         versions.save(active.copy(status = "reverted", statusNote = why))
         log.add("правка промпта: версия от ${dayFmt.format(Date(active.at))} возвращена — $why")
@@ -372,19 +375,31 @@ class PromptTuner(
         val decision = PromptTunePolicy.decide(tally.shadowBetter, tally.dayBetter, tally.tie, simOld, simNew, withOwner.size)
         val newPrompt = run.evidence["prompt_new"].orEmpty()
         val summaryNew = run.evidence["summary_new"].orEmpty()
+        // Промпт сменился за время измерения (Свод: правка с другой стороны) —
+        // принятое мерили не на том тексте: не затираем, перемерим следующим разом.
+        val moved = decision.adopt && run.evidence["prompt_old"].orEmpty().trim() != prompts.raw(PromptStore.PromptId.CLEAN_CLAUDE).trim()
         val factoryHash = prompts.factory(PromptStore.PromptId.CLEAN_CLAUDE).hashCode()
         val version = PromptVersions.Version(
             id = run.id, at = run.id, source = if (decision.adopt) "tuner" else "rejected", text = newPrompt, note = summaryNew,
             factoryHash = factoryHash, judgeBetter = tally.shadowBetter, judgeWorse = tally.dayBetter, judgeTie = tally.tie,
             simOld = simOld, simNew = simNew, ownerPairs = withOwner.size,
-            status = if (decision.adopt) "active" else "rejected", statusNote = decision.why,
+            status = if (decision.adopt && !moved) "active" else "rejected",
+            statusNote = if (moved) "промпт сменился за время измерения — перемерю" else decision.why,
         )
-        if (decision.adopt) {
+        if (decision.adopt && !moved) {
             versions.active()?.let { versions.save(it.copy(status = "superseded", statusNote = "сменена ${dayFmt.format(Date(run.id))}")) }
-            prompts.setOverride(PromptStore.PromptId.CLEAN_CLAUDE, newPrompt)
+            prompts.setOverride(
+                PromptStore.PromptId.CLEAN_CLAUDE, newPrompt, author = "tuner", reason = "недельная правка: $summaryNew",
+                baseRev = run.evidence["svod_rev"]?.toIntOrNull(),
+            )
         }
+        if (moved) log.add("правка промпта: действующий промпт сменился за время измерения — новое не ставлю, перемерю")
         versions.save(version)
-        val head = if (decision.adopt) "ПРОМПТ ОБНОВЛЁН: $summaryNew." else "Промпт не меняю: предложение «$summaryNew» не прошло измерение."
+        val head = when {
+            moved -> "Промпт не меняю: «$summaryNew» мерили на прежнем тексте, а действующий за неделю сменился — перемерю."
+            decision.adopt -> "ПРОМПТ ОБНОВЛЁН: $summaryNew."
+            else -> "Промпт не меняю: предложение «$summaryNew» не прошло измерение."
+        }
         val flaws = buildString {
             if (tally.dayFlaws.isNotEmpty()) append("\nПроигрывал прежний из-за: ").append(tally.dayFlaws.entries.take(5).joinToString(", ") { "${ShadowPolicy.flawLabel(it.key)} ${it.value}" }).append('.')
             if (tally.shadowFlaws.isNotEmpty()) append("\nПроигрывал новый из-за: ").append(tally.shadowFlaws.entries.take(5).joinToString(", ") { "${ShadowPolicy.flawLabel(it.key)} ${it.value}" }).append('.')

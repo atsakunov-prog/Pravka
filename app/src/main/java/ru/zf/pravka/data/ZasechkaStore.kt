@@ -221,6 +221,10 @@ class ZasechkaStore(private val context: Context) {
         // клиента не переписывается: старые сопоставляются по алиасам там).
         val task: String = "",
         val project: String = "",
+        // С кем было дело — карточка человека Дел (06.10.2026, docs/svod-phone.md,
+        // часть 3): звонок с «Женей С.» помнит id Евгения Соколова, а не только
+        // клиента. Архив (`life.entries.person_id`) берёт его раньше текста клиента.
+        val person: String = "",
     ) {
         val open: Boolean get() = end == 0L
         /** Exact span in ms - the only honest unit for adding a day up. */
@@ -324,7 +328,10 @@ class ZasechkaStore(private val context: Context) {
         clients.toList()
     }
 
-    suspend fun setCategories(value: List<Category>): Unit = mutex.withLock {
+    /** Категории правили — Свод отправит `zasechka.categories` (docs/svod-phone.md, 1.6). */
+    @Volatile var onCategories: (() -> Unit)? = null
+
+    suspend fun setCategories(value: List<Category>, edited: Boolean = true): Unit = mutex.withLock {
         ensureLoaded()
         categories = value
             .map {
@@ -339,6 +346,7 @@ class ZasechkaStore(private val context: Context) {
             .distinctBy { it.name.lowercase() }
             .toMutableList()
         persist()
+        if (edited) onCategories?.invoke()
     }
 
     suspend fun setClients(value: List<String>): Unit = mutex.withLock {
@@ -960,6 +968,8 @@ class ZasechkaStore(private val context: Context) {
         client: String = "",
         /** Проект Дел (звонок клиента, 06.10.2026) — как у записи из дела. */
         project: String = "",
+        /** Человек Дел — с кем был звонок. */
+        person: String = "",
     ): Entry? = mutex.withLock {
         ensureLoaded()
         if (end <= start) return@withLock null
@@ -990,6 +1000,7 @@ class ZasechkaStore(private val context: Context) {
             synced = false,
             createdAt = System.currentTimeMillis(),
             project = project.trim(),
+            person = person.trim(),
         )
         entries.add(entry)
         resumeTemplate?.let { t ->
@@ -1694,6 +1705,7 @@ class ZasechkaStore(private val context: Context) {
                     comment = o.optString("comment", ""),
                     task = o.optString("task", ""),
                     project = o.optString("project", ""),
+                    person = o.optString("person", ""),
                 )
             )
         }
@@ -1916,6 +1928,7 @@ class ZasechkaStore(private val context: Context) {
                             if (e.comment.isNotBlank()) put("comment", e.comment)
                             if (e.task.isNotBlank()) put("task", e.task)
                             if (e.project.isNotBlank()) put("project", e.project)
+                            if (e.person.isNotBlank()) put("person", e.person)
                         }
                     )
                 }

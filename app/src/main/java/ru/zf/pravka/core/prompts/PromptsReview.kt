@@ -8,7 +8,8 @@ package ru.zf.pravka.core.prompts
 internal object PromptsReview {
 
     /** Что и почему: общее для трёх задач первого прохода (один запрос). */
-    val ANALYZE_SYSTEM = """
+    val ANALYZE_SYSTEM: String get() = ru.zf.pravka.core.Svod.text("prompt.review.analyze", FACTORY_ANALYZE_SYSTEM)
+    val FACTORY_ANALYZE_SYSTEM = """
 Ты ночной аудитор системы голосовой диктовки одного человека — Саши. Каждое утро
 он читает твой отчёт. Система: распознаватель речи (Google, офлайн-пакет или сеть)
 даёт сырой текст; словарь заменяет устойчивые ослышки до модели (HARD — заменить
@@ -83,7 +84,8 @@ confidence: "high" — ты бы поставил на это деньги: ес
      * второй заход). Теперь пакет один, лежит системным блоком под кэшем и
      * читается проверкой из кэша, а задачи перечислены здесь.
      */
-    val ANALYZE_TASKS = """
+    val ANALYZE_TASKS: String get() = ru.zf.pravka.core.Svod.text("prompt.review.analyze_tasks", FACTORY_ANALYZE_TASKS)
+    val FACTORY_ANALYZE_TASKS = """
 ЗАДАЧИ ЭТОЙ НОЧИ — три, ответ одним списком changes (id не пиши, их
 расставит приложение):
 1. Словарь и ослышки. Ослышки распознавателя, которые модель или владелец
@@ -105,7 +107,8 @@ confidence: "high" — ты бы поставил на это деньги: ес
 """.trimIndent()
 
     /** Второй проход: подтвердить или отклонить каждую находку по тем же свидетельствам. */
-    val CHECK_SYSTEM = """
+    val CHECK_SYSTEM: String get() = ru.zf.pravka.core.Svod.text("prompt.review.check", FACTORY_CHECK_SYSTEM)
+    val FACTORY_CHECK_SYSTEM = """
 Ты второй аудитор системы голосовой диктовки Саши. Первый аудитор прочитал
 журналы за период и предложил изменения словаря и правил. Тебе дают те же
 свидетельства, текущий словарь с правилами и его список. Твоя работа —
@@ -142,7 +145,8 @@ confidence: "high" — ты бы поставил на это деньги: ес
      * говорим. Итоги по моделям и деньги считает приложение (ShadowPolicy),
      * судья только сравнивает пары и называет изъяны проигравшего по словарю.
      */
-    val SHADOW_JUDGE_SYSTEM = """
+    val SHADOW_JUDGE_SYSTEM: String get() = ru.zf.pravka.core.Svod.text("prompt.review.shadow_judge", FACTORY_SHADOW_JUDGE_SYSTEM)
+    val FACTORY_SHADOW_JUDGE_SYSTEM = """
 Ты судья в слепом сравнении двух чисток одной и той же голосовой надиктовки.
 Автор — Саша — диктует голосом; распознаватель даёт сырой текст (<d>); модель
 чистит его по промпту: убирает ошибки распознавания, ставит пунктуацию, делит на
@@ -188,7 +192,8 @@ lost (потеря слов или смысла), negation (потеряно о�
      * приложение (ComparePolicy), судья только называет лучшую и худшую и изъяны
      * худшей по словарю.
      */
-    val COMPARE_JUDGE_SYSTEM = """
+    val COMPARE_JUDGE_SYSTEM: String get() = ru.zf.pravka.core.Svod.text("prompt.review.compare_judge", FACTORY_COMPARE_JUDGE_SYSTEM)
+    val FACTORY_COMPARE_JUDGE_SYSTEM = """
 Ты судья в слепом сравнении трёх чисток одной и той же голосовой надиктовки.
 Автор — Саша — диктует голосом; распознаватель даёт сырой текст (<d>); модель
 чистит его по промпту: убирает ошибки распознавания, ставит пунктуацию, делит на
@@ -234,7 +239,8 @@ lost (потеря слов или смысла), negation (потеряно о�
      * диктовках недели и принимается, только если лучше; откат — через неделю
      * по доле правок руками. Здесь — только как предлагать.
      */
-    val TUNE_SYSTEM = """
+    val TUNE_SYSTEM: String get() = ru.zf.pravka.core.Svod.text("prompt.review.tune", FACTORY_TUNE_SYSTEM)
+    val FACTORY_TUNE_SYSTEM = """
 Ты редактор промпта системы голосовой диктовки одного человека — Саши. Промпт
 CLEAN говорит модели Claude, как чистить надиктованный текст. Каждую ночь
 аудитор разбирает журналы и оставляет ИДЕИ — наблюдения про поведение модели с
@@ -275,7 +281,8 @@ CLEAN говорит модели Claude, как чистить надиктов
 """.trimIndent()
 
     /** Владелец отвечает на отчёт по-человечески — перевести в действия по изменениям. */
-    val REPLY_SYSTEM = """
+    val REPLY_SYSTEM: String get() = ru.zf.pravka.core.Svod.text("prompt.review.reply", FACTORY_REPLY_SYSTEM)
+    val FACTORY_REPLY_SYSTEM = """
 Саша прочитал утренний отчёт ночного разбора своей системы диктовки и написал
 ответ обычным языком. Тебе дают список изменений этого разбора (id, что и в
 каком состоянии: applied — применено, proposed — предложено, rejected —
@@ -293,4 +300,18 @@ CLEAN говорит модели Claude, как чистить надиктов
 {"actions": [{"id": "dict-3", "action": "revert|apply|reject|keep"}],
  "answer": "одной-двумя фразами по-русски, что сделано или что непонятно"}
 """.trimIndent()
+
+    /**
+     * Ключи Свода разборов (`prompt.review.<имя>`) и заводские тексты —
+     * для первого знакомства: телефон отдаёт свои, дальше правда на сервере.
+     */
+    val SVOD: Map<String, String> get() = mapOf(
+        "prompt.review.analyze" to FACTORY_ANALYZE_SYSTEM,
+        "prompt.review.analyze_tasks" to FACTORY_ANALYZE_TASKS,
+        "prompt.review.check" to FACTORY_CHECK_SYSTEM,
+        "prompt.review.shadow_judge" to FACTORY_SHADOW_JUDGE_SYSTEM,
+        "prompt.review.compare_judge" to FACTORY_COMPARE_JUDGE_SYSTEM,
+        "prompt.review.tune" to FACTORY_TUNE_SYSTEM,
+        "prompt.review.reply" to FACTORY_REPLY_SYSTEM
+    )
 }

@@ -2416,9 +2416,13 @@ private fun PromptEditor(
     // Правка руками у общего с сервером промпта (06.10.2026): своя копия здесь —
     // это уже не общий текст, и владелец должен это видеть словами.
     val own by promptStore.overrideFlow(id).collectAsState(initial = null)
+    // Свод (06.10.2026): правда о промптах на сервере — правка отсюда уходит туда, для всех.
+    val app = LocalContext.current.applicationContext as PravkaApp
+    val svodView by app.svodStore.view.collectAsState()
+    val svodOn = remember(svodView) { promptStore.svodOn() }
 
     LaunchedEffect(id) {
-        text = promptStore.effective(id)
+        text = promptStore.raw(id)
         loaded = true
     }
 
@@ -2440,7 +2444,18 @@ private fun PromptEditor(
             )
         }
         Spacer(Modifier.height(8.dp))
-        if (id == PromptStore.PromptId.TASKS_DELA) {
+        if (svodOn) {
+            // Свод: правка не «своя копия», а новая версия на сервере — её получат
+            // и веб, и службы компа. Промпты обычно правят автоматы (тюнер, ночной разбор).
+            Text(
+                "Текст живёт в Своде на сервере Дел (${PromptStore.svodKey(id)}" +
+                    (ru.zf.pravka.core.Svod.current[PromptStore.svodKey(id)]?.let { ", версия ${it.rev}" } ?: ", ещё не отдан") +
+                    "). «Сохранить» уйдёт на сервер — для всех, а не только для телефона.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+        } else if (id == PromptStore.PromptId.TASKS_DELA) {
             // Правила разбора дел — общие с сервером: файл server/contract/prompts/raznoska.txt
             // читают и телефон, и веб. Своя правка здесь живёт только на этом телефоне.
             Text(
@@ -2449,7 +2464,7 @@ private fun PromptEditor(
                     "здесь своё у телефона — только словарь и наговор в конце."
                 else "Этот текст правлен на телефоне и больше НЕ общий с сервером: веб разбирает " +
                     "общим, телефон — твоим. Напоминаний и времени дел в твоём тексте может не быть. " +
-                    "«Вернуть заводской» — снова общий.",
+                    "«Вернуть заводской» — снова общий. Когда сервер Дел узнает Свод, правка уйдёт на сервер.",
                 style = MaterialTheme.typography.bodySmall,
                 color = if (own == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
             )
@@ -2490,7 +2505,7 @@ private fun PromptEditor(
                 if (confirmReset) {
                     scope.launch {
                         promptStore.resetToFactory(id)
-                        text = promptStore.factory(id)
+                        text = promptStore.raw(id)
                         confirmReset = false
                         savedMark = false
                         error = null
