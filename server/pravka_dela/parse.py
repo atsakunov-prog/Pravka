@@ -235,7 +235,7 @@ def run(url: str, user: str, text: str, defaults: dict, key: str, proxy: str | N
         ask_fn = lambda s, u: ask(cl, s, u)  # noqa: E731
     data = ask_fn(system, user_text)
     usage = data.get("_usage")
-    llm.account(url, "parse", llm.cost(usage, MODEL), (usage or {}).get("model") or MODEL)
+    llm.account(url, "parse", llm.cost(usage, MODEL, url), (usage or {}).get("model") or MODEL)
     # Наговорка — строкой рядом с делами: «Новое» показывает, что сказано и куда что попало.
     ref = f"parse:{uuid.uuid4()}"
     ops = to_ops(data, index, defaults or {}, source, places, ref)

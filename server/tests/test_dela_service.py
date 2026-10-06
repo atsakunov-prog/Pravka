@@ -22,7 +22,8 @@ def test_api_token_sync_ops_view(dela):
     assert client.get("/api/sync").status_code == 401
     tok = tokens.issue(dela, "sasha", "device", "телефон")
     h = {"Authorization": f"Bearer {tok}"}
-    assert client.get("/api/me", headers=h).json()["user"] == "sasha"
+    me = client.get("/api/me", headers=h).json()
+    assert me["user"] == "sasha" and "telegram_id" in me   # по нему Встречи узнают владельца
     r = client.post("/api/ops", headers=h, json={"ops": [
         {"op": "task.create", "op_id": "11111111-1111-4111-8111-111111111111", "task": {"title": "Альфа: позвонить", "due_date": "2026-10-03"}},
     ]}).json()

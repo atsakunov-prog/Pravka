@@ -410,15 +410,16 @@ def build(cfg: Config) -> Starlette:
 
 
 def _user_info(url: str, user: str) -> dict:
-    """Имя и что человеку открыто: веб по этому прячет «Деньги» и время Засечки."""
+    """Имя и что человеку открыто: веб по этому прячет «Деньги» и время Засечки. telegram_id — свой же:
+    по нему Встречи узнают владельца (одна правда — crm.users, 06.10.2026), а не по числу в своём коде."""
     with db.session(url, user, via="view") as conn:
         row = conn.execute(
-            "SELECT name, role, clients, crm.money_ok(id) AS money, settings FROM crm.users WHERE id = %s", (user,)
+            "SELECT name, role, clients, crm.money_ok(id) AS money, settings, telegram_id FROM crm.users WHERE id = %s", (user,)
         ).fetchone()
     if not row:
-        return {"name": user, "role": "member", "clients": "own", "money": False, "settings": {}}
+        return {"name": user, "role": "member", "clients": "own", "money": False, "settings": {}, "telegram_id": None}
     return {"name": row["name"], "role": row["role"], "clients": row["clients"], "money": row["money"],
-            "settings": row["settings"] or {}}
+            "settings": row["settings"] or {}, "telegram_id": row["telegram_id"]}
 
 
 def task_card(url: str, user: str, ref: str) -> dict | None:

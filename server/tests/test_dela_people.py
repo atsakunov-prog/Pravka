@@ -261,3 +261,18 @@ def test_who_initials_and_diminutive_card(dela):
     for q, want in {"a.komarov": f, "Dmitry L": d, "Vasiliy Belousov": v, "Василий Белоусов": v}.items():
         w = store.view(dela, "sasha", "who", q=q)
         assert w["sure"] and str(w["best"]["id"]) == want, (q, w)
+
+
+def test_claude_prices_come_from_svod(dela):
+    """Цены Claude — из Свода (claude.prices), таблица в llm.py — только запас (06.10.2026, LOGIC.md §11)."""
+    from pravka_dela import llm
+
+    usage = {"model": "claude-opus-5-5", "input": 1_000_000, "output": 0}
+    llm._svod.update(at=-llm.SVOD_EVERY, prices={})
+    assert llm.cost(usage) == 4.0                       # без Свода — запас
+    v = {"batch_discount": 0.5, "claude-opus-5-5": {"in": 5, "out": 25, "cache_read": 0.5, "cache_write_5m": 6.25,
+                                                     "cache_write_1h": 10}}
+    assert ops(dela, "sasha", {"op": "svod.set", "key": "claude.prices", "value": v, "author": "claude"})[0]["ok"]
+    assert llm.cost(usage, url=dela) == 5.0             # из Свода
+    assert llm.cost({"model": "claude-opus-5-5-20260601", "input": 0, "output": 1_000_000}) == 25.0
+    llm._svod.update(at=-llm.SVOD_EVERY, prices={})

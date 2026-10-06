@@ -1028,7 +1028,7 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
         for k, v in split_card(data["card"]).items():
             data[k] = (data.get(k) or []) + v
     usage = data.get("_usage")
-    llm.account(url, "ask", llm.cost(usage, model), (usage or {}).get("model") or model)
+    llm.account(url, "ask", llm.cost(usage, model, url), (usage or {}).get("model") or model)
     defaults = {k: scope[k] for k in ("project_id", "person_id", "deal_id") if scope.get(k)}
     if card and card["kind"] == "deal":
         defaults["project_id"] = str(card["deal"]["project_id"])
