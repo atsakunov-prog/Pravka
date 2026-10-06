@@ -245,19 +245,19 @@ def test_who_hints_abbreviation_role_and_first_name_with_company(dela):
 
 def test_who_latin_zoom_names_and_short_company(dela):
     zf = org(dela, "sasha", "ЗФ")
-    v = person(dela, "sasha", "Василий Вельдяксов", org_id=org(dela, "sasha", "Восток Инвестиции"))
+    v = person(dela, "sasha", "Василий Белоусов", org_id=org(dela, "sasha", "Север Капитал"))
     lena = person(dela, "sasha", "Елена Смирнова", org_id=zf)
-    for q, want in {"Vasiliy Veldyaksov (Vostok Investments)": v, "Лена Смирнова (ЗФ)": lena}.items():
+    for q, want in {"Vasiliy Belousov (Sever Capital)": v, "Лена Смирнова (ЗФ)": lena}.items():
         w = store.view(dela, "sasha", "who", q=q)
         assert w["sure"] and str(w["best"]["id"]) == want, (q, w)
 
 
 def test_who_initials_and_diminutive_card(dela):
-    """Подписи Zoom и почты: «a.filatov», «Dmitry L»; в карточке — уменьшительное («Вася»)."""
-    f = person(dela, "sasha", "Александр Филатов")
+    """Подписи Zoom и почты: «a.komarov», «Dmitry L»; в карточке — уменьшительное («Вася»)."""
+    f = person(dela, "sasha", "Александр Комаров")
     d = person(dela, "sasha", "Дмитрий Лебедев")
     person(dela, "sasha", "Дмитрий Орлов")
-    v = person(dela, "sasha", "Вася Вельдяксов")
-    for q, want in {"a.filatov": f, "Dmitry L": d, "Vasiliy Veldyaksov": v, "Василий Вельдяксов": v}.items():
+    v = person(dela, "sasha", "Вася Белоусов")
+    for q, want in {"a.komarov": f, "Dmitry L": d, "Vasiliy Belousov": v, "Василий Белоусов": v}.items():
         w = store.view(dela, "sasha", "who", q=q)
         assert w["sure"] and str(w["best"]["id"]) == want, (q, w)
