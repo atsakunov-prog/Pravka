@@ -164,11 +164,18 @@ class DelaRemindTest {
     fun `настоящий приезд, а не мигнувший роутер`() {
         val now = 10_000_000_000L
         val min = 60_000L
-        assertFalse("отъезда не было — служба поднялась дома", DelaRemind.realArrival("дом", now, "", 0L))
-        assertFalse("роутер мигнул на пять минут", DelaRemind.realArrival("дом", now, "дом", now - 5 * min))
-        assertTrue("не было дома 40 минут", DelaRemind.realArrival("дом", now, "дом", now - 40 * min))
-        assertTrue("приехал из Летово", DelaRemind.realArrival("дом", now, "Летово", now - 5 * min))
-        assertFalse("отъезд в будущем — часы сбились", DelaRemind.realArrival("дом", now, "Летово", now + min))
+        fun arrive(t: DelaRemind.Trail) = DelaRemind.realArrival("дом", now, t)
+        assertFalse("отъезда не знаем вовсе", arrive(DelaRemind.Trail()))
+        assertFalse("роутер мигнул на пять минут", arrive(DelaRemind.Trail("дом", now - 5 * min, "дом", now - 3 * 3600_000L)))
+        assertTrue("не было дома 40 минут", arrive(DelaRemind.Trail("дом", now - 40 * min, "дом", now - 9 * 3600_000L)))
+        assertTrue("приехал из Летово", arrive(DelaRemind.Trail("Летово", now - 5 * min, "Летово", now - 30 * min)))
+        assertFalse("отъезд в будущем — часы сбились", arrive(DelaRemind.Trail("Летово", now + min, "", 0L)))
+        // Служба поднялась дома вечером: утренний отъезд старше вечернего «здесь» — не приезд.
+        assertFalse(arrive(DelaRemind.Trail("дом", now - 11 * 3600_000L, "дом", now - 2 * 3600_000L)))
+        // Служба перезапустилась в дороге: отъезд на диске пережил её — приезд засчитан.
+        assertTrue(arrive(DelaRemind.Trail("дом", now - 11 * 3600_000L, "дом", now - 12 * 3600_000L)))
+        // Мигание вечером, записанное «здесь» после него, — та же стоянка.
+        assertFalse(arrive(DelaRemind.Trail("дом", now - 2 * 3600_000L, "дом", now - 2 * 3600_000L + min)))
     }
 
     @Test

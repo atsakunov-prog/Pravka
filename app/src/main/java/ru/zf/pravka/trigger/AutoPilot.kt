@@ -364,9 +364,18 @@ class AutoPilot(
         const val WHAT_SLEEP_UNDO = "sleep_undo"
         /** Сон, закрытый утренним толчком, — «Ещё сплю»: открыть обратно. */
         const val WHAT_SLEEP_BACK = "sleep_back"
+        /** Звонок в ленте — другая категория («Работа» / «Семья»); категория — в `to`. */
+        const val WHAT_CALL_CAT = "call_cat"
+        /** Звонок в ленте — «Убрать»: врезка уходит, дело сшивается обратно. */
+        const val WHAT_CALL_DROP = "call_drop"
 
         /** Сон, начатый автопилотом: с какого мига (0 — нет). Переживает перезапуск службы. */
         private const val KEY_AUTO_SLEEP_FROM = "z_auto_sleep_from"
+        /** След мест для напоминаний дел: последний отъезд и последнее «здесь». */
+        private const val KEY_TRAIL_LEFT = "remind_trail_left"
+        private const val KEY_TRAIL_LEFT_AT = "remind_trail_left_at"
+        private const val KEY_TRAIL_HERE = "remind_trail_here"
+        private const val KEY_TRAIL_HERE_AT = "remind_trail_here_at"
         /** Ночь, про которую сон уже решён (начат или отменён), — второго за ночь нет. */
         private const val KEY_SLEEP_NIGHT = "z_sleep_night"
         const val SLEEP_TITLE = AutoPilotRules.SLEEP_TITLE
@@ -616,6 +625,11 @@ class AutoPilot(
         // Вернулись в известное место — «уехал?» отменяется, вместе с пушем.
         dropLeaveQuestion()
         val now = System.currentTimeMillis()
+        // След для напоминаний: «здесь» пишется на каждое касание места, и
+        // мигание, которое ниже гасит дребезг, — тоже: иначе служба,
+        // поднявшаяся дома позже, сочла бы мигание отъездом без возвращения.
+        val trail = remindTrail()
+        saveTrail(trail.copy(herePlace = place, hereAt = now))
         if (place == lastPlace && now - lastArriveAt < ARRIVE_DEBOUNCE_MS) return
         lastPlace = place
         lastArriveAt = now
@@ -623,7 +637,7 @@ class AutoPilot(
         // Напоминания дел «когда приеду домой» (06.10.2026) — при любом тумблере
         // приезда: это не правка ленты, а просьба владельца. Только настоящий
         // приезд: мигнувший роутер дома не должен будить сказанное дома же.
-        if (ru.zf.pravka.core.DelaRemind.realArrival(place, now, leftPlace, leftAtMs)) {
+        if (ru.zf.pravka.core.DelaRemind.realArrival(place, now, trail)) {
             scope.launch { runCatching { app.delaArrived(place, now) } }
         }
         if (!autoArrive) return
@@ -940,6 +954,7 @@ class AutoPilot(
     private fun onLeftPlace(fromPlace: String, atMs: Long, delayMs: Long) {
         leftPlace = fromPlace
         leftAtMs = atMs
+        saveTrail(remindTrail().copy(leftPlace = fromPlace, leftAt = atMs))
         app.eventLog.add("автопилот: потерял «$fromPlace» в ${timeHm(atMs)}")
         // Ходьба: считаем толчки с момента отъезда, через двадцать минут решаем.
         walkMotions = 0
@@ -1184,6 +1199,29 @@ class AutoPilot(
 
     override fun lastArrival(): Leave? = if (lastArriveAt > 0L && lastPlace.isNotBlank()) Leave(lastPlace, lastArriveAt) else null
 
+    /**
+     * Звонок лёг в ленту (06.10.2026, `PhoneSweeper.placeCall`). Узнан —
+     * тихой копией в шторку: разговор владелец помнит и без баннера, а
+     * поправить одним касанием можно. Не узнан — вопросом плашкой или
+     * громко: «с кем это?» и есть то, чего роботу не знать.
+     */
+    override fun callInRibbon(entryId: Long, title: String, category: String, client: String, start: Long, end: Long, cut: String, sure: Boolean) {
+        val min = ((end - start + 30_000L) / 60_000L).coerceAtLeast(1L)
+        val rules = ru.zf.pravka.core.CallRules
+        val choices = buildList {
+            if (category != rules.WORK) add(action("Работа", WHAT_CALL_CAT, start, "", id = entryId, to = rules.WORK))
+            if (category != rules.FAMILY) add(action("Семья", WHAT_CALL_CAT, start, "", id = entryId, to = rules.FAMILY))
+            add(action("Убрать", WHAT_CALL_DROP, start, "", id = entryId))
+        }
+        val head = "📞 ${title.removePrefix("Звонок: ")}, $min мин"
+        val text = "${timeHm(start)}–${timeHm(end)} [$category]" +
+            (if (client.isNotBlank()) ", клиент $client" else "") + "." +
+            (if (cut.isNotBlank()) " «$cut» разрезано звонком и идёт дальше." else "") +
+            if (sure) "" else " С кем это — работа или семья? Отвечу так и в следующий раз."
+        lastFire = "звонок ${timeHm(start)} [$category]"
+        notify(head, text, choices, quiet = sure)
+    }
+
     override fun leaveAnswered(by: String) {
         handler.post {
             if (pendingLeave != null || leaveNotifId != 0 || pendingWalk != null) {
@@ -1342,6 +1380,31 @@ class AutoPilot(
     }
 
     private fun internal() = service.getSharedPreferences("pravka_internal", Context.MODE_PRIVATE)
+
+    /**
+     * След мест для напоминаний дел (`DelaRemind.Trail`, 06.10.2026) — на диске,
+     * а не в памяти: отъезд, записанный только в поле службы, пропадал с её
+     * перезапуском, и приезд домой после него не будил «когда приеду домой».
+     * Свой ключ, не поля автопилота: его правила приезда живут как жили.
+     */
+    private fun remindTrail(): ru.zf.pravka.core.DelaRemind.Trail = runCatching {
+        val p = internal()
+        ru.zf.pravka.core.DelaRemind.Trail(
+            leftPlace = p.getString(KEY_TRAIL_LEFT, "").orEmpty(),
+            leftAt = p.getLong(KEY_TRAIL_LEFT_AT, 0L),
+            herePlace = p.getString(KEY_TRAIL_HERE, "").orEmpty(),
+            hereAt = p.getLong(KEY_TRAIL_HERE_AT, 0L),
+        )
+    }.getOrDefault(ru.zf.pravka.core.DelaRemind.Trail())
+
+    private fun saveTrail(t: ru.zf.pravka.core.DelaRemind.Trail) {
+        runCatching {
+            internal().edit()
+                .putString(KEY_TRAIL_LEFT, t.leftPlace).putLong(KEY_TRAIL_LEFT_AT, t.leftAt)
+                .putString(KEY_TRAIL_HERE, t.herePlace).putLong(KEY_TRAIL_HERE_AT, t.hereAt)
+                .apply()
+        }
+    }
 
     private fun sleepNight(): String = runCatching { internal().getString(KEY_SLEEP_NIGHT, "").orEmpty() }.getOrDefault("")
 
@@ -1871,6 +1934,37 @@ class AutoPilot(
                     )
                     if (back != null) app.eventLog.add("автопилот: сон открыт обратно кнопкой «Ещё сплю»")
                 }
+                WHAT_CALL_CAT -> {
+                    // Поправил однажды — дальше этот собеседник так и приезжает:
+                    // PhoneSweeper берёт категорию прошлого звонка с тем же названием.
+                    val call = app.zasechkaStore.entryById(id)
+                    if (call == null) {
+                        Feedback.toast(app, "Звонка в ленте уже нет")
+                    } else {
+                        val work = toPlace == ru.zf.pravka.core.CallRules.WORK
+                        app.zasechkaStore.update(
+                            call.copy(
+                                category = toPlace,
+                                client = if (work) call.client else "",
+                                project = if (work) call.project else "",
+                            )
+                        )
+                        app.zasechkaSync.kickSoon(scope)
+                        Feedback.toast(app, "📞 ${call.title} — $toPlace; дальше так и буду")
+                        app.eventLog.add("звонок: «${call.title}» → [$toPlace] кнопкой")
+                    }
+                }
+                WHAT_CALL_DROP -> {
+                    val call = app.zasechkaStore.entryById(id)
+                    val kept = app.zasechkaStore.dissolveInterruption(id)
+                    app.zasechkaSync.kickSoon(scope)
+                    Feedback.toast(
+                        app,
+                        if (call == null) "Звонка в ленте уже нет"
+                        else "↩︎ Звонок убран" + (kept?.let { ", «${it.title}» без разрыва" } ?: ""),
+                    )
+                    if (call != null) app.eventLog.add("звонок: «${call.title}» убран из ленты кнопкой")
+                }
                 WHAT_REOPEN -> {
                     val back = app.zasechkaStore.reopen(id)
                     if (back != null) app.zasechkaSync.kickSoon(scope)
@@ -1954,8 +2048,10 @@ class AutoPilot(
             .putExtra(AutoPilotActivity.EXTRA_UNTIL, until)
             .putExtra(AutoPilotActivity.EXTRA_TO, to)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        // В коде запроса и [to]: у звонка «Работа» и «Семья» — одно what и один
+        // миг, и с FLAG_UPDATE_CURRENT вторая кнопка переписала бы первой её категорию.
         val pending = PendingIntent.getActivity(
-            service, (what + at + until).hashCode(),
+            service, (what + at + until + to).hashCode(),
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )

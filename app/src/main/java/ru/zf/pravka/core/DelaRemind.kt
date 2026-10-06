@@ -177,15 +177,34 @@ object DelaRemind {
     // ------------------------------------------------------------ приезд
 
     /**
-     * Настоящий ли это приезд, а не мигнувший роутер. Та же мера, что у
-     * автопилота Засечки (`AutoPilotRules.arrival`): был зафиксирован отъезд,
-     * и место сменилось или сети не было дольше получаса. Без отъезда (служба
-     * только поднялась, сеть дома видна с утра) — не приезд: напоминание
-     * «когда приеду домой», сказанное дома, должно дождаться возвращения.
+     * След мест для напоминаний: последний отъезд и последнее «здесь» (место и
+     * миг, когда телефон его видел). Хранится между перезапусками службы
+     * (`AutoPilot`, `pravka_internal`): отъезд в памяти службы умирал вместе с
+     * ней, и перезапуск в дороге съедал приезд домой — «когда приеду домой»
+     * молчало.
      */
-    fun realArrival(place: String, nowMs: Long, leftPlace: String, leftAtMs: Long): Boolean {
-        if (leftAtMs <= 0L || leftAtMs > nowMs) return false
-        return Dela.norm(leftPlace) != Dela.norm(place) || nowMs - leftAtMs >= AutoPilotRules.BLINK_MS
+    data class Trail(
+        val leftPlace: String = "",
+        val leftAt: Long = 0L,
+        val herePlace: String = "",
+        val hereAt: Long = 0L,
+    )
+
+    /**
+     * Настоящий ли это приезд, а не мигнувший роутер (владелец, 06.10.2026:
+     * «именно когда пришёл домой… когда подключился — вылезает напоминание»).
+     * Мера — та же, что у автопилота Засечки (`AutoPilotRules.arrival`): был
+     * отъезд, и место сменилось или сети не было дольше получаса. И ещё одно
+     * условие, которого автопилоту не нужно: с последнего «здесь» в этом же
+     * месте отъезд был. Без него служба, поднявшаяся дома вечером, увидела бы
+     * утренний отъезд и разбудила «когда приеду», сказанное уже дома. Отъезда
+     * не знаем вовсе — не приезд.
+     */
+    fun realArrival(place: String, nowMs: Long, t: Trail): Boolean {
+        if (t.leftAt <= 0L || t.leftAt > nowMs) return false
+        val here = Dela.norm(place)
+        if (Dela.norm(t.herePlace) == here && t.hereAt >= t.leftAt) return false
+        return Dela.norm(t.leftPlace) != here || nowMs - t.leftAt >= AutoPilotRules.BLINK_MS
     }
 
     /**

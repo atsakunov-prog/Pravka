@@ -122,6 +122,40 @@ class ZasechkaStore(private val context: Context) {
          * про саму себя. Имена, на которые опирается код («Сон», «Потери»,
          * «Не размечено», «Звонки»), остаются; добавлена «Учёба».
          */
+        /**
+         * Лента без врезки [id] (звонка): чистая часть [dissolveInterruption] под
+         * тестом. Голова до звонка и её продолжение после (то же название,
+         * категория и клиент, без своей надиктовки) — снова одна запись; нет
+         * продолжения — время звонка отходит делу до него, нет и его — делу
+         * после. Не авто-факт или открытый — null: убирать нечего.
+         */
+        internal fun dissolved(entries: List<Entry>, id: Long): Pair<List<Entry>, Entry?>? {
+            val call = entries.firstOrNull { it.id == id && it.source == "auto" && !it.open } ?: return null
+            fun near(a: Long, b: Long) = kotlin.math.abs(a - b) < 60_000L
+            val before = entries.firstOrNull { !it.open && it.id != id && it.source != GAP_SOURCE && near(it.end, call.start) }
+            val after = entries.firstOrNull { it.id != id && it.source != GAP_SOURCE && near(it.start, call.end) }
+            val out = entries.filter { it.id != id }.toMutableList()
+            var kept: Entry? = null
+            fun put(e: Entry) { out[out.indexOfFirst { it.id == e.id }] = e }
+            when {
+                before != null && after != null && after.raw.isBlank() &&
+                    after.title == before.title && after.category == before.category && after.client == before.client -> {
+                    kept = before.copy(end = after.end, synced = false, notionSynced = false)
+                    out.removeAll { it.id == after.id }
+                    put(kept)
+                }
+                before != null -> {
+                    kept = before.copy(end = call.end, synced = false, notionSynced = false)
+                    put(kept)
+                }
+                after != null -> {
+                    kept = after.copy(start = call.start, synced = false, notionSynced = false)
+                    put(kept)
+                }
+            }
+            return out to kept
+        }
+
         fun neutralCategories(): List<Category> {
             val personal = setOf("Секс: с Марианной", "Секс: соло")
             val hints = mapOf(
@@ -924,6 +958,8 @@ class ZasechkaStore(private val context: Context) {
         category: String,
         resumePrevious: Boolean,
         client: String = "",
+        /** Проект Дел (звонок клиента, 06.10.2026) — как у записи из дела. */
+        project: String = "",
     ): Entry? = mutex.withLock {
         ensureLoaded()
         if (end <= start) return@withLock null
@@ -953,6 +989,7 @@ class ZasechkaStore(private val context: Context) {
             source = "auto",
             synced = false,
             createdAt = System.currentTimeMillis(),
+            project = project.trim(),
         )
         entries.add(entry)
         resumeTemplate?.let { t ->
@@ -980,6 +1017,27 @@ class ZasechkaStore(private val context: Context) {
         entries.sortBy { it.start }
         persist()
         entry
+    }
+
+    /**
+     * Убрать врезку звонка (кнопка «Убрать» в пуше, 06.10.2026): звонок уходит,
+     * а дело, которое он разрезал, сшивается обратно — голова до звонка и её
+     * продолжение после (то же название, категория и клиент, без своей
+     * надиктовки — копия `insertInterruption`) снова одна запись. Владелец
+     * после звонка переключился — продолжения нет: время звонка отходит делу
+     * до него. ОДНИМ шагом под замком: удалением и правкой по отдельности
+     * нормализация успела бы подложить заполнитель в щель. Шаг отмены — как у правки.
+     */
+    suspend fun dissolveInterruption(id: Long): Entry? = mutex.withLock {
+        ensureLoaded()
+        val call = entries.firstOrNull { it.id == id } ?: return@withLock null
+        val (next, kept) = dissolved(entries, id) ?: return@withLock null
+        snapshotLocked("убрать «${call.title.ifBlank { "звонок" }}»")
+        entries = next.toMutableList()
+        normalizeLocked()
+        entries.sortBy { it.start }
+        persist()
+        kept?.let { k -> entries.firstOrNull { it.id == k.id } }
     }
 
     /**

@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import ru.zf.pravka.core.AutoWitness
+import ru.zf.pravka.core.CallRules
 import ru.zf.pravka.core.SleepGuess
 
 // Reads the phone's own memory of the day - UsageStatsManager events and the
@@ -32,6 +33,11 @@ import ru.zf.pravka.core.SleepGuess
 // «эксперимент оказался неудачным, засоряет ленту. просто давай считать
 // каждый день, сколько на Клод, телеграм, звонки, сколько на ютуб». Теперь
 // ровно так: телефон считается по дням, лента остаётся лентой.
+//
+// Кроме звонков (06.10.2026, владелец: «звонки всё же должны перебивать
+// текущее дело… когда я говорю по телефону, то я не работаю»): разговор от
+// двух минут снова режет дело врезкой — но с категорией по собеседнику
+// (`core/CallRules.kt`), а не безликим «Звонком». Приложения — по-прежнему по дням.
 // Runs retrospectively every few minutes, so nothing is lost while Правка's
 // process was dead - the system kept the history for us.
 class PhoneSweeper(
@@ -44,6 +50,8 @@ class PhoneSweeper(
     private val scope: CoroutineScope,
     /** Автопилот службы: узнаёт о найденной ночи и начинает дело по подъёму. */
     private val witness: () -> AutoWitness? = { null },
+    /** Люди Дел с телефонами и клиентом — по ним звонок узнаёт работу (пусто — Дела не на сервере). */
+    private val callPeople: suspend () -> List<ru.zf.pravka.core.CallRules.Person> = { emptyList() },
 ) {
 
     companion object {
@@ -432,12 +440,16 @@ class PhoneSweeper(
         val from = if (lastCallSweep <= 0) dayStartMs(now) else max(lastCallSweep - CALL_RESCAN_MS, 0L)
         val deltas = HashMap<String, PhoneStore.DayDelta>()
         val starts = ArrayList<Long>()
+        val fresh = ArrayList<ru.zf.pravka.core.CallRules.Call>()
         var watermark = lastCallSweep
         var counted = 0
         runCatching {
             context.contentResolver.query(
                 CallLog.Calls.CONTENT_URI,
-                arrayOf(CallLog.Calls.DATE, CallLog.Calls.DURATION, CallLog.Calls.TYPE, CallLog.Calls.CACHED_NAME),
+                arrayOf(
+                    CallLog.Calls.DATE, CallLog.Calls.DURATION, CallLog.Calls.TYPE, CallLog.Calls.CACHED_NAME,
+                    CallLog.Calls.NUMBER,
+                ),
                 "${CallLog.Calls.DATE} > ?",
                 arrayOf(from.toString()),
                 "${CallLog.Calls.DATE} ASC",
@@ -446,6 +458,7 @@ class PhoneSweeper(
                 val durCol = cursor.getColumnIndex(CallLog.Calls.DURATION)
                 val typeCol = cursor.getColumnIndex(CallLog.Calls.TYPE)
                 val nameCol = cursor.getColumnIndex(CallLog.Calls.CACHED_NAME)
+                val numCol = cursor.getColumnIndex(CallLog.Calls.NUMBER)
                 while (cursor.moveToNext()) {
                     val date = cursor.getLong(dateCol)
                     val durationSec = cursor.getLong(durCol)
@@ -463,6 +476,15 @@ class PhoneSweeper(
                     name?.trim()?.takeIf { it.isNotBlank() }?.let { d.callers[it] = (d.callers[it] ?: 0L) + (end - date) }
                     starts.add(date)
                     counted++
+                    if (durationSec >= ru.zf.pravka.core.CallRules.MIN_SEC) {
+                        fresh += ru.zf.pravka.core.CallRules.Call(
+                            start = date,
+                            end = end,
+                            name = name?.trim().orEmpty(),
+                            number = if (numCol >= 0) cursor.getString(numCol).orEmpty() else "",
+                            outgoing = type == CallLog.Calls.OUTGOING_TYPE,
+                        )
+                    }
                 }
             }
         }.onFailure { eventLog.add("журнал звонков не прочитался: ${it.message}") }
@@ -470,6 +492,57 @@ class PhoneSweeper(
             phoneStore.applyCalls(deltas, starts, watermark)
         }
         if (counted > 0) eventLog.add("телефон: звонков за свип $counted → в счётчики дня")
+        // Звонки режут дело (06.10.2026): только новые — уже посчитанные узнаны
+        // выше по времени начала, и в ленту второй раз не идут.
+        if (fresh.isNotEmpty() && settings.zCallsCutFlow.first()) {
+            for (c in fresh) runCatching { placeCall(c) }.onFailure { eventLog.add("звонок в ленту не лёг: ${it.message}") }
+        }
+    }
+
+    /**
+     * Звонок — врезкой в ленту: дело, которое шло, режется на его начале и
+     * продолжается после (`ZasechkaStore.insertInterruption`, копия без
+     * надиктовки), категория — по собеседнику (`CallRules.verdict`). Где
+     * звонок и так часть дела (свой звонок, встреча, дорога, спорт) — не режем,
+     * только пишем в журнал почему.
+     */
+    private suspend fun placeCall(c: ru.zf.pravka.core.CallRules.Call) {
+        val rules = ru.zf.pravka.core.CallRules
+        val title = rules.title(c)
+        val overlaps = zasechkaStore.forRange(c.start, c.end)
+        val skip = rules.skip(overlaps.map { CallRules.Seen(it.title, it.category, it.source) })
+        if (skip != ru.zf.pravka.core.CallRules.Skip.NONE) {
+            eventLog.add("звонок «$title» ${hm(c.start)}–${hm(c.end)}: дело не режу — ${skip.words}")
+            return
+        }
+        // Слово владельца: тот же собеседник раньше в ленте с поправленной
+        // категорией — так и дальше. Своя догадка «Звонки» словом не считается:
+        // иначе раз не ответив на вопрос, владелец больше его не увидел бы.
+        val learned = zasechkaStore.all()
+            .lastOrNull { it.title.equals(title, ignoreCase = true) && it.category.isNotBlank() && it.source != "gap" }
+            ?.takeIf { !it.category.equals(rules.UNKNOWN, ignoreCase = true) }
+            ?.let { CallRules.Learned(it.category, it.client, it.project) }
+        val verdict = rules.verdict(c, rules.familyList(settings.zCallFamilyFlow.first()), runCatching { callPeople() }.getOrDefault(emptyList()), learned)
+        val cut = overlaps.lastOrNull { it.source != "gap" && it.start <= c.start }
+        val entry = zasechkaStore.insertInterruption(
+            start = c.start,
+            end = c.end,
+            title = verdict.title,
+            category = verdict.category,
+            resumePrevious = true,
+            client = verdict.client,
+            project = verdict.project,
+        ) ?: return
+        sync.kickSoon(scope)
+        eventLog.add(
+            "звонок: «${entry.title}» ${hm(entry.start)}–${hm(entry.end)} [${entry.category}]" +
+                (if (entry.client.isNotBlank()) " · ${entry.client}" else "") +
+                " — ${verdict.why.name.lowercase()}" + (cut?.let { ", разрезал «${it.title}»" } ?: "")
+        )
+        witness()?.callInRibbon(
+            entry.id, entry.title, entry.category, entry.client, entry.start, entry.end,
+            cut?.title.orEmpty(), verdict.sure,
+        )
     }
 
     private fun excludedPackages(): Set<String> {

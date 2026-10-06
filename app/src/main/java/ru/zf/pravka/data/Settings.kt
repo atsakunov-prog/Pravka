@@ -116,6 +116,8 @@ class Settings(private val context: Context) {
         private val KEY_Z_WEBHOOK = stringPreferencesKey("z_webhook_url")
         private val KEY_Z_CALLS = booleanPreferencesKey("z_calls_to_ribbon")
         private val KEY_Z_CALL_CATEGORY = stringPreferencesKey("z_call_category")
+        private val KEY_Z_CALLS_CUT = booleanPreferencesKey("z_calls_cut")
+        private val KEY_Z_CALL_FAMILY = stringPreferencesKey("z_call_family")
         private val KEY_Z_IMMERSIVE_MIN = intPreferencesKey("z_immersive_min")
         private val KEY_Z_CHECKINS = booleanPreferencesKey("z_checkins")
         // Разноска: третья кнопка «Д» (она про дела).
@@ -875,6 +877,23 @@ class Settings(private val context: Context) {
     val zCallsFlow = context.dataStore.data.map { it[KEY_Z_CALLS] ?: true }
     suspend fun setZCalls(value: Boolean) {
         context.dataStore.edit { it[KEY_Z_CALLS] = value }
+    }
+
+    /**
+     * Звонки режут дело (06.10.2026, `core/CallRules.kt`): разговор от двух минут
+     * встаёт в ленту врезкой с категорией по собеседнику, дело продолжается
+     * после. С завода — да: владелец попросил сам. Выключено — звонки только в
+     * суточных счётчиках, как с 05.09.
+     */
+    val zCallsCutFlow = context.dataStore.data.map { it[KEY_Z_CALLS_CUT] ?: true }
+    suspend fun setZCallsCut(value: Boolean) {
+        context.dataStore.edit { it[KEY_Z_CALLS_CUT] = value }
+    }
+
+    /** Кто — семья для звонков: имена контактов через запятую («Марианна, Папа»). */
+    val zCallFamilyFlow = context.dataStore.data.map { it[KEY_Z_CALL_FAMILY] ?: ru.zf.pravka.core.CallRules.FAMILY_DEFAULT }
+    suspend fun setZCallFamily(value: String) {
+        context.dataStore.edit { it[KEY_Z_CALL_FAMILY] = value.trim() }
     }
 
     val zCallCategoryFlow = context.dataStore.data.map { it[KEY_Z_CALL_CATEGORY] ?: "Звонки" }

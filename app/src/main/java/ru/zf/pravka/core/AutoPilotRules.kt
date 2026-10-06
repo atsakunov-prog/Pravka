@@ -477,4 +477,12 @@ interface AutoWitness {
      * (и сам решил про дело по подъёму), ночь второй раз не пишется.
      */
     suspend fun nightSeen(wakeAt: Long): Boolean = false
+
+    /**
+     * Звонок лёг в ленту врезкой (06.10.2026, `CallRules`): автопилот говорит
+     * это пушем с «Работа · Семья · Убрать». [sure] — собеседник узнан, и
+     * пуш — тихая копия в шторку; не узнан — вопрос плашкой или громко.
+     * [cut] — какое дело звонок разрезал (пусто — ничего не шло).
+     */
+    fun callInRibbon(entryId: Long, title: String, category: String, client: String, start: Long, end: Long, cut: String, sure: Boolean) {}
 }

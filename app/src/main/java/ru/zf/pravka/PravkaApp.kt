@@ -832,7 +832,30 @@ class PravkaApp : Application() {
             this, phoneStore, zasechkaStore, settings, eventLog, zasechkaSync, appScope,
             // Нашёл ночь — автопилот решает про дело по подъёму (сборы детей в будни).
             witness = { ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.autoWitness() },
+            callPeople = { callPeople() },
         )
+    }
+
+    /**
+     * Люди Дел для звонков (06.10.2026, `CallRules`): имена, телефоны и клиент —
+     * проект Дел их организации. Звонок такому человеку — работа с его клиентом.
+     * Дела не на своём сервере — людей нет, звонок узнаётся только семьёй.
+     */
+    private suspend fun callPeople(): List<ru.zf.pravka.core.CallRules.Person> {
+        if (!delaOnServer()) return emptyList()
+        delaStore.load()
+        val s = delaStore.view.value
+        return s.people.values.filter { it.live }.map { p ->
+            val client = if (p.orgId.isBlank()) null else s.projects.values
+                .filter { it.live && it.orgId == p.orgId }
+                .let { same -> same.firstOrNull { it.kind == "client" } ?: same.firstOrNull() }
+            ru.zf.pravka.core.CallRules.Person(
+                names = (listOf(p.name, p.short) + p.aliases).filter { it.isNotBlank() },
+                phones = p.phones,
+                client = client?.name.orEmpty(),
+                projectId = client?.id.orEmpty(),
+            )
+        }
     }
 
     // Самообновление: раз в сутки смотрит ветку apk-builds, тянет APK и

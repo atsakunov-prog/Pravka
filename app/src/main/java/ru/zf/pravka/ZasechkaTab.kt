@@ -2092,6 +2092,40 @@ private fun AutoPilotSection(app: PravkaApp) {
         }
     }
 
+    // ---- Звонки (06.10.2026) ----
+    SubHead("Звонки", info = CALLS_INFO)
+    val callsCut by settings.zCallsCutFlow.collectAsState(initial = true)
+    PaperToggle(
+        title = "Звонок режет дело — с категорией по собеседнику",
+        checked = callsCut,
+        onCheckedChange = { on -> scope.launch { settings.setZCallsCut(on) } },
+    )
+    if (callsCut) {
+        val callPerm = remember(permTick) { ru.zf.pravka.data.PhoneSweeper.hasCallLogAccess(context) }
+        if (!callPerm) {
+            PaperButton(
+                "Дать доступ к журналу звонков",
+                icon = Glyphs.Phone,
+                onClick = { askPermission.launch(android.Manifest.permission.READ_CALL_LOG) },
+            )
+        }
+        val family by settings.zCallFamilyFlow.collectAsState(initial = ru.zf.pravka.core.CallRules.FAMILY_DEFAULT)
+        var familyText by remember(family) { mutableStateOf(family) }
+        PaperField(
+            value = familyText,
+            onValueChange = { v ->
+                familyText = v
+                scope.launch { settings.setZCallFamily(v) }
+            },
+            label = "Семья — имена контактов через запятую",
+            singleLine = false,
+        )
+        PaperHint(
+            "Семья — [Семья]; люди Дел (по номеру или имени) — [Работа: звонки] с их клиентом; " +
+                "остальные — [Звонки] и вопрос пушем. Ответил однажды — этот собеседник дальше так и приезжает.",
+        )
+    }
+
     // ---- Подъём и отбой ----
     SubHead("Подъём и отбой", info = WAKE_INFO)
     val wakeDeal by settings.autoWakeDealFlow.collectAsState(initial = null)
@@ -2159,6 +2193,14 @@ private const val WAKE_INFO =
         "по ночи на экране."
 
 /** Встречи из календаря — за «i» у заголовка «Календарь». */
+private const val CALLS_INFO =
+    "Владелец, 06.10.2026: «звонки должны перебивать текущее дело… когда я говорю по " +
+        "телефону, я не работаю; а если сижу и пришёл звонок по работе — я прямо работаю». " +
+        "Разговор от двух минут встаёт в ленту врезкой: дело режется на начале звонка и " +
+        "продолжается после. Категорию решает собеседник, а не дело, которое шло. Не режет " +
+        "свой записанный звонок, встречу из календаря, дорогу и тренировку. Пуш — «Работа», " +
+        "«Семья», «Убрать» (дело сшивается обратно). Выключено — звонки только в счётчиках дня."
+
 private const val CALENDAR_INFO =
     "Встреча из календаря телефона начинается в ленте сама с начала события и " +
         "закрывает текущее дело; по концу события закрывается и возвращает то, что " +
