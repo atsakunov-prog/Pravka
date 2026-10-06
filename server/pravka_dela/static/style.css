@@ -139,14 +139,14 @@ section.card-pane { border-left: 1px solid var(--line-soft); background: var(--p
 }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bad); flex: none; }
 .side-group { margin-top: 16px; }
-.side-group > button.gh {
+.side-group .gh-row > button.gh {
   display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; color: var(--faint);
   font-size: 11px; letter-spacing: .07em; text-transform: uppercase; padding: 4px 8px; font-weight: 650;
 }
-.side-group > button.gh:hover { color: var(--muted); }
-.side-group > button.gh .n { margin-left: auto; font-weight: 500; letter-spacing: 0; }
-.side-group > button.gh .caret { transition: transform .15s; font-size: 10px; }
-.side-group.closed > button.gh .caret { transform: rotate(-90deg); }
+.side-group .gh-row > button.gh:hover { color: var(--muted); }
+.side-group .gh-row > button.gh .n { margin-left: auto; font-weight: 500; letter-spacing: 0; }
+.side-group .gh-row > button.gh .caret { transition: transform .15s; font-size: 10px; }
+.side-group.closed .gh-row > button.gh .caret { transform: rotate(-90deg); }
 .side-group.closed > .items { display: none; }
 .side-foot { margin-top: 20px; padding: 10px 8px 0; border-top: 1px solid var(--line-soft); font-size: 12px; color: var(--faint); display: flex; justify-content: space-between; align-items: center; }
 .side-foot button { border: 0; background: none; color: var(--faint); padding: 3px 6px; border-radius: 7px; display: inline-flex; align-items: center; gap: 6px; }
@@ -787,6 +787,13 @@ details summary:hover { color: var(--muted); }
 .pop input:focus { outline: none; border-color: var(--accent); }
 
 /* Меню слева: клиент с раскрывающимися проектами. */
+.gh-row { display: flex; align-items: center; }
+.gh-row .gh { flex: 1; min-width: 0; }
+.gh-act { flex: none; border: 0; background: none; color: var(--faint); font-size: 11px; padding: 2px 7px; border-radius: 6px; }
+.gh-act:hover { color: var(--text); background: var(--hover); }
+/* Поиск: на компьютере поле — слева в меню, на телефоне (меню в шторке) — ещё и наверху страницы. */
+.main-search { display: none; width: 100%; margin-top: 14px; padding: 9px 12px; font-size: 15px; }
+@media (max-width: 900px) { .main-search { display: block; } }
 .side-client { display: flex; flex-wrap: wrap; align-items: center; }
 .side-client > .nav-item { flex: 1; min-width: 0; width: auto; padding-left: 4px; }
 .side-caret { flex: none; width: 16px; height: 22px; border: 0; background: none; color: var(--faint); font-size: 11px; padding: 0; border-radius: 5px; }

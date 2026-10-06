@@ -303,7 +303,7 @@ function render() {
     if (t) { openCard(t.id); return; }
   }
   const ae = document.activeElement;
-  const q0 = ae && (ae.id === 'quick' || ae.classList?.contains('ask-input')) ? ae : null;
+  const q0 = ae && (['quick', 'side-search', 'main-search'].includes(ae.id) || ae.classList?.contains('ask-input')) ? ae : null;
   const focused = q0 ? { id: q0.id, value: q0.value, a: q0.selectionStart, b: q0.selectionEnd } : null;
   const shell = el('div', { class: 'shell' + (S.cardId || S.draft ? ' with-card' : '') + (S.sideOpen ? ' side-open' : '') + (S.sel.size ? ' selecting' : '') });
   shell.append(renderSide(r), el('main', { class: 'list' }, renderMain(r)));
@@ -334,8 +334,12 @@ function navItem(hash, ico, label, count, on, extra, hot) {
 }
 
 function renderSide(r) {
-  const search = el('input', { class: 'side-search', type: 'search', placeholder: 'Поиск  /', value: r.kind === 'search' ? r.q : '' });
-  search.addEventListener('keydown', (e) => { if (e.key === 'Enter') go('#/search/' + encodeURIComponent(search.value.trim())); });
+  const search = el('input', { id: 'side-search', class: 'side-search', type: 'search', placeholder: 'Поиск  /', value: r.kind === 'search' ? r.q : '' });
+  search.addEventListener('input', () => liveSearch(search.value));
+  search.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { S.sideOpen = false; liveSearch(search.value); } // на телефоне — убрать шторку, результаты под ней
+    if (e.key === 'Escape') { search.value = ''; search.blur(); }
+  });
   const sphere = el('div', { class: 'seg' }, [['work', 'Работа'], ['home', 'Дом'], ['', 'Всё']].map(([v, t]) =>
     el('button', { class: S.sphere === v ? 'on' : '', onclick: () => { S.sphere = v; LS.set('sphere', v); render(); } }, t)));
   // «Сейчас» — отдельной строкой над остальными: до пяти дел, которые обязан сделать сегодня.
@@ -377,11 +381,13 @@ function renderSide(r) {
           r.kind === 'deal' && r.id === d.id, null, ts.some(isLate));
       })) : null);
   };
-  const group = (key, title, items) => {
+  const group = (key, title, items, act) => {
     if (!items.length) return null;
     return el('div', { class: 'side-group' + (S.closed[key] ? ' closed' : '') },
-      el('button', { class: 'gh', onclick: () => { S.closed[key] = !S.closed[key]; LS.set('closed', S.closed); render(); } },
-        el('span', { class: 'caret' }, '▾'), title, el('span', { class: 'n' }, items.length)),
+      el('div', { class: 'gh-row' },
+        el('button', { class: 'gh', onclick: () => { S.closed[key] = !S.closed[key]; LS.set('closed', S.closed); render(); } },
+          el('span', { class: 'caret' }, '▾'), title, el('span', { class: 'n' }, items.length)),
+        act && !S.closed[key] ? act : null),
       el('div', { class: 'items' }, items));
   };
   const favs = live.filter((p) => S.favs.includes(p.id));
@@ -389,7 +395,8 @@ function renderSide(r) {
     .map(([k, v]) => navItem('#/' + k, tint(icon(v.icon), v.color), v.title, null, r.kind === k)) : [];
   const groups = [group('crm', 'CRM', crmNav), group('fav', 'Избранное', favs.map(projItem))];
   for (const [kind, title] of Object.entries(KIND)) {
-    groups.push(group('k-' + kind, title, live.filter((p) => p.kind === kind && !S.favs.includes(p.id)).map(projItem)));
+    const list = live.filter((p) => p.kind === kind && !S.favs.includes(p.id));
+    groups.push(group('k-' + kind, title, list.map(projItem), kind === 'client' ? openAllBtn(list) : null));
   }
   // Люди: с кем больше всего открытых дел. С CRM — отдельная страница «Люди» по компаниям.
   if (!crmOn()) {
@@ -412,6 +419,25 @@ function renderSide(r) {
       el('button', { class: 'settings-btn' + (r.kind === 'settings' ? ' on' : ''), onclick: () => go('#/settings') }, icon('gear', 14), 'Настройки'),
       el('button', { onclick: async () => { await api('/auth/logout', {}); location.reload(); } }, 'Выйти')),
     el('div', { class: 'side-keys' }, el('span', { class: 'kbd' }, 'n'), ' сказать Claude · ', el('span', { class: 'kbd' }, '/'), ' поиск'));
+}
+
+/** «Раскрыть все / свернуть все» — проекты всех клиентов списка разом (владелец, 06.10.2026). */
+function openAllBtn(clients) {
+  const ids = clients.filter((p) => clientDeals(p.id).some((d) => d.stage !== 'archive')).map((p) => p.id);
+  if (!ids.length) return null;
+  const allOpen = ids.every((id) => S.clientOpen.has(id));
+  return el('button', { class: 'gh-act', title: allOpen ? 'Свернуть проекты всех клиентов' : 'Показать проекты всех клиентов',
+    onclick: () => { ids.forEach((id) => (allOpen ? S.clientOpen.delete(id) : S.clientOpen.add(id))); LS.set('clientOpen', [...S.clientOpen]); render(); } },
+  allOpen ? 'свернуть все' : 'раскрыть все');
+}
+
+/** Поиск сразу, по мере набора: адрес — #/search/<текст>; первая буква — новая запись истории
+ *  (назад — туда, откуда пришёл), дальше та же. Ищет всё: клиентов, проекты, людей, дела. */
+function liveSearch(v) {
+  const h = '#/search/' + encodeURIComponent(v.trim());
+  if (route().kind === 'search') history.replaceState(null, '', h);
+  else { history.pushState(null, '', h); S.toTop = true; S.sel.clear(); S.dealFilter = null; }
+  render();
 }
 
 // ── Основная колонка ────────────────────────────────────────────────────
@@ -1428,14 +1454,44 @@ function renderPerson(id) {
       crmOn() && !p.user_id ? personCrmBlock(p) : null)];
 }
 
+/** Общий поиск — сразу, по мере набора: клиенты и проекты справочника, проекты клиентов (сделки),
+ *  люди, дела. Всё уже в памяти — считается тут, без запросов. Каждое слово запроса должно найтись. */
+const SEARCH_SHOWN = 8;
 function renderSearch(q) {
   const words = norm(q).split(/\s+/).filter(Boolean);
-  const items = words.length ? all().filter((t) => {
-    const hay = norm(t.title + ' ' + (t.notes || '') + ' ' + (project(t.project_id)?.name || '') + ' ' + personName(person(t.person_id)));
-    return words.every((w) => hay.includes(w)) && (S.showDone || isOpen(t));
-  }) : [];
-  return [head('Поиск: ' + q, [plural(items.length, 'дело', 'дела', 'дел')]),
-    el('div', { class: 'body' }, el('div', { class: 'toolbar' }, doneToggle()), quickAdd({}), items.length ? grouped(items, 'project') : el('div', { class: 'empty' }, 'Ничего не нашлось.'))];
+  const hit = (...parts) => words.length > 0 && words.every((w) => norm(parts.flat().filter(Boolean).join(' ')).includes(w));
+  const projs = [...S.projects.values()].filter((p) => hit(p.name, p.aliases || [], p.note))
+    .sort((a, b) => !!a.archived_at - !!b.archived_at || a.name.localeCompare(b.name, 'ru'));
+  const deals = [...S.deals.values()].filter((d) => hit(d.name, project(d.project_id)?.name, d.deal_type))
+    .sort((a, b) => (a.stage === 'archive') - (b.stage === 'archive') || a.name.localeCompare(b.name, 'ru'));
+  const ppl = livePeople().filter((x) => !x.merged_into && hit(x.name, x.short, x.aliases || [], x.role, orgLabel(x.org_id)?.name))
+    .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  const tasks = all().filter((t) => (S.showDone || isOpen(t)) && hit(t.title, t.notes, project(t.project_id)?.name,
+    personName(person(t.person_id)), t.deal_id && S.deals.get(t.deal_id)?.name, t.labels || []));
+  const openBy = (pid) => all().filter((t) => t.project_id === pid && isOpen(t)).length;
+  const part = (title, list, row) => (list.length ? el('div', { class: 'group' }, el('h2', {}, title, el('span', { class: 'n' }, list.length)),
+    list.slice(0, SEARCH_SHOWN).map(row),
+    list.length > SEARCH_SHOWN ? el('div', { class: 'faint pad' }, `и ещё ${list.length - SEARCH_SHOWN} — уточни запрос`) : null) : null);
+  const box = el('input', { id: 'main-search', class: 'main-search inline-search', type: 'search', placeholder: 'Что найти: клиент, проект, человек, дело', value: q });
+  box.addEventListener('input', () => liveSearch(box.value));
+  const total = projs.length + deals.length + ppl.length + tasks.length;
+  return [head(q ? 'Поиск: ' + q : 'Поиск', words.length ? [plural(total, 'находка', 'находки', 'находок'),
+    deals.length ? plural(deals.length, 'проект', 'проекта', 'проектов') : null, ppl.length ? plural(ppl.length, 'человек', 'человека', 'человек') : null,
+    plural(tasks.length, 'дело', 'дела', 'дел')] : ['набирай в поле «Поиск» слева — результаты появляются сразу']),
+  el('div', { class: 'body' }, box,
+    part('Клиенты и разделы', projs, (p) => el('div', { class: 'crow', onclick: () => go('#/p/' + p.id) }, dot(p.id),
+      el('div', { class: 'main' }, el('div', { class: 'title' }, p.name, p.archived_at ? el('span', { class: 'faint' }, ' · архив') : null),
+        el('div', { class: 'chips' }, el('span', {}, KIND[p.kind] || p.kind), openBy(p.id) ? el('span', {}, plural(openBy(p.id), 'открытое дело', 'открытых дела', 'открытых дел')) : null)))),
+    part('Проекты клиентов', deals, (d) => el('div', { class: 'crow', onclick: () => openDeal(d.id) }, el('span', { class: 'st-dot st-' + d.stage }),
+      el('div', { class: 'main' }, el('div', { class: 'title' }, d.name),
+        el('div', { class: 'chips' }, el('span', {}, stageWord(d)), project(d.project_id) ? el('span', {}, project(d.project_id).name) : null)))),
+    part('Люди', ppl, (x) => el('div', { class: 'crow person-row', onclick: () => go('#/h/' + x.id) }, avatar(x),
+      el('div', { class: 'main' }, el('div', { class: 'title' }, x.name, x.short && x.short !== x.name ? el('span', { class: 'faint' }, ' · ' + x.short) : null),
+        el('div', { class: 'chips' }, x.role ? el('span', {}, x.role) : null, orgLabel(x.org_id) ? el('span', {}, orgLabel(x.org_id).name) : null)))),
+    words.length ? el('div', { class: 'group' }, el('h2', {}, 'Дела', el('span', { class: 'n' }, tasks.length), el('span', { class: 'act' }, doneToggle()))) : null,
+    words.length && tasks.length ? quickAdd({}, { placeholder: 'Скажи, что сделать с найденными делами: «все — на пятницу», «эти два закрой»' }) : null,
+    tasks.length ? grouped(tasks, 'project') : null,
+    words.length && !total ? el('div', { class: 'empty' }, 'Ничего не нашлось. Ищу по началам и кусочкам слов: «альф», «фонд», «иван».') : null)];
 }
 
 function renderWeek() {
