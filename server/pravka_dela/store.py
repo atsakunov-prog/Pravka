@@ -38,9 +38,11 @@ TASK_FIELDS = {
 
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
-FEATURES = ["remind", "svod", "people"]
+FEATURES = ["remind", "svod", "people", "dictations"]
 # «svod» — Свод (crm.svod) в синке и операция svod.set; «people» — person.add / person.merge и вид who
 # (одна карточка человека, 06.10.2026). Без них телефон не шлёт этих операций.
+# «dictations» — операция dictation.add: текст наговорки, из которой вышли дела (их source_ref = её id),
+# для «Нового» веба (06.10.2026).
 # Токен службы бота Ковчега (python -m pravka_dela token --name kovcheg): только он забирает
 # «что пора» и отмечает отправку (remind.py, task.reminded).
 REMIND_BOT = "kovcheg"
@@ -460,6 +462,47 @@ def op_interaction_delete(conn, user, op):
         raise OpError("нет такой записи хронологии или её нельзя убрать")
     return {"row": row}
 
+
+DICTATION_SOURCES = {"phone", "web", "bot", "mcp"}
+
+
+def op_dictation_add(conn, user, op):
+    """Наговорка, из которой вышли дела: текст дословно, id — source_ref её дел (06.10.2026).
+
+    Строка не переписывается: телефон повторяет операцию из очереди, и второй раз — тот же ответ.
+    """
+    data = _pick(op.get("dictation") or {}, {"id", "text", "at", "source"}, "наговорка")
+    if not data.get("id") or not data.get("text"):
+        raise OpError("наговорка: нужны id и текст")
+    if data.get("source", "phone") not in DICTATION_SOURCES:
+        raise OpError("наговорка: откуда — phone, web, bot или mcp")
+    data["owner_id"] = user
+    if not data.get("at"):
+        data.pop("at", None)
+    cols = list(data)
+    q = sql.SQL("INSERT INTO tasks.dictations ({}) VALUES ({}) ON CONFLICT (id) DO NOTHING RETURNING *").format(
+        sql.SQL(", ").join(map(sql.Identifier, cols)), sql.SQL(", ").join(sql.Placeholder() * len(cols)))
+    row = conn.execute(q, [data[c] for c in cols]).fetchone() or conn.execute(
+        "SELECT * FROM tasks.dictations WHERE id = %s", (data["id"],)).fetchone()
+    if not row:
+        raise OpError("наговорка с таким id — чужая")
+    return {"dictation": row}
+
+
+def op_suggestion_seen(conn, user, op):
+    """«Понятно» у решённого без человека («Закрыто само»): видел, согласен — из «Нового» уходит.
+
+    Владелец 06.10.2026: «закрыто дело 268, так и висит… никуда не уходит».
+    """
+    ids = [str(x) for x in (op.get("ids") or ([op["id"]] if op.get("id") else []))]
+    if not ids:
+        raise OpError("понятно: нужны id предложений")
+    rows = conn.execute(
+        "UPDATE tasks.suggestions SET seen_at = now() WHERE id = ANY(%s::uuid[]) AND for_user = %s "
+        "AND status <> 'pending' AND seen_at IS NULL RETURNING id", (ids, user)).fetchall()
+    return {"seen": [r["id"] for r in rows]}
+
+
 HANDLERS: dict[str, Callable] = {
     "task.create": op_task_create,
     "task.set": op_task_set,
@@ -489,6 +532,8 @@ HANDLERS: dict[str, Callable] = {
     "payment.set": payment_set,
     "suggestion.create": op_suggestion_create,
     "suggestion.decide": op_suggestion_decide,
+    "suggestion.seen": op_suggestion_seen,
+    "dictation.add": op_dictation_add,
 }
 
 # Ошибки базы, которые повтор не исправит: формат, права, правила.
@@ -633,6 +678,45 @@ def view_new(conn, user, **_):
     return {"batches": list(batches.values()), "count": len(rows)}
 
 
+DICTATIONS_SHOWN = 10
+
+
+def view_dictations(conn, user, **_):
+    """Последние наговорки и что из них вышло: дела любого статуса, заметки в хронологию и что
+    потом про эти дела сказала автоматика (встреча, Telegram) — «сращивание» (06.10.2026).
+
+    Наговорка без строки в tasks.dictations (телефон старый или текст не дошёл) — всё равно видна:
+    по source_ref её дел, только без слов.
+    """
+    heads = conn.execute(
+        "SELECT id AS ref, at, text, source FROM tasks.dictations WHERE owner_id = %s "
+        "UNION ALL "
+        "SELECT t.source_ref, min(t.created_at), NULL, CASE WHEN bool_or(t.source = 'voice') THEN 'phone' ELSE 'web' END "
+        "FROM tasks.tasks t WHERE t.created_by = %s AND t.source_ref ~ '^(raznoska|parse):[^:]+$' "
+        "AND NOT EXISTS (SELECT 1 FROM tasks.dictations x WHERE x.id = t.source_ref) GROUP BY t.source_ref "
+        "ORDER BY at DESC LIMIT %s", (user, user, DICTATIONS_SHOWN)).fetchall()
+    refs = [h["ref"] for h in heads]
+    if not refs:
+        return {"items": []}
+    tasks = conn.execute("SELECT * FROM tasks.v_tasks WHERE source_ref = ANY(%s) ORDER BY created_at, num", (refs,)).fetchall()
+    notes = conn.execute(
+        "SELECT id, at, summary, project_id, person_ids, source_ref FROM crm.interactions WHERE deleted_at IS NULL "
+        "AND split_part(source_ref, ':', 1) || ':' || split_part(source_ref, ':', 2) = ANY(%s) ORDER BY source_ref",
+        (refs,)).fetchall()
+    touches = conn.execute(
+        "SELECT id, task_id, kind, status, source, batch_title, quote, payload, created_at, decided_at, reason "
+        "FROM tasks.suggestions WHERE task_id = ANY(%s) AND kind IN ('update', 'close') ORDER BY created_at",
+        ([t["id"] for t in tasks],)).fetchall() if tasks else []
+    out = []
+    for h in heads:
+        mine = [t for t in tasks if t["source_ref"] == h["ref"]]
+        ids = {t["id"] for t in mine}
+        out.append({**h, "tasks": mine,
+                    "notes": [n for n in notes if ":".join(str(n["source_ref"]).split(":")[:2]) == h["ref"]],
+                    "touches": [s for s in touches if s["task_id"] in ids]})
+    return {"items": out}
+
+
 def view_waiting(conn, user, sphere=None, **_):
     rows = _list(conn, "status = 'open' AND owner_id = %s AND ball = 'waiting'", [user], sphere,
                  " ORDER BY person_short NULLS LAST, waiting_since NULLS LAST")
@@ -724,6 +808,7 @@ VIEWS: dict[str, Callable] = {
     "who": people.view_who,
     "morning": view_morning,
     "new": view_new,
+    "dictations": view_dictations,
     "waiting": view_waiting,
     "person": view_person,
     "quick": view_quick,

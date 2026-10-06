@@ -32,6 +32,7 @@ APP_TABLES = {
     "tasks.tasks": "SELECT, INSERT, UPDATE",
     "tasks.comments": "SELECT, INSERT, UPDATE",
     "tasks.suggestions": "SELECT, INSERT, UPDATE",
+    "tasks.dictations": "SELECT, INSERT, UPDATE",
     "crm.tokens": "SELECT, INSERT, UPDATE",
     "crm.sessions": "SELECT, INSERT, UPDATE, DELETE",
     "crm.login_requests": "SELECT, INSERT, UPDATE, DELETE",

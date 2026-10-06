@@ -712,3 +712,113 @@ details summary:hover { color: var(--muted); }
 .hb { display: block; height: 100%; background: color-mix(in srgb, var(--accent) 65%, transparent); border-radius: 99px; }
 .hv { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 .stats .rules { margin-top: 18px; line-height: 1.5; }
+
+/* ── «Сейчас» отдельной строкой, «Скажи, что сделать», новое «Новое», карточки (06.10.2026) ── */
+/* «Сейчас» — над остальными видами, с тонкой линией под ним: сначала эти пять, потом всё остальное. */
+.nav-now { padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--line-soft); }
+.nav-now .nav-item { background: color-mix(in srgb, var(--now) 7%, transparent); }
+.nav-now .nav-item.on { background: color-mix(in srgb, var(--now) 16%, transparent); }
+.now-meter { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 500; }
+.now-meter.full { color: var(--now); font-weight: 650; }
+.sub .today { color: var(--now); }
+
+/* Строка Claude: заголовок «Скажи, что сделать …» и поле в его свете. */
+.quick.say { margin-top: 16px; }
+.say-h { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); margin: 0 2px 7px; cursor: text; }
+.say-h .claude-ico { color: var(--claude); flex: none; }
+.say-h > span:first-of-type { color: var(--text); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.say-model { margin-left: auto; flex: none; font-size: 11px; color: var(--claude); border: 1px solid color-mix(in srgb, var(--claude) 45%, transparent); border-radius: 999px; padding: 0 8px; line-height: 18px; }
+.say .quick-box {
+  border-color: color-mix(in srgb, var(--claude) 38%, var(--line));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--claude) 5%, var(--panel)), var(--panel));
+  box-shadow: 0 10px 28px -20px color-mix(in srgb, var(--claude) 70%, #000);
+}
+.say .quick-box:focus-within { border-color: var(--claude); box-shadow: 0 0 0 3px color-mix(in srgb, var(--claude) 16%, transparent); }
+.say .quick-box textarea { height: 40px; padding: 9px 4px; font-size: 15px; }
+.say .q-btn { width: 36px; height: 36px; margin-top: 2px; }
+.say .q-btn.plus { width: 28px; height: 28px; margin: 6px 2px 0 4px; font-size: 18px; background: var(--hover-2); color: var(--muted); }
+.say .q-btn.plus:hover:not(:disabled) { background: var(--accent); color: var(--accent-ink); }
+.say .q-btn.claude-btn { background: var(--claude); color: #fff; }
+.say .q-btn.claude-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--claude) 85%, #fff); }
+.quick .preview .pv-h { background: none; color: var(--faint); padding: 1px 0; }
+
+/* «Без проекта» в строке дела — вопрос, а не тупик: щелчок выбирает проект. */
+.chips .m.noproj { border: 0; background: color-mix(in srgb, var(--warn) 13%, transparent); color: var(--warn); border-radius: 6px; padding: 0 7px; font-size: 12px; line-height: 19px; }
+.chips .m.noproj:hover { background: color-mix(in srgb, var(--warn) 24%, transparent); }
+/* Что потом сказала про дело встреча или Telegram — дело срослось, наговорка его не теряет. */
+.chips .m.merged { color: var(--accent); }
+.chips .m.merged.pending { color: var(--warn); }
+
+/* «Новое»: наговорки — карточками, свежие сверху. */
+.part-h { margin: 26px 6px 0; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 650; }
+.part-h .faint { text-transform: none; letter-spacing: 0; font-weight: 450; }
+.dicts .dict { margin: 10px 0 0; padding: 8px 10px 6px; border: 1px solid var(--line-soft); border-radius: 12px; background: color-mix(in srgb, var(--panel) 55%, transparent); }
+.dict-h { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 0 2px 4px; }
+.dict-h b { font-weight: 650; }
+.dict-text {
+  font-size: 13px; color: var(--muted); padding: 2px 2px 6px 10px; margin: 0 0 4px; border-left: 2px solid color-mix(in srgb, #e5774f 55%, transparent);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; white-space: pre-wrap;
+}
+.dict-text.open { -webkit-line-clamp: unset; display: block; cursor: default; }
+.dict .task { margin-left: 0 !important; }
+.dict-note { display: flex; gap: 6px; align-items: baseline; font-size: 12.5px; color: var(--muted); padding: 3px 6px; }
+.dict-note svg { flex: none; opacity: .7; }
+.sug .twin { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12.5px; color: var(--accent); margin-top: 4px; }
+.sug .twin .link { color: var(--text); }
+
+/* Люди плашками: круглые, аватар + имя + должность, крестик — убрать отсюда. */
+.pchips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 14px; }
+.pc-label { font-size: 12px; color: var(--muted); margin-right: 4px; }
+.pchip {
+  display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; background: var(--panel);
+  font-size: 13px; line-height: 1; transition: border-color .12s, background-color .12s;
+}
+.pchip:hover { border-color: var(--faint); }
+.pchip .pc-main { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; padding: 3px 9px 3px 3px; border-radius: 999px; }
+.pchip .pc-name { font-weight: 550; }
+.pchip .pc-role, .pchip.where .pc-role { color: var(--muted); font-size: 12px; }
+.pchip .pc-x { border: 0; background: none; color: var(--faint); padding: 0 8px 0 2px; height: 26px; display: grid; place-items: center; border-radius: 0 999px 999px 0; }
+.pchip .pc-x:hover { color: var(--bad); }
+.pchip.add { gap: 4px; padding: 6px 11px; color: var(--muted); border-style: dashed; background: transparent; }
+.pchip.add:hover { color: var(--text); }
+.pchip.where { gap: 6px; padding: 4px 11px; color: var(--text); }
+.pop-l { font-size: 11.5px; color: var(--faint); padding: 8px 4px 3px; }
+.pop input:not([type=date]) { width: 100%; background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; margin-top: 4px; }
+.pop input:focus { outline: none; border-color: var(--accent); }
+
+/* Клиенты: сделки (проекты клиента) раскрываются под строкой. */
+.cblock { border-radius: 10px; }
+.cblock.open { background: color-mix(in srgb, var(--panel) 45%, transparent); margin: 4px 0; }
+.caret-btn { flex: none; align-self: flex-start; width: 24px; height: 24px; border: 0; background: none; color: var(--muted); border-radius: 6px; font-size: 15px; line-height: 1; padding: 0; }
+.caret-btn:hover:not(:disabled) { background: var(--hover-2); color: var(--text); }
+.caret-btn:disabled { cursor: default; }
+.cdeals { padding: 0 10px 8px 42px; display: grid; gap: 2px; }
+.cdeal {
+  display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 1px 10px; align-items: baseline; text-align: left;
+  border: 0; background: none; padding: 6px 8px; border-radius: 8px; cursor: pointer; font-size: 13.5px; color: var(--text);
+}
+.cdeal:hover { background: var(--hover-2); }
+.cdeal.arch { opacity: .6; }
+.cdeal.add { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); font-size: 12.5px; }
+.cd-stage { font-size: 11.5px; color: var(--muted); }
+.cd-stage.st-mandate, .cd-stage.st-active { color: var(--ok); }
+.cd-stage.st-proposal { color: var(--warn); }
+.cd-name { font-weight: 550; }
+.cd-next { grid-column: 2; font-size: 12px; color: var(--muted); }
+.cd-next.late, .cd-next.none { color: var(--bad); }
+.cd-more { font-size: 12px; padding: 2px 8px; }
+.person-row .ava { width: 28px; height: 28px; font-size: 11px; }
+
+/* Сделка страницей. */
+.deal-people { display: grid; gap: 0; }
+.body > .stage-row, .body > .stage-closed { margin-top: 12px; }
+.deal-more { margin-top: 12px; }
+.deal-more > summary { margin-top: 6px; }
+.props input.deal-name { font-weight: 600; }
+@media (max-width: 900px) {
+  .group h2 { flex-wrap: wrap; row-gap: 2px; }
+  .group h2 .gsub { margin-left: 0; flex-basis: 100%; order: 9; }
+  .cdeals { padding-left: 14px; }
+  .cdeal { grid-template-columns: 1fr; }
+  .cd-next { grid-column: 1; }
+}

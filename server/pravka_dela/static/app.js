@@ -12,13 +12,14 @@ const LS = {
 const S = {
   me: null, today: null, seq: 0,
   tasks: new Map(), projects: new Map(), people: new Map(), deals: new Map(), sugs: new Map(), labels: [],
-  orgs: new Map(), pays: new Map(), dealId: null, // CRM: организации, оплаты, открытая сделка
+  orgs: new Map(), pays: new Map(), // CRM: организации, оплаты
   crmList: LS.get('crmList', false), crmMine: false, crmStale: false, clientQ: '', clientArch: false, clientTab: 'tasks',
   sphere: LS.get('sphere', ''), groups: LS.get('groups', {}), favs: LS.get('favs', []), closed: LS.get('closed', {}),
   showDone: false, upNoDate: false, upMineOnly: false, dealFilter: null,
   sel: new Set(), order: [], lastPick: null, cardId: null, draft: null, sideOpen: false,
   parse: null, quickDraft: null, // идёт разбор Claude; текст, вернувшийся после неудачи
   askTask: null, askText: '', asking: null, // микрофон у дела: какое открыто, текст, идёт правка
+  dictOpen: new Set(), clientOpen: new Set(LS.get('clientOpen', [])), peopleQ: '', // «Новое», клиенты со сделками, люди
 };
 const BALL = { mine: 'моё', waiting: 'жду', agenda: 'повестка' };
 const KIND = { client: 'Клиенты', internal: 'Внутреннее', personal: 'Личное' };
@@ -142,35 +143,34 @@ function sortTasks(a, b) {
 const all = () => [...S.tasks.values()];
 const openMine = () => all().filter((t) => isOpen(t) && isMine(t) && inSphere(t));
 
+// «Утра» и «Входящих» больше нет (владелец, 06.10.2026: «утро непонятно, что это такое… входящие —
+// чем они отличаются от нового»). «Сейчас» — отдельной строкой, до пяти дел на сегодня; просроченное —
+// наверху «Предстоящего»; «пора напомнить» — наверху «Жду»; дела без проекта и поставленные другими —
+// в «Новом», рядом с наговорками и предложениями автоматики.
+const NOW_MAX = 5;
+const nowTasks = () => all().filter((t) => isOpen(t) && isMine(t) && isNow(t));
+const nudgeDue = (t) => t.ball === 'waiting' && ((t.nudge_on && t.nudge_on <= S.today) || (t.due_date && t.due_date <= S.today));
 const VIEWS = {
-  morning: {
-    title: 'Утро', icon: 'sun', color: '#f5b544',
-    sections() {
-      const m = openMine();
-      const from = new Date(Date.now() - 3 * 86400e3).toISOString();
-      // [заголовок, дела, значок, цвет значка]
-      return [
-        ['Сейчас', m.filter(isNow), 'bolt', 'var(--now)'],
-        ['На сегодня и просроченное', m.filter((t) => t.ball === 'mine' && t.due_date && t.due_date <= S.today && !isNow(t)), 'date', '#f2706a'],
-        ['Пора напомнить', m.filter((t) => t.ball === 'waiting' && ((t.nudge_on && t.nudge_on <= S.today) || (t.due_date && t.due_date <= S.today))), 'hourglass', 'var(--waiting)'],
-        ['Поставили другие', m.filter((t) => t.created_by !== t.owner_id && t.created_at > from), 'person', '#a78bfa'],
-      ];
-    },
-    count: () => openMine().filter((t) => (t.ball === 'mine' && t.due_date && t.due_date <= S.today) || isNow(t)).length,
-  },
   // У каждого вида свой цвет значка — как у умных списков Things: глаз находит пункт раньше, чем читает.
-  upcoming: { title: 'Предстоящее', icon: 'cal', color: '#f2706a', count: () => openMine().filter((t) => t.due_date && t.due_date > S.today && t.due_date <= D.add(S.today, 7)).length },
-  new: { title: 'Новое', icon: 'inbox-in', color: '#5b9dff', count: () => pendingSugs().length },
-  waiting: { title: 'Жду', icon: 'hourglass', color: '#6fb8ff', count: () => openMine().filter((t) => t.ball === 'waiting').length },
+  now: { title: 'Сейчас', icon: 'bolt', color: '#f5b544', count: () => nowTasks().length },
+  new: { title: 'Новое', icon: 'inbox-in', color: '#5b9dff', count: () => newCount() },
+  upcoming: { title: 'Предстоящее', icon: 'cal', color: '#f2706a', count: () => openMine().filter((t) => t.due_date && t.due_date <= D.add(S.today, 7)).length,
+    hot: () => openMine().some(isLate) },
+  waiting: { title: 'Жду', icon: 'hourglass', color: '#6fb8ff', count: () => openMine().filter((t) => t.ball === 'waiting').length,
+    hot: () => openMine().some(nudgeDue) },
   week: { title: 'Неделя', icon: 'broom', color: '#3fbf8f' },
-  inbox: { title: 'Входящие', icon: 'tray', color: '#8b93ff', count: () => openMine().filter((t) => !t.project_id).length },
   all: { title: 'Все дела', icon: 'list', color: '#9aa3b2' },
 };
+const NO_PROJECT = { color: '#8b93ff' }; // дела без проекта (бывшие «Входящие») — живут в «Новом»
 const pendingSugs = () => [...S.sugs.values()].filter((s) => s.status === 'pending' && s.for_user === S.me.user);
-/** Очевидные закрытия, которые сервер принял сам (store._auto_close), — за days дней, свежие сверху. */
+/** Очевидные закрытия, которые сервер принял сам (store._auto_close), — за days дней, свежие сверху.
+ *  «Понятно» (seen_at) убирает их совсем: 06.10.2026 #268 висел неделю и «никуда не уходил». */
 const autoClosed = (days) => [...S.sugs.values()].filter((s) => s.kind === 'close' && s.status === 'accepted' && (s.payload || {}).auto
-  && s.for_user === S.me.user && s.decided_at && Date.now() - Date.parse(s.decided_at) < days * 86400e3)
+  && !s.seen_at && s.for_user === S.me.user && s.decided_at && Date.now() - Date.parse(s.decided_at) < days * 86400e3)
   .sort((a, b) => b.decided_at.localeCompare(a.decided_at));
+const fromOthers = () => openMine().filter((t) => t.created_by !== t.owner_id && Date.now() - Date.parse(t.created_at) < 3 * 86400e3);
+const noProject = () => openMine().filter((t) => !t.project_id);
+const newCount = () => pendingSugs().length + autoClosed(7).length + noProject().length + fromOthers().length;
 
 // ── Иконки (свой штрих, без шрифтов и эмодзи) ───────────────────────────
 const ICONS = {
@@ -255,16 +255,18 @@ function route() {
   const [kind, id] = h.split('/');
   if (kind === 'p' && id) return { kind: 'project', id };
   if (kind === 'h' && id) return { kind: 'person', id };
+  if (kind === 'd' && id) return { kind: 'deal', id }; // сделка — страницей, как клиент и человек (06.10.2026)
   if (kind === 'search') return { kind: 'search', q: decodeURIComponent(id || '') };
   if (kind === 'new' && id) return { kind: 'new', batch: decodeURIComponent(id) }; // ссылка из Telegram — одна пачка
-  if (kind === 'task' && /^\d+$/.test(id || '')) return { kind: 'morning', task: +id }; // кнопка «Открыть» под напоминанием
+  if (kind === 'task' && /^\d+$/.test(id || '')) return { kind: 'now', task: +id }; // кнопка «Открыть» под напоминанием
   if (kind === 'settings') return { kind: 'settings' };
   if (kind === 'stats') return { kind: 'stats' };
+  if (kind === 'inbox') return { kind: 'new' }; // старые закладки: «Входящие» теперь в «Новом»
   if (CRM_VIEWS[kind]) return { kind };
-  return { kind: VIEWS[kind] ? kind : 'morning' };
+  return { kind: VIEWS[kind] ? kind : 'now' };
 }
 const go = (hash) => { location.hash = hash; };
-window.addEventListener('hashchange', () => { S.sel.clear(); S.dealFilter = null; S.sideOpen = false; render(); });
+window.addEventListener('hashchange', () => { S.sel.clear(); S.dealFilter = null; S.sideOpen = false; S.toTop = true; render(); });
 
 // ── Вход ────────────────────────────────────────────────────────────────
 function renderLogin(msg) {
@@ -295,19 +297,19 @@ async function boot() {
 function render() {
   if (!S.me) return;
   const r = route();
-  if (r.task) { // #task/61: карточка этого дела поверх «Утра», адрес — обычный
+  if (r.task) { // #task/61: карточка этого дела поверх «Сейчас», адрес — обычный
     const t = all().find((x) => x.num === r.task);
-    history.replaceState(null, '', '#/morning');
+    history.replaceState(null, '', '#/now');
     if (t) { openCard(t.id); return; }
   }
   const ae = document.activeElement;
   const q0 = ae && (ae.id === 'quick' || ae.classList?.contains('ask-input')) ? ae : null;
   const focused = q0 ? { id: q0.id, value: q0.value, a: q0.selectionStart, b: q0.selectionEnd } : null;
-  const shell = el('div', { class: 'shell' + (S.cardId || S.draft || S.dealId ? ' with-card' : '') + (S.sideOpen ? ' side-open' : '') + (S.sel.size ? ' selecting' : '') });
+  const shell = el('div', { class: 'shell' + (S.cardId || S.draft ? ' with-card' : '') + (S.sideOpen ? ' side-open' : '') + (S.sel.size ? ' selecting' : '') });
   shell.append(renderSide(r), el('main', { class: 'list' }, renderMain(r)));
-  if (S.dealId && !S.cardId && !S.draft) shell.append(renderDealCard());
-  else if (S.cardId || S.draft) shell.append(renderCard());
-  const scroll = document.querySelector('main.list')?.scrollTop || 0;
+  if (S.cardId || S.draft) shell.append(renderCard());
+  const scroll = S.toTop ? 0 : document.querySelector('main.list')?.scrollTop || 0; // новая страница — с начала
+  S.toTop = false;
   const old = document.querySelector('section.card-pane');
   const cardScroll = old ? [old.dataset.key, old.scrollTop] : null;
   $app.replaceChildren(shell);
@@ -336,10 +338,15 @@ function renderSide(r) {
   search.addEventListener('keydown', (e) => { if (e.key === 'Enter') go('#/search/' + encodeURIComponent(search.value.trim())); });
   const sphere = el('div', { class: 'seg' }, [['work', 'Работа'], ['home', 'Дом'], ['', 'Всё']].map(([v, t]) =>
     el('button', { class: S.sphere === v ? 'on' : '', onclick: () => { S.sphere = v; LS.set('sphere', v); render(); } }, t)));
+  // «Сейчас» — отдельной строкой над остальными: до пяти дел, которые обязан сделать сегодня.
   const nav = Object.entries(VIEWS).map(([k, v]) => {
     const n = v.count ? v.count() : 0;
+    if (k === 'now') {
+      return el('div', { class: 'nav-now' }, navItem('#/now', tint(icon(v.icon), v.color), v.title, null, r.kind === k,
+        el('span', { class: 'now-meter' + (n >= NOW_MAX ? ' full' : '') }, `${n} из ${NOW_MAX}`)));
+    }
     const badge = k === 'new' && n ? el('span', { class: 'badge-new' }, n) : null;
-    return navItem('#/' + k, tint(icon(v.icon), v.color), v.title, k === 'new' ? null : n, r.kind === k, badge);
+    return navItem('#/' + k, tint(icon(v.icon), v.color), v.title, k === 'new' ? null : n, r.kind === k, badge, v.hot && v.hot());
   });
 
   // Проекты: избранные сверху, дальше по видам; число открытых и точка просрочки.
@@ -367,11 +374,13 @@ function renderSide(r) {
   for (const [kind, title] of Object.entries(KIND)) {
     groups.push(group('k-' + kind, title, live.filter((p) => p.kind === kind && !S.favs.includes(p.id)).map(projItem)));
   }
-  // Люди: с кем больше всего открытых дел.
-  const byPerson = new Map();
-  for (const t of all()) if (isOpen(t) && t.person_id) byPerson.set(t.person_id, (byPerson.get(t.person_id) || 0) + 1);
-  const people = [...byPerson.entries()].sort((a, b) => b[1] - a[1]).map(([id, n]) => [person(id), n]).filter(([p]) => p);
-  groups.push(group('people', 'Люди', people.map(([p, n]) => navItem('#/h/' + p.id, avatar(p), personName(p), n, r.kind === 'person' && r.id === p.id))));
+  // Люди: с кем больше всего открытых дел. С CRM — отдельная страница «Люди» по компаниям.
+  if (!crmOn()) {
+    const byPerson = new Map();
+    for (const t of all()) if (isOpen(t) && t.person_id) byPerson.set(t.person_id, (byPerson.get(t.person_id) || 0) + 1);
+    const people = [...byPerson.entries()].sort((a, b) => b[1] - a[1]).map(([id, n]) => [person(id), n]).filter(([p]) => p);
+    groups.push(group('people', 'Люди', people.map(([p, n]) => navItem('#/h/' + p.id, avatar(p), personName(p), n, r.kind === 'person' && r.id === p.id))));
+  }
   const archived = [...S.projects.values()].filter((p) => p.archived_at).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   if (S.closed.arch === undefined) S.closed.arch = true;
   groups.push(group('arch', 'Архив', archived.map(projItem)));
@@ -385,7 +394,7 @@ function renderSide(r) {
     el('div', { class: 'side-foot' },
       el('button', { class: 'settings-btn' + (r.kind === 'settings' ? ' on' : ''), onclick: () => go('#/settings') }, icon('gear', 14), 'Настройки'),
       el('button', { onclick: async () => { await api('/auth/logout', {}); location.reload(); } }, 'Выйти')),
-    el('div', { class: 'side-keys' }, el('span', { class: 'kbd' }, 'n'), ' новое · ', el('span', { class: 'kbd' }, '/'), ' поиск'));
+    el('div', { class: 'side-keys' }, el('span', { class: 'kbd' }, 'n'), ' сказать Claude · ', el('span', { class: 'kbd' }, '/'), ' поиск'));
 }
 
 // ── Основная колонка ────────────────────────────────────────────────────
@@ -395,8 +404,9 @@ function headIcon() {
   const v = VIEWS[r.kind] || CRM_VIEWS[r.kind];
   const box = (name, c) => tint(el('span', { class: 'h-ico' }, icon(name, 18)), c);
   if (v) return box(v.icon, v.color);
-  if (r.kind === 'project' && project(r.id)) return box('folder', hueOf(r.id));
+  if (r.kind === 'project' && project(r.id)) return box(project(r.id).kind === 'client' ? 'building' : 'folder', hueOf(r.id));
   if (r.kind === 'person' && person(r.id)) return avatar(person(r.id), 'big');
+  if (r.kind === 'deal' && S.deals.get(r.id)) return box('funnel', hueOf(S.deals.get(r.id).project_id));
   if (r.kind === 'search') return box('search', '#9aa3b2');
   if (r.kind === 'settings') return box('gear', '#9aa3b2');
   if (r.kind === 'stats') return box('chart', '#7c9cff');
@@ -425,6 +435,7 @@ function renderMain(r) {
   S.sugOrder = []; // предложения «Нового» в порядке экрана: П1, П2… — так их видит и Claude
   if (r.kind === 'project') return renderProject(r.id);
   if (r.kind === 'person') return renderPerson(r.id);
+  if (r.kind === 'deal') return renderDeal(r.id);
   if (r.kind === 'search') return renderSearch(r.q);
   if (r.kind === 'new') return renderNew(r.batch);
   if (r.kind === 'settings') return renderSettings();
@@ -432,43 +443,63 @@ function renderMain(r) {
   if (r.kind === 'week') return renderWeek();
   if (r.kind === 'crm') return renderPipeline();
   if (r.kind === 'clients') return renderClients();
+  if (r.kind === 'people') return renderPeople();
   if (r.kind === 'ties') return renderTies();
   if (r.kind === 'money') return renderMoney();
-  const v = VIEWS[r.kind];
-  if (r.kind === 'morning') {
-    const secs = v.sections();
-    const body = el('div', { class: 'body' }, quickAdd({}),
-      secs.map(([t, items, ic, c]) => (items.length ? groupBox(t, items.sort(sortTasks), { lead: tint(icon(ic, 14), c) }) : null)));
-    if (!secs.some(([, i]) => i.length)) body.append(el('div', { class: 'empty' }, 'На сегодня пусто. Загляни в «Предстоящее».'));
-    const n = pendingSugs().length, self = autoClosed(1).length;
-    return [head('Утро', [D.long(S.today), n ? el('a', { class: 'link', href: '#/new' }, `в «Новом» ждут решения: ${n}`) : null,
-      self ? el('a', { class: 'link', href: '#/new' }, `закрылось само за сутки: ${self}`) : null]), body];
-  }
+  if (r.kind === 'now') return renderNow();
   if (r.kind === 'upcoming') {
     let items = openMine();
     if (S.upMineOnly) items = items.filter((t) => t.ball === 'mine');
     if (!S.upNoDate) items = items.filter((t) => t.due_date);
+    const late = items.filter(isLate).length;
     const tb = el('div', { class: 'toolbar' },
       el('button', { class: 'chip-btn' + (S.upMineOnly ? ' on' : ''), onclick: () => { S.upMineOnly = !S.upMineOnly; render(); } }, 'Только мяч у меня'),
       el('button', { class: 'chip-btn' + (S.upNoDate ? ' on' : ''), onclick: () => { S.upNoDate = !S.upNoDate; render(); } }, 'И без даты'));
-    return [head('Предстоящее', [plural(items.length, 'дело', 'дела', 'дел')]),
-      el('div', { class: 'body' }, tb, quickAdd({}), items.length ? grouped(items, 'date') : el('div', { class: 'empty' }, 'Впереди пусто.'))];
+    // Просроченное — первой группой (ключ «0late» в grouped): «в предстоящих сверху — просроченные».
+    return [head('Предстоящее', [plural(items.length, 'дело', 'дела', 'дел'), late ? el('span', { class: 'late' }, 'просрочено: ' + late) : null]),
+      el('div', { class: 'body' }, quickAdd({}, { placeholder: 'Скажи, что сделать с этими делами: «КП Альфе — этого уже нет, убирай», «все просроченные — на пятницу»' }),
+        tb, items.length ? grouped(items, 'date') : el('div', { class: 'empty' }, 'Впереди пусто.'))];
   }
   if (r.kind === 'waiting') {
     const items = openMine().filter((t) => t.ball === 'waiting');
-    return [head('Жду', ['что должны другие — по людям, с давностью']),
-      el('div', { class: 'body' }, quickAdd({}), items.length ? grouped(items, 'person') : el('div', { class: 'empty' }, 'Ни от кого ничего не ждём.'))];
+    const due = items.filter(nudgeDue).sort(sortTasks);
+    const rest = items.filter((t) => !nudgeDue(t));
+    return [head('Жду', ['что должны другие — по людям, с давностью', due.length ? el('span', { class: 'late' }, 'пора напомнить: ' + due.length) : null]),
+      el('div', { class: 'body' }, quickAdd({}, { placeholder: 'Скажи, что сделать: «Ивану напомнил, жду до пятницы», «модель пришла — закрой»' }),
+        due.length ? groupBox('Пора напомнить', due, { lead: tint(icon('hourglass', 14), 'var(--waiting)'), late: true }) : null,
+        rest.length ? grouped(rest, 'person') : null,
+        !items.length ? el('div', { class: 'empty' }, 'Ни от кого ничего не ждём.') : null)];
   }
-  if (r.kind === 'inbox' || r.kind === 'all') {
-    const key = r.kind;
-    const [picker, g] = groupPicker(key, key === 'all' ? 'project' : 'date', GROUPS);
-    let items = all().filter((t) => isMine(t) && inSphere(t) && (S.showDone || isOpen(t)));
-    if (key === 'inbox') items = items.filter((t) => !t.project_id);
+  if (r.kind === 'all') {
+    const [picker, g] = groupPicker('all', 'project', GROUPS);
+    const items = all().filter((t) => isMine(t) && inSphere(t) && (S.showDone || isOpen(t)));
     const tb = el('div', { class: 'toolbar' }, picker, doneToggle());
-    return [head(v.title, [plural(items.filter(isOpen).length, 'открытое', 'открытых', 'открытых')]),
-      el('div', { class: 'body' }, tb, quickAdd({}), items.length ? grouped(items, g) : el('div', { class: 'empty' }, 'Пусто.'))];
+    return [head(VIEWS.all.title, [plural(items.filter(isOpen).length, 'открытое', 'открытых', 'открытых')]),
+      el('div', { class: 'body' }, quickAdd({}), tb, items.length ? grouped(items, g) : el('div', { class: 'empty' }, 'Пусто.'))];
   }
   return [head('Дела'), el('div', { class: 'body' })];
+}
+
+/** «Сейчас»: до пяти дел, которые обязан сделать сегодня, — сначала они, потом всё остальное.
+ *  Они же — наверху Засечки на телефоне (ZasechkaTasks.shortlist: «сейчас» — сразу после идущего). */
+function renderNow() {
+  const m = openMine();
+  const now = nowTasks().sort(sortTasks);
+  const left = NOW_MAX - now.length;
+  const pick = m.filter((t) => !isNow(t) && t.ball === 'mine' && t.due_date && t.due_date <= S.today);
+  const next = m.filter((t) => !isNow(t) && t.ball === 'mine' && t.due_date === D.add(S.today, 1));
+  const n = newCount();
+  const sub = [D.long(S.today), el('span', { class: left ? '' : 'today' }, `в «Сейчас» ${now.length} из ${NOW_MAX}`),
+    n ? el('a', { class: 'link', href: '#/new' }, `в «Новом» ждут: ${n}`) : null];
+  const bolt = (c) => tint(icon('bolt', 14), c);
+  return [head('Сейчас', sub),
+    el('div', { class: 'body' },
+      quickAdd({}, { placeholder: 'Скажи, что сделать: «сверку Наташе — первым делом», «звонок Ивану убери из сейчас»' }),
+      now.length ? groupBox('Сделать сегодня', now, { lead: bolt('var(--now)') })
+        : el('div', { class: 'empty' }, `Выбери на сегодня до ${NOW_MAX} дел — молния слева у дела. Сначала они, потом всё остальное.`),
+      pick.length ? groupBox(left > 0 ? `Выбрать на сегодня: просрочено и на сегодня` : 'Ещё на сегодня и просрочено', pick.sort(sortTasks),
+        { lead: tint(icon('date', 14), '#f2706a'), late: pick.some(isLate) }) : null,
+      next.length && left > 0 ? groupBox('Завтра — если останется время', next.sort(sortTasks), { lead: tint(icon('cal', 14), 'var(--muted)') }) : null)];
 }
 
 const doneToggle = () => el('button', { class: 'chip-btn' + (S.showDone ? ' on' : ''), onclick: () => { S.showDone = !S.showDone; render(); } }, 'Сделанные');
@@ -498,7 +529,7 @@ function grouped(items, by) {
       }
     } else if (by === 'project') {
       const p = project(t.project_id);
-      put(p ? '1' + p.name : '0', p ? p.name : 'Входящие', t, { href: p ? '#/p/' + p.id : '#/inbox', lead: () => (p ? dot(p.id) : tint(icon('tray', 14), VIEWS.inbox.color)) });
+      put(p ? '1' + p.name : '0', p ? p.name : 'Без проекта', t, { href: p ? '#/p/' + p.id : '#/new', lead: () => (p ? dot(p.id) : tint(icon('tray', 14), NO_PROJECT.color)) });
     } else if (by === 'person') {
       const p = person(t.person_id);
       put(p ? '1' + personName(p) : '2', p ? personName(p) : 'Без человека', t, { href: p ? '#/h/' + p.id : null, lead: p ? () => avatar(p) : null });
@@ -516,14 +547,29 @@ function groupBox(title, items, opts = {}, by) {
   const lead = typeof opts.lead === 'function' ? opts.lead() : opts.lead;
   const h = title ? el('h2', { class: opts.late ? 'late' : '' }, lead || null,
     opts.href ? el('a', { class: 'link', href: opts.href }, title) : title, el('span', { class: 'n' }, items.length),
-    opts.late && items.length > 1 ? el('span', { class: 'act' },
+    opts.sub ? el('span', { class: 'gsub' }, opts.sub) : null,
+    opts.act ? el('span', { class: 'act' }, opts.act) : opts.late && items.length > 1 ? el('span', { class: 'act' },
       el('button', { class: 'chip-btn', onclick: (e) => reschedulePop(e.currentTarget, items.map((t) => t.id)) }, 'Перенести все')) : null) : null;
-  return el('div', { class: 'group' }, h, items.map((t) => taskRow(t, by)));
+  return el('div', { class: 'group' + (opts.cls ? ' ' + opts.cls : '') }, h, opts.before || null, items.map((t) => taskRow(t, by, opts.chips && opts.chips(t))));
+}
+
+/** «Сейчас» — не больше пяти: шестое не встаёт, пока не убрал одно (владелец, 06.10.2026). */
+function nowRoom(ids) {
+  const have = new Set(nowTasks().map((t) => t.id));
+  const add = ids.filter((id) => !have.has(id)).length;
+  if (have.size + add <= NOW_MAX) return true;
+  toast(`В «Сейчас» уже ${have.size} из ${NOW_MAX}` + (add > 1 ? ` — влезет ещё ${Math.max(0, NOW_MAX - have.size)}` : ' — сначала убери одно'));
+  return false;
+}
+function toggleNow(t) {
+  if (isNow(t)) { setFields([t.id], { focus_on: null }); return; }
+  if (nowRoom([t.id])) setFields([t.id], { focus_on: S.today });
 }
 
 // Строка дела. Слева — выбор, «Сейчас» и галка: их места заняты всегда, при наведении они только
 // проявляются, поэтому строка не прыгает. Номер — справа, бледно: на него ссылаются, но читать не мешает.
-function taskRow(t, by) {
+// extra — подписи от места, где строка стоит («Новое»: откуда пришло, что сказала автоматика).
+function taskRow(t, by, extra) {
   S.order.push(t.id);
   const p = project(t.project_id);
   const who = person(t.person_id);
@@ -535,11 +581,13 @@ function taskRow(t, by) {
   if (due && (by !== 'date' || due.cls === 'late')) chips.push(m(due.cls, 'date', due.text));
   const rem = remindChip(t);
   if (rem) chips.push(m('remind', null, rem));
-  if (by !== 'project' && route().kind !== 'project') {
-    chips.push(p ? el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, dot(p.id), p.name) : m('', 'tray', 'Входящие'));
+  if (by !== 'project' && !['project', 'deal'].includes(route().kind)) {
+    // Без проекта — не тупик, а вопрос: щелчок — выбрать проект.
+    chips.push(p ? el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, dot(p.id), p.name)
+      : el('button', { class: 'm noproj', title: 'Выбрать проект', onclick: (e) => { stop(e); projectPop(e.currentTarget, [t.id]); } }, icon('tray', 12), 'без проекта'));
   }
   const dl = t.deal_id ? S.deals.get(t.deal_id) : null;
-  if (dl && by !== 'deal') chips.push(m('', 'funnel', dl.name));
+  if (dl && by !== 'deal' && route().kind !== 'deal') chips.push(el('a', { class: 'm link', href: '#/d/' + dl.id, onclick: stop }, icon('funnel', 12), dl.name));
   if (t.ball !== 'mine' && by !== 'ball') {
     chips.push(m('ball-' + t.ball, t.ball === 'waiting' ? 'hourglass' : 'chat',
       BALL[t.ball] + (who ? ' ' + personName(who) : '') + (t.ball === 'waiting' && t.waiting_since ? ' · ' + D.diff(S.today, t.waiting_since) + ' дн.' : '')));
@@ -548,6 +596,7 @@ function taskRow(t, by) {
   }
   if (t.estimate_min) chips.push(m('', 'clock', t.estimate_min + ' мин'));
   for (const l of t.labels || []) chips.push(el('span', { class: 'tag' }, l));
+  if (extra) chips.push(...[].concat(extra).filter(Boolean));
   const pick = el('input', { type: 'checkbox', class: 'pick', title: 'Выбрать (Shift — диапазон)' });
   pick.checked = S.sel.has(t.id);
   pick.addEventListener('click', (e) => { e.stopPropagation(); togglePick(t.id, e.shiftKey); });
@@ -558,8 +607,8 @@ function taskRow(t, by) {
   },
   pick,
   el('div', { class: 'lead' },
-    el('button', { class: 'now-btn' + (now ? ' on' : ''), title: now ? 'Убрать из «Сейчас»' : 'В «Сейчас» — на сегодня',
-      onclick: (e) => { e.stopPropagation(); setFields([t.id], { focus_on: now ? null : S.today }); } }, icon('bolt', 15)),
+    el('button', { class: 'now-btn' + (now ? ' on' : ''), title: now ? 'Убрать из «Сейчас»' : `В «Сейчас» — сделать сегодня (до ${NOW_MAX} дел)`,
+      onclick: (e) => { e.stopPropagation(); toggleNow(t); } }, icon('bolt', 15)),
     el('button', { class: 'mic-btn' + (S.askTask === t.id ? ' on' : ''), title: 'Сказать Claude, что сделать с этим делом',
       onclick: (e) => { e.stopPropagation(); if (S.askTask === t.id && rec) stopListening(); else openAsk(t); } }, icon('mic', 14))),
   el('button', { class: 'tick' + (isOpen(t) ? '' : ' done'), title: isOpen(t) ? 'Сделано' : 'Вернуть', onclick: (e) => { e.stopPropagation(); toggleDone([t]); } }),
@@ -671,7 +720,7 @@ function reschedulePop(anchor, ids) {
 function projectPop(anchor, ids) {
   setTimeout(() => {
     const live = [...S.projects.values()].filter((p) => !p.archived_at).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-    popAt(anchor, [el('button', { onclick: () => { closePop(); setFields(ids, { project_id: null, deal_id: null }, 'Во «Входящие»'); } }, 'Входящие'),
+    popAt(anchor, [el('button', { onclick: () => { closePop(); setFields(ids, { project_id: null, deal_id: null }, 'Без проекта'); } }, 'Без проекта'),
       ...live.map((p) => el('button', { onclick: () => { closePop(); setFields(ids, { project_id: p.id, deal_id: null }, 'В проект ' + p.name); } }, p.name))]);
   }, 0);
 }
@@ -695,7 +744,7 @@ function renderBulk() {
     el('button', { onclick: () => toggleDone(ids.map((id) => S.tasks.get(id))) }, 'Сделано'),
     el('button', { onclick: (e) => reschedulePop(e.currentTarget, ids) }, 'Перенести'),
     el('button', { onclick: (e) => projectPop(e.currentTarget, ids) }, 'В проект'),
-    el('button', { onclick: () => setFields(ids, { focus_on: S.today }, 'В «Сейчас»') }, 'В «Сейчас»'),
+    el('button', { onclick: () => nowRoom(ids) && setFields(ids, { focus_on: S.today }, 'В «Сейчас»') }, 'В «Сейчас»'),
     el('button', {
       onclick: async () => {
         if (!confirm(`Отменить ${plural(ids.length, 'дело', 'дела', 'дел')}? Они останутся в журнале.`)) return;
@@ -845,19 +894,22 @@ function claudeIcon(size = 18) {
   return svg;
 }
 
-// ── Быстрый ввод: «+» — одно дело с разметкой, Claude — разбор текста на дела ──
-// toClaude: Enter отдаёт Claude, а не заводит дело («Новое»: там пишут «первое прими», и это не дело).
-function quickAdd(defaults, { toClaude = false, placeholder = null } = {}) {
+// ── Строка «Скажи, что сделать» — наверху каждой страницы ───────────────
+// Владелец, 06.10.2026: «везде должен быть сверху красивый текстбокс… скажи, что сделать с этим делом,
+// с этим клиентом — я наговариваю, и он внутри всё правит». Enter, звёздочка и микрофон — Claude: он
+// видит дела на экране (в карточке клиента, сделки, человека — и саму карточку, это Opus), правит их,
+// заводит новые, в «Новом» решает предложения. «+» слева — одно дело как написано, с разметкой.
+// label — о чём строка («с клиентом «Альфа»»), placeholder — пример команды для этой страницы.
+function quickAdd(defaults, { placeholder = null, label = null } = {}) {
   const busy = !!S.parse;
   const input = el('textarea', { id: 'quick', rows: 1, autocomplete: 'off', disabled: busy,
-    placeholder: placeholder || 'Новое дело — Enter. Claude (звёздочка или микрофон): «все просроченные — на завтра», надиктовка' });
+    placeholder: placeholder || 'Скажи или напиши: «все просроченные — на пятницу», «Ивану позвонить завтра», надиктовка целиком' });
   if (busy) input.value = S.parse.text;
   else if (S.quickDraft) { input.value = S.quickDraft; S.quickDraft = null; }
   const preview = el('div', { class: 'preview' });
   const help = el('div', { class: 'help hidden' },
-    toClaude ? 'Enter, звёздочка или микрофон — Claude: примет, отклонит или поправит предложения на экране · «+» — одно дело · Shift+Enter — новая строка · '
-      : 'Enter — одно дело · звёздочка, Ctrl+Enter или микрофон — Claude: поправит дела на экране или заведёт новые · Shift+Enter — новая строка · ',
-    '+проект  @человек  *метка  !жду  !повестка  !сейчас  !хочу  !15м · сегодня, завтра, в пятницу, через 3 дня, 12.10 · «в кавычках» — без разбора');
+    'Enter, звёздочка или микрофон — Claude · Shift+Enter — новая строка · «+» слева — одно дело как написано: ',
+    '+проект  @человек  *метка  !жду  !повестка  !сейчас  !хочу  !15м · сегодня, завтра, в пятницу, 12.10');
   const status = busy ? el('div', { class: 'claude-status' }, 'Claude думает… Можно уходить на другие страницы — изменения появятся сами.')
     : rec && S.listenQuick ? el('div', { class: 'claude-status listening' }, 'Слушаю… замолчишь — отдам Claude. Нажми микрофон ещё раз, чтобы закончить сразу.') : null;
   const ac = el('div', { class: 'ac hidden' });
@@ -890,7 +942,8 @@ function quickAdd(defaults, { toClaude = false, placeholder = null } = {}) {
   };
   const update = () => {
     const p = parseQuick(input.value, defaults);
-    preview.replaceChildren(...p.tags.map((t) => el('span', {}, t)));
+    // Как «+» поймёт разметку — только если она есть: Claude читает текст сам.
+    preview.replaceChildren(...(p.tags.length ? [el('span', { class: 'pv-h' }, '«+» запишет:'), ...p.tags.map((t) => el('span', {}, t))] : []));
     help.classList.toggle('hidden', !input.value);
     grow();
     updateAc();
@@ -912,6 +965,7 @@ function quickAdd(defaults, { toClaude = false, placeholder = null } = {}) {
     if (!input.value.trim()) { input.focus(); return; }
     const p = parseQuick(input.value.replace(/\s*\n\s*/g, ' '), defaults);
     if (!p.title) { toast('Нужно название'); return; }
+    if (p.set.focus_on && !nowRoom(['new'])) return;
     try {
       const r = await op1({ op: 'task.create', task: { ...p.set, title: p.title, source: 'web' } });
       input.value = '';
@@ -936,16 +990,13 @@ function quickAdd(defaults, { toClaude = false, placeholder = null } = {}) {
     if (e.key === 'Escape') { input.value = ''; update(); input.blur(); e.stopPropagation(); return; }
     if (e.key !== 'Enter' || e.shiftKey) return;
     e.preventDefault();
-    // Ctrl+Enter — Claude; несколько строк — тоже ему: одно дело из абзаца не выйдет.
-    if (toClaude || e.ctrlKey || e.metaKey || input.value.trim().includes('\n')) claudeParse(input, defaults);
-    else addOne();
+    if (e.altKey) addOne(); // Alt+Enter — одно дело, как «+»
+    else claudeParse(input, defaults);
   });
 
-  const plusBtn = el('button', { type: 'button', class: 'q-btn plus', title: 'Записать одно дело' + (toClaude ? '' : ' (Enter)'), disabled: busy, onclick: addOne }, '+');
+  const plusBtn = el('button', { type: 'button', class: 'q-btn plus', title: 'Записать одно дело как написано, без Claude (Alt+Enter)', disabled: busy, onclick: addOne }, '+');
   const claudeBtn = el('button', { type: 'button', class: 'q-btn claude-btn' + (busy ? ' busy' : ''), disabled: busy,
-    title: !S.me.claude ? 'Claude на сервере ещё не настроен'
-      : toClaude ? 'Claude: принять, отклонить или поправить предложения на экране (Enter)'
-        : 'Claude: поправить дела на экране или разобрать текст на новые дела (Ctrl+Enter)',
+    title: !S.me.claude ? 'Claude на сервере ещё не настроен' : 'Отдать Claude (Enter)',
     onclick: () => claudeParse(input, defaults) }, claudeIcon());
   // Микрофон: сказанное дописывается в поле и, когда человек замолчал, уходит Claude.
   const hearing = !!(rec && S.listenQuick);
@@ -969,7 +1020,12 @@ function quickAdd(defaults, { toClaude = false, placeholder = null } = {}) {
       render();
     } }, icon('mic', 17));
   if (input.value) setTimeout(grow);
-  return el('div', { class: 'quick' },
+  const card = pageScope(defaults).card;
+  const say = el('label', { class: 'say-h', for: 'quick' }, claudeIcon(15),
+    el('span', {}, 'Скажи, что сделать ' + (label || 'с этими делами')),
+    card ? el('span', { class: 'say-model', title: 'В карточке Claude видит её целиком: сделки, людей, хронологию — и правит их' }, 'Opus · видит карточку') : null);
+  return el('div', { class: 'quick say' },
+    say,
     el('div', { class: 'quick-wrap' }, el('div', { class: 'quick-box' + (busy ? ' busy' : '') + (hearing ? ' hearing' : '') }, plusBtn, input, micBtn, claudeBtn), ac),
     status, preview, help);
 }
@@ -1025,13 +1081,19 @@ async function runJob(path, body) {
 function pageScope(defaults = {}) {
   const r = route();
   const p = r.kind === 'project' ? project(r.id) : null, h = r.kind === 'person' ? person(r.id) : null;
+  const dl = r.kind === 'deal' ? S.deals.get(r.id) : null;
   const one = r.kind === 'new' && r.batch ? pendingSugs().find((s) => s.batch_ref === r.batch) : null;
-  const title = p ? `${KIND[p.kind] || 'Проект'}: ${p.name}` : h ? `Человек: ${h.name}` : r.kind === 'search' ? `Поиск: ${r.q}`
-    : r.kind === 'new' && r.batch ? `Новое: одна пачка — ${one?.batch_title || r.batch}`
-      : (VIEWS[r.kind] || CRM_VIEWS[r.kind] || { title: 'Дела' }).title;
+  const title = p ? `${KIND[p.kind] || 'Проект'}: ${p.name}` : h ? `Человек: ${h.name}` : dl ? `Сделка: ${dl.name}`
+    : r.kind === 'search' ? `Поиск: ${r.q}`
+      : r.kind === 'new' && r.batch ? `Новое: одна пачка — ${one?.batch_title || r.batch}`
+        : (VIEWS[r.kind] || CRM_VIEWS[r.kind] || { title: 'Дела' }).title;
   const scope = { title, task_ids: [...new Set(S.order)].slice(0, 300) };
   if (r.kind === 'new') scope.suggestion_ids = S.sugOrder.slice(0, 150);
-  for (const k of ['project_id', 'person_id']) if (defaults[k]) scope[k] = defaults[k];
+  for (const k of ['project_id', 'person_id', 'deal_id']) if (defaults[k]) scope[k] = defaults[k];
+  // Карточка: Claude (Opus) видит её целиком и правит хронологию, людей и сделки, не только дела.
+  if (crmOn() && p && p.kind === 'client') Object.assign(scope, { card: 'client', project_id: p.id });
+  if (crmOn() && h) Object.assign(scope, { card: 'person', person_id: h.id });
+  if (crmOn() && dl) Object.assign(scope, { card: 'deal', deal_id: dl.id, project_id: dl.project_id });
   return scope;
 }
 
@@ -1046,6 +1108,7 @@ async function claudeParse(input, defaults) {
   try {
     const d = await runJob('/api/ask', { text, scope });
     S.parse = null;
+    crmDirty(); // карточку (хронологию, людей, сделки) Claude мог поправить на сервере
     for (const t of d.tasks || []) S.tasks.set(t.id, t);
     await sync().catch(() => {});
     render();
@@ -1120,7 +1183,7 @@ function describe(c) {
   if ('due_date' in a) out.push(a.due_date ? 'срок ' + D.ddmm(a.due_date) + (a.due_time ? ' ' + a.due_time : '') : 'без срока');
   else if ('due_time' in a) out.push(a.due_time ? 'время ' + a.due_time : 'без времени');
   if ('focus_on' in a) out.push(a.focus_on ? 'в «Сейчас»' : 'из «Сейчас»');
-  if ('project_id' in a) out.push(a.project_id ? 'проект ' + (project(a.project_id)?.name || '?') : 'во «Входящие»');
+  if ('project_id' in a) out.push(a.project_id ? 'проект ' + (project(a.project_id)?.name || '?') : 'без проекта');
   if (a.deal_id) out.push('сделка ' + (S.deals.get(a.deal_id)?.name || '?'));
   if ('ball' in a || 'person_id' in a) {
     const who = 'person_id' in a ? personName(person(a.person_id)) : '';
@@ -1143,7 +1206,7 @@ const DECIDED = { create: 'заведено', close: 'закрыто', update: '
  *  как было), отклонённое — нет: оно остаётся отклонённым вместе с причиной. */
 function askResult(d) {
   document.querySelectorAll('.claude-result').forEach((x) => x.remove());
-  const changed = d.changed || [], made = d.tasks || [], decided = d.decided || [];
+  const changed = d.changed || [], made = d.tasks || [], decided = d.decided || [], crm = d.crm || [];
   const took = decided.filter((x) => x.decision === 'accept' && x.id);
   const dropped = decided.filter((x) => x.decision === 'reject');
   const box = el('div', { class: 'claude-result', role: 'status' });
@@ -1155,11 +1218,13 @@ function askResult(d) {
       if (c.status) back.push({ op: { open: 'task.reopen', done: 'task.done', cancelled: 'task.cancel' }[c.status[0]], id: c.id });
     }
     for (const t of [...made, ...took.filter((x) => x.created)]) back.push({ op: 'task.cancel', id: t.id });
+    for (const c of crm) back.push(...(c.undo || [])); // карточка: хронология, люди, сделки — как было
     try { if (back.length) await ops(back); close(); render(); toast('Вернул как было'); } catch (e) { fail(e); }
   };
-  const nTasks = changed.length + made.length, n = nTasks + decided.length, back = nTasks + took.length;
+  const nTasks = changed.length + made.length, n = nTasks + decided.length + crm.length;
+  const back = nTasks + took.length + crm.filter((c) => (c.undo || []).length).length;
   const what = [decided.length ? plural(decided.length, 'предложение', 'предложения', 'предложений') : null,
-    nTasks ? plural(nTasks, 'дело', 'дела', 'дел') : null].filter(Boolean).join(', ');
+    nTasks ? plural(nTasks, 'дело', 'дела', 'дел') : null, crm.length ? 'карточка: ' + crm.length : null].filter(Boolean).join(', ');
   // Предложение словами — как в «Новом», пока оно есть у веба; иначе — как его видел Claude.
   const sugTitle = (x) => (S.sugs.get(x.sid) ? sugText(S.sugs.get(x.sid)).title : x.what);
   box.append(...[
@@ -1176,6 +1241,8 @@ function askResult(d) {
       el('div', {}, `#${c.num} ${c.after?.title || c.title}`), el('div', { class: 'cr-meta' }, describe(c)))),
     made.length ? el('div', { class: 'cr-sub' }, 'Новые:') : null,
     made.map((t) => el('button', { class: 'cr-task', onclick: () => openCard(t.id) }, el('div', {}, '#' + t.num + ' ' + t.title))),
+    crm.length ? el('div', { class: 'cr-sub' }, 'В карточке:') : null,
+    crm.map((c) => el('div', { class: 'cr-note' }, c.what)),
     d.errors && d.errors.length ? el('div', { class: 'cr-err' }, 'Не вышло: ' + d.errors.join('; ')) : null,
     el('div', { class: 'cr-acts' },
       back ? el('button', { onclick: undo, title: dropped.length ? 'Отклонённое остаётся отклонённым — вернуть его нельзя' : '' },
@@ -1241,15 +1308,74 @@ function renderProject(id) {
     const c = clientBlock(p);
     sub.push(...c.info);
     return [head(p.name, sub, star),
-      el('div', { class: 'body' }, c.dealBox, c.peopleBox, c.tabs,
+      el('div', { class: 'body' },
+        quickAdd({ project_id: id }, { label: `с клиентом «${p.name}»`,
+          placeholder: '«Иван — их CFO, отправили ему сегодня», «КП уже нет — закрой сделку», «созвонились, ждут модель к пятнице»' }),
+        c.dealBox, c.peopleBox, c.tabs,
         c.timeline || [el('div', { class: 'toolbar' }, picker, doneToggle()),
-          quickAdd({ project_id: id, ...(S.dealFilter ? { deal_id: S.dealFilter } : {}) }),
-          items.length ? grouped(items, g) : el('div', { class: 'empty' }, 'Дел нет. Следующий шаг — в строке выше.')])];
+          items.length ? grouped(items, g) : el('div', { class: 'empty' }, 'Дел нет. Следующий шаг — скажи в строке выше.')])];
   }
   return [head(p.name, sub, star),
-    el('div', { class: 'body' }, dealBox, el('div', { class: 'toolbar' }, picker, doneToggle()),
-      quickAdd({ project_id: id, ...(S.dealFilter ? { deal_id: S.dealFilter } : {}) }),
-      items.length ? grouped(items, g) : el('div', { class: 'empty' }, 'Дел нет. Следующий шаг — в строке выше.'))];
+    el('div', { class: 'body' },
+      quickAdd({ project_id: id, ...(S.dealFilter ? { deal_id: S.dealFilter } : {}) }, { label: `с проектом «${p.name}»` }),
+      dealBox, el('div', { class: 'toolbar' }, picker, doneToggle()),
+      items.length ? grouped(items, g) : el('div', { class: 'empty' }, 'Дел нет. Следующий шаг — скажи в строке выше.'))];
+}
+
+// ── Люди плашками: круглые, с крестиком; щелчок — откуда он и должность ──
+/** Организации для «откуда он»: клиенты (по имени проекта) и остальные компании. */
+function orgChoices() {
+  const byOrg = new Map();
+  for (const p of S.projects.values()) if (p.kind === 'client' && p.org_id && !p.archived_at) byOrg.set(p.org_id, p.name);
+  const clients = [...byOrg.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  const other = [...S.orgs.values()].filter((o) => !o.archived_at && !byOrg.has(o.id)).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  return { clients, other };
+}
+/** Как называть организацию человека: клиентом, если она чья-то, иначе своим именем. */
+function orgLabel(orgId) {
+  if (!orgId) return null;
+  const c = [...S.projects.values()].find((p) => p.kind === 'client' && p.org_id === orgId);
+  return c ? { name: c.name, href: '#/p/' + c.id } : S.orgs.get(orgId) ? { name: S.orgs.get(orgId).name, href: null } : null;
+}
+async function personSet(x, set, msg) {
+  const before = Object.fromEntries(Object.keys(set).map((k) => [k, x[k] ?? null]));
+  try { await op1({ op: 'person.set', id: x.id, set }); render(); toast(msg, () => op1({ op: 'person.set', id: x.id, set: before })); } catch (e) { fail(e); }
+}
+function personPop(anchor, x) {
+  setTimeout(() => {
+    const { clients, other } = orgChoices();
+    const sel = el('select', {}, el('option', { value: '' }, '— ни откуда —'),
+      el('optgroup', { label: 'Клиенты' }, clients.map((o) => el('option', { value: o.id, selected: x.org_id === o.id }, o.name))),
+      other.length ? el('optgroup', { label: 'Другие компании' }, other.map((o) => el('option', { value: o.id, selected: x.org_id === o.id }, o.name))) : null);
+    sel.addEventListener('change', () => { closePop(); personSet(x, { org_id: sel.value || null }, `${personName(x)}: ` + (sel.value ? 'откуда — ' + orgLabel(sel.value)?.name : 'без компании')); });
+    const role = el('input', { value: x.role || '', placeholder: 'должность: CFO, партнёр…' });
+    role.addEventListener('keydown', (e) => { if (e.key === 'Enter') { closePop(); personSet(x, { role: role.value.trim() || null }, `${personName(x)}: ` + (role.value.trim() || 'без должности')); } });
+    popAt(anchor, [el('div', { class: 'pop-h' }, x.name), el('div', { class: 'pop-l' }, 'Откуда он'), sel,
+      el('div', { class: 'pop-l' }, 'Должность (Enter)'), role,
+      el('div', { class: 'sep' }), el('button', { onclick: () => { closePop(); go('#/h/' + x.id); } }, 'Открыть карточку', el('span', { class: 'k' }, '→'))]);
+  }, 0);
+}
+/** Плашки людей: list — люди, remove(x) — убрать отсюда, add(anchor) — «+ человек». */
+function peopleChips(title, list, { remove, add, empty } = {}) {
+  return el('div', { class: 'pchips' }, el('span', { class: 'pc-label' }, title),
+    list.length ? list.map((x) => el('span', { class: 'pchip' },
+      el('button', { class: 'pc-main', title: 'Откуда он, должность', onclick: (e) => personPop(e.currentTarget, x) },
+        avatar(x), el('span', { class: 'pc-name' }, personName(x)), x.role ? el('span', { class: 'pc-role' }, x.role) : null),
+      remove ? el('button', { class: 'pc-x', title: 'Убрать отсюда', onclick: () => remove(x) }, icon('x', 11)) : null))
+      : el('span', { class: 'faint' }, empty || 'никого'),
+    add ? el('button', { class: 'pchip add', onclick: (e) => add(e.currentTarget) }, icon('plus', 12), 'человек') : null);
+}
+/** «+ человек»: выбрать из справочника или завести нового — pick(id) или create(name). */
+function addPersonPop(anchor, exclude, pick, create) {
+  setTimeout(() => {
+    const sel = el('select', {}, el('option', { value: '' }, 'выбрать…'),
+      livePeople().filter((x) => !exclude.includes(x.id)).sort((a, b) => personName(a).localeCompare(personName(b), 'ru'))
+        .map((x) => el('option', { value: x.id }, x.short && x.short !== x.name ? `${x.short} — ${x.name}` : x.name)));
+    sel.addEventListener('change', () => { if (sel.value) { closePop(); pick(sel.value); } });
+    const name = el('input', { placeholder: 'или новый: имя фамилия, Enter' });
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter' && name.value.trim()) { closePop(); create(name.value.trim()); } });
+    popAt(anchor, [el('div', { class: 'pop-h' }, 'Кто ещё'), sel, name]);
+  }, 0);
 }
 
 function renderPerson(id) {
@@ -1264,9 +1390,11 @@ function renderPerson(id) {
   ];
   const info = [];
   const row = (k, v) => { if (v) info.push(el('span', {}, k), el('span', {}, v)); };
-  row('Роль', p.role);
-  const org = p.org_id ? [...S.projects.values()].find((x) => x.org_id === p.org_id) : null;
-  if (org) info.push(el('span', {}, 'Клиент'), el('span', {}, el('a', { class: 'link', href: '#/p/' + org.id }, org.name)));
+  // Откуда он — плашкой: щелчок меняет компанию и должность.
+  const ol = orgLabel(p.org_id);
+  const whereBtn = el('button', { class: 'pchip where', title: 'Откуда он, должность', onclick: (e) => personPop(e.currentTarget, p) },
+    icon('building', 12), ol ? ol.name : 'откуда — не знаю', p.role ? el('span', { class: 'pc-role' }, p.role) : null);
+  info.push(el('span', {}, 'Откуда'), el('span', {}, whereBtn, ol && ol.href ? el('a', { class: 'link faint', href: ol.href }, ' карточка клиента →') : null));
   row('Телефон', (p.phones || []).join(', '));
   row('Почта', (p.emails || []).join(', '));
   row('Telegram', p.telegram_username ? '@' + p.telegram_username : null);
@@ -1274,8 +1402,10 @@ function renderPerson(id) {
   row('Как часто', { month: 'раз в месяц', quarter: 'раз в 2–3 месяца', year: 'раз в год', none: 'не видимся' }[p.cadence]);
   row('Ищет', p.seeks); row('Предлагает', p.offers); row('Характер', p.traits); row('Откуда', p.source); row('Заметка', p.note);
   return [head(p.name, p.short && p.short !== p.name ? ['в задачах — ' + p.short] : null),
-    el('div', { class: 'body' }, info.length ? el('div', { class: 'person-info' }, info) : null,
-      quickAdd({ person_id: id }),
+    el('div', { class: 'body' },
+      quickAdd({ person_id: id }, { label: `с человеком «${p.name}»`,
+        placeholder: '«он теперь CFO в Бете», «созвонились, пришлёт модель в пятницу», «жду от него договор»' }),
+      info.length ? el('div', { class: 'person-info' }, info) : null,
       secs.map(([t, items]) => (items.length ? groupBox(t, items.sort(sortTasks)) : null)),
       secs.every(([, i]) => !i.length) ? el('div', { class: 'empty' }, 'Открытых дел с ним нет.') : null,
       crmOn() && !p.user_id ? personCrmBlock(p) : null)];
@@ -1331,7 +1461,83 @@ const sugAt = (s) => (s.payload && s.payload.meeting_at) || s.created_at.slice(0
 // Пачка — одна встреча или одно окно дайджеста; значок — откуда она.
 const SRC = { meeting: ['mic', '#e57bd1'], telegram: ['send', '#38bdf8'], userbot: ['send', '#38bdf8'], mcp: ['chat', '#d97757'] };
 
-/** «Новое» пачками; batch — одна пачка по ссылке из уведомления Telegram. */
+// ── Наговорки в «Новом»: что сказал и куда что попало (сервер, вид dictations) ──
+const MSK_DAY = (iso) => msk(Date.parse(iso));
+function whenWords(iso) {
+  const { day, hm } = MSK_DAY(iso);
+  const n = D.diff(S.today, day);
+  return (n === 0 ? 'сегодня' : n === 1 ? 'вчера' : D.ddmm(day)) + ' ' + hm;
+}
+const SUG_FROM = { meeting: 'встреча', telegram: 'Telegram', userbot: 'Telegram', mcp: 'Claude' };
+/** Что потом сказала про дело автоматика: «Telegram · пн 05.10: закрыто» — дело то же, оно срослось. */
+function touchChips(list) {
+  return (list || []).map((s) => {
+    const from = s.batch_title || SUG_FROM[s.source] || s.source;
+    const what = s.kind === 'close' ? 'закрыть' : 'уточнение';
+    const st = s.status === 'pending' ? ' — ждёт решения ниже' : s.status === 'rejected' ? ' — отклонил' : s.status === 'expired' ? ' — погасло' : ' — принято';
+    return el('span', { class: 'm merged' + (s.status === 'pending' ? ' pending' : ''), title: s.quote || '' },
+      icon(s.source === 'meeting' ? 'mic' : 'send', 12), `${from}: ${what}${st}`);
+  });
+}
+function dictCard(d, shown) {
+  const tasks = d.tasks.map((t) => S.tasks.get(t.id) || t);
+  tasks.forEach((t) => shown.add(t.id));
+  const touch = new Map();
+  for (const s of d.touches || []) touch.set(s.task_id, [...(touch.get(s.task_id) || []), S.sugs.get(s.id) || s]);
+  const open = S.dictOpen.has(d.ref);
+  const src = { phone: 'с телефона', web: 'в вебе' }[d.source] || '';
+  return el('div', { class: 'dict' },
+    el('div', { class: 'dict-h' }, tint(icon('mic', 13), '#e5774f'), el('b', {}, whenWords(d.at)), src ? el('span', { class: 'faint' }, src) : null,
+      el('span', { class: 'faint' }, tasks.length ? plural(tasks.length, 'дело', 'дела', 'дел') : 'дел нет')),
+    d.text ? el('div', { class: 'dict-text' + (open ? ' open' : ''), title: open ? '' : 'Показать целиком',
+      onclick: () => { if (open) S.dictOpen.delete(d.ref); else S.dictOpen.add(d.ref); render(); } }, d.text) : null,
+    tasks.map((t) => taskRow(t, null, touchChips(touch.get(t.id)))),
+    (d.notes || []).map((n) => el('div', { class: 'dict-note' }, icon('chat', 12),
+      el('span', {}, 'в хронологию' + (project(n.project_id) ? ' · ' + project(n.project_id).name : '') + ': '), n.summary)));
+}
+function dictationsBlock(shown) {
+  const v = crmGet('/api/view/dictations', 20000);
+  const h = (n) => el('h2', {}, tint(icon('mic', 14), '#e5774f'), 'Последние наговорки', n != null ? el('span', { class: 'n' }, n) : null,
+    el('span', { class: 'gsub' }, 'что сказал и куда что попало'));
+  if (!v) return el('div', { class: 'group' }, h(null), loading());
+  if (!v.items.length) return null;
+  return el('div', { class: 'group dicts' }, h(v.items.length), v.items.map((d) => dictCard(d, shown)));
+}
+
+/** Похожее открытое дело для предложения «завести»: то же из наговорки, пришедшее ещё раз из встречи
+ *  или Telegram. Совпадение — по началам слов названия, хотя бы 60 % меньшего. */
+const stems = (s) => norm(s).replace(/[^a-zа-я0-9]+/g, ' ').split(' ').filter((w) => w.length > 3).map((w) => w.slice(0, 5));
+function twinOf(s) {
+  if (s.kind !== 'create') return null;
+  const a = new Set(stems((s.payload || {}).title || s.quote));
+  if (a.size < 2) return null;
+  let best = null, score = 0;
+  for (const t of all()) {
+    if (!isOpen(t) || !isMine(t)) continue;
+    const b = new Set(stems(t.title));
+    if (b.size < 2) continue;
+    let k = 0;
+    for (const w of a) if (b.has(w)) k++;
+    const sc = k / Math.min(a.size, b.size);
+    if (sc > score) { score = sc; best = t; }
+  }
+  return score >= 0.6 ? best : null;
+}
+/** «Это оно»: предложение срастается с делом — его слова ложатся комментарием, само предложение отклонено с причиной. */
+async function mergeInto(s, t) {
+  const p = s.payload || {};
+  const said = [p.title, s.quote && s.quote !== p.title ? '«' + s.quote + '»' : null, p.notes].filter(Boolean).join(' — ');
+  try {
+    await ops([{ op: 'comment.add', comment: { task_id: t.id, text: `${s.batch_title || SUG_FROM[s.source] || 'Автоматика'}: ${said}` } },
+      { op: 'suggestion.decide', id: s.id, decision: 'reject', reason: `уже есть #${t.num}` }]);
+    toast(`Срослось с #${t.num}: слова — комментарием к делу`);
+    render();
+  } catch (e) { fail(e); render(); }
+}
+
+/** «Новое» — всё, что пришло и ещё не разложено, по тому, откуда пришло (владелец, 06.10.2026): твои
+ *  наговорки (последние 10 — что сказал и куда что попало), предложения встреч и Telegram, поставленное
+ *  другими, дела без проекта (бывшие «Входящие»), закрытое само. batch — одна пачка по ссылке из Telegram. */
 function renderNew(batch) {
   const all_ = pendingSugs().sort((a, b) => a.created_at.localeCompare(b.created_at));
   const list = batch ? all_.filter((s) => s.batch_ref === batch) : all_;
@@ -1344,11 +1550,18 @@ function renderNew(batch) {
     if (sugAt(s) > b.at) b.at = sugAt(s);
   }
   const box = el('div', { class: 'body' });
-  if (batch) box.append(el('div', { class: 'toolbar' }, el('a', { class: 'chip-btn', href: '#/new' }, `Всё «Новое»: ${all_.length}`)));
+  if (batch) box.append(el('div', { class: 'toolbar' }, el('a', { class: 'chip-btn', href: '#/new' }, `Всё «Новое»: ${newCount()}`)));
   // Строка Claude: «первое прими, срок пятница; второе не надо» — П-номера ниже те же, что видит он.
-  box.append(quickAdd({}, list.length ? { toClaude: true, placeholder: 'Claude: «первое прими, срок пятница; второе не надо — делает Наташа»' } : {}));
+  box.append(quickAdd({}, { label: 'с новым', placeholder: list.length
+    ? '«П1 прими, срок пятница; П2 не надо — делает Ольга», «всё про Альфу — в проект Альфа»'
+    : '«всё без проекта про Альфу — в Альфу», «про ремонт — в Личное»' }));
+  const shown = new Set();
+  const dicts = batch ? null : dictationsBlock(shown);
+  if (dicts) box.append(dicts);
   if (batch && !list.length) box.append(el('div', { class: 'empty' }, 'Эта пачка уже разобрана.'));
-  else if (!list.length) box.append(el('div', { class: 'empty' }, 'Новых предложений нет.'));
+  if (!batch && batches.size) {
+    box.append(el('div', { class: 'part-h' }, 'Предложения встреч и Telegram', el('span', { class: 'faint' }, ' — примешь, станут делами')));
+  }
   for (const b of [...batches.values()].sort((x, y) => y.at.localeCompare(x.at))) {
     const ids = b.items.map((s) => s.id);
     const [ic, col] = SRC[b.src] || ['inbox-in', VIEWS.new.color];
@@ -1361,38 +1574,60 @@ function renderNew(batch) {
       b.items.map((s) => {
         const { title, hint, add } = sugText(s);
         S.sugOrder.push(s.id);
+        const twin = twinOf(s);
         return el('div', { class: 'sug' + (s.kind !== 'create' ? ' ' + s.kind : '') },
           el('div', { class: 'main' }, el('div', {}, el('span', { class: 'sug-n', title: 'Номер для Claude: «П' + S.sugOrder.length + ' прими»' }, 'П' + S.sugOrder.length), title),
             hint ? el('div', { class: 'hint' }, hint) : null,
             add ? el('div', { class: 'add' }, add) : null,
-            s.quote && s.quote !== title ? el('div', { class: 'hint' }, '«' + s.quote.slice(0, 200) + '»') : null),
+            s.quote && s.quote !== title ? el('div', { class: 'hint' }, '«' + s.quote.slice(0, 200) + '»') : null,
+            twin ? el('div', { class: 'twin' }, icon('link', 12), 'похоже, это уже есть: ',
+              el('a', { class: 'link', href: '#', onclick: (e) => { e.preventDefault(); openCard(twin.id); } }, `#${twin.num} ${twin.title}`),
+              el('button', { class: 'chip-btn', title: 'Не заводить второе: слова — комментарием к делу', onclick: () => mergeInto(s, twin) }, 'Это оно')) : null),
           el('div', { class: 'acts' },
             el('button', { class: 'btn small ok', onclick: () => decide([s.id], 'accept') }, 'Принять'),
             s.kind === 'create' ? el('button', { class: 'btn small', onclick: () => { S.draft = s; S.cardId = null; render(); } }, 'Поправить') : null,
             el('button', { class: 'btn small bad', onclick: () => { const r = prompt(s.kind === 'create' ? 'Почему не дело? (можно пусто)' : 'Почему нет? (можно пусто)'); if (r !== null) decide([s.id], 'reject', r || null); } }, 'Отклонить')));
       })));
   }
-  // Очевидное автоматика закрывает сама — тут видно, что и почему, и можно вернуть.
+  if (!batch) {
+    // Поставили другие (за три дня) и дела без проекта — бывшие «Утро» и «Входящие»: разложи — уйдут отсюда.
+    const others = fromOthers().filter((t) => !shown.has(t.id));
+    others.forEach((t) => shown.add(t.id));
+    if (others.length) box.append(groupBox('Поставили другие', others.sort(sortTasks), { lead: tint(icon('person', 14), '#a78bfa'), sub: 'за три дня' }));
+    const loose = noProject().filter((t) => !shown.has(t.id));
+    if (loose.length) {
+      box.append(groupBox('Без проекта — куда их?', loose.sort(sortTasks), { lead: tint(icon('tray', 14), NO_PROJECT.color),
+        sub: 'щелчок по «без проекта» — выбрать, или скажи Claude наверху',
+        act: loose.length > 1 ? el('button', { class: 'chip-btn', onclick: (e) => projectPop(e.currentTarget, loose.map((t) => t.id)) }, 'Все в проект…') : null }));
+    }
+  }
+  // Очевидное автоматика закрывает сама — тут видно, что и почему; «Понятно» убирает отсюда, «Вернуть» — в работу.
   const auto = batch ? autoClosed(365).filter((s) => s.batch_ref === batch) : autoClosed(7);
+  const seen = async (ids) => { try { await op1({ op: 'suggestion.seen', ids }); render(); } catch (e) { fail(e); } };
   if (auto.length) {
     box.append(el('div', { class: 'group' },
       el('h2', {}, tint(icon('check', 14), 'var(--ok)'), 'Закрыто само', el('span', { class: 'n' }, auto.length),
-        el('span', { class: 'gsub' }, 'за неделю: очевидное из встреч и Telegram')),
+        el('span', { class: 'gsub' }, 'очевидное из встреч и Telegram'),
+        auto.length > 1 ? el('span', { class: 'act' }, el('button', { class: 'chip-btn', onclick: () => seen(auto.map((s) => s.id)) }, 'Понятно, все')) : null),
       auto.map((s) => {
         const t = S.tasks.get(s.task_id);
         if (t) S.order.push(t.id); // закрытое само — тоже дело на экране: «верни акт» Claude поймёт
         const reopen = async () => {
-          try { await op1({ op: 'task.reopen', id: t.id }); toast('Вернул в работу: ' + t.title); render(); } catch (e) { fail(e); }
+          try { await ops([{ op: 'task.reopen', id: t.id }, { op: 'suggestion.seen', ids: [s.id] }]); toast('Вернул в работу: ' + t.title); render(); } catch (e) { fail(e); }
         };
         return el('div', { class: 'sug auto' },
           el('div', { class: 'main' }, el('div', {}, t ? `#${t.num} ${t.title}` : 'дело не видно'),
             el('div', { class: 'hint' }, [s.batch_title, D.ddmm(s.decided_at.slice(0, 10))].filter(Boolean).join(' · ')),
             s.quote ? el('div', { class: 'hint' }, '«' + s.quote.slice(0, 200) + '»') : null),
-          el('div', { class: 'acts' }, t && t.status === 'done' ? el('button', { class: 'btn small', onclick: reopen }, 'Вернуть')
-            : el('span', { class: 'faint' }, t && t.status === 'open' ? 'вернул в работу' : '')));
+          el('div', { class: 'acts' },
+            el('button', { class: 'btn small ok', title: 'Согласен — убрать отсюда', onclick: () => seen([s.id]) }, 'Понятно'),
+            t && t.status === 'done' ? el('button', { class: 'btn small', onclick: reopen }, 'Вернуть') : null));
       })));
   }
-  return [head('Новое', ['что предложила автоматика: встречи, Telegram — дела появятся, когда примешь; очевидные закрытия проходят сами']), box];
+  if (!batch && !list.length && !auto.length && !shown.size && crmGet('/api/view/dictations', 20000)) {
+    box.append(el('div', { class: 'empty' }, 'Всё разложено. Новое появится, когда наговоришь или придёт со встречи и из Telegram.'));
+  }
+  return [head('Новое', ['всё, что пришло, по тому, откуда пришло: наговорки, встречи, Telegram — разложи, и оно уйдёт отсюда']), box];
 }
 
 // ── Настройки: Claude (у человека на сервере), голос (на этом устройстве), траты (владельцу) ──
@@ -1433,7 +1668,7 @@ function renderSettings() {
   return [head('Настройки', ['Claude в Делах, голос и траты']),
     el('div', { class: 'body settings' },
       el('div', { class: 'group' }, el('h2', {}, tint(claudeIcon(14), 'var(--claude)'), 'Claude правит дела словами'),
-        el('div', { class: 'hint-line' }, 'Микрофон у дела, звёздочка и микрофон в поле наверху. Новые дела из надиктовки всегда разбирает Opus 5.5.'),
+        el('div', { class: 'hint-line' }, 'Микрофон у дела и строка «Скажи, что сделать» наверху. Модель ниже — для списков; в карточке клиента, сделки и человека и для новых дел из надиктовки всегда Opus 5.5.'),
         v.claude ? null : el('div', { class: 'cr-err' }, 'Claude на сервере не настроен — нет ключа.'),
         el('div', { class: 'set-label' }, 'Модель'), choices('claude_model', MODEL_INFO, s.claude_model),
         el('div', { class: 'set-label' }, 'Глубина'), choices('claude_effort', EFFORT_INFO, s.claude_effort)),
@@ -1464,7 +1699,7 @@ async function decide(ids, decision, reason, set) {
 }
 
 // ── Карточка дела (справа; на телефоне — лист снизу) ─────────────────────
-function openCard(id) { S.cardId = id; S.draft = null; S.dealId = null; render(); loadCardExtras(id); }
+function openCard(id) { S.cardId = id; S.draft = null; render(); loadCardExtras(id); }
 const extras = new Map(); // комментарии и журнал — по требованию
 async function loadCardExtras(id) {
   const t = S.tasks.get(id);
@@ -1521,7 +1756,7 @@ function renderCard() {
     return s;
   };
   const live = [...S.projects.values()].filter((p) => !p.archived_at || p.id === src.project_id).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-  const projSel = el('select', {}, [['', 'Входящие'], ...live.map((p) => [p.id, p.name])].map(([v, l]) => el('option', { value: v, selected: (src.project_id || '') === v }, l)));
+  const projSel = el('select', {}, [['', 'Без проекта'], ...live.map((p) => [p.id, p.name])].map(([v, l]) => el('option', { value: v, selected: (src.project_id || '') === v }, l)));
   projSel.addEventListener('change', () => { if (t) setFields([t.id], { project_id: projSel.value || null, deal_id: null }); else { src.project_id = projSel.value || null; src.deal_id = null; render(); } });
   const deals = [...S.deals.values()].filter((d) => d.project_id && d.project_id === src.project_id);
   const people = [...S.people.values()].filter((p) => !p.archived_at).sort((a, b) => personName(a).localeCompare(personName(b), 'ru'));
@@ -1545,7 +1780,10 @@ function renderCard() {
   const chk = (field, label, on, value) => {
     const c = el('input', { type: 'checkbox' });
     c.checked = !!on;
-    c.addEventListener('change', () => save(field, c.checked ? value : (field === 'want' ? false : null)));
+    c.addEventListener('change', () => {
+      if (field === 'focus_on' && c.checked && t && !nowRoom([t.id])) { c.checked = false; return; }
+      save(field, c.checked ? value : (field === 'want' ? false : null));
+    });
     return el('label', {}, c, label);
   };
 
@@ -1562,7 +1800,7 @@ function renderCard() {
 
   const cp = project(src.project_id);
   const crumb = cp ? el('a', { class: 'crumb', href: '#/p/' + cp.id }, dot(cp.id), cp.name)
-    : el('span', { class: 'crumb' }, tint(icon('tray', 13), VIEWS.inbox.color), 'Входящие');
+    : el('span', { class: 'crumb' }, tint(icon('tray', 13), NO_PROJECT.color), 'Без проекта');
   const card = el('div', { class: 'card' },
     el('div', { class: 'top' }, sug ? el('span', { class: 'crumb' }, tint(icon('inbox-in', 13), VIEWS.new.color), 'Предложение') : crumb,
       t ? el('span', { class: 'num' }, '#' + t.num + (t.status !== 'open' ? ' · ' + (t.status === 'done' ? 'сделано' : 'отменено') : '')) : null,
@@ -1626,6 +1864,7 @@ const OPEN_STAGES = ['lead', 'proposal', 'mandate', 'active', 'closing'];
 const CRM_VIEWS = {
   crm: { title: 'Воронка', icon: 'funnel', color: '#f39a4a' },
   clients: { title: 'Клиенты', icon: 'building', color: '#2fc5c0' },
+  people: { title: 'Люди', icon: 'person', color: '#a78bfa' },
   ties: { title: 'Связи', icon: 'link', color: '#e57bd1' },
   money: { title: 'Деньги', icon: 'coin', color: '#45c07a', money: true },
 };
@@ -1680,7 +1919,8 @@ async function dealOp(op) {
 }
 const setDeal = (id, set) => dealOp({ op: 'deal.set', id, set });
 
-function openDeal(id) { S.dealId = id; S.cardId = null; S.draft = null; render(); }
+// Сделка — страницей (#/d/<id>), как клиент и человек: «не просто сайдбар» (владелец, 06.10.2026).
+function openDeal(id) { S.cardId = null; S.draft = null; go('#/d/' + id); }
 async function newDeal(projectId) {
   const name = prompt('Название сделки («Клиент: тема»)', (project(projectId)?.name || '') + ': ');
   if (!name || !name.trim()) return;
@@ -1698,7 +1938,7 @@ function dealTile(d) {
     ? el('div', { class: 'next' }, `#${d.next_task.num} ${d.next_task.title}` + (d.next_task.due_date ? ' · ' + D.ddmm(d.next_task.due_date) : ''))
     : (d.stage !== 'archive' ? el('div', { class: 'next none' }, 'нет следующего дела') : null);
   const quiet = d.stage !== 'archive' && d.quiet_days > 30 ? el('span', { class: 'quiet' }, `тишина ${d.quiet_days} дн.`) : null;
-  return el('div', { class: 'dtile' + (S.dealId === d.id ? ' on' : '') + (d.stale ? ' stale' : ''), onclick: () => openDeal(d.id) },
+  return el('div', { class: 'dtile' + (route().id === d.id ? ' on' : '') + (d.stale ? ' stale' : ''), onclick: () => openDeal(d.id) },
     el('div', { class: 'dname' }, d.name),
     el('div', { class: 'dclient' }, d.project_name, d.deal_type ? ' · ' + d.deal_type : ''),
     meta.length || quiet ? el('div', { class: 'dmeta' }, meta, quiet) : null, next,
@@ -1751,9 +1991,25 @@ function renderClients() {
   if (q) rows = rows.filter((c) => norm(c.name + ' ' + (c.aliases || []).join(' ') + ' ' + (c.org || '')).includes(q));
   const search = el('input', { class: 'inline-search', type: 'search', placeholder: 'Найти клиента', value: S.clientQ || '' });
   search.addEventListener('input', () => { S.clientQ = search.value; const pos = search.selectionStart; render(); const s2 = document.querySelector('.inline-search'); if (s2) { s2.focus(); s2.setSelectionRange(pos, pos); } });
+  // Сделки клиента — его проекты: раскрываются под строкой клиента (владелец, 06.10.2026).
+  const dealsOf = (id) => [...S.deals.values()].filter((d) => d.project_id === id)
+    .sort((a, b) => (a.stage === 'archive') - (b.stage === 'archive') || OPEN_STAGES.indexOf(a.stage) - OPEN_STAGES.indexOf(b.stage) || a.name.localeCompare(b.name, 'ru'));
+  const toggle = (id) => { if (S.clientOpen.has(id)) S.clientOpen.delete(id); else S.clientOpen.add(id); LS.set('clientOpen', [...S.clientOpen]); render(); };
+  const allOpen = rows.length && rows.every((c) => S.clientOpen.has(c.id));
   const tb = el('div', { class: 'toolbar' }, search,
+    el('button', { class: 'chip-btn' + (allOpen ? ' on' : ''), onclick: () => {
+      rows.forEach((c) => (allOpen ? S.clientOpen.delete(c.id) : S.clientOpen.add(c.id))); LS.set('clientOpen', [...S.clientOpen]); render();
+    } }, allOpen ? 'Свернуть сделки' : 'Раскрыть сделки'),
     el('button', { class: 'chip-btn' + (S.clientArch ? ' on' : ''), onclick: () => { S.clientArch = !S.clientArch; render(); } }, 'И архив'),
     el('button', { class: 'chip-btn', onclick: () => newClient() }, '+ Клиент'));
+  const dealLine = (d) => {
+    const next = all().filter((t) => t.deal_id === d.id && isOpen(t)).sort(sortTasks)[0];
+    return el('div', { class: 'cdeal' + (d.stage === 'archive' ? ' arch' : ''), onclick: (e) => { e.stopPropagation(); openDeal(d.id); } },
+      el('span', { class: 'cd-stage st-' + d.stage }, stageWord(d)),
+      el('span', { class: 'cd-name' }, d.name),
+      next ? el('span', { class: 'cd-next' + (isLate(next) ? ' late' : '') }, `#${next.num} ${next.title}` + (next.due_date ? ' · ' + D.ddmm(next.due_date) : ''))
+        : d.stage !== 'archive' ? el('span', { class: 'cd-next none' }, 'нет следующего дела') : null);
+  };
   const row = (c) => {
     const bits = [];
     if (c.stages && c.stages.length) bits.push(el('span', {}, c.stages.map((s) => STAGE[s]).join(', ')));
@@ -1762,16 +2018,71 @@ function renderClients() {
     if (v.money && c.paid_year_kop) bits.push(el('span', { class: 'money' }, 'за год ' + rubShort(c.paid_year_kop)));
     if (v.money && c.invoiced_kop) bits.push(el('span', { class: 'late' }, 'ждём ' + rubShort(c.invoiced_kop)));
     if (c.minutes_90) bits.push(el('span', { title: 'Засечка, 90 дней' }, hrs(c.minutes_90)));
-    return el('div', { class: 'crow', onclick: () => go('#/p/' + c.id) },
-      el('div', { class: 'main' },
-        el('div', { class: 'title' }, c.name, c.org && norm(c.org) !== norm(c.name) ? el('span', { class: 'faint' }, ' · ' + c.org) : null, c.archived_at ? el('span', { class: 'faint' }, ' · архив') : null),
-        el('div', { class: 'chips' }, bits),
-        c.next_task ? el('div', { class: 'next' }, `#${c.next_task.num} ${c.next_task.title}` + (c.next_task.due_date ? ' · ' + D.ddmm(c.next_task.due_date) : ''))
-          : (c.live_deals ? el('div', { class: 'next none' }, 'нет следующего дела') : null)));
+    const deals = dealsOf(c.id);
+    const shownDeals = deals.filter((d) => d.stage !== 'archive' || S.clientArch);
+    const open = S.clientOpen.has(c.id);
+    return el('div', { class: 'cblock' + (open ? ' open' : '') },
+      el('div', { class: 'crow', onclick: () => go('#/p/' + c.id) },
+        el('button', { class: 'caret-btn', title: open ? 'Свернуть сделки' : 'Показать сделки', disabled: !deals.length,
+          onclick: (e) => { e.stopPropagation(); toggle(c.id); } }, deals.length ? (open ? '▾' : '▸') : ''),
+        el('div', { class: 'main' },
+          el('div', { class: 'title' }, c.name, c.org && norm(c.org) !== norm(c.name) ? el('span', { class: 'faint' }, ' · ' + c.org) : null,
+            c.archived_at ? el('span', { class: 'faint' }, ' · архив') : null,
+            deals.length ? el('span', { class: 'faint' }, ' · ' + plural(deals.length, 'сделка', 'сделки', 'сделок')) : null),
+          el('div', { class: 'chips' }, bits),
+          !open && c.next_task ? el('div', { class: 'next' }, `#${c.next_task.num} ${c.next_task.title}` + (c.next_task.due_date ? ' · ' + D.ddmm(c.next_task.due_date) : ''))
+            : (!open && c.live_deals ? el('div', { class: 'next none' }, 'нет следующего дела') : null))),
+      open ? el('div', { class: 'cdeals' }, shownDeals.map(dealLine),
+        deals.length > shownDeals.length ? el('div', { class: 'faint cd-more' }, `и в архиве: ${deals.length - shownDeals.length}`) : null,
+        el('button', { class: 'cdeal add', onclick: () => newDeal(c.id) }, icon('plus', 12), ' сделка')) : null);
   };
   const out = [tb, rows.length ? el('div', { class: 'group' }, rows.map(row)) : el('div', { class: 'empty' }, 'Не нашлось.')];
   if (v.unmatched && v.unmatched.length && !q) out.push(renderUnmatched(v.unmatched));
   return [head('Клиенты', [plural(rows.filter((c) => !c.archived_at).length, 'клиент', 'клиента', 'клиентов')]), el('div', { class: 'body' }, out)];
+}
+
+// ── Люди по компаниям ───────────────────────────────────────────────────
+// Владелец, 06.10.2026: «в людях обязательно нужна группировка по компаниям». Компания — клиент (его
+// страница по щелчку) или другая организация; команда — сверху, без компании — внизу. Плашка «откуда»
+// у строки меняет компанию и должность, не заходя в карточку.
+function renderPeople() {
+  const q = norm(S.peopleQ || '');
+  const hay = (x) => norm([x.name, x.short, ...(x.aliases || []), x.role, orgLabel(x.org_id)?.name].filter(Boolean).join(' '));
+  const list = livePeople().filter((x) => !x.merged_into && (!q || hay(x).includes(q)));
+  const openBy = new Map(), waitBy = new Map();
+  for (const t of all()) {
+    if (!isOpen(t) || !t.person_id) continue;
+    openBy.set(t.person_id, (openBy.get(t.person_id) || 0) + 1);
+    if (t.ball === 'waiting') waitBy.set(t.person_id, (waitBy.get(t.person_id) || 0) + 1);
+  }
+  const groups = new Map();
+  for (const x of list) {
+    const ol = orgLabel(x.org_id);
+    const key = x.user_id ? '0' : ol ? '1' + norm(ol.name) : '9';
+    if (!groups.has(key)) groups.set(key, { title: x.user_id ? 'Команда' : ol ? ol.name : 'Без компании', href: x.user_id ? null : ol && ol.href, items: [] });
+    groups.get(key).items.push(x);
+  }
+  const search = el('input', { class: 'inline-search people-search', type: 'search', placeholder: 'Найти человека или компанию', value: S.peopleQ || '' });
+  search.addEventListener('input', () => {
+    S.peopleQ = search.value; const pos = search.selectionStart; render();
+    const s2 = document.querySelector('.people-search'); if (s2) { s2.focus(); s2.setSelectionRange(pos, pos); }
+  });
+  const row = (x) => el('div', { class: 'crow person-row', onclick: () => go('#/h/' + x.id) },
+    avatar(x),
+    el('div', { class: 'main' },
+      el('div', { class: 'title' }, x.name, x.short && x.short !== x.name ? el('span', { class: 'faint' }, ' · ' + x.short) : null),
+      el('div', { class: 'chips' }, x.role ? el('span', {}, x.role) : null,
+        openBy.get(x.id) ? el('span', {}, plural(openBy.get(x.id), 'дело', 'дела', 'дел')) : null,
+        waitBy.get(x.id) ? el('span', { class: 'ball-waiting' }, 'жду: ' + waitBy.get(x.id)) : null)),
+    el('button', { class: 'chip-btn', title: 'Откуда он, должность', onclick: (e) => { e.stopPropagation(); personPop(e.currentTarget, x); } }, 'откуда…'));
+  const boxes = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0], 'ru')).map(([, g]) =>
+    el('div', { class: 'group' }, el('h2', {}, g.href ? el('a', { class: 'link', href: g.href }, g.title) : g.title,
+      el('span', { class: 'n' }, g.items.length)), g.items.sort((a, b) => a.name.localeCompare(b.name, 'ru')).map(row)));
+  return [head('Люди', [plural(list.length, 'человек', 'человека', 'человек'), 'по компаниям: команда, клиенты, другие организации']),
+    el('div', { class: 'body' },
+      quickAdd({}, { label: 'с людьми', placeholder: '«Иван теперь CFO в Бете», «Ольга ушла из Альфы», «заведи Петра Сидорова из Гаммы, юрист»' }),
+      el('div', { class: 'toolbar' }, search),
+      boxes.length ? boxes : el('div', { class: 'empty' }, 'Не нашлось.'))];
 }
 
 async function newClient(name) {
@@ -1962,20 +2273,67 @@ function clientBlock(p) {
     const total = v.months.reduce((s, m) => s + m.minutes, 0);
     info.push(el('span', { title: 'время из Засечки' }, icon('clock', 12), ' ' + hrs(total) + ' всего · ' + v.months.slice(0, 3).map((m) => `${MONTHS[+m.month.slice(5) - 1].slice(0, 3)} ${hrs(m.minutes)}`).join(', ')));
   }
-  const peopleBox = v && v.people.length ? el('div', { class: 'people-line' }, 'Люди: ', v.people.map((x, k) => [k ? ', ' : '', el('a', { class: 'link', href: '#/h/' + x.id }, x.name + (x.role ? ` (${x.role})` : ''))])) : null;
+  // Люди клиента — плашками: крестик убирает отсюда, щелчок — откуда он и должность (владелец, 06.10.2026).
+  const people = v ? v.people.map((x) => person(x.id) || x) : [];
+  const peopleBox = v ? peopleChips('Люди', people, {
+    empty: 'пока никого',
+    remove: (x) => leaveClient(x, p, v),
+    add: (anchor) => addPersonPop(anchor, people.map((x) => x.id), (id) => joinClient(person(id), p), (name) => joinClient(null, p, name)),
+  }) : null;
   const tabs = el('div', { class: 'seg tabs' }, [['tasks', 'Дела'], ['timeline', 'Хронология']].map(([k, l]) =>
     el('button', { class: (S.clientTab || 'tasks') === k ? 'on' : '', onclick: () => { S.clientTab = k; render(); } }, l)));
   return { dealBox, info, peopleBox, tabs, timeline: (S.clientTab === 'timeline')
     ? (v ? timelineBox(v.timeline, v.entries, { project_id: p.id }, { showDeal: true }) : loading()) : null };
 }
 
-// ── Карточка сделки ─────────────────────────────────────────────────────
-function renderDealCard() {
-  const close = () => { S.dealId = null; render(); };
-  const d0 = S.deals.get(S.dealId);
-  const v = crmGet('/api/view/deal?deal_id=' + S.dealId, 15000);
-  if (!d0) return el('section', { class: 'card-pane' }, el('div', { class: 'card' }, el('div', { class: 'top' }, el('span', { class: 'num' }, 'Сделка'),
-    el('button', { class: 'icon-btn', onclick: close }, icon('x', 16))), el('div', { class: 'empty' }, 'Сделка не видна.')));
+/** Организация клиента; у старого клиента без неё — заводим (люди привязываются к организации). */
+async function clientOrg(p) {
+  if (p.org_id) return p.org_id;
+  const org = (await op1({ op: 'org.create', data: { name: p.name, kind: 'client' } })).row;
+  await op1({ op: 'project.set', id: p.id, set: { org_id: org.id } });
+  return org.id;
+}
+/** Человек — к клиенту: его организация; нового — заводим сразу с ней. */
+async function joinClient(x, p, name) {
+  try {
+    const org = await clientOrg(p);
+    if (x) {
+      const was = x.org_id || null;
+      await op1({ op: 'person.set', id: x.id, set: { org_id: org } });
+      toast(`${personName(x)} — теперь из «${p.name}»`, () => op1({ op: 'person.set', id: x.id, set: { org_id: was } }));
+    } else {
+      await op1({ op: 'person.create', data: { name, org_id: org } });
+      toast(`Завёл: ${name} из «${p.name}»`);
+    }
+    render();
+  } catch (e) { fail(e); }
+}
+/** Убрать человека из клиента: из его организации и из людей его сделок. Строки не удаляются — «Вернуть». */
+async function leaveClient(x, p, v) {
+  if (!confirm(`Убрать ${x.name} из «${p.name}»? Карточка человека останется.`)) return;
+  const go_ = [], back = [];
+  if (x.org_id && x.org_id === p.org_id) {
+    go_.push({ op: 'person.set', id: x.id, set: { org_id: null } });
+    back.push({ op: 'person.set', id: x.id, set: { org_id: x.org_id } });
+  }
+  for (const d of (v && v.deals) || []) {
+    const ids = d.person_ids || [];
+    if (!ids.includes(x.id)) continue;
+    go_.push({ op: 'deal.set', id: d.id, set: { person_ids: ids.filter((i) => i !== x.id) } });
+    back.push({ op: 'deal.set', id: d.id, set: { person_ids: ids } });
+  }
+  if (!go_.length) { toast(`${x.name} связан с «${p.name}» иначе — поправь в его карточке`); return; }
+  try { await ops(go_); render(); toast(`${personName(x)} больше не в «${p.name}»`, () => ops(back)); } catch (e) { fail(e); }
+}
+
+// ── Сделка — страницей ──────────────────────────────────────────────────
+// Владелец, 06.10.2026: «если я нажимаю на проект, он должен быть не просто сайдбаром, а таким же,
+// как клиент и человек: видны дела, что за проект, и можно его двигать дальше». Сделка у клиента —
+// это его проект. Наверху — строка Claude (Opus видит сделку целиком), стадии — кнопками.
+function renderDeal(id) {
+  const d0 = S.deals.get(id);
+  const v = crmGet('/api/view/deal?deal_id=' + id, 15000);
+  if (!d0) return [head('Сделка'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Сделка не видна.'))];
   const d = { ...d0, ...(v ? v.deal : {}) };
   const p = project(d.project_id);
   const money = S.me.money;
@@ -1991,22 +2349,20 @@ function renderDealCard() {
     return i;
   };
   const rubIn = (field) => inp(field, 'number', d[field] != null ? Math.round(d[field] / 100) : '', (x) => Math.round(+x * 100));
-  const peopleSel = (field, list) => {
-    const ids = d[field] || [];
-    const box = el('div', { class: 'multi' }, ids.map((x) => el('span', { class: 'pill' }, pName(x),
-      el('button', { title: 'Убрать', onclick: () => save(field, ids.filter((y) => y !== x)) }, '×'))));
-    const add = el('select', {}, el('option', { value: '' }, '+ добавить'), list.filter((x) => !ids.includes(x.id)).map((x) => el('option', { value: x.id }, x.short && x.short !== x.name ? `${x.short} — ${x.name}` : x.name)));
-    add.addEventListener('change', () => add.value && save(field, [...ids, add.value]));
-    box.append(add);
-    return box;
-  };
   const team = teamPeople();
   const ppl = livePeople().sort((a, b) => personName(a).localeCompare(personName(b), 'ru'));
-  const clientPeople = ppl.filter((x) => !team.includes(x));
-
-  const title = el('textarea', { class: 'title-edit', rows: 2 }, d.name);
-  title.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } });
-  title.addEventListener('change', () => title.value.trim() && save('name', title.value.trim()));
+  // Команда и люди клиента — те же плашки, что у клиента.
+  const chipsOf = (field, title) => {
+    const ids = d[field] || [];
+    return peopleChips(title, ids.map(person).filter(Boolean), {
+      remove: (x) => save(field, ids.filter((y) => y !== x.id)),
+      add: (anchor) => addPersonPop(anchor, ids, (pid) => save(field, [...ids, pid]), async (name) => {
+        const org = field === 'person_ids' && p ? await clientOrg(p).catch(() => null) : null;
+        const r = await dealOp({ op: 'person.create', data: { name, ...(org ? { org_id: org } : {}) } });
+        if (r && r.row) save(field, [...ids, r.row.id]);
+      }),
+    });
+  };
 
   const stages = el('div', { class: 'stages' }, OPEN_STAGES.map((s) => el('button', { class: d.stage === s ? 'on' : '', onclick: () => save('stage', s) }, STAGE[s])));
   const closeDeal = (anchor) => setTimeout(() => popAt(anchor, [
@@ -2022,20 +2378,27 @@ function renderDealCard() {
       el('button', { class: 'btn small', onclick: () => save('stage', 'active') }, 'Вернуть в работу'))
     : el('div', { class: 'stage-row' }, stages, el('button', { class: 'btn small', onclick: (e) => closeDeal(e.currentTarget) }, 'Закрыть…'));
 
-  const props = el('div', { class: 'props' },
-    el('span', {}, 'Клиент'), p ? el('a', { class: 'link', href: '#/p/' + p.id }, p.name) : el('span', {}, '—'),
+  const title = el('input', { class: 'deal-name', value: d.name, title: 'Название сделки' });
+  title.addEventListener('keydown', (e) => { if (e.key === 'Enter') title.blur(); });
+  title.addEventListener('change', () => title.value.trim() && save('name', title.value.trim()));
+  const props = el('div', { class: 'props deal-props' },
+    el('span', {}, 'Название'), title,
     el('span', {}, 'Тип'), sel('deal_type', DEAL_TYPES.map((x) => [x, x]).concat(d.deal_type && !DEAL_TYPES.includes(d.deal_type) ? [[d.deal_type, d.deal_type]] : []), d.deal_type),
     el('span', {}, 'Ведёт'), sel('lead_person_id', team.map((x) => [x.id, personName(x)]), d.lead_person_id),
-    el('span', {}, 'Команда'), peopleSel('team_ids', team),
-    el('span', {}, 'Люди клиента'), peopleSel('person_ids', clientPeople),
     el('span', {}, 'Привёл'), sel('source_person_id', ppl.map((x) => [x.id, x.name]), d.source_person_id),
     el('span', {}, 'Вероятность, %'), inp('probability', 'number', d.probability, (x) => Math.max(0, Math.min(100, Math.round(+x)))),
     el('span', {}, 'Решение ждём'), inp('expected_on', 'date', d.expected_on),
     el('span', {}, 'Дедлайн'), inp('deadline', 'date', d.deadline));
 
-  const card = el('div', { class: 'card deal-card' },
-    el('div', { class: 'top' }, el('span', { class: 'num' }, 'Сделка · ' + stageWord(d)), el('button', { class: 'icon-btn', title: 'Закрыть (Esc)', onclick: close }, icon('x', 16))),
-    title, stageRow, props);
+  const sub = [p ? el('a', { class: 'link', href: '#/p/' + p.id }, dot(p.id), ' ', p.name) : null, stageWord(d),
+    d.fee_kop && money ? rubShort(d.fee_kop) : null, v && v.minutes_all ? el('span', { title: 'время из Засечки по делам сделки' }, icon('clock', 12), ' ' + hrs(v.minutes_all)) : null];
+  const body = el('div', { class: 'body' },
+    quickAdd({ project_id: d.project_id, deal_id: d.id }, { label: `со сделкой «${d.name}»`,
+      placeholder: '«подписали мандат», «этого уже нет — закрой, проиграли», «Ольга теперь в команде клиента», «созвон: ждут модель к пятнице»' }),
+    stageRow,
+    el('div', { class: 'deal-people' }, chipsOf('person_ids', 'Люди клиента'), chipsOf('team_ids', 'Команда')),
+    el('details', { class: 'deal-more', open: S.dealMore ? true : null, ontoggle: (e) => { S.dealMore = e.currentTarget.open; } },
+      el('summary', {}, 'Что за сделка: тип, кто ведёт, вероятность, сроки'), props));
 
   if (money) {
     const pays = v ? v.payments : [...S.pays.values()].filter((x) => x.deal_id === d.id);
@@ -2049,7 +2412,8 @@ function renderDealCard() {
       if (!(+amount.value > 0)) { toast('Сумма?'); return; }
       try { await op1({ op: 'payment.create', data: { deal_id: d.id, kind: kind.value, amount_kop: Math.round(+amount.value * 100), due_on: due.value || null } }); crmDirty(); render(); } catch (e) { fail(e); }
     };
-    card.append(el('h3', {}, 'Деньги'),
+    body.append(el('details', { class: 'deal-more' }, el('summary', {}, 'Деньги: ' + ([paid && 'получено ' + rubShort(paid), inv && 'счета ' + rubShort(inv),
+      plan && 'план ' + rubShort(plan)].filter(Boolean).join(' · ') || 'оплат пока нет')),
       el('div', { class: 'props' },
         el('span', {}, 'Модель'), sel('fee_kind', Object.entries(FEE_KIND), d.fee_kind),
         el('span', {}, 'Гонорар, ₽'), rubIn('fee_kop'),
@@ -2059,46 +2423,39 @@ function renderDealCard() {
         d.fee_kop && ['mandate', 'active', 'closing'].includes(d.stage) ? 'осталось ' + rub(Math.max(d.fee_kop - paid, 0)) : null,
         d.fee_kop && paid + inv + plan < d.fee_kop && d.stage !== 'archive' ? 'не расписано ' + rub(d.fee_kop - paid - inv - plan) : null].filter(Boolean).join(' · ') || 'оплат пока нет'),
       el('div', { class: 'pays' }, pays.map((x) => payRow(x, false))),
-      el('div', { class: 'pay-add' }, kind, amount, due, el('button', { class: 'btn small', onclick: addPay }, '+ Оплата')));
+      el('div', { class: 'pay-add' }, kind, amount, due, el('button', { class: 'btn small', onclick: addPay }, '+ Оплата'))));
   }
 
-  // Следующий шаг — открытое дело сделки.
-  const open = (v ? v.open : all().filter((t) => t.deal_id === d.id && isOpen(t)));
-  const next = el('input', { placeholder: 'Следующее дело по сделке… (Enter)' });
-  next.addEventListener('keydown', async (e) => {
-    if (e.key !== 'Enter' || !next.value.trim()) return;
-    const parsed = parseQuick(next.value.trim(), {});
-    try { await op1({ op: 'task.create', task: { title: parsed.title, ...parsed.set, project_id: d.project_id, deal_id: d.id, source: 'web' } }); next.value = ''; crmDirty(); render(); } catch (err) { fail(err); }
-  });
-  card.append(el('h3', {}, 'Следующий шаг'),
-    el('div', {}, open.length ? open.map((t) => el('div', { class: 'mini-task', onclick: () => openCard(t.id) },
-      el('button', { class: 'tick', title: 'Сделано', onclick: (e) => { e.stopPropagation(); toggleDone([S.tasks.get(t.id) || t]).then(() => { crmDirty(); render(); }); } }),
-      el('span', {}, '#' + t.num + ' ' + t.title), t.due_date ? el('span', { class: t.due_date < S.today ? 'late' : 'faint' }, ' · ' + D.ddmm(t.due_date)) : null))
-      : (d.stage !== 'archive' ? el('div', { class: 'next none' }, 'Нет следующего дела — сделка без шага застынет.') : null)),
-    el('div', { class: 'add-comment' }, next));
-  if (v && v.done.length) card.append(el('details', {}, el('summary', {}, `Сделано по сделке (${v.done.length})`),
-    v.done.map((t) => el('div', { class: 'hist' }, `#${t.num} ${t.title}` + (t.completed_at ? ' · ' + D.ddmm(t.completed_at.slice(0, 10)) : '')))));
-
-  card.append(el('h3', {}, 'Хронология'), v ? timelineBox(v.timeline, v.entries, { project_id: d.project_id, deal_id: d.id, person_ids: d.person_ids || [] }) : loading());
-  if (v && v.minutes_all) card.append(el('div', { class: 'hint-line' }, icon('clock', 12), ' Время из Засечки по делам сделки: ' + hrs(v.minutes_all)));
-
+  const tabs = el('div', { class: 'seg tabs' }, [['tasks', 'Дела'], ['timeline', 'Хронология']].map(([k, l]) =>
+    el('button', { class: (S.clientTab || 'tasks') === k ? 'on' : '', onclick: () => { S.clientTab = k; render(); } }, l)));
+  body.append(tabs);
+  if (S.clientTab === 'timeline') {
+    body.append(v ? timelineBox(v.timeline, v.entries, { project_id: d.project_id, deal_id: d.id, person_ids: d.person_ids || [] }) : loading());
+  } else {
+    // Следующий шаг — открытое дело сделки; без него сделка застынет.
+    const items = all().filter((t) => t.deal_id === d.id && (S.showDone || isOpen(t)));
+    const open = items.filter(isOpen);
+    body.append(el('div', {}, el('div', { class: 'toolbar' }, doneToggle()),
+      open.length || d.stage === 'archive' ? null : el('div', { class: 'next none pad' }, 'Нет следующего дела — сделка без шага застынет. Скажи его в строке наверху.'),
+      items.length ? grouped(items, 'date') : null));
+  }
   const legacy = [d.my_view != null || S.me.role === 'owner' ? ['Как я вижу (только мне)', 'my_view', true] : null, ['Идеи', 'ideas', true],
     d.next_step ? ['Следующий шаг (Notion)', 'next_step', false] : null, d.ball ? ['Мяч (Notion)', 'ball', false] : null,
     d.log ? ['Хронология (Notion)', 'log', false] : null].filter(Boolean);
-  card.append(el('details', { open: d.my_view || d.ideas ? true : null }, el('summary', {}, 'Заметки и тексты из Notion'),
+  body.append(el('details', { open: d.my_view || d.ideas ? true : null }, el('summary', {}, 'Заметки и тексты из Notion'),
     legacy.map(([label, f, edit]) => {
       const ta = el('textarea', { class: 'notes', readonly: edit ? null : true }, d[f] || '');
       if (edit) ta.addEventListener('change', () => save(f, ta.value.trim() || null));
       return el('div', { class: 'legacy' }, el('div', { class: 'faint' }, label), ta);
     })));
   if (v && v.history.length) {
-    card.append(el('details', {}, el('summary', {}, 'Журнал сделки'), v.history.map((h) => {
+    body.append(el('details', {}, el('summary', {}, 'Журнал сделки'), v.history.map((h) => {
       const a = h.after || {};
       const what = h.op === 'insert' ? 'заведена' : a.stage ? 'стадия: ' + (STAGE[a.stage] || a.stage) + (a.outcome ? ' — ' + OUTCOME[a.outcome] : '') : Object.keys(a).join(', ');
       return el('div', { class: 'hist' }, `${h.at.slice(0, 16).replace('T', ' ')} · ${h.actor} · ${what}`);
     })));
   }
-  return el('section', { class: 'card-pane', 'data-key': 'deal:' + S.dealId }, card);
+  return [head(d.name, sub), body];
 }
 
 // ── Человек в CRM (на его странице) ─────────────────────────────────────
@@ -2265,14 +2622,14 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (document.querySelector('.pop')) { closePop(); return; }
     if (rec || S.askTask) { stopListening(); S.askTask = null; S.listenQuick = false; render(); return; }
-    if (S.cardId || S.draft || S.dealId) { S.cardId = null; S.draft = null; S.dealId = null; render(); return; }
+    if (S.cardId || S.draft) { S.cardId = null; S.draft = null; render(); return; }
     if (S.sel.size) { S.sel.clear(); render(); }
     return;
   }
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === '/') { e.preventDefault(); document.querySelector('.side-search')?.focus(); }
   if (e.key === 'n' || e.key === 'т') { e.preventDefault(); document.getElementById('quick')?.focus(); }
-  const jump = { m: 'morning', u: 'upcoming', i: 'inbox', w: 'waiting' }[e.key];
+  const jump = { m: 'now', u: 'upcoming', i: 'new', w: 'waiting' }[e.key];
   if (jump) go('#/' + jump);
 });
 

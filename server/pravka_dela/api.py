@@ -19,7 +19,7 @@
 | GET  /api/task/<id или номер> | дело с комментариями и журналом |
 | POST /api/parse | {"text", "project_id"?, "person_id"?} — Claude режет текст на дела и заводит их; ответ — номер задания |
 | GET  /api/parse/<номер> | run, пока думает; потом done с делами и заметками или error |
-| POST /api/ask | {"text", "scope": {"title", "task_ids", "focus"?, "project_id"?, "person_id"?, "suggestion_ids"?}} — Claude правит дела страницы словами, в «Новом» — и решает предложения на экране (ask.py); ответ — номер задания |
+| POST /api/ask | {"text", "scope": {"title", "task_ids", "focus"?, "project_id"?, "person_id"?, "deal_id"?, "card"?, "suggestion_ids"?}} — Claude правит дела страницы словами, в «Новом» — и решает предложения на экране, в карточке (card: client, person, deal) — и её хронологию, людей, сделки (ask.py); ответ — номер задания |
 | GET  /api/ask/<номер> | как у разбора; done — что поменялось (changed: как было и стало), новые дела, решения по «Новому» (decided), ответ Claude |
 | GET  /api/reminders/due | только бот Ковчега: напоминания, которым пора в Telegram (remind.py) |
 | POST /api/reminders/act | только бот Ковчега: {"telegram_id", "num", "action": done, snooze, tomorrow, "minutes"?} — кнопка под напоминанием от имени нажавшего |
@@ -303,11 +303,13 @@ def build(cfg: Config) -> Starlette:
         try:
             scope["task_ids"] = [str(uuid.UUID(str(x))) for x in (raw.get("task_ids") or [])][:ask.MAX_TASKS]
             scope["suggestion_ids"] = [str(uuid.UUID(str(x))) for x in (raw.get("suggestion_ids") or [])][:ask.MAX_SUGS]
-            for k in ("focus", "project_id", "person_id"):
+            for k in ("focus", "project_id", "person_id", "deal_id"):
                 if raw.get(k):
                     scope[k] = str(uuid.UUID(str(raw[k])))
         except (ValueError, TypeError):
             return _err("scope: id — не uuid", 400)
+        if raw.get("card") in ("client", "person", "deal"):
+            scope["card"] = raw["card"]  # карточка на экране: Claude видит и правит её (ask.card_ops)
         now = time.monotonic()
         for k in [k for k, j in jobs.items() if now - j["at"] > JOB_TTL and j["status"] != "run"]:
             del jobs[k]

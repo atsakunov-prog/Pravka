@@ -18,6 +18,7 @@ import datetime as dt
 import json
 import logging
 import re
+import uuid
 from pathlib import Path
 
 from . import db, llm, remind, store
@@ -130,19 +131,21 @@ def ask(cl, system: str, user_text: str) -> dict:
     return data
 
 
-def to_ops(data: dict, index: dict, defaults: dict, source: str, places: list[str] | None = None) -> list[dict]:
+def to_ops(data: dict, index: dict, defaults: dict, source: str, places: list[str] | None = None,
+           ref: str | None = None) -> list[dict]:
     """Ответ Claude — в операции Дел. Имена — в id по справочнику; не нашлось — пусто.
 
     Напоминание — как у телефона (parseTasksDela): время — местное «ГГГГ-ММ-ДД ЧЧ:ММ» по
     Москве в timestamptz; место — только из мест телефона (places), иное не теряется, а
-    ложится строкой в заметки дела.
+    ложится строкой в заметки дела. ref — метка наговорки (source_ref дел, у заметок — ref:номер),
+    по ней «Новое» показывает, что из сказанного куда попало.
     """
     ops = []
     for t in data.get("tasks") or []:
         title = (t.get("title") or "").strip()
         if not title:
             continue
-        task = {"title": title, "source": source}
+        task = {"title": title, "source": source, **({"source_ref": ref} if ref else {})}
         notes = (t.get("notes") or "").strip()
         pid = _one(index, "projects", t.get("project") or "") or defaults.get("project_id")
         if pid:
@@ -184,11 +187,13 @@ def to_ops(data: dict, index: dict, defaults: dict, source: str, places: list[st
         if labels:
             task["labels"] = labels
         ops.append({"op": "task.create", "task": task})
-    for n in data.get("notes") or []:
+    for i, n in enumerate(data.get("notes") or []):
         text = (n.get("text") or "").strip()
         if not text:
             continue
         item = {"at": dt.datetime.now(dt.timezone.utc).isoformat(), "kind": "note", "summary": text, "source": "raznoska"}
+        if ref:
+            item["source_ref"] = f"{ref}:{i}"
         pid = _one(index, "projects", n.get("project") or "") or defaults.get("project_id")
         if pid:
             item["project_id"] = str(pid)
@@ -231,7 +236,11 @@ def run(url: str, user: str, text: str, defaults: dict, key: str, proxy: str | N
     data = ask_fn(system, user_text)
     usage = data.get("_usage")
     llm.account(url, "parse", llm.cost(usage, MODEL), (usage or {}).get("model") or MODEL)
-    ops = to_ops(data, index, defaults or {}, source, places)
+    # Наговорка — строкой рядом с делами: «Новое» показывает, что сказано и куда что попало.
+    ref = f"parse:{uuid.uuid4()}"
+    ops = to_ops(data, index, defaults or {}, source, places, ref)
+    if ops:
+        ops.insert(0, {"op": "dictation.add", "dictation": {"id": ref, "text": text, "source": {"app": "phone", "web": "web"}.get(via, "bot")}})
     res = store.apply_ops(url, user, ops, via, actor) if ops else {"results": []}
     tasks = [r["task"] for r in res["results"] if r.get("ok") and r.get("task")]
     notes = [r["row"] for r in res["results"] if r.get("ok") and r.get("row")]

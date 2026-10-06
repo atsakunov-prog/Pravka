@@ -24,6 +24,14 @@ sonnet или opus, claude_effort — low, medium, high). По умолчани�
 Напоминания в Telegram (06.10.2026): «напомни в 11», «напомни, когда приеду домой», «через час ещё
 раз» — поля remind_at и remind_place. Правила — раздел «НАПОМИНАНИЕ» общего промпта разбора
 (server/contract/prompts/raznoska.txt): один текст на телефон, звёздочку и правку словами.
+
+Карточки (06.10.2026). Владелец: «в любой карточке клиента или человека сверху должен быть текстбокс
+Клода, который видит именно эти дела… ему можно надиктовать, и он может исправить всё, что нужно в
+этой карточке, и это конечно же должен делать Опус». На странице клиента, сделки или человека
+(scope.card) Claude видит и саму карточку — сделки, людей, последние записи хронологии — и кроме дел
+правит её: пишет в хронологию (notes), людей — откуда, должность, убрать из клиента (people), сделки —
+стадия, итог, вероятность (deals). Модель в карточке — всегда Opus 5.5 (CARD_MODEL), глубина — из
+«Настроек». «Сейчас» — не больше пяти дел (NOW_MAX): лишнее Claude не ставит, а говорит почему.
 """
 
 from __future__ import annotations
@@ -32,12 +40,16 @@ import datetime as dt
 import json
 import logging
 import re
+import uuid
 
-from . import db, llm, parse, remind, store
+from . import db, llm, parse, people, remind, store
 
 log = logging.getLogger("dela.ask")
 
 MODEL = "claude-sonnet-5-5"    # по умолчанию; в настройках — llm.MODELS
+CARD_MODEL = "claude-opus-5-5"  # карточка клиента, сделки, человека — решение владельца 06.10.2026
+NOW_MAX = 5                     # «Сейчас» — дела, которые обязан сделать сегодня: не больше пяти
+TIMELINE_SHOWN = 12             # записей хронологии в карточке для Claude
 EFFORT = "low"                 # правка короткая; ошибается — «Вдумчиво» в настройках
 MAX_INPUT = 4000
 MAX_TASKS = 300
@@ -95,6 +107,27 @@ create — новые дела, только если Саша прямо про
   (title обязателен; due, now, project, person, ball, notes_add — заметка нового дела).
 reply — одна-две фразы Саше: что сделал. Чего не понял или не нашёл — скажи прямо. Без вступлений.
 
+КАРТОЧКА — если Саша на странице клиента, сделки или человека, в сообщении есть раздел КАРТОЧКА:
+кто это, сделки, люди, последние записи хронологии. «Он», «они», «по ним», «этот проект» — про неё.
+card — правки самой карточки, по записи на правку; do — что это. Поля, которые правке не нужны, — пусто
+  ("" у строк, 0 у чисел, false, []). Вне карточки do бывает только "person".
+  do "note" — записать в хронологию: что было (звонок, встреча, переписка), о чём договорились, факт
+    или новость. Это не дела: что сделать — в changes и create, что уже произошло — сюда. text — суть
+    коротко, словами Саши; kind — call, meeting, telegram, email или note; date — ГГГГ-ММ-ДД, если
+    сказано когда, иначе пусто (сегодня); name — сделка, если запись про неё; people — короткие имена.
+  do "person" — правка человека. name — имя из ЛЮДЕЙ; org — откуда он: ровно имя клиента из ПРОЕКТОВ
+    (· клиент) или компании из КОМПАНИЙ, «-» — ни откуда; role — должность («CFO»), «-» — стереть;
+    remove — true, если Саша говорит убрать человека из этого клиента или сделки («он не отсюда»);
+    new — true, только если Саша просит завести человека, которого в справочнике нет: name — как
+    назван, полностью.
+  do "deal" — правка сделки (у клиента их несколько — это его проекты). name — ровно имя из СДЕЛОК,
+    "" — сделка этой карточки; stage — lead (лид), proposal (КП), mandate (мандат, подписали), active
+    (в работе), closing (закрытие) или итог: won (сделали), lost (проиграли, «этого уже нет»), paused
+    (заморозили); text — почему итог, словами Саши; probability — вероятность, %, 0 — не менять; date —
+    ГГГГ-ММ-ДД, когда ждём решения, «-» — убрать; new — true, если Саша просит завести новую
+    сделку: name — «Клиент: тема», клиент — из карточки.
+«Сейчас» (now "on") — не больше пяти дел на сегодня: их Саша обязан сделать. Уже пять — скажи в reply.
+
 ПРАВИЛА
 — Меняй только то, что сказано. Не выдумывай сроки, людей и проекты.
 — «Все», «эти», «просроченные», «по Ивану», «клиентские» — про дела на экране: выбери их сам по
@@ -143,20 +176,66 @@ _SUG = {
     "required": ["n", "decision", "reason", *_SUG_TEXT, "ball", "now"],
     "additionalProperties": False,
 }
+# Новые дела внутри правки — только нужные поля: каждое поле схемы растит грамматику ответа, а у неё
+# предел (06.10.2026: с карточкой полный набор полей у create не прошёл — «compiled grammar is too large»).
+_CREATE = {
+    "type": "object",
+    "properties": {**{k: {"type": "string"} for k in ["title", "notes_add", "project", "person", "due"]},
+                   "ball": _ITEM["properties"]["ball"], "now": _ITEM["properties"]["now"]},
+    "required": ["title", "notes_add", "project", "person", "due", "ball", "now"],
+    "additionalProperties": False,
+}
+# Карточка (06.10.2026): хронология, люди, сделки — одним массивом и без перечислений, по той же причине.
+_CARD = {
+    "type": "object",
+    "properties": {
+        "do": {"type": "string", "enum": ["note", "person", "deal"]},
+        **{k: {"type": "string"} for k in ["name", "text", "kind", "date", "org", "role", "stage"]},
+        "probability": {"type": "integer"},
+        "remove": {"type": "boolean"},
+        "new": {"type": "boolean"},
+        "people": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["do", "name", "text", "kind", "date", "org", "role", "stage", "probability", "remove", "new", "people"],
+    "additionalProperties": False,
+}
 # Одна схема на все страницы: кэш привязан к схеме ответа, и с разными он бы не делился.
 SCHEMA = {
     "type": "object",
     "properties": {
         "route": {"type": "string", "enum": ["edit", "new"]},
         "changes": {"type": "array", "items": _ITEM},
-        "create": {"type": "array", "items": _ITEM},
+        "create": {"type": "array", "items": _CREATE},
         "suggestions": {"type": "array", "items": _SUG},
+        "card": {"type": "array", "items": _CARD},
         "reply": {"type": "string"},
     },
-    "required": ["route", "changes", "create", "suggestions", "reply"],
+    "required": ["route", "changes", "create", "suggestions", "card", "reply"],
     "additionalProperties": False,
 }
+NOTE_KINDS = {"call", "meeting", "zoom", "telegram", "email", "whatsapp", "note", "other"}
+OPEN_STAGES = {"lead", "proposal", "mandate", "active", "closing"}
+OUTCOMES = {"won", "lost", "paused"}
 
+
+def split_card(items: list[dict] | None) -> dict:
+    """card из ответа Claude → notes, people, deals в форме card_ops. Строки без перечислений в схеме —
+    поэтому вид записи, стадию и итог проверяем здесь: чужое слово — пусто."""
+    out: dict = {"notes": [], "people": [], "deals": []}
+    for x in items or []:
+        g = lambda k: (x.get(k) or "").strip()  # noqa: E731
+        if x.get("do") == "note":
+            out["notes"].append({"text": g("text"), "kind": g("kind") if g("kind") in NOTE_KINDS else "note", "date": g("date"),
+                                 "deal": g("name"), "people": x.get("people") or []})
+        elif x.get("do") == "person":
+            out["people"].append({"person": g("name"), "org": g("org"), "role": g("role"), "remove": bool(x.get("remove")),
+                                  "new": bool(x.get("new"))})
+        elif x.get("do") == "deal":
+            st = g("stage")
+            out["deals"].append({"deal": g("name"), "stage": st if st in OPEN_STAGES else "", "outcome": st if st in OUTCOMES else "",
+                                 "reason": g("text"), "probability": int(x.get("probability") or 0), "expected_on": g("date"),
+                                 "name": "", "new": bool(x.get("new"))})
+    return out
 
 class AskError(Exception):
     """Команда не сложилась — словами для человека."""
@@ -186,7 +265,111 @@ def _catalog(conn) -> tuple[str, dict]:
     index["deals"] = {}
     for d in deals:
         index["deals"].setdefault(parse._norm(d["name"]), []).append((d["id"], d["project_id"]))
+    # Откуда человек: клиент (его организация) или компания без проекта — банк, фонд, партнёр.
+    orgs = conn.execute(
+        "SELECT o.id, o.name, o.aliases, bool_or(p.id IS NOT NULL) AS client FROM crm.orgs o "
+        "LEFT JOIN crm.projects p ON p.org_id = o.id AND p.archived_at IS NULL "
+        "WHERE o.archived_at IS NULL GROUP BY o.id ORDER BY o.name"
+    ).fetchall()
+    free = [o for o in orgs if not o["client"]]
+    if free:
+        text += "\n\nКОМПАНИИ (org у человека — ровно имя; это не клиенты: банки, фонды, партнёры):\n" + "\n".join(
+            f"— {o['name']}" + (f" ({', '.join(o['aliases'])})" if o["aliases"] else "") for o in free)
+    index["orgs"] = {}
+    for o in orgs:
+        for n in [o["name"], *(o["aliases"] or [])]:
+            index["orgs"].setdefault(parse._norm(n), []).append(o["id"])
+    for pr in conn.execute("SELECT name, aliases, org_id FROM crm.projects WHERE kind = 'client' AND org_id IS NOT NULL "
+                           "AND archived_at IS NULL").fetchall():
+        for n in [pr["name"], *(pr["aliases"] or [])]:
+            index["orgs"].setdefault(parse._norm(n), []).append(pr["org_id"])
     return text, index
+
+
+STAGE_WORD = {"lead": "лид", "proposal": "КП", "mandate": "мандат", "active": "в работе", "closing": "закрытие", "archive": "архив"}
+OUTCOME_WORD = {"won": "сделали", "lost": "проиграли", "paused": "заморожено"}
+KIND_WORD = {"call": "звонок", "meeting": "встреча", "zoom": "Zoom", "telegram": "Telegram", "email": "почта",
+             "whatsapp": "WhatsApp", "note": "заметка", "other": "другое"}
+
+
+def _names_of(conn, ids) -> str:
+    ids = [str(x) for x in ids or []]
+    if not ids:
+        return ""
+    rows = conn.execute("SELECT coalesce(short, name) AS n FROM crm.people WHERE id = ANY(%s::uuid[]) ORDER BY 1", (ids,)).fetchall()
+    return ", ".join(r["n"] for r in rows)
+
+
+def _deal_line(conn, d: dict) -> str:
+    bits = [d["name"], STAGE_WORD.get(d["stage"], d["stage"])
+            + (f" — {OUTCOME_WORD.get(d['outcome'], d['outcome'])}" if d.get("outcome") else "")]
+    if d.get("lead_person_id"):
+        bits.append("ведёт " + _names_of(conn, [d["lead_person_id"]]))
+    if d.get("person_ids"):
+        bits.append("люди клиента: " + _names_of(conn, d["person_ids"]))
+    if d.get("probability"):
+        bits.append(f"вероятность {d['probability']}%")
+    if d.get("expected_on"):
+        bits.append(f"решение ждём {d['expected_on'].isoformat()}")
+    return " · ".join(bits)
+
+
+def _timeline_lines(conn, where: str, params: list) -> list[str]:
+    rows = conn.execute(
+        "SELECT i.at, i.kind, i.summary, d.name AS deal FROM crm.interactions i LEFT JOIN crm.deals d ON d.id = i.deal_id "
+        f"WHERE i.deleted_at IS NULL AND {where} ORDER BY i.at DESC LIMIT %s", [*params, TIMELINE_SHOWN]).fetchall()
+    return [f"— {r['at'].astimezone(MSK).strftime('%d.%m')} {KIND_WORD.get(r['kind'], r['kind'])}: {_short(r['summary'], 160)}"
+            + (f" · {r['deal']}" if r["deal"] else "") for r in rows] or ["(пусто)"]
+
+
+def _person_line(conn, pe: dict) -> str:
+    org = conn.execute("SELECT name FROM crm.orgs WHERE id = %s", (pe["org_id"],)).fetchone() if pe.get("org_id") else None
+    label = pe.get("short") or pe["name"]
+    return " · ".join(x for x in [label + (f" ({pe['name']})" if pe["name"] != label else ""), pe.get("role"),
+                                  org and f"откуда: {org['name']}"] if x)
+
+
+def _card(conn, scope: dict) -> tuple[list[str], dict | None]:
+    """Карточка на экране — словами для Claude и указатели для правок (клиент, сделка, человек)."""
+    kind = scope.get("card")
+    if kind == "deal" and scope.get("deal_id"):
+        d = conn.execute("SELECT * FROM crm.v_deals WHERE id = %s", (scope["deal_id"],)).fetchone()
+        if not d:
+            return [], None
+        pr = conn.execute("SELECT id, name, org_id FROM crm.projects WHERE id = %s", (d["project_id"],)).fetchone()
+        lines = [f"КАРТОЧКА: сделка «{d['name']}» клиента «{pr['name']}» — {_deal_line(conn, d)}"]
+        if d.get("deal_type"):
+            lines.append(f"Тип: {d['deal_type']}")
+        if d.get("team_ids"):
+            lines.append("Команда: " + _names_of(conn, d["team_ids"]))
+        lines += ["Хронология сделки (свежие сверху):", *_timeline_lines(conn, "i.deal_id = %s", [d["id"]])]
+        return lines, {"kind": "deal", "deal": d, "project": pr}
+    if kind == "client" and scope.get("project_id"):
+        pr = conn.execute("SELECT * FROM crm.projects WHERE id = %s", (scope["project_id"],)).fetchone()
+        if not pr:
+            return [], None
+        lines = [f"КАРТОЧКА: клиент «{pr['name']}»" + (f" (ещё зовут: {', '.join(pr['aliases'])})" if pr["aliases"] else "")]
+        deals = conn.execute("SELECT * FROM crm.v_deals WHERE project_id = %s ORDER BY stage = 'archive', name", (pr["id"],)).fetchall()
+        lines += ["Сделки клиента (его проекты):", *([f"— {_deal_line(conn, d)}" for d in deals] or ["(нет)"])]
+        ppl = conn.execute(
+            "SELECT pe.* FROM crm.people pe WHERE pe.archived_at IS NULL AND ((pe.org_id IS NOT NULL AND pe.org_id = %s) "
+            "OR EXISTS (SELECT 1 FROM crm.deals d WHERE d.project_id = %s AND pe.id = ANY (d.person_ids))) ORDER BY pe.name",
+            (pr["org_id"], pr["id"])).fetchall()
+        lines += ["Люди клиента:", *([f"— {_person_line(conn, x)}" for x in ppl] or ["(нет)"])]
+        lines += ["Хронология (свежие сверху):", *_timeline_lines(conn, "i.project_id = %s", [pr["id"]])]
+        return lines, {"kind": "client", "project": pr, "deals": deals, "people": ppl}
+    if kind == "person" and scope.get("person_id"):
+        pe = conn.execute("SELECT * FROM crm.people WHERE id = %s", (scope["person_id"],)).fetchone()
+        if not pe:
+            return [], None
+        lines = [f"КАРТОЧКА: человек — {_person_line(conn, pe)}"]
+        deals = conn.execute(
+            "SELECT * FROM crm.v_deals WHERE lead_person_id = %s OR %s = ANY (team_ids) OR %s = ANY (person_ids) "
+            "OR source_person_id = %s ORDER BY stage = 'archive', name", [pe["id"]] * 4).fetchall()
+        lines += ["Его сделки:", *([f"— {_deal_line(conn, d)}" for d in deals] or ["(нет)"])]
+        lines += ["Хронология с ним (свежие сверху):", *_timeline_lines(conn, "%s = ANY (i.person_ids)", [pe["id"]])]
+        return lines, {"kind": "person", "person": pe}
+    return [], None
 
 
 def _calendar(today: dt.date) -> str:
@@ -223,6 +406,9 @@ def _task_line(t: dict, today: dt.date) -> str:
     note = _short(t.get("notes"))
     line = " · ".join(bits)
     return line + (" — " + note if note else "")
+
+
+MSK = dt.timezone(dt.timedelta(hours=3))
 
 
 def _short(text: str | None, n: int = NOTE_CHARS) -> str:
@@ -366,10 +552,27 @@ def _fields(x: dict, t: dict | None, index: dict, today: dt.date) -> tuple[dict,
 _wire = store.jsonable  # значение поля так, как его шлёт веб: даты и uuid строкой, время ЧЧ:ММ
 
 
-def to_ops(data: dict, tasks: dict, index: dict, today: dt.date, defaults: dict) -> tuple[list[dict], list[dict], list[str]]:
-    """Ответ Claude → операции Дел, «как было» для отмены и чего не получилось."""
+def to_ops(data: dict, tasks: dict, index: dict, today: dt.date, defaults: dict,
+           now_ids: set[str] | None = None) -> tuple[list[dict], list[dict], list[str]]:
+    """Ответ Claude → операции Дел, «как было» для отмены и чего не получилось.
+
+    now_ids — дела, уже стоящие в «Сейчас»: больше NOW_MAX туда не встанет (None — без счёта).
+    """
     ops, undo, miss = [], [], []
     seen = set()
+    room = None
+    if now_ids is not None:
+        off = {str(t["id"]) for x in data.get("changes") or [] if x.get("now") == "off"
+               and (t := tasks.get(x.get("num"))) and str(t["id"]) in now_ids}
+        room = NOW_MAX - len(now_ids - off)
+
+    def fits(tid: str | None) -> bool:
+        nonlocal room
+        if room is None or (tid and tid in now_ids):
+            return True
+        room -= 1
+        return room >= 0
+
     for x in data.get("changes") or []:
         t = tasks.get(x.get("num"))
         if not t:
@@ -381,6 +584,9 @@ def to_ops(data: dict, tasks: dict, index: dict, today: dt.date, defaults: dict)
         set_, why = _fields(x, t, index, today)
         miss += [f"#{t['num']}: не нашёл {w}" for w in why]
         set_ = {k: v for k, v in set_.items() if _wire(t.get(k)) != v and not (t.get(k) in (None, [], "") and v in (None, [], ""))}
+        if set_.get("focus_on") and not fits(str(t["id"])):
+            del set_["focus_on"]
+            miss.append(f"#{t['num']}: в «Сейчас» уже {NOW_MAX} — не поставил, сначала убери одно")
         status = x.get("status") if x.get("status") in ("done", "cancelled", "open") and x.get("status") != t["status"] else None
         if not set_ and not status:
             continue
@@ -400,10 +606,231 @@ def to_ops(data: dict, tasks: dict, index: dict, today: dt.date, defaults: dict)
         for k in ("project_id", "person_id"):
             if k not in task and defaults.get(k) and not (k == "project_id" and (x.get("project") or "").strip() == "-"):
                 task[k] = defaults[k]
+        # На странице сделки новое дело — её следующий шаг, если проект тот же.
+        if defaults.get("deal_id") and "deal_id" not in task and task.get("project_id") == defaults.get("project_id"):
+            task["deal_id"] = defaults["deal_id"]
         if task.get("ball") in ("waiting", "agenda") and not task.get("person_id"):
             task["ball"] = "mine"
+        if task.get("focus_on") and not fits(None):
+            del task["focus_on"]
+            miss.append(f"«{task['title']}»: в «Сейчас» уже {NOW_MAX} — завёл без него")
         ops.append({"op": "task.create", "task": task})
     return ops, undo, miss
+
+
+def _person_ref(conn, index: dict, name: str) -> dict | None:
+    """Человек по имени: справочник разбора, потом общее узнавание (уменьшительные, падежи) — только уверенное."""
+    pid = parse._one(index, "people", name)
+    if not pid:
+        w = people.who(conn, q=name)
+        pid = w["best"]["id"] if w["sure"] else None
+    return conn.execute("SELECT * FROM crm.people WHERE id = %s", (pid,)).fetchone() if pid else None
+
+
+def _org_ref(index: dict, name: str):
+    ids = list(dict.fromkeys(index.get("orgs", {}).get(parse._norm(name), [])))
+    return ids[0] if len(ids) == 1 else None
+
+
+def _deal_ref(index: dict, name: str, project_id: str | None):
+    hits = list(dict.fromkeys(index["deals"].get(parse._norm(name), [])))
+    if project_id:
+        hits = [h for h in hits if str(h[1]) == str(project_id)] or hits
+    return hits[0] if len(hits) == 1 else None
+
+
+def _org_name(conn, oid) -> str:
+    row = conn.execute("SELECT name FROM crm.orgs WHERE id = %s", (oid,)).fetchone() if oid else None
+    return row["name"] if row else "?"
+
+
+def card_ops(conn, data: dict, card: dict | None, index: dict, today: dt.date) -> tuple[list[dict], list[dict], list[str]]:
+    """Хронология, люди и сделки из ответа Claude → операции. plan — по записи на правку: что она значит
+    словами (what), сколько операций (n) и чем её вернуть (undo) — для ответа и «Вернуть всё»."""
+    ops, plan, miss = [], [], []
+    if not card:
+        # Людей правим откуда угодно («Иван теперь CFO в Бете» на странице «Люди»), хронологию и сделки — в карточке.
+        if any(data.get(k) for k in ("notes", "deals")):
+            miss.append("хронологию и сделки правлю на странице клиента, сделки или человека")
+        card = {"kind": None}
+    project = card.get("project")
+    pid = str(project["id"]) if project else None
+    now = dt.datetime.now(dt.timezone.utc)
+
+    for n in (data.get("notes") or []) if card["kind"] else []:
+        text = (n.get("text") or "").strip()
+        if not text:
+            continue
+        d = _date(n.get("date"))
+        item = {"id": str(uuid.uuid4()), "kind": n.get("kind") or "note", "summary": text, "source": "manual",
+                "at": (dt.datetime.combine(d, dt.time(12), MSK) if d and d != today else now).isoformat()}
+        if pid:
+            item["project_id"] = pid
+        if card["kind"] == "deal":
+            item["deal_id"] = str(card["deal"]["id"])
+        elif (n.get("deal") or "").strip():
+            hit = _deal_ref(index, n["deal"], pid)
+            if hit:
+                item["deal_id"], item["project_id"] = str(hit[0]), str(hit[1])
+            else:
+                miss.append(f"не нашёл сделку «{n['deal']}» — записал без неё")
+        who = [str(card["person"]["id"])] if card["kind"] == "person" else []
+        for name in n.get("people") or []:
+            pe = _person_ref(conn, index, name)
+            if pe:
+                who.append(str(pe["id"]))
+            else:
+                miss.append(f"не нашёл человека «{name}» для хронологии")
+        if who:
+            item["person_ids"] = list(dict.fromkeys(who))
+        ops.append({"op": "interaction.add", "data": item})
+        plan.append({"what": f"в хронологию: {text}", "n": 1, "undo": [{"op": "interaction.delete", "id": item["id"]}]})
+
+    for x in data.get("people") or []:
+        name = (x.get("person") or "").strip()
+        if not name:
+            continue
+        set_: dict = {}
+        org = (x.get("org") or "").strip()
+        if org == "-":
+            set_["org_id"] = None
+        elif org:
+            oid = _org_ref(index, org)
+            if oid:
+                set_["org_id"] = str(oid)
+            else:
+                miss.append(f"{name}: не нашёл компанию «{org}» — заведи её клиентом или скажи точнее")
+        role = (x.get("role") or "").strip()
+        if role == "-":
+            set_["role"] = None
+        elif role:
+            set_["role"] = role[:120]
+        pe = _person_ref(conn, index, name)
+        if pe is None:
+            if not x.get("new"):
+                miss.append(f"не нашёл человека «{name}»")
+                continue
+            row = {"id": str(uuid.uuid4()), "name": name, **{k: v for k, v in set_.items() if v}}
+            if "org_id" not in row and project and project.get("org_id"):
+                row["org_id"] = str(project["org_id"])
+            ops.append({"op": "person.create", "data": row})
+            n_ops, undo = 1, [{"op": "person.set", "id": row["id"], "set": {"archived_at": now.isoformat()}}]
+            if card["kind"] == "deal":
+                ids = [str(i) for i in card["deal"]["person_ids"] or []]
+                ops.append({"op": "deal.set", "id": str(card["deal"]["id"]), "set": {"person_ids": ids + [row["id"]]}})
+                undo.append({"op": "deal.set", "id": str(card["deal"]["id"]), "set": {"person_ids": ids}})
+                n_ops += 1
+            plan.append({"what": f"новый человек: {name}" + (f", {row['role']}" if row.get("role") else "")
+                         + (f", откуда — {_org_name(conn, row['org_id'])}" if row.get("org_id") else ""), "n": n_ops, "undo": undo})
+            continue
+        label = pe["short"] or pe["name"]
+        extra = []  # (операция, её отмена): человек уходит из людей сделок клиента
+        if x.get("remove"):
+            if card["kind"] == "client" and pe["org_id"] and str(pe["org_id"]) == str(project.get("org_id")) and "org_id" not in set_:
+                set_["org_id"] = None
+            deals = card.get("deals") or ([card["deal"]] if card["kind"] == "deal" else [])
+            for d in deals:
+                ids = [str(i) for i in d["person_ids"] or []]
+                if str(pe["id"]) in ids:
+                    extra.append(({"op": "deal.set", "id": str(d["id"]), "set": {"person_ids": [i for i in ids if i != str(pe["id"])]}},
+                                  {"op": "deal.set", "id": str(d["id"]), "set": {"person_ids": ids}}))
+        set_ = {k: v for k, v in set_.items() if _wire(pe.get(k)) != v and not (_empty(pe.get(k)) and _empty(v))}
+        if not set_ and not extra:
+            continue
+        words = []
+        if "org_id" in set_:
+            words.append(f"откуда — {_org_name(conn, set_['org_id'])}" if set_["org_id"] else "без компании")
+        if "role" in set_:
+            words.append(f"должность — {set_['role']}" if set_["role"] else "без должности")
+        if x.get("remove"):
+            words.append("убран из карточки")
+        undo = []
+        if set_:
+            ops.append({"op": "person.set", "id": str(pe["id"]), "set": set_})
+            undo.append({"op": "person.set", "id": str(pe["id"]), "set": {k: _wire(pe.get(k)) for k in set_}})
+        for o, u in extra:
+            ops.append(o)
+            undo.append(u)
+        plan.append({"what": f"{label}: " + ", ".join(dict.fromkeys(words)), "n": len(undo), "undo": undo})
+
+    for x in (data.get("deals") or []) if card["kind"] else []:
+        nm = (x.get("deal") or "").strip()
+        new_name = (x.get("name") or "").strip()
+        prob = int(x.get("probability") or 0)
+        exp = (x.get("expected_on") or "").strip()
+        if x.get("new"):
+            title = new_name or nm
+            if not pid or not title:
+                miss.append("новую сделку завожу только в карточке клиента, с названием")
+                continue
+            row = {"id": str(uuid.uuid4()), "project_id": pid, "name": title, "stage": x.get("stage") or "lead"}
+            if prob > 0:
+                row["probability"] = min(prob, 100)
+            if _date(exp):
+                row["expected_on"] = exp
+            ops.append({"op": "deal.create", "data": row})
+            plan.append({"what": f"новая сделка: {title} ({STAGE_WORD[row['stage']]})", "n": 1, "undo": []})
+            continue
+        if card["kind"] == "deal" and (not nm or parse._norm(nm) == parse._norm(card["deal"]["name"])):
+            did = card["deal"]["id"]
+        else:
+            hit = _deal_ref(index, nm, pid) if nm else None
+            if not hit:
+                miss.append(f"не нашёл сделку «{nm}»")
+                continue
+            did = hit[0]
+        d = conn.execute("SELECT * FROM crm.v_deals WHERE id = %s", (did,)).fetchone()
+        set_ = {}
+        if x.get("stage") and x["stage"] != d["stage"]:
+            set_["stage"] = x["stage"]
+        if x.get("outcome"):
+            set_["outcome"] = x["outcome"]
+            set_["lost_reason"] = (x.get("reason") or "").strip() or None
+            set_.pop("stage", None)  # итог сам уводит в архив
+        if prob > 0:
+            set_["probability"] = min(prob, 100)
+        elif prob < 0:
+            set_["probability"] = None
+        if exp == "-":
+            set_["expected_on"] = None
+        elif _date(exp):
+            set_["expected_on"] = exp
+        if new_name and new_name != d["name"]:
+            set_["name"] = new_name
+        set_ = {k: v for k, v in set_.items() if _wire(d.get(k)) != v and not (_empty(d.get(k)) and _empty(v))}
+        if not set_:
+            continue
+        back = {k: _wire(d.get(k)) for k in set_}
+        if "outcome" in set_:  # вернуть из архива: прежняя стадия и без итога
+            back.update(stage=d["stage"], outcome=_wire(d.get("outcome")), closed_on=_wire(d.get("closed_on")))
+        words = []
+        if "stage" in set_:
+            words.append("стадия — " + STAGE_WORD[set_["stage"]])
+        if "outcome" in set_:
+            words.append("закрыта: " + OUTCOME_WORD[set_["outcome"]] + (f" ({set_['lost_reason']})" if set_.get("lost_reason") else ""))
+        if "probability" in set_:
+            words.append(f"вероятность {set_['probability']}%" if set_["probability"] else "без вероятности")
+        if "expected_on" in set_:
+            words.append("решение ждём " + set_["expected_on"] if set_["expected_on"] else "без даты решения")
+        if "name" in set_:
+            words.append(f"название «{set_['name']}»")
+        ops.append({"op": "deal.set", "id": str(did), "set": set_})
+        plan.append({"what": f"{d['name']}: " + ", ".join(words), "n": 1, "undo": [{"op": "deal.set", "id": str(did), "set": back}]})
+    return ops, plan, miss
+
+
+def card_done(plan: list[dict], results: list[dict]) -> tuple[list[dict], list[str]]:
+    """Что прошло из правок карточки: правка с несколькими операциями прошла, если прошли все."""
+    out, errors, i = [], [], 0
+    for w in plan:
+        rs = results[i:i + w["n"]]
+        i += w["n"]
+        bad = [r for r in rs if not r.get("ok")]
+        if bad:
+            errors.append(f"{w['what']}: {bad[0].get('error') or 'не вышло'}")
+        else:
+            out.append({"what": w["what"], "undo": w["undo"]})
+    return out, errors
 
 
 def _empty(v) -> bool:
@@ -545,6 +972,11 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
         today = conn.execute("SELECT crm.today() AS d").fetchone()["d"]
         me = conn.execute("SELECT name, id = crm.owner_id() AS owner FROM crm.users WHERE id = %s", (user,)).fetchone()
         model, effort = settings_of(conn, user)
+        card_lines, card = _card(conn, scope)
+        if card:
+            model = CARD_MODEL
+        now_ids = {str(r["id"]) for r in conn.execute(
+            "SELECT id FROM tasks.tasks WHERE owner_id = %s AND status = 'open' AND focus_on = crm.today()", (user,)).fetchall()}
         index["places"] = places = remind.places_of(conn, user)
         hm = conn.execute("SELECT to_char(now() AT TIME ZONE 'Europe/Moscow', 'HH24:MI') AS hm").fetchone()["hm"]
         rows = conn.execute("SELECT * FROM tasks.v_tasks WHERE id = ANY(%s::uuid[])", (ids,)).fetchall() if ids else []
@@ -566,6 +998,9 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
            f"Страница: {(scope.get('title') or 'Дела').strip()[:200]}"]
     if me and not me["owner"]:
         msg.append(f"Команду даёт не Саша, а {me['name']}: «Саша» и mine выше — про этого человека.")
+    if card_lines:
+        msg += ["", *card_lines]
+    msg.append(f"В «Сейчас» сегодня: {len(now_ids)} из {NOW_MAX}.")
     if focused:
         msg += ["", "ДЕЛО (команда про него):", _task_line(focused, today)]
     msg += ["", f"ДЕЛА НА ЭКРАНЕ ({len(rows)}):"] + ([_task_line(r, today) for r in rows] or ["(нет)"])
@@ -589,22 +1024,41 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
         cl = client(key, proxy)
         ask_fn = lambda s, u: ask(cl, s, u, model, effort)  # noqa: E731
     data = ask_fn(system, "\n".join(msg))
+    if data.get("card"):
+        for k, v in split_card(data["card"]).items():
+            data[k] = (data.get(k) or []) + v
     usage = data.get("_usage")
     llm.account(url, "ask", llm.cost(usage, model), (usage or {}).get("model") or model)
-    if data.get("route") == "new" and not focused and not data.get("suggestions"):
+    defaults = {k: scope[k] for k in ("project_id", "person_id", "deal_id") if scope.get(k)}
+    if card and card["kind"] == "deal":
+        defaults["project_id"] = str(card["deal"]["project_id"])
+    if (data.get("route") == "new" and not focused and not data.get("suggestions")
+            and not any(data.get(k) for k in ("notes", "people", "deals"))):
         # Команда целиком про новые дела — разбор надиктовки, как у звёздочки (тот же промпт, что у телефона).
-        defaults = {k: scope[k] for k in ("project_id", "person_id") if scope.get(k)}
-        out = parse.run(url, user, text, defaults, key, proxy, via=via, actor=actor, ask_fn=parse_fn)
-        return {"route": "new", "reply": "", "changed": [], "decided": [], **out, "usage": usage}
-    defaults = {k: scope[k] for k in ("project_id", "person_id") if scope.get(k)}
+        out = parse.run(url, user, text, {k: v for k, v in defaults.items() if k != "deal_id"}, key, proxy,
+                        via=via, actor=actor, ask_fn=parse_fn)
+        if defaults.get("deal_id"):  # на странице сделки новые дела — её шаги
+            fix = [{"op": "task.set", "id": str(t["id"]), "set": {"deal_id": defaults["deal_id"]}} for t in out["tasks"]
+                   if str(t.get("project_id")) == defaults["project_id"] and not t.get("deal_id")]
+            if fix:
+                got = store.apply_ops(url, user, fix, via, actor)["results"]
+                byid = {str(r["task"]["id"]): r["task"] for r in got if r.get("ok") and r.get("task")}
+                out["tasks"] = [byid.get(str(t["id"]), t) for t in out["tasks"]]
+        return {"route": "new", "reply": "", "changed": [], "decided": [], "crm": [], **out, "usage": usage}
     sops, plan, smiss = sug_ops(data, sugs, targets, index, today)
-    ops, undo, miss = to_ops(data, tasks, index, today, defaults)
-    ops = sops + ops
+    tops, undo, miss = to_ops(data, tasks, index, today, defaults, now_ids)
+    with db.session(url, user, via="ask") as conn:
+        cops, cplan, cmiss = card_ops(conn, data, card, index, today)
+    ops = sops + tops + cops
     res = store.apply_ops(url, user, ops, via, actor) if ops else {"results": []}
-    done, serr = decided(plan, res["results"][:len(sops)])
-    errors = serr + [r["error"] for r in res["results"][len(sops):] if not r.get("ok")]
-    created = [r["task"] for o, r in zip(ops, res["results"]) if o["op"] == "task.create" and r.get("ok") and r.get("task")]
+    results = res["results"]
+    done, serr = decided(plan, results[:len(sops)])
+    terr = [r["error"] for r in results[len(sops):len(sops) + len(tops)] if not r.get("ok")]
+    crm_done, cerr = card_done(cplan, results[len(sops) + len(tops):])
+    errors = serr + terr + cerr
+    created = [r["task"] for o, r in zip(ops, results) if o["op"] == "task.create" and r.get("ok") and r.get("task")]
     if errors:
         log.warning("правка: не прошли %d из %d: %s", len(errors), len(ops), errors[0])
     return {"route": "edit", "reply": (data.get("reply") or "").strip(), "changed": undo, "tasks": created, "decided": done,
-            "notes": [], "errors": errors + smiss + miss, "usage": usage, "model": (usage or {}).get("model") or model}
+            "crm": crm_done, "notes": [], "errors": errors + smiss + miss + cmiss, "usage": usage,
+            "model": (usage or {}).get("model") or model}
