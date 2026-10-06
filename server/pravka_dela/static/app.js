@@ -287,8 +287,7 @@ async function boot() {
   await sync(true);
   render();
   // Пока человек набирает новое дело, фон только подтягивает данные, а не перерисовывает.
-  const typing = () => rec || S.askTask || (document.activeElement?.id === 'quick' && document.activeElement.value);
-  const refresh = () => sync().then(() => { if (!typing()) render(); }).catch(() => {});
+  const refresh = () => sync().then(softRender).catch(() => {});
   setInterval(() => { if (!document.hidden) refresh(); }, 30000);
   window.addEventListener('focus', refresh);
 }
@@ -312,7 +311,9 @@ function render() {
   S.toTop = false;
   const old = document.querySelector('section.card-pane');
   const cardScroll = old ? [old.dataset.key, old.scrollTop] : null;
+  const sideScroll = document.querySelector('aside.side')?.scrollTop || 0;
   $app.replaceChildren(shell);
+  shell.querySelector('aside.side').scrollTop = sideScroll;
   const pane = shell.querySelector('section.card-pane');
   if (pane && cardScroll && pane.dataset.key === cardScroll[0]) pane.scrollTop = cardScroll[1];
   if (S.sideOpen) $app.append(el('div', { class: 'scrim', onclick: () => { S.sideOpen = false; render(); } }));
@@ -326,6 +327,28 @@ function render() {
   }
   renderBulk();
 }
+
+// ── Перерисовка не по действию человека ─────────────────────────────────
+// Синк раз в 30 с и пришедшие данные видов перерисовывали страницу целиком — и открытый выпадающий
+// список, меню или начатый ввод пропадали (владелец, 06.10.2026: «открываю выпадающий список, страница
+// двигается — он пропадает»). Пока человек в списке, меню или пишет — данные копятся, страница ждёт;
+// отпустил — перерисовка.
+function uiBusy() {
+  const ae = document.activeElement;
+  if (rec || S.askTask || document.querySelector('.pop')) return true;
+  if (!ae || ae === document.body) return false;
+  if (ae.tagName === 'SELECT') return true;
+  // Поиск перерисовка переживает (фокус и текст возвращаются), остальной начатый ввод — нет.
+  return /^(INPUT|TEXTAREA)$/.test(ae.tagName) && !!ae.value && !['side-search', 'main-search'].includes(ae.id);
+}
+function softRender() {
+  if (uiBusy()) { S.dirty = true; return; }
+  S.dirty = false;
+  render();
+}
+function afterBusy() { setTimeout(() => { if (S.dirty && !uiBusy()) { S.dirty = false; render(); } }, 60); }
+document.addEventListener('focusout', afterBusy);
+document.addEventListener('change', (e) => { if (e.target.tagName === 'SELECT') afterBusy(); });
 
 function navItem(hash, ico, label, count, on, extra, hot) {
   return el('button', { class: 'nav-item' + (on ? ' on' : ''), onclick: () => go(hash) },
@@ -728,7 +751,11 @@ async function setFields(ids, set, msg) {
   } catch (e) { fail(e); render(); }
 }
 
-function closePop() { document.querySelectorAll('.pop').forEach((p) => p.remove()); }
+function closePop() {
+  const had = document.querySelector('.pop');
+  document.querySelectorAll('.pop').forEach((p) => p.remove());
+  if (had) afterBusy();
+}
 document.addEventListener('click', (e) => { if (!e.target.closest('.pop')) closePop(); });
 
 function popAt(anchor, children) {
@@ -1979,8 +2006,8 @@ function crmGet(path, maxAge = 30000) {
   if (c && c.data && Date.now() - c.at < maxAge) return c.data;
   if (!c || !c.loading) {
     crmCache.set(path, { ...(c || {}), loading: true });
-    api(path).then((d) => { crmCache.set(path, { data: d, at: Date.now() }); render(); })
-      .catch((e) => { crmCache.set(path, { data: c && c.data, at: Date.now(), error: e.message }); render(); });
+    api(path).then((d) => { crmCache.set(path, { data: d, at: Date.now() }); softRender(); })
+      .catch((e) => { crmCache.set(path, { data: c && c.data, at: Date.now(), error: e.message }); softRender(); });
   }
   return c ? c.data : null;
 }
