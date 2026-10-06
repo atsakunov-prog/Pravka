@@ -359,7 +359,24 @@ function renderSide(r) {
   const live = [...S.projects.values()].filter((p) => !p.archived_at && (!S.sphere || p.sphere === S.sphere))
     .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   // Цвет проекта — точкой; просрочка — красным числом (красная точка рядом с цветной путала бы).
-  const projItem = (p) => navItem('#/p/' + p.id, dot(p.id), p.name, openBy.get(p.id), r.kind === 'project' && r.id === p.id, null, lateBy.has(p.id));
+  const plainItem = (p) => navItem('#/p/' + p.id, dot(p.id), p.name, openBy.get(p.id), r.kind === 'project' && r.id === p.id, null, lateBy.has(p.id));
+  // Клиент — с раскрывающимися проектами (сделками) прямо в меню (владелец, 06.10.2026: «проекты
+  // группируются под клиента… в клиентах раскрываемый список у каждого клиента по проектам»).
+  const projItem = (p) => {
+    if (p.kind !== 'client') return plainItem(p);
+    const deals = clientDeals(p.id).filter((d) => d.stage !== 'archive');
+    if (!deals.length) return el('div', { class: 'side-client' }, el('span', { class: 'side-caret' }), plainItem(p));
+    const here = r.kind === 'deal' && deals.some((d) => d.id === r.id);
+    const open = S.clientOpen.has(p.id) || here;
+    const caret = el('button', { class: 'side-caret', title: open ? 'Свернуть проекты' : `Проекты клиента: ${deals.length}`,
+      onclick: (e) => { e.stopPropagation(); toggleClientOpen(p.id); } }, open ? '▾' : '▸');
+    return el('div', { class: 'side-client' + (open ? ' open' : '') }, caret, plainItem(p),
+      open ? el('div', { class: 'side-deals' }, deals.map((d) => {
+        const ts = all().filter((t) => t.deal_id === d.id && isOpen(t));
+        return navItem('#/d/' + d.id, el('span', { class: 'st-dot st-' + d.stage, title: STAGE[d.stage] }), dealShort(d, p), ts.length || null,
+          r.kind === 'deal' && r.id === d.id, null, ts.some(isLate));
+      })) : null);
+  };
   const group = (key, title, items) => {
     if (!items.length) return null;
     return el('div', { class: 'side-group' + (S.closed[key] ? ' closed' : '') },
@@ -1983,6 +2000,21 @@ function renderPipeline() {
 }
 
 // ── Клиенты ─────────────────────────────────────────────────────────────
+// Проект клиента — его сделка в CRM («ПТИЦ: хедж юаня» у клиента «ПТИЦ»): владелец зовёт их проектами.
+const clientDeals = (id) => [...S.deals.values()].filter((d) => d.project_id === id)
+  .sort((a, b) => (a.stage === 'archive') - (b.stage === 'archive') || OPEN_STAGES.indexOf(a.stage) - OPEN_STAGES.indexOf(b.stage) || a.name.localeCompare(b.name, 'ru'));
+function toggleClientOpen(id) {
+  if (S.clientOpen.has(id)) S.clientOpen.delete(id); else S.clientOpen.add(id);
+  LS.set('clientOpen', [...S.clientOpen]);
+  render();
+}
+/** «Клиент: тема» под своим клиентом — просто «тема»: имя клиента и так видно строкой выше. */
+function dealShort(d, p) {
+  const m = d.name.match(/^([^:]{1,60}):\s*(.+)$/);
+  if (!m || !p) return d.name;
+  const head = norm(m[1]);
+  return [p.name, ...(p.aliases || [])].some((n) => { const x = norm(n); return x && (head.startsWith(x.slice(0, 4)) || x.startsWith(head.slice(0, 4))); }) ? m[2] : d.name;
+}
 function renderClients() {
   const v = crmGet('/api/view/clients');
   if (!v) return [head('Клиенты'), el('div', { class: 'body' }, loading())];
@@ -1991,29 +2023,27 @@ function renderClients() {
   if (q) rows = rows.filter((c) => norm(c.name + ' ' + (c.aliases || []).join(' ') + ' ' + (c.org || '')).includes(q));
   const search = el('input', { class: 'inline-search', type: 'search', placeholder: 'Найти клиента', value: S.clientQ || '' });
   search.addEventListener('input', () => { S.clientQ = search.value; const pos = search.selectionStart; render(); const s2 = document.querySelector('.inline-search'); if (s2) { s2.focus(); s2.setSelectionRange(pos, pos); } });
-  // Сделки клиента — его проекты: раскрываются под строкой клиента (владелец, 06.10.2026).
-  const dealsOf = (id) => [...S.deals.values()].filter((d) => d.project_id === id)
-    .sort((a, b) => (a.stage === 'archive') - (b.stage === 'archive') || OPEN_STAGES.indexOf(a.stage) - OPEN_STAGES.indexOf(b.stage) || a.name.localeCompare(b.name, 'ru'));
-  const toggle = (id) => { if (S.clientOpen.has(id)) S.clientOpen.delete(id); else S.clientOpen.add(id); LS.set('clientOpen', [...S.clientOpen]); render(); };
+  // Проекты клиента (сделки CRM) раскрываются под строкой клиента — так же, как в меню слева.
+  const dealsOf = clientDeals, toggle = toggleClientOpen;
   const allOpen = rows.length && rows.every((c) => S.clientOpen.has(c.id));
   const tb = el('div', { class: 'toolbar' }, search,
     el('button', { class: 'chip-btn' + (allOpen ? ' on' : ''), onclick: () => {
       rows.forEach((c) => (allOpen ? S.clientOpen.delete(c.id) : S.clientOpen.add(c.id))); LS.set('clientOpen', [...S.clientOpen]); render();
-    } }, allOpen ? 'Свернуть сделки' : 'Раскрыть сделки'),
+    } }, allOpen ? 'Свернуть проекты' : 'Раскрыть проекты'),
     el('button', { class: 'chip-btn' + (S.clientArch ? ' on' : ''), onclick: () => { S.clientArch = !S.clientArch; render(); } }, 'И архив'),
     el('button', { class: 'chip-btn', onclick: () => newClient() }, '+ Клиент'));
   const dealLine = (d) => {
     const next = all().filter((t) => t.deal_id === d.id && isOpen(t)).sort(sortTasks)[0];
     return el('div', { class: 'cdeal' + (d.stage === 'archive' ? ' arch' : ''), onclick: (e) => { e.stopPropagation(); openDeal(d.id); } },
       el('span', { class: 'cd-stage st-' + d.stage }, stageWord(d)),
-      el('span', { class: 'cd-name' }, d.name),
+      el('span', { class: 'cd-name' }, dealShort(d, project(d.project_id))),
       next ? el('span', { class: 'cd-next' + (isLate(next) ? ' late' : '') }, `#${next.num} ${next.title}` + (next.due_date ? ' · ' + D.ddmm(next.due_date) : ''))
         : d.stage !== 'archive' ? el('span', { class: 'cd-next none' }, 'нет следующего дела') : null);
   };
   const row = (c) => {
     const bits = [];
     if (c.stages && c.stages.length) bits.push(el('span', {}, c.stages.map((s) => STAGE[s]).join(', ')));
-    else bits.push(el('span', { class: 'faint' }, c.all_deals ? 'сделки в архиве' : 'без сделок'));
+    else bits.push(el('span', { class: 'faint' }, c.all_deals ? 'проекты в архиве' : 'без проектов'));
     bits.push(el('span', { class: c.last_touch && D.diff(S.today, c.last_touch.slice(0, 10)) > 45 ? 'late' : '' }, c.last_touch ? 'контакт ' + ago(c.last_touch) : 'контактов нет'));
     if (v.money && c.paid_year_kop) bits.push(el('span', { class: 'money' }, 'за год ' + rubShort(c.paid_year_kop)));
     if (v.money && c.invoiced_kop) bits.push(el('span', { class: 'late' }, 'ждём ' + rubShort(c.invoiced_kop)));
@@ -2023,18 +2053,18 @@ function renderClients() {
     const open = S.clientOpen.has(c.id);
     return el('div', { class: 'cblock' + (open ? ' open' : '') },
       el('div', { class: 'crow', onclick: () => go('#/p/' + c.id) },
-        el('button', { class: 'caret-btn', title: open ? 'Свернуть сделки' : 'Показать сделки', disabled: !deals.length,
+        el('button', { class: 'caret-btn', title: open ? 'Свернуть проекты' : 'Показать проекты', disabled: !deals.length,
           onclick: (e) => { e.stopPropagation(); toggle(c.id); } }, deals.length ? (open ? '▾' : '▸') : ''),
         el('div', { class: 'main' },
           el('div', { class: 'title' }, c.name, c.org && norm(c.org) !== norm(c.name) ? el('span', { class: 'faint' }, ' · ' + c.org) : null,
             c.archived_at ? el('span', { class: 'faint' }, ' · архив') : null,
-            deals.length ? el('span', { class: 'faint' }, ' · ' + plural(deals.length, 'сделка', 'сделки', 'сделок')) : null),
+            deals.length ? el('span', { class: 'faint' }, ' · ' + plural(deals.length, 'проект', 'проекта', 'проектов')) : null),
           el('div', { class: 'chips' }, bits),
           !open && c.next_task ? el('div', { class: 'next' }, `#${c.next_task.num} ${c.next_task.title}` + (c.next_task.due_date ? ' · ' + D.ddmm(c.next_task.due_date) : ''))
             : (!open && c.live_deals ? el('div', { class: 'next none' }, 'нет следующего дела') : null))),
       open ? el('div', { class: 'cdeals' }, shownDeals.map(dealLine),
         deals.length > shownDeals.length ? el('div', { class: 'faint cd-more' }, `и в архиве: ${deals.length - shownDeals.length}`) : null,
-        el('button', { class: 'cdeal add', onclick: () => newDeal(c.id) }, icon('plus', 12), ' сделка')) : null);
+        el('button', { class: 'cdeal add', onclick: () => newDeal(c.id) }, icon('plus', 12), ' проект')) : null);
   };
   const out = [tb, rows.length ? el('div', { class: 'group' }, rows.map(row)) : el('div', { class: 'empty' }, 'Не нашлось.')];
   if (v.unmatched && v.unmatched.length && !q) out.push(renderUnmatched(v.unmatched));

@@ -786,6 +786,20 @@ details summary:hover { color: var(--muted); }
 .pop input:not([type=date]) { width: 100%; background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; margin-top: 4px; }
 .pop input:focus { outline: none; border-color: var(--accent); }
 
+/* Меню слева: клиент с раскрывающимися проектами. */
+.side-client { display: flex; flex-wrap: wrap; align-items: center; }
+.side-client > .nav-item { flex: 1; min-width: 0; width: auto; padding-left: 4px; }
+.side-caret { flex: none; width: 16px; height: 22px; border: 0; background: none; color: var(--faint); font-size: 11px; padding: 0; border-radius: 5px; }
+button.side-caret:hover { color: var(--text); background: var(--hover); }
+.side-deals { flex-basis: 100%; padding-left: 22px; margin: 0 0 4px; border-left: 1px solid var(--line-soft); margin-left: 15px; }
+.side-deals .nav-item { min-height: 27px; padding: 3px 8px; font-size: 13px; color: var(--muted); }
+.side-deals .nav-item.on { color: var(--text); }
+.st-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: var(--faint); }
+.st-dot.st-lead { background: var(--faint); }
+.st-dot.st-proposal { background: var(--warn); }
+.st-dot.st-mandate, .st-dot.st-active { background: var(--ok); }
+.st-dot.st-closing { background: var(--accent); }
+
 /* Клиенты: сделки (проекты клиента) раскрываются под строкой. */
 .cblock { border-radius: 10px; }
 .cblock.open { background: color-mix(in srgb, var(--panel) 45%, transparent); margin: 4px 0; }
