@@ -13,7 +13,8 @@
        ключ Claude для разбора текста — берётся у встреч);
        адрес базы Дел — ещё и в server.env архива: так у Claude в коннекторе
        «Правка» появляются инструменты дел;
-    4. схемы crm и tasks (migrate ролью владельца базы);
+    4. схемы crm и tasks (migrate ролью владельца базы); напоминания, которые телефон
+       клал строкой в заметки, пока сервер их не знал, — в поля напоминания (повтор безвреден);
     5. служба ZF-Dela (NSSM), виртуальная учётка NT SERVICE\ZF-Dela с типом
        SID restricted: писать может только в свои папки, C:\Bot ей закрыт,
        server.env архива она не видит;
@@ -23,8 +24,10 @@
        комментарии, а мост забирает новые задачи до переезда телефона);
     8. запуск, /health, самопроверка; перезапуск архива;
     9. встречи: токен службы и мягкий перезапуск обработчика — задачи из
-       разборов поедут в «Новое»; токен дайджеста Telegram (C:\Bot\Digest\secrets,
-       только alex) — разноска переписки; плашка «Дела» на «Доме».
+       разборов поедут в «Новое»; токен бота Ковчега (kovcheg) — напоминания дел
+       в Telegram шлёт служба встреч, Telegram Саши — из ADMIN_ID бота; токен
+       дайджеста Telegram (C:\Bot\Digest\secrets, только alex) — разноска
+       переписки; плашка «Дела» на «Доме».
   Итог — в D:\PravkaArchive\logs\install-dela-<дата>.log.
 #>
 param(
@@ -178,6 +181,8 @@ with psycopg.connect(dsn, autocommit=True) as c:
 
     Step '4/9 Схемы crm и tasks'
     Py 'migrate' @('-m', 'pravka_dela', '--env', $DelaEnv, 'migrate', '--owner-env', $OwnerEnv)
+    # Пока сервер не знал напоминаний (до 06.10), телефон клал их строкой «⏰ Напомнить…» в заметки.
+    Py 'напоминания из заметок' @('-m', 'pravka_dela', '--env', $DelaEnv, 'remind-notes', '--apply')
 
     Step '5/9 Перенос из Todoist, Notion и ленты'
     $decisions = Join-Path $Import 'decisions.json'
@@ -282,6 +287,22 @@ with psycopg.connect(dsn, autocommit=True) as c:
         Set-EnvLine $meetEnv 'DELA_TOKEN' ((Get-Content -LiteralPath $tmpTok -Raw).Trim())
         Remove-Item -LiteralPath $tmpTok -Force
         Ok 'встречи получили токен: задачи свежих разборов поедут в «Новое»'
+    }
+    # Напоминания дел в Telegram (06.10): шлёт служба встреч ботом Ковчега — её getUpdates, её кнопки.
+    # Свой токен kovcheg: только ему Дела отдают «что пора» (/api/reminders/due) и принимают отметки.
+    if ((Test-Path 'D:\Meetings\secrets') -and -not (Read-Env $meetEnv)['DELA_BOT_TOKEN']) {
+        $tmpTok = Join-Path $env:TEMP 'dela-kovcheg.tok'
+        Py 'токен бота Ковчега' @('-m', 'pravka_dela', '--env', $DelaEnv, 'token', '--user', 'sasha', '--kind', 'service', '--name', 'kovcheg', '--out', $tmpTok)
+        Set-EnvLine $meetEnv 'DELA_BOT_TOKEN' ((Get-Content -LiteralPath $tmpTok -Raw).Trim())
+        Remove-Item -LiteralPath $tmpTok -Force
+        Ok 'бот Ковчега получил токен: напоминания дел пойдут в Telegram'
+    }
+    # Куда слать напоминания Саши: его Telegram — тот же, что у бота (ADMIN_ID).
+    $adminTg = (Read-Env 'C:\Bot\ZFbot\.env')['ADMIN_ID']
+    if ($adminTg -match '^\d+$') {
+        Py 'Telegram Саши' @('-m', 'pravka_dela', '--env', $DelaEnv, 'telegram', 'sasha', $adminTg)
+    } else {
+        Warn 'в C:\Bot\ZFbot\.env нет ADMIN_ID — напоминания некуда слать: python -m pravka_dela telegram sasha <id>'
     }
     # Дайджест Telegram (слушатель C:\Bot\Digest от alex): свой токен — разноска переписки в «Новое».
     $digestDir = 'C:\Bot\Digest'

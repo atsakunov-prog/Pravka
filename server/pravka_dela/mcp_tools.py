@@ -6,6 +6,9 @@
 
 Люди и проекты называются по-человечески («Додо», «Наташа»): имя ищется
 среди алиасов. Дело — по короткому номеру «57» или «#57».
+
+Напоминание в Telegram (06.10.2026): remind_at — «ГГГГ-ММ-ДД ЧЧ:ММ» по Москве, remind_place —
+место телефона («дом»): «напомни мне завтра в 10» из claude.ai доходит до бота Ковчега.
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ import datetime as dt
 import re
 from typing import Any
 
-from . import db, store
+from . import db, remind, store
 
 USER = "sasha"  # архив — одного человека, и Claude в нём действует от его имени
 BALL = {"mine": "моё", "waiting": "жду", "agenda": "повестка"}
@@ -54,6 +57,9 @@ def line(t: dict, today: dt.date | None = None) -> str:
         bits.append(f"напомнить {_d(t['nudge_on'])}")
     if t.get("estimate_min"):
         bits.append(f"{t['estimate_min']} мин")
+    r = remind.state(t, today)
+    if r:
+        bits.append(r)
     m = MONEY.get(t.get("money_eff") or "none")
     if m:
         bits.append(m)
@@ -147,6 +153,24 @@ def _resolve(conn, fields: dict) -> dict:
     for k in ("due_date", "nudge_on"):
         if k in out and out[k] == "":
             out[k] = None
+    # Напоминание — одно из двух: время снимает место, место — время (как карточка телефона).
+    if "remind_at" in out:
+        said = out.pop("remind_at")
+        if said == "":
+            out["remind_at"] = None
+        else:
+            at = remind.local_iso(said)
+            if not at:
+                raise NameError_(f"remind_at «{said}» — нужно «ГГГГ-ММ-ДД ЧЧ:ММ» по Москве")
+            out["remind_at"] = at
+            out.setdefault("remind_place", None)
+    if out.get("remind_place"):
+        places = remind.places_of(conn, USER)
+        out["remind_place"] = remind.match_place(out["remind_place"], places) or out["remind_place"].strip()
+        if "remind_at" not in out:
+            out["remind_at"] = None
+    elif out.get("remind_place") == "":
+        out["remind_place"] = None
     return out
 
 

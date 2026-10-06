@@ -98,3 +98,16 @@ def test_contract_examples_match_server(dela):
     example = {k: v for k, v in TWO["ask"]["done_edit"].items() if k not in ("ok", "status", "_")}
     fields(example, out, "ask route=edit, «Новое»")
     assert TWO["ask"]["request"]["POST /api/ask"]["scope"]["suggestion_ids"]
+
+
+def test_remind_contract_matches_server(dela):
+    """Часть 3 (dela-remind.json): операции есть, флаг в синке, дело синка — со всеми полями примера."""
+    three = json.loads((ROOT / "dela-remind.json").read_text(encoding="utf-8"))
+    assert {o["op"] for o in three["ops_examples"]} <= set(store.HANDLERS)
+    assert three["features"]["example"] == store.FEATURES
+    assert {"remind_at", "remind_place"} <= store.TASK_FIELDS and "reminded_at" not in store.TASK_FIELDS
+    store.apply_ops(dela, "sasha", [{"op": "task.create", "task": {"title": "Позвонить Ивану", "due_date": "2026-10-06",
+                                                                    "remind_at": "2026-10-06T11:00:00+03:00", "source": "voice"}}], "app")
+    out = store.sync(dela, "sasha", 0)
+    assert out["features"] == three["features"]["example"]
+    fields(three["sync_task_example"], out["tasks"][0], "синк, дело")

@@ -32,8 +32,16 @@ OVERLAP = 200
 TASK_FIELDS = {
     "title", "notes", "project_id", "deal_id", "owner_id", "ball", "person_id", "nudge_on", "requested_by",
     "due_date", "due_time", "estimate_min", "money", "want", "focus_on", "labels", "status",
-    "source", "source_ref",
+    "source", "source_ref", "remind_at", "remind_place",
 }
+# reminded_at в TASK_FIELDS нет: его ставит только сервер (task.reminded от бота).
+
+# Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
+# телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
+FEATURES = ["remind"]
+# Токен службы бота Ковчега (python -m pravka_dela token --name kovcheg): только он забирает
+# «что пора» и отмечает отправку (remind.py, task.reminded).
+REMIND_BOT = "kovcheg"
 PROJECT_FIELDS = {"name", "aliases", "sphere", "kind", "org_id", "money_default", "note", "archived_at"}
 DEAL_FIELDS = {
     "project_id", "name", "stage", "deal_type", "lead_person_id", "person_ids", "fee_kop", "deadline",
@@ -179,6 +187,43 @@ def _status(status):
         return op_task_set(conn, user, {"id": op.get("id"), "set": {"status": status}})
 
     return handler
+
+
+def _instant(v: Any) -> dt.datetime | None:
+    if isinstance(v, dt.datetime):
+        return v
+    try:
+        got = dt.datetime.fromisoformat(str(v or ""))
+    except ValueError:
+        return None
+    return got if got.tzinfo else None
+
+
+def op_task_reminded(conn, user, op):
+    """Бот Ковчега отправил напоминание в Telegram: reminded_at — больше не слать.
+
+    Только токен бота: телефон и веб reminded_at не ставят (его нет в TASK_FIELDS). Бот
+    напоминает всем, у кого есть Telegram, а токен у него на одного человека — поэтому отметка
+    идёт от имени system (как и «что пора»), а в журнал — бот. remind_at — то время, о котором
+    бот напомнил: если его успели переставить («через час» с телефона, пока бот слал), отметка
+    не ставится — новое напоминание уйдёт в своё время. message_id — в ответе (crm.ops_seen).
+    """
+    actor = conn.execute("SELECT crm.actor() AS a").fetchone()["a"]
+    if actor != f"svc:{REMIND_BOT}":
+        raise OpError("task.reminded шлёт только бот напоминаний")
+    at = _instant(op.get("at")) or dt.datetime.now(dt.timezone.utc)
+    conn.execute("SELECT set_config('dela.user', 'system', true)")
+    try:
+        cur = task_by(conn, op.get("id"))
+        if not cur:
+            raise OpError("нет такого дела")
+        sent_for = _instant(op.get("remind_at"))
+        if op.get("remind_at") and sent_for != cur["remind_at"]:
+            return {"task": cur, "stale": True, "message_id": op.get("message_id")}
+        conn.execute("UPDATE tasks.tasks SET reminded_at = %s WHERE id = %s AND reminded_at IS NULL", (at, cur["id"]))
+        return {"task": _full(conn, cur["id"]), "message_id": op.get("message_id")}
+    finally:
+        conn.execute("SELECT set_config('dela.user', %s, true)", (user,))
 
 
 def op_comment_add(conn, user, op):
@@ -413,6 +458,7 @@ HANDLERS: dict[str, Callable] = {
     "task.done": _status("done"),
     "task.reopen": _status("open"),
     "task.cancel": _status("cancelled"),
+    "task.reminded": op_task_reminded,
     "comment.add": op_comment_add,
     "comment.delete": op_comment_delete,
     "org.create": org_create,
@@ -520,6 +566,7 @@ def sync(url: str, user: str, since: int) -> dict:
         out["labels"] = jsonable(conn.execute("SELECT name, color FROM tasks.labels ORDER BY name").fetchall())
         out["seq"] = top
         out["today"] = conn.execute("SELECT crm.today() AS d").fetchone()["d"].isoformat()
+    out["features"] = FEATURES
     return out
 
 

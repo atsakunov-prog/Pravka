@@ -13,14 +13,16 @@ SELECT t.num, t.title, t.notes, t.status,
        t.want, (t.focus_on = crm.today()) AS now, t.labels, t.source, t.source_ref,
        t.created_at, t.updated_at, t.completed_at,
        (t.status = 'open' AND t.due_date < crm.today()) AS overdue,
-       t.id, t.project_id, t.person_id
+       t.id, t.project_id, t.person_id,
+       -- Напоминание в Telegram (dela_0003) — в конце: CREATE OR REPLACE дописывает колонки только в хвост.
+       t.remind_at, t.remind_place, t.reminded_at
 FROM tasks.tasks t
 LEFT JOIN crm.projects p ON p.id = t.project_id
 LEFT JOIN crm.deals d ON d.id = t.deal_id
 LEFT JOIN crm.people pe ON pe.id = t.person_id
 LEFT JOIN crm.people rq ON rq.id = t.requested_by
 WHERE crm.sees_task(crm.owner_id(), t.project_id, t.owner_id);
-COMMENT ON VIEW life.tasks IS 'Дела владельца (сервис «Дела»). num — короткий номер «#57». status: open, done, cancelled. ball: mine — моё, waiting — мяч у person, agenda — поднять при встрече с person. money — paid (оплата согласована), potential (развитие), none; пусто у задачи = как у проекта. project пусто — «Входящие». Менять дела — инструментами dela_*, не SQL.';
+COMMENT ON VIEW life.tasks IS 'Дела владельца (сервис «Дела»). num — короткий номер «#57». status: open, done, cancelled. ball: mine — моё, waiting — мяч у person, agenda — поднять при встрече с person. money — paid (оплата согласована), potential (развитие), none; пусто у задачи = как у проекта. project пусто — «Входящие». remind_at — когда напомнить в Telegram, remind_place — напомнить по приезду (место автопилота телефона), reminded_at — когда напоминание ушло. Менять дела — инструментами dela_*, не SQL.';
 
 CREATE OR REPLACE VIEW life.projects AS
 SELECT p.name, p.aliases, p.sphere, p.kind, o.name AS org, p.owner_id AS owner, p.money_default, p.note, p.archived_at,

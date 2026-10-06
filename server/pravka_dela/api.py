@@ -21,6 +21,10 @@
 | GET  /api/parse/<номер> | run, пока думает; потом done с делами и заметками или error |
 | POST /api/ask | {"text", "scope": {"title", "task_ids", "focus"?, "project_id"?, "person_id"?, "suggestion_ids"?}} — Claude правит дела страницы словами, в «Новом» — и решает предложения на экране (ask.py); ответ — номер задания |
 | GET  /api/ask/<номер> | как у разбора; done — что поменялось (changed: как было и стало), новые дела, решения по «Новому» (decided), ответ Claude |
+| GET  /api/reminders/due | только бот Ковчега: напоминания, которым пора в Telegram (remind.py) |
+| POST /api/reminders/act | только бот Ковчега: {"telegram_id", "num", "action": done, snooze, tomorrow, "minutes"?} — кнопка под напоминанием от имени нажавшего |
+
+Бот ходит на 127.0.0.1:8102 мимо сайта-посредника: пути напоминаний в его список не нужны.
 """
 
 from __future__ import annotations
@@ -40,7 +44,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import ask, db, llm, parse, store, tokens
+from . import ask, db, llm, parse, remind, store, tokens
 from .config import Config
 
 log = logging.getLogger("dela.api")
@@ -133,7 +137,8 @@ def build(cfg: Config) -> Starlette:
         if not who:
             return _err("нужен вход", 401)
         info = await anyio.to_thread.run_sync(_user_info, url, who.user)
-        return _json({"ok": True, "user": who.user, **info, "kind": who.kind, "claude": bool(cfg.anthropic_key)})
+        return _json({"ok": True, "user": who.user, **info, "kind": who.kind, "claude": bool(cfg.anthropic_key),
+                      "features": store.FEATURES})
 
     async def sync(request: Request):
         who = await auth(request)
@@ -313,6 +318,39 @@ def build(cfg: Config) -> Starlette:
             out["cost"] = await anyio.to_thread.run_sync(llm.spent, url)
         return _json(out)
 
+    # Напоминания в Telegram: шлёт бот Ковчега (служба встреч), Дела отдают ему «что пора»
+    # и принимают его кнопки. Чужому токену — 403: телефону и вебу эти пути не нужны.
+    async def bot(request: Request) -> tuple[tokens.Who | None, JSONResponse | None]:
+        who = await auth(request)
+        if not who:
+            return None, _err("нужен вход", 401)
+        if who.kind != "service" or who.name != store.REMIND_BOT:
+            return None, _err("только боту напоминаний", 403)
+        return who, None
+
+    async def reminders_due(request: Request):
+        who, bad = await bot(request)
+        if bad:
+            return bad
+        return _json(await anyio.to_thread.run_sync(remind.due, url, cfg.public_url))
+
+    async def reminders_act(request: Request):
+        who, bad = await bot(request)
+        if bad:
+            return bad
+        try:
+            body = await request.json()
+            tg, ref, action = int(body["telegram_id"]), str(body["num"]), str(body["action"])
+            minutes = int(body.get("minutes") or 60)
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return _err("ожидается JSON {\"telegram_id\", \"num\", \"action\", \"minutes\"?}", 400)
+        try:
+            out = await anyio.to_thread.run_sync(lambda: remind.act(url, tg, ref, action, minutes))
+        except store.OpError as e:
+            return _err(str(e), 422)
+        log.info("напоминание: кнопка %s у #%s (%s)", action, ref, out["user"])
+        return _json(out)
+
     async def task(request: Request):
         who = await auth(request)
         if not who:
@@ -338,6 +376,8 @@ def build(cfg: Config) -> Starlette:
         Route("/api/ask", ask_start, methods=["POST"]),
         Route("/api/ask/{job}", parse_poll),  # задания общие с разбором
         Route("/api/settings", settings),
+        Route("/api/reminders/due", reminders_due),
+        Route("/api/reminders/act", reminders_act, methods=["POST"]),
     ])
 
 

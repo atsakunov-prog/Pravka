@@ -4,6 +4,8 @@
   serve    служба: API на DELA_LISTEN
   check    настройки и база — словами
   user     завести или поправить пользователя
+  telegram  чей Telegram: напоминания дел уходят на этот id (бот Ковчега)
+  remind-notes  перенос строк «⏰ Напомнить…» из заметок в напоминания (разово, повтор безвреден)
   token    выдать токен службе или устройству (печатается один раз)
   pair     QR для телефона: адрес и новый токен устройства
   invite   одноразовая ссылка входа в веб для пользователя
@@ -101,6 +103,30 @@ def cmd_user(args) -> int:
         u = conn.execute("SELECT clients, sees_money, person_id FROM crm.users WHERE id = %s", (args.id,)).fetchone()
     print(f"пользователь {args.id} записан: клиенты — {u['clients']}, деньги — {'да' if u['sees_money'] else 'нет'}"
           + ("" if u["person_id"] else " (не связан с человеком справочника: --person)"))
+    return 0
+
+
+def cmd_telegram(args) -> int:
+    """Telegram пользователя — куда бот Ковчега шлёт его напоминания. Только из командной строки:
+    самому человеку база telegram_id менять не даёт (crm.users_guard)."""
+    cfg = config_mod.load(args.env)
+    with db.session(cfg.db_url, "system", "svc:cli") as conn:
+        row = conn.execute("UPDATE crm.users SET telegram_id = %s WHERE id = %s RETURNING id", (args.telegram_id, args.user)).fetchone()
+    if not row:
+        print(f"пользователя {args.user} нет")
+        return 1
+    print(f"{args.user}: Telegram {str(args.telegram_id)[:4]}… — напоминания пойдут туда")
+    return 0
+
+
+def cmd_remind_notes(args) -> int:
+    from . import remind
+
+    cfg = config_mod.load(args.env)
+    done = remind.move_notes(cfg.db_url, apply=args.apply)
+    for line in done:
+        print(("перенёс  " if args.apply else "перенесу ") + line)
+    print(f"напоминаний из заметок: {len(done)}" + ("" if args.apply else " (сухой прогон — нужен --apply)"))
     return 0
 
 
@@ -287,6 +313,15 @@ def main(argv: list[str] | None = None) -> int:
                    help="видит гонорары и оплаты")
     u.add_argument("--person", help="кто он в справочнике людей (имя или короткое имя)")
     u.set_defaults(fn=cmd_user)
+
+    tg = sub.add_parser("telegram")
+    tg.add_argument("user")
+    tg.add_argument("telegram_id", type=int)
+    tg.set_defaults(fn=cmd_telegram)
+
+    rn = sub.add_parser("remind-notes")
+    rn.add_argument("--apply", action="store_true", help="записать (без него — только список)")
+    rn.set_defaults(fn=cmd_remind_notes)
 
     t = sub.add_parser("token")
     t.add_argument("--user", required=True)

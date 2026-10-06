@@ -95,6 +95,35 @@ function dueLabel(t) {
   return { text: D.ddmm(t.due_date) + time, cls: '' };
 }
 
+// ── Напоминания в Telegram (06.10.2026; слово в слово DelaRemind на телефоне) ───
+// Часы — московские при любом поясе браузера: в Москве нет перевода часов, сдвиг всегда +3.
+const MSK_MS = 3 * 3600e3;
+const msk = (ms) => { const s = new Date(ms + MSK_MS).toISOString(); return { day: s.slice(0, 10), hm: s.slice(11, 16) }; };
+const mskIso = (day, hm) => `${day}T${hm}:00+03:00`;
+const remindOn = () => ((S.me && S.me.features) || []).includes('remind');
+const myPlaces = () => ((S.me && S.me.settings && S.me.settings.places) || []).filter((x) => String(x || '').trim());
+/** «11:00», «завтра 09:00», «чт 09:00» (до недели вперёд), иначе «12.10 09:00». */
+function remindWords(iso) {
+  const { day, hm } = msk(Date.parse(iso));
+  const n = D.diff(day, S.today);
+  if (n === 0) return hm;
+  if (n === 1) return 'завтра ' + hm;
+  if (n >= 2 && n <= 6) return WD_SHORT[D.wd(day)] + ' ' + hm;
+  return day.slice(8, 10) + '.' + day.slice(5, 7) + ' ' + hm;
+}
+/** Подпись строки: «⏰ 11:00», «⏰ дом»; отправленное и закрытое — без подписи. */
+function remindChip(t) {
+  if (t.reminded_at || t.status !== 'open') return '';
+  if (t.remind_at) return '⏰ ' + remindWords(t.remind_at);
+  return t.remind_place ? '⏰ ' + t.remind_place : '';
+}
+function remindState(t) {
+  if (t.reminded_at) return 'отправлено в Telegram ' + remindWords(t.reminded_at);
+  if (t.remind_at) return (t.remind_place ? `приехал «${t.remind_place}» — ` : '') + 'напомню в Telegram ' + remindWords(t.remind_at);
+  if (t.remind_place) return 'напомню в Telegram, когда приедешь: ' + t.remind_place;
+  return '';
+}
+
 // ── Правила (как в store.py) ─────────────────────────────────────────────
 const isOpen = (t) => t.status === 'open';
 const isMine = (t) => t.owner_id === S.me.user;
@@ -228,6 +257,7 @@ function route() {
   if (kind === 'h' && id) return { kind: 'person', id };
   if (kind === 'search') return { kind: 'search', q: decodeURIComponent(id || '') };
   if (kind === 'new' && id) return { kind: 'new', batch: decodeURIComponent(id) }; // ссылка из Telegram — одна пачка
+  if (kind === 'task' && /^\d+$/.test(id || '')) return { kind: 'morning', task: +id }; // кнопка «Открыть» под напоминанием
   if (kind === 'settings') return { kind: 'settings' };
   if (kind === 'stats') return { kind: 'stats' };
   if (CRM_VIEWS[kind]) return { kind };
@@ -265,6 +295,11 @@ async function boot() {
 function render() {
   if (!S.me) return;
   const r = route();
+  if (r.task) { // #task/61: карточка этого дела поверх «Утра», адрес — обычный
+    const t = all().find((x) => x.num === r.task);
+    history.replaceState(null, '', '#/morning');
+    if (t) { openCard(t.id); return; }
+  }
   const ae = document.activeElement;
   const q0 = ae && (ae.id === 'quick' || ae.classList?.contains('ask-input')) ? ae : null;
   const focused = q0 ? { id: q0.id, value: q0.value, a: q0.selectionStart, b: q0.selectionEnd } : null;
@@ -498,6 +533,8 @@ function taskRow(t, by) {
   const m = (cls, ic, ...kids) => el('span', { class: 'm' + (cls ? ' ' + cls : '') }, ic ? icon(ic, 12) : null, ...kids);
   const chips = [];
   if (due && (by !== 'date' || due.cls === 'late')) chips.push(m(due.cls, 'date', due.text));
+  const rem = remindChip(t);
+  if (rem) chips.push(m('remind', null, rem));
   if (by !== 'project' && route().kind !== 'project') {
     chips.push(p ? el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, dot(p.id), p.name) : m('', 'tray', 'Входящие'));
   }
@@ -1092,6 +1129,9 @@ function describe(c) {
   if ('notes' in a) out.push('дописал заметку');
   if ('estimate_min' in a) out.push(a.estimate_min ? a.estimate_min + ' мин' : 'без оценки');
   if ('labels' in a) out.push(a.labels.length ? 'метки ' + a.labels.join(', ') : 'без меток');
+  if (a.remind_at) out.push('напомню в Telegram ' + remindWords(a.remind_at));
+  else if (a.remind_place) out.push('напомню, когда приедешь: ' + a.remind_place);
+  else if ('remind_at' in a || 'remind_place' in a) out.push('без напоминания');
   if (c.status) out.push({ done: 'сделано', cancelled: 'отменено', open: 'в работу' }[c.status[1]]);
   return out.join(', ');
 }
@@ -1436,6 +1476,31 @@ async function loadCardExtras(id) {
   } catch (e) { /* без комментариев карточка тоже работает */ }
 }
 
+// «Напомнить в Telegram»: время или место — одно из двух. Шлёт бот Ковчега; новое время или место
+// взводит напоминание заново, даже отправленное. Места — те, что прислал телефон (автопилот Засечки).
+function remindBlock(t) {
+  const set = (at, place) => setFields([t.id], { remind_at: at, remind_place: place });
+  const now = Date.now();
+  const hour = msk(now + 3600e3);
+  const quick = [['через час', mskIso(hour.day, hour.hm)]];
+  if (msk(now).hm < '18:30') quick.push(['вечером 19:00', mskIso(S.today, '19:00')]);
+  quick.push(['завтра 09:00', mskIso(D.add(S.today, 1), '09:00')]);
+  const same = (iso) => t.remind_at && Date.parse(t.remind_at) === Date.parse(iso);
+  const chips = quick.map(([label, iso]) => el('button', { class: 'chip-btn' + (same(iso) ? ' on' : ''), onclick: () => set(iso, null) }, label));
+  for (const p of myPlaces()) {
+    const on = !t.remind_at && norm(t.remind_place) === norm(p);
+    chips.push(el('button', { class: 'chip-btn' + (on ? ' on' : ''), onclick: () => set(null, p) }, 'приеду: ' + p));
+  }
+  if (t.remind_at || t.remind_place) chips.push(el('button', { class: 'chip-btn', onclick: () => set(null, null) }, 'убрать'));
+  const cur = t.remind_at ? msk(Date.parse(t.remind_at)) : null;
+  const own = el('input', { type: 'datetime-local', title: 'Своё время (по Москве)', value: cur ? `${cur.day}T${cur.hm}` : '' });
+  own.addEventListener('change', () => { if (own.value) set(mskIso(own.value.slice(0, 10), own.value.slice(11, 16)), null); });
+  const said = remindState(t);
+  return [el('span', { class: 'top-label' }, 'Напомнить в Telegram'),
+    el('div', { class: 'remind-box' }, said ? el('div', { class: 'remind-state' }, said) : null,
+      el('div', { class: 'quick-dates' }, chips), own)];
+}
+
 function renderCard() {
   const close = () => { S.cardId = null; S.draft = null; render(); };
   const sug = S.draft;
@@ -1491,6 +1556,7 @@ function renderCard() {
     el('span', {}, 'Человек'), sel('person_id', [['', '—'], ...people.map((p) => [p.id, p.short && p.short !== p.name ? `${p.short} — ${p.name}` : p.name])], src.person_id),
     el('span', {}, 'Срок'), date('due_date'), el('span', {}), quickDates,
     el('span', {}, 'Напомнить ему'), date('nudge_on'),
+    t && isOpen(t) && remindOn() ? remindBlock(t) : null,
     el('span', {}, 'Минут'), num,
     el('span', {}, 'Метки'), labels);
 

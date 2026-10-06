@@ -251,3 +251,57 @@ def test_phone_ops_as_pravka_sends_them(dela):
     t = next(x for x in out["tasks"] if x["id"] == tid)
     assert t["due_date"] == "2026-10-12" and t["estimate_min"] is None and t["labels"] == [] and t["status"] == "cancelled"
     assert any(c["id"] == cid for c in out["comments"])
+
+
+# ── Напоминания в Telegram (контракт dela-remind.json) ──────────────────
+
+def bot_ops(url, *items):
+    """Операции от бота Ковчега: токен службы kovcheg, журнал — svc:kovcheg."""
+    return store.apply_ops(url, "sasha", list(items), store.REMIND_BOT, f"svc:{store.REMIND_BOT}")["results"]
+
+
+def test_remind_fields_flag_and_reminded_only_from_bot(dela):
+    out = store.sync(dela, "sasha", 0)
+    assert out["features"] == ["remind"] and store.sync(dela, "sasha", out["seq"])["features"] == ["remind"]
+    tid = str(uuid.uuid4())
+    t = ops(dela, "sasha", {"op": "task.create", "op_id": str(uuid.uuid4()), "task": {
+        "id": tid, "title": "Позвонить Ивану", "due_date": "2026-10-06", "remind_at": "2026-10-06T11:00:00+03:00",
+        "source": "voice"}})[0]
+    assert t["ok"], t
+    assert dt.datetime.fromisoformat(t["task"]["remind_at"]) == dt.datetime.fromisoformat("2026-10-06T11:00:00+03:00")
+    assert t["task"]["reminded_at"] is None and t["task"]["remind_place"] is None
+    # reminded_at клиентам не поле: телефон и веб его не ставят — ни правкой, ни операцией.
+    bad = ops(dela, "sasha", {"op": "task.set", "id": tid, "set": {"reminded_at": "2026-10-06T11:00:00+03:00"}})[0]
+    assert not bad["ok"] and "reminded_at" in bad["error"]
+    phone = ops(dela, "sasha", {"op": "task.reminded", "id": tid, "at": "2026-10-06T11:00:04+03:00", "message_id": 1})[0]
+    assert not phone["ok"] and "бот" in phone["error"]
+    # Бот отправил: отметка стоит, message_id — в ответе.
+    sent = bot_ops(dela, {"op": "task.reminded", "op_id": str(uuid.uuid4()), "id": tid, "at": "2026-10-06T11:00:04+03:00",
+                          "message_id": 81234, "remind_at": "2026-10-06T11:00:00+03:00"})[0]
+    assert sent["ok"] and sent["task"]["reminded_at"] and sent["message_id"] == 81234 and "stale" not in sent
+    # Новое время (кнопка «Через час», карточка) — напоминание снова в силе: reminded_at сбросил триггер.
+    again = ops(dela, "sasha", {"op": "task.set", "id": tid, "set": {"remind_at": "2026-10-06T12:00:00+03:00"}})[0]
+    assert again["ok"] and again["task"]["reminded_at"] is None
+    # Бот слал старое время, пока его переставили: отметку не ставим — новое уйдёт в свой срок.
+    stale = bot_ops(dela, {"op": "task.reminded", "id": tid, "remind_at": "2026-10-06T11:00:00+03:00", "message_id": 2})[0]
+    assert stale["ok"] and stale["stale"] and stale["task"]["reminded_at"] is None
+    # Правка других полей отметку не трогает; место тоже взводит заново.
+    bot_ops(dela, {"op": "task.reminded", "id": tid, "remind_at": "2026-10-06T12:00:00+03:00", "message_id": 3})
+    kept = ops(dela, "sasha", {"op": "task.set", "id": tid, "set": {"title": "Позвонить Ивану про модель"}})[0]["task"]
+    assert kept["reminded_at"]
+    place = ops(dela, "sasha", {"op": "task.set", "id": tid, "set": {"remind_at": None, "remind_place": "дом"}})[0]["task"]
+    assert place["reminded_at"] is None and place["remind_place"] == "дом"
+
+
+def test_reminded_by_bot_for_task_its_user_cannot_see(dela):
+    """Токен бота — на Сашу, а напоминает он всем, у кого есть Telegram: отметка — от имени system."""
+    p = project(dela, "natasha", "Наташино личное", kind="personal", sphere="home")
+    t = ops(dela, "natasha", {"op": "task.create", "task": {"title": "Сверка", "project_id": str(p),
+                                                          "remind_at": "2026-10-06T10:00:00+03:00"}})[0]["task"]
+    assert not ops(dela, "sasha", {"op": "task.set", "id": t["id"], "set": {"title": "x"}})[0]["ok"]  # Саша его не видит
+    r = bot_ops(dela, {"op": "task.reminded", "id": t["id"], "message_id": 5})[0]
+    assert r["ok"] and r["task"]["reminded_at"]
+    # После операции бот снова Саша: чужое по-прежнему не видно.
+    res = store.apply_ops(dela, "sasha", [{"op": "task.reminded", "id": t["id"]}, {"op": "task.set", "id": t["id"], "set": {"title": "x"}}],
+                          store.REMIND_BOT, f"svc:{store.REMIND_BOT}")["results"]
+    assert res[0]["ok"] and not res[1]["ok"]

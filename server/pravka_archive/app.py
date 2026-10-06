@@ -54,6 +54,7 @@ DELA_INSTRUCTIONS = """
 - Менять: dela_add, dela_change, dela_decide («Новое»), dela_note (хронология клиента). Дело называется коротким номером «57».
 - Формат названия — «Кто: действие». Мяч: mine — моё, waiting — жду от person, agenda — поднять при встрече с person. Деньги: paid — оплата согласована, potential — развитие, пусто — как у проекта.
 - Даты пиши сам: YYYY-MM-DD, сегодняшняя дата — в первой строке dela_view.
+- «Напомни мне…» — remind_at («YYYY-MM-DD HH:MM» по Москве) или remind_place (место телефона, «дом») в dela_add / dela_change: напоминание придёт Саше в Telegram ботом Ковчега.
 - Задачу на Марианну не ставь: только с её согласия, через неё саму.
 
 Вопросы человеческим голосом — дела вместе с жизнью:
@@ -302,11 +303,13 @@ def _dela_tools(mcp: FastMCP, url: str) -> None:
                        ball: str = "mine", due_date: str | None = None, due_time: str | None = None,
                        nudge_on: str | None = None, requested_by: str | None = None, estimate_min: int | None = None,
                        money: str | None = None, want: bool | None = None, now: bool | None = None,
-                       labels: list[str] | None = None, notes: str | None = None) -> str:
-        """Новое дело Саше. title — «Кто: действие». project — проект (пусто — «Входящие»), deal — сделка проекта. ball: mine, waiting (жду от person), agenda (поднять при встрече с person). due_date, nudge_on — YYYY-MM-DD. money: paid, potential, none (пусто — как у проекта). now — в «Сейчас» на сегодня. labels — только контексты вроде «звонок»."""
+                       labels: list[str] | None = None, notes: str | None = None, remind_at: str | None = None,
+                       remind_place: str | None = None) -> str:
+        """Новое дело Саше. title — «Кто: действие». project — проект (пусто — «Входящие»), deal — сделка проекта. ball: mine, waiting (жду от person), agenda (поднять при встрече с person). due_date, nudge_on — YYYY-MM-DD. money: paid, potential, none (пусто — как у проекта). now — в «Сейчас» на сегодня. labels — только контексты вроде «звонок». Напомнить Саше в Telegram (бот Ковчега): remind_at — «YYYY-MM-DD HH:MM» по Москве («напомни завтра в 10»), или remind_place — по приезду в место телефона («дом»); одно из двух. Срок не назван — due_date = день напоминания."""
         return await run(dela.add, title=title, project=project, deal=deal, person=person, ball=ball, due_date=due_date,
                          due_time=due_time, nudge_on=nudge_on, requested_by=requested_by, estimate_min=estimate_min,
-                         money=money, want=want, now=now, labels=labels, notes=notes)
+                         money=money, want=want, now=now, labels=labels, notes=notes, remind_at=remind_at,
+                         remind_place=remind_place)
 
     @mcp.tool()
     async def dela_change(ref: str, title: str | None = None, notes: str | None = None, project: str | None = None,
@@ -314,12 +317,13 @@ def _dela_tools(mcp: FastMCP, url: str) -> None:
                           due_date: str | None = None, due_time: str | None = None, nudge_on: str | None = None,
                           requested_by: str | None = None, estimate_min: int | None = None, money: str | None = None,
                           want: bool | None = None, now: bool | None = None, labels: list[str] | None = None,
-                          status: str | None = None, comment: str | None = None) -> str:
-        """Поправить дело по номеру: любые поля как у dela_add; status: done (сделано), cancelled (отменено), open (вернуть); comment — дописать комментарий. Пустая строка в поле — очистить его (due_date="" — без срока). Что не передано — не меняется."""
+                          status: str | None = None, comment: str | None = None, remind_at: str | None = None,
+                          remind_place: str | None = None) -> str:
+        """Поправить дело по номеру: любые поля как у dela_add; status: done (сделано), cancelled (отменено), open (вернуть); comment — дописать комментарий. Пустая строка в поле — очистить его (due_date="" — без срока, remind_at="" — без напоминания). Новое remind_at или remind_place взводит напоминание заново, даже если старое уже приходило. Что не передано — не меняется."""
         return await run(dela.change, ref, comment=comment, title=title, notes=notes, project=project, deal=deal,
                          person=person, ball=ball, due_date=due_date, due_time=due_time, nudge_on=nudge_on,
                          requested_by=requested_by, estimate_min=estimate_min, money=money, want=want, now=now,
-                         labels=labels, status=status)
+                         labels=labels, status=status, remind_at=remind_at, remind_place=remind_place)
 
     @mcp.tool()
     async def dela_decide(suggestion: str, decision: str, reason: str | None = None, title: str | None = None,

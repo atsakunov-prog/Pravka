@@ -122,4 +122,4 @@ def test_schema_is_strict():
         if node.get("type") == "array":
             walk(node["items"])
 
-    walk(parse.SCHEMA)
+    walk(parse.schema())

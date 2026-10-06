@@ -2,10 +2,10 @@
 
 Владелец пишет или надиктовывает как есть («Наташе сверку до пятницы, жду от
 Ивана модель, обсудить с Толкушкиным фонды»), Claude режет это на дела по
-промпту TASKS_DELA (тот же, что у телефона: core/prompts/PromptsRaznoska.kt)
-со справочником проектов, людей и меток — только тех, что видит этот
-пользователь. Кнопку жмёт сам человек, поэтому дела заводятся сразу, без
-«Нового» (туда идёт только автоматика); отмена — одним движением в вебе.
+общему с телефоном промпту (server/contract/prompts/raznoska.txt) со справочником
+проектов, людей и меток — только тех, что видит этот пользователь — и его местами
+для напоминаний «когда приеду». Кнопку жмёт сам человек, поэтому дела заводятся
+сразу, без «Нового» (туда идёт только автоматика); отмена — одним движением в вебе.
 Факты, которые не дела, ложатся заметками в хронологию.
 
 К API — через xray бота (из России API Anthropic закрыт), ключ —
@@ -18,8 +18,9 @@ import datetime as dt
 import json
 import logging
 import re
+from pathlib import Path
 
-from . import db, llm, store
+from . import db, llm, remind, store
 
 log = logging.getLogger("dela.parse")
 
@@ -28,128 +29,20 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 MAX_INPUT = 20_000
 WD = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
 
-# Промпт — копия TASKS_DELA из Правки: правила одни, разбор на телефоне и в вебе
-# не должен расходиться. Правишь одно — поправь и другое.
-SYSTEM = """Ты разбираешь наговор владельца на дела для его сервиса «Дела».
+# Правила разбора — один файл на телефон и сервер (06.10.2026): server/contract/prompts/raznoska.txt
+# и схема ответа рядом. Телефон берёт его в APK, сервер читает с диска при каждом разборе — правка
+# правил меняет разбор и там, и там. Служба работает из клона репозитория, контракт — рядом с кодом.
+PROMPTS = Path(__file__).resolve().parents[1] / "contract" / "prompts"
 
-Кто говорит: Саша — финансовый советник. Его мир: сделки M&A,
-банковский advisory, управленческая отчётность, финмодели,
-финансирование, налоги; своя команда; клиенты и их собственники;
-семья; свои приложения. Он наговаривает на ходу: несколько дел
-подряд, а между ними факты, мысли вслух и оговорки.
 
-Текст набран руками или пришёл из распознавания речи: пунктуации может
-не быть, имена и термины могут быть услышаны неверно. Сначала пойми смысл целиком,
-потом разбирай на дела.
+def template() -> str:
+    """Текст правил с подстановками {CATALOG}, {PLACES}, {TODAY}, {NOW}."""
+    return (PROMPTS / "raznoska.txt").read_text(encoding="utf-8")
 
-ТВОЯ РАБОТА
-Вытащи КАЖДОЕ дело отдельной задачей. Одна задача = одно действие.
-Не склеивай два дела в одно и не дроби одно дело на шаги.
-Сказанное самим Сашей вслух — уже решение: это дела, а не идеи.
 
-ФОРМУЛИРОВКА (title)
-«Кто: глагол + конкретное действие». «Кто» — тот, у кого мяч:
-человек из справочника, клиент, контрагент. Мяч у самого Саши —
-без префикса, сразу с действия. Коротко и проверяемо: понятно, что
-сделать и когда это сделано.
-Плохо: «помнить про Майю», «ПТИЦ: юнит-экономика», «ждём реакцию».
-Хорошо: «Майя: рассмотреть для казначейских проектов»,
-«Тимофей: прислать фидбек по юнит-экономике».
-
-МЯЧ (ball) И ЧЕЛОВЕК (person)
-— mine: делает сам Саша. Если он кому-то пообещал («обещал Ивану
-  прислать модель») — тоже mine, а person — тот, кому обещал;
-— waiting: мяч на чужой стороне, Саша ждёт от person ответа или
-  результата («жду от Наташи сверку»);
-— agenda: поднять при следующей встрече или звонке с person
-  («обсудить с Толкушкиным фонды»).
-person — короткое имя ровно из справочника ЛЮДИ ниже. Человека нет
-в справочнике или не уверен — пустая строка, title всё равно
-начинай с его имени. Для waiting и agenda человек обязателен по
-смыслу: без него оставь mine.
-Марианне дел не ставь: просьба к ней — это waiting с person
-«Марианна», дело остаётся Сашиным.
-
-ПРОЕКТ (project)
-Ровно одно имя из справочника ПРОЕКТЫ — так, как оно там записано
-(в скобках — как ещё называют, это тоже он). Проект = клиент или
-служебное направление. Не уверен — пустая строка, владелец выберет
-сам. Проект, которого нет в справочнике, не выдумывай.
-
-ДЕНЬГИ (money)
-Обычно пустая строка — деньги наследуются от проекта. «paid» — только
-если дело прямо про согласованную оплату, инвойс, деньги по сделке;
-«potential» — развитие, будущий клиент.
-
-ОЦЕНКА (estimate_min)
-Минуты, если по сказанному ясно: «быстро», «пять минут», «звонок»
-— 5–10; «посидеть над моделью час» — 60. Неясно — 0.
-
-ХОЧУ (want)
-true — если Саша делает это потому, что сам хочет, а не потому, что
-попросили. Обычно false.
-
-МЕТКИ (labels)
-Только свободные контексты из справочника МЕТКИ («звонок»). Люди,
-мяч, деньги и срочность — поля дела, а не метки. Не уверен — пусто.
-
-СРОК (due)
-Сегодняшняя дата названа ниже. Считай от неё: «завтра», «в пятницу»,
-«через две недели», «к концу месяца» — точная дата ГГГГ-ММ-ДД.
-Срок не назван — пустая строка, не придумывай. Повторяющихся дел в
-сервисе нет: «каждый вторник» — одно дело на ближайший вторник, а
-повтор словами допиши в notes.
-
-ЗАМЕТКИ К ДЕЛУ (notes)
-Только если через три дня дело без них будет непонятно: с кем, о
-чём, что считать выполненным. Две-три строки, без истории.
-
-ЧТО НЕ ЯВЛЯЕТСЯ ДЕЛОМ
-Факты («комитет пройден», «выручка 2,6 млрд»), результаты встреч,
-статусы, рассуждения — не дела. Каждое — отдельной заметкой в поле
-notes верхнего уровня: текст, проект и человек из справочника, если
-понятно. Они лягут в хронологию клиента. Если дел нет — tasks пустой.
-
-{CATALOG}
-
-Сегодня {TODAY}.{SPEAKER}"""
-
-SCHEMA = {
-    "type": "object",
-    "properties": {
-        "tasks": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "notes": {"type": "string"},
-                    "project": {"type": "string"},
-                    "person": {"type": "string"},
-                    "ball": {"type": "string", "enum": ["mine", "waiting", "agenda"]},
-                    "due": {"type": "string"},
-                    "estimate_min": {"type": "integer"},
-                    "money": {"type": "string", "enum": ["", "paid", "potential", "none"]},
-                    "want": {"type": "boolean"},
-                    "labels": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["title", "notes", "project", "person", "ball", "due", "estimate_min", "money", "want", "labels"],
-                "additionalProperties": False,
-            },
-        },
-        "notes": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {"text": {"type": "string"}, "project": {"type": "string"}, "person": {"type": "string"}},
-                "required": ["text", "project", "person"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "required": ["tasks", "notes"],
-    "additionalProperties": False,
-}
+def schema() -> dict:
+    """Схема ответа (structured output) — та же, по которой телефон разбирает ответ."""
+    return json.loads((PROMPTS / "raznoska.schema.json").read_text(encoding="utf-8"))
 
 
 class ParseError(Exception):
@@ -217,7 +110,7 @@ def ask(cl, system: str, user_text: str) -> dict:
         model=MODEL,
         max_tokens=16000,
         system=system,
-        output_config={"effort": "high", "format": {"type": "json_schema", "schema": SCHEMA}},
+        output_config={"effort": "high", "format": {"type": "json_schema", "schema": schema()}},
         messages=[{"role": "user", "content": user_text}],
         # Отказ модели — повтор на резервной внутри того же запроса (как у встреч).
         betas=[FALLBACK_BETA],
@@ -237,16 +130,20 @@ def ask(cl, system: str, user_text: str) -> dict:
     return data
 
 
-def to_ops(data: dict, index: dict, defaults: dict, source: str) -> list[dict]:
-    """Ответ Claude — в операции Дел. Имена — в id по справочнику; не нашлось — пусто."""
+def to_ops(data: dict, index: dict, defaults: dict, source: str, places: list[str] | None = None) -> list[dict]:
+    """Ответ Claude — в операции Дел. Имена — в id по справочнику; не нашлось — пусто.
+
+    Напоминание — как у телефона (parseTasksDela): время — местное «ГГГГ-ММ-ДД ЧЧ:ММ» по
+    Москве в timestamptz; место — только из мест телефона (places), иное не теряется, а
+    ложится строкой в заметки дела.
+    """
     ops = []
     for t in data.get("tasks") or []:
         title = (t.get("title") or "").strip()
         if not title:
             continue
         task = {"title": title, "source": source}
-        if (t.get("notes") or "").strip():
-            task["notes"] = t["notes"].strip()
+        notes = (t.get("notes") or "").strip()
         pid = _one(index, "projects", t.get("project") or "") or defaults.get("project_id")
         if pid:
             task["project_id"] = str(pid)
@@ -262,6 +159,21 @@ def to_ops(data: dict, index: dict, defaults: dict, source: str) -> list[dict]:
                 task["due_date"] = due
             except ValueError:
                 pass
+        # Время срока — только при сроке: due_time без due_date база не примет.
+        hm = remind.norm_time(t.get("due_time"))
+        if hm and task.get("due_date"):
+            task["due_time"] = hm
+        at = remind.local_iso(t.get("remind_at"))
+        said = (t.get("remind_place") or "").strip()
+        place = "" if at else remind.match_place(said, places or [])
+        if at:
+            task["remind_at"] = at
+        elif place:
+            task["remind_place"] = place
+        elif said and said.lower() not in notes.lower():
+            notes = (notes + "\n" + remind.place_note(said)).strip()
+        if notes:
+            task["notes"] = notes
         if int(t.get("estimate_min") or 0) > 0:
             task["estimate_min"] = int(t["estimate_min"])
         if t.get("money") in ("paid", "potential", "none"):
@@ -297,15 +209,19 @@ def run(url: str, user: str, text: str, defaults: dict, key: str, proxy: str | N
         raise ParseError(f"больше {MAX_INPUT} знаков — раздели на части")
     with db.session(url, user, via="parse") as conn:
         cat, index = catalog(conn)
-        today = conn.execute("SELECT crm.today() AS d").fetchone()["d"]
+        clock = conn.execute(
+            "SELECT crm.today() AS d, to_char(now() AT TIME ZONE 'Europe/Moscow', 'HH24:MI') AS hm").fetchone()
+        today = clock["d"]
         me = conn.execute("SELECT name, id = crm.owner_id() AS owner FROM crm.users WHERE id = %s", (user,)).fetchone()
+        places = remind.places_of(conn, user)
     # Промпт написан от лица Саши; Наташе и Марианне — та же логика от их имени.
     speaker = "" if not me or me["owner"] else (
         f"\n\nСейчас говорит не Саша, а {me['name']}. Везде выше, где «Саша», читай «{me['name']}»: "
         "mine — дело этого человека, waiting и agenda — от его имени.")
-    system = (SYSTEM.replace("{CATALOG}", cat)
+    system = (template().replace("{CATALOG}", cat)
+              .replace("{PLACES}", remind.places_block(places))
               .replace("{TODAY}", f"{today.isoformat()}, {WD[today.weekday()]}")
-              .replace("{SPEAKER}", speaker))
+              .replace("{NOW}", clock["hm"])) + speaker
     user_text = f"Наговор:\n{text}"
     if ask_fn is None:
         if not key:
@@ -315,7 +231,7 @@ def run(url: str, user: str, text: str, defaults: dict, key: str, proxy: str | N
     data = ask_fn(system, user_text)
     usage = data.get("_usage")
     llm.account(url, "parse", llm.cost(usage, MODEL), (usage or {}).get("model") or MODEL)
-    ops = to_ops(data, index, defaults or {}, source)
+    ops = to_ops(data, index, defaults or {}, source, places)
     res = store.apply_ops(url, user, ops, via, actor) if ops else {"results": []}
     tasks = [r["task"] for r in res["results"] if r.get("ok") and r.get("task")]
     notes = [r["row"] for r in res["results"] if r.get("ok") and r.get("row")]

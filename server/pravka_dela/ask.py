@@ -20,6 +20,10 @@ sonnet или opus, claude_effort — low, medium, high). По умолчани�
 владельца (05.10.2026): правка короткая, ждать её не хочется. Справочник — в кэше (одинаков между
 командами одного человека и одной модели), дела страницы и команда — после него.
 Траты — в crm.state 'llm_cost' (llm.py).
+
+Напоминания в Telegram (06.10.2026): «напомни в 11», «напомни, когда приеду домой», «через час ещё
+раз» — поля remind_at и remind_place. Правила — раздел «НАПОМИНАНИЕ» общего промпта разбора
+(server/contract/prompts/raznoska.txt): один текст на телефон, звёздочку и правку словами.
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ import json
 import logging
 import re
 
-from . import db, llm, parse, store
+from . import db, llm, parse, remind, store
 
 log = logging.getLogger("dela.ask")
 
@@ -83,6 +87,10 @@ changes — правки дел на экране, по одной записи 
   estimate_min — оценка в минутах; -1 — убрать оценку.
   labels_add, labels_remove — метки только из справочника.
   status — "done": сделано; "cancelled": не нужно, отменить; "open": вернуть в работу.
+  remind_at — когда напомнить Саше в Telegram, «ГГГГ-ММ-ДД ЧЧ:ММ» по местному времени; «-» —
+    убрать напоминание. remind_place — напомнить по приезду: ровно имя из МЕСТ ниже; «-» — убрать.
+    Одно из двух: новое время снимает место, новое место — время. Как считать время — раздел
+    НАПОМИНАНИЕ ниже; «ещё раз через час» — от времени «сейчас» в сообщении.
 create — новые дела, только если Саша прямо просит завести их внутри правки. Поля — как у changes
   (title обязателен; due, now, project, person, ball, notes_add — заметка нового дела).
 reply — одна-две фразы Саше: что сделал. Чего не понял или не нашёл — скажи прямо. Без вступлений.
@@ -98,9 +106,13 @@ reply — одна-две фразы Саше: что сделал. Чего н�
   его дела в changes.
 — Сомневаешься, о каком деле, предложении, человеке или проекте речь, — не меняй, а спроси в reply.
 
-{CATALOG}"""
+{REMIND}
 
-_TEXT_FIELDS = ["title", "notes_add", "project", "deal", "person", "due", "due_time"]
+{CATALOG}
+
+{PLACES}"""
+
+_TEXT_FIELDS = ["title", "notes_add", "project", "deal", "person", "due", "due_time", "remind_at", "remind_place"]
 _ITEM = {
     "type": "object",
     "properties": {
@@ -150,6 +162,17 @@ class AskError(Exception):
     """Команда не сложилась — словами для человека."""
 
 
+REMIND_HEAD, REMIND_END = "НАПОМИНАНИЕ (remind_at, remind_place)", "ЗАМЕТКИ К ДЕЛУ"
+
+
+def remind_rules() -> str:
+    """Раздел «НАПОМИНАНИЕ» общего промпта разбора — те же слова, что у телефона и звёздочки.
+    Заголовки переименовали — пусто (поля описаны и выше), а тест test_remind_rules_cut это поймает."""
+    text = parse.template()
+    a, b = text.find(REMIND_HEAD), text.find(REMIND_END)
+    return text[a:b].strip() if 0 <= a < b else ""
+
+
 def _catalog(conn) -> tuple[str, dict]:
     """Справочник разбора (проекты, люди, метки) и живые сделки — текст и указатели имя → id."""
     text, index = parse.catalog(conn)
@@ -194,6 +217,9 @@ def _task_line(t: dict, today: dt.date) -> str:
         bits.append(f"{t['estimate_min']} мин")
     if t.get("labels"):
         bits.append("метки " + ", ".join(t["labels"]))
+    said = remind.state(t, today)
+    if said:
+        bits.append(said)
     note = _short(t.get("notes"))
     line = " · ".join(bits)
     return line + (" — " + note if note else "")
@@ -306,6 +332,22 @@ def _fields(x: dict, t: dict | None, index: dict, today: dt.date) -> tuple[dict,
     if s("notes_add"):
         old = (t.get("notes") or "").rstrip() if t else ""
         out["notes"] = (old + "\n" if old else "") + s("notes_add")
+    if s("remind_at") == "-":
+        out["remind_at"] = None
+    elif s("remind_at"):
+        at = remind.local_iso(s("remind_at"))
+        if at:
+            out["remind_at"], out["remind_place"] = at, None  # одно из двух: время снимает место
+        else:
+            miss.append(f"время напоминания «{s('remind_at')}»")
+    if s("remind_place") == "-":
+        out["remind_place"] = None
+    elif s("remind_place") and not out.get("remind_at"):
+        place = remind.match_place(s("remind_place"), index.get("places") or [])
+        if place:
+            out["remind_place"], out["remind_at"] = place, None
+        else:
+            miss.append(f"место «{s('remind_place')}» у телефона")
     est = int(x.get("estimate_min") or 0)
     if est > 0:
         out["estimate_min"] = est
@@ -503,6 +545,8 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
         today = conn.execute("SELECT crm.today() AS d").fetchone()["d"]
         me = conn.execute("SELECT name, id = crm.owner_id() AS owner FROM crm.users WHERE id = %s", (user,)).fetchone()
         model, effort = settings_of(conn, user)
+        index["places"] = places = remind.places_of(conn, user)
+        hm = conn.execute("SELECT to_char(now() AT TIME ZONE 'Europe/Moscow', 'HH24:MI') AS hm").fetchone()["hm"]
         rows = conn.execute("SELECT * FROM tasks.v_tasks WHERE id = ANY(%s::uuid[])", (ids,)).fetchall() if ids else []
         # Только ждущие решения и только свои — как в «Новом» у веба; разобранное с телефона выпадает.
         srows = conn.execute("SELECT * FROM tasks.suggestions WHERE id = ANY(%s::uuid[]) AND status = 'pending' AND for_user = %s",
@@ -518,7 +562,7 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
     by_id = {str(s["id"]): s for s in srows}
     sugs = {k: by_id[i] for k, i in enumerate(sids, 1) if i in by_id}
     targets = {r["id"]: r for r in trows}
-    msg = [f"Сегодня {today.isoformat()}, {WD[today.weekday()]}.", "Календарь: " + _calendar(today),
+    msg = [f"Сегодня {today.isoformat()}, {WD[today.weekday()]}, сейчас {hm}.", "Календарь: " + _calendar(today),
            f"Страница: {(scope.get('title') or 'Дела').strip()[:200]}"]
     if me and not me["owner"]:
         msg.append(f"Команду даёт не Саша, а {me['name']}: «Саша» и mine выше — про этого человека.")
@@ -536,7 +580,9 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
         if not sugs:
             msg.append("(ничего — всё уже разобрано)")
     msg += ["", f"КОМАНДА: {text}"]
-    system = SYSTEM.replace("{CATALOG}", cat)
+    # Справочник, правила напоминаний и места — в кэше: между командами одного человека они те же.
+    system = (SYSTEM.replace("{REMIND}", remind_rules()).replace("{CATALOG}", cat)
+              .replace("{PLACES}", remind.places_block(places)))
     if ask_fn is None:
         if not key:
             raise AskError("Claude не настроен: нет ключа в dela.env")
