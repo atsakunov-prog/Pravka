@@ -222,3 +222,42 @@ def test_api_who_svod_and_scoped_dengi(dela):
                 {"op": "task.create", "task": {"title": "Деньги завели дело"}}):
         assert c.post("/api/ops", headers=dengi, json={"ops": [bad]}).status_code == 403
     assert store.view(dela, "sasha", "svod", key="prompt.food")["items"][0]["body"] == "Еда."
+
+
+def test_who_hints_abbreviation_role_and_first_name_with_company(dela):
+    """Как спикеры подписаны во встречах: «(ЗФ)», «(финдир Ромашки)», «(терапевт)», одно имя с компанией."""
+    firm = org(dela, "sasha", "Весёлый Огород")
+    rom = org(dela, "sasha", "Ромашка")
+    olya = person(dela, "sasha", "Ольга Петрова", org_id=firm)
+    person(dela, "sasha", "Борис Петров", org_id=firm)
+    dima = person(dela, "sasha", "Дмитрий Кузнецов", org_id=rom, role="финансовый директор")
+    person(dela, "sasha", "Дмитрий Орлов", org_id=firm)
+    anna = person(dela, "sasha", "Анна Иванова", role="терапевт")
+    cases = {"Оля Петрова (ВО)": olya, "Дмитрий (финдир Ромашки)": dima, "Дмитрий (Ромашка)": dima,
+             "Анна Иванова (терапевт)": anna}
+    for q, want in cases.items():
+        w = store.view(dela, "sasha", "who", q=q)
+        assert w["sure"] and str(w["best"]["id"]) == want, (q, w)
+    # Одно имя без компании — не уверен; «банк» не отличает компанию.
+    assert not store.view(dela, "sasha", "who", q="Дмитрий")["sure"]
+    assert not store.view(dela, "sasha", "who", q="Дмитрий (банк)")["sure"]
+
+
+def test_who_latin_zoom_names_and_short_company(dela):
+    zf = org(dela, "sasha", "ЗФ")
+    v = person(dela, "sasha", "Василий Вельдяксов", org_id=org(dela, "sasha", "Восток Инвестиции"))
+    lena = person(dela, "sasha", "Елена Смирнова", org_id=zf)
+    for q, want in {"Vasiliy Veldyaksov (Vostok Investments)": v, "Лена Смирнова (ЗФ)": lena}.items():
+        w = store.view(dela, "sasha", "who", q=q)
+        assert w["sure"] and str(w["best"]["id"]) == want, (q, w)
+
+
+def test_who_initials_and_diminutive_card(dela):
+    """Подписи Zoom и почты: «a.filatov», «Dmitry L»; в карточке — уменьшительное («Вася»)."""
+    f = person(dela, "sasha", "Александр Филатов")
+    d = person(dela, "sasha", "Дмитрий Лебедев")
+    person(dela, "sasha", "Дмитрий Орлов")
+    v = person(dela, "sasha", "Вася Вельдяксов")
+    for q, want in {"a.filatov": f, "Dmitry L": d, "Vasiliy Veldyaksov": v, "Василий Вельдяксов": v}.items():
+        w = store.view(dela, "sasha", "who", q=q)
+        assert w["sure"] and str(w["best"]["id"]) == want, (q, w)

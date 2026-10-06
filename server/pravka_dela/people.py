@@ -33,7 +33,7 @@ DIMINUTIVE: dict[str, tuple[str, ...]] = {
     "толя": ("анатолий",), "валера": ("валерий",), "лера": ("валерия",), "галя": ("галина",), "люба": ("любовь",),
     "надя": ("надежда",), "настя": ("анастасия",), "даша": ("дарья",), "ксюша": ("ксения",), "тема": ("артем",),
     "макс": ("максим",), "гена": ("геннадий",), "федя": ("федор",), "илюша": ("илья",), "ваня": ("иван",),
-    "гриша": ("григорий",), "лева": ("лев",), "сеня": ("семен", "арсений"), "вадик": ("вадим",),
+    "гриша": ("григорий",), "вася": ("василий",), "толик": ("анатолий",), "веня": ("вениамин",), "лева": ("лев",), "сеня": ("семен", "арсений"), "вадик": ("вадим",),
     "влад": ("владислав",), "эдик": ("эдуард",), "тоша": ("антон",), "антоша": ("антон",), "тима": ("тимофей", "тимур"),
     "вика": ("виктория",), "соня": ("софья", "софия"), "поля": ("полина",), "алена": ("елена", "алена"),
     "олег": ("олег",), "игорек": ("игорь",), "юра": ("юрий",), "ося": ("иосиф",), "яша": ("яков",),
@@ -67,14 +67,46 @@ def stem(w: str) -> str:
     return w
 
 
+FIRST_STEMS: set[str] = set()  # заполняется ниже, после stem()
+
+
+# Латиница из Zoom и почты — в кириллицу, грубо, но так, чтобы сошлась основа: «Vasiliy Smirnov» —
+# «василий смирнов». Мягкий знак при сравнении не считается: в латинице его нет («Veldyaksov»).
+TRANSLIT = [("shch", "щ"), ("sch", "щ"), ("yo", "ё"), ("yu", "ю"), ("ya", "я"), ("ye", "е"), ("zh", "ж"),
+            ("kh", "х"), ("ts", "ц"), ("ch", "ч"), ("sh", "ш"), ("iy", "ий"), ("yy", "ый"), ("ay", "ай"),
+            ("ey", "ей"), ("oy", "ой"), ("a", "а"), ("b", "б"), ("v", "в"), ("w", "в"), ("g", "г"), ("d", "д"),
+            ("e", "е"), ("z", "з"), ("i", "и"), ("j", "й"), ("k", "к"), ("l", "л"), ("m", "м"), ("n", "н"),
+            ("o", "о"), ("p", "п"), ("r", "р"), ("s", "с"), ("t", "т"), ("u", "у"), ("f", "ф"), ("h", "х"),
+            ("c", "к"), ("y", "ы"), ("x", "кс"), ("q", "к")]
+
+
+def translit(s: str) -> str:
+    # «Dmitry», «Vasily», «Anatoly» — на конце после согласной «y» звучит «ий».
+    s = re.sub(r"(?<=[bcdfghklmnprstvz])y\b", "iy", norm(s))
+    out, i = [], 0
+    while i < len(s):
+        for lat, cyr in TRANSLIT:
+            if s.startswith(lat, i):
+                out.append(cyr)
+                i += len(lat)
+                break
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
+
+
 def same(a: str, b: str) -> bool:
     """Одно слово в разных падежах: основы равны или одна продолжает другую на 1–2 буквы
     («евген» и «евгени» из «Евгений» и «Евгением»)."""
-    sa, sb = stem(norm(a)), stem(norm(b))
+    sa, sb = (stem(norm(x)).replace("ь", "").replace("ъ", "") for x in (a, b))
     if sa == sb:
         return len(sa) >= 3
     lo, hi = sorted((sa, sb), key=len)
     return len(lo) >= 4 and hi.startswith(lo) and len(hi) - len(lo) <= 2
+
+
+FIRST_STEMS.update(stem(n) for n in FIRST_NAMES)
 
 
 def first_forms(w: str) -> set[str]:
@@ -93,7 +125,16 @@ def same_first(a: str, b: str) -> bool:
 
 
 def is_first(w: str) -> bool:
-    return any(same(w, n) for n in FIRST_NAMES)
+    """Слово — имя, а не фамилия. Строго по основе: «Петрова» — не «Пётр», «Иванов» — не «Иван»
+    (фамилии от имён часты, нестрогое сравнение принимало их за имена и теряло фамилию)."""
+    w = norm(w)
+    return w in FIRST_NAMES or stem(w) in FIRST_STEMS
+
+
+def _first_only(q: str) -> bool:
+    """Запрос — одно имя («Дмитрий», «Женя»)."""
+    ws = words(q)
+    return len(ws) == 1 and is_first(ws[0])
 
 
 def phone_key(s: Any) -> str | None:
@@ -115,13 +156,29 @@ def split_hint(q: str) -> tuple[str, str]:
     return q, hint
 
 
-def _org_hit(hint: str, org_names: list[str]) -> bool:
+# Слова, которые компанию не отличают: «Петров (банк)» не должен поднимать всех Петровых из банков.
+GENERIC = {"банк", "групп", "группа", "компания", "ооо", "ао", "пао", "зао", "ип", "холдинг", "фонд", "бизнес"}
+
+
+def _initials(name: str) -> str:
+    """«Знакомый Финансист» → «зф»: так компанию зовут в скобках у спикеров."""
+    ws = words(name)
+    return "".join(w[0] for w in ws) if len(ws) >= 2 else ""
+
+
+def _hint_hit(hint: str, names: list[str]) -> bool:
+    """Подсказка в скобках или после «из» подтверждает человека: компания (любое отличительное
+    слово — «финдир Додо» тоже Додо), аббревиатура компании («ЗФ») или роль («терапевт»)."""
     if not hint:
         return False
-    hw = [stem(w) for w in words(hint)]
-    for n in org_names:
-        ow = [stem(w) for w in words(n)]
-        if hw and all(any(o.startswith(h) or h.startswith(o) for o in ow if len(o) >= 3) for h in hw):
+    hw = [stem(w) for w in words(hint) if len(w) >= 3 and w not in GENERIC]
+    compact = "".join(words(hint))
+    for n in names:
+        # «ЗФ» — и аббревиатура «Знакомого финансиста», и компания, которая так и записана.
+        if compact and len(compact) >= 2 and compact in (_initials(n), "".join(words(n))):
+            return True
+        ow = [stem(w) for w in words(n) if len(w) >= 3 and w not in GENERIC]
+        if any(o.startswith(h) or h.startswith(o) for h in hw for o in ow):
             return True
     return False
 
@@ -149,6 +206,13 @@ def _name_score(q: str, person: dict) -> float:
         if len(qw) >= 2 and len(nw) >= 2:
             for qf, ql in ((qw[0], qw[-1]), (qw[-1], qw[0])):
                 for nf, nl in ((nw[0], nw[-1]), (nw[-1], nw[0])):
+                    # Инициал вместо имени или фамилии — «a.filatov», «Dmitry L» из Zoom и почты.
+                    if len(qf) == 1 and nf.startswith(qf) and not is_first(ql) and same(ql, nl):
+                        best = max(best, 0.85)
+                        continue
+                    if len(ql) == 1 and nl.startswith(ql) and is_first(nf) and same_first(qf, nf):
+                        best = max(best, 0.85)
+                        continue
                     if is_first(ql) or not same(ql, nl):
                         continue
                     best = max(best, 0.9 if same_first(qf, nf) else 0.5)
@@ -189,13 +253,17 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
             s, how = 1.0, "почта"
         else:
             s = _name_score(q_name, p)
+            if re.search(r"[a-z]", q_name):
+                s = max(s, _name_score(translit(q_name), p))  # подпись из Zoom латиницей
             how = "имя" if s >= 0.95 else "похоже"
             orgs = [x for x in [p["org_name"], *(p["org_aliases"] or [])] if x]
             if s and hint:
-                # Компания подтверждает — увереннее; у человека другая компания — слабее; компании нет —
-                # подсказке не с чем спорить («Анна Смирнова (Цветочная лавка)» — это она).
-                if _org_hit(hint, orgs):
-                    s = min(1.0, s + 0.2)
+                # Компания или роль подтверждает — увереннее, а одно имя с ней («Дмитрий (финдир
+                # Додо)») — почти наверняка: уникальность всё равно проверит GAP. У человека другая
+                # компания — слабее; компании нет — подсказке не с чем спорить («Анна Смирнова
+                # (Цветочная лавка)» — это она).
+                if _hint_hit(hint, orgs + [p["role"] or ""]) or _hint_hit(translit(hint), orgs + [p["role"] or ""]):
+                    s = max(min(1.0, s + 0.2), 0.9 if _first_only(q_name) else 0.0)
                 elif orgs:
                     s -= 0.15
         if s > 0.3:
