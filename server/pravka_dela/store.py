@@ -65,6 +65,14 @@ SUGGESTION_FIELDS = {"kind", "task_id", "payload", "source", "source_ref", "quot
 
 SUGGESTION_TTL = dt.timedelta(days=7)
 
+# «Сейчас» — дела, которые Саша обязан сделать сегодня (focus_on = сегодня), не больше пяти. До 06.10.2026
+# предел держали только веб, ask.py и телефон, а коннектор claude.ai, реплай в Telegram и любой клиент API
+# ставили шестое молча (LOGIC.md §11). Теперь его держит сервер — одно место для всех; клиенты считают
+# сами лишь ради подсказки до запроса.
+NOW_MAX = 5
+NOW_LOCK = 0x5E4A  # первый ключ замка «Сейчас» (второй — владелец): чужим замкам базы не мешает
+_NOW_WORD = {5: "пять", 6: "шесть", 7: "семь", 8: "восемь", 9: "девять"}
+
 
 class OpError(Exception):
     """Ошибка операции, которую повтор не исправит: её запоминаем вместе с op_id."""
@@ -152,6 +160,36 @@ def _full(conn: psycopg.Connection, tid: Any) -> dict:
     return conn.execute("SELECT * FROM tasks.v_tasks WHERE id = %s", (tid,)).fetchone()
 
 
+def _now_guard(conn: psycopg.Connection, before: dict | None, after: dict) -> None:
+    """Дело встаёт в «Сейчас» владельца, а там уже NOW_MAX — отказ словами, а не шестое молча.
+
+    before — дело до операции (None — новое), after — каким оно станет. В «Сейчас» — открытое дело
+    с focus_on на сегодня (crm.today(), Москва). Предел проверяется, только когда дело туда ВХОДИТ:
+    правка уже стоящего (срок, заметка), снятие и закрытие его не трогают. Счёт — до записи и под
+    замком на владельца: телефон, веб и реплай в Telegram в одну секунду шестого не поставят.
+    Считается видимое работающему (RLS): чужие приватные дела владельца в счёт не попадут.
+    """
+    if not after.get("focus_on") or (after.get("status") or "open") != "open":
+        return
+    today = conn.execute("SELECT crm.today() AS d").fetchone()["d"].isoformat()
+
+    def in_now(t: dict | None) -> bool:
+        return bool(t) and (t.get("status") or "open") == "open" and str(t.get("focus_on") or "")[:10] == today
+
+    owner = after.get("owner_id")
+    if not in_now(after) or (in_now(before) and before.get("owner_id") == owner):
+        return
+    conn.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s::text))", (NOW_LOCK, owner))
+    rows = conn.execute(
+        "SELECT num, title FROM tasks.tasks WHERE owner_id = %s AND status = 'open' AND focus_on = crm.today() "
+        "AND id IS DISTINCT FROM %s::uuid ORDER BY num",
+        (owner, str(before["id"]) if before else after.get("id")),
+    ).fetchall()
+    if len(rows) >= NOW_MAX:
+        names = "; ".join(f"#{r['num']} {r['title'] if len(r['title']) <= 40 else r['title'][:39] + '…'}" for r in rows)
+        raise OpError(f"в «Сейчас» уже {_NOW_WORD.get(len(rows), len(rows))} дел: {names} — сначала убери одно")
+
+
 # ── Операции ────────────────────────────────────────────────────────────
 
 
@@ -165,6 +203,7 @@ def op_task_create(conn, user, op):
             return {"task": _full(conn, have["id"])}
     data.setdefault("owner_id", user)
     data["created_by"] = user
+    _now_guard(conn, None, data)
     _ensure_labels(conn, data.get("labels"))
     row = _insert(conn, "tasks.tasks", data)
     return {"task": _full(conn, row["id"])}
@@ -179,6 +218,7 @@ def op_task_set(conn, user, op):
     # Поле поменяли с двух сторон: побеждает пришедшее последним, прежнее
     # значение остаётся в журнале, а клиент узнаёт, что спорил не один.
     conflicts = sorted(k for k in changes if k in was and not _same(cur.get(k), was[k]) and not _same(cur.get(k), changes[k]))
+    _now_guard(conn, cur, {**cur, **changes})
     _ensure_labels(conn, changes.get("labels"))
     row = _update(conn, "tasks.tasks", {"id": cur["id"]}, changes)
     if row is None:

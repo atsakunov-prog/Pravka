@@ -385,3 +385,110 @@ def person(url: str, name: str, also: list[str] | None = None, phone: str | None
     if row.get("phones"):
         bits.append(f"номера: {', '.join(row['phones'])}")
     return ("Записал. " if r.get("changed") else "Уже было. ") + f"{row['name']} — " + "; ".join(bits) + "."
+
+
+# ── Инструменты коннектора «Правка» в claude.ai ─────────────────────────
+
+
+def register(mcp, url: str) -> None:
+    """Инструменты Дел и CRM для Claude — архив регистрирует их, если задан DELA_DB_URL.
+
+    Подпись, описание для Claude и код — здесь, у Дел: новое поле дела — одна правка в этом файле.
+    До 06.10.2026 подписи жили в pravka_archive/app.py и каждое поле добавляли в оба места (LOGIC.md §11).
+    Тот же код, что у службы Дел, ролью её же базы.
+    """
+    import anyio
+
+    from pravka_dela import mcp_tools as dela
+
+    def run(fn, *a, **kw):
+        return anyio.to_thread.run_sync(lambda: fn(url, *a, **kw))
+
+    @mcp.tool()
+    async def dela_view(view: str = "morning", sphere: str | None = None, person: str | None = None,
+                        project: str | None = None, query: str | None = None) -> str:
+        """Дела списком. view: morning (утро: сейчас, на сегодня и просроченное, кому пора напомнить, поставили другие), new («Новое» — что предложила автоматика), waiting (жду, по людям), person (по человеку: повестка, жду, его просьбы — нужен person), project (проект: сделки, задачи, время из ленты — нужен project), week (неделя: протухшее, жду без движения, проекты без следующего шага), quick (до 10 минут), now (сейчас), search (поиск — нужен query). sphere: work, home или пусто (всё). Имена людей и проектов — как говорит Саша («Додо», «Наташа»)."""
+        return await run(dela.view, view, sphere, person, project, query)
+
+    @mcp.tool()
+    async def dela_person(name: str, also: list[str] | None = None, phone: str | None = None,
+                          telegram: str | None = None, merge_into: str | None = None) -> str:
+        """Один человек на всю систему. name — как его называют («Женя Соколов», «Соколов из Ромашки»); also — его другие имена, чтобы встречи, звонки и разбор узнавали; phone — номер; telegram — @имя. merge_into — живая карточка, в которую слить эту (дубль уходит в архив, всё его переезжает). Неуверенное не трогает — вернёт кандидатов."""
+        return await run(dela.person, name, also, phone, telegram, merge_into)
+
+    @mcp.tool()
+    async def dela_task(ref: str) -> str:
+        """Дело целиком: поля, заметки, комментарии, журнал правок. ref — короткий номер («57»)."""
+        return await run(dela.card, ref)
+
+    @mcp.tool()
+    async def dela_add(title: str, project: str | None = None, deal: str | None = None, person: str | None = None,
+                       ball: str = "mine", due_date: str | None = None, due_time: str | None = None,
+                       nudge_on: str | None = None, requested_by: str | None = None, estimate_min: int | None = None,
+                       money: str | None = None, want: bool | None = None, now: bool | None = None,
+                       labels: list[str] | None = None, notes: str | None = None, remind_at: str | None = None,
+                       remind_place: str | None = None) -> str:
+        """Новое дело Саше. title — «Кто: действие». project — проект (пусто — «Входящие»), deal — сделка проекта. ball: mine, waiting (жду от person), agenda (поднять при встрече с person). due_date, nudge_on — YYYY-MM-DD. money: paid, potential, none (пусто — как у проекта). now — в «Сейчас» на сегодня. labels — только контексты вроде «звонок». Напомнить Саше в Telegram (бот Ковчега): remind_at — «YYYY-MM-DD HH:MM» по Москве («напомни завтра в 10»), или remind_place — по приезду в место телефона («дом»); одно из двух. Срок не назван — due_date = день напоминания."""
+        return await run(dela.add, title=title, project=project, deal=deal, person=person, ball=ball, due_date=due_date,
+                         due_time=due_time, nudge_on=nudge_on, requested_by=requested_by, estimate_min=estimate_min,
+                         money=money, want=want, now=now, labels=labels, notes=notes, remind_at=remind_at,
+                         remind_place=remind_place)
+
+    @mcp.tool()
+    async def dela_change(ref: str, title: str | None = None, notes: str | None = None, project: str | None = None,
+                          deal: str | None = None, person: str | None = None, ball: str | None = None,
+                          due_date: str | None = None, due_time: str | None = None, nudge_on: str | None = None,
+                          requested_by: str | None = None, estimate_min: int | None = None, money: str | None = None,
+                          want: bool | None = None, now: bool | None = None, labels: list[str] | None = None,
+                          status: str | None = None, comment: str | None = None, remind_at: str | None = None,
+                          remind_place: str | None = None) -> str:
+        """Поправить дело по номеру: любые поля как у dela_add; status: done (сделано), cancelled (отменено), open (вернуть); comment — дописать комментарий. Пустая строка в поле — очистить его (due_date="" — без срока, remind_at="" — без напоминания). Новое remind_at или remind_place взводит напоминание заново, даже если старое уже приходило. Что не передано — не меняется."""
+        return await run(dela.change, ref, comment=comment, title=title, notes=notes, project=project, deal=deal,
+                         person=person, ball=ball, due_date=due_date, due_time=due_time, nudge_on=nudge_on,
+                         requested_by=requested_by, estimate_min=estimate_min, money=money, want=want, now=now,
+                         labels=labels, status=status, remind_at=remind_at, remind_place=remind_place)
+
+    @mcp.tool()
+    async def dela_decide(suggestion: str, decision: str, reason: str | None = None, title: str | None = None,
+                          project: str | None = None, person: str | None = None, ball: str | None = None,
+                          due_date: str | None = None) -> str:
+        """Разобрать «Новое». suggestion — id из dela_view view=new (первых 8 знаков хватит) или «batch:<пачка>» — вся пачка встречи. decision: accept или reject. reason — почему отклонил (это учит разбор). Поля title, project, person, ball, due_date — принять с поправкой."""
+        return await run(dela.decide, suggestion, decision, reason, title=title, project=project, person=person,
+                         ball=ball, due_date=due_date)
+
+    from pravka_dela import crm_tools as crm
+
+    @mcp.tool()
+    async def crm_view(view: str = "pipeline", project: str | None = None, deal: str | None = None,
+                       person: str | None = None) -> str:
+        """CRM ЗФ. view: pipeline (воронка по стадиям: гонорар, взвешенно, следующее дело, тишина, время), clients (клиенты: контакт, следующее дело, деньги за год, время за 90 дней; плюс клиенты из Засечки, которых нет в справочнике), client (клиент целиком: сделки, хронология, время по месяцам — нужен project), deal (сделка: модель гонорара, команда, дела, оплаты с id, хронология — нужны project и deal), person (человек: сделки и хронология — нужен person), ties (связи: кому пора напомнить о себе по теплоте, кто приводит сделки, дни рождения), money (деньги фирмы: дебиторка, ждём, получено, портфель, воронка)."""
+        return await run(crm.view, view, project, deal, person)
+
+    @mcp.tool()
+    async def crm_deal(project: str, deal: str | None = None, name: str | None = None, stage: str | None = None,
+                       outcome: str | None = None, lost_reason: str | None = None, deal_type: str | None = None,
+                       lead: str | None = None, team: list[str] | None = None, people: list[str] | None = None,
+                       source: str | None = None, fee_kind: str | None = None, fee_rub: float | None = None,
+                       retainer_rub: float | None = None, success_pct: float | None = None, probability: int | None = None,
+                       expected_on: str | None = None, deadline: str | None = None, my_view: str | None = None,
+                       ideas: str | None = None) -> str:
+        """Завести сделку клиента (project + name) или поправить (project + deal). stage: lead, proposal (КП), mandate, active, closing, archive; outcome: won (сделали), lost (проиграли), paused (заморожено) — сам уводит в архив, lost_reason — почему. deal_type: M&A, Банковский advisory, Управленка, Косткаттинг, Финансирование, Сопровождение. lead — ответственный в ЗФ, team — команда ЗФ, people — люди клиента, source — кто привёл. fee_kind: fixed, retainer, success, hourly, mixed; fee_rub — гонорар всего, retainer_rub — в месяц, success_pct — процент успеха; probability — %, expected_on — когда решение (YYYY-MM-DD). my_view — «как я вижу» (видит только Саша). Пустая строка — очистить поле. Ответственный и команда видят клиента в Делах; деньги — только кому открыты."""
+        return await run(crm.deal, project, deal=deal, name=name, lead=lead, team=team, people=people, source=source,
+                         fee_rub=fee_rub, retainer_rub=retainer_rub, success_pct=success_pct, stage=stage, outcome=outcome,
+                         lost_reason=lost_reason, deal_type=deal_type, fee_kind=fee_kind, probability=probability,
+                         expected_on=expected_on, deadline=deadline, my_view=my_view, ideas=ideas)
+
+    @mcp.tool()
+    async def crm_payment(project: str, deal: str, amount_rub: float | None = None, kind: str | None = None,
+                          title: str | None = None, due_on: str | None = None, invoiced_on: str | None = None,
+                          paid_on: str | None = None, payment: str | None = None, cancel: bool = False,
+                          note: str | None = None) -> str:
+        """Оплата по сделке ЗФ: новая (amount_rub) или правка старой (payment — id из crm_view view=deal). kind: advance (аванс), stage (этап), final, success (success fee), retainer (за месяц), extra (допработы). due_on — когда ждём, invoiced_on — счёт выставлен, paid_on — деньги пришли (YYYY-MM-DD). cancel — оплаты не будет (строка остаётся)."""
+        return await run(crm.payment, project, deal, amount_rub=amount_rub, kind=kind, title=title, due_on=due_on,
+                         invoiced_on=invoiced_on, paid_on=paid_on, payment=payment, cancel=cancel, note=note)
+
+    @mcp.tool()
+    async def dela_note(summary: str, kind: str = "note", project: str | None = None, deal: str | None = None,
+                        people: list[str] | None = None, next_step: str | None = None, at: str | None = None) -> str:
+        """Запись в хронологию клиента и людей (бывший «Лог взаимодействий» Notion): звонок, встреча, переписка, заметка — не дело. kind: call, meeting, zoom, telegram, email, whatsapp, note, other. at — когда (ISO, пусто — сейчас)."""
+        return await run(dela.note, summary, kind, project, deal, people, next_step, at)

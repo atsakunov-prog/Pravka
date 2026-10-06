@@ -307,3 +307,30 @@ def test_reminded_by_bot_for_task_its_user_cannot_see(dela):
     res = store.apply_ops(dela, "sasha", [{"op": "task.reminded", "id": t["id"]}, {"op": "task.set", "id": t["id"], "set": {"title": "x"}}],
                           store.REMIND_BOT, f"svc:{store.REMIND_BOT}")["results"]
     assert res[0]["ok"] and not res[1]["ok"]
+
+
+def test_now_holds_five_on_the_server(dela, conn):
+    """«Сейчас» — не больше пяти держит сервер: шестое отказывает словами из любого клиента
+    (коннектор claude.ai, реплай в Telegram, телефон), а не встаёт молча (06.10.2026, LOGIC.md §11)."""
+    today = conn.execute("SELECT crm.today()").fetchone()[0].isoformat()
+    five = [ops(dela, "sasha", {"op": "task.create", "task": {"title": f"Сейчас {i}", "focus_on": today}}, via="web")[0]
+            for i in range(5)]
+    assert all(r["ok"] for r in five), five
+    sixth = ops(dela, "sasha", {"op": "task.create", "task": {"title": "Шестое", "focus_on": today}}, via="mcp")[0]
+    assert not sixth["ok"] and "уже пять" in sixth["error"] and "Сейчас 0" in sixth["error"]
+    # Без «Сейчас» дело заводится спокойно, а поставить его туда шестым — нельзя.
+    later = ops(dela, "sasha", {"op": "task.create", "task": {"title": "Потом"}}, via="mcp")[0]["task"]
+    r = ops(dela, "sasha", {"op": "task.set", "id": later["id"], "set": {"focus_on": today}}, via="mcp")[0]
+    assert not r["ok"] and "сначала убери одно" in r["error"]
+    # Правка стоящего в «Сейчас» и его закрытие предел не трогают; место освободилось — встаёт.
+    first = five[0]["task"]
+    assert ops(dela, "sasha", {"op": "task.set", "id": first["id"], "set": {"notes": "уточнение"}})[0]["ok"]
+    assert ops(dela, "sasha", {"op": "task.done", "id": first["id"]})[0]["ok"]
+    assert ops(dela, "sasha", {"op": "task.set", "id": later["id"], "set": {"focus_on": today}})[0]["ok"]
+    # Вернуть закрытое с сегодняшним focus_on — тоже вход в «Сейчас»: шестым не встаёт.
+    r = ops(dela, "sasha", {"op": "task.reopen", "id": first["id"]})[0]
+    assert not r["ok"] and "уже пять" in r["error"]
+    # Вчерашнее «Сейчас» в счёт не идёт, у другого человека — своё «Сейчас».
+    yesterday = (dt.date.fromisoformat(today) - dt.timedelta(days=1)).isoformat()
+    assert ops(dela, "sasha", {"op": "task.create", "task": {"title": "Вчерашнее", "focus_on": yesterday}})[0]["ok"]
+    assert ops(dela, "natasha", {"op": "task.create", "task": {"title": "Наташино", "focus_on": today}})[0]["ok"]
