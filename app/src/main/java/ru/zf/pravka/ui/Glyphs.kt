@@ -145,6 +145,8 @@ object Glyphs {
         )
     }
     val Timer: ImageVector get() = pick("Timer") { sw -> glyph("Timer", sw, circle(12f, 13f, 8f), "M12 9v4l2.5 2.5M9 2h6") }
+    /** «Сейчас» — дело на сегодня (до пяти): молния у строки дела, как в вебе. */
+    val Bolt: ImageVector get() = pick("Bolt") { sw -> glyph("Bolt", sw, "M13 2L4 14h7l-1 8 9-12h-7z") }
     /** Звук тейка — разобрать фразу заново (30.09.2026). */
     val Wave: ImageVector get() = pick("Wave") { sw -> glyph("Wave", sw, "M3 10.5v3M7.5 7v10M12 3v18M16.5 7v10M21 10.5v3") }
     val Play: ImageVector get() = pick("Play") { sw -> glyph("Play", sw, circle(12f, 12f, 9f), "M10 8.5l5 3.5-5 3.5z") }

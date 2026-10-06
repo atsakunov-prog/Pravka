@@ -232,6 +232,11 @@ object Dela {
         val local: Boolean = false,
         val decidedBy: String = "",
         val resultTaskId: String = "",
+        /**
+         * «Понятно» у решённого без человека («Закрыто само», 06.10.2026):
+         * видел, согласен — из «Нового» уходит. Ставит операция `suggestion.seen`.
+         */
+        val seenAt: String = "",
     ) {
         val pending: Boolean get() = status == "pending"
         fun payloadObj(): JSONObject = runCatching { JSONObject(payload) }.getOrElse { JSONObject() }
@@ -294,6 +299,9 @@ object Dela {
     ) {
         /** Сервер Дел знает напоминания (поля `remind_*`) и шлёт их в Telegram. */
         val remindOn: Boolean get() = FEATURE_REMIND in features
+
+        /** Сервер Дел держит наговорки (`dictation.add`, вид `dictations`) — «Новое» по источнику. */
+        val dictationsOn: Boolean get() = FEATURE_DICTATIONS in features
 
         val empty: Boolean
             get() = tasks.isEmpty() && projects.isEmpty() && people.isEmpty() && suggestions.isEmpty()
@@ -474,7 +482,7 @@ object Dela {
             o.str("source_ref"), o.str("quote"), o.str("batch_ref"), o.str("batch_title"),
             o.str("status").ifBlank { "pending" }, o.str("reason"), o.str("expires_at"), o.str("created_at"),
             o.str("decided_at"), o.int("rev"), o.long("seq"), o.bool("_local"),
-            decidedBy = o.str("decided_by"), resultTaskId = o.str("result_task_id"),
+            decidedBy = o.str("decided_by"), resultTaskId = o.str("result_task_id"), seenAt = o.str("seen_at"),
         )
     }
 
@@ -484,7 +492,7 @@ object Dela {
         .put("batch_ref", nul(s.batchRef)).put("batch_title", nul(s.batchTitle)).put("status", s.status)
         .put("reason", nul(s.reason)).put("expires_at", nul(s.expiresAt)).put("created_at", nul(s.createdAt))
         .put("decided_at", nul(s.decidedAt)).put("rev", s.rev).put("seq", s.seq)
-        .put("decided_by", nul(s.decidedBy)).put("result_task_id", nul(s.resultTaskId))
+        .put("decided_by", nul(s.decidedBy)).put("result_task_id", nul(s.resultTaskId)).put("seen_at", nul(s.seenAt))
         .apply { if (s.local) put("_local", true) }
 
     fun user(o: JSONObject): User? {
@@ -677,6 +685,12 @@ object Dela {
                     val status = if (op.str("decision") == "reject") "rejected" else "accepted"
                     suggestions[sg.id] = sg.copy(status = status, reason = op.str("reason"), decidedAt = nowIso, local = true)
                 }
+                // «Понятно» у закрытого само — уходит из «Нового» сразу, до ответа.
+                "suggestion.seen" -> for (id in op.strings("ids")) {
+                    val sg = suggestions[id] ?: continue
+                    if (sg.pending || sg.seenAt.isNotBlank()) continue
+                    suggestions[id] = sg.copy(seenAt = nowIso, local = true)
+                }
                 "deal.set" -> {
                     val d = deals[op.str("id")] ?: continue
                     deals[d.id] = applyDeal(d, op.optJSONObject("set") ?: continue, today)
@@ -799,6 +813,9 @@ object Dela {
     /** Что сервер умеет сверх контракта части 1 — `features` ответа синка. */
     const val FEATURE_REMIND = "remind"
 
+    /** Наговорки: `dictation.add` и вид `dictations` (06.10.2026, docs/dela-phone-3.md). */
+    const val FEATURE_DICTATIONS = "dictations"
+
     /**
      * Поля нового дела: карточкины плюс деньги. Деньги ставит только Разноска —
      * тот же промпт, что у разбора сервера (`TASKS_DELA`), который их по-прежнему
@@ -895,6 +912,22 @@ object Dela {
             }
 
     /**
+     * Наговорка, из которой вышли дела (06.10.2026, docs/dela-phone-3.md): текст
+     * дословно — то, что ушло в разбор, не чистка. [ref] — ровно `source_ref` её
+     * дел (`raznoska:<черновик>`): по нему «Новое» показывает, что сказано и куда
+     * что попало. Повтор того же id сервер не переписывает.
+     */
+    fun dictationOp(ref: String, text: String, atIso: String, opId: String): JSONObject =
+        JSONObject().put("op", "dictation.add").put("op_id", opId).put(
+            "dictation",
+            JSONObject().put("id", ref).put("text", text.trim()).put("at", atIso).put("source", "phone"),
+        )
+
+    /** «Понятно» у закрытого само: видел, согласен — из «Нового» уходит (`seen_at`). */
+    fun seenOp(ids: List<String>, opId: String = newId()): JSONObject =
+        JSONObject().put("op", "suggestion.seen").put("op_id", opId).put("ids", arr(ids))
+
+    /**
      * «Не дела» из Разноски — в хронологию CRM заметкой (`interaction.add`,
      * kind = note), а не в поле, которое никто не видит.
      */
@@ -926,6 +959,8 @@ object Dela {
             "comment.add" -> "комментарий к ${taskName(op.optJSONObject("comment")?.str("task_id").orEmpty())}"
             "comment.delete" -> "убрать комментарий"
             "suggestion.decide" -> (if (op.str("decision") == "reject") "отклонить" else "принять") + " предложение"
+            "suggestion.seen" -> "«понятно» у закрытого само"
+            "dictation.add" -> "текст наговорки"
             "interaction.add" -> "заметка в хронологию"
             "interaction.delete" -> "убрать запись хронологии"
             "deal.set" -> "сделка «${s.deals[op.str("id")]?.name?.take(60) ?: "?"}»"
@@ -1014,10 +1049,11 @@ object Dela {
     /**
      * «Закрыто само» за [days] дней, свежие сверху (`autoClosed` веба): синк
      * приносит эти строки (accepted), раньше телефон их просто не показывал.
+     * «Понятно» (`seen_at`) убирает их совсем: 06.10.2026 #268 висел неделю.
      */
     fun autoClosed(s: Snapshot, me: String, now: Long, days: Int = 7): List<Suggestion> =
         s.suggestions.values.filter {
-            it.autoClosed && (me.isBlank() || it.forUser == me) && (ms(it.decidedAt) ?: 0L) > now - days * DAY_MS
+            it.autoClosed && it.seenAt.isBlank() && (me.isBlank() || it.forUser == me) && (ms(it.decidedAt) ?: 0L) > now - days * DAY_MS
         }.sortedByDescending { ms(it.decidedAt) ?: 0L }
 
     /**

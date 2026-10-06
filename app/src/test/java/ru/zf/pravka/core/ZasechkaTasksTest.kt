@@ -69,6 +69,28 @@ class ZasechkaTasksTest {
         val ids = ZasechkaTasks.shortlist(s, "me", today, entries, now).map { it.id }
         // «due» начато из ленты сегодня — оно выше «recent», а просрочкой второй раз не встаёт.
         assertEquals(listOf("run", "focus", "due", "recent"), ids)
+
+        // По частям: идущее не из «Сейчас» — первым, «Сейчас» — своим заголовком, ниже остальное.
+        val p = ZasechkaTasks.parts(s, "me", today, entries, now)
+        assertEquals("run", p.running?.id)
+        assertEquals(listOf("focus"), p.now.map { it.id })
+        assertEquals(listOf("due", "recent"), p.rest.map { it.id })
+        assertEquals(ids, p.all.map { it.id })
+    }
+
+    @Test
+    fun `идущее из «Сейчас» — среди «Сейчас» первым, отдельной строки нет`() {
+        val today = "2026-10-05"
+        val s = snap(task("a", 1, focus = today, due = "2026-10-01"), task("b", 2, focus = today), task("c", 3, due = today))
+        val p = ZasechkaTasks.parts(s, "me", today, listOf(entry(now - 10 * m, 0L, task = "b")), now)
+        assertNull(p.running)
+        assertEquals(listOf("b", "a"), p.now.map { it.id })
+        assertEquals(listOf("c"), p.rest.map { it.id })
+        // Ничего не идёт и «Сейчас» пусто — весь список «остальным», заголовков нет.
+        val q = ZasechkaTasks.parts(snap(task("c", 3, due = today)), "me", today, emptyList(), now)
+        assertNull(q.running)
+        assertEquals(emptyList<Dela.Task>(), q.now)
+        assertEquals(listOf("c"), q.rest.map { it.id })
     }
 
     @Test

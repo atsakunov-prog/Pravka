@@ -67,6 +67,14 @@ object DelaAsk {
     data class Note(val summary: String, val projectId: String)
 
     /**
+     * Правка карточки (06.10.2026, `crm[]` ответа): хронология, люди, сделки —
+     * [what] словами («в хронологию: …», «Иван: должность CFO»), [undo] —
+     * операции «как было», готовые для очереди. Телефону карточки CRM правит
+     * веб; здесь — показать, что поменялось, и вернуть вместе со всем.
+     */
+    data class Crm(val what: String, val undo: List<JSONObject>)
+
+    /**
      * Ответ задания. `route = edit` — поправки дел на экране (`changed`) и, может
      * быть, новые дела; `route = new` — команда целиком про новые дела, сервер
      * отдал её разбору (как `/api/parse`): `tasks` и `notes` — что заведено.
@@ -79,9 +87,13 @@ object DelaAsk {
         val notes: List<Note>,
         val errors: List<String>,
         val model: String,
+        val crm: List<Crm> = emptyList(),
     ) {
+        /** Дела, которых коснулся Claude: поправленные и новые. */
         val count: Int get() = changed.size + tasks.size
         val isNew: Boolean get() = route == "new"
+        /** Есть что вернуть «Вернуть всё»: дела или правки карточки с «как было». */
+        val undoable: Boolean get() = count > 0 || crm.any { it.undo.isNotEmpty() }
     }
 
     fun parse(o: JSONObject): Result {
@@ -111,6 +123,10 @@ object DelaAsk {
             notes = objs("notes").map { Note(it.str("summary"), it.str("project_id")) }.filter { it.summary.isNotBlank() },
             errors = errors,
             model = o.str("model"),
+            crm = objs("crm").map { c ->
+                val u = c.optJSONArray("undo")
+                Crm(c.str("what").trim(), if (u == null) emptyList() else (0 until u.length()).mapNotNull { u.optJSONObject(it) })
+            }.filter { it.what.isNotBlank() || it.undo.isNotEmpty() },
         )
     }
 
@@ -120,7 +136,8 @@ object DelaAsk {
      * `task.reopen`, done — `task.done`, cancelled — `task.cancel`; каждому
      * новому делу — `task.cancel` (строки на сервере не удаляются). В `was` —
      * то, что поставил Claude: если с тех пор поле меняли руками, сервер
-     * скажет о споре, а не затрёт молча.
+     * скажет о споре, а не затрёт молча. Правки карточки (`crm[].undo`) —
+     * как прислал сервер, каждой свой op_id (как у веба: «карточка — как было»).
      */
     fun undoOps(r: Result): List<JSONObject> {
         val out = mutableListOf<JSONObject>()
@@ -137,6 +154,10 @@ object DelaAsk {
             }
         }
         for (t in r.tasks) out += Dela.statusOp("task.cancel", t.id)
+        for (c in r.crm) for (u in c.undo) {
+            if (u.str("op").isBlank()) continue
+            out += JSONObject(u.toString()).put("op_id", Dela.newId())
+        }
         return out
     }
 
@@ -152,7 +173,7 @@ object DelaAsk {
             out += a.str("due_time").let { if (it.isBlank()) "без времени" else "время ${it.take(5)}" }
         }
         if (a.has("focus_on")) out += if (a.str("focus_on").isBlank()) "из «Сейчас»" else "в «Сейчас»"
-        if (a.has("project_id")) out += a.str("project_id").let { if (it.isBlank()) "во «Входящие»" else "проект " + (s.projects[it]?.name ?: "?") }
+        if (a.has("project_id")) out += a.str("project_id").let { if (it.isBlank()) "без проекта" else "проект " + (s.projects[it]?.name ?: "?") }
         if (a.str("deal_id").isNotBlank()) out += "сделка " + (s.deals[a.str("deal_id")]?.name ?: "?")
         if (a.has("ball") || a.has("person_id")) {
             val who = if (a.has("person_id")) s.people[a.str("person_id")]?.label.orEmpty() else ""

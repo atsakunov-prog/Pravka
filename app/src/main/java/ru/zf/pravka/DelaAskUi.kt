@@ -227,7 +227,10 @@ internal fun AskResultSheet(
             ).joinToString(" и ")
             if (said.isBlank()) "Claude не нашёл тут дел" else "Claude записал $said"
         }
-        r.count > 0 -> "Claude: " + plural(r.count, "дело", "дела", "дел")
+        r.count > 0 || r.crm.isNotEmpty() -> "Claude: " + listOfNotNull(
+            plural(r.count, "дело", "дела", "дел").takeIf { r.count > 0 },
+            "карточка: ${r.crm.size}".takeIf { r.crm.isNotEmpty() },
+        ).joinToString(", ")
         else -> "Claude ничего не менял"
     }
     PaperSheet(
@@ -236,8 +239,9 @@ internal fun AskResultSheet(
         icon = Glyphs.Ask,
         subtitle = shown.scope.optString("title").takeIf { it.isNotBlank() },
         footer = {
-            if (r != null && r.count > 0) {
-                PaperTextButton(if (r.isNew && r.changed.isEmpty()) "Отменить дела" else "Вернуть всё", icon = Glyphs.Undo, onClick = { onUndo(r) })
+            // «Вернуть всё» — и дела, и правки карточки (crm[].undo, 06.10.2026), как в вебе.
+            if (r != null && r.undoable) {
+                PaperTextButton(if (r.isNew && r.changed.isEmpty() && r.crm.isEmpty()) "Отменить дела" else "Вернуть всё", icon = Glyphs.Undo, onClick = { onUndo(r) })
             }
             Spacer(Modifier.weight(1f))
             if (r == null) PaperButton("Ещё раз", icon = Glyphs.Ask, primary = true, enabled = retry.isNotBlank() && !running, onClick = { onRetry(retry.trim()) })
@@ -276,8 +280,13 @@ internal fun AskResultSheet(
                 PaperHint(n.summary + (snap.projects[n.projectId]?.name?.let { " · $it" } ?: ""), c.onSurface)
             }
         }
+        // Правки карточки — хронология, люди, сделки (`crm[]`): словами, как их назвал сервер.
+        if (r.crm.isNotEmpty()) {
+            PaperHint("В карточке:")
+            for (cr in r.crm) PaperHint(cr.what, c.onSurface)
+        }
         if (r.errors.isNotEmpty()) PaperHint("Не вышло: " + r.errors.joinToString("; "), c.error)
-        if (r.count == 0 && r.errors.isEmpty() && r.reply.isBlank()) PaperHint("Ничего не поменялось.")
+        if (r.count == 0 && r.crm.isEmpty() && r.errors.isEmpty() && r.reply.isBlank()) PaperHint("Ничего не поменялось.")
     }
 }
 

@@ -254,6 +254,13 @@ class RaznoskaEngine(
      * ставится, как только очередь их взяла: дальше их доводит очередь, а
      * повтор с тем же op_id сервер не удваивает. Ждём ответа сервера
      * несколько секунд — чтобы честно сказать «записал» или «в очереди».
+     *
+     * Первой в пачке — сама наговорка (`dictation.add`, 06.10.2026,
+     * docs/dela-phone-3.md): «Новое» веба и телефона показывает, что сказано и
+     * куда что попало. id — `source_ref` её дел, op_id выведен из черновика:
+     * дослать отмеченное позже — та же операция, сервер ответит той же строкой.
+     * Старый сервер (без `dictations` в синке) отверг бы незнакомую операцию —
+     * тогда не шлём.
      */
     private suspend fun sendDela(draftId: Long, only: Set<Long>?): SendOutcome {
         store.load()
@@ -263,6 +270,15 @@ class RaznoskaEngine(
         val notes = if (draft.notesSent) emptyList() else draft.noteItems
         if (queue.isEmpty() && notes.isEmpty()) return SendOutcome(0, 0, "", "Дела")
         val ops = mutableListOf<org.json.JSONObject>()
+        if (delaStore.view.value.dictationsOn && draft.transcript.isNotBlank()) {
+            ops += Dela.dictationOp(
+                ref = dictationRef(draft.id),
+                text = draft.transcript,
+                atIso = java.time.Instant.ofEpochMilli(draft.createdTs).atZone(java.time.ZoneId.systemDefault())
+                    .toOffsetDateTime().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString(),
+                opId = Dela.stableId("razn-dictation-${draft.id}"),
+            )
+        }
         // Старый черновик (до Дел) ключей не имел — выдаём их здесь и запоминаем.
         val keyed = queue.map { t ->
             if (t.delaId.isNotBlank() && t.opId.isNotBlank()) t else t.copy(delaId = t.delaId.ifBlank { Dela.newId() }, opId = t.opId.ifBlank { Dela.newId() })
@@ -278,7 +294,7 @@ class RaznoskaEngine(
                 atIso = at,
                 projectId = n.projectId,
                 personIds = n.personIds,
-                sourceRef = "raznoska:${draft.id}:$i",
+                sourceRef = dictationRef(draft.id) + ":$i",
                 opId = n.opId.ifBlank { Dela.stableId("razn-note-${draft.id}-$i") },
             )
         }
@@ -328,8 +344,11 @@ class RaznoskaEngine(
         want = t.want,
         labels = t.labels,
         source = "voice",
-        sourceRef = "raznoska:$draftId",
+        sourceRef = dictationRef(draftId),
     )
+
+    /** Метка наговорки: `source_ref` её дел (заметки — с номером через «:») и id строки наговорки на сервере. */
+    private fun dictationRef(draftId: Long): String = "raznoska:$draftId"
 
     /**
      * Правка формулировки прямо на плашке. Пустой текст = владелец вычеркнул

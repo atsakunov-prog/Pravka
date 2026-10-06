@@ -2,8 +2,11 @@ package ru.zf.pravka.core
 
 import java.text.Collator
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.util.Locale
+import org.json.JSONObject
+import ru.zf.pravka.core.Dela.str
 
 /**
  * Виды Дел на телефоне — как в вебе (05.10.2026, владелец: «адаптировать
@@ -13,21 +16,51 @@ import java.util.Locale
  * (`taskRow`, `dueLabel`), «Неделя», поиск, страница человека. Здесь то же
  * правило на копии телефона: вкладка открывается без сети, а читается так же,
  * как веб на ПК. Поправил веб — поправь здесь и тест `DelaViewsTest`.
+ *
+ * С 06.10.2026 (docs/dela-phone-3.md) «Утра» и «Входящих» нет — владелец:
+ * «утро непонятно, что это такое… входящие — чем они отличаются от нового».
+ * Первым — «Сейчас» (до пяти дел на сегодня), дела без проекта и поставленные
+ * другими — в «Новом» рядом с наговорками и предложениями автоматики;
+ * просроченное — наверху «Предстоящего», «пора напомнить» — наверху «Жду».
  */
 object DelaViews {
 
     // ------------------------------------------------------------ разделы
 
-    /** Разделы веба по порядку боковой панели. */
+    /** Разделы веба по порядку боковой панели (`VIEWS` веба). */
     enum class View(val key: String, val title: String) {
-        MORNING("morning", "Утро"),
-        UPCOMING("upcoming", "Предстоящее"),
+        NOW("now", "Сейчас"),
         NEW("new", "Новое"),
+        UPCOMING("upcoming", "Предстоящее"),
         WAITING("waiting", "Жду"),
         WEEK("week", "Неделя"),
-        INBOX("inbox", "Входящие"),
-        ALL("all", "Все дела"),
+        ALL("all", "Все дела");
+
+        companion object {
+            /**
+             * Ключ раздела, как маршрут веба: старые «Утро» и «Входящие» ведут туда,
+             * где их дела теперь живут, — в «Сейчас» и в «Новое».
+             */
+            fun of(key: String): View = when (key) {
+                "morning" -> NOW
+                "inbox" -> NEW
+                else -> entries.firstOrNull { it.key == key } ?: NOW
+            }
+        }
     }
+
+    /**
+     * «Сейчас» — дела, которые обязан сделать сегодня, не больше пяти (владелец,
+     * 06.10.2026). Шестое не встаёт ни молнией, ни из карточки: веб и правка
+     * словами на сервере (`ask.NOW_MAX`) держат то же число.
+     */
+    const val NOW_MAX = 5
+
+    /** Ответ, когда шестое не встаёт: тот же у молнии и у карточки. */
+    const val NOW_FULL = "В «Сейчас» уже $NOW_MAX — сначала убери одно"
+
+    /** Подпись строки дела без проекта — она же кнопка выбора проекта (как в вебе). */
+    const val NO_PROJECT = "без проекта"
 
     /** Группировка списка — выбор над ним, как `groupPicker` веба. */
     enum class By(val key: String, val title: String) {
@@ -51,49 +84,114 @@ object DelaViews {
 
     private fun isNow(t: Dela.Task, today: String) = t.focusOn == today
     private fun le(d: String, today: String) = d.isNotBlank() && d <= today
+    private fun ms(iso: String): Long = runCatching { java.time.OffsetDateTime.parse(iso).toInstant().toEpochMilli() }.getOrDefault(0L)
 
-    /** Числа у разделов в меню — как `count()` у `VIEWS` веба. */
-    data class Counts(val morning: Int, val upcoming: Int, val new: Int, val waiting: Int, val inbox: Int) {
+    /** Просрочено: открытое со сроком раньше сегодня (`isLate` веба). */
+    fun isLate(t: Dela.Task, today: String): Boolean = t.open && t.dueDate.isNotBlank() && t.dueDate < today
+
+    /** «Пора напомнить» (`nudgeDue` веба): мяч у человека, настал день напоминания или срок. */
+    fun nudgeDue(t: Dela.Task, today: String): Boolean =
+        t.ball == Dela.WAITING && (le(t.nudgeOn, today) || le(t.dueDate, today))
+
+    /**
+     * Дела «Сейчас» (`nowTasks` веба): мои открытые, отмеченные на сегодня, —
+     * во всех сферах: пять на день, а не пять на сферу.
+     */
+    fun nowTasks(s: Dela.Snapshot, me: String, today: String): List<Dela.Task> =
+        s.tasks.values.filter { it.open && mine(s, me, it) && isNow(it, today) }.sortedWith(Dela.ORDER)
+
+    /**
+     * Влезут ли [ids] в «Сейчас» (`nowRoom` веба): уже стоящие не считаются
+     * дважды. false — было бы шестое; ответ владельцу — [NOW_FULL].
+     */
+    fun nowRoom(s: Dela.Snapshot, me: String, today: String, ids: Collection<String>): Boolean {
+        val have = nowTasks(s, me, today).map { it.id }.toSet()
+        return have.size + ids.toSet().count { it !in have } <= NOW_MAX
+    }
+
+    /** «Поставили другие» за три дня (`fromOthers` веба): моё, заведённое не мной. */
+    fun fromOthers(s: Dela.Snapshot, me: String, sphere: String, now: Long): List<Dela.Task> =
+        openMine(s, me, sphere).filter { it.createdBy.isNotBlank() && it.createdBy != it.ownerId && ms(it.createdAt) > now - 3 * 86_400_000L }
+            .sortedWith(Dela.ORDER)
+
+    /** Мои открытые без проекта — бывшие «Входящие», теперь в «Новом»: «Без проекта — куда их?». */
+    fun noProject(s: Dela.Snapshot, me: String, sphere: String): List<Dela.Task> =
+        openMine(s, me, sphere).filter { it.projectId.isBlank() }.sortedWith(Dela.ORDER)
+
+    /**
+     * Числа у разделов в меню — как `count()` у `VIEWS` веба. [upcomingHot] и
+     * [waitingHot] — `hot()` веба: есть просроченное, пора кому-то напомнить.
+     */
+    data class Counts(
+        val now: Int,
+        val new: Int,
+        val upcoming: Int,
+        val waiting: Int,
+        val upcomingHot: Boolean = false,
+        val waitingHot: Boolean = false,
+    ) {
         fun of(v: View): Int = when (v) {
-            View.MORNING -> morning
+            View.NOW -> now
             View.UPCOMING -> upcoming
             View.NEW -> new
             View.WAITING -> waiting
-            View.INBOX -> inbox
             else -> 0
+        }
+
+        fun hot(v: View): Boolean = (v == View.UPCOMING && upcomingHot) || (v == View.WAITING && waitingHot)
+
+        /** Число раздела словами: у «Сейчас» — «3 из 5», у остальных — число или пусто. */
+        fun label(v: View): String = when {
+            v == View.NOW -> "$now из $NOW_MAX"
+            of(v) > 0 -> of(v).toString()
+            else -> ""
         }
     }
 
-    fun counts(s: Dela.Snapshot, me: String, today: String, sphere: String): Counts {
+    fun counts(s: Dela.Snapshot, me: String, today: String, sphere: String, now: Long): Counts {
         val m = openMine(s, me, sphere)
         val week = plusDays(today, 7)
         return Counts(
-            morning = m.count { (it.ball == Dela.MINE && le(it.dueDate, today)) || isNow(it, today) },
-            upcoming = m.count { it.dueDate.isNotBlank() && it.dueDate > today && it.dueDate <= week },
-            new = Dela.newOnes(s, me).size,
+            now = nowTasks(s, me, today).size,
+            new = newCount(s, me, sphere, now),
+            upcoming = m.count { it.dueDate.isNotBlank() && it.dueDate <= week },
             waiting = m.count { it.ball == Dela.WAITING },
-            inbox = m.count { it.projectId.isBlank() },
+            upcomingHot = m.any { isLate(it, today) },
+            waitingHot = m.any { nudgeDue(it, today) },
         )
     }
 
-    /** Раздел «Утра»: заголовок веба и дела в его порядке. */
+    /**
+     * Число «Нового» (`newCount` веба): предложения автоматики, закрытое само за
+     * неделю, дела без проекта и поставленные другими — всё, что ждёт, чтобы его
+     * разложили. Наговорки не считаются: их дела уже разложены.
+     */
+    fun newCount(s: Dela.Snapshot, me: String, sphere: String, now: Long): Int =
+        Dela.newOnes(s, me).size + Dela.autoClosed(s, me, now).size + noProject(s, me, sphere).size + fromOthers(s, me, sphere, now).size
+
+    /** Раздел страницы: заголовок веба и дела в его порядке. */
     data class Section(val title: String, val items: List<Dela.Task>)
 
     /**
-     * «Утро» веба: Сейчас · На сегодня и просроченное · Пора напомнить ·
-     * Поставили другие. Как в вебе, дело в «Сейчас» в «сегодня» не повторяется;
-     * остальные разделы друг друга не исключают.
+     * «Сейчас» (`renderNow` веба): до пяти дел на сегодня — сначала они, потом
+     * всё остальное. [pick] — моё просроченное и на сегодня, чего ещё нет в
+     * «Сейчас» («Выбрать на сегодня»), [next] — моё на завтра, пока место
+     * осталось. «Сейчас» — во всех сферах, выбирать — из своей.
      */
-    fun morning(s: Dela.Snapshot, me: String, today: String, sphere: String, now: Long): List<Section> {
-        val m = openMine(s, me, sphere)
-        val from = now - 3 * 86_400_000L
-        fun ms(iso: String) = runCatching { java.time.OffsetDateTime.parse(iso).toInstant().toEpochMilli() }.getOrDefault(0L)
-        return listOf(
-            Section("Сейчас", m.filter { isNow(it, today) }),
-            Section("На сегодня и просроченное", m.filter { it.ball == Dela.MINE && le(it.dueDate, today) && !isNow(it, today) }),
-            Section("Пора напомнить", m.filter { it.ball == Dela.WAITING && (le(it.nudgeOn, today) || le(it.dueDate, today)) }),
-            Section("Поставили другие", m.filter { it.createdBy.isNotBlank() && it.createdBy != it.ownerId && ms(it.createdAt) > from }),
-        ).map { it.copy(items = it.items.sortedWith(Dela.ORDER)) }
+    data class Now(val now: List<Dela.Task>, val pick: List<Dela.Task>, val next: List<Dela.Task>) {
+        val left: Int get() = (NOW_MAX - now.size).coerceAtLeast(0)
+        val pickTitle: String get() = if (left > 0) "Выбрать на сегодня: просрочено и на сегодня" else "Ещё на сегодня и просрочено"
+    }
+
+    fun now(s: Dela.Snapshot, me: String, today: String, sphere: String): Now {
+        val m = openMine(s, me, sphere).filter { !isNow(it, today) && it.ball == Dela.MINE }
+        val nowList = nowTasks(s, me, today)
+        val tomorrow = plusDays(today, 1)
+        return Now(
+            now = nowList,
+            pick = m.filter { le(it.dueDate, today) }.sortedWith(Dela.ORDER),
+            next = if (nowList.size < NOW_MAX) m.filter { it.dueDate == tomorrow }.sortedWith(Dela.ORDER) else emptyList(),
+        )
     }
 
     /** «Предстоящее»: моё с датой (или и без), по датам; «Только мяч у меня» — без «жду» и «повестки». */
@@ -104,11 +202,20 @@ object DelaViews {
     fun waiting(s: Dela.Snapshot, me: String, sphere: String): List<Dela.Task> =
         openMine(s, me, sphere).filter { it.ball == Dela.WAITING }
 
-    /** «Входящие» и «Все дела»: моё в сфере, с «Сделанными» по выбору. */
-    fun list(s: Dela.Snapshot, me: String, sphere: String, inboxOnly: Boolean, showDone: Boolean): List<Dela.Task> =
-        s.tasks.values.filter {
-            mine(s, me, it) && Dela.inSphere(it, sphere) && (showDone || it.open) && (!inboxOnly || it.projectId.isBlank())
-        }
+    /**
+     * «Жду» веба: «Пора напомнить» первой группой (красным, как просрочка),
+     * остальное — по людям.
+     */
+    fun waitingGroups(s: Dela.Snapshot, me: String, today: String, sphere: String): List<Group> {
+        val items = waiting(s, me, sphere)
+        val due = items.filter { nudgeDue(it, today) }.sortedWith(Dela.ORDER)
+        val head = if (due.isEmpty()) emptyList() else listOf(Group("0nudge", "Пора напомнить", late = true, items = due))
+        return head + group(items.filter { !nudgeDue(it, today) }, By.PERSON, s, today)
+    }
+
+    /** «Все дела»: моё в сфере, с «Сделанными» по выбору. */
+    fun list(s: Dela.Snapshot, me: String, sphere: String, showDone: Boolean): List<Dela.Task> =
+        s.tasks.values.filter { mine(s, me, it) && Dela.inSphere(it, sphere) && (showDone || it.open) }
 
     /** «Неделя» веба: три раздела с его заголовками. */
     data class Week(val stale: List<Dela.Task>, val waitStale: List<Dela.Task>, val noStep: List<Dela.Project>)
@@ -153,9 +260,9 @@ object DelaViews {
 
     /**
      * `grouped` веба: по датам (Просрочено, Сегодня, Завтра, дни недели,
-     * Следующая неделя, Позже, Без даты, Сделано), проектам («Входящие»
-     * первыми), людям, мячу, сделкам или одним списком. Порядок групп — по
-     * ключу, как у веба; дела внутри — в порядке срока.
+     * Следующая неделя, Позже, Без даты, Сделано), проектам («Без проекта»
+     * первыми, заголовок ведёт в «Новое»), людям, мячу, сделкам или одним
+     * списком. Порядок групп — по ключу, как у веба; дела внутри — в порядке срока.
      */
     fun group(items: List<Dela.Task>, by: By, s: Dela.Snapshot, today: String): List<Group> {
         val sorted = items.sortedWith(Dela.ORDER)
@@ -184,7 +291,7 @@ object DelaViews {
                 }
                 By.PROJECT -> {
                     val p = s.projects[t.projectId]
-                    if (p != null) put("1" + p.name, p.name, t, projectId = p.id) else put("0", "Входящие", t, projectId = "")
+                    if (p != null) put("1" + p.name, p.name, t, projectId = p.id) else put("0", "Без проекта", t, projectId = "")
                 }
                 By.PERSON -> {
                     val p = s.people[t.personId]
@@ -228,9 +335,10 @@ object DelaViews {
 
     /**
      * Подписи под названием — как метки строки веба: срок (если не группа по
-     * датам, а просроченный — всегда), проект или «Входящие» (если не группа
-     * по проектам и не страница проекта), сделка, мяч с человеком и давностью
-     * «жду» («жду Иван · 3 дн.») или «@Иван», минуты, метки. Номер — последним.
+     * датам, а просроченный — всегда), проект или «без проекта» (если не группа
+     * по проектам и не страница проекта; строка рисует его кнопкой выбора
+     * проекта), сделка, мяч с человеком и давностью «жду» («жду Иван · 3 дн.»)
+     * или «@Иван», минуты, метки. Номер — последним.
      */
     fun chips(t: Dela.Task, by: By?, s: Dela.Snapshot, today: String, onProjectPage: Boolean = false): List<String> {
         val out = mutableListOf<String>()
@@ -240,7 +348,7 @@ object DelaViews {
         // В вебе такой подписи ещё нет — задание серверу (docs/dela-server-remind.md) её просит.
         date(today)?.let { day -> out += DelaRemind.chip(t, day, java.time.ZoneId.systemDefault()) }
         if (by != By.PROJECT && !onProjectPage) {
-            out += if (t.projectId.isBlank()) "Входящие" else s.projects[t.projectId]?.name ?: t.projectName.ifBlank { "проект" }
+            out += if (t.projectId.isBlank()) NO_PROJECT else s.projects[t.projectId]?.name ?: t.projectName.ifBlank { "проект" }
         }
         val deal = s.deals[t.dealId]?.name ?: t.dealName.takeIf { t.dealId.isNotBlank() }
         if (!deal.isNullOrBlank() && by != By.DEAL) out += deal
@@ -254,6 +362,96 @@ object DelaViews {
         if (t.estimateMin > 0) out += "${t.estimateMin} мин"
         out += t.labels
         return out.filter { it.isNotBlank() }
+    }
+
+    // ------------------------------------------------------------ наговорки
+
+    /** Заметка наговорки в хронологию: что легло и к какому проекту. */
+    data class DictNote(val summary: String, val projectId: String)
+
+    /**
+     * Наговорка в «Новом» (вид сервера `dictations`, 06.10.2026): что сказано
+     * дословно ([text] пуст, если текст до сервера не дошёл — старый телефон),
+     * её дела любого статуса, заметки в хронологию и [touches] — что потом про
+     * эти дела сказала автоматика (встреча, Telegram): дело то же, оно срослось
+     * и из наговорки не уходит.
+     */
+    data class Dictation(
+        val ref: String,
+        val at: String,
+        val text: String,
+        val source: String,
+        val tasks: List<Dela.Task>,
+        val notes: List<DictNote>,
+        val touches: List<Dela.Suggestion>,
+    )
+
+    /** Ответ `GET /api/view/dictations` (`store.view_dictations`): `items[]`, свежие сверху. */
+    fun dictations(o: JSONObject?): List<Dictation> {
+        val a = o?.optJSONArray("items") ?: return emptyList()
+        fun objs(x: JSONObject, key: String): List<JSONObject> {
+            val arr = x.optJSONArray(key) ?: return emptyList()
+            return (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+        }
+        return (0 until a.length()).mapNotNull { i ->
+            val d = a.optJSONObject(i) ?: return@mapNotNull null
+            val ref = d.str("ref").ifBlank { return@mapNotNull null }
+            Dictation(
+                ref = ref,
+                at = d.str("at"),
+                text = d.str("text").trim(),
+                source = d.str("source"),
+                tasks = objs(d, "tasks").mapNotNull { Dela.task(it) },
+                notes = objs(d, "notes").map { DictNote(it.str("summary"), it.str("project_id")) }.filter { it.summary.isNotBlank() },
+                touches = objs(d, "touches").mapNotNull { Dela.suggestion(it) },
+            )
+        }
+    }
+
+    /**
+     * Дела наговорки — из своей копии, если она их знает: там и только что
+     * поставленная галка, и новое имя проекта. Не знает (чужая сфера, синк ещё не
+     * дошёл) — как сказал сервер.
+     */
+    fun dictTasks(d: Dictation, s: Dela.Snapshot): List<Dela.Task> = d.tasks.map { s.tasks[it.id] ?: it }
+
+    /** «сегодня 10:42», «вчера 18:05», «05.10 09:00» — когда сказано, как `whenWords` веба. */
+    fun whenWords(iso: String, today: String, zone: ZoneId): String {
+        val t = runCatching { java.time.OffsetDateTime.parse(iso).atZoneSameInstant(zone) }.getOrNull() ?: return ""
+        val day = t.toLocalDate().toString()
+        val hm = String.format(Locale.ROOT, "%02d:%02d", t.hour, t.minute)
+        return when (days(day, today)) {
+            0L -> "сегодня $hm"
+            1L -> "вчера $hm"
+            else -> ddmm(day, today) + " " + hm
+        }
+    }
+
+    /** Откуда наговорка: «с телефона», «в вебе». */
+    fun dictSource(source: String): String = when (source) {
+        "phone" -> "с телефона"
+        "web" -> "в вебе"
+        else -> ""
+    }
+
+    private val SUG_FROM = mapOf("meeting" to "встреча", "telegram" to "Telegram", "userbot" to "Telegram", "mcp" to "Claude")
+
+    /**
+     * Что потом сказала про дело автоматика — словами, как `touchChips` веба:
+     * «Бета, 05.10: закрыть — ждёт решения ниже». Статус — из своей копии, если
+     * она знает предложение (там и только что принятое).
+     */
+    fun touchWord(sg: Dela.Suggestion, s: Dela.Snapshot): String {
+        val live = s.suggestions[sg.id] ?: sg
+        val from = live.batchTitle.ifBlank { SUG_FROM[live.source] ?: live.source }
+        val what = if (live.kind == "close") "закрыть" else "уточнение"
+        val st = when (live.status) {
+            "pending" -> "ждёт решения ниже"
+            "rejected" -> "отклонил"
+            "expired" -> "погасло"
+            else -> "принято"
+        }
+        return "$from: $what — $st"
     }
 
     // ------------------------------------------------------------ человек

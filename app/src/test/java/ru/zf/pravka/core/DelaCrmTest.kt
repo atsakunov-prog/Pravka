@@ -184,6 +184,74 @@ class DelaCrmTest {
         assertTrue(op.getString("op") in opsList())
     }
 
+    @Test
+    fun `наговорка и «Понятно» — операции сервера 06_10, только когда он их знает`() {
+        // dictation.add — форма store.op_dictation_add: id (= source_ref дел), text, at, source.
+        val op = Dela.dictationOp("raznoska:1759650000000", "  позвонить Ивану  ", "2026-10-05T08:15:00+03:00", Dela.stableId("razn-dictation-1"))
+        assertEquals("dictation.add", op.getString("op"))
+        assertTrue(Dela.isUuid(op.getString("op_id")))
+        val d = op.getJSONObject("dictation")
+        assertEquals(setOf("id", "text", "at", "source"), d.keys().asSequence().toSet())
+        assertEquals("raznoska:1759650000000", d.getString("id"))
+        assertEquals("позвонить Ивану", d.getString("text"))
+        assertEquals("phone", d.getString("source"))
+        // suggestion.seen — ids списком.
+        val seen = Dela.seenOp(listOf("a", "b"))
+        assertEquals("suggestion.seen", seen.getString("op"))
+        assertEquals(2, seen.getJSONArray("ids").length())
+        assertTrue(Dela.isUuid(seen.getString("op_id")))
+        // Флаг — состояние сервера сейчас: без «dictations» в синке телефон их не шлёт.
+        val s = snap()
+        assertFalse(s.dictationsOn)
+        val on = Dela.merge(s, JSONObject().put("full", false).put("seq", 2001).put("features", JSONArray().put("remind").put("dictations")), now)
+        assertTrue(on.dictationsOn)
+        assertFalse(Dela.merge(on, JSONObject().put("full", false).put("seq", 2002).put("features", JSONArray().put("remind")), now).dictationsOn)
+        // Обе операции не трогают копию (кроме seen_at) и называются словами в «сервер ответил».
+        assertEquals("текст наговорки", Dela.describe(op, s))
+        assertEquals("«понятно» у закрытого само", Dela.describe(seen, s))
+        assertEquals(s.tasks, Dela.overlay(s, listOf(op), "sasha", today, nowIso).tasks)
+    }
+
+    @Test
+    fun `seen_at из синка — закрытое само уходит из «Нового», в кэше живёт`() {
+        val s = snap()
+        val auto = s.suggestions.values.single { it.autoClosed }
+        assertEquals("", auto.seenAt)
+        val row = Dela.json(auto).put("seen_at", "2026-10-05T19:00:00+03:00").put("rev", auto.rev + 1)
+        val s2 = Dela.merge(s, JSONObject().put("full", false).put("seq", 2001).put("suggestions", JSONArray().put(row)), now)
+        assertEquals("2026-10-05T19:00:00+03:00", s2.suggestions.getValue(auto.id).seenAt)
+        assertTrue(Dela.autoClosed(s2, "sasha", now).isEmpty())
+        val back = Dela.fromJson(JSONObject(Dela.toJson(s2).toString()))
+        assertEquals(s2.suggestions, back.suggestions)
+    }
+
+    @Test
+    fun `правка карточки в ответе Claude — словами и в «Вернуть всё»`() {
+        // Форма — ask.card_done: crm[] {what, undo[]}; у новой сделки отмены нет (undo пуст).
+        val d = JSONObject(ask.getJSONObject("done_edit").toString())
+            .put("crm", JSONArray()
+                .put(JSONObject().put("what", "в хронологию: созвонились, ждут модель")
+                    .put("undo", JSONArray().put(JSONObject().put("op", "interaction.delete").put("id", "i1"))))
+                .put(JSONObject().put("what", "Иван: должность CFO")
+                    .put("undo", JSONArray().put(JSONObject().put("op", "person.set").put("id", "p1").put("set", JSONObject().put("role", JSONObject.NULL)))))
+                .put(JSONObject().put("what", "новая сделка: Бета: модель (лид)").put("undo", JSONArray())))
+        val r = DelaAsk.parse(d)
+        assertEquals(listOf("в хронологию: созвонились, ждут модель", "Иван: должность CFO", "новая сделка: Бета: модель (лид)"), r.crm.map { it.what })
+        assertTrue(r.undoable)
+        val undo = DelaAsk.undoOps(r)
+        // Сначала дела (как раньше), потом карточка — как прислал сервер, у каждой операции свой op_id.
+        assertEquals(listOf("task.set", "task.reopen", "interaction.delete", "person.set"), undo.map { it.getString("op") })
+        assertTrue(undo.all { Dela.isUuid(it.getString("op_id")) })
+        assertTrue(undo[3].getJSONObject("set").isNull("role"))
+        // Ответ без дел, только карточка: вернуть есть что.
+        val onlyCard = DelaAsk.parse(JSONObject().put("route", "edit").put("crm", d.getJSONArray("crm")))
+        assertEquals(0, onlyCard.count)
+        assertTrue(onlyCard.undoable)
+        // Старый сервер поля не знает — пусто, не падает.
+        assertTrue(DelaAsk.parse(ask.getJSONObject("done_edit")).crm.isEmpty())
+        assertFalse(DelaAsk.parse(JSONObject().put("route", "edit")).undoable)
+    }
+
     // ------------------------------------------------------------ деньги дела
 
     @Test

@@ -36,7 +36,8 @@ object ZasechkaTasks {
 
     /**
      * Короткий список «взяться за дело»: то, что идёт; отмеченное на сегодня
-     * («сейчас»); начатое из ленты за неделю (свежее выше — к нему обычно и
+     * («Сейчас», до пяти — во вкладке и в вебе оно первым разделом); начатое
+     * из ленты за неделю (свежее выше — к нему обычно и
      * возвращаются); моё на сегодня и просроченное. Только открытые дела
      * владельца, без повторов. Жду и «при встрече» — не то, за что берутся
      * руками, если не отмечены на сегодня.
@@ -64,6 +65,33 @@ object ZasechkaTasks {
             .sortedWith(Dela.ORDER)
             .forEach(::add)
         return out.values.toList()
+    }
+
+    /**
+     * Тот же список по частям (06.10.2026, docs/dela-phone-3.md; владелец:
+     * «сначала делаю их, потом всё остальное»): идущее — первым, если оно не
+     * из «Сейчас»; дела «Сейчас» — под своим заголовком (идущее среди них —
+     * первым); ниже — остальное в порядке [shortlist].
+     */
+    data class Parts(val running: Dela.Task?, val now: List<Dela.Task>, val rest: List<Dela.Task>) {
+        val all: List<Dela.Task> get() = listOfNotNull(running) + now + rest
+    }
+
+    fun parts(
+        s: Dela.Snapshot,
+        me: String,
+        today: String,
+        entries: List<ZasechkaStore.Entry>,
+        now: Long,
+    ): Parts {
+        val list = shortlist(s, me, today, entries, now)
+        val runId = running(entries)
+        val head = list.firstOrNull { it.id == runId && it.focusOn != today }
+        return Parts(
+            running = head,
+            now = list.filter { it.focusOn == today },
+            rest = list.filter { it.focusOn != today && it.id != head?.id },
+        )
     }
 
     /**

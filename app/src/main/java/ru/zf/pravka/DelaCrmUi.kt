@@ -130,7 +130,7 @@ internal class DelaCrmContext(
  * заново, в ответ на это время виден прежний ответ. Не вышло — причина целиком.
  */
 @Composable
-private fun Freshness(ctx: DelaCrmContext, path: String) {
+internal fun Freshness(ctx: DelaCrmContext, path: String) {
     var loading by remember(path) { mutableStateOf(false) }
     var error by remember(path) { mutableStateOf("") }
     val cached = ctx.views[path]

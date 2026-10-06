@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import java.time.LocalDate
 import kotlinx.coroutines.launch
 import ru.zf.pravka.core.Dela
+import ru.zf.pravka.core.DelaViews
 import ru.zf.pravka.core.ZasechkaTasks
 import ru.zf.pravka.data.ZasechkaStore
 import ru.zf.pravka.ui.Feedback
@@ -41,7 +42,9 @@ import ru.zf.pravka.ui.RowRule
  * список дел из моих дел, и рядом с каждым — значок Play, когда я просто
  * начинаю заниматься этим делом… и можно ещё сделать какой-то комментарий»).
  * Что в списке — `core/ZasechkaTasks.shortlist`: идущее, «сейчас», начатое за
- * неделю, на сегодня и просроченное. ▶ — запись ленты из дела (та же дорога,
+ * неделю, на сегодня и просроченное. С 06.10.2026 дела «Сейчас» (до пяти на
+ * сегодня) — под своим заголовком, остальное ниже под «Потом» (владелец:
+ * «сначала делаю их, потом всё остальное»). ▶ — запись ленты из дела (та же дорога,
  * что во вкладке «Дела»), у идущего — «идёт N мин», заметка и стоп; заметка
  * ложится комментарием к записи и уезжает в само дело. Тап по строке —
  * карточка дела. Дел не на своём сервере или нечего показать — плашки нет.
@@ -62,31 +65,44 @@ internal fun ZasechkaTasksCard(
     val link by app.delaSync.link.collectAsState()
     val me = link?.user ?: app.delaStore.me
     val today = LocalDate.now().toString()
-    val list = remember(snap, entries, me, today) { ZasechkaTasks.shortlist(snap, me, today, entries, now) }
+    val parts = remember(snap, entries, me, today) { ZasechkaTasks.parts(snap, me, today, entries, now) }
+    val list = parts.all
     if (list.isEmpty()) return
     val spent = remember(entries, now) { ZasechkaTasks.spent(entries, now) }
     val runningEntry = entries.lastOrNull { it.open }
     val runningTask = runningEntry?.task.orEmpty()
     var expanded by rememberSaveable { mutableStateOf(false) }
     var starting by remember { mutableStateOf("") }
-    val shown = if (expanded) list else list.take(COLLAPSED)
+    // Свёрнуто: идущее и все «Сейчас» видны всегда (их не больше шести), остальное — до трёх строк всего.
+    val head = listOfNotNull(parts.running) + parts.now
+    val collapsed = head + parts.rest.take((COLLAPSED - head.size).coerceAtLeast(0))
+    val shown = if (expanded) list else collapsed
     PaperCard(
         label = "дела",
         info = "▶ — начать дело в ленте: запись знает, какое это дело, и его время копится " +
             "в «в ленте». У идущего — заметка (ляжет комментарием к записи и в само дело) " +
-            "и стоп. Здесь — идущее, отмеченное на сегодня, начатое за неделю, на сегодня " +
-            "и просроченное; тап по строке — карточка дела.",
-        trailing = if (list.size > COLLAPSED) {
+            "и стоп. Сверху — идущее и «Сейчас» (до пяти дел на сегодня: молния во вкладке «Дела»), " +
+            "ниже — начатое за неделю, на сегодня и просроченное; тап по строке — карточка дела.",
+        trailing = if (list.size > collapsed.size) {
             {
                 PaperTextButton(
-                    if (expanded) "свернуть" else "ещё ${list.size - COLLAPSED}",
+                    if (expanded) "свернуть" else "ещё ${list.size - collapsed.size}",
                     onClick = { expanded = !expanded },
                 )
             }
         } else null,
     ) {
+        // Заголовки — только когда «Сейчас» есть: «Сейчас» над его делами, «Потом» — над остальным
+        // (идущее не из «Сейчас» стоит первым, без заголовка).
+        val nowIds = parts.now.map { it.id }.toSet()
         shown.forEachIndexed { i, t ->
-            if (i > 0) RowRule()
+            val isNow = t.id in nowIds
+            val prevNow = i > 0 && shown[i - 1].id in nowIds
+            when {
+                isNow && !prevNow -> PartHead("Сейчас · ${parts.now.size} из ${DelaViews.NOW_MAX}", top = i > 0)
+                !isNow && prevNow -> PartHead("Потом", top = true)
+                i > 0 -> RowRule()
+            }
             val live = t.id == runningTask && runningEntry != null
             TaskStartRow(
                 task = t,
@@ -112,6 +128,17 @@ internal fun ZasechkaTasksCard(
 }
 
 private const val COLLAPSED = 3
+
+/** Заголовок части списка: «Сейчас · 3 из 5», «Потом». */
+@Composable
+private fun PartHead(text: String, top: Boolean) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = if (top) 8.dp else 0.dp, bottom = 2.dp),
+    )
+}
 
 /**
  * Строка дела в Засечке: название, номер, проект и время в ленте; справа ▶,
