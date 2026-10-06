@@ -149,8 +149,8 @@ def test_reminder_api_only_for_bot(dela):
     phone = {"Authorization": f"Bearer {tokens.issue(dela, 'sasha', 'device', 'телефон')}"}
     other = {"Authorization": f"Bearer {tokens.issue(dela, 'sasha', 'service', 'meetings')}"}
     client = TestClient(api.build(Config(db_url=dela, public_url="https://dela.example")))
-    assert client.get("/api/me", headers=phone).json()["features"] == ["remind"]
-    assert client.get("/api/sync", headers=phone).json()["features"] == ["remind"]
+    assert "remind" in client.get("/api/me", headers=phone).json()["features"]
+    assert "remind" in client.get("/api/sync", headers=phone).json()["features"]
     assert client.get("/api/reminders/due").status_code == 401
     assert client.get("/api/reminders/due", headers=phone).status_code == 403
     assert client.get("/api/reminders/due", headers=other).status_code == 403

@@ -69,6 +69,16 @@ STATIC = {
 }
 
 
+
+# Службы с узкими правами (06.10.2026). «Деньги» смотрят наружу: их токену — только свои записи
+# Свода (money.*), без дел, людей и синка. Остальные службы (встречи, дайджест, бот) действуют как
+# владелец токена, как раньше.
+SCOPED = {"dengi": {"ops": {"svod.set"}, "views": {"svod"}, "svod_prefix": "money."}}
+
+
+def _scope(who) -> dict | None:
+    return SCOPED.get(who.name) if who and who.kind == "service" else None
+
 def _json(data, status: int = 200) -> JSONResponse:
     return JSONResponse(data, status_code=status, headers={"Cache-Control": "no-store", **SECURITY})
 
@@ -144,6 +154,8 @@ def build(cfg: Config) -> Starlette:
         who = await auth(request)
         if not who:
             return _err("нужен вход", 401)
+        if _scope(who):
+            return _err(f"службе {who.name} синк не положен", 403)
         try:
             since = int(request.query_params.get("since", "0"))
         except ValueError:
@@ -166,6 +178,10 @@ def build(cfg: Config) -> Starlette:
             return _err("ожидается JSON {\"ops\": [...]}", 400)
         if not isinstance(items, list) or len(items) > MAX_OPS:
             return _err(f"ops — список до {MAX_OPS} операций", 400)
+        sc = _scope(who)
+        if sc and any(not isinstance(o, dict) or o.get("op") not in sc["ops"]
+                      or not str(o.get("key") or "").startswith(sc["svod_prefix"]) for o in items):
+            return _err(f"службе {who.name} можно только {', '.join(sorted(sc['ops']))} с ключами {sc['svod_prefix']}*", 403)
         out = await anyio.to_thread.run_sync(lambda: store.apply_ops(url, who.user, items, who.via, who.actor))
         bad = [r for r in out["results"] if not r.get("ok")]
         if bad:
@@ -178,7 +194,17 @@ def build(cfg: Config) -> Starlette:
             return _err("нужен вход", 401)
         name = request.path_params["name"]
         params = {k: v for k, v in request.query_params.items()
-                  if k in {"sphere", "person_id", "project_id", "deal_id", "q", "status", "closed_days"}}
+                  if k in {"sphere", "person_id", "project_id", "deal_id", "q", "status", "closed_days",
+                           # Свод и «кто это» (06.10.2026)
+                           "key", "prefix", "phone", "telegram", "telegram_id", "email"}}
+        sc = _scope(who)
+        if sc:
+            if name not in sc["views"]:
+                return _err(f"службе {who.name} этот вид не положен", 403)
+            if name == "svod":
+                params["prefix"] = sc["svod_prefix"] + (params.pop("prefix", "") or "").removeprefix(sc["svod_prefix"])
+                if params.get("key") and not params["key"].startswith(sc["svod_prefix"]):
+                    return _err(f"службе {who.name} — только {sc['svod_prefix']}*", 403)
         try:
             out = await anyio.to_thread.run_sync(lambda: store.view(url, who.user, name, **params))
         except store.OpError as e:

@@ -114,14 +114,17 @@ COMMENT ON VIEW life.suggestions IS '«Новое» в Делах: что пре
 DROP VIEW IF EXISTS life.work_time;
 CREATE VIEW life.work_time AS
 SELECT e.day, e.start_local, e.end_local, e.minutes, e.title, e.category, e.client,
-       p.name AS project, o.name AS org, pe.short AS person,
-       p.id AS project_id, coalesce(p.org_id, m.org_id) AS org_id, m.person_id,
+       p.name AS project, o.name AS org, coalesce(pe.short, pe.name) AS person,
+       p.id AS project_id, coalesce(p.org_id, m.org_id, pe.org_id) AS org_id, pe.id AS person_id,
        t.num AS task_num, t.id AS task_id
 FROM life.entries e
 LEFT JOIN LATERAL crm.match_name(e.client) m ON true
 LEFT JOIN tasks.tasks t ON t.id::text = e.task_id
 LEFT JOIN crm.projects p ON p.id::text = coalesce(e.project_id, t.project_id::text, m.project_id::text)
-LEFT JOIN crm.orgs o ON o.id = coalesce(p.org_id, m.org_id)
-LEFT JOIN crm.people pe ON pe.id = m.person_id
-WHERE e.client IS NOT NULL OR e.project_id IS NOT NULL OR e.task_id IS NOT NULL;
-COMMENT ON VIEW life.work_time IS 'Лента с клиентом, сопоставленным со справочником Дел: проект, организация, человек, дело. Запись, начатая из дела, несёт его проект сама (task_num — «#57»); остальные — по алиасам клиента. Часы на клиента = sum(minutes)/60 по project или org.';
+-- Человек записи (звонок — с кем, 06.10.2026) сильнее человека из текста клиента; слитый дубль
+-- ведёт в живую карточку.
+LEFT JOIN crm.people pe0 ON pe0.id::text = coalesce(e.person_id, m.person_id::text)
+LEFT JOIN crm.people pe ON pe.id = coalesce(pe0.merged_into, pe0.id)
+LEFT JOIN crm.orgs o ON o.id = coalesce(p.org_id, m.org_id, pe.org_id)
+WHERE e.client IS NOT NULL OR e.project_id IS NOT NULL OR e.task_id IS NOT NULL OR e.person_id IS NOT NULL;
+COMMENT ON VIEW life.work_time IS 'Лента с клиентом, сопоставленным со справочником Дел: проект, организация, человек, дело. Запись, начатая из дела, несёт его проект сама (task_num — «#57»); остальные — по алиасам клиента. Часы на клиента = sum(minutes)/60 по project или org; с человеком — по person_id (звонки несут его сами).';

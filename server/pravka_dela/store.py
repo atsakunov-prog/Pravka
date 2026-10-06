@@ -21,7 +21,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from . import db
+from . import db, people
 
 # Сколько номеров изменений синк захватывает назад. Номер берётся в начале
 # транзакции, а видна она после фиксации: изменение с меньшим номером может
@@ -38,7 +38,9 @@ TASK_FIELDS = {
 
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
-FEATURES = ["remind"]
+FEATURES = ["remind", "svod", "people"]
+# «svod» — Свод (crm.svod) в синке и операция svod.set; «people» — person.add / person.merge и вид who
+# (одна карточка человека, 06.10.2026). Без них телефон не шлёт этих операций.
 # Токен службы бота Ковчега (python -m pravka_dela token --name kovcheg): только он забирает
 # «что пора» и отмечает отправку (remind.py, task.reminded).
 REMIND_BOT = "kovcheg"
@@ -411,6 +413,12 @@ def _names(conn, payload: dict) -> dict:
             table = "crm.projects" if col == "project_id" else "crm.people"
             if conn.execute(f"SELECT 1 FROM {table} WHERE id = %s", (r[col],)).fetchone():
                 out[col] = r[col]
+        elif col == "person_id":
+            # Точного имени нет — «Женя Соколов» из встречи: то же узнавание, что у встреч и звонков,
+            # но только уверенное (people.who видит лишь доступных человеку — RLS).
+            w = people.who(conn, q=name)
+            if w["sure"]:
+                out[col] = w["best"]["id"]
     return out
 
 
@@ -465,6 +473,9 @@ HANDLERS: dict[str, Callable] = {
     "org.set": org_set,
     "person.create": person_create,
     "person.set": person_set,
+    "person.add": lambda conn, user, op: people.op_person_add(conn, user, op, OpError),
+    "person.merge": lambda conn, user, op: people.op_person_merge(conn, user, op, OpError),
+    "svod.set": lambda conn, user, op: people.op_svod_set(conn, user, op, OpError),
     "project.create": project_create,
     "project.set": project_set,
     "deal.create": deal_create,
@@ -540,6 +551,8 @@ SYNC_TABLES = {
     "suggestions": "SELECT * FROM tasks.suggestions WHERE seq > %s",
     "access": "SELECT * FROM crm.project_access WHERE seq > %s",
     "users": "SELECT id, name, person_id, role, clients, sees_money, seq FROM crm.users WHERE seq > %s",
+    # Свод — только свой (RLS): промпты, словарь, правила денег. Тексты едут, только когда поменялись.
+    "svod": "SELECT owner_id, key, body, value, author, reason, updated_at, rev, seq FROM crm.svod WHERE seq > %s",
 }
 
 
@@ -578,7 +591,10 @@ def _sphere(sphere: str | None) -> tuple[str, list]:
     return "", []
 
 
-ORDER = " ORDER BY due_date NULLS LAST, due_time NULLS LAST, (money_eff = 'paid') DESC, created_at"
+# С 05.10.2026 — как в вебе и на телефоне: без «оплаченное выше» и без раздела «оплачено, без даты».
+# Деньги дела владелец убрал из интерфейса («тяжело смотреть»), а сервер их показывал дальше — Claude
+# в коннекторе видел раздел, которого у владельца нет.
+ORDER = " ORDER BY due_date NULLS LAST, due_time NULLS LAST, created_at"
 
 
 def _list(conn, where: str, params: list, sphere: str | None = None, order: str = ORDER) -> list[dict]:
@@ -592,7 +608,6 @@ def view_morning(conn, user, sphere=None, **_):
         "now": _list(conn, f"{open_mine} AND focus_on = crm.today()", [user], sphere),
         "today": _list(conn, f"{open_mine} AND ball = 'mine' AND due_date <= crm.today()", [user], sphere),
         "nudge": _list(conn, f"{open_mine} AND ball = 'waiting' AND (nudge_on <= crm.today() OR due_date <= crm.today())", [user], sphere),
-        "paid_undated": _list(conn, f"{open_mine} AND ball = 'mine' AND money_eff = 'paid' AND due_date IS NULL", [user], sphere),
         "from_others": _list(conn, f"{open_mine} AND created_by <> owner_id AND created_at > now() - interval '3 days'", [user], sphere),
         "new_count": conn.execute(
             "SELECT count(*) AS n FROM tasks.suggestions WHERE for_user = %s AND status = 'pending'", (user,)
@@ -705,6 +720,8 @@ def view_search(conn, user, q=None, status="open", **_):
 
 
 VIEWS: dict[str, Callable] = {
+    "svod": people.view_svod,
+    "who": people.view_who,
     "morning": view_morning,
     "new": view_new,
     "waiting": view_waiting,

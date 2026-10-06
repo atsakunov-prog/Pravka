@@ -17,7 +17,7 @@ import datetime as dt
 import re
 from typing import Any
 
-from . import db, remind, store
+from . import db, people, remind, store
 
 USER = "sasha"  # архив — одного человека, и Claude в нём действует от его имени
 BALL = {"mine": "моё", "waiting": "жду", "agenda": "повестка"}
@@ -113,7 +113,11 @@ def find_person(conn, name: str) -> dict:
     part = exact or [r for r in rows if n in store_norm(r["name"])]
     if len(part) == 1:
         return part[0]
-    cands = ", ".join(r["name"] for r in part[:8]) or "нет похожих"
+    # «Женя Соколов», «Соколов из Ромашки» — то же узнавание, что у встреч и звонков (people.who).
+    w = people.who(conn, q=name)
+    if w["sure"] and not exact:
+        return {"id": w["best"]["id"], "name": w["best"]["name"], "short": w["best"]["short"], "aliases": []}
+    cands = ", ".join(r["name"] for r in part[:8]) or ", ".join(c["name"] for c in w["candidates"]) or "нет похожих"
     raise NameError_(f"человек «{name}» не определился: {cands}")
 
 
@@ -201,7 +205,7 @@ def view(url: str, name: str = "morning", sphere: str | None = None, person: str
     out = [head, ""]
     if name == "morning":
         out += _block("Сейчас", v["now"], today) + _block("На сегодня и просроченное", v["today"], today)
-        out += _block("Пора напомнить", v["nudge"], today) + _block("Оплачено, без даты", v["paid_undated"], today)
+        out += _block("Пора напомнить", v["nudge"], today)
         out += _block("Поставили другие", v["from_others"], today)
         if v["new_count"]:
             out.append(f"В «Новом» ждут решения: {v['new_count']} (dela view=new).")
@@ -349,3 +353,35 @@ def note(url: str, summary: str, kind: str = "note", project: str | None = None,
             "project_id": pid, "deal_id": did, "person_ids": pids, "next_step": next_step, "source": "manual"}
     r = store.apply_ops(url, USER, [{"op": "interaction.add", "data": {k: v for k, v in data.items() if v is not None}}], via="mcp")["results"][0]
     return "Записал в хронологию." if r["ok"] else f"Не записал: {r['error']}"
+
+
+def person(url: str, name: str, also: list[str] | None = None, phone: str | None = None,
+           telegram: str | None = None, merge_into: str | None = None) -> str:
+    """Один человек на всю систему: другое имя, номер, Telegram — к карточке; дубль — в живую карточку.
+
+    Владелец (06.10.2026): «Женя из встречи — это тот же Евгений из карточки клиента». Карточку находит
+    то же узнавание, что у встреч и звонков; неуверенное не трогаем — перечисляем кандидатов.
+    """
+    with db.session(url, USER, via="mcp") as conn:
+        try:
+            p = find_person(conn, name)
+            into = find_person(conn, merge_into) if merge_into else None
+        except NameError_ as e:
+            return f"Не вышло: {e}"
+    if into is not None:
+        if str(into["id"]) == str(p["id"]):
+            return f"«{name}» и «{merge_into}» — уже одна карточка: {p['name']}."
+        r = store.apply_ops(url, USER, [{"op": "person.merge", "id": str(p["id"]), "into": str(into["id"])}], via="mcp")["results"][0]
+        if not r["ok"]:
+            return f"Не слил: {r['error']}"
+        return f"Слил «{p['name']}» в «{into['name']}»: ссылок переехало {r.get('moved', 0)}, другие имена — {', '.join(r['row']['aliases'])}."
+    add = {"aliases": [a for a in (also or []) if a], "phones": [phone] if phone else [],
+           "telegram_username": telegram.lstrip("@") if telegram else None}
+    r = store.apply_ops(url, USER, [{"op": "person.add", "id": str(p["id"]), "add": add}], via="mcp")["results"][0]
+    if not r["ok"]:
+        return f"Не записал: {r['error']}"
+    row = r["row"]
+    bits = [f"другие имена: {', '.join(row['aliases']) or '—'}"]
+    if row.get("phones"):
+        bits.append(f"номера: {', '.join(row['phones'])}")
+    return ("Записал. " if r.get("changed") else "Уже было. ") + f"{row['name']} — " + "; ".join(bits) + "."

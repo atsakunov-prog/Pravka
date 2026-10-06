@@ -134,7 +134,9 @@ def test_morning_and_week_views(dela):
     )
     m = store.view(dela, "sasha", "morning")
     assert {t["title"] for t in m["today"]} == {"Сегодня", "Давно"}
-    assert [t["title"] for t in m["paid_undated"]] == ["Платное без даты"]
+    # Раздела «оплачено, без даты» нет с 05.10.2026: платное без срока — нигде в «Утре».
+    assert "paid_undated" not in m
+    assert all(t["title"] != "Платное без даты" for k in ("now", "today", "nudge", "from_others") for t in m[k])
     assert [t["title"] for t in m["nudge"]] == ["Ждём"]
     assert [t["title"] for t in m["now"]] == ["Сейчас"]
     w = store.view(dela, "sasha", "week")
@@ -262,7 +264,7 @@ def bot_ops(url, *items):
 
 def test_remind_fields_flag_and_reminded_only_from_bot(dela):
     out = store.sync(dela, "sasha", 0)
-    assert out["features"] == ["remind"] and store.sync(dela, "sasha", out["seq"])["features"] == ["remind"]
+    assert "remind" in out["features"] and "remind" in store.sync(dela, "sasha", out["seq"])["features"]
     tid = str(uuid.uuid4())
     t = ops(dela, "sasha", {"op": "task.create", "op_id": str(uuid.uuid4()), "task": {
         "id": tid, "title": "Позвонить Ивану", "due_date": "2026-10-06", "remind_at": "2026-10-06T11:00:00+03:00",

@@ -39,6 +39,7 @@ APP_TABLES = {
     "crm.ops_seen": "SELECT, INSERT, DELETE",
     "crm.state": "SELECT, INSERT, UPDATE",
     "crm.history": "SELECT",
+    "crm.svod": "SELECT, INSERT, UPDATE",
 }
 APP_VIEWS = ["tasks.v_tasks", "crm.v_deals"]
 APP_SEQUENCES = ["tasks.task_num"]

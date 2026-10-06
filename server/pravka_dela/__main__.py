@@ -12,6 +12,7 @@
   revoke   отозвать токены по имени
   import   перенос из Todoist, Notion и ленты (сухой прогон по умолчанию)
   export-todoist  выгрузка Todoist по API (с комментариями) для переноса
+  svod     Свод: list, get <ключ>, set <ключ> --file (промпты, словарь, правила — одна правда)
 """
 
 from __future__ import annotations
@@ -288,6 +289,36 @@ def cmd_export_todoist(args) -> int:
     return 0
 
 
+def cmd_svod(args) -> int:
+    """Свод из командной строки: сессии Claude на компе правят промпт здесь, а не копией в коде."""
+    from . import store
+
+    cfg = config_mod.load(args.env)
+    user = args.user
+    if args.action == "list":
+        for it in store.view(cfg.db_url, user, "svod", prefix=args.key)["items"]:
+            size = len(it["body"]) if it["body"] is not None else len(json.dumps(it["value"], ensure_ascii=False))
+            print(f"{it['key']:32} v{it['rev']:<4} {it['author']:10} {str(it['updated_at'])[:16]}  {size} зн.  {it['reason'] or ''}")
+        return 0
+    if not args.key:
+        print("нужен ключ")
+        return 2
+    if args.action == "get":
+        items = store.view(cfg.db_url, user, "svod", key=args.key)["items"]
+        if not items:
+            print(f"нет ключа {args.key}")
+            return 1
+        it = items[0]
+        print(it["body"] if it["body"] is not None else json.dumps(it["value"], ensure_ascii=False, indent=1))
+        return 0
+    text = Path(args.file).read_text(encoding="utf-8-sig") if args.file else sys.stdin.read()
+    op = {"op": "svod.set", "key": args.key, "author": args.author, "reason": args.reason}
+    op["value" if args.json else "body"] = json.loads(text) if args.json else text.strip()
+    r = store.apply_ops(cfg.db_url, user, [op], via="cli", actor=f"cli:{args.author}")["results"][0]
+    print(f"записал {args.key} v{r['row']['rev']}" if r["ok"] else f"не записал: {r['error']}")
+    return 0 if r["ok"] else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="pravka_dela", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--env", help=f"файл секретов Дел (с завода {config_mod.DEFAULT_ENV_FILE})")
@@ -364,6 +395,16 @@ def main(argv: list[str] | None = None) -> int:
     e = sub.add_parser("export-todoist")
     e.add_argument("--out", required=True)
     e.set_defaults(fn=cmd_export_todoist)
+
+    sv = sub.add_parser("svod", help="Свод: промпты, словарь, правила")
+    sv.add_argument("action", choices=["list", "get", "set"])
+    sv.add_argument("key", nargs="?")
+    sv.add_argument("--file", help="текст записи (без него — со стандартного входа)")
+    sv.add_argument("--json", action="store_true", help="запись — JSON, а не текст")
+    sv.add_argument("--user", default="sasha")
+    sv.add_argument("--author", default="claude")
+    sv.add_argument("--reason")
+    sv.set_defaults(fn=cmd_svod)
 
     args = ap.parse_args(argv)
     return args.fn(args)

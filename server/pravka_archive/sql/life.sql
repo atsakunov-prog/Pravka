@@ -59,7 +59,8 @@ SELECT (e->>'id')::bigint                    AS id,
        NULLIF((e->>'rating')::int, 0)        AS rating,
        (e->>'end') IS NULL                   AS open,
        c.value_per_hour,
-       round((e->>'minutes')::numeric / 60 * c.value_per_hour, 1) AS points
+       round((e->>'minutes')::numeric / 60 * c.value_per_hour, 1) AS points,
+       NULLIF(e->>'person', '')              AS person_id
 FROM core.records r
 CROSS JOIN LATERAL jsonb_array_elements(r.data->'entries') e
 LEFT JOIN life.categories c ON lower(c.name) = lower(e->>'category')
@@ -73,6 +74,7 @@ COMMENT ON COLUMN life.entries.points IS 'Очки = часы × ценност�
 COMMENT ON COLUMN life.entries.open IS 'Дело идёт сейчас: конца ещё нет.';
 COMMENT ON COLUMN life.entries.task_id IS 'id дела в Делах (life.tasks.id), если запись начата тапом по делу. Связь ставит телефон; у остальных записей пусто.';
 COMMENT ON COLUMN life.entries.project_id IS 'id проекта Дел (life.projects.id) у записи из дела или с клиентом из справочника. Пусто — клиент свободным текстом (сопоставление по алиасам — life.work_time).';
+COMMENT ON COLUMN life.entries.person_id IS 'id человека Дел (life.people.id), с кем было дело: звонок, встреча. Ставит телефон, узнав человека по номеру или имени (одна карточка, 06.10.2026); пусто — не узнан или не про человека.';
 
 -- ---------------------------------------------------------------- Телефон
 

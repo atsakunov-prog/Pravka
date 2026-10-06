@@ -214,10 +214,14 @@ def due(url: str, public_url: str = "") -> dict:
     with db.session(url, "system", ACTOR, BOT) as conn:
         rows = conn.execute(DUE, {"bot": ACTOR, "limit": LIMIT}).fetchall()
         at = conn.execute("SELECT now() AS n").fetchone()["n"]
+    today = at.astimezone(MSK).date()
     out = []
     for r in rows:
         r = dict(r)
         r["url"] = f"{base}/#task/{r['num']}"
+        # Подпись времени — одна на всех (06.10.2026): бот печатал её своей копией и писал «09.10»
+        # там, где телефон и веб — «чт 09:00». Теперь бот берёт готовое.
+        r["when"] = when_words(r["remind_at"], today) if r.get("remind_at") else None
         out.append(r)
     return store.jsonable({"ok": True, "now": iso(at), "reminders": out})
 
