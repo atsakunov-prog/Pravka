@@ -123,3 +123,16 @@ def test_schema_is_strict():
             walk(node["items"])
 
     walk(parse.schema())
+
+
+def test_raznoska_rules_come_from_svod(dela):
+    """Правила разбора — из Свода (prompt.raznoska): тюнер телефона правит их там, и сервер разбирает так же.
+    Нет записи в Своде — файл контракта (06.10.2026)."""
+    from pravka_dela import parse, store
+
+    assert parse.template(dela) == parse.template()            # Свод пуст — файл контракта
+    body = parse.template() + "\nПРАВИЛО ТЮНЕРА: проверка."
+    r = store.apply_ops(dela, "sasha", [{"op": "svod.set", "key": "prompt.raznoska", "body": body, "author": "tuner"}], "app")
+    assert r["results"][0]["ok"], r
+    assert parse.template(dela).endswith("ПРАВИЛО ТЮНЕРА: проверка.")
+    assert "ПРАВИЛО ТЮНЕРА" not in parse.template()             # без url — запасной файл

@@ -244,10 +244,10 @@ class AskError(Exception):
 REMIND_HEAD, REMIND_END = "НАПОМИНАНИЕ (remind_at, remind_place)", "ЗАМЕТКИ К ДЕЛУ"
 
 
-def remind_rules() -> str:
+def remind_rules(url: str | None = None) -> str:
     """Раздел «НАПОМИНАНИЕ» общего промпта разбора — те же слова, что у телефона и звёздочки.
     Заголовки переименовали — пусто (поля описаны и выше), а тест test_remind_rules_cut это поймает."""
-    text = parse.template()
+    text = parse.template(url)
     a, b = text.find(REMIND_HEAD), text.find(REMIND_END)
     return text[a:b].strip() if 0 <= a < b else ""
 
@@ -1016,7 +1016,7 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
             msg.append("(ничего — всё уже разобрано)")
     msg += ["", f"КОМАНДА: {text}"]
     # Справочник, правила напоминаний и места — в кэше: между командами одного человека они те же.
-    system = (SYSTEM.replace("{REMIND}", remind_rules()).replace("{CATALOG}", cat)
+    system = (SYSTEM.replace("{REMIND}", remind_rules(url)).replace("{CATALOG}", cat)
               .replace("{PLACES}", remind.places_block(places)))
     if ask_fn is None:
         if not key:

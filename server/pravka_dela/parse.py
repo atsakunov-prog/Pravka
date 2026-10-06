@@ -30,14 +30,27 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 MAX_INPUT = 20_000
 WD = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
 
-# Правила разбора — один файл на телефон и сервер (06.10.2026): server/contract/prompts/raznoska.txt
-# и схема ответа рядом. Телефон берёт его в APK, сервер читает с диска при каждом разборе — правка
-# правил меняет разбор и там, и там. Служба работает из клона репозитория, контракт — рядом с кодом.
+# Правила разбора — одни на телефон и сервер: с 06.10.2026 правда — Свод (prompt.raznoska, template(url)),
+# файл server/contract/prompts/raznoska.txt — запас и первое знакомство телефона. Схема ответа — файл рядом:
+# её тюнер не правит. Служба работает из клона репозитория, контракт — рядом с кодом.
 PROMPTS = Path(__file__).resolve().parents[1] / "contract" / "prompts"
 
 
-def template() -> str:
-    """Текст правил с подстановками {CATALOG}, {PLACES}, {TODAY}, {NOW}."""
+def template(url: str | None = None) -> str:
+    """Текст правил с подстановками {CATALOG}, {PLACES}, {TODAY}, {NOW}.
+
+    Правда — Свод (prompt.raznoska, 06.10.2026): его правит тюнер телефона по субботам, и разбор на сервере
+    меняется вместе с ним. Файл контракта — запас (Свод недоступен, url не дан) и то, что телефон кладёт в Свод
+    при первом знакомстве. Читаем ролью system: Свод владельца, а говорить может и Наташа."""
+    if url:
+        try:
+            with db.session(url, "system", via="parse") as conn:
+                row = conn.execute("SELECT body FROM crm.svod WHERE owner_id = crm.owner_id() "
+                                   "AND key = 'prompt.raznoska' AND body IS NOT NULL").fetchone()
+            if row and (row["body"] or "").strip():
+                return row["body"]
+        except Exception:  # noqa: BLE001
+            log.exception("prompt.raznoska из Свода — беру файл контракта")
     return (PROMPTS / "raznoska.txt").read_text(encoding="utf-8")
 
 
@@ -223,7 +236,7 @@ def run(url: str, user: str, text: str, defaults: dict, key: str, proxy: str | N
     speaker = "" if not me or me["owner"] else (
         f"\n\nСейчас говорит не Саша, а {me['name']}. Везде выше, где «Саша», читай «{me['name']}»: "
         "mine — дело этого человека, waiting и agenda — от его имени.")
-    system = (template().replace("{CATALOG}", cat)
+    system = (template(url).replace("{CATALOG}", cat)
               .replace("{PLACES}", remind.places_block(places))
               .replace("{TODAY}", f"{today.isoformat()}, {WD[today.weekday()]}")
               .replace("{NOW}", clock["hm"])) + speaker
