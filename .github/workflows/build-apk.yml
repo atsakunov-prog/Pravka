@@ -21,8 +21,17 @@ name: build-apk
 on:
   push:
     branches: ["**"]
-    # server/ — архив на домашнем компе, к APK отношения не имеет.
-    paths-ignore: ["README.md", "CLAUDE.md", "docs/**", "server/**"]
+    # server/ — архив на домашнем компе, к APK отношения не имеет. Кроме общих
+    # с телефоном промптов (server/contract/prompts, 06.10.2026): они едут в APK
+    # ресурсом, и правка одного промпта обязана пересобрать телефон. Порядок
+    # важен: положительный шаблон после отрицательного возвращает путь в сборку.
+    paths:
+      - "**"
+      - "!README.md"
+      - "!CLAUDE.md"
+      - "!docs/**"
+      - "!server/**"
+      - "server/contract/prompts/**"
   workflow_dispatch:
 
 permissions:

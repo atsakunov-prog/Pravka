@@ -71,16 +71,24 @@ suspend fun ClaudeProvider.splitTasks(
  * свой промпт. Модель называет проект и человека так, как они стоят в
  * справочнике синка; [snapshot] превращает названное в id — наружу выходит
  * то, что сервер примет. «Не дела» — поштучно, с проектом и людьми.
+ *
+ * Правила разбора — общие с сервером (server/contract/prompts/raznoska.txt,
+ * 06.10.2026); [places] — места автопилота Засечки: по ним модель ставит
+ * напоминание «когда приеду домой», а телефон потом узнаёт приезд.
  */
 suspend fun ClaudeProvider.splitTasksDela(
     transcript: String,
     dictBlock: String,
     catalogBlock: String,
     snapshot: ru.zf.pravka.core.Dela.Snapshot,
+    places: List<String> = emptyList(),
 ): Result<SplitResult> = withContext(Dispatchers.IO) {
     runCatchingApi {
-        val call = askSplit(PromptStore.PromptId.TASKS_DELA, transcript, dictBlock, catalogBlock)
-        val (tasks, notes) = parseTasksDela(call.reply.text, snapshot)
+        val call = askSplit(
+            PromptStore.PromptId.TASKS_DELA, transcript, dictBlock, catalogBlock,
+            placesBlock = ru.zf.pravka.core.DelaRemind.placesBlock(places),
+        )
+        val (tasks, notes) = parseTasksDela(call.reply.text, snapshot, places)
         call.result(tasks, notes.joinToString("\n") { it.text }, notes)
     }
 }
@@ -104,6 +112,7 @@ private suspend fun ClaudeProvider.askSplit(
     transcript: String,
     dictBlock: String,
     catalogBlock: String,
+    placesBlock: String = "",
 ): SplitCall {
     val apiKey = settings.apiKey()
     if (apiKey.isBlank()) {
@@ -120,9 +129,13 @@ private suspend fun ClaudeProvider.askSplit(
     // каталога. Если владелец в «Промптах» увёл словарь выше даты, голова
     // менялась бы каждый раз — тогда кэш не ставим, а не платим за запись.
     val cut = template.indexOf("{TODAY}")
+    // {PLACES} — в голове под кэшем (места меняются редко), {NOW} — в хвосте
+    // рядом с датой: «через час» и «в 11, если уже прошло» считаются от него.
     fun fill(s: String) = s
         .replace("{CATALOG}", catalog)
+        .replace("{PLACES}", placesBlock.ifBlank { ru.zf.pravka.core.DelaRemind.placesBlock(emptyList()) })
         .replace("{TODAY}", todayContext())
+        .replace("{NOW}", java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date()))
         .replace(Prompts.PLACEHOLDER_DICT, dictBlock.ifBlank { "—" })
     val headTemplate = if (cut > 0) template.substring(0, cut) else ""
     val head = fill(headTemplate)
@@ -173,8 +186,14 @@ private fun replyJson(raw: String): JSONObject {
  * с теми же ключами. Человек без проекта тянет проект своей организации
  * не здесь, а на сервере — телефон не угадывает за справочник.
  */
-internal fun parseTasksDela(raw: String, snapshot: ru.zf.pravka.core.Dela.Snapshot): Pair<List<ParsedTask>, List<ru.zf.pravka.core.ParsedNote>> {
+internal fun parseTasksDela(
+    raw: String,
+    snapshot: ru.zf.pravka.core.Dela.Snapshot,
+    places: List<String> = emptyList(),
+    zone: java.time.ZoneId = java.time.ZoneId.systemDefault(),
+): Pair<List<ParsedTask>, List<ru.zf.pravka.core.ParsedNote>> {
     val dela = ru.zf.pravka.core.Dela
+    val remind = ru.zf.pravka.core.DelaRemind
     val o = replyJson(raw)
     val known = snapshot.labels
     val out = mutableListOf<ParsedTask>()
@@ -198,17 +217,28 @@ internal fun parseTasksDela(raw: String, snapshot: ru.zf.pravka.core.Dela.Snapsh
                 known.firstOrNull { it.equals(name, ignoreCase = true) }?.let { labels += it }
             }
         }
-        val due = t.optString("due").trim()
+        val due = t.optString("due").trim().takeIf { Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(it) }.orEmpty()
         val money = t.optString("money").trim().lowercase().takeIf { it == "paid" || it == "potential" }.orEmpty()
+        // Время срока — только при сроке (так же держит база: due_time без due_date нельзя).
+        val dueTime = if (due.isBlank()) "" else dela.normTime(t.optString("due_time")).orEmpty()
+        // Напоминание: время — в ISO со смещением телефона; место — только из мест
+        // автопилота. Названное мимо списка не теряется — строкой в заметки дела.
+        val remindAt = remind.iso(t.optString("remind_at"), zone)
+        val placeSaid = t.optString("remind_place").trim()
+        val remindPlace = if (remindAt.isNotBlank()) "" else remind.matchPlace(placeSaid, places)
+        var taskNotes = t.optString("notes").ifBlank { t.optString("description") }.trim()
+        if (remindAt.isBlank() && remindPlace.isBlank() && placeSaid.isNotBlank() && !taskNotes.contains(placeSaid, ignoreCase = true)) {
+            taskNotes = (taskNotes + "\n⏰ Напомнить, когда приеду: $placeSaid — такого места нет у автопилота Засечки").trim()
+        }
         out += ParsedTask(
             id = (i + 1).toLong(),
             content = title,
-            description = t.optString("notes").ifBlank { t.optString("description") }.trim(),
+            description = taskNotes,
             projectId = project?.id.orEmpty(),
             // Не нашли — сказанное моделью остаётся: в редакторе видно, что проект выбрать руками.
             projectName = project?.name ?: named,
             labels = labels.distinct(),
-            due = if (Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(due)) due else "",
+            due = due,
             ball = ball,
             personId = person?.id.orEmpty(),
             personName = person?.label ?: personNamed,
@@ -217,6 +247,9 @@ internal fun parseTasksDela(raw: String, snapshot: ru.zf.pravka.core.Dela.Snapsh
             want = t.optBoolean("want", false),
             delaId = dela.newId(),
             opId = dela.newId(),
+            dueTime = dueTime,
+            remindAt = remindAt,
+            remindPlace = remindPlace,
         )
     }
     val notes = mutableListOf<ru.zf.pravka.core.ParsedNote>()

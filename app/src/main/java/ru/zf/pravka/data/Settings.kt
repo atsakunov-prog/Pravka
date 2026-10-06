@@ -132,6 +132,7 @@ class Settings(private val context: Context) {
         private val KEY_ICU_KEY = stringPreferencesKey("icu_api_key")
         private val KEY_TODOIST_TOKEN = stringPreferencesKey("todoist_token")
         private val KEY_DELA_BACKEND = stringPreferencesKey("dela_backend")
+        private val KEY_DELA_PLACES_SENT = stringPreferencesKey("dela_places_sent")
 
         // Спорт: вкладка живёт кэшем intervals.icu, глубина - в днях.
         private val KEY_SPORT_DAYS = intPreferencesKey("sport_days")
@@ -916,6 +917,16 @@ class Settings(private val context: Context) {
     suspend fun delaBackend(): String = delaBackendFlow.first()
     suspend fun setDelaBackend(value: String) {
         context.dataStore.edit { it[KEY_DELA_BACKEND] = value }
+    }
+
+    /**
+     * Места автопилота, которые сервер Дел уже знает (`user.settings.places`,
+     * 06.10.2026): строкой «дом|Летово». Иная строка — места поменялись, их
+     * пора отдать серверу, чтобы разбор в вебе ставил «когда приеду» тем же словом.
+     */
+    suspend fun delaPlacesSent(): String = context.dataStore.data.first()[KEY_DELA_PLACES_SENT].orEmpty()
+    suspend fun setDelaPlacesSent(value: String) {
+        context.dataStore.edit { it[KEY_DELA_PLACES_SENT] = value }
     }
 
     // Разноска: кнопка «Д» на экране. Включена по умолчанию - она и есть

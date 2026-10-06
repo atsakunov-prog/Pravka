@@ -620,6 +620,12 @@ class AutoPilot(
         lastPlace = place
         lastArriveAt = now
         app.eventLog.add("автопилот: $how — место «$place»")
+        // Напоминания дел «когда приеду домой» (06.10.2026) — при любом тумблере
+        // приезда: это не правка ленты, а просьба владельца. Только настоящий
+        // приезд: мигнувший роутер дома не должен будить сказанное дома же.
+        if (ru.zf.pravka.core.DelaRemind.realArrival(place, now, leftPlace, leftAtMs)) {
+            scope.launch { runCatching { app.delaArrived(place, now) } }
+        }
         if (!autoArrive) return
         scope.launch { onArrived(place, now) }
     }

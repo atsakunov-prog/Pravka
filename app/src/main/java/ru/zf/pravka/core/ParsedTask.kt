@@ -42,6 +42,12 @@ data class ParsedTask(
     // отдаёт прежний ответ вместо дубля. Вместо sentId и X-Request-Id Todoist.
     val delaId: String = "",
     val opId: String = "",
+    // ---- Время и напоминание (06.10.2026, общий промпт server/contract/prompts/raznoska.txt) ----
+    // «ЧЧ:ММ» — время самого дела («созвон в 15:00»), только при сроке.
+    val dueTime: String = "",
+    // Напоминание в Telegram: момент ISO со смещением или место автопилота («дом»).
+    val remindAt: String = "",
+    val remindPlace: String = "",
 ) {
     val sent: Boolean get() = sentId.isNotBlank()
 

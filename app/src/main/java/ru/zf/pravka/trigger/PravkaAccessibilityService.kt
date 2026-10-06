@@ -3021,7 +3021,10 @@ class PravkaAccessibilityService : AccessibilityService() {
             // (время из ленты — нужны и Дела, и Засечка). На сервере коммент со
             // временем не нужен: запись ленты сама помнит дело.
             if (dela) scope.launch {
-                if (app.delaOnServer()) runCatching { app.delaSync.tick() }
+                if (app.delaOnServer()) {
+                    runCatching { app.delaPlacesToServer() }
+                    runCatching { app.delaSync.tick() }
+                }
                 else if (zasechka) runCatching { app.todoistSync.flushLinks() }
             }
             // Копии на диск: сама проверка стоит один listFiles, копирование

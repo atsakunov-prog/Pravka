@@ -47,6 +47,16 @@ object Dela {
         val requestedBy: String = "",
         val dueDate: String = "",
         val dueTime: String = "",
+        /**
+         * Напоминание в Telegram (06.10.2026, контракт — server/contract/dela-remind.json):
+         * момент ISO со смещением («2026-10-06T11:00:00+03:00»). У напоминания по
+         * месту сюда ложится миг приезда — его ставит телефон, увидев место.
+         */
+        val remindAt: String = "",
+        /** Напомнить по приезду: имя места автопилота Засечки («дом», «Летово»). */
+        val remindPlace: String = "",
+        /** Когда сервер отправил напоминание; ставит только сервер, правка напоминания его сбрасывает. */
+        val remindedAt: String = "",
         val estimateMin: Int = 0,
         /** "" — как у проекта (money_default). */
         val money: String = "",
@@ -279,7 +289,12 @@ object Dela {
         val labels: List<String> = emptyList(),
         val syncedAt: Long = 0,
         val payments: Map<String, Payment> = emptyMap(),
+        /** `features` последнего синка: чего нет — сервер ещё не умеет, и телефон это не шлёт. */
+        val features: Set<String> = emptySet(),
     ) {
+        /** Сервер Дел знает напоминания (поля `remind_*`) и шлёт их в Telegram. */
+        val remindOn: Boolean get() = FEATURE_REMIND in features
+
         val empty: Boolean
             get() = tasks.isEmpty() && projects.isEmpty() && people.isEmpty() && suggestions.isEmpty()
 
@@ -332,7 +347,9 @@ object Dela {
             projectId = o.str("project_id"), dealId = o.str("deal_id"), ownerId = o.str("owner_id"),
             ball = o.str("ball").ifBlank { MINE }, personId = o.str("person_id"),
             waitingSince = o.str("waiting_since"), nudgeOn = o.str("nudge_on"), requestedBy = o.str("requested_by"),
-            dueDate = o.str("due_date"), dueTime = o.str("due_time"), estimateMin = o.int("estimate_min"),
+            dueDate = o.str("due_date"), dueTime = o.str("due_time"),
+            remindAt = o.str("remind_at"), remindPlace = o.str("remind_place"), remindedAt = o.str("reminded_at"),
+            estimateMin = o.int("estimate_min"),
             money = o.str("money"), want = o.bool("want"), focusOn = o.str("focus_on"), labels = o.strings("labels"),
             status = o.str("status").ifBlank { OPEN }, source = o.str("source").ifBlank { "manual" },
             sourceRef = o.str("source_ref"), createdBy = o.str("created_by"), createdAt = o.str("created_at"),
@@ -349,7 +366,8 @@ object Dela {
         .put("project_id", nul(t.projectId)).put("deal_id", nul(t.dealId)).put("owner_id", t.ownerId)
         .put("ball", t.ball).put("person_id", nul(t.personId)).put("waiting_since", nul(t.waitingSince))
         .put("nudge_on", nul(t.nudgeOn)).put("requested_by", nul(t.requestedBy)).put("due_date", nul(t.dueDate))
-        .put("due_time", nul(t.dueTime)).put("estimate_min", if (t.estimateMin > 0) t.estimateMin else JSONObject.NULL)
+        .put("due_time", nul(t.dueTime)).put("remind_at", nul(t.remindAt)).put("remind_place", nul(t.remindPlace))
+        .put("reminded_at", nul(t.remindedAt)).put("estimate_min", if (t.estimateMin > 0) t.estimateMin else JSONObject.NULL)
         .put("money", nul(t.money)).put("want", t.want).put("focus_on", nul(t.focusOn)).put("labels", arr(t.labels))
         .put("status", t.status).put("source", t.source).put("source_ref", nul(t.sourceRef))
         .put("created_by", t.createdBy).put("created_at", nul(t.createdAt)).put("updated_at", nul(t.updatedAt))
@@ -510,6 +528,7 @@ object Dela {
         .put("users", JSONArray().apply { s.users.values.forEach { put(json(it)) } })
         .put("payments", JSONArray().apply { s.payments.values.forEach { put(json(it)) } })
         .put("labels", arr(s.labels))
+        .put("features", arr(s.features.sorted()))
 
     fun fromJson(o: JSONObject): Snapshot = Snapshot(
         seq = o.long("seq"),
@@ -525,6 +544,7 @@ object Dela {
         labels = labels(o).orEmpty(),
         syncedAt = o.long("syncedAt"),
         payments = rows(o, "payments", ::payment).associateBy { it.id },
+        features = o.strings("features").toSet(),
     )
 
     // ------------------------------------------------------------ синк
@@ -565,6 +585,9 @@ object Dela {
                 labels = labels(resp) ?: old.labels,
                 syncedAt = now,
                 payments = up(old.payments, fresh.payments) { it.rev.toLong() },
+                // Умение — состояние сервера сейчас, а не накопленное: откатили
+                // сервер — флага нет, и телефон перестаёт слать то, чего тот не знает.
+                features = fresh.features,
             )
         )
     }
@@ -718,6 +741,9 @@ object Dela {
                 "requested_by" -> out.copy(requestedBy = f.str(k))
                 "due_date" -> out.copy(dueDate = f.str(k), dueTime = if (f.str(k).isBlank()) "" else out.dueTime)
                 "due_time" -> out.copy(dueTime = f.str(k))
+                // Новое напоминание — ещё не отправлено: сервер сбрасывает reminded_at так же.
+                "remind_at" -> out.copy(remindAt = f.str(k), remindedAt = if (f.str(k) != out.remindAt) "" else out.remindedAt)
+                "remind_place" -> out.copy(remindPlace = f.str(k), remindedAt = if (f.str(k) != out.remindPlace) "" else out.remindedAt)
                 "estimate_min" -> out.copy(estimateMin = if (f.isNull(k)) 0 else f.optInt(k, 0))
                 "money" -> out.copy(money = f.str(k))
                 "want" -> out.copy(want = f.bool(k))
@@ -759,11 +785,19 @@ object Dela {
      * интерфейса («тяжело смотреть, нагружает»). Поле в данных осталось, но
      * карточка его не показывает — значит, и `task.set` не должен уметь его
      * тронуть: невидимая правка денег читалась бы как поломка.
+     *
+     * Напоминание (`remind_at`, `remind_place`, 06.10.2026) правится, только
+     * когда сервер его знает (`Snapshot.remindOn`): старый сервер отвергает
+     * операцию с незнакомым полем целиком. Карточка без этого флага блока
+     * напоминания не показывает, и поля в `task.set` не попадают.
      */
     val EDITABLE = listOf(
         "title", "notes", "project_id", "deal_id", "ball", "person_id", "nudge_on", "requested_by",
-        "due_date", "due_time", "estimate_min", "want", "focus_on", "labels",
+        "due_date", "due_time", "remind_at", "remind_place", "estimate_min", "want", "focus_on", "labels",
     )
+
+    /** Что сервер умеет сверх контракта части 1 — `features` ответа синка. */
+    const val FEATURE_REMIND = "remind"
 
     /**
      * Поля нового дела: карточкины плюс деньги. Деньги ставит только Разноска —
@@ -796,6 +830,8 @@ object Dela {
         "requested_by" -> nul(t.requestedBy)
         "due_date" -> nul(t.dueDate)
         "due_time" -> nul(t.dueTime)
+        "remind_at" -> nul(t.remindAt)
+        "remind_place" -> nul(t.remindPlace)
         "estimate_min" -> if (t.estimateMin > 0) t.estimateMin else JSONObject.NULL
         "money" -> nul(t.money)
         "want" -> t.want

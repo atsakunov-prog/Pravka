@@ -41,6 +41,8 @@ class RaznoskaEngine(
     private val delaSync: DelaSync,
     /** Режим «Дела» ходит в домашний сервер, а не в Todoist. */
     private val delaOn: suspend () -> Boolean,
+    /** Места автопилота Засечки («дом», «Летово») — для напоминаний «когда приеду». */
+    private val places: suspend () -> List<String> = { emptyList() },
 ) {
 
     companion object {
@@ -151,6 +153,7 @@ class RaznoskaEngine(
                 .filter { it.isNotBlank() }
                 .joinToString("\n\n"),
             snapshot = snap,
+            places = runCatching { places() }.getOrDefault(emptyList()),
         )
         val split = result.getOrElse { e ->
             eventLog.add("разноска: разбор не вышел — ${e.message}")
@@ -265,7 +268,8 @@ class RaznoskaEngine(
             if (t.delaId.isNotBlank() && t.opId.isNotBlank()) t else t.copy(delaId = t.delaId.ifBlank { Dela.newId() }, opId = t.opId.ifBlank { Dela.newId() })
         }
         if (keyed != queue) store.replaceTasks(draftId, draft.tasks.map { t -> keyed.firstOrNull { it.id == t.id } ?: t })
-        for (t in keyed) ops += Dela.createOp(asDela(t, draft.id), t.opId)
+        val remindOn = delaStore.view.value.remindOn
+        for (t in keyed) ops += Dela.createOp(asDela(t, draft.id, remindOn), t.opId)
         val at = java.time.OffsetDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString()
         for ((i, n) in notes.withIndex()) {
             ops += Dela.noteOp(
@@ -300,15 +304,25 @@ class RaznoskaEngine(
         return SendOutcome(keyed.size, 0, "", "Дела", queued)
     }
 
-    /** Дело разбора — в дело Дел: то, что уедет в `task.create`. */
-    private fun asDela(t: ParsedTask, draftId: Long): Dela.Task = Dela.Task(
+    /**
+     * Дело разбора — в дело Дел: то, что уедет в `task.create`. Сервер, не
+     * знающий напоминаний ([remindOn] = false), отверг бы дело с полем
+     * `remind_*` целиком — тогда напоминание едет строкой в заметках.
+     */
+    private fun asDela(t: ParsedTask, draftId: Long, remindOn: Boolean): Dela.Task = Dela.Task(
         id = t.delaId,
         title = t.content.trim(),
-        notes = t.description.trim(),
+        notes = if (remindOn) t.description.trim() else listOf(
+            t.description.trim(),
+            DelaRemind.notesLine(t.remindAt, t.remindPlace, java.time.LocalDate.now(), java.time.ZoneId.systemDefault()),
+        ).filter { it.isNotBlank() }.joinToString("\n"),
         projectId = t.projectId,
         ball = t.ball,
         personId = t.personId,
         dueDate = t.due,
+        dueTime = if (t.due.isBlank()) "" else t.dueTime,
+        remindAt = if (remindOn) t.remindAt else "",
+        remindPlace = if (remindOn && t.remindAt.isBlank()) t.remindPlace else "",
         estimateMin = t.estimateMin,
         money = t.money,
         want = t.want,

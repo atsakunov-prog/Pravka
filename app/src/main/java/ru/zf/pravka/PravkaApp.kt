@@ -5,6 +5,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -399,6 +400,56 @@ class PravkaApp : Application() {
     }
 
     /**
+     * Места автопилота Засечки (SSID → имя, без повторов имени): по ним
+     * Разноска ставит «напомни, когда приеду домой», а автопилот узнаёт приезд.
+     */
+    suspend fun remindPlaces(): List<String> = settings.autoPlacesFlow.first()
+        .values.map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { ru.zf.pravka.core.Dela.norm(it) }
+
+    /**
+     * Приехал в место (06.10.2026, docs/dela.md «Напоминания»): дела с
+     * напоминанием по этому месту получают `remind_at` = миг приезда, и
+     * сервер отправляет их в Telegram тем же путём, что напоминание по
+     * времени. Только настоящий приезд (`DelaRemind.realArrival` решает
+     * автопилот) и только когда сервер Дел знает напоминания.
+     */
+    suspend fun delaArrived(place: String, nowMs: Long) {
+        if (!delaOnServer()) return
+        delaStore.load()
+        val snap = delaStore.view.value
+        if (!snap.remindOn) return
+        val me = delaSync.link.value?.user.orEmpty()
+        val ops = ru.zf.pravka.core.DelaRemind.arrivalOps(
+            snap, me, place, ru.zf.pravka.core.DelaRemind.now(nowMs, java.time.ZoneId.systemDefault()),
+        )
+        if (ops.isEmpty()) return
+        delaStore.enqueue(ops)
+        eventLog.add("дела: приехал «$place» — напоминаний в Telegram: ${ops.size}")
+        // Дома сеть есть: отправить сейчас, а не через десять секунд тишины.
+        runCatching { delaSync.pushNow(4_000L) }
+    }
+
+    /**
+     * Места — на сервер Дел (`user.settings {places}`), когда поменялись: разбор
+     * в вебе ставит «когда приеду» тем же словом, что телефон потом узнает.
+     * Только серверу, который знает напоминания: старому места ни к чему.
+     */
+    suspend fun delaPlacesToServer() {
+        if (!delaOnServer() || !delaStore.view.value.remindOn) return
+        val places = remindPlaces()
+        val key = places.joinToString("|")
+        if (key == settings.delaPlacesSent()) return
+        delaDo(listOf(
+            org.json.JSONObject().put("op", "user.settings")
+                // Свой op_id каждый раз: вернулись к прежним местам — тот же ключ
+                // сервер принял бы за повтор и мест бы не поменял.
+                .put("op_id", ru.zf.pravka.core.Dela.newId())
+                .put("settings", org.json.JSONObject().put("places", org.json.JSONArray(places))),
+        ))
+        settings.setDelaPlacesSent(key)
+    }
+
+    /**
      * Комментарий к записи ленты, начатой из дела, — и в само дело (05.10.2026;
      * владелец: «понимать, что этим делом я занимаюсь… и можно ещё сделать
      * какой-то комментарий»). Едет только дописанное (`ZasechkaTasks.added`):
@@ -432,6 +483,7 @@ class PravkaApp : Application() {
             delaStore = delaStore,
             delaSync = delaSync,
             delaOn = { delaOnServer() },
+            places = { remindPlaces() },
         )
     }
 

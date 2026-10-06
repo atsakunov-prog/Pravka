@@ -1,0 +1,218 @@
+{
+ "_": "Контракт Дел, часть 3 (06.10.2026): напоминания в Telegram и общий промпт разбора наговора. Часть 1 — dela.json, часть 2 — dela-crm.json. Телефон сделан по этому файлу; сервер — по заданию docs/dela-server-remind.md. Данные в примерах выдуманные.",
+
+ "features": {
+  "where": "Ответ GET /api/sync (на верхнем уровне, в каждом ответе — и полном, и после seq) и GET /api/me.",
+  "example": ["remind"],
+  "rule": "Сервер, который знает поля remind_*, отдаёт \"remind\". Нет флага — телефон поля remind_* НЕ шлёт: store._pick отвергает операцию с незнакомым полем целиком, и вместе с напоминанием пропало бы дело. Без флага напоминание едет строкой в notes дела («⏰ Напомнить: 11:00 (сервер Дел пока не напоминает)»). Флаг — состояние сервера сейчас: откатили сервер — флаг ушёл, телефон перестал слать."
+ },
+
+ "task_fields": {
+  "remind_at": "timestamptz или null. Когда напомнить. Телефон шлёт ISO со смещением: \"2026-10-06T11:00:00+03:00\". Ставят: разбор наговора, карточка, бот («через час»), телефон по приезду (см. place_arrival).",
+  "remind_place": "text или null. Напомнить по приезду: имя места автопилота Засечки, как его видит владелец («дом», «Летово», «дача»). Список мест телефон отдаёт серверу в users.settings.places.",
+  "reminded_at": "timestamptz или null. Когда напоминание ушло в Telegram. Ставит только сервер (операция task.reminded); клиенты его не шлют. Правка remind_at или remind_place (любое новое значение) сбрасывает reminded_at в null — триггером в базе, как waiting_since.",
+  "due_time": "Уже было в части 1; теперь его ставит и разбор наговора («созвон в 15:00»). Только при due_date."
+ },
+
+ "sync_task_example": {
+  "id": "5d1c2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+  "num": 61,
+  "title": "Позвонить Ивану",
+  "notes": null,
+  "project_id": "8c0e2f1a-1d2b-4c3d-8e4f-5a6b7c8d9e0f",
+  "project_name": "Бета Групп",
+  "project_kind": "client",
+  "deal_id": null,
+  "deal_name": null,
+  "sphere": "work",
+  "owner_id": "sasha",
+  "ball": "mine",
+  "person_id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+  "person_short": "Иван",
+  "person_name": "Иван Петров",
+  "waiting_since": null,
+  "nudge_on": null,
+  "requested_by": null,
+  "requested_by_short": null,
+  "due_date": "2026-10-06",
+  "due_time": null,
+  "remind_at": "2026-10-06T11:00:00+03:00",
+  "remind_place": null,
+  "reminded_at": null,
+  "estimate_min": 10,
+  "money": null,
+  "money_eff": "paid",
+  "want": false,
+  "focus_on": null,
+  "now_": false,
+  "overdue": false,
+  "labels": [],
+  "status": "open",
+  "source": "voice",
+  "source_ref": "raznoska:1759740000000",
+  "created_by": "sasha",
+  "created_at": "2026-10-06T09:40:00+03:00",
+  "updated_at": "2026-10-06T09:40:00+03:00",
+  "completed_at": null,
+  "import_ref": null,
+  "rev": 1,
+  "seq": 2210
+ },
+
+ "ops_examples": [
+  {
+   "_": "Разноска: «напомни в 11 позвонить Ивану» — срок днём напоминания, напоминание в 11:00.",
+   "op": "task.create",
+   "op_id": "<uuid>",
+   "task": {
+    "id": "<uuid телефона>",
+    "title": "Позвонить Ивану",
+    "person_id": "<person_id>",
+    "due_date": "2026-10-06",
+    "remind_at": "2026-10-06T11:00:00+03:00",
+    "source": "voice",
+    "source_ref": "raznoska:1759740000000"
+   }
+  },
+  {
+   "_": "Разноска: «когда приеду домой, напомни повесить полку».",
+   "op": "task.create",
+   "op_id": "<uuid>",
+   "task": {
+    "id": "<uuid телефона>",
+    "title": "Повесить полку",
+    "remind_place": "дом",
+    "source": "voice"
+   }
+  },
+  {
+   "_": "Разноска: время самого дела — «созвон со Стелларом в пятницу в 15:00».",
+   "op": "task.create",
+   "op_id": "<uuid>",
+   "task": {
+    "id": "<uuid телефона>",
+    "title": "Созвон со Стелларом",
+    "due_date": "2026-10-09",
+    "due_time": "15:00",
+    "source": "voice"
+   }
+  },
+  {
+   "_": "Карточка: напоминание на завтра 09:00 вместо места (одно из двух — второе в null).",
+   "op": "task.set",
+   "op_id": "<uuid>",
+   "id": "<task_id>",
+   "set": {"remind_at": "2026-10-07T09:00:00+03:00", "remind_place": null},
+   "was": {"remind_at": null, "remind_place": "дом"}
+  },
+  {
+   "_": "Телефон увидел приезд «дом» (place_arrival): делу с remind_place = «дом» — remind_at = миг приезда. op_id выводится из id дела и мига: повтор не удваивает.",
+   "op": "task.set",
+   "op_id": "<uuid>",
+   "id": "<task_id>",
+   "set": {"remind_at": "2026-10-06T19:05:12+03:00"},
+   "was": {"remind_at": null}
+  },
+  {
+   "_": "Места автопилота — серверу, когда поменялись (операция части 2, слиянием в users.settings).",
+   "op": "user.settings",
+   "op_id": "<uuid>",
+   "settings": {"places": ["дом", "Летово", "дача"]}
+  },
+  {
+   "_": "НОВАЯ операция сервера: бот отправил напоминание. Шлёт только служба (токен бота); телефон её не шлёт.",
+   "op": "task.reminded",
+   "op_id": "<uuid>",
+   "id": "<task_id>",
+   "at": "2026-10-06T11:00:04+03:00",
+   "message_id": 81234
+  }
+ ],
+
+ "place_arrival": {
+  "who": "Только телефон: он один знает, где владелец (автопилот Засечки, места по Wi-Fi).",
+  "when": "Настоящий приезд: был зафиксирован отъезд, и место сменилось или сети не было дольше 30 минут (та же мера, что у автопилота, AutoPilotRules.BLINK_MS). Мигнувший дома роутер и подъём службы с уже видимой сетью — не приезд: «когда приеду домой», сказанное дома, ждёт возвращения.",
+  "what": "Мои (owner_id = я) открытые дела с remind_place = это место (без регистра и падежа), без remind_at и без reminded_at — task.set {remind_at: миг приезда}. Дальше их отправляет сервер, как любое напоминание по времени. Отправленное и уже взведённое не трогается: напоминание по месту — один раз.",
+  "server": "Новой операции на сервере не нужно: remind_at в прошлом или «сейчас» = отправить сразу."
+ },
+
+ "reminders_due": {
+  "_": "Для бота (Ковчег): что пора отправить. Предложение — сервер решает форму сам, но тогда правит и этот пример.",
+  "request": "GET /api/reminders/due  (Authorization: Bearer <токен службы бота>)",
+  "response": {
+   "ok": true,
+   "now": "2026-10-06T11:00:03+03:00",
+   "reminders": [
+    {
+     "task_id": "5d1c2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+     "num": 61,
+     "user": "sasha",
+     "telegram_id": 123456789,
+     "title": "Позвонить Ивану",
+     "project": "Бета Групп",
+     "person": "Иван",
+     "due_date": "2026-10-06",
+     "due_time": null,
+     "remind_at": "2026-10-06T11:00:00+03:00",
+     "remind_place": null,
+     "late_min": 0,
+     "url": "https://dela.kovcheg.am/#task/61"
+    }
+   ]
+  },
+  "rule": "Открытые дела с remind_at <= now() и reminded_at IS NULL у пользователей с telegram_id. Опоздавшее (служба лежала) — тоже, с late_min: бот пишет «должно было в 11:00». Дело закрыто до отправки — не напоминаем."
+ },
+
+ "telegram_message": {
+  "text": "⏰ Позвонить Ивану · #61\nБета Групп · срок сегодня",
+  "text_place": "⏰ Ты дома: повесить полку · #62",
+  "buttons": [
+   {"text": "✓ Сделано", "callback_data": "dela:done:61"},
+   {"text": "Через час", "callback_data": "dela:snooze:60:61"},
+   {"text": "Завтра 9:00", "callback_data": "dela:tomorrow:61"},
+   {"text": "Открыть", "url": "https://dela.kovcheg.am/#task/61"}
+  ],
+  "callbacks": {
+   "dela:done:<num>": "task.done",
+   "dela:snooze:<мин>:<num>": "task.set {remind_at: now + мин} — reminded_at сбросит триггер, напоминание придёт ещё раз",
+   "dela:tomorrow:<num>": "task.set {remind_at: завтра 09:00 по Москве}"
+  }
+ },
+
+ "prompt": {
+  "file": "server/contract/prompts/raznoska.txt",
+  "schema": "server/contract/prompts/raznoska.schema.json",
+  "rule": "Один текст правил разбора наговора на дела для телефона (Разноска, «Д») и сервера (parse.py, звёздочка в вебе). Телефон берёт его в APK ресурсом, сервер читает с диска. Своё у сторон — только хвост: телефон дописывает словарь Правки и наговор, сервер — «говорит не Саша» и схему ответа (structured output). Правишь правила — правь файл: изменится разбор и там, и там.",
+  "placeholders": {
+   "{CATALOG}": "справочник: проекты с алиасами, люди, метки (как catalog() в parse.py и Dela.promptCatalog на телефоне)",
+   "{PLACES}": "места: «МЕСТА (remind_place — ровно одно имя из списка…):\\nдом, Летово» или фраза «мест нет»; сервер берёт users.settings.places",
+   "{TODAY}": "дата словами и ISO",
+   "{NOW}": "время ЧЧ:ММ по местному: от него «через час» и «в 11, если уже прошло»"
+  },
+  "now_for_example": "2026-10-06 14:00, вторник; места: дом, Летово",
+  "answer_example": {
+   "tasks": [
+    {"title": "Позвонить Ивану", "notes": "", "project": "", "person": "Иван", "ball": "mine", "due": "2026-10-07", "due_time": "", "remind_at": "2026-10-07 11:00", "remind_place": "", "estimate_min": 10, "money": "", "want": false, "labels": []},
+    {"title": "Повесить полку", "notes": "", "project": "", "person": "", "ball": "mine", "due": "", "due_time": "", "remind_at": "", "remind_place": "дом", "estimate_min": 0, "money": "", "want": false, "labels": []},
+    {"title": "Созвон со Стелларом", "notes": "", "project": "", "person": "", "ball": "mine", "due": "2026-10-09", "due_time": "15:00", "remind_at": "", "remind_place": "", "estimate_min": 0, "money": "", "want": false, "labels": []},
+    {"title": "Забрать документы", "notes": "", "project": "", "person": "", "ball": "mine", "due": "", "due_time": "", "remind_at": "", "remind_place": "офис", "estimate_min": 0, "money": "", "want": false, "labels": []}
+   ],
+   "notes": []
+  },
+  "answer_expected": [
+   {"title": "Позвонить Ивану", "due_date": "2026-10-07", "due_time": "", "remind_at": "2026-10-07T11:00:00+03:00", "remind_place": ""},
+   {"title": "Повесить полку", "due_date": "", "due_time": "", "remind_at": "", "remind_place": "дом"},
+   {"title": "Созвон со Стелларом", "due_date": "2026-10-09", "due_time": "15:00", "remind_at": "", "remind_place": ""},
+   {"title": "Забрать документы", "due_date": "", "due_time": "", "remind_at": "", "remind_place": "", "notes_has": "⏰ Напомнить, когда приеду: офис"}
+  ]
+ },
+
+ "rules": [
+  "Напоминание — одно из двух: время (remind_at) или место (remind_place). Телефон, ставя одно, второе шлёт null. Приезд превращает место в момент: оба поля заполнены — место уже сработало.",
+  "Шлёт напоминание только сервер (через бота), один раз: reminded_at. Правка remind_at/remind_place сбрасывает reminded_at — «через час» из бота и новое время из карточки снова взводят напоминание.",
+  "Напоминание приходит владельцу дела (owner_id) в его Telegram (crm.users.telegram_id). Нет telegram_id — не шлём и не ставим reminded_at.",
+  "Закрытое или отменённое дело не напоминает.",
+  "Марианне — только её собственные напоминания (она сама попросила); чужих напоминаний и просрочек ей нет (правило 6 сервера).",
+  "Сервер без флага features.remind полей remind_* не получает: телефон их не шлёт."
+ ]
+}

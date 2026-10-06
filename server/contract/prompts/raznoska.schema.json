@@ -1,0 +1,44 @@
+{
+  "type": "object",
+  "properties": {
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "notes": {"type": "string"},
+          "project": {"type": "string"},
+          "person": {"type": "string"},
+          "ball": {"type": "string", "enum": ["mine", "waiting", "agenda"]},
+          "due": {"type": "string"},
+          "due_time": {"type": "string"},
+          "remind_at": {"type": "string"},
+          "remind_place": {"type": "string"},
+          "estimate_min": {"type": "integer"},
+          "money": {"type": "string", "enum": ["", "paid", "potential", "none"]},
+          "want": {"type": "boolean"},
+          "labels": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["title", "notes", "project", "person", "ball", "due", "due_time", "remind_at", "remind_place",
+                     "estimate_min", "money", "want", "labels"],
+        "additionalProperties": false
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "text": {"type": "string"},
+          "project": {"type": "string"},
+          "person": {"type": "string"}
+        },
+        "required": ["text", "project", "person"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["tasks", "notes"],
+  "additionalProperties": false
+}

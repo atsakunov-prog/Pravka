@@ -236,6 +236,9 @@ object DelaViews {
         val out = mutableListOf<String>()
         val d = due(t, today)
         if (d != null && (by != By.DATE || d.late)) out += d.text
+        // Напоминание в Telegram (06.10.2026): «⏰ 11:00», «⏰ завтра 09:00», «⏰ дом».
+        // В вебе такой подписи ещё нет — задание серверу (docs/dela-server-remind.md) её просит.
+        date(today)?.let { day -> out += DelaRemind.chip(t, day, java.time.ZoneId.systemDefault()) }
         if (by != By.PROJECT && !onProjectPage) {
             out += if (t.projectId.isBlank()) "Входящие" else s.projects[t.projectId]?.name ?: t.projectName.ifBlank { "проект" }
         }

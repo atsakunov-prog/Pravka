@@ -44,6 +44,7 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
 import ru.zf.pravka.core.Dela
+import ru.zf.pravka.core.DelaRemind
 import ru.zf.pravka.core.DelaAsk
 import ru.zf.pravka.core.DelaViews
 import ru.zf.pravka.trigger.PravkaAccessibilityService
@@ -1628,7 +1629,14 @@ internal fun DelaTaskSheet(
 
         DateLine("Срок", f.dueDate, today) { f = f.copy(dueDate = it, dueTime = if (it.isBlank()) "" else f.dueTime) }
         if (f.dueDate.isNotBlank()) TimeLine(f.dueTime) { f = f.copy(dueTime = it) }
-        if (f.ball == Dela.WAITING) DateLine("Напомнить", f.nudgeOn, today) { f = f.copy(nudgeOn = it) }
+        // «Напомнить ему» — день пнуть того, у кого мяч (как в вебе); моё напоминание — ниже, в Telegram.
+        if (f.ball == Dela.WAITING) DateLine("Напомнить ему", f.nudgeOn, today) { f = f.copy(nudgeOn = it) }
+        val places by app.settings.autoPlacesFlow.collectAsState(initial = emptyMap())
+        RemindLine(
+            f,
+            on = snap.remindOn,
+            places = places.values.map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { Dela.norm(it) },
+        ) { f = it }
 
         PaperHint("Сколько займёт")
         ChipRow {
@@ -1755,6 +1763,54 @@ private fun DateLine(label: String, value: String, today: LocalDate, onChange: (
             PaperChip(name, selected = value == d.toString(), onClick = { onChange(d.toString()) })
         }
         if (value.isNotBlank()) PaperChip("убрать", selected = false, onClick = { onChange("") })
+    }
+}
+
+/**
+ * Напоминание в Telegram (06.10.2026, docs/dela.md «Напоминания»): время или
+ * место — одно из двух. Быстрые чипы (через час, вечером, завтра утром), места
+ * автопилота Засечки («приеду: дом») и своё время — днём и часами. Сервер, не
+ * знающий напоминаний, получил бы `task.set` с незнакомым полем и отверг бы
+ * правку целиком — поэтому без `remindOn` блока нет, только слова, почему.
+ */
+@Composable
+private fun RemindLine(f: Dela.Task, on: Boolean, places: List<String>, onChange: (Dela.Task) -> Unit) {
+    if (!on) {
+        PaperHint("Напоминания в Telegram появятся, когда сервер Дел обновится; сказанное «напомни…» пока ложится в заметки")
+        return
+    }
+    val zone = java.time.ZoneId.systemDefault()
+    val today = LocalDate.now(zone)
+    val at = DelaRemind.local(f.remindAt, zone)
+    var custom by remember(f.id) { mutableStateOf(false) }
+    PaperHint("Напомнить в Telegram")
+    DelaRemind.state(f, today, zone).takeIf { it.isNotBlank() }?.let { PaperHint(it, MaterialTheme.colorScheme.primary) }
+    ChipRow {
+        for (q in DelaRemind.quick(java.time.ZonedDateTime.now(zone))) {
+            PaperChip(q.label, selected = f.remindAt == q.iso, onClick = { onChange(f.copy(remindAt = q.iso, remindPlace = "", remindedAt = "")) })
+        }
+        for (p in places) {
+            val chosen = f.remindAt.isBlank() && Dela.norm(f.remindPlace) == Dela.norm(p)
+            PaperChip("приеду: $p", selected = chosen, onClick = { onChange(f.copy(remindAt = "", remindPlace = p, remindedAt = "")) })
+        }
+        PaperChip("своё время", selected = custom, onClick = { custom = !custom })
+        if (f.remindAt.isNotBlank() || f.remindPlace.isNotBlank()) {
+            PaperChip("убрать", selected = false, onClick = { onChange(f.copy(remindAt = "", remindPlace = "")) })
+        }
+    }
+    if (custom) {
+        val day = at?.toLocalDate()?.toString().orEmpty()
+        val hm = at?.let { String.format(java.util.Locale.ROOT, "%02d:%02d", it.hour, it.minute) }.orEmpty()
+        DateLine("Напомнить в день", day, today) { d ->
+            val date = runCatching { LocalDate.parse(d) }.getOrNull()
+            onChange(
+                if (date == null) f.copy(remindAt = "")
+                else f.copy(remindAt = DelaRemind.at(date, hm.ifBlank { DelaRemind.MORNING }, zone), remindPlace = "", remindedAt = "")
+            )
+        }
+        if (at != null) TimeLine(hm) { t ->
+            onChange(f.copy(remindAt = DelaRemind.at(at.toLocalDate(), t.ifBlank { DelaRemind.MORNING }, zone), remindPlace = "", remindedAt = ""))
+        }
     }
 }
 

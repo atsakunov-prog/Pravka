@@ -193,6 +193,9 @@ class RaznoskaStore(private val context: Context) {
                             want = t.optBoolean("want", false),
                             delaId = t.optString("delaId"),
                             opId = t.optString("opId"),
+                            dueTime = t.optString("dueTime"),
+                            remindAt = t.optString("remindAt"),
+                            remindPlace = t.optString("remindPlace"),
                         )
                     )
                 }
@@ -275,6 +278,9 @@ class RaznoskaStore(private val context: Context) {
                                 if (t.want) put("want", true)
                                 if (t.delaId.isNotBlank()) put("delaId", t.delaId)
                                 if (t.opId.isNotBlank()) put("opId", t.opId)
+                                if (t.dueTime.isNotBlank()) put("dueTime", t.dueTime)
+                                if (t.remindAt.isNotBlank()) put("remindAt", t.remindAt)
+                                if (t.remindPlace.isNotBlank()) put("remindPlace", t.remindPlace)
                             }
                         )
                     }

@@ -2413,6 +2413,9 @@ private fun PromptEditor(
     var warning by remember { mutableStateOf<Int?>(null) }
     var confirmReset by remember { mutableStateOf(false) }
     var savedMark by remember { mutableStateOf(false) }
+    // Правка руками у общего с сервером промпта (06.10.2026): своя копия здесь —
+    // это уже не общий текст, и владелец должен это видеть словами.
+    val own by promptStore.overrideFlow(id).collectAsState(initial = null)
 
     LaunchedEffect(id) {
         text = promptStore.effective(id)
@@ -2437,6 +2440,21 @@ private fun PromptEditor(
             )
         }
         Spacer(Modifier.height(8.dp))
+        if (id == PromptStore.PromptId.TASKS_DELA) {
+            // Правила разбора дел — общие с сервером: файл server/contract/prompts/raznoska.txt
+            // читают и телефон, и веб. Своя правка здесь живёт только на этом телефоне.
+            Text(
+                if (own == null) "Правила — общие с сервером Дел: тем же текстом разбирает веб. " +
+                    "Поменять их для обоих — правкой файла server/contract/prompts/raznoska.txt; " +
+                    "здесь своё у телефона — только словарь и наговор в конце."
+                else "Этот текст правлен на телефоне и больше НЕ общий с сервером: веб разбирает " +
+                    "общим, телефон — твоим. Напоминаний и времени дел в твоём тексте может не быть. " +
+                    "«Вернуть заводской» — снова общий.",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (own == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+            )
+            Spacer(Modifier.height(8.dp))
+        }
 
         OutlinedTextField(
             value = text,

@@ -139,6 +139,11 @@ android {
         buildConfig = true
     }
 
+    // Общие с сервером Дел промпты (server/contract/prompts, 06.10.2026): правила
+    // разбора наговора на дела — один файл на телефон и сервер. В APK он едет
+    // Java-ресурсом, а не копией в Kotlin: вторая копия расходилась бы с первой.
+    sourceSets.getByName("main").resources.srcDir(rootProject.file("server/contract/prompts"))
+
     // Снимки экранов для дизайна (app/src/shots, docs/design): Robolectric
     // рисует настоящие экраны на JVM. Только с -Pshots — обычный прогон
     // тестов не видит ни этих файлов, ни Robolectric (≈360 МБ образов Android

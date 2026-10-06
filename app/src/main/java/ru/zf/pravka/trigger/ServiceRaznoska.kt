@@ -418,7 +418,14 @@ internal fun PravkaAccessibilityService.raznMeta(task: ru.zf.pravka.core.ParsedT
     }
     if (task.labels.isNotEmpty()) meta.add(task.labels.joinToString(" ") { "@" + it })
     if (task.repeat.isNotBlank()) meta.add(task.repeat)
-    else if (task.due.isNotBlank()) meta.add(raznDate(task.due))
+    else if (task.due.isNotBlank()) meta.add(raznDate(task.due) + if (task.dueTime.isNotBlank()) " " + task.dueTime else "")
+    // Напоминание в Telegram — видно сразу в итоге: «записал» должно быть правдой.
+    // Сервер, который напоминаний не знает, получит их строкой в заметках — так и сказано.
+    val zone = java.time.ZoneId.systemDefault()
+    val later = if (app.delaStore.view.value.remindOn) "" else " — в заметке, сервер Дел пока не напоминает"
+    ru.zf.pravka.core.DelaRemind.local(task.remindAt, zone)?.let { at ->
+        meta.add("⏰ " + ru.zf.pravka.core.DelaRemind.whenWords(at, java.time.LocalDate.now(zone)) + later)
+    } ?: run { if (task.remindPlace.isNotBlank()) meta.add("⏰ приеду: " + task.remindPlace + later) }
     if (task.priority != ru.zf.pravka.core.ParsedTask.P4) meta.add(task.priorityLabel)
     if (task.projectName.isBlank()) meta.add("проект не выбран")
     return meta.joinToString(" · ")
