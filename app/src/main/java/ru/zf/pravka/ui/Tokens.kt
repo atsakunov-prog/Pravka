@@ -48,7 +48,7 @@ object Ink {
  * верхней кромки, рамка [rim] и светлее сверху [rimTop].
  */
 @Immutable
-class GlassSpec(
+data class GlassSpec(
     val base: Color,
     /** Цвет налёта — сама кнопка режима. */
     val key: Color = Color.Transparent,

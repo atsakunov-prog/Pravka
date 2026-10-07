@@ -107,6 +107,7 @@ import ru.zf.pravka.ui.WeatherRow
 import ru.zf.pravka.ui.ZGroup
 import ru.zf.pravka.ui.AvatarKey
 import ru.zf.pravka.ui.scrollFade
+import ru.zf.pravka.ui.bottomFade
 import ru.zf.pravka.ui.twoPane
 import java.time.LocalDate
 import java.time.ZoneId
@@ -432,7 +433,7 @@ private fun TodayFolded(
             Spacer(Modifier.height(10.dp))
             LazyColumn(
                 state = list,
-                modifier = Modifier.weight(1f).fillMaxWidth().scrollFade(list),
+                modifier = Modifier.weight(1f).fillMaxWidth().bottomFade().scrollFade(list),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 8.dp, end = 14.dp, bottom = 96.dp),
             ) {
                 if (items.isEmpty()) {
@@ -599,7 +600,7 @@ private fun TodayWide(
                 )
                 LazyColumn(
                     state = list,
-                    modifier = Modifier.weight(1f).fillMaxWidth().scrollFade(list),
+                    modifier = Modifier.weight(1f).fillMaxWidth().bottomFade().scrollFade(list),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 96.dp),
                 ) {
                     items(r.items.size, key = { r.items[it].key }) { i ->

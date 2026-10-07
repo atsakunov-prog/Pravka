@@ -99,7 +99,12 @@ internal fun ZasechkaTasksCard(
             val isNow = t.id in nowIds
             val prevNow = i > 0 && shown[i - 1].id in nowIds
             when {
-                isNow && !prevNow -> PartHead("Сейчас · ${parts.now.size} из ${DelaViews.NOW_MAX}", top = i > 0)
+                isNow && !prevNow -> {
+                    // Сколько займут дела «Сейчас» по их оценкам — та же очередь, что идёт
+                    // после линии «сейчас» на «Сегодня» (Правка 4.0).
+                    val est = parts.now.sumOf { it.estimateMin.coerceAtLeast(0) }
+                    PartHead("Сейчас · ${parts.now.size} из ${DelaViews.NOW_MAX}" + (if (est > 0) " · ${ru.zf.pravka.core.Fmt.dur(est)}" else ""), top = i > 0)
+                }
                 !isNow && prevNow -> PartHead("Потом", top = true)
                 i > 0 -> RowRule()
             }
@@ -133,10 +138,10 @@ private const val COLLAPSED = 3
 @Composable
 private fun PartHead(text: String, top: Boolean) {
     Text(
-        text,
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = if (top) 8.dp else 0.dp, bottom = 2.dp),
+        text.uppercase(),
+        style = ru.zf.pravka.ui.LocalPravkaType.current.overline,
+        color = ru.zf.pravka.ui.LocalMode.current.label,
+        modifier = Modifier.padding(top = if (top) 10.dp else 0.dp, bottom = 4.dp),
     )
 }
 
@@ -156,58 +161,46 @@ private fun TaskStartRow(
     onStop: () -> Unit,
     onComment: () -> Unit,
 ) {
-    val c = MaterialTheme.colorScheme
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val t = ru.zf.pravka.ui.LocalPravkaType.current
     val live = liveMs >= 0L
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onOpen).padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onOpen).padding(vertical = 6.dp),
     ) {
         Column(Modifier.weight(1f)) {
             Text(
                 task.title,
-                style = MaterialTheme.typography.bodyMedium,
+                style = t.bodyL,
                 fontWeight = if (live) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (live) c.primary else c.onSurface,
+                color = ru.zf.pravka.ui.Ink.Text,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             val meta = buildList {
                 add(task.numLabel)
                 if (task.projectName.isNotBlank()) add(task.projectName)
+                if (task.estimateMin > 0) add(ru.zf.pravka.core.Fmt.dur(task.estimateMin))
                 if (live) add("идёт " + ZasechkaTasks.label(liveMs))
                 if (spentMs > 0L) add("в ленте " + ZasechkaTasks.label(spentMs))
             }.joinToString(" · ")
             Text(
                 meta,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (live) c.primary else c.onSurfaceVariant,
+                style = t.meta,
+                color = if (live) mode.value else mode.meta,
+                fontWeight = if (live) FontWeight.SemiBold else FontWeight.Normal,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
         when {
-            starting -> Text("…", style = MaterialTheme.typography.bodyMedium, color = c.primary)
+            starting -> Text("…", style = t.body, color = mode.label)
             live -> {
-                Icon(
-                    Glyphs.Note,
-                    contentDescription = "заметка к делу",
-                    tint = c.primary,
-                    modifier = Modifier.size(28.dp).clip(CircleShape).clickable(onClick = onComment).padding(4.dp),
-                )
-                Icon(
-                    Glyphs.Stop,
-                    contentDescription = "остановить",
-                    tint = c.error,
-                    modifier = Modifier.size(28.dp).clip(CircleShape).clickable(onClick = onStop).padding(4.dp),
-                )
+                ru.zf.pravka.ui.GlyphButton(Glyphs.Note, "заметка к делу", onComment, tint = mode.tint, size = 40.dp)
+                ru.zf.pravka.ui.StopKey(onStop)
             }
-            else -> Icon(
-                Glyphs.Play,
-                contentDescription = "начать в ленте",
-                tint = c.primary,
-                modifier = Modifier.size(28.dp).clip(CircleShape).clickable(onClick = onStart).padding(4.dp),
-            )
+            else -> ru.zf.pravka.ui.GlyphButton(Glyphs.Play, "начать в ленте", onStart, tint = mode.tint, size = 40.dp)
         }
     }
 }

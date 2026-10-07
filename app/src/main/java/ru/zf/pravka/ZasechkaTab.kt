@@ -1,5 +1,15 @@
 package ru.zf.pravka
 
+import ru.zf.pravka.ui.fadingScroll
+
+import ru.zf.pravka.core.Fmt
+
+import androidx.compose.foundation.layout.imePadding
+
+import androidx.compose.foundation.layout.navigationBarsPadding
+
+import androidx.compose.foundation.layout.PaddingValues
+
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -86,6 +96,7 @@ import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.SheetAction
 import ru.zf.pravka.ui.VoiceInput
 import ru.zf.pravka.ui.scrollFade
+import ru.zf.pravka.ui.bottomFade
 import ru.zf.pravka.trigger.onZasechkaTap
 
 // Вкладка «Засечка»: the owner's day as a ribbon of entries, the numbers he
@@ -97,12 +108,16 @@ import ru.zf.pravka.trigger.onZasechkaTap
 // здесь и раскладывается донат дня в «Отчёте». Тут — только заливка под тему.
 internal fun categoryHue(name: String): Float = ru.zf.pravka.core.CategoryRainbow.hue(name)
 
+/**
+ * Цвет категории — Правка 4.0 (DESIGN §4.3): только оттенки оранжевого по
+ * цене часа (группа `ZGroup`): светлее — дороже час, потери краснее. Радуга
+ * категорий (`CategoryRainbow`) осталась порядком итогов, но не краской:
+ * внутри Засечки чужих цветов нет.
+ */
 @Composable
 internal fun categoryColor(name: String): Color {
-    // Тон — ночной: приложение всегда тёмное (версия 3).
-    if (name.isBlank()) return Color(0xFF9A9184)
-    // Softened rainbow (owner: "чуть-чуть помягче") - same hues, less punch.
-    return Color.hsv(categoryHue(name), 0.55f, 0.94f)
+    if (name.isBlank()) return ru.zf.pravka.ui.Ink.TextMeta
+    return ru.zf.pravka.ui.ZGroup.of(name).fill
 }
 
 private fun capFirst(s: String): String = s.replaceFirstChar { it.uppercase() }
@@ -185,18 +200,13 @@ private fun fmtTime(ms: Long): String = timeFormat.format(Date(ms))
 /** Milliseconds -> whole minutes, rounded to nearest (never truncated). */
 private fun msToMin(ms: Long): Long = (ms + 30_000L) / 60_000L
 
-private fun fmtDur(min: Long): String =
-    if (min >= 60) "${min / 60} ч ${min % 60} м" else "$min м"
+private fun fmtDur(min: Long): String = ru.zf.pravka.core.Fmt.dur(min.toInt())
 
 /**
  * Длительность полными словами — для подписи в шапке листа («1 ч 15 мин»):
  * там строка одна и места хватает, а в ленте остаётся короткая «1 ч 15 м».
  */
-private fun fmtDurLong(min: Long): String = when {
-    min < 60 -> "$min мин"
-    min % 60 == 0L -> "${min / 60} ч"
-    else -> "${min / 60} ч ${min % 60} мин"
-}
+private fun fmtDurLong(min: Long): String = ru.zf.pravka.core.Fmt.dur(min.toInt())
 
 /** «10:40–11:55 · 1 ч 15 мин»; у идущего — «10:40–… · 1 ч 15 мин, идёт», у цепочки перед временем Σ. */
 private fun spanLine(start: Long, end: Long, open: Boolean, minutes: Long, net: Boolean = false): String =
@@ -413,127 +423,90 @@ internal fun ZasechkaTab(
         app.appScope.launch { app.zasechkaEngine.closeOpen() }
     }
 
-    // Поля и шаг — общие для всех вкладок (ScreenPad): раньше у Засечки сверху
-    // было 16 вместо 8, а между разделами — свои распорки 10–14.
+    // Правка 4.0 (07.10.2026, DESIGN §12.3, `screens/04`): сверху циферблат
+    // суток и плашка времени, ниже — лента, дела, итоги по категориям и
+    // телефон; строка «сказать» — внизу, со «стоп» и текущим занятием.
+    val bedtimeMin by app.settings.todayBedtimeFlow.collectAsState(initial = ru.zf.pravka.data.Settings.TODAY_BEDTIME_DEFAULT)
+    val day = remember(dayStart) { DayFacts.localDay(dayStart) }
+    val facts = remember(entries, categories, day, now, bedtimeMin) {
+        DayFacts.of(entries, categories, day, now, bedtimeMin)
+    }
+    val wide = ru.zf.pravka.ui.twoPane()
     val listState = rememberLazyListState()
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().scrollFade(listState),
-        state = listState,
-        contentPadding = ScreenPad.Padding,
-        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
-    ) {
-        // ---- quick add: one dense row, voice or typed ----
-        // Версия 3, второй заход (26.09.2026, вечер): пилюля — ПЕРВОЙ строкой
-        // вкладки, над днём («в каждом должно быть наверху вот такая плашка…
-        // в Засечке там написано „чем занят“»). Единая система: наверху каждой
-        // вкладки — то, что сказать режиму.
-        // Общая строка ввода набора (24.09.2026): микрофон · поле · отправить.
-        // Микрофон — тот же тап «З», что на стекле. На время разбора поле не
-        // гасим: в общей строке оно гаснет вместе с микрофоном, а тапнуть его
-        // и сказать следующее, пока модель думает над прошлым, можно было и
-        // раньше. Отправка до конца разбора закрыта, как и была.
-        if (dayOffset == 0) {
-            item {
-                VoiceInput(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    placeholder = if (processing) "Разбираю…" else ru.zf.pravka.core.PillHint.say(ownerName, "чем занят?"),
-                    onSend = submitText,
-                    onMic = {
-                        val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
-                        if (service == null) Feedback.toast(context, context.getString(R.string.toast_no_service))
-                        else service.onZasechkaTap()
-                    },
-                    sendEnabled = !processing && draft.isNotBlank(),
-                    maxLines = 1,
-                    busy = processing,
-                )
-            }
-            // Дела с ▶ — сразу под «чем занят?»: сказать словами или взяться
-            // за дело из списка (05.10.2026). Дел на сервере нет — плашки нет.
-            item(key = "tasks") {
-                ZasechkaTasksCard(
-                    app = app,
-                    entries = entries,
-                    now = now,
-                    onComment = { commenting = it },
-                    onOpen = { openTask = it },
-                )
-            }
+    val openFromDial: (Long) -> Unit = { id ->
+        val unit = dayUnits.firstOrNull { u -> u.fragments.any { it.id == id } || u.interruptions.any { it.id == id } }
+        val head = unit?.fragments?.first()
+        if (head != null) {
+            if (head.source == "gap") gapFor = gapTargetOf(dayUnits, dayUnits.indexOf(unit), head) else sheetFor = head.id
         }
-
-        // Название и значки — в общей шапке (ui/Frame.kt). Здесь сразу день.
-        // ---- date navigation ----
-        item {
-            DayNav(
-                title = dayTitle(dayOffset, dayStart),
-                subtitle = daySubtitle(dayOffset, dayStart),
-                onPrev = { dayOffset += 1 },
-                // Сегодня вперёд некуда — стрелка гаснет.
-                onNext = if (dayOffset > 0) ({ dayOffset = (dayOffset - 1).coerceAtLeast(0) }) else null,
+    }
+    val dial: @Composable () -> Unit = {
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            ru.zf.pravka.ui.Dial(
+                sectors = facts.sectors,
+                nowMin = facts.nowMin,
+                score = Fmt.points(facts.score),
+                size = if (wide) 256.dp else 308.dp,
+                wide = wide,
+                compare = facts.weekAgo?.let { w -> { ru.zf.pravka.ui.DialCompare(facts.score - w, Fmt.dayShort(facts.weekAgoDate)) } },
+                place = if (wide) null else facts.rank?.let { "$it-й из 28 дней" },
+                onSector = openFromDial,
             )
-            Spacer(Modifier.height(6.dp))
-            // The score of the day sits right under its name (owner's layout).
-            val rangeTo = minOf(now, dayEnd)
-            val balance = rangeEntries.sumOf { e ->
-                worthOf(e.category) * e.durationMsIn(rangeStart, rangeTo, now).toDouble() / 3_600_000.0
-            }
-            RainbowScoreBar(kotlin.math.round(balance).toInt(), weekMode = false)
         }
-
-        // ---- the day's history first (owner's layout), newest on top. An
-        // uninterrupted entry is one dense table line; a sliced-up activity is
-        // ONE block: a tall line for the whole span, the net Σ beside it
-        // (owner: "а то кусками") ----
-        // Лента — с заголовком, но БЕЗ плашки (владелец, 15.09, второй заход:
-        // «лента у Засечки — без плашки»): строки лежат прямо на фоне, как
-        // раньше. Дневные записи — обычная колонка: их несколько десятков.
-        // Лента дышит (владелец, 24.09.2026): в строке время, дело и
-        // категория, а стоп · заметка · правка · удаление — в листе по тапу.
-        // На виду остаётся только «стоп» у идущего дела.
-        item {
-            PaperLabel("лента")
-            Column(Modifier.fillMaxWidth()) {
-              dayUnits.forEachIndexed { index, unit ->
+    }
+    val plate: @Composable () -> Unit = {
+        ru.zf.pravka.ui.TimePlate(
+            big = facts.big,
+            sub = facts.sub,
+            right = if (facts.aheadMin > 0) Fmt.durFuture(facts.aheadMin) else null,
+            rightSub = if (facts.aheadMin > 0) "до сна в ${Fmt.hm(facts.bedtime)}" else null,
+            parts = facts.barParts,
+            legend = facts.legend,
+            wide = wide,
+            nav = {
+                DayNav(
+                    title = dayTitle(dayOffset, dayStart),
+                    subtitle = Fmt.dayLong(day),
+                    onPrev = { dayOffset += 1 },
+                    onNext = if (dayOffset > 0) ({ dayOffset = (dayOffset - 1).coerceAtLeast(0) }) else null,
+                )
+            },
+        )
+    }
+    val ribbon: @Composable () -> Unit = {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 0.dp)) {
+            dayUnits.forEachIndexed { index, unit ->
                 val head = unit.fragments.first()
-                // Заполнитель «не размечено» — не запись, чтобы её править:
-                // тап открывает выбор «что это было / к соседу».
                 val isGap = head.source == "gap"
                 val onOpen: () -> Unit = {
                     if (isGap) gapFor = gapTargetOf(dayUnits, index, head) else sheetFor = head.id
                 }
-                if (unit.chain) {
-                    ChainBlock(
-                        unit = unit,
-                        now = now,
-                        worthOf = worthOf,
-                        onStop = if (unit.open) doStop else null,
-                        onClick = onOpen,
-                    )
-                } else {
-                    EntryRow(
-                        entry = head,
-                        now = now,
-                        worthOf = worthOf,
-                        onStop = if (head.open) doStop else null,
-                        onClick = onOpen,
-                    )
-                }
-                // A visible hole in the ribbon is the whole point of the app -
-                // drawn between this unit and the chronologically older one.
-                // Свежая дыра (заполнитель придёт после карантина) — тот же
-                // выбор по тапу, что и у «не размечено».
+                val totalMs = unit.fragments.sumOf { it.durationMs(now) }
+                val time = if (unit.open) "с ${fmtTime(unit.start)}" else "${fmtTime(unit.start)}–${fmtTime(unit.endMs(now))}"
+                ru.zf.pravka.ui.ZasechkaEntryRow(
+                    title = capFirst(head.title.ifBlank { head.raw.take(60) }.ifBlank { head.category.ifBlank { "без названия" } }) +
+                        (if (unit.chain) " · кусками" else ""),
+                    useful = head.useful,
+                    category = head.category,
+                    worth = worthOf(head.category),
+                    time = time,
+                    duration = Fmt.durMs(totalMs),
+                    points = if (unit.open) null else pointsOf(worthOf(head.category), totalMs),
+                    current = unit.open && dayOffset == 0,
+                    client = head.client,
+                    onClick = onOpen,
+                    divider = index > 0,
+                )
+                // Свежая дыра — тонкой строкой между записями: тап — «что это было».
                 if (index < dayUnits.size - 1) {
                     val older = dayUnits[index + 1]
                     if (!older.open) {
                         val gapMin = (unit.start - older.endMs(now)) / 60_000L
                         if (gapMin >= 5) {
                             Text(
-                                "···  ${fmtDur(gapMin)} без записи",
-                                style = MaterialTheme.typography.bodySmall,
-                                // Deliberately faint: the holes must not
-                                // shout louder than the entries.
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                                "···  ${Fmt.dur(gapMin.toInt())} без записи",
+                                style = ru.zf.pravka.ui.LocalPravkaType.current.meta,
+                                color = ru.zf.pravka.ui.Ink.TextNote,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
@@ -545,154 +518,142 @@ internal fun ZasechkaTab(
                                             next = unit.fragments.first().takeIf { it.source != "gap" },
                                         )
                                     }
-                                    .padding(start = 56.dp, top = 1.dp, bottom = 1.dp),
+                                    .padding(start = 13.dp, top = 4.dp, bottom = 4.dp),
                             )
                         }
                     }
                 }
             }
-              if (rangeEntries.isEmpty()) {
-                    Text(
-                        "Записей за этот день нет.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 8.dp),
-                    )
-              }
+            if (rangeEntries.isEmpty()) {
+                ru.zf.pravka.ui.EmptyState("Записей за этот день нет", icon = Glyphs.Calendar)
             }
         }
-
-        // ---- totals: EVERY category, laid out in rainbow order (red work at
-        // the top, violet leisure at the bottom) - the owner reads the shape
-        // of the day at a glance and aims for the inverted triangle: long red
-        // bars up top, short violet ones below. Zero rows stay visible but dim.
-        item {
-          PaperCard(
-              label = "итоги",
-              // Как читать плашку — за «i»: на виду сами числа (24.09.2026).
-              info = "Баланс дня — сумма очков: час дела × ценность часа его категории " +
-                  "(правится в настройках Засечки). Плюс и минус — отдельно: ноль на " +
-                  "полоске чаще всего честная ничья, час потерь съедает час работы. " +
-                  "Ниже — все категории, кроме сна, в радужном порядке: работа сверху, " +
-                  "потери внизу, цель — перевёрнутый треугольник. Доля — от времени " +
-                  "бодрствования, справа — очки категории за день.",
-          ) {
-            // Summed in MILLISECONDS and rounded once: adding up per-entry
-            // whole minutes is how the day used to come out short of the clock.
-            val rangeTo = minOf(now, dayEnd)
-            val mainEntries = rangeEntries
-            val msByCat = HashMap<String, Long>()
-            for (e in mainEntries) {
-                val k = e.category.trim().lowercase()
-                msByCat[k] = (msByCat[k] ?: 0L) + e.durationMsIn(rangeStart, rangeTo, now)
-            }
-            val minutesByCat = msByCat.mapValues { msToMin(it.value) }
-            // Сон в итогах не строка. Владелец (08.09): «там обычно сон на
-            // 7 часов и всё остальное очень коротко — уберём сон, будем
-            // считать чистое время и проценты от бодрствования». Строки —
-            // только бодрствование, доля каждой — от него же
-            // (core/WakingShare.kt); сон остаётся числом в заголовке.
-            val names = (categoryNames + mainEntries.map { it.category.trim() }.filter { it.isNotBlank() })
-                .distinctBy { it.lowercase() }
-                .filter { !WakingShare.isSleep(it) }
-                .sortedBy { categoryHue(it) }
-            val rows = names.map { it to (minutesByCat[it.lowercase()] ?: 0L) } +
-                listOfNotNull(minutesByCat[""]?.takeIf { it > 0 }?.let { "" to it })
-            val awakeMin = WakingShare.awakeMinutes(minutesByCat)
-            // Из чего сложился балл: плюс и минус по отдельности, одной
-            // строкой по центру между лентой и категориями (владелец, 15.09:
-            // «„за день 4 ч 5 мин без сна, баланс +11“ загрязняет — просто
-            // „баланс +11 = +12 − 2“, нормально, посередине»). Ноль на полоске —
-            // чаще всего честная ничья: час потерь съедает час работы.
-            var plus = 0.0
-            var minus = 0.0
-            for (e in mainEntries) {
-                val v = worthOf(e.category) * e.durationMsIn(rangeStart, rangeTo, now) / 3_600_000.0
-                if (v >= 0) plus += v else minus += v
-            }
-            val net = kotlin.math.round(plus + minus).toInt()
-            Text(
-                "Баланс ${if (net >= 0) "+$net" else "$net"} = " +
-                    "+${kotlin.math.round(plus).toInt()} − ${kotlin.math.round(-minus).toInt()}",
-                style = MaterialTheme.typography.titleMedium,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-            )
-            Spacer(Modifier.height(6.dp))
-            val max = rows.maxOfOrNull { it.second } ?: 0L
-            for ((category, minutes) in rows) {
-                val rowAlpha = if (minutes > 0) 1f else 0.4f
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(vertical = 2.dp),
-                ) {
-                    Text(
-                        category.ifBlank { "без категории" },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = categoryColor(category).copy(alpha = rowAlpha),
-                        fontWeight = if (minutes > 0) FontWeight.SemiBold else FontWeight.Normal,
-                        modifier = Modifier.width(130.dp),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .height(10.dp)
-                            .background(
-                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = rowAlpha * 0.9f),
-                                RoundedCornerShape(5.dp),
-                            ),
-                    ) {
-                        if (minutes > 0 && max > 0) {
-                            val fraction = minutes.toFloat() / max
-                            Box(
-                                Modifier
-                                    .fillMaxWidth(fraction.coerceIn(0.02f, 1f))
-                                    .height(10.dp)
-                                    .background(categoryColor(category), RoundedCornerShape(5.dp)),
-                            )
-                        }
-                    }
-                    Text(
-                        if (minutes > 0) fmtDur(minutes) else "—",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = rowAlpha),
-                        modifier = Modifier.padding(start = 8.dp).width(64.dp),
-                    )
-                    // Доля от бодрствования — между временем и очками, где
-                    // владелец её и попросил («справа между временем и
-                    // стоимостью»).
-                    Text(
-                        WakingShare.label(minutes, awakeMin),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = rowAlpha),
-                        textAlign = TextAlign.End,
-                        modifier = Modifier.width(40.dp),
-                    )
-                    // Сколько эта категория дала дню - тут и видно, кто съел
-                    // балл: строка «Потери −19» объясняет ноль на полоске.
-                    PointsChip(
-                        pointsOf(worthOf(category), msByCat[category.trim().lowercase()] ?: 0L),
-                        bold = true,
-                    )
-                }
-            }
-            if (rows.isEmpty()) {
+    }
+    val totals: @Composable () -> Unit = {
+        val plus = facts.categories.filter { it.points > 0 }.sumOf { it.points }
+        val minus = facts.categories.filter { it.points < 0 }.sumOf { it.points }
+        PaperCard(
+            label = "итоги",
+            trailing = {
                 Text(
-                    "Пока пусто.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    "${Fmt.points(plus)} ${Fmt.MINUS} ${-minus}",
+                    style = ru.zf.pravka.ui.LocalPravkaType.current.label,
+                    color = ru.zf.pravka.ui.LocalMode.current.meta,
+                    modifier = Modifier.padding(end = 6.dp),
+                )
+            },
+            info = "Балл дня — сумма очков: час дела × ценность часа его категории " +
+                "(правится в настройках Засечки). Плюс и минус в заголовке — отдельно: " +
+                "ноль чаще всего честная ничья, час потерь съедает час работы. Строка — " +
+                "категория: время, доля дня и очки; сон — только его часть внутри суток.",
+        ) {
+            val total = facts.categories.sumOf { it.minutes }.coerceAtLeast(1)
+            val max = facts.categories.maxOfOrNull { it.minutes }?.coerceAtLeast(1) ?: 1
+            facts.categories.forEach { c ->
+                ru.zf.pravka.ui.CategoryRow(
+                    name = c.name,
+                    worth = c.worth,
+                    minutes = c.minutes,
+                    share = "${(c.minutes * 100f / total).toInt()} %",
+                    points = c.points,
+                    fraction = c.minutes / max.toFloat(),
                 )
             }
-          }
+            if (facts.categories.isEmpty()) ru.zf.pravka.ui.EmptyState("Пока пусто")
+            if (facts.emptyCategories > 0) {
+                Text(
+                    "ещё ${facts.emptyCategories} без записей",
+                    style = ru.zf.pravka.ui.LocalPravkaType.current.meta,
+                    color = ru.zf.pravka.ui.LocalMode.current.meta,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
         }
+    }
+    val tasks: @Composable () -> Unit = {
+        ZasechkaTasksCard(
+            app = app,
+            entries = entries,
+            now = now,
+            onComment = { commenting = it },
+            onOpen = { openTask = it },
+        )
+    }
 
-        // ---- the phone layer: separate from the ribbon by design ----
-        item {
-            PhoneSection(app, dayStart, now)
+    Box(Modifier.fillMaxSize()) {
+        if (wide) {
+            // Разворот (§12.3): слева круг, плашка времени и итоги; справа лента.
+            Row(Modifier.fillMaxSize()) {
+                Column(
+                    Modifier.width(386.dp).fillMaxHeight().fadingScroll().padding(start = 20.dp, bottom = 32.dp),
+                    verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+                ) {
+                    dial()
+                    plate()
+                    totals()
+                    PhoneSection(app, dayStart, now)
+                }
+                Spacer(Modifier.width(24.dp))
+                LazyColumn(
+                    modifier = Modifier.weight(1f).fillMaxHeight().then(if (dayOffset == 0) Modifier.bottomFade() else Modifier).scrollFade(listState),
+                    state = listState,
+                    contentPadding = PaddingValues(end = 16.dp, bottom = 110.dp),
+                    verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+                ) {
+                    if (dayOffset == 0) item(key = "tasks") { tasks() }
+                    item(key = "ribbon") { ribbon() }
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().then(if (dayOffset == 0) Modifier.bottomFade() else Modifier).scrollFade(listState),
+                state = listState,
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 110.dp),
+                verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+            ) {
+                item(key = "dial") { dial() }
+                item(key = "plate") { plate() }
+                item(key = "ribbon") { ribbon() }
+                if (dayOffset == 0) item(key = "tasks") { tasks() }
+                item(key = "totals") { totals() }
+                item(key = "phone") { PhoneSection(app, dayStart, now) }
+            }
         }
-        // Настройки режима — за шестерёнкой в шапке вкладки.
+        // Строка «сказать» Засечки (DESIGN §11.4): над подсказкой — текущее
+        // занятие, слева «стоп», справа голос — тот же тап, что «З» на стекле.
+        if (dayOffset == 0) {
+            val open = entries.lastOrNull { it.open && it.source != "gap" }
+            ru.zf.pravka.ui.SayBar(
+                value = draft,
+                onValueChange = { draft = it },
+                placeholder = "Чем занят дальше?",
+                onSend = submitText,
+                onMic = {
+                    val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                    if (service == null) Feedback.toast(context, context.getString(R.string.toast_no_service))
+                    else service.onZasechkaTap()
+                },
+                sendEnabled = !processing && draft.isNotBlank(),
+                maxLines = 1,
+                busy = processing,
+                busyLabel = "Разбираю",
+                above = open?.let { e ->
+                    {
+                        ru.zf.pravka.ui.SayAbove(
+                            "${capFirst(e.title.ifBlank { e.category })} · с ${fmtTime(e.start)}",
+                            Fmt.durMs(now - e.start),
+                        )
+                    }
+                },
+                leading = open?.let { { ru.zf.pravka.ui.StopKey(doStop, "Остановить: ${it.title}") } },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .then(if (wide) Modifier.padding(start = 410.dp) else Modifier)
+                    .navigationBarsPadding()
+                    .imePadding()
+                    .padding(start = 12.dp, end = 12.dp, bottom = 18.dp),
+            )
+        }
     }
 
     // Клиент — из справочника Дел, свободный текст — запасом (docs/dela-server.md).
@@ -2773,7 +2734,7 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, now: Long) {
         val trackedMs = agg.apps.entries.filter { it.key in tracked }.sumOf { it.value }
         Text(
             buildString {
-                append("Экран ").append(fmtDur(agg.screenMs / 60_000))
+                append("экран ").append(fmtDur(agg.screenMs / 60_000))
                 if (trackedMs > 0) append(" · считается ").append(fmtDur(trackedMs / 60_000))
                 if (agg.calls > 0) {
                     append(" · звонки ").append(fmtDur(agg.callsMs / 60_000)).append(" · ").append(agg.calls)
@@ -2826,7 +2787,7 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, now: Long) {
                     Modifier
                         .weight(1f)
                         .height(10.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(5.dp)),
+                        .background(ru.zf.pravka.ui.LocalMode.current.tint.copy(alpha = 0.12f), RoundedCornerShape(5.dp)),
                 ) {
                     val fraction = if (maxMs > 0) ms.toFloat() / maxMs else 0f
                     Box(
@@ -2834,9 +2795,10 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, now: Long) {
                             .fillMaxWidth(fraction.coerceIn(0.02f, 1f))
                             .height(10.dp)
                             .background(
-                                // Считаемое — акцентом, остальное — приглушённой охрой.
-                                if (on) MaterialTheme.colorScheme.primary
-                                else Color(0xFFD97706).copy(alpha = 0.45f),
+                                // Правка 4.0: полосы — в шкале Засечки. Считаемое —
+                                // светлой ступенью, остальное — тёмной.
+                                if (on) ru.zf.pravka.ui.Modes.Zasechka.ramp[1]
+                                else ru.zf.pravka.ui.Modes.Zasechka.ramp[3].copy(alpha = 0.75f),
                                 RoundedCornerShape(5.dp),
                             ),
                     )

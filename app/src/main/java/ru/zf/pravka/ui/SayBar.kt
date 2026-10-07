@@ -102,7 +102,9 @@ fun SayBar(
             Modifier
                 .fillMaxWidth()
                 .heightIn(min = if (tall) 64.dp else 62.dp)
-                .glass(shape, mode.glass)
+                // Строка стоит поверх ленты — стекло плотнее плашек (`mockups`:
+                // .84–.86 у «Сегодня» и режимов, .86 и тёплый налёт у Засечки).
+                .glass(shape, mode.glass.copy(inkAlpha = maxOf(mode.glass.inkAlpha, 0.9f), keyTop = if (tall) 0.22f else mode.glass.keyTop, keyBottom = if (tall) 0.08f else mode.glass.keyBottom, key = if (tall) mode.key else mode.glass.key))
                 .then(
                     // В Засечке строка теплее и плотнее (`mockups/04`): налёт
                     // янтаря сверху и рамка ярче — она и есть пульт дня.

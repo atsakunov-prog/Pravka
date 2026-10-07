@@ -221,3 +221,27 @@ private fun Modifier.scrollFade(scrolled: () -> Float): Modifier = this
             blendMode = BlendMode.DstIn,
         )
     }
+
+/**
+ * Низ ленты тает под строкой «сказать» (DESIGN §10, маски макетов: лента
+ * сходит в прозрачность над строкой): последние [fade] dp перед зоной
+ * строки [bar] — в прозрачность, сама зона — пустая. Буфер слоя — только
+ * ради маски `DstIn`.
+ */
+fun Modifier.bottomFade(bar: androidx.compose.ui.unit.Dp = 80.dp, fade: androidx.compose.ui.unit.Dp = 36.dp): Modifier = this
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val b = bar.toPx()
+        val f = fade.toPx()
+        val h = size.height
+        drawRect(
+            Brush.verticalGradient(
+                0f to Color.Black,
+                ((h - b - f) / h).coerceIn(0f, 1f) to Color.Black,
+                ((h - b) / h).coerceIn(0f, 1f) to Color.Transparent,
+                1f to Color.Transparent,
+            ),
+            blendMode = BlendMode.DstIn,
+        )
+    }

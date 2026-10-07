@@ -430,8 +430,8 @@ fun CategoryRow(name: String, worth: Int, minutes: Int, share: String, points: I
     val t = LocalPravkaType.current
     val g = ZGroup.of(name, worth)
     Row(Modifier.fillMaxWidth().height(36.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(name, style = t.body, color = Ink.Text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        Box(Modifier.width(56.dp).height(6.dp).padding(start = 8.dp)) {
+        FitText(name, style = t.body, color = Ink.Text, modifier = Modifier.weight(1f), minSize = 12f)
+        Box(Modifier.width(48.dp).height(6.dp).padding(start = 8.dp)) {
             Box(
                 Modifier
                     .fillMaxWidth(fraction.coerceIn(0.04f, 1f))
@@ -440,7 +440,7 @@ fun CategoryRow(name: String, worth: Int, minutes: Int, share: String, points: I
                     .drawBehind { if (g == ZGroup.LOSS) hatch(g.fill, 0.30f) else drawRect(g.fill) },
             )
         }
-        Text(Fmt.dur(minutes), style = t.label.copy(fontWeight = FontWeight.SemiBold), color = Ink.LegendValue, textAlign = TextAlign.End, maxLines = 1, modifier = Modifier.width(58.dp))
+        Text(Fmt.dur(minutes), style = t.label.copy(fontWeight = FontWeight.SemiBold), color = Ink.LegendValue, textAlign = TextAlign.End, maxLines = 1, modifier = Modifier.width(56.dp))
         Text(share, style = t.meta, color = Ink.TextMeta, textAlign = TextAlign.End, maxLines = 1, modifier = Modifier.width(36.dp))
         Text(
             if (points == 0) "" else Fmt.points(points),

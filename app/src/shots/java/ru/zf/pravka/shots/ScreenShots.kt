@@ -195,6 +195,24 @@ class ScreenShots {
 
         if (want("overlay")) overlays()
 
+        // ---- режимы по одному (Правка 4.0): сложенный, целиком, разворот
+        for ((g, tab) in listOf(
+            "zasechka" to MainActivity.TAB_ZASECHKA,
+            "dela" to MainActivity.TAB_TODOIST,
+            "sport" to MainActivity.TAB_SPORT,
+            "food" to MainActivity.TAB_FOOD,
+            "money" to MainActivity.TAB_MONEY,
+            "pravka" to MainActivity.TAB_PRAVKA,
+        )) {
+            if (!want(g)) continue
+            var m = launch(tab); shot(m, "$g-1-folded"); close(m)
+            RuntimeEnvironment.setQualifiers(OUTER_TALL)
+            m = launch(tab); shot(m, "$g-2-tall"); close(m)
+            RuntimeEnvironment.setQualifiers(INNER)
+            m = launch(tab); shot(m, "$g-3-wide"); close(m)
+            RuntimeEnvironment.setQualifiers(OUTER)
+        }
+
         // ---- «Сегодня» (Правка 4.0): сложенный, целиком, разворот
         if (want("today")) {
             var t = launch(null); shot(t, "today-01-folded")
