@@ -312,7 +312,12 @@ private fun buildDayUnits(all: List<ZasechkaStore.Entry>): List<DayUnit> {
 }
 
 @Composable
-internal fun ZasechkaTab(app: PravkaApp) {
+internal fun ZasechkaTab(
+    app: PravkaApp,
+    /** Запись, которую открыть на правку сразу (лист записи «Сегодня» → «Поправить»). */
+    editEntry: Long? = null,
+    onEditHandled: () -> Unit = {},
+) {
     val context = LocalContext.current
     val store = app.zasechkaStore
     val entries by store.entriesFlow.collectAsState()
@@ -327,6 +332,12 @@ internal fun ZasechkaTab(app: PravkaApp) {
     // использую»); отменить последнюю операцию можно из меню долгого нажатия «З».
     var dayOffset by remember { mutableStateOf(0) }
     var editing by remember { mutableStateOf<ZasechkaStore.Entry?>(null) }
+    LaunchedEffect(editEntry, entries) {
+        val id = editEntry ?: return@LaunchedEffect
+        val e = entries.firstOrNull { it.id == id } ?: store.entryById(id) ?: return@LaunchedEffect
+        editing = e
+        onEditHandled()
+    }
     // Chain edit: the whole sliced-up activity at once, all fragments.
     var editingChain by remember { mutableStateOf<List<ZasechkaStore.Entry>?>(null) }
     // Баббл 💬: комментарий к делу отдельным окном (у цепочки — к голове).

@@ -182,7 +182,12 @@ private class NewParts(
 }
 
 @Composable
-fun DelaTab(app: PravkaApp) {
+fun DelaTab(
+    app: PravkaApp,
+    /** Дело, которое открыть карточкой сразу (тап по делу на «Сегодня»). */
+    openTaskId: String? = null,
+    onOpenHandled: () -> Unit = {},
+) {
     val snap by app.delaStore.view.collectAsState()
     val queued by app.delaStore.queued.collectAsState()
     val notices by app.delaStore.noticesFlow.collectAsState()
@@ -219,6 +224,12 @@ fun DelaTab(app: PravkaApp) {
     // Фильтр дел проекта по сделке — свой у каждой страницы: сменилась страница — сброс.
     var dealFilter by remember(page) { mutableStateOf("") }
     var openTask by remember { mutableStateOf<Dela.Task?>(null) }
+    LaunchedEffect(openTaskId, snap) {
+        val id = openTaskId ?: return@LaunchedEffect
+        val t = snap.tasks[id] ?: return@LaunchedEffect
+        openTask = t
+        onOpenHandled()
+    }
     var newTask by remember { mutableStateOf(false) }
     var editingSuggestion by remember { mutableStateOf<Dela.Suggestion?>(null) }
     var rejecting by remember { mutableStateOf<Dela.Suggestion?>(null) }

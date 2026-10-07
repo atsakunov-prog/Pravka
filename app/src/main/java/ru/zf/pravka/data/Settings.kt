@@ -46,6 +46,19 @@ class Settings(private val context: Context) {
 
         private val KEY_API_KEY = stringPreferencesKey("anthropic_api_key")
         private val KEY_FAB_SIZE = intPreferencesKey("fab_size_dp")
+        // Правка 4.0 (07.10.2026): «Сегодня» — время сна, погода, календари,
+        // отметки в ленте и месячный бюджет для полосы на плашке Денег.
+        private val KEY_TODAY_BEDTIME = intPreferencesKey("today_bedtime_min")
+        private val KEY_WEATHER_CITY = stringPreferencesKey("weather_city")
+        private val KEY_TODAY_CALENDARS = stringPreferencesKey("today_calendars_json")
+        private val KEY_TODAY_MARKS = stringPreferencesKey("today_marks")
+        private val KEY_MONEY_MONTH_BUDGET = longPreferencesKey("money_month_budget_rub")
+        /** Время сна с завода — 23:30 (DESIGN §11.5 SleepRow). */
+        const val TODAY_BEDTIME_DEFAULT = 23 * 60 + 30
+        /** Город погоды с завода — пустой ряд никому не нужен, а живёт владелец в Москве. */
+        const val WEATHER_CITY_DEFAULT = "Москва"
+        /** Отметки, которые с завода прикрепляются к ленте «Сегодня». */
+        const val TODAY_MARKS_DEFAULT = "sport,food,money,dela"
         private val KEY_FAB_ALPHA = floatPreferencesKey("fab_alpha")
         private val KEY_TICKER_WIDTH = intPreferencesKey("ticker_width_dp")
         /** Прожил одну сборку (26.09): «снизу» да/нет. Читается только ради перехода на [KEY_TICKER_PLACE]. */
@@ -1323,6 +1336,55 @@ class Settings(private val context: Context) {
     }
 
     /** null — не выбирали (только основной календарь); пустой набор — ничего не смотреть. */
+    // ---- «Сегодня» (Правка 4.0) ----
+
+    /** Время сна, минуты от полуночи: отсюда «до сна 4 ч 40 м» и «дела не влезают на N м». */
+    val todayBedtimeFlow = context.dataStore.data.map { it[KEY_TODAY_BEDTIME] ?: TODAY_BEDTIME_DEFAULT }
+    suspend fun setTodayBedtime(min: Int) {
+        context.dataStore.edit { it[KEY_TODAY_BEDTIME] = min.coerceIn(0, 1439) }
+    }
+
+    /** Город погоды на «Сегодня»; пусто — ряд погоды не показывается. */
+    val weatherCityFlow = context.dataStore.data.map { it[KEY_WEATHER_CITY] ?: WEATHER_CITY_DEFAULT }
+    suspend fun setWeatherCity(city: String) {
+        context.dataStore.edit { it[KEY_WEATHER_CITY] = city.trim() }
+    }
+
+    /**
+     * Календари в ленте «Сегодня»: null — те же, что выбраны для встреч
+     * автопилота ([autoCalendarsFlow]); пустой набор — ни одного.
+     */
+    val todayCalendarsFlow: kotlinx.coroutines.flow.Flow<Set<String>?> = context.dataStore.data.map { prefs ->
+        val raw = prefs[KEY_TODAY_CALENDARS] ?: return@map null
+        runCatching {
+            val a = org.json.JSONArray(raw)
+            (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() }.toSet()
+        }.getOrDefault(emptySet())
+    }
+    suspend fun setTodayCalendars(names: Set<String>?) {
+        context.dataStore.edit {
+            if (names == null) it.remove(KEY_TODAY_CALENDARS)
+            else it[KEY_TODAY_CALENDARS] = org.json.JSONArray(names.toList()).toString()
+        }
+    }
+
+    /** Какие отметки прикреплять к ленте «Сегодня»: sport, food, money, dela. */
+    val todayMarksFlow = context.dataStore.data.map { prefs ->
+        (prefs[KEY_TODAY_MARKS] ?: TODAY_MARKS_DEFAULT).split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
+    }
+    suspend fun setTodayMarks(marks: Set<String>) {
+        context.dataStore.edit { it[KEY_TODAY_MARKS] = marks.joinToString(",") }
+    }
+
+    /**
+     * Месячный бюджет трат, рубли; 0 — не задан, и полоса на плашке Денег не
+     * рисуется (лимит дня = бюджет / дней в месяце, DESIGN §8).
+     */
+    val moneyMonthBudgetFlow = context.dataStore.data.map { it[KEY_MONEY_MONTH_BUDGET] ?: 0L }
+    suspend fun setMoneyMonthBudget(rub: Long) {
+        context.dataStore.edit { it[KEY_MONEY_MONTH_BUDGET] = rub.coerceAtLeast(0L) }
+    }
+
     val autoCalendarsFlow: kotlinx.coroutines.flow.Flow<Set<String>?> = context.dataStore.data.map { prefs ->
         val raw = prefs[KEY_AUTO_CALENDARS]
         if (raw == null) null

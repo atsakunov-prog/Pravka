@@ -185,12 +185,17 @@ fun DayHeader(
     avatar: String,
     onAvatar: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Тап по дню недели — навигатор дня (прошлый и будущий день). */
+    onWeekday: (() -> Unit)? = null,
 ) {
     val t = LocalPravkaType.current
     Column(modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 2.dp)) {
         Text(overline, style = t.label.copy(lineHeight = 16.sp), color = Ink.TextSecondary, maxLines = 1)
         Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            FitText(weekday, style = t.titleL, color = Ink.TextStrong, modifier = Modifier.weight(1f), minSize = 22f)
+            FitText(
+                weekday, style = t.titleL, color = Ink.TextStrong, minSize = 22f,
+                modifier = Modifier.weight(1f).then(if (onWeekday != null) Modifier.clickable(onClickLabel = "другой день", onClick = onWeekday) else Modifier),
+            )
             if (score != null) ZPill(score, onScore)
             HeaderIcon(Glyphs.Stats, "Статистика дня", onStats, tint = Ink.PlanText)
             AvatarKey(avatar, onAvatar)

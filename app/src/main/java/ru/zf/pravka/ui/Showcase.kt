@@ -202,41 +202,6 @@ private fun ShowTimeline() {
     }
 }
 
-/** Строки хроники по `DayItem` — общий рисовальщик для Витрины и «Сегодня». */
-@Composable
-fun TimelineItems(
-    items: List<DayItem>,
-    now: Long,
-    onEntry: (DayItem.Entry) -> Unit = {},
-    onMark: (DayItem.Mark) -> Unit = {},
-    onPending: (DayItem.Pending, Boolean) -> Unit = { _, _ -> },
-    onTask: (DayItem.Task, TaskAct) -> Unit = { _, _ -> },
-    onPlanned: (DayItem.Planned) -> Unit = {},
-) {
-    var line = Ink.TimePast
-    items.forEachIndexed { i, it ->
-        when (it) {
-            is DayItem.Entry -> {
-                line = ZGroup.of(it.category, it.worth).fill
-                if (it.current) CurrentRow(it, now, { onEntry(it) })
-                else EntryRow(it, lineDown = i < items.lastIndex && items[i + 1] !is DayItem.Now, onClick = { onEntry(it) })
-            }
-            is DayItem.Mark -> MarkRow(it.source, it.text, line) { onMark(it) }
-            is DayItem.Pending -> PendingRow(it.source, it.text, line, { onPending(it, false) }, { onPending(it, true) })
-            is DayItem.Now -> NowLine(Fmt.hm(it.at))
-            is DayItem.Free -> FreeRow(it.minutes)
-            is DayItem.Planned -> PlannedRow(it.start, it.end, it.title, it.workout, it.note, it.minutes, if (it.workout) ({ onPlanned(it) }) else null)
-            is DayItem.PlannedLoose -> PlannedRow(null, null, it.title, true, it.note, it.minutes) { }
-            is DayItem.TaskGroup -> TaskGroupRow(it.count, it.minutes)
-            is DayItem.Task -> TaskTimelineRow(it, { onTask(it, TaskAct.DONE) }, { onTask(it, TaskAct.OPEN) }, { onTask(it, TaskAct.MENU) })
-            is DayItem.Sleep -> SleepRow(it.at, it.overflowMin)
-        }
-    }
-}
-
-/** Что сделали с делом в хронике: тап по кольцу, по строке, долгое нажатие. */
-enum class TaskAct { DONE, OPEN, MENU }
-
 @Composable
 private fun ShowZasechka() {
     SectionHeader("Засечка", trailing = "циферблат · плашка времени · лента · итоги")

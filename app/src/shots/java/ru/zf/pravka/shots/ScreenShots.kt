@@ -195,6 +195,17 @@ class ScreenShots {
 
         if (want("overlay")) overlays()
 
+        // ---- «Сегодня» (Правка 4.0): сложенный, целиком, разворот
+        if (want("today")) {
+            var t = launch(null); shot(t, "today-01-folded")
+            close(t)
+            RuntimeEnvironment.setQualifiers(OUTER_TALL)
+            t = launch(null); shot(t, "today-03-tall"); close(t)
+            RuntimeEnvironment.setQualifiers(INNER)
+            t = launch(null); shot(t, "today-05-wide"); close(t)
+            RuntimeEnvironment.setQualifiers(OUTER)
+        }
+
         // ---- сложенный: внешний экран
         var c: ActivityController<MainActivity>
         if (want("outer")) {

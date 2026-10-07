@@ -856,6 +856,9 @@ class PravkaApp : Application() {
     // The phone layer: app time, pickups, distractions, calls - counted per
     // day; only сон crosses into the ribbon via the sweeper.
     val phoneStore by lazy { ru.zf.pravka.data.PhoneStore(this) }
+
+    /** Погода для «Сегодня» (Правка 4.0): Open-Meteo, кэш час. */
+    val weatherStore by lazy { ru.zf.pravka.data.WeatherStore(this) }
     val phoneSweeper by lazy {
         ru.zf.pravka.data.PhoneSweeper(
             this, phoneStore, zasechkaStore, settings, eventLog, zasechkaSync, appScope,

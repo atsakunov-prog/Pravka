@@ -1,5 +1,7 @@
 package ru.zf.pravka
 
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.navigationBarsPadding
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -267,7 +269,7 @@ class MainActivity : ComponentActivity() {
         val foodAction = intent?.getStringExtra(EXTRA_FOOD_ACTION).orEmpty()
         // Без явной просьбы открываем таймшит: это экран, который он смотрит
         // каждый день, всё остальное — служебное.
-        val initialTab = tabOf(intent) ?: Tab.ZASECHKA
+        val initialTab = tabOf(intent) ?: Tab.TODAY
         groupOf(intent)?.let { groupRequest.value = it }
         // Почерк значков — до первого кадра (версия 3): иначе на холодном
         // старте первый кадр рисовался бы заводским почерком и значки
@@ -350,6 +352,8 @@ class MainActivity : ComponentActivity() {
 }
 
 internal enum class Tab(val titleRes: Int) {
+    /** «Сегодня» — главный экран Правки 4.0 (07.10.2026). */
+    TODAY(R.string.tab_today),
     PRAVKA(R.string.tab_pravka),
     ZASECHKA(R.string.tab_zasechka),
     TODOIST(R.string.tab_todoist),
@@ -391,20 +395,6 @@ private val SERVICE_TABS = listOf(
     Tab.LEARNING,
     Tab.LOGS,
     Tab.SETTINGS,
-)
-
-/**
- * Нижние кнопки и их значки. Геттер, а не готовый список: значок берётся в
- * текущем почерке (`Glyphs.gemini`), и переключение в настройках доходит сюда.
- */
-private val BOTTOM_TABS: List<Pair<Tab, androidx.compose.ui.graphics.vector.ImageVector>> get() = listOf(
-    Tab.PRAVKA to Glyphs.Pravka,
-    Tab.ZASECHKA to Glyphs.Zasechka,
-    Tab.TODOIST to Glyphs.Delo,
-    Tab.SPORT to Glyphs.Sport,
-    Tab.FOOD to Glyphs.Food,
-    Tab.MONEY to Glyphs.Money,
-    Tab.MORE to Glyphs.More,
 )
 
 /** Режим профиля, которому принадлежит вкладка; null — вкладка есть всегда. */
@@ -462,13 +452,13 @@ private fun serviceGlyph(tab: Tab): androidx.compose.ui.graphics.vector.ImageVec
 }
 
 /**
- * «Ещё» — две полки (24.09.2026): что учит и чистит саму Правку (разборы,
- * словарь, промпты, обучение) и служебное (логи, настройки). Раньше — шесть
- * голых карточек подряд с абзацем под каждой; значок и строка в одну линию
- * читаются быстрее, чем пояснение.
+ * «Ещё» (аватар «С», DESIGN §12.10): Правка — вход в режим и Общая
+ * статистика, полки «Правка изнутри» и «Служебное», профиль «кто
+ * пользуется». Цвет — Правки.
  */
 @Composable
-private fun MoreList(onOpen: (Tab) -> Unit) {
+private fun MoreList(app: PravkaApp, onOpen: (Tab) -> Unit, onMode: (Tab) -> Unit, onProfile: () -> Unit) {
+    val profile by app.profileStore.flow.collectAsState()
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -476,6 +466,21 @@ private fun MoreList(onOpen: (Tab) -> Unit) {
             .padding(ScreenPad.Padding),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
+        ru.zf.pravka.ui.PaperCard {
+            PaperRow(
+                title = stringResource(R.string.tab_pravka),
+                hint = "чистка текста, расшифровки",
+                icon = Glyphs.Pravka,
+                onClick = { onMode(Tab.PRAVKA) },
+            )
+            RowRule()
+            PaperRow(
+                title = stringResource(R.string.tab_report),
+                hint = serviceHint(Tab.REPORT),
+                icon = Glyphs.Stats,
+                onClick = { onOpen(Tab.REPORT) },
+            )
+        }
         for ((label, items) in MORE_SHELVES) {
             ru.zf.pravka.ui.PaperCard(label = label) {
                 items.forEachIndexed { i, item ->
@@ -484,11 +489,18 @@ private fun MoreList(onOpen: (Tab) -> Unit) {
                         title = stringResource(item.titleRes),
                         hint = serviceHint(item),
                         icon = serviceGlyph(item),
-                        badgeTint = MaterialTheme.colorScheme.primary,
                         onClick = { onOpen(item) },
                     )
                 }
             }
+        }
+        ru.zf.pravka.ui.PaperCard(label = "кто пользуется") {
+            PaperRow(
+                title = profile?.name?.takeIf { it.isNotBlank() } ?: "Профиль",
+                hint = "имя, режимы",
+                icon = Glyphs.Key,
+                onClick = onProfile,
+            )
         }
     }
 }
@@ -600,67 +612,55 @@ private fun MainScreen(
         }
         return
     }
-    // Вкладка выключенного в профиле режима не показывается: ни снизу, ни по
-    // ссылке из уведомления — тогда первая живая.
+    // Режим, выключенный в профиле, не открывается ни плашкой, ни по ссылке
+    // из уведомления — тогда «Сегодня».
     val live: (Tab) -> Boolean = { t -> modeOf(t)?.let { m -> profile?.has(m) ?: true } ?: true }
-    val firstLive = { BOTTOM_TABS.map { it.first }.first(live) }
-    // Служебные вкладки живут под «Ещё» и открываются поверх текущей. Ссылка
-    // снаружи (уведомление, меню кнопки) может показывать прямо на служебную —
-    // тогда открываем «Ещё» и сразу её.
+    // Правка 4.0 (07.10.2026, DESIGN §1): главный экран — «Сегодня», режимы —
+    // линзы на этот день поверх него; нижней панели и колонки нет. Служебные
+    // экраны — стопкой поверх (как раньше). Ссылка снаружи (уведомление, меню
+    // кнопки) может показывать прямо на служебную — тогда «Сегодня» и над ним
+    // она.
     val service = remember { SERVICE_TABS }
     var tab by remember {
         mutableStateOf(
             when {
-                initialTab in service -> Tab.MORE
+                initialTab in service -> Tab.TODAY
+                initialTab == Tab.MORE -> Tab.TODAY
                 live(initialTab) -> initialTab
-                else -> firstLive()
+                else -> Tab.TODAY
             }
         )
     }
-    // Режим выключили тумблером, пока его вкладка открыта, или ссылка извне
-    // привела на выключенный — на первую живую.
     LaunchedEffect(profile, tab) {
-        if (!live(tab)) tab = firstLive()
+        if (!live(tab)) tab = Tab.TODAY
     }
-    // Стопка экранов поверх вкладки (24.09.2026): из Настроек открывается
-    // группа, из группы — подключение, и «назад» должен вести на шаг, а не
-    // сразу на вкладку. Тап по нижней кнопке снимает всю стопку.
     var pages by remember {
         mutableStateOf<List<Page>>(if (initialTab in service) listOf(Page.Service(initialTab)) else emptyList())
     }
     val page = pages.lastOrNull()
     val pop = { pages = pages.dropLast(1) }
-    // Одноразовый автозапуск камеры/сканера в Теле (Е) — из меню кнопки еды.
     var foodActionPending by remember { mutableStateOf(foodAction.ifBlank { null }) }
-    // Диалоги выгрузок, которые открывают значки в шапке служебных экранов.
+    // Глубокие переходы с «Сегодня»: запись Засечки на правку, дело карточкой.
+    var zasechkaEdit by remember { mutableStateOf<Long?>(null) }
+    var delaOpen by remember { mutableStateOf<String?>(null) }
     var dictationExport by remember { mutableStateOf(false) }
     var lifeExport by remember { mutableStateOf(false) }
-    // Выгрузка Денег — значком в шапке, как у Статистики (24.09.2026); раньше
-    // кнопка жила в самом низу длинной ленты.
     var moneyExport by remember { mutableStateOf(false) }
 
-    // Открытие приложения — тоже повод посмотреть, нет ли сборки свежее:
-    // служба доступности может быть выключена, а суточный тик живёт в ней.
     LaunchedEffect(Unit) { runCatching { app.updates.tick() } }
 
-    // Просьба извне при живом приложении: переключаемся и сообщаем, что
-    // услышали, — иначе следующая перерисовка увела бы вкладку обратно.
     LaunchedEffect(tabRequest) {
         val want = tabRequest ?: return@LaunchedEffect
         if (want in service) {
-            tab = Tab.MORE
             pages = listOf(Page.Service(want))
         } else {
-            tab = want
+            tab = if (live(want)) want else Tab.TODAY
             pages = emptyList()
         }
         onTabRequestHandled()
     }
-    // Группа настроек из меню кнопки: Настройки, над ними — эта группа, чтобы
-    // «назад» вёл в меню настроек, а не на вкладку.
     LaunchedEffect(groupRequest) {
         val g = groupRequest ?: return@LaunchedEffect
-        tab = Tab.MORE
         pages = listOf(Page.Service(Tab.SETTINGS), Page.ModeSettings(g))
         onGroupRequestHandled()
     }
@@ -669,262 +669,268 @@ private fun MainScreen(
         foodActionPending = foodActionRequest
         onFoodActionHandled()
     }
-    // Системное «назад» закрывает верхний экран, а не приложение.
-    BackHandler(enabled = pages.isNotEmpty()) { pop() }
+    // «Назад»: верхний экран стопки, потом — из режима на «Сегодня» (DESIGN §1).
+    BackHandler(enabled = pages.isNotEmpty() || tab != Tab.TODAY) {
+        if (pages.isNotEmpty()) pop() else tab = Tab.TODAY
+    }
 
-    // Два вида (версия 3): сложенный Fold — кнопки внизу, разложенный —
-    // колонка слева, как у Gemini на развороте (`ui/Nav.kt`). Решает ширина
-    // окна, а не модель телефона: складывание пересобирает экран само.
-    val wide = LocalConfiguration.current.screenWidthDp >= ru.zf.pravka.ui.WIDE_DP
-    val scheme = MaterialTheme.colorScheme
-    val navModes = BOTTOM_TABS.filter { live(it.first) && (!wide || it.first != Tab.MORE) }.map { (item, glyph) ->
-        // Семь кнопок — порядок и подписи владельца: Правка, Засечка, Дело,
-        // Спорт, Еда, Деньги, Ещё (Деньги — 23.09.2026). Тап закрывает и
-        // верхний экран: владелец хочет вкладку, а не то, что над ней. На
-        // развороте «Ещё» не кнопка — его пункты стоят в колонке строками.
-        val selected = when {
-            wide -> tab == item && tab != Tab.MORE
-            item == Tab.MORE -> tab == Tab.MORE || page != null
-            else -> tab == item && page == null
-        }
-        ru.zf.pravka.ui.NavItem(
-            glyph = glyph,
-            label = stringResource(item.titleRes),
-            ink = decorOf(item).tint(scheme).primary,
-            selected = selected,
-            onClick = { tab = item; pages = emptyList() },
+    val openMode: (Tab) -> Unit = { t -> if (live(t)) { tab = t; pages = emptyList() } }
+    val toToday = { tab = Tab.TODAY; pages = emptyList() }
+    val openCost = { pages = pages + Page.Cost }
+    val openReport = { pages = pages + Page.Service(Tab.REPORT) }
+    val todayNav = remember {
+        TodayNav(
+            mode = { t -> openMode(t) },
+            more = { pages = listOf(Page.Service(Tab.MORE)) },
+            stats = { pages = listOf(Page.Service(Tab.REPORT)) },
+            zasechkaEntry = { id -> zasechkaEdit = id; openMode(Tab.ZASECHKA) },
+            foodAction = { a -> foodActionPending = a; openMode(Tab.FOOD) },
+            delaTask = { id -> delaOpen = id; openMode(Tab.TODOIST) },
         )
     }
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = { if (!wide) ru.zf.pravka.ui.ModeBottomBar(navModes) },
-    ) { padding ->
-        Row(Modifier.padding(padding)) {
-        if (wide) {
-            val first = pages.firstOrNull()
-            val serviceInk = scheme.primary
-            ru.zf.pravka.ui.ModeRail(
-                title = stringResource(R.string.app_name),
-                modes = navModes,
-                service = SERVICE_TABS.filter { it != Tab.SETTINGS }.map { t ->
-                    ru.zf.pravka.ui.NavItem(
-                        glyph = serviceGlyph(t),
-                        label = stringResource(t.titleRes),
-                        ink = serviceInk,
-                        selected = tab == Tab.MORE && first == Page.Service(t),
-                        onClick = { tab = Tab.MORE; pages = listOf(Page.Service(t)) },
-                    )
-                },
-                serviceLabel = stringResource(R.string.tab_more),
-                person = profile?.name?.takeIf { it.isNotBlank() },
-                settings = ru.zf.pravka.ui.NavItem(
-                    glyph = Glyphs.Gear,
-                    label = stringResource(R.string.tab_settings),
-                    ink = serviceInk,
-                    selected = tab == Tab.MORE && first == Page.Service(Tab.SETTINGS),
-                    onClick = { tab = Tab.MORE; pages = listOf(Page.Service(Tab.SETTINGS)) },
-                ),
-            )
-        }
-        Column(Modifier.weight(1f)) {
-            // Пуши выключены — говорим сверху, а не в глубине настроек
-            // автопилота: без них молчат автопилот, напоминания и обновления.
-            if (!notifEnabled) NotificationsBanner(onFixNotifications)
-            val openCost = { pages = pages + Page.Cost }
-            val openReport = { pages = listOf(Page.Service(Tab.REPORT)) }
-            val p = page
+
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        // Переходы — растворением, 250 мс (DESIGN §10): экран не едет, а сменяется.
+        androidx.compose.animation.AnimatedContent(
+            targetState = page to tab,
+            transitionSpec = {
+                androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(250)) togetherWith
+                    androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200))
+            },
+            contentKey = { (p, t) -> p?.toString() ?: t.name },
+            label = "screen",
+        ) { (p, t) ->
             when {
-                p != null -> ModeFrame((p as? Page.ModeSettings)?.group?.decor ?: ModeDecor.SERVICE) {
-                    Column {
-                        when (p) {
-                            is Page.Cost -> {
-                                TabHeader(title = stringResource(R.string.stats_header), glyph = Glyphs.Stats, onBack = pop)
-                                CostScreen(app)
-                            }
-                            is Page.ModeSettings -> {
+                p != null -> PageScreen(
+                    app, p, pop, openCost,
+                    openService = { pages = pages + Page.Service(it) },
+                    openGroup = { g -> pages = pages + Page.ModeSettings(g) },
+                    openMode = { m -> openMode(m) },
+                    serviceEnabled = serviceEnabled,
+                    onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                    dictionaryStore = dictionaryStore,
+                    historyLog = historyLog,
+                    dictMiner = dictMiner,
+                    promptStore = promptStore,
+                    dictationExport = dictationExport,
+                    onDictationExport = { dictationExport = it },
+                    onLifeExport = { lifeExport = true },
+                )
+                t == Tab.TODAY -> TodayScreen(app, todayNav)
+                else -> ModeFrame(decorOf(t)) {
+                    Column(Modifier.fillMaxSize()) {
+                        when (t) {
+                            Tab.PRAVKA -> {
+                                val cleanFlow = remember { app.settings.modelChoiceFlow(ru.zf.pravka.data.ModelRoute.PRAVKA) }
+                                val clean by cleanFlow.collectAsState(initial = null)
                                 TabHeader(
-                                    title = p.group.title,
-                                    glyph = p.group.glyph,
-                                    onBack = pop,
-                                    actions = { CostAction(openCost) },
-                                )
-                                ModeSettingsScreen(
-                                    app,
-                                    p.group,
-                                    serviceEnabled,
-                                    onOpenAccessibilitySettings = onOpenAccessibilitySettings,
-                                    onOpen = { g -> pages = pages + Page.ModeSettings(g) },
-                                )
-                            }
-                            is Page.Service -> if (p.tab == Tab.SHOWCASE) {
-                                ru.zf.pravka.ui.ShowcaseScreen(onBack = pop)
-                            } else {
-                                TabHeader(
-                                    title = stringResource(p.tab.titleRes),
-                                    glyph = serviceGlyph(p.tab),
-                                    onBack = pop,
+                                    title = stringResource(R.string.tab_pravka),
+                                    onBack = toToday,
+                                    titleExtra = clean?.let { c ->
+                                        ru.zf.pravka.data.Models.label(c.model).substringBefore(' ') + " · " +
+                                            ru.zf.pravka.data.Models.effectiveEffort(c.model, c.effort)
+                                    },
+                                    onTitleExtra = { pages = listOf(Page.ModeSettings(SettingsGroup.MODELS)) },
                                     actions = {
-                                        when (p.tab) {
-                                            Tab.REPORT -> ExportAction { lifeExport = true }
-                                            Tab.STATS -> ExportAction { dictationExport = true }
-                                            else -> Unit
-                                        }
+                                        StatsAction { pages = listOf(Page.Service(Tab.STATS)) }
                                         CostAction(openCost)
+                                        SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.PRAVKA)) }
                                     },
                                 )
-                                when (p.tab) {
-                                    Tab.REPORT -> ReportTab(app)
-                                    Tab.SETTINGS -> SettingsTab(
-                                        app,
-                                        serviceEnabled,
-                                        onOpenAccessibilitySettings,
-                                        onOpen = { g -> pages = pages + Page.ModeSettings(g) },
-                                    )
-                                    Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
-                                    Tab.PROMPTS -> PromptsTab(promptStore)
-                                    Tab.LEARNING -> LearningTab(app)
-                                    Tab.REVIEWS -> ReviewsTab(app)
-                                    Tab.LOGS -> LogsTab(app)
-                                    Tab.STATS -> DictationStatsTab(
-                                        app,
-                                        exportRequested = dictationExport,
-                                        onExportHandled = { dictationExport = false },
-                                    )
-                                    else -> Unit
-                                }
+                                PravkaTab(app, serviceEnabled)
                             }
-                        }
-                    }
-                }
-                tab == Tab.MORE -> ModeFrame(ModeDecor.SERVICE) {
-                    Column {
-                        TabHeader(
-                            title = stringResource(R.string.tab_more),
-                            glyph = Glyphs.More,
-                            actions = { CostAction(openCost) },
-                        )
-                        MoreList(onOpen = { pages = listOf(Page.Service(it)) })
-                    }
-                }
-                else -> {
-                    ModeFrame(decorOf(tab)) {
-                        Column {
-                            when (tab) {
-                                Tab.PRAVKA -> {
-                                    // Модель чистки — вторым тоном названия, как «Pro Extended ⌄»
-                                    // у Gemini (версия 3); тап — группа «Модели».
-                                    val cleanFlow = remember { app.settings.modelChoiceFlow(ru.zf.pravka.data.ModelRoute.PRAVKA) }
-                                    val clean by cleanFlow.collectAsState(initial = null)
-                                    TabHeader(
-                                        title = stringResource(R.string.tab_pravka),
-                                        glyph = Glyphs.Pravka,
-                                        titleExtra = clean?.let { c ->
-                                            ru.zf.pravka.data.Models.label(c.model).substringBefore(' ') + " · " +
-                                                ru.zf.pravka.data.Models.effectiveEffort(c.model, c.effort)
-                                        },
-                                        onTitleExtra = { pages = listOf(Page.ModeSettings(SettingsGroup.MODELS)) },
-                                        actions = {
-                                            StatsAction { pages = listOf(Page.Service(Tab.STATS)) }
-                                            CostAction(openCost)
-                                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.PRAVKA)) }
-                                        },
-                                    )
-                                    PravkaTab(app, serviceEnabled)
-                                }
-                                Tab.ZASECHKA -> {
-                                    TabHeader(
-                                        title = stringResource(R.string.tab_zasechka),
-                                        glyph = Glyphs.Zasechka,
-                                        actions = {
-                                            StatsAction(openReport)
-                                            CostAction(openCost)
-                                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.ZASECHKA)) }
-                                        },
-                                    )
-                                    ZasechkaTab(app)
-                                }
-                                Tab.TODOIST -> {
-                                    TabHeader(
-                                        title = "Дела",
-                                        glyph = Glyphs.Delo,
-                                        actions = {
-                                            StatsAction(openReport)
-                                            CostAction(openCost)
-                                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.DELA)) }
-                                        },
-                                    )
-                                    // Дела на домашнем сервере или Todoist — выбор в
-                                    // «Подключениях» (03.10.2026); Todoist — запасной путь.
-                                    val onServer by app.delaServer.collectAsState()
-                                    if (onServer) DelaTab(app) else TodoistTab(app)
-                                }
-                                Tab.SPORT -> {
-                                    TabHeader(
-                                        title = stringResource(R.string.tab_sport),
-                                        glyph = Glyphs.Sport,
-                                        actions = {
-                                            StatsAction(openReport)
-                                            CostAction(openCost)
-                                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.SPORT)) }
-                                        },
-                                    )
-                                    SportTab(app)
-                                }
-                                Tab.MONEY -> {
-                                    // «Личное · ЗФ» — вторым тоном названия (версия 3): от них
-                                    // зависит вся вкладка, и выбор стоит там, где её имя.
-                                    val pOn by app.settings.mScopePersonalFlow.collectAsState(initial = true)
-                                    val zOn by app.settings.mScopeZfFlow.collectAsState(initial = false)
-                                    var scopeSheet by remember { mutableStateOf(false) }
-                                    TabHeader(
-                                        title = stringResource(R.string.tab_money),
-                                        glyph = Glyphs.Money,
-                                        titleExtra = when {
-                                            pOn && zOn -> "Всё"
-                                            zOn -> "ЗФ"
-                                            else -> "Личное"
-                                        },
-                                        onTitleExtra = { scopeSheet = true },
-                                        actions = {
-                                            ExportAction { moneyExport = true }
-                                            StatsAction(openReport)
-                                            CostAction(openCost)
-                                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.MONEY)) }
-                                        },
-                                    )
-                                    MoneyTab(
-                                        app,
-                                        exportRequested = moneyExport,
-                                        onExportHandled = { moneyExport = false },
-                                    )
-                                    if (scopeSheet) MoneyScopeSheet(app, pOn, zOn, onDismiss = { scopeSheet = false })
-                                }
-                                else -> {
-                                    TabHeader(
-                                        title = stringResource(R.string.tab_food),
-                                        glyph = Glyphs.Food,
-                                        actions = {
-                                            StatsAction(openReport)
-                                            CostAction(openCost)
-                                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.FOOD)) }
-                                        },
-                                    )
-                                    FoodTab(
-                                        app,
-                                        autoAction = foodActionPending,
-                                        onAutoConsumed = { foodActionPending = null },
-                                    )
-                                }
+                            Tab.ZASECHKA -> {
+                                TabHeader(
+                                    title = stringResource(R.string.tab_zasechka),
+                                    onBack = toToday,
+                                    actions = {
+                                        StatsAction(openReport)
+                                        SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.ZASECHKA)) }
+                                    },
+                                )
+                                ZasechkaTab(app, editEntry = zasechkaEdit, onEditHandled = { zasechkaEdit = null })
+                            }
+                            Tab.TODOIST -> {
+                                TabHeader(
+                                    title = "Дела",
+                                    onBack = toToday,
+                                    actions = {
+                                        StatsAction(openReport)
+                                        CostAction(openCost)
+                                        SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.DELA)) }
+                                    },
+                                )
+                                // Дела на домашнем сервере или Todoist — выбор в
+                                // «Подключениях» (03.10.2026); Todoist — запасной путь.
+                                val onServer by app.delaServer.collectAsState()
+                                if (onServer) DelaTab(app, openTaskId = delaOpen, onOpenHandled = { delaOpen = null }) else TodoistTab(app)
+                            }
+                            Tab.SPORT -> {
+                                TabHeader(
+                                    title = stringResource(R.string.tab_sport),
+                                    onBack = toToday,
+                                    actions = {
+                                        StatsAction(openReport)
+                                        CostAction(openCost)
+                                        SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.SPORT)) }
+                                    },
+                                )
+                                SportTab(app)
+                            }
+                            Tab.MONEY -> {
+                                val pOn by app.settings.mScopePersonalFlow.collectAsState(initial = true)
+                                val zOn by app.settings.mScopeZfFlow.collectAsState(initial = false)
+                                var scopeSheet by remember { mutableStateOf(false) }
+                                TabHeader(
+                                    title = stringResource(R.string.tab_money),
+                                    onBack = toToday,
+                                    titleExtra = when {
+                                        pOn && zOn -> "Всё"
+                                        zOn -> "ЗФ"
+                                        else -> "Личное"
+                                    },
+                                    onTitleExtra = { scopeSheet = true },
+                                    actions = {
+                                        ExportAction { moneyExport = true }
+                                        StatsAction(openReport)
+                                        CostAction(openCost)
+                                        SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.MONEY)) }
+                                    },
+                                )
+                                MoneyTab(
+                                    app,
+                                    exportRequested = moneyExport,
+                                    onExportHandled = { moneyExport = false },
+                                )
+                                if (scopeSheet) MoneyScopeSheet(app, pOn, zOn, onDismiss = { scopeSheet = false })
+                            }
+                            else -> {
+                                TabHeader(
+                                    title = stringResource(R.string.tab_food),
+                                    onBack = toToday,
+                                    titleExtra = null,
+                                    actions = {
+                                        StatsAction(openReport)
+                                        CostAction(openCost)
+                                        SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.FOOD)) }
+                                    },
+                                )
+                                FoodTab(
+                                    app,
+                                    autoAction = foodActionPending,
+                                    onAutoConsumed = { foodActionPending = null },
+                                )
                             }
                         }
                     }
                 }
             }
         }
+        // Пуши выключены — говорим сверху, а не в глубине настроек автопилота.
+        if (!notifEnabled) {
+            Box(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 92.dp)) {
+                NotificationsBanner(onFixNotifications)
+            }
         }
     }
 
     if (lifeExport) LifeExportDialog(app, onDismiss = { lifeExport = false })
+}
+
+/**
+ * Экран стопки поверх «Сегодня» или режима: служебный (Ещё, настройки,
+ * разборы…), настройки одного режима или стоимость. «‹» и системный «назад»
+ * — на шаг.
+ */
+@Composable
+private fun PageScreen(
+    app: PravkaApp,
+    p: Page,
+    pop: () -> Unit,
+    openCost: () -> Unit,
+    openService: (Tab) -> Unit,
+    openGroup: (SettingsGroup) -> Unit,
+    openMode: (Tab) -> Unit,
+    serviceEnabled: Boolean,
+    onOpenAccessibilitySettings: () -> Unit,
+    dictionaryStore: DictionaryStore,
+    historyLog: HistoryLog,
+    dictMiner: ru.zf.pravka.provider.DictMiner,
+    promptStore: PromptStore,
+    dictationExport: Boolean,
+    onDictationExport: (Boolean) -> Unit,
+    onLifeExport: () -> Unit,
+) {
+    if (p is Page.Service && p.tab == Tab.SHOWCASE) {
+        ru.zf.pravka.ui.ShowcaseScreen(onBack = pop)
+        return
+    }
+    val decor = when (p) {
+        is Page.ModeSettings -> p.group.decor
+        is Page.Service -> if (p.tab == Tab.REPORT) ModeDecor.TODAY else ModeDecor.SERVICE
+        else -> ModeDecor.SERVICE
+    }
+    ModeFrame(decor) {
+        Column(Modifier.fillMaxSize()) {
+            when (p) {
+                is Page.Cost -> {
+                    TabHeader(title = stringResource(R.string.stats_header), onBack = pop)
+                    CostScreen(app)
+                }
+                is Page.ModeSettings -> {
+                    TabHeader(
+                        title = p.group.title,
+                        glyph = p.group.glyph,
+                        onBack = pop,
+                        actions = { CostAction(openCost) },
+                    )
+                    ModeSettingsScreen(
+                        app,
+                        p.group,
+                        serviceEnabled,
+                        onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                        onOpen = openGroup,
+                    )
+                }
+                is Page.Service -> {
+                    TabHeader(
+                        title = stringResource(p.tab.titleRes),
+                        glyph = if (p.tab == Tab.MORE) null else serviceGlyph(p.tab),
+                        onBack = pop,
+                        actions = {
+                            when (p.tab) {
+                                Tab.REPORT -> ExportAction(onLifeExport)
+                                Tab.STATS -> ExportAction { onDictationExport(true) }
+                                else -> Unit
+                            }
+                            CostAction(openCost)
+                        },
+                    )
+                    when (p.tab) {
+                        Tab.MORE -> MoreList(
+                            app,
+                            onOpen = openService,
+                            onMode = openMode,
+                            onProfile = { openGroup(SettingsGroup.PROFILE) },
+                        )
+                        Tab.REPORT -> ReportTab(app)
+                        Tab.SETTINGS -> SettingsTab(app, serviceEnabled, onOpenAccessibilitySettings, onOpen = openGroup)
+                        Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
+                        Tab.PROMPTS -> PromptsTab(promptStore)
+                        Tab.LEARNING -> LearningTab(app)
+                        Tab.REVIEWS -> ReviewsTab(app)
+                        Tab.LOGS -> LogsTab(app)
+                        Tab.STATS -> DictationStatsTab(
+                            app,
+                            exportRequested = dictationExport,
+                            onExportHandled = { onDictationExport(false) },
+                        )
+                        else -> Unit
+                    }
+                }
+            }
+        }
+    }
 }
 
 /**

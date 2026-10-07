@@ -502,3 +502,56 @@ fun SleepRow(at: Long, overflowMin: Int) {
         )
     }
 }
+
+/** Что сделали с делом в хронике: тап по кольцу, по строке, долгое нажатие. */
+enum class TaskAct { DONE, OPEN, MENU }
+
+/**
+ * Одна строка хроники по `DayItem` — для `LazyColumn` «Сегодня». [line] —
+ * цвет записи, к которой прикреплены отметки (рельс насквозь), [nextIsNow] —
+ * за записью сразу «сейчас», и линия вниз не идёт.
+ */
+@Composable
+fun TimelineItem(
+    item: DayAssembler.DayItem,
+    line: Color,
+    nextIsNow: Boolean,
+    now: Long,
+    onEntry: (DayAssembler.DayItem.Entry) -> Unit = {},
+    onMark: (DayAssembler.DayItem.Mark) -> Unit = {},
+    onPending: (DayAssembler.DayItem.Pending, Boolean) -> Unit = { _, _ -> },
+    onTask: (DayAssembler.DayItem.Task, TaskAct) -> Unit = { _, _ -> },
+    onPlanned: (DayAssembler.DayItem.Planned) -> Unit = {},
+) {
+    when (item) {
+        is DayAssembler.DayItem.Entry ->
+            if (item.current) CurrentRow(item, now, { onEntry(item) })
+            else EntryRow(item, lineDown = !nextIsNow, onClick = { onEntry(item) })
+        is DayAssembler.DayItem.Mark -> MarkRow(item.source, item.text, line) { onMark(item) }
+        is DayAssembler.DayItem.Pending -> PendingRow(item.source, item.text, line, { onPending(item, false) }, { onPending(item, true) })
+        is DayAssembler.DayItem.Now -> NowLine(Fmt.hm(item.at))
+        is DayAssembler.DayItem.Free -> FreeRow(item.minutes)
+        is DayAssembler.DayItem.Planned -> PlannedRow(item.start, item.end, item.title, item.workout, item.note, item.minutes, if (item.workout) ({ onPlanned(item) }) else null)
+        is DayAssembler.DayItem.PlannedLoose -> PlannedRow(null, null, item.title, true, item.note, item.minutes, null)
+        is DayAssembler.DayItem.TaskGroup -> TaskGroupRow(item.count, item.minutes)
+        is DayAssembler.DayItem.Task -> TaskTimelineRow(item, { onTask(item, TaskAct.DONE) }, { onTask(item, TaskAct.OPEN) }, { onTask(item, TaskAct.MENU) })
+        is DayAssembler.DayItem.Sleep -> SleepRow(item.at, item.overflowMin)
+    }
+}
+
+/** Цвет рельса отметки — цвет записи, к которой она прикреплена. */
+fun lineColorAt(items: List<DayAssembler.DayItem>, i: Int): Color {
+    for (k in i downTo 0) {
+        val e = items[k] as? DayAssembler.DayItem.Entry ?: continue
+        return ZGroup.of(e.category, e.worth).fill
+    }
+    return Ink.TimePast
+}
+
+/** Вся хроника столбцом (Витрина, превью). */
+@Composable
+fun TimelineItems(items: List<DayAssembler.DayItem>, now: Long) {
+    items.forEachIndexed { i, it ->
+        TimelineItem(it, lineColorAt(items, i), i < items.lastIndex && items[i + 1] is DayAssembler.DayItem.Now, now)
+    }
+}
