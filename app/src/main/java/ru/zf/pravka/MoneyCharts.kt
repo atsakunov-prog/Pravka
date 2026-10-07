@@ -35,35 +35,45 @@ import ru.zf.pravka.core.MoneyCategories
 // категорий в один донат не влезают, поэтому донат — по группам, а категории
 // — строками с полосой цвета своей группы.
 //
-// «Ушло» и «пришло» — красным и зелёным по просьбе владельца («зелёным и
-// красным с двух сторон»), и всегда рядом со словом и знаком: цвет не
-// единственный носитель смысла.
+// «Ушло» и «пришло» были красным и зелёным («зелёным и красным с двух
+// сторон»); в Правке 4.0 (макет 11, владелец: «нравится прямо так, как в
+// файле») — тоном режима: смысл несут знак и слово рядом.
 
 private val GROUP_ORDER = listOf(
     MoneyCategories.G_HOME, MoneyCategories.G_KIDS, MoneyCategories.G_LIFE,
     MoneyCategories.G_HEALTH, MoneyCategories.G_ZF,
 )
-private val LIGHT = listOf(0xFF2A78D6, 0xFFEB6834, 0xFF1BAF7A, 0xFFEDA100, 0xFFE87BA4)
-private val DARK = listOf(0xFF3987E5, 0xFFD95926, 0xFF199E70, 0xFFC98500, 0xFFD55181)
 
 @Composable
 internal fun moneyDark(): Boolean = MaterialTheme.colorScheme.background.luminance() < 0.4f
 
 @Composable
 internal fun groupColor(group: String): Color {
+    // Правка 4.0 (`screens/11`): группы — ступенями шкалы краски Денег, от
+    // светлой к тёмной, чужие цвета не примешиваются (DESIGN §4).
     val i = GROUP_ORDER.indexOf(group)
-    if (i < 0) return MaterialTheme.colorScheme.outline
-    return Color((if (moneyDark()) DARK else LIGHT)[i])
+    val ramp = ru.zf.pravka.ui.LocalMode.current.ramp
+    if (i < 0) return ramp.last().copy(alpha = 0.8f)
+    return listOf(ramp[0], ramp[1], ramp[2], Color(0xFF7363A8), ramp[3])[i % 5]
 }
 
 @Composable
 internal fun moneyCategoryColor(key: String): Color = groupColor(MoneyCategories.of(key)?.group ?: "")
 
+/** Цвет суммы «ушло» в тексте: без красного — знак «−» и так говорит. */
 @Composable
-internal fun spentColor(): Color = if (moneyDark()) Color(0xFFE66767) else Color(0xFFE34948)
+internal fun spentColor(): Color = ru.zf.pravka.ui.Ink.TextStrong
+
+/** Цвет суммы «пришло» в тексте — светлым тоном режима. */
+@Composable
+internal fun incomeColor(): Color = ru.zf.pravka.ui.LocalMode.current.value
+
+/** Столбики «ушло» и «пришло» — ступенями шкалы режима. */
+@Composable
+internal fun spentBarColor(): Color = ru.zf.pravka.ui.LocalMode.current.ramp[2]
 
 @Composable
-internal fun incomeColor(): Color = if (moneyDark()) Color(0xFF3FB950) else Color(0xFF008300)
+internal fun incomeBarColor(): Color = ru.zf.pravka.ui.LocalMode.current.ramp[0]
 
 /**
  * Месяцы парами столбиков на одной шкале: «ушло» и «пришло» рядом. Одна ось
@@ -83,8 +93,8 @@ internal fun MonthPairs(
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     val labelStyle = TextStyle(fontSize = 10.sp, color = labelColor)
     val base = MaterialTheme.colorScheme.outlineVariant
-    val red = spentColor()
-    val green = incomeColor()
+    val red = spentBarColor()
+    val green = incomeBarColor()
     Column(Modifier.fillMaxWidth()) {
         Canvas(Modifier.fillMaxWidth().height(height)) {
             val n = labels.size

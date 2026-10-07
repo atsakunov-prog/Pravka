@@ -1,5 +1,15 @@
 package ru.zf.pravka
 
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.border
+import ru.zf.pravka.trigger.finishMoneyTab
+import ru.zf.pravka.trigger.MoneyTabVoice
+import ru.zf.pravka.ui.glass
+import ru.zf.pravka.ui.bottomFade
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -217,109 +227,162 @@ internal fun MoneyTab(
     // за чипом «Разобрать» молчали бы, пока туда не зайдёшь.
     val waiting = questions.size + drafts.size
 
+    val ask = remember { MoneyAsk(app) }
+    var periodSheet by remember { mutableStateOf(false) }
+    val askLive by MoneyTabVoice.live.collectAsState()
+    val askListening = askLive?.owner == "ask"
+    val talking = ru.zf.pravka.ui.rememberRouteBusy(app.liveWork, "money")
+    val ownerName = app.profileStore.flow.collectAsState().value?.name
+    Box(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize()) {
+        // Правка 4.0 (`screens/11`): части — сегментами, справа — период
+        // («Октябрь ⌄»: неделя или месяц и стрелки — листом). «Личное · ЗФ» —
+        // в шапке, вторым тоном названия.
+        Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ru.zf.pravka.ui.Segmented(
+                options = listOf("Сводка", if (waiting > 0) "Разобрать · $waiting" else "Разобрать", "Журнал"),
+                selected = part,
+                onSelect = { part = it },
+                modifier = Modifier.weight(1f),
+            )
+            if (part != PART_SORT) {
+                Spacer(Modifier.width(8.dp))
+                // «Октябрь ⌄» — стрелкой справа, как выбор в шапке.
+                val pm = ru.zf.pravka.ui.LocalMode.current
+                val pt = ru.zf.pravka.ui.LocalPravkaType.current
+                Row(
+                    Modifier
+                        .height(36.dp)
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(50))
+                        .border(1.dp, pm.tint.copy(alpha = 0.28f), androidx.compose.foundation.shape.RoundedCornerShape(50))
+                        .clickable { periodSheet = true }
+                        .padding(start = 14.dp, end = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(periodChip(period), style = pt.label.copy(fontWeight = FontWeight.SemiBold), color = pm.label, maxLines = 1)
+                    Spacer(Modifier.width(4.dp))
+                    Icon(Glyphs.ChevronDown, contentDescription = "выбрать период", tint = pm.label, modifier = Modifier.size(18.dp))
+                }
+            }
+        }
+        // Готовые вопросы Claude — чипами под сегментами (`screens/11`); есть ответ — прячутся.
+        if (part == PART_SUMMARY && !ask.busy && ask.answer.isEmpty()) {
+            ru.zf.pravka.ui.AskChips(MONEY_ASKS, onAsk = { ask.send(it) }, modifier = Modifier.padding(bottom = 6.dp))
+        }
     Column(
         modifier = Modifier
-            .fillMaxSize()
+            .fillMaxWidth()
+            .weight(1f)
+            .bottomFade()
             .fadingScroll()
-            .padding(ScreenPad.Padding),
+            .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 110.dp),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
-        // «Личное · ЗФ» — в шапке, вторым тоном названия (версия 3,
-        // `MoneyScopeSheet`): строка чипов первой строкой вкладки ушла туда.
-        // Первой строкой — пилюля «что потратил?» (версия 3, второй заход:
-        // «в каждом должно быть наверху вот такая плашка… единая система»):
-        // кружок — тот же тап, что «₽», набранное — тот же разбор, что у голоса.
-        MoneySpendPill(app)
-        Segments(
-            options = listOf("Сводка", if (waiting > 0) "Разобрать · $waiting" else "Разобрать", "Журнал"),
-            selected = part,
-            onSelect = { part = it },
-        )
         // Общие с семьёй: когда был обмен и что пришло (есть вход в семейный Drive).
         MoneySyncLine(app)
 
         when (part) {
             PART_SUMMARY -> {
-                // ---- Спросить Claude — наверху, как просил владелец ----
-                AskCard(app)
-                // «Наговорить траты» — пилюлей наверху вкладки (версия 3, второй заход).
+                // ---- Спросить Claude: ответ — плашкой; чипы — под сегментами, поле — внизу ----
+                MoneyAnswerCard(ask)
 
-                PeriodCard(kind, { kind = it }, period, { period = it }, totals)
+                // ---- Период: ушло крупно, к прошлому, пришло и сальдо ----
+                PeriodSummaryCard(period, totals)
 
-                // ---- ДДС и баланс — сразу под периодом (владелец, 23.09.2026: «кеш и баланс должны быть выше») ----
-                CashflowCard(app, entries, java.time.YearMonth.from(period.firstDay.plusDays((period.days - 1).toLong())), ms)
-                BalanceCard(app, entries, ms)
-                AccountsCard(app, entries, period, ms)
-
-                // ---- Плитки — на плашке, как всё остальное (24.09.2026) ----
-                PaperCard {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ru.zf.pravka.ui.KpiTile("в день", MoneyFormat.k(pace.perDayKop), Modifier.weight(1f), hint = "${MoneyFormat.K} · за ${pace.daysPassed} дн.")
-                        if (pace.forecastKop != null) {
-                            ru.zf.pravka.ui.KpiTile("прогноз", MoneyFormat.k(pace.forecastKop), Modifier.weight(1f), hint = "${MoneyFormat.K} · если тратить так же")
-                        } else {
-                            ru.zf.pravka.ui.KpiTile("трат", totals.count.toString(), Modifier.weight(1f), hint = "за период")
-                        }
-                        val top = biggest.firstOrNull()
-                        ru.zf.pravka.ui.KpiTile(
-                            "крупнейшая", top?.let { MoneyFormat.k(-it.rubKop) } ?: "—", Modifier.weight(1f),
-                            hint = top?.let { MoneyMerchants.canonical(it.what) },
-                        )
+                // ---- Плитки: в день, прогноз, крупнейшая ----
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ru.zf.pravka.ui.StatTile("В день", MoneyFormat.k(pace.perDayKop), Modifier.weight(1f), delta = "за ${pace.daysPassed} дн.")
+                    if (pace.forecastKop != null) {
+                        ru.zf.pravka.ui.StatTile("Прогноз", "−" + MoneyFormat.k(pace.forecastKop), Modifier.weight(1f), delta = "если тратить так же")
+                    } else {
+                        ru.zf.pravka.ui.StatTile("Трат", totals.count.toString(), Modifier.weight(1f), delta = "за период")
                     }
+                    val top = biggest.firstOrNull()
+                    ru.zf.pravka.ui.StatTile(
+                        "Крупнейшая", top?.let { "−" + MoneyFormat.k(-it.rubKop) } ?: "—", Modifier.weight(1f),
+                        delta = top?.let { MoneyMerchants.canonical(it.what) },
+                    )
                 }
 
                 // ---- Категории: донат по группам и строки, которые раскрываются магазинами ----
                 CategoriesCard(cats, totals.spentKop)
 
                 // ---- Траты по дням ----
-                PaperCard(label = "по дням · " + MoneyFormat.K, info = "Пунктир — средний день.") {
-                    val avg = if (pace.daysPassed > 0) pace.perDayKop / 100f else null
-                    ru.zf.pravka.ui.StackedColumns(
-                        columns = daily.mapIndexed { i, kop ->
-                            val day = period.firstDay.plusDays(i.toLong())
-                            ru.zf.pravka.ui.StackedColumn(
-                                label = if (period.kind == MoneyStats.Kind.WEEK) dayLetter(day) else if (day.dayOfMonth % 5 == 1) day.dayOfMonth.toString() else "",
-                                parts = listOf(ru.zf.pravka.ui.ChartSlice("", kop / 100f, spentColor())),
-                                faded = day == today,
-                            )
-                        },
-                        target = avg,
-                        valueText = if (period.kind == MoneyStats.Kind.WEEK) { v -> MoneyFormat.k((v * 100).toLong()) } else null,
-                        highlight = daily.indices.firstOrNull { period.firstDay.plusDays(it.toLong()) == today } ?: -1,
+                Column {
+                    ru.zf.pravka.ui.SectionHeader(
+                        "по дням",
+                        trailing = if (pace.daysPassed > 0) "среднее " + MoneyFormat.k(pace.perDayKop) else null,
+                        info = "По дням" to "Пунктир — средний день периода.",
                     )
+                    PaperCard {
+                        val avg = if (pace.daysPassed > 0) pace.perDayKop / 100f else null
+                        val barColor = ru.zf.pravka.ui.LocalMode.current.ramp[2]
+                        // Только прошедшие дни (`screens/11`): будущее месяца — пустые
+                        // столбики без смысла. До десяти дней — «чт, 1» и сумма над столбиком.
+                        val shownDays = daily.indices.filter { !period.firstDay.plusDays(it.toLong()).isAfter(today) }.ifEmpty { daily.indices.toList() }
+                        val few = shownDays.size <= 10
+                        ru.zf.pravka.ui.StackedColumns(
+                            columns = shownDays.map { i ->
+                                val day = period.firstDay.plusDays(i.toLong())
+                                ru.zf.pravka.ui.StackedColumn(
+                                    label = if (few) dayLetter(day) + ", " + day.dayOfMonth else if (day.dayOfMonth % 5 == 1) day.dayOfMonth.toString() else "",
+                                    parts = listOf(ru.zf.pravka.ui.ChartSlice("", daily[i] / 100f, barColor)),
+                                    faded = day == today,
+                                )
+                            },
+                            target = avg,
+                            valueText = if (few) { v -> MoneyFormat.k((v * 100).toLong()) } else null,
+                            highlight = shownDays.indexOfFirst { period.firstDay.plusDays(it.toLong()) == today },
+                        )
+                    }
                 }
 
-                // ---- Полгода: ушло и пришло ----
-                PaperCard(label = "полгода · " + MoneyFormat.K) {
-                    MonthPairs(
-                        labels = trend.map { monthShort(it.month) },
-                        spent = trend.map { it.spentKop },
-                        income = trend.map { it.incomeKop },
-                        valueText = { MoneyFormat.k(it) },
-                        highlight = trend.lastIndex,
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        LegendDot(spentColor()); PaperHint(" ушло   ")
-                        LegendDot(incomeColor()); PaperHint(" пришло")
-                    }
-                    val avgSpent = trend.dropLast(1).filter { it.spentKop > 0 }.map { it.spentKop }.average().takeIf { !it.isNaN() }
-                    if (avgSpent != null) PaperHint("средний месяц (без текущего): " + MoneyFormat.k(avgSpent.toLong()) + " " + MoneyFormat.K)
-                }
+                // ---- ДДС, баланс и счета ----
+                CashflowCard(app, entries, java.time.YearMonth.from(period.firstDay.plusDays((period.days - 1).toLong())), ms)
+                BalanceCard(app, entries, ms)
+                AccountsCard(app, entries, period, ms)
 
                 // ---- Регулярные платежи ----
                 if (recurring.isNotEmpty()) {
-                    PaperCard(label = "регулярные · ${MoneyFormat.k(recurring.sumOf { it.avgKop })} ${MoneyFormat.K} в месяц") {
-                        for (r in recurring.take(15)) {
-                            Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                                LegendDot(moneyCategoryColor(r.category))
-                                Spacer(Modifier.width(8.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(r.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    PaperHint(MoneyCategories.title(r.category) + " · ${r.months} мес. из 6")
+                    Column {
+                        ru.zf.pravka.ui.SectionHeader("регулярные", trailing = "−" + MoneyFormat.k(recurring.sumOf { it.avgKop }) + " в месяц")
+                        PaperCard {
+                            val ty = ru.zf.pravka.ui.LocalPravkaType.current
+                            val mode = ru.zf.pravka.ui.LocalMode.current
+                            recurring.take(15).forEachIndexed { k, r ->
+                                if (k > 0) ru.zf.pravka.ui.Hairline()
+                                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(r.name, style = ty.bodyL, color = ru.zf.pravka.ui.Ink.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(MoneyCategories.title(r.category) + " · ${r.months} мес. из 6", style = ty.meta, color = mode.meta)
+                                    }
+                                    Text("−" + MoneyFormat.k(r.avgKop), style = ty.valueS, color = ru.zf.pravka.ui.Ink.TextStrong)
                                 }
-                                Text(MoneyFormat.k(r.avgKop), style = MaterialTheme.typography.bodyMedium)
                             }
                         }
+                    }
+                }
+
+                // ---- Полгода: ушло и пришло ----
+                Column {
+                    ru.zf.pravka.ui.SectionHeader("полгода")
+                    PaperCard {
+                        MonthPairs(
+                            labels = trend.map { monthShort(it.month) },
+                            spent = trend.map { it.spentKop },
+                            income = trend.map { it.incomeKop },
+                            valueText = { MoneyFormat.k(it) },
+                            highlight = trend.lastIndex,
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            LegendDot(spentBarColor()); PaperHint(" ушло   ")
+                            LegendDot(incomeBarColor()); PaperHint(" пришло")
+                        }
+                        val avgSpent = trend.dropLast(1).filter { it.spentKop > 0 }.map { it.spentKop }.average().takeIf { !it.isNaN() }
+                        if (avgSpent != null) PaperHint("средний месяц (без текущего): " + MoneyFormat.k(avgSpent.toLong()) + " " + MoneyFormat.K)
                     }
                 }
 
@@ -412,8 +475,8 @@ internal fun MoneyTab(
             }
 
             else -> {
-                // Журнал — записи периода: тот же выбор недели или месяца, что в сводке.
-                PeriodCard(kind, { kind = it }, period, { period = it }, totals)
+                // Журнал — записи периода: тот же период, что в сводке (чип сверху).
+                PeriodSummaryCard(period, totals)
 
                 // ---- Журнал периода ----
                 PaperCard(label = "журнал · " + journal.size) {
@@ -427,6 +490,55 @@ internal fun MoneyTab(
             }
         }
     }
+    }
+    // ---- «Спроси про деньги» — строка внизу (`screens/11`) ----
+    // Отправить и микрофон — вопрос Claude; «+» — трата: набранное — тем же
+    // разбором, что у «₽», пусто — голосом, как тап по «₽».
+    ru.zf.pravka.ui.SayBar(
+        value = ask.question,
+        onValueChange = { ask.question = it },
+        placeholder = if (talking) "Разбираю трату…" else ru.zf.pravka.core.PillHint.say(ownerName, "спроси про деньги"),
+        onSend = { ask.send(ask.question) },
+        onMic = {
+            if (askListening) PravkaAccessibilityService.instance?.finishMoneyTab(keep = true)
+            else startMoneyVoice(app, "ask", "спроси про деньги") { spoken -> ask.send(spoken) }
+        },
+        listening = askListening,
+        sendEnabled = !ask.busy && ask.question.isNotBlank(),
+        busy = ask.busy || talking,
+        busyLabel = if (talking) "Разбираю" else "Claude считает",
+        maxLines = 3,
+        trailing = {
+            ru.zf.pravka.ui.SayIcon(Glyphs.Plus, "записать трату: набранное — тратой, пусто — голосом, как «₽»", onClick = {
+                val service = PravkaAccessibilityService.instance
+                val text = ask.question.trim()
+                if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
+                else if (text.isNotEmpty()) { ask.question = ""; service.onMoneyText(text) }
+                else service.onMoneyTap()
+            })
+        },
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .navigationBarsPadding()
+            .imePadding()
+            .padding(start = 12.dp, end = 12.dp, bottom = 18.dp),
+    )
+    }
+    if (periodSheet) {
+        ru.zf.pravka.ui.PaperSheet(onDismiss = { periodSheet = false }, title = "Период") {
+            ru.zf.pravka.ui.Segmented(
+                options = listOf("Неделя", "Месяц"),
+                selected = if (kind == MoneyStats.Kind.WEEK) 0 else 1,
+                onSelect = { kind = if (it == 0) MoneyStats.Kind.WEEK else MoneyStats.Kind.MONTH },
+            )
+            Spacer(Modifier.height(8.dp))
+            DayNav(
+                title = periodTitle(period),
+                onPrev = { period = period.prev() },
+                onNext = if (period.to <= System.currentTimeMillis()) ({ period = period.next() }) else null,
+            )
+        }
+    }
 
     editing?.let { e ->
         EntryDialog(app, e, onDismiss = { editing = null })
@@ -434,50 +546,66 @@ internal fun MoneyTab(
 }
 
 /**
- * Период: неделя или месяц, стрелки тем же навигатором, что у дня в Еде и
- * Засечке, и «ушло» с «пришло» по краям. Один на «Сводку» и «Журнал»:
- * листаешь в одной части — видишь тот же период в другой.
+ * Период (Правка 4.0, `screens/11`): «ОКТЯБРЬ · 1–5», ушло крупно со знаком
+ * рубля, «ушло · к прошлому месяцу ▼ 8 %», под линией — «Пришло» и «Сальдо».
+ * Один на «Сводку» и «Журнал»; выбор недели или месяца — чипом над вкладкой.
  */
 @Composable
-private fun PeriodCard(
-    kind: MoneyStats.Kind,
-    onKind: (MoneyStats.Kind) -> Unit,
-    period: MoneyStats.Period,
-    onPeriod: (MoneyStats.Period) -> Unit,
-    totals: MoneyStats.Totals,
-) {
-    PaperCard {
-        ChipRow {
-            PaperChip("Неделя", selected = kind == MoneyStats.Kind.WEEK, onClick = { onKind(MoneyStats.Kind.WEEK) })
-            PaperChip("Месяц", selected = kind == MoneyStats.Kind.MONTH, onClick = { onKind(MoneyStats.Kind.MONTH) })
-        }
-        Spacer(Modifier.height(4.dp))
-        DayNav(
-            title = periodTitle(period),
-            onPrev = { onPeriod(period.prev()) },
-            onNext = if (period.to <= System.currentTimeMillis()) ({ onPeriod(period.next()) }) else null,
-        )
-        Spacer(Modifier.height(4.dp))
-        Row(Modifier.fillMaxWidth()) {
-            Column(Modifier.weight(1f)) {
-                PaperHint("ушло")
-                Text("−" + MoneyFormat.k(totals.spentKop), style = MaterialTheme.typography.headlineSmall, color = spentColor())
+private fun PeriodSummaryCard(period: MoneyStats.Period, totals: MoneyStats.Totals) {
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .glass(androidx.compose.foundation.shape.RoundedCornerShape(22.dp), mode.glass)
+            .padding(horizontal = 18.dp, vertical = 16.dp),
+    ) {
+        Text(periodOverline(period), style = ty.overline, color = mode.label)
+        Spacer(Modifier.height(6.dp))
+        ru.zf.pravka.ui.FitText("−" + MoneyFormat.k(totals.spentKop) + " ₽", style = ty.displayL, color = ru.zf.pravka.ui.Ink.TextStrong, minSize = 26f)
+        Text(
+            androidx.compose.ui.text.buildAnnotatedString {
+                append("ушло")
                 totals.spentDelta?.let { d ->
                     val up = d > 0
-                    PaperHint(
-                        (if (up) "▲ " else "▼ ") + "${kotlin.math.abs(Math.round(d * 100))} % к прошл${if (period.kind == MoneyStats.Kind.WEEK) "ой неделе" else "ому месяцу"}",
-                        color = if (up) spentColor() else incomeColor(),
-                    )
+                    append(" · к прошл" + (if (period.kind == MoneyStats.Kind.WEEK) "ой неделе " else "ому месяцу "))
+                    pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.SemiBold, color = ru.zf.pravka.ui.Ink.Text))
+                    append((if (up) "▲ " else "▼ ") + "${kotlin.math.abs(Math.round(d * 100))} %")
+                    pop()
                 }
+            },
+            style = ty.label,
+            color = mode.label,
+        )
+        ru.zf.pravka.ui.Hairline(Modifier.padding(vertical = 12.dp))
+        Row(Modifier.fillMaxWidth()) {
+            Column(Modifier.weight(1f)) {
+                Text("Пришло", style = ty.label, color = mode.label)
+                Text("+" + MoneyFormat.k(totals.incomeKop), style = ty.valueL, color = ru.zf.pravka.ui.Ink.TextStrong)
             }
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-                PaperHint("пришло")
-                Text("+" + MoneyFormat.k(totals.incomeKop), style = MaterialTheme.typography.headlineSmall, color = incomeColor())
-                PaperHint("сальдо " + MoneyFormat.k(totals.balanceKop, sign = true) + " " + MoneyFormat.K)
+            Column(Modifier.weight(1f)) {
+                Text("Сальдо", style = ty.label, color = mode.label)
+                Text(MoneyFormat.k(totals.balanceKop, sign = true), style = ty.valueL, color = ru.zf.pravka.ui.Ink.TextStrong)
             }
         }
     }
 }
+
+/** «ОКТЯБРЬ · 1–7» у месяца, «НЕДЕЛЯ · 5–11 ОКТ» у недели. */
+private fun periodOverline(p: MoneyStats.Period): String {
+    val last = p.firstDay.plusDays((p.days - 1).toLong())
+    val upTo = minOf(last, java.time.LocalDate.now()).let { if (it.isBefore(p.firstDay)) p.firstDay else it }
+    return if (p.kind == MoneyStats.Kind.MONTH) {
+        ru.zf.pravka.core.Fmt.monthTitle(p.firstDay.monthValue).uppercase() + " · ${p.firstDay.dayOfMonth}–${upTo.dayOfMonth}"
+    } else {
+        "НЕДЕЛЯ · ${p.firstDay.dayOfMonth}–${upTo.dayOfMonth} " + ru.zf.pravka.core.Fmt.dayMon(upTo).substringAfter(' ').uppercase()
+    }
+}
+
+/** Чип периода над вкладкой: «Октябрь», «5–11 окт». */
+private fun periodChip(p: MoneyStats.Period): String =
+    if (p.kind == MoneyStats.Kind.MONTH) ru.zf.pravka.core.Fmt.monthTitle(p.firstDay.monthValue)
+    else "${p.firstDay.dayOfMonth}–" + ru.zf.pravka.core.Fmt.dayMon(p.firstDay.plusDays(6))
 
 /** Одна строка журнала: что, когда, откуда, сумма; тап — правка. */
 @Composable
@@ -896,38 +1024,4 @@ internal fun MoneyScopeSheet(app: PravkaApp, personal: Boolean, zf: Boolean, onD
                 "исключаются: остаются только операции с внешним миром."
         )
     }
-}
-
-/**
- * Пилюля наверху Денег — «Саша, что потратил?» (версия 3, второй заход). Голос —
- * тот же тап, что по «₽» (плашка с суммами, молчание — «да»); набранное — тот же
- * разбор, что у пилюли «₽» при наборе. Ждём Claude — искры и секунды.
- */
-@Composable
-private fun MoneySpendPill(app: PravkaApp) {
-    var draft by remember { mutableStateOf("") }
-    val ownerName = app.profileStore.flow.collectAsState().value?.name
-    val talking = ru.zf.pravka.ui.rememberRouteBusy(app.liveWork, "money")
-    ru.zf.pravka.ui.VoiceInput(
-        value = draft,
-        onValueChange = { draft = it },
-        placeholder = if (talking) "Разбираю…" else ru.zf.pravka.core.PillHint.say(ownerName, "что потратил?"),
-        onSend = {
-            val text = draft.trim()
-            val service = PravkaAccessibilityService.instance
-            if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
-            else if (text.isNotEmpty()) {
-                draft = ""
-                service.onMoneyText(text)
-            }
-        },
-        onMic = {
-            val service = PravkaAccessibilityService.instance
-            if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
-            else service.onMoneyTap()
-        },
-        sendEnabled = draft.isNotBlank(),
-        maxLines = 3,
-        busy = talking,
-    )
 }

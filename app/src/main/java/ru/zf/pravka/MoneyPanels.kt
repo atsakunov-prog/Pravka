@@ -1,5 +1,6 @@
 package ru.zf.pravka
 
+import ru.zf.pravka.ui.glass
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -61,22 +62,17 @@ internal fun LegendDot(color: Color) {
 }
 
 /**
- * «Спросить Claude» — поле наверху вкладки (владелец, 23.09.2026: «достаточно
- * высоко должен быть текстбокс, где можно спросить у Клода что-то про
- * расходы»). Голосом — нашим движком, как у кнопок; ответ — по выжимке
- * журнала за год и строкам за 90 дней (`MoneyContext`).
- *
- * С 24.09.2026 — общая строка ввода «микрофон · поле · отправить», как у Еды
- * и Засечки: «🎙 Голосом» и «Спросить» словами стали значками по краям поля.
- * Горящий микрофон — слушаем для этого поля; тап по нему — то же «Готово».
+ * «Спросить Claude» про деньги. Правка 4.0 (`screens/11`): поле — нижняя
+ * строка вкладки «Спроси про деньги», готовые вопросы — чипами под
+ * сегментами, ответ — плашкой в ленте. Состояние одно на всех трёх, поэтому
+ * живёт здесь, а не в плашке. Голосом — нашим движком, как у кнопок; ответ —
+ * по выжимке журнала за год и строкам за 90 дней (`MoneyContext`).
  */
-@Composable
-internal fun AskCard(app: PravkaApp) {
-    val scope = rememberCoroutineScope()
-    var question by remember { mutableStateOf("") }
-    var answer by remember { mutableStateOf("") }
-    var asked by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
+internal class MoneyAsk(private val app: PravkaApp) {
+    var question by mutableStateOf("")
+    var answer by mutableStateOf("")
+    var asked by mutableStateOf("")
+    var busy by mutableStateOf(false)
 
     fun send(q: String) {
         val text = q.trim()
@@ -84,53 +80,43 @@ internal fun AskCard(app: PravkaApp) {
         busy = true
         asked = text
         answer = ""
+        question = ""
         app.appScope.launch {
             answer = app.moneyEngine.ask(text).getOrElse { e -> "Не вышло: ${e.message}" }
             busy = false
         }
     }
+}
 
-    val live by MoneyTabVoice.live.collectAsState()
-    val listening = live?.owner == "ask"
+/** Готовые вопросы — первые два из макета 11, дальше прежние владельца. */
+internal val MONEY_ASKS = listOf(
+    "Куда ушло больше обычного?",
+    "Хватит до зарплаты?",
+    "На что уходит больше всего?",
+    "Что выросло за полгода?",
+    "Сколько стоят кружки детей?",
+    "Сколько мелочи на кафе и такси?",
+)
 
-    PaperCard(
-        label = "спросить Claude",
-        // Пока Claude думает — крутилка в строке подписи: кнопки «Спросить» словом больше нет.
-        trailing = if (busy) {
-            { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
-        } else null,
+/** Ответ Claude плашкой: вопрос цитатой, искры пока думает, ответ, «Новый вопрос». */
+@Composable
+internal fun MoneyAnswerCard(ask: MoneyAsk) {
+    if (!ask.busy && ask.answer.isEmpty()) return
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .glass(androidx.compose.foundation.shape.RoundedCornerShape(22.dp), mode.glass)
+            .padding(horizontal = 18.dp, vertical = 14.dp),
     ) {
-        VoiceInput(
-            value = question,
-            onValueChange = { question = it },
-            placeholder = "Сколько я трачу на кафе в месяц?",
-            onSend = { send(question) },
-            onMic = {
-                if (listening) PravkaAccessibilityService.instance?.finishMoneyTab(keep = true)
-                else startMoneyVoice(app, "ask", "спроси про деньги") { spoken -> question = spoken; send(spoken) }
-            },
-            listening = listening,
-            sendEnabled = !busy && question.isNotBlank(),
-            sendIcon = Glyphs.Spark,
-            busy = busy,
-        )
-        MoneyVoiceBar("ask")
-        if (answer.isEmpty() && !busy) {
-            // Готовые вопросы — чипами в ряд с прокруткой вбок: крупные чипы
-            // набора, переносясь столбиком, заняли бы полплашки.
-            Spacer(Modifier.height(8.dp))
-            ChipRow {
-                for (s in listOf("На что уходит больше всего?", "Что выросло за полгода?", "Сколько стоят кружки детей?", "Сколько мелочи на кафе и такси?")) {
-                    PaperChip(s, selected = false, onClick = { question = s; send(s) })
-                }
-            }
-        }
-        if (answer.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
-            PaperHint("«$asked»")
-            Spacer(Modifier.height(4.dp))
-            MarkdownText(answer)
-            PaperTextButton("Новый вопрос", icon = Glyphs.Plus, onClick = { answer = ""; question = "" })
+        Text("«${ask.asked}»", style = ty.body.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic), color = ru.zf.pravka.ui.Ink.TextSecondary)
+        Spacer(Modifier.height(6.dp))
+        if (ask.busy) ru.zf.pravka.ui.ThinkingLine("Claude считает")
+        else MarkdownText(ask.answer)
+        if (!ask.busy) {
+            Spacer(Modifier.height(6.dp))
+            PaperTextButton("Новый вопрос", icon = Glyphs.Plus, onClick = { ask.answer = ""; ask.question = "" })
         }
     }
 }
