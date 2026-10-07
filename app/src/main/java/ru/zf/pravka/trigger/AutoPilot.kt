@@ -1030,7 +1030,10 @@ class AutoPilot(
                 val addr = runCatching { device?.address }.getOrNull().orEmpty()
                 if (!AutoPilotRules.isCar(name, addr, carBt, carBtAddr)) {
                     if (name.isNotBlank() || addr.isNotBlank()) {
-                        app.eventLog.add("автопилот: BT «${name.ifBlank { addr }}» — не машина")
+                        // Подключился или ушёл — для разбора кнопки гарнитуры (07.10.2026:
+                        // «BT «RB Meta 026Y»» в 9:39 не говорил, пришли очки или ушли).
+                        val what = if (intent.action == BluetoothDevice.ACTION_ACL_CONNECTED) "подключился" else "отключился"
+                        app.eventLog.add("автопилот: BT «${name.ifBlank { addr }}» $what — не машина")
                     }
                     return
                 }

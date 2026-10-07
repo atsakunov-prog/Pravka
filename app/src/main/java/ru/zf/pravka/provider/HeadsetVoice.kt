@@ -84,13 +84,76 @@ class HeadsetVoice(
             PackageManager.PERMISSION_GRANTED
 
     /** Держать связь со стеком наготове (подъём службы). Без разрешения — молча ничего. */
-    fun open() = withProxy { }
+    fun open() {
+        withProxy { p -> if (p != null) log("по звонкам подключены: ${linked(p)}") }
+        watchLinks()
+    }
 
     fun close() {
         stop("служба закрылась")
+        linkReceiver?.let { r -> runCatching { context.unregisterReceiver(r) } }
+        linkReceiver = null
         val p = proxy
         proxy = null
         if (p != null) runCatching { adapter()?.closeProfileProxy(BluetoothProfile.HEADSET, p) }
+    }
+
+    /** Кто подключён по звонкам — словами, для журнала на нажатии. */
+    fun linkedNow(): String = proxy?.let { linked(it) } ?: "стек не на связи"
+
+    @SuppressLint("MissingPermission") // proxy есть только с разрешением
+    private fun linked(p: BluetoothHeadset): String =
+        runCatching { p.connectedDevices }.getOrDefault(emptyList())
+            .joinToString(", ") { "«${name(it)}»" }
+            .ifBlank { "никого" }
+
+    private var linkReceiver: BroadcastReceiver? = null
+
+    /**
+     * Кто подключается и отключается по звонкам и кого стек делает главным —
+     * в журнал, на каждую перемену. 07.10.2026 два нажатия Shokz в 9:55 до
+     * Правки не дошли, а журнал знал только «BT «RB Meta 026Y»» в 9:39:
+     * подключились очки или ушли и кто стал главным для звонков — не понять.
+     * Команда помощника ездит по звонкам, и второе устройство на них — первый
+     * подозреваемый, когда нажатие пропадает.
+     */
+    private fun watchLinks() {
+        if (linkReceiver != null || !hasPermission()) return
+        val r = object : BroadcastReceiver() {
+            @SuppressLint("MissingPermission") // приёмник заводится только с разрешением
+            override fun onReceive(c: Context, intent: Intent) {
+                val dev: BluetoothDevice? = if (Build.VERSION.SDK_INT >= 33) {
+                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                }
+                val who = dev?.let { "«${name(it)}»" }
+                val line = when (intent.action) {
+                    BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED ->
+                        when (intent.getIntExtra(BluetoothProfile.EXTRA_STATE, -1)) {
+                            BluetoothProfile.STATE_CONNECTED -> "звонки: ${who ?: "?"} подключена"
+                            BluetoothProfile.STATE_DISCONNECTED -> "звонки: ${who ?: "?"} отключена"
+                            else -> null
+                        }
+                    ACTION_ACTIVE_DEVICE_CHANGED -> "главная для звонков — ${who ?: "никто"}"
+                    else -> null
+                } ?: return
+                log(line)
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
+            addAction(ACTION_ACTIVE_DEVICE_CHANGED)
+        }
+        val ok = runCatching {
+            if (Build.VERSION.SDK_INT >= 33) {
+                context.registerReceiver(r, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                context.registerReceiver(r, filter)
+            }
+        }.isSuccess
+        linkReceiver = if (ok) r else null
     }
 
     /**
@@ -399,6 +462,13 @@ class HeadsetVoice(
         runCatching { d.name }.getOrNull()?.takeIf { it.isNotBlank() } ?: d.address
 
     private companion object {
+        /**
+         * Стек сменил главное устройство для звонков. Константа у
+         * `BluetoothHeadset` скрыта, рассылка — нет: её получает любой с
+         * «Устройствами поблизости».
+         */
+        const val ACTION_ACTIVE_DEVICE_CHANGED = "android.bluetooth.headset.profile.action.ACTIVE_DEVICE_CHANGED"
+
         /** Сколько ждать связи со стеком на нажатии: из пяти секунд стека — с запасом. */
         const val PROXY_WAIT_MS = 1_500L
 

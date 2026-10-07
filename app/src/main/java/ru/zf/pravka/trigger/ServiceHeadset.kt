@@ -31,7 +31,10 @@ fun PravkaAccessibilityService.onHeadsetButton() {
         fieldFocused = field,
         zasechkaOn = cachedZEnabled,
     )
-    app.eventLog.add("гарнитура: кнопка — ${action.word}${if (locked) " (экран заблокирован)" else ""}")
+    app.eventLog.add(
+        "гарнитура: кнопка — ${action.word}${if (locked) " (экран заблокирован)" else ""}" +
+            " · по звонкам: ${headsetVoice.linkedNow()}"
+    )
     if (action == HeadsetPress.Action.STOP) {
         stopTakeFromHeadset(byHeadset = true)
         return
