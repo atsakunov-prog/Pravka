@@ -11,6 +11,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import ru.zf.pravka.ui.hatch
+import ru.zf.pravka.ui.glass
+import ru.zf.pravka.ui.bottomFade
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -51,19 +63,12 @@ import ru.zf.pravka.ui.ChipRow
 import ru.zf.pravka.ui.DayNav
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.GlyphButton
-import ru.zf.pravka.ui.GoalBar
-import ru.zf.pravka.ui.GoalRow
 import ru.zf.pravka.ui.IconAction
-import ru.zf.pravka.ui.MicroBar
-import ru.zf.pravka.ui.MicroOver
-import ru.zf.pravka.ui.microColor
 import ru.zf.pravka.ui.PaperAlert
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperChip
 import ru.zf.pravka.ui.PaperField
 import ru.zf.pravka.ui.PaperHint
-import ru.zf.pravka.ui.PaperIconButton
-import ru.zf.pravka.ui.PaperLabel
 import ru.zf.pravka.ui.Glyphs
 import ru.zf.pravka.ui.PaperButton
 import ru.zf.pravka.ui.PaperTextButton
@@ -71,7 +76,6 @@ import ru.zf.pravka.ui.PaperToggle
 import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.SheetAction
 import ru.zf.pravka.ui.SummaryLine
-import ru.zf.pravka.ui.VoiceInput
 import ru.zf.pravka.ui.scrollFade
 import ru.zf.pravka.trigger.onFoodTap
 
@@ -91,10 +95,6 @@ private val mealTimeFormat = SimpleDateFormat("HH:mm", Locale.US)
 private val dayTitleFormat = SimpleDateFormat("EEEE, d MMMM", Locale("ru"))
 private val isoFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
 
-private val KCAL_COLOR = Color(0xFFEA580C)
-private val PROTEIN_COLOR = Color(0xFF0E7490)
-private val FAT_COLOR = Color(0xFFCA8A04)
-private val CARBS_COLOR = Color(0xFF16A34A)
 
 @Composable
 internal fun FoodTab(
@@ -103,6 +103,11 @@ internal fun FoodTab(
     // запускает камеру или сканер, без лишнего тапа.
     autoAction: String? = null,
     onAutoConsumed: () -> Unit = {},
+    /**
+     * Шапка режима (Правка 4.0): её рисует вкладка — вторым тоном в ней день
+     * дневника («Еда пн, 5 октября ⌄», `screens/10`), а день живёт здесь.
+     */
+    header: @Composable (day: String, onDay: () -> Unit) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     val store = app.foodStore
@@ -235,80 +240,181 @@ internal fun FoodTab(
     }
 
     val listState = rememberLazyListState()
+    var daySheet by remember { mutableStateOf(false) }
+    val dayDate = remember(dayStart) { java.time.Instant.ofEpochMilli(dayStart).atZone(java.time.ZoneId.systemDefault()).toLocalDate() }
+    // Ждёт «✓» за этот день — штриховкой на полосе и строкой «с ужином перебор 65 ккал».
+    val pendingDay = remember(pending, date) { pending.filter { isoFormat.format(Date(it.ts)) == date } }
+    val takePhoto: () -> Unit = {
+        val file = File(context.cacheDir, "eda-shot.jpg")
+        pendingPhoto = file
+        val uri = androidx.core.content.FileProvider.getUriForFile(context, BuildConfig.APPLICATION_ID + ".files", file)
+        camera.launch(uri)
+    }
+    val pickImage: () -> Unit = {
+        gallery.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    }
+    val scanCode: () -> Unit = {
+        ru.zf.pravka.ui.scanBarcode(
+            context = context,
+            onFail = { message -> Feedback.toast(app, message, long = true) },
+        ) { code ->
+            busy = true
+            app.appScope.launch {
+                val result = runCatching { app.foodEngine.parseBarcode(code) }.getOrElse { Result.failure(it) }
+                busy = false
+                result.onFailure { e ->
+                    Feedback.toast(app, (e.message ?: "Штрихкод не нашёлся") + " — сними этикетку камерой", long = true)
+                }
+            }
+        }
+    }
+    val confirmMeal: (Long) -> Unit = { id ->
+        scope.launch {
+            val outcome = app.foodEngine.confirm(id)
+            if (outcome.icuError.isNotBlank()) {
+                Feedback.toast(app, "Записал. В intervals.icu не уехало: ${outcome.icuError}", long = true)
+            }
+        }
+    }
+    val reparseMeal: (Long) -> Unit = { id ->
+        busy = true
+        app.appScope.launch {
+            val result = runCatching { app.foodEngine.reparse(id) }.getOrElse { Result.failure(it) }
+            busy = false
+            result.onFailure { e -> Feedback.toast(app, e.message ?: "Не вышло", long = true) }
+        }
+    }
+    Column(Modifier.fillMaxSize()) {
+    header(ru.zf.pravka.core.Fmt.dayList(dayDate)) { daySheet = true }
+    Box(Modifier.weight(1f)) {
     LazyColumn(
-        Modifier.fillMaxWidth().scrollFade(listState),
+        Modifier.fillMaxSize().bottomFade().scrollFade(listState),
         state = listState,
-        contentPadding = ScreenPad.Padding,
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 110.dp),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
-        // ---- Что съел: пилюля наверху, четыре дороги в ней ----
-        // Версия 3, второй заход (26.09.2026, вечер): «в еде должна быть вот эта
-        // „записать еду“, и там как раз снять, галерея, штрихкод — это можно
-        // добавить в саму плашку… должна быть единая система». Пилюля первой
-        // строкой вкладки: слева в ней снимок, галерея и штрихкод, посередине
-        // поле (подпись к снимку — там же: масло в салате, сахар в кофе),
-        // кружок — голос (тот же тап, что «Е») или «отправить». Пока Claude
-        // разбирает — искры и секунды.
-        item {
-            VoiceInput(
-                value = draft,
-                onValueChange = { draft = it },
-                placeholder = if (busy || talking) "Разбираю…" else ru.zf.pravka.core.PillHint.say(ownerName, "что съел?"),
-                onSend = { parseText(draft.trim()) },
-                onMic = {
-                    val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
-                    if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
-                    else service.onFoodTap()
-                },
-                enabled = !busy,
-                sendEnabled = !busy && draft.isNotBlank(),
-                busy = busy || talking,
-                maxLines = 4,
-                leading = {
-                    ru.zf.pravka.ui.PillAction(Glyphs.Camera, "снять", enabled = !busy, onClick = {
-                        val file = File(context.cacheDir, "eda-shot.jpg")
-                        pendingPhoto = file
-                        val uri = androidx.core.content.FileProvider.getUriForFile(
-                            context, BuildConfig.APPLICATION_ID + ".files", file
-                        )
-                        camera.launch(uri)
-                    })
-                    ru.zf.pravka.ui.PillAction(Glyphs.Image, "галерея", enabled = !busy, onClick = {
-                        gallery.launch(
-                            androidx.activity.result.PickVisualMediaRequest(
-                                ActivityResultContracts.PickVisualMedia.ImageOnly
-                            )
-                        )
-                    })
-                    ru.zf.pravka.ui.PillAction(Glyphs.Barcode, "штрихкод", enabled = !busy, onClick = {
-                        ru.zf.pravka.ui.scanBarcode(
-                            context = context,
-                            onFail = { message -> Feedback.toast(app, message, long = true) },
-                        ) { code ->
-                            busy = true
-                            app.appScope.launch {
-                                val result = runCatching { app.foodEngine.parseBarcode(code) }
-                                    .getOrElse { Result.failure(it) }
-                                busy = false
-                                result.onFailure { e ->
-                                    Feedback.toast(
-                                        app,
-                                        (e.message ?: "Штрихкод не нашёлся") +
-                                            " — сними этикетку камерой",
-                                        long = true,
-                                    )
-                                }
-                            }
-                        }
-                    })
-                },
+        // ---- Итог дня: сколько осталось крупно, полоса с ожидающим, три макро (`screens/10`) ----
+        item(key = "total") {
+            DayTotalCard(
+                total = total,
+                pending = pendingDay,
+                targetKcal = targetKcal,
+                macros = listOf(
+                    Triple("Белки", total.protein, targetProtein),
+                    Triple("Жиры", total.fat, targetFat),
+                    Triple("Углеводы", total.carbs, targetCarbs),
+                ),
+                today = dayOffset == 0,
             )
         }
 
-        // ---- День и его итог ----
-        // Один навигатор дня на все вкладки (24.09.2026): «Сегодня» и дата под
-        // ним; дальше вчерашнего дата и есть название — второй раз её не пишем.
-        item {
+        // ---- Разобранное, но не записанное ----
+        if (pending.isNotEmpty()) {
+            item(key = "pending:h") {
+                ru.zf.pravka.ui.SectionHeader("ждёт подтверждения", trailing = pending.first().let { mealTimeFormat.format(Date(it.ts)) })
+            }
+            items(pending.size, key = { i -> "p" + pending[i].id }) { i ->
+                val meal = pending[i]
+                MealCard(
+                    app = app,
+                    meal = meal,
+                    pendingState = true,
+                    onEdit = { editing = meal.id },
+                    onConfirm = { confirmMeal(meal.id) },
+                    onDelete = { scope.launch { app.foodEngine.delete(meal.id) } },
+                    onReparse = { reparseMeal(meal.id) },
+                )
+            }
+        }
+
+        // ---- Приёмы дня — одной плашкой строками ----
+        item(key = "meals:h") {
+            ru.zf.pravka.ui.SectionHeader(
+                if (dayMeals.isEmpty()) "приёмов нет" else "приёмы · ${dayMeals.size}",
+                trailing = if (dayMeals.isEmpty()) null else ru.zf.pravka.core.Fmt.num(dayMeals.sumOf { it.kcal }) + " ккал",
+            )
+        }
+        item(key = "meals") {
+            if (dayMeals.isEmpty()) {
+                ru.zf.pravka.ui.EmptyState("За этот день ничего не записано — скажи или сними тарелку внизу", icon = Glyphs.Food)
+            } else {
+                val mode = ru.zf.pravka.ui.LocalMode.current
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .glass(RoundedCornerShape(22.dp), mode.glass)
+                        .padding(horizontal = 18.dp, vertical = 6.dp),
+                ) {
+                    dayMeals.forEachIndexed { k, meal ->
+                        if (k > 0) ru.zf.pravka.ui.Hairline()
+                        MealRow(
+                            app = app,
+                            meal = meal,
+                            onEdit = { editing = meal.id },
+                            onDelete = { scope.launch { app.foodEngine.delete(meal.id) } },
+                            onUnconfirm = { scope.launch { app.foodEngine.unconfirm(meal.id) } },
+                        )
+                    }
+                }
+            }
+        }
+
+        // ---- Витамины и элементы ----
+        item(key = "micro") { MicroCard(total) }
+
+        // ---- Мой рацион: то, что повторяется каждый день ----
+        item(key = "ration") { RationSection(app, dayStart) }
+
+        // ---- Неделя столбиками ----
+        item(key = "week") {
+            val week = remember(meals) { store.recentDays(7) }
+            if (week.isNotEmpty()) {
+                WeekKcalCard(
+                    week = week.reversed(),
+                    targetKcal = targetKcal,
+                    pendingToday = pending.filter { isoFormat.format(Date(it.ts)) == week.first().date }.sumOf { it.kcal },
+                    selected = date,
+                    onDay = { d -> dayOffset = daysBetween(d) },
+                )
+            }
+        }
+
+        // Настройки режима — за шестерёнкой в шапке вкладки.
+    }
+    // ---- Что съел: строка «сказать» внизу, четыре дороги в ней (DESIGN §11.4) ----
+    // Снимок, галерея и штрихкод — значками справа перед микрофоном (`screens/10`);
+    // набранное поле — подпись к снимку (масло в салате, сахар в кофе).
+    ru.zf.pravka.ui.SayBar(
+        value = draft,
+        onValueChange = { draft = it },
+        placeholder = ru.zf.pravka.core.PillHint.say(ownerName, "что съел?"),
+        onSend = { parseText(draft.trim()) },
+        onMic = {
+            val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+            if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
+            else service.onFoodTap()
+        },
+        enabled = !busy,
+        sendEnabled = !busy && draft.isNotBlank(),
+        busy = busy || talking,
+        maxLines = 4,
+        trailing = {
+            if (draft.isBlank()) {
+                ru.zf.pravka.ui.SayIcon(Glyphs.Camera, "снять", takePhoto, enabled = !busy)
+                ru.zf.pravka.ui.SayIcon(Glyphs.Image, "галерея", pickImage, enabled = !busy)
+                ru.zf.pravka.ui.SayIcon(Glyphs.Barcode, "штрихкод", scanCode, enabled = !busy)
+            }
+        },
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .navigationBarsPadding()
+            .imePadding()
+            .padding(start = 12.dp, end = 12.dp, bottom = 18.dp),
+    )
+    }
+    }
+    if (daySheet) {
+        ru.zf.pravka.ui.PaperSheet(onDismiss = { daySheet = false }, title = "День дневника") {
             val dayTitle = dayTitleFormat.format(Date(dayStart))
             DayNav(
                 title = when (dayOffset) {
@@ -320,152 +426,11 @@ internal fun FoodTab(
                 onPrev = { dayOffset += 1 },
                 onNext = if (dayOffset > 0) ({ dayOffset -= 1 }) else null,
             )
-        }
-        item {
-            PaperCard(label = if (total.empty) "за день ничего" else "за день") {
-                GoalRow("Калории", total.kcal, targetKcal, "ккал", KCAL_COLOR)
-                GoalRow("Белки", total.protein, targetProtein, "г", PROTEIN_COLOR)
-                GoalRow("Жиры", total.fat, targetFat, "г", FAT_COLOR)
-                GoalRow("Углеводы", total.carbs, targetCarbs, "г", CARBS_COLOR)
-                if (total.fiber > 0) {
-                    Spacer(Modifier.height(6.dp))
-                    PaperHint("Клетчатки ${total.fiber} г · приёмов ${total.meals}")
-                }
-                if (targetKcal > 0 && !total.empty) {
-                    Spacer(Modifier.height(8.dp))
-                    val left = targetKcal - total.kcal
-                    Text(
-                        if (left >= 0) "Осталось $left ккал"
-                        else "Перебор ${-left} ккал",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (left >= 0) MaterialTheme.colorScheme.onSurface
-                        else MaterialTheme.colorScheme.error,
-                    )
-                }
+            if (dayOffset != 0) {
+                Spacer(Modifier.height(10.dp))
+                ru.zf.pravka.ui.GhostKey("К сегодняшнему", { dayOffset = 0; daySheet = false })
             }
         }
-
-        // ---- Витамины и элементы ----
-        item { MicroCard(total) }
-
-        // ---- Мой рацион: то, что повторяется каждый день ----
-        item { RationSection(app, dayStart) }
-
-        // ---- Разобранное, но не записанное ----
-        if (pending.isNotEmpty()) {
-            item { PaperLabel("разобрано, ждёт «✓»") }
-            items(pending.size, key = { i -> "p" + pending[i].id }) { i ->
-                val meal = pending[i]
-                MealCard(
-                    app = app,
-                    meal = meal,
-                    pendingState = true,
-                    onEdit = { editing = meal.id },
-                    onConfirm = {
-                        scope.launch {
-                            val outcome = app.foodEngine.confirm(meal.id)
-                            if (outcome.icuError.isNotBlank()) {
-                                Feedback.toast(
-                                    app,
-                                    "Записал. В intervals.icu не уехало: ${outcome.icuError}",
-                                    long = true,
-                                )
-                            }
-                        }
-                    },
-                    onDelete = { scope.launch { app.foodEngine.delete(meal.id) } },
-                    onReparse = {
-                        busy = true
-                        app.appScope.launch {
-                            val result = runCatching { app.foodEngine.reparse(meal.id) }
-                                .getOrElse { Result.failure(it) }
-                            busy = false
-                            result.onFailure { e ->
-                                Feedback.toast(app, e.message ?: "Не вышло", long = true)
-                            }
-                        }
-                    },
-                )
-            }
-        }
-
-        // ---- Приёмы дня ----
-        item { PaperLabel(if (dayMeals.isEmpty()) "приёмов нет" else "приёмы дня") }
-        if (dayMeals.isEmpty()) {
-            item {
-                PaperCard {
-                    Text(
-                        "За этот день ничего не записано.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    PaperHint("Скажи кнопкой «Т», набери выше или сними тарелку.")
-                }
-            }
-        } else {
-            items(dayMeals.size, key = { i -> dayMeals[i].id }) { i ->
-                val meal = dayMeals[i]
-                MealCard(
-                    app = app,
-                    meal = meal,
-                    pendingState = false,
-                    onEdit = { editing = meal.id },
-                    onConfirm = {},
-                    onDelete = { scope.launch { app.foodEngine.delete(meal.id) } },
-                    onReparse = null,
-                    onUnconfirm = { scope.launch { app.foodEngine.unconfirm(meal.id) } },
-                )
-            }
-        }
-
-        // ---- Неделя одной полоской ----
-        item {
-            val week = remember(meals) { store.recentDays(7) }
-            if (week.isNotEmpty()) {
-                PaperCard(label = "неделя") {
-                    for (d in week) {
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                                .clickable {
-                                    // Тап по дню недели листает дневник туда.
-                                    dayOffset = daysBetween(d.date)
-                                },
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    humanDay(d.date),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                )
-                                GoalBar(d.kcal, targetKcal, KCAL_COLOR, height = 6.dp)
-                            }
-                            Spacer(Modifier.width(12.dp))
-                            Column(horizontalAlignment = Alignment.End) {
-                                Text(
-                                    "${d.kcal}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = if (targetKcal > 0 && d.kcal > targetKcal)
-                                        MaterialTheme.colorScheme.error
-                                    else MaterialTheme.colorScheme.onSurface,
-                                )
-                                PaperHint("Б${d.protein} Ж${d.fat} У${d.carbs}")
-                            }
-                        }
-                    }
-                    val avg = week.sumOf { it.kcal } / week.size
-                    Spacer(Modifier.height(6.dp))
-                    PaperHint(
-                        "В среднем $avg ккал по ${week.size} дн. с записями" +
-                            (if (targetKcal > 0) ", цель $targetKcal" else "")
-                    )
-                }
-            }
-        }
-
-        // Настройки режима — за шестерёнкой в шапке вкладки.
     }
 
     val editMeal = editing?.let { id -> meals.firstOrNull { it.id == id } }
@@ -478,124 +443,164 @@ internal fun FoodTab(
     }
 }
 
-/** Сколько дефицитов показывает свёрнутая карточка — и полосками, и в строке. */
-private const val LOW_SHOWN = 4
 
 /**
- * Витамины и элементы за день: полоска на вещество, засечка нормы, светофор.
- *
- * Свёрнутая карточка показывает не первые попавшиеся вещества, а те, которых
- * МАЛО: это единственная строка, по которой можно что-то сделать сегодня.
- * Остальные полоски — по тапу: они нужны раз в неделю, а места занимают
- * весь экран.
+ * Витамины и элементы за день (Правка 4.0, `screens/10`): строка на вещество —
+ * имя, полоса с риской нормы и процент. Светофорных цветов нет: «мало» —
+ * жирным словом у имени, перебор — тёплым процентом. Сначала то, чего мало
+ * (это единственное, что можно поправить сегодня), остальное — строкой «ещё
+ * N — в норме ›». Тап по строке — зачем вещество и где его брать.
  */
 @Composable
 private fun MicroCard(total: FoodStore.DayTotal) {
     var open by remember { mutableStateOf(false) }
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
     val totals = total.micro
+    val all = Micronutrients.ALL
+    // По доле нормы: меньше всего — сверху; у натрия норма — потолок, он в конце.
+    val sorted = remember(totals) { all.sortedWith(compareBy({ it.limit }, { it.share(totals[it.id] ?: 0.0) })) }
     val low = remember(totals) { Micronutrients.lacking(totals) }
-    val over = remember(totals) { Micronutrients.over(totals) }
-    val shown = if (open) Micronutrients.ALL else low.take(LOW_SHOWN)
-    // Пояснения — за «i», раскрытие — шевроном (24.09.2026): на плашке сама
-    // сводка дня, а откуда цифры и что значит риска — по требованию.
-    PaperCard(
-        label = "витамины и элементы",
-        info = "Свёрнутая плашка показывает то, чего мало; все ${Micronutrients.ALL.size} " +
-            "полосок — по стрелке. Вещества приезжают с разбором еды и с рационом; " +
-            "таблетки скажи отдельно — «выпил витамин D и магний». Риска на полоске — " +
-            "суточная норма мужчины 43 лет. Цифры считает модель по составу еды и точно — " +
-            "по рациону и штрихкоду: это порядок величины, а не анализ крови. У натрия " +
-            "норма — потолок, а не цель.",
-        trailing = {
-            GlyphButton(
-                Glyphs.ChevronDown,
-                if (open) "свернуть" else "все ${Micronutrients.ALL.size}",
-                onClick = { open = !open },
-                modifier = Modifier.rotate(if (open) 180f else 0f),
-                size = 32.dp,
-            )
-        },
-    ) {
-        if (totals.isEmpty() && !open) {
-            PaperHint("За этот день веществ не посчитано.")
-            return@PaperCard
-        }
-        // Одна строка вместо двадцати полосок: что закрыто, чего мало, что
-        // перебрано. Свёрнутую карточку читают именно её.
-        val okCount = Micronutrients.ALL.count {
-            Micronutrients.level(it, totals[it.id] ?: 0.0) == Micronutrients.Level.OK
-        }
-        // Список дефицитов режем: в пустой день их девятнадцать, и строка
-        // превращается в стену, из которой не следует ничего.
-        val lowNames = low.take(LOW_SHOWN).joinToString(", ") { it.name.lowercase() } +
-            (if (low.size > LOW_SHOWN) " и ещё ${low.size - LOW_SHOWN}" else "")
-        Text(
-            "Норму закрыли $okCount из ${Micronutrients.ALL.size}" +
-                (if (low.isEmpty()) "" else " · мало: $lowNames"),
-            style = MaterialTheme.typography.bodyMedium,
+    val head = if (open) sorted else sorted.filter { n ->
+        val lvl = Micronutrients.level(n, totals[n.id] ?: 0.0)
+        lvl == Micronutrients.Level.LOW || lvl == Micronutrients.Level.MID || lvl == Micronutrients.Level.OVER
+    }.take(8)
+    Column(Modifier.fillMaxWidth()) {
+        ru.zf.pravka.ui.SectionHeader(
+            "витамины и элементы · ${all.size}",
+            info = "Витамины и элементы" to ("Сначала то, чего мало; все ${all.size} — строкой внизу. Вещества приезжают " +
+                "с разбором еды и с рационом; таблетки скажи отдельно — «выпил витамин D и магний». Риска на " +
+                "полосе — суточная норма мужчины 43 лет. Цифры считает модель по составу еды и точно — по " +
+                "рациону и штрихкоду: это порядок величины, а не анализ крови. У натрия норма — потолок, а не цель."),
         )
-        if (over.isNotEmpty()) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "Перебор: " + over.joinToString(", ") { it.name.lowercase() },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MicroOver,
-            )
-        }
-        if (total.pills.isNotBlank()) {
-            Spacer(Modifier.height(4.dp))
-            PaperHint("Из банки: " + total.pills)
-        }
-        if (shown.isEmpty()) {
-            Spacer(Modifier.height(6.dp))
-            PaperHint("Ничего в дефиците — все полоски по стрелке.")
-            return@PaperCard
-        }
-        Spacer(Modifier.height(10.dp))
-        for (n in shown) {
-            MicroRow(
-                nutrient = n,
-                value = totals[n.id] ?: 0.0,
-                fromPills = total.microPills[n.id] ?: 0.0,
-            )
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .glass(RoundedCornerShape(22.dp), mode.glass)
+                .padding(horizontal = 18.dp, vertical = 10.dp),
+        ) {
+            if (totals.isEmpty()) {
+                Text("За этот день веществ не посчитано.", style = ty.body, color = mode.meta, modifier = Modifier.padding(vertical = 6.dp))
+            }
+            if (total.pills.isNotBlank()) {
+                Text("Из банки: " + total.pills, style = ty.meta, color = mode.meta, modifier = Modifier.padding(vertical = 4.dp))
+            }
+            if (totals.isNotEmpty()) {
+                for (n in head) MicroRow(n, totals[n.id] ?: 0.0, total.microPills[n.id] ?: 0.0)
+            }
+            val rest = all.size - head.size
+            if (rest > 0 || open) {
+                ru.zf.pravka.ui.Hairline(Modifier.padding(top = 6.dp))
+                Row(
+                    Modifier.fillMaxWidth().clickable { open = !open }.padding(vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (open) "свернуть" else if (low.isEmpty() && totals.isNotEmpty()) "все ${all.size} — в норме" else "ещё $rest — в норме",
+                        style = ty.bodyL,
+                        color = mode.label,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Icon(
+                        if (open) Glyphs.ChevronDown else Glyphs.Forward,
+                        contentDescription = null,
+                        tint = mode.label,
+                        modifier = Modifier.size(20.dp).rotate(if (open) 180f else 0f),
+                    )
+                }
+            }
         }
     }
 }
 
-/** Одно вещество: сколько от нормы, светофором, и зачем оно нужно. */
+/** Одно вещество строкой: имя («мало» жирным), полоса с риской нормы, процент; тап — зачем. */
 @Composable
 private fun MicroRow(
     nutrient: Micronutrients.Nutrient,
     value: Double,
     fromPills: Double,
 ) {
+    var why by remember(nutrient.id) { mutableStateOf(false) }
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
     val level = Micronutrients.level(nutrient, value)
-    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(nutrient.name, style = MaterialTheme.typography.bodyMedium)
+    val low = level == Micronutrients.Level.LOW
+    val over = level == Micronutrients.Level.OVER
+    Column(Modifier.fillMaxWidth().clickable { why = !why }.padding(vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                Micronutrients.amount(value) + " / " + Micronutrients.amount(nutrient.norm) +
-                    " " + nutrient.unit + " · " + Micronutrients.word(level),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = microColor(level),
+                androidx.compose.ui.text.buildAnnotatedString {
+                    pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = if (low) FontWeight.SemiBold else FontWeight.Normal))
+                    append(nutrient.name)
+                    pop()
+                    if (low) {
+                        pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.SemiBold, fontSize = ty.caption.fontSize))
+                        append(" мало")
+                        pop()
+                    }
+                },
+                style = ty.body,
+                color = ru.zf.pravka.ui.Ink.Text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.width(132.dp),
+            )
+            androidx.compose.foundation.Canvas(Modifier.weight(1f).height(8.dp)) {
+                val r = androidx.compose.ui.geometry.CornerRadius(size.height / 2, size.height / 2)
+                drawRoundRect(mode.tint.copy(alpha = 0.14f), cornerRadius = r)
+                val scale = nutrient.scale()
+                val w = size.width * (value / scale).toFloat().coerceIn(0f, 1f)
+                if (w > 0f) drawRoundRect(if (over) ru.zf.pravka.ui.Ink.Warn else mode.ramp[1], size = androidx.compose.ui.geometry.Size(w, size.height), cornerRadius = r)
+                val x = size.width * (nutrient.norm / scale).toFloat()
+                drawLine(ru.zf.pravka.ui.Ink.Cream.copy(alpha = 0.7f), androidx.compose.ui.geometry.Offset(x, -3f), androidx.compose.ui.geometry.Offset(x, size.height + 3f), strokeWidth = 2f)
+            }
+            Text(
+                "${(nutrient.share(value) * 100).toInt()} %",
+                style = ty.valueS.copy(fontSize = ty.body.fontSize),
+                color = if (over) ru.zf.pravka.ui.Ink.Warn else ru.zf.pravka.ui.Ink.TextStrong,
+                textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                modifier = Modifier.width(64.dp),
             )
         }
-        Spacer(Modifier.height(4.dp))
-        MicroBar(nutrient, value)
-        Spacer(Modifier.height(4.dp))
-        PaperHint(
-            (if (fromPills > 0) "из банки " + Micronutrients.amount(fromPills) + " " +
-                nutrient.unit + " · " else "") + nutrient.why + ". " + nutrient.source
-        )
+        if (why) {
+            Text(
+                Micronutrients.amount(value) + " / " + Micronutrients.amount(nutrient.norm) + " " + nutrient.unit +
+                    (if (fromPills > 0) " · из банки " + Micronutrients.amount(fromPills) + " " + nutrient.unit else "") +
+                    " · " + nutrient.why + ". " + nutrient.source,
+                style = ty.meta,
+                color = mode.meta,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
     }
 }
 
-/** Один приём: позиции, итог и ручки. */
+/** «Ужин: паста с курицей, салат» — вид приёма и что в нём. */
+private fun mealTitle(meal: FoodStore.Meal): String {
+    // Внутри строки позиции — с маленькой буквы («паста с курицей, салат»);
+    // аббревиатуры («ПП-батончик») не трогаем.
+    val list = meal.items.joinToString(", ") { item ->
+        val n = item.name
+        if (n.length > 1 && n[1].isUpperCase()) n else n.replaceFirstChar { it.lowercase() }
+    }.ifBlank { meal.raw }
+    return meal.kind.replaceFirstChar { it.uppercase() } + ": " + list
+}
+
+private fun macros(p: Int, f: Int, c: Int) = "Б $p · Ж $f · У $c"
+
+private fun sourceWord(source: String): String? = when (source) {
+    "photo" -> "по фото"
+    "barcode" -> "по штрихкоду"
+    "voice" -> "голосом"
+    else -> null
+}
+
+/**
+ * Разобранный, но не записанный приём (Правка 4.0, `screens/10`): «Ужин:
+ * паста с курицей, салат» жирным, «≈ 720 ккал · Б 42 · Ж 24 · У 80 · по
+ * фото», справа ✕ · ✎ и «Записать» главной клавишей. Тап по плашке — позиции,
+ * замечание модели, «Сказано: …» и «разобрать заново».
+ */
 @Composable
 private fun MealCard(
     app: PravkaApp,
@@ -607,122 +612,366 @@ private fun MealCard(
     onReparse: (() -> Unit)?,
     onUnconfirm: (() -> Unit)? = null,
 ) {
-    var open by remember(meal.id) { mutableStateOf(pendingState) }
-    val accent = kindColor(meal.kind)
-    PaperCard {
-        Row(
-            Modifier.fillMaxWidth().clickable { open = !open },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                Modifier
-                    .width(4.dp)
-                    .height(38.dp)
-                    .background(accent, MaterialTheme.shapes.extraSmall)
-            )
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    meal.kind.replaceFirstChar { it.uppercase() } + " · " +
-                        mealTimeFormat.format(Date(meal.ts)),
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                // Длинный список позиций в одну строку не влезает — раскрытие
-                // карточки покажет всё.
-                PaperHint(meal.shortList.ifBlank { meal.raw })
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    "${meal.kcal} ккал",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                PaperHint("Б${meal.protein} Ж${meal.fat} У${meal.carbs}")
-            }
+    var open by remember(meal.id) { mutableStateOf(false) }
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .glass(RoundedCornerShape(22.dp), mode.glass)
+            .clip(RoundedCornerShape(22.dp))
+            .clickable { open = !open }
+            .padding(horizontal = 18.dp, vertical = 14.dp),
+    ) {
+        Text(mealTitle(meal), style = ty.bodyStrong.copy(fontSize = ty.bodyL.fontSize, lineHeight = ty.bodyL.lineHeight),
+            color = ru.zf.pravka.ui.Ink.TextStrong, maxLines = if (open) 6 else 2, overflow = TextOverflow.Ellipsis)
+        Text(
+            listOfNotNull("≈ ${ru.zf.pravka.core.Fmt.num(meal.kcal)} ккал", macros(meal.protein, meal.fat, meal.carbs), sourceWord(meal.source))
+                .joinToString(" · "),
+            style = ty.meta,
+            color = mode.meta,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+        if (open) {
+            MealDetails(app, meal)
         }
-        if (!open) return@PaperCard
         Spacer(Modifier.height(8.dp))
-        for (item in meal.items) {
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        item.name,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    PaperHint(
-                        listOfNotNull(
-                            if (item.pill) "таблетка" else null,
-                            if (item.grams > 0) "${item.grams} г" else null,
-                            // У таблетки макросов нет — писать «Б0 Ж0 У0» значит
-                            // занимать строку ничем.
-                            if (item.pill) null else "Б${item.protein} Ж${item.fat} У${item.carbs}",
-                            item.sureness.takeIf { it.isNotBlank() && !item.pill },
-                            item.micro.takeIf { it.isNotEmpty() }?.let { Micronutrients.short(it, limit = 4) },
-                        ).joinToString(" · ")
-                    )
-                }
-                Text("${item.kcal}", style = MaterialTheme.typography.bodyMedium)
-            }
-        }
-        val mealMicro = meal.micro
-        if (mealMicro.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
-            PaperHint("Витамины приёма: " + Micronutrients.short(mealMicro, limit = 8))
-        }
-        if (meal.note.isNotBlank()) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "⚠ " + meal.note,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.secondary,
-            )
-        }
-        val photo = app.foodStore.photoFile(meal.photo)
-        if (photo != null) {
-            Spacer(Modifier.height(6.dp))
-            PaperHint("Снимок сохранён (${photo.length() / 1024} КБ)")
-        }
-        if (meal.raw.isNotBlank() && meal.raw != meal.shortList) {
-            Spacer(Modifier.height(6.dp))
-            PaperHint("Сказано: «${meal.raw}»")
-        }
-        Spacer(Modifier.height(10.dp))
-        // Одна главная — «Записать» справа, под большим пальцем (24.09.2026).
-        // Мелкие ручки слева значками; «Поправить» — кружком с кромкой: словом
-        // рядом с «Записать» и двумя значками он на внешнем экране Fold не
-        // встаёт, а у обоих видов карточки ручка правки должна быть одна.
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            GlyphButton(Glyphs.Delete, "убрать приём", onClick = onDelete)
-            if (onReparse != null) {
-                GlyphButton(Glyphs.Refresh, "разобрать заново", onClick = onReparse)
-            }
-            // Убрать из дня — не то же, что удалить: разбор остаётся ждать, и
-            // приём можно записать заново, поправив.
-            if (onUnconfirm != null) {
-                PaperTextButton("Из дня", onClick = onUnconfirm, icon = Glyphs.Undo)
-            }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            if (open && onReparse != null) GlyphButton(Glyphs.Refresh, "разобрать заново", onClick = onReparse, tint = mode.label)
+            if (onUnconfirm != null) PaperTextButton("Из дня", onClick = onUnconfirm, icon = Glyphs.Undo)
             Spacer(Modifier.weight(1f))
-            PaperIconButton(Glyphs.Edit, "поправить", onClick = onEdit)
+            GlyphButton(Glyphs.Close, "убрать приём", onClick = onDelete, tint = mode.label)
+            GlyphButton(Glyphs.Edit, "поправить", onClick = onEdit, tint = mode.label)
             if (pendingState) {
-                Spacer(Modifier.width(8.dp))
-                PaperButton("Записать", onClick = onConfirm, icon = Glyphs.Check, primary = true)
+                Spacer(Modifier.width(6.dp))
+                ru.zf.pravka.ui.PrimaryKey("Записать", onClick = onConfirm)
             }
         }
-        if (!pendingState) {
-            val marks = listOfNotNull(
-                if (meal.icuSynced) "intervals.icu" else null,
-                if (meal.ribbonSynced) "лента" else null,
-            )
-            if (marks.isNotEmpty()) PaperHint("Уехало: " + marks.joinToString(", "))
+    }
+}
+
+/** Позиции приёма, его витамины, замечание модели, снимок и сказанное — по тапу. */
+@Composable
+private fun MealDetails(app: PravkaApp, meal: FoodStore.Meal) {
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    Spacer(Modifier.height(8.dp))
+    for (item in meal.items) {
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(item.name, style = ty.body, color = ru.zf.pravka.ui.Ink.Text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    listOfNotNull(
+                        if (item.pill) "таблетка" else null,
+                        if (item.grams > 0) "${item.grams} г" else null,
+                        // У таблетки макросов нет — писать «Б0 Ж0 У0» значит занимать строку ничем.
+                        if (item.pill) null else macros(item.protein, item.fat, item.carbs),
+                        item.sureness.takeIf { it.isNotBlank() && !item.pill },
+                        item.micro.takeIf { it.isNotEmpty() }?.let { Micronutrients.short(it, limit = 4) },
+                    ).joinToString(" · "),
+                    style = ty.meta,
+                    color = mode.meta,
+                )
+            }
+            Text("${item.kcal}", style = ty.valueS, color = ru.zf.pravka.ui.Ink.Text)
         }
+    }
+    val mealMicro = meal.micro
+    if (mealMicro.isNotEmpty()) {
+        Text("Витамины приёма: " + Micronutrients.short(mealMicro, limit = 8), style = ty.meta, color = mode.meta, modifier = Modifier.padding(top = 6.dp))
+    }
+    if (meal.note.isNotBlank()) {
+        Row(Modifier.padding(top = 6.dp)) {
+            Icon(Glyphs.Error, contentDescription = null, tint = ru.zf.pravka.ui.Ink.Warn, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(meal.note, style = ty.label, color = ru.zf.pravka.ui.Ink.Warn)
+        }
+    }
+    val photo = app.foodStore.photoFile(meal.photo)
+    if (photo != null) {
+        Text("Снимок сохранён (${photo.length() / 1024} КБ)", style = ty.meta, color = mode.meta, modifier = Modifier.padding(top = 6.dp))
+    }
+    if (meal.raw.isNotBlank() && meal.raw != meal.shortList) {
+        Text("Сказано: «${meal.raw}»", style = ty.meta, color = mode.meta, modifier = Modifier.padding(top = 6.dp))
+    }
+    if (meal.confirmed) {
+        val marks = listOfNotNull(if (meal.icuSynced) "intervals.icu" else null, if (meal.ribbonSynced) "лента" else null)
+        if (marks.isNotEmpty()) Text("Уехало: " + marks.joinToString(", "), style = ty.meta, color = mode.meta, modifier = Modifier.padding(top = 6.dp))
+    }
+}
+
+/**
+ * Записанный приём строкой плашки «Приёмы» (`screens/10`): время, «Завтрак:
+ * овсянка, два яйца» и «Б 28 · Ж 18 · У 60», справа калории. Тап — позиции и
+ * ручки: «Из дня», ✕, ✎.
+ */
+@Composable
+private fun MealRow(
+    app: PravkaApp,
+    meal: FoodStore.Meal,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onUnconfirm: () -> Unit,
+) {
+    var open by remember(meal.id) { mutableStateOf(false) }
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    Column(Modifier.fillMaxWidth().clickable { open = !open }.padding(vertical = 10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(mealTimeFormat.format(Date(meal.ts)), style = ty.time, color = mode.meta, modifier = Modifier.width(56.dp))
+            Column(Modifier.weight(1f)) {
+                Text(mealTitle(meal), style = ty.bodyL, color = ru.zf.pravka.ui.Ink.Text, maxLines = if (open) 6 else 2, overflow = TextOverflow.Ellipsis)
+                Text(macros(meal.protein, meal.fat, meal.carbs), style = ty.meta, color = mode.meta)
+            }
+            Spacer(Modifier.width(10.dp))
+            Text(ru.zf.pravka.core.Fmt.num(meal.kcal), style = ty.valueS, color = ru.zf.pravka.ui.Ink.TextStrong)
+        }
+        if (open) {
+            Column(Modifier.padding(start = 56.dp)) {
+                MealDetails(app, meal)
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                    // Убрать из дня — не то же, что удалить: разбор остаётся ждать, и
+                    // приём можно записать заново, поправив.
+                    PaperTextButton("Из дня", onClick = onUnconfirm, icon = Glyphs.Undo)
+                    Spacer(Modifier.weight(1f))
+                    GlyphButton(Glyphs.Delete, "убрать приём", onClick = onDelete, tint = mode.label)
+                    GlyphButton(Glyphs.Edit, "поправить", onClick = onEdit, tint = mode.label)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Итог дня (`screens/10`): сколько осталось — крупно, справа «1 545 съедено ·
+ * цель 2 200»; полоса — съеденное заливкой, ждущее «✓» штриховкой, цель —
+ * риской; под ней «с ужином перебор 65 ккал»; три макро полосками.
+ */
+@Composable
+private fun DayTotalCard(
+    total: FoodStore.DayTotal,
+    pending: List<FoodStore.Meal>,
+    targetKcal: Int,
+    macros: List<Triple<String, Int, Int>>,
+    today: Boolean,
+) {
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    val eaten = total.kcal
+    val waiting = pending.sumOf { it.kcal }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .glass(RoundedCornerShape(22.dp), mode.glass)
+            .padding(horizontal = 18.dp, vertical = 16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Column(Modifier.weight(1f)) {
+                if (targetKcal > 0) {
+                    val left = targetKcal - eaten
+                    Text(ru.zf.pravka.core.Fmt.num(kotlin.math.abs(left)), style = ty.displayXL, color = ru.zf.pravka.ui.Ink.TextStrong, maxLines = 1)
+                    Text(
+                        if (left >= 0) "ккал осталось" + (if (today) " на сегодня" else "") else "ккал перебор",
+                        style = ty.label,
+                        color = if (left >= 0) mode.label else ru.zf.pravka.ui.Ink.Warn,
+                    )
+                } else {
+                    Text(ru.zf.pravka.core.Fmt.num(eaten), style = ty.displayXL, color = ru.zf.pravka.ui.Ink.TextStrong, maxLines = 1)
+                    Text("ккал за день · цель — в настройках Еды", style = ty.label, color = mode.label)
+                }
+            }
+            if (targetKcal > 0) {
+                Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(bottom = 2.dp)) {
+                    Text(
+                        androidx.compose.ui.text.buildAnnotatedString {
+                            pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold, color = ru.zf.pravka.ui.Ink.TextStrong))
+                            append(ru.zf.pravka.core.Fmt.num(eaten))
+                            pop()
+                            append(" съедено")
+                        },
+                        style = ty.bodyL,
+                        color = mode.label,
+                    )
+                    Text("цель ${ru.zf.pravka.core.Fmt.num(targetKcal)}", style = ty.meta, color = mode.meta)
+                }
+            }
+        }
+        if (targetKcal > 0) {
+            Spacer(Modifier.height(12.dp))
+            val scale = maxOf(targetKcal, eaten + waiting).toFloat() * 1.04f
+            val fill = mode.ramp[1]
+            androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(14.dp)) {
+                val r = androidx.compose.ui.geometry.CornerRadius(size.height / 2, size.height / 2)
+                drawRoundRect(mode.tint.copy(alpha = 0.14f), cornerRadius = r)
+                val we = size.width * (eaten / scale)
+                if (waiting > 0) {
+                    val ww = size.width * (waiting / scale)
+                    clipRect(left = we - 4f, right = we + ww) {
+                        hatch(fill, gapAlpha = 0.18f, topLeft = androidx.compose.ui.geometry.Offset(we - 4f, 0f), size = androidx.compose.ui.geometry.Size(ww + 4f, size.height), stripeAlpha = 0.7f)
+                    }
+                }
+                drawRoundRect(fill, size = androidx.compose.ui.geometry.Size(we, size.height), cornerRadius = r)
+                val x = size.width * (targetKcal / scale)
+                drawLine(ru.zf.pravka.ui.Ink.Cream, androidx.compose.ui.geometry.Offset(x, -3f), androidx.compose.ui.geometry.Offset(x, size.height + 3f), strokeWidth = 2.5f)
+            }
+            if (waiting > 0) {
+                val after = targetKcal - eaten - waiting
+                val with = pending.firstOrNull()?.kind?.let { k ->
+                    when (k) { "завтрак" -> "с завтраком"; "обед" -> "с обедом"; "ужин" -> "с ужином"; "перекус" -> "с перекусом"; else -> "с ожидающим" }
+                } ?: "с ожидающим"
+                Text(
+                    androidx.compose.ui.text.buildAnnotatedString {
+                        append("$with ")
+                        pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold, color = ru.zf.pravka.ui.Ink.Text))
+                        append(if (after < 0) "перебор ${ru.zf.pravka.core.Fmt.num(-after)} ккал" else "останется ${ru.zf.pravka.core.Fmt.num(after)} ккал")
+                        pop()
+                    },
+                    style = ty.label,
+                    color = mode.label,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        for ((label, value, target) in macros) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(label, style = ty.body, color = mode.label, modifier = Modifier.width(96.dp))
+                androidx.compose.foundation.Canvas(Modifier.weight(1f).height(8.dp)) {
+                    val r = androidx.compose.ui.geometry.CornerRadius(size.height / 2, size.height / 2)
+                    drawRoundRect(mode.tint.copy(alpha = 0.14f), cornerRadius = r)
+                    if (target > 0 && value > 0) {
+                        val w = size.width * (value / target.toFloat()).coerceAtMost(1f)
+                        drawRoundRect(mode.ramp[1], size = androidx.compose.ui.geometry.Size(w, size.height), cornerRadius = r)
+                    }
+                }
+                Text(
+                    if (target > 0) "$value / $target г" else "$value г",
+                    style = ty.valueS.copy(fontSize = ty.body.fontSize),
+                    color = ru.zf.pravka.ui.Ink.TextStrong,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                    modifier = Modifier.width(96.dp),
+                )
+            }
+        }
+        if (total.fiber > 0) {
+            Text("клетчатка ${total.fiber} г · приёмов ${total.meals}", style = ty.meta, color = mode.meta, modifier = Modifier.padding(top = 6.dp))
+        }
+    }
+}
+
+/**
+ * Неделя столбиками (`screens/10`): калории по дням, пунктиром — цель,
+ * сегодня — светлее и со штриховкой ждущего «✓»; под столбиком — число и
+ * день недели. Тап по столбику листает дневник на тот день.
+ */
+@Composable
+private fun WeekKcalCard(
+    week: List<FoodStore.DayTotal>,
+    targetKcal: Int,
+    pendingToday: Int,
+    selected: String,
+    onDay: (String) -> Unit,
+) {
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    val withData = week.filter { it.kcal > 0 }
+    val todayKey = week.lastOrNull()?.date
+    Column(Modifier.fillMaxWidth()) {
+        ru.zf.pravka.ui.SectionHeader(
+            "неделя",
+            trailing = if (withData.isNotEmpty()) "среднее ${ru.zf.pravka.core.Fmt.num(withData.sumOf { it.kcal } / withData.size)} за ${withData.size} ${dayWord(withData.size)}" else null,
+        )
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .glass(RoundedCornerShape(22.dp), mode.glass)
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+        ) {
+            val top = maxOf(targetKcal, week.maxOf { it.kcal + if (it.date == todayKey) pendingToday else 0 }).coerceAtLeast(1) * 1.08f
+            if (targetKcal > 0) {
+                Text("цель ${ru.zf.pravka.core.Fmt.num(targetKcal)}", style = ty.caption, color = mode.meta, modifier = Modifier.align(Alignment.End))
+            }
+            Box(Modifier.fillMaxWidth().height(120.dp)) {
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (d in week) {
+                        val isToday = d.date == todayKey
+                        androidx.compose.foundation.Canvas(
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { onDay(d.date) },
+                        ) {
+                            val r = androidx.compose.ui.geometry.CornerRadius(5.dp.toPx(), 5.dp.toPx())
+                            val h = size.height * d.kcal / top
+                            val pend = if (isToday) size.height * pendingToday / top else 0f
+                            if (pend > 0f) {
+                                hatch(
+                                    mode.ramp[1],
+                                    gapAlpha = 0.16f,
+                                    topLeft = androidx.compose.ui.geometry.Offset(0f, size.height - h - pend),
+                                    size = androidx.compose.ui.geometry.Size(size.width, pend),
+                                    stripeAlpha = 0.7f,
+                                )
+                            }
+                            if (h > 0f) {
+                                drawRoundRect(
+                                    if (isToday) mode.ramp[1] else mode.key.copy(alpha = 0.95f),
+                                    topLeft = androidx.compose.ui.geometry.Offset(0f, size.height - h),
+                                    size = androidx.compose.ui.geometry.Size(size.width, h),
+                                    cornerRadius = r,
+                                )
+                            }
+                            if (d.date == selected && !isToday) {
+                                drawRoundRect(mode.tint.copy(alpha = 0.6f), cornerRadius = r, style = androidx.compose.ui.graphics.drawscope.Stroke(1.5.dp.toPx()))
+                            }
+                        }
+                    }
+                }
+                if (targetKcal > 0) {
+                    androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                        val y = size.height * (1f - targetKcal / top)
+                        drawLine(
+                            ru.zf.pravka.ui.Ink.Cream.copy(alpha = 0.45f),
+                            androidx.compose.ui.geometry.Offset(0f, y),
+                            androidx.compose.ui.geometry.Offset(size.width, y),
+                            strokeWidth = 1.5f,
+                            pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(10f, 8f)),
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (d in week) {
+                    val isToday = d.date == todayKey
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            if (d.kcal > 0) ru.zf.pravka.core.Fmt.num(d.kcal) else "—",
+                            style = ty.caption.copy(fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal),
+                            color = if (isToday) ru.zf.pravka.ui.Ink.TextStrong else mode.label,
+                            maxLines = 1,
+                        )
+                        val ld = runCatching { java.time.LocalDate.parse(d.date) }.getOrNull()
+                        Text(
+                            ld?.let { ru.zf.pravka.core.Fmt.wd(it) }.orEmpty(),
+                            style = ty.caption.copy(fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal),
+                            color = if (isToday) ru.zf.pravka.ui.Ink.TextStrong else mode.meta,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun dayWord(n: Int): String {
+    val m10 = n % 10
+    val m100 = n % 100
+    return when {
+        m10 == 1 && m100 != 11 -> "день"
+        m10 in 2..4 && m100 !in 12..14 -> "дня"
+        else -> "дней"
     }
 }
 
@@ -929,17 +1178,6 @@ private fun NumberField(
     )
 }
 
-@Composable
-private fun kindColor(kind: String): Color {
-    val hue = when (kind.trim().lowercase()) {
-        "завтрак" -> 45f
-        "обед" -> 25f
-        "ужин" -> 280f
-        else -> 150f
-    }
-    return Color.hsv(hue, 0.5f, 0.92f)
-}
-
 // ---- Мелочи ----
 
 /**
@@ -977,13 +1215,6 @@ private fun daysBetween(date: String): Int {
     return ((today - parsed) / 86_400_000L).toInt().coerceAtLeast(0)
 }
 
-private fun humanDay(date: String): String {
-    val back = daysBetween(date)
-    if (back == 0) return "Сегодня"
-    if (back == 1) return "Вчера"
-    val parsed = runCatching { isoFormat.parse(date) }.getOrNull() ?: return date
-    return dayTitleFormat.format(parsed)
-}
 
 /** «13:40» на дне приёма → метка времени; мусор даёт null (оставить как было). */
 private fun parseClock(baseTs: Long, clock: String): Long? {

@@ -818,20 +818,25 @@ private fun MainScreen(
                                 if (scopeSheet) MoneyScopeSheet(app, pOn, zOn, onDismiss = { scopeSheet = false })
                             }
                             else -> {
-                                TabHeader(
-                                    title = stringResource(R.string.tab_food),
-                                    onBack = toToday,
-                                    titleExtra = null,
-                                    actions = {
-                                        StatsAction(openReport)
-                                        CostAction(openCost)
-                                        SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.FOOD)) }
-                                    },
-                                )
+                                // Шапку рисует вкладка: вторым тоном — день дневника (макет 10).
+                                val foodTitle = stringResource(R.string.tab_food)
                                 FoodTab(
                                     app,
                                     autoAction = foodActionPending,
                                     onAutoConsumed = { foodActionPending = null },
+                                    header = { day, onDay ->
+                                        TabHeader(
+                                            title = foodTitle,
+                                            onBack = toToday,
+                                            titleExtra = day,
+                                            onTitleExtra = onDay,
+                                            actions = {
+                                                StatsAction(openReport)
+                                                CostAction(openCost)
+                                                SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.FOOD)) }
+                                            },
+                                        )
+                                    },
                                 )
                             }
                         }

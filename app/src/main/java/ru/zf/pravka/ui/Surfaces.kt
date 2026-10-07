@@ -287,21 +287,24 @@ fun Key(
 
 /** Буква режима на монете — векторы плавающих кнопок (оверлей их не теряет: мы только читаем). */
 fun coinGlyph(decor: ModeDecor): Int = when (decor) {
-    ModeDecor.PRAVKA, ModeDecor.SERVICE, ModeDecor.TODAY -> R.drawable.ic_fab_glyph
-    ModeDecor.ZASECHKA -> R.drawable.ic_zfab_glyph
-    ModeDecor.DELA -> R.drawable.ic_razn_glyph
-    // «Т» и «Е» в том же брусковом языке уже есть в проекте: Т — бывшая
-    // буква Тела, Е — буква выключенной с завода кнопки Еды.
-    ModeDecor.SPORT -> R.drawable.ic_body_glyph
-    ModeDecor.FOOD -> R.drawable.ic_efab_glyph
-    ModeDecor.MONEY -> R.drawable.ic_money_glyph
+    // Владелец, 07.10.2026: «везде не буквы в кругах, а наши с тобой прекрасные
+    // иконки. Точно как сейчас» — на монетах те же пиктограммы, что на
+    // плавающих кнопках в режиме иконок (перо, часы, галочка, гантель, вилка с
+    // ножом, рубль), теми же файлами `_btn` (52 % поля, как у кнопок).
+    ModeDecor.PRAVKA, ModeDecor.SERVICE, ModeDecor.TODAY -> R.drawable.ic_mode_pravka_btn
+    ModeDecor.ZASECHKA -> R.drawable.ic_mode_zasechka_btn
+    ModeDecor.DELA -> R.drawable.ic_mode_delo_btn
+    ModeDecor.SPORT -> R.drawable.ic_mode_sport_btn
+    ModeDecor.FOOD -> R.drawable.ic_mode_food_btn
+    ModeDecor.MONEY -> R.drawable.ic_mode_money_btn
 }
 
 /**
- * Монета (DESIGN §8): круг в цвете кнопки режима с бликом и буквой режима.
+ * Монета (DESIGN §8): круг в цвете кнопки режима с бликом и значком режима
+ * (как на плавающей кнопке; буквы макета владелец заменил значками 07.10).
  * Диаметры: 20 — отметка в ленте, 24 — ждёт подтверждения, 30 — пилюля
- * «+84», 34 — шапка режима. Буква — около 0.55 диаметра (векторы кнопок
- * держат её ~0.52 своего поля, поэтому рисуются чуть крупнее поля монеты).
+ * «+84», 34 — шапка режима. Значок — как на кнопке: вектор держит его в
+ * 0.52 своего поля, поэтому рисуется чуть крупнее поля монеты.
  */
 @Composable
 fun Coin(decor: ModeDecor, size: Dp, modifier: Modifier = Modifier) {
