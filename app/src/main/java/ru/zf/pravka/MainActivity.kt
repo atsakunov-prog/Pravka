@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -751,19 +752,29 @@ private fun MainScreen(
                                 ZasechkaTab(app, editEntry = zasechkaEdit, onEditHandled = { zasechkaEdit = null })
                             }
                             Tab.TODOIST -> {
-                                TabHeader(
-                                    title = "Дела",
-                                    onBack = toToday,
-                                    actions = {
-                                        StatsAction(openReport)
-                                        CostAction(openCost)
-                                        SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.DELA)) }
-                                    },
-                                )
+                                val delaActions: @Composable RowScope.() -> Unit = {
+                                    StatsAction(openReport)
+                                    CostAction(openCost)
+                                    SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.DELA)) }
+                                }
                                 // Дела на домашнем сервере или Todoist — выбор в
                                 // «Подключениях» (03.10.2026); Todoist — запасной путь.
+                                // У своего сервера шапку рисует вкладка: вторым тоном
+                                // в ней сфера (макет 06 — «Дела Все сферы ⌄»).
                                 val onServer by app.delaServer.collectAsState()
-                                if (onServer) DelaTab(app, openTaskId = delaOpen, onOpenHandled = { delaOpen = null }) else TodoistTab(app)
+                                if (onServer) {
+                                    DelaTab(
+                                        app,
+                                        openTaskId = delaOpen,
+                                        onOpenHandled = { delaOpen = null },
+                                        header = { sub, onSub ->
+                                            TabHeader(title = "Дела", onBack = toToday, titleExtra = sub, onTitleExtra = onSub, actions = delaActions)
+                                        },
+                                    )
+                                } else {
+                                    TabHeader(title = "Дела", onBack = toToday, actions = delaActions)
+                                    TodoistTab(app)
+                                }
                             }
                             Tab.SPORT -> {
                                 TabHeader(

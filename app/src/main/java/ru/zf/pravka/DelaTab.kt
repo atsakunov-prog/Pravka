@@ -1,5 +1,16 @@
 package ru.zf.pravka
 
+import ru.zf.pravka.ui.glass
+
+import ru.zf.pravka.ui.bottomFade
+
+import androidx.compose.foundation.layout.imePadding
+
+import androidx.compose.foundation.layout.navigationBarsPadding
+
+import androidx.compose.foundation.layout.PaddingValues
+
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -187,6 +198,11 @@ fun DelaTab(
     /** Дело, которое открыть карточкой сразу (тап по делу на «Сегодня»). */
     openTaskId: String? = null,
     onOpenHandled: () -> Unit = {},
+    /**
+     * Шапка режима (Правка 4.0): её рисует вкладка, потому что второй тон
+     * шапки — сфера («Все сферы ⌄», `screens/06`), а сфера живёт здесь.
+     */
+    header: @Composable (sphere: String, onSphere: () -> Unit) -> Unit = { _, _ -> },
 ) {
     val snap by app.delaStore.view.collectAsState()
     val queued by app.delaStore.queued.collectAsState()
@@ -343,8 +359,11 @@ fun DelaTab(
         }
     }
 
+    // На развороте дело открывается справа (`DelaTaskPane`), а не листом.
+    val wideNow = ru.zf.pravka.ui.twoPane()
+    var paneId by rememberSaveable { mutableStateOf<String?>(null) }
     val actions = DelaActions(
-        open = { openTask = it },
+        open = { if (wideNow) paneId = it.id else openTask = it },
         start = { t ->
             if (starting.isBlank()) {
                 starting = t.id
@@ -545,80 +564,63 @@ fun DelaTab(
     val crm = DelaCrmContext(app, snap, me, today, views, queuedOps, moneyOn, actions, push, back = { pages = pages.dropLast(1) }, ui = crmUi)
 
     val listState = rememberLazyListState()
+    var sphereSheet by remember { mutableStateOf(false) }
+    // Разворот (`screens/08`): список слева, карточка дела справа, строка «сказать» — под ней.
+    val wide = ru.zf.pravka.ui.twoPane()
+    val list: @Composable (Modifier) -> Unit = { listModifier ->
     LazyColumn(
-        modifier = Modifier.fillMaxSize().scrollFade(listState),
+        modifier = listModifier.fillMaxSize().bottomFade().scrollFade(listState),
         state = listState,
-        contentPadding = ScreenPad.Padding,
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 110.dp),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
-        // Пилюля «говори дела» — та же, что выезжает у «Д»: голос и набор идут
-        // одним разбором Разноски и сразу в Дела.
-        item {
-            VoiceInput(
-                value = draft,
-                onValueChange = { draft = it },
-                placeholder = if (talking) "Разбираю…" else ru.zf.pravka.core.PillHint.say(ownerName, "говори дела"),
-                onSend = {
-                    val text = draft.trim()
-                    val service = PravkaAccessibilityService.instance
-                    if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
-                    else if (text.isNotEmpty()) {
-                        draft = ""
-                        service.onRaznoskaText(text)
-                    }
-                },
-                onMic = {
-                    val service = PravkaAccessibilityService.instance
-                    if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
-                    else service.onRaznoskaTap()
-                },
-                sendEnabled = draft.isNotBlank(),
-                maxLines = 4,
-                busy = talking,
-            )
-        }
-
+        // «▷ Сейчас: Ужин с семьёй · 21 м · синк 18:40 · поиск · +» (`screens/06`):
+        // что идёт в Засечке, когда сверялись с сервером, и два действия.
         item {
             Column(Modifier.fillMaxWidth()) {
-                if (running != null) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 4.dp, bottom = 6.dp)) {
-                        Icon(Glyphs.Timer, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(8.dp))
+                val mode = ru.zf.pravka.ui.LocalMode.current
+                val ty = ru.zf.pravka.ui.LocalPravkaType.current
+                val bad = st.lastError.isNotBlank() && st.lastErrorAt >= st.lastOk
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(start = 4.dp)) {
+                    if (running != null) {
+                        Icon(Glyphs.Play, contentDescription = null, tint = mode.tint, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
                         Text(
-                            "Сейчас идёт: ${running.title.ifBlank { "без названия" }}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
+                            androidx.compose.ui.text.buildAnnotatedString {
+                                append("Сейчас: ")
+                                pushStyle(androidx.compose.ui.text.SpanStyle(color = ru.zf.pravka.ui.Ink.PlanText))
+                                append(running.title.ifBlank { "без названия" })
+                                append(" · " + ru.zf.pravka.core.Fmt.durMs(now - running.start))
+                                pop()
+                            },
+                            style = ty.label,
+                            color = mode.label,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
                         )
+                    } else {
+                        Spacer(Modifier.weight(1f))
                     }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    GlyphButton(
-                        Glyphs.Refresh,
-                        "отправить очередь и обновить",
-                        enabled = link != null && !st.running,
-                        onClick = { scope.launch { app.delaSync.sync("руками") } },
-                    )
-                    val bad = st.lastError.isNotBlank() && st.lastErrorAt >= st.lastOk
+                    // Синк — коротко; тап — «отправить очередь и обновить».
                     Text(
-                        delaStatusLine(link != null, st, queued.size, snap.syncedAt, now),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (bad) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
+                        delaSyncShort(link != null, st, queued.size, snap.syncedAt, now),
+                        style = ty.meta.copy(fontWeight = if (bad) FontWeight.SemiBold else FontWeight.Normal),
+                        color = if (bad) mode.value else mode.meta,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable(enabled = link != null && !st.running) { scope.launch { app.delaSync.sync("руками") } }
+                            .padding(horizontal = 6.dp, vertical = 10.dp),
                     )
                     if (askScreen != null) {
                         GlyphButton(
-                            Glyphs.Ask,
+                            Glyphs.Spark,
                             if (askOpen) "убрать строку Claude" else "Claude: команда на дела этого экрана",
-                            tint = if (askOpen || ask.running == ASK_SCREEN) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = if (askOpen || ask.running == ASK_SCREEN) mode.value else mode.label,
                             onClick = { askOpen = !askOpen },
                         )
                     }
-                    GlyphButton(Glyphs.Plus, "новое дело руками", onClick = { newTask = true })
                     GlyphButton(
                         if (searching) Glyphs.Close else Glyphs.Search,
                         if (searching) "закрыть поиск" else "поиск по делам",
@@ -626,6 +628,16 @@ fun DelaTab(
                             if (searching) query = ""
                             searching = !searching
                         },
+                    )
+                    GlyphButton(Glyphs.Plus, "новое дело руками", onClick = { newTask = true })
+                }
+                if (bad) {
+                    // Ошибка синка — причиной целиком, как и раньше (железное правило 6).
+                    Text(
+                        delaStatusLine(link != null, st, queued.size, snap.syncedAt, now),
+                        style = ty.meta,
+                        color = mode.value,
+                        modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
                     )
                 }
                 if (searching || query.isNotEmpty()) PaperField(value = query, onValueChange = { query = it }, label = "Поиск по делам")
@@ -678,13 +690,17 @@ fun DelaTab(
             is DelaPage.Person -> personScreen ?: DelaScreen("Человек")
             is DelaPage.Deal -> DelaScreen("Сделка")
         }
-        item(key = "head") {
-            DelaHead(
-                head,
-                sphere = if (page == null) SPHERES.firstOrNull { it.first == sphere && it.first != "all" }?.second.orEmpty() else "",
-                onBack = if (pages.isNotEmpty()) ({ pages = pages.dropLast(1) }) else null,
-                onMenu = { navOpen = true },
-            )
+        // Заголовок раздела — только у страниц (человек, проект, сделка): у
+        // разделов его название и так стоит в сегментах (`screens/06`).
+        if (page != null || needle.isNotEmpty() || (crmOn && CRM_NAV.any { it.first == nav })) {
+            item(key = "head") {
+                DelaHead(
+                    head,
+                    sphere = "",
+                    onBack = if (pages.isNotEmpty()) ({ pages = pages.dropLast(1) }) else null,
+                    onMenu = { navOpen = true },
+                )
+            }
         }
         val crmNav = crmOn && CRM_NAV.any { it.first == nav }
         if (page == null && needle.isEmpty()) {
@@ -692,14 +708,19 @@ fun DelaTab(
             item(key = "nav") {
                 val c = DelaViews.counts(snap, me, today, sphere, now)
                 val keys = DelaViews.View.entries.map { it.key to it.title } + (if (crmOn) CRM_NAV else emptyList())
-                Segments(
+                // ☰ — боковая панель веба листом, рядом — разделы с числами.
+                ru.zf.pravka.ui.Segmented(
                     options = keys.map { (k, t) ->
                         val n = DelaViews.View.entries.firstOrNull { it.key == k }?.let { c.label(it) }.orEmpty()
                         if (n.isNotBlank()) "$t $n" else t
                     },
                     selected = keys.indexOfFirst { it.first == nav },
                     onSelect = { go(keys[it].first) },
+                    leading = { GlyphButton(Glyphs.Menu, "разделы, CRM, проекты и люди", onClick = { navOpen = true }, tint = ru.zf.pravka.ui.LocalMode.current.label, size = 44.dp) },
                 )
+            }
+            if (view == DelaViews.View.NOW) {
+                item(key = "stats") { DelaStats(snap, me, today, sphere) }
             }
         }
 
@@ -790,7 +811,7 @@ fun DelaTab(
         }
 
         // Разобранные наговоры, которые ещё ждут решения, — над разделом.
-        item(key = "raznoska") { RaznoskaSection(app) }
+        item(key = "raznoska") { RaznoskaSection(app, voiceInBar = true) }
 
         val np = newParts
         if (np != null) {
@@ -823,19 +844,89 @@ fun DelaTab(
             )
         } else if (screen != null) {
             // «Сейчас»: что ждёт в «Новом» — ссылкой под шапкой, как в вебе («в «Новом» ждут: N»).
+            // Поля «Новое дело…» у разделов нет (Правка 4.0): «+» — в строке
+            // состояния, голос и текст — в нижней строке. У проекта и человека оно осталось.
+            screenBody(screen, if (needle.isNotEmpty()) "search" else nav, actions, tools)
+            // «Новое из встреч и чатов · 4 ›» — под делами «Сейчас» (`screens/06`).
             if (view == DelaViews.View.NOW && needle.isEmpty()) {
                 val waitingNew = DelaViews.newCount(snap, me, sphere, now)
                 if (waitingNew > 0) {
-                    item(key = "now:links") {
-                        PaperTextButton("в «Новом» ждут: $waitingNew", icon = Glyphs.Spark, onClick = { go(NAV_NEW) })
-                    }
+                    item(key = "now:links") { NewLinkCard(waitingNew) { go(NAV_NEW) } }
                 }
             }
-            screenBody(screen, if (needle.isNotEmpty()) "search" else nav, actions, tools.copy(onAdd = { title -> quickAdd(title) }))
         }
 
         if (snap.empty && link != null) {
-            item { Box(Modifier.padding(start = 4.dp)) { PaperHint("Копия пустая — нажми «обновить» слева вверху.") } }
+            item { ru.zf.pravka.ui.EmptyState("Копия пустая — нажми «синк» вверху", icon = Glyphs.Refresh) }
+        }
+    }
+    }
+    // Строка «сказать» Дел — внизу (DESIGN §11.4): тот же разбор Разноски, что у «Д».
+    val sayBar: @Composable (Modifier) -> Unit = { barModifier ->
+    ru.zf.pravka.ui.SayBar(
+        value = draft,
+        onValueChange = { draft = it },
+        placeholder = ru.zf.pravka.core.PillHint.say(ownerName, "говори дела"),
+        onSend = {
+            val text = draft.trim()
+            val service = PravkaAccessibilityService.instance
+            if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
+            else if (text.isNotEmpty()) {
+                draft = ""
+                service.onRaznoskaText(text)
+            }
+        },
+        onMic = {
+            val service = PravkaAccessibilityService.instance
+            if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
+            else service.onRaznoskaTap()
+        },
+        sendEnabled = draft.isNotBlank(),
+        maxLines = 4,
+        busy = talking,
+        busyLabel = "Разбираю",
+        modifier = barModifier
+            .navigationBarsPadding()
+            .imePadding()
+            .padding(start = 12.dp, end = 12.dp, bottom = 18.dp),
+    )
+    }
+    Column(Modifier.fillMaxSize()) {
+        header(if (sphere == "all") "Все сферы" else SPHERES.firstOrNull { it.first == sphere }?.second.orEmpty()) { sphereSheet = true }
+        if (wide) {
+            Row(Modifier.weight(1f).fillMaxWidth()) {
+                Box(Modifier.weight(1f)) { list(Modifier) }
+                Box(Modifier.weight(1f)) {
+                    // Открытое справа дело; пусто — первое из «Сейчас».
+                    val shown = paneId?.let { snap.tasks[it] }
+                        ?: snap.tasks.values.filter { it.open && it.focusOn == today && it.ownerId == me }.minByOrNull { it.num }
+                    DelaTaskPane(
+                        app = app,
+                        task = shown,
+                        snap = snap,
+                        spentMs = shown?.let { actions.spent[it.id] } ?: 0L,
+                        onStart = { shown?.let { actions.start(it) } },
+                        onEdit = { openTask = shown },
+                        onDone = { shown?.let { actions.done(it) } },
+                        onPerson = { id -> push(DelaPage.Person(id)) },
+                    )
+                    sayBar(Modifier.align(Alignment.BottomCenter))
+                }
+            }
+        } else {
+            Box(Modifier.weight(1f)) {
+                list(Modifier)
+                sayBar(Modifier.align(Alignment.BottomCenter))
+            }
+        }
+    }
+    if (sphereSheet) {
+        PaperSheet(onDismiss = { sphereSheet = false }, title = "Сфера") {
+            ru.zf.pravka.ui.Segmented(
+                options = SPHERES.map { it.second },
+                selected = SPHERES.indexOfFirst { it.first == sphere }.coerceAtLeast(0),
+                onSelect = { sphere = SPHERES[it].first; sphereSheet = false },
+            )
         }
     }
 
@@ -1271,51 +1362,77 @@ private fun SuggestionRow(
     onEdit: () -> Unit,
     onReject: () -> Unit,
 ) {
+    // Правка 4.0 (`screens/07`): цитата источника курсивом сверху, дело —
+    // жирным «Кто: действие», под ним подписи; справа ✕ · ✎ и ✓ круглой
+    // клавишей режима — главное действие предложения.
     val p = sg.payloadObj()
-    val c = MaterialTheme.colorScheme
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
     // ✎ — у «завести» и «уточнить»: черновик правится той же карточкой. У «закрыть» правки нет — только да или нет.
     val editable = sg.kind == "create" || sg.kind == "update"
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Column(Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).clickable(enabled = editable, onClick = onEdit)) {
-            val t = snap.tasks[sg.taskId]
-            val ref = t?.let { "${it.numLabel} ${it.title}" } ?: "дело не видно"
-            val head = when (sg.kind) {
-                "close" -> "Закрыть: $ref"
-                "assign" -> "Взять себе: $ref"
-                "update" -> "Уточнить: $ref"
-                else -> sg.title
-            }
-            Text(head, style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        if (sg.quote.isNotBlank() && sg.quote != sg.title) {
+            Text(
+                "«${sg.quote.take(200)}»",
+                style = ty.body.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
+                color = ru.zf.pravka.ui.Ink.TextSecondary,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+        }
+        val t = snap.tasks[sg.taskId]
+        val ref = t?.let { "${it.numLabel} ${it.title}" } ?: "дело не видно"
+        val head = when (sg.kind) {
+            "close" -> "Закрыть: $ref"
+            "assign" -> "Взять себе: $ref"
+            "update" -> "Уточнить: $ref"
+            else -> sg.title
+        }
+        Text(
+            head,
+            style = ty.bodyStrong.copy(fontSize = ty.bodyL.fontSize, lineHeight = ty.bodyL.lineHeight),
+            color = ru.zf.pravka.ui.Ink.TextStrong,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable(enabled = editable, onClick = onEdit),
+        )
+        // Подробности уточнения — отдельной строкой: при принятии лягут комментарием к делу.
+        val note = if (sg.kind == "update") p.optString("note").takeIf { it.isNotBlank() && it != "null" } else null
+        if (note != null) Text("+ $note", style = ty.label, color = mode.label, maxLines = 4, overflow = TextOverflow.Ellipsis)
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             val meta = if (sg.kind == "update") {
                 // Что именно поменяется: название, срок «было → стало», мяч с человеком.
                 val u = Dela.update(sg, snap)
                 listOfNotNull(
                     u.title.takeIf { it.isNotBlank() }?.let { "название: «$it»" },
-                    u.dueTo.takeIf { it.isNotBlank() }?.let { "срок " + (if (u.dueFrom.isNotBlank()) delaDate(u.dueFrom) + " → " else "") + delaDate(it) },
+                    u.dueTo.takeIf { it.isNotBlank() }?.let { "срок " + (if (u.dueFrom.isNotBlank()) delaDate(u.dueFrom) + " – " else "") + delaDate(it) },
                     if (u.ball.isNotBlank()) "мяч: " + ballWord(u.ball) + (if (u.person.isNotBlank()) " ${u.person}" else "")
                     else u.person.takeIf { it.isNotBlank() }?.let { "человек: $it" },
                 ).joinToString(" · ")
             } else if (sg.kind == "create") {
                 listOfNotNull(
-                    p.optString("project_name").takeIf { it.isNotBlank() && it != "null" }?.let { "#$it" },
+                    p.optString("due_date").takeIf { it.isNotBlank() && it != "null" }?.let { "до " + delaDate(it) },
                     p.optString("person_name").takeIf { it.isNotBlank() && it != "null" },
                     p.optString("ball").takeIf { it == Dela.WAITING || it == Dela.AGENDA }?.let { ballWord(it) },
-                    p.optString("due_date").takeIf { it.isNotBlank() && it != "null" }?.let { "срок " + delaDate(it) },
+                    p.optString("project_name").takeIf { it.isNotBlank() && it != "null" },
                 ).joinToString(" · ")
             } else {
                 t?.projectName.orEmpty()
             }
-            if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            // Подробности уточнения — отдельной строкой: при принятии лягут комментарием к делу.
-            val note = if (sg.kind == "update") p.optString("note").takeIf { it.isNotBlank() && it != "null" } else null
-            if (note != null) Text("+ $note", style = MaterialTheme.typography.bodySmall, color = c.primary, maxLines = 4, overflow = TextOverflow.Ellipsis)
-            if (sg.quote.isNotBlank() && sg.quote != sg.title) {
-                Text("«${sg.quote.take(200)}»", style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            }
+            Text(
+                meta,
+                style = ty.label,
+                color = mode.meta,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(end = 4.dp),
+            )
+            GlyphButton(Glyphs.Close, "отклонить", onClick = onReject, size = 40.dp, tint = mode.label)
+            if (editable) GlyphButton(Glyphs.Edit, "поправить и принять", onClick = onEdit, size = 40.dp, tint = mode.label)
+            Spacer(Modifier.width(4.dp))
+            ru.zf.pravka.ui.Key(Glyphs.Check, "принять", onAccept, size = 44.dp)
         }
-        GlyphButton(Glyphs.Close, "отклонить", onClick = onReject, size = 36.dp)
-        if (editable) GlyphButton(Glyphs.Edit, "поправить и принять", onClick = onEdit, size = 36.dp)
-        GlyphButton(Glyphs.Check, "принять", onClick = onAccept, size = 36.dp, tint = c.primary)
     }
 }
 
@@ -1384,12 +1501,22 @@ private fun LazyListScope.screenBody(
     }
     for (g in sc.groups) {
         item(key = "$key:g:${g.key}") {
-            val c = MaterialTheme.colorScheme
             PaperCard(
                 label = g.title.takeIf { it.isNotBlank() }?.let { "$it · ${g.items.size}" },
-                labelColor = if (g.late) c.error else null,
+                // Просроченное — без красного (DESIGN §11.7): тревогу несут кольцо и «просрочено N дн».
+                labelColor = if (g.late) ru.zf.pravka.ui.LocalMode.current.value else null,
                 trailing = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Сумма оценок открытых дел группы — «1 ч 40 м» справа (`screens/06`).
+                        val est = g.items.filter { it.open }.sumOf { it.estimateMin }
+                        if (est > 0 && !(g.late && g.items.size > 1)) {
+                            Text(
+                                ru.zf.pravka.core.Fmt.dur(est),
+                                style = ru.zf.pravka.ui.LocalPravkaType.current.meta,
+                                color = ru.zf.pravka.ui.LocalMode.current.label,
+                                modifier = Modifier.padding(end = 4.dp),
+                            )
+                        }
                         if (g.late && g.items.size > 1) PaperTextButton("Перенести все", onClick = { tools.onReschedule(g.items) })
                         val pid = g.projectId
                         val hid = g.personId
@@ -1629,51 +1756,56 @@ private fun TaskRow(
     onProjectPage: Boolean = false,
     extra: List<String> = emptyList(),
 ) {
-    val c = MaterialTheme.colorScheme
+    // Правка 4.0 (DESIGN §11.7 TaskRow в Делах, `screens/06`): кольцо 22 в
+    // зоне 44, «Кто: действие» до двух строк, вторая строка — подписи веба;
+    // справа ▶ и микрофон по 40. Просроченное — толще кольцо и «просрочено
+    // N дн» жирным, без красного. Молния «Сейчас» (06.10.2026) — слева.
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
     val asking = actions.askId == t.id
     val running = actions.askRunning == askTaskKey(t.id)
+    val lateDays = if (t.open && t.dueDate.isNotBlank() && t.dueDate < today)
+        runCatching { java.time.temporal.ChronoUnit.DAYS.between(LocalDate.parse(t.dueDate.take(10)), LocalDate.parse(today)).toInt() }.getOrDefault(0) else 0
     Column(Modifier.fillMaxWidth()) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { actions.open(t) }.padding(vertical = 7.dp),
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { actions.open(t) }.padding(vertical = 4.dp),
         ) {
-            // Молния слева — «Сейчас» на сегодня, как в вебе (06.10.2026): горит — дело в «Сейчас».
             if (t.open) {
                 val on = t.focusOn == today
                 Icon(
                     Glyphs.Bolt,
                     contentDescription = if (on) "убрать из «Сейчас»" else "в «Сейчас» — сделать сегодня (до ${DelaViews.NOW_MAX} дел)",
-                    tint = if (on) c.primary else c.outline.copy(alpha = 0.6f),
-                    modifier = Modifier.size(26.dp).clip(CircleShape).clickable { actions.toggleNow(t) }.padding(3.dp),
+                    tint = if (on) mode.value else mode.meta.copy(alpha = 0.45f),
+                    modifier = Modifier.size(30.dp).clip(CircleShape).clickable { actions.toggleNow(t) }.padding(6.dp),
                 )
-            } else {
-                Spacer(Modifier.width(26.dp))
             }
             Box(
-                Modifier
-                    .size(22.dp)
-                    .clip(CircleShape)
-                    .border(1.5.dp, c.outline, CircleShape)
-                    .clickable { actions.done(t) },
+                Modifier.size(44.dp).clip(CircleShape).clickable { actions.done(t) },
                 contentAlignment = Alignment.Center,
             ) {
-                if (!t.open) Icon(Glyphs.Check, contentDescription = "закрыто", tint = c.primary, modifier = Modifier.size(14.dp))
+                Box(
+                    Modifier
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .then(if (!t.open) Modifier.background(mode.key) else Modifier)
+                        .border(if (lateDays > 0) 2.5.dp else 2.dp, if (lateDays > 0) mode.value else mode.tint, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (!t.open) Icon(Glyphs.Check, contentDescription = "закрыто", tint = ru.zf.pravka.ui.Ink.KeyIcon, modifier = Modifier.size(14.dp))
+                }
             }
-            Column(Modifier.weight(1f)) {
+            Column(Modifier.weight(1f).padding(start = 2.dp)) {
                 Text(
                     t.title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (t.open) c.onSurface else c.onSurfaceVariant,
+                    style = ty.bodyL,
+                    color = if (t.open) ru.zf.pravka.ui.Ink.Text else mode.meta,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 val live = t.id == actions.running
                 val spentMs = actions.spent[t.id] ?: 0L
-                // Подписи веба (срок, проект, сделка, мяч с человеком, минуты, метки), номер — последним.
-                // «Сейчас» видно молнией, словом не повторяется.
                 val chips = DelaViews.chips(t, by, actions.snap, today, onProjectPage)
-                // Без проекта — не тупик, а вопрос: подпись — кнопка выбора проекта (как в вебе).
                 val pick = actions.pickProject
                 val loose = pick != null && t.open && DelaViews.NO_PROJECT in chips
                 val meta = listOfNotNull(
@@ -1684,12 +1816,20 @@ private fun TaskRow(
                     t.numLabel + if (t.local) " ⏳" else "",
                 ).joinToString(" · ")
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (lateDays > 0) {
+                        Text(
+                            "просрочено $lateDays дн" + if (meta.isNotBlank()) " · " else "",
+                            style = ty.label.copy(fontWeight = FontWeight.SemiBold),
+                            color = mode.value,
+                            maxLines = 1,
+                        )
+                    }
                     if (loose && pick != null) {
                         Text(
                             DelaViews.NO_PROJECT,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Medium,
-                            color = c.primary,
+                            style = ty.label,
+                            fontWeight = FontWeight.SemiBold,
+                            color = mode.label,
                             maxLines = 1,
                             modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { pick(listOf(t)) }.padding(end = 6.dp),
                         )
@@ -1697,12 +1837,8 @@ private fun TaskRow(
                     if (meta.isNotBlank()) {
                         Text(
                             meta,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = when {
-                                live -> c.primary
-                                DelaViews.due(t, today)?.late == true -> c.error
-                                else -> c.onSurfaceVariant
-                            },
+                            style = ty.label.copy(fontWeight = if (live) FontWeight.SemiBold else FontWeight.Normal),
+                            color = if (live) mode.value else mode.meta,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false),
@@ -1710,37 +1846,24 @@ private fun TaskRow(
                     }
                 }
                 for (line in extra) {
-                    Text(line, style = MaterialTheme.typography.bodySmall, color = c.primary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(line, style = ty.label, color = mode.label, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
-            // Справа столбиком: ▶ (или стоп) — запись в Засечке, под ним микрофон —
-            // команда Claude про это дело, как в вебе: «сделано», «на пятницу», «это Наташе».
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                if (actions.starting == t.id) {
-                    Text("…", style = MaterialTheme.typography.bodyMedium, color = c.primary, modifier = Modifier.size(28.dp).padding(4.dp))
-                } else if (t.open && t.id == actions.running) {
-                    // Идёт сейчас — стоп вместо ▶: второй раз начинать нечего.
-                    Icon(
-                        Glyphs.Stop,
-                        contentDescription = "остановить в ленте",
-                        tint = c.error,
-                        modifier = Modifier.size(28.dp).clip(CircleShape).clickable { actions.stop() }.padding(4.dp),
-                    )
-                } else if (t.open) {
-                    Icon(
-                        Glyphs.Play,
-                        contentDescription = "начать в ленте",
-                        tint = c.primary,
-                        modifier = Modifier.size(28.dp).clip(CircleShape).clickable { actions.start(t) }.padding(4.dp),
-                    )
-                }
-                Icon(
-                    if (asking && actions.listening) Glyphs.Stop else Glyphs.Mic,
-                    contentDescription = if (asking && actions.listening) "хватит слушать" else "сказать Claude, что сделать с этим делом",
-                    tint = if (asking || running) c.primary else c.onSurfaceVariant,
-                    modifier = Modifier.size(28.dp).clip(CircleShape).clickable { actions.onAskMic(t) }.padding(5.dp),
-                )
+            // ▶ (или стоп) — запись в Засечке; микрофон — команда Claude про это дело.
+            if (actions.starting == t.id) {
+                Text("…", style = ty.body, color = mode.tint, modifier = Modifier.size(40.dp).padding(10.dp))
+            } else if (t.open && t.id == actions.running) {
+                ru.zf.pravka.ui.StopKey(onClick = { actions.stop() }, description = "остановить в ленте")
+            } else if (t.open) {
+                GlyphButton(Glyphs.Play, "начать в ленте", { actions.start(t) }, tint = mode.tint, size = 40.dp)
             }
+            GlyphButton(
+                if (asking && actions.listening) Glyphs.Stop else Glyphs.Mic,
+                if (asking && actions.listening) "хватит слушать" else "сказать Claude, что сделать с этим делом",
+                { actions.onAskMic(t) },
+                tint = if (asking || running) mode.value else mode.tint,
+                size = 40.dp,
+            )
         }
         if (asking || running) {
             AskInline(
@@ -2251,5 +2374,70 @@ private fun RejectSheet(suggestion: Dela.Suggestion, onDismiss: () -> Unit, onRe
             singleLine = false,
             maxLines = 4,
         )
+    }
+}
+
+
+/** Синк коротко — «синк 18:40», «в очереди 2», «нет связи» (`screens/06`). */
+private fun delaSyncShort(linked: Boolean, st: ru.zf.pravka.data.DelaSync.Status, queued: Int, syncedAt: Long, now: Long): String = when {
+    !linked -> "не подключено"
+    st.running -> "связываюсь…"
+    queued > 0 -> "в очереди $queued"
+    st.lastError.isNotBlank() && st.lastErrorAt >= st.lastOk -> "нет связи"
+    syncedAt > 0 -> "синк " + ru.zf.pravka.core.Fmt.hm(syncedAt)
+    else -> "синк"
+}
+
+/**
+ * Плитки над разделом «Сейчас» (`screens/06`): Сегодня «0 из 5 / 2 ч 25 м»,
+ * Неделя «14 из 23», Просрочено «1 / на 2 дня», Жду «6 / от 4 людей».
+ */
+@Composable
+private fun DelaStats(snap: Dela.Snapshot, me: String, today: String, sphere: String) {
+    val mine = remember(snap, me, sphere) { DelaViews.openMine(snap, me, sphere) }
+    val nowOpen = remember(snap, me, today) { DelaViews.nowTasks(snap, me, today) }
+    val doneAll = remember(snap, me) { snap.tasks.values.filter { it.status == Dela.DONE && (me.isBlank() || it.ownerId == me) } }
+    val doneToday = doneAll.count { it.completedAt.take(10) == today && it.focusOn == today }
+    val estimate = nowOpen.sumOf { it.estimateMin.coerceAtLeast(0) }
+    val d = runCatching { LocalDate.parse(today) }.getOrDefault(LocalDate.now())
+    val monday = d.minusDays((d.dayOfWeek.value - 1).toLong()).toString()
+    val sunday = d.plusDays((7 - d.dayOfWeek.value).toLong()).toString()
+    val weekOpen = mine.count { it.dueDate.isNotBlank() && it.dueDate <= sunday }
+    val weekDone = doneAll.count { it.completedAt.take(10) in monday..sunday }
+    val late = mine.filter { DelaViews.isLate(it, today) }
+    val lateDays = late.maxOfOrNull {
+        runCatching { java.time.temporal.ChronoUnit.DAYS.between(LocalDate.parse(it.dueDate.take(10)), d).toInt() }.getOrDefault(0)
+    } ?: 0
+    val waiting = mine.filter { it.ball == Dela.WAITING }
+    val people = waiting.map { it.personId }.filter { it.isNotBlank() }.toSet().size
+    Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ru.zf.pravka.ui.StatTile("Сегодня", "$doneToday из ${nowOpen.size + doneToday}", Modifier.weight(1f), delta = if (estimate > 0) ru.zf.pravka.core.Fmt.dur(estimate) else null)
+        ru.zf.pravka.ui.StatTile("Неделя", "$weekDone из ${weekOpen + weekDone}", Modifier.weight(1f), delta = if (weekOpen > 0) "осталось $weekOpen" else null)
+        ru.zf.pravka.ui.StatTile("Просрочено", "${late.size}", Modifier.weight(1f), delta = if (lateDays > 0) "на $lateDays дн" else null, worse = late.isNotEmpty())
+        ru.zf.pravka.ui.StatTile("Жду", "${waiting.size}", Modifier.weight(1f), delta = if (people > 0) "от $people чел." else null)
+    }
+}
+
+/** «Новое из встреч и чатов · 4 ›» — стеклянная строка-вход в «Новое» (`screens/06`). */
+@Composable
+private fun NewLinkCard(count: Int, onClick: () -> Unit) {
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    val shape = RoundedCornerShape(22.dp)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .glass(shape, mode.glass)
+            .clip(shape)
+            .clickable(onClick = onClick)
+            .padding(start = 16.dp, end = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(Glyphs.Groups, contentDescription = null, tint = ru.zf.pravka.ui.Ink.PlanText, modifier = Modifier.size(22.dp))
+        Text("Новое из встреч и чатов", style = ty.bodyL, color = ru.zf.pravka.ui.Ink.Text, modifier = Modifier.weight(1f))
+        ru.zf.pravka.ui.Segment(count.toString(), selected = true, onClick = onClick, height = 28.dp)
+        Icon(Glyphs.Forward, contentDescription = null, tint = mode.label, modifier = Modifier.size(22.dp))
     }
 }

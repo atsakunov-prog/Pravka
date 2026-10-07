@@ -1682,4 +1682,5 @@ private fun DelaSettings(app: PravkaApp, onOpen: (SettingsGroup) -> Unit) {
             onClick = { onOpen(SettingsGroup.TODOIST) },
         )
     }
+    RaznoskaRoutesCard(app)
 }

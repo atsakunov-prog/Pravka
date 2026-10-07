@@ -359,7 +359,7 @@ object DelaViews {
         } else if (who.isNotBlank() && by != By.PERSON) {
             out += "@$who"
         }
-        if (t.estimateMin > 0) out += "${t.estimateMin} мин"
+        if (t.estimateMin > 0) out += "${t.estimateMin} м"
         out += t.labels
         return out.filter { it.isNotBlank() }
     }

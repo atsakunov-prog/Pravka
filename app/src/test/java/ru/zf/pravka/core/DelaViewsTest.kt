@@ -95,12 +95,12 @@ class DelaViewsTest {
         val s = snap()
         val t = s.task("57")!!.copy(waitingSince = "2026-10-02")
         // Не группа по датам: срок виден; не страница проекта: проект виден.
-        assertEquals(listOf("сб 10.10", "Бета Групп", "жду Иван · 3 дн.", "10 мин", "звонок"), DelaViews.chips(t, null, s, today))
+        assertEquals(listOf("сб 10.10", "Бета Групп", "жду Иван · 3 дн.", "10 м", "звонок"), DelaViews.chips(t, null, s, today))
         // Группа по датам — срок молчит (он в заголовке).
-        assertEquals(listOf("Бета Групп", "жду Иван · 3 дн.", "10 мин", "звонок"), DelaViews.chips(t, DelaViews.By.DATE, s, today))
+        assertEquals(listOf("Бета Групп", "жду Иван · 3 дн.", "10 м", "звонок"), DelaViews.chips(t, DelaViews.By.DATE, s, today))
         // Группа по мячу: мяч в заголовке, а человек остаётся — «@Иван» (как в вебе).
-        assertEquals(listOf("сб 10.10", "Бета Групп", "@Иван", "10 мин", "звонок"), DelaViews.chips(t, DelaViews.By.BALL, s, today))
-        assertEquals(listOf("сб 10.10", "жду Иван · 3 дн.", "10 мин", "звонок"), DelaViews.chips(t, null, s, today, onProjectPage = true))
+        assertEquals(listOf("сб 10.10", "Бета Групп", "@Иван", "10 м", "звонок"), DelaViews.chips(t, DelaViews.By.BALL, s, today))
+        assertEquals(listOf("сб 10.10", "жду Иван · 3 дн.", "10 м", "звонок"), DelaViews.chips(t, null, s, today, onProjectPage = true))
         // Моё с человеком — «@Иван»; без проекта — «без проекта» (строка рисует его кнопкой выбора проекта).
         val mine = t.copy(ball = Dela.MINE, projectId = "", labels = emptyList(), estimateMin = 0, dueDate = "")
         assertEquals(listOf(DelaViews.NO_PROJECT, "@Иван"), DelaViews.chips(mine, null, s, today))

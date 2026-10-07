@@ -205,7 +205,14 @@ class ScreenShots {
             "pravka" to MainActivity.TAB_PRAVKA,
         )) {
             if (!want(g)) continue
-            var m = launch(tab); shot(m, "$g-1-folded"); close(m)
+            var m = launch(tab); shot(m, "$g-1-folded")
+            // Второй раздел режима — тем же окном (макеты 07, 09, 11).
+            when (g) {
+                "dela" -> if (tap(m, "Новое")) shot(m, "$g-4-novoe")
+                "sport" -> if (tap(m, "Путь", exact = true)) shot(m, "$g-4-put")
+                "money" -> if (tap(m, "Журнал", exact = true)) shot(m, "$g-4-zhurnal")
+            }
+            close(m)
             RuntimeEnvironment.setQualifiers(OUTER_TALL)
             m = launch(tab); shot(m, "$g-2-tall"); close(m)
             RuntimeEnvironment.setQualifiers(INNER)

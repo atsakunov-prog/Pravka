@@ -67,8 +67,13 @@ import ru.zf.pravka.trigger.onRaznoskaTap
 // Второе издание (24.09.2026): первая плашка — «разноска» с кнопкой голоса,
 // каждый наговор — своя плашка, окна дела, проекта и меток — листы снизу.
 // Своя синяя подпись «РАЗНОСКА» ушла: вкладка и так в синей краске Дел.
+//
+// Правка 4.0 (07.10.2026): во вкладке Дел своего сервера голос и набор живут в
+// нижней строке «Саша, говори дела» (`screens/06`), поэтому плашка с кнопкой
+// «Наговорить дела» там не рисуется ([voiceInBar]); маршруты переехали в
+// настройки Дел (`RaznoskaRoutesCard`). Ждущие наговоры — как были.
 @Composable
-internal fun RaznoskaSection(app: PravkaApp) {
+internal fun RaznoskaSection(app: PravkaApp, voiceInBar: Boolean = false) {
     val drafts by app.raznoskaStore.draftsFlow.collectAsState()
     val projectList by app.todoistStore.projectsFlow.collectAsState()
     val labelList by app.todoistStore.labelsFlow.collectAsState()
@@ -86,7 +91,7 @@ internal fun RaznoskaSection(app: PravkaApp) {
     val projectPaths = remember(projectList) { app.todoistStore.paths() }
 
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap)) {
-        PaperCard(
+        if (!voiceInBar) PaperCard(
             label = "разноска",
             info = "Кнопка «Д» — наговори дела, Опус разберёт их на задачи. " +
                 "Плашка появится сразу; правь здесь, потом «Отправить».\n\n" +
@@ -320,6 +325,21 @@ internal fun RaznoskaSection(app: PravkaApp) {
 // Маршруты: чему Разноска научилась на его поправках. Свёрнуто строкой-сводкой,
 // потому что смотреть туда надо редко - только если она возит дело не туда.
 // Что это такое — за «i» первой плашки (24.09.2026).
+/** Маршруты Разноски плашкой — для настроек Дел (Правка 4.0); пусто — ничего. */
+@Composable
+internal fun RaznoskaRoutesCard(app: PravkaApp) {
+    val routes by app.raznoskaRoutes.routesFlow.collectAsState()
+    if (routes.isEmpty()) {
+        LaunchedEffect(Unit) { app.raznoskaRoutes.load() }
+        return
+    }
+    PaperCard(
+        label = "разноска",
+        info = "Маршруты — куда ты сам перекладывал дела. Эти примеры уезжают в " +
+            "следующий разбор — так Разноска перестаёт ошибаться дважды.",
+    ) { RoutesBlock(app) }
+}
+
 @Composable
 private fun RoutesBlock(app: PravkaApp) {
     val routes by app.raznoskaRoutes.routesFlow.collectAsState()
