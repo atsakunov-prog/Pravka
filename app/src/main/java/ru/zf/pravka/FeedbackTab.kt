@@ -234,3 +234,87 @@ private fun copy(context: android.content.Context, text: String) {
     val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
     cm.setPrimaryClip(android.content.ClipData.newPlainText("Правка: баги и предложения", text))
 }
+
+// ---------------------------------------------------------------------------
+// «Настройки → Баги»: история починок
+// ---------------------------------------------------------------------------
+
+private val dayFormat = SimpleDateFormat("d MMMM", Locale("ru"))
+
+/**
+ * История: что ждёт ночного разбора и что уже починено — сборками, свежая
+ * сверху (владелец, 07.10.2026: «в самом приложении тоже нужна история, что он
+ * починил по каждому багу (в настройках, думаю, „Баги“)»). В строке — что
+ * сделано и, вторым тоном, что просил; тап — просьба целиком. Отмечает
+ * записи сама приехавшая сборка (`assets/feedback_done.txt`), список правок
+ * руками — «Ещё → Баги и предложения».
+ */
+@Composable
+internal fun FeedbackHistory(app: PravkaApp) {
+    val items by app.feedbackStore.flow.collectAsState()
+    LaunchedEffect(Unit) { app.feedbackStore.load() }
+    val open = remember(items) { items.filter { it.open }.sortedBy { it.num } }
+    val history = remember(items) { FeedbackStore.history(items) }
+    ru.zf.pravka.ui.PaperCard(
+        label = "ждут разбора · ${open.size}",
+        info = "Каждую ночь в 3:57 Claude читает новые записи с компа, чинит и выкладывает сборку. " +
+            "Сборка приехала на телефон — запись уходит в историю ниже, с тем, что сделано.",
+    ) {
+        if (open.isEmpty()) {
+            ru.zf.pravka.ui.PaperHint("Всё разобрано. Новое — долгое нажатие на любую кнопку, «🐞 Баг или предложение».")
+        }
+        open.forEachIndexed { k, i ->
+            if (k > 0) ru.zf.pravka.ui.Hairline()
+            HistoryRow(i, waiting = true)
+        }
+    }
+    if (history.isEmpty()) {
+        ru.zf.pravka.ui.PaperHint("Починенного пока нет.")
+    }
+    for (b in history) {
+        ru.zf.pravka.ui.PaperCard(
+            label = if (b.build > 0) "сборка ${b.build} · ${dayFormat.format(Date(b.at))} · ${b.items.size}"
+            else "отмечено руками · ${b.items.size}",
+        ) {
+            b.items.forEachIndexed { k, i ->
+                if (k > 0) ru.zf.pravka.ui.Hairline()
+                HistoryRow(i, waiting = false)
+            }
+        }
+    }
+}
+
+/** «№7 · сделано», что сделано; вторым тоном — что просил (тап — целиком и сказанное). */
+@Composable
+private fun HistoryRow(item: FeedbackStore.Item, waiting: Boolean) {
+    val mode = LocalMode.current
+    val ty = LocalPravkaType.current
+    var full by remember(item.num) { mutableStateOf(false) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable { full = !full }
+            .padding(vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            "№${item.num} · " + if (waiting) "${stampFormat.format(Date(item.ts))} · с «${item.origin}»"
+            else FeedbackStore.statusWord(item.status),
+            style = ty.meta,
+            color = if (item.status == FeedbackStore.SKIP) Ink.Warn else mode.label,
+        )
+        if (!waiting) {
+            Text(item.note.ifBlank { "без пометки" }, style = ty.body, color = Ink.Text)
+        }
+        Text(
+            if (waiting) item.shown else "просил: ${item.shown}",
+            style = if (waiting) ty.body else ty.meta,
+            color = if (waiting) Ink.Text else mode.meta,
+            maxLines = if (full || waiting) Int.MAX_VALUE else 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (full && item.text.isNotBlank() && item.text != item.raw) {
+            Text("Сказано: «${item.raw}»", style = ty.meta, color = mode.meta)
+        }
+    }
+}

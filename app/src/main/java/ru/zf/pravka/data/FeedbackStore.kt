@@ -165,6 +165,20 @@ class FeedbackStore(private val context: Context) {
         const val DONE = "done"
         const val SKIP = "skip"
 
+        /**
+         * История починок — сборками, свежая сверху (владелец, 07.10.2026:
+         * «в самом приложении тоже нужна история, что он починил по каждому
+         * багу»): в каждой — что сделано и что отложено, по номерам. Отмеченное
+         * руками (сборки нет) — отдельной пачкой с номером сборки 0, в конце.
+         */
+        data class Batch(val build: Int, val at: Long, val items: List<Item>)
+
+        fun history(items: List<Item>): List<Batch> = items
+            .filter { !it.open }
+            .groupBy { it.build }
+            .map { (build, list) -> Batch(build, list.maxOf { it.doneAt }, list.sortedBy { it.num }) }
+            .sortedWith(compareBy<Batch> { it.build == 0 }.thenByDescending { it.build })
+
         fun statusWord(status: String): String = when (status) {
             DONE -> "сделано"
             SKIP -> "отложено"

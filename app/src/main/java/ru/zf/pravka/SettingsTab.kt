@@ -121,6 +121,9 @@ internal enum class SettingsGroup(
     BUTTONS("Кнопки на экране", "какие, круг или стопка, размер", SettingsShelf.LOOK, { Glyphs.Disk }),
     DISK("Вид диска", "стекло, плотности, тени, инерция", SettingsShelf.LOOK, { Glyphs.Palette }),
     CARDS("Плашки приложения", "значки, свечение режима, темнее, фаска, свет, зерно", SettingsShelf.LOOK, { Glyphs.Layers }),
+    // Владелец, 07.10.2026: «нам в самом приложении тоже нужна история, что он
+    // починил по каждому багу (в настройках, думаю, „Баги“)».
+    BUGS("Баги", "что починено по каждому, по сборкам; что ждёт ночного разбора", SettingsShelf.APP, { Glyphs.Bug }),
     DATA("База данных", "где лежит, переезд в папку, как копировать", SettingsShelf.APP, { Glyphs.Archive }),
     APP("Обновления и служба", "служба, обновления, копии ленты, отладка", SettingsShelf.APP, { Glyphs.Phone }),
     ;
@@ -234,6 +237,11 @@ private class GroupStatus(val text: String, val ok: Boolean? = null, val dot: Bo
 private fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
     val s = app.settings
     return when (g) {
+        SettingsGroup.BUGS -> {
+            val items by app.feedbackStore.flow.collectAsState()
+            val waiting = items.count { it.open }
+            if (waiting > 0) GroupStatus("ждут: $waiting") else if (items.isNotEmpty()) GroupStatus("всё разобрано", ok = true, dot = true) else null
+        }
         SettingsGroup.VOICE -> {
             val phone by s.phoneMicOnlyFlow.collectAsState(initial = true)
             GroupStatus(if (phone) "телефон" else "гарнитура")
@@ -518,6 +526,7 @@ private fun GroupContent(
         SettingsGroup.BUTTONS -> ButtonsSettings(app)
         SettingsGroup.DISK -> DiskSettings(app)
         SettingsGroup.CARDS -> CardsSettings(app)
+        SettingsGroup.BUGS -> FeedbackHistory(app)
         SettingsGroup.DATA -> DataSettings(app)
         SettingsGroup.APP -> AppSettings(app, serviceEnabled, onOpenAccessibilitySettings)
     }

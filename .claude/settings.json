@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash scripts/cloud-sdk.sh)",
+      "Bash(./gradlew:*)",
+      "Bash(git fetch origin pravka)",
+      "Bash(git push origin pravka)",
+      "Bash(git push -u origin pravka)"
+    ]
+  }
+}

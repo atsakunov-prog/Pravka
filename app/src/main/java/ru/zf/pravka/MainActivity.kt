@@ -656,6 +656,10 @@ private fun MainScreen(
     var moneyExport by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { runCatching { app.updates.tick() } }
+    // Приехавшая сборка отмечает починенные баги сразу при запуске
+    // (`feedback_done.txt`), а не когда откроют список: история в «Настройки →
+    // Баги» датируется днём сборки, а на комп уходит «сделано» без задержки.
+    LaunchedEffect(Unit) { runCatching { app.feedbackStore.load() } }
 
     LaunchedEffect(tabRequest) {
         val want = tabRequest ?: return@LaunchedEffect

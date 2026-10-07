@@ -269,6 +269,10 @@ class ScreenShots {
             app.feedbackStore.setStatus(b.num, ru.zf.pravka.data.FeedbackStore.DONE, "Деньги: «вчера» — первой строкой")
         }
         c = launch(MainActivity.TAB_FEEDBACK); shot(c, "outer-11-feedback"); close(c)
+        // «Настройки → Баги» — история починок (07.10.2026).
+        c = launch(MainActivity.TAB_SETTINGS)
+        if (tap(c, "Баги", exact = true)) shot(c, "outer-12-bugs")
+        close(c)
         c = launch(MainActivity.TAB_ZASECHKA)
         if (tap(c, "Созвон: бюджет")) screen("outer-10-sheet-entry")
         close(c)
