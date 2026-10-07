@@ -70,4 +70,17 @@ class WeatherDayTest {
         assertEquals(18, WeatherDay.hoursFrom(day(), nowHour = 18).first().hour)
         assertEquals(24, WeatherDay.hoursFrom(day(), nowHour = null).size)
     }
+
+    @Test
+    fun `десять дней - утро, день, вечер с ощущается, осадки по часам всегда`() {
+        val p = WeatherDay.parts(day().map { it.copy(feels = it.temp - 2.0) })
+        assertEquals(listOf("утро", "день", "вечер"), p.map { it.label })
+        assertEquals(listOf("+4°", "+10°", "+7°"), p.map { WeatherDay.temp(it.temp) })
+        assertEquals("+2°", WeatherDay.temp(p[0].feels))
+        assertTrue(WeatherDay.parts(emptyList()).isEmpty())
+        assertEquals("0 мм", WeatherDay.mm(0.0))
+        assertEquals("0,4 мм", WeatherDay.mm(0.42))
+        assertEquals("2 мм", WeatherDay.mm(2.0))
+        assertEquals("12 мм", WeatherDay.mm(12.4))
+    }
 }

@@ -58,14 +58,21 @@ import ru.zf.pravka.core.Fmt
 // давай везде переносить по строкам, потому что для меня всё-таки важна
 // информация»): текст переносится, строка растёт, рельс тянется за ней
 // (`height(IntrinsicSize.Min)` — колонка рельса меряет высоту по соседям).
-// Отметки режимов (еда, деньги, спорт, дела) — монетой ПРЯМО НА РЕЛЬСЕ во
-// время отметки, текст рядом плашкой («сделать их… точками на таймлайне…
-// или кнопочками такими, с галкой, с рублёвым»): раньше капсула с монетой
-// стояла в колонке содержимого и отступала от линии неровно.
+// Отметки режимов (еда, деньги, спорт, дела) — ТОЧКОЙ цвета режима прямо на
+// рельсе во время отметки, текст рядом плашкой. Сначала (07.10, баг №7) на
+// рельсе стояла монета со значком; владелец в тот же вечер (№14): «на
+// таймлайне плохо выглядят эти иконки, давай просто точками… другого цвета».
+// В плашке первым — число (№15: в еде калории, в деньгах деньги, в делах —
+// сколько новых), оно жирнее остального.
+// Текст всех строк начинается с одной линии (№19: «ровно такой же отступ, как
+// и внутри плашек»): у строк без плашки содержимое сдвинуто на внутренний
+// отступ плашки — [TEXT_INSET].
 
 private val TIME_W = 42.dp
 private val RAIL_W = 18.dp
 private val PTS_W = 30.dp
+/** Внутренний отступ плашки отметки — на столько же сдвинут текст строк без плашки. */
+private val TEXT_INSET = 10.dp
 
 /** Как рисуется рельс строки. */
 sealed class Rail {
@@ -75,6 +82,8 @@ sealed class Rail {
     data class Current(val line: Color, val halo: Color) : Rail()
     /** Отметка или ждущее: просто линия на всю высоту. */
     data class Through(val color: Color) : Rail()
+    /** Отметка: линия насквозь и точка 8 цвета режима, центр — на [centerY] (середина плашки рядом). */
+    data class Mark(val line: Color, val dot: Color, val centerY: Dp) : Rail()
     /** План: полое кольцо и пунктир в цвете источника. */
     data class Ring(val color: Color, val line: Color?, val size: Dp = 10.dp) : Rail()
     /** Свободно: точечная линия. */
@@ -103,6 +112,13 @@ private fun DrawScope.rail(r: Rail, x: Float) {
             drawLine(r.line, Offset(x, top + d + 2.dp.toPx()), Offset(x, size.height), w2)
         }
         is Rail.Through -> drawLine(r.color, Offset(x, 0f), Offset(x, size.height), w2)
+        is Rail.Mark -> {
+            drawLine(r.line, Offset(x, 0f), Offset(x, size.height), w2)
+            val c = Offset(x, r.centerY.toPx())
+            // Тёмный ободок отделяет точку от линии той же яркости.
+            drawCircle(Ink.Bg, 4.dp.toPx() + 1.5.dp.toPx(), c)
+            drawCircle(r.dot, 4.dp.toPx(), c)
+        }
         is Rail.Ring -> {
             val d = r.size.toPx()
             val top = (if (r.size > 10.dp) 3.dp else 4.dp).toPx()
@@ -142,8 +158,8 @@ fun TimelineRow(
     highlight: Boolean = false,
     /** Время мелким вторым тоном (отметка: время прихода еды или траты). */
     timeSmall: Boolean = false,
-    /** Знак на рельсе поверх линии — монета режима у отметки. */
-    railMark: (@Composable BoxScope.() -> Unit)? = null,
+    /** Сдвиг содержимого: у строк без плашки — внутренний отступ плашки, у плашек — 0. */
+    inset: Dp = TEXT_INSET,
     content: @Composable RowScope.() -> Unit,
 ) {
     val t = LocalPravkaType.current
@@ -184,11 +200,9 @@ fun TimelineRow(
                     .width(RAIL_W)
                     .fillMaxHeight()
                     .drawBehind { rail(rail, size.width / 2f) },
-                contentAlignment = Alignment.TopCenter,
-                content = { railMark?.invoke(this) },
             )
         }
-        Row(Modifier.weight(1f).fillMaxHeight(), content = content)
+        Row(Modifier.weight(1f).fillMaxHeight().padding(start = inset), content = content)
         if (points != null) {
             Text(
                 points,
@@ -324,26 +338,37 @@ fun EventChip(source: DayAssembler.Source, text: String, onClick: () -> Unit, mo
         horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
         if (coin) Coin(source.decor(), 20.dp)
-        Text(text, style = t.label.copy(fontWeight = FontWeight.Normal), color = m.eventText)
+        Text(leadBold(text), style = t.label.copy(fontWeight = FontWeight.Normal), color = m.eventText)
     }
 }
 
-/** Монета отметки на рельсе: 18 dp, центр — на уровне середины плашки рядом. */
-private val MARK_COIN = 18.dp
+/** «419 ккал · Творог…» — первое (число) жирнее остального. */
+private fun leadBold(text: String) = buildAnnotatedString {
+    val cut = text.indexOf(" · ")
+    if (cut <= 0) {
+        append(text)
+        return@buildAnnotatedString
+    }
+    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(text.substring(0, cut)) }
+    append(text.substring(cut))
+}
+
+/** Точка отметки на рельсе — цвет режима (подпись плашки: светлый тон кнопки). */
+private fun DayAssembler.Source.dot(): Color = Modes.of(decor()).tint
 
 /**
- * Строка отметки: рельс записи насквозь, на нём — монета режима, слева —
+ * Строка отметки: рельс записи насквозь, на нём — точка цвета режима, слева —
  * время отметки мелким, справа — плашка с текстом (переносится, без монеты).
  */
 @Composable
 fun MarkRow(source: DayAssembler.Source, text: String, line: Color, onClick: () -> Unit, at: Long? = null) {
     TimelineRow(
         height = 34.dp,
-        rail = Rail.Through(line),
+        rail = Rail.Mark(line, source.dot(), 15.dp),
         time = at?.let { Fmt.hm(it) },
         timeColor = Ink.TextMeta,
         timeSmall = true,
-        railMark = { Coin(source.decor(), MARK_COIN, Modifier.padding(top = 6.dp)) },
+        inset = 0.dp,
     ) {
         Box(Modifier.weight(1f).padding(top = 2.dp, bottom = 6.dp)) { EventChip(source, text, onClick, coin = false) }
     }
@@ -359,11 +384,11 @@ fun PendingRow(source: DayAssembler.Source, text: String, line: Color, onOpen: (
     val t = LocalPravkaType.current
     TimelineRow(
         height = 42.dp,
-        rail = Rail.Through(line),
+        rail = Rail.Mark(line, source.dot(), 18.dp),
         time = at?.let { Fmt.hm(it) },
         timeColor = Ink.TextMeta,
         timeSmall = true,
-        railMark = { Coin(source.decor(), MARK_COIN, Modifier.padding(top = 9.dp)) },
+        inset = 0.dp,
     ) {
         val shape = RoundedCornerShape(18.dp)
         Row(
@@ -375,11 +400,11 @@ fun PendingRow(source: DayAssembler.Source, text: String, line: Color, onOpen: (
                 .background(m.key.copy(alpha = 0.30f))
                 .border(1.dp, m.tint.copy(alpha = 0.38f), shape)
                 .clickable(onClick = onOpen)
-                .padding(start = 12.dp, end = 3.dp, top = 3.dp, bottom = 3.dp),
+                .padding(start = TEXT_INSET, end = 3.dp, top = 3.dp, bottom = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(text, style = t.label.copy(fontWeight = FontWeight.Normal), color = m.eventText, modifier = Modifier.weight(1f))
+            Text(leadBold(text), style = t.label.copy(fontWeight = FontWeight.Normal), color = m.eventText, modifier = Modifier.weight(1f))
             val bs = RoundedCornerShape(14.dp)
             Box(
                 Modifier

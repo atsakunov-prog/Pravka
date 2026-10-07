@@ -28,7 +28,12 @@ object WeatherDay {
         val feels: Double = Double.NaN,
     )
 
-    /** День прогноза на десять дней: небо, минимум и максимум, как ощущается, осадки. */
+    /**
+     * День прогноза на десять дней: небо, минимум и максимум, как ощущается,
+     * осадки и [parts] — утро, день, вечер (баг №16: «надо указывать справа не
+     * „+8 до +15“, а утро, день, вечер»). Нет часов на день — частей нет, и лист
+     * показывает диапазон.
+     */
     data class Day(
         val date: java.time.LocalDate,
         val code: Int,
@@ -38,7 +43,31 @@ object WeatherDay {
         val feelsMax: Double = Double.NaN,
         val precipMm: Double = 0.0,
         val prob: Int = 0,
+        val parts: List<Part> = emptyList(),
     )
+
+    /** Часть дня: «утро» и температура с «как ощущается» в ближайший к 9, 14, 19 час. */
+    data class Part(val label: String, val temp: Double, val feels: Double)
+
+    /** Утро, день, вечер дня по его часам — те же часы, что у ряда «Сегодня». */
+    fun parts(hours: List<Hour>): List<Part> {
+        if (hours.isEmpty()) return emptyList()
+        fun at(h: Int) = hours.minByOrNull { kotlin.math.abs(it.hour - h) }!!
+        return listOf("утро" to 9, "день" to 14, "вечер" to 19).map { (label, h) ->
+            val x = at(h)
+            Part(label, x.temp, x.feels)
+        }
+    }
+
+    /**
+     * Осадки часа в мм — всегда, и ноль тоже (баг №17: «по часам количество
+     * осадков и вероятность»): «0 мм», «0,4 мм», «12 мм».
+     */
+    fun mm(v: Double): String = when {
+        v < 0.05 -> "0 мм"
+        v < 10.0 -> String.format(java.util.Locale.forLanguageTag("ru"), "%.1f мм", v).replace(",0 мм", " мм")
+        else -> "${v.roundToInt()} мм"
+    }
 
     enum class Sky { CLEAR, PARTLY, CLOUD, FOG, RAIN, SNOW, STORM, NIGHT }
 

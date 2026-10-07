@@ -50,6 +50,9 @@ import java.time.LocalTime
 /** Осадки — холодным голубым: единственный цвет в листе погоды, кроме кремового текста. */
 private val RAIN = Color(0xFF8FB4D4)
 
+/** Столбец «утро» / «день» / «вечер» в списке на десять дней. */
+private val PART_W = 46.dp
+
 /**
  * Тихая строка состояния: три точки светофора Спорта и «сон 7,2 ч · HRV 58 ·
  * форма +4» вторым тоном; хуже нормы — тёплым. Тап — Спорт. Переносится,
@@ -104,7 +107,7 @@ internal fun WeatherSheet(w: ru.zf.pravka.data.WeatherStore.Result, day: LocalDa
     PaperSheet(onDismiss = onDismiss, title = "Погода", icon = Glyphs.PartlyCloudy, subtitle = sub) {
         val hours = WeatherDay.hoursFrom(w.hours, if (day == today) LocalTime.now().hour else null)
         if (hours.isNotEmpty()) {
-            SectionHeader(if (day == today) "сегодня по часам" else "по часам", trailing = "серым — ощущается")
+            SectionHeader(if (day == today) "сегодня по часам" else "по часам", trailing = "серым — ощущается, голубым — осадки")
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -115,6 +118,22 @@ internal fun WeatherSheet(w: ru.zf.pravka.data.WeatherStore.Result, day: LocalDa
         if (w.days.isNotEmpty()) {
             SectionHeader("${w.days.size} дней")
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                // Подписи столбцов — один раз над списком (баг №16: справа утро,
+                // день, вечер вместо «+8…+15»).
+                if (w.days.any { it.parts.isNotEmpty() }) {
+                    Row(Modifier.fillMaxWidth()) {
+                        Spacer(Modifier.weight(1f))
+                        for (label in listOf("утро", "день", "вечер")) {
+                            Text(
+                                label,
+                                style = LocalPravkaType.current.caption.copy(fontSize = 11.sp),
+                                color = Ink.Caption,
+                                textAlign = TextAlign.End,
+                                modifier = Modifier.width(PART_W),
+                            )
+                        }
+                    }
+                }
                 for (d in w.days) DayLine(d, today)
             }
         }
@@ -152,16 +171,18 @@ private fun HourCell(h: WeatherDay.Hour, now: Boolean) {
             maxLines = 1,
         )
         Spacer(Modifier.height(4.dp))
+        // Осадки каждого часа — всегда обе цифры, и нули (баг №17): вероятность
+        // и сколько миллиметров.
         Text(
-            if (h.prob > 0) "${h.prob} %" else " ",
+            "${h.prob} %",
             style = t.caption.copy(fontSize = 11.sp, lineHeight = 14.sp, fontWeight = if (h.prob >= 50) FontWeight.SemiBold else FontWeight.Normal),
-            color = RAIN.copy(alpha = if (h.prob >= 30) 1f else 0.6f),
+            color = RAIN.copy(alpha = if (h.prob >= 30) 1f else 0.55f),
             maxLines = 1,
         )
         Text(
-            if (h.precipMm >= 0.1) (if (h.precipMm < 1.0) "<1 мм" else "${Math.round(h.precipMm)} мм") else " ",
-            style = t.caption.copy(fontSize = 10.sp, lineHeight = 13.sp),
-            color = RAIN.copy(alpha = 0.7f),
+            WeatherDay.mm(h.precipMm),
+            style = t.caption.copy(fontSize = 10.5.sp, lineHeight = 13.sp, fontWeight = if (h.precipMm >= 0.5) FontWeight.SemiBold else FontWeight.Normal),
+            color = RAIN.copy(alpha = if (h.precipMm >= 0.05) 1f else 0.55f),
             maxLines = 1,
         )
     }
@@ -188,7 +209,23 @@ private fun DayLine(d: WeatherDay.Day, today: LocalDate) {
             color = RAIN.copy(alpha = if (d.prob >= 30) 1f else 0.6f),
             modifier = Modifier.weight(1f),
         )
-        Column(horizontalAlignment = Alignment.End) {
+        if (d.parts.isNotEmpty()) {
+            // Утро, день, вечер — столбцами под подписями сверху, серым под
+            // каждым — как ощущается.
+            for (p in d.parts) {
+                Column(Modifier.width(PART_W), horizontalAlignment = Alignment.End) {
+                    Text(WeatherDay.temp(p.temp), style = t.weather, color = Ink.WeatherText, maxLines = 1)
+                    if (!p.feels.isNaN()) {
+                        Text(
+                            WeatherDay.temp(p.feels),
+                            style = t.caption.copy(fontSize = 11.sp, lineHeight = 14.sp),
+                            color = Ink.Caption.copy(alpha = 0.8f),
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+        } else Column(horizontalAlignment = Alignment.End) {
             Text(WeatherDay.range(d.min, d.max), style = t.weather, color = Ink.WeatherText, textAlign = TextAlign.End)
             if (!d.feelsMin.isNaN() && !d.feelsMax.isNaN()) {
                 Text(

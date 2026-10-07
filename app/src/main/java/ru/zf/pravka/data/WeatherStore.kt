@@ -170,6 +170,8 @@ class WeatherStore(private val context: Context) {
                     feelsMax = fMax?.optDouble(i, Double.NaN) ?: Double.NaN,
                     precipMm = sum?.optDouble(i, 0.0) ?: 0.0,
                     prob = prob?.optInt(i, 0) ?: 0,
+                    // Утро, день, вечер — из почасового прогноза того же ответа.
+                    parts = WeatherDay.parts(hours(forecast, date)),
                 )
             }
         }

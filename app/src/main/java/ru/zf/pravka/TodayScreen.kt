@@ -410,6 +410,11 @@ private fun TodayFolded(
     val density = androidx.compose.ui.platform.LocalDensity.current
     val sayPx = with(density) { 96.dp.roundToPx() }
     val growGuess = with(density) { 230.dp.roundToPx() }
+    // Запас до нижнего края, с которым шапка разворачивается: высота шапки
+    // теперь гасится прокруткой (ниже, баг №18), и ждать целых 230 dp не нужно —
+    // хватает зазора от дрожи. Лента в самом конце прокрутить вперёд не может —
+    // тогда запас полный.
+    val marginPx = with(density) { 96.dp.roundToPx() }
     var nowSeen by remember { mutableStateOf(true) }
     LaunchedEffect(list, r.nowIndex, dayOffset) {
         androidx.compose.runtime.snapshotFlow {
@@ -427,7 +432,8 @@ private fun TodayFolded(
             )
         }.collect { v ->
             val grow = (tallPx - shortPx).takeIf { tallPx > 0 && shortPx > 0 && it > 0 } ?: growGuess
-            auto = TodayFold.next(auto, r.nowIndex, v, grow, today = dayOffset == 0)
+            val margin = if (list.canScrollForward) minOf(grow, marginPx) else grow
+            auto = TodayFold.next(auto, r.nowIndex, v, margin, today = dayOffset == 0)
             nowSeen = r.nowIndex >= 0 && r.nowIndex in v.first..v.last &&
                 (v.nowTop == null || v.nowTop < v.viewEnd) && (v.nowBottom == null || v.nowBottom > 0)
         }
@@ -438,9 +444,29 @@ private fun TodayFolded(
     var showNav by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
+    // Шапка меняет высоту — лента остаётся на месте (баг №18, 07.10.2026:
+    // «тормозит в момент, когда вылезает верхняя плашка, и надо его докручивать
+    // ещё ниже»): шапка выросла на d — лента ниже на d, и мы тут же прокручиваем
+    // её на d вперёд, сжалась — назад. Строки под пальцем не дёргаются, шапка
+    // наезжает на верх ленты. `dispatchRawDelta`, а не `scrollBy`: тот
+    // останавливал бы идущий взмах — как раз то торможение. Прокручивать прямо
+    // в замере нельзя (Compose падает: «performMeasureAndLayout called during
+    // measure layout») — разница уходит очередью и применяется сразу после кадра.
+    var headPx by remember { mutableIntStateOf(-1) }
+    val headDelta = remember { kotlinx.coroutines.channels.Channel<Float>(kotlinx.coroutines.channels.Channel.UNLIMITED) }
+    LaunchedEffect(list) {
+        for (d in headDelta) list.dispatchRawDelta(d)
+    }
+
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            Box(Modifier.fillMaxWidth()) {
+            Box(
+                Modifier.fillMaxWidth().onSizeChanged { sz ->
+                    val old = headPx
+                    headPx = sz.height
+                    if (old >= 0 && sz.height != old) headDelta.trySend((sz.height - old).toFloat())
+                },
+            ) {
                 androidx.compose.animation.AnimatedContent(
                     targetState = compact,
                     transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(200)) },
@@ -804,15 +830,18 @@ private fun buildModel(
 
     val marks = ArrayList<DayAssembler.MarkIn>()
     val pending = ArrayList<DayAssembler.PendingIn>()
+    // Плашки отметок — единообразно, первым число (баг №15, 07.10.2026: «в еде
+    // первым ставить количество калорий, в деньгах — деньги, и в делах —
+    // количество новых дел»); в плашке оно жирнее (`ui/Timeline.kt`).
     // Еда: подтверждённые приёмы и ждущие «Записать».
     val meals = app.foodStore.mealsOn(dateKey)
     if ("food" in marksOn) {
         meals.filter { !it.supplement }.forEach { m ->
-            marks += DayAssembler.MarkIn(m.ts, DayAssembler.Source.FOOD, "${m.shortList.ifBlank { m.kind }} · ${m.kcal} ккал · Б ${m.protein}", "meal:${m.id}")
+            marks += DayAssembler.MarkIn(m.ts, DayAssembler.Source.FOOD, "${Fmt.num(m.kcal)} ккал · ${m.shortList.ifBlank { m.kind }} · Б ${m.protein}", "meal:${m.id}")
         }
     }
     app.foodStore.pending().filter { dayKey(it.ts) == dateKey }.forEach { m ->
-        pending += DayAssembler.PendingIn(m.ts, DayAssembler.Source.FOOD, "${m.shortList.ifBlank { m.kind }} · ≈ ${m.kcal} ккал", "meal:${m.id}")
+        pending += DayAssembler.PendingIn(m.ts, DayAssembler.Source.FOOD, "≈ ${Fmt.num(m.kcal)} ккал · ${m.shortList.ifBlank { m.kind }}", "meal:${m.id}")
     }
     val kcal = meals.sumOf { it.kcal }
 
@@ -853,7 +882,7 @@ private fun buildModel(
         }
         app.strengthStore.gtgOn(dateKey)?.takeIf { it.any && it.ts > 0 }?.let { g ->
             val n = g.doneIds.size
-            marks += DayAssembler.MarkIn(g.ts, DayAssembler.Source.SPORT, "Зарядка" + (if (n > 0) " · $n упр." else "") + (if (g.charged) " · сделана" else ""), "sport:gtg")
+            marks += DayAssembler.MarkIn(g.ts, DayAssembler.Source.SPORT, (if (n > 0) "$n упр. · " else "") + "Зарядка" + (if (g.charged) " · сделана" else ""), "sport:gtg")
         }
     }
     val plan = app.planStore.dayOf(dateKey)
@@ -915,8 +944,8 @@ private fun buildModel(
                         "bot" -> "бота"
                         else -> "почты"
                     }
-                    val text = if (batch.size > 1) "Новое из $from · ${batch.size} · разобрать"
-                    else "Из $from: ${first.title}"
+                    val text = "+" + plural(batch.size, "новое", "новых", "новых") + " из $from · " +
+                        if (batch.size > 1) "разобрать" else first.title
                     marks += DayAssembler.MarkIn(at, DayAssembler.Source.DELA, text, "dela:new")
                 }
         }
