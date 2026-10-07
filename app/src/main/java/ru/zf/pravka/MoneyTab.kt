@@ -1,5 +1,6 @@
 package ru.zf.pravka
 
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
 import androidx.compose.ui.draw.clip
@@ -272,20 +273,18 @@ internal fun MoneyTab(
         if (part == PART_SUMMARY && !ask.busy && ask.answer.isEmpty()) {
             ru.zf.pravka.ui.AskChips(MONEY_ASKS, onAsk = { ask.send(it) }, modifier = Modifier.padding(bottom = 6.dp))
         }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .weight(1f)
-            .bottomFade()
-            .fadingScroll()
-            .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 110.dp),
-        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
-    ) {
+    // Разворот (DESIGN §13): две колонки — слева главное части, справа
+    // остальное; сложенный — одна лента. [side]: 0 — всё, 1 — левая, 2 — правая.
+    val wide = ru.zf.pravka.ui.twoPane()
+    val blocks: @Composable ColumnScope.(Int) -> Unit = { side ->
+        val left = side != 2
+        val right = side != 1
         // Общие с семьёй: когда был обмен и что пришло (есть вход в семейный Drive).
-        MoneySyncLine(app)
+        if (left) MoneySyncLine(app)
 
         when (part) {
             PART_SUMMARY -> {
+                if (left) {
                 // ---- Спросить Claude: ответ — плашкой; чипы — под сегментами, поле — внизу ----
                 MoneyAnswerCard(ask)
 
@@ -340,6 +339,8 @@ internal fun MoneyTab(
                     }
                 }
 
+                }
+                if (right) {
                 // ---- ДДС, баланс и счета ----
                 CashflowCard(app, entries, java.time.YearMonth.from(period.firstDay.plusDays((period.days - 1).toLong())), ms)
                 BalanceCard(app, entries, ms)
@@ -388,9 +389,11 @@ internal fun MoneyTab(
 
                 // ---- Паттерны от Claude ----
                 PatternsCard(app, state.insight, state.insightTs)
+                }
             }
 
             PART_SORT -> {
+                if (left) {
                 // ---- Вопросы карточками ----
                 QuestionCards(app, questions) {
                     PaperTextButton(
@@ -433,6 +436,8 @@ internal fun MoneyTab(
                     }
                 }
 
+                }
+                if (right) {
                 // ---- Выписки ----
                 PaperCard(
                     label = "выписки",
@@ -472,9 +477,11 @@ internal fun MoneyTab(
                         PaperHint("${stamp(i.ts)} · ${i.kind}: ${i.rows} строк, новых ${i.added}" + if (i.note.isNotBlank()) " · ${i.note}" else "")
                     }
                 }
+                }
             }
 
             else -> {
+                if (left) {
                 // Журнал — записи периода: тот же период, что в сводке (чип сверху).
                 PeriodSummaryCard(period, totals)
 
@@ -485,10 +492,35 @@ internal fun MoneyTab(
                     if (journal.size > 150) PaperHint("и ещё ${journal.size - 150} — в книге")
                 }
 
+                }
                 // ---- Справочник ----
-                PayeesCard(app)
+                if (right) PayeesCard(app)
             }
         }
+    }
+    if (wide) {
+        Row(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 8.dp)) {
+            for (side in 1..2) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .bottomFade()
+                        .fadingScroll()
+                        .padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 110.dp),
+                    verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+                ) { blocks(side) }
+            }
+        }
+    } else {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .bottomFade()
+                .fadingScroll()
+                .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 110.dp),
+            verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+        ) { blocks(0) }
     }
     }
     // ---- «Спроси про деньги» — строка внизу (`screens/11`) ----
@@ -518,7 +550,9 @@ internal fun MoneyTab(
             })
         },
         modifier = Modifier
-            .align(Alignment.BottomCenter)
+            // На развороте строка — под правой колонкой, как в макете 08.
+            .align(if (ru.zf.pravka.ui.twoPane()) Alignment.BottomEnd else Alignment.BottomCenter)
+            .then(if (ru.zf.pravka.ui.twoPane()) Modifier.fillMaxWidth(0.5f) else Modifier)
             .navigationBarsPadding()
             .imePadding()
             .padding(start = 12.dp, end = 12.dp, bottom = 18.dp),

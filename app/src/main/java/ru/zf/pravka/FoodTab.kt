@@ -287,12 +287,14 @@ internal fun FoodTab(
     Column(Modifier.fillMaxSize()) {
     header(ru.zf.pravka.core.Fmt.dayList(dayDate)) { daySheet = true }
     Box(Modifier.weight(1f)) {
-    LazyColumn(
-        Modifier.fillMaxSize().bottomFade().scrollFade(listState),
-        state = listState,
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 110.dp),
-        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
-    ) {
+    // Разворот (DESIGN §13): слева день — итог, ждущее, приёмы; справа —
+    // витамины, рацион, неделя. [side]: 0 — всё одной лентой, 1 — левая, 2 — правая.
+    val wide = ru.zf.pravka.ui.twoPane()
+    val rightState = rememberLazyListState()
+    val body: androidx.compose.foundation.lazy.LazyListScope.(Int) -> Unit = { side ->
+        val left = side != 2
+        val right = side != 1
+        if (left) {
         // ---- Итог дня: сколько осталось крупно, полоса с ожидающим, три макро (`screens/10`) ----
         item(key = "total") {
             DayTotalCard(
@@ -359,6 +361,8 @@ internal fun FoodTab(
             }
         }
 
+        }
+        if (right) {
         // ---- Витамины и элементы ----
         item(key = "micro") { MicroCard(total) }
 
@@ -379,7 +383,27 @@ internal fun FoodTab(
             }
         }
 
+        }
         // Настройки режима — за шестерёнкой в шапке вкладки.
+    }
+    if (wide) {
+        Row(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
+            for ((side, st) in listOf(1 to listState, 2 to rightState)) {
+                LazyColumn(
+                    Modifier.weight(1f).fillMaxHeight().bottomFade().scrollFade(st),
+                    state = st,
+                    contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 110.dp),
+                    verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+                ) { body(side) }
+            }
+        }
+    } else {
+        LazyColumn(
+            Modifier.fillMaxSize().bottomFade().scrollFade(listState),
+            state = listState,
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 110.dp),
+            verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+        ) { body(0) }
     }
     // ---- Что съел: строка «сказать» внизу, четыре дороги в ней (DESIGN §11.4) ----
     // Снимок, галерея и штрихкод — значками справа перед микрофоном (`screens/10`);
@@ -406,7 +430,9 @@ internal fun FoodTab(
             }
         },
         modifier = Modifier
-            .align(Alignment.BottomCenter)
+            // На развороте строка — под правой колонкой, как в макете 08.
+            .align(if (wide) Alignment.BottomEnd else Alignment.BottomCenter)
+            .then(if (wide) Modifier.fillMaxWidth(0.5f) else Modifier)
             .navigationBarsPadding()
             .imePadding()
             .padding(start = 12.dp, end = 12.dp, bottom = 18.dp),

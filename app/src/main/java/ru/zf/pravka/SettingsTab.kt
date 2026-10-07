@@ -135,13 +135,12 @@ internal fun SettingsTab(
     onOpenAccessibilitySettings: () -> Unit,
     onOpen: (SettingsGroup) -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .fadingScroll()
-            .padding(ScreenPad.Padding),
-        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
-    ) {
+    // Разворот: слева служба и полки «Режимы», «Голос и Claude», справа —
+    // «Подключения», «Кнопки и вид», «Приложение».
+    ru.zf.pravka.ui.SplitColumns { side ->
+        val left = side != 2
+        val right = side != 1
+        if (left) {
         // Самым верхним — «Проверить обновления» (владелец, 01.10.2026:
         // «вытаскивать эту кнопку и дальше нажимать из шестерёнки… очень
         // каждый раз сложно, потому что у края экрана не получается»).
@@ -166,10 +165,13 @@ internal fun SettingsTab(
             }
         }
 
+        }
         // Группы выключенного в профиле режима не показываются: их настройки
         // ни на что не действуют. Вернуть режим — «Кто пользуется».
         val profile by app.profileStore.flow.collectAsState()
         for (shelf in SettingsShelf.entries) {
+            val leftShelf = shelf == SettingsShelf.MODES || shelf == SettingsShelf.VOICE
+            if (if (leftShelf) !left else !right) continue
             val groups = SettingsGroup.entries.filter { it.shelf == shelf && it != SettingsGroup.APP }
                 .filter { g -> g.modes.isEmpty() || g.modes.any { m -> profile?.has(m) ?: true } }
             if (groups.isEmpty()) continue
@@ -194,7 +196,7 @@ internal fun SettingsTab(
                 }
             }
         }
-        PaperHint(
+        if (right) PaperHint(
             stringResource(
                 R.string.build_info,
                 BuildConfig.VERSION_NAME,

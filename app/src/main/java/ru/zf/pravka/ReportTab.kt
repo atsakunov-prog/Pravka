@@ -1,5 +1,7 @@
 package ru.zf.pravka
 
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.background
@@ -355,12 +357,15 @@ internal fun ReportTab(app: PravkaApp) {
     val refHealth = healthByDate[refKey]
 
     val listState = rememberLazyListState()
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().scrollFade(listState),
-        state = listState,
-        contentPadding = ScreenPad.Padding,
-        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
-    ) {
+    // Разворот (DESIGN §12.9): сетка в две колонки — слева день (балл, числа,
+    // из чего сложился, часы, треугольник, сравнение), справа неделя, телефон,
+    // тело, еда, дела и коэффициенты. [side]: 0 — одной лентой.
+    val wide = ru.zf.pravka.ui.twoPane()
+    val rightState = rememberLazyListState()
+    val body: androidx.compose.foundation.lazy.LazyListScope.(Int) -> Unit = { side ->
+        val left = side != 2
+        val right = side != 1
+        if (left) {
         // ---- шапка и день ----
         item {
             // Название — в общей шапке («Общая статистика»); здесь сразу день.
@@ -421,6 +426,8 @@ internal fun ReportTab(app: PravkaApp) {
             )
         }
 
+        }
+        if (right) {
         // ---- 7. неделя ----
         item {
             WeekCard(weekDays, history, dayStart, isToday, now)
@@ -492,6 +499,26 @@ internal fun ReportTab(app: PravkaApp) {
         item {
             RatiosCard(frame, refFrame, phone, refPhone, isToday)
         }
+        }
+    }
+    if (wide) {
+        Row(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
+            for ((side, st) in listOf(1 to listState, 2 to rightState)) {
+                LazyColumn(
+                    modifier = Modifier.weight(1f).fillMaxHeight().scrollFade(st),
+                    state = st,
+                    contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+                ) { body(side) }
+            }
+        }
+    } else {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().scrollFade(listState),
+            state = listState,
+            contentPadding = ScreenPad.Padding,
+            verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+        ) { body(0) }
     }
 }
 

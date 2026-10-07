@@ -1,5 +1,6 @@
 package ru.zf.pravka
 
+import androidx.compose.foundation.layout.fillMaxHeight
 import ru.zf.pravka.ui.glass
 import ru.zf.pravka.ui.bottomFade
 import androidx.compose.ui.unit.sp
@@ -181,12 +182,14 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
 
     val listState = rememberLazyListState()
     Box(Modifier.fillMaxSize()) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().bottomFade().scrollFade(listState),
-        state = listState,
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 110.dp),
-        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
-    ) {
+    // Разворот (DESIGN §13): слева «Последнее», записи и черновик, справа —
+    // расшифровки. [side]: 0 — всё одной лентой, 1 — левая, 2 — правая.
+    val wide = ru.zf.pravka.ui.twoPane()
+    val rightState = rememberLazyListState()
+    val body: androidx.compose.foundation.lazy.LazyListScope.(Int) -> Unit = { side ->
+        val left = side != 2
+        val right = side != 1
+        if (left) {
         // «Последнее» (Правка 4.0, `screens/12`): что сказано и что вышло —
         // свежая чистка из нижней строки или последняя чистка «П».
         item(key = "last") { LastCard(app) }
@@ -228,6 +231,8 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
             }
         }
 
+        }
+        if (right) {
         item(key = "tr:h") {
             // «24 сегодня · 18 м голоса» — сколько тейков сегодня и сколько в них голоса.
             val dayFrom = remember(log) { dayStartMs(System.currentTimeMillis()) }
@@ -284,8 +289,32 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
                 }
             }
         }
+        }
     }
-    CleanBar(app, Modifier.align(Alignment.BottomCenter))
+    if (wide) {
+        Row(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
+            for ((side, st) in listOf(1 to listState, 2 to rightState)) {
+                LazyColumn(
+                    modifier = Modifier.weight(1f).fillMaxHeight().bottomFade().scrollFade(st),
+                    state = st,
+                    contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 4.dp, bottom = if (side == 2) 110.dp else 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+                ) { body(side) }
+            }
+        }
+    } else {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().bottomFade().scrollFade(listState),
+            state = listState,
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 110.dp),
+            verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+        ) { body(0) }
+    }
+    // На развороте строка — под правой колонкой, как в макете 08.
+    CleanBar(
+        app,
+        if (wide) Modifier.align(Alignment.BottomEnd).fillMaxWidth(0.5f) else Modifier.align(Alignment.BottomCenter),
+    )
     }
 
     replayOut?.let { out ->

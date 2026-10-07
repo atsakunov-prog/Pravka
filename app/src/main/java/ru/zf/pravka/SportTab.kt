@@ -1,5 +1,6 @@
 package ru.zf.pravka
 
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -307,13 +308,15 @@ internal fun SportTab(app: PravkaApp) {
             onSelect = { part = it },
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 6.dp),
         )
-        LazyColumn(
-            Modifier.fillMaxWidth().weight(1f).bottomFade().scrollFade(listState),
-            state = listState,
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 110.dp),
-            verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
-        ) {
+        // Разворот (DESIGN §13): две колонки — слева главное части, справа
+        // остальное. [side]: 0 — всё одной лентой, 1 — левая, 2 — правая.
+        val wide = ru.zf.pravka.ui.twoPane()
+        val rightState = rememberLazyListState()
+        val body: androidx.compose.foundation.lazy.LazyListScope.(Int) -> Unit = { side ->
+            val left = side != 2
+            val right = side != 1
             if (part == PART_TODAY) {
+                if (left) {
                 // ---- Готовность: светофор дня точками, почему и четыре числа ----
                 item(key = "ready") { ReadinessCard(verdict, health.firstOrNull(), app.icuSportSync.lastError()) }
 
@@ -486,6 +489,8 @@ internal fun SportTab(app: PravkaApp) {
                     item { StrengthTodayCard(app, todaySession, onFeel = { feelDialog = todaySession.id }) }
                 }
 
+                }
+                if (right) {
                 // ---- Сделано сегодня: что приехало с часов ----
                 val doneToday = workouts.filter { dayKey(it.start) == today }.sortedBy { it.start }
                 if (doneToday.isNotEmpty()) {
@@ -503,9 +508,11 @@ internal fun SportTab(app: PravkaApp) {
 
                 // ---- Неделя: сделано против плана столбиками ----
                 item(key = "week") { WeekBarsCard(app, workouts, planDays) }
+                }
             }
 
             if (part == PART_PATH) {
+                if (left) {
                 // Пустая часть читается поломкой: до первой выгрузки intervals здесь
                 // ничего бы не нарисовалось — скажем, чего ждём.
                 if (health.isEmpty() && workouts.isEmpty()) {
@@ -557,6 +564,8 @@ internal fun SportTab(app: PravkaApp) {
                 // не нужно — данные уже в кэше, рисуем тренд и говорим словами.
                 item { EfficiencyCard(workouts) }
 
+                }
+                if (right) {
                 // ---- План недели: что впереди, с его же комментариями ----
                 item { WeekPlanCard(app, planDays) }
 
@@ -588,9 +597,11 @@ internal fun SportTab(app: PravkaApp) {
                         }
                     }
                 }
+                }
             }
 
             if (part == PART_JOURNAL) {
+                if (left) {
                 // ---- Тренировки ----
                 // Период — чипами ПОД подписью, а не в её строке: четыре чипа рядом с
                 // «тренировки · 12» на внешнем экране Fold не вставали (24.09.2026).
@@ -654,6 +665,8 @@ internal fun SportTab(app: PravkaApp) {
                     }
                 }
 
+                }
+                if (right) {
                 // ---- Вопрос ----
                 item {
                     PaperCard(
@@ -741,9 +754,29 @@ internal fun SportTab(app: PravkaApp) {
                         }
                     }
                 }
+                }
             }
 
             // Настройки режима — за шестерёнкой в шапке вкладки.
+        }
+        if (wide) {
+            Row(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 8.dp)) {
+                for ((side, st) in listOf(1 to listState, 2 to rightState)) {
+                    LazyColumn(
+                        Modifier.weight(1f).fillMaxHeight().bottomFade().scrollFade(st),
+                        state = st,
+                        contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 110.dp),
+                        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+                    ) { body(side) }
+                }
+            }
+        } else {
+            LazyColumn(
+                Modifier.fillMaxWidth().weight(1f).bottomFade().scrollFade(listState),
+                state = listState,
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 110.dp),
+                verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+            ) { body(0) }
         }
     }
     // Микрофона у этой строки нет, как не было у поля: голосом про тело говорят
@@ -769,7 +802,9 @@ internal fun SportTab(app: PravkaApp) {
         maxLines = 3,
         busy = sayBusy,
         modifier = Modifier
-            .align(Alignment.BottomCenter)
+            // На развороте строка — под правой колонкой, как в макете 08.
+            .align(if (ru.zf.pravka.ui.twoPane()) Alignment.BottomEnd else Alignment.BottomCenter)
+            .then(if (ru.zf.pravka.ui.twoPane()) Modifier.fillMaxWidth(0.5f) else Modifier)
             .navigationBarsPadding()
             .imePadding()
             .padding(start = 12.dp, end = 12.dp, bottom = 18.dp),

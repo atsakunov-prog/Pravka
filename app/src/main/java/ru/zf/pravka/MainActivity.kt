@@ -1,5 +1,7 @@
 package ru.zf.pravka
 
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.navigationBarsPadding
 import android.os.Bundle
@@ -460,14 +462,11 @@ private fun serviceGlyph(tab: Tab): androidx.compose.ui.graphics.vector.ImageVec
 @Composable
 private fun MoreList(app: PravkaApp, onOpen: (Tab) -> Unit, onMode: (Tab) -> Unit, onProfile: () -> Unit) {
     val profile by app.profileStore.flow.collectAsState()
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .fadingScroll()
-            .padding(ScreenPad.Padding),
-        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
-    ) {
-        ru.zf.pravka.ui.PaperCard {
+    // Разворот: слева Правка, статистика и «кто пользуется», справа полки.
+    ru.zf.pravka.ui.SplitColumns { side ->
+        val left = side != 2
+        val right = side != 1
+        if (left) ru.zf.pravka.ui.PaperCard {
             PaperRow(
                 title = stringResource(R.string.tab_pravka),
                 hint = "чистка текста, расшифровки",
@@ -482,7 +481,7 @@ private fun MoreList(app: PravkaApp, onOpen: (Tab) -> Unit, onMode: (Tab) -> Uni
                 onClick = { onOpen(Tab.REPORT) },
             )
         }
-        for ((label, items) in MORE_SHELVES) {
+        if (right) for ((label, items) in MORE_SHELVES) {
             ru.zf.pravka.ui.PaperCard(label = label) {
                 items.forEachIndexed { i, item ->
                     if (i > 0) RowRule()
@@ -495,7 +494,7 @@ private fun MoreList(app: PravkaApp, onOpen: (Tab) -> Unit, onMode: (Tab) -> Uni
                 }
             }
         }
-        ru.zf.pravka.ui.PaperCard(label = "кто пользуется") {
+        if (left) ru.zf.pravka.ui.PaperCard(label = "кто пользуется") {
             PaperRow(
                 title = profile?.name?.takeIf { it.isNotBlank() } ?: "Профиль",
                 hint = "имя, режимы",
@@ -898,7 +897,7 @@ private fun PageScreen(
             when (p) {
                 is Page.Cost -> {
                     TabHeader(title = stringResource(R.string.stats_header), onBack = pop)
-                    CostScreen(app)
+                    WideCap { CostScreen(app) }
                 }
                 is Page.ModeSettings -> {
                     TabHeader(
@@ -907,13 +906,15 @@ private fun PageScreen(
                         onBack = pop,
                         actions = { CostAction(openCost) },
                     )
-                    ModeSettingsScreen(
-                        app,
-                        p.group,
-                        serviceEnabled,
-                        onOpenAccessibilitySettings = onOpenAccessibilitySettings,
-                        onOpen = openGroup,
-                    )
+                    WideCap {
+                        ModeSettingsScreen(
+                            app,
+                            p.group,
+                            serviceEnabled,
+                            onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                            onOpen = openGroup,
+                        )
+                    }
                 }
                 is Page.Service -> {
                     TabHeader(
@@ -938,21 +939,39 @@ private fun PageScreen(
                         )
                         Tab.REPORT -> ReportTab(app)
                         Tab.SETTINGS -> SettingsTab(app, serviceEnabled, onOpenAccessibilitySettings, onOpen = openGroup)
-                        Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
-                        Tab.PROMPTS -> PromptsTab(promptStore)
-                        Tab.LEARNING -> LearningTab(app)
-                        Tab.REVIEWS -> ReviewsTab(app)
-                        Tab.LOGS -> LogsTab(app)
-                        Tab.STATS -> DictationStatsTab(
-                            app,
-                            exportRequested = dictationExport,
-                            onExportHandled = { onDictationExport(false) },
-                        )
+                        Tab.DICTIONARY -> WideCap { DictionaryTab(dictionaryStore, historyLog, dictMiner) }
+                        Tab.PROMPTS -> WideCap { PromptsTab(promptStore) }
+                        Tab.LEARNING -> WideCap { LearningTab(app) }
+                        Tab.REVIEWS -> WideCap { ReviewsTab(app) }
+                        Tab.LOGS -> WideCap { LogsTab(app) }
+                        Tab.STATS -> WideCap {
+                            DictationStatsTab(
+                                app,
+                                exportRequested = dictationExport,
+                                onExportHandled = { onDictationExport(false) },
+                            )
+                        }
                         else -> Unit
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * Служебная страница одной колонкой (группа настроек, словарь, логи…): на
+ * развороте — не шире 640 dp по центру, а не растянутой во весь экран
+ * (DESIGN §13). На сложенном — как есть.
+ */
+@Composable
+private fun WideCap(content: @Composable () -> Unit) {
+    if (!ru.zf.pravka.ui.twoPane()) {
+        content()
+        return
+    }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Box(Modifier.fillMaxHeight().widthIn(max = 640.dp)) { content() }
     }
 }
 
