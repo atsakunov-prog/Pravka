@@ -780,6 +780,8 @@ private fun MainScreen(
                                 TabHeader(
                                     title = stringResource(R.string.tab_sport),
                                     onBack = toToday,
+                                    // Вторым тоном — неделя года, как в макете 09 («Неделя 41»).
+                                    titleExtra = "Неделя " + java.time.LocalDate.now().get(java.time.temporal.WeekFields.ISO.weekOfWeekBasedYear()),
                                     actions = {
                                         StatsAction(openReport)
                                         CostAction(openCost)

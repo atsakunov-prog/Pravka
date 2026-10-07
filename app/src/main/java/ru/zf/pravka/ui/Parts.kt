@@ -780,7 +780,7 @@ fun StatTile(
             .border(1.dp, mode.tint.copy(alpha = 0.26f), shape)
             .padding(horizontal = 10.dp, vertical = 9.dp),
     ) {
-        Text(label, style = t.caption, color = mode.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        FitText(label, style = t.caption, color = mode.label, minSize = 9.5f)
         Text(
             value,
             style = t.tile,
@@ -798,7 +798,9 @@ fun StatTile(
                     worse -> mode.meta.copy(alpha = 0.8f)
                     else -> mode.meta
                 },
-                maxLines = 1,
+                // Подпись под числом — до двух строк: «тренированность 41.3» на
+                // плитке в четверть экрана в одну не встаёт (`screens/09`).
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
         }

@@ -13,6 +13,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import ru.zf.pravka.ui.combinedTap
+import ru.zf.pravka.ui.glass
+import ru.zf.pravka.ui.bottomFade
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -111,13 +118,14 @@ private const val PART_TODAY = 0
 private const val PART_PATH = 1
 private const val PART_JOURNAL = 2
 
-/** Цвет тона сводки: та же радуга, что у балла дня в Засечке. */
+/** Цвет тона сводки. */
 @Composable
 private fun toneColor(tone: Int): Color = when (tone) {
-    -2 -> Color(0xFFEF4444)
-    -1 -> Color(0xFFF59E0B)
-    1 -> Color(0xFF22C55E)
-    else -> MaterialTheme.colorScheme.onSurfaceVariant
+    // Правка 4.0: светофорных цветов нет (DESIGN §4) — «хорошо» ярким тоном
+    // режима, «плохо» — тёплым предупреждением, «ровно» — подписью.
+    -2, -1 -> ru.zf.pravka.ui.Ink.Warn
+    1 -> ru.zf.pravka.ui.LocalMode.current.value
+    else -> ru.zf.pravka.ui.LocalMode.current.label
 }
 
 @Composable
@@ -285,327 +293,190 @@ internal fun SportTab(app: PravkaApp) {
     }
 
     val listState = listStates[part]
-    // Пилюля светофора в плашке «сегодня» ведёт к его подробностям. Индекс
-    // считается по устройству части «Сегодня» ниже: «сегодня», чек-лист
-    // зарядки, затем на каждую силовую подпись и её упражнения, и следом —
-    // светофор. Поменял порядок элементов — поправь и здесь.
-    val lightIndex = 2 + dayGroups.sumOf { 1 + it.second.size }
 
+    // Правка 4.0 (`screens/09`): части вкладки сегментами сверху, строка
+    // «Как тренировка?» — внизу, как у всех режимов (DESIGN §11.4). Тот же
+    // роутер, что у «Т»: зарядка, подходы, ощущение — он сам поймёт.
+    var sayDraft by remember { mutableStateOf("") }
+    var sayBusy by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxWidth()) {
-        // Версия 3, второй заход (26.09.2026, вечер): пилюля — первой строкой
-        // вкладки, как у всех («в спорте должно быть тоже сверху: например, итог
-        // зарядки на сегодня, и такая же плашка»). Тот же роутер, что у «Т»:
-        // зарядка, подходы, ощущение — он сам поймёт, о чём сказано.
-        ru.zf.pravka.ui.TopPill {
-            BodyTalkBox(
-                app = app,
-                hint = ru.zf.pravka.core.PillHint.say(app.profileStore.flow.collectAsState().value?.name, "итог зарядки?"),
-                whereSaid = "",
-            )
-        }
         Segments(
             options = PARTS,
             selected = part,
             onSelect = { part = it },
-            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp),
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 6.dp),
         )
         LazyColumn(
-            Modifier.fillMaxWidth().scrollFade(listState),
+            Modifier.fillMaxWidth().weight(1f).bottomFade().scrollFade(listState),
             state = listState,
-            contentPadding = ScreenPad.Padding,
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 110.dp),
             verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
         ) {
             if (part == PART_TODAY) {
-                // ---- Что я делаю сегодня ----
-                item {
-                    PaperCard(
-                        label = "сегодня",
-                        info = "План приезжает из календаря intervals — ты его туда пушишь, " +
-                            "когда собираешь блок. Правила блока читаются из Notion.",
-                        trailing = {
-                            if (syncing) {
-                                Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-                                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                // ---- Готовность: светофор дня точками, почему и четыре числа ----
+                item(key = "ready") { ReadinessCard(verdict, health.firstOrNull(), app.icuSportSync.lastError()) }
+
+                // ---- Тренировка дня: план, тренер, упражнения, «Сделано» ----
+                item(key = "plan") {
+                    val mode = ru.zf.pravka.ui.LocalMode.current
+                    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+                    val mainTasks = dayGroups.firstOrNull { it.first.eventId == mainPlan?.eventId }?.second.orEmpty()
+                    Column(Modifier.fillMaxWidth()) {
+                        ru.zf.pravka.ui.SectionHeader(
+                            "тренировка" + (mainPlan?.time?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
+                            trailing = "из intervals.icu",
+                            info = "План" to "План приезжает из календаря intervals — ты его туда пушишь, " +
+                                "когда собираешь блок. Правила блока читаются из Notion.",
+                            action = {
+                                if (syncing) {
+                                    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = mode.tint)
+                                    }
+                                } else {
+                                    GlyphButton(Glyphs.Refresh, "Обновить", onClick = refresh, tint = mode.label)
                                 }
+                            },
+                        )
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .glass(RoundedCornerShape(22.dp), mode.glass)
+                                .padding(horizontal = 18.dp, vertical = 16.dp),
+                        ) {
+                            if (mainPlan == null) {
+                                Text("В календаре intervals на сегодня ничего нет.", style = ty.bodyL, color = ru.zf.pravka.ui.Ink.Text)
                             } else {
-                                GlyphButton(Glyphs.Refresh, "Обновить", onClick = refresh)
-                            }
-                        },
-                    ) {
-                        // Светофор пилюлей — вердикт дня виден, не прокручивая мимо
-                        // упражнений; почему и три числа — в его плашке ниже, тап
-                        // по пилюле туда и ведёт (24.09.2026).
-                        TrafficPill(verdict, onClick = {
-                            scope.launch { listState.animateScrollToItem(lightIndex) }
-                        })
-                        Spacer(Modifier.height(10.dp))
-                        if (mainPlan == null) {
-                            Text(
-                                "В календаре intervals на сегодня ничего нет.",
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                        } else {
-                            Text(mainPlan.name, style = MaterialTheme.typography.titleLarge)
-                            Spacer(Modifier.height(4.dp))
-                            // planLine — «название · параметры»; название уже выше,
-                            // поэтому в подсказку идёт только хвост с параметрами.
-                            PaperHint(verdict.planLine.substringAfter(mainPlan.name).trim(' ', '·'))
-                            // Комментарий владельца к сессии — первый абзац описания
-                            // до нумерованного списка. Он там про смысл дня, и это
-                            // ровно то, что стоит прочитать перед началом.
-                            val comment = mainPlan.noteBefore()
-                            if (comment.isNotBlank()) {
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    comment.take(400),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                )
-                            }
-                            // Список упражнений силовой здесь не дублируем: он живёт
-                            // ниже карточками-задачами. А у кардио нумерованные строки —
-                            // подсказки дня («руки на верх руля», «каждые 15 мин из
-                            // седла»), их место здесь, без галочек.
-                            if (!mainPlan.strength) {
-                                val cues = mainPlan.plannedLines()
-                                if (cues.isNotEmpty()) {
-                                    Spacer(Modifier.height(8.dp))
-                                    // Подсказки кардио — его же слова, не имена из
-                                    // справочника: матчить «нагрудный ремень» незачем.
-                                    for (cue in PlanLine.parseAll(cues, app.exerciseBook)) {
-                                        Text(
-                                            "· " + (if (cue.dose.isBlank()) cue.name else "${cue.name} — ${cue.dose}"),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                        )
-                                        if (cue.note.isNotBlank()) {
-                                            Text(
-                                                "   " + cue.note,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            )
+                                Text(mainPlan.name, style = ty.titleM, color = ru.zf.pravka.ui.Ink.TextStrong)
+                                // planLine — «название · параметры»; название уже выше.
+                                val meta = listOf(
+                                    verdict.planLine.substringAfter(mainPlan.name).trim(' ', '·'),
+                                    if (mainTasks.isNotEmpty()) "${mainTasks.size} упр." else "",
+                                ).filter { it.isNotBlank() }.joinToString(" · ")
+                                if (meta.isNotBlank()) Text(meta, style = ty.meta, color = mode.meta, modifier = Modifier.padding(top = 2.dp))
+                                // Его слова к сессии — до и после списка — плашкой «Тренер».
+                                val coach = listOf(mainPlan.noteBefore(), mainPlan.noteAfter())
+                                    .filter { it.isNotBlank() }.joinToString("\n")
+                                if (coach.isNotBlank()) {
+                                    Spacer(Modifier.height(12.dp))
+                                    ru.zf.pravka.ui.CoachNote(coach.take(600))
+                                }
+                                // У кардио нумерованные строки — подсказки дня, без галочек.
+                                if (!mainPlan.strength) {
+                                    val cues = mainPlan.plannedLines()
+                                    if (cues.isNotEmpty()) {
+                                        Spacer(Modifier.height(8.dp))
+                                        for (cue in PlanLine.parseAll(cues, app.exerciseBook)) {
+                                            ru.zf.pravka.ui.ExerciseRow(cue.name, cue.note.takeIf { it.isNotBlank() }, cue.dose.takeIf { it.isNotBlank() })
                                         }
                                     }
                                 }
-                            }
-                            // Его текст ПОСЛЕ списка — «Отдых минута. Задача дня — не
-                            // устать, а понять, как гиря лежит в руках». Раньше терялся.
-                            val afterNote = mainPlan.noteAfter()
-                            if (afterNote.isNotBlank()) {
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    afterNote.take(400),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            // Второстепенное дня — одной строкой, по часам: турник
-                            // после гири, Zwift днём. Зарядка — в своей карточке.
-                            val extras = app.planStore.dayOf(today)
-                                .filterNot { it.eventId == mainPlan.eventId || it.charger }
-                                .sortedBy { it.time.ifBlank { "99:99" } }
-                            if (extras.isNotEmpty()) {
-                                Spacer(Modifier.height(6.dp))
-                                PaperHint(
-                                    "Ещё сегодня: " + extras.joinToString("; ") { e ->
-                                        (if (e.time.isNotBlank()) e.time + " " else "") +
-                                            e.name + (if (e.minutes > 0) " · ${e.minutes} мин" else "")
+                                // Упражнения силовой — строками в той же плашке (`screens/09`).
+                                if (mainTasks.isNotEmpty()) {
+                                    Spacer(Modifier.height(8.dp))
+                                    mainTasks.forEachIndexed { i, task ->
+                                        if (i > 0) ru.zf.pravka.ui.Hairline()
+                                        ExerciseLine(app, task, todaySession, today, dayTasks, restSec,
+                                            onAskCoach = { auto -> coachTopic = Triple(task.title, task.exercise, auto) },
+                                            onFeel = { feelDialog = it })
                                     }
-                                )
-                            }
-                            // Кардио закрывают часы: активность нужного типа приехала —
-                            // задача дня выполнена фактом, никакую кнопку жать не надо.
-                            val arrivedToday = if (!mainPlan.strength) {
-                                workouts.firstOrNull {
-                                    dayKey(it.start) == today &&
-                                        (it.type.equals(mainPlan.type, true) ||
-                                            (mainPlan.type.equals("Ride", true) &&
-                                                it.type.equals("VirtualRide", true)))
                                 }
-                            } else null
-                            if (arrivedToday != null) {
-                                Spacer(Modifier.height(8.dp))
-                                DoneLine(
-                                    "Приехала с часов: " + buildList {
-                                        if (arrivedToday.km >= 0.1) add(fmt1(arrivedToday.km) + " км")
-                                        add("${arrivedToday.minutes} мин")
-                                        if (arrivedToday.avgHr > 0) add("пульс ${arrivedToday.avgHr}")
-                                    }.joinToString(", ")
-                                )
-                            }
-                            Spacer(Modifier.height(10.dp))
-                            // «Сделано» — главная кнопка плашки, справа, куда дотягивается
-                            // большой палец; «Самочувствие» — контуром слева от неё.
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                // Состояние слева берёт то, что осталось от кнопок: у
-                                // строки с весом ширина считается последней, и
-                                // главную кнопку узкий экран не сожмёт.
+                                // Второстепенное дня — одной строкой, по часам.
+                                val extras = app.planStore.dayOf(today)
+                                    .filterNot { it.eventId == mainPlan.eventId || it.charger }
+                                    .filterNot { e -> dayGroups.any { it.first.eventId == e.eventId } }
+                                    .sortedBy { it.time.ifBlank { "99:99" } }
+                                if (extras.isNotEmpty()) {
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        "Ещё сегодня: " + extras.joinToString("; ") { e ->
+                                            (if (e.time.isNotBlank()) e.time + " " else "") +
+                                                e.name + (if (e.minutes > 0) " · ${ru.zf.pravka.core.Fmt.dur(e.minutes)}" else "")
+                                        },
+                                        style = ty.meta,
+                                        color = mode.meta,
+                                    )
+                                }
+                                // Кардио закрывают часы: активность нужного типа приехала — сделано фактом.
+                                val arrivedToday = if (!mainPlan.strength) {
+                                    workouts.firstOrNull {
+                                        dayKey(it.start) == today &&
+                                            (it.type.equals(mainPlan.type, true) ||
+                                                (mainPlan.type.equals("Ride", true) && it.type.equals("VirtualRide", true)))
+                                    }
+                                } else null
+                                if (arrivedToday != null) {
+                                    Spacer(Modifier.height(8.dp))
+                                    DoneLine(
+                                        "Приехала с часов: " + buildList {
+                                            if (arrivedToday.km >= 0.1) add(fmt1(arrivedToday.km) + " км")
+                                            add(ru.zf.pravka.core.Fmt.dur(arrivedToday.minutes.toInt()))
+                                            if (arrivedToday.avgHr > 0) add("пульс ${arrivedToday.avgHr}")
+                                        }.joinToString(", ")
+                                    )
+                                }
+                                Spacer(Modifier.height(14.dp))
+                                // «Сделано» — главная клавиша справа, под большим пальцем;
+                                // «Самочувствие» — контуром слева.
                                 Row(
-                                    Modifier.weight(1f),
+                                    Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    if (todaySession?.done == true) {
-                                        DoneLine("Сделано")
-                                    }
-                                    if (todaySession != null && todaySession.feel in 1..5) {
-                                        PaperHint("самочувствие ${todaySession.feel}/5")
-                                    }
-                                }
-                                if (todaySession != null && todaySession.feel !in 1..5) {
-                                    PaperButton(
-                                        "Самочувствие",
-                                        onClick = { feelDialog = todaySession.id },
-                                        icon = Glyphs.Heart,
-                                    )
-                                }
-                                if (todaySession?.done != true) {
-                                    PaperButton(
-                                        "Сделано",
-                                        onClick = {
-                                            app.appScope.launch {
-                                                val session = app.strengthEngine.markDone(today, mainPlan.minutes)
-                                                feelDialog = session.id
-                                            }
-                                        },
-                                        icon = Glyphs.Check,
-                                        primary = true,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // ---- Зарядка: чек-лист на утро ----
-                item {
-                    val chargerPlan = remember(planDays, today) { app.planStore.chargerOf(today) }
-                    ZaryadkaChecklist(app, gtgToday, chargerPlan)
-                }
-
-                // ---- Упражнения дня с прошлым разом: группа на каждую силовую ----
-                for ((session, tasks) in dayGroups) {
-                    item(key = "pl" + session.eventId) {
-                        val checkedCount = tasks.count { todaySession?.isChecked(it.id) == true }
-                        val label = if (dayGroups.size == 1) "упражнения" else {
-                            (if (session.time.isNotBlank()) session.time + " · " else "") +
-                                session.shortName.lowercase()
-                        }
-                        PaperLabel("$label · $checkedCount из ${tasks.size}")
-                        // У второй сессии дня комментарий владельца иначе не виден:
-                        // карточка «сегодня» показывает только главную.
-                        if (session.eventId != mainPlan?.eventId) {
-                            val note = listOf(session.noteBefore(), session.noteAfter())
-                                .filter { it.isNotBlank() }.joinToString(" ")
-                            if (note.isNotBlank()) PaperHint(note.take(300))
-                        }
-                    }
-                    items(tasks.size, key = { i -> "px" + session.eventId + "-" + tasks[i].id }) { i ->
-                        val task = tasks[i]
-                        val doneToday = todaySession?.exercises?.firstOrNull { it.exerciseId == task.id }
-                        PlannedExerciseCard(
-                            title = task.title,
-                            hint = task.hint,
-                            exercise = task.exercise,
-                            lastTime = task.lastTime,
-                            doneToday = doneToday,
-                            history = task.history,
-                            restSec = restSec,
-                            onAskCoach = { auto -> coachTopic = Triple(task.title, task.exercise, auto) },
-                            checked = todaySession?.isChecked(task.id) == true,
-                            onCheck = {
-                                app.appScope.launch {
-                                    val before = app.strengthStore.sessionsOn(today).firstOrNull()?.done == true
-                                    val updated = app.strengthEngine.toggleChecked(
-                                        task.id, today, allIds = dayTasks.map { it.id },
-                                    )
-                                    // Отметил последнее — сессия закрылась сама:
-                                    // осталось спросить самочувствие, как у «Сделано».
-                                    if (updated != null && updated.done && !before) {
-                                        feelDialog = updated.id
-                                    }
-                                }
-                            },
-                            onRest = { seconds ->
-                                Feedback.toast(app, "Отдых $seconds сек — кнопка «Т» считает")
-                                ru.zf.pravka.trigger.PravkaAccessibilityService.instance
-                                    ?.startRestFromTab(seconds)
-                            },
-                        )
-                    }
-                }
-
-                // ---- Светофор: подробности пилюли из плашки «сегодня» ----
-                item(key = "svetofor") {
-                    PaperCard(label = "светофор", labelColor = toneColor(verdict.tone)) {
-                        Text(
-                            verdict.headline,
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = toneColor(verdict.tone),
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(verdict.because, style = MaterialTheme.typography.bodyMedium)
-                        if (verdict.warnings.isNotEmpty()) {
-                            Spacer(Modifier.height(10.dp))
-                            for (w in verdict.warnings) {
-                                Text(
-                                    "⚠ " + w,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                        }
-                        if (verdict.numbers.isNotEmpty()) {
-                            Spacer(Modifier.height(12.dp))
-                            // Три числа мелким шрифтом — чтобы можно было проверить, а
-                            // не чтобы читать вместо вердикта. Больше трёх — дашборд.
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                            ) {
-                                for (n in verdict.numbers) {
-                                    Column {
-                                        Text(
-                                            n.label + " " + n.value,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = toneColor(n.tone),
-                                        )
-                                        if (n.hint.isNotBlank()) {
-                                            Text(
-                                                n.hint,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            )
+                                    Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        if (todaySession?.done == true) DoneLine("Сделано")
+                                        if (todaySession != null && todaySession.feel in 1..5) {
+                                            Text("самочувствие ${todaySession.feel}/5", style = ty.meta, color = mode.meta)
+                                        }
+                                        if (todaySession != null && todaySession.feel !in 1..5) {
+                                            ru.zf.pravka.ui.GhostKey("Самочувствие", { feelDialog = todaySession.id }, icon = Glyphs.Heart)
                                         }
                                     }
+                                    if (todaySession?.done != true) {
+                                        ru.zf.pravka.ui.PrimaryKey(
+                                            "Сделано",
+                                            onClick = {
+                                                app.appScope.launch {
+                                                    val session = app.strengthEngine.markDone(today, mainPlan.minutes)
+                                                    feelDialog = session.id
+                                                }
+                                            },
+                                            icon = Glyphs.Check,
+                                        )
+                                    }
                                 }
                             }
-                        }
-                        val error = app.icuSportSync.lastError()
-                        if (error.isNotBlank()) {
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                error,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
                         }
                     }
                 }
 
-                // Итог силовой словами — рядом с её упражнениями, а не в другой
-                // вкладке: «гоблет четыре по десять шестнадцать, последний тяжело,
-                // очень доволен» — числа в журнал, комментарий в заметку сессии.
-                if (dayTasks.isNotEmpty()) {
-                    item {
-                        PaperCard {
-                            BodyTalkBox(
-                                app = app,
-                                hint = "Подходы и как прошло — словами…",
-                                whereSaid = "в карточке силовой",
+                // ---- Вторая силовая дня (турник с прессом после гири) — своей плашкой ----
+                for ((session, tasks) in dayGroups) {
+                    if (session.eventId == mainPlan?.eventId) continue
+                    item(key = "pl" + session.eventId) {
+                        val mode = ru.zf.pravka.ui.LocalMode.current
+                        val ty = ru.zf.pravka.ui.LocalPravkaType.current
+                        val checkedCount = tasks.count { todaySession?.isChecked(it.id) == true }
+                        Column(Modifier.fillMaxWidth()) {
+                            ru.zf.pravka.ui.SectionHeader(
+                                (if (session.time.isNotBlank()) session.time + " · " else "") + session.shortName.lowercase(),
+                                trailing = "$checkedCount из ${tasks.size}",
                             )
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .glass(RoundedCornerShape(22.dp), mode.glass)
+                                    .padding(horizontal = 18.dp, vertical = 10.dp),
+                            ) {
+                                val note = listOf(session.noteBefore(), session.noteAfter()).filter { it.isNotBlank() }.joinToString(" ")
+                                if (note.isNotBlank()) Text(note.take(300), style = ty.meta, color = mode.meta, modifier = Modifier.padding(vertical = 6.dp))
+                                tasks.forEachIndexed { i, task ->
+                                    if (i > 0) ru.zf.pravka.ui.Hairline()
+                                    ExerciseLine(app, task, todaySession, today, dayTasks, restSec,
+                                        onAskCoach = { auto -> coachTopic = Triple(task.title, task.exercise, auto) },
+                                        onFeel = { feelDialog = it })
+                                }
+                            }
                         }
                     }
                 }
@@ -615,103 +486,23 @@ internal fun SportTab(app: PravkaApp) {
                     item { StrengthTodayCard(app, todaySession, onFeel = { feelDialog = todaySession.id }) }
                 }
 
-                // ---- Зарядка и GTG ----
-                item {
-                    PaperCard(
-                        label = "зарядка · путь к первому подтягиванию",
-                        info = "Турник — отдельные числа, зарядку они не отмечают.",
-                    ) {
-                        // Отметка зарядки — ГЛАВНАЯ кнопка во всю ширину, и она одна.
-                        // Раньше она была мелкой справа от стрика, а «+» в углу открывал
-                        // диалог с висами, который зарядку не отмечал вовсе — и было
-                        // непонятно, чем одно отличается от другого. Теперь порядок
-                        // такой: сверху «сделал», ниже мелким — числа турника.
-                        val charged = gtgToday?.charged == true
-                        if (charged) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                DoneLine("Зарядка сделана", big = true, modifier = Modifier.weight(1f))
-                                PaperTextButton(
-                                    "Отменить",
-                                    onClick = { app.appScope.launch { app.bodyEngine.unchargeToday(today) } },
-                                    icon = Glyphs.Undo,
-                                )
-                            }
-                        } else {
-                            PaperButton(
-                                "Зарядка сделана",
-                                onClick = { app.appScope.launch { app.bodyEngine.chargedToday() } },
-                                modifier = Modifier.fillMaxWidth(),
-                                icon = Glyphs.Check,
-                                primary = true,
-                            )
-                        }
-                        Spacer(Modifier.height(10.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "$streak",
-                                style = MaterialTheme.typography.displaySmall,
-                                color = if (streak > 0) toneColor(1) else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    if (streak == 1) "день подряд" else "дней подряд",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                )
-                                PaperHint(
-                                    if (charged) "сегодня отмечено"
-                                    else "сегодня ещё нет — цепочка не рвётся до полуночи"
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(10.dp))
-                        GtgStrip(app.strengthStore.recentGtg(14))
-                        Spacer(Modifier.height(12.dp))
-                        // Подпись раздела осталась, пояснение «зарядку они не
-                        // отмечают» — за «i» плашки (24.09.2026).
-                        PaperHint("Турник")
-                        Spacer(Modifier.height(4.dp))
-                        val best = app.strengthStore.bestHang()
-                        val bestPull = app.strengthStore.bestPullups()
-                        if ((gtgToday?.pullups ?: 0) > 0) {
-                            Text(
-                                "Подтягивания сегодня: ${gtgToday?.pullups}" +
-                                    (if (bestPull == gtgToday?.pullups) " — рекорд" else ""),
-                                style = MaterialTheme.typography.titleMedium,
-                                color = toneColor(1),
-                            )
-                            Spacer(Modifier.height(8.dp))
-                        }
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            LegendValue(
-                                "Вис сегодня",
-                                if ((gtgToday?.hangSec ?: 0) > 0) "${gtgToday?.hangSec} сек" else "—",
-                                CTL_COLOR,
-                            )
-                            LegendValue("Лучший вис", if (best > 0) "$best сек" else "—", ATL_COLOR)
-                            LegendValue(
-                                if (bestPull > 0) "Подтягивания" else "Негативы",
-                                if (bestPull > 0) "$bestPull"
-                                else if ((gtgToday?.negatives ?: 0) > 0) "${gtgToday?.negatives}" else "—",
-                                CTL_COLOR,
-                            )
-                        }
-                        Spacer(Modifier.height(6.dp))
-                        PaperButton(
-                            "Записать вис, негативы, колено",
-                            onClick = { gtgDialog = true },
-                            modifier = Modifier.fillMaxWidth(),
-                            icon = Glyphs.Edit,
-                        )
-                        if (gtgToday?.knee?.isNotBlank() == true) {
-                            Spacer(Modifier.height(8.dp))
-                            PaperHint("Колено сегодня: ${gtgToday.knee}")
-                        }
-                    }
+                // ---- Сделано сегодня: что приехало с часов ----
+                val doneToday = workouts.filter { dayKey(it.start) == today }.sortedBy { it.start }
+                if (doneToday.isNotEmpty()) {
+                    item(key = "done") { DoneTodayCard(doneToday) }
                 }
+
+                // ---- Зарядка: чипами, тап — отметить, долгое — техника и заметка ----
+                item(key = "zaryadka") {
+                    val chargerPlan = remember(planDays, today) { app.planStore.chargerOf(today) }
+                    ZaryadkaChecklist(app, gtgToday, chargerPlan, today)
+                }
+
+                // ---- Путь к первому подтягиванию ----
+                item(key = "pullup") { PullupCard(app, gtgToday, streak, onRecord = { gtgDialog = true }) }
+
+                // ---- Неделя: сделано против плана столбиками ----
+                item(key = "week") { WeekBarsCard(app, workouts, planDays) }
             }
 
             if (part == PART_PATH) {
@@ -955,6 +746,35 @@ internal fun SportTab(app: PravkaApp) {
             // Настройки режима — за шестерёнкой в шапке вкладки.
         }
     }
+    // Микрофона у этой строки нет, как не было у поля: голосом про тело говорят
+    // гарнитуре (развилка Засечки), здесь — набор.
+    ru.zf.pravka.ui.SayBar(
+        value = sayDraft,
+        onValueChange = { sayDraft = it },
+        placeholder = ru.zf.pravka.core.PillHint.say(app.profileStore.flow.collectAsState().value?.name, "как тренировка?"),
+        onSend = {
+            val text = sayDraft.trim()
+            if (text.isNotBlank() && !sayBusy) {
+                sayBusy = true
+                sayDraft = ""
+                app.appScope.launch {
+                    val result = app.bodyEngine.hear(text, source = "text", whereSaid = "")
+                    sayBusy = false
+                    Feedback.toast(app, result.fold({ "✓ " + it.headline() }, { e -> e.message ?: "Не разобрал" }), long = true)
+                }
+            }
+        },
+        sendEnabled = !sayBusy && sayDraft.isNotBlank(),
+        enabled = !sayBusy,
+        maxLines = 3,
+        busy = sayBusy,
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .navigationBarsPadding()
+            .imePadding()
+            .padding(start = 12.dp, end = 12.dp, bottom = 18.dp),
+    )
+    }
 
     if (gtgDialog) {
         GtgDialog(app = app, date = today, onClose = { gtgDialog = false })
@@ -1118,8 +938,56 @@ private fun fmtDay(ts: Long): String = workoutDayFormat.format(Date(ts))
  * МОМЕНТ подхода, а не вспоминать.
  */
 @Composable
+private fun ExerciseLine(
+    app: PravkaApp,
+    task: DayTask,
+    todaySession: StrengthStore.Session?,
+    today: String,
+    dayTasks: List<DayTask>,
+    restSec: Int,
+    onAskCoach: (Boolean) -> Unit,
+    onFeel: (Long) -> Unit,
+) {
+    val doneToday = todaySession?.exercises?.firstOrNull { it.exerciseId == task.id }
+    PlannedExerciseCard(
+        title = task.title,
+        name = task.name,
+        dose = task.dose,
+        hint = task.hint,
+        exercise = task.exercise,
+        lastTime = task.lastTime,
+        doneToday = doneToday,
+        history = task.history,
+        restSec = restSec,
+        onAskCoach = onAskCoach,
+        checked = todaySession?.isChecked(task.id) == true,
+        onCheck = {
+            app.appScope.launch {
+                val before = app.strengthStore.sessionsOn(today).firstOrNull()?.done == true
+                val updated = app.strengthEngine.toggleChecked(task.id, today, allIds = dayTasks.map { it.id })
+                // Отметил последнее — сессия закрылась сама: осталось спросить самочувствие.
+                if (updated != null && updated.done && !before) onFeel(updated.id)
+            }
+        },
+        onRest = { seconds ->
+            Feedback.toast(app, "Отдых $seconds сек — кнопка «Т» считает")
+            ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.startRestFromTab(seconds)
+        },
+    )
+}
+
+/**
+ * Упражнение дня строкой в плашке тренировки (Правка 4.0, `screens/09`):
+ * кольцо — «сделал по схеме», имя, под ним прошлый раз (или сегодняшнее —
+ * ярче), справа доза плана. Тап — техника, прогрессия, таймер и тренер.
+ * Прошлый раз здесь главное: прогрессивная перегрузка — это «сегодня чуть
+ * больше», и «чуть больше чего» надо видеть В МОМЕНТ подхода.
+ */
+@Composable
 private fun PlannedExerciseCard(
     title: String,
+    name: String = "",
+    dose: String = "",
     hint: String = "",
     exercise: ExerciseBook.Exercise?,
     lastTime: StrengthStore.ExerciseLog?,
@@ -1133,64 +1001,54 @@ private fun PlannedExerciseCard(
 ) {
     var open by remember(title) { mutableStateOf(false) }
     val ticked = checked || doneToday != null
-    PaperCard {
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().clickable { open = !open },
+            Modifier.fillMaxWidth().clickable { open = !open }.padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (onCheck != null) {
                 // «Ок» на задачу: галочка — «сделал по схеме», числа поверх
                 // неё наговариваются как обычно и весят больше галочки.
                 CheckDot(ticked, onCheck)
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(12.dp))
             }
-            Box(
-                Modifier
-                    .width(4.dp)
-                    .height(38.dp)
-                    .background(
-                        if (ticked) toneColor(1) else MaterialTheme.colorScheme.outlineVariant,
-                        MaterialTheme.shapes.extraSmall,
-                    )
-            )
-            Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 3,
+                    name.ifBlank { title },
+                    style = ty.bodyL,
+                    color = if (ticked) mode.meta else ru.zf.pravka.ui.Ink.Text,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                // Мелкой строкой — его же пояснение из плана («зачем движение»);
-                // нет пояснения — имя из справочника, если строка зовёт его иначе.
+                // Мелкой строкой — прошлый раз (или сегодняшнее) и его пояснение из плана.
                 val hintText = when {
                     hint.isNotBlank() -> hint
                     exercise == null -> ""
-                    !title.contains(exercise.name.substringBefore(" (").take(8), ignoreCase = true) ->
-                        exercise.name
-                    else -> exercise.gear.firstOrNull().orEmpty()
+                    !title.contains(exercise.name.substringBefore(" (").take(8), ignoreCase = true) -> exercise.name
+                    else -> ""
                 }
-                if (hintText.isNotBlank()) PaperHint(hintText)
+                val past = if (doneToday != null) "сегодня " + doneToday.compact()
+                else lastTime?.let { "прошлый раз " + it.compact() }
+                val meta = listOfNotNull(past, hintText.takeIf { it.isNotBlank() }).joinToString(" · ")
+                if (meta.isNotBlank()) {
+                    Text(
+                        meta,
+                        style = ty.meta.copy(fontWeight = if (doneToday != null) FontWeight.SemiBold else FontWeight.Normal),
+                        color = if (doneToday != null) mode.value else mode.meta,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
-            Column(horizontalAlignment = Alignment.End) {
-                if (doneToday != null) {
-                    Text(
-                        doneToday.compact(),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = toneColor(1),
-                    )
-                } else {
-                    Text(
-                        lastTime?.compact() ?: "—",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                PaperHint(if (doneToday != null) "сегодня" else "прошлый раз")
+            val target = dose.ifBlank { if (name.isBlank()) "" else title.substringAfterLast(" — ", "") }
+            if (target.isNotBlank()) {
+                Spacer(Modifier.width(10.dp))
+                Text(target, style = ty.valueS, color = ru.zf.pravka.ui.Ink.TextStrong, maxLines = 1)
             }
         }
-        if (!open) return@PaperCard
+        if (!open) return@Column
         Spacer(Modifier.height(10.dp))
         if (exercise == null) {
             PaperHint("Движение недели — техники в справочнике нет, спроси тренера ниже.")
@@ -1464,39 +1322,6 @@ private fun StrengthTodayCard(
     }
 }
 
-/** Полоска последних двух недель зарядки: цепочка, которую видно глазом. */
-@Composable
-private fun GtgStrip(days: List<StrengthStore.GtgDay>) {
-    val done = days.filter { it.charged }.map { it.date }.toSet()
-    val today = dayKey(System.currentTimeMillis())
-    val dates = remember(today) {
-        var cursor = today
-        val out = mutableListOf<String>()
-        repeat(14) {
-            out.add(cursor)
-            cursor = ru.zf.pravka.data.dayBefore(cursor)
-        }
-        out.reversed()
-    }
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-        for (date in dates) {
-            Box(
-                Modifier
-                    .weight(1f)
-                    .height(18.dp)
-                    .background(
-                        if (date in done) toneColor(1)
-                        else MaterialTheme.colorScheme.surfaceVariant,
-                        MaterialTheme.shapes.extraSmall,
-                    )
-            )
-        }
-    }
-}
-
 /** Вис, негативы, лопаточные и колено — руками, когда голосом неудобно. */
 @Composable
 private fun GtgDialog(app: PravkaApp, date: String, onClose: () -> Unit) {
@@ -1668,8 +1493,10 @@ private data class DayTask(
     val dose: String = "",
 )
 
-private val CTL_COLOR = Color(0xFF0E7490)
-private val ATL_COLOR = Color(0xFFEA580C)
+// Правка 4.0: графики — шкалой краски Спорта (`Modes.Sport.ramp`), чужие
+// цвета не примешиваются: тренированность — светлым, усталость — тёплым.
+private val CTL_COLOR = Color(0xFFCDEBDB)
+private val ATL_COLOR = Color(0xFFF27A45)
 private val RUN_COLOR = Color(0xFF16A34A)
 private val RIDE_COLOR = Color(0xFF2563EB)
 
@@ -1680,39 +1507,22 @@ private val RIDE_COLOR = Color(0xFF2563EB)
  */
 @Composable
 private fun CheckDot(ticked: Boolean, onCheck: () -> Unit) {
-    val c = MaterialTheme.colorScheme
+    // Правка 4.0: кольцо 22 в зоне 40 краской режима; сделано — залито клавишей.
+    val mode = ru.zf.pravka.ui.LocalMode.current
     Box(
-        Modifier
-            .size(28.dp)
-            .clip(CircleShape)
-            .background(if (ticked) c.primary else Color.Transparent)
-            .border(1.5.dp, if (ticked) c.primary else c.outline, CircleShape)
-            .clickable(onClick = onCheck),
+        Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onCheck),
         contentAlignment = Alignment.Center,
     ) {
-        if (ticked) {
-            Icon(Glyphs.Check, contentDescription = "сделано", tint = c.onPrimary, modifier = Modifier.size(16.dp))
+        Box(
+            Modifier
+                .size(24.dp)
+                .clip(CircleShape)
+                .background(if (ticked) mode.key else Color.Transparent)
+                .border(2.dp, if (ticked) mode.key else mode.tint, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (ticked) Icon(Glyphs.Check, contentDescription = "сделано", tint = ru.zf.pravka.ui.Ink.KeyIcon, modifier = Modifier.size(15.dp))
         }
-    }
-}
-
-/**
- * Кружок «не смог» или «частично» на месте галочки — того же размера, что
- * [CheckDot], чтобы строки чек-листа не прыгали. Раньше это были знаки
- * шрифта «✗» и «◐».
- */
-@Composable
-private fun MarkDot(icon: ImageVector, color: Color, description: String, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .size(28.dp)
-            .clip(CircleShape)
-            .background(color.copy(alpha = 0.14f))
-            .border(1.5.dp, color, CircleShape)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(icon, contentDescription = description, tint = color, modifier = Modifier.size(16.dp))
     }
 }
 
@@ -1739,55 +1549,6 @@ private fun BusyLine(text: String) {
 }
 
 /**
- * Светофор пилюлей: точка цвета и вердикт словами («По плану», «Срежь
- * интенсивность»). Живёт в плашке «сегодня», чтобы решение дня было видно
- * до упражнений; тап ведёт к плашке светофора с причинами и числами.
- */
-@Composable
-private fun TrafficPill(verdict: TrafficLight.Verdict, onClick: () -> Unit) {
-    val color = toneColor(verdict.tone)
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(50))
-            .background(color.copy(alpha = 0.14f))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-        Spacer(Modifier.width(7.dp))
-        Text(
-            verdict.headline,
-            style = MaterialTheme.typography.labelLarge,
-            color = color,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-/**
- * Секунды удержания у строки зарядки: значок таймера и число краской
- * режима. Раньше — «⏱40» текстом; число осталось, чтобы было видно, сколько
- * пойдёт, до тапа.
- */
-@Composable
-private fun TimerTap(seconds: Int, onClick: () -> Unit) {
-    val c = MaterialTheme.colorScheme
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(50))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Glyphs.Timer, contentDescription = "таймер", tint = c.primary, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(3.dp))
-        Text("$seconds", style = MaterialTheme.typography.labelLarge, color = c.primary)
-    }
-}
-
-/**
  * Чек-лист зарядки: что именно делать сегодня утром, по упражнению на строку,
  * с «ок» на каждом. Список — блок «Зарядка» справочника (правится в Notion,
  * пересобирается скриптом). Отметил все — день закрывается сам: charged
@@ -1801,6 +1562,7 @@ private fun ZaryadkaChecklist(
     app: PravkaApp,
     gtgToday: StrengthStore.GtgDay?,
     chargerPlan: PlanStore.PlanDay? = null,
+    today: String = dayKey(System.currentTimeMillis()),
 ) {
     var loaded by remember { mutableStateOf(app.exerciseBook.loaded) }
     LaunchedEffect(Unit) {
@@ -1857,172 +1619,145 @@ private fun ZaryadkaChecklist(
     var asking by remember { mutableStateOf<Triple<String, ExerciseBook.Exercise?, Boolean>?>(null) }
     var noting by remember { mutableStateOf<DayTask?>(null) }
 
-    PaperCard(
-        label = "зарядка сегодня",
-        // Как пользоваться чек-листом — за «i» (24.09.2026); раньше строкой
-        // под списком, и она менялась, когда зарядка закрыта.
-        info = "Тап по названию — техника, карандаш — как пошло. Отметишь всё — " +
-            "зарядка закроется сама. Числа виса и негативов — в карточке зарядки ниже.",
-        trailing = {
-            PaperHint(
-                if (charged) "сделана"
-                else "${allIds.count { it in doneIds }} из ${items.size}"
-            )
-        },
-    ) {
-        // Заметка дня из календаря: «сокращённая версия», «дачная — турник
-        // заменяется резинкой», «добавка недели — bird dog». Владелец пушит
-        // её из чата вместе с планом, и меняется она чаще справочника.
-        // Нумерованный список из заметки не показываем: он и есть чек-лист
-        // ниже, дублировать его текстом сверху — читать одно дважды.
+    // Правка 4.0 (`screens/09`): упражнения — чипами. Тап — отметить, долгое
+    // нажатие — лист с дозой, техникой, таймером, тренером и заметкой (то, что
+    // раньше раскрывалось под строкой). «Не смог» и «частично» — значком в чипе.
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    val doneCount = if (charged) items.size else allIds.count { it in doneIds }
+    Column(Modifier.fillMaxWidth()) {
+        ru.zf.pravka.ui.SectionHeader(
+            "зарядка · $doneCount из ${items.size}",
+            trailing = chargerPlan?.minutes?.takeIf { it > 0 }?.let { ru.zf.pravka.core.Fmt.dur(it) },
+            info = "Зарядка" to "Тап по упражнению — отметить, долгое нажатие — техника, таймер и " +
+                "заметка, как пошло. Отметишь всё — зарядка закроется сама.",
+        )
+        // Заметка дня из календаря: «сокращённая версия», «дачная — турник заменяется резинкой».
         val dayNote = chargerPlan?.noteBefore().orEmpty()
         if (dayNote.isNotBlank()) {
-            Text(dayNote.take(400), style = MaterialTheme.typography.bodySmall)
-            Spacer(Modifier.height(10.dp))
+            Text(dayNote.take(400), style = ty.meta, color = mode.meta, modifier = Modifier.padding(start = 8.dp, bottom = 8.dp))
         }
-        for (task in items) {
-            val ticked = task.id in doneIds || charged
-            val report = gtgToday?.items?.firstOrNull { it.id == task.id }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (report != null && report.status != "ok") {
-                    // «Не смог» и «частично» — не галочка и не пустота: видно
-                    // без раскрытия. Тап открывает тот же ✎-отчёт.
-                    val no = report.status == "no"
-                    MarkDot(
-                        icon = if (no) Glyphs.Close else Glyphs.Minus,
-                        color = toneColor(if (no) -2 else -1),
-                        description = if (no) "не смог" else "частично",
-                        onClick = { noting = task },
-                    )
-                } else {
-                    CheckDot(ticked) {
-                        app.appScope.launch {
-                            app.bodyEngine.toggleZaryadka(task.id, allIds = allIds)
-                        }
-                    }
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            for (task in items) {
+                val ticked = task.id in doneIds || charged
+                val report = gtgToday?.items?.firstOrNull { it.id == task.id }
+                val mark = when {
+                    report != null && report.status == "no" -> Glyphs.Close
+                    report != null && report.status != "ok" -> Glyphs.Minus
+                    ticked -> Glyphs.Check
+                    else -> null
                 }
-                Spacer(Modifier.width(12.dp))
-                Column(
+                val warn = report != null && report.status != "ok"
+                val shape = RoundedCornerShape(50)
+                Row(
                     Modifier
-                        .weight(1f)
-                        .clickable { openId = if (openId == task.id) null else task.id }
+                        .clip(shape)
+                        .background(if (ticked || warn) mode.tint.copy(alpha = 0.12f) else Color.Transparent)
+                        .border(1.dp, mode.tint.copy(alpha = if (ticked) 0.42f else 0.24f), shape)
+                        .combinedTap(
+                            enabled = true,
+                            onClick = {
+                                if (warn) noting = task
+                                else app.appScope.launch { app.bodyEngine.toggleZaryadka(task.id, allIds = allIds) }
+                            },
+                            onLongClick = { openId = task.id },
+                        )
+                        .padding(start = if (mark != null) 12.dp else 16.dp, end = 16.dp, top = 9.dp, bottom = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // Сверху — имя как в Notion, под ним доза и его пояснение:
-                    // «Осанка: подбородок назад · скольжения по стене · грудь в
-                    // проёме» с дозой в той же строке не читалось бы вовсе.
+                    if (mark != null) {
+                        Icon(mark, contentDescription = null, tint = if (warn) ru.zf.pravka.ui.Ink.Warn else mode.value, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                    }
                     Text(
-                        task.name.ifBlank { task.title },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (ticked) MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.onSurface,
+                        listOf(task.name.ifBlank { task.title }, task.dose).filter { it.isNotBlank() }.joinToString(" "),
+                        style = ty.label,
+                        color = if (ticked) ru.zf.pravka.ui.Ink.Text else mode.label,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
-                    val exercise = task.exercise
-                    // Доза («2×6», «×2 до предела») и его пояснение («секунды в
-                    // заметку») — мелкой строкой; запасному списку без строк
-                    // плана — схема из справочника.
-                    val detail = listOf(task.dose, task.hint).filter { it.isNotBlank() }.joinToString(" · ")
-                    when {
-                        detail.isNotBlank() -> PaperHint(detail)
-                        exercise != null && exercise.scheme.isNotBlank() -> PaperHint(exercise.scheme)
-                    }
-                    if (report != null &&
-                        (report.fact.isNotBlank() || report.note.isNotBlank() || report.status != "ok")
-                    ) {
-                        PaperHint("✎ " + report.brief().substringAfter(": "))
-                    }
-                    if (openId == task.id) {
-                        if (exercise != null && exercise.how.isNotBlank()) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(exercise.how, style = MaterialTheme.typography.bodySmall)
-                        }
-                        if (exercise != null && exercise.mistakes.isNotBlank()) {
-                            Spacer(Modifier.height(2.dp))
-                            Text(
-                                exercise.mistakes,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                        Spacer(Modifier.height(2.dp))
-                        // Те же значки, что у упражнения силовой: одно
-                        // действие — один значок во всей вкладке.
-                        IconActionRow {
-                            IconAction(Glyphs.Book, "Как делать", onClick = {
-                                asking = Triple(task.title, exercise, true)
-                            })
-                            IconAction(Glyphs.Spark, "Спросить", onClick = {
-                                asking = Triple(task.title, exercise, false)
-                            })
-                        }
-                    }
                 }
-                // «Планка — 40 сек»: секунды засечь нечем — intervals не
-                // передаёт Garmin шаги силовых, часы на зарядке пишут только
-                // пульс. Таймер поэтому здесь, в одном тапе от строки.
-                val holdSec = HOLD_SEC.find(task.title)?.groupValues?.get(1)?.toIntOrNull()
-                if (holdSec != null && !ticked) {
-                    TimerTap(holdSec) {
-                        Feedback.toast(app, "$holdSec сек пошли — считает кнопка «Т»")
-                        ru.zf.pravka.trigger.PravkaAccessibilityService.instance
-                            ?.startRestFromTab(holdSec)
-                    }
-                }
-                GlyphButton(
-                    Glyphs.Edit,
-                    "Комментарий к упражнению",
-                    onClick = { noting = task },
-                    size = 32.dp,
-                )
             }
         }
-        // Его текст ПОСЛЕ списка: «Минимум на плохое утро: 1 + 3 + шесть
-        // отжиманий», «Затем прогулка с семьёй». Раньше не показывался вовсе.
+        // Его текст ПОСЛЕ списка: «Минимум на плохое утро: 1 + 3 + шесть отжиманий».
         val afterNote = chargerPlan?.noteAfter().orEmpty()
         if (afterNote.isNotBlank()) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                afterNote.take(400),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text(afterNote.take(400), style = ty.meta, color = mode.meta, modifier = Modifier.padding(start = 8.dp, top = 10.dp))
         }
-        // Самочувствие — в нативное поле feel зарядки-активности: intervals
-        // сам рисует по нему кривую, из слова «ужас» её не построишь.
-        if (charged || doneIds.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
-            // Шкала — подпись к чипам: без неё «1» и «5» не прочитать.
-            PaperHint("самочувствие · 1 отлично — 5 развалина (шкала intervals)")
-            Spacer(Modifier.height(4.dp))
-            ChipRow {
-                for (v in 1..5) {
-                    PaperChip(
-                        "$v",
-                        selected = gtgToday?.feel == v,
-                        onClick = {
-                            app.appScope.launch { app.bodyEngine.putGtgNumbers(feel = v) }
-                        },
-                    )
-                }
+        Spacer(Modifier.height(10.dp))
+        // Отметить всю зарядку разом — одной клавишей; сделана — словами и «Отменить».
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            if (charged) {
+                DoneLine("Зарядка сделана", modifier = Modifier.weight(1f).padding(start = 8.dp))
+                PaperTextButton(
+                    "Отменить",
+                    onClick = { app.appScope.launch { app.bodyEngine.unchargeToday(today) } },
+                    icon = Glyphs.Undo,
+                )
+            } else {
+                Spacer(Modifier.weight(1f))
+                ru.zf.pravka.ui.GhostKey("Зарядка сделана", { app.appScope.launch { app.bodyEngine.chargedToday() } }, icon = Glyphs.Check)
             }
         }
-        // Накопленные за день пометки — здесь же, чтобы было видно, что уедет
-        // в intervals вместе с итогом.
-        val accumNote = gtgToday?.note.orEmpty()
-        if (accumNote.isNotBlank()) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Заметки дня: $accumNote",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        // Самочувствие — в нативное поле feel зарядки-активности: intervals рисует по нему кривую.
+        if (charged || doneIds.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Text("самочувствие · 1 отлично — 5 развалина (шкала intervals)", style = ty.meta, color = mode.meta, modifier = Modifier.padding(start = 8.dp))
+            Spacer(Modifier.height(6.dp))
+            ru.zf.pravka.ui.Segmented(
+                options = (1..5).map { "$it" },
+                selected = (gtgToday?.feel ?: 0) - 1,
+                onSelect = { v -> app.appScope.launch { app.bodyEngine.putGtgNumbers(feel = v + 1) } },
             )
         }
-        // Итог словами — пилюлей наверху вкладки (версия 3, второй заход):
-        // тот же роутер «Т», charged, числа, заметка — в intervals и Дневник.
+        // Накопленные за день пометки — видно, что уедет в intervals вместе с итогом.
+        val accumNote = gtgToday?.note.orEmpty()
+        if (accumNote.isNotBlank()) {
+            Text("Заметки дня: $accumNote", style = ty.meta, color = mode.meta, modifier = Modifier.padding(start = 8.dp, top = 8.dp))
+        }
+    }
+    // Лист упражнения по долгому нажатию: доза, его пояснение, отчёт, техника и действия.
+    val opened = items.firstOrNull { it.id == openId }
+    if (opened != null) {
+        val exercise = opened.exercise
+        val report = gtgToday?.items?.firstOrNull { it.id == opened.id }
+        PaperSheet(
+            onDismiss = { openId = null },
+            title = opened.name.ifBlank { opened.title },
+            icon = Glyphs.Sport,
+            subtitle = listOf(opened.dose, opened.hint).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { exercise?.scheme },
+        ) {
+            if (report != null && (report.fact.isNotBlank() || report.note.isNotBlank() || report.status != "ok")) {
+                PaperHint("✎ " + report.brief().substringAfter(": "))
+            }
+            if (exercise != null && exercise.how.isNotBlank()) {
+                Text("Как делать", style = ty.label.copy(fontWeight = FontWeight.SemiBold), color = mode.label)
+                Text(exercise.how, style = ty.body, color = ru.zf.pravka.ui.Ink.Text)
+                Spacer(Modifier.height(8.dp))
+            }
+            if (exercise != null && exercise.mistakes.isNotBlank()) {
+                Text("Главные ошибки", style = ty.label.copy(fontWeight = FontWeight.SemiBold), color = mode.label)
+                Text(exercise.mistakes, style = ty.body, color = ru.zf.pravka.ui.Ink.Warn)
+                Spacer(Modifier.height(8.dp))
+            }
+            IconActionRow {
+                // «Планка — 40 сек»: секунды засечь нечем — таймер в одном тапе.
+                val holdSec = HOLD_SEC.find(opened.title)?.groupValues?.get(1)?.toIntOrNull()
+                if (holdSec != null) {
+                    IconAction(Glyphs.Timer, "$holdSec сек", onClick = {
+                        openId = null
+                        Feedback.toast(app, "$holdSec сек пошли — считает кнопка «Т»")
+                        ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.startRestFromTab(holdSec)
+                    })
+                }
+                IconAction(Glyphs.Book, "Как делать", onClick = { openId = null; asking = Triple(opened.title, exercise, true) })
+                IconAction(Glyphs.Spark, "Спросить", onClick = { openId = null; asking = Triple(opened.title, exercise, false) })
+                IconAction(Glyphs.Edit, "Как пошло", onClick = { openId = null; noting = opened })
+            }
+        }
     }
     asking?.let { (title, exercise, auto) ->
         CoachDialog(app, title, exercise, autoAsk = auto, onClose = { asking = null })
@@ -2104,48 +1839,6 @@ private fun ZaryadkaReportDialog(
         )
         // Куда уедет запись — последствие кнопки, а не справка: на виду.
         PaperHint("Уедет строкой «факт/план» в комментарий intervals — по ней правится план.")
-    }
-}
-
-/**
- * Поле «скажи итог словами» — одно на зарядку и силовую. Текст идёт через тот
- * же роутер, что кнопка «Т»: сырая запись на диск навсегда, разбор в числа,
- * дороги в intervals и Дневник — все прежние. Поле просто ближе, чем кнопка.
- */
-@Composable
-private fun BodyTalkBox(app: PravkaApp, hint: String, whereSaid: String) {
-    var draft by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    // Та же строка ввода, что у Засечки, Еды и Денег (24.09.2026). Микрофона
-    // здесь не было и нет — поле для набора, голосом говорят кнопке.
-    VoiceInput(
-        value = draft,
-        onValueChange = { draft = it },
-        placeholder = hint,
-        onSend = {
-            val text = draft.trim()
-            if (text.isNotBlank() && !busy) {
-                busy = true
-                draft = ""
-                app.appScope.launch {
-                    val result = app.bodyEngine.hear(text, source = "text", whereSaid = whereSaid)
-                    busy = false
-                    Feedback.toast(
-                        app,
-                        result.fold({ "✓ " + it.headline() }, { e -> e.message ?: "Не разобрал" }),
-                        long = true,
-                    )
-                }
-            }
-        },
-        sendEnabled = !busy && draft.isNotBlank(),
-        enabled = !busy,
-        maxLines = 3,
-        busy = busy,
-    )
-    if (busy) {
-        Spacer(Modifier.height(8.dp))
-        BusyLine("Разбираю…")
     }
 }
 
@@ -3283,3 +2976,325 @@ private fun fmt1(v: Double) = String.format(Locale.US, "%.1f", v)
 private fun signed(v: Int) = if (v > 0) "+$v" else "$v"
 private fun pace(secPerKm: Int): String =
     "${secPerKm / 60}:" + String.format(Locale.US, "%02d", secPerKm % 60)
+
+// ---------------------------------------------------------------- Правка 4.0: «Сегодня» Спорта (`screens/09`)
+
+/**
+ * Готовность: светофор дня тремя точками в краске режима (без светофорных
+ * цветов), вердикт крупно, почему — строкой, его нарушения — тёплым, и числа
+ * плитками: три светофора и пульс покоя, если часы его знают.
+ */
+@Composable
+private fun ReadinessCard(verdict: TrafficLight.Verdict, health: SportStore.Health?, error: String) {
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .glass(RoundedCornerShape(22.dp), mode.glass)
+            .padding(start = 18.dp, end = 8.dp, top = 6.dp, bottom = 16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("ГОТОВНОСТЬ", style = ty.overline, color = mode.label, modifier = Modifier.weight(1f))
+            ru.zf.pravka.ui.InfoDot(
+                "готовность",
+                "Светофор считается на телефоне: сон, HRV и форма из intervals и правила блока " +
+                    "из Notion. Три точки — по плану, две — осторожно, одна — восстановление.",
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 10.dp)) {
+            val lit = when {
+                verdict.tone >= 1 -> 3
+                verdict.tone == 0 -> 2
+                else -> 1
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                repeat(3) { k ->
+                    Box(Modifier.size(13.dp).clip(CircleShape).background(if (k < lit) mode.value else mode.tint.copy(alpha = 0.20f)))
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Text(verdict.headline, style = ty.titleS, color = ru.zf.pravka.ui.Ink.TextStrong, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        if (verdict.because.isNotBlank()) {
+            Text(verdict.because, style = ty.body, color = ru.zf.pravka.ui.Ink.TextSecondary, modifier = Modifier.padding(top = 6.dp, end = 10.dp))
+        }
+        for (w in verdict.warnings) {
+            Row(Modifier.padding(top = 6.dp, end = 10.dp), verticalAlignment = Alignment.Top) {
+                Icon(Glyphs.Error, contentDescription = null, tint = ru.zf.pravka.ui.Ink.Warn, modifier = Modifier.size(16.dp).padding(top = 1.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(w, style = ty.label, color = ru.zf.pravka.ui.Ink.Warn)
+            }
+        }
+        val tiles = verdict.numbers.take(3).map { Triple(it.label, it.value, it.hint to (it.tone < 0)) } +
+            listOfNotNull(health?.restingHr?.takeIf { it > 0 }?.let { Triple("Пульс покоя", "$it", "" to false) })
+        if (tiles.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth().padding(end = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for ((label, value, sub) in tiles) {
+                    ru.zf.pravka.ui.StatTile(label, value, Modifier.weight(1f), delta = sub.first.takeIf { it.isNotBlank() }, worse = sub.second)
+                }
+            }
+        }
+        if (error.isNotBlank()) {
+            Text(error, style = ty.meta, color = ru.zf.pravka.ui.Ink.Warn, modifier = Modifier.padding(top = 8.dp, end = 10.dp))
+        }
+    }
+}
+
+/** Что приехало с часов сегодня: название, часы, четыре числа (`screens/09`). */
+@Composable
+private fun DoneTodayCard(list: List<SportStore.Workout>) {
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    Column(Modifier.fillMaxWidth()) {
+        ru.zf.pravka.ui.SectionHeader(
+            "сделано сегодня · ${list.size}",
+            trailing = ru.zf.pravka.core.Fmt.dur(list.sumOf { it.minutes }.toInt()),
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            for (w in list) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .glass(RoundedCornerShape(22.dp), mode.glass)
+                        .padding(horizontal = 18.dp, vertical = 14.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(w.name.ifBlank { w.type }, style = ty.bodyStrong.copy(fontSize = ty.bodyL.fontSize), color = ru.zf.pravka.ui.Ink.TextStrong,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        Text(
+                            ru.zf.pravka.core.Fmt.range(w.start, w.start + w.seconds * 1000),
+                            style = ty.meta,
+                            color = mode.meta,
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    val cells = buildList {
+                        if (w.km >= 0.1) add("Дистанция" to (fmt2(w.km) + " км"))
+                        add("Время" to clock(w.movingSeconds.takeIf { it > 0 } ?: w.seconds))
+                        if (w.paceSecPerKm > 0) add("Темп" to (pace(w.paceSecPerKm) + " /км"))
+                        else if (w.avgWatts > 0) add("Мощность" to "${w.avgWatts} Вт")
+                        if (w.avgHr > 0) add("Пульс" to "${w.avgHr}")
+                    }
+                    Row(Modifier.fillMaxWidth()) {
+                        for ((k, v) in cells) {
+                            Column(Modifier.weight(1f)) {
+                                Text(k, style = ty.caption, color = mode.label, maxLines = 1)
+                                Text(v, style = ty.valueS, color = ru.zf.pravka.ui.Ink.TextStrong, maxLines = 1)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun fmt2(v: Double) = String.format(Locale("ru"), "%.2f", v)
+
+/** «29:40», «1:05:12». */
+private fun clock(sec: Long): String {
+    val h = sec / 3600
+    val m = (sec % 3600) / 60
+    val s = sec % 60
+    return if (h > 0) String.format(Locale.US, "%d:%02d:%02d", h, m, s) else String.format(Locale.US, "%d:%02d", m, s)
+}
+
+/**
+ * Путь к первому подтягиванию: вис сегодня крупно, рекорд рядом, негативы
+ * справа, полоса виса против рекорда и две недели зарядки точками; запись
+ * чисел — клавишей «Записать вис, негативы, колено».
+ */
+@Composable
+private fun PullupCard(app: PravkaApp, gtgToday: StrengthStore.GtgDay?, streak: Int, onRecord: () -> Unit) {
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    val best = app.strengthStore.bestHang()
+    val bestPull = app.strengthStore.bestPullups()
+    val hang = gtgToday?.hangSec ?: 0
+    val neg = gtgToday?.negatives ?: 0
+    Column(Modifier.fillMaxWidth()) {
+        ru.zf.pravka.ui.SectionHeader(
+            "путь к первому подтягиванию",
+            trailing = if (streak > 0) "серия " + plural(streak, "день", "дня", "дней") else null,
+            info = "Турник" to "Турник — отдельные числа: зарядку они не отмечают. Точки — зарядка " +
+                "за две недели, полоса — вис сегодня против рекорда.",
+        )
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .glass(RoundedCornerShape(22.dp), mode.glass)
+                .padding(horizontal = 18.dp, vertical = 14.dp),
+        ) {
+            if ((gtgToday?.pullups ?: 0) > 0) {
+                Text(
+                    "Подтягивания сегодня: ${gtgToday?.pullups}" + (if (bestPull == gtgToday?.pullups) " — рекорд" else ""),
+                    style = ty.titleS,
+                    color = mode.value,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+            Row(verticalAlignment = Alignment.Bottom) {
+                Column(Modifier.weight(1f)) {
+                    Text("Вис", style = ty.label, color = mode.label)
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(if (hang > 0) "$hang с" else "—", style = ty.displayL, color = ru.zf.pravka.ui.Ink.TextStrong)
+                        if (best > 0) {
+                            Text("рекорд $best с", style = ty.meta, color = mode.meta, modifier = Modifier.padding(start = 10.dp, bottom = 6.dp))
+                        }
+                    }
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(if (bestPull > 0) "Подтягивания" else "Негативы", style = ty.label, color = mode.label)
+                    Text(
+                        if (bestPull > 0) "$bestPull" else if (neg > 0) "$neg" else "—",
+                        style = ty.valueS,
+                        color = ru.zf.pravka.ui.Ink.TextStrong,
+                    )
+                }
+            }
+            if (best > 0) {
+                Spacer(Modifier.height(10.dp))
+                // Шкала — рекорд с запасом: отметка рекорда видна, сегодняшний вис идёт к ней.
+                val scale = maxOf(best, hang) * 1.25f
+                androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(10.dp)) {
+                    val r = size.height / 2
+                    drawRoundRect(mode.tint.copy(alpha = 0.16f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(r, r))
+                    if (hang > 0) {
+                        drawRoundRect(
+                            mode.value,
+                            size = androidx.compose.ui.geometry.Size(size.width * (hang / scale), size.height),
+                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(r, r),
+                        )
+                    }
+                    val x = size.width * (best / scale)
+                    drawLine(ru.zf.pravka.ui.Ink.Cream, Offset(x, -3f), Offset(x, size.height + 3f), strokeWidth = 2.5f)
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            // Две недели зарядки точками: сегодня — кольцом крупнее.
+            val days = app.strengthStore.recentGtg(14)
+            val done = days.filter { it.charged }.map { it.date }.toSet()
+            val todayKey = dayKey(System.currentTimeMillis())
+            val dates = remember(todayKey) {
+                var cursor = todayKey
+                val out = mutableListOf<String>()
+                repeat(14) { out.add(cursor); cursor = ru.zf.pravka.data.dayBefore(cursor) }
+                out.reversed()
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("14 дней", style = ty.meta, color = mode.meta, modifier = Modifier.weight(1f))
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    for (d in dates) {
+                        val on = d in done
+                        val isToday = d == todayKey
+                        Box(
+                            Modifier
+                                .size(if (isToday) 15.dp else 12.dp)
+                                .clip(CircleShape)
+                                .background(if (on) mode.value else Color.Transparent)
+                                .border(if (isToday) 2.dp else 1.5.dp, if (on) mode.value else mode.tint.copy(alpha = 0.45f), CircleShape),
+                        )
+                    }
+                }
+            }
+            if (gtgToday?.knee?.isNotBlank() == true) {
+                Text("Колено сегодня: ${gtgToday.knee}", style = ty.meta, color = mode.meta, modifier = Modifier.padding(top = 8.dp))
+            }
+            Spacer(Modifier.height(12.dp))
+            ru.zf.pravka.ui.GhostKey("Записать вис, негативы, колено", onRecord, icon = Glyphs.Edit)
+        }
+    }
+}
+
+/**
+ * Неделя столбиками (`screens/09`): по дню — пунктиром план из календаря
+ * intervals (без зарядки), заливкой — что приехало с часов. Сверху — «сделано
+ * 45 м из 4 ч 5 м».
+ */
+@Composable
+private fun WeekBarsCard(app: PravkaApp, workouts: List<SportStore.Workout>, planDays: List<PlanStore.PlanDay>) {
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    val todayDate = java.time.LocalDate.now()
+    val monday = todayDate.with(java.time.DayOfWeek.MONDAY)
+    val week = todayDate.get(java.time.temporal.WeekFields.ISO.weekOfWeekBasedYear())
+    val days = remember(planDays, workouts, monday) {
+        (0 until 7).map { k ->
+            val d = monday.plusDays(k.toLong())
+            val key = d.toString()
+            val plan = app.planStore.dayOf(key).filterNot { it.charger }.sumOf { it.minutes }
+            val done = workouts.filter { dayKey(it.start) == key }.sumOf { it.minutes }.toInt()
+            Triple(d, plan, done)
+        }
+    }
+    val planSum = days.sumOf { it.second }
+    val doneSum = days.sumOf { it.third }
+    if (planSum == 0 && doneSum == 0) return
+    val top = days.maxOf { maxOf(it.second, it.third) }.coerceAtLeast(1)
+    Column(Modifier.fillMaxWidth()) {
+        ru.zf.pravka.ui.SectionHeader(
+            "неделя $week",
+            trailing = "сделано ${ru.zf.pravka.core.Fmt.dur(doneSum)} из ${ru.zf.pravka.core.Fmt.dur(planSum)}",
+        )
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .glass(RoundedCornerShape(22.dp), mode.glass)
+                .padding(horizontal = 18.dp, vertical = 16.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                for ((d, plan, done) in days) {
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(96.dp)) {
+                            val r = androidx.compose.ui.geometry.CornerRadius(6.dp.toPx(), 6.dp.toPx())
+                            if (plan > 0) {
+                                val h = size.height * plan / top
+                                drawRoundRect(
+                                    mode.tint.copy(alpha = 0.55f),
+                                    topLeft = Offset(0f, size.height - h),
+                                    size = androidx.compose.ui.geometry.Size(size.width, h),
+                                    cornerRadius = r,
+                                    style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                        width = 1.5.dp.toPx(),
+                                        pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 4.dp.toPx())),
+                                    ),
+                                )
+                            }
+                            if (done > 0) {
+                                val h = size.height * done / top
+                                drawRoundRect(
+                                    mode.value,
+                                    topLeft = Offset(0f, size.height - h),
+                                    size = androidx.compose.ui.geometry.Size(size.width, h),
+                                    cornerRadius = r,
+                                )
+                            } else if (plan == 0) {
+                                drawRoundRect(
+                                    mode.tint.copy(alpha = 0.22f),
+                                    topLeft = Offset(0f, size.height - 3.dp.toPx()),
+                                    size = androidx.compose.ui.geometry.Size(size.width, 3.dp.toPx()),
+                                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(2f, 2f),
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            ru.zf.pravka.core.Fmt.wd(d),
+                            style = ty.caption.copy(fontWeight = if (d == todayDate) FontWeight.Bold else FontWeight.Normal),
+                            color = if (d == todayDate) ru.zf.pravka.ui.Ink.TextStrong else mode.label,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(12.dp).clip(RoundedCornerShape(3.dp)).background(mode.value))
+                Text("сделано", style = ty.meta, color = mode.meta, modifier = Modifier.padding(start = 6.dp, end = 16.dp))
+                Box(Modifier.size(12.dp).border(1.5.dp, mode.tint.copy(alpha = 0.55f), RoundedCornerShape(3.dp)))
+                Text("план", style = ty.meta, color = mode.meta, modifier = Modifier.padding(start = 6.dp))
+            }
+        }
+    }
+}
