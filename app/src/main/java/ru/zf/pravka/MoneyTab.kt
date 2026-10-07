@@ -185,13 +185,8 @@ internal fun MoneyTab(
         )
     }
     if (calc == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                androidx.compose.material3.CircularProgressIndicator()
-                Spacer(Modifier.height(8.dp))
-                PaperHint("считаю…")
-            }
-        }
+        // Загрузка (DESIGN §12.13): «считаю…» полосой набора, не колесом.
+        Box(Modifier.fillMaxSize().padding(16.dp)) { ru.zf.pravka.ui.LoadingLine() }
         return
     }
     val totals = calc.totals
