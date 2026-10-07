@@ -879,3 +879,123 @@ private fun buildModel(
         tasksById, dayEntries.associateBy { it.id },
     )
 }
+
+/**
+ * Настройки «Сегодня» (Правка 4.0, DESIGN §12.11): время сна — для «до сна»
+ * и «дела не влезают на N м»; город погоды; какие календари показывать в
+ * хронике (пусто — те же, что у автопилота Засечки); какие отметки режимов
+ * прикреплять к ленте; месячный бюджет — без него полоса на плашке «Деньги»
+ * не рисуется.
+ */
+@Composable
+internal fun TodaySettings(app: PravkaApp) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = app.appScope
+    val s = app.settings
+    val bedtime by s.todayBedtimeFlow.collectAsState(initial = ru.zf.pravka.data.Settings.TODAY_BEDTIME_DEFAULT)
+    var bedDraft by remember(bedtime) { mutableStateOf(bedtime.toFloat()) }
+    ru.zf.pravka.ui.PaperCard(label = "день") {
+        // Шаг — четверть часа, с 21:00 до 02:00 следующих суток: после полуночи
+        // хранится как минуты сверх суток (01:00 — 1500), чтобы сон оставался в этом дне.
+        ru.zf.pravka.ui.PaperSlider(
+            title = "Время сна",
+            valueText = ru.zf.pravka.core.Fmt.hmOfMin(bedDraft.toInt() % 1440),
+            value = bedDraft.coerceIn(21 * 60f, 26 * 60f),
+            onValueChange = { v -> bedDraft = (v.toInt() / 15 * 15).toFloat() },
+            onValueChangeFinished = { scope.launch { s.setTodayBedtime(bedDraft.toInt()) } },
+            valueRange = (21 * 60f)..(26 * 60f),
+            steps = (5 * 60) / 15 - 1,
+            info = "Отсюда «до сна» на плашке времени и строка «дела не влезают на N м» в хронике.",
+        )
+    }
+    val city by s.weatherCityFlow.collectAsState(initial = ru.zf.pravka.data.Settings.WEATHER_CITY_DEFAULT)
+    var cityText by remember(city) { mutableStateOf(city) }
+    ru.zf.pravka.ui.PaperCard(
+        label = "погода",
+        info = "Прогноз Open-Meteo без ключа: город один раз переводится в координаты, прогноз живёт час. " +
+            "Пустой город — ряд погоды скрыт.",
+    ) {
+        ru.zf.pravka.ui.PaperField(
+            value = cityText,
+            onValueChange = { cityText = it },
+            label = "Город",
+            placeholder = "Москва",
+        )
+        if (cityText.trim() != city) {
+            Spacer(Modifier.height(8.dp))
+            ru.zf.pravka.ui.GhostKey("Сохранить город", { scope.launch { s.setWeatherCity(cityText) } }, icon = Glyphs.Check)
+        }
+    }
+    // Календари: права нет — просьба; выбор пуст — как у автопилота.
+    var permTick by remember { mutableStateOf(0) }
+    val askPermission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { permTick++ }
+    val chosen by s.todayCalendarsFlow.collectAsState(initial = null)
+    val auto by s.autoCalendarsFlow.collectAsState(initial = null)
+    ru.zf.pravka.ui.PaperCard(
+        label = "календари в хронике",
+        info = "Встречи календаря встают в хронику «Сегодня» после «сейчас». Не выбирал — те же " +
+            "календари, что у автопилота Засечки (или основной календарь аккаунта).",
+    ) {
+        val granted = remember(permTick) {
+            androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_CALENDAR) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        if (!granted) {
+            ru.zf.pravka.ui.GhostKey("Дать доступ к календарю", { askPermission.launch(android.Manifest.permission.READ_CALENDAR) }, icon = Glyphs.Calendar)
+        } else {
+            val cals = remember(permTick) { ru.zf.pravka.trigger.CalendarPilot.calendars(context) }
+            if (cals.isEmpty()) {
+                ru.zf.pravka.ui.PaperHint("Календарей на телефоне не видно.")
+            } else {
+                val effective = chosen ?: auto ?: cals.filter { it.primary }.map { it.name }.toSet()
+                for (c in cals) {
+                    ru.zf.pravka.ui.PaperToggle(
+                        title = c.name + if (c.primary) " · основной" else "",
+                        checked = c.name in effective,
+                        onCheckedChange = { on ->
+                            scope.launch { s.setTodayCalendars(if (on) effective + c.name else effective - c.name) }
+                        },
+                    )
+                }
+                if (chosen != null) {
+                    ru.zf.pravka.ui.PaperTextButton("Как у автопилота", icon = Glyphs.Undo, onClick = { scope.launch { s.setTodayCalendars(null) } })
+                }
+            }
+        }
+    }
+    val marks by s.todayMarksFlow.collectAsState(initial = ru.zf.pravka.data.Settings.TODAY_MARKS_DEFAULT.split(',').toSet())
+    ru.zf.pravka.ui.PaperCard(
+        label = "отметки в ленте",
+        info = "Отметка — монета режима у записи Засечки, в чьё время случилось событие: тренировка, " +
+            "приём еды, трата, сделанное дело.",
+    ) {
+        for ((key, title) in listOf("sport" to "Спорт", "food" to "Еда", "money" to "Деньги", "dela" to "Дела")) {
+            ru.zf.pravka.ui.PaperToggle(
+                title = title,
+                checked = key in marks,
+                onCheckedChange = { on -> scope.launch { s.setTodayMarks(if (on) marks + key else marks - key) } },
+            )
+        }
+    }
+    val budget by s.moneyMonthBudgetFlow.collectAsState(initial = 0L)
+    var budgetText by remember(budget) { mutableStateOf(if (budget > 0) budget.toString() else "") }
+    ru.zf.pravka.ui.PaperCard(
+        label = "бюджет месяца",
+        info = "Сколько рублей в месяц на личные траты. Есть — на плашке «Деньги» полоса дня: " +
+            "бюджет, делённый на дни месяца. Пусто — полосы нет.",
+    ) {
+        ru.zf.pravka.ui.PaperField(
+            value = budgetText,
+            onValueChange = { v -> budgetText = v.filter { it.isDigit() }.take(9) },
+            label = "Рублей в месяц",
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+        )
+        val parsed = budgetText.toLongOrNull() ?: 0L
+        if (parsed != budget) {
+            Spacer(Modifier.height(8.dp))
+            ru.zf.pravka.ui.GhostKey("Сохранить", { scope.launch { s.setMoneyMonthBudget(parsed) } }, icon = Glyphs.Check)
+        }
+    }
+}

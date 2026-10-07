@@ -885,7 +885,12 @@ private fun PageScreen(
     }
     val decor = when (p) {
         is Page.ModeSettings -> p.group.decor
-        is Page.Service -> if (p.tab == Tab.REPORT) ModeDecor.TODAY else ModeDecor.SERVICE
+        // «Ещё» — в цвете Правки (DESIGN §12.10), Общая статистика — нейтрально, как «Сегодня».
+        is Page.Service -> when (p.tab) {
+            Tab.REPORT -> ModeDecor.TODAY
+            Tab.MORE -> ModeDecor.PRAVKA
+            else -> ModeDecor.SERVICE
+        }
         else -> ModeDecor.SERVICE
     }
     ModeFrame(decor) {

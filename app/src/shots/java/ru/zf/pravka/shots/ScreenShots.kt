@@ -249,8 +249,9 @@ class ScreenShots {
         c = launch(MainActivity.TAB_MONEY); shot(c, "outer-06-money")
         if (tap(c, "Журнал", exact = true)) shot(c, "outer-06b-money-zhurnal")
         close(c)
-        c = launch(MainActivity.TAB_PRAVKA)
-        if (tap(c, "Ещё", exact = true)) shot(c, "outer-07-more")
+        // «Ещё» — аватаром «С» в шапке «Сегодня» (Правка 4.0: нижней панели нет).
+        c = launch(null)
+        if (tap(c, "Ещё и настройки")) shot(c, "outer-07-more")
         close(c)
         c = launch(MainActivity.TAB_SETTINGS); shot(c, "outer-08-settings"); close(c)
         c = launch(MainActivity.TAB_ZASECHKA)

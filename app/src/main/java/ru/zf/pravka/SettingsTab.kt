@@ -98,6 +98,8 @@ internal enum class SettingsGroup(
     val decor: ModeDecor = ModeDecor.SERVICE,
 ) {
     PROFILE("Кто пользуется", "имя, род, какие режимы включены", SettingsShelf.MODES, { Glyphs.Tune }),
+    // Правка 4.0: главный экран — свои пункты (DESIGN §12.11).
+    TODAY("Сегодня", "время сна, погода, календари, отметки, бюджет", SettingsShelf.MODES, { Glyphs.Sunny }, ModeDecor.TODAY),
     PRAVKA("Правка", "проза, контекст, правила в промпте", SettingsShelf.MODES, { Glyphs.Pravka }, ModeDecor.PRAVKA),
     ZASECHKA("Засечка", "напоминания, категории, автопилот, NFC", SettingsShelf.MODES, { Glyphs.Zasechka }, ModeDecor.ZASECHKA),
     DELA("Дела", "кнопка «Д», сервер или Todoist", SettingsShelf.MODES, { Glyphs.Delo }, ModeDecor.DELA),
@@ -492,6 +494,7 @@ private fun GroupContent(
 ) {
     when (group) {
         SettingsGroup.PROFILE -> ProfileSettings(app)
+        SettingsGroup.TODAY -> TodaySettings(app)
         SettingsGroup.PRAVKA -> PravkaSettings(app)
         SettingsGroup.ZASECHKA -> ZasechkaSettings(app)
         SettingsGroup.DELA -> DelaSettings(app, onOpen)

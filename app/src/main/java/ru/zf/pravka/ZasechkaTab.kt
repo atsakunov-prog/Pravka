@@ -183,13 +183,12 @@ private fun PointsChip(points: Int, bold: Boolean = false) {
 private const val ROW_SCORE_SPAN = 20f
 
 internal fun scoreColor(value: Float, span: Float): Color = when {
-    value >= span * 0.75f -> Color(0xFFEF4444)
-    value >= span * 0.45f -> Color(0xFFF97316)
-    value >= span * 0.15f -> Color(0xFFEAB308)
-    value > -span * 0.10f -> Color(0xFF22C55E)
-    value > -span * 0.30f -> Color(0xFF06B6D4)
-    value > -span * 0.55f -> Color(0xFF3B82F6)
-    else -> Color(0xFF8B5CF6)
+    // Правка 4.0: радуги нет (DESIGN §4) — плюс шкалой краски Засечки, чем
+    // больше, тем гуще; минус — тёплым предупреждением.
+    value >= span * 0.45f -> ru.zf.pravka.ui.Modes.Zasechka.ramp[2]
+    value >= span * 0.15f -> ru.zf.pravka.ui.Modes.Zasechka.ramp[1]
+    value > -span * 0.10f -> ru.zf.pravka.ui.Modes.Zasechka.ramp[0]
+    else -> ru.zf.pravka.ui.Ink.Warn
 }
 
 private val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
@@ -1021,84 +1020,6 @@ private fun GapDialog(
     }
 }
 
-/**
- * The score of the day on a full rainbow (owner's design): the whole track is
- * the spectrum - violet on the far left, GREEN in the middle where zero sits,
- * red on the far right. The bright fill grows from the centre: right for a day
- * that paid off, left for one that sank. The colours belong to the TRACK, so
- * red only lights up when the day actually reaches it.
- */
-@Composable
-internal fun RainbowScoreBar(balance: Int, weekMode: Boolean) {
-    // Half the track is a strong day: eight hours of work at +8 plus an hour
-    // of sport lands near a hundred; a week of those near five hundred.
-    val span = if (weekMode) 500f else 100f
-    val rainbow = listOf(
-        Color(0xFF8B5CF6), Color(0xFF6366F1), Color(0xFF3B82F6), Color(0xFF06B6D4),
-        Color(0xFF22C55E), Color(0xFFEAB308), Color(0xFFF97316), Color(0xFFEF4444),
-    )
-    val label = if (balance >= 0) "+$balance" else "$balance"
-    val labelColor = scoreColor(balance.toFloat(), span)
-    val trackColor = MaterialTheme.colorScheme.surfaceVariant
-    // Полоска во всю ширину и ровно под галками навигации: у IconButton глиф
-    // сидит в 12.dp от края, столько же отступа берёт себе дорожка - слева и
-    // справа одинаково.
-    Box(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Canvas(Modifier.fillMaxWidth().height(18.dp)) {
-            val h = size.height
-            val radius = androidx.compose.ui.geometry.CornerRadius(h / 2f)
-            val middle = size.width / 2f
-            val brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
-                colors = rainbow,
-                startX = 0f,
-                endX = size.width,
-            )
-            drawRoundRect(color = trackColor, size = size, cornerRadius = radius)
-            // The whole spectrum, dimmed: both directions are visible as goals.
-            drawRoundRect(brush = brush, size = size, cornerRadius = radius, alpha = 0.22f)
-            val frac = (kotlin.math.abs(balance) / span).coerceIn(0f, 1f)
-            val width = middle * frac
-            if (width > 0f) {
-                drawRoundRect(
-                    brush = brush,
-                    topLeft = androidx.compose.ui.geometry.Offset(
-                        if (balance >= 0) middle else middle - width, 0f,
-                    ),
-                    size = androidx.compose.ui.geometry.Size(width, h),
-                    cornerRadius = radius,
-                )
-                // У нуля заливка ровная, скругление только на дальнем конце:
-                // ноль - это срез, от которого тянешься, а не отдельная капля.
-                val flat = kotlin.math.min(width, h / 2f)
-                drawRect(
-                    brush = brush,
-                    topLeft = androidx.compose.ui.geometry.Offset(
-                        if (balance >= 0) middle else middle - flat, 0f,
-                    ),
-                    size = androidx.compose.ui.geometry.Size(flat, h),
-                )
-            }
-        }
-        // Балл едет кружком по дорожке и стоит в своей точке - там, докуда
-        // день дотянулся. Смещение задаётся тем же дробным сдвигом, что и
-        // заливка: 0 = ноль в середине, +1 = правый край, −1 = левый.
-        val bias = (balance / span).coerceIn(-1f, 1f)
-        Text(
-            label,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold,
-            color = Color(0xFF1B1B1B),
-            maxLines = 1,
-            modifier = Modifier
-                .align(androidx.compose.ui.BiasAlignment(bias, 0f))
-                .background(labelColor, RoundedCornerShape(50))
-                .padding(horizontal = 8.dp, vertical = 2.dp),
-        )
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Ribbon rows: the plain one-line entry and the chain block (an activity the

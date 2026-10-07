@@ -1341,7 +1341,8 @@ class Settings(private val context: Context) {
     /** Время сна, минуты от полуночи: отсюда «до сна 4 ч 40 м» и «дела не влезают на N м». */
     val todayBedtimeFlow = context.dataStore.data.map { it[KEY_TODAY_BEDTIME] ?: TODAY_BEDTIME_DEFAULT }
     suspend fun setTodayBedtime(min: Int) {
-        context.dataStore.edit { it[KEY_TODAY_BEDTIME] = min.coerceIn(0, 1439) }
+        // После полуночи — минутами сверх суток (01:00 — 1500): сон того же дня.
+        context.dataStore.edit { it[KEY_TODAY_BEDTIME] = min.coerceIn(0, 26 * 60) }
     }
 
     /** Город погоды на «Сегодня»; пусто — ряд погоды не показывается. */

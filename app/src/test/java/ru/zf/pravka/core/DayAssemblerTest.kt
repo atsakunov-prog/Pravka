@@ -61,6 +61,15 @@ class DayAssemblerTest {
     }
 
     @Test
+    fun `сон после полуночи - минутами сверх суток, дела влезают`() {
+        // Настройка «Время сна» 01:00 хранится как 1500: сон — в этом же дне.
+        val r = DayAssembler.assemble(input().copy(bedtimeMin = 25 * 60))
+        val sleep = r.items.last() as DayItem.Sleep
+        assertEquals(day + 25 * 60 * MIN, sleep.at)
+        assertEquals(0, sleep.overflowMin)
+    }
+
+    @Test
     fun `после сейчас - свободно до календаря, потом план`() {
         val r = DayAssembler.assemble(input())
         val i = r.nowIndex

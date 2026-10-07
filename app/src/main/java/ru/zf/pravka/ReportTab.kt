@@ -109,24 +109,30 @@ private val reportShortDate = SimpleDateFormat("d.MM", Locale("ru"))
 private val reportIso = SimpleDateFormat("yyyy-MM-dd", Locale.US)
 private val reportClock = SimpleDateFormat("HH:mm", Locale.US)
 
-private val GOOD = Color(0xFF22C55E)
-private val BAD = Color(0xFFEF4444)
-// Те же чернила, что во вкладке «Еда»: одна еда — один цвет во всём приложении.
-private val KCAL_INK = Color(0xFFEA580C)
-private val PROTEIN_INK = Color(0xFF0E7490)
-private val FAT_INK = Color(0xFFCA8A04)
-private val CARBS_INK = Color(0xFF16A34A)
-private val SLEEP_INK = Color(0xFF6366F1)
-private val STEPS_INK = Color(0xFF0E7490)
-private val HRV_INK = Color(0xFF16A34A)
-private val RHR_INK = Color(0xFFEA580C)
-private val WEIGHT_INK = Color(0xFF0E7490)
-private val COST_INK = Color(0xFFCA8A04)
-private val PICKUP_INK = Color(0xFF0E7490)
-private val GLANCE_INK = Color(0xFFEA580C)
-// Ступени треугольника — остановки той же радуги, что у балла.
+// Правка 4.0 (DESIGN §12.9): цвета режимов здесь — метки источника, как на
+// «Сегодня»: балл и телефон — краской Засечки, еда — Еды, тело — Спорта,
+// деньги Claude — Правки; «хорошо/плохо» — тоном Засечки и предупреждением.
+private val GOOD = ru.zf.pravka.ui.Modes.Zasechka.ramp[1]
+private val BAD = ru.zf.pravka.ui.Ink.Warn
+private val KCAL_INK = ru.zf.pravka.ui.Modes.Food.ramp[1]
+private val PROTEIN_INK = ru.zf.pravka.ui.Modes.Food.ramp[0]
+private val FAT_INK = ru.zf.pravka.ui.Modes.Food.ramp[2]
+private val CARBS_INK = ru.zf.pravka.ui.Modes.Food.ramp[3]
+private val SLEEP_INK = ru.zf.pravka.ui.Modes.Sport.ramp[1]
+private val STEPS_INK = ru.zf.pravka.ui.Modes.Sport.ramp[0]
+private val HRV_INK = ru.zf.pravka.ui.Modes.Sport.ramp[1]
+private val RHR_INK = ru.zf.pravka.ui.Modes.Sport.ramp[2]
+private val WEIGHT_INK = ru.zf.pravka.ui.Modes.Sport.ramp[0]
+private val COST_INK = ru.zf.pravka.ui.Modes.Pravka.ramp[1]
+private val PICKUP_INK = ru.zf.pravka.ui.Modes.Zasechka.ramp[1]
+private val GLANCE_INK = ru.zf.pravka.ui.Modes.Zasechka.ramp[2]
+// Ступени треугольника — от потерь к лучшим часам: предупреждение и шкала Засечки.
 private val BUCKET_INKS = listOf(
-    Color(0xFFEF4444), Color(0xFFF97316), Color(0xFF22C55E), Color(0xFF3B82F6), Color(0xFF8B5CF6),
+    ru.zf.pravka.ui.Ink.Warn,
+    ru.zf.pravka.ui.Modes.Zasechka.ramp[3],
+    ru.zf.pravka.ui.Modes.Zasechka.ramp[2],
+    ru.zf.pravka.ui.Modes.Zasechka.ramp[1],
+    ru.zf.pravka.ui.Modes.Zasechka.ramp[0],
 )
 
 private fun reportDayStart(offsetDays: Int): Long {
@@ -509,8 +515,13 @@ private fun ScoreCard(
             "восемь часов работы по +8 и час спорта. Место считается среди 27 предыдущих " +
             "дней, обрезанных как этот.",
     ) {
-        RainbowScoreBar(b.net, weekMode = false)
-        Spacer(Modifier.height(8.dp))
+        // Балл крупно (Literata) в краске Засечки — вместо радужной полосы.
+        Text(
+            signed(b.net),
+            style = ru.zf.pravka.ui.LocalPravkaType.current.displayL,
+            color = ru.zf.pravka.ui.pointsColor(b.net),
+        )
+        Spacer(Modifier.height(4.dp))
         Text(
             "Баланс ${signed(b.net)} = +${b.plus.roundToInt()} и ${b.minus.roundToInt()}",
             style = MaterialTheme.typography.bodyMedium,
