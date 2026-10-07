@@ -134,6 +134,13 @@ def test_journal_chunks_readable_by_day(full):
     assert one(full, "SELECT count(*) FROM life.said WHERE text ILIKE %s", "%команда голоса%")[0] == 0
 
 
+def test_feedback_waits_for_daily_review(full):
+    row = one(full, "SELECT num, origin, status, text, raw, build FROM life.feedback")
+    assert row[0] == 7 and row[1] == "Д" and row[2] == "new" and row[5] is None
+    assert row[3].startswith("Подпись на плитке") and row[4].startswith("подпись на плитке")
+    assert one(full, "SELECT count(*) FROM life.feedback WHERE status = 'new'")[0] == 1
+
+
 def test_wellness_skips_future_forecast(full):
     assert [str(r[0]) for r in full.execute("SELECT day FROM life.wellness")] == ["2026-09-07"]
     assert float(one(full, "SELECT tsb FROM life.wellness")[0]) == pytest.approx(-6.8)

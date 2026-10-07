@@ -182,6 +182,8 @@ class PravkaAccessibilityService : AccessibilityService() {
      * текст уходит сюда, а не в разбор Разноски. Движок тот же, что у «Д».
      */
     internal var rTabSink: ((String) -> Unit)? = null
+    /** Подсказка в пилюле, пока «Д» слушает для [rTabSink] (баг или предложение). */
+    internal var rTabPrompt: String = ""
 
     // Деньги: четвёртая кнопка на диске, «₽» (23.09.2026). Тот же контроллер,
     // что у «Д» (`RaznoskaButtonController` со своим лицом): наговор уезжает
@@ -1732,6 +1734,8 @@ class PravkaAccessibilityService : AccessibilityService() {
                     FloatingButtonController.MenuItem(getString(R.string.redo_polish), red) { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_POLISH) },
                     FloatingButtonController.MenuItem("Обучить", red) { learnFromField() },
                     FloatingButtonController.MenuItem("Сброс", red) { resetStuck() },
+                    // Баг или предложение — голосом, с любой кнопки (07.10.2026, `ServiceFeedback.kt`).
+                    FloatingButtonController.MenuItem("🐞 Баг или предложение", red) { startFeedbackTake("П") },
                     FloatingButtonController.MenuItem("Открыть Правку", red) { openPravkaPrompts() },
                     FloatingButtonController.MenuItem("Настройки", red) { openSettingsTab("PRAVKA") },
                     FloatingButtonController.MenuItem("Закрыть", red) { floatingButton?.hideMenu() },

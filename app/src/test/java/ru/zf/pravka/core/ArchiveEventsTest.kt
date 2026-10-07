@@ -121,6 +121,10 @@ class ArchiveEventsTest {
             ArchiveEvents.pravkaClean(clean, clock)!!,
             ArchiveEvents.correction(5, t0, "org.telegram", "сказал", "модель", "итог", "dict", clock),
             ArchiveEvents.journal(listOf("09-07 07:30:01.120  гарнитура: команда голоса пришла"), clock, t0).single(),
+            ArchiveEvents.feedback(
+                ru.zf.pravka.data.FeedbackStore.Item(7, t0, "Д", "подпись обрезается", "Подпись обрезается.", "3.0.787"),
+                clock,
+            ),
             ArchiveEvents.talk(SportStore.Talk(11, t0, "как форма?", "ровно", 0.02), clock),
         )
     }

@@ -523,6 +523,26 @@ object ArchiveEvents {
     }
 
     /** Одна чистка из `history.jsonl`: что ушло модели и что она вернула. */
+    /**
+     * Баг или предложение с кнопки (`data/FeedbackStore.kt`): ключ — номер
+     * записи, по нему её называет сессия, которая чинит. Статус меняется —
+     * запись уходит заново (хэш другой).
+     */
+    fun feedback(i: ru.zf.pravka.data.FeedbackStore.Item, clock: Clock): Item =
+        Item("pravka.feedback", i.num.toString(), obj(
+            "num" to i.num,
+            "day" to clock.day(i.ts),
+            "at" to clock.iso(i.ts),
+            "origin" to i.origin,
+            "raw" to i.raw,
+            "text" to i.text,
+            "version" to i.version,
+            "status" to i.status,
+            "note" to i.note,
+            "done_at" to if (i.doneAt > 0L) clock.iso(i.doneAt) else null,
+            "build" to if (i.build > 0) i.build else null,
+        ))
+
     fun pravkaClean(line: JSONObject, clock: Clock): Item? {
         val ms = logMillis(line.optString("ts"))
         if (ms == 0L) return null

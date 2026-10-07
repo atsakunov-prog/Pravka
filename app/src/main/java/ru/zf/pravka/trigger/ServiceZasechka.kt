@@ -589,7 +589,9 @@ internal fun PravkaAccessibilityService.showZasechkaMenu() {
         // сверху занял тот пункт, которым он пользоваться собирается.
         val prefs = ZasechkaButtonController.MenuItem("Настройки") { openSettingsTab("ZASECHKA") }
         val close = ZasechkaButtonController.MenuItem("Закрыть") { zButton?.hideMenu() }
-        zButton?.showMenu(listOfNotNull(thought, header, openTab, prefs, close))
+        // Баг или предложение — голосом, с любой кнопки (07.10.2026, `ServiceFeedback.kt`).
+        val bug = ZasechkaButtonController.MenuItem("🐞 Баг или предложение") { startFeedbackTake("З") }
+        zButton?.showMenu(listOfNotNull(thought, header, openTab, bug, prefs, close))
     }
 }
 

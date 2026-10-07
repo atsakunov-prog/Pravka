@@ -663,7 +663,9 @@ class PravkaApp : Application() {
                 ArchiveDomain.PRAVKA ->
                     corrections.all().map {
                         ev.correction(it.id, it.ts, it.pkg, it.dictated, it.cleaned, it.edited, it.result, clock)
-                    }
+                    } +
+                        // Баги и предложения — чтобы ежедневный разбор читал их с компа.
+                        feedbackStore.all().map { ev.feedback(it, clock) }
             }
         }
     }
@@ -859,6 +861,9 @@ class PravkaApp : Application() {
 
     /** Погода для «Сегодня» (Правка 4.0): Open-Meteo, кэш час. */
     val weatherStore by lazy { ru.zf.pravka.data.WeatherStore(this) }
+
+    /** Баги и предложения с кнопок (07.10.2026, `docs/feedback.md`). */
+    val feedbackStore by lazy { ru.zf.pravka.data.FeedbackStore(this) }
     val phoneSweeper by lazy {
         ru.zf.pravka.data.PhoneSweeper(
             this, phoneStore, zasechkaStore, settings, eventLog, zasechkaSync, appScope,

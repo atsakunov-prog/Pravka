@@ -149,6 +149,8 @@ class MainActivity : ComponentActivity() {
         const val TAB_MONEY = "money"
         const val TAB_SETTINGS = "settings"
         const val TAB_PROMPTS = "prompts"
+        /** Баги и предложения — записка с кнопки открывает список (07.10.2026). */
+        const val TAB_FEEDBACK = "feedback"
 
         /**
          * Группа настроек, в которую приземлить «Настройки» из меню плавающей
@@ -247,6 +249,7 @@ class MainActivity : ComponentActivity() {
         when (intent?.getStringExtra(EXTRA_TAB)) {
             TAB_SETTINGS -> Tab.SETTINGS
             TAB_PROMPTS -> Tab.PROMPTS
+            TAB_FEEDBACK -> Tab.FEEDBACK
             TAB_PRAVKA -> Tab.PRAVKA
             TAB_ZASECHKA -> Tab.ZASECHKA
             TAB_TODOIST -> Tab.TODOIST
@@ -376,6 +379,8 @@ internal enum class Tab(val titleRes: Int) {
     REVIEWS(R.string.tab_reviews),
     /** Витрина набора деталей Правки 4.0 — только в debug-сборке, «Ещё → Служебное». */
     SHOWCASE(R.string.tab_showcase),
+    /** Баги и предложения с кнопок (07.10.2026, `docs/feedback.md`). */
+    FEEDBACK(R.string.tab_feedback),
 }
 
 /**
@@ -397,6 +402,7 @@ private val SERVICE_TABS = listOf(
     Tab.PROMPTS,
     Tab.LEARNING,
     Tab.LOGS,
+    Tab.FEEDBACK,
     Tab.SETTINGS,
 )
 
@@ -431,6 +437,7 @@ private fun serviceHint(tab: Tab): String = when (tab) {
     Tab.REVIEWS -> "ночной разбор, правка промпта, сравнение"
     Tab.LOGS -> "что делала служба, выгрузки для разбора"
     Tab.SHOWCASE -> "все детали набора во всех состояниях"
+    Tab.FEEDBACK -> "сказанное с кнопок — раз в день в разбор"
     else -> ""
 }
 
@@ -451,6 +458,7 @@ private fun serviceGlyph(tab: Tab): androidx.compose.ui.graphics.vector.ImageVec
     Tab.SETTINGS -> Glyphs.Gear
     Tab.REPORT -> Glyphs.Stats
     Tab.STATS -> Glyphs.Stats
+    Tab.FEEDBACK -> Glyphs.Bug
     else -> Glyphs.More
 }
 
@@ -507,7 +515,7 @@ private fun MoreList(app: PravkaApp, onOpen: (Tab) -> Unit, onMode: (Tab) -> Uni
 
 private val MORE_SHELVES: List<Pair<String, List<Tab>>> = listOf(
     "правка изнутри" to listOf(Tab.REVIEWS, Tab.DICTIONARY, Tab.PROMPTS, Tab.LEARNING),
-    "служебное" to listOfNotNull(Tab.LOGS, Tab.SETTINGS, Tab.SHOWCASE.takeIf { BuildConfig.DEBUG }),
+    "служебное" to listOfNotNull(Tab.FEEDBACK, Tab.LOGS, Tab.SETTINGS, Tab.SHOWCASE.takeIf { BuildConfig.DEBUG }),
 )
 
 /**
@@ -944,6 +952,7 @@ private fun PageScreen(
                         Tab.LEARNING -> WideCap { LearningTab(app) }
                         Tab.REVIEWS -> WideCap { ReviewsTab(app) }
                         Tab.LOGS -> WideCap { LogsTab(app) }
+                        Tab.FEEDBACK -> WideCap { FeedbackTab(app) }
                         Tab.STATS -> WideCap {
                             DictationStatsTab(
                                 app,

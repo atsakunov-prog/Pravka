@@ -66,7 +66,7 @@ fun PravkaAccessibilityService.onRaznoskaTap() {
  * разбор. false — не стартовало (микрофон занят, нет разрешения), причина
  * уже сказана тостом.
  */
-fun PravkaAccessibilityService.listenForDelaReason(onText: (String) -> Unit): Boolean {
+fun PravkaAccessibilityService.listenForDelaReason(prompt: String = "", onText: (String) -> Unit): Boolean {
     if (rSession != null || rWhisperRecording || googleSession != null || zSession != null || zWhisperRecording ||
         eSession != null || eWhisperRecording || mSession != null || mWhisperRecording || DictationService.recording
     ) {
@@ -79,9 +79,11 @@ fun PravkaAccessibilityService.listenForDelaReason(onText: (String) -> Unit): Bo
         return false
     }
     rTabSink = onText
+    rTabPrompt = prompt
     startRaznoskaCapture()
     if (rSession == null && !rWhisperRecording) {
         rTabSink = null
+        rTabPrompt = ""
         return false
     }
     return true
@@ -94,6 +96,7 @@ fun PravkaAccessibilityService.listenForDelaReason(onText: (String) -> Unit): Bo
 fun PravkaAccessibilityService.finishDelaReason(keep: Boolean): Boolean {
     if (rSession == null && !(rWhisperRecording && DictationService.recording)) {
         rTabSink = null
+        rTabPrompt = ""
         return false
     }
     if (!keep) {
@@ -109,7 +112,8 @@ fun PravkaAccessibilityService.finishDelaReason(keep: Boolean): Boolean {
 
 /** Приглашение говорить в бегущей строке «Д» — одно на оба движка. */
 /** Надпись в пилюле «Д», пока слов нет. Тап посередине — по-прежнему набор. */
-internal fun PravkaAccessibilityService.raznoskaTickerPrompt(): String = listenHint()
+internal fun PravkaAccessibilityService.raznoskaTickerPrompt(): String =
+    rTabPrompt.takeIf { rTabSink != null && it.isNotBlank() } ?: listenHint()
 
 internal fun PravkaAccessibilityService.startRaznoskaCapture() {
     rButton?.hideInput()
@@ -246,6 +250,7 @@ internal fun PravkaAccessibilityService.onRaznoskaLiveDone(text: String) {
         rDiscard = false
         rTypeInstead = false
         rTabSink = null
+        rTabPrompt = ""
         rButton?.setBusy(false)
         app.eventLog.add("разноска: наговор отменён (${text.length} зн.)")
         Feedback.toast(this, "Отменено")
@@ -264,6 +269,7 @@ internal fun PravkaAccessibilityService.onRaznoskaLiveError(msg: String) {
     rSession = null
     rDiscard = false
     rTabSink = null
+    rTabPrompt = ""
     runCatching { stopMicHold() }
     rButton?.hideTicker()
     rButton?.hideCancelBubble()
@@ -291,6 +297,7 @@ internal fun PravkaAccessibilityService.onRaznoskaText(raw: String, review: Bool
     val sink = rTabSink
     if (sink != null) {
         rTabSink = null
+        rTabPrompt = ""
         rButton?.setBusy(false)
         if (text.isNotEmpty()) sink(text)
         return
@@ -718,6 +725,8 @@ internal fun PravkaAccessibilityService.showRaznoskaMenu() {
                     if (newest != null) showRaznoskaPlate(newest.id) else openTodoistTab()
                 },
                 RaznoskaButtonController.MenuItem("Открыть Дело") { openTodoistTab() },
+                // Баг или предложение — голосом, с любой кнопки (07.10.2026, `ServiceFeedback.kt`).
+                RaznoskaButtonController.MenuItem("🐞 Баг или предложение") { startFeedbackTake("Д") },
                 RaznoskaButtonController.MenuItem("Настройки") { openSettingsTab("DELA") },
                 RaznoskaButtonController.MenuItem("Закрыть") { rButton?.hideMenu() },
             )

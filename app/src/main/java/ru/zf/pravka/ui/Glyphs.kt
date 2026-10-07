@@ -157,6 +157,11 @@ object Glyphs {
     val Barcode: ImageVector get() = pick("Barcode") { sw -> glyph("Barcode", sw, "M3 5v14M6.5 5v14M10 5v14M13 5v14M17 5v14M21 5v14") }
     val Edit: ImageVector get() = pick("Edit") { sw -> glyph("Edit", sw, "M12 20h9", "M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z") }
     val Delete: ImageVector get() = pick("Delete") { sw -> glyph("Delete", sw, "M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2") }
+    /** Баг или предложение (07.10.2026): жук — наш штрих и bug_report у Gemini. */
+    val Bug: ImageVector get() = pick("Bug") { sw ->
+        glyph("Bug", sw, rect(8f, 8f, 8f, 12f, 4f), "M9 8a3 3 0 0 1 6 0", "M12 12v8",
+            "M3 13h5", "M16 13h5", "M4 19l4-2", "M20 19l-4-2", "M4 7l4 2", "M20 7l-4 2")
+    }
     val Copy: ImageVector get() = pick("Copy") { sw -> glyph("Copy", sw, rect(9f, 9f, 13f, 13f, 2f), "M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1") }
     val Paste: ImageVector get() = pick("Paste") { sw -> glyph("Paste", sw, "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2", rect(8f, 2f, 8f, 4f, 1f)) }
     val Share: ImageVector get() = pick("Share") { sw -> glyph("Share", sw, circle(18f, 5f, 3f), circle(6f, 12f, 3f), circle(18f, 19f, 3f), "M8.6 13.5l6.8 4M15.4 6.5l-6.8 4") }

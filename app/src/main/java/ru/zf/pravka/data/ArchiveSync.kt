@@ -69,7 +69,7 @@ internal class ArchiveSync(
         STRENGTH(listOf("strength.session", "strength.gtg", "strength.take")),
         MONEY(listOf("money.entry", "money.reference", "money.take", "money.push")),
         SPORT(listOf("sport.talk")),
-        PRAVKA(listOf("pravka.take", "pravka.clean", "pravka.correction", JOURNAL_KIND)),
+        PRAVKA(listOf("pravka.take", "pravka.clean", "pravka.correction", "pravka.feedback", JOURNAL_KIND)),
     }
 
     data class Link(val url: String, val token: String, val at: Long)

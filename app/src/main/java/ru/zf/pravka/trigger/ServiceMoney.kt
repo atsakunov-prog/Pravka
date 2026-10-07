@@ -498,6 +498,8 @@ internal fun PravkaAccessibilityService.showMoneyMenu() {
         if (questions > 0) items.add(RaznoskaButtonController.MenuItem("? Вопросов сверки: $questions") { openMoneyTab() })
         items.add(RaznoskaButtonController.MenuItem("Набрать текстом") { openMoneyTypeIn("") })
         items.add(RaznoskaButtonController.MenuItem("Открыть Деньги") { openMoneyTab() })
+        // Баг или предложение — голосом, с любой кнопки (07.10.2026, `ServiceFeedback.kt`).
+        items.add(RaznoskaButtonController.MenuItem("🐞 Баг или предложение") { startFeedbackTake("₽") })
         items.add(RaznoskaButtonController.MenuItem("Настройки") { openSettingsTab("MONEY") })
         items.add(RaznoskaButtonController.MenuItem("Закрыть") { mButton?.hideMenu() })
         mButton?.showMenu(items)

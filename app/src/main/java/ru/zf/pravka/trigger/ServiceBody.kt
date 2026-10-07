@@ -841,6 +841,8 @@ internal fun PravkaAccessibilityService.showFoodMenu() {
             listOf(
                 BodyButtonController.MenuItem(head) { openFoodTab() },
                 BodyButtonController.MenuItem("Записать еду") { onFoodTap() },
+                // Баг или предложение — голосом, с любой кнопки (07.10.2026, `ServiceFeedback.kt`).
+                BodyButtonController.MenuItem("🐞 Баг или предложение") { startFeedbackTake("Е") },
                 BodyButtonController.MenuItem("Настройки") { openSettingsTab("FOOD") },
                 BodyButtonController.MenuItem("Закрыть") { eButton?.hideMenu() },
             )

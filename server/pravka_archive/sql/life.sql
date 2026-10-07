@@ -424,6 +424,22 @@ FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'pravka.journal' AND NOT r.deleted;
 COMMENT ON VIEW life.journal IS 'Журнал службы телефона кусками: строки «ЧЧ:ММ:СС.мс  событие» — нажатия кнопок и гарнитуры («гарнитура: команда голоса пришла» — нажатие дошло до Правки), микрофон и маршрут, распознаватель, стоп и чей он, ошибки. Для «почему не сработало»: WHERE day = … AND text ILIKE ''%гарнитура%'' ORDER BY at. Шлётся с 07.10.2026; раньше — только то, что телефон ещё помнил (журнал у него до мегабайта).';
 
+CREATE VIEW life.feedback AS
+SELECT (d->>'num')::int             AS num,
+       (d->>'day')::date            AS day,
+       (d->>'at')::timestamptz      AS at,
+       d->>'origin'                 AS origin,
+       COALESCE(NULLIF(d->>'text', ''), d->>'raw') AS text,
+       d->>'raw'                    AS raw,
+       d->>'version'                AS version,
+       d->>'status'                 AS status,
+       NULLIF(d->>'note', '')       AS note,
+       (d->>'done_at')::timestamptz AS done_at,
+       (d->>'build')::int           AS build
+FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+WHERE r.kind = 'pravka.feedback' AND NOT r.deleted;
+COMMENT ON VIEW life.feedback IS 'Баги и предложения владельца о самой Правке, сказанные с кнопок пунктом «🐞 Баг или предложение» (с 07.10.2026). num — номер, по нему запись называют в коммите и в assets/feedback_done.txt; origin — с какой кнопки (П, З, Д, ₽, Е, приложение); text — после чистки Правкой, raw — как сказано; status: new — ждёт разбора, done — сделано, skip — отложено (note — что сделано или почему). Разбор раз в день: WHERE status = ''new'' ORDER BY num (docs/feedback.md).';
+
 -- ---------------------------------------------------------------- Спорт: intervals как есть
 
 CREATE VIEW life.workouts AS

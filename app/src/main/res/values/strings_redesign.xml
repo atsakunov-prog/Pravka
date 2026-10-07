@@ -4,4 +4,5 @@
 <resources>
     <string name="tab_today">Сегодня</string>
     <string name="tab_showcase">Витрина</string>
+    <string name="tab_feedback">Баги и предложения</string>
 </resources>
