@@ -1,5 +1,12 @@
 package ru.zf.pravka
 
+import ru.zf.pravka.ui.glass
+import ru.zf.pravka.ui.bottomFade
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -173,15 +180,16 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
     }
 
     val listState = rememberLazyListState()
+    Box(Modifier.fillMaxSize()) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().scrollFade(listState),
+        modifier = Modifier.fillMaxSize().bottomFade().scrollFade(listState),
         state = listState,
-        contentPadding = ScreenPad.Padding,
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 110.dp),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
-        // Текстбокс для чужого текста — самым первым: владелец (16.09.2026)
-        // «наверху должен быть текстбокс… над всеми правками».
-        item { CleanBox(app) }
+        // «Последнее» (Правка 4.0, `screens/12`): что сказано и что вышло —
+        // свежая чистка из нижней строки или последняя чистка «П».
+        item(key = "last") { LastCard(app) }
 
         // Записи, которые не расшифровались: то, что ждёт действия, — «с утра
         // кнопкой расшифровать». Пусто — раздела нет.
@@ -220,18 +228,54 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
             }
         }
 
-        item { SectionLabel(if (showAll) "все расшифровки" else "последние расшифровки") }
-        if (log.isEmpty()) {
-            item { Text(stringResource(R.string.transcripts_empty), style = MaterialTheme.typography.bodyMedium) }
-        }
-        items(log, key = { it.ts + it.chars + it.engine }) { entry ->
-            val audio = entry.audio?.takeIf { it in withAudio }
-            TranscriptCard(
-                entry, ruLoc,
-                onCopy = { copy(entry.text) },
-                onReplay = if (audio != null) ({ replay(entry) }) else null,
-                replayShare = if (audio != null && audio == replaying) replayShare else null,
+        item(key = "tr:h") {
+            // «24 сегодня · 18 м голоса» — сколько тейков сегодня и сколько в них голоса.
+            val dayFrom = remember(log) { dayStartMs(System.currentTimeMillis()) }
+            val todays = log.filter { transcriptionLog.tsMillis(it) >= dayFrom }
+            ru.zf.pravka.ui.SectionHeader(
+                if (showAll) "все расшифровки" else "последние расшифровки",
+                trailing = if (todays.isEmpty()) null
+                else "${todays.size} сегодня · " + ru.zf.pravka.core.Fmt.durMs(todays.sumOf { it.audioMs }) + " голоса",
             )
+        }
+        if (log.isEmpty()) {
+            item { ru.zf.pravka.ui.EmptyState(stringResource(R.string.transcripts_empty), icon = Glyphs.Wave) }
+        }
+        // Расшифровки — одной плашкой строками (`screens/12`); «Показать всё» —
+        // каждая своей плашкой: тысяча строк в одном элементе ленты — тяжело.
+        if (!showAll && log.isNotEmpty()) {
+            item(key = "tr") {
+                val mode = ru.zf.pravka.ui.LocalMode.current
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .glass(RoundedCornerShape(22.dp), mode.glass)
+                        .padding(horizontal = 18.dp, vertical = 4.dp),
+                ) {
+                    log.forEachIndexed { k, entry ->
+                        if (k > 0) ru.zf.pravka.ui.Hairline()
+                        val audio = entry.audio?.takeIf { it in withAudio }
+                        TranscriptRow(
+                            entry, ruLoc,
+                            onCopy = { copy(entry.text) },
+                            onReplay = if (audio != null) ({ replay(entry) }) else null,
+                            replayShare = if (audio != null && audio == replaying) replayShare else null,
+                        )
+                    }
+                }
+            }
+        }
+        if (showAll) items(log, key = { it.ts + it.chars + it.engine }) { entry ->
+            val audio = entry.audio?.takeIf { it in withAudio }
+            val mode = ru.zf.pravka.ui.LocalMode.current
+            Box(Modifier.fillMaxWidth().glass(RoundedCornerShape(22.dp), mode.glass).padding(horizontal = 18.dp)) {
+                TranscriptRow(
+                    entry, ruLoc,
+                    onCopy = { copy(entry.text) },
+                    onReplay = if (audio != null) ({ replay(entry) }) else null,
+                    replayShare = if (audio != null && audio == replaying) replayShare else null,
+                )
+            }
         }
         if (hasMore && !showAll) {
             item {
@@ -240,6 +284,8 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
                 }
             }
         }
+    }
+    CleanBar(app, Modifier.align(Alignment.BottomCenter))
     }
 
     replayOut?.let { out ->
@@ -300,136 +346,181 @@ private object CleanBoxState {
     val streaming = mutableStateOf("")
     val error = mutableStateOf<String?>(null)
     val busy = mutableStateOf(false)
-    /** Что ушло на чистку — пузырём справа; поле пилюли после отправки пустое, как у Gemini. */
+    /** Что ушло на чистку — пузырём справа; поле строки после отправки пустое, как у Gemini. */
     val sent = mutableStateOf("")
+    val startedAt = mutableStateOf(0L)
+    /** Сколько шла чистка — «2,1 с» в «Последнем». */
+    val tookMs = mutableStateOf(0L)
 }
 
+/**
+ * Причесать текст из нижней строки: тот же движок и режим CLEAN, что у «П»;
+ * результат — в буфер (на Applied движок кладёт его сам). Запрос — в
+ * appScope: уход со вкладки не обрывает работу, за которую уже заплачено.
+ */
+private fun startClean(app: PravkaApp, context: android.content.Context) {
+    val input = CleanBoxState.text.value.trim()
+    if (input.isEmpty() || CleanBoxState.busy.value) return
+    CleanBoxState.busy.value = true
+    CleanBoxState.sent.value = input
+    CleanBoxState.text.value = ""
+    CleanBoxState.result.value = null
+    CleanBoxState.error.value = null
+    CleanBoxState.streaming.value = ""
+    CleanBoxState.startedAt.value = android.os.SystemClock.elapsedRealtime()
+    app.appScope.launch {
+        val target = PlainTextTarget(input, explicit = true)
+        // Дельты приходят с IO-потока; состояние Compose трогаем на главном,
+        // и не чаще раза в 100 мс — пересобирать длинный текст на каждый токен незачем.
+        var lastAt = 0L
+        val outcome = runCatching {
+            app.engine.proofread(target, ProofreadMode.CLEAN, onDelta = { partial ->
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastAt >= 100) {
+                    lastAt = now
+                    app.appScope.launch { CleanBoxState.streaming.value = partial }
+                }
+            })
+        }.getOrElse { e ->
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            ProofreadEngine.Outcome.Failed(e.message ?: "Неизвестная ошибка")
+        }
+        CleanBoxState.tookMs.value = android.os.SystemClock.elapsedRealtime() - CleanBoxState.startedAt.value
+        when (outcome) {
+            is ProofreadEngine.Outcome.Applied, is ProofreadEngine.Outcome.CopiedToClipboard -> {
+                CleanBoxState.result.value = target.result ?: input
+                Feedback.toast(context, "Готово — результат в буфере обмена")
+            }
+            is ProofreadEngine.Outcome.Unchanged -> {
+                // Движок на «без изменений» буфер не трогает, а владелец ждёт текст в буфере в любом случае.
+                CleanBoxState.result.value = input
+                putClipboard(context, input)
+                Feedback.toast(context, "Текст уже чистый — положил в буфер как есть")
+            }
+            ProofreadEngine.Outcome.Rejected -> CleanBoxState.error.value = "Пустой текст — причёсывать нечего."
+            is ProofreadEngine.Outcome.Failed -> CleanBoxState.error.value = outcome.message
+        }
+        CleanBoxState.busy.value = false
+    }
+}
+
+/**
+ * Нижняя строка Правки «Вставь или скажи текст» (`screens/12`): справа —
+ * «из буфера» (или ✕, когда текст есть), кружок — «причесать». Сказать —
+ * кнопкой «П» в это поле, как в любое другое.
+ */
 @Composable
-private fun CleanBox(app: PravkaApp) {
+private fun CleanBar(app: PravkaApp, modifier: Modifier) {
     val context = LocalContext.current
     var text by CleanBoxState.text
-    var result by CleanBoxState.result
-    var streaming by CleanBoxState.streaming
-    var error by CleanBoxState.error
-    var busy by CleanBoxState.busy
-    var sent by CleanBoxState.sent
-
+    val busy by CleanBoxState.busy
     fun clipboardText(): String {
         val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         return cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
     }
-
-    fun clean() {
-        val input = text.trim()
-        if (input.isEmpty() || busy) return
-        busy = true
-        sent = input
-        text = ""
-        result = null
-        error = null
-        streaming = ""
-        app.appScope.launch {
-            val target = PlainTextTarget(input, explicit = true)
-            // Дельты приходят с IO-потока; состояние Compose трогаем на главном,
-            // и не чаще раза в 100 мс — пересобирать длинный текст на каждый
-            // токен незачем.
-            var lastAt = 0L
-            val outcome = runCatching {
-                app.engine.proofread(target, ProofreadMode.CLEAN, onDelta = { partial ->
-                    val now = android.os.SystemClock.elapsedRealtime()
-                    if (now - lastAt >= 100) {
-                        lastAt = now
-                        app.appScope.launch { CleanBoxState.streaming.value = partial }
-                    }
+    ru.zf.pravka.ui.SayBar(
+        value = text,
+        onValueChange = { text = it },
+        placeholder = "Вставь или скажи текст",
+        onSend = { startClean(app, context) },
+        sendEnabled = text.isNotBlank() && !busy,
+        enabled = !busy,
+        maxLines = 8,
+        busy = busy,
+        busyLabel = "Причёсываю",
+        trailing = {
+            if (text.isEmpty()) {
+                ru.zf.pravka.ui.SayIcon(Glyphs.Paste, "вставить из буфера", onClick = {
+                    val fromClip = clipboardText()
+                    if (fromClip.isBlank()) Feedback.toast(context, "Буфер обмена пуст") else text = fromClip
                 })
-            }.getOrElse { e ->
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                ProofreadEngine.Outcome.Failed(e.message ?: "Неизвестная ошибка")
+            } else {
+                ru.zf.pravka.ui.SayIcon(Glyphs.Close, "очистить", onClick = { text = "" })
             }
-            when (outcome) {
-                is ProofreadEngine.Outcome.Applied -> {
-                    // Буфер уже заполнил движок (clipboardFallback на Applied).
-                    result = target.result ?: input
-                    Feedback.toast(context, "Готово — результат в буфере обмена")
-                }
-                is ProofreadEngine.Outcome.CopiedToClipboard -> {
-                    result = target.result ?: input
-                    Feedback.toast(context, "Готово — результат в буфере обмена")
-                }
-                is ProofreadEngine.Outcome.Unchanged -> {
-                    // Движок на «без изменений» буфер не трогает, а владелец ждёт
-                    // текст в буфере в любом случае.
-                    result = input
-                    putClipboard(context, input)
-                    Feedback.toast(context, "Текст уже чистый — положил в буфер как есть")
-                }
-                ProofreadEngine.Outcome.Rejected -> error = "Пустой текст — причёсывать нечего."
-                is ProofreadEngine.Outcome.Failed -> error = outcome.message
-            }
-            busy = false
-        }
-    }
+        },
+        modifier = modifier
+            .navigationBarsPadding()
+            .imePadding()
+            .padding(start = 12.dp, end = 12.dp, bottom = 18.dp),
+    )
+}
 
-    // Версия 3, второй заход (26.09.2026, вечер): «в Правке там написано
-    // „вставь текст — причешу, положу в буфер“ — и вот это и должно быть в
-    // обычной плашке, такой же, как вылезает, когда нажимаем на кнопку».
-    // Поле — сама пилюля наверху вкладки: слева «из буфера» (или ✕, когда
-    // текст есть), кружок — «причесать». Отправленное уходит пузырём в
-    // плашку ниже, под ним искры с секундами и ответ; пилюля снова пустая.
-    Column(verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap)) {
-        VoiceInput(
-            value = text,
-            onValueChange = { text = it },
-            placeholder = "Вставь текст — причешу",
-            onSend = { clean() },
-            sendEnabled = text.isNotBlank() && !busy,
-            enabled = !busy,
-            maxLines = 8,
-            busy = busy,
-            leading = {
-                if (text.isEmpty()) {
-                    PillAction(Glyphs.Paste, "вставить из буфера", onClick = {
-                        val fromClip = clipboardText()
-                        if (fromClip.isBlank()) Feedback.toast(context, "Буфер обмена пуст")
-                        else text = fromClip
-                    })
-                } else {
-                    PillAction(Glyphs.Close, "очистить", onClick = { text = "" })
-                }
-            },
+/**
+ * «Последнее» (`screens/12`): пузырём справа — что сказано или вставлено,
+ * под ним плашка с тем, что вышло, «2,1 с · 118 → 74 зн» и «Скопировать
+ * ещё раз». Свежая чистка из нижней строки — она (с искрами, пока идёт);
+ * иначе — последняя чистка «П» из журнала.
+ */
+@Composable
+private fun LastCard(app: PravkaApp) {
+    val context = LocalContext.current
+    val result by CleanBoxState.result
+    val streaming by CleanBoxState.streaming
+    val error by CleanBoxState.error
+    val busy by CleanBoxState.busy
+    val sent by CleanBoxState.sent
+    val took by CleanBoxState.tookMs
+    var last by remember { mutableStateOf<Pair<ru.zf.pravka.data.HistoryLog.Entry, Long>?>(null) }
+    LaunchedEffect(result) { last = withContext(Dispatchers.IO) { app.historyLog.lastClean() } }
+    val fresh = busy || result != null || error != null
+    val input = if (fresh) sent else last?.first?.input.orEmpty()
+    val output = if (fresh) result else last?.first?.output
+    if (!fresh && last == null) return
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    val at = if (fresh) System.currentTimeMillis() else last?.first?.tsMs ?: 0L
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        ru.zf.pravka.ui.SectionHeader(
+            "последнее · " + ru.zf.pravka.core.Fmt.hm(at),
+            trailing = if (output != null && !busy) "в буфере" else null,
+            action = if (fresh && !busy) {
+                { GlyphButton(Glyphs.Close, "убрать", onClick = {
+                    CleanBoxState.sent.value = ""; CleanBoxState.result.value = null
+                    CleanBoxState.error.value = null; CleanBoxState.streaming.value = ""
+                }, tint = mode.label) }
+            } else null,
         )
-        if (busy || result != null || error != null) {
-            PaperCard(
-                label = if (result != null) "результат — уже в буфере" else "причесать текст",
-                trailing = if (!busy) {
-                    { PaperTextButton("Убрать", onClick = { sent = ""; result = null; error = null; streaming = "" }) }
-                } else null,
-            ) {
-                // Тап по пузырю — исходник снова в пилюлю: поправить и причесать ещё раз.
-                if (sent.isNotBlank()) {
-                    SourceBubble(sent, onEdit = if (busy) null else ({ text = sent; result = null; error = null; streaming = "" }))
-                }
-                if (busy) {
-                    Spacer(Modifier.height(12.dp))
-                    ThinkingLine("Причёсываю")
-                    if (streaming.isNotBlank()) {
-                        Spacer(Modifier.height(8.dp))
-                        StreamingText(streaming)
-                    }
-                }
-                error?.let {
+        // Тап по пузырю свежей чистки — исходник снова в строку: поправить и причесать ещё раз.
+        if (input.isNotBlank()) {
+            SourceBubble(input, onEdit = if (fresh && !busy) ({
+                CleanBoxState.text.value = sent; CleanBoxState.result.value = null
+                CleanBoxState.error.value = null; CleanBoxState.streaming.value = ""
+            }) else null)
+        }
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .glass(RoundedCornerShape(22.dp), mode.glass)
+                .padding(horizontal = 18.dp, vertical = 16.dp),
+        ) {
+            if (busy) {
+                ThinkingLine("Причёсываю")
+                if (streaming.isNotBlank()) {
                     Spacer(Modifier.height(8.dp))
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    StreamingText(streaming)
                 }
-                result?.let { r ->
-                    Spacer(Modifier.height(12.dp))
-                    SelectionContainer {
-                        Text(r, style = MaterialTheme.typography.bodyMedium)
-                    }
-                    PaperTextButton("Скопировать ещё раз", icon = Glyphs.Copy, onClick = {
+            }
+            error?.let { Text(it, style = ty.body, color = ru.zf.pravka.ui.Ink.Warn) }
+            output?.let { r ->
+                SelectionContainer {
+                    Text(r, style = ty.bodyL.copy(fontSize = 17.sp, lineHeight = 24.sp), color = ru.zf.pravka.ui.Ink.TextStrong)
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val ms = if (fresh) took else last?.second ?: 0L
+                    Text(
+                        listOfNotNull(
+                            ms.takeIf { it > 0 }?.let { String.format(Locale.forLanguageTag("ru"), "%.1f с", it / 1000.0) },
+                            if (input.isNotBlank()) "${input.length} → ${r.length} зн" else null,
+                        ).joinToString(" · "),
+                        style = ty.meta,
+                        color = mode.meta,
+                        modifier = Modifier.weight(1f),
+                    )
+                    ru.zf.pravka.ui.PrimaryKey("Скопировать ещё раз", onClick = {
                         putClipboard(context, r)
                         Feedback.toast(context, context.getString(R.string.transcript_copied))
-                    })
+                    }, icon = Glyphs.Copy)
                 }
             }
         }
@@ -448,14 +539,15 @@ private fun SourceBubble(text: String, onEdit: (() -> Unit)?) {
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
         Text(
             text,
-            style = MaterialTheme.typography.bodyMedium,
+            style = ru.zf.pravka.ui.LocalPravkaType.current.body,
+            color = ru.zf.pravka.ui.Ink.Text,
             maxLines = 8,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .fillMaxWidth(0.88f)
                 .clip(shape)
-                .background(Color.White.copy(alpha = 0.08f))
-                .bevel(shape)
+                .background(ru.zf.pravka.ui.LocalMode.current.key.copy(alpha = 0.30f))
+                .border(1.dp, ru.zf.pravka.ui.LocalMode.current.tint.copy(alpha = 0.30f), shape)
                 .then(if (onEdit != null) Modifier.clickable(onClick = onEdit) else Modifier)
                 .padding(horizontal = 14.dp, vertical = 10.dp),
         )
@@ -485,102 +577,63 @@ private fun engineLabel(engine: String): String = when (engine) {
 }
 
 /**
- * Плашка, которую можно нажать целиком. В наборе у `PaperCard` нажатия нет,
- * а расшифровка копируется тапом по всей плашке с июля — отнимать это
- * ради значка было бы шагом назад (24.09.2026). Рябь обрезана по форме
- * плашки: без подписи плашка — ровно её `Card`.
+ * Одна расшифровка строкой плашки (Правка 4.0, `screens/12`): «16:05 · Whisper
+ * · 0:41 · 402 зн», текст до трёх строк, справа — «скопировать» (тап по
+ * строке делает то же, как с июля). [onReplay] — звук тейка лежит: значок
+ * волны разбирает фразу заново; [replayShare] — разбор идёт, доля звука.
  */
 @Composable
-private fun TapPaperCard(onClick: () -> Unit, enabled: Boolean, content: @Composable ColumnScope.() -> Unit) {
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .clip(MaterialTheme.shapes.medium)
-            .clickable(enabled = enabled, onClick = onClick),
-    ) {
-        PaperCard(content = content)
-    }
-}
-
-/**
- * Одна расшифровка: строка метрик, время, текст; тап — текст в буфер.
- * [onReplay] — звук тейка лежит: значок волны разбирает фразу заново;
- * [replayShare] — разбор идёт, доля поданного звука.
- */
-@Composable
-private fun TranscriptCard(
+private fun TranscriptRow(
     entry: TranscriptionLog.Entry,
     ruLoc: Locale,
     onCopy: () -> Unit,
     onReplay: (() -> Unit)? = null,
     replayShare: Float? = null,
 ) {
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
     val canCopy = entry.text.isNotBlank()
-    TapPaperCard(onClick = { if (canCopy) onCopy() }, enabled = canCopy) {
-        Column {
-            // Metrics line: engine · audio · transcription time · chars.
+    Row(
+        Modifier.fillMaxWidth().clickable(enabled = canCopy, onClick = onCopy).padding(vertical = 10.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Column(Modifier.weight(1f)) {
+            // Метрики: время · движок · длина звука · (расшифровка) · знаки.
             val meta = buildString {
-                append(entry.ts.replace('T', ' ').substring(5, 16))
-                append(" · ")
-                append(engineLabel(entry.engine))
-                append(" · ")
-                append(String.format(ruLoc, "%.1f", entry.audioMs / 1000.0)).append(" с")
-                // Whisper reports its transcription time; the Google
-                // live engine is realtime, so it logs 0 - skip it there.
+                append(entry.ts.replace('T', ' ').substring(11, 16))
+                append(" · ").append(engineLabel(entry.engine))
+                val sec = (entry.audioMs / 1000).toInt()
+                append(" · ").append(sec / 60).append(':').append(String.format(ruLoc, "%02d", sec % 60))
+                // Whisper сообщает время расшифровки; живой Google — в реальном времени, у него 0.
                 if (entry.transcribeMs > 0) {
-                    append(" · расшифровка ")
-                    append(String.format(ruLoc, "%.1f", entry.transcribeMs / 1000.0)).append(" с")
+                    append(" · расшифровка ").append(String.format(ruLoc, "%.1f", entry.transcribeMs / 1000.0)).append(" с")
                 }
-                append(" · ")
-                append(entry.chars).append(" симв.")
+                append(" · ").append(entry.chars).append(" зн")
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    meta,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (!entry.ok) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                )
-                if (replayShare != null) {
-                    Text(
-                        "разбираю… ${(replayShare * 100).toInt()} %",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                } else if (onReplay != null) {
-                    GlyphButton(Glyphs.Wave, "разобрать заново", onClick = onReplay, size = 30.dp)
-                }
-                // Значок — подсказка, что тап копирует; делает то же самое.
-                if (canCopy) GlyphButton(Glyphs.Copy, "скопировать", onClick = onCopy, size = 30.dp)
-            }
-            entry.error?.let {
-                Spacer(Modifier.height(4.dp))
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-            }
-            // Глухие окна, долгий старт, гарнитура (28.09.2026, владелец: «много
-            // пропускает слов… хотя вроде бы говорил нормально»): пропало ли
-            // слово в распознавании или его вовсе никто не слушал.
+            Text(meta, style = ty.meta, color = if (!entry.ok) ru.zf.pravka.ui.Ink.Warn else mode.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            entry.error?.let { Text(it, style = ty.label, color = ru.zf.pravka.ui.Ink.Warn) }
+            // Глухие окна, долгий старт, гарнитура (28.09.2026): пропало ли слово в
+            // распознавании или его вовсе никто не слушал.
             TakeHealth.cardLine(
                 entry.startupMs, entry.deafMs, entry.deafGaps, entry.mic, ruLoc,
                 stuck = entry.stuck, offline = entry.offline != null,
             )?.let { line ->
-                Spacer(Modifier.height(4.dp))
-                val withErrors = if (entry.errors.isNotEmpty() && entry.deafMs >= TakeHealth.SHOW_DEAF_MS) {
-                    "$line · ошибки ${entry.errors}"
-                } else line
+                val withErrors = if (entry.errors.isNotEmpty() && entry.deafMs >= TakeHealth.SHOW_DEAF_MS) "$line · ошибки ${entry.errors}" else line
                 Text(
                     withErrors,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (entry.deafMs >= TakeHealth.SHOW_DEAF_MS || entry.stuck > 0) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = ty.caption,
+                    color = if (entry.deafMs >= TakeHealth.SHOW_DEAF_MS || entry.stuck > 0) ru.zf.pravka.ui.Ink.Warn else mode.meta,
                 )
             }
             if (entry.text.isNotBlank()) {
-                Spacer(Modifier.height(6.dp))
-                Text(entry.text, style = MaterialTheme.typography.bodyMedium)
+                Text(entry.text, style = ty.bodyL, color = ru.zf.pravka.ui.Ink.Text, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
+            }
+            if (replayShare != null) {
+                Text("разбираю заново… ${(replayShare * 100).toInt()} %", style = ty.label, color = mode.label, modifier = Modifier.padding(top = 3.dp))
             }
         }
+        if (onReplay != null && replayShare == null) GlyphButton(Glyphs.Wave, "разобрать заново", onClick = onReplay, size = 40.dp, tint = mode.label)
+        if (canCopy) GlyphButton(Glyphs.Copy, "скопировать", onClick = onCopy, size = 40.dp, tint = mode.label)
     }
 }
 

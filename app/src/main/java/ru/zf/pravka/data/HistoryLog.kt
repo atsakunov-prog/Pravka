@@ -140,6 +140,25 @@ class HistoryLog(private val context: Context) {
         }.getOrElse { emptyList() }
     }
 
+    /**
+     * Последняя удачная чистка CLEAN — «Последнее» на вкладке Правки (Правка
+     * 4.0, `screens/12`): что надиктовано, что вышло и сколько шло. Только
+     * чтение, с хвоста файла.
+     */
+    fun lastClean(): Pair<Entry, Long>? {
+        if (!file.exists()) return null
+        return runCatching {
+            file.readLines().asReversed().asSequence()
+                .mapNotNull { line -> runCatching { JSONObject(line) }.getOrNull() }
+                .firstOrNull { !it.has("error") && it.optString("mode") == "CLEAN" && it.optString("output").isNotBlank() }
+                ?.let { o ->
+                    val t = runCatching { timestampFormat.parse(o.optString("ts"))?.time }.getOrNull() ?: 0L
+                    Entry(t, o.optString("input"), o.optString("output"), o.optDouble("cost_usd", 0.0), o.optString("model")) to
+                        o.optLong("latency_ms", 0L)
+                }
+        }.getOrNull()
+    }
+
     /** Один запрос глазами дуги прогресса: чем, на скольких знаках, сколько шёл. */
     data class Timing(val mode: String, val model: String, val chars: Int, val ms: Long)
 
