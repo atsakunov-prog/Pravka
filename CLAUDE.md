@@ -208,8 +208,9 @@
 ./gradlew assembleDebug                          # APK
 ```
 
-В облачной сессии: SDK ставится в `/opt/android-sdk`, путь — в
-`local.properties` (`sdk.dir=…`, файл не в git), Gradle есть в `/opt`. Перед
+В облачной сессии первым делом — `bash scripts/cloud-sdk.sh`: ставит Android
+SDK в `/opt/android-sdk` (около минуты; уже стоит — секунда) и пишет путь в
+`local.properties` (файл не в git); Gradle и JDK в контейнере есть. Перед
 пушем — компиляция и тесты обязательны; новый случай разбора — сначала тест.
 
 CI (`.github/workflows/build-apk.yml`) собирает APK на каждый пуш в любую ветку,
