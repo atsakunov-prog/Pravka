@@ -8,6 +8,7 @@ import android.os.Process
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.ui.platform.ViewRootForTest
+import androidx.activity.compose.setContent
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -148,6 +149,24 @@ class ScreenShots {
     private fun close(c: ActivityController<MainActivity>) {
         c.pause().stop().destroy()
         settle(4)
+    }
+
+    /**
+     * Витрина набора Правки 4.0 — без данных и без вкладок: экран деталей
+     * в отдельной активити, высокой, чтобы влезли все состояния.
+     */
+    @Test
+    fun kit() {
+        if (!want("kit")) return
+        pinEvening()
+        RuntimeEnvironment.setQualifiers("w411dp-h5200dp-420dpi")
+        val c = Robolectric.buildActivity(androidx.activity.ComponentActivity::class.java).setup()
+        c.get().setContent {
+            ru.zf.pravka.ui.PravkaTheme { ru.zf.pravka.ui.ShowcaseScreen(onBack = {}) }
+        }
+        settle(20)
+        c.get().window.decorView.captureRoboImage(File(dir, "kit-showcase.png").absolutePath)
+        c.pause().stop().destroy()
     }
 
     @Test

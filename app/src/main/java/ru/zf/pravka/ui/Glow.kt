@@ -219,6 +219,34 @@ private fun androidx.compose.animation.core.InfiniteTransition.loop(periodMs: In
  */
 val LocalClaudeSeconds = staticCompositionLocalOf<State<String?>> { mutableStateOf(null) }
 
+/**
+ * Доля обещанного времени, которая уже прошла (0…1), — для заливки слева
+ * направо у строки «сказать» и у «Claude думает» (DESIGN §4.4): то же
+ * обещание, что секунды. null — запроса нет.
+ */
+val LocalClaudeProgress = staticCompositionLocalOf<State<Float?>> { mutableStateOf(null) }
+
+/** Часы для [LocalClaudeProgress] — рядом с секундами, в `MainActivity`. */
+@Composable
+fun rememberClaudeProgress(work: StateFlow<PravkaApp.LiveWork?>): State<Float?> {
+    val live by work.collectAsState()
+    val progress = remember { mutableStateOf<Float?>(null) }
+    LaunchedEffect(live) {
+        val w = live
+        if (w == null) {
+            progress.value = null
+            return@LaunchedEffect
+        }
+        while (true) {
+            val passed = android.os.SystemClock.uptimeMillis() - w.startedAt
+            progress.value = if (w.expectMs <= 0L) null else (passed.toFloat() / w.expectMs).coerceIn(0f, 1f)
+            if (passed >= w.expectMs) break
+            delay(100)
+        }
+    }
+    return progress
+}
+
 /** Часы для [LocalClaudeSeconds] — один раз на приложение, в `MainActivity`. */
 @Composable
 fun rememberClaudeSeconds(work: StateFlow<PravkaApp.LiveWork?>): State<String?> {

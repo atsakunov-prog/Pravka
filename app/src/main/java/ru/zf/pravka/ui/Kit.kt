@@ -147,16 +147,20 @@ object ScreenPad {
 // Значок в круге, кнопки
 // ---------------------------------------------------------------------------
 
-/** Значок в круге краски режима — шапка окна, строка настроек. */
+/** Значок в круге: tint @ .14 с рамкой tint @ .28 (DESIGN §11.7 IconLabel). */
 @Composable
 fun IconBadge(
     icon: ImageVector,
     size: Dp = 40.dp,
-    tint: Color = MaterialTheme.colorScheme.primary,
-    container: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+    tint: Color = LocalMode.current.value,
+    container: Color = LocalMode.current.tint.copy(alpha = 0.14f),
 ) {
     Box(
-        Modifier.size(size).clip(CircleShape).background(container),
+        Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(container)
+            .border(1.dp, LocalMode.current.tint.copy(alpha = 0.28f), CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(size * 0.5f))
@@ -164,8 +168,9 @@ fun IconBadge(
 }
 
 /**
- * Кнопка. Главная ([primary]) — одна на плашку или окно, залита краской
- * режима и стоит справа; остальные — контуром. Значок слева, если есть.
+ * Кнопка. Главная ([primary]) — одна на плашку или окно: клавиша-капсула в
+ * цвете кнопки режима, справа (DESIGN §11.7 PrimaryKey); остальные —
+ * капсула с тонкой рамкой tint и словом в подписи режима.
  */
 @Composable
 fun PaperButton(
@@ -176,56 +181,8 @@ fun PaperButton(
     primary: Boolean = false,
     enabled: Boolean = true,
 ) {
-    val inner: @Composable RowScope.() -> Unit = {
-        if (icon != null) {
-            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-        }
-        Text(text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-    val padding = PaddingValues(start = if (icon != null) 14.dp else 18.dp, end = 18.dp, top = 8.dp, bottom = 8.dp)
-    if (primary) {
-        // Версия 3: главная кнопка — клавиша, как кнопки на стекле: краска
-        // режима, блик сверху, фаска; под пальцем блик гаснет (`keyFace`).
-        // Цвета и высота — как у Material Button, чтобы ни одна плашка не
-        // сдвинулась от замены.
-        val c = MaterialTheme.colorScheme
-        val shape = RoundedCornerShape(50)
-        val interaction = remember { MutableInteractionSource() }
-        val pressed by interaction.collectIsPressedAsState()
-        Row(
-            modifier
-                .defaultMinSize(minWidth = 58.dp, minHeight = 40.dp)
-                .keyFace(if (enabled) c.primary else c.onSurface.copy(alpha = 0.12f), shape, lit = enabled && !pressed)
-                .clickable(
-                    interactionSource = interaction,
-                    indication = LocalIndication.current,
-                    enabled = enabled,
-                    role = Role.Button,
-                    onClick = onClick,
-                )
-                .padding(padding),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            CompositionLocalProvider(LocalContentColor provides if (enabled) c.onPrimary else c.onSurface.copy(alpha = 0.38f)) {
-                ProvideTextStyle(MaterialTheme.typography.labelLarge) { inner() }
-            }
-        }
-    } else {
-        OutlinedButton(
-            onClick = onClick,
-            modifier = modifier,
-            enabled = enabled,
-            contentPadding = padding,
-            border = BorderStroke(
-                1.dp,
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (enabled) 1f else 0.4f),
-            ),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
-            content = inner,
-        )
-    }
+    if (primary) PrimaryKey(text, onClick, modifier, icon = icon, enabled = enabled, height = 40.dp)
+    else GhostKey(text, onClick, modifier, icon = icon, enabled = enabled)
 }
 
 /** Тихое действие словом: «Очистить», «Закрыть». Краской режима, без рамки. */
@@ -242,7 +199,7 @@ fun PaperTextButton(
         onClick = onClick,
         modifier = modifier,
         enabled = enabled,
-        colors = if (color != null) ButtonDefaults.textButtonColors(contentColor = color) else ButtonDefaults.textButtonColors(),
+        colors = ButtonDefaults.textButtonColors(contentColor = color ?: LocalMode.current.label),
     ) {
         if (icon != null) {
             Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -253,8 +210,9 @@ fun PaperTextButton(
 }
 
 /**
- * Круглая кнопка-значок с кромкой (микрофон у строки ввода, «удалить» в
- * низу окна). [active] — залита краской: так горит микрофон, пока слушает.
+ * Круглая кнопка-значок (микрофон в строке, «удалить» внизу окна): круг
+ * tint @ .14 с рамкой tint @ .28, как значки листа (DESIGN §11.7 IconLabel).
+ * [active] — клавиша в цвете кнопки режима: так горит микрофон, пока слушает.
  */
 @Composable
 fun PaperIconButton(
@@ -267,24 +225,24 @@ fun PaperIconButton(
     size: Dp = 42.dp,
     tint: Color? = null,
 ) {
-    val c = MaterialTheme.colorScheme
+    val mode = LocalMode.current
+    if (active) {
+        Key(icon, description, onClick, modifier, size = size, enabled = enabled)
+        return
+    }
     Box(
         modifier
             .size(size)
             .clip(CircleShape)
-            .background(if (active) c.primary else Color.Transparent)
-            .border(1.dp, if (active) Color.Transparent else c.outlineVariant, CircleShape)
-            .clickable(enabled = enabled, onClick = onClick),
+            .background(mode.tint.copy(alpha = 0.10f))
+            .border(1.dp, mode.tint.copy(alpha = 0.28f), CircleShape)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
             icon,
             contentDescription = description,
-            tint = when {
-                active -> c.onPrimary
-                tint != null -> tint
-                else -> c.onSurface
-            }.copy(alpha = if (enabled) 1f else 0.35f),
+            tint = (tint ?: mode.value).copy(alpha = if (enabled) 1f else 0.35f),
             modifier = Modifier.size(size * 0.46f),
         )
     }
@@ -297,7 +255,7 @@ fun GlyphButton(
     description: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    tint: Color = LocalMode.current.label,
     enabled: Boolean = true,
     size: Dp = 40.dp,
 ) {
@@ -313,8 +271,8 @@ fun GlyphButton(
 
 /**
  * Действие значком с подписью снизу — ряд под плашкой («Таймер · Как делать
- * · Спросить · Видео»). Подпись оставлена нарочно, как в нижней плашке
- * читалки Слушалки: без слов «Как делать» и «Спросить» не отличить.
+ * · Спросить · Видео»). Правка 4.0: это IconLabel (DESIGN §11.7) — значок в
+ * круге 48 и подпись 12.5 под ним.
  */
 @Composable
 fun RowScope.IconAction(
@@ -324,38 +282,7 @@ fun RowScope.IconAction(
     enabled: Boolean = true,
     active: Boolean = false,
     onLongClick: (() -> Unit)? = null,
-) {
-    val c = MaterialTheme.colorScheme
-    Column(
-        Modifier
-            .weight(1f)
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (active) c.primary.copy(alpha = 0.12f) else Color.Transparent)
-            .then(
-                if (onLongClick != null) Modifier.combinedClickableCompat(enabled, onClick, onLongClick)
-                else Modifier.clickable(enabled = enabled, onClick = onClick)
-            )
-            .padding(vertical = 7.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = c.primary.copy(alpha = if (enabled) 1f else 0.35f),
-            modifier = Modifier.size(22.dp),
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            label,
-            fontSize = 11.sp,
-            lineHeight = 13.sp,
-            color = c.onSurface.copy(alpha = if (enabled) 1f else 0.4f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-        )
-    }
-}
+) = IconLabel(icon, label, onClick, enabled, active, onLongClick)
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 private fun Modifier.combinedClickableCompat(enabled: Boolean, onClick: () -> Unit, onLongClick: () -> Unit): Modifier =
@@ -389,41 +316,11 @@ fun PaperChip(
     enabled: Boolean = true,
     warn: Boolean = false,
 ) {
-    val c = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(50)
-    // Выбранный чип — прозрачная клавиша краски режима (версия 3): блик и
-    // фаска те же, что у главной кнопки, заливка — на просвет.
-    val fill = when {
-        selected && warn -> c.error.copy(alpha = 0.2f)
-        selected -> c.primary.copy(alpha = 0.2f)
-        else -> Color.Transparent
-    }
-    val ink = when {
-        !enabled -> c.onSurface.copy(alpha = 0.38f)
-        selected && warn -> c.error
-        selected -> c.primary
-        else -> c.onSurface
-    }
-    Row(
-        Modifier
-            .defaultMinSize(minHeight = 34.dp)
-            .then(if (selected) Modifier.keyFace(fill, shape) else Modifier.clip(shape).border(1.dp, c.outlineVariant, shape))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (icon != null) {
-            Icon(icon, contentDescription = null, tint = ink, modifier = Modifier.size(15.dp))
-            Spacer(Modifier.width(6.dp))
-        }
-        Text(
-            label,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            color = ink,
-            maxLines = 1,
-        )
-    }
+    // Правка 4.0: чип — сегмент-капсула (DESIGN §11.7): выбранный — маленькая
+    // клавиша в цвете кнопки режима, остальные — подпись с тонкой рамкой.
+    // «warn» силой, а не цветом: в режиме нет чужих красок.
+    val (text, count) = splitCount(label)
+    Segment(text, selected = selected, onClick = onClick, count = count, icon = icon, enabled = enabled, height = 34.dp)
 }
 
 /** Ряд чипов с прокруткой вбок — выбор из нескольких. */
@@ -443,13 +340,8 @@ fun ChipRow(modifier: Modifier = Modifier, content: @Composable RowScope.() -> U
  * прокручивается пятнадцатью плашками подряд.
  */
 @Composable
-fun Segments(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
-    ChipRow(modifier) {
-        options.forEachIndexed { i, label ->
-            PaperChip(label, selected = i == selected, onClick = { onSelect(i) })
-        }
-    }
-}
+fun Segments(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) =
+    Segmented(options, selected, onSelect, modifier)
 
 // ---------------------------------------------------------------------------
 // Строки: действие, тумблер, сводка
@@ -490,12 +382,12 @@ fun PaperRow(
             Spacer(Modifier.width(14.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(title, style = LocalPravkaType.current.bodyL, color = Ink.Text, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (!hint.isNullOrBlank()) {
                 Text(
                     hint,
                     style = MaterialTheme.typography.bodySmall,
-                    color = c.onSurfaceVariant,
+                    color = LocalMode.current.meta,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -513,16 +405,14 @@ fun PaperRow(
         trailing?.let { Spacer(Modifier.width(6.dp)); it() }
         if (onClick != null) {
             Spacer(Modifier.width(4.dp))
-            Icon(Glyphs.Forward, contentDescription = null, tint = c.onSurfaceVariant, modifier = Modifier.size(18.dp))
+            Icon(Glyphs.Forward, contentDescription = null, tint = LocalMode.current.label, modifier = Modifier.size(18.dp))
         }
     }
 }
 
-/** Тонкая линия между строками внутри плашки. */
+/** Тонкая линия между строками внутри плашки — tint @ .10 (DESIGN, `border-top` в макетах). */
 @Composable
-fun RowRule() {
-    HorizontalDivider(thickness = 0.7.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
-}
+fun RowRule() = Hairline()
 
 /**
  * Тумблер строкой: название, короткая подсказка под ним и «i» с длинным
@@ -550,21 +440,16 @@ fun PaperToggle(
         Column(Modifier.weight(1f)) {
             Text(
                 title,
-                style = MaterialTheme.typography.bodyMedium,
-                color = c.onSurface.copy(alpha = if (enabled) 1f else 0.45f),
+                style = LocalPravkaType.current.bodyL,
+                color = Ink.Text.copy(alpha = if (enabled) 1f else 0.45f),
             )
             if (!hint.isNullOrBlank()) {
-                Text(hint, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
+                Text(hint, style = MaterialTheme.typography.bodySmall, color = LocalMode.current.meta)
             }
         }
         if (!info.isNullOrBlank()) InfoButton(title, info)
         Spacer(Modifier.width(6.dp))
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            enabled = enabled,
-            colors = SwitchDefaults.colors(checkedTrackColor = c.primary, checkedThumbColor = c.onPrimary),
-        )
+        Toggle(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
     }
 }
 
@@ -634,8 +519,8 @@ fun StatusDot(ok: Boolean?) {
             .clip(CircleShape)
             .background(
                 when (ok) {
-                    true -> MicroOk
-                    false -> c.error
+                    true -> LocalMode.current.tint
+                    false -> Ink.Warn
                     null -> c.outline
                 }
             )
@@ -653,15 +538,7 @@ fun StatusDot(ok: Boolean?) {
  * абзацев-подсказок успели размыть).
  */
 @Composable
-fun InfoButton(title: String, text: String, size: Dp = 32.dp) {
-    var open by remember { mutableStateOf(false) }
-    GlyphButton(Glyphs.Info, "пояснение", onClick = { open = true }, size = size)
-    if (open) {
-        PaperSheet(onDismiss = { open = false }, title = title.replaceFirstChar { it.uppercase() }, icon = Glyphs.Info) {
-            Text(text, style = MaterialTheme.typography.bodyMedium)
-        }
-    }
-}
+fun InfoButton(title: String, text: String, size: Dp = 32.dp) = InfoDot(title, text)
 
 // ---------------------------------------------------------------------------
 // Окно-лист
@@ -679,27 +556,30 @@ fun SheetHeader(
     subtitle: String? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
+    // Правка 4.0 (лист записи, `screens/13`): значок — в кольце, заголовок —
+    // Literata 22 цветом заголовков режима, подпись — второй строкой.
+    val mode = LocalMode.current
     Row(
         Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 2.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) {
-            IconBadge(icon, size = 40.dp)
+            IconBadge(icon, size = 36.dp)
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(title, style = LocalPravkaType.current.titleS, color = mode.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (!subtitle.isNullOrBlank()) {
                 Text(
                     subtitle,
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = mode.label,
                     maxLines = 2,
                 )
             }
         }
         actions()
-        if (onClose != null) GlyphButton(Glyphs.Close, "закрыть", onClick = onClose, tint = MaterialTheme.colorScheme.onSurface)
+        if (onClose != null) GlyphButton(Glyphs.Close, "закрыть", onClick = onClose, tint = Ink.Text, size = 44.dp)
     }
 }
 
@@ -724,24 +604,26 @@ fun PaperSheet(
     scroll: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    // Правка 4.0 (DESIGN §11.7 BottomSheet, `screens/13`): лист — стекло
+    // режима, верх 28, ручка 32×4 кремом @ .3, затемнение под ним .62.
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val look = LocalCardLook.current
-    val c = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp)
+    val mode = LocalMode.current
+    val shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = state,
         shape = shape,
-        containerColor = darkened(c.surfaceContainerLow, look.darken * 0.6f),
-        contentColor = c.onSurface,
+        containerColor = mode.ink.copy(alpha = 0.97f).compositeOver(Ink.Bg),
+        contentColor = Ink.Text,
+        scrimColor = Color(0xFF080706).copy(alpha = 0.62f),
         tonalElevation = 0.dp,
         dragHandle = {
             Box(
                 Modifier
                     .padding(top = 10.dp, bottom = 8.dp)
-                    .size(width = 38.dp, height = 4.dp)
+                    .size(width = 32.dp, height = 4.dp)
                     .clip(RoundedCornerShape(2.dp))
-                    .background(c.onSurface.copy(alpha = 0.22f))
+                    .background(Ink.Cream.copy(alpha = 0.30f))
             )
         },
         contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
@@ -749,23 +631,23 @@ fun PaperSheet(
         Column(
             Modifier
                 .fillMaxWidth()
-                .then(if (look.bevel) Modifier.bevel(shape) else Modifier)
+                .sheetGlass(mode)
                 .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime)),
         ) {
             SheetHeader(title, onClose = onDismiss, icon = icon, subtitle = subtitle, actions = actions)
-            HorizontalDivider(thickness = 0.7.dp, color = c.outlineVariant)
             Column(
                 Modifier
                     .fillMaxWidth()
                     .weight(1f, fill = false)
                     .then(if (scroll) Modifier.verticalScroll(rememberScrollState()) else Modifier)
-                    .padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = if (footer == null) 22.dp else 8.dp),
+                    .padding(start = 20.dp, end = 20.dp, top = 6.dp, bottom = if (footer == null) 22.dp else 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 content = content,
             )
             if (footer != null) {
+                Hairline(Modifier.padding(horizontal = 20.dp), alpha = 0.14f)
                 Row(
-                    Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 16.dp),
+                    Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     content = footer,
@@ -773,6 +655,18 @@ fun PaperSheet(
             }
         }
     }
+}
+
+/** Налёт и блик листа (`screens/13`): key .16 → .06 сверху вниз и светлый tint у верхней кромки. */
+private fun Modifier.sheetGlass(mode: ModeColors): Modifier = this.drawBehind {
+    drawRect(Brush.verticalGradient(0f to mode.key.copy(alpha = if (mode === Modes.Today) 0f else 0.16f), 1f to mode.key.copy(alpha = if (mode === Modes.Today) 0f else 0.06f)))
+    drawRect(
+        Brush.verticalGradient(
+            0f to mode.glass.sheenColor.copy(alpha = 0.14f),
+            0.26f to mode.glass.sheenColor.copy(alpha = 0.03f),
+            1f to Color.Transparent,
+        )
+    )
 }
 
 /**
@@ -875,19 +769,10 @@ fun PaperField(
 }
 
 /**
- * Одна строка ввода на все вкладки — в одежде пилюли диктовки (версия 3,
- * 26.09.2026). До этого — микрофон · поле · «отправить» тремя деталями; теперь
- * это та же пилюля, что выезжает поверх приложений (`trigger/DictationPill.kt`),
- * и числа у неё те же (`core/PillLook.kt`): заливка — цвет режима, уведённый
- * в чернила, слева гуще чернил, у кружка гуще цвета, от кружка по стеклу
- * свечение, блик по верхней трети и светлая кромка. Одна вещь на стекле и в
- * приложении, а не две похожие.
- *
- * Кружок справа — как у Gemini: пусто и есть [onMic] — голос (три полоски);
- * есть текст — «отправить» ([sendIcon]); [busy] — ждём Claude: слева искры,
- * в кружке секунды до ответа (`LocalClaudeSeconds`, то же обещание, что на
- * кнопке), и свет вкладки ярче. Слева — знак режима.
- * [extras] — значки над строкой (камера, галерея, штрихкод у Еды).
+ * Строка ввода режима — Правка 4.0 (07.10.2026): это строка «сказать»
+ * (`ui/SayBar.kt`, DESIGN §11.4). Параметры прежней пилюли сохранены, чтобы
+ * вкладки переехали вниз без переделки разбора: [extras] и [leading] —
+ * значки перед клавишей (камера, галерея, штрихкод, вставить).
  */
 @Composable
 fun VoiceInput(
@@ -901,228 +786,50 @@ fun VoiceInput(
     sendEnabled: Boolean = value.isNotBlank(),
     enabled: Boolean = true,
     maxLines: Int = 4,
-    sendIcon: ImageVector = Glyphs.Send,
+    sendIcon: ImageVector = Glyphs.ArrowUp,
     extras: (@Composable RowScope.() -> Unit)? = null,
     busy: Boolean = false,
-    /**
-     * Свои значки слева В САМОЙ пилюле вместо знака режима (владелец: «снять,
-     * галерея, штрихкод… это можно добавить в саму плашку»). Пока ждём
-     * Claude, на их месте искры.
-     */
     leading: (@Composable RowScope.() -> Unit)? = null,
+    busyLabel: String = "Разбираю",
 ) {
-    val c = MaterialTheme.colorScheme
-    val decor = LocalModeDecor.current ?: ModeDecor.SERVICE
-    val accent = decor.pillAccent
-    GlowBusy(busy)
-    val d = PillLook.DENSITY_DEFAULT
-    val start = Color(PillLook.bodyStart(accent)).copy(alpha = d)
-    val end = Color(PillLook.bodyEnd(accent)).copy(alpha = d)
-    val glow = Color(accent)
-    val glowA = PillLook.glowAlpha(d)
-    val shape = RoundedCornerShape(28.dp)
-    val ink = Color(0xFFF7F3EA)
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (extras != null) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, content = extras)
-        }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .heightIn(min = PillLook.HEIGHT_DP.dp)
-                .clip(shape)
-                .background(Brush.horizontalGradient(listOf(start, end)))
-                .drawBehind {
-                    // Свечение от кружка голоса — центр ровно под ним.
-                    val orbX = size.width - (6 + 22).dp.toPx()
-                    drawRect(
-                        Brush.radialGradient(
-                            0f to glow.copy(alpha = glowA),
-                            0.45f to glow.copy(alpha = glowA * 0.35f),
-                            1f to glow.copy(alpha = 0f),
-                            center = Offset(orbX, size.height / 2f),
-                            radius = PillLook.HEIGHT_DP.dp.toPx() * 1.9f,
-                        )
-                    )
-                }
-                .background(
-                    Brush.verticalGradient(
-                        0f to Color.White.copy(alpha = PillLook.sheenAlpha(d)),
-                        0.45f to Color.Transparent,
-                    )
-                )
-                .border(
-                    1.dp,
-                    Brush.verticalGradient(
-                        0f to Color.White.copy(alpha = PillLook.rimAlpha(d)),
-                        1f to Color.White.copy(alpha = PillLook.rimAlpha(d) * 0.35f),
-                    ),
-                    shape,
-                )
-                .padding(start = 4.dp, end = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Слева — знак режима, как у пилюли на стекле, пока нечего
-            // отменять; ждём Claude — искры: «одно действие — один значок».
-            if (leading != null && !busy) {
-                CompositionLocalProvider(LocalContentColor provides ink.copy(alpha = 0.86f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, content = leading)
-                }
-            } else {
-                Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-                    Icon(
-                        if (busy) Glyphs.Spark else decorGlyph(decor),
-                        contentDescription = null,
-                        tint = ink.copy(alpha = 0.82f),
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            }
-            TextField(
-                value = value,
-                onValueChange = onValueChange,
-                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-                enabled = enabled,
-                placeholder = {
-                    Text(
-                        placeholder,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                },
-                maxLines = maxLines,
-                textStyle = MaterialTheme.typography.bodyLarge,
-                keyboardOptions = KeyboardOptions(imeAction = if (maxLines == 1) ImeAction.Send else ImeAction.Default),
-                keyboardActions = KeyboardActions(onSend = { if (sendEnabled && enabled) onSend() }),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    disabledContainerColor = Color.Transparent,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    disabledIndicatorColor = Color.Transparent,
-                    focusedTextColor = c.onSurface,
-                    unfocusedTextColor = c.onSurface,
-                    disabledTextColor = c.onSurface.copy(alpha = 0.6f),
-                    focusedPlaceholderColor = ink.copy(alpha = 0.64f),
-                    unfocusedPlaceholderColor = ink.copy(alpha = 0.64f),
-                    disabledPlaceholderColor = ink.copy(alpha = 0.5f),
-                    cursorColor = ink,
-                ),
-            )
-            PillOrb(
-                accent = accent,
-                busy = busy,
-                voice = onMic != null && value.isBlank(),
-                listening = listening,
-                sendIcon = sendIcon,
-                active = when {
-                    busy -> false
-                    onMic != null && value.isBlank() -> enabled || listening
-                    else -> sendEnabled && enabled
-                },
-                onClick = {
-                    if (onMic != null && value.isBlank()) onMic() else if (sendEnabled && enabled) onSend()
-                },
-            )
-        }
+    val icons: (@Composable RowScope.() -> Unit)? = when {
+        leading != null && extras != null -> ({ leading(); extras() })
+        else -> leading ?: extras
     }
+    SayBar(
+        value = value,
+        onValueChange = onValueChange,
+        placeholder = placeholder,
+        onSend = onSend,
+        modifier = modifier,
+        onMic = onMic,
+        listening = listening,
+        sendEnabled = sendEnabled,
+        enabled = enabled,
+        maxLines = maxLines,
+        busy = busy,
+        busyLabel = busyLabel,
+        trailing = icons,
+        sendIcon = sendIcon,
+    )
 }
 
 /**
- * Кружок пилюли — клавиша цвета режима (`keyFace`), почти чистый цвет: одно
- * пятно краски на всей строке, как у пилюли на стекле. Голос — три полоски
- * (выше, пока слушает), «отправить» — стрелка, ожидание — секунды до ответа
- * или искры, если обещанное время вышло.
+ * Значок внутри строки «сказать» — для [VoiceInput.leading]: снимок,
+ * галерея, штрихкод, «из буфера».
  */
 @Composable
-private fun PillOrb(
-    accent: Int,
-    busy: Boolean,
-    voice: Boolean,
-    listening: Boolean,
-    sendIcon: ImageVector,
-    active: Boolean,
-    onClick: () -> Unit,
-) {
-    val ink = Color(0xFFF7F3EA)
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    Box(
-        Modifier
-            .size(44.dp)
-            .keyFace(Color(PillLook.orb(accent)).copy(alpha = if (active || busy) 1f else 0.5f), CircleShape, lit = !pressed)
-            .clickable(
-                interactionSource = interaction,
-                indication = LocalIndication.current,
-                enabled = active,
-                role = Role.Button,
-                onClick = onClick,
-            )
-            .semantics { contentDescription = if (voice) (if (listening) "остановить" else "голосом") else "отправить" },
-        contentAlignment = Alignment.Center,
-    ) {
-        when {
-            busy -> {
-                val seconds by LocalClaudeSeconds.current
-                val label = seconds
-                if (label != null) {
-                    Text(
-                        label,
-                        color = ink,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = if (label.length > 3) 12.sp else 14.sp,
-                        style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = "tnum"),
-                    )
-                } else {
-                    Icon(Glyphs.Spark, contentDescription = null, tint = ink, modifier = Modifier.size(18.dp))
-                }
-            }
-            voice -> Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
-                val k = if (listening) 1.25f else 1f
-                for (h in listOf(10, 18, 13)) {
-                    Box(Modifier.width(3.dp).height((h * k).dp).clip(RoundedCornerShape(2.dp)).background(ink))
-                }
-            }
-            else -> Icon(sendIcon, contentDescription = null, tint = ink.copy(alpha = if (active) 1f else 0.6f), modifier = Modifier.size(19.dp))
-        }
-    }
-}
+fun PillAction(icon: ImageVector, description: String, onClick: () -> Unit, enabled: Boolean = true) =
+    SayIcon(icon, description, onClick, enabled)
 
 /**
- * Значок внутри пилюли слева — мишень 40 dp, цвет — чернила пилюли. Для
- * [VoiceInput.leading]: снимок, галерея, штрихкод, «из буфера».
- */
-@Composable
-fun PillAction(icon: ImageVector, description: String, onClick: () -> Unit, enabled: Boolean = true) {
-    Box(
-        Modifier
-            .size(40.dp)
-            .clip(CircleShape)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = description },
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = LocalContentColor.current.copy(alpha = if (enabled) LocalContentColor.current.alpha else 0.35f),
-            modifier = Modifier.size(20.dp),
-        )
-    }
-}
-
-/**
- * Пилюля наверху вкладки — единое место «сказать режиму» (26.09.2026, вечер,
- * владелец: «в каждом должно быть наверху вот такая плашка… как вылезает, когда
- * нажимаем на кнопку… должна быть единая система»). Та же [VoiceInput] с полями
- * экрана: во вкладке она первой строкой под шапкой.
+ * Место строки «сказать». До 4.0 пилюля стояла первой строкой вкладки; теперь
+ * строка внизу экрана (DESIGN §11.4): вкладки, которые ещё не переехали,
+ * получают её отступы.
  */
 @Composable
 fun TopPill(content: @Composable () -> Unit) {
-    Box(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 4.dp)) { content() }
+    Box(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 4.dp)) { content() }
 }
 
 /** Знак режима — тот же, что у его кнопки внизу и на стекле. */
@@ -1143,20 +850,30 @@ internal fun decorGlyph(decor: ModeDecor): ImageVector = when (decor) {
  */
 @Composable
 fun ThinkingLine(label: String, modifier: Modifier = Modifier) {
+    // Правка 4.0 (DESIGN §4.4): «Claude думает» — заливка слева направо
+    // tint @ .25 по строке, слово и секунды до ответа; без пульса.
     GlowBusy(true)
-    val c = MaterialTheme.colorScheme
+    val mode = LocalMode.current
+    val t = LocalPravkaType.current
     val seconds by LocalClaudeSeconds.current
-    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        Icon(Glyphs.Spark, contentDescription = null, tint = c.primary, modifier = Modifier.size(18.dp))
+    val progress by LocalClaudeProgress.current
+    val shape = RoundedCornerShape(12.dp)
+    Row(
+        modifier
+            .clip(shape)
+            .drawBehind {
+                val f = (progress ?: 1f).coerceIn(0f, 1f)
+                drawRect(mode.tint.copy(alpha = 0.25f), size = androidx.compose.ui.geometry.Size(size.width * f, size.height))
+            }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Glyphs.Spark, contentDescription = null, tint = mode.label, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(8.dp))
-        Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+        Text(label, style = t.body, color = Ink.Text, fontWeight = FontWeight.Medium)
         val s = seconds
         if (s != null) {
-            Text(
-                " · ещё $s с",
-                style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
-                color = c.onSurfaceVariant,
-            )
+            Text(" · ещё $s с", style = t.meta, color = mode.meta)
         }
     }
 }
@@ -1179,12 +896,15 @@ fun DayNav(
     subtitle: String? = null,
     onTitleClick: (() -> Unit)? = null,
 ) {
-    val c = MaterialTheme.colorScheme
+    // Правка 4.0 (DESIGN §11.7 DayNavigator): «‹ Сегодня / понедельник, 5
+    // октября ›»; вперёд некуда — «›» тоном `textDisabled`.
+    val mode = LocalMode.current
+    val t = LocalPravkaType.current
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        GlyphButton(Glyphs.Back, "день назад", onClick = onPrev, tint = c.onSurface)
+        GlyphButton(Glyphs.Back, "день назад", onClick = onPrev, tint = mode.label, size = 44.dp)
         Column(
             Modifier
                 .weight(1f)
@@ -1193,12 +913,20 @@ fun DayNav(
                 .padding(vertical = 2.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+            Text(title, style = t.valueS, color = Ink.Text, maxLines = 1)
             if (!subtitle.isNullOrBlank()) {
-                Text(subtitle, style = MaterialTheme.typography.labelMedium, color = c.onSurfaceVariant, maxLines = 1)
+                Text(subtitle, style = t.label, color = mode.label, maxLines = 1)
             }
         }
-        GlyphButton(Glyphs.Forward, "день вперёд", onClick = { onNext?.invoke() }, enabled = onNext != null, tint = c.onSurface)
+        Box(
+            Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .clickable(enabled = onNext != null, role = Role.Button, onClickLabel = "день вперёд") { onNext?.invoke() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Glyphs.Forward, "день вперёд", tint = if (onNext != null) mode.label else Ink.TextDisabled, modifier = Modifier.size(22.dp))
+        }
     }
 }
 
@@ -1225,16 +953,15 @@ fun PaperSlider(
 ) {
     Column(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(title, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Text(title, style = LocalPravkaType.current.bodyL, color = Ink.Text, modifier = Modifier.weight(1f))
             Text(
                 valueText,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.SemiBold,
+                style = LocalPravkaType.current.valueS,
+                color = LocalMode.current.value,
             )
             if (!info.isNullOrBlank()) InfoButton(title, info)
         }
-        androidx.compose.material3.Slider(
+        Slider4(
             value = value,
             onValueChange = onValueChange,
             onValueChangeFinished = onValueChangeFinished,

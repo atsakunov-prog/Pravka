@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -109,9 +110,10 @@ fun ModeFrame(decor: ModeDecor, content: @Composable () -> Unit) {
 }
 
 /**
- * Шапка вкладки: пиктограмма режима в плашке краской режима, название с
- * засечками, справа — значки действий. Служебные экраны под
- * «Ещё» дают [onBack] — тогда слева стоит «‹».
+ * Шапка экрана — Правка 4.0 (DESIGN §11.2 ModeHeader): «‹», монета режима
+ * (у служебных экранов — значок), название Literata 24, второй тон — под
+ * названием ([titleExtra] — главный выбор, тап — [onTitleExtra]), справа —
+ * значки без капсулы. Строка состояния — над шапкой (`statusBarsPadding`).
  */
 @Composable
 fun TabHeader(
@@ -120,175 +122,43 @@ fun TabHeader(
     onBack: (() -> Unit)? = null,
     subtitle: String? = null,
     glyph: ImageVector? = null,
-    /**
-     * Второй тон названия — главный выбор вкладки, как «Pro Extended ⌄» у
-     * Gemini (версия 3): у Правки — модель чистки, у Денег — «Личное · ЗФ».
-     * Только там, где выбор настоящий; тап — [onTitleExtra].
-     */
     titleExtra: String? = null,
     onTitleExtra: (() -> Unit)? = null,
     actions: (@Composable RowScope.() -> Unit)? = null,
 ) {
-    val badge = icon ?: glyph?.let { rememberVectorPainter(it) }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(start = if (onBack != null) 4.dp else 16.dp, end = 4.dp, top = 8.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (onBack != null) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Glyphs.Back,
-                    contentDescription = "назад",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp),
-                )
-            }
-        }
-        if (badge != null) {
-            Box(
-                Modifier
-                    .size(36.dp)
-                    .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(10.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    badge,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-        }
-        Column(Modifier.weight(1f)) {
-            // Полоски под названием больше нет (владелец, 24.09.2026:
-            // «подчёркивания под названиями какие-то странные»). Короткая
-            // черта одной длины под словами разной длины читалась ссылкой
-            // или опечаткой вёрстки; режим теперь держит значок в краске
-            // режима слева, а название — просто название.
-            if (titleExtra == null) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.headlineSmall,
-                    maxLines = 1,
-                )
-            } else {
-                Row(
-                    Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .then(if (onTitleExtra != null) Modifier.clickable(onClick = onTitleExtra) else Modifier),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        title,
-                        style = MaterialTheme.typography.headlineSmall,
-                        maxLines = 1,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        titleExtra,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Normal,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    if (onTitleExtra != null) {
-                        Icon(
-                            Glyphs.ChevronDown,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 2.dp).size(16.dp),
-                        )
-                    }
-                }
-            }
-            if (subtitle != null) {
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    modifier = Modifier.padding(top = 3.dp),
-                )
-            }
-        }
-        if (actions != null) HeaderCapsule(actions)
-    }
-}
-
-/**
- * Значки шапки — в одной стеклянной капсуле, как карандаш с тремя точками
- * у Gemini (версия 3). Не прихоть: тонкие серые значки на свете режима
- * тонут, капсула даёт им подложку — тёмное стекло с той же фаской, что у
- * плашек, светлой сверху и тёмной снизу.
- */
-@Composable
-private fun HeaderCapsule(actions: @Composable RowScope.() -> Unit) {
-    val shape = RoundedCornerShape(50)
-    Row(
-        Modifier
-            .clip(shape)
-            .background(CAPSULE_GLASS)
-            .border(
-                1.dp,
-                Brush.verticalGradient(
-                    0f to Color.White.copy(alpha = 0.12f),
-                    0.5f to Color.Transparent,
-                    1f to Color.Black.copy(alpha = 0.3f),
-                ),
-                shape,
-            )
-            .padding(horizontal = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        content = actions,
+    val decor = LocalModeDecor.current
+    ModeHeader(
+        title = title,
+        decor = decor,
+        onBack = onBack,
+        subtitle = titleExtra ?: subtitle,
+        onSubtitle = onTitleExtra,
+        glyph = glyph,
+        actions = actions,
+        modifier = Modifier.statusBarsPadding(),
     )
 }
 
-/** Тёмное стекло капсулы: ночь фона на просвет — свет режима под ней чуть виден. */
-private val CAPSULE_GLASS = Color(0x8C0C0B09)
-
-/** Значок действия в шапке: штриховая пиктограмма цветом второго плана. */
+/** Значок действия в шапке — 22 dp в цели 44, без капсулы. */
 @Composable
-fun HeaderAction(icon: ImageVector, description: String, onClick: () -> Unit, tint: Color? = null) {
-    IconButton(onClick = onClick) {
-        Icon(
-            icon,
-            contentDescription = description,
-            tint = tint ?: MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(22.dp),
-        )
-    }
-}
+fun HeaderAction(icon: ImageVector, description: String, onClick: () -> Unit, tint: Color? = null) =
+    HeaderIcon(icon, description, onClick, tint)
 
-/** Доллар в шапке — стоимость обращений к API. Знак шрифтом, а не картинкой: он и есть надпись. */
+/** «$» — стоимость Claude (attach_money, DESIGN §9). */
 @Composable
-fun CostAction(onClick: () -> Unit) {
-    IconButton(onClick = onClick) {
-        Text(
-            "$",
-            fontSize = 20.sp,
-            fontFamily = FontFamily.Serif,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
+fun CostAction(onClick: () -> Unit) = HeaderIcon(Glyphs.Dollar, "стоимость Claude", onClick)
 
-/** Шестерёнка: настройки именно этого режима. Тем же штрихом, что остальные значки. */
+/** Шестерёнка: настройки именно этого режима. */
 @Composable
-fun SettingsAction(onClick: () -> Unit) = HeaderAction(Glyphs.Gear, "настройки режима", onClick)
+fun SettingsAction(onClick: () -> Unit) = HeaderIcon(Glyphs.Gear, "настройки режима", onClick)
 
-/** Статистика: круговая диаграмма — круглая, в пару шестерёнке, и не путается с часами Засечки. */
+/** Статистика — Общая статистика (donut_small, DESIGN §9). */
 @Composable
-fun StatsAction(onClick: () -> Unit) = HeaderAction(Glyphs.Stats, "статистика", onClick)
+fun StatsAction(onClick: () -> Unit) = HeaderIcon(Glyphs.Stats, "статистика", onClick)
 
 /** Выгрузка: стрелка из лотка. */
 @Composable
-fun ExportAction(onClick: () -> Unit) = HeaderAction(Glyphs.Export, "выгрузка", onClick)
+fun ExportAction(onClick: () -> Unit) = HeaderIcon(Glyphs.Export, "выгрузка", onClick)
 
 // ---------------------------------------------------------------------------
 // Край ленты под шапкой
@@ -302,7 +172,7 @@ fun ExportAction(onClick: () -> Unit) = HeaderAction(Glyphs.Export, "выгру�
  * туман: верхние [SCROLL_FADE_DP] ленты сходят в прозрачность, и плашка
  * уходит под шапку в свет, как у Gemini.
  */
-const val SCROLL_FADE_DP = 24
+const val SCROLL_FADE_DP = 40
 
 /**
  * Растворение верха ленты по её состоянию. Пока лента стоит в начале, края нет

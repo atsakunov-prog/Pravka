@@ -39,14 +39,17 @@ import ru.zf.pravka.core.Micronutrients
 // (private в MainActivity.kt), но вкладкам «Спорт» и «Еда» они нужны обеим -
 // а два экрана с чуть разными отступами выглядят как два приложения.
 
-/** Малый прописной заголовок над карточкой, чернилами акцента. */
+/**
+ * Заголовок раздела над плашкой — overline Правки 4.0 (DESIGN §11.7
+ * SectionHeader): прописными с разрядкой, в подписи режима.
+ */
 @Composable
 fun PaperLabel(text: String, color: Color? = null) {
     Text(
         text.uppercase(Locale.forLanguageTag("ru")),
-        style = MaterialTheme.typography.labelMedium,
-        color = color ?: MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
+        style = LocalPravkaType.current.overline,
+        color = color ?: LocalMode.current.label,
+        modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 6.dp, bottom = 8.dp),
     )
 }
 
@@ -71,9 +74,11 @@ fun Modifier.bevel(shape: Shape? = null): Modifier = composed {
 }
 
 /**
- * Карточка с необязательной подписью над ней. [info] — пояснение, которое
- * раньше лежало абзацем в конце плашки: теперь оно за «i» в строке подписи
- * (24.09.2026), а на плашке остаётся сама вещь.
+ * Плашка с необязательным заголовком раздела над ней. Правка 4.0 (07.10.2026,
+ * DESIGN §8): плашка — стекло в чернилах режима (на «Сегодня» — нейтральное,
+ * на служебных экранах — в цвете Правки), радиус 22; заголовок — overline
+ * над плашкой, справа «i» и [trailing]. [info] — пояснение за «i»: на
+ * плашке — сама вещь, а не инструкция.
  */
 @Composable
 fun PaperCard(
@@ -83,92 +88,36 @@ fun PaperCard(
     info: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val mode = LocalMode.current
     Column(Modifier.fillMaxWidth()) {
         if (label != null || trailing != null || info != null) {
             Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                Modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (label != null) PaperLabel(label, labelColor) else Box {}
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (info != null) InfoButton(label ?: "Пояснение", info, size = 30.dp)
-                    trailing?.invoke()
-                }
-            }
-        }
-        // Узор знаков режима — на самой плашке, под текстом (владелец, 15.09).
-        val decor = LocalModeDecor.current
-        // Фаска, свет сверху и зерно — те же слои, что у стекла диска
-        // (владелец, 20.09.2026: «сделаешь тогда их характеристики и у
-        // плашек», потом «потемнее и с такими же эффектами, как и диск»).
-        // Плоский прямоугольник тёмного тёплого цвета читается пылью; тот же
-        // цвет с ребром, светом и зерном — предметом. Каждый слой со своим
-        // тумблером: `ui/CardLook.kt`.
-        val look = LocalCardLook.current
-        // Во вкладке режима плашка — стекло в чернилах пилюли с цветом кнопки
-        // (`Modifier.modeGlass`, третий заход 27.09.2026: «что-то с плашками
-        // надо сделать»); на служебных экранах — прежний нейтральный тон с
-        // фаской, светом и зерном.
-        val accent = decor?.glowAccent
-        if (decor != null && accent != null) {
-            val shape = RoundedCornerShape(CardLook.MODE_RADIUS_DP.dp)
-            Box(Modifier.fillMaxWidth().modeGlass(accent, shape, look)) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .then(if (look.grain) Modifier.grain(CardLook.GRAIN) else Modifier)
-
-                ) {
-                    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
-                        Column(Modifier.fillMaxWidth().padding(16.dp), content = content)
-                    }
-                }
-            }
-            return@Column
-        }
-        Card(
-            modifier = Modifier.fillMaxWidth().then(if (look.bevel) Modifier.bevel() else Modifier),
-            colors = CardDefaults.cardColors(
-                containerColor = darkened(MaterialTheme.colorScheme.surfaceContainerLow, look.darken),
-            ),
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    // Блик полосой по верхней трети и лёгкое затенение по
-                    // нижней пятой — ровно как у плашек на стекле, а не
-                    // градиент во всю высоту: тот читался заливкой.
-                    .then(
-                        if (look.light) Modifier
-                            .background(
-                                Brush.verticalGradient(
-                                    0f to Color.White.copy(alpha = CardLook.SHEEN),
-                                    CardLook.SHEEN_SPAN * 0.55f to Color.White.copy(alpha = CardLook.SHEEN * 0.3f),
-                                    CardLook.SHEEN_SPAN to Color.Transparent,
-                                )
-                            )
-                            .background(
-                                Brush.verticalGradient(
-                                    1f - CardLook.FOOT_SPAN to Color.Transparent,
-                                    1f to Color.Black.copy(alpha = CardLook.FOOT),
-                                )
-                            )
-                        else Modifier
-                    )
-                    .then(if (look.grain) Modifier.grain(CardLook.GRAIN) else Modifier)
-
-            ) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    content = content,
+                Text(
+                    (label ?: "").uppercase(Locale.forLanguageTag("ru")),
+                    style = LocalPravkaType.current.overline,
+                    color = labelColor ?: mode.label,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
+                if (info != null) InfoDot(label ?: "Пояснение", info)
+                trailing?.invoke()
+            }
+        }
+        val shape = RoundedCornerShape(PLATE_RADIUS)
+        Box(Modifier.fillMaxWidth().glass(shape, mode.glass)) {
+            CompositionLocalProvider(LocalContentColor provides Ink.Text) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), content = content)
             }
         }
     }
 }
+
+/** Радиус плашки-стекла (DESIGN §7: плашки 22–24). */
+val PLATE_RADIUS = 22.dp
 
 /** Мелкий серый текст под значением: «база 45 за две недели». */
 @Composable

@@ -207,4 +207,26 @@ object Glyphs {
     val Nfc: ImageVector get() = pick("Nfc") { sw -> glyph("Nfc", sw, "M6 8.5a5 5 0 0 1 0 7M9.5 5.5a9.5 9.5 0 0 1 0 13M13 3a13 13 0 0 1 0 18") }
     val Car: ImageVector get() = pick("Car") { sw -> glyph("Car", sw, "M5 17h14M5 17a2 2 0 1 1-4 0v-5l2.5-6h17l2.5 6v5a2 2 0 1 1-4 0", circle(7f, 17f, 2f), circle(17f, 17f, 2f)) }
     val Wifi: ImageVector get() = pick("Wifi") { sw -> glyph("Wifi", sw, "M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M2 9a15 15 0 0 1 20 0M12 20h.01") }
+
+    // ---- Правка 4.0 (07.10.2026, DESIGN §9) ----
+    // Почерк 4.0 — Material Symbols Rounded 300; наш штрих ниже — запас для
+    // второго положения настроек «почерк значков».
+    val ArrowUp: ImageVector get() = pick("ArrowUp") { sw -> glyph("ArrowUp", sw, "M12 19V5M5.5 11.5L12 5l6.5 6.5") }
+    val ArrowDown: ImageVector get() = pick("ArrowDown") { sw -> glyph("ArrowDown", sw, "M12 5v14M5.5 12.5L12 19l6.5-6.5") }
+    val Menu: ImageVector get() = pick("Menu") { sw -> glyph("Menu", sw, "M4 7h16M4 12h16M4 17h16") }
+    val Dollar: ImageVector get() = pick("Dollar") { sw -> glyph("Dollar", sw, "M12 2v20M17 6.5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6") }
+    val CloudOff: ImageVector get() = pick("CloudOff") { sw -> glyph("CloudOff", sw, "M18 10h-1.26A8 8 0 0 0 7.5 5.2M4.6 8.7A8 8 0 0 0 9 20h9a5 5 0 0 0 2.3-.6M3 3l18 18") }
+    val Error: ImageVector get() = pick("Error") { sw -> glyph("Error", sw, circle(12f, 12f, 9f), "M12 7.5v5.5M12 16.5h.01") }
+    val Groups: ImageVector get() = pick("Groups") { sw -> glyph("Groups", sw, circle(9f, 9f, 3f), "M3.5 19c.6-3 2.8-4.6 5.5-4.6s4.9 1.6 5.5 4.6", circle(17f, 9.5f, 2.4f), "M16 14.6c2.5 0 4.3 1.3 4.8 4") }
+    val Telegram: ImageVector get() = pick("Telegram") { sw -> glyph("Telegram", sw, "M21 3L3 10.5l6.8 2.7L12.5 21 21 3zM9.8 13.2L21 3") }
+    val Mail: ImageVector get() = pick("Mail") { sw -> glyph("Mail", sw, rect(3f, 5f, 18f, 14f, 2f), "M3.5 6.5L12 13l8.5-6.5") }
+    val Sunny: ImageVector get() = pick("Sunny") { sw -> glyph("Sunny", sw, circle(12f, 12f, 4f), "M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4") }
+    val Rainy: ImageVector get() = pick("Rainy") { sw -> glyph("Rainy", sw, "M7.5 15.5h9a3.5 3.5 0 0 0 .3-7 5 5 0 0 0-9.6 1.2A2.9 2.9 0 0 0 7.5 15.5z", "M8 18.5l-1 2M12 18.5l-1 2M16 18.5l-1 2") }
+    val Umbrella: ImageVector get() = pick("Umbrella") { sw -> glyph("Umbrella", sw, "M3 12a9 9 0 0 1 18 0z", "M12 12v6.5a2 2 0 0 1-4 0") }
+    val Snowy: ImageVector get() = pick("Snowy") { sw -> glyph("Snowy", sw, "M7.5 15.5h9a3.5 3.5 0 0 0 .3-7 5 5 0 0 0-9.6 1.2A2.9 2.9 0 0 0 7.5 15.5z", "M8 19h.01M12 20h.01M16 19h.01") }
+    val Foggy: ImageVector get() = pick("Foggy") { sw -> glyph("Foggy", sw, "M7.5 13.5h9a3.5 3.5 0 0 0 .3-7 5 5 0 0 0-9.6 1.2A2.9 2.9 0 0 0 7.5 13.5z", "M5 17h14M7 20h10") }
+    val Thunder: ImageVector get() = pick("Thunder") { sw -> glyph("Thunder", sw, "M7.5 14.5h9a3.5 3.5 0 0 0 .3-7 5 5 0 0 0-9.6 1.2A2.9 2.9 0 0 0 7.5 14.5z", "M12.5 15l-2 3.5h3l-2 3.5") }
+    val Bedtime: ImageVector get() = pick("Bedtime") { sw -> glyph("Bedtime", sw, "M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z") }
+    val PartlyCloudy: ImageVector get() = pick("PartlyCloudy") { sw -> glyph("PartlyCloudy", sw, "M9 18.5h8a3 3 0 0 0 .2-6 4.4 4.4 0 0 0-8.4 1A2.6 2.6 0 0 0 9 18.5z", "M7 4v1.5M3.4 7.5l1 .8M2.5 12h1.5", "M10.2 8.6A4 4 0 0 0 4 11.5") }
+    val NightCloud: ImageVector get() = pick("NightCloud") { sw -> glyph("NightCloud", sw, "M9 19h8a3 3 0 0 0 .2-6 4.4 4.4 0 0 0-8.4 1A2.6 2.6 0 0 0 9 19z", "M12 6.5A5.5 5.5 0 0 0 5.5 13") }
 }

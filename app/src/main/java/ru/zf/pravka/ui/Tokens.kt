@@ -50,6 +50,8 @@ object Ink {
 @Immutable
 class GlassSpec(
     val base: Color,
+    /** Цвет налёта — сама кнопка режима. */
+    val key: Color = Color.Transparent,
     val inkAlpha: Float,
     val keyTop: Float,
     val keyBottom: Float,
@@ -99,7 +101,7 @@ class ModeColors(
 
 private fun modeGlass(key: Color, ink: Color, tint: Color, inkA: Float, top: Float, bottom: Float, sheen: Float = 0.13f, rimTop: Float = 0.36f) =
     GlassSpec(
-        base = ink, inkAlpha = inkA, keyTop = top, keyBottom = bottom,
+        base = ink, key = key, inkAlpha = inkA, keyTop = top, keyBottom = bottom,
         sheenColor = tint, sheen = sheen,
         rimColor = tint, rim = 0.20f, rimTopColor = tint, rimTop = rimTop,
         innerTop = Color.White.copy(alpha = 0.07f),

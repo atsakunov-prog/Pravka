@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Правка 4.0 (07.10.2026): строки новых экранов — отдельным файлом, чтобы
+     strings.xml, который делят экраны и оверлей, не менялся. -->
+<resources>
+    <string name="tab_today">Сегодня</string>
+    <string name="tab_showcase">Витрина</string>
+</resources>

@@ -286,7 +286,11 @@ class MainActivity : ComponentActivity() {
                 // Секунды до ответа Claude — одни часы на всё приложение
                 // (версия 3): строка «Причёсываю · ещё 6 с» и кружок строки ввода.
                 val claudeSeconds = ru.zf.pravka.ui.rememberClaudeSeconds(app.liveWork)
-                androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalClaudeSeconds provides claudeSeconds) {
+                val claudeProgress = ru.zf.pravka.ui.rememberClaudeProgress(app.liveWork)
+                androidx.compose.runtime.CompositionLocalProvider(
+                    ru.zf.pravka.ui.LocalClaudeSeconds provides claudeSeconds,
+                    ru.zf.pravka.ui.LocalClaudeProgress provides claudeProgress,
+                ) {
                 MainScreen(
                     app = app,
                     initialTab = initialTab,
@@ -363,6 +367,8 @@ internal enum class Tab(val titleRes: Int) {
     STATS(R.string.tab_stats),
     /** Разборы: ночной разбор диктовок и тень второй модели — отчёты, ответ текстом (16.09.2026). */
     REVIEWS(R.string.tab_reviews),
+    /** Витрина набора деталей Правки 4.0 — только в debug-сборке, «Ещё → Служебное». */
+    SHOWCASE(R.string.tab_showcase),
 }
 
 /**
@@ -431,6 +437,7 @@ private fun serviceHint(tab: Tab): String = when (tab) {
     Tab.LEARNING -> "разбор твоих правок и принятые правила"
     Tab.REVIEWS -> "ночной разбор, правка промпта, сравнение"
     Tab.LOGS -> "что делала служба, выгрузки для разбора"
+    Tab.SHOWCASE -> "все детали набора во всех состояниях"
     else -> ""
 }
 
@@ -488,7 +495,7 @@ private fun MoreList(onOpen: (Tab) -> Unit) {
 
 private val MORE_SHELVES: List<Pair<String, List<Tab>>> = listOf(
     "правка изнутри" to listOf(Tab.REVIEWS, Tab.DICTIONARY, Tab.PROMPTS, Tab.LEARNING),
-    "служебное" to listOf(Tab.LOGS, Tab.SETTINGS),
+    "служебное" to listOfNotNull(Tab.LOGS, Tab.SETTINGS, Tab.SHOWCASE.takeIf { BuildConfig.DEBUG }),
 )
 
 /**
@@ -749,7 +756,9 @@ private fun MainScreen(
                                     onOpen = { g -> pages = pages + Page.ModeSettings(g) },
                                 )
                             }
-                            is Page.Service -> {
+                            is Page.Service -> if (p.tab == Tab.SHOWCASE) {
+                                ru.zf.pravka.ui.ShowcaseScreen(onBack = pop)
+                            } else {
                                 TabHeader(
                                     title = stringResource(p.tab.titleRes),
                                     glyph = serviceGlyph(p.tab),
