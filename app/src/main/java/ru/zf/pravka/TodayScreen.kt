@@ -45,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -56,6 +57,8 @@ import ru.zf.pravka.core.CalendarRules
 import ru.zf.pravka.core.DayAssembler
 import ru.zf.pravka.core.DayAssembler.DayItem
 import ru.zf.pravka.core.DayReport
+import ru.zf.pravka.core.TodayFold
+import ru.zf.pravka.core.DayState
 import ru.zf.pravka.core.Dela
 import ru.zf.pravka.core.DelaViews
 import ru.zf.pravka.core.Fmt
@@ -202,6 +205,8 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
     val pOn by app.settings.mScopePersonalFlow.collectAsState(initial = true)
     val zOn by app.settings.mScopeZfFlow.collectAsState(initial = false)
     val profile by app.profileStore.flow.collectAsState()
+    val health by app.sportStore.healthFlow.collectAsState()
+    val stateOn by app.settings.todayStateFlow.collectAsState(initial = true)
 
     // Календарь — раз в пять минут и при смене дня: чтение провайдера — не на главном потоке.
     val calendar by produceState(emptyList<ru.zf.pravka.core.CalEvent>(), day, todayCals, autoCals) {
@@ -220,6 +225,16 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
     val weather by produceState<ru.zf.pravka.data.WeatherStore.Result?>(null, day, city) {
         value = runCatching { app.weatherStore.today(city, day) }.getOrNull()
     }
+
+    // Тихая строка состояния под днём (баг №13): светофор Спорта и три его
+    // числа — только сегодняшние: вчерашний HRV на главном экране врал бы.
+    val state = remember(health, planDays, stateOn, day, today) {
+        if (!stateOn || day != today) null
+        else health.firstOrNull()?.takeIf { it.date == today.toString() }?.let {
+            runCatching { DayState.of(app.trafficLight.today(today.toString())) }.getOrNull()
+        }
+    }
+    var weatherOpen by remember { mutableStateOf(false) }
 
     val me = link?.user ?: app.delaStore.me
     val model = remember(entries, categories, meals, money, workouts, planDays, gtg, snap, calendar, now, day, bedtime, marksOn, kcalGoal, budget, pOn, zOn, onServer) {
@@ -294,11 +309,16 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = twoPane()
+        val head = TodayHead(state, onWeather = { weatherOpen = true })
         if (wide) {
-            TodayWide(model, weather, now, dayOffset, { dayOffset = it }, initial, nav, onItem, sayBar)
+            TodayWide(model, weather, now, dayOffset, { dayOffset = it }, initial, nav, onItem, sayBar, head)
         } else {
-            TodayFolded(model, weather, now, dayOffset, { dayOffset = it }, initial, nav, onItem, sayBar)
+            TodayFolded(model, weather, now, dayOffset, { dayOffset = it }, initial, nav, onItem, sayBar, head)
         }
+    }
+    val w = weather
+    if (weatherOpen && w != null) {
+        WeatherSheet(w, day, today, onDismiss = { weatherOpen = false })
     }
 
     // ---- лист записи (DESIGN §12.12, `screens/13`) ----
@@ -366,6 +386,7 @@ private fun TodayFolded(
     nav: TodayNav,
     act: ItemActions,
     sayBar: @Composable (Modifier) -> Unit,
+    head: TodayHead,
 ) {
     val r = model.result
     val items = r.items
@@ -377,17 +398,41 @@ private fun TodayFolded(
     }
     val list = rememberLazyListState(initialFirstVisibleItemIndex = start)
     // Шапка развёрнута, пока «сейчас» видно в окне или выше него; сжимается,
-    // когда «сейчас» ушло ниже окна — смотрим прошлое (§11.2).
-    val compact by remember(r.nowIndex) {
-        derivedStateOf {
-            val i = r.nowIndex
-            if (i < 0) list.firstVisibleItemIndex > 0 && dayOffset == 0
-            else {
-                val last = list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: Int.MAX_VALUE
-                i > last
-            }
+    // когда «сейчас» ушло ниже окна — смотрим прошлое (§11.2). С памятью
+    // (`core/TodayFold.kt`, баг №2): развернуться — только если «сейчас»
+    // останется видно и после разворота, иначе шапка прыгала у линии.
+    var auto by remember(model.day) { mutableStateOf(false) }
+    // Двойной тап по дню недели — шапка до минимума, пока не тапнут дату
+    // в сжатой (баг №6): своё решение владельца, лента его не перебивает.
+    var forced by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    var tallPx by remember { mutableIntStateOf(0) }
+    var shortPx by remember { mutableIntStateOf(0) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val sayPx = with(density) { 96.dp.roundToPx() }
+    val growGuess = with(density) { 230.dp.roundToPx() }
+    var nowSeen by remember { mutableStateOf(true) }
+    LaunchedEffect(list, r.nowIndex, dayOffset) {
+        androidx.compose.runtime.snapshotFlow {
+            val info = list.layoutInfo
+            val vis = info.visibleItemsInfo
+            val now = vis.firstOrNull { it.index == r.nowIndex }
+            TodayFold.View(
+                first = list.firstVisibleItemIndex,
+                firstOffset = list.firstVisibleItemScrollOffset,
+                last = vis.lastOrNull()?.index ?: -1,
+                nowTop = now?.offset,
+                nowBottom = now?.let { it.offset + it.size },
+                // Нижние 96 dp закрыты строкой «сказать»: там «сейчас» глазу не видно.
+                viewEnd = info.viewportEndOffset - sayPx,
+            )
+        }.collect { v ->
+            val grow = (tallPx - shortPx).takeIf { tallPx > 0 && shortPx > 0 && it > 0 } ?: growGuess
+            auto = TodayFold.next(auto, r.nowIndex, v, grow, today = dayOffset == 0)
+            nowSeen = r.nowIndex >= 0 && r.nowIndex in v.first..v.last &&
+                (v.nowTop == null || v.nowTop < v.viewEnd) && (v.nowBottom == null || v.nowBottom > 0)
         }
     }
+    val compact = forced || auto
     val dim = LocalGlowDim.current
     LaunchedEffect(compact) { dim.floatValue = if (compact) 0.65f else 1f }
     var showNav by remember { mutableStateOf(false) }
@@ -402,9 +447,18 @@ private fun TodayFolded(
                     label = "dayHeader",
                 ) { c ->
                     if (c) {
-                        CompactHeader(model, weather?.summary?.line, nav)
+                        CompactHeader(
+                            model, weather?.summary?.line, nav,
+                            modifier = Modifier.onSizeChanged { shortPx = it.height },
+                            onDate = {
+                                // Свернул сам — тап разворачивает; сжалась сама — тап ведёт к «сейчас».
+                                if (forced) forced = false
+                                else scope.launch { list.animateScrollToItem(if (r.nowIndex >= 0) (r.nowIndex - 2).coerceAtLeast(0) else 0) }
+                                Unit
+                            },
+                        )
                     } else {
-                        Column {
+                        Column(Modifier.onSizeChanged { tallPx = it.height }) {
                             DayHeader(
                                 overline = Fmt.overline(model.day, model.day.minusDays(dayOffset.toLong())),
                                 weekday = Fmt.weekdayTitle(model.day),
@@ -414,6 +468,8 @@ private fun TodayFolded(
                                 avatar = initial,
                                 onAvatar = nav.more,
                                 onWeekday = { showNav = !showNav },
+                                onWeekdayDouble = { showNav = false; forced = true },
+                                status = head.state?.let { st -> { DayStateLine(st, onClick = { nav.mode(Tab.SPORT) }) } },
                             )
                             if (dayOffset != 0 || showNav) {
                                 DayNav(
@@ -424,8 +480,8 @@ private fun TodayFolded(
                                     onTitleClick = { setDay(0) },
                                 )
                             }
-                            WeatherBlock(weather)
-                            TilesRow(model, nav, Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp))
+                            WeatherBlock(weather, head.onWeather)
+                            TilesRow(model, nav, Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp))
                         }
                     }
                 }
@@ -449,7 +505,7 @@ private fun TodayFolded(
         }
         // «↓ сейчас» — справа над строкой «сказать», ровно когда шапка сжата.
         AnimatedVisibility(
-            visible = compact && r.nowIndex >= 0,
+            visible = compact && r.nowIndex >= 0 && !nowSeen,
             enter = fadeIn(tween(200)),
             exit = fadeOut(tween(200)),
             modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(end = 16.dp, bottom = 96.dp),
@@ -466,16 +522,19 @@ private fun TodayFolded(
     }
 }
 
+/** Что шапке «Сегодня» нужно сверх модели дня: строка состояния и тап по погоде. */
+internal class TodayHead(val state: DayState?, val onWeather: () -> Unit)
+
 @Composable
-private fun WeatherBlock(weather: ru.zf.pravka.data.WeatherStore.Result?) {
+private fun WeatherBlock(weather: ru.zf.pravka.data.WeatherStore.Result?, onClick: () -> Unit) {
     val s = weather?.summary ?: return
     Box {
-        WeatherRow(s.cells.map { c -> WeatherCell(skyIcon(c.sky), c.label, c.value, c.dim) }, offline = weather.stale)
+        WeatherRow(s.cells.map { c -> WeatherCell(skyIcon(c.sky), c.label, c.value, c.dim, c.feels) }, offline = weather.stale, onClick = onClick)
         if (weather.stale) OfflineChip(Modifier.align(Alignment.TopEnd).padding(end = 20.dp))
     }
 }
 
-private fun skyIcon(s: WeatherDay.Sky) = when (s) {
+internal fun skyIcon(s: WeatherDay.Sky) = when (s) {
     WeatherDay.Sky.CLEAR -> Glyphs.Sunny
     WeatherDay.Sky.PARTLY -> Glyphs.PartlyCloudy
     WeatherDay.Sky.CLOUD -> Glyphs.Cloud
@@ -518,8 +577,8 @@ private fun TilesRow(model: TodayModel, nav: TodayNav, modifier: Modifier = Modi
 
 /** Сжатая шапка: «пн, 5 окт», погода строкой и пять мини-плашек (DESIGN §11.2). */
 @Composable
-private fun CompactHeader(model: TodayModel, weatherLine: String?, nav: TodayNav) {
-    DayHeaderCompact(Fmt.dayShort(model.day), weatherLine, minis = {
+private fun CompactHeader(model: TodayModel, weatherLine: String?, nav: TodayNav, modifier: Modifier = Modifier, onDate: (() -> Unit)? = null) {
+    DayHeaderCompact(Fmt.dayShort(model.day), weatherLine, modifier = modifier, onDate = onDate, minis = {
         MiniStat(Fmt.points(model.result.score), Modes.Zasechka, "Засечка ${Fmt.points(model.result.score)}", { nav.mode(Tab.ZASECHKA) })
         MiniStat("${model.delaDone}/${model.delaTotal}", Modes.Dela, "Дела", { nav.mode(Tab.TODOIST) })
         MiniStat("${model.sportDone}/${model.sportTotal}", Modes.Sport, "Спорт", { nav.mode(Tab.SPORT) })
@@ -543,6 +602,7 @@ private fun TodayWide(
     nav: TodayNav,
     act: ItemActions,
     sayBar: @Composable (Modifier) -> Unit,
+    head: TodayHead,
 ) {
     val t = LocalPravkaType.current
     val f = model.facts
@@ -559,9 +619,13 @@ private fun TodayWide(
                 HeaderIcon(Glyphs.Back, "день назад", { setDay(dayOffset - 1) })
                 HeaderIcon(Glyphs.Forward, "день вперёд", { setDay(dayOffset + 1) }, tint = if (dayOffset >= 0) Ink.TextDisabled else null)
             }
+            head.state?.let { st -> DayStateLine(st, onClick = { nav.mode(Tab.SPORT) }) }
             Box(Modifier.padding(start = 0.dp)) {
                 weather?.summary?.let { s ->
-                    WeatherRow(s.cells.map { c -> WeatherCell(skyIcon(c.sky), c.label, c.value, c.dim) }, Modifier.padding(start = 0.dp), offline = weather.stale)
+                    WeatherRow(
+                        s.cells.map { c -> WeatherCell(skyIcon(c.sky), c.label, c.value, c.dim, c.feels) },
+                        Modifier.padding(start = 0.dp), offline = weather.stale, onClick = head.onWeather,
+                    )
                 }
             }
             TilesRow(model, nav, Modifier.padding(top = 14.dp))
@@ -978,6 +1042,18 @@ internal fun TodaySettings(app: PravkaApp) {
                 onCheckedChange = { on -> scope.launch { s.setTodayMarks(if (on) marks + key else marks - key) } },
             )
         }
+    }
+    val stateOn by s.todayStateFlow.collectAsState(initial = true)
+    ru.zf.pravka.ui.PaperCard(
+        label = "состояние",
+        info = "Строка под днём недели: светофор Спорта точками, сон, HRV и форма из intervals — " +
+            "только за сегодня. Нет свежих данных — строки нет. Тап — Спорт.",
+    ) {
+        ru.zf.pravka.ui.PaperToggle(
+            title = "Сон, HRV и форма под днём",
+            checked = stateOn,
+            onCheckedChange = { on -> scope.launch { s.setTodayState(on) } },
+        )
     }
     val budget by s.moneyMonthBudgetFlow.collectAsState(initial = 0L)
     var budgetText by remember(budget) { mutableStateOf(if (budget > 0) budget.toString() else "") }

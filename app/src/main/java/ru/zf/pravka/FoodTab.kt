@@ -567,8 +567,6 @@ private fun MicroRow(
                 },
                 style = ty.body,
                 color = ru.zf.pravka.ui.Ink.Text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.width(132.dp),
             )
             androidx.compose.foundation.Canvas(Modifier.weight(1f).height(8.dp)) {
@@ -650,7 +648,7 @@ private fun MealCard(
             .padding(horizontal = 18.dp, vertical = 14.dp),
     ) {
         Text(mealTitle(meal), style = ty.bodyStrong.copy(fontSize = ty.bodyL.fontSize, lineHeight = ty.bodyL.lineHeight),
-            color = ru.zf.pravka.ui.Ink.TextStrong, maxLines = if (open) 6 else 2, overflow = TextOverflow.Ellipsis)
+            color = ru.zf.pravka.ui.Ink.TextStrong)
         Text(
             listOfNotNull("≈ ${ru.zf.pravka.core.Fmt.num(meal.kcal)} ккал", macros(meal.protein, meal.fat, meal.carbs), sourceWord(meal.source))
                 .joinToString(" · "),
@@ -685,7 +683,7 @@ private fun MealDetails(app: PravkaApp, meal: FoodStore.Meal) {
     for (item in meal.items) {
         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(item.name, style = ty.body, color = ru.zf.pravka.ui.Ink.Text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(item.name, style = ty.body, color = ru.zf.pravka.ui.Ink.Text)
                 Text(
                     listOfNotNull(
                         if (item.pill) "таблетка" else null,
@@ -746,7 +744,7 @@ private fun MealRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(mealTimeFormat.format(Date(meal.ts)), style = ty.time, color = mode.meta, modifier = Modifier.width(56.dp))
             Column(Modifier.weight(1f)) {
-                Text(mealTitle(meal), style = ty.bodyL, color = ru.zf.pravka.ui.Ink.Text, maxLines = if (open) 6 else 2, overflow = TextOverflow.Ellipsis)
+                Text(mealTitle(meal), style = ty.bodyL, color = ru.zf.pravka.ui.Ink.Text)
                 Text(macros(meal.protein, meal.fat, meal.carbs), style = ty.meta, color = mode.meta)
             }
             Spacer(Modifier.width(10.dp))
@@ -1421,8 +1419,6 @@ private fun RationRow(
             Text(
                 product.shortName,
                 style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
                 color = if (switchable) MaterialTheme.colorScheme.onSurfaceVariant
                 else MaterialTheme.colorScheme.onSurface,
             )

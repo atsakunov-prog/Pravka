@@ -639,7 +639,7 @@ private fun TranscriptRow(
                 }
                 append(" · ").append(entry.chars).append(" зн")
             }
-            Text(meta, style = ty.meta, color = if (!entry.ok) ru.zf.pravka.ui.Ink.Warn else mode.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(meta, style = ty.meta, color = if (!entry.ok) ru.zf.pravka.ui.Ink.Warn else mode.meta)
             entry.error?.let { Text(it, style = ty.label, color = ru.zf.pravka.ui.Ink.Warn) }
             // Глухие окна, долгий старт, гарнитура (28.09.2026): пропало ли слово в
             // распознавании или его вовсе никто не слушал.

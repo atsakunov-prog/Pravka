@@ -184,8 +184,6 @@ private fun FeedbackRow(
                 style = ty.meta,
                 color = if (item.open) mode.label else mode.meta,
                 modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
             GlyphButton(Glyphs.Copy, "скопировать", onClick = onCopy, size = 40.dp, tint = mode.label)
         }

@@ -136,11 +136,16 @@ internal fun CategoriesCard(cats: List<MoneyStats.Category>, spentKop: Long) {
             return@PaperCard
         }
         val groups = MoneyStats.groups(cats)
+        // Тап по куску или строке — подсветка обоих (баг №5).
+        var pick by remember(groups) { mutableStateOf<Int?>(null) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             DonutChart(
                 slices = groups.map { (g, kop) -> ChartSlice(g, kop / 100f, groupColor(g)) },
                 size = 128.dp,
                 thickness = 18.dp,
+                selected = pick,
+                onSelect = { pick = it },
+                valueText = { MoneyFormat.k((it.value * 100).toLong()) },
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(MoneyFormat.k(spentKop), style = MaterialTheme.typography.titleMedium)
@@ -149,8 +154,11 @@ internal fun CategoriesCard(cats: List<MoneyStats.Category>, spentKop: Long) {
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                for ((g, kop) in groups) {
-                    LegendRow(groupColor(g), g, MoneyFormat.k(kop), sub = pct(kop, spentKop))
+                groups.forEachIndexed { i, (g, kop) ->
+                    LegendRow(
+                        groupColor(g), g, MoneyFormat.k(kop), sub = pct(kop, spentKop),
+                        highlight = pick == i, onClick = { pick = ru.zf.pravka.ui.donutToggle(pick, i) },
+                    )
                 }
             }
         }
@@ -172,8 +180,6 @@ internal fun CategoriesCard(cats: List<MoneyStats.Category>, spentKop: Long) {
                             if (c.key.isBlank()) "Без категории" else MoneyCategories.title(c.key),
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.weight(1f, fill = false),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                         )
                         FoldChevron(expanded)
                     }
@@ -189,7 +195,7 @@ internal fun CategoriesCard(cats: List<MoneyStats.Category>, spentKop: Long) {
                     Spacer(Modifier.height(4.dp))
                     for (m in c.merchants.take(12)) {
                         Row(Modifier.fillMaxWidth().padding(start = 17.dp, top = 2.dp)) {
-                            Text(m.name, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            Text(m.name, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                             PaperHint(if (m.count > 1) "${m.count}× " else "")
                             Text(MoneyFormat.k(m.kop), style = MaterialTheme.typography.bodySmall)
                         }

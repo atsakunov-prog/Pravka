@@ -46,4 +46,28 @@ class WeatherDayTest {
         assertEquals("−3°", WeatherDay.temp(-2.6))
         assertNull(WeatherDay.summary(emptyList()))
     }
+
+    @Test
+    fun `ощущается как - серой строкой под температурой, нет данных - нет строки`() {
+        val hours = day().map { it.copy(feels = it.temp - 3.4) }
+        val s = WeatherDay.summary(hours, nowHour = 12)!!
+        assertEquals(listOf("ощущ. +1°", "ощущ. +6°", "ощущ. +4°"), s.cells.take(3).map { it.feels })
+        assertNull(s.cells[3].feels)
+        assertNull(WeatherDay.summary(day(), nowHour = 12)!!.cells[0].feels)
+    }
+
+    @Test
+    fun `лист погоды - подписи дней, диапазон, осадки, часы с текущего`() {
+        val today = java.time.LocalDate.of(2026, 10, 7)
+        assertEquals("сегодня", WeatherDay.dayLabel(today, today))
+        assertEquals("завтра", WeatherDay.dayLabel(today.plusDays(1), today))
+        assertEquals("пт 9", WeatherDay.dayLabel(today.plusDays(2), today))
+        assertEquals("−2…+4°", WeatherDay.range(-2.4, 3.6))
+        assertEquals("+5°", WeatherDay.range(4.8, 5.1))
+        assertEquals("70 % · 2 мм", WeatherDay.rainText(70, 2.2))
+        assertEquals("40 %", WeatherDay.rainText(40, 0.0))
+        assertEquals("", WeatherDay.rainText(0, 0.0))
+        assertEquals(18, WeatherDay.hoursFrom(day(), nowHour = 18).first().hour)
+        assertEquals(24, WeatherDay.hoursFrom(day(), nowHour = null).size)
+    }
 }

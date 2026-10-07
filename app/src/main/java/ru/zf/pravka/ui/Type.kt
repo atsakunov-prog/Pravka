@@ -57,12 +57,21 @@ object PravkaFonts {
 
 private const val TNUM = "tnum"
 
+// Перенос по слогам (баг №10, 07.10.2026: «давай везде переносить по
+// строкам»): текст больше не режется многоточием, и узкая плитка без слогов
+// рвала бы слово посреди («тренирова|нность»). Русский словарь переносов —
+// системный (Android 10+), язык — языка телефона.
+private val HYPHENS = androidx.compose.ui.text.style.Hyphens.Auto
+private val BREAK = androidx.compose.ui.text.style.LineBreak.Paragraph
+
 private fun serif(size: Float, line: Float? = null) = TextStyle(
     fontFamily = PravkaFonts.literata(size.toInt()),
     fontWeight = FontWeight.SemiBold,
     fontSize = size.sp,
     lineHeight = line?.sp ?: TextUnit.Unspecified,
     fontFeatureSettings = TNUM,
+    hyphens = HYPHENS,
+    lineBreak = BREAK,
 )
 
 private fun sans(size: Float, weight: Int, line: Float? = null) = TextStyle(
@@ -71,6 +80,8 @@ private fun sans(size: Float, weight: Int, line: Float? = null) = TextStyle(
     fontSize = size.sp,
     lineHeight = line?.sp ?: TextUnit.Unspecified,
     fontFeatureSettings = TNUM,
+    hyphens = HYPHENS,
+    lineBreak = BREAK,
 )
 
 /**

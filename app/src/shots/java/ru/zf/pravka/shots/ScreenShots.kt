@@ -190,6 +190,7 @@ class ScreenShots {
             Seed.food(app)
             Seed.money(app)
         }
+        Seed.weather(app)
         Seed.pravka(app)
         settle(20)
 
@@ -208,7 +209,11 @@ class ScreenShots {
             var m = launch(tab); shot(m, "$g-1-folded")
             // Второй раздел режима — тем же окном (макеты 07, 09, 11).
             when (g) {
-                "dela" -> if (tap(m, "Новое")) shot(m, "$g-4-novoe")
+                "dela" -> {
+                    if (tap(m, "Новое")) shot(m, "$g-4-novoe")
+                    // ☰ — боковая панель (баг №1, 07.10.2026).
+                    if (tap(m, "разделы, CRM")) screen("$g-5-nav")
+                }
                 "sport" -> if (tap(m, "Путь", exact = true)) shot(m, "$g-4-put")
                 "money" -> if (tap(m, "Журнал", exact = true)) shot(m, "$g-4-zhurnal")
             }
@@ -223,6 +228,8 @@ class ScreenShots {
         // ---- «Сегодня» (Правка 4.0): сложенный, целиком, разворот
         if (want("today")) {
             var t = launch(null); shot(t, "today-01-folded")
+            // Тап по погоде — лист: часы и десять дней (баг №4).
+            if (tap(t, "утро")) screen("today-02-weather")
             close(t)
             RuntimeEnvironment.setQualifiers(OUTER_TALL)
             t = launch(null); shot(t, "today-03-tall"); close(t)

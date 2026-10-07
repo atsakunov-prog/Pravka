@@ -3,6 +3,7 @@ package ru.zf.pravka.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -187,6 +188,10 @@ fun DayHeader(
     modifier: Modifier = Modifier,
     /** Тап по дню недели — навигатор дня (прошлый и будущий день). */
     onWeekday: (() -> Unit)? = null,
+    /** Двойной тап по дню недели — шапка до минимума (баг №6). */
+    onWeekdayDouble: (() -> Unit)? = null,
+    /** Тихая строка под днём недели — состояние: сон, HRV, форма (баг №13). */
+    status: (@Composable () -> Unit)? = null,
 ) {
     val t = LocalPravkaType.current
     Column(modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 2.dp)) {
@@ -194,12 +199,19 @@ fun DayHeader(
         Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             FitText(
                 weekday, style = t.titleL, color = Ink.TextStrong, minSize = 22f,
-                modifier = Modifier.weight(1f).then(if (onWeekday != null) Modifier.clickable(onClickLabel = "другой день", onClick = onWeekday) else Modifier),
+                modifier = Modifier.weight(1f).then(
+                    if (onWeekday != null || onWeekdayDouble != null) Modifier.combinedClickable(
+                        onClickLabel = "другой день",
+                        onClick = onWeekday ?: {},
+                        onDoubleClick = onWeekdayDouble,
+                    ) else Modifier
+                ),
             )
             if (score != null) ZPill(score, onScore)
             HeaderIcon(Glyphs.Stats, "Статистика дня", onStats, tint = Ink.PlanText)
             AvatarKey(avatar, onAvatar)
         }
+        if (status != null) status()
     }
 }
 
@@ -246,14 +258,22 @@ fun DayHeaderCompact(
     weatherLine: String?,
     minis: @Composable RowScope.() -> Unit,
     modifier: Modifier = Modifier,
+    /** Тап (и двойной тап) по дате — развернуть шапку обратно. */
+    onDate: (() -> Unit)? = null,
 ) {
     val t = LocalPravkaType.current
     Row(
-        modifier.fillMaxWidth().height(52.dp).padding(start = 20.dp, end = 12.dp),
+        modifier.fillMaxWidth().height(52.dp).padding(start = 8.dp, end = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Column(Modifier.weight(1f)) {
+        Column(
+            Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(12.dp))
+                .then(if (onDate != null) Modifier.combinedClickable(onClickLabel = "развернуть день", onClick = onDate, onDoubleClick = onDate) else Modifier)
+                .padding(start = 12.dp, top = 4.dp, bottom = 4.dp),
+        ) {
             Text(date, style = t.valueS.copy(fontSize = 14.5.sp, lineHeight = 17.sp), color = Ink.TextStrong, maxLines = 1)
             if (!weatherLine.isNullOrBlank()) {
                 Text(weatherLine, style = t.caption.copy(lineHeight = 17.sp), color = Ink.Caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -263,33 +283,43 @@ fun DayHeaderCompact(
     }
 }
 
-/** Ячейка погоды: значок 20 и две строки — «утро» и «+4°». */
-class WeatherCell(val icon: ImageVector, val label: String, val value: String, val dim: Boolean = false)
+/** Ячейка погоды: значок 20 и строки — «утро», «+4°» и серым «ощущ. +1°» ([feels]). */
+class WeatherCell(val icon: ImageVector, val label: String, val value: String, val dim: Boolean = false, val feels: String? = null)
 
 /**
  * Погода (DESIGN §11.2 WeatherRow): четыре ячейки — утро, день, вечер,
  * осадки («дождь 17–21 / 3 мм · 80 %»). Без данных ряд не показывается —
  * это решает вызывающий: пустой список здесь — пустота, не заглушка.
+ * Под температурой — серым «как ощущается» (баг №9). [onClick] — тап по
+ * ряду: лист с часами и десятью днями (баг №4).
  */
 @Composable
-fun WeatherRow(cells: List<WeatherCell>, modifier: Modifier = Modifier, offline: Boolean = false) {
+fun WeatherRow(cells: List<WeatherCell>, modifier: Modifier = Modifier, offline: Boolean = false, onClick: (() -> Unit)? = null) {
     if (cells.isEmpty()) return
     val t = LocalPravkaType.current
     Row(
-        modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 8.dp),
+        modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 12.dp, top = 4.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .then(if (onClick != null) Modifier.clickable(onClickLabel = "погода по часам и на десять дней", onClick = onClick) else Modifier)
+            .padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.Top,
     ) {
         cells.forEach { c ->
             Row(
                 Modifier.alpha(if (offline) 0.55f else 1f),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Icon(c.icon, null, tint = Ink.WeatherIcon.copy(alpha = if (c.dim) 0.5f else 1f), modifier = Modifier.size(20.dp))
+                Icon(c.icon, null, tint = Ink.WeatherIcon.copy(alpha = if (c.dim) 0.5f else 1f), modifier = Modifier.padding(top = 6.dp).size(20.dp))
                 Column {
                     Text(c.label, style = t.caption.copy(fontSize = 11.sp, lineHeight = 13.sp), color = Ink.Caption, maxLines = 1)
                     Text(c.value, style = t.weather, color = Ink.WeatherText, maxLines = 1)
+                    if (c.feels != null) {
+                        Text(c.feels, style = t.caption.copy(fontSize = 11.sp, lineHeight = 13.sp), color = Ink.Caption.copy(alpha = 0.75f), maxLines = 1)
+                    }
                 }
             }
         }

@@ -710,6 +710,7 @@ private fun CompositionCard(frame: Frame, pool: List<ZasechkaStore.Entry>, now: 
             PaperHint("В ленте за этот день пусто.")
             return@PaperCard
         }
+        var pick by remember(ordered) { mutableStateOf<Int?>(null) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             DonutChart(
                 slices = ordered.map {
@@ -717,6 +718,9 @@ private fun CompositionCard(frame: Frame, pool: List<ZasechkaStore.Entry>, now: 
                 },
                 size = 150.dp,
                 thickness = 22.dp,
+                selected = pick,
+                onSelect = { pick = it },
+                valueText = { dur(DayReport.msToMin(it.value.toLong())) },
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(dur(DayReport.msToMin(elapsed)), style = MaterialTheme.typography.titleMedium)
@@ -731,12 +735,14 @@ private fun CompositionCard(frame: Frame, pool: List<ZasechkaStore.Entry>, now: 
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 val shown = ordered.take(9)
-                for (s in shown) {
+                for ((i, s) in shown.withIndex()) {
                     LegendRow(
                         color = categoryColor(s.category),
                         label = s.category.ifBlank { "без категории" },
                         value = dur(s.minutes),
                         sub = pct(share(s.ms, elapsed)),
+                        highlight = pick == i,
+                        onClick = { pick = ru.zf.pravka.ui.donutToggle(pick, i) },
                     )
                 }
                 if (ordered.size > shown.size) {
@@ -764,7 +770,7 @@ private fun CompositionCard(frame: Frame, pool: List<ZasechkaStore.Entry>, now: 
                     )
                     Spacer(Modifier.width(8.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(t.title, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(t.title, style = MaterialTheme.typography.bodySmall)
                         Box(
                             Modifier.fillMaxWidth(0.98f).height(4.dp)
                                 .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(2.dp)),
@@ -1172,8 +1178,13 @@ private fun PhoneCard(
                     if (cat != null) categoryColor(cat) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = greys[i]),
                 )
             } + (if (restMs > 0) listOf(ChartSlice("прочее", restMs.toFloat(), other.copy(alpha = 0.5f))) else emptyList())
+            var pick by remember(slices) { mutableStateOf<Int?>(null) }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                DonutChart(slices, size = 120.dp, thickness = 18.dp) {
+                DonutChart(
+                    slices, size = 120.dp, thickness = 18.dp,
+                    selected = pick, onSelect = { pick = it },
+                    valueText = { dur(DayReport.msToMin(it.value.toLong())) },
+                ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(dur(phone.screenMin), style = MaterialTheme.typography.titleSmall)
                         PaperHint("экран")
@@ -1181,7 +1192,12 @@ private fun PhoneCard(
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    for (s in slices) LegendRow(s.color, s.label, dur(DayReport.msToMin(s.value.toLong())))
+                    for ((i, s) in slices.withIndex()) {
+                        LegendRow(
+                            s.color, s.label, dur(DayReport.msToMin(s.value.toLong())),
+                            highlight = pick == i, onClick = { pick = ru.zf.pravka.ui.donutToggle(pick, i) },
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(10.dp))
@@ -1543,8 +1559,6 @@ private fun FoodCard(
                         k.replaceFirstChar { it.uppercase() } + (if (list.size > 1) " ×${list.size}" else ""),
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.width(96.dp),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
                     Box(
                         Modifier.weight(1f).height(9.dp)
@@ -1667,10 +1681,13 @@ private fun FoodCard(
             val p = today.protein * 4f
             val f = today.fat * 9f
             val c = today.carbs * 4f
+            var pick by remember { mutableStateOf<Int?>(null) }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 DonutChart(
                     listOf(ChartSlice("белки", p, PROTEIN_INK), ChartSlice("жиры", f, FAT_INK), ChartSlice("углеводы", c, CARBS_INK)),
                     size = 110.dp, thickness = 16.dp,
+                    selected = pick, onSelect = { pick = it },
+                    valueText = { "${Math.round(it.value)} ккал" },
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("${today.kcal}", style = MaterialTheme.typography.titleSmall)
@@ -1679,9 +1696,10 @@ private fun FoodCard(
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    LegendRow(PROTEIN_INK, "Белки", "${today.protein} г", sub = pct((p / macroKcal).toDouble()))
-                    LegendRow(FAT_INK, "Жиры", "${today.fat} г", sub = pct((f / macroKcal).toDouble()))
-                    LegendRow(CARBS_INK, "Углеводы", "${today.carbs} г", sub = pct((c / macroKcal).toDouble()))
+                    val tap = { i: Int -> pick = ru.zf.pravka.ui.donutToggle(pick, i) }
+                    LegendRow(PROTEIN_INK, "Белки", "${today.protein} г", sub = pct((p / macroKcal).toDouble()), highlight = pick == 0, onClick = { tap(0) })
+                    LegendRow(FAT_INK, "Жиры", "${today.fat} г", sub = pct((f / macroKcal).toDouble()), highlight = pick == 1, onClick = { tap(1) })
+                    LegendRow(CARBS_INK, "Углеводы", "${today.carbs} г", sub = pct((c / macroKcal).toDouble()), highlight = pick == 2, onClick = { tap(2) })
                 }
             }
         }

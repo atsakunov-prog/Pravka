@@ -359,15 +359,11 @@ private fun RoutesBlock(app: PravkaApp) {
                     Text(
                         "«" + route.text + "»",
                         style = MaterialTheme.typography.bodySmall,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         "→ " + route.destination(),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 GlyphButton(

@@ -99,6 +99,18 @@ class DayAssemblerTest {
     }
 
     @Test
+    fun `отметки и ждущее под записью - по времени вместе`() {
+        // Время отметки видно в колонке времени (07.10.2026): «18:50 Зарядка»
+        // над «18:40 Говядина» читалось бы как ошибка.
+        val r = DayAssembler.assemble(
+            input().copy(marks = input().marks + DayAssembler.MarkIn(at(18, 50), DayAssembler.Source.SPORT, "Зарядка · 3 упр.")),
+        )
+        val under = r.items.dropWhile { !(it is DayItem.Entry && it.id == 5L) }.drop(1)
+            .takeWhile { it is DayItem.Mark || it is DayItem.Pending }
+        assertEquals(listOf(at(18, 40), at(18, 50)), under.map { (it as? DayItem.Mark)?.at ?: (it as DayItem.Pending).at })
+    }
+
+    @Test
     fun `сон с вечера - с полуночи, но полная ночь во второй строке`() {
         val r = DayAssembler.assemble(input())
         val sleep = r.items.filterIsInstance<DayItem.Entry>().first()

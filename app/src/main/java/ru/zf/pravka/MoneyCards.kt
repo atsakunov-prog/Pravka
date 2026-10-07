@@ -221,8 +221,6 @@ private fun QuestionCard(app: PravkaApp, q: MoneyEngine.Question, position: Stri
                     e.note.ifBlank { "" },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
                 Text(MoneyFormat.rub(e.rubKop, sign = true), style = MaterialTheme.typography.bodySmall)

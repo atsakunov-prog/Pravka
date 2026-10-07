@@ -178,8 +178,6 @@ fun TodoistTab(app: PravkaApp) {
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.primary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -193,8 +191,6 @@ fun TodoistTab(app: PravkaApp) {
                         status,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
                     GlyphButton(
@@ -371,8 +367,6 @@ private fun TaskRow(
             Text(
                 task.content,
                 style = MaterialTheme.typography.bodyMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
             )
             val note = listOf(project, task.due).filter { it.isNotBlank() }.joinToString(" · ")
             if (note.isNotBlank()) {
@@ -380,8 +374,6 @@ private fun TaskRow(
                     note,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

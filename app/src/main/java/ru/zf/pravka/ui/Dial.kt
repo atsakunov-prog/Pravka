@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -328,7 +329,7 @@ fun TimePlate(
         Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
                 Text(big, style = if (wide) t.displayLWide else t.displayL, color = Modes.Zasechka.value, maxLines = 1)
-                Text(sub, style = t.label, color = Modes.Zasechka.label, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+                Text(sub, style = t.label, color = Modes.Zasechka.label, modifier = Modifier.padding(top = 2.dp))
             }
             if (right != null) {
                 Column(Modifier.padding(top = 6.dp), horizontalAlignment = Alignment.End) {
@@ -381,7 +382,8 @@ fun ZasechkaEntryRow(
     Column(modifier.fillMaxWidth()) {
         if (divider) Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFFFBE78).copy(alpha = 0.08f)))
         Row(
-            Modifier.fillMaxWidth().height(46.dp).clickable(onClick = onClick),
+            // Не ровно 46, а не меньше: длинное название переносится (баг №10).
+            Modifier.fillMaxWidth().heightIn(min = 46.dp).clickable(onClick = onClick).padding(vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -391,8 +393,6 @@ fun ZasechkaEntryRow(
                     entryTitle(title, useful, client),
                     style = if (current) t.bodyStrong else t.body,
                     color = Ink.Text,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     buildAnnotatedString {
@@ -409,8 +409,6 @@ fun ZasechkaEntryRow(
                     },
                     style = t.meta,
                     color = Ink.TextMeta,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
             if (points != null && points != 0) {

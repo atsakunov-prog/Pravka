@@ -25,6 +25,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
@@ -170,62 +172,91 @@ fun Modifier.modeGlass4(shape: Shape, shadow: Boolean = true): Modifier =
 // ---------------------------------------------------------------------------
 
 /**
- * Лицо круглой клавиши (DESIGN §8 «Клавиша», `.key` в макетах): блик —
- * радиальный из (34 %, 20 %) белым, низ — радиальный тёмный из (50 %, 118 %),
- * внутри — светлая линия сверху и тёмная снизу, тень 0/6/14. Нажатая —
- * блик ярче (палец «давит» свет), сама клавиша на 3 % меньше.
+ * Свет клавиши — ровно числа кнопок на диске (`trigger/BubbleSkin.kt`).
+ * Владелец, 07.10.2026 (баг №3): «на самих кнопках внутри приложения
+ * слишком сильное вот это свечение. Я бы их сделал ровно такими же, как и
+ * кнопки на диске». Первое издание набора брало блик макета — белый 0,6 из
+ * левого верхнего угла и тёмный низ 0,55: на тёмном фоне это читалось
+ * фонарём. Теперь — как у кнопок на стекле: блик 0,26 у верхней кромки,
+ * затенение 0,2 снизу, тонкая фаска (светлая сверху, тёмная снизу);
+ * нажатая — свет гаснет до трети. Числа продублированы, а не взяты из
+ * `BubbleSkin`: слой поверх приложений живёт своей жизнью, и правка
+ * приложения не должна его трогать.
+ */
+internal object KeyLight {
+    const val SHEEN = 0.26f
+    const val FOOT = 0.20f
+    const val RIM_LIGHT = 0.34f
+    const val RIM_SHADE = 0.22f
+    const val RIM_WIDTH = 0.055f
+    const val PRESSED_LIGHT = 0.3f
+    const val PILL_SHEEN_SPAN = 0.34f
+    const val PILL_FOOT_SPAN = 0.2f
+    const val PILL_FOOT = 0.1f
+    const val PILL_RIM_SHADE = 0.12f
+}
+
+/**
+ * Лицо круглой клавиши: заливка цветом кнопки и три слоя кнопки на диске
+ * ([KeyLight]) — затенение снизу, блик сверху (центр вынесен к верхнему
+ * краю, ярче всего кромка, а не пятно посередине) и фаска по кругу. Тень
+ * под клавишей мягкая: на диске её рисует стекло под кнопкой.
  */
 fun Modifier.keyDisc(
     color: Color,
     pressed: Boolean = false,
-    cream: Boolean = false,
+    @Suppress("UNUSED_PARAMETER") cream: Boolean = false,
     shadow: Boolean = true,
 ): Modifier = this
-    .then(if (shadow) Modifier.softShadow(CircleShape, Color.Black.copy(alpha = 0.45f), 6.dp, 14.dp) else Modifier)
+    .then(if (shadow) Modifier.softShadow(CircleShape, Color.Black.copy(alpha = 0.35f), 3.dp, 9.dp) else Modifier)
     .drawWithCache {
         val w = size.width
         val h = size.height
-        val hiA = if (cream) 0.75f else 0.60f
-        val hi = Brush.radialGradient(
-            0f to Color.White.copy(alpha = (hiA * if (pressed) 1.25f else 1f).coerceAtMost(1f)),
-            0.32f to Color.White.copy(alpha = 0.12f),
-            0.5f to Color.White.copy(alpha = 0f),
-            center = Offset.Zero,
-            radius = w * 1.1f,
-        )
-        val lowColor = if (cream) Color(0xFF785A32).copy(alpha = 0.35f) else Color.Black.copy(alpha = 0.55f)
-        val low = Brush.radialGradient(
-            0f to lowColor,
-            0.70f to lowColor.copy(alpha = 0f),
-            center = Offset.Zero,
-            radius = w,
-        )
-        val topLine = Brush.verticalGradient(
-            0f to Color.White.copy(alpha = if (cream) 0.6f else 0.42f),
-            0.22f to Color.White.copy(alpha = 0f),
-        )
-        val bottomLine = Brush.verticalGradient(
-            0.72f to Color.Transparent,
-            1f to (if (cream) Color(0xFF785A32).copy(alpha = 0.25f) else Color.Black.copy(alpha = 0.35f)),
-        )
-        val r = minOf(w, h) / 2f
+        val half = minOf(w, h) / 2f
         val c = Offset(w / 2f, h / 2f)
-        val stroke1 = Stroke(1.dp.toPx())
-        val stroke2 = Stroke(2.dp.toPx())
+        val lit = if (pressed) KeyLight.PRESSED_LIGHT else 1f
+        val sheen = Brush.radialGradient(
+            0f to Color.White.copy(alpha = KeyLight.SHEEN * lit),
+            0.45f to Color.White.copy(alpha = KeyLight.SHEEN * 0.35f * lit),
+            1f to Color.White.copy(alpha = 0f),
+            center = Offset(c.x, c.y - half * 0.55f),
+            radius = half * 1.25f,
+        )
+        val foot = Brush.radialGradient(
+            0f to Color.Black.copy(alpha = KeyLight.FOOT),
+            0.5f to Color.Black.copy(alpha = KeyLight.FOOT * 0.3f),
+            1f to Color.Black.copy(alpha = 0f),
+            center = Offset(c.x, c.y + half * 0.9f),
+            radius = half * 1.15f,
+        )
+        val rimW = (half * KeyLight.RIM_WIDTH).coerceAtLeast(1f)
+        val rim = Brush.verticalGradient(
+            0f to Color.White.copy(alpha = KeyLight.RIM_LIGHT * lit),
+            0.5f to Color.White.copy(alpha = 0f),
+            1f to Color.Black.copy(alpha = KeyLight.RIM_SHADE),
+            startY = c.y - half,
+            endY = c.y + half,
+        )
         onDrawBehind {
-            drawCircle(color, r, c)
-            // Эллипсы CSS (110 % × 85 %) — круг, сжатый по высоте.
-            translate(w * 0.34f, h * 0.20f) {
-                scale(1f, 0.85f / 1.1f, pivot = Offset.Zero) { drawCircle(hi, w * 1.1f, Offset.Zero) }
-            }
-            clipPath(Path().apply { addOval(androidx.compose.ui.geometry.Rect(c, r)) }) {
-                translate(w * 0.5f, h * 1.18f) {
-                    scale(1f, 0.70f, pivot = Offset.Zero) { drawCircle(low, w, Offset.Zero) }
-                }
-            }
-            drawCircle(topLine, r - 0.5.dp.toPx(), c, style = stroke1)
-            drawCircle(bottomLine, r - 1.dp.toPx(), c, style = stroke2)
+            drawCircle(color, half, c)
+            drawCircle(foot, half, c)
+            drawCircle(sheen, half, c)
+            drawCircle(rim, half - rimW / 2f, c, style = Stroke(rimW))
         }
+    }
+
+/**
+ * Прозрачность без отдельного слоя. Обычный `alpha` рисует клавишу в
+ * буфер ровно по её границам, и размытая тень под ней обрезается прямой
+ * линией — «видимый уголок у кнопки» (баг №11, «Саша, как тренировка?»:
+ * у пустой строки клавиша неактивна, @ 0.4). Здесь прозрачность
+ * умножается на каждый слой по отдельности, буфера нет — тень целая.
+ */
+fun Modifier.dim(alpha: Float): Modifier =
+    if (alpha >= 1f) this
+    else this.graphicsLayer {
+        this.alpha = alpha
+        compositingStrategy = CompositingStrategy.ModulateAlpha
     }
 
 /**
@@ -258,7 +289,7 @@ fun Key(
         modifier
             .minimumInteractiveComponentSize()
             .size(size)
-            .alpha(if (enabled) 1f else 0.4f)
+            .dim(if (enabled) 1f else 0.4f)
             .scale(if (pressed) 0.97f else 1f)
             .keyDisc(face, pressed, cream)
             .clickable(

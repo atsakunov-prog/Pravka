@@ -595,8 +595,6 @@ fun DelaTab(
                             },
                             style = ty.label,
                             color = mode.label,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
                         )
                     } else {
@@ -958,13 +956,16 @@ fun DelaTab(
         )
     }
     CrmSheets(crm)
-    if (navOpen) {
+    // Боковая панель всегда в дереве: закрытая — пуста, а закрываясь,
+    // успевает уехать (баг №1). Числа считаются, только пока она видна.
+    run {
         DelaNavSheet(
+            visible = navOpen,
             nav = if (page == null && needle.isEmpty()) nav else "",
             sphere = sphere,
-            counts = DelaViews.counts(snap, me, today, sphere, now),
+            counts = { DelaViews.counts(snap, me, today, sphere, now) },
             crmOn = crmOn,
-            projects = Dela.projectsNav(snap, me, today, sphere, favs),
+            projects = { Dela.projectsNav(snap, me, today, sphere, favs) },
             onSphere = { sphere = it },
             onNav = go,
             // Из боковой панели — как переход по ссылке в вебе: страница вместо стопки.
@@ -1319,7 +1320,7 @@ private fun AutoClosedRow(sg: Dela.Suggestion, t: Dela.Task?, onReopen: (Dela.Ta
     val c = MaterialTheme.colorScheme
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Column(Modifier.weight(1f)) {
-            Text(t?.let { "${it.numLabel} ${it.title}" } ?: "дело не видно", style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(t?.let { "${it.numLabel} ${it.title}" } ?: "дело не видно", style = MaterialTheme.typography.bodyMedium)
             val meta = listOf(sg.batchTitle.ifBlank { sourceWord(sg.source) }, delaDate(sg.decidedAt)).filter { it.isNotBlank() }.joinToString(" · ")
             Text(meta, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, maxLines = 1)
             if (sg.quote.isNotBlank()) {
@@ -1393,13 +1394,11 @@ private fun SuggestionRow(
             head,
             style = ty.bodyStrong.copy(fontSize = ty.bodyL.fontSize, lineHeight = ty.bodyL.lineHeight),
             color = ru.zf.pravka.ui.Ink.TextStrong,
-            maxLines = 3,
-            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable(enabled = editable, onClick = onEdit),
         )
         // Подробности уточнения — отдельной строкой: при принятии лягут комментарием к делу.
         val note = if (sg.kind == "update") p.optString("note").takeIf { it.isNotBlank() && it != "null" } else null
-        if (note != null) Text("+ $note", style = ty.label, color = mode.label, maxLines = 4, overflow = TextOverflow.Ellipsis)
+        if (note != null) Text("+ $note", style = ty.label, color = mode.label)
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             val meta = if (sg.kind == "update") {
                 // Что именно поменяется: название, срок «было → стало», мяч с человеком.
@@ -1424,8 +1423,6 @@ private fun SuggestionRow(
                 meta,
                 style = ty.label,
                 color = mode.meta,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f).padding(end = 4.dp),
             )
             GlyphButton(Glyphs.Close, "отклонить", onClick = onReject, size = 40.dp, tint = mode.label)
@@ -1553,9 +1550,9 @@ private fun DelaHead(sc: DelaScreen, sphere: String, onBack: (() -> Unit)?, onMe
         if (onBack != null) GlyphButton(Glyphs.Back, "назад", onClick = onBack)
         GlyphButton(Glyphs.ListLines, "разделы, CRM, проекты и люди — как боковая панель веба", onClick = onMenu)
         Column(Modifier.weight(1f).padding(start = 4.dp)) {
-            Text(sc.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(sc.title, style = MaterialTheme.typography.titleMedium)
             val sub = listOf(sc.sub, sphere).filter { it.isNotBlank() }.joinToString(" · ")
-            if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
             if (sc.alert.isNotBlank()) Text(sc.alert, style = MaterialTheme.typography.bodySmall, color = c.error)
         }
     }
@@ -1568,18 +1565,24 @@ private fun DelaHead(sc: DelaScreen, sphere: String, onBack: (() -> Unit)?, onMe
  */
 @Composable
 private fun DelaNavSheet(
+    visible: Boolean,
     nav: String,
     sphere: String,
-    counts: DelaViews.Counts,
+    counts: () -> DelaViews.Counts,
     crmOn: Boolean,
-    projects: Dela.ProjectsNav,
+    projects: () -> Dela.ProjectsNav,
     onSphere: (String) -> Unit,
     onNav: (String) -> Unit,
     onProject: (String) -> Unit,
     onPerson: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    PaperSheet(onDismiss = onDismiss, title = "Дела", icon = Glyphs.Delo) {
+    // Сбоку, с отступами от краёв, а не листом во весь экран снизу (баг №1:
+    // «чтобы сбоку оно вылезало… я его крутил, выбирал и дальше оно выезжало
+    // обратно»).
+    ru.zf.pravka.ui.SideSheet(visible = visible, onDismiss = onDismiss, title = "Дела", icon = Glyphs.Delo) {
+        val counts = counts()
+        val projects = projects()
         Segments(
             options = SPHERES.map { it.second },
             selected = SPHERES.indexOfFirst { it.first == sphere }.coerceAtLeast(0),
@@ -1683,7 +1686,7 @@ private fun ProjectLine(title: String, open: Int, late: Boolean, hint: String? =
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(vertical = 9.dp, horizontal = 2.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, style = MaterialTheme.typography.bodyMedium)
             if (hint != null) Text(hint, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
         }
         if (open > 0) {
@@ -1800,8 +1803,6 @@ private fun TaskRow(
                     t.title,
                     style = ty.bodyL,
                     color = if (t.open) ru.zf.pravka.ui.Ink.Text else mode.meta,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 val live = t.id == actions.running
                 val spentMs = actions.spent[t.id] ?: 0L
@@ -1815,38 +1816,36 @@ private fun TaskRow(
                     when (t.status) { Dela.DONE -> "сделано"; Dela.CANCELLED -> "отменено"; else -> null },
                     t.numLabel + if (t.local) " ⏳" else "",
                 ).joinToString(" · ")
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (lateDays > 0) {
-                        Text(
-                            "просрочено $lateDays дн" + if (meta.isNotBlank()) " · " else "",
-                            style = ty.label.copy(fontWeight = FontWeight.SemiBold),
-                            color = mode.value,
-                            maxLines = 1,
-                        )
-                    }
-                    if (loose && pick != null) {
-                        Text(
-                            DelaViews.NO_PROJECT,
-                            style = ty.label,
-                            fontWeight = FontWeight.SemiBold,
-                            color = mode.label,
-                            maxLines = 1,
-                            modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { pick(listOf(t)) }.padding(end = 6.dp),
-                        )
-                    }
-                    if (meta.isNotBlank()) {
-                        Text(
-                            meta,
-                            style = ty.label.copy(fontWeight = if (live) FontWeight.SemiBold else FontWeight.Normal),
-                            color = if (live) mode.value else mode.meta,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false),
-                        )
-                    }
+                // «Без проекта» — отдельной строкой-ссылкой; «просрочено» и
+                // остальное — ОДНИМ текстом: тремя кусками в ряд перенос шёл
+                // узкой колонкой справа (баг №10).
+                if (loose && pick != null) {
+                    Text(
+                        DelaViews.NO_PROJECT,
+                        style = ty.label,
+                        fontWeight = FontWeight.SemiBold,
+                        color = mode.label,
+                        maxLines = 1,
+                        modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { pick(listOf(t)) }.padding(end = 6.dp),
+                    )
+                }
+                if (lateDays > 0 || meta.isNotBlank()) {
+                    Text(
+                        androidx.compose.ui.text.buildAnnotatedString {
+                            if (lateDays > 0) {
+                                pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.SemiBold, color = mode.value))
+                                append("просрочено $lateDays дн")
+                                pop()
+                                if (meta.isNotBlank()) append(" · ")
+                            }
+                            append(meta)
+                        },
+                        style = ty.label.copy(fontWeight = if (live) FontWeight.SemiBold else FontWeight.Normal),
+                        color = if (live) mode.value else mode.meta,
+                    )
                 }
                 for (line in extra) {
-                    Text(line, style = ty.label, color = mode.label, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(line, style = ty.label, color = mode.label)
                 }
             }
             // ▶ (или стоп) — запись в Засечке; микрофон — команда Claude про это дело.
@@ -2288,7 +2287,7 @@ private fun PickLine(text: String, more: String, selected: Boolean, onClick: () 
     ) {
         Column(Modifier.weight(1f)) {
             Text(text, style = MaterialTheme.typography.bodyMedium, color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
-            if (more.isNotBlank()) Text(more, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (more.isNotBlank()) Text(more, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (selected) Icon(Glyphs.Check, contentDescription = "выбрано", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
     }

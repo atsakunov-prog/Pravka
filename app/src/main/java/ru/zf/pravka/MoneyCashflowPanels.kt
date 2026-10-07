@@ -138,7 +138,7 @@ internal fun BreakdownDialog(b: Breakdown, onDismiss: () -> Unit) {
                     Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(SimpleDateFormat("d MMM", ru).format(Date(it.entry.ts)), style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(52.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(it.entry.what, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(it.entry.what, style = MaterialTheme.typography.bodySmall)
                             val acc = it.entry.account.ifBlank { it.entry.source.title }
                             if (acc.isNotBlank()) PaperHint(acc)
                         }
@@ -270,8 +270,6 @@ private fun CashLine(
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
                 color = if (hint) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
             )
             if (expanded != null) FoldChevron(expanded)
@@ -437,7 +435,7 @@ private fun noteDivergence(app: PravkaApp, ownKop: Long, s: ru.zf.pravka.core.Mo
 private fun AccountRow(a: MoneyCashflow.Account, hint: String? = null, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text(a.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(a.name, style = MaterialTheme.typography.bodyMedium)
             PaperHint(
                 // Долг Наташе — не от якоря, а по правилу партнёрства: так и подписан.
                 hint ?: if (a.name == MoneyCashflow.NATASHA_DEBT) ZfPartner.HINT
@@ -512,8 +510,6 @@ internal fun AccountsCard(app: PravkaApp, entries: List<MoneyEntry>, period: Mon
                             f.name,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false),
                         )
                         FoldChevron(expanded)
@@ -554,7 +550,7 @@ internal fun AccountsCard(app: PravkaApp, entries: List<MoneyEntry>, period: Mon
                                 .clickable { show(f.name, cat) { MoneyCategories.title(it.entry.category) == cat } }
                                 .padding(start = 12.dp, top = 4.dp, bottom = 4.dp),
                         ) {
-                            Text(cat, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(cat, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                             Text(
                                 MoneyFormat.k(kop, sign = true),
                                 style = MaterialTheme.typography.bodySmall,

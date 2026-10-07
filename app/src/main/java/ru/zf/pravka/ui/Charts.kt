@@ -2,6 +2,16 @@ package ru.zf.pravka.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.style.TextAlign
+import ru.zf.pravka.core.DonutHit
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -60,20 +70,50 @@ private fun dash() = PathEffect.dashPathEffect(floatArrayOf(10f, 8f))
  * Донат: доли по кругу от двенадцати часов по часовой стрелке. Между кусками
  * зазор в полтора градуса, чтобы соседние оттенки радуги не слипались; пустой
  * донат — серое кольцо. В центре — что угодно (часы, балл).
+ *
+ * Тап по куску (баг №5, 07.10.2026) подсвечивает его: кусок толще, остальные
+ * гаснут, в центре вместо [center] — что это и какая доля ([valueText] — ещё
+ * и значение). Повторный тап или тап в дырку — снять. [selected]/[onSelect]
+ * — выбор снаружи, чтобы подсветить и строку легенды рядом
+ * (`LegendRow(highlight = …)`); не передали — донат помнит выбор сам.
  */
 @Composable
 fun DonutChart(
     slices: List<ChartSlice>,
     size: Dp = 168.dp,
     thickness: Dp = 24.dp,
+    selected: Int? = null,
+    onSelect: ((Int?) -> Unit)? = null,
+    valueText: ((ChartSlice) -> String)? = null,
     center: @Composable BoxScope.() -> Unit = {},
 ) {
     val track = MaterialTheme.colorScheme.surfaceVariant
-    Box(Modifier.size(size), contentAlignment = Alignment.Center) {
+    var own by remember(slices.size) { mutableStateOf<Int?>(null) }
+    val sel = (if (onSelect != null) selected else own)?.takeIf { it in slices.indices }
+    val pick: (Int?) -> Unit = onSelect ?: { own = it }
+    val values = slices.map { it.value }
+    val pad = 4.dp
+    Box(
+        Modifier
+            .size(size)
+            .pointerInput(values, sel) {
+                detectTapGestures { p ->
+                    val outer = this.size.width / 2f
+                    val dx = p.x - outer
+                    val dy = p.y - this.size.height / 2f
+                    // Кольцо ловит с запасом внутрь: тонкий донат пальцем не промахнуться.
+                    val inner = (outer - (thickness + pad).toPx() - 12.dp.toPx()).coerceAtLeast(0f)
+                    val hit = DonutHit.index(values, dx, dy, inner, outer)
+                    pick(if (hit == null || hit == sel) null else hit)
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
         Canvas(Modifier.size(size)) {
+            val grow = pad.toPx()
             val stroke = thickness.toPx()
-            val inset = stroke / 2f
-            val arcSize = Size(this.size.width - stroke, this.size.height - stroke)
+            val inset = stroke / 2f + grow
+            val arcSize = Size(this.size.width - 2 * inset, this.size.height - 2 * inset)
             val topLeft = Offset(inset, inset)
             val total = slices.sumOf { it.value.toDouble() }.toFloat()
             if (total <= 0f) {
@@ -82,30 +122,76 @@ fun DonutChart(
             }
             val gap = if (slices.size > 1) 1.5f else 0f
             var angle = -90f
-            for (s in slices) {
+            for ((i, s) in slices.withIndex()) {
                 val sweep = s.value / total * 360f
                 if (sweep <= 0f) continue
+                val on = sel == i
                 drawArc(
-                    color = s.color,
+                    color = if (sel == null || on) s.color else s.color.copy(alpha = s.color.alpha * 0.32f),
                     startAngle = angle + gap / 2f,
                     sweepAngle = (sweep - gap).coerceAtLeast(0.6f),
                     useCenter = false,
                     topLeft = topLeft,
                     size = arcSize,
-                    style = Stroke(stroke),
+                    style = Stroke(if (on) stroke + 2 * grow else stroke),
                 )
                 angle += sweep
             }
         }
-        center()
+        val s = sel?.let { slices[it] }
+        if (s == null) {
+            center()
+        } else {
+            val total = slices.sumOf { it.value.toDouble() }.coerceAtLeast(1e-9)
+            val share = (s.value / total * 100).let { if (it < 1 && it > 0) "<1 %" else "${Math.round(it)} %" }
+            Column(
+                Modifier.width(size - thickness * 2 - pad * 2 - 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    s.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = s.color.copy(alpha = 1f),
+                    textAlign = TextAlign.Center,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    valueText?.let { "${it(s)} · $share" } ?: share,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
     }
 }
 
-/** Кружок цвета, подпись и значение справа — строка легенды. */
+/** Выбор куска доната ↔ строки легенды: повторный тап снимает. */
+fun donutToggle(current: Int?, i: Int): Int? = if (current == i) null else i
+
+/**
+ * Кружок цвета, подпись и значение справа — строка легенды. [highlight] —
+ * этот кусок выбран на донате (подложка цветом куска, подпись жирнее);
+ * [onClick] — тап по строке выбирает кусок. Подпись переносится (баг №10).
+ */
 @Composable
-fun LegendRow(color: Color, label: String, value: String, sub: String? = null, dim: Boolean = false) {
+fun LegendRow(
+    color: Color,
+    label: String,
+    value: String,
+    sub: String? = null,
+    dim: Boolean = false,
+    highlight: Boolean = false,
+    onClick: (() -> Unit)? = null,
+) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .then(if (highlight) Modifier.background(color.copy(alpha = 0.16f)) else Modifier)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(vertical = 2.dp, horizontal = if (onClick != null || highlight) 4.dp else 0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(10.dp).background(color, CircleShape))
@@ -113,9 +199,8 @@ fun LegendRow(color: Color, label: String, value: String, sub: String? = null, d
         Text(
             label,
             style = MaterialTheme.typography.bodySmall,
+            fontWeight = if (highlight) FontWeight.SemiBold else null,
             color = if (dim) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         if (sub != null) {
@@ -418,8 +503,6 @@ fun CenteredBars(
                             r.sub,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -492,8 +575,6 @@ fun CompareRow(
             label,
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.width(112.dp),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Box(Modifier.fillMaxWidth().height(9.dp).background(track, RoundedCornerShape(4.dp))) {
@@ -541,8 +622,6 @@ fun KpiTile(
             label,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
         )
         Text(
             value,
@@ -558,8 +637,6 @@ fun KpiTile(
                 hint,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
             )
         }
     }

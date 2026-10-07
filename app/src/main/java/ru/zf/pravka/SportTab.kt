@@ -1054,8 +1054,6 @@ private fun PlannedExerciseCard(
                     name.ifBlank { title },
                     style = ty.bodyL,
                     color = if (ticked) mode.meta else ru.zf.pravka.ui.Ink.Text,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 // Мелкой строкой — прошлый раз (или сегодняшнее) и его пояснение из плана.
                 val hintText = when {
@@ -1072,8 +1070,6 @@ private fun PlannedExerciseCard(
                         meta,
                         style = ty.meta.copy(fontWeight = if (doneToday != null) FontWeight.SemiBold else FontWeight.Normal),
                         color = if (doneToday != null) mode.value else mode.meta,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -1244,8 +1240,6 @@ private fun StrengthTodayCard(
                 Text(
                     log.name,
                     style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
                 Spacer(Modifier.width(10.dp))
@@ -1711,8 +1705,6 @@ private fun ZaryadkaChecklist(
                         listOf(task.name.ifBlank { task.title }, task.dose).filter { it.isNotBlank() }.joinToString(" "),
                         style = ty.label,
                         color = if (ticked) ru.zf.pravka.ui.Ink.Text else mode.label,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -2331,8 +2323,6 @@ private fun WorkoutRow(
                                 !workout.name.equals(workout.type, true)
                         ) " · ${workout.name}" else ""),
                     style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 PaperHint(
                     workoutDayFormat.format(Date(workout.start)) + ", " +
@@ -3049,7 +3039,7 @@ private fun ReadinessCard(verdict: TrafficLight.Verdict, health: SportStore.Heal
                 }
             }
             Spacer(Modifier.width(12.dp))
-            Text(verdict.headline, style = ty.titleS, color = ru.zf.pravka.ui.Ink.TextStrong, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(verdict.headline, style = ty.titleS, color = ru.zf.pravka.ui.Ink.TextStrong)
         }
         if (verdict.because.isNotBlank()) {
             Text(verdict.because, style = ty.body, color = ru.zf.pravka.ui.Ink.TextSecondary, modifier = Modifier.padding(top = 6.dp, end = 10.dp))
@@ -3097,7 +3087,7 @@ private fun DoneTodayCard(list: List<SportStore.Workout>) {
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(w.name.ifBlank { w.type }, style = ty.bodyStrong.copy(fontSize = ty.bodyL.fontSize), color = ru.zf.pravka.ui.Ink.TextStrong,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            modifier = Modifier.weight(1f))
                         Text(
                             ru.zf.pravka.core.Fmt.range(w.start, w.start + w.seconds * 1000),
                             style = ty.meta,

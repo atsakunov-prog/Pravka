@@ -156,6 +156,46 @@ internal object Seed {
 
     // ------------------------------------------------------------ спорт
 
+    /**
+     * Погода — кэш Open-Meteo в базе (сети в снимках нет): свежий, на город
+     * с завода, часы на десять дней и дневной прогноз. Вечером дождь, утро
+     * холоднее, чем показывает градусник, — чтобы «ощущ.» было видно.
+     */
+    fun weather(app: PravkaApp) {
+        val start = today()
+        val time = JSONArray(); val temp = JSONArray(); val feels = JSONArray()
+        val pr = JSONArray(); val prob = JSONArray(); val code = JSONArray()
+        val dTime = JSONArray(); val dCode = JSONArray(); val dMax = JSONArray(); val dMin = JSONArray()
+        val dfMax = JSONArray(); val dfMin = JSONArray(); val dSum = JSONArray(); val dProb = JSONArray()
+        for (d in 0 until 10) {
+            val day = start.plusDays(d.toLong())
+            val base = 6.0 - d * 0.6 + (if (d % 3 == 1) 2.5 else 0.0)
+            var hi = -99.0; var lo = 99.0; var fhi = -99.0; var flo = 99.0; var sum = 0.0; var pmax = 0
+            for (h in 0 until 24) {
+                val t = base + 5.0 * kotlin.math.sin((h - 9) / 24.0 * 2 * Math.PI).coerceAtLeast(-0.6)
+                val wet = (d == 0 && h in 17..20) || (d == 3 && h in 8..15) || (d == 6 && h in 12..23)
+                val p = if (wet) 0.8 else 0.0
+                val pp = if (wet) 70 + h % 3 * 5 else (h * 7 + d * 11) % 30
+                val f = t - 3.2 - (if (h < 10) 1.0 else 0.0)
+                time.put("%sT%02d:00".format(day, h)); temp.put(t); feels.put(f); pr.put(p); prob.put(pp)
+                code.put(if (wet) 61 else if (h in 10..15 && d % 2 == 0) 2 else 3)
+                hi = maxOf(hi, t); lo = minOf(lo, t); fhi = maxOf(fhi, f); flo = minOf(flo, f); sum += p; pmax = maxOf(pmax, pp)
+            }
+            dTime.put(day.toString()); dCode.put(if (sum > 0) 61 else if (d % 2 == 0) 2 else 3)
+            dMax.put(hi); dMin.put(lo); dfMax.put(fhi); dfMin.put(flo); dSum.put(sum); dProb.put(pmax)
+        }
+        val forecast = JSONObject()
+            .put("hourly", JSONObject().put("time", time).put("temperature_2m", temp).put("apparent_temperature", feels)
+                .put("precipitation", pr).put("precipitation_probability", prob).put("weather_code", code))
+            .put("daily", JSONObject().put("time", dTime).put("weather_code", dCode)
+                .put("temperature_2m_max", dMax).put("temperature_2m_min", dMin)
+                .put("apparent_temperature_max", dfMax).put("apparent_temperature_min", dfMin)
+                .put("precipitation_sum", dSum).put("precipitation_probability_max", dProb))
+        val save = JSONObject().put("city", ru.zf.pravka.data.Settings.WEATHER_CITY_DEFAULT)
+            .put("lat", 55.75).put("lon", 37.62).put("at", System.currentTimeMillis()).put("forecast", forecast)
+        java.io.File(ru.zf.pravka.data.DataRoot.dir(app), "weather.json").writeText(save.toString())
+    }
+
     suspend fun sport(app: PravkaApp) {
         val zone = ZoneId.systemDefault()
         val now = System.currentTimeMillis()

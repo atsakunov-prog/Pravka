@@ -251,7 +251,7 @@ internal fun LazyListScope.crmPipeline(ctx: DelaCrmContext) {
 private fun DealRow(ctx: DelaCrmContext, d: DelaCrm.Deal, money: Boolean) {
     val c = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { ctx.push(DelaPage.Deal(d.id)) }.padding(vertical = 6.dp)) {
-        Text(d.name + if (d.local) " ⏳" else "", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(d.name + if (d.local) " ⏳" else "", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
         val meta = listOfNotNull(
             (d.projectName.ifBlank { ctx.snap.projects[d.projectId]?.name.orEmpty() } + if (d.dealType.isNotBlank()) " · ${d.dealType}" else "").takeIf { it.isNotBlank() },
             ctx.personName(d.leadPersonId).takeIf { it.isNotBlank() },
@@ -260,7 +260,7 @@ private fun DealRow(ctx: DelaCrmContext, d: DelaCrm.Deal, money: Boolean) {
             } else null,
             DelaCrm.hours(d.minutes30).takeIf { it.isNotBlank() }?.let { "$it за 30 дн." },
         ).joinToString(" · ")
-        if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
         if (d.closed) {
             val out = listOf(d.stageWord, d.closedOn.takeIf { it.isNotBlank() }?.let { DelaAsk.ddmm(it, ctx.today) }.orEmpty(), d.lostReason)
                 .filter { it.isNotBlank() }.joinToString(" · ")
@@ -276,8 +276,6 @@ private fun DealRow(ctx: DelaCrmContext, d: DelaCrm.Deal, money: Boolean) {
                     "→ #${next.num} ${next.title}" + if (next.dueDate.isNotBlank()) " · " + DelaAsk.ddmm(next.dueDate, ctx.today) else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (next.dueDate.isNotBlank() && next.dueDate < ctx.today) c.error else c.onSurface,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                 )
             } else {
                 Text("нет следующего дела", style = MaterialTheme.typography.bodySmall, color = c.error)
@@ -320,7 +318,7 @@ private fun ClientRow(ctx: DelaCrmContext, cl: DelaCrm.Client, money: Boolean) {
             cl.org.takeIf { it.isNotBlank() && Dela.norm(it) != Dela.norm(cl.name) },
             "архив".takeIf { !cl.live },
         ).joinToString(" · ")
-        Text(cl.name + if (tail.isNotBlank()) " · $tail" else "", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(cl.name + if (tail.isNotBlank()) " · $tail" else "", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
         val stages = if (cl.stages.isNotEmpty()) cl.stages.joinToString(", ") { DelaCrm.STAGE[it] ?: it } else if (cl.allDeals > 0) "сделки в архиве" else "без сделок"
         val late = (DelaCrm.daysSince(cl.lastTouch, ctx.today) ?: 0) > 45
         val touch = if (cl.lastTouch.isNotBlank()) "контакт " + DelaCrm.ago(cl.lastTouch, ctx.today) else "контактов нет"
@@ -332,13 +330,11 @@ private fun ClientRow(ctx: DelaCrmContext, cl: DelaCrm.Client, money: Boolean) {
             (listOf(stages, touch) + moneyBits + listOfNotNull(DelaCrm.hours(cl.minutes90).takeIf { it.isNotBlank() }?.let { "$it за 90 дн." })).joinToString(" · "),
             style = MaterialTheme.typography.bodySmall,
             color = if (late) c.error else c.onSurfaceVariant,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
         )
         val next = cl.nextTask
         if (next != null) {
             Text("→ #${next.num} ${next.title}" + if (next.dueDate.isNotBlank()) " · " + DelaAsk.ddmm(next.dueDate, ctx.today) else "",
-                style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                style = MaterialTheme.typography.bodySmall)
         } else if (cl.liveDeals > 0) {
             Text("нет следующего дела", style = MaterialTheme.typography.bodySmall, color = c.error)
         }
@@ -387,7 +383,7 @@ private fun TieRow(ctx: DelaCrmContext, p: DelaCrm.Tie) {
     val c = MaterialTheme.colorScheme
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).clickable { ctx.push(DelaPage.Person(p.id)) }.padding(vertical = 6.dp)) {
-            Text(p.name + if (p.org.isNotBlank()) " · ${p.org}" else "", style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(p.name + if (p.org.isNotBlank()) " · ${p.org}" else "", style = MaterialTheme.typography.bodyMedium)
             val since = p.sinceDays?.let { if (it == 0) "контакт сегодня" else "контакт $it дн. назад" } ?: "контактов не записано"
             val bits = listOfNotNull(
                 DelaCrm.CADENCE[p.cadence],
@@ -397,7 +393,7 @@ private fun TieRow(ctx: DelaCrmContext, p: DelaCrm.Tie) {
                 p.agenda.takeIf { it > 0 }?.let { "повестка: $it" },
                 p.birthdayIn?.takeIf { it <= 14 }?.let { if (it == 0) "день рождения сегодня" else "день рождения через $it дн." },
             ).joinToString(" · ")
-            Text(bits, style = MaterialTheme.typography.bodySmall, color = if (p.due) c.error else c.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(bits, style = MaterialTheme.typography.bodySmall, color = if (p.due) c.error else c.onSurfaceVariant)
         }
         PaperTextButton("Поговорили", onClick = {
             ctx.ui.talk = TalkTarget(p.name, personIds = listOf(p.id), refresh = listOf(DelaCrm.TIES, DelaCrm.dossierPath(p.id)))

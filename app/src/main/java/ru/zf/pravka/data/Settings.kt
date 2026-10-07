@@ -52,6 +52,7 @@ class Settings(private val context: Context) {
         private val KEY_WEATHER_CITY = stringPreferencesKey("weather_city")
         private val KEY_TODAY_CALENDARS = stringPreferencesKey("today_calendars_json")
         private val KEY_TODAY_MARKS = stringPreferencesKey("today_marks")
+        private val KEY_TODAY_STATE = booleanPreferencesKey("today_state_line")
         private val KEY_MONEY_MONTH_BUDGET = longPreferencesKey("money_month_budget_rub")
         /** Время сна с завода — 23:30 (DESIGN §11.5 SleepRow). */
         const val TODAY_BEDTIME_DEFAULT = 23 * 60 + 30
@@ -1375,6 +1376,16 @@ class Settings(private val context: Context) {
     }
     suspend fun setTodayMarks(marks: Set<String>) {
         context.dataStore.edit { it[KEY_TODAY_MARKS] = marks.joinToString(",") }
+    }
+
+    /**
+     * Тихая строка состояния под днём недели «Сегодня» — сон, HRV, форма
+     * (баг №13, 07.10.2026: «не будет ли нагружать? Подумай»). С завода
+     * включена; мешает — выключается в настройках «Сегодня».
+     */
+    val todayStateFlow = context.dataStore.data.map { it[KEY_TODAY_STATE] ?: true }
+    suspend fun setTodayState(on: Boolean) {
+        context.dataStore.edit { it[KEY_TODAY_STATE] = on }
     }
 
     /**

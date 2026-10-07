@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -85,51 +86,42 @@ import java.util.Locale
 // ---------------------------------------------------------------------------
 
 /**
- * Клавиша-капсула (выбранный сегмент, главная кнопка): цвет кнопки режима,
- * блик-эллипс из (34 %, 20 %) и тёмный низ, как у круглой клавиши (`.on` и
- * `.key` в макетах). [hi] — сила блика: 0.38 у сегмента, 0.5–0.6 у кнопок.
+ * Клавиша-капсула (выбранный сегмент, главная кнопка): цвет кнопки режима и
+ * свет плашки на диске (`trigger/BubbleSkin.kt`, числа — [KeyLight]): блик
+ * продольной полосой по верхней трети, затенение — по нижней пятой, тонкая
+ * фаска. Баг №3 (07.10.2026): прежний радиальный блик 0,5 из угла светил
+ * фонарём. [cream] — кремовая капсула «Сегодня» (тот же свет).
  */
-fun Modifier.keyFace4(color: Color, shape: Shape, pressed: Boolean = false, hi: Float = 0.5f, low: Float = 0.45f, cream: Boolean = false): Modifier =
+fun Modifier.keyFace4(color: Color, shape: Shape, pressed: Boolean = false, cream: Boolean = false): Modifier =
     this.drawWithCache {
         val outline = shape.createOutline(size, layoutDirection, this)
-        val path = androidx.compose.ui.graphics.Path().apply {
-            when (outline) {
-                is androidx.compose.ui.graphics.Outline.Generic -> addPath(outline.path)
-                is androidx.compose.ui.graphics.Outline.Rectangle -> addRect(outline.rect)
-                is androidx.compose.ui.graphics.Outline.Rounded -> addRoundRect(outline.roundRect)
-            }
-        }
-        val w = size.width
         val h = size.height
-        val hiA = (hi * if (pressed) 1.3f else 1f).coerceAtMost(1f)
-        val hiBrush = Brush.radialGradient(
-            0f to Color.White.copy(alpha = hiA),
-            0.32f to Color.White.copy(alpha = hiA * 0.2f),
-            0.5f to Color.White.copy(alpha = 0f),
-            center = Offset.Zero, radius = w * 1.1f,
+        val half = minOf(size.width, h) / 2f
+        val lit = if (pressed) KeyLight.PRESSED_LIGHT else 1f
+        val sheen = Brush.verticalGradient(
+            0f to Color.White.copy(alpha = KeyLight.SHEEN * lit),
+            0.55f to Color.White.copy(alpha = KeyLight.SHEEN * 0.3f * lit),
+            1f to Color.White.copy(alpha = 0f),
+            startY = 0f,
+            endY = h * KeyLight.PILL_SHEEN_SPAN,
         )
-        val lowColor = if (cream) Color(0xFF785A32).copy(alpha = 0.35f) else Color.Black.copy(alpha = low)
-        val lowBrush = Brush.radialGradient(
-            0f to lowColor, 0.7f to lowColor.copy(alpha = 0f),
-            center = Offset.Zero, radius = w,
+        val foot = Brush.verticalGradient(
+            0f to Color.Black.copy(alpha = 0f),
+            1f to Color.Black.copy(alpha = KeyLight.PILL_FOOT),
+            startY = h * (1f - KeyLight.PILL_FOOT_SPAN),
+            endY = h,
         )
+        val rimW = (half * KeyLight.RIM_WIDTH).coerceAtLeast(1f)
         val rim = Brush.verticalGradient(
-            0f to Color.White.copy(alpha = if (cream) 0.6f else 0.32f),
-            0.3f to Color.White.copy(alpha = 0f),
-            0.75f to Color.Transparent,
-            1f to (if (cream) Color(0xFF785A32).copy(alpha = 0.25f) else Color.Black.copy(alpha = 0.30f)),
+            0f to Color.White.copy(alpha = KeyLight.RIM_LIGHT * lit),
+            0.5f to Color.White.copy(alpha = 0f),
+            1f to (if (cream) Color(0xFF785A32) else Color.Black).copy(alpha = KeyLight.PILL_RIM_SHADE),
         )
-        val stroke = Stroke(1.dp.toPx())
+        val stroke = Stroke(rimW)
         onDrawBehind {
             drawOutline(outline, color)
-            clipPath(path) {
-                translate(w * 0.34f, h * 0.20f) {
-                    scale(1f, (0.85f * h) / (1.1f * w), pivot = Offset.Zero) { drawCircle(hiBrush, w * 1.1f, Offset.Zero) }
-                }
-                translate(w * 0.5f, h * 1.18f) {
-                    scale(1f, (0.70f * h) / w, pivot = Offset.Zero) { drawCircle(lowBrush, w, Offset.Zero) }
-                }
-            }
+            drawOutline(outline, foot)
+            drawOutline(outline, sheen)
             drawOutline(outline, rim, style = stroke)
         }
     }
@@ -164,13 +156,20 @@ fun SectionHeader(
             text.uppercase(Locale.forLanguageTag("ru")),
             style = t.overline,
             color = color ?: mode.label,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         if (trailing != null) {
             Spacer(Modifier.width(10.dp))
-            Text(trailing, style = t.label, color = mode.meta, maxLines = 1)
+            // Правая подпись — не шире половины строки и переносится: иначе
+            // длинная забирала бы всю ширину, и заголовок слева вставал
+            // столбиком по букве (заголовок теперь переносится, а не режется).
+            Text(
+                trailing,
+                style = t.label,
+                color = mode.meta,
+                textAlign = TextAlign.End,
+                modifier = Modifier.widthIn(max = 180.dp),
+            )
         }
         if (info != null) InfoButton(info.first, info.second)
         action?.invoke(this)
@@ -207,12 +206,11 @@ fun Segment(
         Modifier
             .minimumInteractiveComponentSize()
             .height(height)
-            .alpha(if (enabled) 1f else 0.4f)
+            .dim(if (enabled) 1f else 0.4f)
             .then(
                 if (selected) Modifier
                     .softShadow(shape, Color.Black.copy(alpha = 0.35f), 4.dp, 10.dp)
-                    .keyFace4(mode.key, shape, pressed, hi = 0.38f, low = 0.3f, cream = today)
-                    .border(1.dp, mode.tint.copy(alpha = 0.55f), shape)
+                    .keyFace4(mode.key, shape, pressed, cream = today)
                 else Modifier.clip(shape).border(1.dp, mode.tint.copy(alpha = 0.18f), shape)
             )
             .clip(shape)
@@ -302,9 +300,9 @@ fun PrimaryKey(
         modifier
             .minimumInteractiveComponentSize()
             .defaultMinSize(minHeight = height)
-            .alpha(if (enabled) 1f else 0.4f)
-            .softShadow(shape, Color.Black.copy(alpha = 0.45f), 6.dp, 14.dp)
-            .keyFace4(if (today) Ink.Cream else mode.key, shape, pressed, hi = 0.5f, cream = today)
+            .dim(if (enabled) 1f else 0.4f)
+            .softShadow(shape, Color.Black.copy(alpha = 0.35f), 3.dp, 9.dp)
+            .keyFace4(if (today) Ink.Cream else mode.key, shape, pressed, cream = today)
             .clip(shape)
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(PaddingValues(start = if (icon != null) 16.dp else 20.dp, end = 20.dp)),
@@ -336,7 +334,7 @@ fun GhostKey(
         modifier
             .minimumInteractiveComponentSize()
             .defaultMinSize(minHeight = height)
-            .alpha(if (enabled) 1f else 0.4f)
+            .dim(if (enabled) 1f else 0.4f)
             .clip(shape)
             .background(mode.tint.copy(alpha = 0.06f))
             .border(1.dp, mode.tint.copy(alpha = 0.30f), shape)
@@ -376,7 +374,7 @@ fun RowScope.IconLabel(
                 else Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             )
             .padding(vertical = 6.dp)
-            .alpha(if (enabled) 1f else 0.4f),
+            .dim(if (enabled) 1f else 0.4f),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
@@ -390,7 +388,7 @@ fun RowScope.IconLabel(
             Icon(icon, null, tint = mode.value, modifier = Modifier.size(22.dp))
         }
         Spacer(Modifier.height(6.dp))
-        Text(label, style = t.label, color = Ink.Text, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+        Text(label, style = t.label, color = Ink.Text, textAlign = TextAlign.Center)
     }
 }
 
@@ -415,7 +413,7 @@ fun Toggle(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, enabled: Boo
         modifier
             .minimumInteractiveComponentSize()
             .size(width = 48.dp, height = 28.dp)
-            .alpha(if (enabled) 1f else 0.4f)
+            .dim(if (enabled) 1f else 0.4f)
             .clip(track)
             .background(mode.ink.copy(alpha = 0.9f))
             .background(mode.key.copy(alpha = 0.22f * pos))
@@ -468,7 +466,7 @@ fun Slider4(
         modifier
             .fillMaxWidth()
             .height(40.dp)
-            .alpha(if (enabled) 1f else 0.4f)
+            .dim(if (enabled) 1f else 0.4f)
             .then(
                 if (!enabled) Modifier else Modifier.pointerSlide(
                     onWidth = { width = it },
@@ -714,8 +712,8 @@ fun ExerciseRow(name: String, last: String?, target: String?, modifier: Modifier
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(name, style = t.bodyL, color = Ink.Text, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (!last.isNullOrBlank()) Text(last, style = t.meta, color = mode.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(name, style = t.bodyL, color = Ink.Text)
+            if (!last.isNullOrBlank()) Text(last, style = t.meta, color = mode.meta)
         }
         if (!target.isNullOrBlank()) {
             Spacer(Modifier.width(10.dp))
@@ -800,8 +798,6 @@ fun StatTile(
                 },
                 // Подпись под числом — до двух строк: «тренированность 41.3» на
                 // плитке в четверть экрана в одну не встаёт (`screens/09`).
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
             )
         }
     }

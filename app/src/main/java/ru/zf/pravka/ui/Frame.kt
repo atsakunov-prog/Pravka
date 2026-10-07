@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -96,10 +97,15 @@ fun ModeFrame(decor: ModeDecor, content: @Composable () -> Unit) {
         shapes = MaterialTheme.shapes,
     ) {
         val glow = remember(decor) { GlowState() }
+        // Приглушение света — своё у каждого экрана: общее на всё приложение
+        // (как было) оставляло режим тусклым после сжатой шапки «Сегодня», а в
+        // карусели (07.10.2026) гасило и соседа на время взмаха.
+        val dim = remember(decor) { mutableFloatStateOf(1f) }
         CompositionLocalProvider(
             LocalModeDecor provides decor,
             LocalMode provides mode,
             LocalGlowState provides glow,
+            LocalGlowDim provides dim,
         ) {
             Box(Modifier.fillMaxSize()) {
                 ModeGlowLayer(decor)

@@ -104,10 +104,10 @@ internal fun DelaTaskPane(
                     )
                     val project = snap.projects[task.projectId]?.name ?: task.projectName
                     if (project.isNotBlank()) {
-                        Text(project, style = ty.bodyL, color = mode.meta, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 12.dp))
+                        Text(project, style = ty.bodyL, color = mode.meta, modifier = Modifier.padding(start = 12.dp))
                     }
                 }
-                Text(task.title, style = ty.titleL, color = Ink.TextStrong, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                Text(task.title, style = ty.titleL, color = Ink.TextStrong)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (task.open) GhostKey("Начать в Засечке", onStart, icon = Glyphs.Play)
                     Spacer(Modifier.width(10.dp))
@@ -241,13 +241,11 @@ internal fun DelaTaskPane(
                         contentAlignment = Alignment.Center,
                     ) { Text(initials, style = ty.valueS, color = mode.label) }
                     Column(Modifier.weight(1f).padding(start = 14.dp)) {
-                        Text(person.label, style = ty.bodyStrong, color = Ink.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(person.label, style = ty.bodyStrong, color = Ink.Text)
                         Text(
                             "открытых дел $open",
                             style = ty.meta,
                             color = mode.meta,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }

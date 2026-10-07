@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.union
@@ -382,14 +383,12 @@ fun PaperRow(
             Spacer(Modifier.width(14.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(title, style = LocalPravkaType.current.bodyL, color = Ink.Text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(title, style = LocalPravkaType.current.bodyL, color = Ink.Text)
             if (!hint.isNullOrBlank()) {
                 Text(
                     hint,
                     style = MaterialTheme.typography.bodySmall,
                     color = LocalMode.current.meta,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
@@ -568,7 +567,7 @@ fun SheetHeader(
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(title, style = LocalPravkaType.current.titleS, color = mode.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(title, style = LocalPravkaType.current.titleS, color = mode.title)
             if (!subtitle.isNullOrBlank()) {
                 Text(
                     subtitle,
@@ -609,6 +608,13 @@ fun PaperSheet(
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val mode = LocalMode.current
     val shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+    // Высокий лист не заходит под строку состояния (баг №1, 07.10.2026: лист
+    // Дел «вылезает слишком высоко… перекрывается статусной строкой»): окно
+    // листа — во весь экран, своих отступов сверху у него нет (`contentWindowInsets`
+    // ноль — иначе полоса под клавиатурой). Потолок — высота окна приложения
+    // без строки состояния, ручки листа и зазора 16 dp; меряется снаружи
+    // листа, в окне приложения.
+    val maxHeight = sheetMaxHeight()
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = state,
@@ -631,6 +637,7 @@ fun PaperSheet(
         Column(
             Modifier
                 .fillMaxWidth()
+                .heightIn(max = maxHeight)
                 .sheetGlass(mode)
                 .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime)),
         ) {
@@ -655,6 +662,16 @@ fun PaperSheet(
             }
         }
     }
+}
+
+/** Потолок тела листа: окно приложения без строки состояния, ручки (22 dp) и зазора 16 dp. */
+@Composable
+internal fun sheetMaxHeight(): androidx.compose.ui.unit.Dp {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val window = androidx.compose.ui.platform.LocalWindowInfo.current.containerSize.height
+    val top = WindowInsets.statusBars.getTop(density)
+    if (window <= 0) return androidx.compose.ui.unit.Dp.Infinity
+    return with(density) { (window - top).toDp() } - 38.dp
 }
 
 /** Налёт и блик листа (`screens/13`): key .16 → .06 сверху вниз и светлый tint у верхней кромки. */

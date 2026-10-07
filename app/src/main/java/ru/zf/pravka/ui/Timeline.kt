@@ -6,6 +6,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -49,6 +52,16 @@ import ru.zf.pravka.core.Fmt
 // Засечка. Строка — колонка времени 42 (вправо), рельс 18, содержимое и
 // колонка очков 30. Рельс рисуется в каждой строке своим куском (`drawBehind`),
 // поэтому линия выглядит непрерывной. Числа — `mockups/01–03`.
+//
+// Высота строки — НЕ меньше макетной, а не ровно она (баги №7, №10,
+// 07.10.2026, владелец: «шрифт красивый в Дне, но регулярно не влезает…
+// давай везде переносить по строкам, потому что для меня всё-таки важна
+// информация»): текст переносится, строка растёт, рельс тянется за ней
+// (`height(IntrinsicSize.Min)` — колонка рельса меряет высоту по соседям).
+// Отметки режимов (еда, деньги, спорт, дела) — монетой ПРЯМО НА РЕЛЬСЕ во
+// время отметки, текст рядом плашкой («сделать их… точками на таймлайне…
+// или кнопочками такими, с галкой, с рублёвым»): раньше капсула с монетой
+// стояла в колонке содержимого и отступала от линии неровно.
 
 private val TIME_W = 42.dp
 private val RAIL_W = 18.dp
@@ -127,13 +140,18 @@ fun TimelineRow(
     onLongClick: (() -> Unit)? = null,
     railTap: (() -> Unit)? = null,
     highlight: Boolean = false,
+    /** Время мелким вторым тоном (отметка: время прихода еды или траты). */
+    timeSmall: Boolean = false,
+    /** Знак на рельсе поверх линии — монета режима у отметки. */
+    railMark: (@Composable BoxScope.() -> Unit)? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
     val t = LocalPravkaType.current
     Row(
         modifier
             .fillMaxWidth()
-            .height(height)
+            .heightIn(min = height)
+            .height(IntrinsicSize.Min)
             .then(if (highlight) Modifier.clip(RoundedCornerShape(12.dp)).background(Ink.Now.copy(alpha = 0.06f)) else Modifier)
             .then(
                 when {
@@ -148,13 +166,14 @@ fun TimelineRow(
                 .fillMaxHeight()
                 .then(if (railTap != null) Modifier.clickable(role = Role.Checkbox, onClickLabel = "сделано", onClick = railTap) else Modifier),
         ) {
-            Column(Modifier.width(TIME_W).padding(top = 1.dp), horizontalAlignment = Alignment.End) {
+            Column(Modifier.width(TIME_W).padding(top = if (timeSmall) 8.dp else 1.dp), horizontalAlignment = Alignment.End) {
                 if (time != null) {
                     Text(
                         time,
-                        style = t.time.copy(fontWeight = if (timeBold) FontWeight.SemiBold else FontWeight.Normal),
+                        style = if (timeSmall) t.meta.copy(lineHeight = 14.sp) else t.time.copy(fontWeight = if (timeBold) FontWeight.SemiBold else FontWeight.Normal),
                         color = timeColor,
                         maxLines = 1,
+                        softWrap = false,
                         textAlign = TextAlign.End,
                     )
                 }
@@ -165,6 +184,8 @@ fun TimelineRow(
                     .width(RAIL_W)
                     .fillMaxHeight()
                     .drawBehind { rail(rail, size.width / 2f) },
+                contentAlignment = Alignment.TopCenter,
+                content = { railMark?.invoke(this) },
             )
         }
         Row(Modifier.weight(1f).fillMaxHeight(), content = content)
@@ -211,13 +232,13 @@ fun EntryRow(
         modifier = modifier,
         highlight = highlight,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(entryTitle(e.title, e.useful, e.client), style = t.body, color = Ink.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Column(Modifier.weight(1f).padding(bottom = 7.dp)) {
+            Text(entryTitle(e.title, e.useful, e.client), style = t.body, color = Ink.Text)
             val second = if (e.fromYesterday) "с ${Fmt.hm(e.fullStart)} вчера · за ночь ${Fmt.dur(e.fullMinutes)}"
             else "${e.category.ifBlank { "без категории" }} · ${Fmt.dur(e.minutes)}"
-            Text(second, style = t.meta, color = Ink.TextMeta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(second, style = t.meta, color = Ink.TextMeta)
             if (withNote) {
-                Text(e.comment, style = t.meta.copy(fontStyle = FontStyle.Italic), color = Ink.TextNote, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(e.comment, style = t.meta.copy(fontStyle = FontStyle.Italic), color = Ink.TextNote)
             }
         }
     }
@@ -253,8 +274,8 @@ fun CurrentRow(
         onClick = onClick,
         modifier = modifier,
     ) {
-        Row(Modifier.weight(1f), verticalAlignment = Alignment.Top) {
-            Text(e.title, style = t.bodyStrong, color = Ink.Text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Row(Modifier.weight(1f).padding(bottom = 7.dp), verticalAlignment = Alignment.Top) {
+            Text(e.title, style = t.bodyStrong, color = Ink.Text, modifier = Modifier.weight(1f, fill = false))
             if (e.category.isNotBlank() && !e.gap) {
                 Spacer(Modifier.width(8.dp))
                 TagChip(e.category.substringBefore(':').trim(), group.text, group.fill.copy(alpha = 0.30f))
@@ -287,31 +308,44 @@ fun DayAssembler.Source.decor(): ModeDecor = when (this) {
  * режима — капсула 26 dp. Тап открывает режим на этой записи.
  */
 @Composable
-fun EventChip(source: DayAssembler.Source, text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun EventChip(source: DayAssembler.Source, text: String, onClick: () -> Unit, modifier: Modifier = Modifier, coin: Boolean = true) {
     val m = Modes.of(source.decor())
     val t = LocalPravkaType.current
     val shape = RoundedCornerShape(13.dp)
     Row(
         modifier
-            .height(26.dp)
+            .heightIn(min = 26.dp)
             .clip(shape)
             .background(m.key.copy(alpha = 0.32f))
             .border(1.dp, m.tint.copy(alpha = 0.29f), shape)
             .clickable(role = Role.Button, onClick = onClick)
-            .padding(start = 3.dp, end = 10.dp),
+            .padding(start = if (coin) 3.dp else 10.dp, end = 10.dp, top = 3.dp, bottom = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
-        Coin(source.decor(), 20.dp)
-        Text(text, style = t.label.copy(fontWeight = FontWeight.Normal), color = m.eventText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (coin) Coin(source.decor(), 20.dp)
+        Text(text, style = t.label.copy(fontWeight = FontWeight.Normal), color = m.eventText)
     }
 }
 
-/** Строка отметки: рельс записи насквозь и капсула. */
+/** Монета отметки на рельсе: 18 dp, центр — на уровне середины плашки рядом. */
+private val MARK_COIN = 18.dp
+
+/**
+ * Строка отметки: рельс записи насквозь, на нём — монета режима, слева —
+ * время отметки мелким, справа — плашка с текстом (переносится, без монеты).
+ */
 @Composable
-fun MarkRow(source: DayAssembler.Source, text: String, line: Color, onClick: () -> Unit) {
-    TimelineRow(height = 34.dp, rail = Rail.Through(line)) {
-        Box(Modifier.weight(1f).padding(top = 2.dp)) { EventChip(source, text, onClick) }
+fun MarkRow(source: DayAssembler.Source, text: String, line: Color, onClick: () -> Unit, at: Long? = null) {
+    TimelineRow(
+        height = 34.dp,
+        rail = Rail.Through(line),
+        time = at?.let { Fmt.hm(it) },
+        timeColor = Ink.TextMeta,
+        timeSmall = true,
+        railMark = { Coin(source.decor(), MARK_COIN, Modifier.padding(top = 6.dp)) },
+    ) {
+        Box(Modifier.weight(1f).padding(top = 2.dp, bottom = 6.dp)) { EventChip(source, text, onClick, coin = false) }
     }
 }
 
@@ -320,31 +354,38 @@ fun MarkRow(source: DayAssembler.Source, text: String, line: Color, onClick: () 
  * монета 24, текст и маленькая клавиша «Записать» в tint.
  */
 @Composable
-fun PendingRow(source: DayAssembler.Source, text: String, line: Color, onOpen: () -> Unit, onConfirm: () -> Unit) {
+fun PendingRow(source: DayAssembler.Source, text: String, line: Color, onOpen: () -> Unit, onConfirm: () -> Unit, at: Long? = null) {
     val m = Modes.of(source.decor())
     val t = LocalPravkaType.current
-    TimelineRow(height = 42.dp, rail = Rail.Through(line)) {
+    TimelineRow(
+        height = 42.dp,
+        rail = Rail.Through(line),
+        time = at?.let { Fmt.hm(it) },
+        timeColor = Ink.TextMeta,
+        timeSmall = true,
+        railMark = { Coin(source.decor(), MARK_COIN, Modifier.padding(top = 9.dp)) },
+    ) {
         val shape = RoundedCornerShape(18.dp)
         Row(
             Modifier
                 .weight(1f)
-                .height(36.dp)
+                .padding(bottom = 6.dp)
+                .heightIn(min = 36.dp)
                 .clip(shape)
                 .background(m.key.copy(alpha = 0.30f))
                 .border(1.dp, m.tint.copy(alpha = 0.38f), shape)
                 .clickable(onClick = onOpen)
-                .padding(start = 4.dp, end = 3.dp),
+                .padding(start = 12.dp, end = 3.dp, top = 3.dp, bottom = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Coin(source.decor(), 24.dp)
-            Text(text, style = t.label.copy(fontWeight = FontWeight.Normal), color = m.eventText, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text(text, style = t.label.copy(fontWeight = FontWeight.Normal), color = m.eventText, modifier = Modifier.weight(1f))
             val bs = RoundedCornerShape(14.dp)
             Box(
                 Modifier
                     .height(28.dp)
                     .clip(bs)
-                    .keyFace4(m.tint, bs, hi = 0.55f, low = 0f)
+                    .keyFace4(m.tint, bs)
                     .clickable(role = Role.Button, onClick = onConfirm)
                     .padding(horizontal = 12.dp),
                 contentAlignment = Alignment.Center,
@@ -415,14 +456,14 @@ fun PlannedRow(
         time2 = end?.let { Fmt.hm(it) },
         onClick = onClick,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = t.body, color = Ink.PlanText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(bottom = 7.dp)) {
+            Text(title, style = t.body, color = Ink.PlanText)
+            Row(verticalAlignment = Alignment.Top) {
                 if (workout) TagChip("Спорт · план", sport.label, sport.key.copy(alpha = 0.45f))
                 else TagChip("Календарь", Ink.PlanText, Ink.Cream.copy(alpha = 0.12f))
                 Spacer(Modifier.width(4.dp))
                 val tail = listOf(Fmt.dur(minutes), note).filter { it.isNotBlank() }.joinToString(" · ")
-                Text(tail, style = t.meta, color = Ink.TextMeta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(tail, style = t.meta, color = Ink.TextMeta)
             }
         }
     }
@@ -437,8 +478,7 @@ fun TaskGroupRow(count: Int, minutes: Int) {
             "ДЕЛА НА СЕГОДНЯ · $count · ${Fmt.dur(minutes).uppercase()}",
             style = t.overline,
             color = Color(0xFF8FB4D4),
-            maxLines = 1,
-            modifier = Modifier.padding(top = 4.dp),
+            modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
         )
     }
 }
@@ -467,16 +507,14 @@ fun TaskTimelineRow(
         onLongClick = onLong,
         railTap = onDone,
     ) {
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f).padding(bottom = 7.dp)) {
             Text(
                 item.title,
                 style = t.body,
                 color = Ink.PlanText.copy(alpha = if (done) 0.5f else 1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
             val second = listOf(item.second, Fmt.dur(item.minutes)).filter { it.isNotBlank() }.joinToString(" · ")
-            Text(second, style = t.meta, color = dela.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(second, style = t.meta, color = dela.meta)
         }
     }
 }
@@ -497,8 +535,7 @@ fun SleepRow(at: Long, overflowMin: Int) {
             },
             style = t.body,
             color = Ink.TextSecondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(bottom = 7.dp),
         )
     }
 }
@@ -527,8 +564,8 @@ fun TimelineItem(
         is DayAssembler.DayItem.Entry ->
             if (item.current) CurrentRow(item, now, { onEntry(item) })
             else EntryRow(item, lineDown = !nextIsNow, onClick = { onEntry(item) })
-        is DayAssembler.DayItem.Mark -> MarkRow(item.source, item.text, line) { onMark(item) }
-        is DayAssembler.DayItem.Pending -> PendingRow(item.source, item.text, line, { onPending(item, false) }, { onPending(item, true) })
+        is DayAssembler.DayItem.Mark -> MarkRow(item.source, item.text, line, { onMark(item) }, at = item.at)
+        is DayAssembler.DayItem.Pending -> PendingRow(item.source, item.text, line, { onPending(item, false) }, { onPending(item, true) }, at = item.at)
         is DayAssembler.DayItem.Now -> NowLine(Fmt.hm(item.at))
         is DayAssembler.DayItem.Free -> FreeRow(item.minutes)
         is DayAssembler.DayItem.Planned -> PlannedRow(item.start, item.end, item.title, item.workout, item.note, item.minutes, if (item.workout) ({ onPlanned(item) }) else null)

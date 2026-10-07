@@ -352,7 +352,7 @@ internal fun MoneyTab(
                                 if (k > 0) ru.zf.pravka.ui.Hairline()
                                 Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Column(Modifier.weight(1f)) {
-                                        Text(r.name, style = ty.bodyL, color = ru.zf.pravka.ui.Ink.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(r.name, style = ty.bodyL, color = ru.zf.pravka.ui.Ink.Text)
                                         Text(MoneyCategories.title(r.category) + " · ${r.months} мес. из 6", style = ty.meta, color = mode.meta)
                                     }
                                     Text("−" + MoneyFormat.k(r.avgKop), style = ty.valueS, color = ru.zf.pravka.ui.Ink.TextStrong)
@@ -647,7 +647,7 @@ private fun EntryRow(e: MoneyEntry, onVoice: ((MoneyEntry) -> Unit)? = null, onC
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(e.what, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(e.what, style = MaterialTheme.typography.bodyMedium)
             val bits = mutableListOf(stamp(e.ts, e.timeKnown), e.source.title)
             bits.add(if (e.category.isBlank()) "без категории" else MoneyCategories.title(e.category))
             if (e.who.isNotBlank()) bits.add(MoneyCategories.whoTitle(e.who))

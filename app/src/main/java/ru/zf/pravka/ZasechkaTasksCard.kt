@@ -175,8 +175,6 @@ private fun TaskStartRow(
                 style = t.bodyL,
                 fontWeight = if (live) FontWeight.SemiBold else FontWeight.Normal,
                 color = ru.zf.pravka.ui.Ink.Text,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
             )
             val meta = buildList {
                 add(task.numLabel)
@@ -190,8 +188,6 @@ private fun TaskStartRow(
                 style = t.meta,
                 color = if (live) mode.value else mode.meta,
                 fontWeight = if (live) FontWeight.SemiBold else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
         }
         when {

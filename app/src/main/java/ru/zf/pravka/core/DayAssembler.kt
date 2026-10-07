@@ -202,8 +202,12 @@ object DayAssembler {
                     last -> at >= r.start
                     else -> at >= r.start && at < rows[i + 1].start
                 }
-                marks.filter { owns(it.at) }.forEach { out += DayItem.Mark(r.id, it.at, it.source, it.text, it.ref) }
-                pend.filter { owns(it.at) }.forEach { out += DayItem.Pending(r.id, it.at, it.source, it.text, it.ref) }
+                // Отметки и ждущее — одной очередью по времени: время отметки
+                // видно в колонке времени, и «18:50» над «18:40» читалось бы ошибкой.
+                (
+                    marks.filter { owns(it.at) }.map { it.at to DayItem.Mark(r.id, it.at, it.source, it.text, it.ref) } +
+                        pend.filter { owns(it.at) }.map { it.at to DayItem.Pending(r.id, it.at, it.source, it.text, it.ref) }
+                    ).sortedBy { it.first }.forEach { out += it.second }
             }
             // Отметки без записей (день ещё пуст) — всё равно видны.
             if (rows.isEmpty()) {

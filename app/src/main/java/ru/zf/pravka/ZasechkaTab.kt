@@ -1112,8 +1112,6 @@ private fun EntryRow(
             Text(
                 title,
                 style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(2.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1198,8 +1196,6 @@ private fun ChainBlock(
             Text(
                 title,
                 style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(2.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1270,8 +1266,6 @@ private fun EntrySheet(
                     entry.client,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
             if (points != 0) {
@@ -2322,8 +2316,6 @@ private fun CategoriesEditor(
                         style = MaterialTheme.typography.bodyMedium,
                         color = categoryColor(category.name),
                         modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
                     // The two knobs at a glance: typical length and what an
                     // hour of it is worth (+ lifts the day, - sinks it).
@@ -2356,8 +2348,6 @@ private fun CategoriesEditor(
                         category.hint,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -2949,8 +2939,6 @@ private fun CommentLine(comment: String) {
         comment,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 2,
-        overflow = TextOverflow.Ellipsis,
         modifier = Modifier.padding(top = 2.dp),
     )
 }

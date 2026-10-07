@@ -697,6 +697,141 @@ private fun MainScreen(
         )
     }
 
+    // Карусель (баг №12, 07.10.2026, владелец: «когда я смахиваю вправо по
+    // текущему дню, я попадал в дела… дальше вправо — в спорт, потом в еду,
+    // потом в деньги, и наоборот… и бэком я возвращаюсь к текущему дню»):
+    // «Сегодня» и четыре режима плашек листаются вбок. Засечка и Правка —
+    // не в ней: у них свои входы (пилюля «+84», «Ещё»). Выключенный в
+    // профиле режим из карусели выпадает.
+    val ring = remember(profile) { RING.filter(live) }
+    // Экран режима — один на все входы: прямой (Засечка, Правка) и в карусели.
+    val modeScreen: @Composable (Tab) -> Unit = { t ->
+        ModeFrame(decorOf(t)) {
+            Column(Modifier.fillMaxSize()) {
+                when (t) {
+                    Tab.PRAVKA -> {
+                        val cleanFlow = remember { app.settings.modelChoiceFlow(ru.zf.pravka.data.ModelRoute.PRAVKA) }
+                        val clean by cleanFlow.collectAsState(initial = null)
+                        TabHeader(
+                            title = stringResource(R.string.tab_pravka),
+                            onBack = toToday,
+                            titleExtra = clean?.let { c ->
+                                ru.zf.pravka.data.Models.label(c.model).substringBefore(' ') + " · " +
+                                    ru.zf.pravka.data.Models.effectiveEffort(c.model, c.effort)
+                            },
+                            onTitleExtra = { pages = listOf(Page.ModeSettings(SettingsGroup.MODELS)) },
+                            actions = {
+                                StatsAction { pages = listOf(Page.Service(Tab.STATS)) }
+                                CostAction(openCost)
+                                SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.PRAVKA)) }
+                            },
+                        )
+                        PravkaTab(app, serviceEnabled)
+                    }
+                    Tab.ZASECHKA -> {
+                        TabHeader(
+                            title = stringResource(R.string.tab_zasechka),
+                            onBack = toToday,
+                            actions = {
+                                StatsAction(openReport)
+                                SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.ZASECHKA)) }
+                            },
+                        )
+                        ZasechkaTab(app, editEntry = zasechkaEdit, onEditHandled = { zasechkaEdit = null })
+                    }
+                    Tab.TODOIST -> {
+                        val delaActions: @Composable RowScope.() -> Unit = {
+                            StatsAction(openReport)
+                            CostAction(openCost)
+                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.DELA)) }
+                        }
+                        // Дела на домашнем сервере или Todoist — выбор в
+                        // «Подключениях» (03.10.2026); Todoist — запасной путь.
+                        // У своего сервера шапку рисует вкладка: вторым тоном
+                        // в ней сфера (макет 06 — «Дела Все сферы ⌄»).
+                        val onServer by app.delaServer.collectAsState()
+                        if (onServer) {
+                            DelaTab(
+                                app,
+                                openTaskId = delaOpen,
+                                onOpenHandled = { delaOpen = null },
+                                header = { sub, onSub ->
+                                    TabHeader(title = "Дела", onBack = toToday, titleExtra = sub, onTitleExtra = onSub, actions = delaActions)
+                                },
+                            )
+                        } else {
+                            TabHeader(title = "Дела", onBack = toToday, actions = delaActions)
+                            TodoistTab(app)
+                        }
+                    }
+                    Tab.SPORT -> {
+                        TabHeader(
+                            title = stringResource(R.string.tab_sport),
+                            onBack = toToday,
+                            // Вторым тоном — неделя года, как в макете 09 («Неделя 41»).
+                            titleExtra = "Неделя " + java.time.LocalDate.now().get(java.time.temporal.WeekFields.ISO.weekOfWeekBasedYear()),
+                            actions = {
+                                StatsAction(openReport)
+                                CostAction(openCost)
+                                SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.SPORT)) }
+                            },
+                        )
+                        SportTab(app)
+                    }
+                    Tab.MONEY -> {
+                        val pOn by app.settings.mScopePersonalFlow.collectAsState(initial = true)
+                        val zOn by app.settings.mScopeZfFlow.collectAsState(initial = false)
+                        var scopeSheet by remember { mutableStateOf(false) }
+                        TabHeader(
+                            title = stringResource(R.string.tab_money),
+                            onBack = toToday,
+                            titleExtra = when {
+                                pOn && zOn -> "Всё"
+                                zOn -> "ЗФ"
+                                else -> "Личное"
+                            },
+                            onTitleExtra = { scopeSheet = true },
+                            actions = {
+                                ExportAction { moneyExport = true }
+                                StatsAction(openReport)
+                                CostAction(openCost)
+                                SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.MONEY)) }
+                            },
+                        )
+                        MoneyTab(
+                            app,
+                            exportRequested = moneyExport,
+                            onExportHandled = { moneyExport = false },
+                        )
+                        if (scopeSheet) MoneyScopeSheet(app, pOn, zOn, onDismiss = { scopeSheet = false })
+                    }
+                    else -> {
+                        // Шапку рисует вкладка: вторым тоном — день дневника (макет 10).
+                        val foodTitle = stringResource(R.string.tab_food)
+                        FoodTab(
+                            app,
+                            autoAction = foodActionPending,
+                            onAutoConsumed = { foodActionPending = null },
+                            header = { day, onDay ->
+                                TabHeader(
+                                    title = foodTitle,
+                                    onBack = toToday,
+                                    titleExtra = day,
+                                    onTitleExtra = onDay,
+                                    actions = {
+                                        StatsAction(openReport)
+                                        CostAction(openCost)
+                                        SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.FOOD)) }
+                                    },
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         // Переходы — растворением, 250 мс (DESIGN §10): экран не едет, а сменяется.
         androidx.compose.animation.AnimatedContent(
@@ -705,7 +840,8 @@ private fun MainScreen(
                 androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(250)) togetherWith
                     androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200))
             },
-            contentKey = { (p, t) -> p?.toString() ?: t.name },
+            // Внутри карусели смена вкладки — не смена экрана: едет пейджер.
+            contentKey = { (p, t) -> p?.toString() ?: if (t in ring) "ring" else t.name },
             label = "screen",
         ) { (p, t) ->
             when {
@@ -724,131 +860,10 @@ private fun MainScreen(
                     onDictationExport = { dictationExport = it },
                     onLifeExport = { lifeExport = true },
                 )
-                t == Tab.TODAY -> TodayScreen(app, todayNav)
-                else -> ModeFrame(decorOf(t)) {
-                    Column(Modifier.fillMaxSize()) {
-                        when (t) {
-                            Tab.PRAVKA -> {
-                                val cleanFlow = remember { app.settings.modelChoiceFlow(ru.zf.pravka.data.ModelRoute.PRAVKA) }
-                                val clean by cleanFlow.collectAsState(initial = null)
-                                TabHeader(
-                                    title = stringResource(R.string.tab_pravka),
-                                    onBack = toToday,
-                                    titleExtra = clean?.let { c ->
-                                        ru.zf.pravka.data.Models.label(c.model).substringBefore(' ') + " · " +
-                                            ru.zf.pravka.data.Models.effectiveEffort(c.model, c.effort)
-                                    },
-                                    onTitleExtra = { pages = listOf(Page.ModeSettings(SettingsGroup.MODELS)) },
-                                    actions = {
-                                        StatsAction { pages = listOf(Page.Service(Tab.STATS)) }
-                                        CostAction(openCost)
-                                        SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.PRAVKA)) }
-                                    },
-                                )
-                                PravkaTab(app, serviceEnabled)
-                            }
-                            Tab.ZASECHKA -> {
-                                TabHeader(
-                                    title = stringResource(R.string.tab_zasechka),
-                                    onBack = toToday,
-                                    actions = {
-                                        StatsAction(openReport)
-                                        SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.ZASECHKA)) }
-                                    },
-                                )
-                                ZasechkaTab(app, editEntry = zasechkaEdit, onEditHandled = { zasechkaEdit = null })
-                            }
-                            Tab.TODOIST -> {
-                                val delaActions: @Composable RowScope.() -> Unit = {
-                                    StatsAction(openReport)
-                                    CostAction(openCost)
-                                    SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.DELA)) }
-                                }
-                                // Дела на домашнем сервере или Todoist — выбор в
-                                // «Подключениях» (03.10.2026); Todoist — запасной путь.
-                                // У своего сервера шапку рисует вкладка: вторым тоном
-                                // в ней сфера (макет 06 — «Дела Все сферы ⌄»).
-                                val onServer by app.delaServer.collectAsState()
-                                if (onServer) {
-                                    DelaTab(
-                                        app,
-                                        openTaskId = delaOpen,
-                                        onOpenHandled = { delaOpen = null },
-                                        header = { sub, onSub ->
-                                            TabHeader(title = "Дела", onBack = toToday, titleExtra = sub, onTitleExtra = onSub, actions = delaActions)
-                                        },
-                                    )
-                                } else {
-                                    TabHeader(title = "Дела", onBack = toToday, actions = delaActions)
-                                    TodoistTab(app)
-                                }
-                            }
-                            Tab.SPORT -> {
-                                TabHeader(
-                                    title = stringResource(R.string.tab_sport),
-                                    onBack = toToday,
-                                    // Вторым тоном — неделя года, как в макете 09 («Неделя 41»).
-                                    titleExtra = "Неделя " + java.time.LocalDate.now().get(java.time.temporal.WeekFields.ISO.weekOfWeekBasedYear()),
-                                    actions = {
-                                        StatsAction(openReport)
-                                        CostAction(openCost)
-                                        SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.SPORT)) }
-                                    },
-                                )
-                                SportTab(app)
-                            }
-                            Tab.MONEY -> {
-                                val pOn by app.settings.mScopePersonalFlow.collectAsState(initial = true)
-                                val zOn by app.settings.mScopeZfFlow.collectAsState(initial = false)
-                                var scopeSheet by remember { mutableStateOf(false) }
-                                TabHeader(
-                                    title = stringResource(R.string.tab_money),
-                                    onBack = toToday,
-                                    titleExtra = when {
-                                        pOn && zOn -> "Всё"
-                                        zOn -> "ЗФ"
-                                        else -> "Личное"
-                                    },
-                                    onTitleExtra = { scopeSheet = true },
-                                    actions = {
-                                        ExportAction { moneyExport = true }
-                                        StatsAction(openReport)
-                                        CostAction(openCost)
-                                        SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.MONEY)) }
-                                    },
-                                )
-                                MoneyTab(
-                                    app,
-                                    exportRequested = moneyExport,
-                                    onExportHandled = { moneyExport = false },
-                                )
-                                if (scopeSheet) MoneyScopeSheet(app, pOn, zOn, onDismiss = { scopeSheet = false })
-                            }
-                            else -> {
-                                // Шапку рисует вкладка: вторым тоном — день дневника (макет 10).
-                                val foodTitle = stringResource(R.string.tab_food)
-                                FoodTab(
-                                    app,
-                                    autoAction = foodActionPending,
-                                    onAutoConsumed = { foodActionPending = null },
-                                    header = { day, onDay ->
-                                        TabHeader(
-                                            title = foodTitle,
-                                            onBack = toToday,
-                                            titleExtra = day,
-                                            onTitleExtra = onDay,
-                                            actions = {
-                                                StatsAction(openReport)
-                                                CostAction(openCost)
-                                                SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.FOOD)) }
-                                            },
-                                        )
-                                    },
-                                )
-                            }
-                        }
-                    }
+                t in ring -> RingPager(ring, t, onSettle = { tab = it }) { rt ->
+                    if (rt == Tab.TODAY) TodayScreen(app, todayNav) else modeScreen(rt)
                 }
+                else -> modeScreen(t)
             }
         }
         // Пуши выключены — говорим сверху, а не в глубине настроек автопилота.
@@ -2612,3 +2627,31 @@ private fun PromptEditor(
     }
 }
 
+/** Порядок карусели: «Сегодня», Дела, Спорт, Еда, Деньги (баг №12). */
+private val RING = listOf(Tab.TODAY, Tab.TODOIST, Tab.SPORT, Tab.FOOD, Tab.MONEY)
+
+/**
+ * Карусель «Сегодня» и режимов: взмах вбок — соседний экран, как страницы.
+ * Вкладка [tab] и страница пейджера держатся вместе: плашка или «назад»
+ * меняют вкладку — пейджер встаёт туда сразу, без проезда через соседей;
+ * взмах остановился на странице — вкладка становится ею ([onSettle]).
+ * Соседи собираются только на время взмаха: держать Дела и Деньги
+ * собранными, пока смотришь «Сегодня», — лишняя работа.
+ */
+@Composable
+private fun RingPager(ring: List<Tab>, tab: Tab, onSettle: (Tab) -> Unit, page: @Composable (Tab) -> Unit) {
+    val pager = androidx.compose.foundation.pager.rememberPagerState(initialPage = ring.indexOf(tab).coerceAtLeast(0)) { ring.size }
+    LaunchedEffect(tab, ring) {
+        val i = ring.indexOf(tab)
+        if (i >= 0 && i != pager.settledPage && !pager.isScrollInProgress) pager.scrollToPage(i)
+    }
+    val settle by androidx.compose.runtime.rememberUpdatedState(onSettle)
+    LaunchedEffect(pager, ring) {
+        androidx.compose.runtime.snapshotFlow { pager.settledPage }.collect { i -> ring.getOrNull(i)?.let { settle(it) } }
+    }
+    androidx.compose.foundation.pager.HorizontalPager(
+        state = pager,
+        key = { ring[it].name },
+        modifier = Modifier.fillMaxSize(),
+    ) { i -> page(ring[i]) }
+}
