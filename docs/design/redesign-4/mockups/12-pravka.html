@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Правка — чистка текста</title>
+
+</head>
+<body>
+
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&amp;family=Literata:opsz,wght@7..72,500;7..72,600;7..72,700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+.ph{font-family:'Golos Text',system-ui,sans-serif;color:#F0EADF;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;--k:234,88,12;--t:245,146,90;--i:46,22,8;--tint:#F5925A;--label:#F7A878;--value:#FFD2B5;--meta:#B8907A}
+.serif{font-family:'Literata',Georgia,serif}
+.glass{background:linear-gradient(180deg,rgba(var(--t),.13) 0,rgba(var(--t),.03) 30%,rgba(var(--t),0) 100%),linear-gradient(180deg,rgba(var(--k),.16),rgba(var(--k),.06)),rgba(var(--i),.80);border:1px solid rgba(var(--t),.20);border-top-color:rgba(var(--t),.36);box-shadow:0 14px 30px rgba(0,0,0,.40),inset 0 1px 0 rgba(255,255,255,.07)}
+.key{background:radial-gradient(110% 85% at 34% 20%,rgba(255,238,210,.58) 0,rgba(255,238,210,.12) 32%,rgba(255,238,210,0) 50%),radial-gradient(100% 70% at 50% 118%,rgba(100,30,0,.55) 0,rgba(100,30,0,0) 70%),rgb(var(--k));box-shadow:inset 0 1px 0 rgba(255,255,255,.40),inset 0 -2px 3px rgba(90,25,0,.35),0 6px 14px rgba(0,0,0,.45);color:#FFF6EA;border:0;padding:0;cursor:pointer}
+.coin{border-radius:50%;display:flex;align-items:center;justify-content:center;flex:none;background-image:radial-gradient(70% 55% at 36% 24%,rgba(255,236,210,.50) 0,rgba(255,236,210,0) 60%),radial-gradient(90% 60% at 50% 115%,rgba(0,0,0,.38) 0,rgba(0,0,0,0) 70%);box-shadow:0 3px 8px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.25)}
+.flat{background:transparent;border:0;padding:0;cursor:pointer;color:var(--label);font:inherit}
+.ib{width:44px;height:44px;display:flex;align-items:center;justify-content:center;flex:none}
+.ico{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block}
+.ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sec{display:flex;justify-content:space-between;align-items:baseline;padding:18px 24px 8px;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600;color:var(--label)}
+.sec span{text-transform:none;letter-spacing:0;font-weight:500;color:var(--meta);font-size:12.5px}
+.tr{display:flex;align-items:flex-start;gap:6px;padding:10px 0 10px;border-top:1px solid rgba(var(--t),.10)}
+.tr small{display:block;font-size:12px;color:var(--meta);line-height:16px}
+.tr p{margin:2px 0 0;font-size:14px;line-height:19px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ph input::placeholder{color:#C9A088}
+</style>
+
+<div class="ph" style="width:411px;height:900px;position:relative;overflow:hidden;background:#100F0D">
+
+  <div style="position:absolute;left:0;top:0;right:0;height:560px;pointer-events:none;opacity:0.85;background:radial-gradient(60% 40% at 16% 0%,rgba(234,88,12,.90) 0,rgba(234,88,12,0) 72%),radial-gradient(52% 36% at 88% 0%,rgba(245,146,90,.50) 0,rgba(245,146,90,0) 72%),radial-gradient(80% 40% at 50% 26%,rgba(234,88,12,.30) 0,rgba(234,88,12,0) 72%)"></div>
+
+  <div style="position:absolute;left:0;right:0;top:0;bottom:0;display:flex;flex-direction:column;padding-top:36px">
+
+    <div style="display:flex;align-items:center;gap:6px;padding:0 6px 0 2px;height:52px;flex:none">
+      <a href="#" class="ib" aria-label="Назад к сегодня" style="color:var(--label)"><svg class="ico" viewBox="0 0 24 24"><path d="M14.5 6l-6 6 6 6"></path></svg></a>
+      <span class="coin" style="width:34px;height:34px;background-color:#EA580C"><svg width="18" height="18" viewBox="0 0 24 24"><path d="M5.5 5h13v14h-3.4V8.3H8.9V19H5.5z" fill="#EFE8DC"></path></svg></span>
+      <div style="flex:1;min-width:0;margin-left:6px">
+        <h1 class="serif" style="margin:0;font-size:24px;line-height:26px;font-weight:600;color:#FFF3E8">Правка</h1>
+        <button class="flat" style="font-size:12.5px;line-height:16px;display:flex;align-items:center;gap:2px">Сонет · high<svg class="ico" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M7 10l5 5 5-5"></path></svg></button>
+      </div>
+      <button class="flat ib" aria-label="Статистика правки"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 3.5V12h8.5"></path></svg></button>
+      <button class="flat ib" aria-label="Стоимость Claude"><svg class="ico" viewBox="0 0 24 24"><path d="M12 3v18M16 7.6c-.8-1.3-2.3-2-4-2-2.2 0-4 1.2-4 3s1.8 2.6 4 3 4 1.3 4 3.2-1.8 3-4 3c-1.9 0-3.5-.8-4.2-2.2"></path></svg></button>
+      <button class="flat ib" aria-label="Настройки правки"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M12 2.8l1.6 2.3 2.7-.6.9 2.6 2.6.9-.6 2.7 2.3 1.6-2.3 1.6.6 2.7-2.6.9-.9 2.6-2.7-.6L12 21.2l-1.6-2.3-2.7.6-.9-2.6-2.6-.9.6-2.7L2.5 12l2.3-1.6-.6-2.7 2.6-.9.9-2.6 2.7.6z"></path></svg></button>
+    </div>
+
+    <div class="sec" style="flex:none">Последнее · 18:12<span>в Telegram · Иван Петров</span></div>
+
+    <div style="display:flex;justify-content:flex-end;margin:0 16px;flex:none">
+      <div style="max-width:84%;border-radius:20px 20px 6px 20px;padding:10px 14px;background:linear-gradient(180deg,rgba(245,146,90,.26),rgba(234,88,12,.18)),rgba(46,22,8,.85);border:1px solid rgba(245,146,90,.34);font-size:14px;line-height:19px;color:#FFE6D6">ну короче скажи ивану что выгрузку из один эс жду до среды и пусть структуру долга тоже пришлёт</div>
+    </div>
+
+    <div class="glass" style="margin:10px 16px 0;border-radius:22px;padding:14px 12px 10px 16px;flex:none">
+      <div style="font-size:16.5px;line-height:23px">Иван, жду выгрузку из 1С до среды. И пришлите, пожалуйста, структуру долга.</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+        <span style="flex:1;font-size:12.5px;color:var(--meta)">2,1 с · 118 → 74 зн</span>
+        <button class="key" style="height:44px;border-radius:22px;display:flex;align-items:center;gap:8px;padding:0 16px 0 12px;font-family:inherit;font-size:14px;font-weight:600"><svg class="ico" viewBox="0 0 24 24" style="width:18px;height:18px"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"></path></svg>Скопировать ещё раз</button>
+      </div>
+    </div>
+
+    <div class="sec" style="flex:none">Последние расшифровки<span>24 сегодня · 18 м голоса</span></div>
+    <div style="flex:1;min-height:0;overflow:hidden;-webkit-mask-image:linear-gradient(180deg,#000 0,#000 80%,rgba(0,0,0,0) 100%);mask-image:linear-gradient(180deg,#000 0,#000 80%,rgba(0,0,0,0) 100%)">
+      <div class="glass" style="margin:0 16px;border-radius:22px;padding:0 4px 0 16px">
+        <div class="tr" style="border-top:0">
+          <div style="flex:1;min-width:0"><small>16:05 · Whisper · 0:41 · 402 зн</small><p>Пост про ковенанты: три ошибки, которые собственники делают на переговорах с банком, и как их не допустить</p></div>
+          <button class="flat ib" aria-label="Скопировать"><svg class="ico" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"></path></svg></button>
+        </div>
+        <div class="tr">
+          <div style="flex:1;min-width:0"><small>14:52 · Whisper · 0:09 · 76 зн</small><p>Ок, напомню себе в среду, спасибо!</p></div>
+          <button class="flat ib" aria-label="Скопировать"><svg class="ico" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"></path></svg></button>
+        </div>
+        <div class="tr">
+          <div style="flex:1;min-width:0"><small>11:30 · на телефоне · 0:22 · 190 зн</small><p>Марина, четверг подходит. Давайте в 11 или в 15 — как вам удобнее?</p></div>
+          <button class="flat ib" aria-label="Скопировать"><svg class="ico" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"></path></svg></button>
+        </div>
+        <div class="tr">
+          <div style="flex:1;min-width:0"><small>10:41 · Whisper · 0:12 · 98 зн</small><p>Записать: сценарий без кредита к четвергу, Бета Групп</p></div>
+          <button class="flat ib" aria-label="Скопировать"><svg class="ico" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"></path></svg></button>
+        </div>
+      </div>
+    </div>
+    <div style="height:98px;flex:none"></div>
+  </div>
+
+  <div class="glass" style="position:absolute;left:12px;right:12px;bottom:18px;height:62px;border-radius:31px;display:flex;align-items:center;gap:4px;padding:0 6px 0 20px;box-sizing:border-box">
+    <input aria-label="Текст для правки" placeholder="Вставь или скажи текст" style="flex:1;min-width:0;background:transparent;border:0;outline:0;font:inherit;font-size:16.5px;color:#F0EADF">
+    <button class="flat ib" aria-label="Вставить"><svg class="ico" viewBox="0 0 24 24"><rect x="6" y="5" width="12" height="16" rx="2"></rect><path d="M9 5V3.5h6V5"></path></svg></button>
+    <button class="key" aria-label="Сказать голосом" style="width:50px;height:50px;border-radius:25px;display:flex;align-items:center;justify-content:center;flex:none"><svg class="ico" viewBox="0 0 24 24" style="width:24px;height:24px;stroke-width:2"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"></path></svg></button>
+  </div>
+</div>
+
+
+</body>
+</html>

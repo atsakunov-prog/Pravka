@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Засечка — циферблат суток</title>
+
+</head>
+<body>
+
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&amp;family=Literata:opsz,wght@7..72,500;7..72,600;7..72,700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+.ph{font-family:'Golos Text',system-ui,sans-serif;color:#F0EADF;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+.serif{font-family:'Literata',Georgia,serif}
+.glass{background:linear-gradient(180deg,rgba(255,200,140,.14) 0,rgba(255,200,140,.035) 30%,rgba(255,200,140,0) 100%),rgba(44,25,10,.72);border:1px solid rgba(247,136,16,.22);border-top-color:rgba(255,206,150,.38);box-shadow:0 14px 30px rgba(0,0,0,.40),inset 0 1px 0 rgba(255,228,195,.10)}
+.key{background:radial-gradient(110% 85% at 34% 20%,rgba(255,238,210,.60) 0,rgba(255,238,210,.12) 32%,rgba(255,238,210,0) 50%),radial-gradient(100% 70% at 50% 118%,rgba(120,48,0,.55) 0,rgba(120,48,0,0) 70%),#F78810;box-shadow:inset 0 1px 0 rgba(255,255,255,.42),inset 0 -2px 3px rgba(110,45,0,.35),0 6px 14px rgba(0,0,0,.45);color:#FFF6EA;border:0;padding:0;cursor:pointer}
+.coin{border-radius:50%;display:flex;align-items:center;justify-content:center;flex:none;background-image:radial-gradient(70% 55% at 36% 24%,rgba(255,236,210,.50) 0,rgba(255,236,210,0) 60%),radial-gradient(90% 60% at 50% 115%,rgba(0,0,0,.38) 0,rgba(0,0,0,0) 70%);box-shadow:0 3px 8px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.25)}
+.flat{background:transparent;border:0;padding:0;cursor:pointer;color:#E8D3B8}
+.ico{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block}
+.ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ph input::placeholder{color:#CDAE88}
+.sw{width:11px;height:11px;border-radius:3px;flex:none;display:inline-block}
+.lg{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:#CDB394;white-space:nowrap}
+.lg b{color:#F9B566;font-weight:600}
+</style>
+
+<div class="ph" style="width:411px;height:900px;position:relative;overflow:hidden;background:#100F0D">
+
+  <div style="position:absolute;left:0;top:0;right:0;height:640px;pointer-events:none;opacity:0.85;background:radial-gradient(60% 34% at 18% 0%,rgba(255,156,34,.80) 0,rgba(255,156,34,0) 72%),radial-gradient(52% 30% at 88% 0%,rgba(247,122,16,.62) 0,rgba(247,122,16,0) 72%),radial-gradient(44% 26% at 50% 30%,rgba(247,136,16,.22) 0,rgba(247,136,16,0) 72%)"></div>
+
+  <div style="position:absolute;inset:0;display:flex;flex-direction:column;padding-top:36px">
+
+    <div style="display:flex;align-items:center;gap:8px;padding:0 10px 0 4px;height:52px;flex:none">
+      <a href="01-segodnya.html" aria-label="Назад к сегодня" style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;color:#E8D3B8"><svg class="ico" viewBox="0 0 24 24"><path d="M14.5 6l-6 6 6 6"></path></svg></a>
+      <div class="coin" style="width:34px;height:34px;background-color:#F78810"><svg width="18" height="18" viewBox="0 0 24 24"><path d="M5.5 5h13v14h-13v-3.2h9.6v-2.2H8.5v-3.2h6.6V8.2H5.5z" fill="#EFE8DC"></path></svg></div>
+      <h1 class="serif" style="margin:0 0 0 4px;font-size:24px;line-height:30px;font-weight:600;flex:1;color:#FFF3E2">Засечка</h1>
+      <button class="flat" aria-label="Статистика дня" style="width:44px;height:44px;display:flex;align-items:center;justify-content:center"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 3.5V12h8.5"></path></svg></button>
+      <button class="flat" aria-label="Настройки Засечки" style="width:44px;height:44px;display:flex;align-items:center;justify-content:center"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M12 2.8l1.6 2.3 2.7-.6.9 2.6 2.6.9-.6 2.7 2.3 1.6-2.3 1.6.6 2.7-2.6.9-.9 2.6-2.7-.6L12 21.2l-1.6-2.3-2.7.6-.9-2.6-2.6-.9.6-2.7L2.5 12l2.3-1.6-.6-2.7 2.6-.9.9-2.6 2.7.6z"></path></svg></button>
+    </div>
+
+    <div style="position:relative;width:308px;height:308px;margin:2px auto 0;flex:none">
+      <svg width="308" height="308" viewBox="0 0 300 300" style="display:block" role="img" aria-label="Сутки по часам: снаружи круга — время с пользой, внутрь — потери">
+        <circle cx="150" cy="150" r="100" fill="none" stroke="rgba(247,136,16,.10)" stroke-width="1"></circle>
+        <path d="M149.4 252.0A102.0 102.0 0 0 1 51.9 122.1L55.7 123.2A98.0 98.0 0 0 0 149.4 248.0Z" fill="#6B4426"></path>
+        <path d="M30.7 114.4A124.5 124.5 0 0 1 34.7 103.1L59.2 113.1A98.0 98.0 0 0 0 56.1 122.0Z" fill="#F9A23A"></path>
+        <path d="M41.2 104.2A118.0 118.0 0 0 1 51.5 85.0L68.2 96.1A98.0 98.0 0 0 0 59.7 111.9Z" fill="#F78810"></path>
+        <path d="M61.6 90.1A106.8 106.8 0 0 1 69.3 80.1L75.9 85.8A98.0 98.0 0 0 0 68.9 95.1Z" fill="#A9611F"></path>
+        <path d="M73.7 82.3A102.0 102.0 0 0 1 80.6 75.2L83.4 78.2A98.0 98.0 0 0 0 76.7 84.9Z" fill="#A9611F"></path>
+        <path d="M62.4 53.2A130.6 130.6 0 0 1 79.2 40.3L96.8 67.7A98.0 98.0 0 0 0 84.2 77.3Z" fill="#FFC261"></path>
+        <path d="M83.8 44.6A124.5 124.5 0 0 1 106.7 33.3L115.9 58.1A98.0 98.0 0 0 0 97.9 67.0Z" fill="#FFC261"></path>
+        <path d="M115.7 53.9A102.0 102.0 0 0 1 120.9 52.3L125.3 67.2A86.4 86.4 0 0 0 120.9 68.6Z" fill="#E0531A"></path>
+        <path d="M113.0 20.1A135.0 135.0 0 0 1 172.6 16.9L166.4 53.4A98.0 98.0 0 0 0 123.2 55.7Z" fill="#FFC261"></path>
+        <path d="M173.6 20.5A131.6 131.6 0 0 1 197.0 27.0L185.0 58.4A98.0 98.0 0 0 0 167.6 53.6Z" fill="#F9A23A"></path>
+        <path d="M188.9 51.6A105.8 105.8 0 0 1 202.3 58.1L198.5 64.8A98.0 98.0 0 0 0 186.1 58.9Z" fill="#A9611F"></path>
+        <path d="M217.0 35.5A132.6 132.6 0 0 1 239.0 51.7L215.8 77.3A98.0 98.0 0 0 0 199.5 65.4Z" fill="#FFC261"></path>
+        <path d="M241.6 51.3A134.7 134.7 0 0 1 274.1 97.7L240.3 111.9A98.0 98.0 0 0 0 216.6 78.2Z" fill="#FFC261"></path>
+        <path d="M275.7 98.8A135.7 135.7 0 0 1 282.3 119.8L245.5 128.2A98.0 98.0 0 0 0 240.8 113.1Z" fill="#FFC261"></path>
+        <path d="M259.1 126.5A111.6 111.6 0 0 1 261.3 142.0L247.7 143.0A98.0 98.0 0 0 0 245.8 129.4Z" fill="#A9611F"></path>
+        <path d="M267.8 143.0A118.0 118.0 0 0 1 267.1 164.7L247.2 162.2A98.0 98.0 0 0 0 247.8 144.2Z" fill="#F78810"></path>
+        <path d="M255.8 164.6A106.8 106.8 0 0 1 254.3 172.9L245.7 171.0A98.0 98.0 0 0 0 247.1 163.4Z" fill="#A9611F" stroke="#FFF1DC" stroke-width="1.2"></path>
+        <path d="M247.1 173.8A100 100 0 0 1 150.9 250.0" fill="none" stroke="rgba(247,136,16,.35)" stroke-width="1.5" stroke-dasharray="1.5 4" stroke-linecap="round"></path>
+        <line x1="150.0" y1="241.0" x2="150.0" y2="237.0" stroke="rgba(255,214,170,0.55)" stroke-width="1.4" stroke-linecap="round"></line>
+        <line x1="59.0" y1="150.0" x2="63.0" y2="150.0" stroke="rgba(255,214,170,0.55)" stroke-width="1.4" stroke-linecap="round"></line>
+        <line x1="150.0" y1="59.0" x2="150.0" y2="63.0" stroke="rgba(255,214,170,0.55)" stroke-width="1.4" stroke-linecap="round"></line>
+        <line x1="241.0" y1="150.0" x2="237.0" y2="150.0" stroke="rgba(255,214,170,0.55)" stroke-width="1.4" stroke-linecap="round"></line>
+        <line x1="71.2" y1="104.5" x2="72.9" y2="105.5" stroke="rgba(255,214,170,0.22)" stroke-width="1.4" stroke-linecap="round"></line>
+        <line x1="104.5" y1="71.2" x2="105.5" y2="72.9" stroke="rgba(255,214,170,0.22)" stroke-width="1.4" stroke-linecap="round"></line>
+        <line x1="195.5" y1="71.2" x2="194.5" y2="72.9" stroke="rgba(255,214,170,0.22)" stroke-width="1.4" stroke-linecap="round"></line>
+        <line x1="228.8" y1="104.5" x2="227.1" y2="105.5" stroke="rgba(255,214,170,0.22)" stroke-width="1.4" stroke-linecap="round"></line>
+        <line x1="228.8" y1="195.5" x2="227.1" y2="194.5" stroke="rgba(255,214,170,0.22)" stroke-width="1.4" stroke-linecap="round"></line>
+        <line x1="195.5" y1="228.8" x2="194.5" y2="227.1" stroke="rgba(255,214,170,0.22)" stroke-width="1.4" stroke-linecap="round"></line>
+        <line x1="104.5" y1="228.8" x2="105.5" y2="227.1" stroke="rgba(255,214,170,0.22)" stroke-width="1.4" stroke-linecap="round"></line>
+        <line x1="71.2" y1="195.5" x2="72.9" y2="194.5" stroke="rgba(255,214,170,0.22)" stroke-width="1.4" stroke-linecap="round"></line>
+        <text x="150.0" y="293.0" text-anchor="middle" dominant-baseline="middle" font-size="10.5" fill="#9C8670" font-family="Golos Text, sans-serif">00</text>
+        <text x="7.0" y="150.0" text-anchor="middle" dominant-baseline="middle" font-size="10.5" fill="#9C8670" font-family="Golos Text, sans-serif">06</text>
+        <text x="150.0" y="6.0" text-anchor="middle" dominant-baseline="middle" font-size="10.5" fill="#9C8670" font-family="Golos Text, sans-serif">12</text>
+        <text x="293.0" y="150.0" text-anchor="middle" dominant-baseline="middle" font-size="10.5" fill="#9C8670" font-family="Golos Text, sans-serif">18</text>
+        <line x1="228.0" y1="167.7" x2="286.5" y2="180.9" stroke="#FFF1DC" stroke-width="1.6" stroke-linecap="round"></line>
+        <circle cx="286.5" cy="180.9" r="3.2" fill="#FFF1DC"></circle>
+      </svg>
+      <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none">
+        <div class="serif" style="font-size:52px;line-height:54px;font-weight:600;color:#FFC261">+84</div>
+        <div style="font-size:12.5px;color:#CDB394;margin-top:2px">балл дня</div>
+        <div style="font-size:12.5px;margin-top:8px"><span style="color:#FFC261;font-weight:600">▲ 13</span><span style="color:#CDB394"> к пн, 28 сент</span></div>
+        <div style="font-size:12.5px;color:#CDB394">3-й из 28 дней</div>
+      </div>
+    </div>
+
+    <div class="glass" style="margin:8px 16px 0;border-radius:24px;padding:4px 16px 14px;flex:none">
+      <div style="display:flex;align-items:center;margin:0 -12px">
+        <button class="flat" aria-label="Предыдущий день" style="width:44px;height:44px;display:flex;align-items:center;justify-content:center"><svg class="ico" viewBox="0 0 24 24"><path d="M14.5 6l-6 6 6 6"></path></svg></button>
+        <div style="flex:1;text-align:center;line-height:18px">
+          <div style="font-size:15px;font-weight:600">Сегодня</div>
+          <div style="font-size:12.5px;color:#CDB394">понедельник, 5 октября</div>
+        </div>
+        <button class="flat" aria-label="Следующий день" style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;color:#6E5844"><svg class="ico" viewBox="0 0 24 24"><path d="M9.5 6l6 6-6 6"></path></svg></button>
+      </div>
+      <div style="display:flex;align-items:flex-start;margin-top:4px">
+        <div style="flex:1">
+          <div class="serif" style="font-size:38px;line-height:42px;font-weight:600;color:#FFD9A8">11 ч 46 м</div>
+          <div style="font-size:12.5px;color:#CDB394;margin-top:2px">с подъёма в 07:05 · сон 7 ч 25 м</div>
+        </div>
+        <div style="text-align:right;padding-top:6px">
+          <div style="font-size:15px;font-weight:600">4 ч 40 м</div>
+          <div style="font-size:12px;color:#CDB394">до сна в 23:30</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:2px;height:12px;margin-top:12px" aria-label="Время с подъёма до сна по категориям">
+        <div style="flex:15 1 0;min-width:8px;border-radius:4px 2px 2px 4px;background:repeating-linear-gradient(135deg,#E0531A 0 2px,rgba(224,83,26,.30) 2px 5px)"></div>
+        <div style="flex:385 1 0;border-radius:2px;background:#FFC261"></div>
+        <div style="flex:70 1 0;border-radius:2px;background:#F9A23A"></div>
+        <div style="flex:90 1 0;border-radius:2px;background:#F78810"></div>
+        <div style="flex:146 1 0;border-radius:2px;background:#A9611F"></div>
+        <div style="flex:280 1 0;border-radius:2px 4px 4px 2px;background:repeating-linear-gradient(135deg,rgba(247,136,16,.34) 0 2px,rgba(247,136,16,.07) 2px 6px)"></div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:12px">
+        <span class="lg"><span class="sw" style="background:#FFC261"></span>работа <b>6 ч 25 м</b></span>
+        <span class="lg"><span class="sw" style="background:#F9A23A"></span>спорт <b>1 ч 10 м</b></span>
+        <span class="lg"><span class="sw" style="background:#F78810"></span>семья <b>1 ч 30 м</b></span>
+        <span class="lg"><span class="sw" style="background:#A9611F"></span>быт <b>2 ч 26 м</b></span>
+        <span class="lg"><span class="sw" style="background:repeating-linear-gradient(135deg,#E0531A 0 2px,rgba(224,83,26,.30) 2px 5px)"></span>потери <b style="color:#F27A45">15 м</b></span>
+        <span class="lg"><span class="sw" style="background:repeating-linear-gradient(135deg,rgba(247,136,16,.40) 0 2px,rgba(247,136,16,.08) 2px 6px)"></span>впереди <b style="color:#E8D3B8">4 ч 40 м</b></span>
+      </div>
+    </div>
+
+    <div style="flex:1;min-height:0;overflow:hidden;margin-top:6px;padding:0 16px;-webkit-mask-image:linear-gradient(180deg,#000 0,#000 55%,rgba(0,0,0,0) 100%);mask-image:linear-gradient(180deg,#000 0,#000 55%,rgba(0,0,0,0) 100%)">
+      <div style="display:flex;align-items:center;gap:10px;height:46px">
+        <div style="width:3px;height:30px;border-radius:2px;background:#A9611F"></div>
+        <div style="flex:1;min-width:0">
+          <div class="ell" style="font-size:14.5px;font-weight:600">Ужин с семьёй</div>
+          <div class="ell" style="font-size:12px;color:#A98F72">с 18:30 · <span style="color:#D9A06A">Еда</span> · идёт <span style="color:#FFF1DC">21 м</span></div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;height:46px;border-top:1px solid rgba(255,190,120,.08)">
+        <div style="width:3px;height:30px;border-radius:2px;background:#F78810"></div>
+        <div style="flex:1;min-width:0">
+          <div class="ell" style="font-size:14.5px">Уроки со старшим<span style="color:#FFC261"> ★4</span></div>
+          <div class="ell" style="font-size:12px;color:#A98F72">17:45–18:30 · <span style="color:#FBA54E">Семья</span> · 45 м</div>
+        </div>
+        <div style="font-size:14px;font-weight:600;color:#FFC261">+4</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;height:46px;border-top:1px solid rgba(255,190,120,.08)">
+        <div style="width:3px;height:30px;border-radius:2px;background:#A9611F"></div>
+        <div style="flex:1;min-width:0">
+          <div class="ell" style="font-size:14.5px">Разбор дел и почты</div>
+          <div class="ell" style="font-size:12px;color:#A98F72">17:10–17:45 · <span style="color:#D9A06A">Систематизация</span> · 35 м</div>
+        </div>
+        <div style="font-size:14px;font-weight:600;color:#FFC261">+2</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;height:46px;border-top:1px solid rgba(255,190,120,.08)">
+        <div style="width:3px;height:30px;border-radius:2px;background:#FFC261"></div>
+        <div style="flex:1;min-width:0">
+          <div class="ell" style="font-size:14.5px">Пост в канал про ковенанты<span style="color:#FFC261"> ★3</span></div>
+          <div class="ell" style="font-size:12px;color:#A98F72">16:30–17:10 · <span style="color:#FFC977">Работа: привлечение</span> · 40 м</div>
+        </div>
+        <div style="font-size:14px;font-weight:600;color:#FFC261">+7</div>
+      </div>
+    </div>
+
+    <div class="glass" style="margin:4px 12px 18px;height:64px;border-radius:32px;display:flex;align-items:center;gap:8px;padding:0 6px;box-sizing:border-box;flex:none;background:linear-gradient(180deg,rgba(255,180,100,.22),rgba(247,136,16,.08) 60%),rgba(54,30,10,.86);border-color:rgba(255,170,80,.45)">
+      <button aria-label="Остановить: Ужин с семьёй" style="width:44px;height:44px;border-radius:22px;display:flex;align-items:center;justify-content:center;flex:none;background:rgba(255,200,140,.10);border:1px solid rgba(255,190,120,.30);padding:0;cursor:pointer"><svg viewBox="0 0 24 24" width="14" height="14"><rect x="5" y="5" width="14" height="14" rx="3" fill="#FFC261"></rect></svg></button>
+      <div style="flex:1;min-width:0">
+        <div class="ell" style="font-size:12px;color:#D9A06A;line-height:15px">Ужин с семьёй · с 18:30 · <span style="color:#FFF1DC;font-weight:600">21 м</span></div>
+        <input aria-label="Сказать Засечке" placeholder="Чем занят дальше?" style="width:100%;background:transparent;border:0;outline:0;font:inherit;font-size:16px;color:#F0EADF;padding:0;line-height:22px">
+      </div>
+      <button class="key" aria-label="Сказать голосом" style="width:52px;height:52px;border-radius:26px;display:flex;align-items:center;justify-content:center;flex:none"><svg class="ico" viewBox="0 0 24 24" style="width:24px;height:24px;stroke-width:2"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"></path></svg></button>
+    </div>
+  </div>
+</div>
+
+
+</body>
+</html>

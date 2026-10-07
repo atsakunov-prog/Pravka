@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Дела — Новое</title>
+
+</head>
+<body>
+
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&amp;family=Literata:opsz,wght@7..72,500;7..72,600;7..72,700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+.ph{font-family:'Golos Text',system-ui,sans-serif;color:#F0EADF;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;--k:42,93,130;--t:111,163,204;--i:14,24,34;--tint:#6FA3CC;--label:#9FC2DE;--value:#D4E6F5;--meta:#7F9AB2}
+.serif{font-family:'Literata',Georgia,serif}
+.glass{background:linear-gradient(180deg,rgba(var(--t),.13) 0,rgba(var(--t),.03) 30%,rgba(var(--t),0) 100%),linear-gradient(180deg,rgba(var(--k),.22),rgba(var(--k),.10)),rgba(var(--i),.84);border:1px solid rgba(var(--t),.20);border-top-color:rgba(var(--t),.36);box-shadow:0 14px 30px rgba(0,0,0,.40),inset 0 1px 0 rgba(255,255,255,.07)}
+.key{background:radial-gradient(110% 85% at 34% 20%,rgba(255,255,255,.50) 0,rgba(255,255,255,.10) 32%,rgba(255,255,255,0) 50%),radial-gradient(100% 70% at 50% 118%,rgba(0,0,0,.45) 0,rgba(0,0,0,0) 70%),rgb(var(--k));box-shadow:inset 0 1px 0 rgba(255,255,255,.38),inset 0 -2px 3px rgba(0,0,0,.30),0 6px 14px rgba(0,0,0,.45);color:#F4EEE3;border:0;padding:0;cursor:pointer}
+.coin{border-radius:50%;display:flex;align-items:center;justify-content:center;flex:none;background-image:radial-gradient(70% 55% at 36% 24%,rgba(255,236,210,.50) 0,rgba(255,236,210,0) 60%),radial-gradient(90% 60% at 50% 115%,rgba(0,0,0,.38) 0,rgba(0,0,0,0) 70%);box-shadow:0 3px 8px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.25)}
+.flat{background:transparent;border:0;padding:0;cursor:pointer;color:var(--label);font:inherit}
+.ib{width:44px;height:44px;display:flex;align-items:center;justify-content:center;flex:none}
+.ico{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block}
+.ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sec{display:flex;justify-content:space-between;align-items:center;padding:14px 16px 8px 24px;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600;color:var(--label)}
+.seg{height:36px;border-radius:18px;padding:0 13px;display:inline-flex;align-items:center;gap:6px;font-size:13.5px;font-weight:500;color:var(--label);white-space:nowrap;flex:none;text-decoration:none;box-sizing:border-box;border:1px solid rgba(var(--t),.18)}
+.seg b{font-weight:600;color:var(--meta)}
+.on{background:radial-gradient(110% 85% at 34% 20%,rgba(255,255,255,.38) 0,rgba(255,255,255,0) 50%),rgb(var(--k));color:#F4EEE3;font-weight:600;border-color:rgba(var(--t),.55);box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 4px 10px rgba(0,0,0,.35)}
+.on b{color:var(--value)}
+.card{margin:0 16px 10px;border-radius:22px;padding:12px 8px 6px 16px}
+.src{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--meta);height:18px}
+.q{font-size:13px;line-height:17px;color:#C9D6E2;font-style:italic;margin:6px 8px 0 0}
+.tt{font-size:15.5px;line-height:20px;font-weight:600;margin-top:9px;padding-right:8px}
+.act{display:flex;align-items:center;gap:2px}
+.tm{flex:1;min-width:0;font-size:12.5px;color:var(--meta);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ph input::placeholder{color:#93AFC6}
+</style>
+
+<div class="ph" style="width:411px;height:900px;position:relative;overflow:hidden;background:#100F0D">
+
+  <div style="position:absolute;left:0;top:0;right:0;height:560px;pointer-events:none;opacity:0.85;background:radial-gradient(60% 40% at 16% 0%,rgba(42,93,130,.95) 0,rgba(42,93,130,0) 72%),radial-gradient(52% 36% at 88% 0%,rgba(111,163,204,.45) 0,rgba(111,163,204,0) 72%),radial-gradient(80% 40% at 50% 26%,rgba(42,93,130,.35) 0,rgba(42,93,130,0) 72%)"></div>
+
+  <div style="position:absolute;left:0;right:0;top:0;bottom:0;display:flex;flex-direction:column;padding-top:36px">
+
+    <div style="display:flex;align-items:center;gap:6px;padding:0 6px 0 2px;height:52px;flex:none">
+      <a href="#" class="ib" aria-label="Назад к сегодня" style="color:var(--label)"><svg class="ico" viewBox="0 0 24 24"><path d="M14.5 6l-6 6 6 6"></path></svg></a>
+      <span class="coin" style="width:34px;height:34px;background-color:#2A5D82"><svg width="18" height="18" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M7.6 4.5h9.6v11.8h2V21h-3.2v-1.6H7.8V21H4.6v-4.7h1.2c1.2-2.4 1.8-6 1.8-10.4zM10.8 7.7v.6c0 3.3-.4 5.9-1.3 8h4.5V7.7z" fill="#EFE8DC"></path></svg></span>
+      <div style="flex:1;min-width:0;margin-left:6px">
+        <h1 class="serif" style="margin:0;font-size:24px;line-height:26px;font-weight:600;color:#F2F6FA">Дела</h1>
+        <button class="flat" style="font-size:12.5px;line-height:16px;display:flex;align-items:center;gap:2px">Все сферы<svg class="ico" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M7 10l5 5 5-5"></path></svg></button>
+      </div>
+      <button class="flat ib" aria-label="Статистика дел"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 3.5V12h8.5"></path></svg></button>
+      <button class="flat ib" aria-label="Стоимость Claude"><svg class="ico" viewBox="0 0 24 24"><path d="M12 3v18M16 7.6c-.8-1.3-2.3-2-4-2-2.2 0-4 1.2-4 3s1.8 2.6 4 3 4 1.3 4 3.2-1.8 3-4 3c-1.9 0-3.5-.8-4.2-2.2"></path></svg></button>
+      <button class="flat ib" aria-label="Настройки дел"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M12 2.8l1.6 2.3 2.7-.6.9 2.6 2.6.9-.6 2.7 2.3 1.6-2.3 1.6.6 2.7-2.6.9-.9 2.6-2.7-.6L12 21.2l-1.6-2.3-2.7.6-.9-2.6-2.6-.9.6-2.7L2.5 12l2.3-1.6-.6-2.7 2.6-.9.9-2.6 2.7.6z"></path></svg></button>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:4px;margin:4px 6px 0 20px;height:40px;flex:none">
+      <svg class="ico" viewBox="0 0 24 24" style="width:16px;height:16px;color:var(--tint);flex:none"><path d="M8 5.5v13l10.5-6.5z"></path></svg>
+      <div class="ell" style="flex:1;font-size:12.5px;color:var(--label);margin-left:4px">Сейчас: <span style="color:#E8DCCB">Ужин с семьёй · 21 м</span></div>
+      <span style="font-size:12px;color:var(--meta);white-space:nowrap">синк 18:40</span>
+      <button class="flat ib" aria-label="Поиск" style="width:40px"><svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"></circle><path d="M16 16l4.5 4.5"></path></svg></button>
+      <button class="flat ib" aria-label="Добавить дело" style="width:40px"><svg class="ico" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg></button>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:6px;margin-top:4px;padding-left:6px;height:44px;flex:none">
+      <button class="flat ib" aria-label="Разделы и сферы"><svg class="ico" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"></path></svg></button>
+      <div style="display:flex;gap:6px;overflow:hidden;flex:1;-webkit-mask-image:linear-gradient(90deg,#000 0,#000 85%,rgba(0,0,0,0) 100%);mask-image:linear-gradient(90deg,#000 0,#000 85%,rgba(0,0,0,0) 100%)">
+        <a href="06-dela-utro.html" class="seg">Утро <b>5</b></a>
+        <a href="#" class="seg">Предстоящее <b>12</b></a>
+        <a href="#" class="seg on">Новое <b>4</b></a>
+        <a href="#" class="seg">Жду <b>6</b></a>
+        <a href="#" class="seg">Неделя <b>23</b></a>
+      </div>
+    </div>
+
+    <div class="sec" style="flex:none">Из встреч, почты и Telegram · 4
+      <button class="seg on" style="height:32px;font-size:13px;padding:0 12px;cursor:pointer;font-family:inherit"><svg class="ico" viewBox="0 0 24 24" style="width:16px;height:16px;stroke-width:2.2"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Принять все</button>
+    </div>
+
+    <div style="flex:1;min-height:0;overflow:hidden;-webkit-mask-image:linear-gradient(180deg,#000 0,#000 82%,rgba(0,0,0,0) 100%);mask-image:linear-gradient(180deg,#000 0,#000 82%,rgba(0,0,0,0) 100%)">
+
+      <div class="glass card">
+        <div class="src"><svg class="ico" viewBox="0 0 24 24" style="width:16px;height:16px;color:#E8DCCB"><circle cx="9" cy="9" r="3"></circle><path d="M3.5 19c.6-3 2.8-4.5 5.5-4.5s4.9 1.5 5.5 4.5"></path><circle cx="17" cy="9.5" r="2.4"></circle><path d="M16 14.6c2.5 0 4.3 1.3 4.8 4"></path></svg>Встреча · Орион Логистик · 14:00</div>
+        <div class="q">«Пришлите, пожалуйста, анкету по учёту до пятницы — тогда успеем к совету директоров»</div>
+        <div class="tt">Орион: отправить анкету по управленческому учёту</div>
+        <div class="act">
+          <span class="tm">до пт, 9 окт · 15 м · Орион Логистик</span>
+          <button class="flat ib" aria-label="Отклонить" style="width:40px"><svg class="ico" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+          <button class="flat ib" aria-label="Поправить" style="width:40px"><svg class="ico" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"></path></svg></button>
+          <button class="key" aria-label="Принять" style="width:44px;height:44px;border-radius:22px;display:flex;align-items:center;justify-content:center;flex:none"><svg class="ico" viewBox="0 0 24 24" style="stroke-width:2.2"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></button>
+        </div>
+      </div>
+
+      <div class="glass card">
+        <div class="src"><svg class="ico" viewBox="0 0 24 24" style="width:16px;height:16px;color:#E8DCCB"><path d="M4 12l16-7-5 15-4-6zM11 14l9-9"></path></svg>Telegram · Иван Петров · 18:12</div>
+        <div class="q">«И пришлите, пожалуйста, структуру долга — банк просит до среды»</div>
+        <div class="tt">Бета: структура долга для банка</div>
+        <div class="act">
+          <span class="tm">до ср, 7 окт · 40 м · Бета Групп</span>
+          <button class="flat ib" aria-label="Отклонить" style="width:40px"><svg class="ico" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+          <button class="flat ib" aria-label="Поправить" style="width:40px"><svg class="ico" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"></path></svg></button>
+          <button class="key" aria-label="Принять" style="width:44px;height:44px;border-radius:22px;display:flex;align-items:center;justify-content:center;flex:none"><svg class="ico" viewBox="0 0 24 24" style="stroke-width:2.2"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></button>
+        </div>
+      </div>
+
+      <div class="glass card">
+        <div class="src"><svg class="ico" viewBox="0 0 24 24" style="width:16px;height:16px;color:#E8DCCB"><rect x="3.5" y="5.5" width="17" height="13" rx="2"></rect><path d="M4 7l8 6 8-6"></path></svg>Почта · Марина, ООО «Север» · 17:20</div>
+        <div class="q">«Можем перенести наш созвон на четверг? В среду не получается»</div>
+        <div class="tt">Север: перенести созвон на четверг</div>
+        <div class="act">
+          <span class="tm"><span style="color:var(--value);font-weight:600">похоже на #48</span> · быстрое · 5 м</span>
+          <button class="flat ib" aria-label="Отклонить" style="width:40px"><svg class="ico" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+          <button class="flat ib" aria-label="Поправить" style="width:40px"><svg class="ico" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"></path></svg></button>
+          <button class="key" aria-label="Объединить с #48" style="width:44px;height:44px;border-radius:22px;display:flex;align-items:center;justify-content:center;flex:none"><svg class="ico" viewBox="0 0 24 24" style="stroke-width:2.2"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></button>
+        </div>
+      </div>
+
+      <div class="glass card">
+        <div class="src"><svg class="ico" viewBox="0 0 24 24" style="width:16px;height:16px;color:#E8DCCB"><circle cx="9" cy="9" r="3"></circle><path d="M3.5 19c.6-3 2.8-4.5 5.5-4.5s4.9 1.5 5.5 4.5"></path><circle cx="17" cy="9.5" r="2.4"></circle><path d="M16 14.6c2.5 0 4.3 1.3 4.8 4"></path></svg>Встреча · Бета Групп · 09:50</div>
+        <div class="q">«Ковенанты пересчитаем уже по новой модели»</div>
+        <div class="tt">Бета: пересчитать ковенанты</div>
+      </div>
+    </div>
+
+    <div style="height:98px;flex:none"></div>
+  </div>
+
+  <div class="glass" style="position:absolute;left:12px;right:12px;bottom:18px;height:62px;border-radius:31px;display:flex;align-items:center;gap:4px;padding:0 6px 0 20px;box-sizing:border-box">
+    <input aria-label="Сказать делам" placeholder="Саша, говори дела" style="flex:1;min-width:0;background:transparent;border:0;outline:0;font:inherit;font-size:16.5px;color:#F0EADF">
+    <button class="key" aria-label="Сказать голосом" style="width:50px;height:50px;border-radius:25px;display:flex;align-items:center;justify-content:center;flex:none"><svg class="ico" viewBox="0 0 24 24" style="width:24px;height:24px;stroke-width:2"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"></path></svg></button>
+  </div>
+</div>
+
+
+</body>
+</html>

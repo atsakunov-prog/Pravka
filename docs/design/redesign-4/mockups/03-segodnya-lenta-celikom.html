@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Один день — лента целиком</title>
+
+</head>
+<body>
+
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&amp;family=Literata:opsz,wght@7..72,500;7..72,600;7..72,700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+.ph{font-family:'Golos Text',system-ui,sans-serif;color:#F0EADF;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+.serif{font-family:'Literata',Georgia,serif}
+.glass{background:linear-gradient(180deg,rgba(255,230,200,.12) 0,rgba(255,230,200,.03) 30%,rgba(255,230,200,0) 100%),rgba(34,28,22,.84);border:1px solid rgba(255,220,180,.16);border-top-color:rgba(255,230,200,.30);box-shadow:0 14px 30px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,240,220,.08)}
+.cream{background:radial-gradient(110% 85% at 34% 20%,rgba(255,255,255,.75) 0,rgba(255,255,255,.12) 34%,rgba(255,255,255,0) 50%),radial-gradient(100% 70% at 50% 118%,rgba(120,90,50,.35) 0,rgba(120,90,50,0) 70%),#F1E8D8;box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 -2px 3px rgba(120,90,50,.25),0 6px 14px rgba(0,0,0,.45);color:#2A1E12;border:0;padding:0;cursor:pointer}
+.coin{border-radius:50%;display:flex;align-items:center;justify-content:center;flex:none;background-image:radial-gradient(70% 55% at 36% 24%,rgba(255,236,210,.50) 0,rgba(255,236,210,0) 60%),radial-gradient(90% 60% at 50% 115%,rgba(0,0,0,.38) 0,rgba(0,0,0,0) 70%);box-shadow:0 3px 8px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.25)}
+.flat{background:transparent;border:0;padding:0;cursor:pointer;color:#E8DCCB}
+.ico{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block}
+.ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ph input::placeholder{color:#BDAE98}
+.zpill{height:40px;border-radius:20px;display:flex;align-items:center;gap:6px;padding:0 12px 0 4px;text-decoration:none;box-sizing:border-box;background:linear-gradient(180deg,rgba(255,200,140,.18),rgba(255,200,140,.04)),rgba(60,34,12,.75);border:1px solid rgba(247,136,16,.40);color:#FFC261;font-size:15px;font-weight:700}
+.tile{border-radius:18px;padding:10px 10px 11px;display:flex;flex-direction:column;gap:7px;text-decoration:none;box-sizing:border-box;min-width:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.16),0 8px 20px rgba(0,0,0,.35)}
+.tl{display:flex;align-items:center;gap:5px;font-size:12.5px;font-weight:500;min-width:0}
+.tv{font-size:19px;line-height:22px;font-weight:700;white-space:nowrap}
+.tb{height:4px;border-radius:2px;overflow:hidden}
+.wx{display:flex;align-items:center;gap:6px;min-width:0}
+.wx small{display:block;font-size:11px;line-height:13px;color:#A8998A}
+.wx span{display:block;font-size:14px;line-height:17px;font-weight:600;color:#EDE3D4}
+.row{display:flex}
+.tm{width:42px;flex:none;font-size:13px;text-align:right;padding-top:1px;line-height:16px;color:#D8C6AE}
+.rail{width:18px;flex:none;display:flex;flex-direction:column;align-items:center}
+.dot{width:8px;height:8px;border-radius:4px;margin-top:5px;flex:none}
+.ring{width:10px;height:10px;border-radius:5px;margin-top:4px;flex:none;box-sizing:border-box;border:2px solid}
+.solid{width:2px;flex:1;margin-top:2px}
+.dash{width:0;flex:1;margin-top:3px;border-left:2px dashed}
+.ct{flex:1;min-width:0}
+.t1{font-size:14.5px;line-height:18px}
+.t2{font-size:12px;line-height:17px;color:#A98F72}
+.nt{font-size:12px;line-height:17px;color:#9C8670;font-style:italic}
+.chip{display:inline-block;padding:0 7px;border-radius:7px;font-size:11.5px;line-height:17px;font-weight:600;margin-right:4px}
+.pts{width:30px;flex:none;text-align:right;font-size:14px;font-weight:600;color:#FFC261}
+.ev{display:inline-flex;align-items:center;gap:7px;height:26px;border-radius:13px;padding:0 10px 0 3px;font-size:12.5px;min-width:0;max-width:100%;box-sizing:border-box}
+.evT{background:rgba(47,107,79,.32);border:1px solid rgba(121,194,156,.28);color:#BDE3CC}
+.evE{background:rgba(94,122,31,.32);border:1px solid rgba(175,203,98,.28);color:#D6E6A6}
+.evD{background:rgba(42,93,130,.32);border:1px solid rgba(111,163,204,.30);color:#C3DBEE}
+.evR{background:rgba(91,74,140,.34);border:1px solid rgba(174,157,224,.30);color:#D6CCF2}
+</style>
+
+<div class="ph" style="width:411px;height:1980px;position:relative;overflow:hidden;background:#100F0D">
+
+  <div style="position:absolute;left:0;top:0;right:0;height:420px;pointer-events:none;opacity:0.9;background:radial-gradient(64% 50% at 20% 0%,rgba(255,214,160,.40) 0,rgba(255,214,160,0) 72%),radial-gradient(50% 44% at 90% 0%,rgba(247,136,16,.30) 0,rgba(247,136,16,0) 72%)"></div>
+
+  <div style="position:absolute;inset:0;display:flex;flex-direction:column;padding-top:36px">
+
+    <div style="padding:2px 12px 0 20px;flex:none">
+      <div style="font-size:12.5px;color:#C9B9A2;height:16px;line-height:16px">5 октября · сегодня</div>
+      <div style="display:flex;align-items:center;gap:6px;height:44px">
+        <h1 class="serif" style="margin:0;font-size:30px;line-height:34px;font-weight:600;color:#FFF5E8;flex:1">Понедельник</h1>
+        <a href="04-zasechka.html" class="zpill" aria-label="Засечка, балл дня +84"><span class="coin" style="width:30px;height:30px;background-color:#F78810"><svg width="16" height="16" viewBox="0 0 24 24"><path d="M5.5 5h13v14h-13v-3.2h9.6v-2.2H8.5v-3.2h6.6V8.2H5.5z" fill="#EFE8DC"></path></svg></span>+84</a>
+        <button class="flat" aria-label="Статистика дня" style="width:44px;height:44px;display:flex;align-items:center;justify-content:center"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 3.5V12h8.5"></path></svg></button>
+        <button aria-label="Ещё и настройки" style="width:44px;height:44px;border-radius:22px;border:1px solid rgba(255,220,180,.30);background:rgba(255,230,200,.08);color:#F1E8D8;font:inherit;font-size:16px;font-weight:600;cursor:pointer;padding:0;flex:none">С</button>
+      </div>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;gap:8px;padding:8px 20px 0;flex:none;color:#D9CBB6" aria-label="Погода на сегодня">
+      <div class="wx"><svg class="ico" viewBox="0 0 24 24" style="width:20px;height:20px"><path d="M7.5 18.5h9a3.5 3.5 0 0 0 .3-7 5 5 0 0 0-9.6 1.2A2.9 2.9 0 0 0 7.5 18.5z"></path></svg><div><small>утро</small><span>+4°</span></div></div>
+      <div class="wx"><svg class="ico" viewBox="0 0 24 24" style="width:20px;height:20px"><circle cx="12" cy="12" r="4"></circle><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"></path></svg><div><small>день</small><span>+10°</span></div></div>
+      <div class="wx"><svg class="ico" viewBox="0 0 24 24" style="width:20px;height:20px"><path d="M7.5 14.5h9a3.5 3.5 0 0 0 .3-7 5 5 0 0 0-9.6 1.2A2.9 2.9 0 0 0 7.5 14.5zM9 17.5l-1 2.5M13 17.5l-1 2.5M17 17.5l-1 2.5"></path></svg><div><small>вечер</small><span>+7°</span></div></div>
+      <div class="wx"><svg class="ico" viewBox="0 0 24 24" style="width:20px;height:20px"><path d="M3 12a9 9 0 0 1 18 0zM12 12v6.5a2 2 0 0 1-4 0"></path></svg><div><small>дождь 17–21</small><span>3 мм · 80 %</span></div></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:14px 16px 0;flex:none">
+      <a href="#" class="tile" style="background:linear-gradient(180deg,rgba(111,163,204,.30) 0,rgba(42,93,130,.20) 55%,rgba(42,93,130,.30) 100%),rgba(14,24,34,.92);border:1.5px solid rgba(111,163,204,.55)">
+        <span class="tl" style="color:#9FC2DE"><svg class="ico" viewBox="0 0 24 24" style="width:16px;height:16px;flex:none"><circle cx="12" cy="12" r="8.5"></circle><path d="M8.3 12.4l2.6 2.6 5-5.2"></path></svg>Дела</span>
+        <span class="tv" style="color:#D4E6F5">0 из 5</span>
+        <span class="tb" style="background:rgba(111,163,204,.18)"><span style="display:block;height:4px;width:0%;background:#8BB8DC"></span></span>
+      </a>
+      <a href="#" class="tile" style="background:linear-gradient(180deg,rgba(121,194,156,.28) 0,rgba(47,107,79,.20) 55%,rgba(47,107,79,.30) 100%),rgba(12,28,20,.92);border:1.5px solid rgba(121,194,156,.55)">
+        <span class="tl" style="color:#9DD3B5"><svg class="ico" viewBox="0 0 24 24" style="width:16px;height:16px;flex:none"><path d="M8 8l8 8M5.2 10.8l5.6-5.6M13.2 18.8l5.6-5.6M3.5 9l1.7 1.8M9 3.5l1.8 1.7M13.2 18.8l1.8 1.7M18.8 13.2l1.7 1.8"></path></svg>Спорт</span>
+        <span class="tv" style="color:#CDEBDB">1 из 2</span>
+        <span class="tb" style="background:rgba(121,194,156,.18)"><span style="display:block;height:4px;width:50%;background:#8FD0AD"></span></span>
+      </a>
+      <a href="#" class="tile" style="background:linear-gradient(180deg,rgba(175,203,98,.28) 0,rgba(94,122,31,.20) 55%,rgba(94,122,31,.30) 100%),rgba(22,28,8,.92);border:1.5px solid rgba(175,203,98,.55)">
+        <span class="tl" style="color:#C8DC8E"><svg class="ico" viewBox="0 0 24 24" style="width:16px;height:16px;flex:none"><path d="M7 3v18M4.5 3v5a2.5 2.5 0 0 0 5 0V3M17 21V3c-2.2 1.4-3.2 4-3.2 7.5H17"></path></svg>Еда</span>
+        <span class="tv" style="color:#E4EFC2">1 545</span>
+        <span class="tb" style="background:rgba(175,203,98,.18)"><span style="display:block;height:4px;width:70%;background:#BCD66E"></span></span>
+      </a>
+      <a href="#" class="tile" style="background:linear-gradient(180deg,rgba(174,157,224,.30) 0,rgba(91,74,140,.22) 55%,rgba(91,74,140,.32) 100%),rgba(22,17,36,.92);border:1.5px solid rgba(174,157,224,.55)">
+        <span class="tl" style="color:#C6BAEA"><svg class="ico" viewBox="0 0 24 24" style="width:16px;height:16px;flex:none"><path d="M8.5 21V4h5a4 4 0 0 1 0 8H6M6 16.2h8"></path></svg>Деньги</span>
+        <span class="tv" style="color:#E2DBF6">−3 577</span>
+        <span class="tb" style="background:rgba(174,157,224,.18)"><span style="display:block;height:4px;width:50%;background:#BBAEE6"></span></span>
+      </a>
+    </div>
+
+    <div style="flex:1;margin-top:14px;padding:0 14px 0 8px">
+
+      <div class="row" style="height:44px">
+        <div class="tm">00:00</div>
+        <div class="rail"><div class="dot" style="background:#6B4426"></div><div class="solid" style="background:#6B4426"></div></div>
+        <div class="ct"><div class="ell t1">Сон</div><div class="ell t2">с 23:40 вчера · за ночь 7 ч 25 м</div></div>
+      </div>
+      <div class="row" style="height:34px">
+        <div class="tm"></div>
+        <div class="rail"><div class="solid" style="background:#6B4426;margin-top:0"></div></div>
+        <div class="ct" style="padding-top:2px"><div class="ev evT"><span class="coin" style="width:20px;height:20px;background-color:#2F6B4F"><svg width="11" height="11" viewBox="0 0 24 24"><path d="M5 5h14v3.3h-5.3V19h-3.4V8.3H5z" fill="#EFE8DC"></path></svg></span><span class="ell">Готовность: можно тяжёлое · HRV 64 · пульс 52</span></div></div>
+      </div>
+
+      <div class="row" style="height:44px">
+        <div class="tm">07:05</div>
+        <div class="rail"><div class="dot" style="background:#F9A23A"></div><div class="solid" style="background:#F9A23A"></div></div>
+        <div class="ct"><div class="ell t1">Зарядка и душ</div><div class="ell t2">Спорт: прочее · 25 м</div></div>
+        <div class="pts">+3</div>
+      </div>
+      <div class="row" style="height:34px">
+        <div class="tm"></div>
+        <div class="rail"><div class="solid" style="background:#F9A23A;margin-top:0"></div></div>
+        <div class="ct" style="padding-top:2px"><div class="ev evT"><span class="coin" style="width:20px;height:20px;background-color:#2F6B4F"><svg width="11" height="11" viewBox="0 0 24 24"><path d="M5 5h14v3.3h-5.3V19h-3.4V8.3H5z" fill="#EFE8DC"></path></svg></span><span class="ell">Зарядка 6 из 6 · планка 1:30</span></div></div>
+      </div>
+
+      <div class="row" style="height:60px">
+        <div class="tm">07:30</div>
+        <div class="rail"><div class="dot" style="background:#F78810"></div><div class="solid" style="background:#F78810"></div></div>
+        <div class="ct"><div class="ell t1">Собираю детей в школу и сад</div><div class="ell t2">Семья · 45 м</div><div class="ell nt">Младший сам оделся — рекорд</div></div>
+        <div class="pts">+4</div>
+      </div>
+
+      <div class="row" style="height:44px">
+        <div class="tm">08:15</div>
+        <div class="rail"><div class="dot" style="background:#A9611F"></div><div class="solid" style="background:#A9611F"></div></div>
+        <div class="ct"><div class="ell t1">Отвожу младших</div><div class="ell t2">Передвижение: пешком · 30 м</div></div>
+        <div class="pts">+1</div>
+      </div>
+
+      <div class="row" style="height:44px">
+        <div class="tm">08:45</div>
+        <div class="rail"><div class="dot" style="background:#A9611F"></div><div class="solid" style="background:#A9611F"></div></div>
+        <div class="ct"><div class="ell t1">Завтрак</div><div class="ell t2">Еда · 25 м</div></div>
+      </div>
+      <div class="row" style="height:34px">
+        <div class="tm"></div>
+        <div class="rail"><div class="solid" style="background:#A9611F;margin-top:0"></div></div>
+        <div class="ct" style="padding-top:2px"><div class="ev evE"><span class="coin" style="width:20px;height:20px;background-color:#5E7A1F"><svg width="11" height="11" viewBox="0 0 24 24"><path d="M6 5h12v3.3H9.4v2.2h7.4v3.1H9.4v2.1H18V19H6z" fill="#EFE8DC"></path></svg></span><span class="ell">Овсянка, два яйца · 520 ккал · Б 28</span></div></div>
+      </div>
+
+      <div class="row" style="height:44px">
+        <div class="tm">09:10</div>
+        <div class="rail"><div class="dot" style="background:#FFC261"></div><div class="solid" style="background:#FFC261"></div></div>
+        <div class="ct"><div class="ell t1">План недели и входящие<span style="color:#FFC261"> ★4</span></div><div class="ell t2">Работа: планирование · 40 м</div></div>
+        <div class="pts">+6</div>
+      </div>
+
+      <div class="row" style="height:60px">
+        <div class="tm">09:50</div>
+        <div class="rail"><div class="dot" style="background:#FFC261"></div><div class="solid" style="background:#FFC261"></div></div>
+        <div class="ct"><div class="ell t1">Созвон: бюджет на IV квартал<span style="color:#FFC261"> ★5</span><span style="color:#A98F72"> · Бета Групп</span></div><div class="ell t2">Работа: звонки · 50 м</div><div class="ell nt">Сценарий без кредита — к четвергу</div></div>
+        <div class="pts">+6</div>
+      </div>
+      <div class="row" style="height:34px">
+        <div class="tm"></div>
+        <div class="rail"><div class="solid" style="background:#FFC261;margin-top:0"></div></div>
+        <div class="ct" style="padding-top:2px"><div class="ev evD"><span class="coin" style="width:20px;height:20px;background-color:#2A5D82"><svg width="11" height="11" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M7.6 4.5h9.6v11.8h2V21h-3.2v-1.6H7.8V21H4.6v-4.7h1.2c1.2-2.4 1.8-6 1.8-10.4zM10.8 7.7v.6c0 3.3-.4 5.9-1.3 8h4.5V7.7z" fill="#EFE8DC"></path></svg></span><span class="ell">Из встречи: Бета — сценарий без кредита · #61</span></div></div>
+      </div>
+
+      <div class="row" style="height:44px">
+        <div class="tm">10:40</div>
+        <div class="rail"><div class="dot" style="background:#E0531A"></div><div class="solid" style="background:#E0531A"></div></div>
+        <div class="ct"><div class="ell t1">Залип в ленте</div><div class="ell t2">Потери · 15 м</div></div>
+        <div class="pts" style="color:#F27A45">−1</div>
+      </div>
+
+      <div class="row" style="height:60px">
+        <div class="tm">10:55</div>
+        <div class="rail"><div class="dot" style="background:#FFC261"></div><div class="solid" style="background:#FFC261"></div></div>
+        <div class="ct"><div class="ell t1">Финмодель: денежный поток 2027<span style="color:#A98F72"> · Бета Групп</span></div><div class="ell t2">Работа: текущая · 1 ч 45 м</div><div class="ell nt">Свёл ДДС, осталась кредитная линия</div></div>
+        <div class="pts">+18</div>
+      </div>
+
+      <div class="row" style="height:44px">
+        <div class="tm">12:40</div>
+        <div class="rail"><div class="dot" style="background:#F9A23A"></div><div class="solid" style="background:#F9A23A"></div></div>
+        <div class="ct"><div class="ell t1">Бег Z2, 5 км</div><div class="ell t2">Спорт: бег · 45 м</div></div>
+        <div class="pts">+7</div>
+      </div>
+      <div class="row" style="height:34px">
+        <div class="tm"></div>
+        <div class="rail"><div class="solid" style="background:#F9A23A;margin-top:0"></div></div>
+        <div class="ct" style="padding-top:2px"><div class="ev evT"><span class="coin" style="width:20px;height:20px;background-color:#2F6B4F"><svg width="11" height="11" viewBox="0 0 24 24"><path d="M5 5h14v3.3h-5.3V19h-3.4V8.3H5z" fill="#EFE8DC"></path></svg></span><span class="ell">5,02 км · 5:55 /км · пульс 141</span></div></div>
+      </div>
+
+      <div class="row" style="height:44px">
+        <div class="tm">13:25</div>
+        <div class="rail"><div class="dot" style="background:#A9611F"></div><div class="solid" style="background:#A9611F"></div></div>
+        <div class="ct"><div class="ell t1">Обед</div><div class="ell t2">Еда · 35 м</div></div>
+        <div class="pts">+1</div>
+      </div>
+      <div class="row" style="height:64px">
+        <div class="tm"></div>
+        <div class="rail"><div class="solid" style="background:#A9611F;margin-top:0"></div></div>
+        <div class="ct" style="padding-top:2px;display:flex;flex-direction:column;gap:4px;align-items:flex-start">
+          <div class="ev evE"><span class="coin" style="width:20px;height:20px;background-color:#5E7A1F"><svg width="11" height="11" viewBox="0 0 24 24"><path d="M6 5h12v3.3H9.4v2.2h7.4v3.1H9.4v2.1H18V19H6z" fill="#EFE8DC"></path></svg></span><span class="ell">640 ккал · Б 38 · Ж 22 · У 70</span></div>
+          <div class="ev evR"><span class="coin" style="width:20px;height:20px;background-color:#5B4A8C"><svg width="11" height="11" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M7.2 4h6.1a4.7 4.7 0 0 1 0 9.4h-2.7v1.4h4.6v2.6h-4.6V20H7.2v-2.6H5.6v-2.6h1.6v-1.4H5.6v-3h1.6zM10.6 7.1v3.3h2.6a1.65 1.65 0 0 0 0-3.3z" fill="#EFE8DC"></path></svg></span><span class="ell">−1 240 ₽ · кафе у дома</span></div>
+        </div>
+      </div>
+
+      <div class="row" style="height:44px">
+        <div class="tm">14:00</div>
+        <div class="rail"><div class="dot" style="background:#FFC261"></div><div class="solid" style="background:#FFC261"></div></div>
+        <div class="ct"><div class="ell t1">Знакомство: управленческий учёт<span style="color:#A98F72"> · Орион Логистик</span></div><div class="ell t2">Работа: привлечение · 50 м</div></div>
+        <div class="pts">+8</div>
+      </div>
+
+      <div class="row" style="height:44px">
+        <div class="tm">14:50</div>
+        <div class="rail"><div class="dot" style="background:#FFC261"></div><div class="solid" style="background:#FFC261"></div></div>
+        <div class="ct"><div class="ell t1">КП на управленческую отчётность<span style="color:#A98F72"> · Орион Логистик</span></div><div class="ell t2">Работа: текущая · 1 ч 40 м</div></div>
+        <div class="pts">+17</div>
+      </div>
+      <div class="row" style="height:34px">
+        <div class="tm"></div>
+        <div class="rail"><div class="solid" style="background:#FFC261;margin-top:0"></div></div>
+        <div class="ct" style="padding-top:2px"><div class="ev evD"><span class="coin" style="width:20px;height:20px;background-color:#2A5D82"><svg width="11" height="11" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M7.6 4.5h9.6v11.8h2V21h-3.2v-1.6H7.8V21H4.6v-4.7h1.2c1.2-2.4 1.8-6 1.8-10.4zM10.8 7.7v.6c0 3.3-.4 5.9-1.3 8h4.5V7.7z" fill="#EFE8DC"></path></svg></span><span class="ell">Из встречи: Иван — выгрузка из 1С · жду</span></div></div>
+      </div>
+
+      <div class="row" style="height:44px">
+        <div class="tm">16:30</div>
+        <div class="rail"><div class="dot" style="background:#FFC261"></div><div class="solid" style="background:#FFC261"></div></div>
+        <div class="ct"><div class="ell t1">Пост в канал про ковенанты<span style="color:#FFC261"> ★3</span></div><div class="ell t2">Работа: привлечение · 40 м</div></div>
+        <div class="pts">+7</div>
+      </div>
+      <div class="row" style="height:34px">
+        <div class="tm"></div>
+        <div class="rail"><div class="solid" style="background:#FFC261;margin-top:0"></div></div>
+        <div class="ct" style="padding-top:2px"><div class="ev evE"><span class="coin" style="width:20px;height:20px;background-color:#5E7A1F"><svg width="11" height="11" viewBox="0 0 24 24"><path d="M6 5h12v3.3H9.4v2.2h7.4v3.1H9.4v2.1H18V19H6z" fill="#EFE8DC"></path></svg></span><span class="ell">Перекус: творог, яблоко · 385 ккал</span></div></div>
+      </div>
+
+      <div class="row" style="height:44px">
+        <div class="tm">17:10</div>
+        <div class="rail"><div class="dot" style="background:#A9611F"></div><div class="solid" style="background:#A9611F"></div></div>
+        <div class="ct"><div class="ell t1">Разбор дел и почты</div><div class="ell t2">Систематизация · 35 м</div></div>
+        <div class="pts">+2</div>
+      </div>
+      <div class="row" style="height:34px">
+        <div class="tm"></div>
+        <div class="rail"><div class="solid" style="background:#A9611F;margin-top:0"></div></div>
+        <div class="ct" style="padding-top:2px"><div class="ev evD"><span class="coin" style="width:20px;height:20px;background-color:#2A5D82"><svg width="11" height="11" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M7.6 4.5h9.6v11.8h2V21h-3.2v-1.6H7.8V21H4.6v-4.7h1.2c1.2-2.4 1.8-6 1.8-10.4zM10.8 7.7v.6c0 3.3-.4 5.9-1.3 8h4.5V7.7z" fill="#EFE8DC"></path></svg></span><span class="ell">Новое из почты · 3 · разобрать</span></div></div>
+      </div>
+
+      <div class="row" style="height:44px">
+        <div class="tm">17:45</div>
+        <div class="rail"><div class="dot" style="background:#F78810"></div><div class="solid" style="background:#F78810"></div></div>
+        <div class="ct"><div class="ell t1">Уроки со старшим<span style="color:#FFC261"> ★4</span></div><div class="ell t2">Семья · 45 м</div></div>
+        <div class="pts">+4</div>
+      </div>
+      <div class="row" style="height:34px">
+        <div class="tm"></div>
+        <div class="rail"><div class="solid" style="background:#F78810;margin-top:0"></div></div>
+        <div class="ct" style="padding-top:2px"><div class="ev evR"><span class="coin" style="width:20px;height:20px;background-color:#5B4A8C"><svg width="11" height="11" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M7.2 4h6.1a4.7 4.7 0 0 1 0 9.4h-2.7v1.4h4.6v2.6h-4.6V20H7.2v-2.6H5.6v-2.6h1.6v-1.4H5.6v-3h1.6zM10.6 7.1v3.3h2.6a1.65 1.65 0 0 0 0-3.3z" fill="#EFE8DC"></path></svg></span><span class="ell">−2 337 ₽ · канцелярия к школе</span></div></div>
+      </div>
+
+      <div class="row" style="height:42px">
+        <div class="tm" style="color:#FFF1DC;font-weight:600">18:30</div>
+        <div class="rail"><div style="width:10px;height:10px;border-radius:5px;margin-top:4px;background:#FFF1DC;box-shadow:0 0 0 3px rgba(247,136,16,.35);flex:none"></div><div class="solid" style="background:#A9611F"></div></div>
+        <div class="ct"><div class="ell t1" style="font-weight:600">Ужин с семьёй <span class="chip" style="background:rgba(169,97,31,.30);color:#D9A06A;margin-left:4px">Еда</span><span style="font-size:12.5px;font-weight:600;color:#F9A54C">идёт 21 м</span></div></div>
+      </div>
+      <div class="row" style="height:42px">
+        <div class="tm"></div>
+        <div class="rail"><div class="solid" style="background:#A9611F;margin-top:0"></div></div>
+        <div style="flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:36px;border-radius:18px;padding:0 3px 0 4px;background:rgba(94,122,31,.30);border:1px solid rgba(175,203,98,.38);box-sizing:border-box">
+          <span class="coin" style="width:24px;height:24px;background-color:#5E7A1F"><svg width="13" height="13" viewBox="0 0 24 24"><path d="M6 5h12v3.3H9.4v2.2h7.4v3.1H9.4v2.1H18V19H6z" fill="#EFE8DC"></path></svg></span>
+          <span class="ell" style="flex:1;font-size:12.5px;color:#D6E6A6">Паста, салат · ≈ 720 ккал</span>
+          <button style="height:28px;border-radius:14px;border:0;padding:0 12px;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;color:#1C2408;background:radial-gradient(110% 85% at 34% 20%,rgba(255,255,255,.55) 0,rgba(255,255,255,0) 50%),#AFCB62">Записать</button>
+        </div>
+      </div>
+
+      <div class="row" style="height:28px;align-items:center">
+        <div style="width:42px;flex:none;display:flex;justify-content:flex-end"><span style="display:inline-block;padding:1px 6px;border-radius:9px;background:#FFF1DC;color:#2A1E12;font-size:12px;font-weight:700;line-height:16px">18:51</span></div>
+        <div style="width:18px;flex:none;height:2px;background:rgba(255,241,220,.7)"></div>
+        <div style="flex:1;height:1.5px;background:linear-gradient(90deg,rgba(255,241,220,.7),rgba(255,241,220,.08))"></div>
+      </div>
+      <div class="row" style="height:30px">
+        <div class="tm"></div>
+        <div class="rail"><div style="width:0;flex:1;border-left:2px dotted rgba(241,232,216,.35)"></div></div>
+        <div class="ct" style="font-size:12px;color:#9C8F80;padding-top:6px">свободно 1 ч 10 м</div>
+      </div>
+
+      <div class="row" style="height:48px">
+        <div class="tm" style="color:#E8DCCB">20:00<div style="font-size:12px;color:#8F8476">20:30</div></div>
+        <div class="rail"><div class="ring" style="border-color:#E8DCCB"></div><div class="dash" style="border-color:rgba(232,220,203,.40)"></div></div>
+        <div class="ct"><div class="ell t1" style="color:#E8DCCB">Родительское собрание 3 «Б»</div><div class="ell t2"><span class="chip" style="background:rgba(241,232,216,.12);color:#E8DCCB">Календарь</span>30 м · Zoom</div></div>
+      </div>
+      <div class="row" style="height:48px">
+        <div class="tm" style="color:#E8DCCB">20:30<div style="font-size:12px;color:#8F8476">21:15</div></div>
+        <div class="rail"><div class="ring" style="border-color:#79C29C"></div><div class="dash" style="border-color:rgba(121,194,156,.55)"></div></div>
+        <div class="ct"><div class="ell t1" style="color:#E8DCCB">Силовая А — гиря 16 кг: ноги и задняя цепь</div><div class="ell t2"><span class="chip" style="background:rgba(47,107,79,.45);color:#9DD3B5">Спорт · план</span>45 м · можно тяжёлое</div></div>
+      </div>
+
+      <div class="row" style="height:24px">
+        <div class="tm"></div>
+        <div class="rail"><div class="dash" style="border-color:rgba(111,163,204,.45);margin-top:0"></div></div>
+        <div class="ct" style="font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600;color:#8FB4D4;padding-top:4px">Дела на сегодня · 5 · 2 ч 25 м</div>
+      </div>
+      <div class="row" style="height:42px">
+        <div class="tm" style="color:#C9D9E6">21:30</div>
+        <div class="rail"><div class="ring" style="border-color:#6FA3CC;width:12px;height:12px;border-radius:6px;margin-top:3px"></div><div class="dash" style="border-color:rgba(111,163,204,.45)"></div></div>
+        <div class="ct"><div class="ell t1" style="color:#E8DCCB">Бета: финмодель — сценарий без кредита</div><div class="ell t2" style="color:#7F9AB2">#61 · Бета Групп · 45 м</div></div>
+      </div>
+      <div class="row" style="height:42px">
+        <div class="tm" style="color:#7F9AB2">22:15</div>
+        <div class="rail"><div class="ring" style="border-color:#6FA3CC;width:12px;height:12px;border-radius:6px;margin-top:3px"></div><div class="dash" style="border-color:rgba(111,163,204,.45)"></div></div>
+        <div class="ct"><div class="ell t1" style="color:#E8DCCB">Бета: пересчитать ковенанты</div><div class="ell t2" style="color:#7F9AB2">до 7 окт · 30 м</div></div>
+      </div>
+      <div class="row" style="height:42px">
+        <div class="tm" style="color:#7F9AB2">22:45</div>
+        <div class="rail"><div class="ring" style="border-color:#6FA3CC;width:12px;height:12px;border-radius:6px;margin-top:3px"></div><div class="dash" style="border-color:rgba(111,163,204,.45)"></div></div>
+        <div class="ct"><div class="ell t1" style="color:#E8DCCB">Налоговый вычет: собрать чеки за лечение</div><div class="ell t2" style="color:#7F9AB2">#41 · Дом · 20 м</div></div>
+      </div>
+      <div class="row" style="height:42px">
+        <div class="tm" style="color:#7F9AB2">23:05</div>
+        <div class="rail"><div class="ring" style="border-color:#6FA3CC;width:12px;height:12px;border-radius:6px;margin-top:3px"></div><div class="dash" style="border-color:rgba(111,163,204,.45)"></div></div>
+        <div class="ct"><div class="ell t1" style="color:#E8DCCB">Иван: ответить про выгрузку из 1С</div><div class="ell t2" style="color:#7F9AB2">быстрое · 10 м</div></div>
+      </div>
+      <div class="row" style="height:42px">
+        <div class="tm" style="color:#7F9AB2">23:15</div>
+        <div class="rail"><div class="ring" style="border-color:#6FA3CC;width:12px;height:12px;border-radius:6px;margin-top:3px"></div><div class="dash" style="border-color:rgba(111,163,204,.45)"></div></div>
+        <div class="ct"><div class="ell t1" style="color:#E8DCCB">Орион: КП на управленческий учёт</div><div class="ell t2" style="color:#7F9AB2">#55 · Орион Логистик · 40 м</div></div>
+      </div>
+      <div class="row" style="height:40px">
+        <div class="tm" style="color:#C9B9A2">23:30</div>
+        <div class="rail"><div class="ring" style="border-color:#8A6A4E"></div></div>
+        <div class="ct"><div class="ell t1" style="color:#C9B9A2">Сон <span style="font-size:12px;color:#F27A45;font-weight:600">· дела не влезают на 25 м</span></div></div>
+      </div>
+    </div>
+
+    <div class="glass" style="margin:4px 12px 18px;height:62px;border-radius:31px;display:flex;align-items:center;gap:4px;padding:0 6px 0 20px;box-sizing:border-box;flex:none">
+      <input aria-label="Сказать Правке" placeholder="Саша, что у тебя?" style="flex:1;min-width:0;background:transparent;border:0;outline:0;font:inherit;font-size:16.5px;color:#F0EADF">
+      <button class="flat" aria-label="Фото" style="width:44px;height:44px;display:flex;align-items:center;justify-content:center"><svg class="ico" viewBox="0 0 24 24"><path d="M4 8.5h3l1.6-2.5h6.8L17 8.5h3v10.5H4z"></path><circle cx="12" cy="13.5" r="3.4"></circle></svg></button>
+      <button class="cream" aria-label="Сказать голосом" style="width:50px;height:50px;border-radius:25px;display:flex;align-items:center;justify-content:center;flex:none"><svg class="ico" viewBox="0 0 24 24" style="width:24px;height:24px;stroke-width:2"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"></path></svg></button>
+    </div>
+  </div>
+</div>
+
+
+</body>
+</html>

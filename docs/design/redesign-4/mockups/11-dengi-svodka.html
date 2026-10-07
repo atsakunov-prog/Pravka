@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Деньги — Сводка</title>
+
+</head>
+<body>
+
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&amp;family=Literata:opsz,wght@7..72,500;7..72,600;7..72,700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+.ph{font-family:'Golos Text',system-ui,sans-serif;color:#F0EADF;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;--k:91,74,140;--t:174,157,224;--i:22,17,36;--tint:#AE9DE0;--label:#C6BAEA;--value:#E2DBF6;--meta:#9A90B8}
+.serif{font-family:'Literata',Georgia,serif}
+.glass{background:linear-gradient(180deg,rgba(var(--t),.13) 0,rgba(var(--t),.03) 30%,rgba(var(--t),0) 100%),linear-gradient(180deg,rgba(var(--k),.26),rgba(var(--k),.12)),rgba(var(--i),.86);border:1px solid rgba(var(--t),.20);border-top-color:rgba(var(--t),.36);box-shadow:0 14px 30px rgba(0,0,0,.40),inset 0 1px 0 rgba(255,255,255,.07)}
+.key{background:radial-gradient(110% 85% at 34% 20%,rgba(255,255,255,.50) 0,rgba(255,255,255,.10) 32%,rgba(255,255,255,0) 50%),radial-gradient(100% 70% at 50% 118%,rgba(0,0,0,.45) 0,rgba(0,0,0,0) 70%),rgb(var(--k));box-shadow:inset 0 1px 0 rgba(255,255,255,.38),inset 0 -2px 3px rgba(0,0,0,.30),0 6px 14px rgba(0,0,0,.45);color:#F4EEE3;border:0;padding:0;cursor:pointer}
+.coin{border-radius:50%;display:flex;align-items:center;justify-content:center;flex:none;background-image:radial-gradient(70% 55% at 36% 24%,rgba(255,236,210,.50) 0,rgba(255,236,210,0) 60%),radial-gradient(90% 60% at 50% 115%,rgba(0,0,0,.38) 0,rgba(0,0,0,0) 70%);box-shadow:0 3px 8px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.25)}
+.flat{background:transparent;border:0;padding:0;cursor:pointer;color:var(--label);font:inherit}
+.ib{width:44px;height:44px;display:flex;align-items:center;justify-content:center;flex:none}
+.ico{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block}
+.ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sec{display:flex;justify-content:space-between;align-items:baseline;padding:18px 24px 8px;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600;color:var(--label)}
+.sec span{text-transform:none;letter-spacing:0;font-weight:500;color:var(--meta);font-size:12.5px}
+.seg{height:36px;border-radius:18px;padding:0 14px;display:inline-flex;align-items:center;gap:6px;font-size:13.5px;font-weight:500;color:var(--label);white-space:nowrap;flex:none;text-decoration:none;box-sizing:border-box;border:1px solid rgba(var(--t),.18);background:transparent;font-family:inherit;cursor:pointer}
+.on{background:radial-gradient(110% 85% at 34% 20%,rgba(255,255,255,.38) 0,rgba(255,255,255,0) 50%),rgb(var(--k));color:#F4EEE3;font-weight:600;border-color:rgba(var(--t),.55);box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 4px 10px rgba(0,0,0,.35)}
+.st{border-radius:16px;padding:9px 10px;background:rgba(var(--k),.22);border:1px solid rgba(var(--t),.26);min-width:0}
+.st small{display:block;font-size:11.5px;color:var(--label)}
+.st b{display:block;font-size:16px;line-height:20px;font-weight:600;color:var(--value);margin-top:2px;white-space:nowrap}
+.st i{display:block;font-style:normal;font-size:11px;color:var(--meta);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lg{display:flex;align-items:center;gap:7px;height:24px;font-size:13px}
+.lg i{width:10px;height:10px;border-radius:3px;flex:none}
+.lg b{font-weight:600;color:var(--value)}
+.lg em{font-style:normal;width:32px;text-align:right;color:var(--meta);font-size:12px}
+.dds{display:grid;grid-template-columns:104px repeat(3,minmax(0,1fr));align-items:center;height:32px;font-size:13px;border-top:1px solid rgba(var(--t),.10)}
+.dds span{text-align:right}
+.acc{display:flex;align-items:center;gap:10px;height:44px;border-top:1px solid rgba(var(--t),.10);font-size:14px}
+.acc b{font-weight:600;color:var(--value)}
+.ph input::placeholder{color:#A69CC8}
+</style>
+
+<div class="ph" style="width:411px;height:1550px;position:relative;overflow:hidden;background:#100F0D">
+
+  <div style="position:absolute;left:0;top:0;right:0;height:560px;pointer-events:none;opacity:0.85;background:radial-gradient(60% 40% at 16% 0%,rgba(91,74,140,.95) 0,rgba(91,74,140,0) 72%),radial-gradient(52% 36% at 88% 0%,rgba(174,157,224,.40) 0,rgba(174,157,224,0) 72%),radial-gradient(80% 40% at 50% 26%,rgba(91,74,140,.35) 0,rgba(91,74,140,0) 72%)"></div>
+
+  <div style="position:absolute;left:0;right:0;top:0;display:flex;flex-direction:column;padding-top:36px">
+
+    <div style="display:flex;align-items:center;gap:6px;padding:0 6px 0 2px;height:52px">
+      <a href="#" class="ib" aria-label="Назад к сегодня" style="color:var(--label)"><svg class="ico" viewBox="0 0 24 24"><path d="M14.5 6l-6 6 6 6"></path></svg></a>
+      <span class="coin" style="width:34px;height:34px;background-color:#5B4A8C"><svg width="18" height="18" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M7.2 4h6.1a4.7 4.7 0 0 1 0 9.4h-2.7v1.4h4.6v2.6h-4.6V20H7.2v-2.6H5.6v-2.6h1.6v-1.4H5.6v-3h1.6zM10.6 7.1v3.3h2.6a1.65 1.65 0 0 0 0-3.3z" fill="#EFE8DC"></path></svg></span>
+      <div style="flex:1;min-width:0;margin-left:6px">
+        <h1 class="serif" style="margin:0;font-size:24px;line-height:26px;font-weight:600;color:#F4F1FB">Деньги</h1>
+        <button class="flat" style="font-size:12.5px;line-height:16px;display:flex;align-items:center;gap:2px">Личное<svg class="ico" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M7 10l5 5 5-5"></path></svg></button>
+      </div>
+      <button class="flat ib" aria-label="Статистика денег"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 3.5V12h8.5"></path></svg></button>
+      <button class="flat ib" aria-label="Стоимость Claude"><svg class="ico" viewBox="0 0 24 24"><path d="M12 3v18M16 7.6c-.8-1.3-2.3-2-4-2-2.2 0-4 1.2-4 3s1.8 2.6 4 3 4 1.3 4 3.2-1.8 3-4 3c-1.9 0-3.5-.8-4.2-2.2"></path></svg></button>
+      <button class="flat ib" aria-label="Настройки денег"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M12 2.8l1.6 2.3 2.7-.6.9 2.6 2.6.9-.6 2.7 2.3 1.6-2.3 1.6.6 2.7-2.6.9-.9 2.6-2.7-.6L12 21.2l-1.6-2.3-2.7.6-.9-2.6-2.6-.9.6-2.7L2.5 12l2.3-1.6-.6-2.7 2.6-.9.9-2.6 2.7.6z"></path></svg></button>
+    </div>
+
+    <div style="display:flex;gap:6px;margin:8px 16px 0;height:40px;align-items:center">
+      <a href="#" class="seg on">Сводка</a>
+      <a href="#" class="seg">Журнал</a>
+      <span style="flex:1"></span>
+      <button class="seg">Октябрь<svg class="ico" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M7 10l5 5 5-5"></path></svg></button>
+    </div>
+
+    <div style="display:flex;gap:6px;margin:12px 0 0 16px;overflow:hidden;-webkit-mask-image:linear-gradient(90deg,#000 0,#000 85%,rgba(0,0,0,0) 100%);mask-image:linear-gradient(90deg,#000 0,#000 85%,rgba(0,0,0,0) 100%)">
+      <button class="seg" style="color:var(--value)"><svg class="ico" viewBox="0 0 24 24" style="width:16px;height:16px;color:var(--tint)"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"></path></svg>Куда ушло больше обычного?</button>
+      <button class="seg" style="color:var(--value)">Хватит до зарплаты?</button>
+      <button class="seg" style="color:var(--value)">Что с подписками?</button>
+    </div>
+
+    <div class="glass" style="margin:12px 16px 0;border-radius:24px;padding:14px 16px 14px">
+      <div style="font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600;color:var(--label)">Октябрь · 1–5</div>
+      <div class="serif" style="font-size:36px;line-height:42px;font-weight:600;color:var(--value);margin-top:4px">−111 441 ₽</div>
+      <div style="font-size:12.5px;color:var(--meta)">ушло · к сентябрю за те же дни <span style="color:var(--value);font-weight:600">▼ 8 %</span></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;padding-top:12px;border-top:1px solid rgba(174,157,224,.12)">
+        <div><div style="font-size:11.5px;color:var(--label)">Пришло</div><div style="font-size:18px;font-weight:600;color:var(--value)">+325 000</div></div>
+        <div><div style="font-size:11.5px;color:var(--label)">Сальдо</div><div style="font-size:18px;font-weight:600;color:var(--value)">+213 559</div></div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 16px 0">
+      <div class="st"><small>В день</small><b>22 288</b><i>▼ 5 % к сент</i></div>
+      <div class="st"><small>Прогноз</small><b>−486 000</b><i>с регулярными</i></div>
+      <div class="st"><small>Крупнейшая</small><b>−48 000</b><i>школа · 1 окт</i></div>
+    </div>
+
+    <div class="sec">Куда ушло<span>5 групп</span></div>
+    <div class="glass" style="margin:0 16px;border-radius:24px;padding:14px 16px;display:flex;align-items:center;gap:14px">
+      <div style="position:relative;width:112px;height:112px;flex:none">
+        <svg width="112" height="112" viewBox="0 0 112 112" style="display:block;transform:rotate(-90deg)" aria-label="Траты по группам">
+          <circle cx="56" cy="56" r="46" fill="none" stroke="#E2DBF6" stroke-width="16" stroke-dasharray="97.1 289.03" stroke-dashoffset="0"></circle>
+          <circle cx="56" cy="56" r="46" fill="none" stroke="#AE9DE0" stroke-width="16" stroke-dasharray="80.7 289.03" stroke-dashoffset="-99.1"></circle>
+          <circle cx="56" cy="56" r="46" fill="none" stroke="#8C78C8" stroke-width="16" stroke-dasharray="57.2 289.03" stroke-dashoffset="-181.8"></circle>
+          <circle cx="56" cy="56" r="46" fill="none" stroke="#5B4A8C" stroke-width="16" stroke-dasharray="22.9 289.03" stroke-dashoffset="-241"></circle>
+          <circle cx="56" cy="56" r="46" fill="none" stroke="#3B3060" stroke-width="16" stroke-dasharray="21.1 289.03" stroke-dashoffset="-265.9"></circle>
+        </svg>
+        <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:16px">
+          <span style="font-size:14px;font-weight:700;color:var(--value)">111 441</span>
+          <span style="font-size:10.5px;color:var(--meta)">₽ за 5 дней</span>
+        </div>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div class="lg"><i style="background:#E2DBF6"></i><span class="ell" style="flex:1">Дом и ЖКХ</span><b>38 200</b><em>34 %</em></div>
+        <div class="lg"><i style="background:#AE9DE0"></i><span class="ell" style="flex:1">Дети</span><b>31 900</b><em>29 %</em></div>
+        <div class="lg"><i style="background:#8C78C8"></i><span class="ell" style="flex:1">Еда</span><b>22 840</b><em>20 %</em></div>
+        <div class="lg"><i style="background:#5B4A8C"></i><span class="ell" style="flex:1">Транспорт</span><b>9 600</b><em>9 %</em></div>
+        <div class="lg"><i style="background:#3B3060;box-shadow:inset 0 0 0 1px rgba(174,157,224,.5)"></i><span class="ell" style="flex:1">Прочее</span><b>8 901</b><em>8 %</em></div>
+      </div>
+    </div>
+
+    <div class="sec">По дням<span>среднее 22 288</span></div>
+    <div class="glass" style="margin:0 16px;border-radius:24px;padding:12px 16px 12px">
+      <div style="position:relative;height:100px">
+        <div style="position:absolute;left:0;right:0;bottom:37px;border-top:1.5px dashed rgba(226,219,246,.40)"></div>
+        <div style="position:absolute;inset:0;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;align-items:end">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:3px"><span style="font-size:11px;color:var(--meta)">48 000</span><div style="width:100%;height:80px;border-radius:4px;background:#5B4A8C"></div></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:3px"><span style="font-size:11px;color:var(--meta)">21 300</span><div style="width:100%;height:36px;border-radius:4px;background:#5B4A8C"></div></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:3px"><span style="font-size:11px;color:var(--meta)">14 900</span><div style="width:100%;height:25px;border-radius:4px;background:#5B4A8C"></div></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:3px"><span style="font-size:11px;color:var(--meta)">23 664</span><div style="width:100%;height:39px;border-radius:4px;background:#5B4A8C"></div></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:3px"><span style="font-size:11px;color:var(--value);font-weight:600">3 577</span><div style="width:100%;height:6px;border-radius:3px;background:#AE9DE0"></div></div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;margin-top:6px;text-align:center;font-size:11px;color:var(--meta)">
+        <span>чт, 1</span><span>пт, 2</span><span>сб, 3</span><span>вс, 4</span><span style="color:var(--value);font-weight:600">пн, 5</span>
+      </div>
+    </div>
+
+    <div class="sec">ДДС · 3 месяца<span>окт — 5 дней</span></div>
+    <div class="glass" style="margin:0 16px;border-radius:24px;padding:6px 16px 8px">
+      <div class="dds" style="border-top:0;color:var(--meta);font-size:12px;height:28px"><span style="text-align:left"></span><span>август</span><span>сентябрь</span><span style="color:var(--value);font-weight:600">октябрь</span></div>
+      <div class="dds"><span style="text-align:left;color:var(--label)">Поступления</span><span>410 000</span><span>395 000</span><span style="color:var(--value)">325 000</span></div>
+      <div class="dds"><span style="text-align:left;color:var(--label)">Выплаты</span><span>−372 500</span><span>−401 200</span><span style="color:var(--value)">−111 441</span></div>
+      <div class="dds" style="font-weight:600"><span style="text-align:left;color:var(--label);font-weight:500">Сальдо</span><span>+37 500</span><span>−6 200</span><span style="color:var(--value)">+213 559</span></div>
+    </div>
+
+    <div class="sec">Баланс и счета<span>3 счёта</span></div>
+    <div class="glass" style="margin:0 16px;border-radius:24px;padding:12px 16px 4px">
+      <div class="serif" style="font-size:28px;line-height:34px;font-weight:600;color:var(--value)">1 074 898 ₽</div>
+      <div style="font-size:12.5px;color:var(--meta);margin-bottom:8px">к 1 октября <span style="color:var(--value);font-weight:600">▲ 213 559</span></div>
+      <div class="acc"><span class="ell" style="flex:1">Т-Банк · карта</span><b>184 230</b></div>
+      <div class="acc"><span class="ell" style="flex:1">Сбер · зарплатный</span><b>312 668</b></div>
+      <div class="acc"><span class="ell" style="flex:1">Альфа · накопительный</span><b>578 000</b></div>
+    </div>
+
+    <div class="sec">Регулярные до конца месяца<span>−66 560</span></div>
+    <div class="glass" style="margin:0 16px;border-radius:24px;padding:2px 16px">
+      <div class="acc" style="border-top:0"><div style="flex:1;min-width:0"><div class="ell">Ипотека</div><div style="font-size:12px;color:var(--meta)">15 окт · Сбер</div></div><b>−62 400</b></div>
+      <div class="acc" style="height:48px"><div style="flex:1;min-width:0"><div class="ell">Связь и интернет</div><div style="font-size:12px;color:var(--meta)">20 окт · 2 номера</div></div><b>−1 290</b></div>
+      <div class="acc" style="height:48px"><div style="flex:1;min-width:0"><div class="ell">Подписки · 3</div><div style="font-size:12px;color:var(--meta)">8, 17 и 28 окт</div></div><b>−2 870</b></div>
+    </div>
+  </div>
+
+  <div class="glass" style="position:absolute;left:12px;right:12px;bottom:18px;height:62px;border-radius:31px;display:flex;align-items:center;gap:4px;padding:0 6px 0 20px;box-sizing:border-box">
+    <input aria-label="Спросить про деньги" placeholder="Спроси про деньги" style="flex:1;min-width:0;background:transparent;border:0;outline:0;font:inherit;font-size:16.5px;color:#F0EADF">
+    <button class="key" aria-label="Сказать голосом" style="width:50px;height:50px;border-radius:25px;display:flex;align-items:center;justify-content:center;flex:none"><svg class="ico" viewBox="0 0 24 24" style="width:24px;height:24px;stroke-width:2"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"></path></svg></button>
+  </div>
+</div>
+
+
+</body>
+</html>
