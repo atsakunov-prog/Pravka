@@ -126,6 +126,14 @@ def test_workouts_pace_cadence_and_raw(full):
     assert float(ride[0]) == 88  # у вело обороты не удваиваются
 
 
+def test_journal_chunks_readable_by_day(full):
+    row = one(full, "SELECT day, time_from, time_to, lines, text FROM life.journal")
+    assert str(row[0]) == "2026-09-07" and row[1] == "15:47:05" and row[2] == "15:47:09" and row[3] == 3
+    assert "гарнитура: команда голоса пришла" in row[4]
+    # Журнал — не «сказанное»: в поиск по словам владельца он не попадает.
+    assert one(full, "SELECT count(*) FROM life.said WHERE text ILIKE %s", "%команда голоса%")[0] == 0
+
+
 def test_wellness_skips_future_forecast(full):
     assert [str(r[0]) for r in full.execute("SELECT day FROM life.wellness")] == ["2026-09-07"]
     assert float(one(full, "SELECT tsb FROM life.wellness")[0]) == pytest.approx(-6.8)

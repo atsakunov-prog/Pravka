@@ -142,6 +142,7 @@ Notion повторял это окно: выпавшее из телефона 
 | `pravka.take` | `<ts>` | каждая диктовка: распознанный текст, движок, звук | `TranscriptionLog` |
 | `pravka.clean` | `<ts>` | чистка моделью: вход и выход | `HistoryLog` |
 | `pravka.correction` | `<id>` | правка владельца после модели | `CorrectionsLog` |
+| `pravka.journal` | `<ms начала>-<отпечаток>` | журнал службы кусками: подряд идущие строки одних суток, до 200 строк (07.10.2026: «кнопка гарнитуры иногда молчит» — дошло ли нажатие до Правки, видно только в журнале, а он жил в телефоне) | `EventLog` (`dictation-events.log`), `ArchiveEvents.journal` |
 | `sport.talk` | `<id>` | вопрос тренеру и ответ | `SportStore` |
 
 Сборщик intervals кладёт карточки intervals как есть, устройство
@@ -237,7 +238,9 @@ Notion повторял это окно: выпавшее из телефона 
   `money_statements` (что покрывает каждая выписка), `bank_pushes`. Их же
   читает сервис «Деньги» на компе — телефон шлёт счёт и якоря такими, какими
   считает их сам (`docs/dengi.md`, «Деньги в архиве»).
-- **Правка:** `dictations`, `cleanups`, `corrections`.
+- **Правка:** `dictations`, `cleanups`, `corrections`; журнал службы —
+  `journal` (строки «ЧЧ:ММ:СС.мс  событие» кусками: `WHERE day = … AND text
+  ILIKE '%гарнитура%'`).
 - **Спорт:** `workouts` (+ `workout_streams`), `wellness`, `plan`, `coach`.
 - **Общее:**
   - `days` — строка на сутки;

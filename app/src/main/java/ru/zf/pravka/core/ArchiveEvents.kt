@@ -551,4 +551,83 @@ object ArchiveEvents {
             "app" to pkg,
             "result" to result,
         ))
+
+    // ------------------------------------------------------------------ Журнал службы
+
+    /** Строк в одном куске журнала: кусок — одна запись архива, а не одна строка. */
+    const val JOURNAL_LINES = 200
+
+    /** И знаков: строки бывают длинными (подсказки движку, ответы стека). */
+    const val JOURNAL_CHARS = 24_000
+
+    private val journalStamp = Regex("""^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}""")
+
+    /**
+     * Журнал службы (`dictation-events.log`: «MM-dd HH:mm:ss.SSS  событие» —
+     * кнопки, гарнитура, микрофон, распознаватель, стоп и чей он) — кусками:
+     * подряд идущие строки одних суток, до [JOURNAL_LINES] строк. Владелец,
+     * 07.10.2026, про кнопку гарнитуры: «иногда работает, иногда ничего не
+     * вылезает» — дошло ли нажатие до Правки, видно только здесь, а журнал
+     * жил в телефоне и до разбора не доезжал.
+     *
+     * Года в строке нет — берётся год [now], а дата из будущего (дальше
+     * суток) — прошлогодняя, как у `EventLog.shareRangeIntent`. Строка без
+     * метки (перенос внутри события) — продолжение предыдущей. В куске метка
+     * укорочена до «ЧЧ:ММ:СС.мс»: сутки — полем `day`. Ключ — начало куска и
+     * отпечаток текста: тот же кусок второй раз сервер не удвоит.
+     */
+    fun journal(lines: List<String>, clock: Clock, now: Long): List<Item> {
+        val parse = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).apply {
+            timeZone = clock.zone
+            isLenient = false
+        }
+        val year = java.util.Calendar.getInstance(clock.zone).apply { timeInMillis = now }
+            .get(java.util.Calendar.YEAR)
+        fun millis(stamp: String): Long? {
+            val t = runCatching { parse.parse("$year-$stamp")?.time }.getOrNull() ?: return null
+            if (t <= now + 86_400_000L) return t
+            return runCatching { parse.parse("${year - 1}-$stamp")?.time }.getOrNull()
+        }
+        val out = mutableListOf<Item>()
+        val text = StringBuilder()
+        var count = 0
+        var day = ""
+        var first = 0L
+        var last = 0L
+        fun flush() {
+            if (count == 0) return
+            val body = text.toString()
+            out += Item("pravka.journal", "$first-${hashOf(body).take(8)}", obj(
+                "day" to day,
+                "at" to clock.iso(first),
+                "from" to clock.iso(first).substring(11, 19),
+                "to" to clock.iso(last).substring(11, 19),
+                "lines" to count,
+                "text" to body,
+            ))
+            text.setLength(0)
+            count = 0
+        }
+        for (line in lines) {
+            val stamp = journalStamp.find(line)?.value
+            val ms = stamp?.let { millis(it) }
+            if (ms == null) {
+                if (count > 0 && line.isNotBlank()) text.append('\n').append(line)
+                continue
+            }
+            val d = clock.day(ms)
+            if (count > 0 && (d != day || count >= JOURNAL_LINES || text.length >= JOURNAL_CHARS)) flush()
+            if (count == 0) {
+                day = d
+                first = ms
+            } else {
+                text.append('\n')
+            }
+            text.append(line.substring(6))
+            last = ms
+            count++
+        }
+        flush()
+        return out
+    }
 }

@@ -120,8 +120,52 @@ class ArchiveEventsTest {
             ArchiveEvents.pravkaTake(take, clock)!!,
             ArchiveEvents.pravkaClean(clean, clock)!!,
             ArchiveEvents.correction(5, t0, "org.telegram", "сказал", "модель", "итог", "dict", clock),
+            ArchiveEvents.journal(listOf("09-07 07:30:01.120  гарнитура: команда голоса пришла"), clock, t0).single(),
             ArchiveEvents.talk(SportStore.Talk(11, t0, "как форма?", "ровно", 0.02), clock),
         )
+    }
+
+    // ------------------------------------------------------------------ Журнал службы
+
+    @Test
+    fun `журнал службы — кусками по суткам, метка без даты, перенос — к своей строке`() {
+        val lines = listOf(
+            "09-06 23:59:58.500  засечка: стоп: откуда — ZButton.tap",
+            "09-07 00:00:01.001  гарнитура: команда голоса пришла",
+            "09-07 00:00:01.010  гарнитура: кнопка — Засечка (экран заблокирован)",
+            "  …продолжение длинного события",
+            "",
+            "09-07 00:00:04.400  распознавание подтверждено стеку — «OpenComm2 by Shokz_II»",
+        )
+        val items = ArchiveEvents.journal(lines, clock, t0)
+        assertEquals(listOf("2026-09-06", "2026-09-07"), items.map { it.data.getString("day") })
+        val day = items[1].data
+        assertEquals("00:00:01", day.getString("from"))
+        assertEquals("00:00:04", day.getString("to"))
+        assertEquals(3, day.getInt("lines"))
+        assertEquals(
+            "00:00:01.001  гарнитура: команда голоса пришла\n" +
+                "00:00:01.010  гарнитура: кнопка — Засечка (экран заблокирован)\n" +
+                "  …продолжение длинного события\n" +
+                "00:00:04.400  распознавание подтверждено стеку — «OpenComm2 by Shokz_II»",
+            day.getString("text"),
+        )
+        assertEquals("2026-09-07T00:00:01.001+03:00", day.getString("at"))
+        // Тот же кусок — тот же ключ: повтор прохода сервер не удвоит.
+        assertEquals(items.map { it.key }, ArchiveEvents.journal(lines, clock, t0).map { it.key })
+    }
+
+    @Test
+    fun `журнал службы — длинный режется, строка без метки в начале не теряет следующих, год — прошлый для будущей даты`() {
+        val many = (0 until ArchiveEvents.JOURNAL_LINES + 5).map { i ->
+            "09-07 07:%02d:%02d.000  строка $i".format(i / 60, i % 60)
+        }
+        val cut = ArchiveEvents.journal(listOf("хвост без метки") + many, clock, t0 + 86_400_000L)
+        assertEquals(listOf(ArchiveEvents.JOURNAL_LINES, 5), cut.map { it.data.getInt("lines") })
+        assertEquals(2, cut.map { it.key }.toSet().size)
+        // 31 декабря, прочитанное 7 сентября, — прошлогоднее, а не из будущего.
+        val old = ArchiveEvents.journal(listOf("12-31 23:00:00.000  новогоднее"), clock, t0).single()
+        assertEquals("2025-12-31", old.data.getString("day"))
     }
 
     @Test

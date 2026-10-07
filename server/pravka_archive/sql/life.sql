@@ -412,6 +412,18 @@ FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'pravka.correction' AND NOT r.deleted;
 COMMENT ON VIEW life.corrections IS 'Правки владельца после модели: надиктовано — что вернула модель — что осталось в поле.';
 
+CREATE VIEW life.journal AS
+SELECT (d->>'day')::date            AS day,
+       (d->>'at')::timestamptz      AS at,
+       d->>'from'                   AS time_from,
+       d->>'to'                     AS time_to,
+       (d->>'lines')::int           AS lines,
+       d->>'text'                   AS text,
+       r.key                        AS id
+FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+WHERE r.kind = 'pravka.journal' AND NOT r.deleted;
+COMMENT ON VIEW life.journal IS 'Журнал службы телефона кусками: строки «ЧЧ:ММ:СС.мс  событие» — нажатия кнопок и гарнитуры («гарнитура: команда голоса пришла» — нажатие дошло до Правки), микрофон и маршрут, распознаватель, стоп и чей он, ошибки. Для «почему не сработало»: WHERE day = … AND text ILIKE ''%гарнитура%'' ORDER BY at. Шлётся с 07.10.2026; раньше — только то, что телефон ещё помнил (журнал у него до мегабайта).';
+
 -- ---------------------------------------------------------------- Спорт: intervals как есть
 
 CREATE VIEW life.workouts AS

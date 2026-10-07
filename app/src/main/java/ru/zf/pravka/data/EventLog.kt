@@ -20,13 +20,16 @@ import java.util.Locale
 // is still flushed - the whole point of this log is to survive a crash.
 class EventLog(
     private val context: Context,
-    private val fileName: String = "dictation-events.log",
+    private val fileName: String = MAIN_FILE,
     /** Потолок файла до ротации. У лога запросов к Claude — больше: один запрос это десятки килобайт. */
     private val maxBytes: Long = MAX_BYTES,
 ) {
 
     companion object {
         private const val MAX_BYTES = 512L * 1024
+
+        /** Журнал службы (`app.eventLog`); его же архив дочитывает с места (`ArchiveSync`). */
+        const val MAIN_FILE = "dictation-events.log"
     }
 
     // Only touched on the DiskWriter thread.

@@ -40,8 +40,9 @@ import ru.zf.pravka.core.ArchiveEvents
  * записи и правда значит «удалили» (лента по суткам, приёмы еды, силовые,
  * зарядка); срезанное по сроку и журналы удалением не считаются никогда.
  *
- * Журналы Правки (`transcriptions.jsonl`, `history.jsonl`) только
- * дописываются — их читаем с места, где остановились, а не целиком.
+ * Журналы Правки (`transcriptions.jsonl`, `history.jsonl`) и журнал службы
+ * (`dictation-events.log`) только дописываются — их читаем с места, где
+ * остановились, а не целиком.
  *
  * Куда и с чем — адрес и токен из QR команды `pair` на компе, в закрытой
  * памяти (`DataRoot.secrets`): с базой не едут.
@@ -68,7 +69,7 @@ internal class ArchiveSync(
         STRENGTH(listOf("strength.session", "strength.gtg", "strength.take")),
         MONEY(listOf("money.entry", "money.reference", "money.take", "money.push")),
         SPORT(listOf("sport.talk")),
-        PRAVKA(listOf("pravka.take", "pravka.clean", "pravka.correction")),
+        PRAVKA(listOf("pravka.take", "pravka.clean", "pravka.correction", JOURNAL_KIND)),
     }
 
     data class Link(val url: String, val token: String, val at: Long)
@@ -181,6 +182,9 @@ internal class ArchiveSync(
             if (Domain.PRAVKA in domains) events += pravkaLogs(clock, at, ledger, marks)
 
             var sent = 0
+            // Куски журнала службы — в счёт, но не поводом для строки в журнал:
+            // иначе каждый тик писал бы «отправлено 1» про собственную прошлую строку.
+            var journalSent = 0
             var problem = ""
             for ((n, chunk) in chunks(events).withIndex()) {
                 val reply = runCatching { post(l.url, l.token, batch(chunk.map { it.event })) }.getOrElse { e ->
@@ -201,6 +205,7 @@ internal class ArchiveSync(
                     if (p.event.optString("eid") in acked || p.event.optString("eid") in rejectedIds) p.commit(ledger)
                 }
                 sent += acked.size
+                journalSent += chunk.count { it.event.optString("kind") == JOURNAL_KIND && it.event.optString("eid") in acked }
                 ledger.sent += acked.size
                 // Квитанции на диск не после каждой пачки: при первой заливке их
                 // мегабайт, а оборвись проход — повтор сервер всё равно не удвоит.
@@ -213,7 +218,7 @@ internal class ArchiveSync(
                 ledger.write(ledgerFile)
                 _status.value = Status(lastOk = now, sent = ledger.sent, pending = 0,
                     note = if (sent > 0) "отправлено $sent" else "")
-                if (sent > 0) log("архив: $why — отправлено $sent")
+                if (sent > journalSent) log("архив: $why — отправлено $sent")
             } else {
                 ledger.write(ledgerFile)
                 _status.value = Status(lastOk = ledger.lastOk, lastError = problem, lastErrorAt = now,
@@ -267,35 +272,53 @@ internal class ArchiveSync(
         marks: MutableList<(Ledger) -> Unit>,
     ): List<Pending> {
         val out = mutableListOf<Pending>()
-        val dir = DataRoot.dir(context)
         for ((name, build) in listOf<Pair<String, (JSONObject) -> ArchiveEvents.Item?>>(
             TranscriptionLog.FILE_NAME to { o -> ArchiveEvents.pravkaTake(o, clock) },
             HistoryLog.FILE_NAME to { o -> ArchiveEvents.pravkaClean(o, clock) },
         )) {
-            val main = File(dir, name)
-            val rotated = File(dir, "$name.1")
-            val from = ledger.offsets[name]
-            val len = if (main.isFile) main.length() else 0L
-            val parts = mutableListOf<Pair<File, Long>>()
-            when {
-                from == null -> { parts += rotated to 0L; parts += main to 0L }
-                len < from -> { parts += rotated to from; parts += main to 0L }
-                else -> parts += main to from
+            for (line in tail(name, ledger, marks)) {
+                val o = runCatching { JSONObject(line) }.getOrNull() ?: continue
+                val u = build(o) ?: continue
+                out += Pending(event(u.kind, u.key, "put", u.data, at)) { }
             }
-            var mark = from ?: 0L
-            for ((f, startAt) in parts) {
-                if (!f.isFile) continue
-                val (lines, stop) = readLines(f, startAt)
-                if (f == main) mark = stop
-                for (line in lines) {
-                    val o = runCatching { JSONObject(line) }.getOrNull() ?: continue
-                    val u = build(o) ?: continue
-                    out += Pending(event(u.kind, u.key, "put", u.data, at)) { }
-                }
-            }
-            if (!main.isFile) mark = 0L
-            marks += { lg -> lg.offsets[name] = mark }
         }
+        // Журнал службы — не JSON, а строки с меткой времени: кусками по
+        // суткам (`ArchiveEvents.journal`). Нажатие кнопки гарнитуры, стоп и
+        // чей он, отказ стека — всё, о чём иначе приходится спрашивать телефон.
+        val journal = tail(EventLog.MAIN_FILE, ledger, marks)
+        for (u in ArchiveEvents.journal(journal, clock, System.currentTimeMillis())) {
+            out += Pending(event(u.kind, u.key, "put", u.data, at)) { }
+        }
+        return out
+    }
+
+    /**
+     * Новые целые строки журнала [name] с прошлой метки (и хвост «.1», если
+     * журнал с тех пор переложился). Метку сдвинет [marks], когда сервер
+     * примет весь проход.
+     */
+    private fun tail(name: String, ledger: Ledger, marks: MutableList<(Ledger) -> Unit>): List<String> {
+        val dir = DataRoot.dir(context)
+        val main = File(dir, name)
+        val rotated = File(dir, "$name.1")
+        val from = ledger.offsets[name]
+        val len = if (main.isFile) main.length() else 0L
+        val parts = mutableListOf<Pair<File, Long>>()
+        when {
+            from == null -> { parts += rotated to 0L; parts += main to 0L }
+            len < from -> { parts += rotated to from; parts += main to 0L }
+            else -> parts += main to from
+        }
+        val out = mutableListOf<String>()
+        var mark = from ?: 0L
+        for ((f, startAt) in parts) {
+            if (!f.isFile) continue
+            val (lines, stop) = readLines(f, startAt)
+            if (f == main) mark = stop
+            out += lines
+        }
+        if (!main.isFile) mark = 0L
+        marks += { lg -> lg.offsets[name] = mark }
         return out
     }
 
@@ -455,6 +478,7 @@ internal class ArchiveSync(
         const val LEDGER_FILE = "archive-ledger.json"
         const val PAIR_PREFIX = "pravka-archive:"
         private const val GONE = "del"
+        private const val JOURNAL_KIND = "pravka.journal"
         private const val POKE_QUIET_MS = 10_000L
         private const val BATCH_EVENTS = 400
         private const val BATCH_BYTES = 1_500_000
