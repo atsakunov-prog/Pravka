@@ -73,7 +73,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -113,29 +113,21 @@ import androidx.compose.ui.unit.sp
  * служебные экраны остаются в родном оранжевом.
  */
 internal fun ModeDecor.tint(base: ColorScheme): ColorScheme {
-    val dark = base.background.luminance() < 0.5f
-    val ink = when (this) {
-        ModeDecor.ZASECHKA -> if (dark) ModeInk(0xFFF7A23A, 0xFF3A2205, 0xFF5E3A0C, 0xFFFCDCA8)
-        else ModeInk(0xFFB45309, 0xFFFFF8F0, 0xFFFCE7C4, 0xFF7A3A06)
-        ModeDecor.DELA -> if (dark) ModeInk(0xFF86B6DC, 0xFF0E2436, 0xFF1E3E57, 0xFFD2E6F6)
-        else ModeInk(0xFF2A5D82, 0xFFF4F8FC, 0xFFD6E6F3, 0xFF173A55)
-        ModeDecor.SPORT -> if (dark) ModeInk(0xFF78C49C, 0xFF0C2A1C, 0xFF1D4633, 0xFFCBEBD9)
-        else ModeInk(0xFF2F6B4F, 0xFFF3FAF6, 0xFFD3EBDD, 0xFF173D2B)
-        ModeDecor.FOOD -> if (dark) ModeInk(0xFFB4C872, 0xFF232C07, 0xFF3D4718, 0xFFE6EFC6)
-        else ModeInk(0xFF5E7A1F, 0xFFF8FBEE, 0xFFE7EFCC, 0xFF34440E)
-        ModeDecor.MONEY -> if (dark) ModeInk(0xFFAE9CE0, 0xFF221845, 0xFF3D3263, 0xFFE4DCFA)
-        else ModeInk(0xFF5B4A8C, 0xFFF7F4FC, 0xFFE4DDF5, 0xFF33285A)
-        else -> return base
-    }
+    // Правка 4.0: краска — из цветов режима (`ui/Tokens.kt`). `primary` —
+    // светлый tint, а не сама кнопка: старые экраны красят `primary` текст и
+    // значки, и тёмно-синий #2A5D82 на ночи не читался бы (расхождение с
+    // DESIGN §14 записано в отчёте); сама кнопка — `primaryContainer`.
+    val m = Modes.of(this)
     return base.copy(
-        primary = Color(ink.primary),
-        onPrimary = Color(ink.onPrimary),
-        primaryContainer = Color(ink.container),
-        onPrimaryContainer = Color(ink.onContainer),
+        primary = m.tint,
+        onPrimary = m.ink,
+        primaryContainer = m.key,
+        onPrimaryContainer = m.value,
+        secondary = m.label,
+        onSurfaceVariant = if (this == ModeDecor.TODAY || this == ModeDecor.SERVICE) base.onSurfaceVariant else m.label,
+        outlineVariant = m.tint.copy(alpha = 0.18f).compositeOver(base.background),
     )
 }
-
-private class ModeInk(val primary: Long, val onPrimary: Long, val container: Long, val onContainer: Long)
 
 // ---------------------------------------------------------------------------
 // Отступы экрана
@@ -1135,7 +1127,7 @@ fun TopPill(content: @Composable () -> Unit) {
 
 /** Знак режима — тот же, что у его кнопки внизу и на стекле. */
 internal fun decorGlyph(decor: ModeDecor): ImageVector = when (decor) {
-    ModeDecor.PRAVKA, ModeDecor.SERVICE -> Glyphs.Pravka
+    ModeDecor.PRAVKA, ModeDecor.SERVICE, ModeDecor.TODAY -> Glyphs.Pravka
     ModeDecor.ZASECHKA -> Glyphs.Zasechka
     ModeDecor.DELA -> Glyphs.Delo
     ModeDecor.SPORT -> Glyphs.Sport

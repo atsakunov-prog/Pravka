@@ -118,7 +118,7 @@ fun PaperCard(
                     Modifier
                         .fillMaxWidth()
                         .then(if (look.grain) Modifier.grain(CardLook.GRAIN) else Modifier)
-                        .glyphPattern(decor),
+
                 ) {
                     CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
                         Column(Modifier.fillMaxWidth().padding(16.dp), content = content)
@@ -157,7 +157,7 @@ fun PaperCard(
                         else Modifier
                     )
                     .then(if (look.grain) Modifier.grain(CardLook.GRAIN) else Modifier)
-                    .then(if (decor != null) Modifier.glyphPattern(decor) else Modifier),
+
             ) {
                 Column(
                     Modifier

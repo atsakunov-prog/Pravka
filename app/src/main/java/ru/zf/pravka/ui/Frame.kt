@@ -61,87 +61,45 @@ import androidx.compose.ui.unit.sp
 // расползлись, как расползались заголовки до этого.
 
 /**
- * Режим вкладки — какие знаки лежат узором на плашках. Знаки — символы
- * шрифта без эмодзи-представления (цветной эмодзи не приглушить альфой):
- * письменные у Правки, циферблаты у Засечки, галочки у Дел, снаряды у
- * спорта, еда у Еды. Владелец (15.09, второй заход): «бэкграунд не вышел —
- * сделаем узор на самих плашках, поплотнее, но еле заметный».
+ * Режим экрана — его цвета (`ui/Tokens.kt`, `Modes.of`), свет и монета.
+ * До 4.0 у режима был ещё узор знаков на плашках; DESIGN 4.0 знаки режима на
+ * фоне запрещает («вещь, а не обои»), узор снят 07.10.2026.
+ * [TODAY] — «Сегодня» и Общая статистика: нейтральный крем, цвета режимов
+ * там — только метки источника.
  */
-enum class ModeDecor(val glyphs: List<String>) {
-    PRAVKA(listOf("¶", "✎", "§", "❝", "„", "✑", "❞", "“")),
-    ZASECHKA(listOf("◔", "◑", "◕", "◴", "◵", "◶", "◷", "◐")),
-    DELA(listOf("✓", "☐", "•", "→", "✓", "☐", "✓", "•")),
-    SPORT(listOf("◎", "▲", "∞", "⚑", "≋", "◇", "◈", "⬡")),
-    FOOD(listOf("○", "◌", "❋", "✿", "❀", "⊙", "◍", "✾")),
-    MONEY(listOf("₽", "¤", "€", "$", "₽", "%", "₽", "¢")),
-    SERVICE(listOf("·", "◦", "·", "◦", "·", "◦", "·", "◦")),
+enum class ModeDecor {
+    PRAVKA,
+    ZASECHKA,
+    DELA,
+    SPORT,
+    FOOD,
+    MONEY,
+    TODAY,
+    SERVICE,
 }
 
-/** Режим текущей вкладки — читает `PaperCard`, чтобы положить узор на плашку. */
+/** Режим текущего экрана — для деталей, которым мало цветов (`LocalMode`). */
 val LocalModeDecor = compositionLocalOf<ModeDecor?> { null }
 
 /**
- * Узор знаков режима под содержимым плашки. Владелец (15.09, третий заход):
- * «не ровная сетка — сами пиктограммы сильно больше, повёрнуты в разные
- * стороны, как будто развалины, и чтобы было понятно, что это». Поэтому
- * знаки крупные (трёх размеров), разбросаны по редкой решётке со сдвигом и
- * большим случайным смещением, повёрнуты на ±45°, а цвет — цвет текста на
- * семь сотых прозрачности: контур читается, яркость почти как у плашки.
- * Разброс детерминирован (хеш от ряда и колонки): плашка не мерцает при
- * перерисовке. Рисуется в drawBehind, знаки промерены один раз на плашку.
- */
-@Composable
-fun Modifier.glyphPattern(decor: ModeDecor): Modifier {
-    val measurer = rememberTextMeasurer()
-    val ink = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
-    val sizesSp = listOf(30, 42, 56)
-    val layouts = remember(decor, ink) {
-        sizesSp.map { sp -> decor.glyphs.map { measurer.measure(it, TextStyle(fontSize = sp.sp, color = ink)) } }
-    }
-    return this.drawBehind {
-        val cellW = 104.dp.toPx()
-        val cellH = 92.dp.toPx()
-        fun hash(r: Int, c: Int, salt: Int): Float {
-            var h = (r * 73856093) xor (c * 19349663) xor (salt * 83492791)
-            h = h xor (h ushr 13); h *= 0x5bd1e995.toInt(); h = h xor (h ushr 15)
-            return (h and 0x7fffffff) % 10007 / 10007f
-        }
-        var row = 0
-        var y = -cellH * 0.45f
-        while (y < size.height + cellH * 0.2f) {
-            var col = 0
-            var x = -cellW * 0.45f + (if (row % 2 == 0) 0f else cellW * 0.5f)
-            while (x < size.width + cellW * 0.2f) {
-                val sizeIdx = (hash(row, col, 1) * sizesSp.size).toInt().coerceIn(0, sizesSp.lastIndex)
-                val glyph = layouts[sizeIdx][(hash(row, col, 2) * decor.glyphs.size).toInt().coerceIn(0, decor.glyphs.lastIndex)]
-                val left = x + (hash(row, col, 3) - 0.5f) * cellW * 0.6f
-                val top = y + (hash(row, col, 4) - 0.5f) * cellH * 0.6f
-                val rot = (hash(row, col, 5) - 0.5f) * 90f
-                val pivot = Offset(left + glyph.size.width / 2f, top + glyph.size.height / 2f)
-                rotate(rot, pivot) { drawText(glyph, topLeft = Offset(left, top)) }
-                x += cellW
-                col++
-            }
-            y += cellH
-            row++
-        }
-    }
-}
-
-/**
- * Вкладка целиком: режим для узора плашек, краска режима (`Kit.kt`,
- * [tint]), свет режима сверху (`ui/Glow.kt`, версия 3) и содержимое. Фон —
- * тёмный; свет лежит под содержимым и к середине экрана сходит в него.
+ * Экран режима целиком: цвета режима (`LocalMode`, краска Material —
+ * [tint]), свет режима сверху (`ui/Glow.kt`) и содержимое. Фон — ночь
+ * `#100F0D`; свет лежит под содержимым и к середине экрана сходит в неё.
  */
 @Composable
 fun ModeFrame(decor: ModeDecor, content: @Composable () -> Unit) {
+    val mode = Modes.of(decor)
     MaterialTheme(
         colorScheme = decor.tint(MaterialTheme.colorScheme),
         typography = MaterialTheme.typography,
         shapes = MaterialTheme.shapes,
     ) {
         val glow = remember(decor) { GlowState() }
-        CompositionLocalProvider(LocalModeDecor provides decor, LocalGlowState provides glow) {
+        CompositionLocalProvider(
+            LocalModeDecor provides decor,
+            LocalMode provides mode,
+            LocalGlowState provides glow,
+        ) {
             Box(Modifier.fillMaxSize()) {
                 ModeGlowLayer(decor)
                 content()

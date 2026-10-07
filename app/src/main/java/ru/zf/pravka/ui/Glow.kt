@@ -34,6 +34,8 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
@@ -65,7 +67,7 @@ val ModeDecor.glowAccent: Int?
         ModeDecor.SPORT -> ru.zf.pravka.trigger.BodyButtonController.INK
         ModeDecor.FOOD -> FOOD_OLIVE
         ModeDecor.MONEY -> ru.zf.pravka.trigger.PravkaAccessibilityService.MONEY_INK
-        ModeDecor.SERVICE -> null
+        ModeDecor.TODAY, ModeDecor.SERVICE -> null
     }
 
 /** Олива Еды — тот же тон, что у краски вкладки (`ModeDecor.tint`, светлая ветка). */
@@ -97,72 +99,73 @@ fun GlowBusy(active: Boolean) {
 }
 
 /**
- * Свет вкладки — под содержимым: круглые пятна краски режима (второй заход,
- * 26.09.2026: «наверху свечение какое-то круглое», «должно как-то
- * двигаться»). Сам цвет кнопки — большое пятно слева сверху, тёплый сосед —
- * справа, холодный — ниже посередине, блик — у самого верха. Каждое медленно
- * обходит свою петлю, а соседи дышат силой навстречу друг другу — это и есть
- * перелив: цвет верха поворачивается на полшага туда и обратно.
+ * Насколько приглушить свет экрана — «Сегодня» со сжатой шапкой смотрит в
+ * прошлое, и свет там тише (DESIGN §4.5: ×0.65). 1 — как есть.
+ */
+val LocalGlowDim = compositionLocalOf { mutableFloatStateOf(1f) }
+
+/**
+ * Свет экрана — Правка 4.0 (07.10.2026, DESIGN §4.5): два-три круглых пятна
+ * сверху, к середине экрана сходят в ночь. Числа — первый `div` каждого
+ * макета (`docs/design/redesign-4/mockups`): в режиме — пятно цвета кнопки
+ * слева, светлый сосед справа и слабое пятно ниже к середине; на «Сегодня» —
+ * крем слева и тёплый янтарь справа. Пятна медленно плывут по своим петлям
+ * (17, 23 и 29 с), без мигания; пока Claude работает — на 0.15 ярче, одним
+ * переходом 600 мс.
  *
- * Рисуется ОДНИМ проходом, без слоёв (третий заход, 27.09.2026: «с края едет
- * тёмная резкая полоса»). Прежде каждое пятно было своим слоем со сдвигом и
- * прозрачностью, а слой с прозрачностью рисуется в свой буфер размером с
- * себя — сдвинутый, он показывал обрезанный край, и край ехал по экрану.
- * Теперь кисти строятся один раз на размер (`drawWithCache`), движение —
- * сдвиг холста перед кругом, сила — альфа самого круга. Ни буфера, ни края;
- * и свет без буфера рисуется выше себя — под строкой состояния, с самого
- * верха экрана, как у Gemini, без прежней ровной границы по строке. Сбоку
- * свет обрезан своей колонкой: на развороте он не ложится на колонку слева.
- * Пока вкладка не на экране, часы кадров стоят — и перелив тоже.
+ * Рисуется ОДНИМ проходом, без слоёв (27.09.2026: «с края едет тёмная
+ * резкая полоса» — слой с прозрачностью рисуется в свой буфер, и сдвинутый
+ * буфер показывал край). Кисти строятся раз на размер, движение — сдвиг
+ * холста, сила — альфа самого пятна. Эллипс CSS `radial-gradient(60% 40% …)`
+ * — круг, сжатый по высоте. Пока экран не на виду, часы стоят.
  */
 @Composable
 fun ModeGlowLayer(decor: ModeDecor) {
-    val accent = decor.glowAccent ?: return
+    val spec = Modes.of(decor).light
     val look = LocalCardLook.current
     val busy = (LocalGlowState.current?.busy ?: 0) > 0
-    val target = ModeGlow.alpha(look.glow, busy)
-    val strength = animateFloatAsState(target, tween(ModeGlow.FADE_MS), label = "modeGlow")
+    // Ползунок «Свечение режима» (`CardLook.glow`) — множитель к силе макета:
+    // заводское 0.9 — ровно макет.
+    val user = (look.glow / ModeGlow.DEFAULT).coerceIn(0f, 1.5f)
+    val dim by LocalGlowDim.current
+    val target = if (user <= 0f) 0f else (spec.opacity * user * dim + if (busy) BUSY_BOOST else 0f).coerceIn(0f, 1f)
+    val strength = animateFloatAsState(target, tween(BUSY_FADE_MS), label = "modeGlow")
     if (target <= 0f && strength.value <= 0.001f) return
     val top = WindowInsets.statusBars.getTop(LocalDensity.current).toFloat()
-    val blobs = remember(accent) { glowBlobs(accent) }
-    // Часы перелива заводятся, только когда он включён: выключенный тумблер
-    // «Переливы» — это стоящий свет и ни одного лишнего кадра.
-    val drift: Drift? = if (look.glowMotion) rememberDrift() else null
+    val drift: Drift? = if (look.glowMotion) rememberDrift(spec.blobs.size) else null
     Spacer(
         Modifier
             .fillMaxSize()
             .drawWithCache {
                 val w = size.width
-                // Мерка — ширина, но не шире [MAX_HEIGHT_DP]: на развороте Fold
-                // круги от ширины заливали бы весь экран, а свет — это верх.
-                val u = minOf(w, ModeGlow.MAX_HEIGHT_DP.dp.toPx())
-                val brushes = blobs.map { b ->
+                // Слой света макета — `heightDp` от самого верха экрана, вместе
+                // со строкой состояния: свет идёт и под ней, как у Gemini.
+                val h = spec.heightDp.dp.toPx()
+                val brushes = spec.blobs.map { b ->
+                    val rx = w * b.rx
                     Brush.radialGradient(
                         0f to b.color,
-                        0.3f to b.color.copy(alpha = 0.78f),
-                        0.6f to b.color.copy(alpha = 0.36f),
-                        0.85f to b.color.copy(alpha = 0.09f),
-                        1f to b.color.copy(alpha = 0f),
+                        0.72f to b.color.copy(alpha = 0f),
                         center = Offset.Zero,
-                        radius = u * b.r,
+                        radius = rx,
                     )
                 }
                 onDrawBehind {
                     val s = strength.value
                     if (s <= 0.001f) return@onDrawBehind
-                    val wave = drift?.let { (sin(it.breath.value) + 1f) / 2f } ?: 0.5f
                     clipRect(left = 0f, top = -top, right = w, bottom = size.height) {
-                        blobs.forEachIndexed { i, b ->
-                            val p = drift?.phases?.get(i)?.value
-                            val x = w * b.cx + (p?.let { cos(it) * ModeGlow.DRIFT * u * b.dx } ?: 0f)
-                            val y = u * b.cy - top + (p?.let { sin(it) * ModeGlow.DRIFT * u * b.dy } ?: 0f)
-                            val k = when (b.breath) {
-                                Breath.NONE -> 1f
-                                Breath.WITH -> 1f - ModeGlow.SHIMMER * (1f - wave)
-                                Breath.AGAINST -> 1f - ModeGlow.SHIMMER * wave
-                            }
-                            translate(x, y) {
-                                drawCircle(brushes[i], radius = u * b.r, center = Offset.Zero, alpha = s * b.alpha * k)
+                        spec.blobs.forEachIndexed { i, b ->
+                            val rx = w * b.rx
+                            val ry = h * b.ry
+                            val p = drift?.phases?.getOrNull(i)?.value
+                            val dx = p?.let { cos(it) * DRIFT_DP.dp.toPx() } ?: 0f
+                            val dy = p?.let { sin(it) * DRIFT_DP.dp.toPx() * 0.6f } ?: 0f
+                            val cx = w * b.cx + dx
+                            val cy = h * b.cy - top + dy
+                            translate(cx, cy) {
+                                scale(1f, ry / rx, pivot = Offset.Zero) {
+                                    drawCircle(brushes[i], radius = rx, center = Offset.Zero, alpha = s)
+                                }
                             }
                         }
                     }
@@ -171,48 +174,26 @@ fun ModeGlowLayer(decor: ModeDecor) {
     )
 }
 
-/** Как пятно дышит силой: не дышит, в такт переливу или навстречу ему. */
-private enum class Breath { NONE, WITH, AGAINST }
+/** Пока Claude работает — свет ярче на столько (DESIGN §4.5). */
+private const val BUSY_BOOST = 0.15f
+private const val BUSY_FADE_MS = 600
 
-/**
- * Одно пятно: цвет, центр в долях мерки ([cx] — от ширины, [cy] — от верха
- * экрана, под строкой состояния), радиус [r] в долях мерки, сила [alpha],
- * размах петли по осям ([dx], [dy]) и как дышит.
- */
-private class GlowBlob(
-    val color: Color,
-    val cx: Float,
-    val cy: Float,
-    val r: Float,
-    val alpha: Float,
-    val dx: Float,
-    val dy: Float,
-    val breath: Breath,
-)
+/** Размах петли пятна, dp: дрейф, а не полёт. */
+private const val DRIFT_DP = 18
 
-/** Пятна в порядке рисования: нижнее — первым. */
-private fun glowBlobs(accent: Int): List<GlowBlob> = listOf(
-    // Холодный сосед — ниже и шире: тело света, дышит навстречу тёплому.
-    GlowBlob(Color(ModeGlow.cool(accent)), 0.5f, 0.46f, 0.78f, 0.85f, 0.7f, 0.5f, Breath.AGAINST),
-    // Сам цвет кнопки — главное пятно у левого верхнего угла, не дышит.
-    GlowBlob(Color(ModeGlow.tone(accent)), 0.2f, 0f, 1f, 1f, 1f, 0.6f, Breath.NONE),
-    // Тёплый сосед — справа сверху.
-    GlowBlob(Color(ModeGlow.warm(accent)), 0.88f, 0.1f, 0.78f, 0.8f, 0.8f, 0.7f, Breath.WITH),
-    // Блик — у самого верха, над шапкой: светлая верхушка, как у кнопки.
-    GlowBlob(Color(ModeGlow.lit(accent)), 0.56f, -0.04f, 0.5f, 0.7f, 0.9f, 0.4f, Breath.WITH),
-)
+/** Периоды петель пятен — 17, 23 и 29 с (DESIGN §4.5), не кратные: свет не повторяет узор. */
+private val DRIFT_PERIODS_MS = listOf(17_000, 23_000, 29_000)
 
-/** Часы перелива: по петле на пятно (периоды не кратные) и одно дыхание соседей. */
-private class Drift(val phases: List<State<Float>>, val breath: State<Float>)
+/** Часы дрейфа: по петле на пятно. */
+private class Drift(val phases: List<State<Float>>)
 
 @Composable
-private fun rememberDrift(): Drift {
+private fun rememberDrift(count: Int): Drift {
     val t = rememberInfiniteTransition(label = "modeGlowDrift")
-    val phases = listOf(1.71f, 1f, 1.37f, 2.13f).mapIndexed { i, k ->
-        t.loop((ModeGlow.DRIFT_MS * k).toInt(), "drift$i")
+    val phases = (0 until count).map { i ->
+        t.loop(DRIFT_PERIODS_MS[i % DRIFT_PERIODS_MS.size], "drift$i")
     }
-    val breath = t.loop(ModeGlow.SHIMMER_MS, "breath")
-    return remember(phases, breath) { Drift(phases, breath) }
+    return remember(phases) { Drift(phases) }
 }
 
 /** Угол петли: от нуля до полного круга за [periodMs], ровно, по кругу. */
