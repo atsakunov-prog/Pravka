@@ -46,6 +46,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -216,7 +218,8 @@ fun DelaTab(
     // «Сделано само» в «Новом» — свёрнуто, пока не попросили показать.
     var autoOpen by rememberSaveable { mutableStateOf(false) }
     val groupsPref by app.delaStore.groupsFlow.collectAsState()
-    var draft by remember { mutableStateOf("") }
+    // Набранное в строке Claude живёт, пока его не отправили или не стёрли: смена раздела и синк его не стирают.
+    var draft by rememberSaveable { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var pages by remember { mutableStateOf(listOf<DelaPage>()) }
@@ -234,14 +237,14 @@ fun DelaTab(
     var editingSuggestion by remember { mutableStateOf<Dela.Suggestion?>(null) }
     var rejecting by remember { mutableStateOf<Dela.Suggestion?>(null) }
     var starting by remember { mutableStateOf("") }
-    // Правка словами: одна команда за раз, строка над видом и её текст.
+    // Правка словами: одна команда за раз из строки Claude внизу (задание 7).
     val ask = remember { AskState() }
-    var askOpen by rememberSaveable { mutableStateOf(false) }
-    var askText by rememberSaveable { mutableStateOf("") }
-    // Микрофон в строке дела: у какого дела открыто поле, что в нём и слушает ли.
-    var rowAsk by remember { mutableStateOf("") }
-    var rowAskText by remember { mutableStateOf("") }
-    var rowListening by remember { mutableStateOf(false) }
+    var sayListening by remember { mutableStateOf(false) }
+    // Над строкой: «Claude ничего не поменял — команда снова в поле» или причина отказа.
+    var sayNote by remember { mutableStateOf("") }
+    var sayNoteError by remember { mutableStateOf(false) }
+    // Что в окне в миг отправки — строки дел и плитки сделок отмечают себя сами.
+    val seenRows = remember { SeenRows() }
 
     LaunchedEffect(link) {
         app.delaStore.load()
@@ -279,67 +282,38 @@ fun DelaTab(
     androidx.activity.compose.BackHandler(enabled = pages.isNotEmpty()) { pages = pages.dropLast(1) }
 
     /**
-     * Команда Claude: одна за раз. Получилось — итог листом поверх вкладки (и
-     * [onDone] — поле очищается); нет — причина у той стороны, что спросила, а
-     * текст остаётся. Ошибка у карточки, которую уже закрыли, — листом с текстом.
+     * Команда Claude из строки внизу: одна за раз. Пока он думает — команда в
+     * поле серым. Сделал или ответил — поле пусто, итог листом; ничего не сделал
+     * и не ответил — команда остаётся в поле: дополнить и отправить ещё раз
+     * (08.10.2026: «нажимаю на микрофон, говорю… и всё стирается»). Не вышло
+     * (нет сети, сервер отказал) — причина целиком над строкой, текст на месте.
      */
-    fun runAsk(key: String, text: String, scopeJson: org.json.JSONObject, onDone: () -> Unit = {}) {
+    fun runAsk(text: String, scopeJson: org.json.JSONObject) {
         if (ask.running.isNotBlank()) {
             Feedback.toast(app, "Claude ещё правит прошлую команду")
             return
         }
-        ask.running = key
-        ask.errors = ask.errors - key
+        ask.running = ASK_SCREEN
+        sayNote = ""
         scope.launch {
             val r = app.delaSync.ask(text, scopeJson)
             ask.running = ""
             r.onSuccess { res ->
-                onDone()
-                if (openTask != null && key == askTaskKey(openTask!!.id)) openTask = null
-                ask.shown = AskShown(key, text, scopeJson, result = res)
+                if (res.undoable || res.notes.isNotEmpty() || res.reply.isNotBlank() || res.errors.isNotEmpty()) {
+                    if (draft.trim() == text.trim()) draft = ""
+                    // Карточка дела, про которое сказано, закрывается: Claude её уже поправил.
+                    if (scopeJson.has("open")) openTask = null
+                    ask.shown = AskShown(ASK_SCREEN, text, scopeJson, result = res)
+                } else {
+                    if (draft.isBlank()) draft = text
+                    sayNote = "Claude ничего не поменял — команда снова в поле"
+                    sayNoteError = false
+                }
             }.onFailure { e ->
-                val why = e.message.orEmpty().ifBlank { "Claude не ответил" }
-                ask.errors = ask.errors + (key to why)
-                // Видно ли, где спросили: строка над видом открыта, карточка или поле у строки дела на месте.
-                val seen = if (key == ASK_SCREEN) askOpen else openTask?.let { askTaskKey(it.id) } == key || askTaskKey(rowAsk) == key
-                if (!seen) ask.shown = AskShown(key, text, scopeJson, error = why)
+                if (draft.isBlank()) draft = text
+                sayNote = e.message.orEmpty().ifBlank { "Claude не ответил" }
+                sayNoteError = true
             }
-        }
-    }
-
-    /** Команда про одно дело из его строки: уходит Claude, поле закрывается, когда он ответил. */
-    fun rowSend(t: Dela.Task, text: String) {
-        if (text.isBlank()) return
-        rowAskText = text
-        runAsk(askTaskKey(t.id), text, DelaAsk.taskScope(t.id)) { if (rowAsk == t.id) { rowAsk = ""; rowAskText = "" } }
-    }
-
-    /**
-     * Микрофон под ▶ (05.10.2026, владелец: «под каждой кнопкой play нужно сделать
-     * кнопку микрофончика… зачёркивать дела, уточнять, говорить, что это другое.
-     * Точно так же, как в вебе»): открыть поле у дела и сразу слушать тем же
-     * движком, что «Д»; сказанное уходит само. Второй тап — хватит слушать.
-     */
-    fun rowMic(t: Dela.Task) {
-        val service = PravkaAccessibilityService.instance
-        if (rowListening) {
-            if (service?.finishDelaReason(keep = true) != true) rowListening = false
-            return
-        }
-        if (rowAsk != t.id) {
-            rowAsk = t.id
-            rowAskText = ""
-        }
-        if (service == null) {
-            Feedback.toast(app, app.getString(R.string.toast_no_service))
-            return
-        }
-        if (ask.running == askTaskKey(t.id)) return
-        rowListening = service.listenForDelaReason { said ->
-            rowListening = false
-            val full = (rowAskText.trim() + " " + said.trim()).trim()
-            rowAskText = full
-            if (full.isNotBlank() && rowAsk == t.id) rowSend(t, full)
         }
     }
 
@@ -388,20 +362,6 @@ fun DelaTab(
         runningMs = running?.durationMs(now) ?: 0L,
         spent = remember(ribbon, now) { ru.zf.pravka.core.ZasechkaTasks.spent(ribbon, now) },
         stop = { scope.launch { app.zasechkaEngine.closeOpen() } },
-        askId = rowAsk,
-        askText = rowAskText,
-        onAskText = { rowAskText = it },
-        listening = rowListening,
-        askRunning = ask.running,
-        askError = { id -> ask.error(askTaskKey(id)) },
-        onAskMic = { t -> rowMic(t) },
-        onAskSend = { t, text -> rowSend(t, text) },
-        onAskClose = {
-            if (rowListening) PravkaAccessibilityService.instance?.finishDelaReason(keep = false)
-            rowListening = false
-            rowAsk = ""
-            rowAskText = ""
-        },
         snap = snap,
     )
 
@@ -567,8 +527,6 @@ fun DelaTab(
     }
 
     val crmUi = remember { CrmUiState() }
-    // Пилюля Claude наверху карточки клиента, сделки и человека — открыта сама, как в вебе.
-    LaunchedEffect(page, askScreen?.card) { if (askScreen?.card == true) askOpen = true }
     // Новая карточка открывается на «Делах».
     LaunchedEffect(page) { crmUi.tab = TAB_TASKS }
     val clientOpen by app.delaStore.clientOpenFlow.collectAsState()
@@ -586,9 +544,10 @@ fun DelaTab(
     val wide = ru.zf.pravka.ui.twoPane()
     val list: @Composable (Modifier) -> Unit = { listModifier ->
     LazyColumn(
-        modifier = listModifier.fillMaxSize().bottomFade().scrollFade(listState),
+        modifier = listModifier.fillMaxSize().bottomFade().scrollFade(listState)
+            .onGloballyPositioned { seenRows.top = it.boundsInWindow().top },
         state = listState,
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 110.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 150.dp),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
         // «▷ Сейчас: Ужин с семьёй · 21 м · синк 18:40 · поиск · +» (`screens/06`):
@@ -628,14 +587,6 @@ fun DelaTab(
                             .clickable(enabled = link != null && !st.running) { scope.launch { app.delaSync.sync("руками") } }
                             .padding(horizontal = 6.dp, vertical = 10.dp),
                     )
-                    if (askScreen != null) {
-                        GlyphButton(
-                            Glyphs.Spark,
-                            if (askOpen) "убрать строку Claude" else "Claude: команда на дела этого экрана",
-                            tint = if (askOpen || ask.running == ASK_SCREEN) mode.value else mode.label,
-                            onClick = { askOpen = !askOpen },
-                        )
-                    }
                     GlyphButton(
                         if (searching) Glyphs.Close else Glyphs.Search,
                         if (searching) "закрыть поиск" else "поиск: клиенты, проекты, люди, дела",
@@ -665,20 +616,6 @@ fun DelaTab(
                         modifier = Modifier.padding(start = 4.dp),
                     )
                 }
-            }
-        }
-
-        if (askOpen && askScreen != null) {
-            item(key = "ask") {
-                AskBar(
-                    screen = askScreen,
-                    text = askText,
-                    onText = { askText = it },
-                    running = ask.running == ASK_SCREEN,
-                    error = ask.error(ASK_SCREEN),
-                    onSend = { text -> runAsk(ASK_SCREEN, text, askScreen.scope) { askText = "" } },
-                    onClose = { askOpen = false },
-                )
             }
         }
 
@@ -918,39 +855,83 @@ fun DelaTab(
     }
     }
     // Строка «сказать» Дел — внизу (DESIGN §11.4): тот же разбор Разноски, что у «Д».
-    val sayBar: @Composable (Modifier) -> Unit = { barModifier ->
-    ru.zf.pravka.ui.SayBar(
-        value = draft,
-        onValueChange = { draft = it },
-        placeholder = ru.zf.pravka.core.PillHint.say(ownerName, "говори дела"),
-        onSend = {
-            val text = draft.trim()
-            val service = PravkaAccessibilityService.instance
-            if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
-            else if (text.isNotEmpty()) {
-                draft = ""
-                service.onRaznoskaText(text)
-            }
-        },
-        onMic = {
-            val service = PravkaAccessibilityService.instance
-            if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
-            else service.onRaznoskaTap()
-        },
-        sendEnabled = draft.isNotBlank(),
-        maxLines = 4,
-        busy = talking,
-        busyLabel = "Разбираю",
-        modifier = barModifier
-            .navigationBarsPadding()
-            .imePadding()
-            .padding(start = 12.dp, end = 12.dp, bottom = 18.dp),
-    )
+    /**
+     * Строка Claude внизу — одна на всё (задания 7 и 9, поправки задания 10): что
+     * сказано, уходит на сервер (`/api/ask`) вместе с тем, что на экране: дела
+     * страницы, какие из них в окне, открытое дело. Не подключено к серверу —
+     * прежняя дорога: разбор Разноски, как у «Д».
+     */
+    fun sayScope(openId: String): org.json.JSONObject? {
+        val base = askScreen?.scope ?: return null
+        val o = org.json.JSONObject(base.toString())
+        return DelaAsk.see(o, seenRows.visible("t:"), open = openId)
     }
+    fun saySend(text: String, openId: String) {
+        val t = text.trim()
+        if (t.isEmpty()) return
+        val sc = if (link != null) sayScope(openId) else null
+        if (sc == null) {
+            val service = PravkaAccessibilityService.instance
+            if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
+            else { draft = ""; service.onRaznoskaText(t) }
+            return
+        }
+        draft = t
+        runAsk(t, sc)
+    }
+    fun sayMic(openId: String) {
+        val service = PravkaAccessibilityService.instance
+        when {
+            service == null -> Feedback.toast(app, app.getString(R.string.toast_no_service))
+            link == null -> service.onRaznoskaTap()
+            // Второе нажатие — «готово»: сказанное придёт и уйдёт Claude. Пауза запись не кончает:
+            // движок держит одну сессию через паузы и сам поднимает её, если она оборвалась.
+            sayListening -> if (!service.finishDelaReason(keep = true)) sayListening = false
+            else -> {
+                val base = draft.trim()
+                sayNote = ""
+                sayListening = service.listenForDelaReason("Говори — нажми микрофон ещё раз, отдам Claude") { said ->
+                    sayListening = false
+                    val full = (base + " " + said.trim()).trim()
+                    draft = full
+                    if (said.isNotBlank()) saySend(full, openId)
+                }
+            }
+        }
+    }
+    val sayBar: @Composable (Modifier, Dela.Task?, Boolean) -> Unit = { barModifier, opened, coversList ->
+        val openId = opened?.id.orEmpty()
+        DelaSayBar(
+            value = draft,
+            onValueChange = { draft = it; if (sayNote.isNotBlank() && !sayNoteError) sayNote = "" },
+            placeholder = ru.zf.pravka.core.PillHint.say(ownerName, "говори дела"),
+            about = when {
+                opened != null -> "с делом «${opened.title.take(60)}»"
+                askScreen?.card == true -> "с карточкой"
+                view == DelaViews.View.NEW && page == null -> "с новым"
+                else -> "с делами на экране"
+            },
+            card = askScreen?.card == true && opened == null,
+            listening = sayListening,
+            busy = ask.running.isNotBlank() || (link == null && talking),
+            note = sayNote,
+            noteError = sayNoteError,
+            onMic = { sayMic(openId) },
+            onSend = { saySend(draft, openId) },
+            modifier = barModifier
+                // Строка поверх списка — снизу окно кончается у неё (на развороте она под карточкой справа).
+                .onGloballyPositioned { if (coversList) seenRows.bottom = it.boundsInWindow().top }
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(start = 12.dp, end = 12.dp, bottom = 18.dp),
+        )
+    }
+    androidx.compose.runtime.CompositionLocalProvider(LocalSeenRows provides seenRows) {
     Column(Modifier.fillMaxSize()) {
         header(if (sphere == "all") "Все сферы" else SPHERES.firstOrNull { it.first == sphere }?.second.orEmpty()) { sphereSheet = true }
         if (wide) {
             Row(Modifier.weight(1f).fillMaxWidth()) {
+                LaunchedEffect(Unit) { seenRows.bottom = Float.MAX_VALUE }
                 Box(Modifier.weight(1f)) { list(Modifier) }
                 Box(Modifier.weight(1f)) {
                     // Открытое справа дело; пусто — первое из «Сейчас».
@@ -966,15 +947,16 @@ fun DelaTab(
                         onDone = { shown?.let { actions.done(it) } },
                         onPerson = { id -> push(DelaPage.Person(id)) },
                     )
-                    sayBar(Modifier.align(Alignment.BottomCenter))
+                    sayBar(Modifier.align(Alignment.BottomCenter), shown, false)
                 }
             }
         } else {
             Box(Modifier.weight(1f)) {
                 list(Modifier)
-                sayBar(Modifier.align(Alignment.BottomCenter))
+                sayBar(Modifier.align(Alignment.BottomCenter), null, true)
             }
         }
+    }
     }
     if (sphereSheet) {
         PaperSheet(onDismiss = { sphereSheet = false }, title = "Сфера") {
@@ -1007,10 +989,8 @@ fun DelaTab(
                 scope.launch { app.delaDo(listOf(Dela.statusOp(op, fresh.id))) }
             },
             onStart = { openTask = null; actions.start(fresh) },
-            // Микрофон у дела: команда про одно это дело, правит сервер.
-            onAsk = { text -> runAsk(askTaskKey(fresh.id), text, DelaAsk.taskScope(fresh.id)) },
-            asking = ask.running == askTaskKey(fresh.id),
-            askError = ask.error(askTaskKey(fresh.id)),
+            // Микрофона у дела нет (поправки задания 10): та же строка Claude — над карточкой, с `open`.
+            say = if (link != null) ({ sayBar(Modifier, fresh, false) }) else null,
         )
     }
     CrmSheets(crm)
@@ -1088,7 +1068,7 @@ fun DelaTab(
                     Feedback.toast(app, if (sent) "Вернул как было" else "Вернул как было — уйдёт на сервер, когда будет связь")
                 }
             },
-            onRetry = { text -> runAsk(shown.key, text, shown.scope) },
+            onRetry = { text -> runAsk(text, shown.scope) },
         )
     }
     if (newTask) {
@@ -1236,19 +1216,6 @@ internal class DelaActions(
     /** Время в ленте по id дела. */
     val spent: Map<String, Long> = emptyMap(),
     val stop: () -> Unit = {},
-    /** Микрофон у дела в строке (как в вебе): у какого дела открыто поле команды Claude. */
-    val askId: String = "",
-    val askText: String = "",
-    val onAskText: (String) -> Unit = {},
-    /** Слушает ли сейчас микрофон строки. */
-    val listening: Boolean = false,
-    /** Ключ команды, которую сейчас правит Claude (`askTaskKey`); "" — никакой. */
-    val askRunning: String = "",
-    val askError: (String) -> String = { "" },
-    /** Тап по микрофону строки: открыть поле и слушать (второй тап — хватит слушать). */
-    val onAskMic: (Dela.Task) -> Unit = {},
-    val onAskSend: (Dela.Task, String) -> Unit = { _, _ -> },
-    val onAskClose: () -> Unit = {},
     /** Копия — подписям строки нужны имена проектов, сделок и людей (как в вебе). */
     val snap: Dela.Snapshot = Dela.Snapshot(),
 )
@@ -1416,7 +1383,7 @@ private fun FeedRow(t: Dela.Task, actions: DelaActions, today: String, where: St
     val snap = actions.snap
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { actions.open(t) }.padding(vertical = 2.dp),
+        modifier = Modifier.fillMaxWidth().seen("t:" + t.id).clip(RoundedCornerShape(12.dp)).clickable { actions.open(t) }.padding(vertical = 2.dp),
     ) {
         Box(Modifier.size(40.dp).clip(CircleShape).clickable { actions.done(t) }, contentAlignment = Alignment.Center) {
             Box(Modifier.size(20.dp).clip(CircleShape).border(2.dp, mode.tint, CircleShape))
@@ -1942,8 +1909,8 @@ internal fun TaskRows(
 
 /**
  * Дело строкой: кружок — закрыть одним касанием (как в Todoist), сама строка —
- * карточка, ▶ — запись в Засечке с id дела и проекта, под ним микрофон —
- * команда Claude про это дело (поле раскрывается под строкой). Под названием — номер,
+ * карточка, ▶ — запись в Засечке с id дела и проекта (микрофона у дела нет с
+ * 09.10.2026: строка Claude одна — внизу). Под названием —
  * проект, у кого мяч, срок и оценка. Денег дела нет с 05.10.2026: владелец —
  * «тяжело смотреть, нагружает».
  */
@@ -1962,11 +1929,9 @@ private fun TaskRow(
     // N дн» жирным, без красного. Молния «Сейчас» (06.10.2026) — слева.
     val mode = ru.zf.pravka.ui.LocalMode.current
     val ty = ru.zf.pravka.ui.LocalPravkaType.current
-    val asking = actions.askId == t.id
-    val running = actions.askRunning == askTaskKey(t.id)
     val lateDays = if (t.open && t.dueDate.isNotBlank() && t.dueDate < today)
         runCatching { java.time.temporal.ChronoUnit.DAYS.between(LocalDate.parse(t.dueDate.take(10)), LocalDate.parse(today)).toInt() }.getOrDefault(0) else 0
-    Column(Modifier.fillMaxWidth()) {
+    Column(Modifier.fillMaxWidth().seen("t:" + t.id)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { actions.open(t) }.padding(vertical = 4.dp),
@@ -2053,26 +2018,6 @@ private fun TaskRow(
             } else if (t.open) {
                 GlyphButton(Glyphs.Play, "начать в ленте", { actions.start(t) }, tint = mode.tint, size = 40.dp)
             }
-            GlyphButton(
-                if (asking && actions.listening) Glyphs.Stop else Glyphs.Mic,
-                if (asking && actions.listening) "хватит слушать" else "сказать Claude, что сделать с этим делом",
-                { actions.onAskMic(t) },
-                tint = if (asking || running) mode.value else mode.tint,
-                size = 40.dp,
-            )
-        }
-        if (asking || running) {
-            AskInline(
-                // Поле у дела, которое правится, а поле уже открыто у другого, — без чужого текста.
-                text = if (asking) actions.askText else "",
-                onText = actions.onAskText,
-                listening = asking && actions.listening,
-                running = running,
-                error = actions.askError(t.id),
-                onMic = { actions.onAskMic(t) },
-                onSend = { actions.onAskSend(t, it) },
-                onClose = actions.onAskClose,
-            )
         }
     }
 }
@@ -2108,16 +2053,14 @@ internal fun DelaTaskSheet(
     /** Черновик Разноски: «убрать это дело» корзиной, без «Сейчас» (у черновика его нет). */
     onDrop: (() -> Unit)? = null,
     warn: String = "",
-    /** Команда Claude про это дело (сервер, `/api/ask`); null — микрофона нет (новое дело, черновик). */
-    onAsk: ((String) -> Unit)? = null,
-    asking: Boolean = false,
-    askError: String = "",
+    /**
+     * Строка Claude про это дело — та же, что внизу вкладки (`scope.open`): микрофона
+     * у дела нет (поправки задания 10). null — новое дело, черновик, нет сервера.
+     */
+    say: (@Composable () -> Unit)? = null,
 ) {
     var f by remember(task.id) { mutableStateOf(task) }
     var picking by remember { mutableStateOf("") }
-    var askShown by remember(task.id) { mutableStateOf(askError.isNotBlank() || asking) }
-    var askText by remember(task.id) { mutableStateOf("") }
-    var listening by remember { mutableStateOf(false) }
     var comment by remember { mutableStateOf("") }
     var history by remember { mutableStateOf<List<String>?>(null) }
     var historyNote by remember { mutableStateOf("") }
@@ -2140,26 +2083,6 @@ internal fun DelaTaskSheet(
             sourceName(task.source),
         ).joinToString(" · ") else null,
         actions = {
-            if (existing && onAsk != null) {
-                GlyphButton(
-                    Glyphs.Mic,
-                    "сказать Claude, что сделать с этим делом",
-                    tint = if (askShown) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    onClick = {
-                        askShown = true
-                        // Сразу слушать — как микрофон у дела в вебе; набрать можно и руками.
-                        val service = PravkaAccessibilityService.instance
-                        if (!listening && !asking && service != null) {
-                            listening = service.listenForDelaReason { said ->
-                                listening = false
-                                val full = (askText.trim() + " " + said.trim()).trim()
-                                askText = full
-                                if (full.isNotBlank()) onAsk(full)
-                            }
-                        }
-                    },
-                )
-            }
             if (existing && task.open) GlyphButton(Glyphs.Play, "начать в ленте", onClick = onStart, tint = MaterialTheme.colorScheme.primary)
         },
         footer = {
@@ -2175,32 +2098,8 @@ internal fun DelaTaskSheet(
             PaperButton(saveText, primary = true, enabled = f.title.isNotBlank(), onClick = { onSave(f.copy(title = f.title.trim(), notes = f.notes.trim())) })
         },
     ) {
-        if (askShown && onAsk != null) {
-            // Команда про это дело: «на пятницу, это Наташе, первым делом». Не вышло — текст остаётся.
-            PaperField(
-                value = askText,
-                onValueChange = { askText = it },
-                label = if (listening) "Слушаю — что сделать с делом…" else "Claude: «на пятницу, это Наташе»",
-                singleLine = false,
-                maxLines = 3,
-                enabled = !asking,
-            )
-            if (asking) ThinkingLine("Claude правит…")
-            if (askError.isNotBlank() && !asking) PaperHint(askError, MaterialTheme.colorScheme.error)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AskMic(listening, { listening = it }, enabled = !asking, onText = { said ->
-                    val full = (askText.trim() + " " + said.trim()).trim()
-                    askText = full
-                    if (full.isNotBlank()) onAsk(full)
-                })
-                Spacer(Modifier.weight(1f))
-                PaperTextButton(
-                    if (askError.isNotBlank()) "Ещё раз" else "Отдать Claude",
-                    icon = Glyphs.Ask,
-                    enabled = askText.isNotBlank() && !asking,
-                    onClick = { onAsk(askText.trim()) },
-                )
-            }
+        if (say != null && existing) {
+            say()
             RowRule()
         }
         if (quote.isNotBlank()) PaperHint("«${quote.take(300)}»")

@@ -45,6 +45,9 @@ object DelaAsk {
         dealId: String = "",
         card: String = "",
         suggestionIds: List<String> = emptyList(),
+        visibleIds: List<String>? = null,
+        selectedIds: List<String> = emptyList(),
+        open: String = "",
     ): JSONObject {
         val ids = taskIds.filter { Dela.isUuid(it) }.distinct().take(MAX_TASKS)
         val o = JSONObject().put("title", title.take(200)).put("task_ids", JSONArray().apply { ids.forEach { put(it) } })
@@ -56,9 +59,41 @@ object DelaAsk {
         // «Новое»: предложения на экране по порядку — П1, П2… (`scope.suggestion_ids` сервера).
         val sugs = suggestionIds.filter { Dela.isUuid(it) }.distinct().take(MAX_SUGGESTIONS)
         if (sugs.isNotEmpty()) o.put("suggestion_ids", JSONArray().apply { sugs.forEach { put(it) } })
+        return see(o, visibleIds, selectedIds, open)
+    }
+
+    /**
+     * Что человек видит в миг отправки (08.10.2026, docs/dela-phone-7.md, `pageScope`
+     * веба): [visibleIds] — строки, которые в окне прямо сейчас (null — неизвестно,
+     * поля нет), [selectedIds] — выбранные, [open] — дело, открытое в карточке. Кто
+     * такие «это» и «эти», решает сервер; старый сервер этих полей молча не заметит.
+     */
+    fun see(o: JSONObject, visibleIds: List<String>?, selectedIds: List<String> = emptyList(), open: String = ""): JSONObject {
+        fun arr(ids: List<String>) = JSONArray().apply { ids.filter { Dela.isUuid(it) }.distinct().take(MAX_TASKS).forEach { put(it) } }
+        if (visibleIds != null) o.put("visible_ids", arr(visibleIds))
+        if (selectedIds.isNotEmpty()) o.put("selected_ids", arr(selectedIds))
+        if (open.isNotBlank() && Dela.isUuid(open)) o.put("open", open)
         return o
     }
 
+    /** Строка или плитка на экране: где она (уже обрезанная окном списка) и какой была бы целиком. */
+    data class Seen(val top: Float, val bottom: Float, val left: Float, val right: Float, val fullHeight: Float, val fullWidth: Float)
+
+    /**
+     * «В окне» — как `seen` веба: видно хотя бы 60 % высоты и ширины, считая, что
+     * снизу экран кончается у строки Claude ([bottom]) — строка, почти целиком
+     * ушедшая под неё, не в счёт: её названия не видно.
+     */
+    fun inView(r: Seen, top: Float, bottom: Float): Boolean {
+        if (r.fullHeight <= 0f || r.fullWidth <= 0f) return false
+        val h = minOf(r.bottom, bottom) - maxOf(r.top, top)
+        val w = r.right - r.left
+        return h >= r.fullHeight * 0.6f && w >= r.fullWidth * 0.6f
+    }
+
+    /** Ключи в порядке экрана (сверху вниз, слева направо), которые [inView]. */
+    fun visible(rows: Map<String, Seen>, top: Float, bottom: Float): List<String> =
+        rows.entries.filter { inView(it.value, top, bottom) }.sortedWith(compareBy({ it.value.top }, { it.value.left })).map { it.key }
     /** Карточки, которые Claude видит целиком (`scope.card` сервера): клиент, сделка, человек. */
     val CARDS = setOf("client", "deal", "person")
 
@@ -77,8 +112,6 @@ object DelaAsk {
     fun personScope(title: String, taskIds: List<String>, personId: String): JSONObject =
         scope(title, taskIds, personId = personId, card = "person")
 
-    /** Микрофон у дела: команда про одно это дело. */
-    fun taskScope(taskId: String): JSONObject = scope("Одно дело", listOf(taskId), focus = taskId)
 
     fun request(text: String, scope: JSONObject): JSONObject = JSONObject().put("text", text.trim()).put("scope", scope)
 

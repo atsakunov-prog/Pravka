@@ -291,16 +291,35 @@ class DelaCrmTest {
     private val ask by lazy { crm.getJSONObject("ask") }
 
     @Test
+    fun `в окне — от строки видно хотя бы 60 процентов, под строкой Claude не в счёт`() {
+        fun row(top: Float, h: Float = 100f, left: Float = 0f, w: Float = 400f, fullW: Float = 400f) =
+            DelaAsk.Seen(top, top + h, left, left + w, 100f, fullW)
+        val rows = mapOf(
+            "a" to row(0f, h = 70f),        // сверху обрезана, видно 70 %
+            "b" to row(100f),
+            "c" to row(850f),               // строка Claude с 900: видно 50 — не в счёт
+            "d" to row(780f),               // видно 100 из 100 до 880
+            "e" to row(300f, w = 200f),     // колонка доски за краем: видно половину ширины
+            "f" to row(300f, left = 400f),
+        )
+        assertEquals(listOf("a", "b", "f", "d"), DelaAsk.visible(rows, top = 0f, bottom = 900f))
+    }
+
+    @Test
     fun `scope у дела и на экране — форма контракта`() {
         val req = ask.getJSONObject("request").getJSONObject("POST /api/ask")
         val keys = req.getJSONObject("scope").keys().asSequence().toSet()
         val id = Dela.newId()
-        val one = DelaAsk.taskScope(id)
-        assertEquals("Одно дело", one.getString("title"))
-        assertEquals(id, one.getJSONArray("task_ids").getString(0))
-        assertEquals(1, one.getJSONArray("task_ids").length())
-        assertEquals(id, one.getString("focus"))
+        // Микрофона у дела больше нет (задание 10): открытое дело — `open`, что в окне — `visible_ids`.
+        val other = Dela.newId()
+        val one = DelaAsk.scope("Сейчас", listOf(id, other), visibleIds = listOf(other, "x"), selectedIds = listOf(id), open = id)
+        assertEquals(id, one.getString("open"))
+        assertEquals(listOf(other), (0 until one.getJSONArray("visible_ids").length()).map { one.getJSONArray("visible_ids").getString(it) })
+        assertEquals(id, one.getJSONArray("selected_ids").getString(0))
+        assertFalse(one.has("focus"))
         assertTrue(one.keys().asSequence().toSet().minus(keys).isEmpty())
+        // Неизвестно, что в окне, — поля нет совсем (сервер возьмёт весь экран), а не пустой список.
+        assertFalse(DelaAsk.scope("Сейчас", listOf(id)).has("visible_ids"))
 
         val p = Dela.newId()
         val ids = listOf(Dela.newId(), Dela.newId())

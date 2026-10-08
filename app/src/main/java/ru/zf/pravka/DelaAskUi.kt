@@ -1,6 +1,17 @@
 package ru.zf.pravka
 
 import androidx.compose.foundation.clickable
+import ru.zf.pravka.ui.glass
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.alpha
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -62,11 +73,7 @@ internal data class AskShown(
     val error: String = "",
 )
 
-/**
- * Одна команда за раз на всю вкладку. Ключ — откуда она: «screen» (строка над
- * видом) или «task:<id>» (микрофон в карточке): по нему каждая сторона видит
- * своё «правит…» и свою ошибку.
- */
+/** Одна команда за раз на всю вкладку — из строки Claude внизу ([ASK_SCREEN]). */
 internal class AskState {
     var running by mutableStateOf("")
     var errors by mutableStateOf(mapOf<String, String>())
@@ -76,7 +83,6 @@ internal class AskState {
 }
 
 internal const val ASK_SCREEN = "screen"
-internal fun askTaskKey(id: String) = "task:$id"
 
 /**
  * Микрофон команды: тот же движок и пилюля, что у «Д» (`listenForDelaReason`),
@@ -106,108 +112,139 @@ internal fun AskMic(listening: Boolean, onListening: (Boolean) -> Unit, onText: 
 }
 
 /**
- * Строка «Claude» над видом: команда на всё, что на экране. Пока Claude
- * правит — поле не трогается; не вышло (нет сети, сервер отказал) — причина
- * целиком красным, текст остаётся в поле: «Ещё раз» — тем же касанием.
+ * Что сейчас в окне (08.10.2026, docs/dela-phone-7.md, `pageScope` веба):
+ * строки дел и плитки сделок отмечают, где они, — обрезанные окном списка
+ * (`boundsInWindow`) и целиком. В миг отправки [visible] отдаёт те, от которых
+ * видно хотя бы 60 % выше строки Claude. Не состояние Compose — просто записная
+ * книжка: перерисовок она не вызывает. Ушедшая из списка строка себя стирает.
  */
+internal class SeenRows {
+    private val rows = HashMap<String, DelaAsk.Seen>()
+    var top = 0f
+    var bottom = Float.MAX_VALUE
+
+    fun put(key: String, r: DelaAsk.Seen) { rows[key] = r }
+    fun drop(key: String) { rows.remove(key) }
+
+    /** Ключи с приставкой [prefix] («t:» — дела, «d:» — сделки), которые в окне, — без приставки. */
+    fun visible(prefix: String): List<String> =
+        DelaAsk.visible(rows.filterKeys { it.startsWith(prefix) }, top, bottom).map { it.removePrefix(prefix) }
+}
+
+internal val LocalSeenRows = androidx.compose.runtime.staticCompositionLocalOf<SeenRows?> { null }
+
+/** Отметить строку или плитку в [SeenRows] под ключом [key] («t:<id>», «d:<id>»). */
 @Composable
-internal fun AskBar(
-    screen: AskScreen,
-    text: String,
-    onText: (String) -> Unit,
-    running: Boolean,
-    error: String,
-    onSend: (String) -> Unit,
-    onClose: () -> Unit,
-) {
-    var listening by remember { mutableStateOf(false) }
-    PaperCard(
-        label = "Claude · " + screen.title.take(40),
-        info = if (screen.card) {
-            // Карточка (06.10.2026, docs/dela-phone-4.md): сервер берёт Opus 5.5 и даёт ему её целиком.
-            "Claude видит эту карточку целиком — сделки, людей, хронологию — и правит не только дела: " +
-                "«созвонились, ждут КП к пятнице», «Иван теперь CFO», «сделка — в мандат». Новые дела лягут сюда. " +
-                "Правит сервер, в карточке — всегда Opus 5.5; «Вернуть всё» — в итоге."
-        } else {
-            "Команда на дела этого экрана — Claude видит их в том же порядке. «Все просроченные — на завтра», " +
-                "«бюджет первым делом, сегодня», «это Наташе». Если команда про новые дела — Claude их заведёт" +
-                " (на странице проекта или человека — туда). Правит сервер, модель — в его «Настройках»."
-        },
-        trailing = { GlyphButton(Glyphs.Close, "убрать строку Claude", onClick = onClose, size = 30.dp) },
-    ) {
-        PaperField(
-            value = text,
-            onValueChange = onText,
-            placeholder = if (listening) "Слушаю — говори команду…" else if (screen.card) "Скажи, что сделать с карточкой" else "«все просроченные — на завтра»",
-            singleLine = false,
-            maxLines = 4,
-            enabled = !running,
-        )
-        if (running) ThinkingLine("Claude правит…", Modifier.padding(top = 6.dp))
-        if (error.isNotBlank()) PaperHint(error, MaterialTheme.colorScheme.error)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            AskMic(listening, { listening = it }, enabled = !running, onText = { said ->
-                val full = (text.trim() + " " + said.trim()).trim()
-                onText(full)
-                if (full.isNotBlank()) onSend(full)
-            })
-            Spacer(Modifier.weight(1f))
-            PaperButton(
-                if (error.isNotBlank()) "Ещё раз" else "Отдать Claude",
-                icon = Glyphs.Ask,
-                primary = true,
-                enabled = text.isNotBlank() && !running,
-                onClick = { onSend(text.trim()) },
-            )
-        }
-    }
+internal fun Modifier.seen(key: String): Modifier {
+    val rows = LocalSeenRows.current ?: return this
+    androidx.compose.runtime.DisposableEffect(key) { onDispose { rows.drop(key) } }
+    return this.then(Modifier.onGloballyPositioned { c ->
+        val b = c.boundsInWindow()
+        rows.put(key, DelaAsk.Seen(b.top, b.bottom, b.left, b.right, c.size.height.toFloat(), c.size.width.toFloat()))
+    })
 }
 
 /**
- * Поле команды под строкой дела — как `askBox` веба: что сказано (правится и
- * руками), «Claude правит…», причина отказа красным. Текст не пропадает, пока
- * Claude не ответил: не вышло — «Ещё раз» тем же касанием.
+ * Строка Claude внизу — одна на всю вкладку (08–09.10.2026, docs/dela-phone-7.md,
+ * поправки задания 10): микрофон слева — нажал, говоришь сколько угодно, нажал
+ * ещё раз — команда ушла; стрелка справа (пока поле пусто — приглушена). Пока
+ * Claude думает — команда серым в поле и заливка слева направо, ничего не
+ * вращается. Над строкой — о чём она: дела на экране, открытое дело или
+ * карточка («Opus · видит карточку»); пока слушает — как закончить.
  */
 @Composable
-internal fun AskInline(
-    text: String,
-    onText: (String) -> Unit,
+internal fun DelaSayBar(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    about: String,
+    card: Boolean,
     listening: Boolean,
-    running: Boolean,
-    error: String,
+    busy: Boolean,
+    note: String,
+    noteError: Boolean,
     onMic: () -> Unit,
-    onSend: (String) -> Unit,
-    onClose: () -> Unit,
+    onSend: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    val c = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxWidth().padding(start = 32.dp, bottom = 6.dp)) {
-        PaperField(
-            value = text,
-            onValueChange = onText,
-            placeholder = if (listening) "Слушаю — что сделать с делом…" else "«сделано», «на пятницу», «это Наташе», «это не моё»",
-            singleLine = false,
-            maxLines = 3,
-            enabled = !running,
-        )
-        if (running) ThinkingLine("Claude правит…", Modifier.padding(top = 4.dp))
-        if (error.isNotBlank() && !running) PaperHint(error, c.error)
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    // Заливка «Claude думает»: растёт к краю, но не доходит — без крутилки и пульса.
+    var progress by remember { mutableStateOf(0f) }
+    androidx.compose.runtime.LaunchedEffect(busy) {
+        progress = 0f
+        val start = System.currentTimeMillis()
+        while (busy) {
+            val sec = (System.currentTimeMillis() - start) / 1000f
+            progress = 1f - kotlin.math.exp(-sec / 8f) * 0.95f
+            kotlinx.coroutines.delay(200)
+        }
+    }
+    val shape = RoundedCornerShape(31.dp)
+    Column(modifier.fillMaxWidth(), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)) {
+        val head = when {
+            listening -> "Слушаю — говори сколько нужно. Нажми микрофон ещё раз — отдам Claude"
+            busy -> "Claude думает… Можно уходить на другие разделы — изменения появятся сами"
+            else -> "Скажи, что сделать $about"
+        }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 62.dp)
+                .glass(shape, mode.glass.copy(inkAlpha = maxOf(mode.glass.inkAlpha, 0.9f)))
+                .clip(shape)
+                .drawBehind {
+                    if (busy) drawRect(mode.tint.copy(alpha = 0.25f), size = androidx.compose.ui.geometry.Size(size.width * progress, size.height))
+                }
+                .padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // «Стоп» — в цвете Дел, без красного: это «готово», а не тревога.
             GlyphButton(
                 if (listening) Glyphs.Stop else Glyphs.Mic,
-                if (listening) "хватит слушать" else "сказать голосом",
-                tint = c.primary,
-                enabled = !running,
+                if (listening) "готово — отдать Claude" else "сказать голосом: нажми, говори, нажми ещё раз",
                 onClick = onMic,
-                size = 34.dp,
+                tint = if (listening) mode.value else mode.label,
+                size = 46.dp,
+                enabled = !busy,
             )
-            Spacer(Modifier.weight(1f))
-            GlyphButton(Glyphs.Close, "закрыть", onClick = onClose, size = 34.dp)
-            PaperTextButton(
-                if (error.isNotBlank()) "Ещё раз" else "Отдать Claude",
-                icon = Glyphs.Ask,
-                enabled = text.isNotBlank() && !running,
-                onClick = { onSend(text.trim()) },
-            )
+            // Над полем, внутри стекла, — о чём строка (или «слушаю», «думает») и что ответил Claude.
+            Column(Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 8.dp)) {
+                Text(
+                    androidx.compose.ui.text.buildAnnotatedString {
+                        append(head)
+                        if (card && !listening && !busy) {
+                            pushStyle(androidx.compose.ui.text.SpanStyle(color = mode.meta))
+                            append(" · Opus · видит карточку")
+                            pop()
+                        }
+                    },
+                    style = ty.meta,
+                    color = mode.label,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (note.isNotBlank()) Text(note, style = ty.meta, color = if (noteError) ru.zf.pravka.ui.Ink.Warn else mode.value)
+                BasicTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    enabled = !busy,
+                    textStyle = ty.input.copy(color = if (busy) mode.meta else ru.zf.pravka.ui.Ink.Text),
+                    cursorBrush = SolidColor(mode.tint),
+                    maxLines = 5,
+                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp).semantics { contentDescription = placeholder },
+                    decorationBox = { inner ->
+                        Box(contentAlignment = Alignment.CenterStart) {
+                            if (value.isEmpty()) Text(placeholder, style = ty.input, color = mode.placeholder, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            inner()
+                        }
+                    },
+                )
+            }
+            val canSend = value.isNotBlank() && !busy
+            Box(Modifier.alpha(if (canSend) 1f else 0.35f)) {
+                ru.zf.pravka.ui.Key(Glyphs.ArrowUp, "отдать Claude", onClick = { if (canSend) onSend() }, size = 46.dp, enabled = canSend)
+            }
         }
     }
 }
