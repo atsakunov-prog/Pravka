@@ -14,11 +14,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -36,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.text.SimpleDateFormat
@@ -49,7 +50,6 @@ import ru.zf.slushalka.ask.Razbor
 import ru.zf.slushalka.ask.RazborChapter
 import ru.zf.slushalka.ask.RazborEngine
 import ru.zf.slushalka.ask.RazborIdea
-import ru.zf.slushalka.ask.RazborRef
 import ru.zf.slushalka.data.Settings
 import ru.zf.slushalka.library.Book
 import ru.zf.slushalka.text.BookText
@@ -58,11 +58,10 @@ import ru.zf.slushalka.text.BookText
  * Разбор книги сервером: о книге, книга за 15 минут, идеи, главы с «что было
  * раньше», линзы по жанру.
  *
- * Спойлер-барьер - как у справочника: дочитанные главы - те, что до текущей;
- * запись со ссылкой дальше спрятана. Идеи и «за 15 минут» - про книгу
- * целиком, в них концовка: они видны дочитавшему или по «Показать всё», и
- * перед этим лист переспрашивает. Записи без ссылок («Тем временем в мире»,
- * «Что напечатать») видны всегда - спойлером они быть не могут.
+ * Без спойлер-барьера (08.10.2026, владелец: «он вообще не помогает, я
+ * постоянно его выключаю»): разбор открыт целиком - все главы, идеи, «за 15
+ * минут», все записи линз. Где читатель, видно по главе: вкладка «Главы»
+ * открывается на ней, у неё сразу видно «что было раньше» и метка «ты здесь».
  *
  * «К месту» у записи со ссылкой: читалка листает туда, плеер встаёт туда по
  * разметке, как «Слушать отсюда».
@@ -71,7 +70,7 @@ import ru.zf.slushalka.text.BookText
 @Composable
 fun RazborSheet(
     app: SlushalkaApp,
-    /** Где читатель: по нему - дочитанные главы. */
+    /** Где читатель: по нему - текущая глава. */
     cutoffChar: Int,
     /** К месту: знак в тексте и нашёл ли его сервер по цитате (тогда это «страница», а не начало главы). */
     onGo: (charOffset: Int, exact: Boolean) -> Unit,
@@ -88,17 +87,13 @@ fun RazborSheet(
     DisposableEffect(Unit) { onDispose { app.clip.stop() } }
 
     var tab by remember { mutableStateOf(TAB_CARD) }
-    var showAll by remember { mutableStateOf(false) }
-    var confirmAll by remember { mutableStateOf(false) }
     var ordering by remember { mutableStateOf(false) }
+    val list = rememberLazyListState()
 
-    val readChapters = if (t != null) t.chapterIndexAt(cutoffChar) else 0
-    // Дочитал - барьера нет: прятать больше нечего.
+    // Глава, где читатель, - с единицы, как у сервера.
+    val here = if (t != null) t.chapterIndexAt(cutoffChar) + 1 else 1
     val finished = b != null && t != null &&
         (app.positions.get(b.id).finished || cutoffChar >= t.length * 0.97)
-    val open = showAll || finished
-    val upTo = if (open) Int.MAX_VALUE else readChapters
-    fun visible(ref: RazborRef?) = ref == null || ref.chapter <= upTo
 
     PaperSheet(
         app = app,
@@ -108,20 +103,12 @@ fun RazborSheet(
         subtitle = when {
             ordering || b == null || t == null -> null
             finished -> "${b.title} · дочитана"
-            else -> "${b.title} · дочитано глав: $readChapters из ${t.chapters.size}"
+            else -> "${b.title} · глава $here из ${t.chapters.size}"
         },
         tall = r != null && !ordering,
         scroll = r == null || ordering,
         actions = {
-            when {
-                ordering -> PaperIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Назад") { ordering = false }
-                // Дочитавшему замок ни к чему: всё и так открыто.
-                !finished -> PaperIconButton(
-                    if (showAll) Glyphs.LockOpen else Icons.Default.Lock,
-                    if (showAll) "Спрятать спойлеры" else "Показать всё",
-                    active = showAll,
-                ) { if (showAll) showAll = false else confirmAll = true }
-            }
+            if (ordering) PaperIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Назад") { ordering = false }
         },
     ) {
         if (b == null || t == null || r == null) {
@@ -134,24 +121,6 @@ fun RazborSheet(
             return@PaperSheet
         }
         Spacer(Modifier.height(8.dp))
-        if (confirmAll) {
-            PaperCard(highlight = true) {
-                Text(
-                    "Покажу весь разбор - с концовкой и всеми поворотами, в том числе то, " +
-                        "до чего ты ещё не дочитал. Точно?",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PaperButton("Показать всё", icon = Glyphs.LockOpen, primary = true, modifier = Modifier.weight(1f)) {
-                        showAll = true
-                        confirmAll = false
-                    }
-                    PaperButton("Не надо", modifier = Modifier.weight(1f)) { confirmAll = false }
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-        }
 
         // Вкладки: постоянные и линзы, какие сервер положил под жанр книги.
         val tabs = buildList {
@@ -167,51 +136,30 @@ fun RazborSheet(
         }
         Spacer(Modifier.height(10.dp))
 
-        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Вкладка сменилась - с начала, а «Главы» - с той, где читатель: все
+        // главы открыты, и своя иначе терялась бы посреди списка.
+        LaunchedEffect(current) {
+            val at = if (current == TAB_CHAPTERS) r.chapters.indexOfFirst { it.chapter >= here }.coerceAtLeast(0) else 0
+            list.scrollToItem(at)
+        }
+        LazyColumn(Modifier.weight(1f), state = list, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             when (current) {
                 TAB_CARD -> item { CardPage(r) }
-                TAB_SHORT -> if (!open) {
-                    item { Locked("Книга за 15 минут - изложение всей книги, с концовкой.") { confirmAll = true } }
-                } else {
+                TAB_SHORT -> {
                     if (r.audio.isNotBlank()) item { ClipControls(app, r.audio) }
                     items(r.summary15.split('\n').map { it.trim() }.filter { it.isNotEmpty() }) { p ->
                         Text(p, style = bookBody())
                     }
                 }
-                TAB_IDEAS -> if (!open) {
-                    item { Locked("Идеи - про книгу целиком, и концовка в них есть.") { confirmAll = true } }
-                } else {
-                    items(r.ideas) { idea -> IdeaCard(idea, t, onGo) }
-                }
-                TAB_CHAPTERS -> {
-                    val shown = r.chapters.filter { it.chapter <= upTo || it.chapter == readChapters + 1 }
-                    items(shown, key = { it.chapter }) { ch ->
-                        ChapterCard(ch, summaryShown = ch.chapter <= upTo, t, onGo)
-                    }
-                    if (shown.size < r.chapters.size) item { Later() }
+                TAB_IDEAS -> items(r.ideas) { idea -> IdeaCard(idea, t, onGo) }
+                TAB_CHAPTERS -> items(r.chapters, key = { it.chapter }) { ch ->
+                    ChapterCard(ch, here = !finished && ch.chapter == here, t, onGo)
                 }
                 else -> r.lenses.firstOrNull { it.key == current }?.let { lens ->
-                    val shown = lens.items.filter { lens.warnsAhead || visible(it.ref) }
-                    if (shown.isEmpty()) {
-                        item {
-                            PaperNote(
-                                if (readChapters == 0) "Откроется, когда дочитаешь первую главу."
-                                else "В дочитанных главах здесь пока пусто.",
-                                Modifier.padding(vertical = 12.dp),
-                            )
-                        }
+                    if (lens.items.isEmpty()) {
+                        item { PaperNote("Здесь пока пусто.", Modifier.padding(vertical = 12.dp)) }
                     }
-                    if (lens.warnsAhead) {
-                        item {
-                            PaperNote(
-                                "Это для взрослого - знать заранее, поэтому заглядывает вперёд. " +
-                                    "Что именно в главах, которые ещё не прочитаны, - по тапу.",
-                                Modifier.padding(bottom = 4.dp),
-                            )
-                        }
-                    }
-                    items(shown) { item -> LensCard(item, ahead = !visible(item.ref), t, onGo) }
-                    if (shown.size < lens.items.size) item { Later() }
+                    items(lens.items) { item -> LensCard(item, t, onGo) }
                 }
             }
         }
@@ -313,22 +261,6 @@ private fun CardPage(r: Razbor) = Column {
     }
 }
 
-/** Закрытое до конца книги: что это и как открыть. */
-@Composable
-private fun Locked(what: String, onOpen: () -> Unit) {
-    PaperCard {
-        Text("$what Откроется, когда дочитаешь.", style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.height(8.dp))
-        PaperButton("Показать всё", icon = Glyphs.LockOpen) { onOpen() }
-    }
-}
-
-/** Одна строка у всех вкладок: сказать, сколько записей впереди, - значит выдать. */
-@Composable
-private fun Later() {
-    PaperNote("Остальное откроется по мере чтения.", Modifier.padding(vertical = 10.dp))
-}
-
 /** «За 15 минут» голосом: тот же рассказчик, что у машинных аудиокниг, звук - с сервера. */
 @Composable
 private fun ClipControls(app: SlushalkaApp, path: String) {
@@ -398,19 +330,31 @@ private fun IdeaCard(idea: RazborIdea, text: BookText, onGo: (Int, Boolean) -> U
 }
 
 /**
- * Глава: что в ней и что было до неё. Текущая (недочитанная) - только «что
- * было раньше»: что в ней самой, рассказало бы страницы впереди.
+ * Глава: что в ней, а по тапу - и что было до неё. Глава, где читатель, -
+ * закрашена, с меткой «ты здесь» и «что было раньше» сразу: за ним сюда и
+ * приходят, вернувшись к книге.
  */
 @Composable
-private fun ChapterCard(ch: RazborChapter, summaryShown: Boolean, text: BookText, onGo: (Int, Boolean) -> Unit) {
+private fun ChapterCard(ch: RazborChapter, here: Boolean, text: BookText, onGo: (Int, Boolean) -> Unit) {
     var expanded by remember(ch.chapter) { mutableStateOf(false) }
-    PaperCard(onClick = { expanded = !expanded }) {
-        Text(
-            "Глава ${ch.chapter}" + if (ch.title.isNotBlank()) ". ${ch.title}" else "",
-            style = MaterialTheme.typography.titleMedium,
-        )
+    PaperCard(onClick = { expanded = !expanded }, highlight = here) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Глава ${ch.chapter}" + if (ch.title.isNotBlank()) ". ${ch.title}" else "",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            if (here) {
+                Text(
+                    "ты здесь",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
+        }
         Spacer(Modifier.height(4.dp))
-        if (summaryShown && ch.summary.isNotBlank()) {
+        if (ch.summary.isNotBlank()) {
             Text(
                 ch.summary,
                 style = MaterialTheme.typography.bodyMedium,
@@ -418,8 +362,7 @@ private fun ChapterCard(ch: RazborChapter, summaryShown: Boolean, text: BookText
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        val showBefore = ch.before.isNotBlank() && (expanded || !summaryShown)
-        if (showBefore) {
+        if (ch.before.isNotBlank() && (expanded || here)) {
             PaperLabel("Что было раньше")
             Text(
                 ch.before,
@@ -428,7 +371,6 @@ private fun ChapterCard(ch: RazborChapter, summaryShown: Boolean, text: BookText
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        if (!summaryShown) PaperNote("Что в самой главе - когда дочитаешь её.", Modifier.padding(top = 6.dp))
         if (expanded) {
             Spacer(Modifier.height(10.dp))
             val at = text.chapters.getOrNull(ch.chapter - 1)?.start ?: ch.pos.coerceAtLeast(0)
@@ -437,22 +379,10 @@ private fun ChapterCard(ch: RazborChapter, summaryShown: Boolean, text: BookText
     }
 }
 
-/**
- * Запись линзы. [ahead] - ссылка дальше дочитанного: такое показывается
- * только у «Что может напугать», и то свёрнутым - видна глава, а что там,
- * открывается тапом.
- */
+/** Запись линзы: заголовок с приговором, текст, строки, цитата и «К месту». */
 @Composable
-private fun LensCard(item: LensItem, ahead: Boolean, text: BookText, onGo: (Int, Boolean) -> Unit) {
-    var revealed by remember(item) { mutableStateOf(!ahead) }
+private fun LensCard(item: LensItem, text: BookText, onGo: (Int, Boolean) -> Unit) {
     val ref = item.ref
-    if (!revealed) {
-        PaperCard(onClick = { revealed = true }) {
-            Text("Глава ${ref?.chapter ?: "?"} - может напугать", style = MaterialTheme.typography.titleSmall)
-            PaperNote("Что именно - по тапу. Это впереди: глава ещё не прочитана.")
-        }
-        return
-    }
     PaperCard {
         if (item.title.isNotBlank() || item.verdict.isNotBlank()) {
             Row(verticalAlignment = Alignment.CenterVertically) {

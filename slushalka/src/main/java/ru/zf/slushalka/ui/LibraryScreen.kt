@@ -216,19 +216,34 @@ fun LibraryScreen(
     /** «только на телефоне»: книги нет в библиотеке, и сервер её не узнал. */
     fun phoneOnly(e: ShelfEntry): Boolean = library && e.server == null && verdictOf(e)?.unknown == true
 
-    /** Что в книге есть: текст, звук или оба - на телефоне или на сервере. */
-    fun formatOf(e: ShelfEntry): String {
+    /** Что в книге есть: текст, звук (живой или нейросети), разбор - на телефоне или на сервере. */
+    fun contentsOf(e: ShelfEntry): Contents {
         val book = e.book
         val sb = e.server
         val text = book.hasText || sb?.mainText != null
         val audio = book.hasAudio || sb?.audio?.isNotEmpty() == true
-        val span = (book.totalMs.takeIf { it > 0 } ?: sb?.audioMs ?: 0L).takeIf { audio && it > 0 }
-        val machine = audio && app.nightVoice.isMachine(book)
+        return Contents(
+            text = text,
+            audio = audio,
+            machine = audio && app.nightVoice.isMachine(book),
+            razbor = text && app.razbor.known(book, sb),
+        )
+    }
+    // Разбор узнаётся и по копии на телефоне (файл) - считается раз на перемену
+    // полки, а не каждой плиткой на каждом кадре прокрутки.
+    val razbors by app.razbor.states.collectAsState()
+    val contents = remember(entries, razbors) { entries.associate { it.book.id to contentsOf(it) } }
+
+    /** «текст + аудио нейросети · 12 ч · разбор» - для строки списка. */
+    fun formatOf(e: ShelfEntry, has: Contents): String {
+        val book = e.book
+        val sb = e.server
+        val span = (book.totalMs.takeIf { it > 0 } ?: sb?.audioMs ?: 0L).takeIf { has.audio && it > 0 }
         return when {
-            text && audio -> if (machine) "текст + аудио нейросети" else "текст + аудио"
-            audio -> if (machine) "аудио нейросети" else "только аудио"
+            has.text && has.audio -> if (has.machine) "текст + аудио нейросети" else "текст + аудио"
+            has.audio -> if (has.machine) "аудио нейросети" else "только аудио"
             else -> "только текст"
-        } + (span?.let { " · " + formatSpan(it) } ?: "")
+        } + (span?.let { " · " + formatSpan(it) } ?: "") + if (has.razbor) " · разбор" else ""
     }
 
     /** Нажали на серию: полка - только она, по номерам; полки сбрасываются на «Все». */
@@ -336,6 +351,7 @@ fun LibraryScreen(
             val onClick = { open(entry.local ?: entry.book) }
             val onLongClick = { menuFor = entry }
             val note = if (phoneOnly(entry)) "только на телефоне" else null
+            val has = contents[book.id] ?: contentsOf(entry)
             if (listView) {
                 BookRow(
                     app = app,
@@ -343,7 +359,8 @@ fun LibraryScreen(
                     progress = progress.getValue(book.id),
                     badge = badgeOf(entry),
                     note = note,
-                    format = formatOf(entry),
+                    has = has,
+                    format = formatOf(entry, has),
                     series = seriesOf(book),
                     onSeries = pickSeries,
                     onClick = onClick,
@@ -356,6 +373,7 @@ fun LibraryScreen(
                     progress = progress.getValue(book.id),
                     badge = badgeOf(entry),
                     note = note,
+                    has = has,
                     series = seriesOf(book),
                     onSeries = pickSeries,
                     onClick = onClick,
@@ -1064,9 +1082,10 @@ private const val COVER_RATIO = 2f / 3f
 
 /**
  * Книга на полке: обложка с полоской пройденного, название, серия, автор и
- * сколько пройдено. В углу обложки - маленький значок телефона у скачанной
- * (контуром - только текст, звук с сервера), доля - пока качается, стрелка -
- * пока выгружается в библиотеку. Долгое нажатие - окно книги.
+ * сколько пройдено. Слева вверху на обложке - что в книге есть (текст, звук
+ * чтеца или нейросети, разбор), в нижнем углу - маленький значок телефона у
+ * скачанной (контуром - только текст, звук с сервера), доля - пока качается,
+ * стрелка - пока выгружается в библиотеку. Долгое нажатие - окно книги.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1077,6 +1096,7 @@ private fun BookTile(
     badge: Badge?,
     /** «только на телефоне» - библиотека книгу не узнала; null - сказать нечего. */
     note: String?,
+    has: Contents,
     series: BookMeta.Series?,
     onSeries: (String) -> Unit,
     onClick: () -> Unit,
@@ -1110,21 +1130,11 @@ private fun BookTile(
                         .padding(horizontal = 7.dp, vertical = 2.dp),
                 )
             }
-            if (!book.hasAudio) {
-                // Книга без записи - только читается: пусть это видно на обложке.
-                Text(
-                    "текст",
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(6.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(Color.Black.copy(alpha = 0.45f))
-                        .padding(horizontal = 5.dp, vertical = 1.dp),
-                )
-            }
-            // Значок - в нижнем углу, над полоской пройденного: верхние заняты «✓» и «текст».
+            // Что в книге есть - видно, не открывая (08.10.2026, владелец: «прямо
+            // на самой книжке показывать, что есть текст, аудио, аудио нейросети
+            // и разбор»).
+            ContentMarks(has, onCover = true, modifier = Modifier.align(Alignment.TopStart).padding(6.dp))
+            // Значок - в нижнем углу, над полоской пройденного: верхние заняты «✓» и тем, что в книге есть.
             if (badge != null) {
                 CopyBadge(badge, onCover = true, modifier = Modifier.align(Alignment.BottomEnd).padding(end = 5.dp, bottom = 9.dp))
             }
@@ -1171,8 +1181,8 @@ private fun BookTile(
 
 /**
  * Книга строкой списка: маленькая обложка, название (значок телефона - справа
- * от него), серия, автор, что в книге есть (текст, звук или оба) и сколько
- * пройдено.
+ * от него), серия, автор, что в книге есть (значками и словами: текст, звук
+ * чтеца или нейросети, разбор) и сколько пройдено.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1182,6 +1192,7 @@ private fun BookRow(
     progress: Progress,
     badge: Badge?,
     note: String?,
+    has: Contents,
     /** «текст + аудио · 12 ч», «только текст» - что в книге есть. */
     format: String,
     series: BookMeta.Series?,
@@ -1232,13 +1243,19 @@ private fun BookRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Text(
-                format,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            // Значки - те же, что на обложке плитки: здесь рядом со словами, так
+            // они и запоминаются.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ContentMarks(has, onCover = false)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    format,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             val line = listOf(
                 if (progress.done) (if (book.hasAudio) "дослушано ✓" else "прочитано ✓")
                 else statusLine(book, progress, withSpan = false),
@@ -1255,6 +1272,57 @@ private fun BookRow(
                 )
             }
         }
+    }
+}
+
+/** Что в книге есть: текст, звук ([machine] - озвучено нейросетью), разбор сервера. */
+private data class Contents(val text: Boolean, val audio: Boolean, val machine: Boolean, val razbor: Boolean)
+
+/**
+ * Что в книге есть - значками: книга - текст, наушники - запись чтеца,
+ * наушники с искрой - озвучено нейросетью, лампочка - разбор (тот же значок,
+ * что у листа «Разбор»). На обложке - белым на тёмной подложке, чтобы
+ * читалось на любой картинке; в строке списка - тихим цветом рядом со словами.
+ */
+@Composable
+private fun ContentMarks(has: Contents, onCover: Boolean, modifier: Modifier = Modifier) {
+    if (!has.text && !has.audio && !has.razbor) return
+    val size = if (onCover) 14.dp else 13.dp
+    val tint = if (onCover) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+    // Искра - тёплым: нейросеть отличается от живого чтеца с первого взгляда.
+    val spark = if (onCover) Color(0xFFFFD54F) else MaterialTheme.colorScheme.tertiary
+    Row(
+        modifier.then(
+            if (onCover) {
+                Modifier
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .padding(horizontal = 5.dp, vertical = 3.dp)
+            } else Modifier
+        ),
+        horizontalArrangement = Arrangement.spacedBy(if (onCover) 4.dp else 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (has.text) Icon(Glyphs.MenuBook, contentDescription = "Текст", tint = tint, modifier = Modifier.size(size))
+        if (has.audio && has.machine) {
+            Box(Modifier.size(width = size + 5.dp, height = size)) {
+                Icon(
+                    Glyphs.Headphones,
+                    contentDescription = "Аудио нейросети",
+                    tint = tint,
+                    modifier = Modifier.size(size).align(Alignment.BottomStart),
+                )
+                Icon(
+                    Glyphs.AutoAwesome,
+                    contentDescription = null,
+                    tint = spark,
+                    modifier = Modifier.size(size * 0.6f).align(Alignment.TopEnd),
+                )
+            }
+        } else if (has.audio) {
+            Icon(Glyphs.Headphones, contentDescription = "Аудио", tint = tint, modifier = Modifier.size(size))
+        }
+        if (has.razbor) Icon(Glyphs.Lightbulb, contentDescription = "Разбор", tint = tint, modifier = Modifier.size(size))
     }
 }
 

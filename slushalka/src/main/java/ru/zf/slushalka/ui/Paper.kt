@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,7 +21,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -59,10 +63,16 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.zf.slushalka.SlushalkaApp
@@ -192,9 +202,20 @@ fun PaperSheet(
     PaperTheme(app) {
         val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val eink = LocalEink.current
+        val ceiling = sheetCeiling()
         ModalBottomSheet(
             onDismissRequest = onClose,
             sheetState = sheet,
+            // Лист «прыгал» вверх-вниз, когда список доезжал до низа (08.10.2026,
+            // «Разбор»). Материал отступает от строки состояния на столько, на
+            // сколько лист до неё не доехал, - высота листа зависела от того, где
+            // он сам. Взмах, не израсходованный списком у дна, лист отдаёт себе
+            // пружиной; та подбрасывала его к строке состояния, высота менялась,
+            // а с ней и точка «развёрнут» - и пружина начиналась заново с той же
+            // скоростью вверх. Поэтому отступа сверху у листа нет, а его потолок
+            // меряется снаружи, в окне приложения: не выше строки состояния.
+            modifier = Modifier.maxHeightPx(ceiling),
+            contentWindowInsets = { WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom) },
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface,
             tonalElevation = 0.dp,
@@ -212,7 +233,8 @@ fun PaperSheet(
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .then(if (tall) Modifier.fillMaxHeight(0.94f) else Modifier)
+                    .then(if (tall) Modifier.fillMaxHeight() else Modifier)
+                    .nestedScroll(KeepSheetStill)
                     .imePadding(),
             ) {
                 PaperHeader(icon, title, subtitle, actions, onClose)
@@ -228,6 +250,41 @@ fun PaperSheet(
             }
         }
     }
+}
+
+/**
+ * Потолок листа в пикселях: окно приложения без строки состояния и зазор
+ * 16 dp под ней - высокий лист встаёт там же, где раньше вставал на 94%
+ * экрана. Меряется в окне приложения, а не в самом листе: внутри листа отступы
+ * зависят от того, где он сейчас, и высота снова поехала бы за положением.
+ * Пиксели, а не dp: у окна листа своя плотность, без масштаба интерфейса.
+ */
+@Composable
+private fun sheetCeiling(): Int {
+    val density = LocalDensity.current
+    val window = LocalWindowInfo.current.containerSize.height
+    if (window <= 0) return 0
+    val top = WindowInsets.safeDrawing.getTop(density)
+    return (window - top - with(density) { 16.dp.roundToPx() }).coerceAtLeast(0)
+}
+
+/** Не выше [px] пикселей; 0 - без потолка. */
+private fun Modifier.maxHeightPx(px: Int): Modifier = layout { measurable, constraints ->
+    val cap = if (px > 0) px.coerceAtMost(constraints.maxHeight) else constraints.maxHeight
+    val placeable = measurable.measure(
+        constraints.copy(minHeight = constraints.minHeight.coerceAtMost(cap), maxHeight = cap),
+    )
+    layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+}
+
+/**
+ * Остаток взмаха вверх, который список не израсходовал у дна, лист пустил бы
+ * в свою пружину и подпрыгнул бы. Он гасится здесь; остаток вниз (список у
+ * верха) идёт листу дальше - так лист и закрывается взмахом.
+ */
+private val KeepSheetStill = object : NestedScrollConnection {
+    override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity =
+        if (available.y < 0f) Velocity(0f, available.y) else Velocity.Zero
 }
 
 /** Шапка окна: значок в круге, заголовок антиквой, строка под ним, действия и «закрыть». */

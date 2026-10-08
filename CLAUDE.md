@@ -155,7 +155,9 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     (`ServerLibrary.seriesOf` понимает и объект, и список), его серия
     главнее. Порядок — `Prefs.shelfSort`, `shelfOrder` + `SortButton`. На полке — `SeriesLink` (фильтр), плашка
     `SeriesBar`; вид `Prefs.shelfLayout` (плитки `BookTile` / список
-    `BookRow`). «Только текст» — `CloudBooks.downloadText`
+    `BookRow`); что в книге есть — значками `ContentMarks` по `Contents`
+    (текст, звук чтеца, нейросети — наушники с искрой, разбор), на обложке
+    слева вверху и в строке списка. «Только текст» — `CloudBooks.downloadText`
     + метка `слушалка-звук.json` (`ServerLibrary.MARKER`), её читает
     `LibraryScanner` → файлы книги с `remote`. Поток — `player/Streaming.kt`:
     HTTP с Basic, `SimpleCache` в `cache/stream` (свой LRU-вытеснитель с
@@ -208,7 +210,9 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     `NotesSheet`, хранилище `data/Notes.kt`, синк — `пометки-<имя>.json`;
     значки — `Glyphs.kt`, контуры Material поштучно, не вся библиотека: APK без
     R8; окна поверх читалки — на бумаге читалки набором `Paper.kt`
-    (`PaperTheme` из `readerView().readerTheme`, `PaperSheet` снизу,
+    (`PaperTheme` из `readerView().readerTheme`, `PaperSheet` снизу — без
+    отступа сверху, потолок `sheetCeiling` в пикселях окна приложения,
+    `KeepSheetStill` гасит остаток взмаха вверх: иначе лист качался у дна,
     `PaperScreen` во весь экран для вопроса и разговора, `PaperCard/Chip/
     Button/Toggle/Field/Quote`, `ChatBubble` + `ChatInput`); новые окна
     читалки собирать из него, не из голого Material; выгрузки — `Share.kt` (FileProvider, `cache/shared/`), Word —
@@ -259,7 +263,8 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     Поле от
     края, тень, стол, фаска, блик, матовость, колонтитулы и переносы —
     каждое своим тумблером (`PageLook`)),
-    разбор (`RazborSheet.kt`: вкладки, барьер, «К месту» — `onGo`, заказ —
+    разбор (`RazborSheet.kt`: вкладки, без спойлер-барьера — «Главы»
+    открываются на своей, «ты здесь»; «К месту» — `onGo`, заказ —
     `RazborOrderPanel`, его же показывает справочник; «что было раньше» —
     карточкой вместо «Напомнить?» в читалке и плеере, вход с полки —
     `AppState.requestRazbor`),

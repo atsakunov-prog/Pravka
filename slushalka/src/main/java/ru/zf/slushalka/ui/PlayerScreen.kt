@@ -500,9 +500,8 @@ fun PlayerScreen(
         )
     }
     if (showRazbor) {
-        // Барьер - тот же, что у справочника: по месту записи с запасом.
-        val margin = prefs.spoilerMarginSec * 1000L
-        val cutoff = alignment?.charAt((play.absMs - margin).coerceAtLeast(0L)) ?: 0
+        // Барьера у разбора нет - место записи нужно только, чтобы найти свою главу.
+        val cutoff = alignment?.charAt(play.absMs) ?: 0
         RazborSheet(
             app = app,
             cutoffChar = cutoff,
