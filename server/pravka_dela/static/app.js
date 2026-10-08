@@ -163,14 +163,17 @@ const VIEWS = {
 };
 const NO_PROJECT = { color: '#8b93ff' }; // дела без проекта (бывшие «Входящие») — живут в «Новом»
 const pendingSugs = () => [...S.sugs.values()].filter((s) => s.status === 'pending' && s.for_user === S.me.user);
-/** Очевидные закрытия, которые сервер принял сам (store._auto_close), — за days дней, свежие сверху.
- *  «Понятно» (seen_at) убирает их совсем: 06.10.2026 #268 висел неделю и «никуда не уходил». */
-const autoClosed = (days) => [...S.sugs.values()].filter((s) => s.kind === 'close' && s.status === 'accepted' && (s.payload || {}).auto
-  && !s.seen_at && s.for_user === S.me.user && s.decided_at && Date.now() - Date.parse(s.decided_at) < days * 86400e3)
+/** Закрытия и уточнения, которые сервер принял сам (store._auto: владелец 05.10 и 08.10.2026 — «спокойно
+ *  закрывай и спокойно уточняй»), — за days дней, свежие сверху. Узнаются по причине решения: принятое руками
+ *  предложение с payload.auto сюда не попадает. «Понятно» (seen_at) убирает их совсем: 06.10.2026 #268 висел
+ *  неделю и «никуда не уходил». */
+const AUTO_REASONS = ['закрыто само', 'уточнено само'];
+const autoDone = (days) => [...S.sugs.values()].filter((s) => (s.kind === 'close' || s.kind === 'update') && s.status === 'accepted'
+  && AUTO_REASONS.includes(s.reason) && !s.seen_at && s.for_user === S.me.user && s.decided_at && Date.now() - Date.parse(s.decided_at) < days * 86400e3)
   .sort((a, b) => b.decided_at.localeCompare(a.decided_at));
 const fromOthers = () => openMine().filter((t) => t.created_by !== t.owner_id && Date.now() - Date.parse(t.created_at) < 3 * 86400e3);
 const noProject = () => openMine().filter((t) => !t.project_id);
-const newCount = () => pendingSugs().length + autoClosed(7).length + noProject().length + fromOthers().length;
+const newCount = () => pendingSugs().length + autoDone(7).length + noProject().length + fromOthers().length;
 
 // ── Иконки (свой штрих, без шрифтов и эмодзи) ───────────────────────────
 const ICONS = {
@@ -1555,6 +1558,15 @@ function sugText(s) {
     .filter(Boolean).join(' · ');
   return { title: 'Уточнить: ' + ref, hint: what, add: p.note || null };
 }
+/** Что поменяло уточнение, принятое само: было → стало (result.was — как было, result — как стало). */
+function autoWords(s) {
+  const r = s.result || {}, was = r.was || {}, p = s.payload || {};
+  return [
+    'title' in was ? `название: «${r.title}»` : null,
+    'due_date' in was ? 'срок ' + (was.due_date ? D.ddmm(was.due_date) + ' → ' : '') + (r.due_date ? D.ddmm(r.due_date) : 'без срока') : null,
+    'ball' in was || 'person_id' in was ? 'мяч: ' + (BALL[r.ball] || r.ball) + (p.person_name ? ' ' + p.person_name : '') : null,
+  ].filter(Boolean).join(' · ');
+}
 // Пачки — по дате встречи, свежие сверху; без даты — по времени появления.
 const sugAt = (s) => (s.payload && s.payload.meeting_at) || s.created_at.slice(0, 10);
 
@@ -1574,7 +1586,8 @@ function touchChips(list) {
   return (list || []).map((s) => {
     const from = s.batch_title || SUG_FROM[s.source] || s.source;
     const what = s.kind === 'close' ? 'закрыть' : 'уточнение';
-    const st = s.status === 'pending' ? ' — ждёт решения ниже' : s.status === 'rejected' ? ' — отклонил' : s.status === 'expired' ? ' — погасло' : ' — принято';
+    const st = s.status === 'pending' ? ' — ждёт решения ниже' : s.status === 'rejected' ? ' — отклонил' : s.status === 'expired' ? ' — погасло'
+      : AUTO_REASONS.includes(s.reason) ? ' — само' : ' — принято';
     return el('span', { class: 'm merged' + (s.status === 'pending' ? ' pending' : ''), title: s.quote || '' },
       icon(s.source === 'meeting' ? 'mic' : 'send', 12), `${from}: ${what}${st}`);
   });
@@ -1701,27 +1714,36 @@ function renderNew(batch) {
         act: loose.length > 1 ? el('button', { class: 'chip-btn', onclick: (e) => projectPop(e.currentTarget, loose.map((t) => t.id)) }, 'Все в проект…') : null }));
     }
   }
-  // Очевидное автоматика закрывает сама — тут видно, что и почему; «Понятно» убирает отсюда, «Вернуть» — в работу.
-  const auto = batch ? autoClosed(365).filter((s) => s.batch_ref === batch) : autoClosed(7);
+  // Закрыть и уточнить автоматика может сама — тут видно, что и почему; «Понятно» убирает отсюда, «Вернуть» — как было.
+  const auto = batch ? autoDone(365).filter((s) => s.batch_ref === batch) : autoDone(7);
   const seen = async (ids) => { try { await op1({ op: 'suggestion.seen', ids }); render(); } catch (e) { fail(e); } };
   if (auto.length) {
     box.append(el('div', { class: 'group' },
-      el('h2', {}, tint(icon('check', 14), 'var(--ok)'), 'Закрыто само', el('span', { class: 'n' }, auto.length),
-        el('span', { class: 'gsub' }, 'очевидное из встреч и Telegram'),
+      el('h2', {}, tint(icon('check', 14), 'var(--ok)'), 'Сделано само', el('span', { class: 'n' }, auto.length),
+        el('span', { class: 'gsub' }, 'закрыл и уточнил по встречам и Telegram'),
         auto.length > 1 ? el('span', { class: 'act' }, el('button', { class: 'chip-btn', onclick: () => seen(auto.map((s) => s.id)) }, 'Понятно, все')) : null),
       auto.map((s) => {
         const t = S.tasks.get(s.task_id);
-        if (t) S.order.push(t.id); // закрытое само — тоже дело на экране: «верни акт» Claude поймёт
-        const reopen = async () => {
-          try { await ops([{ op: 'task.reopen', id: t.id }, { op: 'suggestion.seen', ids: [s.id] }]); toast('Вернул в работу: ' + t.title); render(); } catch (e) { fail(e); }
+        if (t) S.order.push(t.id); // сделанное само — тоже дело на экране: «верни акт» Claude поймёт
+        const r = s.result || {};
+        const was = r.was || {};
+        const back = t && (s.kind === 'close' ? t.status === 'done' : Object.keys(was).length || r.comment_id);
+        const undo = async () => {
+          const list = s.kind === 'close' ? [{ op: 'task.reopen', id: t.id }]
+            : Object.keys(was).length ? [{ op: 'task.set', id: t.id, set: was }] : [];
+          if (r.comment_id) list.push({ op: 'comment.delete', id: r.comment_id });
+          list.push({ op: 'suggestion.seen', ids: [s.id] });
+          try { await ops(list); toast((s.kind === 'close' ? 'Вернул в работу: ' : 'Вернул как было: ') + (was.title || t.title)); render(); } catch (e) { fail(e); }
         };
         return el('div', { class: 'sug auto' },
-          el('div', { class: 'main' }, el('div', {}, t ? `#${t.num} ${t.title}` : 'дело не видно'),
+          el('div', { class: 'main' }, el('div', {}, (s.kind === 'close' ? 'Закрыто: ' : 'Уточнено: ') + (t ? `#${t.num} ${t.title}` : 'дело не видно')),
+            s.kind === 'update' && autoWords(s) ? el('div', { class: 'hint' }, autoWords(s)) : null,
+            s.kind === 'update' && (s.payload || {}).note ? el('div', { class: 'add' }, s.payload.note) : null,
             el('div', { class: 'hint' }, [s.batch_title, D.ddmm(s.decided_at.slice(0, 10))].filter(Boolean).join(' · ')),
             s.quote ? el('div', { class: 'hint' }, '«' + s.quote.slice(0, 200) + '»') : null),
           el('div', { class: 'acts' },
             el('button', { class: 'btn small ok', title: 'Согласен — убрать отсюда', onclick: () => seen([s.id]) }, 'Понятно'),
-            t && t.status === 'done' ? el('button', { class: 'btn small', onclick: reopen }, 'Вернуть') : null));
+            back ? el('button', { class: 'btn small', title: s.kind === 'close' ? 'Открыть дело снова' : 'Вернуть дело как было до уточнения', onclick: undo }, 'Вернуть') : null));
       })));
   }
   if (!batch && !list.length && !auto.length && !shown.size && crmGet('/api/view/dictations', 20000)) {

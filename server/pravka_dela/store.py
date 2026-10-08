@@ -348,36 +348,57 @@ def op_suggestion_create(conn, user, op):
         if same:
             return {"suggestion": same}
     row = _insert(conn, "tasks.suggestions", data)
-    if _auto_close(conn, user, row):
-        return op_suggestion_decide(conn, user, {"id": row["id"], "decision": "accept", "reason": AUTO_CLOSE_REASON})
+    reason = _auto(conn, user, row)
+    if reason:
+        try:
+            with conn.transaction():  # не вышло само (дело поменяли, «Сейчас» полно) — ждёт человека
+                return op_suggestion_decide(conn, user, {"id": row["id"], "decision": "accept", "reason": reason})
+        except (OpError, *PERMANENT):
+            pass
     return {"suggestion": row}
 
 
-AUTO_CLOSE_DAYS = 3
+AUTO_DAYS = 3
 AUTO_CLOSE_REASON = "закрыто само"
+AUTO_UPDATE_REASON = "уточнено само"
+AUTO_REASONS = (AUTO_CLOSE_REASON, AUTO_UPDATE_REASON)
 
 
-def _auto_close(conn, user, s: dict) -> bool:
-    """Очевидное «закрыть» проходит само (решение владельца 05.10.2026), остальное — в «Новое».
+def _auto(conn, user, s: dict) -> str | None:
+    """Закрыть и уточнить дело по свежей встрече или переписке автоматика может сама; заводить —
+    нет, новое дело ждёт человека в «Новом». Возвращает причину решения или None — в «Новое».
 
-    Само — только когда автоматика уверена (payload.auto), основание названо (quote), дело —
-    открытое и самого владельца токена, а встреча или переписка свежая (AUTO_CLOSE_DAYS) и не
-    старше самого дела: разбор архива и чужие дела по-прежнему ждут решения человека.
-    Основание ложится комментарием к делу (_trace), «Вернуть» — в «Новом», «Закрыто само».
+    Владелец 05.10.2026 разрешил очевидное закрытие, 08.10.2026 — любое закрытие и уточнение:
+    «спокойно закрывай и спокойно уточняй… я доверяю». До того из закрытий без пометки «бесспорно»
+    он принял 18 из 19, из уточнений — 15 из 19 (два отказа — прошедшие сроки старых встреч).
+
+    Само — когда автоматика просит (payload.auto), основание названо (quote), дело — открытое и
+    самого владельца токена, а встреча или переписка свежая (AUTO_DAYS) и не старше самого дела:
+    разбор архива и чужие дела по-прежнему ждут решения человека. Уточнение — ещё и только когда
+    человек и проект по имени узнаются однозначно: иначе мяч ушёл бы «никому».
+    Основание ложится комментарием к делу (_trace), «Вернуть» — в «Новом», «Сделано само».
     """
     p = s.get("payload") or {}
-    if s.get("kind") != "close" or p.get("auto") is not True or user != s.get("for_user") or not s.get("quote"):
-        return False
+    kind = s.get("kind")
+    if kind not in ("close", "update") or p.get("auto") is not True or user != s.get("for_user") or not s.get("quote"):
+        return None
     try:
         at = dt.date.fromisoformat(str(p.get("meeting_at") or "")[:10])
     except ValueError:
-        return False
+        return None
     row = conn.execute(
         "SELECT %s >= crm.today() - %s AND %s >= (created_at AT TIME ZONE 'Europe/Moscow')::date AS ok "
         "FROM tasks.tasks WHERE id = %s AND status = 'open' AND owner_id = %s",
-        (at, AUTO_CLOSE_DAYS, at, s["task_id"], user),
+        (at, AUTO_DAYS, at, s["task_id"], user),
     ).fetchone()
-    return bool(row and row["ok"])
+    if not (row and row["ok"]):
+        return None
+    if kind == "close":
+        return AUTO_CLOSE_REASON
+    names = _names(conn, p)
+    if any(p.get(key) and not p.get(col) and col not in names for key, col in (("project_name", "project_id"), ("person_name", "person_id"))):
+        return None
+    return AUTO_UPDATE_REASON
 
 
 def op_suggestion_decide(conn, user, op):
@@ -395,7 +416,7 @@ def op_suggestion_decide(conn, user, op):
         raise OpError("решение: accept или reject")
     fix = _pick(op.get("set") or {}, TASK_FIELDS, "дело")
     payload = dict(s["payload"] or {})
-    task = None
+    task, back = None, {}
     if s["kind"] == "create":
         fields = {k: v for k, v in payload.items() if k in TASK_FIELDS}
         fields.update(_names(conn, payload))
@@ -409,8 +430,11 @@ def op_suggestion_decide(conn, user, op):
         if s["kind"] == "close":
             fields.setdefault("status", "done")
         fields.update(fix)
+        cur = task_by(conn, s["task_id"]) or {}
         task = op_task_set(conn, user, {"id": s["task_id"], "set": fields})["task"]
-        _trace(conn, user, s, task)
+        # «Вернуть» у сделанного само: как было (только то, что поменялось) и чем это объяснили.
+        back = {"was": {k: cur.get(k) for k in fields if k in cur and not _same(cur.get(k), task.get(k))},
+                "comment_id": _trace(conn, user, s, task)}
     elif s["kind"] == "assign":
         fields = {"owner_id": user, **fix}
         task = op_task_set(conn, user, {"id": s["task_id"], "set": fields})["task"]
@@ -421,22 +445,23 @@ def op_suggestion_decide(conn, user, op):
         "decided_by": user,
         "decided_at": dt.datetime.now(dt.timezone.utc),
         "result_task_id": task["id"] if task else None,
-        "result": Jsonb(jsonable({k: task[k] for k in TASK_FIELDS if task and k in task})),
+        "result": Jsonb(jsonable({**{k: task[k] for k in TASK_FIELDS if task and k in task}, **back})),
     })
     return {"suggestion": row, "task": task}
 
 
-def _trace(conn, user, s: dict, task: dict | None) -> None:
+def _trace(conn, user, s: dict, task: dict | None) -> str | None:
     """Принятое «закрыть» или «поправить» оставляет при деле комментарий: откуда и почему.
 
     Уточнение из встречи или переписки (payload.note — новые подробности) иначе осталось бы
     только в «Новом», а через неделю там его уже не найти; у закрытого — основание (quote).
+    Возвращает id комментария: «Вернуть» у сделанного само убирает и его.
     """
     text = ((s.get("payload") or {}).get("note") or s.get("quote") or "").strip()
     if not text or not task:
-        return
+        return None
     head = s.get("batch_title") or {"meeting": "Встреча", "telegram": "Telegram"}.get(s.get("source"), s.get("source") or "")
-    op_comment_add(conn, user, {"comment": {"task_id": task["id"], "text": f"{head}: {text}" if head else text}})
+    return op_comment_add(conn, user, {"comment": {"task_id": task["id"], "text": f"{head}: {text}" if head else text}})["comment"]["id"]
 
 
 def _names(conn, payload: dict) -> dict:

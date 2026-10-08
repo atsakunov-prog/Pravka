@@ -159,6 +159,25 @@ def test_timeline_soft_delete_and_card(team):
         store.view(url, "marianna", "deal", deal_id=d["id"])
 
 
+def test_recent_timeline_for_meetings_input(team):
+    """Вид timeline — вход сверки встреч и дайджеста: по три свежих записи на клиента, давнее и
+    убранное не видно, остальным — по их доступу к клиентам."""
+    url = team["url"]
+    now = dt.datetime.now(dt.timezone.utc)
+    p, q = project(url, "sasha", "Эта"), project(url, "sasha", "Йота")
+    add = lambda pid, days, text: ops(url, "sasha", {"op": "interaction.add", "data": {  # noqa: E731
+        "at": (now - dt.timedelta(days=days)).isoformat(), "kind": "meeting", "summary": text, "project_id": str(pid)}})[0]["row"]
+    for i in range(5):
+        add(p, i + 1, f"Эта {i + 1}")
+    ops(url, "sasha", {"op": "interaction.delete", "id": add(p, 0, "Эта убрано")["id"]})
+    add(q, 2, "Йота свежая")
+    add(q, 90, "Йота давняя")
+    got = [(i["project_name"], i["summary"]) for i in store.view(url, "sasha", "timeline")["items"]]
+    assert [s for n, s in got if n == "Эта"] == ["Эта 1", "Эта 2", "Эта 3"]
+    assert [s for n, s in got if n == "Йота"] == ["Йота свежая"]
+    assert store.view(url, "alena", "timeline")["items"] == []
+
+
 def test_clients_ties_and_time_views_answer(team):
     url = team["url"]
     p = project(url, "sasha", "Йота")

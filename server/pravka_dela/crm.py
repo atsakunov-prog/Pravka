@@ -346,6 +346,25 @@ def view_money(conn, user, **_):
     }
 
 
+TIMELINE_DAYS = 45
+TIMELINE_PER_CLIENT = 3
+
+
+def view_timeline(conn, user, **_):
+    """Недавняя хронология всех живых клиентов: по TIMELINE_PER_CLIENT последних записей за
+    TIMELINE_DAYS дней — свежие сверху. Вход сверки встреч и дайджеста с делами: модель видит,
+    что с клиентом было до этой встречи (владелец 08.10.2026: «и что там до этого было»)."""
+    return {"items": conn.execute(
+        "SELECT at, kind, summary, next_step, project_id, project_name, deal_name, person_ids, source FROM ("
+        " SELECT i.*, p.name AS project_name, d.name AS deal_name,"
+        "  row_number() OVER (PARTITION BY i.project_id ORDER BY i.at DESC) AS k"
+        " FROM crm.interactions i JOIN crm.projects p ON p.id = i.project_id LEFT JOIN crm.deals d ON d.id = i.deal_id"
+        " WHERE i.deleted_at IS NULL AND p.archived_at IS NULL AND i.at >= now() - make_interval(days => %s)) x "
+        "WHERE k <= %s ORDER BY project_name, at DESC",
+        (TIMELINE_DAYS, TIMELINE_PER_CLIENT),
+    ).fetchall()}
+
+
 VIEWS = {
     "pipeline": view_pipeline,
     "clients": view_clients,
@@ -354,5 +373,6 @@ VIEWS = {
     "dossier": view_dossier,
     "ties": view_ties,
     "money": view_money,
+    "timeline": view_timeline,
 }
 store.VIEWS.update(VIEWS)

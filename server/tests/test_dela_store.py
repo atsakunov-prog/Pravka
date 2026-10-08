@@ -220,6 +220,44 @@ def test_obvious_close_from_fresh_meeting_closes_itself(dela):
     assert (st["Тизер для фондов"], st["Модель Альфы"]) == ("open", "open")
 
 
+def test_refine_from_fresh_meeting_applies_itself_and_goes_back(dela):
+    """Уточнение по свежей встрече проходит само (владелец 08.10.2026: «спокойно уточняй»): срок,
+    мяч к человеку по имени, подробности — комментарием. В ответе — как было и id комментария,
+    ими «Вернуть» возвращает дело. Неузнанный человек, старая встреча, без auto — ждут в «Новом»."""
+    today = dt.date.today()
+    with store.db.session(dela, "system", "t") as c:
+        c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Ольга Смирнова', 'Ольга', 'sasha')")
+    mk_task = lambda title, **kw: ops(dela, "sasha", {"op": "task.create", "task": {"title": title, **kw}})[0]["task"]  # noqa: E731
+    soon = (today + dt.timedelta(days=2)).isoformat()
+    a, b, c_, d = mk_task("Список фондов", due_date=soon), mk_task("Модель Беты"), mk_task("Тизер"), mk_task("Отчёт")
+
+    def refine(t, payload, at=today, auto=True):
+        return ops(dela, "sasha", {"op": "suggestion.create", "suggestion": {
+            "for_user": "sasha", "kind": "update", "task_id": t["id"], "source": "meeting", "batch_ref": "meeting:4",
+            "batch_title": "Бета: статус", "quote": "Ольга пришлёт к пятнице",
+            "payload": {"meeting_at": at.isoformat(), **payload, **({"auto": True} if auto else {})}}})[0]
+
+    later = (today + dt.timedelta(days=5)).isoformat()
+    r = refine(a, {"due_date": later, "ball": "waiting", "person_name": "Ольга", "note": "нужно 40 фондов, не 20"})
+    assert r["ok"] and r["suggestion"]["status"] == "accepted" and r["suggestion"]["reason"] == store.AUTO_UPDATE_REASON
+    t = r["task"]
+    assert (t["due_date"], t["ball"], t["person_short"]) == (later, "waiting", "Ольга")
+    back = r["suggestion"]["result"]
+    assert back["was"] == {"due_date": soon, "ball": "mine", "person_id": None}
+    with store.db.session(dela, "sasha", "t") as c:
+        assert [x["text"] for x in c.execute("SELECT text FROM tasks.comments WHERE id = %s", (back["comment_id"],))] == [
+            "Бета: статус: нужно 40 фондов, не 20"]
+
+    # «Вернуть» веба: как было и без комментария
+    undo = ops(dela, "sasha", {"op": "task.set", "id": t["id"], "set": back["was"]}, {"op": "comment.delete", "id": back["comment_id"]})
+    assert all(x["ok"] for x in undo), undo
+    assert (undo[0]["task"]["due_date"], undo[0]["task"]["ball"], undo[0]["task"]["person_id"]) == (soon, "mine", None)
+
+    assert refine(b, {"ball": "waiting", "person_name": "Захар Неизвестный"})["suggestion"]["status"] == "pending"
+    assert refine(c_, {"title": "Тизер на английском"}, at=today - dt.timedelta(days=10))["suggestion"]["status"] == "pending"
+    assert refine(d, {"title": "Отчёт за сентябрь"}, auto=False)["suggestion"]["status"] == "pending"
+
+
 def test_phone_ops_as_pravka_sends_them(dela):
     """Операции ровно той формы, что собирает Правка (`core/Dela.kt`): id дела
     и op_id — телефона, пустое — null, у правки — was, заметка Разноски —
