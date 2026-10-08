@@ -59,8 +59,11 @@ class DelaSync(
         val note: String = "",
     )
 
-    /** Карточка дела с сервера: комментарии и журнал правок (журнал есть только там). */
-    data class Card(val comments: List<JSONObject>, val history: List<JSONObject>)
+    /**
+     * Карточка дела с сервера: комментарии, журнал правок (журнал есть только
+     * там) и `origin` — откуда дело (08.10.2026; у старого сервера его нет — null).
+     */
+    data class Card(val comments: List<JSONObject>, val history: List<JSONObject>, val origin: JSONObject? = null)
 
     private val linkFile: File get() = File(DataRoot.secrets(context), LINK_FILE)
 
@@ -278,7 +281,7 @@ class DelaSync(
                 val a = o.optJSONArray(key) ?: return emptyList()
                 return (0 until a.length()).mapNotNull { a.optJSONObject(it) }
             }
-            Card(list("comments"), list("history"))
+            Card(list("comments"), list("history"), o.optJSONObject("origin"))
         }
     }
 

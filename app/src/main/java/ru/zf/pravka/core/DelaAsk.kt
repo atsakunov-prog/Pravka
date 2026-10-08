@@ -24,6 +24,9 @@ object DelaAsk {
     /** Потолок дел на экране у сервера (`ask.MAX_TASKS`): лишние он молча отрежет. */
     const val MAX_TASKS = 300
 
+    /** Потолок предложений на экране (`suggestion_ids`, как у веба). */
+    const val MAX_SUGGESTIONS = 150
+
     /** Потолок команды у сервера (`ask.MAX_INPUT`): длиннее — отказ словами, а не обрезка. */
     const val MAX_INPUT = 4000
 
@@ -41,6 +44,7 @@ object DelaAsk {
         personId: String = "",
         dealId: String = "",
         card: String = "",
+        suggestionIds: List<String> = emptyList(),
     ): JSONObject {
         val ids = taskIds.filter { Dela.isUuid(it) }.distinct().take(MAX_TASKS)
         val o = JSONObject().put("title", title.take(200)).put("task_ids", JSONArray().apply { ids.forEach { put(it) } })
@@ -49,6 +53,9 @@ object DelaAsk {
         if (personId.isNotBlank() && Dela.isUuid(personId)) o.put("person_id", personId)
         if (dealId.isNotBlank() && Dela.isUuid(dealId)) o.put("deal_id", dealId)
         if (card in CARDS) o.put("card", card)
+        // «Новое»: предложения на экране по порядку — П1, П2… (`scope.suggestion_ids` сервера).
+        val sugs = suggestionIds.filter { Dela.isUuid(it) }.distinct().take(MAX_SUGGESTIONS)
+        if (sugs.isNotEmpty()) o.put("suggestion_ids", JSONArray().apply { sugs.forEach { put(it) } })
         return o
     }
 

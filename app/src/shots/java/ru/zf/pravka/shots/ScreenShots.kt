@@ -188,9 +188,16 @@ class ScreenShots {
         c = launch(MainActivity.TAB_TODOIST)
         if (tap(c, "Люди", exact = true)) shot(c, "crm-5-people")
         close(c)
-        // Задание 5: «Сделано само» в «Новом».
+        // Задание 6: «Новое» — «Подскажи», «Поставил», «Сделано само» свёрнуто и развёрнуто.
         c = launch(MainActivity.TAB_TODOIST)
-        if (tap(c, "Новое")) shot(c, "crm-7-sdelano-samo")
+        if (tap(c, "Новое")) {
+            shot(c, "crm-7-novoe")
+            if (tap(c, "Показать", exact = true)) shot(c, "crm-8-sdelano-samo")
+        }
+        close(c)
+        // Задание 6: «Без проекта — куда их?» — в «Неделе».
+        c = launch(MainActivity.TAB_TODOIST)
+        if (tap(c, "Неделя")) shot(c, "crm-9-nedelya")
         close(c)
         RuntimeEnvironment.setQualifiers(OUTER)
         c = launch(MainActivity.TAB_TODOIST)

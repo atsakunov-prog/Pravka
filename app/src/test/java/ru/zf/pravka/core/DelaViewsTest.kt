@@ -136,10 +136,10 @@ class DelaViewsTest {
         assertTrue(c.upcomingHot)
         assertEquals(2, c.waiting)  // #57 и nudge
         assertTrue(c.waitingHot)
-        // «Новое» — как newCount веба: восемь без проекта (#57 — в проекте) и поставленное другими;
-        // «other» и то и другое — веб считает его дважды, и телефон так же.
-        assertEquals(9, c.new)
-        assertEquals("9", c.label(DelaViews.View.NEW))
+        // «Новое» — как newCount веба (08.10.2026): только вопросы. Предложений нет — и числа нет:
+        // без проекта и поставленное другими ответа не ждут.
+        assertEquals(0, c.new)
+        assertEquals("", c.label(DelaViews.View.NEW))
         assertEquals("", c.label(DelaViews.View.WEEK))
         // «Предстоящее» — с датой; «И без даты» — все; «Только мяч у меня» — без «жду».
         assertEquals(8, DelaViews.upcoming(s, "sasha", "all", mineOnly = false, withUndated = false).size)
@@ -181,12 +181,83 @@ class DelaViewsTest {
         val auto = Dela.Suggestion(id = "a1", forUser = "sasha", kind = "close", taskId = "loose", status = "accepted",
             payload = "{\"auto\": true}", reason = "закрыто само", decidedAt = "2026-10-05T08:00:00+03:00")
         val withAuto = s.copy(suggestions = s.suggestions + ("a1" to auto))
-        val base = DelaViews.newCount(s, "sasha", "all", now)
-        assertEquals(base + 1, DelaViews.newCount(withAuto, "sasha", "all", now))
+        // Сделанное само ответа не ждёт — число «Нового» его не считает (08.10.2026).
+        assertEquals(DelaViews.newCount(s, "sasha", "all", now), DelaViews.newCount(withAuto, "sasha", "all", now))
+        assertEquals(1, Dela.autoDone(withAuto, "sasha", now).size)
         // «Понятно» — seen_at: из «Нового» уходит, и сразу, до ответа сервера.
         val seen = Dela.overlay(withAuto, listOf(Dela.seenOp(listOf("a1"))), "sasha", today, nowIso)
         assertTrue(Dela.autoDone(seen, "sasha", now).isEmpty())
-        assertEquals(base, DelaViews.newCount(seen, "sasha", "all", now))
+        // Без проекта — в «Неделе» (08.10.2026), не в «Новом».
+        assertEquals(listOf("loose"), DelaViews.week(s, "sasha", today, "all", now).loose.map { it.id })
+    }
+
+    @Test
+    fun `новое — поставил — открытые, мои, за три дня, свежие сверху, по дням`() {
+        val s = snap(
+            task("fresh") { it.copy(createdAt = "2026-10-05T08:30:00+03:00") },
+            task("yesterday") { it.copy(createdAt = "2026-10-04T18:00:00+03:00") },
+            task("two-days") { it.copy(createdAt = "2026-10-03T12:00:00+03:00") },
+            task("old") { it.copy(createdAt = "2026-10-01T12:00:00+03:00") },
+            task("done") { it.copy(createdAt = "2026-10-05T07:00:00+03:00", status = Dela.DONE) },
+            task("foreign") { it.copy(createdAt = "2026-10-05T07:00:00+03:00", ownerId = "natasha") },
+            task("by-lena") { it.copy(createdAt = "2026-10-05T07:30:00+03:00", createdBy = "lena") },
+        )
+        val feed = DelaViews.feed(s, "sasha", "all", now).map { it.id }
+        // Контрактное дело #57 заведено 03.10 21:10 — тоже за три дня.
+        assertEquals(listOf("fresh", "by-lena", "yesterday", "2b1f0c9e-6a51-4f3e-9c3a-0d6f1b2a7e10", "two-days"), feed)
+        val zone = java.time.ZoneId.of("Europe/Moscow")
+        val days = DelaViews.feedDays(DelaViews.feed(s, "sasha", "all", now), today, zone)
+        assertEquals(listOf("Сегодня", "Вчера", "Суббота, 3 октября"), days.map { it.first })
+        // Значок — без номера: откуда и когда; поставил другой — кто.
+        val lena = s.tasks.getValue("by-lena")
+        assertEquals("поставил(а) lena · сегодня 07:30", DelaViews.markWords(lena, "", s, today, zone))
+        val voice = s.tasks.getValue("fresh").copy(source = "meeting")
+        assertEquals("встреча: Бета: тизер · сегодня 08:30", DelaViews.markWords(voice, "Бета: тизер", s, today, zone))
+        assertEquals(DelaViews.Mark("mic", true, "наговорка"), DelaViews.mark("voice"))
+        assertFalse(DelaViews.mark("import").plan)
+    }
+
+    @Test
+    fun `новое — бейдж только у вопросов, вопрос — ask, проект, человек`() {
+        val s0 = snap()
+        fun sug(id: String, payload: String, status: String = "pending") = Dela.Suggestion(
+            id = id, forUser = "sasha", kind = "create", payload = payload, status = status, createdAt = "2026-10-05T08:00:00+03:00",
+        )
+        val s = s0.copy(suggestions = mapOf(
+            "q1" to sug("q1", "{\"title\": \"Звонок\", \"ask\": \"Это про Бету или про Альфу?\"}"),
+            "q2" to sug("q2", "{\"title\": \"КП\", \"project_name\": \"Гамма\", \"person_name\": \"Пётр\"}"),
+            "q3" to sug("q3", "{\"title\": \"КП\", \"project_name\": \"бета\", \"person_name\": \"Пётр\"}"),
+            "q4" to sug("q4", "{\"title\": \"КП\", \"project_name\": \"Бета Групп\", \"person_name\": \"ваня\"}"),
+            "a1" to sug("a1", "{\"title\": \"Само\", \"auto\": true}", status = "accepted"),
+        ))
+        assertEquals(4, DelaViews.newCount(s, "sasha", "all", now))
+        assertEquals("Это про Бету или про Альфу?", DelaViews.askWhy(s.suggestions.getValue("q1"), s))
+        assertEquals("Не знаю проект «Гамма» — куда?", DelaViews.askWhy(s.suggestions.getValue("q2"), s))
+        // Проект узнан по другому имени без регистра — спрашивается человек.
+        assertEquals("Кто это — «Пётр»?", DelaViews.askWhy(s.suggestions.getValue("q3"), s))
+        assertNull(DelaViews.askWhy(s.suggestions.getValue("q4"), s))
+        assertEquals("Поставить", DelaViews.askYes("create"))
+        assertEquals("Закрыть", DelaViews.askYes("close"))
+        // Свёрнутое «Сделано само» одной строкой.
+        val c = Dela.Suggestion(id = "c", kind = "close")
+        val u = Dela.Suggestion(id = "u", kind = "update")
+        assertEquals("закрыл 2, уточнил 1", DelaViews.autoSummary(listOf(c, u, c)))
+        // «Похоже, это уже есть» — началами слов, хотя бы 60 % меньшего.
+        val twin = sug("tw", "{\"title\": \"Ивану прислать модель бюджета\"}")
+        assertEquals("Иван: прислать модель", DelaViews.twinOf(twin, s, "sasha")?.title)
+    }
+
+    @Test
+    fun `карточка — откуда дело — наговорка дословно или встреча с цитатой`() {
+        assertNull(DelaViews.origin(null))
+        val zone = java.time.ZoneId.of("Europe/Moscow")
+        val d = DelaViews.origin(JSONObject("{\"kind\": \"dictation\", \"at\": \"2026-10-05T12:52:00+03:00\", \"text\": \" Ивану позвонить \", \"source\": \"phone\"}"))!!
+        assertEquals("Наговорка · сегодня 12:52", DelaViews.originTop(d, today, zone))
+        assertEquals("Ивану позвонить", d.text)
+        val m = DelaViews.origin(JSONObject("{\"kind\": \"suggestion\", \"source\": \"meeting\", \"batch_title\": \"Бета: тизер · 05.10\", " +
+            "\"quote\": \"пришлю модель\", \"url\": \"http://evil\", \"auto\": true}"))!!
+        assertEquals("Бета: тизер · 05.10 · поставлено само", DelaViews.originTop(m, today, zone))
+        assertEquals("", m.url)  // только https://
     }
 
     @Test

@@ -340,7 +340,7 @@ internal object Seed {
         fun task(num: Int, title: String, f: JSONObject.() -> Unit = {}) = JSONObject()
             .put("id", "t-$num").put("num", num).put("title", title).put("owner_id", me).put("created_by", me)
             .put("ball", "mine").put("status", "open").put("source", "voice")
-            .put("created_at", ago(30)).put("updated_at", ago(6)).put("rev", 1).put("seq", ++seq).apply(f)
+            .put("created_at", ago(200)).put("updated_at", ago(6)).put("rev", 1).put("seq", ++seq).apply(f)
         fun sug(id: String, p: JSONObject, src: String, quote: String, batch: String = "", bt: String = "", status: String = "pending") =
             JSONObject().put("id", id).put("for_user", me).put("kind", "create").put("payload", p).put("source", src)
                 .put("quote", quote).put("batch_ref", batch).put("batch_title", bt).put("status", status)
@@ -360,9 +360,9 @@ internal object Seed {
         )
         val tasks = arr(
             task(61, "Бета: финмодель — сценарий без кредита") { put("project_id", "p-beta"); put("deal_id", "d-beta-model"); put("focus_on", d(0)); put("estimate_min", 60) },
-            task(58, "Иван: созвон по бюджету IV квартала") { put("project_id", "p-beta"); put("person_id", "pe-ivan"); put("due_date", d(0)); put("due_time", "11:30"); put("labels", arr("звонок")) },
+            task(58, "Иван: созвон по бюджету IV квартала") { put("project_id", "p-beta"); put("person_id", "pe-ivan"); put("due_date", d(0)); put("due_time", "11:30"); put("labels", arr("звонок")); put("created_at", ago(3)); put("source", "meeting") },
             task(55, "Орион: КП на управленческий учёт") { put("project_id", "p-orion"); put("deal_id", "d-orion-uu"); put("due_date", d(-1)); put("estimate_min", 120) },
-            task(63, "Дача: оплатить электричество за сентябрь") { put("project_id", "p-dacha"); put("due_date", d(0)); put("estimate_min", 5) },
+            task(63, "Дача: оплатить электричество за сентябрь") { put("project_id", "p-dacha"); put("due_date", d(0)); put("estimate_min", 5); put("created_at", ago(26)) },
             task(41, "Налоговый вычет: собрать чеки за лечение") { put("project_id", "p-home"); put("due_date", d(-17)) },
             task(57, "Иван: прислать выгрузку из 1С") { put("project_id", "p-beta"); put("ball", "waiting"); put("person_id", "pe-ivan"); put("waiting_since", d(-5)); put("nudge_on", d(0)) },
             task(60, "Ольга: подписанный договор на внедрение") { put("project_id", "p-orion"); put("ball", "waiting"); put("person_id", "pe-olga"); put("waiting_since", d(-9)) },
@@ -370,18 +370,19 @@ internal object Seed {
             task(66, "Иван: обсудить продление договора") { put("project_id", "p-beta"); put("ball", "agenda"); put("person_id", "pe-ivan") },
             task(64, "Бета: проверить платёжный календарь на октябрь") { put("project_id", "p-beta"); put("deal_id", "d-beta-refi") },
             task(65, "Отчёт ДДС: посмотреть шаблон от Лены") { put("project_id", "p-zf"); put("created_by", "lena"); put("created_at", ago(20)); put("source", "web") },
-            task(59, "Автосервис: записаться на ТО") { put("estimate_min", 10); put("labels", arr("звонок")) },
-            task(67, "Дом: заказать фильтры для воды") { put("project_id", "p-home"); put("due_date", d(4)) },
+            task(59, "Автосервис: записаться на ТО") { put("estimate_min", 10); put("labels", arr("звонок")); put("created_at", ago(50)); put("source", "mcp") },
+            task(67, "Дом: заказать фильтры для воды") { put("project_id", "p-home"); put("due_date", d(4)); put("created_at", ago(5)); put("source", "telegram") },
             task(68, "Продлить Контур") { put("project_id", "p-zf"); put("status", "done"); put("completed_at", ago(5)) },
             task(52, "Бета: отправить счёт за сентябрь") { put("project_id", "p-beta"); put("status", "done"); put("completed_at", ago(26)) },
         )
         val suggestions = arr(
             sug(
-                "s-1", JSONObject().put("title", "Ольга: ответить про сроки внедрения").put("project_name", "Орион Логистик").put("person_name", "Ольга"),
+                "s-1", JSONObject().put("title", "Ольга: ответить про сроки внедрения").put("project_name", "Орион Логистик").put("person_name", "Ольга")
+                    .put("ask", "Ответить сразу или после созвона с Ольгой?"),
                 "telegram", "Саша, когда сможете начать? Нам бы до ноября",
             ),
             sug(
-                "s-2", JSONObject().put("title", "Бета: пересчитать ковенанты по кредиту").put("project_name", "Бета Групп").put("due_date", d(2)),
+                "s-2", JSONObject().put("title", "Бета: пересчитать ковенанты по кредиту").put("project_name", "Бета Холдинг").put("due_date", d(2)),
                 "meeting", "Посмотри ещё ковенанты, банк спросит", "meet-beta", "Встреча с Бета Групп",
             ),
             sug(

@@ -162,12 +162,12 @@ object DelaViews {
     }
 
     /**
-     * Число «Нового» (`newCount` веба): предложения автоматики, закрытое само за
-     * неделю, дела без проекта и поставленные другими — всё, что ждёт, чтобы его
-     * разложили. Наговорки не считаются: их дела уже разложены.
+     * Число «Нового» (`newCount` веба, 08.10.2026): только вопросы — ждущие
+     * предложения. Поставленное и сделанное само ответа не ждут (владелец:
+     * «уверен — поставил, не уверен — подскажи»).
      */
-    fun newCount(s: Dela.Snapshot, me: String, sphere: String, now: Long): Int =
-        Dela.newOnes(s, me).size + Dela.autoDone(s, me, now).size + noProject(s, me, sphere).size + fromOthers(s, me, sphere, now).size
+    @Suppress("UNUSED_PARAMETER")
+    fun newCount(s: Dela.Snapshot, me: String, sphere: String, now: Long): Int = Dela.newOnes(s, me).size
 
     /** Раздел страницы: заголовок веба и дела в его порядке. */
     data class Section(val title: String, val items: List<Dela.Task>)
@@ -217,8 +217,14 @@ object DelaViews {
     fun list(s: Dela.Snapshot, me: String, sphere: String, showDone: Boolean): List<Dela.Task> =
         s.tasks.values.filter { mine(s, me, it) && Dela.inSphere(it, sphere) && (showDone || it.open) }
 
-    /** «Неделя» веба: три раздела с его заголовками. */
-    data class Week(val stale: List<Dela.Task>, val waitStale: List<Dela.Task>, val noStep: List<Dela.Project>)
+    /**
+     * «Неделя» веба: что протухло, кто молчит, где нет следующего шага и (с
+     * 08.10.2026) [loose] — мои открытые без проекта: «Без проекта — куда их?»
+     * переехало сюда из «Нового», это уборка раз в неделю, а не вопрос.
+     */
+    data class Week(val stale: List<Dela.Task>, val waitStale: List<Dela.Task>, val noStep: List<Dela.Project>, val loose: List<Dela.Task> = emptyList()) {
+        val empty: Boolean get() = stale.isEmpty() && waitStale.isEmpty() && noStep.isEmpty() && loose.isEmpty()
+    }
 
     fun week(s: Dela.Snapshot, me: String, today: String, sphere: String, now: Long): Week {
         val w = Dela.week(s, me, today, sphere, now)
@@ -227,7 +233,7 @@ object DelaViews {
         val noStep = s.projects.values.filter {
             it.live && (me.isBlank() || it.ownerId == me) && it.moneyDefault in setOf("paid", "potential") && it.id !in busy
         }.sortedBy { it.name.lowercase() }
-        return Week(w.stale, w.waitingStale, noStep)
+        return Week(w.stale, w.waitingStale, noStep, noProject(s, me, sphere))
     }
 
     /**
@@ -279,6 +285,225 @@ object DelaViews {
         }.sortedBy { it.name.lowercase() }
         return Found(projects, deals, people, search(s, q, showDone))
     }
+
+    // ------------------------------------------------------------ «Новое»: подскажи — поставил — само
+
+    /*
+     * «Новое» (08.10.2026, docs/dela-phone-6.md, `renderNew` веба). Владелец:
+     * «в новом всё делится на "не уверен — подскажи" и "уверен — поставил"».
+     * Сверху — только то, где без человека не обойтись; ниже — поставленное за
+     * три дня одной строкой со значком источника; «Сделано само» — свёрнуто.
+     * Что именно сказано и откуда — в карточке дела (`origin`).
+     */
+
+    /** «Поставил» — за сколько дней и сколько строк (`FEED_DAYS`, `FEED_MAX` веба). */
+    const val FEED_DAYS = 3
+    const val FEED_MAX = 40
+
+    /** «Подскажи»: ждущие предложения, свежие сверху — по дате встречи, потом по времени появления. */
+    fun asks(s: Dela.Snapshot, me: String): List<Dela.Suggestion> =
+        Dela.newOnes(s, me).sortedWith(compareByDescending<Dela.Suggestion> { it.at }.thenByDescending { it.createdAt })
+
+    /** «Поставил»: мои открытые дела, заведённые за [FEED_DAYS] дня, свежие сверху. Сделанное — не новость. */
+    fun feed(s: Dela.Snapshot, me: String, sphere: String, now: Long): List<Dela.Task> =
+        openMine(s, me, sphere).filter { ms(it.createdAt) > now - FEED_DAYS * 86_400_000L }.sortedByDescending { ms(it.createdAt) }
+
+    /** «Поставил» по дням: «Сегодня», «Вчера», «Вторник, 6 октября» — первые [FEED_MAX] строк. */
+    fun feedDays(list: List<Dela.Task>, today: String, zone: ZoneId): List<Pair<String, List<Dela.Task>>> {
+        val out = LinkedHashMap<String, MutableList<Dela.Task>>()
+        for (t in list.take(FEED_MAX)) {
+            val day = runCatching { java.time.OffsetDateTime.parse(t.createdAt).atZoneSameInstant(zone).toLocalDate().toString() }
+                .getOrDefault(t.createdAt.take(10))
+            out.getOrPut(day) { mutableListOf() } += t
+        }
+        return out.map { (day, items) ->
+            when (days(day, today)) {
+                0L -> "Сегодня"
+                1L -> "Вчера"
+                else -> longDate(day)
+            } to items.toList()
+        }
+    }
+
+    private fun byName(n: String, vararg names: String): Boolean {
+        val key = Dela.norm(n) ?: return false
+        return key.isNotBlank() && names.any { it.isNotBlank() && Dela.norm(it) == key }
+    }
+
+    /**
+     * Почему предложение ждёт человека (`askWhy` веба): вопрос самой автоматики
+     * (`payload.ask`), не узнан проект, не узнан человек — по имени, короткому
+     * и другим именам, без регистра. null — вопроса нет (старая встреча и т. п.).
+     */
+    fun askWhy(sg: Dela.Suggestion, s: Dela.Snapshot): String? {
+        val p = sg.payloadObj()
+        p.str("ask").takeIf { it.isNotBlank() }?.let { return it }
+        val project = p.str("project_name")
+        if (project.isNotBlank() && s.projects.values.none { byName(project, it.name, *it.aliases.toTypedArray()) }) {
+            return "Не знаю проект «$project» — куда?"
+        }
+        val person = p.str("person_name")
+        if (person.isNotBlank() && s.people.values.none { byName(person, it.name, it.short, *it.aliases.toTypedArray()) }) {
+            return "Кто это — «$person»?"
+        }
+        return null
+    }
+
+    /** Предложение словами (`sugText` веба): что, подсказка одной строкой и подробности уточнения. */
+    data class SugText(val title: String, val hint: String, val add: String = "")
+
+    fun sugText(sg: Dela.Suggestion, s: Dela.Snapshot, today: String): SugText {
+        val p = sg.payloadObj()
+        fun v(k: String) = p.str(k)
+        val ball = v("ball")
+        if (sg.kind == "create") {
+            return SugText(
+                v("title").ifBlank { sg.quote },
+                listOfNotNull(
+                    v("project_name").takeIf { it.isNotBlank() },
+                    v("person_name").takeIf { it.isNotBlank() },
+                    BALL_WORD[ball]?.takeIf { ball.isNotBlank() && ball != Dela.MINE },
+                    v("due_date").takeIf { it.isNotBlank() }?.let { "срок " + ddmm(it, today) },
+                ).joinToString(" · "),
+            )
+        }
+        val t = s.tasks[sg.taskId]
+        val ref = t?.title ?: "дело не видно"
+        val project = t?.let { s.projects[it.projectId]?.name ?: it.projectName }.orEmpty()
+        return when (sg.kind) {
+            "close" -> SugText("Закрыть: $ref", project)
+            "assign" -> SugText("Взять себе: $ref", project)
+            else -> {
+                val person = v("person_name")
+                SugText(
+                    "Уточнить: $ref",
+                    listOfNotNull(
+                        v("title").takeIf { it.isNotBlank() }?.let { "название: «$it»" },
+                        v("due_date").takeIf { it.isNotBlank() }?.let { d ->
+                            "срок " + (t?.dueDate?.takeIf { it.isNotBlank() }?.let { ddmm(it, today) + " → " } ?: "") + ddmm(d, today)
+                        },
+                        if (ball.isNotBlank()) (BALL_WORD[ball] ?: ball) + if (person.isNotBlank()) " $person" else ""
+                        else person.takeIf { it.isNotBlank() }?.let { "человек: $it" },
+                    ).joinToString(" · "),
+                    v("note"),
+                )
+            }
+        }
+    }
+
+    /** Кнопка «да» у вопроса — по виду предложения (`ASK_YES` веба). */
+    fun askYes(kind: String): String = when (kind) {
+        "close" -> "Закрыть"
+        "update" -> "Уточнить"
+        "assign" -> "Взять"
+        else -> "Поставить"
+    }
+
+    private fun stems(text: String): Set<String> =
+        (Dela.norm(text) ?: "").replace(Regex("[^a-zа-я0-9]+"), " ").split(' ').filter { it.length > 3 }.map { it.take(5) }.toSet()
+
+    /**
+     * «Похоже, это уже есть» (`twinOf` веба): открытое моё дело, чьё название
+     * совпадает с предложением «завести» началами слов — хотя бы на 60 % меньшего.
+     */
+    fun twinOf(sg: Dela.Suggestion, s: Dela.Snapshot, me: String): Dela.Task? {
+        if (sg.kind != "create") return null
+        val a = stems(sg.payloadObj().str("title").ifBlank { sg.quote })
+        if (a.size < 2) return null
+        var best: Dela.Task? = null
+        var score = 0.0
+        for (t in s.tasks.values) {
+            if (!t.open || !mine(s, me, t)) continue
+            val b = stems(t.title)
+            if (b.size < 2) continue
+            val sc = a.count { it in b }.toDouble() / minOf(a.size, b.size)
+            if (sc > score) { score = sc; best = t }
+        }
+        return best.takeIf { score >= 0.6 }
+    }
+
+    /** «Сделано само» свёрнутым — одной строкой: «закрыл 3, уточнил 2». */
+    fun autoSummary(list: List<Dela.Suggestion>): String {
+        val closed = list.count { it.kind == "close" }
+        return listOfNotNull(
+            "закрыл $closed".takeIf { closed > 0 },
+            "уточнил ${list.size - closed}".takeIf { list.size > closed },
+        ).joinToString(", ")
+    }
+
+    /**
+     * Значок источника (`ORIGIN` веба): форма — откуда, цвет — без радуги
+     * (поправка задания 10): наговорка, встреча, Telegram, Claude — кремовым
+     * `plan`, руками и перенос — бледным `meta`. [glyph] — имя значка для экрана.
+     */
+    data class Mark(val glyph: String, val plan: Boolean, val word: String)
+
+    fun mark(source: String): Mark = when (source) {
+        "voice", "dictation" -> Mark("mic", true, "наговорка")
+        "meeting" -> Mark("meet", true, "встреча")
+        "telegram", "userbot" -> Mark("send", true, "Telegram")
+        "bot" -> Mark("send", true, "ответ в Telegram")
+        "mcp" -> Mark("chat", true, "Claude")
+        "web" -> Mark("pen", false, "в вебе")
+        "import" -> Mark("list", false, "перенос")
+        else -> Mark("pen", false, "руками")
+    }
+
+    /**
+     * Откуда дело и когда — по долгому нажатию на значок «Поставил»: «встреча:
+     * Альфа: тизер · сегодня 12:52». Номера нет нигде (поправка задания 10).
+     * [batchTitle] — пачка предложения, из которого вышло дело.
+     */
+    fun markWords(t: Dela.Task, batchTitle: String, s: Dela.Snapshot, today: String, zone: ZoneId): String {
+        val other = t.createdBy.isNotBlank() && t.createdBy != t.ownerId
+        val who = if (other) "поставил(а) " + (s.people.values.firstOrNull { it.userId == t.createdBy }?.name ?: s.users[t.createdBy]?.name ?: t.createdBy) else null
+        val m = mark(t.source)
+        return listOfNotNull(who ?: (m.word + if (batchTitle.isNotBlank()) ": $batchTitle" else ""), whenWords(t.createdAt, today, zone).takeIf { it.isNotBlank() })
+            .joinToString(" · ")
+    }
+
+    /** Предложение «завести», из которого вышло дело (`sugByTask` веба): по `result_task_id`. */
+    fun sugByTask(s: Dela.Snapshot): Map<String, Dela.Suggestion> =
+        s.suggestions.values.filter { it.kind == "create" && it.resultTaskId.isNotBlank() }.associateBy { it.resultTaskId }
+
+    /**
+     * Откуда дело (`origin` у `GET /api/task`, 08.10.2026): наговорка дословно
+     * ([kind] dictation — [text]) или встреча и Telegram ([kind] suggestion —
+     * пачка, цитата, ссылка на встречу только `https://`, [auto] — поставлено само).
+     */
+    data class Origin(
+        val kind: String,
+        val at: String,
+        val text: String = "",
+        val source: String = "",
+        val batchTitle: String = "",
+        val quote: String = "",
+        val url: String = "",
+        val auto: Boolean = false,
+    ) {
+        val dictation: Boolean get() = kind == "dictation"
+    }
+
+    /** null — старый сервер, дело руками или ответ без `origin`. */
+    fun origin(o: JSONObject?): Origin? {
+        if (o == null) return null
+        val kind = o.str("kind").ifBlank { return null }
+        return Origin(
+            kind = kind,
+            at = o.str("at"),
+            text = o.str("text").trim(),
+            source = o.str("source"),
+            batchTitle = o.str("batch_title"),
+            quote = o.str("quote").trim(),
+            url = o.str("url").takeIf { it.startsWith("https://") }.orEmpty(),
+            auto = !o.isNull("auto") && o.optBoolean("auto", false),
+        )
+    }
+
+    /** Строка плашки «откуда»: «Наговорка · сегодня 12:52» или «Альфа: тизер · 08.10 · поставлено само». */
+    fun originTop(o: Origin, today: String, zone: ZoneId): String =
+        if (o.dictation) listOf("Наговорка", whenWords(o.at, today, zone)).filter { it.isNotBlank() }.joinToString(" · ")
+        else listOfNotNull(o.batchTitle.ifBlank { mark(o.source).word }, "поставлено само".takeIf { o.auto }).joinToString(" · ")
 
     // ------------------------------------------------------------ группы
 
