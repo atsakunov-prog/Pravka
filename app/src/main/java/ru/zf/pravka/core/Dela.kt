@@ -130,6 +130,13 @@ object Dela {
         val rev: Int = 0,
         val seq: Long = 0,
         val local: Boolean = false,
+        // «Что за сделка» (06.10.2026, docs/dela-phone-4.md): кто привёл, вероятность, сроки.
+        val sourcePersonId: String = "",
+        /** Вероятность выиграть, %; null — по стадии (сервер считает сам). */
+        val probability: Int? = null,
+        /** Когда ждём решения клиента или подписи. */
+        val expectedOn: String = "",
+        val deadline: String = "",
     ) {
         val closed: Boolean get() = stage == "archive"
     }
@@ -183,9 +190,11 @@ object Dela {
         val traits: String = "",
         val source: String = "",
         val note: String = "",
+        /** Дубль, слитый в другую карточку (`person.merge`, 06.10.2026): строка жива, но человека здесь нет. */
+        val mergedInto: String = "",
     ) {
         val label: String get() = short.ifBlank { name }
-        val live: Boolean get() = archivedAt.isBlank()
+        val live: Boolean get() = archivedAt.isBlank() && mergedInto.isBlank()
     }
 
     data class Org(
@@ -406,7 +415,8 @@ object Dela {
             outcome = o.str("outcome"), lostReason = o.str("lost_reason"), closedOn = o.str("closed_on"),
             dealType = o.str("deal_type"), leadPersonId = o.str("lead_person_id"), teamIds = o.strings("team_ids"),
             personIds = o.strings("person_ids"), feeKop = o.longOrNull("fee_kop"), rev = o.int("rev"), seq = o.long("seq"),
-            local = o.bool("_local"),
+            local = o.bool("_local"), sourcePersonId = o.str("source_person_id"), probability = o.intOrNull("probability"),
+            expectedOn = o.str("expected_on"), deadline = o.str("deadline"),
         )
     }
 
@@ -414,6 +424,8 @@ object Dela {
         .put("stage", nul(d.stage)).put("outcome", nul(d.outcome)).put("lost_reason", nul(d.lostReason))
         .put("closed_on", nul(d.closedOn)).put("deal_type", nul(d.dealType)).put("lead_person_id", nul(d.leadPersonId))
         .put("team_ids", arr(d.teamIds)).put("person_ids", arr(d.personIds)).put("fee_kop", nulLong(d.feeKop))
+        .put("source_person_id", nul(d.sourcePersonId)).put("probability", d.probability ?: JSONObject.NULL)
+        .put("expected_on", nul(d.expectedOn)).put("deadline", nul(d.deadline))
         .put("rev", d.rev).put("seq", d.seq).apply { if (d.local) put("_local", true) }
 
     fun payment(o: JSONObject): Payment? {
@@ -440,6 +452,7 @@ object Dela {
             birthDay = o.int("birth_day"), birthMonth = o.int("birth_month"), userId = o.str("user_id"), local = o.bool("_local"),
             emails = o.strings("emails"), telegram = o.str("telegram_username"), birthYear = o.int("birth_year"),
             seeks = o.str("seeks"), offers = o.str("offers"), traits = o.str("traits"), source = o.str("source"), note = o.str("note"),
+            mergedInto = o.str("merged_into"),
         )
     }
 
@@ -452,6 +465,7 @@ object Dela {
         .put("user_id", nul(p.userId)).put("emails", arr(p.emails)).put("telegram_username", nul(p.telegram))
         .put("birth_year", if (p.birthYear > 0) p.birthYear else JSONObject.NULL).put("seeks", nul(p.seeks))
         .put("offers", nul(p.offers)).put("traits", nul(p.traits)).put("source", nul(p.source)).put("note", nul(p.note))
+        .put("merged_into", nul(p.mergedInto))
         .apply { if (p.local) put("_local", true) }
 
     fun org(o: JSONObject): Org? {
@@ -644,6 +658,8 @@ object Dela {
         val deals = LinkedHashMap(s.deals)
         val payments = LinkedHashMap(s.payments)
         val people = LinkedHashMap(s.people)
+        val orgs = LinkedHashMap(s.orgs)
+        val projects = LinkedHashMap(s.projects)
         fun find(ref: String): Task? {
             tasks[ref]?.let { return it }
             val n = ref.trim().removePrefix("#").toIntOrNull() ?: return null
@@ -708,16 +724,54 @@ object Dela {
                 "person.set" -> {
                     val p = people[op.str("id")] ?: continue
                     val set = op.optJSONObject("set") ?: continue
-                    people[p.id] = p.copy(
-                        cadence = if (set.has("cadence")) set.str("cadence") else p.cadence,
-                        hub = if (set.has("hub")) set.bool("hub") else p.hub,
-                        local = true,
+                    people[p.id] = applyPerson(p, set)
+                }
+                // Человек, заведённый с телефона («+ человек» у клиента и сделки), — виден до ответа: id даёт телефон.
+                "person.create" -> {
+                    val d = op.optJSONObject("data") ?: continue
+                    val id = d.str("id").takeIf { it.isNotBlank() } ?: continue
+                    if (people.containsKey(id)) continue
+                    people[id] = applyPerson(Person(id = id, name = d.str("name")), d)
+                }
+                "org.create" -> {
+                    val d = op.optJSONObject("data") ?: continue
+                    val id = d.str("id").takeIf { it.isNotBlank() } ?: continue
+                    if (!orgs.containsKey(id)) orgs[id] = Org(id, d.str("name"), d.strings("aliases"))
+                }
+                // У старого клиента без организации её заводит телефон — проект узнаёт её сразу.
+                "project.set" -> {
+                    val p = projects[op.str("id")] ?: continue
+                    val set = op.optJSONObject("set") ?: continue
+                    projects[p.id] = p.copy(
+                        orgId = if (set.has("org_id")) set.str("org_id") else p.orgId,
+                        name = if (set.has("name")) set.str("name").ifBlank { p.name } else p.name,
+                        archivedAt = if (set.has("archived_at")) set.str("archived_at") else p.archivedAt,
                     )
                 }
             }
         }
-        return derive(s.copy(tasks = tasks, comments = comments, suggestions = suggestions, deals = deals, payments = payments, people = people))
+        return derive(
+            s.copy(
+                tasks = tasks, comments = comments, suggestions = suggestions, deals = deals, payments = payments, people = people,
+                orgs = orgs, projects = projects,
+            )
+        )
     }
+
+    /**
+     * Правка человека поверх строки — те поля, что меняет телефон: откуда он,
+     * должность, теплота, хаб, имя, архив. Остальное — как было.
+     */
+    fun applyPerson(p: Person, set: JSONObject): Person = p.copy(
+        name = if (set.has("name")) set.str("name").ifBlank { p.name } else p.name,
+        short = if (set.has("short")) set.str("short") else p.short,
+        orgId = if (set.has("org_id")) set.str("org_id") else p.orgId,
+        role = if (set.has("role")) set.str("role") else p.role,
+        cadence = if (set.has("cadence")) set.str("cadence") else p.cadence,
+        hub = if (set.has("hub")) set.bool("hub") else p.hub,
+        archivedAt = if (set.has("archived_at")) set.str("archived_at") else p.archivedAt,
+        local = true,
+    )
 
     /**
      * Правка сделки поверх строки — как у триггера сервера: итог (`outcome`)
@@ -726,6 +780,10 @@ object Dela {
      */
     fun applyDeal(d: Deal, set: JSONObject, today: String): Deal {
         var out = d
+        // Люди сделки и команда — плашками на её странице (06.10.2026): крестик и «+ человек» видны сразу.
+        if (set.has("person_ids")) out = out.copy(personIds = set.strings("person_ids"))
+        if (set.has("team_ids")) out = out.copy(teamIds = set.strings("team_ids"))
+        if (set.has("name")) out = out.copy(name = set.str("name").ifBlank { out.name })
         if (set.has("stage")) out = out.copy(stage = set.str("stage"))
         if (set.has("outcome")) out = out.copy(outcome = set.str("outcome"))
         if (set.has("lost_reason")) out = out.copy(lostReason = set.str("lost_reason"))
@@ -966,6 +1024,9 @@ object Dela {
             "deal.set" -> "сделка «${s.deals[op.str("id")]?.name?.take(60) ?: "?"}»"
             "payment.set" -> "оплата по сделке «${s.payments[op.str("id")]?.let { s.deals[it.dealId]?.name }?.take(60) ?: "?"}»"
             "person.set" -> "человек «${s.people[op.str("id")]?.label ?: "?"}»"
+            "person.create" -> "новый человек «${op.optJSONObject("data")?.str("name").orEmpty().take(60)}»"
+            "org.create" -> "организация «${op.optJSONObject("data")?.str("name").orEmpty().take(60)}»"
+            "project.set" -> "проект «${s.projects[op.str("id")]?.name?.take(60) ?: "?"}»"
             else -> op.str("op")
         }
     }

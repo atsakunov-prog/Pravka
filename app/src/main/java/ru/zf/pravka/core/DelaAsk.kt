@@ -39,14 +39,36 @@ object DelaAsk {
         focus: String = "",
         projectId: String = "",
         personId: String = "",
+        dealId: String = "",
+        card: String = "",
     ): JSONObject {
         val ids = taskIds.filter { Dela.isUuid(it) }.distinct().take(MAX_TASKS)
         val o = JSONObject().put("title", title.take(200)).put("task_ids", JSONArray().apply { ids.forEach { put(it) } })
         if (focus.isNotBlank() && Dela.isUuid(focus)) o.put("focus", focus)
         if (projectId.isNotBlank() && Dela.isUuid(projectId)) o.put("project_id", projectId)
         if (personId.isNotBlank() && Dela.isUuid(personId)) o.put("person_id", personId)
+        if (dealId.isNotBlank() && Dela.isUuid(dealId)) o.put("deal_id", dealId)
+        if (card in CARDS) o.put("card", card)
         return o
     }
+
+    /** Карточки, которые Claude видит целиком (`scope.card` сервера): клиент, сделка, человек. */
+    val CARDS = setOf("client", "deal", "person")
+
+    /**
+     * Команда из карточки (06.10.2026, docs/dela-phone-4.md, `pageScope` веба):
+     * сервер сам берёт Opus 5.5, даёт ему карточку целиком — сделки, людей,
+     * хронологию — и правит не только дела, но и их (`crm[]` ответа). Новые дела
+     * со страницы сделки ложатся в её проект и в неё саму.
+     */
+    fun clientScope(title: String, taskIds: List<String>, projectId: String): JSONObject =
+        scope(title, taskIds, projectId = projectId, card = "client")
+
+    fun dealScope(title: String, taskIds: List<String>, dealId: String, projectId: String): JSONObject =
+        scope(title, taskIds, projectId = projectId, dealId = dealId, card = "deal")
+
+    fun personScope(title: String, taskIds: List<String>, personId: String): JSONObject =
+        scope(title, taskIds, personId = personId, card = "person")
 
     /** Микрофон у дела: команда про одно это дело. */
     fun taskScope(taskId: String): JSONObject = scope("Одно дело", listOf(taskId), focus = taskId)
