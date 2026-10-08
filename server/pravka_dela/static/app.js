@@ -337,10 +337,7 @@ function render() {
   const q0 = ae && ['quick', 'side-search', 'main-search'].includes(ae.id) ? ae : null;
   const focused = q0 ? { id: q0.id, value: q0.value, a: q0.selectionStart, b: q0.selectionEnd } : null;
   const shell = el('div', { class: 'shell' + (S.cardId || S.draft ? ' with-card' : '') + (S.sideOpen ? ' side-open' : '') + (S.sel.size ? ' selecting' : '') });
-  // Строку Claude собирает страница (у неё свои подсказки и куда класть новое), а стоит она одна на всё
-  // (владелец 09.10.2026): на компьютере — слева под видами, на телефоне — внизу, под пальцем.
-  const { main, say } = listColumn(r);
-  shell.append(renderSide(r, narrow() ? null : say), main);
+  shell.append(renderSide(r), listColumn(r));
   if (S.cardId || S.draft) shell.append(renderCard());
   const scroll = S.toTop ? 0 : document.querySelector('main.list > .scroll')?.scrollTop || 0; // новая страница — с начала
   S.toTop = false;
@@ -368,22 +365,18 @@ function render() {
   renderBulk();
 }
 
-/** Колонка списка как экран режима в Правке 4.0: шапка стоит, под ней прокручивается содержимое. Страницы
- *  кладут строку «Скажи, что сделать» первой в тело — здесь её вынимают: на телефоне она уезжает вниз, под
- *  большой палец (DESIGN §1), на компьютере — на полку слева, под виды (render). */
+/** Колонка списка как экран режима в Правке 4.0: шапка стоит, между ней и строкой «сказать» прокручивается
+ *  содержимое. Страницы кладут строку «Скажи, что сделать» первой в тело — здесь она уезжает вниз, под большой
+ *  палец (DESIGN §1). Строка одна на всё (владелец 09.10.2026); полдня она стояла на полке слева под видами —
+ *  «сбоку выглядит не очень, там место поиску» — и вернулась вниз, на компьютере тоже. */
 function listColumn(r) {
   const parts = [renderMain(r)].flat(Infinity).filter(Boolean);
   const top = parts[0]?.classList?.contains('list-head') ? parts.shift() : null;
   const scroll = el('div', { class: 'scroll' }, parts);
   plate(scroll);
-  let say = scroll.querySelector('.quick.say');
-  if (!say) say = quickAdd({});
-  say.remove();
-  const phone = narrow();
-  return { main: el('main', { class: 'list' }, top, scroll, phone ? el('div', { class: 'dock' }, say) : null), say };
+  const say = scroll.querySelector('.quick.say') || quickAdd({});
+  return el('main', { class: 'list' }, top, scroll, el('div', { class: 'dock' }, say));
 }
-// Компьютер ↔ телефон: строка Claude переезжает между полкой и низом экрана.
-window.matchMedia('(max-width: 900px)').addEventListener('change', () => { S.sideOpen = false; render(); });
 
 /** Раздел = надстрочник над стеклянной плашкой: всё, что в группе под заголовком, — в одну плашку со
  *  строками через волосяную линию. Плитки и доска — сами стекло, их не оборачиваем. */
@@ -449,15 +442,15 @@ function freshBy() {
   return at;
 }
 
-function renderSide(r, say) {
+function renderSide(r) {
   const search = el('input', { id: 'side-search', class: 'side-search', type: 'search', placeholder: 'Поиск  /', value: r.kind === 'search' ? r.q : '' });
   search.addEventListener('input', () => liveSearch(search.value));
   search.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { S.sideOpen = false; liveSearch(search.value); } // на телефоне — убрать шторку, результаты под ней
     if (e.key === 'Escape') { search.value = ''; search.blur(); }
   });
-  // Наверху полки — виды овалами и под ними одна строка Claude на всё; ниже прокручиваются разделы:
-  // CRM, избранное, клиенты, проекты, люди, архив.
+  // Наверху полки стоят виды овалами и под ними поиск; ниже прокручиваются разделы: CRM, избранное, клиенты,
+  // проекты, люди, архив.
 
   // Проекты: избранные сверху, дальше по видам; число открытых и точка просрочки. Клиенты — по свежести дел.
   const openBy = new Map(), lateBy = new Set();
@@ -519,15 +512,15 @@ function renderSide(r, say) {
 
   const me = person(S.me.person_id) || { id: S.me.user, name: S.me.name };
   // Полка — овал; прокручивается только её середина, чтобы полоса прокрутки не лезла на скругления (09.10.2026).
-  // Путь (стоянка, серия) — внизу полки: его место наверху заняла строка Claude.
+  // Путь (стоянка, серия) — внизу полки (владелец: «вместо этой Греции»).
   return el('aside', { class: 'side' },
     el('div', { class: 'side-top' },
       el('div', { class: 'brand' }, coin('tick'), el('b', {}, 'Дела'),
         el('span', { class: 'who' }, S.me.name), avatar(me)),
       el('nav', { class: 'side-views' }, viewPills(r)),
-      say || null),
+      search),
     el('div', { class: 'side-scroll' },
-      search, groups,
+      groups,
       gameCard(),
       el('div', { class: 'side-foot' },
         el('button', { class: 'settings-btn' + (r.kind === 'settings' ? ' on' : ''), onclick: () => go('#/settings') }, icon('gear', 15), 'Настройки'),
@@ -1987,7 +1980,7 @@ function renderSettings() {
   return [head('Настройки', ['Claude в Делах, голос и траты']),
     el('div', { class: 'body settings' },
       el('div', { class: 'group' }, el('h2', {}, tint(icon('chat', 14), 'var(--claude)'), 'Claude правит дела словами'),
-        el('div', { class: 'hint-line' }, 'Одна строка на всё — на компьютере слева под видами, на телефоне внизу. Claude видит, что на экране и в окне, что выбрано галочками и открыто в карточке, — и все остальные открытые дела коротко. Модель ниже — для списков; в карточке клиента, сделки и человека и для новых дел из надиктовки всегда Opus 5.5.'),
+        el('div', { class: 'hint-line' }, 'Одна строка на всё — внизу каждой страницы. Claude видит, что на экране и в окне, что выбрано галочками и открыто в карточке, — и все остальные открытые дела коротко. Модель ниже — для списков; в карточке клиента, сделки и человека и для новых дел из надиктовки всегда Opus 5.5.'),
         v.claude ? null : el('div', { class: 'cr-err' }, 'Claude на сервере не настроен — нет ключа.'),
         el('div', { class: 'set-label' }, 'Модель'), choices('claude_model', MODEL_INFO, s.claude_model),
         el('div', { class: 'set-label' }, 'Глубина'), choices('claude_effort', EFFORT_INFO, s.claude_effort)),

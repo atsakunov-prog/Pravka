@@ -163,7 +163,7 @@ input[type=date], input[type=datetime-local], input[type=number] { color-scheme:
 /* ── Каркас: полка · список · карточка ── */
 .shell { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr); height: 100vh; height: 100dvh; }
 .shell.with-card { grid-template-columns: var(--side-w) minmax(0, 1fr) var(--card-w); }
-/* Полка — овал: стоят бренд, виды и строка Claude; прокручивается только середина, и её полоса не лезет на
+/* Полка — овал: стоят бренд, виды и поиск; прокручивается только середина, и её полоса не лезет на
    скругления (владелец 09.10.2026: «прокрутка залезает на границы овала»). */
 aside.side {
   margin: 12px 0 12px 12px; border-radius: 24px; overflow: hidden; display: flex; flex-direction: column; min-height: 0;
@@ -176,17 +176,6 @@ aside.side {
 /* Виды овалами — в несколько строк, без прокрутки вбок. */
 .side-views { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 10px; }
 .side-views .pill-tab { height: 32px; padding: 0 11px; font-size: 13px; border-radius: 16px; }
-/* Строка Claude на полке: подпись — о чём она, поле в две строки, подсказки открываются вниз. */
-.side .say { margin: 2px 0 8px; }
-.side .say .say-h { display: flex; margin: 0 6px 6px; }
-.side .say .quick-box { min-height: 0; border-radius: 22px; padding: 4px; align-items: flex-end; }
-.side .say .quick-box textarea { font-size: 14.5px; padding: 8px 2px 8px 4px; height: 58px; min-height: 58px; line-height: 20px; }
-.side .say .quick-box textarea::placeholder { white-space: normal; }
-.side .say .q-btn { width: 34px; height: 38px; }
-.side .say .q-btn svg { width: 19px; height: 19px; }
-.side .say .q-btn.send-btn { width: 40px; height: 40px; border-radius: 20px; }
-.side .say .claude-status, .side .say .help, .side .say .preview { margin-left: 6px; margin-right: 6px; }
-.side .ac { top: calc(100% + 6px); bottom: auto; max-height: 50vh; }
 /* Список: шапка стоит, между ней и строкой «сказать» прокручивается содержимое; под шапкой оно тает (§10). */
 main.list { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; }
 main.list > .scroll {
@@ -200,7 +189,7 @@ section.card-pane { overflow-y: auto; overscroll-behavior: contain; border-left:
 .brand b { font: 600 22px/1.1 var(--font-display); color: var(--strong); flex: 1; letter-spacing: -.005em; }
 .brand .who { font-size: 12px; color: var(--meta); }
 .side-search {
-  width: 100%; height: 40px; border-radius: 20px; padding: 0 14px 0 38px; margin: 0 0 6px;
+  width: 100%; height: 40px; border-radius: 20px; padding: 0 14px 0 38px; margin: 0 0 4px;
   background: rgba(var(--i), .6) no-repeat 13px center / 16px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239FC2DE' stroke-width='1.8' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='6.5'/%3E%3Cpath d='M16 16l4.5 4.5'/%3E%3C/svg%3E");
   border: 1px solid rgba(var(--t), .18); color: var(--text);
@@ -1000,10 +989,6 @@ textarea.about::placeholder { color: var(--ph); opacity: .75; }
 .row-projs .pchip.proj { padding: 2px 10px; font-size: 12.5px; }
 .pchips.projs { margin-top: 12px; }
 
-/* Строка Claude на полке: подпись в две строки, если длинная. */
-.side .say .say-h { flex-wrap: wrap; row-gap: 4px; }
-.side .say .say-h > span:first-of-type { white-space: normal; overflow: visible; }
-.side .say .say-model { margin-left: 0; }
 
 /* Доска воронки: проект тащат из колонки в колонку. */
 .board .dtile[draggable=true] { cursor: grab; }
@@ -1077,12 +1062,6 @@ textarea.about::placeholder { color: var(--ph); opacity: .75; }
 .login h1 { font: 600 34px/1.2 var(--font-display); color: var(--strong); margin: 16px 0 8px; }
 .login p { color: var(--label); }
 .scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); z-index: 24; }
-
-/* ── Компьютер: строка Claude на полке — итог рядом с ней, тост и выбор — у низа экрана ── */
-@media (min-width: 901px) {
-  .claude-result { left: calc(var(--side-w) + 18px); right: auto; top: 14px; bottom: auto; max-height: calc(100vh - 28px); }
-  .toast, .bulk { bottom: calc(22px + env(safe-area-inset-bottom)); }
-}
 
 /* ── Компьютер поуже: карточка забирает место у полки ── */
 @media (min-width: 901px) and (max-width: 1320px) {
