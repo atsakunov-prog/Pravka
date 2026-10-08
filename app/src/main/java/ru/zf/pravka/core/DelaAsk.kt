@@ -24,6 +24,9 @@ object DelaAsk {
     /** Потолок дел на экране у сервера (`ask.MAX_TASKS`): лишние он молча отрежет. */
     const val MAX_TASKS = 300
 
+    /** Потолок сделок на экране (`deal_ids`, как у веба). */
+    const val MAX_DEALS = 200
+
     /** Потолок предложений на экране (`suggestion_ids`, как у веба). */
     const val MAX_SUGGESTIONS = 150
 
@@ -68,9 +71,23 @@ object DelaAsk {
      * поля нет), [selectedIds] — выбранные, [open] — дело, открытое в карточке. Кто
      * такие «это» и «эти», решает сервер; старый сервер этих полей молча не заметит.
      */
-    fun see(o: JSONObject, visibleIds: List<String>?, selectedIds: List<String> = emptyList(), open: String = ""): JSONObject {
-        fun arr(ids: List<String>) = JSONArray().apply { ids.filter { Dela.isUuid(it) }.distinct().take(MAX_TASKS).forEach { put(it) } }
+    fun see(
+        o: JSONObject,
+        visibleIds: List<String>?,
+        selectedIds: List<String> = emptyList(),
+        open: String = "",
+        dealIds: List<String> = emptyList(),
+        visibleDealIds: List<String> = emptyList(),
+    ): JSONObject {
+        fun arr(ids: List<String>, max: Int = MAX_TASKS) = JSONArray().apply { ids.filter { Dela.isUuid(it) }.distinct().take(max).forEach { put(it) } }
         if (visibleIds != null) o.put("visible_ids", arr(visibleIds))
+        // Сделки экрана (08.10.2026, docs/dela-phone-8.md): Воронка, клиенты, человек — «убери Альфу —
+        // не работаем» Claude правит прямо отсюда. Нет сделок на экране — полей нет.
+        val deals = dealIds.filter { Dela.isUuid(it) }
+        if (deals.isNotEmpty()) {
+            o.put("deal_ids", arr(deals, MAX_DEALS))
+            o.put("visible_deal_ids", arr(visibleDealIds.filter { it in deals }, MAX_DEALS))
+        }
         if (selectedIds.isNotEmpty()) o.put("selected_ids", arr(selectedIds))
         if (open.isNotBlank() && Dela.isUuid(open)) o.put("open", open)
         return o

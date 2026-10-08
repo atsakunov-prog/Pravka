@@ -506,6 +506,8 @@ fun DelaTab(
             )
         }
         null -> screen?.let { AskScreen(it.title, DelaAsk.scope(it.title, it.ids)) }
+            // Воронка, клиенты, люди, связи: дел нет, зато сделки экрана (`deal_ids`) — Claude правит их отсюда.
+            ?: CRM_NAV.firstOrNull { crmOn && it.first == nav && needle.isEmpty() }?.let { (_, t) -> AskScreen(t, DelaAsk.scope(t, emptyList())) }
             // П1, П2… — те же, что в «Подскажи» (`scope.suggestion_ids`): «П1 поставь, срок пятница».
             ?: newParts?.let { AskScreen("Новое", DelaAsk.scope("Новое", it.ids, suggestionIds = it.asks.map { sg -> sg.id })) }
     }
@@ -864,7 +866,7 @@ fun DelaTab(
     fun sayScope(openId: String): org.json.JSONObject? {
         val base = askScreen?.scope ?: return null
         val o = org.json.JSONObject(base.toString())
-        return DelaAsk.see(o, seenRows.visible("t:"), open = openId)
+        return DelaAsk.see(o, seenRows.visible("t:"), open = openId, dealIds = seenRows.all("d:"), visibleDealIds = seenRows.visible("d:"))
     }
     fun saySend(text: String, openId: String) {
         val t = text.trim()
@@ -909,6 +911,7 @@ fun DelaTab(
                 opened != null -> "с делом «${opened.title.take(60)}»"
                 askScreen?.card == true -> "с карточкой"
                 view == DelaViews.View.NEW && page == null -> "с новым"
+                page == null && view == null -> "со сделками на экране"
                 else -> "с делами на экране"
             },
             card = askScreen?.card == true && opened == null,

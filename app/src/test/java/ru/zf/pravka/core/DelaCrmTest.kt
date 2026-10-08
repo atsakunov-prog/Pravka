@@ -318,6 +318,14 @@ class DelaCrmTest {
         assertEquals(id, one.getJSONArray("selected_ids").getString(0))
         assertFalse(one.has("focus"))
         assertTrue(one.keys().asSequence().toSet().minus(keys).isEmpty())
+        // Сделки экрана (задание 8): все по порядку и те, что в окне; нет сделок — полей нет.
+        val d1 = Dela.newId()
+        val d2 = Dela.newId()
+        val pipe = DelaAsk.see(DelaAsk.scope("Воронка", emptyList()), visibleIds = emptyList(), dealIds = listOf(d1, d2, "x"), visibleDealIds = listOf(d2, Dela.newId()))
+        assertEquals(listOf(d1, d2), (0 until pipe.getJSONArray("deal_ids").length()).map { pipe.getJSONArray("deal_ids").getString(it) })
+        assertEquals(listOf(d2), (0 until pipe.getJSONArray("visible_deal_ids").length()).map { pipe.getJSONArray("visible_deal_ids").getString(it) })
+        assertTrue(pipe.keys().asSequence().toSet().minus(keys).isEmpty())
+        assertFalse(one.has("deal_ids"))
         // Неизвестно, что в окне, — поля нет совсем (сервер возьмёт весь экран), а не пустой список.
         assertFalse(DelaAsk.scope("Сейчас", listOf(id)).has("visible_ids"))
 

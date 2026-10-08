@@ -195,6 +195,10 @@ class ScreenShots {
             if (tap(c, "Показать", exact = true)) shot(c, "crm-8-sdelano-samo")
         }
         close(c)
+        // Задание 8: на Воронке строка Claude видит сделки экрана.
+        c = launch(MainActivity.TAB_TODOIST)
+        if (tap(c, "Воронка", exact = true)) shot(c, "crm-10-voronka")
+        close(c)
         // Задание 6: «Без проекта — куда их?» — в «Неделе».
         c = launch(MainActivity.TAB_TODOIST)
         if (tap(c, "Неделя")) shot(c, "crm-9-nedelya")

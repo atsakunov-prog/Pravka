@@ -424,6 +424,20 @@ internal object Seed {
         app.settings.setDelaBackend(ru.zf.pravka.data.Settings.DELA_BACKEND_SERVER)
         app.delaStore.setMe("sasha")
         check(app.delaStore.applySync(delaResponse(), System.currentTimeMillis() - 4 * MIN).isEmpty())
+        // Воронка (задание 8): ответ вида — те же выдуманные сделки, что в синке.
+        val sync = delaResponse()
+        val deals = sync.getJSONArray("deals")
+        val names = mapOf("p-beta" to "Бета Групп", "p-orion" to "Орион Логистик")
+        for (i in 0 until deals.length()) {
+            val d = deals.getJSONObject(i)
+            d.put("project_name", names[d.getString("project_id")]).put("open_tasks", 1).put("quiet_days", 3).put("stale", false)
+        }
+        app.delaStore.putView(
+            ru.zf.pravka.core.DelaCrm.PIPELINE,
+            JSONObject().put("deals", deals).put("stages", JSONArray()).put("money", false).put("owner", true)
+                .put("totals", JSONObject().put("live", deals.length()).put("stale", 0)),
+            System.currentTimeMillis() - 4 * MIN,
+        )
         // Синк в сеть не ходит: его замок уже взят — строка «обновлено 4 мин назад» остаётся.
         val mutex = ru.zf.pravka.data.DelaSync::class.java.getDeclaredField("mutex").apply { isAccessible = true }
         (mutex.get(app.delaSync) as kotlinx.coroutines.sync.Mutex).tryLock()

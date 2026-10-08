@@ -380,7 +380,8 @@ internal fun LazyListScope.crmPipeline(ctx: DelaCrmContext) {
 @Composable
 private fun DealRow(ctx: DelaCrmContext, d: DelaCrm.Deal, money: Boolean) {
     val c = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { ctx.push(DelaPage.Deal(d.id)) }.padding(vertical = 6.dp)) {
+    // Сделка на экране (08.10.2026, docs/dela-phone-8.md): Claude видит её в `deal_ids` и `visible_deal_ids`.
+    Column(Modifier.fillMaxWidth().seen("d:" + d.id).clip(RoundedCornerShape(10.dp)).clickable { ctx.push(DelaPage.Deal(d.id)) }.padding(vertical = 6.dp)) {
         Text(d.name + if (d.local) " ⏳" else "", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
         val meta = listOfNotNull(
             (d.projectName.ifBlank { ctx.snap.projects[d.projectId]?.name.orEmpty() } + if (d.dealType.isNotBlank()) " · ${d.dealType}" else "").takeIf { it.isNotBlank() },
@@ -477,7 +478,7 @@ internal fun StageDot(stage: String) {
 private fun ClientDealLine(ctx: DelaCrmContext, d: Dela.Deal, client: Dela.Project?) {
     val c = MaterialTheme.colorScheme
     val next = ctx.snap.tasks.values.filter { it.dealId == d.id && it.open }.sortedWith(Dela.ORDER).firstOrNull()
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { ctx.push(DelaPage.Deal(d.id)) }.padding(start = 30.dp, top = 4.dp, bottom = 4.dp)) {
+    Column(Modifier.fillMaxWidth().seen("d:" + d.id).clip(RoundedCornerShape(10.dp)).clickable { ctx.push(DelaPage.Deal(d.id)) }.padding(start = 30.dp, top = 4.dp, bottom = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             StageDot(d.stage)
             Spacer(Modifier.width(6.dp))

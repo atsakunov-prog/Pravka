@@ -129,6 +129,10 @@ internal class SeenRows {
     /** Ключи с приставкой [prefix] («t:» — дела, «d:» — сделки), которые в окне, — без приставки. */
     fun visible(prefix: String): List<String> =
         DelaAsk.visible(rows.filterKeys { it.startsWith(prefix) }, top, bottom).map { it.removePrefix(prefix) }
+
+    /** Все отмеченные с приставкой — сверху вниз (и те, что за краем окна, но ещё нарисованы). */
+    fun all(prefix: String): List<String> =
+        rows.entries.filter { it.key.startsWith(prefix) }.sortedWith(compareBy({ it.value.top }, { it.value.left })).map { it.key.removePrefix(prefix) }
 }
 
 internal val LocalSeenRows = androidx.compose.runtime.staticCompositionLocalOf<SeenRows?> { null }
@@ -331,7 +335,7 @@ internal fun AskResultSheet(
         }
         // Правки карточки — хронология, люди, сделки (`crm[]`): словами, как их назвал сервер.
         if (r.crm.isNotEmpty()) {
-            PaperHint("В карточке:")
+            PaperHint("Проекты, люди, хронология:")
             for (cr in r.crm) PaperHint(cr.what, c.onSurface)
         }
         if (r.errors.isNotEmpty()) PaperHint("Не вышло: " + r.errors.joinToString("; "), c.error)
