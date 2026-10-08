@@ -65,6 +65,10 @@ def cfg(admin_dsn: str, tmp_path_factory) -> Config:
         logs=tmp / "logs",
         icu_athlete="i12345",
         icu_key="key",
+        # Второй человек архива: его схема строится на каждом прогоне, и виды
+        # хозяина проверяются рядом с ней (test_people.py).
+        people=("marianna",),
+        icu_people=(("marianna", "i777", "key-m"),),
     )
     db.migrate(c)
     yield c

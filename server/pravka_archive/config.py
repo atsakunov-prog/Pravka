@@ -8,11 +8,62 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
 DEFAULT_ENV_FILE = r"D:\PravkaArchive\secrets\server.env"
+
+# Ключ профиля телефона (data/Profile.kt: латиница, цифры, дефис). Он же —
+# person в core и, с дефисом через подчёркивание, имя схемы видов.
+PERSON_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
+# Схемы, которые уже заняты: архив, Дела, системные.
+RESERVED_SCHEMAS = {"life", "core", "public", "crm", "tasks", "information_schema"}
+
+
+@dataclass(frozen=True)
+class Person:
+    """Человек архива (08.10.2026): чей телефон шлёт пачки и где его виды.
+
+    Хозяин архива — PRAVKA_PROFILE: его записи лежат с person = '' и видны в
+    схеме life, как было до второго человека. Остальные — PRAVKA_PEOPLE: у
+    каждого свой person (ключ профиля) и своя схема с теми же видами.
+    """
+
+    profile: str
+    key: str
+    schema: str
+    icu_athlete: str = ""
+    icu_key: str = ""
+
+    @property
+    def owner(self) -> bool:
+        return self.key == ""
+
+    @property
+    def icu_source(self) -> str:
+        """Устройство и строка свежести его сборщика intervals."""
+        return "intervals" if self.owner else f"intervals-{self.key}"
+
+    @property
+    def has_icu(self) -> bool:
+        return bool(self.icu_athlete and self.icu_key)
+
+
+def schema_of(profile: str) -> str:
+    return profile.replace("-", "_")
+
+
+def valid_person(profile: str, owner: str) -> bool:
+    """Годится ли ключ из PRAVKA_PEOPLE: он идёт в SQL именем схемы и строкой."""
+    return bool(PERSON_RE.match(profile)) and schema_of(profile) not in RESERVED_SCHEMAS \
+        and not profile.startswith("pg") and profile != owner
+
+
+def env_suffix(profile: str) -> str:
+    """marianna → MARIANNA: хвост переменных ICU_ATHLETE_ID_<…>, ICU_API_KEY_<…>."""
+    return profile.upper().replace("-", "_")
 
 
 def read_env_file(path: str | os.PathLike[str]) -> dict[str, str]:
@@ -48,6 +99,24 @@ class Config:
     phone_url: str = ""
     # Дела (pravka_dela): адрес базы ролью службы Дел. Пусто — инструментов дел у Claude нет.
     dela_db_url: str = ""
+    # Остальные люди архива (PRAVKA_PEOPLE) и их intervals: (профиль, athlete id, ключ).
+    people: tuple[str, ...] = ()
+    icu_people: tuple[tuple[str, str, str], ...] = ()
+
+    def persons(self) -> list[Person]:
+        """Хозяин первым, за ним остальные — в порядке PRAVKA_PEOPLE."""
+        out = [Person(self.profile, "", "life", self.icu_athlete, self.icu_key)]
+        icu = {p: (a, k) for p, a, k in self.icu_people}
+        for p in self.people:
+            if not valid_person(p, self.profile):
+                continue  # problems() скажет словами; в SQL такое имя не пойдёт
+            a, k = icu.get(p, ("", ""))
+            out.append(Person(p, p, schema_of(p), a, k))
+        return out
+
+    def person_of(self, profile: object) -> Person | None:
+        """Чей телефон: хозяин, один из PRAVKA_PEOPLE или чужой (None)."""
+        return next((p for p in self.persons() if p.profile == profile), None)
 
     @property
     def mcp_url(self) -> str:
@@ -74,6 +143,9 @@ class Config:
             out.append("PRAVKA_INGEST_TOKEN короче 32 знаков: телефону нужен длинный случайный токен")
         if len(self.owner_password) < 12:
             out.append("PRAVKA_OWNER_PASSWORD короче 12 знаков: им закрыт вход Claude ко всей жизни")
+        for p in self.people:
+            if not valid_person(p, self.profile):
+                out.append(f"PRAVKA_PEOPLE: «{p}» не годится — ключ профиля латиницей (marianna), не {self.profile} и не имя служебной схемы")
         return out
 
 
@@ -84,6 +156,9 @@ def load(env_file: str | None = None) -> Config:
 
     def get(name: str, default: str = "") -> str:
         return values.get(name, default).strip()
+
+    people = tuple(dict.fromkeys(p for p in re.split(r"[\s,;]+", get("PRAVKA_PEOPLE").lower()) if p))
+    icu_people = tuple((p, get(f"ICU_ATHLETE_ID_{env_suffix(p)}"), get(f"ICU_API_KEY_{env_suffix(p)}")) for p in people)
 
     listen = get("PRAVKA_LISTEN", "0.0.0.0:8090")
     host, _, port = listen.rpartition(":")
@@ -99,7 +174,8 @@ def load(env_file: str | None = None) -> Config:
         logs=Path(get("PRAVKA_LOGS", r"D:\PravkaArchive\logs")),
         icu_athlete=get("ICU_ATHLETE_ID"),
         icu_key=get("ICU_API_KEY"),
-        # Архив одного человека: телефон другого профиля перетёр бы его сутки.
+        # Хозяин архива: его записи — схема life. Чужой профиль, которого нет в
+        # PRAVKA_PEOPLE, сервер не пускает.
         profile=get("PRAVKA_PROFILE", "sasha"),
         # Кому верить X-Forwarded-For: роутер, который публикует сервис.
         proxies=get("PRAVKA_PROXIES", "127.0.0.1"),
@@ -108,4 +184,9 @@ def load(env_file: str | None = None) -> Config:
         # Нидерланды ни к чему — ему прямой адрес роутера (CrazeDNS, 8443).
         phone_url=get("PRAVKA_PHONE_URL").rstrip("/"),
         dela_db_url=get("DELA_DB_URL"),
+        # Второй человек (08.10.2026): Марианна шлёт со своего телефона, её
+        # intervals сервер забирает её ключом. PRAVKA_PEOPLE=marianna,
+        # ICU_ATHLETE_ID_MARIANNA, ICU_API_KEY_MARIANNA.
+        people=people,
+        icu_people=icu_people,
     )

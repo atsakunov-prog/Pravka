@@ -28,7 +28,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from . import icu, tools
 from .auth import SCOPE, OwnerAuth
-from .config import Config
+from .config import Config, env_suffix
 from .ingest import ingest_batch
 
 log = logging.getLogger("pravka")
@@ -46,6 +46,11 @@ INSTRUCTIONS = """Архив Правки — вся жизнь Саши (вла
 - Тренировки и форма — из intervals как есть; поле, которого нет колонкой, — raw->>'поле'.
 - Число, которого нет в архиве, не произносится. Свежесть телефона старше часа — скажи, что про сегодня данные могут быть неполными.
 - Как ты читал архив — не тема разговора: Саше нужна его жизнь, а не названия видов."""
+
+PEOPLE_INSTRUCTIONS = """
+Кроме Саши в архиве — {names}: со своего телефона и своих часов (свой intervals). Те же виды своей схемой: {examples}. schema, search и day — с who (ключ профиля или имя: who="{first}"); в sql пиши схему явно ({first_schema}.entries). Без who — всё про Сашу.
+- Деньги семьи — один общий журнал в life.money: owner = '{first}' — операции и надиктовки с того телефона. В схеме {first_schema} денежные виды пусты — общий журнал шлёт телефон Саши.
+- «Как спала Марианна», «что она ела», «её тренировки» — её схема; сравнение «у нас с ней» — обе схемы рядом."""
 
 DELA_INSTRUCTIONS = """
 
@@ -72,9 +77,18 @@ CRM ЗФ — в тех же Делах: клиент = проект, внутр�
 
 def build(cfg: Config) -> tuple[FastMCP, OwnerAuth]:
     auth = OwnerAuth(cfg)
+    others = [p for p in cfg.persons() if not p.owner]
+    people_text = ""
+    if others:
+        people_text = PEOPLE_INSTRUCTIONS.format(
+            names=", ".join(p.profile for p in others),
+            examples=", ".join(f"{p.schema}.entries, {p.schema}.workouts, {p.schema}.wellness" for p in others),
+            first=others[0].profile,
+            first_schema=others[0].schema,
+        )
     mcp = FastMCP(
         "Архив Правки",
-        instructions=INSTRUCTIONS + (DELA_INSTRUCTIONS if cfg.dela_db_url else ""),
+        instructions=INSTRUCTIONS + people_text + (DELA_INSTRUCTIONS if cfg.dela_db_url else ""),
         host=cfg.listen_host,
         port=cfg.listen_port,
         stateless_http=True,
@@ -97,13 +111,13 @@ def build(cfg: Config) -> tuple[FastMCP, OwnerAuth]:
     )
 
     @mcp.tool()
-    async def schema(view: str | None = None) -> str:
-        """Карта архива: виды схемы life с описанием и колонками, и свежесть источников. С именем вида — его колонки с типами и пояснениями. Звать первым."""
-        return await anyio.to_thread.run_sync(tools.schema, cfg, view)
+    async def schema(view: str | None = None, who: str | None = None) -> str:
+        """Карта архива: виды схемы life с описанием и колонками, и свежесть источников. С именем вида — его колонки с типами и пояснениями. Звать первым. who — другой человек архива (marianna): виды его схемы."""
+        return await anyio.to_thread.run_sync(tools.schema, cfg, view, who)
 
     @mcp.tool()
     async def sql(query: str, max_rows: int = 200) -> str:
-        """Один SELECT по схеме life (только чтение, 15 секунд, до 500 строк). Суммы, средние, сравнения периодов — здесь: считает база. Ответ — таблица текстом."""
+        """Один SELECT по схеме life (только чтение, 15 секунд, до 500 строк). Суммы, средние, сравнения периодов — здесь: считает база. Другой человек архива — его схемой явно (marianna.entries). Ответ — таблица текстом."""
         return await anyio.to_thread.run_sync(tools.run_sql, cfg, query, max_rows)
 
     @mcp.tool()
@@ -114,14 +128,15 @@ def build(cfg: Config) -> tuple[FastMCP, OwnerAuth]:
         domain: str | None = None,
         limit: int = 30,
         order: str = "new",
+        who: str | None = None,
     ) -> str:
-        """Поиск по всему, что Саша говорил и писал: надиктовки ленты, еды, силовых и денег, комментарии к делам, каждая диктовка Правки, вопросы тренеру, комментарии к тренировкам и форме. Русские словоформы («Анной» по «Марианна»), если пусто — подстрока, потом похожие слова. Даты — ГГГГ-ММ-ДД; domain — засечка, еда, силовые, деньги, правка, тренер, форма, тренировки; order — new (свежее сверху) или best (точнее сверху)."""
-        return await anyio.to_thread.run_sync(tools.search, cfg, query, date_from, date_to, domain, limit, order)
+        """Поиск по всему, что Саша говорил и писал: надиктовки ленты, еды, силовых и денег, комментарии к делам, каждая диктовка Правки, вопросы тренеру, комментарии к тренировкам и форме. Русские словоформы («Анной» по «Марианна»), если пусто — подстрока, потом похожие слова. Даты — ГГГГ-ММ-ДД; domain — засечка, еда, силовые, деньги, правка, тренер, форма, тренировки; order — new (свежее сверху) или best (точнее сверху); who — другой человек архива (marianna): искать в его сказанном."""
+        return await anyio.to_thread.run_sync(tools.search, cfg, query, date_from, date_to, domain, limit, order, who)
 
     @mcp.tool()
-    async def day(date: str, full: bool = False) -> str:
-        """Сутки целиком одной лентой: лента времени со словами Саши, сделанные и заведённые дела, встречи и звонки с клиентами, еда, тренировки, сон и форма, силовые и зарядка, траты, телефон, сколько диктовал. date — ГГГГ-ММ-ДД. full — тексты целиком, а не первые строки."""
-        return await anyio.to_thread.run_sync(tools.day, cfg, date, full)
+    async def day(date: str, full: bool = False, who: str | None = None) -> str:
+        """Сутки целиком одной лентой: лента времени со словами Саши, сделанные и заведённые дела, встречи и звонки с клиентами, еда, тренировки, сон и форма, силовые и зарядка, траты, телефон, сколько диктовал. date — ГГГГ-ММ-ДД. full — тексты целиком, а не первые строки. who — другой человек архива (marianna): его сутки."""
+        return await anyio.to_thread.run_sync(tools.day, cfg, date, full, who)
 
     if cfg.dela_db_url:
         _dela_tools(mcp, cfg.dela_db_url)
@@ -155,7 +170,8 @@ def build(cfg: Config) -> tuple[FastMCP, OwnerAuth]:
 
         def work():
             with psycopg.connect(cfg.db_url, autocommit=True) as conn:
-                return ingest_batch(conn, batch, cfg.profile)
+                others = [p.profile for p in cfg.persons() if not p.owner]
+                return ingest_batch(conn, batch, cfg.profile, others)
 
         status, payload = await anyio.to_thread.run_sync(work)
         return JSONResponse(payload, status_code=status)
@@ -164,25 +180,31 @@ def build(cfg: Config) -> tuple[FastMCP, OwnerAuth]:
 
 
 async def pull_forever(cfg: Config) -> None:
-    """Сборщик intervals: раз в 10 минут свежее, раз в сутки глубоко, один раз всё."""
-    if not (cfg.icu_athlete and cfg.icu_key):
-        log.info("intervals: ключа нет — сборщик спит (ICU_ATHLETE_ID, ICU_API_KEY)")
-        return
-    puller = icu.Puller(cfg)
+    """Сборщики intervals всех людей архива: раз в 10 минут свежее, раз в сутки глубоко, один раз всё."""
+    pullers = [icu.Puller(cfg, person=p) for p in cfg.persons() if p.has_icu]
+    for p in cfg.persons():
+        if not p.has_icu:
+            suffix = "" if p.owner else f"_{env_suffix(p.profile)}"
+            log.info("%s: ключа нет — сборщик спит (ICU_ATHLETE_ID%s, ICU_API_KEY%s)", p.icu_source, suffix, suffix)
+    # Каждый своим циклом: первая выгрузка всей истории Марианны идёт до часа,
+    # и свежие тренировки хозяина всё это время не должны ждать её.
+    await asyncio.gather(*(_pull_loop(cfg, p) for p in pullers))
+
+
+async def _pull_loop(cfg: Config, puller: icu.Puller) -> None:
     while True:
         try:
             def once():
                 with psycopg.connect(cfg.db_url, autocommit=True) as conn:
-                    row = conn.execute("SELECT note FROM core.sources WHERE source = 'intervals'").fetchone()
+                    row = conn.execute("SELECT note FROM core.sources WHERE source = %s", (puller.device,)).fetchone()
                 mode = icu.due(row[0] if row else None, dt.datetime.now(dt.timezone.utc)) or "recent"
                 return mode, puller.run(mode)
-
             mode, out = await anyio.to_thread.run_sync(once)
             changed = sum(out.values())
             if changed or mode != "recent":
-                log.info("intervals %s: %s", mode, out)
+                log.info("%s %s: %s", puller.device, mode, out)
         except Exception as e:  # сборщик не должен ронять сервис
-            log.warning("intervals: %s: %s", e.__class__.__name__, e)
+            log.warning("%s: %s: %s", puller.device, e.__class__.__name__, e)
         await asyncio.sleep(600)
 
 
@@ -213,11 +235,12 @@ def seed_sources(cfg: Config) -> None:
     нет и не было». Строка-заглушка «phone» уходит с первой пачкой телефона.
     """
     with psycopg.connect(cfg.db_url, autocommit=True) as conn:
-        if cfg.icu_athlete and cfg.icu_key:
-            conn.execute(
-                "INSERT INTO core.sources (source, note) VALUES ('intervals', %s) ON CONFLICT (source) DO NOTHING",
-                (Jsonb({"why": "сборщик только запущен"}),),
-            )
+        for p in cfg.persons():
+            if p.has_icu:
+                conn.execute(
+                    "INSERT INTO core.sources (source, note) VALUES (%s, %s) ON CONFLICT (source) DO NOTHING",
+                    (p.icu_source, Jsonb({"why": "сборщик только запущен"})),
+                )
         phones = conn.execute("SELECT 1 FROM core.sources WHERE source LIKE 'phone:%' LIMIT 1").fetchone()
         if phones:
             conn.execute("DELETE FROM core.sources WHERE source = 'phone'")

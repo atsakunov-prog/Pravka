@@ -9,6 +9,11 @@
 Ответ на каждое событие — квитанция: телефон убирает из очереди всё, что
 получило `acked`, и не повторяет `rejected` (там формат, повтор не поможет),
 а показывает причину словами.
+
+Людей в архиве может быть несколько (08.10.2026): запись — тройка
+(person, kind, key). Хозяин — person '', остальные — ключ профиля из
+PRAVKA_PEOPLE. Сутки Марианны с тем же ключом-датой лежат рядом с сутками
+хозяина, а не поверх.
 """
 
 from __future__ import annotations
@@ -93,9 +98,10 @@ def store_events(
     events: list[dict[str, Any]],
     app: str | None = None,
     schema: int = SCHEMA,
+    person: str = "",
 ) -> Result:
     """Кладёт события в журнал и состояние. Каждое — в своей точке сохранения:
-    одно кривое не роняет пачку."""
+    одно кривое не роняет пачку. person — чьи записи: '' — хозяина архива."""
     res = Result()
     for ev in events:
         why = check_event(ev, device)
@@ -105,22 +111,24 @@ def store_events(
             continue
         try:
             with conn.transaction():
-                _store_one(conn, device, ev, app, schema, res)
+                _store_one(conn, device, ev, app, schema, res, person)
             res.acked.append(eid)
         except psycopg.Error as e:  # pragma: no cover - видно в журнале службы
             res.rejected.append({"eid": eid, "why": f"база: {e.__class__.__name__}: {e}"[:500]})
     return res
 
 
-def _store_one(conn: psycopg.Connection, device: str, ev: dict[str, Any], app: str | None, schema: int, res: Result) -> None:
+def _store_one(
+    conn: psycopg.Connection, device: str, ev: dict[str, Any], app: str | None, schema: int, res: Result, person: str
+) -> None:
     kind, key, op, seq = ev["kind"], ev["key"], ev["op"], ev["seq"]
     at = parse_at(ev["at"])
     data = ev.get("data") if op == "put" else None
     h = digest(data) if op == "put" else "del"
 
     cur = conn.execute(
-        "SELECT hash, deleted, at, seq FROM core.records WHERE kind = %s AND key = %s FOR UPDATE",
-        (kind, key),
+        "SELECT hash, deleted, at, seq FROM core.records WHERE person = %s AND kind = %s AND key = %s FOR UPDATE",
+        (person, kind, key),
     ).fetchone()
     if cur is not None:
         same = (op == "del" and cur[1]) or (op == "put" and not cur[1] and cur[0] == h)
@@ -128,9 +136,9 @@ def _store_one(conn: psycopg.Connection, device: str, ev: dict[str, Any], app: s
             return
 
     inserted = conn.execute(
-        "INSERT INTO core.events (eid, device, seq, kind, key, op, at, schema, app, data) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (eid) DO NOTHING",
-        (ev["eid"], device, seq, kind, key, op, at, schema, app, Jsonb(data) if data is not None else None),
+        "INSERT INTO core.events (eid, device, person, seq, kind, key, op, at, schema, app, data) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (eid) DO NOTHING",
+        (ev["eid"], device, person, seq, kind, key, op, at, schema, app, Jsonb(data) if data is not None else None),
     ).rowcount
     if not inserted:
         return
@@ -141,36 +149,47 @@ def _store_one(conn: psycopg.Connection, device: str, ev: dict[str, Any], app: s
 
     if op == "put":
         conn.execute(
-            "INSERT INTO core.records (kind, key, deleted, data, hash, at, seq, eid, device, updated_at) "
-            "VALUES (%s, %s, false, %s, %s, %s, %s, %s, %s, now()) "
-            "ON CONFLICT (kind, key) DO UPDATE SET deleted = false, data = EXCLUDED.data, hash = EXCLUDED.hash, "
+            "INSERT INTO core.records (person, kind, key, deleted, data, hash, at, seq, eid, device, updated_at) "
+            "VALUES (%s, %s, %s, false, %s, %s, %s, %s, %s, %s, now()) "
+            "ON CONFLICT (person, kind, key) DO UPDATE SET deleted = false, data = EXCLUDED.data, hash = EXCLUDED.hash, "
             "at = EXCLUDED.at, seq = EXCLUDED.seq, eid = EXCLUDED.eid, device = EXCLUDED.device, updated_at = now()",
-            (kind, key, Jsonb(data), h, at, seq, ev["eid"], device),
+            (person, kind, key, Jsonb(data), h, at, seq, ev["eid"], device),
         )
     else:
         # Удаление хранит последние известные данные: «что было» не теряется.
         conn.execute(
-            "INSERT INTO core.records (kind, key, deleted, data, hash, at, seq, eid, device, updated_at) "
-            "VALUES (%s, %s, true, '{}'::jsonb, 'del', %s, %s, %s, %s, now()) "
-            "ON CONFLICT (kind, key) DO UPDATE SET deleted = true, hash = 'del', "
+            "INSERT INTO core.records (person, kind, key, deleted, data, hash, at, seq, eid, device, updated_at) "
+            "VALUES (%s, %s, %s, true, '{}'::jsonb, 'del', %s, %s, %s, %s, now()) "
+            "ON CONFLICT (person, kind, key) DO UPDATE SET deleted = true, hash = 'del', "
             "at = EXCLUDED.at, seq = EXCLUDED.seq, eid = EXCLUDED.eid, device = EXCLUDED.device, updated_at = now()",
-            (kind, key, at, seq, ev["eid"], device),
+            (person, kind, key, at, seq, ev["eid"], device),
         )
     res.changed += 1
-    refresh_said(conn, kind, key)
+    refresh_said(conn, kind, key, person)
 
 
-def ingest_batch(conn: psycopg.Connection, batch: Any, owner_profile: str) -> tuple[int, dict[str, Any]]:
-    """Пачка с телефона целиком: (HTTP-код, ответ)."""
+def ingest_batch(
+    conn: psycopg.Connection, batch: Any, owner_profile: str, people: tuple[str, ...] | list[str] = ()
+) -> tuple[int, dict[str, Any]]:
+    """Пачка с телефона целиком: (HTTP-код, ответ).
+
+    owner_profile — хозяин архива (его записи — person ''), people — кого ещё
+    пускать (PRAVKA_PEOPLE): их записи ложатся под ключом профиля."""
     if not isinstance(batch, dict):
         return 400, {"error": "тело — объект JSON"}
     device = batch.get("device")
-    if not isinstance(device, str) or not DEVICE_RE.match(device) or device == "intervals":
+    if not isinstance(device, str) or not DEVICE_RE.match(device) or device.startswith("intervals"):
         return 400, {"error": "device — имя устройства латиницей, например sasha-3f9a2c"}
     profile = batch.get("profile")
-    if profile != owner_profile:
-        # Архив одного человека: чужой профиль перетёр бы его сутки своими.
-        return 403, {"error": f"архив принимает только профиль «{owner_profile}», пришёл «{profile}»"}
+    if profile == owner_profile:
+        person = ""
+    elif isinstance(profile, str) and profile in people:
+        person = profile
+    else:
+        # Человек, которого архив не знает: его сутки легли бы ничьими. Кого
+        # пускать — PRAVKA_PEOPLE в server.env на компе.
+        known = "», «".join([owner_profile, *people])
+        return 403, {"error": f"архив принимает профили «{known}», пришёл «{profile}» — добавь его в PRAVKA_PEOPLE на компе"}
     schema = batch.get("schema")
     if schema != SCHEMA:
         return 400, {"error": f"контракт версии {schema} сервер не знает, он знает {SCHEMA}"}
@@ -179,7 +198,7 @@ def ingest_batch(conn: psycopg.Connection, batch: Any, owner_profile: str) -> tu
         return 400, {"error": f"events — список до {MAX_EVENTS} событий"}
     app = batch.get("app") if isinstance(batch.get("app"), str) else None
     with conn.transaction():
-        res = store_events(conn, device, events, app=app, schema=SCHEMA)
+        res = store_events(conn, device, events, app=app, schema=SCHEMA, person=person)
         mark_source(conn, f"phone:{device}", ok=True, note={"app": app, "profile": profile, "last_batch": len(events)})
         conn.execute("DELETE FROM core.sources WHERE source = 'phone'")
     return 200, {"ok": True, **res.as_json()}

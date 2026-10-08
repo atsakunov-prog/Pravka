@@ -248,6 +248,9 @@ PRAVKA_BLOBS=D:\PravkaArchive\blobs
 PRAVKA_LOGS=D:\PravkaArchive\logs
 ICU_ATHLETE_ID=
 ICU_API_KEY=
+PRAVKA_PEOPLE=
+ICU_ATHLETE_ID_MARIANNA=
+ICU_API_KEY_MARIANNA=
 ```
 
 - **`PRAVKA_INGEST_TOKEN`** — по нему телефон доказывает, что он телефон.
@@ -265,6 +268,10 @@ ICU_API_KEY=
   Settings, раздел Developer Settings: там API key и Athlete ID вида `i12345`.
   Подскажи, где это. Если ключа пока нет, оставь пустым: сборщик intervals
   просто не запустится.
+- **`PRAVKA_PEOPLE`** — кто ещё шлёт в архив со своего телефона (с 08.10.2026:
+  `marianna`). Пусто — архив одного хозяина. Её intervals —
+  `ICU_ATHLETE_ID_MARIANNA` и `ICU_API_KEY_MARIANNA`, из её аккаунта intervals.icu
+  тем же путём.
 
 ### 6. Брандмауэр
 

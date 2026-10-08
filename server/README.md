@@ -75,6 +75,18 @@ location / { return 404; }
 
 Ему нужны `ICU_ATHLETE_ID` и `ICU_API_KEY`. Без них он спит, остальное работает.
 
+**Второй человек** (08.10.2026, Марианна). Архив принимает телефоны
+хозяина (`PRAVKA_PROFILE`, с завода `sasha`) и тех, кто перечислен в
+`PRAVKA_PEOPLE` (`marianna`). У каждой записи есть `person`: у хозяина — пусто,
+у остальных — ключ профиля. Поэтому сутки Марианны с той же датой лежат
+рядом с сутками Саши, а не поверх. Её виды — схема `marianna` с теми же
+именами (`marianna.entries`, `marianna.workouts`, `marianna.wellness`…);
+`schema`, `search` и `day` принимают `who`. Её intervals сервер забирает её
+ключом: `ICU_ATHLETE_ID_MARIANNA`, `ICU_API_KEY_MARIANNA`. Сборщик —
+отдельным циклом, устройство и строка свежести `intervals-marianna`. Деньги
+семьи — один журнал в `life.money`: его шлёт телефон хозяина, у её
+операций `owner = 'marianna'`.
+
 База устроена так:
 
 - **`core`** — журнал событий `core.events`, текущее состояние `core.records`,
@@ -108,7 +120,10 @@ git clone -b pravka https://github.com/atsakunov-prog/pravka D:\PravkaArchive\re
 
 - `PRAVKA_OWNER_PASSWORD` — пароль Claude к архиву;
 - `ICU_ATHLETE_ID` и `ICU_API_KEY` — можно и позже, тогда после них
-  перезапустить задачу.
+  перезапустить задачу;
+- второй человек — `PRAVKA_PEOPLE=marianna`, его intervals —
+  `ICU_ATHLETE_ID_MARIANNA` и `ICU_API_KEY_MARIANNA` (тоже можно позже). Токен
+  телефона и QR из `pair` у всех телефонов один.
 
 `PRAVKA_PROXIES` не нужен: роутер `X-Forwarded-For` не присылает. Если когда-
 нибудь начнёт — `PRAVKA_PROXIES=192.168.1.1`, и в журнале появится настоящий

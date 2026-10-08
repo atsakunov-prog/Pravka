@@ -1,4 +1,4 @@
-"""python -m pravka_archive migrate | check | serve | supervise | pull [recent|deep|full] | pair"""
+"""python -m pravka_archive migrate | check | serve | supervise | pull [recent|deep|full] [--who marianna] | pair"""
 
 from __future__ import annotations
 
@@ -74,16 +74,26 @@ def cmd_check(cfg: config_mod.Config) -> int:
             say(True, f"папка {folder} пишется")
         except OSError as e:
             say(False, f"папка {folder}: {e}")
-    if cfg.icu_athlete and cfg.icu_key:
-        import httpx
+    for person in cfg.persons():
+        name = person.icu_source
+        if person.has_icu:
+            import httpx
 
-        try:
-            r = httpx.get(f"https://intervals.icu/api/v1/athlete/{cfg.icu_athlete}", auth=("API_KEY", cfg.icu_key), timeout=30)
-            say(r.status_code == 200, f"intervals: {r.status_code}" + ("" if r.status_code == 200 else f" {r.text[:200]}"))
-        except Exception as e:
-            say(False, f"intervals: {e}")
-    else:
-        print("—    intervals: ключа нет, сборщик спит")
+            try:
+                r = httpx.get(f"https://intervals.icu/api/v1/athlete/{person.icu_athlete}", auth=("API_KEY", person.icu_key), timeout=30)
+                say(r.status_code == 200, f"{name}: {r.status_code}" + ("" if r.status_code == 200 else f" {r.text[:200]}"))
+            except Exception as e:
+                say(False, f"{name}: {e}")
+        else:
+            suffix = "" if person.owner else f"_{config_mod.env_suffix(person.profile)}"
+            print(f"—    {name}: ключа нет, сборщик спит (ICU_ATHLETE_ID{suffix}, ICU_API_KEY{suffix})")
+        if not person.owner:
+            try:
+                with psycopg.connect(cfg.reader_url, autocommit=True) as conn:
+                    conn.execute(f"SELECT count(*) FROM {person.schema}.days").fetchone()
+                say(True, f"архив профиля «{person.profile}»: схема {person.schema} читается")
+            except psycopg.Error as e:
+                say(False, f"архив профиля «{person.profile}»: {e} — выполни migrate")
     if cfg.public_url.startswith("https://"):
         import httpx
 
@@ -105,11 +115,16 @@ def cmd_check(cfg: config_mod.Config) -> int:
     return 1 if bad else 0
 
 
-def cmd_pull(cfg: config_mod.Config, mode: str) -> int:
+def cmd_pull(cfg: config_mod.Config, mode: str, who: str | None = None) -> int:
     from .icu import Puller
 
-    out = Puller(cfg).run(mode)
-    print(json.dumps(out, ensure_ascii=False, indent=1))
+    persons = [p for p in cfg.persons() if p.has_icu and (not who or who in (p.profile, p.schema))]
+    if not persons:
+        print(f"intervals: ключа нет{' у ' + who if who else ''} — нечего забирать")
+        return 1
+    for person in persons:
+        out = Puller(cfg, person=person).run(mode)
+        print(person.icu_source, json.dumps(out, ensure_ascii=False, indent=1))
     return 0
 
 
@@ -197,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("command", choices=["migrate", "check", "serve", "supervise", "pull", "pair"])
     ap.add_argument("mode", nargs="?", default="recent", choices=["recent", "deep", "full"])
     ap.add_argument("--env", help="файл секретов (по умолчанию D:\\PravkaArchive\\secrets\\server.env)")
+    ap.add_argument("--who", help="pull: только этот человек архива (marianna); без него — все, у кого есть ключ intervals")
     args = ap.parse_args(argv)
     cfg = config_mod.load(args.env)
 
@@ -206,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_check(cfg)
     if args.command == "pull":
         _logging(cfg)
-        return cmd_pull(cfg, args.mode)
+        return cmd_pull(cfg, args.mode, args.who)
     if args.command == "pair":
         return cmd_pair(cfg, args.env)
     if args.command == "supervise":

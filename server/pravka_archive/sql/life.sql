@@ -1,6 +1,13 @@
--- Схема life — то, что видит Claude. Только виды поверх core.records: их
+-- Схема life — то, что видит Claude. Только виды поверх записей архива: их
 -- можно менять сколько угодно, данные от этого не меняются. migrate сносит
 -- схему и строит заново, затем пересобирает указатель сказанного.
+--
+-- Один текст на всех людей архива (08.10.2026): life — хозяин архива, его
+-- записи — person = ''. Для каждого человека из PRAVKA_PEOPLE migrate берёт
+-- этот же текст, ставит имя его схемы вместо life и его ключ вместо '' в
+-- трёх видах ядра ниже (db.person_sql). Поэтому виды читают не core.records,
+-- а core.records_life (и events, said так же): иначе сутки Марианны и Саши
+-- сложились бы в одни.
 --
 -- Правила, которые здесь держатся (docs/arkhiv.md):
 --  * сутки — поле day, его решил телефон (или intervals: start_date_local);
@@ -13,7 +20,10 @@
 --  * деньги — целые копейки.
 
 DROP SCHEMA IF EXISTS life CASCADE;
-DROP VIEW IF EXISTS core.said_source;
+DROP VIEW IF EXISTS core.records_life, core.events_life, core.said_life CASCADE;
+CREATE VIEW core.records_life AS SELECT * FROM core.records WHERE person = '';
+CREATE VIEW core.events_life AS SELECT * FROM core.events WHERE person = '';
+CREATE VIEW core.said_life AS SELECT * FROM core.said_index WHERE person = '';
 CREATE SCHEMA life;
 COMMENT ON SCHEMA life IS 'Архив Правки для чтения: виды по режимам, сутки, всё сказанное.';
 
@@ -29,13 +39,13 @@ SELECT c->>'name'                AS name,
        NULLIF(c->>'hint', '')    AS hint,
        (c->>'base_min')::int     AS base_min,
        (c->>'ord')::int          AS ord
-FROM core.records r, jsonb_array_elements(r.data->'categories') c
+FROM core.records_life r, jsonb_array_elements(r.data->'categories') c
 WHERE r.kind = 'zasechka.reference' AND r.key = 'all' AND NOT r.deleted;
 COMMENT ON VIEW life.categories IS 'Справочник категорий ленты: ценность часа (−10…+10), подсказка, что владелец к ней относит, базовое время в минутах.';
 
 CREATE VIEW life.clients AS
 SELECT c #>> '{}' AS name
-FROM core.records r, jsonb_array_elements(r.data->'clients') c
+FROM core.records_life r, jsonb_array_elements(r.data->'clients') c
 WHERE r.kind = 'zasechka.reference' AND r.key = 'all' AND NOT r.deleted;
 COMMENT ON VIEW life.clients IS 'Клиенты, которых знает лента.';
 
@@ -61,7 +71,7 @@ SELECT (e->>'id')::bigint                    AS id,
        c.value_per_hour,
        round((e->>'minutes')::numeric / 60 * c.value_per_hour, 1) AS points,
        NULLIF(e->>'person', '')              AS person_id
-FROM core.records r
+FROM core.records_life r
 CROSS JOIN LATERAL jsonb_array_elements(r.data->'entries') e
 LEFT JOIN life.categories c ON lower(c.name) = lower(e->>'category')
 WHERE r.kind = 'zasechka.day' AND NOT r.deleted;
@@ -86,7 +96,7 @@ SELECT (d->>'day')::date                       AS day,
        (d->>'calls_min')::int                  AS calls_min,
        (d->>'calls')::int                      AS calls,
        COALESCE((d->>'backfilled')::boolean, false) AS backfilled
-FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'phone.day' AND NOT r.deleted;
 COMMENT ON VIEW life.phone_days IS 'Телефон по суткам: экран, подъёмы, отвлечения короче двух минут, звонки. Это статистика телефона, а не записи ленты: время с делами ленты не складывается.';
 
@@ -97,19 +107,19 @@ SELECT (r.data->>'day')::date AS day,
        (a->>'min')::numeric   AS minutes,
        (a->>'sessions')::int  AS sessions,
        (a->>'glances')::int   AS glances
-FROM core.records r, jsonb_array_elements(r.data->'apps') a
+FROM core.records_life r, jsonb_array_elements(r.data->'apps') a
 WHERE r.kind = 'phone.day' AND NOT r.deleted;
 COMMENT ON VIEW life.phone_apps IS 'Приложения по суткам: минуты на экране, сессии от 5 секунд, отвлечения.';
 
 CREATE VIEW life.phone_sites AS
 SELECT (r.data->>'day')::date AS day, s->>'domain' AS domain, (s->>'min')::numeric AS minutes
-FROM core.records r, jsonb_array_elements(r.data->'sites') s
+FROM core.records_life r, jsonb_array_elements(r.data->'sites') s
 WHERE r.kind = 'phone.day' AND NOT r.deleted;
 COMMENT ON VIEW life.phone_sites IS 'Сайты в Chrome по суткам, минуты.';
 
 CREATE VIEW life.phone_calls AS
 SELECT (r.data->>'day')::date AS day, c->>'who' AS who, (c->>'min')::numeric AS minutes
-FROM core.records r, jsonb_array_elements(r.data->'callers') c
+FROM core.records_life r, jsonb_array_elements(r.data->'callers') c
 WHERE r.kind = 'phone.day' AND NOT r.deleted;
 COMMENT ON VIEW life.phone_calls IS 'Звонки от минуты по собеседникам за сутки.';
 
@@ -137,7 +147,7 @@ SELECT r.key                                  AS id,
             WHEN d->'items' @> '[{"sureness": "примерно"}]' THEN 'примерно'
             WHEN d->'items' @> '[{"sureness": "точно"}]' THEN 'точно' END AS confidence,
        NULLIF(d->>'model', '')                AS model
-FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'food.meal' AND NOT r.deleted;
 COMMENT ON VIEW life.meals IS 'Приёмы пищи. В счёт идут только confirmed. kind: завтрак, обед, ужин, перекус, добавки (горсть таблеток без еды). confidence — самая слабая позиция приёма: «наугад» значит, что числа прикидочные.';
 
@@ -156,7 +166,7 @@ SELECT r.key                                  AS meal_id,
        NULLIF(i.v->>'sureness', '')           AS sureness,
        COALESCE((i.v->>'pill')::boolean, false) AS pill,
        COALESCE(i.v->'micro', '{}'::jsonb)    AS micro
-FROM core.records r, jsonb_array_elements(r.data->'items') WITH ORDINALITY i(v, n)
+FROM core.records_life r, jsonb_array_elements(r.data->'items') WITH ORDINALITY i(v, n)
 WHERE r.kind = 'food.meal' AND NOT r.deleted;
 COMMENT ON VIEW life.meal_items IS 'Позиции приёмов: числа на всю порцию. pill — таблетка: калорий нет, доза в micro. micro — вещества: ключ — id из life.norms.';
 
@@ -170,7 +180,7 @@ SELECT s->>'id'                    AS substance,
        NULLIF(s->>'why', '')       AS why,
        NULLIF(s->>'where', '')     AS sources,
        (s->>'ord')::int            AS ord
-FROM core.records r, jsonb_array_elements(r.data->'substances') s
+FROM core.records_life r, jsonb_array_elements(r.data->'substances') s
 WHERE r.kind = 'food.norms' AND r.key = 'all' AND NOT r.deleted;
 COMMENT ON VIEW life.norms IS 'Справочник веществ: норма в день (мужчина 43 лет; у натрия это потолок, а не цель), верхний предел, зачем и где брать.';
 
@@ -207,7 +217,7 @@ SELECT r.key                                   AS id,
        NULLIF(d->>'icu_activity_id', '')       AS icu_activity_id,
        jsonb_array_length(COALESCE(d->'exercises', '[]'::jsonb)) AS exercises,
        jsonb_array_length(COALESCE(d->'checked', '[]'::jsonb))   AS checked
-FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'strength.session' AND NOT r.deleted;
 COMMENT ON VIEW life.strength IS 'Силовые сессии голосом или галочками. feel 1–5: 1 — отлично. checked — сколько пунктов схемы отмечено без чисел.';
 
@@ -221,7 +231,7 @@ SELECT r.key                                  AS session_id,
        (s.v->>'amount')::numeric              AS amount,
        NULLIF((s.v->>'weight_kg')::numeric, 0) AS weight_kg,
        NULLIF(s.v->>'note', '')               AS note
-FROM core.records r,
+FROM core.records_life r,
      jsonb_array_elements(r.data->'exercises') ex(v),
      jsonb_array_elements(ex.v->'sets') WITH ORDINALITY s(v, n)
 WHERE r.kind = 'strength.session' AND NOT r.deleted;
@@ -239,7 +249,7 @@ SELECT r.key::date                              AS day,
        NULLIF((d->>'feel')::int, 0)             AS feel,
        NULLIF(d->>'note', '')                   AS note,
        COALESCE(d->'items', '[]'::jsonb)        AS items
-FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'strength.gtg' AND NOT r.deleted;
 COMMENT ON VIEW life.gtg IS 'Зарядка по дням (GTG): статус выполнена / частично / пропущена, вис, негативы, лопаточные, подтягивания, светофор колена.';
 
@@ -256,7 +266,7 @@ SELECT split_part(r.kind, '.', 1)            AS domain,
        NULLIF(d->>'source', '')              AS source,
        NULLIF(d->>'consumed_by', '')         AS consumed_by,
        NULLIF(d->>'error', '')               AS error
-FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind IN ('strength.take', 'money.take') AND NOT r.deleted;
 COMMENT ON VIEW life.takes IS 'Что владелец наговорил Силовым и Деньгам дословно, до разбора. consumed_by — во что фраза превратилась.';
 
@@ -268,7 +278,7 @@ SELECT c->>'key'                              AS key,
        c->>'group'                            AS grp,
        c->>'shelf'                            AS shelf,
        COALESCE((c->>'income')::boolean, false) AS income
-FROM core.records r, jsonb_array_elements(r.data->'categories') c
+FROM core.records_life r, jsonb_array_elements(r.data->'categories') c
 WHERE r.kind = 'money.reference' AND r.key = 'all' AND NOT r.deleted;
 COMMENT ON VIEW life.money_categories IS 'Категории денег. shelf: family — траты семьи, zf — деньги ЗФ, service — не трата (между своими, наличные, займы, пополнения). income — доход.';
 
@@ -303,7 +313,7 @@ SELECT r.key                                      AS id,
        NULLIF(d->>'take_id', '')                  AS take_id,
        NULLIF(d->>'balance_account', '')          AS balance_account,
        NULLIF(d->>'roundup_from', '')             AS roundup_from
-FROM core.records r
+FROM core.records_life r
 CROSS JOIN LATERAL (SELECT r.data AS d) x
 LEFT JOIN life.money_categories mc ON mc.key = d->>'category'
 WHERE r.kind = 'money.entry' AND NOT r.deleted;
@@ -322,7 +332,7 @@ CREATE VIEW life.money_rules AS
 SELECT x->>'pattern' AS pattern, x->>'category' AS category, NULLIF(x->>'for_whom', '') AS for_whom,
        (x->>'sign')::int AS sign, NULLIF(x->>'owner', '') AS owner, NULLIF(x->>'comment', '') AS comment,
        NULLIF(x->>'source', '') AS bank, NULLIF(x->>'mcc', '') AS mcc, NULLIF((x->>'amount_kop')::bigint, 0) AS amount_kop
-FROM core.records r, jsonb_array_elements(r.data->'rules') x
+FROM core.records_life r, jsonb_array_elements(r.data->'rules') x
 WHERE r.kind = 'money.reference' AND r.key = 'all' AND NOT r.deleted;
 COMMENT ON VIEW life.money_rules IS 'Справочник получателей владельца: шаблон — категория.';
 
@@ -333,13 +343,13 @@ CREATE VIEW life.money_balances AS
 SELECT x->>'account' AS account, (x->>'at')::timestamptz AS at, (x->>'kop')::bigint AS kop, x->>'source' AS source,
        ARRAY(SELECT jsonb_array_elements_text(COALESCE(x->'covers', '[]'::jsonb))) AS covers,
        NULLIF(x->>'note', '') AS note
-FROM core.records r, jsonb_array_elements(r.data->'anchors') x
+FROM core.records_life r, jsonb_array_elements(r.data->'anchors') x
 WHERE r.kind = 'money.reference' AND r.key = 'all' AND NOT r.deleted
 UNION ALL
 SELECT x->>'account', (x->>'at')::timestamptz, (x->>'kop')::bigint, COALESCE(NULLIF(x->>'source', ''), 'пуш'),
        ARRAY(SELECT jsonb_array_elements_text(COALESCE(x->'covers', '[]'::jsonb))),
        NULLIF(x->>'note', '')
-FROM core.records r CROSS JOIN LATERAL (SELECT r.data->'anchor' AS x) a
+FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data->'anchor' AS x) a
 WHERE r.kind = 'money.push' AND NOT r.deleted AND jsonb_typeof(r.data->'anchor') = 'object';
 COMMENT ON VIEW life.money_balances IS 'Якоря остатков счетов — все, что знает баланс телефона: снимок владельца, вписанные на телефоне и «Доступно» из каждого пуша Т-Банка с узнанной картой. Остаток на момент = самый поздний якорь счёта + движения life.money по balance_account после него, кроме записей из covers.';
 COMMENT ON COLUMN life.money_balances.source IS 'снимок — заводской снимок владельца, вписано — на телефоне, пуш — «Доступно» из уведомления банка.';
@@ -349,7 +359,7 @@ CREATE VIEW life.money_accounts AS
 SELECT x->>'name' AS name, x->>'side' AS side, x->>'kind' AS kind, COALESCE(NULLIF(x->>'currency', ''), 'RUB') AS currency,
        ARRAY(SELECT jsonb_array_elements_text(COALESCE(x->'cards', '[]'::jsonb))) AS cards,
        NULLIF(x->>'owner', '') AS owner
-FROM core.records r, jsonb_array_elements(COALESCE(r.data->'accounts', '[]'::jsonb)) x
+FROM core.records_life r, jsonb_array_elements(COALESCE(r.data->'accounts', '[]'::jsonb)) x
 WHERE r.kind = 'money.reference' AND r.key = 'all' AND NOT r.deleted;
 COMMENT ON VIEW life.money_accounts IS 'Счета баланса телефона: с движениями, с якорем и отмеченные счетами ЗФ. name — то же имя, что life.money.balance_account и life.money_balances.account.';
 COMMENT ON COLUMN life.money_accounts.side IS 'zf — деньги ЗФ, personal — личные.';
@@ -360,14 +370,14 @@ CREATE VIEW life.money_statements AS
 SELECT x->>'bank' AS bank, NULLIF(x->>'account', '') AS account,
        (x->>'from')::date AS day_from, (x->>'to')::date AS day_to,
        (x->>'rows')::int AS rows, (x->>'loaded_at')::timestamptz AS loaded_at
-FROM core.records r, jsonb_array_elements(COALESCE(r.data->'statements', '[]'::jsonb)) x
+FROM core.records_life r, jsonb_array_elements(COALESCE(r.data->'statements', '[]'::jsonb)) x
 WHERE r.kind = 'money.reference' AND r.key = 'all' AND NOT r.deleted;
 COMMENT ON VIEW life.money_statements IS 'Что покрывает каждая загруженная выписка: банк, счёт баланса, дни с первой по последнюю строку счёта, строк, когда загружена. День внутри day_from…day_to без операций счёта — операций не было; день вне всех выписок счёта — выписки нет, судить нельзя.';
 
 CREATE VIEW life.bank_pushes AS
 SELECT r.key AS key, (d->>'at')::timestamptz AS at, (d->>'day')::date AS day, d->>'pkg' AS pkg,
        d->>'title' AS title, d->>'text' AS text, NULLIF(d->>'result', '') AS result
-FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'money.push' AND NOT r.deleted;
 COMMENT ON VIEW life.bank_pushes IS 'Сырые уведомления банков, из которых выведены операции. «Доступно» из пуша как якорь остатка — в life.money_balances (source = пуш).';
 
@@ -385,7 +395,7 @@ SELECT r.key                              AS id,
        NULLIF(d->>'error', '')            AS error,
        NULLIF(d->>'audio', '')            AS audio,
        NULLIF(d->>'mic', '')              AS mic
-FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'pravka.take' AND NOT r.deleted;
 COMMENT ON VIEW life.dictations IS 'Каждая диктовка Правки: распознанный текст до чистки. Это всё, что владелец наговаривал в любые поля: сообщения людям, заметки, письма.';
 
@@ -400,7 +410,7 @@ SELECT r.key                       AS id,
        (d->>'latency_ms')::int     AS latency_ms,
        (d->>'cost_usd')::numeric   AS cost_usd,
        NULLIF(d->>'error', '')     AS error
-FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'pravka.clean' AND NOT r.deleted;
 COMMENT ON VIEW life.cleanups IS 'Чистка диктовки моделью: что пришло (input) и что модель вернула (output).';
 
@@ -408,7 +418,7 @@ CREATE VIEW life.corrections AS
 SELECT r.key AS id, (d->>'day')::date AS day, (d->>'at')::timestamptz AS at,
        d->>'said' AS said, d->>'model' AS model_text, d->>'final' AS final, NULLIF(d->>'app', '') AS app,
        NULLIF(d->>'result', '') AS result
-FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'pravka.correction' AND NOT r.deleted;
 COMMENT ON VIEW life.corrections IS 'Правки владельца после модели: надиктовано — что вернула модель — что осталось в поле.';
 
@@ -420,7 +430,7 @@ SELECT (d->>'day')::date            AS day,
        (d->>'lines')::int           AS lines,
        d->>'text'                   AS text,
        r.key                        AS id
-FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'pravka.journal' AND NOT r.deleted;
 COMMENT ON VIEW life.journal IS 'Журнал службы телефона кусками: строки «ЧЧ:ММ:СС.мс  событие» — нажатия кнопок и гарнитуры («гарнитура: команда голоса пришла» — нажатие дошло до Правки), микрофон и маршрут, распознаватель, стоп и чей он, ошибки. Для «почему не сработало»: WHERE day = … AND text ILIKE ''%гарнитура%'' ORDER BY at. Шлётся с 07.10.2026; раньше — только то, что телефон ещё помнил (журнал у него до мегабайта).';
 
@@ -436,7 +446,7 @@ SELECT (d->>'num')::int             AS num,
        NULLIF(d->>'note', '')       AS note,
        (d->>'done_at')::timestamptz AS done_at,
        (d->>'build')::int           AS build
-FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'pravka.feedback' AND NOT r.deleted;
 COMMENT ON VIEW life.feedback IS 'Баги и предложения владельца о самой Правке, сказанные с кнопок пунктом «🐞 Баг или предложение» (с 07.10.2026). num — номер, по нему запись называют в коммите и в assets/feedback_done.txt; origin — с какой кнопки (П, З, Д, ₽, Е, приложение); text — после чистки Правкой, raw — как сказано; status: new — ждёт разбора, done — сделано, skip — отложено (note — что сделано или почему). Разбор раз в день: WHERE status = ''new'' ORDER BY num (docs/feedback.md).';
 
@@ -474,13 +484,13 @@ SELECT d->>'id'                                              AS id,
        NULLIF(d->>'description', '')                         AS description,
        'https://intervals.icu/activities/' || (d->>'id')     AS url,
        d                                                     AS raw
-FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'icu.activity' AND NOT r.deleted;
 COMMENT ON VIEW life.workouts IS 'Тренировки из intervals.icu как они там лежат. pace — с/км, cadence у бега и ходьбы — шаги в минуту, у вело — обороты. feel 1–5: 1 — отлично, rpe 1–10. raw — вся карточка intervals: любое поле, которого нет колонкой, — raw->>''поле''.';
 
 CREATE VIEW life.workout_streams AS
 SELECT r.key AS workout_id, s->>'type' AS type, s->'data' AS data
-FROM core.records r, jsonb_array_elements(r.data->'streams') s
+FROM core.records_life r, jsonb_array_elements(r.data->'streams') s
 WHERE r.kind = 'icu.streams' AND NOT r.deleted;
 COMMENT ON VIEW life.workout_streams IS 'Посекундные потоки тренировки: type — time, heartrate, watts, cadence, velocity_smooth, altitude, distance, latlng…; data — массив значений. Разворачивать через jsonb_array_elements_text(data) WITH ORDINALITY.';
 
@@ -507,7 +517,7 @@ SELECT r.key::date                                AS day,
        (d->>'mood')::int                          AS mood,
        NULLIF(d->>'comments', '')                 AS comment,
        d                                          AS raw
-FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'icu.wellness' AND NOT r.deleted
   AND r.key <= to_char(now(), 'YYYY-MM-DD');
 COMMENT ON VIEW life.wellness IS 'Сутки здоровья из intervals.icu (часы и весы): пульс покоя, HRV, сон, шаги, вес, CTL/ATL/TSB. kcal_eaten — это наш же итог еды, ушедший туда из Правки. Завтрашний прогноз CTL/ATL строкой не становится. raw — всё, что прислал intervals.';
@@ -522,73 +532,22 @@ SELECT d->>'id'                                         AS id,
        round((d->>'moving_time')::numeric / 60)         AS planned_min,
        (d->>'icu_training_load')::numeric               AS planned_load,
        d                                                AS raw
-FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'icu.event' AND NOT r.deleted;
 COMMENT ON VIEW life.plan IS 'Календарь intervals: запланированные тренировки (category WORKOUT), заметки (NOTE) и прочее.';
 
 CREATE VIEW life.coach AS
 SELECT r.key AS id, (d->>'day')::date AS day, (d->>'at')::timestamptz AS at,
        d->>'question' AS question, d->>'answer' AS answer, (d->>'cost_usd')::numeric AS cost_usd, NULLIF(d->>'error', '') AS error
-FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
+FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'sport.talk' AND NOT r.deleted;
 COMMENT ON VIEW life.coach IS 'Разговоры с тренером в приложении: вопрос владельца и ответ модели.';
 
 -- ---------------------------------------------------------------- Сказанное: один поиск на всё
 
-CREATE VIEW core.said_source AS
-SELECT r.kind, r.key, 'raw:' || (e->>'id') AS part, 'засечка' AS domain,
-       (r.data->>'day')::date AS day, (e->>'start')::timestamptz AS at, life.hm(e->>'start') AS time_local,
-       't' || (e->>'id') AS ref, split_part(e->>'raw', E'\nКБЖУ:', 1) AS text
-FROM core.records r, jsonb_array_elements(r.data->'entries') e
-WHERE r.kind = 'zasechka.day' AND NOT r.deleted AND COALESCE(e->>'raw', '') <> ''
-UNION ALL
-SELECT r.kind, r.key, 'comment:' || (e->>'id'), 'засечка', (r.data->>'day')::date, (e->>'start')::timestamptz,
-       life.hm(e->>'start'), 't' || (e->>'id'), e->>'comment'
-FROM core.records r, jsonb_array_elements(r.data->'entries') e
-WHERE r.kind = 'zasechka.day' AND NOT r.deleted AND COALESCE(e->>'comment', '') <> ''
-UNION ALL
-SELECT r.kind, r.key, 'raw', 'еда', (r.data->>'day')::date, (r.data->>'at')::timestamptz, life.hm(r.data->>'at'),
-       r.key, r.data->>'raw'
-FROM core.records r
-WHERE r.kind = 'food.meal' AND NOT r.deleted AND COALESCE(r.data->>'raw', '') <> ''
-UNION ALL
-SELECT r.kind, r.key, 'text', CASE r.kind WHEN 'money.take' THEN 'деньги' ELSE 'силовые' END,
-       (r.data->>'day')::date, (r.data->>'at')::timestamptz, life.hm(r.data->>'at'), r.key, r.data->>'text'
-FROM core.records r
-WHERE r.kind IN ('strength.take', 'money.take') AND NOT r.deleted AND COALESCE(r.data->>'text', '') <> ''
-UNION ALL
-SELECT r.kind, r.key, 'note', 'силовые', COALESCE((r.data->>'day')::date, CASE WHEN r.kind = 'strength.gtg' THEN r.key::date END),
-       NULL::timestamptz, NULL, r.key, r.data->>'note'
-FROM core.records r
-WHERE r.kind IN ('strength.session', 'strength.gtg') AND NOT r.deleted AND COALESCE(r.data->>'note', '') <> ''
-UNION ALL
-SELECT r.kind, r.key, 'text', 'правка', (r.data->>'day')::date, (r.data->>'at')::timestamptz, life.hm(r.data->>'at'),
-       r.key, r.data->>'text'
-FROM core.records r
-WHERE r.kind = 'pravka.take' AND NOT r.deleted AND COALESCE(r.data->>'text', '') <> ''
-UNION ALL
-SELECT r.kind, r.key, 'question', 'тренер', (r.data->>'day')::date, (r.data->>'at')::timestamptz, life.hm(r.data->>'at'),
-       r.key, r.data->>'question'
-FROM core.records r
-WHERE r.kind = 'sport.talk' AND NOT r.deleted AND COALESCE(r.data->>'question', '') <> ''
-UNION ALL
-SELECT r.kind, r.key, 'answer', 'тренер', (r.data->>'day')::date, (r.data->>'at')::timestamptz, life.hm(r.data->>'at'),
-       r.key, r.data->>'answer'
-FROM core.records r
-WHERE r.kind = 'sport.talk' AND NOT r.deleted AND COALESCE(r.data->>'answer', '') <> ''
-UNION ALL
-SELECT r.kind, r.key, 'comment', 'форма', r.key::date, NULL, NULL, r.key, r.data->>'comments'
-FROM core.records r
-WHERE r.kind = 'icu.wellness' AND NOT r.deleted AND COALESCE(r.data->>'comments', '') <> ''
-UNION ALL
-SELECT r.kind, r.key, 'description', 'тренировки', left(r.data->>'start_date_local', 10)::date,
-       (r.data->>'start_date')::timestamptz, substring(r.data->>'start_date_local' from 12 for 5), r.key, r.data->>'description'
-FROM core.records r
-WHERE r.kind = 'icu.activity' AND NOT r.deleted AND COALESCE(r.data->>'description', '') <> '';
-
 CREATE VIEW life.said AS
 SELECT domain, day, time_local, at, ref, part, text, tsv, tsv_words
-FROM core.said_index;
+FROM core.said_life;
 COMMENT ON VIEW life.said IS 'Всё сказанное и написанное владельцем во всех режимах — для поиска. Проще всего — инструментом search. Руками: tsv @@ websearch_to_tsquery(''russian'', …) — словоформы обычных слов; имена стеммер режет по-разному, для них tsv_words @@ to_tsquery(''simple'', ''марианн:*'') — начало слова (ё как е); text ILIKE ''%…%'' — подстрока. domain: засечка, еда, силовые, деньги, правка, тренер, форма, тренировки. ref — номер записи в своём виде (у ленты — t<id>).';
 
 -- ---------------------------------------------------------------- Сутки целиком
@@ -651,9 +610,9 @@ COMMENT ON VIEW life.freshness IS 'Когда каждый источник (pho
 -- ---------------------------------------------------------------- Всё остальное и история
 
 CREATE VIEW life.raw AS
-SELECT kind, key, data, updated_at FROM core.records WHERE NOT deleted;
+SELECT kind, key, data, updated_at FROM core.records_life WHERE NOT deleted;
 COMMENT ON VIEW life.raw IS 'Любая запись архива как она пришла (JSON): то, для чего ещё нет отдельного вида (icu.athlete — пороги и зоны, icu.file — исходные файлы тренировок, …), читается здесь: data->>''поле''.';
 
 CREATE VIEW life.history AS
-SELECT kind, key, op, at, device, data FROM core.events;
+SELECT kind, key, op, at, device, data FROM core.events_life;
 COMMENT ON VIEW life.history IS 'Журнал изменений: каждая версия каждой записи. Как было до правки — здесь: WHERE kind = ''…'' AND key = ''…'' ORDER BY at. at у телефона — когда он заметил изменение (до 10 секунд после правки), а не время самой записи; всё, что было до подключения архива (01.10.2026), пришло одной заливкой с одним at. Время дела, приёма, траты — в полях записи.';

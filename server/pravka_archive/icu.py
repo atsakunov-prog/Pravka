@@ -15,6 +15,10 @@
 События кладутся тем же store_events, что и телефонные, устройство
 «intervals». Тот же снимок события не плодит: опрос каждые 10 минут
 журнал не раздувает.
+
+С 08.10.2026 у каждого человека архива свой сборщик своим ключом
+(ICU_ATHLETE_ID_<ПРОФИЛЬ>, ICU_API_KEY_<ПРОФИЛЬ>): устройство и строка
+свежести «intervals-marianna», записи — под его person.
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ from typing import Any, Callable
 import httpx
 import psycopg
 
-from .config import Config
+from .config import Config, Person
 from .db import mark_source
 from .ingest import digest, store_events
 
@@ -42,10 +46,20 @@ FULL_FROM = dt.date(2010, 1, 1)
 
 
 class Puller:
-    def __init__(self, cfg: Config, client: httpx.Client | None = None, today: Callable[[], dt.date] | None = None):
+    def __init__(
+        self,
+        cfg: Config,
+        client: httpx.Client | None = None,
+        today: Callable[[], dt.date] | None = None,
+        person: Person | None = None,
+    ):
         self.cfg = cfg
+        # Чей intervals: без person — хозяина архива, как было до второго человека.
+        self.person = person or cfg.persons()[0]
+        self.athlete = self.person.icu_athlete
+        self.device = self.person.icu_source
         self.client = client or httpx.Client(
-            base_url=BASE, auth=("API_KEY", cfg.icu_key), timeout=httpx.Timeout(60.0, connect=20.0),
+            base_url=BASE, auth=("API_KEY", self.person.icu_key), timeout=httpx.Timeout(60.0, connect=20.0),
             headers={"User-Agent": "pravka-archive"},
         )
         self.today = today or dt.date.today
@@ -57,7 +71,7 @@ class Puller:
         # seq растёт и между перезапусками: время в мс × 1000 + счётчик.
         self._seq = max(self._seq + 1, int(time.time() * 1000) * 1000)
         return {
-            "eid": f"{DEVICE}:{self._seq}",
+            "eid": f"{self.device}:{self._seq}",
             "seq": self._seq,
             "kind": kind,
             "key": key,
@@ -70,9 +84,9 @@ class Puller:
         if not events:
             return 0
         with conn.transaction():
-            res = store_events(conn, DEVICE, events, app="icu-puller")
+            res = store_events(conn, self.device, events, app="icu-puller", person=self.person.key)
         if res.rejected:
-            log.warning("intervals: отвергнуто %d событий: %s", len(res.rejected), res.rejected[:3])
+            log.warning("%s: отвергнуто %d событий: %s", self.device, len(res.rejected), res.rejected[:3])
         return res.changed
 
     def _get(self, path: str, **params: Any) -> Any:
@@ -85,31 +99,31 @@ class Puller:
     # ------------------------------------------------------------ части
 
     def pull_athlete(self, conn: psycopg.Connection) -> int:
-        a = self._get(f"/athlete/{self.cfg.icu_athlete}")
-        return self._put(conn, [self._event("icu.athlete", self.cfg.icu_athlete, a)])
+        a = self._get(f"/athlete/{self.athlete}")
+        return self._put(conn, [self._event("icu.athlete", self.athlete, a)])
 
     def pull_wellness(self, conn: psycopg.Connection, oldest: dt.date, newest: dt.date) -> int:
-        rows = self._get(f"/athlete/{self.cfg.icu_athlete}/wellness", oldest=oldest.isoformat(), newest=newest.isoformat())
+        rows = self._get(f"/athlete/{self.athlete}/wellness", oldest=oldest.isoformat(), newest=newest.isoformat())
         events = [self._event("icu.wellness", str(w.get("id")), w) for w in rows if isinstance(w, dict) and w.get("id")]
         return self._put(conn, events)
 
     def pull_events(self, conn: psycopg.Connection, oldest: dt.date, newest: dt.date) -> int:
-        rows = self._get(f"/athlete/{self.cfg.icu_athlete}/events", oldest=oldest.isoformat(), newest=newest.isoformat())
+        rows = self._get(f"/athlete/{self.athlete}/events", oldest=oldest.isoformat(), newest=newest.isoformat())
         if not isinstance(rows, list):
             return 0
         seen = {str(e.get("id")) for e in rows if isinstance(e, dict) and e.get("id") is not None}
         events = [self._event("icu.event", str(e["id"]), e) for e in rows if isinstance(e, dict) and e.get("id") is not None]
         # Событие пропало из календаря внутри окна — его удалили.
         gone = conn.execute(
-            "SELECT key FROM core.records WHERE kind = 'icu.event' AND NOT deleted "
+            "SELECT key FROM core.records WHERE person = %s AND kind = 'icu.event' AND NOT deleted "
             "AND left(data->>'start_date_local', 10) BETWEEN %s AND %s",
-            (oldest.isoformat(), newest.isoformat()),
+            (self.person.key, oldest.isoformat(), newest.isoformat()),
         ).fetchall()
         events += [self._event("icu.event", k, None, op="del") for (k,) in gone if k not in seen]
         return self._put(conn, events)
 
     def pull_activities(self, conn: psycopg.Connection, oldest: dt.date, newest: dt.date, deep: bool = True) -> int:
-        rows = self._get(f"/athlete/{self.cfg.icu_athlete}/activities", oldest=oldest.isoformat(), newest=newest.isoformat())
+        rows = self._get(f"/athlete/{self.athlete}/activities", oldest=oldest.isoformat(), newest=newest.isoformat())
         if not isinstance(rows, list):
             return 0
         changed = 0
@@ -147,9 +161,9 @@ class Puller:
                 time.sleep(0.2)
         # Тренировку удалили в intervals — внутри окна её больше нет в списке.
         gone = conn.execute(
-            "SELECT key FROM core.records WHERE kind = 'icu.activity' AND NOT deleted "
+            "SELECT key FROM core.records WHERE person = %s AND kind = 'icu.activity' AND NOT deleted "
             "AND left(data->>'start_date_local', 10) BETWEEN %s AND %s",
-            (oldest.isoformat(), newest.isoformat()),
+            (self.person.key, oldest.isoformat(), newest.isoformat()),
         ).fetchall()
         changed += self._put(conn, [self._event("icu.activity", k, None, op="del") for (k,) in gone if k not in listed])
         return changed
@@ -195,10 +209,10 @@ class Puller:
     # ------------------------------------------------------------ проходы
 
     def _progress(self, conn: psycopg.Connection, where: str) -> None:
-        row = conn.execute("SELECT note FROM core.sources WHERE source = %s", (DEVICE,)).fetchone()
+        row = conn.execute("SELECT note FROM core.sources WHERE source = %s", (self.device,)).fetchone()
         note = dict(row[0] or {}) if row else {}
         note["full_progress"] = where
-        mark_source(conn, DEVICE, ok=True, note=note)
+        mark_source(conn, self.device, ok=True, note=note)
 
     def run(self, mode: str = "recent") -> dict[str, int]:
         """recent — каждые 10 минут, deep — раз в сутки, full — вся история."""
@@ -229,12 +243,12 @@ class Puller:
                     out["wellness"] = self.pull_wellness(conn, today - dt.timedelta(days=7), today + dt.timedelta(days=1))
                     out["events"] = self.pull_events(conn, today - dt.timedelta(days=3), today + dt.timedelta(days=14))
             except Exception as e:
-                mark_source(conn, DEVICE, ok=False, error=f"{mode}: {e.__class__.__name__}: {e}")
+                mark_source(conn, self.device, ok=False, error=f"{mode}: {e.__class__.__name__}: {e}")
                 raise
-            note = conn.execute("SELECT note FROM core.sources WHERE source = %s", (DEVICE,)).fetchone()
+            note = conn.execute("SELECT note FROM core.sources WHERE source = %s", (self.device,)).fetchone()
             note = dict(note[0] or {}) if note else {}
             note[f"{mode}_at"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-            mark_source(conn, DEVICE, ok=True, note=note)
+            mark_source(conn, self.device, ok=True, note=note)
         return out
 
 

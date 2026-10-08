@@ -15,10 +15,46 @@ from typing import Any, Iterable, Sequence
 
 import psycopg
 
-from .config import Config
+from .config import Config, Person
 
 MAX_ROWS = 500
 MAX_CELL = 400
+
+_TRANSLIT = dict(zip(
+    "абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
+    ["a", "b", "v", "g", "d", "e", "yo", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u", "f",
+     "h", "ts", "ch", "sh", "sch", "", "y", "", "e", "yu", "ya"],
+))
+
+
+def person_for(cfg: Config, who: str | None) -> Person | str:
+    """Чьи виды читать (08.10.2026): пусто — хозяина архива (схема life).
+
+    who — ключ профиля (marianna) или имя по-русски («Марианна»): имя
+    переводится в латиницу так же, как телефон делает ключ профиля
+    (data/Profile.kt). Нет такого человека — строка с ответом словами."""
+    people = cfg.persons()
+    if not who or not who.strip():
+        return people[0]
+    w = who.strip().lower()
+    latin = "".join(_TRANSLIT.get(c, c) for c in w)
+    for p in people:
+        if w in (p.profile, p.schema) or latin in (p.profile, p.schema):
+            return p
+    return f"Такого человека в архиве нет: «{who}». Есть: {', '.join(p.profile for p in people)}."
+
+
+class _Of:
+    """Соединение, которое читает виды одного человека: «life.» в запросе → его схема."""
+
+    def __init__(self, conn: psycopg.Connection, person: Person):
+        self.conn = conn
+        self.schema = person.schema
+
+    def execute(self, query: str, params: Any = None):
+        if self.schema != "life":
+            query = query.replace("life.", f"{self.schema}.")
+        return self.conn.execute(query, params)
 
 
 def _reader(cfg: Config) -> psycopg.Connection:
@@ -56,7 +92,7 @@ def table(names: Sequence[str], rows: Iterable[Sequence[Any]], limit: int = MAX_
     return "\n".join(lines)
 
 
-def freshness_line(conn: psycopg.Connection) -> str:
+def freshness_line(conn: psycopg.Connection, owner: str | None = None) -> str:
     rows = conn.execute("SELECT source, last_ok, last_error, last_error_at, note FROM life.freshness ORDER BY source").fetchall()
     if not rows:
         return "Свежесть: источники ещё ничего не присылали."
@@ -64,7 +100,11 @@ def freshness_line(conn: psycopg.Connection) -> str:
     parts = []
     for source, ok, err, err_at, note in rows:
         note = note or {}
-        name = "телефон" if source.startswith("phone") else source
+        name = source
+        if source.startswith("phone"):
+            # Телефон хозяина — просто «телефон»; чужой — с профилем: их два.
+            prof = note.get("profile")
+            name = "телефон" if not prof or prof == owner or owner is None else f"телефон {prof}"
         if ok is None:
             why = f" — {note['why']}" if note.get("why") else ""
             bad = f" (ошибка {err_at:%d.%m %H:%M}: {cell(err, 120)})" if err and err_at else ""
@@ -74,7 +114,7 @@ def freshness_line(conn: psycopg.Connection) -> str:
         age = f"{mins} мин назад" if mins < 120 else f"{mins // 60} ч назад"
         bad = f" (последняя ошибка {err_at:%d.%m %H:%M}: {cell(err, 120)})" if err and err_at and err_at > ok else ""
         going = ""
-        if source == "intervals" and not note.get("full_at") and note.get("full_progress"):
+        if source.startswith("intervals") and not note.get("full_at") and note.get("full_progress"):
             going = f", идёт первая выгрузка всей истории: дошла до {note['full_progress']}"
         parts.append(f"{name}: {age}{going}{bad}")
     return "Свежесть: " + " · ".join(parts)
@@ -82,18 +122,34 @@ def freshness_line(conn: psycopg.Connection) -> str:
 
 # ------------------------------------------------------------------ schema
 
-def schema(cfg: Config, view: str | None = None) -> str:
+def schema(cfg: Config, view: str | None = None, who: str | None = None) -> str:
+    person = person_for(cfg, who)
+    if isinstance(person, str):
+        return person
+    s = person.schema
     with _reader(cfg) as conn:
-        fresh = freshness_line(conn)
+        fresh = freshness_line(conn, cfg.profile)
         if not view:
             rows = conn.execute(
                 "SELECT c.relname, obj_description(c.oid, 'pg_class'), "
                 "  (SELECT string_agg(a.attname, ', ' ORDER BY a.attnum) FROM pg_attribute a "
                 "    WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped) "
                 "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
-                "WHERE n.nspname = 'life' AND c.relkind IN ('v', 'r', 'm') ORDER BY c.relname"
+                "WHERE n.nspname = %s AND c.relkind IN ('v', 'r', 'm') ORDER BY c.relname",
+                (s,),
             ).fetchall()
-            out = [fresh, "", "Виды схемы life (search_path уже стоит на life). Подробно о колонках — schema(view)."]
+            if s == "life":
+                out = [fresh, "", "Виды схемы life (search_path уже стоит на life). Подробно о колонках — schema(view)."]
+                others = [p for p in cfg.persons() if not p.owner]
+                if others:
+                    out.append(
+                        "Другие люди архива — те же виды своей схемой: "
+                        + ", ".join(f"{p.profile} — {p.schema}.entries, {p.schema}.workouts…" for p in others)
+                        + " (schema/search/day с who)."
+                    )
+            else:
+                out = [fresh, "", f"Виды схемы {s} — архив профиля «{person.profile}», в sql пиши {s}.<вид>. Подробно о колонках — schema(view, who). "
+                       f"«Владелец» в описаниях — {person.profile}. Деньги семьи общие — life.money (owner = '{person.profile}')."]
             for name, comment, cols in rows:
                 out.append(f"\n{name} — {comment or ''}\n  колонки: {cols}")
             return "\n".join(out)
@@ -101,13 +157,13 @@ def schema(cfg: Config, view: str | None = None) -> str:
             "SELECT a.attname, format_type(a.atttypid, a.atttypmod), col_description(c.oid, a.attnum) "
             "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
             "JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped "
-            "WHERE n.nspname = 'life' AND c.relname = %s ORDER BY a.attnum",
-            (view,),
+            "WHERE n.nspname = %s AND c.relname = %s ORDER BY a.attnum",
+            (s, view),
         ).fetchall()
         if not rows:
-            return f"Вида {view} в схеме life нет. Список — schema() без аргумента."
+            return f"Вида {view} в схеме {s} нет. Список — schema() без аргумента."
         comment = conn.execute(
-            "SELECT obj_description(('life.' || quote_ident(%s))::regclass, 'pg_class')", (view,)
+            "SELECT obj_description((quote_ident(%s) || '.' || quote_ident(%s))::regclass, 'pg_class')", (s, view)
         ).fetchone()[0]
         lines = [f"{view} — {comment or ''}", ""]
         for name, typ, c in rows:
@@ -175,10 +231,14 @@ def search(
     domain: str | None = None,
     limit: int = 30,
     order: str = "new",
+    who: str | None = None,
 ) -> str:
     query = (query or "").strip()
     if not query:
         return "Что искать? Слова или фраза."
+    person = person_for(cfg, who)
+    if isinstance(person, str):
+        return person
     limit = max(1, min(int(limit), 200))
     where = ["true"]
     args: list[Any] = []
@@ -194,8 +254,9 @@ def search(
     filt = " AND ".join(where)
     sort = "rank DESC, day DESC NULLS LAST" if order == "best" else "day DESC NULLS LAST, time_local DESC NULLS LAST, rank DESC"
 
-    with _reader(cfg) as conn:
-        fresh = freshness_line(conn)
+    with _reader(cfg) as raw_conn:
+        fresh = freshness_line(raw_conn, cfg.profile)
+        conn = _Of(raw_conn, person)
         how = "по словоформам"
         opts = "MaxWords=35, MinWords=15, MaxFragments=2, FragmentDelimiter=\" … \", StartSel=**, StopSel=**"
         pre = prefix_query(query) or "''"
@@ -302,11 +363,15 @@ def _day_dela(conn, d, lim: int, full: bool) -> list[str]:
     return out
 
 
-def day(cfg: Config, date: str, full: bool = False) -> str:
+def day(cfg: Config, date: str, full: bool = False, who: str | None = None) -> str:
     lim = 4000 if full else 220
-    with _reader(cfg) as conn:
-        fresh = freshness_line(conn)
-        d = conn.execute("SELECT %s::date", (date,)).fetchone()[0]
+    person = person_for(cfg, who)
+    if isinstance(person, str):
+        return person
+    with _reader(cfg) as raw_conn:
+        fresh = freshness_line(raw_conn, cfg.profile)
+        conn = _Of(raw_conn, person)
+        d = raw_conn.execute("SELECT %s::date", (date,)).fetchone()[0]
         out = [fresh, ""]
         summary = conn.execute("SELECT dow, ribbon_min, points FROM life.days WHERE day = %s", (d,)).fetchone()
         out.append(f"{d.isoformat()}, {summary[0] if summary else ''}".rstrip(", "))
@@ -331,8 +396,11 @@ def day(cfg: Config, date: str, full: bool = False) -> str:
                     out.append(f"      комментарий: {cell(comment, lim)}")
 
         # Дела и хронология — только если виды Дел есть (архив бывает и без них).
-        if conn.execute("SELECT to_regclass('life.tasks') IS NOT NULL AND to_regclass('life.interactions') IS NOT NULL").fetchone()[0]:
-            out += _day_dela(conn, d, lim, full)
+        # Дела — хозяина архива: у других людей их нет.
+        if person.owner and raw_conn.execute(
+            "SELECT to_regclass('life.tasks') IS NOT NULL AND to_regclass('life.interactions') IS NOT NULL"
+        ).fetchone()[0]:
+            out += _day_dela(raw_conn, d, lim, full)
 
         meals = conn.execute(
             "SELECT m.time_local, m.kind, m.kcal, m.protein_g, m.fat_g, m.carbs_g, m.confidence, m.raw, "
@@ -400,14 +468,22 @@ def day(cfg: Config, date: str, full: bool = False) -> str:
         if g:
             out.append(f"\nЗарядка: {g[0] or ''}" + (f", вис {g[1]} с" if g[1] else "") + (f", подтягиваний {g[2]}" if g[2] else "") + (f", колено {g[3]}" if g[3] else ""))
 
-        money = conn.execute(
-            "SELECT time_local, amount_kop, what, category_title, owner, shelf, income FROM life.money_live WHERE day = %s ORDER BY at", (d,)
-        ).fetchall()
+        # Деньги семьи — один общий журнал (его шлёт телефон хозяина) в life:
+        # у другого человека из него — его операции.
+        if person.owner:
+            money = raw_conn.execute(
+                "SELECT time_local, amount_kop, what, category_title, owner, shelf, income FROM life.money_live WHERE day = %s ORDER BY at", (d,)
+            ).fetchall()
+        else:
+            money = raw_conn.execute(
+                "SELECT time_local, amount_kop, what, category_title, owner, shelf, income FROM life.money_live "
+                "WHERE day = %s AND owner = %s ORDER BY at", (d, person.profile)
+            ).fetchall()
         if money:
             spent = -sum(m[1] for m in money if m[1] < 0 and m[5] == "family" and not m[6])
             out.append(f"\nДеньги: {len(money)} операций, траты семьи {_rub(-spent).lstrip('−+')}:")
             for t, kop, what, cat, owner, _shelf, _inc in money[: 60 if full else 25]:
-                who = "" if owner == "sasha" else f" ({owner})"
+                who = "" if owner == (cfg.profile if person.owner else person.profile) else f" ({owner})"
                 out.append(f"  {t or '--:--'} {_rub(kop)} {what or ''} · {cat or 'без категории'}{who}")
             if len(money) > (60 if full else 25):
                 out.append(f"  … ещё {len(money) - (60 if full else 25)} (life.money_live)")
