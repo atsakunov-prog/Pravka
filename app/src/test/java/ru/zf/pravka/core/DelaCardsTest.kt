@@ -50,7 +50,7 @@ class DelaCardsTest {
             Dela.Person(ivan, "Иван Петров", short = "Иван", orgId = orgBeta, role = "CFO"),
             Dela.Person(olga, "Ольга Смирнова", orgId = orgGamma, role = "юрист"),
             Dela.Person(petr, "Пётр Сидоров", role = "аналитик"),
-            Dela.Person(nata, "Наталья Команда", userId = "member1"),
+            Dela.Person(nata, "Ирина Команда", userId = "member1"),
             Dela.Person(dupe, "Иван П.", orgId = orgBeta, mergedInto = ivan),
             Dela.Person(gleb, "Глеб Без Компании"),
         )
