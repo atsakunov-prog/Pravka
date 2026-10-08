@@ -46,12 +46,12 @@ FEATURES = ["remind", "svod", "people", "dictations"]
 # Токен службы бота Ковчега (python -m pravka_dela token --name kovcheg): только он забирает
 # «что пора» и отмечает отправку (remind.py, task.reminded).
 REMIND_BOT = "kovcheg"
-PROJECT_FIELDS = {"name", "aliases", "sphere", "kind", "org_id", "money_default", "note", "archived_at"}
+PROJECT_FIELDS = {"name", "aliases", "sphere", "kind", "org_id", "money_default", "note", "archived_at", "status", "folder_url", "files"}
 DEAL_FIELDS = {
     "project_id", "name", "stage", "deal_type", "lead_person_id", "person_ids", "fee_kop", "deadline",
     "wheel", "ball", "next_step", "my_view", "ideas", "log",
     "outcome", "lost_reason", "closed_on", "fee_kind", "retainer_kop", "success_pct", "probability", "expected_on",
-    "source_person_id", "team_ids",
+    "source_person_id", "team_ids", "description", "folder_url", "files",
 }
 PERSON_FIELDS = {
     "name", "short", "aliases", "org_id", "role", "phones", "emails", "telegram_id", "telegram_username",
@@ -60,7 +60,7 @@ PERSON_FIELDS = {
 }
 ORG_FIELDS = {"name", "aliases", "kind", "note", "archived_at"}
 INTERACTION_FIELDS = {"at", "kind", "summary", "next_step", "project_id", "deal_id", "person_ids", "source", "source_ref", "duration_min"}
-PAYMENT_FIELDS = {"deal_id", "kind", "title", "amount_kop", "due_on", "invoiced_on", "paid_on", "cancelled_at", "note"}
+PAYMENT_FIELDS = {"deal_id", "kind", "title", "amount_kop", "due_on", "invoiced_on", "paid_on", "cancelled_at", "note", "sent_to", "sent_via"}
 SUGGESTION_FIELDS = {"kind", "task_id", "payload", "source", "source_ref", "quote", "batch_ref", "batch_title", "dup_of", "for_user", "expires_at"}
 
 SUGGESTION_TTL = dt.timedelta(days=7)
@@ -107,7 +107,30 @@ def _pick(data: dict, allowed: set[str], what: str) -> dict:
     for k, v in data.items():
         if isinstance(v, str) and k not in {"notes", "note", "summary", "title"}:
             v = v.strip() or None
-        out[k] = Jsonb(v) if k == "payload" else v
+        if k == "files":
+            v = _files(v, what)
+        out[k] = Jsonb(v) if k in ("payload", "files") else v
+    return out
+
+
+FILE_KINDS = {"contract", "invoice", "nda", "act", "other"}
+
+
+def _files(v, what: str) -> list[dict]:
+    """Документы сделки или клиента ссылками (dela_0006): [{kind, title, url, at}]. Сами файлы — на диске
+    или в почте, тут только ссылка; кривую запись отвергаем целиком, а не кладём молча."""
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise OpError(f"{what}: files — список")
+    out = []
+    for x in v:
+        url = str((x or {}).get("url") or "").strip() if isinstance(x, dict) else ""
+        if not url.lower().startswith(("http://", "https://")):
+            raise OpError(f"{what}: у документа нужна ссылка http(s)")
+        kind = x.get("kind") if x.get("kind") in FILE_KINDS else "other"
+        out.append({"kind": kind, "title": str(x.get("title") or "").strip()[:200] or None, "url": url[:2000],
+                    "at": str(x.get("at") or "")[:10] or None})
     return out
 
 

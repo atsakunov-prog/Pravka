@@ -224,6 +224,79 @@ def test_card_deal_new_tasks_land_in_deal(dela):
     assert (d["stage"], d["probability"]) == ("closing", 80)
 
 
+def test_card_team_people_about_status(dela):
+    """Одна строка на всё (09.10.2026, владелец: «написал: добавь <человека> — написал, что добавил, но ничего
+    не добавилось»): в команду и к людям клиента — kind у person, два человека в один массив не затирают друг
+    друга; пустая правка не пропадает молча; описание сделки и клиента, статус «поддержание отношений»."""
+    p, org, bank, olga, ivan, deal = _client(dela)
+    with parse.db.session(dela, "system", "test") as c:
+        lena = c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Лена Тестова', 'Лена', 'sasha') RETURNING id").fetchone()["id"]
+        oleg = c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Олег Тестов', 'Олег', 'sasha') RETURNING id").fetchone()["id"]
+    seen = {}
+
+    def fake(system, user_text):
+        seen["user"] = user_text
+        return empty_card(card=[
+            cd("person", name="Лена", kind="team"),
+            cd("person", name="Олег", kind="team"),
+            cd("person", name="Олег", kind="lead"),
+            cd("person", name="Ольга", kind="client"),
+            cd("person", name="Иван", kind="client"),       # уже в людях клиента — ответ «уже там», не ошибка
+            cd("person", name="Лена"),                       # пустая правка — в ошибки, а не молча
+            cd("about", text="Дашборды для собственника: сравнение с депозитом")],
+            reply="Лена и Олег в команде, Олег ведёт.", _usage=None)
+
+    scope = {"title": "Сделка: Альфа: фонды", "task_ids": [], "card": "deal", "deal_id": str(deal)}
+    out = ask.run(dela, "sasha", "добавь Лену и Олега, Олег ведёт; Ольга с их стороны; опиши проект", scope, "", None, ask_fn=fake)
+    assert "Описание: (пусто)" in seen["user"] and "Команда ЗФ: (никого, кроме ведущего)" in seen["user"]
+    with parse.db.session(dela, "sasha", "t") as c:
+        d = c.execute("SELECT team_ids, lead_person_id, person_ids, description FROM crm.deals WHERE id = %s", (deal,)).fetchone()
+    assert set(d["team_ids"]) == {lena, oleg} and d["lead_person_id"] == oleg  # триггер сделки раскладывает команду сам
+    assert d["person_ids"] == [ivan, olga] and d["description"] == "Дашборды для собственника: сравнение с депозитом"
+    assert any("Иван уже в людях клиента «Альфа: фонды»" == x["what"] for x in out["crm"])
+    assert out["errors"] == ["Лена: не понял, что сделать — в команду, к людям клиента или поправить должность?"]
+    back = [u for c_ in out["crm"] for u in c_["undo"]]
+    assert all(x["ok"] for x in ops(dela, "sasha", back)), back
+    with parse.db.session(dela, "sasha", "t") as c:
+        d = c.execute("SELECT team_ids, lead_person_id, person_ids, description FROM crm.deals WHERE id = %s", (deal,)).fetchone()
+    assert (d["team_ids"], d["lead_person_id"], d["person_ids"], d["description"]) == ([], None, [ivan], None)
+
+    # Карточка клиента: человек — к самому клиенту (его организация), в команду — единственного живого проекта;
+    # описание клиента — его note, статус — поддержание отношений.
+    def fake2(system, user_text):
+        seen["user"] = user_text
+        return empty_card(card=[cd("person", name="Иван", kind="client"), cd("person", name="Лена", kind="team"),
+                                cd("about", text="Давний клиент, семейный бизнес"), cd("client", stage="relations")], _usage=None)
+
+    out = ask.run(dela, "sasha", "Иван их; Лена с нами; давний клиент; поддерживаем отношения",
+                  {"task_ids": [], "card": "client", "project_id": str(p)}, "", None, ask_fn=fake2)
+    assert not out["errors"], out["errors"]
+    assert "Статус: по проектам" in seen["user"]
+    with parse.db.session(dela, "sasha", "t") as c:
+        assert c.execute("SELECT org_id FROM crm.people WHERE id = %s", (ivan,)).fetchone()["org_id"] == org
+        assert c.execute("SELECT team_ids FROM crm.deals WHERE id = %s", (deal,)).fetchone()["team_ids"] == [lena]
+        pr = c.execute("SELECT note, status FROM crm.projects WHERE id = %s", (p,)).fetchone()
+    assert (pr["note"], pr["status"]) == ("Давний клиент, семейный бизнес", "relations")
+
+
+def test_files_and_new_fields(dela):
+    """Папка и документы ссылками у сделки и клиента, кому и как ушёл счёт (dela_0006)."""
+    p, org, bank, olga, ivan, deal = _client(dela)
+    files = [{"kind": "contract", "title": "Договор", "url": "https://disk.example/d.pdf"}, {"kind": "что-то", "url": "http://x.example/n"}]
+    r = ops(dela, "sasha", [
+        {"op": "deal.set", "id": str(deal), "set": {"folder_url": "https://disk.example/alfa", "files": files, "description": "Тест"}},
+        {"op": "project.set", "id": str(p), "set": {"status": "relations", "files": []}},
+        {"op": "payment.create", "data": {"deal_id": str(deal), "kind": "advance", "amount_kop": 100, "invoiced_on": dt.date.today().isoformat(),
+                                          "sent_to": "бухгалтерия", "sent_via": "почта"}}])
+    assert all(x["ok"] for x in r), r
+    assert r[0]["row"]["files"][1]["kind"] == "other" and r[0]["row"]["folder_url"] == "https://disk.example/alfa"
+    assert (r[2]["row"]["sent_to"], r[2]["row"]["sent_via"]) == ("бухгалтерия", "почта")
+    bad = ops(dela, "sasha", [{"op": "deal.set", "id": str(deal), "set": {"files": [{"title": "без ссылки"}]}}])[0]
+    assert not bad["ok"] and "ссылка" in bad["error"]
+    v = store.view(dela, "sasha", "clients")["clients"]
+    assert v[0]["status"] == "relations"
+
+
 def test_schema_fits_grammar():
     """У схемы ответа предел: 06.10.2026 с карточкой тремя массивами и полным create API ответил
     «compiled grammar is too large» (62 поля — нет, 52 — да). Новое поле — сначала проба на API."""

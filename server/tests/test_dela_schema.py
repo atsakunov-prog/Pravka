@@ -243,14 +243,20 @@ def test_work_time_takes_project_from_entry_then_task_then_alias(dela, clean, ba
     assert ("разбор отчётности", "Гамма", t["num"]) in rows
     assert ("завтрак с детьми", "Гамма", t["num"]) in rows
     assert ids == (str(t["id"]), str(gamma))
-    # Без связи — по-старому, алиасом клиента.
+    # Без связи — по-старому, алиасом клиента. Личное (еда, семья) с одним клиентом текстом — не работа
+    # на клиента (09.10.2026: телефон переносит клиента в следующие записи, и «Время с семьёй» легло в часы клиента).
     for e in entries:
         e.pop("task", None)
         e.pop("project", None)
+        e.pop("person", None)
+        if e["title"] == "завтрак с детьми":
+            e["client"] = "Тестовый клиент"
     day["eid"] = day["eid"] + "b"
     day["seq"] = day["seq"] + 1000
     ingest_batch(clean, batch, "sasha")
     with psycopg.connect(cfg.reader_url) as r:
         row = r.execute("SELECT project, task_num FROM life.work_time WHERE title = 'разбор отчётности'").fetchone()
+        meal = r.execute("SELECT count(*) FROM life.work_time WHERE title = 'завтрак с детьми'").fetchone()[0]
     assert row == ("Бета Групп", None)
+    assert meal == 0
     assert beta

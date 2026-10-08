@@ -67,7 +67,7 @@ def test_ask_edits_tasks_on_screen(dela):
     assert (nb["person_short"], nb["ball"], nb["title"], nb["project_id"]) == ("Наташа", "waiting", "Наташа: смета по ремонту", p)
     assert st[c_["num"]]["status"] == "done"
     assert st[off["num"]]["due_date"].isoformat() == tomorrow  # названное по имени находится и не с этой страницы
-    assert any("#99999 нет ни на экране, ни среди открытых" in e for e in out["errors"])
+    assert any("одного из названных дел нет ни на экране, ни среди открытых" in e for e in out["errors"])
     # Как было — для «Вернуть»: только изменённые поля и статус.
     undo = {u["num"]: u for u in out["changed"]}
     assert undo[a["num"]]["before"] == {"due_date": late, "focus_on": None, "notes": None}

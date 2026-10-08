@@ -163,10 +163,30 @@ input[type=date], input[type=datetime-local], input[type=number] { color-scheme:
 /* ── Каркас: полка · список · карточка ── */
 .shell { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr); height: 100vh; height: 100dvh; }
 .shell.with-card { grid-template-columns: var(--side-w) minmax(0, 1fr) var(--card-w); }
+/* Полка — овал: стоят бренд, виды и строка Claude; прокручивается только середина, и её полоса не лезет на
+   скругления (владелец 09.10.2026: «прокрутка залезает на границы овала»). */
 aside.side {
-  margin: 12px 0 12px 12px; border-radius: 24px; overflow-y: auto; overscroll-behavior: contain;
-  padding: 16px 12px calc(14px + env(safe-area-inset-bottom));
+  margin: 12px 0 12px 12px; border-radius: 24px; overflow: hidden; display: flex; flex-direction: column; min-height: 0;
 }
+.side-top { flex: none; padding: 16px 12px 4px; }
+.side-scroll {
+  flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  margin: 4px 4px 18px 0; padding: 8px 8px calc(4px + env(safe-area-inset-bottom)) 12px;
+}
+/* Виды овалами — в несколько строк, без прокрутки вбок. */
+.side-views { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 10px; }
+.side-views .pill-tab { height: 32px; padding: 0 11px; font-size: 13px; border-radius: 16px; }
+/* Строка Claude на полке: подпись — о чём она, поле в две строки, подсказки открываются вниз. */
+.side .say { margin: 2px 0 8px; }
+.side .say .say-h { display: flex; margin: 0 6px 6px; }
+.side .say .quick-box { min-height: 0; border-radius: 22px; padding: 4px; align-items: flex-end; }
+.side .say .quick-box textarea { font-size: 14.5px; padding: 8px 2px 8px 4px; height: 58px; min-height: 58px; line-height: 20px; }
+.side .say .quick-box textarea::placeholder { white-space: normal; }
+.side .say .q-btn { width: 34px; height: 38px; }
+.side .say .q-btn svg { width: 19px; height: 19px; }
+.side .say .q-btn.send-btn { width: 40px; height: 40px; border-radius: 20px; }
+.side .say .claude-status, .side .say .help, .side .say .preview { margin-left: 6px; margin-right: 6px; }
+.side .ac { top: calc(100% + 6px); bottom: auto; max-height: 50vh; }
 /* Список: шапка стоит, между ней и строкой «сказать» прокручивается содержимое; под шапкой оно тает (§10). */
 main.list { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; }
 main.list > .scroll {
@@ -206,6 +226,7 @@ section.card-pane { overflow-y: auto; overscroll-behavior: contain; border-left:
   padding: 0 7px; line-height: 20px; min-width: 20px; text-align: center; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .3);
 }
 .side-group { margin-top: 18px; }
+.side-scroll > .game-card { margin: 18px 0 0; }
 .gh-row { display: flex; align-items: center; }
 .gh-row .gh { flex: 1; min-width: 0; }
 .side-group .gh-row > button.gh {
@@ -276,6 +297,9 @@ button.h-sub:hover, a.h-sub:hover { color: var(--value); }
 .sub .tools .ib { width: 40px; height: 40px; }
 /* Вкладки: выбранная — маленькая клавиша-капсула, остальные — текст tint; листаются вбок (§11.7). */
 .tabs-row { display: flex; align-items: center; gap: 4px; height: 50px; }
+@media (min-width: 901px) { .tabs-row:not(.sec-nav) { display: none; } .list-head { padding-bottom: 6px; } }
+.sec-nav .pill-tab { height: 32px; font-size: 13px; padding: 0 12px; background: transparent; }
+.sec-nav .pill-tab.on { background: var(--pill-on); }
 .burger { display: none; }
 .pills {
   flex: 1; min-width: 0; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 4px 2px 6px; position: relative;
@@ -424,13 +448,6 @@ a.st:hover { border-color: rgba(var(--t), .5); }
 .task.done .title { color: var(--meta); text-decoration-color: currentColor; }
 .task .num { flex: none; color: var(--faint); font-size: 12px; }
 .task .acts-r { flex: none; display: flex; }
-.mic-btn {
-  flex: none; width: 40px; height: 44px; padding: 0; border: 0; background: none; border-radius: 12px;
-  display: grid; place-items: center; color: var(--tint);
-}
-.mic-btn:hover { color: var(--value); background: var(--hover); }
-.mic-btn.on { color: var(--value); background: var(--active); }
-.task.done .mic-btn { visibility: hidden; }
 .task.compact { padding-top: 3px; padding-bottom: 3px; }
 .task.compact .title { font-size: 14.5px; }
 
@@ -450,6 +467,7 @@ a.st:hover { border-color: rgba(var(--t), .5); }
 .chips .ball-waiting, .chips .ball-agenda, .chips .remind { color: var(--label); }
 .chips .tag { color: var(--label); }
 .chips .money, .chips .ok { color: var(--label); }
+.chips .rel { color: var(--value); font-weight: 600; }
 .chips .m.noproj { border: 0; background: none; padding: 0; color: var(--label); font: inherit; text-decoration: underline dotted rgba(var(--t), .6); text-underline-offset: 3px; }
 .badge { font-size: 11px; padding: 0 7px; border-radius: 999px; border: 1px solid currentColor; line-height: 17px; }
 .badge.paid { color: var(--value); }
@@ -460,18 +478,6 @@ a.st:hover { border-color: rgba(var(--t), .5); }
   display: inline-grid; place-items: center; flex: none;
 }
 .icon-btn:hover { background: var(--hover-2); color: var(--value); }
-
-/* Правка дела словами (микрофон у дела): строка в стекле под названием. */
-.ask-inline {
-  display: flex; align-items: center; gap: 2px; margin-top: 8px; padding: 3px; cursor: default; border-radius: 22px;
-  background: rgba(var(--i), .7); border: 1px solid rgba(var(--t), .4); position: relative; overflow: hidden;
-}
-.ask-input { flex: 1; min-width: 0; border: 0; background: none; padding: 6px 0; font-size: 14px; }
-.ask-input:focus { outline: none; }
-.ask-input::placeholder { color: var(--ph); }
-.ask-status { display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; color: var(--label); font-size: 12.5px; white-space: nowrap; }
-.ask-inline .q-btn { width: 34px; height: 34px; }
-.ask-inline.busy::before { content: ''; position: absolute; inset: 0; background: rgba(var(--t), .25); transform-origin: left; animation: think 30s linear forwards; pointer-events: none; }
 
 /* ── Строка «сказать» (SayBar, §11.4): внизу экрана, под большим пальцем, не уезжает при прокрутке ── */
 .dock { flex: none; padding: 8px 0 calc(16px + env(safe-area-inset-bottom)); }
@@ -517,7 +523,6 @@ a.st:hover { border-color: rgba(var(--t), .5); }
 .q-btn.send-btn:active:not(:disabled) { transform: scale(.97); }
 .q-btn.send-btn.busy { opacity: 1; }
 .quick-box:not(.has-text):not(.busy) .q-btn.send-btn { opacity: .5; }
-.ask-inline .q-btn.send-btn { width: 34px; height: 34px; margin: 0; }
 .quick-box.hearing { border-color: rgba(var(--t), .7); }
 /* Claude думает: заливка слева направо в tint @ .25 (как в пилюле диктовки), без пульса. */
 .quick-box.busy::before {
@@ -619,10 +624,6 @@ a.btn { text-decoration: none; }
 /* ── Карточка дела (справа; на телефоне — лист снизу) ── */
 .card { padding: 18px 22px 40px; }
 .card .top { display: flex; align-items: center; gap: 10px; min-height: 44px; }
-.card .top .num {
-  flex: none; height: 32px; padding: 0 12px; border-radius: 16px; border: 1px solid rgba(var(--t), .3);
-  display: inline-flex; align-items: center; font-weight: 600; color: var(--value); font-size: 14px;
-}
 .crumb {
   flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 7px; color: var(--label); font-size: 14px;
   text-decoration: none; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
@@ -640,7 +641,6 @@ a.crumb:hover { color: var(--value); }
 .card-acts .done-key svg { width: 24px; height: 24px; }
 .card-acts .btn.on { border-color: rgba(var(--t), .6); color: var(--value); }
 .card-acts .btn.on svg { fill: currentColor; }
-.card .ask-inline { margin: 0 0 14px; }
 /* Свойства — плашкой со строками: подпись слева в label, значение справа; поле проявляется, когда его трогаешь. */
 .props {
   display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 0 10px; align-items: center; margin: 4px 0 12px;
@@ -885,6 +885,131 @@ details summary:hover { color: var(--value); }
 .deal-more > summary { margin-top: 6px; }
 .props input.deal-name { font-weight: 600; }
 
+/* ── Карточки клиента и проекта (09.10.2026): разделы одно под другим, пилюли в шапке листают к ним ── */
+.sec { margin-top: 22px; scroll-margin-top: 10px; }
+.sec:first-child { margin-top: 4px; }
+.sec > h2.sec-h {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 6px; margin: 0; padding: 0 8px 8px;
+  font-size: 11.5px; line-height: 16px; letter-spacing: .06em; text-transform: uppercase; font-weight: 600; color: var(--label);
+}
+.sec > h2.sec-h .n::before { content: '· '; }
+.sec > h2.sec-h .act { margin-left: auto; text-transform: none; letter-spacing: 0; }
+.sec > h2.sec-h .act .chip-btn { height: 28px; }
+.sec > .group:first-of-type, .sec > .toolbar + .group { margin-top: 8px; }
+.sec > .toolbar { margin-top: 0; }
+.sec > .empty { margin-top: 0; }
+.link-btn {
+  border: 0; background: none; padding: 0 0 0 6px; color: var(--tint); font: inherit; font-size: 12.5px; text-transform: none; letter-spacing: 0;
+  cursor: pointer; text-decoration: none;
+}
+.link-btn:hover { color: var(--value); text-decoration: underline; text-underline-offset: 3px; }
+
+/* Описание — поле стеклом, растёт по тексту. */
+textarea.about {
+  width: 100%; min-height: 60px; resize: none; overflow: hidden; display: block; line-height: 1.5; padding: 11px 16px; border-radius: 20px;
+  background: rgba(var(--i), .55); border: 1px solid rgba(var(--t), .18); color: var(--text); font-size: 15px;
+  transition: border-color .12s, background-color .12s;
+}
+textarea.about:hover { border-color: rgba(var(--t), .32); }
+textarea.about:focus { outline: none; border-color: rgba(var(--t), .55); background: rgba(var(--i), .75); }
+textarea.about::placeholder { color: var(--ph); opacity: .75; }
+.legacy textarea.about { font-size: 14px; }
+
+/* Короткие факты проекта: подпись над полем, по нескольку в строку. */
+.facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px 10px; margin-top: 10px; }
+.fact { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.fact > span { font-size: 11.5px; color: var(--label); padding-left: 10px; }
+.fact input, .fact select {
+  width: 100%; min-width: 0; height: 36px; border-radius: 14px; padding: 0 10px; color: var(--text);
+  background-color: rgba(var(--i), .55); border: 1px solid rgba(var(--t), .16);
+}
+.fact select { padding-right: 28px; }
+.fact input:hover, .fact select:hover { border-color: rgba(var(--t), .35); }
+.fact input:focus, .fact select:focus { outline: none; border-color: rgba(var(--t), .55); }
+.sec .deal-more { margin-top: 8px; }
+.sec .deal-more > summary { margin-top: 4px; }
+
+/* Статус: подпись и пилюли. */
+.cs-word { font-size: 11.5px; color: var(--label); letter-spacing: .06em; text-transform: uppercase; font-weight: 600; margin: 0 6px 0 8px; }
+.cs-now { font-size: 13.5px; color: var(--value); margin-right: 4px; }
+.client-status { margin-top: 12px; }
+.card-body > .stage-row, .card-body > .stage-closed { margin-top: 18px; }
+
+/* Люди клиента и команда — с двух сторон. */
+.sides { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin-top: 14px; }
+.side-col {
+  border-radius: 20px; padding: 10px 12px 12px; min-width: 0;
+  background: rgba(var(--k), .14); border: 1px solid rgba(var(--t), .2);
+}
+.sc-h { font-size: 11.5px; color: var(--label); letter-spacing: .06em; text-transform: uppercase; font-weight: 600; padding: 0 2px 8px; }
+.sc-h .n { color: var(--meta); margin-left: 6px; font-weight: 500; }
+.sc-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.sc-note { font-size: 12px; color: var(--meta); margin: 8px 2px 0; }
+.pchip .pc-role.lead { color: var(--value); font-weight: 600; }
+
+/* Поиск человека при добавлении. */
+.ps-pop { width: 340px; max-width: calc(100vw - 24px); }
+.pop .ps-q { height: 40px; border-radius: 14px; font-size: 14.5px; margin: 2px 0 6px; }
+.ps-list { max-height: 320px; overflow-y: auto; display: grid; gap: 1px; }
+.pop .ps-item { display: flex; align-items: center; justify-content: flex-start; gap: 10px; padding: 7px 10px; }
+.ps-item.on { background: var(--active); }
+.ps-item .ava { width: 28px; height: 28px; font-size: 10.5px; }
+.ps-t { display: flex; flex-direction: column; min-width: 0; text-align: left; }
+.ps-n { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ps-s { font-size: 12px; color: var(--meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ps-new { color: var(--label); }
+.ps-new svg { flex: none; width: 28px; }
+.ps-empty { font-size: 13px; color: var(--meta); padding: 8px 10px; }
+
+/* Хронология: тема встречи строкой, итог — три строки (щелчок — целиком), договорённости списком. */
+.tl-rows { border-radius: 22px; padding: 2px 6px 2px 4px; }
+.tl-row { cursor: default; }
+.tl-row:not(.work):not(.pay) { cursor: pointer; }
+.tl-head { line-height: 1.35; }
+.tl-head b { font-weight: 600; color: var(--strong); }
+.tl-body { margin-top: 2px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.tl-row.open .tl-body { display: block; -webkit-line-clamp: unset; }
+.tl-steps { margin: 5px 0 0; padding-left: 18px; color: var(--label); font-size: 13px; line-height: 1.45; }
+.tl-steps li::marker { color: var(--meta); }
+.tl-steps li.more { list-style: none; margin-left: -18px; color: var(--tint); font-size: 12.5px; }
+.tl-row.pay .tl-kind { color: var(--value); font-weight: 600; }
+.tl-row.work .tl-what { font-size: 13px; }
+.tl-more { margin: 8px 0 0 6px; }
+
+/* Файлы: папка и документы ссылками. */
+.files { padding: 4px 10px; }
+.f-row { display: flex; align-items: center; gap: 10px; padding: 8px 2px; min-height: 44px; flex-wrap: wrap; }
+.f-folder > svg { color: var(--tint); flex: none; }
+.f-open { flex: none; color: var(--value); font-weight: 600; }
+.f-kind { flex: none; font-size: 11.5px; color: var(--label); border: 1px solid rgba(var(--t), .3); border-radius: 999px; padding: 0 9px; line-height: 20px; }
+.f-name { flex: 1; min-width: 0; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.f-in, .f-add select {
+  flex: 1; min-width: 140px; height: 36px; border-radius: 14px; padding: 0 12px; color: var(--text);
+  background-color: rgba(var(--i), .55); border: 1px solid rgba(var(--t), .16);
+}
+.f-add select { flex: none; min-width: 0; width: auto; padding-right: 28px; }
+.f-in:focus, .f-add select:focus { outline: none; border-color: rgba(var(--t), .55); }
+.pays { padding: 2px 6px; margin-top: 8px; }
+.sec .pay-add { margin-top: 10px; }
+
+/* Проекты человека — плашками-ссылками. */
+.pchip.proj { gap: 7px; padding: 5px 12px; color: var(--text); text-decoration: none; }
+.pchip.proj .st-dot { flex: none; }
+.pchip.proj.arch { opacity: .6; }
+.row-projs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; align-items: center; font-size: 12.5px; }
+.row-projs .pchip.proj { padding: 2px 10px; font-size: 12.5px; }
+.pchips.projs { margin-top: 12px; }
+
+/* Строка Claude на полке: подпись в две строки, если длинная. */
+.side .say .say-h { flex-wrap: wrap; row-gap: 4px; }
+.side .say .say-h > span:first-of-type { white-space: normal; overflow: visible; }
+.side .say .say-model { margin-left: 0; }
+
+/* Доска воронки: проект тащат из колонки в колонку. */
+.board .dtile[draggable=true] { cursor: grab; }
+.board .dtile.dragging { opacity: .45; }
+.col.drop { border-color: rgba(var(--t), .7); background: linear-gradient(180deg, rgba(var(--t), .16), rgba(var(--t), .06)), rgba(var(--i), .84); }
+
 /* ── Настройки ── */
 .settings .group > h2 { margin-bottom: 0; }
 .set-label { font-size: 12.5px; color: var(--label); margin: 14px 8px 8px; }
@@ -953,6 +1078,12 @@ details summary:hover { color: var(--value); }
 .login p { color: var(--label); }
 .scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); z-index: 24; }
 
+/* ── Компьютер: строка Claude на полке — итог рядом с ней, тост и выбор — у низа экрана ── */
+@media (min-width: 901px) {
+  .claude-result { left: calc(var(--side-w) + 18px); right: auto; top: 14px; bottom: auto; max-height: calc(100vh - 28px); }
+  .toast, .bulk { bottom: calc(22px + env(safe-area-inset-bottom)); }
+}
+
 /* ── Компьютер поуже: карточка забирает место у полки ── */
 @media (min-width: 901px) and (max-width: 1320px) {
   .shell.with-card { grid-template-columns: 248px minmax(0, 1fr) 400px; }
@@ -965,8 +1096,8 @@ details summary:hover { color: var(--value); }
     position: fixed; z-index: 25; top: 0; bottom: 0; left: 0; width: min(86vw, 330px); margin: 0; border-radius: 0 24px 24px 0;
     transform: translateX(-104%); transition: transform .22s;
     background: linear-gradient(180deg, rgba(var(--t), .12) 0, rgba(var(--t), 0) 30%), linear-gradient(180deg, rgba(var(--k), .24), rgba(var(--k), .10)), rgba(var(--i), .98);
-    padding-top: calc(16px + env(safe-area-inset-top));
   }
+  .side-top { padding-top: calc(16px + env(safe-area-inset-top)); }
   .shell.side-open aside.side { transform: none; }
   .burger { display: inline-grid; }
   .list-head { padding-top: calc(4px + env(safe-area-inset-top)); }
@@ -1007,6 +1138,8 @@ details summary:hover { color: var(--value); }
   .cdeal { grid-template-columns: 1fr; }
   .cd-next { grid-column: 1; }
   .person-info { grid-template-columns: 104px 1fr; }
+  .sides { grid-template-columns: 1fr; }
+  .facts { grid-template-columns: 1fr 1fr; }
   .claude-result { right: 12px; left: 12px; width: auto; }
   .side-keys { display: none; }
 }

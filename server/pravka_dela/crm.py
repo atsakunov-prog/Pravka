@@ -138,7 +138,8 @@ def view_pipeline(conn, user, closed_days: str | None = None, **_):
 
 
 CLIENTS_SQL = """
-SELECT p.id, p.name, p.aliases, p.org_id, o.name AS org, p.money_default, p.archived_at, p.owner_id, p.note,
+SELECT p.id, p.name, p.aliases, p.org_id, o.name AS org, p.money_default, p.archived_at, p.owner_id, p.note, p.status,
+       (SELECT max(greatest(t.created_at, t.completed_at)) FROM tasks.tasks t WHERE t.project_id = p.id) AS last_task_at,
        (SELECT count(*) FROM crm.deals d WHERE d.project_id = p.id AND d.stage <> 'archive') AS live_deals,
        (SELECT count(*) FROM crm.deals d WHERE d.project_id = p.id) AS all_deals,
        (SELECT array_agg(DISTINCT d.stage) FROM crm.deals d WHERE d.project_id = p.id AND d.stage <> 'archive') AS stages,
@@ -161,10 +162,18 @@ ORDER BY p.archived_at IS NOT NULL, p.name
 """
 
 
+def _fresh(c: dict) -> float:
+    """Когда с клиентом что-то было: последнее дело (заведено или закрыто) или контакт хронологии."""
+    xs = [x for x in (c.get("last_task_at"), c.get("last_touch")) if x]
+    return max(xs).timestamp() if xs else 0.0
+
+
 def view_clients(conn, user, **_):
-    """Клиенты: сделки, последний контакт, следующее дело, деньги, часы из Засечки."""
+    """Клиенты: сделки, последний контакт, следующее дело, деньги, часы из Засечки. Сверху — с кем
+    свежее всего были дела (владелец 09.10.2026: «а то вылезает клиент, где уже год как ничего»)."""
     today = _today(conn)
-    rows = [dict(r) for r in conn.execute(CLIENTS_SQL).fetchall()]
+    rows = sorted((dict(r) for r in conn.execute(CLIENTS_SQL).fetchall()),
+                  key=lambda c: (c["archived_at"] is not None, -_fresh(c), c["name"]))
     out: dict[str, Any] = {"clients": rows, "money": money_ok(conn, user), "owner": is_owner(conn, user)}
     if out["owner"]:
         t90 = _minutes(conn, "crm.time_by_project", today - dt.timedelta(days=90), "project_id")
@@ -229,6 +238,11 @@ def view_client(conn, user, project_id=None, **_):
         "project": p,
         "timeline": _timeline(conn, "i.project_id = %s", [project_id]),
         "deals": deals(conn, "d.project_id = %s", [project_id]),
+        # Оплаты всех проектов клиента — тем, кому открыты деньги (остальным политика оплат отдаёт пусто).
+        "payments": conn.execute(
+            "SELECT pm.*, d.name AS deal_name FROM crm.payments pm JOIN crm.deals d ON d.id = pm.deal_id "
+            "WHERE d.project_id = %s ORDER BY coalesce(pm.paid_on, pm.invoiced_on, pm.due_on, pm.created_at::date)", (project_id,)
+        ).fetchall(),
         "people": conn.execute(
             "SELECT pe.* FROM crm.people pe WHERE pe.archived_at IS NULL AND ("
             " (pe.org_id IS NOT NULL AND pe.org_id = %s)"

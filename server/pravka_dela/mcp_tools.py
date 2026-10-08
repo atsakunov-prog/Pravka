@@ -471,12 +471,12 @@ def register(mcp, url: str) -> None:
                        source: str | None = None, fee_kind: str | None = None, fee_rub: float | None = None,
                        retainer_rub: float | None = None, success_pct: float | None = None, probability: int | None = None,
                        expected_on: str | None = None, deadline: str | None = None, my_view: str | None = None,
-                       ideas: str | None = None) -> str:
-        """Завести сделку клиента (project + name) или поправить (project + deal). stage: lead, proposal (КП), mandate, active, closing, archive; outcome: won (сделали), lost (проиграли), paused (заморожено) — сам уводит в архив, lost_reason — почему. deal_type: M&A, Банковский advisory, Управленка, Косткаттинг, Финансирование, Сопровождение. lead — ответственный в ЗФ, team — команда ЗФ, people — люди клиента, source — кто привёл. fee_kind: fixed, retainer, success, hourly, mixed; fee_rub — гонорар всего, retainer_rub — в месяц, success_pct — процент успеха; probability — %, expected_on — когда решение (YYYY-MM-DD). my_view — «как я вижу» (видит только Саша). Пустая строка — очистить поле. Ответственный и команда видят клиента в Делах; деньги — только кому открыты."""
+                       ideas: str | None = None, description: str | None = None) -> str:
+        """Завести сделку клиента (project + name) или поправить (project + deal). stage: lead, proposal (КП), mandate, active, closing, archive; outcome: won (сделали), lost (проиграли), paused (заморожено) — сам уводит в архив, lost_reason — почему. deal_type: M&A, Банковский advisory, Управленка, Косткаттинг, Финансирование, Сопровождение. lead — ответственный в ЗФ, team — команда ЗФ, people — люди клиента, source — кто привёл. fee_kind: fixed, retainer, success, hourly, mixed; fee_rub — гонорар всего, retainer_rub — в месяц, success_pct — процент успеха; probability — %, expected_on — когда решение (YYYY-MM-DD). description — что за проект словами (видят все, кто видит сделку; Саша зовёт сделки проектами клиента); my_view — «как я вижу» (видит только Саша). Пустая строка — очистить поле. Ответственный и команда видят клиента в Делах; деньги — только кому открыты."""
         return await run(crm.deal, project, deal=deal, name=name, lead=lead, team=team, people=people, source=source,
                          fee_rub=fee_rub, retainer_rub=retainer_rub, success_pct=success_pct, stage=stage, outcome=outcome,
                          lost_reason=lost_reason, deal_type=deal_type, fee_kind=fee_kind, probability=probability,
-                         expected_on=expected_on, deadline=deadline, my_view=my_view, ideas=ideas)
+                         expected_on=expected_on, deadline=deadline, my_view=my_view, ideas=ideas, description=description)
 
     @mcp.tool()
     async def crm_payment(project: str, deal: str, amount_rub: float | None = None, kind: str | None = None,

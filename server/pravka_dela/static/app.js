@@ -13,15 +13,15 @@ const S = {
   me: null, today: null, seq: 0,
   tasks: new Map(), projects: new Map(), people: new Map(), deals: new Map(), sugs: new Map(), labels: [],
   orgs: new Map(), pays: new Map(), // CRM: организации, оплаты
-  crmList: LS.get('crmList', false), crmMine: false, crmStale: false, clientQ: '', clientArch: false, clientTab: 'tasks',
+  crmList: LS.get('crmList', false), crmMine: false, crmStale: false, clientQ: '', clientArch: false,
   sphere: LS.get('sphere', ''), groups: LS.get('groups', {}), favs: LS.get('favs', []), closed: LS.get('closed', {}),
   showDone: false, upNoDate: false, upMineOnly: false, dealFilter: null,
   sel: new Set(), order: [], lastPick: null, cardId: null, draft: null, sideOpen: false,
   parse: null, quickText: '', // идёт разбор Claude; текст строки Claude — живёт, пока его не отдали (перерисовка его не стирает)
-  askTask: null, askText: '', asking: null, // микрофон у дела: какое открыто, текст, идёт правка
   autoOpen: false, clientOpen: new Set(LS.get('clientOpen', [])), peopleQ: '', // «Сделано само» развёрнуто, клиенты со сделками, люди
 };
 const BALL = { mine: 'моё', waiting: 'жду', agenda: 'повестка' };
+const BALL_LONG = { mine: 'моё', waiting: 'жду от человека', agenda: 'обсудить при встрече' };
 const KIND = { client: 'Клиенты', internal: 'Внутреннее', personal: 'Личное' };
 const STAGE = { lead: 'лид', proposal: 'КП', mandate: 'мандат', active: 'в работе', closing: 'закрытие', archive: 'архив' };
 const WD = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'];
@@ -298,7 +298,7 @@ function route() {
   return { kind: VIEWS[kind] ? kind : 'now' };
 }
 const go = (hash) => { location.hash = hash; };
-window.addEventListener('hashchange', () => { S.sel.clear(); S.dealFilter = null; S.sideOpen = false; S.toTop = true; render(); });
+window.addEventListener('hashchange', () => { S.sel.clear(); S.dealFilter = null; S.sideOpen = false; S.toTop = true; S.secOn = null; S.tlAll = null; render(); });
 
 // ── Вход ────────────────────────────────────────────────────────────────
 function renderLogin(msg) {
@@ -334,19 +334,22 @@ function render() {
     if (t) { openCard(t.id); return; }
   }
   const ae = document.activeElement;
-  const q0 = ae && (['quick', 'side-search', 'main-search'].includes(ae.id) || ae.classList?.contains('ask-input')) ? ae : null;
+  const q0 = ae && ['quick', 'side-search', 'main-search'].includes(ae.id) ? ae : null;
   const focused = q0 ? { id: q0.id, value: q0.value, a: q0.selectionStart, b: q0.selectionEnd } : null;
   const shell = el('div', { class: 'shell' + (S.cardId || S.draft ? ' with-card' : '') + (S.sideOpen ? ' side-open' : '') + (S.sel.size ? ' selecting' : '') });
-  shell.append(renderSide(r), listColumn(r));
+  // Строку Claude собирает страница (у неё свои подсказки и куда класть новое), а стоит она одна на всё
+  // (владелец 09.10.2026): на компьютере — слева под видами, на телефоне — внизу, под пальцем.
+  const { main, say } = listColumn(r);
+  shell.append(renderSide(r, narrow() ? null : say), main);
   if (S.cardId || S.draft) shell.append(renderCard());
   const scroll = S.toTop ? 0 : document.querySelector('main.list > .scroll')?.scrollTop || 0; // новая страница — с начала
   S.toTop = false;
   const old = document.querySelector('section.card-pane');
   const cardScroll = old ? [old.dataset.key, old.scrollTop] : null;
-  const sideScroll = document.querySelector('aside.side')?.scrollTop || 0;
+  const sideScroll = document.querySelector('aside.side .side-scroll')?.scrollTop || 0;
   const pillScroll = document.querySelector('.pills')?.scrollLeft;
   $app.replaceChildren(shell);
-  shell.querySelector('aside.side').scrollTop = sideScroll;
+  shell.querySelector('aside.side .side-scroll').scrollTop = sideScroll;
   const pane = shell.querySelector('section.card-pane');
   if (pane && cardScroll && pane.dataset.key === cardScroll[0]) pane.scrollTop = cardScroll[1];
   if (S.sideOpen) $app.append(el('div', { class: 'scrim', onclick: () => { S.sideOpen = false; render(); } }));
@@ -365,19 +368,22 @@ function render() {
   renderBulk();
 }
 
-/** Колонка списка как экран режима в Правке 4.0: шапка стоит, между ней и строкой «сказать» прокручивается
- *  содержимое. Страницы по-прежнему кладут строку «Скажи, что сделать» первой в тело — здесь она уезжает
- *  вниз, под большой палец (DESIGN §1: «пилюли-строки наверху больше нет»). */
-const NO_SAY = ['settings', 'stats'];
+/** Колонка списка как экран режима в Правке 4.0: шапка стоит, под ней прокручивается содержимое. Страницы
+ *  кладут строку «Скажи, что сделать» первой в тело — здесь её вынимают: на телефоне она уезжает вниз, под
+ *  большой палец (DESIGN §1), на компьютере — на полку слева, под виды (render). */
 function listColumn(r) {
   const parts = [renderMain(r)].flat(Infinity).filter(Boolean);
   const top = parts[0]?.classList?.contains('list-head') ? parts.shift() : null;
   const scroll = el('div', { class: 'scroll' }, parts);
   plate(scroll);
   let say = scroll.querySelector('.quick.say');
-  if (!say && !NO_SAY.includes(r.kind)) say = quickAdd({});
-  return el('main', { class: 'list' }, top, scroll, el('div', { class: 'dock' }, say));
+  if (!say) say = quickAdd({});
+  say.remove();
+  const phone = narrow();
+  return { main: el('main', { class: 'list' }, top, scroll, phone ? el('div', { class: 'dock' }, say) : null), say };
 }
+// Компьютер ↔ телефон: строка Claude переезжает между полкой и низом экрана.
+window.matchMedia('(max-width: 900px)').addEventListener('change', () => { S.sideOpen = false; render(); });
 
 /** Раздел = надстрочник над стеклянной плашкой: всё, что в группе под заголовком, — в одну плашку со
  *  строками через волосяную линию. Плитки и доска — сами стекло, их не оборачиваем. */
@@ -399,7 +405,7 @@ function plate(root) {
 // отпустил — перерисовка.
 function uiBusy() {
   const ae = document.activeElement;
-  if (rec || S.askTask || document.querySelector('.pop')) return true;
+  if (rec || document.querySelector('.pop')) return true;
   if (!ae || ae === document.body) return false;
   if (ae.tagName === 'SELECT') return true;
   // Поиск перерисовка переживает (фокус и текст возвращаются), остальной начатый ввод — нет.
@@ -420,25 +426,50 @@ function navItem(hash, ico, label, count, on, extra, hot) {
     count ? el('span', { class: 'n' + (hot ? ' hot' : ''), title: hot ? 'есть просроченные' : null }, count) : null);
 }
 
-function renderSide(r) {
+/** Виды овалами — «Сейчас 1 из 5», «Новое 8», «Предстоящее 13»… На компьютере они на полке слева
+ *  (владелец 09.10.2026: «поставить обратно влево, такими же овальчиками»), на телефоне — вкладками в шапке. */
+function viewPills(r) {
+  return Object.entries(VIEWS).map(([k, v]) => {
+    const n = v.count ? v.count() : 0;
+    return el('a', { class: 'pill-tab' + (r.kind === k ? ' on' : '') + (k === 'now' && n >= NOW_MAX ? ' full' : '') + (v.hot && v.hot() ? ' hot' : ''),
+      href: '#/' + k, onclick: () => { S.sideOpen = false; } },
+    v.title, k === 'now' ? el('b', {}, `${n} из ${NOW_MAX}`) : n ? el('b', {}, n) : null);
+  });
+}
+
+/** Когда в проекте что-то было: последнее дело заведено или закрыто (владелец 09.10.2026: «сортировать по тому,
+ *  у кого последние задачи, а то вылезает клиент, где уже год как ничего»). */
+function freshBy() {
+  const at = new Map();
+  for (const t of all()) {
+    if (!t.project_id) continue;
+    const x = [t.created_at, t.completed_at].filter(Boolean).sort().pop() || '';
+    if (x > (at.get(t.project_id) || '')) at.set(t.project_id, x);
+  }
+  return at;
+}
+
+function renderSide(r, say) {
   const search = el('input', { id: 'side-search', class: 'side-search', type: 'search', placeholder: 'Поиск  /', value: r.kind === 'search' ? r.q : '' });
   search.addEventListener('input', () => liveSearch(search.value));
   search.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { S.sideOpen = false; liveSearch(search.value); } // на телефоне — убрать шторку, результаты под ней
     if (e.key === 'Escape') { search.value = ''; search.blur(); }
   });
-  // Виды («Сейчас», «Новое»…) и сфера — в шапке списка вкладками и «Все сферы ⌄», как в Правке;
-  // полка — только разделы: CRM, избранное, клиенты, проекты, люди, архив.
+  // Наверху полки — виды овалами и под ними одна строка Claude на всё; ниже прокручиваются разделы:
+  // CRM, избранное, клиенты, проекты, люди, архив.
 
-  // Проекты: избранные сверху, дальше по видам; число открытых и точка просрочки.
+  // Проекты: избранные сверху, дальше по видам; число открытых и точка просрочки. Клиенты — по свежести дел.
   const openBy = new Map(), lateBy = new Set();
   for (const t of all()) {
     if (!isOpen(t) || !t.project_id) continue;
     openBy.set(t.project_id, (openBy.get(t.project_id) || 0) + 1);
     if (isLate(t)) lateBy.add(t.project_id);
   }
+  const fresh = freshBy();
   const live = [...S.projects.values()].filter((p) => !p.archived_at && (!S.sphere || p.sphere === S.sphere))
-    .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    .sort((a, b) => (a.kind === 'client' && b.kind === 'client' ? (fresh.get(b.id) || '').localeCompare(fresh.get(a.id) || '') : 0)
+      || a.name.localeCompare(b.name, 'ru'));
   // Цвет проекта — точкой; просрочка — красным числом (красная точка рядом с цветной путала бы).
   const plainItem = (p) => navItem('#/p/' + p.id, dot(p.id), p.name, openBy.get(p.id), r.kind === 'project' && r.id === p.id, null, lateBy.has(p.id));
   // Клиент — с раскрывающимися проектами (сделками) прямо в меню (владелец, 06.10.2026: «проекты
@@ -487,15 +518,21 @@ function renderSide(r) {
   groups.push(group('arch', 'Архив', archived.map(projItem)));
 
   const me = person(S.me.person_id) || { id: S.me.user, name: S.me.name };
+  // Полка — овал; прокручивается только её середина, чтобы полоса прокрутки не лезла на скругления (09.10.2026).
+  // Путь (стоянка, серия) — внизу полки: его место наверху заняла строка Claude.
   return el('aside', { class: 'side' },
-    el('div', { class: 'brand' }, coin('tick'), el('b', {}, 'Дела'),
-      el('span', { class: 'who' }, S.me.name), avatar(me)),
-    gameCard(),
-    search, groups,
-    el('div', { class: 'side-foot' },
-      el('button', { class: 'settings-btn' + (r.kind === 'settings' ? ' on' : ''), onclick: () => go('#/settings') }, icon('gear', 15), 'Настройки'),
-      el('button', { onclick: async () => { await api('/auth/logout', {}); location.reload(); } }, 'Выйти')),
-    el('div', { class: 'side-keys' }, el('span', { class: 'kbd' }, 'n'), ' сказать Claude · ', el('span', { class: 'kbd' }, '/'), ' поиск'));
+    el('div', { class: 'side-top' },
+      el('div', { class: 'brand' }, coin('tick'), el('b', {}, 'Дела'),
+        el('span', { class: 'who' }, S.me.name), avatar(me)),
+      el('nav', { class: 'side-views' }, viewPills(r)),
+      say || null),
+    el('div', { class: 'side-scroll' },
+      search, groups,
+      gameCard(),
+      el('div', { class: 'side-foot' },
+        el('button', { class: 'settings-btn' + (r.kind === 'settings' ? ' on' : ''), onclick: () => go('#/settings') }, icon('gear', 15), 'Настройки'),
+        el('button', { onclick: async () => { await api('/auth/logout', {}); location.reload(); } }, 'Выйти')),
+      el('div', { class: 'side-keys' }, el('span', { class: 'kbd' }, 'n'), ' сказать Claude · ', el('span', { class: 'kbd' }, '/'), ' поиск')));
 }
 
 /** «Раскрыть все / свернуть все» — проекты всех клиентов списка разом (владелец, 06.10.2026). */
@@ -528,7 +565,8 @@ function headCoin(r) {
   if (CRM_VIEWS[r.kind]) return coin(CRM_VIEWS[r.kind].icon);
   if (r.kind === 'project') return coin(project(r.id)?.kind === 'client' ? 'building' : 'folder');
   if (r.kind === 'person' && person(r.id)) return coin(initials(person(r.id).name));
-  if (r.kind === 'deal') return coin('funnel');
+  // Проект клиента — портфелем: воронка на монете путала его с самой Воронкой (владелец 09.10.2026).
+  if (r.kind === 'deal') return coin('case');
   return coin({ search: 'search', settings: 'gear', stats: 'chart' }[r.kind] || 'tick');
 }
 function headSub(r) {
@@ -548,18 +586,40 @@ function headSub(r) {
 /** Назад — туда, откуда пришёл; пришёл по ссылке — на «Сейчас». */
 const back = () => (history.length > 1 ? history.back() : go('#/now'));
 
-function tabsRow(r) {
-  const pills = Object.entries(VIEWS).map(([k, v]) => {
-    const n = v.count ? v.count() : 0;
-    return el('a', { class: 'pill-tab' + (r.kind === k ? ' on' : '') + (k === 'now' && n >= NOW_MAX ? ' full' : '') + (v.hot && v.hot() ? ' hot' : ''), href: '#/' + k },
-      v.title, k === 'now' ? el('b', {}, `${n} из ${NOW_MAX}`) : n ? el('b', {}, n) : null);
-  });
-  return el('div', { class: 'tabs-row' },
+/** Третья строка шапки. На видах — вкладки видов (на компьютере их нет: виды на полке). В карточке клиента и
+ *  проекта — разделы карточки: всё стоит одно под другим, а пилюли листают к разделу (владелец 09.10.2026:
+ *  «такие переключения внутри: статус, команда и дела, хронология, деньги, файлы»; хронология — «не
+ *  переключалкой, а под делами»). */
+function tabsRow(r, nav) {
+  const pills = nav ? nav.map(([k, label]) => el('button', { class: 'pill-tab' + (k === (S.secOn || nav[0][0]) ? ' on' : ''), 'data-sec': k,
+    onclick: (e) => {
+      // Нажатая пилюля горит, пока страница едет: внизу короткий раздел до верха не доедет.
+      S.secOn = k; S.secLock = Date.now();
+      for (const b of e.currentTarget.parentNode.children) b.classList.toggle('on', b.dataset.sec === k);
+      document.getElementById('sec-' + k)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } }, label))
+    : viewPills(r);
+  return el('div', { class: 'tabs-row' + (nav ? ' sec-nav' : '') },
     el('button', { class: 'ib burger', title: 'Разделы: CRM, клиенты, проекты, люди', onclick: () => { S.sideOpen = true; render(); } }, icon('menu', 22)),
     el('nav', { class: 'pills' }, pills));
 }
+/** Пилюля раздела загорается, когда он под шапкой: какой раздел последним ушёл вверх, тот и сейчас. */
+document.addEventListener('scroll', (e) => {
+  const box = e.target;
+  if (!box.classList?.contains('scroll')) return;
+  const nav = document.querySelector('.sec-nav .pills');
+  if (!nav || Date.now() - (S.secLock || 0) < 900) return;
+  const top = box.getBoundingClientRect().top + 40;
+  let cur = nav.firstChild?.dataset.sec;
+  for (const b of nav.children) {
+    const sec = document.getElementById('sec-' + b.dataset.sec);
+    if (sec && sec.getBoundingClientRect().top <= top) cur = b.dataset.sec;
+  }
+  S.secOn = cur;
+  for (const b of nav.children) b.classList.toggle('on', b.dataset.sec === cur);
+}, true);
 
-function head(title, sub, extra) {
+function head(title, sub, extra, nav) {
   const r = route();
   const view = !!VIEWS[r.kind];
   const tools = el('span', { class: 'tools' },
@@ -577,7 +637,7 @@ function head(title, sub, extra) {
       el('a', { class: 'ib', href: '#/stats', title: 'Статистика и путь' }, icon('donut', 22)),
       el('a', { class: 'ib', href: '#/settings', title: 'Настройки' }, icon('gear', 22))),
     el('div', { class: 'sub' }, [].concat(sub || []).filter(Boolean).map((x) => (x.nodeType ? x : el('span', {}, x))), tools),
-    tabsRow(r));
+    tabsRow(r, nav));
 }
 
 function groupPicker(key, def, options) {
@@ -586,7 +646,7 @@ function groupPicker(key, def, options) {
   sel.addEventListener('change', () => { S.groups[key] = sel.value; LS.set('groups', S.groups); render(); });
   return [el('label', {}, 'Группировать', sel), cur];
 }
-const GROUPS = [['date', 'по датам'], ['project', 'по проектам'], ['person', 'по людям'], ['ball', 'по мячу'], ['deal', 'по сделкам'], ['none', 'без групп']];
+const GROUPS = [['date', 'по датам'], ['project', 'по проектам'], ['person', 'по людям'], ['ball', 'моё, жду, повестка'], ['deal', 'по сделкам'], ['none', 'без групп']];
 
 function renderMain(r) {
   S.order = [];
@@ -611,7 +671,7 @@ function renderMain(r) {
     if (!S.upNoDate) items = items.filter((t) => t.due_date);
     const late = items.filter(isLate).length;
     const tb = el('div', { class: 'toolbar' },
-      el('button', { class: 'chip-btn' + (S.upMineOnly ? ' on' : ''), onclick: () => { S.upMineOnly = !S.upMineOnly; render(); } }, 'Только мяч у меня'),
+      el('button', { class: 'chip-btn' + (S.upMineOnly ? ' on' : ''), onclick: () => { S.upMineOnly = !S.upMineOnly; render(); } }, 'Только моё'),
       el('button', { class: 'chip-btn' + (S.upNoDate ? ' on' : ''), onclick: () => { S.upNoDate = !S.upNoDate; render(); } }, 'И без даты'));
     // Просроченное — первой группой (ключ «0late» в grouped): «в предстоящих сверху — просроченные».
     return [head('Предстоящее', [plural(items.length, 'дело', 'дела', 'дел'), late ? el('span', { class: 'late' }, 'просрочено: ' + late) : null]),
@@ -686,7 +746,7 @@ function nowTiles() {
 
 const doneToggle = () => el('button', { class: 'chip-btn' + (S.showDone ? ' on' : ''), onclick: () => { S.showDone = !S.showDone; render(); } }, 'Сделанные');
 
-/** Разложить дела по группам: даты (как «Предстоящее» в Vikunja), проекты, люди, мяч, сделки. */
+/** Разложить дела по группам: даты (как «Предстоящее» в Vikunja), проекты, люди, чьё дело, сделки. */
 function grouped(items, by) {
   items = [...items].sort(sortTasks);
   if (by === 'none') return groupBox(null, items);
@@ -786,7 +846,6 @@ function taskRow(t, by, extra, opt = {}) {
   if (t.estimate_min && !opt.compact) chips.push(m('', dur(t.estimate_min)));
   for (const l of opt.compact ? [] : t.labels || []) chips.push(el('span', { class: 'tag' }, l));
   if (extra) chips.push(...[].concat(extra).filter(Boolean));
-  if (!opt.mark) chips.push(m('', '#' + t.num));
   const pick = el('input', { type: 'checkbox', class: 'pick', title: 'Выбрать (Shift — диапазон)' });
   pick.checked = S.sel.has(t.id);
   pick.addEventListener('click', (e) => { e.stopPropagation(); togglePick(t.id, e.shiftKey); });
@@ -801,11 +860,7 @@ function taskRow(t, by, extra, opt = {}) {
     el('button', { class: 'now-btn' + (now ? ' on' : ''), title: now ? 'Убрать из «Сейчас»' : `В «Сейчас» — сделать сегодня (до ${NOW_MAX} дел)`,
       onclick: (e) => { e.stopPropagation(); toggleNow(t); } }, icon('bolt', 18))),
   el('button', { class: 'tick' + (isOpen(t) ? '' : ' done'), title: isOpen(t) ? 'Сделано' : 'Вернуть', onclick: (e) => { e.stopPropagation(); toggleDone([t]); } }),
-  el('div', { class: 'main' }, el('div', { class: 'title' }, t.title), chips.length ? el('div', { class: 'chips' }, chips) : null,
-    S.askTask === t.id && S.cardId !== t.id ? askBox(t) : null),
-  opt.compact ? null : el('div', { class: 'acts-r' },
-    el('button', { class: 'mic-btn' + (S.askTask === t.id ? ' on' : ''), title: 'Поправить словами: сказать Claude, что сделать с этим делом',
-      onclick: (e) => { e.stopPropagation(); if (S.askTask === t.id && rec) stopListening(); else openAsk(t); } }, icon('mic', 22))),
+  el('div', { class: 'main' }, el('div', { class: 'title' }, t.title), chips.length ? el('div', { class: 'chips' }, chips) : null),
   opt.mark || null);
 }
 
@@ -1026,7 +1081,7 @@ function parseQuick(text, defaults) {
 
 // ── Подсказки при вводе: +проект, @человек, *метка, !команда ─────────────
 const COMMANDS = [
-  ['жду', 'мяч у человека: жду от него'], ['повестка', 'поднять при встрече или звонке'],
+  ['жду', 'делает человек: жду от него'], ['повестка', 'поднять при встрече или звонке'],
   ['сейчас', 'в фокус на сегодня'], ['хочу', 'делаю, потому что сам хочу'],
   ['5м', 'оценка: 5 минут'], ['15м', 'оценка: 15 минут'], ['30м', 'оценка: полчаса'], ['60м', 'оценка: час'],
 ];
@@ -1085,9 +1140,12 @@ function acItems(kind, q) {
 // примеры команд — во всплывающей подсказке поля; клавиша справа — голос, а с текстом — «отдать Claude».
 function quickAdd(defaults, { placeholder = null, label = null } = {}) {
   const busy = !!S.parse;
+  // О чём строка: открытое дело, карточка (клиент, проект, человек) или дела на экране.
+  const opened = S.cardId && S.tasks.get(S.cardId);
+  const about = opened ? `с делом «${opened.title}»` : label || 'с делами на экране';
   const input = el('textarea', { id: 'quick', rows: 1, autocomplete: 'off', disabled: busy,
-    'aria-label': 'Скажи, что сделать ' + (label || 'с этими делами'),
-    placeholder: label ? 'Скажи, что сделать ' + label : `${S.me.name || 'Саша'}, говори дела`,
+    'aria-label': 'Скажи, что сделать ' + about,
+    placeholder: `${S.me.name || 'Саша'}, говори дела`,
     title: placeholder || 'Скажи или напиши: «все просроченные — на пятницу», «Ивану позвонить завтра», надиктовка целиком' });
   if (busy) input.value = S.parse.text;
   else input.value = S.quickText || '';
@@ -1158,7 +1216,7 @@ function quickAdd(defaults, { placeholder = null, label = null } = {}) {
       input.value = S.quickText = '';
       render();
       document.getElementById('quick')?.focus();
-      toast('Записал: #' + r.task.num + ' ' + r.task.title);
+      toast('Записал: ' + r.task.title);
     } catch (err) { fail(err); }
   };
 
@@ -1212,11 +1270,11 @@ function quickAdd(defaults, { placeholder = null, label = null } = {}) {
     } }, icon(hearing ? 'stop' : 'mic', 22));
   if (input.value) setTimeout(grow);
   const card = pageScope(defaults).card;
-  // В карточке клиента, сделки, человека над строкой — о чём она и что Claude видит карточку целиком.
-  const say = card ? el('label', { class: 'say-h', for: 'quick' }, el('span', {}, 'Скажи, что сделать ' + (label || 'с этими делами')),
-    el('span', { class: 'say-model', title: 'В карточке Claude видит её целиком: сделки, людей, хронологию — и правит их' }, 'Opus · видит карточку')) : null;
+  // Над строкой — о чём она; в карточке клиента, проекта, человека — что Claude (Opus) видит её целиком.
+  const say = el('label', { class: 'say-h', for: 'quick' }, el('span', {}, 'Скажи, что сделать ' + about),
+    card ? el('span', { class: 'say-model', title: 'В карточке Claude видит её целиком: проекты, людей, команду, описание, хронологию — и правит их' }, 'Opus · видит карточку') : null);
   const box = el('div', { class: 'quick-box' + (busy ? ' busy' : '') + (hearing ? ' hearing' : '') + (input.value.trim() ? ' has-text' : '') }, micBtn, input, sendBtn);
-  return el('div', { class: 'quick say' + (card ? ' card-scope' : '') },
+  return el('div', { class: 'quick say' + (card || opened ? ' card-scope' : '') },
     say,
     el('div', { class: 'quick-wrap' }, box, ac),
     status, preview, help);
@@ -1363,65 +1421,6 @@ async function claudeSay(text, defaults) {
   }
 }
 
-// ── Микрофон у дела: сказал — Claude поправил именно это дело ────────────
-function openAsk(t) {
-  S.askTask = t.id;
-  S.askText = '';
-  render();
-  const go = () => document.getElementById('ask-' + t.id);
-  go()?.focus();
-  // Как у строки «говори дела»: нажал — говоришь, нажал ещё раз — ушло Claude.
-  listen((txt) => { S.askText = txt; const i = go(); if (i) i.value = txt; },
-    (txt) => { if (S.askTask === t.id && txt && voiceAuto()) askTask(t.id, txt); else render(); });
-  render();
-  go()?.focus();
-}
-async function askTask(id, text) {
-  text = (text || '').trim();
-  if (!text || S.asking) return;
-  stopListening();
-  S.asking = { id, text };
-  render();
-  try {
-    const d = await runJob('/api/ask', { text, scope: { title: 'Одно дело', task_ids: [id], focus: id } });
-    S.asking = null;
-    // Ничего не сделал — поле у дела остаётся с командой: дополнить и отправить ещё раз.
-    const did = ['changed', 'tasks', 'decided', 'crm'].some((k) => (d[k] || []).length);
-    S.askTask = did ? null : id;
-    S.askText = did ? '' : text;
-    for (const t of d.tasks || []) S.tasks.set(t.id, t);
-    await sync().catch(() => {});
-    render();
-    askResult(d);
-  } catch (e) {
-    S.asking = null;
-    S.askText = text;
-    render();
-    fail(e);
-  }
-}
-function askBox(t) {
-  const busy = S.asking && S.asking.id === t.id;
-  const stop = (e) => e.stopPropagation();
-  const input = el('input', { class: 'ask-input', id: 'ask-' + t.id, value: busy ? S.asking.text : S.askText || '', disabled: busy,
-    placeholder: rec ? 'Говори: «на пятницу, это Наташе, первым делом»…' : 'Что сделать с делом: «на пятницу, это Наташе»' });
-  input.addEventListener('click', stop);
-  input.addEventListener('input', () => { S.askText = input.value; });
-  input.addEventListener('keydown', (e) => {
-    e.stopPropagation();
-    if (e.key === 'Enter') { e.preventDefault(); askTask(t.id, input.value); }
-    if (e.key === 'Escape') { stopListening(); S.askTask = null; render(); }
-  });
-  // Как строка «говори дела»: микрофон слева, стрелка справа; пока Claude правит — заливка по строке.
-  return el('div', { class: 'ask-inline' + (busy ? ' busy' : ''), onclick: stop },
-    busy ? null : el('button', { class: 'q-btn mic' + (rec ? ' on' : ''), type: 'button', title: rec ? 'Готово — отдать Claude' : 'Сказать голосом: нажми, говори, нажми ещё раз',
-      onclick: () => { if (rec) stopListening(); else openAsk(t); } }, icon('mic', 16)),
-    input,
-    busy ? el('span', { class: 'ask-status' }, 'правит…') : [
-      el('button', { class: 'q-btn send-btn', type: 'button', title: 'Отдать Claude (Enter)', 'aria-label': 'Отдать Claude', onclick: () => askTask(t.id, input.value) }, icon('up', 16)),
-      el('button', { class: 'icon-btn', type: 'button', title: 'Закрыть (Esc)', onclick: () => { stopListening(); S.askTask = null; render(); } }, icon('x', 13))]);
-}
-
 /** Что поменялось — словами: «срок 07.10, в «Сейчас», жду Наташа». */
 function describe(c) {
   const a = c.after || {}, out = [];
@@ -1479,14 +1478,14 @@ function askResult(d) {
     d.reply ? el('div', { class: 'cr-reply' }, d.reply) : null,
     decided.map((x) => (x.decision === 'accept'
       ? el('button', { class: 'cr-task', onclick: () => x.id && openCard(x.id) },
-        el('div', {}, `П${x.n} ${DECIDED[x.kind] || 'принято'}` + (x.id ? `: #${x.num} ${x.title}` : '')),
+        el('div', {}, `П${x.n} ${DECIDED[x.kind] || 'принято'}` + (x.id ? `: ${x.title}` : '')),
         describe(x) ? el('div', { class: 'cr-meta' }, describe(x)) : null)
       : el('div', { class: 'cr-task' }, el('div', {}, `П${x.n} отклонено: ${sugTitle(x)}`),
         x.reason ? el('div', { class: 'cr-meta' }, x.reason) : null))),
     changed.map((c) => el('button', { class: 'cr-task', onclick: () => openCard(c.id) },
-      el('div', {}, `#${c.num} ${c.after?.title || c.title}`), el('div', { class: 'cr-meta' }, describe(c)))),
+      el('div', {}, c.after?.title || c.title), el('div', { class: 'cr-meta' }, describe(c)))),
     made.length ? el('div', { class: 'cr-sub' }, 'Новые:') : null,
-    made.map((t) => el('button', { class: 'cr-task', onclick: () => openCard(t.id) }, el('div', {}, '#' + t.num + ' ' + t.title))),
+    made.map((t) => el('button', { class: 'cr-task', onclick: () => openCard(t.id) }, el('div', {}, t.title))),
     crm.length ? el('div', { class: 'cr-sub' }, 'Сделки, люди, хронология:') : null,
     crm.map((c) => el('div', { class: 'cr-note' }, c.what)),
     d.errors && d.errors.length ? el('div', { class: 'cr-err' }, 'Не вышло: ' + d.errors.join('; ')) : null,
@@ -1512,7 +1511,7 @@ function claudeResult(d) {
     el('div', { class: 'cr-head' }, el('span', {}, said ? 'Claude записал ' + said : 'Claude не нашёл тут дел'),
       el('button', { class: 'icon-btn', title: 'Закрыть', onclick: close }, icon('x', 14))),
     d.tasks.map((t) => el('button', { class: 'cr-task', onclick: () => openCard(t.id) },
-      el('div', {}, '#' + t.num + ' ' + t.title), meta(t) ? el('div', { class: 'cr-meta' }, meta(t)) : null)),
+      el('div', {}, t.title), meta(t) ? el('div', { class: 'cr-meta' }, meta(t)) : null)),
     m ? el('div', { class: 'cr-sub' }, 'В хронологию:') : null,
     d.notes.map((x) => el('div', { class: 'cr-note' }, x.summary,
       project(x.project_id) ? el('span', { class: 'cr-meta' }, ' · ' + project(x.project_id).name) : null)),
@@ -1547,24 +1546,13 @@ function renderProject(id) {
   const dealBox = deals.length ? el('div', { class: 'deals' }, deals.map((d) => el('div', {
     class: 'deal' + (S.dealFilter === d.id ? ' on' : ''), title: 'Показать только дела этой сделки',
     onclick: () => { S.dealFilter = S.dealFilter === d.id ? null : d.id; render(); },
-  }, el('div', {}, d.name), el('div', { class: 'stage' }, STAGE[d.stage] || d.stage, d.fee_kop ? ' · fee ' + Math.round(d.fee_kop / 100).toLocaleString('ru') + ' ₽' : ''),
-  d.next_step ? el('div', { class: 'next' }, d.next_step.length > 110 ? d.next_step.slice(0, 110) + '…' : d.next_step) : null))) : null;
-  if (p.kind === 'client' && crmOn()) {
-    const c = clientBlock(p);
-    sub.push(...c.info);
-    return [head(p.name, sub, star),
-      el('div', { class: 'body' },
-        quickAdd({ project_id: id }, { label: `с клиентом «${p.name}»`,
-          placeholder: '«Иван — их CFO, отправили ему сегодня», «КП уже нет — закрой сделку», «созвонились, ждут модель к пятнице»' }),
-        c.dealBox, c.peopleBox, c.tabs,
-        c.timeline || [el('div', { class: 'toolbar' }, picker, doneToggle()),
-          items.length ? grouped(items, g) : el('div', { class: 'empty' }, 'Дел нет. Следующий шаг — скажи в строке выше.')])];
-  }
+  }, el('div', {}, d.name), el('div', { class: 'stage' }, STAGE[d.stage] || d.stage, d.fee_kop ? ' · fee ' + Math.round(d.fee_kop / 100).toLocaleString('ru') + ' ₽' : '')))) : null;
+  if (p.kind === 'client' && crmOn()) return renderClientCard(p, { picker, g, items, sub, star });
   return [head(p.name, sub, star),
     el('div', { class: 'body' },
       quickAdd({ project_id: id, ...(S.dealFilter ? { deal_id: S.dealFilter } : {}) }, { label: `с проектом «${p.name}»` }),
       dealBox, el('div', { class: 'toolbar' }, picker, doneToggle()),
-      items.length ? grouped(items, g) : el('div', { class: 'empty' }, 'Дел нет. Следующий шаг — скажи в строке выше.'))];
+      items.length ? grouped(items, g) : el('div', { class: 'empty' }, 'Дел нет. Следующий шаг — скажи в строке Claude.'))];
 }
 
 // ── Люди плашками: круглые, с крестиком; щелчок — откуда он и должность ──
@@ -1586,7 +1574,8 @@ async function personSet(x, set, msg) {
   const before = Object.fromEntries(Object.keys(set).map((k) => [k, x[k] ?? null]));
   try { await op1({ op: 'person.set', id: x.id, set }); render(); toast(msg, () => op1({ op: 'person.set', id: x.id, set: before })); } catch (e) { fail(e); }
 }
-function personPop(anchor, x) {
+/** Откуда он и должность; extra — ещё действия места, где стоит плашка («Ведёт проект»). */
+function personPop(anchor, x, extra) {
   setTimeout(() => {
     const { clients, other } = orgChoices();
     const sel = el('select', {}, el('option', { value: '' }, '— ни откуда —'),
@@ -1597,30 +1586,24 @@ function personPop(anchor, x) {
     role.addEventListener('keydown', (e) => { if (e.key === 'Enter') { closePop(); personSet(x, { role: role.value.trim() || null }, `${personName(x)}: ` + (role.value.trim() || 'без должности')); } });
     popAt(anchor, [el('div', { class: 'pop-h' }, x.name), el('div', { class: 'pop-l' }, 'Откуда он'), sel,
       el('div', { class: 'pop-l' }, 'Должность (Enter)'), role,
-      el('div', { class: 'sep' }), el('button', { onclick: () => { closePop(); go('#/h/' + x.id); } }, 'Открыть карточку', el('span', { class: 'k' }, '→'))]);
+      el('div', { class: 'sep' }), extra || null, el('button', { onclick: () => { closePop(); go('#/h/' + x.id); } }, 'Открыть карточку', el('span', { class: 'k' }, '→'))]);
   }, 0);
 }
-/** Плашки людей: list — люди, remove(x) — убрать отсюда, add(anchor) — «+ человек». */
-function peopleChips(title, list, { remove, add, empty } = {}) {
-  return el('div', { class: 'pchips' }, el('span', { class: 'pc-label' }, title),
-    list.length ? list.map((x) => el('span', { class: 'pchip' },
-      el('button', { class: 'pc-main', title: 'Откуда он, должность', onclick: (e) => personPop(e.currentTarget, x) },
-        avatar(x), el('span', { class: 'pc-name' }, personName(x)), x.role ? el('span', { class: 'pc-role' }, x.role) : null),
-      remove ? el('button', { class: 'pc-x', title: 'Убрать отсюда', onclick: () => remove(x) }, icon('x', 11)) : null))
-      : el('span', { class: 'faint' }, empty || 'никого'),
-    add ? el('button', { class: 'pchip add', onclick: (e) => add(e.currentTarget) }, icon('plus', 12), 'человек') : null);
+/** Проекты человека — с какой он стороны: ведёт, в команде, от клиента, привёл. Плашками-ссылками
+ *  (владелец 09.10.2026: «в людях указывать, какие проекты с ними, чтобы можно было нажимать»). */
+function personDeals(pid) {
+  const out = [];
+  for (const d of S.deals.values()) {
+    const role = d.lead_person_id === pid ? 'ведёт' : (d.team_ids || []).includes(pid) ? 'в команде'
+      : (d.person_ids || []).includes(pid) ? 'от клиента' : d.source_person_id === pid ? 'привёл' : null;
+    if (role) out.push({ d, role });
+  }
+  return out.sort((a, b) => (a.d.stage === 'archive') - (b.d.stage === 'archive') || a.d.name.localeCompare(b.d.name, 'ru'));
 }
-/** «+ человек»: выбрать из справочника или завести нового — pick(id) или create(name). */
-function addPersonPop(anchor, exclude, pick, create) {
-  setTimeout(() => {
-    const sel = el('select', {}, el('option', { value: '' }, 'выбрать…'),
-      livePeople().filter((x) => !exclude.includes(x.id)).sort((a, b) => personName(a).localeCompare(personName(b), 'ru'))
-        .map((x) => el('option', { value: x.id }, x.short && x.short !== x.name ? `${x.short} — ${x.name}` : x.name)));
-    sel.addEventListener('change', () => { if (sel.value) { closePop(); pick(sel.value); } });
-    const name = el('input', { placeholder: 'или новый: имя фамилия, Enter' });
-    name.addEventListener('keydown', (e) => { if (e.key === 'Enter' && name.value.trim()) { closePop(); create(name.value.trim()); } });
-    popAt(anchor, [el('div', { class: 'pop-h' }, 'Кто ещё'), sel, name]);
-  }, 0);
+function dealChip(d, role, stop) {
+  return el('a', { class: 'pchip proj' + (d.stage === 'archive' ? ' arch' : ''), href: '#/d/' + d.id, 'data-deal': d.id, title: STAGE[d.stage] + (role ? ' · ' + role : ''),
+    onclick: stop ? (e) => e.stopPropagation() : null },
+  el('span', { class: 'st-dot st-' + d.stage }), el('span', { class: 'pc-name' }, d.name), role ? el('span', { class: 'pc-role' }, role) : null);
 }
 
 function renderPerson(id) {
@@ -1651,6 +1634,8 @@ function renderPerson(id) {
       quickAdd({ person_id: id }, { label: `с человеком «${p.name}»`,
         placeholder: '«он теперь CFO в Бете», «созвонились, пришлёт модель в пятницу», «жду от него договор»' }),
       info.length ? el('div', { class: 'person-info' }, info) : null,
+      crmOn() && personDeals(id).length ? el('div', { class: 'pchips projs' }, el('span', { class: 'pc-label' }, 'Проекты'),
+        personDeals(id).map(({ d, role }) => dealChip(d, role))) : null,
       secs.map(([t, items]) => (items.length ? groupBox(t, items.sort(sortTasks)) : null)),
       secs.every(([, i]) => !i.length) ? el('div', { class: 'empty' }, 'Открытых дел с ним нет.') : null,
       crmOn() && !p.user_id ? personCrmBlock(p) : null)];
@@ -1725,13 +1710,13 @@ function sugText(s) {
       hint: [p.project_name, p.person_name, p.ball !== 'mine' ? BALL[p.ball] : null, p.due_date && 'срок ' + D.ddmm(p.due_date)].filter(Boolean).join(' · ') };
   }
   const t = S.tasks.get(s.task_id);
-  const ref = t ? `#${t.num} ${t.title}` : 'дело не видно';
+  const ref = t ? t.title : 'дело не видно';
   if (s.kind === 'close') return { title: 'Закрыть: ' + ref, hint: t?.project_name || '' };
   if (s.kind === 'assign') return { title: 'Взять себе: ' + ref, hint: t?.project_name || '' };
   // Уточнение: что поменяется в деле; подробности (note) при принятии лягут комментарием.
   const what = [p.title ? `название: «${p.title}»` : null,
     p.due_date ? 'срок ' + (t?.due_date ? D.ddmm(t.due_date) + ' → ' : '') + D.ddmm(p.due_date) : null,
-    p.ball ? 'мяч: ' + BALL[p.ball] + (p.person_name ? ' ' + p.person_name : '') : (p.person_name ? 'человек: ' + p.person_name : null)]
+    p.ball ? BALL[p.ball] + (p.person_name ? ' ' + p.person_name : '') : (p.person_name ? 'человек: ' + p.person_name : null)]
     .filter(Boolean).join(' · ');
   return { title: 'Уточнить: ' + ref, hint: what, add: p.note || null };
 }
@@ -1741,7 +1726,7 @@ function autoWords(s) {
   return [
     'title' in was ? `название: «${r.title}»` : null,
     'due_date' in was ? 'срок ' + (was.due_date ? D.ddmm(was.due_date) + ' → ' : '') + (r.due_date ? D.ddmm(r.due_date) : 'без срока') : null,
-    'ball' in was || 'person_id' in was ? 'мяч: ' + (BALL[r.ball] || r.ball) + (p.person_name ? ' ' + p.person_name : '') : null,
+    'ball' in was || 'person_id' in was ? (BALL[r.ball] || r.ball) + (p.person_name ? ' ' + p.person_name : '') : null,
   ].filter(Boolean).join(' · ');
 }
 // Пачки — по дате встречи, свежие сверху; без даты — по времени появления.
@@ -1777,11 +1762,11 @@ function sugByTask() {
 function originMark(t, s) {
   if (t.created_by && t.created_by !== t.owner_id) {
     const who = [...S.people.values()].find((p) => p.user_id === t.created_by);
-    return el('span', { class: 'src-mark', title: `поставил(а) ${who ? personName(who) : t.created_by} · ${whenWords(t.created_at)} · #${t.num}` },
+    return el('span', { class: 'src-mark', title: `поставил(а) ${who ? personName(who) : t.created_by} · ${whenWords(t.created_at)}` },
       who ? avatar(who, 'tiny') : tint(icon('person', 14), 'var(--plan)'));
   }
   const [ic, col, word] = origin(t.source);
-  return el('span', { class: 'src-mark', title: [word + (s && s.batch_title ? ': ' + s.batch_title : ''), whenWords(t.created_at), '#' + t.num].join(' · ') },
+  return el('span', { class: 'src-mark', title: [word + (s && s.batch_title ? ': ' + s.batch_title : ''), whenWords(t.created_at)].join(' · ') },
     tint(icon(ic, 14), col));
 }
 /** Значок источника у предложения: встреча — ссылкой на неё, цитата — подсказкой. */
@@ -1830,8 +1815,8 @@ async function mergeInto(s, t) {
   const said = [p.title, s.quote && s.quote !== p.title ? '«' + s.quote + '»' : null, p.notes].filter(Boolean).join(' — ');
   try {
     await ops([{ op: 'comment.add', comment: { task_id: t.id, text: `${s.batch_title || SUG_FROM[s.source] || 'Автоматика'}: ${said}` } },
-      { op: 'suggestion.decide', id: s.id, decision: 'reject', reason: `уже есть #${t.num}` }]);
-    toast(`Срослось с #${t.num}: слова — комментарием к делу`);
+      { op: 'suggestion.decide', id: s.id, decision: 'reject', reason: `уже есть: ${t.title}` }]);
+    toast(`Срослось с «${t.title}»: слова — комментарием к делу`);
     render();
   } catch (e) { fail(e); render(); }
 }
@@ -1863,7 +1848,7 @@ function askItem(s) {
       add ? el('div', { class: 'add' }, add) : null,
       s.quote && s.quote !== title ? el('div', { class: 'hint quote' }, '«' + s.quote.slice(0, 160) + (s.quote.length > 160 ? '…' : '') + '»') : null,
       twin ? el('div', { class: 'twin' }, icon('link', 12), 'похоже, это уже есть: ',
-        el('a', { class: 'link', href: '#', onclick: (e) => { e.preventDefault(); openCard(twin.id); } }, `#${twin.num} ${twin.title}`),
+        el('a', { class: 'link', href: '#', onclick: (e) => { e.preventDefault(); openCard(twin.id); } }, twin.title),
         el('button', { class: 'chip-btn', title: 'Не заводить второе: слова — комментарием к делу', onclick: () => mergeInto(s, twin) }, 'Это оно')) : null),
     el('div', { class: 'acts' },
       el('button', { class: 'btn small ok', onclick: () => decide([s.id], 'accept') }, ASK_YES[s.kind] || 'Да'),
@@ -1918,7 +1903,7 @@ function autoItem(s, seen) {
   };
   const words = s.kind === 'update' ? autoWords(s) : '';
   return el('div', { class: 'sug auto' },
-    el('div', { class: 'main' }, el('div', {}, (s.kind === 'close' ? 'Закрыто: ' : 'Уточнено: ') + (t ? `#${t.num} ${t.title}` : 'дело не видно')),
+    el('div', { class: 'main' }, el('div', {}, (s.kind === 'close' ? 'Закрыто: ' : 'Уточнено: ') + (t ? t.title : 'дело не видно')),
       words ? el('div', { class: 'hint' }, words) : null),
     el('div', { class: 'acts' },
       el('button', { class: 'btn small ok', title: 'Согласен — убрать отсюда', onclick: () => seen([s.id]) }, 'Понятно'),
@@ -2002,7 +1987,7 @@ function renderSettings() {
   return [head('Настройки', ['Claude в Делах, голос и траты']),
     el('div', { class: 'body settings' },
       el('div', { class: 'group' }, el('h2', {}, tint(icon('chat', 14), 'var(--claude)'), 'Claude правит дела словами'),
-        el('div', { class: 'hint-line' }, 'Строка «говори дела» внизу каждой страницы и микрофон у дела. Claude видит, что на экране и в окне, что выбрано галочками и открыто в карточке, — и все остальные открытые дела коротко. Модель ниже — для списков; в карточке клиента, сделки и человека и для новых дел из надиктовки всегда Opus 5.5.'),
+        el('div', { class: 'hint-line' }, 'Одна строка на всё — на компьютере слева под видами, на телефоне внизу. Claude видит, что на экране и в окне, что выбрано галочками и открыто в карточке, — и все остальные открытые дела коротко. Модель ниже — для списков; в карточке клиента, сделки и человека и для новых дел из надиктовки всегда Opus 5.5.'),
         v.claude ? null : el('div', { class: 'cr-err' }, 'Claude на сервере не настроен — нет ключа.'),
         el('div', { class: 'set-label' }, 'Модель'), choices('claude_model', MODEL_INFO, s.claude_model),
         el('div', { class: 'set-label' }, 'Глубина'), choices('claude_effort', EFFORT_INFO, s.claude_effort)),
@@ -2126,7 +2111,7 @@ function renderCard() {
   const props = el('div', { class: 'props' },
     el('span', {}, 'Проект'), projSel,
     deals.length ? el('span', {}, 'Сделка') : null, deals.length ? sel('deal_id', [['', '—'], ...deals.map((d) => [d.id, d.name])], src.deal_id) : null,
-    el('span', {}, 'Мяч'), sel('ball', Object.entries(BALL), src.ball),
+    el('span', {}, 'Чьё дело'), sel('ball', Object.entries(BALL_LONG), src.ball),
     el('span', {}, 'Человек'), sel('person_id', [['', '—'], ...people.map((p) => [p.id, p.short && p.short !== p.name ? `${p.short} — ${p.name}` : p.name])], src.person_id),
     el('span', {}, 'Срок'), date('due_date'), el('span', {}), quickDates,
     el('span', {}, 'Напомнить ему'), date('nudge_on'),
@@ -2140,19 +2125,16 @@ function renderCard() {
   const crumb = cp ? el('a', { class: 'crumb', href: '#/p/' + cp.id }, cp.name) : el('span', { class: 'crumb' }, 'Без проекта');
   const acts = t ? el('div', { class: 'card-acts' },
     isOpen(t) ? [
-      el('button', { class: 'btn' + (S.askTask === t.id ? ' on' : ''), title: 'Сказать Claude, что сделать с делом', onclick: () => (S.askTask === t.id && rec ? stopListening() : openAsk(t)) },
-        icon('mic', 18), 'Поправить'),
       el('button', { class: 'btn' + (isNow(t) ? ' on' : ''), title: isNow(t) ? 'Убрать из «Сейчас»' : `В «Сейчас» — сделать сегодня (до ${NOW_MAX} дел)`, onclick: () => toggleNow(t) },
         icon('bolt', 17), 'Сейчас'),
       el('button', { class: 'key done-key', title: 'Сделано', onclick: () => toggleDone([t]) }, icon('tick', 24)),
     ] : el('button', { class: 'btn', onclick: () => toggleDone([t]) }, 'Вернуть в работу')) : null;
   const card = el('div', { class: 'card' },
     el('div', { class: 'top' },
-      t ? el('span', { class: 'num' }, '#' + t.num) : null,
       sug ? el('span', { class: 'crumb' }, 'Предложение') : crumb,
       t && t.status !== 'open' ? el('span', { class: 'faint' }, t.status === 'done' ? 'сделано' : 'отменено') : null,
       el('button', { class: 'icon-btn', title: 'Закрыть (Esc)', onclick: close }, icon('x', 18))),
-    title, acts, t && S.askTask === t.id ? askBox(t) : null, t ? originLine(t) : null, props,
+    title, acts, t ? originLine(t) : null, props,
     el('div', { class: 'checks' }, t ? null : chk('focus_on', 'Сейчас — на сегодня', isNow(src), S.today), chk('want', 'Хочу сам', src.want, true)),
     notes);
   const btns = el('div', { class: 'btns' });
@@ -2225,6 +2207,7 @@ Object.assign(ICONS, {
   coin: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM9 9h4.5a2 2 0 0 1 0 4H9v4M8 15h6',
   clock: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2',
   plus: 'M12 5v14M5 12h14',
+  case: 'M4 8h16v11H4zM9 8V5.5h6V8M4 13h16M11 13v2h2v-2',
 });
 const narrow = () => window.matchMedia('(max-width: 900px)').matches; // телефон: пустые колонки воронки не показываем
 const crmOn = () => S.me && (S.me.role === 'owner' || S.me.clients !== 'own');
@@ -2279,21 +2262,49 @@ async function newDeal(projectId) {
 }
 
 // ── Воронка ─────────────────────────────────────────────────────────────
-function dealTile(d) {
+function dealTile(d, { drag } = {}) {
   const meta = [];
   if (d.fee_kop) meta.push(el('span', { class: 'money' }, rubShort(d.fee_kop) + (d.p_eff != null && ['lead', 'proposal'].includes(d.stage) ? ` · ${d.p_eff}%` : '')));
   if (d.lead_person_id) meta.push(el('span', {}, pName(d.lead_person_id)));
   if (d.minutes_30) meta.push(el('span', { title: 'время из Засечки за 30 дней' }, hrs(d.minutes_30)));
   const next = d.next_task
-    ? el('div', { class: 'next' }, `#${d.next_task.num} ${d.next_task.title}` + (d.next_task.due_date ? ' · ' + D.ddmm(d.next_task.due_date) : ''))
+    ? el('div', { class: 'next' }, d.next_task.title + (d.next_task.due_date ? ' · ' + D.ddmm(d.next_task.due_date) : ''))
     : (d.stage !== 'archive' ? el('div', { class: 'next none' }, 'нет следующего дела') : null);
   const quiet = d.stage !== 'archive' && d.quiet_days > 30 ? el('span', { class: 'quiet' }, `тишина ${d.quiet_days} дн.`) : null;
-  return el('div', { class: 'dtile' + (route().id === d.id ? ' on' : '') + (d.stale ? ' stale' : ''), 'data-deal': d.id, onclick: () => openDeal(d.id) },
+  const tile = el('div', { class: 'dtile' + (route().id === d.id ? ' on' : '') + (d.stale ? ' stale' : ''), 'data-deal': d.id, onclick: () => openDeal(d.id),
+    draggable: drag ? 'true' : null },
     el('div', { class: 'dname' }, d.name),
     el('div', { class: 'dclient' }, d.project_name, d.deal_type ? ' · ' + d.deal_type : ''),
     meta.length || quiet ? el('div', { class: 'dmeta' }, meta, quiet) : null, next,
     d.stage === 'archive' ? el('div', { class: 'dmeta' }, el('span', { class: 'out-' + (d.outcome || 'none') }, stageWord(d)),
       d.closed_on ? el('span', {}, D.ddmm(d.closed_on)) : null, d.lost_reason ? el('span', {}, d.lost_reason) : null) : null);
+  if (drag) {
+    tile.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', d.id); e.dataTransfer.effectAllowed = 'move'; tile.classList.add('dragging'); });
+    tile.addEventListener('dragend', () => tile.classList.remove('dragging'));
+  }
+  return tile;
+}
+/** Колонка доски принимает проект: перетащил — новая стадия (владелец 09.10.2026). Карточка встаёт на место
+ *  сразу, не дожидаясь ответа сервера: вид воронки считает сервер, и без этого она прыгала бы назад. */
+function dropStage(col, stage) {
+  col.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; col.classList.add('drop'); });
+  col.addEventListener('dragleave', (e) => { if (!col.contains(e.relatedTarget)) col.classList.remove('drop'); });
+  col.addEventListener('drop', (e) => {
+    e.preventDefault();
+    col.classList.remove('drop');
+    const id = e.dataTransfer.getData('text/plain');
+    const c = crmCache.get('/api/view/pipeline');
+    const d = c && c.data && c.data.deals.find((x) => x.id === id);
+    if (!d || d.stage === stage) return;
+    const was = d.stage;
+    d.stage = stage;
+    render();
+    dealOp({ op: 'deal.set', id, set: { stage } }).then((r) => {
+      if (!r) { d.stage = was; render(); return; }
+      toast(`${d.name}: ${STAGE[stage]}`, () => dealOp({ op: 'deal.set', id, set: { stage: was } }));
+    });
+  });
+  return col;
 }
 
 function renderPipeline() {
@@ -2317,18 +2328,19 @@ function renderPipeline() {
   const col = (s) => {
     const items = live.filter((d) => d.stage === s).sort((a, b) => (b.fee_kop || 0) - (a.fee_kop || 0));
     const st = v.stages.find((x) => x.stage === s) || {};
-    return el('div', { class: 'col' },
+    return dropStage(el('div', { class: 'col' },
       el('div', { class: 'col-h' }, el('b', {}, STAGE[s]), el('span', { class: 'n' }, items.length),
         v.money && st.fee_kop ? el('span', { class: 'sum' }, rubShort(st.fee_kop)) : null),
-      items.map(dealTile));
+      items.map((d) => dealTile(d, { drag: !narrow() }))), s);
   };
   const body = S.crmList
-    ? OPEN_STAGES.map((s) => { const items = live.filter((d) => d.stage === s); return items.length ? el('div', { class: 'group' }, el('h2', {}, STAGE[s], el('span', { class: 'n' }, items.length)), el('div', { class: 'dlist' }, items.map(dealTile))) : null; })
+    ? OPEN_STAGES.map((s) => { const items = live.filter((d) => d.stage === s); return items.length ? el('div', { class: 'group' }, el('h2', {}, STAGE[s], el('span', { class: 'n' }, items.length)), el('div', { class: 'dlist' }, items.map((d) => dealTile(d)))) : null; })
     : el('div', { class: 'board' }, OPEN_STAGES.filter((s) => !narrow() || live.some((d) => d.stage === s)).map(col));
+  if (!S.crmList && !narrow()) sub.push(el('span', { class: 'faint' }, 'проект перетаскивается между стадиями'));
   return [head('Воронка', sub),
     el('div', { class: 'body wide' }, tb, body,
       closed.length ? el('div', { class: 'group' }, el('h2', {}, 'Закрыты за 90 дней', el('span', { class: 'n' }, closed.length)),
-        el('div', { class: 'dlist' }, closed.map(dealTile))) : null,
+        el('div', { class: 'dlist' }, closed.map((d) => dealTile(d)))) : null,
       !live.length && !closed.length ? el('div', { class: 'empty' }, 'Сделок нет. Новая — со страницы клиента, кнопкой «+ Сделка».') : null)];
 }
 
@@ -2352,7 +2364,8 @@ function renderClients() {
   const v = crmGet('/api/view/clients');
   if (!v) return [head('Клиенты'), el('div', { class: 'body' }, loading())];
   const q = norm(S.clientQ || '');
-  let rows = v.clients.filter((c) => (S.clientArch ? true : !c.archived_at));
+  // Порядок — с сервера: сверху те, с кем свежее всего были дела (владелец 09.10.2026).
+  let rows = v.clients.filter((c) => (S.clientArch ? true : !c.archived_at) && (!S.clientRel || c.status === 'relations'));
   if (q) rows = rows.filter((c) => norm(c.name + ' ' + (c.aliases || []).join(' ') + ' ' + (c.org || '')).includes(q));
   const search = el('input', { class: 'inline-search', type: 'search', placeholder: 'Найти клиента', value: S.clientQ || '' });
   search.addEventListener('input', () => { S.clientQ = search.value; const pos = search.selectionStart; render(); const s2 = document.querySelector('.inline-search'); if (s2) { s2.focus(); s2.setSelectionRange(pos, pos); } });
@@ -2363,6 +2376,8 @@ function renderClients() {
     el('button', { class: 'chip-btn' + (allOpen ? ' on' : ''), onclick: () => {
       rows.forEach((c) => (allOpen ? S.clientOpen.delete(c.id) : S.clientOpen.add(c.id))); LS.set('clientOpen', [...S.clientOpen]); render();
     } }, allOpen ? 'Свернуть проекты' : 'Раскрыть проекты'),
+    el('button', { class: 'chip-btn' + (S.clientRel ? ' on' : ''), title: 'Уже не лид, но и не сделка: работали, держим связь',
+      onclick: () => { S.clientRel = !S.clientRel; render(); } }, 'Поддержание отношений'),
     el('button', { class: 'chip-btn' + (S.clientArch ? ' on' : ''), onclick: () => { S.clientArch = !S.clientArch; render(); } }, 'И архив'),
     el('button', { class: 'chip-btn', onclick: () => newClient() }, '+ Клиент'));
   const dealLine = (d) => {
@@ -2370,13 +2385,14 @@ function renderClients() {
     return el('div', { class: 'cdeal' + (d.stage === 'archive' ? ' arch' : ''), 'data-deal': d.id, onclick: (e) => { e.stopPropagation(); openDeal(d.id); } },
       el('span', { class: 'cd-stage st-' + d.stage }, stageWord(d)),
       el('span', { class: 'cd-name' }, dealShort(d, project(d.project_id))),
-      next ? el('span', { class: 'cd-next' + (isLate(next) ? ' late' : '') }, `#${next.num} ${next.title}` + (next.due_date ? ' · ' + D.ddmm(next.due_date) : ''))
+      next ? el('span', { class: 'cd-next' + (isLate(next) ? ' late' : '') }, next.title + (next.due_date ? ' · ' + D.ddmm(next.due_date) : ''))
         : d.stage !== 'archive' ? el('span', { class: 'cd-next none' }, 'нет следующего дела') : null);
   };
   const row = (c) => {
     const bits = [];
+    if (c.status === 'relations') bits.push(el('span', { class: 'rel' }, CLIENT_STATUS.relations));
     if (c.stages && c.stages.length) bits.push(el('span', {}, c.stages.map((s) => STAGE[s]).join(', ')));
-    else bits.push(el('span', { class: 'faint' }, c.all_deals ? 'проекты в архиве' : 'без проектов'));
+    else if (c.status !== 'relations') bits.push(el('span', { class: 'faint' }, c.all_deals ? 'проекты в архиве' : 'без проектов'));
     bits.push(el('span', { class: c.last_touch && D.diff(S.today, c.last_touch.slice(0, 10)) > 45 ? 'late' : '' }, c.last_touch ? 'контакт ' + ago(c.last_touch) : 'контактов нет'));
     if (v.money && c.paid_year_kop) bits.push(el('span', { class: 'money' }, 'за год ' + rubShort(c.paid_year_kop)));
     if (v.money && c.invoiced_kop) bits.push(el('span', { class: 'late' }, 'ждём ' + rubShort(c.invoiced_kop)));
@@ -2393,7 +2409,7 @@ function renderClients() {
             c.archived_at ? el('span', { class: 'faint' }, ' · архив') : null,
             deals.length ? el('span', { class: 'faint' }, ' · ' + plural(deals.length, 'проект', 'проекта', 'проектов')) : null),
           el('div', { class: 'chips' }, bits),
-          !open && c.next_task ? el('div', { class: 'next' }, `#${c.next_task.num} ${c.next_task.title}` + (c.next_task.due_date ? ' · ' + D.ddmm(c.next_task.due_date) : ''))
+          !open && c.next_task ? el('div', { class: 'next' }, c.next_task.title + (c.next_task.due_date ? ' · ' + D.ddmm(c.next_task.due_date) : ''))
             : (!open && c.live_deals ? el('div', { class: 'next none' }, 'нет следующего дела') : null))),
       open ? el('div', { class: 'cdeals' }, shownDeals.map(dealLine),
         deals.length > shownDeals.length ? el('div', { class: 'faint cd-more' }, `и в архиве: ${deals.length - shownDeals.length}`) : null,
@@ -2436,7 +2452,12 @@ function renderPeople() {
       el('div', { class: 'title' }, x.name, x.short && x.short !== x.name ? el('span', { class: 'faint' }, ' · ' + x.short) : null),
       el('div', { class: 'chips' }, x.role ? el('span', {}, x.role) : null,
         openBy.get(x.id) ? el('span', {}, plural(openBy.get(x.id), 'дело', 'дела', 'дел')) : null,
-        waitBy.get(x.id) ? el('span', { class: 'ball-waiting' }, 'жду: ' + waitBy.get(x.id)) : null)),
+        waitBy.get(x.id) ? el('span', { class: 'ball-waiting' }, 'жду: ' + waitBy.get(x.id)) : null),
+      (() => {
+        const ds = personDeals(x.id).filter(({ d }) => d.stage !== 'archive');
+        return ds.length ? el('div', { class: 'row-projs' }, ds.slice(0, 4).map(({ d, role }) => dealChip(d, role, true)),
+          ds.length > 4 ? el('span', { class: 'faint' }, `ещё ${ds.length - 4}`) : null) : null;
+      })()),
     el('button', { class: 'chip-btn', title: 'Откуда он, должность', onclick: (e) => { e.stopPropagation(); personPop(e.currentTarget, x); } }, 'откуда…'));
   const boxes = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0], 'ru')).map(([, g]) =>
     el('div', { class: 'group' }, el('h2', {}, g.href ? el('a', { class: 'link', href: g.href }, g.title) : g.title,
@@ -2538,14 +2559,16 @@ function payRow(p, withDeal) {
       : el('span', {}, p.due_on ? 'ждём ' + D.ddmm(p.due_on) : 'без даты');
   const acts = [];
   if (!p.paid_on && !p.cancelled_at) {
-    if (!p.invoiced_on) acts.push(el('button', { class: 'btn small', onclick: (e) => { e.stopPropagation(); payOp(p.id, { invoiced_on: S.today }, 'Счёт выставлен'); } }, 'Счёт выставлен'));
+    // Счёт выставлен — сразу кому и как отправили: встаёт в хронологию (владелец 09.10.2026).
+    if (!p.invoiced_on) acts.push(el('button', { class: 'btn small', onclick: (e) => { e.stopPropagation(); invoicePop(e.currentTarget, p); } }, 'Счёт выставлен'));
     acts.push(el('button', { class: 'btn small ok', onclick: (e) => { e.stopPropagation(); payOp(p.id, { paid_on: S.today }, 'Оплата получена'); } }, 'Оплачено'));
   }
   return el('div', { class: 'prow' + (p.cancelled_at ? ' cancelled' : ''), onclick: withDeal ? () => openDeal(p.deal_id) : null },
     el('div', { class: 'main' },
       el('div', {}, el('b', {}, rub(p.amount_kop)), ' ', PAY_KIND[p.kind] || p.kind, p.title ? ' · ' + p.title : '',
-        withDeal ? el('span', { class: 'faint' }, ' · ' + p.project_name + ' / ' + p.deal_name) : null),
-      el('div', { class: 'chips' }, st, p.cancelled_at ? el('span', {}, 'отменено') : null, p.note ? el('span', {}, p.note) : null)),
+        withDeal ? el('span', { class: 'faint' }, ' · ' + [p.project_name, p.deal_name].filter(Boolean).join(' / ')) : null),
+      el('div', { class: 'chips' }, st, p.invoiced_on && (p.sent_to || p.sent_via) ? el('span', {}, [p.sent_to && 'кому: ' + p.sent_to, p.sent_via].filter(Boolean).join(' ')) : null,
+        p.cancelled_at ? el('span', {}, 'отменено') : null, p.note ? el('span', {}, p.note) : null)),
     acts.length ? el('div', { class: 'acts-inline' }, acts) : null);
 }
 async function payOp(id, set, msg) {
@@ -2571,82 +2594,314 @@ function renderMoney() {
       sec('Ждём в ближайший месяц', v.expected),
       sec('Позже или без даты', v.later),
       v.unplanned.length ? el('div', { class: 'group' }, el('h2', {}, 'Подписано, а оплаты расписаны не на всю сумму', el('span', { class: 'n' }, v.unplanned.length)),
-        el('div', { class: 'dlist' }, v.unplanned.map(dealTile))) : null,
+        el('div', { class: 'dlist' }, v.unplanned.map((d) => dealTile(d)))) : null,
       sec('Пришло за 4 месяца', v.paid),
       !v.overdue.length && !v.invoiced.length && !v.expected.length && !v.later.length && !v.paid.length
         ? el('div', { class: 'empty' }, 'Оплат пока нет. Их заводят в карточке сделки: аванс, этапы, ретейнер, success fee.') : null)];
 }
 
-// ── Хронология ──────────────────────────────────────────────────────────
-/** Записи хронологии и (владельцу) куски Засечки вперемешку, свежие сверху. */
-function timelineBox(items, entries, base, opts = {}) {
-  const kind = el('select', {}, Object.entries(IKIND).map(([k, l]) => el('option', { value: k, selected: k === (opts.kind || 'call') }, l)));
-  const when = el('input', { type: 'date', value: S.today });
-  const text = el('textarea', { rows: 2, placeholder: 'Что было: звонок, встреча, переписка — коротко, с сутью и договорённостями' });
-  const add = async () => {
-    if (!text.value.trim()) return;
-    const at = when.value === S.today ? new Date().toISOString() : when.value + 'T12:00:00+03:00';
-    try {
-      await op1({ op: 'interaction.add', data: { at, kind: kind.value, summary: text.value.trim(), source: 'web', ...base } });
-      text.value = ''; crmDirty(); toast('Записано в хронологию'); render();
-    } catch (e) { fail(e); }
-  };
-  text.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) add(); });
+// ── Карточки клиента и проекта (владелец 09.10.2026) ────────────────────
+// Одно устройство у обеих: сверху описание — правится тут же или словами в строке Claude, — и статус; под
+// ними с двух сторон люди клиента и команда; дальше одно под другим — проекты (у клиента), дела, хронология
+// (звонки, встречи с короткими итогами и ссылками, счета: кому и как ушли), деньги, файлы. Пилюли в шапке
+// листают к разделу. Тексты Notion («Следующий шаг», «Мяч», «Лог») веб больше не показывает.
+function sec(key, title, extra, ...kids) {
+  return el('section', { class: 'sec', id: 'sec-' + key },
+    title ? el('h2', { class: 'sec-h' }, title, extra || null) : null, kids);
+}
+const secN = (n) => (n ? el('span', { class: 'n' }, n) : null);
+
+/** Описание — поле, которое растёт по тексту и сохраняется, когда из него вышел. */
+function aboutBox(value, placeholder, save) {
+  const ta = el('textarea', { class: 'about', rows: 2, placeholder }, value || '');
+  const fit = () => { ta.style.height = ''; ta.style.height = Math.max(ta.scrollHeight + 2, 60) + 'px'; };
+  ta.addEventListener('input', fit);
+  setTimeout(fit);
+  ta.addEventListener('change', () => { const x = ta.value.trim() || null; if (x !== (value || null)) save(x); });
+  return ta;
+}
+
+// ── Люди: с двух сторон, добавление — поиском ───────────────────────────
+/** Колонка людей: плашки (щелчок — откуда он и должность, крестик — убрать отсюда) и «+ человек». */
+function sideCol(title, list, { remove, add, mark, empty, note } = {}) {
+  return el('div', { class: 'side-col' },
+    el('div', { class: 'sc-h' }, title, list.length ? el('span', { class: 'n' }, list.length) : null),
+    el('div', { class: 'sc-chips' },
+      list.map((x) => el('span', { class: 'pchip' },
+        el('button', { class: 'pc-main', title: 'Откуда он, должность', onclick: (e) => personPop(e.currentTarget, x, mark && mark.acts ? mark.acts(x) : null) },
+          avatar(x), el('span', { class: 'pc-name' }, personName(x)),
+          mark && mark.word(x) ? el('span', { class: 'pc-role lead' }, mark.word(x)) : x.role ? el('span', { class: 'pc-role' }, x.role) : null),
+        remove ? el('button', { class: 'pc-x', title: 'Убрать отсюда', onclick: () => remove(x) }, icon('x', 11)) : null)),
+      !list.length ? el('span', { class: 'faint' }, empty || 'никого') : null,
+      add ? el('button', { class: 'pchip add', onclick: (e) => add(e.currentTarget) }, icon('plus', 12), 'человек') : null),
+    note ? el('div', { class: 'sc-note' }, note) : null);
+}
+
+/** «+ человек» — поисковая строка, а не выпадающий список (владелец 09.10.2026): сразу видны свои (команда
+ *  или люди этого клиента), набираешь — ищет среди всех по имени, компании, должности; нет такого — «Новый». */
+function personSearchPop(anchor, { title, base, exclude = [], pick, create }) {
+  setTimeout(() => {
+    const q = el('input', { class: 'ps-q', placeholder: 'Имя, компания, должность…', autocomplete: 'off' });
+    const list = el('div', { class: 'ps-list' });
+    let items = [], at = 0;
+    const keys = (x) => [x.name, x.short, ...(x.aliases || []), x.role, orgLabel(x.org_id)?.name].filter(Boolean);
+    const draw = () => {
+      const words = norm(q.value).split(/\s+/).filter(Boolean);
+      const pool = livePeople().filter((x) => !x.merged_into && !exclude.includes(x.id));
+      if (!words.length) items = base().filter((x) => x && !exclude.includes(x.id)).slice(0, 14);
+      else {
+        const score = (x) => {
+          const ks = keys(x).map(norm);
+          let sum = 0;
+          for (const w of words) {
+            const r = ks.some((k) => k.startsWith(w)) ? 0 : ks.some((k) => k.split(/[\s\-–«»"().,]+/).some((p) => p.startsWith(w))) ? 1
+              : ks.some((k) => k.includes(w)) ? 2 : -1;
+            if (r < 0) return -1;
+            sum += r;
+          }
+          return sum;
+        };
+        items = pool.map((x) => [x, score(x)]).filter(([, s]) => s >= 0)
+          .sort((a, b) => a[1] - b[1] || personName(a[0]).localeCompare(personName(b[0]), 'ru')).map(([x]) => x).slice(0, 14);
+      }
+      const typed = q.value.trim();
+      at = Math.min(at, Math.max(0, items.length - (typed ? 0 : 1)));
+      list.replaceChildren(...[
+        ...items.map((x, i) => el('button', { class: 'ps-item' + (i === at ? ' on' : ''), onmousedown: (e) => { e.preventDefault(); done(x); } },
+          avatar(x), el('span', { class: 'ps-t' }, el('span', { class: 'ps-n' }, x.name),
+            el('span', { class: 'ps-s' }, [x.short && x.short !== x.name ? x.short : null, x.role, orgLabel(x.org_id)?.name].filter(Boolean).join(' · '))))),
+        !items.length && !typed ? el('div', { class: 'ps-empty' }, 'Набери имя — найду среди всех людей') : null,
+        typed ? el('button', { class: 'ps-item ps-new' + (at === items.length ? ' on' : ''), onmousedown: (e) => { e.preventDefault(); closePop(); create(typed); } },
+          icon('plus', 16), el('span', { class: 'ps-t' }, el('span', { class: 'ps-n' }, `Новый: «${typed}»`), el('span', { class: 'ps-s' }, 'завести в справочнике'))) : null,
+      ].filter(Boolean));
+    };
+    const done = (x) => { closePop(); pick(x.id); };
+    q.addEventListener('input', () => { at = 0; draw(); });
+    q.addEventListener('keydown', (e) => {
+      const n = items.length + (q.value.trim() ? 1 : 0);
+      if (e.key === 'ArrowDown' && n) { e.preventDefault(); at = (at + 1) % n; draw(); }
+      if (e.key === 'ArrowUp' && n) { e.preventDefault(); at = (at - 1 + n) % n; draw(); }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (at < items.length) done(items[at]); else if (q.value.trim()) { closePop(); create(q.value.trim()); }
+      }
+      if (e.key === 'Escape') { e.stopPropagation(); closePop(); }
+    });
+    draw();
+    const pop = popAt(anchor, [el('div', { class: 'pop-h' }, title), q, list]);
+    pop.classList.add('ps-pop');
+    q.focus();
+  }, 0);
+}
+/** Люди этого клиента: его организация и люди его проектов. */
+function clientPeopleOf(p) {
+  const ids = new Set();
+  for (const d of S.deals.values()) if (d.project_id === p.id) (d.person_ids || []).forEach((x) => ids.add(x));
+  return livePeople().filter((x) => !x.merged_into && ((p.org_id && x.org_id === p.org_id) || ids.has(x.id)))
+    .sort((a, b) => personName(a).localeCompare(personName(b), 'ru'));
+}
+
+// ── Хронология: звонки, встречи, счета, Засечка ─────────────────────────
+const TL_SHOWN = 10;
+const SENT_VIA = ['почтой', 'в Telegram', 'через ЭДО', 'лично', 'курьером'];
+/** Итог встречи — коротко: «Тема: итог» → тема строкой, итог в три строки (щелчок — целиком), договорённости
+ *  списком (владелец 09.10.2026: «звонки, встречи с короткими итогами со ссылками на встречи»). */
+function tlLine(r, showDeal) {
+  if (r.e) {
+    const e = r.e;
+    return el('div', { class: 'tl-row work' }, el('div', { class: 'tl-when' }, D.ddmm(e.day)),
+      el('div', { class: 'tl-what' }, el('span', { class: 'tl-kind' }, icon('clock', 12), ' Засечка · ' + dur(e.minutes)), ' ', e.title || 'работа'));
+  }
+  if (r.pay) {
+    const p = r.pay;
+    const what = [rub(p.amount_kop), PAY_KIND[p.kind] || p.kind, p.title, showDeal && p.deal_name].filter(Boolean).join(' · ');
+    if (r.what === 'paid') {
+      return el('div', { class: 'tl-row pay' }, el('div', { class: 'tl-when' }, D.ddmm(p.paid_on)),
+        el('div', { class: 'tl-what' }, el('span', { class: 'tl-kind' }, 'оплата пришла'), ' ', what));
+    }
+    const sent = [p.sent_to && 'кому: ' + p.sent_to, p.sent_via].filter(Boolean).join(' · ');
+    return el('div', { class: 'tl-row pay' }, el('div', { class: 'tl-when' }, D.ddmm(p.invoiced_on)),
+      el('div', { class: 'tl-what' }, el('span', { class: 'tl-kind' }, 'счёт'), ' ', what,
+        el('div', { class: 'tl-meta' }, sent || 'кому и как отправили — не записано',
+          el('button', { class: 'link-btn', onclick: (ev) => invoicePop(ev.currentTarget, p) }, sent ? ' поправить' : ' записать'))));
+  }
+  const i = r.i;
+  const who = (i.person_ids || []).map((x) => personName(person(x))).filter(Boolean);
+  const sum = (i.summary || '').trim();
+  // Тема — до последнего «: » в начале (до первой точки, не дальше 110 знаков): у встреч в теме бывает своё
+  // двоеточие — «Клиент: тема: итог».
+  const stop = Math.min(110, sum.indexOf('. ') < 0 ? sum.length : sum.indexOf('. '));
+  const cut = sum.slice(0, stop).lastIndexOf(': ');
+  const m = cut >= 3 ? [null, sum.slice(0, cut), sum.slice(cut + 2)] : null;
+  const steps = (i.next_step || '').split(/\s*;\s*|\n+/).map((x) => x.replace(/^[→\-–•\s]+/, '').replace(/[.;]\s*$/, '').trim()).filter(Boolean);
+  const open = S.tlOpen === i.id;
+  const meeting = /^https:\/\//.test(i.source_ref || '') ? i.source_ref : null;
+  return el('div', { class: 'tl-row' + (open ? ' open' : ''), onclick: (ev) => { if (ev.target.closest('a, button')) return; S.tlOpen = open ? null : i.id; render(); } },
+    el('div', { class: 'tl-when' }, D.ddmm(i.at.slice(0, 10))),
+    el('div', { class: 'tl-what' },
+      el('div', { class: 'tl-head' }, el('span', { class: 'tl-kind' }, IKIND[i.kind] || i.kind), ' ', m ? el('b', {}, m[1]) : null),
+      el('div', { class: 'tl-body' }, m ? m[2] : sum),
+      steps.length ? el('ul', { class: 'tl-steps' }, (open ? steps : steps.slice(0, 2)).map((x) => el('li', {}, x)),
+        !open && steps.length > 2 ? el('li', { class: 'more' }, `ещё ${steps.length - 2}`) : null) : null,
+      el('div', { class: 'tl-meta' }, [showDeal && i.deal_name, who.length && who.join(', '), i.duration_min && dur(i.duration_min),
+        i.source === 'meeting' && 'из встречи'].filter(Boolean).join(' · '),
+      meeting ? el('a', { class: 'src', href: meeting, target: '_blank', rel: 'noopener noreferrer' }, ' встреча →') : null)),
+    el('button', { class: 'icon-btn tl-del', title: 'Убрать из хронологии', onclick: async () => {
+      if (!confirm('Убрать запись из хронологии? Она останется в журнале.')) return;
+      await dealOp({ op: 'interaction.delete', id: i.id });
+    } }, icon('x', 12)));
+}
+/** Хронология вперемешку, свежие сверху: записи (звонки, встречи, заметки), счета и оплаты (тем, кому открыты
+ *  деньги), куски Засечки (владельцу). Первые десять — сразу, остальное — «Показать всё». Записывать — словами
+ *  в строке Claude: «созвонились с Иваном, ждут модель к пятнице». */
+function timelineBlock(key, { items, entries, pays, showDeal }) {
   const rows = [
     ...(items || []).map((i) => ({ at: i.at, i })),
+    ...(pays || []).filter((p) => !p.cancelled_at).flatMap((p) => [
+      p.invoiced_on ? { at: p.invoiced_on + 'T12:00:00', pay: p, what: 'invoice' } : null,
+      p.paid_on ? { at: p.paid_on + 'T12:00:01', pay: p, what: 'paid' } : null]).filter(Boolean),
     ...(entries || []).map((e) => ({ at: e.day + 'T' + (e.start_local || '00:00').slice(-5) + ':00', e })),
-  ].sort((a, b) => b.at.localeCompare(a.at)).slice(0, opts.limit || 150);
-  const line = (r) => {
-    if (r.e) {
-      const e = r.e;
-      return el('div', { class: 'tl-row work' }, el('div', { class: 'tl-when' }, D.ddmm(e.day)),
-        el('div', { class: 'tl-what' }, el('span', { class: 'tl-kind' }, icon('clock', 12), ' ' + hrs(e.minutes)), ' ', e.title || 'работа',
-          e.task_num ? el('span', { class: 'faint' }, ' · #' + e.task_num) : null));
-    }
-    const i = r.i;
-    const who = (i.person_ids || []).map((x) => personName(person(x))).filter(Boolean);
-    return el('div', { class: 'tl-row' }, el('div', { class: 'tl-when' }, D.ddmm(i.at.slice(0, 10))),
-      el('div', { class: 'tl-what' },
-        el('span', { class: 'tl-kind' }, IKIND[i.kind] || i.kind), ' ', i.summary,
-        i.next_step ? el('div', { class: 'tl-next' }, '→ ' + i.next_step) : null,
-        el('div', { class: 'tl-meta' }, [opts.showDeal && i.deal_name, who.length && who.join(', '), i.duration_min && i.duration_min + ' мин',
-          i.source === 'meeting' && 'из встречи', i.source === 'notion' && 'Notion'].filter(Boolean).join(' · '),
-          i.source_ref && /^https:\/\//.test(i.source_ref) ? el('a', { class: 'src', href: i.source_ref, target: '_blank', rel: 'noopener noreferrer' }, ' открыть') : null)),
-      el('button', { class: 'icon-btn tl-del', title: 'Убрать из хронологии', onclick: async () => {
-        if (!confirm('Убрать запись из хронологии? Она останется в журнале.')) return;
-        await dealOp({ op: 'interaction.delete', id: i.id });
-      } }, icon('x', 12)));
+  ].sort((a, b) => b.at.localeCompare(a.at));
+  const full = S.tlAll === key;
+  const shown = full ? rows : rows.slice(0, TL_SHOWN);
+  return [el('div', { class: 'rows tl-rows' }, shown.length ? shown.map((r) => tlLine(r, showDeal))
+    : el('div', { class: 'faint pad' }, 'Пока пусто. Скажи слева: «созвонились с Иваном, ждут модель к пятнице» — запишу сюда.')),
+  rows.length > TL_SHOWN ? el('button', { class: 'chip-btn tl-more', onclick: () => { S.tlAll = full ? null : key; render(); } },
+    full ? 'Свернуть' : `Показать всё · ${rows.length}`) : null];
+}
+
+/** Счёт выставлен: когда, кому и как отправили — встаёт в хронологию. */
+function invoicePop(anchor, p) {
+  setTimeout(() => {
+    const day = el('input', { type: 'date', value: p.invoiced_on || S.today });
+    const to = el('input', { placeholder: 'кому: бухгалтерия, Иван…', value: p.sent_to || '' });
+    const via = el('select', {}, ['', ...SENT_VIA, ...(p.sent_via && !SENT_VIA.includes(p.sent_via) ? [p.sent_via] : [])]
+      .map((x) => el('option', { value: x, selected: (p.sent_via || '') === x }, x || 'как отправили…')));
+    const save = () => { closePop(); payOp(p.id, { invoiced_on: day.value || S.today, sent_to: to.value.trim() || null, sent_via: via.value || null }, 'Счёт: ' + (to.value.trim() || 'записал')); };
+    to.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+    popAt(anchor, [el('div', { class: 'pop-h' }, 'Счёт: ' + rub(p.amount_kop)), el('div', { class: 'pop-l' }, 'Когда выставили'), day,
+      el('div', { class: 'pop-l' }, 'Кому'), to, el('div', { class: 'pop-l' }, 'Как'), via,
+      el('div', { class: 'sep' }), el('button', { onclick: save }, 'Записать', el('span', { class: 'k' }, 'Enter'))]);
+    to.focus();
+  }, 0);
+}
+
+// ── Файлы: папка и документы ссылками ───────────────────────────────────
+const FILE_KIND = { contract: 'Договор', invoice: 'Счёт', nda: 'NDA', act: 'Акт', other: 'Документ' };
+const withScheme = (v) => (v && !/^https?:\/\//i.test(v) ? 'https://' + v : v);
+const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return u; } };
+function filesBlock(row, save) {
+  const files = row.files || [];
+  const folder = el('input', { class: 'f-in', type: 'url', placeholder: 'Ссылка на папку: Яндекс Диск, Google Drive…', value: row.folder_url || '' });
+  folder.addEventListener('change', () => save({ folder_url: withScheme(folder.value.trim()) || null }, 'Папка: ' + (folder.value.trim() ? 'записал' : 'убрал')));
+  const kind = el('select', {}, Object.entries(FILE_KIND).map(([k, l]) => el('option', { value: k }, l)));
+  const title = el('input', { class: 'f-in', placeholder: 'название: «Договор №12», «Счёт за октябрь»' });
+  const url = el('input', { class: 'f-in', type: 'url', placeholder: 'ссылка на файл' });
+  const add = () => {
+    const u = withScheme(url.value.trim());
+    if (!u) { url.focus(); return; }
+    save({ files: [...files, { kind: kind.value, title: title.value.trim() || null, url: u, at: S.today }] }, (title.value.trim() || FILE_KIND[kind.value]) + ' — в файлах');
   };
-  return el('div', { class: 'timeline' },
-    el('div', { class: 'tl-add' }, el('div', { class: 'tl-add-row' }, kind, when), text,
-      el('div', { class: 'tl-add-row' }, el('span', { class: 'faint' }, 'Ctrl+Enter'), el('button', { class: 'btn small', onclick: add }, 'Записать'))),
-    rows.length ? rows.map(line) : el('div', { class: 'faint pad' }, 'Пока пусто.'));
+  url.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+  return el('div', { class: 'rows files' },
+    el('div', { class: 'f-row f-folder' }, icon('folder', 18),
+      row.folder_url ? el('a', { class: 'link f-open', href: row.folder_url, target: '_blank', rel: 'noopener noreferrer' }, 'Открыть папку ↗') : null, folder),
+    files.map((f, k) => el('div', { class: 'f-row' }, el('span', { class: 'f-kind' }, FILE_KIND[f.kind] || 'Документ'),
+      el('a', { class: 'link f-name', href: f.url, target: '_blank', rel: 'noopener noreferrer' }, f.title || hostOf(f.url)),
+      f.at ? el('span', { class: 'faint' }, D.ddmm(f.at)) : null,
+      el('button', { class: 'icon-btn', title: 'Убрать из файлов', onclick: () => save({ files: files.filter((_, j) => j !== k) }, 'Убрал: ' + (f.title || FILE_KIND[f.kind])) }, icon('x', 12)))),
+    el('div', { class: 'f-row f-add' }, kind, title, url, el('button', { class: 'btn small', onclick: add }, '+ Документ')));
 }
 
 // ── Клиент на странице проекта ──────────────────────────────────────────
-function clientBlock(p) {
+const CLIENT_STATUS = { relations: 'поддержание отношений' };
+async function projectSet(p, set, msg) {
+  const before = Object.fromEntries(Object.keys(set).map((k) => [k, p[k] ?? null]));
+  try { await op1({ op: 'project.set', id: p.id, set }); crmDirty(); render(); if (msg) toast(msg, () => op1({ op: 'project.set', id: p.id, set: before })); } catch (e) { fail(e); render(); }
+}
+/** Команда клиента — те, кто ведёт его живые проекты и в их командах. */
+function clientTeam(deals) {
+  const ids = [];
+  for (const d of deals) for (const x of [d.lead_person_id, ...(d.team_ids || [])]) if (x && !ids.includes(x)) ids.push(x);
+  return ids.map(person).filter(Boolean);
+}
+/** В команду клиента: проект один — в него, несколько — выбрать, в какой. */
+function addToTeam(anchor, deals, pid) {
+  const put = (d) => { const ids = d.team_ids || []; if (!ids.includes(pid) && d.lead_person_id !== pid) setDeal(d.id, { team_ids: [...ids, pid] }); };
+  if (deals.length === 1) { put(deals[0]); return; }
+  setTimeout(() => popAt(anchor, [el('div', { class: 'pop-h' }, `${pName(pid)} — в команду какого проекта?`),
+    ...deals.map((d) => el('button', { onclick: () => { closePop(); put(d); } }, dealShort(d, project(d.project_id)), el('span', { class: 'k' }, STAGE[d.stage])))]), 0);
+}
+
+function renderClientCard(p, { picker, g, items, sub, star }) {
   const v = crmGet('/api/view/client?project_id=' + p.id);
-  const deals = [...S.deals.values()].filter((d) => d.project_id === p.id)
-    .sort((a, b) => (a.stage === 'archive') - (b.stage === 'archive') || OPEN_STAGES.indexOf(a.stage) - OPEN_STAGES.indexOf(b.stage));
+  const deals = clientDeals(p.id);
+  const live = deals.filter((d) => d.stage !== 'archive');
   const full = v ? new Map(v.deals.map((d) => [d.id, d])) : new Map();
-  const dealBox = el('div', { class: 'dlist' }, deals.map((d) => dealTile({ ...d, project_name: p.name, ...(full.get(d.id) || {}) })),
-    el('button', { class: 'dtile add', onclick: () => newDeal(p.id) }, icon('plus', 14), ' Сделка'));
-  const info = [];
+  const money = S.me.money;
   if (v && v.months && v.months.length) {
     const total = v.months.reduce((s, m) => s + m.minutes, 0);
-    info.push(el('span', { title: 'время из Засечки' }, icon('clock', 12), ' ' + hrs(total) + ' всего · ' + v.months.slice(0, 3).map((m) => `${MONTHS[+m.month.slice(5) - 1].slice(0, 3)} ${hrs(m.minutes)}`).join(', ')));
+    sub.push(el('span', { title: 'время из Засечки' }, icon('clock', 12), ' ' + dur(total) + ' всего · ' + v.months.slice(0, 3).map((m) => `${MONTHS[+m.month.slice(5) - 1].slice(0, 3)} ${dur(m.minutes)}`).join(', ')));
   }
-  // Люди клиента — плашками: крестик убирает отсюда, щелчок — откуда он и должность (владелец, 06.10.2026).
-  const people = v ? v.people.map((x) => person(x.id) || x) : [];
-  const peopleBox = v ? peopleChips('Люди', people, {
-    empty: 'пока никого',
-    remove: (x) => leaveClient(x, p, v),
-    add: (anchor) => addPersonPop(anchor, people.map((x) => x.id), (id) => joinClient(person(id), p), (name) => joinClient(null, p, name)),
-  }) : null;
-  const tabs = el('div', { class: 'seg tabs' }, [['tasks', 'Дела'], ['timeline', 'Хронология']].map(([k, l]) =>
-    el('button', { class: (S.clientTab || 'tasks') === k ? 'on' : '', onclick: () => { S.clientTab = k; render(); } }, l)));
-  return { dealBox, info, peopleBox, tabs, timeline: (S.clientTab === 'timeline')
-    ? (v ? timelineBox(v.timeline, v.entries, { project_id: p.id }, { showDeal: true }) : loading()) : null };
+  const stages = OPEN_STAGES.filter((s) => live.some((d) => d.stage === s)).map((s) => STAGE[s]);
+  const status = el('div', { class: 'stage-row client-status' },
+    el('span', { class: 'cs-word' }, 'Статус'),
+    stages.length ? el('span', { class: 'cs-now' }, 'проекты: ' + stages.join(', ')) : null,
+    // «Поддержание отношений» — уже не лид, но и не сделка (владелец 09.10.2026).
+    el('button', { class: 'chip-btn' + (p.status === 'relations' ? ' on' : ''), title: 'Уже не лид, но и не сделка: работали, держим связь',
+      onclick: () => projectSet(p, { status: p.status === 'relations' ? null : 'relations' }, p.status === 'relations' ? 'Статус — по проектам' : 'Поддержание отношений') },
+    'Поддержание отношений'),
+    !stages.length && p.status !== 'relations' ? el('span', { class: 'faint' }, 'проектов в работе нет') : null);
+  const people = clientPeopleOf(p);
+  const team = clientTeam(live);
+  const sides = el('div', { class: 'sides' },
+    sideCol('Люди клиента', people, {
+      empty: 'пока никого',
+      remove: (x) => leaveClient(x, p, v),
+      add: (a) => personSearchPop(a, { title: 'Кто из «' + p.name + '»', base: () => people, exclude: people.map((x) => x.id),
+        pick: (id) => joinClient(person(id), p), create: (name) => joinClient(null, p, name) }),
+    }),
+    sideCol('Команда', team, {
+      empty: live.length ? 'никого' : 'появится с проектом',
+      mark: { word: (x) => (live.some((d) => d.lead_person_id === x.id) ? 'ведёт' : '') },
+      add: live.length ? (a) => personSearchPop(a, { title: 'Кто из команды', base: teamPeople, exclude: team.map((x) => x.id),
+        pick: (id) => addToTeam(a, live, id), create: async (name) => {
+          const r = await dealOp({ op: 'person.create', data: { name } });
+          if (r && r.row) addToTeam(a, live, r.row.id);
+        } }) : null,
+      note: live.length > 1 ? 'по всем живым проектам; убрать — в карточке проекта' : null,
+    }));
+  const tiles = el('div', { class: 'dlist' }, deals.filter((d) => d.stage !== 'archive' || S.clientArch)
+    .map((d) => dealTile({ ...d, project_name: p.name, ...(full.get(d.id) || {}) })),
+  el('button', { class: 'dtile add', onclick: () => newDeal(p.id) }, icon('plus', 14), ' Проект'));
+  const archived = deals.length - live.length;
+  const nav = [['about', 'О клиенте'], ['deals', 'Проекты'], ['tasks', 'Дела'], ['timeline', 'Хронология'], money ? ['money', 'Деньги'] : null, ['files', 'Файлы']].filter(Boolean);
+  const pays = v ? v.payments || [] : [];
+  return [head(p.name, sub, star, nav),
+    el('div', { class: 'body card-body' },
+      quickAdd({ project_id: p.id }, { label: `с клиентом «${p.name}»`,
+        placeholder: '«Иван — их CFO, добавь его», «Лена с нами на проекте», «созвонились, ждут модель к пятнице», «поддерживаем отношения»' }),
+      sec('about', 'О клиенте', null,
+        aboutBox(p.note, 'Кто они, чем занимаются, как пришли, о чём договорённость. Можно сказать словами в строке Claude.', (x) => projectSet(p, { note: x }, 'Описание сохранено')),
+        status),
+      sides,
+      sec('deals', 'Проекты', [secN(live.length), archived ? el('button', { class: 'link-btn', onclick: () => { S.clientArch = !S.clientArch; render(); } },
+        S.clientArch ? 'скрыть архив' : `и в архиве: ${archived}`) : null], tiles),
+      sec('tasks', 'Дела', secN(items.filter(isOpen).length), el('div', { class: 'toolbar' }, picker, doneToggle()),
+        items.length ? grouped(items, g) : el('div', { class: 'empty' }, 'Дел нет. Следующий шаг — скажи в строке Claude.')),
+      sec('timeline', 'Хронология', null, v ? timelineBlock('c:' + p.id, { items: v.timeline, entries: v.entries, pays: money ? pays : [], showDeal: true }) : loading()),
+      money ? sec('money', 'Деньги', null, clientMoney(pays)) : null,
+      sec('files', 'Файлы', secN((p.files || []).length), filesBlock(p, (set, msg) => projectSet(p, set, msg))))];
+}
+/** Деньги клиента: оплаты всех его проектов — что пришло, что выставлено, чего ждём. */
+function clientMoney(pays) {
+  const live = pays.filter((x) => !x.cancelled_at);
+  if (!live.length) return el('div', { class: 'empty' }, 'Оплат пока нет — их заводят в карточке проекта.');
+  const sum = (f) => live.filter(f).reduce((s, x) => s + x.amount_kop, 0);
+  return [el('div', { class: 'money-sum' }, [sum((x) => x.paid_on) && 'получено ' + rub(sum((x) => x.paid_on)),
+    sum((x) => !x.paid_on && x.invoiced_on) && 'счета ' + rub(sum((x) => !x.paid_on && x.invoiced_on)),
+    sum((x) => !x.paid_on && !x.invoiced_on) && 'план ' + rub(sum((x) => !x.paid_on && !x.invoiced_on))].filter(Boolean).join(' · ')),
+  el('div', { class: 'rows pays' }, live.map((x) => payRow({ ...x, project_name: '', deal_name: x.deal_name }, true)))];
 }
 
 /** Организация клиента; у старого клиента без неё — заводим (люди привязываются к организации). */
@@ -2668,18 +2923,19 @@ async function joinClient(x, p, name) {
       await op1({ op: 'person.create', data: { name, org_id: org } });
       toast(`Завёл: ${name} из «${p.name}»`);
     }
+    crmDirty();
     render();
   } catch (e) { fail(e); }
 }
 /** Убрать человека из клиента: из его организации и из людей его сделок. Строки не удаляются — «Вернуть». */
-async function leaveClient(x, p, v) {
+async function leaveClient(x, p) {
   if (!confirm(`Убрать ${x.name} из «${p.name}»? Карточка человека останется.`)) return;
   const go_ = [], back = [];
   if (x.org_id && x.org_id === p.org_id) {
     go_.push({ op: 'person.set', id: x.id, set: { org_id: null } });
     back.push({ op: 'person.set', id: x.id, set: { org_id: x.org_id } });
   }
-  for (const d of (v && v.deals) || []) {
+  for (const d of clientDeals(p.id)) {
     const ids = d.person_ids || [];
     if (!ids.includes(x.id)) continue;
     go_.push({ op: 'deal.set', id: d.id, set: { person_ids: ids.filter((i) => i !== x.id) } });
@@ -2689,14 +2945,14 @@ async function leaveClient(x, p, v) {
   try { await ops(go_); render(); toast(`${personName(x)} больше не в «${p.name}»`, () => ops(back)); } catch (e) { fail(e); }
 }
 
-// ── Сделка — страницей ──────────────────────────────────────────────────
-// Владелец, 06.10.2026: «если я нажимаю на проект, он должен быть не просто сайдбаром, а таким же,
-// как клиент и человек: видны дела, что за проект, и можно его двигать дальше». Сделка у клиента —
-// это его проект. Наверху — строка Claude (Opus видит сделку целиком), стадии — кнопками.
+// ── Проект клиента (сделка) — страницей ─────────────────────────────────
+// Владелец, 06.10.2026: «если я нажимаю на проект, он должен быть не просто сайдбаром, а таким же, как клиент
+// и человек». 09.10.2026 — то же устройство, что у клиента: описание сверху и правится, статус, люди клиента
+// и команда с двух сторон, дела, хронология под делами, деньги, файлы.
 function renderDeal(id) {
   const d0 = S.deals.get(id);
   const v = crmGet('/api/view/deal?deal_id=' + id, 15000);
-  if (!d0) return [head('Сделка'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Сделка не видна.'))];
+  if (!d0) return [head('Проект'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Проект не виден.'))];
   const d = { ...d0, ...(v ? v.deal : {}) };
   const p = project(d.project_id);
   const money = S.me.money;
@@ -2712,21 +2968,22 @@ function renderDeal(id) {
     return i;
   };
   const rubIn = (field) => inp(field, 'number', d[field] != null ? Math.round(d[field] / 100) : '', (x) => Math.round(+x * 100));
-  const team = teamPeople();
-  const ppl = livePeople().sort((a, b) => personName(a).localeCompare(personName(b), 'ru'));
-  // Команда и люди клиента — те же плашки, что у клиента.
-  const chipsOf = (field, title) => {
-    const ids = d[field] || [];
-    return peopleChips(title, ids.map(person).filter(Boolean), {
-      remove: (x) => save(field, ids.filter((y) => y !== x.id)),
-      add: (anchor) => addPersonPop(anchor, ids, (pid) => save(field, [...ids, pid]), async (name) => {
-        const org = field === 'person_ids' && p ? await clientOrg(p).catch(() => null) : null;
-        const r = await dealOp({ op: 'person.create', data: { name, ...(org ? { org_id: org } : {}) } });
-        if (r && r.row) save(field, [...ids, r.row.id]);
-      }),
-    });
-  };
+  const fact = (label, ctl) => el('label', { class: 'fact' }, el('span', {}, label), ctl);
 
+  // Что за проект: описание (видят все, кто видит проект) и короткие факты.
+  const facts = el('div', { class: 'facts' },
+    fact('Тип', sel('deal_type', DEAL_TYPES.map((x) => [x, x]).concat(d.deal_type && !DEAL_TYPES.includes(d.deal_type) ? [[d.deal_type, d.deal_type]] : []), d.deal_type)),
+    fact('Вероятность, %', inp('probability', 'number', d.probability, (x) => Math.max(0, Math.min(100, Math.round(+x))))),
+    fact('Решение ждём', inp('expected_on', 'date', d.expected_on)),
+    fact('Дедлайн', inp('deadline', 'date', d.deadline)),
+    fact('Привёл', sel('source_person_id', livePeople().sort((a, b) => personName(a).localeCompare(personName(b), 'ru')).map((x) => [x.id, x.name]), d.source_person_id)));
+  // «Как я вижу» и «Идеи» — старые заметки владельца: видны, только если в них что-то есть.
+  const notes = [d.my_view ? ['Как я вижу (только мне)', 'my_view'] : null, d.ideas ? ['Идеи', 'ideas'] : null].filter(Boolean);
+  const more = notes.length ? el('details', { class: 'deal-more', open: S.dealMore ? true : null, ontoggle: (e) => { S.dealMore = e.currentTarget.open; } },
+    el('summary', {}, notes.map(([l]) => l.replace(' (только мне)', '').toLowerCase()).join(' и ')),
+    notes.map(([label, f]) => el('div', { class: 'legacy' }, el('div', { class: 'faint' }, label), aboutBox(d[f], '', (x) => save(f, x))))) : null;
+
+  // Статус: лид, КП… и «Закрыть…» с итогом.
   const stages = el('div', { class: 'stages' }, OPEN_STAGES.map((s) => el('button', { class: d.stage === s ? 'on' : '', onclick: () => save('stage', s) }, STAGE[s])));
   const closeDeal = (anchor) => setTimeout(() => popAt(anchor, [
     ...Object.entries(OUTCOME).map(([k, l]) => el('button', { onclick: () => {
@@ -2739,32 +2996,45 @@ function renderDeal(id) {
     ? el('div', { class: 'stage-closed' }, el('span', { class: 'out-' + (d.outcome || 'none') }, d.outcome ? OUTCOME[d.outcome] : 'архив'),
       d.closed_on ? ' · ' + D.ddmm(d.closed_on) : '', d.lost_reason ? ' · ' + d.lost_reason : '',
       el('button', { class: 'btn small', onclick: () => save('stage', 'active') }, 'Вернуть в работу'))
-    : el('div', { class: 'stage-row' }, stages, el('button', { class: 'btn small', onclick: (e) => closeDeal(e.currentTarget) }, 'Закрыть…'));
+    : el('div', { class: 'stage-row' }, el('span', { class: 'cs-word' }, 'Статус'), stages, el('button', { class: 'btn small', onclick: (e) => closeDeal(e.currentTarget) }, 'Закрыть…'));
 
-  const title = el('input', { class: 'deal-name', value: d.name, title: 'Название сделки' });
-  title.addEventListener('keydown', (e) => { if (e.key === 'Enter') title.blur(); });
-  title.addEventListener('change', () => title.value.trim() && save('name', title.value.trim()));
-  const props = el('div', { class: 'props deal-props' },
-    el('span', {}, 'Название'), title,
-    el('span', {}, 'Тип'), sel('deal_type', DEAL_TYPES.map((x) => [x, x]).concat(d.deal_type && !DEAL_TYPES.includes(d.deal_type) ? [[d.deal_type, d.deal_type]] : []), d.deal_type),
-    el('span', {}, 'Ведёт'), sel('lead_person_id', team.map((x) => [x.id, personName(x)]), d.lead_person_id),
-    el('span', {}, 'Привёл'), sel('source_person_id', ppl.map((x) => [x.id, x.name]), d.source_person_id),
-    el('span', {}, 'Вероятность, %'), inp('probability', 'number', d.probability, (x) => Math.max(0, Math.min(100, Math.round(+x)))),
-    el('span', {}, 'Решение ждём'), inp('expected_on', 'date', d.expected_on),
-    el('span', {}, 'Дедлайн'), inp('deadline', 'date', d.deadline));
+  // С двух сторон: люди клиента и команда (ведущий — первым, с пометкой).
+  const clientSide = (d.person_ids || []).map(person).filter(Boolean);
+  const teamIds = [d.lead_person_id, ...(d.team_ids || [])].filter((x, k, a) => x && a.indexOf(x) === k);
+  const teamSide = teamIds.map(person).filter(Boolean);
+  const newPerson = async (name, field) => {
+    const org = field === 'person_ids' && p ? await clientOrg(p).catch(() => null) : null;
+    const r = await dealOp({ op: 'person.create', data: { name, ...(org ? { org_id: org } : {}) } });
+    if (r && r.row) save(field, [...(d[field] || []), r.row.id]);
+  };
+  const sides = el('div', { class: 'sides' },
+    sideCol('Люди клиента', clientSide, {
+      remove: (x) => save('person_ids', (d.person_ids || []).filter((y) => y !== x.id)),
+      add: (a) => personSearchPop(a, { title: 'Кто от клиента', base: () => (p ? clientPeopleOf(p) : []), exclude: d.person_ids || [],
+        pick: (pid) => save('person_ids', [...(d.person_ids || []), pid]), create: (name) => newPerson(name, 'person_ids') }),
+    }),
+    sideCol('Команда', teamSide, {
+      mark: {
+        word: (x) => (x.id === d.lead_person_id ? 'ведёт' : ''),
+        acts: (x) => (x.id === d.lead_person_id ? null : el('button', { onclick: () => { closePop(); setDeal(d.id, { lead_person_id: x.id, team_ids: [...new Set([...(d.team_ids || []), d.lead_person_id].filter((y) => y && y !== x.id))] }); } }, 'Ведёт проект', el('span', { class: 'k' }, '★'))),
+      },
+      remove: (x) => (x.id === d.lead_person_id ? save('lead_person_id', null) : save('team_ids', (d.team_ids || []).filter((y) => y !== x.id))),
+      add: (a) => personSearchPop(a, { title: 'Кто из команды', base: teamPeople, exclude: teamIds,
+        pick: (pid) => (d.lead_person_id ? save('team_ids', [...(d.team_ids || []), pid]) : save('lead_person_id', pid)),
+        create: (name) => newPerson(name, 'team_ids') }),
+      empty: 'никого — первый станет ведущим',
+    }));
 
-  const sub = [p ? el('a', { class: 'link', href: '#/p/' + p.id }, dot(p.id), ' ', p.name) : null, stageWord(d),
-    d.fee_kop && money ? rubShort(d.fee_kop) : null, v && v.minutes_all ? el('span', { title: 'время из Засечки по делам сделки' }, icon('clock', 12), ' ' + hrs(v.minutes_all)) : null];
-  const body = el('div', { class: 'body' },
-    quickAdd({ project_id: d.project_id, deal_id: d.id }, { label: `со сделкой «${d.name}»`,
-      placeholder: '«подписали мандат», «этого уже нет — закрой, проиграли», «Ольга теперь в команде клиента», «созвон: ждут модель к пятнице»' }),
-    stageRow,
-    el('div', { class: 'deal-people' }, chipsOf('person_ids', 'Люди клиента'), chipsOf('team_ids', 'Команда')),
-    el('details', { class: 'deal-more', open: S.dealMore ? true : null, ontoggle: (e) => { S.dealMore = e.currentTarget.open; } },
-      el('summary', {}, 'Что за сделка: тип, кто ведёт, вероятность, сроки'), props));
+  // Дела: следующий шаг — открытое дело проекта; без него проект застынет.
+  const items = all().filter((t) => t.deal_id === d.id && (S.showDone || isOpen(t)));
+  const open = items.filter(isOpen);
+  const tasks = sec('tasks', 'Дела', [secN(open.length), el('span', { class: 'act' }, doneToggle())],
+    open.length || d.stage === 'archive' ? null : el('div', { class: 'empty' }, 'Нет следующего дела — проект без шага застынет. Скажи его в строке Claude.'),
+    items.length ? grouped(items, 'date') : null);
 
+  const pays = v ? v.payments : [...S.pays.values()].filter((x) => x.deal_id === d.id);
+  let moneySec = null;
   if (money) {
-    const pays = v ? v.payments : [...S.pays.values()].filter((x) => x.deal_id === d.id);
     const live = pays.filter((x) => !x.cancelled_at);
     const sum = (f) => live.filter(f).reduce((s, x) => s + x.amount_kop, 0);
     const paid = sum((x) => x.paid_on), inv = sum((x) => !x.paid_on && x.invoiced_on), plan = sum((x) => !x.paid_on && !x.invoiced_on);
@@ -2775,50 +3045,39 @@ function renderDeal(id) {
       if (!(+amount.value > 0)) { toast('Сумма?'); return; }
       try { await op1({ op: 'payment.create', data: { deal_id: d.id, kind: kind.value, amount_kop: Math.round(+amount.value * 100), due_on: due.value || null } }); crmDirty(); render(); } catch (e) { fail(e); }
     };
-    body.append(el('details', { class: 'deal-more' }, el('summary', {}, 'Деньги: ' + ([paid && 'получено ' + rubShort(paid), inv && 'счета ' + rubShort(inv),
-      plan && 'план ' + rubShort(plan)].filter(Boolean).join(' · ') || 'оплат пока нет')),
-      el('div', { class: 'props' },
-        el('span', {}, 'Модель'), sel('fee_kind', Object.entries(FEE_KIND), d.fee_kind),
-        el('span', {}, 'Гонорар, ₽'), rubIn('fee_kop'),
-        el('span', {}, 'Ретейнер, ₽/мес'), rubIn('retainer_kop'),
-        el('span', {}, 'Успех, %'), inp('success_pct', 'number', d.success_pct, (x) => +x)),
+    moneySec = sec('money', 'Деньги', null,
+      el('div', { class: 'facts' }, fact('Модель', sel('fee_kind', Object.entries(FEE_KIND), d.fee_kind)), fact('Гонорар, ₽', rubIn('fee_kop')),
+        fact('Ретейнер, ₽/мес', rubIn('retainer_kop')), fact('Успех, %', inp('success_pct', 'number', d.success_pct, (x) => +x))),
       el('div', { class: 'money-sum' }, [paid && 'получено ' + rub(paid), inv && 'счета ' + rub(inv), plan && 'план ' + rub(plan),
         d.fee_kop && ['mandate', 'active', 'closing'].includes(d.stage) ? 'осталось ' + rub(Math.max(d.fee_kop - paid, 0)) : null,
         d.fee_kop && paid + inv + plan < d.fee_kop && d.stage !== 'archive' ? 'не расписано ' + rub(d.fee_kop - paid - inv - plan) : null].filter(Boolean).join(' · ') || 'оплат пока нет'),
-      el('div', { class: 'pays' }, pays.map((x) => payRow(x, false))),
-      el('div', { class: 'pay-add' }, kind, amount, due, el('button', { class: 'btn small', onclick: addPay }, '+ Оплата'))));
+      pays.length ? el('div', { class: 'rows pays' }, pays.map((x) => payRow(x, false))) : null,
+      el('div', { class: 'pay-add' }, kind, amount, due, el('button', { class: 'btn small', onclick: addPay }, '+ Оплата')));
   }
 
-  const tabs = el('div', { class: 'seg tabs' }, [['tasks', 'Дела'], ['timeline', 'Хронология']].map(([k, l]) =>
-    el('button', { class: (S.clientTab || 'tasks') === k ? 'on' : '', onclick: () => { S.clientTab = k; render(); } }, l)));
-  body.append(tabs);
-  if (S.clientTab === 'timeline') {
-    body.append(v ? timelineBox(v.timeline, v.entries, { project_id: d.project_id, deal_id: d.id, person_ids: d.person_ids || [] }) : loading());
-  } else {
-    // Следующий шаг — открытое дело сделки; без него сделка застынет.
-    const items = all().filter((t) => t.deal_id === d.id && (S.showDone || isOpen(t)));
-    const open = items.filter(isOpen);
-    body.append(el('div', {}, el('div', { class: 'toolbar' }, doneToggle()),
-      open.length || d.stage === 'archive' ? null : el('div', { class: 'next none pad' }, 'Нет следующего дела — сделка без шага застынет. Скажи его в строке наверху.'),
-      items.length ? grouped(items, 'date') : null));
-  }
-  const legacy = [d.my_view != null || S.me.role === 'owner' ? ['Как я вижу (только мне)', 'my_view', true] : null, ['Идеи', 'ideas', true],
-    d.next_step ? ['Следующий шаг (Notion)', 'next_step', false] : null, d.ball ? ['Мяч (Notion)', 'ball', false] : null,
-    d.log ? ['Хронология (Notion)', 'log', false] : null].filter(Boolean);
-  body.append(el('details', { open: d.my_view || d.ideas ? true : null }, el('summary', {}, 'Заметки и тексты из Notion'),
-    legacy.map(([label, f, edit]) => {
-      const ta = el('textarea', { class: 'notes', readonly: edit ? null : true }, d[f] || '');
-      if (edit) ta.addEventListener('change', () => save(f, ta.value.trim() || null));
-      return el('div', { class: 'legacy' }, el('div', { class: 'faint' }, label), ta);
-    })));
+  const sub = [p ? el('a', { class: 'link', href: '#/p/' + p.id }, dot(p.id), ' ', p.name) : null, stageWord(d),
+    d.fee_kop && money ? rubShort(d.fee_kop) : null, v && v.minutes_all ? el('span', { title: 'время из Засечки по делам проекта' }, icon('clock', 12), ' ' + dur(v.minutes_all)) : null];
+  const nav = [['about', 'О проекте'], ['tasks', 'Дела'], ['timeline', 'Хронология'], money ? ['money', 'Деньги'] : null, ['files', 'Файлы']].filter(Boolean);
+  const body = el('div', { class: 'body card-body' },
+    quickAdd({ project_id: d.project_id, deal_id: d.id }, { label: `с проектом «${d.name}»`,
+      placeholder: '«подписали мандат», «добавь Наташу в команду», «Ольга — их CFO», «созвон: ждут модель к пятнице», «этого уже нет — закрой»' }),
+    sec('about', 'О проекте', null,
+      aboutBox(d.description, 'Что за проект: суть, цель, о чём договорились. Можно сказать словами в строке Claude.', (x) => save('description', x)),
+      facts, more),
+    stageRow,
+    sides,
+    tasks,
+    sec('timeline', 'Хронология', null, v ? timelineBlock('d:' + d.id, { items: v.timeline, entries: v.entries, pays: money ? pays : [] }) : loading()),
+    moneySec,
+    sec('files', 'Файлы', secN((d.files || []).length), filesBlock(d, (set, msg) => dealOp({ op: 'deal.set', id: d.id, set }).then((r) => r && msg && toast(msg)))));
   if (v && v.history.length) {
-    body.append(el('details', {}, el('summary', {}, 'Журнал сделки'), v.history.map((h) => {
+    body.append(el('details', { class: 'deal-more' }, el('summary', {}, 'Журнал проекта'), v.history.map((h) => {
       const a = h.after || {};
-      const what = h.op === 'insert' ? 'заведена' : a.stage ? 'стадия: ' + (STAGE[a.stage] || a.stage) + (a.outcome ? ' — ' + OUTCOME[a.outcome] : '') : Object.keys(a).join(', ');
+      const what = h.op === 'insert' ? 'заведён' : a.stage ? 'стадия: ' + (STAGE[a.stage] || a.stage) + (a.outcome ? ' — ' + OUTCOME[a.outcome] : '') : Object.keys(a).join(', ');
       return el('div', { class: 'hist' }, `${h.at.slice(0, 16).replace('T', ' ')} · ${h.actor} · ${what}`);
     })));
   }
-  return [head(d.name, sub), body];
+  return [head(d.name, sub, null, nav), body];
 }
 
 // ── Человек в CRM (на его странице) ─────────────────────────────────────
@@ -2831,8 +3090,7 @@ function personCrmBlock(p) {
   hub.addEventListener('change', async () => { try { await op1({ op: 'person.set', id: p.id, set: { hub: hub.checked } }); crmDirty(); } catch (e) { fail(e); } });
   return el('div', { class: 'crm-person' },
     el('div', { class: 'toolbar' }, el('label', {}, 'Теплота', cad), el('label', {}, hub, 'хаб — через него идут темы')),
-    v && v.deals.length ? el('div', { class: 'group' }, el('h2', {}, 'Сделки', el('span', { class: 'n' }, v.deals.length)), el('div', { class: 'dlist' }, v.deals.map(dealTile))) : null,
-    el('div', { class: 'group' }, el('h2', {}, 'Хронология'), v ? timelineBox(v.timeline, null, { person_ids: [p.id] }, { showDeal: true }) : loading()));
+    sec('timeline', 'Хронология', null, v ? timelineBlock('h:' + p.id, { items: v.timeline, showDeal: true }) : loading()));
 }
 
 // ── Путь: очки, серия, уровень (считает сервер, вид stats; имена — тут) ─
@@ -2984,7 +3242,7 @@ document.addEventListener('keydown', (e) => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);
   if (e.key === 'Escape') {
     if (document.querySelector('.pop')) { closePop(); return; }
-    if (rec || S.askTask) { stopListening(); S.askTask = null; S.listenQuick = false; render(); return; }
+    if (rec) { stopListening(); S.listenQuick = false; render(); return; }
     if (S.cardId || S.draft) { S.cardId = null; S.draft = null; render(); return; }
     if (S.sel.size) { S.sel.clear(); render(); }
     return;

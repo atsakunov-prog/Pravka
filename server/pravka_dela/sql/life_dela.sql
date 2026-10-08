@@ -28,11 +28,13 @@ CREATE OR REPLACE VIEW life.projects AS
 SELECT p.name, p.aliases, p.sphere, p.kind, o.name AS org, p.owner_id AS owner, p.money_default, p.note, p.archived_at,
        (SELECT count(*) FROM tasks.tasks t WHERE t.project_id = p.id AND t.status = 'open') AS open_tasks,
        (SELECT count(*) FROM crm.deals d WHERE d.project_id = p.id AND d.stage <> 'archive') AS live_deals,
-       p.id, p.org_id
+       p.id, p.org_id,
+       -- Статус клиента и папка (dela_0006) — в хвост: CREATE OR REPLACE дописывает только туда.
+       p.status, p.folder_url, p.files
 FROM crm.projects p
 LEFT JOIN crm.orgs o ON o.id = p.org_id
 WHERE crm.sees_project(crm.owner_id(), p.id);
-COMMENT ON VIEW life.projects IS 'Проекты Дел: клиенты (как корневые проекты Todoist), служебные (ЗФ, Люди), личные. money_default — paid (оплата согласована), potential (развитие), none. Сделки клиента — life.deals.';
+COMMENT ON VIEW life.projects IS 'Проекты Дел: клиенты (как корневые проекты Todoist), служебные (ЗФ, Люди), личные. money_default — paid (оплата согласована), potential (развитие), none. note — описание клиента; status relations — поддержание отношений (не лид и не сделка). Сделки клиента — life.deals.';
 
 -- Колонки сделок поменялись (dela_0002) — поэтому DROP, как у work_time.
 DROP VIEW IF EXISTS life.deals;
@@ -50,23 +52,23 @@ SELECT d.name, p.name AS project, d.stage, d.outcome, d.lost_reason, d.closed_on
        (SELECT max(i.at) FROM crm.interactions i WHERE i.deal_id = d.id AND i.deleted_at IS NULL) AS last_touch,
        d.wheel, d.ball, d.next_step, d.my_view, d.ideas, d.log,
        (SELECT count(*) FROM tasks.tasks t WHERE t.deal_id = d.id AND t.status = 'open') AS open_tasks,
-       d.updated_at, d.id, d.project_id
+       d.updated_at, d.id, d.project_id, d.description, d.folder_url, d.files
 FROM crm.deals d
 JOIN crm.projects p ON p.id = d.project_id
 LEFT JOIN crm.people lp ON lp.id = d.lead_person_id
 LEFT JOIN crm.people sp ON sp.id = d.source_person_id
 WHERE crm.sees_project(crm.owner_id(), d.project_id);
-COMMENT ON VIEW life.deals IS 'Сделки CRM (бывшие «Сделки» Notion). stage: lead, proposal (КП), mandate, active, closing, archive; у архива outcome: won (сделали), lost (проиграли), paused (заморожено). fee_rub — гонорар ЗФ всего, retainer_rub — в месяц, success_pct — процент успеха; probability — вероятность (пустая по стадии подставлена). paid_rub / unpaid_rub — из оплат (life.payments). lead и team — команда ЗФ, people — люди клиента. next_step, ball, log — тексты из Notion до 04.10.2026; живой следующий шаг — открытые дела сделки (life.tasks.deal).';
+COMMENT ON VIEW life.deals IS 'Сделки CRM (бывшие «Сделки» Notion). stage: lead, proposal (КП), mandate, active, closing, archive; у архива outcome: won (сделали), lost (проиграли), paused (заморожено). fee_rub — гонорар ЗФ всего, retainer_rub — в месяц, success_pct — процент успеха; probability — вероятность (пустая по стадии подставлена). paid_rub / unpaid_rub — из оплат (life.payments). lead и team — команда ЗФ, people — люди клиента. description — что за проект словами; folder_url и files — папка и документы ссылками. next_step, ball, log — тексты из Notion до 04.10.2026; живой следующий шаг — открытые дела сделки (life.tasks.deal).';
 
 CREATE OR REPLACE VIEW life.payments AS
 SELECT d.name AS deal, p.name AS project, pm.kind, pm.title, round(pm.amount_kop / 100.0) AS amount_rub,
        pm.due_on, pm.invoiced_on, pm.paid_on, (pm.cancelled_at IS NOT NULL) AS cancelled, pm.note,
-       pm.id, pm.deal_id, d.project_id
+       pm.id, pm.deal_id, d.project_id, pm.sent_to, pm.sent_via
 FROM crm.payments pm
 JOIN crm.deals d ON d.id = pm.deal_id
 JOIN crm.projects p ON p.id = d.project_id
 WHERE crm.sees_project(crm.owner_id(), d.project_id);
-COMMENT ON VIEW life.payments IS 'Оплаты по сделкам ЗФ: due_on — когда ждём, invoiced_on — счёт выставлен, paid_on — деньги пришли; cancelled — не будет. Деньги фирмы, не семьи (семья — life.money_live).';
+COMMENT ON VIEW life.payments IS 'Оплаты по сделкам ЗФ: due_on — когда ждём, invoiced_on — счёт выставлен (sent_to — кому, sent_via — как), paid_on — деньги пришли; cancelled — не будет. Деньги фирмы, не семьи (семья — life.money_live).';
 
 CREATE OR REPLACE VIEW life.people AS
 SELECT pe.name, pe.short, pe.aliases, o.name AS org, pe.role, pe.phones, pe.emails, pe.telegram_username,
@@ -111,6 +113,10 @@ COMMENT ON VIEW life.suggestions IS '«Новое» в Делах: что пре
 -- клиент текстом по алиасам. id сравниваются текстом: строка записи пришла с
 -- телефона, и кривой id не должен ронять вид целиком. Колонки поменялись —
 -- поэтому DROP: Дела мигрируют этот файл и поверх старого вида.
+-- Личное время (семья, еда, сон, спорт…) с одним лишь клиентом текстом — не работа на клиента
+-- (09.10.2026): телефон переносит клиента в следующие записи, и «Время с семьёй» на 4 часа
+-- легло в часы и хронологию клиента. Такие записи сюда не идут; звонок с человеком, запись
+-- из дела или с проектом — идут, как раньше.
 DROP VIEW IF EXISTS life.work_time;
 CREATE VIEW life.work_time AS
 SELECT e.day, e.start_local, e.end_local, e.minutes, e.title, e.category, e.client,
@@ -126,5 +132,7 @@ LEFT JOIN crm.projects p ON p.id::text = coalesce(e.project_id, t.project_id::te
 LEFT JOIN crm.people pe0 ON pe0.id::text = coalesce(e.person_id, m.person_id::text)
 LEFT JOIN crm.people pe ON pe.id = coalesce(pe0.merged_into, pe0.id)
 LEFT JOIN crm.orgs o ON o.id = coalesce(p.org_id, m.org_id, pe.org_id)
-WHERE e.client IS NOT NULL OR e.project_id IS NOT NULL OR e.task_id IS NOT NULL OR e.person_id IS NOT NULL;
+WHERE (e.client IS NOT NULL OR e.project_id IS NOT NULL OR e.task_id IS NOT NULL OR e.person_id IS NOT NULL)
+  AND NOT (coalesce(e.category, '') ~* '^(Семья|Еда|Быт|Отдых|Сон|Спорт|Секс|Чтение|Потери|Не размечено)'
+           AND e.project_id IS NULL AND e.task_id IS NULL AND e.person_id IS NULL);
 COMMENT ON VIEW life.work_time IS 'Лента с клиентом, сопоставленным со справочником Дел: проект, организация, человек, дело. Запись, начатая из дела, несёт его проект сама (task_num — «#57»); остальные — по алиасам клиента. Часы на клиента = sum(minutes)/60 по project или org; с человеком — по person_id (звонки несут его сами).';

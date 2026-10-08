@@ -123,6 +123,8 @@ def view(url: str, name: str = "pipeline", project: str | None = None, deal: str
         if name == "deal":
             d = v["deal"]
             out.append(deal_line(d, names))
+            if d.get("description"):
+                out.append("Описание: " + d["description"])
             model = [FEE_RU.get(d.get("fee_kind") or ""), d.get("retainer_kop") and f"ретейнер {rub(d['retainer_kop'])}/мес",
                      d.get("success_pct") and f"успех {d['success_pct']}%", d.get("p_eff") is not None and f"вероятность {d['p_eff']}%",
                      d.get("expected_on") and f"решение ждём {_d(d['expected_on'])}"]
@@ -142,6 +144,9 @@ def view(url: str, name: str = "pipeline", project: str | None = None, deal: str
                 out += ["Оплаты:", *(f"  {_pay_line(p)}" for p in v["payments"])]
             if d.get("next_step") or d.get("log"):
                 out.append("Из Notion (до мая 2026): " + (d.get("next_step") or "") + ((" | " + d["log"][:500]) if d.get("log") else ""))
+            if d.get("folder_url") or d.get("files"):
+                out.append("Файлы: " + ", ".join([f"папка {d['folder_url']}"] if d.get("folder_url") else []
+                                                 + [f"{f.get('title') or f.get('kind')} {f['url']}" for f in d.get("files") or []]))
         else:
             for d in v["deals"]:
                 out.append("  сделка: " + deal_line(d, names))
@@ -178,7 +183,8 @@ def view(url: str, name: str = "pipeline", project: str | None = None, deal: str
     return "\n".join(out).rstrip() + "\n"
 
 
-DEAL_ARGS = {"stage", "outcome", "lost_reason", "deal_type", "probability", "expected_on", "deadline", "my_view", "ideas", "fee_kind"}
+DEAL_ARGS = {"stage", "outcome", "lost_reason", "deal_type", "probability", "expected_on", "deadline", "my_view", "ideas", "fee_kind",
+             "description"}
 
 
 def deal(url: str, project: str, deal: str | None = None, name: str | None = None, lead: str | None = None,
