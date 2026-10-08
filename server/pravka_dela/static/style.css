@@ -206,7 +206,7 @@ section.card-pane { border-left: 1px solid var(--line-soft); background: var(--p
 a.chip-btn { text-decoration: none; display: inline-block; }
 .chip-btn.on { border-color: color-mix(in srgb, var(--accent) 60%, transparent); color: var(--accent); background: var(--accent-soft); }
 
-/* ── Быстрый ввод: «+» слева, Claude справа, подсказки под полем ── */
+/* ── Строка Claude: микрофон слева, стрелка справа, подсказки под полем ── */
 .quick { margin: 14px 0 4px; }
 .quick-wrap { position: relative; }
 .quick-box {
@@ -231,15 +231,14 @@ a.chip-btn { text-decoration: none; display: inline-block; }
 }
 .q-btn:hover:not(:disabled) { background: var(--hover-2); }
 .q-btn:disabled { cursor: default; opacity: .55; }
-.q-btn.plus { background: var(--accent); color: var(--accent-ink); font-size: 21px; font-weight: 500; }
-.q-btn.plus:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 85%, #fff); }
-.q-btn.plus:active:not(:disabled) { transform: scale(.94); }
-.q-btn.claude-btn { color: var(--claude); }
-.q-btn.claude-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--claude) 14%, transparent); }
-.q-btn.claude-btn.busy { opacity: 1; }
-.claude-btn.busy .claude-ico { animation: dela-spin 1.6s linear infinite; }
+/* Отправить — стрелка в круге; пока Claude думает — крутилка на её месте. */
+.q-btn.send-btn { border-radius: 50%; background: var(--accent); color: var(--accent-ink); }
+.q-btn.send-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 85%, #fff); }
+.q-btn.send-btn:active:not(:disabled) { transform: scale(.94); }
+.q-btn.send-btn.busy { opacity: 1; background: var(--hover-2); color: var(--muted); }
+.spin { width: 15px; height: 15px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: dela-spin .8s linear infinite; }
 @keyframes dela-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .claude-btn.busy .claude-ico { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }
 .claude-status { font-size: 12.5px; color: var(--claude); margin-top: 6px; }
 .quick .preview { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; font-size: 12.5px; }
 .quick .preview:empty { display: none; }
@@ -268,7 +267,6 @@ a.chip-btn { text-decoration: none; display: inline-block; }
   box-shadow: var(--shadow);
 }
 .cr-head { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 6px; }
-.cr-head .claude-ico { color: var(--claude); flex: none; }
 .cr-head .icon-btn { margin-left: auto; }
 .cr-task { display: block; width: 100%; border: 0; background: none; text-align: left; padding: 6px 6px; border-radius: 8px; }
 .cr-task:hover { background: var(--hover); }
@@ -348,13 +346,13 @@ a.chip-btn { text-decoration: none; display: inline-block; }
 .ask-input:focus { outline: none; }
 .ask-input::placeholder { color: var(--faint); }
 .ask-status { display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; color: var(--claude); font-size: 12.5px; }
-.ask-status .claude-ico { animation: dela-spin 1.6s linear infinite; }
+.ask-status .spin { width: 12px; height: 12px; }
 .ask-inline .q-btn { width: 28px; height: 28px; }
 .q-btn.mic { color: var(--muted); }
 .q-btn.mic:hover:not(:disabled) { color: var(--text); }
 .q-btn.mic.on { color: #fff; background: var(--bad); animation: mic-pulse 1.4s ease-in-out infinite; }
 @keyframes mic-pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--bad) 25%, transparent); } }
-@media (prefers-reduced-motion: reduce) { .q-btn.mic.on, .ask-status .claude-ico { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .q-btn.mic.on { animation: none; } }
 .quick-box.hearing { border-color: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 14%, transparent); }
 .claude-status.listening { color: var(--bad); }
 .tick {
@@ -751,12 +749,9 @@ details summary:hover { color: var(--muted); }
 .now-meter.full { color: var(--now); font-weight: 650; }
 .sub .today { color: var(--now); }
 
-/* Строка Claude: заголовок «Скажи, что сделать …» и поле в его свете. */
+/* Строка Claude — в липкой шапке страницы (render переносит её туда): видна и при прокрутке. */
 .quick.say { margin-top: 16px; }
-.say-h { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); margin: 0 2px 7px; cursor: text; }
-.say-h .claude-ico { color: var(--claude); flex: none; }
-.say-h > span:first-of-type { color: var(--text); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.say-model { margin-left: auto; flex: none; font-size: 11px; color: var(--claude); border: 1px solid color-mix(in srgb, var(--claude) 45%, transparent); border-radius: 999px; padding: 0 8px; line-height: 18px; }
+.list-head .quick.say { margin: 12px 0 0; }
 .say .quick-box {
   border-color: color-mix(in srgb, var(--claude) 38%, var(--line));
   background: linear-gradient(180deg, color-mix(in srgb, var(--claude) 5%, var(--panel)), var(--panel));
@@ -765,10 +760,6 @@ details summary:hover { color: var(--muted); }
 .say .quick-box:focus-within { border-color: var(--claude); box-shadow: 0 0 0 3px color-mix(in srgb, var(--claude) 16%, transparent); }
 .say .quick-box textarea { height: 40px; padding: 9px 4px; font-size: 15px; }
 .say .q-btn { width: 36px; height: 36px; margin-top: 2px; }
-.say .q-btn.plus { width: 28px; height: 28px; margin: 6px 2px 0 4px; font-size: 18px; background: var(--hover-2); color: var(--muted); }
-.say .q-btn.plus:hover:not(:disabled) { background: var(--accent); color: var(--accent-ink); }
-.say .q-btn.claude-btn { background: var(--claude); color: #fff; }
-.say .q-btn.claude-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--claude) 85%, #fff); }
 .quick .preview .pv-h { background: none; color: var(--faint); padding: 1px 0; }
 
 /* «Без проекта» в строке дела — вопрос, а не тупик: щелчок выбирает проект. */

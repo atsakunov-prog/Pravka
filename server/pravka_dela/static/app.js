@@ -17,7 +17,7 @@ const S = {
   sphere: LS.get('sphere', ''), groups: LS.get('groups', {}), favs: LS.get('favs', []), closed: LS.get('closed', {}),
   showDone: false, upNoDate: false, upMineOnly: false, dealFilter: null,
   sel: new Set(), order: [], lastPick: null, cardId: null, draft: null, sideOpen: false,
-  parse: null, quickDraft: null, // идёт разбор Claude; текст, вернувшийся после неудачи
+  parse: null, quickText: '', // идёт разбор Claude; текст строки Claude — живёт, пока его не отдали (перерисовка его не стирает)
   askTask: null, askText: '', asking: null, // микрофон у дела: какое открыто, текст, идёт правка
   autoOpen: false, clientOpen: new Set(LS.get('clientOpen', [])), peopleQ: '', // «Сделано само» развёрнуто, клиенты со сделками, люди
 };
@@ -199,6 +199,8 @@ const ICONS = {
   meet: 'M9 11a3 3 0 1 0 0-6a3 3 0 1 0 0 6zM3 20c.5-3.5 3-5.5 6-5.5s5.5 2 6 5.5M16 11a2.5 2.5 0 1 0 0-5M17.5 14.5c2 .5 3.3 2.3 3.5 5.5',
   pen: 'M4 20h4L19 9l-4-4L4 16zM14 6l4 4',
   help: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17h.01',
+  // Отправить команду Claude — стрелка вверх, как у чатов (08.10.2026: звёздочку Claude владелец убрал).
+  up: 'M12 19V5M5.5 11.5L12 5l6.5 6.5',
 };
 function icon(name, size = 15) {
   const ns = 'http://www.w3.org/2000/svg';
@@ -313,6 +315,10 @@ function render() {
   const focused = q0 ? { id: q0.id, value: q0.value, a: q0.selectionStart, b: q0.selectionEnd } : null;
   const shell = el('div', { class: 'shell' + (S.cardId || S.draft ? ' with-card' : '') + (S.sideOpen ? ' side-open' : '') + (S.sel.size ? ' selecting' : '') });
   shell.append(renderSide(r), el('main', { class: 'list' }, renderMain(r)));
+  // Строка Claude висит наверху и при прокрутке (владелец 08.10.2026: «уходит, если кручу вниз»): переносим
+  // её в шапку страницы, а та уже липкая. Смотришь на дела, говоришь — Claude видит, что в окне (pageScope).
+  const say = shell.querySelector('main.list .quick.say'), hd = shell.querySelector('main.list .list-head');
+  if (say && hd) hd.append(say);
   if (S.cardId || S.draft) shell.append(renderCard());
   const scroll = S.toTop ? 0 : document.querySelector('main.list')?.scrollTop || 0; // новая страница — с начала
   S.toTop = false;
@@ -957,42 +963,28 @@ function acItems(kind, q) {
   return out.slice(0, 8);
 }
 
-// ── Значок Claude: лучистая звёздочка ───────────────────────────────────
-function claudeIcon(size = 18) {
-  const ns = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(ns, 'svg');
-  for (const [k, v] of Object.entries({ viewBox: '0 0 24 24', width: size, height: size, fill: 'none', stroke: 'currentColor',
-    'stroke-width': '2.1', 'stroke-linecap': 'round', class: 'claude-ico' })) svg.setAttribute(k, v);
-  let d = '';
-  for (let i = 0; i < 12; i++) {
-    const a = i * Math.PI / 6 + 0.12, r2 = i % 2 ? 7.2 : 10;
-    d += `M${(12 + 2.4 * Math.cos(a)).toFixed(2)} ${(12 + 2.4 * Math.sin(a)).toFixed(2)}`
-       + `L${(12 + r2 * Math.cos(a)).toFixed(2)} ${(12 + r2 * Math.sin(a)).toFixed(2)}`;
-  }
-  const p = document.createElementNS(ns, 'path');
-  p.setAttribute('d', d);
-  svg.append(p);
-  return svg;
-}
-
 // ── Строка «Скажи, что сделать» — наверху каждой страницы ───────────────
 // Владелец, 06.10.2026: «везде должен быть сверху красивый текстбокс… скажи, что сделать с этим делом,
-// с этим клиентом — я наговариваю, и он внутри всё правит». Enter, звёздочка и микрофон — Claude: он
-// видит дела на экране (в карточке клиента, сделки, человека — и саму карточку, это Opus), правит их,
-// заводит новые, в «Новом» решает предложения. «+» слева — одно дело как написано, с разметкой.
+// с этим клиентом — я наговариваю, и он внутри всё правит». Claude видит дела на экране (в карточке
+// клиента, сделки, человека — и саму карточку, это Opus), правит их, заводит новые, в «Новом» решает
+// предложения. 08.10.2026: «знак Клода уберём… слева микрофончик, справа send»: микрофон — нажал, говоришь,
+// нажал ещё раз — ушло Claude; написал — стрелка или Enter. Строка висит наверху и при прокрутке (render
+// переносит её в шапку): смотришь на дела, говоришь — Claude видит, что в окне (pageScope).
+// «+» больше нет: одно дело как написано, с разметкой, — Alt+Enter.
 // label — о чём строка («с клиентом «Альфа»»), placeholder — пример команды для этой страницы.
 function quickAdd(defaults, { placeholder = null, label = null } = {}) {
   const busy = !!S.parse;
   const input = el('textarea', { id: 'quick', rows: 1, autocomplete: 'off', disabled: busy,
+    'aria-label': 'Скажи, что сделать ' + (label || 'с этими делами'),
     placeholder: placeholder || 'Скажи или напиши: «все просроченные — на пятницу», «Ивану позвонить завтра», надиктовка целиком' });
   if (busy) input.value = S.parse.text;
-  else if (S.quickDraft) { input.value = S.quickDraft; S.quickDraft = null; }
+  else input.value = S.quickText || '';
   const preview = el('div', { class: 'preview' });
   const help = el('div', { class: 'help hidden' },
-    'Enter, звёздочка или микрофон — Claude · Shift+Enter — новая строка · «+» слева — одно дело как написано: ',
+    'Enter или стрелка — Claude · Shift+Enter — новая строка · Alt+Enter — одно дело как написано: ',
     '+проект  @человек  *метка  !жду  !повестка  !сейчас  !хочу  !15м · сегодня, завтра, в пятницу, 12.10');
   const status = busy ? el('div', { class: 'claude-status' }, 'Claude думает… Можно уходить на другие страницы — изменения появятся сами.')
-    : rec && S.listenQuick ? el('div', { class: 'claude-status listening' }, 'Слушаю… замолчишь — отдам Claude. Нажми микрофон ещё раз, чтобы закончить сразу.') : null;
+    : rec && S.listenQuick ? el('div', { class: 'claude-status listening' }, 'Слушаю — говори сколько нужно. Нажми микрофон ещё раз — отдам Claude.') : null;
   const ac = el('div', { class: 'ac hidden' });
   let acState = null; // {kind, q, start, items, at}
 
@@ -1022,9 +1014,10 @@ function quickAdd(defaults, { placeholder = null, label = null } = {}) {
     drawAc();
   };
   const update = () => {
+    S.quickText = input.value;
     const p = parseQuick(input.value, defaults);
-    // Как «+» поймёт разметку — только если она есть: Claude читает текст сам.
-    preview.replaceChildren(...(p.tags.length ? [el('span', { class: 'pv-h' }, '«+» запишет:'), ...p.tags.map((t) => el('span', {}, t))] : []));
+    // Как Alt+Enter поймёт разметку — только если она есть: Claude читает текст сам.
+    preview.replaceChildren(...(p.tags.length ? [el('span', { class: 'pv-h' }, 'Alt+Enter запишет:'), ...p.tags.map((t) => el('span', {}, t))] : []));
     help.classList.toggle('hidden', !input.value);
     grow();
     updateAc();
@@ -1049,7 +1042,7 @@ function quickAdd(defaults, { placeholder = null, label = null } = {}) {
     if (p.set.focus_on && !nowRoom(['new'])) return;
     try {
       const r = await op1({ op: 'task.create', task: { ...p.set, title: p.title, source: 'web' } });
-      input.value = '';
+      input.value = S.quickText = '';
       render();
       document.getElementById('quick')?.focus();
       toast('Записал: #' + r.task.num + ' ' + r.task.title);
@@ -1068,82 +1061,96 @@ function quickAdd(defaults, { placeholder = null, label = null } = {}) {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeAc(); return; }
     }
     if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) setTimeout(updateAc);
-    if (e.key === 'Escape') { input.value = ''; update(); input.blur(); e.stopPropagation(); return; }
+    if (e.key === 'Escape') { input.value = S.quickText = ''; update(); input.blur(); e.stopPropagation(); return; }
     if (e.key !== 'Enter' || e.shiftKey) return;
     e.preventDefault();
     if (e.altKey) addOne(); // Alt+Enter — одно дело, как «+»
     else claudeParse(input, defaults);
   });
 
-  const plusBtn = el('button', { type: 'button', class: 'q-btn plus', title: 'Записать одно дело как написано, без Claude (Alt+Enter)', disabled: busy, onclick: addOne }, '+');
-  const claudeBtn = el('button', { type: 'button', class: 'q-btn claude-btn' + (busy ? ' busy' : ''), disabled: busy,
-    title: !S.me.claude ? 'Claude на сервере ещё не настроен' : 'Отдать Claude (Enter)',
-    onclick: () => claudeParse(input, defaults) }, claudeIcon());
-  // Микрофон: сказанное дописывается в поле и, когда человек замолчал, уходит Claude.
+  const sendBtn = el('button', { type: 'button', class: 'q-btn send-btn' + (busy ? ' busy' : ''), disabled: busy,
+    title: !S.me.claude ? 'Claude на сервере ещё не настроен' : busy ? 'Claude думает…' : 'Отдать Claude (Enter)',
+    'aria-label': 'Отдать Claude', onclick: () => claudeParse(input, defaults) }, busy ? el('span', { class: 'spin' }) : icon('up', 18));
+  // Микрофон: нажал — слушаю (сказанное дописывается в поле), нажал ещё раз — ушло Claude. Браузер сам
+  // закрывает распознавание в паузе (Chrome на телефоне — почти сразу) — listen открывает его снова: 08.10.2026
+  // так команда уходила посреди фразы, а второе нажатие начинало новую запись в пустом поле — «всё стирается».
   const hearing = !!(rec && S.listenQuick);
   const micBtn = el('button', { type: 'button', class: 'q-btn mic' + (hearing ? ' on' : ''), disabled: busy,
-    title: hearing ? 'Хватит слушать — отдать Claude' : 'Сказать Claude голосом: что поправить в делах на экране или что завести',
+    title: hearing ? 'Готово — отдать Claude' : 'Сказать голосом: нажми, говори, нажми ещё раз',
+    'aria-label': hearing ? 'Закончить и отдать Claude' : 'Сказать голосом', 'aria-pressed': hearing ? 'true' : 'false',
     onclick: () => {
       if (hearing) { stopListening(); return; }
       const base = input.value.trim();
       S.listenQuick = true;
-      S.quickDraft = base || null;
       const ok = listen((txt) => {
         const q = document.getElementById('quick');
-        S.quickDraft = (base ? base + ' ' : '') + txt; // перерисовка вернёт его в поле
-        if (q) { q.value = S.quickDraft; q.dispatchEvent(new Event('input')); }
-      }, (txt) => {
+        S.quickText = (base ? base + ' ' : '') + txt; // перерисовка вернёт его в поле
+        if (q) { q.value = S.quickText; q.dispatchEvent(new Event('input')); }
+      }, () => {
         S.listenQuick = false;
         const q = document.getElementById('quick');
-        if (q && txt && q.value.trim() && voiceAuto()) { S.quickDraft = null; claudeParse(q, defaults); } else render();
+        const said = (q ? q.value : S.quickText).trim();
+        if (said && said !== base && voiceAuto()) claudeSay(said, defaults);
+        else render();
       });
       if (!ok) S.listenQuick = false;
       render();
-    } }, icon('mic', 17));
+    } }, icon('mic', 18));
   if (input.value) setTimeout(grow);
   const card = pageScope(defaults).card;
-  const say = el('label', { class: 'say-h', for: 'quick' }, claudeIcon(15),
-    el('span', {}, 'Скажи, что сделать ' + (label || 'с этими делами')),
-    card ? el('span', { class: 'say-model', title: 'В карточке Claude видит её целиком: сделки, людей, хронологию — и правит их' }, 'Opus · видит карточку') : null);
-  return el('div', { class: 'quick say' },
-    say,
-    el('div', { class: 'quick-wrap' }, el('div', { class: 'quick-box' + (busy ? ' busy' : '') + (hearing ? ' hearing' : '') }, plusBtn, input, micBtn, claudeBtn), ac),
+  return el('div', { class: 'quick say' + (card ? ' card-say' : ''), title: card ? 'В карточке Claude (Opus) видит её целиком: сделки, людей, хронологию — и правит их' : null },
+    el('div', { class: 'quick-wrap' }, el('div', { class: 'quick-box' + (busy ? ' busy' : '') + (hearing ? ' hearing' : '') }, micBtn, input, sendBtn), ac),
     status, preview, help);
 }
 
 // ── Голос: распознавание браузера (Chrome — по-русски, сразу), своего сервера не нужно ──
 const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null; // одна запись на страницу
-const LISTEN_START = 7000; // столько ждём, пока человек начнёт говорить
-function stopListening() { if (rec) { try { rec.stop(); } catch (e) { /* уже стоит */ } } }
-/** Слушать: onText — текст по ходу речи, onDone — итог, когда человек замолчал или нажал ещё раз. */
+const HOLD_QUIET = 45000; // забыл нажать второй раз — через столько тишины отдаём сами
+function stopListening() { if (rec) { rec.byUser = true; try { rec.stop(); } catch (e) { /* уже стоит */ } } }
+/** Слушать: onText — текст по ходу речи, onDone — итог, когда человек нажал микрофон ещё раз.
+ *  Владелец 08.10.2026: «нажимаю на микрофон, говорю, ещё раз нажимаю» — итог по паузе (было до того)
+ *  обрывал команду на полуслове. Браузер сам закрывает распознавание в паузе (Chrome на телефоне — почти
+ *  сразу) — открываем его снова и дописываем к сказанному. */
 function listen(onText, onDone) {
   if (!Speech) { toast('Этот браузер не распознаёт речь — напиши текстом (в Chrome микрофон работает)'); return false; }
   stopListening();
-  const r = new Speech();
-  r.lang = 'ru-RU';
-  r.interimResults = true;
-  r.continuous = true;
-  let final = '', last = '', idle;
-  const wait = (ms) => { clearTimeout(idle); idle = setTimeout(() => { try { r.stop(); } catch (e) { /* стоит */ } }, ms); };
-  r.onresult = (e) => {
-    let interim = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      if (e.results[i].isFinal) final += e.results[i][0].transcript; else interim += e.results[i][0].transcript;
-    }
-    last = (final + interim).replace(/\s+/g, ' ').trim();
-    onText(last);
-    wait(voicePause());
+  let said = '', last = '', idle, broken = false, quietAt = Date.now();
+  const start = () => {
+    const r = new Speech();
+    r.lang = 'ru-RU';
+    r.interimResults = true;
+    r.continuous = true;
+    let final = '';
+    const wait = (ms) => { clearTimeout(idle); idle = setTimeout(() => { r.byUser = true; try { r.stop(); } catch (e) { /* стоит */ } }, ms); };
+    r.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) final += ' ' + e.results[i][0].transcript; else interim += ' ' + e.results[i][0].transcript;
+      }
+      last = (said + ' ' + final + interim).replace(/\s+/g, ' ').trim();
+      onText(last);
+      quietAt = Date.now();
+      wait(HOLD_QUIET);
+    };
+    r.onerror = (e) => {
+      if (e.error === 'no-speech' || e.error === 'aborted') return; // тишина — не поломка: слушаем дальше
+      broken = true; // микрофон не дали, сети нет — снова открывать бесполезно
+      toast(e.error === 'not-allowed' || e.error === 'service-not-allowed' ? 'Браузер не дал микрофон — разреши его для этой страницы' : 'Распознавание: ' + e.error);
+    };
+    // Итог — до перерисовки: она пересоздаёт поля, и надиктованное в несфокусированном поле пропало бы.
+    r.onend = () => {
+      clearTimeout(idle);
+      if (rec !== r) return;
+      if (!r.byUser && !broken && Date.now() - quietAt < HOLD_QUIET) { said = last; start(); return; } // закрыл браузер, не человек
+      rec = null;
+      onDone(last);
+    };
+    rec = r;
+    try { r.start(); } catch (e) { rec = null; onDone(last); return; }
+    wait(HOLD_QUIET);
   };
-  r.onerror = (e) => {
-    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('Браузер не дал микрофон — разреши его для этой страницы');
-    else if (e.error !== 'no-speech' && e.error !== 'aborted') toast('Распознавание: ' + e.error);
-  };
-  // Итог — до перерисовки: она пересоздаёт поля, и надиктованное в несфокусированном поле пропало бы.
-  r.onend = () => { clearTimeout(idle); if (rec === r) rec = null; onDone(last); };
-  rec = r;
-  r.start();
-  wait(LISTEN_START);
+  start();
   return true;
 }
 
@@ -1200,7 +1207,11 @@ async function claudeParse(input, defaults) {
   const text = input.value.trim();
   if (S.parse) return;
   if (!text) { toast('Скажи или напиши Claude: новые дела или что поправить в делах на экране'); input.focus(); return; }
-  const scope = pageScope(defaults);
+  return claudeSay(text, defaults);
+}
+async function claudeSay(text, defaults) {
+  if (S.parse) return;
+  const scope = pageScope(defaults); // экран — до перерисовки: что в окне, видно сейчас
   S.parse = { text };
   render();
   try {
@@ -1208,11 +1219,15 @@ async function claudeParse(input, defaults) {
     S.parse = null;
     crmDirty(); // карточку (хронологию, людей, сделки) Claude мог поправить на сервере
     for (const t of d.tasks || []) S.tasks.set(t.id, t);
+    // Claude ничего не сделал (не понял, переспросил) — команда возвращается в поле: дополнить и отправить
+    // ещё раз, а не говорить заново (08.10.2026: «нажимаю на микрофон, и всё стирается»).
+    const did = ['changed', 'tasks', 'decided', 'crm', 'notes'].some((k) => (d[k] || []).length);
+    S.quickText = did ? '' : text; // пока Claude думал, поле было занято командой — чужого текста там нет
     await sync().catch(() => {});
     render();
     if (d.route === 'new') claudeResult(d); else askResult(d);
   } catch (e) {
-    S.quickDraft = S.parse && S.parse.text;
+    S.quickText = S.parse ? S.parse.text : S.quickText;
     S.parse = null;
     render();
     fail(e);
@@ -1226,6 +1241,7 @@ function openAsk(t) {
   render();
   const go = () => document.getElementById('ask-' + t.id);
   go()?.focus();
+  // Как у строки наверху: нажал — говоришь, нажал ещё раз — ушло Claude.
   listen((txt) => { S.askText = txt; const i = go(); if (i) i.value = txt; },
     (txt) => { if (S.askTask === t.id && txt && voiceAuto()) askTask(t.id, txt); else render(); });
   render();
@@ -1240,8 +1256,10 @@ async function askTask(id, text) {
   try {
     const d = await runJob('/api/ask', { text, scope: { title: 'Одно дело', task_ids: [id], focus: id } });
     S.asking = null;
-    S.askTask = null;
-    S.askText = '';
+    // Ничего не сделал — поле у дела остаётся с командой: дополнить и отправить ещё раз.
+    const did = ['changed', 'tasks', 'decided', 'crm'].some((k) => (d[k] || []).length);
+    S.askTask = did ? null : id;
+    S.askText = did ? '' : text;
     for (const t of d.tasks || []) S.tasks.set(t.id, t);
     await sync().catch(() => {});
     render();
@@ -1265,12 +1283,13 @@ function askBox(t) {
     if (e.key === 'Enter') { e.preventDefault(); askTask(t.id, input.value); }
     if (e.key === 'Escape') { stopListening(); S.askTask = null; render(); }
   });
+  // Как строка наверху: микрофон слева, стрелка справа.
   return el('div', { class: 'ask-inline' + (busy ? ' busy' : ''), onclick: stop },
+    busy ? null : el('button', { class: 'q-btn mic' + (rec ? ' on' : ''), type: 'button', title: rec ? 'Готово — отдать Claude' : 'Сказать голосом: нажми, говори, нажми ещё раз',
+      onclick: () => { if (rec) stopListening(); else openAsk(t); } }, icon('mic', 16)),
     input,
-    busy ? el('span', { class: 'ask-status' }, claudeIcon(15), 'правит…') : [
-      el('button', { class: 'q-btn mic' + (rec ? ' on' : ''), type: 'button', title: rec ? 'Хватит слушать' : 'Сказать голосом',
-        onclick: () => { if (rec) stopListening(); else openAsk(t); } }, icon('mic', 16)),
-      el('button', { class: 'q-btn claude-btn', type: 'button', title: 'Отдать Claude (Enter)', onclick: () => askTask(t.id, input.value) }, claudeIcon(16)),
+    busy ? el('span', { class: 'ask-status' }, el('span', { class: 'spin' }), 'правит…') : [
+      el('button', { class: 'q-btn send-btn', type: 'button', title: 'Отдать Claude (Enter)', 'aria-label': 'Отдать Claude', onclick: () => askTask(t.id, input.value) }, icon('up', 16)),
       el('button', { class: 'icon-btn', type: 'button', title: 'Закрыть (Esc)', onclick: () => { stopListening(); S.askTask = null; render(); } }, icon('x', 13))]);
 }
 
@@ -1326,7 +1345,7 @@ function askResult(d) {
   // Предложение словами — как в «Новом», пока оно есть у веба; иначе — как его видел Claude.
   const sugTitle = (x) => (S.sugs.get(x.sid) ? sugText(S.sugs.get(x.sid)).title : x.what);
   box.append(...[
-    el('div', { class: 'cr-head' }, claudeIcon(16), el('span', {}, n ? `Claude: ${what}` : 'Claude ничего не менял'),
+    el('div', { class: 'cr-head' }, el('span', {}, n ? `Claude: ${what}` : 'Claude ничего не поменял — команда снова в поле'),
       el('button', { class: 'icon-btn', title: 'Закрыть', onclick: close }, icon('x', 14))),
     d.reply ? el('div', { class: 'cr-reply' }, d.reply) : null,
     decided.map((x) => (x.decision === 'accept'
@@ -1348,7 +1367,6 @@ function askResult(d) {
       el('button', { onclick: close }, 'Хорошо')),
   ].flat().filter(Boolean));
   document.body.append(box);
-  if (!n && !(d.errors || []).length) setTimeout(close, 8000);
 }
 
 /** Что сделал Claude: дела (открываются карточкой), заметки, отмена одним движением. */
@@ -1362,7 +1380,7 @@ function claudeResult(d) {
     t.due_date ? dueLabel(t).text : null, t.estimate_min ? t.estimate_min + ' мин' : null].filter(Boolean).join(' · ');
   const said = [n ? plural(n, 'дело', 'дела', 'дел') : null, m ? plural(m, 'заметка', 'заметки', 'заметок') : null].filter(Boolean).join(' и ');
   box.append(...[
-    el('div', { class: 'cr-head' }, claudeIcon(16), el('span', {}, said ? 'Claude записал ' + said : 'Claude не нашёл тут дел'),
+    el('div', { class: 'cr-head' }, el('span', {}, said ? 'Claude записал ' + said : 'Claude не нашёл тут дел'),
       el('button', { class: 'icon-btn', title: 'Закрыть', onclick: close }, icon('x', 14))),
     d.tasks.map((t) => el('button', { class: 'cr-task', onclick: () => openCard(t.id) },
       el('div', {}, '#' + t.num + ' ' + t.title), meta(t) ? el('div', { class: 'cr-meta' }, meta(t)) : null)),
@@ -1819,7 +1837,6 @@ function renderNew(batch) {
 
 // ── Настройки: Claude (у человека на сервере), голос (на этом устройстве), траты (владельцу) ──
 const voiceAuto = () => LS.get('voiceAuto', true);
-const voicePause = () => LS.get('voicePause', 2500);
 const MODEL_INFO = {
   sonnet: ['Sonnet 5.5', 'дешевле: 3–5 с, около 0,4 цента за команду'],
   opus: ['Opus 5.5', 'умнее в запутанных командах: 4–6 с, около 0,7 цента за команду'],
@@ -1854,15 +1871,14 @@ function renderSettings() {
   const kinds = { ask: 'правка словами', parse: 'разбор надиктовки' };
   return [head('Настройки', ['Claude в Делах, голос и траты']),
     el('div', { class: 'body settings' },
-      el('div', { class: 'group' }, el('h2', {}, tint(claudeIcon(14), 'var(--claude)'), 'Claude правит дела словами'),
-        el('div', { class: 'hint-line' }, 'Микрофон у дела и строка «Скажи, что сделать» наверху. Модель ниже — для списков; в карточке клиента, сделки и человека и для новых дел из надиктовки всегда Opus 5.5.'),
+      el('div', { class: 'group' }, el('h2', {}, tint(icon('chat', 14), 'var(--claude)'), 'Claude правит дела словами'),
+        el('div', { class: 'hint-line' }, 'Строка наверху каждой страницы и микрофон у дела. Claude видит, что на экране и в окне, что выбрано галочками и открыто в карточке, — и все остальные открытые дела коротко. Модель ниже — для списков; в карточке клиента, сделки и человека и для новых дел из надиктовки всегда Opus 5.5.'),
         v.claude ? null : el('div', { class: 'cr-err' }, 'Claude на сервере не настроен — нет ключа.'),
         el('div', { class: 'set-label' }, 'Модель'), choices('claude_model', MODEL_INFO, s.claude_model),
         el('div', { class: 'set-label' }, 'Глубина'), choices('claude_effort', EFFORT_INFO, s.claude_effort)),
       el('div', { class: 'group' }, el('h2', {}, tint(icon('mic', 14), 'var(--bad)'), 'Голос', el('span', { class: 'gsub' }, 'на этом устройстве')),
-        el('label', { class: 'set-check' }, auto, 'Отдавать Claude сам, когда замолчал', el('span', { class: 'faint' }, ' — иначе текст ждёт Enter или звёздочку')),
-        el('div', { class: 'set-label' }, 'Пауза, после которой команда сказана'),
-        choices('voicePause', { 1500: ['1,5 с', 'говорю коротко'], 2500: ['2,5 с', 'обычно'], 4000: ['4 с', 'думаю на ходу'] }, voicePause(), Number),
+        el('div', { class: 'hint-line' }, 'Нажми микрофон — говори сколько нужно, хоть с паузами — нажми ещё раз.'),
+        el('label', { class: 'set-check' }, auto, 'Второе нажатие сразу отдаёт Claude', el('span', { class: 'faint' }, ' — иначе текст ждёт в поле стрелку или Enter')),
         el('div', { class: 'hint-line' }, 'Речь распознаёт браузер (Chrome — и на телефоне). На компьютере можно диктовать и Wispr Flow прямо в поле.')),
       el('div', { class: 'group' }, el('h2', {}, tint(icon('flame', 14), 'var(--now)'), 'Путь: очки, серия, уровень'),
         el('div', { class: 'hint-line' }, 'Очки — только за доведённое: закрыл, отменил ненужное, разобрал «Новое». Карточка пути — вверху боковой панели, подробно — «Статистика».'),
