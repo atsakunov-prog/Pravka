@@ -1304,12 +1304,22 @@ function pageScope(defaults = {}) {
   const top = document.querySelector('main.list .list-head')?.getBoundingClientRect().bottom || 0;
   const bottom = Math.min(window.innerHeight, document.querySelector('main.list')?.getBoundingClientRect().bottom || window.innerHeight,
     document.querySelector('main.list .dock')?.getBoundingClientRect().top || Infinity); // строка внизу экрана — тоже не окно
-  const inView = rows.filter((x) => {
+  const main = document.querySelector('main.list')?.getBoundingClientRect();
+  const seen = (x) => {
     const b = x.getBoundingClientRect();
-    return b.height > 0 && Math.min(b.bottom, bottom) - Math.max(b.top, top) >= b.height * 0.6;
-  });
+    // Доска Воронки шире окна и листается вбок: колонка за краем — не «в окне».
+    const c = x.closest('.board')?.getBoundingClientRect() || main;
+    const left = Math.max(c ? c.left : 0, main ? main.left : 0), right = Math.min(c ? c.right : innerWidth, main ? main.right : innerWidth);
+    return b.height > 0 && Math.min(b.bottom, bottom) - Math.max(b.top, top) >= b.height * 0.6
+      && Math.min(b.right, right) - Math.max(b.left, left) >= b.width * 0.6;
+  };
+  const inView = rows.filter(seen);
   const scope = { title, task_ids: uniq(rows.length ? rows.map((x) => x.dataset.id) : S.order).slice(0, 300),
     visible_ids: uniq(inView.map((x) => x.dataset.id)).slice(0, 300) };
+  // Сделки на экране (08.10.2026): Воронка, клиенты, человек — «убери Альфу — не работаем» Claude правит прямо отсюда.
+  const deals = [...document.querySelectorAll('main.list [data-deal]')];
+  if (deals.length) Object.assign(scope, { deal_ids: uniq(deals.map((x) => x.dataset.deal)).slice(0, 200),
+    visible_deal_ids: uniq(deals.filter(seen).map((x) => x.dataset.deal)).slice(0, 200) });
   if (S.sel.size) scope.selected_ids = [...S.sel].slice(0, 300);
   if (S.cardId && S.tasks.has(S.cardId)) scope.open = S.cardId;
   if (r.kind === 'new') scope.suggestion_ids = S.sugOrder.slice(0, 150);
@@ -1477,7 +1487,7 @@ function askResult(d) {
       el('div', {}, `#${c.num} ${c.after?.title || c.title}`), el('div', { class: 'cr-meta' }, describe(c)))),
     made.length ? el('div', { class: 'cr-sub' }, 'Новые:') : null,
     made.map((t) => el('button', { class: 'cr-task', onclick: () => openCard(t.id) }, el('div', {}, '#' + t.num + ' ' + t.title))),
-    crm.length ? el('div', { class: 'cr-sub' }, 'В карточке:') : null,
+    crm.length ? el('div', { class: 'cr-sub' }, 'Сделки, люди, хронология:') : null,
     crm.map((c) => el('div', { class: 'cr-note' }, c.what)),
     d.errors && d.errors.length ? el('div', { class: 'cr-err' }, 'Не вышло: ' + d.errors.join('; ')) : null,
     el('div', { class: 'cr-acts' },
@@ -2278,7 +2288,7 @@ function dealTile(d) {
     ? el('div', { class: 'next' }, `#${d.next_task.num} ${d.next_task.title}` + (d.next_task.due_date ? ' · ' + D.ddmm(d.next_task.due_date) : ''))
     : (d.stage !== 'archive' ? el('div', { class: 'next none' }, 'нет следующего дела') : null);
   const quiet = d.stage !== 'archive' && d.quiet_days > 30 ? el('span', { class: 'quiet' }, `тишина ${d.quiet_days} дн.`) : null;
-  return el('div', { class: 'dtile' + (route().id === d.id ? ' on' : '') + (d.stale ? ' stale' : ''), onclick: () => openDeal(d.id) },
+  return el('div', { class: 'dtile' + (route().id === d.id ? ' on' : '') + (d.stale ? ' stale' : ''), 'data-deal': d.id, onclick: () => openDeal(d.id) },
     el('div', { class: 'dname' }, d.name),
     el('div', { class: 'dclient' }, d.project_name, d.deal_type ? ' · ' + d.deal_type : ''),
     meta.length || quiet ? el('div', { class: 'dmeta' }, meta, quiet) : null, next,
@@ -2357,7 +2367,7 @@ function renderClients() {
     el('button', { class: 'chip-btn', onclick: () => newClient() }, '+ Клиент'));
   const dealLine = (d) => {
     const next = all().filter((t) => t.deal_id === d.id && isOpen(t)).sort(sortTasks)[0];
-    return el('div', { class: 'cdeal' + (d.stage === 'archive' ? ' arch' : ''), onclick: (e) => { e.stopPropagation(); openDeal(d.id); } },
+    return el('div', { class: 'cdeal' + (d.stage === 'archive' ? ' arch' : ''), 'data-deal': d.id, onclick: (e) => { e.stopPropagation(); openDeal(d.id); } },
       el('span', { class: 'cd-stage st-' + d.stage }, stageWord(d)),
       el('span', { class: 'cd-name' }, dealShort(d, project(d.project_id))),
       next ? el('span', { class: 'cd-next' + (isLate(next) ? ' late' : '') }, `#${next.num} ${next.title}` + (next.due_date ? ' · ' + D.ddmm(next.due_date) : ''))

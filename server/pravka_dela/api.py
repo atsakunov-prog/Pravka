@@ -19,7 +19,7 @@
 | GET  /api/task/<id или номер> | дело с комментариями, журналом и откуда оно (origin) |
 | POST /api/parse | {"text", "project_id"?, "person_id"?} — Claude режет текст на дела и заводит их; ответ — номер задания |
 | GET  /api/parse/<номер> | run, пока думает; потом done с делами и заметками или error |
-| POST /api/ask | {"text", "scope": {"title", "task_ids", "visible_ids"?, "selected_ids"?, "open"?, "focus"?, "project_id"?, "person_id"?, "deal_id"?, "card"?, "suggestion_ids"?}} — Claude правит дела словами: видит страницу (что в окне, что выбрано, что открыто) и все свои открытые дела коротко, в «Новом» — и решает предложения на экране, в карточке (card: client, person, deal) — и её хронологию, людей, сделки (ask.py); ответ — номер задания |
+| POST /api/ask | {"text", "scope": {"title", "task_ids", "visible_ids"?, "selected_ids"?, "open"?, "deal_ids"?, "visible_deal_ids"?, "focus"?, "project_id"?, "person_id"?, "deal_id"?, "card"?, "suggestion_ids"?}} — Claude правит дела словами: видит страницу (что в окне, что выбрано, что открыто) и все свои открытые дела коротко, в «Новом» — и решает предложения на экране, в карточке (card: client, person, deal) — и её хронологию, людей, сделки (ask.py); ответ — номер задания |
 | GET  /api/ask/<номер> | как у разбора; done — что поменялось (changed: как было и стало), новые дела, решения по «Новому» (decided), ответ Claude |
 | GET  /api/reminders/due | только бот Ковчега: напоминания, которым пора в Telegram (remind.py) |
 | POST /api/reminders/act | только бот Ковчега: {"telegram_id", "num", "action": done, snooze, tomorrow, "minutes"?} — кнопка под напоминанием от имени нажавшего |
@@ -308,6 +308,8 @@ def build(cfg: Config) -> Starlette:
         try:
             for k in ("task_ids", "visible_ids", "selected_ids"):  # экран: дела страницы, в окне, выбранные
                 scope[k] = [str(uuid.UUID(str(x))) for x in (raw.get(k) or [])][:ask.MAX_TASKS]
+            for k in ("deal_ids", "visible_deal_ids"):  # сделки на экране: Воронка, клиенты, человек
+                scope[k] = [str(uuid.UUID(str(x))) for x in (raw.get(k) or [])][:ask.MAX_DEALS]
             scope["suggestion_ids"] = [str(uuid.UUID(str(x))) for x in (raw.get("suggestion_ids") or [])][:ask.MAX_SUGS]
             for k in ("focus", "open", "project_id", "person_id", "deal_id"):
                 if raw.get(k):

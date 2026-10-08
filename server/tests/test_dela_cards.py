@@ -174,19 +174,37 @@ def test_card_client_edits_timeline_people_deals_and_undo(dela):
     assert gone["archived_at"] is not None  # строки не удаляются — заведённый уходит в архив
 
 
-def test_people_edit_anywhere_notes_only_in_card(dela):
-    _, org, bank, olga, ivan, deal = _client(dela)
+def test_people_deals_and_notes_from_any_page(dela):
+    """Вне карточки — по имени (08.10.2026, владелец на Воронке: «<сделку> надо убрать — мы не работаем больше»,
+    а Claude отвечал «откройте карточку сделки»): человек, сделка, запись хронологии к сделке или клиенту."""
+    p, org, bank, olga, ivan, deal = _client(dela)
+    seen = {}
 
     def fake(system, user_text):
-        assert "КАРТОЧКА" not in user_text
-        return empty_card(card=[cd("person", name="Иван", org="Банк Гамма"), cd("note", text="что-то было", kind="созвон")], _usage=None)
+        seen["user"] = user_text
+        return empty_card(card=[cd("person", name="Иван", org="Банк Гамма"),
+                                cd("deal", name="Альфа: фонды", stage="lost", text="не работаем больше"),
+                                cd("note", text="Ольга звонила: фонды не нужны", kind="call", org="Альфа"),
+                                cd("note", text="что-то было", kind="созвон")], _usage=None)
 
-    out = ask.run(dela, "sasha", "Иван теперь в банке Гамма", {"title": "Люди", "task_ids": []}, "", None, ask_fn=fake)
+    scope = {"title": "Воронка", "task_ids": [], "deal_ids": [str(deal)], "visible_deal_ids": [str(deal)]}
+    out = ask.run(dela, "sasha", "фонды Альфы убери — не работаем; Иван теперь в банке Гамма", scope, "", None, ask_fn=fake)
+    assert "КАРТОЧКА" not in seen["user"]
+    assert "СДЕЛКИ НА ЭКРАНЕ (1); «в окне» — 1" in seen["user"]
+    assert "в окне · Альфа: фонды · в работе" in seen["user"] and "клиент Альфа · нет следующего дела" in seen["user"]
     with parse.db.session(dela, "sasha", "t") as c:
         assert c.execute("SELECT org_id FROM crm.people WHERE id = %s", (ivan,)).fetchone()["org_id"] == bank
-        assert c.execute("SELECT count(*) AS n FROM crm.interactions").fetchone()["n"] == 0
-    assert out["model"] != ask.CARD_MODEL or ask.MODEL == ask.CARD_MODEL
-    assert any("хронологию и сделки" in e for e in out["errors"])
+        d = c.execute("SELECT stage, outcome, lost_reason FROM crm.deals WHERE id = %s", (deal,)).fetchone()
+        notes = c.execute("SELECT project_id, kind, summary FROM crm.interactions WHERE deleted_at IS NULL").fetchall()
+    assert (d["stage"], d["outcome"], d["lost_reason"]) == ("archive", "lost", "не работаем больше")
+    assert [(n["project_id"], n["kind"], n["summary"]) for n in notes] == [(p, "call", "Ольга звонила: фонды не нужны")]
+    assert any("к какому клиенту" in e for e in out["errors"])  # без сделки и клиента запись не пишется
+    assert out["model"] != ask.CARD_MODEL or ask.MODEL == ask.CARD_MODEL  # вне карточки — модель из «Настроек»
+    # «Вернуть всё» и тут: сделка снова в работе.
+    back = [u for c_ in out["crm"] for u in c_["undo"]]
+    assert all(x["ok"] for x in ops(dela, "sasha", back)), back
+    with parse.db.session(dela, "sasha", "t") as c:
+        assert c.execute("SELECT stage, outcome FROM crm.deals WHERE id = %s", (deal,)).fetchone() == {"stage": "active", "outcome": None}
 
 
 def test_card_deal_new_tasks_land_in_deal(dela):
