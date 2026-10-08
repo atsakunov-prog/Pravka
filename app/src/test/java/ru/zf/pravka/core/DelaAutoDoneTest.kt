@@ -69,7 +69,7 @@ class DelaAutoDoneTest {
     @Test
     fun `уточнение само — что поменялось словами, как в вебе`() {
         val sg = snap().suggestions.getValue("s-upd")
-        assertEquals("название: «Альфа: КП на управленку до 12.10» · срок 17.10 → 12.10 · мяч: жду Ольга", DelaViews.autoWords(sg, today))
+        assertEquals("название: «Альфа: КП на управленку до 12.10» · срок 17.10 → 12.10 · жду Ольга", DelaViews.autoWords(sg, today))
         // Старый сервер — слов нет, строка без них.
         assertEquals("", DelaViews.autoWords(snap().suggestions.getValue("s-old"), today))
     }

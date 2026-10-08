@@ -91,10 +91,11 @@ internal fun DelaTaskPane(
     ) {
         item(key = "head") {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                // «#61 Бета Групп»: номер — капсулой, проект — вторым тоном.
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // Проект — капсулой (номера дел нет нигде с 09.10.2026).
+                val project = snap.projects[task.projectId]?.name ?: task.projectName
+                if (project.isNotBlank()) {
                     Text(
-                        task.numLabel,
+                        project,
                         style = ty.valueS,
                         color = mode.label,
                         modifier = Modifier
@@ -102,16 +103,12 @@ internal fun DelaTaskPane(
                             .border(1.dp, mode.tint.copy(alpha = 0.28f), RoundedCornerShape(50))
                             .padding(horizontal = 14.dp, vertical = 8.dp),
                     )
-                    val project = snap.projects[task.projectId]?.name ?: task.projectName
-                    if (project.isNotBlank()) {
-                        Text(project, style = ty.bodyL, color = mode.meta, modifier = Modifier.padding(start = 12.dp))
-                    }
                 }
                 Text(task.title, style = ty.titleL, color = Ink.TextStrong)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (task.open) GhostKey("Начать в Засечке", onStart, icon = Glyphs.Play)
                     Spacer(Modifier.width(10.dp))
-                    GhostKey("Поправить", onEdit, icon = Glyphs.Edit)
+                    GhostKey("Карточка", onEdit, icon = Glyphs.Edit)
                     Spacer(Modifier.weight(1f))
                     Key(
                         Glyphs.Check,
@@ -152,7 +149,7 @@ internal fun DelaTaskPane(
                 }
                 val since = task.waitingSince.ifBlank { task.createdAt }.take(10)
                 val days = runCatching { ChronoUnit.DAYS.between(LocalDate.parse(since), today).toInt() }.getOrNull()
-                add(Triple("Мяч", ball, days?.takeIf { it > 0 }?.let { plural(it, "день", "дня", "дней") }.orEmpty()))
+                add(Triple("Чьё", ball, days?.takeIf { it > 0 }?.let { plural(it, "день", "дня", "дней") }.orEmpty()))
                 val created = task.createdAt.take(10).takeIf { it.isNotBlank() }?.let { runCatching { Fmt.dayShort(LocalDate.parse(it)) }.getOrNull() }
                 val src = listOfNotNull(sourcePaneName(task.source), created).joinToString(", ")
                 if (src.isNotBlank()) add(Triple("Источник", src, ""))

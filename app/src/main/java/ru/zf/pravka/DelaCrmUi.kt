@@ -3,6 +3,8 @@ package ru.zf.pravka
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -75,8 +77,17 @@ internal class CrmUiState {
     var clientArchive by mutableStateOf(false)
     /** «Закрыть…» сделку: выбор итога и причина. */
     var closing by mutableStateOf<DelaCrm.Deal?>(null)
-    /** «Поговорили» из «Связей»: запись в хронологию про человека. */
-    var talk by mutableStateOf<TalkTarget?>(null)
+    /** «Счёт выставлен…» и «записать» у счёта: когда, кому и как — и какие виды обновить. */
+    var invoicing by mutableStateOf<Pair<Dela.Payment, List<String>>?>(null)
+    /** Долгое нажатие на проект Воронки — меню «Стадия» (перетаскивания на телефоне нет). */
+    var stageFor by mutableStateOf<DelaCrm.Deal?>(null)
+    /** Плашка человека в команде проекта: в листе «откуда он» — ещё «Ведёт проект». */
+    var leadDeal by mutableStateOf("")
+    /** Запись хронологии, раскрытая целиком, и хронология, показанная вся (`S.tlOpen`, `S.tlAll` веба). */
+    var tlOpen by mutableStateOf("")
+    var tlAll by mutableStateOf("")
+    /** Фильтр «Поддержание отношений» у «Клиентов». */
+    var clientRelations by mutableStateOf(false)
     /** Убрать запись хронологии — с подтверждением: строка останется в журнале. */
     var deleting by mutableStateOf<Pair<DelaCrm.Interaction, List<String>>?>(null)
     /** Тап по плашке человека — «откуда он» и должность (`personPop` веба). */
@@ -85,14 +96,10 @@ internal class CrmUiState {
     var addTo by mutableStateOf<AddTarget?>(null)
     /** Крестик у человека клиента — с подтверждением: карточка человека остаётся. */
     var leaving by mutableStateOf<Pair<Dela.Person, String>?>(null)
-    /** Вкладка карточки клиента и сделки: «Дела» или «Хронология» (`S.clientTab` веба). */
-    var tab by mutableStateOf(TAB_TASKS)
     /** Поиск в «Людях». */
     var peopleQuery by mutableStateOf("")
 }
 
-internal const val TAB_TASKS = "tasks"
-internal const val TAB_TIMELINE = "timeline"
 
 /**
  * Куда «+ человек»: к клиенту ([clientId]: в его организацию) или в сделку
@@ -106,16 +113,14 @@ internal data class AddTarget(
     val dealId: String = "",
     val field: String = "",
     val ids: List<String> = emptyList(),
+    /** Свои — кого показать до набора: команда ЗФ или люди этого клиента (`personSearchPop` веба). */
+    val base: List<String> = emptyList(),
+    /** В команду клиента: его живые проекты — один — в него, несколько — выбрать, в какой. */
+    val teamDeals: List<String> = emptyList(),
+    /** У проекта нет ведущего — первый в команде станет ведущим. */
+    val leadEmpty: Boolean = false,
 )
 
-/** Куда ляжет запись хронологии: клиент, сделка, люди — и какие виды после неё обновить. */
-internal data class TalkTarget(
-    val title: String,
-    val projectId: String = "",
-    val dealId: String = "",
-    val personIds: List<String> = emptyList(),
-    val refresh: List<String> = emptyList(),
-)
 
 /** Всё, что нужно кускам CRM: копия, кто я, кэш видов, очередь, видны ли деньги, переходы. */
 internal class DelaCrmContext(
@@ -134,6 +139,8 @@ internal class DelaCrmContext(
     val clientOpen: Set<String> = emptySet(),
     /** Правка, которую можно вернуть: слова и операции «как было» — полоской «Вернуть» наверху вкладки. */
     val offerUndo: (said: String, back: List<JSONObject>, refresh: List<String>) -> Unit = { _, _, _ -> },
+    /** Пилюли карточки: пролистать список к разделу по ключу (`sec:about`, `sec:tasks`…). */
+    val scrollTo: (String) -> Unit = {},
 ) {
     fun data(path: String): JSONObject? = views[path]?.data
 
@@ -200,6 +207,9 @@ internal fun PeopleChips(
     onRemove: ((Dela.Person) -> Unit)?,
     onAdd: (() -> Unit)?,
     empty: String = "никого",
+    /** Пометка вместо должности — «ведёт» у ведущего проекта. */
+    mark: (Dela.Person) -> String = { "" },
+    onTap: ((Dela.Person) -> Unit)? = null,
 ) {
     val c = MaterialTheme.colorScheme
     PaperHint(title)
@@ -209,12 +219,15 @@ internal fun PeopleChips(
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.clip(RoundedCornerShape(50)).border(1.dp, c.outlineVariant, RoundedCornerShape(50))
-                    .clickable { ctx.ui.personFor = p.id }.padding(start = 4.dp, end = if (onRemove != null) 2.dp else 12.dp, top = 3.dp, bottom = 3.dp),
+                    .clickable { if (onTap != null) onTap(p) else { ctx.ui.leadDeal = ""; ctx.ui.personFor = p.id } }.padding(start = 4.dp, end = if (onRemove != null) 2.dp else 12.dp, top = 3.dp, bottom = 3.dp),
             ) {
                 Avatar(p)
                 Spacer(Modifier.width(6.dp))
                 Text(p.label + if (p.local) " ⏳" else "", style = MaterialTheme.typography.bodySmall, color = c.onSurface, maxLines = 1)
-                if (p.role.isNotBlank()) {
+                val m = mark(p)
+                if (m.isNotBlank()) {
+                    Text(" · $m", style = MaterialTheme.typography.bodySmall, color = c.primary, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                } else if (p.role.isNotBlank()) {
                     Text(" · " + p.role, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.widthIn(max = 120.dp))
                 }
@@ -243,16 +256,6 @@ internal fun Avatar(p: Dela.Person, size: androidx.compose.ui.unit.Dp = 24.dp) {
     Box(Modifier.size(size).clip(CircleShape).background(c.primary.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {
         Text(ini.ifBlank { "?" }, style = MaterialTheme.typography.labelSmall, color = c.primary, fontWeight = FontWeight.SemiBold)
     }
-}
-
-/** «Дела» / «Хронология» — вкладки карточки клиента и сделки, как в вебе. */
-@Composable
-internal fun CardTabs(ctx: DelaCrmContext) {
-    Segments(
-        options = listOf("Дела", "Хронология"),
-        selected = if (ctx.ui.tab == TAB_TIMELINE) 1 else 0,
-        onSelect = { ctx.ui.tab = if (it == 1) TAB_TIMELINE else TAB_TASKS },
-    )
 }
 
 // ---------------------------------------------------------------- свежесть
@@ -377,11 +380,15 @@ internal fun LazyListScope.crmPipeline(ctx: DelaCrmContext) {
  * открыты), «тишина N дн.»; ниже — следующее дело или красное «нет
  * следующего дела». У закрытой — итог, дата и причина.
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun DealRow(ctx: DelaCrmContext, d: DelaCrm.Deal, money: Boolean) {
     val c = MaterialTheme.colorScheme
     // Сделка на экране (08.10.2026, docs/dela-phone-8.md): Claude видит её в `deal_ids` и `visible_deal_ids`.
-    Column(Modifier.fillMaxWidth().seen("d:" + d.id).clip(RoundedCornerShape(10.dp)).clickable { ctx.push(DelaPage.Deal(d.id)) }.padding(vertical = 6.dp)) {
+    // Долгое нажатие — меню «Стадия» (п. 9 задания 9: на телефоне вместо перетаскивания по доске).
+    Column(Modifier.fillMaxWidth().seen("d:" + d.id).clip(RoundedCornerShape(10.dp))
+        .combinedClickable(onClick = { ctx.push(DelaPage.Deal(d.id)) }, onLongClick = { if (!d.closed) ctx.ui.stageFor = d })
+        .padding(vertical = 6.dp)) {
         Text(d.name + if (d.local) " ⏳" else "", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
         val meta = listOfNotNull(
             (d.projectName.ifBlank { ctx.snap.projects[d.projectId]?.name.orEmpty() } + if (d.dealType.isNotBlank()) " · ${d.dealType}" else "").takeIf { it.isNotBlank() },
@@ -404,7 +411,7 @@ private fun DealRow(ctx: DelaCrmContext, d: DelaCrm.Deal, money: Boolean) {
             ).joinToString(" · ")
             if (next != null) {
                 Text(
-                    "→ #${next.num} ${next.title}" + if (next.dueDate.isNotBlank()) " · " + DelaAsk.ddmm(next.dueDate, ctx.today) else "",
+                    "→ ${next.title}" + if (next.dueDate.isNotBlank()) " · " + DelaAsk.ddmm(next.dueDate, ctx.today) else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (next.dueDate.isNotBlank() && next.dueDate < ctx.today) c.error else c.onSurface,
                 )
@@ -421,7 +428,8 @@ private fun DealRow(ctx: DelaCrmContext, d: DelaCrm.Deal, money: Boolean) {
 internal fun LazyListScope.crmClients(ctx: DelaCrmContext) {
     val v = ctx.data(DelaCrm.CLIENTS)?.let(DelaCrm::clients)
     val money = ctx.money && v?.money == true
-    val rows = v?.find(ctx.ui.clientQuery, ctx.ui.clientArchive).orEmpty()
+    // Порядок — сервера: свежие (последнее дело заведено или закрыто, контакт) сверху (09.10.2026).
+    val rows = v?.find(ctx.ui.clientQuery, ctx.ui.clientArchive, ctx.ui.clientRelations).orEmpty()
     // Проекты клиента (сделки CRM) раскрываются под его строкой — так же, как в ☰ (06.10.2026).
     val withDeals = rows.filter { DelaCrm.clientDeals(ctx.snap, it.id).isNotEmpty() }.map { it.id }
     val allOpen = withDeals.isNotEmpty() && withDeals.all { it in ctx.clientOpen }
@@ -435,6 +443,7 @@ internal fun LazyListScope.crmClients(ctx: DelaCrmContext) {
             PaperField(value = ctx.ui.clientQuery, onValueChange = { ctx.ui.clientQuery = it }, label = "Найти клиента")
             ChipRow {
                 PaperChip("и архив", selected = ctx.ui.clientArchive, onClick = { ctx.ui.clientArchive = !ctx.ui.clientArchive })
+                PaperChip("Поддержание отношений", selected = ctx.ui.clientRelations, onClick = { ctx.ui.clientRelations = !ctx.ui.clientRelations })
                 if (withDeals.isNotEmpty()) {
                     PaperChip(if (allOpen) "Свернуть проекты" else "Раскрыть проекты", selected = allOpen, onClick = { ctx.setClientOpen(withDeals, !allOpen) })
                 }
@@ -490,7 +499,7 @@ private fun ClientDealLine(ctx: DelaCrmContext, d: Dela.Deal, client: Dela.Proje
         }
         if (next != null) {
             Text(
-                "→ #${next.num} ${next.title}" + if (next.dueDate.isNotBlank()) " · " + DelaAsk.ddmm(next.dueDate, ctx.today) else "",
+                "→ ${next.title}" + if (next.dueDate.isNotBlank()) " · " + DelaAsk.ddmm(next.dueDate, ctx.today) else "",
                 style = MaterialTheme.typography.bodySmall,
                 color = if (next.dueDate.isNotBlank() && next.dueDate < ctx.today) c.error else c.onSurfaceVariant,
             )
@@ -524,7 +533,10 @@ private fun ClientRow(ctx: DelaCrmContext, cl: DelaCrm.Client, money: Boolean) {
                 plural(deals.size, "проект", "проекта", "проектов").takeIf { deals.isNotEmpty() },
             ).joinToString(" · ")
             Text(cl.name + if (tail.isNotBlank()) " · $tail" else "", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-            val stages = if (cl.stages.isNotEmpty()) cl.stages.joinToString(", ") { DelaCrm.STAGE[it] ?: it } else if (cl.allDeals > 0) "сделки в архиве" else "без сделок"
+            val stages = listOfNotNull(
+                "поддержание отношений".takeIf { cl.relations },
+                if (cl.stages.isNotEmpty()) cl.stages.joinToString(", ") { DelaCrm.STAGE[it] ?: it } else if (cl.relations) null else if (cl.allDeals > 0) "проекты в архиве" else "без проектов",
+            ).joinToString(" · ")
             val late = (DelaCrm.daysSince(cl.lastTouch, ctx.today) ?: 0) > 45
             val touch = if (cl.lastTouch.isNotBlank()) "контакт " + DelaCrm.ago(cl.lastTouch, ctx.today) else "контактов нет"
             val moneyBits = if (money) listOfNotNull(
@@ -540,7 +552,7 @@ private fun ClientRow(ctx: DelaCrmContext, cl: DelaCrm.Client, money: Boolean) {
             if (open) {
                 // Раскрыто — следующее дело видно у каждого проекта ниже.
             } else if (next != null) {
-                Text("→ #${next.num} ${next.title}" + if (next.dueDate.isNotBlank()) " · " + DelaAsk.ddmm(next.dueDate, ctx.today) else "",
+                Text("→ ${next.title}" + if (next.dueDate.isNotBlank()) " · " + DelaAsk.ddmm(next.dueDate, ctx.today) else "",
                     style = MaterialTheme.typography.bodySmall)
             } else if (cl.liveDeals > 0) {
                 Text("нет следующего дела", style = MaterialTheme.typography.bodySmall, color = c.error)
@@ -681,59 +693,175 @@ private fun TieRow(ctx: DelaCrmContext, p: DelaCrm.Tie) {
             ).joinToString(" · ")
             Text(bits, style = MaterialTheme.typography.bodySmall, color = if (p.due) c.error else c.onSurfaceVariant)
         }
-        PaperTextButton("Поговорили", onClick = {
-            ctx.ui.talk = TalkTarget(p.name, personIds = listOf(p.id), refresh = listOf(DelaCrm.TIES, DelaCrm.dossierPath(p.id)))
-        })
     }
 }
 
-// ---------------------------------------------------------------- клиент
+// ---------------------------------------------------------------- клиент и проект: карточки (09.10.2026)
+
+/*
+ * Карточки клиента и проекта — одно устройство, одно под другим (09.10.2026,
+ * docs/dela-phone-9.md, п. 4–8; веб — `renderClientCard`, `renderDeal`):
+ * «О клиенте / О проекте» (описание полем и статус), люди клиента и команда,
+ * проекты плитками (у клиента), дела, хронология под делами (не вкладкой),
+ * деньги, файлы. Пилюли в шапке — разделы карточки: нажатие листает к разделу.
+ * Номеров дел, текстов Notion и слова «мяч» нет; своей формы хронологии нет —
+ * пишет Claude из строки внизу.
+ */
+
+/** Пилюли разделов карточки — листают к разделу (`sec-*` веба). */
+@Composable
+private fun CardPills(ctx: DelaCrmContext, sections: List<Pair<String, String>>) {
+    ChipRow {
+        for ((key, title) in sections) PaperChip(title, selected = false, onClick = { ctx.scrollTo(key) })
+    }
+}
 
 /**
- * Клиент на странице проекта: люди плашками, сделки, вкладки «Дела» /
- * «Хронология» (06.10.2026, как `renderProject` веба) — дела проекта под
- * вкладкой «Дела» рисует вкладка из своей копии.
+ * Описание полем (`aboutBox` веба): растёт по тексту и сохраняется, когда из
+ * него вышел (или по «Сохранить», если поле не отпускают).
  */
-internal fun LazyListScope.crmClientBlock(ctx: DelaCrmContext, projectId: String) {
+@Composable
+private fun AboutField(value: String, placeholder: String, save: (String) -> Unit) {
+    var text by remember(value) { mutableStateOf(value) }
+    var focused by remember { mutableStateOf(false) }
+    PaperField(
+        value = text,
+        onValueChange = { text = it },
+        placeholder = placeholder,
+        singleLine = false,
+        maxLines = 12,
+        modifier = Modifier.fillMaxWidth().onFocusChanged { f ->
+            if (focused && !f.isFocused && text.trim() != value.trim()) save(text.trim())
+            focused = f.isFocused
+        },
+    )
+    if (text.trim() != value.trim()) {
+        Row {
+            Spacer(Modifier.weight(1f))
+            PaperTextButton("Сохранить", icon = Glyphs.Check, onClick = { save(text.trim()) })
+        }
+    }
+}
+
+/** Заголовок раздела карточки — как `sec-h` веба. */
+@Composable
+private fun SecHead(title: String, n: Int = 0) {
+    Text(
+        title + if (n > 0) " · $n" else "",
+        style = MaterialTheme.typography.labelLarge,
+        color = ru.zf.pravka.ui.LocalMode.current.label,
+        modifier = Modifier.padding(start = 4.dp, top = 6.dp),
+    )
+}
+
+/**
+ * Клиент на странице проекта — верх карточки: шапка с пилюлями, «О клиенте»
+ * (описание — `note`, статус: проекты по стадиям и «Поддержание отношений»),
+ * люди клиента и команда (ведущие и команды его живых проектов) одна под
+ * другой, проекты плитками. Дела рисует вкладка, низ — [crmClientBottom].
+ */
+internal fun LazyListScope.crmClientTop(ctx: DelaCrmContext, projectId: String) {
     val path = DelaCrm.clientPath(projectId)
     val v = ctx.data(path)?.let(DelaCrm::client)
     val project = ctx.snap.projects[projectId] ?: v?.project
     val money = ctx.money && v?.money == true
+    val copyDeals = ctx.snap.allDealsOf(projectId)
+    val live = copyDeals.filter { !it.closed }
     item(key = "crm:client") {
-        PaperCard(label = "клиент") {
+        PaperCard {
             Text(project?.name ?: "клиент не найден", style = MaterialTheme.typography.titleMedium)
             if (project != null && project.aliases.isNotEmpty()) PaperHint("ещё зовут: " + project.aliases.joinToString(", "))
-            if (project != null && project.note.isNotBlank()) PaperHint(project.note)
             Freshness(ctx, path)
-            // Люди — плашками из своей копии (крестик и «+ человек» видны сразу); пока копия
-            // не знает людей клиента — что сказал сервер.
+            CardPills(ctx, listOfNotNull("sec:about" to "О клиенте", "sec:deals" to "Проекты", "sec:tasks" to "Дела", "sec:timeline" to "Хронология",
+                if (money) "sec:money" to "Деньги" else null, "sec:files" to "Файлы"))
+        }
+    }
+    item(key = "sec:about") {
+        PaperCard(label = "О клиенте") {
+            if (project != null) {
+                AboutField(project.note, "Кто они, чем занимаются, как пришли, о чём договорённость. Можно сказать словами Claude внизу.") { x ->
+                    ctx.runUndoable(
+                        DelaCrm.Undoable(
+                            listOf(DelaCrm.projectSetOp(projectId, JSONObject().put("note", Dela.nul(x)))),
+                            listOf(DelaCrm.projectSetOp(projectId, JSONObject().put("note", Dela.nul(project.note)))),
+                            "Описание сохранено",
+                        ),
+                        listOf(path),
+                    )
+                }
+                // Статус: проекты по стадиям и «Поддержание отношений» — уже не лид, но и не сделка.
+                val stages = Dela.OPEN_STAGES.filter { st -> live.any { it.stage == st } }.map { DelaCrm.STAGE[it] ?: it }
+                PaperHint(if (stages.isNotEmpty()) "Статус — проекты: " + stages.joinToString(", ") else if (project.status != DelaCrm.RELATIONS) "Статус — проектов в работе нет" else "Статус")
+                ChipRow {
+                    val on = project.status == DelaCrm.RELATIONS
+                    PaperChip("Поддержание отношений", selected = on, onClick = {
+                        ctx.runUndoable(
+                            DelaCrm.Undoable(
+                                listOf(DelaCrm.projectSetOp(projectId, JSONObject().put("status", if (on) JSONObject.NULL else DelaCrm.RELATIONS))),
+                                listOf(DelaCrm.projectSetOp(projectId, JSONObject().put("status", Dela.nul(project.status)))),
+                                if (on) "Статус — по проектам" else "Поддержание отношений",
+                            ),
+                            listOf(path, DelaCrm.CLIENTS),
+                        )
+                    })
+                }
+            }
+        }
+    }
+    item(key = "crm:client:people") {
+        PaperCard {
+            // Люди клиента — из своей копии (крестик и «+ человек» видны сразу); пока копия не знает — что сказал сервер.
             val people = DelaCrm.clientPeople(ctx.snap, projectId).ifEmpty {
                 v?.people.orEmpty().map { r -> ctx.snap.people[r.id] ?: Dela.Person(r.id, r.name, short = r.short, role = r.role) }
             }
             PeopleChips(
-                ctx, "Люди", people,
+                ctx, "Люди клиента", people,
                 onRemove = { p -> ctx.ui.leaving = p to projectId },
-                onAdd = { ctx.ui.addTo = AddTarget("К «${project?.name ?: "клиенту"}»", people.map { it.id }.toSet(), clientId = projectId) },
+                onAdd = {
+                    ctx.ui.addTo = AddTarget("Кто из «${project?.name ?: "клиента"}»", people.map { it.id }.toSet(), clientId = projectId, base = people.map { it.id })
+                },
                 empty = "пока никого",
             )
+            val teamIds = DelaCrm.clientTeam(copyDeals)
+            PeopleChips(
+                ctx, "Команда", teamIds.mapNotNull { ctx.snap.people[it] },
+                onRemove = null,
+                onAdd = if (live.isNotEmpty()) ({
+                    ctx.ui.addTo = AddTarget("Кто из команды", teamIds.toSet(), field = "team_ids", base = DelaCrm.teamPeople(ctx.snap).map { it.id },
+                        teamDeals = live.map { it.id })
+                }) else null,
+                empty = if (live.isNotEmpty()) "никого" else "появится с проектом",
+                mark = { p -> if (live.any { it.leadPersonId == p.id }) "ведёт" else "" },
+            )
+            if (live.size > 1) PaperHint("Команда — по всем живым проектам; убрать — в карточке проекта.")
         }
     }
-    // Сделки: из ответа вида (с посчитанным), а пока его нет — из копии синка.
-    val deals = (v?.deals ?: ctx.snap.allDealsOf(projectId).map { fromCopy(it, project?.name.orEmpty()) })
+    // Проекты (сделки) плитками: из ответа вида (с посчитанным), а пока его нет — из копии синка.
+    val deals = (v?.deals ?: copyDeals.map { fromCopy(it, project?.name.orEmpty()) })
         .map { DelaCrm.overlayDeal(it, ctx.ops, ctx.today) }
         .sortedWith(compareBy<DelaCrm.Deal>({ it.closed }, { Dela.STAGES.indexOf(it.stage) }, { it.name.lowercase() }))
-    item(key = "crm:client:deals") {
-        PaperCard(label = "проекты · ${deals.size}") {
-            if (deals.isEmpty()) PaperHint("Проектов (сделок) нет. Новый — в вебе, кнопкой «+ Сделка».")
+    item(key = "sec:deals") {
+        PaperCard(label = "Проекты · ${deals.count { !it.closed }}") {
+            if (deals.isEmpty()) PaperHint("Проектов нет. Новый — скажи Claude внизу: «новый проект — финмодель».")
             deals.forEachIndexed { i, d -> if (i > 0) RowRule(); DealRow(ctx, d, money) }
         }
     }
-    item(key = "crm:client:tabs") { CardTabs(ctx) }
-    if (ctx.ui.tab == TAB_TIMELINE) {
-        item(key = "crm:client:tl") {
-            val items = DelaCrm.overlayTimeline(v?.timeline.orEmpty(), ctx.ops, ctx.snap) { it.projectId == projectId }
-            TimelineCard(ctx, items, TalkTarget(project?.name.orEmpty(), projectId = projectId, refresh = listOf(path)), loaded = v != null, showDeal = true)
-        }
+}
+
+/** Низ карточки клиента: хронология (записи, счета и оплаты всех проектов), деньги, файлы. */
+internal fun LazyListScope.crmClientBottom(ctx: DelaCrmContext, projectId: String) {
+    val path = DelaCrm.clientPath(projectId)
+    val v = ctx.data(path)?.let(DelaCrm::client)
+    val project = ctx.snap.projects[projectId] ?: v?.project
+    val money = ctx.money && v?.money == true
+    val pays = DelaCrm.overlayPayments(v?.payments.orEmpty(), ctx.ops)
+    item(key = "sec:timeline") {
+        val items = DelaCrm.overlayTimeline(v?.timeline.orEmpty(), ctx.ops, ctx.snap) { it.projectId == projectId }
+        TimelineBlock(ctx, "c:$projectId", items, if (money) pays else emptyList(), loaded = v != null, refresh = listOf(path), showDeal = true)
+    }
+    if (money) item(key = "sec:money") { ClientMoney(ctx, pays, listOf(path)) }
+    if (project != null) item(key = "sec:files") {
+        FilesCard(ctx, project.folderUrl, project.files) { set, msg -> ctx.run(listOf(DelaCrm.projectSetOp(projectId, set)), listOf(path), msg) }
     }
 }
 
@@ -745,16 +873,12 @@ private fun fromCopy(d: Dela.Deal, projectName: String): DelaCrm.Deal = DelaCrm.
     sourcePersonId = d.sourcePersonId, probability = d.probability, expectedOn = d.expectedOn, deadline = d.deadline,
 )
 
-// ---------------------------------------------------------------- сделка
-
 /**
- * Страница сделки — как в вебе (06.10.2026, docs/dela-phone-4.md; владелец:
- * «если я нажимаю на проект, он должен быть не сайдбаром, а таким же, как
- * клиент и человек»): наверху пилюля Claude (рисует вкладка), стадия
- * переключателем, «Закрыть…» с итогом, «Вернуть в работу»; люди клиента и
- * команда — плашками; вкладки «Дела» (следующий шаг — открытые дела сделки и
- * «Следующее дело…») и «Хронология»; «что за сделка» и деньги — свёрнутыми
- * строками ниже.
+ * Проект клиента (сделка) страницей — как клиент (09.10.2026, `renderDeal` веба):
+ * «О проекте» (описание полем и короткие факты), статус («Закрыть…» с итогом,
+ * «Вернуть в работу»), люди клиента и команда (ведущий первым, «ведёт»), дела,
+ * хронология, деньги, файлы; «Как я вижу» и «Идеи» — свёрнуто и только если в
+ * них что-то есть. Тексты Notion («Следующий шаг», «Мяч», «Лог») не показываются.
  */
 internal fun LazyListScope.crmDealPage(ctx: DelaCrmContext, dealId: String) {
     val path = DelaCrm.dealPath(dealId)
@@ -762,139 +886,164 @@ internal fun LazyListScope.crmDealPage(ctx: DelaCrmContext, dealId: String) {
     val base = v?.deal ?: ctx.snap.deals[dealId]?.let { fromCopy(it, ctx.snap.projects[it.projectId]?.name.orEmpty()) }
     if (base == null) {
         item(key = "crm:deal:none") {
-            PaperCard(label = "сделка") {
+            PaperCard(label = "проект") {
                 Freshness(ctx, path)
-                PaperHint("Сделка не видна — может быть, её закрыли от тебя или она ещё не пришла с сервера.")
+                PaperHint("Проект не виден — может быть, его закрыли от тебя или он ещё не пришёл с сервера.")
             }
         }
         return
     }
-    // Люди и команда — из своей копии, если она знает сделку: там и только что убранный крестиком.
+    // Люди, команда, описание, файлы — из своей копии, если она знает сделку: там и только что поправленное.
     val copy = ctx.snap.deals[dealId]
-    val d = DelaCrm.overlayDeal(base, ctx.ops, ctx.today).let { o -> if (copy != null) o.copy(personIds = copy.personIds, teamIds = copy.teamIds) else o }
+    val d = DelaCrm.overlayDeal(base, ctx.ops, ctx.today).let { o ->
+        if (copy != null) o.copy(personIds = copy.personIds, teamIds = copy.teamIds, leadPersonId = copy.leadPersonId) else o
+    }
     val refreshDeal = listOf(path, DelaCrm.clientPath(d.projectId))
-    // Деньги — кому открыты; сервер сам пометил ответ (`money`). Гонорара может не быть, а оплаты — быть.
+    // Деньги — кому открыты; сервер сам пометил ответ (`money`).
     val money = ctx.money && (v?.money ?: true)
     item(key = "crm:deal:head") {
-        PaperCard(label = "сделка · " + d.stageWord + if (d.local) " ⏳" else "") {
-            Text(d.name, style = MaterialTheme.typography.titleMedium)
+        PaperCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Монета — портфель, не воронка (п. 4 задания 9).
+                Icon(Glyphs.Layers, contentDescription = "проект", tint = ru.zf.pravka.ui.LocalMode.current.label, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(d.name + if (d.local) " ⏳" else "", style = MaterialTheme.typography.titleMedium)
+            }
             PaperRow(
                 title = d.projectName.ifBlank { ctx.snap.projects[d.projectId]?.name ?: "клиент" },
-                hint = "клиент",
-                icon = Glyphs.Layers,
+                hint = "клиент · " + d.stageWord,
+                icon = Glyphs.Groups,
                 onClick = { ctx.push(DelaPage.Project(d.projectId)) },
             )
             Freshness(ctx, path)
+            CardPills(ctx, listOfNotNull("sec:about" to "О проекте", "sec:tasks" to "Дела", "sec:timeline" to "Хронология",
+                if (money) "sec:money" to "Деньги" else null, "sec:files" to "Файлы"))
+        }
+    }
+    item(key = "sec:about") {
+        PaperCard(label = "О проекте") {
+            AboutField(copy?.description.orEmpty(), "Что за проект: суть, цель, о чём договорились. Можно сказать словами Claude внизу.") { x ->
+                ctx.runUndoable(
+                    DelaCrm.Undoable(
+                        listOf(DelaCrm.dealSetOp(d.id, JSONObject().put("description", Dela.nul(x)))),
+                        listOf(DelaCrm.dealSetOp(d.id, JSONObject().put("description", Dela.nul(copy?.description.orEmpty())))),
+                        "Описание сохранено",
+                    ),
+                    refreshDeal,
+                )
+            }
+            val facts = listOf(
+                "Тип" to d.dealType,
+                "Вероятность" to (d.probability?.let { "$it %" } ?: d.pEff?.let { "$it % (по стадии)" }.orEmpty()),
+                "Решение ждём" to d.expectedOn.takeIf { it.isNotBlank() }?.let { DelaAsk.ddmm(it, ctx.today) }.orEmpty(),
+                "Дедлайн" to d.deadline.takeIf { it.isNotBlank() }?.let { DelaAsk.ddmm(it, ctx.today) }.orEmpty(),
+                "Привёл" to ctx.personName(d.sourcePersonId),
+            ).filter { it.second.isNotBlank() }
+            if (facts.isNotEmpty()) PaperHint(facts.joinToString(" · ") { "${it.first}: ${it.second}" }, ru.zf.pravka.ui.Ink.Text)
+            else PaperHint("Тип, вероятность, сроки — скажи Claude внизу: «тип — M&A, решение ждём к 20-му».")
+            // «Как я вижу» и «Идеи» — старые заметки владельца: свёрнуто и только если в них что-то есть.
+            val notes = listOf("Как я вижу (только мне)" to d.myView, "Идеи" to d.ideas).filter { it.second.isNotBlank() }
+            if (notes.isNotEmpty()) {
+                var shown by remember(d.id) { mutableStateOf(false) }
+                SummaryLine(title = notes.joinToString(" и ") { it.first.removeSuffix(" (только мне)").lowercase() }, summary = "", expanded = shown, onToggle = { shown = !shown }) {
+                    for ((k, x) in notes) PaperHint("$k: $x", ru.zf.pravka.ui.Ink.Text)
+                }
+            }
+        }
+    }
+    item(key = "crm:deal:stage") {
+        PaperCard(label = "Статус") {
             if (d.closed) {
                 val out = listOf(d.stageWord, d.closedOn.takeIf { it.isNotBlank() }?.let { DelaAsk.ddmm(it, ctx.today) }.orEmpty(), d.lostReason)
                     .filter { it.isNotBlank() }.joinToString(" · ")
                 Text(out, style = MaterialTheme.typography.bodyMedium, color = if (d.outcome == "won") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
                 PaperButton("Вернуть в работу", icon = Glyphs.Undo, onClick = {
-                    ctx.run(listOf(DelaCrm.reopenOp(d.id)), listOf(path, DelaCrm.PIPELINE, DelaCrm.clientPath(d.projectId)), "Сделка снова в работе")
+                    ctx.run(listOf(DelaCrm.reopenOp(d.id)), listOf(path, DelaCrm.PIPELINE, DelaCrm.clientPath(d.projectId)), "Проект снова в работе")
                 })
             } else {
-                PaperHint("Стадия")
                 ChipRow {
                     for (st in Dela.OPEN_STAGES) {
                         PaperChip(DelaCrm.STAGE[st] ?: st, selected = d.stage == st, onClick = {
                             if (d.stage != st) ctx.run(listOf(DelaCrm.stageOp(d.id, st)), listOf(path, DelaCrm.PIPELINE, DelaCrm.clientPath(d.projectId)))
                         })
                     }
-                }
-                Row {
-                    Spacer(Modifier.weight(1f))
-                    PaperTextButton("Закрыть…", icon = Glyphs.Check, onClick = { ctx.ui.closing = d })
+                    PaperChip("Закрыть…", selected = false, onClick = { ctx.ui.closing = d })
                 }
             }
         }
     }
-
-    // Люди клиента и команда — плашками: крестик убирает из сделки, «+ человек» — из справочника или новый.
+    // Люди клиента и команда — одна под другой; ведущий — первым, с пометкой «ведёт».
     item(key = "crm:deal:people") {
         PaperCard {
-            DealPeople(ctx, d, "person_ids", "Люди клиента", d.personIds, refreshDeal)
-            DealPeople(ctx, d, "team_ids", "Команда", d.teamIds, refreshDeal)
-        }
-    }
-    item(key = "crm:deal:tabs") { CardTabs(ctx) }
-
-    // Следующий шаг — открытое дело сделки (правило 12 сервера), из своей копии.
-    val open = ctx.snap.tasks.values.filter { it.dealId == dealId && it.open }.sortedWith(Dela.ORDER)
-        .ifEmpty { v?.open.orEmpty() }
-    if (ctx.ui.tab != TAB_TIMELINE) item(key = "crm:deal:next") {
-        var next by remember(dealId) { mutableStateOf("") }
-        PaperCard(label = "следующий шаг · ${open.size}") {
-            if (open.isNotEmpty()) TaskRows(open, ctx.actions)
-            else if (!d.closed) PaperHint("Нет следующего дела — сделка без шага застынет.", MaterialTheme.colorScheme.error)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                PaperField(value = next, onValueChange = { next = it }, label = "Следующее дело…", singleLine = false, maxLines = 3, modifier = Modifier.weight(1f))
-                GlyphButton(Glyphs.Send, "завести дело по сделке", enabled = next.isNotBlank(), onClick = {
-                    val title = next.trim()
-                    next = ""
-                    ctx.run(listOf(DelaCrm.nextTaskOp(title, d.projectId, d.id, ctx.me)), listOf(path, DelaCrm.PIPELINE), "✓ следующее дело: ${title.take(40)}")
-                })
-            }
-            val done = v?.done.orEmpty()
-            if (done.isNotEmpty()) {
-                var shown by remember { mutableStateOf(false) }
-                SummaryLine(title = "Сделано по сделке", summary = done.size.toString(), expanded = shown, onToggle = { shown = !shown }) {
-                    for (t in done) PaperHint("#${t.num} ${t.title}" + if (t.completedAt.isNotBlank()) " · " + DelaAsk.ddmm(t.completedAt, ctx.today) else "")
-                }
-            }
-        }
-    }
-
-    if (ctx.ui.tab == TAB_TIMELINE) {
-        item(key = "crm:deal:tl") {
-            val items = DelaCrm.overlayTimeline(v?.timeline.orEmpty(), ctx.ops, ctx.snap) { it.dealId == dealId }
-            TimelineCard(
-                ctx,
-                items,
-                TalkTarget(d.name, projectId = d.projectId, dealId = d.id, personIds = d.personIds, refresh = refreshDeal),
-                loaded = v != null,
+            val client = ctx.snap.projects[d.projectId]
+            PeopleChips(
+                ctx, "Люди клиента", d.personIds.mapNotNull { ctx.snap.people[it] },
+                onRemove = { p ->
+                    ctx.runUndoable(
+                        DelaCrm.Undoable(listOf(DelaCrm.dealPeopleOp(d.id, "person_ids", d.personIds - p.id)), listOf(DelaCrm.dealPeopleOp(d.id, "person_ids", d.personIds)), "${p.label} больше не от клиента"),
+                        refreshDeal,
+                    )
+                },
+                onAdd = {
+                    ctx.ui.addTo = AddTarget("Кто от клиента", d.personIds.toSet(), clientId = d.projectId, dealId = d.id, field = "person_ids", ids = d.personIds,
+                        base = if (client != null) DelaCrm.clientPeople(ctx.snap, client.id).map { it.id } else emptyList())
+                },
+            )
+            val team = (listOf(d.leadPersonId) + d.teamIds).filter { it.isNotBlank() }.distinct()
+            PeopleChips(
+                ctx, "Команда", team.mapNotNull { ctx.snap.people[it] },
+                onRemove = { p ->
+                    val (go, back) = if (p.id == d.leadPersonId) {
+                        DelaCrm.dealSetOp(d.id, JSONObject().put("lead_person_id", JSONObject.NULL)) to DelaCrm.dealSetOp(d.id, JSONObject().put("lead_person_id", d.leadPersonId))
+                    } else {
+                        DelaCrm.dealPeopleOp(d.id, "team_ids", d.teamIds - p.id) to DelaCrm.dealPeopleOp(d.id, "team_ids", d.teamIds)
+                    }
+                    ctx.runUndoable(DelaCrm.Undoable(listOf(go), listOf(back), "${p.label} больше не в команде"), refreshDeal)
+                },
+                onAdd = {
+                    ctx.ui.addTo = AddTarget("Кто из команды", team.toSet(), dealId = d.id, field = "team_ids", ids = d.teamIds,
+                        base = DelaCrm.teamPeople(ctx.snap).map { it.id }, leadEmpty = d.leadPersonId.isBlank())
+                },
+                empty = "никого — первый станет ведущим",
+                mark = { p -> if (p.id == d.leadPersonId) "ведёт" else "" },
+                onTap = { p -> ctx.ui.leadDeal = if (p.id != d.leadPersonId) d.id else ""; ctx.ui.personFor = p.id },
             )
         }
     }
-
-    // «Что за сделка» — свёрнутой строкой под вкладками: тип, кто ведёт, кто привёл, вероятность, сроки.
-    item(key = "crm:deal:about") {
-        var shown by remember { mutableStateOf(false) }
-        val lines = listOf(
-            "Тип" to d.dealType,
-            "Ведёт" to ctx.personName(d.leadPersonId),
-            "Привёл" to ctx.personName(d.sourcePersonId),
-            "Вероятность" to (d.probability?.let { "$it %" } ?: d.pEff?.let { "$it % (по стадии)" }.orEmpty()),
-            "Решение ждём" to d.expectedOn.takeIf { it.isNotBlank() }?.let { DelaAsk.ddmm(it, ctx.today) }.orEmpty(),
-            "Дедлайн" to d.deadline.takeIf { it.isNotBlank() }?.let { DelaAsk.ddmm(it, ctx.today) }.orEmpty(),
-        ).filter { it.second.isNotBlank() }
-        PaperCard {
-            SummaryLine(
-                title = "Что за сделка",
-                summary = lines.take(2).joinToString(" · ") { it.second }.ifBlank { "тип, кто ведёт, вероятность, сроки" },
-                expanded = shown,
-                onToggle = { shown = !shown },
-            ) {
-                if (lines.isEmpty()) PaperHint("Ничего не записано. Скажи Claude наверху: «тип — M&A, ведёт Иван, решение ждём к 20-му».")
-                for ((k, value) in lines) PaperHint("$k: $value", MaterialTheme.colorScheme.onSurface)
+    // Дела проекта: следующий шаг — его открытое дело (правило 12 сервера), из своей копии.
+    val open = ctx.snap.tasks.values.filter { it.dealId == dealId && it.open }.sortedWith(Dela.ORDER)
+        .ifEmpty { v?.open.orEmpty() }
+    item(key = "sec:tasks") {
+        PaperCard(label = "Дела · ${open.size}") {
+            if (open.isNotEmpty()) TaskRows(open, ctx.actions)
+            else if (!d.closed) PaperHint("Нет следующего дела — проект без шага застынет. Скажи его Claude внизу.", MaterialTheme.colorScheme.error)
+            val done = v?.done.orEmpty()
+            if (done.isNotEmpty()) {
+                var shown by remember { mutableStateOf(false) }
+                SummaryLine(title = "Сделано по проекту", summary = done.size.toString(), expanded = shown, onToggle = { shown = !shown }) {
+                    for (t in done) PaperHint(t.title + if (t.completedAt.isNotBlank()) " · " + DelaAsk.ddmm(t.completedAt, ctx.today) else "")
+                }
             }
         }
     }
-
-    if (money) {
-        val pays = DelaCrm.overlayPayments(v?.payments ?: ctx.snap.paymentsOf(dealId), ctx.ops)
-        item(key = "crm:deal:money") { DealMoney(ctx, d, pays, listOf(path)) }
+    val pays = DelaCrm.overlayPayments(v?.payments ?: ctx.snap.paymentsOf(dealId), ctx.ops)
+    item(key = "sec:timeline") {
+        val items = DelaCrm.overlayTimeline(v?.timeline.orEmpty(), ctx.ops, ctx.snap) { it.dealId == dealId }
+        TimelineBlock(ctx, "d:$dealId", items, if (money) pays else emptyList(), loaded = v != null, refresh = refreshDeal)
     }
-
+    if (money) item(key = "sec:money") { DealMoney(ctx, d, pays, listOf(path)) }
+    if (copy != null) item(key = "sec:files") {
+        FilesCard(ctx, copy.folderUrl, copy.files) { set, msg -> ctx.run(listOf(DelaCrm.dealSetOp(d.id, set)), refreshDeal, msg) }
+    }
     val minutes = DelaCrm.hours(v?.minutesAll)
-    if (d.myView.isNotBlank() || minutes.isNotBlank() || v?.history?.isNotEmpty() == true) {
+    val history = v?.history.orEmpty()
+    if (minutes.isNotBlank() || history.isNotEmpty()) {
         item(key = "crm:deal:more") {
             var shown by remember { mutableStateOf(false) }
             PaperCard {
-                if (minutes.isNotBlank()) PaperHint("Время из Засечки по делам сделки: $minutes")
-                if (d.myView.isNotBlank()) PaperHint("Как я вижу: " + d.myView)
-                val history = v?.history.orEmpty()
+                if (minutes.isNotBlank()) PaperHint("Время из Засечки по делам проекта: $minutes")
                 if (history.isNotEmpty()) {
-                    SummaryLine(title = "Журнал сделки", summary = history.size.toString(), expanded = shown, onToggle = { shown = !shown }) {
+                    SummaryLine(title = "Журнал проекта", summary = history.size.toString(), expanded = shown, onToggle = { shown = !shown }) {
                         for (h in history.takeLast(30).reversed()) PaperHint(h)
                     }
                 }
@@ -904,18 +1053,16 @@ internal fun LazyListScope.crmDealPage(ctx: DelaCrmContext, dealId: String) {
 }
 
 /**
- * Деньги сделки — только кому открыты, свёрнутой строкой (как `details` веба):
- * гонорар, сколько получено, счета, план; раскрыл — оплаты с «Счёт выставлен»
- * и «Оплачено». План оплат заводится в вебе (этап 3 телефона — после слова владельца).
+ * Деньги проекта — кому открыты (`renderDeal` веба): гонорар, получено, счета,
+ * план, осталось; оплаты строками — «Счёт выставлен» спрашивает, когда, кому и
+ * как; «Оплачено». План оплат заводится в вебе или словами Claude.
  */
 @Composable
 private fun DealMoney(ctx: DelaCrmContext, d: DelaCrm.Deal, pays: List<Dela.Payment>, refresh: List<String>) {
-    val c = MaterialTheme.colorScheme
     val live = pays.filter { it.live }
     val paid = live.filter { it.paidOn.isNotBlank() }.sumOf { it.amountKop }
     val inv = live.filter { it.paidOn.isBlank() && it.invoicedOn.isNotBlank() }.sumOf { it.amountKop }
     val plan = live.filter { it.paidOn.isBlank() && it.invoicedOn.isBlank() }.sumOf { it.amountKop }
-    var shown by remember { mutableStateOf(false) }
     val fee = d.feeKop ?: 0L
     val sum = listOfNotNull(
         DelaCrm.rub(fee).takeIf { it.isNotBlank() }?.let { "гонорар $it" },
@@ -924,63 +1071,213 @@ private fun DealMoney(ctx: DelaCrmContext, d: DelaCrm.Deal, pays: List<Dela.Paym
         DelaCrm.rub(plan).takeIf { it.isNotBlank() }?.let { "план $it" },
         if (fee > 0 && d.stage in setOf("mandate", "active", "closing")) DelaCrm.rub(maxOf(fee - paid, 0L)).takeIf { it.isNotBlank() }?.let { "осталось $it" } else null,
     ).joinToString(" · ").ifBlank { "оплат пока нет" }
-    PaperCard {
-        SummaryLine(title = "Деньги", summary = sum, expanded = shown, onToggle = { shown = !shown }) {
-            pays.forEachIndexed { i, p ->
-                if (i > 0) RowRule()
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            DelaCrm.rub(p.amountKop) + " " + (DelaCrm.PAY_KIND[p.kind] ?: p.kind) + (if (p.title.isNotBlank()) " · ${p.title}" else "") + if (p.local) " ⏳" else "",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        val late = p.paidOn.isBlank() && p.invoicedOn.isNotBlank() && (p.dueOn.ifBlank { p.invoicedOn }) < ctx.today
-                        val st = when {
-                            !p.live -> "отменено"
-                            p.paidOn.isNotBlank() -> "получено " + DelaAsk.ddmm(p.paidOn, ctx.today)
-                            p.invoicedOn.isNotBlank() -> "счёт " + DelaAsk.ddmm(p.invoicedOn, ctx.today) + if (p.dueOn.isNotBlank()) ", срок " + DelaAsk.ddmm(p.dueOn, ctx.today) else ""
-                            p.dueOn.isNotBlank() -> "ждём " + DelaAsk.ddmm(p.dueOn, ctx.today)
-                            else -> "без даты"
-                        }
-                        Text(st + if (p.note.isNotBlank()) " · ${p.note}" else "", style = MaterialTheme.typography.bodySmall,
-                            color = if (late) c.error else if (p.paidOn.isNotBlank()) c.primary else c.onSurfaceVariant)
-                    }
-                    if (p.live && p.paidOn.isBlank()) {
-                        Column(horizontalAlignment = Alignment.End) {
-                            if (p.invoicedOn.isBlank()) PaperTextButton("Счёт выставлен", onClick = { ctx.run(listOf(DelaCrm.invoicedOp(p.id, ctx.today)), refresh, "Счёт выставлен") })
-                            PaperTextButton("Оплачено", icon = Glyphs.Check, color = c.primary, onClick = { ctx.run(listOf(DelaCrm.paidOp(p.id, ctx.today)), refresh, "Оплата получена") })
-                        }
-                    }
+    PaperCard(label = "Деньги") {
+        PaperHint(sum, ru.zf.pravka.ui.Ink.Text)
+        PayRows(ctx, pays, refresh)
+        if (pays.isEmpty()) PaperHint("План оплат (аванс, этапы, ретейнер) — в вебе или словами Claude внизу.")
+    }
+}
+
+/** Деньги клиента: оплаты всех его проектов — что пришло, что выставлено, чего ждём. */
+@Composable
+private fun ClientMoney(ctx: DelaCrmContext, pays: List<Dela.Payment>, refresh: List<String>) {
+    val live = pays.filter { it.live }
+    fun sum(f: (Dela.Payment) -> Boolean) = live.filter(f).sumOf { it.amountKop }
+    PaperCard(label = "Деньги") {
+        if (live.isEmpty()) PaperHint("Оплат пока нет — их заводят в карточке проекта.")
+        else {
+            PaperHint(listOfNotNull(
+                DelaCrm.rub(sum { it.paidOn.isNotBlank() }).takeIf { it.isNotBlank() }?.let { "получено $it" },
+                DelaCrm.rub(sum { it.paidOn.isBlank() && it.invoicedOn.isNotBlank() }).takeIf { it.isNotBlank() }?.let { "счета $it" },
+                DelaCrm.rub(sum { it.paidOn.isBlank() && it.invoicedOn.isBlank() }).takeIf { it.isNotBlank() }?.let { "план $it" },
+            ).joinToString(" · "), ru.zf.pravka.ui.Ink.Text)
+            PayRows(ctx, live, refresh, withDeal = true)
+        }
+    }
+}
+
+/** Оплаты строками: сумма, вид, проект; статус; «Счёт выставлен…» и «Оплачено» у ждущей. */
+@Composable
+private fun PayRows(ctx: DelaCrmContext, pays: List<Dela.Payment>, refresh: List<String>, withDeal: Boolean = false) {
+    val c = MaterialTheme.colorScheme
+    pays.forEachIndexed { i, p ->
+        if (i > 0) RowRule()
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    listOfNotNull(DelaCrm.rub(p.amountKop), DelaCrm.PAY_KIND[p.kind] ?: p.kind, p.title.takeIf { it.isNotBlank() },
+                        ctx.snap.deals[p.dealId]?.name?.takeIf { withDeal }).joinToString(" · ") + if (p.local) " ⏳" else "",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                val late = p.paidOn.isBlank() && p.invoicedOn.isNotBlank() && (p.dueOn.ifBlank { p.invoicedOn }) < ctx.today
+                val st = when {
+                    !p.live -> "отменено"
+                    p.paidOn.isNotBlank() -> "получено " + DelaAsk.ddmm(p.paidOn, ctx.today)
+                    p.invoicedOn.isNotBlank() -> "счёт " + DelaAsk.ddmm(p.invoicedOn, ctx.today) + (if (p.dueOn.isNotBlank()) ", срок " + DelaAsk.ddmm(p.dueOn, ctx.today) else "") +
+                        listOf(p.sentTo.takeIf { it.isNotBlank() }?.let { "кому: $it" }, p.sentVia.takeIf { it.isNotBlank() }).filterNotNull().joinToString(" · ").let { if (it.isNotBlank()) " · $it" else "" }
+                    p.dueOn.isNotBlank() -> "ждём " + DelaAsk.ddmm(p.dueOn, ctx.today)
+                    else -> "без даты"
+                }
+                Text(st, style = MaterialTheme.typography.bodySmall, color = if (late) c.error else if (p.paidOn.isNotBlank()) c.primary else c.onSurfaceVariant)
+            }
+            if (p.live && p.paidOn.isBlank()) {
+                Column(horizontalAlignment = Alignment.End) {
+                    if (p.invoicedOn.isBlank()) PaperTextButton("Счёт выставлен…", onClick = { ctx.ui.invoicing = p to refresh })
+                    PaperTextButton("Оплачено", icon = Glyphs.Check, color = c.primary, onClick = { ctx.run(listOf(DelaCrm.paidOp(p.id, ctx.today)), refresh, "Оплата получена") })
                 }
             }
-            if (pays.isEmpty()) PaperHint("План оплат (аванс, этапы, ретейнер) заводится в вебе.")
         }
     }
 }
 
 /**
- * Люди сделки ([field] = `person_ids`) или её команда (`team_ids`) плашками:
- * крестик — убрать из сделки (с «Вернуть»), «+ человек» — из справочника или
- * новый (в люди клиента — сразу с организацией клиента).
+ * Хронология под делами (`timelineBlock` веба): записи, счета и оплаты вперемешку,
+ * свежие сверху, первые 10 и «Показать всё». У записи встречи — тема строкой,
+ * итог в три строки (касание — целиком), договорённости списком по две, «встреча →».
+ * Своей формы нет — пишет Claude: «созвонились с Иваном, ждут модель к пятнице».
  */
 @Composable
-private fun DealPeople(ctx: DelaCrmContext, d: DelaCrm.Deal, field: String, title: String, ids: List<String>, refresh: List<String>) {
-    val people = ids.mapNotNull { ctx.snap.people[it] }
-    val where = if (field == "team_ids") "в команде" else "в людях сделки"
-    PeopleChips(
-        ctx, title, people,
-        onRemove = { p ->
-            ctx.runUndoable(
-                DelaCrm.Undoable(listOf(DelaCrm.dealPeopleOp(d.id, field, ids - p.id)), listOf(DelaCrm.dealPeopleOp(d.id, field, ids)), "${p.label} больше не $where"),
-                refresh,
+private fun TimelineBlock(
+    ctx: DelaCrmContext,
+    key: String,
+    items: List<DelaCrm.Interaction>,
+    pays: List<Dela.Payment>,
+    loaded: Boolean,
+    refresh: List<String>,
+    showDeal: Boolean = false,
+) {
+    val rows = DelaCrm.timelineRows(items, pays)
+    val all = ctx.ui.tlAll == key
+    PaperCard(label = "Хронология" + if (rows.isNotEmpty()) " · ${rows.size}" else "") {
+        if (rows.isEmpty()) PaperHint(if (loaded) "Пока пусто. Скажи Claude внизу: «созвонились с Иваном, ждут модель к пятнице» — запишу сюда." else "Загружаю с сервера…")
+        val shown = if (all) rows else rows.take(DelaCrm.TL_SHOWN)
+        shown.forEachIndexed { i, r ->
+            if (i > 0) RowRule()
+            if (r.item != null) TlItem(ctx, r.item, refresh, showDeal) else r.pay?.let { TlPay(ctx, it, r.paid, refresh, showDeal) }
+        }
+        if (rows.size > DelaCrm.TL_SHOWN) {
+            PaperTextButton(if (all) "Свернуть" else "Показать всё · ${rows.size}", onClick = { ctx.ui.tlAll = if (all) "" else key })
+        }
+    }
+}
+
+@Composable
+private fun TlItem(ctx: DelaCrmContext, it: DelaCrm.Interaction, refresh: List<String>, showDeal: Boolean) {
+    val c = MaterialTheme.colorScheme
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val open = ctx.ui.tlOpen == it.id
+    val (topic, body) = DelaCrm.meetingParts(it.summary)
+    val steps = DelaCrm.steps(it.nextStep)
+    Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+        .clickable { ctx.ui.tlOpen = if (open) "" else it.id }.padding(vertical = 4.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                DelaAsk.ddmm(it.day, ctx.today) + " · " + it.kindWord + if (it.local) " ⏳" else "",
+                style = MaterialTheme.typography.bodySmall,
+                color = c.primary,
             )
-        },
-        onAdd = {
-            ctx.ui.addTo = AddTarget(
-                "$title — «${d.name}»", ids.toSet(), clientId = if (field == "person_ids") d.projectId else "", dealId = d.id, field = field, ids = ids,
-            )
-        },
-    )
+            if (topic != null) Text(topic, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            if (body.isNotBlank()) Text(body, style = MaterialTheme.typography.bodyMedium, maxLines = if (open) Int.MAX_VALUE else 3, overflow = TextOverflow.Ellipsis)
+            for (st in if (open) steps else steps.take(2)) Text("• $st", style = MaterialTheme.typography.bodySmall)
+            if (!open && steps.size > 2) Text("ещё ${steps.size - 2}", style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
+            val meta = listOfNotNull(
+                it.dealName.takeIf { n -> showDeal && n.isNotBlank() },
+                it.personIds.map { id -> ctx.personName(id) }.filter { n -> n.isNotBlank() }.takeIf { l -> l.isNotEmpty() }?.joinToString(", "),
+                it.durationMin?.takeIf { m -> m > 0 }?.let { m -> "$m мин" },
+                "из встречи".takeIf { _ -> it.source == "meeting" },
+            ).joinToString(" · ")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
+                if (it.sourceRef.startsWith("https://")) {
+                    Text(
+                        (if (meta.isNotBlank()) " · " else "") + "встреча →",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = c.primary,
+                        modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { openLink(context, it.sourceRef) },
+                    )
+                }
+            }
+        }
+        if (!it.local) GlyphButton(Glyphs.Close, "убрать из хронологии", onClick = { ctx.ui.deleting = it to refresh }, size = 30.dp)
+    }
+}
+
+@Composable
+private fun TlPay(ctx: DelaCrmContext, p: Dela.Payment, paid: Boolean, refresh: List<String>, showDeal: Boolean) {
+    val c = MaterialTheme.colorScheme
+    val what = listOfNotNull(DelaCrm.rub(p.amountKop), DelaCrm.PAY_KIND[p.kind] ?: p.kind, p.title.takeIf { it.isNotBlank() },
+        ctx.snap.deals[p.dealId]?.name?.takeIf { showDeal }).joinToString(" · ")
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text(DelaAsk.ddmm(if (paid) p.paidOn else p.invoicedOn, ctx.today) + " · " + if (paid) "оплата пришла" else "счёт", style = MaterialTheme.typography.bodySmall, color = c.primary)
+        Text(what, style = MaterialTheme.typography.bodyMedium)
+        if (!paid) {
+            val sent = listOfNotNull(p.sentTo.takeIf { it.isNotBlank() }?.let { "кому: $it" }, p.sentVia.takeIf { it.isNotBlank() }).joinToString(" · ")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(sent.ifBlank { "кому и как отправили — не записано" }, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, modifier = Modifier.weight(1f, fill = false))
+                PaperTextButton(if (sent.isNotBlank()) "поправить" else "записать", onClick = { ctx.ui.invoicing = p to refresh })
+            }
+        }
+    }
+}
+
+/**
+ * Файлы (`filesBlock` веба): ссылка на папку и документы ссылками — вид,
+ * название, ссылка, дата; «+ Документ» и крестик. Ссылка без схемы — https://.
+ */
+@Composable
+private fun FilesCard(ctx: DelaCrmContext, folderUrl: String, files: List<Dela.FileRef>, save: (JSONObject, String) -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var folder by remember(folderUrl) { mutableStateOf(folderUrl) }
+    var kind by remember { mutableStateOf("contract") }
+    var title by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf("") }
+    PaperCard(label = "Файлы" + if (files.isNotEmpty()) " · ${files.size}" else "") {
+        if (folderUrl.isNotBlank()) PaperTextButton("Открыть папку ↗", icon = Glyphs.Link, onClick = { openLink(context, folderUrl) })
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) { PaperField(value = folder, onValueChange = { folder = it }, placeholder = "Ссылка на папку: Яндекс Диск, Google Drive…") }
+            if (folder.trim() != folderUrl) GlyphButton(Glyphs.Check, "записать папку", onClick = {
+                val u = DelaCrm.withScheme(folder)
+                save(JSONObject().put("folder_url", Dela.nul(u)), "Папка: " + if (u.isNotBlank()) "записал" else "убрал")
+            })
+        }
+        for ((k, f) in files.withIndex()) {
+            RowRule()
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(DelaCrm.FILE_KIND[f.kind] ?: "Документ", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(70.dp))
+                Text(
+                    f.title.ifBlank { runCatching { java.net.URI(f.url).host?.removePrefix("www.") }.getOrNull() ?: f.url },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).clickable { openLink(context, f.url) },
+                )
+                if (f.at.isNotBlank()) Text(DelaAsk.ddmm(f.at, ctx.today), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                GlyphButton(Glyphs.Close, "убрать из файлов", onClick = {
+                    save(JSONObject().put("files", Dela.json(files.filterIndexed { j, _ -> j != k })), "Убрал: " + f.title.ifBlank { DelaCrm.FILE_KIND[f.kind] ?: "документ" })
+                }, size = 30.dp)
+            }
+        }
+        RowRule()
+        ChipRow { for ((k, w) in DelaCrm.FILE_KIND) PaperChip(w, selected = kind == k, onClick = { kind = k }) }
+        PaperField(value = title, onValueChange = { title = it }, placeholder = "название: «Договор №12», «Счёт за октябрь»")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) { PaperField(value = url, onValueChange = { url = it }, placeholder = "ссылка на файл") }
+            PaperTextButton("+ Документ", enabled = url.isNotBlank(), onClick = {
+                val u = DelaCrm.withScheme(url)
+                val add = Dela.FileRef(kind, title.trim(), u, ctx.today)
+                save(JSONObject().put("files", Dela.json(files + add)), title.trim().ifBlank { DelaCrm.FILE_KIND[kind] ?: "Документ" } + " — в файлах")
+                title = ""
+                url = ""
+            })
+        }
+    }
+}
+
+internal fun openLink(context: android.content.Context, url: String) {
+    runCatching {
+        context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
 }
 
 // ---------------------------------------------------------------- человек
@@ -1017,14 +1314,14 @@ internal fun LazyListScope.crmPersonBlock(ctx: DelaCrmContext, personId: String)
     val deals = v?.deals.orEmpty().map { DelaCrm.overlayDeal(it, ctx.ops, ctx.today) }
     if (deals.isNotEmpty()) {
         item(key = "crm:person:deals") {
-            PaperCard(label = "сделки · ${deals.size}") {
+            PaperCard(label = "проекты · ${deals.size}") {
                 deals.forEachIndexed { i, d -> if (i > 0) RowRule(); DealRow(ctx, d, ctx.money) }
             }
         }
     }
     item(key = "crm:person:tl") {
         val items = DelaCrm.overlayTimeline(v?.timeline.orEmpty(), ctx.ops, ctx.snap) { personId in it.personIds }
-        TimelineCard(ctx, items, TalkTarget(p?.name.orEmpty(), personIds = listOf(personId), refresh = listOf(path, DelaCrm.TIES)), loaded = v != null, showDeal = true)
+        TimelineBlock(ctx, "h:$personId", items, emptyList(), loaded = v != null, refresh = listOf(path, DelaCrm.TIES), showDeal = true)
     }
 }
 
@@ -1084,93 +1381,6 @@ private fun PersonNamesCard(ctx: DelaCrmContext, p: Dela.Person, path: String) {
 }
 
 // ---------------------------------------------------------------- хронология
-
-/**
- * Хронология: добавить запись (вид, дата — сегодня или выбранная, суть) и
- * убрать (строка не удаляется — сервер ставит `deleted_at`). Свежие сверху,
- * своя неотправленная — сразу, с ⏳.
- */
-@Composable
-private fun TimelineCard(ctx: DelaCrmContext, items: List<DelaCrm.Interaction>, target: TalkTarget, loaded: Boolean, showDeal: Boolean = false) {
-    val c = MaterialTheme.colorScheme
-    var adding by remember(target) { mutableStateOf(false) }
-    var all by remember(target) { mutableStateOf(false) }
-    PaperCard(
-        label = "хронология · ${items.size}",
-        trailing = { GlyphButton(if (adding) Glyphs.Close else Glyphs.Plus, if (adding) "не записывать" else "записать в хронологию", onClick = { adding = !adding }, size = 30.dp) },
-    ) {
-        if (adding) {
-            InteractionForm(ctx, target, onDone = { adding = false })
-            RowRule()
-        }
-        if (items.isEmpty()) PaperHint(if (loaded) "Пока пусто." else "Загружаю с сервера…")
-        val shown = if (all) items else items.take(20)
-        shown.forEachIndexed { i, it ->
-            if (i > 0) RowRule()
-            Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        DelaAsk.ddmm(it.day, ctx.today) + " · " + it.kindWord + if (it.local) " ⏳" else "",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = c.primary,
-                    )
-                    Text(it.summary, style = MaterialTheme.typography.bodyMedium)
-                    if (it.nextStep.isNotBlank()) Text("→ " + it.nextStep, style = MaterialTheme.typography.bodySmall)
-                    val meta = listOfNotNull(
-                        it.dealName.takeIf { n -> showDeal && n.isNotBlank() },
-                        it.personIds.map { id -> ctx.personName(id) }.filter { n -> n.isNotBlank() }.takeIf { l -> l.isNotEmpty() }?.joinToString(", "),
-                        it.durationMin?.takeIf { m -> m > 0 }?.let { m -> "$m мин" },
-                        when (it.source) { "meeting" -> "из встречи"; "notion" -> "Notion"; "phone" -> "с телефона"; else -> null },
-                    ).joinToString(" · ")
-                    if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
-                }
-                if (!it.local) GlyphButton(Glyphs.Close, "убрать из хронологии", onClick = { ctx.ui.deleting = it to target.refresh }, size = 30.dp)
-            }
-        }
-        if (items.size > 20 && !all) PaperTextButton("Ещё ${items.size - 20}", onClick = { all = true })
-    }
-}
-
-/** Новая запись: вид чипами, когда, что было — набором или голосом (тот же движок, что у «Д»). */
-@Composable
-private fun InteractionForm(ctx: DelaCrmContext, target: TalkTarget, onDone: () -> Unit, defaultKind: String = "call") {
-    var kind by remember(target) { mutableStateOf(defaultKind) }
-    var day by remember(target) { mutableStateOf(ctx.today) }
-    var text by remember(target) { mutableStateOf("") }
-    var listening by remember { mutableStateOf(false) }
-    val todayDate = runCatching { LocalDate.parse(ctx.today) }.getOrNull() ?: LocalDate.now()
-    ChipRow {
-        for ((k, word) in DelaCrm.IKIND) PaperChip(word, selected = kind == k, onClick = { kind = k })
-    }
-    ChipRow {
-        PaperChip("сегодня", selected = day == todayDate.toString(), onClick = { day = todayDate.toString() })
-        PaperChip("вчера", selected = day == todayDate.minusDays(1).toString(), onClick = { day = todayDate.minusDays(1).toString() })
-        PaperChip("позавчера", selected = day == todayDate.minusDays(2).toString(), onClick = { day = todayDate.minusDays(2).toString() })
-    }
-    var dayText by remember(day) { mutableStateOf(day) }
-    PaperField(
-        value = dayText,
-        onValueChange = { v -> dayText = v; if (Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(v) && v <= ctx.today) day = v },
-        label = "Когда ГГГГ-ММ-ДД · " + delaDate(day),
-    )
-    PaperField(
-        value = text,
-        onValueChange = { text = it },
-        label = if (listening) "Слушаю — что было…" else "Что было: суть и договорённости",
-        singleLine = false,
-        maxLines = 6,
-    )
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        AskMic(listening, { listening = it }, onText = { said -> text = (text.trim() + " " + said.trim()).trim() })
-        Spacer(Modifier.weight(1f))
-        PaperButton("Записать", icon = Glyphs.Check, primary = true, enabled = text.isNotBlank(), onClick = {
-            val op = DelaCrm.interactionOp(kind, text, DelaCrm.atIso(day, ctx.today), target.projectId, target.dealId, target.personIds)
-            ctx.run(listOf(op), target.refresh, "Записано в хронологию")
-            text = ""
-            onDone()
-        })
-    }
-}
 
 /** Листы CRM поверх вкладки: «Закрыть…» сделку, «Поговорили», убрать запись, «откуда он», «+ человек», убрать из клиента. */
 @Composable
@@ -1232,9 +1442,17 @@ internal fun CrmSheets(ctx: DelaCrmContext) {
             }
         }
     }
-    ui.talk?.let { t ->
-        PaperSheet(onDismiss = { ui.talk = null }, title = "Поговорили", icon = Glyphs.Phone, subtitle = t.title) {
-            InteractionForm(ctx, t, onDone = { ui.talk = null }, defaultKind = "note")
+    ui.invoicing?.let { (p, refresh) -> InvoiceSheet(ctx, p, refresh) }
+    ui.stageFor?.let { d ->
+        PaperSheet(onDismiss = { ui.stageFor = null }, title = "Стадия", icon = Glyphs.Layers, subtitle = d.name) {
+            for (st in Dela.OPEN_STAGES) {
+                ChoiceLine(DelaCrm.STAGE[st] ?: st, "", d.stage == st) {
+                    ui.stageFor = null
+                    if (d.stage != st) ctx.run(listOf(DelaCrm.stageOp(d.id, st)), listOf(DelaCrm.dealPath(d.id), DelaCrm.PIPELINE, DelaCrm.clientPath(d.projectId)),
+                        "${d.name.take(40)}: ${DelaCrm.STAGE[st] ?: st}")
+                }
+            }
+            ChoiceLine("Закрыть…", "выиграли, проиграли или заморожено", false) { ui.stageFor = null; ui.closing = d }
         }
     }
     ui.deleting?.let { (i, refresh) ->
@@ -1297,6 +1515,21 @@ private fun PersonWhereSheet(ctx: DelaCrmContext, p: Dela.Person) {
         subtitle = listOf(now?.name ?: "откуда — не знаю", p.role).filter { it.isNotBlank() }.joinToString(" · "),
         footer = {
             PaperTextButton("Открыть карточку", icon = Glyphs.Forward, onClick = { ui.personFor = null; ctx.push(DelaPage.Person(p.id)) })
+            // В команде проекта — «Ведёт проект» (`personPop` веба): прежний ведущий уходит в команду.
+            ctx.snap.deals[ui.leadDeal]?.takeIf { it.leadPersonId != p.id }?.let { d ->
+                PaperTextButton("Ведёт проект", onClick = {
+                    ui.personFor = null
+                    val team = (d.teamIds + d.leadPersonId).filter { it.isNotBlank() && it != p.id }.distinct()
+                    ctx.runUndoable(
+                        DelaCrm.Undoable(
+                            listOf(DelaCrm.dealSetOp(d.id, JSONObject().put("lead_person_id", p.id).put("team_ids", Dela.arr(team)))),
+                            listOf(DelaCrm.dealSetOp(d.id, JSONObject().put("lead_person_id", Dela.nul(d.leadPersonId)).put("team_ids", Dela.arr(d.teamIds)))),
+                            "${p.label} ведёт «${d.name.take(40)}»",
+                        ),
+                        listOf(DelaCrm.dealPath(d.id), DelaCrm.clientPath(d.projectId), DelaCrm.PIPELINE),
+                    )
+                })
+            }
             Spacer(Modifier.weight(1f))
             PaperButton("Должность", icon = Glyphs.Check, primary = true, enabled = role.trim() != p.role, onClick = {
                 ui.personFor = null
@@ -1325,51 +1558,111 @@ private fun PersonWhereSheet(ctx: DelaCrmContext, p: Dela.Person) {
 }
 
 /**
- * «+ человек» (`addPersonPop` веба): выбрать из справочника или завести нового.
- * К клиенту — в его организацию (у старого клиента без неё — заводим её); в
- * сделку — в её людей или команду; новый человек в люди клиента — сразу с
- * организацией клиента. id нового даёт телефон: плашка видна до ответа.
+ * «+ человек» — поиск, а не список (09.10.2026, `personSearchPop` веба): сразу —
+ * свои ([AddTarget.base]: для команды — команда ЗФ, для людей клиента — люди
+ * этого клиента); набираешь — ищет среди всех по имени, компании, должности
+ * (`DelaCrm.searchPeople`); последней строкой — «Новый: «…»». К клиенту — в его
+ * организацию; в проект — в люди клиента или команду (без ведущего — первый
+ * станет ведущим); в команду клиента — проект один — в него, несколько — выбрать.
  */
 @Composable
 private fun AddPersonSheet(ctx: DelaCrmContext, t: AddTarget) {
     var q by remember(t) { mutableStateOf("") }
-    val n = Dela.norm(q)
-    val list = ctx.snap.livePeople().filter { p ->
-        p.id !in t.exclude && (n == null || Dela.norm(listOf(p.name, p.short, p.aliases.joinToString(" "), p.role).joinToString(" "))?.contains(n) == true)
-    }.take(40)
+    // В команду клиента с несколькими проектами: кто выбран — ждём, в какой проект.
+    var picked by remember(t) { mutableStateOf<Pair<Dela.Person?, String>?>(null) }
+    val base = t.base.mapNotNull { ctx.snap.people[it] }
+    val list = DelaCrm.searchPeople(ctx.snap, q, base, t.exclude)
     val client = ctx.snap.projects[t.clientId]
-    fun add(p: Dela.Person?, name: String) {
-        ctx.ui.addTo = null
-        if (t.dealId.isBlank()) {
-            val u = DelaCrm.joinClient(ctx.snap, t.clientId, p, name)
-            if (u == null) Feedback.toast(ctx.app, "${p?.label ?: name} уже здесь") else ctx.runUndoable(u, listOf(DelaCrm.clientPath(t.clientId)))
-            return
+    fun toDeal(dealId: String, p: Dela.Person?, name: String) {
+        val d = ctx.snap.deals[dealId] ?: return
+        val refresh = listOf(DelaCrm.dealPath(dealId), DelaCrm.clientPath(d.projectId))
+        val where = if (t.field == "team_ids") "в команде «${d.name.take(40)}»" else "от клиента в «${d.name.take(40)}»"
+        val id = p?.id ?: Dela.newId()
+        val create = if (p == null) listOf(DelaCrm.personCreateOp(id, name, if (t.field == "person_ids") client?.orgId.orEmpty() else "")) else emptyList()
+        val (go, back) = when {
+            t.field != "team_ids" -> DelaCrm.dealPeopleOp(dealId, "person_ids", d.personIds + id) to DelaCrm.dealPeopleOp(dealId, "person_ids", d.personIds)
+            d.leadPersonId.isBlank() -> DelaCrm.dealSetOp(dealId, JSONObject().put("lead_person_id", id)) to DelaCrm.dealSetOp(dealId, JSONObject().put("lead_person_id", JSONObject.NULL))
+            id == d.leadPersonId || id in d.teamIds -> { Feedback.toast(ctx.app, "${p?.label ?: name} уже в команде"); return }
+            else -> DelaCrm.dealPeopleOp(dealId, "team_ids", d.teamIds + id) to DelaCrm.dealPeopleOp(dealId, "team_ids", d.teamIds)
         }
-        val refresh = listOf(DelaCrm.dealPath(t.dealId), DelaCrm.clientPath(t.clientId.ifBlank { ctx.snap.deals[t.dealId]?.projectId.orEmpty() }))
-        val back = listOf(DelaCrm.dealPeopleOp(t.dealId, t.field, t.ids))
-        val where = if (t.field == "team_ids") "в команде" else "в людях сделки"
-        if (p != null) {
-            ctx.runUndoable(DelaCrm.Undoable(listOf(DelaCrm.dealPeopleOp(t.dealId, t.field, t.ids + p.id)), back, "${p.label} — $where"), refresh)
-        } else {
-            val id = Dela.newId()
-            val ops = listOf(DelaCrm.personCreateOp(id, name, client?.orgId.orEmpty()), DelaCrm.dealPeopleOp(t.dealId, t.field, t.ids + id))
-            ctx.runUndoable(DelaCrm.Undoable(ops, back, "Завёл: ${name.trim()} — $where"), refresh)
+        ctx.runUndoable(DelaCrm.Undoable(create + go, listOf(back), (if (p == null) "Завёл: ${name.trim()}" else p.label) + " — $where"), refresh)
+    }
+    fun add(p: Dela.Person?, name: String) {
+        when {
+            t.dealId.isNotBlank() -> { ctx.ui.addTo = null; toDeal(t.dealId, p, name) }
+            t.teamDeals.size == 1 -> { ctx.ui.addTo = null; toDeal(t.teamDeals.first(), p, name) }
+            t.teamDeals.size > 1 -> picked = p to name
+            else -> {
+                ctx.ui.addTo = null
+                val u = DelaCrm.joinClient(ctx.snap, t.clientId, p, name)
+                if (u == null) Feedback.toast(ctx.app, "${p?.label ?: name} уже здесь") else ctx.runUndoable(u, listOf(DelaCrm.clientPath(t.clientId)))
+            }
         }
     }
-    PaperSheet(onDismiss = { ctx.ui.addTo = null }, title = "Кто ещё", icon = Glyphs.Plus, subtitle = t.title) {
-        PaperField(value = q, onValueChange = { q = it }, label = "Имя — найти или завести нового")
+    val pk = picked
+    if (pk != null) {
+        PaperSheet(onDismiss = { ctx.ui.addTo = null }, title = "${pk.first?.label ?: pk.second} — в команду какого проекта?", icon = Glyphs.Plus) {
+            for (id in t.teamDeals) {
+                val d = ctx.snap.deals[id] ?: continue
+                ChoiceLine(DelaCrm.dealShort(d.name, ctx.snap.projects[d.projectId]), DelaCrm.STAGE[d.stage] ?: d.stage, false) {
+                    ctx.ui.addTo = null
+                    toDeal(id, pk.first, pk.second)
+                }
+            }
+        }
+        return
+    }
+    PaperSheet(onDismiss = { ctx.ui.addTo = null }, title = t.title, icon = Glyphs.Plus) {
+        PaperField(value = q, onValueChange = { q = it }, label = "Имя, компания, должность…")
+        for (p in list) {
+            val org = DelaCrm.orgLabel(ctx.snap, p.orgId)?.name.orEmpty()
+            ChoiceLine(
+                p.name,
+                listOf(p.short.takeIf { it != p.name }.orEmpty(), p.role, org).filter { it.isNotBlank() }.joinToString(" · "),
+                false,
+            ) { add(p, "") }
+        }
+        if (list.isEmpty() && q.isBlank()) PaperHint("Набери имя — найду среди всех людей.")
         if (q.isNotBlank()) {
-            ChoiceLine("Новый: ${q.trim()}", if (client != null && (t.dealId.isBlank() || t.field == "person_ids")) "завести — из «${client.name}»" else "завести", false) {
+            ChoiceLine("Новый: «${q.trim()}»", if (client != null && t.field != "team_ids") "завести — из «${client.name}»" else "завести в справочнике", false) {
                 add(null, q.trim())
             }
         }
-        for (p in list) {
-            val org = DelaCrm.orgLabel(ctx.snap, p.orgId)?.name.orEmpty()
-            ChoiceLine(p.name + if (p.short.isNotBlank() && p.short != p.name) " · ${p.short}" else "", listOf(p.role, org).filter { it.isNotBlank() }.joinToString(" · "), false) {
-                add(p, "")
-            }
+    }
+}
+
+/**
+ * «Счёт выставлен» (`invoicePop` веба): когда выставили, кому и как отправили —
+ * встаёт в хронологию строкой «счёт · кому: … · почтой».
+ */
+@Composable
+private fun InvoiceSheet(ctx: DelaCrmContext, p: Dela.Payment, refresh: List<String>) {
+    var day by remember(p.id) { mutableStateOf(p.invoicedOn.ifBlank { ctx.today }) }
+    var to by remember(p.id) { mutableStateOf(p.sentTo) }
+    var via by remember(p.id) { mutableStateOf(p.sentVia) }
+    val todayDate = runCatching { LocalDate.parse(ctx.today) }.getOrNull() ?: LocalDate.now()
+    PaperSheet(
+        onDismiss = { ctx.ui.invoicing = null },
+        title = "Счёт: " + DelaCrm.rub(p.amountKop),
+        icon = Glyphs.Check,
+        subtitle = ctx.snap.deals[p.dealId]?.name,
+        footer = {
+            Spacer(Modifier.weight(1f))
+            PaperButton("Записать", icon = Glyphs.Check, primary = true, onClick = {
+                ctx.ui.invoicing = null
+                ctx.run(listOf(DelaCrm.invoiceOp(p.id, day, to, via)), refresh, "Счёт: " + to.trim().ifBlank { "записал" })
+            })
+        },
+    ) {
+        PaperHint("Когда выставили")
+        ChipRow {
+            PaperChip("сегодня", selected = day == todayDate.toString(), onClick = { day = todayDate.toString() })
+            PaperChip("вчера", selected = day == todayDate.minusDays(1).toString(), onClick = { day = todayDate.minusDays(1).toString() })
+            PaperChip(delaDate(day), selected = false, onClick = {})
         }
-        if (list.isEmpty() && q.isBlank()) PaperHint("В справочнике никого — набери имя, и он появится.")
+        PaperField(value = to, onValueChange = { to = it }, label = "Кому: бухгалтерия, Иван…")
+        PaperHint("Как")
+        ChipRow { for (w in DelaCrm.SENT_VIA) PaperChip(w, selected = via == w, onClick = { via = if (via == w) "" else w }) }
     }
 }
 

@@ -347,7 +347,8 @@ internal object Seed {
                 .put("created_at", ago(14)).put("decided_at", if (status == "pending") JSONObject.NULL else ago(30))
                 .put("rev", 1).put("seq", ++seq)
         val projects = arr(
-            project("p-beta", "Бета Групп", "work", "client", "paid", "Бета").put("org_id", "o-beta"),
+            project("p-beta", "Бета Групп", "work", "client", "paid", "Бета").put("org_id", "o-beta")
+                .put("note", "Производственная группа, пришли по рекомендации. Ведём модель и разговор с банком."),
             project("p-orion", "Орион Логистик", "work", "client", "potential", "Орион").put("org_id", "o-orion"),
             project("p-zf", "Фирма: внутреннее", "work", "internal", "none"),
             project("p-home", "Дом", "home", "personal", "none"),
@@ -409,11 +410,20 @@ internal object Seed {
             .put("users", users).put("comments", JSONArray())
             .put("orgs", arr(org("o-beta", "Бета Групп"), org("o-orion", "Орион Логистик"), org("o-buh", "Счётная палата плюс")))
             .put("deals", arr(
-                deal("d-beta-model", "p-beta", "Бета Групп: финмодель 2027", "active", listOf("pe-ivan", "pe-anna")),
+                deal("d-beta-model", "p-beta", "Бета Групп: финмодель 2027", "active", listOf("pe-ivan", "pe-anna"))
+                    .put("description", "Финансовая модель группы на 2027 год: три сценария, ковенанты банка, бюджет движения денег.")
+                    .put("folder_url", "https://disk.example.ru/beta-model")
+                    .put("files", arr(JSONObject().put("kind", "contract").put("title", "Договор №12").put("url", "https://disk.example.ru/beta-model/dogovor.pdf").put("at", d(-20)))),
                 deal("d-beta-refi", "p-beta", "Бета Групп: рефинансирование", "proposal", listOf("pe-ivan")),
                 deal("d-orion-uu", "p-orion", "Орион: управленческий учёт", "lead", listOf("pe-olga")),
             ))
             .put("labels", arr("звонок", "письмо", "встреча"))
+            .put("payments", arr(
+                JSONObject().put("id", "pay-1").put("deal_id", "d-beta-model").put("kind", "advance").put("amount_kop", 30_000_000L)
+                    .put("invoiced_on", d(-12)).put("paid_on", d(-5)).put("sent_to", "бухгалтерия").put("sent_via", "почтой").put("rev", 1).put("seq", ++seq),
+                JSONObject().put("id", "pay-2").put("deal_id", "d-beta-model").put("kind", "stage").put("amount_kop", 45_000_000L)
+                    .put("invoiced_on", d(-2)).put("rev", 1).put("seq", ++seq),
+            ))
     }
 
     suspend fun dela(app: PravkaApp) {
@@ -436,6 +446,29 @@ internal object Seed {
             ru.zf.pravka.core.DelaCrm.PIPELINE,
             JSONObject().put("deals", deals).put("stages", JSONArray()).put("money", false).put("owner", true)
                 .put("totals", JSONObject().put("live", deals.length()).put("stale", 0)),
+            System.currentTimeMillis() - 4 * MIN,
+        )
+        // Карточки клиента и проекта (задание 9): хронология — встреча с темой и договорённостями, звонок.
+        fun ago(h: Long) = OffsetDateTime.now().minusHours(h).truncatedTo(ChronoUnit.SECONDS).toString()
+        val timeline = JSONArray()
+            .put(JSONObject().put("id", "i-1").put("at", ago(26)).put("kind", "meeting").put("project_id", "p-beta").put("deal_id", "d-beta-model")
+                .put("summary", "Бета: модель 2027: обсудили три сценария, банк ждёт ковенанты к концу месяца, Иван согласен на сценарий без кредита")
+                .put("next_step", "Иван пришлёт выгрузку из 1С; мы — модель к пятнице; созвон в среду").put("source", "meeting")
+                .put("source_ref", "https://meet.example.ru/beta-1").put("deal_name", "Бета Групп: финмодель 2027").put("person_ids", JSONArray().put("pe-ivan")))
+            .put(JSONObject().put("id", "i-2").put("at", ago(120)).put("kind", "call").put("project_id", "p-beta").put("deal_id", "d-beta-refi")
+                .put("summary", "Анна: банк готов смотреть рефинансирование после модели").put("deal_name", "Бета Групп: рефинансирование").put("person_ids", JSONArray().put("pe-anna")))
+        app.delaStore.putView(
+            ru.zf.pravka.core.DelaCrm.clientPath("p-beta"),
+            JSONObject().put("project", sync.getJSONArray("projects").getJSONObject(0)).put("timeline", timeline)
+                .put("deals", JSONArray().put(deals.getJSONObject(0)).put(deals.getJSONObject(1))).put("people", JSONArray())
+                .put("money", true).put("payments", sync.getJSONArray("payments")),
+            System.currentTimeMillis() - 4 * MIN,
+        )
+        app.delaStore.putView(
+            ru.zf.pravka.core.DelaCrm.dealPath("d-beta-model"),
+            JSONObject().put("deal", deals.getJSONObject(0).put("fee_kop", 120_000_000L)).put("open", JSONArray()).put("done", JSONArray())
+                .put("payments", sync.getJSONArray("payments")).put("timeline", JSONArray().put(timeline.getJSONObject(0)))
+                .put("history", JSONArray()).put("money", true),
             System.currentTimeMillis() - 4 * MIN,
         )
         // Синк в сеть не ходит: его замок уже взят — строка «обновлено 4 мин назад» остаётся.

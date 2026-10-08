@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.border
@@ -282,37 +283,46 @@ fun DelaTab(
     androidx.activity.compose.BackHandler(enabled = pages.isNotEmpty()) { pages = pages.dropLast(1) }
 
     /**
-     * Команда Claude из строки внизу: одна за раз. Пока он думает — команда в
-     * поле серым. Сделал или ответил — поле пусто, итог листом; ничего не сделал
-     * и не ответил — команда остаётся в поле: дополнить и отправить ещё раз
-     * (08.10.2026: «нажимаю на микрофон, говорю… и всё стирается»). Не вышло
-     * (нет сети, сервер отказал) — причина целиком над строкой, текст на месте.
+     * Команда Claude: одна за раз. Из строки внизу ([cont] = false) — новый
+     * разговор; из окна разговора — следующая реплика с `scope.history`. Пока он
+     * думает — команда в поле серым. Сделал или ответил — реплика в окне
+     * разговора (09.10.2026, п. 12 задания 9); ничего не сделал и не ответил —
+     * команда снова в поле внизу (поправка задания 10). Не вышло (нет сети,
+     * сервер отказал) — причина целиком, текст на месте.
      */
-    fun runAsk(text: String, scopeJson: org.json.JSONObject) {
+    fun runAsk(text: String, scopeJson: org.json.JSONObject, cont: Boolean = false) {
         if (ask.running.isNotBlank()) {
             Feedback.toast(app, "Claude ещё правит прошлую команду")
             return
         }
+        val talk0 = if (cont) ask.talk ?: Talk(scopeJson) else Talk(scopeJson)
+        val sent = if (cont) DelaAsk.withHistory(talk0.scope, talk0.turns, snap) else scopeJson
         ask.running = ASK_SCREEN
-        sayNote = ""
+        if (!cont) sayNote = ""
+        if (cont) ask.talk = talk0.copy(busy = text, text = "", error = "")
         scope.launch {
-            val r = app.delaSync.ask(text, scopeJson)
+            val r = app.delaSync.ask(text, sent)
             ask.running = ""
             r.onSuccess { res ->
-                if (res.undoable || res.notes.isNotEmpty() || res.reply.isNotBlank() || res.errors.isNotEmpty()) {
-                    if (draft.trim() == text.trim()) draft = ""
-                    // Карточка дела, про которое сказано, закрывается: Claude её уже поправил.
-                    if (scopeJson.has("open")) openTask = null
-                    ask.shown = AskShown(ASK_SCREEN, text, scopeJson, result = res)
-                } else {
+                val cur = if (cont) ask.talk ?: talk0 else talk0
+                if (!cont && !res.did && res.reply.isBlank() && res.errors.isEmpty()) {
                     if (draft.isBlank()) draft = text
                     sayNote = "Claude ничего не поменял — команда снова в поле"
                     sayNoteError = false
+                } else {
+                    if (!cont && draft.trim() == text.trim()) draft = ""
+                    // Карточка дела, про которое сказано, закрывается: Claude её уже поправил.
+                    if (scopeJson.has("open")) openTask = null
+                    ask.talk = cur.copy(turns = cur.turns + DelaAsk.Turn(text, res), busy = "", error = "")
                 }
             }.onFailure { e ->
-                if (draft.isBlank()) draft = text
-                sayNote = e.message.orEmpty().ifBlank { "Claude не ответил" }
-                sayNoteError = true
+                val why = e.message.orEmpty().ifBlank { "Claude не ответил" }
+                if (cont) ask.talk = (ask.talk ?: talk0).copy(busy = "", text = text, error = why)
+                else {
+                    if (draft.isBlank()) draft = text
+                    sayNote = why
+                    sayNoteError = true
+                }
             }
         }
     }
@@ -529,18 +539,31 @@ fun DelaTab(
     }
 
     val crmUi = remember { CrmUiState() }
-    // Новая карточка открывается на «Делах».
-    LaunchedEffect(page) { crmUi.tab = TAB_TASKS }
+    val listState = rememberLazyListState()
+    /**
+     * Пилюли карточки листают к разделу (`sec-*` веба): ключ виден — к нему; нет —
+     * пролистать вниз на окно и посмотреть снова (разделы всегда ниже пилюль).
+     */
+    val scrollTo: (String) -> Unit = { key ->
+        scope.launch {
+            repeat(30) {
+                val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
+                if (info != null) { listState.animateScrollToItem(info.index); return@launch }
+                val step = (listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset) * 0.8f
+                if (listState.scrollBy(step) < 1f) return@launch
+            }
+        }
+    }
     val clientOpen by app.delaStore.clientOpenFlow.collectAsState()
     // «Вернуть» после крестика, «откуда он», «+ человек» — полоской наверху вкладки, пока не закрыли.
     var undoOffer by remember { mutableStateOf<UndoOffer?>(null) }
     val crm = DelaCrmContext(
         app, snap, me, today, views, queuedOps, moneyOn, actions, push, back = { pages = pages.dropLast(1) }, ui = crmUi,
         clientOpen = clientOpen,
+        scrollTo = scrollTo,
         offerUndo = { said, back, refresh -> undoOffer = UndoOffer(said, back, refresh) },
     )
 
-    val listState = rememberLazyListState()
     var sphereSheet by remember { mutableStateOf(false) }
     // Разворот (`screens/08`): список слева, карточка дела справа, строка «сказать» — под ней.
     val wide = ru.zf.pravka.ui.twoPane()
@@ -659,7 +682,7 @@ fun DelaTab(
             )
             is DelaPage.Project -> projectScreen ?: DelaScreen("Проект")
             is DelaPage.Person -> personScreen ?: DelaScreen("Человек")
-            is DelaPage.Deal -> DelaScreen("Сделка")
+            is DelaPage.Deal -> DelaScreen("Проект")
         }
         // Заголовок раздела — только у страниц (человек, проект, сделка): у
         // разделов его название и так стоит в сегментах (`screens/06`).
@@ -718,6 +741,14 @@ fun DelaTab(
                         screenBody(sc, "person", actions, tools.copy(onAdd = { title -> quickAdd(title, personId = pg.id) }, addLabel = "Новое дело про ${p?.label ?: "него"}…")) {
                             // Карточка человека — строками веба: роль, клиент, телефон, почта, Telegram…
                             if (p != null) for ((k, v) in DelaViews.personInfo(p, snap)) PaperHint("$k: $v", MaterialTheme.colorScheme.onSurface)
+                            // Проекты человека — плашками-ссылками со стороной (09.10.2026, п. 11 задания 9).
+                            val his = if (crmOn) ru.zf.pravka.core.DelaCrm.personDeals(snap, pg.id) else emptyList()
+                            if (his.isNotEmpty()) {
+                                PaperHint("Проекты")
+                                ChipRow {
+                                    for ((d, role) in his) PaperChip(d.name + " · " + role + if (d.closed) " · архив" else "", selected = false, onClick = { push(DelaPage.Deal(d.id)) })
+                                }
+                            }
                         }
                     }
                     // Теплота, «хаб», сделки и хронология — тем, кому видна CRM; у пользователя Дел их нет.
@@ -727,9 +758,15 @@ fun DelaTab(
                     // Клиент из «Клиентов», которого копия ещё не знает, — тоже клиент: блок CRM спросит сервер сам.
                     val pr = snap.projects[pg.id]
                     val client = crmOn && pg.id.isNotBlank() && (pr == null || pr.kind == "client")
-                    if (client) crmClientBlock(crm, pg.id)
-                    // У клиента дела — под вкладкой «Дела»; на «Хронологии» их нет (как в вебе).
-                    if (!client || crmUi.tab != TAB_TIMELINE) projectScreen?.let { sc ->
+                    // Карточка клиента — одно под другим (09.10.2026): о клиенте, люди, проекты, дела, хронология, деньги, файлы.
+                    if (client) {
+                        crmClientTop(crm, pg.id)
+                        item(key = "sec:tasks") {
+                            Text("Дела", style = MaterialTheme.typography.labelLarge, color = ru.zf.pravka.ui.LocalMode.current.label,
+                                modifier = Modifier.padding(start = 4.dp, top = 6.dp))
+                        }
+                    }
+                    projectScreen?.let { sc ->
                         val deals = snap.allDealsOf(pg.id)
                         screenBody(
                             sc, "project", actions,
@@ -769,6 +806,10 @@ fun DelaTab(
                     }
                 }
                 is DelaPage.Deal -> crmDealPage(crm, pg.id)
+            }
+            // Низ карточки клиента — под делами: хронология, деньги, файлы.
+            if (pg is DelaPage.Project && crmOn && pg.id.isNotBlank() && snap.projects[pg.id].let { it == null || it.kind == "client" }) {
+                crmClientBottom(crm, pg.id)
             }
             return@LazyColumn
         }
@@ -1054,24 +1095,24 @@ fun DelaTab(
             }
         }
     }
-    val shown = ask.shown
-    if (shown != null) {
-        AskResultSheet(
-            shown = shown,
+    ask.talk?.let { talk ->
+        TalkSheet(
+            talk = talk,
             snap = snap,
-            running = ask.running == shown.key,
-            onDismiss = { ask.shown = null },
-            onOpen = { id -> snap.tasks[id]?.let { ask.shown = null; openTask = it } },
-            onUndo = { r ->
-                ask.shown = null
+            onText = { v -> ask.talk = ask.talk?.copy(text = v) },
+            onSend = { text -> runAsk(text, talk.scope, cont = true) },
+            onDismiss = { if (ask.running.isBlank()) ask.talk = null else Feedback.toast(app, "Claude ещё думает — дождусь ответа") },
+            onOpen = { id -> snap.tasks[id]?.let { openTask = it } },
+            onUndo = { i ->
+                val turn = talk.turns.getOrNull(i) ?: return@TalkSheet
+                ask.talk = talk.copy(turns = talk.turns.mapIndexed { k, t -> if (k == i) t.copy(undone = true) else t })
                 scope.launch {
                     // Отмена — обычными операциями очереди с op_id: дошли не сразу — уйдут сами.
-                    app.delaStore.enqueue(DelaAsk.undoOps(r))
+                    app.delaStore.enqueue(DelaAsk.undoOps(turn.result))
                     val sent = app.delaSync.pushNow(4_000L)
                     Feedback.toast(app, if (sent) "Вернул как было" else "Вернул как было — уйдёт на сервер, когда будет связь")
                 }
             },
-            onRetry = { text -> runAsk(text, shown.scope) },
         )
     }
     if (newTask) {
@@ -1098,7 +1139,7 @@ fun DelaTab(
             task = proposed,
             snap = snap,
             isNew = true,
-            title = if (sg.kind == "update") "Уточнить ${proposed.numLabel}" else "Предложение",
+            title = if (sg.kind == "update") "Уточнить дело" else "Предложение",
             saveText = "Принять",
             // У уточнения подробности (note) лягут комментарием к делу — видны и здесь.
             quote = listOfNotNull(sg.payloadObj().optString("note").takeIf { sg.kind == "update" && it.isNotBlank() && it != "null" }, sg.quote.takeIf { it.isNotBlank() })
@@ -1568,7 +1609,7 @@ private fun LazyListScope.screenBody(
                 if (sc.upcoming || sc.done || sc.groupKey != null) {
                     ChipRow {
                         if (sc.upcoming) {
-                            PaperChip("Только мяч у меня", selected = tools.mineOnly, onClick = tools.onMineOnly)
+                            PaperChip("Только моё", selected = tools.mineOnly, onClick = tools.onMineOnly)
                             PaperChip("И без даты", selected = tools.noDate, onClick = tools.onNoDate)
                         }
                         if (sc.done) PaperChip("Сделанные", selected = tools.showDone, onClick = tools.onShowDone)
@@ -1979,7 +2020,8 @@ private fun TaskRow(
                     chips.filter { !(loose && it == DelaViews.NO_PROJECT) }.joinToString(" · ").takeIf { it.isNotBlank() },
                     ("в ленте " + ru.zf.pravka.core.ZasechkaTasks.label(spentMs)).takeIf { spentMs > 0L },
                     when (t.status) { Dela.DONE -> "сделано"; Dela.CANCELLED -> "отменено"; else -> null },
-                    t.numLabel + if (t.local) " ⏳" else "",
+                    // Номеров дел нигде нет (09.10.2026): только в адресах и командах Claude.
+                    "⏳".takeIf { t.local },
                 ).joinToString(" · ")
                 // «Без проекта» — отдельной строкой-ссылкой; «просрочено» и
                 // остальное — ОДНИМ текстом: тремя кусками в ряд перенос шёл
@@ -2079,7 +2121,7 @@ internal fun DelaTaskSheet(
 
     PaperSheet(
         onDismiss = onDismiss,
-        title = title ?: if (isNew) "Новое дело" else "Дело ${task.numLabel}",
+        title = title ?: if (isNew) "Новое дело" else "Дело",
         icon = Glyphs.Delo,
         subtitle = if (existing) listOfNotNull(
             task.createdAt.take(10).takeIf { it.isNotBlank() }?.let { "заведено " + delaDate(it) },
@@ -2126,11 +2168,12 @@ internal fun DelaTaskSheet(
             )
         }
 
-        PaperHint("У кого мяч")
+        // «Чьё дело» (09.10.2026: слова «мяч» больше нет нигде) — как `BALL_LONG` веба.
+        PaperHint("Чьё дело")
         ChipRow {
             PaperChip("Моё", selected = f.ball == Dela.MINE, onClick = { f = f.copy(ball = Dela.MINE) })
-            PaperChip("Жду", selected = f.ball == Dela.WAITING, onClick = { f = f.copy(ball = Dela.WAITING) })
-            PaperChip("При встрече", selected = f.ball == Dela.AGENDA, onClick = { f = f.copy(ball = Dela.AGENDA) })
+            PaperChip("Жду от человека", selected = f.ball == Dela.WAITING, onClick = { f = f.copy(ball = Dela.WAITING) })
+            PaperChip("Обсудить при встрече", selected = f.ball == Dela.AGENDA, onClick = { f = f.copy(ball = Dela.AGENDA) })
         }
         PaperRow(
             title = snap.people[f.personId]?.label ?: "без человека",
@@ -2139,7 +2182,7 @@ internal fun DelaTaskSheet(
             onClick = { picking = "person" },
         )
         if (f.ball != Dela.MINE && f.personId.isBlank()) {
-            PaperHint("Без человека «жду» и «при встрече» некого ждать — выбери, у кого мяч.", MaterialTheme.colorScheme.error)
+            PaperHint("Без человека «жду» и «при встрече» некого ждать — выбери человека.", MaterialTheme.colorScheme.error)
         }
         // Кто просил — как в вебе («Его просьбы ко мне»): строкой, если есть.
         if (f.requestedBy.isNotBlank()) {

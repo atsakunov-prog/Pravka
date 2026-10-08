@@ -328,7 +328,7 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
     }
     val menuTask = taskMenu?.let { model.tasksById[it] }
     if (menuTask != null) {
-        PaperSheet(onDismiss = { taskMenu = null }, title = menuTask.title, subtitle = menuTask.numLabel) {
+        PaperSheet(onDismiss = { taskMenu = null }, title = menuTask.title, subtitle = menuTask.projectName.takeIf { it.isNotBlank() }) {
             Row {
                 IconLabel(Glyphs.Play, "Начать в Засечке", {
                     taskMenu = null
@@ -914,7 +914,7 @@ private fun buildModel(
                     dayStart + (h * 60 + m) * 60_000L
                 }.getOrNull()
             } else null
-            val second = listOf(t.numLabel.takeIf { t.num > 0 }, t.projectName.takeIf { it.isNotBlank() }).filterNotNull().joinToString(" · ")
+            val second = t.projectName  // номеров дел нет нигде (09.10.2026)
             tasksIn += DayAssembler.TaskIn(t.id, t.title, second, t.estimateMin, fixed)
         }
         val doneToday = snap.tasks.values.filter { it.status == Dela.DONE && it.completedAt.take(10) == dateKey && (me.isBlank() || it.ownerId == me) }

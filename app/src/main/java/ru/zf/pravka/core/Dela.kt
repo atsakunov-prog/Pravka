@@ -105,8 +105,29 @@ object Dela {
         val archivedAt: String = "",
         val rev: Int = 0,
         val seq: Long = 0,
+        // Карточка клиента (09.10.2026, docs/dela-phone-9.md): `relations` — «поддержание
+        // отношений» (не лид и не сделка), пусто — по сделкам; папка и документы ссылками.
+        val status: String = "",
+        val folderUrl: String = "",
+        val files: List<FileRef> = emptyList(),
     ) {
         val live: Boolean get() = archivedAt.isBlank()
+    }
+
+    /** Документ ссылкой (`files` сделки и клиента): вид (contract, invoice, nda, act, other), название, ссылка, дата. */
+    data class FileRef(val kind: String, val title: String, val url: String, val at: String = "")
+
+    fun files(o: JSONObject, key: String = "files"): List<FileRef> {
+        val a = o.optJSONArray(key) ?: return emptyList()
+        return (0 until a.length()).mapNotNull { i ->
+            val f = a.optJSONObject(i) ?: return@mapNotNull null
+            val url = f.str("url").ifBlank { return@mapNotNull null }
+            FileRef(f.str("kind").ifBlank { "other" }, f.str("title"), url, f.str("at"))
+        }
+    }
+
+    fun json(files: List<FileRef>): JSONArray = JSONArray().apply {
+        for (f in files) put(JSONObject().put("kind", f.kind).put("title", nul(f.title)).put("url", f.url).put("at", nul(f.at)))
     }
 
     /**
@@ -137,6 +158,10 @@ object Dela {
         /** Когда ждём решения клиента или подписи. */
         val expectedOn: String = "",
         val deadline: String = "",
+        // Карточка проекта (09.10.2026): что за проект (видят все, кто видит сделку), папка и документы.
+        val description: String = "",
+        val folderUrl: String = "",
+        val files: List<FileRef> = emptyList(),
     ) {
         val closed: Boolean get() = stage == "archive"
     }
@@ -156,6 +181,9 @@ object Dela {
         val rev: Int = 0,
         val seq: Long = 0,
         val local: Boolean = false,
+        /** Кому и как ушёл счёт (09.10.2026): «бухгалтерия, Иван», «почтой». */
+        val sentTo: String = "",
+        val sentVia: String = "",
     ) {
         val live: Boolean get() = cancelledAt.isBlank()
     }
@@ -424,12 +452,14 @@ object Dela {
             id, o.str("name"), o.strings("aliases"), o.str("sphere").ifBlank { "work" }, o.str("kind").ifBlank { "client" },
             o.str("org_id"), o.str("owner_id"), o.str("money_default").ifBlank { "none" }, o.str("note"),
             o.str("archived_at"), o.int("rev"), o.long("seq"),
+            status = o.str("status"), folderUrl = o.str("folder_url"), files = files(o),
         )
     }
 
     fun json(p: Project): JSONObject = JSONObject().put("id", p.id).put("name", p.name).put("aliases", arr(p.aliases))
         .put("sphere", p.sphere).put("kind", p.kind).put("org_id", nul(p.orgId)).put("owner_id", p.ownerId)
         .put("money_default", p.moneyDefault).put("note", nul(p.note)).put("archived_at", nul(p.archivedAt))
+        .put("status", nul(p.status)).put("folder_url", nul(p.folderUrl)).put("files", json(p.files))
         .put("rev", p.rev).put("seq", p.seq)
 
     fun deal(o: JSONObject): Deal? {
@@ -441,6 +471,7 @@ object Dela {
             personIds = o.strings("person_ids"), feeKop = o.longOrNull("fee_kop"), rev = o.int("rev"), seq = o.long("seq"),
             local = o.bool("_local"), sourcePersonId = o.str("source_person_id"), probability = o.intOrNull("probability"),
             expectedOn = o.str("expected_on"), deadline = o.str("deadline"),
+            description = o.str("description"), folderUrl = o.str("folder_url"), files = files(o),
         )
     }
 
@@ -450,6 +481,7 @@ object Dela {
         .put("team_ids", arr(d.teamIds)).put("person_ids", arr(d.personIds)).put("fee_kop", nulLong(d.feeKop))
         .put("source_person_id", nul(d.sourcePersonId)).put("probability", d.probability ?: JSONObject.NULL)
         .put("expected_on", nul(d.expectedOn)).put("deadline", nul(d.deadline))
+        .put("description", nul(d.description)).put("folder_url", nul(d.folderUrl)).put("files", json(d.files))
         .put("rev", d.rev).put("seq", d.seq).apply { if (d.local) put("_local", true) }
 
     fun payment(o: JSONObject): Payment? {
@@ -458,14 +490,15 @@ object Dela {
             id = id, dealId = o.str("deal_id"), kind = o.str("kind"), title = o.str("title"), amountKop = o.long("amount_kop"),
             dueOn = o.str("due_on"), invoicedOn = o.str("invoiced_on"), paidOn = o.str("paid_on"),
             cancelledAt = o.str("cancelled_at"), note = o.str("note"), rev = o.int("rev"), seq = o.long("seq"),
-            local = o.bool("_local"),
+            local = o.bool("_local"), sentTo = o.str("sent_to"), sentVia = o.str("sent_via"),
         )
     }
 
     fun json(p: Payment): JSONObject = JSONObject().put("id", p.id).put("deal_id", p.dealId).put("kind", p.kind)
         .put("title", nul(p.title)).put("amount_kop", p.amountKop).put("due_on", nul(p.dueOn))
         .put("invoiced_on", nul(p.invoicedOn)).put("paid_on", nul(p.paidOn)).put("cancelled_at", nul(p.cancelledAt))
-        .put("note", nul(p.note)).put("rev", p.rev).put("seq", p.seq).apply { if (p.local) put("_local", true) }
+        .put("note", nul(p.note)).put("sent_to", nul(p.sentTo)).put("sent_via", nul(p.sentVia))
+        .put("rev", p.rev).put("seq", p.seq).apply { if (p.local) put("_local", true) }
 
     fun person(o: JSONObject): Person? {
         val id = o.str("id").ifBlank { return null }
@@ -745,6 +778,8 @@ object Dela {
                         invoicedOn = if (set.has("invoiced_on")) set.str("invoiced_on") else p.invoicedOn,
                         paidOn = if (set.has("paid_on")) set.str("paid_on") else p.paidOn,
                         cancelledAt = if (set.has("cancelled_at")) set.str("cancelled_at") else p.cancelledAt,
+                        sentTo = if (set.has("sent_to")) set.str("sent_to") else p.sentTo,
+                        sentVia = if (set.has("sent_via")) set.str("sent_via") else p.sentVia,
                         local = true,
                     )
                 }
@@ -773,6 +808,10 @@ object Dela {
                         orgId = if (set.has("org_id")) set.str("org_id") else p.orgId,
                         name = if (set.has("name")) set.str("name").ifBlank { p.name } else p.name,
                         archivedAt = if (set.has("archived_at")) set.str("archived_at") else p.archivedAt,
+                        note = if (set.has("note")) set.str("note") else p.note,
+                        status = if (set.has("status")) set.str("status") else p.status,
+                        folderUrl = if (set.has("folder_url")) set.str("folder_url") else p.folderUrl,
+                        files = if (set.has("files")) files(set) else p.files,
                     )
                 }
                 // Дописать имена и номера — как сервер: что уже есть, не дублируется.
@@ -838,6 +877,16 @@ object Dela {
         if (set.has("stage")) out = out.copy(stage = set.str("stage"))
         if (set.has("outcome")) out = out.copy(outcome = set.str("outcome"))
         if (set.has("lost_reason")) out = out.copy(lostReason = set.str("lost_reason"))
+        // Карточка проекта (09.10.2026): описание, ведущий, факты, папка и документы — видны сразу.
+        if (set.has("description")) out = out.copy(description = set.str("description"))
+        if (set.has("lead_person_id")) out = out.copy(leadPersonId = set.str("lead_person_id"))
+        if (set.has("deal_type")) out = out.copy(dealType = set.str("deal_type"))
+        if (set.has("source_person_id")) out = out.copy(sourcePersonId = set.str("source_person_id"))
+        if (set.has("probability")) out = out.copy(probability = set.intOrNull("probability"))
+        if (set.has("expected_on")) out = out.copy(expectedOn = set.str("expected_on"))
+        if (set.has("deadline")) out = out.copy(deadline = set.str("deadline"))
+        if (set.has("folder_url")) out = out.copy(folderUrl = set.str("folder_url"))
+        if (set.has("files")) out = out.copy(files = files(set))
         // Тот же порядок, что у crm.deal_rules: итог уводит в архив, живая стадия итог стирает.
         if (out.outcome.isNotBlank() && set.has("outcome")) out = out.copy(stage = "archive")
         out = if (out.stage == "archive") {
@@ -1375,7 +1424,17 @@ object Dela {
         val live = s.projects.values.filter { it.live && (sphere == "all" || sphere.isBlank() || it.sphere == sphere) }
             .sortedBy { it.name.lowercase() }
         val favs = live.filter { it.id in favorites }
-        val groups = KINDS.map { (kind, title) -> title to live.filter { it.kind == kind && it.id !in favorites }.map(::row) }
+        // Клиенты — по свежести дел (09.10.2026, `freshBy` веба): чьё дело заведено или закрыто последним — сверху.
+        val fresh = HashMap<String, String>()
+        for (t in s.tasks.values) {
+            if (t.projectId.isBlank()) continue
+            val x = maxOf(t.createdAt, t.completedAt)
+            if (x > (fresh[t.projectId] ?: "")) fresh[t.projectId] = x
+        }
+        val groups = KINDS.map { (kind, title) ->
+            val list = live.filter { it.kind == kind && it.id !in favorites }
+            title to (if (kind == "client") list.sortedByDescending { fresh[it.id] ?: "" } else list).map(::row)
+        }
             .filter { it.second.isNotEmpty() }
         // Проект незнакомого вида не теряется — отдельной группой «Другое».
         val known = KINDS.map { it.first }.toSet()

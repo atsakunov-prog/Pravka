@@ -211,8 +211,12 @@ class ZasechkaEngine(
                             category = categoryNames
                                 .firstOrNull { it.equals(p.category, ignoreCase = true) }
                                 ?: p.category,
-                            client = clients.firstOrNull { it.equals(p.client, ignoreCase = true) }
-                                ?: p.client,
+                            // Личная запись клиента не наследует (09.10.2026): только если он назван в словах.
+                            client = ZasechkaClient.keep(
+                                p.category,
+                                clients.firstOrNull { it.equals(p.client, ignoreCase = true) } ?: p.client,
+                                text,
+                            ),
                             useful = p.useful,
                         )
                         if (entry == null) {
@@ -302,8 +306,11 @@ class ZasechkaEngine(
                             category = categoryNames
                                 .firstOrNull { it.equals(p.category, ignoreCase = true) }
                                 ?: p.category,
-                            client = clients.firstOrNull { it.equals(p.client, ignoreCase = true) }
-                                ?: p.client,
+                            client = ZasechkaClient.keep(
+                                p.category,
+                                clients.firstOrNull { it.equals(p.client, ignoreCase = true) } ?: p.client,
+                                text,
+                            ),
                             useful = p.useful,
                             source = source,
                         )

@@ -1,6 +1,7 @@
 package ru.zf.pravka
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import ru.zf.pravka.ui.glass
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
@@ -64,12 +65,17 @@ internal data class AskScreen(
     val card: Boolean = false,
 )
 
-/** Итог команды — на лист поверх вкладки; ошибка у закрытой карточки — сюда же, с текстом. */
-internal data class AskShown(
-    val key: String,
-    val text: String,
+/**
+ * Разговор с Claude (09.10.2026, docs/dela-phone-9.md, п. 12; владелец: «он
+ * регулярно просит ещё следующий вопрос — в его ответе тоже должен быть
+ * текстбокс»): что видел экран в начале ([scope]), реплики, ждущая реплика
+ * ([busy]), набранное в строке ответа и причина, если реплика не ушла.
+ */
+internal data class Talk(
     val scope: JSONObject,
-    val result: DelaAsk.Result? = null,
+    val turns: List<DelaAsk.Turn> = emptyList(),
+    val busy: String = "",
+    val text: String = "",
     val error: String = "",
 )
 
@@ -77,7 +83,7 @@ internal data class AskShown(
 internal class AskState {
     var running by mutableStateOf("")
     var errors by mutableStateOf(mapOf<String, String>())
-    var shown by mutableStateOf<AskShown?>(null)
+    var talk by mutableStateOf<Talk?>(null)
 
     fun error(key: String): String = errors[key].orEmpty()
 }
@@ -254,92 +260,148 @@ internal fun DelaSayBar(
 }
 
 /**
- * Итог команды: слова Claude, что поменялось («срок 06.10, в «Сейчас»»), новые
- * дела и заметки — и «Вернуть всё» одним движением (контракт, `ask.undo`).
- * Ошибка у команды, чья карточка уже закрыта, — тоже здесь: с текстом и «Ещё раз».
+ * Окно разговора (`showTalk` веба): реплики сверху вниз — что сказал (пузырём
+ * справа), ответ Claude, что сделано (дела открываются карточкой), ошибки и
+ * «Вернуть» у каждой реплики; внизу — своя строка ответа: микрофон слева,
+ * стрелка справа. Ответ уходит с `scope.history`. «Хорошо» или крестик —
+ * разговор окончен; новая команда из строки внизу вкладки — новый разговор.
  */
 @Composable
-internal fun AskResultSheet(
-    shown: AskShown,
+internal fun TalkSheet(
+    talk: Talk,
     snap: Dela.Snapshot,
-    running: Boolean,
+    onText: (String) -> Unit,
+    onSend: (String) -> Unit,
     onDismiss: () -> Unit,
     onOpen: (String) -> Unit,
-    onUndo: (DelaAsk.Result) -> Unit,
-    onRetry: (String) -> Unit,
+    onUndo: (Int) -> Unit,
 ) {
-    val r = shown.result
-    val c = MaterialTheme.colorScheme
-    var retry by remember(shown) { mutableStateOf(shown.text) }
-    val head = when {
-        r == null -> "Claude: не вышло"
-        r.isNew -> {
-            val said = listOfNotNull(
-                plural(r.tasks.size, "дело", "дела", "дел").takeIf { r.tasks.isNotEmpty() },
-                plural(r.notes.size, "заметка", "заметки", "заметок").takeIf { r.notes.isNotEmpty() },
-            ).joinToString(" и ")
-            if (said.isBlank()) "Claude не нашёл тут дел" else "Claude записал $said"
-        }
-        r.count > 0 || r.crm.isNotEmpty() -> "Claude: " + listOfNotNull(
-            plural(r.count, "дело", "дела", "дел").takeIf { r.count > 0 },
-            "карточка: ${r.crm.size}".takeIf { r.crm.isNotEmpty() },
-        ).joinToString(", ")
-        else -> "Claude ничего не менял"
-    }
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    val context = LocalContext.current
+    var listening by remember { mutableStateOf(false) }
+    val busy = talk.busy.isNotBlank()
     PaperSheet(
-        onDismiss = onDismiss,
-        title = head,
-        icon = Glyphs.Ask,
-        subtitle = shown.scope.optString("title").takeIf { it.isNotBlank() },
+        onDismiss = { if (listening) PravkaAccessibilityService.instance?.finishDelaReason(keep = false); onDismiss() },
+        title = "Claude",
+        subtitle = talk.turns.size.takeIf { it > 1 }?.let { plural(it, "реплика", "реплики", "реплик") },
         footer = {
-            // «Вернуть всё» — и дела, и правки карточки (crm[].undo, 06.10.2026), как в вебе.
-            if (r != null && r.undoable) {
-                PaperTextButton(if (r.isNew && r.changed.isEmpty() && r.crm.isEmpty()) "Отменить дела" else "Вернуть всё", icon = Glyphs.Undo, onClick = { onUndo(r) })
+            GlyphButton(
+                if (listening) Glyphs.Stop else Glyphs.Mic,
+                if (listening) "готово — отдать Claude" else "ответить голосом: нажми, говори, нажми ещё раз",
+                tint = if (listening) mode.value else mode.label,
+                enabled = !busy,
+                onClick = {
+                    val service = PravkaAccessibilityService.instance
+                    when {
+                        service == null -> Feedback.toast(context, context.getString(R.string.toast_no_service))
+                        listening -> if (!service.finishDelaReason(keep = true)) listening = false
+                        else -> {
+                            val base = talk.text.trim()
+                            listening = service.listenForDelaReason("Говори — нажми микрофон ещё раз, отдам Claude") { said ->
+                                listening = false
+                                val full = (base + " " + said.trim()).trim()
+                                onText(full)
+                                if (said.isNotBlank()) onSend(full)
+                            }
+                        }
+                    }
+                },
+            )
+            Box(Modifier.weight(1f).padding(horizontal = 6.dp)) {
+                PaperField(
+                    value = talk.text,
+                    onValueChange = onText,
+                    placeholder = if (busy) "Claude думает…" else if (listening) "Слушаю…" else "Ответить Claude…",
+                    singleLine = false,
+                    maxLines = 4,
+                    enabled = !busy,
+                )
             }
-            Spacer(Modifier.weight(1f))
-            if (r == null) PaperButton("Ещё раз", icon = Glyphs.Ask, primary = true, enabled = retry.isNotBlank() && !running, onClick = { onRetry(retry.trim()) })
-            else PaperButton("Хорошо", icon = Glyphs.Check, primary = true, onClick = onDismiss)
+            Box(Modifier.alpha(if (talk.text.isNotBlank() && !busy) 1f else 0.35f)) {
+                ru.zf.pravka.ui.Key(Glyphs.ArrowUp, "ответить Claude", onClick = { if (talk.text.isNotBlank() && !busy) onSend(talk.text.trim()) }, size = 44.dp)
+            }
+            PaperTextButton("Хорошо", onClick = onDismiss)
         },
     ) {
-        if (r == null) {
-            PaperHint(shown.error, c.error)
-            PaperField(value = retry, onValueChange = { retry = it }, label = "Команда", singleLine = false, maxLines = 4, enabled = !running)
-            if (running) ThinkingLine("Claude правит…")
-            return@PaperSheet
+        talk.turns.forEachIndexed { i, t ->
+            if (i > 0) RowRule()
+            TurnView(t, snap, onOpen = onOpen, onUndo = { onUndo(i) })
         }
-        if (r.reply.isNotBlank()) Text(r.reply, style = MaterialTheme.typography.bodyMedium)
-        r.changed.forEachIndexed { i, ch ->
-            if (i > 0 || r.reply.isNotBlank()) RowRule()
-            val title = ch.after.optString("title").takeIf { ch.after.has("title") && it.isNotBlank() } ?: ch.title
-            AskLine("#${ch.num} $title", DelaAsk.describe(ch, snap)) { onOpen(ch.id) }
+        if (busy) {
+            if (talk.turns.isNotEmpty()) RowRule()
+            Said(talk.busy)
+            Text("Claude думает…", style = ty.label, color = mode.meta)
         }
-        if (r.tasks.isNotEmpty()) {
-            PaperHint(if (r.changed.isEmpty()) "Заведено:" else "Новые:")
-            for (t in r.tasks) {
-                val meta = listOfNotNull(
-                    snap.projects[t.projectId]?.name ?: t.projectName.takeIf { it.isNotBlank() },
-                    t.personId.takeIf { it.isNotBlank() }?.let { pid ->
-                        (if (t.ball != Dela.MINE) (if (t.ball == Dela.WAITING) "жду " else "повестка ") else "") + (snap.people[pid]?.label ?: t.who)
-                    },
-                    t.dueDate.takeIf { it.isNotBlank() }?.let { "срок " + DelaAsk.ddmm(it, snap.today) },
-                    t.estimateMin.takeIf { it > 0 }?.let { "$it мин" },
-                ).joinToString(" · ")
-                AskLine("#${t.num} ${t.title}", meta) { onOpen(t.id) }
-            }
+        if (talk.error.isNotBlank()) PaperHint(talk.error, ru.zf.pravka.ui.Ink.Warn)
+    }
+}
+
+/** Что сказал — пузырём справа. */
+@Composable
+private fun Said(text: String) {
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+        Text(
+            text,
+            style = ru.zf.pravka.ui.LocalPravkaType.current.body,
+            color = ru.zf.pravka.ui.Ink.Text,
+            modifier = Modifier.padding(start = 40.dp, top = 6.dp, bottom = 6.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(mode.tint.copy(alpha = 0.18f))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        )
+    }
+}
+
+/** Реплика (`turnView` веба): что сказал, ответ, что сделано, ошибки и «Вернуть». Номеров дел нет. */
+@Composable
+private fun TurnView(t: DelaAsk.Turn, snap: Dela.Snapshot, onOpen: (String) -> Unit, onUndo: () -> Unit) {
+    val r = t.result
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    Said(t.said)
+    val nothing = !r.did && r.errors.isEmpty()
+    if (r.reply.isNotBlank()) Text(r.reply, style = ty.body, color = ru.zf.pravka.ui.Ink.Text)
+    else if (nothing) Text("Ничего не поменял.", style = ty.label, color = mode.meta)
+    for (x in r.decided) {
+        AskLine(DelaAsk.decidedWord(x), if (x.accept) "" else x.reason) { if (x.accept && x.id.isNotBlank()) onOpen(x.id) }
+    }
+    for (ch in r.changed) {
+        val title = ch.after.optString("title").takeIf { ch.after.has("title") && it.isNotBlank() } ?: ch.title
+        AskLine(title, DelaAsk.describe(ch, snap)) { onOpen(ch.id) }
+    }
+    if (r.tasks.isNotEmpty()) {
+        PaperHint(if (r.isNew) "Записал:" else "Новые:")
+        for (x in r.tasks) {
+            val meta = listOfNotNull(
+                snap.projects[x.projectId]?.name ?: x.projectName.takeIf { it.isNotBlank() },
+                x.personId.takeIf { it.isNotBlank() }?.let { pid ->
+                    (if (x.ball == Dela.WAITING) "жду " else if (x.ball == Dela.AGENDA) "повестка " else "") + (snap.people[pid]?.label ?: x.who)
+                },
+                x.dueDate.takeIf { it.isNotBlank() }?.let { "срок " + DelaAsk.ddmm(it, snap.today) },
+                x.estimateMin.takeIf { it > 0 }?.let { "$it мин" },
+            ).joinToString(" · ")
+            AskLine(x.title, meta) { onOpen(x.id) }
         }
-        if (r.notes.isNotEmpty()) {
-            PaperHint("В хронологию:")
-            for (n in r.notes) {
-                PaperHint(n.summary + (snap.projects[n.projectId]?.name?.let { " · $it" } ?: ""), c.onSurface)
-            }
+    }
+    if (r.notes.isNotEmpty()) {
+        PaperHint("В хронологию:")
+        for (n in r.notes) PaperHint(n.summary + (snap.projects[n.projectId]?.name?.let { " · $it" } ?: ""), ru.zf.pravka.ui.Ink.Text)
+    }
+    // Правки карточки — проекты, люди, хронология (`crm[]`): словами, как их назвал сервер.
+    if (r.crm.isNotEmpty()) {
+        PaperHint("Проекты, люди, хронология:")
+        for (cr in r.crm) PaperHint(cr.what, ru.zf.pravka.ui.Ink.Text)
+    }
+    if (r.errors.isNotEmpty()) PaperHint("Не вышло: " + r.errors.joinToString("; "), ru.zf.pravka.ui.Ink.Warn)
+    when {
+        t.undone -> Text("Вернул как было", style = ty.label, color = mode.meta)
+        r.undoable -> Row {
+            Spacer(Modifier.weight(1f))
+            val dropped = r.decided.any { !it.accept }
+            PaperTextButton(if (dropped) "Вернуть принятое" else "Вернуть", icon = Glyphs.Undo, onClick = onUndo)
         }
-        // Правки карточки — хронология, люди, сделки (`crm[]`): словами, как их назвал сервер.
-        if (r.crm.isNotEmpty()) {
-            PaperHint("Проекты, люди, хронология:")
-            for (cr in r.crm) PaperHint(cr.what, c.onSurface)
-        }
-        if (r.errors.isNotEmpty()) PaperHint("Не вышло: " + r.errors.joinToString("; "), c.error)
-        if (r.count == 0 && r.crm.isEmpty() && r.errors.isEmpty() && r.reply.isBlank()) PaperHint("Ничего не поменялось.")
     }
 }
 

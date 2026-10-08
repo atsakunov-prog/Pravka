@@ -681,7 +681,7 @@ internal fun ZasechkaTab(
                 ),
                 points = pointsOf(worthOf(head.category), totalMs),
                 pieces = unit.fragments.size,
-                taskLabel = delaSnap.tasks[head.task]?.let { "${it.numLabel} ${it.title}" }.orEmpty(),
+                taskLabel = delaSnap.tasks[head.task]?.title.orEmpty(),
                 onDismiss = { sheetFor = null },
                 onEdit = {
                     sheetFor = null
@@ -710,7 +710,7 @@ internal fun ZasechkaTab(
             entry = entry,
             categories = categoryNames,
             projects = delaProjects,
-            taskTitle = delaSnap.tasks[entry.task]?.let { "${it.numLabel} ${it.title}" }.orEmpty(),
+            taskTitle = delaSnap.tasks[entry.task]?.title.orEmpty(),
             onDismiss = { editing = null },
             onDictate = { editing = null; dictateEdit(entry) },
             onSave = { updated ->

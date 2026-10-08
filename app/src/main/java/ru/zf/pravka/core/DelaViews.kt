@@ -67,7 +67,7 @@ object DelaViews {
         DATE("date", "по датам"),
         PROJECT("project", "по проектам"),
         PERSON("person", "по людям"),
-        BALL("ball", "по мячу"),
+        BALL("ball", "моё, жду, повестка"),
         DEAL("deal", "по сделкам"),
         NONE("none", "без групп");
 
@@ -733,7 +733,7 @@ object DelaViews {
         return listOfNotNull(
             if (was.has("title")) "название: «${v(r, "title")}»" else null,
             if (was.has("due_date")) "срок " + (if (wasDue.isNotBlank()) ddmm(wasDue, today) + " → " else "") + (if (due.isNotBlank()) ddmm(due, today) else "без срока") else null,
-            if (was.has("ball") || was.has("person_id")) "мяч: " + (BALL_WORD[v(r, "ball")] ?: v(r, "ball")) + if (person.isNotBlank()) " $person" else "" else null,
+            if (was.has("ball") || was.has("person_id")) (BALL_WORD[v(r, "ball")] ?: v(r, "ball")) + if (person.isNotBlank()) " $person" else "" else null,
         ).joinToString(" · ")
     }
 

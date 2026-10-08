@@ -154,6 +154,26 @@ object DelaAsk {
     data class Crm(val what: String, val undo: List<JSONObject>)
 
     /**
+     * Решённое предложение «Нового» (`decided[]` ответа): П-номер [n], принято или
+     * отклонено, вид, дело ([id], [title]; [created] — заведено им), что поменялось
+     * ([before], [after], статус) и причина отказа. Отклонённое не возвращается.
+     */
+    data class Decided(
+        val n: Int,
+        val accept: Boolean,
+        val kind: String,
+        val id: String,
+        val title: String,
+        val created: Boolean,
+        val before: JSONObject,
+        val after: JSONObject,
+        val statusFrom: String = "",
+        val statusTo: String = "",
+        val reason: String = "",
+        val what: String = "",
+    )
+
+    /**
      * Ответ задания. `route = edit` — поправки дел на экране (`changed`) и, может
      * быть, новые дела; `route = new` — команда целиком про новые дела, сервер
      * отдал её разбору (как `/api/parse`): `tasks` и `notes` — что заведено.
@@ -167,18 +187,35 @@ object DelaAsk {
         val errors: List<String>,
         val model: String,
         val crm: List<Crm> = emptyList(),
+        val decided: List<Decided> = emptyList(),
     ) {
-        /** Дела, которых коснулся Claude: поправленные и новые. */
+        /** Дела, которых коснулся Claude: поправленные и новые (решённые предложения — в [decided]). */
         val count: Int get() = changed.size + tasks.size
         val isNew: Boolean get() = route == "new"
         /** Есть что вернуть «Вернуть всё»: дела или правки карточки с «как было». */
-        val undoable: Boolean get() = count > 0 || crm.any { it.undo.isNotEmpty() }
+        val undoable: Boolean get() = changed.isNotEmpty() || tasks.isNotEmpty() || decided.any { it.accept && it.id.isNotBlank() } || crm.any { it.undo.isNotEmpty() }
+
+        /** Сделал ли что-нибудь: поправки, новые дела, заметки, решения, карточка. */
+        val did: Boolean get() = changed.isNotEmpty() || tasks.isNotEmpty() || notes.isNotEmpty() || decided.isNotEmpty() || crm.isNotEmpty()
     }
 
     fun parse(o: JSONObject): Result {
         fun objs(key: String): List<JSONObject> {
             val a = o.optJSONArray(key) ?: return emptyList()
             return (0 until a.length()).mapNotNull { a.optJSONObject(it) }
+        }
+        fun pair(c: JSONObject): Pair<String, String> {
+            val st = c.optJSONArray("status")?.takeIf { it.length() == 2 } ?: return "" to ""
+            return (if (st.isNull(0)) "" else st.optString(0)) to (if (st.isNull(1)) "" else st.optString(1))
+        }
+        val decided = objs("decided").map { x ->
+            val (from, to) = pair(x)
+            Decided(
+                n = x.optInt("n", 0), accept = x.str("decision") == "accept", kind = x.str("kind"), id = x.str("id"),
+                title = x.str("title"), created = !x.isNull("created") && x.optBoolean("created", false),
+                before = x.optJSONObject("before") ?: JSONObject(), after = x.optJSONObject("after") ?: JSONObject(),
+                statusFrom = from, statusTo = to, reason = x.str("reason"), what = x.str("what"),
+            )
         }
         val changed = objs("changed").mapNotNull { c ->
             val id = c.str("id").ifBlank { return@mapNotNull null }
@@ -206,6 +243,7 @@ object DelaAsk {
                 val u = c.optJSONArray("undo")
                 Crm(c.str("what").trim(), if (u == null) emptyList() else (0 until u.length()).mapNotNull { u.optJSONObject(it) })
             }.filter { it.what.isNotBlank() || it.undo.isNotEmpty() },
+            decided = decided,
         )
     }
 
@@ -233,6 +271,21 @@ object DelaAsk {
             }
         }
         for (t in r.tasks) out += Dela.statusOp("task.cancel", t.id)
+        // Принятое из «Нового» (`turnUndo` веба): заведённое — отменой, уточнённое — как было.
+        for (x in r.decided) {
+            if (!x.accept || !Dela.isUuid(x.id)) continue
+            if (x.created) { out += Dela.statusOp("task.cancel", x.id); continue }
+            if (x.before.length() > 0) {
+                val was = JSONObject()
+                for (k in x.before.keys()) if (x.after.has(k)) was.put(k, x.after.opt(k))
+                out += Dela.setOp(x.id, JSONObject(x.before.toString()), was)
+            }
+            when (x.statusFrom) {
+                Dela.OPEN -> out += Dela.statusOp("task.reopen", x.id)
+                Dela.DONE -> out += Dela.statusOp("task.done", x.id)
+                Dela.CANCELLED -> out += Dela.statusOp("task.cancel", x.id)
+            }
+        }
         for (c in r.crm) for (u in c.undo) {
             if (u.str("op").isBlank()) continue
             out += JSONObject(u.toString()).put("op_id", Dela.newId())
@@ -271,6 +324,54 @@ object DelaAsk {
     }
 
     private val BALL = mapOf(Dela.MINE to "моё", Dela.WAITING to "жду", Dela.AGENDA to "повестка")
+
+    // ------------------------------------------------------------ разговор (09.10.2026)
+
+    /**
+     * Реплика разговора с Claude (docs/dela-phone-9.md, п. 12; `claudeSay` веба):
+     * что сказано, что он ответил и сделал; [undone] — «Вернуть» уже нажато.
+     */
+    data class Turn(val said: String, val result: Result, val undone: Boolean = false)
+
+    /** Сколько прошлых реплик видит Claude (`TALK_KEEP` веба). */
+    const val TALK_KEEP = 8
+
+    private val DECIDED = mapOf("create" to "заведено", "close" to "закрыто", "update" to "уточнено", "assign" to "взято себе")
+
+    /** Решение словами: «П1 заведено: …», «П2 отклонено: …». */
+    fun decidedWord(x: Decided): String =
+        "П${x.n} " + if (x.accept) (DECIDED[x.kind] ?: "принято") + (if (x.title.isNotBlank()) ": ${x.title}" else "")
+        else "отклонено" + (x.title.ifBlank { x.what }.takeIf { it.isNotBlank() }?.let { ": $it" } ?: "")
+
+    /**
+     * Что сделано репликой — коротко, для памяти разговора на сервере (`turnMemo`
+     * веба): `{said, reply, done}`; вернул — «Саша вернул всё это как было».
+     */
+    fun memo(t: Turn, s: Dela.Snapshot): JSONObject {
+        val r = t.result
+        val out = mutableListOf<String>()
+        if (r.isNew) {
+            if (r.tasks.isNotEmpty()) out += "завёл: " + r.tasks.joinToString(", ") { it.title }
+            if (r.notes.isNotEmpty()) out += "в хронологию: " + r.notes.joinToString("; ") { it.summary }
+        } else {
+            for (c in r.changed) out += (c.after.str("title").ifBlank { c.title }) + ": " + describe(c, s)
+            if (r.tasks.isNotEmpty()) out += "завёл: " + r.tasks.joinToString(", ") { it.title }
+            for (x in r.decided) out += "П${x.n} " + if (x.accept) DECIDED[x.kind] ?: "принято" else "отклонено"
+            for (c in r.crm) out += c.what
+        }
+        if (r.errors.isNotEmpty()) out += "не вышло: " + r.errors.joinToString("; ")
+        val done = out.joinToString("; ").ifBlank { "ничего не менял" }.take(700) + if (t.undone) " — Саша вернул всё это как было" else ""
+        return JSONObject().put("said", t.said.take(600)).put("reply", r.reply.take(900)).put("done", done)
+    }
+
+    /**
+     * Следующая реплика уходит вместе с разговором: `scope.history` — до
+     * [TALK_KEEP] прошлых реплик. Старый сервер поля молча не заметит.
+     */
+    fun withHistory(scope: JSONObject, turns: List<Turn>, s: Dela.Snapshot): JSONObject {
+        if (turns.isEmpty()) return scope
+        return JSONObject(scope.toString()).put("history", JSONArray().apply { turns.takeLast(TALK_KEEP).forEach { put(memo(it, s)) } })
+    }
 
     /** «07.10», а не своего года — «07.10.27»: как `D.ddmm` веба. */
     fun ddmm(iso: String, today: String): String {

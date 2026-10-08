@@ -87,6 +87,8 @@ object DelaCrm {
         val probability: Int? = null,
         val expectedOn: String = "",
         val deadline: String = "",
+        /** «Идеи» — старые заметки владельца (Notion): видны, только если в них что-то есть. */
+        val ideas: String = "",
     ) {
         val closed: Boolean get() = stage == "archive"
         /** «в работе», а у закрытой — итог: «выиграли», «проиграли». */
@@ -131,17 +133,32 @@ object DelaCrm {
         val paidYearKop: Long?,
         val invoicedKop: Long?,
         val minutes90: Int?,
+        /** `relations` — «поддержание отношений» (09.10.2026); пусто — по сделкам. */
+        val status: String = "",
+        /** Когда последнее дело заведено или закрыто — по нему сервер ставит свежих сверху. */
+        val lastTaskAt: String = "",
     ) {
         val live: Boolean get() = archivedAt.isBlank()
+        val relations: Boolean get() = status == RELATIONS
     }
 
     data class Clients(val clients: List<Client>, val money: Boolean) {
-        /** Поиск по имени, алиасам и организации — без регистра и «ё»; архивные — только по просьбе. */
-        fun find(q: String, withArchive: Boolean = false): List<Client> {
+        /**
+         * Поиск по имени, алиасам и организации — без регистра и «ё»; архивные — только по
+         * просьбе; [relationsOnly] — фильтр «Поддержание отношений». Порядок — сервера
+         * (с 09.10.2026 — по свежести дел и контактов), телефон его не пересортировывает.
+         */
+        fun find(q: String, withArchive: Boolean = false, relationsOnly: Boolean = false): List<Client> {
             val n = Dela.norm(q)
-            return clients.filter { (withArchive || it.live) && (n == null || Dela.norm(it.name + " " + it.aliases.joinToString(" ") + " " + it.org)?.contains(n) == true) }
+            return clients.filter {
+                (withArchive || it.live) && (!relationsOnly || it.relations) &&
+                    (n == null || Dela.norm(it.name + " " + it.aliases.joinToString(" ") + " " + it.org)?.contains(n) == true)
+            }
         }
     }
+
+    /** Статус клиента «поддержание отношений»: уже не лид, но и не сделка — работали, держим связь. */
+    const val RELATIONS = "relations"
 
     /** Запись хронологии (`crm.interactions`). Строки не удаляются: убранная — `deleted_at`. */
     data class Interaction(
@@ -180,6 +197,8 @@ object DelaCrm {
         val deals: List<Deal>,
         val people: List<PersonRow>,
         val money: Boolean,
+        /** Оплаты всех проектов клиента (09.10.2026) — тем, кому открыты деньги. */
+        val payments: List<Dela.Payment> = emptyList(),
     )
 
     data class DealView(
@@ -247,7 +266,7 @@ object DelaCrm {
             toGetKop = o.longOrNull("to_get_kop"), weightedKop = o.longOrNull("weighted_kop"),
             minutes30 = o.intOrNull("minutes_30"), minutesAll = o.intOrNull("minutes_all"), myView = o.str("my_view"),
             sourcePersonId = o.str("source_person_id"), probability = o.intOrNull("probability"),
-            expectedOn = o.str("expected_on"), deadline = o.str("deadline"),
+            expectedOn = o.str("expected_on"), deadline = o.str("deadline"), ideas = o.str("ideas"),
         )
     }
 
@@ -288,6 +307,7 @@ object DelaCrm {
                 liveDeals = c.int("live_deals"), allDeals = c.int("all_deals"), stages = c.strings("stages"),
                 lastTouch = c.str("last_touch"), openTasks = c.int("open_tasks"), nextTask = next(c.optJSONObject("next_task")),
                 paidYearKop = c.longOrNull("paid_year_kop"), invoicedKop = c.longOrNull("invoiced_kop"), minutes90 = c.intOrNull("minutes_90"),
+                status = c.str("status"), lastTaskAt = c.str("last_task_at"),
             )
         },
         money = money(o),
@@ -304,6 +324,7 @@ object DelaCrm {
         deals = objs(o, "deals").mapNotNull(::deal),
         people = objs(o, "people").mapNotNull(::personRow),
         money = money(o),
+        payments = objs(o, "payments").mapNotNull { Dela.payment(it) },
     )
 
     fun dealView(o: JSONObject): DealView = DealView(
@@ -343,6 +364,126 @@ object DelaCrm {
         }
         return h.str("at").take(16).replace('T', ' ') + " · " + h.str("actor").ifBlank { "?" } + " · " + what
     }
+
+    // ------------------------------------------------------------ карточки клиента и проекта (09.10.2026)
+
+    /**
+     * Строка хронологии (`timelineBlock` веба): запись (звонок, встреча, заметка),
+     * счёт ([paid] = false — `invoiced_on`) или пришедшая оплата (`paid_on`).
+     */
+    data class TlRow(val at: String, val item: Interaction? = null, val pay: Dela.Payment? = null, val paid: Boolean = false)
+
+    /** Сколько строк хронологии сразу — дальше «Показать всё» (`TL_SHOWN` веба). */
+    const val TL_SHOWN = 10
+
+    /** Записи, счета и оплаты вперемешку, свежие сверху. Отменённая оплата не в счёт. */
+    fun timelineRows(items: List<Interaction>, pays: List<Dela.Payment>): List<TlRow> =
+        (items.map { TlRow(it.at, item = it) } + pays.filter { it.live }.flatMap { p ->
+            listOfNotNull(
+                p.invoicedOn.takeIf { it.isNotBlank() }?.let { TlRow(it.take(10) + "T12:00:00", pay = p) },
+                p.paidOn.takeIf { it.isNotBlank() }?.let { TlRow(it.take(10) + "T12:00:01", pay = p, paid = true) },
+            )
+        }).sortedByDescending { it.at }
+
+    /**
+     * Итог встречи коротко (`tlLine` веба): «Тема: итог» — тема до последнего «: »
+     * в начале (до первой точки, не дальше 110 знаков; у встреч в теме бывает своё
+     * двоеточие — «Клиент: тема: итог»). null у темы — её нет.
+     */
+    fun meetingParts(summary: String): Pair<String?, String> {
+        val sum = summary.trim()
+        val dot = sum.indexOf(". ")
+        val stop = minOf(110, if (dot < 0) sum.length else dot)
+        val cut = sum.substring(0, stop).lastIndexOf(": ")
+        return if (cut >= 3) sum.substring(0, cut) to sum.substring(cut + 2) else null to sum
+    }
+
+    /** Договорённости (`next_step`) списком: через «;» или с новой строки, без маркеров и точек в конце. */
+    fun steps(nextStep: String): List<String> =
+        nextStep.split(Regex("\\s*;\\s*|\\n+")).map { it.replace(Regex("^[→\\-–•\\s]+"), "").replace(Regex("[.;]\\s*$"), "").trim() }
+            .filter { it.isNotBlank() }
+
+    /** Как ушёл счёт (`SENT_VIA` веба). */
+    val SENT_VIA = listOf("почтой", "в Telegram", "через ЭДО", "лично", "курьером")
+
+    /** Вид документа (`FILE_KIND` веба). */
+    val FILE_KIND = linkedMapOf("contract" to "Договор", "invoice" to "Счёт", "nda" to "NDA", "act" to "Акт", "other" to "Документ")
+
+    /** Ссылка без схемы — https:// (сервер ссылки не http(s) отвергает). */
+    fun withScheme(v: String): String = v.trim().let { if (it.isNotBlank() && !Regex("^https?://", RegexOption.IGNORE_CASE).containsMatchIn(it)) "https://$it" else it }
+
+    /**
+     * «+ человек» — поиск, а не список (`personSearchPop` веба): пусто — [base]
+     * (свои: команда или люди этого клиента); набрал — среди всех живых по имени,
+     * короткому, другим именам, должности и компании. Каждое слово должно найтись:
+     * с начала поля — лучше, с начала слова — хуже, кусочком — ещё хуже.
+     */
+    fun searchPeople(s: Dela.Snapshot, q: String, base: List<Dela.Person>, exclude: Set<String>, max: Int = 14): List<Dela.Person> {
+        val words = (Dela.norm(q) ?: "").split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (words.isEmpty()) return base.filter { it.id !in exclude }.take(max)
+        fun keys(x: Dela.Person) = (listOf(x.name, x.short, x.role, orgLabel(s, x.orgId)?.name.orEmpty()) + x.aliases)
+            .filter { it.isNotBlank() }.mapNotNull { Dela.norm(it) }
+        fun score(x: Dela.Person): Int {
+            val ks = keys(x)
+            var sum = 0
+            for (w in words) {
+                sum += when {
+                    ks.any { it.startsWith(w) } -> 0
+                    ks.any { k -> k.split(Regex("[\\s\\-–«»\"().,]+")).any { it.startsWith(w) } } -> 1
+                    ks.any { it.contains(w) } -> 2
+                    else -> return -1
+                }
+            }
+            return sum
+        }
+        return s.people.values.filter { it.live && it.id !in exclude }.map { it to score(it) }.filter { it.second >= 0 }
+            .sortedWith(compareBy<Pair<Dela.Person, Int>>({ it.second }, { it.first.label.lowercase() })).map { it.first }.take(max)
+    }
+
+    /** Команда ЗФ (`teamPeople` веба): пользователи Дел и все, кто ведёт проекты или в их командах. */
+    fun teamPeople(s: Dela.Snapshot): List<Dela.Person> {
+        val ids = s.people.values.filter { it.userId.isNotBlank() }.map { it.id }.toMutableSet()
+        for (d in s.deals.values) { if (d.leadPersonId.isNotBlank()) ids += d.leadPersonId; ids += d.teamIds }
+        return ids.mapNotNull { s.people[it] }.filter { it.live }.sortedBy { it.label.lowercase() }
+    }
+
+    /** Команда клиента — ведущие и команды его живых проектов (`clientTeam` веба). */
+    fun clientTeam(deals: List<Dela.Deal>): List<String> =
+        deals.filter { !it.closed }.flatMap { listOf(it.leadPersonId) + it.teamIds }.filter { it.isNotBlank() }.distinct()
+
+    /** Команда проекта: ведущий — первым, потом команда. */
+    fun dealTeam(d: Dela.Deal): List<String> = (listOf(d.leadPersonId) + d.teamIds).filter { it.isNotBlank() }.distinct()
+
+    /**
+     * Проекты человека со стороной (`personDeals` веба): ведёт, в команде, от клиента,
+     * привёл — живые сверху. У человека и в его карточке — плашками-ссылками.
+     */
+    fun personDeals(s: Dela.Snapshot, personId: String): List<Pair<Dela.Deal, String>> =
+        s.deals.values.mapNotNull { d ->
+            val role = when (personId) {
+                d.leadPersonId -> "ведёт"
+                in d.teamIds -> "в команде"
+                in d.personIds -> "от клиента"
+                d.sourcePersonId -> "привёл"
+                else -> return@mapNotNull null
+            }
+            d to role
+        }.sortedWith(compareBy({ it.first.closed }, { it.first.name.lowercase() }))
+
+    /** Правка сделки полями (`deal.set`): описание, ведущий, файлы — что угодно из `set`. */
+    fun dealSetOp(dealId: String, set: JSONObject, opId: String = Dela.newId()): JSONObject =
+        op("deal.set", opId).put("id", dealId).put("set", set)
+
+    /** Правка клиента (`project.set`): описание (`note`), статус, папка, файлы. */
+    fun projectSetOp(projectId: String, set: JSONObject, opId: String = Dela.newId()): JSONObject =
+        op("project.set", opId).put("id", projectId).put("set", set)
+
+    /** «Счёт выставлен» — когда, кому и как (`invoicePop` веба). */
+    fun invoiceOp(paymentId: String, day: String, sentTo: String, sentVia: String, opId: String = Dela.newId()): JSONObject =
+        op("payment.set", opId).put("id", paymentId).put(
+            "set",
+            JSONObject().put("invoiced_on", day).put("sent_to", Dela.nul(sentTo.trim())).put("sent_via", Dela.nul(sentVia.trim())),
+        )
 
     // ------------------------------------------------------------ пути видов
 
