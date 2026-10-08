@@ -10,7 +10,8 @@ import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.core.BankPush
 
 // Пуши Т-Банка и чата «Плати по миру» → журнал Денег (владелец, 23.09.2026:
-// «чтобы правка ловила пуши от Тинькова и вносила их»).
+// «чтобы правка ловила пуши от Тинькова и вносила их»). С 08.10.2026 — и
+// Альфа с МКБ (телефон Марианны): пуш приложения банка или SMS от банка.
 //
 // Отдельная служба, НЕ служба доступности: у той можно подписаться на
 // «уведомление появилось», но это ровно то, чего после Fold не делаем —
@@ -69,7 +70,8 @@ class MoneyNotificationListener : NotificationListenerService() {
         val extras = n.extras ?: return
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
         sample(pkg, title, extras, n, sbn.postTime)
-        if (BankPush.from(pkg, title) == BankPush.From.OTHER) return
+        val from = BankPush.from(pkg, title)
+        if (from == BankPush.From.OTHER) return
 
         // Телеграм кладёт непрочитанные сообщения чата списком (MessagingStyle):
         // каждое — со своим временем. Т-Банк — один текст, полный — в BIG_TEXT
@@ -83,18 +85,40 @@ class MoneyNotificationListener : NotificationListenerService() {
                     ?.toString()?.takeIf { it.isNotBlank() }?.let { it to sbn.postTime }
             )
         if (items.isEmpty()) return
+        // Альфа и МКБ — заголовком: у SMS это отправитель, по нему `BankPush.from`
+        // и узнал банк. Чат «Плати по миру» и Т-Банк — как было (названием беседы,
+        // если есть): от заголовка считается отпечаток уже пойманных пушей.
         val chatTitle = style?.conversationTitle?.toString()?.takeIf { it.isNotBlank() } ?: title
+        val pushTitle = if (from == BankPush.From.ALFA || from == BankPush.From.MKB) title else chatTitle
 
         val app = application as? PravkaApp ?: return
         // Деньги выключены в профиле — пуши банка не читаются вовсе.
         if (!app.profileStore.has(ru.zf.pravka.data.Profile.Mode.MONEY)) return
         app.appScope.launch {
             if (!app.settings.mPushFlow.first()) return@launch
+            // Т-Банк на чужом телефоне (08.10.2026) — не ловим вовсе, и сырьё не
+            // храним: переразбор его бы воскресил. Карта Марианны — на счёте
+            // Саши, её пуши ловит его телефон; здесь вышла бы вторая запись.
+            if (from == BankPush.From.TBANK &&
+                !BankPush.catchTbank(app.settings.mPushTbankFlow.first(), app.profileStore.owner)
+            ) {
+                val now = System.currentTimeMillis()
+                if (now - tbankOffLogged > 6 * 3_600_000L) {
+                    tbankOffLogged = now
+                    app.eventLog.add("деньги: пуш Т-Банка не ловлю — на этом телефоне выключено (Настройки → Деньги → пуши банка)")
+                }
+                return@launch
+            }
             for ((text, ts) in items) {
-                val result = runCatching { app.moneyEngine.onPush(pkg, chatTitle, text, ts) }
+                val result = runCatching { app.moneyEngine.onPush(pkg, pushTitle, text, ts) }
                     .getOrElse { e -> "ошибка: ${e.message ?: e.javaClass.simpleName}" }
                 if (result.startsWith("ошибка")) app.eventLog.add("деньги: пуш $pkg — $result")
             }
         }
+    }
+
+    private companion object {
+        /** Когда последний раз писали «Т-Банк здесь не ловлю»: строка — раз в шесть часов, а не на каждый пуш. */
+        @Volatile var tbankOffLogged = 0L
     }
 }

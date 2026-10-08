@@ -3,6 +3,7 @@ package ru.zf.pravka.core
 import java.time.Instant
 import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import ru.zf.pravka.data.CbrRates
 import ru.zf.pravka.data.DictionaryStore
@@ -47,7 +48,16 @@ class MoneyEngine(
     private val factoryAccountsText: () -> String = { "" },
     /** Сырьё выписки — в `imports/` базы до разбора (`data/ImportArchive.kt`). */
     private val keepImport: (ByteArray) -> Unit = {},
+    /**
+     * Справочник только заполняет пустые категории (`MoneyMatch.run`,
+     * `fillOnly`): общие Деньги на чужом телефоне — автоматические категории
+     * решает телефон владельца, иначе два справочника переписывали бы друг друга.
+     */
+    private val fillOnly: () -> Boolean = { false },
 ) {
+
+    /** Проверка «повтор пуша из другого приложения» и запись пуша — одним шагом (`BankPush.twin`). */
+    private val pushLock = kotlinx.coroutines.sync.Mutex()
 
     /**
      * Все правила: сначала владельца (вписанные и запомненные ответами), потом
@@ -277,14 +287,15 @@ class MoneyEngine(
     // ---- Пуши ----
 
     /**
-     * Уведомление от Т-Банка или из чата «Плати по миру» (служба
+     * Уведомление от Т-Банка, Альфы, МКБ или из чата «Плати по миру» (служба
      * `MoneyNotificationListener`). Сырьё ложится всегда (кроме чужих
      * приложений), запись — если разбор узнал операцию. Возвращает, что
      * вышло, словами — для журнала событий.
      */
     suspend fun onPush(pkg: String, title: String, text: String, postedAt: Long): String = withContext(Dispatchers.Default) {
-        when (BankPush.from(pkg, title)) {
+        when (val from = BankPush.from(pkg, title)) {
             BankPush.From.OTHER -> "не банк"
+            BankPush.From.ALFA, BankPush.From.MKB -> onOtherBankPush(from, pkg, title, text, postedAt)
             BankPush.From.TBANK -> {
                 val out = BankPush.parse(title, text)
                 val entry = (out as? BankPush.Outcome.Money)?.let { BankPush.entry(it.p, postedAt, owner(), title, text) }
@@ -316,6 +327,46 @@ class MoneyEngine(
         }
     }
 
+    /**
+     * Пуш или SMS Альфы и МКБ (08.10.2026). Разбор — общий и осторожный
+     * (`BankPush.parseGeneric`): настоящих текстов этих банков у нас ещё нет.
+     * Сырьё ложится ВСЕГДА — и ставшее записью, и нет: оно уезжает в архив, по
+     * нему напишется точный разбор, а шаг переразбора истории выведет записи
+     * заново (железное правило 13). Код и вход — сырьём с закрытыми цифрами.
+     * Та же операция, уже пойманная другим приложением банка (пуш и SMS),
+     * второй записью не становится.
+     */
+    private suspend fun onOtherBankPush(from: BankPush.From, pkg: String, title: String, text: String, postedAt: Long): String {
+        val out = BankPush.parseGeneric(from, title, text)
+        val parsed = (out as? BankPush.Outcome.Money)?.let { BankPush.entry(it.p, postedAt, owner(), title, text, from) }
+        val skip = out as? BankPush.Outcome.Skip
+        var entry: MoneyEntry? = null
+        var result = ""
+        val fresh = pushLock.withLock {
+            val s = store.load()
+            val twin = parsed?.let { e ->
+                val entries = s.entries.associateBy { it.id }
+                val near = s.pushes.filter { it.result == MoneyStore.MONEY && kotlin.math.abs(it.ts - postedAt) <= BankPush.TWIN_MS }
+                    .mapNotNull { p -> entries["push-" + p.key]?.let { p.pkg to it } }
+                BankPush.twin(e, pkg, near)?.let { t -> t to near.first { it.second.id == t.id }.first }
+            }
+            entry = parsed.takeIf { twin == null }
+            result = when {
+                twin != null -> "повтор: та же операция уже поймана из ${twin.second}"
+                entry != null -> MoneyStore.MONEY
+                else -> skip?.why.orEmpty()
+            }
+            val keep = if (skip?.secret == true) BankPush.mask(text) else text
+            store.addPush(MoneyStore.Push(BankPush.key(title, text), postedAt, pkg, title, keep, result), entry)
+        }
+        if (!fresh) return "уже был"
+        entry?.let { e ->
+            reconcile()
+            eventLog.add("деньги: пуш ${if (from == BankPush.From.ALFA) "Альфы" else "МКБ"} — ${e.what} ${MoneyFormat.rub(e.rubKop, sign = true)}")
+        }
+        return result
+    }
+
     // ---- Баланс ----
 
     /**
@@ -325,8 +376,10 @@ class MoneyEngine(
     fun anchors(): List<MoneyCashflow.Anchor> {
         val s = store.stateFlow.value
         val cards = MoneyCashflow.cardMap(s.entries)
+        // «Доступно» — только у пушей Т-Банка: приложение пуша передаётся, и
+        // похожий текст Альфы или МКБ якорем не станет.
         val fromPushes = s.pushes.filter { it.result == MoneyStore.MONEY }.mapNotNull { p ->
-            MoneyCashflow.pushAnchor(p.title, p.text, p.ts, p.key, cards)
+            MoneyCashflow.pushAnchor(p.title, p.text, p.ts, p.key, cards, pkg = p.pkg)
         }
         return factoryBalances() + s.balances + fromPushes
     }
@@ -389,7 +442,8 @@ class MoneyEngine(
     suspend fun reconcile(): MoneyMatch.Result {
         var result: MoneyMatch.Result? = null
         withContext(Dispatchers.Default) {
-            store.transform { st -> MoneyMatch.run(st.entries, st.rules + factory(), System.currentTimeMillis()).also { result = it }.entries }
+            val fill = fillOnly()
+            store.transform { st -> MoneyMatch.run(st.entries, st.rules + factory(), System.currentTimeMillis(), fillOnly = fill).also { result = it }.entries }
         }
         return result ?: MoneyMatch.Result(store.stateFlow.value.entries, 0, 0, 0, 0)
     }

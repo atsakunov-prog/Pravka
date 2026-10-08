@@ -15,6 +15,10 @@ package ru.zf.pravka.core
 //  - запись никогда не удаляется: пуш, который новый разбор не узнал,
 //    остаётся как был.
 //
+// Сырьё Альфы и МКБ (с 08.10.2026) — тем же проходом, разбором своего банка
+// (`BankPush.parseFrom`): напишется точный разбор — шаг переразбора истории
+// выведет их записи заново. Повтор «пуш приложения + SMS» записью не становится.
+//
 // Файл без Android: проверяется JVM-тестом на настоящем пуше владельца.
 object MoneyReparse {
 
@@ -23,7 +27,7 @@ object MoneyReparse {
 
     data class Out(
         val entries: List<MoneyEntry>,
-        /** Сколько сырых пушей Т-Банка просмотрено. */
+        /** Сколько сырых пушей банков (Т-Банк, Альфа, МКБ) просмотрено. */
         val looked: Int,
         /** Сколько записей поправлено. */
         val changed: Int,
@@ -40,22 +44,33 @@ object MoneyReparse {
         var changed = 0
         var added = 0
         val nowMoney = HashSet<String>()
+        // Приложение каждой записи пуша — для повторов «пуш + SMS» Альфы и МКБ (`BankPush.twin`).
+        val pkgOf = raw.associate { "push-" + BankPush.key(it.title, it.text) to it.pkg }
         for (r in raw) {
-            if (BankPush.from(r.pkg, r.title) != BankPush.From.TBANK) continue
+            val from = BankPush.from(r.pkg, r.title)
+            if (from != BankPush.From.TBANK && from != BankPush.From.ALFA && from != BankPush.From.MKB) continue
             looked++
-            val parsed = (BankPush.parse(r.title, r.text) as? BankPush.Outcome.Money)?.p ?: continue
+            val parsed = (BankPush.parseFrom(from, r.title, r.text) as? BankPush.Outcome.Money)?.p ?: continue
             val key = BankPush.key(r.title, r.text)
             val id = "push-$key"
             val at = index[id]
             if (at == null) {
-                out.add(BankPush.entry(parsed, r.ts, owner, r.title, r.text))
+                val fresh = BankPush.entry(parsed, r.ts, owner, r.title, r.text, from)
+                // Та же операция уже есть из другого приложения банка — повтор, не запись.
+                if (from != BankPush.From.TBANK) {
+                    val near = out.filter {
+                        it.source == MoneyEntry.Source.PUSH && kotlin.math.abs(it.ts - r.ts) <= BankPush.TWIN_MS
+                    }.mapNotNull { e -> pkgOf[e.id]?.let { it to e } }
+                    if (BankPush.twin(fresh, r.pkg, near) != null) continue
+                }
+                out.add(fresh)
                 index[id] = out.lastIndex
                 added++
                 nowMoney.add(key)
                 continue
             }
             val old = out[at]
-            val fresh = BankPush.entry(parsed, r.ts, old.owner, r.title, r.text)
+            val fresh = BankPush.entry(parsed, r.ts, old.owner, r.title, r.text, from)
             val same = old.what == fresh.what && old.note == fresh.note &&
                 old.account == fresh.account && old.rubKop == fresh.rubKop
             if (same) continue

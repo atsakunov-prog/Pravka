@@ -229,9 +229,10 @@ object MoneyCashflow {
      */
     fun accountOf(e: MoneyEntry, cardToAccount: Map<String, String>): String? = when (e.source) {
         MoneyEntry.Source.TINKOFF -> "Т-Банк · " + stripCard(e.account).ifBlank { "счёт" }
-        MoneyEntry.Source.PUSH -> pushAccount(e.account, cardToAccount) ?: TBANK_UNNAMED
+        MoneyEntry.Source.PUSH -> pushAccount(e.account, cardToAccount)
+            ?: if (BankPush.fromAccount(e.account) == BankPush.From.ALFA) ALFA_UNNAMED else TBANK_UNNAMED
         MoneyEntry.Source.ALFA -> "Альфа · " + stripCard(e.account).ifBlank { "счёт" }
-        MoneyEntry.Source.MKB -> "МКБ"
+        MoneyEntry.Source.MKB -> MKB_NAME
         MoneyEntry.Source.TBIZ -> TBIZ_NAME
         // Записи со слов владельца на именованный счёт (касса ЗФ) — этот счёт.
         MoneyEntry.Source.MANUAL -> e.account.takeIf { it.isNotBlank() && it != MoneyEntry.CASH && it != NATASHA_DEBT }
@@ -251,14 +252,26 @@ object MoneyCashflow {
     /** Пуш, чей счёт не узнан: карты нет в выписках и сам он счёт не назвал. */
     const val TBANK_UNNAMED = "Т-Банк · счёт"
 
+    /** Пуш Альфы, чья карта не узнана по строкам выписки Альфы (или без карты). Имя — как у строк Альфы без счёта. */
+    const val ALFA_UNNAMED = "Альфа · счёт"
+
+    /** МКБ — один счёт: так его зовут строки выписки МКБ. */
+    const val MKB_NAME = "МКБ"
+
     /**
-     * Счёт баланса пуша Т-Банка по счёту его записи: карта — по строкам
-     * выписки, без карты — по слову пуша («счет RUB», «накоп. счет»). Не
-     * узнан — null: якорь такому пушу не ставится, запись встаёт на
-     * [TBANK_UNNAMED].
+     * Счёт баланса пуша по счёту его записи. Т-Банк: карта — по строкам
+     * выписки, без карты — по слову пуша («счет RUB», «накоп. счет»). Альфа
+     * (08.10.2026): карта — по строкам выписки Альфы с этой картой. МКБ — его
+     * единственный счёт. Не узнан — null: якорь такому пушу не ставится,
+     * запись встаёт на [TBANK_UNNAMED] или [ALFA_UNNAMED].
      */
     fun pushAccount(account: String, cardToAccount: Map<String, String>): String? {
         val card = BankPush.cardOf(account)
+        when (BankPush.fromAccount(account)) {
+            BankPush.From.ALFA -> return card.takeIf { it.isNotEmpty() }?.let { cardToAccount[alfaCard(it)] }
+            BankPush.From.MKB -> return MKB_NAME
+            else -> {}
+        }
         if (card.isNotEmpty()) return cardToAccount[card]
         return when (BankPush.acctOf(account)) {
             BankPush.Acct.RUB -> TBANK_MAIN
@@ -268,13 +281,23 @@ object MoneyCashflow {
     }
 
     /**
+     * Ключ карты Альфы в [cardMap]: свой, чтобы карта Альфы и карта Т-Банка с
+     * теми же четырьмя цифрами не вели пуш одного банка на счёт другого.
+     */
+    private fun alfaCard(card: String) = "Альфа *$card"
+
+    /**
      * Якорь из пуша Т-Банка: «Доступно …» — остаток счёта его записи после
      * операции. Счёт не узнан — якоря нет (не гадаем). Только на счёт-актив:
      * у кредитки «Доступно» — свободный лимит, а не остаток, и пуш «Перевод …
      * *5018. Доступно 0 ₽» (04.10.2026) обнулял долг по ней. Долговой счёт
      * двигают только снимок и вписанное владельцем (так и на сервере).
+     * Только Т-Банк: остаток в пуше Альфы и МКБ разбором не читается, а
+     * разбор Т-Банка мог бы принять похожий текст другого банка за свой
+     * ([pkg] — приложение пуша; пусто — старый вызов, как раньше).
      */
-    fun pushAnchor(title: String, text: String, ts: Long, key: String, cardToAccount: Map<String, String>): Anchor? {
+    fun pushAnchor(title: String, text: String, ts: Long, key: String, cardToAccount: Map<String, String>, pkg: String = ""): Anchor? {
+        if (pkg.isNotEmpty() && BankPush.from(pkg, title) != BankPush.From.TBANK) return null
         val parsed = (BankPush.parse(title, text) as? BankPush.Outcome.Money)?.p ?: return null
         val bal = parsed.balanceKop ?: return null
         val entry = BankPush.entry(parsed, ts, "", title, text)
@@ -371,20 +394,29 @@ object MoneyCashflow {
     @Volatile private var cardsMemo: Memo<Map<String, String>>? = null
     @Volatile private var movesMemo: Memo<Map<String, List<MoneyEntry>>>? = null
 
-    /** Карта Т-Банка → счёт, по строкам выписки: «1519» → «Т-Банк · Black Premium». */
+    /**
+     * Карта → счёт, по строкам выписки: «1519» → «Т-Банк · Black Premium»;
+     * карта Альфы — своим ключом ([alfaCard]): «Альфа *8625» → «Альфа · MC World PP».
+     */
     fun cardMap(entries: List<MoneyEntry>): Map<String, String> {
         cardsMemo?.takeIf { it.of === entries }?.let { return it.value }
         return computeCardMap(entries).also { cardsMemo = Memo(entries, it) }
     }
 
     private fun computeCardMap(entries: List<MoneyEntry>): Map<String, String> =
-        entries.filter { it.source == MoneyEntry.Source.TINKOFF || it.source == MoneyEntry.Source.TBIZ }
-            .mapNotNull { e ->
-                BankPush.cardOf(e.account).takeIf { it.isNotEmpty() }?.let {
-                    it to if (e.source == MoneyEntry.Source.TBIZ) TBIZ_NAME else "Т-Банк · " + stripCard(e.account)
-                }
+        entries.mapNotNull { e ->
+            val card = BankPush.cardOf(e.account).takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            when (e.source) {
+                MoneyEntry.Source.TBIZ -> card to TBIZ_NAME
+                MoneyEntry.Source.TINKOFF -> card to "Т-Банк · " + stripCard(e.account)
+                // Тот же счёт, что у строк Альфы в балансе (`accountOf`).
+                MoneyEntry.Source.ALFA -> alfaCard(card) to "Альфа · " + stripCard(e.account).ifBlank { "счёт" }
+                else -> null
             }
-            .toMap()
+        }.toMap()
+
+    /** Хвост карты из ключа [cardMap]: «Альфа *8625» → «8625», «1519» — как есть. */
+    private fun cardTail(key: String) = BankPush.cardOf(key).ifEmpty { key }
 
     /** Расчётный счёт ЗФ в Т-Бизнесе — в балансе, «Счетах» и списке счетов ЗФ. */
     const val TBIZ_NAME = "Т-Бизнес · ЗФ"
@@ -533,7 +565,7 @@ object MoneyCashflow {
                 side = if (name in zfAccounts || name == LOAN_ASSET || name == NATASHA_DEBT) "zf" else "personal",
                 kind = if (isDebtAccount(name)) "debt" else "asset",
                 currency = "RUB",
-                cards = cards.filterValues { it == name }.keys.sorted(),
+                cards = cards.filterValues { it == name }.keys.map(::cardTail).sorted(),
                 owner = owner?.ifBlank { null } ?: defaultOwner,
             )
         }

@@ -904,10 +904,26 @@ private fun PushSettings(app: PravkaApp) {
         title = "Ловить пуши банка",
         checked = on,
         onCheckedChange = { v -> app.appScope.launch { app.settings.setMPush(v) } },
-        hint = "Т-Банк и «Плати по миру» в Телеграме",
-        info = "Трата ложится в журнал сразу, как пришёл пуш, а выписка потом её заменяет.",
+        hint = "Т-Банк, Альфа, МКБ (и их SMS), «Плати по миру» в Телеграме",
+        info = "Трата ложится в журнал сразу, как пришёл пуш, а выписка своего банка потом её заменяет. " +
+            "Альфу и МКБ Правка пока читает осторожно: сомнительный пуш записью не становится, но его " +
+            "текст сохраняется — по нему потом научится их точному виду.",
     )
     if (!on) return
+    // Т-Банк на этом телефоне (08.10.2026). С завода — только у владельца: карта
+    // Марианны на счёте Саши, её пуши ловит его телефон, и второй пуш той же
+    // операции не склеился бы с выпиской — трата посчиталась бы дважды.
+    val tbankSet by app.settings.mPushTbankFlow.collectAsState(initial = null)
+    val ownerPhone = app.profileStore.owner
+    ru.zf.pravka.ui.PaperToggle(
+        title = "Пуши Т-Банка",
+        checked = ru.zf.pravka.core.BankPush.catchTbank(tbankSet, ownerPhone),
+        onCheckedChange = { v -> app.appScope.launch { app.settings.setMPushTbank(v) } },
+        hint = if (ownerPhone) "свой счёт Т-Банка на этом телефоне" else "обычно их ловит телефон Саши: карта на его счёте",
+        info = "Пуш Т-Банка заменяет строка выписки того же хозяина. Выписку Т-Банка грузит Саша, и карта " +
+            "Марианны — на его счёте: пуш, пойманный на её телефоне, лёг бы второй записью и с выпиской не " +
+            "склеился бы. Выключено — пуши Т-Банка здесь не читаются и не хранятся.",
+    )
     Spacer(Modifier.height(6.dp))
     if (!granted) {
         PaperHint(
@@ -929,7 +945,7 @@ private fun PushSettings(app: PravkaApp) {
     val money = pushes.count { it.result == ru.zf.pravka.data.MoneyStore.MONEY }
     val replaced = state.entries.count { it.source == MoneyEntry.Source.PUSH && it.replacedBy.isNotEmpty() }
     PaperHint(
-        if (pushes.isEmpty()) "Доступ есть. Пока ничего не поймано — первый пуш Т-Банка появится здесь."
+        if (pushes.isEmpty()) "Доступ есть. Пока ничего не поймано — первый пуш банка появится здесь."
         else "Поймано ${pushes.size}, из них операций $money; выпиской уже заменено $replaced."
     )
     // Тап по пойманному — его сырьё целиком (25.09.2026: «пополнение ничего

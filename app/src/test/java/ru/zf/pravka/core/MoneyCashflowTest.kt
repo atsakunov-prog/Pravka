@@ -263,6 +263,34 @@ class MoneyCashflowTest {
         assertEquals(MoneyCashflow.TBANK_MAIN, MoneyCashflow.places(listOf(rub))[rub.id]!!.account)
     }
 
+    // Пуш Альфы и МКБ (08.10.2026) — на счёт своего банка, не на «Т-Банк · счёт».
+    @Test fun alfaAndMkbPushesLandOnTheirBanksAccounts() {
+        fun push(id: String, acc: String) = MoneyEntry(id = id, owner = "marianna", source = MoneyEntry.Source.PUSH, ts = at("2026-10-05"), rubKop = -100, what = id, account = acc)
+        val alfaCard = e("a1", "2026-10-01", -1, "", acc = "MC World PP *8625", src = MoneyEntry.Source.ALFA).copy(owner = "marianna")
+        val alfaAcc = e("a2", "2026-10-01", -1, "", acc = "Текущий зарплатный счёт", src = MoneyEntry.Source.ALFA).copy(owner = "marianna")
+        // Карта Т-Банка с теми же четырьмя цифрами — у каждого банка своя.
+        val tbank = e("t1", "2026-10-01", -1, "", acc = "Black Premium *8625")
+        val list = listOf(alfaCard, alfaAcc, tbank)
+        val cards = MoneyCashflow.cardMap(list)
+        assertEquals("Альфа · MC World PP", MoneyCashflow.accountOf(push("p1", "Альфа-Банк *8625"), cards))
+        assertEquals("Т-Банк · Black Premium", MoneyCashflow.accountOf(push("p2", "Т-Банк *8625"), cards))
+        // Карта не узнана или её нет — безымянный счёт Альфы.
+        assertEquals(MoneyCashflow.ALFA_UNNAMED, MoneyCashflow.accountOf(push("p3", "Альфа-Банк *1111"), cards))
+        assertEquals(MoneyCashflow.ALFA_UNNAMED, MoneyCashflow.accountOf(push("p4", "Альфа-Банк"), cards))
+        // МКБ — один счёт, как у его выписки.
+        assertEquals("МКБ", MoneyCashflow.accountOf(push("p5", "МКБ *4321"), cards))
+        assertEquals("МКБ", MoneyCashflow.accountOf(push("p6", "МКБ"), cards))
+        // В реестре у счёта Альфы — его карта, без служебной приставки.
+        val reg = MoneyCashflow.registry(list, emptyList(), emptySet(), "sasha").associateBy { it.name }
+        assertEquals(listOf("8625"), reg["Альфа · MC World PP"]!!.cards)
+        assertEquals(listOf("8625"), reg["Т-Банк · Black Premium"]!!.cards)
+        // «Доступно» — якорь только из пуша Т-Банка.
+        val text = "Покупка на 100 ₽, счет карты *8625\nДоступно 5 000 ₽"
+        val key = BankPush.key("Лавка", text)
+        assertEquals("Т-Банк · Black Premium", MoneyCashflow.pushAnchor("Лавка", text, at("2026-10-05"), key, cards, pkg = "com.idamob.tinkoff.android")!!.account)
+        assertNull(MoneyCashflow.pushAnchor("Лавка", text, at("2026-10-05"), key, cards, pkg = "ru.alfabank.mobile.android"))
+    }
+
     // «Доступно» у кредитки — свободный лимит, а не остаток (пуш 04.10.2026 обнулял долг по ней).
     @Test fun pushAnchorOnlyOnAssetAccounts() {
         val cards = mapOf("7777" to "Т-Банк · Платинум", "1519" to "Т-Банк · Black Premium")

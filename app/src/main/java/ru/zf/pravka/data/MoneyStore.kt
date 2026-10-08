@@ -179,9 +179,13 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
         val s = _state.value
         if (s.pushes.any { it.key == push.key }) return@withLock false
         // Незнакомые и не денежные храним последние 300 — чтобы было на чём
-        // научить разбор новому виду; денежные — все, это сырьё записей.
-        val skipped = s.pushes.filter { it.result != MONEY }
-        val trimmed = if (push.result != MONEY && skipped.size >= 300) s.pushes - skipped.first() else s.pushes
+        // научить разбор новому виду; денежные — все, это сырьё записей. Сырьё
+        // Альфы и МКБ с суммой в рублях — тоже всё (08.10.2026): разбор у них
+        // пока общий, и операции, которые он пропустил, выведет из этого сырья
+        // точный разбор шагом переразбора истории.
+        fun disposable(p: Push) = p.result != MONEY && !ru.zf.pravka.core.BankPush.keepRaw(p.pkg, p.title, p.text)
+        val skipped = s.pushes.filter(::disposable)
+        val trimmed = if (disposable(push) && skipped.size >= 300) s.pushes - skipped.first() else s.pushes
         val entries = if (entry != null && s.entries.none { it.id == entry.id }) s.entries + entry else s.entries
         write(s.copy(pushes = trimmed + push, entries = entries))
         true

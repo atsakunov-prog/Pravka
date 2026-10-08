@@ -160,6 +160,103 @@ class MoneyMatchTest {
         assertEquals("", r.entries.first { it.id == "v2" }.question)
     }
 
+    // ---- Пуши Альфы и МКБ ↔ их выписки (08.10.2026) ----
+
+    private fun msk(d: String, h: Int, m: Int = 0) =
+        java.time.LocalDate.parse(d).atTime(h, m).atZone(BankStatements.MSK).toInstant().toEpochMilli()
+
+    private fun herPush(id: String, rub: Long, ts: Long, account: String) = MoneyEntry(
+        id = id, owner = "marianna", source = MoneyEntry.Source.PUSH, ts = ts, rubKop = rub, what = "MAGNIT", account = account,
+    )
+
+    /** Строка Альфы — как её кладёт `BankStatements.alfa`: только день, полдень по Москве. */
+    private fun alfaRow(id: String, rub: Long, d: String, account: String = "MC World PP *8625") = MoneyEntry(
+        id = id, owner = "marianna", source = MoneyEntry.Source.ALFA, ts = msk(d, 12), timeKnown = false, rubKop = rub,
+        what = "MAGNIT", account = account,
+    )
+
+    private fun mkbRow(id: String, rub: Long, ts: Long) = MoneyEntry(
+        id = id, owner = "marianna", source = MoneyEntry.Source.MKB, ts = ts, rubKop = rub, what = "MAGNIT", account = "МКБ",
+    )
+
+    @Test fun alfaPushIsReplacedByAlfaRowByLocalDate() {
+        // Пуш поздно вечером, строка Альфы — днём проведения через два дня.
+        val p = herPush("p1", -150_000, msk("2026-10-03", 23, 40), "Альфа-Банк *8625")
+        val r = MoneyMatch.run(listOf(p, alfaRow("a1", -150_000, "2026-10-05")), emptyList(), msk("2026-10-10", 12))
+        assertEquals(1, r.pushLinked)
+        assertEquals("a1", r.entries.first { it.id == "p1" }.replacedBy)
+        assertEquals(1, r.entries.count { it.live() })
+        // Днём раньше пуша — ещё пара (выписка ставит день по своей зоне), через четыре дня — уже нет.
+        assertEquals("a0", MoneyMatch.run(listOf(p, alfaRow("a0", -150_000, "2026-10-02")), emptyList(), 0).entries.first { it.id == "p1" }.replacedBy)
+        assertEquals("", MoneyMatch.run(listOf(p, alfaRow("a4", -150_000, "2026-10-07")), emptyList(), 0).entries.first { it.id == "p1" }.replacedBy)
+        // Другая карта, другой хозяин, другая сумма до копейки — не пара.
+        assertEquals(0, MoneyMatch.run(listOf(p, alfaRow("a1", -150_000, "2026-10-04", "MC World PP *1111")), emptyList(), 0).pushLinked)
+        assertEquals(0, MoneyMatch.run(listOf(p, alfaRow("a1", -150_000, "2026-10-04").copy(owner = "sasha")), emptyList(), 0).pushLinked)
+        assertEquals(0, MoneyMatch.run(listOf(p, alfaRow("a1", -150_001, "2026-10-04")), emptyList(), 0).pushLinked)
+        // Строка счёта без карты (СБП со счёта) карте пуша не противоречит.
+        assertEquals(1, MoneyMatch.run(listOf(p, alfaRow("a1", -150_000, "2026-10-04", "Текущий зарплатный счёт")), emptyList(), 0).pushLinked)
+    }
+
+    @Test fun pushPairsOnlyWithItsOwnBanksStatement() {
+        val t = msk("2026-10-03", 15)
+        val tbankRow = bank("t1", "MAGNIT", -150_000, t + 60_000, owner = "marianna").copy(account = "Black Premium *8625")
+        // Пуш Альфы не берёт строку Тинькова, пуш Т-Банка — строку Альфы и МКБ.
+        assertEquals(0, MoneyMatch.run(listOf(herPush("p1", -150_000, t, "Альфа-Банк *8625"), tbankRow), emptyList(), 0).pushLinked)
+        assertEquals(0, MoneyMatch.run(listOf(herPush("p1", -150_000, t, "Т-Банк *8625"), alfaRow("a1", -150_000, "2026-10-03")), emptyList(), 0).pushLinked)
+        assertEquals(0, MoneyMatch.run(listOf(herPush("p1", -150_000, t, "Т-Банк"), mkbRow("m1", -150_000, t + 60_000)), emptyList(), 0).pushLinked)
+        assertEquals(1, MoneyMatch.run(listOf(herPush("p1", -150_000, t, "Т-Банк *8625"), tbankRow), emptyList(), 0).pushLinked)
+    }
+
+    @Test fun mkbPushIsReplacedByNearestMkbRowOnce() {
+        val t = msk("2026-10-03", 15)
+        val entries = listOf(
+            herPush("p1", -50_000, t, "МКБ *4321"),
+            herPush("p2", -50_000, t + 3_600_000, "МКБ"),
+            mkbRow("m1", -50_000, t + 3_660_000),
+            mkbRow("m2", -50_000, t + 120_000),
+            // Двое суток спустя — уже не пара.
+            mkbRow("m3", -50_000, t + 2 * day),
+        )
+        val r = MoneyMatch.run(entries, emptyList(), t + 10 * day)
+        val byId = r.entries.associateBy { it.id }
+        assertEquals(2, r.pushLinked)
+        assertEquals("m2", byId["p1"]!!.replacedBy)
+        assertEquals("m1", byId["p2"]!!.replacedBy)
+        assertEquals(3, r.entries.count { it.live() })
+    }
+
+    @Test fun orphanQuestionIsTbankOnly() {
+        // Пуш Альфы без пары в пришедшей выписке Альфы — «отменили?» не спрашивается.
+        val lost = herPush("p1", -25_000, msk("2026-10-03", 15), "Альфа-Банк *8625")
+        val r = MoneyMatch.run(
+            listOf(lost, alfaRow("a1", -10_000, "2026-10-01"), alfaRow("a2", -20_000, "2026-10-09")),
+            emptyList(), msk("2026-10-12", 12),
+        )
+        assertTrue(r.entries.first { it.id == "p1" }.question != MoneyMatch.ORPHAN_PUSH)
+    }
+
+    // ---- Справочник на чужом телефоне общих Денег: только заполняет ----
+
+    @Test fun fillOnlyRulesNeverReplaceAnExistingCategory() {
+        val rules = MoneyRules.parseText("ВкусВилл = Кафе и рестораны").rules
+        val set = bank("b1", "ВкусВилл", -1_000_00, t0).copy(category = "groceries", categoryBy = MoneyEntry.CategoryBy.RULE)
+        val blank = bank("b2", "ВкусВилл", -2_000_00, t0)
+        val model = bank("b3", "ВкусВилл", -3_000_00, t0).copy(category = "gifts", categoryBy = MoneyEntry.CategoryBy.MODEL)
+        // Телефон владельца: его справочник переписывает категорию правила.
+        val own = MoneyMatch.run(listOf(set, blank, model), rules, t0).entries.associateBy { it.id }
+        assertEquals("cafe", own["b1"]!!.category)
+        assertEquals("cafe", own["b2"]!!.category)
+        // Чужой телефон: пустую заполняет, поставленную — не трогает.
+        val r = MoneyMatch.run(listOf(set, blank, model), rules, t0, fillOnly = true)
+        val byId = r.entries.associateBy { it.id }
+        assertEquals("groceries", byId["b1"]!!.category)
+        assertEquals(MoneyEntry.CategoryBy.RULE, byId["b1"]!!.categoryBy)
+        assertEquals("cafe", byId["b2"]!!.category)
+        assertEquals(MoneyEntry.CategoryBy.RULE, byId["b2"]!!.categoryBy)
+        assertEquals("gifts", byId["b3"]!!.category)
+        assertEquals(1, r.classified)
+    }
+
     @Test fun zfToggle() {
         val rules = MoneyRules.parseText("Партнёр П. = ЗФ: расходы").rules
         val entries = listOf(

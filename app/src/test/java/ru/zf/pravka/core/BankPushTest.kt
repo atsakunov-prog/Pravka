@@ -136,6 +136,171 @@ class BankPushTest {
         assertEquals(BankPush.From.OTHER, BankPush.from("com.google.android.calendar", "Плати по миру"))
     }
 
+    // ---- Альфа и МКБ (08.10.2026): общий осторожный разбор ----
+    //
+    // Настоящих пушей Альфы и МКБ в репозитории ещё нет. Все тексты ниже —
+    // ФОРМА ПРЕДПОЛАГАЕМАЯ, НЕ С НАСТОЯЩЕГО ПУША: проверяют правила разбора
+    // (действие → сумма в рублях, отсев кодов, отказов, остатков и валюты), а
+    // не формат банка. Точный разбор напишется по сырью из архива
+    // (`money.push`), и шаг переразбора истории выведет записи заново.
+
+    private fun generic(from: BankPush.From, title: String, text: String): BankPush.Parsed {
+        val out = BankPush.parseGeneric(from, title, text)
+        assertTrue("ждал операцию, вышло $out", out is BankPush.Outcome.Money)
+        return (out as BankPush.Outcome.Money).p
+    }
+
+    private fun skipped(from: BankPush.From, title: String, text: String): BankPush.Outcome.Skip {
+        val out = BankPush.parseGeneric(from, title, text)
+        assertTrue("ждал отсев, вышло $out", out is BankPush.Outcome.Skip)
+        return out as BankPush.Outcome.Skip
+    }
+
+    @Test fun alfaAndMkbSourcesByPackageAndSmsSender() {
+        assertEquals(BankPush.From.ALFA, BankPush.from("ru.alfabank.mobile.android", "Покупка"))
+        assertEquals(BankPush.From.MKB, BankPush.from("ru.mkb.mobile", "МКБ"))
+        // SMS: заголовок уведомления — отправитель.
+        assertEquals(BankPush.From.ALFA, BankPush.from("com.google.android.apps.messaging", "Alfa-Bank"))
+        assertEquals(BankPush.From.ALFA, BankPush.from("com.google.android.apps.messaging", "AlfaBank"))
+        assertEquals(BankPush.From.ALFA, BankPush.from("com.samsung.android.messaging", "Альфа-Банк"))
+        assertEquals(BankPush.From.MKB, BankPush.from("com.google.android.apps.messaging", "MKB"))
+        assertEquals(BankPush.From.MKB, BankPush.from("com.android.mms", "Московский кредитный банк"))
+        assertEquals(BankPush.From.OTHER, BankPush.from("com.google.android.apps.messaging", "Мама"))
+        // Пакет решает первым: пуш Т-Банка о переводе в МКБ — Т-Банк.
+        assertEquals(BankPush.From.TBANK, BankPush.from("com.idamob.tinkoff.android", "МКБ (Московский Кредитный Банк)"))
+        // «МКБ» в заголовке не SMS-приложения — не банк.
+        assertEquals(BankPush.From.OTHER, BankPush.from("org.telegram.messenger", "МКБ"))
+        assertEquals(BankPush.From.OTHER, BankPush.from("com.whatsapp", "Alfa-Bank"))
+    }
+
+    @Test fun alfaPurchaseWithDottedCard() {
+        // Форма предполагаемая, не с настоящего пуша.
+        val text = "Покупка 1 299,90 ₽ в ВкусВилл. Карта ··8625. Баланс: 12 345,67 ₽"
+        val p = generic(BankPush.From.ALFA, "Альфа-Банк", text)
+        assertEquals(-129_990L, p.rubKop)
+        assertEquals("ВкусВилл", p.what)
+        assertEquals("8625", p.card)
+        val e = BankPush.entry(p, ts = 1L, owner = "marianna", title = "Альфа-Банк", text = text, from = BankPush.From.ALFA)
+        assertEquals("Альфа-Банк *8625", e.account)
+        assertEquals("push-" + BankPush.key("Альфа-Банк", text), e.id)
+        assertEquals(MoneyEntry.Source.PUSH, e.source)
+        assertEquals("marianna", e.owner)
+        assertEquals(BankPush.From.ALFA, BankPush.fromAccount(e.account))
+    }
+
+    @Test fun alfaSmsWithNbspAbbreviatedRublesAndMerchantInNextSentence() {
+        // Форма предполагаемая, не с настоящего пуша: неразрывные пробелы, «р.», магазин — следующим предложением.
+        val p = generic(BankPush.From.ALFA, "Alfa-Bank", "Списание 1\u00A0500р. с карты *8625. Яндекс Такси. Остаток 10\u00A0000р.")
+        assertEquals(-150_000L, p.rubKop)
+        assertEquals("Яндекс Такси", p.what)
+        assertEquals("8625", p.card)
+    }
+
+    @Test fun titleIsVerbOrMerchant() {
+        // Форма предполагаемая, не с настоящего пуша: действие — заголовком.
+        val a = generic(BankPush.From.ALFA, "Покупка", "1 500 ₽ в MAGNIT, карта ··8625")
+        assertEquals(-150_000L, a.rubKop)
+        assertEquals("MAGNIT", a.what)
+        // Магазин — заголовком, в тексте только действие и карта.
+        val b = generic(BankPush.From.ALFA, "Пятёрочка", "Покупка 350 ₽ ··8625")
+        assertEquals("Пятёрочка", b.what)
+        assertEquals("8625", b.card)
+        // Ни магазина, ни заголовка, кроме банка, — «что» словом действия, СБП — в заметке.
+        val c = generic(BankPush.From.MKB, "МКБ", "Оплата СБП 2 500,00 RUB. Доступно 3 000,00 RUB")
+        assertEquals(-250_000L, c.rubKop)
+        assertEquals("Оплата СБП", c.what)
+        assertTrue(c.note, c.note.contains("СБП"))
+    }
+
+    @Test fun mkbIncomeFromPerson() {
+        // Форма предполагаемая, не с настоящего пуша.
+        val text = "Поступление 15 000,00 RUB на карту *4321 от Иван И. Доступно 20 000,00 RUB"
+        val p = generic(BankPush.From.MKB, "MKB", text)
+        assertEquals(1_500_000L, p.rubKop)
+        assertEquals("Иван И.", p.what)
+        // «на карту» у поступления — своя карта.
+        assertEquals("4321", p.card)
+        val e = BankPush.entry(p, ts = 1L, owner = "marianna", title = "MKB", text = text, from = BankPush.From.MKB)
+        assertEquals("МКБ *4321", e.account)
+        assertEquals(BankPush.From.MKB, BankPush.fromAccount(e.account))
+        assertEquals("МКБ", BankPush.entry(p.copy(card = ""), 1L, "marianna", "MKB", text, BankPush.From.MKB).account)
+    }
+
+    @Test fun transfersAreDirectedOrSkipped() {
+        // Формы предполагаемые, не с настоящих пушей.
+        // Исходящий: карта получателя («на карту ··1111») — не своя карта.
+        val out = generic(BankPush.From.ALFA, "Альфа-Банк", "Перевод 5 000 ₽ на карту ··1111 Иван И. Баланс 100 ₽")
+        assertEquals(-500_000L, out.rubKop)
+        assertEquals("", out.card)
+        assertEquals("Иван И.", out.what)
+        // Входящий — названный прямо.
+        val inc = generic(BankPush.From.ALFA, "Альфа-Банк", "Входящий перевод 3 000 ₽ от Иван И.")
+        assertEquals(300_000L, inc.rubKop)
+        assertEquals("Иван И.", inc.what)
+        // «Перевод … от» и «перевод … зачислен» — ушло или пришло, не ясно: записи нет.
+        skipped(BankPush.From.ALFA, "Альфа-Банк", "Перевод 5 000 ₽ от Иван И.")
+        skipped(BankPush.From.ALFA, "Альфа-Банк", "Перевод 5 000 ₽ зачислен на карту ··8625")
+        // Пополнение телефона — трата, а не доход: не гадаем.
+        skipped(BankPush.From.MKB, "МКБ", "Пополнение телефона 500 ₽")
+    }
+
+    @Test fun genericSkipsCodesDeclinesBalancesForeignAndAds() {
+        // Формы предполагаемые, не с настоящих пушей.
+        val code = skipped(BankPush.From.ALFA, "Альфа-Банк", "Код для входа в Альфа-Онлайн: 4829. Никому не сообщайте")
+        assertTrue(code.secret)
+        // Код с суммой — всё равно не операция.
+        val code3ds = skipped(BankPush.From.MKB, "MKB", "Код подтверждения покупки на 1 500 ₽ в OZON: 482913")
+        assertTrue(code3ds.secret)
+        assertTrue(!BankPush.mask("Код подтверждения покупки на 1 500 ₽ в OZON: 482913").contains("482913"))
+        skipped(BankPush.From.ALFA, "Альфа-Банк", "Вход в приложение с нового устройства")
+        // Отказ.
+        assertTrue(!skipped(BankPush.From.ALFA, "Альфа-Банк", "Отказ. Покупка 500 ₽ MAGNIT. Недостаточно средств").secret)
+        // Остаток — не сумма операции.
+        skipped(BankPush.From.ALFA, "Альфа-Банк", "Баланс карты ··8625: 12 345 ₽")
+        skipped(BankPush.From.ALFA, "Альфа-Банк", "Покупка в MAGNIT. Баланс 1 000 ₽")
+        skipped(BankPush.From.ALFA, "Альфа-Банк", "Покупка MAGNIT, баланс 1 000 ₽")
+        // Не рубли — рубли скажет выписка.
+        skipped(BankPush.From.ALFA, "Альфа-Банк", "Покупка 25,00 USD в AMAZON. Карта ··8625")
+        skipped(BankPush.From.ALFA, "Альфа-Банк", "Покупка 25 $ (2 400 ₽) AMAZON")
+        // Реклама с суммой.
+        skipped(BankPush.From.ALFA, "Альфа-Банк", "Оплата покупок частями до 50 000 ₽ — оформите в приложении")
+        // «Код авторизации» операции — не код входа: запись есть.
+        assertEquals(-50_000L, generic(BankPush.From.MKB, "МКБ", "Покупка 500 ₽ MAGNIT. Код авторизации: 123456").rubKop)
+        // Номер карты рядом с суммой не склеивается с ней в одно число.
+        assertEquals(-50_000L, generic(BankPush.From.ALFA, "Альфа-Банк", "Покупка ··8625 500 ₽ MAGNIT").rubKop)
+    }
+
+    @Test fun smsTwinOfAppPushIsTheSameOperation() {
+        // Альфа и МКБ шлют и пуш, и SMS об одной покупке: вторая запись — повтор.
+        val app = MoneyEntry(id = "push-a", owner = "marianna", source = MoneyEntry.Source.PUSH, ts = t0, rubKop = -150_000, what = "MAGNIT", account = "Альфа-Банк *8625")
+        val sms = app.copy(id = "push-b", ts = t0 + 40_000, what = "Магнит")
+        val caught = listOf("ru.alfabank.mobile.android" to app)
+        assertEquals(app, BankPush.twin(sms, "com.google.android.apps.messaging", caught))
+        // Из того же приложения — две покупки подряд, не повтор.
+        assertEquals(null, BankPush.twin(sms, "ru.alfabank.mobile.android", caught))
+        // Другая сумма, другая карта, другой банк, далеко по времени — не повтор.
+        assertEquals(null, BankPush.twin(sms.copy(rubKop = -150_001), "com.google.android.apps.messaging", caught))
+        assertEquals(null, BankPush.twin(sms.copy(account = "Альфа-Банк *1111"), "com.google.android.apps.messaging", caught))
+        assertEquals(null, BankPush.twin(sms.copy(account = "МКБ *8625"), "com.google.android.apps.messaging", caught))
+        assertEquals(null, BankPush.twin(sms.copy(ts = t0 + 30 * 60_000), "com.google.android.apps.messaging", caught))
+        // Без карты у одного из двух — карты не спорят.
+        assertEquals(app, BankPush.twin(sms.copy(account = "Альфа-Банк"), "com.google.android.apps.messaging", caught))
+    }
+
+    @Test fun tbankOnThisPhoneByDefaultOnlyOnOwners() {
+        assertTrue(BankPush.catchTbank(setting = null, ownerPhone = true))
+        assertTrue(!BankPush.catchTbank(setting = null, ownerPhone = false))
+        assertTrue(BankPush.catchTbank(setting = true, ownerPhone = false))
+        assertTrue(!BankPush.catchTbank(setting = false, ownerPhone = true))
+    }
+
+    @Test fun rawOfAlfaAndMkbOperationsIsKeptBeyondTheSkippedCap() {
+        assertTrue(BankPush.keepRaw("ru.alfabank.mobile.android", "Альфа-Банк", "Что-то новое на 1 500 ₽"))
+        assertTrue(BankPush.keepRaw("com.google.android.apps.messaging", "MKB", "Оплата 500р."))
+        assertTrue(!BankPush.keepRaw("ru.alfabank.mobile.android", "Альфа-Банк", "Обновите приложение"))
+        assertTrue(!BankPush.keepRaw("com.idamob.tinkoff.android", "Т-Банк", "Кэшбэк 100 ₽"))
+    }
+
     // ---- Чат бота из уведомлений: знак валюты ПЕРЕД числом ----
 
     @Test fun platiNotificationFormat() {

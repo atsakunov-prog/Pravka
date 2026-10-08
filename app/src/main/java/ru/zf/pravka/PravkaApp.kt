@@ -522,7 +522,7 @@ class PravkaApp : Application() {
     val moneyStore by lazy { ru.zf.pravka.data.MoneyStore(this) { eventLog.add(it) } }
     val moneyExport by lazy { ru.zf.pravka.data.MoneyExport(this, moneyStore) }
     val cbrRates by lazy { ru.zf.pravka.data.CbrRates(httpClient) { eventLog.add(it) } }
-    val moneyEngine by lazy {
+    val moneyEngine: ru.zf.pravka.core.MoneyEngine by lazy {
         ru.zf.pravka.core.MoneyEngine(
             claude = claudeProvider,
             dictionary = DictionaryApplier(dictionaryStore),
@@ -558,6 +558,10 @@ class PravkaApp : Application() {
                 }
             },
             keepImport = { bytes -> importArchive.keep(bytes) },
+            // Общие Деньги на чужом телефоне: справочник только заполняет пустые
+            // категории — у телефонов разные справочники, и иначе каждый обмен
+            // переписывал бы категории другого (`MoneyMatch.run`, 08.10.2026).
+            fillOnly = { !profileStore.owner && moneyCloudSync.ready() },
         )
     }
 

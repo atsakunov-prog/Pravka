@@ -83,6 +83,21 @@ class MoneyReparseTest {
         assertTrue(out.nowMoney.contains(BankPush.key("", text)))
     }
 
+    @Test fun alfaRawIsReparsedAndSmsTwinIsNotAdded() {
+        // Форма предполагаемая, не с настоящего пуша (08.10.2026): сырьё Альфы
+        // переразбирается тем же шагом, что Т-Банк, а SMS о той же покупке — повтор.
+        val app = MoneyReparse.Raw(ts = raw.ts, pkg = "ru.alfabank.mobile.android", title = "Альфа-Банк", text = "Покупка 1 500 ₽ в MAGNIT. Карта ··8625")
+        val sms = MoneyReparse.Raw(ts = raw.ts + 30_000, pkg = "com.google.android.apps.messaging", title = "Alfa-Bank", text = "Покупка 1500 р. MAGNIT, карта *8625")
+        val out = MoneyReparse.pushes(emptyList(), listOf(app, sms), "marianna")
+        assertEquals(2, out.looked)
+        assertEquals(1, out.added)
+        val e = out.entries.single()
+        assertEquals("Альфа-Банк *8625", e.account)
+        assertEquals("marianna", e.owner)
+        assertEquals(-150_000L, e.rubKop)
+        assertEquals(setOf(BankPush.key(app.title, app.text)), out.nowMoney)
+    }
+
     @Test fun historyStepsRunOnceAndFailedOnesAgain() {
         val steps = HistoryFixes.STEPS
         assertTrue(steps.isNotEmpty())

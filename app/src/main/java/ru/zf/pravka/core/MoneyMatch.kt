@@ -13,8 +13,9 @@ import kotlin.math.abs
 //     итоги идёт выписка (правда о сумме), голос отдаёт ей категорию и слова;
 //  3. склеивает переводы Саша ↔ Марианна с двух сторон (из 44 переводов в
 //     Альфе 42 нашли пару в Тинькове до рубля — 23.09.2026);
-//  2а. пуш Т-Банка заменяется строкой выписки: та же сумма до копейки, та же
-//     карта, время рядом. Выписка — правда, пуш отдаёт ей решённую категорию;
+//  2а. пуш банка заменяется строкой выписки того же банка (Т-Банк, Альфа,
+//     МКБ): та же сумма до копейки, та же карта, время рядом. Выписка —
+//     правда, пуш отдаёт ей решённую категорию;
 //  4. задаёт вопросы: неразложенные строки — группой по получателю
 //     («Иван П., 17 раз, 102 000 ₽ — кто это?»), надиктованное без пары в
 //     выписке — «не нашёл, это наличные?».
@@ -31,11 +32,22 @@ object MoneyMatch {
         val classified: Int,
     )
 
-    fun run(entries: List<MoneyEntry>, rules: List<MoneyRules.Rule>, now: Long): Result {
+    /**
+     * [fillOnly] — справочник только ЗАПОЛНЯЕТ пустые категории и не меняет
+     * поставленные (общие Деньги на чужом телефоне, 08.10.2026). Справочники у
+     * телефонов разные: заводской слой и правила Свода — только у владельца.
+     * Без этого телефон Марианны раскладывал бы общую запись своим
+     * справочником, телефон Саши — своим, и каждый обмен переписывал бы
+     * категорию другого — вечно, поле за полем. Автоматическая категория —
+     * дело телефона владельца; ответ человека на любом телефоне сильнее
+     * обоих по рангу (`MoneySync`).
+     */
+    fun run(entries: List<MoneyEntry>, rules: List<MoneyRules.Rule>, now: Long, fillOnly: Boolean = false): Result {
         var list = entries
         var classified = 0
         list = list.map { e ->
             if (!e.fromBank || e.categoryBy == MoneyEntry.CategoryBy.OWNER) return@map e
+            if (fillOnly && e.category.isNotBlank()) return@map e
             val hit = MoneyRules.classify(e, rules)
             when {
                 // Справочник владельца сильнее догадки модели; безличное правило — нет.
@@ -68,26 +80,25 @@ object MoneyMatch {
     const val ORPHAN_PUSH = "Пуш был, а в выписке Т-Банка его нет. Операцию отменили?"
 
     /**
-     * Пуш и строка Тинькова — одна операция, если сумма та же ДО КОПЕЙКИ
-     * (пуш пишет копейки, как банк), карта не противоречит и время в
-     * пределах полутора суток (пуш — минута в минуту, но строка выписки
-     * иногда встаёт датой проведения). Из кандидатов — ближайший по времени.
-     * Пуш не удаляется: он остаётся следом, с номером заменившей его строки.
+     * Пуш и строка выписки ЕГО банка — одна операция, если хозяин тот же,
+     * сумма та же ДО КОПЕЙКИ (пуш пишет копейки, как банк), карта не
+     * противоречит и время рядом ([samePlace]). Из кандидатов — ближайший по
+     * времени, строка берётся одна на один пуш. Пуш не удаляется: он
+     * остаётся следом, с номером заменившей его строки.
      */
     fun linkPush(entries: List<MoneyEntry>): Pair<List<MoneyEntry>, Int> {
         val pushes = entries.filter { it.source == MoneyEntry.Source.PUSH && it.replacedBy.isEmpty() && !it.dropped }
         if (pushes.isEmpty()) return entries to 0
         val byId = entries.associateBy { it.id }.toMutableMap()
         val taken = entries.filter { it.source == MoneyEntry.Source.PUSH }.map { it.replacedBy }.filter { it.isNotEmpty() }.toMutableSet()
-        // Т-Бизнес (карта ЗФ *8958) даёт только день ПРОВЕДЕНИЯ — он бывает на
-        // два-три дня позже покупки, поэтому окно шире.
-        val bank = entries.filter { (it.source == MoneyEntry.Source.TINKOFF || it.source == MoneyEntry.Source.TBIZ) && !it.dropped }
+        val bank = entries.filter { it.source in PUSH_STATEMENTS && !it.dropped }
         var linked = 0
         for (p in pushes.sortedBy { it.ts }) {
+            val from = BankPush.fromAccount(p.account)
             val pc = BankPush.cardOf(p.account)
             val hit = bank.asSequence()
                 .filter { it.id !in taken && it.owner == p.owner && it.rubKop == p.rubKop }
-                .filter { b -> if (b.source == MoneyEntry.Source.TBIZ) b.ts - p.ts in -DAY..4 * DAY else abs(b.ts - p.ts) <= DAY + DAY / 2 }
+                .filter { b -> samePlace(from, p, b) }
                 .filter { b -> BankPush.cardOf(b.account).let { bc -> pc.isEmpty() || bc.isEmpty() || bc == pc } }
                 .minByOrNull { abs(it.ts - p.ts) } ?: continue
             taken.add(hit.id)
@@ -109,6 +120,37 @@ object MoneyMatch {
         }
         return entries.map { byId[it.id] ?: it } to linked
     }
+
+    /** Выписки, которые заменяют пуши. */
+    private val PUSH_STATEMENTS = setOf(
+        MoneyEntry.Source.TINKOFF, MoneyEntry.Source.TBIZ, MoneyEntry.Source.ALFA, MoneyEntry.Source.MKB,
+    )
+
+    /**
+     * Банк пуша решает, чья выписка его заменяет, а выписка — окно по
+     * времени:
+     *  - Т-Банк → Тиньков: ±1,5 суток; Т-Бизнес (карта ЗФ *8958) даёт только
+     *    день ПРОВЕДЕНИЯ — он бывает на два-три дня позже покупки, поэтому
+     *    окно шире: от суток до до четырёх после;
+     *  - Альфа → Альфа: у строки только день (полдень по Москве, `BankStatements.alfa`),
+     *    поэтому сравниваются дни: от дня до пуша до трёх после — проведение
+     *    позже покупки, а «днём раньше» — запас на зону дня у банка;
+     *  - МКБ → МКБ: у строки есть время — ±1,5 суток, как у Тинькова.
+     * Чужой банк — не пара никогда: перевод с Т-Банка Марианне и её покупка в
+     * Альфе на ту же сумму — две операции.
+     */
+    private fun samePlace(from: BankPush.From, p: MoneyEntry, b: MoneyEntry): Boolean = when (b.source) {
+        MoneyEntry.Source.TINKOFF -> from == BankPush.From.TBANK && abs(b.ts - p.ts) <= DAY + DAY / 2
+        MoneyEntry.Source.TBIZ -> from == BankPush.From.TBANK && b.ts - p.ts in -DAY..4 * DAY
+        MoneyEntry.Source.ALFA -> from == BankPush.From.ALFA && mskDays(p.ts, b.ts) in -1L..3L
+        MoneyEntry.Source.MKB -> from == BankPush.From.MKB && abs(b.ts - p.ts) <= DAY + DAY / 2
+        else -> false
+    }
+
+    private fun mskDays(from: Long, to: Long): Long = java.time.temporal.ChronoUnit.DAYS.between(
+        java.time.Instant.ofEpochMilli(from).atZone(BankStatements.MSK).toLocalDate(),
+        java.time.Instant.ofEpochMilli(to).atZone(BankStatements.MSK).toLocalDate(),
+    )
 
     // ---- 2б. Наличные ↔ карта ----
 
@@ -303,6 +345,11 @@ object MoneyMatch {
             .mapValues { (_, v) -> (v.minOf { it.ts }) to (v.maxOf { it.ts }) }
         fun orphan(e: MoneyEntry): Boolean {
             if (e.source != MoneyEntry.Source.PUSH || e.replacedBy.isNotEmpty()) return false
+            // Только Т-Банк (08.10.2026). Пуши Альфы и МКБ разбираются пока общим
+            // осторожным разбором, не по образцам: их пуш без пары — скорее
+            // неточно прочитанный, чем отменённый, и «отменили?» был бы шумом.
+            // Вернуть, когда у них будет точный разбор.
+            if (BankPush.fromAccount(e.account) != BankPush.From.TBANK) return false
             val src = cardSource[BankPush.cardOf(e.account)] ?: MoneyEntry.Source.TINKOFF
             val span = tbank[e.owner to src] ?: return false
             // Т-Бизнес проводит позже — пуш «без пары» только за неделю до конца его выписки.

@@ -141,6 +141,8 @@ class Settings(private val context: Context) {
         private val KEY_M_ENABLED = booleanPreferencesKey("m_enabled")
         private val KEY_M_WITH_ZF = booleanPreferencesKey("m_with_zf")
         private val KEY_M_PUSH = booleanPreferencesKey("m_push")
+        // Пуши Т-Банка на этом телефоне; нет ключа — только на телефоне владельца.
+        private val KEY_M_PUSH_TBANK = booleanPreferencesKey("m_push_tbank")
         // Образцы денежных уведомлений для разборщиков новых банков — только по тумблеру.
         private val KEY_M_PUSH_SAMPLES = booleanPreferencesKey("m_push_samples")
         private val KEY_M_SCOPE_P = booleanPreferencesKey("m_scope_personal")
@@ -1015,6 +1017,17 @@ class Settings(private val context: Context) {
     val mPushFlow = context.dataStore.data.map { it[KEY_M_PUSH] ?: true }
     suspend fun setMPush(value: Boolean) {
         context.dataStore.edit { it[KEY_M_PUSH] = value }
+    }
+
+    /**
+     * Ловить ли пуши Т-Банка на ЭТОМ телефоне (08.10.2026). null — не задано:
+     * решает профиль (`BankPush.catchTbank`) — на телефоне владельца да, на
+     * чужом нет: карта Марианны на счёте Саши, её пуши ловит его телефон, и
+     * второй пуш той же операции с выпиской не склеится.
+     */
+    val mPushTbankFlow: Flow<Boolean?> = context.dataStore.data.map { it[KEY_M_PUSH_TBANK] }
+    suspend fun setMPushTbank(value: Boolean) {
+        context.dataStore.edit { it[KEY_M_PUSH_TBANK] = value }
     }
 
     // ---- Notion: правила блока ----
