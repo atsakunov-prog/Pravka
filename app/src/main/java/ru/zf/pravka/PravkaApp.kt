@@ -214,6 +214,13 @@ class PravkaApp : Application() {
     val settings by lazy { Settings(this) }
     /** Кто пользуется установкой и какие режимы включены (data/Profile.kt). */
     internal val profileStore by lazy { ru.zf.pravka.data.ProfileStore(this) }
+
+    /** Молчит ли Засечка на этой установке (`Profile.zasechkaQuiet`): тумблер или профиль. */
+    val zQuietFlow: kotlinx.coroutines.flow.Flow<Boolean> by lazy {
+        kotlinx.coroutines.flow.combine(settings.zQuietSetFlow, profileStore.flow) { chosen, p ->
+            ru.zf.pravka.data.Profile.zasechkaQuiet(chosen, p)
+        }
+    }
     /** История «сколько идёт запрос» по тройкам «дорога + модель + усилие». */
     val paceStore by lazy { PaceStore(this) }
     val promptStore by lazy { PromptStore(this) }
@@ -650,6 +657,12 @@ class PravkaApp : Application() {
                     // Черновик до «ОК» — ещё не факт: уйдёт, когда станет записью или будет вычеркнут.
                     // Якоря и счета ЗФ — те же, что у баланса вкладки: сервер видит то же, что телефон.
                     val anchors = moneyEngine.anchors()
+                    // Не владелец (08.10.2026): журнал денег семьи — общий, и в архив его везёт
+                    // телефон владельца (обмен через облако семьи уже свёл туда записи Марианны).
+                    // Отсюда — только своё сырьё, которого больше нигде нет: пуши и надиктовки.
+                    if (!profileStore.owner) {
+                        return st.takes.map { ev.moneyTake(it, clock) } + ev.moneyPushes(st.pushes, anchors, st.entries, clock)
+                    }
                     ev.moneyEntries(st.entries, clock) +
                         ev.moneyReference(st, clock, anchors, moneyEngine.zfAccounts(), profileStore.current?.id ?: "user") +
                         st.takes.map { ev.moneyTake(it, clock) } +
@@ -702,7 +715,11 @@ class PravkaApp : Application() {
     // IcuSweeper: тот пишет в ленту, а этот в кэш, который можно потерять.
     val sportStore by lazy { ru.zf.pravka.data.SportStore(this) }
     val icuSportSync by lazy {
-        ru.zf.pravka.data.IcuSportSync(settings, sportStore, httpClient, eventLog)
+        ru.zf.pravka.data.IcuSportSync(
+            settings, sportStore, httpClient, eventLog,
+            planStore = planStore,
+            owner = { profileStore.current.let { it == null || it.owner } },
+        )
     }
 
     // Еда: дневник приёмов с КБЖУ. Незаменимые данные - как лента.
@@ -786,6 +803,7 @@ class PravkaApp : Application() {
             sportStore = sportStore,
             client = httpClient,
             eventLog = eventLog,
+            owner = { profileStore.current.let { it == null || it.owner } },
         )
     }
     // Вся жизнь в Notion раз в час — лента, еда, тренировки, силовые,
@@ -873,6 +891,7 @@ class PravkaApp : Application() {
             callWho = { phone, name -> delaSync.who(phone, name) },
             callFamilyIds = { callFamilyIds() },
             delaOps = { ops -> delaDo(ops) },
+            quiet = { zQuietFlow.first() },
         )
     }
 

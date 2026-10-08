@@ -607,8 +607,9 @@ internal fun PravkaAccessibilityService.zDur(ms: Long): String {
 internal fun PravkaAccessibilityService.zasechkaReminderCheck() {
     val gapMin = cachedZGapMin
     scope.launch {
-        // Reminders die with the toggle or with a zero interval.
-        if (!cachedZEnabled || gapMin <= 0) {
+        // Reminders die with the toggle, with a zero interval or with «Засечка
+        // молча» (08.10.2026: Марианне — ни одного напоминания, лента пишется сама).
+        if (!cachedZEnabled || gapMin <= 0 || cachedZQuiet) {
             zButton?.setRemind(false)
             return@launch
         }
@@ -627,7 +628,10 @@ internal fun PravkaAccessibilityService.zasechkaReminderCheck() {
         // nudge asks to close a still-running entry.
         if (hour >= cachedZDayEnd || hour < cachedZDayStart) {
             zButton?.setRemind(false)
-            if (open != null && hour >= cachedZDayEnd &&
+            // Идущий сон — не «день не закрыт»: автопилот сам начинает «Сон» после
+            // 23:00, и вечерний вопрос «Закрыть день? «Сон» всё ещё идёт» будил бы
+            // ровно того, кто лёг (08.10.2026).
+            if (open != null && hour >= cachedZDayEnd && !open.category.equals("Сон", ignoreCase = true) &&
                 internal.getString(PravkaAccessibilityService.KEY_Z_EVENING_DAY, "") != todayKey
             ) {
                 internal.edit().putString(PravkaAccessibilityService.KEY_Z_EVENING_DAY, todayKey).apply()

@@ -162,6 +162,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var cachedStackIdle = true
     @Volatile internal var cachedZGapMin = 45
     @Volatile internal var cachedZCheckins = true
+    /** «Засечка молча» (`app.zQuietFlow`): ни напоминаний, ни глубокого янтаря. */
+    @Volatile internal var cachedZQuiet = false
     @Volatile internal var cachedZDayStart = 9
     @Volatile internal var cachedZDayEnd = 23
     @Volatile internal var zCategoriesCached: List<String> = emptyList()
@@ -677,6 +679,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         scope.launch { runCatching { app.planStore.load() } }
         scope.launch { app.settings.zGapMinFlow.collect { cachedZGapMin = it } }
         scope.launch { app.settings.zCheckinsFlow.collect { cachedZCheckins = it } }
+        scope.launch { app.zQuietFlow.collect { cachedZQuiet = it } }
         scope.launch { app.settings.zDayStartFlow.collect { cachedZDayStart = it } }
         scope.launch { app.settings.zDayEndFlow.collect { cachedZDayEnd = it } }
         // Force-load the store once, then keep the recognizer bias lists warm.

@@ -188,6 +188,24 @@ object Prompts {
             "Саша в тексте — отдельный человек из семьи.\n\n"
     }
 
+    /**
+     * Приписка к промптам тела (разбор силовых, тренер, вопрос по тренировкам)
+     * у не-владельца (08.10.2026). [speakerNote] говорит «всё об авторе —
+     * про Марианну», а в теле промпта стоит «Саша, мужчина 43 лет, 86 кг… гиря
+     * 16 кг», «CTL около 17», его цели и его схемы: вместе это делало бы её
+     * сорокатрёхлетним мужчиной с его гирей. Цифры тела — только из её данных.
+     */
+    fun bodyNote(author: Author): String {
+        if (author.owner) return ""
+        val she = if (author.female) "её" else "его"
+        return speakerNote(author) +
+            "Цифры тела в тексте ниже — возраст, вес, рост, «гиря 16 кг», пороги и CTL, цели, " +
+            "схемы и дозы упражнений «обычно …» — Сашины, не $she. О теле ${author.name} знаешь только " +
+            "то, что пришло в данных ниже (intervals, записи силовых, сказанное). Вес снаряда, " +
+            "который ${author.name} не назвал${if (author.female) "а" else ""}, не подставляй из Сашиного: " +
+            "ставь 0 и пиши об этом в note.\n\n"
+    }
+
     // Splits at {DICT} and {INPUT} (empty dict block leaves no stray blank
     // lines). If a user-edited template loses {INPUT}, the input is appended
     // at the end - never silently dropped.

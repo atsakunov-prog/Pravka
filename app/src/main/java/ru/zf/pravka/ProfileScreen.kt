@@ -133,15 +133,7 @@ internal fun ProfileOnboarding(app: PravkaApp) {
                     runCatching {
                         app.profileStore.save(p)
                         app.eventLog.add("профиль: ${p.name} (${p.id}), режимы: ${p.modes.joinToString { it.key }}")
-                        // Не владелец: автоматы владельца с завода выключены. Ночной
-                        // разбор и правка промпта написаны про Сашу и тратят ключ;
-                        // синк «Всей жизни» и Дневника смотрит в его Notion.
-                        if (!p.owner) {
-                            app.settings.setNightReviewEnabled(false)
-                            app.settings.setPromptTuneEnabled(false)
-                            app.settings.setNotionLife(false)
-                            app.settings.setNotionDiary(false)
-                        }
+                        if (!p.owner) ownerAutomatsOff(app)
                     }.onFailure { saving = false }
                 }
             },
@@ -152,6 +144,20 @@ internal fun ProfileOnboarding(app: PravkaApp) {
     }
 }
 
+/**
+ * Не владелец: автоматы владельца с завода выключены. Ночной разбор и правка
+ * промпта написаны про Сашу и тратят ключ; синк «Всей жизни» и Дневника
+ * смотрит в его Notion. Одно и то же — при первом запуске и при смене
+ * профиля в настройках (08.10.2026: телефон, заведённый как Сашин и
+ * переключённый на Марианну, оставлял их включёнными).
+ */
+private suspend fun ownerAutomatsOff(app: PravkaApp) {
+    app.settings.setNightReviewEnabled(false)
+    app.settings.setPromptTuneEnabled(false)
+    app.settings.setNotionLife(false)
+    app.settings.setNotionDiary(false)
+}
+
 /** Группа «Кто пользуется» в настройках: тот же выбор и тумблеры режимов. */
 @Composable
 internal fun ProfileSettings(app: PravkaApp) {
@@ -160,7 +166,10 @@ internal fun ProfileSettings(app: PravkaApp) {
     val who = remember(current.id, current.name, current.female) { WhoState(current) }
     val save: (Profile) -> Unit = { p ->
         app.appScope.launch(Dispatchers.IO) {
-            runCatching { app.profileStore.save(p) }
+            runCatching {
+                app.profileStore.save(p)
+                if (current.owner && !p.owner) ownerAutomatsOff(app)
+            }
         }
     }
     PaperCard(label = "кто пользуется") {

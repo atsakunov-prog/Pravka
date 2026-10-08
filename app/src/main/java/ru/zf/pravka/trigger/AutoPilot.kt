@@ -415,6 +415,8 @@ class AutoPilot(
     @Volatile private var autoBedtime = true
     /** Вопросы — плашкой сверху, когда экран открыт (см. `Settings.autoPlatesFlow`). */
     @Volatile private var platesOn = true
+    /** «Засечка молча» (`app.zQuietFlow`): ни плашек, ни пушей, ни дел за человека. */
+    @Volatile private var zQuiet = false
     /** Дела мест по приезду: имя места → что начать (см. `Settings.autoPlaceDealsFlow`). */
     @Volatile private var placeDeals: Map<String, PlaceDeal> = emptyMap()
 
@@ -511,6 +513,7 @@ class AutoPilot(
         jobs += scope.launch { app.settings.autoBedtimeFlow.collect { autoBedtime = it } }
         jobs += scope.launch { app.settings.autoPlatesFlow.collect { platesOn = it } }
         jobs += scope.launch { app.settings.autoPlaceDealsFlow.collect { placeDeals = it } }
+        jobs += scope.launch { app.zQuietFlow.collect { zQuiet = it } }
         startWifiWatch()
         startScanWatch()
         startBtWatch()
@@ -1604,6 +1607,9 @@ class AutoPilot(
 
     /** Начать дело по подъёму, если пора (`AutoPilotRules.wakeDealDue`). true — начато. */
     private suspend fun startWakeDeal(sleptFrom: Long, wakeAt: Long): Boolean {
+        // Молчащая Засечка дела за человека не начинает: «Сборы детей» по подъёму —
+        // утро владельца, а у Марианны это были бы дела, которых она не говорила.
+        if (zQuiet) return false
         val deal = wakeDeal ?: return false
         val c = java.util.Calendar.getInstance()
         c.timeInMillis = wakeAt
@@ -1673,7 +1679,7 @@ class AutoPilot(
             handler.removeCallbacks(r)
             r.run()
         }
-        if (!askStill) return
+        if (!askStill || zQuiet) return
         scope.launch {
             val open = app.zasechkaStore.openEntry() ?: return@launch
             if (!AutoPilotRules.stillAskable(open.title, open.category)) return@launch
@@ -1718,7 +1724,8 @@ class AutoPilot(
             armMotion()
             return
         }
-        if (!askStill || now - lastStillAsk < STILL_THROTTLE_MS) return
+        // Вопрос по движению идёт плашкой мимо notify — молчание проверяется тут.
+        if (!askStill || zQuiet || now - lastStillAsk < STILL_THROTTLE_MS) return
         scope.launch {
             val open = app.zasechkaStore.openEntry() ?: return@launch
             if (!AutoPilotRules.stillAskable(open.title, open.category)) return@launch
@@ -2138,6 +2145,14 @@ class AutoPilot(
         quiet: Boolean = false,
     ): Int {
         val id = (title + text).hashCode()
+        // «Засечка молча» (08.10.2026): автопилот делает своё — сон, подъём,
+        // места, — но ни плашки, ни пуша; что сказал бы — строкой в журнал.
+        // Одна дверь на все вопросы автопилота и календаря: новая функция с
+        // вопросом замолчит здесь же.
+        if (zQuiet) {
+            app.eventLog.add("автопилот молча: $title — ${text.take(120)}")
+            return id
+        }
         if (Looper.myLooper() != Looper.getMainLooper()) {
             // Плашка — вещь главного потока (календарь спрашивает из IO).
             handler.post { notify(title, text, actions, openSettings, plate, quiet) }

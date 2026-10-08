@@ -38,6 +38,12 @@ class NotionDiarySync(
     private val sportStore: SportStore,
     private val client: OkHttpClient,
     private val eventLog: EventLog,
+    /**
+     * Владелец ли пользуется (08.10.2026). Дневник — база владельца, её id
+     * зашит ниже: с телефона Марианны подходы и еда легли бы в его Дневник
+     * под его датами, какой бы тумблер ни стоял.
+     */
+    private val owner: () -> Boolean = { true },
 ) {
 
     companion object {
@@ -82,7 +88,7 @@ class NotionDiarySync(
     suspend fun sync(force: Boolean = false): Boolean {
         val now = System.currentTimeMillis()
         if (!force && now - lastRun < PERIOD_MS) return false
-        if (!settings.notionDiary()) return false
+        if (!settings.notionDiary() || !owner()) return false
         val token = settings.notionToken().trim()
         if (token.isBlank()) return false
         lastRun = now

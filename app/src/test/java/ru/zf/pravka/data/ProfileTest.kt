@@ -116,4 +116,26 @@ class ProfileTest {
         assertFalse(hints.contains("Мариан"))
         assertFalse(hints.contains("Правки"))
     }
+
+    @Test
+    fun `Засечка молчит у всех, кроме владельца, пока тумблер не тронут`() {
+        val sasha = Profile.of(Profile.Preset.SASHA)
+        val marianna = Profile.of(Profile.Preset.MARIANNA)
+        assertFalse(Profile.zasechkaQuiet(null, sasha))
+        assertTrue(Profile.zasechkaQuiet(null, marianna))
+        // Слово человека сильнее профиля — в обе стороны.
+        assertTrue(Profile.zasechkaQuiet(true, sasha))
+        assertFalse(Profile.zasechkaQuiet(false, marianna))
+        // Профиль не прочитан (база недоступна) — как было до тумблера.
+        assertFalse(Profile.zasechkaQuiet(null, null))
+    }
+
+    @Test
+    fun `тело у не-владельца — без Сашиных цифр, у владельца промпт байт в байт`() {
+        assertEquals("", Prompts.bodyNote(Prompts.Author("Саша", female = false, owner = true)))
+        val her = Prompts.bodyNote(Prompts.Author("Марианна", female = true, owner = false))
+        assertTrue(her.startsWith(Prompts.speakerNote(Prompts.Author("Марианна", female = true, owner = false))))
+        assertTrue(her.contains("«гиря 16 кг»") && her.contains("Сашины, не её"))
+        assertTrue(her.contains("Марианна не назвала"))
+    }
 }

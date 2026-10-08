@@ -50,6 +50,8 @@ class PhoneSweeper(
     private val scope: CoroutineScope,
     /** Автопилот службы: узнаёт о найденной ночи и начинает дело по подъёму. */
     private val witness: () -> AutoWitness? = { null },
+    /** «Засечка молча» (`Profile.zasechkaQuiet`): звонки считаются по дням, но ленту не режут. */
+    private val quiet: suspend () -> Boolean = { false },
     /** Люди Дел с телефонами и клиентом — по ним звонок узнаёт работу (пусто — Дела не на сервере). */
     private val callPeople: suspend () -> List<ru.zf.pravka.core.CallRules.Person> = { emptyList() },
     /** «Кто это» сервера по номеру и имени контакта (null — нет сети, старый сервер). */
@@ -500,7 +502,9 @@ class PhoneSweeper(
         if (counted > 0) eventLog.add("телефон: звонков за свип $counted → в счётчики дня")
         // Звонки режут дело (06.10.2026): только новые — уже посчитанные узнаны
         // выше по времени начала, и в ленту второй раз не идут.
-        if (fresh.isNotEmpty() && settings.zCallsCutFlow.first()) {
+        // Молчащая Засечка звонком дело не режет: врезка спрашивает «с кем это —
+        // работа или семья?», а спрашивать ей нельзя.
+        if (fresh.isNotEmpty() && settings.zCallsCutFlow.first() && !quiet()) {
             for (c in fresh) runCatching { placeCall(c) }.onFailure { eventLog.add("звонок в ленту не лёг: ${it.message}") }
         }
     }

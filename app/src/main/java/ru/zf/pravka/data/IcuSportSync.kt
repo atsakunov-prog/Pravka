@@ -29,9 +29,20 @@ class IcuSportSync(
     private val store: SportStore,
     private val client: OkHttpClient,
     private val eventLog: EventLog,
+    /** Кэш плана: при смене аккаунта intervals чужой календарь выбрасывается. */
+    private val planStore: PlanStore? = null,
+    /** Владелец ли пользуется: у не-владельца кэш без отпечатка считается чужим. */
+    private val owner: () -> Boolean = { true },
 ) {
 
     companion object {
+        /** Отпечаток аккаунта: athlete id «0» значит «хозяин ключа», поэтому в счёт идёт и ключ. */
+        fun accountOf(athlete: String, key: String): String {
+            val md = java.security.MessageDigest.getInstance("SHA-1")
+            val bytes = md.digest("${athlete.trim()}:${key.trim()}".toByteArray())
+            return bytes.take(6).joinToString("") { "%02x".format(it) }
+        }
+
         /** Потолок длительности одной тренировки: забытые часы дальше врут. */
         private const val MAX_WORKOUT_S = 12 * 3_600L
 
@@ -133,6 +144,7 @@ class IcuSportSync(
         val auth = Credentials.basic("API_KEY", key)
         val keepDays = settings.sportDays()
         store.load()
+        checkAccount(athlete, key)
         val deep = force || lastDeep == 0L || now - lastDeep > DEEP_PERIOD_MS ||
             store.workoutsFlow.value.isEmpty()
         val days = if (deep) keepDays else SHALLOW_DAYS
@@ -164,6 +176,28 @@ class IcuSportSync(
                 "тренировок ${workouts?.size ?: 0}, дней здоровья ${health?.size ?: 0}"
         )
         return true
+    }
+
+    /**
+     * Тот ли аккаунт, чьим ключом выгружен кэш (08.10.2026). Сменился — кэш
+     * тренировок, здоровья и плана выгружается заново: иначе на телефоне
+     * Марианны 120 дней жили бы Сашины тренировки, вес и сон рядом с её.
+     * Кэш без отпечатка (до этой сборки) у владельца — его, просто
+     * отмечается; у не-владельца — неизвестно чей, выгружается заново: это
+     * расходный кэш, глубокая выгрузка вернёт своё за минуту.
+     */
+    private suspend fun checkAccount(athlete: String, key: String) {
+        val now = accountOf(athlete, key)
+        val was = store.account()
+        if (was == now) return
+        if (was.isEmpty() && owner()) {
+            store.setAccount(now)
+            return
+        }
+        store.resetForAccount(now)
+        planStore?.clearDays()
+        lastDeep = 0L
+        eventLog.add("спорт: аккаунт intervals ${if (was.isEmpty()) "не отмечен" else "сменился"} — тренировки, здоровье и план выгружаются заново")
     }
 
     // ---- Тренировки ----
@@ -448,6 +482,10 @@ class IcuSportSync(
             val athlete = settings.icuAthlete().trim()
             val key = settings.icuKey().trim()
             if (athlete.isBlank() || key.isBlank()) return@withContext false
+            // План может приехать раньше тренировок: чужой календарь не должен
+            // слиться с новым (см. checkAccount).
+            this@IcuSportSync.store.load()
+            checkAccount(athlete, key)
             val auth = Credentials.basic("API_KEY", key)
             val now = System.currentTimeMillis()
             val oldest = dayString(now - back * 86_400_000L)

@@ -132,6 +132,11 @@ private fun toneColor(tone: Int): Color = when (tone) {
 @Composable
 internal fun SportTab(app: PravkaApp) {
     val store = app.sportStore
+    // Карточки, написанные под владельца (08.10.2026): «Цели октября» — его
+    // 80 кг к 31.10 и его дорожная карта, «путь к первому подтягиванию» — его
+    // турник. У Марианны их нет: вкладка — её тренировки, сон и вес из её
+    // intervals. Профиль не прочитан — показываем, как было.
+    val ownerCards = app.profileStore.flow.collectAsState().value.let { it == null || it.owner }
     val workouts by store.workoutsFlow.collectAsState()
     val health by store.healthFlow.collectAsState()
     val profile by store.profileFlow.collectAsState()
@@ -504,7 +509,7 @@ internal fun SportTab(app: PravkaApp) {
                 }
 
                 // ---- Путь к первому подтягиванию ----
-                item(key = "pullup") { PullupCard(app, gtgToday, streak, onRecord = { gtgDialog = true }) }
+                if (ownerCards) item(key = "pullup") { PullupCard(app, gtgToday, streak, onRecord = { gtgDialog = true }) }
 
                 // ---- Неделя: сделано против плана столбиками ----
                 item(key = "week") { WeekBarsCard(app, workouts, planDays) }
@@ -570,7 +575,7 @@ internal fun SportTab(app: PravkaApp) {
                 item { WeekPlanCard(app, planDays) }
 
                 // ---- Цели октября ----
-                item { GoalsCard(app, health, gtgDays, rules) }
+                if (ownerCards) item { GoalsCard(app, health, gtgDays, rules) }
 
                 // ---- Вес и VO2max, если часы их знают ----
                 if (weights.size >= 3) {
@@ -1626,6 +1631,12 @@ private fun ZaryadkaChecklist(
                     hint = line.note,
                 )
             }
+        } else if (!app.profileStore.owner && app.profileStore.current != null) {
+            // Запасной список — блок «Зарядка» файла сборки, а это схема владельца
+            // (вис 10–15 с, подтягивания с резинкой, отжимания 2×6): Марианна
+            // видела его как свои «занятия» (08.10.2026). У не-владельца зарядка —
+            // только своим событием в календаре intervals.
+            emptyList()
         } else {
             app.exerciseBook.ofBlock("Зарядка").map { exercise ->
                 DayTask(

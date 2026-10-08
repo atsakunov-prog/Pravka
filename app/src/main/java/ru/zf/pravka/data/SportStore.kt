@@ -137,6 +137,39 @@ class SportStore(private val context: Context) {
     @Volatile private var syncedAt = 0L
     fun lastSyncAt(): Long = syncedAt
 
+    /**
+     * Чей кэш (08.10.2026): отпечаток athlete id и ключа intervals, которыми
+     * он выгружен (`IcuSportSync.accountOf`). На телефоне Марианны лежал кэш,
+     * выгруженный Сашиным ключом, — тренировки, вес и сон сливаются по id и
+     * дате, и её свежая выгрузка не вытеснила бы его 120 дней. Пусто — кэш
+     * старше отпечатков.
+     */
+    @Volatile private var account = ""
+    fun account(): String = account
+
+    /** Отметить, чьим ключом выгружен кэш, ничего не трогая. */
+    suspend fun setAccount(value: String) = mutex.withLock {
+        ensureLoaded()
+        if (account == value) return@withLock
+        account = value
+        persist()
+    }
+
+    /**
+     * Аккаунт intervals сменился: кэш тренировок, здоровья и порогов —
+     * расходный (железное правило 1) — выбрасывается и выгружается заново
+     * уже новым ключом. Разговоры с тренером — переписка, не кэш: остаются.
+     */
+    suspend fun resetForAccount(value: String) = mutex.withLock {
+        ensureLoaded()
+        _workoutsFlow.value = emptyList()
+        _healthFlow.value = emptyList()
+        _profileFlow.value = Profile()
+        syncedAt = 0L
+        account = value
+        persist()
+    }
+
     suspend fun load() = mutex.withLock { ensureLoaded() }
 
     /**
@@ -268,6 +301,7 @@ class SportStore(private val context: Context) {
             _profileFlow.value = parsed.profile
             _talksFlow.value = parsed.talks
             syncedAt = parsed.syncedAt
+            account = parsed.account
         }
     }
 
@@ -277,6 +311,7 @@ class SportStore(private val context: Context) {
         val profile: Profile,
         val talks: List<Talk>,
         val syncedAt: Long,
+        val account: String,
     )
 
     private fun persist() {
@@ -286,6 +321,7 @@ class SportStore(private val context: Context) {
 
     private fun serialize(): JSONObject = JSONObject().apply {
         put("syncedAt", syncedAt)
+        put("account", account)
         put("workouts", JSONArray().apply { _workoutsFlow.value.forEach { put(workoutJson(it)) } })
         put("health", JSONArray().apply { _healthFlow.value.forEach { put(healthJson(it)) } })
         put("profile", profileJson(_profileFlow.value))
@@ -466,6 +502,7 @@ class SportStore(private val context: Context) {
             profile = profile,
             talks = talks.sortedByDescending { it.ts },
             syncedAt = o.optLong("syncedAt"),
+            account = o.optString("account"),
         )
     }
 }

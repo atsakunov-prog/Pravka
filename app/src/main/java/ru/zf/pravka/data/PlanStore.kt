@@ -264,6 +264,18 @@ class PlanStore(private val context: Context) {
         persist()
     }
 
+    /**
+     * Аккаунт intervals сменился (`IcuSportSync`): события чужого календаря —
+     * не план этого человека. Кэш расходный; правила блока из Notion остаются.
+     */
+    suspend fun clearDays() = mutex.withLock {
+        ensureLoaded()
+        if (_daysFlow.value.isEmpty()) return@withLock
+        _daysFlow.value = emptyList()
+        eventsAt = 0L
+        persist()
+    }
+
     suspend fun setRules(rules: Rules) = mutex.withLock {
         ensureLoaded()
         if (!rules.known) return@withLock

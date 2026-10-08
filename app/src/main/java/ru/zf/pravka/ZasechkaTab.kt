@@ -1318,6 +1318,7 @@ internal fun ZasechkaSettings(app: PravkaApp) {
     val dayStartH by app.settings.zDayStartFlow.collectAsState(initial = 9)
     val dayEndH by app.settings.zDayEndFlow.collectAsState(initial = 23)
     val checkins by app.settings.zCheckinsFlow.collectAsState(initial = true)
+    val quiet by app.zQuietFlow.collectAsState(initial = false)
     // Ползунки пишут по отпусканию: запись DataStore на каждый шаг
     // перетаскивания — десятки записей файла за секунду.
     var gapSlider by remember(gapMin) { mutableStateOf(gapMin.toFloat()) }
@@ -1326,6 +1327,18 @@ internal fun ZasechkaSettings(app: PravkaApp) {
 
     Column(verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap)) {
         PaperCard(label = "напоминания") {
+            // Первым — одним тумблером всё сразу (08.10.2026): Марианне Засечка
+            // нужна как журнал сна и тренировок, а не как собеседник.
+            PaperToggle(
+                title = "Засечка молча",
+                checked = quiet,
+                onCheckedChange = { app.appScope.launch { app.settings.setZQuiet(it) } },
+                hint = if (quiet) "сон, тренировки и экран пишутся сами — без вопросов" else null,
+                info = "Лента пишется сама: сон по зарядке и экрану, сон и тренировки с часов через " +
+                    "intervals, экран по дням. Ни напоминаний о дырах, ни «всё ещё …?», ни вопросов " +
+                    "автопилота, ни дел за тебя — по подъёму («сборы детей»), звонку или календарю. " +
+                    "С завода молчит у всех, кроме Саши.",
+            )
             val gapShown = (gapSlider / 15f).roundToInt() * 15
             PaperSlider(
                 title = "Дыра во времени",
@@ -1455,12 +1468,26 @@ internal fun IntervalsSettings(app: PravkaApp) {
     val icuKey by app.settings.icuKeyFlow.collectAsState(initial = "")
     var athleteField by remember(icuAthlete) { mutableStateOf(icuAthlete) }
     var keyField by remember(icuKey) { mutableStateOf(icuKey) }
+    val icuProfile by app.sportStore.profileFlow.collectAsState()
     PaperCard(
         label = "ключ",
         info = "Тренировки за последние двое суток сами встают в ленту (бег, вело, силовая, ходьба), " +
-            "а Garmin-длительность сна дописывается к записи «сон». Ключ: intervals.icu → " +
-            "Settings → Developer Settings → API Key.",
+            "а Garmin-длительность сна дописывается к записи «сон»; вес, пульс покоя и HRV — во " +
+            "вкладке «Спорт». Часы и весы Garmin приходят в intervals.icu сами: там Settings → " +
+            "Connections → Garmin Connect. Ключ: intervals.icu → Settings → Developer Settings → " +
+            "API Key, Athlete ID — там же (i и цифры). Ключ — свой у каждого: чужой ключ показывает " +
+            "чужие тренировки и пишет подходы и еду в чужой intervals.",
     ) {
+        // Чей это аккаунт — словами (08.10.2026): на телефоне Марианны стоял
+        // Сашин ключ, и вкладка показывала его тренировки как её.
+        if (icuProfile.athleteName.isNotBlank()) {
+            PaperHint(
+                "Аккаунт: ${icuProfile.athleteName}" +
+                    (if (icuProfile.weightKg > 0) " · вес в профиле ${"%.1f".format(icuProfile.weightKg)} кг" else "") +
+                    " — его тренировки, сон и вес видит приложение",
+            )
+            Spacer(Modifier.height(6.dp))
+        }
         PaperField(value = athleteField, onValueChange = { athleteField = it }, label = "Athlete ID (i…)")
         PaperField(value = keyField, onValueChange = { keyField = it }, label = "API Key")
         Spacer(Modifier.height(6.dp))
@@ -1471,6 +1498,9 @@ internal fun IntervalsSettings(app: PravkaApp) {
                     app.settings.setIcuAthlete(athleteField)
                     app.settings.setIcuKey(keyField)
                     Feedback.toast(app, "Сохранено — тренировки подтянутся в ближайший свип")
+                    // Глубокая выгрузка сразу: имя аккаунта встаёт строкой выше, а
+                    // сменился аккаунт — чужой кэш уходит (IcuSportSync.checkAccount).
+                    runCatching { app.icuSportSync.refresh(force = true) }
                     app.icuSweeper.sweep(force = true)
                 }
             })

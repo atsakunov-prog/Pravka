@@ -134,6 +134,7 @@ class Settings(private val context: Context) {
         private val KEY_Z_CALL_FAMILY = stringPreferencesKey("z_call_family")
         private val KEY_Z_IMMERSIVE_MIN = intPreferencesKey("z_immersive_min")
         private val KEY_Z_CHECKINS = booleanPreferencesKey("z_checkins")
+        private val KEY_Z_QUIET = booleanPreferencesKey("z_quiet")
         // Разноска: третья кнопка «Д» (она про дела).
         private val KEY_R_ENABLED = booleanPreferencesKey("r_enabled")
         // Деньги: кнопка «₽» и тумблер «+ ЗФ» во вкладке.
@@ -878,6 +879,16 @@ class Settings(private val context: Context) {
     val zCheckinsFlow = context.dataStore.data.map { it[KEY_Z_CHECKINS] ?: true }
     suspend fun setZCheckins(value: Boolean) {
         context.dataStore.edit { it[KEY_Z_CHECKINS] = value }
+    }
+
+    /**
+     * «Засечка молча» как выбрал человек; null — не выбирал. Что это значит на
+     * деле, решает `Profile.zasechkaQuiet` (не выбирал — молчит у всех, кроме
+     * владельца); читать — `app.zQuietFlow`, не этот поток.
+     */
+    val zQuietSetFlow: Flow<Boolean?> = context.dataStore.data.map { it[KEY_Z_QUIET] }
+    suspend fun setZQuiet(value: Boolean) {
+        context.dataStore.edit { it[KEY_Z_QUIET] = value }
     }
 
     /** Apps Script web-app URL; blank = Sheets mirror off. */

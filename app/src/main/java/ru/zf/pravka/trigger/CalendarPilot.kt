@@ -179,6 +179,8 @@ class CalendarPilot(
 
     private val jobs = mutableListOf<Job>()
     @Volatile private var on = true
+    /** «Засечка молча»: встречи из календаря не начинаются сами — это дела, которых не говорили. */
+    @Volatile private var quiet = false
     @Volatile private var category = CalendarRules.DEFAULT_CATEGORY
     /** null — не выбирали: только основной календарь (см. `Settings.autoCalendarsFlow`). */
     @Volatile private var watched: Set<String>? = null
@@ -189,6 +191,7 @@ class CalendarPilot(
 
     fun start() {
         jobs += scope.launch { app.settings.autoCalOnFlow.collect { on = it } }
+        jobs += scope.launch { app.zQuietFlow.collect { quiet = it } }
         jobs += scope.launch { app.settings.autoCalCategoryFlow.collect { category = it } }
         jobs += scope.launch { app.settings.autoCalendarsFlow.collect { watched = it } }
     }
@@ -200,7 +203,7 @@ class CalendarPilot(
 
     /** Тик службы. Сам себя не накладывает; без доступа к календарю молчит. */
     fun tick() {
-        if (!on || !hasPermission(service)) return
+        if (!on || quiet || !hasPermission(service)) return
         if (!running.compareAndSet(false, true)) return
         scope.launch {
             try {
