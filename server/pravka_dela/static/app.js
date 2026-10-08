@@ -152,16 +152,16 @@ const nowTasks = () => all().filter((t) => isOpen(t) && isMine(t) && isNow(t));
 const nudgeDue = (t) => t.ball === 'waiting' && ((t.nudge_on && t.nudge_on <= S.today) || (t.due_date && t.due_date <= S.today));
 const VIEWS = {
   // У каждого вида свой цвет значка — как у умных списков Things: глаз находит пункт раньше, чем читает.
-  now: { title: 'Сейчас', icon: 'bolt', color: '#f5b544', count: () => nowTasks().length },
-  new: { title: 'Новое', icon: 'inbox-in', color: '#5b9dff', count: () => newCount() },
-  upcoming: { title: 'Предстоящее', icon: 'cal', color: '#f2706a', count: () => openMine().filter((t) => t.due_date && t.due_date <= D.add(S.today, 7)).length,
+  now: { title: 'Сейчас', icon: 'bolt', color: 'var(--tint)', count: () => nowTasks().length },
+  new: { title: 'Новое', icon: 'inbox-in', color: 'var(--tint)', count: () => newCount() },
+  upcoming: { title: 'Предстоящее', icon: 'cal', color: 'var(--tint)', count: () => openMine().filter((t) => t.due_date && t.due_date <= D.add(S.today, 7)).length,
     hot: () => openMine().some(isLate) },
-  waiting: { title: 'Жду', icon: 'hourglass', color: '#6fb8ff', count: () => openMine().filter((t) => t.ball === 'waiting').length,
+  waiting: { title: 'Жду', icon: 'hourglass', color: 'var(--tint)', count: () => openMine().filter((t) => t.ball === 'waiting').length,
     hot: () => openMine().some(nudgeDue) },
-  week: { title: 'Неделя', icon: 'broom', color: '#3fbf8f' },
-  all: { title: 'Все дела', icon: 'list', color: '#9aa3b2' },
+  week: { title: 'Неделя', icon: 'broom', color: 'var(--tint)' },
+  all: { title: 'Все дела', icon: 'list', color: 'var(--tint)' },
 };
-const NO_PROJECT = { color: '#8b93ff' }; // дела без проекта (бывшие «Входящие») — разложить в «Неделе»
+const NO_PROJECT = { color: 'var(--meta)' }; // дела без проекта (бывшие «Входящие») — разложить в «Неделе»
 const pendingSugs = () => [...S.sugs.values()].filter((s) => s.status === 'pending' && s.for_user === S.me.user);
 /** Закрытия и уточнения, которые сервер принял сам (store._auto: владелец 05.10 и 08.10.2026 — «спокойно
  *  закрывай и спокойно уточняй»), — за days дней, свежие сверху. Узнаются по причине решения: принятое руками
@@ -199,8 +199,15 @@ const ICONS = {
   meet: 'M9 11a3 3 0 1 0 0-6a3 3 0 1 0 0 6zM3 20c.5-3.5 3-5.5 6-5.5s5.5 2 6 5.5M16 11a2.5 2.5 0 1 0 0-5M17.5 14.5c2 .5 3.3 2.3 3.5 5.5',
   pen: 'M4 20h4L19 9l-4-4L4 16zM14 6l4 4',
   help: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17h.01',
-  // Отправить команду Claude — стрелка вверх, как у чатов (08.10.2026: звёздочку Claude владелец убрал).
-  up: 'M12 19V5M5.5 11.5L12 5l6.5 6.5',
+  // Правка 4.0 (Material Symbols Rounded, вес 300 — как в макетах): одно действие — один значок везде.
+  back: 'M14.5 6l-6 6 6 6',
+  chev: 'M9.5 6l6 6-6 6',
+  down: 'M7 10l5 5 5-5',
+  menu: 'M4 7h16M4 12h16M4 17h16',
+  donut: 'M12 3.5a8.5 8.5 0 1 0 8.5 8.5H12zM12 3.5a8.5 8.5 0 0 1 8.5 8.5',
+  up: 'M12 19V5.5M6 11l6-6 6 6',
+  stop: 'M8 7h8a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z',
+  tick: 'M20 6L9 17l-5-5',
 };
 function icon(name, size = 15) {
   const ns = 'http://www.w3.org/2000/svg';
@@ -245,11 +252,27 @@ function toast(text, undo) {
 }
 const fail = (e) => toast('Не вышло: ' + e.message);
 const norm = (s) => (s || '').toLowerCase().replace(/ё/g, 'е').trim();
+/** Длительность как в Правке: «45 м», «1 ч», «1 ч 40 м» — никогда «мин» (DESIGN §3.9). */
+const dur = (m) => (!m ? '' : m >= 60 ? `${Math.floor(m / 60)} ч` + (m % 60 ? ` ${m % 60} м` : '') : m + ' м');
+
+/** Монета режима: круг в key с бликом и знаком. Дела — галочка плавающей кнопки (ic_mode_delo_btn);
+ *  у страниц внутри — значок страницы или инициалы человека. */
+function coin(what, cls) {
+  const c = el('span', { class: 'coin' + (cls ? ' ' + cls : ''), 'aria-hidden': 'true' });
+  if (ICONS[what]) {
+    const svg = icon(what, 18);
+    svg.setAttribute('stroke-width', what === 'tick' ? '2.4' : '2');
+    c.append(svg);
+  } else c.append(what);
+  return c;
+}
+const initials = (name) => (name || '?').split(/\s+/).map((w) => (w.match(/[\p{L}\p{N}]/u) || [''])[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || '?';
 
 // ── Цвета: у проекта и человека свой оттенок — по id, чтобы не менялся от переименования ──
-const HUES = ['#f87171', '#fb923c', '#f5b544', '#a3d65c', '#34d399', '#2dd4bf', '#38bdf8', '#7c9cff', '#a78bfa', '#e879f9', '#f472b6'];
+// Цвет = источник (Правка 4.0): внутри Дел только синий режима — «свой оттенок» стал ступенью его шкалы, а не радугой.
+const HUES = ['#D4E6F5', '#9FC2DE', '#6FA3CC', '#4A82AE', '#B9D3E9', '#8DB6D8', '#7F9AB2'];
 const hueOf = (id) => { let h = 0; for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return HUES[h % HUES.length]; };
-/** Цвет — переменной --c (CSSOM, CSP не мешает); в светлой теме CSS сам темнит его. */
+/** Цвет — переменной --c (CSSOM, CSP не мешает). */
 const tint = (node, c) => { node.classList.add('tinted'); node.style.setProperty('--c', c); return node; };
 const dot = (id) => tint(el('span', { class: 'pdot' }), hueOf(id));
 function avatar(p, cls) {
@@ -279,7 +302,7 @@ window.addEventListener('hashchange', () => { S.sel.clear(); S.dealFilter = null
 
 // ── Вход ────────────────────────────────────────────────────────────────
 function renderLogin(msg) {
-  $app.replaceChildren(el('div', { class: 'login' }, el('img', { class: 'login-logo', src: '/static/icon.svg', alt: '' }), el('h1', {}, 'Дела'),
+  $app.replaceChildren(el('div', { class: 'login' }, coin('tick', 'big'), el('h1', {}, 'Дела'),
     el('p', { class: 'muted' }, msg || 'Вход — по ссылке-приглашению. Попроси её у Саши: ссылка одноразовая, дальше страница помнит вход полгода.')));
 }
 
@@ -314,23 +337,24 @@ function render() {
   const q0 = ae && (['quick', 'side-search', 'main-search'].includes(ae.id) || ae.classList?.contains('ask-input')) ? ae : null;
   const focused = q0 ? { id: q0.id, value: q0.value, a: q0.selectionStart, b: q0.selectionEnd } : null;
   const shell = el('div', { class: 'shell' + (S.cardId || S.draft ? ' with-card' : '') + (S.sideOpen ? ' side-open' : '') + (S.sel.size ? ' selecting' : '') });
-  shell.append(renderSide(r), el('main', { class: 'list' }, renderMain(r)));
-  // Строка Claude висит наверху и при прокрутке (владелец 08.10.2026: «уходит, если кручу вниз»): переносим
-  // её в шапку страницы, а та уже липкая. Смотришь на дела, говоришь — Claude видит, что в окне (pageScope).
-  const say = shell.querySelector('main.list .quick.say'), hd = shell.querySelector('main.list .list-head');
-  if (say && hd) hd.append(say);
+  shell.append(renderSide(r), listColumn(r));
   if (S.cardId || S.draft) shell.append(renderCard());
-  const scroll = S.toTop ? 0 : document.querySelector('main.list')?.scrollTop || 0; // новая страница — с начала
+  const scroll = S.toTop ? 0 : document.querySelector('main.list > .scroll')?.scrollTop || 0; // новая страница — с начала
   S.toTop = false;
   const old = document.querySelector('section.card-pane');
   const cardScroll = old ? [old.dataset.key, old.scrollTop] : null;
   const sideScroll = document.querySelector('aside.side')?.scrollTop || 0;
+  const pillScroll = document.querySelector('.pills')?.scrollLeft;
   $app.replaceChildren(shell);
   shell.querySelector('aside.side').scrollTop = sideScroll;
   const pane = shell.querySelector('section.card-pane');
   if (pane && cardScroll && pane.dataset.key === cardScroll[0]) pane.scrollTop = cardScroll[1];
   if (S.sideOpen) $app.append(el('div', { class: 'scrim', onclick: () => { S.sideOpen = false; render(); } }));
-  shell.querySelector('main.list').scrollTop = scroll;
+  shell.querySelector('main.list > .scroll').scrollTop = scroll;
+  // Вкладки листаются вбок: выбранная — в поле зрения, иначе — где была.
+  const pills = shell.querySelector('.pills'), on = pills?.querySelector('.on');
+  if (pills && on && (on.offsetLeft < pills.scrollLeft || on.offsetLeft + on.offsetWidth > pills.scrollLeft + pills.clientWidth)) pills.scrollLeft = on.offsetLeft - 12;
+  else if (pills && pillScroll != null) pills.scrollLeft = pillScroll;
   if (focused) {
     const q = document.getElementById(focused.id);
     if (q && !q.disabled) {
@@ -339,6 +363,33 @@ function render() {
     }
   }
   renderBulk();
+}
+
+/** Колонка списка как экран режима в Правке 4.0: шапка стоит, между ней и строкой «сказать» прокручивается
+ *  содержимое. Страницы по-прежнему кладут строку «Скажи, что сделать» первой в тело — здесь она уезжает
+ *  вниз, под большой палец (DESIGN §1: «пилюли-строки наверху больше нет»). */
+const NO_SAY = ['settings', 'stats'];
+function listColumn(r) {
+  const parts = [renderMain(r)].flat(Infinity).filter(Boolean);
+  const top = parts[0]?.classList?.contains('list-head') ? parts.shift() : null;
+  const scroll = el('div', { class: 'scroll' }, parts);
+  plate(scroll);
+  let say = scroll.querySelector('.quick.say');
+  if (!say && !NO_SAY.includes(r.kind)) say = quickAdd({});
+  return el('main', { class: 'list' }, top, scroll, el('div', { class: 'dock' }, say));
+}
+
+/** Раздел = надстрочник над стеклянной плашкой: всё, что в группе под заголовком, — в одну плашку со
+ *  строками через волосяную линию. Плитки и доска — сами стекло, их не оборачиваем. */
+const OWN_GLASS = '.dlist, .tiles, .board, .choices, .day-chart, .lv-card, .deals, .pchips, .person-info, .toolbar, .empty';
+function plate(root) {
+  for (const g of root.querySelectorAll('.group')) {
+    const kids = [...g.children].filter((x) => x.tagName !== 'H2');
+    if (!kids.length || kids.every((x) => x.matches(OWN_GLASS) || x.classList.contains('rows'))) continue;
+    const rows = el('div', { class: 'rows' });
+    kids[0].before(rows);
+    rows.append(...kids);
+  }
 }
 
 // ── Перерисовка не по действию человека ─────────────────────────────────
@@ -376,18 +427,8 @@ function renderSide(r) {
     if (e.key === 'Enter') { S.sideOpen = false; liveSearch(search.value); } // на телефоне — убрать шторку, результаты под ней
     if (e.key === 'Escape') { search.value = ''; search.blur(); }
   });
-  const sphere = el('div', { class: 'seg' }, [['work', 'Работа'], ['home', 'Дом'], ['', 'Всё']].map(([v, t]) =>
-    el('button', { class: S.sphere === v ? 'on' : '', onclick: () => { S.sphere = v; LS.set('sphere', v); render(); } }, t)));
-  // «Сейчас» — отдельной строкой над остальными: до пяти дел, которые обязан сделать сегодня.
-  const nav = Object.entries(VIEWS).map(([k, v]) => {
-    const n = v.count ? v.count() : 0;
-    if (k === 'now') {
-      return el('div', { class: 'nav-now' }, navItem('#/now', tint(icon(v.icon), v.color), v.title, null, r.kind === k,
-        el('span', { class: 'now-meter' + (n >= NOW_MAX ? ' full' : '') }, `${n} из ${NOW_MAX}`)));
-    }
-    const badge = k === 'new' && n ? el('span', { class: 'badge-new' }, n) : null;
-    return navItem('#/' + k, tint(icon(v.icon), v.color), v.title, k === 'new' ? null : n, r.kind === k, badge, v.hot && v.hot());
-  });
+  // Виды («Сейчас», «Новое»…) и сфера — в шапке списка вкладками и «Все сферы ⌄», как в Правке;
+  // полка — только разделы: CRM, избранное, клиенты, проекты, люди, архив.
 
   // Проекты: избранные сверху, дальше по видам; число открытых и точка просрочки.
   const openBy = new Map(), lateBy = new Set();
@@ -447,12 +488,12 @@ function renderSide(r) {
 
   const me = person(S.me.person_id) || { id: S.me.user, name: S.me.name };
   return el('aside', { class: 'side' },
-    el('div', { class: 'brand' }, el('img', { src: '/static/icon.svg', alt: '' }), el('b', {}, 'Дела'),
+    el('div', { class: 'brand' }, coin('tick'), el('b', {}, 'Дела'),
       el('span', { class: 'who' }, S.me.name), avatar(me)),
     gameCard(),
-    search, sphere, nav, groups,
+    search, groups,
     el('div', { class: 'side-foot' },
-      el('button', { class: 'settings-btn' + (r.kind === 'settings' ? ' on' : ''), onclick: () => go('#/settings') }, icon('gear', 14), 'Настройки'),
+      el('button', { class: 'settings-btn' + (r.kind === 'settings' ? ' on' : ''), onclick: () => go('#/settings') }, icon('gear', 15), 'Настройки'),
       el('button', { onclick: async () => { await api('/auth/logout', {}); location.reload(); } }, 'Выйти')),
     el('div', { class: 'side-keys' }, el('span', { class: 'kbd' }, 'n'), ' сказать Claude · ', el('span', { class: 'kbd' }, '/'), ' поиск'));
 }
@@ -477,28 +518,66 @@ function liveSearch(v) {
 }
 
 // ── Основная колонка ────────────────────────────────────────────────────
-/** Значок перед заголовком: цвет вида, проекта или аватар человека — по маршруту. */
-function headIcon() {
-  const r = route();
-  const v = VIEWS[r.kind] || CRM_VIEWS[r.kind];
-  const box = (name, c) => tint(el('span', { class: 'h-ico' }, icon(name, 18)), c);
-  if (v) return box(v.icon, v.color);
-  if (r.kind === 'project' && project(r.id)) return box(project(r.id).kind === 'client' ? 'building' : 'folder', hueOf(r.id));
-  if (r.kind === 'person' && person(r.id)) return avatar(person(r.id), 'big');
-  if (r.kind === 'deal' && S.deals.get(r.id)) return box('funnel', hueOf(S.deals.get(r.id).project_id));
-  if (r.kind === 'search') return box('search', '#9aa3b2');
-  if (r.kind === 'settings') return box('gear', '#9aa3b2');
-  if (r.kind === 'stats') return box('chart', '#7c9cff');
-  return null;
+// ── Шапка режима (Правка 4.0, ModeHeader): монета, название Literata, второй тон; строка состояния;
+// вкладки-пилюли. На видах («Сейчас», «Новое»…) название — «Дела», второй тон — выбор сферы; на страницах
+// внутри (клиент, человек, сделка, CRM) — «‹», значок страницы на монете и её имя.
+const KIND_ONE = { client: 'Клиент', internal: 'Внутреннее', personal: 'Личное' };
+const SPHERE = { work: 'Работа', home: 'Дом', '': 'Все сферы' };
+function headCoin(r) {
+  if (VIEWS[r.kind]) return coin('tick');
+  if (CRM_VIEWS[r.kind]) return coin(CRM_VIEWS[r.kind].icon);
+  if (r.kind === 'project') return coin(project(r.id)?.kind === 'client' ? 'building' : 'folder');
+  if (r.kind === 'person' && person(r.id)) return coin(initials(person(r.id).name));
+  if (r.kind === 'deal') return coin('funnel');
+  return coin({ search: 'search', settings: 'gear', stats: 'chart' }[r.kind] || 'tick');
+}
+function headSub(r) {
+  if (VIEWS[r.kind]) {
+    return el('button', { class: 'h-sub', title: 'Сфера: работа, дом или всё', onclick: (e) => {
+      const at = e.currentTarget;
+      setTimeout(() => popAt(at, Object.entries(SPHERE).map(([v, t]) => el('button', { onclick: () => { closePop(); S.sphere = v; LS.set('sphere', v); render(); } },
+        t, S.sphere === v ? el('span', { class: 'k' }, icon('check', 14)) : null))), 0);
+    } }, SPHERE[S.sphere] || SPHERE[''], icon('down', 14));
+  }
+  const p = r.kind === 'project' ? project(r.id) : null;
+  const dl = r.kind === 'deal' ? S.deals.get(r.id) : null;
+  if (dl && project(dl.project_id)) return el('a', { class: 'h-sub', href: '#/p/' + dl.project_id }, 'Сделка · ' + project(dl.project_id).name);
+  const word = p ? KIND_ONE[p.kind] || 'Проект' : r.kind === 'person' ? 'Человек' : CRM_VIEWS[r.kind] ? 'CRM' : 'Дела';
+  return el('span', { class: 'h-sub' }, word);
+}
+/** Назад — туда, откуда пришёл; пришёл по ссылке — на «Сейчас». */
+const back = () => (history.length > 1 ? history.back() : go('#/now'));
+
+function tabsRow(r) {
+  const pills = Object.entries(VIEWS).map(([k, v]) => {
+    const n = v.count ? v.count() : 0;
+    return el('a', { class: 'pill-tab' + (r.kind === k ? ' on' : '') + (k === 'now' && n >= NOW_MAX ? ' full' : '') + (v.hot && v.hot() ? ' hot' : ''), href: '#/' + k },
+      v.title, k === 'now' ? el('b', {}, `${n} из ${NOW_MAX}`) : n ? el('b', {}, n) : null);
+  });
+  return el('div', { class: 'tabs-row' },
+    el('button', { class: 'ib burger', title: 'Разделы: CRM, клиенты, проекты, люди', onclick: () => { S.sideOpen = true; render(); } }, icon('menu', 22)),
+    el('nav', { class: 'pills' }, pills));
 }
 
 function head(title, sub, extra) {
-  const lead = headIcon();
-  return el('div', { class: 'list-head' + (lead ? ' has-ico' : '') },
+  const r = route();
+  const view = !!VIEWS[r.kind];
+  const tools = el('span', { class: 'tools' },
+    el('button', { class: 'ib', title: 'Поиск (/)', onclick: () => {
+      const s = document.querySelector('.side-search');
+      if (s && s.offsetParent) s.focus(); else liveSearch('');
+    } }, icon('search', 22)),
+    el('button', { class: 'ib', title: 'Сказать или записать дело (n)', onclick: () => document.getElementById('quick')?.focus() }, icon('plus', 22)));
+  return el('div', { class: 'list-head' },
     el('div', { class: 'row1' },
-      el('button', { class: 'burger', onclick: () => { S.sideOpen = true; render(); } }, '☰'),
-      el('h1', {}, lead, el('span', { class: 'h-t' }, title)), extra || null),
-    sub ? el('div', { class: 'sub' }, [].concat(sub).filter(Boolean).map((x) => (x.nodeType ? x : el('span', {}, x)))) : null);
+      view ? null : el('button', { class: 'ib h-back', title: 'Назад', onclick: back }, icon('back', 22)),
+      headCoin(r),
+      el('div', { class: 'h-titles' }, el('h1', { title: view ? null : title }, view ? 'Дела' : title), headSub(r)),
+      extra || null,
+      el('a', { class: 'ib', href: '#/stats', title: 'Статистика и путь' }, icon('donut', 22)),
+      el('a', { class: 'ib', href: '#/settings', title: 'Настройки' }, icon('gear', 22))),
+    el('div', { class: 'sub' }, [].concat(sub || []).filter(Boolean).map((x) => (x.nodeType ? x : el('span', {}, x))), tools),
+    tabsRow(r));
 }
 
 function groupPicker(key, def, options) {
@@ -568,17 +647,41 @@ function renderNow() {
   const pick = m.filter((t) => !isNow(t) && t.ball === 'mine' && t.due_date && t.due_date <= S.today);
   const next = m.filter((t) => !isNow(t) && t.ball === 'mine' && t.due_date === D.add(S.today, 1));
   const n = newCount();
-  const sub = [D.long(S.today), el('span', { class: left ? '' : 'today' }, `в «Сейчас» ${now.length} из ${NOW_MAX}`),
-    n ? el('a', { class: 'link', href: '#/new' }, `в «Новом» ждут: ${n}`) : null];
-  const bolt = (c) => tint(icon('bolt', 14), c);
-  return [head('Сейчас', sub),
+  const est = (list) => dur(list.reduce((s, t) => s + (t.estimate_min || 0), 0));
+  return [head('Сейчас', [D.long(S.today)]),
     el('div', { class: 'body' },
       quickAdd({}, { placeholder: 'Скажи, что сделать: «сверку Наташе — первым делом», «звонок Ивану убери из сейчас»' }),
-      now.length ? groupBox('Сделать сегодня', now, { lead: bolt('var(--now)') })
-        : el('div', { class: 'empty' }, `Выбери на сегодня до ${NOW_MAX} дел — молния слева у дела. Сначала они, потом всё остальное.`),
+      nowTiles(),
+      now.length ? groupBox('Сделать сегодня', now, { sum: est(now) })
+        : el('div', { class: 'empty' }, `В «Сейчас» пусто — молния у дела ставит его сюда, до ${NOW_MAX}`),
       pick.length ? groupBox(left > 0 ? `Выбрать на сегодня: просрочено и на сегодня` : 'Ещё на сегодня и просрочено', pick.sort(sortTasks),
-        { lead: tint(icon('date', 14), '#f2706a'), late: pick.some(isLate) }) : null,
-      next.length && left > 0 ? groupBox('Завтра — если останется время', next.sort(sortTasks), { lead: tint(icon('cal', 14), 'var(--muted)') }) : null)];
+        { late: pick.some(isLate) }) : null,
+      next.length && left > 0 ? groupBox('Завтра — если останется время', next.sort(sortTasks), { sum: est(next), cls: 'later' }) : null,
+      el('a', { class: 'new-link', href: '#/new' }, icon('meet', 22), el('span', { class: 't' }, 'Новое из встреч и чатов'),
+        n ? el('span', { class: 'badge-new' }, n) : null, icon('chev', 22)))];
+}
+
+/** Плитки над «Сейчас» — как в Делах на телефоне (DelaTab.DelaStats): Сегодня «0 из 5 · 2 ч 25 м»,
+ *  Неделя «14 из 23 · осталось 9», Просрочено «1 · на 2 дн», Жду «6 · от 4 чел.». Сутки сделанного — московские. */
+function nowTiles() {
+  const mine = openMine(), now = nowTasks();
+  const doneAll = all().filter((t) => t.status === 'done' && isMine(t) && t.completed_at);
+  const doneDay = (t) => MSK_DAY(t.completed_at).day;
+  const doneToday = doneAll.filter((t) => doneDay(t) === S.today && t.focus_on === S.today).length;
+  const monday = D.add(S.today, -D.wd(S.today)), sunday = D.add(monday, 6);
+  const weekOpen = mine.filter((t) => t.due_date && t.due_date <= sunday).length;
+  const weekDone = doneAll.filter((t) => doneDay(t) >= monday && doneDay(t) <= sunday).length;
+  const late = mine.filter(isLate);
+  const lateDays = Math.max(0, ...late.map((t) => D.diff(S.today, t.due_date)));
+  const waiting = mine.filter((t) => t.ball === 'waiting');
+  const people = new Set(waiting.map((t) => t.person_id).filter(Boolean)).size;
+  const tile = (href, label, value, delta, cls) => el('a', { class: 'st' + (cls ? ' ' + cls : ''), href },
+    el('small', {}, label), el('b', {}, value), el('i', {}, delta || ' '));
+  return el('div', { class: 'stats-row' },
+    tile('#/now', 'Сегодня', `${doneToday} из ${now.length + doneToday}`, dur(now.reduce((s, t) => s + (t.estimate_min || 0), 0))),
+    tile('#/upcoming', 'Неделя', `${weekDone} из ${weekOpen + weekDone}`, weekOpen ? `осталось ${weekOpen}` : ''),
+    tile('#/upcoming', 'Просрочено', String(late.length), lateDays ? `на ${lateDays} дн` : '', late.length ? 'worse' : ''),
+    tile('#/waiting', 'Жду', String(waiting.length), people ? `от ${people} чел.` : ''));
 }
 
 const doneToggle = () => el('button', { class: 'chip-btn' + (S.showDone ? ' on' : ''), onclick: () => { S.showDone = !S.showDone; render(); } }, 'Сделанные');
@@ -627,6 +730,7 @@ function groupBox(title, items, opts = {}, by) {
   const h = title ? el('h2', { class: opts.late ? 'late' : '' }, lead || null,
     opts.href ? el('a', { class: 'link', href: opts.href }, title) : title, el('span', { class: 'n' }, items.length),
     opts.sub ? el('span', { class: 'gsub' }, opts.sub) : null,
+    opts.sum && !opts.act ? el('span', { class: 'sum' }, opts.sum) : null,
     opts.act ? el('span', { class: 'act' }, opts.act) : opts.late && items.length > 1 ? el('span', { class: 'act' },
       el('button', { class: 'chip-btn', onclick: (e) => reschedulePop(e.currentTarget, items.map((t) => t.id)) }, 'Перенести все')) : null) : null;
   return el('div', { class: 'group' + (opts.cls ? ' ' + opts.cls : '') }, h, opts.before || null, items.map((t) => taskRow(t, by, opts.chips && opts.chips(t))));
@@ -645,8 +749,9 @@ function toggleNow(t) {
   if (nowRoom([t.id])) setFields([t.id], { focus_on: S.today });
 }
 
-// Строка дела. Слева — выбор, «Сейчас» и галка: их места заняты всегда, при наведении они только
-// проявляются, поэтому строка не прыгает. Номер — справа, бледно: на него ссылаются, но читать не мешает.
+// Строка дела — как TaskRow в Делах на телефоне (Правка 4.0): слева молния «Сейчас», кольцо-галочка (зона
+// касания 44), «Кто: действие» и вторая строка meta через «·» — срок, проект, мяч, минуты, номер; справа
+// микрофон «поправить словами». Просроченное — жирным «просрочено 2 дн» и толстым кольцом, без красного.
 // extra — подписи от места, где строка стоит. opt.compact — короткая строка «Нового» (владелец 08.10.2026:
 // «ужасно всё засоряет»): только срок и проект, а справа вместо номера — значок, откуда дело (opt.mark).
 function taskRow(t, by, extra, opt = {}) {
@@ -656,48 +761,52 @@ function taskRow(t, by, extra, opt = {}) {
   const due = dueLabel(t);
   const now = isNow(t);
   const stop = (e) => e.stopPropagation();
-  const m = (cls, ic, ...kids) => el('span', { class: 'm' + (cls ? ' ' + cls : '') }, ic ? icon(ic, 12) : null, ...kids);
+  const m = (cls, ...kids) => el('span', { class: 'm' + (cls ? ' ' + cls : '') }, ...kids);
   const chips = [];
-  if (due && (by !== 'date' || due.cls === 'late')) chips.push(m(due.cls, 'date', due.text));
+  if (due && due.cls === 'late') chips.push(m('late', `просрочено ${D.diff(S.today, t.due_date)} дн`), m('', D.ddmm(t.due_date)));
+  else if (due && by !== 'date') chips.push(m(due.cls, due.text));
   const rem = remindChip(t);
-  if (rem) chips.push(m('remind', null, rem));
+  if (rem) chips.push(m('remind', rem));
   if (opt.compact) {
-    if (p) chips.push(el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, dot(p.id), p.name));
+    if (p) chips.push(el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, p.name));
   } else if (by !== 'project' && !['project', 'deal'].includes(route().kind)) {
     // Без проекта — не тупик, а вопрос: щелчок — выбрать проект.
-    chips.push(p ? el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, dot(p.id), p.name)
-      : el('button', { class: 'm noproj', title: 'Выбрать проект', onclick: (e) => { stop(e); projectPop(e.currentTarget, [t.id]); } }, icon('tray', 12), 'без проекта'));
+    chips.push(p ? el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, p.name)
+      : el('button', { class: 'm noproj', title: 'Выбрать проект', onclick: (e) => { stop(e); projectPop(e.currentTarget, [t.id]); } }, 'без проекта'));
   }
   const dl = !opt.compact && t.deal_id ? S.deals.get(t.deal_id) : null;
-  if (dl && by !== 'deal' && route().kind !== 'deal') chips.push(el('a', { class: 'm link', href: '#/d/' + dl.id, onclick: stop }, icon('funnel', 12), dl.name));
+  if (dl && by !== 'deal' && route().kind !== 'deal') chips.push(el('a', { class: 'm link', href: '#/d/' + dl.id, onclick: stop }, dl.name));
   // В короткой строке мяч и человек — в самом названии («Кто: действие»), минуты и метки — в карточке.
   if (!opt.compact && t.ball !== 'mine' && by !== 'ball') {
-    chips.push(m('ball-' + t.ball, t.ball === 'waiting' ? 'hourglass' : 'chat',
-      BALL[t.ball] + (who ? ' ' + personName(who) : '') + (t.ball === 'waiting' && t.waiting_since ? ' · ' + D.diff(S.today, t.waiting_since) + ' дн.' : '')));
+    chips.push(m('ball-' + t.ball, BALL[t.ball] + (who ? ' ' + personName(who) : '')
+      + (t.ball === 'waiting' && t.waiting_since ? ' ' + D.diff(S.today, t.waiting_since) + ' дн' : '')));
   } else if (!opt.compact && who && by !== 'person') {
     chips.push(el('a', { class: 'm link', href: '#/h/' + who.id, onclick: stop }, '@' + personName(who)));
   }
-  if (t.estimate_min && !opt.compact) chips.push(m('', 'clock', t.estimate_min + ' мин'));
+  if (t.estimate_min && !opt.compact) chips.push(m('', dur(t.estimate_min)));
   for (const l of opt.compact ? [] : t.labels || []) chips.push(el('span', { class: 'tag' }, l));
   if (extra) chips.push(...[].concat(extra).filter(Boolean));
+  if (!opt.mark) chips.push(m('', '#' + t.num));
   const pick = el('input', { type: 'checkbox', class: 'pick', title: 'Выбрать (Shift — диапазон)' });
   pick.checked = S.sel.has(t.id);
   pick.addEventListener('click', (e) => { e.stopPropagation(); togglePick(t.id, e.shiftKey); });
   return el('div', {
-    class: 'task ball-' + t.ball + (opt.compact ? ' compact' : '') + (isOpen(t) ? '' : ' done') + (now ? ' now' : '') + (S.cardId === t.id ? ' open-now' : '') + (S.sel.has(t.id) ? ' sel' : ''),
+    class: 'task ball-' + t.ball + (opt.compact ? ' compact' : '') + (isOpen(t) ? '' : ' done') + (now ? ' now' : '') + (isLate(t) ? ' late' : '')
+      + (S.cardId === t.id ? ' open-now' : '') + (S.sel.has(t.id) ? ' sel' : ''),
     'data-id': t.id,
     onclick: () => openCard(t.id),
   },
   pick,
   el('div', { class: 'lead' },
     el('button', { class: 'now-btn' + (now ? ' on' : ''), title: now ? 'Убрать из «Сейчас»' : `В «Сейчас» — сделать сегодня (до ${NOW_MAX} дел)`,
-      onclick: (e) => { e.stopPropagation(); toggleNow(t); } }, icon('bolt', 15)),
-    el('button', { class: 'mic-btn' + (S.askTask === t.id ? ' on' : ''), title: 'Сказать Claude, что сделать с этим делом',
-      onclick: (e) => { e.stopPropagation(); if (S.askTask === t.id && rec) stopListening(); else openAsk(t); } }, icon('mic', 14))),
+      onclick: (e) => { e.stopPropagation(); toggleNow(t); } }, icon('bolt', 18))),
   el('button', { class: 'tick' + (isOpen(t) ? '' : ' done'), title: isOpen(t) ? 'Сделано' : 'Вернуть', onclick: (e) => { e.stopPropagation(); toggleDone([t]); } }),
   el('div', { class: 'main' }, el('div', { class: 'title' }, t.title), chips.length ? el('div', { class: 'chips' }, chips) : null,
-    S.askTask === t.id ? askBox(t) : null),
-  opt.mark || el('span', { class: 'num' }, '#' + t.num));
+    S.askTask === t.id && S.cardId !== t.id ? askBox(t) : null),
+  opt.compact ? null : el('div', { class: 'acts-r' },
+    el('button', { class: 'mic-btn' + (S.askTask === t.id ? ' on' : ''), title: 'Поправить словами: сказать Claude, что сделать с этим делом',
+      onclick: (e) => { e.stopPropagation(); if (S.askTask === t.id && rec) stopListening(); else openAsk(t); } }, icon('mic', 22))),
+  opt.mark || null);
 }
 
 // ── Действия ────────────────────────────────────────────────────────────
@@ -963,20 +1072,23 @@ function acItems(kind, q) {
   return out.slice(0, 8);
 }
 
-// ── Строка «Скажи, что сделать» — наверху каждой страницы ───────────────
+// ── Строка «Скажи, что сделать» — на каждой странице, внизу (строка «сказать» Правки 4.0) ────────
 // Владелец, 06.10.2026: «везде должен быть сверху красивый текстбокс… скажи, что сделать с этим делом,
 // с этим клиентом — я наговариваю, и он внутри всё правит». Claude видит дела на экране (в карточке
 // клиента, сделки, человека — и саму карточку, это Opus), правит их, заводит новые, в «Новом» решает
 // предложения. 08.10.2026: «знак Клода уберём… слева микрофончик, справа send»: микрофон — нажал, говоришь,
-// нажал ещё раз — ушло Claude; написал — стрелка или Enter. Строка висит наверху и при прокрутке (render
-// переносит её в шапку): смотришь на дела, говоришь — Claude видит, что в окне (pageScope).
-// «+» больше нет: одно дело как написано, с разметкой, — Alt+Enter.
+// нажал ещё раз — ушло Claude; написал — стрелка или Enter. В тот же день — вид Правки 4.0: строка стоит
+// внизу экрана под большим пальцем и не уезжает при прокрутке (владелец: «внизу, ага»); listColumn
+// переносит её туда. «+» больше нет: одно дело как написано, с разметкой, — Alt+Enter.
 // label — о чём строка («с клиентом «Альфа»»), placeholder — пример команды для этой страницы.
+// С 08.10.2026 (Правка 4.0) это строка «сказать» внизу экрана: подсказка короткая («Саша, говори дела»),
+// примеры команд — во всплывающей подсказке поля; клавиша справа — голос, а с текстом — «отдать Claude».
 function quickAdd(defaults, { placeholder = null, label = null } = {}) {
   const busy = !!S.parse;
   const input = el('textarea', { id: 'quick', rows: 1, autocomplete: 'off', disabled: busy,
     'aria-label': 'Скажи, что сделать ' + (label || 'с этими делами'),
-    placeholder: placeholder || 'Скажи или напиши: «все просроченные — на пятницу», «Ивану позвонить завтра», надиктовка целиком' });
+    placeholder: label ? 'Скажи, что сделать ' + label : `${S.me.name || 'Саша'}, говори дела`,
+    title: placeholder || 'Скажи или напиши: «все просроченные — на пятницу», «Ивану позвонить завтра», надиктовка целиком' });
   if (busy) input.value = S.parse.text;
   else input.value = S.quickText || '';
   const preview = el('div', { class: 'preview' });
@@ -1019,6 +1131,7 @@ function quickAdd(defaults, { placeholder = null, label = null } = {}) {
     // Как Alt+Enter поймёт разметку — только если она есть: Claude читает текст сам.
     preview.replaceChildren(...(p.tags.length ? [el('span', { class: 'pv-h' }, 'Alt+Enter запишет:'), ...p.tags.map((t) => el('span', {}, t))] : []));
     help.classList.toggle('hidden', !input.value);
+    box.classList.toggle('has-text', !!input.value.trim());
     grow();
     updateAc();
   };
@@ -1068,9 +1181,10 @@ function quickAdd(defaults, { placeholder = null, label = null } = {}) {
     else claudeParse(input, defaults);
   });
 
+  // Отправить — клавиша справа, под большим пальцем; пока Claude думает — заливка по строке, без крутилки.
   const sendBtn = el('button', { type: 'button', class: 'q-btn send-btn' + (busy ? ' busy' : ''), disabled: busy,
     title: !S.me.claude ? 'Claude на сервере ещё не настроен' : busy ? 'Claude думает…' : 'Отдать Claude (Enter)',
-    'aria-label': 'Отдать Claude', onclick: () => claudeParse(input, defaults) }, busy ? el('span', { class: 'spin' }) : icon('up', 18));
+    'aria-label': 'Отдать Claude', onclick: () => claudeParse(input, defaults) }, icon('up', 24));
   // Микрофон: нажал — слушаю (сказанное дописывается в поле), нажал ещё раз — ушло Claude. Браузер сам
   // закрывает распознавание в паузе (Chrome на телефоне — почти сразу) — listen открывает его снова: 08.10.2026
   // так команда уходила посреди фразы, а второе нажатие начинало новую запись в пустом поле — «всё стирается».
@@ -1095,11 +1209,16 @@ function quickAdd(defaults, { placeholder = null, label = null } = {}) {
       });
       if (!ok) S.listenQuick = false;
       render();
-    } }, icon('mic', 18));
+    } }, icon(hearing ? 'stop' : 'mic', 22));
   if (input.value) setTimeout(grow);
   const card = pageScope(defaults).card;
-  return el('div', { class: 'quick say' + (card ? ' card-say' : ''), title: card ? 'В карточке Claude (Opus) видит её целиком: сделки, людей, хронологию — и правит их' : null },
-    el('div', { class: 'quick-wrap' }, el('div', { class: 'quick-box' + (busy ? ' busy' : '') + (hearing ? ' hearing' : '') }, micBtn, input, sendBtn), ac),
+  // В карточке клиента, сделки, человека над строкой — о чём она и что Claude видит карточку целиком.
+  const say = card ? el('label', { class: 'say-h', for: 'quick' }, el('span', {}, 'Скажи, что сделать ' + (label || 'с этими делами')),
+    el('span', { class: 'say-model', title: 'В карточке Claude видит её целиком: сделки, людей, хронологию — и правит их' }, 'Opus · видит карточку')) : null;
+  const box = el('div', { class: 'quick-box' + (busy ? ' busy' : '') + (hearing ? ' hearing' : '') + (input.value.trim() ? ' has-text' : '') }, micBtn, input, sendBtn);
+  return el('div', { class: 'quick say' + (card ? ' card-scope' : '') },
+    say,
+    el('div', { class: 'quick-wrap' }, box, ac),
     status, preview, help);
 }
 
@@ -1202,7 +1321,7 @@ function pageScope(defaults = {}) {
   return scope;
 }
 
-// ── Claude: команда или надиктовка из поля наверху — правка дел на экране или новые дела ──
+// ── Claude: команда или надиктовка из строки «сказать» — правка дел на экране или новые дела ──
 async function claudeParse(input, defaults) {
   const text = input.value.trim();
   if (S.parse) return;
@@ -1241,7 +1360,7 @@ function openAsk(t) {
   render();
   const go = () => document.getElementById('ask-' + t.id);
   go()?.focus();
-  // Как у строки наверху: нажал — говоришь, нажал ещё раз — ушло Claude.
+  // Как у строки «говори дела»: нажал — говоришь, нажал ещё раз — ушло Claude.
   listen((txt) => { S.askText = txt; const i = go(); if (i) i.value = txt; },
     (txt) => { if (S.askTask === t.id && txt && voiceAuto()) askTask(t.id, txt); else render(); });
   render();
@@ -1283,12 +1402,12 @@ function askBox(t) {
     if (e.key === 'Enter') { e.preventDefault(); askTask(t.id, input.value); }
     if (e.key === 'Escape') { stopListening(); S.askTask = null; render(); }
   });
-  // Как строка наверху: микрофон слева, стрелка справа.
+  // Как строка «говори дела»: микрофон слева, стрелка справа; пока Claude правит — заливка по строке.
   return el('div', { class: 'ask-inline' + (busy ? ' busy' : ''), onclick: stop },
     busy ? null : el('button', { class: 'q-btn mic' + (rec ? ' on' : ''), type: 'button', title: rec ? 'Готово — отдать Claude' : 'Сказать голосом: нажми, говори, нажми ещё раз',
       onclick: () => { if (rec) stopListening(); else openAsk(t); } }, icon('mic', 16)),
     input,
-    busy ? el('span', { class: 'ask-status' }, el('span', { class: 'spin' }), 'правит…') : [
+    busy ? el('span', { class: 'ask-status' }, 'правит…') : [
       el('button', { class: 'q-btn send-btn', type: 'button', title: 'Отдать Claude (Enter)', 'aria-label': 'Отдать Claude', onclick: () => askTask(t.id, input.value) }, icon('up', 16)),
       el('button', { class: 'icon-btn', type: 'button', title: 'Закрыть (Esc)', onclick: () => { stopListening(); S.askTask = null; render(); } }, icon('x', 13))]);
 }
@@ -1583,7 +1702,7 @@ function renderWeek() {
       noStep.length ? el('div', { class: 'group' }, el('h2', {}, 'Проекты в работе без моего следующего шага', el('span', { class: 'n' }, noStep.length)),
         noStep.map((p) => navItem('#/p/' + p.id, dot(p.id), p.name, null, false))) : null,
       loose.length ? groupBox('Без проекта — куда их?', loose.sort(sortTasks), { lead: tint(icon('tray', 14), NO_PROJECT.color),
-        sub: 'щелчок по «без проекта» — выбрать, или скажи Claude наверху',
+        sub: 'щелчок по «без проекта» — выбрать, или скажи Claude внизу',
         act: loose.length > 1 ? el('button', { class: 'chip-btn', onclick: (e) => projectPop(e.currentTarget, loose.map((t) => t.id)) }, 'Все в проект…') : null }) : null,
       !stale.length && !waitStale.length && !noStep.length && !loose.length ? el('div', { class: 'empty' }, 'Чисто. Неделя разобрана.') : null)];
 }
@@ -1633,9 +1752,9 @@ function whenWords(iso) {
 const SUG_FROM = { meeting: 'встреча', telegram: 'Telegram', userbot: 'Telegram', mcp: 'Claude' };
 // Откуда пришло — значок справа: наговорка — микрофон, встреча — двое, Telegram — самолётик, Claude — облачко.
 const ORIGIN = {
-  voice: ['mic', '#e5774f', 'наговорка'], meeting: ['meet', '#e57bd1', 'встреча'], telegram: ['send', '#38bdf8', 'Telegram'],
-  userbot: ['send', '#38bdf8', 'Telegram'], bot: ['send', '#38bdf8', 'ответ в Telegram'], mcp: ['chat', '#d97757', 'Claude'],
-  web: ['pen', 'var(--faint)', 'в вебе'], manual: ['pen', 'var(--faint)', 'руками'], import: ['list', 'var(--faint)', 'перенос'],
+  voice: ['mic', 'var(--plan)', 'наговорка'], meeting: ['meet', 'var(--plan)', 'встреча'], telegram: ['send', 'var(--plan)', 'Telegram'],
+  userbot: ['send', 'var(--plan)', 'Telegram'], bot: ['send', 'var(--plan)', 'ответ в Telegram'], mcp: ['chat', 'var(--plan)', 'Claude'],
+  web: ['pen', 'var(--meta)', 'в вебе'], manual: ['pen', 'var(--meta)', 'руками'], import: ['list', 'var(--meta)', 'перенос'],
 };
 const origin = (src) => ORIGIN[src] || ORIGIN.manual;
 /** Предложение, из которого вышло дело: пачка встречи или окна Telegram. */
@@ -1649,7 +1768,7 @@ function originMark(t, s) {
   if (t.created_by && t.created_by !== t.owner_id) {
     const who = [...S.people.values()].find((p) => p.user_id === t.created_by);
     return el('span', { class: 'src-mark', title: `поставил(а) ${who ? personName(who) : t.created_by} · ${whenWords(t.created_at)} · #${t.num}` },
-      who ? avatar(who, 'tiny') : tint(icon('person', 14), '#a78bfa'));
+      who ? avatar(who, 'tiny') : tint(icon('person', 14), 'var(--plan)'));
   }
   const [ic, col, word] = origin(t.source);
   return el('span', { class: 'src-mark', title: [word + (s && s.batch_title ? ': ' + s.batch_title : ''), whenWords(t.created_at), '#' + t.num].join(' · ') },
@@ -1725,7 +1844,9 @@ function askItem(s) {
   S.sugOrder.push(s.id);
   const twin = twinOf(s);
   const q = askWhy(s);
+  // Карточка предложения как в Делах · Новое (screens/07): сверху источник — кремовый значок и пачка.
   return el('div', { class: 'sug' + (s.kind !== 'create' ? ' ' + s.kind : '') },
+    el('div', { class: 'src-line' }, sugMark(s), el('span', {}, s.batch_title || origin(s.source)[2])),
     el('div', { class: 'main' }, el('div', {}, el('span', { class: 'sug-n', title: 'Номер для Claude: «П' + S.sugOrder.length + ' прими»' }, 'П' + S.sugOrder.length), title),
       q ? el('div', { class: 'q' }, q) : null,
       hint ? el('div', { class: 'hint' }, hint) : null,
@@ -1737,8 +1858,7 @@ function askItem(s) {
     el('div', { class: 'acts' },
       el('button', { class: 'btn small ok', onclick: () => decide([s.id], 'accept') }, ASK_YES[s.kind] || 'Да'),
       s.kind === 'create' ? el('button', { class: 'btn small', onclick: () => { S.draft = s; S.cardId = null; render(); } }, 'Поправить') : null,
-      el('button', { class: 'btn small bad', onclick: () => { const r = prompt(s.kind === 'create' ? 'Почему не дело? (можно пусто)' : 'Почему нет? (можно пусто)'); if (r !== null) decide([s.id], 'reject', r || null); } }, 'Не надо')),
-    sugMark(s));
+      el('button', { class: 'btn small bad', onclick: () => { const r = prompt(s.kind === 'create' ? 'Почему не дело? (можно пусто)' : 'Почему нет? (можно пусто)'); if (r !== null) decide([s.id], 'reject', r || null); } }, 'Не надо')));
 }
 
 /** «Поставил»: новые дела, свежие сверху, по дням; сделанные не показываем — они уже не новость. */
@@ -1872,18 +1992,18 @@ function renderSettings() {
   return [head('Настройки', ['Claude в Делах, голос и траты']),
     el('div', { class: 'body settings' },
       el('div', { class: 'group' }, el('h2', {}, tint(icon('chat', 14), 'var(--claude)'), 'Claude правит дела словами'),
-        el('div', { class: 'hint-line' }, 'Строка наверху каждой страницы и микрофон у дела. Claude видит, что на экране и в окне, что выбрано галочками и открыто в карточке, — и все остальные открытые дела коротко. Модель ниже — для списков; в карточке клиента, сделки и человека и для новых дел из надиктовки всегда Opus 5.5.'),
+        el('div', { class: 'hint-line' }, 'Строка «говори дела» внизу каждой страницы и микрофон у дела. Claude видит, что на экране и в окне, что выбрано галочками и открыто в карточке, — и все остальные открытые дела коротко. Модель ниже — для списков; в карточке клиента, сделки и человека и для новых дел из надиктовки всегда Opus 5.5.'),
         v.claude ? null : el('div', { class: 'cr-err' }, 'Claude на сервере не настроен — нет ключа.'),
         el('div', { class: 'set-label' }, 'Модель'), choices('claude_model', MODEL_INFO, s.claude_model),
         el('div', { class: 'set-label' }, 'Глубина'), choices('claude_effort', EFFORT_INFO, s.claude_effort)),
       el('div', { class: 'group' }, el('h2', {}, tint(icon('mic', 14), 'var(--bad)'), 'Голос', el('span', { class: 'gsub' }, 'на этом устройстве')),
         el('div', { class: 'hint-line' }, 'Нажми микрофон — говори сколько нужно, хоть с паузами — нажми ещё раз.'),
-        el('label', { class: 'set-check' }, auto, 'Второе нажатие сразу отдаёт Claude', el('span', { class: 'faint' }, ' — иначе текст ждёт в поле стрелку или Enter')),
+        el('label', { class: 'set-check' }, auto, 'Второе нажатие сразу отдаёт Claude', el('span', { class: 'faint' }, ' — иначе текст ждёт в поле стрелку справа или Enter')),
         el('div', { class: 'hint-line' }, 'Речь распознаёт браузер (Chrome — и на телефоне). На компьютере можно диктовать и Wispr Flow прямо в поле.')),
       el('div', { class: 'group' }, el('h2', {}, tint(icon('flame', 14), 'var(--now)'), 'Путь: очки, серия, уровень'),
         el('div', { class: 'hint-line' }, 'Очки — только за доведённое: закрыл, отменил ненужное, разобрал «Новое». Карточка пути — вверху боковой панели, подробно — «Статистика».'),
         choices('game_theme', { torah: ['Тора', '42 стоянки странствий, серия — манна; суббота не рвёт'], greek: ['Греция', 'подвиги Геракла и путь Одиссея, серия — огонь Прометея'] }, s.game_theme || 'torah')),
-      cost ? el('div', { class: 'group' }, el('h2', {}, tint(icon('coin', 14), '#45c07a'), 'Траты Claude в Делах'),
+      cost ? el('div', { class: 'group' }, el('h2', {}, tint(icon('coin', 14), 'var(--tint)'), 'Траты Claude в Делах'),
         el('div', { class: 'tiles' },
           el('div', { class: 'tile' }, el('div', { class: 'tl' }, 'Сегодня'), el('div', { class: 'tv' }, usd(cost.today))),
           el('div', { class: 'tile' }, el('div', { class: 'tl' }, 'За 30 дней'), el('div', { class: 'tv' }, usd(cost.month))),
@@ -1972,7 +2092,10 @@ function renderCard() {
   num.addEventListener('change', () => save('estimate_min', num.value ? +num.value : null));
   const labels = el('input', { value: (src.labels || []).join(', '), placeholder: 'звонок, …' });
   labels.addEventListener('change', () => save('labels', labels.value.split(',').map((x) => x.trim()).filter(Boolean)));
-  const title = el('textarea', { class: 'title-edit', rows: 2 }, src.title || '');
+  const title = el('textarea', { class: 'title-edit', rows: 1 }, src.title || '');
+  const fit = () => { title.style.height = ''; title.style.height = title.scrollHeight + 'px'; }; // название — сколько строк надо
+  title.addEventListener('input', fit);
+  setTimeout(fit);
   title.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } });
   title.addEventListener('change', () => title.value.trim() && save('title', title.value.trim()));
   const notes = el('textarea', { class: 'notes', placeholder: 'Заметки' }, src.notes || '');
@@ -2001,24 +2124,38 @@ function renderCard() {
     el('span', {}, 'Минут'), num,
     el('span', {}, 'Метки'), labels);
 
+  // Карточка как на развороте Правки (screens/08): номер плашкой и проект, название Literata, ряд действий
+  // («Поправить» словами, «Сейчас») и галочка-клавиша справа, свойства — стеклянной плашкой со строками.
   const cp = project(src.project_id);
-  const crumb = cp ? el('a', { class: 'crumb', href: '#/p/' + cp.id }, dot(cp.id), cp.name)
-    : el('span', { class: 'crumb' }, tint(icon('tray', 13), NO_PROJECT.color), 'Без проекта');
+  const crumb = cp ? el('a', { class: 'crumb', href: '#/p/' + cp.id }, cp.name) : el('span', { class: 'crumb' }, 'Без проекта');
+  const acts = t ? el('div', { class: 'card-acts' },
+    isOpen(t) ? [
+      el('button', { class: 'btn' + (S.askTask === t.id ? ' on' : ''), title: 'Сказать Claude, что сделать с делом', onclick: () => (S.askTask === t.id && rec ? stopListening() : openAsk(t)) },
+        icon('mic', 18), 'Поправить'),
+      el('button', { class: 'btn' + (isNow(t) ? ' on' : ''), title: isNow(t) ? 'Убрать из «Сейчас»' : `В «Сейчас» — сделать сегодня (до ${NOW_MAX} дел)`, onclick: () => toggleNow(t) },
+        icon('bolt', 17), 'Сейчас'),
+      el('button', { class: 'key done-key', title: 'Сделано', onclick: () => toggleDone([t]) }, icon('tick', 24)),
+    ] : el('button', { class: 'btn', onclick: () => toggleDone([t]) }, 'Вернуть в работу')) : null;
   const card = el('div', { class: 'card' },
-    el('div', { class: 'top' }, sug ? el('span', { class: 'crumb' }, tint(icon('inbox-in', 13), VIEWS.new.color), 'Предложение') : crumb,
-      t ? el('span', { class: 'num' }, '#' + t.num + (t.status !== 'open' ? ' · ' + (t.status === 'done' ? 'сделано' : 'отменено') : '')) : null,
-      el('button', { class: 'icon-btn', title: 'Закрыть (Esc)', onclick: close }, icon('x', 16))),
-    title, t ? originLine(t) : null, props,
-    el('div', { class: 'checks' }, chk('focus_on', 'Сейчас — на сегодня', isNow(src), S.today), chk('want', 'Хочу сам', src.want, true)),
+    el('div', { class: 'top' },
+      t ? el('span', { class: 'num' }, '#' + t.num) : null,
+      sug ? el('span', { class: 'crumb' }, 'Предложение') : crumb,
+      t && t.status !== 'open' ? el('span', { class: 'faint' }, t.status === 'done' ? 'сделано' : 'отменено') : null,
+      el('button', { class: 'icon-btn', title: 'Закрыть (Esc)', onclick: close }, icon('x', 18))),
+    title, acts, t && S.askTask === t.id ? askBox(t) : null, t ? originLine(t) : null, props,
+    el('div', { class: 'checks' }, t ? null : chk('focus_on', 'Сейчас — на сегодня', isNow(src), S.today), chk('want', 'Хочу сам', src.want, true)),
     notes);
   const btns = el('div', { class: 'btns' });
+  let personLink = null;
   if (t) {
-    btns.append(isOpen(t)
-      ? el('button', { class: 'btn main', onclick: () => toggleDone([t]) }, icon('check', 15), 'Сделано')
-      : el('button', { class: 'btn', onclick: () => toggleDone([t]) }, 'Вернуть в работу'));
     if (isOpen(t)) btns.append(el('button', { class: 'btn bad', onclick: async () => { if (confirm('Отменить дело? Оно останется в журнале.')) { try { await op1({ op: 'task.cancel', id: t.id }); render(); } catch (e) { fail(e); } } } }, 'Отменить дело'));
     const who = person(t.person_id); // проект — ссылкой наверху карточки
-    if (who) btns.append(el('a', { class: 'btn', href: '#/h/' + who.id }, avatar(who), personName(who) + ' →'));
+    if (who) {
+      const org = orgLabel(who.org_id);
+      personLink = el('a', { class: 'glass person-link', href: '#/h/' + who.id }, avatar(who),
+        el('span', { class: 't' }, who.name, org ? el('span', { class: 'faint' }, ' · ' + org.name) : null, who.role ? el('span', { class: 's' }, who.role) : null),
+        icon('chev', 20));
+    }
   } else {
     btns.append(el('button', {
       class: 'btn main',
@@ -2033,7 +2170,7 @@ function renderCard() {
       },
     }, 'Принять'), el('button', { class: 'btn', onclick: close }, 'Закрыть'));
   }
-  card.append(btns);
+  card.append(btns, personLink || '');
   if (t) {
     const x = extras.get(t.id);
     const add = el('input', { placeholder: 'Комментарий…' });
@@ -2065,11 +2202,11 @@ const IKIND = { call: 'звонок', meeting: 'встреча', zoom: 'Zoom', t
 const CADENCE = { month: 'раз в месяц', quarter: 'раз в квартал', year: 'раз в год', none: 'не видимся' };
 const OPEN_STAGES = ['lead', 'proposal', 'mandate', 'active', 'closing'];
 const CRM_VIEWS = {
-  crm: { title: 'Воронка', icon: 'funnel', color: '#f39a4a' },
-  clients: { title: 'Клиенты', icon: 'building', color: '#2fc5c0' },
-  people: { title: 'Люди', icon: 'person', color: '#a78bfa' },
-  ties: { title: 'Связи', icon: 'link', color: '#e57bd1' },
-  money: { title: 'Деньги', icon: 'coin', color: '#45c07a', money: true },
+  crm: { title: 'Воронка', icon: 'funnel', color: 'var(--tint)' },
+  clients: { title: 'Клиенты', icon: 'building', color: 'var(--tint)' },
+  people: { title: 'Люди', icon: 'person', color: 'var(--tint)' },
+  ties: { title: 'Связи', icon: 'link', color: 'var(--tint)' },
+  money: { title: 'Деньги', icon: 'coin', color: 'var(--tint)', money: true },
 };
 Object.assign(ICONS, {
   funnel: 'M3 5h18l-7 8v6l-4 2v-8z',
@@ -2820,7 +2957,7 @@ function renderStats() {
         tile(th.streak[0].toUpperCase() + th.streak.slice(1), plural(st.current, 'день', 'дня', 'дней'), 'лучшая — ' + plural(st.best, 'день', 'дня', 'дней'), st.current && !st.today_done ? 'warn' : ''),
         tile('Закрыто за 30 дней', String(m.done), m.with_due ? `в срок — ${Math.round(m.on_time / m.with_due * 100)}% (${m.on_time} из ${m.with_due})` : null),
         tile('Сейчас открыто', String(v.open.open), `просрочено ${v.open.overdue} · в «Сейчас» ${v.open.now_}`, v.open.overdue ? 'warn' : '')),
-      el('div', { class: 'group' }, el('h2', {}, tint(icon('chart', 14), '#7c9cff'), 'Очки по дням', el('span', { class: 'gsub' }, '30 дней, субботы светлее')),
+      el('div', { class: 'group' }, el('h2', {}, tint(icon('chart', 14), 'var(--tint)'), 'Очки по дням', el('span', { class: 'gsub' }, '30 дней, субботы светлее')),
         dayChart(v.days)),
       v.by_project.length ? el('div', { class: 'group' }, el('h2', {}, 'Что закрывал за 30 дней'),
         v.by_project.map((x) => {

@@ -66,6 +66,10 @@ STATIC = {
     "style.css": "text/css; charset=utf-8",
     "icon.svg": "image/svg+xml",
     "manifest.webmanifest": "application/manifest+json",
+    # Шрифты Правки 4.0 (OFL): Golos Text и Literata, только латиница и кириллица. Меняются раз в годы —
+    # кэш на месяц, иначе телефон тянул бы 150 КБ при каждом открытии.
+    "golos.woff2": "font/woff2",
+    "literata.woff2": "font/woff2",
 }
 
 
@@ -91,7 +95,8 @@ def _static(name: str) -> Response:
     if name not in STATIC:
         return Response("нет такого", status_code=404, headers=SECURITY)
     body = (resources.files(__package__) / "static" / name).read_bytes()
-    return Response(body, media_type=STATIC[name], headers={"Cache-Control": "no-cache", **SECURITY})
+    cache = "public, max-age=2592000" if name.endswith(".woff2") else "no-cache"
+    return Response(body, media_type=STATIC[name], headers={"Cache-Control": cache, **SECURITY})
 
 
 def build(cfg: Config) -> Starlette:

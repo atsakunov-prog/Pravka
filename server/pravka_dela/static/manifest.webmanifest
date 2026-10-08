@@ -3,7 +3,7 @@
   "short_name": "Дела",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#111317",
-  "theme_color": "#111317",
+  "background_color": "#100F0D",
+  "theme_color": "#100F0D",
   "icons": [{"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml"}]
 }
