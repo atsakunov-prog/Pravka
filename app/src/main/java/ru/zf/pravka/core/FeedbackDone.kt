@@ -18,15 +18,22 @@ object FeedbackDone {
      * пропускаются. Пробел вместо табуляции тоже годится. Начало «-» у
      * примечания («7 - не будем: …») — запись отложена, а не сделана.
      * Повтор номера — берётся последняя строка.
+     *
+     * Номера у каждого телефона свои (08.10.2026: с Марианной их два), и
+     * Сашино «7 сделано» не должно закрыть её №7 о другом. Голый номер — запись
+     * владельца; «marianna:7» — запись профиля marianna. [profile] — ключ
+     * профиля этой установки, [owner] — владелец ли это.
      */
-    fun parse(text: String): Map<Int, Line> {
+    fun parse(text: String, profile: String? = null, owner: Boolean = true): Map<Int, Line> {
         val out = LinkedHashMap<Int, Line>()
         for (raw in text.lineSequence()) {
             val line = raw.trim()
             if (line.isEmpty() || line.startsWith("#")) continue
             val m = LINE.matchEntire(line) ?: continue
-            val num = m.groupValues[1].toIntOrNull() ?: continue
-            var note = m.groupValues[2].trim()
+            val who = m.groupValues[1]
+            if (if (who.isEmpty()) !owner else who != profile) continue
+            val num = m.groupValues[2].toIntOrNull() ?: continue
+            var note = m.groupValues[3].trim()
             val skip = note.startsWith("-")
             if (skip) note = note.removePrefix("-").trim()
             out[num] = Line(num, note, skip)
@@ -34,5 +41,5 @@ object FeedbackDone {
         return out
     }
 
-    private val LINE = Regex("""^№?(\d+)[\t ]*(.*)$""")
+    private val LINE = Regex("""^(?:([a-z][a-z0-9-]*):)?№?(\d+)[\t ]*(.*)$""")
 }

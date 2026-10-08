@@ -38,4 +38,15 @@ class FeedbackDoneTest {
         assertEquals(1, m.size)
         assertEquals("второе", m[5]!!.note)
     }
+
+    @Test
+    fun `номера у каждого телефона свои - голый номер владельца, с профилем - его`() {
+        val text = "7\tу Саши\nmarianna:7\tу Марианны\nmarianna:9\t- потом"
+        assertEquals("у Саши", FeedbackDone.parse(text)[7]?.note)
+        assertEquals(setOf(7), FeedbackDone.parse(text).keys)
+        val her = FeedbackDone.parse(text, profile = "marianna", owner = false)
+        assertEquals("у Марианны", her[7]?.note)
+        assertTrue(her[9]?.skip == true)
+        assertTrue(FeedbackDone.parse(text, profile = "seryozha", owner = false).isEmpty())
+    }
 }

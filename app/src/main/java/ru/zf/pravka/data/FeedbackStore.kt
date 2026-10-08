@@ -124,8 +124,14 @@ class FeedbackStore(private val context: Context) {
         if (parsed != null) items.addAll(parsed)
         // Сборка знает, что по каким номерам сделано, — отмечаем только новые:
         // поставленное руками («снова новое») сборка не перебивает.
+        // Чьи номера: у Марианны свой счёт, её строки в файле — «marianna:7».
+        val profile = (context.applicationContext as? ru.zf.pravka.PravkaApp)?.profileStore?.current
         val done = runCatching {
-            FeedbackDone.parse(context.assets.open(DONE_ASSET).bufferedReader().use { it.readText() })
+            FeedbackDone.parse(
+                context.assets.open(DONE_ASSET).bufferedReader().use { it.readText() },
+                profile = profile?.id,
+                owner = profile == null || profile.owner,
+            )
         }.getOrDefault(emptyMap())
         var changed = false
         val now = System.currentTimeMillis()
