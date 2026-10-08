@@ -93,6 +93,20 @@ class DelaStore(private val context: Context) {
     /** Группировка списков по ключу списка («inbox», «all», «project») — как `S.groups` веба. */
     val groupsFlow: StateFlow<Map<String, String>> = _groups
 
+    private val _clientOpen = MutableStateFlow<Set<String>>(emptySet())
+    /**
+     * Клиенты, у которых проекты раскрыты — в ☰ и в «Клиентах» (`S.clientOpen`
+     * веба, 06.10.2026): раскрытое помнится, как избранное.
+     */
+    val clientOpenFlow: StateFlow<Set<String>> = _clientOpen
+
+    /** Раскрыть или свернуть проекты клиентов: один клиент или «раскрыть все / свернуть все». */
+    suspend fun setClientOpen(ids: Collection<String>, open: Boolean) = mutex.withLock {
+        ensureLoaded()
+        _clientOpen.value = if (open) _clientOpen.value + ids else _clientOpen.value - ids.toSet()
+        writePrefs()
+    }
+
     /** Звезда у проекта: поставить или снять. Файл крошечный — пишется сразу. */
     suspend fun toggleFav(projectId: String) = mutex.withLock {
         ensureLoaded()
@@ -110,6 +124,7 @@ class DelaStore(private val context: Context) {
         val text = JSONObject().put("v", 1)
             .put("projects", JSONArray().apply { _favs.value.sorted().forEach { put(it) } })
             .put("groups", JSONObject().apply { for ((k, v) in _groups.value) put(k, v) })
+            .put("clientOpen", JSONArray().apply { _clientOpen.value.sorted().forEach { put(it) } })
             .toString()
         withContext(Dispatchers.IO) { StoreFiles.writeAtomic(favsFile, text) }
     }
@@ -347,6 +362,9 @@ class DelaStore(private val context: Context) {
                     _favs.value = (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.isNotBlank() } }.toSet()
                 }
                 o.optJSONObject("groups")?.let { g -> _groups.value = g.keys().asSequence().associateWith { g.optString(it) } }
+                o.optJSONArray("clientOpen")?.let { a ->
+                    _clientOpen.value = (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.isNotBlank() } }.toSet()
+                }
             }
         }
         loaded = true

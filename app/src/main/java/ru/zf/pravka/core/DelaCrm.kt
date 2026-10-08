@@ -82,6 +82,11 @@ object DelaCrm {
         val minutesAll: Int? = null,
         val myView: String = "",
         val local: Boolean = false,
+        // «Что за сделка» (06.10.2026): кто привёл, вероятность (null — по стадии), сроки.
+        val sourcePersonId: String = "",
+        val probability: Int? = null,
+        val expectedOn: String = "",
+        val deadline: String = "",
     ) {
         val closed: Boolean get() = stage == "archive"
         /** «в работе», а у закрытой — итог: «выиграли», «проиграли». */
@@ -241,6 +246,8 @@ object DelaCrm {
             paidKop = o.longOrNull("paid_kop"), invoicedKop = o.longOrNull("invoiced_kop"), plannedKop = o.longOrNull("planned_kop"),
             toGetKop = o.longOrNull("to_get_kop"), weightedKop = o.longOrNull("weighted_kop"),
             minutes30 = o.intOrNull("minutes_30"), minutesAll = o.intOrNull("minutes_all"), myView = o.str("my_view"),
+            sourcePersonId = o.str("source_person_id"), probability = o.intOrNull("probability"),
+            expectedOn = o.str("expected_on"), deadline = o.str("deadline"),
         )
     }
 
@@ -446,9 +453,12 @@ object DelaCrm {
             if (o.str("op") != "deal.set" || o.str("id") != d.id) continue
             val set = o.optJSONObject("set") ?: continue
             val base = Dela.Deal(id = out.id, projectId = out.projectId, name = out.name, stage = out.stage, outcome = out.outcome,
-                lostReason = out.lostReason, closedOn = out.closedOn)
+                lostReason = out.lostReason, closedOn = out.closedOn, teamIds = out.teamIds, personIds = out.personIds)
             val n = Dela.applyDeal(base, set, today)
-            out = out.copy(stage = n.stage, outcome = n.outcome, lostReason = n.lostReason, closedOn = n.closedOn, local = true)
+            out = out.copy(
+                name = n.name, stage = n.stage, outcome = n.outcome, lostReason = n.lostReason, closedOn = n.closedOn,
+                teamIds = n.teamIds, personIds = n.personIds, local = true,
+            )
         }
         return out
     }
@@ -482,6 +492,180 @@ object DelaCrm {
             i.copy(dealName = s.deals[i.dealId]?.name.orEmpty(), projectName = s.projects[i.projectId]?.name.orEmpty())
         }.filter { it.id !in have && match(it) }
         return (list + mine).filter { it.id !in gone }.sortedByDescending { it.at }
+    }
+
+    // ------------------------------------------------------------ проекты клиента
+
+    /**
+     * Проекты клиента — его сделки CRM (06.10.2026, docs/dela-phone-4.md;
+     * владелец: «проекты должны группироваться под клиента»): живые по ходу
+     * воронки, закрытые — в конце (`clientDeals` веба).
+     */
+    fun clientDeals(s: Dela.Snapshot, projectId: String): List<Dela.Deal> = s.allDealsOf(projectId)
+
+    /**
+     * «Клиент: тема» под своим клиентом — просто «тема» (`dealShort` веба): имя
+     * клиента и так видно строкой выше. Приставка срезается, только если она —
+     * сам клиент (его имя или алиас, по первым четырём буквам).
+     */
+    fun dealShort(name: String, client: Dela.Project?): String {
+        val m = Regex("^([^:]{1,60}):\\s*(.+)$").find(name) ?: return name
+        if (client == null) return name
+        val head = Dela.norm(m.groupValues[1]) ?: return name
+        val same = (listOf(client.name) + client.aliases).any { n ->
+            val x = Dela.norm(n) ?: return@any false
+            head.startsWith(x.take(4)) || x.startsWith(head.take(4))
+        }
+        return if (same) m.groupValues[2] else name
+    }
+
+    /** Проект клиента строкой меню: короткое имя, открытые дела и есть ли просрочка. */
+    data class NavDeal(val deal: Dela.Deal, val short: String, val open: Int, val late: Boolean)
+
+    /** Живые проекты клиента для меню и «Клиентов» — с числом открытых дел (красное при просрочке). */
+    fun navDeals(s: Dela.Snapshot, projectId: String, today: String): List<NavDeal> {
+        val client = s.projects[projectId]
+        return clientDeals(s, projectId).filter { !it.closed }.map { d ->
+            val open = s.tasks.values.filter { it.dealId == d.id && it.open }
+            NavDeal(d, dealShort(d.name, client), open.size, open.any { it.dueDate.isNotBlank() && it.dueDate < today })
+        }
+    }
+
+    // ------------------------------------------------------------ люди плашками
+
+    /**
+     * Люди клиента — как `view_client` сервера, но из своей копии (видно и без
+     * сети, и сразу после крестика): из организации клиента или из людей его
+     * сделок. Слитые дубли и архив — нет.
+     */
+    fun clientPeople(s: Dela.Snapshot, projectId: String): List<Dela.Person> {
+        val org = s.projects[projectId]?.orgId.orEmpty()
+        val inDeals = clientDeals(s, projectId).flatMap { it.personIds }.toSet()
+        return s.people.values.filter { it.live && ((org.isNotBlank() && it.orgId == org) || it.id in inDeals) }
+            .sortedBy { it.name.lowercase() }
+    }
+
+    /** Откуда человек — словами: клиент (и его страница), иначе имя организации; null — не знаем. */
+    data class OrgLabel(val name: String, val clientId: String = "")
+
+    fun orgLabel(s: Dela.Snapshot, orgId: String): OrgLabel? {
+        if (orgId.isBlank()) return null
+        s.projects.values.firstOrNull { it.kind == "client" && it.orgId == orgId }?.let { return OrgLabel(it.name, it.id) }
+        return s.orgs[orgId]?.let { OrgLabel(it.name) }
+    }
+
+    /** Организации для «откуда он» (`orgChoices` веба): клиенты по имени проекта, потом другие компании. */
+    data class OrgChoice(val orgId: String, val name: String, val client: Boolean)
+
+    fun orgChoices(s: Dela.Snapshot): List<OrgChoice> {
+        val byOrg = LinkedHashMap<String, String>()
+        for (p in s.projects.values) if (p.kind == "client" && p.orgId.isNotBlank() && p.live) byOrg[p.orgId] = p.name
+        val clients = byOrg.map { (id, name) -> OrgChoice(id, name, true) }.sortedBy { it.name.lowercase() }
+        val other = s.orgs.values.filter { it.archivedAt.isBlank() && it.id !in byOrg }
+            .map { OrgChoice(it.id, it.name, false) }.sortedBy { it.name.lowercase() }
+        return clients + other
+    }
+
+    /** Группа «Людей»: «Команда», организация (клиент — ссылкой на его страницу), «Без компании». */
+    data class PeopleGroup(val key: String, val title: String, val clientId: String, val people: List<Dela.Person>)
+
+    /**
+     * «Люди» по компаниям (`renderPeople` веба; владелец, 06.10.2026: «в людях
+     * обязательно нужна группировка по компаниям»): команда сверху, без компании
+     * — внизу. Поиск — каждое слово где угодно: имя, короткое, алиасы, должность,
+     * компания.
+     */
+    fun peopleByCompany(s: Dela.Snapshot, q: String): List<PeopleGroup> {
+        val words = (Dela.norm(q) ?: "").split(' ').filter { it.isNotBlank() }
+        val groups = LinkedHashMap<String, Triple<String, String, MutableList<Dela.Person>>>()
+        for (p in s.people.values.filter { it.live }) {
+            val ol = orgLabel(s, p.orgId)
+            val hay = Dela.norm(listOf(p.name, p.short, p.aliases.joinToString(" "), p.role, ol?.name.orEmpty()).joinToString(" ")).orEmpty()
+            if (words.any { !hay.contains(it) }) continue
+            val key = when {
+                p.userId.isNotBlank() -> "0"
+                ol != null -> "1" + (Dela.norm(ol.name) ?: ol.name)
+                else -> "9"
+            }
+            val title = when {
+                p.userId.isNotBlank() -> "Команда"
+                ol != null -> ol.name
+                else -> "Без компании"
+            }
+            groups.getOrPut(key) { Triple(title, if (p.userId.isBlank()) ol?.clientId.orEmpty() else "", mutableListOf()) }.third += p
+        }
+        return groups.entries.sortedBy { it.key }.map { (k, g) -> PeopleGroup(k, g.first, g.second, g.third.sortedBy { it.name.lowercase() }) }
+    }
+
+    /** Правка человека: откуда он (`org_id`), должность и что ещё ([set] — поля сервера). */
+    fun personSetOp(personId: String, set: JSONObject, opId: String = Dela.newId()): JSONObject =
+        op("person.set", opId).put("id", personId).put("set", set)
+
+    /** Новый человек — id даёт телефон: виден до ответа, повтор не удваивает. */
+    fun personCreateOp(id: String, name: String, orgId: String = "", opId: String = Dela.newId()): JSONObject {
+        val data = JSONObject().put("id", id).put("name", name.trim())
+        if (orgId.isNotBlank()) data.put("org_id", orgId)
+        return op("person.create", opId).put("data", data)
+    }
+
+    /** Люди сделки или её команда целиком (`person_ids`, `team_ids`) — крестик и «+ человек». */
+    fun dealPeopleOp(dealId: String, field: String, ids: List<String>, opId: String = Dela.newId()): JSONObject =
+        op("deal.set", opId).put("id", dealId).put("set", JSONObject().put(field, Dela.arr(ids.distinct())))
+
+    /** Правка и её отмена — для «Вернуть» после крестика или «откуда он». */
+    data class Undoable(val ops: List<JSONObject>, val back: List<JSONObject>, val said: String)
+
+    /**
+     * Убрать человека из клиента (`leaveClient` веба): из организации клиента,
+     * если он оттуда, и из людей его сделок. Строки не удаляются — «Вернуть»
+     * ставит всё как было. null — связан с клиентом иначе (поправить в карточке).
+     */
+    fun leaveClient(s: Dela.Snapshot, person: Dela.Person, projectId: String): Undoable? {
+        val p = s.projects[projectId] ?: return null
+        val go = mutableListOf<JSONObject>()
+        val back = mutableListOf<JSONObject>()
+        if (person.orgId.isNotBlank() && person.orgId == p.orgId) {
+            go += personSetOp(person.id, JSONObject().put("org_id", JSONObject.NULL))
+            back += personSetOp(person.id, JSONObject().put("org_id", person.orgId))
+        }
+        for (d in clientDeals(s, projectId)) {
+            if (person.id !in d.personIds) continue
+            go += dealPeopleOp(d.id, "person_ids", d.personIds - person.id)
+            back += dealPeopleOp(d.id, "person_ids", d.personIds)
+        }
+        if (go.isEmpty()) return null
+        return Undoable(go, back, "${person.label} больше не в «${p.name}»")
+    }
+
+    /**
+     * Человека — к клиенту (`joinClient` веба): в организацию клиента; у старого
+     * клиента без неё — сперва заводим её с его именем ([newOrgId]) и ставим
+     * проекту. Нового человека ([name]) — сразу с этой организацией ([newPersonId]).
+     */
+    fun joinClient(
+        s: Dela.Snapshot,
+        projectId: String,
+        person: Dela.Person?,
+        name: String = "",
+        newOrgId: String = Dela.newId(),
+        newPersonId: String = Dela.newId(),
+    ): Undoable? {
+        val p = s.projects[projectId] ?: return null
+        val go = mutableListOf<JSONObject>()
+        val org = p.orgId.ifBlank {
+            go += op("org.create", Dela.newId()).put("data", JSONObject().put("id", newOrgId).put("name", p.name).put("kind", "client"))
+            go += op("project.set", Dela.newId()).put("id", p.id).put("set", JSONObject().put("org_id", newOrgId))
+            newOrgId
+        }
+        return if (person != null) {
+            if (person.orgId == org) return null
+            go += personSetOp(person.id, JSONObject().put("org_id", org))
+            Undoable(go, listOf(personSetOp(person.id, JSONObject().put("org_id", Dela.nul(person.orgId)))), "${person.label} — теперь из «${p.name}»")
+        } else {
+            if (name.isBlank()) return null
+            go += personCreateOp(newPersonId, name, org)
+            Undoable(go, emptyList(), "Завёл: ${name.trim()} из «${p.name}»")
+        }
     }
 
     // ------------------------------------------------------------ слова

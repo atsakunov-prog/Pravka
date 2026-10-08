@@ -328,8 +328,15 @@ internal object Seed {
         fun project(id: String, name: String, sphere: String, kind: String, money: String, vararg al: String) =
             JSONObject().put("id", id).put("name", name).put("aliases", arr(*al)).put("sphere", sphere)
                 .put("kind", kind).put("owner_id", me).put("money_default", money).put("rev", 1).put("seq", ++seq)
-        fun person(id: String, name: String, short: String) = JSONObject().put("id", id).put("name", name)
+        fun person(id: String, name: String, short: String, org: String = "", role: String = "") = JSONObject().put("id", id).put("name", name)
             .put("short", short).put("aliases", JSONArray()).put("phones", JSONArray()).put("rev", 1).put("seq", ++seq)
+            .put("org_id", org.ifBlank { null }).put("role", role.ifBlank { null })
+        // CRM (задание 4): клиенты — с организацией, у клиента проекты-сделки, люди — из компаний.
+        fun org(id: String, name: String) = JSONObject().put("id", id).put("name", name).put("aliases", JSONArray()).put("rev", 1).put("seq", ++seq)
+        fun deal(id: String, project: String, name: String, stage: String, people: List<String>, team: List<String> = listOf("pe-lena")) =
+            JSONObject().put("id", id).put("project_id", project).put("name", name).put("stage", stage)
+                .put("person_ids", arr(*people.toTypedArray())).put("team_ids", arr(*team.toTypedArray()))
+                .put("deal_type", "финмодель").put("lead_person_id", "pe-lena").put("rev", 1).put("seq", ++seq)
         fun task(num: Int, title: String, f: JSONObject.() -> Unit = {}) = JSONObject()
             .put("id", "t-$num").put("num", num).put("title", title).put("owner_id", me).put("created_by", me)
             .put("ball", "mine").put("status", "open").put("source", "voice")
@@ -340,27 +347,28 @@ internal object Seed {
                 .put("created_at", ago(14)).put("decided_at", if (status == "pending") JSONObject.NULL else ago(30))
                 .put("rev", 1).put("seq", ++seq)
         val projects = arr(
-            project("p-beta", "Бета Групп", "work", "client", "paid", "Бета"),
-            project("p-orion", "Орион Логистик", "work", "client", "potential", "Орион"),
+            project("p-beta", "Бета Групп", "work", "client", "paid", "Бета").put("org_id", "o-beta"),
+            project("p-orion", "Орион Логистик", "work", "client", "potential", "Орион").put("org_id", "o-orion"),
             project("p-zf", "Фирма: внутреннее", "work", "internal", "none"),
             project("p-home", "Дом", "home", "personal", "none"),
             project("p-dacha", "Дача", "home", "personal", "none"),
         )
         val people = arr(
-            person("pe-ivan", "Иван Петров", "Иван"), person("pe-olga", "Ольга Смирнова", "Ольга"),
-            person("pe-dima", "Дмитрий Кузнецов", "Дима"), person("pe-lena", "Елена Орлова", "Лена"),
+            person("pe-ivan", "Иван Петров", "Иван", "o-beta", "финдиректор"), person("pe-olga", "Ольга Смирнова", "Ольга", "o-orion", "CEO"),
+            person("pe-dima", "Дмитрий Кузнецов", "Дима", "o-buh", "бухгалтер"), person("pe-lena", "Елена Орлова", "Лена").put("user_id", "lena"),
+            person("pe-anna", "Анна Белова", "Анна", "o-beta", "казначей"), person("pe-petr", "Пётр Ершов", "Пётр"),
         )
         val tasks = arr(
-            task(61, "Бета: финмодель — сценарий без кредита") { put("project_id", "p-beta"); put("focus_on", d(0)); put("estimate_min", 60) },
+            task(61, "Бета: финмодель — сценарий без кредита") { put("project_id", "p-beta"); put("deal_id", "d-beta-model"); put("focus_on", d(0)); put("estimate_min", 60) },
             task(58, "Иван: созвон по бюджету IV квартала") { put("project_id", "p-beta"); put("person_id", "pe-ivan"); put("due_date", d(0)); put("due_time", "11:30"); put("labels", arr("звонок")) },
-            task(55, "Орион: КП на управленческий учёт") { put("project_id", "p-orion"); put("due_date", d(-1)); put("estimate_min", 120) },
+            task(55, "Орион: КП на управленческий учёт") { put("project_id", "p-orion"); put("deal_id", "d-orion-uu"); put("due_date", d(-1)); put("estimate_min", 120) },
             task(63, "Дача: оплатить электричество за сентябрь") { put("project_id", "p-dacha"); put("due_date", d(0)); put("estimate_min", 5) },
             task(41, "Налоговый вычет: собрать чеки за лечение") { put("project_id", "p-home"); put("due_date", d(-17)) },
             task(57, "Иван: прислать выгрузку из 1С") { put("project_id", "p-beta"); put("ball", "waiting"); put("person_id", "pe-ivan"); put("waiting_since", d(-5)); put("nudge_on", d(0)) },
             task(60, "Ольга: подписанный договор на внедрение") { put("project_id", "p-orion"); put("ball", "waiting"); put("person_id", "pe-olga"); put("waiting_since", d(-9)) },
             task(62, "Дима: акт сверки за сентябрь") { put("project_id", "p-zf"); put("ball", "waiting"); put("person_id", "pe-dima"); put("waiting_since", d(-2)); put("nudge_on", d(3)) },
             task(66, "Иван: обсудить продление договора") { put("project_id", "p-beta"); put("ball", "agenda"); put("person_id", "pe-ivan") },
-            task(64, "Бета: проверить платёжный календарь на октябрь") { put("project_id", "p-beta") },
+            task(64, "Бета: проверить платёжный календарь на октябрь") { put("project_id", "p-beta"); put("deal_id", "d-beta-refi") },
             task(65, "Отчёт ДДС: посмотреть шаблон от Лены") { put("project_id", "p-zf"); put("created_by", "lena"); put("created_at", ago(20)); put("source", "web") },
             task(59, "Автосервис: записаться на ТО") { put("estimate_min", 10); put("labels", arr("звонок")) },
             task(67, "Дом: заказать фильтры для воды") { put("project_id", "p-home"); put("due_date", d(4)) },
@@ -387,7 +395,13 @@ internal object Seed {
         )
         return JSONObject().put("ok", true).put("full", true).put("seq", seq).put("today", d(0))
             .put("tasks", tasks).put("projects", projects).put("people", people).put("suggestions", suggestions)
-            .put("users", users).put("deals", JSONArray()).put("orgs", JSONArray()).put("comments", JSONArray())
+            .put("users", users).put("comments", JSONArray())
+            .put("orgs", arr(org("o-beta", "Бета Групп"), org("o-orion", "Орион Логистик"), org("o-buh", "Счётная палата плюс")))
+            .put("deals", arr(
+                deal("d-beta-model", "p-beta", "Бета Групп: финмодель 2027", "active", listOf("pe-ivan", "pe-anna")),
+                deal("d-beta-refi", "p-beta", "Бета Групп: рефинансирование", "proposal", listOf("pe-ivan")),
+                deal("d-orion-uu", "p-orion", "Орион: управленческий учёт", "lead", listOf("pe-olga")),
+            ))
             .put("labels", arr("звонок", "письмо", "встреча"))
     }
 

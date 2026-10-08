@@ -231,16 +231,53 @@ object DelaViews {
     }
 
     /**
-     * Поиск веба: каждое слово — где угодно в названии, заметках, имени проекта
-     * или человека, без регистра и «ё».
+     * Поиск веба: каждое слово — где угодно в названии, заметках, имени проекта,
+     * человека или сделки, в метках; без регистра и «ё».
      */
     fun search(s: Dela.Snapshot, q: String, showDone: Boolean): List<Dela.Task> {
-        val words = (Dela.norm(q) ?: return emptyList()).split(' ').filter { it.isNotBlank() }
+        val words = words(q)
         if (words.isEmpty()) return emptyList()
         return s.tasks.values.filter { t ->
-            val hay = Dela.norm(listOf(t.title, t.notes, s.projects[t.projectId]?.name.orEmpty(), s.people[t.personId]?.label.orEmpty()).joinToString(" ")).orEmpty()
-            (showDone || t.open) && words.all { hay.contains(it) }
+            (showDone || t.open) && hit(words, t.title, t.notes, s.projects[t.projectId]?.name.orEmpty(), s.people[t.personId]?.label.orEmpty(),
+                s.people[t.personId]?.name.orEmpty(), s.deals[t.dealId]?.name.orEmpty(), t.labels.joinToString(" "))
         }
+    }
+
+    private fun words(q: String): List<String> = (Dela.norm(q) ?: "").split(' ').filter { it.isNotBlank() }
+    private fun hit(words: List<String>, vararg parts: String): Boolean {
+        val hay = Dela.norm(parts.filter { it.isNotBlank() }.joinToString(" ")).orEmpty()
+        return words.isNotEmpty() && words.all { hay.contains(it) }
+    }
+
+    /** Сколько строк в группе находок — дальше «и ещё N — уточни запрос» (`SEARCH_SHOWN` веба). */
+    const val SEARCH_SHOWN = 8
+
+    /**
+     * Находки общего поиска (06.10.2026, docs/dela-phone-4.md, `renderSearch`
+     * веба): клиенты и разделы (проекты справочника), проекты клиентов (сделки),
+     * люди (имя, должность, компания) и дела. Всё — из копии, на каждую букву,
+     * без сети; каждое слово запроса должно найтись.
+     */
+    data class Found(
+        val projects: List<Dela.Project>,
+        val deals: List<Dela.Deal>,
+        val people: List<Dela.Person>,
+        val tasks: List<Dela.Task>,
+    ) {
+        val total: Int get() = projects.size + deals.size + people.size + tasks.size
+    }
+
+    fun searchAll(s: Dela.Snapshot, q: String, showDone: Boolean): Found {
+        val w = words(q)
+        if (w.isEmpty()) return Found(emptyList(), emptyList(), emptyList(), emptyList())
+        val projects = s.projects.values.filter { hit(w, it.name, it.aliases.joinToString(" "), it.note) }
+            .sortedWith(compareBy<Dela.Project>({ !it.live }, { it.name.lowercase() }))
+        val deals = s.deals.values.filter { hit(w, it.name, s.projects[it.projectId]?.name.orEmpty(), it.dealType) }
+            .sortedWith(compareBy<Dela.Deal>({ it.closed }, { it.name.lowercase() }))
+        val people = s.people.values.filter {
+            it.live && hit(w, it.name, it.short, it.aliases.joinToString(" "), it.role, DelaCrm.orgLabel(s, it.orgId)?.name.orEmpty())
+        }.sortedBy { it.name.lowercase() }
+        return Found(projects, deals, people, search(s, q, showDone))
     }
 
     // ------------------------------------------------------------ группы

@@ -46,7 +46,12 @@ import ru.zf.pravka.ui.ThinkingLine
 // всё». Без сети команда не уходит — и текст остаётся в поле.
 
 /** Что видит Claude с этого экрана: название и дела в порядке показа. */
-internal data class AskScreen(val title: String, val scope: JSONObject)
+internal data class AskScreen(
+    val title: String,
+    val scope: JSONObject,
+    /** Карточка клиента, сделки или человека: Claude (Opus) видит её целиком и правит не только дела. */
+    val card: Boolean = false,
+)
 
 /** Итог команды — на лист поверх вкладки; ошибка у закрытой карточки — сюда же, с текстом. */
 internal data class AskShown(
@@ -118,15 +123,22 @@ internal fun AskBar(
     var listening by remember { mutableStateOf(false) }
     PaperCard(
         label = "Claude · " + screen.title.take(40),
-        info = "Команда на дела этого экрана — Claude видит их в том же порядке. «Все просроченные — на завтра», " +
-            "«бюджет первым делом, сегодня», «это Наташе». Если команда про новые дела — Claude их заведёт" +
-            " (на странице проекта или человека — туда). Правит сервер, модель — в его «Настройках».",
+        info = if (screen.card) {
+            // Карточка (06.10.2026, docs/dela-phone-4.md): сервер берёт Opus 5.5 и даёт ему её целиком.
+            "Claude видит эту карточку целиком — сделки, людей, хронологию — и правит не только дела: " +
+                "«созвонились, ждут КП к пятнице», «Иван теперь CFO», «сделка — в мандат». Новые дела лягут сюда. " +
+                "Правит сервер, в карточке — всегда Opus 5.5; «Вернуть всё» — в итоге."
+        } else {
+            "Команда на дела этого экрана — Claude видит их в том же порядке. «Все просроченные — на завтра», " +
+                "«бюджет первым делом, сегодня», «это Наташе». Если команда про новые дела — Claude их заведёт" +
+                " (на странице проекта или человека — туда). Правит сервер, модель — в его «Настройках»."
+        },
         trailing = { GlyphButton(Glyphs.Close, "убрать строку Claude", onClick = onClose, size = 30.dp) },
     ) {
         PaperField(
             value = text,
             onValueChange = onText,
-            placeholder = if (listening) "Слушаю — говори команду…" else "«все просроченные — на завтра»",
+            placeholder = if (listening) "Слушаю — говори команду…" else if (screen.card) "Скажи, что сделать с карточкой" else "«все просроченные — на завтра»",
             singleLine = false,
             maxLines = 4,
             enabled = !running,

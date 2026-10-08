@@ -119,6 +119,17 @@ class ScreenShots {
         com.github.takahirom.roborazzi.captureScreenRoboImage(File(dir, "$name.png").absolutePath)
     }
 
+    /** Все окна Compose приложения, верхнее — первым (`WindowManagerGlobal.mViews`). */
+    private fun roots(c: ActivityController<MainActivity>): List<ViewRootForTest> {
+        val views = runCatching {
+            val g = Class.forName("android.view.WindowManagerGlobal")
+            val inst = g.getMethod("getInstance").invoke(null)
+            @Suppress("UNCHECKED_CAST")
+            (g.getDeclaredField("mViews").apply { isAccessible = true }.get(inst) as List<View>).toList()
+        }.getOrDefault(emptyList())
+        return (views.reversed() + c.get().window.decorView).mapNotNull { it.composeRoot() }.distinct()
+    }
+
     private fun View.composeRoot(): ViewRootForTest? = when (this) {
         is ViewRootForTest -> this
         is ViewGroup -> (0 until childCount).firstNotNullOfOrNull { getChildAt(it).composeRoot() }
@@ -131,12 +142,12 @@ class ScreenShots {
 
     /** Тап по тому, что видно на экране, — по тексту или подписи значка. */
     private fun tap(c: ActivityController<MainActivity>, what: String, exact: Boolean = false): Boolean {
-        val root = c.get().window.decorView.composeRoot() ?: return false
-        val nodes = root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true)
+        // Листы и боковая панель — своими окнами поверх вкладки: верхнее окно — первым.
+        val nodes = roots(c).flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true) }
         val node = nodes.firstOrNull { n ->
             val l = n.label().trim()
             if (exact) l == what || l.split(" ").contains(what) else l.contains(what)
-        } ?: return false.also { println("shots: не нашёл «$what»") }
+        } ?: return false.also { println("shots: не нашёл «$what» среди: " + nodes.map { it.label().trim() }.filter { it.isNotBlank() }.take(60).joinToString(" | ")) }
         var n: SemanticsNode? = node
         while (n != null) {
             n.config.getOrNull(SemanticsActions.OnClick)?.action?.let { it(); settle(); return true }
@@ -144,6 +155,43 @@ class ScreenShots {
         }
         println("shots: «$what» не нажимается")
         return false
+    }
+
+    /** Набрать текст в первое поле ввода на экране — как пальцем. */
+    private fun type(c: ActivityController<MainActivity>, text: String): Boolean {
+        val root = c.get().window.decorView.composeRoot() ?: return false
+        val node = root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false)
+            .firstOrNull { it.config.getOrNull(SemanticsActions.SetText) != null } ?: return false.also { println("shots: поля нет") }
+        node.config[SemanticsActions.SetText].action?.invoke(androidx.compose.ui.text.AnnotatedString(text))
+        settle()
+        return true
+    }
+
+    /** CRM на телефоне — как веб: ☰ с проектами под клиентами, клиент, сделка, «откуда он», «Люди», поиск. */
+    private fun crm() {
+        // Первый запуск вкладки в прогоне рисует её без копии — прогреть и закрыть.
+        close(launch(MainActivity.TAB_TODOIST))
+        var c = launch(MainActivity.TAB_TODOIST)
+        if (tap(c, "разделы, CRM")) {
+            tap(c, "раскрыть все")
+            screen("crm-1-nav-clients")
+            if (tap(c, "Бета Групп 5")) shot(c, "crm-2-client")
+            if (tap(c, "финдиректор")) screen("crm-3-person-where")
+        }
+        close(c)
+        RuntimeEnvironment.setQualifiers(OUTER_TALL)
+        c = launch(MainActivity.TAB_TODOIST)
+        settle()
+        // Раскрытое помнится: клиенты уже раскрыты с прошлого запуска.
+        if (tap(c, "разделы, CRM") && tap(c, "финмодель 2027")) shot(c, "crm-4-deal")
+        close(c)
+        c = launch(MainActivity.TAB_TODOIST)
+        if (tap(c, "Люди", exact = true)) shot(c, "crm-5-people")
+        close(c)
+        RuntimeEnvironment.setQualifiers(OUTER)
+        c = launch(MainActivity.TAB_TODOIST)
+        if (tap(c, "поиск: клиенты") && type(c, "бета")) shot(c, "crm-6-search")
+        close(c)
     }
 
     private fun close(c: ActivityController<MainActivity>) {
@@ -224,6 +272,9 @@ class ScreenShots {
             m = launch(tab); shot(m, "$g-3-wide"); close(m)
             RuntimeEnvironment.setQualifiers(OUTER)
         }
+
+        // ---- Дела, задание 4 (docs/dela-phone-4.md): проекты под клиентом, карточки, люди, поиск
+        if (want("crm")) crm()
 
         // ---- «Сегодня» (Правка 4.0): сложенный, целиком, разворот
         if (want("today")) {

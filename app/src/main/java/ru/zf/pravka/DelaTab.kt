@@ -114,7 +114,7 @@ import ru.zf.pravka.ui.scrollFade
 private const val NAV_NEW = "new"
 /** Вид сервера с последними наговорками (`store.view_dictations`); кэш — как у видов CRM. */
 private const val DICTATIONS = "dictations"
-private val CRM_NAV = listOf("crm" to "Воронка", "clients" to "Клиенты", "ties" to "Связи")
+private val CRM_NAV = listOf("crm" to "Воронка", "clients" to "Клиенты", "people" to "Люди", "ties" to "Связи")
 private val SPHERES = listOf("work" to "Работа", "home" to "Дом", "all" to "Всё")
 
 /**
@@ -426,14 +426,22 @@ fun DelaTab(
     // порядке показа). «Новое» и CRM рисуются своими кусками — модели у них нет.
     val needle = query.trim()
     val by0 = DelaViews.By.DATE
+    // Поиск сразу (06.10.2026, docs/dela-phone-4.md, `renderSearch` веба): на каждую букву, из копии,
+    // всё — клиенты и разделы, проекты клиентов, люди, дела.
+    val found: DelaViews.Found? = if (page == null && needle.isNotEmpty()) DelaViews.searchAll(snap, needle, showDone) else null
     val screen: DelaScreen? = if (page != null) null else when {
-        needle.isNotEmpty() -> DelaViews.search(snap, needle, showDone).let { found ->
-            DelaScreen(
-                "Поиск: $needle", plural(found.size, "дело", "дела", "дел"),
-                groups = DelaViews.group(found, DelaViews.By.PROJECT, snap, today), by = DelaViews.By.PROJECT,
-                done = true, empty = "Ничего не нашлось.",
-            )
-        }
+        found != null -> DelaScreen(
+            "Поиск: $needle",
+            listOfNotNull(
+                plural(found.total, "находка", "находки", "находок"),
+                found.deals.size.takeIf { it > 0 }?.let { plural(it, "проект", "проекта", "проектов") },
+                found.people.size.takeIf { it > 0 }?.let { plural(it, "человек", "человека", "человек") },
+                plural(found.tasks.size, "дело", "дела", "дел"),
+            ).joinToString(" · "),
+            groups = DelaViews.group(found.tasks, DelaViews.By.PROJECT, snap, today), by = DelaViews.By.PROJECT,
+            done = true,
+            empty = if (found.total == 0) "Ничего не нашлось. Ищу по началам и кусочкам слов: «альф», «фонд», «иван»." else "",
+        )
         // «Сейчас» (`renderNow` веба): до пяти дел на сегодня — сначала они, потом всё остальное.
         view == DelaViews.View.NOW -> DelaViews.now(snap, me, today, sphere).let { n ->
             DelaScreen(
@@ -526,18 +534,30 @@ fun DelaTab(
 
     // Что видит Claude с этого экрана — то же, что человек: название и дела в порядке показа.
     val askScreen: AskScreen? = when (val pg = page) {
+        // Карточка (06.10.2026, docs/dela-phone-4.md, `pageScope` веба): с CRM сервер
+        // берёт Opus и даёт ему карточку целиком — правит и хронологию, людей, сделки.
         is DelaPage.Person -> personScreen?.let { sc ->
             val title = "Человек: " + sc.title
-            AskScreen(title, DelaAsk.scope(title, sc.ids, personId = pg.id))
+            val card = crmOn && snap.people[pg.id]?.userId.isNullOrBlank()
+            AskScreen(title, if (card) DelaAsk.personScope(title, sc.ids, pg.id) else DelaAsk.scope(title, sc.ids, personId = pg.id), card)
         }
         is DelaPage.Project -> projectScreen?.let { sc ->
             val title = if (pg.id.isBlank()) "Входящие" else "Проект: " + sc.title
-            AskScreen(title, DelaAsk.scope(title, sc.ids, projectId = pg.id))
+            val pr = snap.projects[pg.id]
+            val card = crmOn && pg.id.isNotBlank() && (pr == null || pr.kind == "client")
+            AskScreen(title, if (card) DelaAsk.clientScope(title, sc.ids, pg.id) else DelaAsk.scope(title, sc.ids, projectId = pg.id), card)
         }
         is DelaPage.Deal -> snap.deals[pg.id].let { d ->
             val title = "Сделка: " + (d?.name ?: "?")
             val open = snap.tasks.values.filter { it.dealId == pg.id && it.open }.sortedWith(Dela.ORDER)
-            AskScreen(title, DelaAsk.scope(title, open.map { it.id }, projectId = d?.projectId.orEmpty()))
+            val ids = open.map { it.id }
+            // Новые дела со страницы сделки — в её проект и в неё саму (`deal_id` в scope).
+            AskScreen(
+                title,
+                if (crmOn) DelaAsk.dealScope(title, ids, pg.id, d?.projectId.orEmpty())
+                else DelaAsk.scope(title, ids, projectId = d?.projectId.orEmpty(), dealId = pg.id),
+                crmOn,
+            )
         }
         // «Новое»: дела наговорок, поставленное другими и без проекта — «всё про Альфу — в Альфу».
         null -> screen?.let { AskScreen(it.title, DelaAsk.scope(it.title, it.ids)) }
@@ -561,7 +581,18 @@ fun DelaTab(
     }
 
     val crmUi = remember { CrmUiState() }
-    val crm = DelaCrmContext(app, snap, me, today, views, queuedOps, moneyOn, actions, push, back = { pages = pages.dropLast(1) }, ui = crmUi)
+    // Пилюля Claude наверху карточки клиента, сделки и человека — открыта сама, как в вебе.
+    LaunchedEffect(page, askScreen?.card) { if (askScreen?.card == true) askOpen = true }
+    // Новая карточка открывается на «Делах».
+    LaunchedEffect(page) { crmUi.tab = TAB_TASKS }
+    val clientOpen by app.delaStore.clientOpenFlow.collectAsState()
+    // «Вернуть» после крестика, «откуда он», «+ человек» — полоской наверху вкладки, пока не закрыли.
+    var undoOffer by remember { mutableStateOf<UndoOffer?>(null) }
+    val crm = DelaCrmContext(
+        app, snap, me, today, views, queuedOps, moneyOn, actions, push, back = { pages = pages.dropLast(1) }, ui = crmUi,
+        clientOpen = clientOpen,
+        offerUndo = { said, back, refresh -> undoOffer = UndoOffer(said, back, refresh) },
+    )
 
     val listState = rememberLazyListState()
     var sphereSheet by remember { mutableStateOf(false) }
@@ -621,7 +652,7 @@ fun DelaTab(
                     }
                     GlyphButton(
                         if (searching) Glyphs.Close else Glyphs.Search,
-                        if (searching) "закрыть поиск" else "поиск по делам",
+                        if (searching) "закрыть поиск" else "поиск: клиенты, проекты, люди, дела",
                         onClick = {
                             if (searching) query = ""
                             searching = !searching
@@ -638,7 +669,7 @@ fun DelaTab(
                         modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
                     )
                 }
-                if (searching || query.isNotEmpty()) PaperField(value = query, onValueChange = { query = it }, label = "Поиск по делам")
+                if (searching || query.isNotEmpty()) PaperField(value = query, onValueChange = { query = it }, label = "Что найти: клиент, проект, человек, дело")
                 if (link == null) {
                     Text(
                         "Дела не подключены — отсканируй QR сервера: «Настройки → Подключения → Дела». " +
@@ -662,6 +693,23 @@ fun DelaTab(
                     onSend = { text -> runAsk(ASK_SCREEN, text, askScreen.scope) { askText = "" } },
                     onClose = { askOpen = false },
                 )
+            }
+        }
+
+        undoOffer?.let { u ->
+            item(key = "undo") {
+                PaperCard(
+                    label = "сделано",
+                    trailing = { GlyphButton(Glyphs.Close, "понятно", onClick = { undoOffer = null }, size = 30.dp) },
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(u.said, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                        PaperTextButton("Вернуть", icon = Glyphs.Undo, onClick = {
+                            undoOffer = null
+                            crm.run(u.back, u.refresh, "Вернул как было")
+                        })
+                    }
+                }
             }
         }
 
@@ -755,7 +803,8 @@ fun DelaTab(
                     val pr = snap.projects[pg.id]
                     val client = crmOn && pg.id.isNotBlank() && (pr == null || pr.kind == "client")
                     if (client) crmClientBlock(crm, pg.id)
-                    projectScreen?.let { sc ->
+                    // У клиента дела — под вкладкой «Дела»; на «Хронологии» их нет (как в вебе).
+                    if (!client || crmUi.tab != TAB_TIMELINE) projectScreen?.let { sc ->
                         val deals = snap.allDealsOf(pg.id)
                         screenBody(
                             sc, "project", actions,
@@ -803,6 +852,7 @@ fun DelaTab(
             when (nav) {
                 "crm" -> crmPipeline(crm)
                 "clients" -> crmClients(crm)
+                "people" -> crmPeople(crm)
                 else -> crmTies(crm)
             }
             return@LazyColumn
@@ -844,6 +894,7 @@ fun DelaTab(
             // «Сейчас»: что ждёт в «Новом» — ссылкой под шапкой, как в вебе («в «Новом» ждут: N»).
             // Поля «Новое дело…» у разделов нет (Правка 4.0): «+» — в строке
             // состояния, голос и текст — в нижней строке. У проекта и человека оно осталось.
+            if (found != null) searchFound(found, snap, today, onProject = { push(DelaPage.Project(it)) }, onDeal = { push(DelaPage.Deal(it)) }, onPerson = { push(DelaPage.Person(it)) })
             screenBody(screen, if (needle.isNotEmpty()) "search" else nav, actions, tools)
             // «Новое из встреч и чатов · 4 ›» — под делами «Сейчас» (`screens/06`).
             if (view == DelaViews.View.NOW && needle.isEmpty()) {
@@ -968,6 +1019,13 @@ fun DelaTab(
             projects = { Dela.projectsNav(snap, me, today, sphere, favs) },
             onSphere = { sphere = it },
             onNav = go,
+            clientOpen = clientOpen,
+            // Открытая сделка раскрывает своего клиента сам.
+            hereClient = (page as? DelaPage.Deal)?.let { snap.deals[it.id]?.projectId }.orEmpty(),
+            hereDeal = (page as? DelaPage.Deal)?.id.orEmpty(),
+            clientDeals = { id -> if (crmOn) ru.zf.pravka.core.DelaCrm.navDeals(snap, id, today) else emptyList() },
+            onClientOpen = { ids, open -> crm.setClientOpen(ids, open) },
+            onDeal = { id -> navOpen = false; query = ""; searching = false; pages = listOf(DelaPage.Deal(id)) },
             // Из боковой панели — как переход по ссылке в вебе: страница вместо стопки.
             onProject = { id -> navOpen = false; query = ""; searching = false; pages = listOf(DelaPage.Project(id)) },
             onPerson = { id -> navOpen = false; query = ""; searching = false; pages = listOf(DelaPage.Person(id)) },
@@ -1085,6 +1143,73 @@ fun DelaTab(
         )
     }
 }
+
+/**
+ * Находки поиска над делами (`renderSearch` веба): клиенты и разделы, проекты
+ * клиентов, люди — до [DelaViews.SEARCH_SHOWN] строк на группу, дальше «и ещё N».
+ */
+private fun LazyListScope.searchFound(
+    f: DelaViews.Found,
+    snap: Dela.Snapshot,
+    today: String,
+    onProject: (String) -> Unit,
+    onDeal: (String) -> Unit,
+    onPerson: (String) -> Unit,
+) {
+    fun <T> part(key: String, title: String, list: List<T>, row: @Composable (T) -> Unit) {
+        if (list.isEmpty()) return
+        item(key = "search:$key") {
+            PaperCard(label = "$title · ${list.size}") {
+                list.take(DelaViews.SEARCH_SHOWN).forEachIndexed { i, x -> if (i > 0) RowRule(); row(x) }
+                if (list.size > DelaViews.SEARCH_SHOWN) PaperHint("и ещё ${list.size - DelaViews.SEARCH_SHOWN} — уточни запрос")
+            }
+        }
+    }
+    val openBy = snap.tasks.values.filter { it.open && it.projectId.isNotBlank() }.groupingBy { it.projectId }.eachCount()
+    part("projects", "Клиенты и разделы", f.projects) { p ->
+        val n = openBy[p.id] ?: 0
+        FoundLine(
+            p.name + if (!p.live) " · архив" else "",
+            listOfNotNull(Dela.KINDS.firstOrNull { it.first == p.kind }?.second ?: p.kind, n.takeIf { it > 0 }?.let { plural(it, "открытое дело", "открытых дела", "открытых дел") })
+                .joinToString(" · "),
+        ) { onProject(p.id) }
+    }
+    part("deals", "Проекты клиентов", f.deals) { d ->
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            StageDot(d.stage)
+            Spacer(Modifier.width(8.dp))
+            Box(Modifier.weight(1f)) {
+                FoundLine(d.name, listOfNotNull(
+                    if (d.closed && d.outcome.isNotBlank()) ru.zf.pravka.core.DelaCrm.OUTCOME[d.outcome] ?: d.outcome else stageWord(d.stage),
+                    snap.projects[d.projectId]?.name,
+                ).joinToString(" · ")) { onDeal(d.id) }
+            }
+        }
+    }
+    part("people", "Люди", f.people) { x ->
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Avatar(x, 28.dp)
+            Spacer(Modifier.width(8.dp))
+            Box(Modifier.weight(1f)) {
+                FoundLine(
+                    x.name + if (x.short.isNotBlank() && x.short != x.name) " · ${x.short}" else "",
+                    listOfNotNull(x.role.takeIf { it.isNotBlank() }, ru.zf.pravka.core.DelaCrm.orgLabel(snap, x.orgId)?.name).joinToString(" · "),
+                ) { onPerson(x.id) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FoundLine(title: String, more: String, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(vertical = 6.dp)) {
+        Text(title, style = MaterialTheme.typography.bodyMedium)
+        if (more.isNotBlank()) Text(more, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** Правка CRM, которую можно вернуть: слова, операции «как было» и какие виды после них обновить. */
+private data class UndoOffer(val said: String, val back: List<org.json.JSONObject>, val refresh: List<String>)
 
 /** Что умеет строка дела — одним набором на все виды (и на страницах CRM). */
 internal class DelaActions(
@@ -1550,7 +1675,7 @@ private fun DelaHead(sc: DelaScreen, sphere: String, onBack: (() -> Unit)?, onMe
         if (onBack != null) GlyphButton(Glyphs.Back, "назад", onClick = onBack)
         GlyphButton(Glyphs.ListLines, "разделы, CRM, проекты и люди — как боковая панель веба", onClick = onMenu)
         Column(Modifier.weight(1f).padding(start = 4.dp)) {
-            Text(sc.title, style = MaterialTheme.typography.titleMedium)
+            Text(sc.title, style = MaterialTheme.typography.titleMedium, color = c.onSurface)
             val sub = listOf(sc.sub, sphere).filter { it.isNotBlank() }.joinToString(" · ")
             if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
             if (sc.alert.isNotBlank()) Text(sc.alert, style = MaterialTheme.typography.bodySmall, color = c.error)
@@ -1576,11 +1701,19 @@ private fun DelaNavSheet(
     onProject: (String) -> Unit,
     onPerson: (String) -> Unit,
     onDismiss: () -> Unit,
+    clientOpen: Set<String> = emptySet(),
+    hereClient: String = "",
+    hereDeal: String = "",
+    clientDeals: (String) -> List<ru.zf.pravka.core.DelaCrm.NavDeal> = { emptyList() },
+    onClientOpen: (Collection<String>, Boolean) -> Unit = { _, _ -> },
+    onDeal: (String) -> Unit = {},
 ) {
     // Сбоку, с отступами от краёв, а не листом во весь экран снизу (баг №1:
     // «чтобы сбоку оно вылезало… я его крутил, выбирал и дальше оно выезжало
     // обратно»).
     ru.zf.pravka.ui.SideSheet(visible = visible, onDismiss = onDismiss, title = "Дела", icon = Glyphs.Delo) {
+        // Строки без своего цвета (клиенты, заголовки групп) — светлыми: иначе на тёмном листе их не видно.
+        androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
         val counts = counts()
         val projects = projects()
         Segments(
@@ -1597,17 +1730,35 @@ private fun DelaNavSheet(
             NavHead("CRM")
             for ((k, t) in CRM_NAV) NavLine(t, 0, selected = nav == k) { onNav(k) }
         }
+        // Клиент — со своими проектами (сделками) под стрелкой (06.10.2026, docs/dela-phone-4.md;
+        // владелец: «проекты должны группироваться под клиента»), как `projItem` веба.
+        val row: @Composable (Dela.ProjectRow) -> Unit = { r ->
+            val deals = if (r.project.kind == "client") clientDeals(r.project.id) else emptyList()
+            if (deals.isEmpty()) ProjectLine(r.project.name, r.open, r.late) { onProject(r.project.id) }
+            else ClientNavLine(r, deals, r.project.id in clientOpen || r.project.id == hereClient, hereDeal,
+                onToggle = { onClientOpen(listOf(r.project.id), r.project.id !in clientOpen) }, onProject = onProject, onDeal = onDeal)
+        }
         if (projects.favorites.isNotEmpty()) {
             NavHead("Избранное")
-            for (r in projects.favorites) ProjectLine(r.project.name, r.open, r.late) { onProject(r.project.id) }
+            for (r in projects.favorites) row(r)
         }
         for ((title, rows) in projects.groups) {
             var open by rememberSaveable("nav:$title") { mutableStateOf(true) }
             SummaryLine(title = title, summary = rows.size.toString(), expanded = open, onToggle = { open = !open }) {
-                for (r in rows) ProjectLine(r.project.name, r.open, r.late) { onProject(r.project.id) }
+                // «Раскрыть все / свернуть все» — проекты всех клиентов разом (`openAllBtn` веба).
+                val withDeals = rows.filter { it.project.kind == "client" && clientDeals(it.project.id).isNotEmpty() }.map { it.project.id }
+                if (withDeals.isNotEmpty()) {
+                    val allOpen = withDeals.all { it in clientOpen }
+                    Row {
+                        Spacer(Modifier.weight(1f))
+                        PaperTextButton(if (allOpen) "свернуть все" else "раскрыть все", onClick = { onClientOpen(withDeals, !allOpen) })
+                    }
+                }
+                for (r in rows) row(r)
             }
         }
-        if (projects.people.isNotEmpty()) {
+        // С CRM люди — разделом «Люди» по компаниям; без неё — с кем больше открытых дел.
+        if (projects.people.isNotEmpty() && !crmOn) {
             var open by rememberSaveable("nav:people") { mutableStateOf(false) }
             SummaryLine(title = "Люди", summary = projects.people.size.toString(), expanded = open, onToggle = { open = !open }) {
                 for ((p, n) in projects.people) ProjectLine(p.label, n, false) { onPerson(p.id) }
@@ -1619,6 +1770,7 @@ private fun DelaNavSheet(
                 for (r in projects.archived) ProjectLine(r.project.name, r.open, r.late) { onProject(r.project.id) }
             }
         }
+    }
     }
 }
 
@@ -1673,6 +1825,56 @@ private fun RescheduleSheet(count: Int, today: LocalDate, onDismiss: () -> Unit,
             GlyphButton(Glyphs.Check, "перенести на эту дату", enabled = Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(own), onClick = {
                 onPick(own, DelaViews.ddmm(own, iso))
             })
+        }
+    }
+}
+
+/**
+ * Клиент в ☰ с проектами под стрелкой: стрелка раскрывает, тап по имени —
+ * страница клиента; проект — точка цвета стадии, имя без «Клиент: », число
+ * открытых дел (красное при просрочке), тап — страница сделки.
+ */
+@Composable
+private fun ClientNavLine(
+    r: Dela.ProjectRow,
+    deals: List<ru.zf.pravka.core.DelaCrm.NavDeal>,
+    open: Boolean,
+    hereDeal: String,
+    onToggle: () -> Unit,
+    onProject: (String) -> Unit,
+    onDeal: (String) -> Unit,
+) {
+    val c = MaterialTheme.colorScheme
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        GlyphButton(
+            if (open) Glyphs.ChevronUp else Glyphs.ChevronDown,
+            if (open) "свернуть проекты" else "проекты клиента: ${deals.size}",
+            onClick = onToggle,
+            size = 30.dp,
+        )
+        Box(Modifier.weight(1f)) { ProjectLine(r.project.name, r.open, r.late) { onProject(r.project.id) } }
+    }
+    if (open) {
+        for (d in deals) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { onDeal(d.deal.id) }
+                    .padding(start = 34.dp, end = 2.dp, top = 7.dp, bottom = 7.dp),
+            ) {
+                StageDot(d.deal.stage)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    d.short,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (d.deal.id == hereDeal) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (d.deal.id == hereDeal) c.primary else c.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                if (d.open > 0) {
+                    Text(d.open.toString(), style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (d.late) FontWeight.SemiBold else FontWeight.Normal, color = if (d.late) c.error else c.onSurfaceVariant)
+                }
+            }
         }
     }
 }
