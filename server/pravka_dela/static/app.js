@@ -1158,7 +1158,10 @@ async function runJob(path, body) {
   }
 }
 
-/** Что видит человек на этой странице — Claude видит то же: название, дела и в «Новом» — предложения (П1, П2…). */
+/** Что видит человек на этой странице — Claude видит то же (владелец 08.10.2026: «пусть смотрит на то, что
+ *  сейчас на экране»): дела страницы сверху вниз — какие из них в окне прямо сейчас, какие выбраны
+ *  галочками, какое открыто в карточке, — и в «Новом» предложения (П1, П2…). Дела берутся с самой
+ *  страницы в миг отправки: что нарисовано, то и видно; S.order — запас, если строк в DOM нет. */
 function pageScope(defaults = {}) {
   const r = route();
   const p = r.kind === 'project' ? project(r.id) : null, h = r.kind === 'person' ? person(r.id) : null;
@@ -1168,7 +1171,21 @@ function pageScope(defaults = {}) {
     : r.kind === 'search' ? `Поиск: ${r.q}`
       : r.kind === 'new' && r.batch ? `Новое: одна пачка — ${one?.batch_title || r.batch}`
         : (VIEWS[r.kind] || CRM_VIEWS[r.kind] || { title: 'Дела' }).title;
-  const scope = { title, task_ids: [...new Set(S.order)].slice(0, 300) };
+  const rows = [...document.querySelectorAll('main.list .task[data-id]')];
+  const uniq = (xs) => [...new Set(xs)];
+  // В окне — между низом липкой шапки и низом окна; строка, от которой видна лишь кромка, не в счёт:
+  // её названия не видно.
+  const top = document.querySelector('main.list .list-head')?.getBoundingClientRect().bottom || 0;
+  const bottom = Math.min(window.innerHeight, document.querySelector('main.list')?.getBoundingClientRect().bottom || window.innerHeight,
+    document.querySelector('main.list .dock')?.getBoundingClientRect().top || Infinity); // строка внизу экрана — тоже не окно
+  const inView = rows.filter((x) => {
+    const b = x.getBoundingClientRect();
+    return b.height > 0 && Math.min(b.bottom, bottom) - Math.max(b.top, top) >= b.height * 0.6;
+  });
+  const scope = { title, task_ids: uniq(rows.length ? rows.map((x) => x.dataset.id) : S.order).slice(0, 300),
+    visible_ids: uniq(inView.map((x) => x.dataset.id)).slice(0, 300) };
+  if (S.sel.size) scope.selected_ids = [...S.sel].slice(0, 300);
+  if (S.cardId && S.tasks.has(S.cardId)) scope.open = S.cardId;
   if (r.kind === 'new') scope.suggestion_ids = S.sugOrder.slice(0, 150);
   for (const k of ['project_id', 'person_id', 'deal_id']) if (defaults[k]) scope[k] = defaults[k];
   // Карточка: Claude (Opus) видит её целиком и правит хронологию, людей и сделки, не только дела.

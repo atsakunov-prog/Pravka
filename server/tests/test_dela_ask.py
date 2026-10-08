@@ -47,14 +47,17 @@ def test_ask_edits_tasks_on_screen(dela):
             item(a["num"], now="on", due=today.isoformat(), notes_add="сначала маркетинг"),
             item(b["num"], person="Наташа", ball="waiting", title="Наташа: смета по ремонту", due=tomorrow, project="Птиц"),
             item(c_["num"], status="done"),
-            item(off["num"], due=tomorrow),
+            item(off["num"], due=tomorrow),  # названо не с этой страницы — его открытое дело
+            item(99999, due=tomorrow),       # такого дела нет вовсе
             item(a["num"], due="-"),  # второй раз то же дело — не трогаем
         ], "_usage": {"input": 1000, "output": 200, "cache_write": 0, "cache_read": 3000}}
 
     scope = {"title": "Проект ПТИЦ", "task_ids": [a["id"], b["id"], c_["id"]], "project_id": str(p)}
     out = ask.run(dela, "sasha", "бюджет первым делом, смету Наташе к завтра, акт закрыл", scope, "", None, ask_fn=fake)
     assert "— ПТИЦ (Птиц)" in seen["system"] and "— Наташа (Наталья Ш)" in seen["system"]
-    assert "Страница: Проект ПТИЦ" in seen["user"] and "(просрочено)" in seen["user"] and "Чужое" not in seen["user"]
+    screen, other = seen["user"].split("ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА")
+    assert "Страница: Проект ПТИЦ" in screen and "(просрочено)" in screen and "Чужое" not in screen
+    assert "Входящие:" in other and f"#{off['num']} Чужое на другой странице" in other and "Бюджет" not in other
     assert f"{today.isoformat()} — сегодня" in seen["user"] and seen["user"].endswith("акт закрыл")
     assert out["route"] == "edit" and out["reply"].startswith("Бюджет")
     with parse.db.session(dela, "sasha", "t") as c:
@@ -63,8 +66,8 @@ def test_ask_edits_tasks_on_screen(dela):
     nb = st[b["num"]]
     assert (nb["person_short"], nb["ball"], nb["title"], nb["project_id"]) == ("Наташа", "waiting", "Наташа: смета по ремонту", p)
     assert st[c_["num"]]["status"] == "done"
-    assert st[off["num"]]["due_date"] is None  # не на экране — не трогаем
-    assert any("не на экране" in e for e in out["errors"])
+    assert st[off["num"]]["due_date"].isoformat() == tomorrow  # названное по имени находится и не с этой страницы
+    assert any("#99999 нет ни на экране, ни среди открытых" in e for e in out["errors"])
     # Как было — для «Вернуть»: только изменённые поля и статус.
     undo = {u["num"]: u for u in out["changed"]}
     assert undo[a["num"]]["before"] == {"due_date": late, "focus_on": None, "notes": None}
@@ -101,6 +104,28 @@ def test_ask_focus_create_and_new_route(dela):
     out = ask.run(dela, "sasha", "Наташе сверку к пятнице", {"task_ids": [t["id"]]}, "", None,
                   ask_fn=lambda s, u: {"route": "new", "reply": "", "changes": [], "create": []}, parse_fn=fake_parse)
     assert out["route"] == "new" and out["tasks"][0]["title"] == "Наташе сверку" and calls
+
+
+def test_ask_sees_window_selection_and_card(dela):
+    """Владелец 08.10.2026: «показал ему несколько дел… сказал, что не видит никаких дел». Экран — как в миг
+    отправки: что в окне, что выбрано галочками, что открыто в карточке; остальное открытое — одной строкой."""
+    a, b, c_, d = (mk(dela, t) for t in ("Полку повесить", "Учебник с дачи", "Карта для оплаты", "Смета ремонта"))
+    done = mk(dela, "Старое сделанное")
+    store.apply_ops(dela, "sasha", [{"op": "task.done", "id": done["id"]}], "web")
+    scope = {"title": "Новое", "task_ids": [a["id"], b["id"], c_["id"]], "visible_ids": [a["id"], b["id"]],
+             "selected_ids": [b["id"], c_["id"]], "open": d["id"]}
+    msg = ask.context(dela, "sasha", "эти на субботу", scope)["message"]
+    pick, rest = msg.split("ВЫБРАНО ГАЛОЧКАМИ (2) — «эти» про них:")[1].split("ОТКРЫТО В КАРТОЧКЕ СПРАВА:")
+    assert f"#{b['num']} Учебник с дачи" in pick and f"#{c_['num']} Карта" in pick and "Полку" not in pick
+    screen = rest.split("ДЕЛА НА ЭКРАНЕ (4), сверху вниз; «в окне» — 2")[1]
+    assert rest.startswith(f" #{d['num']} Смета ремонта")  # открытое в карточке — на экране, хоть список его и не рисует
+    assert f"в окне · #{a['num']} Полку" in screen and f"в окне · #{b['num']} Учебник" in screen
+    assert f"\n#{c_['num']} Карта" in screen and "ДРУГИЕ МОИ" not in msg  # других открытых нет, сделанное не тащим
+
+    # Пустой экран (страница без дел) — Claude всё равно видит открытые дела и находит названное.
+    ctx = ask.context(dela, "sasha", "полку на субботу", {"title": "Клиенты", "task_ids": []})
+    assert "ДЕЛА НА ЭКРАНЕ (0)" in ctx["message"] and f"#{a['num']} Полку повесить" in ctx["message"]
+    assert "Старое сделанное" not in ctx["message"] and a["num"] in ctx["tasks"]
 
 
 def sug(n, decision="accept", **kw):

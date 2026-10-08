@@ -3,8 +3,16 @@
 Владелец разбирает дела и говорит, что с ними сделать: «перенеси на пятницу», «это Наташе,
 жду до среды», «все просроченные — на завтра», «бюджет — первым делом, сегодня». Claude видит
 то же, что человек на этой странице (дела с номерами), справочник проектов, сделок и людей и
-календарь на две недели — и возвращает правки. Сервер их проверяет (только дела со страницы,
+календарь на две недели — и возвращает правки. Сервер их проверяет (только видимые человеку дела,
 имена — по справочнику) и сразу применяет; ответ — что поменялось и как вернуть одним движением.
+
+Что на экране (08.10.2026). Владелец: «я ему показал в новом несколько дел… переставить дату — сказал,
+что не видит никаких дел… пусть смотрит на то, что сейчас на экране». Поэтому веб собирает экран в миг
+отправки с самой страницы: дела сверху вниз, какие из них в окне прямо сейчас (visible_ids), какие
+выбраны галочками (selected_ids), какое открыто в карточке (open). Кто такие «это» и «эти» — по этому
+порядку (SYSTEM, «О КАКИХ ДЕЛАХ РЕЧЬ»). А чтобы названное по смыслу находилось и не с этой страницы,
+Claude видит ещё и все остальные свои открытые дела одной строкой (без заметок; их ~150 — около 6 тыс.
+знаков). Общие слова («все», «просроченные») — только про экран.
 
 Команда целиком про новые дела («завтра позвонить Ивану, Наташе сверку к пятнице») уходит в
 разбор parse.py — тот же промпт, что у телефона; короткое новое дело внутри правки Claude заводит сам.
@@ -53,6 +61,7 @@ TIMELINE_SHOWN = 12             # записей хронологии в кар�
 EFFORT = "low"                 # правка короткая; ошибается — «Вдумчиво» в настройках
 MAX_INPUT = 4000
 MAX_TASKS = 300
+MAX_OTHER = 400                 # остальные открытые дела — коротко, чтобы названное находилось и не с этой страницы
 MAX_SUGS = 150
 NOTE_CHARS = 100
 WD = parse.WD
@@ -66,10 +75,27 @@ SYSTEM = """Ты правишь дела Саши в его сервисе «Д�
 
 НА ВХОДЕ
 — СПРАВОЧНИК ниже: проекты, сделки, люди, метки.
-— В сообщении: сегодняшняя дата и календарь на две недели; где Саша сейчас (страница); дела на
-  экране с номерами; если команда про одно дело — оно названо отдельно («ДЕЛО»); в «Новом» —
-  предложения автоматики на экране (НОВОЕ: П1, П2 … сверху вниз, по пачкам — встреча или окно
-  Telegram; завести, закрыть или уточнить дело); сама команда.
+— В сообщении: сегодняшняя дата и календарь на две недели; где Саша сейчас (страница); если команда
+  про одно дело — оно названо отдельно («ДЕЛО»); дела, выбранные галочками («ВЫБРАНО»); дело, открытое
+  в карточке справа («ОТКРЫТО»); ДЕЛА НА ЭКРАНЕ — все дела страницы сверху вниз, пометка «в окне» —
+  те, что Саша видит прямо сейчас, не прокручивая; в «Новом» — предложения автоматики на экране (НОВОЕ:
+  П1, П2 … сверху вниз, по пачкам — встреча или окно Telegram; завести, закрыть или уточнить дело);
+  ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА — всё остальное открытое, одной строкой; сама команда.
+
+О КАКИХ ДЕЛАХ РЕЧЬ — это главное, разберись до правок
+1. Номер («#523», «пятьсот двадцать третье») — это дело, где бы оно ни было.
+2. «Это», «его», «перенеси» без названия — ДЕЛО; нет его — ВЫБРАНО; нет — ОТКРЫТО; нет — единственное
+   дело «в окне».
+3. «Эти», «вот эти», «их», «все эти» — ВЫБРАНО; ничего не выбрано — дела «в окне»; их явно не хватает
+   или они не подходят по смыслу — все ДЕЛА НА ЭКРАНЕ.
+4. «Все», «просроченные», «по Ивану», «клиентские», «последние три», «верхние два» — выбери сам по
+   признакам (срок, мяч, человек, проект, порядок сверху вниз) среди ДЕЛ НА ЭКРАНЕ, а не в ДРУГИХ.
+5. Дело названо по смыслу («полку», «звонок Ивану», «акт Альфе») — ищи сначала на экране, потом в ДРУГИХ.
+   Голос коверкает слова: сравнивай по смыслу и созвучию, а не по буквам.
+6. Подходит одно — делай. Подходят несколько одинаково — сделай с бесспорными, про остальные спроси в
+   reply, назвав их номера.
+7. Не отвечай «не вижу дел», если они есть на экране или в ДРУГИХ: скажи, что именно не понял, и как
+   сказать точнее (номер, название, выбрать галочкой).
 
 ЧТО ВЕРНУТЬ
 route — "edit", если команда про дела или предложения на экране (поправить, перенести, закрыть,
@@ -83,7 +109,7 @@ suggestions — решения по предложениям из НОВОГО, 
   Саша не менял — пусто. Принять «закрыть» — дело закроется; «уточнить» — поправится, как предложено.
 changes — правки дел на экране, по одной записи на дело. Поле, которое Саша не менял, — пусто:
   "" у строк, 0 у чисел, [] у списков. «-» в строке — очистить поле.
-  num — номер дела из списка (только из списка на экране).
+  num — номер дела: с экрана или из ДРУГИХ (правила — «О КАКИХ ДЕЛАХ РЕЧЬ»).
   due — срок ГГГГ-ММ-ДД по календарю или «-». «Завтра», «в пятницу», «через неделю», «на
     следующей неделе» (её понедельник) — считай по календарю. due_time — ЧЧ:ММ, только если названо.
   now — "on": в «Сейчас», фокус на сегодня; "off" — убрать. «Первым делом», «в приоритет»,
@@ -105,7 +131,8 @@ changes — правки дел на экране, по одной записи 
     НАПОМИНАНИЕ ниже; «ещё раз через час» — от времени «сейчас» в сообщении.
 create — новые дела, только если Саша прямо просит завести их внутри правки. Поля — как у changes
   (title обязателен; due, now, project, person, ball, notes_add — заметка нового дела).
-reply — одна-две фразы Саше: что сделал. Чего не понял или не нашёл — скажи прямо. Без вступлений.
+reply — одна-две фразы Саше: что сделал. Чего не понял или не нашёл — скажи прямо, с номерами дел,
+  о которых думал. Без вступлений.
 
 КАРТОЧКА — если Саша на странице клиента, сделки или человека, в сообщении есть раздел КАРТОЧКА:
 кто это, сделки, люди, последние записи хронологии. «Он», «они», «по ним», «этот проект» — про неё.
@@ -130,9 +157,6 @@ card — правки самой карточки, по записи на пра
 
 ПРАВИЛА
 — Меняй только то, что сказано. Не выдумывай сроки, людей и проекты.
-— «Все», «эти», «просроченные», «по Ивану», «клиентские» — про дела на экране: выбери их сам по
-  признакам из списка (срок, мяч, человек, проект).
-— ДЕЛО, если оно названо, — главный адресат: «его», «это», «перенеси» — про него.
 — «Первое прими», «всё прими», «остальное отклони», «про Ивана», «всё со встречи с Альфой» — про
   предложения НОВОГО по порядку (П1 — первое сверху) и признакам. О каком предложении команда
   молчит, то не трогай: оно останется в «Новом». Предложение решай через suggestions, а не правкой
@@ -378,12 +402,14 @@ def _calendar(today: dt.date) -> str:
                      for i, d in enumerate(days))
 
 
-def _task_line(t: dict, today: dt.date) -> str:
+def _task_line(t: dict, today: dt.date, short: bool = False) -> str:
+    """Дело одной строкой. short — для ДРУГИХ открытых: без сделки, оценки, меток, напоминания и заметки."""
     bits = [f"#{t['num']} {t['title']}"]
     if t["status"] != "open":
         bits.append({"done": "сделано", "cancelled": "отменено"}.get(t["status"], t["status"]))
-    bits.append(f"проект {t['project_name']}" if t.get("project_name") else "Входящие")
-    if t.get("deal_name"):
+    if not short:  # короткие строки идут под заголовком проекта
+        bits.append(f"проект {t['project_name']}" if t.get("project_name") else "Входящие")
+    if t.get("deal_name") and not short:
         bits.append(f"сделка {t['deal_name']}")
     who = t.get("person_short") or t.get("person_name")
     if t["ball"] in ("waiting", "agenda") and who:
@@ -396,6 +422,8 @@ def _task_line(t: dict, today: dt.date) -> str:
                     + (" (просрочено)" if t["status"] == "open" and d < today else ""))
     if t.get("focus_on") == today:
         bits.append("в «Сейчас»")
+    if short:
+        return " · ".join(bits)
     if t.get("estimate_min"):
         bits.append(f"{t['estimate_min']} мин")
     if t.get("labels"):
@@ -576,7 +604,7 @@ def to_ops(data: dict, tasks: dict, index: dict, today: dt.date, defaults: dict,
     for x in data.get("changes") or []:
         t = tasks.get(x.get("num"))
         if not t:
-            miss.append(f"дело #{x.get('num')} не на экране")
+            miss.append(f"дела #{x.get('num')} нет ни на экране, ни среди открытых")
             continue
         if t["id"] in seen:
             continue
@@ -949,24 +977,34 @@ def settings_of(conn, user: str) -> tuple[str, str]:
     return llm.MODELS.get(s.get("claude_model"), MODEL), s.get("claude_effort") if s.get("claude_effort") in llm.EFFORTS else EFFORT
 
 
-def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None,
-        via: str = "web", actor: str | None = None, ask_fn=None, parse_fn=None) -> dict:
-    """Команда → правки (или разбор новых дел) → применить. ask_fn/parse_fn — подмена Claude в тестах.
+def _ids(scope: dict, key: str, limit: int) -> list[str]:
+    return list(dict.fromkeys(str(x) for x in (scope.get(key) or [])))[:limit]
 
-    scope: {"title": «где человек», "task_ids": [дела на экране], "focus": id дела у микрофона,
-    "project_id"/"person_id": куда класть новые дела, "suggestion_ids": [предложения «Нового» на
-    экране, сверху вниз — П1, П2…]}.
+
+def context(url: str, user: str, text: str, scope: dict) -> dict:
+    """Что увидит Claude: справочник (system, в кэше) и экран с командой (message) — и всё, что нужно,
+    чтобы его ответ стал правками. Отдельно от run, чтобы прогнать команду на настоящих делах, ничего
+    не применяя (проверка промпта на малом).
+
+    scope: {"title": «где человек», "task_ids": [дела страницы сверху вниз], "visible_ids": [те из них,
+    что в окне сейчас], "selected_ids": [выбранные галочками], "open": id дела в карточке, "focus": id
+    дела у микрофона, "project_id"/"person_id": куда класть новые дела, "suggestion_ids": [предложения
+    «Нового» на экране, сверху вниз — П1, П2…]}.
     """
     text = (text or "").strip()
     if not text:
         raise AskError("пусто — скажи, что сделать")
     if len(text) > MAX_INPUT:
         raise AskError(f"больше {MAX_INPUT} знаков — для длинной надиктовки нажми звёздочку")
-    ids = [str(x) for x in (scope.get("task_ids") or [])][:MAX_TASKS]
+    ids = _ids(scope, "task_ids", MAX_TASKS)
+    visible = set(_ids(scope, "visible_ids", MAX_TASKS))
+    selected = _ids(scope, "selected_ids", MAX_TASKS)
     focus = str(scope.get("focus") or "") or None
-    if focus and focus not in ids:
-        ids.insert(0, focus)
-    sids = [str(x) for x in (scope.get("suggestion_ids") or [])][:MAX_SUGS]
+    opened = str(scope.get("open") or "") or None
+    for x in [focus, opened, *selected]:  # выбранное и открытое — тоже на экране, даже если список его не нарисовал
+        if x and x not in ids:
+            ids.insert(0, x)
+    sids = _ids(scope, "suggestion_ids", MAX_SUGS)
     with db.session(url, user, via="ask") as conn:
         cat, index = _catalog(conn)
         today = conn.execute("SELECT crm.today() AS d").fetchone()["d"]
@@ -980,6 +1018,10 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
         index["places"] = places = remind.places_of(conn, user)
         hm = conn.execute("SELECT to_char(now() AT TIME ZONE 'Europe/Moscow', 'HH24:MI') AS hm").fetchone()["hm"]
         rows = conn.execute("SELECT * FROM tasks.v_tasks WHERE id = ANY(%s::uuid[])", (ids,)).fetchall() if ids else []
+        # Остальные свои открытые — чтобы «перенеси полку» находилось и не с этой страницы (и с пустой).
+        others = conn.execute(
+            "SELECT * FROM tasks.v_tasks WHERE owner_id = %s AND status = 'open' AND NOT (id = ANY(%s::uuid[])) "
+            "ORDER BY project_name NULLS FIRST, due_date NULLS LAST, num LIMIT %s", (user, ids, MAX_OTHER)).fetchall()
         # Только ждущие решения и только свои — как в «Новом» у веба; разобранное с телефона выпадает.
         srows = conn.execute("SELECT * FROM tasks.suggestions WHERE id = ANY(%s::uuid[]) AND status = 'pending' AND for_user = %s",
                              (sids, user)).fetchall() if sids else []
@@ -987,12 +1029,14 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
         trows = conn.execute("SELECT * FROM tasks.v_tasks WHERE id = ANY(%s::uuid[])", (tids,)).fetchall() if tids else []
     order = {i: k for k, i in enumerate(ids)}
     rows.sort(key=lambda r: order.get(str(r["id"]), 0))
-    tasks = {r["num"]: r for r in rows}
-    focused = next((r for r in rows if str(r["id"]) == focus), None)
+    byid = {str(r["id"]): r for r in rows}
+    focused = byid.get(focus) if focus else None
+    picked = [byid[i] for i in selected if i in byid]
+    shown = byid.get(opened) if opened else None
     # П-номер — место на экране, а не в выборке: разобранное с другого устройства оставляет дырку,
     # и «третье» по-прежнему про третье сверху.
-    by_id = {str(s["id"]): s for s in srows}
-    sugs = {k: by_id[i] for k, i in enumerate(sids, 1) if i in by_id}
+    by_sid = {str(s["id"]): s for s in srows}
+    sugs = {k: by_sid[i] for k, i in enumerate(sids, 1) if i in by_sid}
     targets = {r["id"]: r for r in trows}
     msg = [f"Сегодня {today.isoformat()}, {WD[today.weekday()]}, сейчас {hm}.", "Календарь: " + _calendar(today),
            f"Страница: {(scope.get('title') or 'Дела').strip()[:200]}"]
@@ -1003,7 +1047,13 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
     msg.append(f"В «Сейчас» сегодня: {len(now_ids)} из {NOW_MAX}.")
     if focused:
         msg += ["", "ДЕЛО (команда про него):", _task_line(focused, today)]
-    msg += ["", f"ДЕЛА НА ЭКРАНЕ ({len(rows)}):"] + ([_task_line(r, today) for r in rows] or ["(нет)"])
+    if picked:
+        msg += ["", f"ВЫБРАНО ГАЛОЧКАМИ ({len(picked)}) — «эти» про них:", *[f"#{r['num']} {r['title']}" for r in picked]]
+    if shown and shown is not focused:
+        msg += ["", f"ОТКРЫТО В КАРТОЧКЕ СПРАВА: #{shown['num']} {shown['title']}"]
+    seen_now = sum(str(r["id"]) in visible for r in rows)
+    msg += ["", f"ДЕЛА НА ЭКРАНЕ ({len(rows)}), сверху вниз" + (f"; «в окне» — {seen_now}, их Саша видит сейчас:" if seen_now else ":")]
+    msg += [("в окне · " if str(r["id"]) in visible else "") + _task_line(r, today) for r in rows] or ["(нет)"]
     if sids:
         msg += ["", f"НОВОЕ НА ЭКРАНЕ — ждут решения ({len(sugs)}):"]
         batch = object()
@@ -1014,16 +1064,38 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
             msg.append(f"П{n}. {_sug_line(s, targets.get(s['task_id']))}")
         if not sugs:
             msg.append("(ничего — всё уже разобрано)")
+    if others:
+        # По проектам заголовком: «· проект Х» в каждой строке стоил бы ~500 токенов на команду.
+        msg += ["", f"ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА — не на этой странице ({len(others)}), по проектам:"]
+        group = object()
+        for r in others:
+            if r["project_name"] != group:
+                group = r["project_name"]
+                msg.append(f"{group or 'Входящие'}:")
+            msg.append(_task_line(r, today, short=True))
     msg += ["", f"КОМАНДА: {text}"]
     # Справочник, правила напоминаний и места — в кэше: между командами одного человека они те же.
     system = (SYSTEM.replace("{REMIND}", remind_rules(url)).replace("{CATALOG}", cat)
               .replace("{PLACES}", remind.places_block(places)))
+    return {"text": text, "system": system, "message": "\n".join(msg), "model": model, "effort": effort,
+            "tasks": {r["num"]: r for r in [*others, *rows]}, "focused": focused, "sugs": sugs, "targets": targets,
+            "index": index, "today": today, "card": card, "now_ids": now_ids}
+
+
+def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None,
+        via: str = "web", actor: str | None = None, ask_fn=None, parse_fn=None) -> dict:
+    """Команда → правки (или разбор новых дел) → применить. ask_fn/parse_fn — подмена Claude в тестах.
+    Что видит Claude — context (там же scope)."""
+    ctx = context(url, user, text, scope)
+    text, model, effort = ctx["text"], ctx["model"], ctx["effort"]
+    tasks, focused, sugs, targets = ctx["tasks"], ctx["focused"], ctx["sugs"], ctx["targets"]
+    index, today, card, now_ids = ctx["index"], ctx["today"], ctx["card"], ctx["now_ids"]
     if ask_fn is None:
         if not key:
             raise AskError("Claude не настроен: нет ключа в dela.env")
         cl = client(key, proxy)
         ask_fn = lambda s, u: ask(cl, s, u, model, effort)  # noqa: E731
-    data = ask_fn(system, "\n".join(msg))
+    data = ask_fn(ctx["system"], ctx["message"])
     if data.get("card"):
         for k, v in split_card(data["card"]).items():
             data[k] = (data.get(k) or []) + v
