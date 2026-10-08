@@ -297,6 +297,29 @@ def test_files_and_new_fields(dela):
     assert v[0]["status"] == "relations"
 
 
+def test_talk_history_and_no_parse_route(dela):
+    """Разговор (09.10.2026): ответ в окне Claude приходит с прошлыми репликами — Claude видит, о чём спрашивал;
+    в разговоре команда не уходит в разбор надиктовки, даже если Claude назвал её новой."""
+    a = mk(dela, "Позвонить в банк")
+    seen = {}
+
+    def fake(system, user_text):
+        seen["user"] = user_text
+        return empty_card(route="new", create=[item(0, title="Отправить банку выписку")], reply="Завёл.", _usage=None)
+
+    def no_parse(*_):
+        raise AssertionError("в разговоре разбор надиктовки не зовём")
+
+    scope = {"task_ids": [a["id"]], "history": [
+        {"said": "что с банком", "reply": "Есть «Позвонить в банк». Завести ещё выписку?", "done": "ничего не менял"},
+        "мусор", {"said": "", "reply": "пустое — пропускаем"}]}
+    out = ask.run(dela, "sasha", "да, заведи", scope, "", None, ask_fn=fake, parse_fn=no_parse)
+    talk = seen["user"].split("РАЗГОВОР", 1)[1].split("КОМАНДА:", 1)[0]
+    assert "Саша: что с банком" in talk and "Ты: Есть «Позвонить в банк». Завести ещё выписку? | сделано: ничего не менял" in talk
+    assert "пустое" not in talk and seen["user"].rstrip().endswith("КОМАНДА: да, заведи")
+    assert out["route"] == "edit" and [t["title"] for t in out["tasks"]] == ["Отправить банку выписку"]
+
+
 def test_schema_fits_grammar():
     """У схемы ответа предел: 06.10.2026 с карточкой тремя массивами и полным create API ответил
     «compiled grammar is too large» (62 поля — нет, 52 — да). Новое поле — сначала проба на API."""

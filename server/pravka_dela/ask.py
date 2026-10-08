@@ -48,6 +48,12 @@ CRM и всё может править»; «написал: добавь <че�
 статус клиента «поддержание отношений» (client). Правка человека, из которой ничего не вышло, больше не
 пропадает молча — она в ошибках ответа; reply называет только сделанное, дела — названием (номеров
 Саша не видит).
+
+Разговор (09.10.2026). Владелец: «когда Клод отвечает, он регулярно просит ещё следующий вопрос — в его
+ответе тоже должен быть текстбокс». У окна ответа своя строка; следующая реплика приходит с разговором
+(scope.history: что Саша сказал, что ответил Claude, что сделано) — раздел РАЗГОВОР перед командой. Он
+после справочника, поэтому кэш тот же. В разговоре команда — всегда правка (route "edit"): ответ «да, на
+пятницу» не уходит в разбор надиктовки, который разговора не видит.
 """
 
 from __future__ import annotations
@@ -149,7 +155,13 @@ create — новые дела, только если Саша прямо про
   (title обязателен; due, now, project, person, ball, notes_add — заметка нового дела).
 reply — одна-две фразы Саше: что сделал — только то, что есть в changes, create, suggestions и card;
   чего там нет, того ты не сделал, и «добавил» про это не пиши. Чего не понял или не нашёл — скажи прямо,
-  назвав дела, о которых думал. Дела — названием: номеров Саша не видит. Без вступлений.
+  назвав дела, о которых думал. Дела — названием: номеров Саша не видит. Без вступлений. Нужен ответ
+  Саши — закончи reply одним коротким вопросом: он ответит в том же окне, и ты увидишь разговор.
+
+РАЗГОВОР — если он есть в сообщении, команда — продолжение: Саша отвечает на твой вопрос или уточняет
+сказанное. Пойми её вместе с разговором («да», «на пятницу», «нет, второе», «и Лену туда же» — про то, о
+чём шла речь) и сделай. Сделанное в прошлых репликах уже применено — не повторяй его; «верни», «не то» —
+поправь сделанное. route в разговоре — "edit": новые дела — в create.
 
 КАРТОЧКА — если Саша на странице клиента, сделки или человека, в сообщении есть раздел КАРТОЧКА:
 кто это, описание, сделки (Саша зовёт их проектами клиента), люди клиента, команда ЗФ, последние записи
@@ -1182,6 +1194,23 @@ def _ids(scope: dict, key: str, limit: int) -> list[str]:
     return list(dict.fromkeys(str(x) for x in (scope.get(key) or [])))[:limit]
 
 
+TALK_TURNS = 8      # реплик разговора, которые видит Claude
+TALK_CHARS = 900    # на каждую часть реплики
+
+
+def _history(scope: dict) -> list[str]:
+    """Разговор в окне ответа (scope.history): что сказал Саша, что ответил Claude, что сделано — строками."""
+    out = []
+    for x in (scope.get("history") or [])[-TALK_TURNS:]:
+        if not isinstance(x, dict):
+            continue
+        cut = lambda k: " ".join(str(x.get(k) or "").split())[:TALK_CHARS]  # noqa: E731
+        if cut("said"):
+            out.append(f"Саша: {cut('said')}")
+            out.append(f"Ты: {cut('reply') or '(без слов)'} | сделано: {cut('done') or 'ничего'}")
+    return out
+
+
 def context(url: str, user: str, text: str, scope: dict) -> dict:
     """Что увидит Claude: справочник (system, в кэше) и экран с командой (message) — и всё, что нужно,
     чтобы его ответ стал правками. Отдельно от run, чтобы прогнать команду на настоящих делах, ничего
@@ -1190,7 +1219,8 @@ def context(url: str, user: str, text: str, scope: dict) -> dict:
     scope: {"title": «где человек», "task_ids": [дела страницы сверху вниз], "visible_ids": [те из них,
     что в окне сейчас], "selected_ids": [выбранные галочками], "open": id дела в карточке, "focus": id
     дела у микрофона, "project_id"/"person_id": куда класть новые дела, "suggestion_ids": [предложения
-    «Нового» на экране, сверху вниз — П1, П2…], "deal_ids"/"visible_deal_ids": [сделки на экране и в окне]}.
+    «Нового» на экране, сверху вниз — П1, П2…], "deal_ids"/"visible_deal_ids": [сделки на экране и в окне],
+    "history": [{"said", "reply", "done"} — разговор в окне ответа, старое сверху]}.
     """
     text = (text or "").strip()
     if not text:
@@ -1205,6 +1235,7 @@ def context(url: str, user: str, text: str, scope: dict) -> dict:
     for x in [focus, opened, *selected]:  # выбранное и открытое — тоже на экране, даже если список его не нарисовал
         if x and x not in ids:
             ids.insert(0, x)
+    talk = _history(scope)
     sids = _ids(scope, "suggestion_ids", MAX_SUGS)
     dids = _ids(scope, "deal_ids", MAX_DEALS)
     dvis = set(_ids(scope, "visible_deal_ids", MAX_DEALS))
@@ -1281,6 +1312,8 @@ def context(url: str, user: str, text: str, scope: dict) -> dict:
                 group = r["project_name"]
                 msg.append(f"{group or 'Входящие'}:")
             msg.append(_task_line(r, today, short=True))
+    if talk:
+        msg += ["", "РАЗГОВОР — команда ниже его продолжение (старое сверху; сделанное уже применено):", *talk]
     msg += ["", f"КОМАНДА: {text}"]
     # Справочник, правила напоминаний и места — в кэше: между командами одного человека они те же.
     system = (SYSTEM.replace("{REMIND}", remind_rules(url)).replace("{CATALOG}", cat)
@@ -1312,7 +1345,7 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
     defaults = {k: scope[k] for k in ("project_id", "person_id", "deal_id") if scope.get(k)}
     if card and card["kind"] == "deal":
         defaults["project_id"] = str(card["deal"]["project_id"])
-    if (data.get("route") == "new" and not focused and not data.get("suggestions")
+    if (data.get("route") == "new" and not focused and not data.get("suggestions") and not scope.get("history")
             and not any(data.get(k) for k in ("notes", "people", "deals", "about", "clients"))):
         # Команда целиком про новые дела — разбор надиктовки, как у звёздочки (тот же промпт, что у телефона).
         out = parse.run(url, user, text, {k: v for k, v in defaults.items() if k != "deal_id"}, key, proxy,

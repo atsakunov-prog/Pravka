@@ -1140,7 +1140,8 @@ function quickAdd(defaults, { placeholder = null, label = null } = {}) {
     'aria-label': 'Скажи, что сделать ' + about,
     placeholder: `${S.me.name || 'Саша'}, говори дела`,
     title: placeholder || 'Скажи или напиши: «все просроченные — на пятницу», «Ивану позвонить завтра», надиктовка целиком' });
-  if (busy) input.value = S.parse.text;
+  // Пока Claude думает над командой отсюда — она в поле; над ответом в окне разговора — поле своё.
+  if (busy && !S.parse.talk) input.value = S.parse.text;
   else input.value = S.quickText || '';
   const preview = el('div', { class: 'preview' });
   const help = el('div', { class: 'help hidden' },
@@ -1389,31 +1390,6 @@ async function claudeParse(input, defaults) {
   if (!text) { toast('Скажи или напиши Claude: новые дела или что поправить в делах на экране'); input.focus(); return; }
   return claudeSay(text, defaults);
 }
-async function claudeSay(text, defaults) {
-  if (S.parse) return;
-  const scope = pageScope(defaults); // экран — до перерисовки: что в окне, видно сейчас
-  S.parse = { text };
-  render();
-  try {
-    const d = await runJob('/api/ask', { text, scope });
-    S.parse = null;
-    crmDirty(); // карточку (хронологию, людей, сделки) Claude мог поправить на сервере
-    for (const t of d.tasks || []) S.tasks.set(t.id, t);
-    // Claude ничего не сделал (не понял, переспросил) — команда возвращается в поле: дополнить и отправить
-    // ещё раз, а не говорить заново (08.10.2026: «нажимаю на микрофон, и всё стирается»).
-    const did = ['changed', 'tasks', 'decided', 'crm', 'notes'].some((k) => (d[k] || []).length);
-    S.quickText = did ? '' : text; // пока Claude думал, поле было занято командой — чужого текста там нет
-    await sync().catch(() => {});
-    render();
-    if (d.route === 'new') claudeResult(d); else askResult(d);
-  } catch (e) {
-    S.quickText = S.parse ? S.parse.text : S.quickText;
-    S.parse = null;
-    render();
-    fail(e);
-  }
-}
-
 /** Что поменялось — словами: «срок 07.10, в «Сейчас», жду Наташа». */
 function describe(c) {
   const a = c.after || {}, out = [];
@@ -1439,85 +1415,187 @@ function describe(c) {
 
 const DECIDED = { create: 'заведено', close: 'закрыто', update: 'уточнено', assign: 'взято себе' };
 
-/** Итог правки: что сделал Claude, его слова, «Вернуть всё» одним движением.
- *  В «Новом» ещё и решения по предложениям: принятое возвращается (заведённое — отменой, поправленное —
- *  как было), отклонённое — нет: оно остаётся отклонённым вместе с причиной. */
-function askResult(d) {
-  document.querySelectorAll('.claude-result').forEach((x) => x.remove());
-  const changed = d.changed || [], made = d.tasks || [], decided = d.decided || [], crm = d.crm || [];
-  const took = decided.filter((x) => x.decision === 'accept' && x.id);
-  const dropped = decided.filter((x) => x.decision === 'reject');
-  const box = el('div', { class: 'claude-result', role: 'status' });
-  const close = () => box.remove();
-  const undo = async () => {
-    const back = [];
-    for (const c of [...changed, ...took.filter((x) => !x.created)]) {
-      if (Object.keys(c.before || {}).length) back.push({ op: 'task.set', id: c.id, set: c.before });
-      if (c.status) back.push({ op: { open: 'task.reopen', done: 'task.done', cancelled: 'task.cancel' }[c.status[0]], id: c.id });
-    }
-    for (const t of [...made, ...took.filter((x) => x.created)]) back.push({ op: 'task.cancel', id: t.id });
-    for (const c of crm) back.push(...(c.undo || [])); // карточка: хронология, люди, сделки — как было
-    try { if (back.length) await ops(back); close(); render(); toast('Вернул как было'); } catch (e) { fail(e); }
-  };
-  const nTasks = changed.length + made.length, n = nTasks + decided.length + crm.length;
-  const back = nTasks + took.length + crm.filter((c) => (c.undo || []).length).length;
-  const what = [decided.length ? plural(decided.length, 'предложение', 'предложения', 'предложений') : null,
-    nTasks ? plural(nTasks, 'дело', 'дела', 'дел') : null, crm.length ? 'карточка: ' + crm.length : null].filter(Boolean).join(', ');
-  // Предложение словами — как в «Новом», пока оно есть у веба; иначе — как его видел Claude.
-  const sugTitle = (x) => (S.sugs.get(x.sid) ? sugText(S.sugs.get(x.sid)).title : x.what);
-  box.append(...[
-    el('div', { class: 'cr-head' }, el('span', {}, n ? `Claude: ${what}` : 'Claude ничего не поменял — команда снова в поле'),
-      el('button', { class: 'icon-btn', title: 'Закрыть', onclick: close }, icon('x', 14))),
-    d.reply ? el('div', { class: 'cr-reply' }, d.reply) : null,
-    decided.map((x) => (x.decision === 'accept'
-      ? el('button', { class: 'cr-task', onclick: () => x.id && openCard(x.id) },
+// ── Разговор с Claude: окно ответа со своей строкой (владелец 09.10.2026) ─
+// «Когда Клод отвечает, он регулярно просит ещё следующий вопрос — в его ответе тоже должен быть текстбокс,
+// где можно начать диалог». Окно ответа — разговор: реплики сверху вниз, у каждой — что сделано и «Вернуть»;
+// внизу — строка ответа (микрофон слева, стрелка справа). Следующая реплика уходит вместе с разговором
+// (scope.history): Claude помнит, о чём спрашивал и что уже сделал. Новая команда из строки внизу страницы —
+// новый разговор; «Хорошо» или крестик — разговор окончен.
+const TALK_KEEP = 8; // реплик разговора, которые видит Claude
+async function claudeSay(text, defaults, cont) {
+  if (S.parse) return;
+  const scope = pageScope(defaults); // экран — до перерисовки: что в окне, видно сейчас
+  const talk = cont && S.talk ? S.talk : { defaults, turns: [] };
+  if (talk.turns.length) scope.history = talk.turns.slice(-TALK_KEEP).map(turnMemo);
+  S.talk = talk;
+  talk.busy = text;
+  S.parse = { text, talk: !!cont };
+  if (cont) S.talkText = '';
+  render();
+  showTalk();
+  try {
+    const d = await runJob('/api/ask', { text, scope });
+    S.parse = null;
+    talk.busy = null;
+    crmDirty(); // карточку (хронологию, людей, сделки) Claude мог поправить на сервере
+    for (const t of d.tasks || []) S.tasks.set(t.id, t);
+    // Ничего не сделал и не спросил — команда возвращается в поле: дополнить и отправить ещё раз, а не говорить
+    // заново (08.10.2026: «нажимаю на микрофон, и всё стирается»). Спросил — отвечать в окне разговора.
+    const did = ['changed', 'tasks', 'decided', 'crm', 'notes'].some((k) => (d[k] || []).length);
+    if (!cont) S.quickText = did || d.reply ? '' : text;
+    talk.turns.push({ said: text, d });
+    await sync().catch(() => {});
+    render();
+    showTalk(true);
+  } catch (e) {
+    talk.busy = null;
+    if (cont) S.talkText = text; else S.quickText = text;
+    S.parse = null;
+    if (!talk.turns.length) S.talk = null;
+    render();
+    showTalk();
+    fail(e);
+  }
+}
+
+/** Что сделано в реплике — коротко, для памяти разговора на сервере. */
+function turnMemo(t) {
+  const d = t.d, out = [];
+  if (d.route === 'new') {
+    if ((d.tasks || []).length) out.push('завёл: ' + d.tasks.map((x) => x.title).join(', '));
+    if ((d.notes || []).length) out.push('в хронологию: ' + d.notes.map((x) => x.summary).join('; '));
+  } else {
+    for (const c of d.changed || []) out.push(`${c.after?.title || c.title}: ${describe(c)}`);
+    if ((d.tasks || []).length) out.push('завёл: ' + d.tasks.map((x) => x.title).join(', '));
+    for (const x of d.decided || []) out.push(`П${x.n} ${x.decision === 'accept' ? DECIDED[x.kind] || 'принято' : 'отклонено'}`);
+    for (const c of d.crm || []) out.push(c.what);
+  }
+  if ((d.errors || []).length) out.push('не вышло: ' + d.errors.join('; '));
+  return { said: t.said.slice(0, 600), reply: (d.reply || '').slice(0, 900),
+    done: (out.join('; ') || 'ничего не менял').slice(0, 700) + (t.undone ? ' — Саша вернул всё это как было' : '') };
+}
+
+/** Отмена реплики: правки дел — как было, заведённое — отменой, карточка — её «как было». */
+function turnUndo(d) {
+  const back = [];
+  if (d.route === 'new') {
+    for (const t of d.tasks || []) back.push({ op: 'task.cancel', id: t.id });
+    return back;
+  }
+  const took = (d.decided || []).filter((x) => x.decision === 'accept' && x.id);
+  for (const c of [...(d.changed || []), ...took.filter((x) => !x.created)]) {
+    if (Object.keys(c.before || {}).length) back.push({ op: 'task.set', id: c.id, set: c.before });
+    if (c.status) back.push({ op: { open: 'task.reopen', done: 'task.done', cancelled: 'task.cancel' }[c.status[0]], id: c.id });
+  }
+  for (const t of [...(d.tasks || []), ...took.filter((x) => x.created)]) back.push({ op: 'task.cancel', id: t.id });
+  for (const c of d.crm || []) back.push(...(c.undo || [])); // карточка: хронология, люди, сделки — как было
+  return back;
+}
+
+/** Реплика: что сказал, ответ Claude словами и что он сделал — дела открываются карточкой. */
+function turnView(t) {
+  const d = t.d;
+  const open = (id) => () => id && openCard(id);
+  const items = [];
+  if (d.route === 'new') {
+    const meta = (x) => [project(x.project_id)?.name,
+      x.person_id ? ((x.ball !== 'mine' ? BALL[x.ball] + ' ' : '') + personName(person(x.person_id))) : null,
+      x.due_date ? dueLabel(x).text : null, x.estimate_min ? x.estimate_min + ' мин' : null].filter(Boolean).join(' · ');
+    if ((d.tasks || []).length) items.push(el('div', { class: 'cr-sub' }, 'Записал:'));
+    items.push((d.tasks || []).map((x) => el('button', { class: 'cr-task', onclick: open(x.id) }, el('div', {}, x.title),
+      meta(x) ? el('div', { class: 'cr-meta' }, meta(x)) : null)));
+    if ((d.notes || []).length) items.push(el('div', { class: 'cr-sub' }, 'В хронологию:'));
+    items.push((d.notes || []).map((x) => el('div', { class: 'cr-note' }, x.summary,
+      project(x.project_id) ? el('span', { class: 'cr-meta' }, ' · ' + project(x.project_id).name) : null)));
+  } else {
+    // Предложение словами — как в «Новом», пока оно есть у веба; иначе — как его видел Claude.
+    const sugTitle = (x) => (S.sugs.get(x.sid) ? sugText(S.sugs.get(x.sid)).title : x.what);
+    items.push((d.decided || []).map((x) => (x.decision === 'accept'
+      ? el('button', { class: 'cr-task', onclick: open(x.id) },
         el('div', {}, `П${x.n} ${DECIDED[x.kind] || 'принято'}` + (x.id ? `: ${x.title}` : '')),
         describe(x) ? el('div', { class: 'cr-meta' }, describe(x)) : null)
       : el('div', { class: 'cr-task' }, el('div', {}, `П${x.n} отклонено: ${sugTitle(x)}`),
-        x.reason ? el('div', { class: 'cr-meta' }, x.reason) : null))),
-    changed.map((c) => el('button', { class: 'cr-task', onclick: () => openCard(c.id) },
-      el('div', {}, c.after?.title || c.title), el('div', { class: 'cr-meta' }, describe(c)))),
-    made.length ? el('div', { class: 'cr-sub' }, 'Новые:') : null,
-    made.map((t) => el('button', { class: 'cr-task', onclick: () => openCard(t.id) }, el('div', {}, t.title))),
-    crm.length ? el('div', { class: 'cr-sub' }, 'Сделки, люди, хронология:') : null,
-    crm.map((c) => el('div', { class: 'cr-note' }, c.what)),
-    d.errors && d.errors.length ? el('div', { class: 'cr-err' }, 'Не вышло: ' + d.errors.join('; ')) : null,
-    el('div', { class: 'cr-acts' },
-      back ? el('button', { onclick: undo, title: dropped.length ? 'Отклонённое остаётся отклонённым — вернуть его нельзя' : '' },
-        dropped.length ? 'Вернуть принятое' : 'Вернуть всё') : null,
-      el('button', { onclick: close }, 'Хорошо')),
-  ].flat().filter(Boolean));
-  document.body.append(box);
+        x.reason ? el('div', { class: 'cr-meta' }, x.reason) : null))));
+    items.push((d.changed || []).map((c) => el('button', { class: 'cr-task', onclick: open(c.id) },
+      el('div', {}, c.after?.title || c.title), el('div', { class: 'cr-meta' }, describe(c)))));
+    if ((d.tasks || []).length) items.push(el('div', { class: 'cr-sub' }, 'Новые:'));
+    items.push((d.tasks || []).map((x) => el('button', { class: 'cr-task', onclick: open(x.id) }, el('div', {}, x.title))));
+    if ((d.crm || []).length) items.push(el('div', { class: 'cr-sub' }, 'Проекты, люди, хронология:'));
+    items.push((d.crm || []).map((c) => el('div', { class: 'cr-note' }, c.what)));
+  }
+  const back = turnUndo(d);
+  const dropped = (d.decided || []).some((x) => x.decision === 'reject');
+  const nothing = !items.flat().length && !(d.errors || []).length;
+  return el('div', { class: 'cr-turn' + (t.undone ? ' undone' : '') },
+    el('div', { class: 'cr-said' }, t.said),
+    d.reply ? el('div', { class: 'cr-reply' }, d.reply) : nothing ? el('div', { class: 'cr-reply faint' }, 'Ничего не поменял.') : null,
+    items,
+    (d.errors || []).length ? el('div', { class: 'cr-err' }, 'Не вышло: ' + d.errors.join('; ')) : null,
+    t.undone ? el('div', { class: 'cr-meta cr-undone' }, 'Вернул как было')
+      : back.length ? el('div', { class: 'cr-turn-acts' }, el('button', { class: 'link-btn',
+        title: dropped ? 'Отклонённое остаётся отклонённым — вернуть его нельзя' : 'Вернуть всё, что сделано этой репликой',
+        onclick: async () => {
+          try { await ops(back); t.undone = true; render(); showTalk(); toast('Вернул как было'); } catch (e) { fail(e); }
+        } }, dropped ? 'Вернуть принятое' : 'Вернуть')) : null);
 }
 
-/** Что сделал Claude: дела (открываются карточкой), заметки, отмена одним движением. */
-function claudeResult(d) {
-  document.querySelectorAll('.claude-result').forEach((x) => x.remove());
-  const n = d.tasks.length, m = d.notes.length;
-  const box = el('div', { class: 'claude-result', role: 'status' });
-  const close = () => box.remove();
-  const meta = (t) => [project(t.project_id)?.name,
-    t.person_id ? ((t.ball !== 'mine' ? BALL[t.ball] + ' ' : '') + personName(person(t.person_id))) : null,
-    t.due_date ? dueLabel(t).text : null, t.estimate_min ? t.estimate_min + ' мин' : null].filter(Boolean).join(' · ');
-  const said = [n ? plural(n, 'дело', 'дела', 'дел') : null, m ? plural(m, 'заметка', 'заметки', 'заметок') : null].filter(Boolean).join(' и ');
-  box.append(...[
-    el('div', { class: 'cr-head' }, el('span', {}, said ? 'Claude записал ' + said : 'Claude не нашёл тут дел'),
-      el('button', { class: 'icon-btn', title: 'Закрыть', onclick: close }, icon('x', 14))),
-    d.tasks.map((t) => el('button', { class: 'cr-task', onclick: () => openCard(t.id) },
-      el('div', {}, t.title), meta(t) ? el('div', { class: 'cr-meta' }, meta(t)) : null)),
-    m ? el('div', { class: 'cr-sub' }, 'В хронологию:') : null,
-    d.notes.map((x) => el('div', { class: 'cr-note' }, x.summary,
-      project(x.project_id) ? el('span', { class: 'cr-meta' }, ' · ' + project(x.project_id).name) : null)),
-    d.errors && d.errors.length ? el('div', { class: 'cr-err' }, 'Не записались: ' + d.errors.join('; ')) : null,
-    el('div', { class: 'cr-acts' },
-      n ? el('button', { onclick: async () => {
-        try {
-          await ops(d.tasks.map((t) => ({ op: 'task.cancel', id: t.id })));
-          close(); render(); toast('Отменил ' + plural(n, 'дело', 'дела', 'дел') + (m ? '; заметки остались в хронологии' : ''));
-        } catch (e) { fail(e); }
-      } }, 'Отменить дела') : null,
-      el('button', { onclick: close }, 'Хорошо'))].flat().filter(Boolean));
+/** Окно разговора: реплики и строка ответа. scrollDown — новая реплика: показать её низ. */
+function showTalk(scrollDown) {
+  const oldBox = document.querySelector('.claude-result');
+  const hadFocus = document.activeElement?.id === 'talk-input';
+  const keepTop = oldBox?.querySelector('.cr-thread')?.scrollTop;
+  oldBox?.remove();
+  const talk = S.talk;
+  if (!talk || (!talk.turns.length && !(talk.busy && S.parse?.talk))) return;
+  const close = () => { if (rec && S.listenTalk) stopListening(); S.talk = null; S.talkText = ''; showTalk(); };
+  const busy = !!talk.busy;
+  const input = el('textarea', { id: 'talk-input', rows: 1, disabled: busy, value: busy ? '' : S.talkText || '',
+    placeholder: busy ? 'Claude думает…' : 'Ответить Claude…', 'aria-label': 'Ответить Claude' });
+  const grow = () => { input.style.height = ''; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; };
+  const send = () => { const x = input.value.trim(); if (x && !S.parse) claudeSay(x, talk.defaults, true); else input.focus(); };
+  input.addEventListener('input', () => { S.talkText = input.value; grow(); box.querySelector('.cr-talk')?.classList.toggle('has-text', !!input.value.trim()); });
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+  });
+  // Микрофон — как у строки внизу: нажал — говоришь, нажал ещё раз — ушло Claude.
+  const hearing = !!(rec && S.listenTalk);
+  const mic = el('button', { type: 'button', class: 'q-btn mic' + (hearing ? ' on' : ''), disabled: busy,
+    title: hearing ? 'Готово — отдать Claude' : 'Ответить голосом: нажми, говори, нажми ещё раз',
+    onclick: () => {
+      if (hearing) { stopListening(); return; }
+      const base = input.value.trim();
+      S.listenTalk = true;
+      const ok = listen((txt) => {
+        S.talkText = (base ? base + ' ' : '') + txt;
+        const i = document.getElementById('talk-input');
+        if (i) { i.value = S.talkText; i.dispatchEvent(new Event('input')); }
+      }, () => {
+        S.listenTalk = false;
+        const said = (S.talkText || '').trim();
+        if (said && said !== base && voiceAuto()) claudeSay(said, talk.defaults, true); else showTalk();
+      });
+      if (!ok) S.listenTalk = false;
+      showTalk();
+    } }, icon(hearing ? 'stop' : 'mic', 20));
+  const thread = el('div', { class: 'cr-thread' }, talk.turns.map(turnView),
+    busy && S.parse?.talk ? el('div', { class: 'cr-turn pending' }, el('div', { class: 'cr-said' }, talk.busy),
+      el('div', { class: 'cr-think' }, 'Claude думает…')) : null);
+  const box = el('div', { class: 'claude-result talk', role: 'dialog', 'aria-label': 'Разговор с Claude' },
+    el('div', { class: 'cr-head' }, el('span', {}, 'Claude'),
+      talk.turns.length > 1 ? el('span', { class: 'cr-meta' }, plural(talk.turns.length, 'реплика', 'реплики', 'реплик')) : null,
+      el('button', { class: 'icon-btn', title: 'Закрыть разговор (Esc)', onclick: close }, icon('x', 14))),
+    thread,
+    el('div', { class: 'cr-talk' + (busy ? ' busy' : '') + (input.value.trim() ? ' has-text' : '') + (hearing ? ' hearing' : '') }, mic, input,
+      el('button', { type: 'button', class: 'q-btn send-btn', disabled: busy, title: 'Ответить (Enter)', 'aria-label': 'Ответить Claude', onclick: send }, icon('up', 20))),
+    el('div', { class: 'cr-acts' }, el('button', { onclick: close }, 'Хорошо')));
   document.body.append(box);
+  setTimeout(grow);
+  // Новая реплика — видна с начала; иначе — где была.
+  const last = thread.lastElementChild;
+  thread.scrollTop = scrollDown || keepTop == null ? (last ? last.offsetTop - 6 : 0) : keepTop;
+  if (hadFocus || (scrollDown && !narrow())) input.focus(); // на телефоне клавиатура сама не выскакивает
 }
 
 // ── Проект, человек, поиск, «Новое», «Неделя» ───────────────────────────

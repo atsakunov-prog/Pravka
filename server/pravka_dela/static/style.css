@@ -565,6 +565,40 @@ a.st:hover { border-color: rgba(var(--t), .5); }
 .cr-acts button:hover { border-color: rgba(var(--t), .55); color: var(--value); }
 .cr-acts button:last-child { background: var(--key-face); box-shadow: var(--key-shadow); border: 0; color: #F4EEE3; font-weight: 600; }
 
+/* Разговор с Claude (09.10.2026): реплики сверху вниз, у каждой «Вернуть»; внизу — строка ответа. */
+.claude-result.talk { display: flex; flex-direction: column; max-height: min(72vh, 680px); overflow: hidden; padding: 12px 12px 10px; }
+.claude-result.talk .cr-head { flex: none; padding: 0 4px; }
+.claude-result.talk .cr-head .cr-meta { font-weight: 400; margin: 0; }
+.cr-thread { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin: 4px -4px 0; padding: 0 4px; }
+.cr-turn { padding: 6px 0 8px; }
+.cr-turn + .cr-turn { border-top: 1px solid rgba(var(--t), .12); }
+.cr-turn.undone { opacity: .55; }
+.cr-said {
+  margin: 4px 0 8px auto; width: fit-content; max-width: 88%; padding: 7px 12px; border-radius: 16px 16px 4px 16px;
+  background: rgba(var(--k), .45); color: var(--value); font-size: 13.5px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.cr-turn .cr-reply { margin: 0 8px 6px; white-space: pre-wrap; }
+.cr-turn-acts { display: flex; justify-content: flex-end; margin: 2px 8px 0; }
+.cr-undone { margin: 4px 8px 0; text-align: right; }
+.cr-think { margin: 2px 8px; color: var(--label); font-size: 13px; position: relative; overflow: hidden; border-radius: 8px; padding: 2px 0; }
+.cr-think::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: rgba(var(--t), .55); transform-origin: left; animation: think 30s cubic-bezier(.2, .6, .4, 1) forwards; }
+.cr-talk {
+  flex: none; display: flex; align-items: flex-end; gap: 2px; margin-top: 8px; padding: 3px; border-radius: 22px; position: relative; overflow: hidden;
+  background: rgba(var(--i), .75); border: 1px solid rgba(var(--t), .35); transition: border-color .15s;
+}
+.cr-talk:focus-within, .cr-talk.hearing { border-color: rgba(var(--t), .7); }
+.cr-talk textarea {
+  flex: 1; min-width: 0; resize: none; border: 0; background: none; padding: 9px 4px; line-height: 20px; height: 38px; max-height: 160px;
+  font-size: 14.5px; color: var(--text); display: block;
+}
+.cr-talk textarea:focus { outline: none; }
+.cr-talk textarea::placeholder { color: var(--ph); }
+.cr-talk .q-btn { width: 36px; height: 38px; margin: 0; }
+.cr-talk .q-btn.send-btn { width: 38px; height: 38px; border-radius: 19px; }
+.cr-talk:not(.has-text):not(.busy) .q-btn.send-btn { opacity: .5; }
+.cr-talk.busy::before { content: ''; position: absolute; inset: 0; background: rgba(var(--t), .22); transform-origin: left; pointer-events: none; animation: think 30s cubic-bezier(.2, .6, .4, 1) forwards; }
+.claude-result.talk .cr-acts { flex: none; margin-top: 8px; }
+
 /* ── Меню, массовые действия ── */
 .pop {
   position: fixed; z-index: 30; border-radius: 18px; padding: 6px; min-width: 220px;
