@@ -19,7 +19,7 @@ const S = {
   sel: new Set(), order: [], lastPick: null, cardId: null, draft: null, sideOpen: false,
   parse: null, quickDraft: null, // идёт разбор Claude; текст, вернувшийся после неудачи
   askTask: null, askText: '', asking: null, // микрофон у дела: какое открыто, текст, идёт правка
-  dictOpen: new Set(), clientOpen: new Set(LS.get('clientOpen', [])), peopleQ: '', // «Новое», клиенты со сделками, люди
+  autoOpen: false, clientOpen: new Set(LS.get('clientOpen', [])), peopleQ: '', // «Сделано само» развёрнуто, клиенты со сделками, люди
 };
 const BALL = { mine: 'моё', waiting: 'жду', agenda: 'повестка' };
 const KIND = { client: 'Клиенты', internal: 'Внутреннее', personal: 'Личное' };
@@ -161,7 +161,7 @@ const VIEWS = {
   week: { title: 'Неделя', icon: 'broom', color: '#3fbf8f' },
   all: { title: 'Все дела', icon: 'list', color: '#9aa3b2' },
 };
-const NO_PROJECT = { color: '#8b93ff' }; // дела без проекта (бывшие «Входящие») — живут в «Новом»
+const NO_PROJECT = { color: '#8b93ff' }; // дела без проекта (бывшие «Входящие») — разложить в «Неделе»
 const pendingSugs = () => [...S.sugs.values()].filter((s) => s.status === 'pending' && s.for_user === S.me.user);
 /** Закрытия и уточнения, которые сервер принял сам (store._auto: владелец 05.10 и 08.10.2026 — «спокойно
  *  закрывай и спокойно уточняй»), — за days дней, свежие сверху. Узнаются по причине решения: принятое руками
@@ -171,9 +171,9 @@ const AUTO_REASONS = ['закрыто само', 'уточнено само'];
 const autoDone = (days) => [...S.sugs.values()].filter((s) => (s.kind === 'close' || s.kind === 'update') && s.status === 'accepted'
   && AUTO_REASONS.includes(s.reason) && !s.seen_at && s.for_user === S.me.user && s.decided_at && Date.now() - Date.parse(s.decided_at) < days * 86400e3)
   .sort((a, b) => b.decided_at.localeCompare(a.decided_at));
-const fromOthers = () => openMine().filter((t) => t.created_by !== t.owner_id && Date.now() - Date.parse(t.created_at) < 3 * 86400e3);
 const noProject = () => openMine().filter((t) => !t.project_id);
-const newCount = () => pendingSugs().length + autoDone(7).length + noProject().length + fromOthers().length;
+// Число у «Нового» — только вопросы: поставленное и сделанное само ответа не ждут (владелец 08.10.2026).
+const newCount = () => pendingSugs().length;
 
 // ── Иконки (свой штрих, без шрифтов и эмодзи) ───────────────────────────
 const ICONS = {
@@ -195,6 +195,10 @@ const ICONS = {
   send: 'M21 3L3 10.5l7 2.5 2.5 7zM21 3L10 13',
   search: 'M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14zM20 20l-4-4',
   check: 'M5 12.5l4.5 4.5L19 7.5',
+  // «Новое» (08.10.2026): встреча — двое, руками — карандаш, вопрос — кружок с «?».
+  meet: 'M9 11a3 3 0 1 0 0-6a3 3 0 1 0 0 6zM3 20c.5-3.5 3-5.5 6-5.5s5.5 2 6 5.5M16 11a2.5 2.5 0 1 0 0-5M17.5 14.5c2 .5 3.3 2.3 3.5 5.5',
+  pen: 'M4 20h4L19 9l-4-4L4 16zM14 6l4 4',
+  help: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17h.01',
 };
 function icon(name, size = 15) {
   const ns = 'http://www.w3.org/2000/svg';
@@ -598,7 +602,7 @@ function grouped(items, by) {
       }
     } else if (by === 'project') {
       const p = project(t.project_id);
-      put(p ? '1' + p.name : '0', p ? p.name : 'Без проекта', t, { href: p ? '#/p/' + p.id : '#/new', lead: () => (p ? dot(p.id) : tint(icon('tray', 14), NO_PROJECT.color)) });
+      put(p ? '1' + p.name : '0', p ? p.name : 'Без проекта', t, { href: p ? '#/p/' + p.id : '#/week', lead: () => (p ? dot(p.id) : tint(icon('tray', 14), NO_PROJECT.color)) });
     } else if (by === 'person') {
       const p = person(t.person_id);
       put(p ? '1' + personName(p) : '2', p ? personName(p) : 'Без человека', t, { href: p ? '#/h/' + p.id : null, lead: p ? () => avatar(p) : null });
@@ -637,8 +641,9 @@ function toggleNow(t) {
 
 // Строка дела. Слева — выбор, «Сейчас» и галка: их места заняты всегда, при наведении они только
 // проявляются, поэтому строка не прыгает. Номер — справа, бледно: на него ссылаются, но читать не мешает.
-// extra — подписи от места, где строка стоит («Новое»: откуда пришло, что сказала автоматика).
-function taskRow(t, by, extra) {
+// extra — подписи от места, где строка стоит. opt.compact — короткая строка «Нового» (владелец 08.10.2026:
+// «ужасно всё засоряет»): только срок и проект, а справа вместо номера — значок, откуда дело (opt.mark).
+function taskRow(t, by, extra, opt = {}) {
   S.order.push(t.id);
   const p = project(t.project_id);
   const who = person(t.person_id);
@@ -650,27 +655,30 @@ function taskRow(t, by, extra) {
   if (due && (by !== 'date' || due.cls === 'late')) chips.push(m(due.cls, 'date', due.text));
   const rem = remindChip(t);
   if (rem) chips.push(m('remind', null, rem));
-  if (by !== 'project' && !['project', 'deal'].includes(route().kind)) {
+  if (opt.compact) {
+    if (p) chips.push(el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, dot(p.id), p.name));
+  } else if (by !== 'project' && !['project', 'deal'].includes(route().kind)) {
     // Без проекта — не тупик, а вопрос: щелчок — выбрать проект.
     chips.push(p ? el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, dot(p.id), p.name)
       : el('button', { class: 'm noproj', title: 'Выбрать проект', onclick: (e) => { stop(e); projectPop(e.currentTarget, [t.id]); } }, icon('tray', 12), 'без проекта'));
   }
-  const dl = t.deal_id ? S.deals.get(t.deal_id) : null;
+  const dl = !opt.compact && t.deal_id ? S.deals.get(t.deal_id) : null;
   if (dl && by !== 'deal' && route().kind !== 'deal') chips.push(el('a', { class: 'm link', href: '#/d/' + dl.id, onclick: stop }, icon('funnel', 12), dl.name));
-  if (t.ball !== 'mine' && by !== 'ball') {
+  // В короткой строке мяч и человек — в самом названии («Кто: действие»), минуты и метки — в карточке.
+  if (!opt.compact && t.ball !== 'mine' && by !== 'ball') {
     chips.push(m('ball-' + t.ball, t.ball === 'waiting' ? 'hourglass' : 'chat',
       BALL[t.ball] + (who ? ' ' + personName(who) : '') + (t.ball === 'waiting' && t.waiting_since ? ' · ' + D.diff(S.today, t.waiting_since) + ' дн.' : '')));
-  } else if (who && by !== 'person') {
+  } else if (!opt.compact && who && by !== 'person') {
     chips.push(el('a', { class: 'm link', href: '#/h/' + who.id, onclick: stop }, '@' + personName(who)));
   }
-  if (t.estimate_min) chips.push(m('', 'clock', t.estimate_min + ' мин'));
-  for (const l of t.labels || []) chips.push(el('span', { class: 'tag' }, l));
+  if (t.estimate_min && !opt.compact) chips.push(m('', 'clock', t.estimate_min + ' мин'));
+  for (const l of opt.compact ? [] : t.labels || []) chips.push(el('span', { class: 'tag' }, l));
   if (extra) chips.push(...[].concat(extra).filter(Boolean));
   const pick = el('input', { type: 'checkbox', class: 'pick', title: 'Выбрать (Shift — диапазон)' });
   pick.checked = S.sel.has(t.id);
   pick.addEventListener('click', (e) => { e.stopPropagation(); togglePick(t.id, e.shiftKey); });
   return el('div', {
-    class: 'task ball-' + t.ball + (isOpen(t) ? '' : ' done') + (now ? ' now' : '') + (S.cardId === t.id ? ' open-now' : '') + (S.sel.has(t.id) ? ' sel' : ''),
+    class: 'task ball-' + t.ball + (opt.compact ? ' compact' : '') + (isOpen(t) ? '' : ' done') + (now ? ' now' : '') + (S.cardId === t.id ? ' open-now' : '') + (S.sel.has(t.id) ? ' sel' : ''),
     'data-id': t.id,
     onclick: () => openCard(t.id),
   },
@@ -683,7 +691,7 @@ function taskRow(t, by, extra) {
   el('button', { class: 'tick' + (isOpen(t) ? '' : ' done'), title: isOpen(t) ? 'Сделано' : 'Вернуть', onclick: (e) => { e.stopPropagation(); toggleDone([t]); } }),
   el('div', { class: 'main' }, el('div', { class: 'title' }, t.title), chips.length ? el('div', { class: 'chips' }, chips) : null,
     S.askTask === t.id ? askBox(t) : null),
-  el('span', { class: 'num' }, '#' + t.num));
+  opt.mark || el('span', { class: 'num' }, '#' + t.num));
 }
 
 // ── Действия ────────────────────────────────────────────────────────────
@@ -1531,13 +1539,18 @@ function renderWeek() {
   const waitStale = m.filter((t) => t.ball === 'waiting' && t.waiting_since && D.diff(S.today, t.waiting_since) > 7 && (!t.nudge_on || t.nudge_on < S.today));
   const busy = new Set(all().filter((t) => isOpen(t) && t.ball === 'mine' && t.project_id).map((t) => t.project_id));
   const noStep = [...S.projects.values()].filter((p) => !p.archived_at && p.owner_id === S.me.user && ['paid', 'potential'].includes(p.money_default) && !busy.has(p.id));
-  return [head('Неделя', ['раз в неделю: что протухло, кто молчит, где нет следующего шага']),
+  // Без проекта — не вопрос «Нового» (владелец 08.10.2026: «без проекта… ужасно всё засоряет»), а уборка раз в неделю.
+  const loose = noProject();
+  return [head('Неделя', ['раз в неделю: что протухло, кто молчит, где нет следующего шага, что без проекта']),
     el('div', { class: 'body' }, quickAdd({}),
       stale.length ? groupBox('Протухшее — закрыть, перенести или отпустить', stale.sort(sortTasks), { late: true }) : null,
       waitStale.length ? groupBox('Жду без движения больше недели', waitStale.sort(sortTasks)) : null,
       noStep.length ? el('div', { class: 'group' }, el('h2', {}, 'Проекты в работе без моего следующего шага', el('span', { class: 'n' }, noStep.length)),
         noStep.map((p) => navItem('#/p/' + p.id, dot(p.id), p.name, null, false))) : null,
-      !stale.length && !waitStale.length && !noStep.length ? el('div', { class: 'empty' }, 'Чисто. Неделя разобрана.') : null)];
+      loose.length ? groupBox('Без проекта — куда их?', loose.sort(sortTasks), { lead: tint(icon('tray', 14), NO_PROJECT.color),
+        sub: 'щелчок по «без проекта» — выбрать, или скажи Claude наверху',
+        act: loose.length > 1 ? el('button', { class: 'chip-btn', onclick: (e) => projectPop(e.currentTarget, loose.map((t) => t.id)) }, 'Все в проект…') : null }) : null,
+      !stale.length && !waitStale.length && !noStep.length && !loose.length ? el('div', { class: 'empty' }, 'Чисто. Неделя разобрана.') : null)];
 }
 
 /** Что предлагает автоматика — словами: завести, закрыть или поправить дело. */
@@ -1570,10 +1583,12 @@ function autoWords(s) {
 // Пачки — по дате встречи, свежие сверху; без даты — по времени появления.
 const sugAt = (s) => (s.payload && s.payload.meeting_at) || s.created_at.slice(0, 10);
 
-// Пачка — одна встреча или одно окно дайджеста; значок — откуда она.
-const SRC = { meeting: ['mic', '#e57bd1'], telegram: ['send', '#38bdf8'], userbot: ['send', '#38bdf8'], mcp: ['chat', '#d97757'] };
-
-// ── Наговорки в «Новом»: что сказал и куда что попало (сервер, вид dictations) ──
+// ── «Новое»: подскажи — поставил — само (владелец 08.10.2026) ────────────
+// «Зачем мне это в новом, если это понятное?.. Это ужасно всё засоряет» (о своей же наговорке). Поэтому сверху —
+// только то, где без человека не обойтись («Подскажи»), ниже — короткий список поставленного за три дня,
+// свежее сверху, со значком источника справа; что именно сказано и откуда — в карточке дела.
+const FEED_DAYS = 3;
+const FEED_MAX = 40;
 const MSK_DAY = (iso) => msk(Date.parse(iso));
 function whenWords(iso) {
   const { day, hm } = MSK_DAY(iso);
@@ -1581,40 +1596,49 @@ function whenWords(iso) {
   return (n === 0 ? 'сегодня' : n === 1 ? 'вчера' : D.ddmm(day)) + ' ' + hm;
 }
 const SUG_FROM = { meeting: 'встреча', telegram: 'Telegram', userbot: 'Telegram', mcp: 'Claude' };
-/** Что потом сказала про дело автоматика: «Telegram · пн 05.10: закрыто» — дело то же, оно срослось. */
-function touchChips(list) {
-  return (list || []).map((s) => {
-    const from = s.batch_title || SUG_FROM[s.source] || s.source;
-    const what = s.kind === 'close' ? 'закрыть' : 'уточнение';
-    const st = s.status === 'pending' ? ' — ждёт решения ниже' : s.status === 'rejected' ? ' — отклонил' : s.status === 'expired' ? ' — погасло'
-      : AUTO_REASONS.includes(s.reason) ? ' — само' : ' — принято';
-    return el('span', { class: 'm merged' + (s.status === 'pending' ? ' pending' : ''), title: s.quote || '' },
-      icon(s.source === 'meeting' ? 'mic' : 'send', 12), `${from}: ${what}${st}`);
-  });
+// Откуда пришло — значок справа: наговорка — микрофон, встреча — двое, Telegram — самолётик, Claude — облачко.
+const ORIGIN = {
+  voice: ['mic', '#e5774f', 'наговорка'], meeting: ['meet', '#e57bd1', 'встреча'], telegram: ['send', '#38bdf8', 'Telegram'],
+  userbot: ['send', '#38bdf8', 'Telegram'], bot: ['send', '#38bdf8', 'ответ в Telegram'], mcp: ['chat', '#d97757', 'Claude'],
+  web: ['pen', 'var(--faint)', 'в вебе'], manual: ['pen', 'var(--faint)', 'руками'], import: ['list', 'var(--faint)', 'перенос'],
+};
+const origin = (src) => ORIGIN[src] || ORIGIN.manual;
+/** Предложение, из которого вышло дело: пачка встречи или окна Telegram. */
+function sugByTask() {
+  const m = new Map();
+  for (const s of S.sugs.values()) if (s.kind === 'create' && s.result_task_id) m.set(s.result_task_id, s);
+  return m;
 }
-function dictCard(d, shown) {
-  const tasks = d.tasks.map((t) => S.tasks.get(t.id) || t);
-  tasks.forEach((t) => shown.add(t.id));
-  const touch = new Map();
-  for (const s of d.touches || []) touch.set(s.task_id, [...(touch.get(s.task_id) || []), S.sugs.get(s.id) || s]);
-  const open = S.dictOpen.has(d.ref);
-  const src = { phone: 'с телефона', web: 'в вебе' }[d.source] || '';
-  return el('div', { class: 'dict' },
-    el('div', { class: 'dict-h' }, tint(icon('mic', 13), '#e5774f'), el('b', {}, whenWords(d.at)), src ? el('span', { class: 'faint' }, src) : null,
-      el('span', { class: 'faint' }, tasks.length ? plural(tasks.length, 'дело', 'дела', 'дел') : 'дел нет')),
-    d.text ? el('div', { class: 'dict-text' + (open ? ' open' : ''), title: open ? '' : 'Показать целиком',
-      onclick: () => { if (open) S.dictOpen.delete(d.ref); else S.dictOpen.add(d.ref); render(); } }, d.text) : null,
-    tasks.map((t) => taskRow(t, null, touchChips(touch.get(t.id)))),
-    (d.notes || []).map((n) => el('div', { class: 'dict-note' }, icon('chat', 12),
-      el('span', {}, 'в хронологию' + (project(n.project_id) ? ' · ' + project(n.project_id).name : '') + ': '), n.summary)));
+/** Значок справа в строке «Поставил»: откуда, когда и номер — подсказкой; поставил другой — его кружок. */
+function originMark(t, s) {
+  if (t.created_by && t.created_by !== t.owner_id) {
+    const who = [...S.people.values()].find((p) => p.user_id === t.created_by);
+    return el('span', { class: 'src-mark', title: `поставил(а) ${who ? personName(who) : t.created_by} · ${whenWords(t.created_at)} · #${t.num}` },
+      who ? avatar(who, 'tiny') : tint(icon('person', 14), '#a78bfa'));
+  }
+  const [ic, col, word] = origin(t.source);
+  return el('span', { class: 'src-mark', title: [word + (s && s.batch_title ? ': ' + s.batch_title : ''), whenWords(t.created_at), '#' + t.num].join(' · ') },
+    tint(icon(ic, 14), col));
 }
-function dictationsBlock(shown) {
-  const v = crmGet('/api/view/dictations', 20000);
-  const h = (n) => el('h2', {}, tint(icon('mic', 14), '#e5774f'), 'Последние наговорки', n != null ? el('span', { class: 'n' }, n) : null,
-    el('span', { class: 'gsub' }, 'что сказал и куда что попало'));
-  if (!v) return el('div', { class: 'group' }, h(null), loading());
-  if (!v.items.length) return null;
-  return el('div', { class: 'group dicts' }, h(v.items.length), v.items.map((d) => dictCard(d, shown)));
+/** Значок источника у предложения: встреча — ссылкой на неё, цитата — подсказкой. */
+function sugMark(s) {
+  const [ic, col, word] = origin(s.source);
+  const title = [s.batch_title || word, s.quote ? '«' + s.quote.slice(0, 200) + '»' : null].filter(Boolean).join('\n');
+  return /^https:\/\//.test(s.source_ref || '')
+    ? el('a', { class: 'src-mark', href: s.source_ref, target: '_blank', rel: 'noopener noreferrer', title, onclick: (e) => e.stopPropagation() }, tint(icon(ic, 14), col))
+    : el('span', { class: 'src-mark', title }, tint(icon(ic, 14), col));
+}
+/** Откуда дело — в карточке: наговорка дословно или встреча и Telegram с цитатой (origin у /api/task). */
+function originLine(t) {
+  const o = extras.get(t.id)?.origin;
+  if (!o) return null;
+  const [ic, col, word] = origin(o.kind === 'dictation' ? 'voice' : o.source);
+  const top = o.kind === 'dictation' ? 'Наговорка · ' + whenWords(o.at) : [o.batch_title || word, o.auto ? 'поставлено само' : null].filter(Boolean).join(' · ');
+  const text = o.kind === 'dictation' ? o.text : o.quote;
+  return el('div', { class: 'origin' }, tint(icon(ic, 13), col),
+    el('div', {}, el('span', { class: 'o-h' }, top),
+      o.url ? el('a', { class: 'link', href: o.url, target: '_blank', rel: 'noopener noreferrer' }, ' · встреча →') : null,
+      text ? el('div', { class: 'o-t' }, text) : null));
 }
 
 /** Похожее открытое дело для предложения «завести»: то же из наговорки, пришедшее ещё раз из встречи
@@ -1648,108 +1672,132 @@ async function mergeInto(s, t) {
   } catch (e) { fail(e); render(); }
 }
 
-/** «Новое» — всё, что пришло и ещё не разложено, по тому, откуда пришло (владелец, 06.10.2026): твои
- *  наговорки (последние 10 — что сказал и куда что попало), предложения встреч и Telegram, поставленное
- *  другими, дела без проекта (бывшие «Входящие»), закрытое само. batch — одна пачка по ссылке из Telegram. */
-function renderNew(batch) {
-  const all_ = pendingSugs().sort((a, b) => a.created_at.localeCompare(b.created_at));
-  const list = batch ? all_.filter((s) => s.batch_ref === batch) : all_;
-  const batches = new Map();
-  for (const s of list) {
-    const key = s.batch_ref || 'one:' + s.id;
-    if (!batches.has(key)) batches.set(key, { title: s.batch_title, ref: s.source_ref, src: s.source, at: '', items: [] });
-    const b = batches.get(key);
-    b.items.push(s);
-    if (sugAt(s) > b.at) b.at = sugAt(s);
+/** Почему предложение ждёт человека: вопрос самой автоматики или что не узналось по имени. */
+const byName = (list, name) => {
+  const n = norm(name);
+  return n && list.find((x) => [x.name, x.short, ...(x.aliases || [])].some((a) => a && norm(a) === n));
+};
+function askWhy(s) {
+  const p = s.payload || {};
+  if (p.ask) return p.ask;
+  if (p.project_name && !byName([...S.projects.values()], p.project_name)) return `Не знаю проект «${p.project_name}» — куда?`;
+  if (p.person_name && !byName([...S.people.values()], p.person_name)) return `Кто это — «${p.person_name}»?`;
+  return null;
+}
+const ASK_YES = { create: 'Поставить', close: 'Закрыть', update: 'Уточнить', assign: 'Взять' };
+function askItem(s) {
+  const { title, hint, add } = sugText(s);
+  S.sugOrder.push(s.id);
+  const twin = twinOf(s);
+  const q = askWhy(s);
+  return el('div', { class: 'sug' + (s.kind !== 'create' ? ' ' + s.kind : '') },
+    el('div', { class: 'main' }, el('div', {}, el('span', { class: 'sug-n', title: 'Номер для Claude: «П' + S.sugOrder.length + ' прими»' }, 'П' + S.sugOrder.length), title),
+      q ? el('div', { class: 'q' }, q) : null,
+      hint ? el('div', { class: 'hint' }, hint) : null,
+      add ? el('div', { class: 'add' }, add) : null,
+      s.quote && s.quote !== title ? el('div', { class: 'hint quote' }, '«' + s.quote.slice(0, 160) + (s.quote.length > 160 ? '…' : '') + '»') : null,
+      twin ? el('div', { class: 'twin' }, icon('link', 12), 'похоже, это уже есть: ',
+        el('a', { class: 'link', href: '#', onclick: (e) => { e.preventDefault(); openCard(twin.id); } }, `#${twin.num} ${twin.title}`),
+        el('button', { class: 'chip-btn', title: 'Не заводить второе: слова — комментарием к делу', onclick: () => mergeInto(s, twin) }, 'Это оно')) : null),
+    el('div', { class: 'acts' },
+      el('button', { class: 'btn small ok', onclick: () => decide([s.id], 'accept') }, ASK_YES[s.kind] || 'Да'),
+      s.kind === 'create' ? el('button', { class: 'btn small', onclick: () => { S.draft = s; S.cardId = null; render(); } }, 'Поправить') : null,
+      el('button', { class: 'btn small bad', onclick: () => { const r = prompt(s.kind === 'create' ? 'Почему не дело? (можно пусто)' : 'Почему нет? (можно пусто)'); if (r !== null) decide([s.id], 'reject', r || null); } }, 'Не надо')),
+    sugMark(s));
+}
+
+/** «Поставил»: новые дела, свежие сверху, по дням; сделанные не показываем — они уже не новость. */
+function feedBlock(list, from) {
+  const days = new Map();
+  for (const t of list.slice(0, FEED_MAX)) {
+    const d = MSK_DAY(t.created_at).day;
+    if (!days.has(d)) days.set(d, []);
+    days.get(d).push(t);
   }
-  const box = el('div', { class: 'body' });
-  if (batch) box.append(el('div', { class: 'toolbar' }, el('a', { class: 'chip-btn', href: '#/new' }, `Всё «Новое»: ${newCount()}`)));
-  // Строка Claude: «первое прими, срок пятница; второе не надо» — П-номера ниже те же, что видит он.
-  box.append(quickAdd({}, { label: 'с новым', placeholder: list.length
-    ? '«П1 прими, срок пятница; П2 не надо — делает Ольга», «всё про Альфу — в проект Альфа»'
-    : '«всё без проекта про Альфу — в Альфу», «про ремонт — в Личное»' }));
-  const shown = new Set();
-  const dicts = batch ? null : dictationsBlock(shown);
-  if (dicts) box.append(dicts);
-  if (batch && !list.length) box.append(el('div', { class: 'empty' }, 'Эта пачка уже разобрана.'));
-  if (!batch && batches.size) {
-    box.append(el('div', { class: 'part-h' }, 'Предложения встреч и Telegram', el('span', { class: 'faint' }, ' — примешь, станут делами')));
-  }
-  for (const b of [...batches.values()].sort((x, y) => y.at.localeCompare(x.at))) {
-    const ids = b.items.map((s) => s.id);
-    const [ic, col] = SRC[b.src] || ['inbox-in', VIEWS.new.color];
-    box.append(el('div', { class: 'group' },
-      el('h2', {}, tint(icon(ic, 14), col), b.title || 'Без пачки', el('span', { class: 'n' }, b.items.length),
-        b.ref && /^https:\/\//.test(b.ref) ? el('a', { class: 'src', href: b.ref, target: '_blank', rel: 'noopener noreferrer' }, 'встреча') : null,
-        ids.length > 1 ? el('span', { class: 'act' },
-          el('button', { class: 'chip-btn', onclick: () => decide(ids, 'accept') }, 'Принять все'), ' ',
-          el('button', { class: 'chip-btn', onclick: () => decide(ids, 'reject') }, 'Отклонить все')) : null),
-      b.items.map((s) => {
-        const { title, hint, add } = sugText(s);
-        S.sugOrder.push(s.id);
-        const twin = twinOf(s);
-        return el('div', { class: 'sug' + (s.kind !== 'create' ? ' ' + s.kind : '') },
-          el('div', { class: 'main' }, el('div', {}, el('span', { class: 'sug-n', title: 'Номер для Claude: «П' + S.sugOrder.length + ' прими»' }, 'П' + S.sugOrder.length), title),
-            hint ? el('div', { class: 'hint' }, hint) : null,
-            add ? el('div', { class: 'add' }, add) : null,
-            s.quote && s.quote !== title ? el('div', { class: 'hint' }, '«' + s.quote.slice(0, 200) + '»') : null,
-            twin ? el('div', { class: 'twin' }, icon('link', 12), 'похоже, это уже есть: ',
-              el('a', { class: 'link', href: '#', onclick: (e) => { e.preventDefault(); openCard(twin.id); } }, `#${twin.num} ${twin.title}`),
-              el('button', { class: 'chip-btn', title: 'Не заводить второе: слова — комментарием к делу', onclick: () => mergeInto(s, twin) }, 'Это оно')) : null),
-          el('div', { class: 'acts' },
-            el('button', { class: 'btn small ok', onclick: () => decide([s.id], 'accept') }, 'Принять'),
-            s.kind === 'create' ? el('button', { class: 'btn small', onclick: () => { S.draft = s; S.cardId = null; render(); } }, 'Поправить') : null,
-            el('button', { class: 'btn small bad', onclick: () => { const r = prompt(s.kind === 'create' ? 'Почему не дело? (можно пусто)' : 'Почему нет? (можно пусто)'); if (r !== null) decide([s.id], 'reject', r || null); } }, 'Отклонить')));
-      })));
-  }
-  if (!batch) {
-    // Поставили другие (за три дня) и дела без проекта — бывшие «Утро» и «Входящие»: разложи — уйдут отсюда.
-    const others = fromOthers().filter((t) => !shown.has(t.id));
-    others.forEach((t) => shown.add(t.id));
-    if (others.length) box.append(groupBox('Поставили другие', others.sort(sortTasks), { lead: tint(icon('person', 14), '#a78bfa'), sub: 'за три дня' }));
-    const loose = noProject().filter((t) => !shown.has(t.id));
-    if (loose.length) {
-      box.append(groupBox('Без проекта — куда их?', loose.sort(sortTasks), { lead: tint(icon('tray', 14), NO_PROJECT.color),
-        sub: 'щелчок по «без проекта» — выбрать, или скажи Claude наверху',
-        act: loose.length > 1 ? el('button', { class: 'chip-btn', onclick: (e) => projectPop(e.currentTarget, loose.map((t) => t.id)) }, 'Все в проект…') : null }));
-    }
-  }
-  // Закрыть и уточнить автоматика может сама — тут видно, что и почему; «Понятно» убирает отсюда, «Вернуть» — как было.
-  const auto = batch ? autoDone(365).filter((s) => s.batch_ref === batch) : autoDone(7);
+  const dayName = (d) => { const n = D.diff(S.today, d); return n === 0 ? 'Сегодня' : n === 1 ? 'Вчера' : D.long(d); };
+  return el('div', { class: 'group feed' },
+    el('h2', {}, tint(icon('inbox-in', 14), VIEWS.new.color), 'Поставил', el('span', { class: 'n' }, list.length),
+      el('span', { class: 'gsub' }, 'откуда — значок справа, что сказано — в карточке')),
+    [...days].map(([d, items]) => [el('div', { class: 'feed-day' }, dayName(d)),
+      items.map((t) => taskRow(t, null, null, { compact: true, mark: originMark(t, from.get(t.id)) }))]),
+    list.length > FEED_MAX ? el('a', { class: 'faint pad link', href: '#/all' }, `и ещё ${list.length - FEED_MAX} — во «Всех делах»`) : null);
+}
+
+/** Закрыть и уточнить автоматика может сама — свёрнуто одной строкой; «Понятно» убирает, «Вернуть» — как было. */
+function autoBlock(auto, batch) {
+  if (!auto.length) return null;
+  const open = !!batch || S.autoOpen;
   const seen = async (ids) => { try { await op1({ op: 'suggestion.seen', ids }); render(); } catch (e) { fail(e); } };
-  if (auto.length) {
-    box.append(el('div', { class: 'group' },
-      el('h2', {}, tint(icon('check', 14), 'var(--ok)'), 'Сделано само', el('span', { class: 'n' }, auto.length),
-        el('span', { class: 'gsub' }, 'закрыл и уточнил по встречам и Telegram'),
-        auto.length > 1 ? el('span', { class: 'act' }, el('button', { class: 'chip-btn', onclick: () => seen(auto.map((s) => s.id)) }, 'Понятно, все')) : null),
-      auto.map((s) => {
-        const t = S.tasks.get(s.task_id);
-        if (t) S.order.push(t.id); // сделанное само — тоже дело на экране: «верни акт» Claude поймёт
-        const r = s.result || {};
-        const was = r.was || {};
-        const back = t && (s.kind === 'close' ? t.status === 'done' : Object.keys(was).length || r.comment_id);
-        const undo = async () => {
-          const list = s.kind === 'close' ? [{ op: 'task.reopen', id: t.id }]
-            : Object.keys(was).length ? [{ op: 'task.set', id: t.id, set: was }] : [];
-          if (r.comment_id) list.push({ op: 'comment.delete', id: r.comment_id });
-          list.push({ op: 'suggestion.seen', ids: [s.id] });
-          try { await ops(list); toast((s.kind === 'close' ? 'Вернул в работу: ' : 'Вернул как было: ') + (was.title || t.title)); render(); } catch (e) { fail(e); }
-        };
-        return el('div', { class: 'sug auto' },
-          el('div', { class: 'main' }, el('div', {}, (s.kind === 'close' ? 'Закрыто: ' : 'Уточнено: ') + (t ? `#${t.num} ${t.title}` : 'дело не видно')),
-            s.kind === 'update' && autoWords(s) ? el('div', { class: 'hint' }, autoWords(s)) : null,
-            s.kind === 'update' && (s.payload || {}).note ? el('div', { class: 'add' }, s.payload.note) : null,
-            el('div', { class: 'hint' }, [s.batch_title, D.ddmm(s.decided_at.slice(0, 10))].filter(Boolean).join(' · ')),
-            s.quote ? el('div', { class: 'hint' }, '«' + s.quote.slice(0, 200) + '»') : null),
-          el('div', { class: 'acts' },
-            el('button', { class: 'btn small ok', title: 'Согласен — убрать отсюда', onclick: () => seen([s.id]) }, 'Понятно'),
-            back ? el('button', { class: 'btn small', title: s.kind === 'close' ? 'Открыть дело снова' : 'Вернуть дело как было до уточнения', onclick: undo }, 'Вернуть') : null));
-      })));
+  const nc = auto.filter((s) => s.kind === 'close').length;
+  const what = [nc ? `закрыл ${nc}` : null, auto.length - nc ? `уточнил ${auto.length - nc}` : null].filter(Boolean).join(', ');
+  return el('div', { class: 'group auto-done' + (open ? '' : ' folded') },
+    el('h2', {}, tint(icon('check', 14), 'var(--ok)'), 'Сделано само', el('span', { class: 'n' }, auto.length),
+      el('span', { class: 'gsub' }, what + ' по встречам и Telegram'),
+      el('span', { class: 'act' },
+        open && auto.length > 1 ? el('button', { class: 'chip-btn', title: 'Видел, согласен — убрать отсюда', onclick: () => seen(auto.map((s) => s.id)) }, 'Понятно, все') : null, ' ',
+        batch ? null : el('button', { class: 'chip-btn', onclick: () => { S.autoOpen = !S.autoOpen; render(); } }, open ? 'Свернуть' : 'Показать'))),
+    open ? auto.map((s) => autoItem(s, seen)) : null);
+}
+function autoItem(s, seen) {
+  const t = S.tasks.get(s.task_id);
+  if (t) S.order.push(t.id); // сделанное само — тоже дело на экране: «верни акт» Claude поймёт
+  const r = s.result || {};
+  const was = r.was || {};
+  const back = t && (s.kind === 'close' ? t.status === 'done' : Object.keys(was).length || r.comment_id);
+  const undo = async () => {
+    const list = s.kind === 'close' ? [{ op: 'task.reopen', id: t.id }]
+      : Object.keys(was).length ? [{ op: 'task.set', id: t.id, set: was }] : [];
+    if (r.comment_id) list.push({ op: 'comment.delete', id: r.comment_id });
+    list.push({ op: 'suggestion.seen', ids: [s.id] });
+    try { await ops(list); toast((s.kind === 'close' ? 'Вернул в работу: ' : 'Вернул как было: ') + (was.title || t.title)); render(); } catch (e) { fail(e); }
+  };
+  const words = s.kind === 'update' ? autoWords(s) : '';
+  return el('div', { class: 'sug auto' },
+    el('div', { class: 'main' }, el('div', {}, (s.kind === 'close' ? 'Закрыто: ' : 'Уточнено: ') + (t ? `#${t.num} ${t.title}` : 'дело не видно')),
+      words ? el('div', { class: 'hint' }, words) : null),
+    el('div', { class: 'acts' },
+      el('button', { class: 'btn small ok', title: 'Согласен — убрать отсюда', onclick: () => seen([s.id]) }, 'Понятно'),
+      back ? el('button', { class: 'btn small', title: s.kind === 'close' ? 'Открыть дело снова' : 'Вернуть дело как было до уточнения', onclick: undo }, 'Вернуть') : null),
+    sugMark(s));
+}
+
+/** «Новое» (владелец 08.10.2026: «делится на "не уверен — подскажи" и "уверен — поставил"»):
+ *  «Подскажи» — только где без человека не поставить (вопрос автоматики, не узнан проект или человек,
+ *  старая встреча); «Поставил» — новые дела за три дня одной строкой со значком источника справа;
+ *  «Сделано само» — свёрнуто. Наговорки целиком, «без проекта», минуты и «что сказала автоматика» сюда
+ *  больше не идут: что сказано — в карточке дела, без проекта — в «Неделе». batch — пачка из Telegram. */
+function renderNew(batch) {
+  const asks = pendingSugs().filter((s) => !batch || s.batch_ref === batch)
+    .sort((a, b) => sugAt(b).localeCompare(sugAt(a)) || b.created_at.localeCompare(a.created_at));
+  const from = sugByTask();
+  const since = Date.now() - FEED_DAYS * 86400e3;
+  const feed = (batch ? all().filter((t) => isOpen(t) && from.get(t.id)?.batch_ref === batch)
+    : openMine().filter((t) => Date.parse(t.created_at) > since)).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const auto = batch ? autoDone(365).filter((s) => s.batch_ref === batch) : autoDone(7);
+  const box = el('div', { class: 'body' });
+  if (batch) box.append(el('div', { class: 'toolbar' }, el('a', { class: 'chip-btn', href: '#/new' }, 'Всё «Новое»')));
+  // Строка Claude: «первое поставь, срок пятница; второе не надо» — П-номера ниже те же, что видит он.
+  box.append(quickAdd({}, { label: 'с новым', placeholder: asks.length
+    ? '«П1 поставь, срок пятница; П2 не надо — делает Ольга»'
+    : '«последние три — в Альфу», «полку — на субботу»' }));
+  if (asks.length) {
+    const ids = asks.map((s) => s.id);
+    box.append(el('div', { class: 'group asks' },
+      el('h2', {}, tint(icon('help', 14), 'var(--warn)'), 'Подскажи', el('span', { class: 'n' }, asks.length),
+        el('span', { class: 'gsub' }, 'без тебя не поставлю'),
+        ids.length > 1 ? el('span', { class: 'act' },
+          el('button', { class: 'chip-btn', onclick: () => decide(ids, 'accept') }, 'Поставить все'), ' ',
+          el('button', { class: 'chip-btn', onclick: () => decide(ids, 'reject') }, 'Не надо все')) : null),
+      asks.map(askItem)));
   }
-  if (!batch && !list.length && !auto.length && !shown.size && crmGet('/api/view/dictations', 20000)) {
-    box.append(el('div', { class: 'empty' }, 'Всё разложено. Новое появится, когда наговоришь или придёт со встречи и из Telegram.'));
+  if (feed.length) box.append(feedBlock(feed, from));
+  const done = autoBlock(auto, batch);
+  if (done) box.append(done);
+  if (!asks.length && !feed.length && !auto.length) {
+    box.append(el('div', { class: 'empty' }, batch ? 'Эта пачка уже разобрана.' : 'Пусто. Новое появится, когда наговоришь или придёт со встречи и из Telegram.'));
   }
-  return [head('Новое', ['всё, что пришло, по тому, откуда пришло: наговорки, встречи, Telegram — разложи, и оно уйдёт отсюда']), box];
+  return [head('Новое', [asks.length ? `подскажи: ${asks.length}` : 'вопросов нет',
+    feed.length ? (batch ? `поставил: ${feed.length}` : `поставил за ${FEED_DAYS} дня: ${feed.length}`) : null]), box];
 }
 
 // ── Настройки: Claude (у человека на сервере), голос (на этом устройстве), траты (владельцу) ──
@@ -1927,7 +1975,7 @@ function renderCard() {
     el('div', { class: 'top' }, sug ? el('span', { class: 'crumb' }, tint(icon('inbox-in', 13), VIEWS.new.color), 'Предложение') : crumb,
       t ? el('span', { class: 'num' }, '#' + t.num + (t.status !== 'open' ? ' · ' + (t.status === 'done' ? 'сделано' : 'отменено') : '')) : null,
       el('button', { class: 'icon-btn', title: 'Закрыть (Esc)', onclick: close }, icon('x', 16))),
-    title, props,
+    title, t ? originLine(t) : null, props,
     el('div', { class: 'checks' }, chk('focus_on', 'Сейчас — на сегодня', isNow(src), S.today), chk('want', 'Хочу сам', src.want, true)),
     notes);
   const btns = el('div', { class: 'btns' });

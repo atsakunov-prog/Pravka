@@ -1255,6 +1255,7 @@
  "rules": [
   "«Новое»: kind update — уточнение целиком: payload может нести title, due_date, ball, person_name (сервер найдёт человека), note — подробности; при принятии note и quote ложатся комментарием к делу. Показывать, что именно поменяется.",
   "«Закрыто само»: suggestion kind close, status accepted, payload.auto = true, reason «закрыто само» — сервер закрыл дело сам по свежей встрече или переписке. Показать за 7 дней с основанием (quote, batch_title) и «Вернуть» (task.reopen).",
+  "«Заведено само» (08.10.2026): suggestion kind create, status accepted, payload.auto = true, reason «заведено само», result_task_id — дело. Не уверена автоматика — payload.ask (вопрос владельцу) и status pending: показать вопрос в «Подскажи». Заведённое само — обычное дело в «Поставил», не в «Сделано само». /api/task/<номер> отдаёт origin: {kind: dictation, at, text, source} или {kind: suggestion, source, batch_title, quote, url, auto, at, reason} или null (docs/dela-phone-6.md).",
   "Деньги задачи (task.money, money_eff) владелец убрал из интерфейса 05.10: поле в синке осталось, не показывать и не править.",
   "CRM видна, если users[я].role = owner или clients ≠ own; деньги (оплаты, гонорары, вид money) — если sees_money или owner.",
   "Хронология (interactions) в синк не входит: её дают виды client, deal, dossier; писать — interaction.add, убрать — interaction.delete (строка не удаляется, deleted_at).",

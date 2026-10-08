@@ -156,6 +156,27 @@ def task_by(conn: psycopg.Connection, ref: Any) -> dict | None:
     return conn.execute("SELECT * FROM tasks.v_tasks WHERE id = %s", (s,)).fetchone()
 
 
+def task_origin(conn: psycopg.Connection, t: dict) -> dict | None:
+    """Откуда дело — для карточки: наговорка дословно или встреча и Telegram (пачка, цитата, ссылка).
+
+    С 08.10.2026 «Новое» — короткий список «поставил» со значком источника; что именно было сказано,
+    раньше занимало полэкрана в самом «Новом» (владелец: «ужасно всё засоряет»), теперь — в карточке.
+    """
+    ref = t.get("source_ref") or ""
+    if ref.startswith(("raznoska:", "parse:")):
+        d = conn.execute("SELECT at, text, source FROM tasks.dictations WHERE id = %s", (ref,)).fetchone()
+        if d:
+            return {"kind": "dictation", **d}
+    s = conn.execute(
+        "SELECT source, source_ref, batch_title, quote, reason, created_at AS at FROM tasks.suggestions "
+        "WHERE result_task_id = %s AND kind = 'create' ORDER BY decided_at DESC LIMIT 1", (t["id"],)).fetchone()
+    if s:
+        url = s.pop("source_ref")
+        return {"kind": "suggestion", **s, "url": url if str(url or "").startswith("https://") else None,
+                "auto": s["reason"] == AUTO_CREATE_REASON}
+    return None
+
+
 def _full(conn: psycopg.Connection, tid: Any) -> dict:
     return conn.execute("SELECT * FROM tasks.v_tasks WHERE id = %s", (tid,)).fetchone()
 
@@ -361,44 +382,52 @@ def op_suggestion_create(conn, user, op):
 AUTO_DAYS = 3
 AUTO_CLOSE_REASON = "закрыто само"
 AUTO_UPDATE_REASON = "уточнено само"
-AUTO_REASONS = (AUTO_CLOSE_REASON, AUTO_UPDATE_REASON)
+AUTO_CREATE_REASON = "заведено само"
+AUTO_REASONS = (AUTO_CLOSE_REASON, AUTO_UPDATE_REASON, AUTO_CREATE_REASON)
 
 
 def _auto(conn, user, s: dict) -> str | None:
-    """Закрыть и уточнить дело по свежей встрече или переписке автоматика может сама; заводить —
-    нет, новое дело ждёт человека в «Новом». Возвращает причину решения или None — в «Новое».
+    """Завести, закрыть и уточнить дело по свежей встрече или переписке автоматика может сама.
+    Возвращает причину решения или None — ждёт человека в «Новом» («Подскажи»).
 
     Владелец 05.10.2026 разрешил очевидное закрытие, 08.10.2026 — любое закрытие и уточнение:
     «спокойно закрывай и спокойно уточняй… я доверяю». До того из закрытий без пометки «бесспорно»
     он принял 18 из 19, из уточнений — 15 из 19 (два отказа — прошедшие сроки старых встреч).
+    08.10.2026 вечером — и новые дела: «Новое» делится на «уверен — поставил» и «не уверен —
+    подскажи». С 05.10 по 08.10 он принял 65 из 66 предложений «завести» — разбор был лишней
+    работой. Не уверена автоматика сама — шлёт вопрос (payload.ask) вместо auto.
 
-    Само — когда автоматика просит (payload.auto), основание названо (quote), дело — открытое и
-    самого владельца токена, а встреча или переписка свежая (AUTO_DAYS) и не старше самого дела:
-    разбор архива и чужие дела по-прежнему ждут решения человека. Уточнение — ещё и только когда
-    человек и проект по имени узнаются однозначно: иначе мяч ушёл бы «никому».
+    Само — когда автоматика просит (payload.auto), основание названо (quote), встреча или переписка
+    свежая (AUTO_DAYS), а человек и проект по имени узнаются однозначно: иначе мяч ушёл бы «никому».
+    Закрыть и уточнить — ещё и только открытое дело самого владельца токена, не старше встречи:
+    разбор архива и чужие дела по-прежнему ждут решения человека.
     Основание ложится комментарием к делу (_trace), «Вернуть» — в «Новом», «Сделано само».
     """
     p = s.get("payload") or {}
     kind = s.get("kind")
-    if kind not in ("close", "update") or p.get("auto") is not True or user != s.get("for_user") or not s.get("quote"):
+    if kind not in ("create", "close", "update") or p.get("auto") is not True or user != s.get("for_user") or not s.get("quote"):
         return None
     try:
         at = dt.date.fromisoformat(str(p.get("meeting_at") or "")[:10])
     except ValueError:
         return None
-    row = conn.execute(
-        "SELECT %s >= crm.today() - %s AND %s >= (created_at AT TIME ZONE 'Europe/Moscow')::date AS ok "
-        "FROM tasks.tasks WHERE id = %s AND status = 'open' AND owner_id = %s",
-        (at, AUTO_DAYS, at, s["task_id"], user),
-    ).fetchone()
-    if not (row and row["ok"]):
+    if kind == "create":
+        ok = conn.execute("SELECT %s >= crm.today() - %s AS ok", (at, AUTO_DAYS)).fetchone()["ok"]
+    else:
+        row = conn.execute(
+            "SELECT %s >= crm.today() - %s AND %s >= (created_at AT TIME ZONE 'Europe/Moscow')::date AS ok "
+            "FROM tasks.tasks WHERE id = %s AND status = 'open' AND owner_id = %s",
+            (at, AUTO_DAYS, at, s["task_id"], user),
+        ).fetchone()
+        ok = bool(row and row["ok"])
+    if not ok:
         return None
     if kind == "close":
         return AUTO_CLOSE_REASON
     names = _names(conn, p)
     if any(p.get(key) and not p.get(col) and col not in names for key, col in (("project_name", "project_id"), ("person_name", "person_id"))):
         return None
-    return AUTO_UPDATE_REASON
+    return AUTO_CREATE_REASON if kind == "create" else AUTO_UPDATE_REASON
 
 
 def op_suggestion_decide(conn, user, op):

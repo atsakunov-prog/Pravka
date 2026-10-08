@@ -258,6 +258,39 @@ def test_refine_from_fresh_meeting_applies_itself_and_goes_back(dela):
     assert refine(d, {"title": "Отчёт за сентябрь"}, auto=False)["suggestion"]["status"] == "pending"
 
 
+def test_sure_new_task_from_fresh_meeting_is_created_itself(dela):
+    """Новое дело по свежей встрече автоматика заводит сама, когда уверена (владелец 08.10.2026:
+    «уверен — поставил, не уверен — подскажи»): проект и человек по имени, основание — в предложении.
+    Вопрос вместо auto, неузнанный проект или человек, старая встреча — ждут в «Новом»; очков за
+    заведённое само нет — разбирал не человек."""
+    from pravka_dela import stats
+
+    today = dt.date.today()
+    project(dela, "sasha", "Бета Групп")
+    with store.db.session(dela, "system", "t") as c:
+        c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Ольга Смирнова', 'Ольга', 'sasha')")
+
+    def create(title, payload, at=today, auto=True):
+        return ops(dela, "sasha", {"op": "suggestion.create", "suggestion": {
+            "for_user": "sasha", "kind": "create", "source": "meeting", "batch_ref": "meeting:5",
+            "batch_title": "Бета: статус", "quote": "Ольга пришлёт список фондов",
+            "payload": {"title": title, "meeting_at": at.isoformat(), **payload, **({"auto": True} if auto else {})}}})[0]
+
+    r = create("Ольга: список фондов", {"project_name": "Бета Групп", "person_name": "Ольга", "ball": "waiting"})
+    assert r["ok"] and r["suggestion"]["status"] == "accepted" and r["suggestion"]["reason"] == store.AUTO_CREATE_REASON
+    t = r["task"]
+    assert (t["title"], t["project_name"], t["person_short"], t["ball"], t["source"]) == (
+        "Ольга: список фондов", "Бета Групп", "Ольга", "waiting", "meeting")
+    assert str(r["suggestion"]["result_task_id"]) == str(t["id"])
+    assert create("Купить билеты", {})["suggestion"]["status"] == "accepted"  # без проекта — можно: дело ясное
+    assert create("Модель для Гаммы", {"ask": "Это Гамма или Гамма-2?"}, auto=False)["suggestion"]["status"] == "pending"
+    assert create("Тизер", {"project_name": "Неведомый проект"})["suggestion"]["status"] == "pending"
+    assert create("Созвон", {"person_name": "Захар Неизвестный", "ball": "agenda"})["suggestion"]["status"] == "pending"
+    assert create("Отчёт", {}, at=today - dt.timedelta(days=10))["suggestion"]["status"] == "pending"
+    with store.db.session(dela, "sasha", "t") as c:
+        assert not [e for e in stats._events(c, "sasha") if e["kind"] == "triage"]
+
+
 def test_phone_ops_as_pravka_sends_them(dela):
     """Операции ровно той формы, что собирает Правка (`core/Dela.kt`): id дела
     и op_id — телефона, пустое — null, у правки — was, заметка Разноски —

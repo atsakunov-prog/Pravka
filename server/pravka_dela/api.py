@@ -16,7 +16,7 @@
 | GET  /api/sync?since=N | всё изменившееся после N (телефон, веб) |
 | POST /api/ops | пачка операций с op_id (офлайн-очередь) |
 | GET  /api/view/<имя> | готовый список: morning, new, waiting, person, quick, now, project, week, search; CRM — pipeline, clients, client, deal (с журналом), dossier, ties, money |
-| GET  /api/task/<id или номер> | дело с комментариями и журналом |
+| GET  /api/task/<id или номер> | дело с комментариями, журналом и откуда оно (origin) |
 | POST /api/parse | {"text", "project_id"?, "person_id"?} — Claude режет текст на дела и заводит их; ответ — номер задания |
 | GET  /api/parse/<номер> | run, пока думает; потом done с делами и заметками или error |
 | POST /api/ask | {"text", "scope": {"title", "task_ids", "focus"?, "project_id"?, "person_id"?, "deal_id"?, "card"?, "suggestion_ids"?}} — Claude правит дела страницы словами, в «Новом» — и решает предложения на экране, в карточке (card: client, person, deal) — и её хронологию, людей, сделки (ask.py); ответ — номер задания |
@@ -423,8 +423,8 @@ def _user_info(url: str, user: str) -> dict:
 
 
 def task_card(url: str, user: str, ref: str) -> dict | None:
-    """Дело, его комментарии и журнал. Журнал читает system — но только после
-    того, как сама база показала дело этому пользователю."""
+    """Дело, его комментарии, журнал и откуда оно (наговорка, встреча, Telegram). Журнал читает
+    system — но только после того, как сама база показала дело этому пользователю."""
     with db.session(url, user, via="view") as conn:
         t = store.task_by(conn, ref)
         if not t:
@@ -432,9 +432,10 @@ def task_card(url: str, user: str, ref: str) -> dict | None:
         comments = conn.execute(
             "SELECT * FROM tasks.comments WHERE task_id = %s AND deleted_at IS NULL ORDER BY created_at", (t["id"],)
         ).fetchall()
+        origin = store.task_origin(conn, t)
     with db.session(url, "system", "svc:view") as conn:
         history = conn.execute(
             "SELECT at, actor, via, op, before, after FROM crm.history WHERE entity = 'tasks.tasks' AND entity_id = %s ORDER BY id",
             (str(t["id"]),),
         ).fetchall()
-    return store.jsonable({"task": t, "comments": comments, "history": history})
+    return store.jsonable({"task": t, "comments": comments, "history": history, "origin": origin})

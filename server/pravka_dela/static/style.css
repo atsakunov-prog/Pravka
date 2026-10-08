@@ -510,6 +510,35 @@ details summary:hover { color: var(--muted); }
 .group h2 .src:hover { text-decoration: underline; }
 .sug .acts { display: flex; gap: 4px; flex: none; }
 
+/* «Новое» с 08.10.2026: «Подскажи» с вопросом, «Поставил» по дням, значок источника справа. */
+.sug .q { margin-top: 3px; font-size: 13px; color: var(--warn); }
+.sug .quote { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src-mark { flex: none; display: inline-grid; place-items: center; width: 22px; height: 20px; margin-top: 1px; opacity: .8; text-decoration: none; }
+.src-mark:hover { opacity: 1; }
+.sug .src-mark { margin-top: 2px; }
+/* Телефон: кнопки — под текстом, иначе они сжимают вопрос в столбик по слову. */
+@media (max-width: 900px) {
+  .sug { flex-wrap: wrap; row-gap: 6px; }
+  .sug .main { order: 1; flex-basis: calc(100% - 32px); }
+  .sug .src-mark { order: 2; }
+  .sug .acts { order: 3; }
+}
+/* Короткая строка: срок и проект — сразу за названием, одной строкой, пока влезает. */
+.task.compact { padding-top: 6px; padding-bottom: 6px; }
+.task.compact .main { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 12px; }
+.task.compact .chips { margin-top: 0; }
+.feed-day { margin: 12px 6px 2px; font-size: 12px; color: var(--faint); font-weight: 600; }
+.feed-day:first-of-type { margin-top: 4px; }
+.ava.tiny { width: 18px; height: 18px; font-size: 8.5px; }
+.card .origin {
+  display: flex; gap: 8px; align-items: flex-start; margin: 2px 0 12px; padding: 7px 10px; border-radius: 10px;
+  border: 1px solid var(--line-soft); background: color-mix(in srgb, var(--panel) 55%, transparent); font-size: 12.5px; color: var(--muted);
+}
+.card .origin svg { flex: none; margin-top: 2px; }
+.card .origin .o-h { color: var(--text); font-weight: 550; }
+.card .origin .link { color: var(--accent); text-decoration: none; }
+.card .origin .o-t { margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* ── Проект и человек ── */
 .deals { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .deal {
@@ -746,23 +775,10 @@ details summary:hover { color: var(--muted); }
 .chips .m.noproj { border: 0; background: color-mix(in srgb, var(--warn) 13%, transparent); color: var(--warn); border-radius: 6px; padding: 0 7px; font-size: 12px; line-height: 19px; }
 .chips .m.noproj:hover { background: color-mix(in srgb, var(--warn) 24%, transparent); }
 /* Что потом сказала про дело встреча или Telegram — дело срослось, наговорка его не теряет. */
-.chips .m.merged { color: var(--accent); }
-.chips .m.merged.pending { color: var(--warn); }
 
 /* «Новое»: наговорки — карточками, свежие сверху. */
 .part-h { margin: 26px 6px 0; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 650; }
 .part-h .faint { text-transform: none; letter-spacing: 0; font-weight: 450; }
-.dicts .dict { margin: 10px 0 0; padding: 8px 10px 6px; border: 1px solid var(--line-soft); border-radius: 12px; background: color-mix(in srgb, var(--panel) 55%, transparent); }
-.dict-h { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 0 2px 4px; }
-.dict-h b { font-weight: 650; }
-.dict-text {
-  font-size: 13px; color: var(--muted); padding: 2px 2px 6px 10px; margin: 0 0 4px; border-left: 2px solid color-mix(in srgb, #e5774f 55%, transparent);
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; white-space: pre-wrap;
-}
-.dict-text.open { -webkit-line-clamp: unset; display: block; cursor: default; }
-.dict .task { margin-left: 0 !important; }
-.dict-note { display: flex; gap: 6px; align-items: baseline; font-size: 12.5px; color: var(--muted); padding: 3px 6px; }
-.dict-note svg { flex: none; opacity: .7; }
 .sug .twin { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12.5px; color: var(--accent); margin-top: 4px; }
 .sug .twin .link { color: var(--text); }
 

@@ -43,7 +43,7 @@ def _events(conn, user: str) -> list[dict]:
         SELECT (s.decided_at {MSK})::date, 'triage', {TRIAGE}, NULL, s.source, NULL, NULL
         FROM tasks.suggestions s
         WHERE s.for_user = %(u)s AND s.decided_by = %(u)s AND s.decided_at IS NOT NULL
-          AND s.status IN ('accepted', 'edited', 'rejected') AND coalesce(s.reason, '') NOT IN ('закрыто само', 'уточнено само')
+          AND s.status IN ('accepted', 'edited', 'rejected') AND coalesce(s.reason, '') NOT IN ('закрыто само', 'уточнено само', 'заведено само')
         """,
         {"u": user},
     ).fetchall()
