@@ -165,15 +165,15 @@ private class NewParts(
     val batches: List<Dela.Batch>,
     val others: List<Dela.Task>,
     val loose: List<Dela.Task>,
-    val autoClosed: List<Dela.Suggestion>,
+    val autoDone: List<Dela.Suggestion>,
 ) {
     /** Дела экрана в порядке показа — то, что видит Claude (предложений он здесь не решает). */
     val ids: List<String>
         get() = dictations.orEmpty().flatMap { it.tasks.map { t -> t.id } } + others.map { it.id } + loose.map { it.id } +
-            autoClosed.mapNotNull { sg -> sg.taskId.takeIf { it.isNotBlank() } }
+            autoDone.mapNotNull { sg -> sg.taskId.takeIf { it.isNotBlank() } }
 
     val empty: Boolean
-        get() = dictations.isNullOrEmpty() && batches.isEmpty() && others.isEmpty() && loose.isEmpty() && autoClosed.isEmpty()
+        get() = dictations.isNullOrEmpty() && batches.isEmpty() && others.isEmpty() && loose.isEmpty() && autoDone.isEmpty()
 
     companion object {
         fun of(snap: Dela.Snapshot, me: String, sphere: String, now: Long, view: org.json.JSONObject?): NewParts {
@@ -186,7 +186,7 @@ private class NewParts(
                 batches = Dela.newBatches(snap, me),
                 others = others,
                 loose = DelaViews.noProject(snap, me, sphere).filter { it.id !in shown },
-                autoClosed = Dela.autoClosed(snap, me, now),
+                autoDone = Dela.autoDone(snap, me, now),
             )
         }
     }
@@ -872,10 +872,13 @@ fun DelaTab(
                 today = today,
                 expanded = dictOpen,
                 onExpand = { ref -> dictOpen = if (ref in dictOpen) dictOpen - ref else dictOpen + ref },
+                // «Вернуть» у сделанного само — одной пачкой: дело как было, без комментария-основания.
                 onReopen = { t, sg ->
-                    scope.launch {
-                        app.delaDo(listOf(Dela.statusOp("task.reopen", t.id)) + if (seenOn) listOf(Dela.seenOp(listOf(sg.id))) else emptyList())
-                        Feedback.toast(app, "Вернул в работу: ${t.title.take(40)}")
+                    val ops = Dela.autoUndoOps(sg, t, seenOn)
+                    if (ops != null) scope.launch {
+                        app.delaDo(ops)
+                        val was = sg.resultObj().optJSONObject("was")?.optString("title").orEmpty().takeIf { it.isNotBlank() && it != "null" }
+                        Feedback.toast(app, if (sg.kind == "close") "Вернул в работу: ${t.title.take(40)}" else "Вернул как было: ${(was ?: t.title).take(40)}")
                     }
                 },
                 onSeen = if (seenOn) {
@@ -1375,23 +1378,27 @@ private fun LazyListScope.newView(
             }
         }
     }
-    // Очевидное автоматика закрывает сама (правило 5 сервера, 05.10.2026) —
-    // здесь видно, что и почему; «Вернуть» — в работу, «Понятно» — убрать отсюда
-    // (06.10.2026: закрытое висело неделю и «никуда не уходило»).
-    val autoClosed = parts.autoClosed
-    if (autoClosed.isNotEmpty()) {
+    // Закрыть и уточнить автоматика может сама (правило 5 сервера; 05.10.2026 —
+    // очевидное закрытие, 08.10.2026 — любое: «спокойно закрывай и спокойно
+    // уточняй… я доверяю») — здесь видно, что и почему; «Вернуть» — как было,
+    // «Понятно» — убрать отсюда (06.10.2026: закрытое висело неделю). Старый
+    // сервер уточнять сам не умеет — строк уточнений просто нет.
+    val autoDone = parts.autoDone
+    if (autoDone.isNotEmpty()) {
         item(key = "n:auto") {
             PaperCard(
-                label = "закрыто само · ${autoClosed.size}",
-                info = "За неделю: очевидное из встреч и Telegram сервер закрыл сам — по свежей встрече или переписке, " +
-                    "только твои открытые дела. Основание легло комментарием к делу. Согласен — «Понятно», зря — «Вернуть».",
-                trailing = if (autoClosed.size > 1 && onSeen != null) {
-                    { PaperTextButton("Понятно, все", onClick = { onSeen(autoClosed) }) }
+                label = "сделано само · ${autoDone.size}",
+                info = "Закрыл и уточнил по встречам и Telegram: свежая встреча или переписка (до 3 дней), " +
+                    "только твои открытые дела. Основание легло комментарием к делу. Согласен — «Понятно», зря — «Вернуть»: " +
+                    "дело как было, комментарий уберётся.",
+                trailing = if (autoDone.size > 1 && onSeen != null) {
+                    { PaperTextButton("Понятно, все", onClick = { onSeen(autoDone) }) }
                 } else null,
             ) {
-                autoClosed.forEachIndexed { i, sg ->
+                PaperHint("закрыл и уточнил по встречам и Telegram")
+                autoDone.forEachIndexed { i, sg ->
                     if (i > 0) RowRule()
-                    AutoClosedRow(sg, snap.tasks[sg.taskId], onReopen = { t -> onReopen(t, sg) }, onSeen = onSeen?.let { f -> { f(listOf(sg)) } })
+                    AutoDoneRow(sg, snap.tasks[sg.taskId], today, onReopen = { t -> onReopen(t, sg) }, onSeen = onSeen?.let { f -> { f(listOf(sg)) } })
                 }
             }
         }
@@ -1441,22 +1448,31 @@ private fun DictationCard(d: DelaViews.Dictation, snap: Dela.Snapshot, actions: 
 
 /** «#9 Продлить Контур», откуда и когда, основание — «Понятно» (согласен) и «Вернуть», пока дело закрыто. */
 @Composable
-private fun AutoClosedRow(sg: Dela.Suggestion, t: Dela.Task?, onReopen: (Dela.Task) -> Unit, onSeen: (() -> Unit)?) {
+private fun AutoDoneRow(sg: Dela.Suggestion, t: Dela.Task?, today: String, onReopen: (Dela.Task) -> Unit, onSeen: (() -> Unit)?) {
     val c = MaterialTheme.colorScheme
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Column(Modifier.weight(1f)) {
-            Text(t?.let { "${it.numLabel} ${it.title}" } ?: "дело не видно", style = MaterialTheme.typography.bodyMedium)
+            // Уточнение — название уже новое; что поменялось — строкой ниже (`autoWords` веба).
+            Text((if (sg.kind == "close") "Закрыто: " else "Уточнено: ") + (t?.let { "${it.numLabel} ${it.title}" } ?: "дело не видно"),
+                style = MaterialTheme.typography.bodyMedium)
+            if (sg.kind == "update") {
+                val words = DelaViews.autoWords(sg, today)
+                if (words.isNotBlank()) Text(words, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
+                val note = sg.payloadObj().optString("note").takeIf { it.isNotBlank() && it != "null" }
+                if (note != null) Text("+ $note", style = MaterialTheme.typography.bodySmall, color = c.onSurface)
+            }
             val meta = listOf(sg.batchTitle.ifBlank { sourceWord(sg.source) }, delaDate(sg.decidedAt)).filter { it.isNotBlank() }.joinToString(" · ")
-            Text(meta, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, maxLines = 1)
+            Text(meta, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
             if (sg.quote.isNotBlank()) {
-                Text("«${sg.quote.take(200)}»", style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Text("«${sg.quote.take(200)}»", style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
             }
         }
         Column(horizontalAlignment = Alignment.End) {
             if (onSeen != null) PaperTextButton("Понятно", icon = Glyphs.Check, onClick = onSeen)
+            // «Вернуть» — когда есть что вернуть (`Dela.autoUndoOps`): закрытое ещё закрыто, у уточнения — как было или комментарий.
             when {
-                t != null && t.status == Dela.DONE -> PaperTextButton("Вернуть", icon = Glyphs.Undo, onClick = { onReopen(t) })
-                t != null && t.open -> Text("вернул в работу", style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
+                t != null && Dela.autoUndoOps(sg, t, seen = false) != null -> PaperTextButton("Вернуть", icon = Glyphs.Undo, onClick = { onReopen(t) })
+                t != null && sg.kind == "close" && t.open -> Text("вернул в работу", style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
             }
         }
     }

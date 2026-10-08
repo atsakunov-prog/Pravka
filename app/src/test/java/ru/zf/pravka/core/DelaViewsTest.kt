@@ -179,13 +179,13 @@ class DelaViewsTest {
         assertEquals(listOf("other"), DelaViews.fromOthers(s, "sasha", "all", now).map { it.id })
         assertEquals(listOf("loose"), DelaViews.noProject(s, "sasha", "all").map { it.id })
         val auto = Dela.Suggestion(id = "a1", forUser = "sasha", kind = "close", taskId = "loose", status = "accepted",
-            payload = "{\"auto\": true}", decidedAt = "2026-10-05T08:00:00+03:00")
+            payload = "{\"auto\": true}", reason = "закрыто само", decidedAt = "2026-10-05T08:00:00+03:00")
         val withAuto = s.copy(suggestions = s.suggestions + ("a1" to auto))
         val base = DelaViews.newCount(s, "sasha", "all", now)
         assertEquals(base + 1, DelaViews.newCount(withAuto, "sasha", "all", now))
         // «Понятно» — seen_at: из «Нового» уходит, и сразу, до ответа сервера.
         val seen = Dela.overlay(withAuto, listOf(Dela.seenOp(listOf("a1"))), "sasha", today, nowIso)
-        assertTrue(Dela.autoClosed(seen, "sasha", now).isEmpty())
+        assertTrue(Dela.autoDone(seen, "sasha", now).isEmpty())
         assertEquals(base, DelaViews.newCount(seen, "sasha", "all", now))
     }
 

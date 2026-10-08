@@ -372,6 +372,7 @@ internal object Seed {
             task(65, "Отчёт ДДС: посмотреть шаблон от Лены") { put("project_id", "p-zf"); put("created_by", "lena"); put("created_at", ago(20)); put("source", "web") },
             task(59, "Автосервис: записаться на ТО") { put("estimate_min", 10); put("labels", arr("звонок")) },
             task(67, "Дом: заказать фильтры для воды") { put("project_id", "p-home"); put("due_date", d(4)) },
+            task(68, "Продлить Контур") { put("project_id", "p-zf"); put("status", "done"); put("completed_at", ago(5)) },
             task(52, "Бета: отправить счёт за сентябрь") { put("project_id", "p-beta"); put("status", "done"); put("completed_at", ago(26)) },
         )
         val suggestions = arr(
@@ -388,6 +389,15 @@ internal object Seed {
                 "meeting", "Я пришлю структуру долга до среды", "meet-beta", "Встреча с Бета Групп",
             ),
             sug("s-4", JSONObject().put("title", "Позвонить нотариусу"), "bot", "", status = "expired"),
+            // «Сделано само» (задание 5): закрытие и уточнение по свежей встрече, с «как было».
+            sug("s-5", JSONObject().put("auto", true), "telegram", "Лицензия продлена до октября 2027", status = "accepted")
+                .put("kind", "close").put("task_id", "t-68").put("reason", "закрыто само").put("batch_title", "Telegram · сегодня")
+                .put("result", JSONObject().put("status", "done").put("was", JSONObject().put("status", "open")).put("comment_id", "c-1")),
+            sug("s-6", JSONObject().put("auto", true).put("person_name", "Ольга").put("note", "две версии: с внедрением и без"), "meeting",
+                "Ольга: КП нужно к пятнице, не к концу месяца", "meet-orion", "Встреча с Орионом", status = "accepted")
+                .put("kind", "update").put("task_id", "t-55").put("reason", "уточнено само")
+                .put("result", JSONObject().put("title", "Орион: КП на управленческий учёт").put("due_date", d(-1))
+                    .put("was", JSONObject().put("due_date", d(9))).put("comment_id", "c-2")),
         )
         val users = arr(
             JSONObject().put("id", "sasha").put("name", "Саша").put("role", "owner").put("seq", 1),

@@ -1,5 +1,12 @@
 # Дела на телефоне — задание 5 (08.10.2026): «Сделано само» вместо «Закрыто само»
 
+> **Сделано 08.10.2026** — как устроено: `docs/dela.md`, «Новое» (абзац «Сделано само»). Ядро —
+> `Dela.Suggestion.autoDone`, `Dela.autoDone`, `Dela.autoUndoOps`, `DelaViews.autoWords`
+> (тест `DelaAutoDoneTest`), строка — `AutoDoneRow` в `DelaTab.kt`. Со старым сервером
+> (без `store._auto`) блок — только из прежних «закрыто само» или пустой; `result` синка
+> без `was` и `comment_id` — «Вернуть» как раньше, `task.reopen`. Снимок — `-Pshots=crm`,
+> `crm-7-sdelano-samo.png`.
+
 Сервер и веб сделаны 08.10.2026 (правило 5 в `server/pravka_dela/CLAUDE.md`, `store._auto`, веб —
 `renderNew` и `autoDone` в `server/pravka_dela/static/app.js`). Веб — образец поведения.
 

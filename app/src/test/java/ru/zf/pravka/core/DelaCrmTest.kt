@@ -162,20 +162,20 @@ class DelaCrmTest {
         val base = snap()
         val taskId = "77f1248d-d409-48d8-968e-4e39997e6cc0"
         val s = Dela.derive(base.copy(tasks = base.tasks + (taskId to Dela.Task(id = taskId, num = 9, title = "Продлить Контур", ownerId = "sasha", status = Dela.DONE))))
-        val auto = Dela.autoClosed(s, "sasha", now)
+        val auto = Dela.autoDone(s, "sasha", now)
         assertEquals(1, auto.size)
         val a = auto.single()
-        assertTrue(a.autoClosed)
+        assertTrue(a.autoDone)
         assertEquals("закрыто само", a.reason)
         assertEquals("Telegram · сегодня", a.batchTitle)
         assertEquals("Контур: «Лицензия продлена до 10.2027»", a.quote)
         assertEquals("telegram", a.source)
         // Неделя прошла — раздела нет.
-        assertTrue(Dela.autoClosed(s, "sasha", now + 8 * 86_400_000L).isEmpty())
+        assertTrue(Dela.autoDone(s, "sasha", now + 8 * 86_400_000L).isEmpty())
         // Чужое — не моё.
-        assertTrue(Dela.autoClosed(s, "member1", now).isEmpty())
+        assertTrue(Dela.autoDone(s, "member1", now).isEmpty())
         // Обычное «закрыть», ещё не принятое, — не «само».
-        assertFalse(s.suggestions.values.single { it.kind == "close" && it.pending }.autoClosed)
+        assertFalse(s.suggestions.values.single { it.kind == "close" && it.pending }.autoDone)
         // «Вернуть» — task.reopen, и дело сразу видно открытым: «вернул в работу».
         val op = Dela.statusOp("task.reopen", a.taskId)
         assertEquals("task.reopen", op.getString("op"))
@@ -215,12 +215,12 @@ class DelaCrmTest {
     @Test
     fun `seen_at из синка — закрытое само уходит из «Нового», в кэше живёт`() {
         val s = snap()
-        val auto = s.suggestions.values.single { it.autoClosed }
+        val auto = s.suggestions.values.single { it.autoDone }
         assertEquals("", auto.seenAt)
         val row = Dela.json(auto).put("seen_at", "2026-10-05T19:00:00+03:00").put("rev", auto.rev + 1)
         val s2 = Dela.merge(s, JSONObject().put("full", false).put("seq", 2001).put("suggestions", JSONArray().put(row)), now)
         assertEquals("2026-10-05T19:00:00+03:00", s2.suggestions.getValue(auto.id).seenAt)
-        assertTrue(Dela.autoClosed(s2, "sasha", now).isEmpty())
+        assertTrue(Dela.autoDone(s2, "sasha", now).isEmpty())
         val back = Dela.fromJson(JSONObject(Dela.toJson(s2).toString()))
         assertEquals(s2.suggestions, back.suggestions)
     }

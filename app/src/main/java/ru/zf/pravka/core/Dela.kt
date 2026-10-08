@@ -249,17 +249,27 @@ object Dela {
          * видел, согласен — из «Нового» уходит. Ставит операция `suggestion.seen`.
          */
         val seenAt: String = "",
+        /**
+         * Итог решения строкой JSON (`result` сервера): поля дела после него, у
+         * сделанного само (08.10.2026) — ещё `was` (как было, только поменявшееся)
+         * и `comment_id` (комментарий-основание). У старого сервера — без них.
+         */
+        val result: String = "{}",
     ) {
         val pending: Boolean get() = status == "pending"
         fun payloadObj(): JSONObject = runCatching { JSONObject(payload) }.getOrElse { JSONObject() }
+        fun resultObj(): JSONObject = runCatching { JSONObject(result) }.getOrElse { JSONObject() }
 
         /**
-         * «Закрыто само» (05.10.2026, правило 5 сервера): очевидное закрытие по
-         * свежей встрече или переписке сервер принял сам — `close`, `accepted`,
-         * `payload.auto`. Телефон показывает его с основанием и «Вернуть».
+         * «Сделано само» (08.10.2026, docs/dela-phone-5.md, правило 5 сервера):
+         * закрытие или уточнение по свежей встрече или переписке сервер принял
+         * сам. Признак — причина решения (`store.AUTO_REASONS`), а не флаг
+         * `payload.auto`: такое предложение, принятое руками (встреча старая),
+         * — решение человека, сюда не идёт. Старый сервер закрывал с той же
+         * причиной «закрыто само» — его строки видны как были.
          */
-        val autoClosed: Boolean
-            get() = kind == "close" && status == "accepted" && payloadObj().optBoolean("auto", false)
+        val autoDone: Boolean
+            get() = (kind == "close" || kind == "update") && status == "accepted" && reason in AUTO_REASONS
 
         /** Дата встречи или переписки, иначе — когда предложение появилось: по ней пачки идут свежими сверху. */
         val at: String get() = payloadObj().str("meeting_at").ifBlank { createdAt.take(10) }
@@ -505,12 +515,14 @@ object Dela {
     fun suggestion(o: JSONObject): Suggestion? {
         val id = o.str("id").ifBlank { return null }
         val payload = o.optJSONObject("payload")?.toString() ?: o.str("payload").ifBlank { "{}" }
+        val result = o.optJSONObject("result")?.toString() ?: "{}"
         return Suggestion(
             id, o.str("for_user"), o.str("kind").ifBlank { "create" }, o.str("task_id"), payload, o.str("source"),
             o.str("source_ref"), o.str("quote"), o.str("batch_ref"), o.str("batch_title"),
             o.str("status").ifBlank { "pending" }, o.str("reason"), o.str("expires_at"), o.str("created_at"),
             o.str("decided_at"), o.int("rev"), o.long("seq"), o.bool("_local"),
             decidedBy = o.str("decided_by"), resultTaskId = o.str("result_task_id"), seenAt = o.str("seen_at"),
+            result = result,
         )
     }
 
@@ -521,6 +533,7 @@ object Dela {
         .put("reason", nul(s.reason)).put("expires_at", nul(s.expiresAt)).put("created_at", nul(s.createdAt))
         .put("decided_at", nul(s.decidedAt)).put("rev", s.rev).put("seq", s.seq)
         .put("decided_by", nul(s.decidedBy)).put("result_task_id", nul(s.resultTaskId)).put("seen_at", nul(s.seenAt))
+        .put("result", runCatching { JSONObject(s.result) }.getOrElse { JSONObject() })
         .apply { if (s.local) put("_local", true) }
 
     fun user(o: JSONObject): User? {
@@ -1156,15 +1169,48 @@ object Dela {
         }.sortedByDescending { it.at }
     }
 
+    /** Причины решения, которые ставит сам сервер (`store.AUTO_REASONS`). */
+    val AUTO_REASONS = setOf("закрыто само", "уточнено само")
+
     /**
-     * «Закрыто само» за [days] дней, свежие сверху (`autoClosed` веба): синк
+     * «Сделано само» за [days] дней, свежие сверху (`autoDone` веба): синк
      * приносит эти строки (accepted), раньше телефон их просто не показывал.
      * «Понятно» (`seen_at`) убирает их совсем: 06.10.2026 #268 висел неделю.
      */
-    fun autoClosed(s: Snapshot, me: String, now: Long, days: Int = 7): List<Suggestion> =
+    fun autoDone(s: Snapshot, me: String, now: Long, days: Int = 7): List<Suggestion> =
         s.suggestions.values.filter {
-            it.autoClosed && it.seenAt.isBlank() && (me.isBlank() || it.forUser == me) && (ms(it.decidedAt) ?: 0L) > now - days * DAY_MS
+            it.autoDone && it.seenAt.isBlank() && (me.isBlank() || it.forUser == me) && (ms(it.decidedAt) ?: 0L) > now - days * DAY_MS
         }.sortedByDescending { ms(it.decidedAt) ?: 0L }
+
+    /**
+     * «Вернуть» у сделанного само (`autoDone` веба), одной пачкой: закрытие —
+     * `task.reopen`, уточнение — `task.set` с `result.was` (как было); у обоих —
+     * `comment.delete` комментария-основания, если сервер его записал
+     * (`result.comment_id`), и [seen] — `suggestion.seen`. null — вернуть нечего:
+     * дело не видно, закрытое уже открыли, у уточнения ни `was`, ни комментария.
+     */
+    fun autoUndoOps(sg: Suggestion, t: Task?, seen: Boolean): List<JSONObject>? {
+        if (t == null) return null
+        val r = sg.resultObj()
+        val was = r.optJSONObject("was") ?: JSONObject()
+        val comment = r.str("comment_id")
+        val list = mutableListOf<JSONObject>()
+        if (sg.kind == "close") {
+            if (t.status != DONE) return null
+            list += statusOp("task.reopen", t.id)
+        } else {
+            if (was.length() == 0 && comment.isBlank()) return null
+            if (was.length() > 0) {
+                // Что стоит сейчас — в `was` операции: правку поверх своей сервер не затрёт молча.
+                val now = json(t)
+                val cur = JSONObject().apply { for (k in was.keys()) put(k, now.opt(k) ?: JSONObject.NULL) }
+                list += setOp(t.id, JSONObject(was.toString()), cur)
+            }
+        }
+        if (comment.isNotBlank()) list += JSONObject().put("op", "comment.delete").put("op_id", newId()).put("id", comment)
+        if (seen) list += seenOp(listOf(sg.id))
+        return list
+    }
 
     /**
      * «Уточнить: #N …» — что именно поменяется в деле, по полям предложения

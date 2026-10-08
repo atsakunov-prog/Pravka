@@ -167,7 +167,7 @@ object DelaViews {
      * разложили. Наговорки не считаются: их дела уже разложены.
      */
     fun newCount(s: Dela.Snapshot, me: String, sphere: String, now: Long): Int =
-        Dela.newOnes(s, me).size + Dela.autoClosed(s, me, now).size + noProject(s, me, sphere).size + fromOthers(s, me, sphere, now).size
+        Dela.newOnes(s, me).size + Dela.autoDone(s, me, now).size + noProject(s, me, sphere).size + fromOthers(s, me, sphere, now).size
 
     /** Раздел страницы: заголовок веба и дела в его порядке. */
     data class Section(val title: String, val items: List<Dela.Task>)
@@ -486,10 +486,34 @@ object DelaViews {
             "pending" -> "ждёт решения ниже"
             "rejected" -> "отклонил"
             "expired" -> "погасло"
-            else -> "принято"
+            // Сделанное само (08.10.2026) — « — само», как `touchChips` веба: решал не человек.
+            else -> if (live.reason in Dela.AUTO_REASONS) "само" else "принято"
         }
         return "$from: $what — $st"
     }
+
+    /**
+     * Что поменяло уточнение само — словами, как `autoWords` веба: «название:
+     * «…» · срок 17.10 → 12.10 · мяч: жду Ольга». Как было — `result.was`, как
+     * стало — сам `result`; имя — `payload.person_name`. Пусто — старый сервер.
+     */
+    fun autoWords(sg: Dela.Suggestion, today: String): String {
+        val r = sg.resultObj()
+        val was = r.optJSONObject("was") ?: return ""
+        val p = sg.payloadObj()
+        fun v(o: org.json.JSONObject, k: String) = o.optString(k).takeIf { !o.isNull(k) && it.isNotBlank() && it != "null" }.orEmpty()
+        val due = v(r, "due_date")
+        val wasDue = v(was, "due_date")
+        val person = v(p, "person_name")
+        return listOfNotNull(
+            if (was.has("title")) "название: «${v(r, "title")}»" else null,
+            if (was.has("due_date")) "срок " + (if (wasDue.isNotBlank()) ddmm(wasDue, today) + " → " else "") + (if (due.isNotBlank()) ddmm(due, today) else "без срока") else null,
+            if (was.has("ball") || was.has("person_id")) "мяч: " + (BALL_WORD[v(r, "ball")] ?: v(r, "ball")) + if (person.isNotBlank()) " $person" else "" else null,
+        ).joinToString(" · ")
+    }
+
+    /** Мяч словом — `BALL` веба. */
+    private val BALL_WORD = mapOf(Dela.MINE to "моё", Dela.WAITING to "жду", Dela.AGENDA to "повестка")
 
     // ------------------------------------------------------------ человек
 
