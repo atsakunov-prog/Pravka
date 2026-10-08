@@ -17,6 +17,8 @@
     5. задача планировщика «Pravka Archive»: при старте системы; в ней сторож,
        который поднимает службу после любого падения;
     6. запуск, ожидание /health, самопроверка (check).
+  Если в server.env ещё нет токена ночного разбора багов — спросит его один
+  раз (Enter — пропустить; ввод скрыт и в журнал не попадает).
   Итог — в D:\PravkaArchive\logs\install-<дата>.log.
 
   Служба работает от NETWORK SERVICE, а не от SYSTEM: она смотрит в интернет,
@@ -28,7 +30,10 @@ param(
     [string]$Python = 'C:\Program Files\Python314\python.exe',
     [string]$Router = '192.168.1.1',
     [ValidateSet('NetworkService', 'System')]
-    [string]$RunAs = 'NetworkService'
+    [string]$RunAs = 'NetworkService',
+    # Routine «Разбор багов Правки (по вызову сервера)» — её будит сторож
+    # night.py, когда есть новые баги (docs/feedback.md, «Ночной разбор»).
+    [string]$NightRoutine = 'trig_01CYtfasBgv7o5iWZzbFcZPK'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,6 +67,13 @@ function EnvValue([string]$name) {
     return ($line -replace "^\s*$name\s*=\s*", '').Trim()
 }
 
+function SetEnv([string]$name, [string]$value) {
+    # Прочие строки файла не трогаем; права NETWORK SERVICE на файл остаются.
+    $lines = @(Get-Content -LiteralPath $EnvFile -Encoding UTF8 | Where-Object { $_ -notmatch "^\s*$name\s*=" })
+    $lines += "$name=$value"
+    Set-Content -LiteralPath $EnvFile -Value $lines -Encoding UTF8
+}
+
 $failed = $false
 try {
     Step 'Проверка прав и путей'
@@ -84,6 +96,31 @@ try {
     }
     if (-not (EnvValue 'ICU_API_KEY')) {
         Write-Warning 'ICU_API_KEY пуст: сборщик intervals будет спать, пока ключ не появится (после — перезапустить задачу).'
+    }
+
+    # Ночной разбор багов (08.10.2026, владелец: «если нет багов, то это и
+    # не запускается»): сервер будит Routine Claude, только когда есть новые.
+    # Токен Routine создаётся только на сайте — спрашиваем его здесь один раз.
+    Step 'Ночной разбор багов'
+    if (EnvValue 'PRAVKA_NIGHT_TOKEN') {
+        Write-Host 'Токен Routine есть: по ночам сервер будит Claude, только если есть новые баги.'
+    } elseif ([Environment]::UserInteractive) {
+        Write-Host 'Сервер может сам будить ночной разбор багов — только когда есть новые.'
+        Write-Host "Нужен токен Routine $NightRoutine («Разбор багов Правки (по вызову сервера)»):"
+        Write-Host 'claude.ai/code/routines → она → Edit → триггер API → Generate token.'
+        # Скрытый ввод: обычный Read-Host попал бы в журнал установки целиком.
+        $secure = Read-Host -AsSecureString 'Вставь токен (sk-ant-oat01-…) или нажми Enter, чтобы пропустить'
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+        try { $token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr).Trim() }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+        if ($token) {
+            if (-not $token.StartsWith('sk-ant-')) { Write-Warning 'Не похоже на токен Routine (sk-ant-oat01-…) — всё равно записываю.' }
+            SetEnv 'PRAVKA_NIGHT_ROUTINE' $NightRoutine
+            SetEnv 'PRAVKA_NIGHT_TOKEN' $token
+            Write-Host 'Записал в server.env (токен в журнал не попал).' -ForegroundColor Green
+        } else {
+            Write-Host 'Пропустил: сторож спит. Захочешь — запусти update.ps1 ещё раз, он спросит снова.'
+        }
     }
 
     Step 'venv и зависимости'
