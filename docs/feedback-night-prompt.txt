@@ -1,10 +1,11 @@
 Ночной разбор багов и предложений Правки (репозиторий atsakunov-prog/Pravka, Android-приложение владельца — Саши). Саша заказал его сам: «разбор в 4 утра… сразу чинить и пушить», и следом: «давай пушить всё, что я предлагаю». Тебя разбудил домашний сервер архива, потому что есть новые записи: их номера — в блоке routine-fire-payload (это подсказка от сервера, сами записи читай через коннектор). Рядом никого нет: вопросов не задавай, решай сам.
 
-1. Порядок — в docs/feedback.md и CLAUDE.md. Первым делом: bash scripts/cloud-sdk.sh (контейнер свежий — SDK ставится за минуту). Работай от свежей ветки pravka (git fetch origin pravka).
+1. Порядок — в docs/feedback.md и CLAUDE.md. Репозиторий: если клона atsakunov-prog/Pravka в сессии нет (git недоступен, GitHub отвечает 403 «access … not enabled for this session»), подключи его сам — add_repo (owner atsakunov-prog, repo Pravka, access push) и склонируй, как он скажет; не вышло — ничего не чини, в отчёте так и скажи. Затем: bash scripts/cloud-sdk.sh (контейнер свежий — SDK ставится за минуту). Работай от свежей ветки pravka (git fetch origin pravka).
 
-2. Новые записи — коннектор Pravka, инструмент sql. Номера у каждого телефона свои: Сашины — в life.feedback, Марианны — в marianna.feedback:
-   SELECT 'Саша' AS who, num, day, origin, version, text FROM life.feedback WHERE status = 'new' UNION ALL SELECT 'marianna', num, day, origin, version, text FROM marianna.feedback WHERE status = 'new' ORDER BY 1, 2
-   Длинный текст выдача режет — добери хвост через substring(raw from 300 for 400). Сделанное уже лежит в app/src/main/assets/feedback_done.txt — пропусти его: Сашины строки там голым номером («7»), Марианны — с профилем («marianna:7»); телефон просто ещё не обновился. Коннектора нет или архив не отвечает — ничего не чини, в отчёте так и скажи.
+2. Новые записи — коннектор Pravka, инструмент sql. Номера у каждого телефона свои. Сашины:
+   SELECT num, day, origin, version, text FROM life.feedback WHERE status = 'new' ORDER BY num
+   Марианны — тем же запросом из marianna.feedback, только если такая таблица есть (SELECT 1 FROM information_schema.tables WHERE table_schema = 'marianna' AND table_name = 'feedback'); нет — её архив ещё не заведён, это не ошибка.
+   Длинный текст выдача режет — добери хвост через substring(raw from 300 for 400). Сделанное уже лежит в app/src/main/assets/feedback_done.txt — пропусти его: Сашины строки там голым номером («7»), Марианны — с профилем («marianna:7»); телефон просто ещё не обновился. Коннектора нет или архив не отвечает — ничего не чини, в отчёте так и скажи. Новых нет — ничего не меняй, отчёт одной строкой.
 
 3. Делай КАЖДУЮ новую запись, мелкую и крупную, по правилам репозитория: документ режима из таблицы CLAUDE.md, на новый случай разбора — сначала тест, железные правила CLAUDE.md не нарушать. Двусмысленное — делай по самому вероятному смыслу и в строке feedback_done.txt скажи, как понял. Голос распознаётся с ошибками — читай по смыслу. Отложить («номер<TAB>- почему и что вместо») — только невозможное: Android не даёт, нет ключа или доступа, запись противоречит железному правилу.
 

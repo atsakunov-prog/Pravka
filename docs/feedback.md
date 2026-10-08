@@ -125,6 +125,11 @@
 1. claude.ai/code/routines → эта Routine → Edit: репозиторий
    atsakunov-prog/Pravka; в «Connectors» — Pravka (остальные убрать);
    триггер **API** → сохранить → «Generate token» (показывается один раз).
+   Проверочный запуск 08.10 (сессия Claude, вручную): коннектор отвечает,
+   а репозитория в сессии нет — GitHub 403 «access … not enabled for this
+   session». Задание поэтому само подключает репозиторий (`add_repo`, push),
+   если его не прикрепили в форме; схему `marianna` спрашивает, только если
+   она есть (на компе её нет, пока не задан `PRAVKA_PEOPLE`).
 2. На компе с архивом — `update.ps1` от администратора: `install.ps1` сам
    спросит токен (скрытый ввод, в журнал не попадает) и впишет в `server.env`
    `PRAVKA_NIGHT_ROUTINE` и `PRAVKA_NIGHT_TOKEN`; `check` в конце скажет
