@@ -183,8 +183,10 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val streamCacheMb: Int = 2048,
         /** Полка плитками с крупными обложками или списком с маленькими. */
         val shelfLayout: String = LAYOUT_GRID,
-        /** Порядок книг на полке: последние, по автору, по названию, по сериям. */
-        val shelfSort: String = SORT_RECENT,
+        /** Порядок книг на полке: добавленные, открытые, по названию, по автору. */
+        val shelfSort: String = SORT_ADDED,
+        /** Группы на полке: без групп, серии, авторы - в том же порядке. */
+        val shelfGroup: String = GROUP_SERIES,
         /**
          * Имя этого устройства в синхронизации мест: у каждого устройства свой
          * файл мест. Пусто - модель телефона.
@@ -301,7 +303,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 streamMobile = p[KEY_STREAM_MOBILE]?.takeIf { it in MOBILES } ?: MOBILE_ASK,
                 streamCacheMb = p[KEY_STREAM_CACHE]?.takeIf { it in CACHE_SIZES_MB } ?: 2048,
                 shelfLayout = p[KEY_SHELF_LAYOUT]?.takeIf { it in LAYOUTS } ?: LAYOUT_GRID,
-                shelfSort = p[KEY_SHELF_SORT]?.takeIf { it in SORTS } ?: SORT_RECENT,
+                shelfSort = p[KEY_SHELF_SORT]?.takeIf { it in SORTS } ?: SORT_ADDED,
+                shelfGroup = p[KEY_SHELF_GROUP]?.takeIf { it in GROUPS } ?: GROUP_SERIES,
                 deviceName = p[KEY_DEVICE_NAME] ?: "",
             )
         }
@@ -414,6 +417,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setStreamCacheMb(v: Int) = edit { if (v in CACHE_SIZES_MB) it[KEY_STREAM_CACHE] = v }
     suspend fun setShelfLayout(v: String) = edit { if (v in LAYOUTS) it[KEY_SHELF_LAYOUT] = v }
     suspend fun setShelfSort(v: String) = edit { if (v in SORTS) it[KEY_SHELF_SORT] = v }
+    suspend fun setShelfGroup(v: String) = edit { if (v in GROUPS) it[KEY_SHELF_GROUP] = v }
     suspend fun setDeviceName(v: String) = edit { it[KEY_DEVICE_NAME] = v.trim() }
 
     companion object {
@@ -494,18 +498,33 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         const val LAYOUT_LIST = "list"
         val LAYOUTS = listOf(LAYOUT_GRID, LAYOUT_LIST)
 
-        // Порядок полки. «Последние» - заводской: приложение открывают продолжить.
+        // Порядок полки. «Добавленные» - заводской (08.10.2026, владелец: «они
+        // лежат в каком-то странном порядке, давай по дате добавления»):
+        // продолжить и так можно карточкой сверху, а полка - это что пришло.
+        const val SORT_ADDED = "added"
         const val SORT_RECENT = "recent"
-        const val SORT_AUTHOR = "author"
         const val SORT_TITLE = "title"
-        const val SORT_SERIES = "series"
-        val SORTS = listOf(SORT_RECENT, SORT_AUTHOR, SORT_TITLE, SORT_SERIES)
+        const val SORT_AUTHOR = "author"
+        val SORTS = listOf(SORT_ADDED, SORT_RECENT, SORT_TITLE, SORT_AUTHOR)
 
         fun sortLabel(v: String): String = when (v) {
-            SORT_AUTHOR -> "По автору"
+            SORT_RECENT -> "Открытые недавно"
             SORT_TITLE -> "По названию"
-            SORT_SERIES -> "По сериям"
-            else -> "Последние"
+            SORT_AUTHOR -> "По автору"
+            else -> "Добавленные"
+        }
+
+        // Группы - поверх порядка, а не вместо него: серия встаёт туда, где
+        // стоит её самая верхняя книга. Заводские - серии.
+        const val GROUP_NONE = "none"
+        const val GROUP_SERIES = "series"
+        const val GROUP_AUTHOR = "author"
+        val GROUPS = listOf(GROUP_NONE, GROUP_SERIES, GROUP_AUTHOR)
+
+        fun groupLabel(v: String): String = when (v) {
+            GROUP_NONE -> "Без групп"
+            GROUP_AUTHOR -> "Авторы вместе"
+            else -> "Серии вместе"
         }
 
         /** Ступени кэша записи: от полугига до восьми. */
@@ -777,7 +796,10 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_STREAM_MOBILE = stringPreferencesKey("stream_mobile")
         private val KEY_STREAM_CACHE = intPreferencesKey("stream_cache_mb")
         private val KEY_SHELF_LAYOUT = stringPreferencesKey("shelf_layout")
-        private val KEY_SHELF_SORT = stringPreferencesKey("shelf_sort")
+        // Новый ключ (08.10.2026): прежний «shelf_sort» помнил «последние» и
+        // «по сериям» - с ним новый заводской порядок до владельца не доехал бы.
+        private val KEY_SHELF_SORT = stringPreferencesKey("shelf_order")
+        private val KEY_SHELF_GROUP = stringPreferencesKey("shelf_group")
         private val KEY_DEVICE_NAME = stringPreferencesKey("device_name")
     }
 }

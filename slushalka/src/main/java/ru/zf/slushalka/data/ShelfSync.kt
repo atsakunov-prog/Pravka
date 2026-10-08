@@ -338,6 +338,8 @@ class ShelfSync(private val app: SlushalkaApp) {
         any = app.texts.rekey(old, new) || any
         any = app.guide.rekey(old, new) || any
         any = app.razbor.rekey(old, new) || any
+        // Дата появления на полке - не данные чтения: местам ехать на сервер незачем.
+        app.added.rekey(old, new)
         return any
     }
 

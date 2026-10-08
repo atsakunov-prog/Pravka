@@ -190,7 +190,25 @@ class AppState(private val app: SlushalkaApp) {
         val a = OneShelf.adopt(raw, index, root, app.shelf.aliases.value)
         adopted = a
         _books.value = a.books
+        noteAdded()
         app.shelf.tidy()
+    }
+
+    /**
+     * Новые книги полки - в [ru.zf.slushalka.data.AddedStore]: книга сервера с
+     * его `modified` на этот день, своя без сервера - «сейчас». Пока облако
+     * есть, а оглавления ещё нет, свои книги ждут: иначе копия книги сервера
+     * получила бы «сейчас» и встала бы наверх «добавленных».
+     */
+    private fun noteAdded() {
+        val index = app.server.index.value
+        if (index == null && prefs.value.cloudReady) return
+        val now = System.currentTimeMillis()
+        val guesses = HashMap<String, Long>()
+        fun guess(b: Book) = index?.byFolder(b.folderName)?.modified?.takeIf { it > 0 }?.times(1000) ?: now
+        for (b in _serverBooks.value) guesses[b.id] = guess(b)
+        for (b in _books.value) guesses.getOrPut(b.id) { guess(b) }
+        app.added.note(guesses)
     }
 
     /** Имя главной папки - из ключей её же книг, без запроса к SAF. */

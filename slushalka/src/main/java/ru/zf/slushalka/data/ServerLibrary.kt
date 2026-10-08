@@ -51,7 +51,10 @@ class ServerLibrary(
         val folder: String,
         val author: String,
         val title: String,
-        /** Когда папка менялась, секунды. */
+        /**
+         * Когда папка менялась, секунды. Не дата появления книги: папка
+         * меняется и от разметки, справочника, разбора (см. AddedStore).
+         */
         val modified: Long,
         val text: List<Entry>,
         /** Обложка - путь внутри папки; null - нет. */
@@ -68,6 +71,8 @@ class ServerLibrary(
          * устройство узнаёт свою папку со старым именем без своей сверки.
          */
         val former: List<String> = emptyList(),
+        /** Когда книга легла в библиотеку, секунды; 0 - сервер не сказал (поле `added`). */
+        val added: Long = 0L,
     ) {
         val audioBytes: Long get() = audio.sumOf { it.size }
 
@@ -322,6 +327,7 @@ class ServerLibrary(
                     audioMs = b.optLong("audio_ms"),
                     other = entries(b.optJSONArray("other")),
                     former = formerOf(b),
+                    added = b.optLong("added"),
                 ).let { book -> seriesOf(b)?.let { (name, num) -> book.copy(series = name, seriesNum = num) } ?: book }
             }
             return Index(

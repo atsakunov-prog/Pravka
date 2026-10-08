@@ -36,6 +36,8 @@ class SlushalkaApp : Application() {
     lateinit var settings: Settings; private set
     lateinit var positions: PositionStore; private set
     lateinit var library: LibraryStore; private set
+    /** Когда книга легла на полку - для порядка «Добавленные». */
+    lateinit var added: ru.zf.slushalka.data.AddedStore; private set
     lateinit var texts: TextRepo; private set
     lateinit var bookmarks: Bookmarks; private set
     lateinit var askLog: AskLog; private set
@@ -78,6 +80,7 @@ class SlushalkaApp : Application() {
         settings = Settings(this, scope)
         positions = PositionStore(this)
         library = LibraryStore(this)
+        added = ru.zf.slushalka.data.AddedStore(this)
         // Облако раньше текстов: книга с сервера качает текст через него.
         cloud = ru.zf.slushalka.data.Cloud(settings)
         texts = TextRepo(this, cloud)

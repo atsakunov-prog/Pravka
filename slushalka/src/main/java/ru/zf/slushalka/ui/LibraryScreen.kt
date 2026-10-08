@@ -75,6 +75,9 @@ import ru.zf.slushalka.data.NightVoice
 import ru.zf.slushalka.data.ServerLibrary
 import ru.zf.slushalka.data.Settings
 import ru.zf.slushalka.library.Book
+import ru.zf.slushalka.library.ShelfGroup
+import ru.zf.slushalka.library.groupShelf
+import ru.zf.slushalka.library.matchesShelfQuery
 import ru.zf.slushalka.text.BookMeta
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -112,6 +115,12 @@ fun LibraryScreen(
     // по имени - ключ сравнения из него и выводится.
     var seriesPick by rememberSaveable { mutableStateOf<String?>(null) }
     val listView = prefs.shelfLayout == Settings.LAYOUT_LIST
+    // Поиск по полке (08.10.2026, владелец: «очень не хватает просто обычного
+    // поиска по списку книг»): строка над полкой, ищет по всей библиотеке.
+    var query by rememberSaveable { mutableStateOf("") }
+    val searching = query.isNotBlank()
+    androidx.activity.compose.BackHandler(enabled = searching) { query = "" }
+    val addedDates by app.added.dates.collectAsState()
 
     // Библиотека - оглавление сервера: свежее при открытии полки, минуту назад
     // уже брали - хватит. В области приложения, а не экрана: ушёл с полки -
@@ -140,6 +149,10 @@ fun LibraryScreen(
         }
     }
     val entryOf = remember(entries) { entries.associateBy { it.book.id } }
+
+    /** Когда книга легла на полку: дата сервера, если он её знает, иначе первая встреча; 0 - неизвестно. */
+    fun addedOf(book: Book): Long =
+        entryOf[book.id]?.server?.added?.takeIf { it > 0 }?.times(1000) ?: addedDates[book.id] ?: 0L
     // Значок телефона на обложке нужен, только когда есть библиотека на
     // сервере: без неё все книги и так на телефоне.
     val library = index != null
@@ -269,8 +282,9 @@ fun LibraryScreen(
                 },
                 actions = {
                     // Каталог Флибусты: найти книгу и положить её на эту же полку.
+                    // Глобус с лупой, а не лупа: лупа - у поиска по своей полке.
                     IconButton(onClick = onCatalog) {
-                        Icon(Icons.Default.Search, contentDescription = "Флибуста")
+                        Icon(Glyphs.TravelExplore, contentDescription = "Флибуста")
                     }
                     // Статистика: сколько, когда и как быстро. Значок рисуется,
                     // как и кнопки плеера: в базовом наборе иконок графика нет.
@@ -320,28 +334,33 @@ fun LibraryScreen(
             if (seriesKey == null) shownBooks
             else shownBooks.filter { b -> seriesOf(b)?.name?.let(BookMeta::key) == seriesKey }
         }
-        val top = last.takeIf { seriesKey == null }
+        val top = last.takeIf { seriesKey == null && !searching }
         // Свёрнутые группы - по ключу: серия или фамилия.
         var collapsed by rememberSaveable { mutableStateOf(listOf<String>()) }
         val counts = remember(progress, base) {
             Shelf.entries.associateWith { sh -> base.count { sh.holds(progress.getValue(it.id)) } }
         }
-        // По сериям и по автору полка - группами с заголовками; в группе книга
-        // стоит на своём месте, даже если она же наверху в «Продолжить».
-        val grouped = seriesKey == null &&
-            (prefs.shelfSort == Settings.SORT_SERIES || prefs.shelfSort == Settings.SORT_AUTHOR)
-        val shown = remember(base, progress, shelf, top, seriesKey, prefs.shelfSort) {
-            base.filter { (grouped || it.id != top?.id) && shelf.holds(progress.getValue(it.id)) }
+        val order = shelfOrder(prefs.shelfSort, progress, ::seriesOf, ::surnameOf, ::addedOf)
+        // Группы - поверх порядка; внутри отобранной серии и в поиске их нет.
+        val grouping = if (seriesKey != null) Settings.GROUP_NONE else prefs.shelfGroup
+        val shown = remember(base, progress, shelf, seriesKey, prefs.shelfSort, addedDates) {
+            base.filter { shelf.holds(progress.getValue(it.id)) }
                 .sortedWith(
                     if (seriesKey != null) compareBy<Book>({ BookMeta.order(seriesOf(it)?.number) }).then(TitleOrder)
-                    else shelfOrder(prefs.shelfSort, progress, ::seriesOf, ::surnameOf)
+                    else order
                 )
         }
-
-        val groups: List<ShelfGroup>? = remember(shown, grouped, prefs.shelfSort, progress) {
-            if (!grouped) null
-            else if (prefs.shelfSort == Settings.SORT_SERIES) groupBySeries(shown, progress, ::seriesOf)
-            else groupByAuthor(shown, progress, ::surnameOf)
+        // Книга из «Продолжить» во второй раз на полке не нужна - разве что в
+        // группе: там она стоит на своём месте в серии или у автора.
+        val groups: List<ShelfGroup> = remember(shown, grouping, top, progress) {
+            groupShelf(shown, grouping, ::seriesOf, ::surnameOf, skipLoose = top?.id) { groupNote(it, progress) }
+        }
+        val headed = groups.filter { it.title != null }
+        // Поиск - по всей полке, мимо полок-чипов и групп: название, автор,
+        // серия, имя папки; каждое слово запроса где-нибудь да есть.
+        val found = remember(shownBooks, query, prefs.shelfSort, progress, addedDates) {
+            if (!searching) emptyList()
+            else shownBooks.filter { matchesShelfQuery(it, seriesOf(it)?.name, query) }.sortedWith(order)
         }
 
         // Книга на полке - плиткой или строкой; одна и та же в простом порядке и в группах.
@@ -424,6 +443,31 @@ fun LibraryScreen(
                 transfer?.takeIf { it.error != null }?.let { tr ->
                     item(key = "transfer", span = { GridItemSpan(maxLineSpan) }) { TransferCard(app, tr) }
                 }
+                if (entries.isNotEmpty()) {
+                    item(key = "search", span = { GridItemSpan(maxLineSpan) }) {
+                        ShelfSearch(query) { query = it }
+                    }
+                }
+                if (searching) {
+                    items(found, key = { it.id }) { book -> bookCell(book) }
+                    if (found.isEmpty()) {
+                        item(key = "nothing", span = { GridItemSpan(maxLineSpan) }) {
+                            Column {
+                                Text(
+                                    "На полке такого нет.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                TextButton(onClick = onCatalog) {
+                                    Icon(Glyphs.TravelExplore, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Поискать во Флибусте")
+                                }
+                            }
+                        }
+                    }
+                    return@LazyVerticalGrid
+                }
                 seriesPick?.let { name ->
                     item(key = "series", span = { GridItemSpan(maxLineSpan) }) {
                         SeriesBar(name, base.size) { seriesPick = null }
@@ -448,7 +492,7 @@ fun LibraryScreen(
                     item(span = { GridItemSpan(maxLineSpan) }) {
                         Text(
                             "Книг пока нет. Книга - это папка с mp3 внутри; текст (fb2 или epub) и " +
-                                "обложку клади туда же. Или найди книгу во Флибусте - лупа сверху.",
+                                "обложку клади туда же. Или найди книгу во Флибусте - глобус сверху.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -458,15 +502,20 @@ fun LibraryScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.weight(1f)) { ShelfChips(shelf, counts) { shelf = it } }
                             // Группы - свернуть разом или развернуть: обзор серий одним экраном.
-                            if (groups != null && groups.size > 1) {
-                                val allFolded = groups.all { it.key in collapsed }
+                            if (headed.size > 1) {
+                                val allFolded = headed.all { it.key in collapsed }
                                 TextButton(onClick = {
-                                    collapsed = if (allFolded) emptyList() else groups.map { it.key }
+                                    collapsed = if (allFolded) emptyList() else headed.map { it.key }
                                 }) { Text(if (allFolded) "Развернуть" else "Свернуть") }
                             }
                             // Внутри серии порядок один - по номерам: выбор порядка там не нужен.
                             if (seriesKey == null) {
-                                SortButton(prefs.shelfSort) { v -> scope.launch { app.settings.setShelfSort(v) } }
+                                SortButton(
+                                    prefs.shelfSort,
+                                    prefs.shelfGroup,
+                                    onSort = { v -> scope.launch { app.settings.setShelfSort(v) } },
+                                    onGroup = { v -> scope.launch { app.settings.setShelfGroup(v) } },
+                                )
                             }
                             // Плитки или список - значок того, во что переключит.
                             IconButton(onClick = {
@@ -482,19 +531,18 @@ fun LibraryScreen(
                         }
                     }
                 }
-                val g = groups
-                if (g == null) {
-                    items(shown, key = { it.id }) { book -> bookCell(book) }
-                } else {
-                    g.forEach { group ->
-                        val folded = group.key in collapsed
-                        item(key = "g:" + group.key, span = { GridItemSpan(maxLineSpan) }) {
-                            GroupHeader(group, folded) {
-                                collapsed = if (folded) collapsed - group.key else collapsed + group.key
-                            }
-                        }
-                        if (!folded) items(group.books, key = { it.id }) { book -> bookCell(book) }
+                groups.forEach { group ->
+                    if (group.title == null) {
+                        items(group.books, key = { it.id }) { book -> bookCell(book) }
+                        return@forEach
                     }
+                    val folded = group.key in collapsed
+                    item(key = "g:" + group.key, span = { GridItemSpan(maxLineSpan) }) {
+                        GroupHeader(group, folded) {
+                            collapsed = if (folded) collapsed - group.key else collapsed + group.key
+                        }
+                    }
+                    if (!folded) items(group.books, key = { it.id }) { book -> bookCell(book) }
                 }
                 if (shownBooks.isNotEmpty() && shown.isEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
@@ -759,7 +807,7 @@ private fun progressOf(app: SlushalkaApp, book: Book): Progress {
 private enum class Shelf(val label: String, val empty: String) {
     ALL("Все", ""),
     NOW("В процессе", "Ничего не начато - самое время."),
-    NEW("Новые", "Непочатых книг нет. Лупа сверху - Флибуста."),
+    NEW("Новые", "Непочатых книг нет. Глобус сверху - Флибуста."),
     DONE("Прочитано", "Пока ничего не дочитано до конца.");
 
     fun holds(p: Progress): Boolean = when (this) {
@@ -780,18 +828,26 @@ private val TitleOrder = Comparator<Book> { a, b ->
 
 /**
  * Порядок полки.
- * - Последние: что открывали, по свежести; нетронутые - за ними по названию.
+ * - Добавленные (заводской): что легло на полку позже - выше; дата
+ *   неизвестна - в конце, по названию.
+ * - Открытые недавно: что открывали, по свежести; нетронутые - за ними по
+ *   названию.
+ * - По названию.
  * - По автору: по фамилии, у одного автора - серии по номерам, потом
  *   остальное по названию; книги без автора - в конце.
- * - По названию.
- * - По сериям: серии по алфавиту, внутри по номерам; книги вне серий - в конце.
  */
 private fun shelfOrder(
     sort: String,
     progress: Map<String, Progress>,
     series: (Book) -> BookMeta.Series?,
     surname: (Book) -> String,
+    added: (Book) -> Long,
 ): Comparator<Book> = when (sort) {
+    Settings.SORT_RECENT -> compareBy<Book>(
+        { progress.getValue(it.id).touchedAt <= 0L },
+        { -progress.getValue(it.id).touchedAt },
+    ).then(TitleOrder)
+    Settings.SORT_TITLE -> TitleOrder
     Settings.SORT_AUTHOR -> compareBy<Book>(
         { surname(it).isBlank() },
         { surname(it).lowercase() },
@@ -800,20 +856,11 @@ private fun shelfOrder(
         { series(it)?.name?.let(BookMeta::key).orEmpty() },
         { BookMeta.order(series(it)?.number) },
     ).then(TitleOrder)
-    Settings.SORT_TITLE -> TitleOrder
-    Settings.SORT_SERIES -> compareBy<Book>(
-        { series(it) == null },
-        { series(it)?.name?.let(BookMeta::key).orEmpty() },
-        { BookMeta.order(series(it)?.number) },
-    ).then(TitleOrder)
     else -> compareBy<Book>(
-        { progress.getValue(it.id).touchedAt <= 0L },
-        { -progress.getValue(it.id).touchedAt },
+        { added(it) <= 0L },
+        { -added(it) },
     ).then(TitleOrder)
 }
-
-/** Группа полки: серия или автор, сколько в ней и что пройдено, книги по порядку. */
-private class ShelfGroup(val key: String, val title: String, val note: String, val books: List<Book>)
 
 /** «10 книг · прочитано 3 · в процессе 1». */
 private fun groupNote(books: List<Book>, progress: Map<String, Progress>): String {
@@ -826,41 +873,30 @@ private fun groupNote(books: List<Book>, progress: Map<String, Progress>): Strin
     ).joinToString(" · ")
 }
 
-/**
- * По сериям: серия - заголовок, под ним книги по номерам; серии по алфавиту,
- * книги вне серий - последней группой. Порядок внутри уже задан сортировкой.
- */
-private fun groupBySeries(
-    shown: List<Book>,
-    progress: Map<String, Progress>,
-    series: (Book) -> BookMeta.Series?,
-): List<ShelfGroup> {
-    val by = shown.groupBy { series(it)?.name?.let(BookMeta::key).orEmpty() }
-    val named = by.filterKeys { it.isNotEmpty() }
-        .map { (k, books) -> ShelfGroup("s:$k", series(books.first())!!.name, groupNote(books, progress), books) }
-        .sortedWith { a, b -> ru.zf.slushalka.library.NaturalOrder.compare(a.title, b.title) }
-    val loose = by[""]?.let { ShelfGroup("s:", "Без серии", groupNote(it, progress), it) }
-    return named + listOfNotNull(loose)
-}
-
-/**
- * По автору: автор - заголовок (по фамилии, так что «Борис Акунин» и
- * «Акунин Борис» - один автор), под ним его серии по номерам и остальное;
- * книги без автора - последней группой.
- */
-private fun groupByAuthor(
-    shown: List<Book>,
-    progress: Map<String, Progress>,
-    surname: (Book) -> String,
-): List<ShelfGroup> {
-    val by = shown.groupBy { surname(it).trim().lowercase() }
-    val named = by.filterKeys { it.isNotEmpty() }.map { (k, books) ->
-        // Имя в заголовке - как оно чаще написано у его книг.
-        val name = books.groupingBy { it.author.trim() }.eachCount().maxBy { it.value }.key
-        ShelfGroup("a:$k", name, groupNote(books, progress), books)
-    }.sortedWith { a, b -> ru.zf.slushalka.library.NaturalOrder.compare(a.key, b.key) }
-    val loose = by[""]?.let { ShelfGroup("a:", "Автор не указан", groupNote(it, progress), it) }
-    return named + listOfNotNull(loose)
+/** Поиск по своей полке: строка с лупой и крестиком; «Найти» на клавиатуре прячет её. */
+@Composable
+private fun ShelfSearch(query: String, onChange: (String) -> Unit) {
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    androidx.compose.material3.OutlinedTextField(
+        value = query,
+        onValueChange = onChange,
+        modifier = Modifier.fillMaxWidth(),
+        placeholder = { Text("Найти на полке: название, автор, серия") },
+        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+        trailingIcon = if (query.isNotEmpty()) {
+            {
+                IconButton(onClick = { onChange("") }) {
+                    Icon(Icons.Default.Close, contentDescription = "Очистить")
+                }
+            }
+        } else null,
+        singleLine = true,
+        shape = RoundedCornerShape(28.dp),
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+            imeAction = androidx.compose.ui.text.input.ImeAction.Search,
+        ),
+        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { focus.clearFocus() }),
+    )
 }
 
 /** Заголовок группы: стрелка, имя, сколько книг; нажатие сворачивает и разворачивает. */
@@ -880,34 +916,48 @@ private fun GroupHeader(group: ShelfGroup, folded: Boolean, onToggle: () -> Unit
         )
         Spacer(Modifier.width(6.dp))
         Column(Modifier.weight(1f)) {
-            Text(group.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(group.title.orEmpty(), style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(group.note, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
-/** Выбор порядка: значок и меню с галочкой у выбранного. */
+/** Порядок и группы: один значок, в меню - два раздела с галочкой у выбранного. */
 @Composable
-private fun SortButton(sort: String, onPick: (String) -> Unit) {
+private fun SortButton(sort: String, group: String, onSort: (String) -> Unit, onGroup: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { open = true }) {
-            Icon(Glyphs.Sort, contentDescription = "Порядок: " + Settings.sortLabel(sort))
+            Icon(Glyphs.Sort, contentDescription = "Порядок: " + Settings.sortLabel(sort) + ", " + Settings.groupLabel(group))
         }
         androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            Settings.SORTS.forEach { v ->
+            @Composable
+            fun section(title: String) = Text(
+                title,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+
+            @Composable
+            fun option(label: String, checked: Boolean, onClick: () -> Unit) =
                 androidx.compose.material3.DropdownMenuItem(
-                    text = { Text(Settings.sortLabel(v)) },
+                    text = { Text(label) },
                     leadingIcon = {
-                        if (v == sort) Icon(androidx.compose.material.icons.Icons.Default.Check, contentDescription = null)
+                        if (checked) Icon(androidx.compose.material.icons.Icons.Default.Check, contentDescription = null)
                         else Spacer(Modifier.size(24.dp))
                     },
                     onClick = {
                         open = false
-                        onPick(v)
+                        onClick()
                     },
                 )
-            }
+
+            section("Порядок")
+            Settings.SORTS.forEach { v -> option(Settings.sortLabel(v), v == sort) { onSort(v) } }
+            androidx.compose.material3.HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            section("Группы")
+            Settings.GROUPS.forEach { v -> option(Settings.groupLabel(v), v == group) { onGroup(v) } }
         }
     }
 }

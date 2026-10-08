@@ -153,7 +153,13 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     `AppState.fillSeries` — в фоне пачками, заодно фамилия автора
     `Book.authorKey`; у сервера — `series`/`series_index` в `index.json`
     (`ServerLibrary.seriesOf` понимает и объект, и список), его серия
-    главнее. Порядок — `Prefs.shelfSort`, `shelfOrder` + `SortButton`. На полке — `SeriesLink` (фильтр), плашка
+    главнее. Порядок — `Prefs.shelfSort` (заводской «Добавленные»: дата первой
+    встречи — `data/AddedStore.kt`, `added.json`; `modified` сервера не годится —
+    папка меняется от разметки и разбора; поле `added` сервера главнее), группы
+    поверх порядка — `Prefs.shelfGroup` (серии / авторы / без групп),
+    `library/ShelfGroups.kt` (`groupShelf`: группа там, где её верхняя книга;
+    поиск `matchesShelfQuery`), меню — `SortButton`; поиск по полке —
+    `ShelfSearch` над «Продолжить», Флибуста — глобус в шапке. На полке — `SeriesLink` (фильтр), плашка
     `SeriesBar`; вид `Prefs.shelfLayout` (плитки `BookTile` / список
     `BookRow`); что в книге есть — значками `ContentMarks` по `Contents`
     (текст, звук чтеца, нейросети — наушники с искрой, разбор), на обложке
@@ -275,7 +281,7 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     нажатию на абзац или по обводке пальцем — `Lasso.kt`: реестр границ и
     раскладки абзацев `TextHits`, по нему же тап в прокрутке листает ровно на
     страницу по строкам, слой росчерка `LassoLayer`), настройки, каталог Флибусты (`CatalogScreen.kt`, вход —
-    лупа на полке), лист советника (`AdvisorSheet.kt`) и статистика
+    глобус с лупой над полкой), лист советника (`AdvisorSheet.kt`) и статистика
     (`StatsScreen.kt`, вход — столбики на полке; графики рисуются `Canvas`,
     тап по столбику — подробности).
 
