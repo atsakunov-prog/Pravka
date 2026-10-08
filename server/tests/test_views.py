@@ -141,6 +141,15 @@ def test_feedback_waits_for_daily_review(full):
     assert one(full, "SELECT count(*) FROM life.feedback WHERE status = 'new'")[0] == 1
 
 
+def test_night_check_sees_new_feedback(full, cfg):
+    # Ночной разбор (night.py) будит Claude по этим новым — он должен видеть
+    # запись хозяина из пачки контракта со статусом new; схема Марианны
+    # пустая, но читается и не мешает.
+    from pravka_archive import night
+
+    assert night.new_labels(full, cfg.persons()) == ["№7"]
+
+
 def test_wellness_skips_future_forecast(full):
     assert [str(r[0]) for r in full.execute("SELECT day FROM life.wellness")] == ["2026-09-07"]
     assert float(one(full, "SELECT tsb FROM life.wellness")[0]) == pytest.approx(-6.8)

@@ -1,4 +1,4 @@
-"""python -m pravka_archive migrate | check | serve | supervise | pull [recent|deep|full] [--who marianna] | pair"""
+"""python -m pravka_archive migrate | check | serve | supervise | pull [recent|deep|full] [--who marianna] | pair | night [--dry]"""
 
 from __future__ import annotations
 
@@ -111,8 +111,31 @@ def cmd_check(cfg: config_mod.Config) -> int:
         except Exception as e:
             print(f"—    снаружи {cfg.public_url}/health изнутри сети не открылся ({e.__class__.__name__}). "
                   "Проверь с телефона по мобильной сети: должен ответить pravka-archive")
+    from . import night
+
+    if night.configured(cfg):
+        print(f"—    ночной разбор багов: каждую ночь в {night.parse_at(cfg.night_at).strftime('%H:%M')} по Москве; "
+              "проверить сейчас — night --dry")
+    else:
+        print("—    ночной разбор багов: адреса Routine нет (PRAVKA_NIGHT_ROUTINE, PRAVKA_NIGHT_TOKEN) — проверка спит")
     print("Всё в порядке." if not bad else f"Проблем: {bad}.")
     return 1 if bad else 0
+
+
+def cmd_night(cfg: config_mod.Config, dry: bool) -> int:
+    """Ручная проверка ночного разбора: мимо времени и отметки дня.
+
+    `--dry` — только сказать, есть ли новые и разбудил бы ли; без него — и
+    правда разбудить Routine (первая проверка после настройки).
+    """
+    from . import night
+
+    if not night.configured(cfg):
+        print("Ночной разбор не настроен: в server.env нужны PRAVKA_NIGHT_ROUTINE (адрес из окна «API» Routine) "
+              "и PRAVKA_NIGHT_TOKEN (токен оттуда же).")
+        return 2
+    print(night.run_cfg(cfg, force=True, dry=dry))
+    return 0
 
 
 def cmd_pull(cfg: config_mod.Config, mode: str, who: str | None = None) -> int:
@@ -209,8 +232,9 @@ def cmd_supervise(cfg: config_mod.Config, env_file: str | None) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="pravka_archive")
-    ap.add_argument("command", choices=["migrate", "check", "serve", "supervise", "pull", "pair"])
+    ap.add_argument("command", choices=["migrate", "check", "serve", "supervise", "pull", "pair", "night"])
     ap.add_argument("mode", nargs="?", default="recent", choices=["recent", "deep", "full"])
+    ap.add_argument("--dry", action="store_true", help="night: только сказать, разбудил бы ли")
     ap.add_argument("--env", help="файл секретов (по умолчанию D:\\PravkaArchive\\secrets\\server.env)")
     ap.add_argument("--who", help="pull: только этот человек архива (marianna); без него — все, у кого есть ключ intervals")
     args = ap.parse_args(argv)
@@ -227,6 +251,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_pair(cfg, args.env)
     if args.command == "supervise":
         return cmd_supervise(cfg, args.env)
+    if args.command == "night":
+        return cmd_night(cfg, args.dry)
 
     problems = cfg.problems()
     if problems:

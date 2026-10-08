@@ -102,6 +102,11 @@ class Config:
     # Остальные люди архива (PRAVKA_PEOPLE) и их intervals: (профиль, athlete id, ключ).
     people: tuple[str, ...] = ()
     icu_people: tuple[tuple[str, str, str], ...] = ()
+    # Ночной разбор багов (night.py): Routine Claude Code с «API»-входом —
+    # адрес (или trig_…), её токен и время по Москве. Пусто — проверка спит.
+    night_routine: str = ""
+    night_token: str = ""
+    night_at: str = "03:57"
 
     def persons(self) -> list[Person]:
         """Хозяин первым, за ним остальные — в порядке PRAVKA_PEOPLE."""
@@ -189,4 +194,7 @@ def load(env_file: str | None = None) -> Config:
         # ICU_ATHLETE_ID_MARIANNA, ICU_API_KEY_MARIANNA.
         people=people,
         icu_people=icu_people,
+        night_routine=get("PRAVKA_NIGHT_ROUTINE"),
+        night_token=get("PRAVKA_NIGHT_TOKEN"),
+        night_at=get("PRAVKA_NIGHT_AT", "03:57"),
     )

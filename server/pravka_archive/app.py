@@ -297,7 +297,9 @@ async def serve(cfg: Config) -> None:
         app, host=cfg.listen_host, port=cfg.listen_port, log_level="info", log_config=None,
         proxy_headers=True, forwarded_allow_ips=cfg.proxies, server_header=False,
     ))
-    jobs = [server.serve(), pull_forever(cfg)]
+    from .night import night_forever
+
+    jobs = [server.serve(), pull_forever(cfg), night_forever(cfg)]
     parent = os.environ.get("PRAVKA_SUPERVISOR_PID", "")
     if parent.isdigit():
         jobs.append(watch_supervisor(int(parent)))
