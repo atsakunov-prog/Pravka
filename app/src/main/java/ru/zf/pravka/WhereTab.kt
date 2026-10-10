@@ -195,7 +195,7 @@ internal fun WhereTab(
         Box(Modifier.fillMaxWidth().weight(1f).clip(shape).bevel(shape)) {
             WhereMap(
                 pins = pins,
-                tiles = if (st.tiles == WhereTiles.OSM.name) WhereTiles.OSM else WhereTiles.CARTO,
+                tiles = WhereTiles.of(st.tiles),
                 fitKey = fitKey,
                 focus = focus,
                 onPinTap = { d -> focusN++; focus = d to focusN },
@@ -209,7 +209,7 @@ internal fun WhereTab(
                 MapKey(Glyphs.Refresh, "обновить точки", busy = asking, enabled = cloud != null, onClick = askNow)
             }
             Text(
-                if (st.tiles == WhereTiles.OSM.name) "© OpenStreetMap" else "© OpenStreetMap · © CARTO",
+                "© OpenStreetMap",
                 fontSize = 9.sp,
                 color = Color.White.copy(alpha = 0.7f),
                 modifier = Modifier
@@ -516,10 +516,11 @@ private fun WhereSettingsSheet(app: PravkaApp, serviceEnabled: Boolean, onOpenCl
         RowRule()
         Text("Карта", style = MaterialTheme.typography.bodyMedium)
         ChipRow {
-            PaperChip("Тёмная CARTO", selected = st.tiles != WhereTiles.OSM.name, onClick = { app.where.setTiles(WhereTiles.CARTO.name) })
-            PaperChip("OpenStreetMap", selected = st.tiles == WhereTiles.OSM.name, onClick = { app.where.setTiles(WhereTiles.OSM.name) })
+            val dark = WhereTiles.of(st.tiles) == WhereTiles.DARK
+            PaperChip("Тёмная", selected = dark, onClick = { app.where.setTiles(WhereTiles.DARK.name) })
+            PaperChip("Светлая", selected = !dark, onClick = { app.where.setTiles(WhereTiles.LIGHT.name) })
         }
-        PaperHint("Не грузятся плитки — переключи: у второй карты другой сервер.")
+        PaperHint("Обе — OpenStreetMap, без ключей; тёмная — наш фильтр поверх.")
     }
 
     if (consent) {

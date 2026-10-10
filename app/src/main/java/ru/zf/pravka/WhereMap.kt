@@ -25,9 +25,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import java.io.File
 import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
@@ -36,12 +34,16 @@ import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Overlay
 import org.osmdroid.views.overlay.Polygon
 
-// Карта «Где мы» — osmdroid на обычном View внутри Compose. Плитки — тёмные
-// CARTO (Dark Matter, данные OpenStreetMap): приложение всегда тёмное, и
-// светлая карта посреди него слепила бы. Запасом — обычный OpenStreetMap,
-// перекрашенный в тёмный (если до CARTO из сети не достучаться). Ключа API не
-// нужно ни тем, ни другим; подпись источника — на самой карте, это условие
-// обоих.
+// Карта «Где мы» — osmdroid на обычном View внутри Compose. Плитки —
+// OpenStreetMap, перекрашенный в тёмный тёплый: приложение всегда тёмное, и
+// светлая карта посреди него слепила бы; светлый оригинал — вторым выбором.
+// Ключа API у OpenStreetMap нет, подписи в Москве — русские; подпись
+// источника — на самой карте, это его условие.
+//
+// Первой стояла CARTO Dark Matter, и в первый же вечер (10.10.2026) вместо
+// карты — «API KEY REQUIRED» на каждой плитке: CARTO закрыла бесплатные
+// плитки ключом. Чужой тёмный сервер может так же закрыться завтра; фильтр над
+// OpenStreetMap — наш и не закроется.
 
 /** Человек на карте: где, насколько точно, насколько свежо и кто он. */
 internal data class WherePin(
@@ -56,23 +58,20 @@ internal data class WherePin(
     val avatar: Bitmap?,
 )
 
-/** Какие плитки: тёмные CARTO или перекрашенный OpenStreetMap. */
-internal enum class WhereTiles { CARTO, OSM }
+/** Какие плитки: OpenStreetMap тёмный (наш фильтр) или светлый как есть. */
+internal enum class WhereTiles {
+    DARK, LIGHT;
 
-private val CARTO_DARK: OnlineTileSourceBase = XYTileSource(
-    "CartoDarkMatter", 0, 20, 512, "@2x.png",
-    arrayOf(
-        "https://a.basemaps.cartocdn.com/dark_all/",
-        "https://b.basemaps.cartocdn.com/dark_all/",
-        "https://c.basemaps.cartocdn.com/dark_all/",
-        "https://d.basemaps.cartocdn.com/dark_all/",
-    ),
-    "© OpenStreetMap · © CARTO",
-)
+    companion object {
+        /** Сохранённый выбор; прежние «CARTO» и «OSM» — тёмная. */
+        fun of(name: String): WhereTiles = if (name == LIGHT.name) LIGHT else DARK
+    }
+}
 
 /**
  * Тёмный OpenStreetMap: инверсия и поворот оттенка на 180° — вода остаётся
- * синеватой, парки зеленоватыми, а фон становится тёмным, как у приложения.
+ * синеватой, парки зеленоватыми, фон тёмный — и чуть тёплый, в тон чернилам
+ * приложения (проверено на плитке Кутузовского: подписи читаются).
  */
 private val OSM_DARK_FILTER = ColorMatrixColorFilter(
     ColorMatrix(
@@ -93,7 +92,7 @@ private val OSM_DARK_FILTER = ColorMatrixColorFilter(
                 )
             )
         )
-        postConcat(ColorMatrix().apply { setScale(0.82f, 0.82f, 0.88f, 1f) })
+        postConcat(ColorMatrix().apply { setScale(0.90f, 0.84f, 0.76f, 1f) })
     }
 )
 
@@ -171,16 +170,8 @@ internal fun WhereMap(
     }
 
     LaunchedEffect(tiles) {
-        when (tiles) {
-            WhereTiles.CARTO -> {
-                map.setTileSource(CARTO_DARK)
-                map.overlayManager.tilesOverlay.setColorFilter(null)
-            }
-            WhereTiles.OSM -> {
-                map.setTileSource(TileSourceFactory.MAPNIK)
-                map.overlayManager.tilesOverlay.setColorFilter(OSM_DARK_FILTER)
-            }
-        }
+        map.setTileSource(TileSourceFactory.MAPNIK)
+        map.overlayManager.tilesOverlay.setColorFilter(if (tiles == WhereTiles.DARK) OSM_DARK_FILTER else null)
         map.invalidate()
     }
 

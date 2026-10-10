@@ -89,8 +89,8 @@ internal class WhereSync(
         val asks: Map<String, Long> = emptyMap(),
         /** Своя последняя просьба. */
         val myAskAt: Long = 0L,
-        /** Плитки карты: CARTO (тёмные) или OSM; выбор этого телефона. */
-        val tiles: String = "CARTO",
+        /** Плитки карты: DARK или LIGHT (`WhereTiles`); выбор этого телефона. */
+        val tiles: String = "DARK",
         /** Версии файлов облака с прошлого списка: имя → версия. */
         val seen: Map<String, String> = emptyMap(),
         /** Последний удачный обмен; 0 — не было. */
@@ -482,7 +482,7 @@ internal class WhereSync(
             avatarAt = o.optLong("avatarAt"),
             avatarSent = o.optLong("avatarSent"),
             myAskAt = o.optLong("myAskAt"),
-            tiles = o.optString("tiles").ifBlank { "CARTO" },
+            tiles = o.optString("tiles").ifBlank { "DARK" },
             syncedAt = o.optLong("syncedAt"),
             others = others,
             asks = asks,
