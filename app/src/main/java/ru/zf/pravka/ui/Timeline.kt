@@ -31,21 +31,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -69,9 +61,9 @@ import ru.zf.pravka.core.DayAssembler
 import ru.zf.pravka.core.Fmt
 
 // Хроника (DESIGN §11.5): строки общей ленты — «Сегодня», разворот и
-// Засечка. Строка — колонка времени 42 (вправо), рельс 18, содержимое и
-// колонка очков 30. Рельс рисуется в каждой строке своим куском (`drawBehind`),
-// поэтому линия выглядит непрерывной. Числа — `mockups/01–03`.
+// Засечка. Строка — труба линии баланса 84, колонка времени 38 (вправо) и
+// зазор 8, содержимое и колонка очков 30. Труба рисуется в каждой строке своим куском
+// (`drawBehind`), поэтому линия и стенки выглядят непрерывными.
 //
 // Высота строки — НЕ меньше макетной, а не ровно она (баги №7, №10,
 // 07.10.2026, владелец: «шрифт красивый в Дне, но регулярно не влезает…
@@ -91,19 +83,26 @@ import ru.zf.pravka.core.Fmt
 // 10.10.2026 снова радуга вместо оттенков янтаря — «пропало понимание, чем я
 // занимаюсь».
 // Рельс прошлого — ЛИНИЯ БАЛАНСА (10.10.2026, владелец: «вести эту линию как
-// можно правее»): по ширине колонки времени и рельса идёт коридор, середина —
-// ноль, вправо — плюс. Каждая запись мягкой S-кривой уводит линию от балла
-// «до» к баллу «после», точка записи — в конце, на балле «после», цвет
-// переливается от прошлой категории к своей. Линия лежит ПОД временем: где
-// цифры, она вырезана (слой offscreen и `BlendMode.Clear`) и продолжается
-// дальше. Отметки (еда, деньги, спорт, дела) точек больше не ставят — линия
-// идёт через их строки прямо, плашки остались. «Сейчас» — пульсирующая точка
-// на конце линии, от неё вправо — черта «сейчас» с временем; ниже — пунктир
-// ровно под точкой, кольца плана и дел стоят в своей колонке. Числа —
+// можно правее»): слева своя труба — две лёгкие серые стенки и пунктир
+// середины, ноль — в середине, вправо — плюс («коридор точно увеличим…
+// серые границы коридора… и середину, чтобы я понимал, где я относительно
+// середины»). Время и дело — справа от трубы, а не над линией: первый вариант
+// клал линию под цифры времени, и владелец: «то, что линия под временем, мне
+// не очень понравилось». Точка записи — у её времени, на балле «до»; дальше
+// мягкая S-кривая уводит линию к баллу «после», цвет переливается от прошлой
+// категории к своей. Отметки (еда, деньги, спорт, дела) точек не ставят —
+// линия идёт через их строки прямо, плашки остались. «Сейчас» — пульсирующая
+// точка на конце линии, от неё вправо — черта «сейчас» с временем; ниже —
+// пунктир ровно под точкой, кольца плана, дел и сна — на нём. Числа —
 // `core/BalanceLine.kt` (граница коридора — медиана крайностей за 28 дней).
 
-private val TIME_W = 42.dp
-private val RAIL_W = 18.dp
+private val TIME_W = 38.dp
+/** Зазор после колонки времени: плашка отметки не прилипает к цифрам. */
+private val TIME_GAP = 8.dp
+/** Труба линии баланса: ширина, где стенки, насколько внутрь от края ходит линия. */
+private val TUBE_W = 84.dp
+private val TUBE_EDGE = 4.dp
+private val TUBE_PAD = 9.dp
 private val PTS_W = 30.dp
 /** Внутренний отступ плашки отметки — на столько же сдвинут текст строк без плашки. */
 private val TEXT_INSET = 10.dp
@@ -166,7 +165,8 @@ private fun DrawScope.rail(r: Rail, x: Float) {
  * цвет сверху (прошлая категория) и свой, вид строки (`BalanceLine.Kind`).
  * [future] — у «сейчас»: ниже есть будущее, пунктир под точкой; [last] —
  * последняя строка хроники: линия кончается на её точке или кольце, а не
- * уходит за край.
+ * уходит за край; [endDot] — последняя запись прошлого дня: точка и в конце,
+ * на балле, которым день закрылся.
  */
 @Immutable
 class BalanceSpec(
@@ -177,12 +177,15 @@ class BalanceSpec(
     val kind: BalanceLine.Kind,
     val future: Boolean = false,
     val last: Boolean = false,
+    val endDot: Boolean = false,
 )
 
 /** Линия баланса по строкам хроники; [corridorOf] — половина коридора по крайнему баллу дня. */
 fun balanceSpecs(items: List<DayAssembler.DayItem>, corridorOf: (Double) -> Double): List<BalanceSpec> {
     val segs = BalanceLine.segments(items)
     val c = corridorOf(BalanceLine.maxAbs(segs))
+    // Прошлый день («сейчас» нет): у последней записи точка и в конце.
+    val closing = if (items.none { it is DayAssembler.DayItem.Now }) items.indexOfLast { it is DayAssembler.DayItem.Entry } else -1
     return segs.mapIndexed { i, s ->
         val color = lineColorAt(items, i)
         // Перелив на изломе: у записи сверху — цвет прошлой записи.
@@ -191,61 +194,85 @@ fun balanceSpecs(items: List<DayAssembler.DayItem>, corridorOf: (Double) -> Doub
             BalanceLine.frac(s.top, c), BalanceLine.frac(s.bottom, c), from, color, s.kind,
             future = s.kind == BalanceLine.Kind.NOW && i < items.lastIndex,
             last = i == items.lastIndex,
+            endDot = i == closing,
         )
     }
 }
 
-/** Ширина коридора — колонка времени и рельс; край — на полточки внутрь. */
-private val CORRIDOR_W = TIME_W + RAIL_W
-private val CORRIDOR_PAD = 6.dp
-/** Точка записи — над нижним краем строки: там колонка времени пуста, цифры её не закрывают. */
-private val DOT_FROM_BOTTOM = 9.dp
+/** Точка записи — на уровне её времени. */
+private val DOT_Y = 9.dp
+private val DOT_R = 4.dp
 private val FUTURE_INK = Ink.Cream.copy(alpha = 0.35f)
+/** Стенки трубы — лёгкие, середина — заметнее стенок, но тише линии. */
+private val TUBE_WALL = Ink.Cream.copy(alpha = 0.13f)
+private val TUBE_ZERO = Ink.Cream.copy(alpha = 0.24f)
 /** Линия баланса — главная на рельсе, чуть толще прежнего рельса в 2 dp. */
 private val LINE_W = 2.5.dp
 
-private fun DrawScope.corridorX(f: Float): Float {
-    val hw = size.width / 2f - CORRIDOR_PAD.toPx()
+private fun DrawScope.tubeX(f: Float): Float {
+    val hw = size.width / 2f - TUBE_PAD.toPx()
     return size.width / 2f + f * hw
 }
 
-/** Линия баланса строки; [cuts] — где лежат цифры времени: там линия вырезана. Точку рисуем после выреза. */
-private fun DrawScope.balanceLine(b: BalanceSpec, cuts: List<Rect>) {
+private fun DrawScope.dashed(color: Color, x: Float, y0: Float, y1: Float) {
+    if (y1 <= y0) return
+    drawLine(color, Offset(x, y0), Offset(x, y1), LINE_W.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx())))
+}
+
+/** Стенки трубы и пунктир нуля посередине. */
+private fun DrawScope.tube() {
+    val e = TUBE_EDGE.toPx()
+    val w = 1.dp.toPx()
+    drawLine(TUBE_WALL, Offset(e, 0f), Offset(e, size.height), w)
+    drawLine(TUBE_WALL, Offset(size.width - e, 0f), Offset(size.width - e, size.height), w)
+    drawLine(
+        TUBE_ZERO, Offset(size.width / 2f, 0f), Offset(size.width / 2f, size.height), w,
+        pathEffect = PathEffect.dashPathEffect(floatArrayOf(2.dp.toPx(), 4.dp.toPx())),
+    )
+}
+
+/** Линия баланса строки в трубе; [rail] — кольцо плана или дела, оно встаёт на пунктир будущего. */
+private fun DrawScope.balanceLine(b: BalanceSpec, rail: Rail) {
     val w = LINE_W.toPx()
-    val x0 = corridorX(b.top)
-    val x1 = corridorX(b.bottom)
-    var dot: Offset? = null
+    val x0 = tubeX(b.top)
+    val x1 = tubeX(b.bottom)
+    val dy = DOT_Y.toPx()
     when (b.kind) {
         BalanceLine.Kind.ENTRY, BalanceLine.Kind.CURRENT -> {
-            val yd = if (b.kind == BalanceLine.Kind.ENTRY) size.height - DOT_FROM_BOTTOM.toPx() else size.height
+            val end = if (b.endDot) size.height - dy else size.height
             val path = Path().apply {
                 moveTo(x0, 0f)
+                lineTo(x0, dy)
                 // Касательные на концах вертикальны: на стыке строк линия не ломается.
-                cubicTo(x0, yd * 0.5f, x1, yd * 0.5f, x1, yd)
-                if (yd < size.height && !b.last) lineTo(x1, size.height)
+                val mid = dy + (end - dy) / 2f
+                cubicTo(x0, mid, x1, mid, x1, end)
             }
             val brush = if (b.from == b.color) SolidColor(b.color)
-            else Brush.verticalGradient(listOf(b.from, b.color), startY = 0f, endY = yd)
+            else Brush.verticalGradient(listOf(b.from, b.color), startY = 0f, endY = dy * 1.6f)
             drawPath(path, brush, style = Stroke(w))
-            if (b.kind == BalanceLine.Kind.ENTRY) dot = Offset(x1, yd)
+            drawCircle(b.color, DOT_R.toPx(), Offset(x0, dy))
+            if (b.endDot) drawCircle(b.color, DOT_R.toPx(), Offset(x1, end))
         }
         BalanceLine.Kind.THROUGH -> drawLine(b.color, Offset(x0, 0f), Offset(x0, size.height), w)
-        // Последняя строка (сон) — пунктир до её кольца, не дальше.
-        BalanceLine.Kind.FUTURE -> drawLine(
-            FUTURE_INK, Offset(x0, 0f), Offset(x0, if (b.last) 9.dp.toPx() else size.height), w,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx())),
-        )
+        BalanceLine.Kind.FUTURE -> {
+            val ring = rail as? Rail.Ring
+            if (ring != null) {
+                // Кольцо плана, дела или сна — на пунктире, ровно под точкой «сейчас».
+                val d = ring.size.toPx()
+                val top = (if (ring.size > 10.dp) 3.dp else 4.dp).toPx()
+                dashed(FUTURE_INK, x0, 0f, top - 2.dp.toPx())
+                if (!b.last) dashed(FUTURE_INK, x0, top + d + 2.dp.toPx(), size.height)
+                drawCircle(ring.color, d / 2 - 1.dp.toPx(), Offset(x0, top + d / 2), style = Stroke(2.dp.toPx()))
+            } else dashed(FUTURE_INK, x0, 0f, if (b.last) dy else size.height)
+        }
         BalanceLine.Kind.NOW -> Unit
     }
-    // Линия — под временем: где цифры, её нет.
-    cuts.forEach { drawRect(Color.Black, it.topLeft, it.size, blendMode = BlendMode.Clear) }
-    dot?.let { drawCircle(b.color, 4.dp.toPx(), it) }
 }
 
 /**
  * Строка хроники: время (одна или две строки), рельс, содержимое и очки.
- * [railTap] — тап по колонке времени и рельсу (60 dp на всю высоту строки):
- * у дела это «сделано» (DESIGN §3.8 «кольцо дела»).
+ * [railTap] — тап по трубе и колонке времени (на всю высоту строки): у дела
+ * это «сделано» (DESIGN §3.8 «кольцо дела»).
  */
 @Composable
 fun TimelineRow(
@@ -266,14 +293,11 @@ fun TimelineRow(
     timeSmall: Boolean = false,
     /** Сдвиг содержимого: у строк без плашки — внутренний отступ плашки, у плашек — 0. */
     inset: Dp = TEXT_INSET,
-    /** Линия баланса в колонке времени и рельса (null — только рельс). */
+    /** Линия баланса в трубе (null — рельс посередине трубы). */
     balance: BalanceSpec? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
     val t = LocalPravkaType.current
-    // Где лежат цифры времени — чтобы вырезать под ними линию баланса.
-    var size1 by remember { mutableStateOf(IntSize.Zero) }
-    var size2 by remember { mutableStateOf(IntSize.Zero) }
     val timeTop = if (timeSmall) 8.dp else 1.dp
     Row(
         modifier
@@ -292,27 +316,17 @@ fun TimelineRow(
         Row(
             Modifier
                 .fillMaxHeight()
-                .then(
-                    if (balance != null) Modifier
-                        .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                        .drawWithContent {
-                            val pad = 3.dp.toPx()
-                            val right = TIME_W.toPx() + 2.dp.toPx()
-                            val y1 = timeTop.toPx()
-                            val cuts = buildList {
-                                if (time != null && size1.width > 0) add(Rect(right - 2.dp.toPx() - size1.width - pad, y1 - 1.dp.toPx(), right, y1 + size1.height + 1.dp.toPx()))
-                                if (time2 != null && size2.width > 0) {
-                                    val y2 = y1 + size1.height
-                                    add(Rect(right - 2.dp.toPx() - size2.width - pad, y2, right, y2 + size2.height + 1.dp.toPx()))
-                                }
-                            }
-                            balanceLine(balance, cuts)
-                            drawContent()
-                        }
-                    else Modifier
-                )
                 .then(if (railTap != null) Modifier.clickable(role = Role.Checkbox, onClickLabel = "сделано", onClick = railTap) else Modifier),
         ) {
+            Box(
+                Modifier
+                    .width(TUBE_W)
+                    .fillMaxHeight()
+                    .drawBehind {
+                        tube()
+                        if (balance != null) balanceLine(balance, rail) else rail(rail, size.width / 2f)
+                    },
+            )
             Column(Modifier.width(TIME_W).padding(top = timeTop), horizontalAlignment = Alignment.End) {
                 if (time != null) {
                     Text(
@@ -322,17 +336,11 @@ fun TimelineRow(
                         maxLines = 1,
                         softWrap = false,
                         textAlign = TextAlign.End,
-                        onTextLayout = { size1 = it.size },
                     )
                 }
-                if (time2 != null) Text(time2, style = t.meta.copy(lineHeight = 15.sp), color = Ink.PlanEnd, maxLines = 1, onTextLayout = { size2 = it.size })
+                if (time2 != null) Text(time2, style = t.meta.copy(lineHeight = 15.sp), color = Ink.PlanEnd, maxLines = 1)
             }
-            Box(
-                Modifier
-                    .width(RAIL_W)
-                    .fillMaxHeight()
-                    .drawBehind { rail(rail, size.width / 2f) },
-            )
+            Spacer(Modifier.width(TIME_GAP))
         }
         Row(Modifier.weight(1f).fillMaxHeight().padding(start = inset), content = content)
         if (points != null) {
@@ -556,60 +564,48 @@ fun PendingRow(source: DayAssembler.Source, text: String, line: Color, onOpen: (
 }
 
 /**
- * Линия «сейчас» (DESIGN §11.5 NowLine): плашка «18:51» и линия до правого
- * края, тающая. С линией баланса ([balance]) — конец линии: точка «сейчас»
- * пульсирует на балле дня (владелец: «немножко пульсирующей»), от неё вправо
- * идёт черта «сейчас», плашка времени — за коридором, а не в колонке времени
- * (там точка); ниже, если есть будущее, — пунктир ровно под точкой.
+ * Линия «сейчас» (DESIGN §11.5 NowLine): конец линии баланса — точка
+ * «сейчас» пульсирует на балле дня (владелец: «немножко пульсирующей»), от неё
+ * вправо через колонку времени с плашкой «18:51» идёт черта, тающая к краю;
+ * ниже, если есть будущее, — пунктир ровно под точкой. Без [balance] — точка
+ * посередине трубы.
  */
 @Composable
 fun NowLine(time: String, modifier: Modifier = Modifier, balance: BalanceSpec? = null) {
     val t = LocalPravkaType.current
-    if (balance != null) {
-        val pulse = rememberInfiniteTransition(label = "now")
-        val p by pulse.animateFloat(
-            0f, 1f,
-            infiniteRepeatable(tween(1400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-            label = "now-pulse",
+    val b = balance ?: BalanceSpec(0f, 0f, Ink.TimePast, Ink.TimePast, BalanceLine.Kind.NOW)
+    val pulse = rememberInfiniteTransition(label = "now")
+    val p by pulse.animateFloat(
+        0f, 1f,
+        infiniteRepeatable(tween(1400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "now-pulse",
+    )
+    val nowLine = Ink.Now.copy(alpha = 0.7f)
+    Row(modifier.fillMaxWidth().height(30.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier
+                .width(TUBE_W)
+                .fillMaxHeight()
+                .drawBehind {
+                    tube()
+                    val x = tubeX(b.top)
+                    val cy = size.height / 2f
+                    if (balance != null) drawLine(b.color, Offset(x, 0f), Offset(x, cy), LINE_W.toPx())
+                    if (b.future) dashed(FUTURE_INK, x, cy, size.height)
+                    drawLine(nowLine, Offset(x, cy), Offset(size.width, cy), 1.5.dp.toPx())
+                    // Ореол дышит в цвете идущей категории, ядро — «сейчас».
+                    drawCircle(b.color.copy(alpha = 0.50f - 0.35f * p), 6.dp.toPx() + 5.dp.toPx() * p, Offset(x, cy))
+                    drawCircle(Ink.Now, 5.dp.toPx(), Offset(x, cy))
+                },
         )
-        Row(modifier.fillMaxWidth().height(30.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier
-                    .width(CORRIDOR_W)
-                    .fillMaxHeight()
-                    .drawBehind {
-                        val x = corridorX(balance.top)
-                        val cy = size.height / 2f
-                        drawLine(balance.color, Offset(x, 0f), Offset(x, cy), LINE_W.toPx())
-                        if (balance.future) drawLine(
-                            FUTURE_INK, Offset(x, cy), Offset(x, size.height), LINE_W.toPx(),
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx())),
-                        )
-                        drawLine(Ink.Now.copy(alpha = 0.7f), Offset(x, cy), Offset(size.width, cy), 1.5.dp.toPx())
-                        // Ореол дышит в цвете идущей категории, ядро — «сейчас».
-                        drawCircle(balance.color.copy(alpha = 0.50f - 0.35f * p), 6.dp.toPx() + 5.dp.toPx() * p, Offset(x, cy))
-                        drawCircle(Ink.Now, 5.dp.toPx(), Offset(x, cy))
-                    },
-            )
-            Box(Modifier.width(6.dp).height(1.5.dp).background(Ink.Now.copy(alpha = 0.7f)))
-            Text(
-                time,
-                style = t.nowBadge,
-                color = Ink.NowInk,
-                maxLines = 1,
-                modifier = Modifier.clip(RoundedCornerShape(9.dp)).background(Ink.Now).padding(horizontal = 6.dp, vertical = 1.dp),
-            )
-            Box(
-                Modifier
-                    .weight(1f)
-                    .height(1.5.dp)
-                    .background(Brush.horizontalGradient(listOf(Ink.Now.copy(alpha = 0.7f), Ink.Now.copy(alpha = 0.08f)))),
-            )
-        }
-        return
-    }
-    Row(modifier.fillMaxWidth().height(28.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.width(TIME_W).wrapContentWidth(Alignment.End, unbounded = true), contentAlignment = Alignment.CenterEnd) {
+        Box(
+            Modifier
+                .width(TIME_W)
+                .fillMaxHeight()
+                .drawBehind { drawLine(nowLine, Offset(0f, size.height / 2f), Offset(size.width, size.height / 2f), 1.5.dp.toPx()) }
+                .wrapContentWidth(Alignment.End, unbounded = true),
+            contentAlignment = Alignment.CenterEnd,
+        ) {
             Text(
                 time,
                 style = t.nowBadge,
@@ -618,12 +614,12 @@ fun NowLine(time: String, modifier: Modifier = Modifier, balance: BalanceSpec? =
                 modifier = Modifier.clip(RoundedCornerShape(9.dp)).background(Ink.Now).padding(horizontal = 6.dp, vertical = 1.dp),
             )
         }
-        Box(Modifier.width(RAIL_W).height(2.dp).background(Ink.Now.copy(alpha = 0.7f)))
+        Box(Modifier.width(TIME_GAP).height(1.5.dp).background(nowLine))
         Box(
             Modifier
                 .weight(1f)
                 .height(1.5.dp)
-                .background(Brush.horizontalGradient(listOf(Ink.Now.copy(alpha = 0.7f), Ink.Now.copy(alpha = 0.08f)))),
+                .background(Brush.horizontalGradient(listOf(nowLine, Ink.Now.copy(alpha = 0.08f)))),
         )
     }
 }
