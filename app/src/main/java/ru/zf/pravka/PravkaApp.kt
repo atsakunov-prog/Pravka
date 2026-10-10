@@ -91,6 +91,13 @@ class PravkaApp : Application() {
         appScope.launch { settings.readyChimeFlow.collect { readyChime = it } }
         appScope.launch { settings.chimeAfterStartFlow.collect { chimeAfterStartMs = it } }
         appScope.launch { settings.chimeAfterSwitchFlow.collect { chimeAfterSwitchMs = it } }
+        // Светофор категорий (10.10.2026): краске по имени нужна цена часа из
+        // справочника Засечки — теги, графики статистики, где записи под рукой нет.
+        appScope.launch {
+            zasechkaStore.categoriesFlow.collect { cats ->
+                ru.zf.pravka.ui.CategoryWorth.byName = cats.associate { it.name.trim().lowercase() to it.value }
+            }
+        }
         // Тейк ушёл с молчащего облака на пакет — сбой связи «в деле», в журнал связи.
         ru.zf.pravka.provider.GoogleSpeechSession.cloudEventSink = { why ->
             netProber.live(ru.zf.pravka.core.NetProbe.Target.GOOGLE, why)

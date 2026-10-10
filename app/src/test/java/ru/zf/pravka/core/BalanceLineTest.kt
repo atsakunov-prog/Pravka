@@ -109,38 +109,34 @@ class BalanceLineTest {
     }
 
     @Test
-    fun `разметка — свои прошлые дни к тому же часу, пустые дни не тянут к нулю`() {
+    fun `мера — свой медианный день к тому же часу, пустые дни не тянут к нулю`() {
         val today = 30 * day
-        // Четыре прошлых дня: к 12:00 набрали 10, 20, 30, 40, к концу — вдвое больше.
+        // Четыре прошлых дня: к 12:00 набрали 8, 20, 28, 40, к концу — вдвое больше.
         val spans = (1..4).flatMap { k ->
             val d = today - k * day
             listOf(BalanceLine.Span(d + 8 * h, d + 12 * h, 10 * k / 4), BalanceLine.Span(d + 14 * h, d + 18 * h, 10 * k / 4))
         } + BalanceLine.Span(today, today + h, 10) // сегодняшняя — не в истории
-        val road = BalanceLine.Road.of(BalanceLine.history(spans, today, dayMs = day), day)!!
-        // 10*k/4 при k = 1..4: 2, 5, 7, 10 за час → к 12:00: 8, 20, 28, 40.
+        val road = BalanceLine.Road.of(BalanceLine.history(spans, today, dayMs = day))!!
         assertEquals(24.0, road.at(12 * h, 0.5), eps)
-        assertEquals(31.0, road.at(12 * h, 0.75), eps)
-        assertEquals(62.0, road.at(20 * h, 0.75), eps)
-        assertEquals(0.0, road.at(6 * h, 0.75), eps)
-        assertEquals(62.0, road.wallMax, eps)
+        assertEquals(48.0, BalanceLine.denom(road, 20 * h, 0.0), eps)
+        // Ночью медианный день около нуля — мера не мельче пола, завтрак за стенку не улетает.
+        assertEquals(BalanceLine.DENOM_FLOOR, BalanceLine.denom(road, 6 * h, 0.0), eps)
+        // Истории нет — одна мера на день, по крайнему баллу.
+        assertEquals(30.0, BalanceLine.denom(null, 12 * h, 30.0), eps)
+        assertEquals(BalanceLine.FLOOR, BalanceLine.denom(null, 12 * h, 0.0), eps)
         assertNull(BalanceLine.Road.of(emptyList()))
     }
 
     @Test
-    fun `масштаб — стенка к концу дня на своей доле, сегодня дальше — по сегодня`() {
-        val road = BalanceLine.Road.of(listOf(BalanceLine.curve(listOf(BalanceLine.Span(0, 4 * h, 9)), 0, day)!!), day)
-        // Стенка 36 → край трубы 36 / 0.72 = 50: за стенкой — обочина до 50.
-        assertEquals(50.0, BalanceLine.scale(12.0, road), 1e-6)
-        assertEquals(70.0, BalanceLine.scale(70.0, road), 1e-6)
-        // Истории нет — по самому дню, и не мельче единицы.
-        assertEquals(3.0, BalanceLine.scale(3.0, null), eps)
-        assertEquals(BalanceLine.FLOOR, BalanceLine.scale(0.0, null), eps)
-    }
-
-    @Test
-    fun `место в трубе — от минус до плюс единицы`() {
-        assertEquals(0f, BalanceLine.frac(0.0, 40.0), 1e-6f)
-        assertEquals(0.5f, BalanceLine.frac(20.0, 40.0), 1e-6f)
-        assertEquals(-1f, BalanceLine.frac(-90.0, 40.0), 1e-6f)
+    fun `место в трубе — медиана ровно на стенке, дальше мягкая обочина`() {
+        val w = BalanceLine.WALL_FRAC.toFloat()
+        assertEquals(0f, BalanceLine.place(0.0, 40.0), 1e-6f)
+        assertEquals(w / 2, BalanceLine.place(20.0, 40.0), 1e-6f)
+        assertEquals(w, BalanceLine.place(40.0, 40.0), 1e-6f)
+        assertEquals(-w, BalanceLine.place(-40.0, 40.0), 1e-6f)
+        // Вдвое лучше медианы — на полпути от стенки к краю, к краю не доходит.
+        assertEquals(w + (1 - w) / 2, BalanceLine.place(80.0, 40.0), 1e-6f)
+        val far = BalanceLine.place(4000.0, 40.0)
+        assert(far < 1f && far > 0.99f)
     }
 }

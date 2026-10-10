@@ -109,10 +109,9 @@ import ru.zf.pravka.trigger.onZasechkaTap
 internal fun categoryHue(name: String): Float = ru.zf.pravka.core.CategoryRainbow.hue(name)
 
 /**
- * Цвет категории — её место на радуге (`ui.categoryFill`). Правка 4.0 красила
- * категории оттенками оранжевого по цене часа, и владелец перестал видеть,
- * чем занят (10.10.2026: «раньше вот этот вот радужный был намного лучше») —
- * радуга вернулась краской, а не только порядком итогов.
+ * Цвет категории — светофор цены её часа (`ui.categoryFill`, 10.10.2026:
+ * «светофор нужно применить везде к категориям»): цена — из справочника
+ * Засечки. Радуга (`CategoryRainbow`) осталась порядком итогов.
  */
 @Composable
 internal fun categoryColor(name: String): Color = ru.zf.pravka.ui.categoryFill(name)
@@ -509,7 +508,7 @@ internal fun ZasechkaTab(
                             b?.let {
                                 ru.zf.pravka.ui.BalanceSpec(
                                     it.bottom, it.bottom, it.color, it.color, ru.zf.pravka.core.BalanceLine.Kind.THROUGH,
-                                    lanes = it.lanes?.let { l -> ru.zf.pravka.ui.Lanes(l.midBottom, l.midBottom, l.wallBottom, l.wallBottom) },
+                                    walls = it.walls,
                                 )
                             },
                         ) {

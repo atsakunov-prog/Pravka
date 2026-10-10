@@ -66,9 +66,9 @@ import kotlin.math.sin
 // до 24»; «как на часах: от 0 до 12 рядом цифры и рисочки»): утро — столбиками
 // внутрь от базового круга, вечер — наружу, длина — цена часа, цифры 1…12 и
 // риски по кромке. Числа — `core/DialGeometry.kt` под тестом, здесь рисунок.
-// Краска — радуга категорий (`categoryFill`, 10.10.2026): сектор, черта
-// строки и полоса итога — цветом своей категории, полоса плашки и легенда —
-// областью радуги группы (`ZGroup`).
+// Краска — светофор цены часа (`categoryFill`, 10.10.2026): сектор и полоса
+// итога — цветом своей категории, полоса плашки и легенда — типичной ценой
+// часа группы (`ZGroup`).
 
 /** Сектор циферблата: запись ленты внутри суток. */
 class DialSector(
@@ -356,13 +356,13 @@ fun TimePlate(
 
 /**
  * Итог по категории (DESIGN §11.6 CategoryRow): название, полоса в цвете
- * категории на радуге (доля от самой длинной), время, доля дня и очки.
+ * светофора цены часа (доля от самой длинной), время, доля дня и очки.
  * Потери — штриховкой.
  */
 @Composable
 fun CategoryRow(name: String, worth: Int, minutes: Int, share: String, points: Int, fraction: Float) {
     val t = LocalPravkaType.current
-    val color = categoryFill(name)
+    val color = categoryFill(name, worth)
     val loss = ZGroup.of(name, worth) == ZGroup.LOSS
     Row(Modifier.fillMaxWidth().height(36.dp), verticalAlignment = Alignment.CenterVertically) {
         FitText(name, style = t.body, color = Ink.Text, modifier = Modifier.weight(1f), minSize = 12f)

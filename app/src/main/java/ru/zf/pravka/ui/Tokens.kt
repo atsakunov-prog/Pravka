@@ -3,7 +3,6 @@ package ru.zf.pravka.ui
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
-import ru.zf.pravka.core.CategoryRainbow
 
 // Цвета Правки 4.0 (07.10.2026, DESIGN §4). Правило одно: цвет — это
 // источник. Внутри режима — только цвет его кнопки на стекле и соседние
@@ -12,7 +11,7 @@ import ru.zf.pravka.core.CategoryRainbow
 // («ждём Claude», «план», «ошибка») меняет силу, а не оттенок — новых цветов
 // для состояний нет. Вторичный текст тёплый, не серый: серое на тёплой ночи
 // читалось грязью (владелец, 20.09: «как будто немного грязные»).
-// Исключение одно — категории ленты: они снова в радуге (10.10.2026, ниже).
+// Исключение одно — категории ленты: они в светофоре цены часа (10.10.2026, ниже).
 
 /** Основа — DESIGN §4.1. */
 object Ink {
@@ -269,49 +268,61 @@ object Modes {
 val LocalMode = staticCompositionLocalOf { Modes.Today }
 
 // ---------------------------------------------------------------------------
-// Засечка: категории — радуга владельца
+// Засечка: категории — светофор цены часа
 // ---------------------------------------------------------------------------
 
-// Правка 4.0 красила категории только оттенками оранжевого по цене часа
-// (DESIGN §4.3). Владелец, 10.10.2026: «у меня полностью пропало понимание,
-// чем я занимаюсь. Вот раньше вот этот вот радужный был намного лучше» —
-// пять соседних янтарей на ленте, круге и полосе не различались. Вернули
-// радугу до 4.0: место категории на спектре — `core/CategoryRainbow.kt`
-// (одна на всё приложение: порядок итогов, донат Отчёта и краска), мягкость
-// та же, что была («чуть-чуть помягче»): насыщенность 0.55, яркость 0.94.
-
-/** Заливка категории по месту на радуге: [hue] 0 (красный) … 292 (фиолетовый). */
-fun rainbowFill(hue: Float): Color = Color.hsv(hue, 0.55f, 0.94f)
-
-/** Подпись категории тем же оттенком, на тон светлее заливки — мелкий текст на тёмном. */
-fun rainbowText(hue: Float): Color = Color.hsv(hue, 0.42f, 0.98f)
-
-/** Цвет категории ленты — её место на радуге; без категории — тёплый вторичный. */
-fun categoryFill(category: String): Color =
-    if (category.isBlank()) Ink.TextMeta else rainbowFill(CategoryRainbow.hue(category))
-
-/** Подпись категории (тег, вторая строка записи) в её радужном оттенке. */
-fun categoryText(category: String): Color =
-    if (category.isBlank()) Ink.TextMeta else rainbowText(CategoryRainbow.hue(category))
+// История краски категорий за один день, 10.10.2026. Правка 4.0 красила их
+// пятью оттенками оранжевого по цене часа — «у меня полностью пропало
+// понимание, чем я занимаюсь»; утром вернули радугу до 4.0 (место категории
+// на спектре, `core/CategoryRainbow.kt`). К вечеру, увидев радугу на дороге
+// жизни: «вырви глаз… может, светофор с градацией?» — и сразу: «светофор
+// нужно применить везде к категориям, а не только в линии». Теперь категория
+// красится ценой своего часа: красный — потери, жёлтый — обычные дела,
+// зелёный — работа и спорт, мягко. `CategoryRainbow` остался порядком итогов.
 
 /**
- * Светофор цены часа — краска дороги жизни в хронике (владелец, 10.10.2026:
- * «можно ли как-то сделать гамму помягче… вырви глаз. Может, светофор с
- * градацией? Красный совсем плохо, жёлтый — обычные дела, зелёный — всякая
- * работа»). Оттенок плавно идёт по цене часа: потери (−5) — мягкий красный,
- * отдых и дорога — янтарь, еда, быт, сон — песочно-жёлтый, семья —
- * жёлто-зелёный, спорт и работа — зелёный. Приглушённо (насыщенность 0.42):
- * линия — фон для текста, а не неон. Категории на круге, в тегах и итогах
- * остаются радугой: там важно «что», здесь — «насколько хорошо».
+ * Цена часа категорий по имени — для краски там, где под рукой только имя
+ * (теги, графики статистики). Держит `PravkaApp` из справочника Засечки
+ * (`categoriesFlow`); пока справочник не пришёл — угадка по группе.
  */
-fun worthTint(worth: Int): Color {
+object CategoryWorth {
+    @Volatile var byName: Map<String, Int> = emptyMap()
+
+    fun of(name: String): Int? = byName[name.trim().lowercase()]
+}
+
+/** Цена часа категории: своя ([worth]), из справочника или типичная для её группы. */
+fun categoryWorth(category: String, worth: Int? = null): Int =
+    worth ?: CategoryWorth.of(category) ?: ZGroup.of(category).typical
+
+/** Цвет категории — светофор цены её часа; без категории — тёплый вторичный. */
+fun categoryFill(category: String, worth: Int? = null): Color =
+    if (category.isBlank()) Ink.TextMeta else worthTint(categoryWorth(category, worth))
+
+/** Подпись категории (тег, вторая строка записи) — тот же оттенок, светлее: мелкий текст на тёмном. */
+fun categoryText(category: String, worth: Int? = null): Color =
+    if (category.isBlank()) Ink.TextMeta else worthText(categoryWorth(category, worth))
+
+/**
+ * Светофор цены часа (владелец, 10.10.2026: «можно ли как-то сделать гамму
+ * помягче… вырви глаз. Может, светофор с градацией? Красный совсем плохо,
+ * жёлтый — обычные дела, зелёный — всякая работа»). Оттенок плавно идёт по
+ * цене часа: потери (−5) — мягкий красный, отдых и дорога — янтарь, еда,
+ * быт, сон — песочно-жёлтый, семья — жёлто-зелёный, спорт и работа —
+ * зелёный. Приглушённо (насыщенность 0.42): не неон.
+ */
+fun worthTint(worth: Int): Color = Color.hsv(worthHue(worth), 0.42f, 0.88f)
+
+/** Подпись тем же оттенком светофора — светлее и мягче заливки. */
+fun worthText(worth: Int): Color = Color.hsv(worthHue(worth), 0.32f, 0.97f)
+
+private fun worthHue(worth: Int): Float {
     val stops = WORTH_HUES
     val w = worth.toFloat().coerceIn(stops.first().first, stops.last().first)
     val i = stops.indexOfLast { it.first <= w }.coerceAtMost(stops.size - 2)
     val (w0, h0) = stops[i]
     val (w1, h1) = stops[i + 1]
-    val hue = h0 + (h1 - h0) * ((w - w0) / (w1 - w0)).coerceIn(0f, 1f)
-    return Color.hsv(hue, 0.42f, 0.88f)
+    return h0 + (h1 - h0) * ((w - w0) / (w1 - w0)).coerceIn(0f, 1f)
 }
 
 /** Опоры светофора: цена часа → оттенок. */
@@ -319,21 +330,22 @@ private val WORTH_HUES = listOf(-5f to 4f, -2f to 24f, 0f to 40f, 2f to 50f, 5f 
 
 /**
  * Группа категории ленты — для полосы и легенды плашки времени. Цвет группы —
- * её область радуги, ровно оттенок главной категории группы: работа красная
- * («Работа: текущая»), спорт жёлтый («Спорт: бег»), семья салатовая,
- * быт синий, сон мятный, потери фиолетовые и со штриховкой. «Впереди» —
- * не категория, а остаток дня: места на радуге у него нет, он кремовой
- * штриховкой.
+ * светофор типичной цены её часа ([typical]): работа и спорт — зелёные, семья
+ * — жёлто-зелёная, быт и сон — песочные, потери — красные и со штриховкой.
+ * «Впереди» — не категория, а остаток дня: кремовой штриховкой.
  */
-enum class ZGroup(val fill: Color, val text: Color, val label: String) {
-    WORK(rainbowFill(8f), rainbowText(8f), "работа"),
-    SPORT(rainbowFill(56f), rainbowText(56f), "спорт"),
-    FAMILY(rainbowFill(88f), rainbowText(88f), "семья"),
-    LIFE(rainbowFill(235f), rainbowText(235f), "быт"),
-    SLEEP(rainbowFill(155f), rainbowText(155f), "сон"),
-    LOSS(rainbowFill(292f), rainbowText(292f), "потери"),
-    AHEAD(Ink.Cream, Color(0xFFE8D3B8), "впереди"),
+enum class ZGroup(val typical: Int, val label: String) {
+    WORK(10, "работа"),
+    SPORT(8, "спорт"),
+    FAMILY(6, "семья"),
+    LIFE(1, "быт"),
+    SLEEP(0, "сон"),
+    LOSS(-5, "потери"),
+    AHEAD(0, "впереди"),
     ;
+
+    val fill: Color get() = if (this == AHEAD) Ink.Cream else worthTint(typical)
+    val text: Color get() = if (this == AHEAD) Color(0xFFE8D3B8) else worthText(typical)
 
     /** Штриховка — у потерь и у «впереди» (DESIGN §4.3). */
     val hatched: Boolean get() = this == LOSS || this == AHEAD

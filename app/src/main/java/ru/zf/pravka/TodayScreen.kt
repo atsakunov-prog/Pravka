@@ -737,7 +737,7 @@ private fun EntrySheet4(
                 " · запись ленты, ${Fmt.dayList(model.day)}",
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (e.category.isNotBlank()) TagChip(e.category, ru.zf.pravka.ui.categoryText(e.category), ru.zf.pravka.ui.categoryFill(e.category).copy(alpha = 0.16f))
+                if (e.category.isNotBlank()) TagChip(e.category, ru.zf.pravka.ui.categoryText(e.category, item?.worth), ru.zf.pravka.ui.categoryFill(e.category, item?.worth).copy(alpha = 0.16f))
                 if (e.client.isNotBlank()) TagChip(e.client, Ink.PlanText, androidx.compose.ui.graphics.Color.Transparent, border = Modes.Zasechka.tint.copy(alpha = 0.30f))
                 if (e.useful > 0) TagChip("★${e.useful}", ru.zf.pravka.ui.PointsPlus, androidx.compose.ui.graphics.Color.Transparent, border = Modes.Zasechka.tint.copy(alpha = 0.30f))
                 val p = item?.points

@@ -85,17 +85,18 @@ import ru.zf.pravka.core.Fmt
 // Рельс прошлого — ЛИНИЯ БАЛАНСА, «дорога жизни» (10.10.2026, владелец:
 // «вести эту линию как можно правее»): слева своя труба, время и дело —
 // справа от неё (линия под цифрами времени владельцу не понравилась).
-// Посередине — сплошная, ноль. Разметка — свои 28 дней к тому же часу:
-// пунктир полосы — медиана («лучше 50% своих дней»), стенка — 75% («край
-// туннеля»); утром дорога узкая, к вечеру расходится. За стенкой — обочина,
-// туда можно выехать. Точка записи — у её времени, на балле «до»; дальше
-// мягкая S-кривая уводит линию к баллу «после». Краска линии — мягкий
-// светофор цены часа (`worthTint`: красный — потери, жёлтый — обычное,
-// зелёный — работа и спорт), на изломе — перелив от прошлой записи к своей.
-// Отметки (еда, деньги, спорт, дела) точек не ставят — линия идёт через их
-// строки прямо, плашки остались. «Сейчас» — пульсирующая точка на конце
-// линии, от неё вправо — черта «сейчас» с временем; ниже — пунктир ровно под
-// точкой, кольца плана, дел и сна — на нём. Числа — `core/BalanceLine.kt`.
+// Посередине — сплошная, ноль; по краям — стенки дороги, свой медианный день
+// к этому часу плюсом и минусом. Стенки стоят на месте, а масштаб едет со
+// временем: линия — балл, поделённый на медиану к этому часу («медианный
+// день… занимал бы 100% туннеля… дорога расширяется, и масштаб уменьшается»),
+// поэтому утром дорога не волосок. За стенкой — мягкая обочина. Точка записи
+// — у её времени, на балле «до»; дальше мягкая S-кривая к баллу «после»; и
+// через отметки линия плывёт: балл стоит, а медиана растёт. Краска —
+// светофор цены часа (`categoryFill`/`worthTint`), на изломе — перелив.
+// Отметки (еда, деньги, спорт, дела) точек не ставят — плашки остались.
+// «Сейчас» — пульсирующая точка на конце линии, от неё вправо — черта с
+// временем; ниже — пунктир ровно под точкой, кольца плана, дел и сна — на нём.
+// Числа — `core/BalanceLine.kt`.
 
 private val TIME_W = 38.dp
 /** Зазор после колонки времени: плашка отметки не прилипает к цифрам. */
@@ -166,7 +167,8 @@ private fun DrawScope.rail(r: Rail, x: Float) {
  * [future] — у «сейчас»: ниже есть будущее, пунктир под точкой; [last] —
  * последняя строка хроники: линия кончается на её точке или кольце, а не
  * уходит за край; [endDot] — последняя запись прошлого дня: точка и в конце,
- * на балле, которым день закрылся; [lanes] — разметка дороги в этой строке.
+ * на балле, которым день закрылся; [walls] — у дороги есть стенки (есть
+ * своя история — медианный день к этому часу).
  */
 @Immutable
 class BalanceSpec(
@@ -178,51 +180,34 @@ class BalanceSpec(
     val future: Boolean = false,
     val last: Boolean = false,
     val endDot: Boolean = false,
-    val lanes: Lanes? = null,
+    val walls: Boolean = false,
 )
 
 /**
- * Разметка дороги в строке, доли трубы (0…1) сверху и снизу: [mid] — медиана
- * своих дней к этому часу (пунктир полосы), [wall] — 75 % (стенка).
- */
-@Immutable
-class Lanes(val midTop: Float, val midBottom: Float, val wallTop: Float, val wallBottom: Float)
-
-/** Краска дороги у строки [i] — светофор цены часа записи, к которой строка прикреплена. */
-fun roadTintAt(items: List<DayAssembler.DayItem>, i: Int): Color {
-    for (k in i downTo 0) {
-        val e = items[k] as? DayAssembler.DayItem.Entry ?: continue
-        return worthTint(e.worth)
-    }
-    return Ink.TimePast
-}
-
-/**
- * Линия баланса по строкам хроники. [dayStart] — начало суток (разметка
- * считается к тому же часу), [road] — свои прошлые дни; null — истории нет,
- * разметки тоже, масштаб — по самому дню.
+ * Линия баланса по строкам хроники. [dayStart] — начало суток (мера —
+ * медианный день к тому же часу), [road] — свои прошлые дни; null — истории
+ * нет: стенок нет, масштаб на день один, по крайнему баллу дня.
  */
 fun balanceSpecs(items: List<DayAssembler.DayItem>, dayStart: Long, road: BalanceLine.Road?): List<BalanceSpec> {
     val segs = BalanceLine.segments(items)
-    val scale = BalanceLine.scale(BalanceLine.maxAbs(segs), road)
+    val fallback = BalanceLine.maxAbs(segs)
+    fun x(bal: Double, t: Long): Float = BalanceLine.place(bal, BalanceLine.denom(road, t - dayStart, fallback))
+    // Будущее — ровно под точкой «сейчас»: балл там ещё не копится.
+    val now = segs.firstOrNull { it.kind == BalanceLine.Kind.NOW }
+    val nowX = now?.let { x(it.top, it.tTop) } ?: 0f
     // Прошлый день («сейчас» нет): у последней записи точка и в конце.
-    val closing = if (items.none { it is DayAssembler.DayItem.Now }) items.indexOfLast { it is DayAssembler.DayItem.Entry } else -1
-    fun lane(t: Long, q: Double): Float = road?.let { kotlin.math.abs(BalanceLine.frac(it.at(t - dayStart, q), scale)) } ?: 0f
+    val closing = if (now == null) items.indexOfLast { it is DayAssembler.DayItem.Entry } else -1
     return segs.mapIndexed { i, s ->
-        val color = roadTintAt(items, i)
+        val color = lineColorAt(items, i)
         // Перелив на изломе: у записи сверху — цвет прошлой записи.
-        val from = if (items[i] is DayAssembler.DayItem.Entry && i > 0 && items.subList(0, i).any { it is DayAssembler.DayItem.Entry }) roadTintAt(items, i - 1) else color
+        val from = if (items[i] is DayAssembler.DayItem.Entry && i > 0 && items.subList(0, i).any { it is DayAssembler.DayItem.Entry }) lineColorAt(items, i - 1) else color
+        val still = s.kind == BalanceLine.Kind.NOW || s.kind == BalanceLine.Kind.FUTURE
         BalanceSpec(
-            BalanceLine.frac(s.top, scale), BalanceLine.frac(s.bottom, scale), from, color, s.kind,
+            if (still) nowX else x(s.top, s.tTop), if (still) nowX else x(s.bottom, s.tBottom), from, color, s.kind,
             future = s.kind == BalanceLine.Kind.NOW && i < items.lastIndex,
             last = i == items.lastIndex,
             endDot = i == closing,
-            lanes = road?.let {
-                Lanes(
-                    lane(s.tTop, BalanceLine.MID_Q), lane(s.tBottom, BalanceLine.MID_Q),
-                    lane(s.tTop, BalanceLine.WALL_Q), lane(s.tBottom, BalanceLine.WALL_Q),
-                )
-            },
+            walls = road != null,
         )
     }
 }
@@ -231,10 +216,9 @@ fun balanceSpecs(items: List<DayAssembler.DayItem>, dayStart: Long, road: Balanc
 private val DOT_Y = 9.dp
 private val DOT_R = 4.dp
 private val FUTURE_INK = Ink.Cream.copy(alpha = 0.35f)
-/** Разметка дороги — лёгкая: сплошная посередине заметнее стенок, пунктир полосы — тише всех. */
+/** Разметка дороги — лёгкая: сплошная посередине чуть заметнее стенок. */
 private val TUBE_ZERO = Ink.Cream.copy(alpha = 0.24f)
 private val TUBE_WALL = Ink.Cream.copy(alpha = 0.18f)
-private val TUBE_LANE = Ink.Cream.copy(alpha = 0.16f)
 /** Линия баланса — главная на рельсе, чуть толще прежнего рельса в 2 dp. */
 private val LINE_W = 2.5.dp
 
@@ -255,18 +239,17 @@ private fun DrawScope.sPath(x0: Float, x1: Float): Path = Path().apply {
 }
 
 /**
- * Дорога: сплошная посередине (ноль), по обе стороны — пунктир полосы
- * (медиана своих дней к этому часу) и стенка (75 %); стенки и полосы
- * тянутся S-кривыми, как и линия, — дорога расширяется по ходу дня.
+ * Дорога: сплошная посередине (ноль) и, если есть своя история, две стенки —
+ * медианный день к этому часу плюсом и минусом. Стенки неподвижны: масштаб
+ * едет вместе с медианой.
  */
-private fun DrawScope.tube(l: Lanes?) {
+private fun DrawScope.tube(walls: Boolean) {
     val w = 1.dp.toPx()
     drawLine(TUBE_ZERO, Offset(size.width / 2f, 0f), Offset(size.width / 2f, size.height), w)
-    if (l == null) return
-    val lane = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 5.dp.toPx()))
+    if (!walls) return
     for (side in intArrayOf(1, -1)) {
-        drawPath(sPath(tubeX(side * l.midTop), tubeX(side * l.midBottom)), TUBE_LANE, style = Stroke(w, pathEffect = lane))
-        drawPath(sPath(tubeX(side * l.wallTop), tubeX(side * l.wallBottom)), TUBE_WALL, style = Stroke(w))
+        val x = tubeX(side * BalanceLine.WALL_FRAC.toFloat())
+        drawLine(TUBE_WALL, Offset(x, 0f), Offset(x, size.height), w)
     }
 }
 
@@ -292,7 +275,8 @@ private fun DrawScope.balanceLine(b: BalanceSpec, rail: Rail) {
             drawCircle(b.color, DOT_R.toPx(), Offset(x0, dy))
             if (b.endDot) drawCircle(b.color, DOT_R.toPx(), Offset(x1, end))
         }
-        BalanceLine.Kind.THROUGH -> drawLine(b.color, Offset(x0, 0f), Offset(x0, size.height), w)
+        // Балл стоит, а медиана к часу растёт — линия и здесь плывёт.
+        BalanceLine.Kind.THROUGH -> drawPath(sPath(x0, x1), b.color, style = Stroke(w))
         BalanceLine.Kind.FUTURE -> {
             val ring = rail as? Rail.Ring
             if (ring != null) {
@@ -362,7 +346,7 @@ fun TimelineRow(
                     .width(TUBE_W)
                     .fillMaxHeight()
                     .drawBehind {
-                        tube(balance?.lanes)
+                        tube(balance?.walls == true)
                         if (balance != null) balanceLine(balance, rail) else rail(rail, size.width / 2f)
                     },
             )
@@ -410,7 +394,7 @@ fun EntryRow(
     balance: BalanceSpec? = null,
 ) {
     val t = LocalPravkaType.current
-    val color = categoryFill(e.category)
+    val color = categoryFill(e.category, e.worth)
     val withNote = e.comment.isNotBlank()
     TimelineRow(
         height = if (withNote) 60.dp else 44.dp,
@@ -456,7 +440,7 @@ fun CurrentRow(
     balance: BalanceSpec? = null,
 ) {
     val t = LocalPravkaType.current
-    val color = categoryFill(e.category)
+    val color = categoryFill(e.category, e.worth)
     TimelineRow(
         height = 42.dp,
         // Ореол «сейчас» — в цвете самой категории: видно, чем занят, ещё до текста.
@@ -473,7 +457,7 @@ fun CurrentRow(
             Text(e.title, style = t.bodyStrong, color = Ink.Text, modifier = Modifier.weight(1f, fill = false))
             if (e.category.isNotBlank() && !e.gap) {
                 Spacer(Modifier.width(8.dp))
-                TagChip(e.category.substringBefore(':').trim(), categoryText(e.category), color.copy(alpha = 0.30f))
+                TagChip(e.category.substringBefore(':').trim(), categoryText(e.category, e.worth), color.copy(alpha = 0.30f))
             }
             Spacer(Modifier.width(6.dp))
             Text(
@@ -626,7 +610,7 @@ fun NowLine(time: String, modifier: Modifier = Modifier, balance: BalanceSpec? =
                 .width(TUBE_W)
                 .fillMaxHeight()
                 .drawBehind {
-                    tube(b.lanes)
+                    tube(b.walls)
                     val x = tubeX(b.top)
                     val cy = size.height / 2f
                     if (balance != null) drawLine(b.color, Offset(x, 0f), Offset(x, cy), LINE_W.toPx())
@@ -840,11 +824,11 @@ fun HoleRow(minutes: Int, balance: BalanceSpec?, onClick: () -> Unit) {
     }
 }
 
-/** Цвет рельса отметки — цвет записи, к которой она прикреплена. */
+/** Цвет рельса отметки — светофор записи, к которой она прикреплена. */
 fun lineColorAt(items: List<DayAssembler.DayItem>, i: Int): Color {
     for (k in i downTo 0) {
         val e = items[k] as? DayAssembler.DayItem.Entry ?: continue
-        return categoryFill(e.category)
+        return categoryFill(e.category, e.worth)
     }
     return Ink.TimePast
 }

@@ -40,7 +40,7 @@ internal class DayFacts(
     /** Итоги по категориям внутри дня: имя, цена часа, минуты, очки. */
     val categories: List<CatRow>,
     val emptyCategories: Int,
-    /** Разметка дороги жизни — свои 28 прошлых дней к тому же часу (`core/BalanceLine.kt`); null — истории нет. */
+    /** Мера дороги жизни — свой медианный день к тому же часу за 28 прошлых дней (`core/BalanceLine.kt`); null — истории нет. */
     val road: BalanceLine.Road? = null,
 ) {
     class CatRow(val name: String, val worth: Int, val minutes: Int, val points: Int)
@@ -133,8 +133,8 @@ internal class DayFacts(
                         fromMin = (s - dayStart) / 60_000f,
                         toMin = (en - dayStart) / 60_000f,
                         worth = w,
-                        // Сектор — цветом своей категории на радуге (10.10.2026).
-                        color = categoryFill(e.category),
+                        // Сектор — светофором цены часа своей категории (10.10.2026).
+                        color = categoryFill(e.category, w),
                         current = e.open && today,
                         hatched = ZGroup.of(e.category, w) == ZGroup.LOSS,
                     )
@@ -147,7 +147,7 @@ internal class DayFacts(
             val empty = categories.count { it.name.trim().lowercase() !in used && !it.name.equals("Не размечено", true) }
             // Разметка дороги жизни — свои 28 прошлых дней к тому же часу.
             val spans = pool.map { BalanceLine.Span(it.start, if (it.open) now else it.end, worthOf(it.category)) }
-            val road = BalanceLine.Road.of(BalanceLine.history(spans, dayStart, dayMs = DAY), DAY)
+            val road = BalanceLine.Road.of(BalanceLine.history(spans, dayStart, dayMs = DAY))
             return DayFacts(
                 dayStart, now, score, weekAgo, day.minusDays(7), rank, wake, nightMs, bedtime, state,
                 groups, aheadMin, sectors, cats, empty, road,
