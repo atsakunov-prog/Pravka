@@ -7,6 +7,7 @@ import ru.zf.pravka.ui.BarPart
 import ru.zf.pravka.ui.DialSector
 import ru.zf.pravka.ui.TimePlateState
 import ru.zf.pravka.ui.ZGroup
+import ru.zf.pravka.ui.categoryFill
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -55,9 +56,9 @@ internal class DayFacts(
         if (state == TimePlateState.CLOSED) append(" · день закрыт")
     }
 
+    /** Полоса — по радуге: работа, спорт, семья, быт, потери, потом «впереди»; порядок легенды тот же. */
     val barParts: List<BarPart> get() = buildList {
-        add(BarPart((groups[ZGroup.LOSS] ?: 0).toFloat(), ZGroup.LOSS))
-        for (g in listOf(ZGroup.WORK, ZGroup.SPORT, ZGroup.FAMILY, ZGroup.LIFE)) add(BarPart((groups[g] ?: 0).toFloat(), g))
+        for (g in listOf(ZGroup.WORK, ZGroup.SPORT, ZGroup.FAMILY, ZGroup.LIFE, ZGroup.LOSS)) add(BarPart((groups[g] ?: 0).toFloat(), g))
         if (aheadMin > 0) add(BarPart(aheadMin.toFloat(), ZGroup.AHEAD))
     }
 
@@ -124,15 +125,15 @@ internal class DayFacts(
                     val en = if (e.open) dayEnd else minOf(e.end, dayStart + DAY)
                     if (en <= s) return@mapNotNull null
                     val w = worthOf(e.category)
-                    val g = ZGroup.of(e.category, w)
                     DialSector(
                         id = e.id,
                         fromMin = (s - dayStart) / 60_000f,
                         toMin = (en - dayStart) / 60_000f,
                         worth = w,
-                        color = g.fill,
+                        // Сектор — цветом своей категории на радуге (10.10.2026).
+                        color = categoryFill(e.category),
                         current = e.open && today,
-                        hatched = g == ZGroup.LOSS,
+                        hatched = ZGroup.of(e.category, w) == ZGroup.LOSS,
                     )
                 }
             // Итоги — по категориям внутри дня (сон — только его часть внутри суток).

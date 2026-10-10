@@ -3,6 +3,7 @@ package ru.zf.pravka.ui
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import ru.zf.pravka.core.CategoryRainbow
 
 // Цвета Правки 4.0 (07.10.2026, DESIGN §4). Правило одно: цвет — это
 // источник. Внутри режима — только цвет его кнопки на стекле и соседние
@@ -11,6 +12,7 @@ import androidx.compose.ui.graphics.Color
 // («ждём Claude», «план», «ошибка») меняет силу, а не оттенок — новых цветов
 // для состояний нет. Вторичный текст тёплый, не серый: серое на тёплой ночи
 // читалось грязью (владелец, 20.09: «как будто немного грязные»).
+// Исключение одно — категории ленты: они снова в радуге (10.10.2026, ниже).
 
 /** Основа — DESIGN §4.1. */
 object Ink {
@@ -267,21 +269,46 @@ object Modes {
 val LocalMode = staticCompositionLocalOf { Modes.Today }
 
 // ---------------------------------------------------------------------------
-// Засечка: категории по цене часа — DESIGN §4.3
+// Засечка: категории — радуга владельца
 // ---------------------------------------------------------------------------
 
+// Правка 4.0 красила категории только оттенками оранжевого по цене часа
+// (DESIGN §4.3). Владелец, 10.10.2026: «у меня полностью пропало понимание,
+// чем я занимаюсь. Вот раньше вот этот вот радужный был намного лучше» —
+// пять соседних янтарей на ленте, круге и полосе не различались. Вернули
+// радугу до 4.0: место категории на спектре — `core/CategoryRainbow.kt`
+// (одна на всё приложение: порядок итогов, донат Отчёта и краска), мягкость
+// та же, что была («чуть-чуть помягче»): насыщенность 0.55, яркость 0.94.
+
+/** Заливка категории по месту на радуге: [hue] 0 (красный) … 292 (фиолетовый). */
+fun rainbowFill(hue: Float): Color = Color.hsv(hue, 0.55f, 0.94f)
+
+/** Подпись категории тем же оттенком, на тон светлее заливки — мелкий текст на тёмном. */
+fun rainbowText(hue: Float): Color = Color.hsv(hue, 0.42f, 0.98f)
+
+/** Цвет категории ленты — её место на радуге; без категории — тёплый вторичный. */
+fun categoryFill(category: String): Color =
+    if (category.isBlank()) Ink.TextMeta else rainbowFill(CategoryRainbow.hue(category))
+
+/** Подпись категории (тег, вторая строка записи) в её радужном оттенке. */
+fun categoryText(category: String): Color =
+    if (category.isBlank()) Ink.TextMeta else rainbowText(CategoryRainbow.hue(category))
+
 /**
- * Группа категории ленты. Только оттенки оранжевого: светлее — дороже час.
- * Потери — краснее (#E0531A, соседний оттенок оранжевого) и со штриховкой.
+ * Группа категории ленты — для полосы и легенды плашки времени. Цвет группы —
+ * её область радуги, ровно оттенок главной категории группы: работа красная
+ * («Работа: текущая»), спорт оранжевый («Спорт: бег»), семья зелёная,
+ * быт синий, сон бирюзовый, потери фиолетовые и со штриховкой. «Впереди» —
+ * не категория, а остаток дня: кремовой штриховкой, чтобы не читаться спортом.
  */
 enum class ZGroup(val fill: Color, val text: Color, val label: String) {
-    WORK(Color(0xFFFFC261), Color(0xFFFFC977), "работа"),
-    SPORT(Color(0xFFF9A23A), Color(0xFFFBA54E), "спорт"),
-    FAMILY(Color(0xFFF78810), Color(0xFFFBA54E), "семья"),
-    LIFE(Color(0xFFA9611F), Color(0xFFD9A06A), "быт"),
-    SLEEP(Color(0xFF6B4426), Color(0xFFC79F7B), "сон"),
-    LOSS(Color(0xFFE0531A), Color(0xFFF27A45), "потери"),
-    AHEAD(Color(0xFFF78810), Color(0xFFE8D3B8), "впереди"),
+    WORK(rainbowFill(8f), rainbowText(8f), "работа"),
+    SPORT(rainbowFill(56f), rainbowText(56f), "спорт"),
+    FAMILY(rainbowFill(88f), rainbowText(88f), "семья"),
+    LIFE(rainbowFill(235f), rainbowText(235f), "быт"),
+    SLEEP(rainbowFill(155f), rainbowText(155f), "сон"),
+    LOSS(rainbowFill(292f), rainbowText(292f), "потери"),
+    AHEAD(Ink.Cream, Color(0xFFE8D3B8), "впереди"),
     ;
 
     /** Штриховка — у потерь и у «впереди» (DESIGN §4.3). */
@@ -310,7 +337,7 @@ enum class ZGroup(val fill: Color, val text: Color, val label: String) {
                 c.startsWith("еда") || c.startsWith("передвиж") || c.startsWith("систематиз") ||
                     c.startsWith("быт") || c.startsWith("отдых") -> LIFE
                 // Остальные (свои категории, «Чтение», «Звонки», «Учёба») — по цене
-                // часа: светлее — дороже, как и вся шкала.
+                // часа, как и вся шкала.
                 value < 0 -> LOSS
                 value >= 7 -> WORK
                 value >= 5 -> FAMILY

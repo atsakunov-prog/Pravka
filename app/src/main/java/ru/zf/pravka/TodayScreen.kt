@@ -107,7 +107,6 @@ import ru.zf.pravka.ui.fadingScroll
 import androidx.compose.ui.unit.sp
 import ru.zf.pravka.ui.WeatherCell
 import ru.zf.pravka.ui.WeatherRow
-import ru.zf.pravka.ui.ZGroup
 import ru.zf.pravka.ui.AvatarKey
 import ru.zf.pravka.ui.scrollFade
 import ru.zf.pravka.ui.bottomFade
@@ -732,8 +731,7 @@ private fun EntrySheet4(
                 " · запись ленты, ${Fmt.dayList(model.day)}",
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                val g = ZGroup.of(e.category, item?.worth ?: 0)
-                if (e.category.isNotBlank()) TagChip(e.category, g.text, g.fill.copy(alpha = 0.16f))
+                if (e.category.isNotBlank()) TagChip(e.category, ru.zf.pravka.ui.categoryText(e.category), ru.zf.pravka.ui.categoryFill(e.category).copy(alpha = 0.16f))
                 if (e.client.isNotBlank()) TagChip(e.client, Ink.PlanText, androidx.compose.ui.graphics.Color.Transparent, border = Modes.Zasechka.tint.copy(alpha = 0.30f))
                 if (e.useful > 0) TagChip("★${e.useful}", ru.zf.pravka.ui.PointsPlus, androidx.compose.ui.graphics.Color.Transparent, border = Modes.Zasechka.tint.copy(alpha = 0.30f))
                 val p = item?.points

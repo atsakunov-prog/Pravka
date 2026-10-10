@@ -109,16 +109,13 @@ import ru.zf.pravka.trigger.onZasechkaTap
 internal fun categoryHue(name: String): Float = ru.zf.pravka.core.CategoryRainbow.hue(name)
 
 /**
- * Цвет категории — Правка 4.0 (DESIGN §4.3): только оттенки оранжевого по
- * цене часа (группа `ZGroup`): светлее — дороже час, потери краснее. Радуга
- * категорий (`CategoryRainbow`) осталась порядком итогов, но не краской:
- * внутри Засечки чужих цветов нет.
+ * Цвет категории — её место на радуге (`ui.categoryFill`). Правка 4.0 красила
+ * категории оттенками оранжевого по цене часа, и владелец перестал видеть,
+ * чем занят (10.10.2026: «раньше вот этот вот радужный был намного лучше») —
+ * радуга вернулась краской, а не только порядком итогов.
  */
 @Composable
-internal fun categoryColor(name: String): Color {
-    if (name.isBlank()) return ru.zf.pravka.ui.Ink.TextMeta
-    return ru.zf.pravka.ui.ZGroup.of(name).fill
-}
+internal fun categoryColor(name: String): Color = ru.zf.pravka.ui.categoryFill(name)
 
 private fun capFirst(s: String): String = s.replaceFirstChar { it.uppercase() }
 

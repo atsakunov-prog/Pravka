@@ -64,6 +64,9 @@ import kotlin.math.sin
 // заменяет полосу баланса −5…+10 (`RainbowScoreBar` ушёл из набора): польза
 // растёт наружу от базового круга, потери — внутрь, сон и почти-ноль — тонкой
 // дугой по самому кругу. Геометрия — ровно §12.3 в поле 300.
+// Краска — радуга категорий (`categoryFill`, 10.10.2026): сектор, черта
+// строки и полоса итога — цветом своей категории, полоса плашки и легенда —
+// областью радуги группы (`ZGroup`).
 
 /** Сектор циферблата: запись ленты внутри суток. */
 class DialSector(
@@ -378,7 +381,6 @@ fun ZasechkaEntryRow(
     trailing: (@Composable () -> Unit)? = null,
 ) {
     val t = LocalPravkaType.current
-    val g = ZGroup.of(category, worth)
     Column(modifier.fillMaxWidth()) {
         if (divider) Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFFFBE78).copy(alpha = 0.08f)))
         Row(
@@ -387,7 +389,7 @@ fun ZasechkaEntryRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Box(Modifier.width(3.dp).height(30.dp).clip(RoundedCornerShape(2.dp)).background(g.fill))
+            Box(Modifier.width(3.dp).height(30.dp).clip(RoundedCornerShape(2.dp)).background(categoryFill(category)))
             Column(Modifier.weight(1f)) {
                 Text(
                     entryTitle(title, useful, client),
@@ -399,7 +401,7 @@ fun ZasechkaEntryRow(
                         append(time)
                         if (category.isNotBlank()) {
                             append(" · ")
-                            withStyle(SpanStyle(color = g.text)) { append(category) }
+                            withStyle(SpanStyle(color = categoryText(category))) { append(category) }
                         }
                         append(" · ")
                         if (current) {
@@ -421,12 +423,14 @@ fun ZasechkaEntryRow(
 
 /**
  * Итог по категории (DESIGN §11.6 CategoryRow): название, полоса в цвете
- * группы (доля от самой длинной), время, доля дня и очки.
+ * категории на радуге (доля от самой длинной), время, доля дня и очки.
+ * Потери — штриховкой.
  */
 @Composable
 fun CategoryRow(name: String, worth: Int, minutes: Int, share: String, points: Int, fraction: Float) {
     val t = LocalPravkaType.current
-    val g = ZGroup.of(name, worth)
+    val color = categoryFill(name)
+    val loss = ZGroup.of(name, worth) == ZGroup.LOSS
     Row(Modifier.fillMaxWidth().height(36.dp), verticalAlignment = Alignment.CenterVertically) {
         FitText(name, style = t.body, color = Ink.Text, modifier = Modifier.weight(1f), minSize = 12f)
         Box(Modifier.width(48.dp).height(6.dp).padding(start = 8.dp)) {
@@ -435,7 +439,7 @@ fun CategoryRow(name: String, worth: Int, minutes: Int, share: String, points: I
                     .fillMaxWidth(fraction.coerceIn(0.04f, 1f))
                     .height(6.dp)
                     .clip(RoundedCornerShape(3.dp))
-                    .drawBehind { if (g == ZGroup.LOSS) hatch(g.fill, 0.30f) else drawRect(g.fill) },
+                    .drawBehind { if (loss) hatch(color, 0.30f) else drawRect(color) },
             )
         }
         Text(Fmt.dur(minutes), style = t.label.copy(fontWeight = FontWeight.SemiBold), color = Ink.LegendValue, textAlign = TextAlign.End, maxLines = 1, modifier = Modifier.width(56.dp))

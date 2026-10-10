@@ -67,6 +67,9 @@ import ru.zf.pravka.core.Fmt
 // Текст всех строк начинается с одной линии (№19: «ровно такой же отступ, как
 // и внутри плашек»): у строк без плашки содержимое сдвинуто на внутренний
 // отступ плашки — [TEXT_INSET].
+// Точка и линия записи — в цвете категории на радуге (`categoryFill`): с
+// 10.10.2026 снова радуга вместо оттенков янтаря — «пропало понимание, чем я
+// занимаюсь».
 
 private val TIME_W = 42.dp
 private val RAIL_W = 18.dp
@@ -216,9 +219,6 @@ fun TimelineRow(
     }
 }
 
-/** Цвет группы категории (DESIGN §4.3). */
-fun zFill(category: String, worth: Int): Color = ZGroup.of(category, worth).fill
-
 /**
  * Запись прошлого (DESIGN §11.5 EntryRow): название · клиент вторым тоном ·
  * ★полезность сразу после названия; вторая строка — категория · длительность;
@@ -233,8 +233,7 @@ fun EntryRow(
     highlight: Boolean = false,
 ) {
     val t = LocalPravkaType.current
-    val group = ZGroup.of(e.category, e.worth)
-    val color = group.fill
+    val color = categoryFill(e.category)
     val withNote = e.comment.isNotBlank()
     TimelineRow(
         height = if (withNote) 60.dp else 44.dp,
@@ -278,10 +277,11 @@ fun CurrentRow(
     stop: (() -> Unit)? = null,
 ) {
     val t = LocalPravkaType.current
-    val group = ZGroup.of(e.category, e.worth)
+    val color = categoryFill(e.category)
     TimelineRow(
         height = 42.dp,
-        rail = Rail.Current(group.fill, Modes.Zasechka.key.copy(alpha = 0.35f)),
+        // Ореол «сейчас» — в цвете самой категории: видно, чем занят, ещё до текста.
+        rail = Rail.Current(color, color.copy(alpha = 0.35f)),
         time = Fmt.hm(e.start),
         timeColor = Ink.Now,
         timeBold = true,
@@ -292,7 +292,7 @@ fun CurrentRow(
             Text(e.title, style = t.bodyStrong, color = Ink.Text, modifier = Modifier.weight(1f, fill = false))
             if (e.category.isNotBlank() && !e.gap) {
                 Spacer(Modifier.width(8.dp))
-                TagChip(e.category.substringBefore(':').trim(), group.text, group.fill.copy(alpha = 0.30f))
+                TagChip(e.category.substringBefore(':').trim(), categoryText(e.category), color.copy(alpha = 0.30f))
             }
             Spacer(Modifier.width(6.dp))
             Text(
@@ -605,7 +605,7 @@ fun TimelineItem(
 fun lineColorAt(items: List<DayAssembler.DayItem>, i: Int): Color {
     for (k in i downTo 0) {
         val e = items[k] as? DayAssembler.DayItem.Entry ?: continue
-        return ZGroup.of(e.category, e.worth).fill
+        return categoryFill(e.category)
     }
     return Ink.TimePast
 }
