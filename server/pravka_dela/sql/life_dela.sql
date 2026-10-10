@@ -16,7 +16,7 @@ SELECT t.num, t.title, t.notes, t.status,
        t.id, t.project_id, t.person_id,
        -- Напоминание в Telegram (dela_0003) — в конце: CREATE OR REPLACE дописывает колонки только в хвост.
        t.remind_at, t.remind_place, t.reminded_at,
-       -- Группа дела (dela_0007): owed — ждут от меня, self — сам, check — проверить.
+       -- Группа дела (dela_0007): owed — отбить (ждут от меня), self — запустить, check — мониторить.
        t.owed, CASE WHEN t.owed THEN 'owed' WHEN t.ball = 'waiting' THEN 'check' ELSE 'self' END AS grp
 FROM tasks.tasks t
 LEFT JOIN crm.projects p ON p.id = t.project_id
@@ -24,7 +24,7 @@ LEFT JOIN crm.deals d ON d.id = t.deal_id
 LEFT JOIN crm.people pe ON pe.id = t.person_id
 LEFT JOIN crm.people rq ON rq.id = t.requested_by
 WHERE crm.sees_task(crm.owner_id(), t.project_id, t.owner_id);
-COMMENT ON VIEW life.tasks IS 'Дела владельца (сервис «Дела»). num — короткий номер «#57». status: open, done, cancelled. grp — группа дела, как Саша их видит: owed — «Ждут от меня» (person ждёт от Саши ответа или дела; первым делом), self — «Сам» (сам придумал: mine и agenda), check — «Проверить» (ждёт от person, ball waiting). ball: mine — моё, waiting — мяч у person, agenda — поднять при встрече с person; owed — флаг «ждут от меня». money — paid (оплата согласована), potential (развитие), none; пусто у задачи = как у проекта. project пусто — «Входящие». remind_at — когда напомнить в Telegram, remind_place — напомнить по приезду (место автопилота телефона), reminded_at — когда напоминание ушло. Менять дела — инструментами dela_*, не SQL.';
+COMMENT ON VIEW life.tasks IS 'Дела владельца (сервис «Дела»). num — короткий номер «#57». status: open, done, cancelled. grp — группа дела, как Саша их видит: owed — «Отбить» (ждут от меня: person ждёт от Саши ответа или дела; первым делом), self — «Запустить» (сам придумал: mine и agenda), check — «Мониторить» (ждёт от person, ball waiting). ball: mine — моё, waiting — мяч у person, agenda — поднять при встрече с person; owed — флаг «ждут от меня». money — paid (оплата согласована), potential (развитие), none; пусто у задачи = как у проекта. project пусто — «Входящие». remind_at — когда напомнить в Telegram, remind_place — напомнить по приезду (место автопилота телефона), reminded_at — когда напоминание ушло. Менять дела — инструментами dela_*, не SQL.';
 
 CREATE OR REPLACE VIEW life.projects AS
 SELECT p.name, p.aliases, p.sphere, p.kind, o.name AS org, p.owner_id AS owner, p.money_default, p.note, p.archived_at,

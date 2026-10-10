@@ -139,13 +139,13 @@ changes — правки дел на экране, по одной записи 
     «Сегодня», в нём всё со сроком сегодня и просроченное.
   project — ровно имя проекта из справочника; «-» — во «Входящие». deal — имя сделки, если названа.
   person и ball — группа дела и кто держит мяч. Групп у Саши три, по приоритету:
-    owed — «Ждут от меня»: человек ждёт от Саши ответа или дела (спросил и ждёт, попросил прислать,
+    owed — «Отбить» (ждут от меня): человек ждёт от Саши ответа или дела (спросил и ждёт, попросил прислать,
       ждёт звонка; «он ждёт», «обещал ему», «надо ответить»); person — кто ждёт;
-    mine — «Сам»: Саша сам придумал, никто не ждёт; agenda — тоже «Сам»: обсудить с человеком при встрече;
-    waiting — «Проверить»: ждём от человека (он делает, «ответственный», «это за ним», «жду от»).
+    mine — «Запустить»: Саша сам придумал, никто не ждёт; agenda — тоже «Запустить»: обсудить с человеком при встрече;
+    waiting — «Мониторить»: ждём от человека (он делает, «ответственный», «это за ним», «жду от»).
     waiting и agenda — только с человеком: person — короткое имя из справочника. Мяч ушёл к другому —
-    поправь и title: «Человек: действие». person «-» — убрать человека. «Это ждут от меня», «это
-    сам», «это проверить» — смена группы: ball owed, mine или waiting.
+    поправь и title: «Человек: действие». person «-» — убрать человека. «Это отбить» («ждут от
+    меня»), «это запустить», «это мониторить» — смена группы: ball owed, mine или waiting.
   title — новая формулировка, только если Саша её меняет или мяч ушёл к другому. Формат
     «Кто: действие»; мяч у Саши — без префикса, сразу с действия.
   notes_add — что дописать к заметке дела: подробности, цифры, условия — коротко, его словами.
@@ -498,7 +498,7 @@ def _task_line(t: dict, today: dt.date, short: bool = False) -> str:
         bits.append(f"сделка {t['deal_name']}")
     who = t.get("person_short") or t.get("person_name")
     if t.get("owed"):  # группа — словами, как Саша её видит (dela_0007)
-        bits.append(f"ждут от меня: {who}" if who else "ждут от меня")
+        bits.append(f"отбить: ждёт {who}" if who else "отбить")
     elif t["ball"] in ("waiting", "agenda") and who:
         bits.append(f"{'жду от' if t['ball'] == 'waiting' else 'повестка с'} {who}")
     elif who:
@@ -555,7 +555,7 @@ def _sug_line(s: dict, t: dict | None) -> str:
     who = p.get("person_name")
     what = [p.get("title") and f"название «{p['title']}»",
             p.get("due_date") and f"срок {p['due_date']}",
-            p.get("ball") and ("мяч: " + ({"mine": "моё", "owed": "ждут от меня"}.get(p["ball"]) or BALL_WORD.get(p["ball"], p["ball"]))
+            p.get("ball") and ("мяч: " + ({"mine": "запустить", "owed": "отбить"}.get(p["ball"]) or BALL_WORD.get(p["ball"], p["ball"]))
                                + (f" {who}" if who and p["ball"] != "mine" else "")),
             not p.get("ball") and who and f"человек: {who}",
             p.get("note") and f"подробности: {_short(p['note'], 200)}"]
@@ -625,13 +625,13 @@ def _fields(x: dict, t: dict | None, index: dict, today: dt.date) -> tuple[dict,
             out["person_id"] = person = str(pe)
         else:
             miss.append(f"человека «{s('person')}»")
-    if x.get("ball") == "owed":  # «Ждут от меня»: в базе — mine и флаг (dela_0007)
+    if x.get("ball") == "owed":  # «Отбить»: в базе — mine и флаг (dela_0007)
         out["ball"], out["owed"] = "mine", True
     elif x.get("ball") in ("mine", "waiting", "agenda"):
         if x["ball"] == "mine" or person:
             out["ball"] = x["ball"]
             if t and t.get("owed"):
-                out["owed"] = False  # «это сам», «это проверить» — из «Ждут от меня» вон
+                out["owed"] = False  # «это запустить», «это мониторить» — из «Отбить» вон
         else:
             miss.append("с кем мяч")
     if s("notes_add"):

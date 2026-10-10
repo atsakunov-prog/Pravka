@@ -20,7 +20,7 @@ from typing import Any
 from . import db, people, remind, store
 
 USER = "sasha"  # архив — одного человека, и Claude в нём действует от его имени
-BALL = {"mine": "моё", "owed": "ждут от меня", "waiting": "жду", "agenda": "повестка"}
+BALL = {"mine": "запустить", "owed": "отбить", "waiting": "жду", "agenda": "повестка"}
 MONEY = {"paid": "оплачено", "potential": "развитие", "none": ""}
 STATUS = {"done": "сделано", "cancelled": "отменено", "open": ""}
 
@@ -42,7 +42,7 @@ def line(t: dict, today: dt.date | None = None) -> str:
         where += f" / {t['deal_name']}"
     bits.append(where)
     who = t.get("person_short") or t.get("person_name")
-    if t.get("owed"):  # «Ждут от меня» (dela_0007): кто ждёт и с какого дня
+    if t.get("owed"):  # «Отбить» (dela_0007): кто ждёт и с какого дня
         bits.append(f"ждёт {who or 'человек'} с {_d(t.get('created_at'))}")
     elif t["ball"] != "mine" or who:
         who = who or "кого — не указано"
@@ -207,15 +207,15 @@ def view(url: str, name: str = "today", sphere: str | None = None, person: str |
     head = f"Дела — {VIEW_TITLES.get(name, name)}, сегодня {today.strftime('%d.%m.%Y')} ({['пн','вт','ср','чт','пт','сб','вс'][today.weekday()]})"
     out = [head, ""]
     if name in ("today", "later"):
-        # Три группы по приоритету: ждут от меня, сам, проверить (владелец 10.10.2026).
+        # Три группы по приоритету: отбить, запустить, мониторить (владелец 10.10.2026).
         for g in v["groups"]:
             out += _block(g["title"], g["items"], today)
         if name == "today":
             if not any(g["items"] for g in v["groups"]):
                 out.append("На сегодня всё закрыто.")
             later = v["later"]
-            out.append(f"Закрыто сегодня: {v['done_today']}. Дальше (не на сегодня): ждут от меня {later['owed']}, "
-                       f"сам {later['self']}, проверить {later['check']} — dela view=later.")
+            out.append(f"Закрыто сегодня: {v['done_today']}. Дальше (не на сегодня): отбить {later['owed']}, "
+                       f"запустить {later['self']}, мониторить {later['check']} — dela view=later.")
             if v["new_count"]:
                 out.append(f"В «Новом» ждут решения: {v['new_count']} (dela view=new).")
     elif name == "morning":
@@ -422,7 +422,7 @@ def register(mcp, url: str) -> None:
     @mcp.tool()
     async def dela_view(view: str = "today", sphere: str | None = None, person: str | None = None,
                         project: str | None = None, query: str | None = None) -> str:
-        """Дела списком. view: today (по умолчанию — «Сегодня», главный список Саши: три группы по приоритету — «Ждут от меня» (человек ждёт от Саши ответа или дела, первым делом), «Сам» (сам придумал), «Проверить» (ждёт от человека, пора напомнить); срок сегодня или прошёл, ждущие без срока), later (всё остальное открытое теми же группами), morning (старое утро), new («Новое» — что предложила автоматика), waiting (жду, по людям), person (по человеку: повестка, жду, его просьбы — нужен person), project (проект: сделки, задачи, время из ленты — нужен project), week (неделя: протухшее, жду без движения, проекты без следующего шага), quick (до 10 минут), now (сейчас), search (поиск — нужен query). sphere: work, home или пусто (всё). Имена людей и проектов — как говорит Саша («Додо», «Наташа»)."""
+        """Дела списком. view: today (по умолчанию — «Сегодня», главный список Саши: три группы по приоритету — «Отбить» (ждут от меня: человек ждёт от Саши ответа или дела, первым делом), «Запустить» (сам придумал), «Мониторить» (ждёт от человека, пора напомнить); срок сегодня или прошёл, ждущие без срока), later (всё остальное открытое теми же группами), morning (старое утро), new («Новое» — что предложила автоматика), waiting (жду, по людям), person (по человеку: повестка, жду, его просьбы — нужен person), project (проект: сделки, задачи, время из ленты — нужен project), week (неделя: протухшее, жду без движения, проекты без следующего шага), quick (до 10 минут), now (сейчас), search (поиск — нужен query). sphere: work, home или пусто (всё). Имена людей и проектов — как говорит Саша («Додо», «Наташа»)."""
         return await run(dela.view, view, sphere, person, project, query)
 
     @mcp.tool()
@@ -443,7 +443,7 @@ def register(mcp, url: str) -> None:
                        money: str | None = None, want: bool | None = None, now: bool | None = None,
                        labels: list[str] | None = None, notes: str | None = None, remind_at: str | None = None,
                        remind_place: str | None = None) -> str:
-        """Новое дело Саше. title — «Кто: действие». project — проект (пусто — «Входящие»), deal — сделка проекта. ball — группа дела: owed («Ждут от меня»: person ждёт от Саши ответа или дела — спросил, попросил, ждёт звонка), mine («Сам»: Саша сам придумал), waiting («Проверить»: ждёт от person), agenda («Сам»: поднять при встрече с person). due_date, nudge_on — YYYY-MM-DD. money: paid, potential, none (пусто — как у проекта). now — в «Сейчас» на сегодня. labels — только контексты вроде «звонок». Напомнить Саше в Telegram (бот Ковчега): remind_at — «YYYY-MM-DD HH:MM» по Москве («напомни завтра в 10»), или remind_place — по приезду в место телефона («дом»); одно из двух. Срок не назван — due_date = день напоминания."""
+        """Новое дело Саше. title — «Кто: действие». project — проект (пусто — «Входящие»), deal — сделка проекта. ball — группа дела: owed («Отбить»: person ждёт от Саши ответа или дела — спросил, попросил, ждёт звонка), mine («Запустить»: Саша сам придумал), waiting («Мониторить»: ждёт от person), agenda («Запустить»: поднять при встрече с person). due_date, nudge_on — YYYY-MM-DD. money: paid, potential, none (пусто — как у проекта). now — в «Сейчас» на сегодня. labels — только контексты вроде «звонок». Напомнить Саше в Telegram (бот Ковчега): remind_at — «YYYY-MM-DD HH:MM» по Москве («напомни завтра в 10»), или remind_place — по приезду в место телефона («дом»); одно из двух. Срок не назван — due_date = день напоминания."""
         return await run(dela.add, title=title, project=project, deal=deal, person=person, ball=ball, due_date=due_date,
                          due_time=due_time, nudge_on=nudge_on, requested_by=requested_by, estimate_min=estimate_min,
                          money=money, want=want, now=now, labels=labels, notes=notes, remind_at=remind_at,

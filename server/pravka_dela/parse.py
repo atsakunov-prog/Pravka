@@ -167,7 +167,7 @@ def to_ops(data: dict, index: dict, defaults: dict, source: str, places: list[st
         if person:
             task["person_id"] = str(person)
         ball = t.get("ball") or "mine"
-        # «Ждут от меня» (owed) — и без узнанного человека: кто-то ждёт, это важнее имени (10.10.2026).
+        # «Отбить» (owed, ждут от меня) — и без узнанного человека: кто-то ждёт, это важнее имени (10.10.2026).
         task["ball"] = ball if (ball in ("mine", "owed") or person) else "mine"
         due = (t.get("due") or "").strip()
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", due):

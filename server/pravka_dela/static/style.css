@@ -365,6 +365,20 @@ a.st:hover { border-color: rgba(var(--t), .5); }
 .rows > .feed-day { border-top: 0; }
 .rows > .feed-day + * { border-top: 0; }
 .group.later .rows { opacity: .85; }
+/* Уровни группировки (10.10.2026): второй и третий — подзаголовками внутри раздела, строки — плашкой. */
+.subgroup { margin-top: 10px; }
+.subgroup.d2 { margin-left: 10px; margin-top: 8px; }
+.subgroup > h3, .subgroup > h4 { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 6px; margin: 0; padding: 4px 8px 6px; font-weight: 600; }
+.subgroup > h3 { font-size: 13.5px; line-height: 18px; color: var(--value); }
+.subgroup > h4 { font-size: 12.5px; line-height: 16px; color: var(--label); }
+.subgroup > h3 > svg, .subgroup > h3 > .tinted, .subgroup > h3 > .pdot, .subgroup > h4 > svg, .subgroup > h4 > .tinted, .subgroup > h4 > .pdot { display: none; }
+.subgroup .n { color: var(--meta); font-weight: 500; }
+.subgroup .n::before { content: '· '; }
+.subgroup .link { color: inherit; text-decoration: none; }
+.subgroup .link:hover { color: var(--value); }
+.subgroup > h3.late, .subgroup > h4.late { color: var(--value); }
+.group.nest + .group.nest { margin-top: 26px; }
+.toolbar .lv-sep { color: var(--meta); }
 .empty {
   display: flex; align-items: center; gap: 10px; padding: 16px 18px; color: var(--label); border-radius: 22px; margin-top: 18px; font-size: 14px;
 }
@@ -457,7 +471,7 @@ a.st:hover { border-color: rgba(var(--t), .5); }
 /* «Ждут от меня» (10.10.2026) — первым делом: кто ждёт и сколько — ярче, кольцо — светлее. Без светофора. */
 .chips .grp-owed { color: var(--value); font-weight: 600; }
 .task.grp-owed .tick::before { border-color: var(--value); }
-.group.grp-owed > h2 { color: var(--value); }
+.group.grp-owed > h2, .subgroup.grp-owed > h3, .subgroup.grp-owed > h4 { color: var(--value); }
 .grp-pick .chip-btn { flex: 1 1 auto; }
 .chips .tag { color: var(--label); }
 .chips .money, .chips .ok { color: var(--label); }

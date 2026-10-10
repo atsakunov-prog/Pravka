@@ -14,21 +14,22 @@ const S = {
   tasks: new Map(), projects: new Map(), people: new Map(), deals: new Map(), sugs: new Map(), labels: [],
   orgs: new Map(), pays: new Map(), // CRM: организации, оплаты
   crmList: LS.get('crmList', false), crmMine: false, crmStale: false, clientQ: '', clientArch: false,
-  sphere: LS.get('sphere', ''), groups: LS.get('groups', {}), favs: LS.get('favs', []), closed: LS.get('closed', {}),
+  sphere: LS.get('sphere', ''), levels: LS.get('levels', {}), fdraft: {}, favs: LS.get('favs', []), closed: LS.get('closed', {}),
   showDone: false, upNoDate: false, upMineOnly: false, dealFilter: null,
   sel: new Set(), order: [], lastPick: null, cardId: null, draft: null, sideOpen: false,
   parse: null, quickText: '', // идёт разбор Claude; текст строки Claude — живёт, пока его не отдали (перерисовка его не стирает)
   autoOpen: false, clientOpen: new Set(LS.get('clientOpen', [])), peopleQ: '', // «Сделано само» развёрнуто, клиенты со сделками, люди
 };
 // Три группы дел (владелец 10.10.2026): «есть дела, которые ждут меня — люди что-то спросили и ждут, они
-// мега важные… второе — что я сам придумал… третье — проверить, что мне люди должны». Порядок — приоритет.
-// Группа — из owed и ball (store.group_of, dela_0007): «Сам» — это и mine, и повестка.
-const GRP = { owed: 'Ждут от меня', self: 'Сам', check: 'Проверить' };
-const GRP_SUB = { owed: 'люди ждут ответа или дела — первым делом', self: 'сам придумал', check: 'что должны мне — проверить, напомнить' };
+// мега важные… второе — что я сам придумал… третье — проверить, что мне люди должны». Вечером назвал их:
+// «первая — отбить, вторая — запустить, третья — мониторить… это должна быть базовая группировка везде».
+// Порядок — приоритет. Группа — из owed и ball (store.group_of, dela_0007): «Запустить» — это и mine, и повестка.
+const GRP = { owed: 'Отбить', self: 'Запустить', check: 'Мониторить' };
+const GRP_SUB = { owed: 'люди ждут ответа или дела — первым делом', self: 'сам придумал — запустить', check: 'что должны мне — проверить, напомнить' };
 const grpOf = (t) => (t.owed || t.ball === 'owed' ? 'owed' : t.ball === 'waiting' ? 'check' : 'self');
 /** Группа словами — в «что поменялось» и подсказках «Нового». */
-const grpWord = (a) => ({ owed: 'ждут от меня', check: 'проверить', self: a.ball === 'agenda' ? 'при встрече' : 'сам' })[grpOf(a)];
-/** Группа → поля дела. Повестка, ставшая «Сам», остаётся повесткой: это тоже «Сам». */
+const grpWord = (a) => ({ owed: 'отбить', check: 'мониторить', self: a.ball === 'agenda' ? 'при встрече' : 'запустить' })[grpOf(a)];
+/** Группа → поля дела. Повестка, ставшая «Запустить», остаётся повесткой: это тоже «Запустить». */
 const grpSet = (t, g) => (g === 'owed' ? { ball: 'mine', owed: true } : g === 'check' ? { ball: 'waiting', owed: false }
   : { ball: t && t.ball === 'agenda' ? 'agenda' : 'mine', owed: false });
 const KIND = { client: 'Клиенты', internal: 'Внутреннее', personal: 'Личное' };
@@ -154,23 +155,56 @@ const openMine = () => all().filter((t) => isOpen(t) && isMine(t) && inSphere(t)
 
 // Видов три (владелец 10.10.2026: «не надо этих всех странных видов. Просто надо говорить: на сегодня вот
 // такие дела»). «Сегодня» — главный список тремя группами; «Новое» — вопросы автоматики; «Все дела» — всё
-// открытое. «Сейчас», «Предстоящее», «Жду» и «Неделя» ушли: их дела — в «Сегодня» и «Всех делах».
+// открытое, с завода уровнями «проекты › группы › время»; свои сочетания — фильтрами на полке. «Сейчас», «Предстоящее», «Жду» и «Неделя» ушли: их дела — в «Сегодня» и «Всех делах».
 // «Сейчас» (focus_on) остаётся у телефона — такое дело тоже в «Сегодня».
 const NOW_MAX = 5;
 const nowTasks = () => all().filter((t) => isOpen(t) && isMine(t) && isNow(t));
-/** На сегодня — как store.TODAY_IF: срок сегодня или прошёл, «Сейчас» телефона, «ждут от меня» без срока
- *  (человек ждёт — значит, сегодня), «проверить», где пора напомнить. Не сделал — завтра оно снова здесь. */
+/** На сегодня — как store.TODAY_IF: срок сегодня или прошёл, «Сейчас» телефона, «отбить» без срока
+ *  (человек ждёт — значит, сегодня), «мониторить», где пора напомнить. Не сделал — завтра оно снова здесь. */
 const inToday = (t) => isOpen(t) && isMine(t) && (isNow(t) || (!!t.due_date && t.due_date <= S.today)
   || (!!t.owed && !t.due_date) || (t.ball === 'waiting' && !!t.nudge_on && t.nudge_on <= S.today));
 const todayTasks = () => all().filter((t) => inToday(t) && inSphere(t));
-/** Кто дольше ждёт — выше: срок, а без срока — день, когда дело завели (как store.TODAY_ORDER). */
-const waitDay = (t) => t.due_date || (t.created_at ? MSK_DAY(t.created_at).day : S.today);
-const byWait = (a, b) => waitDay(a).localeCompare(waitDay(b)) || (a.due_time || '99').localeCompare(b.due_time || '99') || a.num - b.num;
+/** Когда дело делать — для уровня «время» и сортировки, как inToday: «Сейчас» и «отбить» без срока — сегодня,
+ *  «мониторить» — к сроку или дню напоминания, что раньше. Сделанное и без срока — null. */
+function whenDay(t) {
+  if (!isOpen(t)) return null;
+  const days = [t.due_date, isNow(t) ? S.today : null, t.owed && !t.due_date ? S.today : null,
+    t.ball === 'waiting' ? t.nudge_on : null].filter(Boolean).sort();
+  return days[0] || null;
+}
+/** По времени (владелец: «внутри уже сортировка по времени»): когда делать, час, потом кто дольше ждёт. */
+const byTime = (a, b) => (whenDay(a) || '9999').localeCompare(whenDay(b) || '9999') || (a.due_time || '99').localeCompare(b.due_time || '99')
+  || (a.created_at || '').localeCompare(b.created_at || '') || a.num - b.num;
 const VIEWS = {
   today: { title: 'Сегодня', icon: 'sun', color: 'var(--tint)', count: () => todayTasks().length, hot: () => todayTasks().some((t) => t.owed) },
   new: { title: 'Новое', icon: 'inbox-in', color: 'var(--tint)', count: () => newCount() },
   all: { title: 'Все дела', icon: 'list', color: 'var(--tint)' },
 };
+// ── Уровни группировки и фильтры (владелец 10.10.2026 вечером): «нажимаю „Все дела“ — первый уровень
+// группировки проекты, второй — под ними по категориям, третий — по времени… по каждому проекту посмотреть,
+// что я могу сделать сегодня… и раздел слева „Фильтры“: сделал первый, второй, третий уровень — это
+// сохраняется как фильтр». Уровней до трёх; внутри последнего — по времени (byTime). Фильтр — что показать
+// (scope) и уровни; хранится у человека на сервере (users.settings.filters), чтобы телефон видел те же.
+const LEVELS = { project: 'проекты', grp: 'группы', date: 'время', person: 'люди', deal: 'сделки' };
+const LEVELS_DEF = { today: ['grp'], all: ['project', 'grp', 'date'], project: ['grp', 'date'] };
+const SCOPES = { today: 'Сегодня', all: 'Все дела', owed: 'Отбить', self: 'Запустить', check: 'Мониторить' };
+// С завода — пока человек не сохранил своих: сегодня по проектам (его же пример), и кому отбить и кого
+// мониторить — по людям: перед звонком человеку видно всё, что ему должен и что жду от него.
+const FILTERS_DEF = [
+  { id: 'f-today-proj', name: 'Сегодня по проектам', scope: 'today', levels: ['project', 'grp'] },
+  { id: 'f-owed-people', name: 'Отбить — по людям', scope: 'owed', levels: ['person'] },
+  { id: 'f-check-people', name: 'Мониторить — по людям', scope: 'check', levels: ['person'] },
+];
+const filters = () => { const f = (S.me.settings || {}).filters; return Array.isArray(f) ? f : FILTERS_DEF; };
+async function saveFilters(list) {
+  await op1({ op: 'user.settings', settings: { filters: list } });
+  S.me.settings = { ...(S.me.settings || {}), filters: list };
+}
+/** Что показывает фильтр: сегодня, всё открытое или одна группа. */
+const scopeItems = (scope) => (scope === 'today' ? todayTasks()
+  : all().filter((t) => isOpen(t) && isMine(t) && inSphere(t) && (scope === 'all' || grpOf(t) === scope)));
+const levelsOf = (key) => { const v = S.levels[key]; return Array.isArray(v) ? v.filter((x) => LEVELS[x]) : LEVELS_DEF[key] || ['grp']; };
+const levelsName = (levels) => (levels.length ? levels.map((l) => LEVELS[l]).join(' › ') : 'без групп');
 const NO_PROJECT = { color: 'var(--meta)' }; // дела без проекта (бывшие «Входящие»): «без проекта» у дела — выбрать проект
 const pendingSugs = () => [...S.sugs.values()].filter((s) => s.status === 'pending' && s.for_user === S.me.user);
 /** Закрытия и уточнения, которые сервер принял сам (store._auto: владелец 05.10 и 08.10.2026 — «спокойно
@@ -217,6 +251,7 @@ const ICONS = {
   up: 'M12 19V5.5M6 11l6-6 6 6',
   stop: 'M8 7h8a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z',
   tick: 'M20 6L9 17l-5-5',
+  filter: 'M4 6h16M7 12h10M10 18h4',
 };
 function icon(name, size = 15) {
   const ns = 'http://www.w3.org/2000/svg';
@@ -297,6 +332,7 @@ function route() {
   if (kind === 'p' && id) return { kind: 'project', id };
   if (kind === 'h' && id) return { kind: 'person', id };
   if (kind === 'd' && id) return { kind: 'deal', id }; // сделка — страницей, как клиент и человек (06.10.2026)
+  if (kind === 'f' && id) return { kind: 'filter', id: decodeURIComponent(id) }; // сохранённый фильтр (10.10.2026)
   if (kind === 'search') return { kind: 'search', q: decodeURIComponent(id || '') };
   if (kind === 'new' && id) return { kind: 'new', batch: decodeURIComponent(id) }; // ссылка из Telegram — одна пачка
   if (kind === 'task' && /^\d+$/.test(id || '')) return { kind: 'today', task: +id }; // кнопка «Открыть» под напоминанием
@@ -390,7 +426,7 @@ function listColumn(r) {
 
 /** Раздел = надстрочник над стеклянной плашкой: всё, что в группе под заголовком, — в одну плашку со
  *  строками через волосяную линию. Плитки и доска — сами стекло, их не оборачиваем. */
-const OWN_GLASS = '.dlist, .tiles, .board, .choices, .day-chart, .lv-card, .deals, .pchips, .person-info, .toolbar, .empty';
+const OWN_GLASS = '.dlist, .tiles, .board, .choices, .day-chart, .lv-card, .deals, .pchips, .person-info, .toolbar, .empty, .subgroup';
 function plate(root) {
   for (const g of root.querySelectorAll('.group')) {
     const kids = [...g.children].filter((x) => x.tagName !== 'H2');
@@ -504,7 +540,9 @@ function renderSide(r) {
   const favs = live.filter((p) => S.favs.includes(p.id));
   const crmNav = crmOn() ? Object.entries(CRM_VIEWS).filter(([, v]) => !v.money || S.me.money)
     .map(([k, v]) => navItem('#/' + k, tint(icon(v.icon), v.color), v.title, null, r.kind === k)) : [];
-  const groups = [group('crm', 'CRM', crmNav), group('fav', 'Избранное', favs.map(projItem))];
+  const fnav = filters().map((f) => navItem('#/f/' + encodeURIComponent(f.id), icon('filter', 15), f.name, scopeItems(f.scope).length || null,
+    r.kind === 'filter' && r.id === f.id));
+  const groups = [group('filters', 'Фильтры', fnav), group('crm', 'CRM', crmNav), group('fav', 'Избранное', favs.map(projItem))];
   for (const [kind, title] of Object.entries(KIND)) {
     const list = live.filter((p) => p.kind === kind && !S.favs.includes(p.id));
     groups.push(group('k-' + kind, title, list.map(projItem), kind === 'client' ? openAllBtn(list) : null));
@@ -565,6 +603,7 @@ const KIND_ONE = { client: 'Клиент', internal: 'Внутреннее', per
 const SPHERE = { work: 'Работа', home: 'Дом', '': 'Все сферы' };
 function headCoin(r) {
   if (VIEWS[r.kind]) return coin('tick');
+  if (r.kind === 'filter') return coin('filter');
   if (CRM_VIEWS[r.kind]) return coin(CRM_VIEWS[r.kind].icon);
   if (r.kind === 'project') return coin(project(r.id)?.kind === 'client' ? 'building' : 'folder');
   if (r.kind === 'person' && person(r.id)) return coin(initials(person(r.id).name));
@@ -583,7 +622,7 @@ function headSub(r) {
   const p = r.kind === 'project' ? project(r.id) : null;
   const dl = r.kind === 'deal' ? S.deals.get(r.id) : null;
   if (dl && project(dl.project_id)) return el('a', { class: 'h-sub', href: '#/p/' + dl.project_id }, 'Сделка · ' + project(dl.project_id).name);
-  const word = p ? KIND_ONE[p.kind] || 'Проект' : r.kind === 'person' ? 'Человек' : CRM_VIEWS[r.kind] ? 'CRM' : 'Дела';
+  const word = p ? KIND_ONE[p.kind] || 'Проект' : r.kind === 'person' ? 'Человек' : CRM_VIEWS[r.kind] ? 'CRM' : r.kind === 'filter' ? 'Фильтр' : 'Дела';
   return el('span', { class: 'h-sub' }, word);
 }
 /** Назад — туда, откуда пришёл; пришёл по ссылке — на «Сегодня». */
@@ -643,13 +682,33 @@ function head(title, sub, extra, nav) {
     tabsRow(r, nav));
 }
 
-function groupPicker(key, def, options) {
-  const cur = S.groups[key] || def;
-  const sel = el('select', {}, options.map(([v, t]) => el('option', { value: v, selected: v === cur }, t)));
-  sel.addEventListener('change', () => { S.groups[key] = sel.value; LS.set('groups', S.groups); render(); });
-  return [el('label', {}, 'Группировать', sel), cur];
+/** Уровни группировки — до трёх списков «проекты › группы › время»; «—» убирает уровень и всё после него,
+ *  один уровень дважды не встаёт. Отдаёт элементы для toolbar. omit — чего не предлагать (в проекте — проекты). */
+function levelsBar(levels, onChange, omit = []) {
+  const opts = Object.entries(LEVELS).filter(([k]) => !omit.includes(k));
+  const sel = (i) => {
+    const cur = levels[i] || '';
+    const s = el('select', { 'aria-label': `Уровень ${i + 1}` }, [['', i ? '—' : 'без групп'], ...opts]
+      .map(([v, l]) => el('option', { value: v, selected: cur === v }, l)));
+    s.addEventListener('change', () => {
+      const next = s.value ? [...levels.slice(0, i), s.value, ...levels.slice(i + 1)] : levels.slice(0, i);
+      onChange([...new Set(next)].slice(0, 3));
+    });
+    return s;
+  };
+  const sels = [];
+  for (let i = 0; i < Math.min(3, levels.length + 1); i++) sels.push(i ? el('span', { class: 'lv-sep' }, '›') : null, sel(i));
+  return [el('label', {}, 'Группировать'), ...sels.filter(Boolean)];
 }
-const GROUPS = [['grp', 'ждут, сам, проверить'], ['date', 'по датам'], ['project', 'по проектам'], ['person', 'по людям'], ['deal', 'по сделкам'], ['none', 'без групп']];
+const setLevels = (key) => (lv) => { S.levels[key] = lv; LS.set('levels', S.levels); render(); };
+
+/** «Сохранить фильтр»: что показано и как сгруппировано — в «Фильтры» слева. Имя — предложенное, можно своё. */
+async function addFilter(scope, levels) {
+  const name = (prompt('Название фильтра', `${SCOPES[scope]}: ${levelsName(levels)}`) || '').trim();
+  if (!name) return;
+  const f = { id: 'f-' + Date.now().toString(36), name, scope, levels };
+  try { await saveFilters([...filters(), f]); toast('Фильтр сохранён: ' + name); go('#/f/' + encodeURIComponent(f.id)); } catch (e) { fail(e); }
+}
 
 function renderMain(r) {
   S.order = [];
@@ -667,12 +726,14 @@ function renderMain(r) {
   if (r.kind === 'ties') return renderTies();
   if (r.kind === 'money') return renderMoney();
   if (r.kind === 'today') return renderToday();
+  if (r.kind === 'filter') return renderFilter(r.id);
   if (r.kind === 'all') {
-    const [picker, g] = groupPicker('all', 'grp', GROUPS);
+    const lv = levelsOf('all');
     const items = all().filter((t) => isMine(t) && inSphere(t) && (S.showDone || isOpen(t)));
-    const tb = el('div', { class: 'toolbar' }, picker, doneToggle());
+    const tb = el('div', { class: 'toolbar' }, levelsBar(lv, setLevels('all')), doneToggle(),
+      el('button', { class: 'chip-btn', onclick: () => addFilter('all', lv) }, 'Сохранить фильтр'));
     return [head(VIEWS.all.title, [plural(items.filter(isOpen).length, 'открытое', 'открытых', 'открытых')]),
-      el('div', { class: 'body' }, quickAdd({}), tb, items.length ? grouped(items, g) : el('div', { class: 'empty' }, 'Пусто.'))];
+      el('div', { class: 'body' }, quickAdd({}), tb, items.length ? nested(items, lv) : el('div', { class: 'empty' }, 'Пусто.'))];
   }
   return [head('Дела'), el('div', { class: 'body' })];
 }
@@ -682,59 +743,111 @@ function renderMain(r) {
  *  ждут от меня, сам, проверить; в каждой выше тот, кто дольше ждёт. Солнце у дела — «на завтра». */
 function renderToday() {
   const items = todayTasks();
+  const lv = levelsOf('today');
   const doneToday = all().filter((t) => t.status === 'done' && isMine(t) && t.completed_at && MSK_DAY(t.completed_at).day === S.today).length;
   const n = newCount();
-  const groups = Object.keys(GRP).map((g) => [g, items.filter((t) => grpOf(t) === g).sort(byWait)]).filter(([, list]) => list.length);
   return [head('Сегодня', [D.long(S.today), items.length ? 'осталось ' + items.length : null, doneToday ? 'закрыто ' + doneToday : null]),
     el('div', { class: 'body' },
-      quickAdd({}, { placeholder: 'Скажи, что сделать: «Гуркин ждёт звонка по фонду», «это на завтра», «это проверить»' }),
-      groups.length ? groups.map(([g, list]) => groupBox(GRP[g], list, { sub: GRP_SUB[g], cls: 'grp-' + g }, 'grp'))
-        : el('div', { class: 'empty' }, doneToday ? 'На сегодня всё закрыто.' : 'На сегодня пусто.'),
+      quickAdd({}, { placeholder: 'Скажи, что сделать: «Гуркин ждёт звонка по фонду», «это на завтра», «это мониторить»' }),
+      el('div', { class: 'toolbar' }, levelsBar(lv, setLevels('today')),
+        el('button', { class: 'chip-btn', onclick: () => addFilter('today', lv) }, 'Сохранить фильтр')),
+      items.length ? nested(items, lv) : el('div', { class: 'empty' }, doneToday ? 'На сегодня всё закрыто.' : 'На сегодня пусто.'),
       n ? el('a', { class: 'new-link', href: '#/new' }, icon('meet', 22), el('span', { class: 't' }, 'Новое из встреч и чатов: вопросы'),
         el('span', { class: 'badge-new' }, n), icon('chev', 22)) : null)];
 }
 
+/** Сохранённый фильтр: что показать и уровни. Поменял — «Сохранить» запишет, «Как было» — вернёт. */
+function renderFilter(id) {
+  const f = filters().find((x) => x.id === id);
+  if (!f) return [head('Фильтр'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Такого фильтра нет — его удалили.'))];
+  const d = S.fdraft[id] || {};
+  const scope = d.scope || f.scope, lv = d.levels || f.levels || [];
+  const changed = scope !== f.scope || lv.join() !== (f.levels || []).join();
+  const items = scopeItems(scope);
+  const scopeSel = el('select', { 'aria-label': 'Что показать' }, Object.entries(SCOPES).map(([k, l]) => el('option', { value: k, selected: k === scope }, l)));
+  scopeSel.addEventListener('change', () => { S.fdraft[id] = { scope: scopeSel.value, levels: lv }; render(); });
+  const put = async (patch, msg) => {
+    try { await saveFilters(filters().map((x) => (x.id === id ? { ...x, ...patch } : x))); delete S.fdraft[id]; toast(msg); render(); } catch (e) { fail(e); }
+  };
+  const acts = [
+    changed ? el('button', { class: 'chip-btn on', onclick: () => put({ scope, levels: lv }, 'Фильтр сохранён') }, 'Сохранить') : null,
+    changed ? el('button', { class: 'chip-btn', onclick: () => { delete S.fdraft[id]; render(); } }, 'Как было') : null,
+    el('button', { class: 'chip-btn', onclick: () => { const name = (prompt('Название фильтра', f.name) || '').trim(); if (name) put({ name }, 'Переименовал'); } }, 'Переименовать'),
+    el('button', { class: 'chip-btn', onclick: async () => {
+      if (!confirm(`Удалить фильтр «${f.name}»? Дела останутся.`)) return;
+      try { await saveFilters(filters().filter((x) => x.id !== id)); toast('Фильтр удалён'); go('#/today'); } catch (e) { fail(e); }
+    } }, 'Удалить')];
+  return [head(f.name, [SCOPES[scope], levelsName(lv), plural(items.length, 'дело', 'дела', 'дел')]),
+    el('div', { class: 'body' },
+      quickAdd({}),
+      el('div', { class: 'toolbar' }, el('label', {}, 'Показать', scopeSel),
+        levelsBar(lv, (next) => { S.fdraft[id] = { scope, levels: next }; render(); }), ...acts),
+      items.length ? nested(items, lv) : el('div', { class: 'empty' }, 'Здесь пусто.'))];
+}
+
 const doneToggle = () => el('button', { class: 'chip-btn' + (S.showDone ? ' on' : ''), onclick: () => { S.showDone = !S.showDone; render(); } }, 'Сделанные');
 
-/** Разложить дела по группам: даты (как «Предстоящее» в Vikunja), проекты, люди, чьё дело, сделки. */
-function grouped(items, by) {
-  items = [...items].sort(sortTasks);
-  if (by === 'none') return groupBox(null, items);
-  const buckets = new Map();
-  const put = (key, title, t, extra) => {
-    if (!buckets.has(key)) buckets.set(key, { title, items: [], ...extra });
-    buckets.get(key).items.push(t);
-  };
-  const day = (main, iso) => [main, el('span', { class: 'gsub' }, D.long(iso))];
-  for (const t of items) {
-    if (by === 'date') {
-      if (!isOpen(t)) put('9done', 'Сделано', t);
-      else if (!t.due_date) put('8none', 'Без даты', t);
-      else {
-        const n = D.diff(t.due_date, S.today);
-        if (n < 0) put('0late', 'Просрочено', t, { late: true });
-        else if (n === 0) put('1today', day('Сегодня', S.today), t);
-        else if (n === 1) put('2tomorrow', day('Завтра', t.due_date), t);
-        else if (n < 7) put('3' + t.due_date, D.long(t.due_date), t);
-        else if (n < 14) put('5next', 'Следующая неделя', t);
-        else put('6later', 'Позже', t);
-      }
-    } else if (by === 'project') {
-      const p = project(t.project_id);
-      put(p ? '1' + p.name : '0', p ? p.name : 'Без проекта', t, { href: p ? '#/p/' + p.id : null, lead: () => (p ? dot(p.id) : tint(icon('tray', 14), NO_PROJECT.color)) });
-    } else if (by === 'person') {
-      const p = person(t.person_id);
-      put(p ? '1' + personName(p) : '2', p ? personName(p) : 'Без человека', t, { href: p ? '#/h/' + p.id : null, lead: p ? () => avatar(p) : null });
-    } else if (by === 'grp' || by === 'ball') { // «ball» — запомненная браузером старая группировка
-      const g = grpOf(t);
-      put({ owed: '1', self: '2', check: '3' }[g], GRP[g], t, { sub: GRP_SUB[g], cls: 'grp-' + g });
-    } else if (by === 'deal') {
-      const dl = t.deal_id ? S.deals.get(t.deal_id) : null;
-      put(dl ? '1' + dl.name : '2', dl ? dl.name : 'Без сделки', t);
-    }
+/** Ключ дела на уровне: [порядок, заголовок, вид заголовка]. «Время» — по whenDay: когда дело делать. */
+function levelKey(t, lv) {
+  if (lv === 'grp') {
+    const g = grpOf(t);
+    return [{ owed: '1', self: '2', check: '3' }[g], GRP[g], { sub: GRP_SUB[g], cls: 'grp-' + g }];
   }
-  return [...buckets.entries()].sort((a, b) => a[0].localeCompare(b[0], 'ru')).map(([, g]) => groupBox(g.title, g.items, g, by));
+  if (lv === 'project') {
+    const p = project(t.project_id);
+    return p ? ['1' + p.name, p.name, { href: '#/p/' + p.id, lead: () => dot(p.id) }] : ['9', 'Без проекта', { lead: () => tint(icon('tray', 14), NO_PROJECT.color) }];
+  }
+  if (lv === 'person') {
+    const p = person(t.person_id);
+    return p ? ['1' + personName(p), personName(p), { href: '#/h/' + p.id, lead: () => avatar(p) }] : ['9', 'Без человека', {}];
+  }
+  if (lv === 'deal') {
+    const dl = t.deal_id ? S.deals.get(t.deal_id) : null;
+    return dl ? ['1' + dl.name, dl.name, { href: '#/d/' + dl.id }] : ['9', 'Без сделки', {}];
+  }
+  if (lv === 'date') {
+    if (!isOpen(t)) return ['9done', 'Сделано', {}];
+    const d = whenDay(t);
+    if (!d) return ['8none', 'Без срока', {}];
+    const n = D.diff(d, S.today);
+    if (n < 0) return ['0late', 'Просрочено', { late: true }];
+    if (n === 0) return ['1today', 'Сегодня', { sub: D.long(S.today) }];
+    if (n === 1) return ['2tomorrow', 'Завтра', { sub: D.long(d) }];
+    if (n < 7) return ['3' + d, D.long(d), {}];
+    return n < 14 ? ['5next', 'Следующая неделя', {}] : ['6later', 'Позже', {}];
+  }
+  return ['0', null, {}];
 }
+
+function groupHead(tag, title, n, opts = {}) {
+  const lead = typeof opts.lead === 'function' ? opts.lead() : opts.lead;
+  return el(tag, { class: opts.late ? 'late' : '' }, lead || null,
+    opts.href ? el('a', { class: 'link', href: opts.href }, title) : title, el('span', { class: 'n' }, n),
+    opts.sub ? el('span', { class: 'gsub' }, opts.sub) : null);
+}
+
+/** Дела уровнями: первый — разделом (.group), второй и третий — подзаголовками внутри (.subgroup), строки —
+ *  плашкой. Внутри последнего уровня — по времени. Пустых групп не бывает: они собираются из самих дел. */
+function nested(items, levels, depth = 0) {
+  items = [...items].sort(byTime);
+  const lv = levels[depth];
+  if (!lv) return depth === 0 ? groupBox(null, items, {}, levels) : el('div', { class: 'rows' }, items.map((t) => taskRow(t, levels)));
+  const buckets = new Map();
+  for (const t of items) {
+    const [key, title, opts] = levelKey(t, lv);
+    if (!buckets.has(key)) buckets.set(key, { title, opts, items: [] });
+    buckets.get(key).items.push(t);
+  }
+  return [...buckets.entries()].sort((a, b) => a[0].localeCompare(b[0], 'ru')).map(([, g]) => {
+    const cls = g.opts.cls ? ' ' + g.opts.cls : '';
+    if (depth === 0 && !levels[1]) return groupBox(g.title, g.items, g.opts, levels);
+    if (depth === 0) return el('div', { class: 'group nest' + cls }, groupHead('h2', g.title, g.items.length, g.opts), nested(g.items, levels, 1));
+    return el('div', { class: 'subgroup d' + depth + cls }, groupHead(depth === 1 ? 'h3' : 'h4', g.title, g.items.length, { ...g.opts, sub: null }),
+      nested(g.items, levels, depth + 1));
+  });
+}
+/** Одним уровнем — для страниц, где уровни не выбирают (поиск, сделка). */
+const grouped = (items, by) => nested(items, Array.isArray(by) ? by : by === 'none' ? [] : [by]);
 
 function groupBox(title, items, opts = {}, by) {
   const lead = typeof opts.lead === 'function' ? opts.lead() : opts.lead;
@@ -774,6 +887,7 @@ function toggleToday(t) {
 // «ужасно всё засоряет»): только срок и проект, а справа вместо номера — значок, откуда дело (opt.mark).
 function taskRow(t, by, extra, opt = {}) {
   S.order.push(t.id);
+  const grouped_ = (k) => (Array.isArray(by) ? by.includes(k) : by === k); // уровень уже назван заголовком
   const p = project(t.project_id);
   const who = person(t.person_id);
   const due = dueLabel(t);
@@ -782,29 +896,30 @@ function taskRow(t, by, extra, opt = {}) {
   const m = (cls, ...kids) => el('span', { class: 'm' + (cls ? ' ' + cls : '') }, ...kids);
   const chips = [];
   if (due && due.cls === 'late') chips.push(m('late', `просрочено ${D.diff(S.today, t.due_date)} дн`), m('', D.ddmm(t.due_date)));
-  else if (due && by !== 'date') chips.push(m(due.cls, due.text));
+  else if (due && !grouped_('date')) chips.push(m(due.cls, due.text));
   const rem = remindChip(t);
   if (rem) chips.push(m('remind', rem));
   if (opt.compact) {
     if (p) chips.push(el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, p.name));
-  } else if (by !== 'project' && !['project', 'deal'].includes(route().kind)) {
+  } else if (!grouped_('project') && !['project', 'deal'].includes(route().kind)) {
     // Без проекта — не тупик, а вопрос: щелчок — выбрать проект.
     chips.push(p ? el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, p.name)
       : el('button', { class: 'm noproj', title: 'Выбрать проект', onclick: (e) => { stop(e); projectPop(e.currentTarget, [t.id]); } }, 'без проекта'));
   }
   const dl = !opt.compact && t.deal_id ? S.deals.get(t.deal_id) : null;
-  if (dl && by !== 'deal' && route().kind !== 'deal') chips.push(el('a', { class: 'm link', href: '#/d/' + dl.id, onclick: stop }, dl.name));
+  if (dl && !grouped_('deal') && route().kind !== 'deal') chips.push(el('a', { class: 'm link', href: '#/d/' + dl.id, onclick: stop }, dl.name));
   // В короткой строке группа и человек — в самом названии («Кто: действие»), минуты и метки — в карточке.
-  // Ждущим — сколько ждут: «Гуркин ждёт 3 дн» (с того дня, как дело завели), «жду Наташу 5 дн».
+  // «Отбить» — сколько ждут: «Гуркин ждёт 3 дн» (с того дня, как дело завели); «мониторить» — «жду Наташу 5 дн».
   const g = grpOf(t), name = who ? personName(who) : '';
   if (opt.compact) { /* ничего */ } else if (g === 'owed') {
     const d = t.created_at ? D.diff(S.today, MSK_DAY(t.created_at).day) : 0;
     chips.push(m('grp-owed', (name ? name + ' ждёт' : 'ждут') + (d > 0 ? ` ${d} дн` : '')));
   } else if (g === 'check') {
-    chips.push(m('ball-waiting', 'жду' + (name ? ' ' + name : '') + (t.waiting_since ? ' ' + D.diff(S.today, t.waiting_since) + ' дн' : '')));
+    const w = t.waiting_since ? D.diff(S.today, t.waiting_since) : 0;
+    chips.push(m('ball-waiting', 'жду' + (name ? ' ' + name : '') + (w > 0 ? ` ${w} дн` : '')));
   } else if (t.ball === 'agenda') {
     chips.push(m('ball-agenda', 'при встрече' + (name ? ' с ' + name : '')));
-  } else if (who && by !== 'person') {
+  } else if (who && !grouped_('person')) {
     chips.push(el('a', { class: 'm link', href: '#/h/' + who.id, onclick: stop }, '@' + personName(who)));
   }
   if (t.estimate_min && !opt.compact) chips.push(m('', dur(t.estimate_min)));
@@ -932,7 +1047,7 @@ function reschedulePop(anchor, ids) {
   }, 0);
 }
 
-/** Группа для выбранных: «Ждут от меня», «Сам», «Проверить». */
+/** Группа для выбранных: «Отбить», «Запустить», «Мониторить». */
 function grpPop(anchor, ids) {
   popAt(anchor, Object.entries(GRP).map(([g, label]) => el('button', { onclick: async () => {
     closePop();
@@ -1017,8 +1132,8 @@ function parseQuick(text, defaults) {
     return true;
   });
   take(/\s\*(\S+)/g, (m, w) => { (out.set.labels = out.set.labels || []).push(w); out.tags.push('метка: ' + w); });
-  take(/\s!ждут(?=\s)/gi, () => { out.set.ball = 'owed'; out.tags.push('ждут от меня'); });
-  take(/\s!жду(?=\s)/gi, () => { out.set.ball = 'waiting'; out.tags.push('проверить'); });
+  take(/\s!(?:отбить|ждут)(?=\s)/gi, () => { out.set.ball = 'owed'; out.tags.push('отбить'); });
+  take(/\s!(?:мониторить|жду)(?=\s)/gi, () => { out.set.ball = 'waiting'; out.tags.push('мониторить'); });
   take(/\s!повестка(?=\s)/gi, () => { out.set.ball = 'agenda'; out.tags.push('повестка'); });
   take(/\s!сейчас(?=\s)/gi, () => { out.set.focus_on = S.today; out.tags.push('сейчас'); });
   take(/\s!хочу(?=\s)/gi, () => { out.set.want = true; out.tags.push('хочу сам'); });
@@ -1132,7 +1247,7 @@ function quickAdd(defaults, { placeholder = null, label = null } = {}) {
   const preview = el('div', { class: 'preview' });
   const help = el('div', { class: 'help hidden' },
     'Enter или стрелка — Claude · Shift+Enter — новая строка · Alt+Enter — одно дело как написано: ',
-    '+проект  @человек  *метка  !ждут  !жду  !хочу  !15м · сегодня, завтра, в пятницу, 12.10');
+    '+проект  @человек  *метка  !отбить  !мониторить  !хочу  !15м · сегодня, завтра, в пятницу, 12.10');
   const status = busy ? el('div', { class: 'claude-status' }, 'Claude думает… Можно уходить на другие страницы — изменения появятся сами.')
     : rec && S.listenQuick ? el('div', { class: 'claude-status listening' }, 'Слушаю — говори сколько нужно. Нажми микрофон ещё раз — отдам Claude.') : null;
   const ac = el('div', { class: 'ac hidden' });
@@ -1589,7 +1704,8 @@ function renderProject(id) {
   const p = project(id);
   if (!p) return [head('Проект'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Нет такого проекта или он не виден.'))];
   const deals = [...S.deals.values()].filter((d) => d.project_id === id).sort((a, b) => (a.stage === 'archive') - (b.stage === 'archive') || a.name.localeCompare(b.name, 'ru'));
-  const [picker, g] = groupPicker('project', 'date', GROUPS.filter(([v]) => v !== 'project'));
+  const g = levelsOf('project').filter((x) => x !== 'project');
+  const picker = levelsBar(g, setLevels('project'), ['project']);
   let items = all().filter((t) => t.project_id === id && (S.showDone || isOpen(t)));
   if (S.dealFilter) items = items.filter((t) => t.deal_id === S.dealFilter);
   const open = items.filter(isOpen);
@@ -1669,9 +1785,9 @@ function renderPerson(id) {
   const open = all().filter((t) => isOpen(t));
   const his = open.filter((t) => t.person_id === id || t.requested_by === id);
   const secs = [
-    ['Ждёт от меня', his.filter((t) => grpOf(t) === 'owed' || (t.requested_by === id && grpOf(t) === 'self'))],
-    ['Сам: о нём и с ним', his.filter((t) => grpOf(t) === 'self' && t.requested_by !== id)],
-    ['Проверить: жду от него', his.filter((t) => grpOf(t) === 'check')],
+    ['Отбить: ждёт от меня', his.filter((t) => grpOf(t) === 'owed' || (t.requested_by === id && grpOf(t) === 'self'))],
+    ['Запустить: о нём и с ним', his.filter((t) => grpOf(t) === 'self' && t.requested_by !== id)],
+    ['Мониторить: жду от него', his.filter((t) => grpOf(t) === 'check')],
   ];
   const info = [];
   const row = (k, v) => { if (v) info.push(el('span', {}, k), el('span', {}, v)); };
@@ -2141,7 +2257,7 @@ function renderCard() {
     c.addEventListener('change', () => save(field, c.checked ? value : (field === 'want' ? false : null)));
     return el('label', {}, c, label);
   };
-  // Группа — три кнопки (10.10.2026): «Ждут от меня», «Сам», «Проверить»; человек — кто ждёт или от кого жду.
+  // Группа — три кнопки (10.10.2026): «Отбить», «Запустить», «Мониторить»; человек — кто ждёт или от кого жду.
   const g = grpOf(src);
   const grpPick = el('div', { class: 'quick-dates grp-pick' }, Object.entries(GRP).map(([k, l]) =>
     el('button', { class: 'chip-btn' + (g === k ? ' on' : ''), onclick: () => {
@@ -3071,7 +3187,7 @@ function renderDeal(id) {
   const open = items.filter(isOpen);
   const tasks = sec('tasks', 'Дела', [secN(open.length), el('span', { class: 'act' }, doneToggle())],
     open.length || d.stage === 'archive' ? null : el('div', { class: 'empty' }, 'Нет следующего дела — проект без шага застынет. Скажи его в строке Claude.'),
-    items.length ? grouped(items, 'date') : null);
+    items.length ? nested(items, ['grp', 'date']) : null);
 
   const pays = v ? v.payments : [...S.pays.values()].filter((x) => x.deal_id === d.id);
   let moneySec = null;
