@@ -1000,6 +1000,13 @@ textarea.about::placeholder { color: var(--ph); opacity: .75; }
 .ps-n { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ps-s { font-size: 12px; color: var(--meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ps-new { color: var(--label); }
+/* «Только одно» по первому уровню (10.10.2026): строка под группировкой и список с поиском. */
+.pick-bar { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.pick-btn { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pick-btn.on { color: var(--value); border-color: rgba(var(--t), .6); }
+.ps-item .pdot, .ps-item .ps-dot { flex: none; width: 10px; height: 10px; margin: 0 9px; border-radius: 50%; }
+.ps-item .ps-t { flex: 1; }
+.ps-c { flex: none; margin-left: auto; color: var(--meta); font-size: 12.5px; }
 .ps-new svg { flex: none; width: 28px; }
 .ps-empty { font-size: 13px; color: var(--meta); padding: 8px 10px; }
 

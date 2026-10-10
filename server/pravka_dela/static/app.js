@@ -14,7 +14,7 @@ const S = {
   tasks: new Map(), projects: new Map(), people: new Map(), deals: new Map(), sugs: new Map(), labels: [],
   orgs: new Map(), pays: new Map(), // CRM: организации, оплаты
   crmList: LS.get('crmList', false), crmMine: false, crmStale: false, clientQ: '', clientArch: false,
-  sphere: LS.get('sphere', ''), levels: LS.get('levels', {}), fdraft: {}, favs: LS.get('favs', []), closed: LS.get('closed', {}),
+  sphere: LS.get('sphere', ''), levels: LS.get('levels', {}), fdraft: {}, pick: {}, favs: LS.get('favs', []), closed: LS.get('closed', {}),
   showDone: false, upNoDate: false, upMineOnly: false, dealFilter: null,
   sel: new Set(), order: [], lastPick: null, cardId: null, draft: null, sideOpen: false,
   parse: null, quickText: '', // идёт разбор Claude; текст строки Claude — живёт, пока его не отдали (перерисовка его не стирает)
@@ -344,7 +344,7 @@ function route() {
   return { kind: VIEWS[kind] ? kind : 'today' };
 }
 const go = (hash) => { location.hash = hash; };
-window.addEventListener('hashchange', () => { S.sel.clear(); S.dealFilter = null; S.sideOpen = false; S.toTop = true; S.secOn = null; S.tlAll = null; render(); });
+window.addEventListener('hashchange', () => { S.sel.clear(); S.dealFilter = null; S.pick.project = null; S.sideOpen = false; S.toTop = true; S.secOn = null; S.tlAll = null; render(); });
 
 // ── Вход ────────────────────────────────────────────────────────────────
 function renderLogin(msg) {
@@ -702,11 +702,91 @@ function levelsBar(levels, onChange, omit = []) {
 }
 const setLevels = (key) => (lv) => { S.levels[key] = lv; LS.set('levels', S.levels); render(); };
 
+// ── «Только одно» по первому уровню (владелец 10.10.2026: «сделал люди по проектам — следующее, что хочется:
+// выпадающий список со всеми людьми и с поисковой строкой: набрать „Наташ“ — выпадут все Наташи, выберу свою…
+// по первому уровню группировки поиск, чтобы показывалось только одно»). pick = {lv, key, title}: ветка первого
+// уровня; уровни поменялись — выбор молча не действует. На видах живёт до перезагрузки, в фильтре — сохраняется.
+const ALL_OF = { project: 'Все проекты', grp: 'Все группы', date: 'Всё время', person: 'Все люди', deal: 'Все сделки' };
+const pickOn = (pick, levels) => !!pick && pick.lv === levels[0];
+// Человек, проект, сделка — по id: переименуешь — сохранённый фильтр не потеряет свою «Наташу».
+const isPicked = (t, lv, pick) => { const [k, , o] = levelKey(t, lv); return pick.id ? o.id === pick.id : k === pick.key; };
+const picked = (items, levels, pick) => (pickOn(pick, levels) ? items.filter((t) => isPicked(t, levels[0], pick)) : items);
+const pickOf = (b, lv) => ({ lv, key: b.key, title: b.title, ...(b.opts.id ? { id: b.opts.id } : {}) });
+
+/** Ветки первого уровня с числом дел — для списка выбора. Группы и время — по порядку, остальное — где больше дел. */
+function branches(items, lv) {
+  const m = new Map();
+  for (const t of items) {
+    const [key, title, opts] = levelKey(t, lv);
+    if (!m.has(key)) m.set(key, { key, title, opts, n: 0 });
+    m.get(key).n++;
+  }
+  const list = [...m.values()];
+  const seen = new Map();
+  for (const b of list) seen.set(b.title, (seen.get(b.title) || 0) + 1);
+  for (const b of list) if (seen.get(b.title) > 1 && b.opts.full) b.title = b.opts.full;
+  return ['grp', 'date'].includes(lv) ? list.sort((a, b) => a.key.localeCompare(b.key, 'ru'))
+    : list.sort((a, b) => b.n - a.n || a.title.localeCompare(b.title, 'ru'));
+}
+
+/** Строка под группировкой: «Все люди ▾» или «Только: Наташа ✕». Щелчок — список с поиском. */
+function pickBar(items, levels, pick, onPick) {
+  const lv = levels[0];
+  if (!lv) return null;
+  const on = pickOn(pick, levels);
+  return el('div', { class: 'pick-bar' },
+    el('button', { class: 'chip-btn pick-btn' + (on ? ' on' : ''), title: 'Показать только одно', onclick: (e) => pickPop(e.currentTarget, branches(items, lv), lv, onPick) },
+      icon('search', 14), on ? 'Только: ' + pick.title : ALL_OF[lv], icon('down', 14)),
+    on ? el('button', { class: 'chip-btn', title: 'Показать все', onclick: () => onPick(null) }, icon('x', 14)) : null);
+}
+
+/** Список веток первого уровня с поиском, как «+ человек»: «наташ» — все Наташи; Enter — первая. */
+function pickPop(anchor, list, lv, onPick) {
+  setTimeout(() => {
+    const q = el('input', { class: 'ps-q', placeholder: 'Найти…', autocomplete: 'off' });
+    const box = el('div', { class: 'ps-list' });
+    let shown = [], at = 0;
+    const draw = () => {
+      const words = norm(q.value).split(/\s+/).filter(Boolean);
+      shown = list.filter((b) => {
+        const ks = [b.title, ...(b.opts.find || [])].map(norm);
+        return words.every((w) => ks.some((k) => k.includes(w)));
+      });
+      at = Math.min(at, Math.max(0, shown.length - 1));
+      box.replaceChildren(...[
+        !words.length ? el('button', { class: 'ps-item', onmousedown: (e) => { e.preventDefault(); closePop(); onPick(null); } },
+          el('span', { class: 'ps-t' }, el('span', { class: 'ps-n' }, ALL_OF[lv]))) : null,
+        ...shown.slice(0, 40).map((b, i) => el('button', { class: 'ps-item' + (i === at && words.length ? ' on' : ''),
+          onmousedown: (e) => { e.preventDefault(); closePop(); onPick(pickOf(b, lv)); } },
+        (typeof b.opts.lead === 'function' ? b.opts.lead() : null) || el('span', { class: 'ps-dot' }),
+        el('span', { class: 'ps-t' }, el('span', { class: 'ps-n' }, b.title), b.opts.note ? el('span', { class: 'ps-s' }, b.opts.note) : null),
+        el('span', { class: 'ps-c' }, b.n))),
+        words.length && !shown.length ? el('div', { class: 'ps-empty' }, 'Не нашёл — здесь таких нет') : null].filter(Boolean));
+    };
+    q.addEventListener('input', () => { at = 0; draw(); });
+    q.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' && shown.length) { e.preventDefault(); at = (at + 1) % shown.length; draw(); }
+      if (e.key === 'ArrowUp' && shown.length) { e.preventDefault(); at = (at - 1 + shown.length) % shown.length; draw(); }
+      if (e.key === 'Enter' && shown[at]) { e.preventDefault(); closePop(); onPick(pickOf(shown[at], lv)); }
+      if (e.key === 'Escape') { e.stopPropagation(); closePop(); }
+    });
+    draw();
+    const pop = popAt(anchor, [el('div', { class: 'pop-h' }, 'Показать только'), q, box]);
+    pop.classList.add('ps-pop');
+    // Кнопка стоит слева — список открывается от её левого края, а не на полку.
+    pop.style.left = Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, anchor.getBoundingClientRect().left)) + 'px';
+    q.focus();
+  }, 0);
+}
+const setPick = (key) => (pk) => { S.pick[key] = pk; S.toTop = true; render(); };
+const pickNote = (items, pick, levels) => (pickOn(pick, levels) && !items.length ? el('div', { class: 'empty' }, `У «${pick.title}» здесь дел нет.`) : null);
+
 /** «Сохранить фильтр»: что показано и как сгруппировано — в «Фильтры» слева. Имя — предложенное, можно своё. */
-async function addFilter(scope, levels) {
-  const name = (prompt('Название фильтра', `${SCOPES[scope]}: ${levelsName(levels)}`) || '').trim();
+async function addFilter(scope, levels, pick) {
+  const one = pickOn(pick, levels) ? pick : null;
+  const name = (prompt('Название фильтра', `${SCOPES[scope]}: ${levelsName(levels)}` + (one ? ' — ' + one.title : '')) || '').trim();
   if (!name) return;
-  const f = { id: 'f-' + Date.now().toString(36), name, scope, levels };
+  const f = { id: 'f-' + Date.now().toString(36), name, scope, levels, ...(one ? { pick: one } : {}) };
   try { await saveFilters([...filters(), f]); toast('Фильтр сохранён: ' + name); go('#/f/' + encodeURIComponent(f.id)); } catch (e) { fail(e); }
 }
 
@@ -729,11 +809,13 @@ function renderMain(r) {
   if (r.kind === 'filter') return renderFilter(r.id);
   if (r.kind === 'all') {
     const lv = levelsOf('all');
-    const items = all().filter((t) => isMine(t) && inSphere(t) && (S.showDone || isOpen(t)));
+    const every = all().filter((t) => isMine(t) && inSphere(t) && (S.showDone || isOpen(t)));
+    const items = picked(every, lv, S.pick.all);
     const tb = el('div', { class: 'toolbar' }, levelsBar(lv, setLevels('all')), doneToggle(),
-      el('button', { class: 'chip-btn', onclick: () => addFilter('all', lv) }, 'Сохранить фильтр'));
+      el('button', { class: 'chip-btn', onclick: () => addFilter('all', lv, S.pick.all) }, 'Сохранить фильтр'));
     return [head(VIEWS.all.title, [plural(items.filter(isOpen).length, 'открытое', 'открытых', 'открытых')]),
-      el('div', { class: 'body' }, quickAdd({}), tb, items.length ? nested(items, lv) : el('div', { class: 'empty' }, 'Пусто.'))];
+      el('div', { class: 'body' }, quickAdd({}), tb, pickBar(every, lv, S.pick.all, setPick('all')),
+        pickNote(items, S.pick.all, lv) || (items.length ? nested(items, lv) : el('div', { class: 'empty' }, 'Пусто.')))];
   }
   return [head('Дела'), el('div', { class: 'body' })];
 }
@@ -742,16 +824,19 @@ function renderMain(r) {
  *  каждый день… и по-хорошему я должен закрывать все такие дела на каждый день»). Три группы по приоритету:
  *  ждут от меня, сам, проверить; в каждой выше тот, кто дольше ждёт. Солнце у дела — «на завтра». */
 function renderToday() {
-  const items = todayTasks();
   const lv = levelsOf('today');
+  const every = todayTasks();
+  const items = picked(every, lv, S.pick.today);
   const doneToday = all().filter((t) => t.status === 'done' && isMine(t) && t.completed_at && MSK_DAY(t.completed_at).day === S.today).length;
   const n = newCount();
   return [head('Сегодня', [D.long(S.today), items.length ? 'осталось ' + items.length : null, doneToday ? 'закрыто ' + doneToday : null]),
     el('div', { class: 'body' },
       quickAdd({}, { placeholder: 'Скажи, что сделать: «Гуркин ждёт звонка по фонду», «это на завтра», «это мониторить»' }),
       el('div', { class: 'toolbar' }, levelsBar(lv, setLevels('today')),
-        el('button', { class: 'chip-btn', onclick: () => addFilter('today', lv) }, 'Сохранить фильтр')),
-      items.length ? nested(items, lv) : el('div', { class: 'empty' }, doneToday ? 'На сегодня всё закрыто.' : 'На сегодня пусто.'),
+        el('button', { class: 'chip-btn', onclick: () => addFilter('today', lv, S.pick.today) }, 'Сохранить фильтр')),
+      pickBar(every, lv, S.pick.today, setPick('today')),
+      pickNote(items, S.pick.today, lv)
+        || (items.length ? nested(items, lv) : el('div', { class: 'empty' }, doneToday ? 'На сегодня всё закрыто.' : 'На сегодня пусто.')),
       n ? el('a', { class: 'new-link', href: '#/new' }, icon('meet', 22), el('span', { class: 't' }, 'Новое из встреч и чатов: вопросы'),
         el('span', { class: 'badge-new' }, n), icon('chev', 22)) : null)];
 }
@@ -762,27 +847,32 @@ function renderFilter(id) {
   if (!f) return [head('Фильтр'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Такого фильтра нет — его удалили.'))];
   const d = S.fdraft[id] || {};
   const scope = d.scope || f.scope, lv = d.levels || f.levels || [];
-  const changed = scope !== f.scope || lv.join() !== (f.levels || []).join();
-  const items = scopeItems(scope);
+  const pick = 'pick' in d ? d.pick : f.pick || null;
+  const one = pickOn(pick, lv) ? pick : null;
+  const changed = scope !== f.scope || lv.join() !== (f.levels || []).join() || JSON.stringify(one) !== JSON.stringify(pickOn(f.pick, f.levels || []) ? f.pick : null);
+  const every = scopeItems(scope);
+  const items = picked(every, lv, pick);
+  const draft = (patch) => { S.fdraft[id] = { scope, levels: lv, pick, ...patch }; S.toTop = true; render(); };
   const scopeSel = el('select', { 'aria-label': 'Что показать' }, Object.entries(SCOPES).map(([k, l]) => el('option', { value: k, selected: k === scope }, l)));
-  scopeSel.addEventListener('change', () => { S.fdraft[id] = { scope: scopeSel.value, levels: lv }; render(); });
+  scopeSel.addEventListener('change', () => draft({ scope: scopeSel.value }));
   const put = async (patch, msg) => {
     try { await saveFilters(filters().map((x) => (x.id === id ? { ...x, ...patch } : x))); delete S.fdraft[id]; toast(msg); render(); } catch (e) { fail(e); }
   };
   const acts = [
-    changed ? el('button', { class: 'chip-btn on', onclick: () => put({ scope, levels: lv }, 'Фильтр сохранён') }, 'Сохранить') : null,
+    changed ? el('button', { class: 'chip-btn on', onclick: () => put({ scope, levels: lv, pick: one }, 'Фильтр сохранён') }, 'Сохранить') : null,
     changed ? el('button', { class: 'chip-btn', onclick: () => { delete S.fdraft[id]; render(); } }, 'Как было') : null,
     el('button', { class: 'chip-btn', onclick: () => { const name = (prompt('Название фильтра', f.name) || '').trim(); if (name) put({ name }, 'Переименовал'); } }, 'Переименовать'),
     el('button', { class: 'chip-btn', onclick: async () => {
       if (!confirm(`Удалить фильтр «${f.name}»? Дела останутся.`)) return;
       try { await saveFilters(filters().filter((x) => x.id !== id)); toast('Фильтр удалён'); go('#/today'); } catch (e) { fail(e); }
     } }, 'Удалить')];
-  return [head(f.name, [SCOPES[scope], levelsName(lv), plural(items.length, 'дело', 'дела', 'дел')]),
+  return [head(f.name, [SCOPES[scope], levelsName(lv) + (one ? ' — ' + one.title : ''), plural(items.length, 'дело', 'дела', 'дел')]),
     el('div', { class: 'body' },
       quickAdd({}),
       el('div', { class: 'toolbar' }, el('label', {}, 'Показать', scopeSel),
-        levelsBar(lv, (next) => { S.fdraft[id] = { scope, levels: next }; render(); }), ...acts),
-      items.length ? nested(items, lv) : el('div', { class: 'empty' }, 'Здесь пусто.'))];
+        levelsBar(lv, (next) => draft({ levels: next })), ...acts),
+      pickBar(every, lv, pick, (pk) => draft({ pick: pk })),
+      pickNote(items, pick, lv) || (items.length ? nested(items, lv) : el('div', { class: 'empty' }, 'Здесь пусто.')))];
 }
 
 const doneToggle = () => el('button', { class: 'chip-btn' + (S.showDone ? ' on' : ''), onclick: () => { S.showDone = !S.showDone; render(); } }, 'Сделанные');
@@ -791,19 +881,26 @@ const doneToggle = () => el('button', { class: 'chip-btn' + (S.showDone ? ' on' 
 function levelKey(t, lv) {
   if (lv === 'grp') {
     const g = grpOf(t);
-    return [{ owed: '1', self: '2', check: '3' }[g], GRP[g], { sub: GRP_SUB[g], cls: 'grp-' + g }];
+    return [{ owed: '1', self: '2', check: '3' }[g], GRP[g], { sub: GRP_SUB[g], cls: 'grp-' + g, find: [GRP[g], GRP_SUB[g]] }];
   }
+  // Ключ — имя и id: две «Наташи» — две ветки, а не одна (тогда заголовком — полное имя, opts.full).
   if (lv === 'project') {
     const p = project(t.project_id);
-    return p ? ['1' + p.name, p.name, { href: '#/p/' + p.id, lead: () => dot(p.id) }] : ['9', 'Без проекта', { lead: () => tint(icon('tray', 14), NO_PROJECT.color) }];
+    return p ? ['1' + p.name + '\u0001' + p.id, p.name, { id: p.id, href: '#/p/' + p.id, lead: () => dot(p.id), find: projectKeys(p) }]
+      : ['9', 'Без проекта', { lead: () => tint(icon('tray', 14), NO_PROJECT.color), find: ['без проекта'] }];
   }
   if (lv === 'person') {
     const p = person(t.person_id);
-    return p ? ['1' + personName(p), personName(p), { href: '#/h/' + p.id, lead: () => avatar(p) }] : ['9', 'Без человека', {}];
+    const org = p && orgLabel(p.org_id);
+    return p ? ['1' + personName(p) + '\u0001' + p.id, personName(p), { id: p.id, href: '#/h/' + p.id, lead: () => avatar(p), full: p.name,
+      note: [p.short && p.short !== p.name ? p.name : null, p.role, org && org.name].filter(Boolean).join(' · '),
+      find: [...personKeys(p), p.role, org && org.name].filter(Boolean) }] : ['9', 'Без человека', { find: ['без человека'] }];
   }
   if (lv === 'deal') {
     const dl = t.deal_id ? S.deals.get(t.deal_id) : null;
-    return dl ? ['1' + dl.name, dl.name, { href: '#/d/' + dl.id }] : ['9', 'Без сделки', {}];
+    const dp = dl && project(dl.project_id);
+    return dl ? ['1' + dl.name + '\u0001' + dl.id, dl.name, { id: dl.id, href: '#/d/' + dl.id, note: dp ? dp.name : '', find: [dl.name, dp && dp.name].filter(Boolean) }]
+      : ['9', 'Без сделки', { find: ['без сделки'] }];
   }
   if (lv === 'date') {
     if (!isOpen(t)) return ['9done', 'Сделано', {}];
@@ -838,6 +935,9 @@ function nested(items, levels, depth = 0) {
     if (!buckets.has(key)) buckets.set(key, { title, opts, items: [] });
     buckets.get(key).items.push(t);
   }
+  const seen = new Map();
+  for (const g of buckets.values()) seen.set(g.title, (seen.get(g.title) || 0) + 1);
+  for (const g of buckets.values()) if (seen.get(g.title) > 1 && g.opts.full) g.title = g.opts.full;
   return [...buckets.entries()].sort((a, b) => a[0].localeCompare(b[0], 'ru')).map(([, g]) => {
     const cls = g.opts.cls ? ' ' + g.opts.cls : '';
     if (depth === 0 && !levels[1]) return groupBox(g.title, g.items, g.opts, levels);
@@ -1705,9 +1805,10 @@ function renderProject(id) {
   if (!p) return [head('Проект'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Нет такого проекта или он не виден.'))];
   const deals = [...S.deals.values()].filter((d) => d.project_id === id).sort((a, b) => (a.stage === 'archive') - (b.stage === 'archive') || a.name.localeCompare(b.name, 'ru'));
   const g = levelsOf('project').filter((x) => x !== 'project');
-  const picker = levelsBar(g, setLevels('project'), ['project']);
-  let items = all().filter((t) => t.project_id === id && (S.showDone || isOpen(t)));
-  if (S.dealFilter) items = items.filter((t) => t.deal_id === S.dealFilter);
+  let every = all().filter((t) => t.project_id === id && (S.showDone || isOpen(t)));
+  if (S.dealFilter) every = every.filter((t) => t.deal_id === S.dealFilter);
+  const items = picked(every, g, S.pick.project);
+  const picker = [levelsBar(g, setLevels('project'), ['project']), pickBar(every, g, S.pick.project, setPick('project'))];
   const open = items.filter(isOpen);
   const fav = S.favs.includes(id);
   const star = el('button', { class: 'star' + (fav ? ' on' : ''), title: fav ? 'Убрать из избранного' : 'В избранное',
