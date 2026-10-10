@@ -6,12 +6,13 @@ import org.junit.Test
 import ru.zf.pravka.core.BalanceLine.Kind
 import ru.zf.pravka.core.DayAssembler.DayItem
 
-// Линия баланса в хронике (владелец, 10.10.2026): день с нуля в середине
-// коридора, каждая запись сдвигает балл, граница — медиана крайностей за 28
-// дней, а сегодня дальше — коридор расширяется.
+// Дорога жизни в хронике (владелец, 10.10.2026): день с нуля посередине,
+// каждая запись сдвигает балл; разметка — свои 28 дней к тому же часу:
+// медиана — полоса, 75 % — стенка, за ней обочина.
 class BalanceLineTest {
 
     private val h = DayAssembler.HOUR
+    private val day = 86_400_000L
     private val eps = 1e-9
 
     private fun entry(id: Long, fromH: Double, toH: Double, worth: Int, current: Boolean = false) = DayItem.Entry(
@@ -34,57 +35,110 @@ class BalanceLineTest {
         val s = BalanceLine.segments(items)
         assertEquals(listOf(Kind.ENTRY, Kind.ENTRY, Kind.THROUGH, Kind.ENTRY, Kind.CURRENT, Kind.NOW, Kind.FUTURE), s.map { it.kind })
         assertEquals(0.0, s[0].bottom, eps)
-        assertEquals(0.0, s[1].top, eps)
         assertEquals(20.0, s[1].bottom, eps)
         assertEquals(20.0, s[2].top, eps)
         assertEquals(20.0, s[2].bottom, eps)
         assertEquals(17.5, s[3].bottom, eps)
         assertEquals(20.5, s[4].bottom, eps)
-        assertEquals(20.5, s[5].top, eps)
         assertEquals(20.5, s[6].top, eps)
         assertEquals(20.5, BalanceLine.maxAbs(s), eps)
     }
 
     @Test
-    fun `крайность дня — по ходу, а не только в конце`() {
-        val spans = listOf(
-            BalanceLine.Span(0, 2 * h, -5), // −10 утром
-            BalanceLine.Span(2 * h, 3 * h, 4), // −6 к концу
+    fun `время строки — для разметки к тому же часу, низ — начало следующей`() {
+        val items = listOf(
+            entry(1, 8.0, 10.0, 10),
+            // Отметка в середине записи стоит после неё — и время у неё конец записи.
+            DayItem.Mark(1, (9 * h), DayAssembler.Source.FOOD, "419 ккал", ""),
+            // Дыра 10:00–10:30 без записи.
+            entry(2, 10.5, 11.0, 1, current = true),
+            DayItem.Now((11 * h)),
+            DayItem.Free((11 * h), (12 * h)),
+            DayItem.Sleep((23 * h), 0),
         )
-        assertEquals(10.0, BalanceLine.dayMaxAbs(spans, 0, 24 * h)!!, eps)
-        // Запись, переходящая из вчера, считается только своей частью внутри суток.
-        assertEquals(5.0, BalanceLine.dayMaxAbs(listOf(BalanceLine.Span(-h, h, 5)), 0, 24 * h)!!, eps)
-        assertNull(BalanceLine.dayMaxAbs(spans, 24 * h, 48 * h))
+        val s = BalanceLine.segments(items)
+        assertEquals(8 * h, s[0].tTop)
+        assertEquals(10 * h, s[0].tBottom)
+        assertEquals(10 * h, s[1].tTop)
+        // Через дыру разметка тянется до начала следующей записи.
+        assertEquals((10.5 * h).toLong(), s[1].tBottom)
+        assertEquals(11 * h, s[3].tTop)
+        assertEquals(11 * h, s[4].tTop)
+        assertEquals(23 * h, s[4].tBottom)
+        assertEquals(23 * h, s[5].tBottom)
     }
 
     @Test
-    fun `история — 28 прошлых дней, пустые дни медиану к нулю не тянут`() {
-        val day = 86_400_000L
+    fun `кривая дня — балл к любому часу, вчерашний хвост — только своей частью`() {
+        val c = BalanceLine.curve(
+            listOf(
+                BalanceLine.Span(-h, 2 * h, 0), // сон с вечера
+                BalanceLine.Span(8 * h, 10 * h, 10), // +20
+                BalanceLine.Span(12 * h, 13 * h, -5), // −5
+            ),
+            0, day,
+        )!!
+        assertEquals(0.0, c.at(7 * h), eps)
+        assertEquals(10.0, c.at(9 * h), eps)
+        // В дыре между записями балл стоит.
+        assertEquals(20.0, c.at(11 * h), eps)
+        assertEquals(17.5, c.at((12.5 * h).toLong()), eps)
+        assertEquals(15.0, c.at(23 * h), eps)
+        assertNull(BalanceLine.curve(listOf(BalanceLine.Span(0, h, 5)), day, 2 * day))
+    }
+
+    @Test
+    fun `запись поверх других не съедает их — счёт как у балла дня`() {
+        // Длинная запись с ценой 0 на весь день (дубль, авто-факт) и работа внутри.
+        val c = BalanceLine.curve(
+            listOf(
+                BalanceLine.Span(-h, 24 * h, 0),
+                BalanceLine.Span(8 * h, 10 * h, 10),
+            ),
+            0, day,
+        )!!
+        assertEquals(20.0, c.at(12 * h), eps)
+    }
+
+    @Test
+    fun `квантиль — как percentile_cont в базе`() {
+        val xs = listOf(10.0, 40.0, 20.0, 30.0)
+        assertEquals(25.0, BalanceLine.quantile(xs, 0.5)!!, eps)
+        assertEquals(32.5, BalanceLine.quantile(xs, 0.75)!!, eps)
+        assertNull(BalanceLine.quantile(emptyList(), 0.5))
+    }
+
+    @Test
+    fun `разметка — свои прошлые дни к тому же часу, пустые дни не тянут к нулю`() {
         val today = 30 * day
-        // Записи только в двух прошлых днях: вчера +40, позавчера +60.
-        val spans = listOf(
-            BalanceLine.Span(today - day, today - day + 4 * h, 10),
-            BalanceLine.Span(today - 2 * day, today - 2 * day + 6 * h, 10),
-            // Сегодняшняя запись в историю не попадает.
-            BalanceLine.Span(today, today + h, 10),
-        )
-        val hist = BalanceLine.history(spans, today, dayMs = day)
-        assertEquals(listOf(40.0, 60.0), hist)
-        assertEquals(50.0, BalanceLine.median(hist)!!, eps)
+        // Четыре прошлых дня: к 12:00 набрали 10, 20, 30, 40, к концу — вдвое больше.
+        val spans = (1..4).flatMap { k ->
+            val d = today - k * day
+            listOf(BalanceLine.Span(d + 8 * h, d + 12 * h, 10 * k / 4), BalanceLine.Span(d + 14 * h, d + 18 * h, 10 * k / 4))
+        } + BalanceLine.Span(today, today + h, 10) // сегодняшняя — не в истории
+        val road = BalanceLine.Road.of(BalanceLine.history(spans, today, dayMs = day), day)!!
+        // 10*k/4 при k = 1..4: 2, 5, 7, 10 за час → к 12:00: 8, 20, 28, 40.
+        assertEquals(24.0, road.at(12 * h, 0.5), eps)
+        assertEquals(31.0, road.at(12 * h, 0.75), eps)
+        assertEquals(62.0, road.at(20 * h, 0.75), eps)
+        assertEquals(0.0, road.at(6 * h, 0.75), eps)
+        assertEquals(62.0, road.wallMax, eps)
+        assertNull(BalanceLine.Road.of(emptyList()))
     }
 
     @Test
-    fun `коридор — медиана, а сегодня дальше — по сегодняшнему краю`() {
-        val hist = listOf(30.0, 50.0, 40.0)
-        assertEquals(40.0, BalanceLine.corridor(12.0, hist), eps)
-        assertEquals(55.0, BalanceLine.corridor(55.0, hist), eps)
-        // Истории нет — коридор по самому дню, и не уже единицы.
-        assertEquals(3.0, BalanceLine.corridor(3.0, emptyList()), eps)
-        assertEquals(BalanceLine.FLOOR, BalanceLine.corridor(0.0, emptyList()), eps)
+    fun `масштаб — стенка к концу дня на своей доле, сегодня дальше — по сегодня`() {
+        val road = BalanceLine.Road.of(listOf(BalanceLine.curve(listOf(BalanceLine.Span(0, 4 * h, 9)), 0, day)!!), day)
+        // Стенка 36 → край трубы 36 / 0.72 = 50: за стенкой — обочина до 50.
+        assertEquals(50.0, BalanceLine.scale(12.0, road), 1e-6)
+        assertEquals(70.0, BalanceLine.scale(70.0, road), 1e-6)
+        // Истории нет — по самому дню, и не мельче единицы.
+        assertEquals(3.0, BalanceLine.scale(3.0, null), eps)
+        assertEquals(BalanceLine.FLOOR, BalanceLine.scale(0.0, null), eps)
     }
 
     @Test
-    fun `место в коридоре — от минус до плюс единицы`() {
+    fun `место в трубе — от минус до плюс единицы`() {
         assertEquals(0f, BalanceLine.frac(0.0, 40.0), 1e-6f)
         assertEquals(0.5f, BalanceLine.frac(20.0, 40.0), 1e-6f)
         assertEquals(-1f, BalanceLine.frac(-90.0, 40.0), 1e-6f)

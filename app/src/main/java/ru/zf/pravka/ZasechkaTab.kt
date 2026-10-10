@@ -471,8 +471,8 @@ internal fun ZasechkaTab(
     }
     // Лента — той же хроникой, что «Сегодня» (10.10.2026, владелец: «когда
     // открываю засечку, мне приходится немножко думать и переставлять свою
-    // голову… давай синхронизируем»): записи по порядку дня сверху вниз, линия
-    // баланса с коридором от медианы 28 дней, «сейчас» с пульсирующей точкой.
+    // голову… давай синхронизируем»): записи по порядку дня сверху вниз,
+    // дорога жизни с разметкой своих дней, «сейчас» с пульсирующей точкой.
     // Отметок других режимов и будущего здесь нет — у Засечки свои дела ниже;
     // дыры без записи между записями остались строкой «··· 25 м без записи».
     val ribbonItems = remember(entries, worthByCat, dayStart, now) {
@@ -489,7 +489,7 @@ internal fun ZasechkaTab(
         ru.zf.pravka.core.DayAssembler.assemble(ru.zf.pravka.core.DayAssembler.Input(dayStart, now, ins)).items
             .filter { it is ru.zf.pravka.core.DayAssembler.DayItem.Entry || it is ru.zf.pravka.core.DayAssembler.DayItem.Now }
     }
-    val ribbonLine = remember(ribbonItems, facts) { ru.zf.pravka.ui.balanceSpecs(ribbonItems) { facts.corridor(it) } }
+    val ribbonLine = remember(ribbonItems, facts) { ru.zf.pravka.ui.balanceSpecs(ribbonItems, dayStart, facts.road) }
     val ribbon: @Composable () -> Unit = {
         Column(Modifier.fillMaxWidth()) {
             ribbonItems.forEachIndexed { i, item ->
@@ -506,7 +506,12 @@ internal fun ZasechkaTab(
                         val b = ribbonLine.getOrNull(i)
                         ru.zf.pravka.ui.HoleRow(
                             gapMin,
-                            b?.let { ru.zf.pravka.ui.BalanceSpec(it.bottom, it.bottom, it.color, it.color, ru.zf.pravka.core.BalanceLine.Kind.THROUGH) },
+                            b?.let {
+                                ru.zf.pravka.ui.BalanceSpec(
+                                    it.bottom, it.bottom, it.color, it.color, ru.zf.pravka.core.BalanceLine.Kind.THROUGH,
+                                    lanes = it.lanes?.let { l -> ru.zf.pravka.ui.Lanes(l.midBottom, l.midBottom, l.wallBottom, l.wallBottom) },
+                                )
+                            },
                         ) {
                             gapFor = GapTarget(
                                 start = item.end,

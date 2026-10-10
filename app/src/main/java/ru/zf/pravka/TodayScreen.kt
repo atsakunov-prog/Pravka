@@ -390,8 +390,8 @@ private fun TodayFolded(
 ) {
     val r = model.result
     val items = r.items
-    // Линия баланса (10.10.2026): коридор — медиана крайностей 28 дней (`DayFacts.corridor`).
-    val balance = remember(items, model.facts) { balanceSpecs(items) { model.facts.corridor(it) } }
+    // Дорога жизни (10.10.2026): разметка — свои 28 дней к тому же часу (`DayFacts.road`).
+    val balance = remember(items, model.facts) { balanceSpecs(items, model.dayStart, model.facts.road) }
     // Начальная позиция — запись перед текущей (DESIGN §11.5); прошлый день — с начала.
     val start = remember(model.day) {
         val cur = items.indexOfFirst { it is DayItem.Entry && it.current }
@@ -636,7 +636,7 @@ private fun TodayWide(
     val t = LocalPravkaType.current
     val f = model.facts
     val r = model.result
-    val balance = remember(r.items, model.facts) { balanceSpecs(r.items) { model.facts.corridor(it) } }
+    val balance = remember(r.items, model.facts) { balanceSpecs(r.items, model.dayStart, model.facts.road) }
     Row(Modifier.fillMaxSize().statusBarsPadding()) {
         // Слева — обзор: день с ‹ ›, погода, плашки, круг, плашка времени.
         Column(

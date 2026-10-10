@@ -40,8 +40,8 @@ internal class DayFacts(
     /** Итоги по категориям внутри дня: имя, цена часа, минуты, очки. */
     val categories: List<CatRow>,
     val emptyCategories: Int,
-    /** Крайности баланса 28 прошлых дней — граница коридора линии баланса (`core/BalanceLine.kt`). */
-    val lineHistory: List<Double> = emptyList(),
+    /** Разметка дороги жизни — свои 28 прошлых дней к тому же часу (`core/BalanceLine.kt`); null — истории нет. */
+    val road: BalanceLine.Road? = null,
 ) {
     class CatRow(val name: String, val worth: Int, val minutes: Int, val points: Int)
 
@@ -72,9 +72,6 @@ internal class DayFacts(
         }
         if (aheadMin > 0) add(Triple(ZGroup.AHEAD, ZGroup.AHEAD.label, Fmt.durFuture(aheadMin)))
     }
-
-    /** Половина коридора линии баланса для дня, чей крайний балл по ходу — [todayMax]. */
-    fun corridor(todayMax: Double): Double = BalanceLine.corridor(todayMax, lineHistory)
 
     val nowMin: Float? get() = if (now in dayStart until dayStart + DAY) (now - dayStart) / 60_000f else null
 
@@ -148,12 +145,12 @@ internal class DayFacts(
             val cats = slices.map { CatRow(it.category, it.worth, it.minutes.toInt(), it.points) }
             val used = slices.map { it.category.trim().lowercase() }.toSet()
             val empty = categories.count { it.name.trim().lowercase() !in used && !it.name.equals("Не размечено", true) }
-            // Граница коридора линии баланса — медиана крайностей 28 прошлых дней.
+            // Разметка дороги жизни — свои 28 прошлых дней к тому же часу.
             val spans = pool.map { BalanceLine.Span(it.start, if (it.open) now else it.end, worthOf(it.category)) }
-            val history = BalanceLine.history(spans, dayStart, dayMs = DAY)
+            val road = BalanceLine.Road.of(BalanceLine.history(spans, dayStart, dayMs = DAY), DAY)
             return DayFacts(
                 dayStart, now, score, weekAgo, day.minusDays(7), rank, wake, nightMs, bedtime, state,
-                groups, aheadMin, sectors, cats, empty, history,
+                groups, aheadMin, sectors, cats, empty, road,
             )
         }
 

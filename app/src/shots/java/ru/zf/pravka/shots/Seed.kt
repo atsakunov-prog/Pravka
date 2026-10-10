@@ -103,7 +103,15 @@ internal object Seed {
             if (sFrom >= now) break
             z.insertInterruption(sFrom, minOf(sTo, now), "сон", "Сон", resumePrevious = false)
             if (sTo >= now) break
-            for ((i, b) in plan.withIndex()) {
+            for ((i, b0) in plan.withIndex()) {
+                // Прошлые дни разные, как в жизни: каждый третий большой рабочий блок
+                // ушёл в потери, каждый другой третий — в отдых. Иначе у дороги жизни
+                // медиана и 75 % своих дней совпадают и разметки не видно.
+                val b = if (k >= 1 && b0.category == "Работа: текущая" && i == plan.indexOfFirst { it.category == "Работа: текущая" }) when (k % 3) {
+                    1 -> B(b0.from, "Сериал вместо финмодели", "Потери")
+                    2 -> B(b0.from, "Лежал с книгой", "Отдых")
+                    else -> b0
+                } else b0
                 val start = at(k, b.from)
                 val end = plan.getOrNull(i + 1)?.let { at(k, it.from) } ?: at(k, BED)
                 if (start >= now) break
