@@ -405,3 +405,56 @@ def test_now_holds_five_on_the_server(dela, conn):
     yesterday = (dt.date.fromisoformat(today) - dt.timedelta(days=1)).isoformat()
     assert ops(dela, "sasha", {"op": "task.create", "task": {"title": "Вчерашнее", "focus_on": yesterday}})[0]["ok"]
     assert ops(dela, "natasha", {"op": "task.create", "task": {"title": "Наташино", "focus_on": today}})[0]["ok"]
+
+
+def test_three_groups_and_today(dela):
+    """Три группы дел (владелец 10.10.2026): «Ждут от меня» — первым делом, «Сам», «Проверить».
+    ball «owed» — так группу называет автоматика; в базе это mine и флаг owed (телефон до своего задания
+    видит такое дело своим «моё»). Мяч ушёл к человеку — флаг гаснет сам; телефонное «моё» его не роняет.
+    «Сегодня» — срок сегодня или прошёл, «ждут от меня» без срока, «проверить», где пора напомнить."""
+    today = dt.date.today()
+    yday, tmrw = today - dt.timedelta(days=1), today + dt.timedelta(days=1)
+    with store.db.session(dela, "system", "t") as c:
+        pid = c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Евгений Гуркин', 'Гуркин', 'sasha') "
+                        "RETURNING id").fetchone()["id"]
+    r = ops(dela, "sasha",
+            {"op": "task.create", "task": {"title": "Перезвонить Гуркину по фонду", "ball": "owed", "person_id": str(pid)}},
+            {"op": "task.create", "task": {"title": "Попросить Наташу о тизере", "due_date": today.isoformat()}},
+            {"op": "task.create", "task": {"title": "Гуркин: прислать структуру", "ball": "waiting", "person_id": str(pid),
+                                           "nudge_on": yday.isoformat()}},
+            {"op": "task.create", "task": {"title": "Обсудить при встрече", "ball": "agenda", "person_id": str(pid),
+                                           "due_date": yday.isoformat()}},
+            {"op": "task.create", "task": {"title": "Ответить банку к сроку", "ball": "owed", "due_date": tmrw.isoformat()}},
+            {"op": "task.create", "task": {"title": "Купить магний"}})
+    assert all(x["ok"] for x in r), r
+    owed = r[0]["task"]
+    assert (owed["ball"], owed["owed"], owed["grp"]) == ("mine", True, "owed")
+
+    v = store.view(dela, "sasha", "today")
+    assert [g["key"] for g in v["groups"]] == ["owed", "self", "check"]
+    assert {g["key"]: [t["title"] for t in g["items"]] for g in v["groups"]} == {
+        "owed": ["Перезвонить Гуркину по фонду"],
+        "self": ["Обсудить при встрече", "Попросить Наташу о тизере"],  # кто дольше ждёт — выше
+        "check": ["Гуркин: прислать структуру"]}
+    assert v["later"] == {"owed": 1, "self": 1, "check": 0}
+    later = store.view(dela, "sasha", "later")
+    assert {g["key"]: [t["title"] for t in g["items"]] for g in later["groups"]} == {
+        "owed": ["Ответить банку к сроку"], "self": ["Купить магний"], "check": []}
+
+    def set_(**kw):
+        return ops(dela, "sasha", {"op": "task.set", "id": owed["id"], "set": kw})[0]["task"]
+
+    assert set_(due_date=today.isoformat())["owed"] is True
+    t = set_(ball="waiting")
+    assert (t["ball"], t["owed"], t["grp"]) == ("waiting", False, "check")
+    t = set_(ball="owed")
+    assert (t["ball"], t["owed"], t["grp"]) == ("mine", True, "owed")
+    assert set_(ball="mine", title="Перезвонить Гуркину")["owed"] is True
+    assert set_(owed=False)["grp"] == "self"
+
+    # Переписка: «Женя ждёт звонка» — дело само встаёт в «Ждут от меня».
+    s = ops(dela, "sasha", {"op": "suggestion.create", "suggestion": {
+        "for_user": "sasha", "kind": "create", "source": "telegram", "batch_ref": "tg:1", "quote": "Женя: жду звонка",
+        "payload": {"title": "Перезвонить Жене", "ball": "owed", "person_name": "Гуркин",
+                    "meeting_at": today.isoformat(), "auto": True}}})[0]
+    assert s["suggestion"]["status"] == "accepted" and s["task"]["owed"] is True and s["task"]["ball"] == "mine"

@@ -454,6 +454,11 @@ a.st:hover { border-color: rgba(var(--t), .5); }
 .chips .late { color: var(--value); font-weight: 600; }
 .chips .today { color: var(--label); }
 .chips .ball-waiting, .chips .ball-agenda, .chips .remind { color: var(--label); }
+/* «Ждут от меня» (10.10.2026) — первым делом: кто ждёт и сколько — ярче, кольцо — светлее. Без светофора. */
+.chips .grp-owed { color: var(--value); font-weight: 600; }
+.task.grp-owed .tick::before { border-color: var(--value); }
+.group.grp-owed > h2 { color: var(--value); }
+.grp-pick .chip-btn { flex: 1 1 auto; }
 .chips .tag { color: var(--label); }
 .chips .money, .chips .ok { color: var(--label); }
 .chips .rel { color: var(--value); font-weight: 600; }

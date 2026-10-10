@@ -81,7 +81,7 @@ MAX_DEALS = 200                 # сделки на экране: Воронка
 NOTE_CHARS = 100
 WD = parse.WD
 WD_SHORT = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
-BALL_WORD = {"waiting": "жду от", "agenda": "повестка с"}
+BALL_WORD = {"owed": "ждёт", "waiting": "жду от", "agenda": "повестка с"}
 # Что «Вернуть» ставит обратно делу, которое поправило принятое предложение (статус — отдельно).
 UNDO_FIELDS = sorted(store.TASK_FIELDS - {"status", "source", "source_ref"})
 
@@ -134,13 +134,18 @@ changes — правки дел на экране, по одной записи 
   num — номер дела: с экрана или из ДРУГИХ (правила — «О КАКИХ ДЕЛАХ РЕЧЬ»).
   due — срок ГГГГ-ММ-ДД по календарю или «-». «Завтра», «в пятницу», «через неделю», «на
     следующей неделе» (её понедельник) — считай по календарю. due_time — ЧЧ:ММ, только если названо.
-  now — "on": в «Сейчас», фокус на сегодня; "off" — убрать. «Первым делом», «в приоритет»,
-    «срочно», «главное на сегодня» — now "on" и срок сегодня: других приоритетов в Делах нет.
+  now — "on": отметка «Сейчас» на телефоне; "off" — убрать. Только если Саша прямо говорит «в сейчас».
+    «На сегодня», «первым делом», «в приоритет», «срочно» — срок сегодня (due): главный список Саши —
+    «Сегодня», в нём всё со сроком сегодня и просроченное.
   project — ровно имя проекта из справочника; «-» — во «Входящие». deal — имя сделки, если названа.
-  person и ball — кто держит мяч. mine — делает Саша; waiting — ждём от человека (он делает,
-    «ответственный», «это за ним», «жду от»); agenda — обсудить с человеком при встрече. waiting
-    и agenda — только с человеком: person — короткое имя из справочника. Мяч ушёл к другому —
-    поправь и title: «Человек: действие». person «-» — убрать человека.
+  person и ball — группа дела и кто держит мяч. Групп у Саши три, по приоритету:
+    owed — «Ждут от меня»: человек ждёт от Саши ответа или дела (спросил и ждёт, попросил прислать,
+      ждёт звонка; «он ждёт», «обещал ему», «надо ответить»); person — кто ждёт;
+    mine — «Сам»: Саша сам придумал, никто не ждёт; agenda — тоже «Сам»: обсудить с человеком при встрече;
+    waiting — «Проверить»: ждём от человека (он делает, «ответственный», «это за ним», «жду от»).
+    waiting и agenda — только с человеком: person — короткое имя из справочника. Мяч ушёл к другому —
+    поправь и title: «Человек: действие». person «-» — убрать человека. «Это ждут от меня», «это
+    сам», «это проверить» — смена группы: ball owed, mine или waiting.
   title — новая формулировка, только если Саша её меняет или мяч ушёл к другому. Формат
     «Кто: действие»; мяч у Саши — без префикса, сразу с действия.
   notes_add — что дописать к заметке дела: подробности, цифры, условия — коротко, его словами.
@@ -222,7 +227,7 @@ _ITEM = {
     "properties": {
         "num": {"type": "integer"},
         **{k: {"type": "string"} for k in _TEXT_FIELDS},
-        "ball": {"type": "string", "enum": ["", "mine", "waiting", "agenda"]},
+        "ball": {"type": "string", "enum": ["", "owed", "mine", "waiting", "agenda"]},
         "now": {"type": "string", "enum": ["", "on", "off"]},
         "estimate_min": {"type": "integer"},
         "labels_add": {"type": "array", "items": {"type": "string"}},
@@ -492,7 +497,9 @@ def _task_line(t: dict, today: dt.date, short: bool = False) -> str:
     if t.get("deal_name") and not short:
         bits.append(f"сделка {t['deal_name']}")
     who = t.get("person_short") or t.get("person_name")
-    if t["ball"] in ("waiting", "agenda") and who:
+    if t.get("owed"):  # группа — словами, как Саша её видит (dela_0007)
+        bits.append(f"ждут от меня: {who}" if who else "ждут от меня")
+    elif t["ball"] in ("waiting", "agenda") and who:
         bits.append(f"{'жду от' if t['ball'] == 'waiting' else 'повестка с'} {who}")
     elif who:
         bits.append(f"с {who}")
@@ -548,7 +555,7 @@ def _sug_line(s: dict, t: dict | None) -> str:
     who = p.get("person_name")
     what = [p.get("title") and f"название «{p['title']}»",
             p.get("due_date") and f"срок {p['due_date']}",
-            p.get("ball") and ("мяч: " + ({"mine": "моё"}.get(p["ball"]) or BALL_WORD.get(p["ball"], p["ball"]))
+            p.get("ball") and ("мяч: " + ({"mine": "моё", "owed": "ждут от меня"}.get(p["ball"]) or BALL_WORD.get(p["ball"], p["ball"]))
                                + (f" {who}" if who and p["ball"] != "mine" else "")),
             not p.get("ball") and who and f"человек: {who}",
             p.get("note") and f"подробности: {_short(p['note'], 200)}"]
@@ -618,9 +625,13 @@ def _fields(x: dict, t: dict | None, index: dict, today: dt.date) -> tuple[dict,
             out["person_id"] = person = str(pe)
         else:
             miss.append(f"человека «{s('person')}»")
-    if x.get("ball") in ("mine", "waiting", "agenda"):
+    if x.get("ball") == "owed":  # «Ждут от меня»: в базе — mine и флаг (dela_0007)
+        out["ball"], out["owed"] = "mine", True
+    elif x.get("ball") in ("mine", "waiting", "agenda"):
         if x["ball"] == "mine" or person:
             out["ball"] = x["ball"]
+            if t and t.get("owed"):
+                out["owed"] = False  # «это сам», «это проверить» — из «Ждут от меня» вон
         else:
             miss.append("с кем мяч")
     if s("notes_add"):
@@ -1107,7 +1118,9 @@ def sug_ops(data: dict, sugs: dict, targets: dict, index: dict, today: dt.date) 
             continue
         p = s.get("payload") or {}
         if s["kind"] == "create":
-            cur = {"title": p.get("title"), "notes": p.get("notes"), "ball": p.get("ball"), "due_date": p.get("due_date"),
+            owed = p.get("ball") == "owed"  # в предложении группа одним ball, в деле — mine и флаг
+            cur = {"title": p.get("title"), "notes": p.get("notes"), "ball": "mine" if owed else p.get("ball"), "owed": owed,
+                   "due_date": p.get("due_date"),
                    "labels": p.get("labels") or [],
                    "person_id": parse._one(index, "people", p["person_name"]) if p.get("person_name") else None,
                    "project_id": parse._one(index, "projects", p["project_name"]) if p.get("project_name") else None}

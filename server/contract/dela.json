@@ -13,7 +13,7 @@
         "id": "2b1f0c9e-6a51-4f3e-9c3a-0d6f1b2a7e10", "num": 57, "title": "Иван: прислать модель", "notes": null,
         "project_id": "8c0e2f1a-1d2b-4c3d-8e4f-5a6b7c8d9e0f", "project_name": "Бета Групп", "project_kind": "client",
         "deal_id": null, "deal_name": null, "sphere": "work",
-        "owner_id": "sasha", "ball": "waiting", "person_id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", "person_short": "Иван",
+        "owner_id": "sasha", "ball": "waiting", "owed": false, "grp": "check", "person_id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", "person_short": "Иван",
         "person_name": "Иван Петров", "waiting_since": "2026-10-03", "nudge_on": "2026-10-08", "requested_by": null,
         "requested_by_short": null, "due_date": "2026-10-10", "due_time": null, "estimate_min": 10,
         "money": null, "money_eff": "paid", "want": false, "focus_on": null, "now_": false, "overdue": false,

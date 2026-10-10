@@ -30,7 +30,7 @@ from . import db, people
 OVERLAP = 200
 
 TASK_FIELDS = {
-    "title", "notes", "project_id", "deal_id", "owner_id", "ball", "person_id", "nudge_on", "requested_by",
+    "title", "notes", "project_id", "deal_id", "owner_id", "ball", "owed", "person_id", "nudge_on", "requested_by",
     "due_date", "due_time", "estimate_min", "money", "want", "focus_on", "labels", "status",
     "source", "source_ref", "remind_at", "remind_place",
 }
@@ -38,11 +38,13 @@ TASK_FIELDS = {
 
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
-FEATURES = ["remind", "svod", "people", "dictations"]
+FEATURES = ["remind", "svod", "people", "dictations", "groups"]
 # «svod» — Свод (crm.svod) в синке и операция svod.set; «people» — person.add / person.merge и вид who
 # (одна карточка человека, 06.10.2026). Без них телефон не шлёт этих операций.
 # «dictations» — операция dictation.add: текст наговорки, из которой вышли дела (их source_ref = её id),
 # для «Нового» веба (06.10.2026).
+# «groups» — поле owed (группа «Ждут от меня», dela_0007, 10.10.2026) в task.create и task.set; без него телефон
+# owed не шлёт, а «ждут от меня» из разноски передаёт как ball «owed» — сервер поймёт и так (store._ball_norm).
 # Токен службы бота Ковчега (python -m pravka_dela token --name kovcheg): только он забирает
 # «что пора» и отмечает отправку (remind.py, task.reminded).
 REMIND_BOT = "kovcheg"
@@ -72,6 +74,33 @@ SUGGESTION_TTL = dt.timedelta(days=7)
 NOW_MAX = 5
 NOW_LOCK = 0x5E4A  # первый ключ замка «Сейчас» (второй — владелец): чужим замкам базы не мешает
 _NOW_WORD = {5: "пять", 6: "шесть", 7: "семь", 8: "восемь", 9: "девять"}
+
+
+# Три группы дел (владелец 10.10.2026: «есть дела, которые ждут меня… второе — что я сам придумал… третье —
+# проверить, что мне люди должны»). Порядок — приоритет: ждут от меня первым делом. Группа — из owed и ball
+# (dela_0007), тем же правилом в tasks.v_tasks.grp, app.js и на телефоне.
+GROUPS = (("owed", "Ждут от меня"), ("self", "Сам"), ("check", "Проверить"))
+
+
+def group_of(t: dict) -> str:
+    return "owed" if t.get("owed") else "check" if t.get("ball") == "waiting" else "self"
+
+
+def _ball_norm(data: dict) -> dict:
+    """ball = «owed» — «ждут от меня»: в базе это ball mine и флаг owed (dela_0007).
+
+    Так автоматика (встречи, дайджест, разбор надиктовки, Claude) называет группу одним полем ball, а
+    телефон, который о флаге ещё не знает, видит такое дело своим «моё». Мяч ушёл к человеку (waiting) —
+    флаг гаснет; mine и agenda без owed флаг не трогают: уточнение срока «ждут от меня» не роняет.
+    """
+    if data.get("ball") == "owed":
+        data["ball"] = "mine"
+        data["owed"] = True
+    elif data.get("ball") == "waiting":
+        data["owed"] = False
+    if "owed" in data and data["owed"] is None:
+        data["owed"] = False
+    return data
 
 
 class OpError(Exception):
@@ -238,7 +267,7 @@ def _now_guard(conn: psycopg.Connection, before: dict | None, after: dict) -> No
 
 
 def op_task_create(conn, user, op):
-    data = _pick(op.get("task") or {}, TASK_FIELDS | {"id", "import_ref"}, "дело")
+    data = _ball_norm(_pick(op.get("task") or {}, TASK_FIELDS | {"id", "import_ref"}, "дело"))
     if not data.get("title"):
         raise OpError("у дела нет названия")
     if data.get("id"):
@@ -257,7 +286,7 @@ def op_task_set(conn, user, op):
     cur = task_by(conn, op.get("id"))
     if not cur:
         raise OpError("нет такого дела или оно не видно")
-    changes = _pick(op.get("set") or {}, TASK_FIELDS, "дело")
+    changes = _ball_norm(_pick(op.get("set") or {}, TASK_FIELDS, "дело"))
     was = op.get("was") or {}
     # Поле поменяли с двух сторон: побеждает пришедшее последним, прежнее
     # значение остаётся в журнале, а клиент узнаёт, что спорил не один.
@@ -482,6 +511,7 @@ def op_suggestion_decide(conn, user, op):
         if s["kind"] == "close":
             fields.setdefault("status", "done")
         fields.update(fix)
+        _ball_norm(fields)  # «как было» — и про флаг «ждут от меня», иначе «Вернуть» его не снимет
         cur = task_by(conn, s["task_id"]) or {}
         task = op_task_set(conn, user, {"id": s["task_id"], "set": fields})["task"]
         # «Вернуть» у сделанного само: как было (только то, что поменялось) и чем это объяснили.
@@ -777,6 +807,41 @@ def view_morning(conn, user, sphere=None, **_):
     }
 
 
+# «Сегодня» (10.10.2026) — главный список: «чёткий, понятный список на каждый день… и я должен закрывать
+# все такие дела на каждый день». Три группы по приоритету (GROUPS). В нём: срок сегодня или прошёл,
+# «Сейчас» с телефона, «ждут от меня» без срока (человек ждёт — значит, сегодня) и «проверить», где пора
+# напомнить. Не сделал — завтра дело снова здесь, просроченным. Порядок — кто дольше ждёт: срок, а без
+# срока — день, когда дело завели.
+# coalesce — не ради красоты: у дела без срока условие даёт NULL, и NOT (NULL) потерял бы его в «Дальше».
+TODAY_IF = (
+    "coalesce(focus_on = crm.today() OR due_date <= crm.today() "
+    "OR (owed AND due_date IS NULL) OR (ball = 'waiting' AND nudge_on <= crm.today()), false)"
+)
+TODAY_WHERE = "status = 'open' AND owner_id = %s AND " + TODAY_IF
+TODAY_ORDER = " ORDER BY coalesce(due_date, (created_at AT TIME ZONE 'Europe/Moscow')::date), due_time NULLS LAST, num"
+
+
+def view_today(conn, user, sphere=None, **_):
+    rows = _list(conn, TODAY_WHERE, [user], sphere, TODAY_ORDER)
+    rest = _list(conn, f"status = 'open' AND owner_id = %s AND NOT {TODAY_IF}", [user], sphere)
+    return {
+        "groups": [{"key": k, "title": title, "items": [r for r in rows if group_of(r) == k]} for k, title in GROUPS],
+        "later": {k: sum(1 for r in rest if group_of(r) == k) for k, _ in GROUPS},
+        "done_today": conn.execute(
+            "SELECT count(*) AS n FROM tasks.tasks WHERE owner_id = %s AND status = 'done' "
+            "AND (completed_at AT TIME ZONE 'Europe/Moscow')::date = crm.today()", (user,)).fetchone()["n"],
+        "new_count": conn.execute(
+            "SELECT count(*) AS n FROM tasks.suggestions WHERE for_user = %s AND status = 'pending'", (user,)
+        ).fetchone()["n"],
+    }
+
+
+def view_later(conn, user, sphere=None, **_):
+    """Всё открытое, что не на сегодня, — теми же тремя группами, по сроку."""
+    rows = _list(conn, f"status = 'open' AND owner_id = %s AND NOT {TODAY_IF}", [user], sphere)
+    return {"groups": [{"key": k, "title": title, "items": [r for r in rows if group_of(r) == k]} for k, title in GROUPS]}
+
+
 def view_new(conn, user, **_):
     # Пачки — по дате встречи, свежие сверху; у «закрыть» и «поправить» — номер и название дела.
     rows = conn.execute(
@@ -923,6 +988,8 @@ def view_search(conn, user, q=None, status="open", **_):
 VIEWS: dict[str, Callable] = {
     "svod": people.view_svod,
     "who": people.view_who,
+    "today": view_today,
+    "later": view_later,
     "morning": view_morning,
     "new": view_new,
     "dictations": view_dictations,

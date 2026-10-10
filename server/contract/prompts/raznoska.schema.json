@@ -10,7 +10,7 @@
           "notes": {"type": "string"},
           "project": {"type": "string"},
           "person": {"type": "string"},
-          "ball": {"type": "string", "enum": ["mine", "waiting", "agenda"]},
+          "ball": {"type": "string", "enum": ["owed", "mine", "waiting", "agenda"]},
           "due": {"type": "string"},
           "due_time": {"type": "string"},
           "remind_at": {"type": "string"},
