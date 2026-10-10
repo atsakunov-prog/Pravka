@@ -276,7 +276,14 @@ class ScreenShots {
                     if (tap(m, "Все дела")) shot(m, "$g-6-vse")
                     close(m); m = launch(tab)
                     // Фильтр с завода: «Отбить — по людям».
-                    if (tap(m, "разделы, CRM") && tap(m, "Отбить — по людям")) shot(m, "$g-8-filter")
+                    if (tap(m, "разделы, CRM") && tap(m, "Отбить — по людям")) {
+                        shot(m, "$g-8-filter")
+                        // «Только одно»: список людей с поиском, выбор — одна ветка.
+                        if (tap(m, "Все люди")) {
+                            screen("$g-9-pick")
+                            if (tap(m, "Ольга", exact = true)) shot(m, "$g-10-only")
+                        }
+                    }
                     close(m); m = launch(tab)
                     // ☰ — боковая панель (баг №1, 07.10.2026).
                     if (tap(m, "разделы, CRM")) screen("$g-5-nav")

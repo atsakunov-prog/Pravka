@@ -123,6 +123,9 @@ private const val LOOSE_GROUP = "0"
 /** Раздел-фильтр: ключ «f:<id>» (`#/f/<id>` веба). */
 private const val FILTER_NAV = "f:"
 
+/** Список «только одно» экрана [key]: ветки первого уровня [lv] с числом дел. */
+private data class BranchPick(val key: String, val lv: DelaGroups.Level, val list: List<DelaGroups.Branch>)
+
 /** Выбор уровня [i] на экране [key] (`levelsBar` веба): уровни сейчас и чего не предлагать. */
 private data class LevelPick(val key: String, val i: Int, val levels: List<DelaGroups.Level>, val omit: Set<DelaGroups.Level>)
 private val CRM_NAV = listOf("crm" to "Воронка", "clients" to "Клиенты", "people" to "Люди", "ties" to "Связи")
@@ -161,6 +164,9 @@ private data class DelaScreen(
     val levelOmit: Set<DelaGroups.Level> = emptySet(),
     /** «Сохранить фильтр» — что показано (`addFilter` веба); null — кнопки нет. */
     val saveScope: DelaGroups.Scope? = null,
+    /** «Только одно» по первому уровню (`pickBar` веба): выбор и ветки с числом дел — до выбора. */
+    val pick: DelaGroups.Pick? = null,
+    val branches: List<DelaGroups.Branch> = emptyList(),
 ) {
     /** Дела экрана в порядке показа — то, что видит Claude. */
     val ids: List<String> get() = nodes?.let { n -> DelaGroups.flat(n).map { it.id } } ?: groups.flatMap { g -> g.items.map { it.id } }
@@ -317,6 +323,17 @@ fun DelaTab(
     var deleting by remember { mutableStateOf<DelaGroups.Filter?>(null) }
     // Выбор уровня: ключ экрана, номер уровня, уровни сейчас, чего не предлагать.
     var levelPick by remember { mutableStateOf<LevelPick?>(null) }
+    // «Только одно» на видах — до перезапуска (`S.pick` веба); в фильтре — вместе с ним.
+    var picks by remember { mutableStateOf(mapOf<String, DelaGroups.Pick?>()) }
+    var branchPick by remember { mutableStateOf<BranchPick?>(null) }
+    // Другая страница — выбор проекта не переезжает на неё (сброс `S.pick.project` веба).
+    LaunchedEffect(pages.lastOrNull()) { if (picks["project"] != null) picks = picks - "project" }
+    fun setPick(key: String, p: DelaGroups.Pick?) {
+        if (key.startsWith(FILTER_NAV)) {
+            val id = key.removePrefix(FILTER_NAV)
+            filters.firstOrNull { it.id == id }?.let { f0 -> fdraft = fdraft + (id to (fdraft[id] ?: f0).copy(pick = p)) }
+        } else picks = picks + (key to p)
+    }
     // «Назад» листает страницы Дел (как история веба), пока они есть.
     androidx.activity.compose.BackHandler(enabled = pages.isNotEmpty()) { pages = pages.dropLast(1) }
 
@@ -432,9 +449,11 @@ fun DelaTab(
         )
         // «Сегодня» (`renderToday` веба, 10.10.2026): три группы по приоритету — отбить, запустить,
         // мониторить; в каждой выше тот, кому делать раньше и кто дольше ждёт. Пустая группа не видна.
-        view == DelaViews.View.TODAY -> DelaGroups.todayTasks(snap, me, today, sphere).let { items ->
+        view == DelaViews.View.TODAY -> DelaGroups.todayTasks(snap, me, today, sphere).let { every ->
             val done = DelaGroups.doneToday(snap, me, today)
             val lv = levelsOf("today")
+            val pk = picks["today"]?.takeIf { DelaGroups.pickOn(it, lv) }
+            val items = DelaGroups.picked(every, lv, pk, snap, today)
             DelaScreen(
                 "Сегодня",
                 listOfNotNull(
@@ -444,29 +463,36 @@ fun DelaTab(
                 ).joinToString(" · "),
                 nodes = DelaGroups.nested(items, lv, snap, today),
                 levels = lv, levelKey = "today", saveScope = DelaGroups.Scope.TODAY,
-                empty = if (done > 0) "На сегодня всё закрыто." else "На сегодня пусто.",
+                pick = pk, branches = lv.firstOrNull()?.let { DelaGroups.branches(every, it, snap, today) }.orEmpty(),
+                empty = if (pk != null) "У «${pk.title}» здесь дел нет." else if (done > 0) "На сегодня всё закрыто." else "На сегодня пусто.",
             )
         }
         view == DelaViews.View.ALL -> {
             // С 10.10.2026 «Все дела» — уровнями: с завода проекты › группы › время (владелец: «по каждому
             // проекту посмотреть, что я могу сделать сегодня»).
             val lv = levelsOf("all")
-            val items = DelaViews.list(snap, me, sphere, showDone = showDone)
+            val every = DelaViews.list(snap, me, sphere, showDone = showDone)
+            val pk = picks["all"]?.takeIf { DelaGroups.pickOn(it, lv) }
+            val items = DelaGroups.picked(every, lv, pk, snap, today)
             DelaScreen(
                 "Все дела", plural(items.count { it.open }, "открытое", "открытых", "открытых"),
                 nodes = DelaGroups.nested(items, lv, snap, today), levels = lv, levelKey = "all", saveScope = DelaGroups.Scope.ALL,
-                done = true, add = true, empty = "Пусто.",
+                pick = pk, branches = lv.firstOrNull()?.let { DelaGroups.branches(every, it, snap, today) }.orEmpty(),
+                done = true, add = true, empty = if (pk != null) "У «${pk.title}» здесь дел нет." else "Пусто.",
             )
         }
         // Сохранённый фильтр (`renderFilter` веба): что показать и уровни; поменял — «Сохранить» или «Как было».
         filterId != null -> filters.firstOrNull { it.id == filterId }?.let { f0 ->
             val f = fdraft[f0.id] ?: f0
-            val items = DelaGroups.scopeItems(snap, me, today, sphere, f.scope)
+            val every = DelaGroups.scopeItems(snap, me, today, sphere, f.scope)
+            val pk = f.pick?.takeIf { DelaGroups.pickOn(it, f.levels) }
+            val items = DelaGroups.picked(every, f.levels, pk, snap, today)
             DelaScreen(
                 f0.name,
-                listOf(f.scope.title, DelaGroups.levelsName(f.levels), plural(items.size, "дело", "дела", "дел")).joinToString(" · "),
+                listOf(f.scope.title, DelaGroups.levelsName(f.levels) + (pk?.let { " — " + it.title } ?: ""), plural(items.size, "дело", "дела", "дел")).joinToString(" · "),
                 nodes = DelaGroups.nested(items, f.levels, snap, today), levels = f.levels, levelKey = FILTER_NAV + f0.id,
-                empty = "Здесь пусто.",
+                pick = pk, branches = f.levels.firstOrNull()?.let { DelaGroups.branches(every, it, snap, today) }.orEmpty(),
+                empty = if (pk != null) "У «${pk.title}» здесь дел нет." else "Здесь пусто.",
             )
         }
         else -> null
@@ -481,7 +507,9 @@ fun DelaTab(
         val p = snap.projects[pg.id]
         val lv = levelsOf("project").filter { it != DelaGroups.Level.PROJECT }
         val all = snap.tasks.values.filter { it.projectId == pg.id }
-        val items = all.filter { (showDone || it.open) && (dealFilter.isBlank() || it.dealId == dealFilter) }
+        val every = all.filter { (showDone || it.open) && (dealFilter.isBlank() || it.dealId == dealFilter) }
+        val pk = picks["project"]?.takeIf { DelaGroups.pickOn(it, lv) }
+        val items = DelaGroups.picked(every, lv, pk, snap, today)
         val open = all.filter { it.open }
         val late = open.count { it.dueDate.isNotBlank() && it.dueDate < today }
         DelaScreen(
@@ -493,7 +521,8 @@ fun DelaTab(
             ).joinToString(" · "),
             alert = if (late > 0) "просрочено: $late" else "",
             nodes = DelaGroups.nested(items, lv, snap, today), levels = lv, levelKey = "project", levelOmit = setOf(DelaGroups.Level.PROJECT),
-            done = true, add = true, empty = "Дел нет. Следующий шаг — в строке выше.",
+            pick = pk, branches = lv.firstOrNull()?.let { DelaGroups.branches(every, it, snap, today) }.orEmpty(),
+            done = true, add = true, empty = if (pk != null) "У «${pk.title}» здесь дел нет." else "Дел нет. Следующий шаг — в строке выше.",
         )
     }
     // Страница человека — разделы веба.
@@ -758,9 +787,12 @@ fun DelaTab(
             onProject = { id -> if (id.isNotBlank()) push(DelaPage.Project(id)) },
             onPerson = { id -> push(DelaPage.Person(id)) },
             onLevel = { key, i, lv, omit -> levelPick = LevelPick(key, i, lv, omit) },
+            onPick = { key, p -> setPick(key, p) },
+            onPickOpen = { key, list, lv -> branchPick = BranchPick(key, lv, list) },
             onSaveFilter = { sc ->
                 val lv = screen?.levels.orEmpty()
-                naming = DelaGroups.Filter("f-" + java.lang.Long.toString(System.currentTimeMillis(), 36), DelaGroups.suggestName(sc, lv, null), sc, lv)
+                val pk = screen?.pick
+                naming = DelaGroups.Filter("f-" + java.lang.Long.toString(System.currentTimeMillis(), 36), DelaGroups.suggestName(sc, lv, pk), sc, lv, pk)
                 namingNew = true
             },
         )
@@ -1167,6 +1199,12 @@ fun DelaTab(
                 val id = lp.key.removePrefix(FILTER_NAV)
                 filters.firstOrNull { it.id == id }?.let { f0 -> fdraft = fdraft + (id to (fdraft[id] ?: f0).copy(levels = next)) }
             } else scope.launch { app.delaStore.setGroup("lv:" + lp.key, DelaGroups.levelsKey(next)) }
+        }
+    }
+    branchPick?.let { bp ->
+        BranchSheet(bp, onDismiss = { branchPick = null }) { b ->
+            branchPick = null
+            setPick(bp.key, b?.let { DelaGroups.pickOf(it, bp.lv) })
         }
     }
     naming?.let { f ->
@@ -1684,6 +1722,9 @@ private data class ListTools(
     val onLevel: (String, Int, List<DelaGroups.Level>, Set<DelaGroups.Level>) -> Unit = { _, _, _, _ -> },
     /** «Сохранить фильтр» — что показано. */
     val onSaveFilter: (DelaGroups.Scope) -> Unit = {},
+    /** «Только одно»: выбрать ветку (null — показать все) и открыть список с поиском. */
+    val onPick: (String, DelaGroups.Pick?) -> Unit = { _, _ -> },
+    val onPickOpen: (String, List<DelaGroups.Branch>, DelaGroups.Level) -> Unit = { _, _, _ -> },
 )
 
 /**
@@ -1723,6 +1764,16 @@ private fun LazyListScope.screenBody(
                         }
                         val save = sc.saveScope
                         if (save != null) PaperChip("Сохранить фильтр", selected = false, onClick = { tools.onSaveFilter(save) })
+                    }
+                    // «Все люди ▾» / «Только: Наташа» и крестик «показать все» (`pickBar` веба).
+                    val first = sc.levels.firstOrNull()
+                    if (first != null) {
+                        ChipRow {
+                            val p = sc.pick
+                            PaperChip(if (p != null) "Только: ${p.title}" else first.allOf + " ▾", selected = p != null,
+                                onClick = { tools.onPickOpen(lk, sc.branches, first) })
+                            if (p != null) PaperChip("✕ показать все", selected = false, onClick = { tools.onPick(lk, null) })
+                        }
                     }
                 }
                 if (sc.done || sc.groupKey != null) {
@@ -2674,6 +2725,23 @@ private fun TimeLine(value: String, onChange: (String) -> Unit) {
 }
 
 /** Выбор из справочника с поиском: тап выбирает и закрывает. */
+/**
+ * «Показать только» (`pickPop` веба; владелец: «набрать „Наташ“ — выпадут все
+ * Наташи, и я выберу свою»): ветки первого уровня с поиском по имени, короткому
+ * и другим именам, должности, компании; справа — число дел.
+ */
+@Composable
+private fun BranchSheet(bp: BranchPick, onDismiss: () -> Unit, onPick: (DelaGroups.Branch?) -> Unit) {
+    var q by remember { mutableStateOf("") }
+    PaperSheet(onDismiss = onDismiss, title = "Показать только", icon = Glyphs.Search) {
+        PaperField(value = q, onValueChange = { q = it }, label = "Найти…")
+        val shown = DelaGroups.findBranches(bp.list, q)
+        if (q.isBlank()) PickLine(bp.lv.allOf, "", false) { onPick(null) }
+        for (b in shown.take(40)) PickLine(b.title, listOf(b.note, b.n.toString()).filter { it.isNotBlank() }.joinToString(" · "), false) { onPick(b) }
+        if (q.isNotBlank() && shown.isEmpty()) PaperHint("Не нашёл — здесь таких нет")
+    }
+}
+
 /** Имя фильтра: предложенное (`addFilter` веба) или своё. */
 @Composable
 private fun FilterNameSheet(title: String, initial: String, onDismiss: () -> Unit, onDone: (String) -> Unit) {
