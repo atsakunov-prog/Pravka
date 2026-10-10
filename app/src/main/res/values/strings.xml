@@ -193,6 +193,7 @@
     <string name="money_share_label">Деньги: выписка</string>
     <string name="tab_report">Общая статистика</string>
     <string name="tab_reviews">Разборы</string>
+    <string name="tab_where">Где мы</string>
     <string name="e_busy">Микрофон занят другой записью — сначала заверши её</string>
     <string name="m_busy_pravka">Идёт наговор трат — останови его кнопкой «₽»</string>
     <string name="e_busy_pravka">Идёт запись Тела — останови её кнопкой «Т»</string>

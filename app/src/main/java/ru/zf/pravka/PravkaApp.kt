@@ -614,6 +614,25 @@ class PravkaApp : Application() {
     }
 
     /**
+     * «Где мы» (docs/gde.md): точки семьи на карте через то же облако семьи.
+     * Имя телефона — то же, что в журналах Денег; место по Wi-Fi — у
+     * автопилота Засечки, пока служба жива.
+     */
+    internal val locator by lazy { ru.zf.pravka.provider.Locator(this) }
+    internal val where by lazy {
+        ru.zf.pravka.data.WhereSync(
+            context = this,
+            locator = locator,
+            cloud = { familyCloud() },
+            profile = { profileStore.current },
+            device = { moneyCloudSync.device },
+            place = { runCatching { ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.placeNow() }.getOrNull().orEmpty() },
+            scope = appScope,
+            log = { eventLog.add(it) },
+        )
+    }
+
+    /**
      * Архив на домашнем компе (data/ArchiveSync.kt, docs/arkhiv.md): каждый
      * ввод — событием на сервер. Откуда брать записи — здесь: режим,
      * выключенный в профиле, свой стор не будит.

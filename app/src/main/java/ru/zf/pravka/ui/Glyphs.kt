@@ -234,4 +234,10 @@ object Glyphs {
     val Bedtime: ImageVector get() = pick("Bedtime") { sw -> glyph("Bedtime", sw, "M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z") }
     val PartlyCloudy: ImageVector get() = pick("PartlyCloudy") { sw -> glyph("PartlyCloudy", sw, "M9 18.5h8a3 3 0 0 0 .2-6 4.4 4.4 0 0 0-8.4 1A2.6 2.6 0 0 0 9 18.5z", "M7 4v1.5M3.4 7.5l1 .8M2.5 12h1.5", "M10.2 8.6A4 4 0 0 0 4 11.5") }
     val NightCloud: ImageVector get() = pick("NightCloud") { sw -> glyph("NightCloud", sw, "M9 19h8a3 3 0 0 0 .2-6 4.4 4.4 0 0 0-8.4 1A2.6 2.6 0 0 0 9 19z", "M12 6.5A5.5 5.5 0 0 0 5.5 13") }
+
+    // ---- «Где мы» ----
+    /** Семья на карте: двое рядом. */
+    val Family: ImageVector get() = pick("Family") { sw -> glyph("Family", sw, "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2", circle(9f, 7f, 4f), "M23 21v-2a4 4 0 0 0-3-3.87", "M16 3.13a4 4 0 0 1 0 7.75") }
+    /** Маршрут к человеку: стрелка навигатора. */
+    val Route: ImageVector get() = pick("Route") { sw -> glyph("Route", sw, "M3 11l19-9-9 19-2-8-8-2z") }
 }

@@ -485,6 +485,15 @@ class AutoPilot(
     private var btReceiver: BroadcastReceiver? = null
     private var scanReceiver: BroadcastReceiver? = null
 
+    /**
+     * Где телефон по Wi-Fi прямо сейчас — имя места («Дом», «Летово»); не
+     * знаем — пусто. Для точки на карте семьи («Где мы»): зовут с чужого
+     * потока, поэтому эфир — копией.
+     */
+    fun placeNow(): String = places[seenSsid]
+        ?: runCatching { around.toList() }.getOrDefault(emptyList()).firstNotNullOfOrNull { places[it] }
+        ?: ""
+
     /** Одной строкой для настроек: видно, живой автопилот или спит впустую. */
     fun statusLine(): String = buildString {
         append(if (seenSsid.isBlank()) "Сеть не вижу" else "Вижу сеть «$seenSsid»")

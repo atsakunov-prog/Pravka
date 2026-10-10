@@ -116,7 +116,7 @@ internal enum class SettingsGroup(
     NOTION("Notion", "план, Дневник, «Вся жизнь»", SettingsShelf.LINKS, { Glyphs.Scroll }),
     INTERVALS("intervals.icu", "тренировки, сон, вес", SettingsShelf.LINKS, { Glyphs.Activity }, ModeDecor.SPORT),
     SHEETS("Google Sheets", "таймшит из ленты", SettingsShelf.LINKS, { Glyphs.ListLines }, ModeDecor.ZASECHKA),
-    CLOUD("Облако семьи", "домашний сервер: общие Деньги, копии базы", SettingsShelf.LINKS, { Glyphs.Cloud }),
+    CLOUD("Облако семьи", "домашний сервер: общие Деньги, копии базы, карта семьи", SettingsShelf.LINKS, { Glyphs.Cloud }),
     ARCHIVE("Архив", "вся жизнь на компе, к ней ходит Claude", SettingsShelf.LINKS, { Glyphs.Archive }),
     BUTTONS("Кнопки на экране", "какие, круг или стопка, размер", SettingsShelf.LOOK, { Glyphs.Disk }),
     DISK("Вид диска", "стекло, плотности, тени, инерция", SettingsShelf.LOOK, { Glyphs.Palette }),

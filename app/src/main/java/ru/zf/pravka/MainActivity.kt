@@ -381,6 +381,8 @@ internal enum class Tab(val titleRes: Int) {
     SHOWCASE(R.string.tab_showcase),
     /** Баги и предложения с кнопок (07.10.2026, `docs/feedback.md`). */
     FEEDBACK(R.string.tab_feedback),
+    /** «Где мы»: семья на карте аватарами (10.10.2026, docs/gde.md). */
+    WHERE(R.string.tab_where),
 }
 
 /**
@@ -398,6 +400,8 @@ private val SERVICE_TABS = listOf(
     // «Разборы» — первыми: утренний отчёт ночного разбора и тени читается каждый день
     // (владелец, 16.09: «это не в Ещё → Разборы, как я просил»).
     Tab.REVIEWS,
+    // «Где мы» — семья на карте (10.10.2026): служебная страница под «Ещё», полка «семья».
+    Tab.WHERE,
     Tab.DICTIONARY,
     Tab.PROMPTS,
     Tab.LEARNING,
@@ -438,6 +442,7 @@ private fun serviceHint(tab: Tab): String = when (tab) {
     Tab.LOGS -> "что делала служба, выгрузки для разбора"
     Tab.SHOWCASE -> "все детали набора во всех состояниях"
     Tab.FEEDBACK -> "сказанное с кнопок — раз в день в разбор"
+    Tab.WHERE -> "семья на карте: кто где сейчас"
     else -> ""
 }
 
@@ -451,6 +456,7 @@ private sealed class Page {
 /** Значок служебного экрана — тот же, что у него в шапке. */
 private fun serviceGlyph(tab: Tab): androidx.compose.ui.graphics.vector.ImageVector = when (tab) {
     Tab.REVIEWS -> Glyphs.Moon
+    Tab.WHERE -> Glyphs.Family
     Tab.DICTIONARY -> Glyphs.Dictionary
     Tab.PROMPTS -> Glyphs.Scroll
     Tab.LEARNING -> Glyphs.Learn
@@ -514,6 +520,7 @@ private fun MoreList(app: PravkaApp, onOpen: (Tab) -> Unit, onMode: (Tab) -> Uni
 }
 
 private val MORE_SHELVES: List<Pair<String, List<Tab>>> = listOf(
+    "семья" to listOf(Tab.WHERE),
     "правка изнутри" to listOf(Tab.REVIEWS, Tab.DICTIONARY, Tab.PROMPTS, Tab.LEARNING),
     "служебное" to listOfNotNull(Tab.FEEDBACK, Tab.LOGS, Tab.SETTINGS, Tab.SHOWCASE.takeIf { BuildConfig.DEBUG }),
 )
@@ -919,6 +926,8 @@ private fun PageScreen(
         }
         else -> ModeDecor.SERVICE
     }
+    // «Моя точка» на карте семьи — шестерёнкой в шапке, окно открывает сама вкладка.
+    var whereSettings by remember { mutableStateOf(false) }
     ModeFrame(decor) {
         Column(Modifier.fillMaxSize()) {
             when (p) {
@@ -952,6 +961,7 @@ private fun PageScreen(
                             when (p.tab) {
                                 Tab.REPORT -> ExportAction(onLifeExport)
                                 Tab.STATS -> ExportAction { onDictationExport(true) }
+                                Tab.WHERE -> SettingsAction { whereSettings = true }
                                 else -> Unit
                             }
                             CostAction(openCost)
@@ -970,6 +980,14 @@ private fun PageScreen(
                         Tab.PROMPTS -> WideCap { PromptsTab(promptStore) }
                         Tab.LEARNING -> WideCap { LearningTab(app) }
                         Tab.REVIEWS -> WideCap { ReviewsTab(app) }
+                        // Карта — во всю ширину и на разложенном Fold: ей тесно в колонке.
+                        Tab.WHERE -> WhereTab(
+                            app,
+                            serviceEnabled,
+                            settingsRequested = whereSettings,
+                            onSettingsHandled = { whereSettings = false },
+                            onOpenCloud = { openGroup(SettingsGroup.CLOUD) },
+                        )
                         Tab.LOGS -> WideCap { LogsTab(app) }
                         Tab.FEEDBACK -> WideCap { FeedbackTab(app) }
                         Tab.STATS -> WideCap {

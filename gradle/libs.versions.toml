@@ -10,6 +10,9 @@ okhttp = "4.12.0"
 # Штрихкод упаковки: сканер живёт в Play Services, в APK едет только фасад
 # (~150 КБ) и разрешение камеры нам не нужно — снимает сам сервис.
 codeScanner = "16.1.0"
+# Карта «Где мы»: OpenStreetMap-плитки на обычном View, без ключа API и без
+# нативных библиотек (~0,9 МБ). Google и Яндекс просят ключ и аккаунт.
+osmdroid = "6.1.20"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -18,6 +21,7 @@ androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecyc
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 play-services-code-scanner = { group = "com.google.android.gms", name = "play-services-code-scanner", version.ref = "codeScanner" }
+osmdroid = { group = "org.osmdroid", name = "osmdroid-android", version.ref = "osmdroid" }
 compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
 compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 compose-material-icons-core = { group = "androidx.compose.material", name = "material-icons-core" }

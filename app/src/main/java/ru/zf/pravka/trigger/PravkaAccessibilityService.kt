@@ -332,6 +332,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     val calendarPilot by lazy { CalendarPilot(this, app, scope, autoPilot) }
     /** Что автопилот знает о швах дня — тренировкам с часов; выключен — null. */
     fun autoWitness(): ru.zf.pravka.core.AutoWitness? = if (autoPilotOn) autoPilot else null
+    /** Место по Wi-Fi для точки на карте семьи; автопилот выключен — пусто (и не будим его). */
+    fun placeNow(): String = if (autoPilotOn) autoPilot.placeNow() else ""
 
     /**
      * Кнопка стоит на стекле, только если включены и её тумблер («Кнопки на
@@ -366,6 +368,9 @@ class PravkaAccessibilityService : AccessibilityService() {
                 }
         }
         instance = this
+        // «Где мы»: делится этот телефон — слушаем чужой GPS и датчик
+        // движения (сами запросы — короткие вызовы системы, но не на главном).
+        scope.launch(Dispatchers.IO) { runCatching { app.where.attach() } }
         // A fresh "connected" after takes were mid-flight = the process died
         // and the system rebound the service. Makes crashes visible in the log.
         app.eventLog.add("service connected")
@@ -3009,6 +3014,10 @@ class PravkaAccessibilityService : AccessibilityService() {
             // Общие Деньги: обмен с семейным Drive — свои правки туда, чужие
             // сюда. Без входа молчит; второй обмен поверх идущего не встаёт.
             if (money) scope.launch { runCatching { app.moneyCloudSync.sync("тик") } }
+            // «Где мы»: своя точка по лестнице цены (лежит — раз в час по Wi-Fi,
+            // едет — раз в 5 минут, просили — свой GPS) и обмен с облаком семьи.
+            // Не делится — молчит; режима в профиле у карты нет — это согласие.
+            scope.launch(Dispatchers.IO) { runCatching { app.where.tick("тик") } }
             // Дневник в Notion: галочки, feel, колено и вес уезжают сами.
             // Свой дроссель на полчаса и свой «ничего не изменилось» внутри.
             // В нём и спорт, и итог еды — живёт, пока жив хоть один из них.
@@ -3271,6 +3280,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         instance = null
         if (lagSamplerOn) runCatching { lagSampler.shutdownNow() }
         runCatching { autoPilot.stop() }
+        runCatching { app.where.detach() }
         ripenessHandler.removeCallbacks(ripenessCheck)
         ripenessHandler.removeCallbacks(digestRunnable)
         ripenessHandler.removeCallbacks(disarmCapture)

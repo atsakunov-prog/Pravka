@@ -33,6 +33,10 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- С Android 12 точное местоположение просится только в паре с
+         приблизительным: одно точное система молча игнорирует (карта семьи
+         «Где мы», 10.10.2026 — у нового телефона окно разрешения не всплывало бы). -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- Приезд ловит служба доступности, из фона. С разрешением «только при
          использовании приложения» система отдаёт ей «<unknown ssid>», и
          автопилот молчит - выглядит как поломка. Нужно «Разрешать всегда». -->
