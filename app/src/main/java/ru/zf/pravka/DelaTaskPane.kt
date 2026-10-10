@@ -142,14 +142,10 @@ internal fun DelaTaskPane(
                     ))
                 }
                 val who = snap.people[task.personId]?.label ?: task.who
-                val ball = when (task.ball) {
-                    Dela.WAITING -> "жду" + (if (who.isNotBlank()) " $who" else "")
-                    Dela.AGENDA -> "при встрече" + (if (who.isNotBlank()) " с $who" else "")
-                    else -> "у меня"
-                }
-                val since = task.waitingSince.ifBlank { task.createdAt }.take(10)
-                val days = runCatching { ChronoUnit.DAYS.between(LocalDate.parse(since), today).toInt() }.getOrNull()
-                add(Triple("Чьё", ball, days?.takeIf { it > 0 }?.let { plural(it, "день", "дня", "дней") }.orEmpty()))
+                // «Группа» вместо «Чьё» (10.10.2026): отбить, запустить, мониторить — и кто ждёт.
+                val g = ru.zf.pravka.core.DelaGroups.grpOf(task)
+                val wait = ru.zf.pravka.core.DelaGroups.wait(task, who, today.toString(), personGrouped = false)?.text
+                add(Triple("Группа", g.title, wait.orEmpty()))
                 val created = task.createdAt.take(10).takeIf { it.isNotBlank() }?.let { runCatching { Fmt.dayShort(LocalDate.parse(it)) }.getOrNull() }
                 val src = listOfNotNull(sourcePaneName(task.source), created).joinToString(", ")
                 if (src.isNotBlank()) add(Triple("Источник", src, ""))

@@ -199,10 +199,6 @@ class ScreenShots {
         c = launch(MainActivity.TAB_TODOIST)
         if (tap(c, "Воронка", exact = true)) shot(c, "crm-10-voronka")
         close(c)
-        // Задание 6: «Без проекта — куда их?» — в «Неделе».
-        c = launch(MainActivity.TAB_TODOIST)
-        if (tap(c, "Неделя")) shot(c, "crm-9-nedelya")
-        close(c)
         RuntimeEnvironment.setQualifiers(OUTER)
         c = launch(MainActivity.TAB_TODOIST)
         if (tap(c, "поиск: клиенты") && type(c, "бета")) shot(c, "crm-6-search")
@@ -274,6 +270,10 @@ class ScreenShots {
             when (g) {
                 "dela" -> {
                     if (tap(m, "Новое")) shot(m, "$g-4-novoe")
+                    // Задание 11: «Все дела» группами и карточка «Отбить».
+                    if (tap(m, "Все дела")) shot(m, "$g-6-vse")
+                    if (tap(m, "Ольга: ответить про сроки")) screen("$g-7-card")
+                    close(m); m = launch(tab)
                     // ☰ — боковая панель (баг №1, 07.10.2026).
                     if (tap(m, "разделы, CRM")) screen("$g-5-nav")
                 }
@@ -313,7 +313,7 @@ class ScreenShots {
         close(c)
         c = launch(MainActivity.TAB_TODOIST); shot(c, "outer-03-dela-utro")
         if (tap(c, "Новое")) shot(c, "outer-03b-dela-novoe")
-        if (tap(c, "Жду")) shot(c, "outer-03c-dela-zhdu")
+        if (tap(c, "Все дела")) shot(c, "outer-03c-dela-vse")
         close(c)
         c = launch(MainActivity.TAB_SPORT); shot(c, "outer-04-sport")
         if (tap(c, "Путь", exact = true)) shot(c, "outer-04b-sport-put")

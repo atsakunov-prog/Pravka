@@ -35,12 +35,11 @@ object ZasechkaTasks {
         entries.lastOrNull { it.open }?.task.orEmpty()
 
     /**
-     * Короткий список «взяться за дело»: то, что идёт; отмеченное на сегодня
-     * («Сейчас», до пяти — во вкладке и в вебе оно первым разделом); начатое
-     * из ленты за неделю (свежее выше — к нему обычно и
-     * возвращаются); моё на сегодня и просроченное. Только открытые дела
-     * владельца, без повторов. Жду и «при встрече» — не то, за что берутся
-     * руками, если не отмечены на сегодня.
+     * Короткий список «взяться за дело»: то, что идёт; дела «Сегодня» в порядке
+     * вкладки (10.10.2026, docs/dela-phone-11.md: «отбить» — люди ждут, потом
+     * «запустить», потом «мониторить»; «Сейчас» и просроченное — тоже здесь);
+     * начатое из ленты за неделю (свежее выше — к нему обычно и возвращаются).
+     * Только открытые дела владельца, без повторов.
      */
     fun shortlist(
         s: Dela.Snapshot,
@@ -56,22 +55,18 @@ object ZasechkaTasks {
             if (t != null && t.id !in out) out[t.id] = t
         }
         add(byId[running(entries)])
-        mine.filter { it.focusOn == today }.sortedWith(Dela.ORDER).forEach(::add)
+        DelaGroups.todayOrdered(s, me, today, "all").forEach(::add)
         entries.asSequence()
             .filter { it.task.isNotBlank() && it.start >= now - RECENT_MS }
             .sortedByDescending { it.start }
             .forEach { add(byId[it.task]) }
-        mine.filter { it.ball == Dela.MINE && it.dueDate.isNotBlank() && it.dueDate <= today }
-            .sortedWith(Dela.ORDER)
-            .forEach(::add)
         return out.values.toList()
     }
 
     /**
-     * Тот же список по частям (06.10.2026, docs/dela-phone-3.md; владелец:
-     * «сначала делаю их, потом всё остальное»): идущее — первым, если оно не
-     * из «Сейчас»; дела «Сейчас» — под своим заголовком (идущее среди них —
-     * первым); ниже — остальное в порядке [shortlist].
+     * Тот же список по частям: идущее — первым, если оно не на сегодня; дела
+     * «Сегодня» — под своим заголовком (идущее среди них — на своём месте);
+     * ниже — начатое за неделю.
      */
     data class Parts(val running: Dela.Task?, val now: List<Dela.Task>, val rest: List<Dela.Task>) {
         val all: List<Dela.Task> get() = listOfNotNull(running) + now + rest
@@ -86,11 +81,12 @@ object ZasechkaTasks {
     ): Parts {
         val list = shortlist(s, me, today, entries, now)
         val runId = running(entries)
-        val head = list.firstOrNull { it.id == runId && it.focusOn != today }
+        val todayIds = list.filter { DelaGroups.inToday(it, me, today) }.map { it.id }.toSet()
+        val head = list.firstOrNull { it.id == runId && it.id !in todayIds }
         return Parts(
             running = head,
-            now = list.filter { it.focusOn == today },
-            rest = list.filter { it.focusOn != today && it.id != head?.id },
+            now = list.filter { it.id in todayIds },
+            rest = list.filter { it.id !in todayIds && it.id != head?.id },
         )
     }
 

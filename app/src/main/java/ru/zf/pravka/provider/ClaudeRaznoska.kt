@@ -206,9 +206,10 @@ internal fun parseTasksDela(
         val project = dela.findProject(snapshot, named)
         val personNamed = t.optString("person").trim()
         val person = dela.findPerson(snapshot, personNamed)
-        var ball = t.optString("ball").trim().lowercase().takeIf { it in setOf(dela.MINE, dela.WAITING, dela.AGENDA) } ?: dela.MINE
-        // «Жду» и «повестка» без человека — это никого не ждать: дело остаётся моим.
-        if (ball != dela.MINE && person == null && personNamed.isBlank()) ball = dela.MINE
+        var ball = t.optString("ball").trim().lowercase().takeIf { it in setOf(dela.MINE, dela.WAITING, dela.AGENDA, dela.OWED) } ?: dela.MINE
+        // «Жду» и «повестка» без человека — это никого не ждать: дело остаётся своим. «Отбить» (owed,
+        // 10.10.2026) остаётся и без узнанного человека: кто-то ждёт — это важнее имени.
+        if ((ball == dela.WAITING || ball == dela.AGENDA) && person == null && personNamed.isBlank()) ball = dela.MINE
         val labels = mutableListOf<String>()
         t.optJSONArray("labels")?.let { la ->
             for (j in 0 until la.length()) {

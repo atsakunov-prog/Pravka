@@ -377,6 +377,10 @@ internal object Seed {
             task(60, "Ольга: подписанный договор на внедрение") { put("project_id", "p-orion"); put("ball", "waiting"); put("person_id", "pe-olga"); put("waiting_since", d(-9)) },
             task(62, "Дима: акт сверки за сентябрь") { put("project_id", "p-zf"); put("ball", "waiting"); put("person_id", "pe-dima"); put("waiting_since", d(-2)); put("nudge_on", d(3)) },
             task(66, "Иван: обсудить продление договора") { put("project_id", "p-beta"); put("ball", "agenda"); put("person_id", "pe-ivan") },
+            // «Отбить» (задание 11): люди ждут ответа — первым делом.
+            task(69, "Ольга: ответить про сроки внедрения") { put("project_id", "p-orion"); put("owed", true); put("person_id", "pe-olga"); put("created_at", ago(75)); put("source", "telegram") },
+            task(70, "Пётр: вернуть расчёт по аренде гаража") { put("project_id", "p-home"); put("owed", true); put("person_id", "pe-petr"); put("created_at", ago(130)) },
+            task(71, "Анна: прислать реквизиты для оплаты") { put("project_id", "p-beta"); put("owed", true); put("person_id", "pe-anna"); put("due_date", d(2)) },
             task(64, "Бета: проверить платёжный календарь на октябрь") { put("project_id", "p-beta"); put("deal_id", "d-beta-refi") },
             task(65, "Отчёт ДДС: посмотреть шаблон от Лены") { put("project_id", "p-zf"); put("created_by", "lena"); put("created_at", ago(20)); put("source", "web") },
             task(59, "Автосервис: записаться на ТО") { put("estimate_min", 10); put("labels", arr("звонок")); put("created_at", ago(50)); put("source", "mcp") },
@@ -413,7 +417,7 @@ internal object Seed {
             JSONObject().put("id", "sasha").put("name", "Саша").put("role", "owner").put("seq", 1),
             JSONObject().put("id", "lena").put("name", "Лена").put("person_id", "pe-lena").put("role", "member").put("seq", 2),
         )
-        return JSONObject().put("ok", true).put("full", true).put("seq", seq).put("today", d(0))
+        return JSONObject().put("ok", true).put("full", true).put("seq", seq).put("today", d(0)).put("features", arr("groups"))
             .put("tasks", tasks).put("projects", projects).put("people", people).put("suggestions", suggestions)
             .put("users", users).put("comments", JSONArray())
             .put("orgs", arr(org("o-beta", "Бета Групп"), org("o-orion", "Орион Логистик"), org("o-buh", "Счётная палата плюс")))

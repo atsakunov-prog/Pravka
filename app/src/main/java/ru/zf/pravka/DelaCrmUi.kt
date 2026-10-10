@@ -688,7 +688,7 @@ private fun TieRow(ctx: DelaCrmContext, p: DelaCrm.Tie) {
                 "хаб".takeIf { p.hub },
                 since,
                 p.brought.takeIf { it > 0 }?.let { "привёл сделок: $it" },
-                p.agenda.takeIf { it > 0 }?.let { "повестка: $it" },
+                p.agenda.takeIf { it > 0 }?.let { "при встрече: $it" },
                 p.birthdayIn?.takeIf { it <= 14 }?.let { if (it == 0) "день рождения сегодня" else "день рождения через $it дн." },
             ).joinToString(" · ")
             Text(bits, style = MaterialTheme.typography.bodySmall, color = if (p.due) c.error else c.onSurfaceVariant)

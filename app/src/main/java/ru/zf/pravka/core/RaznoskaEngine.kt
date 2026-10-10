@@ -285,7 +285,8 @@ class RaznoskaEngine(
         }
         if (keyed != queue) store.replaceTasks(draftId, draft.tasks.map { t -> keyed.firstOrNull { it.id == t.id } ?: t })
         val remindOn = delaStore.view.value.remindOn
-        for (t in keyed) ops += Dela.createOp(asDela(t, draft.id, remindOn), t.opId)
+        val groupsOn = delaStore.view.value.groupsOn
+        for (t in keyed) ops += Dela.createOp(asDela(t, draft.id, remindOn, groupsOn), t.opId)
         val at = java.time.OffsetDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString()
         for ((i, n) in notes.withIndex()) {
             ops += Dela.noteOp(
@@ -324,8 +325,10 @@ class RaznoskaEngine(
      * Дело разбора — в дело Дел: то, что уедет в `task.create`. Сервер, не
      * знающий напоминаний ([remindOn] = false), отверг бы дело с полем
      * `remind_*` целиком — тогда напоминание едет строкой в заметках.
+     * «Отбить» (10.10.2026) — `owed: true`, если сервер знает группы
+     * ([groupsOn]), иначе одним мячом «owed», как его называет автоматика.
      */
-    private fun asDela(t: ParsedTask, draftId: Long, remindOn: Boolean): Dela.Task = Dela.Task(
+    private fun asDela(t: ParsedTask, draftId: Long, remindOn: Boolean, groupsOn: Boolean): Dela.Task = Dela.Task(
         id = t.delaId,
         title = t.content.trim(),
         notes = if (remindOn) t.description.trim() else listOf(
@@ -333,7 +336,8 @@ class RaznoskaEngine(
             DelaRemind.notesLine(t.remindAt, t.remindPlace, java.time.LocalDate.now(), java.time.ZoneId.systemDefault()),
         ).filter { it.isNotBlank() }.joinToString("\n"),
         projectId = t.projectId,
-        ball = t.ball,
+        ball = if (t.ball == Dela.OWED && groupsOn) Dela.MINE else t.ball,
+        owed = t.ball == Dela.OWED && groupsOn,
         personId = t.personId,
         dueDate = t.due,
         dueTime = if (t.due.isBlank()) "" else t.dueTime,

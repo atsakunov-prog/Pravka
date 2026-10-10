@@ -46,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -62,6 +63,7 @@ import ru.zf.pravka.core.Dela
 import ru.zf.pravka.core.DelaRemind
 import ru.zf.pravka.core.DelaAsk
 import ru.zf.pravka.core.DelaViews
+import ru.zf.pravka.core.DelaGroups
 import ru.zf.pravka.trigger.PravkaAccessibilityService
 import ru.zf.pravka.trigger.finishDelaReason
 import ru.zf.pravka.trigger.listenForDelaReason
@@ -116,8 +118,8 @@ import ru.zf.pravka.ui.scrollFade
 // откуда пришло: наговорки с их делами, предложения встреч и Telegram,
 // поставленное другими, дела без проекта, закрытое само с «Понятно».
 private const val NAV_NEW = "new"
-/** Группа «Без проекта — куда их?» в «Неделе»: у неё — «Все в проект…». */
-private const val LOOSE_GROUP = "w4loose"
+/** Группа «Без проекта» по проектам (ключ `DelaViews.group`): у неё — «Все в проект…». */
+private const val LOOSE_GROUP = "0"
 private val CRM_NAV = listOf("crm" to "Воронка", "clients" to "Клиенты", "people" to "Люди", "ties" to "Связи")
 private val SPHERES = listOf("work" to "Работа", "home" to "Дом", "all" to "Всё")
 
@@ -137,7 +139,6 @@ private data class DelaScreen(
     val groupOptions: List<DelaViews.By> = DelaViews.By.entries,
     val done: Boolean = false,
     val add: Boolean = false,
-    val upcoming: Boolean = false,
     /** «Неделя»: проекты в работе без моего следующего шага. */
     val projects: List<Dela.Project> = emptyList(),
     val empty: String = "",
@@ -205,13 +206,11 @@ fun DelaTab(
     val favs by app.delaStore.favsFlow.collectAsState()
 
     // Раздел — ключ веба: now, new, upcoming, waiting, week, all; CRM — crm, clients, ties.
-    var nav by rememberSaveable { mutableStateOf(DelaViews.View.NOW.key) }
+    var nav by rememberSaveable { mutableStateOf(DelaViews.View.TODAY.key) }
     var navOpen by remember { mutableStateOf(false) }
     var sphere by rememberSaveable { mutableStateOf("all") }
-    // Переключатели веба: «Сделанные» у списков, «Только мяч у меня» и «И без даты» у «Предстоящего».
+    // «Сделанные» у списков, как в вебе.
     var showDone by rememberSaveable { mutableStateOf(false) }
-    var upMineOnly by rememberSaveable { mutableStateOf(false) }
-    var upNoDate by rememberSaveable { mutableStateOf(false) }
     // «Перенести все» у просроченного — дела, которым выбирают новый срок.
     var rescheduling by remember { mutableStateOf<List<Dela.Task>?>(null) }
     // «без проекта» у строки и «Все в проект…» в «Новом» — дела, которым выбирают проект.
@@ -260,10 +259,10 @@ fun DelaTab(
     // CRM — владельцу и тем, кому открыты клиенты; деньги фирмы — владельцу и sees_money.
     val crmOn = Dela.crmOn(snap, me)
     val moneyOn = Dela.moneyOn(snap, me)
-    // CRM отняли, а выбран её раздел — назад в «Сейчас», а не пустой экран.
-    // Сохранённый ключ «Утра» или «Входящих» (до 06.10.2026) ведёт туда, где их дела теперь.
+    // CRM отняли, а выбран её раздел — назад в «Сегодня», а не пустой экран.
+    // Сохранённый ключ «Сейчас», «Предстоящего», «Жду», «Недели» (до 10.10.2026) ведёт туда, где их дела теперь.
     LaunchedEffect(crmOn, nav) {
-        if (!crmOn && CRM_NAV.any { it.first == nav }) nav = DelaViews.View.NOW.key
+        if (!crmOn && CRM_NAV.any { it.first == nav }) nav = DelaViews.View.TODAY.key
         else if (CRM_NAV.none { it.first == nav } && DelaViews.View.entries.none { it.key == nav }) nav = DelaViews.View.of(nav).key
     }
     // Раздел Дел (не CRM) — по ключу; у CRM своё тело.
@@ -327,6 +326,8 @@ fun DelaTab(
         }
     }
 
+    // «Вернуть» после крестика, «откуда он», «+ человек», солнца — полоской наверху вкладки, пока не закрыли.
+    var undoOffer by remember { mutableStateOf<UndoOffer?>(null) }
     // На развороте дело открывается справа (`DelaTaskPane`), а не листом.
     val wideNow = ru.zf.pravka.ui.twoPane()
     var paneId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -350,20 +351,14 @@ fun DelaTab(
         },
         person = { id -> if (id.isNotBlank()) push(DelaPage.Person(id)) },
         project = { id -> if (id.isNotBlank()) push(DelaPage.Project(id)) },
-        // Молния — «Сейчас» на сегодня, не больше пяти (как в вебе): шестое не встаёт.
+        // Солнце (10.10.2026, `toggleToday` веба): не на сегодня — «На сегодня» (срок сегодня);
+        // уже на сегодня — «На завтра». Тост с «Вернуть» — как в вебе.
         toggleNow = { t ->
-            val on = t.focusOn == today
-            if (!on && !DelaViews.nowRoom(snap, me, today, listOf(t.id))) {
-                Feedback.toast(app, DelaViews.NOW_FULL)
-            } else {
-                scope.launch {
-                    app.delaDo(listOf(Dela.setOp(
-                        t.id,
-                        org.json.JSONObject().put("focus_on", if (on) org.json.JSONObject.NULL else today),
-                        org.json.JSONObject().put("focus_on", Dela.nul(t.focusOn)),
-                    )))
-                }
-            }
+            val tomorrow = LocalDate.parse(today).plusDays(1).toString()
+            val (set, said) = DelaGroups.toggleToday(t, me, today, tomorrow)
+            val was = DelaGroups.was(t, set)
+            undoOffer = UndoOffer(said + ": " + t.title.take(40), listOf(Dela.setOp(t.id, was, set)), emptyList())
+            scope.launch { app.delaDo(listOf(Dela.setOp(t.id, set, was))) }
         },
         pickProject = { list -> if (list.isNotEmpty()) projectFor = list },
         starting = starting,
@@ -396,52 +391,27 @@ fun DelaTab(
             done = true,
             empty = if (found.total == 0) "Ничего не нашлось. Ищу по началам и кусочкам слов: «альф», «фонд», «иван»." else "",
         )
-        // «Сейчас» (`renderNow` веба): до пяти дел на сегодня — сначала они, потом всё остальное.
-        view == DelaViews.View.NOW -> DelaViews.now(snap, me, today, sphere).let { n ->
+        // «Сегодня» (`renderToday` веба, 10.10.2026): три группы по приоритету — отбить, запустить,
+        // мониторить; в каждой выше тот, кому делать раньше и кто дольше ждёт. Пустая группа не видна.
+        view == DelaViews.View.TODAY -> DelaGroups.todayTasks(snap, me, today, sphere).let { items ->
+            val done = DelaGroups.doneToday(snap, me, today)
             DelaScreen(
-                "Сейчас", DelaViews.longDate(today) + " · в «Сейчас» ${n.now.size} из ${DelaViews.NOW_MAX}",
-                groups = listOfNotNull(
-                    DelaViews.Group("now", "Сделать сегодня", items = n.now).takeIf { n.now.isNotEmpty() },
-                    DelaViews.Group("pick", n.pickTitle, late = n.pick.any { DelaViews.isLate(it, today) }, items = n.pick)
-                        .takeIf { n.pick.isNotEmpty() },
-                    DelaViews.Group("next", "Завтра — если останется время", items = n.next).takeIf { n.next.isNotEmpty() },
-                ),
-                add = true,
-                hint = if (n.now.isEmpty()) "Выбери на сегодня до ${DelaViews.NOW_MAX} дел — молния слева у дела. Сначала они, потом всё остальное." else "",
-                empty = "На сегодня и на завтра пусто. Загляни в «Предстоящее».",
-            )
-        }
-        // Просроченное — первой группой (ключ «0late»): «в предстоящих сверху — просроченные».
-        view == DelaViews.View.UPCOMING -> DelaViews.upcoming(snap, me, sphere, upMineOnly, upNoDate).let { items ->
-            val late = items.count { DelaViews.isLate(it, today) }
-            DelaScreen(
-                "Предстоящее", plural(items.size, "дело", "дела", "дел"), alert = if (late > 0) "просрочено: $late" else "",
-                groups = DelaViews.group(items, by0, snap, today), by = by0, add = true, upcoming = true, empty = "Впереди пусто.",
-            )
-        }
-        // «Пора напомнить» — первой группой, остальное по людям.
-        view == DelaViews.View.WAITING -> DelaViews.waitingGroups(snap, me, today, sphere).let { groups ->
-            val due = groups.firstOrNull { it.key == "0nudge" }?.items?.size ?: 0
-            DelaScreen(
-                "Жду", "что должны другие — по людям, с давностью", alert = if (due > 0) "пора напомнить: $due" else "",
-                groups = groups, by = DelaViews.By.PERSON, add = true, empty = "Ни от кого ничего не ждём.",
-            )
-        }
-        view == DelaViews.View.WEEK -> DelaViews.week(snap, me, today, sphere, now).let { w ->
-            DelaScreen(
-                "Неделя", "раз в неделю: что протухло, кто молчит, где нет следующего шага, что без проекта",
-                groups = listOf(
-                    DelaViews.Group("w1", "Протухшее — закрыть, перенести или отпустить", late = true, items = w.stale.sortedWith(Dela.ORDER)),
-                    DelaViews.Group("w2", "Жду без движения больше недели", items = w.waitStale.sortedWith(Dela.ORDER)),
-                    // Без проекта — не вопрос «Нового» (08.10.2026), а уборка раз в неделю.
-                    DelaViews.Group(LOOSE_GROUP, "Без проекта — куда их?", sub = "«без проекта» у дела — выбрать проект, или скажи Claude внизу", items = w.loose),
-                ).filter { it.items.isNotEmpty() },
-                add = true, projects = w.noStep,
-                empty = if (w.empty) "Чисто. Неделя разобрана." else "",
+                "Сегодня",
+                listOfNotNull(
+                    DelaViews.longDate(today),
+                    "осталось ${items.size}".takeIf { items.isNotEmpty() },
+                    "закрыто $done".takeIf { done > 0 },
+                ).joinToString(" · "),
+                groups = DelaGroups.nested(items, listOf(DelaGroups.Level.GRP), snap, today).map { n ->
+                    DelaViews.Group(n.key, n.title, sub = n.sub, items = n.items)
+                },
+                by = DelaViews.By.GRP,
+                empty = if (done > 0) "На сегодня всё закрыто." else "На сегодня пусто.",
             )
         }
         view == DelaViews.View.ALL -> {
-            val by = groupOf(DelaViews.View.ALL.key, DelaViews.By.PROJECT)
+            // С 10.10.2026 «Все дела» — группами (отбить, запустить, мониторить), дальше — даты, проекты, люди, сделки.
+            val by = groupOf(DelaViews.View.ALL.key, DelaViews.By.GRP)
             val items = DelaViews.list(snap, me, sphere, showDone = showDone)
             DelaScreen(
                 "Все дела", plural(items.count { it.open }, "открытое", "открытых", "открытых"),
@@ -482,8 +452,8 @@ fun DelaTab(
         DelaScreen(
             p?.name ?: "Человек",
             p?.takeIf { it.short.isNotBlank() && it.short != it.name }?.let { "в задачах — ${it.short}" }.orEmpty(),
-            groups = DelaViews.personSections(Dela.person(snap, pg.id)).filter { it.items.isNotEmpty() }
-                .mapIndexed { i, sec -> DelaViews.Group("p$i", sec.title, items = sec.items.sortedWith(Dela.ORDER)) },
+            groups = DelaViews.personSections(snap, pg.id).filter { it.items.isNotEmpty() }
+                .mapIndexed { i, sec -> DelaViews.Group("p$i", sec.title, items = sec.items.sortedWith(DelaGroups.byTime(today))) },
             add = true, empty = "Открытых дел с ним нет.",
         )
     }
@@ -527,10 +497,15 @@ fun DelaTab(
      * название, проект (и сделка фильтра), человек; остальное — карточкой.
      */
     fun quickAdd(title: String, projectId: String = "", dealId: String = "", personId: String = "") {
-        val t = Dela.Task(
-            id = Dela.newId(), title = title.trim(), projectId = projectId, dealId = dealId, personId = personId,
+        // «!отбить» (и «!ждут»), «!мониторить» (и «!жду»), «!запустить» — группа дела; «!повестка» и «!сейчас»
+        // понимаются и дальше. «Отбить» — только серверу, который знает `owed`.
+        val q = DelaGroups.quick(title)
+        var t = Dela.Task(
+            id = Dela.newId(), title = q.title, projectId = projectId, dealId = dealId, personId = personId,
             ownerId = me, createdBy = me, source = "manual",
+            ball = if (q.agenda) Dela.AGENDA else Dela.MINE, focusOn = if (q.now) today else "",
         )
+        q.grp?.takeIf { it != DelaGroups.Grp.OWED || snap.groupsOn }?.let { t = DelaGroups.withGrp(t, it) }
         if (t.title.isBlank()) return
         scope.launch {
             app.delaDo(listOf(Dela.createOp(t)))
@@ -555,8 +530,6 @@ fun DelaTab(
         }
     }
     val clientOpen by app.delaStore.clientOpenFlow.collectAsState()
-    // «Вернуть» после крестика, «откуда он», «+ человек» — полоской наверху вкладки, пока не закрыли.
-    var undoOffer by remember { mutableStateOf<UndoOffer?>(null) }
     val crm = DelaCrmContext(
         app, snap, me, today, views, queuedOps, moneyOn, actions, push, back = { pages = pages.dropLast(1) }, ui = crmUi,
         clientOpen = clientOpen,
@@ -698,7 +671,7 @@ fun DelaTab(
         }
         val crmNav = crmOn && CRM_NAV.any { it.first == nav }
         if (page == null && needle.isEmpty()) {
-            // Разделы веба одним рядом, с его числами («Сейчас 3 из 5»); CRM — следом, если она видна.
+            // Разделы веба одним рядом, с его числами («Сегодня 7»); CRM — следом, если она видна.
             item(key = "nav") {
                 val c = DelaViews.counts(snap, me, today, sphere, now)
                 val keys = DelaViews.View.entries.map { it.key to it.title } + (if (crmOn) CRM_NAV else emptyList())
@@ -713,22 +686,26 @@ fun DelaTab(
                     leading = { GlyphButton(Glyphs.Menu, "разделы, CRM, проекты и люди", onClick = { navOpen = true }, tint = ru.zf.pravka.ui.LocalMode.current.label, size = 44.dp) },
                 )
             }
-            if (view == DelaViews.View.NOW) {
-                item(key = "stats") { DelaStats(snap, me, today, sphere) }
+            // «Сегодня»: дата, «осталось N», «закрыто M» — строкой под разделами (`renderToday` веба).
+            if (view == DelaViews.View.TODAY && screen != null) {
+                item(key = "today:head") {
+                    Text(
+                        screen.sub,
+                        style = ru.zf.pravka.ui.LocalPravkaType.current.label,
+                        color = ru.zf.pravka.ui.LocalMode.current.label,
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
+                }
             }
         }
 
         val tools = ListTools(
             showDone = showDone,
             onShowDone = { showDone = !showDone },
-            mineOnly = upMineOnly,
-            onMineOnly = { upMineOnly = !upMineOnly },
-            noDate = upNoDate,
-            onNoDate = { upNoDate = !upNoDate },
             onGroup = { key, by -> scope.launch { app.delaStore.setGroup(key, by.key) } },
             onReschedule = { rescheduling = it },
-            // «Без проекта» больше не страница: такие дела ждут в «Неделе» («Без проекта — куда их?», 08.10.2026).
-            onProject = { id -> if (id.isBlank()) go(DelaViews.View.WEEK.key) else push(DelaPage.Project(id)) },
+            // «Без проекта» — не страница: проект выбирается у дела («без проекта» в строке).
+            onProject = { id -> if (id.isNotBlank()) push(DelaPage.Project(id)) },
             onPerson = { id -> push(DelaPage.Person(id)) },
         )
 
@@ -772,7 +749,7 @@ fun DelaTab(
                             sc, "project", actions,
                             tools.copy(
                                 onAdd = { title -> quickAdd(title, projectId = pg.id, dealId = dealFilter) },
-                                addLabel = if (dealFilter.isNotBlank()) "Новое дело по сделке…" else "Новое дело в проект…",
+                                addLabel = if (dealFilter.isNotBlank()) "Новое дело по сделке… (!отбить, !мониторить)" else "Новое дело в проект… (!отбить, !мониторить)",
                             ),
                             onProjectPage = true,
                         ) {
@@ -878,13 +855,13 @@ fun DelaTab(
                 onReject = { rejecting = it },
             )
         } else if (screen != null) {
-            // «Сейчас»: что ждёт в «Новом» — ссылкой под шапкой, как в вебе («в «Новом» ждут: N»).
+            // «Сегодня»: что ждёт в «Новом» — ссылкой под делами, как в вебе.
             // Поля «Новое дело…» у разделов нет (Правка 4.0): «+» — в строке
             // состояния, голос и текст — в нижней строке. У проекта и человека оно осталось.
             if (found != null) searchFound(found, snap, today, onProject = { push(DelaPage.Project(it)) }, onDeal = { push(DelaPage.Deal(it)) }, onPerson = { push(DelaPage.Person(it)) })
             screenBody(screen, if (needle.isNotEmpty()) "search" else nav, actions, tools)
-            // «Новое из встреч и чатов · 4 ›» — под делами «Сейчас» (`screens/06`).
-            if (view == DelaViews.View.NOW && needle.isEmpty()) {
+            // «Новое из встреч и чатов · 4 ›» — под делами «Сегодня» (`screens/06`).
+            if (view == DelaViews.View.TODAY && needle.isEmpty()) {
                 val waitingNew = DelaViews.newCount(snap, me, sphere, now)
                 if (waitingNew > 0) {
                     item(key = "now:links") { NewLinkCard(waitingNew) { go(NAV_NEW) } }
@@ -978,9 +955,9 @@ fun DelaTab(
                 LaunchedEffect(Unit) { seenRows.bottom = Float.MAX_VALUE }
                 Box(Modifier.weight(1f)) { list(Modifier) }
                 Box(Modifier.weight(1f)) {
-                    // Открытое справа дело; пусто — первое из «Сейчас».
+                    // Открытое справа дело; пусто — первое из «Сегодня» (самое важное — «отбить»).
                     val shown = paneId?.let { snap.tasks[it] }
-                        ?: snap.tasks.values.filter { it.open && it.focusOn == today && it.ownerId == me }.minByOrNull { it.num }
+                        ?: DelaGroups.todayOrdered(snap, me, today, sphere).firstOrNull()
                     DelaTaskPane(
                         app = app,
                         task = shown,
@@ -1141,6 +1118,7 @@ fun DelaTab(
             isNew = true,
             title = if (sg.kind == "update") "Уточнить дело" else "Предложение",
             saveText = "Принять",
+            suggestion = true,
             // У уточнения подробности (note) лягут комментарием к делу — видны и здесь.
             quote = listOfNotNull(sg.payloadObj().optString("note").takeIf { sg.kind == "update" && it.isNotBlank() && it != "null" }, sg.quote.takeIf { it.isNotBlank() })
                 .joinToString(" · "),
@@ -1250,7 +1228,7 @@ internal class DelaActions(
     val person: (String) -> Unit,
     val project: (String) -> Unit,
     val starting: String,
-    /** Молния: в «Сейчас» и обратно (до пяти, шестое — отказ словами). */
+    /** Солнце: «на сегодня» и «на завтра» (`toggleToday` веба). */
     val toggleNow: (Dela.Task) -> Unit = {},
     /** «без проекта» у строки — кнопка выбора проекта; null — подпись просто текстом. */
     val pickProject: ((List<Dela.Task>) -> Unit)? = null,
@@ -1572,10 +1550,6 @@ private fun AutoDoneRow(sg: Dela.Suggestion, t: Dela.Task?, today: String, onReo
 private data class ListTools(
     val showDone: Boolean,
     val onShowDone: () -> Unit,
-    val mineOnly: Boolean,
-    val onMineOnly: () -> Unit,
-    val noDate: Boolean,
-    val onNoDate: () -> Unit,
     /** Выбрана группировка списка [String] (`S.groups` веба). */
     val onGroup: (String, DelaViews.By) -> Unit,
     val onReschedule: (List<Dela.Task>) -> Unit,
@@ -1601,17 +1575,13 @@ private fun LazyListScope.screenBody(
     onProjectPage: Boolean = false,
     extra: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
-    val hasTools = sc.upcoming || sc.done || sc.groupKey != null || (sc.add && tools.onAdd != null) || extra != null
+    val hasTools = sc.done || sc.groupKey != null || (sc.add && tools.onAdd != null) || extra != null
     if (hasTools) {
         item(key = "$key:tools") {
             PaperCard {
                 extra?.invoke(this)
-                if (sc.upcoming || sc.done || sc.groupKey != null) {
+                if (sc.done || sc.groupKey != null) {
                     ChipRow {
-                        if (sc.upcoming) {
-                            PaperChip("Только моё", selected = tools.mineOnly, onClick = tools.onMineOnly)
-                            PaperChip("И без даты", selected = tools.noDate, onClick = tools.onNoDate)
-                        }
                         if (sc.done) PaperChip("Сделанные", selected = tools.showDone, onClick = tools.onShowDone)
                         val gk = sc.groupKey
                         if (gk != null) for (b in sc.groupOptions) PaperChip(b.title, selected = b == sc.by, onClick = { tools.onGroup(gk, b) })
@@ -1648,7 +1618,7 @@ private fun LazyListScope.screenBody(
                         if (g.key == LOOSE_GROUP && g.items.size > 1 && pick != null) PaperTextButton("Все в проект…", onClick = { pick(g.items) })
                         val pid = g.projectId
                         val hid = g.personId
-                        if (pid != null && !onProjectPage) GlyphButton(Glyphs.Forward, if (pid.isBlank()) "в «Неделю» — разложить по проектам" else "проект целиком", onClick = { tools.onProject(pid) }, size = 30.dp)
+                        if (!pid.isNullOrBlank() && !onProjectPage) GlyphButton(Glyphs.Forward, "проект целиком", onClick = { tools.onProject(pid) }, size = 30.dp)
                         if (hid != null) GlyphButton(Glyphs.Forward, "всё по человеку", onClick = { tools.onPerson(hid) }, size = 30.dp)
                     }
                 },
@@ -1727,10 +1697,10 @@ private fun DelaNavSheet(
             selected = SPHERES.indexOfFirst { it.first == sphere }.coerceAtLeast(0),
             onSelect = { onSphere(SPHERES[it].first) },
         )
-        // «Сейчас» — отдельной строкой над остальными, со счётчиком «3 из 5» (как в вебе).
+        // «Сегодня» — отдельной строкой над остальными, с числом (красным, если люди ждут — «отбить»).
         for (v in DelaViews.View.entries) {
             NavLine(v.title, 0, selected = nav == v.key, countText = counts.label(v), hot = counts.hot(v)) { onNav(v.key) }
-            if (v == DelaViews.View.NOW) RowRule()
+            if (v == DelaViews.View.TODAY) RowRule()
         }
         if (crmOn) {
             NavHead("CRM")
@@ -1932,6 +1902,33 @@ private fun stageWord(stage: String): String = ru.zf.pravka.core.DelaCrm.STAGE[s
 // ---------------------------------------------------------------- строки
 
 /**
+ * Кольцо-галочка по группе (как в вебе): «отбить» — светлое (`value`),
+ * «мониторить» — пунктиром, повестка — точками, остальное — краской режима.
+ * [strong] — просрочено: толще и светлым, без красного.
+ */
+private fun Modifier.groupRing(
+    g: DelaGroups.Grp,
+    agenda: Boolean,
+    width: androidx.compose.ui.unit.Dp,
+    bright: androidx.compose.ui.graphics.Color,
+    tint: androidx.compose.ui.graphics.Color,
+    strong: Boolean,
+): Modifier = this.then(Modifier.drawBehind {
+    val w = width.toPx()
+    val effect = when {
+        g == DelaGroups.Grp.CHECK -> androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()))
+        agenda -> androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(1.dp.toPx(), 3.dp.toPx()))
+        else -> null
+    }
+    drawCircle(
+        color = if (strong || g == DelaGroups.Grp.OWED) bright else tint,
+        radius = size.minDimension / 2 - w / 2,
+        style = androidx.compose.ui.graphics.drawscope.Stroke(width = w, pathEffect = effect,
+            cap = if (agenda) androidx.compose.ui.graphics.StrokeCap.Round else androidx.compose.ui.graphics.StrokeCap.Butt),
+    )
+})
+
+/**
  * Дела строками. [by] — группировка списка: то, что уже в заголовке группы
  * (срок, проект, человек, мяч, сделка), в строке не повторяется — как в вебе.
  */
@@ -1969,8 +1966,10 @@ private fun TaskRow(
 ) {
     // Правка 4.0 (DESIGN §11.7 TaskRow в Делах, `screens/06`): кольцо 22 в
     // зоне 44, «Кто: действие» до двух строк, вторая строка — подписи веба;
-    // справа ▶ и микрофон по 40. Просроченное — толще кольцо и «просрочено
-    // N дн» жирным, без красного. Молния «Сейчас» (06.10.2026) — слева.
+    // справа ▶ по 40. Просроченное — толще кольцо и «просрочено N дн» жирным,
+    // без красного. Солнце «на сегодня» (10.10.2026, вместо молнии «Сейчас») —
+    // слева; кольцо по группе: «отбить» — светлое, «мониторить» — пунктир,
+    // повестка — точки. Жирным — только дело в «Сейчас» (оно у Засечки).
     val mode = ru.zf.pravka.ui.LocalMode.current
     val ty = ru.zf.pravka.ui.LocalPravkaType.current
     val lateDays = if (t.open && t.dueDate.isNotBlank() && t.dueDate < today)
@@ -1981,10 +1980,12 @@ private fun TaskRow(
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { actions.open(t) }.padding(vertical = 4.dp),
         ) {
             if (t.open) {
-                val on = t.focusOn == today
+                // Солнце горит у дел на сегодня. Владелец дела — «я» для правила «Сегодня»: строка
+                // показывает и чужие дела (страница клиента), и у них своё «сегодня».
+                val on = DelaGroups.inToday(t, t.ownerId, today)
                 Icon(
-                    Glyphs.Bolt,
-                    contentDescription = if (on) "убрать из «Сейчас»" else "в «Сейчас» — сделать сегодня (до ${DelaViews.NOW_MAX} дел)",
+                    Glyphs.Sunny,
+                    contentDescription = if (on) "Не сегодня — на завтра" else "На сегодня",
                     tint = if (on) mode.value else mode.meta.copy(alpha = 0.45f),
                     modifier = Modifier.size(30.dp).clip(CircleShape).clickable { actions.toggleNow(t) }.padding(6.dp),
                 )
@@ -1998,7 +1999,7 @@ private fun TaskRow(
                         .size(22.dp)
                         .clip(CircleShape)
                         .then(if (!t.open) Modifier.background(mode.key) else Modifier)
-                        .border(if (lateDays > 0) 2.5.dp else 2.dp, if (lateDays > 0) mode.value else mode.tint, CircleShape),
+                        .groupRing(DelaGroups.grpOf(t), t.ball == Dela.AGENDA, if (lateDays > 0) 2.5.dp else 2.dp, mode.value, mode.tint, strong = lateDays > 0),
                     contentAlignment = Alignment.Center,
                 ) {
                     if (!t.open) Icon(Glyphs.Check, contentDescription = "закрыто", tint = ru.zf.pravka.ui.Ink.KeyIcon, modifier = Modifier.size(14.dp))
@@ -2007,10 +2008,12 @@ private fun TaskRow(
             Column(Modifier.weight(1f).padding(start = 2.dp)) {
                 Text(
                     t.title,
-                    style = ty.bodyL,
+                    style = ty.bodyL.copy(fontWeight = if (t.open && t.focusOn == today) FontWeight.SemiBold else ty.bodyL.fontWeight),
                     color = if (t.open) ru.zf.pravka.ui.Ink.Text else mode.meta,
                 )
                 val live = t.id == actions.running
+                // «Олег ждёт 3 дн» — ярче остальных: люди ждут (`taskRow` веба, `value` полужирным).
+                val wait = DelaGroups.wait(t, DelaViews.who(t, actions.snap), today, personGrouped = by == DelaViews.By.PERSON)?.takeIf { it.strong }?.text
                 val spentMs = actions.spent[t.id] ?: 0L
                 val chips = DelaViews.chips(t, by, actions.snap, today, onProjectPage)
                 val pick = actions.pickProject
@@ -2045,7 +2048,14 @@ private fun TaskRow(
                                 pop()
                                 if (meta.isNotBlank()) append(" · ")
                             }
-                            append(meta)
+                            val at = if (wait != null) meta.indexOf(wait) else -1
+                            if (at < 0) append(meta) else {
+                                append(meta.substring(0, at))
+                                pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.SemiBold, color = mode.value))
+                                append(wait)
+                                pop()
+                                append(meta.substring(at + wait!!.length))
+                            }
                         },
                         style = ty.label.copy(fontWeight = if (live) FontWeight.SemiBold else FontWeight.Normal),
                         color = if (live) mode.value else mode.meta,
@@ -2103,6 +2113,8 @@ internal fun DelaTaskSheet(
      * у дела нет (поправки задания 10). null — новое дело, черновик, нет сервера.
      */
     say: (@Composable () -> Unit)? = null,
+    /** Предложение автоматики: «на сегодня» в нём не ставится (как в вебе). */
+    suggestion: Boolean = false,
 ) {
     var f by remember(task.id) { mutableStateOf(task) }
     var picking by remember { mutableStateOf("") }
@@ -2168,21 +2180,28 @@ internal fun DelaTaskSheet(
             )
         }
 
-        // «Чьё дело» (09.10.2026: слова «мяч» больше нет нигде) — как `BALL_LONG` веба.
-        PaperHint("Чьё дело")
+        // «Группа» (10.10.2026, `grpSet` веба): отбить, запустить, мониторить. «Отбить» — только серверу,
+        // который знает `owed` (старый отверг бы правку целиком); черновик Разноски отдаст его мячом «owed».
+        val grp = DelaGroups.grpOf(f)
+        PaperHint("Группа")
         ChipRow {
-            PaperChip("Моё", selected = f.ball == Dela.MINE, onClick = { f = f.copy(ball = Dela.MINE) })
-            PaperChip("Жду от человека", selected = f.ball == Dela.WAITING, onClick = { f = f.copy(ball = Dela.WAITING) })
-            PaperChip("Обсудить при встрече", selected = f.ball == Dela.AGENDA, onClick = { f = f.copy(ball = Dela.AGENDA) })
+            for (g in DelaGroups.Grp.entries) {
+                if (g == DelaGroups.Grp.OWED && !snap.groupsOn && onDrop == null && !task.owed) continue
+                PaperChip(g.title, selected = grp == g, onClick = { f = DelaGroups.withGrp(f, g) })
+            }
         }
         PaperRow(
             title = snap.people[f.personId]?.label ?: "без человека",
-            hint = when (f.ball) { Dela.WAITING -> "жду от"; Dela.AGENDA -> "поднять с"; else -> "для кого / про кого" },
+            hint = when (grp) {
+                DelaGroups.Grp.OWED -> "Кто ждёт"
+                DelaGroups.Grp.CHECK -> "От кого жду"
+                else -> if (f.ball == Dela.AGENDA) "При встрече с" else "Человек"
+            },
             icon = Glyphs.Phone,
             onClick = { picking = "person" },
         )
-        if (f.ball != Dela.MINE && f.personId.isBlank()) {
-            PaperHint("Без человека «жду» и «при встрече» некого ждать — выбери человека.", MaterialTheme.colorScheme.error)
+        if ((f.ball == Dela.WAITING || f.ball == Dela.AGENDA) && f.personId.isBlank()) {
+            PaperHint("Без человека «мониторить» и «при встрече» некого ждать — выбери человека.", MaterialTheme.colorScheme.error)
         }
         // Кто просил — как в вебе («Его просьбы ко мне»): строкой, если есть.
         if (f.requestedBy.isNotBlank()) {
@@ -2191,7 +2210,7 @@ internal fun DelaTaskSheet(
 
         DateLine("Срок", f.dueDate, today) { f = f.copy(dueDate = it, dueTime = if (it.isBlank()) "" else f.dueTime) }
         if (f.dueDate.isNotBlank()) TimeLine(f.dueTime) { f = f.copy(dueTime = it) }
-        // «Напомнить ему» — день пнуть того, у кого мяч (как в вебе); моё напоминание — ниже, в Telegram.
+        // «Напомнить ему» — только у «Мониторить»: день пнуть того, от кого жду; моё напоминание — ниже, в Telegram.
         if (f.ball == Dela.WAITING) DateLine("Напомнить ему", f.nudgeOn, today) { f = f.copy(nudgeOn = it) }
         val places by app.settings.autoPlacesFlow.collectAsState(initial = emptyMap())
         RemindLine(
@@ -2206,17 +2225,23 @@ internal fun DelaTaskSheet(
                 PaperChip(if (m < 60) "$m мин" else "${m / 60} ч", selected = f.estimateMin == m, onClick = { f = f.copy(estimateMin = if (f.estimateMin == m) 0 else m) })
             }
         }
-        if (onDrop == null) PaperToggle(
-            "Сейчас — на сегодня",
-            checked = f.focusOn == today.toString(),
-            onCheckedChange = { on ->
-                // Не больше пяти, как у молнии в строке и в вебе: шестое не встаёт.
-                val me = app.delaSync.link.value?.user ?: app.delaStore.me
-                if (on && !DelaViews.nowRoom(snap, me, today.toString(), listOf(task.id))) Feedback.toast(app, DelaViews.NOW_FULL)
-                else f = f.copy(focusOn = if (on) today.toString() else "")
-            },
-            hint = "до ${DelaViews.NOW_MAX} дел на сегодня — первыми во вкладке и в Засечке; завтра отметка гаснет сама",
-        )
+        // «Сейчас» → «На сегодня» / «На завтра» (`toggleToday` веба): то же солнце, что у строки.
+        // В предложении его нет — как в вебе.
+        if (onDrop == null && !suggestion && f.open) {
+            val me = app.delaSync.link.value?.user ?: app.delaStore.me
+            val on = DelaGroups.inToday(f, me, today.toString())
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (on) "На сегодня" + (if (f.focusOn == today.toString()) " · в «Сейчас»" else "") else "Не на сегодня",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                PaperTextButton(if (on) "На завтра" else "На сегодня", icon = Glyphs.Sunny, onClick = {
+                    val (set, _) = DelaGroups.toggleToday(f, me, today.toString(), today.plusDays(1).toString())
+                    f = Dela.applyFields(f, set, today.toString(), f.updatedAt)
+                })
+            }
+        }
         PaperToggle("Хочу сам", checked = f.want, onCheckedChange = { f = f.copy(want = it) }, hint = "не потому, что попросили")
         PaperRow(
             title = if (f.labels.isEmpty()) "метки" else f.labels.joinToString(" ") { "@$it" },
@@ -2566,36 +2591,6 @@ private fun delaSyncShort(linked: Boolean, st: ru.zf.pravka.data.DelaSync.Status
     st.lastError.isNotBlank() && st.lastErrorAt >= st.lastOk -> "нет связи"
     syncedAt > 0 -> "синк " + ru.zf.pravka.core.Fmt.hm(syncedAt)
     else -> "синк"
-}
-
-/**
- * Плитки над разделом «Сейчас» (`screens/06`): Сегодня «0 из 5 / 2 ч 25 м»,
- * Неделя «14 из 23», Просрочено «1 / на 2 дня», Жду «6 / от 4 людей».
- */
-@Composable
-private fun DelaStats(snap: Dela.Snapshot, me: String, today: String, sphere: String) {
-    val mine = remember(snap, me, sphere) { DelaViews.openMine(snap, me, sphere) }
-    val nowOpen = remember(snap, me, today) { DelaViews.nowTasks(snap, me, today) }
-    val doneAll = remember(snap, me) { snap.tasks.values.filter { it.status == Dela.DONE && (me.isBlank() || it.ownerId == me) } }
-    val doneToday = doneAll.count { it.completedAt.take(10) == today && it.focusOn == today }
-    val estimate = nowOpen.sumOf { it.estimateMin.coerceAtLeast(0) }
-    val d = runCatching { LocalDate.parse(today) }.getOrDefault(LocalDate.now())
-    val monday = d.minusDays((d.dayOfWeek.value - 1).toLong()).toString()
-    val sunday = d.plusDays((7 - d.dayOfWeek.value).toLong()).toString()
-    val weekOpen = mine.count { it.dueDate.isNotBlank() && it.dueDate <= sunday }
-    val weekDone = doneAll.count { it.completedAt.take(10) in monday..sunday }
-    val late = mine.filter { DelaViews.isLate(it, today) }
-    val lateDays = late.maxOfOrNull {
-        runCatching { java.time.temporal.ChronoUnit.DAYS.between(LocalDate.parse(it.dueDate.take(10)), d).toInt() }.getOrDefault(0)
-    } ?: 0
-    val waiting = mine.filter { it.ball == Dela.WAITING }
-    val people = waiting.map { it.personId }.filter { it.isNotBlank() }.toSet().size
-    Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ru.zf.pravka.ui.StatTile("Сегодня", "$doneToday из ${nowOpen.size + doneToday}", Modifier.weight(1f), delta = if (estimate > 0) ru.zf.pravka.core.Fmt.dur(estimate) else null)
-        ru.zf.pravka.ui.StatTile("Неделя", "$weekDone из ${weekOpen + weekDone}", Modifier.weight(1f), delta = if (weekOpen > 0) "осталось $weekOpen" else null)
-        ru.zf.pravka.ui.StatTile("Просрочено", "${late.size}", Modifier.weight(1f), delta = if (lateDays > 0) "на $lateDays дн" else null, worse = late.isNotEmpty())
-        ru.zf.pravka.ui.StatTile("Жду", "${waiting.size}", Modifier.weight(1f), delta = if (people > 0) "от $people чел." else null)
-    }
 }
 
 /** «Новое из встреч и чатов · 4 ›» — стеклянная строка-вход в «Новое» (`screens/06`). */

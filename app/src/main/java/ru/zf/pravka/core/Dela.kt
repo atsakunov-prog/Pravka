@@ -41,6 +41,11 @@ object Dela {
         val dealId: String = "",
         val ownerId: String = "",
         val ball: String = MINE,
+        /**
+         * «Отбить» (10.10.2026, `dela_0007`, docs/dela-phone-11.md): человек ждёт от
+         * меня ответа или дела. Группа дела — из него и мяча ([DelaGroups.grpOf]).
+         */
+        val owed: Boolean = false,
         val personId: String = "",
         val waitingSince: String = "",
         val nudgeOn: String = "",
@@ -353,6 +358,9 @@ object Dela {
         /** Сервер Дел держит наговорки (`dictation.add`, вид `dictations`) — «Новое» по источнику. */
         val dictationsOn: Boolean get() = FEATURE_DICTATIONS in features
 
+        /** Сервер Дел знает «Отбить» (`owed`): только тогда телефон его шлёт. */
+        val groupsOn: Boolean get() = FEATURE_GROUPS in features
+
         val empty: Boolean
             get() = tasks.isEmpty() && projects.isEmpty() && people.isEmpty() && suggestions.isEmpty()
 
@@ -414,7 +422,8 @@ object Dela {
         return Task(
             id = id, num = o.int("num"), title = o.str("title"), notes = o.str("notes"),
             projectId = o.str("project_id"), dealId = o.str("deal_id"), ownerId = o.str("owner_id"),
-            ball = o.str("ball").ifBlank { MINE }, personId = o.str("person_id"),
+            ball = o.str("ball").ifBlank { MINE }.let { if (it == OWED) MINE else it },
+            owed = o.bool("owed") || o.str("ball") == OWED, personId = o.str("person_id"),
             waitingSince = o.str("waiting_since"), nudgeOn = o.str("nudge_on"), requestedBy = o.str("requested_by"),
             dueDate = o.str("due_date"), dueTime = o.str("due_time"),
             remindAt = o.str("remind_at"), remindPlace = o.str("remind_place"), remindedAt = o.str("reminded_at"),
@@ -433,7 +442,7 @@ object Dela {
     fun json(t: Task): JSONObject = JSONObject()
         .put("id", t.id).put("num", t.num).put("title", t.title).put("notes", nul(t.notes))
         .put("project_id", nul(t.projectId)).put("deal_id", nul(t.dealId)).put("owner_id", t.ownerId)
-        .put("ball", t.ball).put("person_id", nul(t.personId)).put("waiting_since", nul(t.waitingSince))
+        .put("ball", t.ball).put("owed", t.owed).put("person_id", nul(t.personId)).put("waiting_since", nul(t.waitingSince))
         .put("nudge_on", nul(t.nudgeOn)).put("requested_by", nul(t.requestedBy)).put("due_date", nul(t.dueDate))
         .put("due_time", nul(t.dueTime)).put("remind_at", nul(t.remindAt)).put("remind_place", nul(t.remindPlace))
         .put("reminded_at", nul(t.remindedAt)).put("estimate_min", if (t.estimateMin > 0) t.estimateMin else JSONObject.NULL)
@@ -907,7 +916,9 @@ object Dela {
                 "project_id" -> out.copy(projectId = f.str(k), dealId = if (f.str(k) != out.projectId && !f.has("deal_id")) "" else out.dealId)
                 "deal_id" -> out.copy(dealId = f.str(k))
                 "owner_id" -> out.copy(ownerId = f.str(k).ifBlank { out.ownerId })
-                "ball" -> out.copy(ball = f.str(k).ifBlank { MINE })
+                // «owed» в мяче — так группу называет автоматика: сервер пишет mine + флаг (`store._ball_norm`).
+                "ball" -> f.str(k).ifBlank { MINE }.let { b -> if (b == OWED) out.copy(ball = MINE, owed = true) else out.copy(ball = b) }
+                "owed" -> out.copy(owed = f.bool(k))
                 "person_id" -> out.copy(personId = f.str(k))
                 "nudge_on" -> out.copy(nudgeOn = f.str(k))
                 "requested_by" -> out.copy(requestedBy = f.str(k))
@@ -933,6 +944,8 @@ object Dela {
         if (out.ball == WAITING && t.ball != WAITING && out.waitingSince.isBlank()) out = out.copy(waitingSince = today)
         if (out.ball == WAITING && out.waitingSince.isBlank()) out = out.copy(waitingSince = today)
         if (out.ball != WAITING) out = out.copy(waitingSince = "")
+        // Мяч ушёл к человеку — «отбить» гаснет сам (триггер `owed` сервера).
+        if (out.ball == WAITING) out = out.copy(owed = false)
         return out.copy(updatedAt = nowIso)
     }
 
@@ -965,11 +978,20 @@ object Dela {
      */
     val EDITABLE = listOf(
         "title", "notes", "project_id", "deal_id", "ball", "person_id", "nudge_on", "requested_by",
-        "due_date", "due_time", "remind_at", "remind_place", "estimate_min", "want", "focus_on", "labels",
+        "due_date", "due_time", "remind_at", "remind_place", "estimate_min", "want", "focus_on", "labels", "owed",
     )
 
     /** Что сервер умеет сверх контракта части 1 — `features` ответа синка. */
     const val FEATURE_REMIND = "remind"
+
+    /**
+     * Три группы (10.10.2026): сервер знает поле `owed`. Без этой фичи телефон
+     * `owed` не шлёт — старый сервер отверг бы операцию целиком, как с `remind_*`.
+     */
+    const val FEATURE_GROUPS = "groups"
+
+    /** Мяч «owed» — группа «Отбить» одним полем: так её называет автоматика, сервер пишет mine + `owed`. */
+    const val OWED = "owed"
 
     /** Что из [add] ещё нет в [have] (по [norm]: регистр, ё, форма номера не важны) — без повторов. */
     fun addNew(have: List<String>, add: List<String>, norm: (String) -> String): List<String> {
@@ -1020,6 +1042,7 @@ object Dela {
         "want" -> t.want
         "focus_on" -> nul(t.focusOn)
         "labels" -> arr(t.labels)
+        "owed" -> t.owed
         else -> JSONObject.NULL
     }
 
@@ -1050,7 +1073,7 @@ object Dela {
         for (k in CREATE_FIELDS) {
             if (k == "title") continue
             val v = field(t, k)
-            if (v == JSONObject.NULL || (k == "want" && v == false) || (k == "labels" && t.labels.isEmpty())) continue
+            if (v == JSONObject.NULL || (k == "want" && v == false) || (k == "owed" && v == false) || (k == "labels" && t.labels.isEmpty())) continue
             if (k == "ball" && v == MINE) continue
             task.put(k, v)
         }

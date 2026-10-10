@@ -377,7 +377,7 @@ private fun TurnView(t: DelaAsk.Turn, snap: Dela.Snapshot, onOpen: (String) -> U
             val meta = listOfNotNull(
                 snap.projects[x.projectId]?.name ?: x.projectName.takeIf { it.isNotBlank() },
                 x.personId.takeIf { it.isNotBlank() }?.let { pid ->
-                    (if (x.ball == Dela.WAITING) "жду " else if (x.ball == Dela.AGENDA) "повестка " else "") + (snap.people[pid]?.label ?: x.who)
+                    (if (x.owed) "ждёт " else if (x.ball == Dela.WAITING) "жду " else if (x.ball == Dela.AGENDA) "при встрече " else "") + (snap.people[pid]?.label ?: x.who)
                 },
                 x.dueDate.takeIf { it.isNotBlank() }?.let { "срок " + DelaAsk.ddmm(it, snap.today) },
                 x.estimateMin.takeIf { it > 0 }?.let { "$it мин" },

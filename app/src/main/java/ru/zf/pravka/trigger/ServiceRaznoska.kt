@@ -419,6 +419,7 @@ internal fun PravkaAccessibilityService.raznMeta(task: ru.zf.pravka.core.ParsedT
     if (task.projectName.isNotBlank()) meta.add("#" + task.projectName)
     // Дела: у кого мяч — словами, а не меткой.
     when (task.ball) {
+        ru.zf.pravka.core.Dela.OWED -> meta.add("отбить: " + task.personName.ifBlank { "ждут" })
         ru.zf.pravka.core.Dela.WAITING -> meta.add("жду: " + task.personName.ifBlank { "?" })
         ru.zf.pravka.core.Dela.AGENDA -> meta.add("при встрече: " + task.personName.ifBlank { "?" })
         else -> if (task.personName.isNotBlank()) meta.add("для: " + task.personName)

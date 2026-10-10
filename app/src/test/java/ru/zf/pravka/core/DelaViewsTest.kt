@@ -68,8 +68,9 @@ class DelaViewsTest {
         val byPerson = DelaViews.group(all, DelaViews.By.PERSON, s, today)
         assertEquals(listOf("Иван", "Без человека"), byPerson.map { it.title })
         assertEquals(s.people.values.single().id, byPerson.first().personId)
-        val byBall = DelaViews.group(all, DelaViews.By.BALL, s, today)
-        assertEquals(listOf("Моё", "Жду"), byBall.map { it.title })
+        val byGrp = DelaViews.group(all, DelaViews.By.GRP, s, today)
+        assertEquals(listOf("Запустить", "Мониторить"), byGrp.map { it.title })
+        assertEquals(DelaViews.By.GRP, DelaViews.By.of("ball", DelaViews.By.DATE))
         assertEquals(listOf("Без сделки"), DelaViews.group(all, DelaViews.By.DEAL, s, today).map { it.title })
         assertEquals(1, DelaViews.group(all, DelaViews.By.NONE, s, today).size)
         assertTrue(DelaViews.group(emptyList(), DelaViews.By.NONE, s, today).isEmpty())
@@ -91,16 +92,16 @@ class DelaViewsTest {
     }
 
     @Test
-    fun `подписи строки — мяч с давностью, человек, проект, минуты, метки`() {
+    fun `подписи строки — кто ждёт с давностью, человек, проект, минуты, метки`() {
         val s = snap()
         val t = s.task("57")!!.copy(waitingSince = "2026-10-02")
         // Не группа по датам: срок виден; не страница проекта: проект виден.
-        assertEquals(listOf("сб 10.10", "Бета Групп", "жду Иван · 3 дн.", "10 м", "звонок"), DelaViews.chips(t, null, s, today))
+        assertEquals(listOf("сб 10.10", "Бета Групп", "жду Иван 3 дн", "10 м", "звонок"), DelaViews.chips(t, null, s, today))
         // Группа по датам — срок молчит (он в заголовке).
-        assertEquals(listOf("Бета Групп", "жду Иван · 3 дн.", "10 м", "звонок"), DelaViews.chips(t, DelaViews.By.DATE, s, today))
-        // Группа по мячу: мяч в заголовке, а человек остаётся — «@Иван» (как в вебе).
-        assertEquals(listOf("сб 10.10", "Бета Групп", "@Иван", "10 м", "звонок"), DelaViews.chips(t, DelaViews.By.BALL, s, today))
-        assertEquals(listOf("сб 10.10", "жду Иван · 3 дн.", "10 м", "звонок"), DelaViews.chips(t, null, s, today, onProjectPage = true))
+        assertEquals(listOf("Бета Групп", "жду Иван 3 дн", "10 м", "звонок"), DelaViews.chips(t, DelaViews.By.DATE, s, today))
+        // По группам — «жду Иван» остаётся: сколько ждём, заголовок не скажет (как в вебе).
+        assertEquals(listOf("сб 10.10", "Бета Групп", "жду Иван 3 дн", "10 м", "звонок"), DelaViews.chips(t, DelaViews.By.GRP, s, today))
+        assertEquals(listOf("сб 10.10", "жду Иван 3 дн", "10 м", "звонок"), DelaViews.chips(t, null, s, today, onProjectPage = true))
         // Моё с человеком — «@Иван»; без проекта — «без проекта» (строка рисует его кнопкой выбора проекта).
         val mine = t.copy(ball = Dela.MINE, projectId = "", labels = emptyList(), estimateMin = 0, dueDate = "")
         assertEquals(listOf(DelaViews.NO_PROJECT, "@Иван"), DelaViews.chips(mine, null, s, today))
@@ -110,40 +111,21 @@ class DelaViewsTest {
     }
 
     @Test
-    fun `сейчас — до пяти, выбрать на сегодня и завтра, числа меню как count веба`() {
+    fun `числа меню — сегодня и вопросы, отбить горит`() {
         val s = snap(
-            task("now") { it.copy(focusOn = today, dueDate = "2026-10-01") },
+            task("now") { it.copy(focusOn = today, dueDate = "2026-10-20") },
             task("overdue") { it.copy(dueDate = "2026-10-03") },
             task("nudge") { it.copy(ball = Dela.WAITING, nudgeOn = today) },
-            task("other") { it.copy(createdBy = "natasha", createdAt = "2026-10-04T10:00:00+03:00", dueDate = "2026-10-20") },
-            task("soon") { it.copy(dueDate = "2026-10-09") },
             task("far") { it.copy(dueDate = "2026-12-01") },
-            task("tomorrow") { it.copy(dueDate = "2026-10-06") },
-            task("agenda") { it.copy(ball = Dela.AGENDA, dueDate = "2026-10-02") },
         )
-        val n = DelaViews.now(s, "sasha", today, "all")
-        assertEquals(listOf("now"), n.now.map { it.id })
-        // «Выбрать на сегодня» — только моё (мяч у меня) и не то, что уже в «Сейчас».
-        assertEquals(listOf("overdue"), n.pick.map { it.id })
-        assertEquals(listOf("tomorrow"), n.next.map { it.id })
-        assertEquals(4, n.left)
-        assertEquals("Выбрать на сегодня: просрочено и на сегодня", n.pickTitle)
         val c = DelaViews.counts(s, "sasha", today, "all", now)
-        assertEquals(1, c.now)
-        assertEquals("1 из 5", c.label(DelaViews.View.NOW))
-        // «Предстоящее» — со сроком до недели вперёд, просроченное тоже (оно теперь наверху «Предстоящего»).
-        assertEquals(6, c.upcoming)  // now, overdue, agenda, tomorrow, soon (09.10) и #57 (10.10)
-        assertTrue(c.upcomingHot)
-        assertEquals(2, c.waiting)  // #57 и nudge
-        assertTrue(c.waitingHot)
-        // «Новое» — как newCount веба (08.10.2026): только вопросы. Предложений нет — и числа нет:
-        // без проекта и поставленное другими ответа не ждут.
+        assertEquals(3, c.today)
+        assertFalse(c.todayHot)
+        assertEquals("3", c.label(DelaViews.View.TODAY))
+        // «Новое» — как newCount веба (08.10.2026): только вопросы.
         assertEquals(0, c.new)
         assertEquals("", c.label(DelaViews.View.NEW))
-        assertEquals("", c.label(DelaViews.View.WEEK))
-        // «Предстоящее» — с датой; «И без даты» — все; «Только мяч у меня» — без «жду».
-        assertEquals(8, DelaViews.upcoming(s, "sasha", "all", mineOnly = false, withUndated = false).size)
-        assertEquals(6, DelaViews.upcoming(s, "sasha", "all", mineOnly = true, withUndated = true).size)
+        assertTrue(DelaViews.counts(snap(task("o") { it.copy(owed = true) }), "sasha", today, "all", now).todayHot)
     }
 
     @Test
@@ -156,15 +138,9 @@ class DelaViewsTest {
         assertFalse(DelaViews.nowRoom(s, "sasha", today, listOf("sixth")))
         assertTrue(DelaViews.nowRoom(s, "sasha", today, listOf("n1")))
         assertEquals("В «Сейчас» уже 5 — сначала убери одно", DelaViews.NOW_FULL)
-        val n = DelaViews.now(s, "sasha", today, "all")
-        assertEquals(0, n.left)
-        assertEquals("Ещё на сегодня и просрочено", n.pickTitle)
-        // Места нет — «Завтра» не предлагается.
-        assertTrue(DelaViews.now(snap(*five.toTypedArray(), task("t") { it.copy(dueDate = "2026-10-06") }), "sasha", today, "all").next.isEmpty())
         // «Сейчас» — на день, а не на сферу: дом и работа делят те же пять.
         val home = s.copy(tasks = s.tasks.mapValues { (_, t) -> if (t.id == "n1") t.copy(sphere = "home") else t })
         assertEquals(5, DelaViews.nowTasks(home, "sasha", today).size)
-        assertEquals(5, DelaViews.counts(home, "sasha", today, "work", now).now)
     }
 
     @Test
@@ -187,8 +163,6 @@ class DelaViewsTest {
         // «Понятно» — seen_at: из «Нового» уходит, и сразу, до ответа сервера.
         val seen = Dela.overlay(withAuto, listOf(Dela.seenOp(listOf("a1"))), "sasha", today, nowIso)
         assertTrue(Dela.autoDone(seen, "sasha", now).isEmpty())
-        // Без проекта — в «Неделе» (08.10.2026), не в «Новом».
-        assertEquals(listOf("loose"), DelaViews.week(s, "sasha", today, "all", now).loose.map { it.id })
     }
 
     @Test
@@ -261,27 +235,10 @@ class DelaViewsTest {
     }
 
     @Test
-    fun `жду — пора напомнить первой группой, остальное по людям`() {
-        val s = snap(
-            task("nudge") { it.copy(ball = Dela.WAITING, nudgeOn = "2026-10-04") },
-            task("due") { it.copy(ball = Dela.WAITING, dueDate = today) },
-            task("later") { it.copy(ball = Dela.WAITING, nudgeOn = "2026-10-09") },
-        )
-        val g = DelaViews.waitingGroups(s, "sasha", today, "all")
-        assertEquals("Пора напомнить", g.first().title)
-        assertTrue(g.first().late)
-        assertEquals(setOf("nudge", "due"), g.first().items.map { it.id }.toSet())
-        // #57 у Ивана — по людям; без человека — последним.
-        assertEquals(listOf("Иван", "Без человека"), g.drop(1).map { it.title })
-    }
-
-    @Test
     fun `разделы — старые ключи ведут туда, где их дела теперь`() {
-        assertEquals(listOf("now", "new", "upcoming", "waiting", "week", "all"), DelaViews.View.entries.map { it.key })
-        assertEquals(DelaViews.View.NOW, DelaViews.View.of("morning"))
+        assertEquals(listOf("today", "new", "all"), DelaViews.View.entries.map { it.key })
+        for (old in listOf("now", "morning", "upcoming", "waiting", "week", "непонятное")) assertEquals(DelaViews.View.TODAY, DelaViews.View.of(old))
         assertEquals(DelaViews.View.NEW, DelaViews.View.of("inbox"))
-        assertEquals(DelaViews.View.WAITING, DelaViews.View.of("waiting"))
-        assertEquals(DelaViews.View.NOW, DelaViews.View.of("непонятное"))
     }
 
     @Test
@@ -351,9 +308,9 @@ class DelaViewsTest {
         assertEquals("раз в 2–3 месяца", info["Как часто"])
         assertEquals("фонды", info["Ищет"])
         assertFalse(info.containsKey("Заметка"))
-        val sec = DelaViews.personSections(Dela.person(s, p.id))
-        assertEquals(listOf("Повестка с ним", "Жду от него", "Его просьбы ко мне", "Моё о нём"), sec.map { it.title })
-        assertEquals(1, sec[1].items.size)
+        val sec = DelaViews.personSections(s, p.id)
+        assertEquals(listOf("Отбить: ждёт от меня", "Запустить: о нём и с ним", "Мониторить: жду от него"), sec.map { it.title })
+        assertEquals(1, sec[2].items.size)
     }
 
     @Test

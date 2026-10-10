@@ -27,24 +27,25 @@ object DelaViews {
 
     // ------------------------------------------------------------ разделы
 
-    /** Разделы веба по порядку боковой панели (`VIEWS` веба). */
+    /**
+     * Разделы веба (`VIEWS` веба). С 10.10.2026 их три (docs/dela-phone-11.md,
+     * владелец: «не надо этих всех странных видов. Просто надо говорить: на
+     * сегодня вот такие дела»): «Сегодня» — главный список тремя группами,
+     * «Новое» — вопросы автоматики, «Все дела» — всё открытое.
+     */
     enum class View(val key: String, val title: String) {
-        NOW("now", "Сейчас"),
+        TODAY("today", "Сегодня"),
         NEW("new", "Новое"),
-        UPCOMING("upcoming", "Предстоящее"),
-        WAITING("waiting", "Жду"),
-        WEEK("week", "Неделя"),
         ALL("all", "Все дела");
 
         companion object {
             /**
-             * Ключ раздела, как маршрут веба: старые «Утро» и «Входящие» ведут туда,
-             * где их дела теперь живут, — в «Сейчас» и в «Новое».
+             * Ключ раздела, как маршрут веба: «Сейчас», «Предстоящее», «Жду»,
+             * «Неделя» и старое «Утро» ведут в «Сегодня», «Входящие» — в «Новое».
              */
             fun of(key: String): View = when (key) {
-                "morning" -> NOW
                 "inbox" -> NEW
-                else -> entries.firstOrNull { it.key == key } ?: NOW
+                else -> entries.firstOrNull { it.key == key } ?: TODAY
             }
         }
     }
@@ -62,17 +63,21 @@ object DelaViews {
     /** Подпись строки дела без проекта — она же кнопка выбора проекта (как в вебе). */
     const val NO_PROJECT = "без проекта"
 
-    /** Группировка списка — выбор над ним, как `groupPicker` веба. */
+    /**
+     * Группировка списка — выбор над ним, как `groupPicker` веба. «Группы»
+     * («Отбить», «Запустить», «Мониторить», 10.10.2026) заменили «моё, жду,
+     * повестка»: сохранённый ключ «ball» ведёт в них же.
+     */
     enum class By(val key: String, val title: String) {
         DATE("date", "по датам"),
         PROJECT("project", "по проектам"),
         PERSON("person", "по людям"),
-        BALL("ball", "моё, жду, повестка"),
+        GRP("grp", "группы"),
         DEAL("deal", "по сделкам"),
         NONE("none", "без групп");
 
         companion object {
-            fun of(key: String, fallback: By): By = entries.firstOrNull { it.key == key } ?: fallback
+            fun of(key: String, fallback: By): By = if (key == "ball") GRP else entries.firstOrNull { it.key == key } ?: fallback
         }
     }
 
@@ -119,46 +124,25 @@ object DelaViews {
         openMine(s, me, sphere).filter { it.projectId.isBlank() }.sortedWith(Dela.ORDER)
 
     /**
-     * Числа у разделов в меню — как `count()` у `VIEWS` веба. [upcomingHot] и
-     * [waitingHot] — `hot()` веба: есть просроченное, пора кому-то напомнить.
+     * Числа у разделов в меню — как `count()` у `VIEWS` веба: «Сегодня» — сколько
+     * дел на сегодня, [todayHot] — среди них есть «отбить» (люди ждут), «Новое» —
+     * только вопросы.
      */
-    data class Counts(
-        val now: Int,
-        val new: Int,
-        val upcoming: Int,
-        val waiting: Int,
-        val upcomingHot: Boolean = false,
-        val waitingHot: Boolean = false,
-    ) {
+    data class Counts(val today: Int, val new: Int, val todayHot: Boolean = false) {
         fun of(v: View): Int = when (v) {
-            View.NOW -> now
-            View.UPCOMING -> upcoming
+            View.TODAY -> today
             View.NEW -> new
-            View.WAITING -> waiting
-            else -> 0
+            View.ALL -> 0
         }
 
-        fun hot(v: View): Boolean = (v == View.UPCOMING && upcomingHot) || (v == View.WAITING && waitingHot)
+        fun hot(v: View): Boolean = v == View.TODAY && todayHot
 
-        /** Число раздела словами: у «Сейчас» — «3 из 5», у остальных — число или пусто. */
-        fun label(v: View): String = when {
-            v == View.NOW -> "$now из $NOW_MAX"
-            of(v) > 0 -> of(v).toString()
-            else -> ""
-        }
+        fun label(v: View): String = of(v).takeIf { it > 0 }?.toString().orEmpty()
     }
 
     fun counts(s: Dela.Snapshot, me: String, today: String, sphere: String, now: Long): Counts {
-        val m = openMine(s, me, sphere)
-        val week = plusDays(today, 7)
-        return Counts(
-            now = nowTasks(s, me, today).size,
-            new = newCount(s, me, sphere, now),
-            upcoming = m.count { it.dueDate.isNotBlank() && it.dueDate <= week },
-            waiting = m.count { it.ball == Dela.WAITING },
-            upcomingHot = m.any { isLate(it, today) },
-            waitingHot = m.any { nudgeDue(it, today) },
-        )
+        val t = DelaGroups.todayTasks(s, me, today, sphere)
+        return Counts(today = t.size, new = newCount(s, me, sphere, now), todayHot = t.any { DelaGroups.grpOf(it) == DelaGroups.Grp.OWED })
     }
 
     /**
@@ -172,69 +156,9 @@ object DelaViews {
     /** Раздел страницы: заголовок веба и дела в его порядке. */
     data class Section(val title: String, val items: List<Dela.Task>)
 
-    /**
-     * «Сейчас» (`renderNow` веба): до пяти дел на сегодня — сначала они, потом
-     * всё остальное. [pick] — моё просроченное и на сегодня, чего ещё нет в
-     * «Сейчас» («Выбрать на сегодня»), [next] — моё на завтра, пока место
-     * осталось. «Сейчас» — во всех сферах, выбирать — из своей.
-     */
-    data class Now(val now: List<Dela.Task>, val pick: List<Dela.Task>, val next: List<Dela.Task>) {
-        val left: Int get() = (NOW_MAX - now.size).coerceAtLeast(0)
-        val pickTitle: String get() = if (left > 0) "Выбрать на сегодня: просрочено и на сегодня" else "Ещё на сегодня и просрочено"
-    }
-
-    fun now(s: Dela.Snapshot, me: String, today: String, sphere: String): Now {
-        val m = openMine(s, me, sphere).filter { !isNow(it, today) && it.ball == Dela.MINE }
-        val nowList = nowTasks(s, me, today)
-        val tomorrow = plusDays(today, 1)
-        return Now(
-            now = nowList,
-            pick = m.filter { le(it.dueDate, today) }.sortedWith(Dela.ORDER),
-            next = if (nowList.size < NOW_MAX) m.filter { it.dueDate == tomorrow }.sortedWith(Dela.ORDER) else emptyList(),
-        )
-    }
-
-    /** «Предстоящее»: моё с датой (или и без), по датам; «Только мяч у меня» — без «жду» и «повестки». */
-    fun upcoming(s: Dela.Snapshot, me: String, sphere: String, mineOnly: Boolean, withUndated: Boolean): List<Dela.Task> =
-        openMine(s, me, sphere).filter { (!mineOnly || it.ball == Dela.MINE) && (withUndated || it.dueDate.isNotBlank()) }
-
-    /** «Жду»: что должны другие — веб раскладывает по людям. */
-    fun waiting(s: Dela.Snapshot, me: String, sphere: String): List<Dela.Task> =
-        openMine(s, me, sphere).filter { it.ball == Dela.WAITING }
-
-    /**
-     * «Жду» веба: «Пора напомнить» первой группой (красным, как просрочка),
-     * остальное — по людям.
-     */
-    fun waitingGroups(s: Dela.Snapshot, me: String, today: String, sphere: String): List<Group> {
-        val items = waiting(s, me, sphere)
-        val due = items.filter { nudgeDue(it, today) }.sortedWith(Dela.ORDER)
-        val head = if (due.isEmpty()) emptyList() else listOf(Group("0nudge", "Пора напомнить", late = true, items = due))
-        return head + group(items.filter { !nudgeDue(it, today) }, By.PERSON, s, today)
-    }
-
     /** «Все дела»: моё в сфере, с «Сделанными» по выбору. */
     fun list(s: Dela.Snapshot, me: String, sphere: String, showDone: Boolean): List<Dela.Task> =
         s.tasks.values.filter { mine(s, me, it) && Dela.inSphere(it, sphere) && (showDone || it.open) }
-
-    /**
-     * «Неделя» веба: что протухло, кто молчит, где нет следующего шага и (с
-     * 08.10.2026) [loose] — мои открытые без проекта: «Без проекта — куда их?»
-     * переехало сюда из «Нового», это уборка раз в неделю, а не вопрос.
-     */
-    data class Week(val stale: List<Dela.Task>, val waitStale: List<Dela.Task>, val noStep: List<Dela.Project>, val loose: List<Dela.Task> = emptyList()) {
-        val empty: Boolean get() = stale.isEmpty() && waitStale.isEmpty() && noStep.isEmpty() && loose.isEmpty()
-    }
-
-    fun week(s: Dela.Snapshot, me: String, today: String, sphere: String, now: Long): Week {
-        val w = Dela.week(s, me, today, sphere, now)
-        val busy = s.tasks.values.filter { it.open && it.ball == Dela.MINE && it.projectId.isNotBlank() }.map { it.projectId }.toSet()
-        // Веб берёт проекты без следующего шага во всех сферах: отбор сферой — только у дел.
-        val noStep = s.projects.values.filter {
-            it.live && (me.isBlank() || it.ownerId == me) && it.moneyDefault in setOf("paid", "potential") && it.id !in busy
-        }.sortedBy { it.name.lowercase() }
-        return Week(w.stale, w.waitingStale, noStep, noProject(s, me, sphere))
-    }
 
     /**
      * Поиск веба: каждое слово — где угодно в названии, заметках, имени проекта,
@@ -527,7 +451,8 @@ object DelaViews {
      * списком. Порядок групп — по ключу, как у веба; дела внутри — в порядке срока.
      */
     fun group(items: List<Dela.Task>, by: By, s: Dela.Snapshot, today: String): List<Group> {
-        val sorted = items.sortedWith(Dela.ORDER)
+        // «Группы» — как «Сегодня»: внутри выше тот, кому делать раньше и кто дольше ждёт.
+        val sorted = items.sortedWith(if (by == By.GRP) DelaGroups.byTime(today) else Dela.ORDER)
         if (by == By.NONE) return if (sorted.isEmpty()) emptyList() else listOf(Group("all", "", items = sorted))
         data class Bucket(val title: String, val sub: String, val late: Boolean, val projectId: String?, val personId: String?, val list: MutableList<Dela.Task>)
         val buckets = LinkedHashMap<String, Bucket>()
@@ -559,11 +484,7 @@ object DelaViews {
                     val p = s.people[t.personId]
                     if (p != null) put("1" + p.label, p.label, t, personId = p.id) else put("2", "Без человека", t)
                 }
-                By.BALL -> when (t.ball) {
-                    Dela.AGENDA -> put("2", "Повестка", t)
-                    Dela.WAITING -> put("3", "Жду", t)
-                    else -> put("1", "Моё", t)
-                }
+                By.GRP -> DelaGroups.grpOf(t).let { g -> put((g.ordinal + 1).toString(), g.title, t, sub = g.sub) }
                 By.DEAL -> {
                     val d = s.deals[t.dealId]
                     if (d != null) put("1" + d.name, d.name, t) else put("2", "Без сделки", t)
@@ -577,7 +498,8 @@ object DelaViews {
 
     // ------------------------------------------------------------ строка
 
-    private val BALL = mapOf(Dela.MINE to "моё", Dela.WAITING to "жду", Dela.AGENDA to "повестка")
+    /** Как человек дела назван в строке: короткое имя, иначе полное. */
+    fun who(t: Dela.Task, s: Dela.Snapshot): String = s.people[t.personId]?.label ?: t.who.takeIf { t.personId.isNotBlank() }.orEmpty()
 
     /** Срок строкой, как `dueLabel` веба; [late] — просрочено (красным). */
     data class Due(val text: String, val late: Boolean, val today: Boolean)
@@ -599,8 +521,8 @@ object DelaViews {
      * Подписи под названием — как метки строки веба: срок (если не группа по
      * датам, а просроченный — всегда), проект или «без проекта» (если не группа
      * по проектам и не страница проекта; строка рисует его кнопкой выбора
-     * проекта), сделка, мяч с человеком и давностью «жду» («жду Иван · 3 дн.»)
-     * или «@Иван», минуты, метки. Номер — последним.
+     * проекта), сделка, кто ждёт («Иван ждёт 3 дн», «жду Иван 5 дн», «при
+     * встрече с Иван») или «@Иван», минуты, метки.
      */
     fun chips(t: Dela.Task, by: By?, s: Dela.Snapshot, today: String, onProjectPage: Boolean = false): List<String> {
         val out = mutableListOf<String>()
@@ -614,13 +536,8 @@ object DelaViews {
         }
         val deal = s.deals[t.dealId]?.name ?: t.dealName.takeIf { t.dealId.isNotBlank() }
         if (!deal.isNullOrBlank() && by != By.DEAL) out += deal
-        val who = s.people[t.personId]?.label ?: t.who.takeIf { t.personId.isNotBlank() }.orEmpty()
-        if (t.ball != Dela.MINE && by != By.BALL) {
-            val since = if (t.ball == Dela.WAITING && t.waitingSince.isNotBlank()) " · ${days(t.waitingSince, today)} дн." else ""
-            out += (BALL[t.ball] ?: t.ball) + (if (who.isNotBlank()) " $who" else "") + since
-        } else if (who.isNotBlank() && by != By.PERSON) {
-            out += "@$who"
-        }
+        // Вместо «мяча» — кто ждёт и сколько (10.10.2026, `taskRow` веба): «Олег ждёт 3 дн», «жду Олег 5 дн».
+        DelaGroups.wait(t, who(t, s), today, personGrouped = by == By.PERSON)?.let { out += it.text }
         if (t.estimateMin > 0) out += "${t.estimateMin} м"
         out += t.labels
         return out.filter { it.isNotBlank() }
@@ -733,22 +650,33 @@ object DelaViews {
         return listOfNotNull(
             if (was.has("title")) "название: «${v(r, "title")}»" else null,
             if (was.has("due_date")) "срок " + (if (wasDue.isNotBlank()) ddmm(wasDue, today) + " → " else "") + (if (due.isNotBlank()) ddmm(due, today) else "без срока") else null,
-            if (was.has("ball") || was.has("person_id")) (BALL_WORD[v(r, "ball")] ?: v(r, "ball")) + if (person.isNotBlank()) " $person" else "" else null,
+            if (was.has("ball") || was.has("owed") || was.has("person_id")) {
+                val ball = if (r.optBoolean("owed", false)) Dela.OWED else v(r, "ball")
+                (BALL_WORD[ball] ?: ball) + if (person.isNotBlank()) " $person" else ""
+            } else null,
         ).joinToString(" · ")
     }
 
-    /** Мяч словом — `BALL` веба. */
-    private val BALL_WORD = mapOf(Dela.MINE to "моё", Dela.WAITING to "жду", Dela.AGENDA to "повестка")
+    /**
+     * Группа словом — `grpWord` веба (10.10.2026: слов «мяч», «моё», «повестка» в
+     * группах нет): «owed» — «отбить», ждём от человека — «мониторить», повестка —
+     * «при встрече», своё — «запустить».
+     */
+    private val BALL_WORD = mapOf(Dela.OWED to "отбить", Dela.MINE to "запустить", Dela.WAITING to "мониторить", Dela.AGENDA to "при встрече")
 
     // ------------------------------------------------------------ человек
 
     /** Разделы страницы человека — заголовками веба. */
-    fun personSections(v: Dela.PersonView): List<Section> = listOf(
-        Section("Повестка с ним", v.agenda),
-        Section("Жду от него", v.waiting),
-        Section("Его просьбы ко мне", v.asked),
-        Section("Моё о нём", v.mineAbout),
-    )
+    fun personSections(s: Dela.Snapshot, personId: String): List<Section> {
+        // `renderPerson` веба (10.10.2026): тремя группами. Его просьбы ко мне (`requested_by`) — тоже «отбить».
+        val his = s.tasks.values.filter { it.open && (it.personId == personId || it.requestedBy == personId) }
+        fun g(t: Dela.Task) = DelaGroups.grpOf(t)
+        return listOf(
+            Section("Отбить: ждёт от меня", his.filter { g(it) == DelaGroups.Grp.OWED || (it.requestedBy == personId && g(it) == DelaGroups.Grp.SELF) }),
+            Section("Запустить: о нём и с ним", his.filter { g(it) == DelaGroups.Grp.SELF && it.requestedBy != personId }),
+            Section("Мониторить: жду от него", his.filter { g(it) == DelaGroups.Grp.CHECK }),
+        )
+    }
 
     /** Строки карточки человека, как `renderPerson` веба: пустое не показывается. */
     fun personInfo(p: Dela.Person, s: Dela.Snapshot): List<Pair<String, String>> {

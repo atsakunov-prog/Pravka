@@ -307,9 +307,13 @@ object DelaAsk {
         if (a.has("focus_on")) out += if (a.str("focus_on").isBlank()) "из «Сейчас»" else "в «Сейчас»"
         if (a.has("project_id")) out += a.str("project_id").let { if (it.isBlank()) "без проекта" else "проект " + (s.projects[it]?.name ?: "?") }
         if (a.str("deal_id").isNotBlank()) out += "сделка " + (s.deals[a.str("deal_id")]?.name ?: "?")
-        if (a.has("ball") || a.has("person_id")) {
+        if (a.has("ball") || a.has("person_id") || a.has("owed")) {
             val who = if (a.has("person_id")) s.people[a.str("person_id")]?.label.orEmpty() else ""
-            val ball = if (a.has("ball")) BALL[a.str("ball")] ?: a.str("ball") else "человек"
+            val ball = when {
+                a.optBoolean("owed", false) -> BALL.getValue(Dela.OWED)
+                a.has("ball") -> BALL[a.str("ball")] ?: a.str("ball")
+                else -> "человек"
+            }
             out += ball + if (who.isNotBlank()) " $who" else ""
         }
         if (a.has("notes")) out += "дописал заметку"
@@ -323,7 +327,8 @@ object DelaAsk {
         return out.joinToString(", ")
     }
 
-    private val BALL = mapOf(Dela.MINE to "моё", Dela.WAITING to "жду", Dela.AGENDA to "повестка")
+    /** Группа словами (`grpWord` веба): слов «мяч», «моё», «повестка» нет с 10.10.2026. */
+    private val BALL = mapOf(Dela.OWED to "отбить", Dela.MINE to "запустить", Dela.WAITING to "мониторить", Dela.AGENDA to "при встрече")
 
     // ------------------------------------------------------------ разговор (09.10.2026)
 

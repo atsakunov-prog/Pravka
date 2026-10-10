@@ -234,7 +234,8 @@ internal fun RaznoskaSection(app: PravkaApp, voiceInBar: Boolean = false) {
                 title = p.content,
                 notes = p.description,
                 projectId = p.projectId,
-                ball = p.ball,
+                ball = if (p.ball == ru.zf.pravka.core.Dela.OWED) ru.zf.pravka.core.Dela.MINE else p.ball,
+                owed = p.ball == ru.zf.pravka.core.Dela.OWED,
                 personId = p.personId,
                 dueDate = p.due,
                 dueTime = p.dueTime,
@@ -260,7 +261,8 @@ internal fun RaznoskaSection(app: PravkaApp, voiceInBar: Boolean = false) {
                     description = t.notes,
                     projectId = t.projectId,
                     projectName = delaSnap.projects[t.projectId]?.name.orEmpty(),
-                    ball = t.ball,
+                    // «Отбить» в черновике — мячом «owed»: так его и отдаст Разноска (`asDela`).
+                    ball = if (t.owed) ru.zf.pravka.core.Dela.OWED else t.ball,
                     personId = t.personId,
                     personName = delaSnap.people[t.personId]?.label.orEmpty(),
                     due = t.dueDate,
@@ -630,6 +632,7 @@ private fun taskMeta(task: ParsedTask): String {
     val parts = mutableListOf<String>()
     if (task.projectName.isNotBlank()) parts.add("#" + task.projectName)
     when (task.ball) {
+        ru.zf.pravka.core.Dela.OWED -> parts.add("отбить: " + task.personName.ifBlank { "ждут" })
         ru.zf.pravka.core.Dela.WAITING -> parts.add("жду: " + task.personName.ifBlank { "?" })
         ru.zf.pravka.core.Dela.AGENDA -> parts.add("при встрече: " + task.personName.ifBlank { "?" })
         else -> if (task.personName.isNotBlank()) parts.add("для: " + task.personName)

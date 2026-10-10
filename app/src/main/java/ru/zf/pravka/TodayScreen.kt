@@ -900,7 +900,7 @@ private fun buildModel(
     val sportTotal = plan.size
     val sportDone = minOf(done.size + (if (app.strengthStore.gtgOn(dateKey)?.charged == true) 1 else 0), maxOf(sportTotal, done.size))
 
-    // Дела: «Сейчас» — дела на сегодня в их порядке; нет — просроченное и на сегодня.
+    // Дела: «Сегодня» вкладки Дел (10.10.2026) — отбить, запустить, мониторить, в их порядке.
     val snap = app.delaStore.view.value
     val todayKey = DayFacts.localDay(now).toString()
     val tasksById = HashMap<String, Dela.Task>()
@@ -908,8 +908,7 @@ private fun buildModel(
     var delaDone = 0
     var delaTotal = 0
     if (delaOnServer) {
-        val nowList = DelaViews.nowTasks(snap, me, dateKey)
-        val list = nowList.ifEmpty { DelaViews.now(snap, me, dateKey, "").pick.take(DelaViews.NOW_MAX) }
+        val list = ru.zf.pravka.core.DelaGroups.todayOrdered(snap, me, dateKey, "all")
         list.forEach { t ->
             tasksById[t.id] = t
             val fixed = if (t.dueDate == dateKey && t.dueTime.isNotBlank()) {
@@ -922,12 +921,8 @@ private fun buildModel(
             tasksIn += DayAssembler.TaskIn(t.id, t.title, second, t.estimateMin, fixed)
         }
         val doneToday = snap.tasks.values.filter { it.status == Dela.DONE && it.completedAt.take(10) == dateKey && (me.isBlank() || it.ownerId == me) }
-        delaDone = doneToday.count { it.focusOn == dateKey }
-        delaTotal = nowList.size + delaDone
-        if (delaTotal == 0) {
-            delaTotal = list.size + doneToday.size
-            delaDone = doneToday.size
-        }
+        delaTotal = list.size + doneToday.size
+        delaDone = doneToday.size
         if ("dela" in marksOn) {
             doneToday.forEach { t ->
                 val at = runCatching { java.time.OffsetDateTime.parse(t.completedAt).toInstant().toEpochMilli() }.getOrNull() ?: return@forEach
