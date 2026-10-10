@@ -103,6 +103,7 @@ import ru.zf.pravka.ui.TileState
 import ru.zf.pravka.ui.TimePlate
 import ru.zf.pravka.ui.TimelineItem
 import ru.zf.pravka.ui.lineColorAt
+import ru.zf.pravka.ui.balanceSpecs
 import ru.zf.pravka.ui.fadingScroll
 import androidx.compose.ui.unit.sp
 import ru.zf.pravka.ui.WeatherCell
@@ -389,6 +390,8 @@ private fun TodayFolded(
 ) {
     val r = model.result
     val items = r.items
+    // Линия баланса (10.10.2026): коридор — медиана крайностей 28 дней (`DayFacts.corridor`).
+    val balance = remember(items, model.facts) { balanceSpecs(items) { model.facts.corridor(it) } }
     // Начальная позиция — запись перед текущей (DESIGN §11.5); прошлый день — с начала.
     val start = remember(model.day) {
         val cur = items.indexOfFirst { it is DayItem.Entry && it.current }
@@ -524,6 +527,7 @@ private fun TodayFolded(
                     TimelineItem(
                         items[i], lineColorAt(items, i), i < items.lastIndex && items[i + 1] is DayItem.Now, now,
                         onEntry = act.entry, onMark = act.mark, onPending = act.pending, onTask = act.task, onPlanned = act.planned,
+                        balance = balance.getOrNull(i),
                     )
                 }
             }
@@ -632,6 +636,7 @@ private fun TodayWide(
     val t = LocalPravkaType.current
     val f = model.facts
     val r = model.result
+    val balance = remember(r.items, model.facts) { balanceSpecs(r.items) { model.facts.corridor(it) } }
     Row(Modifier.fillMaxSize().statusBarsPadding()) {
         // Слева — обзор: день с ‹ ›, погода, плашки, круг, плашка времени.
         Column(
@@ -696,6 +701,7 @@ private fun TodayWide(
                         TimelineItem(
                             r.items[i], lineColorAt(r.items, i), i < r.items.lastIndex && r.items[i + 1] is DayItem.Now, now,
                             onEntry = act.entry, onMark = act.mark, onPending = act.pending, onTask = act.task, onPlanned = act.planned,
+                            balance = balance.getOrNull(i),
                         )
                     }
                 }

@@ -234,11 +234,6 @@ private fun ShowZasechka() {
                 ),
                 nav = { DayNav("Сегодня", {}, null, subtitle = "понедельник, 5 октября") },
             )
-            Column {
-                ZasechkaEntryRow("Ужин с семьёй", 0, "Еда", 1, "с 18:30", "21 м", null, current = true, onClick = {}, divider = false)
-                ZasechkaEntryRow("Уроки со старшим", 4, "Семья", 6, "17:45–18:30", "45 м", 4, current = false, onClick = {})
-                ZasechkaEntryRow("Передвижение: транспорт", 0, "Передвижение: транспорт", -1, "16:00–16:45", "45 м", -1, current = false, onClick = {})
-            }
             PaperCard(label = "итоги") {
                 CategoryRow("Работа: текущая", 10, 105, "15 %", 18, 1f)
                 CategoryRow("Потери", -5, 15, "2 %", -1, 0.14f)

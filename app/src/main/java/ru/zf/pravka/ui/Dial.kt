@@ -351,71 +351,8 @@ fun TimePlate(
 }
 
 // ---------------------------------------------------------------------------
-// Лента и итоги Засечки
+// Итоги Засечки (лента — строками хроники, `ui/Timeline.kt`, с 10.10.2026)
 // ---------------------------------------------------------------------------
-
-/**
- * Строка ленты внутри Засечки (DESIGN §11.6 ZasechkaEntryRow, `screens/04`):
- * 46 dp, цветная черта 3×30 слева, название (★ сразу после него), вторая
- * строка «17:45–18:30 · Семья · 45 м» с категорией в её цвете, очки справа.
- * Текущая — жирным, «с 18:30 · Еда · идёт 21 м».
- */
-@Composable
-fun ZasechkaEntryRow(
-    title: String,
-    useful: Int,
-    category: String,
-    worth: Int,
-    time: String,
-    duration: String,
-    points: Int?,
-    current: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    client: String = "",
-    divider: Boolean = true,
-    trailing: (@Composable () -> Unit)? = null,
-) {
-    val t = LocalPravkaType.current
-    Column(modifier.fillMaxWidth()) {
-        if (divider) Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFFFBE78).copy(alpha = 0.08f)))
-        Row(
-            // Не ровно 46, а не меньше: длинное название переносится (баг №10).
-            Modifier.fillMaxWidth().heightIn(min = 46.dp).clickable(onClick = onClick).padding(vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Box(Modifier.width(3.dp).height(30.dp).clip(RoundedCornerShape(2.dp)).background(categoryFill(category)))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    entryTitle(title, useful, client),
-                    style = if (current) t.bodyStrong else t.body,
-                    color = Ink.Text,
-                )
-                Text(
-                    buildAnnotatedString {
-                        append(time)
-                        if (category.isNotBlank()) {
-                            append(" · ")
-                            withStyle(SpanStyle(color = categoryText(category))) { append(category) }
-                        }
-                        append(" · ")
-                        if (current) {
-                            append("идёт ")
-                            withStyle(SpanStyle(color = Ink.Now)) { append(duration) }
-                        } else append(duration)
-                    },
-                    style = t.meta,
-                    color = Ink.TextMeta,
-                )
-            }
-            if (points != null && points != 0) {
-                Text(Fmt.points(points), style = t.points, color = pointsColor(points), maxLines = 1)
-            }
-            trailing?.invoke()
-        }
-    }
-}
 
 /**
  * Итог по категории (DESIGN §11.6 CategoryRow): название, полоса в цвете

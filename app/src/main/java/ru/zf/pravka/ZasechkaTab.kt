@@ -469,52 +469,51 @@ internal fun ZasechkaTab(
             },
         )
     }
+    // Лента — той же хроникой, что «Сегодня» (10.10.2026, владелец: «когда
+    // открываю засечку, мне приходится немножко думать и переставлять свою
+    // голову… давай синхронизируем»): записи по порядку дня сверху вниз, линия
+    // баланса с коридором от медианы 28 дней, «сейчас» с пульсирующей точкой.
+    // Отметок других режимов и будущего здесь нет — у Засечки свои дела ниже;
+    // дыры без записи между записями остались строкой «··· 25 м без записи».
+    val ribbonItems = remember(entries, worthByCat, dayStart, now) {
+        val dayEndMs = dayStart + 86_400_000L
+        val ins = entries.filter { it.start < dayEndMs && (it.open || it.end > dayStart) }.map { e ->
+            ru.zf.pravka.core.DayAssembler.EntryIn(
+                id = e.id, start = e.start, end = e.end,
+                title = e.title.ifBlank { e.raw.take(60) }.ifBlank { e.category },
+                category = e.category, worth = worthOf(e.category),
+                client = e.client, useful = e.useful, comment = e.comment,
+                gap = e.source == "gap",
+            )
+        }
+        ru.zf.pravka.core.DayAssembler.assemble(ru.zf.pravka.core.DayAssembler.Input(dayStart, now, ins)).items
+            .filter { it is ru.zf.pravka.core.DayAssembler.DayItem.Entry || it is ru.zf.pravka.core.DayAssembler.DayItem.Now }
+    }
+    val ribbonLine = remember(ribbonItems, facts) { ru.zf.pravka.ui.balanceSpecs(ribbonItems) { facts.corridor(it) } }
     val ribbon: @Composable () -> Unit = {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 0.dp)) {
-            dayUnits.forEachIndexed { index, unit ->
-                val head = unit.fragments.first()
-                val isGap = head.source == "gap"
-                val onOpen: () -> Unit = {
-                    if (isGap) gapFor = gapTargetOf(dayUnits, index, head) else sheetFor = head.id
-                }
-                val totalMs = unit.fragments.sumOf { it.durationMs(now) }
-                val time = if (unit.open) "с ${fmtTime(unit.start)}" else "${fmtTime(unit.start)}–${fmtTime(unit.endMs(now))}"
-                ru.zf.pravka.ui.ZasechkaEntryRow(
-                    title = capFirst(head.title.ifBlank { head.raw.take(60) }.ifBlank { head.category.ifBlank { "без названия" } }) +
-                        (if (unit.chain) " · кусками" else ""),
-                    useful = head.useful,
-                    category = head.category,
-                    worth = worthOf(head.category),
-                    time = time,
-                    duration = Fmt.durMs(totalMs),
-                    points = if (unit.open) null else pointsOf(worthOf(head.category), totalMs),
-                    current = unit.open && dayOffset == 0,
-                    client = head.client,
-                    onClick = onOpen,
-                    divider = index > 0,
+        Column(Modifier.fillMaxWidth()) {
+            ribbonItems.forEachIndexed { i, item ->
+                val next = ribbonItems.getOrNull(i + 1)
+                ru.zf.pravka.ui.TimelineItem(
+                    item, ru.zf.pravka.ui.lineColorAt(ribbonItems, i), next is ru.zf.pravka.core.DayAssembler.DayItem.Now, now,
+                    onEntry = { openFromDial(it.id) },
+                    balance = ribbonLine.getOrNull(i),
                 )
                 // Свежая дыра — тонкой строкой между записями: тап — «что это было».
-                if (index < dayUnits.size - 1) {
-                    val older = dayUnits[index + 1]
-                    if (!older.open) {
-                        val gapMin = (unit.start - older.endMs(now)) / 60_000L
-                        if (gapMin >= 5) {
-                            Text(
-                                "···  ${Fmt.dur(gapMin.toInt())} без записи",
-                                style = ru.zf.pravka.ui.LocalPravkaType.current.meta,
-                                color = ru.zf.pravka.ui.Ink.TextNote,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        gapFor = GapTarget(
-                                            start = older.endMs(now),
-                                            end = unit.start,
-                                            gap = null,
-                                            prev = older.fragments.last().takeIf { it.source != "gap" },
-                                            next = unit.fragments.first().takeIf { it.source != "gap" },
-                                        )
-                                    }
-                                    .padding(start = 13.dp, top = 4.dp, bottom = 4.dp),
+                if (item is ru.zf.pravka.core.DayAssembler.DayItem.Entry && next is ru.zf.pravka.core.DayAssembler.DayItem.Entry) {
+                    val gapMin = ((next.start - item.end) / 60_000L).toInt()
+                    if (gapMin >= 5) {
+                        val b = ribbonLine.getOrNull(i)
+                        ru.zf.pravka.ui.HoleRow(
+                            gapMin,
+                            b?.let { ru.zf.pravka.ui.BalanceSpec(it.bottom, it.bottom, it.color, it.color, ru.zf.pravka.core.BalanceLine.Kind.THROUGH) },
+                        ) {
+                            gapFor = GapTarget(
+                                start = item.end,
+                                end = next.start,
+                                gap = null,
+                                prev = entries.firstOrNull { it.id == item.id }?.takeIf { it.source != "gap" },
+                                next = entries.firstOrNull { it.id == next.id }?.takeIf { it.source != "gap" },
                             )
                         }
                     }
