@@ -8,6 +8,7 @@
   remind-notes  перенос строк «⏰ Напомнить…» из заметок в напоминания (разово, повтор безвреден)
   token    выдать токен службе или устройству (печатается один раз)
   pair     QR для телефона: адрес и новый токен устройства
+  family   кто в семье для «Где мы» (карта Правки): видит точки семьи и делится своей
   invite   одноразовая ссылка входа в веб для пользователя
   revoke   отозвать токены по имени
   import   перенос из Todoist, Notion и ленты (сухой прогон по умолчанию)
@@ -104,6 +105,26 @@ def cmd_user(args) -> int:
         u = conn.execute("SELECT clients, sees_money, person_id FROM crm.users WHERE id = %s", (args.id,)).fetchone()
     print(f"пользователь {args.id} записан: клиенты — {u['clients']}, деньги — {'да' if u['sees_money'] else 'нет'}"
           + ("" if u["person_id"] else " (не связан с человеком справочника: --person)"))
+    return 0
+
+
+def cmd_family(args) -> int:
+    """Кто в семье для «Где мы» (10.10.2026): видит точки семьи на карте Правки и делится своей.
+    Только из командной строки: сам себя в семью человек не добавит (crm.users_guard). Без
+    аргументов — кто сейчас в семье. Убранный из семьи сразу перестаёт видеть и его точка уходит."""
+    cfg = config_mod.load(args.env)
+    with db.session(cfg.db_url, "system", "svc:cli") as conn:
+        if args.user:
+            row = conn.execute("UPDATE crm.users SET family = %s WHERE id = %s RETURNING id",
+                               (not args.off, args.user)).fetchone()
+            if not row:
+                print(f"пользователя {args.user} нет — сначала команда user")
+                return 1
+            if args.off:
+                conn.execute("DELETE FROM crm.where_points WHERE user_id = %s", (args.user,))
+                conn.execute("DELETE FROM crm.where_asks WHERE user_id = %s", (args.user,))
+        rows = conn.execute("SELECT id, name FROM crm.users WHERE family ORDER BY id").fetchall()
+    print("в семье: " + (", ".join(f"{r['id']} ({r['name']})" for r in rows) or "никого"))
     return 0
 
 
@@ -344,6 +365,11 @@ def main(argv: list[str] | None = None) -> int:
                    help="видит гонорары и оплаты")
     u.add_argument("--person", help="кто он в справочнике людей (имя или короткое имя)")
     u.set_defaults(fn=cmd_user)
+
+    fm = sub.add_parser("family", help="кто в семье для «Где мы»")
+    fm.add_argument("user", nargs="?", help="кого добавить (или убрать с --off); без него — список")
+    fm.add_argument("--off", action="store_true", help="убрать из семьи: перестаёт видеть, его точка уходит")
+    fm.set_defaults(fn=cmd_family)
 
     tg = sub.add_parser("telegram")
     tg.add_argument("user")

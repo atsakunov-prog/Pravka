@@ -24,20 +24,7 @@ interface FamilyCloud {
      * размеру: журнал только дописывается, а на сервере заменяется целиком и
      * разом (временное имя и перенос).
      */
-    data class Item(
-        val name: String,
-        val size: Long,
-        /**
-         * Метка версии от сервера и время правки: «Где мы» переписывает свои
-         * файлы целиком и одного размера, и по размеру их новую версию не
-         * узнать (журнал Денег только растёт — ему хватает размера).
-         */
-        val etag: String = "",
-        val modified: Long = 0L,
-    ) {
-        /** Изменился ли файл с прошлого списка: метка, размер и время вместе. */
-        val version: String get() = "$etag|$size|$modified"
-    }
+    data class Item(val name: String, val size: Long)
 
     class CloudException(message: String) : Exception(message)
 
@@ -87,7 +74,7 @@ class HomeCloud(private val dav: WebDav, private val config: () -> WebDav.Config
         for (t in all) if (!t.folder && WebDav.Dav.isTemp(t.name) && t.modified in 1 until stale) {
             runCatching { dav.delete(c(), path, t.name) }
         }
-        return all.filter { !it.folder && !WebDav.Dav.isTemp(it.name) }.map { FamilyCloud.Item(it.name, it.size, it.etag, it.modified) }
+        return all.filter { !it.folder && !WebDav.Dav.isTemp(it.name) }.map { FamilyCloud.Item(it.name, it.size) }
     }
 
     override suspend fun read(path: List<String>, name: String) = dav.read(c(), path, name)

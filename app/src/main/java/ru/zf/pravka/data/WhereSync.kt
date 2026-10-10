@@ -9,27 +9,27 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import ru.zf.pravka.core.WhereBeacon
 import ru.zf.pravka.core.WhereFix
 import ru.zf.pravka.core.WherePolicy
-import ru.zf.pravka.provider.FamilyCloud
 import ru.zf.pravka.provider.Locator
 
 /**
- * «Где мы» — своя точка и точки семьи через облако семьи (10.10.2026).
+ * «Где мы» — своя точка и точки семьи через сервер Дел (10.10.2026).
  * Решения (когда искать, когда отправлять) — `core/WherePolicy.kt`; точки —
- * `provider/Locator.kt`; здесь порядок шагов, файлы и облако.
+ * `provider/Locator.kt`; здесь порядок шагов, файлы и сервер.
  *
- * Раскладка в облаке, папка `Правка/Где/` — у каждого файла один писатель:
- *  - `<устройство>.json` — точка телефона (пока он делится); перестал
- *    делиться — файл удаляется, и точка пропадает с карт у всех;
- *  - `<устройство>.jpg` — аватар, 256×256;
- *  - `<устройство>.ask.json` — «обновите точки»: свежую просьбу каждый
- *    делящийся телефон на ближайшем тике отрабатывает одним своим GPS.
+ * Сначала точки ездили через облако семьи (WebDAV), и в тот же вечер
+ * владелец: «почему через облако семьи? Вроде мы его не использовали
+ * толком» — облако на телефонах не было подключено, а сервер Дел живёт с
+ * Правкой каждый день. Теперь — его API (контракт `server/contract/dela-where.json`,
+ * сервер — `pravka_dela/where.py`), без новых путей: `/api/ops` (where.set,
+ * where.off, where.ask) и `/api/view` (where, where_avatar). Видит и пишет
+ * только семья (`crm.users.family`, меняет владелец командой `family` на
+ * компе): Наташа карты не видит.
  *
  * Дома, в папке базы: `where.json` (согласие, своя точка, что ушло, чужие
  * точки на момент последнего обмена — карта открывается сразу, не ожидая
@@ -37,14 +37,15 @@ import ru.zf.pravka.provider.Locator
  * следующий обмен соберёт заново.
  *
  * Делиться — согласие каждого на своём телефоне: тумблер на вкладке, с
- * завода выключен. Смотреть может любой телефон семьи с подключённым облаком.
+ * завода выключен. Смотреть может любой член семьи, подключённый к Делам.
  */
 internal class WhereSync(
     private val context: Context,
     private val locator: Locator,
-    private val cloud: () -> FamilyCloud?,
+    /** Связь с сервером Дел; не подключены — null. */
+    private val dela: () -> DelaSync?,
     private val profile: () -> Profile?,
-    /** Имя телефона в облаке — то же, что у журналов Денег (`sasha-3f9a2c`). */
+    /** Имя телефона на сервере — то же, что у журналов Денег (`sasha-3f9a2c`). */
     private val device: () -> String,
     /** Место по Wi-Fi из автопилота Засечки; служба выключена — пусто. */
     private val place: () -> String,
@@ -53,24 +54,23 @@ internal class WhereSync(
 ) {
 
     companion object {
-        val PATH = listOf("Правка", "Где")
         private const val FILE = "where.json"
         private const val DIR = "where"
-        private const val MIME_JSON = "application/json"
-        private const val MIME_JPEG = "image/jpeg"
+        const val NO_DELA = "Правка не подключена к Делам — Настройки → Подключения → Дела, QR с компа"
+        const val OLD_SERVER = "Сервер Дел на компе ещё без карты — обнови его (install-dela.ps1 от администратора)"
     }
 
     data class State(
         /** Согласие этого телефона делиться точкой. */
         val sharing: Boolean = false,
         /**
-         * Выключил «делиться», а убрать свою точку из облака ещё не вышло (не
+         * Выключил «делиться», а убрать свою точку с сервера ещё не вышло (не
          * было сети): тик доделает, пока не получится.
          */
         val retract: Boolean = false,
         /** Лучшая своя точка. */
         val own: WhereFix? = null,
-        /** Что и когда ушло в облако последний раз. */
+        /** Что и когда ушло на сервер последний раз. */
         val sent: WhereFix? = null,
         val sentAt: Long = 0L,
         /** Место и зарядка в отправленной точке: поменялись — повод отправить. */
@@ -81,7 +81,7 @@ internal class WhereSync(
         val preciseFor: Long = 0L,
         /** Своя версия аватара; 0 — фото нет. */
         val avatarAt: Long = 0L,
-        /** Какая версия аватара уже лежит в облаке: другая — выложить заново. */
+        /** Какая версия аватара уже лежит на сервере: другая — выложить заново. */
         val avatarSent: Long = 0L,
         /** Чужие точки: устройство → точка. */
         val others: Map<String, WhereBeacon> = emptyMap(),
@@ -91,8 +91,10 @@ internal class WhereSync(
         val myAskAt: Long = 0L,
         /** Плитки карты: DARK или LIGHT (`WhereTiles`); выбор этого телефона. */
         val tiles: String = "DARK",
-        /** Версии файлов облака с прошлого списка: имя → версия. */
+        /** Версии чужих аватаров, что уже скачаны: устройство → avatar_at. */
         val seen: Map<String, String> = emptyMap(),
+        /** Считает ли сервер Дел этот телефон семьёй; null — ещё не спрашивали. */
+        val family: Boolean? = null,
         /** Последний удачный обмен; 0 — не было. */
         val syncedAt: Long = 0L,
         val error: String = "",
@@ -148,7 +150,7 @@ internal class WhereSync(
         scope.launch(Dispatchers.IO) { runCatching { locate("движение", eager = false) } }
     }
 
-    /** Новая точка от кого угодно: лучше прежней — своя, и если стоит — в облако. */
+    /** Новая точка от кого угодно: лучше прежней — своя, и если стоит — на сервер. */
     private fun offer(fix: WhereFix) {
         var took = false
         _state.update { s ->
@@ -169,7 +171,7 @@ internal class WhereSync(
 
     /**
      * Включить или выключить «делиться». Выключение удаляет свою точку и
-     * аватар из облака сразу: карта у семьи не должна показывать телефон,
+     * аватар с сервера сразу: карта у семьи не должна показывать телефон,
      * который ничего больше не шлёт, как будто он там.
      */
     suspend fun setSharing(on: Boolean) {
@@ -227,13 +229,13 @@ internal class WhereSync(
     }
 
     /**
-     * Один обмен: что в папке → чужое новое к себе → своё в облако (или
-     * удалить, если больше не делимся). Второй поверх идущего не встаёт.
+     * Один обмен: точки семьи к себе → своя точка на сервер (или убрать, если
+     * больше не делимся). Второй поверх идущего не встаёт.
      */
     suspend fun sync(reason: String): Boolean {
-        val c = cloud()
-        if (c == null) {
-            _state.update { it.copy(error = "облако семьи не подключено — Настройки → Подключения → Облако семьи") }
+        val d = dela()
+        if (d == null) {
+            _state.update { it.copy(error = NO_DELA) }
             return false
         }
         if (!mutex.tryLock()) return false
@@ -241,18 +243,20 @@ internal class WhereSync(
         try {
             withContext(Dispatchers.IO) {
                 // Сначала чужое — в нём бывает свежая просьба «обновить»; потом
-                // своя точка (на просьбу — своим GPS) и тем же обменом в облако.
-                val items = readOthers(c)
-                if (_state.value.sharing) runCatching { locate(reason, eager = reason == "вкладка") }
-                sendOwn(c, items)
+                // своя точка (на просьбу — своим GPS) и тем же обменом на сервер.
+                val present = readOthers(d)
+                if (_state.value.sharing && _state.value.family != false) runCatching { locate(reason, eager = reason == "вкладка") }
+                sendOwn(d, present)
             }
-            _state.update { it.copy(syncedAt = System.currentTimeMillis(), error = "", running = false) }
+            val notFamily = if (_state.value.family == false)
+                "Сервер Дел не считает тебя семьёй — на компе: python -m pravka_dela family ${d.link.value?.user ?: "<кто>"}" else ""
+            _state.update { it.copy(syncedAt = System.currentTimeMillis(), error = notFamily, running = false) }
             persist()
             lastLoggedError = ""
             return true
         } catch (e: Throwable) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            val why = FamilyCloud.why(e, c.title)
+            val why = why(e)
             _state.update { it.copy(error = why, running = false) }
             if (why != lastLoggedError) {
                 log("где мы ($reason): обмен не вышел — $why")
@@ -265,74 +269,108 @@ internal class WhereSync(
         }
     }
 
-    /** Что в папке и чужое новое — к себе. Возвращает список папки для своего шага. */
-    private suspend fun readOthers(c: FamilyCloud): List<FamilyCloud.Item> {
-        val me = device()
-        val items = c.list(PATH)
-        val s0 = _state.value
-        val seen = HashMap(s0.seen)
-        val others = HashMap(s0.others)
-        val asks = HashMap(s0.asks)
-        val present = HashSet<String>()
-
-        for (it in items) {
-            val (dev, kind) = WherePolicy.parseName(it.name) ?: continue
-            if (dev == me) continue
-            present.add(it.name)
-            if (seen[it.name] == it.version) continue
-            when (kind) {
-                WherePolicy.Kind.BEACON -> {
-                    val b = WherePolicy.fromJson(String(c.read(PATH, it.name)))
-                    if (b != null && b.device == dev) others[dev] = b else others.remove(dev)
-                }
-                WherePolicy.Kind.ASK -> asks[dev] = WherePolicy.askAt(String(c.read(PATH, it.name)))
-                WherePolicy.Kind.AVATAR -> {
-                    StoreFilesBytes.write(File(dir, it.name), c.read(PATH, it.name))
-                }
-            }
-            seen[it.name] = it.version
+    /** Ошибка словами: старый сервер без карты — что сделать на компе, остальное — как сказали Дела. */
+    private fun why(e: Throwable): String {
+        val m = e.message.orEmpty()
+        return when {
+            "нет такого вида" in m || "нет такой операции" in m -> OLD_SERVER
+            m.isNotBlank() -> m
+            else -> "${e.javaClass.simpleName}: где мы — обмен не вышел"
         }
-        // Пропал с сервера — перестал делиться: с карты его тоже убрать.
-        for (dev in others.keys.toList()) if (dev + WherePolicy.BEACON !in present) others.remove(dev)
-        for (dev in asks.keys.toList()) if (dev + WherePolicy.ASK !in present) asks.remove(dev)
-        for (name in seen.keys.toList()) if (name !in present) seen.remove(name)
-        dir.listFiles()?.forEach { f ->
-            if (f.name.endsWith(WherePolicy.AVATAR) && f.name != me + WherePolicy.AVATAR && f.name !in present) f.delete()
-        }
-        _state.update { it.copy(others = others, asks = asks, seen = seen) }
-        return items
     }
 
-    /** Своё: точка и аватар в облако, пока делимся; перестали — убрать. */
-    private suspend fun sendOwn(c: FamilyCloud, items: List<FamilyCloud.Item>) {
+    /**
+     * Точки семьи и просьбы — к себе; аватары — только сменившиеся. Возвращает
+     * телефоны, чьи точки сейчас на сервере (свой среди них — значит, лежит).
+     */
+    private suspend fun readOthers(d: DelaSync): Set<String> {
         val me = device()
-        val byName = items.associateBy { it.name }
+        val o = d.rawView("where")
+        val present = HashSet<String>()
+        if (!o.optBoolean("family")) {
+            _state.update { it.copy(family = false, others = emptyMap(), asks = emptyMap(), seen = emptyMap()) }
+            dir.listFiles()?.forEach { f -> if (f.name.endsWith(WherePolicy.AVATAR) && f.name != me + WherePolicy.AVATAR) f.delete() }
+            return present
+        }
+        val seen = HashMap(_state.value.seen)
+        val others = HashMap<String, WhereBeacon>()
+        val points = o.optJSONArray("points") ?: JSONArray()
+        for (i in 0 until points.length()) {
+            val p = points.optJSONObject(i) ?: continue
+            val dev = p.optString("device")
+            if (!WherePolicy.isDevice(dev)) continue
+            present.add(dev)
+            if (dev == me) continue
+            val raw = p.optJSONObject("point") ?: continue
+            // Устройство — по строке сервера (её пишет только хозяин), имя — его же, если телефон не прислал.
+            raw.put("device", dev)
+            if (raw.optString("name").isBlank()) raw.put("name", p.optString("name"))
+            if (raw.optString("person").isBlank()) raw.put("person", p.optString("user_id"))
+            val b = WherePolicy.fromJson(raw.toString()) ?: continue
+            val hasAvatar = p.optBoolean("has_avatar")
+            val avatarAt = p.optLong("avatar_at")
+            others[dev] = b.copy(avatarAt = if (hasAvatar) avatarAt else 0L)
+            val f = File(dir, dev + WherePolicy.AVATAR)
+            if (!hasAvatar) {
+                f.delete()
+                seen.remove(dev)
+            } else if (seen[dev] != avatarAt.toString() || !f.isFile) {
+                val a = d.rawView("where_avatar?device=$dev").optString("avatar")
+                if (a.isNotBlank() && a != "null") {
+                    StoreFilesBytes.write(f, android.util.Base64.decode(a, android.util.Base64.DEFAULT))
+                    seen[dev] = avatarAt.toString()
+                }
+            }
+        }
+        val asks = HashMap<String, Long>()
+        val arr = o.optJSONArray("asks") ?: JSONArray()
+        for (i in 0 until arr.length()) {
+            val a = arr.optJSONObject(i) ?: continue
+            val dev = a.optString("device")
+            if (dev != me && WherePolicy.isDevice(dev)) asks[dev] = a.optLong("at")
+        }
+        // Пропал с сервера — перестал делиться: с карты его тоже убрать.
+        for (dev in seen.keys.toList()) if (dev !in present) seen.remove(dev)
+        dir.listFiles()?.forEach { f ->
+            val dev = f.name.removeSuffix(WherePolicy.AVATAR)
+            if (f.name.endsWith(WherePolicy.AVATAR) && dev != me && dev !in present) f.delete()
+        }
+        _state.update { it.copy(family = true, others = others, asks = asks, seen = seen) }
+        return present
+    }
+
+    /** Своё: точка (и сменившийся аватар) на сервер, пока делимся; перестали — убрать. */
+    private suspend fun sendOwn(d: DelaSync, present: Set<String>) {
+        val me = device()
         val s = _state.value
-        val beaconName = me + WherePolicy.BEACON
-        val avatarName = me + WherePolicy.AVATAR
         if (s.sharing) {
+            if (s.family == false) return
+            val fix = s.own ?: return
             val now = System.currentTimeMillis()
             val extras = extras()
-            val missing = beaconName !in byName
-            val fix = s.own
-            if (fix != null && (missing || WherePolicy.shouldSend(now, fix, s.sent, s.sentAt, s.askAt, extras != s.sentExtras))) {
-                val b = beacon(fix, now)
-                c.write(PATH, beaconName, WherePolicy.toJson(b).toByteArray(), MIME_JSON)
-                _state.update { it.copy(sent = fix, sentAt = now, sentExtras = extras) }
+            val missing = me !in present
+            val avatarChanged = s.avatarSent != s.avatarAt
+            if (!missing && !avatarChanged && !WherePolicy.shouldSend(now, fix, s.sent, s.sentAt, s.askAt, extras != s.sentExtras)) return
+            val op = JSONObject().put("op", "where.set").put("device", me).put("point", JSONObject(WherePolicy.toJson(beacon(fix, now))))
+            if (missing || avatarChanged) {
+                val f = avatar(me)
+                if (f != null) op.put("avatar", android.util.Base64.encodeToString(f.readBytes(), android.util.Base64.NO_WRAP)).put("avatar_at", s.avatarAt)
+                else op.put("avatar", JSONObject.NULL).put("avatar_at", 0)
             }
-            val mine = avatar(me)
-            if (mine != null && (avatarName !in byName || s.avatarSent != s.avatarAt)) {
-                c.upload(PATH, avatarName, mine, MIME_JPEG)
-                _state.update { it.copy(avatarSent = s.avatarAt) }
-            }
-            if (mine == null && avatarName in byName) c.delete(PATH, avatarName)
-        } else {
-            if (beaconName in byName) {
-                c.delete(PATH, beaconName)
-                log("где мы: своя точка убрана из облака — больше не делюсь")
-            }
-            if (avatarName in byName) c.delete(PATH, avatarName)
+            ok(d.rawOps(JSONArray().put(op)), "точку")
+            _state.update { it.copy(sent = fix, sentAt = now, sentExtras = extras, avatarSent = s.avatarAt) }
+        } else if (me in present || s.retract) {
+            ok(d.rawOps(JSONArray().put(JSONObject().put("op", "where.off").put("device", me))), "«больше не делюсь»")
+            if (me in present) log("где мы: своя точка убрана с сервера Дел — больше не делюсь")
             _state.update { it.copy(retract = false) }
+        }
+    }
+
+    /** Ответ на одну операцию: не принята — ошибка словами сервера, а не молчание. */
+    private fun ok(results: JSONArray, what: String) {
+        val r = results.optJSONObject(0)
+        if (r?.optBoolean("ok") != true) {
+            throw DelaSync.DelaException("Дела не приняли $what: " + (r?.optString("error")?.ifBlank { null } ?: "пустой ответ"))
         }
     }
 
@@ -359,22 +397,23 @@ internal class WhereSync(
 
     // ---- Вкладка ----
 
-    /** Вкладка открыта: свои — по мере нужды, чужие — свежие из облака. */
+    /** Вкладка открыта: свои — по мере нужды, чужие — свежие с сервера. */
     suspend fun refresh(): Boolean = sync("вкладка")
 
     /**
-     * «Обновить точки»: своя просьба в облако — делящиеся телефоны на
+     * «Обновить точки»: своя просьба на сервер — делящиеся телефоны на
      * ближайшем тике (до пяти минут) отвечают своим GPS. Свою точку этот
      * телефон обновляет сразу, если делится.
      */
     suspend fun ask(): Boolean {
-        val c = cloud() ?: return false
+        val d = dela()
+        if (d == null) {
+            _state.update { it.copy(error = NO_DELA) }
+            return false
+        }
         val now = System.currentTimeMillis()
-        val name = profile()?.name ?: "Без имени"
         return runCatching {
-            withContext(Dispatchers.IO) {
-                c.write(PATH, device() + WherePolicy.ASK, WherePolicy.askJson(now, name).toByteArray(), MIME_JSON)
-            }
+            ok(d.rawOps(JSONArray().put(JSONObject().put("op", "where.ask").put("device", device()))), "просьбу «обновить»")
             _state.update { it.copy(myAskAt = now) }
             persist()
             log("где мы: попросил всех обновить точки")
@@ -386,7 +425,7 @@ internal class WhereSync(
             sync("обновить")
         }.getOrElse { e ->
             if (e is kotlinx.coroutines.CancellationException) throw e
-            _state.update { it.copy(error = FamilyCloud.why(e, c.title)) }
+            _state.update { it.copy(error = why(e)) }
             false
         }
     }

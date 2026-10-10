@@ -1,0 +1,40 @@
+{
+ "_": "Контракт Дел, часть «Где мы» (10.10.2026): точки семьи для карты Правки. Телефон — data/WhereSync.kt (через DelaApi), сервер — pravka_dela/where.py, схема — sql/dela_0008.sql. Новых путей HTTP нет: те же /api/ops и /api/view. Данные в примерах выдуманные.",
+
+ "features": {
+  "flag": "where",
+  "rule": "Нет флага в /api/me или /api/sync — сервер Дел старый: телефон говорит «обнови сервер Дел на компе (install-dela.ps1)» и ничего не шлёт."
+ },
+
+ "family": "Видит точки и пишет свою только член семьи (crm.users.family). Семью меняет владелец на компе: python -m pravka_dela family marianna (или --off). С завода в семье владелец и marianna. Не в семье — вид where отдаёт family: false и пустые списки, where.set и where.ask — ошибку словами.",
+
+ "ops_examples": [
+  {"op": "where.set", "device": "sasha-3f9a2c",
+   "point": {"v": 1, "device": "sasha-3f9a2c", "person": "sasha", "name": "Саша", "lat": 55.7447, "lon": 37.5372, "acc": 20.0,
+             "at": 1791633600000, "src": "fused", "speed": -1.0, "battery": 64, "charging": false, "moving": false,
+             "place": "Дом", "sent": 1791633660000, "avatar": 1791600000000},
+   "_": "Своя точка целиком (формат — core/WherePolicy.toJson). avatar (base64 JPEG 256×256, до 128 КБ) и avatar_at — только когда аватар сменился; avatar: null — убрать. Без поля avatar прежний аватар остаётся."},
+  {"op": "where.ask", "device": "sasha-3f9a2c",
+   "_": "«Обновите точки». Делящиеся телефоны видят свежую (до 30 минут) просьбу на ближайшем тике и отвечают одним своим GPS."},
+  {"op": "where.off", "device": "sasha-3f9a2c",
+   "_": "Перестал делиться: точки и просьбы этого телефона больше нет (строка удаляется, истории нет)."}
+ ],
+
+ "views": {
+  "where": {
+   "request": "GET /api/view/where",
+   "response": {
+    "family": true,
+    "points": [{"device": "marianna-01ab9e", "user_id": "marianna", "name": "Марианна",
+                "point": {"lat": 55.75, "lon": 37.6, "acc": 35.0, "at": 1791633000000, "src": "network", "sent": 1791633000000},
+                "avatar_at": 1791500000000, "has_avatar": true, "updated_at": 1791633001000}],
+    "asks": [{"device": "sasha-3f9a2c", "user_id": "sasha", "at": 1791633500000}],
+    "now": 1791633700000
+   }
+  },
+  "where_avatar": {
+   "request": "GET /api/view/where_avatar?device=marianna-01ab9e",
+   "response": {"device": "marianna-01ab9e", "avatar": "<base64 JPEG>", "avatar_at": 1791500000000}
+  }
+ }
+}

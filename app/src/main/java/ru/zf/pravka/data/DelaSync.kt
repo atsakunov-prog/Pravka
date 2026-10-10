@@ -374,6 +374,38 @@ class DelaSync(
         }
     }
 
+    // ------------------------------------------------------------ «Где мы»
+
+    /**
+     * Вид сервера как есть, без кэша и без журнала (`GET /api/view/<path>`) —
+     * «Где мы» спрашивает точки семьи каждые полминуты, пока открыта карта.
+     * Ошибка — словами ([why]); старый сервер без вида отвечает 400 «нет такого вида».
+     */
+    suspend fun rawView(path: String): JSONObject = withContext(Dispatchers.IO) {
+        val l = _link.value ?: throw DelaException("Дела не подключены")
+        try {
+            get(l.url, l.token, "api/view/$path")
+        } catch (e: Throwable) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            throw if (e is DelaException) e else DelaException(why(e))
+        }
+    }
+
+    /**
+     * Операции мимо очереди (`POST /api/ops`): своя точка «Где мы» нужна сейчас,
+     * а не после синка дел, и повтор её безвреден — op_id не нужен. Ответ —
+     * `results[]` по одному на операцию.
+     */
+    suspend fun rawOps(ops: JSONArray): JSONArray = withContext(Dispatchers.IO) {
+        val l = _link.value ?: throw DelaException("Дела не подключены")
+        try {
+            post(l, "api/ops", JSONObject().put("ops", ops)).optJSONArray("results") ?: JSONArray()
+        } catch (e: Throwable) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            throw if (e is DelaException) e else DelaException(why(e))
+        }
+    }
+
     // ------------------------------------------------------------ сеть
 
     private fun get(base: String, token: String, path: String): JSONObject {

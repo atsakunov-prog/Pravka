@@ -41,6 +41,9 @@ APP_TABLES = {
     "crm.state": "SELECT, INSERT, UPDATE",
     "crm.history": "SELECT",
     "crm.svod": "SELECT, INSERT, UPDATE",
+    # «Где мы»: одна последняя точка на телефон, перестал делиться — строка удаляется (dela_0008).
+    "crm.where_points": "SELECT, INSERT, UPDATE, DELETE",
+    "crm.where_asks": "SELECT, INSERT, UPDATE, DELETE",
 }
 APP_VIEWS = ["tasks.v_tasks", "crm.v_deals"]
 APP_SEQUENCES = ["tasks.task_num"]

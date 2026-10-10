@@ -29,7 +29,7 @@ import org.json.JSONObject
 //  4. свой GPS — только когда кто-то из семьи нажал «обновить» на карте, один
 //     раз на просьбу.
 //
-// Здесь — решения этой лестницы и формат точки в облаке; Android — в
+// Здесь — решения этой лестницы и формат точки на сервере Дел; Android — в
 // `provider/Locator.kt`, обмен — в `data/WhereSync.kt`. Файл без Android:
 // проверяется JVM-тестом `WherePolicyTest`.
 
@@ -47,8 +47,8 @@ data class WhereFix(
 )
 
 /**
- * Точка телефона в облаке семьи: `Правка/Где/<устройство>.json`. Пишет её
- * только сам телефон — у файла один писатель, как у журналов Денег.
+ * Точка телефона на сервере Дел (`crm.where_points`, операция `where.set`).
+ * Пишет её только сам телефон — свою строку сервер не даст тронуть другому.
  */
 data class WhereBeacon(
     val device: String,
@@ -81,7 +81,7 @@ object WherePolicy {
     const val TRY_GAP_MS = 4 * 60_000L
     /** Просьба «обновить» живёт столько; старше — не будит свой GPS. */
     const val ASK_FRESH_MS = 30 * 60_000L
-    /** «Я на связи» в облако — даже если точка не менялась. */
+    /** «Я на связи» на сервер — даже если точка не менялась. */
     const val HEARTBEAT_MS = 30 * 60_000L
     /** Между выгрузками — не чаще (навигатор отдаёт точки каждую секунду). */
     const val SEND_GAP_MS = 2 * 60_000L
@@ -128,7 +128,7 @@ object WherePolicy {
     }
 
     /**
-     * Отправить ли точку в облако. [sent] и [sentAt] — что и когда ушло в
+     * Отправить ли точку на сервер. [sent] и [sentAt] — что и когда ушло в
      * прошлый раз; [askAt] — просьба «обновить»; [extrasChanged] — место по
      * Wi-Fi или зарядка поменялись (это видно на карте).
      */
@@ -260,26 +260,13 @@ object WherePolicy {
 
     private fun round6(v: Double): Double = Math.round(v * 1_000_000.0) / 1_000_000.0
 
-    // ---- Просьба «обновить» ----
+    // ---- Имена ----
 
-    /** `Правка/Где/<устройство>.ask.json`: кто и когда попросил свежие точки. */
-    fun askJson(at: Long, name: String): String = JSONObject().put("at", at).put("name", name).toString()
-
-    fun askAt(text: String): Long = runCatching { JSONObject(text).optLong("at") }.getOrDefault(0L)
-
-    // ---- Имена файлов ----
-
-    const val BEACON = ".json"
-    const val ASK = ".ask.json"
+    /** Свой аватар и чужие лежат дома файлами `<устройство>.jpg`. */
     const val AVATAR = ".jpg"
 
-    enum class Kind { BEACON, ASK, AVATAR }
+    /** Имя телефона, как его примет сервер Дел (`sql/dela_0008.sql`): латиница, цифры, дефис. */
+    fun isDevice(s: String): Boolean = DEVICE.matches(s)
 
-    /** Чей файл и что в нём; null — чужой файл в папке. */
-    fun parseName(name: String): Pair<String, Kind>? = when {
-        name.endsWith(ASK) -> name.removeSuffix(ASK).takeIf { it.isNotBlank() }?.let { it to Kind.ASK }
-        name.endsWith(BEACON) -> name.removeSuffix(BEACON).takeIf { it.isNotBlank() && '.' !in it }?.let { it to Kind.BEACON }
-        name.endsWith(AVATAR) -> name.removeSuffix(AVATAR).takeIf { it.isNotBlank() }?.let { it to Kind.AVATAR }
-        else -> null
-    }
+    private val DEVICE = Regex("^[a-z0-9][a-z0-9-]{0,63}$")
 }

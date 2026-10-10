@@ -986,7 +986,7 @@ private fun PageScreen(
                             serviceEnabled,
                             settingsRequested = whereSettings,
                             onSettingsHandled = { whereSettings = false },
-                            onOpenCloud = { openGroup(SettingsGroup.CLOUD) },
+                            onOpenDela = { openGroup(SettingsGroup.DELA_SERVER) },
                         )
                         Tab.LOGS -> WideCap { LogsTab(app) }
                         Tab.FEEDBACK -> WideCap { FeedbackTab(app) }

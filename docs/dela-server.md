@@ -40,6 +40,10 @@ claude.ai ─► архив /mcp ─(тот же код store)─┘            
   инструменты `dela_*`, если в `server.env` есть `DELA_DB_URL`, и зовёт тот же
   `store` под ролью службы. Для счёта — виды `life.tasks`, `life.projects`,
   `life.deals`, `life.people`, `life.interactions`, `life.work_time`.
+- **«Где мы»** (10.10.2026) — точки семьи для карты Правки едут через эту же
+  службу (`where.py`, `sql/dela_0008.sql`, контракт `server/contract/dela-where.json`):
+  только `/api/ops` и `/api/view`, видит только семья (`crm.users.family`,
+  команда `family`). Спецификация — `docs/gde.md`.
 - **Код** — здесь, рядом с архивом: база общая, порядок `migrate` общий
   (архив после своего `DROP SCHEMA life` возвращает виды Дел), контракт
   с телефоном проверяют обе стороны.

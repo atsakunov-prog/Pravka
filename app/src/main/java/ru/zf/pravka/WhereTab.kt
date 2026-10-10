@@ -78,7 +78,7 @@ import ru.zf.pravka.ui.bevel
 // Вкладка «Где мы» (Ещё → Где мы, 10.10.2026): семья на карте аватарами,
 // под картой — кто где строкой, сверху — «показать всех» и «обновить».
 // Делиться — согласие этого телефона (шестерёнка в шапке); смотреть может
-// любой телефон семьи с подключённым облаком. Логика — `data/WhereSync.kt`,
+// любой член семьи, подключённый к серверу Дел. Логика — `data/WhereSync.kt`,
 // решения — `core/WherePolicy.kt`, карта — `WhereMap.kt`, спецификация —
 // `docs/gde.md`.
 
@@ -88,13 +88,13 @@ internal fun WhereTab(
     serviceEnabled: Boolean,
     settingsRequested: Boolean,
     onSettingsHandled: () -> Unit,
-    onOpenCloud: () -> Unit,
+    onOpenDela: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val st by app.where.state.collectAsState()
     val profile by app.profileStore.flow.collectAsState()
-    val cloud by app.homeServer.saved.collectAsState()
+    val link by app.delaSync.link.collectAsState()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var me by remember { mutableStateOf("") }
     var battery by remember { mutableStateOf(-1 to false) }
@@ -180,7 +180,7 @@ internal fun WhereTab(
                 Feedback.toast(
                     app,
                     if (ok) "Попросил всех обновить точки — телефоны ответят в течение пяти минут"
-                    else "Не вышло попросить: " + app.where.state.value.error.ifBlank { "нет связи с облаком" },
+                    else "Не вышло попросить: " + app.where.state.value.error.ifBlank { "нет связи с Делами" },
                     long = true,
                 )
             }
@@ -206,7 +206,7 @@ internal fun WhereTab(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 MapKey(Glyphs.Family, "показать всех") { fitKey++ }
-                MapKey(Glyphs.Refresh, "обновить точки", busy = asking, enabled = cloud != null, onClick = askNow)
+                MapKey(Glyphs.Refresh, "обновить точки", busy = asking, enabled = link != null && st.family != false, onClick = askNow)
             }
             Text(
                 "© OpenStreetMap",
@@ -222,7 +222,8 @@ internal fun WhereTab(
             if (pins.isEmpty()) {
                 EmptyMapNote(
                     when {
-                        cloud == null -> "Карта семьи ездит через облако семьи — подключи его, и здесь появятся все, кто делится."
+                        link == null -> "Карта семьи ездит через сервер Дел — подключи Правку к Делам, и здесь появятся все, кто делится."
+                        st.family == false -> "Сервер Дел не считает тебя семьёй — владелец добавляет на компе командой family."
                         !st.sharing && st.others.isEmpty() -> "Пока никто не делится. Включи у себя — шестерёнка сверху — и попроси того же Марианну."
                         st.sharing && st.own == null -> "Ищу свою точку…"
                         else -> "Пока никто, кроме тебя, не делится."
@@ -239,10 +240,10 @@ internal fun WhereTab(
             },
         ) {
             Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
-                if (cloud == null) {
-                    PaperHint("Облако семьи не подключено.")
+                if (link == null) {
+                    PaperHint("Правка не подключена к Делам — карта ездит через их сервер на домашнем компе.")
                     Spacer(Modifier.size(8.dp))
-                    PaperButton("Подключить облако семьи", onOpenCloud, icon = Glyphs.Cloud, primary = true)
+                    PaperButton("Подключить Дела", onOpenDela, icon = Glyphs.Delo, primary = true)
                 }
                 people.forEachIndexed { i, b ->
                     if (i > 0) RowRule()
@@ -257,7 +258,7 @@ internal fun WhereTab(
                         onRoute = { route(context, b) },
                     )
                 }
-                if (!st.sharing && cloud != null) {
+                if (!st.sharing && link != null && st.family != false) {
                     if (people.isNotEmpty()) RowRule()
                     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -268,9 +269,9 @@ internal fun WhereTab(
                     }
                 }
                 val status = when {
-                    cloud == null -> ""
+                    link == null -> ""
                     st.error.isNotBlank() -> st.error
-                    st.syncedAt > 0L -> "Облако: обмен " + WherePolicy.ago(now, st.syncedAt)
+                    st.syncedAt > 0L -> "Сервер Дел: обмен " + WherePolicy.ago(now, st.syncedAt)
                     else -> ""
                 }
                 if (status.isNotBlank()) {
@@ -281,7 +282,7 @@ internal fun WhereTab(
         }
     }
 
-    if (sheet) WhereSettingsSheet(app, serviceEnabled, onOpenCloud = { sheet = false; onOpenCloud() }, onDismiss = { sheet = false })
+    if (sheet) WhereSettingsSheet(app, serviceEnabled, onOpenDela = { sheet = false; onOpenDela() }, onDismiss = { sheet = false })
 }
 
 /** Круглая клавиша поверх карты: тёмное стекло, белый значок. */
@@ -381,18 +382,18 @@ private fun route(context: Context, b: WhereBeacon) {
 }
 
 /** Что мешает точке уходить — словами и кнопкой. */
-private enum class WhereBlock { FINE, ALWAYS, SYSTEM, CLOUD, SERVICE }
+private enum class WhereBlock { FINE, ALWAYS, SYSTEM, DELA, FAMILY, OLD, SERVICE }
 
 /**
  * «Моя точка»: согласие делиться, что мешает, аватар, плитки и как это
  * устроено по батарее. Включение — через окно с тем, что именно увидит семья.
  */
 @Composable
-private fun WhereSettingsSheet(app: PravkaApp, serviceEnabled: Boolean, onOpenCloud: () -> Unit, onDismiss: () -> Unit) {
+private fun WhereSettingsSheet(app: PravkaApp, serviceEnabled: Boolean, onOpenDela: () -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val st by app.where.state.collectAsState()
-    val cloud by app.homeServer.saved.collectAsState()
+    val link by app.delaSync.link.collectAsState()
     var permTick by remember { mutableIntStateOf(0) }
     var consent by remember { mutableStateOf(false) }
     var me by remember { mutableStateOf("") }
@@ -437,12 +438,16 @@ private fun WhereSettingsSheet(app: PravkaApp, serviceEnabled: Boolean, onOpenCl
         }
     }
 
-    val blockers = remember(permTick, cloud, serviceEnabled, st.sharing) {
+    val blockers = remember(permTick, link, serviceEnabled, st.sharing, st.family, st.error) {
         buildList {
             if (!app.locator.fine()) add(WhereBlock.FINE to "Нет доступа к местоположению")
             else if (!app.locator.always()) add(WhereBlock.ALWAYS to "Доступ «только при использовании» — из фона точка не уйдёт. Нужно «Разрешать всегда»")
             if (!app.locator.systemOn()) add(WhereBlock.SYSTEM to "Геолокация выключена в системе")
-            if (cloud == null) add(WhereBlock.CLOUD to "Облако семьи не подключено — точке некуда ехать")
+            if (link == null) add(WhereBlock.DELA to "Правка не подключена к Делам — точке некуда ехать")
+            else if (st.family == false) add(
+                WhereBlock.FAMILY to "Сервер Дел не считает тебя семьёй. На компе: python -m pravka_dela family ${link?.user ?: "<кто>"}"
+            )
+            else if (st.error == ru.zf.pravka.data.WhereSync.OLD_SERVER) add(WhereBlock.OLD to st.error)
             if (!serviceEnabled) add(WhereBlock.SERVICE to "Служба Правки выключена — точка уходит, только пока открыта эта вкладка")
         }
     }
@@ -476,7 +481,8 @@ private fun WhereSettingsSheet(app: PravkaApp, serviceEnabled: Boolean, onOpenCl
                 WhereBlock.SYSTEM -> PaperButton("Включить геолокацию", {
                     context.startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 }, icon = Glyphs.Place)
-                WhereBlock.CLOUD -> PaperButton("Подключить облако семьи", onOpenCloud, icon = Glyphs.Cloud)
+                WhereBlock.DELA -> PaperButton("Подключить Дела", onOpenDela, icon = Glyphs.Delo)
+                WhereBlock.FAMILY, WhereBlock.OLD -> Unit
                 WhereBlock.SERVICE -> Unit
             }
         }
@@ -486,7 +492,7 @@ private fun WhereSettingsSheet(app: PravkaApp, serviceEnabled: Boolean, onOpenCl
                 if (own == null) "Своей точки ещё нет — ищу."
                 else "Точка " + WherePolicy.ago(System.currentTimeMillis(), own.at) + " · " + WherePolicy.accuracy(own.acc) +
                     " · " + sourceName(own.src) +
-                    (if (st.sentAt > 0L) " · ушла в облако " + WherePolicy.ago(System.currentTimeMillis(), st.sentAt) else " · в облако ещё не ушла")
+                    (if (st.sentAt > 0L) " · ушла на сервер " + WherePolicy.ago(System.currentTimeMillis(), st.sentAt) else " · на сервер ещё не ушла")
             )
             if (!app.locator.hasMotionSensor()) {
                 PaperHint("У телефона нет датчика движения: в пути точка обновляется по чужому GPS и раз в час.")
@@ -541,8 +547,8 @@ private fun WhereSettingsSheet(app: PravkaApp, serviceEnabled: Boolean, onOpenCl
                     "заряд телефона и место по Wi-Fi из автопилота («Дом», «Летово»)."
             )
             PaperHint(
-                "Кто увидит: все телефоны семьи, подключённые к тому же облаку (домашний сервер). Больше никто — " +
-                    "точка лежит только там, история не копится, хранится одна последняя."
+                "Кто увидит: только семья на сервере Дел (домашний комп) — Наташа и другие пользователи Дел " +
+                    "карты не видят. Точка лежит только там, истории нет: хранится одна последняя."
             )
             PaperHint(HOW_IT_WORKS)
             PaperHint("Выключить можно здесь же в любой момент — точка сразу исчезнет с карт семьи.")

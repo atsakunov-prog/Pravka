@@ -15,7 +15,7 @@
 | GET  /api/me | кто я |
 | GET  /api/sync?since=N | всё изменившееся после N (телефон, веб) |
 | POST /api/ops | пачка операций с op_id (офлайн-очередь) |
-| GET  /api/view/<имя> | готовый список: morning, new, waiting, person, quick, now, project, week, search; CRM — pipeline, clients, client, deal (с журналом), dossier, ties, money |
+| GET  /api/view/<имя> | готовый список: morning, new, waiting, person, quick, now, project, week, search; CRM — pipeline, clients, client, deal (с журналом), dossier, ties, money; «Где мы» — where, where_avatar?device= (where.py) |
 | GET  /api/task/<id или номер> | дело с комментариями, журналом и откуда оно (origin) |
 | POST /api/parse | {"text", "project_id"?, "person_id"?} — Claude режет текст на дела и заводит их; ответ — номер задания |
 | GET  /api/parse/<номер> | run, пока думает; потом done с делами и заметками или error |
@@ -201,7 +201,9 @@ def build(cfg: Config) -> Starlette:
         params = {k: v for k, v in request.query_params.items()
                   if k in {"sphere", "person_id", "project_id", "deal_id", "q", "status", "closed_days",
                            # Свод и «кто это» (06.10.2026)
-                           "key", "prefix", "phone", "telegram", "telegram_id", "email"}}
+                           "key", "prefix", "phone", "telegram", "telegram_id", "email",
+                           # «Где мы» (10.10.2026): аватар одного телефона
+                           "device"}}
         sc = _scope(who)
         if sc:
             if name not in sc["views"]:

@@ -21,7 +21,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from . import db, people
+from . import db, people, where
 
 # Сколько номеров изменений синк захватывает назад. Номер берётся в начале
 # транзакции, а видна она после фиксации: изменение с меньшим номером может
@@ -38,11 +38,13 @@ TASK_FIELDS = {
 
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
-FEATURES = ["remind", "svod", "people", "dictations", "groups"]
+FEATURES = ["remind", "svod", "people", "dictations", "groups", "where"]
 # «svod» — Свод (crm.svod) в синке и операция svod.set; «people» — person.add / person.merge и вид who
 # (одна карточка человека, 06.10.2026). Без них телефон не шлёт этих операций.
 # «dictations» — операция dictation.add: текст наговорки, из которой вышли дела (их source_ref = её id),
 # для «Нового» веба (06.10.2026).
+# «where» — «Где мы» (10.10.2026, where.py): операции where.set / where.off / where.ask и виды where,
+# where_avatar — точки семьи для карты Правки. Без флага телефон говорит «сервер Дел не обновлён».
 # «groups» — поле owed (группа «Отбить» — ждут от меня, dela_0007, 10.10.2026) в task.create и task.set; без него телефон
 # owed не шлёт, а «ждут от меня» из разноски передаёт как ball «owed» — сервер поймёт и так (store._ball_norm).
 # Токен службы бота Ковчега (python -m pravka_dela token --name kovcheg): только он забирает
@@ -1002,6 +1004,9 @@ VIEWS: dict[str, Callable] = {
     "week": view_week,
     "search": view_search,
 }
+
+# «Где мы»: операции и виды точек семьи — свой модуль (where.py), как люди и статистика.
+where.register(HANDLERS, VIEWS, OpError)
 
 
 def view(url: str, user: str, name: str, **params) -> dict:

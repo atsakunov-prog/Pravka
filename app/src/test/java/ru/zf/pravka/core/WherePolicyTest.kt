@@ -168,13 +168,13 @@ class WherePolicyTest {
     }
 
     @Test
-    fun `имена файлов в папке Где`() {
-        assertEquals("sasha-3f9a2c" to WherePolicy.Kind.BEACON, WherePolicy.parseName("sasha-3f9a2c.json"))
-        assertEquals("sasha-3f9a2c" to WherePolicy.Kind.ASK, WherePolicy.parseName("sasha-3f9a2c.ask.json"))
-        assertEquals("marianna-01ab9e" to WherePolicy.Kind.AVATAR, WherePolicy.parseName("marianna-01ab9e.jpg"))
-        assertNull(WherePolicy.parseName("readme.txt"))
-        assertNull(WherePolicy.parseName(".json"))
-        assertEquals(1234L, WherePolicy.askAt(WherePolicy.askJson(1234L, "Саша")))
+    fun `имя телефона — как его примет сервер Дел`() {
+        assertTrue(WherePolicy.isDevice("sasha-3f9a2c"))
+        assertTrue(WherePolicy.isDevice("marianna-01ab9e"))
+        assertFalse(WherePolicy.isDevice("Саша"))
+        assertFalse(WherePolicy.isDevice("-sasha"))
+        assertFalse(WherePolicy.isDevice(""))
+        assertFalse(WherePolicy.isDevice("a".repeat(65)))
     }
 
     private fun beacon(fix: WhereFix, sentAt: Long) = WhereBeacon(
