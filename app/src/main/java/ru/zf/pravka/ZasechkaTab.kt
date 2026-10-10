@@ -1566,6 +1566,12 @@ private fun AutoPilotSection(app: PravkaApp) {
     val askPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { permTick++ }
+    // Точное — только в паре с приблизительным: с Android 12 одно точное
+    // система молча игнорирует, окна нет, и кнопка выглядит сломанной
+    // (на телефоне владельца доступ был выдан давно, поэтому не замечали).
+    val askLocation = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permTick++ }
 
     val places by settings.autoPlacesFlow.collectAsState(initial = emptyMap<String, String>())
     val visibleSsids by settings.autoVisibleFlow.collectAsState(initial = emptySet<String>())
@@ -1622,7 +1628,12 @@ private fun AutoPilotSection(app: PravkaApp) {
             onClick = {
                 when (b.fix) {
                     ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION ->
-                        askPermission.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                        askLocation.launch(
+                            arrayOf(
+                                android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                android.Manifest.permission.ACCESS_COARSE_LOCATION,
+                            )
+                        )
                     ru.zf.pravka.trigger.AutoPilot.FIX_BACKGROUND -> {
                         // На Android 11+ системного диалога для фонового
                         // местоположения нет вовсе: только экран приложения,
