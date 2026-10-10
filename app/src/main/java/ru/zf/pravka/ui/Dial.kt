@@ -53,17 +53,19 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ru.zf.pravka.core.DialGeometry
 import ru.zf.pravka.core.Fmt
-import kotlin.math.atan2
 import kotlin.math.cos
-import kotlin.math.hypot
 import kotlin.math.sin
 
-// Засечка Правки 4.0 (07.10.2026, DESIGN §11.6, §12.3): циферблат суток,
-// плашка времени, полоса по категориям, строки ленты и итоги. Циферблат
-// заменяет полосу баланса −5…+10 (`RainbowScoreBar` ушёл из набора): польза
-// растёт наружу от базового круга, потери — внутрь, сон и почти-ноль — тонкой
-// дугой по самому кругу. Геометрия — ровно §12.3 в поле 300.
+// Засечка Правки 4.0 (07.10.2026, DESIGN §11.6, §12.3): круг дня, плашка
+// времени, полоса по категориям, строки ленты и итоги. Круг заменяет полосу
+// баланса −5…+10 (`RainbowScoreBar` ушёл из набора).
+// С 10.10.2026 круг — циферблат часов на 12 часов (владелец: «надо сделать
+// его циферблатом… внутренняя часть от 0 ночью до 12:00, внешняя — с 12:00
+// до 24»; «как на часах: от 0 до 12 рядом цифры и рисочки»): утро — столбиками
+// внутрь от базового круга, вечер — наружу, длина — цена часа, цифры 1…12 и
+// риски по кромке. Числа — `core/DialGeometry.kt` под тестом, здесь рисунок.
 // Краска — радуга категорий (`categoryFill`, 10.10.2026): сектор, черта
 // строки и полоса итога — цветом своей категории, полоса плашки и легенда —
 // областью радуги группы (`ZGroup`).
@@ -81,19 +83,17 @@ class DialSector(
     val hatched: Boolean = false,
 )
 
-private const val FIELD = 300f
-private const val R0 = 100f
-
-/** Точка на круге радиуса [r] (в поле 300) для минуты суток [min]: 00 внизу, по часовой. */
-private fun pt(c: Float, r: Float, min: Float): Offset {
-    val th = Math.toRadians(min / 1440.0 * 360.0)
-    return Offset((c - r * sin(th)).toFloat(), (c + r * cos(th)).toFloat())
+/** Точка на круге радиуса [r] (в поле 300) под углом [a] от двенадцати по часовой. */
+private fun pt(r: Float, a: Float): Offset {
+    val th = Math.toRadians(a.toDouble())
+    return Offset((DialGeometry.C + r * sin(th)).toFloat(), (DialGeometry.C - r * cos(th)).toFloat())
 }
 
 /**
- * Циферблат суток (DESIGN §12.3). [size] — 308 на сложенном, 256 на
+ * Круг дня — циферблат на 12 часов. [size] — 308 на сложенном, 256 на
  * развороте. [nowMin] — стрелка «сейчас» (null — прошлый день); от неё до
- * конца суток — точечная дуга. В центре — балл, «балл дня», сравнение и место.
+ * конца своей половины суток — точечная дуга на её стороне. В центре — балл,
+ * «балл дня», сравнение и место.
  */
 @Composable
 fun Dial(
@@ -109,46 +109,64 @@ fun Dial(
 ) {
     val t = LocalPravkaType.current
     val measurer = rememberTextMeasurer()
-    val labelStyle = t.dialLabel.copy(fontSize = if (wide) 11.sp else 10.5.sp, color = Ink.TextNote)
-    val labels = remember(labelStyle) { listOf("00", "06", "12", "18").map { measurer.measure(it, labelStyle) } }
+    // Цифры как на часах: 12, 3, 6, 9 крупнее и ярче, остальные — тише.
+    val mainStyle = t.dialLabel.copy(fontSize = if (wide) 12.sp else 13.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextSecondary)
+    val hourStyle = t.dialLabel.copy(fontSize = if (wide) 10.sp else 11.sp, color = Ink.TextNote)
+    val numbers = remember(mainStyle, hourStyle) {
+        (1..12).map { h -> measurer.measure(h.toString(), if (h % 3 == 0) mainStyle else hourStyle) }
+    }
+    val arcs = remember(sectors) { sectors.map { s -> s to DialGeometry.arcs(s.fromMin, s.toMin, s.worth) } }
     Box(
         modifier
             .size(size)
-            .semantics { contentDescription = "Сутки по часам: снаружи круга — время с пользой, внутрь — потери. Балл $score" }
+            .semantics { contentDescription = "Круг дня как часы: внутри круга — до полудня, снаружи — после; длина — цена часа. Балл $score" }
             .then(
-                if (onSector != null) Modifier.pointerInput(sectors) {
+                if (onSector != null) Modifier.pointerInput(arcs) {
                     detectTapGestures { o ->
-                        val k = this.size.width / FIELD
-                        val c = FIELD / 2
-                        val x = o.x / k - c
-                        val y = o.y / k - c
-                        val r = hypot(x, y)
-                        // Обратное к pt(): x = −r·sin θ, y = r·cos θ.
-                        var th = Math.toDegrees(atan2(-x.toDouble(), y.toDouble()))
-                        if (th < 0) th += 360.0
-                        val min = (th / 360.0 * 1440.0).toFloat()
-                        sectors.firstOrNull { s ->
-                            val (inner, outer) = radii(s.worth)
-                            min >= s.fromMin && min < s.toMin && r >= inner - 8 && r <= outer + 8
-                        }?.let { onSector(it.id) }
+                        val k = this.size.width / DialGeometry.FIELD
+                        val dx = o.x / k - DialGeometry.C
+                        val dy = o.y / k - DialGeometry.C
+                        arcs.firstOrNull { (_, list) -> list.any { DialGeometry.contains(it, dx, dy) } }
+                            ?.let { onSector(it.first.id) }
                     }
                 } else Modifier
             ),
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.fillMaxSize()) {
-            val k = this.size.width / FIELD
-            val c = FIELD / 2
-            fun p(r: Float, min: Float) = pt(c, r, min).let { Offset(it.x * k, it.y * k) }
-            // Базовый круг.
-            drawCircle(Modes.Zasechka.key.copy(alpha = 0.10f), R0 * k, Offset(c * k, c * k), style = Stroke(1.dp.toPx()))
-            // Секторы.
-            for (s in sectors) {
-                val (inner, outer) = radii(s.worth)
-                val a1 = s.fromMin / 1440f * 360f + 0.35f
-                val a2 = s.toMin / 1440f * 360f - 0.35f
+            val k = this.size.width / DialGeometry.FIELD
+            val c = DialGeometry.C
+            val r0 = DialGeometry.R0
+            fun p(r: Float, a: Float) = pt(r, a).let { Offset(it.x * k, it.y * k) }
+            // Базовый круг — граница утра и вечера.
+            drawCircle(Modes.Zasechka.key.copy(alpha = 0.16f), r0 * k, Offset(c * k, c * k), style = Stroke(1.dp.toPx()))
+            // Риски: каждый час, главные — 12, 3, 6, 9; между ними — получас.
+            for (i in 0 until 24) {
+                val a = i * 15f
+                val hour = i % 2 == 0
+                val main = i % 6 == 0
+                val len = when {
+                    main -> DialGeometry.TICK_MAIN
+                    hour -> DialGeometry.TICK_HOUR
+                    else -> DialGeometry.TICK_HALF
+                }
+                drawLine(
+                    Color(0xFFFFD6AA).copy(alpha = if (main) 0.80f else if (hour) 0.50f else 0.28f),
+                    p(DialGeometry.TICK_OUT - len, a), p(DialGeometry.TICK_OUT, a),
+                    strokeWidth = (if (main) 2.6f else if (hour) 1.8f else 1.2f) * k, cap = StrokeCap.Round,
+                )
+            }
+            // Цифры 1…12 снаружи рисок.
+            numbers.forEachIndexed { i, l ->
+                val q = p(DialGeometry.NUMBERS, (i + 1) * 30f)
+                drawText(l, topLeft = Offset(q.x - l.size.width / 2f, q.y - l.size.height / 2f))
+            }
+            // Столбики: утро внутрь, вечер наружу.
+            for ((s, list) in arcs) for (arc in list) {
+                val a1 = arc.a1 + 0.35f
+                val a2 = arc.a2 - 0.35f
                 if (a2 <= a1) continue
-                val path = sectorPath(c * k, inner * k, outer * k, a1, a2)
+                val path = sectorPath(c * k, arc.inner * k, arc.outer * k, a1, a2)
                 if (s.hatched) {
                     clipPath(path) { hatch(s.color, 0.30f, period = 5.dp) }
                 } else {
@@ -156,41 +174,26 @@ fun Dial(
                 }
                 if (s.current) drawPath(path, Ink.Now, style = Stroke(1.2.dp.toPx() * k.coerceAtMost(1.2f)))
             }
-            // Остаток дня — точечная дуга по базовому кругу.
             if (nowMin != null && nowMin < 1440f) {
-                val a1 = nowMin / 1440f * 360f
+                val pm = nowMin >= DialGeometry.NOON
+                val a = DialGeometry.angle(nowMin)
+                // Остаток своей половины суток — точечная дуга на её стороне, до двенадцати.
+                val rr = if (pm) r0 + 5f else r0 - 5f
                 drawArc(
-                    Modes.Zasechka.key.copy(alpha = 0.35f),
-                    startAngle = a1 + 90f,
-                    sweepAngle = 360f - a1,
+                    Modes.Zasechka.key.copy(alpha = 0.40f),
+                    startAngle = a - 90f,
+                    sweepAngle = 360f - a,
                     useCenter = false,
-                    topLeft = Offset((c - R0) * k, (c - R0) * k),
-                    size = Size(2 * R0 * k, 2 * R0 * k),
+                    topLeft = Offset((c - rr) * k, (c - rr) * k),
+                    size = Size(2 * rr * k, 2 * rr * k),
                     style = Stroke(1.5.dp.toPx(), cap = StrokeCap.Round, pathEffect = PathEffect.dashPathEffect(floatArrayOf(1.5f * k, 4f * k))),
                 )
-            }
-            // Риски часов: каждые два часа, главные — 00/06/12/18.
-            for (h in 0 until 24 step 2) {
-                val main = h % 6 == 0
-                val m = h * 60f
-                drawLine(
-                    Color(0xFFFFD6AA).copy(alpha = if (main) 0.55f else 0.22f),
-                    p(R0 - 9, m), p(R0 - if (main) 13 else 11, m),
-                    strokeWidth = 1.4f * k, cap = StrokeCap.Round,
-                )
-            }
-            // Подписи 00 / 06 / 12 / 18 — на R0 + 43.
-            listOf(0f, 360f, 720f, 1080f).forEachIndexed { i, m ->
-                val q = p(R0 + 43, m)
-                val l = labels[i]
-                drawText(l, topLeft = Offset(q.x - l.size.width / 2f, q.y - l.size.height / 2f))
-            }
-            // Стрелка «сейчас» — от R0 − 20 до R0 + 40, с точкой.
-            if (nowMin != null) {
-                val a = p(R0 - 20, nowMin)
-                val b = p(R0 + 40, nowMin)
-                drawLine(Ink.Now, a, b, strokeWidth = 1.6f * k, cap = StrokeCap.Round)
-                drawCircle(Ink.Now, 3.2f * k, b)
+                // Стрелка «сейчас» — через обе стороны, точка на той, где идёт время.
+                val (rIn, rOut) = DialGeometry.handEnds()
+                val inner = p(rIn, a)
+                val outer = p(rOut, a)
+                drawLine(Ink.Now, inner, outer, strokeWidth = 1.6f * k, cap = StrokeCap.Round)
+                drawCircle(Ink.Now, 3.2f * k, if (pm) outer else inner)
             }
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -202,18 +205,11 @@ fun Dial(
     }
 }
 
-/** Внутренний и внешний радиус сектора (DESIGN §12.3). */
-private fun radii(worth: Int): Pair<Float, Float> {
-    val d = 3.4f * worth
-    return if (worth >= 0) (R0 - 2f) to maxOf(R0 + d, R0 + 2f)
-    else minOf(R0 + d, R0 - 2f) to (R0 + 2f)
-}
-
-/** Кольцевой сектор: внешняя дуга по часовой, внутренняя — обратно. Угол arcTo = θ + 90. */
+/** Кольцевой сектор: внешняя дуга по часовой, внутренняя — обратно. Угол arcTo = a − 90 (двенадцать сверху). */
 private fun sectorPath(c: Float, inner: Float, outer: Float, a1: Float, a2: Float): Path = Path().apply {
     val sweep = a2 - a1
-    arcTo(Rect(Offset(c, c), outer), a1 + 90f, sweep, forceMoveTo = true)
-    arcTo(Rect(Offset(c, c), inner), a2 + 90f, -sweep, forceMoveTo = false)
+    arcTo(Rect(Offset(c, c), outer), a1 - 90f, sweep, forceMoveTo = true)
+    arcTo(Rect(Offset(c, c), inner), a2 - 90f, -sweep, forceMoveTo = false)
     close()
 }
 
