@@ -498,6 +498,15 @@ object DelaViews {
 
     // ------------------------------------------------------------ строка
 
+    /** Уровень группировки — та же группировка строки: что названо заголовком, строка не повторяет. */
+    fun byOf(lv: DelaGroups.Level): By = when (lv) {
+        DelaGroups.Level.PROJECT -> By.PROJECT
+        DelaGroups.Level.GRP -> By.GRP
+        DelaGroups.Level.DATE -> By.DATE
+        DelaGroups.Level.PERSON -> By.PERSON
+        DelaGroups.Level.DEAL -> By.DEAL
+    }
+
     /** Как человек дела назван в строке: короткое имя, иначе полное. */
     fun who(t: Dela.Task, s: Dela.Snapshot): String = s.people[t.personId]?.label ?: t.who.takeIf { t.personId.isNotBlank() }.orEmpty()
 
@@ -524,20 +533,22 @@ object DelaViews {
      * проекта), сделка, кто ждёт («Иван ждёт 3 дн», «жду Иван 5 дн», «при
      * встрече с Иван») или «@Иван», минуты, метки.
      */
-    fun chips(t: Dela.Task, by: By?, s: Dela.Snapshot, today: String, onProjectPage: Boolean = false): List<String> {
+    fun chips(t: Dela.Task, by: By?, s: Dela.Snapshot, today: String, onProjectPage: Boolean = false, also: Set<By> = emptySet()): List<String> {
+        // [also] — остальные уровни группировки (10.10.2026): что названо заголовком, в строке не повторяется.
+        fun on(b: By) = by == b || b in also
         val out = mutableListOf<String>()
         val d = due(t, today)
-        if (d != null && (by != By.DATE || d.late)) out += d.text
+        if (d != null && (!on(By.DATE) || d.late)) out += d.text
         // Напоминание в Telegram (06.10.2026): «⏰ 11:00», «⏰ завтра 09:00», «⏰ дом».
         // В вебе такой подписи ещё нет — задание серверу (docs/dela-server-remind.md) её просит.
         date(today)?.let { day -> out += DelaRemind.chip(t, day, java.time.ZoneId.systemDefault()) }
-        if (by != By.PROJECT && !onProjectPage) {
+        if (!on(By.PROJECT) && !onProjectPage) {
             out += if (t.projectId.isBlank()) NO_PROJECT else s.projects[t.projectId]?.name ?: t.projectName.ifBlank { "проект" }
         }
         val deal = s.deals[t.dealId]?.name ?: t.dealName.takeIf { t.dealId.isNotBlank() }
-        if (!deal.isNullOrBlank() && by != By.DEAL) out += deal
+        if (!deal.isNullOrBlank() && !on(By.DEAL)) out += deal
         // Вместо «мяча» — кто ждёт и сколько (10.10.2026, `taskRow` веба): «Олег ждёт 3 дн», «жду Олег 5 дн».
-        DelaGroups.wait(t, who(t, s), today, personGrouped = by == By.PERSON)?.let { out += it.text }
+        DelaGroups.wait(t, who(t, s), today, personGrouped = on(By.PERSON))?.let { out += it.text }
         if (t.estimateMin > 0) out += "${t.estimateMin} м"
         out += t.labels
         return out.filter { it.isNotBlank() }

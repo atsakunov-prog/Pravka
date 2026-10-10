@@ -205,6 +205,15 @@ class DelaSync(
         val refused = store.applySync(resp, System.currentTimeMillis())
         if (refused.isNotBlank()) throw DelaException(refused)
         svod?.let { sv -> pullSvod(l, sv, resp) }
+        // Фильтры Дел (10.10.2026) — в настройках человека на сервере, синк их не возит: берём из
+        // `/api/me`. Сбой фильтров синк дел не роняет — он словами в журнал.
+        if (ru.zf.pravka.core.Dela.FEATURE_GROUPS in store.view.value.features) {
+            runCatching {
+                val me = get(l.url, l.token, "api/me")
+                val settings = me.optJSONObject("settings") ?: JSONObject()
+                store.setServerFilters(settings.optJSONArray("filters"))
+            }.onFailure { e -> log("дела: фильтры — ${why(e)}") }
+        }
     }
 
     /**

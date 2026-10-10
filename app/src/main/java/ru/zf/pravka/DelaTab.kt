@@ -120,6 +120,11 @@ import ru.zf.pravka.ui.scrollFade
 private const val NAV_NEW = "new"
 /** Группа «Без проекта» по проектам (ключ `DelaViews.group`): у неё — «Все в проект…». */
 private const val LOOSE_GROUP = "0"
+/** Раздел-фильтр: ключ «f:<id>» (`#/f/<id>` веба). */
+private const val FILTER_NAV = "f:"
+
+/** Выбор уровня [i] на экране [key] (`levelsBar` веба): уровни сейчас и чего не предлагать. */
+private data class LevelPick(val key: String, val i: Int, val levels: List<DelaGroups.Level>, val omit: Set<DelaGroups.Level>)
 private val CRM_NAV = listOf("crm" to "Воронка", "clients" to "Клиенты", "people" to "Люди", "ties" to "Связи")
 private val SPHERES = listOf("work" to "Работа", "home" to "Дом", "all" to "Всё")
 
@@ -142,11 +147,23 @@ private data class DelaScreen(
     /** «Неделя»: проекты в работе без моего следующего шага. */
     val projects: List<Dela.Project> = emptyList(),
     val empty: String = "",
-    /** Подсказка над группами («Сейчас» пусто — как выбрать); показывается и при непустых группах. */
+    /** Подсказка над группами; показывается и при непустых группах. */
     val hint: String = "",
+    /**
+     * Дела уровнями (10.10.2026, `nested` веба): первый уровень — карточкой,
+     * второй и третий — подзаголовками внутри. null — экран группами [groups].
+     */
+    val nodes: List<DelaGroups.Node>? = null,
+    /** Выбранные уровни и куда их помнить (`S.levels` веба): «today», «all», «project», «f:<id>». */
+    val levels: List<DelaGroups.Level> = emptyList(),
+    val levelKey: String? = null,
+    /** Каких уровней не предлагать: на странице проекта — проектов. */
+    val levelOmit: Set<DelaGroups.Level> = emptySet(),
+    /** «Сохранить фильтр» — что показано (`addFilter` веба); null — кнопки нет. */
+    val saveScope: DelaGroups.Scope? = null,
 ) {
     /** Дела экрана в порядке показа — то, что видит Claude. */
-    val ids: List<String> get() = groups.flatMap { g -> g.items.map { it.id } }
+    val ids: List<String> get() = nodes?.let { n -> DelaGroups.flat(n).map { it.id } } ?: groups.flatMap { g -> g.items.map { it.id } }
 }
 
 /**
@@ -204,6 +221,8 @@ fun DelaTab(
 
     val views by app.delaStore.viewsFlow.collectAsState()
     val favs by app.delaStore.favsFlow.collectAsState()
+    val filtersRaw by app.delaStore.filtersFlow.collectAsState()
+    val filters = remember(filtersRaw) { DelaGroups.filters(filtersRaw) }
 
     // Раздел — ключ веба: now, new, upcoming, waiting, week, all; CRM — crm, clients, ties.
     var nav by rememberSaveable { mutableStateOf(DelaViews.View.TODAY.key) }
@@ -261,12 +280,14 @@ fun DelaTab(
     val moneyOn = Dela.moneyOn(snap, me)
     // CRM отняли, а выбран её раздел — назад в «Сегодня», а не пустой экран.
     // Сохранённый ключ «Сейчас», «Предстоящего», «Жду», «Недели» (до 10.10.2026) ведёт туда, где их дела теперь.
-    LaunchedEffect(crmOn, nav) {
-        if (!crmOn && CRM_NAV.any { it.first == nav }) nav = DelaViews.View.TODAY.key
+    LaunchedEffect(crmOn, nav, filters) {
+        if (nav.startsWith(FILTER_NAV)) {
+            if (filters.none { FILTER_NAV + it.id == nav }) nav = DelaViews.View.TODAY.key
+        } else if (!crmOn && CRM_NAV.any { it.first == nav }) nav = DelaViews.View.TODAY.key
         else if (CRM_NAV.none { it.first == nav } && DelaViews.View.entries.none { it.key == nav }) nav = DelaViews.View.of(nav).key
     }
     // Раздел Дел (не CRM) — по ключу; у CRM своё тело.
-    val view: DelaViews.View? = if (CRM_NAV.any { it.first == nav }) null else DelaViews.View.of(nav)
+    val view: DelaViews.View? = if (CRM_NAV.any { it.first == nav } || nav.startsWith(FILTER_NAV)) null else DelaViews.View.of(nav)
     val queuedOps = remember(queued) { queued.map { it.op } }
     val push: (DelaPage) -> Unit = { p -> if (pages.lastOrNull() != p) pages = pages + p }
     /** Перейти в раздел — как ссылка боковой панели веба: страницы и поиск закрываются. */
@@ -278,6 +299,24 @@ fun DelaTab(
         navOpen = false
     }
     fun groupOf(list: String, def: DelaViews.By) = DelaViews.By.of(groupsPref[list].orEmpty(), def)
+    // Уровни группировки на виде (10.10.2026): помнит само устройство, как браузер у веба.
+    fun levelsOf(key: String) = DelaGroups.parseLevels(groupsPref["lv:$key"]) ?: DelaGroups.levelsDef(key)
+    // Фильтр на экране: правка до «Сохранить» — черновиком (`S.fdraft` веба).
+    var fdraft by remember { mutableStateOf(mapOf<String, DelaGroups.Filter>()) }
+    val filterId = nav.takeIf { it.startsWith(FILTER_NAV) }?.removePrefix(FILTER_NAV)
+    fun saveFilters(list: List<DelaGroups.Filter>, said: String) {
+        scope.launch {
+            app.delaStore.saveFilters(DelaGroups.json(list), DelaGroups.saveOp(list))
+            app.delaSync.poke()
+            Feedback.toast(app, said)
+        }
+    }
+    // «Сохранить фильтр», «Переименовать», «Удалить» — листом.
+    var naming by remember { mutableStateOf<DelaGroups.Filter?>(null) }
+    var namingNew by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<DelaGroups.Filter?>(null) }
+    // Выбор уровня: ключ экрана, номер уровня, уровни сейчас, чего не предлагать.
+    var levelPick by remember { mutableStateOf<LevelPick?>(null) }
     // «Назад» листает страницы Дел (как история веба), пока они есть.
     androidx.activity.compose.BackHandler(enabled = pages.isNotEmpty()) { pages = pages.dropLast(1) }
 
@@ -395,6 +434,7 @@ fun DelaTab(
         // мониторить; в каждой выше тот, кому делать раньше и кто дольше ждёт. Пустая группа не видна.
         view == DelaViews.View.TODAY -> DelaGroups.todayTasks(snap, me, today, sphere).let { items ->
             val done = DelaGroups.doneToday(snap, me, today)
+            val lv = levelsOf("today")
             DelaScreen(
                 "Сегодня",
                 listOfNotNull(
@@ -402,20 +442,31 @@ fun DelaTab(
                     "осталось ${items.size}".takeIf { items.isNotEmpty() },
                     "закрыто $done".takeIf { done > 0 },
                 ).joinToString(" · "),
-                groups = DelaGroups.nested(items, listOf(DelaGroups.Level.GRP), snap, today).map { n ->
-                    DelaViews.Group(n.key, n.title, sub = n.sub, items = n.items)
-                },
-                by = DelaViews.By.GRP,
+                nodes = DelaGroups.nested(items, lv, snap, today),
+                levels = lv, levelKey = "today", saveScope = DelaGroups.Scope.TODAY,
                 empty = if (done > 0) "На сегодня всё закрыто." else "На сегодня пусто.",
             )
         }
         view == DelaViews.View.ALL -> {
-            // С 10.10.2026 «Все дела» — группами (отбить, запустить, мониторить), дальше — даты, проекты, люди, сделки.
-            val by = groupOf(DelaViews.View.ALL.key, DelaViews.By.GRP)
+            // С 10.10.2026 «Все дела» — уровнями: с завода проекты › группы › время (владелец: «по каждому
+            // проекту посмотреть, что я могу сделать сегодня»).
+            val lv = levelsOf("all")
             val items = DelaViews.list(snap, me, sphere, showDone = showDone)
             DelaScreen(
                 "Все дела", plural(items.count { it.open }, "открытое", "открытых", "открытых"),
-                groups = DelaViews.group(items, by, snap, today), by = by, groupKey = DelaViews.View.ALL.key, done = true, add = true, empty = "Пусто.",
+                nodes = DelaGroups.nested(items, lv, snap, today), levels = lv, levelKey = "all", saveScope = DelaGroups.Scope.ALL,
+                done = true, add = true, empty = "Пусто.",
+            )
+        }
+        // Сохранённый фильтр (`renderFilter` веба): что показать и уровни; поменял — «Сохранить» или «Как было».
+        filterId != null -> filters.firstOrNull { it.id == filterId }?.let { f0 ->
+            val f = fdraft[f0.id] ?: f0
+            val items = DelaGroups.scopeItems(snap, me, today, sphere, f.scope)
+            DelaScreen(
+                f0.name,
+                listOf(f.scope.title, DelaGroups.levelsName(f.levels), plural(items.size, "дело", "дела", "дел")).joinToString(" · "),
+                nodes = DelaGroups.nested(items, f.levels, snap, today), levels = f.levels, levelKey = FILTER_NAV + f0.id,
+                empty = "Здесь пусто.",
             )
         }
         else -> null
@@ -428,7 +479,7 @@ fun DelaTab(
     // Страница проекта — как в вебе: группировка своя (без «по проектам»), «Сделанные», фильтр сделки.
     val projectScreen: DelaScreen? = (page as? DelaPage.Project)?.let { pg ->
         val p = snap.projects[pg.id]
-        val by = groupOf("project", by0).takeIf { it != DelaViews.By.PROJECT } ?: by0
+        val lv = levelsOf("project").filter { it != DelaGroups.Level.PROJECT }
         val all = snap.tasks.values.filter { it.projectId == pg.id }
         val items = all.filter { (showDone || it.open) && (dealFilter.isBlank() || it.dealId == dealFilter) }
         val open = all.filter { it.open }
@@ -441,8 +492,7 @@ fun DelaTab(
                 p?.aliases?.takeIf { it.isNotEmpty() }?.let { "ещё зовут: " + it.joinToString(", ") },
             ).joinToString(" · "),
             alert = if (late > 0) "просрочено: $late" else "",
-            groups = DelaViews.group(items, by, snap, today), by = by, groupKey = "project",
-            groupOptions = DelaViews.By.entries.filter { it != DelaViews.By.PROJECT },
+            nodes = DelaGroups.nested(items, lv, snap, today), levels = lv, levelKey = "project", levelOmit = setOf(DelaGroups.Level.PROJECT),
             done = true, add = true, empty = "Дел нет. Следующий шаг — в строке выше.",
         )
     }
@@ -659,7 +709,7 @@ fun DelaTab(
         }
         // Заголовок раздела — только у страниц (человек, проект, сделка): у
         // разделов его название и так стоит в сегментах (`screens/06`).
-        if (page != null || needle.isNotEmpty() || (crmOn && CRM_NAV.any { it.first == nav })) {
+        if (page != null || needle.isNotEmpty() || (crmOn && CRM_NAV.any { it.first == nav }) || filterId != null) {
             item(key = "head") {
                 DelaHead(
                     head,
@@ -707,6 +757,12 @@ fun DelaTab(
             // «Без проекта» — не страница: проект выбирается у дела («без проекта» в строке).
             onProject = { id -> if (id.isNotBlank()) push(DelaPage.Project(id)) },
             onPerson = { id -> push(DelaPage.Person(id)) },
+            onLevel = { key, i, lv, omit -> levelPick = LevelPick(key, i, lv, omit) },
+            onSaveFilter = { sc ->
+                val lv = screen?.levels.orEmpty()
+                naming = DelaGroups.Filter("f-" + java.lang.Long.toString(System.currentTimeMillis(), 36), DelaGroups.suggestName(sc, lv, null), sc, lv)
+                namingNew = true
+            },
         )
 
         val pg = page
@@ -859,7 +915,30 @@ fun DelaTab(
             // Поля «Новое дело…» у разделов нет (Правка 4.0): «+» — в строке
             // состояния, голос и текст — в нижней строке. У проекта и человека оно осталось.
             if (found != null) searchFound(found, snap, today, onProject = { push(DelaPage.Project(it)) }, onDeal = { push(DelaPage.Deal(it)) }, onPerson = { push(DelaPage.Person(it)) })
-            screenBody(screen, if (needle.isNotEmpty()) "search" else nav, actions, tools)
+            val f0 = filterId?.let { id -> filters.firstOrNull { it.id == id } }
+            if (f0 != null) {
+                val f = fdraft[f0.id] ?: f0
+                screenBody(screen, nav, actions, tools) {
+                    // «Показать»: сегодня, всё, одна группа (`SCOPES` веба).
+                    PaperHint("Показать")
+                    ChipRow {
+                        for (sc in DelaGroups.Scope.entries) PaperChip(sc.title, selected = f.scope == sc, onClick = {
+                            fdraft = fdraft + (f0.id to f.copy(scope = sc))
+                        })
+                    }
+                    ChipRow {
+                        if (f != f0) {
+                            PaperChip("Сохранить", selected = true, onClick = {
+                                fdraft = fdraft - f0.id
+                                saveFilters(filters.map { if (it.id == f0.id) f else it }, "Фильтр сохранён")
+                            })
+                            PaperChip("Как было", selected = false, onClick = { fdraft = fdraft - f0.id })
+                        }
+                        PaperChip("Переименовать", selected = false, onClick = { naming = f0; namingNew = false })
+                        PaperChip("Удалить", selected = false, onClick = { deleting = f0 })
+                    }
+                }
+            } else screenBody(screen, if (needle.isNotEmpty()) "search" else nav, actions, tools)
             // «Новое из встреч и чатов · 4 ›» — под делами «Сегодня» (`screens/06`).
             if (view == DelaViews.View.TODAY && needle.isEmpty()) {
                 val waitingNew = DelaViews.newCount(snap, me, sphere, now)
@@ -929,7 +1008,7 @@ fun DelaTab(
                 opened != null -> "с делом «${opened.title.take(60)}»"
                 askScreen?.card == true -> "с карточкой"
                 view == DelaViews.View.NEW && page == null -> "с новым"
-                page == null && view == null -> "со сделками на экране"
+                page == null && view == null && filterId == null -> "со сделками на экране"
                 else -> "с делами на экране"
             },
             card = askScreen?.card == true && opened == null,
@@ -1023,6 +1102,7 @@ fun DelaTab(
             nav = if (page == null && needle.isEmpty()) nav else "",
             sphere = sphere,
             counts = { DelaViews.counts(snap, me, today, sphere, now) },
+            filters = { filters.map { it to DelaGroups.scopeItems(snap, me, today, sphere, it.scope).size } },
             crmOn = crmOn,
             projects = { Dela.projectsNav(snap, me, today, sphere, favs) },
             onSphere = { sphere = it },
@@ -1069,6 +1149,48 @@ fun DelaTab(
             if (ops.isNotEmpty()) scope.launch {
                 app.delaDo(ops)
                 Feedback.toast(app, (snap.projects[id]?.name?.let { "В «$it»" } ?: "Без проекта") + if (ops.size > 1) ": ${ops.size}" else "")
+            }
+        }
+    }
+    levelPick?.let { lp ->
+        // Уровень [i]: «—» убирает его и всё после; один уровень дважды не встаёт (`levelsBar` веба).
+        PickSheet(
+            title = "Уровень ${lp.i + 1}",
+            none = if (lp.i == 0) "без групп" else "— (убрать)",
+            items = DelaGroups.Level.entries.filter { it !in lp.omit }.map { Triple(it.key, it.title, "") },
+            selected = lp.levels.getOrNull(lp.i)?.key.orEmpty(),
+            onDismiss = { levelPick = null },
+        ) { k ->
+            levelPick = null
+            val next = DelaGroups.setLevel(lp.levels, lp.i, DelaGroups.Level.of(k))
+            if (lp.key.startsWith(FILTER_NAV)) {
+                val id = lp.key.removePrefix(FILTER_NAV)
+                filters.firstOrNull { it.id == id }?.let { f0 -> fdraft = fdraft + (id to (fdraft[id] ?: f0).copy(levels = next)) }
+            } else scope.launch { app.delaStore.setGroup("lv:" + lp.key, DelaGroups.levelsKey(next)) }
+        }
+    }
+    naming?.let { f ->
+        FilterNameSheet(
+            title = if (namingNew) "Сохранить фильтр" else "Переименовать фильтр",
+            initial = f.name,
+            onDismiss = { naming = null },
+        ) { name ->
+            naming = null
+            if (namingNew) {
+                saveFilters(filters + f.copy(name = name), "Фильтр сохранён: $name")
+                go(FILTER_NAV + f.id)
+            } else saveFilters(filters.map { if (it.id == f.id) it.copy(name = name) else it }, "Переименовал")
+        }
+    }
+    deleting?.let { f ->
+        PaperSheet(onDismiss = { deleting = null }, title = "Удалить фильтр «${f.name}»?", icon = Glyphs.Delete, subtitle = "Дела останутся.") {
+            Row {
+                Spacer(Modifier.weight(1f))
+                PaperButton("Удалить", primary = true, onClick = {
+                    deleting = null
+                    saveFilters(filters.filter { it.id != f.id }, "Фильтр удалён")
+                    go(DelaViews.View.TODAY.key)
+                })
             }
         }
     }
@@ -1558,6 +1680,10 @@ private data class ListTools(
     val onPerson: (String) -> Unit,
     val onAdd: ((String) -> Unit)? = null,
     val addLabel: String = "Новое дело…",
+    /** Тап по уровню группировки: ключ экрана, номер уровня, уровни, чего не предлагать. */
+    val onLevel: (String, Int, List<DelaGroups.Level>, Set<DelaGroups.Level>) -> Unit = { _, _, _, _ -> },
+    /** «Сохранить фильтр» — что показано. */
+    val onSaveFilter: (DelaGroups.Scope) -> Unit = {},
 )
 
 /**
@@ -1575,11 +1701,30 @@ private fun LazyListScope.screenBody(
     onProjectPage: Boolean = false,
     extra: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
-    val hasTools = sc.done || sc.groupKey != null || (sc.add && tools.onAdd != null) || extra != null
+    val hasTools = sc.done || sc.groupKey != null || sc.levelKey != null || (sc.add && tools.onAdd != null) || extra != null
     if (hasTools) {
         item(key = "$key:tools") {
             PaperCard {
                 extra?.invoke(this)
+                // Уровни (`levelsBar` веба): «Группировать: проекты › группы › время»; тап — выбрать
+                // уровень или «—» (убирает его и всё после). Следующий пустой — «＋».
+                val lk = sc.levelKey
+                if (lk != null) {
+                    ChipRow {
+                        Text("Группировать", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.CenterVertically))
+                        for (i in 0 until minOf(DelaGroups.MAX_LEVELS, sc.levels.size + 1)) {
+                            val lv = sc.levels.getOrNull(i)
+                            PaperChip(
+                                (if (i > 0) "› " else "") + (lv?.title ?: if (i == 0) "без групп" else "＋"),
+                                selected = lv != null,
+                                onClick = { tools.onLevel(lk, i, sc.levels, sc.levelOmit) },
+                            )
+                        }
+                        val save = sc.saveScope
+                        if (save != null) PaperChip("Сохранить фильтр", selected = false, onClick = { tools.onSaveFilter(save) })
+                    }
+                }
                 if (sc.done || sc.groupKey != null) {
                     ChipRow {
                         if (sc.done) PaperChip("Сделанные", selected = tools.showDone, onClick = tools.onShowDone)
@@ -1594,6 +1739,36 @@ private fun LazyListScope.screenBody(
     }
     if (sc.hint.isNotBlank()) {
         item(key = "$key:hint") { Box(Modifier.padding(start = 4.dp)) { PaperHint(sc.hint) } }
+    }
+    val nodes = sc.nodes
+    if (nodes != null) {
+        val also = sc.levels.map { DelaViews.byOf(it) }.toSet()
+        for (n in nodes) {
+            item(key = "$key:n:${n.key}") {
+                PaperCard(
+                    label = n.title.takeIf { it.isNotBlank() }?.let { "$it · ${n.items.size}" },
+                    labelColor = if (n.late) ru.zf.pravka.ui.LocalMode.current.value else null,
+                    trailing = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            val est = n.items.filter { it.open }.sumOf { it.estimateMin }
+                            if (est > 0) Text(
+                                ru.zf.pravka.core.Fmt.dur(est),
+                                style = ru.zf.pravka.ui.LocalPravkaType.current.meta,
+                                color = ru.zf.pravka.ui.LocalMode.current.label,
+                                modifier = Modifier.padding(end = 4.dp),
+                            )
+                            val pid = n.projectId
+                            if (!pid.isNullOrBlank() && !onProjectPage) GlyphButton(Glyphs.Forward, "проект целиком", onClick = { tools.onProject(pid) }, size = 30.dp)
+                            val hid = n.personId
+                            if (hid != null) GlyphButton(Glyphs.Forward, "всё по человеку", onClick = { tools.onPerson(hid) }, size = 30.dp)
+                        }
+                    },
+                ) {
+                    if (n.sub.isNotBlank()) PaperHint(n.sub)
+                    NodeRows(n, actions, also, onProjectPage)
+                }
+            }
+        }
     }
     for (g in sc.groups) {
         item(key = "$key:g:${g.key}") {
@@ -1638,7 +1813,7 @@ private fun LazyListScope.screenBody(
             }
         }
     }
-    if (sc.groups.isEmpty() && sc.projects.isEmpty() && sc.empty.isNotBlank()) {
+    if (sc.groups.isEmpty() && sc.nodes.isNullOrEmpty() && sc.projects.isEmpty() && sc.empty.isNotBlank()) {
         item(key = "$key:empty") { Box(Modifier.padding(start = 4.dp)) { PaperHint(sc.empty) } }
     }
 }
@@ -1670,6 +1845,8 @@ private fun DelaNavSheet(
     nav: String,
     sphere: String,
     counts: () -> DelaViews.Counts,
+    /** Фильтры с числом дел — первым разделом (как на полке веба). */
+    filters: () -> List<Pair<DelaGroups.Filter, Int>> = { emptyList() },
     crmOn: Boolean,
     projects: () -> Dela.ProjectsNav,
     onSphere: (String) -> Unit,
@@ -1697,6 +1874,12 @@ private fun DelaNavSheet(
             selected = SPHERES.indexOfFirst { it.first == sphere }.coerceAtLeast(0),
             onSelect = { onSphere(SPHERES[it].first) },
         )
+        val fl = filters()
+        if (fl.isNotEmpty()) {
+            NavHead("Фильтры")
+            for ((f, n) in fl) NavLine(f.name, n, selected = nav == FILTER_NAV + f.id) { onNav(FILTER_NAV + f.id) }
+            RowRule()
+        }
         // «Сегодня» — отдельной строкой над остальными, с числом (красным, если люди ждут — «отбить»).
         for (v in DelaViews.View.entries) {
             NavLine(v.title, 0, selected = nav == v.key, countText = counts.label(v), hot = counts.hot(v)) { onNav(v.key) }
@@ -1929,6 +2112,30 @@ private fun Modifier.groupRing(
 })
 
 /**
+ * Ветка уровней внутри карточки (`nested` веба): последний уровень — строки,
+ * глубже — подзаголовок с числом и его ветки.
+ */
+@Composable
+private fun NodeRows(n: DelaGroups.Node, actions: DelaActions, also: Set<DelaViews.By>, onProjectPage: Boolean) {
+    if (n.leaf) {
+        TaskRows(n.items, actions, by = n.level?.let { DelaViews.byOf(it) }, onProjectPage = onProjectPage, also = also)
+        return
+    }
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    n.children.forEachIndexed { i, c ->
+        Text(
+            "${c.title} · ${c.items.size}",
+            style = if (c.depth == 1) MaterialTheme.typography.labelLarge else MaterialTheme.typography.labelMedium,
+            color = if (c.late) mode.value else mode.label,
+            modifier = Modifier.padding(top = if (i > 0) 10.dp else 2.dp, start = if (c.depth > 1) 10.dp else 0.dp),
+        )
+        if (c.sub.isNotBlank() && c.grp != null) Text(c.sub, style = MaterialTheme.typography.bodySmall, color = mode.meta,
+            modifier = Modifier.padding(start = if (c.depth > 1) 10.dp else 0.dp))
+        Box(Modifier.padding(start = if (c.depth > 1) 10.dp else 0.dp)) { Column { NodeRows(c, actions, also, onProjectPage) } }
+    }
+}
+
+/**
  * Дела строками. [by] — группировка списка: то, что уже в заголовке группы
  * (срок, проект, человек, мяч, сделка), в строке не повторяется — как в вебе.
  */
@@ -1941,10 +2148,12 @@ internal fun TaskRows(
     onProjectPage: Boolean = false,
     /** Подписи от места, где строка стоит («Новое»: что потом сказала автоматика), — строками под делом. */
     extra: (Dela.Task) -> List<String> = { emptyList() },
+    /** Остальные уровни группировки: названное заголовком строка не повторяет. */
+    also: Set<DelaViews.By> = emptySet(),
 ) {
     list.forEachIndexed { i, t ->
         if (i > 0) RowRule()
-        TaskRow(t, actions, today, by, onProjectPage, extra(t))
+        TaskRow(t, actions, today, by, onProjectPage, extra(t), also)
     }
 }
 
@@ -1963,6 +2172,7 @@ private fun TaskRow(
     by: DelaViews.By? = null,
     onProjectPage: Boolean = false,
     extra: List<String> = emptyList(),
+    also: Set<DelaViews.By> = emptySet(),
 ) {
     // Правка 4.0 (DESIGN §11.7 TaskRow в Делах, `screens/06`): кольцо 22 в
     // зоне 44, «Кто: действие» до двух строк, вторая строка — подписи веба;
@@ -2013,9 +2223,9 @@ private fun TaskRow(
                 )
                 val live = t.id == actions.running
                 // «Олег ждёт 3 дн» — ярче остальных: люди ждут (`taskRow` веба, `value` полужирным).
-                val wait = DelaGroups.wait(t, DelaViews.who(t, actions.snap), today, personGrouped = by == DelaViews.By.PERSON)?.takeIf { it.strong }?.text
+                val wait = DelaGroups.wait(t, DelaViews.who(t, actions.snap), today, personGrouped = by == DelaViews.By.PERSON || DelaViews.By.PERSON in also)?.takeIf { it.strong }?.text
                 val spentMs = actions.spent[t.id] ?: 0L
-                val chips = DelaViews.chips(t, by, actions.snap, today, onProjectPage)
+                val chips = DelaViews.chips(t, by, actions.snap, today, onProjectPage, also)
                 val pick = actions.pickProject
                 val loose = pick != null && t.open && DelaViews.NO_PROJECT in chips
                 val meta = listOfNotNull(
@@ -2464,6 +2674,19 @@ private fun TimeLine(value: String, onChange: (String) -> Unit) {
 }
 
 /** Выбор из справочника с поиском: тап выбирает и закрывает. */
+/** Имя фильтра: предложенное (`addFilter` веба) или своё. */
+@Composable
+private fun FilterNameSheet(title: String, initial: String, onDismiss: () -> Unit, onDone: (String) -> Unit) {
+    var name by remember { mutableStateOf(initial) }
+    PaperSheet(onDismiss = onDismiss, title = title, icon = Glyphs.ListLines) {
+        PaperField(value = name, onValueChange = { name = it }, label = "Название фильтра")
+        Row {
+            Spacer(Modifier.weight(1f))
+            PaperButton("Готово", primary = true, enabled = name.isNotBlank(), onClick = { onDone(name.trim()) })
+        }
+    }
+}
+
 @Composable
 private fun PickSheet(
     title: String,

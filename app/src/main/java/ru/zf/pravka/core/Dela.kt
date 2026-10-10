@@ -1161,6 +1161,7 @@ object Dela {
             "person.create" -> "новый человек «${op.optJSONObject("data")?.str("name").orEmpty().take(60)}»"
             "org.create" -> "организация «${op.optJSONObject("data")?.str("name").orEmpty().take(60)}»"
             "project.set" -> "проект «${s.projects[op.str("id")]?.name?.take(60) ?: "?"}»"
+            "user.settings" -> "фильтры Дел"
             else -> op.str("op")
         }
     }

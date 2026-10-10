@@ -93,6 +93,33 @@ class DelaStore(private val context: Context) {
     /** Группировка списков по ключу списка («inbox», «all», «project») — как `S.groups` веба. */
     val groupsFlow: StateFlow<Map<String, String>> = _groups
 
+    private val _filters = MutableStateFlow<JSONArray?>(null)
+    /**
+     * Фильтры Дел (10.10.2026, `settings.filters` из `/api/me`): живут на сервере,
+     * веб видит те же. null — сервер их ещё не отдал (заводские); копия — для
+     * открытия без сети, своя правка — сразу сюда и в очередь (`user.settings`).
+     */
+    val filtersFlow: StateFlow<JSONArray?> = _filters
+
+    /** Что сказал сервер: своё неотправленное (в очереди `user.settings`) не перетирается. */
+    suspend fun setServerFilters(a: JSONArray?) = mutex.withLock {
+        ensureLoaded()
+        if (outbox.any { it.op.optString("op") == "user.settings" }) return@withLock
+        if (a?.toString() == _filters.value?.toString()) return@withLock
+        _filters.value = a
+        writePrefs()
+    }
+
+    /** Свой список фильтров целиком: виден сразу, на сервер — операцией очереди. */
+    suspend fun saveFilters(a: JSONArray, op: JSONObject) {
+        mutex.withLock {
+            ensureLoaded()
+            _filters.value = a
+            writePrefs()
+        }
+        enqueue(listOf(op))
+    }
+
     private val _clientOpen = MutableStateFlow<Set<String>>(emptySet())
     /**
      * Клиенты, у которых проекты раскрыты — в ☰ и в «Клиентах» (`S.clientOpen`
@@ -125,6 +152,7 @@ class DelaStore(private val context: Context) {
             .put("projects", JSONArray().apply { _favs.value.sorted().forEach { put(it) } })
             .put("groups", JSONObject().apply { for ((k, v) in _groups.value) put(k, v) })
             .put("clientOpen", JSONArray().apply { _clientOpen.value.sorted().forEach { put(it) } })
+            .apply { _filters.value?.let { put("filters", it) } }
             .toString()
         withContext(Dispatchers.IO) { StoreFiles.writeAtomic(favsFile, text) }
     }
@@ -362,6 +390,7 @@ class DelaStore(private val context: Context) {
                     _favs.value = (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.isNotBlank() } }.toSet()
                 }
                 o.optJSONObject("groups")?.let { g -> _groups.value = g.keys().asSequence().associateWith { g.optString(it) } }
+                _filters.value = o.optJSONArray("filters")
                 o.optJSONArray("clientOpen")?.let { a ->
                     _clientOpen.value = (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.isNotBlank() } }.toSet()
                 }
