@@ -1,0 +1,7 @@
+pravka=3.0.830
+versionName=3.0.830
+apk=pravka-debug.apk
+versionCode=830
+commit=f6d660105afb215d942fa73bdb5898a4afa4e434
+branch=pravka
+builtAt=2026-10-10T20:37Z
