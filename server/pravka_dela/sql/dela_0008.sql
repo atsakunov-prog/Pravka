@@ -14,6 +14,13 @@
 --    пользователи Дел карты не видят и на неё не пишут. Семью меняет только владелец
 --    командой family (как роль и деньги — командой user, crm.users_guard).
 
+-- Журнал не пропускает правку без подписи: миграция подписывается сама (на время своей
+-- транзакции), как 2, 6 и 7. Без этой строки первая установка у владельца упала (10.10.2026):
+-- UPDATE пользователей ниже — правка журналируемой таблицы, а в тестовой базе пользователей на
+-- момент миграции не было, и править было нечего (test_dela_where.test_migration_with_users_in_place).
+SELECT set_config('dela.actor', 'svc:migrate', true), set_config('dela.via', 'system', true),
+       set_config('dela.user', 'system', true);
+
 ALTER TABLE crm.users ADD COLUMN family boolean NOT NULL DEFAULT false;
 COMMENT ON COLUMN crm.users.family IS 'Член семьи для «Где мы»: видит точки семьи и делится своей. Меняет только владелец командой family.';
 -- С завода в семье владелец и Марианна; остальных добавляет команда family.

@@ -130,3 +130,35 @@ def test_contract_matches_server(fam):
     assert set(want["asks"][0]) <= set(out["asks"][0])
     av = store.view(fam, "sasha", "where_avatar", device="marianna-01ab9e")
     assert set(CONTRACT["views"]["where_avatar"]["response"]) <= set(av)
+
+
+def test_migration_with_users_in_place(admin_dsn):
+    """Миграция 8 — поверх живых Дел, где пользователи уже есть (10.10.2026 у владельца упала:
+    правка crm.users без подписи для журнала). В общей тестовой базе миграции идут по пустой."""
+    import secrets as _secrets
+    from urllib.parse import urlparse, urlunparse
+
+    from psycopg import sql
+
+    name = f"pa_mig8_{_secrets.token_hex(4)}"
+    with psycopg.connect(admin_dsn, autocommit=True) as a:
+        a.execute(sql.SQL("CREATE DATABASE {} ENCODING 'UTF8' TEMPLATE template0").format(sql.Identifier(name)))
+    u = urlparse(admin_dsn)
+    url = urlunparse((u.scheme, u.netloc, "/" + name, "", "", ""))
+    try:
+        files = dict(dela_db._sql_files())
+        before = {k: v for k, v in files.items() if k.startswith("dela_") and k < "dela_0008.sql"}
+        with psycopg.connect(url, autocommit=True) as c:
+            c.execute("CREATE SCHEMA core")
+            c.execute("CREATE TABLE core.migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
+            dela_db.apply_pending(c, before)
+        with dela_db.session(url, "system", "test") as c:
+            c.execute("INSERT INTO crm.users (id, name, role) VALUES ('sasha', 'Саша', 'owner'), "
+                      "('natasha', 'Наташа', 'member'), ('marianna', 'Марианна', 'member')")
+        with psycopg.connect(url, autocommit=True) as c:
+            assert dela_db.apply_pending(c, files) == ["dela_0008.sql"]
+            fam = {r[0] for r in c.execute("SELECT id FROM crm.users WHERE family")}
+        assert fam == {"sasha", "marianna"}
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as a:
+            a.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
