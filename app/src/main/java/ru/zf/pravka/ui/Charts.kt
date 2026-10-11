@@ -47,9 +47,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 
-// Графики «Отчёта» — на Canvas, без библиотек: донат, полоса суток, стопки по
-// дням, столбики со знаком, ломаная с базовой линией, центрированные полосы,
-// плитка KPI. Один язык на все карточки: тонкие линии, скруглённые углы,
+// Графики на Canvas, без библиотек: донат, стопки по дням, столбики со знаком,
+// строка сравнения (Деньги, стоимость, разборы; у Общей статистики свои —
+// `ui/LifeCharts.kt`). Один язык на все карточки: тонкие линии, скруглённые углы,
 // подписи мелким серым; цвета приходят снаружи (радуга категорий, тёплая
 // палитра телефона) — сами графики про цвет ничего не решают.
 
@@ -60,9 +60,6 @@ data class ChartSlice(val label: String, val value: Float, val color: Color)
 data class StackedColumn(val label: String, val parts: List<ChartSlice>, val faded: Boolean = false) {
     val total: Float get() = parts.sumOf { it.value.toDouble() }.toFloat()
 }
-
-/** Отрезок полосы суток: доли от 0 до 1 и цвет. */
-data class StripSegment(val startFrac: Float, val endFrac: Float, val color: Color)
 
 private fun dash() = PathEffect.dashPathEffect(floatArrayOf(10f, 8f))
 
@@ -221,46 +218,6 @@ fun LegendRow(
 }
 
 /**
- * Сутки одной полосой: 24 часа слева направо, отрезки цветом категории, пустое
- * — не размечено или ещё не наступило. [nowFrac] — тонкая риска «сейчас».
- */
-@Composable
-fun DayStripChart(
-    segments: List<StripSegment>,
-    height: Dp = 16.dp,
-    nowFrac: Float? = null,
-) {
-    val track = MaterialTheme.colorScheme.surfaceVariant
-    val ink = MaterialTheme.colorScheme.onSurface
-    Canvas(Modifier.fillMaxWidth().height(height)) {
-        val w = size.width
-        val h = size.height
-        val r = CornerRadius(h / 4f)
-        drawRoundRect(track, size = size, cornerRadius = r)
-        for (s in segments) {
-            val x0 = (s.startFrac.coerceIn(0f, 1f) * w)
-            val x1 = (s.endFrac.coerceIn(0f, 1f) * w)
-            if (x1 - x0 < 0.5f) continue
-            drawRect(s.color, Offset(x0, 0f), Size(x1 - x0, h))
-        }
-        if (nowFrac != null && nowFrac in 0f..1f) {
-            val x = nowFrac * w
-            drawLine(ink, Offset(x, -2f), Offset(x, h + 2f), strokeWidth = 2f)
-        }
-    }
-}
-
-/** Часы под полосой суток: 0 · 6 · 12 · 18 · 24. */
-@Composable
-fun HourTicks() {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        for (t in listOf("0", "6", "12", "18", "24")) {
-            Text(t, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-/**
  * Столбики по дням, стопкой снизу вверх. Высота — от максимума колонок или от
  * цели, если она выше; цель — пунктир. [highlight] — колонка жирной подписью
  * (сегодня); бледная колонка (`faded`) — день, который ещё идёт. Над каждой
@@ -404,154 +361,6 @@ fun SignedColumns(
 }
 
 /**
- * Ломаная с точками. Пропуски (null) рвут линию, а не тянут её через ноль.
- * [baseline] — пунктир «обычно так» (медиана или среднее за окно); шкала от
- * нуля, если [fromZero], иначе от минимума с запасом — вес и HRV живут в узком
- * коридоре, и от нуля там ничего не разглядеть.
- */
-@Composable
-fun LineChart(
-    values: List<Float?>,
-    color: Color,
-    height: Dp = 72.dp,
-    baseline: Float? = null,
-    fromZero: Boolean = false,
-    labels: List<String>? = null,
-    valueText: ((Float) -> String)? = null,
-) {
-    val measurer = rememberTextMeasurer()
-    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
-    val labelStyle = TextStyle(fontSize = 10.sp, color = labelColor)
-    val axis = MaterialTheme.colorScheme.outlineVariant
-    Column(Modifier.fillMaxWidth()) {
-        Canvas(Modifier.fillMaxWidth().height(height)) {
-            val n = values.size
-            val present = values.filterNotNull()
-            drawLine(axis, Offset(0f, size.height - 1f), Offset(size.width, size.height - 1f), strokeWidth = 1f)
-            if (n == 0 || present.isEmpty()) return@Canvas
-            val pad = 6.dp.toPx()
-            var low = if (fromZero) 0f else present.min()
-            var high = present.max()
-            if (baseline != null) {
-                low = minOf(low, baseline)
-                high = maxOf(high, baseline)
-            }
-            if (!fromZero) {
-                val margin = ((high - low) * 0.15f).coerceAtLeast(0.5f)
-                low -= margin
-                high += margin
-            }
-            val span = (high - low).coerceAtLeast(0.01f)
-            val plotH = size.height - 2 * pad
-            fun yOf(v: Float) = pad + (1f - (v - low) / span) * plotH
-            fun xOf(i: Int) = if (n == 1) size.width / 2f else size.width * i / (n - 1).toFloat()
-            if (baseline != null) {
-                val by = yOf(baseline)
-                drawLine(labelColor, Offset(0f, by), Offset(size.width, by), strokeWidth = 1.2f, pathEffect = dash())
-            }
-            var previous: Offset? = null
-            values.forEachIndexed { i, v ->
-                if (v == null) {
-                    previous = null
-                    return@forEachIndexed
-                }
-                val p = Offset(xOf(i), yOf(v))
-                previous?.let { drawLine(color, it, p, strokeWidth = 3f) }
-                drawCircle(color, radius = 3.5f, center = p)
-                previous = p
-            }
-            if (valueText != null) {
-                val lastIndex = values.indexOfLast { it != null }
-                if (lastIndex >= 0) {
-                    val v = values[lastIndex]!!
-                    val layout = measurer.measure(valueText(v), labelStyle.copy(color = color, fontWeight = FontWeight.SemiBold))
-                    val x = (xOf(lastIndex) - layout.size.width).coerceAtLeast(0f)
-                    val y = (yOf(v) - layout.size.height - 4f).coerceAtLeast(0f)
-                    drawText(layout, topLeft = Offset(x, y))
-                }
-            }
-        }
-        if (labels != null) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                labels.forEach { l ->
-                    Text(l, style = MaterialTheme.typography.labelSmall, color = labelColor, maxLines = 1)
-                }
-            }
-        }
-    }
-}
-
-/**
- * Центрированные полосы — треугольник ценности: шире там, где больше минут.
- * Слева ступень, справа минуты; тонкая тёмная черта под полосой — база
- * (тот же день неделю назад), чтобы форму было с чем сравнить.
- */
-@Composable
-fun CenteredBars(
-    rows: List<CenteredBarRow>,
-    height: Dp = 22.dp,
-) {
-    val max = rows.maxOfOrNull { maxOf(it.value, it.ref ?: 0f) }?.coerceAtLeast(1f) ?: 1f
-    val track = MaterialTheme.colorScheme.surfaceVariant
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        for (r in rows) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.width(74.dp)) {
-                    Text(r.label, style = MaterialTheme.typography.labelMedium, color = r.color, maxLines = 1)
-                    if (r.sub.isNotBlank()) {
-                        Text(
-                            r.sub,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                Box(
-                    Modifier.weight(1f).height(height).background(track, RoundedCornerShape(4.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    val frac = (r.value / max).coerceIn(0f, 1f)
-                    if (frac > 0f) {
-                        Box(
-                            Modifier
-                                .fillMaxWidth(frac.coerceAtLeast(0.01f))
-                                .fillMaxHeight()
-                                .background(r.color, RoundedCornerShape(4.dp)),
-                        )
-                    }
-                    if (r.ref != null && r.ref > 0f) {
-                        val rf = (r.ref / max).coerceIn(0f, 1f)
-                        Box(
-                            Modifier
-                                .fillMaxWidth(rf.coerceAtLeast(0.01f))
-                                .height(3.dp)
-                                .align(Alignment.BottomCenter)
-                                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)),
-                        )
-                    }
-                }
-                Text(
-                    r.valueText,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.width(64.dp).padding(start = 8.dp),
-                    maxLines = 1,
-                )
-            }
-        }
-    }
-}
-
-data class CenteredBarRow(
-    val label: String,
-    val sub: String,
-    val value: Float,
-    val ref: Float?,
-    val color: Color,
-    val valueText: String,
-)
-
-/**
  * Строка сравнения: две полоски друг под другом — сейчас цветом, база серым, —
  * и дельта справа. Ширина от общего максимума [max], чтобы строки читались
  * относительно друг друга.
@@ -594,75 +403,6 @@ fun CompareRow(
                 color = deltaColor,
                 maxLines = 1,
             )
-        }
-    }
-}
-
-/**
- * Плитка KPI: подпись сверху, значение крупно, под ним дельта к базе своим
- * цветом и подсказка серым. Цвет дельты решает вызывающий: меньше телефона —
- * это плюс, меньше сна — минус, и график этого знать не может.
- */
-@Composable
-fun KpiTile(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier,
-    delta: String? = null,
-    deltaColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
-    hint: String? = null,
-    valueColor: Color = MaterialTheme.colorScheme.onSurface,
-) {
-    Column(
-        modifier
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            value,
-            style = MaterialTheme.typography.titleLarge,
-            color = valueColor,
-            maxLines = 1,
-        )
-        if (delta != null) {
-            Text(delta, style = MaterialTheme.typography.labelMedium, color = deltaColor, maxLines = 1)
-        }
-        if (hint != null) {
-            Text(
-                hint,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-/** Ряд точек по дням: сделано — цветом, нет — контуром; подпись дня под каждой. */
-@Composable
-fun DotRow(labels: List<String>, on: List<Boolean>, color: Color, highlight: Int = -1) {
-    val off = MaterialTheme.colorScheme.outlineVariant
-    Row(Modifier.fillMaxWidth()) {
-        labels.forEachIndexed { i, l ->
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(
-                    Modifier
-                        .size(16.dp)
-                        .background(if (on.getOrNull(i) == true) color else off, CircleShape),
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    l,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = if (i == highlight) FontWeight.Bold else FontWeight.Normal,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
-            }
         }
     }
 }

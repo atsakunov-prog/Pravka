@@ -1,509 +1,222 @@
 package ru.zf.pravka
 
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.fillMaxHeight
-import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Date
-import java.util.Locale
-import kotlin.math.roundToInt
-import kotlin.math.roundToLong
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import ru.zf.pravka.core.DayReport
-import ru.zf.pravka.core.PhoneDaySummary
-import ru.zf.pravka.core.SportCoach
+import ru.zf.pravka.core.Fmt
+import ru.zf.pravka.core.LifeStats
+import ru.zf.pravka.core.LifeStats.DayPick
+import ru.zf.pravka.core.LifeStats.Group
+import ru.zf.pravka.core.MoneyCategories
 import ru.zf.pravka.data.PhoneSweeper
-import ru.zf.pravka.data.SportStore
-import ru.zf.pravka.data.ZasechkaStore
-import ru.zf.pravka.data.phoneDayKey
-import ru.zf.pravka.ui.CenteredBarRow
-import ru.zf.pravka.ui.CenteredBars
-import ru.zf.pravka.ui.ChartSlice
-import ru.zf.pravka.ui.CompareRow
-import ru.zf.pravka.ui.DayNav
-import ru.zf.pravka.ui.DayStripChart
-import ru.zf.pravka.ui.DonutChart
-import ru.zf.pravka.ui.DotRow
+import ru.zf.pravka.ui.BarsChart
+import ru.zf.pravka.ui.BigStat
+import ru.zf.pravka.ui.ChipRow
 import ru.zf.pravka.ui.Glyphs
-import ru.zf.pravka.ui.HourTicks
-import ru.zf.pravka.ui.KpiTile
-import ru.zf.pravka.ui.LegendRow
-import ru.zf.pravka.ui.LineChart
+import ru.zf.pravka.ui.HBar
+import ru.zf.pravka.ui.HBars
+import ru.zf.pravka.ui.Hairline
+import ru.zf.pravka.ui.HoursChart
+import ru.zf.pravka.ui.Ink
+import ru.zf.pravka.ui.LifeInk
+import ru.zf.pravka.ui.LifeLegend
+import ru.zf.pravka.ui.LifeSeries
+import ru.zf.pravka.ui.LinesChart
+import ru.zf.pravka.ui.LoadingLine
+import ru.zf.pravka.ui.LocalPravkaType
 import ru.zf.pravka.ui.PaperButton
 import ru.zf.pravka.ui.PaperCard
+import ru.zf.pravka.ui.PaperChip
 import ru.zf.pravka.ui.PaperHint
+import ru.zf.pravka.ui.Readout
+import ru.zf.pravka.ui.ReadoutRow
+import ru.zf.pravka.ui.RefLine
 import ru.zf.pravka.ui.ScreenPad
-import ru.zf.pravka.ui.SignedColumns
-import ru.zf.pravka.ui.StackedColumn
-import ru.zf.pravka.ui.StackedColumns
-import ru.zf.pravka.ui.StripSegment
+import ru.zf.pravka.ui.Segments
+import ru.zf.pravka.ui.SeriesToggles
+import ru.zf.pravka.ui.ShareBar
+import ru.zf.pravka.ui.StackBarsChart
+import ru.zf.pravka.ui.ValueList
+import ru.zf.pravka.ui.WhyNote
 import ru.zf.pravka.ui.scrollFade
+import ru.zf.pravka.ui.tap
+import java.time.LocalDate
+import java.time.ZoneId
+import java.util.Locale
+import kotlin.math.roundToInt
 
-// Вкладка «Отчёт»: день в графиках.
+// Общая статистика, издание «Куда уходит день» (11.10.2026). Владелец принёс
+// разбор, который Claude собрал по архиву Правки за 43 дня, и сказал: «я
+// никогда не заглядывал в нашу статистику… давай уберём нашу, а поставим вот
+// ровно такую». Прежняя вкладка (день в графиках, тот же день неделю назад,
+// треугольник, коэффициенты) снята целиком; здесь — разделы того разбора по
+// порядку, только живые и за выбранный отрезок:
 //
-// Владелец: «репорт по тому, что происходит сегодня, пай-чарты, столбики,
-// что за неделю, сравнение этого дня с тем же днём прошлой недели, коэффициенты,
-// оценки дня, сколько в телефоне сидел — и пускай там будут разные-разные
-// графики». Засечка — лента и правка минут; здесь та же лента, телефон, тело и
-// еда сложены в картину, которую можно окинуть одним взглядом.
+//   средний день по часам (выбор: будни, выходные, любой день недели) ·
+//   средние сутки · четыре больших числа · окно будней 10–17 с календарём ·
+//   недели качелями и цена в теле · мастерская против работы · встречи ·
+//   план тренировок против факта, борьба, вис, пробежки · вес и белок · еда на
+//   главном рецепте, БЖУ и вещества · деньги по месяцам, баланс, ЗФ ·
+//   телефон по неделям · как это читать.
 //
-// Порядок карточек — порядок вопросов вечером:
-//   1. Каким был день (балл на радуге, место среди своих дней, тот же день
-//      недели за пять недель).
-//   2. Сутки в числах — плитки с дельтой к тому же дню неделю назад.
-//   3. Из чего сложился день (донат) и что заняло больше всего.
-//   4. День по часам — две полосы: сегодня и неделю назад.
-//   5. Треугольник ценности: широко сверху, узко внизу — его цель.
-//   6. Против того же дня неделю назад — по категориям, телефону, сну, еде.
-//   7. Неделя: стопка по дням, семь суток по часам, балл за 28 дней.
-//   8. Телефон, тело, еда, дела и Правка — каждый своей карточкой.
-//   9. Коэффициенты — с формулой словами под каждым.
-//
-// Честность важнее красоты: идущий день сравнивается с прошлым до того же
-// часа (core/DayReport.Window.shifted), базой служат его собственные дни,
-// а порогов вроде «хорошо — это 8 часов сна» вкладка не выдумывает. Все
-// числа считает core/DayReport.kt (JVM-тесты), модель к экрану не подходит.
-//
-// Легенды графиков — за «i» в подписи плашки (24.09.2026): на плашке
-// остаются числа и живые строки, а абзацы «пунктир — это…», которых было
-// три десятка, открываются по требованию. Формулы коэффициентов остались
-// под каждым числом — это не легенда, а само число словами.
+// Все числа — `core/LifeStats.kt` (JVM-тесты), графики — `ui/LifeCharts.kt`.
+// Гипотез «почему так» модель здесь не пишет: вывод «Что видно» — из чисел,
+// без толкований. Отрезок кончается вчера: сегодняшний неполный день не в счёте.
 
-private const val DAY = DayReport.DAY_MS
-private val WEEKDAYS = listOf("вс", "пн", "вт", "ср", "чт", "пт", "сб")
-private val reportDateFormat = SimpleDateFormat("d MMMM", Locale("ru"))
-private val reportWeekday = SimpleDateFormat("EEEE", Locale("ru"))
-private val reportShortDate = SimpleDateFormat("d.MM", Locale("ru"))
-private val reportIso = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-private val reportClock = SimpleDateFormat("HH:mm", Locale.US)
+private val PERIODS = listOf(4 to "4 недели", 6 to "6 недель", 13 to "3 месяца")
+private const val MONEY_MONTHS = 8
+private val MONTHS = listOf("янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
+private val MONTHS_FULL = listOf("январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь")
+private val PHONE_INKS = listOf(LifeInk.Sys, LifeInk.Work, LifeInk.Loss, LifeInk.Other)
 
-// Правка 4.0 (DESIGN §12.9): цвета режимов здесь — метки источника, как на
-// «Сегодня»: балл и телефон — краской Засечки, еда — Еды, тело — Спорта,
-// деньги Claude — Правки; «хорошо/плохо» — тоном Засечки и предупреждением.
-private val GOOD = ru.zf.pravka.ui.Modes.Zasechka.ramp[1]
-private val BAD = ru.zf.pravka.ui.Ink.Warn
-private val KCAL_INK = ru.zf.pravka.ui.Modes.Food.ramp[1]
-private val PROTEIN_INK = ru.zf.pravka.ui.Modes.Food.ramp[0]
-private val FAT_INK = ru.zf.pravka.ui.Modes.Food.ramp[2]
-private val CARBS_INK = ru.zf.pravka.ui.Modes.Food.ramp[3]
-private val SLEEP_INK = ru.zf.pravka.ui.Modes.Sport.ramp[1]
-private val STEPS_INK = ru.zf.pravka.ui.Modes.Sport.ramp[0]
-private val HRV_INK = ru.zf.pravka.ui.Modes.Sport.ramp[1]
-private val RHR_INK = ru.zf.pravka.ui.Modes.Sport.ramp[2]
-private val WEIGHT_INK = ru.zf.pravka.ui.Modes.Sport.ramp[0]
-private val COST_INK = ru.zf.pravka.ui.Modes.Pravka.ramp[1]
-private val PICKUP_INK = ru.zf.pravka.ui.Modes.Zasechka.ramp[1]
-private val GLANCE_INK = ru.zf.pravka.ui.Modes.Zasechka.ramp[2]
-// Ступени треугольника — от потерь к лучшим часам: предупреждение и шкала Засечки.
-private val BUCKET_INKS = listOf(
-    ru.zf.pravka.ui.Ink.Warn,
-    ru.zf.pravka.ui.Modes.Zasechka.ramp[3],
-    ru.zf.pravka.ui.Modes.Zasechka.ramp[2],
-    ru.zf.pravka.ui.Modes.Zasechka.ramp[1],
-    ru.zf.pravka.ui.Modes.Zasechka.ramp[0],
-)
-
-private fun reportDayStart(offsetDays: Int): Long {
-    val cal = Calendar.getInstance()
-    cal.add(Calendar.DAY_OF_YEAR, -offsetDays)
-    cal.set(Calendar.HOUR_OF_DAY, 0)
-    cal.set(Calendar.MINUTE, 0)
-    cal.set(Calendar.SECOND, 0)
-    cal.set(Calendar.MILLISECOND, 0)
-    return cal.timeInMillis
-}
-
-private fun weekdayOf(ms: Long): String {
-    val cal = Calendar.getInstance()
-    cal.timeInMillis = ms
-    return WEEKDAYS[cal.get(Calendar.DAY_OF_WEEK) - 1]
-}
-
-private fun isoOf(ms: Long): String = reportIso.format(Date(ms))
-private fun clockOf(ms: Long): String = reportClock.format(Date(ms))
-private fun dur(min: Long): String = DayReport.dur(min)
-private fun signed(v: Int): String = DayReport.signed(v)
-private fun pct(share: Double?): String = DayReport.pct(share)
-private fun fmt1(v: Double): String = String.format(Locale.US, "%.1f", v)
-
-/** «8ч», «45м» — подпись над колонкой, куда «1 ч 10 м» не влезает. */
-private fun hoursShort(min: Long): String = if (min >= 60) "${min / 60}ч" else "${min}м"
-
-/** Доля, если знаменатель есть. */
-private fun share(num: Long, den: Long): Double? = if (den <= 0L) null else num.toDouble() / den
-
-/** Всё, что карточкам нужно знать про один день: окно, срезы, балл, фокус, сон. */
-private class Frame(
-    val dayStart: Long,
-    val window: DayReport.Window,
-    val slices: List<DayReport.CatSlice>,
-    val balance: DayReport.Balance,
-    val awakeMs: Long,
-    val focus: DayReport.Focus,
-    val nightSleepMs: Long,
-    val rhythm: DayReport.Rhythm,
+/** Всё, что вкладка знает об отрезке; считается не на главном потоке. */
+private class LifeModel(
+    val from: LocalDate,
+    val to: LocalDate,
+    val weeks: Int,
+    val days: Map<LocalDate, LifeStats.DayRibbon>,
+    val fullDays: Int,
+    val avgDay: List<LifeStats.DayLine>,
+    val window: LifeStats.WindowStats,
+    val weekRows: List<LifeStats.Week>,
+    val cumulative: LifeStats.Cumulative,
+    val catMin: Map<String, Double>,
+    val plan: LifeStats.PlanFact,
+    val bjj: List<LifeStats.WorkoutIn>,
+    val hang: List<LifeStats.GtgIn>,
+    val runs: List<LifeStats.WorkoutIn>,
+    val weight: List<Pair<LocalDate, Double>>,
+    val food: LifeStats.Food,
+    val phone: LifeStats.Phone,
+    val money: LifeStats.Money,
 ) {
-    val awakeMin: Long get() = DayReport.msToMin(awakeMs)
-    val full: Boolean get() = window.to >= dayStart + DAY
-    fun minutes(filter: (String) -> Boolean): Long =
-        DayReport.msToMin(slices.filter { filter(it.category) }.sumOf { it.ms })
-    fun minutesOf(category: String): Long {
-        val key = category.trim().lowercase()
-        return DayReport.msToMin(slices.filter { it.category.trim().lowercase() == key }.sumOf { it.ms })
-    }
-}
-
-private fun frameOf(
-    pool: List<ZasechkaStore.Entry>,
-    dayStart: Long,
-    window: DayReport.Window,
-    now: Long,
-    worthOf: (String) -> Int,
-): Frame = Frame(
-    dayStart = dayStart,
-    window = window,
-    slices = DayReport.byCategory(pool, window, now, worthOf),
-    balance = DayReport.balance(pool, window, now, worthOf),
-    awakeMs = DayReport.awakeMs(pool, window, now),
-    focus = DayReport.focus(pool, window, now),
-    nightSleepMs = DayReport.nightSleepMs(pool, dayStart, now),
-    rhythm = DayReport.rhythm(pool, dayStart, now),
-)
-
-private class DayScore(val dayStart: Long, val net: Int, val full: Boolean)
-
-private class WeekDay(
-    val dayStart: Long,
-    val slices: List<DayReport.CatSlice>,
-    val strip: List<DayReport.Segment>,
-)
-
-/**
- * Цвет дельты: лучше — зелёный, хуже — красный, ноль или «не про лучше» —
- * [neutral]. Обычная функция, не composable: её зовут и из локальных
- * помощников, собирающих плитки.
- */
-private fun deltaColor(diff: Long, higherIsBetter: Boolean?, neutral: Color): Color = when {
-    diff == 0L || higherIsBetter == null -> neutral
-    (diff > 0L) == higherIsBetter -> GOOD
-    else -> BAD
-}
-
-/** «8 123» — тысячи тонким пробелом, без локали и её сюрпризов. */
-private fun thousands(n: Int): String =
-    n.toString().reversed().chunked(3).joinToString("\u2009").reversed()
-
-/** Цвета видов спорта — те же оттенки, что у строк тренировок во вкладке «Тело». */
-@Composable
-private fun sportInk(type: String): Color {
-    val hue = when (type) {
-        "Run", "TrailRun", "VirtualRun" -> 20f
-        "Ride", "VirtualRide", "GravelRide", "MountainBikeRide" -> 200f
-        "WeightTraining", "Workout", "Crossfit", "HIIT" -> 350f
-        "Walk", "Hike" -> 100f
-        "Swim" -> 185f
-        else -> 265f
-    }
-    return Color.hsv(hue, 0.55f, 0.92f)
+    val workMin: Double get() = cumulative.workDay.sum()
+    val sysMin: Double get() = cumulative.sysDay.sum()
 }
 
 @Composable
 internal fun ReportTab(app: PravkaApp) {
     val context = LocalContext.current
     val entries by app.zasechkaStore.entriesFlow.collectAsState()
-    val categories by app.zasechkaStore.categoriesFlow.collectAsState()
     val phoneDays by app.phoneStore.daysFlow.collectAsState()
-    val immersive by app.phoneStore.immersiveFlow.collectAsState()
-    val offApps by app.phoneStore.offFlow.collectAsState()
-    val audioApps by app.phoneStore.audioFlow.collectAsState()
     val labels by app.phoneStore.labelsFlow.collectAsState()
     val meals by app.foodStore.mealsFlow.collectAsState()
     val health by app.sportStore.healthFlow.collectAsState()
     val workouts by app.sportStore.workoutsFlow.collectAsState()
+    val planDays by app.planStore.daysFlow.collectAsState()
     val gtg by app.strengthStore.gtgFlow.collectAsState()
     val sessions by app.strengthStore.sessionsFlow.collectAsState()
-    val todoistTasks by app.todoistStore.tasksFlow.collectAsState()
-    // Дела на сервере или Todoist — сроки открытых дел для строки «на сегодня».
-    val onDelaServer by app.delaServer.collectAsState()
-    val delaSnap by app.delaStore.view.collectAsState()
-    val dueDates = if (onDelaServer) delaSnap.tasks.values.filter { it.open }.map { it.dueDate } else todoistTasks.map { it.due }
-    val kcalTarget by app.settings.foodKcalFlow.collectAsState(initial = 0)
-    val proteinTarget by app.settings.foodProteinFlow.collectAsState(initial = 0)
-    val fatTarget by app.settings.foodFatFlow.collectAsState(initial = 0)
-    val carbsTarget by app.settings.foodCarbsFlow.collectAsState(initial = 0)
+    val money by app.moneyStore.stateFlow.collectAsState()
+    val proteinGoal by app.settings.foodProteinFlow.collectAsState(initial = 0)
     val goalWeight by app.settings.goalWeightFlow.collectAsState(initial = 0)
-
-    var costs by remember { mutableStateOf<Map<String, Double>>(emptyMap()) }
-    var dictations by remember { mutableStateOf<Map<String, Pair<Int, Long>>>(emptyMap()) }
     var usageGranted by remember { mutableStateOf(PhoneSweeper.hasUsageAccess(context)) }
 
-    // Сторы поднимаются лениво: первый читатель и грузит. Ошибка любого из них
-    // не должна валить экран — отчёт покажет то, что есть.
+    // Сторы поднимаются лениво: первый читатель и грузит. Ошибка любого из
+    // них не валит экран — статистика покажет то, что есть.
     LaunchedEffect(Unit) {
         runCatching { app.zasechkaStore.all() }
         runCatching { app.foodStore.load() }
         runCatching { app.sportStore.load() }
+        runCatching { app.planStore.load() }
         runCatching { app.strengthStore.load() }
-        runCatching { app.todoistStore.load() }
-        runCatching { app.delaStore.load() }
+        runCatching { app.moneyStore.load() }
         runCatching { app.phoneStore.trackedApps() }
         usageGranted = PhoneSweeper.hasUsageAccess(context)
         if (usageGranted) runCatching { app.phoneSweeper.sweep() }
-        costs = runCatching { app.stats.dailyCosts(28).toMap() }.getOrDefault(emptyMap())
-        dictations = withContext(Dispatchers.IO) {
+    }
+
+    var periodIx by remember { mutableIntStateOf(1) }
+    val weeks = PERIODS[periodIx].first
+    val model by produceState<LifeModel?>(null, entries, phoneDays, meals, health, workouts, planDays, gtg, sessions, money, proteinGoal, weeks) {
+        value = withContext(Dispatchers.Default) {
             runCatching {
-                app.transcriptionLog.readLast(3000)
-                    .groupBy { it.ts.take(10) }
-                    .mapValues { (_, list) -> list.size to list.sumOf { it.audioMs } }
-            }.getOrDefault(emptyMap())
+                buildModel(app, weeks, entries, phoneDays, meals, health, workouts, planDays, gtg, sessions, money.entries, proteinGoal)
+            }.getOrNull()
         }
     }
 
-    var dayOffset by remember { mutableStateOf(0) }
-    var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(60_000)
-            now = System.currentTimeMillis()
-        }
-    }
-    val dayStart = remember(dayOffset) { reportDayStart(dayOffset) }
-    val isToday = dayOffset == 0
-    val dateKey = isoOf(dayStart)
-    val refStart = dayStart - 7 * DAY
-    val refKey = isoOf(refStart)
-
-    val worthByCat = remember(categories) { categories.associate { it.name.trim().lowercase() to it.value } }
-    val worthOf: (String) -> Int = { worthByCat[it.trim().lowercase()] ?: 0 }
-
-    // Записи за пять недель до дня включительно — всё, что может задеть его
-    // самого, его базу и 28 дней истории. Дальше все счёты идут по этому пулу.
-    val pool = remember(entries, dayStart) {
-        val from = dayStart - 35 * DAY
-        val to = dayStart + DAY
-        entries.filter { it.start < to && (it.open || it.end > from) }
-    }
-    val window = DayReport.dayWindow(dayStart, now)
-    val frame = remember(pool, window, worthByCat) { frameOf(pool, dayStart, window, now, worthOf) }
-    // Тот же день недели неделю назад, обрезанный до того же часа.
-    val refFrame = remember(pool, window, worthByCat) {
-        frameOf(pool, refStart, window.shifted(7), now, worthOf)
-    }
-    val yesterdayNet = remember(pool, window, worthByCat) {
-        DayReport.balance(pool, window.shifted(1), now, worthOf).net
-    }
-    // Балл каждого из 28 дней до дня включительно — полные сутки, как в
-    // Засечке; сегодняшний — сколько его прошло.
-    val history = remember(pool, window, worthByCat) {
-        (27 downTo 0).map { k ->
-            val ds = dayStart - k * DAY
-            val w = DayReport.dayWindow(ds, now)
-            DayScore(ds, DayReport.balance(pool, w, now, worthOf).net, w.to >= ds + DAY)
-        }
-    }
-    // Те же 27 дней, обрезанные до этого же часа, — для места и медианы.
-    val sameHour = remember(pool, window, worthByCat) {
-        (1..27).map { k -> DayReport.balance(pool, window.shifted(k), now, worthOf).net }
-    }
-    val weekdayRefs = remember(pool, window, worthByCat) {
-        (1..4).map { k -> DayReport.balance(pool, window.shifted(7 * k), now, worthOf).net }
-    }
-    val weekDays = remember(pool, window, worthByCat) {
-        (6 downTo 0).map { k ->
-            val ds = dayStart - k * DAY
-            WeekDay(ds, DayReport.byCategory(pool, DayReport.dayWindow(ds, now), now, worthOf), DayReport.strip(pool, ds, now))
-        }
-    }
-
-    val tracked = remember(immersive, offApps) { immersive.filterKeys { it !in offApps } }
-    val phone = PhoneDaySummary.of(phoneDays[phoneDayKey(dayStart)], tracked, labels)
-    val refPhone = PhoneDaySummary.of(phoneDays[phoneDayKey(refStart)], tracked, labels)
-    val healthByDate = remember(health) { health.associateBy { it.date } }
-    val todayHealth = healthByDate[dateKey]
-    val refHealth = healthByDate[refKey]
-
-    val listState = rememberLazyListState()
-    // Разворот (DESIGN §12.9): сетка в две колонки — слева день (балл, числа,
-    // из чего сложился, часы, треугольник, сравнение), справа неделя, телефон,
-    // тело, еда, дела и коэффициенты. [side]: 0 — одной лентой.
     val wide = ru.zf.pravka.ui.twoPane()
+    val leftState = rememberLazyListState()
     val rightState = rememberLazyListState()
-    val body: androidx.compose.foundation.lazy.LazyListScope.(Int) -> Unit = { side ->
+    val body: LazyListScope.(Int) -> Unit = { side ->
         val left = side != 2
         val right = side != 1
+        val m = model
         if (left) {
-        // ---- шапка и день ----
-        item {
-            // Название — в общей шапке («Общая статистика»); здесь сразу день.
-            // Один навигатор с Засечкой и Едой (24.09.2026): день словом
-            // сверху, дата под ним — раньше у дальних дней дата стояла дважды,
-            // «вт, 16 сентября» и под ним снова «вт, 16 сентября».
-            val title = when (dayOffset) {
-                0 -> "Сегодня"
-                1 -> "Вчера"
-                else -> reportWeekday.format(Date(dayStart)).replaceFirstChar { it.uppercase() }
+            item {
+                Segments(PERIODS.map { it.second }, periodIx, { periodIx = it })
             }
-            DayNav(
-                title = title,
-                onPrev = { dayOffset += 1 },
-                onNext = if (dayOffset > 0) ({ dayOffset = (dayOffset - 1).coerceAtLeast(0) }) else null,
-                subtitle = (if (dayOffset <= 1) weekdayOf(dayStart) + ", " else "") +
-                    reportDateFormat.format(Date(dayStart)) +
-                    (if (isToday) " · до ${clockOf(now)}" else " · целиком"),
-            )
         }
-
-        // ---- 1. оценка дня ----
-        item {
-            ScoreCard(frame, refFrame, yesterdayNet, sameHour, weekdayRefs, isToday)
-        }
-
-        // ---- 2. сутки в числах ----
-        item {
-            KpiCard(frame, refFrame, phone, refPhone, todayHealth, refHealth, isToday)
-        }
-
-        // ---- 3. из чего сложился день ----
-        item {
-            CompositionCard(frame, pool, now)
-        }
-
-        // ---- 4. день по часам ----
-        item {
-            StripsCard(
-                today = DayReport.strip(pool, dayStart, now),
-                ref = DayReport.strip(pool, refStart, now),
-                refLabel = weekdayOf(refStart) + ", " + reportShortDate.format(Date(refStart)),
-                nowFrac = if (isToday) ((now - dayStart).toFloat() / DAY).coerceIn(0f, 1f) else null,
-            )
-        }
-
-        // ---- 5. треугольник ----
-        item {
-            TriangleCard(frame, refFrame)
-        }
-
-        // ---- 6. против того же дня неделю назад ----
-        item {
-            CompareCard(
-                frame, refFrame, phone, refPhone, todayHealth, refHealth,
-                food = app.foodStore.dayTotal(dateKey), refFood = app.foodStore.dayTotal(refKey),
-                worthOf = worthOf, isToday = isToday, now = now,
-            )
-        }
-
-        }
-        if (right) {
-        // ---- 7. неделя ----
-        item {
-            WeekCard(weekDays, history, dayStart, isToday, now)
-        }
-        item {
-            HistoryCard(history)
-        }
-
-        // ---- 8. телефон ----
-        item {
-            PhoneCard(
-                context = context,
-                usageGranted = usageGranted,
-                onGranted = { usageGranted = it },
-                days = (6 downTo 0).map { k -> dayStart - k * DAY },
-                phoneDays = phoneDays,
-                tracked = tracked,
-                audioApps = audioApps,
-                labels = labels,
-                phone = phone,
-                refPhone = refPhone,
-                awakeMin = frame.awakeMin,
-                isToday = isToday,
-            )
-        }
-
-        // ---- тело ----
-        item {
-            BodyCard(
-                app = app,
-                dayStart = dayStart,
-                dateKey = dateKey,
-                pool = pool,
-                now = now,
-                healthByDate = healthByDate,
-                workouts = workouts,
-                gtgDays = gtg,
-                sessions = sessions,
-                goalWeight = goalWeight,
-                isToday = isToday,
-            )
-        }
-
-        // ---- еда ----
-        item {
-            FoodCard(
-                app, dayStart,
-                kcalTarget = kcalTarget, proteinTarget = proteinTarget, fatTarget = fatTarget, carbsTarget = carbsTarget,
-                isToday = isToday, mealsSize = meals.size, weightKg = app.sportStore.lastWeight(),
-            )
-        }
-
-        // ---- дела и Правка ----
-        item {
-            TasksAppCard(
-                context = context,
-                pool = pool,
-                window = window,
-                dayStart = dayStart,
-                isToday = isToday,
-                now = now,
-                dueDates = dueDates,
-                costs = costs,
-                dictations = dictations,
-            )
-        }
-
-        // ---- 9. коэффициенты ----
-        item {
-            RatiosCard(frame, refFrame, phone, refPhone, isToday)
-        }
+        if (m == null) {
+            if (left) item { LoadingLine() }
+        } else {
+            if (left) {
+                item { PeriodLine(m) }
+                item { HoursCard(m) }
+                item { AverageDayCard(m) }
+                item { BigNumbers(m, usageGranted) }
+                item { WindowCard(m) }
+                item { WeeksCard(m) }
+                item { WorkshopCard(m) }
+            }
+            if (right) {
+                item { WorkCard(m) }
+                item { SportCard(m) }
+                item { BodyCard(m, proteinGoal, goalWeight) }
+                item { FoodCard(m, proteinGoal) }
+                item { MoneyCard(m) }
+                item {
+                    PhoneCard(m, labels, usageGranted) {
+                        runCatching { context.startActivity(Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)) }
+                        usageGranted = PhoneSweeper.hasUsageAccess(context)
+                    }
+                }
+                item { HowToReadCard() }
+            }
         }
     }
     if (wide) {
         Row(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
-            for ((side, st) in listOf(1 to listState, 2 to rightState)) {
+            for ((side, st) in listOf(1 to leftState, 2 to rightState)) {
                 LazyColumn(
                     modifier = Modifier.weight(1f).fillMaxHeight().scrollFade(st),
                     state = st,
@@ -514,1435 +227,1003 @@ internal fun ReportTab(app: PravkaApp) {
         }
     } else {
         LazyColumn(
-            modifier = Modifier.fillMaxSize().scrollFade(listState),
-            state = listState,
+            modifier = Modifier.fillMaxSize().scrollFade(leftState),
+            state = leftState,
             contentPadding = ScreenPad.Padding,
             verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
         ) { body(0) }
     }
 }
 
+private fun buildModel(
+    app: PravkaApp,
+    weeks: Int,
+    entries: List<ru.zf.pravka.data.ZasechkaStore.Entry>,
+    phoneDays: Map<String, ru.zf.pravka.data.PhoneStore.Day>,
+    meals: List<ru.zf.pravka.data.FoodStore.Meal>,
+    health: List<ru.zf.pravka.data.SportStore.Health>,
+    workouts: List<ru.zf.pravka.data.SportStore.Workout>,
+    planDays: List<ru.zf.pravka.data.PlanStore.PlanDay>,
+    gtg: List<ru.zf.pravka.data.StrengthStore.GtgDay>,
+    sessions: List<ru.zf.pravka.data.StrengthStore.Session>,
+    moneyEntries: List<ru.zf.pravka.core.MoneyEntry>,
+    proteinGoal: Int,
+): LifeModel {
+    val zone = ZoneId.systemDefault()
+    val now = System.currentTimeMillis()
+    val today = DayFacts.localDay(now, zone)
+    val (from, to) = LifeStats.period(today, weeks)
+    val days = LifeStats.ribbon(entries, from, to, now, zone)
+    val ws = workouts.map { w ->
+        LifeStats.WorkoutIn(
+            date = DayFacts.localDay(w.start, zone), type = w.type, name = w.name, minutes = w.minutes.toInt(),
+            load = w.load, hr = w.avgHr, km = w.km, paceSec = w.paceSecPerKm, rpe = w.rpe,
+        )
+    }
+    fun inRange(d: LocalDate) = !d.isBefore(from) && !d.isAfter(to)
+    val gtgIn = gtg.mapNotNull { g -> runCatching { LocalDate.parse(g.date) }.getOrNull()?.let { LifeStats.GtgIn(it, g.charged, g.hangSec) } }
+    val healthIn = health.mapNotNull { h ->
+        runCatching { LocalDate.parse(h.date) }.getOrNull()?.let { LifeStats.HealthIn(it, h.sleepHours, h.restingHr, h.steps, h.weightKg) }
+    }
+    val plan = planDays.mapNotNull { p ->
+        runCatching { LocalDate.parse(p.date) }.getOrNull()?.let { LifeStats.PlanIn(it, p.name, p.type, p.charger, p.strength) }
+    }
+    val strength = sessions.mapNotNull { s -> runCatching { LocalDate.parse(s.date) }.getOrNull()?.let { LifeStats.StrengthIn(it, s.block) } }
+    val bjjDates = ws.filter { it.bjj }.map { it.date }.toSet()
+    val family = app.moneyEngine.scope(personal = true, zf = false)
+    val zf = app.moneyEngine.scope(personal = false, zf = true)
+    return LifeModel(
+        from = from,
+        to = to,
+        weeks = weeks,
+        days = days,
+        fullDays = days.values.count { it.full },
+        avgDay = LifeStats.averageDay(days),
+        window = LifeStats.window(days, bjjDates),
+        weekRows = LifeStats.weeks(days, healthIn, from, to),
+        cumulative = LifeStats.cumulative(days.filterValues { it.full }),
+        catMin = LifeStats.categoryMinutes(days.filterValues { it.full }),
+        plan = LifeStats.planFact(plan, ws, gtgIn, strength, from, to),
+        bjj = ws.filter { it.bjj && inRange(it.date) }.sortedBy { it.date },
+        hang = gtgIn.filter { it.hangSec > 0 && inRange(it.date) }.sortedBy { it.date },
+        runs = ws.filter { it.type.contains("run", true) && inRange(it.date) }.sortedBy { it.date },
+        weight = healthIn.filter { it.weightKg > 0 && !it.date.isBefore(today.minusDays(90)) }.sortedBy { it.date }.map { it.date to it.weightKg },
+        food = LifeStats.food(meals, from, to, proteinGoal, zone),
+        phone = LifeStats.phone(phoneDays, from, to, furniture = ::isFurniturePkg),
+        money = LifeStats.money(moneyEntries, today, MONEY_MONTHS, family, zf),
+    )
+}
+
 // ---------------------------------------------------------------------------
-// 1. Оценка дня
+// Форматы
+// ---------------------------------------------------------------------------
+
+private fun f1(v: Double): String {
+    val r = (v * 10).roundToInt() / 10.0
+    return if (r == r.toLong().toDouble()) r.toLong().toString() else String.format(Locale.US, "%.1f", r).replace('.', ',')
+}
+
+private fun f2(v: Double): String = String.format(Locale.US, "%.2f", v).replace('.', ',').trimEnd('0').trimEnd(',')
+private fun pct(v: Double): String = "${(v * 100).roundToInt()}%"
+private fun mins(v: Double): String = "${v.roundToInt()} мин"
+private fun dm(d: LocalDate): String = "%02d.%02d".format(d.dayOfMonth, d.monthValue)
+private fun rubShort(kop: Long): String {
+    val rub = kop / 100.0
+    return when {
+        kotlin.math.abs(rub) >= 1_000_000 -> f2(rub / 1_000_000) + " млн"
+        kotlin.math.abs(rub) >= 1_000 -> "${(rub / 1000).roundToInt()} тыс."
+        else -> "${rub.roundToInt()} ₽"
+    }
+}
+
+private fun weekRange(monday: LocalDate, from: LocalDate, to: LocalDate): String {
+    val a = if (monday.isBefore(from)) from else monday
+    val b = monday.plusDays(6).let { if (it.isAfter(to)) to else it }
+    return if (a.month == b.month) "${a.dayOfMonth}–${Fmt.dayMonth(b)}" else "${Fmt.dayMonth(a)} — ${Fmt.dayMonth(b)}"
+}
+
+/** Неделя коротко для таблицы: «7–13 сен», «28 сен – 4 окт». */
+private fun weekShort(monday: LocalDate, from: LocalDate, to: LocalDate): String {
+    val a = if (monday.isBefore(from)) from else monday
+    val b = monday.plusDays(6).let { if (it.isAfter(to)) to else it }
+    return if (a.month == b.month) "${a.dayOfMonth}–${Fmt.dayMon(b)}" else "${Fmt.dayMon(a)} – ${Fmt.dayMon(b)}"
+}
+
+@Composable
+private fun Lead(text: String) {
+    Text(text, style = LocalPravkaType.current.body, color = Ink.Text, modifier = Modifier.padding(bottom = 10.dp))
+}
+
+@Composable
+private fun Cap(text: String) {
+    Text(text, style = LocalPravkaType.current.caption, color = Ink.TextMeta, modifier = Modifier.padding(bottom = 6.dp))
+}
+
+@Composable
+private fun SubTitle(text: String) {
+    Text(
+        text,
+        style = LocalPravkaType.current.bodyStrong.copy(fontSize = 16.sp),
+        color = Ink.TextStrong,
+        modifier = Modifier.padding(top = 14.dp, bottom = 8.dp),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Шапка отрезка, средний день по часам, средние сутки, большие числа
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun ScoreCard(
-    frame: Frame,
-    refFrame: Frame,
-    yesterdayNet: Int,
-    sameHour: List<Int>,
-    weekdayRefs: List<Int>,
-    isToday: Boolean,
-) {
-    val b = frame.balance
-    PaperCard(
-        label = "Каким был день",
-        info = "Балл — часы × ценность часа категории, как в Засечке. Сотня — сильный день: " +
-            "восемь часов работы по +8 и час спорта. Место считается среди 27 предыдущих " +
-            "дней, обрезанных как этот.",
-    ) {
-        // Балл крупно (Literata) в краске Засечки — вместо радужной полосы.
-        Text(
-            signed(b.net),
-            style = ru.zf.pravka.ui.LocalPravkaType.current.displayL,
-            color = ru.zf.pravka.ui.pointsColor(b.net),
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "Баланс ${signed(b.net)} = +${b.plus.roundToInt()} и ${b.minus.roundToInt()}",
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-        )
-        val median4 = DayReport.median(weekdayRefs.map { it.toDouble() })
-        val rank = DayReport.rank(b.net.toDouble(), sameHour.map { it.toDouble() })
-        val hour = if (isToday && !frame.full) " к этому часу" else ""
-        Text(
-            "Тот же день недели неделю назад$hour: ${signed(refFrame.balance.net)} · вчера$hour: ${signed(yesterdayNet)}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            "Медиана этого дня недели за четыре недели: " +
-                (median4?.let { signed(it.roundToInt()) } ?: "—") +
-                " · место среди 28 дней$hour: $rank из 28",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+private fun PeriodLine(m: LifeModel) {
+    val total = LifeStats.daysBetween(m.from, m.to) + 1
+    PaperHint(
+        "С ${Fmt.dayMonth(m.from)} по ${Fmt.dayMonth(m.to)}: $total дней, в счёте ${m.fullDays} — " +
+            "сутки, где лента закрыла хотя бы 20 часов. Сегодняшний неполный день не учитывается.",
+    )
+}
+
+@Composable
+private fun HoursCard(m: LifeModel) {
+    var pick by remember { mutableStateOf(DayPick.WEEKDAYS) }
+    val profile = remember(m, pick) { LifeStats.hourProfile(m.days, pick) }
+    val weekendish = pick == DayPick.WEEKENDS || pick == DayPick.SAT || pick == DayPick.SUN
+    PaperCard(label = "Средний день по часам") {
+        DayPickChips(pick) { pick = it }
         Spacer(Modifier.height(10.dp))
-        PaperHint("Этот день недели, пять недель подряд$hour")
-        val values = (weekdayRefs.reversed() + b.net).map { it.toFloat() }
-        SignedColumns(
-            values = values,
-            colorOf = { scoreColor(it, 100f) },
-            labels = listOf("−4 нед", "−3 нед", "−2 нед", "−1 нед", "этот"),
-            height = 84.dp,
-            hollow = if (frame.full) emptySet() else setOf(4),
-            valueText = { signed(it.roundToInt()) },
+        if (profile.empty) {
+            PaperHint("За этот отрезок нет полных суток: ${pick.many}.")
+            return@PaperCard
+        }
+        Cap(
+            "${pick.many.replaceFirstChar { it.uppercase() }} в среднем, " +
+                plural(profile.days, "сутки", "суток", "суток") + ": сколько минут каждого часа ушло на что." +
+                if (!weekendish) " Обведено окно 10–17." else "",
+        )
+        HoursChart(
+            profile,
+            window = if (weekendish) null else LifeStats.WINDOW_FROM_H until LifeStats.WINDOW_TO_H,
+        )
+        LifeLegend(HOURS_LEGEND)
+    }
+}
+
+/** Легенда часов — в порядке отчёта: сначала то, что ищешь глазами. */
+internal val HOURS_LEGEND: List<Pair<String, Color>> = listOf(
+    Group.SOLO, Group.WORK, Group.SYS, Group.LOSS, Group.LIFE, Group.FAMILY, Group.SPORT, Group.SLEEP, Group.GAP, Group.OTHER,
+).map { it.label to LifeInk.of(it) }
+
+/** Выбор дней: все, будни, выходные, любой день недели. */
+@Composable
+internal fun DayPickChips(pick: DayPick, onPick: (DayPick) -> Unit) {
+    ChipRow {
+        DayPick.entries.forEach { p -> PaperChip(p.chip, p == pick, { onPick(p) }) }
+    }
+}
+
+@Composable
+private fun AverageDayCard(m: LifeModel) {
+    if (m.avgDay.isEmpty()) return
+    PaperCard(label = "Средние сутки, все " + plural(m.fullDays, "день", "дня", "дней")) {
+        ShareBar(m.avgDay.map { it.hours.toFloat() to LifeInk.of(it.color) })
+        ValueList(m.avgDay.map { Triple(it.label, f1(it.hours) + " ч", LifeInk.of(it.color)) })
+    }
+}
+
+@Composable
+private fun BigNumbers(m: LifeModel, phoneOn: Boolean) {
+    PaperCard {
+        val weeksWord = plural(m.weeks, "неделю", "недели", "недель")
+        Row(Modifier.fillMaxWidth()) {
+            BigStat("${(m.workMin / 60).roundToInt()} ч", "работы за $weeksWord, во всех рабочих категориях", Modifier.weight(1f).padding(end = 8.dp))
+            BigStat("${(m.sysMin / 60).roundToInt()} ч", "мастерской: Правка, Засечка, настройка", Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(14.dp))
+        Row(Modifier.fillMaxWidth()) {
+            BigStat(m.plan.share?.let { pct(it) } ?: "—", "исполнения тренировочного плана", Modifier.weight(1f).padding(end = 8.dp))
+            BigStat(
+                if (phoneOn && m.phone.days > 0) "${f1(m.phone.screenMin / 60)} ч" else "—",
+                "экрана телефона в день",
+                Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Окно будней 10–17
+// ---------------------------------------------------------------------------
+
+private val ACCUSATIVE = mapOf("работа" to "работу", "еда" to "еду", "мастерская" to "мастерскую", "семья" to "семью")
+
+@Composable
+private fun WindowCard(m: LifeModel) {
+    val w = m.window
+    if (w.days == 0) return
+    PaperCard(label = "Окно: будни, дома, с 10 до 17") {
+        val gap = w.rows.firstOrNull { it.color == Group.GAP }
+        val spent = w.rows.filter { it.color != Group.GAP }.take(8)
+        Lead(
+            "В семичасовом окне будней в среднем " +
+                spent.mapIndexed { i, r ->
+                    val what = ACCUSATIVE[r.label] ?: r.label
+                    if (i == 0) "${r.minutes.roundToInt()} минут уходит на $what" else "${r.minutes.roundToInt()} на $what"
+                }.joinToString(", ") +
+                (gap?.let { ", ${it.minutes.roundToInt()} остаются неразмеченными" } ?: "") + ".",
+        )
+        HBars(
+            w.rows.take(10).map { r ->
+                HBar(r.label, mins(r.minutes), (r.minutes / (w.rows.first().minutes.coerceAtLeast(1.0))).toFloat(), LifeInk.of(r.color))
+            },
+        )
+        SubTitle("Все " + plural(w.days, "будний день", "будних дня", "будних дней"))
+        WeekdayCalendar(w, m.from, m.to)
+        SubTitle("Доля дней с соло")
+        val home = w.home
+        val out = w.outside
+        val bjj = w.bjjDays
+        fun row(label: String, list: List<LifeStats.WeekdayMark>): HBar {
+            val s = list.count { it.solo }
+            val share = if (list.isEmpty()) 0.0 else s.toDouble() / list.size
+            return HBar("$label: $s из ${list.size}", if (list.isEmpty()) "—" else pct(share), share.toFloat(), LifeInk.Solo)
+        }
+        HBars(
+            listOfNotNull(
+                home.takeIf { it.isNotEmpty() }?.let { row("Весь день дома", it) },
+                out.takeIf { it.isNotEmpty() }?.let { row("С выходом из дома", it) },
+                bjj.takeIf { it.isNotEmpty() }?.let { row("Дни борьбы", it) },
+            ),
+        )
+        if (home.isNotEmpty() && out.isNotEmpty()) {
+            val sh = home.count { it.solo }.toDouble() / home.size
+            val so = out.count { it.solo }.toDouble() / out.size
+            Spacer(Modifier.height(12.dp))
+            WhyNote(
+                "Что видно",
+                when {
+                    sh - so >= 0.2 -> "Соло в ${pct(sh)} будних дней дома и в ${pct(so)} дней с выходом из дома между 10 и 16. " +
+                        "Связь может быть и обратной: встречи переставляются, чтобы остаться дома."
+                    so - sh >= 0.2 -> "Соло чаще в дни с выходом из дома: ${pct(so)} против ${pct(sh)} дома."
+                    else -> "На этом отрезке выход из дома почти не меняет долю дней с соло: ${pct(sh)} дома, ${pct(so)} с выходом."
+                },
+            )
+        }
+    }
+}
+
+private val dashed = PathEffect.dashPathEffect(floatArrayOf(8f, 6f))
+
+@Composable
+private fun WeekdayCalendar(w: LifeStats.WindowStats, from: LocalDate, to: LocalDate) {
+    val t = LocalPravkaType.current
+    var info by remember(w) { mutableStateOf<String?>(null) }
+    val byDate = w.marks.associateBy { it.date }
+    // Недели — от первого будня ленты до последнего: пустые недели до начала ленты не рисуются.
+    val first = w.marks.minOfOrNull { it.date } ?: from
+    val last = w.marks.maxOfOrNull { it.date } ?: to
+    val firstMonday = first.minusDays((first.dayOfWeek.value - 1).toLong())
+    val rows = generateSequence(firstMonday) { it.plusDays(7) }.takeWhile { !it.isAfter(last) }.toList()
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("Пн", "Вт", "Ср", "Чт", "Пт").forEach {
+                Text(it, style = t.caption, color = Ink.TextMeta, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            }
+        }
+        for (monday in rows) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (k in 0 until 5) {
+                    val d = monday.plusDays(k.toLong())
+                    val mark = byDate[d]
+                    Box(Modifier.weight(1f).aspectRatio(1.2f)) {
+                        if (mark != null) CalendarCell(mark) { info = calendarInfo(mark) }
+                    }
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            KeyBox(solid = true, fill = null)
+            Text("выходил между 10 и 16", style = t.caption, color = Ink.TextMeta)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            KeyBox(solid = false, fill = null)
+            Text("весь день дома", style = t.caption, color = Ink.TextMeta)
+            KeyBox(solid = false, fill = LifeInk.Solo.copy(alpha = 0.30f))
+            Text("было соло", style = t.caption, color = Ink.TextMeta)
+            Text("BJJ", style = t.caption.copy(fontWeight = FontWeight.Bold), color = LifeInk.Sport)
+            Text("борьба", style = t.caption, color = Ink.TextMeta)
+        }
+        Text(info ?: "Нажми на день — детали здесь.", style = t.body, color = if (info == null) Ink.TextMeta else Ink.Text, modifier = Modifier.padding(top = 6.dp))
+    }
+}
+
+private fun calendarInfo(m: LifeStats.WeekdayMark): String =
+    "${Fmt.dayMonth(m.date)}: " + (if (m.out) "выходил из дома в середине дня" else "весь день дома") +
+        (if (m.meetings > 0) ", встреч ${m.meetings}" else "") +
+        (if (m.bjj) ", борьба" else "") +
+        (if (m.solo) ", было соло" else "") +
+        ", работа в ленте ${m.workMin} мин."
+
+@Composable
+private fun KeyBox(solid: Boolean, fill: Color?) {
+    Box(
+        Modifier
+            .padding(top = 2.dp)
+            .height(13.dp)
+            .aspectRatio(1.25f)
+            .clip(RoundedCornerShape(4.dp))
+            .background(fill ?: Color.Transparent)
+            .drawBehind {
+                drawRoundRect(
+                    if (solid) Ink.TextStrong else Ink.TextMeta,
+                    cornerRadius = CornerRadius(4.dp.toPx()),
+                    style = Stroke(1.5.dp.toPx(), pathEffect = if (solid) null else dashed),
+                )
+            },
+    )
+}
+
+@Composable
+private fun CalendarCell(mark: LifeStats.WeekdayMark, onClick: () -> Unit) {
+    val t = LocalPravkaType.current
+    Box(
+        Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(9.dp))
+            .background(if (mark.solo) LifeInk.Solo.copy(alpha = 0.30f) else Ink.Text.copy(alpha = 0.04f))
+            .drawBehind {
+                drawRoundRect(
+                    if (mark.out) Ink.TextStrong else Ink.TextMeta,
+                    cornerRadius = CornerRadius(9.dp.toPx()),
+                    style = Stroke(2.dp.toPx(), pathEffect = if (mark.out) null else dashed),
+                )
+            }
+            .tap(onClick, label = calendarInfo(mark))
+            .padding(horizontal = 6.dp, vertical = 4.dp),
+    ) {
+        Text("${mark.date.dayOfMonth}", style = t.label, color = Ink.TextStrong)
+        if (mark.bjj) {
+            Text(
+                "BJJ",
+                style = t.caption.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                color = LifeInk.Sport,
+                modifier = Modifier.align(Alignment.BottomEnd),
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Недели
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun WeeksCard(m: LifeModel) {
+    val ws = m.weekRows.filter { it.days > 0 }
+    if (ws.size < 2) return
+    PaperCard(label = "Недели") {
+        Cap("Минут в день, средние по неделям. Нажми на название — включить или выключить линию.")
+        var series by remember(ws) {
+            mutableStateOf(
+                LifeStats.Line.entries.map { line ->
+                    LifeSeries(
+                        line.label,
+                        if (line == LifeStats.Line.MARIANNA) LifeInk.Other else LifeInk.of(line.color),
+                        ws.map { it.perDay.getValue(line).toFloat() },
+                        hidden = line == LifeStats.Line.FAMILY || line == LifeStats.Line.MARIANNA,
+                    )
+                },
+            )
+        }
+        SeriesToggles(series, { i -> series = series.mapIndexed { k, s -> if (k == i) s.copy(hidden = !s.hidden) else s } })
+        LinesChart(
+            labels = ws.map { dm(it.monday) },
+            series = series,
+            tip = { i ->
+                val w = ws[i]
+                Readout(
+                    weekRange(w.monday, m.from, m.to),
+                    series.filter { !it.hidden }.map { s -> ReadoutRow(s.color, "${s.name} ${s.data[i]?.roundToInt() ?: 0} мин") } +
+                        listOfNotNull(
+                            ReadoutRow(null, "встреч ${w.meetings}"),
+                            w.sleepH?.let { ReadoutRow(null, "сон ${f1(it)} ч") },
+                        ),
+                )
+            },
+            height = 230.dp,
+        )
+        // Качели: неделя с наибольшей работой и неделя с наибольшей мастерской.
+        val maxWork = ws.maxBy { it.perDay.getValue(LifeStats.Line.WORK) }
+        val maxSys = ws.maxBy { it.perDay.getValue(LifeStats.Line.SYS) }
+        Spacer(Modifier.height(10.dp))
+        WhyNote(
+            "Что видно",
+            "Больше всего работы — неделя ${weekRange(maxWork.monday, m.from, m.to)}: " +
+                "${maxWork.perDay.getValue(LifeStats.Line.WORK).roundToInt()} мин в день, встреч ${maxWork.meetings}" +
+                (maxWork.sleepH?.let { ", сон ${f1(it)} ч, ночей короче шести часов — ${maxWork.shortNights}" } ?: "") +
+                ", соло ${maxWork.perDay.getValue(LifeStats.Line.SOLO).roundToInt()} мин в день. " +
+                "Больше всего мастерской — ${weekRange(maxSys.monday, m.from, m.to)}: " +
+                "${maxSys.perDay.getValue(LifeStats.Line.SYS).roundToInt()} мин в день, соло " +
+                "${maxSys.perDay.getValue(LifeStats.Line.SOLO).roundToInt()}, работа ${maxSys.perDay.getValue(LifeStats.Line.WORK).roundToInt()}.",
+        )
+        SubTitle("Цена в теле")
+        BodyTable(ws, m)
+    }
+}
+
+@Composable
+private fun BodyTable(ws: List<LifeStats.Week>, m: LifeModel) {
+    val t = LocalPravkaType.current
+    val rhrAvg = ws.mapNotNull { it.rhr }.takeIf { it.isNotEmpty() }?.average()
+    @Composable
+    fun androidx.compose.foundation.layout.RowScope.cell(text: String, weight: Float, hot: Boolean = false, head: Boolean = false) {
+        Text(
+            text,
+            style = if (head) t.caption else t.label.copy(fontWeight = if (hot) FontWeight.Bold else FontWeight.Normal),
+            color = when {
+                head -> Ink.TextMeta
+                hot -> LifeInk.Warn
+                else -> Ink.Text
+            },
+            modifier = Modifier.weight(weight),
+            maxLines = 1,
+        )
+    }
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            cell("Неделя", 1.6f, head = true)
+            cell("Сон, ч", 0.8f, head = true)
+            cell("Ночи < 6 ч", 1f, head = true)
+            cell("Пульс", 0.8f, head = true)
+            cell("Шаги", 0.9f, head = true)
+        }
+        ws.forEach { w ->
+            Hairline(alpha = 0.07f)
+            Row(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+                cell(weekShort(w.monday, m.from, m.to), 1.6f)
+                cell(w.sleepH?.let { f1(it) } ?: "—", 0.8f, hot = (w.sleepH ?: 9.0) < 6.2)
+                cell(if (w.nights > 0) "${w.shortNights} из ${w.nights}" else "—", 1f, hot = w.shortNights >= 3)
+                cell(w.rhr?.let { f1(it) } ?: "—", 0.8f, hot = rhrAvg != null && (w.rhr ?: 0.0) >= rhrAvg + 1.5)
+                cell(w.steps?.let { Fmt.num(it.roundToInt()) } ?: "—", 0.9f)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Мастерская и работа
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun WorkshopCard(m: LifeModel) {
+    val c = m.cumulative
+    if (c.dates.size < 2) return
+    PaperCard(label = "Мастерская против работы") {
+        Lead("За отрезок ${f1(m.workMin / 60)} ч работы и ${f1(m.sysMin / 60)} ч мастерской (Систематизация: Правка, Засечка, настройка).")
+        Cap("Накопительно, часов. Подсвечена последняя неделя.")
+        val work = c.workHours
+        val sys = c.sysHours
+        LinesChart(
+            labels = c.dates.map { dm(it) },
+            series = listOf(
+                LifeSeries("Работа", LifeInk.Work, work.map { it.toFloat() }),
+                LifeSeries("Мастерская", LifeInk.Sys, sys.map { it.toFloat() }),
+            ),
+            tip = { i ->
+                Readout(
+                    Fmt.dayMonth(c.dates[i]),
+                    listOf(
+                        ReadoutRow(LifeInk.Work, "работа ${f1(work[i])} ч (+${c.workDay[i].roundToInt()} мин)"),
+                        ReadoutRow(LifeInk.Sys, "мастерская ${f1(sys[i])} ч (+${c.sysDay[i].roundToInt()} мин)"),
+                    ),
+                )
+            },
+            dots = false,
+            endLabels = true,
+            endFmt = { f1(it.toDouble()) },
+            bands = listOf((c.dates.size - 7).coerceAtLeast(0)..c.dates.lastIndex),
+            hint = "Нажми на день — числа ниже.",
+        )
+        val ws = m.weekRows.filter { it.days > 0 }
+        if (ws.isNotEmpty()) {
+            SubTitle("Сколько записей в ленте в день")
+            BarsChart(
+                labels = ws.map { dm(it.monday) },
+                values = ws.map { it.entriesPerDay.toFloat() },
+                colorOf = { _, _ -> LifeInk.Sleep },
+                tip = { i ->
+                    val w = ws[i]
+                    Readout(
+                        weekRange(w.monday, m.from, m.to),
+                        listOf(
+                            ReadoutRow(null, "записей в день ${f1(w.entriesPerDay)}"),
+                            ReadoutRow(null, "средний блок ${w.avgBlockMin.roundToInt()} мин"),
+                            ReadoutRow(null, "не размечено ${f1(w.gapShare * 100)}%"),
+                        ),
+                    )
+                },
+                valueFmt = { f1(it.toDouble()) },
+            )
+            val a = ws.first()
+            val b = ws.last()
+            if (a !== b) {
+                PaperHint(
+                    "Неделя ${weekRange(a.monday, m.from, m.to)}: ${f1(a.entriesPerDay)} записей в день, средний блок " +
+                        "${a.avgBlockMin.roundToInt()} мин, неразмеченного ${f1(a.gapShare * 100)}%. Последняя: ${f1(b.entriesPerDay)}, " +
+                        "блок ${b.avgBlockMin.roundToInt()} мин, неразмеченного ${f1(b.gapShare * 100)}%. Меньше записей — длиннее блоки и грубее измерение.",
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkCard(m: LifeModel) {
+    val ws = m.weekRows.filter { it.days > 0 }
+    if (ws.isEmpty()) return
+    PaperCard(label = "Работа") {
+        val total = ws.sumOf { it.meetings }
+        val peak = ws.maxBy { it.meetings }
+        val current = (m.catMin.entries.filter { it.key.trim().lowercase().startsWith("работа: текущ") }.sumOf { it.value }) / m.fullDays.coerceAtLeast(1)
+        val lead = m.catMin.entries.filter { it.key.trim().lowercase().startsWith("работа: привлеч") }.sumOf { it.value }
+        Lead(
+            plural(total, "встреча", "встречи", "встреч") + " за отрезок" +
+                (if (peak.meetings > 0) ", пик ${peak.meetings} в неделю ${weekRange(peak.monday, m.from, m.to)}" else "") +
+                ". Текущая работа руками — ${current.roundToInt()} мин в день, в «привлечение» попало ${Fmt.dur(lead.roundToInt())}.",
+        )
+        Cap("Рабочих встреч и созвонов в неделю (блоки «Работа: звонки» от 10 минут).")
+        BarsChart(
+            labels = ws.map { dm(it.monday) },
+            values = ws.map { it.meetings.toFloat() },
+            colorOf = { _, _ -> LifeInk.Work },
+            tip = { i ->
+                val w = ws[i]
+                Readout(
+                    weekRange(w.monday, m.from, m.to),
+                    listOf(ReadoutRow(LifeInk.Work, "встреч ${w.meetings}"), ReadoutRow(null, "работа в ленте ${w.perDay.getValue(LifeStats.Line.WORK).roundToInt()} мин в день")),
+                )
+            },
+            valueFmt = { it.roundToInt().toString() },
+            height = 170.dp,
         )
     }
 }
 
 // ---------------------------------------------------------------------------
-// 2. Сутки в числах
+// Спорт, тело, еда
 // ---------------------------------------------------------------------------
 
-private class Kpi(
-    val label: String,
-    val value: String,
-    val delta: String?,
-    val deltaColor: Color,
-    val hint: String?,
+@Composable
+private fun SportCard(m: LifeModel) {
+    val t = LocalPravkaType.current
+    PaperCard(label = "Спорт: план и факт") {
+        val p = m.plan
+        if (p.planned > 0) {
+            Lead(plural(p.planned, "пункт", "пункта", "пунктов") + " в плане, сделано ${p.done} — ${pct(p.share ?: 0.0)}.")
+            HBars(
+                p.rows.map { r -> HBar(r.kind.label, "${r.done} из ${r.planned}", r.done.toFloat() / r.planned, LifeInk.Sport) },
+            )
+            if (p.bjjUnplanned > 0) {
+                PaperHint("Борьбы без плана: ещё ${p.bjjUnplanned}.")
+            }
+        } else {
+            PaperHint("Плана из intervals за этот отрезок нет — телефон хранит календарь на 40 дней назад.")
+        }
+        if (m.bjj.isNotEmpty()) {
+            SubTitle("BJJ: нагрузка по тренировкам")
+            val perWeek = m.bjj.size / (m.weeks.toDouble())
+            Cap(plural(m.bjj.size, "тренировка", "тренировки", "тренировок") + " за отрезок, ${f1(perWeek)} в неделю.")
+            BarsChart(
+                labels = m.bjj.map { dm(it.date) },
+                values = m.bjj.map { it.load.toFloat() },
+                colorOf = { _, _ -> LifeInk.Sport },
+                tip = { i ->
+                    val w = m.bjj[i]
+                    Readout(Fmt.dayMonth(w.date), listOf(ReadoutRow(LifeInk.Sport, "нагрузка ${w.load}"), ReadoutRow(null, "пульс ${w.hr}"), ReadoutRow(null, "${w.minutes} мин")))
+                },
+                valueFmt = { it.roundToInt().toString() },
+                height = 170.dp,
+            )
+        }
+        if (m.hang.isNotEmpty()) {
+            SubTitle("Вис на турнике, секунд")
+            BarsChart(
+                labels = m.hang.map { dm(it.date) },
+                values = m.hang.map { it.hangSec.toFloat() },
+                colorOf = { _, _ -> LifeInk.Family },
+                tip = { i -> Readout(Fmt.dayMonth(m.hang[i].date), listOf(ReadoutRow(LifeInk.Family, "вис ${m.hang[i].hangSec} с"))) },
+                valueFmt = { it.roundToInt().toString() },
+                height = 160.dp,
+            )
+        }
+        if (m.runs.isNotEmpty()) {
+            SubTitle("Пробежки")
+            Column(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    listOf("Дата" to 1f, "Км" to 0.8f, "Темп" to 0.9f, "Пульс" to 0.8f, "RPE" to 0.6f).forEach { (h, w) ->
+                        Text(h, style = t.caption, color = Ink.TextMeta, modifier = Modifier.weight(w))
+                    }
+                }
+                m.runs.forEach { r ->
+                    Hairline(alpha = 0.07f)
+                    Row(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+                        Text(dm(r.date), style = t.label, color = Ink.Text, modifier = Modifier.weight(1f))
+                        Text(f1(r.km), style = t.label, color = Ink.Text, modifier = Modifier.weight(0.8f))
+                        Text(if (r.paceSec > 0) "%d:%02d".format(r.paceSec / 60, r.paceSec % 60) else "—", style = t.label, color = Ink.Text, modifier = Modifier.weight(0.9f))
+                        Text(if (r.hr > 0) "${r.hr}" else "—", style = t.label, color = Ink.Text, modifier = Modifier.weight(0.8f))
+                        Text(if (r.rpe > 0) "${r.rpe}" else "—", style = t.label, color = Ink.Text, modifier = Modifier.weight(0.6f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BodyCard(m: LifeModel, proteinGoal: Int, goalWeight: Int) {
+    val f = m.food
+    if (m.weight.isEmpty() && f.recordedDays == 0) return
+    PaperCard(label = "Тело") {
+        if (m.weight.size >= 2) {
+            val first = m.weight.first()
+            val last = m.weight.last()
+            Lead(
+                "Вес ${f1(last.second)} кг на ${Fmt.dayMonth(last.first)}; за три месяца от ${f1(m.weight.minOf { it.second })} " +
+                    "до ${f1(m.weight.maxOf { it.second })}, с ${Fmt.dayMonth(first.first)} " +
+                    (if (last.second <= first.second) "минус " else "плюс ") + "${f1(kotlin.math.abs(last.second - first.second))} кг" +
+                    (if (goalWeight > 0) ". Цель — $goalWeight кг." else "."),
+            )
+            val lo = m.weight.minOf { it.second }.toFloat()
+            val hi = m.weight.maxOf { it.second }.toFloat()
+            LinesChart(
+                labels = m.weight.map { dm(it.first) },
+                series = listOf(LifeSeries("Вес", LifeInk.Sleep, m.weight.map { it.second.toFloat() })),
+                tip = { i -> Readout(Fmt.dayMonth(m.weight[i].first), listOf(ReadoutRow(LifeInk.Sleep, "${f1(m.weight[i].second)} кг"))) },
+                yMin = kotlin.math.floor(lo - 0.5f),
+                yMax = kotlin.math.ceil(hi + 0.5f),
+                endLabels = true,
+                endFmt = { f1(it.toDouble()) + " кг" },
+                height = 200.dp,
+            )
+        }
+        if (f.recordedDays > 0) {
+            SubTitle("Белок по дням, г")
+            val goal = proteinGoal.takeIf { it > 0 }
+            Cap(if (goal != null) "Линия — цель $goal г, ниже неё тёплым." else "Цели белка в настройках Еды нет.")
+            BarsChart(
+                labels = f.days.map { dm(it.date) },
+                values = f.days.map { d -> if (d.kcal > 0 || d.protein > 0) d.protein.toFloat() else null },
+                colorOf = { _, v -> if (goal != null && v < goal) LifeInk.Warn else LifeInk.Family },
+                tip = { i ->
+                    val d = f.days[i]
+                    if (d.kcal == 0 && d.protein == 0) Readout(Fmt.dayMonth(d.date), listOf(ReadoutRow(null, "еда не записана")))
+                    else Readout(Fmt.dayMonth(d.date), listOf(ReadoutRow(LifeInk.Family, "белок ${d.protein} г"), ReadoutRow(null, "${Fmt.num(d.kcal)} ккал")))
+                },
+                refs = goal?.let { listOf(RefLine(it.toFloat(), "$it г")) } ?: emptyList(),
+                valueFmt = null,
+                fill = 0.72f,
+                height = 200.dp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FoodCard(m: LifeModel, proteinGoal: Int) {
+    val f = m.food
+    if (f.recordedDays == 0) return
+    val t = LocalPravkaType.current
+    PaperCard(label = "Еда") {
+        val r = f.recipe
+        if (r != null) {
+            Text(
+                (if (r.kcalShare >= 0.35 || r.proteinShare >= 0.4) "Еда держится на одном рецепте: " else "Главный рецепт: ") +
+                    "${pct(r.kcalShare)} калорий и ${pct(r.proteinShare)} белка",
+                style = t.titleS.copy(fontSize = 20.sp, lineHeight = 25.sp),
+                color = Ink.TextStrong,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            Lead("Около ${Fmt.num(r.kcal)} ккал и ${r.protein} г белка за раз, в ${r.days} днях из ${f.recordedDays}.")
+            ChipRow {
+                r.items.forEach { item ->
+                    Text(
+                        item.name + if (item.grams > 0) " ${item.grams} г" else "",
+                        style = t.label,
+                        color = Ink.Text,
+                        modifier = Modifier.clip(RoundedCornerShape(50)).background(Ink.Text.copy(alpha = 0.07f)).padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+        Row(Modifier.fillMaxWidth()) {
+            BigStat(
+                "${f.avgProtein.roundToInt()} г",
+                "белка в среднем" + if (proteinGoal > 0) ", $proteinGoal+ в ${f.proteinGoalDays} днях из ${f.recordedDays}" else "",
+                Modifier.weight(1f).padding(end = 8.dp),
+            )
+            BigStat(Fmt.num(f.avgKcal.roundToInt()), "ккал в среднем по записанному", Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth()) {
+            BigStat("${f.avgFiber.roundToInt()} г", "клетчатки, 30+ только в ${f.fiberDays30} днях", Modifier.weight(1f).padding(end = 8.dp))
+            val wk = f.weekdayKcal
+            val we = f.weekendKcal
+            if (wk != null && we != null && wk > 0) {
+                val d = we / wk - 1
+                BigStat(
+                    (if (d >= 0) "+" else "−") + pct(kotlin.math.abs(d)),
+                    "калорий в выходные: ${Fmt.num(we.roundToInt())} против ${Fmt.num(wk.roundToInt())}",
+                    Modifier.weight(1f),
+                )
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+        }
+        if (r != null) {
+            SubTitle("Калории по дням: рецепт и всё остальное")
+            var stacks by remember(f) {
+                mutableStateOf(
+                    listOf(
+                        LifeSeries("Рецепт", LifeInk.Sys, f.days.map { d -> d.recipeKcal.toFloat().takeIf { d.kcal > 0 } }),
+                        LifeSeries("Всё остальное", LifeInk.Sleep, f.days.map { d -> (d.kcal - d.recipeKcal).toFloat().takeIf { d.kcal > 0 } }),
+                    ),
+                )
+            }
+            SeriesToggles(stacks, { i -> stacks = stacks.mapIndexed { k, s -> if (k == i) s.copy(hidden = !s.hidden) else s } })
+            StackBarsChart(
+                labels = f.days.map { dm(it.date) },
+                stacks = stacks,
+                tip = { i ->
+                    val d = f.days[i]
+                    if (d.kcal == 0) Readout(Fmt.dayMonth(d.date), listOf(ReadoutRow(null, "еда не записана")))
+                    else Readout(
+                        Fmt.dayMonth(d.date),
+                        listOf(
+                            ReadoutRow(LifeInk.Sys, "рецепт ${Fmt.num(d.recipeKcal)} ккал"),
+                            ReadoutRow(LifeInk.Sleep, "остальное ${Fmt.num(d.kcal - d.recipeKcal)} ккал"),
+                            ReadoutRow(null, "белок ${d.protein} г"),
+                        ),
+                    )
+                },
+                fill = 0.74f,
+            )
+        }
+        SubTitle("Белки, жиры, углеводы — доля калорий")
+        val pk = f.avgProtein * 4
+        val fk = f.avgFat * 9
+        val ck = f.avgCarbs * 4
+        val sum = (pk + fk + ck).coerceAtLeast(1.0)
+        ShareBar(listOf(pk.toFloat() to LifeInk.Work, fk.toFloat() to LifeInk.Sys, ck.toFloat() to LifeInk.Family))
+        ValueList(
+            listOf(
+                Triple("Белок ${f.avgProtein.roundToInt()} г", pct(pk / sum), LifeInk.Work),
+                Triple("Жиры ${f.avgFat.roundToInt()} г", pct(fk / sum), LifeInk.Sys),
+                Triple("Углеводы ${f.avgCarbs.roundToInt()} г", pct(ck / sum), LifeInk.Family),
+            ),
+        )
+        if (f.micro.isNotEmpty()) {
+            SubTitle("Вещества, средний процент нормы")
+            Cap("За " + plural(f.microDays, "сутки", "суток", "суток") + " с посчитанными веществами, еда и таблетки вместе. Черта — 100%; у натрия это потолок, а не цель.")
+            HBars(
+                f.micro.map { (n, share) ->
+                    val pctV = (share * 100).roundToInt()
+                    HBar(
+                        if (n.limit) "${n.name}, потолок" else n.name,
+                        "$pctV%",
+                        (share / 3.0).toFloat(),
+                        when {
+                            n.limit -> LifeInk.Loss
+                            share < 0.7 -> LifeInk.Warn
+                            share < 1.0 -> LifeInk.Loss
+                            else -> LifeInk.Family
+                        },
+                    )
+                },
+                marker = 1f / 3f,
+            )
+            val low = f.micro.filter { !it.first.limit && it.second < 0.7 }.map { it.first.name.replaceFirstChar { c -> c.lowercase() } }
+            if (low.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                WhyNote("Что видно", "Ниже 70% нормы: ${low.joinToString(", ")}. Считается по записанному: недописанная еда тянет цифры вниз.")
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Деньги
+// ---------------------------------------------------------------------------
+
+private val MONEY_INKS = mapOf(
+    MoneyCategories.G_HOME to LifeInk.Life,
+    MoneyCategories.G_KIDS to LifeInk.Family,
+    MoneyCategories.G_LIFE to LifeInk.Work,
+    MoneyCategories.G_HEALTH to LifeInk.Sport,
 )
 
 @Composable
-private fun KpiCard(
-    frame: Frame,
-    refFrame: Frame,
-    phone: PhoneDaySummary.Summary,
-    refPhone: PhoneDaySummary.Summary,
-    health: SportStore.Health?,
-    refHealth: SportStore.Health?,
-    isToday: Boolean,
-) {
-    val neutral = MaterialTheme.colorScheme.onSurfaceVariant
-    val partial = isToday && !frame.full
-    val refNote = if (partial) "неделю назад к этому часу" else "неделю назад"
-
-    fun minutesKpi(label: String, cur: Long, ref: Long, higherIsBetter: Boolean?, hint: String? = null): Kpi =
-        Kpi(label, dur(cur), DayReport.delta(cur, ref, "м") + " · $refNote", deltaColor(cur - ref, higherIsBetter, neutral), hint)
-
-    val work = frame.minutes(DayReport::isWork)
-    val refWork = refFrame.minutes(DayReport::isWork)
-    val sport = frame.minutes(DayReport::isSport)
-    val refSport = refFrame.minutes(DayReport::isSport)
-    val family = frame.minutesOf("Семья")
-    val refFamily = refFrame.minutesOf("Семья")
-    val holes = frame.minutes(DayReport::isHole)
-    val refHoles = refFrame.minutes(DayReport::isHole)
-
-    // Сон: ночь из ленты; пока лента про сон молчит — часы (Garmin через intervals).
-    val sleepMin = DayReport.msToMin(frame.nightSleepMs).takeIf { it > 0 }
-        ?: health?.sleepHours?.takeIf { it > 0 }?.let { (it * 60).roundToLong() } ?: 0L
-    val refSleepMin = DayReport.msToMin(refFrame.nightSleepMs).takeIf { it > 0 }
-        ?: refHealth?.sleepHours?.takeIf { it > 0 }?.let { (it * 60).roundToLong() } ?: 0L
-    val sleepSource = when {
-        frame.nightSleepMs > 0 -> "ночь по ленте"
-        sleepMin > 0 -> "по часам"
-        else -> "сна в ленте нет"
-    }
-    val steps = health?.steps ?: 0
-    val refSteps = refHealth?.steps ?: 0
-    val phoneNote = if (partial) "неделю назад — за весь день" else refNote
-
-    val tiles = listOf(
-        Kpi(
-            "Балл", signed(frame.balance.net),
-            DayReport.delta(frame.balance.net.toLong(), refFrame.balance.net.toLong()) + " · $refNote",
-            deltaColor((frame.balance.net - refFrame.balance.net).toLong(), true, neutral),
-            "бодрствование ${dur(frame.awakeMin)}",
-        ),
-        minutesKpi("Работа", work, refWork, true, "глубоких блоков ${frame.focus.deepBlocks} · ${dur(frame.focus.deepMin)}"),
-        minutesKpi("Спорт", sport, refSport, true),
-        minutesKpi("Семья", family, refFamily, true),
-        minutesKpi("Потери и дыры", holes, refHoles, false, "потери и не размечено"),
-        Kpi(
-            "Сон", if (sleepMin > 0) dur(sleepMin) else "—",
-            if (sleepMin > 0 && refSleepMin > 0) DayReport.delta(sleepMin, refSleepMin, "м") + " · неделю назад" else null,
-            deltaColor(sleepMin - refSleepMin, true, neutral), sleepSource,
-        ),
-        Kpi(
-            "Экран", if (phone.screenMin > 0) dur(phone.screenMin) else "—",
-            if (phone.screenMin > 0 || refPhone.screenMin > 0) DayReport.delta(phone.screenMin, refPhone.screenMin, "м") + " · $phoneNote" else null,
-            deltaColor(phone.screenMin - refPhone.screenMin, false, neutral),
-            "подъёмов ${phone.pickups}" + (if (phone.calls > 0) " · звонков ${phone.calls}" else ""),
-        ),
-        Kpi(
-            "Отвлечения", if (phone.screenMin > 0) "${phone.glances}" else "—",
-            if (phone.screenMin > 0 || refPhone.screenMin > 0) DayReport.delta(phone.glances.toLong(), refPhone.glances.toLong()) + " · $phoneNote" else null,
-            deltaColor((phone.glances - refPhone.glances).toLong(), false, neutral),
-            "взял и убрал быстрее двух минут",
-        ),
-        Kpi(
-            "Шаги", if (steps > 0) thousands(steps) else "—",
-            if (steps > 0 && refSteps > 0) DayReport.delta(steps.toLong(), refSteps.toLong()) + " · неделю назад" else null,
-            deltaColor((steps - refSteps).toLong(), true, neutral),
-            if (health != null && health.restingHr > 0) "пульс покоя ${health.restingHr}" + (if (health.hrv > 0) " · HRV ${health.hrv}" else "") else "по часам",
-        ),
-        Kpi(
-            "Подъём",
-            frame.rhythm.wakeMs?.let { clockOf(it) } ?: "—",
-            frame.rhythm.bedMs?.let { "отбой " + clockOf(it) } ?: (if (isToday) "отбоя ещё нет" else "отбой не виден"),
-            neutral,
-            refFrame.rhythm.wakeMs?.let { "неделю назад подъём " + clockOf(it) },
-        ),
-    )
-    PaperCard(
-        label = "Сутки в числах",
-        info = "Зелёная дельта — лучше, чем неделю назад, красная — хуже; телефон считается " +
-            "по дням, поэтому у экрана и отвлечений сравнение с целым днём.",
-    ) {
-        tiles.chunked(2).forEachIndexed { i, pair ->
-            if (i > 0) Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (t in pair) {
-                    KpiTile(
-                        label = t.label, value = t.value, modifier = Modifier.weight(1f),
-                        delta = t.delta, deltaColor = t.deltaColor, hint = t.hint,
-                    )
-                }
-                if (pair.size == 1) Spacer(Modifier.weight(1f))
+private fun MoneyCard(m: LifeModel) {
+    val mo = m.money
+    if (mo.empty) return
+    val months = mo.months
+    val labels = months.map { MONTHS[it.month.monthValue - 1] + if (it.partial) "*" else "" }
+    val full = months.filter { !it.partial && it.spent > 0 }
+    PaperCard(label = "Деньги семьи") {
+        if (full.isNotEmpty()) {
+            val spent = full.map { it.spent }
+            val income = full.map { it.income }
+            val avg = spent.average().toLong()
+            val days = full.sumOf { it.month.lengthOfMonth() }
+            Lead(
+                "За " + plural(full.size, "полный месяц", "полных месяца", "полных месяцев") +
+                    " траты ${rubShort(spent.sum())}, доход ${rubShort(income.sum())}: покрыто ${pct(income.sum().toDouble() / spent.sum().coerceAtLeast(1))}.",
+            )
+            Row(Modifier.fillMaxWidth()) {
+                BigStat(rubShort(avg), "траты семьи в месяц", Modifier.weight(1f).padding(end = 8.dp))
+                BigStat(rubShort(spent.sum() / days.coerceAtLeast(1)), "в день в среднем", Modifier.weight(1f))
             }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 3. Из чего сложился день
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun CompositionCard(frame: Frame, pool: List<ZasechkaStore.Entry>, now: Long) {
-    val ordered = frame.slices.sortedBy { categoryHue(it.category) }
-    val elapsed = frame.window.elapsedMs
-    PaperCard(label = "Из чего сложился день") {
-        if (ordered.isEmpty()) {
-            PaperHint("В ленте за этот день пусто.")
-            return@PaperCard
-        }
-        var pick by remember(ordered) { mutableStateOf<Int?>(null) }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            DonutChart(
-                slices = ordered.map {
-                    ChartSlice(it.category.ifBlank { "без категории" }, it.ms.toFloat(), categoryColor(it.category))
-                },
-                size = 150.dp,
-                thickness = 22.dp,
-                selected = pick,
-                onSelect = { pick = it },
-                valueText = { dur(DayReport.msToMin(it.value.toLong())) },
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(dur(DayReport.msToMin(elapsed)), style = MaterialTheme.typography.titleMedium)
-                    PaperHint("прошло")
-                    Text(
-                        signed(frame.balance.net),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = scoreColor(frame.balance.net.toFloat(), 100f),
-                    )
-                }
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                val shown = ordered.take(9)
-                for ((i, s) in shown.withIndex()) {
-                    LegendRow(
-                        color = categoryColor(s.category),
-                        label = s.category.ifBlank { "без категории" },
-                        value = dur(s.minutes),
-                        sub = pct(share(s.ms, elapsed)),
-                        highlight = pick == i,
-                        onClick = { pick = ru.zf.pravka.ui.donutToggle(pick, i) },
-                    )
-                }
-                if (ordered.size > shown.size) {
-                    val rest = ordered.drop(shown.size).sumOf { it.ms }
-                    LegendRow(
-                        color = MaterialTheme.colorScheme.outline,
-                        label = "ещё ${ordered.size - shown.size}",
-                        value = dur(DayReport.msToMin(rest)),
-                        dim = true,
-                    )
-                }
-            }
-        }
-        val top = DayReport.topTitles(pool, frame.window, now, 5)
-        if (top.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
-            Text("Что заняло больше всего", style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.height(4.dp))
-            val peak = top.first().ms.coerceAtLeast(1L)
-            for (t in top) {
-                Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier.width(4.dp).height(18.dp)
-                            .background(categoryColor(t.category), RoundedCornerShape(2.dp)),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(t.title, style = MaterialTheme.typography.bodySmall)
-                        Box(
-                            Modifier.fillMaxWidth(0.98f).height(4.dp)
-                                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(2.dp)),
-                        ) {
-                            Box(
-                                Modifier.fillMaxWidth((t.ms.toFloat() / peak).coerceIn(0.02f, 1f)).height(4.dp)
-                                    .background(categoryColor(t.category), RoundedCornerShape(2.dp)),
-                            )
-                        }
-                    }
-                    Text(
-                        dur(t.minutes),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(start = 8.dp),
-                    )
-                }
-            }
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 4. День по часам
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun StripsCard(
-    today: List<DayReport.Segment>,
-    ref: List<DayReport.Segment>,
-    refLabel: String,
-    nowFrac: Float?,
-) {
-    PaperCard(
-        label = "День по часам",
-        info = "Сутки слева направо, цвета — радуга категорий Засечки; риска — сейчас. " +
-            "Пустое — не размечено или ещё не наступило. Так видно не «сколько», а «когда».",
-    ) {
-        PaperHint("этот день")
-        DayStripChart(today.map { StripSegment(it.startFrac, it.endFrac, categoryColor(it.category)) }, height = 18.dp, nowFrac = nowFrac)
-        Spacer(Modifier.height(8.dp))
-        PaperHint("неделю назад · $refLabel")
-        DayStripChart(ref.map { StripSegment(it.startFrac, it.endFrac, categoryColor(it.category)) }, height = 18.dp)
-        Spacer(Modifier.height(2.dp))
-        HourTicks()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 5. Треугольник ценности
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun TriangleCard(frame: Frame, refFrame: Frame) {
-    val buckets = DayReport.buckets(frame.slices)
-    val refBuckets = DayReport.buckets(refFrame.slices)
-    val t = DayReport.triangle(frame.slices)
-    val rt = DayReport.triangle(refFrame.slices)
-    PaperCard(
-        label = "Треугольник ценности",
-        info = "Цель — перевёрнутый треугольник: широко сверху, узко внизу. Бодрствование " +
-            "разложено по ценности часа категории, сон не в счёт. Тонкая тёмная черта " +
-            "под полосой — тот же день неделю назад к этому же часу. Индекс — доля верха " +
-            "в сумме верха и низа.",
-    ) {
-        CenteredBars(
-            rows = buckets.mapIndexed { i, b ->
-                CenteredBarRow(
-                    label = b.label,
-                    sub = b.categories.take(2).joinToString(", ") { it.lowercase() },
-                    value = b.ms.toFloat(),
-                    ref = refBuckets[i].ms.toFloat(),
-                    color = BUCKET_INKS[i],
-                    valueText = dur(b.minutes),
+        Cap("Траты по месяцам, тыс. ₽, и линия дохода. * — месяц идёт.")
+        var stacks by remember(mo) {
+            mutableStateOf(LifeStats.MONEY_GROUPS.map { g -> LifeSeries(g, MONEY_INKS[g] ?: LifeInk.Other, months.map { (it.groups[g] ?: 0L) / 100_000f }) })
+        }
+        var lineOn by remember(mo) { mutableStateOf(true) }
+        val line = LifeSeries("Доход", LifeInk.Sys, months.map { it.income / 100_000f }, hidden = !lineOn)
+        SeriesToggles(stacks + line, { i ->
+            if (i == stacks.size) lineOn = !lineOn
+            else stacks = stacks.mapIndexed { k, s -> if (k == i) s.copy(hidden = !s.hidden) else s }
+        })
+        StackBarsChart(
+            labels = labels,
+            stacks = stacks,
+            line = line,
+            tip = { i ->
+                val mm = months[i]
+                Readout(
+                    MONTHS_FULL[mm.month.monthValue - 1] + if (mm.partial) " (идёт)" else "",
+                    listOf(ReadoutRow(null, "траты ${rubShort(mm.spent)}")) +
+                        LifeStats.MONEY_GROUPS.map { g -> ReadoutRow(MONEY_INKS[g], "${g.lowercase()} ${rubShort(mm.groups[g] ?: 0L)}") } +
+                        ReadoutRow(LifeInk.Sys, "доход ${rubShort(mm.income)}: ЗФ ${rubShort(mm.incomeZf)}, Марианна ${rubShort(mm.incomeMarianna)}"),
                 )
             },
+            yFmt = { v -> if (v >= 1000) f1(v / 1000.0) + "м" else v.roundToInt().toString() },
+            xEvery = 1,
+            height = 240.dp,
         )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Верх (от +6) ${dur(DayReport.msToMin(t.topMs))} · низ (до −2) ${dur(DayReport.msToMin(t.bottomMs))} · " +
-                "индекс ${pct(t.index)}, неделю назад ${pct(rt.index)}",
-            style = MaterialTheme.typography.bodySmall,
-        )
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 6. Против того же дня неделю назад
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun CompareCard(
-    frame: Frame,
-    refFrame: Frame,
-    phone: PhoneDaySummary.Summary,
-    refPhone: PhoneDaySummary.Summary,
-    health: SportStore.Health?,
-    refHealth: SportStore.Health?,
-    food: ru.zf.pravka.data.FoodStore.DayTotal,
-    refFood: ru.zf.pravka.data.FoodStore.DayTotal,
-    worthOf: (String) -> Int,
-    isToday: Boolean,
-    now: Long,
-) {
-    val partial = isToday && !frame.full
-    val neutral = MaterialTheme.colorScheme.onSurfaceVariant
-    PaperCard(
-        label = "Против того же дня неделю назад",
-        info = "Идущий день сравнивается с прошлым до того же часа: половина дня против " +
-            "целого проигрывала бы всегда. Толстая полоска — этот день, тонкая серая — " +
-            "неделю назад; в скобках — те числа, что считаются только целыми сутками.",
-    ) {
-        // Какое окно у сравнения — живая строка, она меняется с часом; почему
-        // так — за «i» (24.09.2026).
-        PaperHint(if (partial) "Оба дня — до ${clockOf(now)}." else "Оба дня целиком.")
-        Spacer(Modifier.height(6.dp))
-        val cats = (frame.slices + refFrame.slices)
-            .map { it.category }
-            .distinctBy { it.trim().lowercase() }
-            .sortedBy { categoryHue(it) }
-        var shownAny = false
-        for (c in cats) {
-            val cur = frame.minutesOf(c)
-            val ref = refFrame.minutesOf(c)
-            if (maxOf(cur, ref) < 5L) continue
-            shownAny = true
-            val worth = worthOf(c)
-            CompareRow(
-                label = c.ifBlank { "без категории" },
-                cur = cur.toFloat(), ref = ref.toFloat(), max = maxOf(cur, ref).toFloat(),
-                color = categoryColor(c),
-                curText = dur(cur), refText = dur(ref),
-                deltaText = DayReport.delta(cur, ref),
-                deltaColor = deltaColor(cur - ref, if (worth > 0) true else if (worth < 0) false else null, neutral),
-            )
-        }
-        if (!shownAny) PaperHint("По ленте сравнивать пока нечего.")
-        Spacer(Modifier.height(8.dp))
-        val refPhoneText = if (partial) " (весь день)" else ""
-        if (phone.screenMin > 0 || refPhone.screenMin > 0) {
-            CompareRow(
-                "Экран$refPhoneText", phone.screenMin.toFloat(), refPhone.screenMin.toFloat(),
-                maxOf(phone.screenMin, refPhone.screenMin).toFloat(), MaterialTheme.colorScheme.tertiary,
-                dur(phone.screenMin), dur(refPhone.screenMin), DayReport.delta(phone.screenMin, refPhone.screenMin),
-                deltaColor(phone.screenMin - refPhone.screenMin, false, neutral),
-            )
-        }
-        val sleep = DayReport.msToMin(frame.nightSleepMs).takeIf { it > 0 }
-            ?: health?.sleepHours?.takeIf { it > 0 }?.let { (it * 60).roundToLong() } ?: 0L
-        val refSleep = DayReport.msToMin(refFrame.nightSleepMs).takeIf { it > 0 }
-            ?: refHealth?.sleepHours?.takeIf { it > 0 }?.let { (it * 60).roundToLong() } ?: 0L
-        if (sleep > 0 || refSleep > 0) {
-            CompareRow(
-                "Сон, ночь", sleep.toFloat(), refSleep.toFloat(), maxOf(sleep, refSleep).toFloat(), SLEEP_INK,
-                dur(sleep), dur(refSleep), DayReport.delta(sleep, refSleep), deltaColor(sleep - refSleep, true, neutral),
-            )
-        }
-        val steps = (health?.steps ?: 0).toLong()
-        val refSteps = (refHealth?.steps ?: 0).toLong()
-        if (steps > 0 || refSteps > 0) {
-            CompareRow(
-                "Шаги$refPhoneText", steps.toFloat(), refSteps.toFloat(), maxOf(steps, refSteps).toFloat(), STEPS_INK,
-                thousands(steps.toInt()), thousands(refSteps.toInt()), DayReport.delta(steps, refSteps), deltaColor(steps - refSteps, true, neutral),
-            )
-        }
-        if (food.kcal > 0 || refFood.kcal > 0) {
-            CompareRow(
-                "Ккал$refPhoneText", food.kcal.toFloat(), refFood.kcal.toFloat(), maxOf(food.kcal, refFood.kcal).toFloat(), KCAL_INK,
-                "${food.kcal}", "${refFood.kcal}", DayReport.delta(food.kcal.toLong(), refFood.kcal.toLong()),
-                MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            CompareRow(
-                "Белок$refPhoneText", food.protein.toFloat(), refFood.protein.toFloat(),
-                maxOf(food.protein, refFood.protein).toFloat(), PROTEIN_INK,
-                "${food.protein} г", "${refFood.protein} г", DayReport.delta(food.protein.toLong(), refFood.protein.toLong()),
-                deltaColor((food.protein - refFood.protein).toLong(), true, neutral),
-            )
-            CompareRow(
-                "Жиры$refPhoneText", food.fat.toFloat(), refFood.fat.toFloat(),
-                maxOf(food.fat, refFood.fat).toFloat(), FAT_INK,
-                "${food.fat} г", "${refFood.fat} г", DayReport.delta(food.fat.toLong(), refFood.fat.toLong()), neutral,
-            )
-            CompareRow(
-                "Углеводы$refPhoneText", food.carbs.toFloat(), refFood.carbs.toFloat(),
-                maxOf(food.carbs, refFood.carbs).toFloat(), CARBS_INK,
-                "${food.carbs} г", "${refFood.carbs} г", DayReport.delta(food.carbs.toLong(), refFood.carbs.toLong()), neutral,
-            )
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 7. Неделя
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun WeekCard(
-    weekDays: List<WeekDay>,
-    history: List<DayScore>,
-    dayStart: Long,
-    isToday: Boolean,
-    now: Long,
-) {
-    PaperCard(
-        label = "Неделя",
-        info = "Столбики — бодрствование по дням, стопкой по категориям: работа сверху, " +
-            "потери внизу. Сон — в карточке «Тело».\n\n" +
-            "Семь суток по часам — друг под другом: в какие часы работа, в какие потери, " +
-            "и где ночь съезжает.",
-    ) {
-        // Стопка бодрствования по дням: потери внизу, работа сверху — тот же
-        // порядок, что в радуге, и та же цель (перевёрнутый треугольник).
-        val columns = weekDays.map { d ->
-            val awake = d.slices.filter { !DayReport.isSleep(it.category) }
-                .sortedByDescending { categoryHue(it.category) }
-            StackedColumn(
-                label = weekdayOf(d.dayStart),
-                parts = awake.map { ChartSlice(it.category, it.minutes.toFloat(), categoryColor(it.category)) },
-                faded = d.dayStart == dayStart && isToday && now < dayStart + DAY,
-            )
-        }
-        StackedColumns(columns, height = 150.dp, valueText = { hoursShort(it.roundToLong()) }, highlight = 6)
-        Spacer(Modifier.height(8.dp))
-        val weekTotals = weekDays.flatMap { it.slices }
-            .filter { !DayReport.isSleep(it.category) }
-            .groupBy { it.category.trim().lowercase() }
-            .map { (_, list) -> list.first().category to list.sumOf { it.ms } }
-            .sortedByDescending { it.second }
-        val weekAwakeMs = weekTotals.sumOf { it.second }
-        for ((name, ms) in weekTotals.take(8)) {
-            LegendRow(
-                color = categoryColor(name),
-                label = name.ifBlank { "без категории" },
-                value = dur(DayReport.msToMin(ms)),
-                sub = pct(share(ms, weekAwakeMs)),
-            )
-        }
-        val weekNet = history.takeLast(7).sumOf { it.net }
-        val prevWeekNet = history.dropLast(7).takeLast(7).sumOf { it.net }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Балл семи дней ${signed(weekNet)} · предыдущих семи ${signed(prevWeekNet)}",
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Spacer(Modifier.height(12.dp))
-        Text("Семь суток по часам", style = MaterialTheme.typography.titleSmall)
-        Spacer(Modifier.height(6.dp))
-        for (d in weekDays) {
-            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                val today = d.dayStart == dayStart
-                Text(
-                    weekdayOf(d.dayStart),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = if (today) FontWeight.Bold else FontWeight.Normal,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(28.dp),
+        SubTitle("Доход минус траты, накопительно, млн ₽")
+        val run = mo.running
+        LinesChart(
+            labels = labels,
+            series = listOf(LifeSeries("Баланс", LifeInk.Work, run.map { it / 100_000_000f })),
+            tip = { i ->
+                val mm = months[i]
+                Readout(
+                    MONTHS_FULL[mm.month.monthValue - 1],
+                    listOf(ReadoutRow(null, "доход ${rubShort(mm.income)}"), ReadoutRow(null, "траты ${rubShort(mm.spent)}"), ReadoutRow(LifeInk.Work, "с начала ${rubShort(run[i])}")),
                 )
-                DayStripChart(
-                    d.strip.map { StripSegment(it.startFrac, it.endFrac, categoryColor(it.category)) },
-                    height = 12.dp,
-                    nowFrac = if (today && isToday) ((now - dayStart).toFloat() / DAY).coerceIn(0f, 1f) else null,
+            },
+            yMin = kotlin.math.floor(minOf(0f, run.minOrNull()?.div(100_000_000f) ?: 0f)),
+            yMax = kotlin.math.ceil(maxOf(0.5f, run.maxOrNull()?.div(100_000_000f) ?: 0f)),
+            yFmt = { f2(it.toDouble()).ifBlank { "0" } },
+            xEvery = 1,
+            endLabels = true,
+            endFmt = { f2(it.toDouble()) + " млн" },
+            height = 200.dp,
+        )
+        if (mo.categories.isNotEmpty()) {
+            SubTitle("Куда уходит, в среднем за месяц")
+            val groups = LifeStats.MONEY_GROUPS.map { g -> g to months.sumOf { it.groups[g] ?: 0L } }.filter { it.second > 0 }
+            val gt = groups.sumOf { it.second }.coerceAtLeast(1)
+            ShareBar(groups.map { it.second.toFloat() to (MONEY_INKS[it.first] ?: LifeInk.Other) })
+            ValueList(groups.map { Triple(it.first, pct(it.second.toDouble() / gt), MONEY_INKS[it.first]) })
+            Spacer(Modifier.height(12.dp))
+            val top = mo.categories.filter { it.second > 0 }.take(18)
+            val peak = top.maxOfOrNull { it.second }?.toFloat()?.coerceAtLeast(1f) ?: 1f
+            HBars(
+                top.map { (key, kop) ->
+                    val g = MoneyCategories.of(key)?.group
+                    HBar(MoneyCategories.title(key).replaceFirstChar { it.uppercase() }, rubShort(kop), kop / peak, MONEY_INKS[g] ?: LifeInk.Other)
+                },
+            )
+        }
+        if (months.any { it.zfRevenue > 0 }) {
+            SubTitle("ЗФ: выручка и команда, млн ₽")
+            var zs by remember(mo) {
+                mutableStateOf(
+                    listOf(
+                        LifeSeries("Выручка", LifeInk.Family, months.map { it.zfRevenue / 100_000_000f }),
+                        LifeSeries("Команда и подрядчики", LifeInk.Loss, months.map { it.zfTeam / 100_000_000f }),
+                    ),
                 )
             }
-        }
-        Row(Modifier.fillMaxWidth()) {
-            Spacer(Modifier.width(28.dp))
-            Box(Modifier.weight(1f)) { HourTicks() }
-        }
-    }
-}
-
-@Composable
-private fun HistoryCard(history: List<DayScore>) {
-    PaperCard(
-        label = "Балл по дням, четыре недели",
-        info = "Полные сутки, как в Засечке; контуром — день, который ещё идёт. Подписи стоят под понедельниками.",
-    ) {
-        SignedColumns(
-            values = history.map { it.net.toFloat() },
-            colorOf = { scoreColor(it, 100f) },
-            labels = history.map { if (weekdayOf(it.dayStart) == "пн") "пн" else "" },
-            height = 128.dp,
-            hollow = history.indices.filter { !history[it].full }.toSet(),
-        )
-        Spacer(Modifier.height(6.dp))
-        val full = history.filter { it.full }
-        val last7 = full.takeLast(7)
-        val avg7 = if (last7.isEmpty()) null else last7.sumOf { it.net }.toDouble() / last7.size
-        val avg28 = if (full.isEmpty()) null else full.sumOf { it.net }.toDouble() / full.size
-        val best = full.maxByOrNull { it.net }
-        val worst = full.minByOrNull { it.net }
-        Text(
-            "Среднее за семь полных дней " + (avg7?.let { signed(it.roundToInt()) } ?: "—") +
-                " · за 28 " + (avg28?.let { signed(it.roundToInt()) } ?: "—"),
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        if (best != null && worst != null) {
-            Text(
-                "Лучший — ${weekdayOf(best.dayStart)} ${reportShortDate.format(Date(best.dayStart))} ${signed(best.net)}, " +
-                    "худший — ${weekdayOf(worst.dayStart)} ${reportShortDate.format(Date(worst.dayStart))} ${signed(worst.net)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            SeriesToggles(zs, { i -> zs = zs.mapIndexed { k, s -> if (k == i) s.copy(hidden = !s.hidden) else s } })
+            LinesChart(
+                labels = labels,
+                series = zs,
+                tip = { i ->
+                    val mm = months[i]
+                    Readout(MONTHS_FULL[mm.month.monthValue - 1], listOf(ReadoutRow(LifeInk.Family, "выручка ${rubShort(mm.zfRevenue)}"), ReadoutRow(LifeInk.Loss, "команда ${rubShort(mm.zfTeam)}")))
+                },
+                yFmt = { f1(it.toDouble()) },
+                xEvery = 1,
+                height = 200.dp,
             )
+            val rev = months.sumOf { it.zfRevenue }
+            val team = months.sumOf { it.zfTeam }
+            if (rev > 0) PaperHint("${rubShort(rev)} выручки за " + plural(months.size, "месяц", "месяца", "месяцев") + ", команда и подрядчики — ${pct(team.toDouble() / rev)}.")
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// 8. Телефон
+// Телефон и «как читать»
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun PhoneCard(
-    context: Context,
-    usageGranted: Boolean,
-    onGranted: (Boolean) -> Unit,
-    days: List<Long>,
-    phoneDays: Map<String, ru.zf.pravka.data.PhoneStore.Day>,
-    tracked: Map<String, String>,
-    audioApps: Set<String>,
-    labels: Map<String, String>,
-    phone: PhoneDaySummary.Summary,
-    refPhone: PhoneDaySummary.Summary,
-    awakeMin: Long,
-    isToday: Boolean,
-) {
-    PaperCard(
-        label = "Телефон",
-        info = if (!usageGranted) null
-        else "Столбики — минуты по дням: отмеченные приложения цветом своей категории, " +
-            "остальной экран серым. Отвлечение — взял телефон и убрал быстрее двух минут.",
-    ) {
-        if (!usageGranted) {
-            PaperHint(
-                "Дай Правке доступ к статистике использования — появятся экран по дням, " +
-                    "приложения, подъёмы, отвлечения и звонки.",
-            )
+private fun PhoneCard(m: LifeModel, labels: Map<String, String>, granted: Boolean, onGrant: () -> Unit) {
+    PaperCard(label = "Телефон") {
+        if (!granted) {
+            PaperHint("Дай Правке доступ к статистике использования — появятся экран по неделям и главные приложения.")
             Spacer(Modifier.height(8.dp))
             Row {
                 Spacer(Modifier.weight(1f))
-                PaperButton(
-                    "Дать доступ к статистике",
-                    icon = Glyphs.Key,
-                    primary = true,
-                    onClick = {
-                        runCatching { context.startActivity(Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)) }
-                        onGranted(PhoneSweeper.hasUsageAccess(context))
-                    },
-                )
+                PaperButton("Дать доступ к статистике", icon = Glyphs.Key, primary = true, onClick = onGrant)
             }
             return@PaperCard
         }
-        val summaries = days.map { PhoneDaySummary.of(phoneDays[phoneDayKey(it)], tracked, labels) }
-        // Отмеченные приложения — своим цветом категории («Потери» у YouTube —
-        // фиолетовый, «Систематизация» у Claude — жёлтый), остальное серое.
-        val appLabels = summaries.flatMap { it.apps }.map { it.label }.distinct()
-        val appCategory = HashMap<String, String>()
-        for (s in summaries) for (a in s.apps) appCategory.putIfAbsent(a.label, a.category)
-        val other = MaterialTheme.colorScheme.outline
-        val audioLabels = audioApps.map { PhoneDaySummary.normal(labels[it] ?: it.substringAfterLast('.')) }.toSet()
-        val columns = summaries.mapIndexed { i, s ->
-            val parts = ArrayList<ChartSlice>()
-            var accounted = 0L
-            for (a in s.apps) {
-                parts.add(ChartSlice(a.label, a.minutes.toFloat(), categoryColor(a.category)))
-                // Слушалка играет с погашенным экраном — её минуты не часть экрана.
-                if (PhoneDaySummary.normal(a.label) !in audioLabels) accounted += a.minutes
-            }
-            val rest = (s.screenMin - accounted).coerceAtLeast(0L)
-            if (rest > 0) parts.add(ChartSlice("прочее", rest.toFloat(), other))
-            StackedColumn(weekdayOf(days[i]), parts, faded = isToday && i == days.lastIndex)
-        }
-        StackedColumns(columns, height = 130.dp, valueText = { hoursShort(it.roundToLong()) }, highlight = 6)
-        Spacer(Modifier.height(8.dp))
-        for (label in appLabels) {
-            val today = phone.apps.firstOrNull { it.label == label }?.minutes ?: 0L
-            val week = summaries.sumOf { s -> s.apps.firstOrNull { it.label == label }?.minutes ?: 0L }
-            LegendRow(
-                color = categoryColor(appCategory[label].orEmpty()),
-                label = label,
-                value = dur(today),
-                sub = "за неделю ${dur(week)}",
-            )
-        }
-        if (phone.screenMin > 0) {
-            LegendRow(color = other, label = "экран всего", value = dur(phone.screenMin), sub = "за неделю ${dur(summaries.sumOf { it.screenMin })}")
-        }
-        Spacer(Modifier.height(10.dp))
-        // Донат дня по всем приложениям, не только отмеченным.
-        val day = phoneDays[phoneDayKey(days.last())]
-        if (day != null && day.screenMs > 0) {
-            val top = day.apps.entries
-                .filter { !isFurniturePkg(it.key) }
-                .sortedByDescending { it.value }
-            val head = top.take(6)
-            val restMs = top.drop(6).sumOf { it.value }
-            val greys = listOf(0.9f, 0.72f, 0.58f, 0.46f, 0.36f, 0.28f)
-            val slices = head.mapIndexed { i, (pkg, ms) ->
-                val cat = tracked[pkg]
-                ChartSlice(
-                    appLabelOf(labels, pkg),
-                    ms.toFloat(),
-                    if (cat != null) categoryColor(cat) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = greys[i]),
-                )
-            } + (if (restMs > 0) listOf(ChartSlice("прочее", restMs.toFloat(), other.copy(alpha = 0.5f))) else emptyList())
-            var pick by remember(slices) { mutableStateOf<Int?>(null) }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                DonutChart(
-                    slices, size = 120.dp, thickness = 18.dp,
-                    selected = pick, onSelect = { pick = it },
-                    valueText = { dur(DayReport.msToMin(it.value.toLong())) },
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(dur(phone.screenMin), style = MaterialTheme.typography.titleSmall)
-                        PaperHint("экран")
-                    }
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    for ((i, s) in slices.withIndex()) {
-                        LegendRow(
-                            s.color, s.label, dur(DayReport.msToMin(s.value.toLong())),
-                            highlight = pick == i, onClick = { pick = ru.zf.pravka.ui.donutToggle(pick, i) },
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-        }
-        // Подъёмы и отвлечения по дням — две ломаные.
-        val pickups = summaries.map { if (it.screenMin > 0) it.pickups.toFloat() else null }
-        val glances = summaries.map { if (it.screenMin > 0) it.glances.toFloat() else null }
-        if (pickups.any { it != null }) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Подъёмы", style = MaterialTheme.typography.labelMedium, color = PICKUP_INK)
-                Text("Отвлечения", style = MaterialTheme.typography.labelMedium, color = GLANCE_INK)
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Box(Modifier.weight(1f)) {
-                    LineChart(pickups, PICKUP_INK, height = 64.dp, fromZero = true, valueText = { "${it.roundToInt()}" })
-                }
-                Box(Modifier.weight(1f)) {
-                    LineChart(glances, GLANCE_INK, height = 64.dp, fromZero = true, valueText = { "${it.roundToInt()}" })
-                }
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(weekdayOf(days.first()), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(weekdayOf(days.last()), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        val callsLine = if (phone.calls > 0) {
-            "Звонки: ${phone.calls} · ${dur(phone.callsMin)}" +
-                (if (phone.callers.isNotEmpty()) " · " + phone.callers.take(4).joinToString(", ") else "")
-        } else "Звонков не было"
-        Text(callsLine, style = MaterialTheme.typography.bodySmall)
-        Text(
-            "Экран к бодрствованию ${pct(share(phone.screenMin, awakeMin))} · " +
-                "отвлечений в час ${if (awakeMin > 0) fmt1(phone.glances * 60.0 / awakeMin) else "—"} · " +
-                "неделю назад экран ${dur(refPhone.screenMin)}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Тело
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun BodyCard(
-    app: PravkaApp,
-    dayStart: Long,
-    dateKey: String,
-    pool: List<ZasechkaStore.Entry>,
-    now: Long,
-    healthByDate: Map<String, SportStore.Health>,
-    workouts: List<SportStore.Workout>,
-    gtgDays: List<ru.zf.pravka.data.StrengthStore.GtgDay>,
-    sessions: List<ru.zf.pravka.data.StrengthStore.Session>,
-    goalWeight: Int,
-    isToday: Boolean,
-) {
-    val days7 = (6 downTo 0).map { dayStart - it * DAY }
-    val days14 = (13 downTo 0).map { dayStart - it * DAY }
-    val days28 = (27 downTo 0).map { dayStart - it * DAY }
-    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
-    // Легенды всех графиков тела — одним пояснением за «i» (24.09.2026): их
-    // было четыре абзаца под четырьмя графиками, и плашка читалась инструкцией.
-    PaperCard(
-        label = "Тело",
-        info = "Сон — часы за ночь по ленте (сон с часов, разрезанный полуночью, склеен " +
-            "обратно), без ленты — по Garmin. Пунктир — медиана 28 ночей.\n\n" +
-            "Тренировки — столбики тренировочной нагрузки (load intervals.icu) по дням, " +
-            "цветом вида спорта.\n\n" +
-            "HRV и пульс покоя — пунктир: среднее за 28 дней. HRV выше базы и пульс ниже — " +
-            "восстановлен; наоборот — день полегче.\n\n" +
-            "Вес — пунктир: цель из настроек Тела.",
-    ) {
-        // ---- сон ----
-        fun sleepMin(ds: Long): Long {
-            val ribbon = DayReport.msToMin(DayReport.nightSleepMs(pool, ds, now))
-            if (ribbon > 0) return ribbon
-            val h = healthByDate[isoOf(ds)]?.sleepHours ?: 0.0
-            return if (h > 0) (h * 60).roundToLong() else 0L
-        }
-        val sleep7 = days7.map { sleepMin(it) }
-        val sleep28 = days28.map { sleepMin(it) }.filter { it > 0 }
-        val sleepMedian = DayReport.median(sleep28.map { it.toDouble() })
-        Text("Сон", style = MaterialTheme.typography.titleSmall)
-        if (sleep7.any { it > 0 }) {
-            StackedColumns(
-                columns = days7.mapIndexed { i, ds ->
-                    StackedColumn(weekdayOf(ds), listOf(ChartSlice("сон", sleep7[i].toFloat(), SLEEP_INK)))
-                },
-                height = 96.dp,
-                target = sleepMedian?.toFloat(),
-                valueText = { fmt1(it / 60.0) },
-                highlight = 6,
-            )
-            val todaySleep = sleep7.last()
-            val score = healthByDate[dateKey]?.sleepScore ?: 0
-            Text(
-                "Эта ночь ${if (todaySleep > 0) dur(todaySleep) else "—"} · медиана 28 ночей " +
-                    (sleepMedian?.let { dur(it.roundToLong()) } ?: "—") +
-                    (if (score > 0) " · счёт сна Garmin $score" else ""),
-                style = MaterialTheme.typography.bodySmall,
-            )
-        } else {
-            PaperHint("Сна за эти дни ни в ленте, ни в часах нет.")
-        }
-        Spacer(Modifier.height(12.dp))
-
-        // ---- нагрузка ----
-        Text("Тренировки", style = MaterialTheme.typography.titleSmall)
-        val byDay = days7.map { ds -> workouts.filter { it.start >= ds && it.start < ds + DAY } }
-        if (byDay.any { it.isNotEmpty() }) {
-            StackedColumns(
-                columns = byDay.mapIndexed { i, list ->
-                    StackedColumn(
-                        weekdayOf(days7[i]),
-                        list.sortedBy { it.start }.map { ChartSlice(SportCoach.sportName(it.type), it.load.toFloat(), sportInk(it.type)) },
-                    )
-                },
-                height = 96.dp,
-                valueText = { "${it.roundToInt()}" },
-                highlight = 6,
-            )
-            val weekList = byDay.flatten()
-            val prevList = workouts.filter { it.start >= dayStart - 13 * DAY && it.start < dayStart - 6 * DAY }
-            val types = weekList.groupBy { SportCoach.sportName(it.type) }
-            for ((name, list) in types.entries.sortedByDescending { it.value.sumOf { w -> w.minutes } }) {
-                val km = list.sumOf { it.km }
-                LegendRow(
-                    color = sportInk(list.first().type),
-                    label = name,
-                    value = dur(list.sumOf { it.minutes }),
-                    sub = "${list.size}× · load ${list.sumOf { it.load }}" + (if (km >= 0.5) " · ${fmt1(km)} км" else ""),
-                )
-            }
-            Text(
-                "Load семи дней ${weekList.sumOf { it.load }} · предыдущих семи ${prevList.sumOf { it.load }} · " +
-                    "тренировок ${weekList.size}",
-                style = MaterialTheme.typography.bodySmall,
-                color = labelColor,
-            )
-        } else {
-            PaperHint("Тренировок с часов за эти семь дней нет.")
-        }
-        val todaySessions = sessions.filter { it.date == dateKey }
-        if (todaySessions.isNotEmpty()) {
-            val sets = todaySessions.sumOf { it.setCount }
-            val checked = todaySessions.sumOf { it.checkedIds.size }
-            Text(
-                "Силовые за день: сессий ${todaySessions.size} · подходов $sets" +
-                    (if (checked > 0) " · галочек $checked" else "") +
-                    (todaySessions.firstOrNull { it.feel > 0 }?.let { " · самочувствие ${it.feel}" } ?: ""),
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-        Spacer(Modifier.height(12.dp))
-
-        // ---- зарядка ----
-        val gtgByDate = gtgDays.associateBy { it.date }
-        val charged = days7.map { gtgByDate[isoOf(it)]?.charged == true }
-        val streak = app.strengthStore.streak(dateKey)
-        Text("Зарядка", style = MaterialTheme.typography.titleSmall)
-        DotRow(labels = days7.map { weekdayOf(it) }, on = charged, color = GOOD, highlight = 6)
-        val todayGtg = gtgByDate[dateKey]
-        Text(
-            "Цепочка $streak дн. · за неделю ${charged.count { it }} из 7" +
-                (todayGtg?.takeIf { it.hangSec > 0 }?.let { " · вис ${it.hangSec} с" } ?: "") +
-                (todayGtg?.takeIf { it.pullups > 0 }?.let { " · подтягиваний ${it.pullups}" } ?: "") +
-                (todayGtg?.knee?.takeIf { it.isNotBlank() }?.let { " · колено $it" } ?: ""),
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Spacer(Modifier.height(12.dp))
-
-        // ---- HRV и пульс покоя ----
-        val hrv14 = days14.map { healthByDate[isoOf(it)]?.hrv?.takeIf { v -> v > 0 }?.toFloat() }
-        val rhr14 = days14.map { healthByDate[isoOf(it)]?.restingHr?.takeIf { v -> v > 0 }?.toFloat() }
-        val hrvBase = days28.mapNotNull { healthByDate[isoOf(it)]?.hrv?.takeIf { v -> v > 0 } }.let { if (it.isEmpty()) null else it.average().toFloat() }
-        val rhrBase = days28.mapNotNull { healthByDate[isoOf(it)]?.restingHr?.takeIf { v -> v > 0 } }.let { if (it.isEmpty()) null else it.average().toFloat() }
-        if (hrv14.any { it != null } || rhr14.any { it != null }) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("HRV, 14 дней", style = MaterialTheme.typography.labelMedium, color = HRV_INK)
-                Text("Пульс покоя, 14 дней", style = MaterialTheme.typography.labelMedium, color = RHR_INK)
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Box(Modifier.weight(1f)) {
-                    LineChart(hrv14, HRV_INK, height = 64.dp, baseline = hrvBase, valueText = { "${it.roundToInt()}" })
-                }
-                Box(Modifier.weight(1f)) {
-                    LineChart(rhr14, RHR_INK, height = 64.dp, baseline = rhrBase, valueText = { "${it.roundToInt()}" })
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-        }
-
-        // ---- шаги ----
-        val steps7 = days7.map { (healthByDate[isoOf(it)]?.steps ?: 0).toFloat() }
-        if (steps7.any { it > 0f }) {
-            Text("Шаги", style = MaterialTheme.typography.titleSmall)
-            StackedColumns(
-                columns = days7.mapIndexed { i, ds -> StackedColumn(weekdayOf(ds), listOf(ChartSlice("шаги", steps7[i], STEPS_INK))) },
-                height = 80.dp,
-                valueText = { fmt1(it / 1000.0) + "к" },
-                highlight = 6,
-            )
-            Spacer(Modifier.height(12.dp))
-        }
-
-        // ---- вес и форма ----
-        val weight28 = days28.map { healthByDate[isoOf(it)]?.weightKg?.takeIf { v -> v > 0 }?.toFloat() }
-        val lastWeight = weight28.lastOrNull { it != null }
-        val firstWeight = weight28.firstOrNull { it != null }
-        if (lastWeight != null) {
-            Text("Вес, 28 дней", style = MaterialTheme.typography.titleSmall)
-            LineChart(
-                weight28, WEIGHT_INK, height = 72.dp,
-                baseline = goalWeight.takeIf { it > 0 }?.toFloat(),
-                valueText = { fmt1(it.toDouble()) },
-                labels = listOf(reportShortDate.format(Date(days28.first())), reportShortDate.format(Date(days28.last()))),
-            )
-            Text(
-                "Сейчас ${fmt1(lastWeight.toDouble())} кг" +
-                    (if (firstWeight != null && firstWeight != lastWeight) " · за 28 дней ${fmt1((lastWeight - firstWeight).toDouble()).let { if (it.startsWith("-")) it.replace("-", "−") else "+$it" }}" else "") +
-                    (if (goalWeight > 0) " · до цели $goalWeight: ${fmt1((lastWeight - goalWeight).toDouble())}" else ""),
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-        val h = healthByDate[dateKey] ?: healthByDate.values.filter { it.date < dateKey }.maxByOrNull { it.date }
-        if (h != null && (h.ctl > 0 || h.atl > 0)) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Форма на ${if (h.date == dateKey) "этот день" else h.date}: тренированность ${fmt1(h.ctl)} · " +
-                    "усталость ${fmt1(h.atl)} · свежесть ${fmt1(h.tsb)}" +
-                    (if (h.readiness > 0) " · готовность ${h.readiness}" else ""),
-                style = MaterialTheme.typography.bodySmall,
-                color = labelColor,
-            )
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Еда: статистика по КБЖУ
-// ---------------------------------------------------------------------------
-
-/**
- * Плитка одного макроса против цели из настроек Тела. Белок — пол (зелёный,
- * когда добрал), калории, жиры и углеводы — потолок (красный, когда перебрал):
- * владелец на рекомпозиции, белок 140+ — его же правило.
- */
-@Composable
-private fun MacroTile(
-    label: String,
-    value: Int,
-    target: Int,
-    unit: String,
-    ink: Color,
-    floor: Boolean,
-    hint: String?,
-    modifier: Modifier,
-) {
-    val neutral = MaterialTheme.colorScheme.onSurfaceVariant
-    val shown = when {
-        value <= 0 -> "—"
-        unit.isBlank() -> "$value"
-        else -> "$value $unit"
-    }
-    val delta = if (target > 0 && value > 0) {
-        DayReport.delta(value.toLong(), target.toLong(), unit) + " к цели $target · " + pct(share(value.toLong(), target.toLong()))
-    } else if (target > 0) {
-        "цель $target"
-    } else null
-    val color = when {
-        target <= 0 || value <= 0 -> neutral
-        floor -> if (value >= target) GOOD else BAD
-        value > target -> BAD
-        else -> neutral
-    }
-    KpiTile(label, shown, modifier, delta = delta, deltaColor = color, hint = hint, valueColor = ink)
-}
-
-@Composable
-private fun FoodCard(
-    app: PravkaApp,
-    dayStart: Long,
-    kcalTarget: Int,
-    proteinTarget: Int,
-    fatTarget: Int,
-    carbsTarget: Int,
-    isToday: Boolean,
-    mealsSize: Int,
-    weightKg: Double,
-) {
-    val dateKey = isoOf(dayStart)
-    val days7 = (6 downTo 0).map { dayStart - it * DAY }
-    val days28 = (27 downTo 0).map { dayStart - it * DAY }
-    val totals7 = days7.map { app.foodStore.dayTotal(isoOf(it)) }
-    val totals28 = days28.map { app.foodStore.dayTotal(isoOf(it)) }
-    val today = totals7.last()
-    val meals = app.foodStore.mealsOn(dateKey)
-    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
-    PaperCard(
-        label = "Еда: КБЖУ",
-        info = "Цели — из настроек Тела. Белок — пол: зелёный, когда добрал; калории, жиры и " +
-            "углеводы — потолок: красный, когда перебрал. Считаются только подтверждённые приёмы.\n\n" +
-            "Пунктир на столбиках — цели из настроек. Пустой день — приёмов не записано, а не " +
-            "«ничего не ел».\n\n" +
-            "Доли — по калориям: белки и углеводы ×4, жиры ×9.\n\n" +
-            "Четыре недели: неделя — семь дней до выбранного; в среднем считаются только дни " +
-            "с записями, иначе пропущенный день выглядел бы как голодовка.",
-    ) {
-        if (mealsSize == 0 || totals28.all { it.empty }) {
-            PaperHint("Приёмов за четыре недели в дневнике нет.")
+        val p = m.phone
+        if (p.days == 0) {
+            PaperHint("За этот отрезок телефон ещё ничего не насчитал.")
             return@PaperCard
         }
-        // ---- день против целей ----
-        val macroKcal = (today.protein * 4f + today.fat * 9f + today.carbs * 4f).coerceAtLeast(1f)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MacroTile(
-                "Ккал", today.kcal, kcalTarget, "", KCAL_INK, floor = false,
-                hint = "приёмов ${today.meals}" + (if (today.fiber > 0) " · клетчатка ${today.fiber} г" else ""),
-                modifier = Modifier.weight(1f),
-            )
-            MacroTile(
-                "Белок", today.protein, proteinTarget, "г", PROTEIN_INK, floor = true,
-                hint = if (weightKg > 0 && today.protein > 0) "${fmt1(today.protein / weightKg)} г на кг веса" else "${pct((today.protein * 4f / macroKcal).toDouble())} калорий",
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MacroTile(
-                "Жиры", today.fat, fatTarget, "г", FAT_INK, floor = false,
-                hint = if (today.fat > 0) "${pct((today.fat * 9f / macroKcal).toDouble())} калорий" else null,
-                modifier = Modifier.weight(1f),
-            )
-            MacroTile(
-                "Углеводы", today.carbs, carbsTarget, "г", CARBS_INK, floor = false,
-                hint = if (today.carbs > 0) "${pct((today.carbs * 4f / macroKcal).toDouble())} калорий" else null,
-                modifier = Modifier.weight(1f),
-            )
-        }
-
-        // ---- по приёмам ----
-        if (meals.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
-            Text("По приёмам", style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.height(4.dp))
-            val kinds = listOf("завтрак", "обед", "ужин", "перекус")
-            val byKind = meals.groupBy { it.kind.trim().lowercase().ifBlank { "приём" } }
-            val order = kinds.filter { it in byKind } + byKind.keys.filter { it !in kinds }.sorted()
-            val dayKcal = today.kcal.coerceAtLeast(1)
-            for (k in order) {
-                val list = byKind[k] ?: continue
-                val kcal = list.sumOf { it.kcal }
-                val prot = list.sumOf { it.protein }
-                Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        k.replaceFirstChar { it.uppercase() } + (if (list.size > 1) " ×${list.size}" else ""),
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.width(96.dp),
-                    )
-                    Box(
-                        Modifier.weight(1f).height(9.dp)
-                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(4.dp)),
-                    ) {
-                        Box(
-                            Modifier.fillMaxWidth((kcal.toFloat() / dayKcal).coerceIn(0.015f, 1f)).height(9.dp)
-                                .background(KCAL_INK, RoundedCornerShape(4.dp)),
-                        )
-                    }
-                    Text(
-                        "$kcal ккал · Б $prot г",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(start = 8.dp),
-                        maxLines = 1,
-                    )
-                }
-            }
-            val heaviest = order.maxByOrNull { k -> byKind[k]!!.sumOf { it.kcal } }
-            if (heaviest != null && today.kcal > 0) {
-                PaperHint(
-                    "Самый тяжёлый приём — $heaviest: " +
-                        pct(share(byKind[heaviest]!!.sumOf { it.kcal }.toLong(), today.kcal.toLong())) + " калорий дня.",
-                )
-            }
-        }
-
-        // ---- по дням ----
-        Spacer(Modifier.height(12.dp))
-        Text("Калории по дням", style = MaterialTheme.typography.labelMedium, color = KCAL_INK)
-        StackedColumns(
-            columns = days7.mapIndexed { i, ds ->
-                StackedColumn(weekdayOf(ds), listOf(ChartSlice("ккал", totals7[i].kcal.toFloat(), KCAL_INK)), faded = isToday && i == 6)
-            },
-            height = 96.dp,
-            target = kcalTarget.takeIf { it > 0 }?.toFloat(),
-            valueText = { "${it.roundToInt()}" },
-            highlight = 6,
+        Lead(
+            "В среднем ${f1(p.screenMin / 60)} ч экрана и ${p.pickups.roundToInt()} подъёмов в день. " +
+                p.top.joinToString(", ") { pkg -> "${appLabelOf(labels, pkg)} ${Fmt.dur((p.topMin[pkg] ?: 0.0).roundToInt())}" } + ".",
         )
-        Spacer(Modifier.height(8.dp))
-        Text("Белок по дням, г", style = MaterialTheme.typography.labelMedium, color = PROTEIN_INK)
-        StackedColumns(
-            columns = days7.mapIndexed { i, ds ->
-                StackedColumn(weekdayOf(ds), listOf(ChartSlice("белок", totals7[i].protein.toFloat(), PROTEIN_INK)), faded = isToday && i == 6)
-            },
-            height = 80.dp,
-            target = proteinTarget.takeIf { it > 0 }?.toFloat(),
-            valueText = { "${it.roundToInt()}" },
-            highlight = 6,
-        )
-        Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Column(Modifier.weight(1f)) {
-                Text("Жиры, г", style = MaterialTheme.typography.labelMedium, color = FAT_INK)
-                StackedColumns(
-                    columns = days7.mapIndexed { i, ds ->
-                        StackedColumn(weekdayOf(ds), listOf(ChartSlice("жиры", totals7[i].fat.toFloat(), FAT_INK)), faded = isToday && i == 6)
-                    },
-                    height = 72.dp,
-                    target = fatTarget.takeIf { it > 0 }?.toFloat(),
-                    valueText = { "${it.roundToInt()}" },
-                    highlight = 6,
-                )
+        val ws = p.weeks.filter { it.days > 0 }
+        if (ws.size >= 2) {
+            Cap("Минут в день по неделям.")
+            var series by remember(p, labels) {
+                mutableStateOf(p.top.mapIndexed { i, pkg -> LifeSeries(appLabelOf(labels, pkg), PHONE_INKS[i % PHONE_INKS.size], ws.map { (it.apps[pkg] ?: 0.0).toFloat() }) })
             }
-            Column(Modifier.weight(1f)) {
-                Text("Углеводы, г", style = MaterialTheme.typography.labelMedium, color = CARBS_INK)
-                StackedColumns(
-                    columns = days7.mapIndexed { i, ds ->
-                        StackedColumn(weekdayOf(ds), listOf(ChartSlice("углеводы", totals7[i].carbs.toFloat(), CARBS_INK)), faded = isToday && i == 6)
-                    },
-                    height = 72.dp,
-                    target = carbsTarget.takeIf { it > 0 }?.toFloat(),
-                    valueText = { "${it.roundToInt()}" },
-                    highlight = 6,
-                )
-            }
-        }
-
-        // ---- доли макросов по дням ----
-        Spacer(Modifier.height(12.dp))
-        Text("Доли калорий по дням: белки · жиры · углеводы", style = MaterialTheme.typography.labelMedium, color = labelColor)
-        StackedColumns(
-            columns = days7.mapIndexed { i, ds ->
-                val t = totals7[i]
-                val p = t.protein * 4f
-                val f = t.fat * 9f
-                val c = t.carbs * 4f
-                val sum = p + f + c
-                if (sum <= 0f) StackedColumn(weekdayOf(ds), emptyList())
-                else StackedColumn(
-                    weekdayOf(ds),
-                    listOf(
-                        ChartSlice("белки", p / sum * 100f, PROTEIN_INK),
-                        ChartSlice("жиры", f / sum * 100f, FAT_INK),
-                        ChartSlice("углеводы", c / sum * 100f, CARBS_INK),
-                    ),
-                    faded = isToday && i == 6,
-                )
-            },
-            height = 72.dp,
-            highlight = 6,
-        )
-        val fed7 = totals7.filter { !it.empty }
-        if (fed7.isNotEmpty()) {
-            val p = fed7.sumOf { it.protein } * 4f
-            val f = fed7.sumOf { it.fat } * 9f
-            val c = fed7.sumOf { it.carbs } * 4f
-            val sum = (p + f + c).coerceAtLeast(1f)
-            Text(
-                "За неделю: белки ${pct((p / sum).toDouble())} · жиры ${pct((f / sum).toDouble())} · углеводы ${pct((c / sum).toDouble())} калорий",
-                style = MaterialTheme.typography.bodySmall,
-                color = labelColor,
-            )
-        }
-
-        // ---- донат дня ----
-        if (today.kcal > 0) {
-            Spacer(Modifier.height(12.dp))
-            val p = today.protein * 4f
-            val f = today.fat * 9f
-            val c = today.carbs * 4f
-            var pick by remember { mutableStateOf<Int?>(null) }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                DonutChart(
-                    listOf(ChartSlice("белки", p, PROTEIN_INK), ChartSlice("жиры", f, FAT_INK), ChartSlice("углеводы", c, CARBS_INK)),
-                    size = 110.dp, thickness = 16.dp,
-                    selected = pick, onSelect = { pick = it },
-                    valueText = { "${Math.round(it.value)} ккал" },
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("${today.kcal}", style = MaterialTheme.typography.titleSmall)
-                        PaperHint("ккал")
-                    }
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    val tap = { i: Int -> pick = ru.zf.pravka.ui.donutToggle(pick, i) }
-                    LegendRow(PROTEIN_INK, "Белки", "${today.protein} г", sub = pct((p / macroKcal).toDouble()), highlight = pick == 0, onClick = { tap(0) })
-                    LegendRow(FAT_INK, "Жиры", "${today.fat} г", sub = pct((f / macroKcal).toDouble()), highlight = pick == 1, onClick = { tap(1) })
-                    LegendRow(CARBS_INK, "Углеводы", "${today.carbs} г", sub = pct((c / macroKcal).toDouble()), highlight = pick == 2, onClick = { tap(2) })
-                }
-            }
-        }
-
-        // ---- средние и попадания ----
-        val fed28 = totals28.filter { !it.empty }
-        fun avg(list: List<ru.zf.pravka.data.FoodStore.DayTotal>, of: (ru.zf.pravka.data.FoodStore.DayTotal) -> Int): String =
-            if (list.isEmpty()) "—" else "${list.sumOf(of) / list.size}"
-        if (fed7.isNotEmpty() || fed28.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
-            Text("В среднем за день с записями", style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.height(4.dp))
-            Row(Modifier.fillMaxWidth()) {
-                Text("", Modifier.weight(1.3f))
-                for (h in listOf("7 дн. (${fed7.size})", "28 дн. (${fed28.size})", "цель")) {
-                    Text(h, style = MaterialTheme.typography.labelSmall, color = labelColor, modifier = Modifier.weight(1f), maxLines = 1)
-                }
-            }
-            data class AvgRow(val name: String, val ink: Color, val of: (ru.zf.pravka.data.FoodStore.DayTotal) -> Int, val target: Int)
-            val rows = listOf(
-                AvgRow("Ккал", KCAL_INK, { it.kcal }, kcalTarget),
-                AvgRow("Белок, г", PROTEIN_INK, { it.protein }, proteinTarget),
-                AvgRow("Жиры, г", FAT_INK, { it.fat }, fatTarget),
-                AvgRow("Углеводы, г", CARBS_INK, { it.carbs }, carbsTarget),
-                AvgRow("Клетчатка, г", labelColor, { it.fiber }, 0),
-            )
-            for (r in rows) {
-                Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                    Text(r.name, style = MaterialTheme.typography.bodySmall, color = r.ink, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1.3f))
-                    Text(avg(fed7, r.of), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                    Text(avg(fed28, r.of), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                    Text(if (r.target > 0) "${r.target}" else "—", style = MaterialTheme.typography.bodySmall, color = labelColor, modifier = Modifier.weight(1f))
-                }
-            }
-            if (fed7.isNotEmpty() && (proteinTarget > 0 || kcalTarget > 0)) {
-                val protHits = fed7.count { it.protein >= proteinTarget }
-                val kcalHits = fed7.count { it.kcal <= kcalTarget }
-                Text(
-                    listOfNotNull(
-                        if (proteinTarget > 0) "белок добран в $protHits из ${fed7.size} дней" else null,
-                        if (kcalTarget > 0) "калории в потолке в $kcalHits из ${fed7.size}" else null,
-                    ).joinToString(" · ").replaceFirstChar { it.uppercase() },
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            if (weightKg > 0 && fed7.isNotEmpty()) {
-                val avgProt = fed7.sumOf { it.protein }.toDouble() / fed7.size
-                Text(
-                    "Белок на кг веса: ${fmt1(avgProt / weightKg)} г в среднем за неделю" +
-                        (if (proteinTarget > 0) " · цель $proteinTarget г — это ${fmt1(proteinTarget / weightKg)} г/кг при ${fmt1(weightKg)} кг" else ""),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = labelColor,
-                )
-            }
-        }
-
-        // ---- четыре недели ----
-        val weeks = (3 downTo 0).map { w -> totals28.subList(21 - 7 * w, 28 - 7 * w).filter { !it.empty } }
-        if (weeks.count { it.isNotEmpty() } >= 2) {
-            Spacer(Modifier.height(12.dp))
-            Text("Четыре недели, в среднем за день с записями", style = MaterialTheme.typography.titleSmall)
-            val weekLabels = listOf("−3 нед", "−2 нед", "−1 нед", "эта")
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Column(Modifier.weight(1f)) {
-                    Text("Ккал", style = MaterialTheme.typography.labelMedium, color = KCAL_INK)
-                    StackedColumns(
-                        columns = weeks.mapIndexed { i, list ->
-                            val v = if (list.isEmpty()) 0f else list.sumOf { it.kcal }.toFloat() / list.size
-                            StackedColumn(weekLabels[i], listOf(ChartSlice("ккал", v, KCAL_INK)))
-                        },
-                        height = 72.dp,
-                        target = kcalTarget.takeIf { it > 0 }?.toFloat(),
-                        valueText = { "${it.roundToInt()}" },
-                        highlight = 3,
+            SeriesToggles(series, { i -> series = series.mapIndexed { k, s -> if (k == i) s.copy(hidden = !s.hidden) else s } })
+            LinesChart(
+                labels = ws.map { dm(it.monday) },
+                series = series,
+                tip = { i ->
+                    val w = ws[i]
+                    Readout(
+                        weekRange(w.monday, m.from, m.to),
+                        series.filter { !it.hidden }.map { s -> ReadoutRow(s.color, "${s.name} ${s.data[i]?.roundToInt() ?: 0} мин") } +
+                            ReadoutRow(null, "экран ${f1(w.screenMin / 60)} ч, подъёмов ${w.pickups.roundToInt()}"),
                     )
-                }
-                Column(Modifier.weight(1f)) {
-                    Text("Белок, г", style = MaterialTheme.typography.labelMedium, color = PROTEIN_INK)
-                    StackedColumns(
-                        columns = weeks.mapIndexed { i, list ->
-                            val v = if (list.isEmpty()) 0f else list.sumOf { it.protein }.toFloat() / list.size
-                            StackedColumn(weekLabels[i], listOf(ChartSlice("белок", v, PROTEIN_INK)))
-                        },
-                        height = 72.dp,
-                        target = proteinTarget.takeIf { it > 0 }?.toFloat(),
-                        valueText = { "${it.roundToInt()}" },
-                        highlight = 3,
-                    )
-                }
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Дела и Правка
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun TasksAppCard(
-    context: Context,
-    pool: List<ZasechkaStore.Entry>,
-    window: DayReport.Window,
-    dayStart: Long,
-    isToday: Boolean,
-    now: Long,
-    dueDates: List<String>,
-    costs: Map<String, Double>,
-    dictations: Map<String, Pair<Int, Long>>,
-) {
-    val dateKey = isoOf(dayStart)
-    val todayKey = isoOf(now)
-    PaperCard(
-        label = "Дела и Правка",
-        info = "Сколько Правка сама стоила и сколько было наговорено — то, чего в ленте нет: там это лежит как «Систематизация».",
-    ) {
-        val starts = DayReport.todoistStarts(pool, window)
-        val dueToday = dueDates.count { it == dateKey }
-        val overdue = dueDates.count { it.isNotBlank() && it < todayKey }
-        Text(
-            "Дел запущено в ленте: $starts" +
-                (if (isToday) " · в списке на сегодня $dueToday · просрочено $overdue" else ""),
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Spacer(Modifier.height(10.dp))
-        val days14 = (13 downTo 0).map { dayStart - it * DAY }
-        val costs14 = days14.map { (costs[isoOf(it)] ?: 0.0).toFloat() }
-        if (costs14.any { it > 0f }) {
-            Text("Деньги на модель, 14 дней, USD", style = MaterialTheme.typography.labelMedium, color = COST_INK)
-            StackedColumns(
-                columns = days14.mapIndexed { i, ds ->
-                    StackedColumn(if (i % 2 == 1) weekdayOf(ds) else "", listOf(ChartSlice("usd", costs14[i], COST_INK)))
                 },
-                height = 80.dp,
-                valueText = { if (it >= 0.995f) String.format(Locale.US, "%.1f", it) else String.format(Locale.US, "%.2f", it).removePrefix("0") },
-                highlight = 13,
-            )
-            val today = costs[dateKey] ?: 0.0
-            val week = (0..6).sumOf { costs[isoOf(dayStart - it * DAY)] ?: 0.0 }
-            val month = costs.values.sum()
-            Text(
-                "За день ${String.format(Locale.US, "%.2f", today)} · за семь дней ${String.format(Locale.US, "%.2f", week)} · " +
-                    "за 28 ${String.format(Locale.US, "%.2f", month)}",
-                style = MaterialTheme.typography.bodySmall,
+                height = 220.dp,
             )
         }
-        val d = dictations[dateKey]
-        val weekDict = (0..6).mapNotNull { dictations[isoOf(dayStart - it * DAY)] }
-        if (d != null || weekDict.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Диктовок за день ${d?.first ?: 0}" +
-                    (d?.let { " · речи ${dur(DayReport.msToMin(it.second))}" } ?: "") +
-                    " · за семь дней ${weekDict.sumOf { it.first }}",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 9. Коэффициенты
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun RatioRow(name: String, cur: String, ref: String, formula: String) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(name, style = MaterialTheme.typography.bodyMedium)
-            PaperHint(formula)
-        }
-        Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(start = 8.dp)) {
-            Text(cur, style = MaterialTheme.typography.titleMedium)
-            Text(
-                ref,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        PaperHint("Телефон с лентой не складывается: это параллельный счёт.")
     }
 }
 
 @Composable
-private fun RatiosCard(
-    frame: Frame,
-    refFrame: Frame,
-    phone: PhoneDaySummary.Summary,
-    refPhone: PhoneDaySummary.Summary,
-    isToday: Boolean,
-) {
-    val partial = isToday && !frame.full
-    val refWord = if (partial) "неделю назад к этому часу" else "неделю назад"
-    fun ref(text: String) = "$refWord $text"
-    val awake = frame.awakeMin
-    val refAwake = refFrame.awakeMin
-    val awakeH = awake / 60.0
-    val refAwakeH = refAwake / 60.0
-    val plusMin = DayReport.msToMin(frame.slices.filter { it.worth > 0 }.sumOf { it.ms })
-    val refPlusMin = DayReport.msToMin(refFrame.slices.filter { it.worth > 0 }.sumOf { it.ms })
-    val holes = frame.minutes(DayReport::isHole)
-    val refHoles = refFrame.minutes(DayReport::isHole)
-    val t = DayReport.triangle(frame.slices)
-    val rt = DayReport.triangle(refFrame.slices)
-    PaperCard(
-        label = "Коэффициенты",
-        info = "Порогов тут нет нарочно: что «хорошо», решают его собственные дни, а не таблица. " +
-            "Формула под каждым числом — чтобы можно было проверить.",
-    ) {
-        RatioRow(
-            "КПД дня", pct(frame.balance.efficiency), ref(pct(refFrame.balance.efficiency)),
-            "плюсовые очки к обороту: плюс ÷ (плюс + |минус|)",
-        )
-        RatioRow(
-            "Плюсовое время", pct(share(plusMin, awake)), ref(pct(share(refPlusMin, refAwake))),
-            "минуты в категориях с ценностью выше нуля ÷ бодрствование",
-        )
-        RatioRow(
-            "Дыры", pct(share(holes, awake)), ref(pct(share(refHoles, refAwake))),
-            "потери и не размечено ÷ бодрствование",
-        )
-        RatioRow(
-            "Телефон", pct(share(phone.screenMin, awake)),
-            (if (partial) "неделю назад за весь день " else "$refWord ") + pct(share(refPhone.screenMin, refAwake)),
-            "экран ÷ бодрствование (телефон считается по дням)",
-        )
-        RatioRow(
-            "Отвлечений в час", if (awakeH > 0) fmt1(phone.glances / awakeH) else "—",
-            ref(if (refAwakeH > 0) fmt1(refPhone.glances / refAwakeH) else "—"),
-            "взял и убрал быстрее двух минут, на час бодрствования",
-        )
-        RatioRow(
-            "Дел в час", if (awakeH > 0) fmt1(frame.focus.entries / awakeH) else "—",
-            ref(if (refAwakeH > 0) fmt1(refFrame.focus.entries / refAwakeH) else "—"),
-            "своих дел (без автоматики, заполнителей и сна) на час бодрствования · средняя длина ${dur(frame.focus.avgEntryMin)}, самое долгое ${dur(frame.focus.longestMin)}",
-        )
-        RatioRow(
-            "Глубокая работа", pct(frame.focus.deepShare) + " · ${frame.focus.deepBlocks} бл.",
-            ref(pct(refFrame.focus.deepShare) + " · ${refFrame.focus.deepBlocks} бл."),
-            "доля работы в блоках от 45 минут без смены дела",
-        )
-        RatioRow(
-            "Треугольник", pct(t.index), ref(pct(rt.index)),
-            "минуты от +6 ÷ (от +6 плюс до −2): чем выше, тем шире верх",
-        )
+private fun HowToReadCard() {
+    val t = LocalPravkaType.current
+    PaperCard(label = "Как это читать") {
+        listOf(
+            "Блок ленты тянется до следующей засечки: когда засечек мало, длинные блоки завышены.",
+            "В счёте только сутки, где лента закрыла хотя бы 20 часов; время без записи внутри них — «не размечено».",
+            "Окно и календарь — только будни. «Выход из дома» — любая поездка или проход (Передвижение), начатые между 10 и 16.",
+            "Мастерская — категория «Систематизация»; соло — «Секс: соло»; утечка — потери, отдых, соло и дыры вместе.",
+            "Сон в средних сутках — по ленте (время в кровати); в таблице недель — с часов, из intervals.",
+            "Встречи — блоки «Работа: звонки» от 10 минут; созвоны внутри другой работы не видны.",
+            "План тренировок — календарь intervals, который телефон хранит на 40 дней назад; сделано — в тот же день.",
+            "Еда — только подтверждённые приёмы, дни без записей в средние не входят; рецепт — приём, повторившийся в трети записанных дней и чаще.",
+            "Деньги — подключённые счета и пуши банков; переводы между своими, наличные и займы не траты. Месяц со звёздочкой идёт.",
+        ).forEach { line ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                Text("·", style = t.body, color = Ink.TextMeta, modifier = Modifier.padding(end = 8.dp))
+                Text(line, style = t.body, color = Ink.TextSecondary)
+            }
+        }
     }
 }

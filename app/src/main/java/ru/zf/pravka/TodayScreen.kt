@@ -57,6 +57,7 @@ import ru.zf.pravka.core.CalendarRules
 import ru.zf.pravka.core.DayAssembler
 import ru.zf.pravka.core.DayAssembler.DayItem
 import ru.zf.pravka.core.DayReport
+import ru.zf.pravka.core.LifeStats
 import ru.zf.pravka.core.TodayFold
 import ru.zf.pravka.core.DayState
 import ru.zf.pravka.core.Dela
@@ -311,7 +312,7 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
         val wide = twoPane()
         val head = TodayHead(state, onWeather = { weatherOpen = true })
         if (wide) {
-            TodayWide(model, weather, now, dayOffset, { dayOffset = it }, initial, nav, onItem, sayBar, head)
+            TodayWide(model, weather, now, dayOffset, { dayOffset = it }, initial, nav, onItem, sayBar, head, entries)
         } else {
             TodayFolded(model, weather, now, dayOffset, { dayOffset = it }, initial, nav, onItem, sayBar, head)
         }
@@ -632,6 +633,7 @@ private fun TodayWide(
     act: ItemActions,
     sayBar: @Composable (Modifier) -> Unit,
     head: TodayHead,
+    entries: List<ru.zf.pravka.data.ZasechkaStore.Entry>,
 ) {
     val t = LocalPravkaType.current
     val f = model.facts
@@ -679,6 +681,7 @@ private fun TodayWide(
                 modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
                 wide = true,
             )
+            AverageHours(entries, now, Modifier.padding(bottom = 24.dp))
         }
         Spacer(Modifier.width(24.dp))
         // Справа — «Хроника» и лента, строка «сказать» внизу колонки.
@@ -707,6 +710,52 @@ private fun TodayWide(
                 }
             }
             sayBar(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding().padding(bottom = 18.dp))
+        }
+    }
+}
+
+/** Сколько недель берёт средний день под циферблатом. */
+private const val HOURS_WEEKS = 8
+
+/**
+ * Средний день по часам под циферблатом (разворот, 11.10.2026). Владелец про
+ * верхний график своего разбора: «его можно поставить в раскрытое состояние
+ * под нашим циферблатом как средняя по дням… средняя в целом по всем неделям,
+ * а также меню выбора: только понедельники, только вторники…». Те же 24
+ * столбика, что в Общей статистике (`ReportTab.kt`), за восемь недель до
+ * вчера; чипы — все дни, будни, выходные, любой день недели. Циферблат — этот
+ * день, график под ним — какой такой день обычно.
+ */
+@Composable
+private fun AverageHours(entries: List<ru.zf.pravka.data.ZasechkaStore.Entry>, now: Long, modifier: Modifier = Modifier) {
+    val today = DayFacts.localDay(now)
+    val days = remember(entries, today) {
+        val (from, to) = LifeStats.period(today, HOURS_WEEKS)
+        LifeStats.ribbon(entries, from, to, now)
+    }
+    var pick by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(LifeStats.DayPick.ALL) }
+    val profile = remember(days, pick) { LifeStats.hourProfile(days, pick) }
+    Column(modifier.fillMaxWidth()) {
+        ru.zf.pravka.ui.PaperCard(label = "Средний день по часам") {
+            DayPickChips(pick) { pick = it }
+            Spacer(Modifier.height(10.dp))
+            if (profile.empty) {
+                ru.zf.pravka.ui.PaperHint("За $HOURS_WEEKS недель полных суток нет: ${pick.many}.")
+            } else {
+                Text(
+                    "${pick.many.replaceFirstChar { it.uppercase() }} за $HOURS_WEEKS недель, " +
+                        plural(profile.days, "сутки", "суток", "суток") + ": минуты каждого часа в среднем.",
+                    style = LocalPravkaType.current.caption,
+                    color = Ink.TextMeta,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+                ru.zf.pravka.ui.HoursChart(
+                    profile,
+                    height = 170.dp,
+                    nowHour = ((now - today.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()) / 3_600_000L).toInt().coerceIn(0, 23),
+                )
+                ru.zf.pravka.ui.LifeLegend(HOURS_LEGEND)
+            }
         }
     }
 }
