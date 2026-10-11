@@ -13,13 +13,20 @@ import ru.zf.pravka.data.ZasechkaStore
 class ZFaceTest {
 
     @Test
-    fun `у каждой заводской категории свой значок, кроме Не размечено`() {
+    fun `у каждой заводской категории свой значок`() {
         val all = ZasechkaStore.DEFAULT_CATEGORIES.map { it.name } +
             ZasechkaStore.neutralCategories().map { it.name }
-        for (name in all.distinct()) {
-            if (name == "Не размечено") assertNull(name, ZFace.icon(name))
-            else assertTrue("у «$name» нет значка", ZFace.icon(name) != null)
-        }
+        for (name in all.distinct()) assertTrue("у «$name» нет значка", ZFace.icon(name) != null)
+    }
+
+    @Test
+    fun `выбор владельца на листе значков`() {
+        // 11.10.2026: отдых — кофе, систематизация — ползунки, потери — Zzz,
+        // дыра — код. Рисунок живёт в ZFaceGlyphs, здесь — что к чему.
+        assertEquals(Icon.REST, ZFace.icon("Отдых"))
+        assertEquals(Icon.ORDER, ZFace.icon("Систематизация"))
+        assertEquals(Icon.LOSS, ZFace.icon("Потери"))
+        assertEquals(Icon.UNMARKED, ZFace.icon("Не размечено"))
     }
 
     @Test
@@ -56,12 +63,12 @@ class ZFaceTest {
     }
 
     @Test
-    fun `дыра — без значка, но с минутами`() {
+    fun `дыра — свой значок и минуты`() {
         val f = ZFace.of("Не размечено", "gap", 1_000L)
-        assertNull(f.icon)
+        assertEquals(Icon.UNMARKED, f.icon)
         assertEquals(1_000L, f.start)
         // Даже если заполнитель кто-то переименовал в «Потери» — это не дело.
-        assertNull(ZFace.of("Потери", "gap", 0L).icon)
+        assertEquals(Icon.UNMARKED, ZFace.of("Потери", "gap", 0L).icon)
         assertEquals(Icon.LOSS, ZFace.of("Потери", "voice", 0L).icon)
     }
 
