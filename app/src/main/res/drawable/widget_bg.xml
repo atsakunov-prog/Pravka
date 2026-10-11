@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Фон виджета Засечки: чернила приложения (оно всегда тёмное), сверху —
+     янтарный свет режима, как над вкладкой Засечки (`ui/Glow.kt`). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:angle="270"
+        android:startColor="#FF2A1E12"
+        android:centerColor="#FF1A1511"
+        android:endColor="#FF15120F" />
+    <corners android:radius="24dp" />
+    <stroke android:width="1dp" android:color="#33F78810" />
+</shape>

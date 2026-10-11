@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Виджет Засечки на главном экране (11.10.2026, `trigger/ZasechkaWidget.kt`). -->
+<resources>
+    <string name="widget_z_label">Засечка</string>
+    <string name="widget_z_desc">Что идёт и сколько, сменить голосом, недавние дела одним касанием, еда снимком или текстом, «Сегодня»</string>
+    <string name="widget_z_say">сменить</string>
+    <string name="widget_z_thought">мысль</string>
+    <string name="widget_z_photo">фото</string>
+    <string name="widget_z_gallery">галерея</string>
+    <string name="widget_z_text">текстом</string>
+    <string name="widget_z_today">сегодня</string>
+    <string name="widget_z_min">мин</string>
+    <string name="widget_z_idle_title">Ничего не идёт</string>
+    <string name="widget_z_idle_sub">тапни кружок и скажи, чем занят</string>
+    <string name="widget_z_preview_title">Созвон с Бетой</string>
+    <string name="widget_z_preview_sub">Работа: звонки · с 14:10</string>
+    <string name="widget_z_preview_a1">Обед</string>
+    <string name="widget_z_preview_a2">Почта</string>
+    <string name="widget_z_preview_a3">Прогулка</string>
+
+    <style name="WidgetChip">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">32dp</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:background">@drawable/widget_chip</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:gravity">center</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:paddingStart">10dp</item>
+        <item name="android:paddingEnd">10dp</item>
+        <item name="android:textColor">#FFF2ECE2</item>
+        <item name="android:textSize">13sp</item>
+    </style>
+
+    <style name="WidgetKeyBox">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:gravity">center_horizontal</item>
+        <item name="android:orientation">vertical</item>
+    </style>
+
+    <style name="WidgetKey">
+        <item name="android:layout_width">40dp</item>
+        <item name="android:layout_height">40dp</item>
+        <item name="android:padding">9dp</item>
+        <item name="android:scaleType">fitCenter</item>
+    </style>
+
+    <style name="WidgetKeyLabel">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">3dp</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:textColor">#FFA8998A</item>
+        <item name="android:textSize">10sp</item>
+    </style>
+</resources>

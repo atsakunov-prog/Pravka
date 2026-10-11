@@ -87,6 +87,9 @@ class PravkaApp : Application() {
         // (и единственный, если служба доступности почему-то выключена).
         ru.zf.pravka.data.Backups.tick(this) { line -> eventLog.add(line) }
         appScope.launch { settings.phoneMicOnlyFlow.collect { phoneMicOnly = it } }
+        // Виджет Засечки на главном экране: перерисовка на каждую перемену ленты
+        // и минуты раз в минуту, пока виджет стоит (11.10.2026).
+        ru.zf.pravka.trigger.ZasechkaWidget.watch(this)
         appScope.launch { settings.speechOwnMicFlow.collect { speechOwnMic = it } }
         appScope.launch { settings.readyChimeFlow.collect { readyChime = it } }
         appScope.launch { settings.chimeAfterStartFlow.collect { chimeAfterStartMs = it } }

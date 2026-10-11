@@ -1,6 +1,7 @@
 package ru.zf.pravka.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -88,6 +89,8 @@ fun SayBar(
     error: String? = null,
     onRetry: (() -> Unit)? = null,
     sendIcon: ImageVector = Glyphs.ArrowUp,
+    /** Фокус строки снаружи: «текстом» с виджета открывает её сразу с клавиатурой. */
+    focusRequester: androidx.compose.ui.focus.FocusRequester? = null,
 ) {
     val mode = LocalMode.current
     val t = LocalPravkaType.current
@@ -166,7 +169,9 @@ fun SayBar(
                         maxLines = maxLines,
                         keyboardOptions = KeyboardOptions(imeAction = if (maxLines == 1) ImeAction.Send else ImeAction.Default),
                         keyboardActions = KeyboardActions(onSend = { if (sendEnabled && enabled) onSend() }),
-                        modifier = Modifier.fillMaxWidth().semantics { contentDescription = placeholder },
+                        modifier = Modifier.fillMaxWidth()
+                            .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
+                            .semantics { contentDescription = placeholder },
                         decorationBox = { inner ->
                             Box(contentAlignment = Alignment.CenterStart) {
                                 if (value.isEmpty()) {

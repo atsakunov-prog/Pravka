@@ -127,6 +127,9 @@ internal fun FoodTab(
     // Куда камера положит кадр: файл нужен ДО съёмки, чтобы отдать в интент URI.
     var pendingPhoto by remember { mutableStateOf<File?>(null) }
     var autoFired by remember { mutableStateOf(false) }
+    // «текстом» с виджета: фокус в строку «что съел?» и клавиатура.
+    val inputFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) { store.load() }
@@ -182,49 +185,6 @@ internal fun FoodTab(
         }
     }
 
-    LaunchedEffect(autoAction) {
-        // Просьба погашена — следующая (второй карандаш с пилюли при открытой
-        // вкладке) должна сработать снова: иначе вкладка слушалась бы один раз.
-        val action = autoAction ?: run { autoFired = false; return@LaunchedEffect }
-        if (autoFired) return@LaunchedEffect
-        autoFired = true
-        onAutoConsumed()
-        // Карандаш у позиции в итоге еды (пилюля, 26.09.2026): открыть этот
-        // приём в редакторе — «где уже можно будет и редактировать, и всё делать».
-        if (action.startsWith("edit:")) {
-            editing = action.removePrefix("edit:").toLongOrNull()
-            return@LaunchedEffect
-        }
-        when (action) {
-            "photo" -> {
-                val file = File(context.cacheDir, "eda-shot.jpg")
-                pendingPhoto = file
-                val uri = androidx.core.content.FileProvider.getUriForFile(
-                    context, BuildConfig.APPLICATION_ID + ".files", file
-                )
-                camera.launch(uri)
-            }
-            "barcode" -> {
-                ru.zf.pravka.ui.scanBarcode(
-                    context = context,
-                    onFail = { message -> Feedback.toast(app, message, long = true) },
-                ) { code ->
-                    app.appScope.launch {
-                        val result = runCatching { app.foodEngine.parseBarcode(code) }
-                            .getOrElse { Result.failure(it) }
-                        result.onFailure { e ->
-                            Feedback.toast(
-                                app,
-                                (e.message ?: "Штрихкод не нашёлся") + " — сними этикетку камерой",
-                                long = true,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     val gallery = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
@@ -268,6 +228,63 @@ internal fun FoodTab(
             }
         }
     }
+    // Просьба снаружи (кнопка еды, пилюля, виджет) — ниже всех дорог: ветка
+    // «gallery» зовёт pickImage, объявленный выше этой строки.
+    LaunchedEffect(autoAction) {
+        // Просьба погашена — следующая (второй карандаш с пилюли при открытой
+        // вкладке) должна сработать снова: иначе вкладка слушалась бы один раз.
+        val action = autoAction ?: run { autoFired = false; return@LaunchedEffect }
+        if (autoFired) return@LaunchedEffect
+        autoFired = true
+        onAutoConsumed()
+        // Карандаш у позиции в итоге еды (пилюля, 26.09.2026): открыть этот
+        // приём в редакторе — «где уже можно будет и редактировать, и всё делать».
+        if (action.startsWith("edit:")) {
+            editing = action.removePrefix("edit:").toLongOrNull()
+            return@LaunchedEffect
+        }
+        when (action) {
+            "photo" -> {
+                val file = File(context.cacheDir, "eda-shot.jpg")
+                pendingPhoto = file
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    context, BuildConfig.APPLICATION_ID + ".files", file
+                )
+                camera.launch(uri)
+            }
+            // С виджета Засечки (11.10.2026): снимок из галереи и строка
+            // «что съел?» сразу с клавиатурой.
+            "gallery" -> pickImage()
+            "text" -> scope.launch {
+                // Не в этом эффекте: onAutoConsumed() выше гасит просьбу, ключ
+                // меняется, и пауза здесь оборвалась бы вместе с эффектом.
+                // Окно только что пришло на передний план — клавиатура
+                // поднимается, когда у него уже есть фокус.
+                kotlinx.coroutines.delay(250)
+                runCatching { inputFocus.requestFocus() }
+                keyboard?.show()
+            }
+            "barcode" -> {
+                ru.zf.pravka.ui.scanBarcode(
+                    context = context,
+                    onFail = { message -> Feedback.toast(app, message, long = true) },
+                ) { code ->
+                    app.appScope.launch {
+                        val result = runCatching { app.foodEngine.parseBarcode(code) }
+                            .getOrElse { Result.failure(it) }
+                        result.onFailure { e ->
+                            Feedback.toast(
+                                app,
+                                (e.message ?: "Штрихкод не нашёлся") + " — сними этикетку камерой",
+                                long = true,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     val confirmMeal: (Long) -> Unit = { id ->
         scope.launch {
             val outcome = app.foodEngine.confirm(id)
@@ -422,6 +439,7 @@ internal fun FoodTab(
         sendEnabled = !busy && draft.isNotBlank(),
         busy = busy || talking,
         maxLines = 4,
+        focusRequester = inputFocus,
         trailing = {
             if (draft.isBlank()) {
                 ru.zf.pravka.ui.SayIcon(Glyphs.Camera, "снять", takePhoto, enabled = !busy)

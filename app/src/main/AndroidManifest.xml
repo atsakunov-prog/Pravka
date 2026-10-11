@@ -184,6 +184,23 @@
             android:noHistory="true"
             android:exported="false" />
 
+        <!-- Виджет Засечки на главном экране (11.10.2026): что идёт, «ещё раз»,
+             еда и «Сегодня». exported=true обязательно: обновления шлёт
+             система; свои касания идут не сюда, а в трамплины, которые наружу
+             закрыты (ZasechkaQuickActivity), — чужое приложение не начнёт дело
+             в ленте широковещательным интентом. -->
+        <receiver
+            android:name=".trigger.ZasechkaWidget"
+            android:exported="true"
+            android:label="@string/widget_z_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/zasechka_widget_info" />
+        </receiver>
+
         <activity
             android:name=".trigger.ZasechkaQuickActivity"
             android:theme="@style/Theme.Transparent"

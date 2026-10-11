@@ -141,6 +141,8 @@ class MainActivity : ComponentActivity() {
         // The Засечка button's long press and its notifications land straight
         // on the timesheet tab.
         const val EXTRA_TAB = "tab"
+        /** «Сегодня» — с виджета Засечки (11.10.2026): из любой вкладки на главный экран. */
+        const val TAB_TODAY = "today"
         const val TAB_PRAVKA = "pravka"
         const val TAB_ZASECHKA = "zasechka"
         const val TAB_TODOIST = "todoist"
@@ -160,7 +162,9 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_SETTINGS_GROUP = "settings_group"
 
         // Кнопка еды: «сфоткай тарелку» / «штрихкод» с длинного нажатия
-        // открывают Тело (Е) и сразу запускают камеру или сканер.
+        // открывают Тело (Е) и сразу запускают камеру или сканер. С виджета
+        // Засечки (11.10.2026) ещё «gallery» — снимок из галереи — и «text» —
+        // строка «что съел?» сразу с клавиатурой.
         const val EXTRA_FOOD_ACTION = "food_action"
 
         /** На какой сборке приложение уже само просило уведомления — раз на сборку. */
@@ -250,6 +254,7 @@ class MainActivity : ComponentActivity() {
             TAB_SETTINGS -> Tab.SETTINGS
             TAB_PROMPTS -> Tab.PROMPTS
             TAB_FEEDBACK -> Tab.FEEDBACK
+            TAB_TODAY -> Tab.TODAY
             TAB_PRAVKA -> Tab.PRAVKA
             TAB_ZASECHKA -> Tab.ZASECHKA
             TAB_TODOIST -> Tab.TODOIST

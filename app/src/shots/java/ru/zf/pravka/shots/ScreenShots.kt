@@ -457,12 +457,47 @@ class ScreenShots {
         overlay("overlay-08-menu-p")
         svc.floatingButton?.hideMenu(); settle()
 
+        widgets()
+
         // Стопка вместо диска: все четыре кнопки разом (у дока видны только «П» и «З»).
         runBlocking { RuntimeEnvironment.getApplication().let { (it as PravkaApp).settings.setDiskMode(false) } }
         settle(30)
         overlay("overlay-09-stack")
         runBlocking { RuntimeEnvironment.getApplication().let { (it as PravkaApp).settings.setDiskMode(true) } }
         settle(30)
+    }
+
+    /**
+     * Виджет Засечки (11.10.2026): три размера на тёмных обоях — строка 4×1,
+     * 4×2 без «ещё раз» и высокий 4×3. Данные — посев снимков (идёт
+     * «Друзья в гостях»).
+     */
+    private fun widgets() {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        val model = runBlocking { ru.zf.pravka.core.ZWidget.model(app.zasechkaStore.all(), System.currentTimeMillis()) }
+        val d = app.resources.displayMetrics.density
+        for ((name, size, dims) in listOf(
+            Triple("widget-1-row", ru.zf.pravka.core.ZWidget.Size.ROW, 320 to 76),
+            Triple("widget-2-actions", ru.zf.pravka.core.ZWidget.Size.ACTIONS, 320 to 150),
+            Triple("widget-3-full", ru.zf.pravka.core.ZWidget.Size.FULL, 320 to 200),
+            Triple("widget-4-narrow", ru.zf.pravka.core.ZWidget.Size.ACTIONS, 170 to 150),
+        )) {
+            val (wDp, hDp) = dims
+            val rv = ru.zf.pravka.trigger.ZasechkaWidget.views(app, model, size, ru.zf.pravka.core.ZWidget.wide(wDp), true)
+            val host = android.widget.FrameLayout(app)
+            val v = rv.apply(app, host)
+            val w = (wDp * d).toInt()
+            val h = (hDp * d).toInt()
+            v.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY))
+            v.layout(0, 0, w, h)
+            val pad = (16 * d).toInt()
+            val bmp = android.graphics.Bitmap.createBitmap(w + 2 * pad, h + 2 * pad, android.graphics.Bitmap.Config.ARGB_8888)
+            val c = android.graphics.Canvas(bmp)
+            c.drawColor(0xFF3B4A5C.toInt())
+            c.translate(pad.toFloat(), pad.toFloat())
+            v.draw(c)
+            File(dir, "$name.png").outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        }
     }
 
     /** Все окна процесса — на своих местах, прозрачный фон: чужое приложение подложат потом. */

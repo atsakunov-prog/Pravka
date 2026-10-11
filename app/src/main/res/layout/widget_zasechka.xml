@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Виджет Засечки (11.10.2026, `trigger/ZasechkaWidget.kt`). Три яруса:
+     что идёт (кружок «З» — тейк, текст — лента), «ещё раз» — недавние дела
+     одним касанием, ряд кнопок: сменить голосом, мысль, еда снимком, из
+     галереи, текстом, «Сегодня». Какие ярусы видны — решает размер
+     (`core/ZWidget.size`); тексты по умолчанию — для превью в списке виджетов. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:gravity="center_vertical"
+    android:orientation="vertical"
+    android:paddingStart="12dp"
+    android:paddingTop="10dp"
+    android:paddingEnd="14dp"
+    android:paddingBottom="10dp">
+
+    <LinearLayout
+        android:id="@+id/w_head"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <FrameLayout
+            android:id="@+id/w_face_box"
+            android:layout_width="46dp"
+            android:layout_height="46dp">
+
+            <ImageView
+                android:id="@+id/w_face"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@string/widget_z_say"
+                android:src="@drawable/widget_face" />
+
+            <ImageView
+                android:id="@+id/w_icon"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:importantForAccessibility="no"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_zfab_glyph" />
+
+            <!-- Узкий виджет: минуты в самом кружке, под значком, как на «З». -->
+            <TextView
+                android:id="@+id/w_face_min"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|center_horizontal"
+                android:layout_marginBottom="5dp"
+                android:fontFeatureSettings="tnum"
+                android:gravity="center"
+                android:includeFontPadding="false"
+                android:textColor="#FFF7F3EA"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+        </FrameLayout>
+
+        <LinearLayout
+            android:id="@+id/w_text_box"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/w_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_z_preview_title"
+                android:textColor="#FFF2ECE2"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/w_sub"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="1dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_z_preview_sub"
+                android:textColor="#FFA8998A"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/w_min_box"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:gravity="end"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/w_min"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFeatureSettings="tnum"
+                android:includeFontPadding="false"
+                android:text="25"
+                android:textColor="#FFFFA640"
+                android:textSize="26sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/w_unit"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/widget_z_min"
+                android:textColor="#FFA8998A"
+                android:textSize="11sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/w_again"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/w_a1"
+            style="@style/WidgetChip"
+            android:layout_marginEnd="6dp"
+            android:text="@string/widget_z_preview_a1" />
+
+        <TextView
+            android:id="@+id/w_a2"
+            style="@style/WidgetChip"
+            android:layout_marginEnd="6dp"
+            android:text="@string/widget_z_preview_a2" />
+
+        <TextView
+            android:id="@+id/w_a3"
+            style="@style/WidgetChip"
+            android:text="@string/widget_z_preview_a3" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/w_actions"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:orientation="horizontal">
+
+        <LinearLayout android:id="@+id/w_say" style="@style/WidgetKeyBox">
+            <ImageView style="@style/WidgetKey" android:background="@drawable/widget_face" android:src="@drawable/ic_w_mic" android:contentDescription="@string/widget_z_say" />
+            <TextView style="@style/WidgetKeyLabel" android:text="@string/widget_z_say" />
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/w_thought" style="@style/WidgetKeyBox">
+            <ImageView style="@style/WidgetKey" android:background="@drawable/widget_key" android:src="@drawable/ic_w_idea" android:contentDescription="@string/widget_z_thought" />
+            <TextView style="@style/WidgetKeyLabel" android:text="@string/widget_z_thought" />
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/w_photo" style="@style/WidgetKeyBox">
+            <ImageView style="@style/WidgetKey" android:background="@drawable/widget_key_food" android:src="@drawable/ic_w_camera" android:contentDescription="@string/widget_z_photo" />
+            <TextView style="@style/WidgetKeyLabel" android:text="@string/widget_z_photo" />
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/w_gallery" style="@style/WidgetKeyBox">
+            <ImageView style="@style/WidgetKey" android:background="@drawable/widget_key_food" android:src="@drawable/ic_w_image" android:contentDescription="@string/widget_z_gallery" />
+            <TextView style="@style/WidgetKeyLabel" android:text="@string/widget_z_gallery" />
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/w_text" style="@style/WidgetKeyBox">
+            <ImageView style="@style/WidgetKey" android:background="@drawable/widget_key_food" android:src="@drawable/ic_w_text" android:contentDescription="@string/widget_z_text" />
+            <TextView style="@style/WidgetKeyLabel" android:text="@string/widget_z_text" />
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/w_today" style="@style/WidgetKeyBox">
+            <ImageView style="@style/WidgetKey" android:background="@drawable/widget_key" android:src="@drawable/ic_w_today" android:contentDescription="@string/widget_z_today" />
+            <TextView style="@style/WidgetKeyLabel" android:text="@string/widget_z_today" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

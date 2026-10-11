@@ -99,6 +99,20 @@ object ZFaceGlyphs {
         StrokeGlyph(paths(icon), color, scale)
 
     /**
+     * Тот же значок картинкой — для виджета на главном экране: RemoteViews
+     * не принимают Drawable, только ресурс или Bitmap.
+     */
+    fun bitmap(icon: ZFace.Icon, color: Int, sizePx: Int, scale: Float = 0.52f, lift: Float = 0f): android.graphics.Bitmap {
+        val side = sizePx.coerceAtLeast(1)
+        val bmp = android.graphics.Bitmap.createBitmap(side, side, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        // [lift] — доля кружка вверх: место под минутами, как на кнопке «З».
+        canvas.translate(0f, -side * lift)
+        drawable(icon, color, scale).apply { setBounds(0, 0, side, side) }.draw(canvas)
+        return bmp
+    }
+
+    /**
      * Пути штрихом 2 из 24, вписанные в рамку по центру. Своего размера нет:
      * `ImageView` растягивает такой значок на всё поле, и место решает [scale],
      * как группа со scale 0.52 в векторе `_btn`.

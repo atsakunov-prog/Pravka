@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Круглая клавиша виджета: приподнятые чернила с тонкой кромкой. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="#FF2C251F" />
+    <stroke android:width="1dp" android:color="#FF3E342B" />
+</shape>
