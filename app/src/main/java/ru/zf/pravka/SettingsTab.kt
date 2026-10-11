@@ -913,6 +913,19 @@ private fun ButtonsSettings(app: PravkaApp) {
             onCheckedChange = { on -> scope.launch { settings.setModeIcons(on) } },
             hint = "перо, часы, галочка, рубль, вилка",
         )
+        // Лицо «З» — идущее дело (11.10.2026, `core/ZFace.kt`): подсмотрено у Серёжи.
+        val zFace by settings.zFaceFlow.collectAsState(initial = true)
+        PaperToggle(
+            title = "Дело на «З»",
+            checked = zFace,
+            onCheckedChange = { on -> scope.launch { settings.setZFace(on) } },
+            hint = "значок идущего дела и минуты под ним",
+            info = "Пока в ленте идёт дело, на кнопке «З» вместо буквы — значок его категории " +
+                "(луна — сон, вилка — еда, трубка — звонки, портфель — работа…), а под ним — " +
+                "сколько оно идёт: до часа минутами, дальше «1:25». Категория без своего значка " +
+                "и «Не размечено» оставляют «З», но минуты под ней всё равно идут. Выключено — " +
+                "прежняя «З» без числа.",
+        )
     }
 
     // Пилюля диктовки (владелец, 26.09.2026, по образцу Gemini): «она будет

@@ -174,6 +174,7 @@ class Settings(private val context: Context) {
         private val KEY_GOAL_WEIGHT = intPreferencesKey("body_goal_weight")
         private val KEY_SPORT_NOTIFY = booleanPreferencesKey("sport_notify_arrived")
         private val KEY_MODE_ICONS = booleanPreferencesKey("mode_icons_on_buttons")
+        private val KEY_Z_FACE = booleanPreferencesKey("z_face_running")
         private val KEY_PHONE_MIC_ONLY = booleanPreferencesKey("phone_mic_only")
         // z_auto_inserts - мёртвый ключ прежних врезок, которые резали ленту.
         // Поведения, которым он управлял, больше нет, поэтому и читать его
@@ -1506,6 +1507,16 @@ class Settings(private val context: Context) {
     val modeIconsFlow = context.dataStore.data.map { it[KEY_MODE_ICONS] ?: false }
     suspend fun setModeIcons(value: Boolean) {
         context.dataStore.edit { it[KEY_MODE_ICONS] = value }
+    }
+
+    /**
+     * Лицо «З» — идущее дело (11.10.2026, `core/ZFace.kt`): значок его категории
+     * и минуты под ним. С завода включено — так просил владелец; выключенный
+     * тумблер — прежняя «З» без числа.
+     */
+    val zFaceFlow = context.dataStore.data.map { it[KEY_Z_FACE] ?: true }
+    suspend fun setZFace(value: Boolean) {
+        context.dataStore.edit { it[KEY_Z_FACE] = value }
     }
 
     val sportNotifyFlow = context.dataStore.data.map { it[KEY_SPORT_NOTIFY] ?: true }

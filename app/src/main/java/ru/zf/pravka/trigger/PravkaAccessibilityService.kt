@@ -697,6 +697,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
             launch { app.zasechkaStore.clientsFlow.collect { zClientsCached = it } }
         }
+        // Значок идущего дела и его минуты на «З» (`core/ZFace.kt`).
+        watchZasechkaFace()
         zReminderHandler.postDelayed(zReminderTick, 60_000)
         lagExpectedAt = 0L
         lagHandler.removeCallbacks(lagTick)

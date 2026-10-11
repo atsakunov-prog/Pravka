@@ -2,7 +2,10 @@ package ru.zf.pravka.trigger
 
 import android.annotation.SuppressLint
 import android.graphics.PixelFormat
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -18,6 +21,7 @@ import kotlinx.coroutines.launch
 import ru.zf.pravka.R
 import ru.zf.pravka.core.DiskLook
 import ru.zf.pravka.core.PillGeometry
+import ru.zf.pravka.core.ZFace
 import ru.zf.pravka.data.Settings
 
 // The Засечка (timesheet) button: Правка's little sibling, drawn from the
@@ -30,7 +34,9 @@ import ru.zf.pravka.data.Settings
 //   drag       -> move; the "П" trails behind on a rubber band (owner's
 //                 design: the two buttons travel as a linked pair)
 // States: idle amber "З" / recording red stop / busy spinner / remind (steady deep amber)
-// (a time gap is waiting).
+// (a time gap is waiting). With an дело running, the idle face is that дело
+// instead of the "З": its category's glyph and the minutes it has run
+// (`core/ZFace.kt`, 11.10.2026).
 class ZasechkaButtonController(
     private val service: PravkaAccessibilityService,
     private val scope: CoroutineScope,
@@ -85,6 +91,16 @@ class ZasechkaButtonController(
     private var glyph: ImageView? = null
     private var recDot: View? = null
     private var progress: ProgressBar? = null
+
+    /** Минуты идущего дела под значком (`core/ZFace.kt`). */
+    private var minutes: TextView? = null
+    /** Идущее дело: значок и откуда считать минуты; null — прежняя «З» без числа. */
+    private var face: ZFace.Face? = null
+    // Свой хэндлер, а не postDelayed у вида: снятое из WindowManager окно
+    // (ручка, складывание, диск за краем) держит отложенное в очереди вида
+    // до возвращения, и минуты вставали бы с опозданием на целую минуту.
+    private val faceHandler = Handler(Looper.getMainLooper())
+    private val minuteTick = Runnable { renderMinutes() }
     /** Секунды до ответа вместо колеса (`core/Countdown.kt`), пока кнопка занята. */
     // Секунды до ответа — и на кнопке, и в её пилюле: искры и число (версия 3).
     // Пилюлю лямбда берёт при вызове: отсчёт заговорит, когда кнопка уже собрана.
@@ -227,8 +243,64 @@ class ZasechkaButtonController(
     }
 
     /** Перечитать глиф после переключения «иконки вместо букв». */
-    fun refreshGlyph() {
-        glyph?.setImageResource(ModeGlyphs.zasechka())
+    fun refreshGlyph() = applyGlyph()
+
+    /**
+     * Что идёт в ленте (`core/ZFace.kt`): значок категории вместо «З» и минуты
+     * под ним. Зовёт служба на каждую перемену открытой записи — новое дело,
+     * правка категории или начала; null — ничего не идёт или тумблер выключен.
+     */
+    fun setFace(value: ZFace.Face?) {
+        if (face == value) return
+        val iconChanged = face?.icon != value?.icon
+        face = value
+        if (iconChanged) applyGlyph()
+        applyFaceAndLook()
+    }
+
+    /** Знак на кнопке: значок идущего дела, а без него — своя «З» (буква или часы). */
+    private fun applyGlyph() {
+        val g = glyph ?: return
+        val icon = face?.icon
+        if (icon != null) g.setImageDrawable(ZFaceGlyphs.drawable(icon, PAPER))
+        else g.setImageResource(ModeGlyphs.zasechka())
+        // Буква и штриховой значок стоят над числом в разном масштабе.
+        layoutFace()
+    }
+
+    /** Подпись минут и следующий тик — ровно к смене минуты, а не раз в секунду. */
+    private fun renderMinutes() {
+        faceHandler.removeCallbacks(minuteTick)
+        val f = face ?: return
+        val m = minutes ?: return
+        if (m.visibility != View.VISIBLE) return
+        val elapsed = System.currentTimeMillis() - f.start
+        m.text = ZFace.label(elapsed)
+        faceHandler.postDelayed(minuteTick, ZFace.nextTickMs(elapsed))
+    }
+
+    /**
+     * Значок с минутами делят кружок: значок чуть меньше и выше середины,
+     * число — под ним. Доли от кнопки, чтобы ползунок размера двигал всё
+     * вместе; без минут значок стоит по центру, как прежняя «З».
+     */
+    private fun layoutFace() {
+        val m = minutes ?: return
+        val g = glyph ?: return
+        // В пикселях от кнопки, а не в sp: крупный шрифт системы не должен
+        // выдавливать число за кружок.
+        m.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, buttonSize * 0.21f)
+        (m.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+            lp.bottomMargin = (buttonSize * 0.13f).toInt()
+            m.layoutParams = lp
+        }
+        val lifted = m.visibility == View.VISIBLE
+        // Брусковая буква «З» тяжелее штриховых значков и в 0,82 упиралась
+        // в число (снимок 11.10.2026) — ей меньше.
+        val letter = face?.icon == null && !ModeGlyphs.icons
+        g.translationY = if (lifted) -buttonSize * 0.11f else 0f
+        g.scaleX = if (!lifted) 1f else if (letter) 0.68f else 0.82f
+        g.scaleY = g.scaleX
     }
 
     // One place decides face (glyph/dot/spinner) and color/alpha from the
@@ -236,6 +308,15 @@ class ZasechkaButtonController(
     private fun applyFaceAndLook() {
         val b = button ?: return
         glyph?.visibility = if (!busy && !recording) View.VISIBLE else View.GONE
+        // Минуты — часть лица в покое: пишет или ждёт ответа — на их месте
+        // стоп и секунды до ответа, два числа на кружке спорили бы.
+        val showMinutes = face != null && !busy && !recording
+        minutes?.let { m ->
+            val was = m.visibility == View.VISIBLE
+            m.visibility = if (showMinutes) View.VISIBLE else View.GONE
+            if (was != showMinutes) layoutFace()
+        }
+        if (showMinutes) renderMinutes() else faceHandler.removeCallbacks(minuteTick)
         when {
             recording -> {
                 background?.setColor(REC_RED)
@@ -715,6 +796,7 @@ class ZasechkaButtonController(
         hideInput()
         hideCancelBubble()
         follower.stop()
+        faceHandler.removeCallbacks(minuteTick)
         button?.let { runCatching { windowManager.removeView(it) } }
         attached = false
         button = null
@@ -731,15 +813,35 @@ class ZasechkaButtonController(
         container.elevation = dp(4).toFloat()
         container.alpha = idleAlpha
 
-        // The slab "З" - П's own geometry turned on its side (see the vector).
-        glyph = ImageView(service).apply {
-            setImageResource(ModeGlyphs.zasechka())
-        }
+        // The slab "З" - П's own geometry turned on its side (see the vector);
+        // with an дело running - its category's glyph (`applyGlyph`).
+        glyph = ImageView(service)
+        applyGlyph()
         container.addView(
             glyph,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        // Минуты идущего дела — бумагой, как знак: это часть лица, а не
+        // ожидание (секунды до ответа — серые, `ButtonCountdown`).
+        minutes = TextView(service).apply {
+            setTextColor(PAPER)
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            // Цифры одной ширины: «9» → «10» не должно ёрзать по кнопке.
+            fontFeatureSettings = "tnum"
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            maxLines = 1
+            visibility = View.GONE
+        }
+        container.addView(
+            minutes,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
             ),
         )
         recDot = View(service).apply {
@@ -797,6 +899,7 @@ class ZasechkaButtonController(
                 p.width = buttonSize
                 p.height = buttonSize
                 runCatching { windowManager.updateViewLayout(container, p) }
+                layoutFace()
             }
         }
         scope.launch {
@@ -813,6 +916,10 @@ class ZasechkaButtonController(
         }
 
         container.setOnTouchListener(DragTouchListener().also { touch = it })
+        // Дело могло прийти раньше окна (служба шлёт лицо, как только прочла
+        // ленту): лицо — по нему же.
+        layoutFace()
+        applyFaceAndLook()
     }
 
     private fun applyPosition(p: WindowManager.LayoutParams, xFraction: Float, yFraction: Float) {

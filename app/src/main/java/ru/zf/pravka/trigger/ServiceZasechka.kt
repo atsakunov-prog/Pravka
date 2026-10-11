@@ -15,6 +15,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.R
@@ -543,6 +547,27 @@ internal fun PravkaAccessibilityService.recordZasechkaEntry(
                 )
             }
         }
+    }
+}
+
+/**
+ * Лицо «З» — идущее дело (`core/ZFace.kt`, 11.10.2026): открытая запись ленты
+ * и тумблер «Дело на «З»» превращаются в значок и начало для минут. Лента
+ * отдаёт весь список на каждую перемену — разбор идёт не на главном потоке
+ * службы, а кнопку трогают только новое дело, новая категория или новое
+ * начало (`distinctUntilChanged`); минуты дальше кнопка тикает сама.
+ */
+internal fun PravkaAccessibilityService.watchZasechkaFace() {
+    scope.launch {
+        combine(
+            app.zasechkaStore.entriesFlow.map { list -> list.lastOrNull { it.open } },
+            app.settings.zFaceFlow,
+        ) { open, on ->
+            if (on && open != null) ru.zf.pravka.core.ZFace.of(open.category, open.source, open.start) else null
+        }
+            .distinctUntilChanged()
+            .flowOn(Dispatchers.Default)
+            .collect { zButton?.setFace(it) }
     }
 }
 
