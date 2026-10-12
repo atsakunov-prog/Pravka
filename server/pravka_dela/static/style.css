@@ -34,6 +34,8 @@
   --accent-ink: #ffffff;
   --accent-soft: #e9edfb;
   --bar-fill: #3a3833;
+  /* «Чей это» (кто говорит во встрече) — восемь спокойных цветов текста, читаемых на белом и на фоне. */
+  --sp0: #2747c9; --sp1: #9a5b00; --sp2: #2f7d4f; --sp3: #a23b72; --sp4: #0e7490; --sp5: #6d4fc4; --sp6: #b4461f; --sp7: #5f5b53;
   --shadow: 0 10px 28px rgba(60, 50, 30, .12);
   --font: "Golos Text", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "SF Pro Text", Roboto, sans-serif;
   --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
@@ -60,6 +62,7 @@
     --text: #eceae5; --muted: #b3afa6; --faint: #8f8b82; --icon: #9c988f; --check: #6e6a62; --sep: #55524c;
     --ok: #7cc59a; --warn: #e3a957; --bad: #f08a7e;
     --accent: #93abf8; --accent-ink: #141414; --accent-soft: #252c47; --bar-fill: #b3afa6;
+    --sp0: #93abf8; --sp1: #e3a957; --sp2: #7cc59a; --sp3: #e58cbc; --sp4: #67c3d8; --sp5: #b9a3f5; --sp6: #ec9c74; --sp7: #b3afa6;
     --shadow: 0 12px 32px rgba(0, 0, 0, .45);
     color-scheme: dark;
   }
@@ -71,6 +74,7 @@
   --text: #eceae5; --muted: #b3afa6; --faint: #8f8b82; --icon: #9c988f; --check: #6e6a62; --sep: #55524c;
   --ok: #7cc59a; --warn: #e3a957; --bad: #f08a7e;
   --accent: #93abf8; --accent-ink: #141414; --accent-soft: #252c47; --bar-fill: #b3afa6;
+  --sp0: #93abf8; --sp1: #e3a957; --sp2: #7cc59a; --sp3: #e58cbc; --sp4: #67c3d8; --sp5: #b9a3f5; --sp6: #ec9c74; --sp7: #b3afa6;
   --shadow: 0 12px 32px rgba(0, 0, 0, .45);
   color-scheme: dark;
 }
@@ -1156,6 +1160,7 @@ a.pt-row:hover { color: var(--accent); text-decoration: none; }
 .rows > .tline + .tline { border-top: 0; }
 .tline .tl-t { color: var(--faint); font-size: 12.5px; padding-top: 2px; font-variant-numeric: tabular-nums; }
 .tline .tl-s { display: block; font-weight: 600; color: var(--muted); font-size: 13px; margin-top: 4px; }
+.tline .tl-s.tinted { color: var(--c); }
 .pchips select.pchip.add { padding: 5px 28px 5px 11px; border-radius: 8px; font-size: 14px; color: var(--muted); }
 .msub { font-size: 13px; color: var(--faint); font-weight: 600; margin: 14px 0 6px 2px; }
 
@@ -1165,16 +1170,18 @@ a.pt-row:hover { color: var(--accent); text-decoration: none; }
   .shell.with-card main.list > .scroll { padding-left: 24px; padding-right: 24px; }
   .shell.with-card .tabs-row { margin-left: -24px; margin-right: -24px; padding-left: 24px; padding-right: 24px; }
 }
-@media (min-width: 901px) and (max-width: 1100px) {
-  .top-end .who { display: none; }
+/* Средняя ширина (планшет, окно сбоку): сервисы не влезают в строку с «Ковчегом» и темой — уходят второй строкой
+   с прокруткой вбок, а не переносом в три ряда (как в общем слое: шапка в три строки съедала экран). */
+@media (max-width: 1100px) {
+  .kv-nav { order: 9; flex: 1 0 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -24px; padding: 0 24px; }
+  .kv-nav::-webkit-scrollbar { display: none; }
 }
 
 /* ── Телефон: сервисы — второй строкой с прокруткой вбок; колонка разделов — шторкой; карточка — листом снизу ── */
 @media (max-width: 900px) {
   .top-in { padding: max(8px, env(safe-area-inset-top)) 14px 8px; gap: 6px 10px; }
   .burger { display: inline-grid !important; margin-left: -6px; }
-  .kv-nav { order: 9; flex: 1 0 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -14px; padding: 0 14px; }
-  .kv-nav::-webkit-scrollbar { display: none; }
+  .kv-nav { margin: 0 -14px; padding: 0 14px; }
   .top-end { gap: 6px; }
   .top-end .who { display: none; }
   .shell, .shell.with-card { grid-template-columns: minmax(0, 1fr); }

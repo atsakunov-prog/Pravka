@@ -435,6 +435,20 @@ const ICONS = {
   arrowLeft: 'M19 12H5M11 6l-6 6 6 6',
   chevron: 'M9 6l6 6-6 6',
   coin: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM10 7.5h3.2a2.3 2.3 0 0 1 0 4.6H10M10 7.5v9M8.5 14.3h4.5',
+  car: 'M4 16v-4.5l2.2-5a1.5 1.5 0 0 1 1.4-1h8.8a1.5 1.5 0 0 1 1.4 1l2.2 5V16M3 16h18v2.5H3zM6.5 18.5V20M17.5 18.5V20M4 11.5h16M7 14h.01M17 14h.01',
+  chevronDown: 'M6 9l6 6 6-6',
+  copy: 'M9 9h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1zM5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1',
+  download: 'M12 4v11M7 10l5 5 5-5M5 20h14',
+  upload: 'M12 20V9M7 14l5-5 5 5M5 4h14',
+  flow: 'M4 8h15M15 4l4 4-4 4M20 16H5M9 12l-4 4 4 4',
+  headphones: 'M4 15v-3a8 8 0 0 1 16 0v3M4 15h3v5H5a1 1 0 0 1-1-1zM20 15h-3v5h2a1 1 0 0 0 1-1z',
+  magen: 'M12 3.5l7.4 12.75H4.6zM12 20.5L4.6 7.75h14.8z',
+  minus: 'M5 12h14',
+  more: 'M5 12h.01M12 12h.01M19 12h.01',
+  phone: 'M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2',
+  print: 'M7 9V4h10v5M7 17H5a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-2M7 14h10v6H7z',
+  server: 'M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01',
+  smile: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01',
   // Свои у Дел — тем же штрихом: «отдать Claude», «стоп» записи, раскрыть, меню, вопрос, разговор, огонь серии,
   // дерево жизни.
   up: 'M12 19V5.5M6 11l6-6 6 6',
@@ -790,10 +804,21 @@ function topBar() {
   const theme = el('div', { class: 'kv-theme', role: 'group', 'aria-label': 'Тема' },
     el('button', { type: 'button', 'data-t': 'light', title: 'Светлая', 'aria-label': 'Светлая тема', onclick: () => KV.setTheme('light') }, icon('sun', 16)),
     el('button', { type: 'button', 'data-t': 'dark', title: 'Тёмная', 'aria-label': 'Тёмная тема', onclick: () => KV.setTheme('dark') }, icon('moon', 16)));
+  const nav = el('nav', { class: 'kv-nav', 'aria-label': 'Сервисы' }, items);
+  // Уже 1100 px строка сервисов прокручивается вбок — показать текущий, а не начало списка. Шапка строится, пока
+  // страница ещё без размеров, поэтому один раз, когда строка впервые получит ширину; дальше её крутит человек.
+  const on = nav.querySelector('a.on');
+  let shown = false;
+  const toCurrent = () => {
+    if (shown || !nav.clientWidth) return;
+    shown = true;
+    if (on && nav.scrollWidth > nav.clientWidth) nav.scrollLeft = Math.max(0, on.offsetLeft - nav.offsetLeft - 24);
+  };
+  if (window.ResizeObserver) new ResizeObserver(toCurrent).observe(nav);
   return el('header', { class: 'top' }, el('div', { class: 'top-in' },
     el('button', { class: 'icon burger', title: 'Разделы: виды, фильтры, CRM, клиенты', 'aria-label': 'Разделы', onclick: () => { S.sideOpen = true; render(); } }, icon('menu', 20)),
     el('a', { class: 'brand', href: '#/today' }, el('img', { src: look.icon || '/static/icon.svg', alt: '' }), el('b', {}, 'Ковчег')),
-    el('nav', { class: 'kv-nav', 'aria-label': 'Сервисы' }, items),
+    nav,
     el('div', { class: 'top-end' }, theme, prefsMenu(),
       el('span', { class: 'who' }, S.me.name || S.me.user),
       el('button', { class: 'icon kv-out', title: 'Выйти', 'aria-label': 'Выйти',
@@ -4425,8 +4450,12 @@ function renderMeeting(id) {
   box.addEventListener('input', () => { S.mtLineQ = box.value; render(); });
   const mmss = (x) => (x == null ? '' : `${Math.floor(x / 60)}:${String(Math.floor(x % 60)).padStart(2, '0')}`);
   let prev = null;
+  // Кто говорит — своим цветом из палитры «чей это» Ковчега (--sp0…7), по порядку первой реплики во всей встрече:
+  // поиск по расшифровке цвета не перекрашивает.
+  const spk = new Map();
+  for (const x of v.lines || []) if (x.speaker && !spk.has(x.speaker)) spk.set(x.speaker, spk.size % 8);
   const lines = (v.lines || []).filter((x) => !lq || norm(x.text + ' ' + (x.speaker || '')).includes(norm(lq))).map((x) => {
-    const who = x.speaker && (x.speaker !== prev || lq) ? el('span', { class: 'tl-s' }, x.speaker) : null;
+    const who = x.speaker && (x.speaker !== prev || lq) ? tint(el('span', { class: 'tl-s' }, x.speaker), `var(--sp${spk.get(x.speaker)})`) : null;
     prev = x.speaker || prev;
     return el('div', { class: 'tline' }, el('span', { class: 'tl-t' }, mmss(x.start_sec)), el('div', {}, who, markIn(x.text, lq)));
   });
