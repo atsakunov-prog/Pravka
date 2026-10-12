@@ -1363,9 +1363,10 @@ private fun LearningTab(app: PravkaApp) {
         // авторазбора по расписанию. Разбор — только отсюда и из меню «П».
         SectionCard(
             label = "Разбор по кнопке",
-            info = "Одно поправленное слово уходит в словарь само, без модели. Здесь — " +
-                "сложные правки очередью для Опуса; «Обучить» в меню «П» разбирает " +
-                "текст под курсором сразу. Находки — в словарь с пометкой «авто-обучение».",
+            info = "Без модели в словарь уходит только ослышка, поправленная так же второй " +
+                "раз; остальные правки (смысл, форма слова, сложнее слова) — очередью для " +
+                "Опуса здесь и в ночном разборе. «Обучить» в меню «П» разбирает текст под " +
+                "курсором сразу. Находки — в словарь с пометкой «авто-обучение».",
         ) {
             var watch by remember { mutableStateOf<List<ru.zf.pravka.data.EditWatchStore.Entry>>(emptyList()) }
             var watchTick by remember { mutableStateOf(0) }
@@ -1448,7 +1449,8 @@ private fun LearningTab(app: PravkaApp) {
                         fmtC.format(java.util.Date(r.ts)) + " · " + r.pkg.substringAfterLast('.') + " · " +
                             when {
                                 r.result.startsWith("dict:") -> "в словарь: " + r.result.substringAfter(':').substringAfter(':')
-                                r.result == "pending" -> "ждёт «Разобрать сейчас»"
+                                r.result == "pending" -> "ждёт «Разобрать сейчас»" +
+                                    (if (r.pair.isNotEmpty()) " · " + r.pair else "")
                                 r.result.startsWith("same:") -> "уже в словаре"
                                 else -> r.result
                             },

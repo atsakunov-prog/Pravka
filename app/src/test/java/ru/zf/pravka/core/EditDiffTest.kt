@@ -23,7 +23,7 @@ class EditDiffTest {
     }
 
     @Test
-    fun `слово заменено на непохожее — подсказка, не замена`() {
+    fun `слово заменено на непохожее — правка смысла, не словарь`() {
         val s = EditDiff.singleSubstitution(
             "Надо сделать отчёт к вечеру и отправить.",
             "Надо выполнить отчёт к вечеру и отправить.",
@@ -31,6 +31,11 @@ class EditDiffTest {
         assertEquals("сделать", s!!.from)
         assertEquals("выполнить", s.to)
         assertFalse(s.similar)
+        // До 12.10.2026 такое уходило HINT «владелец предпочитает это слово».
+        assertTrue(
+            EditDiff.learn("Надо сделать отчёт к вечеру и отправить.", "Надо выполнить отчёт к вечеру и отправить.", emptyList(), emptyList())
+                is EditDiff.Learn.Queue
+        )
     }
 
     @Test
@@ -115,5 +120,105 @@ class EditDiffTest {
         )
         assertTrue(s!!.similar)
         assertTrue(s.inflection)
+    }
+
+    // ---- Куда правке дорога без модели (EditDiff.learn, 12.10.2026) ----
+    //
+    // Случай: за месяц захвата правок словарь получил подсказки «и» → «убирала»,
+    // «э» → «мне», «его» → «надо», «вечер» → «день» — владелец правил смысл
+    // сообщения, а диф видел одну замену. Короткие стреляли в каждой диктовке.
+
+    private val base = "Потому что новая бригада, и много до этого старая, убирала двор плохо."
+    private val edit = "Потому что новая бригада убирала много, до этого старая убирала двор плохо."
+
+    @Test
+    fun `«и» → «убирала» — диф видит одну замену, но в словарь она не попадает`() {
+        // Причина воспроизводится: правка смысла выглядит ровно одной заменой.
+        val s = EditDiff.singleSubstitution(base, edit)
+        assertEquals("и", s!!.from)
+        assertEquals("убирала", s.to)
+        assertFalse(s.similar)
+        // В словарь — ни сразу, ни при повторе той же пары: только в очередь Опусу.
+        val first = EditDiff.learn(base, edit, emptyList(), emptyList())
+        assertTrue(first is EditDiff.Learn.Queue)
+        assertEquals("и", (first as EditDiff.Learn.Queue).sub!!.from)
+        val again = EditDiff.learn(base, edit, emptyList(), listOf(EditDiff.pairKey(s), EditDiff.pairKey(s)))
+        assertTrue(again is EditDiff.Learn.Queue)
+    }
+
+    @Test
+    fun `обращение вместо первого слова — не словарь`() {
+        // Голова «Коль, привет!» отрезается как чужая — остаётся «Коля → А».
+        val r = EditDiff.learn(
+            "Коля, ты же отправил вчерашнюю презентацию?",
+            "Коль, привет! А ты же отправил вчерашнюю презентацию?",
+            emptyList(), emptyList(),
+        )
+        assertTrue(r is EditDiff.Learn.Queue)
+    }
+
+    @Test
+    fun `ослышка ложится в словарь со второй такой правки`() {
+        val b = "Созвонился со Стафджетом по отчёту, договорились до пятницы."
+        val e = "Созвонился со Стаффджетом по отчёту, договорились до пятницы."
+        val first = EditDiff.learn(b, e, emptyList(), listOf("другое→слово"))
+        assertTrue(first is EditDiff.Learn.Once)
+        val key = EditDiff.pairKey((first as EditDiff.Learn.Once).sub)
+        val second = EditDiff.learn(b, e, emptyList(), listOf(key))
+        assertTrue(second is EditDiff.Learn.Dict)
+        assertEquals("Стафджетом", (second as EditDiff.Learn.Dict).sub.from)
+    }
+
+    @Test
+    fun `похожая правка смысла впервые — ждёт повтора, а не HARD`() {
+        val r = EditDiff.learn(
+            "Мы на совете весь бюджет определили.",
+            "Мы на совете весь бюджет распределили.",
+            emptyList(), emptyList(),
+        )
+        assertTrue(r is EditDiff.Learn.Once)
+    }
+
+    @Test
+    fun `короткое слово не учится даже повторённым`() {
+        val b = "Положи дом на верхнюю полку."
+        val e = "Положи том на верхнюю полку."
+        val s = EditDiff.singleSubstitution(b, e)!!
+        assertTrue(s.similar)
+        val r = EditDiff.learn(b, e, emptyList(), listOf(EditDiff.pairKey(s)))
+        assertTrue(r is EditDiff.Learn.Queue)
+    }
+
+    @Test
+    fun `разбор застал набор — полуслово не словарь`() {
+        val r = EditDiff.learn(
+            "Пришли мне счёт за прошлый месяц, пожалуйста.",
+            "Пришли мне сч за прошлый месяц, пожалуйста.",
+            emptyList(), listOf("счёт→сч"),
+        )
+        assertTrue(r is EditDiff.Learn.Queue)
+        assertTrue(EditDiff.halfTyped("проигрывает", "проигрываетзвук"))
+        assertFalse(EditDiff.halfTyped("Стафджет", "Стаффджет"))
+    }
+
+    @Test
+    fun `слово уже в словаре, даже выключенное, — не трогаем`() {
+        val known = listOf(DictEntry(id = 7, from = "Стафджетом", to = "Стаффджетом", mode = DictMode.HARD, enabled = false, createdAt = 0))
+        val r = EditDiff.learn(
+            "Созвонился со Стафджетом по отчёту.",
+            "Созвонился со Стаффджетом по отчёту.",
+            known, emptyList(),
+        )
+        assertTrue(r is EditDiff.Learn.Known)
+    }
+
+    @Test
+    fun `короткие и служебные слова`() {
+        assertTrue(EditDiff.shortOrService("и"))
+        assertTrue(EditDiff.shortOrService("его"))
+        assertTrue(EditDiff.shortOrService("Когда"))
+        assertTrue(EditDiff.shortOrService("1100"))
+        assertFalse(EditDiff.shortOrService("стаф джет"))
+        assertFalse(EditDiff.shortOrService("Стаффджет"))
     }
 }

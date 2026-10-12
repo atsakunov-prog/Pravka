@@ -37,6 +37,13 @@ class CorrectionsLog(private val context: Context) {
         /** Что сделано: dict:HARD:a→b · dict:HINT:a→b · pending · opus:… · none */
         val result: String,
         val done: Boolean,
+        /**
+         * Замена одного слова, которую нашёл диф (`EditDiff.pairKey`), пусто —
+         * не нашёл. Держится отдельно от [result]: тот переписывает разбор
+         * Опуса, а повтор той же ослышки считается по всей памяти журнала
+         * (`EditDiff.learn`, 12.10.2026).
+         */
+        val pair: String = "",
     ) {
         val pending: Boolean get() = !done && result == "pending"
     }
@@ -66,6 +73,7 @@ class CorrectionsLog(private val context: Context) {
                         edited = o.optString("edited"),
                         result = o.optString("result"),
                         done = o.optBoolean("done", false),
+                        pair = o.optString("pair"),
                     )
                 )
             }
@@ -84,6 +92,7 @@ class CorrectionsLog(private val context: Context) {
                         put("id", e.id); put("ts", e.ts); put("pkg", e.pkg)
                         put("dictated", e.dictated); put("cleaned", e.cleaned); put("edited", e.edited)
                         put("result", e.result); put("done", e.done)
+                        if (e.pair.isNotEmpty()) put("pair", e.pair)
                     }
                 )
             }
@@ -98,10 +107,11 @@ class CorrectionsLog(private val context: Context) {
         edited: String,
         result: String,
         done: Boolean,
+        pair: String = "",
     ): Entry = withContext(Dispatchers.IO) {
         mutex.withLock {
             ensureLoaded()
-            val e = Entry(nextId++, System.currentTimeMillis(), pkg, dictated.take(4000), cleaned.take(4000), edited.take(4000), result, done)
+            val e = Entry(nextId++, System.currentTimeMillis(), pkg, dictated.take(4000), cleaned.take(4000), edited.take(4000), result, done, pair)
             entries.add(e)
             while (entries.size > 500) entries.removeAt(0)
             persist()
@@ -110,6 +120,11 @@ class CorrectionsLog(private val context: Context) {
     }
 
     suspend fun all(): List<Entry> = withContext(Dispatchers.IO) { mutex.withLock { ensureLoaded(); entries.toList() } }
+
+    /** Замены, уже встречавшиеся в правках, — для счёта повторов ослышки. */
+    suspend fun pairs(): List<String> = withContext(Dispatchers.IO) {
+        mutex.withLock { ensureLoaded(); entries.mapNotNull { it.pair.ifEmpty { null } } }
+    }
 
     /** Сложные правки, которых Опус ещё не видел, — очередь для «Разобрать сейчас». */
     suspend fun pending(): List<Entry> = withContext(Dispatchers.IO) {

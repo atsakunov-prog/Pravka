@@ -163,7 +163,8 @@
   (`data/PromptStore.kt`), заводские тексты — запас.
 - **Словарь, правила, обучение:** `data/DictionaryStore.kt`, `data/RulesStore.kt`,
   `data/LearnStore.kt`, `data/EditWatchStore.kt`, `core/ProofreadEngine.kt`,
-  `core/EditDiff.kt` (правка одного слова руками → словарь без модели),
+  `core/EditDiff.kt` (правка одного слова руками: повторённая ослышка →
+  словарь без модели, остальное — очередь Опусу, `EditDiff.learn`),
   `data/CorrectionsLog.kt` (журнал правок: надиктовано → модель → владелец,
   очередь для «Разобрать сейчас»). Захват правок — окно подписки на события
   текста после доставки (`armCapture` / `digestEdits` в службе), не

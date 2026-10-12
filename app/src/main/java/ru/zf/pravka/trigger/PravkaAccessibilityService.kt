@@ -1960,9 +1960,13 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Разбор устоявшихся правок: одно слово → словарь без модели, остальное → в
-     * журнал правок очередью для Опуса по кнопке. Зовётся по тишине после
-     * правки, по опустевшему полю и перед каждым новым тейком.
+     * Разбор устоявшихся правок: повторённая ослышка → словарь без модели,
+     * остальное → в журнал правок очередью для Опуса (кнопка «Разобрать
+     * сейчас» и ночной разбор). Решает `EditDiff.learn`: правка одного слова
+     * чаще меняет смысл сообщения, чем чинит ослышку, — HINT «владелец
+     * предпочитает это слово» из таких правок насыпал в словарь «"и" — это
+     * убирала» (12.10.2026). Зовётся по тишине после правки, по опустевшему
+     * полю и перед каждым новым тейком.
      */
     private fun digestEdits(quietMs: Long) {
         scope.launch(Dispatchers.Default) {
@@ -1970,40 +1974,58 @@ class PravkaAccessibilityService : AccessibilityService() {
                 val quiet = app.editWatch.quietEdited(quietMs)
                 for (entry in quiet) {
                     val edited = entry.lastSeen
-                    val sub = ru.zf.pravka.core.EditDiff.singleSubstitution(entry.baseline, edited)
-                    val known = app.dictionaryStore.all()
-                    when {
-                        sub != null && known.any { it.from.equals(sub.from, ignoreCase = true) } -> {
-                            app.corrections.append(entry.pkg, entry.dictated, entry.cleaned, edited, "same:${sub.from}", done = true)
-                        }
-                        // Та же основа, другое окончание («Папа → Пап») — правка под
-                        // контекст, не ослышка: HARD из неё переписывал каждое «папа»
-                        // во всех текстах (16.09). В словарь без модели не идёт —
-                        // в очередь «Разобрать сейчас», где Опус видит контекст.
-                        sub != null && sub.inflection -> {
-                            app.corrections.append(entry.pkg, entry.dictated, entry.cleaned, edited, "pending", done = false)
-                            app.learnLog.add("правка формы слова (${sub.from} → ${sub.to}) — не словарь, в очередь «Разобрать сейчас»")
-                        }
-                        sub != null -> {
-                            val mode = if (sub.similar) ru.zf.pravka.core.DictMode.HARD else ru.zf.pravka.core.DictMode.HINT
-                            app.dictionaryStore.add(
-                                sub.from, sub.to, mode,
-                                if (mode == ru.zf.pravka.core.DictMode.HINT) "владелец предпочитает это слово" else "правка руками",
+                    val verdict = ru.zf.pravka.core.EditDiff.learn(
+                        entry.baseline, edited, app.dictionaryStore.all(), app.corrections.pairs(),
+                    )
+                    when (verdict) {
+                        is ru.zf.pravka.core.EditDiff.Learn.Known -> {
+                            val sub = verdict.sub
+                            app.corrections.append(
+                                entry.pkg, entry.dictated, entry.cleaned, edited, "same:${sub.from}", done = true,
+                                pair = ru.zf.pravka.core.EditDiff.pairKey(sub),
                             )
+                        }
+                        is ru.zf.pravka.core.EditDiff.Learn.Dict -> {
+                            val sub = verdict.sub
+                            val mode = ru.zf.pravka.core.DictMode.HARD
+                            app.dictionaryStore.add(sub.from, sub.to, mode, "правка руками, дважды")
                             app.corrections.append(
                                 entry.pkg, entry.dictated, entry.cleaned, edited,
                                 "dict:$mode:${sub.from}→${sub.to}", done = true,
+                                pair = ru.zf.pravka.core.EditDiff.pairKey(sub),
                             )
-                            app.learnLog.add("В СЛОВАРЬ из правки руками: ${sub.from} → ${sub.to} [$mode]")
+                            app.learnLog.add("В СЛОВАРЬ из правки руками (второй раз): ${sub.from} → ${sub.to} [$mode]")
                             app.eventLog.add("edit→dict: ${sub.from} → ${sub.to} [$mode]")
                             cachedBiasing = collectBiasing()
                             kotlinx.coroutines.withContext(Dispatchers.Main) {
                                 Feedback.toast(this@PravkaAccessibilityService, "Словарь: «${sub.from}» → «${sub.to}»")
                             }
                         }
-                        else -> {
-                            app.corrections.append(entry.pkg, entry.dictated, entry.cleaned, edited, "pending", done = false)
-                            app.learnLog.add("правка руками сложнее одного слова — в очередь «Разобрать сейчас» (${entry.pkg})")
+                        is ru.zf.pravka.core.EditDiff.Learn.Once -> {
+                            // Похоже на ослышку, но впервые: в очередь (её видит и
+                            // ночной разбор), а тостом — когда она ляжет сама:
+                            // прежний тост «Словарь: …» на каждую правку пропал бы молча.
+                            val sub = verdict.sub
+                            app.corrections.append(
+                                entry.pkg, entry.dictated, entry.cleaned, edited, "pending", done = false,
+                                pair = ru.zf.pravka.core.EditDiff.pairKey(sub),
+                            )
+                            app.learnLog.add("правка руками (${sub.from} → ${sub.to}): ослышка? первый раз — в очередь «Разобрать сейчас», в словарь со второй такой правки (${entry.pkg})")
+                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                Feedback.toast(
+                                    this@PravkaAccessibilityService,
+                                    "Запомнил «${sub.from}» → «${sub.to}». В словарь — если поправишь так ещё раз.",
+                                )
+                            }
+                        }
+                        is ru.zf.pravka.core.EditDiff.Learn.Queue -> {
+                            val sub = verdict.sub
+                            app.corrections.append(
+                                entry.pkg, entry.dictated, entry.cleaned, edited, "pending", done = false,
+                                pair = sub?.let { ru.zf.pravka.core.EditDiff.pairKey(it) }.orEmpty(),
+                            )
+                            val what = sub?.let { "${it.from} → ${it.to}: " }.orEmpty()
+                            app.learnLog.add("правка руками ($what${verdict.why}) — не словарь, в очередь «Разобрать сейчас» (${entry.pkg})")
                         }
                     }
                     app.editWatch.markDigested(entry.id, edited)
