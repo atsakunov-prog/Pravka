@@ -15,7 +15,7 @@
 | GET  /api/me | кто я |
 | GET  /api/sync?since=N | всё изменившееся после N (телефон, веб) |
 | POST /api/ops | пачка операций с op_id (офлайн-очередь) |
-| GET  /api/view/<имя> | готовый список: morning, new, waiting, person, quick, now, project, week, search; CRM — pipeline, clients, client, deal (с журналом), dossier, ties, money; «Где мы» — where, where_avatar?device= (where.py) |
+| GET  /api/view/<имя> | готовый список: morning, new, waiting, person, quick, now, project, week, search; CRM — pipeline, clients, client, deal (с журналом), dossier, ties, money; «Где мы» — where, where_avatar?device= (where.py); встречи — meetings?sphere&q&project_id&person_id&sort&since&until&archived, meeting?id или ref (meetings.py) |
 | GET  /api/task/<id или номер> | дело с комментариями, журналом и откуда оно (origin) |
 | POST /api/parse | {"text", "project_id"?, "person_id"?} — Claude режет текст на дела и заводит их; ответ — номер задания |
 | GET  /api/parse/<номер> | run, пока думает; потом done с делами и заметками или error |
@@ -203,7 +203,11 @@ def build(cfg: Config) -> Starlette:
                            # Свод и «кто это» (06.10.2026)
                            "key", "prefix", "phone", "telegram", "telegram_id", "email",
                            # «Где мы» (10.10.2026): аватар одного телефона
-                           "device"}}
+                           "device",
+                           # Встречи (12.10.2026): карточка (id, ref, окно расшифровки, сырьё) и список (сортировка,
+                           # даты, убранные, неразобранные). Без них вид молча получал пусто: карточка — «нужен id».
+                           "id", "ref", "around", "lines", "raw", "sort", "dir", "since", "until", "archived",
+                           "unnamed", "limit"}}
         sc = _scope(who)
         if sc:
             if name not in sc["views"]:

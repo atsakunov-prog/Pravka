@@ -170,6 +170,7 @@ def test_dela_tools_appear_with_dela_db(cfg, clean, dela_url):
         assert "Дела — задачи" in init["result"]["instructions"]
         names = {t["name"] for t in rpc(client, tok, "tools/list", rid=2)["result"]["tools"]}
         assert {"dela_view", "dela_task", "dela_add", "dela_change", "dela_decide", "dela_note"} <= names
+        assert {"meetings", "meeting", "meeting_change"} <= names
         out = rpc(client, tok, "tools/call", {"name": "dela_add", "arguments": {"title": "Проверка: из Claude"}}, rid=3)
         assert out["result"]["content"][0]["text"].startswith("Записал: #"), out
         out = rpc(client, tok, "tools/call", {"name": "dela_view", "arguments": {"view": "search", "query": "Проверка"}}, rid=4)

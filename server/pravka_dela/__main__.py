@@ -15,6 +15,7 @@
   export-todoist  выгрузка Todoist по API (с комментариями) для переноса
   svod     Свод: list, get <ключ>, set <ключ> --file (промпты, словарь, правила — одна правда)
   krug-seed  Круг жизни: направления и принципы из файла владельца в Свод, направления проектам
+  meetings  встречи: что с разбором; rename [--all | --ref N] — разобрать заново (замки владельца остаются)
 """
 
 from __future__ import annotations
@@ -278,12 +279,24 @@ def cmd_serve(args) -> int:
                 log.exception("разборщик Круга")
             await asyncio.sleep(60)
 
+    async def meetings_loop():
+        # Разборщик встреч (meetings_auto.py): раз в минуту — досмотреть пачку или, если есть неразобранные
+        # встречи, отправить новую. Нечего разбирать — ни запроса.
+        from . import meetings_auto
+
+        while cfg.anthropic_key:
+            try:
+                await asyncio.to_thread(meetings_auto.tick, cfg.db_url, cfg.anthropic_key, cfg.claude_proxy)
+            except Exception:
+                log.exception("разборщик встреч")
+            await asyncio.sleep(60)
+
     async def main():
         server = uvicorn.Server(uvicorn.Config(
             api.build(cfg), host=cfg.listen_host, port=cfg.listen_port,
             log_level="info", log_config=None, proxy_headers=False, server_header=False,
         ))
-        await asyncio.gather(server.serve(), chores(), bridge_loop(), krug_loop())
+        await asyncio.gather(server.serve(), chores(), bridge_loop(), krug_loop(), meetings_loop())
 
     log.info("Дела: слушаю %s:%d", cfg.listen_host, cfg.listen_port)
     asyncio.run(main())
@@ -363,6 +376,20 @@ def cmd_krug_seed(args) -> int:
     out = krug.seed(cfg.db_url, args.user, data, force=args.force)
     print("Свод:", ", ".join(out["svod"]) or "уже был — не трогал")
     print("Проекты:", "; ".join(out["projects"]) or "размечены раньше — не трогал")
+    return 0
+
+
+def cmd_meetings(args) -> int:
+    """Встречи: что с разбором, и отправить на разбор заново (все, по номерам или неудавшиеся)."""
+    from . import meetings_auto
+
+    cfg = config_mod.load(args.env)
+    if args.action == "rename":
+        n = meetings_auto.rename(cfg.db_url, everything=args.all, refs=args.ref)
+        print(f"на разбор заново: {n} (замки владельца остаются; служба разберёт в ближайшие минуты)")
+    st = meetings_auto.status(cfg.db_url)
+    print(f"встреч: {st['n']}, ждут разбора: {st['waiting']}, не вышло: {st['failed']}, с вопросом: {st['asks']}")
+    print(f"пачка в работе: {st['batch'] or 'нет'}; последний итог: {st['last'] or '—'}")
     return 0
 
 
@@ -458,6 +485,11 @@ def main(argv: list[str] | None = None) -> int:
     sv.add_argument("--reason")
     sv.set_defaults(fn=cmd_svod)
 
+    mt = sub.add_parser("meetings", help="встречи: что с разбором; rename — разобрать заново")
+    mt.add_argument("action", nargs="?", choices=["status", "rename"], default="status")
+    mt.add_argument("--all", action="store_true", help="rename: все встречи (замки владельца остаются)")
+    mt.add_argument("--ref", action="append", help="rename: номер встречи у службы (можно несколько)")
+    mt.set_defaults(fn=cmd_meetings)
     ks = sub.add_parser("krug-seed", help="Круг жизни: направления и принципы из файла владельца")
     ks.add_argument("--file", required=True, help="seed.json владельца (на компе, не в репозитории)")
     ks.add_argument("--user", default="sasha")

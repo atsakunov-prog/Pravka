@@ -1219,3 +1219,39 @@ textarea.about::placeholder { color: var(--ph); opacity: .75; }
 .task.step { padding-left: calc(2px + var(--indent, 0) * 22px); }
 .task.step .title::before { content: '↳ '; color: var(--meta); }
 .sug .dir-pick { padding: 8px 0 2px; }
+
+/* ── Встречи (12.10.2026): список с датой слева, сниппеты поиска, карточка с расшифровкой ── */
+.mrow { align-items: flex-start; }
+.mrow.arch, .crow.arch { opacity: .6; }
+.mdate { flex: none; width: 62px; display: flex; flex-direction: column; gap: 1px; padding-top: 2px; }
+.mdate b { font-size: 14px; font-weight: 600; color: var(--value); }
+.mdate span { font-size: 12px; color: var(--meta); font-variant-numeric: tabular-nums; }
+.mrow .title .badge, .crow .title .badge { margin-left: 7px; vertical-align: 1px; color: var(--label); font-weight: 500; }
+.mrow .title .badge.ask { color: var(--value); }
+.mhits { margin-top: 5px; display: grid; gap: 3px; font-size: 13px; color: var(--label); line-height: 1.4; }
+.mhits b { color: var(--text); font-weight: 600; }
+.mhits mark, .tline mark { background: rgba(var(--t), .3); color: var(--value); border-radius: 4px; padding: 0 2px; }
+.mq { border-radius: 16px; padding: 10px 14px; margin-bottom: 10px; background: rgba(var(--k), .2); border: 1px solid rgba(var(--t), .3); font-size: 14px; line-height: 1.45; }
+.mq .faint { margin-top: 3px; font-size: 12.5px; }
+.mlocks { font-size: 12.5px; color: var(--meta); margin-top: 10px; padding-left: 4px; }
+.mt-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.mt-actions a.chip-btn { display: inline-flex; align-items: center; text-decoration: none; color: var(--label); }
+.msum { white-space: pre-wrap; line-height: 1.5; padding: 10px 8px; font-size: 14px; }
+.magree { margin: 0; padding: 8px 8px 8px 26px; font-size: 14px; line-height: 1.45; }
+.magree li + li { margin-top: 4px; }
+.sec .rows + .rows { margin-top: 8px; }
+.tline { display: grid; grid-template-columns: 46px 1fr; gap: 8px; padding: 5px 8px; font-size: 14px; line-height: 1.5; }
+.rows > .tline + .tline { border-top: 0; }
+.tline .tl-t { color: var(--meta); font-size: 12px; padding-top: 2px; font-variant-numeric: tabular-nums; }
+.tline .tl-s { display: block; font-weight: 600; color: var(--label); font-size: 12.5px; margin-top: 4px; }
+.pchips select.pchip.add { height: 32px; color: var(--label); background: transparent; padding: 0 12px; border-radius: 999px; }
+.msub { font-size: 11.5px; color: var(--label); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; margin: 12px 0 6px 8px; }
+@media (max-width: 640px) {
+  /* На телефоне фильтры встреч — без подписей и в два столбца: список начинается на первом экране. */
+  .mt-top .inline-search { flex: 1 1 100%; min-width: 0; }
+  .mt-tools label { display: none; }
+  .mt-tools select { flex: 1 1 calc(50% - 8px); min-width: 0; }
+  .mdate { width: 54px; }
+  .mdate span { font-size: 11.5px; }
+  .tline { grid-template-columns: 38px 1fr; }
+}

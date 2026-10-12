@@ -21,7 +21,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from . import db, krug, people, where
+from . import db, krug, meetings, people, where
 
 # Сколько номеров изменений синк захватывает назад. Номер берётся в начале
 # транзакции, а видна она после фиксации: изменение с меньшим номером может
@@ -38,7 +38,7 @@ TASK_FIELDS = {
 
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
-FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug"]
+FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings"]
 # «svod» — Свод (crm.svod) в синке и операция svod.set; «people» — person.add / person.merge и вид who
 # (одна карточка человека, 06.10.2026). Без них телефон не шлёт этих операций.
 # «dictations» — операция dictation.add: текст наговорки, из которой вышли дела (их source_ref = её id),
@@ -47,6 +47,8 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug"]
 # where_avatar — точки семьи для карты Правки. Без флага телефон говорит «сервер Дел не обновлён».
 # «groups» — поле owed (группа «Отбить» — ждут от меня, dela_0007, 10.10.2026) в task.create и task.set; без него телефон
 # owed не шлёт, а «ждут от меня» из разноски передаёт как ball «owed» — сервер поймёт и так (store._ball_norm).
+# «meetings» — встречи в базе (dela_0010, 12.10.2026, meetings.py): операции meeting.upsert (служба встреч) и meeting.set
+# (владелец), виды meetings и meeting. Служба встреч без флага шлёт только прежнее — сводку в хронологию и «Новое».
 # «krug» — Круг жизни (dela_0009, 12.10.2026, krug.py): поля directions, why_id, why_title в task.create, task.set и
 # у проекта, список krug в синке (направления проектов), у дела в синке — directions, why_id, dirs, steps_open.
 # Токен службы бота Ковчега (python -m pravka_dela token --name kovcheg): только он забирает
@@ -1096,6 +1098,8 @@ VIEWS: dict[str, Callable] = {
 where.register(HANDLERS, VIEWS, OpError)
 # Круг жизни: вид krug — направления, движение, дерево «Зачем» (krug.py).
 krug.register(VIEWS)
+# Встречи (dela_0010): приём от службы встреч, правка владельцем, список и карточка (meetings.py).
+meetings.register(HANDLERS, VIEWS, OpError)
 
 
 def view(url: str, user: str, name: str, **params) -> dict:

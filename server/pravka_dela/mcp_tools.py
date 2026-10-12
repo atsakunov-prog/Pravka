@@ -17,7 +17,7 @@ import datetime as dt
 import re
 from typing import Any
 
-from . import db, krug, people, remind, store
+from . import db, krug, meetings, people, remind, store
 
 USER = "sasha"  # архив — одного человека, и Claude в нём действует от его имени
 BALL = {"mine": "запустить", "owed": "отбить", "waiting": "жду", "agenda": "повестка"}
@@ -457,6 +457,88 @@ def note(url: str, summary: str, kind: str = "note", project: str | None = None,
     return "Записал в хронологию." if r["ok"] else f"Не записал: {r['error']}"
 
 
+# ── Встречи (dela_0010, 12.10.2026) ────────────────────────────────────
+
+SPHERE_RU = {"work": "рабочая", "home": "личная"}
+MEETING_TEXT_MAX = 60000  # знаков расшифровки в ответ: длинную встречу Claude читает окнами (around)
+
+
+def meetings_list(url: str, query: str | None = None, client: str | None = None, person: str | None = None,
+                  sphere: str | None = None, since: str | None = None, until: str | None = None, limit: int = 30) -> str:
+    """Встречи строками «Клиент: тема · люди · дата · длительность»; с query — где в разговоре это звучало."""
+    params: dict = {"sphere": sphere, "since": since, "until": until, "q": query, "sort": "relevance" if query else "date"}
+    try:
+        with db.session(url, USER, via="mcp") as conn:
+            if client:
+                params["project_id"] = find_project(conn, client)["id"]
+            if person:
+                params["person_id"] = find_person(conn, person)["id"]
+        v = store.view(url, USER, "meetings", **{k: x for k, x in params.items() if x})
+    except store.OpError as e:
+        return f"Не вышло: {e}"
+    items = v["items"][: max(1, min(int(limit or 30), 200))]
+    c = v["counts"]
+    out = [f"Встречи: {len(v['items'])} из {c['all']} (рабочих {c['work']}, личных {c['home']}"
+           + (f", ждут разбора {c['unnamed']}" if c["unnamed"] else "") + ")", ""]
+    for m in items:
+        out.append(f"[{m['ref']}] {m['line']}" + (" · не разобрана" if not m["named"] else "")
+                   + (f" · вопрос: {m['question']}" if m.get("question") else ""))
+        for h in m.get("hits") or []:
+            out.append(f"    {h.get('speaker') or '—'}: {h['text']}  (реплика {h['n']})")
+    if not items:
+        out.append("Ничего не нашлось." if query else "Встреч нет.")
+    return "\n".join(out)
+
+
+def meeting_card(url: str, ref: str, around: int | None = None) -> str:
+    """Встреча целиком: поля, сводка, договорённости, связанное и расшифровка (или окно вокруг реплики around)."""
+    try:
+        v = store.view(url, USER, "meeting", **({"id": ref} if len(str(ref)) > 20 else {"ref": str(ref).strip()}),
+                       **({"around": around} if around is not None else {}))
+    except store.OpError as e:
+        return f"Не вышло: {e}"
+    out = [v["line"], f"номер {v['ref']} · {SPHERE_RU.get(v['sphere'], 'не разобрана')}"
+           + (f" · клиент {v['client']}" if v.get("client") else "") + (f" · сделка {v['deal']}" if v.get("deal") else "")
+           + (f" · ссылка {v['url']}" if v.get("url") else "")]
+    if v.get("question"):
+        out.append(f"Разбор спрашивает: {v['question']}")
+    if v.get("locked"):
+        out.append("Владелец поправил сам: " + ", ".join(v["locked"]))
+    if v.get("summary"):
+        out += ["", "Сводка службы:", v["summary"]]
+    if v.get("agreements"):
+        out += ["", "Договорённости:"] + [f"— {a if isinstance(a, str) else a}" for a in v["agreements"]]
+    if v.get("tasks"):
+        out += ["", "Дела из встречи:"] + [f"#{t['num']} {t['title']} ({STATUS.get(t['status']) or 'открыто'})" for t in v["tasks"]]
+    lines = v.get("lines") or []
+    if lines:
+        out += ["", "Расшифровка" + (f" (окно вокруг реплики {around})" if around is not None else "") + ":"]
+        size, prev = 0, None
+        for x in lines:
+            who = x.get("speaker") or ""
+            ln = f"[{x['n']}] " + (f"{who}: " if who and who != prev else "") + x["text"]
+            prev = who or prev
+            size += len(ln)
+            if size > MEETING_TEXT_MAX:
+                out.append(f"… дальше не влезло: всего реплик {v['lines_n']} — читай окнами, around=<номер реплики>.")
+                break
+            out.append(ln)
+    return "\n".join(out)
+
+
+def meeting_change(url: str, ref: str, title: str | None = None, topic: str | None = None, client: str | None = None,
+                   deal: str | None = None, sphere: str | None = None, people: list[str] | None = None,
+                   archived: bool | None = None, rename: bool = False) -> str:
+    """Поправить встречу словами: что поправил — разбор больше не трогает."""
+    s = {k: v for k, v in {"title": title, "topic": topic, "project": client, "deal": deal, "sphere": sphere,
+                           "people": people, "archived": archived}.items() if v is not None}
+    key = {"id": ref} if len(str(ref)) > 20 else {"ref": str(ref).strip()}
+    r = store.apply_ops(url, USER, [{"op": "meeting.set", **key, "set": s, "rename": rename}], via="mcp")["results"][0]
+    if not r["ok"]:
+        return f"Не вышло: {r['error']}"
+    return "Готово: " + r["meeting"]["line"]
+
+
 def person(url: str, name: str, also: list[str] | None = None, phone: str | None = None,
            telegram: str | None = None, merge_into: str | None = None) -> str:
     """Один человек на всю систему: другое имя, номер, Telegram — к карточке; дубль — в живую карточку.
@@ -589,6 +671,24 @@ def register(mcp, url: str) -> None:
         """Оплата по сделке ЗФ: новая (amount_rub) или правка старой (payment — id из crm_view view=deal). kind: advance (аванс), stage (этап), final, success (success fee), retainer (за месяц), extra (допработы). due_on — когда ждём, invoiced_on — счёт выставлен, paid_on — деньги пришли (YYYY-MM-DD). cancel — оплаты не будет (строка остаётся)."""
         return await run(crm.payment, project, deal, amount_rub=amount_rub, kind=kind, title=title, due_on=due_on,
                          invoiced_on=invoiced_on, paid_on=paid_on, payment=payment, cancel=cancel, note=note)
+
+    @mcp.tool()
+    async def meetings(query: str | None = None, client: str | None = None, person: str | None = None,
+                       sphere: str | None = None, since: str | None = None, until: str | None = None, limit: int = 30) -> str:
+        """Встречи Саши (служба встреч: Zoom, очные, звонки) — название «Клиент: тема», участники, дата, длительность; в квадратных скобках — номер встречи. query — найти в разговорах (словоформы: «счета» найдёт «счёт», «счетов»; имена — подстрокой): у каждой встречи — реплики, где это звучало, с номерами. client — клиент или проект, person — участник, sphere: work (рабочие) или home (личные: терапия, семья — без просьбы Саши не открывай), since/until — ГГГГ-ММ-ДД. Целиком — meeting."""
+        return await run(dela.meetings_list, query, client, person, sphere, since, until, limit)
+
+    @mcp.tool()
+    async def meeting(ref: str, around: int | None = None) -> str:
+        """Встреча целиком: участники, сводка и договорённости службы, дела из неё, расшифровка репликами с номерами. ref — номер встречи из meetings. around — номер реплики: только окно ±15 реплик вокруг неё (длинную встречу читать так, от сниппета поиска)."""
+        return await run(dela.meeting_card, ref, around)
+
+    @mcp.tool()
+    async def meeting_change(ref: str, title: str | None = None, topic: str | None = None, client: str | None = None,
+                             deal: str | None = None, sphere: str | None = None, people: list[str] | None = None,
+                             archived: bool | None = None, rename: bool = False) -> str:
+        """Поправить встречу по номеру: title — название целиком («Клиент: тема»), topic — тема (название пересоберётся), client — клиент или проект («-» — без клиента), deal — сделка клиента, sphere — work (рабочая) или home (личная), people — участники из справочника (все, кроме Саши), archived — убрать из списка. Что поправлено — разбор встреч больше не трогает. rename — отдать встречу разбору заново (поправленное остаётся)."""
+        return await run(dela.meeting_change, ref, title, topic, client, deal, sphere, people, archived, rename)
 
     @mcp.tool()
     async def dela_note(summary: str, kind: str = "note", project: str | None = None, deal: str | None = None,

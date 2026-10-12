@@ -458,6 +458,7 @@ function route() {
   if (kind === 'p' && id) return { kind: 'project', id };
   if (kind === 'h' && id) return { kind: 'person', id };
   if (kind === 'd' && id) return { kind: 'deal', id }; // сделка — страницей, как клиент и человек (06.10.2026)
+  if (kind === 'm' && id) return { kind: 'meeting', id }; // встреча — страницей (12.10.2026)
   if (kind === 'f' && id) return { kind: 'filter', id: decodeURIComponent(id) }; // сохранённый фильтр (10.10.2026)
   if (kind === 'search') return { kind: 'search', q: decodeURIComponent(id || '') };
   if (kind === 'new' && id) return { kind: 'new', batch: decodeURIComponent(id) }; // ссылка из Telegram — одна пачка
@@ -664,7 +665,7 @@ function renderSide(r) {
       el('div', { class: 'items' }, items));
   };
   const favs = live.filter((p) => S.favs.includes(p.id));
-  const crmNav = crmOn() ? Object.entries(CRM_VIEWS).filter(([, v]) => !v.money || S.me.money)
+  const crmNav = crmOn() ? Object.entries(CRM_VIEWS).filter(([, v]) => (!v.money || S.me.money) && (!v.owner || S.me.role === 'owner'))
     .map(([k, v]) => navItem('#/' + k, tint(icon(v.icon), v.color), v.title, null, r.kind === k)) : [];
   const fnav = filters().map((f) => navItem('#/f/' + encodeURIComponent(f.id), icon('filter', 15), f.name, scopeItems(f.scope).length || null,
     r.kind === 'filter' && r.id === f.id));
@@ -735,6 +736,7 @@ function headCoin(r) {
   if (r.kind === 'person' && person(r.id)) return coin(initials(person(r.id).name));
   // Проект клиента — портфелем: воронка на монете путала его с самой Воронкой (владелец 09.10.2026).
   if (r.kind === 'deal') return coin('case');
+  if (r.kind === 'meeting') return coin('meet');
   return coin({ search: 'search', settings: 'gear', stats: 'chart' }[r.kind] || 'tick');
 }
 function headSub(r) {
@@ -748,6 +750,7 @@ function headSub(r) {
   const p = r.kind === 'project' ? project(r.id) : null;
   const dl = r.kind === 'deal' ? S.deals.get(r.id) : null;
   if (dl && project(dl.project_id)) return el('a', { class: 'h-sub', href: '#/p/' + dl.project_id }, 'Сделка · ' + project(dl.project_id).name);
+  if (r.kind === 'meeting') return el('a', { class: 'h-sub', href: '#/meetings' }, 'Встреча');
   const word = p ? KIND_ONE[p.kind] || 'Проект' : r.kind === 'person' ? 'Человек' : CRM_VIEWS[r.kind] ? 'CRM' : r.kind === 'filter' ? 'Фильтр' : 'Дела';
   return el('span', { class: 'h-sub' }, word);
 }
@@ -931,6 +934,8 @@ function renderMain(r) {
   if (r.kind === 'people') return renderPeople();
   if (r.kind === 'ties') return renderTies();
   if (r.kind === 'money') return renderMoney();
+  if (r.kind === 'meetings') return renderMeetings();
+  if (r.kind === 'meeting') return renderMeeting(r.id);
   if (r.kind === 'today') return renderToday();
   if (r.kind === 'krug') return renderKrug();
   if (r.kind === 'filter') return renderFilter(r.id);
@@ -2709,6 +2714,8 @@ const CRM_VIEWS = {
   people: { title: 'Люди', icon: 'person', color: 'var(--tint)' },
   ties: { title: 'Связи', icon: 'link', color: 'var(--tint)' },
   money: { title: 'Деньги', icon: 'coin', color: 'var(--tint)', money: true },
+  // Встречи (12.10.2026): все встречи службы с единым названием «Клиент: тема» — только владельцу (их видит он один).
+  meetings: { title: 'Встречи', icon: 'meet', color: 'var(--tint)', owner: true },
 };
 Object.assign(ICONS, {
   funnel: 'M3 5h18l-7 8v6l-4 2v-8z',
@@ -2747,6 +2754,9 @@ const crmCache = new Map();
 function crmGet(path, maxAge = 30000) {
   const c = crmCache.get(path);
   if (c && c.data && Date.now() - c.at < maxAge) return c.data;
+  // Ошибка без данных — повтор не чаще раза в 5 с: до 12.10.2026 каждая перерисовка звала вид заново, и страница с
+  // ошибкой слала запрос за запросом без паузы.
+  if (c && c.error && !c.loading && Date.now() - c.at < 5000) return c.data;
   if (!c || !c.loading) {
     crmCache.set(path, { ...(c || {}), loading: true });
     api(path).then((d) => { crmCache.set(path, { data: d, at: Date.now() }); softRender(); })
@@ -3745,6 +3755,208 @@ function renderStats() {
         }),
         el('div', { class: 'hint-line' }, 'Откуда были дела: ' + v.by_source.map((x) => `${x.name} ${x.done}`).join(' · '))) : null,
       el('div', { class: 'hint-line rules' }, `Очки: закрыл — ${v.rules.done}, обещанное (ждали от тебя, в «Сейчас» или срок пришёл) — ещё ${v.rules.promised}, отменил ненужное — ${v.rules.cancel}, разобрал «Новое» — ${v.rules.triage}. Заводить дела — бесплатно. ${th.streak[0].toUpperCase() + th.streak.slice(1)} — дни подряд с закрытым делом; суббота не рвёт.`))];
+}
+
+// ── Встречи (12.10.2026) ────────────────────────────────────────────────
+// Владелец: «у встречи должно быть единообразное название: клиент, основная тема, кто присутствовал, дата и
+// duration… в списке встреч сортировка по клиентам, по времени, по присутствующим… встречи поправить на личные и
+// рабочие». Название — «Клиент: тема» (сервер, meetings.title_of); дата, длительность и люди — рядом, по ним
+// сортировка и группы. Поиск — сервером: по названию, сводке и расшифровке, словоформами. Что владелец поправил
+// в карточке, разборщик больше не трогает (замок).
+const MT_SORT = { date: 'по времени', client: 'по клиенту', duration: 'по длительности', people: 'по числу людей', relevance: 'где больше сказано' };
+const MT_GROUP = { none: 'без групп', client: 'по клиентам', month: 'по месяцам', person: 'по людям', sphere: 'рабочие и личные' };
+const MT_SPHERE = { '': 'Все', work: 'Рабочие', home: 'Личные', none: 'Не разобраны' };
+const MT_KIND = { zoom: 'Zoom', meeting: 'встреча', call: 'звонок', other: '' };
+const MT_LOCK = { title: 'название', topic: 'тема', project: 'клиент', sphere: 'рабочая или личная', people: 'участники' };
+const MONTHS_NOM = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+S.mt = { sphere: '', sort: 'date', group: 'none', client: '', person: '', arch: false, ...LS.get('mt', {}) };
+S.mtQ = '';
+const mtSave = (patch) => { S.mt = { ...S.mt, ...patch }; LS.set('mt', S.mt); render(); };
+/** Время встречи по Москве: служба встреч и владелец — там. */
+const mtTime = (iso) => new Date(iso).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' });
+/** Сниппет поиска: «…» сервера (ts_headline) — подсветкой. */
+const markSnip = (t) => String(t || '').split(/(«[^»]*»)/).map((x) => (x.startsWith('«') && x.endsWith('»') ? el('mark', {}, x.slice(1, -1)) : x));
+const markIn = (text, q) => {
+  if (!q) return text;
+  const i = norm(text).indexOf(norm(q));
+  return i < 0 ? text : [text.slice(0, i), el('mark', {}, text.slice(i, i + q.length)), text.slice(i + q.length)];
+};
+const short = (t, n) => (t && t.length > n ? t.slice(0, n).replace(/\s+\S*$/, '') + '…' : t);
+let mtTimer = null;
+
+function meetRow(m) {
+  const who = [...(m.people || []), ...(m.guests || [])];
+  const bits = [
+    m.client ? el('span', { class: 'tag' }, m.client) : el('span', { class: 'faint' }, 'без клиента'),
+    who.length ? el('span', {}, who.join(', ')) : null,
+    m.duration_min ? el('span', {}, dur(m.duration_min)) : null,
+    MT_KIND[m.kind] ? el('span', {}, MT_KIND[m.kind]) : null,
+  ];
+  return el('div', { class: 'crow mrow' + (m.archived ? ' arch' : ''), onclick: () => go('#/m/' + m.id) },
+    el('div', { class: 'mdate' }, el('b', {}, D.ddmm(m.day)), el('span', {}, WD_SHORT[D.wd(m.day)] + ' ' + mtTime(m.started_at))),
+    el('div', { class: 'main' },
+      el('div', { class: 'title' }, m.title || m.source_title || 'Встреча без названия',
+        m.sphere === 'home' ? el('span', { class: 'badge' }, 'личная') : null,
+        !m.named ? el('span', { class: 'badge', title: 'Разбор ещё не дал ей клиента и тему' }, 'не разобрана') : null,
+        m.question ? el('span', { class: 'badge ask', title: m.question }, 'вопрос') : null),
+      el('div', { class: 'chips' }, bits),
+      m.hits ? el('div', { class: 'mhits' }, m.hits.map((h) => el('div', {}, h.speaker ? el('b', {}, h.speaker + ': ') : null, markSnip(h.text))),
+        m.hits_n > m.hits.length ? el('div', { class: 'faint' }, `и ещё ${m.hits_n - m.hits.length}`) : null)
+        : m.summary ? el('div', { class: 'next' }, short(m.summary, 200)) : null));
+}
+
+/** Группы встреч — считает веб: встреч сотни. Клиенты и люди — свежие сверху, месяцы — новые сверху. */
+function meetGroups(items, by) {
+  const groups = new Map();
+  const add = (key, title, m) => { if (!groups.has(key)) groups.set(key, { title, items: [] }); groups.get(key).items.push(m); };
+  for (const m of items) {
+    if (by === 'client') add(m.client || '', m.client || 'Без клиента', m);
+    else if (by === 'month') add(m.day.slice(0, 7), MONTHS_NOM[+m.day.slice(5, 7) - 1] + ' ' + m.day.slice(0, 4), m);
+    else if (by === 'sphere') add(m.sphere || 'none', { work: 'Рабочие', home: 'Личные', none: 'Не разобраны' }[m.sphere || 'none'], m);
+    else if (by === 'person') {
+      const who = [...(m.people || []), ...(m.guests || [])];
+      if (!who.length) add('', 'Без участников', m);
+      for (const w of who) add(w, w, m);
+    }
+  }
+  const last = (g) => g.items.reduce((a, m) => (m.started_at > a ? m.started_at : a), '');
+  const list = [...groups.entries()];
+  if (by === 'month') list.sort((a, b) => b[0].localeCompare(a[0]));
+  else if (by === 'person') list.sort((a, b) => b[1].items.length - a[1].items.length || last(b[1]).localeCompare(last(a[1])));
+  else if (by !== 'sphere') list.sort((a, b) => (a[0] === '') - (b[0] === '') || last(b[1]).localeCompare(last(a[1])));
+  return list.map(([, g]) => g);
+}
+
+function renderMeetings() {
+  const f = S.mt;
+  const qs = new URLSearchParams({ sort: S.mtQ && f.sort === 'date' ? 'relevance' : f.sort });
+  if (f.sphere) qs.set('sphere', f.sphere);
+  if (f.client) qs.set('project_id', f.client);
+  if (f.person) qs.set('person_id', f.person);
+  if (f.arch) qs.set('archived', '1');
+  if (S.mtQ.trim()) qs.set('q', S.mtQ.trim());
+  const v = crmGet('/api/view/meetings?' + qs, 20000);
+  const search = el('input', { id: 'main-search', class: 'inline-search', type: 'search', placeholder: 'Найти в разговорах: счёт, Яблоков, залог…', value: S.mtQ });
+  search.addEventListener('input', () => { S.mtQ = search.value; clearTimeout(mtTimer); mtTimer = setTimeout(render, 350); });
+  const sel = (key, opts, label) => {
+    const s = el('select', { 'aria-label': label }, Object.entries(opts).map(([k, l]) => el('option', { value: k, selected: f[key] === k }, l)));
+    s.addEventListener('change', () => mtSave({ [key]: s.value }));
+    return s;
+  };
+  const spheres = Object.entries(MT_SPHERE).map(([k, l]) => {
+    const n = v && v.counts ? { '': v.counts.all, work: v.counts.work, home: v.counts.home, none: v.counts.none }[k] : null;
+    if (k === 'none' && !n) return null;
+    return el('button', { class: 'chip-btn' + (f.sphere === k ? ' on' : ''), onclick: () => mtSave({ sphere: k }) }, l, n ? el('b', {}, ' ' + n) : null);
+  });
+  const clientSel = el('select', { 'aria-label': 'Клиент' }, el('option', { value: '' }, 'все клиенты'),
+    (v ? v.clients : []).map((c) => el('option', { value: c.id || 'none', selected: f.client === (c.id || 'none') }, `${c.name} · ${c.n}`)));
+  clientSel.addEventListener('change', () => mtSave({ client: clientSel.value }));
+  const personSel = el('select', { 'aria-label': 'Человек' }, el('option', { value: '' }, 'все люди'),
+    (v ? v.people : []).map((x) => el('option', { value: x.id, selected: f.person === x.id }, `${x.short || x.name} · ${x.n}`)));
+  personSel.addEventListener('change', () => mtSave({ person: personSel.value }));
+  const tb = el('div', { class: 'toolbar mt-top' }, search, spheres);
+  const tb2 = el('div', { class: 'toolbar mt-tools' }, el('label', {}, 'Сортировать'), sel('sort', MT_SORT, 'Сортировка'),
+    el('label', {}, 'Группы'), sel('group', MT_GROUP, 'Группы'), clientSel, personSel,
+    el('button', { class: 'chip-btn' + (f.arch ? ' on' : ''), onclick: () => mtSave({ arch: !f.arch }) }, 'И убранные'));
+  if (!v) return [head('Встречи'), el('div', { class: 'body' }, tb, tb2, loading())];
+  const items = v.items;
+  const c = v.counts;
+  const sub = [plural(c.all, 'встреча', 'встречи', 'встреч'), c.minutes ? dur(c.minutes) : null,
+    c.unnamed ? el('span', { class: 'late' }, `ждут разбора: ${c.unnamed}`) : null, c.asks ? `с вопросом: ${c.asks}` : null];
+  let body;
+  if (!items.length) body = el('div', { class: 'empty' }, S.mtQ ? 'Не нашлось ни в названиях, ни в разговорах.'
+    : c.all ? 'Под эти фильтры встреч нет.' : 'Встреч в базе пока нет: их присылает служба встреч (ZF-Meetings) — после её обновления сюда приедут все встречи разом.');
+  else if (f.group === 'none' || !MT_GROUP[f.group]) body = el('div', { class: 'group' }, items.map(meetRow));
+  else body = meetGroups(items, f.group).map((g) => el('div', { class: 'group' },
+    el('h2', {}, g.title, el('span', { class: 'n' }, g.items.length),
+      el('span', { class: 'sum' }, dur(g.items.reduce((a, m) => a + (m.duration_min || 0), 0)))),
+    g.items.map(meetRow)));
+  return [head('Встречи', sub), el('div', { class: 'body' }, tb, tb2, body)];
+}
+
+async function meetOp(op, msg) {
+  try { const r = await op1(op); crmDirty(); if (msg) toast(msg); render(); return r; } catch (e) { fail(e); render(); return null; }
+}
+
+function renderMeeting(id) {
+  const path = '/api/view/meeting?id=' + id;
+  const v = crmGet(path, 15000);
+  const err = crmCache.get(path)?.error;
+  if (!v) return [head('Встреча'), el('div', { class: 'body' }, err ? el('div', { class: 'empty' }, 'Не открылась: ' + err) : loading())];
+  const set = (s, msg) => meetOp({ op: 'meeting.set', id, set: s }, msg);
+  const fact = (label, ctl) => el('label', { class: 'fact' }, el('span', {}, label), ctl);
+  const inp = (field, ph) => {
+    const i = el('input', { value: v[field] || '', placeholder: ph || '' });
+    i.addEventListener('change', () => { if (i.value.trim() !== (v[field] || '')) set({ [field]: i.value.trim() || null }, 'Записал — разбор это больше не трогает'); });
+    return i;
+  };
+  const projects = [...S.projects.values()].filter((p) => !p.archived_at || p.id === v.project_id).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  const client = el('select', {}, el('option', { value: '' }, '— без клиента —'),
+    projects.map((p) => el('option', { value: p.id, selected: p.id === v.project_id }, p.name)));
+  client.addEventListener('change', () => set({ project_id: client.value || null }, client.value ? 'Клиент: ' + project(client.value)?.name : 'Без клиента'));
+  const deals = v.project_id ? clientDeals(v.project_id) : [];
+  const deal = el('select', { disabled: !deals.length }, el('option', { value: '' }, deals.length ? '— не про сделку —' : 'у клиента нет сделок'),
+    deals.map((d) => el('option', { value: d.id, selected: d.id === v.deal_id }, d.name)));
+  deal.addEventListener('change', () => set({ deal_id: deal.value || null }));
+  const sphere = el('div', { class: 'stages' }, [['work', 'Рабочая'], ['home', 'Личная']].map(([k, l]) =>
+    el('button', { class: v.sphere === k ? 'on' : '', onclick: () => set({ sphere: k }, l) }, l)));
+  const ids = v.person_ids || [];
+  const peopleChips = (v.people_cards || []).map((x) => el('span', { class: 'pchip' },
+    el('a', { class: 'pc-main', href: '#/h/' + x.id }, avatar(x), el('span', { class: 'pc-name' }, x.short || x.name)),
+    el('button', { class: 'pc-x', title: 'Не был на встрече', onclick: () => set({ person_ids: ids.filter((y) => y !== x.id) }) }, icon('x', 12))));
+  const guestChips = (v.guests || []).map((g) => el('span', { class: 'pchip' },
+    el('span', { class: 'pc-main' }, el('span', { class: 'pc-name' }, g), el('span', { class: 'pc-role' }, 'нет в справочнике')),
+    el('button', { class: 'pc-x', title: 'Убрать', onclick: () => set({ guests: v.guests.filter((y) => y !== g) }) }, icon('x', 12))));
+  const addPerson = el('select', { class: 'pchip add' }, el('option', { value: '' }, '+ участник'),
+    livePeople().filter((x) => !x.merged_into && !ids.includes(x.id)).sort((a, b) => personName(a).localeCompare(personName(b), 'ru'))
+      .map((x) => el('option', { value: x.id }, x.name)));
+  addPerson.addEventListener('change', () => { if (addPerson.value) set({ person_ids: [...ids, addPerson.value] }); });
+  const locks = (v.locked || []).map((k) => MT_LOCK[k]).filter(Boolean);
+  const when = `${D.long(v.day)}, ${mtTime(v.started_at)}` + (v.duration_min ? ' · ' + dur(v.duration_min) : '') + (MT_KIND[v.kind] ? ' · ' + MT_KIND[v.kind] : '');
+  const card = sec('card', null, null,
+    v.question ? el('div', { class: 'mq' }, el('b', {}, 'Разбор спрашивает: '), v.question, el('div', { class: 'faint' }, 'Ответь делом: выбери клиента или «рабочая / личная» — вопрос уйдёт.')) : null,
+    el('div', { class: 'facts' },
+      fact('Название', inp('title', 'Клиент: тема')),
+      fact('Клиент', client),
+      v.project_id ? fact('Сделка', deal) : fact('Кто в названии', inp('label', 'Экспобанк, ЗФ, Личное…')),
+      fact('Тема', inp('topic', 'о чём договаривались'))),
+    el('div', { class: 'stage-row' }, el('span', { class: 'cs-word' }, 'Встреча'), sphere),
+    el('div', { class: 'pchips' }, peopleChips, guestChips, addPerson),
+    el('div', { class: 'mlocks' }, !v.named ? 'Ещё не разобрана: разборщик назовёт её в ближайшие минуты.'
+      : v.named_by && v.named_by.startsWith('error') ? 'Разбор не вышел: ' + v.named_by.replace(/^error:\s*/, '') + '. Нажми «Разобрать заново».'
+        : 'Назвал Claude' + (locks.length ? ` · ты поправил сам: ${locks.join(', ')} — это разбор больше не трогает` : '')),
+    el('div', { class: 'mt-actions' },
+      el('button', { class: 'chip-btn', title: 'Claude прочтёт встречу ещё раз; что ты поправил сам, останется', onclick: () => meetOp({ op: 'meeting.set', id, rename: true }, 'Отдал на разбор') }, 'Разобрать заново'),
+      locks.length ? el('button', { class: 'chip-btn', title: 'Снять твои правки и отдать всё разбору', onclick: () => meetOp({ op: 'meeting.set', id, unlock: v.locked, rename: true }, 'Всё — разбору') }, 'Вернуть всё разбору') : null,
+      el('button', { class: 'chip-btn', onclick: () => set({ archived: !v.archived }, v.archived ? 'Вернул в список' : 'Убрал из списка') }, v.archived ? 'Вернуть в список' : 'Убрать из списка'),
+      v.url ? el('a', { class: 'chip-btn', href: v.url, target: '_blank', rel: 'noopener' }, 'У службы встреч') : null));
+  const agree = (v.agreements || []).map((a) => (typeof a === 'string' ? a : a.text || a.title || JSON.stringify(a)));
+  const summary = sec('sum', 'Сводка', null,
+    v.summary ? el('div', { class: 'rows' }, el('div', { class: 'msum' }, v.summary)) : el('div', { class: 'empty' }, 'Сводки служба не прислала.'),
+    agree.length ? [el('div', { class: 'msub' }, 'Договорённости'), el('div', { class: 'rows' }, el('ul', { class: 'magree' }, agree.map((a) => el('li', {}, a))))] : null,
+    v.timeline.length ? el('div', { class: 'msub' }, 'В хронологии клиента') : null,
+    v.timeline.length ? el('div', { class: 'rows' }, v.timeline.map((i) => el('div', { class: 'tl-row' },
+      el('span', { class: 'tl-when' }, D.ddmm(i.at.slice(0, 10))), el('div', {}, i.summary, i.next_step ? el('div', { class: 'tl-next' }, i.next_step) : null),
+      i.project ? el('span', { class: 'tl-kind' }, i.project) : null))) : null);
+  const tasks = v.tasks.length ? sec('tasks', 'Дела из встречи', secN(v.tasks.length), el('div', { class: 'rows' }, v.tasks.map((t) =>
+    el('div', { class: 'crow' + (t.status !== 'open' ? ' arch' : ''), onclick: () => { const x = S.tasks.get(t.id); if (x) openCard(x.id); } },
+      el('div', { class: 'main' }, el('div', { class: 'title' }, t.title),
+        el('div', { class: 'chips' }, t.status === 'done' ? el('span', {}, 'сделано') : t.status === 'cancelled' ? el('span', {}, 'отменено') : el('span', { class: 'today' }, 'открыто'),
+          t.project_name ? el('span', {}, t.project_name) : null, t.due_date ? el('span', {}, D.ddmm(t.due_date)) : null)))))) : null;
+  const lq = S.mtLineQ || '';
+  const box = el('input', { id: 'main-search', class: 'inline-search', type: 'search', placeholder: 'Найти в расшифровке', value: lq });
+  box.addEventListener('input', () => { S.mtLineQ = box.value; render(); });
+  const mmss = (x) => (x == null ? '' : `${Math.floor(x / 60)}:${String(Math.floor(x % 60)).padStart(2, '0')}`);
+  let prev = null;
+  const lines = (v.lines || []).filter((x) => !lq || norm(x.text + ' ' + (x.speaker || '')).includes(norm(lq))).map((x) => {
+    const who = x.speaker && (x.speaker !== prev || lq) ? el('span', { class: 'tl-s' }, x.speaker) : null;
+    prev = x.speaker || prev;
+    return el('div', { class: 'tline' }, el('span', { class: 'tl-t' }, mmss(x.start_sec)), el('div', {}, who, markIn(x.text, lq)));
+  });
+  const text = sec('text', 'Расшифровка', secN(v.lines_n), el('div', { class: 'toolbar' }, box),
+    lines.length ? el('div', { class: 'rows' }, lines) : el('div', { class: 'empty' }, v.lines_n ? 'В расшифровке такого нет.' : 'Расшифровки служба не прислала.'));
+  const nav = [['card', 'Карточка'], ['sum', 'Сводка'], v.tasks.length ? ['tasks', 'Дела'] : null, ['text', 'Расшифровка']].filter(Boolean);
+  return [head(v.title || v.source_title || 'Встреча', [when], null, nav), el('div', { class: 'body' }, card, summary, tasks, text)];
 }
 
 // ── Клавиши ─────────────────────────────────────────────────────────────

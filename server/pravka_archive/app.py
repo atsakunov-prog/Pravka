@@ -72,7 +72,13 @@ DELA_INSTRUCTIONS = """
 CRM ЗФ — в тех же Делах: клиент = проект, внутри сделки со стадиями (lead, proposal — КП, mandate, active, closing, archive с итогом won/lost/paused), гонорар, оплаты (план, счёт, получено), хронология контактов, время из Засечки.
 - Смотреть: crm_view (pipeline — воронка, clients — клиенты и «чужие» клиенты Засечки, client, deal, person, ties — кому пора напомнить о себе, money — деньги фирмы). Для счёта — sql по life.deals, life.payments, life.interactions, life.work_time.
 - Менять: crm_deal (завести или поправить сделку: стадия, итог, гонорар, команда, кто привёл), crm_payment (оплаты), dela_note (запись в хронологию). Следующий шаг сделки — открытое дело с этой сделкой (dela_add с project и deal), а не текст.
-- Деньги фирмы (life.payments) — не деньги семьи (life.money_live)."""
+- Деньги фирмы (life.payments) — не деньги семьи (life.money_live).
+
+Встречи — всё, что записала служба встреч (Zoom, очные, звонки), с единым названием «Клиент: тема», участниками, датой и длительностью.
+- Найти, где о чём говорили («где мы обсуждали счета с Яблоковым и сколько это стоит»): meetings с query (и client, person) — реплики с номерами; потом meeting с around — окно разговора вокруг реплики. Число и договорённость — из самих реплик, со ссылкой на встречу и дату.
+- Список и счёт: meetings, sql по life.meetings (title, client, topic, people, guests, day, duration_min, sphere) и life.meeting_lines (tsv — словоформы, text ILIKE — имена).
+- sphere home — личные (терапия, семья): не открывай и не цитируй их без прямой просьбы Саши.
+- Поправить название, клиента, участников, «личная / рабочая» — meeting_change: поправленное разбор больше не трогает."""
 
 
 def build(cfg: Config) -> tuple[FastMCP, OwnerAuth]:

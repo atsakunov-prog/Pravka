@@ -144,3 +144,27 @@ WHERE (e.client IS NOT NULL OR e.project_id IS NOT NULL OR e.task_id IS NOT NULL
   AND NOT (coalesce(e.category, '') ~* '^(Семья|Еда|Быт|Отдых|Сон|Спорт|Секс|Чтение|Потери|Не размечено)'
            AND e.project_id IS NULL AND e.task_id IS NULL AND e.person_id IS NULL);
 COMMENT ON VIEW life.work_time IS 'Лента с клиентом, сопоставленным со справочником Дел: проект, организация, человек, дело. Запись, начатая из дела, несёт его проект сама (task_num — «#57»); остальные — по алиасам клиента. Часы на клиента = sum(minutes)/60 по project или org; с человеком — по person_id (звонки несут его сами).';
+
+-- Встречи (dela_0010, 12.10.2026): карточка с единым названием и расшифровка репликами. Владелец Дел видит свои
+-- встречи целиком — и рабочие, и личные (sphere home: терапия, семья); Claude отличает их по sphere.
+DROP VIEW IF EXISTS life.meeting_lines;
+DROP VIEW IF EXISTS life.meetings;
+CREATE VIEW life.meetings AS
+SELECT m.started_at, (m.started_at AT TIME ZONE 'Europe/Moscow')::date AS day, m.duration_min, m.kind, m.sphere,
+       m.title, coalesce(p.name, m.label) AS client, m.topic, d.name AS deal,
+       ARRAY(SELECT coalesce(pe.short, pe.name) FROM unnest(m.person_ids) WITH ORDINALITY AS u(pid, i)
+             JOIN crm.people pe ON pe.id = u.pid ORDER BY u.i) AS people,
+       m.guests, m.summary, m.agreements, m.source_title, m.question, m.named_at IS NOT NULL AS named,
+       m.lines_n, m.url, m.ref, m.id, m.project_id, m.person_ids, m.archived_at
+FROM crm.meetings m
+LEFT JOIN crm.projects p ON p.id = m.project_id
+LEFT JOIN crm.deals d ON d.id = m.deal_id
+WHERE m.owner_id = crm.owner_id();
+COMMENT ON VIEW life.meetings IS 'Встречи владельца (служба встреч ZF-Meetings): единое название title = «Клиент: тема», client — клиент из справочника или кто был (ЗФ — свои, Личное — личное), topic — тема, people — участники из справочника кроме владельца, guests — кого в справочнике нет. sphere: work — рабочая, home — личная (терапия, семья, дети); пусто — ещё не разобрана. summary и agreements — сводка службы. Расшифровка — life.meeting_lines. archived_at — владелец убрал из списка.';
+
+CREATE VIEW life.meeting_lines AS
+SELECT l.meeting_id, l.n, l.start_sec, l.speaker, l.text, l.tsv, m.title, m.started_at, m.sphere
+FROM crm.meeting_lines l
+JOIN crm.meetings m ON m.id = l.meeting_id
+WHERE m.owner_id = crm.owner_id();
+COMMENT ON VIEW life.meeting_lines IS 'Расшифровки встреч репликами: n — порядок, start_sec — секунда от начала, speaker — кто говорит (как распознала служба). Поиск по словоформам: tsv @@ websearch_to_tsquery(''russian'', ''счёт оплата''); имена — text ILIKE ''%Павел%''. Встреча — life.meetings по meeting_id = id.';
