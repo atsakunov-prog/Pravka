@@ -100,6 +100,17 @@ object Dela {
         /** Номер и название цели — из вида; телефон пересчитывает их из копии (derive). */
         val whyNum: Int = 0,
         val whyTitle: String = "",
+        /**
+         * Дерево целей (13.10.2026, docs/dela-phone-14.md): дело стало целью — узлом
+         * дерева, состоянием, к которому идут («сын хорошо знает математику»). Цели
+         * нет в списках дел: она живёт в дереве, в цепочке «Зачем» и в поиске. У цели
+         * нет проекта — её текст видит только хозяин (сервер снимает проект сам).
+         */
+        val goal: Boolean = false,
+        /** Ритм практики словами («ежедневно», «2 раза в неделю»): цель с ритмом повторяется и не закрывается. */
+        val rhythm: String = "",
+        /** Под целью дел не заводят — ориентир, а не задача (правило базы: шаг сюда сервер отвергнет). */
+        val noSteps: Boolean = false,
     ) {
         val open: Boolean get() = status == OPEN
         /** Как человек называется в строке: короткое имя, иначе полное. */
@@ -129,6 +140,13 @@ object Dela {
     ) {
         val live: Boolean get() = archivedAt.isBlank()
     }
+
+    /**
+     * Проект в Круге (строка `krug` синка, `kind: project`): направления, которые
+     * наследуют его дела, и «Зачем» — цель, на которой проект висит (владелец,
+     * 13.10.2026: «клиентские проекты вешаются на цель целиком»).
+     */
+    data class KrugProject(val directions: List<String> = emptyList(), val whyId: String = "")
 
     /** Документ ссылкой (`files` сделки и клиента): вид (contract, invoice, nda, act, other), название, ссылка, дата. */
     data class FileRef(val kind: String, val title: String, val url: String, val at: String = "")
@@ -362,11 +380,17 @@ object Dela {
         val payments: Map<String, Payment> = emptyMap(),
         /** `features` последнего синка: чего нет — сервер ещё не умеет, и телефон это не шлёт. */
         val features: Set<String> = emptySet(),
-        /** Круг жизни: направления проектов (список `krug` синка) — их наследуют дела проекта. Только свои. */
-        val krug: Map<String, List<String>> = emptyMap(),
+        /**
+         * Круг жизни: проекты в Круге (список `krug` синка) — их направления наследуют дела
+         * проекта, а с 13.10.2026 — и цель, на которой проект висит. Только свои.
+         */
+        val krug: Map<String, KrugProject> = emptyMap(),
     ) {
         /** Сервер знает Круг жизни (поля `directions`, `why_id`): только тогда телефон их шлёт. */
         val krugOn: Boolean get() = FEATURE_KRUG in features
+
+        /** Сервер знает дерево целей (`goal`, `rhythm`, `no_steps`, `why_id` проекта): только тогда телефон их шлёт. */
+        val treeOn: Boolean get() = FEATURE_TREE in features
 
         /** Сервер Дел знает напоминания (поля `remind_*`) и шлёт их в Telegram. */
         val remindOn: Boolean get() = FEATURE_REMIND in features
@@ -453,6 +477,7 @@ object Dela {
             personShort = o.str("person_short"), personName = o.str("person_name"),
             requestedByShort = o.str("requested_by_short"), local = o.bool("_local"),
             directions = o.strings("directions"), whyId = o.str("why_id"), whyNum = o.int("why_num"), whyTitle = o.str("why_title"),
+            goal = o.bool("goal"), rhythm = o.str("rhythm"), noSteps = o.bool("no_steps"),
         )
     }
 
@@ -472,6 +497,7 @@ object Dela {
         .put("person_name", nul(t.personName)).put("requested_by_short", nul(t.requestedByShort))
         .put("directions", arr(t.directions)).put("why_id", nul(t.whyId))
         .put("why_num", if (t.whyNum > 0) t.whyNum else JSONObject.NULL).put("why_title", nul(t.whyTitle))
+        .put("goal", t.goal).put("rhythm", nul(t.rhythm)).put("no_steps", t.noSteps)
         .apply { if (t.local) put("_local", true) }
 
     fun project(o: JSONObject): Project? {
@@ -639,7 +665,9 @@ object Dela {
         .put("payments", JSONArray().apply { s.payments.values.forEach { put(json(it)) } })
         .put("labels", arr(s.labels))
         .put("features", arr(s.features.sorted()))
-        .put("krug", JSONArray().apply { s.krug.forEach { (id, d) -> put(JSONObject().put("id", id).put("kind", "project").put("directions", arr(d))) } })
+        .put("krug", JSONArray().apply {
+            s.krug.forEach { (id, k) -> put(JSONObject().put("id", id).put("kind", "project").put("directions", arr(k.directions)).put("why_id", nul(k.whyId))) }
+        })
 
     fun fromJson(o: JSONObject): Snapshot = Snapshot(
         seq = o.long("seq"),
@@ -656,7 +684,7 @@ object Dela {
         syncedAt = o.long("syncedAt"),
         payments = rows(o, "payments", ::payment).associateBy { it.id },
         features = o.strings("features").toSet(),
-        krug = rows(o, "krug") { k -> k.str("id").ifBlank { null }?.let { it to k.strings("directions") } }.toMap(),
+        krug = rows(o, "krug") { k -> k.str("id").ifBlank { null }?.let { it to KrugProject(k.strings("directions"), k.str("why_id")) } }.toMap(),
     )
 
     // ------------------------------------------------------------ синк
@@ -755,6 +783,7 @@ object Dela {
         val people = LinkedHashMap(s.people)
         val orgs = LinkedHashMap(s.orgs)
         val projects = LinkedHashMap(s.projects)
+        val krug = LinkedHashMap(s.krug)
         fun find(ref: String): Task? {
             tasks[ref]?.let { return it }
             val n = ref.trim().removePrefix("#").toIntOrNull() ?: return null
@@ -850,6 +879,14 @@ object Dela {
                         folderUrl = if (set.has("folder_url")) set.str("folder_url") else p.folderUrl,
                         files = if (set.has("files")) files(set) else p.files,
                     )
+                    // Проект на цели (дерево, 13.10.2026): «Зачем» и направления — в строке Круга проекта, видно сразу.
+                    if (set.has("why_id") || set.has("directions")) {
+                        val k = krug[p.id] ?: KrugProject()
+                        krug[p.id] = k.copy(
+                            directions = if (set.has("directions")) set.strings("directions") else k.directions,
+                            whyId = if (set.has("why_id")) set.str("why_id") else k.whyId,
+                        )
+                    }
                 }
                 // Дописать имена и номера — как сервер: что уже есть, не дублируется.
                 "person.add" -> {
@@ -880,7 +917,7 @@ object Dela {
         return derive(
             s.copy(
                 tasks = tasks, comments = comments, suggestions = suggestions, deals = deals, payments = payments, people = people,
-                orgs = orgs, projects = projects,
+                orgs = orgs, projects = projects, krug = krug,
             )
         )
     }
@@ -969,6 +1006,12 @@ object Dela {
                 // Круг жизни: направления — ключи как есть (названия переводит сервер), «Зачем» — id цели.
                 "directions" -> out.copy(directions = f.strings(k))
                 "why_id" -> out.copy(whyId = f.str(k))
+                // Дерево целей: цель живёт без проекта (сервер снимает проект и сделку сам), ритм сам делает целью.
+                "goal" -> if (f.bool(k)) out.copy(goal = true, projectId = "", dealId = "") else out.copy(goal = false)
+                "rhythm" -> f.str(k).trim().let { r ->
+                    if (r.isEmpty()) out.copy(rhythm = "") else out.copy(rhythm = r, goal = true, projectId = "", dealId = "")
+                }
+                "no_steps" -> out.copy(noSteps = f.bool(k))
                 else -> out
             }
         }
@@ -1013,7 +1056,19 @@ object Dela {
         // Круг жизни (12.10.2026): правятся, только когда сервер их знает (`Snapshot.krugOn`) — карточка без
         // него блока Круга не показывает, и поля в `task.set` не попадают (как напоминание).
         "directions", "why_id",
+        // Дерево целей (13.10.2026): уходят серверу только с фичей `tree` — без неё их вынимают [diff] и [createOp].
+        "goal", "rhythm", "no_steps",
     )
+
+    /**
+     * Поля дерева целей (docs/dela-phone-14.md): сервер без фичи [FEATURE_TREE]
+     * отверг бы операцию с ними целиком, а с ней и всю правку дела. Поэтому их
+     * вынимают сами [diff] и [createOp], а не только карточка, которая их не показывает.
+     */
+    val TREE_FIELDS = setOf("goal", "rhythm", "no_steps")
+
+    /** Дерево целей (13.10.2026, docs/dela-phone-14.md): сервер знает `goal`, `rhythm`, `no_steps` и `why_id` проекта. */
+    const val FEATURE_TREE = "tree"
 
     /** Круг жизни (12.10.2026, docs/dela-phone-12.md): сервер знает `directions`, `why_id` и шлёт список `krug`. */
     const val FEATURE_KRUG = "krug"
@@ -1094,16 +1149,23 @@ object Dela {
         "owed" -> t.owed
         "directions" -> arr(t.directions)
         "why_id" -> nul(t.whyId)
+        "goal" -> t.goal
+        "rhythm" -> nul(t.rhythm)
+        "no_steps" -> t.noSteps
         else -> JSONObject.NULL
     }
 
     private fun same(a: Any, b: Any): Boolean = a.toString() == b.toString()
 
-    /** Что поменялось между тем, что телефон видел, и тем, что сохранил: set и was. */
-    fun diff(before: Task, after: Task): Pair<JSONObject, JSONObject> {
+    /**
+     * Что поменялось между тем, что телефон видел, и тем, что сохранил: set и was.
+     * [tree] — сервер знает дерево целей (`Snapshot.treeOn`); нет — поля [TREE_FIELDS] не уходят.
+     */
+    fun diff(before: Task, after: Task, tree: Boolean = false): Pair<JSONObject, JSONObject> {
         val set = JSONObject()
         val was = JSONObject()
         for (k in EDITABLE) {
+            if (!tree && k in TREE_FIELDS) continue
             val a = field(before, k)
             val b = field(after, k)
             if (!same(a, b)) {
@@ -1119,13 +1181,14 @@ object Dela {
      * придёт с ответом), op_id — его постоянный ключ: повтор пачки не плодит
      * дублей ни в очереди, ни на сервере.
      */
-    fun createOp(t: Task, opId: String = newId()): JSONObject {
+    fun createOp(t: Task, opId: String = newId(), tree: Boolean = false): JSONObject {
         val task = JSONObject().put("id", t.id).put("title", t.title.trim())
         for (k in CREATE_FIELDS) {
-            if (k == "title") continue
+            // Поля дерева — только серверу, который их знает ([tree]).
+            if (k == "title" || (!tree && k in TREE_FIELDS)) continue
             val v = field(t, k)
             if (v == JSONObject.NULL || (k == "want" && v == false) || (k == "owed" && v == false) || (k == "labels" && t.labels.isEmpty())
-                || (k == "directions" && t.directions.isEmpty())) continue
+                || (k == "directions" && t.directions.isEmpty()) || (k == "goal" && v == false) || (k == "no_steps" && v == false)) continue
             if (k == "ball" && v == MINE) continue
             task.put(k, v)
         }
@@ -1243,8 +1306,10 @@ object Dela {
         val total: Int get() = now.size + today.size + nudge.size + fromOthers.size
     }
 
+    /** Мои открытые в сфере — без целей: цель не делают, к ней идут (дерево целей, 13.10.2026). */
     private fun mineOpen(s: Snapshot, me: String, sphere: String): List<Task> =
-        s.tasks.values.filter { it.open && (me.isBlank() || it.ownerId == me) && inSphere(it, sphere) }
+        s.tasks.values.filter { it.open && !it.goal && (me.isBlank() || it.ownerId == me) && inSphere(it, sphere) }
+
 
     private fun le(date: String, today: String): Boolean = date.isNotBlank() && date <= today
 

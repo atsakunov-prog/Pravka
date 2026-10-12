@@ -147,6 +147,14 @@ class DelaStore(private val context: Context) {
         writePrefs()
     }
 
+    /** Много ключей разом — «Раскрыть всё / Свернуть всё» дерева жизни: одна запись файла, а не сотня. */
+    suspend fun setGroups(values: Map<String, String>) = mutex.withLock {
+        if (values.isEmpty()) return@withLock
+        ensureLoaded()
+        _groups.value = _groups.value + values
+        writePrefs()
+    }
+
     private suspend fun writePrefs() {
         val text = JSONObject().put("v", 1)
             .put("projects", JSONArray().apply { _favs.value.sorted().forEach { put(it) } })

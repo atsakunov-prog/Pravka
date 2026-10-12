@@ -979,7 +979,8 @@ private fun buildModel(
             val second = t.projectName  // номеров дел нет нигде (09.10.2026)
             tasksIn += DayAssembler.TaskIn(t.id, t.title, second, t.estimateMin, fixed)
         }
-        val doneToday = snap.tasks.values.filter { it.status == Dela.DONE && it.completedAt.take(10) == dateKey && (me.isBlank() || it.ownerId == me) }
+        // Закрытая цель — не дело дня (дерево жизни, 13.10.2026): в счёт «сделано» её нет.
+        val doneToday = snap.tasks.values.filter { it.status == Dela.DONE && !it.goal && it.completedAt.take(10) == dateKey && (me.isBlank() || it.ownerId == me) }
         delaTotal = list.size + doneToday.size
         delaDone = doneToday.size
         if ("dela" in marksOn) {

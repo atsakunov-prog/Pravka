@@ -39,7 +39,8 @@ object ZasechkaTasks {
      * вкладки (10.10.2026, docs/dela-phone-11.md: «отбить» — люди ждут, потом
      * «запустить», потом «мониторить»; «Сейчас» и просроченное — тоже здесь);
      * начатое из ленты за неделю (свежее выше — к нему обычно и возвращаются).
-     * Только открытые дела владельца, без повторов.
+     * Только открытые дела владельца, без повторов и без целей: время пишут на дело, а
+     * цель — узел дерева жизни (13.10.2026), её не делают.
      */
     fun shortlist(
         s: Dela.Snapshot,
@@ -48,7 +49,7 @@ object ZasechkaTasks {
         entries: List<ZasechkaStore.Entry>,
         now: Long,
     ): List<Dela.Task> {
-        val mine = s.tasks.values.filter { it.open && (me.isBlank() || it.ownerId == me) }
+        val mine = s.tasks.values.filter { it.open && !it.goal && (me.isBlank() || it.ownerId == me) }
         val byId = mine.associateBy { it.id }
         val out = LinkedHashMap<String, Dela.Task>()
         fun add(t: Dela.Task?) {

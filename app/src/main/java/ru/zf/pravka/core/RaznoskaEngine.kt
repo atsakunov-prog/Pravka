@@ -161,7 +161,8 @@ class RaznoskaEngine(
         }
         runCatching { dictionaryStore.incrementHits(prepared.firedIds) }
         runCatching { stats.recordAux(split.costUsd, split.tokensIn, split.tokensOut, route = ru.zf.pravka.data.ModelRoute.RAZNOSKA.key) }
-        val open = snap.tasks.values.filter { it.open }.map { it.title to it.projectId }
+        // Дубль ищется среди дел: цель (узел дерева жизни) — не дело, сказанное к ней не «уже есть».
+        val open = snap.tasks.values.filter { it.open && !it.goal }.map { it.title to it.projectId }
         val tasks = split.tasks.map { task ->
             val dup = TaskMatcher.findDuplicate(task, open)
             if (dup == null) task else task.copy(duplicateOf = dup)

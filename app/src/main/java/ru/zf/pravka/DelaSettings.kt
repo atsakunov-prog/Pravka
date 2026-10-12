@@ -212,7 +212,7 @@ private fun delaHint(l: DelaSync.Link, st: DelaSync.Status, queued: Int, snap: r
         }
         else -> parts += "ещё не обновлялось"
     }
-    parts += "дел ${snap.tasks.values.count { it.open }}"
+    parts += "дел ${snap.tasks.values.count { it.open && !it.goal }}"
     if (queued > 0) parts += "в очереди $queued"
     return parts.joinToString(" · ")
 }

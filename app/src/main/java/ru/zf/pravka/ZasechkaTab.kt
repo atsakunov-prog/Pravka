@@ -811,8 +811,14 @@ internal fun ZasechkaTab(
             onDismiss = { openTask = null },
             onSave = { after ->
                 openTask = null
-                val (set, was) = ru.zf.pravka.core.Dela.diff(t, after)
+                val (set, was) = ru.zf.pravka.core.Dela.diff(t, after, tree = delaSnap.treeOn)
                 if (set.length() > 0) app.appScope.launch { app.delaDo(listOf(ru.zf.pravka.core.Dela.setOp(t.id, set, was))) }
+            },
+            // «Место в дереве»: тап по цели — её карточка; поправленное здесь уходит до перехода.
+            onOpenTask = { after, to ->
+                val (set, was) = ru.zf.pravka.core.Dela.diff(t, after, tree = delaSnap.treeOn)
+                if (set.length() > 0) app.appScope.launch { app.delaDo(listOf(ru.zf.pravka.core.Dela.setOp(t.id, set, was))) }
+                openTask = to
             },
             onStatus = { op ->
                 openTask = null

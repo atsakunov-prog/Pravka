@@ -64,6 +64,11 @@ internal fun DelaTaskPane(
     onDone: () -> Unit,
     onPerson: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** «Место в дереве»: тап по цели — она справа вместо дела; по проекту (▣) — его страница. */
+    onTask: (Dela.Task) -> Unit = {},
+    onProject: (String) -> Unit = {},
+    /** Кто смотрит: место в дереве — только у своего дела. */
+    me: String = "",
 ) {
     val mode = LocalMode.current
     val ty = LocalPravkaType.current
@@ -184,6 +189,13 @@ internal fun DelaTaskPane(
                         }
                     }
                 }
+            }
+        }
+        // Место в дереве жизни (13.10.2026, `placeBlock` веба): зачем это дело и что будет, когда сделаешь.
+        val dirs = ru.zf.pravka.core.DelaKrug.directions()
+        if (ru.zf.pravka.core.DelaKrug.on(snap, dirs) && (me.isBlank() || task.ownerId.isBlank() || task.ownerId == me)) {
+            item(key = "place") {
+                PlaceBlock(task, ru.zf.pravka.core.DelaKrug.place(task, snap, today.toString(), me), dirs, snap, onTask, onProject)
             }
         }
         // История: заметки к делу и журнал правок сервера — по времени.

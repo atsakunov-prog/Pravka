@@ -66,10 +66,11 @@ object DelaGroups {
      * На сегодня (`inToday` веба, сервер — `store.TODAY_IF`): открытое своё дело,
      * у которого срок сегодня или прошёл, «Сейчас» телефона, «отбить» без срока
      * (человек ждёт — значит, сегодня) или «мониторить», где пора напомнить.
-     * Не сделал — завтра оно снова здесь, просроченным.
+     * Не сделал — завтра оно снова здесь, просроченным. Цели здесь не бывает: её не делают,
+     * к ней идут (дерево жизни, 13.10.2026) — значит, нет её и в «Сейчас», Засечке и числах.
      */
     fun inToday(t: Dela.Task, me: String, today: String): Boolean =
-        t.open && mine(me, t) && (
+        t.open && !t.goal && mine(me, t) && (
             t.focusOn == today || le(t.dueDate, today) ||
                 (grpOf(t) == Grp.OWED && t.dueDate.isBlank()) ||
                 (t.ball == Dela.WAITING && le(t.nudgeOn, today))
@@ -128,7 +129,7 @@ object DelaGroups {
 
     /** Сделано сегодня (по Москве): «закрыто M» в шапке «Сегодня». */
     fun doneToday(s: Dela.Snapshot, me: String, today: String): Int =
-        s.tasks.values.count { it.status == Dela.DONE && mine(me, it) && it.completedAt.isNotBlank() && mskDay(it.completedAt) == today }
+        s.tasks.values.count { it.status == Dela.DONE && !it.goal && mine(me, it) && it.completedAt.isNotBlank() && mskDay(it.completedAt) == today }
 
     private val MSK: ZoneId = ZoneId.of("Europe/Moscow")
 
@@ -272,7 +273,7 @@ object DelaGroups {
             Key("1" + d.name + "\u0001" + d.id, d.name, id = d.id, note = pn, find = listOf(d.name, pn).filter { it.isNotBlank() }, dealId = d.id)
         } ?: Key("9", "Без сделки", find = listOf("без сделки"))
         Level.DATE -> dateKey(t, today)
-        // Направление — первое из дела (с наследованием); по кругу: сверху 12 — Здоровье.
+        // Направление — главное (у корня цепочки «Зачем»); по кругу: сверху Здоровье.
         Level.DIR -> DelaKrug.directions().let { dirs ->
             dirs.firstOrNull { it.key == DelaKrug.dirsOf(t, s).firstOrNull() }?.let { d ->
                 Key((d.pos % 12).toString().padStart(2, '0') + d.key, d.name, sub = d.formula, find = listOf(d.name, d.short).filter { it.isNotBlank() })
@@ -473,11 +474,12 @@ object DelaGroups {
     fun suggestName(scope: Scope, levels: List<Level>, pick: Pick?): String =
         "${scope.title}: ${levelsName(levels)}" + (pick?.takeIf { pickOn(it, levels) }?.let { " — " + it.title } ?: "")
 
-    /** Дела фильтра (`scopeItems` веба). */
+    /** Дела фильтра (`scopeItems` веба) — без целей: они в дереве, а не в списках дел. */
     fun scopeItems(s: Dela.Snapshot, me: String, today: String, sphere: String, scope: Scope): List<Dela.Task> = when (scope) {
         Scope.TODAY -> todayTasks(s, me, today, sphere)
         else -> s.tasks.values.filter {
-            it.open && mine(me, it) && Dela.inSphere(it, sphere) && (scope == Scope.ALL || grpOf(it).key == scope.key)
+            it.open && !it.goal && mine(me, it) && Dela.inSphere(it, sphere) && (scope == Scope.ALL || grpOf(it).key == scope.key)
+
         }
     }
 }

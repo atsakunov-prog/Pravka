@@ -318,6 +318,43 @@ class ScreenShots {
         // ---- Дела, задание 4 (docs/dela-phone-4.md): проекты под клиентом, карточки, люди, поиск
         if (want("crm")) crm()
 
+        // ---- Круг и дерево жизни (задание 14, docs/dela-phone-14.md): обзор, три вида дерева, место дела в карточке
+        if (want("krug")) {
+            // Вкладка дорисовывает список не сразу: сначала снимок «Сегодня» (он ждёт кадры), потом нажатия.
+            var k = launch(MainActivity.TAB_TODOIST)
+            shot(k, "krug-0-today")
+            if (tap(k, "Круг жизни")) shot(k, "krug-1-krug")
+            if (tap(k, "Дерево жизни")) {
+                shot(k, "krug-2-tree")
+                if (tap(k, "Колонки", exact = true)) shot(k, "krug-3-cols")
+                if (tap(k, "Список", exact = true)) shot(k, "krug-4-list")
+            }
+            // Вид дерева помнит устройство — следующему снимку снова «Дерево».
+            runBlocking { app.delaStore.setGroup("tree:mode", "tree") }
+            close(k)
+            // Высоким окном: список рисует только видимое, а шаг к цели — ниже первого экрана.
+            RuntimeEnvironment.setQualifiers(OUTER_TALL)
+            k = launch(MainActivity.TAB_TODOIST)
+            settle(8)
+            if (tap(k, "Круг жизни")) shot(k, "krug-6-tall")
+            if (tap(k, "Дерево жизни")) {
+                shot(k, "krug-7-tree-tall")
+                // Карточка шага: «Место в дереве» под названием.
+                if (tap(k, "Купить протеин")) screen("krug-5-card")
+            }
+            close(k)
+            RuntimeEnvironment.setQualifiers(INNER)
+            k = launch(MainActivity.TAB_TODOIST)
+            settle(8)
+            if (tap(k, "Дерево жизни")) {
+                shot(k, "krug-8-wide")
+                // Цель справа: её место, «Под целью …» и шаги.
+                if (tap(k, "Сильное тело к лету")) shot(k, "krug-9-wide-goal")
+            }
+            close(k)
+            RuntimeEnvironment.setQualifiers(OUTER)
+        }
+
         // ---- «Сегодня» (Правка 4.0): сложенный, целиком, разворот
         if (want("today")) {
             var t = launch(null); shot(t, "today-01-folded")

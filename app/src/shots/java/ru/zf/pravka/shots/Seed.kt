@@ -387,6 +387,14 @@ internal object Seed {
             task(67, "Дом: заказать фильтры для воды") { put("project_id", "p-home"); put("due_date", d(4)); put("created_at", ago(5)); put("source", "telegram") },
             task(68, "Продлить Контур") { put("project_id", "p-zf"); put("status", "done"); put("completed_at", ago(5)) },
             task(52, "Бета: отправить счёт за сентябрь") { put("project_id", "p-beta"); put("status", "done"); put("completed_at", ago(26)) },
+            // Дерево жизни (задание 14): цели — узлы без проекта, практика с ритмом, шаги к ним, проекты на целях.
+            task(80, "Сильное тело к лету") { put("goal", true); put("directions", arr("health")) },
+            task(81, "Белок каждый день") { put("goal", true); put("rhythm", "ежедневно"); put("why_id", "t-80") },
+            task(82, "Купить протеин") { put("why_id", "t-81"); put("estimate_min", 30) },
+            task(85, "Тренировка в зале") { put("why_id", "t-80"); put("status", "done"); put("completed_at", ago(30)) },
+            task(83, "Бета — клиент надолго") { put("goal", true); put("directions", arr("work")) },
+            task(84, "Дача готова к маю") { put("goal", true); put("directions", arr("home")) },
+            task(86, "Новая цель без шагов") { put("goal", true); put("directions", arr("mind")) },
         )
         val suggestions = arr(
             sug(
@@ -417,7 +425,11 @@ internal object Seed {
             JSONObject().put("id", "sasha").put("name", "Саша").put("role", "owner").put("seq", 1),
             JSONObject().put("id", "lena").put("name", "Лена").put("person_id", "pe-lena").put("role", "member").put("seq", 2),
         )
-        return JSONObject().put("ok", true).put("full", true).put("seq", seq).put("today", d(0)).put("features", arr("groups"))
+        // Круг (задание 14): проекты в Круге — направления и цель, на которой проект висит.
+        fun krug(id: String, dir: String, why: String? = null) =
+            JSONObject().put("id", id).put("kind", "project").put("directions", arr(dir)).put("why_id", why ?: JSONObject.NULL).put("seq", ++seq)
+        return JSONObject().put("ok", true).put("full", true).put("seq", seq).put("today", d(0)).put("features", arr("groups", "krug", "tree"))
+            .put("krug", arr(krug("p-beta", "work", "t-83"), krug("p-orion", "work"), krug("p-home", "home"), krug("p-dacha", "home", "t-84"), krug("p-zf", "work")))
             .put("tasks", tasks).put("projects", projects).put("people", people).put("suggestions", suggestions)
             .put("users", users).put("comments", JSONArray())
             .put("orgs", arr(org("o-beta", "Бета Групп"), org("o-orion", "Орион Логистик"), org("o-buh", "Счётная палата плюс")))
@@ -445,6 +457,25 @@ internal object Seed {
         )
         app.settings.setDelaBackend(ru.zf.pravka.data.Settings.DELA_BACKEND_SERVER)
         app.delaStore.setMe("sasha")
+        // Круг жизни (задание 14): девять выдуманных направлений по зонам и принципы — как Свод их привёз бы.
+        val dirs = JSONArray()
+        for ((i, d) in listOf(
+            Triple("health", "Здоровье", "Я"), Triple("mind", "Голова", "Я"), Triple("joy", "Радость", "Я"),
+            Triple("work", "Дело", "Мир"), Triple("money", "Деньги", "Мир"), Triple("people", "Люди", "Мир"),
+            Triple("couple", "Пара", "Семья"), Triple("kids", "Дети", "Семья"), Triple("home", "Дом", "Семья"),
+        ).withIndex()) {
+            dirs.put(JSONObject().put("key", d.first).put("pos", i).put("name", d.second).put("short", d.second).put("zone", d.third)
+                .put("formula", if (i % 3 == 0) "Формула направления «${d.second}» — одной строкой." else ""))
+        }
+        app.svodStore.applyAll(
+            listOf(
+                ru.zf.pravka.core.Svod.Entry(ru.zf.pravka.core.DelaKrug.DIRECTIONS, value = dirs.toString()),
+                ru.zf.pravka.core.Svod.Entry(ru.zf.pravka.core.DelaKrug.PRINCIPLES, value = "[\"Страшно — значит, делаю.\", \"Решил — делаю сразу.\"]"),
+            ),
+            System.currentTimeMillis(),
+            fresh = false,
+        )
+
         check(app.delaStore.applySync(delaResponse(), System.currentTimeMillis() - 4 * MIN).isEmpty())
         // Воронка (задание 8): ответ вида — те же выдуманные сделки, что в синке.
         val sync = delaResponse()

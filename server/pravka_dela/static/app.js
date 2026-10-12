@@ -1430,7 +1430,7 @@ function treeList() {
     .sort((a, b) => a.p.localeCompare(b.p, 'ru') || byTime(a.t, b.t));
   const bar = el('div', { class: 'toolbar' }, el('label', {}, 'Цель', goalSel),
     el('button', { class: 'chip-btn' + (f.loose ? ' on' : ''), title: 'Дела, у которых нет цели: висят прямо на направлении', onclick: () => { f.loose = !f.loose; render(); } }, 'Без зачем'));
-  const rows = items.map(({ t, p }) => taskRow(t, ['dir'], p ? el('span', { class: 'm path', title: 'Место в дереве' }, p) : null));
+  const rows = items.map(({ t, p }) => taskRow(t, ['dir'], p ? el('span', { class: 'm path', title: 'Место в дереве' }, p) : null, { tree: true }));
   return [bar, rows.length ? el('div', { class: 'rows' }, rows) : el('div', { class: 'empty' }, 'Под этот фильтр дел нет.')];
 }
 

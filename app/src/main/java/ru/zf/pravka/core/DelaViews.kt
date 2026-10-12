@@ -37,8 +37,13 @@ object DelaViews {
         TODAY("today", "Сегодня"),
         NEW("new", "Новое"),
         ALL("all", "Все дела"),
-        /** Круг жизни (12.10.2026): дерево дел от направлений; виден, только когда Круг включён (`DelaKrug.on`). */
-        KRUG("krug", "Круг жизни");
+        /** Круг жизни (12.10.2026): обзор девяти направлений; виден, только когда Круг включён (`DelaKrug.on`). */
+        KRUG("krug", "Круг жизни"),
+        /**
+         * Дерево жизни (13.10.2026, docs/dela-phone-14.md): направления › цели › проекты и дела —
+         * плюсиками, колонками или списком; видно, только когда сервер знает цели (`DelaKrug.treeOn`).
+         */
+        TREE("tree", "Дерево жизни");
 
         companion object {
             /**
@@ -87,9 +92,9 @@ object DelaViews {
 
     private fun mine(s: Dela.Snapshot, me: String, t: Dela.Task): Boolean = me.isBlank() || t.ownerId == me
 
-    /** `openMine` веба: открытые мои в сфере («Входящие» — в любой). */
+    /** `openMine` веба: открытые мои в сфере («Входящие» — в любой), без целей — цель не делают, к ней идут. */
     fun openMine(s: Dela.Snapshot, me: String, sphere: String): List<Dela.Task> =
-        s.tasks.values.filter { it.open && mine(s, me, it) && Dela.inSphere(it, sphere) }
+        s.tasks.values.filter { it.open && !it.goal && mine(s, me, it) && Dela.inSphere(it, sphere) }
 
     private fun isNow(t: Dela.Task, today: String) = t.focusOn == today
     private fun le(d: String, today: String) = d.isNotBlank() && d <= today
@@ -107,7 +112,7 @@ object DelaViews {
      * во всех сферах: пять на день, а не пять на сферу.
      */
     fun nowTasks(s: Dela.Snapshot, me: String, today: String): List<Dela.Task> =
-        s.tasks.values.filter { it.open && mine(s, me, it) && isNow(it, today) }.sortedWith(Dela.ORDER)
+        s.tasks.values.filter { it.open && !it.goal && mine(s, me, it) && isNow(it, today) }.sortedWith(Dela.ORDER)
 
     /**
      * Влезут ли [ids] в «Сейчас» (`nowRoom` веба): уже стоящие не считаются
@@ -136,7 +141,7 @@ object DelaViews {
         fun of(v: View): Int = when (v) {
             View.TODAY -> today
             View.NEW -> new
-            View.ALL, View.KRUG -> 0
+            View.ALL, View.KRUG, View.TREE -> 0
         }
 
         fun hot(v: View): Boolean = v == View.TODAY && todayHot
@@ -160,9 +165,9 @@ object DelaViews {
     /** Раздел страницы: заголовок веба и дела в его порядке. */
     data class Section(val title: String, val items: List<Dela.Task>)
 
-    /** «Все дела»: моё в сфере, с «Сделанными» по выбору. */
+    /** «Все дела»: моё в сфере, с «Сделанными» по выбору. Целей нет — они в дереве и в поиске (13.10.2026). */
     fun list(s: Dela.Snapshot, me: String, sphere: String, showDone: Boolean): List<Dela.Task> =
-        s.tasks.values.filter { mine(s, me, it) && Dela.inSphere(it, sphere) && (showDone || it.open) }
+        s.tasks.values.filter { !it.goal && mine(s, me, it) && Dela.inSphere(it, sphere) && (showDone || it.open) }
 
     /**
      * Поиск веба: каждое слово — где угодно в названии, заметках, имени проекта,
@@ -298,6 +303,8 @@ object DelaViews {
         val t = s.tasks[sg.taskId]
         val ref = t?.title ?: "дело не видно"
         val project = t?.let { s.projects[it.projectId]?.name ?: it.projectName }.orEmpty()
+        // Вопрос разборщика Круга (`sugText` веба): дело и цель, которую он предлагает, — путём от направления.
+        if (sg.source == "krug") return SugText(ref, v("goal_path").takeIf { it.isNotBlank() }?.let { "цель: $it" } ?: project)
         return when (sg.kind) {
             "close" -> SugText("Закрыть: $ref", project)
             "assign" -> SugText("Взять себе: $ref", project)
@@ -539,7 +546,18 @@ object DelaViews {
      * проекта), сделка, кто ждёт («Иван ждёт 3 дн», «жду Иван 5 дн», «при
      * встрече с Иван») или «@Иван», минуты, метки.
      */
-    fun chips(t: Dela.Task, by: By?, s: Dela.Snapshot, today: String, onProjectPage: Boolean = false, also: Set<By> = emptySet()): List<String> {
+    fun chips(
+        t: Dela.Task,
+        by: By?,
+        s: Dela.Snapshot,
+        today: String,
+        onProjectPage: Boolean = false,
+        also: Set<By> = emptySet(),
+        /** Кто смотрит: у чужого дела Круга нет (направления и цели — только хозяину). "" — своё. */
+        me: String = "",
+        /** Строка в дереве жизни: направление и «зачем» названы самим деревом. */
+        inTree: Boolean = false,
+    ): List<String> {
         // [also] — остальные уровни группировки (10.10.2026): что названо заголовком, в строке не повторяется.
         fun on(b: By) = by == b || b in also
         val out = mutableListOf<String>()
@@ -557,15 +575,17 @@ object DelaViews {
         DelaGroups.wait(t, who(t, s), today, personGrouped = on(By.PERSON))?.let { out += it.text }
         if (t.estimateMin > 0) out += "${t.estimateMin} м"
         out += t.labels
-        // Круг жизни (12.10.2026, `taskRow` веба): направления дела и «зачем: <цель>»; у цели — сколько шагов.
-        if (s.krugOn) {
+        // Круг жизни (12.10.2026, `taskRow` веба): направления дела (главное, потом метки) и «зачем: <цель>»;
+        // у цели — «цель · N шагов» или «практика · ритм» (13.10.2026). В дереве место дела видно и так.
+        val mine = me.isBlank() || t.ownerId.isBlank() || t.ownerId == me
+        if (s.krugOn && mine) {
             val dirs = DelaKrug.directions()
             if (dirs.isNotEmpty()) {
                 val ks = DelaKrug.dirsOf(t, s)
-                if (ks.isNotEmpty()) out += DelaKrug.names(ks, dirs)
-                else if (t.open) out += NO_DIRECTION
-                s.tasks[t.whyId]?.let { g -> out += "зачем: " + if (g.title.length > 34) g.title.take(33) + "…" else g.title }
-                DelaKrug.steps(s, t.id).size.takeIf { it > 0 && t.open }?.let { out += "цель · шагов $it" }
+                if (ks.isNotEmpty() && !inTree) out += DelaKrug.names(ks, dirs)
+                else if (ks.isEmpty() && t.open) out += NO_DIRECTION
+                if (!inTree) s.tasks[t.whyId]?.let { g -> out += "зачем: " + if (g.title.length > 34) g.title.take(33) + "…" else g.title }
+                DelaKrug.goalChip(t, s)?.let { out += it }
             }
         }
         return out.filter { it.isNotBlank() }
@@ -697,7 +717,8 @@ object DelaViews {
     /** Разделы страницы человека — заголовками веба. */
     fun personSections(s: Dela.Snapshot, personId: String): List<Section> {
         // `renderPerson` веба (10.10.2026): тремя группами. Его просьбы ко мне (`requested_by`) — тоже «отбить».
-        val his = s.tasks.values.filter { it.open && (it.personId == personId || it.requestedBy == personId) }
+        val his = s.tasks.values.filter { it.open && !it.goal && (it.personId == personId || it.requestedBy == personId) }
+
         fun g(t: Dela.Task) = DelaGroups.grpOf(t)
         return listOf(
             Section("Отбить: ждёт от меня", his.filter { g(it) == DelaGroups.Grp.OWED || (it.requestedBy == personId && g(it) == DelaGroups.Grp.SELF) }),
