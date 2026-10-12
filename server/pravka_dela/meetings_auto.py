@@ -37,6 +37,7 @@ PROMPT_KEY = "prompt.meetings"
 BATCH_MAX = 100          # встреч в пачке
 BATCH_MAX_AGE = 3 * 3600  # пачка не кончилась за три часа — отмена, встречи уйдут следующей
 MIN_GAP = 300            # секунд между пачками: свежая встреча ждёт не дольше пяти минут плюс сама пачка
+CACHE_MIN = 10           # с какой пачки справочник метить для кэша
 EXCERPT = 14000          # знаков расшифровки в запрос: начала хватает на клиента, тему и участников
 TAIL = 2500              # и конец — там договорённости и прощание по именам
 EXAMPLES = 30
@@ -60,7 +61,8 @@ label — только когда client пустой: коротко, с кем
   для своих, «Личное» для личной. Когда client есть — "".
 deal — имя сделки этого клиента из справочника, если встреча именно о ней; иначе "".
 topic — основная тема в 2–7 словах: что решали или о чём договаривались, а не «обсуждение», «встреча», «созвон».
-  Без имени клиента и без даты, с маленькой буквы (имена собственные — с большой), без точки. Например: «фонды и
+  Без имени клиента и без даты, без двоеточий (двоеточие в названии одно — после клиента), с маленькой буквы
+  (имена собственные — с большой), без точки. Например: «фонды и
   сенситивити модели», «кредит на покупку пиццерий», «найм финдиректора», «плановая сессия».
 people — все, кто говорил или точно был на встрече, кроме самого владельца. name — как человека назвали в разговоре
   или подписала служба; person — точное имя из СПРАВОЧНИКА (как в начале строки), только если это точно он; иначе "".
@@ -163,12 +165,17 @@ def rules(conn, owner: str) -> str:
     return row["body"] if row and (row["body"] or "").strip() else RULES
 
 
-def system_blocks(rules_text: str, cat: str, learned: list[str]) -> list[dict]:
+def system_blocks(rules_text: str, cat: str, learned: list[str], n: int = BATCH_MAX) -> list[dict]:
     text = rules_text + "\n\n" + cat
     if learned:
         text += "\n\nКАК НАЗЫВАЛ ВЛАДЕЛЕЦ (свежие сверху):\n" + "\n".join(learned)
-    # Один блок на всю пачку: кэш делится между её запросами.
-    return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
+    # Один блок на всю пачку: кэш делится между её запросами. Только у большой пачки: запросы пачки идут
+    # параллельно, и пачка из одной-двух свежих встреч кэш только пишет (+25 % к цене справочника вместо
+    # скидки; служба встреч, 12.10.2026). А после архива пачки и есть одна-две встречи.
+    block = {"type": "text", "text": text}
+    if n >= CACHE_MIN:
+        block["cache_control"] = {"type": "ephemeral"}
+    return [block]
 
 
 def _excerpt(conn, mid) -> str:
@@ -197,6 +204,12 @@ def user_prompt(conn, m: dict) -> str:
         parts.append(f"Служба думает, что клиент: {m['hint_project']}.")
     if m["speakers"]:
         parts.append("Говорящие у службы: " + ", ".join(m["speakers"]) + ".")
+    voice = meetings.voice_people(conn, m["id"])
+    if voice:
+        names = {str(r["id"]): r["name"] for r in conn.execute(
+            "SELECT id, name FROM crm.people WHERE id = ANY(%s)", ([v["id"] for v in voice],)).fetchall()}
+        parts.append("Служба узнала по голосу (это точно они, в people — с этим именем из справочника): " + ", ".join(
+            f"{v['name'] + ' — ' if v['name'] else ''}{names.get(str(v['id']), '?')}" for v in voice) + ".")
     if m["summary"]:
         parts.append("СВОДКА СЛУЖБЫ:\n" + m["summary"])
     if m["agreements"]:
@@ -317,7 +330,7 @@ def tick(url: str, key: str, proxy: str | None, now: float | None = None, client
         todo = candidates(conn, owner)
         if not todo:
             return None
-        system = system_blocks(rules(conn, owner), catalog(conn, owner), examples(conn, owner))
+        system = system_blocks(rules(conn, owner), catalog(conn, owner), examples(conn, owner), len(todo))
         reqs = [{"custom_id": str(m["id"]), "params": params(system, user_prompt(conn, m))} for m in todo]
     b = client.messages.batches.create(requests=reqs)
     _save(url, {**st, "sent_at": now, "batch": {"id": b.id, "at": now, "n": len(reqs),

@@ -37,6 +37,7 @@ from . import people
 
 MSK = ZoneInfo("Europe/Moscow")
 KINDS = {"meeting", "zoom", "call", "other"}
+SPEAKER_NAME_KEYS = ("name", "dela_name", "display", "label", "speaker")
 KIND_WORDS = {"встреча": "meeting", "offline": "meeting", "office": "meeting", "звонок": "call", "phone": "call",
               "telegram": "call", "zoom": "zoom", "зум": "zoom", "meet": "zoom", "teams": "zoom"}
 SPHERE_WORDS = {"work": "work", "рабочая": "work", "работа": "work", "home": "home", "personal": "home",
@@ -50,6 +51,9 @@ UPSERT_KNOWN = {
     "ref", "source", "url", "started_at", "ended_at", "duration_min", "duration_sec", "kind", "title", "summary",
     "agreements", "speakers", "transcript", "segments", "project", "project_id", "sphere", "raw",
 }
+# Разбор спрашивает владельца только о свежей встрече (владелец 13.10.2026: «старые уже ушли в прошлое»): про
+# мартовский созвон без расшифровки вопрос никому не нужен — у старой встречи остаётся лучшая догадка без вопроса.
+QUESTION_DAYS = 7
 LINE_MAX = 1500          # знаков в реплике поиска: длинный монолог режется по фразам
 TRANSCRIPT_MAX = 4_000_000
 SPEAKER = re.compile(r"^\s*(?:\[?((?:\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d+)?)\]?\s*[-–—]?\s*)?"
@@ -67,6 +71,13 @@ LIST_MAX = 1000
 
 
 # ── Название ─────────────────────────────────────────────────────────
+
+
+def clean_topic(topic: str | None) -> str | None:
+    """Тема без точки в конце и без двоеточий: «урок математики: задачи» дало бы «Семья: урок математики: задачи»
+    (12.10.2026, на настоящих данных — 10 встреч). Двоеточие в названии одно — после клиента; внутри темы — тире."""
+    t = re.sub(r"\s*:\s*", " — ", (topic or "").strip()).strip(" —").rstrip(".").strip()
+    return t or None
 
 
 def title_of(label: str | None, topic: str | None) -> str | None:
@@ -213,6 +224,31 @@ def _project_hint(conn, m: dict) -> dict | None:
     return None
 
 
+def _speaker_name(x: Any) -> str:
+    if isinstance(x, dict):
+        x = next((x.get(k) for k in SPEAKER_NAME_KEYS if x.get(k)), "")
+    return str(x or "").strip()
+
+
+def voice_people(conn, meeting_id) -> list[dict]:
+    """Кого служба встреч узнала по голосу и связала с карточкой Дел: raw.speakers[].person_id (или speakers
+    верхнего уровня объектами). Это сильнее догадки по разговору. Слитый дубль ведёт в живую карточку; чужой или
+    кривой id — мимо."""
+    row = conn.execute("SELECT raw FROM crm.meeting_raw WHERE meeting_id = %s", (meeting_id,)).fetchone()
+    raw = (row and row["raw"]) or {}
+    found: list[dict] = []
+    for x in raw.get("speakers") if isinstance(raw.get("speakers"), list) else []:
+        pid = str(x.get("person_id") or "") if isinstance(x, dict) else ""
+        if not re.fullmatch(r"[0-9a-fA-F-]{36}", pid):
+            continue
+        p = conn.execute(
+            "SELECT coalesce(m.id, pe.id) AS id FROM crm.people pe LEFT JOIN crm.people m ON m.id = pe.merged_into "
+            "WHERE pe.id = %s::uuid", (pid,)).fetchone()
+        if p:
+            found.append({"id": p["id"], "name": _speaker_name(x)})
+    return found
+
+
 def _kind(v: Any) -> str:
     k = str(v or "meeting").strip().lower()
     return k if k in KINDS else KIND_WORDS.get(k, "other")
@@ -272,7 +308,7 @@ def op_upsert(conn, user, op, err):
         "url": (m.get("url") or "").strip() or None, "started_at": started, "duration_min": dur,
         "kind": _kind(m.get("kind")), "source_title": (m.get("title") or "").strip() or None, "summary": summary,
         "agreements": Jsonb([x if isinstance(x, (dict, str)) else str(x) for x in agreements]),
-        "speakers": [str(x).strip() for x in speakers if str(x).strip()][:50],
+        "speakers": [n for n in (_speaker_name(x) for x in speakers) if n][:50],
         "hint_project": (str(m.get("project") or "") or None),
         "content_md5": md5, "lines_n": len(lines), "chars_n": sum(len(x["text"]) for x in lines),
     }
@@ -385,18 +421,25 @@ def apply_names(conn, row: dict, ans: dict, by: str) -> dict:
         data["sphere"] = sphere
     label = row["label"]
     if "project" not in locked:
-        p = find_project(conn, ans.get("client") or "", strict=True)
+        # Подпись, совпавшая с проектом («ЗФ» — служебный проект), — это и есть проект: иначе в списке клиентов
+        # «ЗФ» стоял дважды — проектом и подписью без проекта (12.10.2026, 5 встреч).
+        p = find_project(conn, ans.get("client") or "", strict=True) or find_project(conn, ans.get("label") or "", strict=True)
         d = find_deal(conn, p["id"], ans.get("deal") or "") if p else None
         label = p["name"] if p else ((ans.get("label") or "").strip() or None)
         data.update(project_id=p and p["id"], deal_id=d and d["id"], label=label)
     topic = row["topic"]
     if "topic" not in locked:
-        topic = (ans.get("topic") or "").strip().rstrip(".") or None
+        topic = clean_topic(ans.get("topic"))
         data["topic"] = topic
     if "people" not in locked:
         me = owner_person(conn, row["owner_id"])
         ids: list = []
         guests: list[str] = []
+        voice = voice_people(conn, row["id"])
+        for v in voice:  # узнанные по голосу — первыми и без догадок
+            if v["id"] != me and v["id"] not in ids:
+                ids.append(v["id"])
+        heard_by_voice = {norm(v["name"]) for v in voice if v["name"]}
         for x in ans.get("people") or []:
             if not isinstance(x, dict):
                 continue
@@ -405,12 +448,13 @@ def apply_names(conn, row: dict, ans: dict, by: str) -> dict:
             if p:
                 if p["id"] != me and p["id"] not in ids:
                     ids.append(p["id"])
-            elif heard and norm(heard) not in map(norm, guests):
+            elif heard and norm(heard) not in map(norm, guests) and norm(heard) not in heard_by_voice:
                 guests.append(heard)
         data.update(person_ids=ids, guests=guests[:30])
     if "title" not in locked:
         data["title"] = title_of(label, topic)
-    data["question"] = None if ans.get("sure", True) else ((ans.get("question") or "").strip() or None)
+    fresh = row["started_at"] >= dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=QUESTION_DAYS)
+    data["question"] = None if ans.get("sure", True) or not fresh else ((ans.get("question") or "").strip() or None)
     sets = ", ".join(f"{k} = %s" for k in data)
     return conn.execute(f"UPDATE crm.meetings SET {sets} WHERE id = %s RETURNING *", [*data.values(), row["id"]]).fetchone()
 
@@ -500,7 +544,7 @@ def op_set(conn, user, op, err):
         data["sphere"] = v
     for k in ("title", "topic", "label"):
         if k in s:
-            data[k] = (str(s.pop(k) or "").strip().rstrip(".") if k == "topic" else str(s.pop(k) or "").strip()) or None
+            data[k] = clean_topic(s.pop(k)) if k == "topic" else (str(s.pop(k) or "").strip() or None)
     archived = s.pop("archived", None)
     if archived is not None:
         data["archived_at"] = dt.datetime.now(dt.timezone.utc) if archived else None
@@ -591,7 +635,8 @@ def view_meetings(conn, user, sphere=None, q=None, project_id=None, person_id=No
         where.append("(m.started_at AT TIME ZONE 'Europe/Moscow')::date <= %s::date")
         params.append(str(until)[:10])
     if str(unnamed or "") in ("1", "true"):
-        where.append("(m.named_at IS NULL OR m.question IS NOT NULL)")
+        where.append("(m.named_at IS NULL OR (m.question IS NOT NULL AND m.started_at >= now() - make_interval(days => %s)))")
+        params.append(QUESTION_DAYS)
     hits: dict = {}
     if q and str(q).strip():
         q = str(q).strip()
@@ -619,8 +664,9 @@ def view_meetings(conn, user, sphere=None, q=None, project_id=None, person_id=No
     facets = conn.execute(
         "SELECT count(*) AS all_, count(*) FILTER (WHERE sphere = 'work') AS work, "
         "count(*) FILTER (WHERE sphere = 'home') AS home, count(*) FILTER (WHERE sphere IS NULL) AS none, "
-        "count(*) FILTER (WHERE named_at IS NULL) AS unnamed, count(*) FILTER (WHERE question IS NOT NULL) AS asks, "
-        "coalesce(sum(duration_min), 0) AS minutes FROM crm.meetings WHERE archived_at IS NULL").fetchone()
+        "count(*) FILTER (WHERE named_at IS NULL) AS unnamed, "
+        "count(*) FILTER (WHERE question IS NOT NULL AND started_at >= now() - make_interval(days => %s)) AS asks, "
+        "coalesce(sum(duration_min), 0) AS minutes FROM crm.meetings WHERE archived_at IS NULL", (QUESTION_DAYS,)).fetchone()
     clients = conn.execute(
         "SELECT m.project_id AS id, coalesce(p.name, m.label, 'Без клиента') AS name, count(*) AS n, "
         "max(m.started_at) AS last FROM crm.meetings m LEFT JOIN crm.projects p ON p.id = m.project_id "

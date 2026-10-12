@@ -294,7 +294,7 @@ def test_namer_sends_unnamed_once_names_and_respects_owner(mt):
     sys_text = req["system"][0]["text"]
     assert "— Вектор (Вектор Плюс) · клиент · сделки: Вектор: рефинансирование" in sys_text
     assert "ВЛАДЕЛЕЦ: Александр Саввин" in sys_text and "Олег Ветров (Олег)" in sys_text
-    assert req["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in req["system"][0]  # пачка из трёх — кэш только писала бы (CACHE_MIN)
     assert any("РАСШИФРОВКА:\nСаша: Добрый день" in r["params"]["messages"][0]["content"] for r in fb.sent[0])
     # Пачка в работе — тик ждёт и новую не шлёт.
     assert meetings_auto.tick(url, "key", None, now=1060.0, client=cl) is None and len(fb.sent) == 1
@@ -365,3 +365,130 @@ def test_contract_example_goes_through(mt):
     assert card["client"] == "Вектор" and card["duration_min"] == 47 and len(card["agreements"]) == 2
     assert [x["speaker"] for x in card["lines"]] == ["Саша", "Олег Ветров"]
     assert ops(mt["url"], "sasha", ex)[0] == r  # тот же op_id — тот же ответ
+
+
+# ── Только то, что уже есть (13.10.2026): без вопросов о старом, тема без двоеточий, «ЗФ» — проектом, голос ───
+
+def name_it(url, mid, **ans_):
+    with dela_db.session(url, "sasha", "svc:test") as c:
+        row = c.execute("SELECT * FROM crm.meetings WHERE id = %s", (mid,)).fetchone()
+        meetings.apply_names(c, row, ans(**ans_), "test")
+    return store.view(url, "sasha", "meeting", id=mid, lines="none")
+
+
+def test_clean_topic_keeps_one_colon():
+    assert meetings.clean_topic("урок математики: текстовые задачи.") == "урок математики — текстовые задачи"
+    assert meetings.clean_topic(" kick-off :интервью ") == "kick-off — интервью"
+    assert meetings.clean_topic(":") is None and meetings.clean_topic(None) is None
+
+
+def test_naming_asks_only_about_fresh_and_label_becomes_project(mt):
+    import datetime as dt
+
+    url = mt["url"]
+    with dela_db.session(url, "sasha", via="app") as c:
+        zf = c.execute("INSERT INTO crm.projects (name, sphere, kind, owner_id) VALUES ('ЗФ', 'work', 'internal', 'sasha') "
+                       "RETURNING id").fetchone()["id"]
+    now = dt.datetime.now(dt.timezone.utc)
+    old = push(url, ref="501", started_at=(now - dt.timedelta(days=40)).isoformat(), ended_at=None)
+    new = push(url, ref="502", started_at=(now - dt.timedelta(days=1)).isoformat(), ended_at=None)
+    a = name_it(url, old["id"], label="ЗФ", topic="ретро недели: фонды", sure=False, question="С кем это было?")
+    assert a["question"] is None  # старая встреча — лучшая догадка без вопроса
+    assert a["project_id"] == str(zf) and a["title"] == "ЗФ: ретро недели — фонды"
+    b = name_it(url, new["id"], client="Вектор", topic="счета", sure=False, question="Это Вектор?")
+    assert b["question"] == "Это Вектор?"
+    v = store.view(url, "sasha", "meetings")
+    assert v["counts"]["asks"] == 1
+    assert [x["ref"] for x in store.view(url, "sasha", "meetings", unnamed="1")["items"]] == ["502"]
+    assert [c["name"] for c in v["clients"]].count("ЗФ") == 1
+
+
+def test_people_recognised_by_voice_join_and_leave_guests(mt):
+    url = mt["url"]
+    m = push(url, raw={"speakers": [{"name": "Олег Ветров", "person_id": str(mt["Олег"])},
+                                    {"name": "Саша", "person_id": str(mt["Саша"])},  # сам владелец — не участник
+                                    {"name": "Чужой", "person_id": "not-a-uuid"}]})
+    card = name_it(url, m["id"], client="Вектор", topic="счета",
+                   people=[{"name": "Олег Ветров", "person": ""}, {"name": "Пётр из банка", "person": ""}])
+    assert card["people"] == ["Олег"] and card["guests"] == ["Пётр из банка"]
+    # Говорящие объектами верхнего уровня — имя в колонку, а не repr словаря.
+    m2 = push(url, ref="216", speakers=[{"name": "Ирина", "person_id": None}, "Олег"])
+    assert store.view(url, "sasha", "meeting", id=m2["id"], lines="none")["speakers"] == ["Ирина", "Олег"]
+
+
+def test_cache_marker_only_for_big_batches():
+    small = meetings_auto.system_blocks("r", "c", [], 1)[0]
+    big = meetings_auto.system_blocks("r", "c", [], meetings_auto.CACHE_MIN)[0]
+    assert "cache_control" not in small and big["cache_control"] == {"type": "ephemeral"}
+
+
+def test_migration_11_over_meetings_in_place(admin_dsn):
+    """Миграция 11 — поверх живых встреч (у владельца их 198 к моменту установки). В общей тестовой базе миграции
+    идут по пустой и правку уже лежащих строк не проверяют (CLAUDE.md, «Проверка»)."""
+    import secrets as _secrets
+    from urllib.parse import urlparse, urlunparse
+
+    import psycopg
+    from psycopg import sql
+    from psycopg.types.json import Jsonb
+
+    name = f"pa_mig11_{_secrets.token_hex(4)}"
+    with psycopg.connect(admin_dsn, autocommit=True) as a:
+        a.execute(sql.SQL("CREATE DATABASE {} ENCODING 'UTF8' TEMPLATE template0").format(sql.Identifier(name)))
+    u = urlparse(admin_dsn)
+    url = urlunparse((u.scheme, u.netloc, "/" + name, "", "", ""))
+    try:
+        files = dict(dela_db._sql_files())
+        before = {k: v for k, v in files.items() if k.startswith("dela_") and k < "dela_0011.sql"}
+        with psycopg.connect(url, autocommit=True) as c:
+            c.execute("CREATE SCHEMA core")
+            c.execute("CREATE TABLE core.migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
+            dela_db.apply_pending(c, before)
+        with dela_db.session(url, "system", "test") as c:
+            c.execute("INSERT INTO crm.users (id, name, role) VALUES ('sasha', 'Саша', 'owner')")
+            zf = c.execute("INSERT INTO crm.projects (name, sphere, kind, owner_id) VALUES ('ЗФ', 'work', 'internal', 'sasha') "
+                           "RETURNING id").fetchone()["id"]
+            me, oleg, dima = (c.execute("INSERT INTO crm.people (name, short, aliases, owner_id) VALUES (%s, %s, %s, 'sasha') "
+                                        "RETURNING id", (n, s, al)).fetchone()["id"]
+                              for n, s, al in (("Александр Саввин", "Саша", []), ("Олег Ветров", "Олег", []),
+                                               ("Дмитрий Орлов", "Дмитрий", ["Дима"])))
+            c.execute("UPDATE crm.users SET person_id = %s WHERE id = 'sasha'", (me,))
+
+            def mk(ref, days, **f):
+                row = c.execute(
+                    "INSERT INTO crm.meetings (ref, started_at, owner_id, label, topic, title, question, locked, guests, person_ids) "
+                    "VALUES (%s, now() - make_interval(days => %s), 'sasha', %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    (ref, days, f.get("label"), f.get("topic"), f.get("title"), f.get("question"), f.get("locked", []),
+                     f.get("guests", []), f.get("person_ids", []))).fetchone()["id"]
+                if "raw" in f:
+                    c.execute("INSERT INTO crm.meeting_raw (meeting_id, raw, owner_id) VALUES (%s, %s, 'sasha')", (row, Jsonb(f["raw"])))
+                return row
+            old_q = mk("1", 30, label="Семья", topic="урок математики: задачи", title="Семья: урок математики: задачи",
+                       question="С кем?")
+            fresh_q = mk("2", 2, label="Вектор", topic="счета", title="Вектор: счета", question="Это Вектор?")
+            zf_label = mk("3", 20, label="ЗФ", topic="ретро", title="ЗФ: ретро")
+            locked = mk("4", 20, label="ЗФ", topic="мой: заголовок", title="ЗФ: мой: заголовок", locked=["project", "topic"])
+            voice = mk("5", 20, label="Вектор", topic="модель", title="Вектор: модель", guests=["Дима", "Пётр"],
+                       person_ids=[oleg], raw={"speakers": [{"name": "Дмитрий", "person_id": str(dima)},
+                                                            {"name": "Саша", "person_id": str(me)}, "просто строка"]})
+        with psycopg.connect(url, autocommit=True) as c:
+            assert dela_db.apply_pending(c, files) == ["dela_0011.sql"]
+        with dela_db.session(url, "system", "test") as c:
+            got = {r["ref"]: r for r in c.execute("SELECT * FROM crm.meetings").fetchall()}
+            hist = c.execute("SELECT count(*) AS n FROM crm.history WHERE actor = 'svc:migrate' AND entity = 'crm.meetings'").fetchone()["n"]
+        assert got["1"]["question"] is None and got["2"]["question"] == "Это Вектор?"
+        assert (got["1"]["topic"], got["1"]["title"]) == ("урок математики — задачи", "Семья: урок математики — задачи")
+        assert got["3"]["project_id"] == zf and got["3"]["sphere"] == "work" and got["3"]["title"] == "ЗФ: ретро"
+        assert got["4"]["project_id"] is None and got["4"]["title"] == "ЗФ: мой: заголовок"  # под замком — не трогали
+        assert got["5"]["person_ids"] == [oleg, dima] and got["5"]["guests"] == ["Пётр"]
+        assert hist == 4  # каждая правка — в журнале
+        # Повтор той же миграции ничего не меняет.
+        with psycopg.connect(url) as c:
+            c.execute(files["dela_0011.sql"])
+            c.commit()
+        with dela_db.session(url, "system", "test") as c:
+            again = {r["ref"]: r["rev"] for r in c.execute("SELECT ref, rev FROM crm.meetings").fetchall()}
+        assert again == {k: v["rev"] for k, v in got.items()}
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as a:
+            a.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
