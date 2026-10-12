@@ -128,6 +128,45 @@ class DelaCardsTest {
     }
 
     @Test
+    fun `переименовать клиента — пустое и то же ничего, занятое отказ словами, иначе project set и «Вернуть»`() {
+        // Задание 13 (docs/dela-phone-13.md): встречи и старое имя в aliases делает сервер.
+        val s = snap()
+        assertNull(DelaCrm.renameClient(s, beta, ""))
+        assertNull(DelaCrm.renameClient(s, beta, "   "))
+        assertNull(DelaCrm.renameClient(s, beta, " Бета Групп "))
+        assertNull(DelaCrm.renameClient(s, "нет-такого", "Сигма"))
+        // Так зовут другой живой проект (регистр не важен) — отказ без операции.
+        val clash = DelaCrm.renameClient(s, beta, "альфа")!!
+        assertTrue(clash.ops.isEmpty())
+        assertTrue(clash.back.isEmpty())
+        assertEquals("«Альфа» — уже другой клиент", clash.said)
+        // Тот же клиент в архиве — не помеха.
+        val archived = s.copy(projects = s.projects + (alfa to s.projects.getValue(alfa).copy(archivedAt = "2026-09-01T00:00:00Z")))
+        assertEquals(1, DelaCrm.renameClient(archived, beta, "Альфа")!!.ops.size)
+        // Иначе — project.set {name} и «Вернуть» прежним именем.
+        val u = DelaCrm.renameClient(s, beta, "  Бета Холдинг ")!!
+        assertEquals(listOf("project.set"), u.ops.map { it.getString("op") })
+        assertEquals(beta, u.ops[0].getString("id"))
+        assertEquals("Бета Холдинг", u.ops[0].getJSONObject("set").getString("name"))
+        assertEquals(1, u.ops[0].getJSONObject("set").length())
+        assertEquals("Бета Групп", u.back[0].getJSONObject("set").getString("name"))
+        assertEquals("Теперь «Бета Холдинг» — и во встречах", u.said)
+        assertTrue((u.ops + u.back).all { Dela.isUuid(it.getString("op_id")) })
+        // Поверх копии — как сервер (dela_0012): новое имя, старое — другим именем.
+        val now = Dela.overlay(s, u.ops, "sasha", today, nowIso).projects.getValue(beta)
+        assertEquals("Бета Холдинг", now.name)
+        assertEquals(listOf("Бета", "Бета Групп"), now.aliases)
+        // «Вернуть»: прежнее имя уходит из других имён, новое ложится туда.
+        val again = Dela.overlay(s, u.ops + u.back, "sasha", today, nowIso).projects.getValue(beta)
+        assertEquals("Бета Групп", again.name)
+        assertEquals(listOf("Бета", "Бета Холдинг"), again.aliases)
+        // Старое имя, которым зовут другой живой проект, в другие имена не ложится.
+        val shared = s.copy(projects = s.projects + (alfa to s.projects.getValue(alfa).copy(aliases = listOf("Бета Групп"))))
+        val p = Dela.overlay(shared, DelaCrm.renameClient(shared, beta, "Бета Холдинг")!!.ops, "sasha", today, nowIso).projects.getValue(beta)
+        assertEquals(listOf("Бета"), p.aliases)
+    }
+
+    @Test
     fun `«+ человек» — в организацию клиента, у клиента без неё — заводим её`() {
         val s = snap()
         val join = DelaCrm.joinClient(s, beta, s.people.getValue(olga))!!

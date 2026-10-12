@@ -839,9 +839,11 @@ object Dela {
                 "project.set" -> {
                     val p = projects[op.str("id")] ?: continue
                     val set = op.optJSONObject("set") ?: continue
+                    val name = if (set.has("name")) set.str("name").ifBlank { p.name } else p.name
                     projects[p.id] = p.copy(
                         orgId = if (set.has("org_id")) set.str("org_id") else p.orgId,
-                        name = if (set.has("name")) set.str("name").ifBlank { p.name } else p.name,
+                        name = name,
+                        aliases = renamedAliases(projects.values, p, name),
                         archivedAt = if (set.has("archived_at")) set.str("archived_at") else p.archivedAt,
                         note = if (set.has("note")) set.str("note") else p.note,
                         status = if (set.has("status")) set.str("status") else p.status,
@@ -1035,6 +1037,18 @@ object Dela {
     }
 
     fun normName(s: String): String = s.trim().lowercase().replace('ё', 'е').replace(Regex("\\s+"), " ")
+
+    /**
+     * Другие имена проекта после `project.set name` — как триггер `old_name` сервера (dela_0012):
+     * новое имя из них уходит, старое ложится, если так не зовут другой живой проект. Поверх
+     * копии — чтобы «ещё зовут» в карточке клиента было видно сразу, до синка.
+     */
+    fun renamedAliases(all: Collection<Project>, p: Project, name: String): List<String> {
+        val kept = p.aliases.filter { normName(it) != normName(name) }
+        if (normName(name) == normName(p.name) || kept.any { normName(it) == normName(p.name) }) return kept
+        val taken = all.any { o -> o.id != p.id && o.live && (o.aliases + o.name).any { normName(it) == normName(p.name) } }
+        return if (taken) kept else kept + p.name
+    }
 
     /** Наговорки: `dictation.add` и вид `dictations` (06.10.2026, docs/dela-phone-3.md). */
     const val FEATURE_DICTATIONS = "dictations"

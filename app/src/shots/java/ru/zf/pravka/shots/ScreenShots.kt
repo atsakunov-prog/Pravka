@@ -199,10 +199,28 @@ class ScreenShots {
         c = launch(MainActivity.TAB_TODOIST)
         if (tap(c, "Воронка", exact = true)) shot(c, "crm-10-voronka")
         close(c)
+        // Задание 13: «Переименовать» клиента — лист с именем; имя другого клиента — отказ словами.
+        c = launch(MainActivity.TAB_TODOIST)
+        if (tap(c, "разделы, CRM") && tap(c, "Бета Групп 5") && tap(c, "Переименовать", exact = true)) {
+            screen("crm-11-rename")
+            if (typeTop(c, "орион логистик")) screen("crm-12-rename-clash")
+            if (typeTop(c, "Бета Холдинг") && tap(c, "Переименовать", exact = true)) shot(c, "crm-13-renamed")
+        }
+        close(c)
         RuntimeEnvironment.setQualifiers(OUTER)
         c = launch(MainActivity.TAB_TODOIST)
         if (tap(c, "поиск: клиенты") && type(c, "бета")) shot(c, "crm-6-search")
         close(c)
+    }
+
+    /** Набрать текст в поле верхнего окна (лист живёт своим окном поверх вкладки). */
+    private fun typeTop(c: ActivityController<MainActivity>, text: String): Boolean {
+        val node = roots(c).firstNotNullOfOrNull { r ->
+            r.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false).firstOrNull { it.config.getOrNull(SemanticsActions.SetText) != null }
+        } ?: return false.also { println("shots: поля нет") }
+        node.config[SemanticsActions.SetText].action?.invoke(androidx.compose.ui.text.AnnotatedString(text))
+        settle()
+        return true
     }
 
     private fun close(c: ActivityController<MainActivity>) {

@@ -98,6 +98,8 @@ internal class CrmUiState {
     var leaving by mutableStateOf<Pair<Dela.Person, String>?>(null)
     /** Поиск в «Людях». */
     var peopleQuery by mutableStateOf("")
+    /** «Переименовать» клиента — лист с новым именем (`prompt` веба); id проекта. */
+    var renaming by mutableStateOf<String?>(null)
 }
 
 
@@ -804,6 +806,8 @@ internal fun LazyListScope.crmClientTop(ctx: DelaCrmContext, projectId: String) 
                             listOf(path, DelaCrm.CLIENTS),
                         )
                     })
+                    // Переименовать (13.10.2026): новое имя — везде, и в названиях встреч (их правит сервер).
+                    PaperChip("Переименовать", selected = false, onClick = { ctx.ui.renaming = projectId })
                 }
             }
         }
@@ -1408,6 +1412,7 @@ internal fun CrmSheets(ctx: DelaCrmContext) {
             PaperHint("Карточка человека останется: он уйдёт из организации клиента и из людей его сделок. Передумаешь — «Вернуть».")
         }
     }
+    ui.renaming?.let { id -> ctx.snap.projects[id]?.let { RenameClientSheet(ctx, it) } }
     ui.closing?.let { d ->
         var outcome by remember(d.id) { mutableStateOf("won") }
         var reason by remember(d.id) { mutableStateOf("") }
@@ -1663,6 +1668,38 @@ private fun InvoiceSheet(ctx: DelaCrmContext, p: Dela.Payment, refresh: List<Str
         PaperField(value = to, onValueChange = { to = it }, label = "Кому: бухгалтерия, Иван…")
         PaperHint("Как")
         ChipRow { for (w in DelaCrm.SENT_VIA) PaperChip(w, selected = via == w, onClick = { via = if (via == w) "" else w }) }
+    }
+}
+
+/**
+ * «Переименовать» клиента (`renderClientCard` веба, 13.10.2026): новое имя, по умолчанию —
+ * нынешнее. Пустое или то же — просто закрыть; имя другого живого клиента — отказ
+ * словами, лист остаётся; иначе — `project.set {name}` и «Вернуть».
+ */
+@Composable
+private fun RenameClientSheet(ctx: DelaCrmContext, p: Dela.Project) {
+    var name by remember(p.id) { mutableStateOf(p.name) }
+    val clash = DelaCrm.renameClient(ctx.snap, p.id, name)?.takeIf { it.ops.isEmpty() }
+    PaperSheet(
+        onDismiss = { ctx.ui.renaming = null },
+        title = "Новое имя клиента",
+        icon = Glyphs.Edit,
+        subtitle = p.name,
+        footer = {
+            Spacer(Modifier.weight(1f))
+            PaperButton("Переименовать", icon = Glyphs.Edit, primary = true, onClick = {
+                val u = DelaCrm.renameClient(ctx.snap, p.id, name)
+                if (u != null && u.ops.isEmpty()) Feedback.toast(ctx.app, u.said)
+                else {
+                    ctx.ui.renaming = null
+                    if (u != null) ctx.runUndoable(u, listOf(DelaCrm.clientPath(p.id), DelaCrm.CLIENTS, DelaCrm.PIPELINE))
+                }
+            })
+        },
+    ) {
+        PaperField(value = name, onValueChange = { name = it }, label = "Как теперь зовут")
+        if (clash != null) PaperHint(clash.said)
+        PaperHint("Новое имя — везде: дела, проекты, хронология и названия встреч. Старое останется другим именем клиента.")
     }
 }
 

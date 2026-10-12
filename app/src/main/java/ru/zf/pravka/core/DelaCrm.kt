@@ -757,6 +757,28 @@ object DelaCrm {
     data class Undoable(val ops: List<JSONObject>, val back: List<JSONObject>, val said: String)
 
     /**
+     * Переименовать клиента (13.10.2026, docs/dela-phone-13.md; кнопка «Переименовать»
+     * в `renderClientCard` веба). Пустое или то же имя — null, ничего. Так уже зовут
+     * другой живой проект — отказ словами без операции (`ops` пустой): два клиента с
+     * одним именем сервер не различил бы ни в подписях встреч, ни в разборе. Иначе —
+     * `project.set {name}` и «Вернуть» прежним именем. Встречи, старое имя в `aliases`
+     * и пристёгивание подписанных встреч сервер делает сам (dela_0012); со старым
+     * сервером — просто новое имя: `project.set name` был всегда.
+     */
+    fun renameClient(s: Dela.Snapshot, projectId: String, name: String): Undoable? {
+        val p = s.projects[projectId] ?: return null
+        val n = name.trim()
+        if (n.isEmpty() || n == p.name) return null
+        val twin = s.projects.values.firstOrNull { it.id != p.id && it.live && it.name.equals(n, ignoreCase = true) }
+        if (twin != null) return Undoable(emptyList(), emptyList(), "«${twin.name}» — уже другой клиент")
+        return Undoable(
+            listOf(projectSetOp(p.id, JSONObject().put("name", n))),
+            listOf(projectSetOp(p.id, JSONObject().put("name", p.name))),
+            "Теперь «$n» — и во встречах",
+        )
+    }
+
+    /**
      * Убрать человека из клиента (`leaveClient` веба): из организации клиента,
      * если он оттуда, и из людей его сделок. Строки не удаляются — «Вернуть»
      * ставит всё как было. null — связан с клиентом иначе (поправить в карточке).
