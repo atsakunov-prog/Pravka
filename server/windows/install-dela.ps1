@@ -183,6 +183,12 @@ with psycopg.connect(dsn, autocommit=True) as c:
     Py 'migrate' @('-m', 'pravka_dela', '--env', $DelaEnv, 'migrate', '--owner-env', $OwnerEnv)
     # Пока сервер не знал напоминаний (до 06.10), телефон клал их строкой «⏰ Напомнить…» в заметки.
     Py 'напоминания из заметок' @('-m', 'pravka_dela', '--env', $DelaEnv, 'remind-notes', '--apply')
+    # Круг жизни (12.10.2026): направления и принципы владельца — из его файла на компе (в репозитории их нет)
+    # в Свод, направления проектам по правилам файла. Уже записанное не трогает — правки владельца целы.
+    $krugSeed = Join-Path $Import 'krug\seed.json'
+    if (Test-Path -LiteralPath $krugSeed) {
+        Py 'Круг жизни' @('-m', 'pravka_dela', '--env', $DelaEnv, 'krug-seed', '--file', $krugSeed)
+    } else { Ok "Круг жизни: файла $krugSeed нет — без засева" }
 
     Step '5/9 Перенос из Todoist, Notion и ленты'
     $decisions = Join-Path $Import 'decisions.json'

@@ -156,7 +156,8 @@ def test_migration_with_users_in_place(admin_dsn):
             c.execute("INSERT INTO crm.users (id, name, role) VALUES ('sasha', 'Саша', 'owner'), "
                       "('natasha', 'Наташа', 'member'), ('marianna', 'Марианна', 'member')")
         with psycopg.connect(url, autocommit=True) as c:
-            assert dela_db.apply_pending(c, files) == ["dela_0008.sql"]
+            # Восьмая — первой; следующие (Круг, dela_0009) едут за ней по тем же живым данным.
+            assert dela_db.apply_pending(c, files)[0] == "dela_0008.sql"
             fam = {r[0] for r in c.execute("SELECT id FROM crm.users WHERE family")}
         assert fam == {"sasha", "marianna"}
     finally:

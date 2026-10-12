@@ -33,6 +33,8 @@ APP_TABLES = {
     "tasks.comments": "SELECT, INSERT, UPDATE",
     "tasks.suggestions": "SELECT, INSERT, UPDATE",
     "tasks.dictations": "SELECT, INSERT, UPDATE",
+    # Круг жизни: направления и «Зачем» — только хозяину (dela_0009); строка не удаляется, пустеет.
+    "tasks.krug": "SELECT, INSERT, UPDATE",
     "crm.tokens": "SELECT, INSERT, UPDATE",
     "crm.sessions": "SELECT, INSERT, UPDATE, DELETE",
     "crm.login_requests": "SELECT, INSERT, UPDATE, DELETE",

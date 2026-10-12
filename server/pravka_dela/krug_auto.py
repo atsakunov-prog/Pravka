@@ -1,0 +1,336 @@
+"""Разборщик Круга: дела без направления получают направление — сами, пачкой, по расписанию.
+
+Владелец 12.10.2026: «если я сам не проставил направление, то разборщик это делает… сервер пускай смотрит
+количество дел без направления и раз в полчаса отправляет. Если нет никаких дел без направлений, то ничего
+не отправляет. Ночью раз в 8 часов: последний раз в 00 и первый раз в 8. В выходные раз в час».
+
+Как устроено:
+- Тик службы — раз в минуту (__main__). Слот — по Москве: будни — :00 и :30 с 08:00 до 23:30, выходные — :00,
+  и последний слот суток — 00:00. Слот уже отработан (crm.state krug_auto) — ничего.
+- Дела без направления: открытые дела владельца, у которых пусто и своё, и наследованное (v_tasks.dirs), и
+  по которым разборщик ещё не спрашивал. Нет таких — ни одного запроса, ни цента.
+- Есть — один запрос Opus в Message Batches (−50 %, обычно минуты). Пачка в работе — крутится следующими
+  тиками; не кончилась за два часа — отмена и тот же запрос напрямую.
+- Ответ: уверен — направления (и «Зачем», если цель очевидна) ставятся сами, от имени владельца со службой
+  svc:krug в журнале; не уверен — вопрос в «Подскажи» (правило Дел №5: «уверен — поставил, не уверен —
+  подскажи»).
+- Учится на правках владельца: что он сам поставил или поправил в Круге (журнал tasks.krug, не служба) —
+  примерами в запрос. Механизма «учиться на причинах отклонения» в Делах не было (бриф думал, что есть) —
+  этот свой.
+- Кэша нет сознательно: запросы редкие (полчаса и реже), кэш на 5 минут не доживёт, а запись часового кэша
+  дороже обычного входа, пока за час нет двух запросов.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import logging
+import time
+import uuid
+from zoneinfo import ZoneInfo
+
+from psycopg.types.json import Jsonb
+
+from . import db, krug, llm
+
+log = logging.getLogger("dela.krug")
+
+MODEL = "claude-opus-5-5"
+EFFORT = "low"  # разметка по готовому справочнику; глубже — дороже без пользы (сначала на малом)
+FALLBACK_BETA = "server-side-fallback-2026-07-01"
+STATE_KEY = "krug_auto"
+BATCH_MAX_AGE = 2 * 3600  # пачка не кончилась за два часа — тот же запрос напрямую
+MAX_TASKS = 80  # за один запрос; остальные — следующим слотом
+ASKED_DAYS = 14  # о деле уже спрашивали (вопрос висит, отклонён или погас) — не переспрашивать
+EXAMPLES = 40  # правок владельца в запрос
+MSK = ZoneInfo("Europe/Moscow")
+
+
+# ── Расписание ─────────────────────────────────────────────────────────
+
+
+def is_slot(t: dt.datetime) -> bool:
+    """Минута t (по Москве) — слот разборщика? Будни: :00 и :30 с 8 до 23:30; выходные: :00; и 00:00."""
+    if t.minute not in (0, 30):
+        return False
+    if t.hour == 0:
+        return t.minute == 0
+    if t.hour < 8:
+        return False
+    return t.minute == 0 or t.weekday() < 5
+
+
+def last_slot(now: dt.datetime) -> dt.datetime:
+    """Последний слот не позже now (по Москве, с точностью до минуты)."""
+    t = now.astimezone(MSK).replace(second=0, microsecond=0)
+    t -= dt.timedelta(minutes=t.minute % 30)
+    while not is_slot(t):
+        t -= dt.timedelta(minutes=30)
+    return t
+
+
+# ── Что размечать ──────────────────────────────────────────────────────
+
+
+def candidates(conn, owner: str) -> list[dict]:
+    """Открытые дела владельца без направления — ни своего, ни наследованного — о которых ещё не спрашивали."""
+    return conn.execute(
+        "SELECT t.id, t.num, t.title, t.notes, t.project_name, t.project_kind, t.deal_name, t.person_name, t.grp, "
+        "t.why_id, t.why_title FROM tasks.v_tasks t "
+        "WHERE t.owner_id = %s AND t.status = 'open' AND cardinality(t.dirs) = 0 "
+        "AND NOT EXISTS (SELECT 1 FROM tasks.suggestions s WHERE s.task_id = t.id AND s.source = 'krug' "
+        "                AND (s.status = 'pending' OR s.created_at > now() - make_interval(days => %s))) "
+        "ORDER BY t.created_at LIMIT %s", (owner, ASKED_DAYS, MAX_TASKS)).fetchall()
+
+
+def goals(conn, owner: str) -> list[dict]:
+    """Открытые цели (дела, у которых есть шаги) — куда разборщик может повесить «Зачем»."""
+    return conn.execute(
+        "SELECT num, title, dirs FROM tasks.v_tasks WHERE owner_id = %s AND status = 'open' AND steps_open > 0 "
+        "ORDER BY num", (owner,)).fetchall()
+
+
+def examples(url: str, owner: str) -> list[dict]:
+    """Как владелец сам размечал: последние правки Круга не службой — дело и что он поставил."""
+    with db.session(url, "system", via="krug") as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT ON (h.entity_id) h.entity_id, h.after -> 'directions' AS dirs, h.at, t.title "
+            "FROM crm.history h JOIN tasks.tasks t ON t.id::text = h.entity_id "
+            "WHERE h.entity = 'tasks.krug' AND h.actor NOT LIKE 'svc:%%' AND h.after ? 'directions' "
+            "AND t.owner_id = %s ORDER BY h.entity_id, h.at DESC", (owner,)).fetchall()
+    rows = sorted(rows, key=lambda r: r["at"], reverse=True)[:EXAMPLES]
+    return [{"title": r["title"], "dirs": list(r["dirs"] or [])} for r in rows if r["dirs"]]
+
+
+# ── Запрос ─────────────────────────────────────────────────────────────
+
+# Правила разметки — запись Свода prompt.krug (правда — там: в ней примеры владельца с именами семьи, а репозиторий
+# публичный; засевается из его файла командой krug-seed). Здесь — запас без имён, пока записи нет.
+PROMPT_KEY = krug.PROMPT_KEY
+RULES ="""Ты размечаешь дела владельца по направлениям его Круга жизни. Направления — параллельные стороны жизни,
+по которым он идёт одновременно; у каждого — формула, смысл, что входит и что нет, примеры (ниже, целиком).
+
+Как решать:
+- Направление — по «зачем» дела: какую сторону жизни оно двигает. Не по тому, кто попросил, и не по типу
+  действия: покупка добавок — Здоровье, покупка одежды — Быт; бытовая просьба близкого — Быт.
+- Обычно направление одно. Второе — только если дело явно двигает обе стороны. Больше двух — почти никогда.
+- То, что ради удовольствия, идёт туда, где живёт его смысл; отдельного направления для удовольствий нет.
+- Сомневаешься между двумя — sure: false, в directions — лучший вариант, в question — короткий вопрос владельцу
+  («Театр — вдвоём (Пара) или для себя (Ум)?»). Уверен — sure: true, question пустой.
+- Дела по клиентам, сделкам и команде — Дело.
+- why_num — только если дело очевидно шаг к одной из открытых целей из списка ЦЕЛИ; иначе null. Не выдумывай.
+- Отвечай по каждому делу из списка ДЕЛА, num — его номер."""
+
+
+def rules(conn, owner: str) -> str:
+    row = conn.execute("SELECT body FROM crm.svod WHERE owner_id = %s AND key = %s AND body IS NOT NULL",
+                       (owner, PROMPT_KEY)).fetchone()
+    return (row["body"] if row and (row["body"] or "").strip() else RULES)
+
+
+def _dir_block(d: dict) -> str:
+    lines = [f"{d.get('pos')} · {d.get('name')} (ключ {d['key']})"]
+    for k, title in (("formula", "Формула"), ("meaning", "Смысл"), ("includes", "Входит"), ("excludes", "Не входит"),
+                     ("notes", "Ещё"), ("examples", "Примеры")):
+        v = d.get(k)
+        if isinstance(v, list):
+            v = "; ".join(str(x) for x in v if str(x).strip())
+        if v:
+            lines.append(f"  {title}: {v}")
+    return "\n".join(lines)
+
+
+def system_prompt(known: list[dict], rules_text: str = RULES) -> str:
+    return rules_text + "\n\nНАПРАВЛЕНИЯ\n" + "\n\n".join(_dir_block(d) for d in known)
+
+
+def user_prompt(tasks: list[dict], open_goals: list[dict], learned: list[dict], known: list[dict]) -> str:
+    name = {d["key"]: d.get("name") or d["key"] for d in known}
+    parts = []
+    if learned:
+        parts.append("КАК ВЛАДЕЛЕЦ РАЗМЕЧАЛ САМ (свежие сверху — это сильнее общих правил):\n" + "\n".join(
+            f"— «{e['title']}»: " + ", ".join(name.get(k, k) for k in e["dirs"]) for e in learned))
+    if open_goals:
+        parts.append("ЦЕЛИ (открытые дела, у которых есть шаги):\n" + "\n".join(
+            f"#{g['num']} {g['title']}" + (f" — {', '.join(name.get(k, k) for k in g['dirs'])}" if g["dirs"] else "")
+            for g in open_goals))
+    rows = []
+    for t in tasks:
+        bits = [f"#{t['num']} {t['title']}"]
+        if t.get("project_name"):
+            bits.append(f"проект {t['project_name']}" + (" (клиент ЗФ)" if t.get("project_kind") == "client" else ""))
+        if t.get("deal_name"):
+            bits.append(f"сделка {t['deal_name']}")
+        if t.get("person_name"):
+            bits.append(f"человек {t['person_name']}")
+        if t.get("why_title"):
+            bits.append(f"зачем: {t['why_title']}")
+        notes = " ".join(str(t.get("notes") or "").split())
+        if notes:
+            bits.append("заметки: " + (notes[:300] + "…" if len(notes) > 300 else notes))
+        rows.append(" · ".join(bits))
+    parts.append("ДЕЛА:\n" + "\n".join(rows))
+    return "\n\n".join(parts)
+
+
+def schema(known: list[dict]) -> dict:
+    keys = [d["key"] for d in known]
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["items"],
+        "properties": {"items": {"type": "array", "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["num", "directions", "sure", "why_num", "question"],
+            "properties": {
+                "num": {"type": "integer"},
+                "directions": {"type": "array", "items": {"type": "string", "enum": keys}},
+                "sure": {"type": "boolean"},
+                "why_num": {"type": ["integer", "null"]},
+                "question": {"type": "string"},
+            }}}},
+    }
+
+
+def params(system: str, user: str, known: list[dict]) -> dict:
+    return {
+        "model": MODEL,
+        "max_tokens": 16000,
+        "system": system,
+        "output_config": {"effort": EFFORT, "format": {"type": "json_schema", "schema": schema(known)}},
+        "messages": [{"role": "user", "content": user}],
+    }
+
+
+def _parse(msg) -> list[dict]:
+    if getattr(msg, "stop_reason", None) in ("refusal", "max_tokens"):
+        raise RuntimeError(f"разборщик Круга: ответ оборван ({msg.stop_reason})")
+    text = next((b.text for b in msg.content if getattr(b, "type", "") == "text"), "")
+    return list(json.loads(text).get("items") or [])
+
+
+# ── Ответ — в Дела ─────────────────────────────────────────────────────
+
+
+def apply(url: str, owner: str, slot: str, items: list[dict], known: list[dict]) -> dict:
+    """Уверенное — ставится само (task.set от владельца, в журнале svc:krug); остальное — вопрос в «Подскажи».
+
+    Дело успели разметить руками, закрыть или удалить из списка — не трогаем: человек сильнее разборщика."""
+    from . import store
+
+    keys = {d["key"] for d in known}
+    name = {d["key"]: d.get("name") or d["key"] for d in known}
+    ops = []
+    with db.session(url, owner, via="krug") as conn:
+        for it in items:
+            dirs = [k for k in it.get("directions") or [] if k in keys]
+            t = conn.execute("SELECT id, num, title, status, dirs FROM tasks.v_tasks WHERE num = %s AND owner_id = %s",
+                             (it.get("num"), owner)).fetchone()
+            if not t or t["status"] != "open" or t["dirs"] or not dirs:
+                continue
+            why = None
+            if it.get("why_num"):
+                g = conn.execute("SELECT id FROM tasks.v_tasks WHERE num = %s AND owner_id = %s AND status = 'open' "
+                                 "AND steps_open > 0 AND id <> %s", (it["why_num"], owner, t["id"])).fetchone()
+                why = g and str(g["id"])
+            if it.get("sure"):
+                ops.append({"op": "task.set", "op_id": str(uuid.uuid4()), "id": str(t["id"]),
+                            "set": {"directions": dirs, **({"why_id": why} if why else {})}})
+            else:
+                q = (it.get("question") or "").strip() or f"«{t['title']}» — {', '.join(name[k] for k in dirs)}?"
+                ops.append({"op": "suggestion.create", "op_id": str(uuid.uuid4()), "suggestion": {
+                    "kind": "update", "task_id": str(t["id"]), "source": "krug", "batch_ref": f"krug:{slot}",
+                    "batch_title": "Направления", "payload": {"directions": dirs, "ask": q, **({"why_id": why} if why else {})}}})
+    if not ops:
+        return {"set": 0, "asked": 0, "errors": []}
+    res = store.apply_ops(url, owner, ops, "krug", "svc:krug")["results"]
+    bad = [r.get("error") for r in res if not r.get("ok")]
+    if bad:
+        log.warning("Круг: не записалось %d из %d: %s", len(bad), len(ops), bad[0])
+    return {"set": sum(1 for o, r in zip(ops, res) if r.get("ok") and o["op"] == "task.set"),
+            "asked": sum(1 for o, r in zip(ops, res) if r.get("ok") and o["op"] == "suggestion.create"), "errors": bad}
+
+
+# ── Тик ────────────────────────────────────────────────────────────────
+
+
+def _state(conn) -> dict:
+    row = conn.execute("SELECT value FROM crm.state WHERE key = %s", (STATE_KEY,)).fetchone()
+    return dict(row["value"]) if row else {}
+
+
+def _save(url: str, value: dict) -> None:
+    with db.session(url, "system", "svc:krug", "krug") as conn:
+        conn.execute("INSERT INTO crm.state (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                     (STATE_KEY, Jsonb(value)))
+
+
+def _account(url: str, msg, batch: bool) -> float:
+    usage = llm.usage_of(msg, MODEL)
+    usd = llm.cost(usage, MODEL, url) * (0.5 if batch else 1.0)
+    llm.account(url, "krug", usd, usage.get("model") or MODEL)
+    return usd
+
+
+def tick(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, client=None) -> dict | None:
+    """Один тик (раз в минуту): досмотреть пачку в работе или, если пришёл слот, отправить новую.
+
+    client — подмена клиента Anthropic в тестах. Возвращает, что сделано, или None — делать было нечего."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    with db.session(url, "system", via="krug") as conn:
+        owner = conn.execute("SELECT crm.owner_id() AS id").fetchone()["id"]
+        st = _state(conn)
+    if not owner or not key:
+        return None
+    if client is None:
+        from . import parse
+        client = parse.client(key, proxy)
+
+    if st.get("batch"):
+        b = st["batch"]
+        info = client.messages.batches.retrieve(b["id"])
+        if info.processing_status != "ended":
+            if time.time() - b["at"] < BATCH_MAX_AGE:
+                return None
+            # Пачка застряла — отмена и тот же запрос напрямую (с резервной моделью на отказ).
+            try:
+                client.messages.batches.cancel(b["id"])
+            except Exception:  # noqa: BLE001
+                log.warning("Круг: пачку %s отменить не вышло", b["id"])
+            msg = client.beta.messages.create(**b["params"], betas=[FALLBACK_BETA], fallbacks="default")
+            usd = _account(url, msg, batch=False)
+            out = apply(url, owner, b["slot"], _parse(msg), krug.directions_of(url, owner))
+            _save(url, {**st, "batch": None, "last": {"slot": b["slot"], "direct": True, "usd": round(usd, 4), **out}})
+            log.info("Круг: пачка застряла — напрямую: поставил %d, спросил %d ($%.3f)", out["set"], out["asked"], usd)
+            return out
+        res = next(iter(client.messages.batches.results(b["id"])), None)
+        if res is None or res.result.type != "succeeded":
+            log.warning("Круг: пачка %s — %s", b["id"], res.result.type if res else "без ответа")
+            _save(url, {**st, "batch": None, "last": {"slot": b["slot"], "error": res.result.type if res else "пусто"}})
+            return {"error": True}
+        usd = _account(url, res.result.message, batch=True)
+        out = apply(url, owner, b["slot"], _parse(res.result.message), krug.directions_of(url, owner))
+        _save(url, {**st, "batch": None, "last": {"slot": b["slot"], "usd": round(usd, 4), **out}})
+        log.info("Круг: поставил %d, спросил %d ($%.3f)", out["set"], out["asked"], usd)
+        return out
+
+    slot = last_slot(now)
+    key_ = slot.strftime("%Y-%m-%dT%H:%M")
+    # Слот уже отработан — или служба поднялась посреди ночи: старый слот не догоняем.
+    if st.get("slot") == key_ or now.astimezone(MSK) - slot > dt.timedelta(minutes=29):
+        return None
+    with db.session(url, owner, via="krug") as conn:
+        known = krug.directions(conn, owner)
+        tasks = candidates(conn, owner) if known else []
+        open_goals = goals(conn, owner) if tasks else []
+        rules_text = rules(conn, owner)
+    if not tasks:
+        _save(url, {**st, "slot": key_})
+        return None
+    p = params(system_prompt(known, rules_text), user_prompt(tasks, open_goals, examples(url, owner), known), known)
+    b = client.messages.batches.create(requests=[{"custom_id": "krug", "params": p}])
+    _save(url, {**st, "slot": key_, "batch": {"id": b.id, "at": time.time(), "slot": key_, "params": p, "n": len(tasks)}})
+    log.info("Круг: %d дел без направления — пачка %s", len(tasks), b.id)
+    return {"sent": len(tasks)}

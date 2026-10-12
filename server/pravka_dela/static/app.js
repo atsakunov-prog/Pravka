@@ -19,6 +19,7 @@ const S = {
   sel: new Set(), order: [], lastPick: null, cardId: null, draft: null, sideOpen: false,
   parse: null, quickText: '', // идёт разбор Claude; текст строки Claude — живёт, пока его не отдали (перерисовка его не стирает)
   autoOpen: false, clientOpen: new Set(LS.get('clientOpen', [])), peopleQ: '', // «Сделано само» развёрнуто, клиенты со сделками, люди
+  krug: { dirs: [], principles: [], proj: new Map() }, kpick: {}, // Круг жизни: направления и принципы (Свод), направления проектов; выбор в «Подскажи»
 };
 // Три группы дел (владелец 10.10.2026): «есть дела, которые ждут меня — люди что-то спросили и ждут, они
 // мега важные… второе — что я сам придумал… третье — проверить, что мне люди должны». Вечером назвал их:
@@ -80,6 +81,14 @@ async function sync(full) {
   for (const o of d.orgs || []) S.orgs.set(o.id, o);
   for (const x of d.payments || []) S.pays.set(x.id, x);
   S.labels = d.labels.map((l) => l.name);
+  // Круг жизни: направления проектов (их наследуют дела) и справочник из Свода — только свои (RLS).
+  if (d.full) S.krug.proj.clear();
+  for (const k of d.krug || []) S.krug.proj.set(k.id, k.directions || []);
+  for (const r of d.svod || []) {
+    const v = Array.isArray(r.value) ? r.value : [];
+    if (r.key === 'krug.directions') S.krug.dirs = v.filter((x) => x && x.key).sort((a, b) => ((+a.pos || 0) % 12) - ((+b.pos || 0) % 12));
+    if (r.key === 'krug.principles') S.krug.principles = v.map((x) => String(x).trim()).filter(Boolean);
+  }
   S.seq = d.seq;
   S.today = d.today;
 }
@@ -153,6 +162,119 @@ function sortTasks(a, b) {
 const all = () => [...S.tasks.values()];
 const openMine = () => all().filter((t) => isOpen(t) && isMine(t) && inSphere(t));
 
+// ── Круг жизни (12.10.2026) ─────────────────────────────────────────────
+// Владелец: «каждое моё дело должно преследовать какое-то направление… просто направление и Круг жизни». У дела —
+// одно или несколько направлений: свои или по наследству — от «Зачем» вверх по цепочке, потом от проекта (то же
+// правило — tasks.krug_dirs на сервере). «Зачем» — дело-цель, шагом к которой дело является («Распечатать
+// столбики примеров» — зачем? — «уверенно считает до 20»). Справочник — Свод владельца (krug.directions), дела без
+// направления размечает разборщик на сервере (krug_auto.py). Чужие дела направлений не показывают.
+const krugOn = () => S.krug.dirs.length > 0 && ((S.me && S.me.features) || []).includes('krug');
+const dirBy = (k) => S.krug.dirs.find((d) => d.key === k);
+const dirName = (k) => { const d = dirBy(k); return d ? d.short || d.name : k; };
+function dirsOf(t) {
+  if (!t || !isMine(t)) return [];
+  const chain = [];
+  for (let x = t; x && chain.length < 50 && !chain.includes(x); x = x.why_id ? S.tasks.get(x.why_id) : null) {
+    chain.push(x);
+    if (x.directions && x.directions.length) return x.directions;
+  }
+  for (const x of chain) {
+    const p = x.project_id && S.krug.proj.get(x.project_id);
+    if (p && p.length) return p;
+  }
+  return [];
+}
+/** Открытые шаги к цели (дела, у которых «Зачем» — это дело). */
+const stepsOf = (id) => all().filter((x) => x.why_id === id && isOpen(x));
+/** Движение за неделю по направлениям (как krug.movement): закрытое дело — 1, закрытая цель — 3. */
+function movement() {
+  const since = D.add(S.today, -6);
+  const goals = new Set(all().map((x) => x.why_id).filter(Boolean));
+  const m = {};
+  for (const t of all()) {
+    if (t.status !== 'done' || !isMine(t) || !t.completed_at || MSK_DAY(t.completed_at).day < since) continue;
+    for (const k of dirsOf(t)) {
+      const x = m[k] || (m[k] = { done: 0, events: 0 });
+      x.done++;
+      x.events += goals.has(t.id) ? 3 : 1;
+    }
+  }
+  return m;
+}
+/** «Моё» (бриф, §9; принцип «Делаю то, что хочу я»): до трёх открытых дел, которых никто не ждёт — «Хочу сам»
+ *  и шаги к целям (есть «Зачем», своих шагов нет); первым закреплённое, потом шаги из направлений, где за неделю
+ *  меньше всего движения. Не «отбить» и не «мониторить»: там ждут люди. Правило — krug.mine_from на сервере. */
+const MINE_MAX = 3;
+function mineTasks() {
+  if (!krugOn()) return [];
+  const mv = movement();
+  const withSteps = new Set(all().filter((x) => isOpen(x) && x.why_id).map((x) => x.why_id));
+  const least = (t) => { const ks = dirsOf(t); return ks.length ? Math.min(...ks.map((k) => (mv[k] || {}).events || 0)) : 0; };
+  return all().filter((t) => isOpen(t) && isMine(t) && inSphere(t) && !t.owed && t.ball !== 'waiting'
+    && (t.want || (t.why_id && !withSteps.has(t.id))))
+    .sort((a, b) => (b.want ? 1 : 0) - (a.want ? 1 : 0) || least(a) - least(b)
+      || (a.created_at || '').localeCompare(b.created_at || '') || a.num - b.num)
+    .slice(0, MINE_MAX);
+}
+/** Принцип дня — по кругу, один в день (как krug.principle_of_day: порядковый номер дня по-питоновски). */
+function principleToday() {
+  const list = S.krug.principles;
+  if (!list.length || !S.today) return null;
+  return list[(Math.round(D.parse(S.today) / 86400e3) + 719163) % list.length];
+}
+const principleLine = () => { const p = principleToday(); return p ? el('div', { class: 'principle', title: 'Принцип дня' }, p) : null; };
+/** Направления дела — переключателями: свои горят; своих нет — подпись, от чего наследует. */
+function dirChips(t, onSet) {
+  const own = t.directions || [];
+  return el('div', { class: 'quick-dates dir-pick' }, S.krug.dirs.map((d) => el('button', {
+    class: 'chip-btn' + (own.includes(d.key) ? ' on' : ''), title: d.formula || d.name,
+    onclick: () => onSet(own.includes(d.key) ? own.filter((k) => k !== d.key) : [...own, d.key]) }, d.short || d.name)));
+}
+/** «Без направления» у дела — щелчок: выбрать направление. */
+function dirPop(anchor, t) {
+  setTimeout(() => popAt(anchor, [el('div', { class: 'pop-h' }, 'Направление'),
+    ...S.krug.dirs.map((d) => el('button', { onclick: () => { closePop(); setFields([t.id], { directions: [d.key] }, 'Направление: ' + d.name); } },
+      d.name, el('span', { class: 'k' }, d.pos)))]), 0);
+}
+/** «Зачем»: открытые свои дела (кроме самого дела и его шагов вниз по цепочке) с поиском; новая фраза — новая цель. */
+function whyPop(anchor, t) {
+  const below = new Set([t.id]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const x of all()) if (x.why_id && below.has(x.why_id) && !below.has(x.id)) { below.add(x.id); grew = true; }
+  }
+  const pool = all().filter((x) => isOpen(x) && isMine(x) && !below.has(x.id))
+    .sort((a, b) => stepsOf(b.id).length - stepsOf(a.id).length || a.title.localeCompare(b.title, 'ru'));
+  const set = (patch) => { closePop(); setFields([t.id], patch); };
+  setTimeout(() => {
+    const q = el('input', { class: 'ps-q', placeholder: 'Зачем это дело? Найти цель или написать новую', autocomplete: 'off' });
+    const box = el('div', { class: 'ps-list' });
+    const draw = () => {
+      const words = norm(q.value).split(/\s+/).filter(Boolean);
+      const shown = pool.filter((x) => words.every((w) => norm(x.title).includes(w))).slice(0, 30);
+      const exact = shown.some((x) => norm(x.title) === norm(q.value));
+      box.replaceChildren(...[
+        words.length && !exact ? el('button', { class: 'ps-item', onmousedown: (e) => { e.preventDefault(); set({ why_title: q.value.trim() }); } },
+          el('span', { class: 'ps-dot' }), el('span', { class: 'ps-t' }, el('span', { class: 'ps-n' }, 'Новая цель: «' + q.value.trim() + '»'))) : null,
+        t.why_id && !words.length ? el('button', { class: 'ps-item', onmousedown: (e) => { e.preventDefault(); set({ why_id: null }); } },
+          el('span', { class: 'ps-dot' }), el('span', { class: 'ps-t' }, el('span', { class: 'ps-n' }, 'Убрать «Зачем»'))) : null,
+        ...shown.map((x) => el('button', { class: 'ps-item', onmousedown: (e) => { e.preventDefault(); set({ why_id: x.id }); } },
+          el('span', { class: 'ps-dot' }), el('span', { class: 'ps-t' }, el('span', { class: 'ps-n' }, x.title),
+            el('span', { class: 'ps-s' }, [stepsOf(x.id).length ? 'шагов ' + stepsOf(x.id).length : null, dirsOf(x).map(dirName).join(', ')].filter(Boolean).join(' · ')))))]
+        .filter(Boolean));
+    };
+    q.addEventListener('input', draw);
+    q.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && q.value.trim()) { e.preventDefault(); const hit = pool.find((x) => norm(x.title) === norm(q.value)); set(hit ? { why_id: hit.id } : { why_title: q.value.trim() }); }
+      if (e.key === 'Escape') { e.stopPropagation(); closePop(); }
+    });
+    draw();
+    const pop = popAt(anchor, [el('div', { class: 'pop-h' }, 'Зачем'), q, box]);
+    pop.classList.add('ps-pop');
+    q.focus();
+  }, 0);
+}
+
 // Видов три (владелец 10.10.2026: «не надо этих всех странных видов. Просто надо говорить: на сегодня вот
 // такие дела»). «Сегодня» — главный список тремя группами; «Новое» — вопросы автоматики; «Все дела» — всё
 // открытое, с завода уровнями «проекты › группы › время»; свои сочетания — фильтрами на полке. «Сейчас», «Предстоящее», «Жду» и «Неделя» ушли: их дела — в «Сегодня» и «Всех делах».
@@ -179,13 +301,15 @@ const VIEWS = {
   today: { title: 'Сегодня', icon: 'sun', color: 'var(--tint)', count: () => todayTasks().length, hot: () => todayTasks().some((t) => t.owed) },
   new: { title: 'Новое', icon: 'inbox-in', color: 'var(--tint)', count: () => newCount() },
   all: { title: 'Все дела', icon: 'list', color: 'var(--tint)' },
+  // Круг жизни (12.10.2026): дерево дел от направлений — «где-то должно быть дерево дел, прямо от направлений».
+  krug: { title: 'Круг жизни', icon: 'circle', color: 'var(--tint)', show: () => krugOn() },
 };
 // ── Уровни группировки и фильтры (владелец 10.10.2026 вечером): «нажимаю „Все дела“ — первый уровень
 // группировки проекты, второй — под ними по категориям, третий — по времени… по каждому проекту посмотреть,
 // что я могу сделать сегодня… и раздел слева „Фильтры“: сделал первый, второй, третий уровень — это
 // сохраняется как фильтр». Уровней до трёх; внутри последнего — по времени (byTime). Фильтр — что показать
 // (scope) и уровни; хранится у человека на сервере (users.settings.filters), чтобы телефон видел те же.
-const LEVELS = { project: 'проекты', grp: 'группы', date: 'время', person: 'люди', deal: 'сделки' };
+const LEVELS = { project: 'проекты', grp: 'группы', date: 'время', person: 'люди', deal: 'сделки', dir: 'направления' };
 const LEVELS_DEF = { today: ['grp'], all: ['project', 'grp', 'date'], project: ['grp', 'date'] };
 const SCOPES = { today: 'Сегодня', all: 'Все дела', owed: 'Отбить', self: 'Запустить', check: 'Мониторить' };
 // С завода — пока человек не сохранил своих: сегодня по проектам (его же пример), и кому отбить и кого
@@ -252,6 +376,8 @@ const ICONS = {
   stop: 'M8 7h8a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z',
   tick: 'M20 6L9 17l-5-5',
   filter: 'M4 6h16M7 12h10M10 18h4',
+  // Круг жизни: циферблат — круг с метками 12, 3, 6, 9.
+  circle: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 3v3M21 12h-3M12 21v-3M3 12h3M12 12l3-3',
 };
 function icon(name, size = 15) {
   const ns = 'http://www.w3.org/2000/svg';
@@ -468,7 +594,7 @@ function navItem(hash, ico, label, count, on, extra, hot) {
 /** Виды овалами — «Сегодня 12», «Новое 3», «Все дела». На компьютере они на полке слева
  *  (владелец 09.10.2026: «поставить обратно влево, такими же овальчиками»), на телефоне — вкладками в шапке. */
 function viewPills(r) {
-  return Object.entries(VIEWS).map(([k, v]) => {
+  return Object.entries(VIEWS).filter(([, v]) => !v.show || v.show()).map(([k, v]) => {
     const n = v.count ? v.count() : 0;
     return el('a', { class: 'pill-tab' + (r.kind === k ? ' on' : '') + (v.hot && v.hot() ? ' hot' : ''),
       href: '#/' + k, onclick: () => { S.sideOpen = false; } },
@@ -685,7 +811,7 @@ function head(title, sub, extra, nav) {
 /** Уровни группировки — до трёх списков «проекты › группы › время»; «—» убирает уровень и всё после него,
  *  один уровень дважды не встаёт. Отдаёт элементы для toolbar. omit — чего не предлагать (в проекте — проекты). */
 function levelsBar(levels, onChange, omit = []) {
-  const opts = Object.entries(LEVELS).filter(([k]) => !omit.includes(k));
+  const opts = Object.entries(LEVELS).filter(([k]) => !omit.includes(k) && (k !== 'dir' || krugOn()));
   const sel = (i) => {
     const cur = levels[i] || '';
     const s = el('select', { 'aria-label': `Уровень ${i + 1}` }, [['', i ? '—' : 'без групп'], ...opts]
@@ -706,7 +832,7 @@ const setLevels = (key) => (lv) => { S.levels[key] = lv; LS.set('levels', S.leve
 // выпадающий список со всеми людьми и с поисковой строкой: набрать „Наташ“ — выпадут все Наташи, выберу свою…
 // по первому уровню группировки поиск, чтобы показывалось только одно»). pick = {lv, key, title}: ветка первого
 // уровня; уровни поменялись — выбор молча не действует. На видах живёт до перезагрузки, в фильтре — сохраняется.
-const ALL_OF = { project: 'Все проекты', grp: 'Все группы', date: 'Всё время', person: 'Все люди', deal: 'Все сделки' };
+const ALL_OF = { project: 'Все проекты', grp: 'Все группы', date: 'Всё время', person: 'Все люди', deal: 'Все сделки', dir: 'Все направления' };
 const pickOn = (pick, levels) => !!pick && pick.lv === levels[0];
 // Человек, проект, сделка — по id: переименуешь — сохранённый фильтр не потеряет свою «Наташу».
 const isPicked = (t, lv, pick) => { const [k, , o] = levelKey(t, lv); return pick.id ? o.id === pick.id : k === pick.key; };
@@ -725,7 +851,7 @@ function branches(items, lv) {
   const seen = new Map();
   for (const b of list) seen.set(b.title, (seen.get(b.title) || 0) + 1);
   for (const b of list) if (seen.get(b.title) > 1 && b.opts.full) b.title = b.opts.full;
-  return ['grp', 'date'].includes(lv) ? list.sort((a, b) => a.key.localeCompare(b.key, 'ru'))
+  return ['grp', 'date', 'dir'].includes(lv) ? list.sort((a, b) => a.key.localeCompare(b.key, 'ru'))
     : list.sort((a, b) => b.n - a.n || a.title.localeCompare(b.title, 'ru'));
 }
 
@@ -806,6 +932,7 @@ function renderMain(r) {
   if (r.kind === 'ties') return renderTies();
   if (r.kind === 'money') return renderMoney();
   if (r.kind === 'today') return renderToday();
+  if (r.kind === 'krug') return renderKrug();
   if (r.kind === 'filter') return renderFilter(r.id);
   if (r.kind === 'all') {
     const lv = levelsOf('all');
@@ -825,15 +952,22 @@ function renderMain(r) {
  *  ждут от меня, сам, проверить; в каждой выше тот, кто дольше ждёт. Солнце у дела — «на завтра». */
 function renderToday() {
   const lv = levelsOf('today');
-  const every = todayTasks();
+  // «Моё» (Круг жизни, 12.10.2026) — над тремя группами: дела, которые двигают жизнь, а не ждут чьего-то ответа;
+  // иначе они снова проиграют входящим. Его дела в группах не повторяются.
+  const mine = mineTasks();
+  const mineIds = new Set(mine.map((t) => t.id));
+  const every = todayTasks().filter((t) => !mineIds.has(t.id));
   const items = picked(every, lv, S.pick.today);
   const doneToday = all().filter((t) => t.status === 'done' && isMine(t) && t.completed_at && MSK_DAY(t.completed_at).day === S.today).length;
   const n = newCount();
-  return [head('Сегодня', [D.long(S.today), items.length ? 'осталось ' + items.length : null, doneToday ? 'закрыто ' + doneToday : null]),
+  const left = items.length + mine.length;
+  return [head('Сегодня', [D.long(S.today), left ? 'осталось ' + left : null, doneToday ? 'закрыто ' + doneToday : null]),
     el('div', { class: 'body' },
+      principleLine(),
       quickAdd({}, { placeholder: 'Скажи, что сделать: «Гуркин ждёт звонка по фонду», «это на завтра», «это мониторить»' }),
       el('div', { class: 'toolbar' }, levelsBar(lv, setLevels('today')),
         el('button', { class: 'chip-btn', onclick: () => addFilter('today', lv, S.pick.today) }, 'Сохранить фильтр')),
+      mine.length ? groupBox('Моё', mine, { cls: 'grp-mine', sub: 'никто не ждёт — двигает жизнь', lead: () => tint(icon('circle', 14), 'var(--tint)') }, lv) : null,
       pickBar(every, lv, S.pick.today, setPick('today')),
       pickNote(items, S.pick.today, lv)
         || (items.length ? nested(items, lv) : el('div', { class: 'empty' }, doneToday ? 'На сегодня всё закрыто.' : 'На сегодня пусто.')),
@@ -901,6 +1035,12 @@ function levelKey(t, lv) {
     const dp = dl && project(dl.project_id);
     return dl ? ['1' + dl.name + '\u0001' + dl.id, dl.name, { id: dl.id, href: '#/d/' + dl.id, note: dp ? dp.name : '', find: [dl.name, dp && dp.name].filter(Boolean) }]
       : ['9', 'Без сделки', { find: ['без сделки'] }];
+  }
+  if (lv === 'dir') {
+    // Направление — первое из дела (с наследованием); по кругу: сверху 12 — Здоровье.
+    const d = dirBy(dirsOf(t)[0]);
+    return d ? [String((+d.pos || 0) % 12).padStart(2, '0') + d.key, d.name, { sub: d.formula, find: [d.name, d.short].filter(Boolean) }]
+      : ['99', 'Без направления', { find: ['без направления'] }];
   }
   if (lv === 'date') {
     if (!isOpen(t)) return ['9done', 'Сделано', {}];
@@ -1008,6 +1148,17 @@ function taskRow(t, by, extra, opt = {}) {
   }
   const dl = !opt.compact && t.deal_id ? S.deals.get(t.deal_id) : null;
   if (dl && !grouped_('deal') && route().kind !== 'deal') chips.push(el('a', { class: 'm link', href: '#/d/' + dl.id, onclick: stop }, dl.name));
+  // Круг жизни: направления (своё — ярче, наследованное — тише), «Зачем» — к цели; без направления — вопрос.
+  if (krugOn() && isMine(t) && !opt.compact) {
+    const ks = dirsOf(t);
+    if (ks.length && !grouped_('dir')) chips.push(m('dir' + ((t.directions || []).length ? '' : ' inherited'), ks.map(dirName).join(', ')));
+    else if (!ks.length && isOpen(t)) chips.push(el('button', { class: 'm noproj nodir', title: 'Выбрать направление', onclick: (e) => { stop(e); dirPop(e.currentTarget, t); } }, 'без направления'));
+    const goal = t.why_id && !opt.tree ? S.tasks.get(t.why_id) : null;
+    if (goal) chips.push(el('a', { class: 'm link why', href: '#', title: 'Зачем: ' + goal.title, onclick: (e) => { stop(e); e.preventDefault(); openCard(goal.id); } },
+      'зачем: ' + (goal.title.length > 34 ? goal.title.slice(0, 33) + '…' : goal.title)));
+    const steps = isOpen(t) ? stepsOf(t.id).length : 0;
+    if (steps) chips.push(m('goal', 'цель · ' + plural(steps, 'шаг', 'шага', 'шагов')));
+  }
   // В короткой строке группа и человек — в самом названии («Кто: действие»), минуты и метки — в карточке.
   // «Отбить» — сколько ждут: «Гуркин ждёт 3 дн» (с того дня, как дело завели); «мониторить» — «жду Наташу 5 дн».
   const g = grpOf(t), name = who ? personName(who) : '';
@@ -1028,9 +1179,9 @@ function taskRow(t, by, extra, opt = {}) {
   const pick = el('input', { type: 'checkbox', class: 'pick', title: 'Выбрать (Shift — диапазон)' });
   pick.checked = S.sel.has(t.id);
   pick.addEventListener('click', (e) => { e.stopPropagation(); togglePick(t.id, e.shiftKey); });
-  return el('div', {
+  const row = el('div', {
     class: 'task ball-' + t.ball + ' grp-' + g + (opt.compact ? ' compact' : '') + (isOpen(t) ? '' : ' done') + (isNow(t) ? ' now' : '') + (isLate(t) ? ' late' : '')
-      + (S.cardId === t.id ? ' open-now' : '') + (S.sel.has(t.id) ? ' sel' : ''),
+      + (S.cardId === t.id ? ' open-now' : '') + (S.sel.has(t.id) ? ' sel' : '') + (opt.indent ? ' step' : ''),
     'data-id': t.id,
     onclick: () => openCard(t.id),
   },
@@ -1041,6 +1192,69 @@ function taskRow(t, by, extra, opt = {}) {
   el('button', { class: 'tick' + (isOpen(t) ? '' : ' done'), title: isOpen(t) ? 'Сделано' : 'Вернуть', onclick: (e) => { e.stopPropagation(); toggleDone([t]); } }),
   el('div', { class: 'main' }, el('div', { class: 'title' }, t.title), chips.length ? el('div', { class: 'chips' }, chips) : null),
   opt.mark || null);
+  if (opt.indent) row.style.setProperty('--indent', opt.indent); // шаг к цели — отступом под ней (дерево Круга)
+  return row;
+}
+
+// ── Страница «Круг жизни»: дерево дел от направлений ─────────────────────
+// Владелец 12.10.2026: «где-то должно быть дерево дел, прямо от направлений». Направления по кругу (сверху 12 —
+// Здоровье), у каждого — формула, сколько открыто и закрыто за неделю; раскрыл — цели с шагами лесенкой
+// («сильная школа › математика › считает до 20 › распечатать столбики»), ниже — остальные дела по проектам (у Дела это
+// клиенты). Внизу — дела без направления: их разметит разборщик или ты сам.
+function krugTree(items) {
+  const ids = new Set(items.map((t) => t.id));
+  const kids = new Map();
+  for (const t of all()) if (isOpen(t) && t.why_id) { if (!kids.has(t.why_id)) kids.set(t.why_id, []); kids.get(t.why_id).push(t); }
+  const branch = (t, depth) => [taskRow(t, ['dir'], null, { indent: depth, tree: depth > 0 }),
+    ...(depth < 8 ? (kids.get(t.id) || []).sort(byTime).flatMap((c) => branch(c, depth + 1)) : [])];
+  const roots = items.filter((t) => !t.why_id || !ids.has(t.why_id));
+  const goals = roots.filter((t) => kids.has(t.id));
+  const out = [];
+  if (goals.length) {
+    out.push(el('div', { class: 'subgroup d1 krug-goals' }, groupHead('h3', 'Цели', goals.length), el('div', { class: 'rows' }, goals.sort(byTime).flatMap((t) => branch(t, 0)))));
+  }
+  const byProj = new Map();
+  for (const t of roots.filter((x) => !kids.has(x.id)).sort(byTime)) {
+    const p = project(t.project_id);
+    const k = p ? p.name : '';
+    if (!byProj.has(k)) byProj.set(k, { p, items: [] });
+    byProj.get(k).items.push(t);
+  }
+  for (const [k, g] of [...byProj].sort((a, b) => (a[0] ? '1' + a[0] : '9').localeCompare(b[0] ? '1' + b[0] : '9', 'ru'))) {
+    out.push(el('div', { class: 'subgroup d1' }, groupHead('h3', k || 'Без проекта', g.items.length, g.p ? { href: '#/p/' + g.p.id } : {}),
+      el('div', { class: 'rows' }, g.items.flatMap((t) => branch(t, 0)))));
+  }
+  return out;
+}
+
+function renderKrug() {
+  if (!krugOn()) return [head('Круг жизни'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Круг жизни не настроен: в Своде нет направлений (krug.directions).'))];
+  const mv = movement();
+  const open = all().filter((t) => isOpen(t) && isMine(t) && inSphere(t));
+  const by = new Map(S.krug.dirs.map((d) => [d.key, []]));
+  const none = [];
+  for (const t of open) {
+    const ks = dirsOf(t);
+    if (!ks.length) none.push(t);
+    for (const k of ks) by.get(k)?.push(t);
+  }
+  const box = el('div', { class: 'body krug' }, principleLine(),
+    quickAdd({}, { placeholder: '«купить магний — это здоровье», «зачем: уверенно считает до 20»' }));
+  for (const d of S.krug.dirs) {
+    const items = by.get(d.key) || [];
+    const m = mv[d.key] || { done: 0, events: 0 };
+    const key = 'krug-' + d.key;
+    const unfolded = S.closed[key] === false; // с завода свёрнуто: двенадцать строк — и есть круг
+    const toggle = () => { S.closed[key] = unfolded; LS.set('closed', S.closed); render(); };
+    box.append(el('div', { class: 'group krug-dir' + (unfolded ? '' : ' folded') },
+      el('h2', { class: 'krug-h', onclick: toggle },
+        el('span', { class: 'krug-pos' }, d.pos), d.name, el('span', { class: 'n' }, items.length),
+        el('span', { class: 'sum', title: 'закрыто за 7 дней; закрытая цель — три события' }, m.done ? 'за неделю ' + m.done : 'за неделю —'),
+        d.formula ? el('span', { class: 'gsub' }, d.formula) : null),
+      unfolded ? (items.length ? krugTree(items) : el('div', { class: 'empty' }, 'Открытых дел нет.')) : null));
+  }
+  if (none.length) box.append(groupBox('Без направления', none.sort(byTime), { sub: 'разметит разборщик в ближайшие полчаса — или выбери сам: щелчок по «без направления»' }));
+  return [head('Круг жизни', [plural(open.length - none.length, 'дело', 'дела', 'дел') + ' по направлениям', none.length ? 'без направления ' + none.length : null]), box];
 }
 
 // ── Действия ────────────────────────────────────────────────────────────
@@ -1966,6 +2180,8 @@ function sugText(s) {
   const ref = t ? t.title : 'дело не видно';
   if (s.kind === 'close') return { title: 'Закрыть: ' + ref, hint: t?.project_name || '' };
   if (s.kind === 'assign') return { title: 'Взять себе: ' + ref, hint: t?.project_name || '' };
+  // Вопрос разборщика Круга: какое направление у дела (выбор — переключателями в самой карточке «Подскажи»).
+  if (s.source === 'krug') return { title: ref, hint: t?.project_name || '' };
   // Уточнение: что поменяется в деле; подробности (note) при принятии лягут комментарием.
   const what = [p.title ? `название: «${p.title}»` : null,
     p.due_date ? 'срок ' + (t?.due_date ? D.ddmm(t.due_date) + ' → ' : '') + D.ddmm(p.due_date) : null,
@@ -2003,6 +2219,7 @@ const ORIGIN = {
   voice: ['mic', 'var(--plan)', 'наговорка'], meeting: ['meet', 'var(--plan)', 'встреча'], telegram: ['send', 'var(--plan)', 'Telegram'],
   userbot: ['send', 'var(--plan)', 'Telegram'], bot: ['send', 'var(--plan)', 'ответ в Telegram'], mcp: ['chat', 'var(--plan)', 'Claude'],
   web: ['pen', 'var(--meta)', 'в вебе'], manual: ['pen', 'var(--meta)', 'руками'], import: ['list', 'var(--meta)', 'перенос'],
+  krug: ['circle', 'var(--plan)', 'разборщик Круга'],
 };
 const origin = (src) => ORIGIN[src] || ORIGIN.manual;
 /** Предложение, из которого вышло дело: пачка встречи или окна Telegram. */
@@ -2090,21 +2307,27 @@ const ASK_YES = { create: 'Поставить', close: 'Закрыть', update:
 function askItem(s) {
   const { title, hint, add } = sugText(s);
   S.sugOrder.push(s.id);
-  const twin = twinOf(s);
+  const twin = s.source === 'krug' ? null : twinOf(s);
   const q = askWhy(s);
+  // Разборщик Круга не уверен: предложенные направления горят, щелчок — поправить; «Да» ставит выбранное.
+  const kr = s.source === 'krug' && krugOn() ? (S.kpick[s.id] || (s.payload || {}).directions || []) : null;
+  const krPick = kr ? dirChips({ directions: kr }, (next) => { S.kpick[s.id] = next; render(); }) : null;
+  const krSet = kr && JSON.stringify(kr) !== JSON.stringify((s.payload || {}).directions || []) ? { directions: kr } : undefined;
   // Карточка предложения как в Делах · Новое (screens/07): сверху источник — кремовый значок и пачка.
   return el('div', { class: 'sug' + (s.kind !== 'create' ? ' ' + s.kind : '') },
     el('div', { class: 'src-line' }, sugMark(s), el('span', {}, s.batch_title || origin(s.source)[2])),
     el('div', { class: 'main' }, el('div', {}, el('span', { class: 'sug-n', title: 'Номер для Claude: «П' + S.sugOrder.length + ' прими»' }, 'П' + S.sugOrder.length), title),
       q ? el('div', { class: 'q' }, q) : null,
       hint ? el('div', { class: 'hint' }, hint) : null,
+      krPick,
       add ? el('div', { class: 'add' }, add) : null,
       s.quote && s.quote !== title ? el('div', { class: 'hint quote' }, '«' + s.quote.slice(0, 160) + (s.quote.length > 160 ? '…' : '') + '»') : null,
       twin ? el('div', { class: 'twin' }, icon('link', 12), 'похоже, это уже есть: ',
         el('a', { class: 'link', href: '#', onclick: (e) => { e.preventDefault(); openCard(twin.id); } }, twin.title),
         el('button', { class: 'chip-btn', title: 'Не заводить второе: слова — комментарием к делу', onclick: () => mergeInto(s, twin) }, 'Это оно')) : null),
     el('div', { class: 'acts' },
-      el('button', { class: 'btn small ok', onclick: () => decide([s.id], 'accept') }, ASK_YES[s.kind] || 'Да'),
+      el('button', { class: 'btn small ok', disabled: kr && !kr.length, onclick: () => { delete S.kpick[s.id]; decide([s.id], 'accept', null, krSet); } },
+        kr ? 'Да' : ASK_YES[s.kind] || 'Да'),
       s.kind === 'create' ? el('button', { class: 'btn small', onclick: () => { S.draft = s; S.cardId = null; render(); } }, 'Поправить') : null,
       el('button', { class: 'btn small bad', onclick: () => { const r = prompt(s.kind === 'create' ? 'Почему не дело? (можно пусто)' : 'Почему нет? (можно пусто)'); if (r !== null) decide([s.id], 'reject', r || null); } }, 'Не надо')));
 }
@@ -2307,6 +2530,34 @@ function remindBlock(t) {
       el('div', { class: 'quick-dates' }, chips), own)];
 }
 
+/** Круг в карточке дела: направления переключателями, «Зачем» — цепочкой вверх, шаги — списком и строкой
+ *  «новый шаг» (дело с этим «Зачем» в том же проекте). */
+function krugProps(t) {
+  const own = t.directions || [];
+  const got = dirsOf(t);
+  const up = [];
+  for (let g = t.why_id ? S.tasks.get(t.why_id) : null; g && up.length < 8 && !up.includes(g); g = g.why_id ? S.tasks.get(g.why_id) : null) up.push(g);
+  const chain = up.length ? up.map((g, i) => [i ? el('span', { class: 'why-sep' }, '›') : null,
+    el('a', { class: 'link', href: '#', onclick: (e) => { e.preventDefault(); openCard(g.id); } }, g.title)]) : el('span', { class: 'faint' }, 'не задано');
+  const steps = stepsOf(t.id).sort(byTime);
+  const add = el('input', { class: 'step-add', placeholder: 'Новый шаг к этому делу — Enter' });
+  add.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter' || !add.value.trim()) return;
+    e.preventDefault();
+    try { await op1({ op: 'task.create', task: { title: add.value.trim(), why_id: t.id, source: 'web', ...(t.project_id ? { project_id: t.project_id } : {}) } }); add.value = ''; render(); } catch (err) { fail(err); }
+  });
+  return [
+    el('span', {}, 'Направления'), dirChips(t, (next) => setFields([t.id], { directions: next })),
+    !own.length ? el('span', {}) : null,
+    !own.length ? el('div', { class: 'hint-line krug-hint' }, got.length ? 'наследует: ' + got.map(dirName).join(', ') + (t.why_id ? ' — от цели' : ' — от проекта')
+      : 'не размечено — разборщик разметит сам, или выбери') : null,
+    el('span', {}, 'Зачем'), el('div', { class: 'why-row' }, el('div', { class: 'why-chain' }, chain),
+      el('button', { class: 'chip-btn', onclick: (e) => whyPop(e.currentTarget, t) }, t.why_id ? 'Поменять' : 'Задать')),
+    el('span', {}, 'Шаги'),
+    el('div', { class: 'steps' }, steps.map((s) => el('a', { class: 'link step-link', href: '#', onclick: (e) => { e.preventDefault(); openCard(s.id); } }, s.title)), add),
+  ];
+}
+
 function renderCard() {
   const close = () => { S.cardId = null; S.draft = null; render(); };
   const sug = S.draft;
@@ -2375,7 +2626,8 @@ function renderCard() {
     g === 'check' ? el('span', {}, 'Напомнить ему') : null, g === 'check' ? date('nudge_on') : null,
     t && isOpen(t) && remindOn() ? remindBlock(t) : null,
     el('span', {}, 'Минут'), num,
-    el('span', {}, 'Метки'), labels);
+    el('span', {}, 'Метки'), labels,
+    t && isMine(t) && krugOn() ? krugProps(t) : null);
 
   // Карточка как на развороте Правки (screens/08): номер плашкой и проект, название Literata, ряд действий
   // («На сегодня» или «На завтра») и галочка-клавиша справа, свойства — стеклянной плашкой со строками.

@@ -14,6 +14,7 @@
   import   перенос из Todoist, Notion и ленты (сухой прогон по умолчанию)
   export-todoist  выгрузка Todoist по API (с комментариями) для переноса
   svod     Свод: list, get <ключ>, set <ключ> --file (промпты, словарь, правила — одна правда)
+  krug-seed  Круг жизни: направления и принципы из файла владельца в Свод, направления проектам
 """
 
 from __future__ import annotations
@@ -265,12 +266,24 @@ def cmd_serve(args) -> int:
                 log.exception("уборка предложений упала")
             await asyncio.sleep(3600)
 
+    async def krug_loop():
+        # Разборщик Круга (krug_auto.py): раз в минуту — досмотреть пачку или, в свой слот, отправить новую.
+        # Слоты — по слову владельца: будни раз в полчаса, выходные раз в час, ночью с 00 до 8 — тишина.
+        from . import krug_auto
+
+        while cfg.anthropic_key:
+            try:
+                await asyncio.to_thread(krug_auto.tick, cfg.db_url, cfg.anthropic_key, cfg.claude_proxy)
+            except Exception:
+                log.exception("разборщик Круга")
+            await asyncio.sleep(60)
+
     async def main():
         server = uvicorn.Server(uvicorn.Config(
             api.build(cfg), host=cfg.listen_host, port=cfg.listen_port,
             log_level="info", log_config=None, proxy_headers=False, server_header=False,
         ))
-        await asyncio.gather(server.serve(), chores(), bridge_loop())
+        await asyncio.gather(server.serve(), chores(), bridge_loop(), krug_loop())
 
     log.info("Дела: слушаю %s:%d", cfg.listen_host, cfg.listen_port)
     asyncio.run(main())
@@ -338,6 +351,19 @@ def cmd_svod(args) -> int:
     r = store.apply_ops(cfg.db_url, user, [op], via="cli", actor=f"cli:{args.author}")["results"][0]
     print(f"записал {args.key} v{r['row']['rev']}" if r["ok"] else f"не записал: {r['error']}")
     return 0 if r["ok"] else 1
+
+
+def cmd_krug_seed(args) -> int:
+    """Круг жизни: направления и принципы из файла владельца — в Свод, направления — проектам по правилам файла.
+    Файл личный и лежит на компе (не в репозитории); повтор не трогает уже записанное (--force — переписать)."""
+    from . import krug
+
+    cfg = config_mod.load(args.env)
+    data = json.loads(Path(args.file).read_text(encoding="utf-8-sig"))
+    out = krug.seed(cfg.db_url, args.user, data, force=args.force)
+    print("Свод:", ", ".join(out["svod"]) or "уже был — не трогал")
+    print("Проекты:", "; ".join(out["projects"]) or "размечены раньше — не трогал")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -431,6 +457,12 @@ def main(argv: list[str] | None = None) -> int:
     sv.add_argument("--author", default="claude")
     sv.add_argument("--reason")
     sv.set_defaults(fn=cmd_svod)
+
+    ks = sub.add_parser("krug-seed", help="Круг жизни: направления и принципы из файла владельца")
+    ks.add_argument("--file", required=True, help="seed.json владельца (на компе, не в репозитории)")
+    ks.add_argument("--user", default="sasha")
+    ks.add_argument("--force", action="store_true", help="переписать записи Свода файлом")
+    ks.set_defaults(fn=cmd_krug_seed)
 
     args = ap.parse_args(argv)
     return args.fn(args)

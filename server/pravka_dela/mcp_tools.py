@@ -17,7 +17,7 @@ import datetime as dt
 import re
 from typing import Any
 
-from . import db, people, remind, store
+from . import db, krug, people, remind, store
 
 USER = "sasha"  # архив — одного человека, и Claude в нём действует от его имени
 BALL = {"mine": "запустить", "owed": "отбить", "waiting": "жду", "agenda": "повестка"}
@@ -33,8 +33,8 @@ def _d(v: Any) -> str:
     return v.strftime("%d.%m")
 
 
-def line(t: dict, today: dt.date | None = None) -> str:
-    """Дело одной строкой: номер, название, проект, мяч, сроки, деньги."""
+def line(t: dict, today: dt.date | None = None, dn: dict | None = None) -> str:
+    """Дело одной строкой: номер, название, проект, мяч, сроки, деньги; направления Круга и «Зачем»."""
     today = today or dt.date.today()
     bits = [f"#{t['num']} {t['title']}"]
     where = t.get("project_name") or "Входящие"
@@ -72,13 +72,26 @@ def line(t: dict, today: dt.date | None = None) -> str:
         bits.append(", ".join(t["labels"]))
     if STATUS.get(t["status"]):
         bits.append(STATUS[t["status"]])
+    # Круг жизни (12.10.2026): направления с наследованием — «(насл.)», если своих нет; «Зачем» — номер цели.
+    if t.get("dirs"):
+        names = ", ".join((dn or {}).get(k, k) for k in t["dirs"])
+        bits.append(f"направление {names}" + ("" if t.get("directions") else " (насл.)"))
+    if t.get("why_num"):
+        bits.append(f"зачем #{t['why_num']} {t.get('why_title') or ''}".rstrip())
+    if t.get("steps_open"):
+        bits.append(f"цель, шагов открыто {t['steps_open']}")
     return " · ".join(bits)
 
 
-def _block(title: str, items: list[dict], today) -> list[str]:
+def _block(title: str, items: list[dict], today, dn: dict | None = None) -> list[str]:
     if not items:
         return []
-    return [f"{title} ({len(items)}):", *(f"  {line(t, today)}" for t in items), ""]
+    return [f"{title} ({len(items)}):", *(f"  {line(t, today, dn)}" for t in items), ""]
+
+
+def _dirnames(conn) -> dict:
+    """Ключ направления — короткое имя (Свод владельца krug.directions); Круга нет — пусто."""
+    return {d["key"]: d.get("short") or d.get("name") or d["key"] for d in krug.directions(conn, USER)}
 
 
 def _today(url: str) -> dt.date:
@@ -157,6 +170,23 @@ def _resolve(conn, fields: dict) -> dict:
         out["deal_id"] = find_deal(conn, pid, v)["id"] if v else None
     if "now" in out:
         out["focus_on"] = conn.execute("SELECT crm.today() AS d").fetchone()["d"] if out.pop("now") else None
+    # «Зачем» (Круг жизни): номер дела-цели («57», «#57»), название открытой цели или новая цель словами.
+    if "why" in out:
+        v = str(out.pop("why") or "").strip()
+        if not v:
+            out["why_id"] = None
+        elif v.lstrip("#").isdigit():
+            g = store.task_by(conn, v)
+            if not g:
+                raise NameError_(f"«зачем»: дела {v} нет или оно не видно")
+            out["why_id"] = str(g["id"])
+        else:
+            g = conn.execute("SELECT id FROM tasks.tasks WHERE owner_id = %s AND status = 'open' "
+                             "AND lower(title) = lower(%s) LIMIT 2", (USER, v)).fetchall()
+            if len(g) == 1:
+                out["why_id"] = str(g[0]["id"])
+            else:
+                out["why_title"] = v
     for k in ("due_date", "nudge_on"):
         if k in out and out[k] == "":
             out[k] = None
@@ -185,12 +215,48 @@ def _resolve(conn, fields: dict) -> dict:
 
 VIEW_TITLES = {
     "today": "Сегодня", "later": "Дальше", "morning": "Утро", "new": "Новое", "waiting": "Жду", "person": "По человеку", "quick": "Быстрое",
-    "now": "Сейчас", "project": "Проект", "week": "Неделя", "search": "Поиск",
+    "now": "Сейчас", "project": "Проект", "week": "Неделя", "search": "Поиск", "krug": "Круг жизни",
 }
 
 
+def _krug_text(v: dict, out: list[str]) -> None:
+    """Круг жизни текстом: направления по часовой, движение за неделю и дерево «Зачем» под каждым."""
+    if not v["configured"]:
+        out.append("Круг жизни не настроен: в Своде нет krug.directions.")
+        return
+    if v.get("principle"):
+        out += [f"Принцип дня: {v['principle']['text']}", ""]
+
+    def tree(nodes, depth, room):
+        for n in nodes:
+            if room[0] <= 0:
+                return
+            room[0] -= 1
+            bits = [f"#{n['num']} {n['title']}"]
+            if n.get("project_name") and depth == 1:
+                bits.append(n["project_name"] + (f" / {n['deal_name']}" if n.get("deal_name") else ""))
+            if n.get("owed"):
+                bits.append("отбить")
+            elif n.get("ball") == "waiting":
+                bits.append("мониторить")
+            if n.get("due_date"):
+                bits.append("срок " + _d(n["due_date"]))
+            out.append("  " * depth + " · ".join(bits))
+            tree(n.get("steps") or [], depth + 1, room)
+
+    for d in v["directions"]:
+        m = d["move"]
+        out.append(f"{d['pos']} · {d['name']} — открыто {d['open']}, за неделю закрыто {m.get('done', 0)} "
+                   f"(событий {m.get('events', 0)}, точка {m.get('radius', 0)} из 10)")
+        tree(d["tree"], 1, [15])
+        out.append("")
+    if v["without"]:
+        out.append(f"Без направления ({len(v['without'])}) — разборщик разметит в ближайший слот:")
+        out += [f"  #{t['num']} {t['title']}" for t in v["without"][:20]]
+
+
 def view(url: str, name: str = "today", sphere: str | None = None, person: str | None = None,
-         project: str | None = None, query: str | None = None) -> str:
+         project: str | None = None, query: str | None = None, direction: str | None = None) -> str:
     today = _today(url)
     params: dict = {"sphere": sphere}
     try:
@@ -199,17 +265,32 @@ def view(url: str, name: str = "today", sphere: str | None = None, person: str |
                 params["person_id"] = find_person(conn, person or "")["id"]
             if name == "project":
                 params["project_id"] = find_project(conn, project or "")["id"]
+            dn = _dirnames(conn)
+            want = krug.norm_directions(conn, USER, [direction], NameError_) if direction else []
         if name == "search":
             params["q"] = query
         v = store.view(url, USER, name, **params)
     except store.OpError as e:
         return f"Не вышло: {e}"
     head = f"Дела — {VIEW_TITLES.get(name, name)}, сегодня {today.strftime('%d.%m.%Y')} ({['пн','вт','ср','чт','пт','сб','вс'][today.weekday()]})"
+    if want:
+        head += f" — направление {dn.get(want[0], want[0])}"
     out = [head, ""]
-    if name in ("today", "later"):
+
+    def block(title, items, today_):
+        # Фильтр по направлению (с наследованием) — для любого списка дел.
+        return _block(title, [t for t in items if not want or want[0] in (t.get("dirs") or [])], today_, dn)
+
+    if name == "krug":
+        _krug_text(v, out)
+    elif name in ("today", "later"):
+        if name == "today":
+            if v.get("principle"):
+                out += [f"Принцип дня: {v['principle']['text']}", ""]
+            out += block("Моё (никто не ждёт, двигает жизнь)", v.get("mine") or [], today)
         # Три группы по приоритету: отбить, запустить, мониторить (владелец 10.10.2026).
         for g in v["groups"]:
-            out += _block(g["title"], g["items"], today)
+            out += block(g["title"], g["items"], today)
         if name == "today":
             if not any(g["items"] for g in v["groups"]):
                 out.append("На сегодня всё закрыто.")
@@ -219,9 +300,9 @@ def view(url: str, name: str = "today", sphere: str | None = None, person: str |
             if v["new_count"]:
                 out.append(f"В «Новом» ждут решения: {v['new_count']} (dela view=new).")
     elif name == "morning":
-        out += _block("Сейчас", v["now"], today) + _block("На сегодня и просроченное", v["today"], today)
-        out += _block("Пора напомнить", v["nudge"], today)
-        out += _block("Поставили другие", v["from_others"], today)
+        out += block("Сейчас", v["now"], today) + block("На сегодня и просроченное", v["today"], today)
+        out += block("Пора напомнить", v["nudge"], today)
+        out += block("Поставили другие", v["from_others"], today)
         if v["new_count"]:
             out.append(f"В «Новом» ждут решения: {v['new_count']} (dela view=new).")
     elif name == "new":
@@ -243,30 +324,30 @@ def view(url: str, name: str = "today", sphere: str | None = None, person: str |
             out.append("Пусто.")
     elif name == "waiting":
         for p in v["people"]:
-            out += _block(p["person"], p["items"], today)
+            out += block(p["person"], p["items"], today)
     elif name == "person":
         pe = v["person"] or {}
         out.append(f"{pe.get('name')}" + (f" ({pe['role']})" if pe.get("role") else ""))
-        out += _block("Повестка с ним", v["agenda"], today) + _block("Жду от него", v["waiting"], today)
-        out += _block("Его просьбы ко мне", v["asked"], today) + _block("Моё о нём", v["mine_about"], today)
+        out += block("Повестка с ним", v["agenda"], today) + block("Жду от него", v["waiting"], today)
+        out += block("Его просьбы ко мне", v["asked"], today) + block("Моё о нём", v["mine_about"], today)
     elif name == "project":
         pr = v["project"]
         out.append(f"{pr['name']} · {pr['kind']} · деньги по умолчанию: {pr['money_default']}")
         for dl in v["deals"]:
             fee = f" · fee {dl['fee_kop'] // 100:,} ₽".replace(",", " ") if dl.get("fee_kop") else ""
             out.append(f"  сделка: {dl['name']} · {dl['stage']}{fee}" + (f" · следующий шаг: {dl['next_step']}" if dl.get("next_step") else ""))
-        out += ["", *_block("Открытые", v["open"], today), *_block("Закрытые недавно", v["done"], today)]
+        out += ["", *block("Открытые", v["open"], today), *block("Закрытые недавно", v["done"], today)]
         if v.get("minutes"):
             total = sum(r["minutes"] or 0 for r in v["minutes"])
             out.append(f"Время из ленты: {total // 60} ч {total % 60} мин за {len(v['minutes'])} дн.")
     elif name == "week":
-        out += _block("Протухшее", v["stale"], today) + _block("Жду без движения", v["waiting_stale"], today)
+        out += block("Протухшее", v["stale"], today) + block("Жду без движения", v["waiting_stale"], today)
         if v["no_next_step"]:
             out.append("Проекты с деньгами без моего следующего шага: " + ", ".join(p["name"] for p in v["no_next_step"]))
         if v["expired"]:
             out.append(f"Погасло предложений за неделю: {len(v['expired'])}")
     else:
-        out += _block(VIEW_TITLES.get(name, name), v.get("items", []), today) or ["Пусто."]
+        out += block(VIEW_TITLES.get(name, name), v.get("items", []), today) or ["Пусто."]
     return "\n".join(out).rstrip() + "\n"
 
 
@@ -277,7 +358,9 @@ def card(url: str, ref: str) -> str:
     if not c:
         return f"Дела #{ref} нет или оно не видно."
     t = c["task"]
-    out = [line(t), ""]
+    with db.session(url, USER, via="mcp") as conn:
+        dn = _dirnames(conn)
+    out = [line(t, None, dn), ""]
     if t.get("notes"):
         out += [t["notes"], ""]
     for cm in c["comments"]:
@@ -300,7 +383,9 @@ def add(url: str, **fields) -> str:
     r = store.apply_ops(url, USER, [{"op": "task.create", "task": data}], via="mcp")["results"][0]
     if not r["ok"]:
         return f"Не записал: {r['error']}"
-    return "Записал: " + line(r["task"])
+    with db.session(url, USER, via="mcp") as conn:
+        dn = _dirnames(conn)
+    return "Записал: " + line(r["task"], None, dn)
 
 
 def change(url: str, ref: str, comment: str | None = None, **fields) -> str:
@@ -326,7 +411,9 @@ def change(url: str, ref: str, comment: str | None = None, **fields) -> str:
     if bad:
         return "Не поменял: " + "; ".join(bad)
     task = next((r["task"] for r in res if "task" in r), None)
-    return "Готово: " + (line(task) if task else f"комментарий к #{t['num']}")
+    with db.session(url, USER, via="mcp") as conn:
+        dn = _dirnames(conn)
+    return "Готово: " + (line(task, None, dn) if task else f"комментарий к #{t['num']}")
 
 
 def decide(url: str, suggestion: str, decision: str, reason: str | None = None, **fix) -> str:
@@ -421,9 +508,9 @@ def register(mcp, url: str) -> None:
 
     @mcp.tool()
     async def dela_view(view: str = "today", sphere: str | None = None, person: str | None = None,
-                        project: str | None = None, query: str | None = None) -> str:
-        """Дела списком. view: today (по умолчанию — «Сегодня», главный список Саши: три группы по приоритету — «Отбить» (ждут от меня: человек ждёт от Саши ответа или дела, первым делом), «Запустить» (сам придумал), «Мониторить» (ждёт от человека, пора напомнить); срок сегодня или прошёл, ждущие без срока), later (всё остальное открытое теми же группами), morning (старое утро), new («Новое» — что предложила автоматика), waiting (жду, по людям), person (по человеку: повестка, жду, его просьбы — нужен person), project (проект: сделки, задачи, время из ленты — нужен project), week (неделя: протухшее, жду без движения, проекты без следующего шага), quick (до 10 минут), now (сейчас), search (поиск — нужен query). sphere: work, home или пусто (всё). Имена людей и проектов — как говорит Саша («Додо», «Наташа»)."""
-        return await run(dela.view, view, sphere, person, project, query)
+                        project: str | None = None, query: str | None = None, direction: str | None = None) -> str:
+        """Дела списком. view: today (по умолчанию — «Сегодня», главный список Саши: три группы по приоритету — «Отбить» (ждут от меня: человек ждёт от Саши ответа или дела, первым делом), «Запустить» (сам придумал), «Мониторить» (ждёт от человека, пора напомнить); срок сегодня или прошёл, ждущие без срока), later (всё остальное открытое теми же группами), morning (старое утро), new («Новое» — что предложила автоматика), waiting (жду, по людям), person (по человеку: повестка, жду, его просьбы — нужен person), project (проект: сделки, задачи, время из ленты — нужен project), week (неделя: протухшее, жду без движения, проекты без следующего шага), quick (до 10 минут), now (сейчас), search (поиск — нужен query), krug (Круг жизни: направления по часовой, движение за неделю, дерево «Зачем» — цели и их шаги, дела без направления). В today сверху — «Моё» (до трёх дел, которых никто не ждёт: шаги к целям и «хочу сам») и принцип дня. sphere: work, home или пусто (всё). direction — только дела одного направления Круга («Здоровье», «Дело»…), с наследованием. Имена людей и проектов — как говорит Саша («Додо», «Наташа»)."""
+        return await run(dela.view, view, sphere, person, project, query, direction)
 
     @mcp.tool()
     async def dela_person(name: str, also: list[str] | None = None, phone: str | None = None,
@@ -442,12 +529,12 @@ def register(mcp, url: str) -> None:
                        nudge_on: str | None = None, requested_by: str | None = None, estimate_min: int | None = None,
                        money: str | None = None, want: bool | None = None, now: bool | None = None,
                        labels: list[str] | None = None, notes: str | None = None, remind_at: str | None = None,
-                       remind_place: str | None = None) -> str:
-        """Новое дело Саше. title — «Кто: действие». project — проект (пусто — «Входящие»), deal — сделка проекта. ball — группа дела: owed («Отбить»: person ждёт от Саши ответа или дела — спросил, попросил, ждёт звонка), mine («Запустить»: Саша сам придумал), waiting («Мониторить»: ждёт от person), agenda («Запустить»: поднять при встрече с person). due_date, nudge_on — YYYY-MM-DD. money: paid, potential, none (пусто — как у проекта). now — в «Сейчас» на сегодня. labels — только контексты вроде «звонок». Напомнить Саше в Telegram (бот Ковчега): remind_at — «YYYY-MM-DD HH:MM» по Москве («напомни завтра в 10»), или remind_place — по приезду в место телефона («дом»); одно из двух. Срок не назван — due_date = день напоминания."""
+                       remind_place: str | None = None, directions: list[str] | None = None, why: str | None = None) -> str:
+        """Новое дело Саше. title — «Кто: действие». project — проект (пусто — «Входящие»), deal — сделка проекта. ball — группа дела: owed («Отбить»: person ждёт от Саши ответа или дела — спросил, попросил, ждёт звонка), mine («Запустить»: Саша сам придумал), waiting («Мониторить»: ждёт от person), agenda («Запустить»: поднять при встрече с person). due_date, nudge_on — YYYY-MM-DD. money: paid, potential, none (пусто — как у проекта). now — в «Сейчас» на сегодня. labels — только контексты вроде «звонок». Напомнить Саше в Telegram (бот Ковчега): remind_at — «YYYY-MM-DD HH:MM» по Москве («напомни завтра в 10»), или remind_place — по приезду в место телефона («дом»); одно из двух. Срок не назван — due_date = день напоминания. Круг жизни: directions — направления, которые дело двигает (названия: «Здоровье», «Образование»…; обычно одно, не передал — разборщик разметит сам; дело в проекте клиента или шаг к цели и так их наследует); why — «Зачем»: номер дела-цели («57»), название открытой цели или новая цель словами («Уверенно считает до 20» — заведётся делом-целью)."""
         return await run(dela.add, title=title, project=project, deal=deal, person=person, ball=ball, due_date=due_date,
                          due_time=due_time, nudge_on=nudge_on, requested_by=requested_by, estimate_min=estimate_min,
                          money=money, want=want, now=now, labels=labels, notes=notes, remind_at=remind_at,
-                         remind_place=remind_place)
+                         remind_place=remind_place, directions=directions, why=why)
 
     @mcp.tool()
     async def dela_change(ref: str, title: str | None = None, notes: str | None = None, project: str | None = None,
@@ -456,20 +543,21 @@ def register(mcp, url: str) -> None:
                           requested_by: str | None = None, estimate_min: int | None = None, money: str | None = None,
                           want: bool | None = None, now: bool | None = None, labels: list[str] | None = None,
                           status: str | None = None, comment: str | None = None, remind_at: str | None = None,
-                          remind_place: str | None = None) -> str:
-        """Поправить дело по номеру: любые поля как у dela_add; status: done (сделано), cancelled (отменено), open (вернуть); comment — дописать комментарий. Пустая строка в поле — очистить его (due_date="" — без срока, remind_at="" — без напоминания). Новое remind_at или remind_place взводит напоминание заново, даже если старое уже приходило. Что не передано — не меняется."""
+                          remind_place: str | None = None, directions: list[str] | None = None, why: str | None = None) -> str:
+        """Поправить дело по номеру: любые поля как у dela_add; status: done (сделано), cancelled (отменено), open (вернуть); comment — дописать комментарий. Пустая строка в поле — очистить его (due_date="" — без срока, remind_at="" — без напоминания). Новое remind_at или remind_place взводит напоминание заново, даже если старое уже приходило. Что не передано — не меняется. directions=[] — снять свои направления (дело снова наследует); why="" — убрать «Зачем»."""
         return await run(dela.change, ref, comment=comment, title=title, notes=notes, project=project, deal=deal,
                          person=person, ball=ball, due_date=due_date, due_time=due_time, nudge_on=nudge_on,
                          requested_by=requested_by, estimate_min=estimate_min, money=money, want=want, now=now,
-                         labels=labels, status=status, remind_at=remind_at, remind_place=remind_place)
+                         labels=labels, status=status, remind_at=remind_at, remind_place=remind_place,
+                         directions=directions, why=why)
 
     @mcp.tool()
     async def dela_decide(suggestion: str, decision: str, reason: str | None = None, title: str | None = None,
                           project: str | None = None, person: str | None = None, ball: str | None = None,
-                          due_date: str | None = None) -> str:
-        """Разобрать «Новое». suggestion — id из dela_view view=new (первых 8 знаков хватит) или «batch:<пачка>» — вся пачка встречи. decision: accept или reject. reason — почему отклонил (это учит разбор). Поля title, project, person, ball, due_date — принять с поправкой."""
+                          due_date: str | None = None, directions: list[str] | None = None) -> str:
+        """Разобрать «Новое». suggestion — id из dela_view view=new (первых 8 знаков хватит) или «batch:<пачка>» — вся пачка встречи. decision: accept или reject. reason — почему отклонил (это учит разбор). Поля title, project, person, ball, due_date, directions (направления Круга — вопрос разборщика «Театр — Пара или Ум?») — принять с поправкой."""
         return await run(dela.decide, suggestion, decision, reason, title=title, project=project, person=person,
-                         ball=ball, due_date=due_date)
+                         ball=ball, due_date=due_date, directions=directions)
 
     from pravka_dela import crm_tools as crm
 

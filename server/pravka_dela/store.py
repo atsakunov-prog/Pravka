@@ -21,7 +21,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from . import db, people, where
+from . import db, krug, people, where
 
 # Сколько номеров изменений синк захватывает назад. Номер берётся в начале
 # транзакции, а видна она после фиксации: изменение с меньшим номером может
@@ -38,7 +38,7 @@ TASK_FIELDS = {
 
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
-FEATURES = ["remind", "svod", "people", "dictations", "groups", "where"]
+FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug"]
 # «svod» — Свод (crm.svod) в синке и операция svod.set; «people» — person.add / person.merge и вид who
 # (одна карточка человека, 06.10.2026). Без них телефон не шлёт этих операций.
 # «dictations» — операция dictation.add: текст наговорки, из которой вышли дела (их source_ref = её id),
@@ -47,6 +47,8 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where"]
 # where_avatar — точки семьи для карты Правки. Без флага телефон говорит «сервер Дел не обновлён».
 # «groups» — поле owed (группа «Отбить» — ждут от меня, dela_0007, 10.10.2026) в task.create и task.set; без него телефон
 # owed не шлёт, а «ждут от меня» из разноски передаёт как ball «owed» — сервер поймёт и так (store._ball_norm).
+# «krug» — Круг жизни (dela_0009, 12.10.2026, krug.py): поля directions, why_id, why_title в task.create, task.set и
+# у проекта, список krug в синке (направления проектов), у дела в синке — directions, why_id, dirs, steps_open.
 # Токен службы бота Ковчега (python -m pravka_dela token --name kovcheg): только он забирает
 # «что пора» и отмечает отправку (remind.py, task.reminded).
 REMIND_BOT = "kovcheg"
@@ -108,6 +110,56 @@ def _ball_norm(data: dict) -> dict:
 
 class OpError(Exception):
     """Ошибка операции, которую повтор не исправит: её запоминаем вместе с op_id."""
+
+
+# Круг жизни (dela_0009, 12.10.2026): у дела — направления и «Зачем», у проекта — направления (их наследуют дела).
+# Живут не в tasks.tasks, а в tasks.krug под политикой «только хозяину» — поэтому из операции они вынимаются
+# до _pick и пишутся отдельно (_krug_write). why_title — «Зачем» новой целью: такое дело заводится тут же.
+KRUG_FIELDS = {"directions", "why_id", "why_title"}
+
+
+def _krug_split(data: dict) -> dict:
+    """Поля Круга из операции — отдельно; в data остаются поля самого дела."""
+    return {k: data.pop(k) for k in list(data) if k in KRUG_FIELDS}
+
+
+def _krug_write(conn, user: str, kind: str, obj: dict, kr: dict) -> None:
+    """Направления и «Зачем» дела (kind task) или направления проекта (kind project) — в строку Круга.
+
+    Ставит только хозяин (или служба от его имени — разборщик идёт пользователем-хозяином): Круг личный, и
+    правка Наташи в общем проекте не должна размечать дела Саши. Направления — ключами или названиями из
+    Свода хозяина (krug.directions); пустой список — «снять свои», дело снова наследует.
+    """
+    owner = obj["owner_id"]
+    if user not in (owner, "system"):
+        raise OpError("направления и «зачем» ставит только хозяин")
+    data: dict = {}
+    if "directions" in kr:
+        data["directions"] = krug.norm_directions(conn, owner, kr["directions"], OpError)
+    if kind == "task":
+        if kr.get("why_title"):
+            goal = op_task_create(conn, user, {"task": {
+                "title": str(kr["why_title"]).strip(), "owner_id": owner, "project_id": obj.get("project_id"),
+                "source": obj.get("source") or "manual"}})["task"]
+            data["why_id"] = goal["id"]
+        elif "why_id" in kr:
+            ref = kr["why_id"]
+            if ref in (None, ""):
+                data["why_id"] = None
+            else:
+                goal = task_by(conn, ref)
+                if not goal:
+                    raise OpError("«зачем»: нет такого дела или оно не видно")
+                data["why_id"] = goal["id"]
+    elif set(kr) - {"directions"}:
+        raise OpError("у проекта «зачем» нет — только направления")
+    if not data:
+        return
+    cols = ["id", "kind", "owner_id", *data]
+    q = sql.SQL("INSERT INTO tasks.krug ({}) VALUES ({}) ON CONFLICT (id) DO UPDATE SET {}").format(
+        sql.SQL(", ").join(map(sql.Identifier, cols)), sql.SQL(", ").join(sql.Placeholder() * len(cols)),
+        sql.SQL(", ").join(sql.SQL("{0} = EXCLUDED.{0}").format(sql.Identifier(c)) for c in data))
+    conn.execute(q, [obj["id"], kind, owner, *data.values()])
 
 
 # ── Форма данных ────────────────────────────────────────────────────────
@@ -270,7 +322,9 @@ def _now_guard(conn: psycopg.Connection, before: dict | None, after: dict) -> No
 
 
 def op_task_create(conn, user, op):
-    data = _ball_norm(_pick(op.get("task") or {}, TASK_FIELDS | {"id", "import_ref"}, "дело"))
+    raw = dict(op.get("task") or {})
+    kr = _krug_split(raw)
+    data = _ball_norm(_pick(raw, TASK_FIELDS | {"id", "import_ref"}, "дело"))
     if not data.get("title"):
         raise OpError("у дела нет названия")
     if data.get("id"):
@@ -282,6 +336,8 @@ def op_task_create(conn, user, op):
     _now_guard(conn, None, data)
     _ensure_labels(conn, data.get("labels"))
     row = _insert(conn, "tasks.tasks", data)
+    if kr:
+        _krug_write(conn, user, "task", row, kr)
     return {"task": _full(conn, row["id"])}
 
 
@@ -289,7 +345,9 @@ def op_task_set(conn, user, op):
     cur = task_by(conn, op.get("id"))
     if not cur:
         raise OpError("нет такого дела или оно не видно")
-    changes = _ball_norm(_pick(op.get("set") or {}, TASK_FIELDS, "дело"))
+    raw = dict(op.get("set") or {})
+    kr = _krug_split(raw)
+    changes = _ball_norm(_pick(raw, TASK_FIELDS, "дело"))
     was = op.get("was") or {}
     # Поле поменяли с двух сторон: побеждает пришедшее последним, прежнее
     # значение остаётся в журнале, а клиент узнаёт, что спорил не один.
@@ -299,6 +357,8 @@ def op_task_set(conn, user, op):
     row = _update(conn, "tasks.tasks", {"id": cur["id"]}, changes)
     if row is None:
         raise OpError("это дело можно только смотреть")
+    if kr:
+        _krug_write(conn, user, "task", row, kr)
     return {"task": _full(conn, row["id"]), "conflicts": conflicts}
 
 
@@ -498,18 +558,20 @@ def op_suggestion_decide(conn, user, op):
         return {"suggestion": row}
     if decision != "accept":
         raise OpError("решение: accept или reject")
-    fix = _pick(op.get("set") or {}, TASK_FIELDS, "дело")
+    fix_raw = dict(op.get("set") or {})
+    fix_kr = _krug_split(fix_raw)  # «Подскажи» разборщика Круга: направления и «Зачем» — поправкой при «Да»
+    fix = {**_pick(fix_raw, TASK_FIELDS, "дело"), **fix_kr}
     payload = dict(s["payload"] or {})
     task, back = None, {}
     if s["kind"] == "create":
-        fields = {k: v for k, v in payload.items() if k in TASK_FIELDS}
+        fields = {k: v for k, v in payload.items() if k in TASK_FIELDS | KRUG_FIELDS}
         fields.update(_names(conn, payload))
         fields.update(fix)
         fields.setdefault("source", _task_source(s["source"]))
         fields.setdefault("source_ref", s["source_ref"])
         task = op_task_create(conn, user, {"task": fields})["task"]
     elif s["kind"] in ("close", "update"):
-        fields = {k: v for k, v in payload.items() if k in TASK_FIELDS}
+        fields = {k: v for k, v in payload.items() if k in TASK_FIELDS | KRUG_FIELDS}
         fields.update(_names(conn, payload))  # «уточнить»: мяч перешёл к другому человеку — по имени
         if s["kind"] == "close":
             fields.setdefault("status", "done")
@@ -530,7 +592,7 @@ def op_suggestion_decide(conn, user, op):
         "decided_by": user,
         "decided_at": dt.datetime.now(dt.timezone.utc),
         "result_task_id": task["id"] if task else None,
-        "result": Jsonb(jsonable({**{k: task[k] for k in TASK_FIELDS if task and k in task}, **back})),
+        "result": Jsonb(jsonable({**{k: task[k] for k in TASK_FIELDS | {"directions", "why_id"} if task and k in task}, **back})),
     })
     return {"suggestion": row, "task": task}
 
@@ -584,7 +646,23 @@ def db_owner(conn) -> str:
 
 org_create, org_set = _entity("crm.orgs", ORG_FIELDS, "организация")
 person_create, person_set = _entity("crm.people", PERSON_FIELDS, "человек")
-project_create, project_set = _entity("crm.projects", PROJECT_FIELDS, "проект", extra=("id", "import_ref"))
+_project_create, _project_set = _entity("crm.projects", PROJECT_FIELDS, "проект", extra=("id", "import_ref"))
+
+
+def _project_krug(fn, key: str):
+    """Проект с направлениями (Круг, dela_0009): directions — в строку Круга хозяина проекта, остальное — как было."""
+    def handler(conn, user, op):
+        raw = dict(op.get(key) or {})
+        kr = _krug_split(raw)
+        res = fn(conn, user, {**op, key: raw})
+        if kr:
+            _krug_write(conn, user, "project", res["row"], kr)
+        return res
+    return handler
+
+
+project_create = _project_krug(_project_create, "data")
+project_set = _project_krug(_project_set, "set")
 _deal_create, _deal_set = _entity("crm.deals", DEAL_FIELDS, "сделка", owner_col=None)
 interaction_create, interaction_set = _entity("crm.interactions", INTERACTION_FIELDS, "взаимодействие")
 payment_create, payment_set = _entity("crm.payments", PAYMENT_FIELDS, "оплата", owner_col=None, extra=("id",))
@@ -736,7 +814,11 @@ def apply_ops(url: str, user: str, ops: list[dict], via: str, actor: str | None 
 # ── Синк ────────────────────────────────────────────────────────────────
 
 SYNC_TABLES = {
-    "tasks": "SELECT * FROM tasks.v_tasks WHERE seq > %s",
+    # Дело приходит заново и когда поменялась только его строка Круга (krug_seq): направления и «Зачем»
+    # живут в своей таблице (dela_0009), а клиенту они — поля дела.
+    "tasks": "SELECT * FROM tasks.v_tasks WHERE greatest(seq, coalesce(krug_seq, 0)) > %s",
+    # Направления проектов — их наследуют дела (у задач свои строки Круга едут в самом деле). Только свои (RLS).
+    "krug": "SELECT id, kind, directions, seq FROM tasks.krug WHERE kind = 'project' AND seq > %s",
     "projects": "SELECT * FROM crm.projects WHERE seq > %s",
     "deals": "SELECT * FROM crm.v_deals WHERE seq > %s",
     "payments": "SELECT * FROM crm.payments WHERE seq > %s",
@@ -770,7 +852,7 @@ def sync(url: str, user: str, since: int) -> dict:
         for name, q in SYNC_TABLES.items():
             rows = conn.execute(q, (lo,)).fetchall()
             out[name] = jsonable(rows)
-            top = max([top, *(r["seq"] for r in rows)])
+            top = max([top, *(max(r["seq"], r.get("krug_seq") or 0) for r in rows)])
         out["labels"] = jsonable(conn.execute("SELECT name, color FROM tasks.labels ORDER BY name").fetchall())
         out["seq"] = top
         out["today"] = conn.execute("SELECT crm.today() AS d").fetchone()["d"].isoformat()
@@ -827,7 +909,12 @@ TODAY_ORDER = " ORDER BY coalesce(due_date, (created_at AT TIME ZONE 'Europe/Mos
 def view_today(conn, user, sphere=None, **_):
     rows = _list(conn, TODAY_WHERE, [user], sphere, TODAY_ORDER)
     rest = _list(conn, f"status = 'open' AND owner_id = %s AND NOT {TODAY_IF}", [user], sphere)
+    # «Моё» (Круг жизни, 12.10.2026) — над тремя группами; его дела в группах не повторяются.
+    extra = krug.today_extra(conn, user)
+    shown = {r["id"] for r in extra["mine"]}
+    rows = [r for r in rows if r["id"] not in shown]
     return {
+        **extra,
         "groups": [{"key": k, "title": title, "items": [r for r in rows if group_of(r) == k]} for k, title in GROUPS],
         "later": {k: sum(1 for r in rest if group_of(r) == k) for k, _ in GROUPS},
         "done_today": conn.execute(
@@ -1007,6 +1094,8 @@ VIEWS: dict[str, Callable] = {
 
 # «Где мы»: операции и виды точек семьи — свой модуль (where.py), как люди и статистика.
 where.register(HANDLERS, VIEWS, OpError)
+# Круг жизни: вид krug — направления, движение, дерево «Зачем» (krug.py).
+krug.register(VIEWS)
 
 
 def view(url: str, user: str, name: str, **params) -> dict:

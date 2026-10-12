@@ -1188,3 +1188,34 @@ textarea.about::placeholder { color: var(--ph); opacity: .75; }
 }
 /* Без мыши наводить нечем — молния видна всегда, бледно. */
 @media (hover: none) { .now-btn { opacity: .45; } .now-btn.on { opacity: 1; } }
+
+/* ── Круг жизни (12.10.2026): направления, «Зачем», «Моё», принцип дня, дерево от направлений ── */
+/* Принцип дня — одной тихой строкой под шапкой «Сегодня»: без галочек и баллов (бриф, §6). */
+.principle { margin: 2px 8px 10px; font-family: Literata, Georgia, serif; font-style: italic; font-size: 14.5px; line-height: 20px; color: var(--plan); }
+/* Направление в строке дела: своё — тоном label, наследованное — тише; «без направления» — вопрос, как «без проекта». */
+.chips .dir { color: var(--label); }
+.chips .dir.inherited { color: var(--meta); }
+.chips .why { color: var(--meta); font-style: italic; }
+.chips .goal { color: var(--label); }
+/* «Моё» — над «Отбить»: заголовок в tint режима, как главное на день. */
+.group.grp-mine > h2 { color: var(--tint); }
+/* Карточка: направления — переключателями, «Зачем» — цепочкой вверх, шаги — списком и строкой «новый шаг». */
+.dir-pick { padding-top: 6px; }
+.krug-hint { grid-column: 2; margin: 0 0 6px; }
+.why-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 0; min-width: 0; }
+.why-chain { flex: 1 1 100%; min-width: 0; font-size: 13.5px; line-height: 19px; overflow-wrap: anywhere; }
+.why-chain .link { color: var(--value); text-decoration: none; }
+.why-chain .link:hover { text-decoration: underline; }
+.why-sep { color: var(--meta); margin: 0 5px; }
+.steps { display: grid; gap: 2px; padding: 6px 0; min-width: 0; }
+.steps .step-link { color: var(--value); text-decoration: none; font-size: 13.5px; line-height: 19px; }
+.steps .step-link::before { content: '— '; color: var(--meta); }
+.props .steps input.step-add { height: 32px; margin-top: 2px; border-color: rgba(var(--t), .14); }
+/* Страница «Круг жизни»: двенадцать строк по кругу; раскрытое направление — деревом «Зачем». */
+.krug-dir > h2.krug-h { cursor: pointer; user-select: none; }
+.krug-dir > h2.krug-h:hover { color: var(--value); }
+.krug-pos { display: inline-grid; place-items: center; min-width: 22px; height: 18px; padding: 0 4px; border-radius: 9px; border: 1px solid rgba(var(--t), .35); font-size: 10.5px; letter-spacing: 0; margin-right: 2px; }
+.krug-dir.folded { margin-top: 10px; }
+.task.step { padding-left: calc(2px + var(--indent, 0) * 22px); }
+.task.step .title::before { content: '↳ '; color: var(--meta); }
+.sug .dir-pick { padding: 8px 0 2px; }
