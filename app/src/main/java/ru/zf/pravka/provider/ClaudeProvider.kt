@@ -576,28 +576,6 @@ class ClaudeProvider(
 
     data class FeelParse(val feel: Int, val knee: String, val note: String)
 
-    // ---- Правила блока: проза Notion -> числа (Сонет, раз в сутки) ----
-
-    data class RulesParse(
-        val hrCeiling: Int,
-        val greyLow: Int,
-        val greyHigh: Int,
-        val cadence: Int,
-        val runsMax: Int,
-        val hoursBetween: Int,
-        val rampNeedsPositiveTsb: Boolean,
-        val testPrep: String,
-        val cancel: String,
-        val kneeGreen: String,
-        val kneeYellow: String,
-        val kneeRed: String,
-        val week: List<Pair<String, String>>,
-        val extra: List<String>,
-        val costUsd: Double,
-        val tokensIn: Int,
-        val tokensOut: Int,
-    )
-
     // ---- Спорт: вопрос по своим тренировкам (Опус) ----
 
     data class CoachAnswer(

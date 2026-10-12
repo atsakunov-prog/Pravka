@@ -45,8 +45,6 @@ class PromptStore(private val context: Context) {
         TRAINER("trainer"),
         // Тело: один микрофон на подходы, еду, зарядку и вопросы (Сонет).
         BODY("body"),
-        // Правила блока: проза Notion -> числа (Сонет).
-        RULES("rules"),
         // Паттерны: ночной поиск повторов по всему логу (Опус). Разборы
         // владелец делает сам в чате — здесь только охота за повторами.
         PATTERNS("patterns");
@@ -78,7 +76,6 @@ class PromptStore(private val context: Context) {
         PromptId.COACH -> Prompts.COACH
         PromptId.TRAINER -> Prompts.TRAINER
         PromptId.BODY -> Prompts.BODY
-        PromptId.RULES -> Prompts.RULES
         PromptId.PATTERNS -> Prompts.PATTERNS
     }
 

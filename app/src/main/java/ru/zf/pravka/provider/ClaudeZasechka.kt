@@ -35,7 +35,6 @@ import ru.zf.pravka.provider.ClaudeProvider.ExerciseParse
 import ru.zf.pravka.provider.ClaudeProvider.StrengthParse
 import ru.zf.pravka.provider.ClaudeProvider.GtgParse
 import ru.zf.pravka.provider.ClaudeProvider.FeelParse
-import ru.zf.pravka.provider.ClaudeProvider.RulesParse
 import ru.zf.pravka.provider.ClaudeProvider.CoachAnswer
 import ru.zf.pravka.provider.ClaudeProvider.BatchAnswer
 

@@ -34,12 +34,11 @@ import ru.zf.pravka.provider.ClaudeProvider.ExerciseParse
 import ru.zf.pravka.provider.ClaudeProvider.StrengthParse
 import ru.zf.pravka.provider.ClaudeProvider.GtgParse
 import ru.zf.pravka.provider.ClaudeProvider.FeelParse
-import ru.zf.pravka.provider.ClaudeProvider.RulesParse
 import ru.zf.pravka.provider.ClaudeProvider.CoachAnswer
 import ru.zf.pravka.provider.ClaudeProvider.BatchAnswer
 
 // Тело: роутер и разбор одной фразы (подходы, зарядка, еда, самочувствие, вопрос),
-// правила блока из прозы Notion, тренер и вопрос по тренировкам.
+// тренер и вопрос по тренировкам.
 // Расширения ClaudeProvider: транспорт там, разбор здесь.
 
 /**
@@ -240,70 +239,6 @@ private fun ClaudeProvider.parseBodyReply(reply: ApiReply, model: String): BodyP
         model = model,
         latencyMs = 0L,
     )
-}
-
-/**
- * Вынимает числа из страницы блока в Notion: потолок пульса, каденс, серую
- * зону, лимит пробежек. Раз в сутки — страница меняется раз в месяц.
- */
-suspend fun ClaudeProvider.extractRules(pageText: String): Result<RulesParse> = withContext(Dispatchers.IO) {
-    runCatchingApi {
-        val apiKey = settings.apiKey()
-        if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
-        require(pageText.isNotBlank()) { "Страница блока пуста." }
-        val template = promptStore.effective(PromptStore.PromptId.RULES)
-        // Стена текста режется: страница блока это две-три тысячи знаков, а
-        // не роман, и платить за случайно вставленный роман незачем.
-        val body = pageText.take(20_000)
-        val prompt = if (template.contains(Prompts.PLACEHOLDER_INPUT)) {
-            template.replace(Prompts.PLACEHOLDER_INPUT, body)
-        } else {
-            template.trimEnd() + "\n\nСтраница блока:\n" + body
-        }
-        val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
-        val choice = settings.modelChoice(ModelRoute.BODY_LIGHT)
-        val reply = requestWithOneRetry(
-            apiKey, choice.model, parts, "", null,
-            effortOverride = choice.effort,
-            routeKey = ModelRoute.BODY_LIGHT.key,
-            paceChars = pageText.length,
-        )
-        val o = jsonObjectOf(reply.text, "Правила блока не разобрались — модель ответила не JSON.")
-        val week = mutableListOf<Pair<String, String>>()
-        o.optJSONArray("week")?.let { a ->
-            for (i in 0 until a.length()) {
-                val w = a.optJSONObject(i) ?: continue
-                val day = w.optString("day").trim()
-                val session = w.optString("session").trim()
-                if (day.isNotBlank() && session.isNotBlank()) week.add(day to session)
-            }
-        }
-        val extra = mutableListOf<String>()
-        o.optJSONArray("extra")?.let { a ->
-            for (i in 0 until a.length()) {
-                a.optString(i).trim().takeIf { it.isNotBlank() }?.let { extra.add(it.take(200)) }
-            }
-        }
-        RulesParse(
-            hrCeiling = o.optInt("hrCeiling", 0).coerceIn(0, 220),
-            greyLow = o.optInt("greyLow", 0).coerceIn(0, 220),
-            greyHigh = o.optInt("greyHigh", 0).coerceIn(0, 220),
-            cadence = o.optInt("cadence", 0).coerceIn(0, 240),
-            runsMax = o.optInt("runsMax", 0).coerceIn(0, 14),
-            hoursBetween = o.optInt("hoursBetween", 0).coerceIn(0, 168),
-            rampNeedsPositiveTsb = o.optBoolean("rampNeedsPositiveTsb", false),
-            testPrep = o.optString("testPrep").trim().take(300),
-            cancel = o.optString("cancel").trim().take(300),
-            kneeGreen = o.optString("kneeGreen").trim().take(300),
-            kneeYellow = o.optString("kneeYellow").trim().take(300),
-            kneeRed = o.optString("kneeRed").trim().take(300),
-            week = week,
-            extra = extra.take(8),
-            costUsd = costUsd(choice.model, reply),
-            tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
-            tokensOut = reply.outputTokens,
-        )
-    }
 }
 
 /**

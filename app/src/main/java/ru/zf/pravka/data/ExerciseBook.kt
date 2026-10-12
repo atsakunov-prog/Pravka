@@ -6,23 +6,24 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
 import org.json.JSONObject
 
 // Справочник упражнений: движения владельца со схемами, техникой, ошибками,
 // прогрессией и именем в Garmin Connect.
 //
-// Источник правды — база Notion «Упражнения», и читается она ЖИВОЙ
-// (`NotionExerciseSync`): владелец правит там состав зарядки и дозы, и вкладка
-// должна видеть новые движения («Суставы сверху вниз», «Осанка: …») в тот же
-// день, а не после пересборки APK. Прочитанное лежит на диске
-// (`exercises_live.json`) — карточка тренировки открывается каждый день, в том
-// числе в подвале на даче без сети, и должна открываться из кэша.
+// Два слоя, оба на диске телефона:
 //
-// Статический `assets/exercises.json` (собран из той же базы скриптом
-// `tools/gen_reference.py`) остался СЕМЕНЕМ: с него начинается жизнь после
-// установки, он же — запас без токена Notion, и из него берутся голосовые имена
-// (`aliases`) и единицы подхода — Notion про них не знает.
+//   СЕМЯ — статический `assets/exercises.json` из сборки (снимок, собранный
+//   скриптом `tools/gen_reference.py`). С него начинается жизнь после
+//   установки, и из него берутся голосовые имена (`aliases`) и единицы подхода.
+//
+//   ПОСЛЕДНИЙ ЖИВОЙ СПРАВОЧНИК — `exercises_live.json`. До 12.10.2026 приложение
+//   раз в сутки читало базу Notion «Упражнения» и клало прочитанное сюда;
+//   Notion владелец убрал, и этот файл ЗАМОРОЖЕН на последнем чтении: в нём
+//   движения, которых нет в семени («Суставы сверху вниз», «Осанка: …»).
+//   Он побеждает семя, пока не старше его: пересобранный с новым снимком
+//   `exercises.json` — единственная дорога обновить справочник — иначе так и
+//   прятался бы за замороженным файлом.
 //
 // Главное здесь не хранение, а СОПОСТАВЛЕНИЕ. Список движений конечный и
 // известен заранее, поэтому «гоблет четыре по десять шестнадцать» разбирается
@@ -74,8 +75,8 @@ class ExerciseBook(private val context: Context?) {
         /**
          * Стабильный id из названия — буква в букву как `slug()` в
          * `tools/gen_reference.py`: id попадает в журнал и в отчёты зарядки,
-         * и живой справочник обязан давать те же id, что файл сборки, иначе
-         * история движения рвётся при первом же чтении Notion.
+         * и последний живой справочник давал те же id, что файл сборки, иначе
+         * история движения порвалась бы на его движениях.
          */
         fun slug(name: String): String {
             val sb = StringBuilder()
@@ -121,7 +122,6 @@ class ExerciseBook(private val context: Context?) {
         val progression: String,
         val video: String,
         val garmin: String,
-        val notion: String,
         val unit: String,
         val aliases: List<String>,
     ) {
@@ -146,20 +146,21 @@ class ExerciseBook(private val context: Context?) {
     /** Файл сборки как прочитан: псевдонимы и единицы для живого справочника. */
     @Volatile private var seed: List<Exercise> = emptyList()
 
-    /** Когда справочник в последний раз приезжал из Notion; 0 — ещё ни разу. */
+    /** Когда прочитан последний живой справочник (Notion, до 12.10.2026); 0 — справочник из семени. */
     @Volatile var fetchedAt: Long = 0L
         private set
 
     private val _versionFlow = MutableStateFlow(0)
-    /** Растёт при каждой замене справочника — вкладка пересобирает списки. */
+    /** Растёт, когда справочник прочитан с диска, — вкладка пересобирает списки. */
     val versionFlow: StateFlow<Int> = _versionFlow
 
     val all: List<Exercise> get() = items
     val loaded: Boolean get() = items.isNotEmpty()
     fun snapshotDate(): String = snapshot
-    val fromNotion: Boolean get() = fetchedAt > 0L
+    /** Справочник — последний живой (замороженный), а не семя из сборки. */
+    val fromLive: Boolean get() = fetchedAt > 0L
 
-    /** Кэш живого справочника; null без Android-контекста (JVM-тесты). */
+    /** Последний живой справочник; null без Android-контекста (JVM-тесты). */
     private val liveFile: File? get() = context?.let { File(DataRoot.dir(it), LIVE_FILE) }
 
     /**
@@ -189,39 +190,29 @@ class ExerciseBook(private val context: Context?) {
             asset to live
         }
         if (asset != null) seed = asset.items
-        // Живой кэш побеждает семя, если он не пуст: пустой ответ Notion сюда
-        // и не пишется (см. NotionExerciseSync), но и пустой файл не должен
-        // оставить вкладку без справочника.
-        val chosen = live?.takeIf { it.items.isNotEmpty() } ?: asset
+        // Последний живой справочник побеждает семя, если он не пуст и не
+        // старше снимка в сборке: пустой файл не должен оставить вкладку без
+        // справочника, а новый снимок в APK — прятаться за замороженным файлом.
+        val chosen = live?.takeIf { liveWins(it, asset) } ?: asset
         if (chosen != null) {
             items = mergeSeed(chosen.items)
             snapshot = chosen.snapshot
             fetchedAt = chosen.fetchedAt
             byAlias = buildIndex(items)
+            _versionFlow.value = _versionFlow.value + 1
         }
         return items
     }
 
+    /** Даты снимков — «yyyy-MM-dd», поэтому сравниваются строкой. */
+    private fun liveWins(live: Snapshot, asset: Snapshot?): Boolean {
+        if (live.items.isEmpty()) return false
+        if (asset == null || asset.snapshot.isBlank() || live.snapshot.isBlank()) return true
+        return live.snapshot >= asset.snapshot
+    }
+
     /** Упражнение из файла сборки по id — псевдонимы и единица подхода. */
     fun seedById(id: String): Exercise? = seed.firstOrNull { it.id == id }
-
-    /**
-     * Заменить справочник тем, что прочиталось из Notion. Пустой список не
-     * принимается — ответ без строк почти всегда значит «сеть или доступ
-     * подвели», а не «упражнений больше нет».
-     */
-    suspend fun replace(list: List<Exercise>, fetchedAt: Long, snapshot: String) {
-        if (list.isEmpty()) return
-        load()
-        val merged = mergeSeed(list)
-        items = merged
-        byAlias = buildIndex(merged)
-        this.fetchedAt = fetchedAt
-        this.snapshot = snapshot
-        val json = serialize(merged, snapshot, fetchedAt).toString()
-        liveFile?.let { file -> DiskWriter.post { StoreFiles.writeAtomic(file, json) } }
-        _versionFlow.value = _versionFlow.value + 1
-    }
 
     /** Псевдонимы и единица — из семени, если живая запись их не принесла. */
     private fun mergeSeed(list: List<Exercise>): List<Exercise> {
@@ -258,7 +249,6 @@ class ExerciseBook(private val context: Context?) {
                     progression = e.optString("progression"),
                     video = e.optString("video"),
                     garmin = e.optString("garmin"),
-                    notion = e.optString("notion"),
                     unit = e.optString("unit").ifBlank { UNIT_REPS },
                     aliases = list("aliases"),
                 )
@@ -266,37 +256,6 @@ class ExerciseBook(private val context: Context?) {
         }
         return Snapshot(out, o.optString("snapshot"), o.optLong("fetchedAt", 0L))
     }
-
-    private fun serialize(list: List<Exercise>, snapshot: String, fetchedAt: Long): JSONObject =
-        JSONObject().apply {
-            put("source", "notion:Упражнения")
-            put("snapshot", snapshot)
-            put("fetchedAt", fetchedAt)
-            put(
-                "items",
-                JSONArray().apply {
-                    for (e in list) put(
-                        JSONObject().apply {
-                            put("id", e.id)
-                            put("n", e.order)
-                            put("name", e.name)
-                            put("scheme", e.scheme)
-                            put("blocks", JSONArray().apply { e.blocks.forEach { put(it) } })
-                            put("gear", JSONArray().apply { e.gear.forEach { put(it) } })
-                            put("targets", JSONArray().apply { e.targets.forEach { put(it) } })
-                            put("how", e.how)
-                            put("mistakes", e.mistakes)
-                            put("progression", e.progression)
-                            put("video", e.video)
-                            put("garmin", e.garmin)
-                            put("notion", e.notion)
-                            put("unit", e.unit)
-                            put("aliases", JSONArray().apply { e.aliases.forEach { put(it) } })
-                        }
-                    )
-                }
-            )
-        }
 
     /**
      * Индекс на точное совпадение. Длинные псевдонимы кладутся первыми и не

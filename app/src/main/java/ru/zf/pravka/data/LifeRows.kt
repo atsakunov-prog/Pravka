@@ -1,24 +1,21 @@
 package ru.zf.pravka.data
 
 import org.json.JSONObject
-import ru.zf.pravka.core.NotionLifeSchema
+import ru.zf.pravka.core.LifeSchema
 import ru.zf.pravka.core.PhoneDaySummary
 
 /**
- * Строки всей жизни по базам — одним сборщиком для Notion и для xlsx.
+ * Строки всей жизни по листам книги Excel (`LifeExport`).
  *
- * Синхронизатор Notion (`NotionLifeSync.scan`) и выгрузка книгой Excel
- * (`LifeExport`) обязаны показывать одно и то же: владелец (09.09) — «один
- * экспорт, который будет экспортировать вот всё то, что в Notion». Пока
- * строки собирал сам синхронизатор, у выгрузки была бы своя копия тех же
- * фильтров (закрытые дела, подтверждённые приёмы, «сессия, в которой хоть
- * что-то есть», день формы не из будущего), и через месяц они бы разошлись.
- * Здесь читаются сторы и строятся строки построителями `NotionLifeSchema`;
- * кто и куда их отправит — не наше дело.
+ * Здесь читаются сторы и строятся строки построителями `LifeSchema`; сюда
+ * же собраны фильтры (закрытые дела, подтверждённые приёмы, «сессия, в
+ * которой хоть что-то есть», день формы не из будущего). До 12.10.2026 те же
+ * строки уезжали и в Notion — сборщик был общим, чтобы синк и выгрузка не
+ * разошлись; Notion убран, сборщик остался у книги.
  *
- * Ключ строки — тот же служебный ключ, по которому синхронизатор узнаёт свою
- * страницу (`t42`, `f17`, `v2026-09-13`, `w…`, `s2026-09-05`, `g…`, `p…`, `h…`,
- * `cat:…`, `n:vd`).
+ * Ключ строки — служебный ключ (`t42`, `f17`, `v2026-09-13`, `w…`,
+ * `s2026-09-05`, `g…`, `p…`, `h…`, `cat:…`, `n:vd`), он же колонка EntryId,
+ * MealId или «Ключ» в книге.
  */
 class LifeRows(
     private val zasechka: ZasechkaStore,
@@ -28,85 +25,85 @@ class LifeRows(
     private val phone: PhoneStore,
 ) {
 
-    /** База и её строки: ключ синхронизатора → свойства строки в формате Notion. */
-    class Table(val db: NotionLifeSchema.Db, val rows: List<Pair<String, JSONObject>>)
+    /** Лист и его строки: служебный ключ → значения строки по колонкам. */
+    class Table(val db: LifeSchema.Db, val rows: List<Pair<String, JSONObject>>)
 
-    /** Читает сторы и собирает строки всех баз в порядке `NotionLifeSchema.ALL`. */
+    /** Читает сторы и собирает строки всех баз в порядке `LifeSchema.ALL`. */
     suspend fun collect(now: Long = System.currentTimeMillis()): List<Table> {
         food.load(); sport.load(); strength.load()
-        val today = NotionLifeSchema.dayKey(now)
+        val today = LifeSchema.dayKey(now)
         val all = zasechka.all()
         val categories = zasechka.categories()
         val worth = categories.associate { it.name.trim().lowercase() to it.value }
         fun worthOf(cat: String) = worth[cat.trim().lowercase()] ?: 0
-        val out = ArrayList<Table>(NotionLifeSchema.ALL.size)
+        val out = ArrayList<Table>(LifeSchema.ALL.size)
 
         // Лента — только закрытые дела: у идущего нет конца, минут и очков, а
         // полуфабрикат в таблице читался бы как факт.
         out += Table(
-            NotionLifeSchema.ZASECHKA,
+            LifeSchema.ZASECHKA,
             all.filter { !it.open }.sortedBy { it.start }.map { e ->
-                "t${e.id}" to NotionLifeSchema.ribbonRow(e, zasechka.budgetMinutes(e, now), worthOf(e.category), now)
+                "t${e.id}" to LifeSchema.ribbonRow(e, zasechka.budgetMinutes(e, now), worthOf(e.category), now)
             },
         )
         out += Table(
-            NotionLifeSchema.EDA,
-            food.mealsFlow.value.filter { it.confirmed }.map { m -> "f${m.id}" to NotionLifeSchema.mealRow(m) },
+            LifeSchema.EDA,
+            food.mealsFlow.value.filter { it.confirmed }.map { m -> "f${m.id}" to LifeSchema.mealRow(m) },
         )
         // Витамины по дням: считаются из тех же подтверждённых приёмов, что и
         // строки «Еды», — просто в другом разрезе. Дни берём только те, где
         // что-то посчиталось: пустая строка на каждый день года сказала бы
         // «витаминов не ел», а правда в том, что их не считали.
         out += Table(
-            NotionLifeSchema.VITAMINY,
+            LifeSchema.VITAMINY,
             food.mealsFlow.value.filter { it.confirmed }
                 .map { dayKey(it.ts) }
                 .distinct()
                 .sorted()
                 .mapNotNull { date ->
-                    NotionLifeSchema.vitaminRow(food.dayTotal(date))?.let { "v$date" to it }
+                    LifeSchema.vitaminRow(food.dayTotal(date))?.let { "v$date" to it }
                 },
         )
         out += Table(
-            NotionLifeSchema.TRENIROVKI,
-            sport.workoutsFlow.value.map { w -> "w${w.id.ifBlank { w.start.toString() }}" to NotionLifeSchema.workoutRow(w) },
+            LifeSchema.TRENIROVKI,
+            sport.workoutsFlow.value.map { w -> "w${w.id.ifBlank { w.start.toString() }}" to LifeSchema.workoutRow(w) },
         )
         // Сессия с одними галочками чек-листа — тоже сессия: иначе «Силовые»
         // стоят пустыми при живом журнале (07.09).
         out += Table(
-            NotionLifeSchema.SILOVYE,
-            strength.sessionsFlow.value.filter { NotionLifeSchema.sessionMatters(it) }
-                .map { s -> "s${s.date}" to NotionLifeSchema.sessionRow(s) },
+            LifeSchema.SILOVYE,
+            strength.sessionsFlow.value.filter { LifeSchema.sessionMatters(it) }
+                .map { s -> "s${s.date}" to LifeSchema.sessionRow(s) },
         )
         out += Table(
-            NotionLifeSchema.ZARYADKA,
-            strength.gtgFlow.value.filter { it.any }.map { g -> "g${g.date}" to NotionLifeSchema.gtgRow(g) },
+            LifeSchema.ZARYADKA,
+            strength.gtgFlow.value.filter { it.any }.map { g -> "g${g.date}" to LifeSchema.gtgRow(g) },
         )
         // Телефон по дням: trackedApps() заодно поднимает стор с диска.
         val tracked = phone.trackedApps()
         val labels = phone.labelsFlow.value
         out += Table(
-            NotionLifeSchema.TELEFON,
+            LifeSchema.TELEFON,
             phone.daysFlow.value.mapNotNull { (date, day) ->
-                NotionLifeSchema.phoneRow(date, PhoneDaySummary.forNotion(day, labels, tracked))?.let { "p$date" to it }
+                LifeSchema.phoneRow(date, PhoneDaySummary.forBook(day, labels, tracked))?.let { "p$date" to it }
             },
         )
         // Форма: завтрашний прогноз CTL/ATL строкой не становится.
         out += Table(
-            NotionLifeSchema.FORMA,
-            sport.healthFlow.value.mapNotNull { h -> NotionLifeSchema.healthRow(h, today)?.let { "h${h.date}" to it } },
+            LifeSchema.FORMA,
+            sport.healthFlow.value.mapNotNull { h -> LifeSchema.healthRow(h, today)?.let { "h${h.date}" to it } },
         )
         out += Table(
-            NotionLifeSchema.KATEGORII,
-            categories.mapIndexed { i, c -> "cat:" + c.name.trim().lowercase() to NotionLifeSchema.categoryRow(c, i + 1) },
+            LifeSchema.KATEGORII,
+            categories.mapIndexed { i, c -> "cat:" + c.name.trim().lowercase() to LifeSchema.categoryRow(c, i + 1) },
         )
         // Справочник веществ: норма, предел и «зачем» рядом с колонками
         // «Витаминов». Он статический — но без него книга Excel показывает
         // двадцать столбцов цифр, о которых неоткуда узнать, много это или мало.
         out += Table(
-            NotionLifeSchema.NORMY,
+            LifeSchema.NORMY,
             ru.zf.pravka.core.Micronutrients.ALL.mapIndexed { i, n ->
-                "n:" + n.id to NotionLifeSchema.normRow(n, i + 1)
+                "n:" + n.id to LifeSchema.normRow(n, i + 1)
             },
         )
         return out

@@ -41,7 +41,6 @@ class ModelRoutesTest {
             ModelRoute.NIGHT_CHECK to "max",
             ModelRoute.SHADOW_JUDGE to "max",
             ModelRoute.PROMPT_TUNE to "max",
-            ModelRoute.PATTERNS_DUPES to "max",
         )
         for ((route, effort) in expected) {
             assertEquals(route.name, Settings.MODEL_OPUS, route.defaultModel)
@@ -114,7 +113,7 @@ class ModelRoutesTest {
 
     @Test
     fun `пустое усилие значит «не передавать» и допустимо`() {
-        assertEquals("", ModelChoice.of(ModelRoute.PATTERNS_DUPES, null, "").effort)
+        assertEquals("", ModelChoice.of(ModelRoute.PROMPT_TUNE, null, "").effort)
         assertEquals("по умолчанию", Models.effortLabel(""))
     }
 }

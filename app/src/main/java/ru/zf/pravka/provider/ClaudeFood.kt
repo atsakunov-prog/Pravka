@@ -34,7 +34,6 @@ import ru.zf.pravka.provider.ClaudeProvider.ExerciseParse
 import ru.zf.pravka.provider.ClaudeProvider.StrengthParse
 import ru.zf.pravka.provider.ClaudeProvider.GtgParse
 import ru.zf.pravka.provider.ClaudeProvider.FeelParse
-import ru.zf.pravka.provider.ClaudeProvider.RulesParse
 import ru.zf.pravka.provider.ClaudeProvider.CoachAnswer
 import ru.zf.pravka.provider.ClaudeProvider.BatchAnswer
 
@@ -189,7 +188,7 @@ internal fun microOf(o: JSONObject?): Map<String, Double> {
         val n = ru.zf.pravka.core.Micronutrients.byId(key) ?: continue
         val v = o.optDouble(key, 0.0)
         // Потолок в сто норм — заслон от съехавшей запятой: «кальций 260000»
-        // раскрасил бы день перебором и уехал бы в Notion как факт.
+        // раскрасил бы день перебором и уехал бы в книгу Excel как факт.
         if (v > 0 && v.isFinite()) out[n.id] = minOf(v, n.norm * 100)
     }
     return out

@@ -146,16 +146,13 @@ internal fun ProfileOnboarding(app: PravkaApp) {
 
 /**
  * Не владелец: автоматы владельца с завода выключены. Ночной разбор и правка
- * промпта написаны про Сашу и тратят ключ; синк «Всей жизни» и Дневника
- * смотрит в его Notion. Одно и то же — при первом запуске и при смене
+ * промпта написаны про Сашу и тратят ключ. Одно и то же — при первом запуске и при смене
  * профиля в настройках (08.10.2026: телефон, заведённый как Сашин и
  * переключённый на Марианну, оставлял их включёнными).
  */
 private suspend fun ownerAutomatsOff(app: PravkaApp) {
     app.settings.setNightReviewEnabled(false)
     app.settings.setPromptTuneEnabled(false)
-    app.settings.setNotionLife(false)
-    app.settings.setNotionDiary(false)
 }
 
 /** Группа «Кто пользуется» в настройках: тот же выбор и тумблеры режимов. */
@@ -183,8 +180,8 @@ internal fun ProfileSettings(app: PravkaApp) {
         }
         Spacer(Modifier.height(6.dp))
         PaperHint(
-            if (current.owner) "Владелец: заводские наличные и счета в Деньгах, базы Notion и промпты — его."
-            else "Заводские данные владельца (его наличные и счета, базы Notion) здесь не используются."
+            if (current.owner) "Владелец: заводские наличные и счета в Деньгах и промпты — его."
+            else "Заводские данные владельца (его наличные и счета) здесь не используются."
         )
     }
     PaperCard(label = "режимы", info = MODES_INFO) {

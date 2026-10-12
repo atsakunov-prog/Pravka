@@ -37,7 +37,7 @@ data class PlanLine(
     val exercise: ExerciseBook.Exercise?,
     val id: String,
 ) {
-    /** Имя как в Notion, если движение узнано; иначе — как написано в плане. */
+    /** Имя как в справочнике, если движение узнано; иначе — как написано в плане. */
     val canonical: String get() = exercise?.name ?: name
 
     /** «Название — доза» одной строкой: заголовок карточки, шапка отчёта. */

@@ -542,16 +542,15 @@ private val MORE_SHELVES: List<Pair<String, List<Tab>>> = listOf(
  *
  * Владелец (09.09): «уберём все эти экспорты csv и сводки, я ими не пользуюсь,
  * и сделаем один экспорт, который будет экспортировать всё то, что в Notion…
- * мне надоел этот Notion, в Excel мне как-то удобнее». Книгу собирает
- * `LifeExport` из тех же строк, что уезжают в Notion: лист на базу, колонка в
- * колонку, свежее сверху. Ничего своего у файла нет — что в Notion, то и тут.
+ * мне надоел этот Notion, в Excel мне как-то удобнее». Notion с 12.10.2026
+ * убран; книгу собирает `LifeExport` по схеме `LifeSchema`: лист на лист,
+ * колонка в колонку, свежее сверху.
  */
 @Composable
 private fun LifeExportDialog(app: PravkaApp, onDismiss: () -> Unit) {
     val context = LocalContext.current
     var busy by remember { mutableStateOf(false) }
     var lastError by remember { mutableStateOf("") }
-    val notionStatus by app.notionLifeSync.statusFlow.collectAsState()
     val export: () -> Unit = {
         busy = true
         lastError = ""
@@ -578,15 +577,14 @@ private fun LifeExportDialog(app: PravkaApp, onDismiss: () -> Unit) {
         onDismiss = onDismiss,
         title = "Вся жизнь одной книгой",
         icon = Glyphs.Export,
-        subtitle = "одна книга .xlsx — как в Notion",
+        subtitle = "одна книга .xlsx",
         confirm = SheetAction(if (busy) "Собираю…" else "Выгрузить .xlsx", icon = Glyphs.Export, enabled = !busy, onClick = export),
     ) {
         HintText(
-            "Та же структура, что в Notion под «Правка: разборы»: листы " +
-                ru.zf.pravka.core.NotionLifeSchema.ALL.joinToString(", ") { it.name } +
+            "Листы " +
+                ru.zf.pravka.core.LifeSchema.ALL.joinToString(", ") { it.name } +
                 ". Свежее сверху, шапка закреплена, фильтр включён."
         )
-        HintText("Notion: " + notionStatus.ifBlank { "синк ещё не запускался" })
         if (lastError.isNotBlank()) {
             Text(
                 lastError,
@@ -2317,7 +2315,6 @@ private val promptTitles = mapOf(
     PromptStore.PromptId.COACH to R.string.prompt_title_coach,
     PromptStore.PromptId.TRAINER to R.string.prompt_title_trainer,
     PromptStore.PromptId.BODY to R.string.prompt_title_body,
-    PromptStore.PromptId.RULES to R.string.prompt_title_rules,
 )
 
 @Composable

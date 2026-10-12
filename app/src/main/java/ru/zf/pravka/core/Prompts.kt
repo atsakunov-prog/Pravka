@@ -86,9 +86,6 @@ object Prompts {
 
     val PATTERNS: String get() = ru.zf.pravka.core.prompts.PromptsAnalysis.PATTERNS
 
-
-    val RULES: String get() = ru.zf.pravka.core.prompts.PromptsBody.RULES
-
     // ---- Спорт: вопрос по своим тренировкам. Опус: трудное здесь не (…см. prompts/PromptsBody.kt)
     val COACH: String get() = ru.zf.pravka.core.prompts.PromptsBody.COACH
 

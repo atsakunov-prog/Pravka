@@ -10,7 +10,7 @@ import ru.zf.pravka.data.PhoneStore
  * оказался неудачным, засоряет ленту. просто давай считать каждый день,
  * сколько на Клод, телеграм, звонки, сколько на ютуб». Лента больше не знает
  * о телефоне ничего, кроме сна; телефонный слой считает свои суммы по дням,
- * и здесь они складываются в сводку для вкладки и для строки «Телефона» в Notion.
+ * и здесь они складываются в сводку для вкладки и для листа «Телефон» книги Excel.
  *
  * Чистый Kotlin: проверяется JVM-тестом.
  */
@@ -132,12 +132,12 @@ object PhoneDaySummary {
         return parts.joinToString(" · ")
     }
 
-    /** Телефон за день в форме строки «Телефона» Notion. */
-    fun forNotion(day: PhoneStore.Day?, labels: Map<String, String>, tracked: Map<String, String>): NotionLifeSchema.PhoneDay {
-        if (day == null) return NotionLifeSchema.PhoneDay()
+    /** Телефон за день в форме строки листа «Телефон» книги Excel. */
+    fun forBook(day: PhoneStore.Day?, labels: Map<String, String>, tracked: Map<String, String>): LifeSchema.PhoneDay {
+        if (day == null) return LifeSchema.PhoneDay()
         val callers = day.callers.entries.sortedByDescending { it.value }.map { it.key }.filter { it.isNotBlank() }
         val summary = of(day, tracked, labels)
-        return NotionLifeSchema.PhoneDay(
+        return LifeSchema.PhoneDay(
             screenMin = (day.screenMs + 30_000L) / 60_000L,
             pickups = day.pickups,
             glances = day.glances,

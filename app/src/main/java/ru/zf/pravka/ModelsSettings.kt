@@ -104,7 +104,7 @@ private const val TYPICAL_INDEX = 1
 /** Дороги, что ходят батчем по ночам: окна и отсчёта на кнопке у них нет. */
 private val BATCH_ROUTES = setOf(
     ModelRoute.NIGHT_REVIEW, ModelRoute.NIGHT_CHECK, ModelRoute.SHADOW_JUDGE,
-    ModelRoute.PROMPT_TUNE, ModelRoute.PATTERNS_DUPES,
+    ModelRoute.PROMPT_TUNE,
 )
 
 private val RU: Locale = Locale.forLanguageTag("ru")

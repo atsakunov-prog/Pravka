@@ -5,16 +5,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Вся жизнь одной книгой Excel: лист на базу Notion, колонка в колонку.
+ * Вся жизнь одной книгой Excel: лист на лист схемы `LifeSchema`, колонка в
+ * колонку.
  *
- * Владелец (09.09): «мне надоел этот Notion. Пускай он дальше синхронизируется,
- * я согласен, но в Excel мне как-то удобнее» — и «там должна быть целиком вся
- * моя жизнь, поделена по вкладкам, отсортирована по времени начала: сначала
- * последний день и по убыванию». Поэтому книга — не свой формат, а зеркало
- * структуры из `NotionLifeSchema`: те же восемь баз листами в том же порядке,
- * те же колонки в том же порядке, те же значения, построенные теми же
- * построителями строк. Что видно в Notion, то и в файле; расходиться им
- * нечем.
+ * Владелец (09.09): «мне надоел этот Notion… в Excel мне как-то удобнее» — и
+ * «там должна быть целиком вся моя жизнь, поделена по вкладкам, отсортирована
+ * по времени начала: сначала последний день и по убыванию». Книга родилась
+ * зеркалом баз Notion; с 12.10.2026 Notion убран, и книга — единственное, что
+ * осталось от той раскладки: те же листы в том же порядке, те же колонки,
+ * те же значения, построенные теми же построителями строк.
  *
  * Типы переводятся один к одному: title и rich_text — текст, number — число,
  * select — его название, checkbox — да/нет, date — настоящая дата Excel
@@ -25,14 +24,14 @@ import org.json.JSONObject
  */
 object LifeXlsx {
 
-    class Table(val db: NotionLifeSchema.Db, val rows: List<JSONObject>)
+    class Table(val db: LifeSchema.Db, val rows: List<JSONObject>)
 
     /** Колонки-даты, по которым лист сортируется от свежего к старому. */
     private val TIME_COLUMNS = listOf("Начало", "Дата", "День")
 
     fun sheets(tables: List<Table>): List<Xlsx.Sheet> = tables.map { sheet(it.db, it.rows) }
 
-    fun sheet(db: NotionLifeSchema.Db, rows: List<JSONObject>): Xlsx.Sheet {
+    fun sheet(db: LifeSchema.Db, rows: List<JSONObject>): Xlsx.Sheet {
         val ordered = sort(db, rows)
         return Xlsx.Sheet(
             name = db.name,
@@ -46,14 +45,14 @@ object LifeXlsx {
      * у базы. У справочника категорий времени нет — он идёт по «Порядку», как
      * в приложении.
      */
-    fun sort(db: NotionLifeSchema.Db, rows: List<JSONObject>): List<JSONObject> {
+    fun sort(db: LifeSchema.Db, rows: List<JSONObject>): List<JSONObject> {
         val timeCol = TIME_COLUMNS.firstOrNull { db.has(it) }
         if (timeCol != null) return rows.sortedByDescending { dateMs(it, timeCol) ?: Long.MIN_VALUE }
         if (db.has("Порядок")) return rows.sortedBy { number(it, "Порядок") ?: Double.MAX_VALUE }
         return rows
     }
 
-    fun cell(column: NotionLifeSchema.Column, row: JSONObject): Xlsx.Cell {
+    fun cell(column: LifeSchema.Column, row: JSONObject): Xlsx.Cell {
         val prop = row.optJSONObject(column.name) ?: return Xlsx.Cell.Empty
         return when (column.type) {
             "title", "rich_text" -> text(prop.optJSONArray(column.type)).let { if (it.isEmpty()) Xlsx.Cell.Empty else Xlsx.Cell.Text(it) }
@@ -79,7 +78,7 @@ object LifeXlsx {
         val start = row.optJSONObject(column)?.optJSONObject("date")?.optString("start").orEmpty()
         return when {
             start.isBlank() -> null
-            start.length <= 10 -> NotionLifeSchema.dayStartOf(start)
+            start.length <= 10 -> LifeSchema.dayStartOf(start)
             else -> parseMs(start)
         }
     }

@@ -140,16 +140,16 @@ class ZasechkaStore(private val context: Context) {
             when {
                 before != null && after != null && after.raw.isBlank() &&
                     after.title == before.title && after.category == before.category && after.client == before.client -> {
-                    kept = before.copy(end = after.end, synced = false, notionSynced = false)
+                    kept = before.copy(end = after.end, synced = false)
                     out.removeAll { it.id == after.id }
                     put(kept)
                 }
                 before != null -> {
-                    kept = before.copy(end = call.end, synced = false, notionSynced = false)
+                    kept = before.copy(end = call.end, synced = false)
                     put(kept)
                 }
                 after != null -> {
-                    kept = after.copy(start = call.start, synced = false, notionSynced = false)
+                    kept = after.copy(start = call.start, synced = false)
                     put(kept)
                 }
             }
@@ -206,9 +206,8 @@ class ZasechkaStore(private val context: Context) {
         val createdAt: Long,
         // 🍅 помидоров, дозревших за делом, — история: таймер снят 09.09
         // (владелец им не пользовался), поле читается и пишется ради старых
-        // записей и колонки «Помидоры» в Notion.
+        // записей и колонки «Помидоры» в книге Excel.
         val pomodoros: Int = 0,
-        val notionSynced: Boolean = false,  // delivered to the Notion mirror
         // Комментарий владельца к делу — ЧТО было внутри («обсудили бюджет,
         // договорились до пятницы»). Отдельно от raw нарочно: raw — дословная
         // надиктовка, из которой дело родилось, и её читает обучение; сюда
@@ -303,7 +302,7 @@ class ZasechkaStore(private val context: Context) {
         val kept = entries.filter { (if (it.open) Long.MAX_VALUE else it.end) <= step.from }
         // Restored rows go out to the mirrors again - the Sheets copy of a
         // row that came back must stop showing the deleted state.
-        entries = (kept + step.entries.map { it.copy(synced = false, notionSynced = false) })
+        entries = (kept + step.entries.map { it.copy(synced = false) })
             .toMutableList()
         entries.sortBy { it.start }
         normalizeLocked()
@@ -410,7 +409,7 @@ class ZasechkaStore(private val context: Context) {
         for (i in entries.indices) {
             val e = entries[i]
             if (e.source == "auto" && !e.open && e.start < start && e.end > start) {
-                entries[i] = e.copy(end = start, synced = false, notionSynced = false)
+                entries[i] = e.copy(end = start, synced = false)
             }
         }
         val opened = Entry(
@@ -477,7 +476,6 @@ class ZasechkaStore(private val context: Context) {
                         comment = if (first) e.comment else "",
                         pomodoros = if (first) e.pomodoros else 0,
                         synced = false,
-                        notionSynced = false,
                     )
                 )
                 first = false
@@ -493,7 +491,6 @@ class ZasechkaStore(private val context: Context) {
                     comment = "",
                     pomodoros = 0,
                     synced = false,
-                    notionSynced = false,
                 )
             )
         }
@@ -559,7 +556,7 @@ class ZasechkaStore(private val context: Context) {
                     claimEnd == null || claimEnd <= e.start -> out.add(e)
                     nowMs - claimEnd < GAP_FILL_MIN_MS -> changed = true  // crumb - drop
                     else -> {
-                        out.add(e.copy(start = claimEnd, synced = false, notionSynced = false))
+                        out.add(e.copy(start = claimEnd, synced = false))
                         changed = true
                     }
                 }
@@ -596,7 +593,6 @@ class ZasechkaStore(private val context: Context) {
                         start = s,
                         end = en,
                         synced = false,
-                        notionSynced = false,
                     )
                 )
                 first = false
@@ -647,7 +643,7 @@ class ZasechkaStore(private val context: Context) {
             if (b.start - a.end >= GAP_FILL_MIN_MS) continue
             val at = entries.indexOfFirst { it.id == a.id }
             if (at < 0) continue
-            entries[at] = a.copy(end = b.start, synced = false, notionSynced = false)
+            entries[at] = a.copy(end = b.start, synced = false)
             changed = true
         }
         return changed
@@ -733,7 +729,7 @@ class ZasechkaStore(private val context: Context) {
      * an old build's data) - is spliced into fragments AROUND them: the дело
      * stays the main block (one chain, net time), the robot's minutes stay
      * the robot's. The head fragment keeps
-     * the id (its Sheets/Notion rows update in place) and is created even at
+     * the id (its Sheets row updates in place) and is created even at
      * zero length - it anchors the block at the declared start; later
      * fragments get fresh ids, 🍅 stay on the tail.
      */
@@ -780,7 +776,6 @@ class ZasechkaStore(private val context: Context) {
                             comment = if (firstSeg) m.comment else "",
                             pomodoros = 0,
                             synced = false,
-                            notionSynced = false,
                         )
                     )
                     firstSeg = false
@@ -795,7 +790,6 @@ class ZasechkaStore(private val context: Context) {
                     raw = if (firstSeg) m.raw else "",
                     comment = if (firstSeg) m.comment else "",
                     synced = false,
-                    notionSynced = false,
                 )
             )
         }
@@ -822,7 +816,7 @@ class ZasechkaStore(private val context: Context) {
         val index = entries.indexOfLast { it.open }
         if (index < 0) return null
         val open = entries[index]
-        val closed = open.copy(end = at.coerceAtLeast(open.start), synced = false, notionSynced = false)
+        val closed = open.copy(end = at.coerceAtLeast(open.start), synced = false)
         entries[index] = closed
         return closed
     }
@@ -880,7 +874,7 @@ class ZasechkaStore(private val context: Context) {
             when {
                 // Накрывает вставку целиком: голова до, продолжение после.
                 e.start < s0 && eEnd > e0 -> {
-                    out.add(e.copy(end = s0, synced = false, notionSynced = false))
+                    out.add(e.copy(end = s0, synced = false))
                     out.add(
                         e.copy(
                             id = nextId(),
@@ -890,14 +884,13 @@ class ZasechkaStore(private val context: Context) {
                             end = if (e.open) 0L else e.end,
                             pomodoros = 0,
                             synced = false,
-                            notionSynced = false,
                         )
                     )
                 }
                 // Заходит слева — обрезаем её конец на старте вставки.
-                e.start < s0 -> out.add(e.copy(end = s0, synced = false, notionSynced = false))
+                e.start < s0 -> out.add(e.copy(end = s0, synced = false))
                 // Выходит справа — сдвигаем её начало на конец вставки.
-                else -> out.add(e.copy(start = e0, synced = false, notionSynced = false))
+                else -> out.add(e.copy(start = e0, synced = false))
             }
         }
         val entry = Entry(
@@ -1017,7 +1010,6 @@ class ZasechkaStore(private val context: Context) {
                     start = actualEnd,
                     end = 0L,
                     synced = false,
-                    notionSynced = false,
                     createdAt = System.currentTimeMillis(),
                 )
             )
@@ -1061,7 +1053,7 @@ class ZasechkaStore(private val context: Context) {
         val index = entries.indexOfFirst { it.id == entry.id }
         if (index >= 0) {
             snapshotLocked("правку «${entries[index].title.ifBlank { "без названия" }}»")
-            entries[index] = entry.copy(synced = false, notionSynced = false)
+            entries[index] = entry.copy(synced = false)
             normalizeLocked()
             entries.sortBy { it.start }
             persist()
@@ -1100,7 +1092,7 @@ class ZasechkaStore(private val context: Context) {
         var reopened: Entry? = null
         val i = entries.indexOfFirst { it.id == reopenId }
         if (i >= 0 && entries.none { it.open }) {
-            reopened = entries[i].copy(end = 0L, synced = false, notionSynced = false)
+            reopened = entries[i].copy(end = 0L, synced = false)
             entries[i] = reopened
         }
         normalizeLocked()
@@ -1119,7 +1111,7 @@ class ZasechkaStore(private val context: Context) {
         val i = entries.indexOfFirst { it.id == id }
         if (i < 0 || entries.any { it.open }) return@withLock null
         snapshotLocked("возврат «${entries[i].title.ifBlank { "без названия" }}»")
-        val reopened = entries[i].copy(end = 0L, synced = false, notionSynced = false)
+        val reopened = entries[i].copy(end = 0L, synced = false)
         entries[i] = reopened
         normalizeLocked()
         persist()
@@ -1141,7 +1133,7 @@ class ZasechkaStore(private val context: Context) {
         val i = entries.indexOfFirst { it.id == saidId }
         if (i < 0 || guess.open || kotlin.math.abs(entries[i].start - guess.end) >= 60_000L) return@withLock null
         snapshotLocked("слияние «${guess.title.ifBlank { "без названия" }}»")
-        val merged = entries[i].copy(start = guess.start, synced = false, notionSynced = false)
+        val merged = entries[i].copy(start = guess.start, synced = false)
         entries[i] = merged
         entries.removeAll { it.id == guessId }
         normalizeLocked()
@@ -1166,7 +1158,7 @@ class ZasechkaStore(private val context: Context) {
         ensureLoaded()
         val index = entries.indexOfFirst { it.id == id }
         if (index < 0) return@withLock false
-        entries[index] = entries[index].copy(raw = raw, synced = false, notionSynced = false)
+        entries[index] = entries[index].copy(raw = raw, synced = false)
         persist()
         true
     }
@@ -1188,7 +1180,7 @@ class ZasechkaStore(private val context: Context) {
         if (index < 0) return@withLock false
         val text = comment.trim()
         if (entries[index].comment == text) return@withLock true
-        entries[index] = entries[index].copy(comment = text, synced = false, notionSynced = false)
+        entries[index] = entries[index].copy(comment = text, synced = false)
         persist()
         true
     }
@@ -1203,7 +1195,7 @@ class ZasechkaStore(private val context: Context) {
         var n = 0
         for (i in entries.indices) {
             if (entries[i].source == from) {
-                entries[i] = entries[i].copy(source = to, synced = false, notionSynced = false)
+                entries[i] = entries[i].copy(source = to, synced = false)
                 n++
             }
         }
@@ -1257,7 +1249,7 @@ class ZasechkaStore(private val context: Context) {
      * от дня НАЧАЛА записи: дело, кончающееся ровно в полночь (а лента режет по
      * полуночи каждое такое), при отсчёте конца от его собственных суток давало
      * минуту 0 и строку длиной −1380 минут. Урок выгрузок, оставшийся в коде
-     * после самих выгрузок: этими минутами живут Notion и книга Excel.
+     * после самих выгрузок: этими минутами живёт книга Excel.
      */
     private fun dayMinutes(start: Long, end: Long): Long {
         val base = dayStartMs(start)
@@ -1614,7 +1606,6 @@ class ZasechkaStore(private val context: Context) {
                         title = "не размечено",
                         category = GAP_CATEGORY,
                         synced = if (e.open || e.end > weekAgo) false else e.synced,
-                        notionSynced = if (e.open || e.end > weekAgo) false else e.notionSynced,
                     )
                 } else e
             }.toMutableList()
@@ -1701,7 +1692,6 @@ class ZasechkaStore(private val context: Context) {
                     synced = o.optBoolean("synced", false),
                     createdAt = o.optLong("createdAt", start),
                     pomodoros = o.optInt("pomodoros", 0),
-                    notionSynced = o.optBoolean("notionSynced", false),
                     comment = o.optString("comment", ""),
                     task = o.optString("task", ""),
                     project = o.optString("project", ""),
@@ -1862,7 +1852,7 @@ class ZasechkaStore(private val context: Context) {
         if (restored.isEmpty()) return@withLock 0
         snapshotLocked("восстановление из $name")
         // Everything goes out to the mirrors again after a restore.
-        entries = restored.map { it.copy(synced = false, notionSynced = false) }.toMutableList()
+        entries = restored.map { it.copy(synced = false) }.toMutableList()
         entries.sortBy { it.start }
         lastId = entries.maxOfOrNull { it.id } ?: lastId
         normalizeLocked()
@@ -1922,7 +1912,6 @@ class ZasechkaStore(private val context: Context) {
                             put("synced", e.synced)
                             put("createdAt", e.createdAt)
                             if (e.pomodoros > 0) put("pomodoros", e.pomodoros)
-                            put("notionSynced", e.notionSynced)
                             // Как pomodoros: пишется только когда есть, старый
                             // файл читается без миграции.
                             if (e.comment.isNotBlank()) put("comment", e.comment)

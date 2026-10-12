@@ -120,6 +120,8 @@ class PravkaApp : Application() {
         // облачный движок главным, а лежащее в DataStore старое «офлайн»
         // сильнее нового заводского.
         appScope.launch { runCatching { settings.migrateSpeechToNetwork() } }
+        // Снятые интеграции (12.10.2026: Notion) — их ключи и токены из базы.
+        appScope.launch { runCatching { settings.dropRetiredLinks() } }
         // Тень снята (18.09.2026; владелец: «убери эту тень, она снова запустилась
         // и ест деньги»): её прогоны, застрявшие активными, закрываются, движка
         // больше нет. Затем — ревизия батчей у Anthropic: всё идущее, за чем в
@@ -794,15 +796,10 @@ class PravkaApp : Application() {
 
     // Тело: справочники, журнал силовых, план на день.
     //
-    // Справочник упражнений читается живым из базы Notion (раз в сутки, кэш на
-    // диске), файл в assets — семя и запас без сети: карточка тренировки
-    // открывается каждый день, в том числе в подвале на даче. Рацион — пока
-    // только из assets. Оба собираются из Notion скриптом tools/gen_reference.py.
-    // Паттерны: ночной поиск повторов снят (владелец, 15.09.2026: «паттерны
-    // убираем, и поиск их убираем»). Стор остался — в нём лежат найденные
-    // раньше паттерны и вердикты владельца, их читает синк Notion.
-    val analysisStore by lazy { ru.zf.pravka.data.AnalysisStore(this).also { it.logger = { l -> eventLog.add(l) } } }
-
+    // Справочник упражнений — семя из assets плюс последний живой справочник,
+    // прочитанный из Notion до 12.10.2026 и с тех пор замороженный на диске
+    // (Notion владелец убрал). Рацион — только из assets. Оба файла сборки
+    // собирает скрипт tools/gen_reference.py.
     val exerciseBook by lazy { ru.zf.pravka.data.ExerciseBook(this) }
     val rationBook by lazy { ru.zf.pravka.data.RationBook(this) }
 
@@ -813,66 +810,20 @@ class PravkaApp : Application() {
         }
     }
 
-    // План: скелет дня из календаря intervals, правила блока из Notion.
+    // План: скелет дня из календаря intervals; правила блока заморожены на
+    // последних, что приехали из Notion до 12.10.2026.
     val planStore by lazy { ru.zf.pravka.data.PlanStore(this) }
-    val notionPlanSync by lazy {
-        ru.zf.pravka.data.NotionPlanSync(settings, planStore, httpClient, eventLog)
-    }
-    // Справочник упражнений — живой из базы Notion «Упражнения»; файл сборки
-    // остаётся семенем и запасом без сети или без токена.
-    val notionExerciseSync by lazy {
-        ru.zf.pravka.data.NotionExerciseSync(settings, exerciseBook, httpClient, eventLog)
-    }
-    // Автогалочки в его базу «Дневник» под хабом «Тело» — зарядка, сделано,
-    // feel, колено, вес. Он забросил её тикать руками ровно тогда, когда всё
-    // это стал наговаривать сюда. Второе место записи в Notion — базы
-    // «Правка: разборы» (notionLifeSync ниже).
-    val notionDiarySync by lazy {
-        ru.zf.pravka.data.NotionDiarySync(
-            settings = settings,
-            strengthStore = strengthStore,
-            planStore = planStore,
-            foodStore = foodStore,
-            sportStore = sportStore,
-            client = httpClient,
-            eventLog = eventLog,
-            owner = { profileStore.current.let { it == null || it.owner } },
-        )
-    }
-    // Вся жизнь в Notion раз в час — лента, еда, тренировки, силовые,
-    // зарядка, дни с телефоном, справочник, паттерны и подтверждения — в
-    // базы под хабом «Правка: разборы». Структура баз описана в
-    // core/NotionLifeSchema и достраивается приложением само. Владелец:
-    // «чтобы оттуда можно было всегда взять актуальную структуру жизни».
-    val notionLifeSync by lazy {
-        ru.zf.pravka.data.NotionLifeSync(
-            context = this,
-            settings = settings,
-            rows = lifeRows,
-            analysis = analysisStore,
-            client = httpClient,
-            eventLog = eventLog,
-            provider = claudeProvider,
-            stats = stats,
-        )
-    }
-    // Строки всей жизни по базам — одним сборщиком для Notion и для книги
-    // Excel, чтобы выгрузка и синк не разошлись ни на строку.
+    // Строки всей жизни по листам книги Excel.
     val lifeRows by lazy {
         ru.zf.pravka.data.LifeRows(zasechkaStore, foodStore, sportStore, strengthStore, phoneStore)
     }
-    // Единственная выгрузка: вся жизнь одной книгой xlsx, лист на базу Notion
-    // («Ещё → Выгрузки»). Владелец: «в Excel мне как-то удобнее».
+    // Единственная выгрузка: вся жизнь одной книгой xlsx (значок выгрузки в
+    // «Общей статистике»). Владелец: «в Excel мне как-то удобнее».
     val lifeExport by lazy { ru.zf.pravka.data.LifeExport(this, lifeRows) }
     val planSync by lazy {
         ru.zf.pravka.core.PlanSync(
             icu = icuSportSync,
-            notion = notionPlanSync,
-            exercises = notionExerciseSync,
-            claude = claudeProvider,
             store = planStore,
-            stats = stats,
-            eventLog = eventLog,
         )
     }
     val strengthEngine by lazy {

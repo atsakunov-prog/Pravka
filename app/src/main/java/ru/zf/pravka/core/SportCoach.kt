@@ -49,7 +49,7 @@ class SportCoach(
         // видно и последнюю неделю, и с чем её сравнивать.
         private const val CONTEXT_WORKOUT_DAYS = 21
         private const val CONTEXT_HEALTH_DAYS = 14
-        // Правила прозой: восемь тысяч знаков это две страницы Notion целиком.
+        // Правила прозой: восемь тысяч знаков это две страницы блока целиком.
         // Дороже пары центов на вопрос, и это ровно тот контекст, без которого
         // совет расходится с его собственными записанными правилами.
         private const val CONTEXT_RULES_CHARS = 14_000
@@ -93,7 +93,7 @@ class SportCoach(
                 append("ВОПРОС ПРО КОНКРЕТНОЕ УПРАЖНЕНИЕ\n")
                 if (planLine.isNotBlank()) append("Сегодня в плане: ").append(planLine).append('\n')
                 if (exercise != null) {
-                    append("Карточка из его справочника (собран из его Notion):\n")
+                    append("Карточка из его справочника:\n")
                     append("Название: ").append(exercise.name).append('\n')
                     if (exercise.scheme.isNotBlank()) append("Схема: ").append(exercise.scheme).append('\n')
                     if (exercise.gear.isNotEmpty()) {
@@ -363,7 +363,7 @@ class SportCoach(
     }
 
     /**
-     * Срез правил для лёгкого тренера: раздел текущей недели из Notion
+     * Срез правил для лёгкого тренера: раздел текущей недели со страницы блока
      * (спина-протокол с запретами и заменами), а если его нет — ключевые числа
      * одной строкой. Полная телеметрия сюда нарочно не едет.
      */
@@ -474,7 +474,8 @@ class SportCoach(
     }
 
     /**
-     * План на неделю вперёд и ЕГО СОБСТВЕННЫЕ ПРАВИЛА из Notion.
+     * План на неделю вперёд и ЕГО СОБСТВЕННЫЕ ПРАВИЛА — последние, что приехали
+     * со страницы блока в Notion до 12.10.2026 (с тех пор заморожены).
      *
      * Без этого блока совет получался общемедицинским: «стоит ли сегодня
      * бежать» — вопрос не про физиологию вообще, а про то, что у него потолок
@@ -500,7 +501,7 @@ class SportCoach(
         }
         val rules = runCatching { planStore.rulesFlow.value }.getOrNull() ?: return
         if (!rules.known && rules.sourceText.isBlank()) return
-        append("ЕГО ПРАВИЛА (страница блока в Notion, правит руками)\n")
+        append("ЕГО ПРАВИЛА (страница блока, записал сам; последняя сохранённая версия)\n")
         if (rules.blockTitle.isNotBlank()) append("Блок: ${rules.blockTitle}\n")
         if (rules.runHrCeiling > 0) append("Потолок лёгкого бега ${rules.runHrCeiling}. ")
         if (rules.greyZoneLow > 0 && rules.greyZoneHigh > 0) {

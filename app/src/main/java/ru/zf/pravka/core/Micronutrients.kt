@@ -70,7 +70,7 @@ object Micronutrients {
     /** Светофор полоски: мало · средне · достаточно · перебор. */
     enum class Level { LOW, MID, OK, OVER }
 
-    /** Светофор словами — одинаково на экране, в Notion и в книге Excel. */
+    /** Светофор словами — одинаково на экране и в книге Excel. */
     fun word(level: Level): String = when (level) {
         Level.LOW -> "мало"
         Level.MID -> "средне"

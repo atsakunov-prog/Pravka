@@ -59,8 +59,8 @@ import ru.zf.pravka.ui.fadingScroll
 // Настройки — пять полок (24.09.2026, «второе издание»).
 //
 // До этого было восемь гармошек подряд, и рукоятки лежали по логике «в
-// каком файле их написали»: ключ Notion — в «Теле», intervals.icu — в
-// «Засечке», тумблер кнопки «Д» — вообще во вкладке. Теперь по тому, что
+// каком файле их написали»: ключ intervals.icu — в «Засечке», тумблер
+// кнопки «Д» — вообще во вкладке. Теперь по тому, что
 // ищешь:
 //   · Режимы — как ведёт себя Правка, Засечка, Дела, Спорт, Еда, Деньги;
 //   · Голос и Claude — микрофон, распознавание, модели;
@@ -113,7 +113,6 @@ internal enum class SettingsGroup(
     ANTHROPIC("Anthropic", "ключ API", SettingsShelf.LINKS, { Glyphs.Key }),
     DELA_SERVER("Дела", "свой сервер дел, QR, выбор Todoist / Дела", SettingsShelf.LINKS, { Glyphs.Delo }, ModeDecor.DELA),
     TODOIST("Todoist", "запасная дорога дел", SettingsShelf.LINKS, { Glyphs.Delo }, ModeDecor.DELA),
-    NOTION("Notion", "план, Дневник, «Вся жизнь»", SettingsShelf.LINKS, { Glyphs.Scroll }),
     INTERVALS("intervals.icu", "тренировки, сон, вес", SettingsShelf.LINKS, { Glyphs.Activity }, ModeDecor.SPORT),
     SHEETS("Google Sheets", "таймшит из ленты", SettingsShelf.LINKS, { Glyphs.ListLines }, ModeDecor.ZASECHKA),
     CLOUD("Облако семьи", "домашний сервер: общие Деньги, копии базы", SettingsShelf.LINKS, { Glyphs.Cloud }),
@@ -276,15 +275,6 @@ private fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
                 st.lastError.isNotBlank() && st.lastErrorAt >= st.lastOk -> GroupStatus("ошибка", ok = false, dot = true)
                 !onServer -> GroupStatus("подключено · Todoist")
                 else -> GroupStatus("подключено", ok = true, dot = true)
-            }
-        }
-        SettingsGroup.NOTION -> {
-            val token by s.notionTokenFlow.collectAsState(initial = "")
-            val err = remember(token) { app.notionPlanSync.lastError() }
-            when {
-                token.isBlank() -> keyStatus(false)
-                err.isNotBlank() -> GroupStatus("ошибка", ok = false, dot = true)
-                else -> keyStatus(true)
             }
         }
         SettingsGroup.INTERVALS -> {
@@ -518,7 +508,6 @@ private fun GroupContent(
         SettingsGroup.ANTHROPIC -> AnthropicSettings(app)
         SettingsGroup.TODOIST -> TodoistSettings(app)
         SettingsGroup.DELA_SERVER -> DelaServerSettings(app)
-        SettingsGroup.NOTION -> NotionSettings(app)
         SettingsGroup.INTERVALS -> IntervalsSettings(app)
         SettingsGroup.SHEETS -> ZasechkaSheetsSettings(app)
         SettingsGroup.CLOUD -> FamilyCloudSettings(app)

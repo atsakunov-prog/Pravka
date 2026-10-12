@@ -1,74 +1,48 @@
 package ru.zf.pravka.core
 
-import ru.zf.pravka.data.EventLog
 import ru.zf.pravka.data.IcuSportSync
-import ru.zf.pravka.data.NotionExerciseSync
-import ru.zf.pravka.data.NotionPlanSync
 import ru.zf.pravka.data.PlanStore
-import ru.zf.pravka.data.Stats
-import ru.zf.pravka.provider.ClaudeProvider
-import ru.zf.pravka.provider.extractRules
 
-// Сборка плана из двух источников — ровно так, как владелец их разделил сам:
-// «Notion — оперативка и знания, intervals.icu — календарь и факт».
+// План дня — из календаря intervals: сессия, тип, длительность, нагрузка и
+// нумерованный список упражнений в описании. Структура, ключ уже есть, кэш
+// офлайн тривиален.
 //
-//   СКЕЛЕТ приезжает из календаря intervals: сессия, тип, длительность,
-//   нагрузка и нумерованный список упражнений в описании. Структура, ключ уже
-//   есть, кэш офлайн тривиален.
+// До 12.10.2026 у плана было ещё два источника в Notion: ПРАВИЛА блока
+// (потолок пульса, каденс, серая зона, светофор колена — Сонет вынимал числа
+// из прозы раз в сутки) и СПРАВОЧНИК упражнений. Владелец убрал Notion («я
+// ничего с ним не делаю»): правила и справочник заморожены на последнем
+// полученном — `PlanStore` и `ExerciseBook` читают их с диска как раньше,
+// светофор и тренер работают на них же, просто они больше не обновляются.
 //
-//   ПРАВИЛА приезжают со страницы блока в Notion: потолок пульса, каденс,
-//   серая зона, лимит пробежек, светофор колена. Их владелец правит руками, и
-//   они прозой — поэтому страница читается раз в сутки, а числа из неё вынимает
-//   Сонет одним вызовом.
-//
-//   СПРАВОЧНИК упражнений — из базы Notion «Упражнения» под тем же хабом:
-//   строки плана матчатся на него, из него берутся техника и схемы. Читается
-//   тем же проходом, без модели — это просто таблица.
-//
-// Все источники необязательные и независимые: календарь без Notion даёт
-// карточку дня без порогов, Notion без календаря — правила без сессии,
-// справочник без Notion — файл сборки. Падение любого оставляет кэш как был.
+// Падение календаря оставляет кэш как был.
 class PlanSync(
     private val icu: IcuSportSync,
-    private val notion: NotionPlanSync,
-    private val exercises: NotionExerciseSync,
-    private val claude: ClaudeProvider,
     private val store: PlanStore,
-    private val stats: Stats,
-    private val eventLog: EventLog,
 ) {
 
     companion object {
         // Календарь — раз в сутки, по слову владельца: «правлю план в чате —
         // сам и обновлю». Кнопка «Обновить» идёт в сеть сразу, фон не суетится.
         private const val EVENTS_PERIOD_MS = 24 * 3_600_000L
-        // Правила — раз в сутки. Страница блока меняется раз в месяц.
-        private const val RULES_PERIOD_MS = 24 * 3_600_000L
     }
 
     @Volatile private var lastEvents = 0L
-    @Volatile private var lastRules = 0L
     @Volatile private var lastError = ""
 
     fun lastError(): String = lastError
 
     data class Outcome(
         val events: Boolean,
-        val rules: Boolean,
         val error: String,
-        val exercises: Boolean = false,
     )
 
     /**
-     * Только календарь, и только если он старше суток. Владелец сказал прямо:
-     * «поменял план в чате — сам и обновлю» (кнопкой), а фоновая суета при
-     * каждом открытии вкладки ему не нужна. Правила Notion не трогаем: их
-     * чтение стоит вызова Сонета. Справочник — дешёвая таблица, у него свой
-     * суточный таймер по возрасту кэша: свежий — ни одного запроса.
+     * Только если календарь старше суток. Владелец сказал прямо: «поменял
+     * план в чате — сам и обновлю» (кнопкой), а фоновая суета при каждом
+     * открытии вкладки ему не нужна.
      */
     suspend fun refreshEventsIfStale(maxAgeMs: Long = 24 * 3_600_000L): Boolean {
         store.load()
-        runCatching { exercises.refresh() }
         val age = System.currentTimeMillis() - store.eventsFetchedAt()
         if (age < maxAgeMs) return false
         val ok = runCatching { icu.refreshPlan(store) }.getOrDefault(false)
@@ -77,14 +51,13 @@ class PlanSync(
     }
 
     /**
-     * Обновить план. [force] — владелец сам потянул экран: идём в оба источника,
-     * не глядя на таймеры.
+     * Обновить план. [force] — владелец сам потянул экран: идём в календарь,
+     * не глядя на таймер.
      */
     suspend fun refresh(force: Boolean = false): Outcome {
         val now = System.currentTimeMillis()
         store.load()
         var events = false
-        var rules = false
         val errors = mutableListOf<String>()
 
         if (force || now - lastEvents > EVENTS_PERIOD_MS) {
@@ -96,78 +69,7 @@ class PlanSync(
             else if (icu.lastError().isNotBlank()) errors.add(icu.lastError())
         }
 
-        if (force || now - lastRules > RULES_PERIOD_MS) {
-            rules = runCatching { refreshRules(force) }.getOrElse { e ->
-                errors.add("правила: ${e.message ?: e.javaClass.simpleName}")
-                false
-            }
-            if (rules) lastRules = now
-            else if (notion.lastError().isNotBlank()) errors.add(notion.lastError())
-        }
-
-        // Справочник упражнений — той же кнопкой и тем же суточным ритмом.
-        // Без токена он молчит (справочник тогда из файла сборки), и жалоба
-        // на токен уже есть от правил — вторую не добавляем.
-        val exercisesOk = runCatching { exercises.refresh(force) }.getOrElse { e ->
-            errors.add("справочник: ${e.message ?: e.javaClass.simpleName}")
-            false
-        }
-        if (!exercisesOk && force) {
-            val why = exercises.lastError()
-            if (why.isNotBlank() && !why.startsWith("Токен")) errors.add(why)
-        }
-
         lastError = errors.joinToString("; ")
-        return Outcome(events, rules, lastError, exercisesOk)
-    }
-
-    /**
-     * Прочитать правила и вынуть из них числа. Текст страниц кладём целиком:
-     * числа идут в светофор, а проза — в вопрос тренеру, где объясняет ПОЧЕМУ.
-     */
-    private suspend fun refreshRules(force: Boolean): Boolean {
-        val page = notion.fetchBlockPage(force) ?: return false
-        val parsed = claude.extractRules(page.text).getOrElse { e ->
-            // Правила не разобрались — но текст страницы всё равно ценен:
-            // он уезжает в контекст вопроса тренеру прозой, как есть.
-            eventLog.add("план: правила не разобрались — ${e.message}")
-            store.setRules(
-                store.rulesFlow.value.copy(
-                    blockTitle = page.title,
-                    sourceText = page.text,
-                    pageId = page.pageId,
-                    fetchedAt = System.currentTimeMillis(),
-                )
-            )
-            return true
-        }
-        runCatching { stats.recordAux(parsed.costUsd, parsed.tokensIn, parsed.tokensOut, route = ru.zf.pravka.data.ModelRoute.BODY_LIGHT.key) }
-        store.setRules(
-            PlanStore.Rules(
-                blockTitle = page.title,
-                runHrCeiling = parsed.hrCeiling,
-                greyZoneLow = parsed.greyLow,
-                greyZoneHigh = parsed.greyHigh,
-                cadenceMin = parsed.cadence,
-                runsPerWeekMax = parsed.runsMax,
-                hoursBetweenRuns = parsed.hoursBetween,
-                rampNeedsPositiveTsb = parsed.rampNeedsPositiveTsb,
-                testPrep = parsed.testPrep,
-                cancelOrder = parsed.cancel,
-                kneeGreen = parsed.kneeGreen,
-                kneeYellow = parsed.kneeYellow,
-                kneeRed = parsed.kneeRed,
-                weekPlan = parsed.week,
-                extra = parsed.extra,
-                sourceText = page.text,
-                fetchedAt = System.currentTimeMillis(),
-                pageId = page.pageId,
-            )
-        )
-        eventLog.add(
-            "план: правила блока «${page.title}» — потолок ${parsed.hrCeiling}, " +
-                "каденс ${parsed.cadence}, пробежек ${parsed.runsMax}"
-        )
-        return true
+        return Outcome(events, lastError)
     }
 }

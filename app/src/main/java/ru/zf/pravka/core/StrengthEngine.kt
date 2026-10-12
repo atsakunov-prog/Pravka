@@ -514,7 +514,7 @@ class StrengthEngine(
         val charger = runCatching { planStore.chargerOf(date) }.getOrNull() ?: return emptyList()
         // Тот же разбор строки, что у чек-листа во вкладке (PlanLine): иначе
         // id и дозы разошлись бы, и галочки не находили бы своих строк.
-        // Имя — каноническое из справочника (он собран из Notion), а не
+        // Имя — каноническое из справочника, а не
         // сокращение из строки события: владелец просил имена «как в
         // ноушене». Не узнали движение — остаётся его же текст.
         return PlanLine.parseAll(charger.plannedLines(), book, suffix = "-z").map { line ->

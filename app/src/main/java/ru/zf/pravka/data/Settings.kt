@@ -91,7 +91,6 @@ class Settings(private val context: Context) {
         private val KEY_MIGRATED_OPUS_55 = booleanPreferencesKey("migrated_opus_5_5")
         private val KEY_MIGRATED_PRAVKA_SONNET_55 = booleanPreferencesKey("migrated_pravka_sonnet_5_5")
         private val KEY_MIGRATED_SPEECH_NET = booleanPreferencesKey("migrated_speech_network_1")
-        private val KEY_PLAN_RULES_LAST_RUN = longPreferencesKey("plan_rules_last_run")
         // Когда служба последний раз перезапускала сама себя из-за невидимых окон (OverlayWatch).
         private val KEY_OVERLAY_RESTART_AT = longPreferencesKey("overlay_restart_at")
         private val KEY_DEBUG_LOG = booleanPreferencesKey("debug_log")
@@ -165,10 +164,6 @@ class Settings(private val context: Context) {
         private val KEY_FOOD_TO_ICU = booleanPreferencesKey("food_to_icu")
         private val KEY_FOOD_TO_RIBBON = booleanPreferencesKey("food_to_ribbon")
 
-        // Notion: правила блока читаются оттуда — владелец их там правит.
-        // Справочник упражнений НЕ отсюда: он статическим файлом в assets.
-        private val KEY_NOTION_TOKEN = stringPreferencesKey("notion_token")
-        private val KEY_NOTION_HUB = stringPreferencesKey("notion_hub_page")
         // Тело: кнопка «Т» и таймер отдыха между подходами.
         private val KEY_T_ENABLED = booleanPreferencesKey("t_enabled")
         private val KEY_REST_SEC = intPreferencesKey("rest_timer_sec")
@@ -210,9 +205,21 @@ class Settings(private val context: Context) {
         private val KEY_AUTO_BEDTIME = booleanPreferencesKey("auto_bedtime_close")
         /** Заводское дело по подъёму в будни — см. [autoWakeDealFlow]. */
         private val FACTORY_WAKE_DEAL = PlaceDeal("Сборы детей", "Семья")
-        private val KEY_NOTION_DIARY = booleanPreferencesKey("notion_diary_push")
-        private val KEY_NOTION_LIFE = booleanPreferencesKey("notion_life_push")
-        private val KEY_NOTION_LIFE_HUB = stringPreferencesKey("notion_life_hub")
+
+        /**
+         * Ключи снятых интеграций (12.10.2026: Notion). Владелец: «уберём весь
+         * Notion, я ничего с ним не делаю». Токен — секрет, и лежать в базе и в
+         * её копиях без дела ему незачем, поэтому ключи стираются на старте
+         * ([dropRetiredLinks]), а не остаются сиротами.
+         */
+        private val RETIRED_KEYS = listOf(
+            stringPreferencesKey("notion_token"),
+            stringPreferencesKey("notion_hub_page"),
+            booleanPreferencesKey("notion_diary_push"),
+            booleanPreferencesKey("notion_life_push"),
+            stringPreferencesKey("notion_life_hub"),
+            longPreferencesKey("plan_rules_last_run"),
+        )
 
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
@@ -275,11 +282,6 @@ class Settings(private val context: Context) {
         const val REST_SEC_DEFAULT = 90
         // Цель веса из его же дорожной карты: «было 93, цель 80».
         const val GOAL_WEIGHT_DEFAULT = 80
-
-        // Страница-хаб «Тело: велоформа и сила» в Notion. Приложение само
-        // находит под ней самую свежую страницу «Блок …» — так новый блок
-        // подхватывается без правки настроек.
-        const val NOTION_HUB_DEFAULT = "3a8c4ffca2d58181a09be74696775c3e"
     }
 
     val apiKeyFlow = context.dataStore.data.map { it[KEY_API_KEY] ?: "" }
@@ -601,12 +603,11 @@ class Settings(private val context: Context) {
         }
     }
 
-    // Когда последний раз читались правила блока из Notion — переживает
-    // перезапуск: в день с семью сборками правила перечитывались и разбирались
-    // Опусом семь раз (16.09.2026), потому что метка жила в памяти процесса.
-    suspend fun planRulesLastRun(): Long = context.dataStore.data.map { it[KEY_PLAN_RULES_LAST_RUN] ?: 0L }.first()
-    suspend fun setPlanRulesLastRun(ms: Long) {
-        context.dataStore.edit { it[KEY_PLAN_RULES_LAST_RUN] = ms }
+    /** Стереть ключи снятых интеграций ([RETIRED_KEYS]). Нечего стирать — ничего не пишется. */
+    suspend fun dropRetiredLinks() {
+        context.dataStore.edit { p ->
+            for (key in RETIRED_KEYS) p.remove(key)
+        }
     }
 
     // Самоперезапуск службы из-за окон, которые система не показывает
@@ -1040,26 +1041,6 @@ class Settings(private val context: Context) {
     val mPushTbankFlow: Flow<Boolean?> = context.dataStore.data.map { it[KEY_M_PUSH_TBANK] }
     suspend fun setMPushTbank(value: Boolean) {
         context.dataStore.edit { it[KEY_M_PUSH_TBANK] = value }
-    }
-
-    // ---- Notion: правила блока ----
-
-    /**
-     * Внутренний токен интеграции Notion (ntn_…). Только чтение: приложение
-     * берёт оттуда правила блока и ничего туда не пишет.
-     */
-    val notionTokenFlow = context.dataStore.data.map { it[KEY_NOTION_TOKEN] ?: "" }
-    suspend fun notionToken(): String = notionTokenFlow.first()
-    suspend fun setNotionToken(value: String) {
-        context.dataStore.edit { it[KEY_NOTION_TOKEN] = value.trim() }
-    }
-
-    val notionHubFlow = context.dataStore.data.map { it[KEY_NOTION_HUB] ?: NOTION_HUB_DEFAULT }
-    suspend fun notionHub(): String = notionHubFlow.first()
-    suspend fun setNotionHub(value: String) {
-        context.dataStore.edit {
-            it[KEY_NOTION_HUB] = value.trim().ifEmpty { NOTION_HUB_DEFAULT }
-        }
     }
 
     // ---- Тело: силовые, зарядка, GTG ----
@@ -1534,32 +1515,6 @@ class Settings(private val context: Context) {
     suspend fun sportNotify(): Boolean = sportNotifyFlow.first()
     suspend fun setSportNotify(value: Boolean) {
         context.dataStore.edit { it[KEY_SPORT_NOTIFY] = value }
-    }
-
-    /** Автогалочки в базу «Дневник» Notion: зарядка, сделано, feel, колено, вес. */
-    val notionDiaryFlow = context.dataStore.data.map { it[KEY_NOTION_DIARY] ?: true }
-    suspend fun notionDiary(): Boolean = notionDiaryFlow.first()
-    suspend fun setNotionDiary(value: Boolean) {
-        context.dataStore.edit { it[KEY_NOTION_DIARY] = value }
-    }
-
-    /**
-     * Вся жизнь в Notion раз в час: лента, еда, тренировки, силовые, зарядка,
-     * дни, паттерны с подтверждениями. Владелец: «чтобы я не выгружал csv».
-     */
-    val notionLifeFlow = context.dataStore.data.map { it[KEY_NOTION_LIFE] ?: true }
-    suspend fun notionLife(): Boolean = notionLifeFlow.first()
-    suspend fun setNotionLife(value: Boolean) {
-        context.dataStore.edit { it[KEY_NOTION_LIFE] = value }
-    }
-
-    /** Хаб «Правка: разборы» — под ним приложение ищет свои базы по названиям. */
-    val notionLifeHubFlow = context.dataStore.data.map {
-        it[KEY_NOTION_LIFE_HUB]?.ifBlank { null } ?: NotionLifeSync.HUB_DEFAULT
-    }
-    suspend fun notionLifeHub(): String = notionLifeHubFlow.first()
-    suspend fun setNotionLifeHub(value: String) {
-        context.dataStore.edit { it[KEY_NOTION_LIFE_HUB] = value.trim() }
     }
 
     // ---- Спорт (вкладка на кэше intervals.icu) ----

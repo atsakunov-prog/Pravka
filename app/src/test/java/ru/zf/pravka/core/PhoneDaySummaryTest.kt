@@ -89,8 +89,8 @@ class PhoneDaySummaryTest {
     }
 
     @Test
-    fun `для Notion - три приложения, экран, звонки и собеседники строкой`() {
-        val n = PhoneDaySummary.forNotion(day, labels, tracked)
+    fun `для книги - три приложения, экран, звонки и собеседники строкой`() {
+        val n = PhoneDaySummary.forBook(day, labels, tracked)
         assertEquals(47L, n.youtubeMin)
         assertEquals(32L, n.telegramMin)
         assertEquals(70L, n.claudeMin)

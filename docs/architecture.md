@@ -69,13 +69,13 @@
 | **pravka** | `ProofreadEngine`, кнопка «П», `target/*`, вкладки Словарь/Промпты/Расшифровки/Обучение | core |
 | **zasechka** | `ZasechkaStore/Engine/Sync/Corrections`, кнопка «З», автопилот, NFC, `PhoneSweeper`, `IcuSweeper`, `StackHandleController` | core |
 | **dela** | сервер Дел (копия, очередь, вкладка), Todoist, Разноска, кнопка «Д» | core, zasechka (запуск дела в ленте) |
-| **body** | спорт, силовые, зарядка, план (`PlanStore/PlanSync/PlanLine`), intervals, Notion (план, справочник, Дневник), еда, кнопка «Т» | core, zasechka (только `annotate`, `insertInterruption`, `coveredByOwner`) |
-| **razbory** | `AnalysisBuilder/Engine/Store`, `DigestBuilder`, `NotionLifeSync`, вкладка Паттерны; Общая статистика (`ReportTab`, `core/LifeStats`, `ui/LifeCharts`) | все сторы, только чтение |
+| **body** | спорт, силовые, зарядка, план (`PlanStore/PlanSync/PlanLine`), справочник (`ExerciseBook`), intervals, еда, кнопка «Т» | core, zasechka (только `annotate`, `insertInterruption`, `coveredByOwner`) |
+| **razbory** | книга Excel «Вся жизнь» (`LifeSchema`, `LifeRows`, `LifeXlsx`, `LifeExport`); Общая статистика (`ReportTab`, `core/LifeStats`, `ui/LifeCharts`) | все сторы, только чтение |
 | **app** | `PravkaApp` (локатор), `MainActivity`, `SettingsTab`, служба и `Service*.kt`, `Updates` | все |
 
 Правило зависимостей: режим зависит от core и от узкого интерфейса ленты, но не
-от другого режима целиком. Разборы читают всех и не пишут ни в кого, кроме
-Notion.
+от другого режима целиком. Разборы читают всех и не пишут ни в кого (синк
+в Notion снят 12.10.2026).
 
 ## Что дальше: Gradle-модули
 

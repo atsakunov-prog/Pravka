@@ -52,7 +52,10 @@ internal object Backups {
         // зарядки, которой сорок дней, а восстановить её нечем.
         "strength.json",
         // Кэши сюда НЕ идут: sport.json отрастает из intervals.icu сам,
-        // plan.json — из календаря и Notion.
+        // календарь в plan.json — тоже. Правила блока в plan.json и последний
+        // живой справочник (exercises_live.json) после снятия Notion
+        // (12.10.2026) не отрастают, но и не меняются — им хватает суточной
+        // копии базы (DailyBackup), а оригинал правил остался на странице блока.
     )
 
     private const val DIR = "backups"
