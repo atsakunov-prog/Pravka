@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime as dt
+
 import psycopg
 import pytest
 
@@ -43,6 +45,14 @@ def task(url, user, title, **kw):
         keys = ", ".join(cols)
         marks = ", ".join(["%s"] * len(cols))
         return c.execute(f"INSERT INTO tasks.tasks ({keys}) VALUES ({marks}) RETURNING id, num, rev, seq", list(cols.values())).fetchone()
+
+
+def db_today(url) -> dt.date:
+    """«Сегодня», как его считает сервер: crm.today(), по Москве. Не dt.date.today(): часы машины
+    тестов в облаке идут по UTC, и с 21:00 до полуночи UTC у Python ещё вчера, а база уже живёт
+    следующим днём — девять тестов Дел падали так каждую ночь (12.10.2026)."""
+    with dela_db.session(url, "system", "test") as c:
+        return c.execute("SELECT crm.today() AS d").fetchone()["d"]
 
 
 def test_migrate_again_is_harmless(dela, cfg):
@@ -196,8 +206,6 @@ def test_life_tasks_for_claude_shows_only_owner_view(dela, cfg):
 
 def test_day_tool_shows_dela_done_created_and_timeline(dela, cfg):
     """«Что у меня было» в чате: сутки архива видят и работу — сделанное, заведённое, контакты."""
-    import datetime as dt
-
     from pravka_archive import tools
     from pravka_dela import store
 
@@ -210,7 +218,7 @@ def test_day_tool_shows_dela_done_created_and_timeline(dela, cfg):
         {"op": "task.create", "task": {"title": "Иван: прислать модель", "source": "meeting"}},
         {"op": "interaction.add", "data": {"at": dt.datetime.now(dt.timezone.utc).isoformat(), "kind": "call", "person_ids": [str(who)],
                                            "summary": "Обсудили акт и оплату", "project_id": str(p), "source": "web"}})
-    today = dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).date().isoformat()
+    today = db_today(dela).isoformat()
     out = tools.day(cfg, today)
     assert "Дела: сделано 1, заведено 2:" in out
     assert f"сделано #{a['num']} Закрыть акт · Стаффджет" in out

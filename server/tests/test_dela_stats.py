@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 
 from pravka_dela import stats, store
-from test_dela_schema import dela  # noqa: F401
+from test_dela_schema import db_today, dela  # noqa: F401
 
 
 def test_streak_saturday_does_not_break_and_today_is_not_over():
@@ -21,7 +21,7 @@ def test_streak_saturday_does_not_break_and_today_is_not_over():
 
 def test_points_promised_cancel_triage_and_undo(dela):
     run = lambda *o: store.apply_ops(dela, "sasha", list(o), "web")["results"]  # noqa: E731
-    today = dt.date.today()
+    today = db_today(dela)
     mk = lambda title, **kw: run({"op": "task.create", "task": {"title": title, **kw}})[0]["task"]  # noqa: E731
     a = mk("Обещанное на сегодня", due_date=today.isoformat())
     b = mk("Без срока")

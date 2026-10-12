@@ -13,7 +13,7 @@ from starlette.testclient import TestClient
 from pravka_dela import api, ask, parse, store, tokens
 from pravka_dela.config import Config
 from test_dela_parse import _people
-from test_dela_schema import dela, project  # noqa: F401
+from test_dela_schema import db_today, dela, project  # noqa: F401
 
 
 def item(num, **kw):
@@ -32,7 +32,7 @@ def test_ask_edits_tasks_on_screen(dela):
     _people(dela)
     with parse.db.session(dela, "system", "test") as c:
         c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Наталья Ш', 'Наташа', 'sasha')")
-    today = dt.date.today()
+    today = db_today(dela)
     late = (today - dt.timedelta(days=3)).isoformat()
     a = mk(dela, "Бюджет на квартал", due_date=late, project_id=str(p))
     b = mk(dela, "Смета по ремонту", due_date=late)
@@ -146,7 +146,7 @@ def test_ask_decides_suggestions_on_new_page(dela):
     _people(dela)
     with parse.db.session(dela, "system", "test") as c:
         c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Наталья Ш', 'Наташа', 'sasha')")
-    today = dt.date.today()
+    today = db_today(dela)
     later, friday = (today + dt.timedelta(days=3)).isoformat(), (today + dt.timedelta(days=4)).isoformat()
     week = (today + dt.timedelta(days=7)).isoformat()
     act = mk(dela, "Акт сверки")

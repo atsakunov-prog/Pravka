@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from pravka_dela import ask, crm, stats, store  # noqa: F401  (crm и stats регистрируют свои виды в store.VIEWS)
-from test_dela_schema import dela, project  # noqa: F401
+from test_dela_schema import db_today, dela, project  # noqa: F401
 
 ROOT = Path(__file__).resolve().parents[1] / "contract"
 TWO = json.loads((ROOT / "dela-crm.json").read_text(encoding="utf-8"))
@@ -49,7 +49,7 @@ def test_contract_examples_match_server(dela):
     """Те же виды на временной базе с клиентом, сделкой, оплатой, хронологией и днём рождения."""
     run = lambda *o: store.apply_ops(dela, "sasha", list(o), "web")["results"]  # noqa: E731
     p = project(dela, "sasha", "Бета Групп")
-    today = dt.date.today()
+    today = db_today(dela)
     soon = today + dt.timedelta(days=5)
     person = run({"op": "person.create", "data": {"name": "Иван Петров", "short": "Иван", "cadence": "month", "hub": True,
                                                   "birth_day": soon.day, "birth_month": soon.month}})[0]["row"]

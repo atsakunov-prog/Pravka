@@ -8,7 +8,7 @@ import datetime as dt
 
 from pravka_dela import ask, parse, store
 from test_dela_ask import item, mk
-from test_dela_schema import dela, project  # noqa: F401
+from test_dela_schema import db_today, dela, project  # noqa: F401
 
 
 def ops(url, user, items, via="web"):
@@ -36,7 +36,7 @@ def test_dictations_view_keeps_tasks_and_touches(dela):
     # Потом про дело из наговорки сказал Telegram — дело то же, в наговорке оно остаётся.
     ops(dela, "system", [{"op": "suggestion.create", "suggestion": {
         "for_user": "sasha", "kind": "update", "task_id": fonds["id"], "source": "telegram", "batch_title": "Telegram · сегодня",
-        "quote": "фонды в понедельник", "payload": {"due_date": dt.date.today().isoformat()}}}], via="test")
+        "quote": "фонды в понедельник", "payload": {"due_date": db_today(dela).isoformat()}}}], via="test")
     ops(dela, "sasha", [{"op": "task.done", "id": fonds["id"]}])
 
     v = store.view(dela, "sasha", "dictations")["items"]
@@ -56,7 +56,7 @@ def test_dictations_view_keeps_tasks_and_touches(dela):
 
 def test_seen_hides_auto_closed(dela):
     t = mk(dela, "Продлить лицензию")
-    today = dt.date.today().isoformat()
+    today = db_today(dela).isoformat()
     s = ops(dela, "sasha", [{"op": "suggestion.create", "suggestion": {
         "for_user": "sasha", "kind": "close", "task_id": t["id"], "source": "telegram", "quote": "лицензия продлена",
         "payload": {"meeting_at": today, "auto": True}}}])[0]["suggestion"]
@@ -96,7 +96,7 @@ def cd(do, **kw):
 
 
 def test_now_holds_five(dela):
-    today = dt.date.today().isoformat()
+    today = db_today(dela).isoformat()
     for i in range(4):
         mk(dela, f"Сейчас {i}", focus_on=today)
     a, b = mk(dela, "Пятое"), mk(dela, "Шестое")
@@ -286,7 +286,7 @@ def test_files_and_new_fields(dela):
     r = ops(dela, "sasha", [
         {"op": "deal.set", "id": str(deal), "set": {"folder_url": "https://disk.example/alfa", "files": files, "description": "Тест"}},
         {"op": "project.set", "id": str(p), "set": {"status": "relations", "files": []}},
-        {"op": "payment.create", "data": {"deal_id": str(deal), "kind": "advance", "amount_kop": 100, "invoiced_on": dt.date.today().isoformat(),
+        {"op": "payment.create", "data": {"deal_id": str(deal), "kind": "advance", "amount_kop": 100, "invoiced_on": db_today(dela).isoformat(),
                                           "sent_to": "бухгалтерия", "sent_via": "почта"}}])
     assert all(x["ok"] for x in r), r
     assert r[0]["row"]["files"][1]["kind"] == "other" and r[0]["row"]["folder_url"] == "https://disk.example/alfa"

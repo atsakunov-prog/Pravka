@@ -8,7 +8,7 @@ import uuid
 import pytest
 
 from pravka_dela import store
-from test_dela_schema import dela, project  # noqa: F401  (фикстура и помощник)
+from test_dela_schema import db_today, dela, project  # noqa: F401  (фикстура и помощники)
 
 
 def ops(url, user, *items, via="app"):
@@ -19,7 +19,7 @@ def test_create_set_done_with_short_number(dela):
     r = ops(dela, "sasha", {"op": "task.create", "task": {"title": "Яблоков: ответить на КП", "ball": "waiting"}})[0]
     assert r["ok"], r
     t = r["task"]
-    assert t["waiting_since"] == dt.date.today().isoformat() or t["waiting_since"]
+    assert t["waiting_since"] == db_today(dela).isoformat()
     r = ops(dela, "sasha", {"op": "task.done", "id": f"#{t['num']}"})[0]
     assert r["ok"] and r["task"]["status"] == "done" and r["task"]["completed_at"]
 
@@ -122,7 +122,7 @@ def test_sync_incremental_and_full_on_access_change(dela):
 
 
 def test_morning_and_week_views(dela):
-    today = dt.date.today()
+    today = db_today(dela)
     p = project(dela, "sasha", "Ростислав", money_default="paid")
     ops(
         dela, "sasha",
@@ -199,7 +199,7 @@ def test_close_and_refine_from_meeting_leave_a_trace(dela):
 def test_obvious_close_from_fresh_meeting_closes_itself(dela):
     """Очевидное закрытие по свежей встрече проходит само, с основанием в комментарии.
     Старая встреча, сомнение и дело не самого владельца — по-прежнему в «Новое»."""
-    today = dt.date.today()
+    today = db_today(dela)
     mk_task = lambda title, **kw: ops(dela, "sasha", {"op": "task.create", "task": {"title": title, **kw}})[0]["task"]  # noqa: E731
     fresh, old, unsure = mk_task("Договор с Бетой"), mk_task("Тизер для фондов"), mk_task("Модель Альфы")
 
@@ -224,7 +224,7 @@ def test_refine_from_fresh_meeting_applies_itself_and_goes_back(dela):
     """Уточнение по свежей встрече проходит само (владелец 08.10.2026: «спокойно уточняй»): срок,
     мяч к человеку по имени, подробности — комментарием. В ответе — как было и id комментария,
     ими «Вернуть» возвращает дело. Неузнанный человек, старая встреча, без auto — ждут в «Новом»."""
-    today = dt.date.today()
+    today = db_today(dela)
     with store.db.session(dela, "system", "t") as c:
         c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Ольга Смирнова', 'Ольга', 'sasha')")
     mk_task = lambda title, **kw: ops(dela, "sasha", {"op": "task.create", "task": {"title": title, **kw}})[0]["task"]  # noqa: E731
@@ -265,7 +265,7 @@ def test_sure_new_task_from_fresh_meeting_is_created_itself(dela):
     заведённое само нет — разбирал не человек."""
     from pravka_dela import stats
 
-    today = dt.date.today()
+    today = db_today(dela)
     project(dela, "sasha", "Бета Групп")
     with store.db.session(dela, "system", "t") as c:
         c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Ольга Смирнова', 'Ольга', 'sasha')")
@@ -412,7 +412,7 @@ def test_three_groups_and_today(dela):
     ball «owed» — так группу называет автоматика; в базе это mine и флаг owed (телефон до своего задания
     видит такое дело своим «моё»). Мяч ушёл к человеку — флаг гаснет сам; телефонное «моё» его не роняет.
     «Сегодня» — срок сегодня или прошёл, «ждут от меня» без срока, «проверить», где пора напомнить."""
-    today = dt.date.today()
+    today = db_today(dela)
     yday, tmrw = today - dt.timedelta(days=1), today + dt.timedelta(days=1)
     with store.db.session(dela, "system", "t") as c:
         pid = c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Евгений Гуркин', 'Гуркин', 'sasha') "

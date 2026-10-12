@@ -10,7 +10,7 @@ import pytest
 
 from pravka_dela import crm, store
 from pravka_dela import db as dela_db
-from test_dela_schema import as_, dela, project, task  # noqa: F401  (фикстура и помощники)
+from test_dela_schema import as_, db_today, dela, project, task  # noqa: F401  (фикстура и помощники)
 
 
 def ops(url, user, *items, via="web"):
@@ -119,7 +119,7 @@ def test_pipeline_weights_and_money_totals(dela):
     lead = deal(dela, "sasha", p, "Альфа: лид", fee_kop=100_000_00)
     signed = deal(dela, "sasha", p, "Альфа: мандат", fee_kop=500_000_00, stage="mandate")
     task(dela, "sasha", "Альфа: счёт на аванс", project_id=p, deal_id=signed["id"])
-    today = dt.date.today()
+    today = db_today(dela)
     ops(dela, "sasha",
         {"op": "payment.create", "data": {"deal_id": signed["id"], "amount_kop": 200_000_00, "invoiced_on": str(today - dt.timedelta(days=20)),
                                            "due_on": str(today - dt.timedelta(days=5)), "kind": "advance"}},

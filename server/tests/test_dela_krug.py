@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import datetime as dt
-
 import pytest
 
 from pravka_dela import krug, store
 from pravka_dela import db as dela_db
-from test_dela_schema import dela, project  # noqa: F401  (фикстура и помощник)
+from test_dela_schema import db_today, dela, project  # noqa: F401  (фикстура и помощники)
 
 # Выдуманный справочник: настоящий живёт только в Своде владельца.
 DIRS = [
@@ -101,7 +99,7 @@ def test_krug_only_change_reaches_incremental_sync(kr):
 
 def test_today_has_mine_and_principle(kr):
     goal = mk(kr, title="Уверенно считает до 20", directions=["Образование"])
-    step = mk(kr, title="Распечатать столбики", why_id=goal["id"], due_date=dt.date.today().isoformat())
+    step = mk(kr, title="Распечатать столбики", why_id=goal["id"], due_date=db_today(kr).isoformat())
     mk(kr, title="Ответить Гуркину", ball="owed", why_id=goal["id"])  # ждут от меня — не «Моё»
     pinned = mk(kr, title="Смонтировать ролик", want=True)
     v = store.view(kr, "sasha", "today")

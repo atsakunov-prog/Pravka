@@ -14,7 +14,7 @@ from starlette.testclient import TestClient
 
 from pravka_dela import api, importer, mcp_tools, tokens
 from pravka_dela.config import Config
-from test_dela_schema import dela, project  # noqa: F401
+from test_dela_schema import db_today, dela, project  # noqa: F401
 
 
 def test_api_token_sync_ops_view(dela):
@@ -45,7 +45,7 @@ def test_mcp_tools_round_trip(dela):
         c.execute("INSERT INTO crm.people (name, short, aliases, owner_id) VALUES ('Иван Петров', 'Иван', '{Ваня}', 'sasha')")
         c.execute("INSERT INTO crm.deals (project_id, name, stage) VALUES (%s, 'Бета: фонды', 'active')", (p,))
     out = mcp_tools.add(dela, title="Иван: прислать модель", project="бета", deal="фонды", person="Ваня", ball="waiting",
-                         due_date=(dt.date.today() + dt.timedelta(days=7)).isoformat())  # срок впереди: проверка «не просрочено»
+                         due_date=(db_today(dela) + dt.timedelta(days=7)).isoformat())  # срок впереди: проверка «не просрочено»
     assert out.startswith("Записал: #") and "Бета Групп / Бета: фонды" in out and "жду Иван" in out, out
     num = out.split("#", 1)[1].split(" ", 1)[0]
     assert "просрочено" not in out

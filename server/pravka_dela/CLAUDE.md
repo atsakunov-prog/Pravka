@@ -210,6 +210,9 @@ Todoist и Notion CRM целиком. Спецификация и причины
 .venv\Scripts\python -m pytest tests          # нужен PRAVKA_TEST_DSN, как у архива
 ```
 
+«Сегодня» в тестах — `db_today(url)` из `tests/test_dela_schema.py` (`crm.today()`, Москва), не
+`dt.date.today()`: часы облака идут по UTC, и с 21:00 до полуночи UTC девять тестов падали (12.10.2026).
+Проверка — прогон с `TZ=UTC0` в это окно.
 Новая операция — в `store.HANDLERS` и тест в `tests/test_dela_store.py`. Новая
 колонка — новым файлом `sql/dela_NNNN.sql`, `dela_0001.sql` после установки не
 меняется.
