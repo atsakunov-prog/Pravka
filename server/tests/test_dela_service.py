@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from starlette.testclient import TestClient
 
 from pravka_dela import api, importer, mcp_tools, tokens
-from pravka_dela.config import Config
+from pravka_dela.config import Config, load
 from test_dela_schema import db_today, dela, project  # noqa: F401
 
 
@@ -275,6 +275,32 @@ def test_web_invite_cookie_and_forgery_guard(dela):
     assert (h["actor"], h["via"]) == ("natasha", "web") and "due_date" not in h["after"]  # пустое в журнал не пишется
     client.post("/auth/logout", headers={"X-Dela": "1"})
     assert client.get("/api/me").status_code == 401
+
+
+def test_look_nav_only_for_owner_and_from_local_settings(dela, tmp_path):
+    """Шапка общего вида Ковчега (13.10.2026): соседние сервисы — из настроек на компе (в репозитории адресов нет),
+    видит их только владелец; команде — одни Дела. Кривые записи настройки пропускаются, а не роняют службу."""
+    env = tmp_path / "dela.env"
+    env.write_text("DELA_DB_URL=" + dela + "\nDELA_PUBLIC_URL=https://dela.example.test\n"
+                   "DELA_NAV=Дом|home|https://home.example.test/; Дела|dela|/ ;Плохой|x y|https://x.test/;"
+                   "Скрипт|film|javascript:alert(1);Без адреса|book\n"
+                   f"DELA_BRAND_ICON={tmp_path / 'brand.svg'}\n", encoding="utf-8")
+    (tmp_path / "brand.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>', encoding="utf-8")
+    cfg = load(str(env))
+    assert cfg.nav == (("Дом", "home", "https://home.example.test/"), ("Дела", "dela", "/"))
+    client = TestClient(api.build(cfg))
+    owner = {"Authorization": "Bearer " + tokens.issue(dela, "sasha", "device", "телефон-шапка")}
+    look = client.get("/api/me", headers=owner).json()["look"]
+    assert [x["url"] for x in look["nav"]] == ["https://home.example.test/", "/"]
+    assert look["domain"] == "example.test" and look["icon"].startswith("data:image/svg+xml;base64,")
+    team = {"Authorization": "Bearer " + tokens.issue(dela, "natasha", "device", "телефон-наташи")}
+    look = client.get("/api/me", headers=team).json()["look"]
+    assert look["nav"] == [] and look["domain"] == "example.test"
+    # Без настройки — только Дела; адрес без родителя (локальная копия) — кука темы на своём адресе.
+    plain = TestClient(api.build(Config(db_url=dela, public_url="http://127.0.0.1:8195")))
+    look = plain.get("/api/me", headers=owner).json()["look"]
+    assert look == {"domain": "", "icon": "", "nav": []}
+    assert plain.get("/static/literata.woff2").status_code == 404 and plain.get("/static/golos.woff2").status_code == 200
 
 
 def test_every_module_compiles_and_cli_parses():

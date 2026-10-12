@@ -12,7 +12,7 @@
 | GET  /health | жив ли |
 | GET  / , /static/… | веб (одна страница) |
 | POST /auth/redeem, /auth/logout | вход по приглашению, выход |
-| GET  /api/me | кто я |
+| GET  /api/me | кто я; look — шапка веба: домен общей куки темы, значок «Ковчега», соседние сервисы (только владельцу) |
 | GET  /api/sync?since=N | всё изменившееся после N (телефон, веб) |
 | POST /api/ops | пачка операций с op_id (офлайн-очередь) |
 | GET  /api/view/<имя> | готовый список: morning, new, waiting, person, quick, now, project, week, search; CRM — pipeline, clients, client, deal (с журналом), dossier, ties, money; «Где мы» — where, where_avatar?device= (where.py); встречи — meetings?sphere&q&project_id&person_id&sort&since&until&archived, meeting?id или ref (meetings.py) |
@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import gzip
 import json
 import logging
@@ -37,6 +38,8 @@ import secrets
 import time
 import uuid
 from importlib import resources
+from pathlib import Path
+from urllib.parse import urlparse
 
 import anyio
 from starlette.applications import Starlette
@@ -66,11 +69,46 @@ STATIC = {
     "style.css": "text/css; charset=utf-8",
     "icon.svg": "image/svg+xml",
     "manifest.webmanifest": "application/manifest+json",
-    # Шрифты Правки 4.0 (OFL): Golos Text и Literata, только латиница и кириллица. Меняются раз в годы —
-    # кэш на месяц, иначе телефон тянул бы 150 КБ при каждом открытии.
+    # Golos Text (OFL), только латиница и кириллица — шрифт общего вида Ковчега (13.10.2026; Literata Правки 4.0
+    # ушла вместе с ним). Свой файл, а не Google Fonts: CSP Дел чужих шрифтов не пускает. Меняется раз в годы —
+    # кэш на месяц, иначе телефон тянул бы 50 КБ при каждом открытии.
     "golos.woff2": "font/woff2",
-    "literata.woff2": "font/woff2",
 }
+BRAND_MAX = 96 * 1024  # значок «Ковчега» уходит в /api/me строкой data: — большой картинке там не место
+
+
+def _cookie_domain(public_url: str) -> str:
+    """Домен общей куки темы (kv-theme): родитель адреса веба — dela.<домен> → <домен>, чтобы выбор темы был
+    общим с соседними сервисами. Сам домен в код не вписан: репозиторий публичный."""
+    host = (urlparse(public_url).hostname or "").lower()
+    parts = host.split(".")
+    if len(parts) < 3 or host.replace(".", "").isdigit() or host.endswith(".localhost"):
+        return ""
+    return ".".join(parts[1:])
+
+
+def _brand_icon(path: str) -> str:
+    """Значок «Ковчега» строкой data: (CSP пускает data: в img-src; новый путь в static — правка сайта-посредника)."""
+    if not path:
+        return ""
+    p = Path(path)
+    kind = {".svg": "image/svg+xml", ".png": "image/png"}.get(p.suffix.lower())
+    try:
+        body = p.read_bytes() if kind else b""
+    except OSError as e:
+        log.warning("значок Ковчега %s не прочитался: %s", path, e)
+        return ""
+    if not body or len(body) > BRAND_MAX:
+        return ""
+    return f"data:{kind};base64,{base64.b64encode(body).decode()}"
+
+
+def _look(cfg: Config) -> tuple[dict, dict]:
+    """Шапка веба (общий вид Ковчега, 13.10.2026): владельцу — соседние сервисы из настроек на компе, команде —
+    только Дела. Это не защита (у каждого сервиса свой вход), а чтобы Наташе и Алёне не мешали чужие ссылки."""
+    base = {"domain": _cookie_domain(cfg.public_url), "icon": _brand_icon(cfg.brand_icon), "nav": []}
+    owner = {**base, "nav": [{"name": n, "icon": i, "url": u} for n, i, u in cfg.nav]}
+    return owner, base
 
 
 
@@ -102,6 +140,7 @@ def _static(name: str) -> Response:
 def build(cfg: Config) -> Starlette:
     url = cfg.db_url
     secure_cookie = not cfg.public_url.startswith("http://")
+    look_owner, look_team = _look(cfg)
 
     async def auth(request: Request) -> tokens.Who | None:
         header = request.headers.get("authorization", "")
@@ -153,7 +192,7 @@ def build(cfg: Config) -> Starlette:
             return _err("нужен вход", 401)
         info = await anyio.to_thread.run_sync(_user_info, url, who.user)
         return _json({"ok": True, "user": who.user, **info, "kind": who.kind, "claude": bool(cfg.anthropic_key),
-                      "features": store.FEATURES})
+                      "features": store.FEATURES, "look": look_owner if info.get("role") == "owner" else look_team})
 
     async def sync(request: Request):
         who = await auth(request)

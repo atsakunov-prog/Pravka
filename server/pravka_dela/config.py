@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -16,6 +17,24 @@ from urllib.parse import urlparse
 from pravka_archive.config import read_env_file
 
 DEFAULT_ENV_FILE = r"C:\ProgramData\ZF-Dela\secrets\dela.env"
+
+_NAV_ICON = re.compile(r"^[a-z][a-zA-Z0-9]{0,23}$")
+_NAV_URL = re.compile(r"^(/|https?://[^\s\"'<>]+)$")
+
+
+def parse_nav(text: str) -> tuple[tuple[str, str, str], ...]:
+    """Сервисы в шапке веба (13.10.2026, общий вид Ковчега): «Название|значок|адрес» через «;». Адреса — только в
+    файле настроек на компе: репозиторий публичный. Адрес «/» — сами Дела (так задаётся их место в ряду).
+    Кривая запись молча пропускается: шапка — не повод не подняться службе."""
+    out = []
+    for part in (text or "").split(";"):
+        bits = [b.strip() for b in part.split("|")]
+        if len(bits) != 3 or not bits[0] or len(bits[0]) > 40:
+            continue
+        name, icon, url = bits
+        if _NAV_ICON.match(icon) and _NAV_URL.match(url):
+            out.append((name, icon, url))
+    return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -32,6 +51,10 @@ class Config:
     # Разбор текста Claude (кнопка рядом с «+»): ключ и xray бота — из России API закрыт.
     anthropic_key: str = ""
     claude_proxy: str = "http://127.0.0.1:11809"
+    # Шапка веба в общем виде Ковчега: соседние сервисы (видит только владелец) и значок «Ковчега» — файл на
+    # компе (картинка семейная, в публичный репозиторий её не кладём). Пусто — в шапке только «Дела».
+    nav: tuple[tuple[str, str, str], ...] = ()
+    brand_icon: str = ""
 
     @property
     def app_role(self) -> str:
@@ -68,4 +91,6 @@ def load(env_file: str | None = None) -> Config:
         todoist_token=get("DELA_TODOIST_TOKEN"),
         anthropic_key=get("ANTHROPIC_API_KEY"),
         claude_proxy=get("DELA_CLAUDE_PROXY", "http://127.0.0.1:11809"),
+        nav=parse_nav(get("DELA_NAV")),
+        brand_icon=get("DELA_BRAND_ICON"),
     )
