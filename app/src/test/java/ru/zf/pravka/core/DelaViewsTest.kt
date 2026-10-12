@@ -236,7 +236,8 @@ class DelaViewsTest {
 
     @Test
     fun `разделы — старые ключи ведут туда, где их дела теперь`() {
-        assertEquals(listOf("today", "new", "all"), DelaViews.View.entries.map { it.key })
+        // «Круг жизни» (12.10.2026) — четвёртым; вкладка видна, только когда Круг включён.
+        assertEquals(listOf("today", "new", "all", "krug"), DelaViews.View.entries.map { it.key })
         for (old in listOf("now", "morning", "upcoming", "waiting", "week", "непонятное")) assertEquals(DelaViews.View.TODAY, DelaViews.View.of(old))
         assertEquals(DelaViews.View.NEW, DelaViews.View.of("inbox"))
     }

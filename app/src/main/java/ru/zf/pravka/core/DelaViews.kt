@@ -36,7 +36,9 @@ object DelaViews {
     enum class View(val key: String, val title: String) {
         TODAY("today", "Сегодня"),
         NEW("new", "Новое"),
-        ALL("all", "Все дела");
+        ALL("all", "Все дела"),
+        /** Круг жизни (12.10.2026): дерево дел от направлений; виден, только когда Круг включён (`DelaKrug.on`). */
+        KRUG("krug", "Круг жизни");
 
         companion object {
             /**
@@ -62,6 +64,8 @@ object DelaViews {
 
     /** Подпись строки дела без проекта — она же кнопка выбора проекта (как в вебе). */
     const val NO_PROJECT = "без проекта"
+    /** Круг жизни: у дела нет направления — ни своего, ни наследованного (разметит разборщик). */
+    const val NO_DIRECTION = "без направления"
 
     /**
      * Группировка списка — выбор над ним, как `groupPicker` веба. «Группы»
@@ -132,7 +136,7 @@ object DelaViews {
         fun of(v: View): Int = when (v) {
             View.TODAY -> today
             View.NEW -> new
-            View.ALL -> 0
+            View.ALL, View.KRUG -> 0
         }
 
         fun hot(v: View): Boolean = v == View.TODAY && todayHot
@@ -499,12 +503,14 @@ object DelaViews {
     // ------------------------------------------------------------ строка
 
     /** Уровень группировки — та же группировка строки: что названо заголовком, строка не повторяет. */
-    fun byOf(lv: DelaGroups.Level): By = when (lv) {
+    /** Уровень — группировка строки (что названо заголовком, строка не повторяет); у направлений своей нет. */
+    fun byOf(lv: DelaGroups.Level): By? = when (lv) {
         DelaGroups.Level.PROJECT -> By.PROJECT
         DelaGroups.Level.GRP -> By.GRP
         DelaGroups.Level.DATE -> By.DATE
         DelaGroups.Level.PERSON -> By.PERSON
         DelaGroups.Level.DEAL -> By.DEAL
+        DelaGroups.Level.DIR -> null
     }
 
     /** Как человек дела назван в строке: короткое имя, иначе полное. */
@@ -551,6 +557,17 @@ object DelaViews {
         DelaGroups.wait(t, who(t, s), today, personGrouped = on(By.PERSON))?.let { out += it.text }
         if (t.estimateMin > 0) out += "${t.estimateMin} м"
         out += t.labels
+        // Круг жизни (12.10.2026, `taskRow` веба): направления дела и «зачем: <цель>»; у цели — сколько шагов.
+        if (s.krugOn) {
+            val dirs = DelaKrug.directions()
+            if (dirs.isNotEmpty()) {
+                val ks = DelaKrug.dirsOf(t, s)
+                if (ks.isNotEmpty()) out += DelaKrug.names(ks, dirs)
+                else if (t.open) out += NO_DIRECTION
+                s.tasks[t.whyId]?.let { g -> out += "зачем: " + if (g.title.length > 34) g.title.take(33) + "…" else g.title }
+                DelaKrug.steps(s, t.id).size.takeIf { it > 0 && t.open }?.let { out += "цель · шагов $it" }
+            }
+        }
         return out.filter { it.isNotBlank() }
     }
 

@@ -64,6 +64,7 @@ import ru.zf.pravka.core.DelaRemind
 import ru.zf.pravka.core.DelaAsk
 import ru.zf.pravka.core.DelaViews
 import ru.zf.pravka.core.DelaGroups
+import ru.zf.pravka.core.DelaKrug
 import ru.zf.pravka.trigger.PravkaAccessibilityService
 import ru.zf.pravka.trigger.finishDelaReason
 import ru.zf.pravka.trigger.listenForDelaReason
@@ -167,6 +168,10 @@ private data class DelaScreen(
     /** «Только одно» по первому уровню (`pickBar` веба): выбор и ветки с числом дел — до выбора. */
     val pick: DelaGroups.Pick? = null,
     val branches: List<DelaGroups.Branch> = emptyList(),
+    /** Круг жизни: принцип дня — строкой под шапкой «Сегодня» и «Круга жизни». */
+    val principle: String = "",
+    /** Круг жизни: отступ строки — шаг к цели под ней (дерево «Зачем»), по id дела. */
+    val indent: Map<String, Int> = emptyMap(),
 ) {
     /** Дела экрана в порядке показа — то, что видит Claude. */
     val ids: List<String> get() = nodes?.let { n -> DelaGroups.flat(n).map { it.id } } ?: groups.flatMap { g -> g.items.map { it.id } }
@@ -280,6 +285,10 @@ fun DelaTab(
     val me = link?.user ?: app.delaStore.me
     val today = LocalDate.now().toString()
     val now = System.currentTimeMillis()
+    // Круг жизни (12.10.2026): справочник — из Свода (едет синком), включён — когда сервер его знает.
+    val krugDirs = DelaKrug.directions()
+    val krugOn = DelaKrug.on(snap, krugDirs)
+    val principle = if (krugOn) DelaKrug.principleOfDay(DelaKrug.principles(), today).orEmpty() else ""
     val running = ribbon.firstOrNull { it.open }
     // CRM — владельцу и тем, кому открыты клиенты; деньги фирмы — владельцу и sees_money.
     val crmOn = Dela.crmOn(snap, me)
@@ -449,19 +458,27 @@ fun DelaTab(
         )
         // «Сегодня» (`renderToday` веба, 10.10.2026): три группы по приоритету — отбить, запустить,
         // мониторить; в каждой выше тот, кому делать раньше и кто дольше ждёт. Пустая группа не видна.
-        view == DelaViews.View.TODAY -> DelaGroups.todayTasks(snap, me, today, sphere).let { every ->
+        view == DelaViews.View.TODAY -> run {
+            // «Моё» (Круг жизни, 12.10.2026, `renderToday` веба): над тремя группами — дела, которые двигают жизнь,
+            // а не ждут чьего-то ответа; иначе они снова проиграют входящим. Его дела в группах не повторяются.
+            val mine = if (krugOn) DelaKrug.mine(snap, me, today, sphere) else emptyList()
+            val mineIds = mine.map { it.id }.toHashSet()
+            DelaGroups.todayTasks(snap, me, today, sphere).filter { it.id !in mineIds } to mine
+        }.let { (every, mine) ->
             val done = DelaGroups.doneToday(snap, me, today)
             val lv = levelsOf("today")
             val pk = picks["today"]?.takeIf { DelaGroups.pickOn(it, lv) }
             val items = DelaGroups.picked(every, lv, pk, snap, today)
+            val mineNode = if (mine.isEmpty()) emptyList() else listOf(DelaGroups.Node("mine", "Моё", 0, null, mine, sub = "никто не ждёт — двигает жизнь"))
             DelaScreen(
                 "Сегодня",
                 listOfNotNull(
                     DelaViews.longDate(today),
-                    "осталось ${items.size}".takeIf { items.isNotEmpty() },
+                    "осталось ${items.size + mine.size}".takeIf { items.size + mine.size > 0 },
                     "закрыто $done".takeIf { done > 0 },
                 ).joinToString(" · "),
-                nodes = DelaGroups.nested(items, lv, snap, today),
+                principle = principle,
+                nodes = mineNode + DelaGroups.nested(items, lv, snap, today),
                 levels = lv, levelKey = "today", saveScope = DelaGroups.Scope.TODAY,
                 pick = pk, branches = lv.firstOrNull()?.let { DelaGroups.branches(every, it, snap, today) }.orEmpty(),
                 empty = if (pk != null) "У «${pk.title}» здесь дел нет." else if (done > 0) "На сегодня всё закрыто." else "На сегодня пусто.",
@@ -479,6 +496,37 @@ fun DelaTab(
                 nodes = DelaGroups.nested(items, lv, snap, today), levels = lv, levelKey = "all", saveScope = DelaGroups.Scope.ALL,
                 pick = pk, branches = lv.firstOrNull()?.let { DelaGroups.branches(every, it, snap, today) }.orEmpty(),
                 done = true, add = true, empty = if (pk != null) "У «${pk.title}» здесь дел нет." else "Пусто.",
+            )
+        }
+        // Круг жизни (`renderKrug` веба): направления по кругу, в каждом — дерево «Зачем» (цели с шагами лесенкой,
+        // потом остальное); внизу — дела без направления: их разметит разборщик или ты сам.
+        view == DelaViews.View.KRUG && krugOn -> {
+            val open = snap.tasks.values.filter { it.open && (me.isBlank() || it.ownerId == me) && Dela.inSphere(it, sphere) }
+            val by = open.groupBy { DelaKrug.dirsOf(it, snap, me).firstOrNull().orEmpty() }
+            val mv = DelaKrug.movement(snap, me, today)
+            val indent = HashMap<String, Int>()
+            val nodes = krugDirs.mapNotNull { d ->
+                val items = by[d.key].orEmpty().ifEmpty { return@mapNotNull null }
+                val lines = DelaKrug.tree(items, snap, today)
+                lines.forEach { if (it.depth > 0) indent[it.task.id] = it.depth }
+                val week = mv[d.key] ?: 0
+                DelaGroups.Node("krug:" + d.key, "${d.pos} · ${d.name}", 0, null, lines.map { it.task },
+                    sub = listOf(d.formula, if (week > 0) "за неделю: $week" else "за неделю —").filter { it.isNotBlank() }.joinToString(" · "))
+            } + listOfNotNull(by[""]?.takeIf { it.isNotEmpty() }?.let { loose ->
+                DelaGroups.Node("krug:-", "Без направления", 0, null, loose.sortedWith(DelaGroups.byTime(today)),
+                    sub = "разметит разборщик в ближайшие полчаса — или выбери сам: «без направления» в строке")
+            })
+            val empty = krugDirs.filter { by[it.key].isNullOrEmpty() }.map { it.label }
+            DelaScreen(
+                "Круг жизни",
+                listOfNotNull(
+                    plural(open.size - (by[""]?.size ?: 0), "дело", "дела", "дел") + " по направлениям",
+                    by[""]?.size?.takeIf { it > 0 }?.let { "без направления $it" },
+                ).joinToString(" · "),
+                principle = principle,
+                hint = if (empty.isNotEmpty()) "Пока без дел: " + empty.joinToString(", ") else "",
+                nodes = nodes, indent = indent,
+                empty = "Открытых дел нет.",
             )
         }
         // Сохранённый фильтр (`renderFilter` веба): что показать и уровни; поменял — «Сохранить» или «Как было».
@@ -753,7 +801,7 @@ fun DelaTab(
             // Разделы веба одним рядом, с его числами («Сегодня 7»); CRM — следом, если она видна.
             item(key = "nav") {
                 val c = DelaViews.counts(snap, me, today, sphere, now)
-                val keys = DelaViews.View.entries.map { it.key to it.title } + (if (crmOn) CRM_NAV else emptyList())
+                val keys = DelaViews.View.entries.filter { it != DelaViews.View.KRUG || krugOn }.map { it.key to it.title } + (if (crmOn) CRM_NAV else emptyList())
                 // ☰ — боковая панель веба листом, рядом — разделы с числами.
                 ru.zf.pravka.ui.Segmented(
                     options = keys.map { (k, t) ->
@@ -766,14 +814,22 @@ fun DelaTab(
                 )
             }
             // «Сегодня»: дата, «осталось N», «закрыто M» — строкой под разделами (`renderToday` веба).
-            if (view == DelaViews.View.TODAY && screen != null) {
+            if ((view == DelaViews.View.TODAY || view == DelaViews.View.KRUG) && screen != null) {
                 item(key = "today:head") {
-                    Text(
-                        screen.sub,
-                        style = ru.zf.pravka.ui.LocalPravkaType.current.label,
-                        color = ru.zf.pravka.ui.LocalMode.current.label,
-                        modifier = Modifier.padding(start = 6.dp),
-                    )
+                    Column(Modifier.padding(start = 6.dp)) {
+                        Text(
+                            screen.sub,
+                            style = ru.zf.pravka.ui.LocalPravkaType.current.label,
+                            color = ru.zf.pravka.ui.LocalMode.current.label,
+                        )
+                        // Принцип дня (Круг жизни): одной тихой строкой курсивом, без галочек и баллов.
+                        if (screen.principle.isNotBlank()) Text(
+                            screen.principle,
+                            style = ru.zf.pravka.ui.LocalPravkaType.current.body.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
+                            color = ru.zf.pravka.ui.Ink.PlanText,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
                 }
             }
         }
@@ -941,6 +997,12 @@ fun DelaTab(
                 },
                 onEdit = { editingSuggestion = it },
                 onReject = { rejecting = it },
+                onAcceptSet = { sg, set ->
+                    scope.launch {
+                        app.delaDo(listOf(Dela.decideOp(sg.id, accept = true, set = set)))
+                        Feedback.toast(app, "✓ направление поставлено")
+                    }
+                },
             )
         } else if (screen != null) {
             // «Сегодня»: что ждёт в «Новом» — ссылкой под делами, как в вебе.
@@ -1136,6 +1198,7 @@ fun DelaTab(
             counts = { DelaViews.counts(snap, me, today, sphere, now) },
             filters = { filters.map { it to DelaGroups.scopeItems(snap, me, today, sphere, it.scope).size } },
             crmOn = crmOn,
+            krugOn = krugOn,
             projects = { Dela.projectsNav(snap, me, today, sphere, favs) },
             onSphere = { sphere = it },
             onNav = go,
@@ -1189,7 +1252,7 @@ fun DelaTab(
         PickSheet(
             title = "Уровень ${lp.i + 1}",
             none = if (lp.i == 0) "без групп" else "— (убрать)",
-            items = DelaGroups.Level.entries.filter { it !in lp.omit }.map { Triple(it.key, it.title, "") },
+            items = DelaGroups.Level.entries.filter { it !in lp.omit && (it != DelaGroups.Level.DIR || krugOn) }.map { Triple(it.key, it.title, "") },
             selected = lp.levels.getOrNull(lp.i)?.key.orEmpty(),
             onDismiss = { levelPick = null },
         ) { k ->
@@ -1451,6 +1514,8 @@ private fun LazyListScope.newView(
     onEdit: (Dela.Suggestion) -> Unit,
     onReject: (Dela.Suggestion) -> Unit,
     onMerge: (Dela.Suggestion, Dela.Task) -> Unit,
+    /** «Да» с поправкой — вопрос разборщика Круга: выбранные направления. */
+    onAcceptSet: (Dela.Suggestion, org.json.JSONObject) -> Unit = { sg, _ -> onAccept(listOf(sg)) },
 ) {
     val snap = crm.snap
     val zone = java.time.ZoneId.systemDefault()
@@ -1475,6 +1540,7 @@ private fun LazyListScope.newView(
                         sg, i + 1, snap, crm.me, today,
                         onAccept = { onAccept(listOf(sg)) }, onEdit = { onEdit(sg) }, onReject = { onReject(sg) },
                         onOpen = actions.open, onMerge = { t -> onMerge(sg, t) },
+                        onAcceptSet = { set -> onAcceptSet(sg, set) },
                     )
                 }
             }
@@ -1619,13 +1685,19 @@ private fun AskRow(
     onReject: () -> Unit,
     onOpen: (Dela.Task) -> Unit,
     onMerge: (Dela.Task) -> Unit,
+    onAcceptSet: (org.json.JSONObject) -> Unit = { onAccept() },
 ) {
     val mode = ru.zf.pravka.ui.LocalMode.current
     val ty = ru.zf.pravka.ui.LocalPravkaType.current
     val context = androidx.compose.ui.platform.LocalContext.current
     val txt = DelaViews.sugText(sg, snap, today)
     val q = DelaViews.askWhy(sg, snap)
-    val twin = DelaViews.twinOf(sg, snap, me)
+    // Вопрос разборщика Круга (`askItem` веба): предложенные направления горят, тап — поправить; «Да» — выбранное.
+    val krugDirs = DelaKrug.directions()
+    val proposed = remember(sg.id) { Dela.run { sg.payloadObj().strings("directions") } }
+    var chosen by remember(sg.id) { mutableStateOf(proposed) }
+    val krugAsk = sg.source == "krug" && DelaKrug.on(snap, krugDirs)
+    val twin = if (sg.source == "krug") null else DelaViews.twinOf(sg, snap, me)
     val link = sg.sourceRef.takeIf { it.startsWith("https://") }
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Row(
@@ -1661,6 +1733,13 @@ private fun AskRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        if (krugAsk) {
+            ChipRow {
+                for (d in krugDirs) PaperChip(d.label, selected = d.key in chosen, onClick = {
+                    chosen = if (d.key in chosen) chosen - d.key else chosen + d.key
+                })
+            }
+        }
         if (twin != null) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -1676,7 +1755,10 @@ private fun AskRow(
             Spacer(Modifier.weight(1f))
             PaperTextButton("Не надо", onClick = onReject)
             if (sg.kind == "create") PaperTextButton("Поправить", onClick = onEdit)
-            PaperButton(DelaViews.askYes(sg.kind), icon = Glyphs.Check, primary = true, onClick = onAccept)
+            if (krugAsk) PaperButton("Да", icon = Glyphs.Check, primary = true, enabled = chosen.isNotEmpty(), onClick = {
+                if (chosen == proposed) onAccept() else onAcceptSet(org.json.JSONObject().put("directions", org.json.JSONArray(chosen)))
+            })
+            else PaperButton(DelaViews.askYes(sg.kind), icon = Glyphs.Check, primary = true, onClick = onAccept)
         }
     }
 }
@@ -1793,7 +1875,7 @@ private fun LazyListScope.screenBody(
     }
     val nodes = sc.nodes
     if (nodes != null) {
-        val also = sc.levels.map { DelaViews.byOf(it) }.toSet()
+        val also = sc.levels.mapNotNull { DelaViews.byOf(it) }.toSet()
         for (n in nodes) {
             item(key = "$key:n:${n.key}") {
                 PaperCard(
@@ -1816,7 +1898,7 @@ private fun LazyListScope.screenBody(
                     },
                 ) {
                     if (n.sub.isNotBlank()) PaperHint(n.sub)
-                    NodeRows(n, actions, also, onProjectPage)
+                    NodeRows(n, actions, also, onProjectPage, sc.indent)
                 }
             }
         }
@@ -1899,6 +1981,8 @@ private fun DelaNavSheet(
     /** Фильтры с числом дел — первым разделом (как на полке веба). */
     filters: () -> List<Pair<DelaGroups.Filter, Int>> = { emptyList() },
     crmOn: Boolean,
+    /** Круг жизни включён — раздел «Круг жизни» в списке. */
+    krugOn: Boolean = false,
     projects: () -> Dela.ProjectsNav,
     onSphere: (String) -> Unit,
     onNav: (String) -> Unit,
@@ -1933,6 +2017,7 @@ private fun DelaNavSheet(
         }
         // «Сегодня» — отдельной строкой над остальными, с числом (красным, если люди ждут — «отбить»).
         for (v in DelaViews.View.entries) {
+            if (v == DelaViews.View.KRUG && !krugOn) continue
             NavLine(v.title, 0, selected = nav == v.key, countText = counts.label(v), hot = counts.hot(v)) { onNav(v.key) }
             if (v == DelaViews.View.TODAY) RowRule()
         }
@@ -2167,9 +2252,9 @@ private fun Modifier.groupRing(
  * глубже — подзаголовок с числом и его ветки.
  */
 @Composable
-private fun NodeRows(n: DelaGroups.Node, actions: DelaActions, also: Set<DelaViews.By>, onProjectPage: Boolean) {
+private fun NodeRows(n: DelaGroups.Node, actions: DelaActions, also: Set<DelaViews.By>, onProjectPage: Boolean, indent: Map<String, Int> = emptyMap()) {
     if (n.leaf) {
-        TaskRows(n.items, actions, by = n.level?.let { DelaViews.byOf(it) }, onProjectPage = onProjectPage, also = also)
+        TaskRows(n.items, actions, by = n.level?.let { DelaViews.byOf(it) }, onProjectPage = onProjectPage, also = also, indent = indent)
         return
     }
     val mode = ru.zf.pravka.ui.LocalMode.current
@@ -2201,10 +2286,12 @@ internal fun TaskRows(
     extra: (Dela.Task) -> List<String> = { emptyList() },
     /** Остальные уровни группировки: названное заголовком строка не повторяет. */
     also: Set<DelaViews.By> = emptySet(),
+    /** Круг жизни: отступ шага к цели (дерево «Зачем»), по id дела. */
+    indent: Map<String, Int> = emptyMap(),
 ) {
     list.forEachIndexed { i, t ->
         if (i > 0) RowRule()
-        TaskRow(t, actions, today, by, onProjectPage, extra(t), also)
+        TaskRow(t, actions, today, by, onProjectPage, extra(t), also, indent[t.id] ?: 0)
     }
 }
 
@@ -2224,6 +2311,8 @@ private fun TaskRow(
     onProjectPage: Boolean = false,
     extra: List<String> = emptyList(),
     also: Set<DelaViews.By> = emptySet(),
+    /** Глубина шага под целью (дерево «Зачем» Круга жизни): отступ и «↳». */
+    depth: Int = 0,
 ) {
     // Правка 4.0 (DESIGN §11.7 TaskRow в Делах, `screens/06`): кольцо 22 в
     // зоне 44, «Кто: действие» до двух строк, вторая строка — подписи веба;
@@ -2235,7 +2324,7 @@ private fun TaskRow(
     val ty = ru.zf.pravka.ui.LocalPravkaType.current
     val lateDays = if (t.open && t.dueDate.isNotBlank() && t.dueDate < today)
         runCatching { java.time.temporal.ChronoUnit.DAYS.between(LocalDate.parse(t.dueDate.take(10)), LocalDate.parse(today)).toInt() }.getOrDefault(0) else 0
-    Column(Modifier.fillMaxWidth().seen("t:" + t.id)) {
+    Column(Modifier.fillMaxWidth().seen("t:" + t.id).padding(start = (minOf(depth, 6) * 16).dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { actions.open(t) }.padding(vertical = 4.dp),
@@ -2268,7 +2357,7 @@ private fun TaskRow(
             }
             Column(Modifier.weight(1f).padding(start = 2.dp)) {
                 Text(
-                    t.title,
+                    (if (depth > 0) "↳ " else "") + t.title,
                     style = ty.bodyL.copy(fontWeight = if (t.open && t.focusOn == today) FontWeight.SemiBold else ty.bodyL.fontWeight),
                     color = if (t.open) ru.zf.pravka.ui.Ink.Text else mode.meta,
                 )
@@ -2510,6 +2599,43 @@ internal fun DelaTaskSheet(
             icon = Glyphs.Tag,
             onClick = { picking = "labels" },
         )
+        // Круг жизни (12.10.2026, `krugProps` веба): направления — чипами (свои горят; своих нет — от чего наследует),
+        // «Зачем» — цепочка целей вверх, шаги к этому делу и «новый шаг». Только серверу, который знает Круг, и своему делу.
+        val krugDirs = DelaKrug.directions()
+        val krugMe = app.delaSync.link.value?.user ?: app.delaStore.me
+        if (DelaKrug.on(snap, krugDirs) && onDrop == null && !suggestion && (f.ownerId.isBlank() || f.ownerId == krugMe)) {
+            val got = DelaKrug.dirsOf(f, snap)
+            PaperHint("Направления")
+            ChipRow {
+                for (d in krugDirs) PaperChip(d.label, selected = d.key in f.directions, onClick = {
+                    f = f.copy(directions = if (d.key in f.directions) f.directions - d.key else f.directions + d.key)
+                })
+            }
+            if (f.directions.isEmpty()) PaperHint(
+                if (got.isNotEmpty()) "наследует: " + DelaKrug.names(got, krugDirs) + if (f.whyId.isNotBlank()) " — от цели" else " — от проекта"
+                else "не размечено — разборщик разметит сам, или выбери",
+            )
+            val up = DelaKrug.goals(f, snap)
+            PaperRow(
+                title = if (up.isEmpty()) "не задано" else up.joinToString(" › ") { it.title },
+                hint = "Зачем — цель, шагом к которой это дело является",
+                icon = Glyphs.Layers,
+                onClick = { picking = "why" },
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.weight(1f))
+                if (f.whyId.isNotBlank()) PaperTextButton("Убрать «Зачем»", onClick = { f = f.copy(whyId = "") })
+                PaperTextButton("Новая цель…", onClick = { picking = "goal" })
+            }
+            if (existing) {
+                val steps = DelaKrug.steps(snap, task.id).sortedWith(DelaGroups.byTime(today.toString()))
+                if (steps.isNotEmpty()) {
+                    PaperHint("Шаги к этому делу")
+                    for (st in steps) Text("— " + st.title, style = MaterialTheme.typography.bodyMedium)
+                }
+                PaperTextButton("Новый шаг…", icon = Glyphs.Plus, onClick = { picking = "step" })
+            }
+        }
 
         if (existing) {
             Spacer(Modifier.height(4.dp))
@@ -2571,6 +2697,39 @@ internal fun DelaTaskSheet(
             onDismiss = { picking = "" },
         ) { id -> f = f.copy(personId = id); picking = "" }
         "labels" -> LabelsSheet(snap.labels, f.labels, onDismiss = { picking = "" }) { f = f.copy(labels = it) }
+        // «Зачем»: свои открытые дела, кроме самого дела и его шагов вниз (иначе вышел бы круг); цели — сверху.
+        "why" -> {
+            val me = app.delaSync.link.value?.user ?: app.delaStore.me
+            val dirs = DelaKrug.directions()
+            val below = DelaKrug.below(snap, task.id)
+            PickSheet(
+                title = "Зачем",
+                none = "без «Зачем»",
+                items = snap.tasks.values.filter { it.open && (me.isBlank() || it.ownerId == me) && it.id !in below }
+                    .sortedWith(compareByDescending<Dela.Task> { DelaKrug.steps(snap, it.id).size }.thenBy { it.title.lowercase() })
+                    .map { g ->
+                        val n = DelaKrug.steps(snap, g.id).size
+                        Triple(g.id, g.title, listOfNotNull(if (n > 0) "шагов $n" else null, DelaKrug.names(DelaKrug.dirsOf(g, snap), dirs).ifBlank { null }).joinToString(" · "))
+                    },
+                selected = f.whyId,
+                onDismiss = { picking = "" },
+            ) { id -> f = f.copy(whyId = id); picking = "" }
+        }
+        // Новая цель словами — заводится делом сразу (в том же проекте), а это дело становится её шагом при «Сохранить».
+        "goal" -> FilterNameSheet("Новая цель — результат словами", "", onDismiss = { picking = "" }) { name ->
+            val goal = Dela.Task(id = Dela.newId(), title = name.trim(), projectId = f.projectId, source = "manual")
+            if (goal.title.isNotBlank()) {
+                scope.launch { app.delaDo(listOf(Dela.createOp(goal))) }
+                f = f.copy(whyId = goal.id)
+            }
+            picking = ""
+        }
+        // Новый шаг к этому делу: дело с этим «Зачем» в том же проекте.
+        "step" -> FilterNameSheet("Новый шаг к «${task.title.take(40)}»", "", onDismiss = { picking = "" }) { name ->
+            val step = Dela.Task(id = Dela.newId(), title = name.trim(), projectId = task.projectId, whyId = task.id, source = "manual")
+            if (step.title.isNotBlank()) scope.launch { app.delaDo(listOf(Dela.createOp(step))) }
+            picking = ""
+        }
     }
 }
 

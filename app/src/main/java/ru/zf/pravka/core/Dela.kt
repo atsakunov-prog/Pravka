@@ -89,6 +89,17 @@ object Dela {
         val requestedByShort: String = "",
         /** Есть правка телефона, которую сервер ещё не принял. */
         val local: Boolean = false,
+        /**
+         * Круг жизни (12.10.2026, docs/dela-phone-12.md): свои направления дела —
+         * ключи Свода `krug.directions`; пусто — наследует (`DelaKrug.dirsOf`).
+         * У чужих дел сервер их не присылает.
+         */
+        val directions: List<String> = emptyList(),
+        /** «Зачем» — id дела-цели, шагом к которой это дело является; "" — не задано. */
+        val whyId: String = "",
+        /** Номер и название цели — из вида; телефон пересчитывает их из копии (derive). */
+        val whyNum: Int = 0,
+        val whyTitle: String = "",
     ) {
         val open: Boolean get() = status == OPEN
         /** Как человек называется в строке: короткое имя, иначе полное. */
@@ -351,7 +362,12 @@ object Dela {
         val payments: Map<String, Payment> = emptyMap(),
         /** `features` последнего синка: чего нет — сервер ещё не умеет, и телефон это не шлёт. */
         val features: Set<String> = emptySet(),
+        /** Круг жизни: направления проектов (список `krug` синка) — их наследуют дела проекта. Только свои. */
+        val krug: Map<String, List<String>> = emptyMap(),
     ) {
+        /** Сервер знает Круг жизни (поля `directions`, `why_id`): только тогда телефон их шлёт. */
+        val krugOn: Boolean get() = FEATURE_KRUG in features
+
         /** Сервер Дел знает напоминания (поля `remind_*`) и шлёт их в Telegram. */
         val remindOn: Boolean get() = FEATURE_REMIND in features
 
@@ -436,6 +452,7 @@ object Dela {
             sphere = o.str("sphere").ifBlank { INBOX }, moneyEff = o.str("money_eff").ifBlank { "none" },
             personShort = o.str("person_short"), personName = o.str("person_name"),
             requestedByShort = o.str("requested_by_short"), local = o.bool("_local"),
+            directions = o.strings("directions"), whyId = o.str("why_id"), whyNum = o.int("why_num"), whyTitle = o.str("why_title"),
         )
     }
 
@@ -453,6 +470,8 @@ object Dela {
         .put("project_name", nul(t.projectName)).put("project_kind", nul(t.projectKind)).put("deal_name", nul(t.dealName))
         .put("sphere", t.sphere).put("money_eff", t.moneyEff).put("person_short", nul(t.personShort))
         .put("person_name", nul(t.personName)).put("requested_by_short", nul(t.requestedByShort))
+        .put("directions", arr(t.directions)).put("why_id", nul(t.whyId))
+        .put("why_num", if (t.whyNum > 0) t.whyNum else JSONObject.NULL).put("why_title", nul(t.whyTitle))
         .apply { if (t.local) put("_local", true) }
 
     fun project(o: JSONObject): Project? {
@@ -620,6 +639,7 @@ object Dela {
         .put("payments", JSONArray().apply { s.payments.values.forEach { put(json(it)) } })
         .put("labels", arr(s.labels))
         .put("features", arr(s.features.sorted()))
+        .put("krug", JSONArray().apply { s.krug.forEach { (id, d) -> put(JSONObject().put("id", id).put("kind", "project").put("directions", arr(d))) } })
 
     fun fromJson(o: JSONObject): Snapshot = Snapshot(
         seq = o.long("seq"),
@@ -636,6 +656,7 @@ object Dela {
         syncedAt = o.long("syncedAt"),
         payments = rows(o, "payments", ::payment).associateBy { it.id },
         features = o.strings("features").toSet(),
+        krug = rows(o, "krug") { k -> k.str("id").ifBlank { null }?.let { it to k.strings("directions") } }.toMap(),
     )
 
     // ------------------------------------------------------------ синк
@@ -679,6 +700,7 @@ object Dela {
                 // Умение — состояние сервера сейчас, а не накопленное: откатили
                 // сервер — флага нет, и телефон перестаёт слать то, чего тот не знает.
                 features = fresh.features,
+                krug = if (fresh.krug.isEmpty()) old.krug else old.krug + fresh.krug,
             )
         )
     }
@@ -699,7 +721,11 @@ object Dela {
         val d = s.deals[t.dealId]
         val pe = s.people[t.personId]
         val rq = s.people[t.requestedBy]
+        val why = s.tasks[t.whyId]
         return t.copy(
+            // «Зачем» — номер и название цели из копии: новая цель с телефона видна до ответа сервера.
+            whyNum = if (t.whyId.isBlank()) 0 else why?.num ?: t.whyNum,
+            whyTitle = if (t.whyId.isBlank()) "" else why?.title ?: t.whyTitle,
             projectName = if (t.projectId.isBlank()) "" else p?.name ?: t.projectName,
             projectKind = if (t.projectId.isBlank()) "" else p?.kind ?: t.projectKind,
             sphere = if (t.projectId.isBlank()) INBOX else p?.sphere ?: t.sphere,
@@ -938,6 +964,9 @@ object Dela {
                 }
                 "source" -> out.copy(source = f.str(k).ifBlank { out.source })
                 "source_ref" -> out.copy(sourceRef = f.str(k))
+                // Круг жизни: направления — ключи как есть (названия переводит сервер), «Зачем» — id цели.
+                "directions" -> out.copy(directions = f.strings(k))
+                "why_id" -> out.copy(whyId = f.str(k))
                 else -> out
             }
         }
@@ -979,7 +1008,13 @@ object Dela {
     val EDITABLE = listOf(
         "title", "notes", "project_id", "deal_id", "ball", "person_id", "nudge_on", "requested_by",
         "due_date", "due_time", "remind_at", "remind_place", "estimate_min", "want", "focus_on", "labels", "owed",
+        // Круг жизни (12.10.2026): правятся, только когда сервер их знает (`Snapshot.krugOn`) — карточка без
+        // него блока Круга не показывает, и поля в `task.set` не попадают (как напоминание).
+        "directions", "why_id",
     )
+
+    /** Круг жизни (12.10.2026, docs/dela-phone-12.md): сервер знает `directions`, `why_id` и шлёт список `krug`. */
+    const val FEATURE_KRUG = "krug"
 
     /** Что сервер умеет сверх контракта части 1 — `features` ответа синка. */
     const val FEATURE_REMIND = "remind"
@@ -1043,6 +1078,8 @@ object Dela {
         "focus_on" -> nul(t.focusOn)
         "labels" -> arr(t.labels)
         "owed" -> t.owed
+        "directions" -> arr(t.directions)
+        "why_id" -> nul(t.whyId)
         else -> JSONObject.NULL
     }
 
@@ -1073,7 +1110,8 @@ object Dela {
         for (k in CREATE_FIELDS) {
             if (k == "title") continue
             val v = field(t, k)
-            if (v == JSONObject.NULL || (k == "want" && v == false) || (k == "owed" && v == false) || (k == "labels" && t.labels.isEmpty())) continue
+            if (v == JSONObject.NULL || (k == "want" && v == false) || (k == "owed" && v == false) || (k == "labels" && t.labels.isEmpty())
+                || (k == "directions" && t.directions.isEmpty())) continue
             if (k == "ball" && v == MINE) continue
             task.put(k, v)
         }

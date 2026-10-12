@@ -189,7 +189,9 @@ object DelaGroups {
         GRP("grp", "группы", "Все группы"),
         DATE("date", "время", "Всё время"),
         PERSON("person", "люди", "Все люди"),
-        DEAL("deal", "сделки", "Все сделки");
+        DEAL("deal", "сделки", "Все сделки"),
+        /** Круг жизни (12.10.2026): первое направление дела; предлагается, только когда Круг включён. */
+        DIR("dir", "направления", "Все направления");
 
         companion object {
             fun of(key: String): Level? = entries.firstOrNull { it.key == key }
@@ -270,6 +272,12 @@ object DelaGroups {
             Key("1" + d.name + "\u0001" + d.id, d.name, id = d.id, note = pn, find = listOf(d.name, pn).filter { it.isNotBlank() }, dealId = d.id)
         } ?: Key("9", "Без сделки", find = listOf("без сделки"))
         Level.DATE -> dateKey(t, today)
+        // Направление — первое из дела (с наследованием); по кругу: сверху 12 — Здоровье.
+        Level.DIR -> DelaKrug.directions().let { dirs ->
+            dirs.firstOrNull { it.key == DelaKrug.dirsOf(t, s).firstOrNull() }?.let { d ->
+                Key((d.pos % 12).toString().padStart(2, '0') + d.key, d.name, sub = d.formula, find = listOf(d.name, d.short).filter { it.isNotBlank() })
+            } ?: Key("99", "Без направления", find = listOf("без направления"))
+        }
     }
 
     /** «Время» как уровень: Просрочено, Сегодня, Завтра, дни недели, Следующая неделя, Позже, Без срока, Сделано — по [whenDay]. */
@@ -363,7 +371,7 @@ object DelaGroups {
             val k = v.first
             Branch(order, if ((titles[k.title] ?: 0) > 1 && k.full.isNotBlank()) k.full else k.title, k.id, v.second, k.note, listOf(k.title) + k.find)
         }
-        return if (lv == Level.GRP || lv == Level.DATE) list.sortedWith { a, b -> collator.compare(a.key, b.key) }
+        return if (lv == Level.GRP || lv == Level.DATE || lv == Level.DIR) list.sortedWith { a, b -> collator.compare(a.key, b.key) }
         else list.sortedWith(compareByDescending<Branch> { it.n }.thenComparator { a, b -> collator.compare(a.title, b.title) })
     }
 
