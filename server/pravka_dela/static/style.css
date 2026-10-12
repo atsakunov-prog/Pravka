@@ -1211,7 +1211,7 @@ textarea.about::placeholder { color: var(--ph); opacity: .75; }
 .steps .step-link { color: var(--value); text-decoration: none; font-size: 13.5px; line-height: 19px; }
 .steps .step-link::before { content: '— '; color: var(--meta); }
 .props .steps input.step-add { height: 32px; margin-top: 2px; border-color: rgba(var(--t), .14); }
-/* Страница «Круг жизни»: двенадцать строк по кругу; раскрытое направление — деревом «Зачем». */
+/* Направления в заголовках дерева: зона кружком. */
 .krug-dir > h2.krug-h { cursor: pointer; user-select: none; }
 .krug-dir > h2.krug-h:hover { color: var(--value); }
 .krug-pos { display: inline-grid; place-items: center; min-width: 22px; height: 18px; padding: 0 4px; border-radius: 9px; border: 1px solid rgba(var(--t), .35); font-size: 10.5px; letter-spacing: 0; margin-right: 2px; }
@@ -1219,6 +1219,93 @@ textarea.about::placeholder { color: var(--ph); opacity: .75; }
 .task.step { padding-left: calc(2px + var(--indent, 0) * 22px); }
 .task.step .title::before { content: '↳ '; color: var(--meta); }
 .sug .dir-pick { padding: 8px 0 2px; }
+
+/* ── Дерево жизни (13.10.2026): цели ромбом, практики — ромбом-кольцом, проекты квадратом; три вида и место дела ── */
+.caret { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 6px; border: 1px solid rgba(var(--t), .3); font-size: 13px; line-height: 1; color: var(--label); flex: none; }
+.caret.open { color: var(--value); }
+.caret-btn { all: unset; cursor: pointer; display: inline-grid; place-items: center; width: 22px; height: 22px; flex: none; }
+.caret-btn.none { cursor: default; }
+.gem { display: inline-block; width: 9px; height: 9px; transform: rotate(45deg); background: var(--tint); border-radius: 2px; flex: none; margin: 0 6px 0 2px; }
+.gem.practice { background: transparent; border: 2px solid var(--tint); width: 7px; height: 7px; }
+.tree-h { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; cursor: pointer; user-select: none; }
+.tree-h .gsub { flex: 1 1 100%; }
+.tree-rows { padding-top: 4px; }
+.tree-goal, .tree-proj { display: flex; align-items: center; gap: 4px; min-height: 36px; padding: 2px 8px 2px calc(2px + var(--indent, 0) * 22px); border-radius: 12px; }
+.tree-goal:hover, .tree-proj:hover { background: var(--hover); }
+.tree-goal .g-title { color: var(--value); text-decoration: none; font-weight: 600; font-size: 14.5px; line-height: 19px; flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.tree-goal .g-title:hover { text-decoration: underline; }
+.tree-goal .m.practice, .col-goal .m.practice { color: var(--label); font-size: 12px; border: 1px solid rgba(var(--t), .3); border-radius: 999px; padding: 0 7px; }
+.tree-goal .m.faint { font-size: 12px; }
+.g-n { margin-left: 6px; color: var(--meta); font-size: 12px; font-variant-numeric: tabular-nums; }
+.g-mv { color: var(--label); font-size: 12px; font-variant-numeric: tabular-nums; }
+.tree-proj .link { color: var(--label); text-decoration: none; font-size: 14px; }
+.tree-proj .link:hover { text-decoration: underline; }
+.tree .rows > .tree-goal + .task, .tree .rows > .task + .tree-goal { border-top: 0; }
+.tree-goal.open-now, .col-goal.open-now, .col-task.open-now { background: var(--active); }
+[draggable="true"] { cursor: grab; }
+.dragging { opacity: .45; }
+.drop { outline: 2px dashed var(--tint); outline-offset: -2px; background: var(--accent-soft) !important; border-radius: 12px; }
+.chips .m.path { color: var(--meta); font-style: italic; }
+.tree-mode-list .toolbar label { min-width: 0; max-width: 100%; }
+.tree-mode-list .toolbar select { max-width: min(560px, 100%); text-overflow: ellipsis; }
+/* «Колонки»: девять направлений рядом; узко — прокрутка вбок внутри полосы, страница не едет. */
+.tree-cols { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: 10px; overflow-x: auto; padding: 4px 2px 12px; scroll-snap-type: x proximity; }
+.tree-col { scroll-snap-align: start; min-width: 0; border: 1px solid var(--line-soft); border-radius: 16px; background: var(--panel-2); display: flex; flex-direction: column; max-height: 78vh; }
+.col-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; padding: 10px 12px 8px; border-bottom: 1px solid var(--line-soft); position: sticky; top: 0; }
+.col-h b { color: var(--value); font-size: 14.5px; }
+.col-h .zone { flex: 1 1 100%; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--meta); }
+.col-body { overflow-y: auto; padding: 6px 4px 10px; display: grid; gap: 1px; align-content: start; }
+.col-goal, .col-proj, .col-task { display: flex; align-items: center; gap: 3px; padding: 4px 6px 4px calc(4px + var(--indent, 0) * 14px); border-radius: 10px; font-size: 13px; line-height: 17px; cursor: pointer; min-width: 0; }
+.col-goal:hover, .col-proj:hover, .col-task:hover { background: var(--hover); }
+.col-goal .g-title { color: var(--value); font-weight: 600; overflow-wrap: anywhere; }
+.col-proj { color: var(--label); }
+.col-proj .caret { width: 14px; height: 14px; font-size: 11px; margin-right: 3px; }
+.col-task { color: var(--text); }
+.col-task span { overflow-wrap: anywhere; min-width: 0; }
+.col-task.today span { color: var(--value); font-weight: 600; }
+.tick.mini { width: 16px; height: 16px; min-width: 16px; margin-right: 4px; border-width: 1.5px; }
+/* Место дела в карточке: лесенка от направления до дела, соседние шаги и «дальше». */
+.place { display: grid; gap: 1px; padding: 6px 0 4px; min-width: 0; }
+.pt-row { display: flex; align-items: center; gap: 2px; padding: 2px 0 2px calc(var(--d, 0) * 14px); font-size: 13.5px; line-height: 19px; color: var(--label); text-decoration: none; min-width: 0; overflow-wrap: anywhere; }
+a.pt-row:hover { color: var(--value); }
+.pt-dir { color: var(--meta); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; }
+.pt-goal { color: var(--value); }
+.pt-me { color: var(--strong); font-weight: 600; }
+.pt-kid, .pt-sib { color: var(--meta); }
+.me-dot, .sib-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--strong); margin: 0 7px 0 3px; flex: none; }
+.sib-dot { background: transparent; border: 1.5px solid var(--meta); width: 6px; height: 6px; }
+.place-box { margin: 10px 0 12px; padding: 10px 14px 12px; border-radius: 22px; }
+.place-h { font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--meta); font-weight: 600; margin-bottom: 2px; }
+.pt-next { margin-top: 6px; padding: 7px 10px; border-radius: 12px; background: var(--accent-soft); color: var(--value); font-size: 13px; line-height: 18px; }
+.rhythm-l { display: inline-flex; align-items: center; gap: 6px; color: var(--meta); font-size: 12.5px; }
+.props .rhythm-l input.rhythm { height: 30px; width: 190px; }
+.ps-dot.goal { transform: rotate(45deg); border-radius: 2px; }
+.ps-dot.dir { opacity: .5; }
+/* «Круг жизни» обзором: циферблат и девять карточек по зонам. */
+.krug-top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; margin: 0 4px 6px; }
+.dial { width: min(420px, 100%); height: auto; flex: none; }
+.dial .ring { fill: none; stroke: rgba(var(--t), .16); }
+.dial .axis { stroke: rgba(var(--t), .28); }
+.dial .move { fill: var(--tint); fill-opacity: .55; stroke: var(--value); stroke-width: 1; }
+.dial .lbl { fill: var(--label); font-size: 12px; cursor: pointer; }
+.dial .lbl:hover { fill: var(--value); }
+.dial-note { flex: 1 1 220px; min-width: 0; color: var(--meta); font-size: 13px; line-height: 19px; display: grid; gap: 8px; }
+.krug-zone { margin-top: 14px; }
+.zone-h { margin: 0 0 8px 8px; font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--meta); font-weight: 600; }
+.krug-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.krug-card { border: 1px solid var(--line-soft); border-radius: 16px; background: var(--panel-2); padding: 10px 12px; display: grid; gap: 6px; align-content: start; min-width: 0; }
+.kc-h { display: flex; align-items: baseline; gap: 8px; cursor: pointer; }
+.kc-h b { color: var(--value); font-size: 15px; }
+.kc-h .sum { margin-left: auto; color: var(--meta); font-size: 12px; }
+.kc-f { font-family: Literata, Georgia, serif; font-style: italic; color: var(--plan); font-size: 13.5px; line-height: 19px; }
+.kc-goals { display: grid; gap: 3px; }
+.kc-goals .link { color: var(--label); text-decoration: none; font-size: 13.5px; line-height: 19px; overflow-wrap: anywhere; }
+.kc-goals .link:hover { color: var(--value); }
+@media (max-width: 640px) {
+  .tree-cols { grid-auto-columns: 82%; }
+  .tree-goal, .tree-proj { padding-left: calc(2px + var(--indent, 0) * 14px); }
+  .task.step { padding-left: calc(2px + var(--indent, 0) * 14px); }
+}
 
 /* ── Встречи (12.10.2026): список с датой слева, сниппеты поиска, карточка с расшифровкой ── */
 .mrow { align-items: flex-start; }

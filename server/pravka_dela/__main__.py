@@ -367,15 +367,25 @@ def cmd_svod(args) -> int:
 
 
 def cmd_krug_seed(args) -> int:
-    """Круг жизни: направления и принципы из файла владельца — в Свод, направления — проектам по правилам файла.
-    Файл личный и лежит на компе (не в репозитории); повтор не трогает уже записанное (--force — переписать)."""
+    """Круг жизни: направления и принципы из файла владельца — в Свод, направления — проектам по правилам файла,
+    дерево целей (7.2) — один раз на версию файла. Файл личный и лежит на компе (не в репозитории); повтор не
+    трогает уже записанное (--force — переписать Свод и пройти дерево ещё раз)."""
     from . import krug
 
     cfg = config_mod.load(args.env)
     data = json.loads(Path(args.file).read_text(encoding="utf-8-sig"))
     out = krug.seed(cfg.db_url, args.user, data, force=args.force)
     print("Свод:", ", ".join(out["svod"]) or "уже был — не трогал")
+    if out["merged"]:
+        print("Слил направления в строках Круга:", out["merged"])
     print("Проекты:", "; ".join(out["projects"]) or "размечены раньше — не трогал")
+    t = out["tree"]
+    if t:
+        print(f"Дерево: целей заведено {t['goals']}, дел {t['created'] - t['goals']}, перевешено дел {t['linked']}, "
+              f"проектов на цели {len(t['projects'])}" + (f", переименовано: {'; '.join(t['renamed'])}" if t["renamed"] else "")
+              + (f"; не нашёл: {', '.join(t['missing'])}" if t["missing"] else ""))
+    else:
+        print("Дерево: уже посажено — не трогал")
     return 0
 
 

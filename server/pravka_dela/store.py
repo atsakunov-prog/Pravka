@@ -38,7 +38,7 @@ TASK_FIELDS = {
 
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
-FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings"]
+FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree"]
 # «svod» — Свод (crm.svod) в синке и операция svod.set; «people» — person.add / person.merge и вид who
 # (одна карточка человека, 06.10.2026). Без них телефон не шлёт этих операций.
 # «dictations» — операция dictation.add: текст наговорки, из которой вышли дела (их source_ref = её id),
@@ -51,6 +51,8 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug",
 # (владелец), виды meetings и meeting. Служба встреч без флага шлёт только прежнее — сводку в хронологию и «Новое».
 # «krug» — Круг жизни (dela_0009, 12.10.2026, krug.py): поля directions, why_id, why_title в task.create, task.set и
 # у проекта, список krug в синке (направления проектов), у дела в синке — directions, why_id, dirs, steps_open.
+# «tree» — дерево целей (Круг 7.2, dela_0013, 13.10.2026): поля goal, rhythm, no_steps в task.create и task.set, why_id
+# у проекта (проект вешается на цель), в списке krug синка — why_id проекта, у дела — goal, rhythm, no_steps.
 # Токен службы бота Ковчега (python -m pravka_dela token --name kovcheg): только он забирает
 # «что пора» и отмечает отправку (remind.py, task.reminded).
 REMIND_BOT = "kovcheg"
@@ -116,8 +118,10 @@ class OpError(Exception):
 
 # Круг жизни (dela_0009, 12.10.2026): у дела — направления и «Зачем», у проекта — направления (их наследуют дела).
 # Живут не в tasks.tasks, а в tasks.krug под политикой «только хозяину» — поэтому из операции они вынимаются
-# до _pick и пишутся отдельно (_krug_write). why_title — «Зачем» новой целью: такое дело заводится тут же.
-KRUG_FIELDS = {"directions", "why_id", "why_title"}
+# до _pick и пишутся отдельно (_krug_write). why_title — «Зачем» новой целью: такая цель заводится тут же.
+# Дерево целей (7.2, dela_0013): goal — дело стало узлом дерева (цель-состояние), rhythm — ритм практики,
+# no_steps — под целью дел не заводят; у проекта — why_id (цель, на которой он висит).
+KRUG_FIELDS = {"directions", "why_id", "why_title", "goal", "rhythm", "no_steps"}
 
 
 def _krug_split(data: dict) -> dict:
@@ -126,11 +130,14 @@ def _krug_split(data: dict) -> dict:
 
 
 def _krug_write(conn, user: str, kind: str, obj: dict, kr: dict) -> None:
-    """Направления и «Зачем» дела (kind task) или направления проекта (kind project) — в строку Круга.
+    """Направления и «Зачем» дела (kind task) или проекта (kind project), пометки узла дерева — в строку Круга.
 
     Ставит только хозяин (или служба от его имени — разборщик идёт пользователем-хозяином): Круг личный, и
     правка Наташи в общем проекте не должна размечать дела Саши. Направления — ключами или названиями из
     Свода хозяина (krug.directions); пустой список — «снять свои», дело снова наследует.
+
+    Узел дерева (goal) — всегда без проекта: текст цели видит только хозяин (бриф 7.2, §12: узлы — личные формулировки
+    владельца, общее дело видно без своего «зачем»), а дело без проекта база показывает только ему.
     """
     owner = obj["owner_id"]
     if user not in (owner, "system"):
@@ -138,25 +145,38 @@ def _krug_write(conn, user: str, kind: str, obj: dict, kr: dict) -> None:
     data: dict = {}
     if "directions" in kr:
         data["directions"] = krug.norm_directions(conn, owner, kr["directions"], OpError)
-    if kind == "task":
-        if kr.get("why_title"):
-            goal = op_task_create(conn, user, {"task": {
-                "title": str(kr["why_title"]).strip(), "owner_id": owner, "project_id": obj.get("project_id"),
-                "source": obj.get("source") or "manual"}})["task"]
+        if len(data["directions"]) > krug.DIRS_MAX:
+            raise OpError(f"направлений у дела не больше {krug.DIRS_MAX}: главное и две метки")
+    if kr.get("why_title"):
+        # Новая цель словами: узел дерева без проекта, на том же месте, где было дело, — в его главном направлении.
+        here = conn.execute("SELECT dirs FROM tasks.v_tasks WHERE id = %s", (obj["id"],)).fetchone() if kind == "task" else None
+        main = list((here or {}).get("dirs") or [])[:1] or list(data.get("directions") or [])[:1]
+        goal = op_task_create(conn, user, {"task": {
+            "title": str(kr["why_title"]).strip(), "owner_id": owner, "source": obj.get("source") or "manual",
+            "goal": True, **({"directions": main} if main else {})}})["task"]
+        data["why_id"] = goal["id"]
+    elif "why_id" in kr:
+        ref = kr["why_id"]
+        if ref in (None, ""):
+            data["why_id"] = None
+        else:
+            goal = task_by(conn, ref)
+            if not goal:
+                raise OpError("«зачем»: нет такого дела или оно не видно")
             data["why_id"] = goal["id"]
-        elif "why_id" in kr:
-            ref = kr["why_id"]
-            if ref in (None, ""):
-                data["why_id"] = None
-            else:
-                goal = task_by(conn, ref)
-                if not goal:
-                    raise OpError("«зачем»: нет такого дела или оно не видно")
-                data["why_id"] = goal["id"]
-    elif set(kr) - {"directions"}:
-        raise OpError("у проекта «зачем» нет — только направления")
+    for k in ("goal", "no_steps"):
+        if k in kr:
+            data[k] = bool(kr[k])
+    if "rhythm" in kr:
+        data["rhythm"] = (str(kr["rhythm"] or "").strip() or None)
+        if data["rhythm"]:
+            data["goal"] = True  # ритм делает практику (бриф 7.2, §3): практика — цель, которая повторяется
+    if kind == "project" and {"goal", "no_steps", "rhythm"} & set(data):
+        raise OpError("целью и практикой бывает дело, а не проект")
     if not data:
         return
+    if data.get("goal") and kind == "task" and obj.get("project_id"):
+        conn.execute("UPDATE tasks.tasks SET project_id = NULL, deal_id = NULL WHERE id = %s", (obj["id"],))
     cols = ["id", "kind", "owner_id", *data]
     q = sql.SQL("INSERT INTO tasks.krug ({}) VALUES ({}) ON CONFLICT (id) DO UPDATE SET {}").format(
         sql.SQL(", ").join(map(sql.Identifier, cols)), sql.SQL(", ").join(sql.Placeholder() * len(cols)),
@@ -354,6 +374,8 @@ def op_task_set(conn, user, op):
     # Поле поменяли с двух сторон: побеждает пришедшее последним, прежнее
     # значение остаётся в журнале, а клиент узнаёт, что спорил не один.
     conflicts = sorted(k for k in changes if k in was and not _same(cur.get(k), was[k]) and not _same(cur.get(k), changes[k]))
+    if changes.get("project_id") and cur.get("goal") and kr.get("goal") is not False:
+        raise OpError("цель живёт без проекта: её текст видит только хозяин (сначала сделай её обычным делом)")
     _now_guard(conn, cur, {**cur, **changes})
     _ensure_labels(conn, changes.get("labels"))
     row = _update(conn, "tasks.tasks", {"id": cur["id"]}, changes)
@@ -652,7 +674,8 @@ _project_create, _project_set = _entity("crm.projects", PROJECT_FIELDS, "про�
 
 
 def _project_krug(fn, key: str):
-    """Проект с направлениями (Круг, dela_0009): directions — в строку Круга хозяина проекта, остальное — как было."""
+    """Проект в Круге (dela_0009, 0013): направления и цель, на которой он висит (why_id), — в строку Круга хозяина
+    проекта, остальное — как было."""
     def handler(conn, user, op):
         raw = dict(op.get(key) or {})
         kr = _krug_split(raw)
@@ -819,8 +842,9 @@ SYNC_TABLES = {
     # Дело приходит заново и когда поменялась только его строка Круга (krug_seq): направления и «Зачем»
     # живут в своей таблице (dela_0009), а клиенту они — поля дела.
     "tasks": "SELECT * FROM tasks.v_tasks WHERE greatest(seq, coalesce(krug_seq, 0)) > %s",
-    # Направления проектов — их наследуют дела (у задач свои строки Круга едут в самом деле). Только свои (RLS).
-    "krug": "SELECT id, kind, directions, seq FROM tasks.krug WHERE kind = 'project' AND seq > %s",
+    # Направления проектов и цель, на которой проект висит, — их наследуют дела (у задач свои строки Круга едут в
+    # самом деле). Только свои (RLS).
+    "krug": "SELECT id, kind, directions, why_id, seq FROM tasks.krug WHERE kind = 'project' AND seq > %s",
     "projects": "SELECT * FROM crm.projects WHERE seq > %s",
     "deals": "SELECT * FROM crm.v_deals WHERE seq > %s",
     "payments": "SELECT * FROM crm.payments WHERE seq > %s",
@@ -877,8 +901,9 @@ ORDER = " ORDER BY due_date NULLS LAST, due_time NULLS LAST, created_at"
 
 
 def _list(conn, where: str, params: list, sphere: str | None = None, order: str = ORDER) -> list[dict]:
+    # Узлы дерева целей (Круг 7.2) — не дела: в списках их нет, они живут в дереве и в цепочке «Зачем».
     s, sp = _sphere(sphere)
-    return conn.execute(f"SELECT * FROM tasks.v_tasks WHERE {where}{s}{order}", [*params, *sp]).fetchall()
+    return conn.execute(f"SELECT * FROM tasks.v_tasks WHERE ({where}) AND NOT goal{s}{order}", [*params, *sp]).fetchall()
 
 
 def view_morning(conn, user, sphere=None, **_):

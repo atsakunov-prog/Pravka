@@ -1,4 +1,5 @@
-"""Разборщик Круга: расписание слотов, пачка, уверенное — само, сомнение — в «Подскажи», учёба на правках."""
+"""Разборщик Круга: расписание слотов, пачка, уверенное — само (цель или направление), сомнение — в «Подскажи»,
+память просмотренного, учёба на правках владельца."""
 
 from __future__ import annotations
 
@@ -57,33 +58,45 @@ def fake(answer):
     return NS(messages=NS(batches=b)), b
 
 
-def test_tick_sends_batch_then_sets_sure_and_asks_unsure(kr):
-    p = project(kr, "sasha", "Альфа")
-    ok(kr, "sasha", {"op": "project.set", "id": str(p), "set": {"directions": ["Дело"]}})
-    mk(kr, title="Подписать счёт", project_id=str(p))  # наследует Дело — разборщику не нужен
-    magnesium = mk(kr, title="Купить магний")
+def test_tick_places_sure_under_goal_and_asks_unsure(kr):
+    client = project(kr, "sasha", "Альфа")
+    ok(kr, "sasha", {"op": "project.set", "id": str(client), "set": {"directions": ["Дело"]}})
+    mk(kr, title="Подписать счёт", project_id=str(client))  # клиент висит на цели целиком — разборщику не нужен
+    food = mk(kr, title="Еда", goal=True, directions=["Здоровье"])
+    protein = mk(kr, title="Ежедневно набираю белок", goal=True, why_id=food["id"], rhythm="ежедневно")
+    mk(kr, title="Ориентир", goal=True, directions=["Здоровье"], no_steps=True)  # под ним ничего — и в список не идёт
+    magnesium = mk(kr, title="Купить протеин", directions=["Здоровье"])
     theatre = mk(kr, title="Театр")
+    lamp = mk(kr, title="Поменять лампу")
     ok(kr, "sasha", {"op": "task.set", "id": mk(kr, title="Купить кроссовки")["id"], "set": {"directions": ["Быт"]}})
-    cl, b = fake([{"num": magnesium["num"], "directions": ["health"], "sure": True, "why_num": None, "question": ""},
-                  {"num": theatre["num"], "directions": ["home"], "sure": False, "why_num": None, "question": "Театр — с кем?"}])
+    cl, b = fake([{"num": magnesium["num"], "goal_num": protein["num"], "directions": ["health"], "sure": True, "question": ""},
+                  {"num": theatre["num"], "goal_num": None, "directions": ["home"], "sure": False, "question": "Театр — с кем?"},
+                  {"num": lamp["num"], "goal_num": None, "directions": ["home"], "sure": True, "question": ""}])
     now = at("2026-10-12T20:31")
-    assert krug_auto.tick(kr, "key", None, now, cl) == {"sent": 2}
+    assert krug_auto.tick(kr, "key", None, now, cl) == {"sent": 4}  # протеин, театр, лампа, кроссовки
     prompt = b.sent[0][0]["params"]["messages"][0]["content"]
-    assert "Купить магний" in prompt and "Подписать счёт" not in prompt
-    assert "«Купить кроссовки»: Быт" in prompt  # правка владельца — примером
+    assert "Купить протеин" in prompt and "Подписать счёт" not in prompt
+    assert f"#{protein['num']} Здоровье › Еда › Ежедневно набираю белок (практика: ежедневно)" in prompt
+    assert "Ориентир" not in prompt and "Еда (" not in prompt
+    assert "«Купить кроссовки»: Комфортный быт" in prompt  # правка владельца — примером
     assert b.sent[0][0]["params"]["output_config"]["effort"] == krug_auto.EFFORT
     # Пачка ещё в работе — тик ничего не делает и новую не шлёт.
     assert krug_auto.tick(kr, "key", None, now, cl) is None and len(b.sent) == 1
     b.status = "ended"
     out = krug_auto.tick(kr, "key", None, now, cl)
-    assert out["set"] == 1 and out["asked"] == 1
+    assert out["set"] == 2 and out["asked"] == 1
     got = {t["num"]: t for t in store.sync(kr, "sasha", 0)["tasks"]}
-    assert got[magnesium["num"]]["directions"] == ["health"] and got[theatre["num"]]["directions"] == []
-    ask = [s for s in store.view(kr, "sasha", "new")["batches"][0]["items"]]
+    # Цель есть — «Зачем»; своё направление, совпавшее с главным, снято (место — по дереву).
+    assert got[magnesium["num"]]["why_id"] == protein["id"] and got[magnesium["num"]]["directions"] == []
+    assert got[lamp["num"]]["directions"] == ["home"] and got[theatre["num"]]["directions"] == []
+    ask = store.view(kr, "sasha", "new")["batches"][0]["items"]
     assert ask[0]["payload"]["ask"] == "Театр — с кем?" and ask[0]["source"] == "krug"
-    # Тот же слот второй раз не шлёт; о «Театре» уже спросили — следующий слот его не берёт.
+    # Тот же слот второй раз не шлёт; о «Театре» уже спросили, лампу и кроссовки уже смотрели — следующий слот пуст.
     assert krug_auto.tick(kr, "key", None, now, cl) is None
     assert krug_auto.tick(kr, "key", None, at("2026-10-12T21:00"), cl) is None and len(b.sent) == 1
+    # Дело поменялось — его смотрят заново.
+    ok(kr, "sasha", {"op": "task.set", "id": lamp["id"], "set": {"title": "Поменять лампу в коридоре"}})
+    assert krug_auto.tick(kr, "key", None, at("2026-10-12T21:30"), cl) == {"sent": 1}
 
 
 def test_nothing_to_do_costs_nothing(kr):
@@ -96,5 +109,6 @@ def test_nothing_to_do_costs_nothing(kr):
 
 def test_schema_enum_is_owner_keys(kr):
     s = krug_auto.schema(DIRS)
-    assert s["properties"]["items"]["items"]["properties"]["directions"]["items"]["enum"] == [d["key"] for d in DIRS]
-    assert "Здоровье" in krug_auto.system_prompt(DIRS) and krug.DIRECTIONS_KEY == "krug.directions"
+    item = s["properties"]["items"]["items"]["properties"]
+    assert item["directions"]["items"]["enum"] == [d["key"] for d in DIRS] and "goal_num" in item
+    assert "Здоровье (ключ health, зона «Я»)" in krug_auto.system_prompt(DIRS) and krug.DIRECTIONS_KEY == "krug.directions"

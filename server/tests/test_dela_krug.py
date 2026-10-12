@@ -1,4 +1,5 @@
-"""Круг жизни (dela_0009): направления, «Зачем», наследование, приватность, «Моё», движение."""
+"""Круг жизни (dela_0009, дерево целей — dela_0013): направления, «Зачем», цели-узлы, наследование, приватность,
+«Моё», движение, засев дерева."""
 
 from __future__ import annotations
 
@@ -10,11 +11,11 @@ from test_dela_schema import db_today, dela, project  # noqa: F401  (фикст�
 
 # Выдуманный справочник: настоящий живёт только в Своде владельца.
 DIRS = [
-    {"key": "health", "pos": 12, "name": "Здоровье", "short": "Здоровье", "formula": "Тело в форме."},
-    {"key": "work", "pos": 3, "name": "Дело", "short": "Дело", "formula": "Дело растёт."},
-    {"key": "education", "pos": 7, "name": "Образование", "short": "Образование", "formula": "Дети учатся."},
-    {"key": "home", "pos": 10, "name": "Комфорт в доме", "short": "Дом", "formula": "Дома хорошо."},
-    {"key": "household", "pos": 11, "name": "Быт", "short": "Быт", "formula": "Быт настроен."},
+    {"key": "health", "pos": 0, "zone": "Я", "name": "Здоровье", "short": "Здоровье", "formula": "Тело в форме."},
+    {"key": "work", "pos": 3, "zone": "Мир", "name": "Дело", "short": "Дело", "formula": "Дело растёт."},
+    {"key": "parenting", "pos": 6, "zone": "Семья", "name": "Родительство", "short": "Дети", "formula": "Дети растут."},
+    {"key": "home", "pos": 8, "zone": "Семья", "name": "Комфортный быт", "short": "Быт", "formula": "Дома хорошо.",
+     "aliases": ["Дом"]},
 ]
 
 
@@ -39,6 +40,10 @@ def mk(url, user="sasha", **task):
     return ok(url, user, {"op": "task.create", "task": task})[0]["task"]
 
 
+def find(url, q):
+    return store.view(url, "sasha", "search", q=q)["items"][0]
+
+
 def test_without_svod_directions_are_refused_in_words(dela):
     r = ops(dela, "sasha", {"op": "task.create", "task": {"title": "Купить магний", "directions": ["health"]}})[0]
     assert not r["ok"] and "krug.directions" in r["error"]
@@ -49,23 +54,71 @@ def test_names_become_keys_and_unknown_is_refused(kr):
     assert t["directions"] == ["health", "home"] and t["dirs"] == ["health", "home"]
     r = ops(kr, "sasha", {"op": "task.set", "id": t["id"], "set": {"directions": ["Астрология"]}})[0]
     assert not r["ok"] and "Астрология" in r["error"] and "Здоровье" in r["error"]
+    r = ops(kr, "sasha", {"op": "task.set", "id": t["id"], "set": {"directions": ["Здоровье", "Дело", "Дети", "Быт"]}})[0]
+    assert not r["ok"] and "не больше 3" in r["error"]
 
 
-def test_why_chain_inherits_and_counts_steps(kr):
-    top = mk(kr, title="Попробовать поступить в сильную школу", directions=["Образование"])
+def test_why_chain_main_direction_from_root_own_become_tags(kr):
+    top = mk(kr, title="Учится в сильной школе", directions=["Дети"], goal=True)
     step = mk(kr, title="Распечатать столбики примеров", why_title="Уверенно считает до 20")
-    goal = store.view(kr, "sasha", "search", q="считает до 20")["items"][0]
-    assert step["why_id"] == goal["id"] and step["why_num"] == goal["num"] and step["why_title"] == "Уверенно считает до 20"
+    goal = find(kr, "считает до 20")
+    # «Новая цель словами» — узел дерева, а не дело.
+    assert goal["goal"] and step["why_id"] == goal["id"] and step["why_title"] == "Уверенно считает до 20"
     assert step["dirs"] == [] and goal["steps_open"] == 1
     ok(kr, "sasha", {"op": "task.set", "id": goal["id"], "set": {"why_id": str(top["num"])}})
-    step = store.view(kr, "sasha", "search", q="столбики")["items"][0]
-    assert step["dirs"] == ["education"] and step["directions"] == []
-    # Своё направление сильнее наследованного.
+    step = find(kr, "столбики")
+    assert step["dirs"] == ["parenting"] and step["directions"] == []
+    # Своё направление шага под целью — метка: главное — у корня цепочки (бриф 7.2, §3).
     ok(kr, "sasha", {"op": "task.set", "id": step["id"], "set": {"directions": ["Быт"]}})
-    assert store.view(kr, "sasha", "search", q="столбики")["items"][0]["dirs"] == ["household"]
+    assert find(kr, "столбики")["dirs"] == ["parenting", "home"]
     # По кругу нельзя: цель не может быть шагом своего шага.
     r = ops(kr, "sasha", {"op": "task.set", "id": top["id"], "set": {"why_id": step["id"]}})[0]
     assert not r["ok"] and "по кругу" in r["error"]
+
+
+def test_goal_nodes_are_private_and_not_in_lists(kr):
+    family = project(kr, "sasha", "Семья", kind="personal", sphere="home")
+    ok(kr, "sasha", {"op": "access.set", "project_id": str(family), "user_id": "marianna", "role": "edit"})
+    goal = mk(kr, title="Личная цель", project_id=str(family), goal=True, directions=["Быт"],
+              due_date=db_today(kr).isoformat())
+    step = mk(kr, title="Купить продукты", project_id=str(family), why_id=goal["id"], due_date=db_today(kr).isoformat())
+    # Узел — без проекта: его текст видит только хозяин; общее дело видно без своего «зачем».
+    assert goal["goal"] and goal["project_id"] is None
+    seen = {t["id"]: t for t in store.sync(kr, "marianna", 0)["tasks"]}
+    assert goal["id"] not in seen and seen[step["id"]]["why_id"] is None and seen[step["id"]]["why_title"] is None
+    # В списках дел целей нет — только в дереве и в цепочке «Зачем».
+    today = store.view(kr, "sasha", "today")
+    listed = [t["id"] for g in today["groups"] for t in g["items"]] + [t["id"] for t in today["mine"]]
+    assert step["id"] in listed and goal["id"] not in listed
+    assert goal["id"] not in [t["id"] for g in store.view(kr, "sasha", "later")["groups"] for t in g["items"]]
+    # Ритм делает практику: цель, которая повторяется.
+    ok(kr, "sasha", {"op": "task.set", "id": step["id"], "set": {"rhythm": "еженедельно"}})
+    assert find(kr, "продукты")["goal"] and find(kr, "продукты")["rhythm"] == "еженедельно"
+
+
+def test_no_steps_goal_takes_nothing_under_it(kr):
+    g = mk(kr, title="Ориентир", goal=True, directions=["Здоровье"], no_steps=True)
+    r = ops(kr, "sasha", {"op": "task.create", "task": {"title": "Шаг", "why_id": g["id"]}})[0]
+    assert not r["ok"] and "ориентир" in r["error"]
+
+
+def test_project_hangs_on_goal_and_tasks_inherit(kr):
+    root = mk(kr, title="Своя фирма", goal=True, directions=["Дело"])
+    mandates = mk(kr, title="Мандаты закрываются с гонораром", goal=True, why_id=root["id"])
+    p = project(kr, "sasha", "Альфа")
+    ok(kr, "sasha", {"op": "project.set", "id": str(p), "set": {"why_id": str(mandates["num"])}})
+    t = mk(kr, title="Подписать договор", project_id=str(p))
+    assert t["dirs"] == ["work"]
+    assert {k["id"]: k["why_id"] for k in store.sync(kr, "sasha", 0)["krug"]} == {str(p): mandates["id"]}
+    tr = store.view(kr, "sasha", "tree", direction="work")["directions"][0]
+    node = tr["children"][0]["children"][0]
+    assert node["title"] == "Мандаты закрываются с гонораром" and node["children"][0] == {
+        "kind": "project", "name": "Альфа", "client": True, "open": 1, "moved": 0,
+        "children": [{"kind": "task", "num": t["num"], "title": "Подписать договор", "project_name": "Альфа", "ball": "mine",
+                      "open": 0, "moved": 0}]}
+    assert tr["open"] == 1
+    r = ops(kr, "sasha", {"op": "project.set", "id": str(p), "set": {"goal": True}})[0]
+    assert not r["ok"] and "проект" in r["error"]
 
 
 def test_project_directions_are_inherited_only_by_owner(kr, conn):
@@ -94,14 +147,15 @@ def test_krug_only_change_reaches_incremental_sync(kr):
     ok(kr, "sasha", {"op": "task.set", "id": t["id"], "set": {"directions": ["Дом"]}})
     got = store.sync(kr, "sasha", seq)
     assert [x["directions"] for x in got["tasks"] if x["id"] == t["id"]] == [["home"]] and got["seq"] > seq
-    assert "krug" in got and "krug" in store.FEATURES
+    assert "krug" in got and {"krug", "tree"} <= set(store.FEATURES)
 
 
 def test_today_has_mine_and_principle(kr):
-    goal = mk(kr, title="Уверенно считает до 20", directions=["Образование"])
+    goal = mk(kr, title="Уверенно считает до 20", directions=["Дети"], goal=True)
     step = mk(kr, title="Распечатать столбики", why_id=goal["id"], due_date=db_today(kr).isoformat())
     mk(kr, title="Ответить Гуркину", ball="owed", why_id=goal["id"])  # ждут от меня — не «Моё»
     pinned = mk(kr, title="Смонтировать ролик", want=True)
+    mk(kr, title="Пустая цель", goal=True, why_id=goal["id"])  # цель без шагов — не дело, в «Моё» не идёт
     v = store.view(kr, "sasha", "today")
     assert [t["title"] for t in v["mine"]] == ["Смонтировать ролик", "Распечатать столбики"]
     assert v["principle"]["text"] in ("Страшно — значит, делаю.", "Решил — делаю сразу.")
@@ -110,22 +164,22 @@ def test_today_has_mine_and_principle(kr):
     assert step["id"] not in in_groups and pinned["id"] not in in_groups
 
 
-def test_movement_counts_goals_triple(kr):
-    goal = mk(kr, title="БЖЖ: 12 недель по две тренировки", directions=["Здоровье"])
-    step = mk(kr, title="Тренировка БЖЖ", why_id=goal["id"])
+def test_movement_counts_goals_triple_and_only_main(kr):
+    goal = mk(kr, title="БЖЖ два раза в неделю", directions=["Здоровье"], goal=True)
+    step = mk(kr, title="Тренировка БЖЖ", why_id=goal["id"], directions=["Дети"])  # метка движения не даёт
     ok(kr, "sasha", {"op": "task.done", "id": step["id"]}, {"op": "task.done", "id": goal["id"]})
     with dela_db.session(kr, "sasha", via="app") as c:
         m = krug.movement(c, "sasha", c.execute("SELECT crm.today() AS d").fetchone()["d"])
-    assert m["health"]["events"] == 4 and m["health"]["goals"] == 1 and m["health"]["radius"] == 6.0
+    assert m == {"health": {"done": 2, "goals": 1, "events": 4, "radius": 6.0}}
 
 
 def test_krug_question_accepted_with_fix(kr):
     t = mk(kr, title="Театр вдвоём")
     s = ok(kr, "sasha", {"op": "suggestion.create", "suggestion": {
-        "kind": "update", "task_id": t["id"], "source": "krug", "batch_ref": "krug:test", "batch_title": "Направления",
-        "payload": {"directions": ["home"], "ask": "Театр вдвоём — Дом?"}}})[0]["suggestion"]
-    r = ok(kr, "sasha", {"op": "suggestion.decide", "id": s["id"], "decision": "accept", "set": {"directions": ["Быт"]}})[0]
-    assert r["task"]["directions"] == ["household"] and r["suggestion"]["status"] == "edited"
+        "kind": "update", "task_id": t["id"], "source": "krug", "batch_ref": "krug:test", "batch_title": "Место в дереве",
+        "payload": {"directions": ["home"], "ask": "Театр вдвоём — Быт?"}}})[0]["suggestion"]
+    r = ok(kr, "sasha", {"op": "suggestion.decide", "id": s["id"], "decision": "accept", "set": {"directions": ["Здоровье"]}})[0]
+    assert r["task"]["directions"] == ["health"] and r["suggestion"]["status"] == "edited"
 
 
 def test_seed_writes_svod_and_projects_once(dela):
@@ -139,42 +193,96 @@ def test_seed_writes_svod_and_projects_once(dela):
     assert got == {str(client): ["work"], str(zf): ["work"]} and str(family) not in got
     # Повтор ничего не переписывает: правки владельца в Своде целы.
     ok(dela, "sasha", {"op": "svod.set", "key": krug.PRINCIPLES_KEY, "value": ["Своё"], "author": "web"})
-    assert krug.seed(dela, "sasha", data) == {"svod": [], "projects": []}
+    assert krug.seed(dela, "sasha", data) == {"svod": [], "merged": 0, "projects": [], "tree": None}
     assert store.view(dela, "sasha", "today")["principle"]["text"] == "Своё"
 
 
-def test_mcp_tools_speak_krug(kr):
+def test_seed_merges_directions_and_imports_tree_once(kr):
+    old = mk(kr, title="Купить кроссовки", directions=["Дом"])
+    school = mk(kr, title="Поступить в сильную школу", directions=["Дети"], project_id=str(project(kr, "sasha", "Семья", kind="personal")))
+    sums = mk(kr, title="Решать примеры")
+    alpha = project(kr, "sasha", "Альфа")
+    beta = project(kr, "sasha", "Бета")
+    # Двенадцать → девять: «household» сливается в «home» (выдуманная карта).
+    with dela_db.session(kr, "system", "test") as c:
+        c.execute("UPDATE tasks.krug SET directions = '{household}' WHERE id = %s", (old["id"],))
+    data = {
+        "merge": {"household": "home"},
+        "tree": {
+            "parenting": [{"title": "Старший сын", "children": [
+                {"num": school["num"], "title": "Учится в сильной школе", "tasks": [sums["num"]], "children": [
+                    {"title": "Читает каждый день", "rhythm": "ежедневно"},
+                    {"title": "Подобрать книги", "task": True}]}]}],
+            "work": [{"title": "Своя фирма", "projects": ["Бета"], "children": [
+                {"title": "Мандаты закрываются с гонораром", "projects": ["kind:client"]}]}],
+            "home": [{"title": "Покупки вовремя", "tasks": [old["num"]]}],
+            "health": [{"title": "Ориентир", "no_steps": True}],
+        },
+    }
+    out = krug.seed(kr, "sasha", data)
+    t = out["tree"]
+    assert out["merged"] == 1 and t["missing"] == []
+    assert t["created"] == 7 and t["goals"] == 6 and t["linked"] == 2
+    assert t["renamed"] == [f"#{school['num']}: Поступить в сильную школу → Учится в сильной школе"]
+    assert sorted(t["projects"]) == ["Альфа", "Бета"]  # «Семья» — не клиент: остаётся без цели
+    school = find(kr, "сильной школе")
+    assert school["goal"] and school["project_id"] is None and school["dirs"] == ["parenting"] and school["directions"] == []
+    assert find(kr, "примеры")["why_id"] == school["id"] and find(kr, "примеры")["dirs"] == ["parenting"]
+    assert find(kr, "кроссовки")["dirs"] == ["home"] and find(kr, "кроссовки")["directions"] == []
+    assert find(kr, "Читает каждый день")["rhythm"] == "ежедневно"
+    books = find(kr, "Подобрать книги")
+    assert not books["goal"] and books["why_id"] == school["id"]
+    krugs = {k["id"]: k["why_id"] for k in store.sync(kr, "sasha", 0)["krug"]}
+    assert krugs[str(alpha)] == find(kr, "Мандаты")["id"] and krugs[str(beta)] == find(kr, "Своя фирма")["id"]
+    assert find(kr, "Ориентир")["no_steps"]
+    # Повтор (установщик зовёт засев каждый раз): дерево уже посажено — не трогает, перенесённое владельцем на месте.
+    ok(kr, "sasha", {"op": "task.set", "id": sums["id"], "set": {"why_id": find(kr, "Читает каждый день")["id"]}})
+    assert krug.seed(kr, "sasha", data)["tree"] is None
+    assert find(kr, "примеры")["why_id"] == find(kr, "Читает каждый день")["id"]
+    # --force — пройти ещё раз: новых узлов нет, ничего не переименовано.
+    again = krug.seed(kr, "sasha", data, force=True)["tree"]
+    assert again["created"] == 0 and again["renamed"] == []
+    # Новая версия файла — Свод переписан один раз.
+    v2 = {**data, "version": "7.2", "principles": ["Начинаю с тела."], "tree": {}}
+    assert krug.PRINCIPLES_KEY in krug.seed(kr, "sasha", v2)["svod"]
+    assert krug.seed(kr, "sasha", v2)["svod"] == []
+
+
+def test_mcp_tools_speak_tree(kr):
     from pravka_dela import mcp_tools
 
-    top = mcp_tools.add(kr, title="Поступить в сильную школу", directions=["Образование"])
-    assert "направление Образование" in top and "(насл.)" not in top, top
+    top = mcp_tools.add(kr, title="Учится в сильной школе", directions=["Дети"], goal=True)
+    assert "цель" in top and "направление Дети" in top and "Входящие" not in top, top
     num = top.split("#", 1)[1].split(" ", 1)[0]
     step = mcp_tools.add(kr, title="Распечатать столбики", why="Уверенно считает до 20")
     assert "зачем #" in step and "Уверенно считает до 20" in step, step
     goal = mcp_tools.change(kr, step.split("зачем #", 1)[1].split(" ", 1)[0], why=num)
-    assert "направление Образование (насл.)" in goal and "цель, шагов открыто 1" in goal, goal
+    assert "цель" in goal and "направление Дети" in goal and "шагов открыто 1" in goal, goal
     # «Зачем» по названию открытой цели — та же цель, а не новая.
     again = mcp_tools.add(kr, title="Привезти учебник", why="уверенно считает до 20")
     assert again.split("зачем #", 1)[1].split(" ", 1)[0] == step.split("зачем #", 1)[1].split(" ", 1)[0]
     k = mcp_tools.view(kr, "krug")
-    assert "7 · Образование — открыто 4" in k and "    #" in k, k
-    only = mcp_tools.view(kr, "later", direction="Образование")
-    assert "Распечатать столбики" in only and "направление Образование" in only
+    assert "Родительство (зона «Семья») — Дети растут." in k and "открыто 2" in k, k
+    tree = mcp_tools.view(kr, "tree", direction="Дети")
+    assert f"◆ #{num} Учится в сильной школе" in tree and "      #" in tree, tree
+    only = mcp_tools.view(kr, "later", direction="Дети")
+    assert "Распечатать столбики" in only and "направление Дети" in only
     assert "нет такого направления" in mcp_tools.view(kr, "later", direction="Астрология")
     today = mcp_tools.view(kr, "today")
     assert "Принцип дня:" in today and "Моё" in today, today
 
 
-def test_view_krug_tree_and_life_view(kr, conn):
-    top = mk(kr, title="Поступить в сильную школу", directions=["Образование"])
-    goal = mk(kr, title="Хорошо знает математику", why_id=top["id"])
+def test_view_krug_overview_tree_and_life_view(kr, conn):
+    top = mk(kr, title="Поступить в сильную школу", directions=["Дети"], goal=True)
+    goal = mk(kr, title="Хорошо знает математику", why_id=top["id"], goal=True)
     mk(kr, title="Распечатать столбики", why_id=goal["id"])
     mk(kr, title="Без направления пока")
     v = store.view(kr, "sasha", "krug")
-    edu = next(d for d in v["directions"] if d["key"] == "education")
-    assert edu["open"] == 3 and [n["title"] for n in edu["tree"]] == ["Поступить в сильную школу"]
-    assert edu["tree"][0]["steps"][0]["steps"][0]["title"] == "Распечатать столбики"
+    kids = next(d for d in v["directions"] if d["key"] == "parenting")
+    assert kids["open"] == 1 and [g["title"] for g in kids["goals"]] == ["Поступить в сильную школу"]
     assert [x["title"] for x in v["without"]] == ["Без направления пока"]
-    assert [d["key"] for d in v["directions"]][0] == "health"  # по кругу: сверху 12
-    row = conn.execute("SELECT directions, why FROM life.tasks WHERE title = 'Распечатать столбики'").fetchone()
-    assert row == (["education"], "Хорошо знает математику")
+    assert [d["key"] for d in v["directions"]][0] == "health"  # по кругу: сверху Здоровье
+    t = store.view(kr, "sasha", "tree", node=str(goal["num"]))["node"]
+    assert t["kind"] == "goal" and t["open"] == 1 and t["children"][0]["title"] == "Распечатать столбики"
+    row = conn.execute("SELECT directions, why, goal FROM life.tasks WHERE title = 'Распечатать столбики'").fetchone()
+    assert row == (["parenting"], "Хорошо знает математику", False)

@@ -1,4 +1,4 @@
-"""Разборщик Круга: дела без направления получают направление — сами, пачкой, по расписанию.
+"""Разборщик Круга: дела без цели получают место в дереве жизни — сами, пачкой, по расписанию.
 
 Владелец 12.10.2026: «если я сам не проставил направление, то разборщик это делает… сервер пускай смотрит
 количество дел без направления и раз в полчаса отправляет. Если нет никаких дел без направлений, то ничего
@@ -7,13 +7,16 @@
 Как устроено:
 - Тик службы — раз в минуту (__main__). Слот — по Москве: будни — :00 и :30 с 08:00 до 23:30, выходные — :00,
   и последний слот суток — 00:00. Слот уже отработан (crm.state krug_auto) — ничего.
-- Дела без направления: открытые дела владельца, у которых пусто и своё, и наследованное (v_tasks.dirs), и
-  по которым разборщик ещё не спрашивал. Нет таких — ни одного запроса, ни цента.
+- Дела без цели (бриф 7.2, 13.10.2026: «для каждого дела автоматика предлагает родителя — конкретную цель
+  дерева, а не только направление»): открытые свои дела без «Зачем», не в проекте клиента и не в сделке (у них
+  место уже есть: клиент висит на цели целиком, у сделки «зачем» — сама сделка), которые разборщик ещё не
+  смотрел в этом виде и о которых ещё не спрашивал. Нет таких — ни одного запроса, ни цента.
 - Есть — один запрос Opus в Message Batches (−50 %, обычно минуты). Пачка в работе — крутится следующими
   тиками; не кончилась за два часа — отмена и тот же запрос напрямую.
-- Ответ: уверен — направления (и «Зачем», если цель очевидна) ставятся сами, от имени владельца со службой
-  svc:krug в журнале; не уверен — вопрос в «Подскажи» (правило Дел №5: «уверен — поставил, не уверен —
-  подскажи»).
+- Ответ: уверен — цель («Зачем») ставится сама, а если ни одна цель не подходит — направление (дело висит на
+  нём «без зачем»); от имени владельца со службой svc:krug в журнале. Не уверен — вопрос в «Подскажи» (правило
+  Дел №5: «уверен — поставил, не уверен — подскажи»). Цели сам не заводит («Узлы создаёт Саша»), под целью с
+  пометкой no_steps ничего не ставит, свои направления владельца не переписывает.
 - Учится на правках владельца: что он сам поставил или поправил в Круге (журнал tasks.krug, не служба) —
   примерами в запрос. Механизма «учиться на причинах отклонения» в Делах не было (бриф думал, что есть) —
   этот свой.
@@ -43,6 +46,7 @@ STATE_KEY = "krug_auto"
 BATCH_MAX_AGE = 2 * 3600  # пачка не кончилась за два часа — тот же запрос напрямую
 MAX_TASKS = 80  # за один запрос; остальные — следующим слотом
 ASKED_DAYS = 14  # о деле уже спрашивали (вопрос висит, отклонён или погас) — не переспрашивать
+SEEN_MAX = 2000  # сколько просмотренных дел помнить (id → версия); старое выпадает
 EXAMPLES = 40  # правок владельца в запрос
 MSK = ZoneInfo("Europe/Moscow")
 
@@ -73,34 +77,64 @@ def last_slot(now: dt.datetime) -> dt.datetime:
 # ── Что размечать ──────────────────────────────────────────────────────
 
 
-def candidates(conn, owner: str) -> list[dict]:
-    """Открытые дела владельца без направления — ни своего, ни наследованного — о которых ещё не спрашивали."""
-    return conn.execute(
+def version(t: dict) -> int:
+    """Версия дела для памяти разборщика: поменялось дело или его строка Круга — смотреть заново."""
+    return max(int(t.get("seq") or 0), int(t.get("krug_seq") or 0))
+
+
+def candidates(conn, owner: str, seen: dict | None = None) -> list[dict]:
+    """Открытые свои дела без цели, которые разборщик ещё не смотрел в этом виде и о которых не спрашивал.
+
+    Не берёт: цели (узлы дерева), дела с «Зачем», дела проектов-клиентов (клиент висит на цели целиком) и дела
+    сделок (их «зачем» — сама сделка)."""
+    seen = seen or {}
+    rows = conn.execute(
         "SELECT t.id, t.num, t.title, t.notes, t.project_name, t.project_kind, t.deal_name, t.person_name, t.grp, "
-        "t.why_id, t.why_title FROM tasks.v_tasks t "
-        "WHERE t.owner_id = %s AND t.status = 'open' AND cardinality(t.dirs) = 0 "
+        "t.dirs, t.directions, t.seq, t.krug_seq FROM tasks.v_tasks t "
+        "WHERE t.owner_id = %s AND t.status = 'open' AND NOT t.goal AND t.why_id IS NULL AND t.deal_id IS NULL "
+        "AND coalesce(t.project_kind, '') <> 'client' "
         "AND NOT EXISTS (SELECT 1 FROM tasks.suggestions s WHERE s.task_id = t.id AND s.source = 'krug' "
         "                AND (s.status = 'pending' OR s.created_at > now() - make_interval(days => %s))) "
-        "ORDER BY t.created_at LIMIT %s", (owner, ASKED_DAYS, MAX_TASKS)).fetchall()
+        "ORDER BY t.created_at", (owner, ASKED_DAYS)).fetchall()
+    return [r for r in rows if seen.get(str(r["id"])) != version(r)][:MAX_TASKS]
 
 
 def goals(conn, owner: str) -> list[dict]:
-    """Открытые цели (дела, у которых есть шаги) — куда разборщик может повесить «Зачем»."""
-    return conn.execute(
-        "SELECT num, title, dirs FROM tasks.v_tasks WHERE owner_id = %s AND status = 'open' AND steps_open > 0 "
-        "ORDER BY num", (owner,)).fetchall()
+    """Цели дерева — куда разборщик может повесить «Зачем»: открытые узлы (и дела, у которых есть шаги), кроме
+    тех, под которыми дел не заводят. С путём от направления: «Здоровье › Еда › Белок»."""
+    rows = conn.execute(
+        "SELECT id, num, title, why_id, dirs, goal, rhythm, no_steps FROM tasks.v_tasks WHERE owner_id = %s "
+        "AND status = 'open' AND (goal OR steps_open > 0) ORDER BY num", (owner,)).fetchall()
+    by = {r["id"]: r for r in rows}
+    out = []
+    for r in rows:
+        if r["no_steps"]:
+            continue
+        path, x = [], r
+        for _ in range(krug.TREE_DEPTH):
+            path.append(x["title"])
+            x = by.get(x["why_id"])
+            if not x:
+                break
+        out.append({"num": r["num"], "path": list(reversed(path)), "dirs": r["dirs"], "rhythm": r["rhythm"]})
+    return out
 
 
 def examples(url: str, owner: str) -> list[dict]:
-    """Как владелец сам размечал: последние правки Круга не службой — дело и что он поставил."""
+    """Как владелец сам ставил: последние правки Круга не службой и не засевом — дело и куда он его поставил
+    (цель или направление). Правки самих целей не в счёт: учимся месту дел. Тот же смысл, что у причины
+    отклонения в «Подскажи» (бриф 7.2, §10): ответ владельца — пример на будущее."""
     with db.session(url, "system", via="krug") as conn:
         rows = conn.execute(
-            "SELECT DISTINCT ON (h.entity_id) h.entity_id, h.after -> 'directions' AS dirs, h.at, t.title "
-            "FROM crm.history h JOIN tasks.tasks t ON t.id::text = h.entity_id "
-            "WHERE h.entity = 'tasks.krug' AND h.actor NOT LIKE 'svc:%%' AND h.after ? 'directions' "
-            "AND t.owner_id = %s ORDER BY h.entity_id, h.at DESC", (owner,)).fetchall()
+            "SELECT DISTINCT ON (h.entity_id) h.entity_id, h.after -> 'directions' AS dirs, h.at, t.title, "
+            "w.title AS why FROM crm.history h JOIN tasks.tasks t ON t.id::text = h.entity_id "
+            "JOIN tasks.krug k ON k.id = t.id AND NOT k.goal "
+            "LEFT JOIN tasks.tasks w ON w.id::text = h.after ->> 'why_id' "
+            "WHERE h.entity = 'tasks.krug' AND h.actor NOT LIKE 'svc:%%' AND h.actor NOT LIKE 'cli:%%' "
+            "AND (h.after ? 'directions' OR h.after ? 'why_id') AND t.owner_id = %s "
+            "ORDER BY h.entity_id, h.at DESC", (owner,)).fetchall()
     rows = sorted(rows, key=lambda r: r["at"], reverse=True)[:EXAMPLES]
-    return [{"title": r["title"], "dirs": list(r["dirs"] or [])} for r in rows if r["dirs"]]
+    return [{"title": r["title"], "dirs": list(r["dirs"] or []), "why": r["why"]} for r in rows if r["dirs"] or r["why"]]
 
 
 # ── Запрос ─────────────────────────────────────────────────────────────
@@ -108,18 +142,20 @@ def examples(url: str, owner: str) -> list[dict]:
 # Правила разметки — запись Свода prompt.krug (правда — там: в ней примеры владельца с именами семьи, а репозиторий
 # публичный; засевается из его файла командой krug-seed). Здесь — запас без имён, пока записи нет.
 PROMPT_KEY = krug.PROMPT_KEY
-RULES ="""Ты размечаешь дела владельца по направлениям его Круга жизни. Направления — параллельные стороны жизни,
-по которым он идёт одновременно; у каждого — формула, смысл, что входит и что нет, примеры (ниже, целиком).
+RULES = """Ты находишь место дел владельца в его дереве жизни. Направления — параллельные стороны жизни, по которым
+он идёт одновременно; у каждого — формула, смысл, границы (ниже, целиком). Под направлениями — его цели
+(список ЦЕЛИ, с путём от направления): цель — состояние, к которому он идёт; цель с ритмом — практика.
 
 Как решать:
-- Направление — по «зачем» дела: какую сторону жизни оно двигает. Не по тому, кто попросил, и не по типу
-  действия: покупка добавок — Здоровье, покупка одежды — Быт; бытовая просьба близкого — Быт.
-- Обычно направление одно. Второе — только если дело явно двигает обе стороны. Больше двух — почти никогда.
-- То, что ради удовольствия, идёт туда, где живёт его смысл; отдельного направления для удовольствий нет.
-- Сомневаешься между двумя — sure: false, в directions — лучший вариант, в question — короткий вопрос владельцу
-  («Театр — вдвоём (Пара) или для себя (Ум)?»). Уверен — sure: true, question пустой.
-- Дела по клиентам, сделкам и команде — Дело.
-- why_num — только если дело очевидно шаг к одной из открытых целей из списка ЦЕЛИ; иначе null. Не выдумывай.
+- Место дела — по его «зачем»: к какой цели оно ведёт. Не по тому, кто попросил, и не по типу действия:
+  покупка добавок — Здоровье, покупка одежды — Быт; бытовая просьба близкого — Быт.
+- goal_num — номер самой точной цели из списка ЦЕЛИ, к которой дело явно ведёт; нет такой — null (дело
+  повиснет прямо на направлении). Целей не выдумывай и новых не предлагай.
+- directions — главное направление первым (то, где цель, или куда дело относится); второе — только если дело
+  явно двигает и другую сторону. Обычно одно.
+- Уверен в месте — sure: true, question пустой. Сомневаешься (две цели или два направления подходят одинаково) —
+  sure: false, лучший вариант в goal_num и directions, в question — короткий вопрос владельцу («Театр — вдвоём
+  (Пара) или для себя (Ум)?»).
 - Отвечай по каждому делу из списка ДЕЛА, num — его номер."""
 
 
@@ -130,8 +166,8 @@ def rules(conn, owner: str) -> str:
 
 
 def _dir_block(d: dict) -> str:
-    lines = [f"{d.get('pos')} · {d.get('name')} (ключ {d['key']})"]
-    for k, title in (("formula", "Формула"), ("meaning", "Смысл"), ("includes", "Входит"), ("excludes", "Не входит"),
+    lines = [f"{d.get('name')} (ключ {d['key']}" + (f", зона «{d['zone']}»" if d.get("zone") else "") + ")"]
+    for k, title in (("formula", "Формула"), ("meaning", "Смысл"), ("includes", "Входит"), ("excludes", "Границы — не сюда"),
                      ("notes", "Ещё"), ("examples", "Примеры")):
         v = d.get(k)
         if isinstance(v, list):
@@ -149,12 +185,13 @@ def user_prompt(tasks: list[dict], open_goals: list[dict], learned: list[dict], 
     name = {d["key"]: d.get("name") or d["key"] for d in known}
     parts = []
     if learned:
-        parts.append("КАК ВЛАДЕЛЕЦ РАЗМЕЧАЛ САМ (свежие сверху — это сильнее общих правил):\n" + "\n".join(
-            f"— «{e['title']}»: " + ", ".join(name.get(k, k) for k in e["dirs"]) for e in learned))
+        parts.append("КАК ВЛАДЕЛЕЦ СТАВИЛ САМ (свежие сверху — это сильнее общих правил):\n" + "\n".join(
+            f"— «{e['title']}»: " + (f"цель «{e['why']}»" if e.get("why") else ", ".join(name.get(k, k) for k in e["dirs"]))
+            for e in learned))
     if open_goals:
-        parts.append("ЦЕЛИ (открытые дела, у которых есть шаги):\n" + "\n".join(
-            f"#{g['num']} {g['title']}" + (f" — {', '.join(name.get(k, k) for k in g['dirs'])}" if g["dirs"] else "")
-            for g in open_goals))
+        parts.append("ЦЕЛИ (номер — путь от направления):\n" + "\n".join(
+            f"#{g['num']} " + " › ".join([name.get((g["dirs"] or [""])[0], "?"), *g["path"]])
+            + (f" (практика: {g['rhythm']})" if g.get("rhythm") else "") for g in open_goals))
     rows = []
     for t in tasks:
         bits = [f"#{t['num']} {t['title']}"]
@@ -164,8 +201,8 @@ def user_prompt(tasks: list[dict], open_goals: list[dict], learned: list[dict], 
             bits.append(f"сделка {t['deal_name']}")
         if t.get("person_name"):
             bits.append(f"человек {t['person_name']}")
-        if t.get("why_title"):
-            bits.append(f"зачем: {t['why_title']}")
+        if t.get("directions"):
+            bits.append("владелец сам поставил: " + ", ".join(name.get(k, k) for k in t["directions"]))
         notes = " ".join(str(t.get("notes") or "").split())
         if notes:
             bits.append("заметки: " + (notes[:300] + "…" if len(notes) > 300 else notes))
@@ -183,12 +220,12 @@ def schema(known: list[dict]) -> dict:
         "properties": {"items": {"type": "array", "items": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["num", "directions", "sure", "why_num", "question"],
+            "required": ["num", "goal_num", "directions", "sure", "question"],
             "properties": {
                 "num": {"type": "integer"},
+                "goal_num": {"type": ["integer", "null"]},
                 "directions": {"type": "array", "items": {"type": "string", "enum": keys}},
                 "sure": {"type": "boolean"},
-                "why_num": {"type": ["integer", "null"]},
                 "question": {"type": "string"},
             }}}},
     }
@@ -214,41 +251,61 @@ def _parse(msg) -> list[dict]:
 # ── Ответ — в Дела ─────────────────────────────────────────────────────
 
 
-def apply(url: str, owner: str, slot: str, items: list[dict], known: list[dict]) -> dict:
+def apply(url: str, owner: str, slot: str, items: list[dict], known: list[dict], seen: dict | None = None) -> dict:
     """Уверенное — ставится само (task.set от владельца, в журнале svc:krug); остальное — вопрос в «Подскажи».
 
-    Дело успели разметить руками, закрыть или удалить из списка — не трогаем: человек сильнее разборщика."""
+    Цель есть — ставится «Зачем»; свои направления дела, кроме главного направления цели, остаются метками.
+    Цели нет — направление, если своих у дела нет и проект не даёт того же. Дело успели поставить руками,
+    закрыть или удалить — не трогаем: человек сильнее разборщика. seen — память просмотренных (id → версия
+    дела после ответа): дело, которое смотрели и оставили как есть, не уходит в следующий запрос."""
     from . import store
 
     keys = {d["key"] for d in known}
     name = {d["key"]: d.get("name") or d["key"] for d in known}
-    ops = []
+    ops, looked = [], []
     with db.session(url, owner, via="krug") as conn:
+        paths = {g["num"]: g for g in goals(conn, owner)}
         for it in items:
-            dirs = [k for k in it.get("directions") or [] if k in keys]
-            t = conn.execute("SELECT id, num, title, status, dirs FROM tasks.v_tasks WHERE num = %s AND owner_id = %s",
-                             (it.get("num"), owner)).fetchone()
-            if not t or t["status"] != "open" or t["dirs"] or not dirs:
+            dirs = [k for k in it.get("directions") or [] if k in keys][:krug.DIRS_MAX]
+            t = conn.execute("SELECT id, num, title, status, goal, why_id, directions, dirs FROM tasks.v_tasks "
+                             "WHERE num = %s AND owner_id = %s", (it.get("num"), owner)).fetchone()
+            if not t or t["status"] != "open" or t["goal"] or t["why_id"]:
                 continue
-            why = None
-            if it.get("why_num"):
-                g = conn.execute("SELECT id FROM tasks.v_tasks WHERE num = %s AND owner_id = %s AND status = 'open' "
-                                 "AND steps_open > 0 AND id <> %s", (it["why_num"], owner, t["id"])).fetchone()
-                why = g and str(g["id"])
-            if it.get("sure"):
-                ops.append({"op": "task.set", "op_id": str(uuid.uuid4()), "id": str(t["id"]),
-                            "set": {"directions": dirs, **({"why_id": why} if why else {})}})
+            looked.append(t["id"])
+            g = None
+            if it.get("goal_num") in paths:
+                g = conn.execute("SELECT id, title, dirs FROM tasks.v_tasks WHERE num = %s AND owner_id = %s AND id <> %s",
+                                 (it["goal_num"], owner, t["id"])).fetchone()
+            own = list(t["directions"] or [])
+            if g:
+                main = (g["dirs"] or [None])[0]
+                tags = [k for k in own if k != main]
+                patch = {"why_id": str(g["id"]), **({"directions": tags} if tags != own else {})}
+            elif dirs and not own and (t["dirs"] or [None])[0] != dirs[0]:
+                patch = {"directions": dirs}
             else:
-                q = (it.get("question") or "").strip() or f"«{t['title']}» — {', '.join(name[k] for k in dirs)}?"
-                ops.append({"op": "suggestion.create", "op_id": str(uuid.uuid4()), "suggestion": {
-                    "kind": "update", "task_id": str(t["id"]), "source": "krug", "batch_ref": f"krug:{slot}",
-                    "batch_title": "Направления", "payload": {"directions": dirs, "ask": q, **({"why_id": why} if why else {})}}})
-    if not ops:
-        return {"set": 0, "asked": 0, "errors": []}
-    res = store.apply_ops(url, owner, ops, "krug", "svc:krug")["results"]
+                continue
+            if it.get("sure"):
+                ops.append({"op": "task.set", "op_id": str(uuid.uuid4()), "id": str(t["id"]), "set": patch})
+                continue
+            p = paths.get(it.get("goal_num")) if g else None
+            where = " › ".join([name.get((p["dirs"] or [""])[0], "?"), *p["path"]]) if p else ", ".join(name[k] for k in dirs)
+            q = (it.get("question") or "").strip() or f"«{t['title']}» — {where}?"
+            ops.append({"op": "suggestion.create", "op_id": str(uuid.uuid4()), "suggestion": {
+                "kind": "update", "task_id": str(t["id"]), "source": "krug", "batch_ref": f"krug:{slot}",
+                "batch_title": "Место в дереве", "payload": {**patch, "ask": q, **({"goal_path": where} if g else {}),
+                                                              **({"directions": dirs} if not g else {})}}})
+    res = store.apply_ops(url, owner, ops, "krug", "svc:krug")["results"] if ops else []
     bad = [r.get("error") for r in res if not r.get("ok")]
     if bad:
         log.warning("Круг: не записалось %d из %d: %s", len(bad), len(ops), bad[0])
+    if seen is not None and looked:
+        with db.session(url, owner, via="krug") as conn:
+            for r in conn.execute("SELECT id, seq, krug_seq FROM tasks.v_tasks WHERE id = ANY(%s)", (looked,)).fetchall():
+                seen.pop(str(r["id"]), None)
+                seen[str(r["id"])] = version(r)
+        for k in list(seen)[:-SEEN_MAX]:
+            seen.pop(k, None)
     return {"set": sum(1 for o, r in zip(ops, res) if r.get("ok") and o["op"] == "task.set"),
             "asked": sum(1 for o, r in zip(ops, res) if r.get("ok") and o["op"] == "suggestion.create"), "errors": bad}
 
@@ -301,8 +358,9 @@ def tick(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
                 log.warning("Круг: пачку %s отменить не вышло", b["id"])
             msg = client.beta.messages.create(**b["params"], betas=[FALLBACK_BETA], fallbacks="default")
             usd = _account(url, msg, batch=False)
-            out = apply(url, owner, b["slot"], _parse(msg), krug.directions_of(url, owner))
-            _save(url, {**st, "batch": None, "last": {"slot": b["slot"], "direct": True, "usd": round(usd, 4), **out}})
+            seen = {**(st.get("seen") or {}), **(b.get("looked") or {})}  # отправленное — просмотрено
+            out = apply(url, owner, b["slot"], _parse(msg), krug.directions_of(url, owner), seen)
+            _save(url, {**st, "seen": seen, "batch": None, "last": {"slot": b["slot"], "direct": True, "usd": round(usd, 4), **out}})
             log.info("Круг: пачка застряла — напрямую: поставил %d, спросил %d ($%.3f)", out["set"], out["asked"], usd)
             return out
         res = next(iter(client.messages.batches.results(b["id"])), None)
@@ -311,8 +369,9 @@ def tick(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
             _save(url, {**st, "batch": None, "last": {"slot": b["slot"], "error": res.result.type if res else "пусто"}})
             return {"error": True}
         usd = _account(url, res.result.message, batch=True)
-        out = apply(url, owner, b["slot"], _parse(res.result.message), krug.directions_of(url, owner))
-        _save(url, {**st, "batch": None, "last": {"slot": b["slot"], "usd": round(usd, 4), **out}})
+        seen = {**(st.get("seen") or {}), **(b.get("looked") or {})}  # отправленное — просмотрено
+        out = apply(url, owner, b["slot"], _parse(res.result.message), krug.directions_of(url, owner), seen)
+        _save(url, {**st, "seen": seen, "batch": None, "last": {"slot": b["slot"], "usd": round(usd, 4), **out}})
         log.info("Круг: поставил %d, спросил %d ($%.3f)", out["set"], out["asked"], usd)
         return out
 
@@ -323,7 +382,7 @@ def tick(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
         return None
     with db.session(url, owner, via="krug") as conn:
         known = krug.directions(conn, owner)
-        tasks = candidates(conn, owner) if known else []
+        tasks = candidates(conn, owner, st.get("seen")) if known else []
         open_goals = goals(conn, owner) if tasks else []
         rules_text = rules(conn, owner)
     if not tasks:
@@ -331,6 +390,8 @@ def tick(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
         return None
     p = params(system_prompt(known, rules_text), user_prompt(tasks, open_goals, examples(url, owner), known), known)
     b = client.messages.batches.create(requests=[{"custom_id": "krug", "params": p}])
-    _save(url, {**st, "slot": key_, "batch": {"id": b.id, "at": time.time(), "slot": key_, "params": p, "n": len(tasks)}})
-    log.info("Круг: %d дел без направления — пачка %s", len(tasks), b.id)
+    looked = {str(t["id"]): version(t) for t in tasks}  # ответ про дело не пришёл — всё равно не слать его снова
+    _save(url, {**st, "slot": key_, "batch": {"id": b.id, "at": time.time(), "slot": key_, "params": p, "n": len(tasks),
+                                              "looked": looked}})
+    log.info("Круг: %d дел без цели — пачка %s", len(tasks), b.id)
     return {"sent": len(tasks)}

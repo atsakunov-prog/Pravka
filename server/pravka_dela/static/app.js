@@ -19,7 +19,8 @@ const S = {
   sel: new Set(), order: [], lastPick: null, cardId: null, draft: null, sideOpen: false,
   parse: null, quickText: '', // идёт разбор Claude; текст строки Claude — живёт, пока его не отдали (перерисовка его не стирает)
   autoOpen: false, clientOpen: new Set(LS.get('clientOpen', [])), peopleQ: '', // «Сделано само» развёрнуто, клиенты со сделками, люди
-  krug: { dirs: [], principles: [], proj: new Map() }, kpick: {}, // Круг жизни: направления и принципы (Свод), направления проектов; выбор в «Подскажи»
+  krug: { dirs: [], principles: [], proj: new Map() }, kpick: {}, // Круг жизни: направления и принципы (Свод), проекты в Круге; выбор в «Подскажи»
+  treeMode: LS.get('treeMode', 'tree'), treeDir: LS.get('treeDir', null), treeF: null, // Дерево жизни: вид, направление, фильтры списка
 };
 // Три группы дел (владелец 10.10.2026): «есть дела, которые ждут меня — люди что-то спросили и ждут, они
 // мега важные… второе — что я сам придумал… третье — проверить, что мне люди должны». Вечером назвал их:
@@ -83,7 +84,7 @@ async function sync(full) {
   S.labels = d.labels.map((l) => l.name);
   // Круг жизни: направления проектов (их наследуют дела) и справочник из Свода — только свои (RLS).
   if (d.full) S.krug.proj.clear();
-  for (const k of d.krug || []) S.krug.proj.set(k.id, k.directions || []);
+  for (const k of d.krug || []) S.krug.proj.set(k.id, { directions: k.directions || [], why_id: k.why_id || null });
   for (const r of d.svod || []) {
     const v = Array.isArray(r.value) ? r.value : [];
     if (r.key === 'krug.directions') S.krug.dirs = v.filter((x) => x && x.key).sort((a, b) => ((+a.pos || 0) % 12) - ((+b.pos || 0) % 12));
@@ -160,57 +161,86 @@ function sortTasks(a, b) {
     || a.num - b.num;
 }
 const all = () => [...S.tasks.values()];
-const openMine = () => all().filter((t) => isOpen(t) && isMine(t) && inSphere(t));
+const openMine = () => all().filter((t) => isOpen(t) && isMine(t) && inSphere(t) && !t.goal);
 
-// ── Круг жизни (12.10.2026) ─────────────────────────────────────────────
-// Владелец: «каждое моё дело должно преследовать какое-то направление… просто направление и Круг жизни». У дела —
-// одно или несколько направлений: свои или по наследству — от «Зачем» вверх по цепочке, потом от проекта (то же
-// правило — tasks.krug_dirs на сервере). «Зачем» — дело-цель, шагом к которой дело является («Распечатать
-// столбики примеров» — зачем? — «уверенно считает до 20»). Справочник — Свод владельца (krug.directions), дела без
-// направления размечает разборщик на сервере (krug_auto.py). Чужие дела направлений не показывают.
+// ── Круг жизни (12.10.2026) и дерево жизни (13.10.2026) ─────────────────
+// Владелец: «каждое моё дело должно преследовать какое-то направление… просто направление и Круг жизни». Бриф 7.2
+// свёл это в одно дерево: девять направлений, под каждым — его цели (цель — состояние: «сын хорошо знает
+// математику»; цель с ритмом — практика), подцели, проекты (клиент — целиком) и дела. Цель — дело с пометкой goal:
+// её нет в списках дел, она живёт в дереве и в цепочке «Зачем». Главное направление дела — у корня цепочки «Зачем»
+// (через проект, если «Зачем» у дела нет); свои направления, кроме главного, — метки. То же правило —
+// tasks.krug_dirs на сервере. Справочник — Свод владельца (krug.directions), место делам без цели предлагает
+// разборщик на сервере (krug_auto.py). Чужие дела направлений и целей не показывают.
 const krugOn = () => S.krug.dirs.length > 0 && ((S.me && S.me.features) || []).includes('krug');
+const treeOn = () => krugOn() && ((S.me && S.me.features) || []).includes('tree');
+/** Дела — без целей: цель не делают, к ней идут (в списках дел целей нет). */
+const deeds = () => all().filter((t) => !t.goal);
 const dirBy = (k) => S.krug.dirs.find((d) => d.key === k);
 const dirName = (k) => { const d = dirBy(k); return d ? d.short || d.name : k; };
+/** Цепочка вверх (как tasks.krug_dirs): само дело, его «Зачем» и выше; у звена без «Зачем» — проект дела (строка
+ *  Круга проекта: {kind: 'project'}) и цель, на которой проект висит. */
+function upOf(t) {
+  const out = [];
+  for (let x = t, n = 0; x && n < 60; n++) {
+    out.push(x);
+    if (x.why_id) { const w = S.tasks.get(x.why_id); x = w && !out.includes(w) ? w : null; continue; }
+    if (x.kind === 'project' || x.goal) break;
+    const p = x.project_id && S.krug.proj.get(x.project_id);
+    x = p ? { kind: 'project', id: x.project_id, directions: p.directions || [], why_id: p.why_id || null } : null;
+  }
+  return out;
+}
+/** Направления дела: [главное, метки…]. Главное — у самого верхнего звена цепочки, где направления есть. */
 function dirsOf(t) {
   if (!t || !isMine(t)) return [];
-  const chain = [];
-  for (let x = t; x && chain.length < 50 && !chain.includes(x); x = x.why_id ? S.tasks.get(x.why_id) : null) {
-    chain.push(x);
-    if (x.directions && x.directions.length) return x.directions;
-  }
-  for (const x of chain) {
-    const p = x.project_id && S.krug.proj.get(x.project_id);
-    if (p && p.length) return p;
-  }
-  return [];
+  const up = upOf(t);
+  let main = null;
+  for (let i = up.length - 1; i >= 0 && !main; i--) if ((up[i].directions || []).length) main = up[i].directions[0];
+  return main ? [main, ...(t.directions || []).filter((k) => k !== main)].slice(0, 3) : [];
 }
-/** Открытые шаги к цели (дела, у которых «Зачем» — это дело). */
+/** Открытые шаги к цели: дела и подцели, у которых «Зачем» — это дело. */
 const stepsOf = (id) => all().filter((x) => x.why_id === id && isOpen(x));
-/** Движение за неделю по направлениям (как krug.movement): закрытое дело — 1, закрытая цель — 3. */
+/** Всё, что ниже дела по «Зачем», вместе с ним: туда его же не повесишь (иначе круг). */
+function belowOf(id) {
+  const below = new Set([id]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const x of all()) if (x.why_id && below.has(x.why_id) && !below.has(x.id)) { below.add(x.id); grew = true; }
+  }
+  return below;
+}
+/** Путь цели словами: «Здоровье › Еда › Белок 140+». */
+function goalPath(g) {
+  const main = dirsOf(g)[0];
+  return [main ? dirName(main) : null, ...upOf(g).reverse().filter((x) => x.kind !== 'project').map((x) => x.title)]
+    .filter(Boolean).join(' › ');
+}
+/** Движение за неделю по направлениям (как krug.movement): закрытое дело — 1, закрытая цель — 3; только главное. */
 function movement() {
   const since = D.add(S.today, -6);
-  const goals = new Set(all().map((x) => x.why_id).filter(Boolean));
+  const parents = new Set(all().map((x) => x.why_id).filter(Boolean));
   const m = {};
   for (const t of all()) {
     if (t.status !== 'done' || !isMine(t) || !t.completed_at || MSK_DAY(t.completed_at).day < since) continue;
-    for (const k of dirsOf(t)) {
-      const x = m[k] || (m[k] = { done: 0, events: 0 });
-      x.done++;
-      x.events += goals.has(t.id) ? 3 : 1;
-    }
+    const k = dirsOf(t)[0];
+    if (!k) continue;
+    const x = m[k] || (m[k] = { done: 0, events: 0 });
+    x.done++;
+    x.events += t.goal || parents.has(t.id) ? 3 : 1;
   }
+  for (const x of Object.values(m)) x.radius = Math.min(10, Math.round(3 * Math.sqrt(x.events) * 10) / 10);
   return m;
 }
-/** «Моё» (бриф, §9; принцип «Делаю то, что хочу я»): до трёх открытых дел, которых никто не ждёт — «Хочу сам»
+/** «Моё» (бриф, §7; принцип «Делаю то, что хочу я»): до трёх открытых дел, которых никто не ждёт — «Хочу сам»
  *  и шаги к целям (есть «Зачем», своих шагов нет); первым закреплённое, потом шаги из направлений, где за неделю
- *  меньше всего движения. Не «отбить» и не «мониторить»: там ждут люди. Правило — krug.mine_from на сервере. */
+ *  меньше всего движения. Не «отбить» и не «мониторить»: там ждут люди. Цели — не дела. Правило — krug.mine_from. */
 const MINE_MAX = 3;
 function mineTasks() {
   if (!krugOn()) return [];
   const mv = movement();
   const withSteps = new Set(all().filter((x) => isOpen(x) && x.why_id).map((x) => x.why_id));
-  const least = (t) => { const ks = dirsOf(t); return ks.length ? Math.min(...ks.map((k) => (mv[k] || {}).events || 0)) : 0; };
-  return all().filter((t) => isOpen(t) && isMine(t) && inSphere(t) && !t.owed && t.ball !== 'waiting'
+  const least = (t) => { const k = dirsOf(t)[0]; return k ? (mv[k] || {}).events || 0 : 0; };
+  return deeds().filter((t) => isOpen(t) && isMine(t) && inSphere(t) && !t.owed && t.ball !== 'waiting'
     && (t.want || (t.why_id && !withSteps.has(t.id))))
     .sort((a, b) => (b.want ? 1 : 0) - (a.want ? 1 : 0) || least(a) - least(b)
       || (a.created_at || '').localeCompare(b.created_at || '') || a.num - b.num)
@@ -223,56 +253,63 @@ function principleToday() {
   return list[(Math.round(D.parse(S.today) / 86400e3) + 719163) % list.length];
 }
 const principleLine = () => { const p = principleToday(); return p ? el('div', { class: 'principle', title: 'Принцип дня' }, p) : null; };
-/** Направления дела — переключателями: свои горят; своих нет — подпись, от чего наследует. */
+/** Направления дела — переключателями: свои горят. */
 function dirChips(t, onSet) {
   const own = t.directions || [];
   return el('div', { class: 'quick-dates dir-pick' }, S.krug.dirs.map((d) => el('button', {
     class: 'chip-btn' + (own.includes(d.key) ? ' on' : ''), title: d.formula || d.name,
     onclick: () => onSet(own.includes(d.key) ? own.filter((k) => k !== d.key) : [...own, d.key]) }, d.short || d.name)));
 }
-/** «Без направления» у дела — щелчок: выбрать направление. */
-function dirPop(anchor, t) {
-  setTimeout(() => popAt(anchor, [el('div', { class: 'pop-h' }, 'Направление'),
-    ...S.krug.dirs.map((d) => el('button', { onclick: () => { closePop(); setFields([t.id], { directions: [d.key] }, 'Направление: ' + d.name); } },
-      d.name, el('span', { class: 'k' }, d.pos)))]), 0);
-}
-/** «Зачем»: открытые свои дела (кроме самого дела и его шагов вниз по цепочке) с поиском; новая фраза — новая цель. */
-function whyPop(anchor, t) {
-  const below = new Set([t.id]);
-  for (let grew = true; grew;) {
-    grew = false;
-    for (const x of all()) if (x.why_id && below.has(x.why_id) && !below.has(x.id)) { below.add(x.id); grew = true; }
-  }
-  const pool = all().filter((x) => isOpen(x) && isMine(x) && !below.has(x.id))
-    .sort((a, b) => stepsOf(b.id).length - stepsOf(a.id).length || a.title.localeCompare(b.title, 'ru'));
-  const set = (patch) => { closePop(); setFields([t.id], patch); };
+/** «Без направления» у дела — щелчок: цель из дерева или просто направление. */
+function dirPop(anchor, t) { whyPop(anchor, t); }
+/** Выбор цели: открытые цели с путём от направления и поиском; сверху — «Новая цель» по набранному, без набранного —
+ *  направления (повесить прямо на направление, «без зачем») и «Убрать «Зачем»». */
+function goalPop(anchor, { exclude = new Set(), current = null, pick, make, toDir, title = 'Зачем' }) {
+  const pool = all().filter((x) => isOpen(x) && isMine(x) && !exclude.has(x.id) && !x.no_steps && (x.goal || stepsOf(x.id).length))
+    .map((x) => ({ x, path: goalPath(x) })).sort((a, b) => a.path.localeCompare(b.path, 'ru'));
+  const done = (fn) => (e) => { e.preventDefault(); closePop(); fn(); };
   setTimeout(() => {
-    const q = el('input', { class: 'ps-q', placeholder: 'Зачем это дело? Найти цель или написать новую', autocomplete: 'off' });
+    const q = el('input', { class: 'ps-q', placeholder: 'К какой цели ведёт? Найти или написать новую', autocomplete: 'off' });
     const box = el('div', { class: 'ps-list' });
     const draw = () => {
       const words = norm(q.value).split(/\s+/).filter(Boolean);
-      const shown = pool.filter((x) => words.every((w) => norm(x.title).includes(w))).slice(0, 30);
-      const exact = shown.some((x) => norm(x.title) === norm(q.value));
+      const shown = pool.filter((g) => words.every((w) => norm(g.path).includes(w))).slice(0, 40);
+      const exact = shown.some((g) => norm(g.x.title) === norm(q.value));
       box.replaceChildren(...[
-        words.length && !exact ? el('button', { class: 'ps-item', onmousedown: (e) => { e.preventDefault(); set({ why_title: q.value.trim() }); } },
+        words.length && !exact && make ? el('button', { class: 'ps-item', onmousedown: done(() => make(q.value.trim())) },
           el('span', { class: 'ps-dot' }), el('span', { class: 'ps-t' }, el('span', { class: 'ps-n' }, 'Новая цель: «' + q.value.trim() + '»'))) : null,
-        t.why_id && !words.length ? el('button', { class: 'ps-item', onmousedown: (e) => { e.preventDefault(); set({ why_id: null }); } },
+        current && !words.length ? el('button', { class: 'ps-item', onmousedown: done(() => pick(null)) },
           el('span', { class: 'ps-dot' }), el('span', { class: 'ps-t' }, el('span', { class: 'ps-n' }, 'Убрать «Зачем»'))) : null,
-        ...shown.map((x) => el('button', { class: 'ps-item', onmousedown: (e) => { e.preventDefault(); set({ why_id: x.id }); } },
-          el('span', { class: 'ps-dot' }), el('span', { class: 'ps-t' }, el('span', { class: 'ps-n' }, x.title),
-            el('span', { class: 'ps-s' }, [stepsOf(x.id).length ? 'шагов ' + stepsOf(x.id).length : null, dirsOf(x).map(dirName).join(', ')].filter(Boolean).join(' · ')))))]
+        ...shown.map((g) => el('button', { class: 'ps-item' + (g.x.id === current ? ' on' : ''), onmousedown: done(() => pick(g.x.id)) },
+          el('span', { class: 'ps-dot' + (g.x.goal ? ' goal' : '') }), el('span', { class: 'ps-t' }, el('span', { class: 'ps-n' }, g.x.title),
+            el('span', { class: 'ps-s' }, [g.path.split(' › ').slice(0, -1).join(' › '), g.x.rhythm ? 'практика · ' + g.x.rhythm : null].filter(Boolean).join(' · '))))),
+        !words.length && toDir ? el('div', { class: 'pop-h' }, 'Или прямо на направление') : null,
+        ...(!words.length && toDir ? S.krug.dirs.map((d) => el('button', { class: 'ps-item', onmousedown: done(() => toDir(d.key)) },
+          el('span', { class: 'ps-dot dir' }), el('span', { class: 'ps-t' }, el('span', { class: 'ps-n' }, d.name)))) : [])]
         .filter(Boolean));
     };
     q.addEventListener('input', draw);
     q.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && q.value.trim()) { e.preventDefault(); const hit = pool.find((x) => norm(x.title) === norm(q.value)); set(hit ? { why_id: hit.id } : { why_title: q.value.trim() }); }
+      if (e.key === 'Enter' && q.value.trim()) {
+        e.preventDefault();
+        const hit = pool.find((g) => norm(g.x.title) === norm(q.value));
+        closePop();
+        if (hit) pick(hit.x.id); else if (make) make(q.value.trim());
+      }
       if (e.key === 'Escape') { e.stopPropagation(); closePop(); }
     });
     draw();
-    const pop = popAt(anchor, [el('div', { class: 'pop-h' }, 'Зачем'), q, box]);
+    const pop = popAt(anchor, [el('div', { class: 'pop-h' }, title), q, box]);
     pop.classList.add('ps-pop');
     q.focus();
   }, 0);
+}
+/** «Зачем» дела: цель (кроме самого дела и того, что ниже него), новая цель словами или направление. */
+function whyPop(anchor, t) {
+  goalPop(anchor, { exclude: belowOf(t.id), current: t.why_id,
+    pick: (id) => setFields([t.id], { why_id: id }, id ? 'Зачем: ' + S.tasks.get(id).title : 'Без «Зачем»'),
+    make: (title) => setFields([t.id], { why_title: title }, 'Новая цель: ' + title),
+    toDir: (k) => setFields([t.id], { why_id: null, directions: [k] }, 'Направление: ' + dirName(k)) });
 }
 
 // Видов три (владелец 10.10.2026: «не надо этих всех странных видов. Просто надо говорить: на сегодня вот
@@ -280,10 +317,10 @@ function whyPop(anchor, t) {
 // открытое, с завода уровнями «проекты › группы › время»; свои сочетания — фильтрами на полке. «Сейчас», «Предстоящее», «Жду» и «Неделя» ушли: их дела — в «Сегодня» и «Всех делах».
 // «Сейчас» (focus_on) остаётся у телефона — такое дело тоже в «Сегодня».
 const NOW_MAX = 5;
-const nowTasks = () => all().filter((t) => isOpen(t) && isMine(t) && isNow(t));
+const nowTasks = () => all().filter((t) => isOpen(t) && isMine(t) && isNow(t) && !t.goal);
 /** На сегодня — как store.TODAY_IF: срок сегодня или прошёл, «Сейчас» телефона, «отбить» без срока
  *  (человек ждёт — значит, сегодня), «мониторить», где пора напомнить. Не сделал — завтра оно снова здесь. */
-const inToday = (t) => isOpen(t) && isMine(t) && (isNow(t) || (!!t.due_date && t.due_date <= S.today)
+const inToday = (t) => isOpen(t) && isMine(t) && !t.goal && (isNow(t) || (!!t.due_date && t.due_date <= S.today)
   || (!!t.owed && !t.due_date) || (t.ball === 'waiting' && !!t.nudge_on && t.nudge_on <= S.today));
 const todayTasks = () => all().filter((t) => inToday(t) && inSphere(t));
 /** Когда дело делать — для уровня «время» и сортировки, как inToday: «Сейчас» и «отбить» без срока — сегодня,
@@ -303,6 +340,8 @@ const VIEWS = {
   all: { title: 'Все дела', icon: 'list', color: 'var(--tint)' },
   // Круг жизни (12.10.2026): дерево дел от направлений — «где-то должно быть дерево дел, прямо от направлений».
   krug: { title: 'Круг жизни', icon: 'circle', color: 'var(--tint)', show: () => krugOn() },
+  // Дерево жизни (13.10.2026): направления › цели › проекты и дела — плюсиками, колонками или списком с фильтрами.
+  tree: { title: 'Дерево жизни', icon: 'tree', color: 'var(--tint)', show: () => treeOn() },
 };
 // ── Уровни группировки и фильтры (владелец 10.10.2026 вечером): «нажимаю „Все дела“ — первый уровень
 // группировки проекты, второй — под ними по категориям, третий — по времени… по каждому проекту посмотреть,
@@ -326,7 +365,7 @@ async function saveFilters(list) {
 }
 /** Что показывает фильтр: сегодня, всё открытое или одна группа. */
 const scopeItems = (scope) => (scope === 'today' ? todayTasks()
-  : all().filter((t) => isOpen(t) && isMine(t) && inSphere(t) && (scope === 'all' || grpOf(t) === scope)));
+  : deeds().filter((t) => isOpen(t) && isMine(t) && inSphere(t) && (scope === 'all' || grpOf(t) === scope)));
 const levelsOf = (key) => { const v = S.levels[key]; return Array.isArray(v) ? v.filter((x) => LEVELS[x]) : LEVELS_DEF[key] || ['grp']; };
 const levelsName = (levels) => (levels.length ? levels.map((l) => LEVELS[l]).join(' › ') : 'без групп');
 const NO_PROJECT = { color: 'var(--meta)' }; // дела без проекта (бывшие «Входящие»): «без проекта» у дела — выбрать проект
@@ -378,6 +417,8 @@ const ICONS = {
   filter: 'M4 6h16M7 12h10M10 18h4',
   // Круг жизни: циферблат — круг с метками 12, 3, 6, 9.
   circle: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 3v3M21 12h-3M12 21v-3M3 12h3M12 12l3-3',
+  // Дерево жизни: корень и две ветки.
+  tree: 'M10 3h4v4h-4zM12 7v4M6 11h12M6 11v3M18 11v3M4 14h4v4H4zM16 14h4v4h-4z',
 };
 function icon(name, size = 15) {
   const ns = 'http://www.w3.org/2000/svg';
@@ -404,6 +445,8 @@ function el(tag, attrs, ...kids) {
     if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
     else if (k === 'class') e.className = v;
     else if (k === 'value') e.value = v;
+    // Стиль — через CSSOM: атрибут style политика страницы (CSP без unsafe-inline) молча отбрасывает.
+    else if (k === 'style') for (const part of String(v).split(';')) { const i = part.indexOf(':'); if (i > 0) e.style.setProperty(part.slice(0, i).trim(), part.slice(i + 1).trim()); }
     else e.setAttribute(k, v === true ? '' : v);
   }
   for (const k of kids.flat(Infinity)) if (k != null && k !== false) e.append(k.nodeType ? k : String(k));
@@ -938,10 +981,11 @@ function renderMain(r) {
   if (r.kind === 'meeting') return renderMeeting(r.id);
   if (r.kind === 'today') return renderToday();
   if (r.kind === 'krug') return renderKrug();
+  if (r.kind === 'tree') return renderTree();
   if (r.kind === 'filter') return renderFilter(r.id);
   if (r.kind === 'all') {
     const lv = levelsOf('all');
-    const every = all().filter((t) => isMine(t) && inSphere(t) && (S.showDone || isOpen(t)));
+    const every = deeds().filter((t) => isMine(t) && inSphere(t) && (S.showDone || isOpen(t)));
     const items = picked(every, lv, S.pick.all);
     const tb = el('div', { class: 'toolbar' }, levelsBar(lv, setLevels('all')), doneToggle(),
       el('button', { class: 'chip-btn', onclick: () => addFilter('all', lv, S.pick.all) }, 'Сохранить фильтр'));
@@ -963,7 +1007,7 @@ function renderToday() {
   const mineIds = new Set(mine.map((t) => t.id));
   const every = todayTasks().filter((t) => !mineIds.has(t.id));
   const items = picked(every, lv, S.pick.today);
-  const doneToday = all().filter((t) => t.status === 'done' && isMine(t) && t.completed_at && MSK_DAY(t.completed_at).day === S.today).length;
+  const doneToday = deeds().filter((t) => t.status === 'done' && isMine(t) && t.completed_at && MSK_DAY(t.completed_at).day === S.today).length;
   const n = newCount();
   const left = items.length + mine.length;
   return [head('Сегодня', [D.long(S.today), left ? 'осталось ' + left : null, doneToday ? 'закрыто ' + doneToday : null]),
@@ -1042,7 +1086,7 @@ function levelKey(t, lv) {
       : ['9', 'Без сделки', { find: ['без сделки'] }];
   }
   if (lv === 'dir') {
-    // Направление — первое из дела (с наследованием); по кругу: сверху 12 — Здоровье.
+    // Направление — главное (у корня цепочки «Зачем»); по кругу: сверху Здоровье.
     const d = dirBy(dirsOf(t)[0]);
     return d ? [String((+d.pos || 0) % 12).padStart(2, '0') + d.key, d.name, { sub: d.formula, find: [d.name, d.short].filter(Boolean) }]
       : ['99', 'Без направления', { find: ['без направления'] }];
@@ -1157,12 +1201,13 @@ function taskRow(t, by, extra, opt = {}) {
   if (krugOn() && isMine(t) && !opt.compact) {
     const ks = dirsOf(t);
     if (ks.length && !grouped_('dir')) chips.push(m('dir' + ((t.directions || []).length ? '' : ' inherited'), ks.map(dirName).join(', ')));
-    else if (!ks.length && isOpen(t)) chips.push(el('button', { class: 'm noproj nodir', title: 'Выбрать направление', onclick: (e) => { stop(e); dirPop(e.currentTarget, t); } }, 'без направления'));
+    else if (!ks.length && isOpen(t)) chips.push(el('button', { class: 'm noproj nodir', title: 'Выбрать цель или направление', onclick: (e) => { stop(e); dirPop(e.currentTarget, t); } }, 'без направления'));
     const goal = t.why_id && !opt.tree ? S.tasks.get(t.why_id) : null;
     if (goal) chips.push(el('a', { class: 'm link why', href: '#', title: 'Зачем: ' + goal.title, onclick: (e) => { stop(e); e.preventDefault(); openCard(goal.id); } },
       'зачем: ' + (goal.title.length > 34 ? goal.title.slice(0, 33) + '…' : goal.title)));
     const steps = isOpen(t) ? stepsOf(t.id).length : 0;
-    if (steps) chips.push(m('goal', 'цель · ' + plural(steps, 'шаг', 'шага', 'шагов')));
+    if (t.goal) chips.push(m('goal', t.rhythm ? 'практика · ' + t.rhythm : steps ? 'цель · ' + plural(steps, 'шаг', 'шага', 'шагов') : 'цель'));
+    else if (steps) chips.push(m('goal', 'цель · ' + plural(steps, 'шаг', 'шага', 'шагов')));
   }
   // В короткой строке группа и человек — в самом названии («Кто: действие»), минуты и метки — в карточке.
   // «Отбить» — сколько ждут: «Гуркин ждёт 3 дн» (с того дня, как дело завели); «мониторить» — «жду Наташу 5 дн».
@@ -1201,65 +1246,277 @@ function taskRow(t, by, extra, opt = {}) {
   return row;
 }
 
-// ── Страница «Круг жизни»: дерево дел от направлений ─────────────────────
-// Владелец 12.10.2026: «где-то должно быть дерево дел, прямо от направлений». Направления по кругу (сверху 12 —
-// Здоровье), у каждого — формула, сколько открыто и закрыто за неделю; раскрыл — цели с шагами лесенкой
-// («сильная школа › математика › считает до 20 › распечатать столбики»), ниже — остальные дела по проектам (у Дела это
-// клиенты). Внизу — дела без направления: их разметит разборщик или ты сам.
-function krugTree(items) {
-  const ids = new Set(items.map((t) => t.id));
+// ── Дерево жизни (13.10.2026) ────────────────────────────────────────────
+// Владелец: «помимо круга жизни — вид „дерево жизни“, когда всё это разделяется. Это может быть как девять колонок
+// со списками, так и просто список с фильтрами, так и список, где плюсиками раскрывается каждая — и ты так ходишь
+// до каждого дела». Три вида одного дерева: «Дерево» (раскрывается плюсиками), «Колонки» (девять направлений рядом),
+// «Список» (дела с фильтрами по направлению и цели). Перетащил дело на цель — у него новое «Зачем» (бриф, §7).
+/** Дерево из синка (как krug.tree на сервере). Ключ родителя: 't:<id>' — цель или дело, 'p:<id>' — проект,
+ *  'd:<ключ>' — направление ('d:' — без направления). Место дела — «Зачем»; нет — проект, если он в Круге; нет —
+ *  главное направление («без зачем»). */
+function treeModel() {
+  const open = all().filter((t) => isOpen(t) && isMine(t));
+  const live = new Set(open.map((t) => t.id));
+  const parentKey = (t) => {
+    if (t.why_id && live.has(t.why_id)) return 't:' + t.why_id;
+    if (!t.goal && t.project_id && S.krug.proj.has(t.project_id)) return 'p:' + t.project_id;
+    return 'd:' + (dirsOf(t)[0] || '');
+  };
+  const projKey = (id) => {
+    const p = S.krug.proj.get(id) || {};
+    return p.why_id && live.has(p.why_id) ? 't:' + p.why_id : 'd:' + ((p.directions || [])[0] || '');
+  };
   const kids = new Map();
-  for (const t of all()) if (isOpen(t) && t.why_id) { if (!kids.has(t.why_id)) kids.set(t.why_id, []); kids.get(t.why_id).push(t); }
-  const branch = (t, depth) => [taskRow(t, ['dir'], null, { indent: depth, tree: depth > 0 }),
-    ...(depth < 8 ? (kids.get(t.id) || []).sort(byTime).flatMap((c) => branch(c, depth + 1)) : [])];
-  const roots = items.filter((t) => !t.why_id || !ids.has(t.why_id));
-  const goals = roots.filter((t) => kids.has(t.id));
-  const out = [];
-  if (goals.length) {
-    out.push(el('div', { class: 'subgroup d1 krug-goals' }, groupHead('h3', 'Цели', goals.length), el('div', { class: 'rows' }, goals.sort(byTime).flatMap((t) => branch(t, 0)))));
+  const push = (k, item) => { if (!kids.has(k)) kids.set(k, []); kids.get(k).push(item); };
+  for (const t of open) push(parentKey(t), { kind: t.goal ? 'goal' : 'task', t, key: 't:' + t.id });
+  for (const id of S.krug.proj.keys()) {
+    const p = project(id);
+    if (p && !p.archived_at) push(projKey(id), { kind: 'project', p, key: 'p:' + id });
   }
-  const byProj = new Map();
-  for (const t of roots.filter((x) => !kids.has(x.id)).sort(byTime)) {
-    const p = project(t.project_id);
-    const k = p ? p.name : '';
-    if (!byProj.has(k)) byProj.set(k, { p, items: [] });
-    byProj.get(k).items.push(t);
+  const openN = new Map();
+  const openUnder = (key) => {
+    if (openN.has(key)) return openN.get(key);
+    openN.set(key, 0);
+    const n = (kids.get(key) || []).reduce((s, c) => s + (c.kind === 'task' ? 1 : 0) + openUnder(c.key), 0);
+    openN.set(key, n);
+    return n;
+  };
+  const moved = new Map();
+  const since = D.add(S.today, -6);
+  for (const t of all()) {
+    if (t.status !== 'done' || !isMine(t) || !t.completed_at || MSK_DAY(t.completed_at).day < since) continue;
+    for (let k = parentKey(t), n = 0; k && n < 30; n++) {
+      moved.set(k, (moved.get(k) || 0) + (t.goal ? 3 : 1));
+      if (k.startsWith('t:')) { const x = S.tasks.get(k.slice(2)); k = x ? parentKey(x) : null; } else if (k.startsWith('p:')) k = projKey(k.slice(2)); else k = null;
+    }
   }
-  for (const [k, g] of [...byProj].sort((a, b) => (a[0] ? '1' + a[0] : '9').localeCompare(b[0] ? '1' + b[0] : '9', 'ru'))) {
-    out.push(el('div', { class: 'subgroup d1' }, groupHead('h3', k || 'Без проекта', g.items.length, g.p ? { href: '#/p/' + g.p.id } : {}),
-      el('div', { class: 'rows' }, g.items.flatMap((t) => branch(t, 0)))));
-  }
-  return out;
+  const rank = { goal: 0, project: 1, task: 2 };
+  const sorted = (key) => (kids.get(key) || []).slice().sort((a, b) => rank[a.kind] - rank[b.kind]
+    || (a.kind === 'project' ? a.p.name.localeCompare(b.p.name, 'ru') : a.kind === 'goal' ? a.t.num - b.t.num : byTime(a.t, b.t)));
+  return { kids: sorted, open: openUnder, moved: (k) => moved.get(k) || 0, parentKey };
 }
 
+/** Свёрнуто ли: своё у каждой ветки, помнится в браузере. С завода направления и цели раскрыты, проекты — свёрнуты. */
+const isFolded = (key, def) => { const v = S.closed['tree:' + key]; return v === undefined ? def : !!v; };
+const setFolded = (key, v) => { S.closed['tree:' + key] = v; LS.set('closed', S.closed); };
+const caret = (open) => el('span', { class: 'caret' + (open ? ' open' : '') }, open ? '−' : '+');
+/** Перетаскивание: дело или цель — на цель (новое «Зачем») или на направление («без зачем»); проект — на цель. */
+function dragFrom(node, kind, id) {
+  node.draggable = true;
+  node.addEventListener('dragstart', (e) => { e.stopPropagation(); e.dataTransfer.setData('text/x-dela', kind + ':' + id); e.dataTransfer.effectAllowed = 'move'; node.classList.add('dragging'); });
+  node.addEventListener('dragend', () => node.classList.remove('dragging'));
+  return node;
+}
+function dropTo(node, target) {
+  node.addEventListener('dragover', (e) => { if (![...e.dataTransfer.types].includes('text/x-dela')) return; e.preventDefault(); e.stopPropagation(); node.classList.add('drop'); });
+  node.addEventListener('dragleave', (e) => { if (!node.contains(e.relatedTarget)) node.classList.remove('drop'); });
+  node.addEventListener('drop', (e) => {
+    e.preventDefault(); e.stopPropagation(); node.classList.remove('drop');
+    const [kind, id] = (e.dataTransfer.getData('text/x-dela') || '').split(':');
+    if (id) moveTo(kind, id, target);
+  });
+  return node;
+}
+async function moveTo(kind, id, target) {
+  const goal = target.goal ? S.tasks.get(target.goal) : null;
+  if (kind === 'project') {
+    if (!goal) return toast('Проект вешается на цель, а не прямо на направление');
+    try { await op1({ op: 'project.set', id, set: { why_id: goal.id } }); toast('Проект — к цели «' + goal.title + '»'); render(); } catch (e) { fail(e); }
+    return;
+  }
+  const t = S.tasks.get(id);
+  if (!t) return;
+  if (goal) {
+    if (goal.no_steps) return toast('Под этой целью дел не заводят — она ориентир');
+    if (belowOf(t.id).has(goal.id)) return toast('Цель не может быть шагом своего шага');
+    if (t.why_id === goal.id) return;
+    setFields([t.id], { why_id: goal.id }, 'Зачем: ' + goal.title);
+  } else if (target.dir) {
+    setFields([t.id], { why_id: null, directions: t.goal || !t.project_id || !S.krug.proj.has(t.project_id) ? [target.dir] : t.directions || [] },
+      'Направление: ' + dirName(target.dir));
+  }
+}
+
+/** Строка цели в дереве: плюсик, ромб, название (щелчок — карточка), практика, сколько открыто и движение. */
+function goalHead(m, c, depth, open, toggle) {
+  const t = c.t, n = m.open(c.key), mv = m.moved(c.key), steps = m.kids(c.key).length;
+  const row = el('div', { class: 'tree-goal' + (open ? '' : ' folded') + (S.cardId === t.id ? ' open-now' : ''), style: '--indent:' + depth, 'data-id': t.id },
+    steps ? el('button', { class: 'caret-btn', title: open ? 'Свернуть' : 'Раскрыть', onclick: (e) => { e.stopPropagation(); toggle(); } }, caret(open)) : el('span', { class: 'caret-btn none' }),
+    el('span', { class: 'gem' + (t.rhythm ? ' practice' : '') }),
+    el('a', { class: 'g-title', href: '#', onclick: (e) => { e.preventDefault(); openCard(t.id); } }, t.title),
+    t.rhythm ? el('span', { class: 'm practice', title: 'Практика: повторяется и не закрывается' }, t.rhythm) : null,
+    t.no_steps ? el('span', { class: 'm faint', title: 'Ориентир, а не задача: дел под ним не заводят' }, 'ориентир') : null,
+    el('span', { class: 'g-n', title: 'открытых дел под целью' }, n || (steps ? '' : 'пусто')),
+    mv ? el('span', { class: 'g-mv', title: 'событий движения за 7 дней: дело — 1, цель — 3' }, '+' + mv) : null);
+  return dropTo(dragFrom(row, 'task', t.id), { goal: t.id });
+}
+/** Ветка «Дерева»: цель (плюсиком), проект (свёрнут), дело (строкой дела) — и всё, что под ними. */
+function treeBranch(m, c, depth) {
+  if (c.kind === 'task') {
+    const row = dragFrom(taskRow(c.t, ['dir'], null, { indent: depth, tree: true }), 'task', c.t.id);
+    const below = m.kids(c.key);
+    return [row, ...below.flatMap((x) => treeBranch(m, x, depth + 1))];
+  }
+  if (c.kind === 'project') {
+    const n = m.open(c.key);
+    if (!n) return [];
+    const open = !isFolded(c.key, true);
+    const head = el('div', { class: 'tree-proj' + (open ? '' : ' folded'), style: '--indent:' + depth },
+      el('button', { class: 'caret-btn', onclick: () => { setFolded(c.key, open); render(); } }, caret(open)),
+      dot(c.p.id), el('a', { class: 'link', href: '#/p/' + c.p.id }, c.p.name), el('span', { class: 'g-n' }, n),
+      m.moved(c.key) ? el('span', { class: 'g-mv' }, '+' + m.moved(c.key)) : null);
+    return [dragFrom(head, 'project', c.p.id), ...(open ? m.kids(c.key).flatMap((x) => treeBranch(m, x, depth + 1)) : [])];
+  }
+  const open = !isFolded(c.key, false);
+  return [goalHead(m, c, depth, open, () => { setFolded(c.key, open); render(); }),
+    ...(open ? m.kids(c.key).flatMap((x) => treeBranch(m, x, depth + 1)) : [])];
+}
+function treeOutline(m, dirs) {
+  return dirs.map((d) => {
+    const key = 'd:' + d.key, open = !isFolded(key, false);
+    const head = el('h2', { class: 'krug-h tree-h', onclick: () => { setFolded(key, open); render(); } },
+      caret(open), el('span', { class: 'krug-pos' }, d.zone || ''), d.name, el('span', { class: 'n' }, m.open(key)),
+      el('span', { class: 'sum', title: 'событий движения за 7 дней' }, m.moved(key) ? 'за неделю +' + m.moved(key) : 'за неделю —'),
+      d.formula ? el('span', { class: 'gsub' }, d.formula) : null);
+    return el('div', { class: 'group tree-dir' + (open ? '' : ' folded') }, dropTo(head, { dir: d.key }),
+      open ? el('div', { class: 'rows tree-rows' }, m.kids(key).flatMap((c) => treeBranch(m, c, 0))) : null,
+      open && !m.kids(key).length ? el('div', { class: 'empty' }, 'Здесь пока ничего — цели заводятся в карточке дела («Сделать целью») или словами Claude.') : null);
+  });
+}
+/** «Колонки»: девять направлений рядом, в каждой — цели лесенкой, проекты и дела коротко; перетаскивай между ними. */
+function treeCols(m, dirs) {
+  const item = (c, depth) => {
+    if (c.kind === 'project') {
+      const n = m.open(c.key);
+      if (!n) return [];
+      const open = !isFolded(c.key, true);
+      return [dragFrom(el('div', { class: 'col-proj', style: '--indent:' + depth, onclick: () => { setFolded(c.key, open); render(); } },
+        caret(open), c.p.name, el('span', { class: 'g-n' }, n)), 'project', c.p.id),
+      ...(open ? m.kids(c.key).flatMap((x) => item(x, depth + 1)) : [])];
+    }
+    const t = c.t;
+    if (c.kind === 'goal') {
+      const open = !isFolded(c.key, false);
+      const row = el('div', { class: 'col-goal' + (t.rhythm ? ' practice' : '') + (S.cardId === t.id ? ' open-now' : ''), style: '--indent:' + depth, onclick: () => openCard(t.id) },
+        m.kids(c.key).length ? el('button', { class: 'caret-btn', onclick: (e) => { e.stopPropagation(); setFolded(c.key, open); render(); } }, caret(open)) : el('span', { class: 'caret-btn none' }),
+        el('span', { class: 'gem' + (t.rhythm ? ' practice' : '') }), el('span', { class: 'g-title' }, t.title),
+        m.open(c.key) ? el('span', { class: 'g-n' }, m.open(c.key)) : null);
+      return [dropTo(dragFrom(row, 'task', t.id), { goal: t.id }), ...(open ? m.kids(c.key).flatMap((x) => item(x, depth + 1)) : [])];
+    }
+    const row = el('div', { class: 'col-task' + (inToday(t) ? ' today' : '') + (S.cardId === t.id ? ' open-now' : ''), style: '--indent:' + depth, onclick: () => openCard(t.id) },
+      el('button', { class: 'tick mini', title: 'Сделано', onclick: (e) => { e.stopPropagation(); toggleDone([t]); } }), el('span', {}, t.title));
+    return [dragFrom(row, 'task', t.id), ...m.kids(c.key).flatMap((x) => item(x, depth + 1))];
+  };
+  return el('div', { class: 'tree-cols' }, dirs.map((d) => {
+    const key = 'd:' + d.key;
+    return dropTo(el('section', { class: 'tree-col' },
+      el('div', { class: 'col-h', title: d.formula || '' }, el('span', { class: 'zone' }, d.zone || ''), el('b', {}, d.name),
+        el('span', { class: 'g-n' }, m.open(key)), m.moved(key) ? el('span', { class: 'g-mv' }, '+' + m.moved(key)) : null),
+      el('div', { class: 'col-body' }, m.kids(key).flatMap((c) => item(c, 0)))), { dir: d.key });
+  }));
+}
+/** «Список»: открытые дела (без целей) плоско, с фильтрами — направление, цель (со всем, что под ней), «без зачем». */
+function treeList() {
+  const f = S.treeF || (S.treeF = {});
+  const goalSel = el('select', { 'aria-label': 'Цель' }, el('option', { value: '' }, 'Любая цель'),
+    all().filter((x) => isOpen(x) && isMine(x) && x.goal).map((x) => ({ x, p: goalPath(x) })).sort((a, b) => a.p.localeCompare(b.p, 'ru'))
+      .map(({ x, p }) => el('option', { value: x.id, selected: f.goal === x.id }, p)));
+  goalSel.addEventListener('change', () => { f.goal = goalSel.value || null; render(); });
+  const under = f.goal ? belowOf(f.goal) : null;
+  const loose = (t) => !upOf(t).slice(1).some((x) => x.kind !== 'project');
+  const items = deeds().filter((t) => isOpen(t) && isMine(t) && inSphere(t)
+    && (!S.treeDir || dirsOf(t).includes(S.treeDir)) && (!under || under.has(t.id)) && (!f.loose || loose(t)))
+    .map((t) => ({ t, p: (() => { const g = upOf(t).slice(1).find((x) => x.kind !== 'project'); return g ? goalPath(g) : dirsOf(t).map(dirName)[0] || ''; })() }))
+    .sort((a, b) => a.p.localeCompare(b.p, 'ru') || byTime(a.t, b.t));
+  const bar = el('div', { class: 'toolbar' }, el('label', {}, 'Цель', goalSel),
+    el('button', { class: 'chip-btn' + (f.loose ? ' on' : ''), title: 'Дела, у которых нет цели: висят прямо на направлении', onclick: () => { f.loose = !f.loose; render(); } }, 'Без зачем'));
+  const rows = items.map(({ t, p }) => taskRow(t, ['dir'], p ? el('span', { class: 'm path', title: 'Место в дереве' }, p) : null));
+  return [bar, rows.length ? el('div', { class: 'rows' }, rows) : el('div', { class: 'empty' }, 'Под этот фильтр дел нет.')];
+}
+
+const TREE_MODES = { tree: 'Дерево', cols: 'Колонки', list: 'Список' };
+function renderTree() {
+  if (!krugOn()) return [head('Дерево жизни'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Круг жизни не настроен: в Своде нет направлений (krug.directions).'))];
+  const mode = TREE_MODES[S.treeMode] ? S.treeMode : 'tree';
+  const m = treeModel();
+  const dirs = S.krug.dirs.filter((d) => !S.treeDir || d.key === S.treeDir);
+  const goals = all().filter((x) => isOpen(x) && isMine(x) && x.goal).length;
+  const dirSel = el('select', { 'aria-label': 'Направление' }, el('option', { value: '' }, 'Все направления'),
+    S.krug.dirs.map((d) => el('option', { value: d.key, selected: S.treeDir === d.key }, d.name)));
+  dirSel.addEventListener('change', () => { S.treeDir = dirSel.value || null; LS.set('treeDir', S.treeDir); render(); });
+  const fold = (v) => () => {
+    for (const d of dirs) { setFolded('d:' + d.key, v); const walk = (k) => m.kids(k).forEach((c) => { if (c.kind === 'goal') setFolded(c.key, v); walk(c.key); }); walk('d:' + d.key); }
+    render();
+  };
+  const bar = el('div', { class: 'toolbar' },
+    el('div', { class: 'quick-dates' }, Object.entries(TREE_MODES).map(([k, l]) => el('button', { class: 'chip-btn' + (k === mode ? ' on' : ''),
+      onclick: () => { S.treeMode = k; LS.set('treeMode', k); render(); } }, l))),
+    el('label', {}, dirSel),
+    mode !== 'list' ? el('button', { class: 'chip-btn', onclick: fold(false) }, 'Раскрыть всё') : null,
+    mode !== 'list' ? el('button', { class: 'chip-btn', onclick: fold(true) }, 'Свернуть всё') : null);
+  const none = m.kids('d:').filter((c) => c.kind !== 'project');
+  const body = mode === 'cols' ? treeCols(m, dirs) : mode === 'list' ? treeList() : treeOutline(m, dirs);
+  return [head('Дерево жизни', [plural(deeds().filter((t) => isOpen(t) && isMine(t)).length, 'дело', 'дела', 'дел'), plural(goals, 'цель', 'цели', 'целей'),
+    mode !== 'list' ? 'перетащи дело на цель — поменяешь «Зачем»' : null]),
+  el('div', { class: 'body tree tree-mode-' + mode }, principleLine(), bar, body,
+    none.length && !S.treeDir && mode !== 'list' ? groupBox('Без направления', none.filter((c) => c.kind === 'task').map((c) => c.t).sort(byTime),
+      { sub: 'разборщик предложит цель в ближайшие полчаса — или перетащи на цель сам' }) : null)];
+}
+
+// ── Страница «Круг жизни»: девять направлений обзором ─────────────────────
+// Направления по кругу (Здоровье сверху, через 40°), три зоны по три: Я, Мир, Семья. Циферблат — движение за неделю
+// точкой на оси (радиус точки min(10, 3·√N)); состояние многоугольником появится с первой оценкой месяца. У
+// направления — формула, сколько открыто, цели верхнего уровня; щелчок — его дерево.
+function dialSvg(mv) {
+  const ns = 'http://www.w3.org/2000/svg', R = 120, C = 160;
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '-80 -6 480 332'); // поля под подписи осей слева и справа
+  svg.setAttribute('class', 'dial');
+  const add = (tag, attrs, text) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text) e.textContent = text; svg.append(e); return e; };
+  for (const f of [1 / 3, 2 / 3, 1]) add('circle', { cx: C, cy: C, r: R * f, class: 'ring' });
+  const n = S.krug.dirs.length;
+  S.krug.dirs.forEach((d, i) => {
+    const a = ((d.pos != null && n === 9 ? +d.pos : i) * (360 / n) - 90) * Math.PI / 180;
+    const x = C + Math.cos(a) * R, y = C + Math.sin(a) * R;
+    add('line', { x1: C, y1: C, x2: x, y2: y, class: 'axis' });
+    const r = (mv[d.key] || {}).radius || 0;
+    if (r) add('circle', { cx: x, cy: y, r: 3 + r * 1.4, class: 'move' }).append(Object.assign(document.createElementNS(ns, 'title'), { textContent: `${d.name}: за неделю ${(mv[d.key] || {}).done || 0}` }));
+    const lx = C + Math.cos(a) * (R + 22), ly = C + Math.sin(a) * (R + 22);
+    const tx = add('text', { x: lx, y: ly + 4, class: 'lbl', 'text-anchor': Math.abs(Math.cos(a)) < 0.3 ? 'middle' : Math.cos(a) > 0 ? 'start' : 'end' }, d.short || d.name);
+    tx.addEventListener('click', () => { S.treeDir = d.key; LS.set('treeDir', d.key); go('#/tree'); });
+  });
+  return svg;
+}
 function renderKrug() {
   if (!krugOn()) return [head('Круг жизни'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Круг жизни не настроен: в Своде нет направлений (krug.directions).'))];
   const mv = movement();
-  const open = all().filter((t) => isOpen(t) && isMine(t) && inSphere(t));
-  const by = new Map(S.krug.dirs.map((d) => [d.key, []]));
-  const none = [];
-  for (const t of open) {
-    const ks = dirsOf(t);
-    if (!ks.length) none.push(t);
-    for (const k of ks) by.get(k)?.push(t);
-  }
-  const box = el('div', { class: 'body krug' }, principleLine(),
-    quickAdd({}, { placeholder: '«купить магний — это здоровье», «зачем: уверенно считает до 20»' }));
+  const m = treeModel();
+  const zones = [];
   for (const d of S.krug.dirs) {
-    const items = by.get(d.key) || [];
-    const m = mv[d.key] || { done: 0, events: 0 };
-    const key = 'krug-' + d.key;
-    const unfolded = S.closed[key] === false; // с завода свёрнуто: двенадцать строк — и есть круг
-    const toggle = () => { S.closed[key] = unfolded; LS.set('closed', S.closed); render(); };
-    box.append(el('div', { class: 'group krug-dir' + (unfolded ? '' : ' folded') },
-      el('h2', { class: 'krug-h', onclick: toggle },
-        el('span', { class: 'krug-pos' }, d.pos), d.name, el('span', { class: 'n' }, items.length),
-        el('span', { class: 'sum', title: 'закрыто за 7 дней; закрытая цель — три события' }, m.done ? 'за неделю ' + m.done : 'за неделю —'),
-        d.formula ? el('span', { class: 'gsub' }, d.formula) : null),
-      unfolded ? (items.length ? krugTree(items) : el('div', { class: 'empty' }, 'Открытых дел нет.')) : null));
+    const z = d.zone || '';
+    if (!zones.length || zones[zones.length - 1].z !== z) zones.push({ z, dirs: [] });
+    zones[zones.length - 1].dirs.push(d);
   }
-  if (none.length) box.append(groupBox('Без направления', none.sort(byTime), { sub: 'разметит разборщик в ближайшие полчаса — или выбери сам: щелчок по «без направления»' }));
-  return [head('Круг жизни', [plural(open.length - none.length, 'дело', 'дела', 'дел') + ' по направлениям', none.length ? 'без направления ' + none.length : null]), box];
+  const card = (d) => {
+    const key = 'd:' + d.key, x = mv[d.key] || { done: 0 };
+    const goals = m.kids(key).filter((c) => c.kind === 'goal');
+    const open = () => { S.treeDir = d.key; LS.set('treeDir', d.key); go('#/tree'); };
+    return dropTo(el('div', { class: 'krug-card' },
+      el('div', { class: 'kc-h', onclick: open }, el('b', {}, d.name), el('span', { class: 'n' }, m.open(key)),
+        el('span', { class: 'sum', title: 'закрыто за 7 дней; закрытая цель — три события' }, x.done ? 'за неделю ' + x.done : 'за неделю —')),
+      d.formula ? el('div', { class: 'kc-f' }, d.formula) : null,
+      goals.length ? el('div', { class: 'kc-goals' }, goals.map((c) => el('a', { class: 'link', href: '#', onclick: (e) => { e.preventDefault(); openCard(c.t.id); } },
+        c.t.title, m.open(c.key) ? el('span', { class: 'g-n' }, m.open(c.key)) : null))) : el('div', { class: 'kc-f faint' }, 'Целей пока нет.')), { dir: d.key });
+  };
+  const none = m.kids('d:').filter((c) => c.kind === 'task').map((c) => c.t);
+  const box = el('div', { class: 'body krug' }, principleLine(),
+    el('div', { class: 'krug-top' }, dialSvg(mv), el('div', { class: 'dial-note' },
+      'Точка на оси — движение за неделю: закрытое дело — одно событие, цель — три. Состояние многоугольником появится с первой оценкой месяца.',
+      el('a', { class: 'link', href: '#/tree' }, 'Дерево жизни целиком'))),
+    zones.map(({ z, dirs }) => el('div', { class: 'krug-zone' }, z ? el('h3', { class: 'zone-h' }, z) : null, el('div', { class: 'krug-cards' }, dirs.map(card)))));
+  if (none.length) box.append(groupBox('Без направления', none.sort(byTime), { sub: 'разборщик предложит цель в ближайшие полчаса — или выбери сам' }));
+  return [head('Круг жизни', [plural(S.krug.dirs.length, 'направление', 'направления', 'направлений'),
+    plural(all().filter((x) => isOpen(x) && isMine(x) && x.goal).length, 'цель', 'цели', 'целей')]), box];
 }
 
 // ── Действия ────────────────────────────────────────────────────────────
@@ -2186,7 +2443,7 @@ function sugText(s) {
   if (s.kind === 'close') return { title: 'Закрыть: ' + ref, hint: t?.project_name || '' };
   if (s.kind === 'assign') return { title: 'Взять себе: ' + ref, hint: t?.project_name || '' };
   // Вопрос разборщика Круга: какое направление у дела (выбор — переключателями в самой карточке «Подскажи»).
-  if (s.source === 'krug') return { title: ref, hint: t?.project_name || '' };
+  if (s.source === 'krug') return { title: ref, hint: p.goal_path ? 'цель: ' + p.goal_path : t?.project_name || '' };
   // Уточнение: что поменяется в деле; подробности (note) при принятии лягут комментарием.
   const what = [p.title ? `название: «${p.title}»` : null,
     p.due_date ? 'срок ' + (t?.due_date ? D.ddmm(t.due_date) + ' → ' : '') + D.ddmm(p.due_date) : null,
@@ -2317,7 +2574,8 @@ function askItem(s) {
   // Разборщик Круга не уверен: предложенные направления горят, щелчок — поправить; «Да» ставит выбранное.
   const kr = s.source === 'krug' && krugOn() ? (S.kpick[s.id] || (s.payload || {}).directions || []) : null;
   const krPick = kr ? dirChips({ directions: kr }, (next) => { S.kpick[s.id] = next; render(); }) : null;
-  const krSet = kr && JSON.stringify(kr) !== JSON.stringify((s.payload || {}).directions || []) ? { directions: kr } : undefined;
+  // Поправил направление — значит, не та цель: «Зачем» из предложения не ставим, дело ляжет на направление.
+  const krSet = kr && JSON.stringify(kr) !== JSON.stringify((s.payload || {}).directions || []) ? { directions: kr, why_id: null } : undefined;
   // Карточка предложения как в Делах · Новое (screens/07): сверху источник — кремовый значок и пачка.
   return el('div', { class: 'sug' + (s.kind !== 'create' ? ' ' + s.kind : '') },
     el('div', { class: 'src-line' }, sugMark(s), el('span', {}, s.batch_title || origin(s.source)[2])),
@@ -2331,7 +2589,7 @@ function askItem(s) {
         el('a', { class: 'link', href: '#', onclick: (e) => { e.preventDefault(); openCard(twin.id); } }, twin.title),
         el('button', { class: 'chip-btn', title: 'Не заводить второе: слова — комментарием к делу', onclick: () => mergeInto(s, twin) }, 'Это оно')) : null),
     el('div', { class: 'acts' },
-      el('button', { class: 'btn small ok', disabled: kr && !kr.length, onclick: () => { delete S.kpick[s.id]; decide([s.id], 'accept', null, krSet); } },
+      el('button', { class: 'btn small ok', disabled: kr && !kr.length && !(s.payload || {}).why_id, onclick: () => { delete S.kpick[s.id]; decide([s.id], 'accept', null, krSet); } },
         kr ? 'Да' : ASK_YES[s.kind] || 'Да'),
       s.kind === 'create' ? el('button', { class: 'btn small', onclick: () => { S.draft = s; S.cardId = null; render(); } }, 'Поправить') : null,
       el('button', { class: 'btn small bad', onclick: () => { const r = prompt(s.kind === 'create' ? 'Почему не дело? (можно пусто)' : 'Почему нет? (можно пусто)'); if (r !== null) decide([s.id], 'reject', r || null); } }, 'Не надо')));
@@ -2535,31 +2793,80 @@ function remindBlock(t) {
       el('div', { class: 'quick-dates' }, chips), own)];
 }
 
-/** Круг в карточке дела: направления переключателями, «Зачем» — цепочкой вверх, шаги — списком и строкой
- *  «новый шаг» (дело с этим «Зачем» в том же проекте). */
+/** Место дела в дереве жизни (владелец 13.10.2026: «в каждом деле должно быть это дерево и его место в нём, чтобы
+ *  я понимал, зачем я это делаю и что будет дальше, когда я это сделаю»): направление, цели над делом лесенкой,
+ *  само дело среди соседних шагов, его шаги — и строка «дальше». */
+function placeBlock(t) {
+  const up = upOf(t).slice(1);
+  const main = dirsOf(t)[0];
+  const chain = up.slice().reverse();
+  const parent = up[0];
+  const goalOf = (x) => x && x.kind !== 'project' ? x : null;
+  const rows = [el('div', { class: 'pt-row pt-dir', style: '--d:0' }, main ? (dirBy(main) || {}).name || main : 'без направления',
+    (t.directions || []).filter((k) => k !== main).length ? el('span', { class: 'faint' }, ' · метки: ' + (t.directions || []).filter((k) => k !== main).map(dirName).join(', ')) : null)];
+  chain.forEach((x, i) => rows.push(x.kind === 'project'
+    ? el('a', { class: 'pt-row pt-proj', style: '--d:' + (i + 1), href: '#/p/' + x.id }, '▣ ' + ((project(x.id) || {}).name || 'проект'))
+    : el('a', { class: 'pt-row pt-goal' + (x.rhythm ? ' practice' : ''), style: '--d:' + (i + 1), href: '#', onclick: (e) => { e.preventDefault(); openCard(x.id); } },
+      el('span', { class: 'gem' + (x.rhythm ? ' practice' : '') }), x.title, x.rhythm ? el('span', { class: 'faint' }, ' · ' + x.rhythm) : null)));
+  const d = chain.length + 1;
+  const sibs = goalOf(parent) ? stepsOf(parent.id).filter((s) => s.id !== t.id).sort((a, b) => (b.goal ? 1 : 0) - (a.goal ? 1 : 0) || byTime(a, b)) : [];
+  rows.push(el('div', { class: 'pt-row pt-me', style: '--d:' + d }, t.goal ? el('span', { class: 'gem' + (t.rhythm ? ' practice' : '') }) : el('span', { class: 'me-dot' }), t.title));
+  const link = (s, dd, cls) => el('a', { class: 'pt-row ' + cls, style: '--d:' + dd, href: '#', onclick: (e) => { e.preventDefault(); openCard(s.id); } },
+    s.goal ? el('span', { class: 'gem' }) : el('span', { class: 'sib-dot' }), s.title);
+  const kids = stepsOf(t.id).sort((a, b) => (b.goal ? 1 : 0) - (a.goal ? 1 : 0) || byTime(a, b));
+  kids.slice(0, 12).forEach((s) => rows.push(link(s, d + 1, 'pt-kid')));
+  if (kids.length > 12) rows.push(el('div', { class: 'pt-row faint', style: '--d:' + (d + 1) }, 'и ещё ' + (kids.length - 12)));
+  sibs.slice(0, 6).forEach((s) => rows.push(link(s, d, 'pt-sib')));
+  if (sibs.length > 6) rows.push(el('div', { class: 'pt-row faint', style: '--d:' + d }, 'рядом ещё ' + (sibs.length - 6)));
+  // «Дальше»: что изменится, когда это сделаешь.
+  const g = goalOf(parent), gg = g ? goalOf(upOf(g)[1]) : null;
+  let next;
+  if (t.goal) {
+    const sub = kids.filter((s) => s.goal).length;
+    const parts = [sub ? plural(sub, 'подцель', 'подцели', 'подцелей') : null,
+      kids.length - sub ? plural(kids.length - sub, 'шаг', 'шага', 'шагов') : null].filter(Boolean).join(' и ');
+    next = parts ? `Под целью ${parts}` + (g ? ` — а сама она ведёт к «${g.title}»` : '')
+      : 'Пустая цель — сигнал, а не мусор: какой первый шаг к ней? Впиши его ниже.';
+  } else if (g) {
+    const left = sibs.filter((s) => !s.goal).length;
+    next = left ? `Сделаешь — к цели «${g.title}» останется ${plural(left, 'шаг', 'шага', 'шагов')}`
+      : `Это последний открытый шаг к цели «${g.title}»` + (gg ? ` — дальше «${gg.title}»` : '');
+  } else if (parent && parent.kind === 'project') {
+    const pg = goalOf(upOf(parent)[1]);
+    next = `Двигает проект «${(project(parent.id) || {}).name || ''}»` + (pg ? ` — а он ведёт к «${pg.title}»` : '');
+  } else {
+    next = main ? 'Висит прямо на направлении — «без зачем». Повесь на цель, и будет видно, куда это ведёт.' : 'Ни цели, ни направления: разборщик предложит место сам, или задай «Зачем».';
+  }
+  return el('div', { class: 'place' }, rows, el('div', { class: 'pt-next' }, next));
+}
+
+/** Круг в карточке дела: место в дереве, «Зачем», цель или дело, ритм практики, направления (метки), новый шаг. */
 function krugProps(t) {
   const own = t.directions || [];
-  const got = dirsOf(t);
-  const up = [];
-  for (let g = t.why_id ? S.tasks.get(t.why_id) : null; g && up.length < 8 && !up.includes(g); g = g.why_id ? S.tasks.get(g.why_id) : null) up.push(g);
-  const chain = up.length ? up.map((g, i) => [i ? el('span', { class: 'why-sep' }, '›') : null,
-    el('a', { class: 'link', href: '#', onclick: (e) => { e.preventDefault(); openCard(g.id); } }, g.title)]) : el('span', { class: 'faint' }, 'не задано');
-  const steps = stepsOf(t.id).sort(byTime);
-  const add = el('input', { class: 'step-add', placeholder: 'Новый шаг к этому делу — Enter' });
+  const add = el('input', { class: 'step-add', placeholder: (t.goal ? 'Новый шаг к этой цели' : 'Новый шаг к этому делу') + ' — Enter' });
   add.addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter' || !add.value.trim()) return;
     e.preventDefault();
-    try { await op1({ op: 'task.create', task: { title: add.value.trim(), why_id: t.id, source: 'web', ...(t.project_id ? { project_id: t.project_id } : {}) } }); add.value = ''; render(); } catch (err) { fail(err); }
+    const task = { title: add.value.trim(), why_id: t.id, source: 'web', ...(!t.goal && t.project_id ? { project_id: t.project_id } : {}) };
+    try { await op1({ op: 'task.create', task }); add.value = ''; render(); } catch (err) { fail(err); }
   });
+  const rhythm = el('input', { class: 'rhythm', placeholder: 'ежедневно, 2 раза в неделю…', value: t.rhythm || '' });
+  rhythm.addEventListener('change', () => setFields([t.id], { rhythm: rhythm.value.trim() || null }, rhythm.value.trim() ? 'Практика: ' + rhythm.value.trim() : 'Уже не практика'));
+  const kindBtn = treeOn() ? el('button', { class: 'chip-btn' + (t.goal ? ' on' : ''),
+    title: t.goal ? 'Вернуть в дела: появится в списках' : 'Цель — состояние, к которому идёшь; в списках дел её нет, она живёт в дереве',
+    onclick: () => {
+      if (!t.goal && t.project_id && !confirm('Цель живёт без проекта — её видишь только ты. Убрать дело из проекта и сделать целью?')) return;
+      setFields([t.id], { goal: !t.goal }, t.goal ? 'Снова дело' : 'Теперь это цель');
+    } }, t.goal ? 'Цель' : 'Сделать целью') : null;
   return [
+    el('span', {}, 'Зачем'), el('div', { class: 'why-row' },
+      el('button', { class: 'chip-btn', onclick: (e) => whyPop(e.currentTarget, t) }, t.why_id ? 'Поменять цель' : 'Повесить на цель'),
+      kindBtn, t.goal ? el('label', { class: 'rhythm-l', title: 'Цель с ритмом — практика: повторяется и не закрывается' }, 'Ритм', rhythm) : null),
     el('span', {}, 'Направления'), dirChips(t, (next) => setFields([t.id], { directions: next })),
-    !own.length ? el('span', {}) : null,
-    !own.length ? el('div', { class: 'hint-line krug-hint' }, got.length ? 'наследует: ' + got.map(dirName).join(', ') + (t.why_id ? ' — от цели' : ' — от проекта')
-      : 'не размечено — разборщик разметит сам, или выбери') : null,
-    el('span', {}, 'Зачем'), el('div', { class: 'why-row' }, el('div', { class: 'why-chain' }, chain),
-      el('button', { class: 'chip-btn', onclick: (e) => whyPop(e.currentTarget, t) }, t.why_id ? 'Поменять' : 'Задать')),
-    el('span', {}, 'Шаги'),
-    el('div', { class: 'steps' }, steps.map((s) => el('a', { class: 'link step-link', href: '#', onclick: (e) => { e.preventDefault(); openCard(s.id); } }, s.title)), add),
+    el('span', {}), el('div', { class: 'hint-line krug-hint' }, own.length
+      ? 'главное — у корня цепочки «Зачем», остальные — метки (до двух)'
+      : 'своих нет — направление по дереву; отметь, если дело двигает ещё и другую сторону'),
+    el('span', {}, 'Шаги'), el('div', { class: 'steps' }, add),
   ];
 }
 
@@ -2623,7 +2930,7 @@ function renderCard() {
     } }, l)));
 
   const props = el('div', { class: 'props' },
-    el('span', {}, 'Проект'), projSel,
+    el('span', {}, 'Проект'), t && t.goal ? el('span', { class: 'faint' }, 'цель живёт без проекта — её видишь только ты') : projSel,
     deals.length ? el('span', {}, 'Сделка') : null, deals.length ? sel('deal_id', [['', '—'], ...deals.map((d) => [d.id, d.name])], src.deal_id) : null,
     el('span', {}, 'Группа'), grpPick,
     el('span', {}, { owed: 'Кто ждёт', check: 'От кого жду' }[g] || 'Человек'), sel('person_id', [['', '—'], ...people.map((p) => [p.id, p.short && p.short !== p.name ? `${p.short} — ${p.name}` : p.name])], src.person_id),
@@ -2649,7 +2956,10 @@ function renderCard() {
       sug ? el('span', { class: 'crumb' }, 'Предложение') : crumb,
       t && t.status !== 'open' ? el('span', { class: 'faint' }, t.status === 'done' ? 'сделано' : 'отменено') : null,
       el('button', { class: 'icon-btn', title: 'Закрыть (Esc)', onclick: close }, icon('x', 18))),
-    title, acts, t ? originLine(t) : null, props,
+    title, acts, t ? originLine(t) : null,
+    // Место в дереве жизни — сразу под названием: зачем это дело и что будет, когда сделаешь (13.10.2026).
+    t && isMine(t) && krugOn() ? el('div', { class: 'glass place-box' }, el('div', { class: 'place-h' }, 'Место в дереве'), placeBlock(t)) : null,
+    props,
     el('div', { class: 'checks' }, chk('want', 'Хочу сам', src.want, true)),
     notes);
   const btns = el('div', { class: 'btns' });
