@@ -175,7 +175,13 @@ class ScreenShots {
         if (tap(c, "разделы, CRM")) {
             tap(c, "раскрыть все")
             screen("crm-1-nav-clients")
-            if (tap(c, "Бета Групп 5")) shot(c, "crm-2-client")
+            if (tap(c, "Бета Групп")) shot(c, "crm-2-client")
+            // Задание 13: «Переименовать» клиента — лист с именем; имя другого клиента — отказ словами.
+            if (tap(c, "Переименовать", exact = true)) {
+                screen("crm-11-rename")
+                if (typeTop(c, "орион логистик")) screen("crm-12-rename-clash")
+                if (typeTop(c, "Бета Холдинг") && tap(c, "Переименовать", exact = true)) shot(c, "crm-13-renamed")
+            }
             if (tap(c, "финдиректор")) screen("crm-3-person-where")
         }
         close(c)
@@ -198,14 +204,6 @@ class ScreenShots {
         // Задание 8: на Воронке строка Claude видит сделки экрана.
         c = launch(MainActivity.TAB_TODOIST)
         if (tap(c, "Воронка", exact = true)) shot(c, "crm-10-voronka")
-        close(c)
-        // Задание 13: «Переименовать» клиента — лист с именем; имя другого клиента — отказ словами.
-        c = launch(MainActivity.TAB_TODOIST)
-        if (tap(c, "разделы, CRM") && tap(c, "Бета Групп 5") && tap(c, "Переименовать", exact = true)) {
-            screen("crm-11-rename")
-            if (typeTop(c, "орион логистик")) screen("crm-12-rename-clash")
-            if (typeTop(c, "Бета Холдинг") && tap(c, "Переименовать", exact = true)) shot(c, "crm-13-renamed")
-        }
         close(c)
         RuntimeEnvironment.setQualifiers(OUTER)
         c = launch(MainActivity.TAB_TODOIST)
