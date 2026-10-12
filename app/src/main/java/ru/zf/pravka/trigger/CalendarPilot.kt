@@ -373,7 +373,6 @@ class CalendarPilot(
         } ?: return mk
         if (!CalendarRules.absorbs(ev, guess.seen(), guess.end, said.seen(), ev.end)) return mk
         val merged = app.zasechkaStore.absorb(guess.id, said.id) ?: return mk
-        app.zasechkaSync.kickSoon(scope)
         lastFire = "«${merged.title}» — твоими словами с ${pilot.timeHm(merged.start)}"
         app.eventLog.add(
             "календарь: «${guess.title}» с ${pilot.timeHm(guess.start)} — ты сказал «${said.title}», " +
@@ -406,7 +405,6 @@ class CalendarPilot(
             source = CalendarRules.SOURCE,
             project = project?.id.orEmpty(),
         )
-        app.zasechkaSync.kickSoon(scope)
         lastFire = "встреча «${entry.title}» с ${pilot.timeHm(e.start)}"
         pilot.notify(
             "📅 ${entry.title}",
@@ -462,7 +460,6 @@ class CalendarPilot(
                     source = it.source, task = it.task, project = it.project,
                 )
             }
-        app.zasechkaSync.kickSoon(scope)
         lastFire = "встреча «${closed.title}» закрыта ${pilot.timeHm(end)}"
         pilot.notify(
             "📅 «${closed.title}» закончилась",

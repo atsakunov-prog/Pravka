@@ -89,7 +89,6 @@ class ZasechkaQuickActivity : Activity() {
             }.onSuccess {
                 Feedback.toast(app, "⏱ ${e.title} — с " + java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(now)))
                 app.eventLog.add("виджет: начато ещё раз «${e.title}» [${e.category}]")
-                app.zasechkaSync.kickSoon(app.appScope)
             }.onFailure {
                 Feedback.toast(app, "Не начал «${e.title}»: ${it.message ?: it.javaClass.simpleName}", long = true)
             }

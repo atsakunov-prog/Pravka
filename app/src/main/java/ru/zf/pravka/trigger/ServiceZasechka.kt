@@ -396,7 +396,6 @@ internal fun PravkaAccessibilityService.onZasechkaCommentText(
             return@launch
         }
         app.eventLog.add("засечка: комментарий к «${entry.title}»: $cleaned")
-        app.zasechkaSync.kickSoon(app.appScope)
         if (spoken) say(ru.zf.pravka.core.ZasechkaIntent.said(ru.zf.pravka.core.ZasechkaIntent.Kind.COMMENT))
         val failure = (outcome as? ProofreadEngine.Outcome.Failed)?.message
         if (failure == null) Haptics.success(this@onZasechkaCommentText)

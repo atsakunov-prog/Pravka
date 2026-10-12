@@ -15,7 +15,7 @@ class ZasechkaTasksTest {
 
     private fun entry(start: Long, end: Long, task: String = "", title: String = "Дело") = ZasechkaStore.Entry(
         id = nextId++, start = start, end = end, raw = "", title = title, category = "Работа: текущая",
-        client = "", useful = 0, source = if (task.isBlank()) "voice" else "task", synced = false, createdAt = start,
+        client = "", useful = 0, source = if (task.isBlank()) "voice" else "task", createdAt = start,
         task = task,
     )
 

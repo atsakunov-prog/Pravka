@@ -114,7 +114,6 @@ internal enum class SettingsGroup(
     DELA_SERVER("Дела", "свой сервер дел, QR, выбор Todoist / Дела", SettingsShelf.LINKS, { Glyphs.Delo }, ModeDecor.DELA),
     TODOIST("Todoist", "запасная дорога дел", SettingsShelf.LINKS, { Glyphs.Delo }, ModeDecor.DELA),
     INTERVALS("intervals.icu", "тренировки, сон, вес", SettingsShelf.LINKS, { Glyphs.Activity }, ModeDecor.SPORT),
-    SHEETS("Google Sheets", "таймшит из ленты", SettingsShelf.LINKS, { Glyphs.ListLines }, ModeDecor.ZASECHKA),
     CLOUD("Облако семьи", "домашний сервер: общие Деньги, копии базы", SettingsShelf.LINKS, { Glyphs.Cloud }),
     ARCHIVE("Архив", "вся жизнь на компе, к ней ходит Claude", SettingsShelf.LINKS, { Glyphs.Archive }),
     BUTTONS("Кнопки на экране", "какие, круг или стопка, размер", SettingsShelf.LOOK, { Glyphs.Disk }),
@@ -215,7 +214,7 @@ internal fun SettingsTab(
  */
 private val SettingsGroup.modes: Set<ru.zf.pravka.data.Profile.Mode>
     get() = when (this) {
-        SettingsGroup.ZASECHKA, SettingsGroup.SHEETS -> setOf(ru.zf.pravka.data.Profile.Mode.ZASECHKA)
+        SettingsGroup.ZASECHKA -> setOf(ru.zf.pravka.data.Profile.Mode.ZASECHKA)
         SettingsGroup.DELA, SettingsGroup.TODOIST, SettingsGroup.DELA_SERVER -> setOf(ru.zf.pravka.data.Profile.Mode.DELA)
         SettingsGroup.SPORT -> setOf(ru.zf.pravka.data.Profile.Mode.SPORT)
         SettingsGroup.FOOD -> setOf(ru.zf.pravka.data.Profile.Mode.FOOD)
@@ -301,10 +300,6 @@ private fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
                 st.lastError.isNotBlank() && st.lastErrorAt >= st.lastOk -> GroupStatus("ошибка", ok = false, dot = true)
                 else -> GroupStatus("подключён", ok = true, dot = true)
             }
-        }
-        SettingsGroup.SHEETS -> {
-            val url by s.zWebhookFlow.collectAsState(initial = "")
-            if (url.isBlank()) GroupStatus("не задано", ok = null, dot = true) else GroupStatus("задано", ok = true, dot = true)
         }
         SettingsGroup.BUTTONS -> {
             val z by s.zEnabledFlow.collectAsState(initial = true)
@@ -509,7 +504,6 @@ private fun GroupContent(
         SettingsGroup.TODOIST -> TodoistSettings(app)
         SettingsGroup.DELA_SERVER -> DelaServerSettings(app)
         SettingsGroup.INTERVALS -> IntervalsSettings(app)
-        SettingsGroup.SHEETS -> ZasechkaSheetsSettings(app)
         SettingsGroup.CLOUD -> FamilyCloudSettings(app)
         SettingsGroup.ARCHIVE -> ArchiveSettings(app)
         SettingsGroup.BUTTONS -> ButtonsSettings(app)

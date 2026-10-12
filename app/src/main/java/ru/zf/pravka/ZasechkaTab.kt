@@ -329,7 +329,6 @@ internal fun ZasechkaTab(
     val categories by store.categoriesFlow.collectAsState()
     val categoryNames = remember(categories) { categories.map { it.name } }
     val clients by store.clientsFlow.collectAsState()
-    val syncStatus by app.zasechkaSync.statusFlow.collectAsState()
     val ownerName = app.profileStore.flow.collectAsState().value?.name
     LaunchedEffect(Unit) { store.all() }  // first read triggers the load
 
@@ -721,7 +720,6 @@ internal fun ZasechkaTab(
                     if (onlyCommentChanged(entry, updated)) store.setComment(entry.id, updated.comment)
                     else store.update(updated)
                     app.mirrorZasechkaComment(entry, entry.comment, updated.comment)
-                    app.zasechkaSync.kickSoon(app.appScope)
                 }
             },
             onDelete = {
@@ -752,7 +750,6 @@ internal fun ZasechkaTab(
                     app.mirrorZasechkaComment(first, first.comment, updated.comment)
                     if (onlyCommentChanged(shown, updated)) {
                         store.setComment(first.id, updated.comment)
-                        app.zasechkaSync.kickSoon(app.appScope)
                         return@launch
                     }
                     for (f in chain) {
@@ -779,7 +776,6 @@ internal fun ZasechkaTab(
                         }
                         store.update(nf)
                     }
-                    app.zasechkaSync.kickSoon(app.appScope)
                 }
             },
             onDelete = {
@@ -799,7 +795,6 @@ internal fun ZasechkaTab(
                     store.setComment(entry.id, text)
                     // Запись из дела — дописанное уезжает и в само дело.
                     app.mirrorZasechkaComment(entry, entry.comment, text)
-                    app.zasechkaSync.kickSoon(app.appScope)
                 }
             },
         )
@@ -873,7 +868,6 @@ internal fun ZasechkaTab(
                     // его обратно, заполнитель уйдёт сам. Закрытая — предыдущее
                     // дело дотягивается до конца дыры.
                     store.update(prev.copy(end = if (target.end == 0L) 0L else target.end))
-                    app.zasechkaSync.kickSoon(app.appScope)
                     Feedback.toast(
                         app,
                         if (target.end == 0L) "▶ «${prev.title}» снова идёт"
@@ -886,7 +880,6 @@ internal fun ZasechkaTab(
                 val next = target.next ?: return@GapDialog
                 app.appScope.launch {
                     store.update(next.copy(start = target.start))
-                    app.zasechkaSync.kickSoon(app.appScope)
                     Feedback.toast(app, "⏱ «${next.title}» с ${fmtTime(target.start)}")
                 }
             },
@@ -1409,51 +1402,6 @@ internal fun ZasechkaSettings(app: PravkaApp) {
 
         PaperCard(label = "автопилот", info = AUTOPILOT_INFO) { AutoPilotSection(app) }
         PaperCard(label = "метки nfc", info = NFC_INFO) { NfcTagsSection(app) }
-    }
-}
-
-/**
- * Google Sheets — зеркало ленты в таблицу. Живёт в «Подключениях» рядом с
- * остальными ключами: искать адрес скрипта в настройках Засечки было
- * «а где это было?».
- */
-@Composable
-internal fun ZasechkaSheetsSettings(app: PravkaApp) {
-    LaunchedEffect(Unit) { app.zasechkaStore.all() }
-    val syncStatus by app.zasechkaSync.statusFlow.collectAsState()
-    val entries by app.zasechkaStore.entriesFlow.collectAsState()
-    val webhook by app.settings.zWebhookFlow.collectAsState(initial = "")
-    var url by remember(webhook) { mutableStateOf(webhook) }
-    val pending = entries.count { !it.open && !it.synced }
-
-    PaperCard(
-        label = "таблица",
-        info = "Скрипт и настройка за пять минут — docs/zasechka-sheets.md в репозитории. " +
-            "Закрытые записи уходят в таблицу сами; «Синхронизировать» толкает очередь сейчас.",
-    ) {
-        PaperField(value = url, onValueChange = { url = it }, label = "URL веб-приложения Apps Script")
-        if (syncStatus.isNotBlank()) PaperHint("Последняя отправка: $syncStatus")
-        if (pending > 0) PaperHint("Ждут отправки: $pending")
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            PaperButton("Синхронизировать", icon = Glyphs.Refresh, onClick = {
-                app.appScope.launch {
-                    val result = app.zasechkaSync.syncNow()
-                    result.onSuccess { n ->
-                        Feedback.toast(app, if (n > 0) "Отправлено строк: $n" else "Всё уже в таблице")
-                    }.onFailure { e ->
-                        Feedback.toast(app, "Не удалось: ${e.message}")
-                    }
-                }
-            })
-            Spacer(Modifier.weight(1f))
-            PaperButton("Сохранить", primary = true, enabled = url.trim() != webhook, onClick = {
-                app.appScope.launch {
-                    app.settings.setZWebhook(url)
-                    Feedback.toast(app, "Сохранено")
-                }
-            })
-        }
     }
 }
 
@@ -2239,7 +2187,6 @@ internal fun BackupsSection(app: PravkaApp) {
         if (uri != null) {
             app.appScope.launch {
                 val n = runCatching { app.zasechkaStore.importCsv(uri) }.getOrDefault(0)
-                if (n > 0) app.zasechkaSync.kickSoon(app.appScope)
                 tick++
                 Feedback.toast(
                     app,
@@ -2318,7 +2265,6 @@ internal fun BackupsSection(app: PravkaApp) {
                 onClick = {
                     app.appScope.launch {
                         val n = runCatching { app.zasechkaStore.restoreFrom(b.name) }.getOrDefault(0)
-                        app.zasechkaSync.kickSoon(app.appScope)
                         Feedback.toast(
                             app,
                             if (n > 0) "Восстановлено записей: $n" else "В копии нечего восстанавливать",

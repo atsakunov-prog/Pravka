@@ -120,7 +120,8 @@ class PravkaApp : Application() {
         // облачный движок главным, а лежащее в DataStore старое «офлайн»
         // сильнее нового заводского.
         appScope.launch { runCatching { settings.migrateSpeechToNetwork() } }
-        // Снятые интеграции (12.10.2026: Notion) — их ключи и токены из базы.
+        // Снятые интеграции (12.10.2026: Notion и Google Sheets) — их ключи,
+        // токены и адреса из базы.
         appScope.launch { runCatching { settings.dropRetiredLinks() } }
         // Тень снята (18.09.2026; владелец: «убери эту тень, она снова запустилась
         // и ест деньги»): её прогоны, застрявшие активными, закрываются, движка
@@ -369,7 +370,7 @@ class PravkaApp : Application() {
     /** Звук тейков Google — переразобрать фразу заново (30.09.2026). */
     val takeAudio by lazy { ru.zf.pravka.data.TakeAudio(this) }
 
-    // Засечка (timesheet): store, the Sheets mirror, phrase -> entry pipeline.
+    // Засечка (timesheet): store and the phrase -> entry pipeline.
     // Правила разбора Засечки: набор, одобренный владельцем, едет в каждый
     // разбор. Ночное самообучение, которое их предлагало, снято (08.09.2026):
     // «все паттерны уже найдены», а ⭐ над «З» раздражала.
@@ -384,12 +385,9 @@ class PravkaApp : Application() {
             }
         }
     }
-    val zasechkaSync by lazy {
-        ru.zf.pravka.data.ZasechkaSync(settings, zasechkaStore, httpClient, eventLog)
-    }
     val zasechkaEngine by lazy {
         ru.zf.pravka.core.ZasechkaEngine(
-            claudeProvider, zasechkaStore, stats, eventLog, zasechkaSync, appScope,
+            claudeProvider, zasechkaStore, stats, eventLog,
             zasechkaRules,
         )
     }
@@ -868,7 +866,7 @@ class PravkaApp : Application() {
     val feedbackStore by lazy { ru.zf.pravka.data.FeedbackStore(this) }
     val phoneSweeper by lazy {
         ru.zf.pravka.data.PhoneSweeper(
-            this, phoneStore, zasechkaStore, settings, eventLog, zasechkaSync, appScope,
+            this, phoneStore, zasechkaStore, settings, eventLog,
             // Нашёл ночь — автопилот решает про дело по подъёму (сборы детей в будни).
             witness = { ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.autoWitness() },
             callPeople = { callPeople() },
@@ -914,7 +912,7 @@ class PravkaApp : Application() {
     // автопилот службы: тренировка от двери начинается с потери сети места.
     val icuSweeper by lazy {
         ru.zf.pravka.data.IcuSweeper(
-            settings, zasechkaStore, httpClient, eventLog, zasechkaSync, appScope,
+            settings, zasechkaStore, httpClient, eventLog,
             witness = { ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.autoWitness() },
             wakeHint = {
                 getSharedPreferences("pravka_internal", MODE_PRIVATE)

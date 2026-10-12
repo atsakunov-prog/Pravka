@@ -82,7 +82,7 @@ app/src/main/java/ru/zf/pravka/
   trigger/               служба доступности (PravkaAccessibilityService — хозяин микрофона,
                          окон и тиков; Service<Режим>.kt — режимные куски), четыре плавающие
                          кнопки, автопилот, NFC, самообновление
-  data/                  сторы и синхронизации: файлы, intervals, Дела, Todoist, Sheets
+  data/                  сторы и синхронизации: файлы, intervals, Дела, Todoist
   ui/                    тема, кирпичи вёрстки, графики (Charts.kt), сканер штрихкода
   target/                куда писать текст: поле доступности, буфер
   assets/                exercises.json (семя справочника), ration.json (КБЖУ и

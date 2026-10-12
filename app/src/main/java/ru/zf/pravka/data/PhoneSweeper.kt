@@ -14,7 +14,6 @@ import androidx.core.content.ContextCompat
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 import kotlin.math.min
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -46,8 +45,6 @@ class PhoneSweeper(
     private val zasechkaStore: ZasechkaStore,
     private val settings: Settings,
     private val eventLog: EventLog,
-    private val sync: ZasechkaSync,
-    private val scope: CoroutineScope,
     /** Автопилот службы: узнаёт о найденной ночи и начинает дело по подъёму. */
     private val witness: () -> AutoWitness? = { null },
     /** «Засечка молча» (`Profile.zasechkaQuiet`): звонки считаются по дням, но ленту не режут. */
@@ -310,14 +307,11 @@ class PhoneSweeper(
 
         // ---- сон и звонки: единственное, что идёт дальше телефонного слоя ----
 
-        var insertedAny = false
-        if (detectSleep(now, usm)) insertedAny = true
+        detectSleep(now, usm)
 
         if (settings.zCallsFlow.first() && hasCallLogAccess(context)) {
             sweepCalls(now, st.lastCallSweep)
         }
-
-        if (insertedAny) sync.kickSoon(scope)
     }
 
     /**
@@ -547,7 +541,6 @@ class PhoneSweeper(
             project = verdict.project,
             person = verdict.personId,
         ) ?: return
-        sync.kickSoon(scope)
         eventLog.add(
             "звонок: «${entry.title}» ${hm(entry.start)}–${hm(entry.end)} [${entry.category}]" +
                 (if (entry.client.isNotBlank()) " · ${entry.client}" else "") +

@@ -55,7 +55,7 @@ class ZasechkaStore(private val context: Context) {
         private const val GAP_FILL_MIN_MS = 60_000L
         // ...but only once the right edge has stood for a while: retro
         // dictation ("обедаю с 12:30") usually lands within the hour, and an
-        // eagerly created filler would already be mirrored to Sheets.
+        // eagerly created filler would already have gone out to the archive.
         private const val GAP_FILL_QUARANTINE_MS = 45 * 60_000L
         private const val GAP_SOURCE = "gap"
         // Авто-заполнитель дыр пишет в СВОЮ категорию: «Потери» — только
@@ -140,16 +140,16 @@ class ZasechkaStore(private val context: Context) {
             when {
                 before != null && after != null && after.raw.isBlank() &&
                     after.title == before.title && after.category == before.category && after.client == before.client -> {
-                    kept = before.copy(end = after.end, synced = false)
+                    kept = before.copy(end = after.end)
                     out.removeAll { it.id == after.id }
                     put(kept)
                 }
                 before != null -> {
-                    kept = before.copy(end = call.end, synced = false)
+                    kept = before.copy(end = call.end)
                     put(kept)
                 }
                 after != null -> {
-                    kept = after.copy(start = call.start, synced = false)
+                    kept = after.copy(start = call.start)
                     put(kept)
                 }
             }
@@ -202,7 +202,6 @@ class ZasechkaStore(private val context: Context) {
         val client: String,       // "" when none
         val useful: Int,          // 1..5, 0 = not rated
         val source: String,       // "voice" | "text" | "edit" | "auto" | "gap" | "task" | "calendar"
-        val synced: Boolean,      // delivered to the Sheets webhook
         val createdAt: Long,
         // 🍅 помидоров, дозревших за делом, — история: таймер снят 09.09
         // (владелец им не пользовался), поле читается и пишется ради старых
@@ -300,10 +299,7 @@ class ZasechkaStore(private val context: Context) {
         ensureLoaded()
         val step = undoSteps.removeLastOrNull() ?: return@withLock null
         val kept = entries.filter { (if (it.open) Long.MAX_VALUE else it.end) <= step.from }
-        // Restored rows go out to the mirrors again - the Sheets copy of a
-        // row that came back must stop showing the deleted state.
-        entries = (kept + step.entries.map { it.copy(synced = false) })
-            .toMutableList()
+        entries = (kept + step.entries).toMutableList()
         entries.sortBy { it.start }
         normalizeLocked()
         persist()
@@ -409,7 +405,7 @@ class ZasechkaStore(private val context: Context) {
         for (i in entries.indices) {
             val e = entries[i]
             if (e.source == "auto" && !e.open && e.start < start && e.end > start) {
-                entries[i] = e.copy(end = start, synced = false)
+                entries[i] = e.copy(end = start)
             }
         }
         val opened = Entry(
@@ -422,7 +418,6 @@ class ZasechkaStore(private val context: Context) {
             client = client.trim(),
             useful = useful.coerceIn(0, 5),
             source = source,
-            synced = false,
             createdAt = nowMs,
             task = task.trim(),
             project = project.trim(),
@@ -475,7 +470,6 @@ class ZasechkaStore(private val context: Context) {
                         raw = if (first) e.raw else "",
                         comment = if (first) e.comment else "",
                         pomodoros = if (first) e.pomodoros else 0,
-                        synced = false,
                     )
                 )
                 first = false
@@ -490,7 +484,6 @@ class ZasechkaStore(private val context: Context) {
                     raw = "",
                     comment = "",
                     pomodoros = 0,
-                    synced = false,
                 )
             )
         }
@@ -556,7 +549,7 @@ class ZasechkaStore(private val context: Context) {
                     claimEnd == null || claimEnd <= e.start -> out.add(e)
                     nowMs - claimEnd < GAP_FILL_MIN_MS -> changed = true  // crumb - drop
                     else -> {
-                        out.add(e.copy(start = claimEnd, synced = false))
+                        out.add(e.copy(start = claimEnd))
                         changed = true
                     }
                 }
@@ -592,7 +585,6 @@ class ZasechkaStore(private val context: Context) {
                         id = if (first) e.id else nextId(),
                         start = s,
                         end = en,
-                        synced = false,
                     )
                 )
                 first = false
@@ -615,7 +607,6 @@ class ZasechkaStore(private val context: Context) {
         client = "",
         useful = 0,
         source = GAP_SOURCE,
-        synced = false,
         createdAt = nowMs,
     )
 
@@ -643,7 +634,7 @@ class ZasechkaStore(private val context: Context) {
             if (b.start - a.end >= GAP_FILL_MIN_MS) continue
             val at = entries.indexOfFirst { it.id == a.id }
             if (at < 0) continue
-            entries[at] = a.copy(end = b.start, synced = false)
+            entries[at] = a.copy(end = b.start)
             changed = true
         }
         return changed
@@ -729,7 +720,7 @@ class ZasechkaStore(private val context: Context) {
      * an old build's data) - is spliced into fragments AROUND them: the дело
      * stays the main block (one chain, net time), the robot's minutes stay
      * the robot's. The head fragment keeps
-     * the id (its Sheets row updates in place) and is created even at
+     * the id and is created even at
      * zero length - it anchors the block at the declared start; later
      * fragments get fresh ids, 🍅 stay on the tail.
      */
@@ -775,7 +766,6 @@ class ZasechkaStore(private val context: Context) {
                             raw = if (firstSeg) m.raw else "",
                             comment = if (firstSeg) m.comment else "",
                             pomodoros = 0,
-                            synced = false,
                         )
                     )
                     firstSeg = false
@@ -789,7 +779,6 @@ class ZasechkaStore(private val context: Context) {
                     end = if (m.open) 0L else kotlin.math.max(m.end, cursor),
                     raw = if (firstSeg) m.raw else "",
                     comment = if (firstSeg) m.comment else "",
-                    synced = false,
                 )
             )
         }
@@ -816,7 +805,7 @@ class ZasechkaStore(private val context: Context) {
         val index = entries.indexOfLast { it.open }
         if (index < 0) return null
         val open = entries[index]
-        val closed = open.copy(end = at.coerceAtLeast(open.start), synced = false)
+        val closed = open.copy(end = at.coerceAtLeast(open.start))
         entries[index] = closed
         return closed
     }
@@ -874,7 +863,7 @@ class ZasechkaStore(private val context: Context) {
             when {
                 // Накрывает вставку целиком: голова до, продолжение после.
                 e.start < s0 && eEnd > e0 -> {
-                    out.add(e.copy(end = s0, synced = false))
+                    out.add(e.copy(end = s0))
                     out.add(
                         e.copy(
                             id = nextId(),
@@ -883,14 +872,13 @@ class ZasechkaStore(private val context: Context) {
                             start = e0,
                             end = if (e.open) 0L else e.end,
                             pomodoros = 0,
-                            synced = false,
                         )
                     )
                 }
                 // Заходит слева — обрезаем её конец на старте вставки.
-                e.start < s0 -> out.add(e.copy(end = s0, synced = false))
+                e.start < s0 -> out.add(e.copy(end = s0))
                 // Выходит справа — сдвигаем её начало на конец вставки.
-                else -> out.add(e.copy(start = e0, synced = false))
+                else -> out.add(e.copy(start = e0))
             }
         }
         val entry = Entry(
@@ -903,7 +891,6 @@ class ZasechkaStore(private val context: Context) {
             client = client.trim(),
             useful = useful.coerceIn(0, 5),
             source = "voice",
-            synced = false,
             createdAt = nowMs,
         )
         out.add(entry)
@@ -973,7 +960,7 @@ class ZasechkaStore(private val context: Context) {
         if (openIndex >= 0) {
             val open = entries[openIndex]
             if (open.start <= start) {
-                entries[openIndex] = open.copy(end = start.coerceAtLeast(open.start), synced = false)
+                entries[openIndex] = open.copy(end = start.coerceAtLeast(open.start))
                 if (resumePrevious) resumeTemplate = open
             } else if (open.start < end) {
                 actualEnd = open.start
@@ -990,7 +977,6 @@ class ZasechkaStore(private val context: Context) {
             client = client.trim(),
             useful = 0,
             source = "auto",
-            synced = false,
             createdAt = System.currentTimeMillis(),
             project = project.trim(),
             person = person.trim(),
@@ -1009,7 +995,6 @@ class ZasechkaStore(private val context: Context) {
                     raw = "",
                     start = actualEnd,
                     end = 0L,
-                    synced = false,
                     createdAt = System.currentTimeMillis(),
                 )
             )
@@ -1044,7 +1029,7 @@ class ZasechkaStore(private val context: Context) {
     }
 
     /**
-     * Full replace by id. Any content change makes the row sync again.
+     * Full replace by id.
      * A time edit that lands the entry OVER auto facts makes it the main
      * дело: the splice runs right here, not only on load.
      */
@@ -1053,7 +1038,7 @@ class ZasechkaStore(private val context: Context) {
         val index = entries.indexOfFirst { it.id == entry.id }
         if (index >= 0) {
             snapshotLocked("правку «${entries[index].title.ifBlank { "без названия" }}»")
-            entries[index] = entry.copy(synced = false)
+            entries[index] = entry
             normalizeLocked()
             entries.sortBy { it.start }
             persist()
@@ -1092,7 +1077,7 @@ class ZasechkaStore(private val context: Context) {
         var reopened: Entry? = null
         val i = entries.indexOfFirst { it.id == reopenId }
         if (i >= 0 && entries.none { it.open }) {
-            reopened = entries[i].copy(end = 0L, synced = false)
+            reopened = entries[i].copy(end = 0L)
             entries[i] = reopened
         }
         normalizeLocked()
@@ -1111,7 +1096,7 @@ class ZasechkaStore(private val context: Context) {
         val i = entries.indexOfFirst { it.id == id }
         if (i < 0 || entries.any { it.open }) return@withLock null
         snapshotLocked("возврат «${entries[i].title.ifBlank { "без названия" }}»")
-        val reopened = entries[i].copy(end = 0L, synced = false)
+        val reopened = entries[i].copy(end = 0L)
         entries[i] = reopened
         normalizeLocked()
         persist()
@@ -1133,7 +1118,7 @@ class ZasechkaStore(private val context: Context) {
         val i = entries.indexOfFirst { it.id == saidId }
         if (i < 0 || guess.open || kotlin.math.abs(entries[i].start - guess.end) >= 60_000L) return@withLock null
         snapshotLocked("слияние «${guess.title.ifBlank { "без названия" }}»")
-        val merged = entries[i].copy(start = guess.start, synced = false)
+        val merged = entries[i].copy(start = guess.start)
         entries[i] = merged
         entries.removeAll { it.id == guessId }
         normalizeLocked()
@@ -1158,7 +1143,7 @@ class ZasechkaStore(private val context: Context) {
         ensureLoaded()
         val index = entries.indexOfFirst { it.id == id }
         if (index < 0) return@withLock false
-        entries[index] = entries[index].copy(raw = raw, synced = false)
+        entries[index] = entries[index].copy(raw = raw)
         persist()
         true
     }
@@ -1180,7 +1165,7 @@ class ZasechkaStore(private val context: Context) {
         if (index < 0) return@withLock false
         val text = comment.trim()
         if (entries[index].comment == text) return@withLock true
-        entries[index] = entries[index].copy(comment = text, synced = false)
+        entries[index] = entries[index].copy(comment = text)
         persist()
         true
     }
@@ -1195,7 +1180,7 @@ class ZasechkaStore(private val context: Context) {
         var n = 0
         for (i in entries.indices) {
             if (entries[i].source == from) {
-                entries[i] = entries[i].copy(source = to, synced = false)
+                entries[i] = entries[i].copy(source = to)
                 n++
             }
         }
@@ -1228,21 +1213,6 @@ class ZasechkaStore(private val context: Context) {
             }
         return manualMs * 2 >= to - from
     }
-
-    /** Closed entries the Sheets mirror has not seen yet, oldest first. */
-    suspend fun unsynced(): List<Entry> = mutex.withLock {
-        ensureLoaded()
-        entries.filter { !it.open && !it.synced }
-    }
-
-    suspend fun markSynced(ids: Collection<Long>): Unit = mutex.withLock {
-        ensureLoaded()
-        if (ids.isEmpty()) return@withLock
-        val idSet = ids.toSet()
-        entries = entries.map { if (it.id in idSet) it.copy(synced = true) else it }.toMutableList()
-        persist()
-    }
-
 
     /**
      * Длина строки в минутах - как РАЗНОСТЬ МИНУТ СУТОК. Обе минуты считаются
@@ -1393,9 +1363,6 @@ class ZasechkaStore(private val context: Context) {
                     client = cell("client"),
                     useful = cell("useful").toIntOrNull() ?: 0,
                     source = source,
-                    // Строки уже уезжали в зеркало один раз — второй заход
-                    // насыпал бы в таблицу дубли всей истории.
-                    synced = true,
                     createdAt = start,
                     comment = cell("comment"),
                 )
@@ -1594,18 +1561,13 @@ class ZasechkaStore(private val context: Context) {
             val parallelsArchived = archiveParkedLocked() > 0
             // Старые авто-дыры назывались «потери» и делили категорию с
             // осознанными потерями — переводим их под «Не размечено».
-            // Свежая неделя пересинкается в зеркала, осевшая история в
-            // зеркалах остаётся как была (данные до правки всё равно
-            // помечены владельцем как тестовый прогон).
             var fillersMigrated = false
-            val weekAgo = System.currentTimeMillis() - 7 * 86_400_000L
             entries = entries.map { e ->
                 if (e.source == GAP_SOURCE && !e.title.equals("не размечено", ignoreCase = true)) {
                     fillersMigrated = true
                     e.copy(
                         title = "не размечено",
                         category = GAP_CATEGORY,
-                        synced = if (e.open || e.end > weekAgo) false else e.synced,
                     )
                 } else e
             }.toMutableList()
@@ -1689,7 +1651,6 @@ class ZasechkaStore(private val context: Context) {
                     client = o.optString("client", ""),
                     useful = o.optInt("useful", 0),
                     source = o.optString("source", "voice"),
-                    synced = o.optBoolean("synced", false),
                     createdAt = o.optLong("createdAt", start),
                     pomodoros = o.optInt("pomodoros", 0),
                     comment = o.optString("comment", ""),
@@ -1851,8 +1812,7 @@ class ZasechkaStore(private val context: Context) {
         archiveParkedLocked()
         if (restored.isEmpty()) return@withLock 0
         snapshotLocked("восстановление из $name")
-        // Everything goes out to the mirrors again after a restore.
-        entries = restored.map { it.copy(synced = false) }.toMutableList()
+        entries = restored.toMutableList()
         entries.sortBy { it.start }
         lastId = entries.maxOfOrNull { it.id } ?: lastId
         normalizeLocked()
@@ -1909,7 +1869,6 @@ class ZasechkaStore(private val context: Context) {
                             put("client", e.client)
                             put("useful", e.useful)
                             put("source", e.source)
-                            put("synced", e.synced)
                             put("createdAt", e.createdAt)
                             if (e.pomodoros > 0) put("pomodoros", e.pomodoros)
                             // Как pomodoros: пишется только когда есть, старый

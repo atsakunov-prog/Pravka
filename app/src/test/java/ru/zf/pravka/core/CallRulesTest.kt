@@ -85,7 +85,7 @@ class CallRulesTest {
     // ------------------------------------------------------------ «Убрать» в пуше
 
     private fun e(id: Long, start: Long, end: Long, title: String, category: String, source: String = "voice", raw: String = "") =
-        ZasechkaStore.Entry(id, start, end, raw, title, category, "", 0, source, false, 0L)
+        ZasechkaStore.Entry(id, start, end, raw, title, category, "", 0, source, 0L)
 
     @Test
     fun `убрать звонок — дело сшивается обратно`() {

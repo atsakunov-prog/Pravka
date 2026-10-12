@@ -5,7 +5,6 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Credentials
@@ -49,8 +48,6 @@ class IcuSweeper(
     private val zasechkaStore: ZasechkaStore,
     private val client: OkHttpClient,
     private val eventLog: EventLog,
-    private val sync: ZasechkaSync,
-    private val scope: CoroutineScope,
     private val witness: () -> AutoWitness? = { null },
     private val wakeHint: () -> Long = { 0L },
 ) {
@@ -115,7 +112,6 @@ class IcuSweeper(
         val oldest = dateFormat.format(Date(now - 2 * 86_400_000L))
         val newest = dateFormat.format(Date(now))
 
-        var inserted = false
         val activitiesUrl =
             "https://intervals.icu/api/v1/athlete/$athleteId/activities?oldest=$oldest&newest=$newest"
         val body = get(activitiesUrl, auth)
@@ -151,8 +147,7 @@ class IcuSweeper(
                 // переодеть на месте, второй раз не класть — у новой записи было
                 // бы другое имя, и дубль по имени её бы не поймал.
                 if (IcuFixes.isBjj(name)) {
-                    val (found, restyled) = bjjInRibbon(watchStart, end)
-                    if (restyled) inserted = true
+                    val (found, _) = bjjInRibbon(watchStart, end)
                     if (found) continue
                 }
                 // Уже лежит (прошлый свип, со своим сшитым началом или без) — не
@@ -190,7 +185,7 @@ class IcuSweeper(
                         (e.open || (min(e.end, end) - maxOf(e.start, start)).coerceAtLeast(0L) * 2 >= end - start)
                 }
                 if (host != null) {
-                    if (noteWatch(host, name, start, end)) inserted = true
+                    noteWatch(host, name, start, end)
                     continue
                 }
                 if (zasechkaStore.coveredByOwner(start, end)) continue
@@ -202,14 +197,12 @@ class IcuSweeper(
                     resumePrevious = false,
                 )
                 if (entry != null) {
-                    inserted = true
                     eventLog.add("icu: $name ${(end - start) / 60_000} мин [$category]$note → в ленту")
                 }
             }
         }
 
         runCatching { enrichSleep(now, athleteId, auth) }
-        if (inserted) sync.kickSoon(scope)
     }
 
     /**
@@ -287,7 +280,6 @@ class IcuSweeper(
         ) ?: return
         zasechkaStore.update(entry.copy(raw = "$note · время — от подъёма по экрану ${hm(wake)}, ночь телефон не увидел"))
         eventLog.add("icu: сон от Garmin ${sleepSecs / 60} мин до ${hm(wake)} → в ленту (телефон ночи не нашёл)")
-        sync.kickSoon(scope)
     }
 
     /**
@@ -375,7 +367,6 @@ class IcuSweeper(
             looked++
             if (restyle(e)) ribbon++
         }
-        if (ribbon > 0) sync.kickSoon(scope)
         val athleteId = settings.icuAthlete().trim()
         val apiKey = settings.icuKey().trim()
         if (athleteId.isBlank() || apiKey.isBlank()) {

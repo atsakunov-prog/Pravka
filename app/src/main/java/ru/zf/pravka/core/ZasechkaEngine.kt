@@ -4,11 +4,9 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import kotlinx.coroutines.CoroutineScope
 import ru.zf.pravka.data.EventLog
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.data.ZasechkaStore
-import ru.zf.pravka.data.ZasechkaSync
 import ru.zf.pravka.data.dayStartMs
 import ru.zf.pravka.provider.ClaudeProvider
 import ru.zf.pravka.provider.zasechka
@@ -25,8 +23,6 @@ class ZasechkaEngine(
     private val store: ZasechkaStore,
     private val stats: Stats,
     private val eventLog: EventLog,
-    private val sync: ZasechkaSync,
-    private val scope: CoroutineScope,
     // Правила разбора, одобренные владельцем, едут в каждый разбор. Набор
     // правится руками в настройках Засечки; робот новых не предлагает.
     private val rules: ru.zf.pravka.data.RulesStore,
@@ -186,7 +182,6 @@ class ZasechkaEngine(
                             )
                         } else {
                             eventLog.add("засечка: закрыто голосом «${closed.title}» (${closed.durationMin()} мин)")
-                            sync.kickSoon(scope)
                             Outcome(closed, categorized = true, error = null, action = "stop")
                         }
                     }
@@ -234,7 +229,6 @@ class ZasechkaEngine(
                                 "${(insEnd - insStart) / 60_000} мин задним числом, обрамление продолжено" +
                                 (if (anchorSpan != null && said.closedPast(now) == null) " (в дыру ленты)" else "")
                         )
-                        sync.kickSoon(scope)
                         Outcome(entry, categorized = true, error = null, action = "insert")
                     }
                     // Edit: touch only the fields the owner asked to change.
@@ -277,7 +271,6 @@ class ZasechkaEngine(
                             "засечка-правка: «${target.title}» → «${shown.title}» [${shown.category}]" +
                                 (if (chain.size > 1) " (${chain.size} куска)" else "")
                         )
-                        sync.kickSoon(scope)
                         Outcome(shown, categorized = true, error = null, action = "edit", previousTitle = target.title)
                     }
                     p.action == "delete" && target != null -> {
@@ -287,7 +280,6 @@ class ZasechkaEngine(
                             "засечка-правка: удалена «${target.title}»" +
                                 (if (chain.size > 1) " (${chain.size} куска)" else "")
                         )
-                        sync.kickSoon(scope)
                         Outcome(target, categorized = true, error = null, action = "delete", previousTitle = target.title)
                     }
                     // Everything else (including an edit that failed to point
@@ -321,7 +313,6 @@ class ZasechkaEngine(
                                 else "") +
                                 (if (said.start == null && anchorAt != null) " (якорь пуша)" else "")
                         )
-                        sync.kickSoon(scope)
                         Outcome(entry, categorized = true, error = null)
                     }
                 }
@@ -339,7 +330,6 @@ class ZasechkaEngine(
                     source = source,
                 )
                 eventLog.add("засечка: разбор не удался (${e.message}) — записано сырым")
-                sync.kickSoon(scope)
                 Outcome(entry, categorized = false, error = e.message)
             },
         )
@@ -448,7 +438,6 @@ class ZasechkaEngine(
             project = project,
         )
         eventLog.add("засечка ← дело: «${entry.title}» [${entry.category.ifBlank { "без категории" }}]" + if (task.isNotBlank()) " · дело $task" else "")
-        sync.kickSoon(scope)
         return entry
     }
 
@@ -470,7 +459,6 @@ class ZasechkaEngine(
         val closed = store.closeOpen(now)
         if (closed != null) {
             eventLog.add("засечка: закрыто «${closed.title}» (${closed.durationMin()} мин)")
-            sync.kickSoon(scope)
         }
         return closed
     }
@@ -493,7 +481,6 @@ class ZasechkaEngine(
         client = "",
         useful = 0,
         source = "voice",
-        synced = true,
         createdAt = now,
     )
 

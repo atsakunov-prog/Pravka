@@ -932,7 +932,6 @@ class AutoPilot(
             useful = 0,
             source = "voice",
         )
-        app.zasechkaSync.kickSoon(scope)
         app.eventLog.add("автопилот: место «$place» — начато «${e.title}» [${e.category}] с ${timeHm(at)}")
         return e
     }
@@ -1125,7 +1124,6 @@ class AutoPilot(
                     // Ложное срабатывание чинит кнопка «Отменить» в пуше.
                     source = "voice",
                 )
-                app.zasechkaSync.kickSoon(scope)
                 lastFire = "машина в ${timeHm(at)}, поездка начата" +
                     (if (merged) " с выхода из «$from» ${timeHm(start)}" else "")
                 notify(
@@ -1312,7 +1310,6 @@ class AutoPilot(
             // Владельческий источник, как у поездки: ложное срабатывание чинят кнопки.
             source = "voice",
         )
-        app.zasechkaSync.kickSoon(scope)
         lastFire = "пешком из «$place» с ${timeHm(start)}"
         notify(
             "🚶 Пешком из «$place»",
@@ -1517,7 +1514,6 @@ class AutoPilot(
             source = "voice",
         )
         setAutoSleepFrom(plan.from)
-        app.zasechkaSync.kickSoon(scope)
         lastFire = "сон с ${timeHm(plan.from)}"
         notify(
             "😴 Сон с ${timeHm(plan.from)}",
@@ -1563,7 +1559,6 @@ class AutoPilot(
             return false
         }
         val closed = app.zasechkaStore.closeOpen(at) ?: return false
-        app.zasechkaSync.kickSoon(scope)
         val slept = (at - from) / 60_000L
         lastFire = "подъём ${timeHm(at)}"
         app.eventLog.add("автопилот: подъём ${timeHm(at)} ($why) — сон ${timeHm(from)}–${timeHm(at)}, ${slept / 60} ч ${slept % 60} мин")
@@ -1649,7 +1644,6 @@ class AutoPilot(
             useful = 0,
             source = "voice",
         )
-        app.zasechkaSync.kickSoon(scope)
         lastFire = "подъём ${timeHm(wakeAt)}, начато «${entry.title}»"
         notify(
             "☀ Подъём ${timeHm(wakeAt)} — ${entry.title}",
@@ -1831,7 +1825,6 @@ class AutoPilot(
                         // не гибнет в clear-and-refill и не режется сплайсом.
                         source = "voice",
                     )
-                    app.zasechkaSync.kickSoon(scope)
                     Feedback.toast(app, "⏱ ${entry.title} — с ${timeHm(entry.start)}")
                     app.eventLog.add("автопилот: начато «${entry.title}»")
                 }
@@ -1854,7 +1847,6 @@ class AutoPilot(
                             start = start, end = arrived, raw = "", title = title,
                             category = CAR_CATEGORY, client = "", useful = 0,
                         )
-                        app.zasechkaSync.kickSoon(scope)
                         Feedback.toast(
                             app,
                             if (entry == null) "Дорога не поместилась — там уже твои записи"
@@ -1879,7 +1871,6 @@ class AutoPilot(
                         // Приехал в место со своим делом — оно начинается там,
                         // где кончилась дорога, а не ждёт слова владельца.
                         val next = deal?.let { startPlaceDeal(toPlace, arrived, it) }
-                        app.zasechkaSync.kickSoon(scope)
                         Feedback.toast(
                             app,
                             "⏱ ${entry.title}: ${timeHm(start)}–${timeHm(arrived)}." +
@@ -1897,7 +1888,6 @@ class AutoPilot(
                 WHAT_STILL_DONE, WHAT_CLOSE_OPEN -> {
                     val at = atMs.coerceIn(1L, now)
                     val closed = app.zasechkaStore.closeOpen(at)
-                    if (closed != null) app.zasechkaSync.kickSoon(scope)
                     Feedback.toast(
                         app,
                         if (closed == null) "Открытого дела уже нет"
@@ -1912,7 +1902,6 @@ class AutoPilot(
                     // возвращённое после встречи дело), открыть прежнюю обратно.
                     val doomed = app.zasechkaStore.all().firstOrNull { it.id == id }
                     val back = app.zasechkaStore.revertAutoStart(id, prevId)
-                    app.zasechkaSync.kickSoon(scope)
                     val gone = doomed?.title ?: "запись"
                     Feedback.toast(
                         app,
@@ -1942,7 +1931,6 @@ class AutoPilot(
                     if (autoSleepFrom() == atMs) setAutoSleepFrom(0L)
                     runCatching { internal().edit().remove(PhoneSweeper.KEY_BEDTIME).apply() }
                     val back = if (pieces.isEmpty()) null else app.zasechkaStore.revertAutoStart(pieces, prevId)
-                    app.zasechkaSync.kickSoon(scope)
                     Feedback.toast(
                         app,
                         when {
@@ -1961,7 +1949,6 @@ class AutoPilot(
                     val back = app.zasechkaStore.reopen(id)
                     if (back != null) {
                         setAutoSleepFrom(atMs)
-                        app.zasechkaSync.kickSoon(scope)
                         handler.post { armMotion() }
                     }
                     Feedback.toast(
@@ -1986,20 +1973,17 @@ class AutoPilot(
                                 project = if (work) call.project else "",
                             )
                         )
-                        app.zasechkaSync.kickSoon(scope)
                         Feedback.toast(app, "📞 ${call.title} — $toPlace; дальше так и буду")
                         app.eventLog.add("звонок: «${call.title}» → [$toPlace] кнопкой")
                     }
                 }
                 WHAT_CALL_WHO -> {
                     val said = app.callIsWho(id, toPlace)
-                    app.zasechkaSync.kickSoon(scope)
                     Feedback.toast(app, said)
                 }
                 WHAT_CALL_DROP -> {
                     val call = app.zasechkaStore.entryById(id)
                     val kept = app.zasechkaStore.dissolveInterruption(id)
-                    app.zasechkaSync.kickSoon(scope)
                     Feedback.toast(
                         app,
                         if (call == null) "Звонка в ленте уже нет"
@@ -2009,7 +1993,6 @@ class AutoPilot(
                 }
                 WHAT_REOPEN -> {
                     val back = app.zasechkaStore.reopen(id)
-                    if (back != null) app.zasechkaSync.kickSoon(scope)
                     Feedback.toast(
                         app,
                         if (back != null) "▶ «${back.title}» снова идёт" else "Открыть обратно не вышло — уже идёт другое",
@@ -2024,14 +2007,12 @@ class AutoPilot(
                     } else {
                         val title = if (fromPlace.isBlank()) CAR_TITLE else "Поездка из «$fromPlace»"
                         app.zasechkaStore.update(walk.copy(title = title, category = CAR_CATEGORY))
-                        app.zasechkaSync.kickSoon(scope)
                         Feedback.toast(app, "🚗 $title — с ${timeHm(walk.start)}")
                         app.eventLog.add("автопилот: «${walk.title}» → «$title» кнопкой")
                     }
                 }
                 WHAT_CAR_UNDO -> {
                     val back = app.zasechkaStore.revertAutoStart(id, prevId)
-                    app.zasechkaSync.kickSoon(scope)
                     Feedback.toast(
                         app,
                         if (back != null) "↩︎ Поездка убрана, снова «${back.title}»"

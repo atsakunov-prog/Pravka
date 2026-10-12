@@ -61,7 +61,7 @@ class ArchiveEventsTest {
     private fun samples(): List<ArchiveEvents.Item> {
         val entry = ZasechkaStore.Entry(
             id = 1, start = t0, end = t0 + 45 * 60_000, raw = "работаю над отчётом", title = "Отчёт",
-            category = "Работа", client = "Клиент", useful = 4, source = "voice", synced = false,
+            category = "Работа", client = "Клиент", useful = 4, source = "voice",
             createdAt = t0, pomodoros = 0, comment = "свели баланс",
         )
         val meal = FoodStore.Meal(
@@ -277,7 +277,7 @@ class ArchiveEventsTest {
     fun `запись из дела везёт task и project, остальные — без этих ключей`() {
         val plain = ZasechkaStore.Entry(
             id = 1, start = t0, end = t0 + 600_000, raw = "", title = "Отчёт", category = "Работа", client = "",
-            useful = 0, source = "voice", synced = false, createdAt = t0,
+            useful = 0, source = "voice", createdAt = t0,
         )
         val fromTask = plain.copy(id = 2, start = t0 + 600_000, end = t0 + 1_200_000, source = "task", task = "t-1", project = "p-1")
         val entries = ArchiveEvents.zasechkaDays(listOf(plain, fromTask), clock, t0 + 3_600_000L).single().data.getJSONArray("entries")
@@ -313,7 +313,7 @@ class ArchiveEventsTest {
     fun `открытое дело — без конца и без минут`() {
         val open = ZasechkaStore.Entry(
             id = 2, start = t0, end = 0, raw = "", title = "Гитара", category = "Хобби", client = "",
-            useful = 0, source = "voice", synced = false, createdAt = t0,
+            useful = 0, source = "voice", createdAt = t0,
         )
         val e = ArchiveEvents.zasechkaDays(listOf(open), clock, t0 + 600_000L).single().data
             .getJSONArray("entries").getJSONObject(0)
@@ -325,7 +325,7 @@ class ArchiveEventsTest {
     fun `лента — сутками по местному дню`() {
         val late = ZasechkaStore.Entry(
             id = 3, start = t0 + 17 * 3_600_000L, end = t0 + 17 * 3_600_000L + 600_000, raw = "", title = "Сон",
-            category = "Сон", client = "", useful = 0, source = "auto", synced = false, createdAt = t0,
+            category = "Сон", client = "", useful = 0, source = "auto", createdAt = t0,
         )
         val early = late.copy(id = 4, start = t0, end = t0 + 600_000)
         val days = ArchiveEvents.zasechkaDays(listOf(late, early), clock, t0 + 86_400_000L)
@@ -341,7 +341,7 @@ class ArchiveEventsTest {
         fun at(h: Int, m: Int, s: Int = 0) = day0 + ((h * 60L + m) * 60 + s) * 1000
         fun e(id: Long, from: Long, to: Long, title: String, source: String = "voice") = ZasechkaStore.Entry(
             id = id, start = from, end = to, raw = "", title = title, category = "Работа", client = "",
-            useful = 0, source = source, synced = false, createdAt = from,
+            useful = 0, source = source, createdAt = from,
         )
         val day = listOf(
             e(1, at(0, 0), at(7, 30, 40), "Сон", "auto"),
@@ -412,7 +412,7 @@ class ArchiveEventsTest {
     fun `с кем было дело — person в записи суток, только когда есть`() {
         val call = ZasechkaStore.Entry(
             id = 2, start = t0, end = t0 + 12 * 60_000, raw = "", title = "Звонок: Женя Соколов",
-            category = "Работа: звонки", client = "Ромашка-банк", useful = 0, source = "auto", synced = false,
+            category = "Работа: звонки", client = "Ромашка-банк", useful = 0, source = "auto",
             createdAt = t0, project = "p-romashka", person = "c2f8",
         )
         val row = ArchiveEvents.zasechkaDays(listOf(call), clock, t0 + 3_600_000L).single().data.getJSONArray("entries").getJSONObject(0)

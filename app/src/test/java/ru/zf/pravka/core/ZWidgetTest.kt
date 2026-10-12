@@ -22,7 +22,7 @@ class ZWidgetTest {
         start = now - startMinAgo * min,
         end = if (open) 0L else now - (startMinAgo - 10) * min,
         raw = title, title = title, category = category, client = client,
-        useful = 0, source = source, synced = false, createdAt = now,
+        useful = 0, source = source, createdAt = now,
     )
 
     private fun hm(ms: Long) = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(ms))

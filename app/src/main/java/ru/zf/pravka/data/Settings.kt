@@ -127,7 +127,6 @@ class Settings(private val context: Context) {
         private val KEY_Z_GAP_MIN = intPreferencesKey("z_gap_min")
         private val KEY_Z_DAY_START = intPreferencesKey("z_day_start")
         private val KEY_Z_DAY_END = intPreferencesKey("z_day_end")
-        private val KEY_Z_WEBHOOK = stringPreferencesKey("z_webhook_url")
         private val KEY_Z_CALLS = booleanPreferencesKey("z_calls_to_ribbon")
         private val KEY_Z_CALL_CATEGORY = stringPreferencesKey("z_call_category")
         private val KEY_Z_CALLS_CUT = booleanPreferencesKey("z_calls_cut")
@@ -207,8 +206,9 @@ class Settings(private val context: Context) {
         private val FACTORY_WAKE_DEAL = PlaceDeal("Сборы детей", "Семья")
 
         /**
-         * Ключи снятых интеграций (12.10.2026: Notion). Владелец: «уберём весь
-         * Notion, я ничего с ним не делаю». Токен — секрет, и лежать в базе и в
+         * Ключи снятых интеграций (12.10.2026: Notion и Google Sheets).
+         * Владелец: «уберём весь Notion, я ничего с ним не делаю. А также Google
+         * Sheets». Токен и адрес скрипта — секреты, и лежать в базе и в
          * её копиях без дела ему незачем, поэтому ключи стираются на старте
          * ([dropRetiredLinks]), а не остаются сиротами.
          */
@@ -219,6 +219,7 @@ class Settings(private val context: Context) {
             booleanPreferencesKey("notion_life_push"),
             stringPreferencesKey("notion_life_hub"),
             longPreferencesKey("plan_rules_last_run"),
+            stringPreferencesKey("z_webhook_url"),
         )
 
         const val FAB_SIZE_DEFAULT = 48
@@ -904,13 +905,6 @@ class Settings(private val context: Context) {
     val zQuietSetFlow: Flow<Boolean?> = context.dataStore.data.map { it[KEY_Z_QUIET] }
     suspend fun setZQuiet(value: Boolean) {
         context.dataStore.edit { it[KEY_Z_QUIET] = value }
-    }
-
-    /** Apps Script web-app URL; blank = Sheets mirror off. */
-    val zWebhookFlow = context.dataStore.data.map { it[KEY_Z_WEBHOOK] ?: "" }
-    suspend fun zWebhook(): String = zWebhookFlow.first()
-    suspend fun setZWebhook(value: String) {
-        context.dataStore.edit { it[KEY_Z_WEBHOOK] = value.trim() }
     }
 
     /** Calls >= 1 min land in the ribbon (needs the call-log permission). */

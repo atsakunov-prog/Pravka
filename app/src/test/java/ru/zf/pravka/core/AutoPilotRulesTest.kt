@@ -471,7 +471,7 @@ class AutoPilotBedtimeTest {
 
     private fun auto(start: Long, end: Long, title: String, source: String = "auto") = ru.zf.pravka.data.ZasechkaStore.Entry(
         id = start, start = start, end = end, raw = "", title = title, category = "Спорт: прочее", client = "",
-        useful = 0, source = source, synced = false, createdAt = start,
+        useful = 0, source = source, createdAt = start,
     )
 
     @Test

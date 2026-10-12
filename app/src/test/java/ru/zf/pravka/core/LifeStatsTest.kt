@@ -35,7 +35,7 @@ class LifeStatsTest {
     private fun e(start: Long, end: Long, category: String, title: String = category, source: String = "voice") =
         ZasechkaStore.Entry(
             id = nextId++, start = start, end = end, raw = "", title = title, category = category,
-            client = "", useful = 0, source = source, synced = false, createdAt = start,
+            client = "", useful = 0, source = source, createdAt = start,
         )
 
     /** Типовые сутки: сон до 7, быт, работа 10–13, соло 13–14, мастерская 14–18, семья до 23, сон. */

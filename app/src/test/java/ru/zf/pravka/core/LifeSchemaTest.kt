@@ -39,7 +39,7 @@ class LifeSchemaTest {
         useful: Int = 0,
     ) = ZasechkaStore.Entry(
         id = id, start = start, end = end, raw = raw, title = title, category = category,
-        client = client, useful = useful, source = source, synced = false, createdAt = start,
+        client = client, useful = useful, source = source, createdAt = start,
         comment = comment,
     )
 

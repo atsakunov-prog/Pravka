@@ -60,7 +60,6 @@ class NfcTapActivity : Activity() {
             }
             runCatching { act(app, tag) }
                 .onFailure { Feedback.toast(app, "Метка «${tag.name}»: не вышло") }
-            app.zasechkaSync.kickSoon(app.appScope)
         }
     }
 

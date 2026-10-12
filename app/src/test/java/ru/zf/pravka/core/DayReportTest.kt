@@ -30,7 +30,7 @@ class DayReportTest {
         client: String = "",
     ) = ZasechkaStore.Entry(
         id = nextId++, start = start, end = end, raw = "", title = title, category = category,
-        client = client, useful = 0, source = source, synced = false, createdAt = start,
+        client = client, useful = 0, source = source, createdAt = start,
     )
 
     private val worth = mapOf(
