@@ -3371,6 +3371,16 @@ function renderClientCard(p, { picker, g, items, sub, star }) {
     el('button', { class: 'chip-btn' + (p.status === 'relations' ? ' on' : ''), title: 'Уже не лид, но и не сделка: работали, держим связь',
       onclick: () => projectSet(p, { status: p.status === 'relations' ? null : 'relations' }, p.status === 'relations' ? 'Статус — по проектам' : 'Поддержание отношений') },
     'Поддержание отношений'),
+    // Переименовать (13.10.2026): дела, сделки и хронология показывают клиента ссылкой, встречи — база (dela_0012);
+    // старое имя ложится в другие имена клиента.
+    el('button', { class: 'chip-btn', title: 'Новое имя — везде: дела, сделки, хронология, названия встреч; старое останется другим именем',
+      onclick: () => {
+        const name = (prompt('Новое имя клиента', p.name) || '').trim();
+        if (!name || name === p.name) return;
+        const twin = [...S.projects.values()].find((x) => x.id !== p.id && !x.archived_at && x.name.toLowerCase() === name.toLowerCase());
+        if (twin) { toast(`«${twin.name}» — уже другой клиент`); return; }
+        projectSet(p, { name }, `Теперь «${name}» — и во встречах`);
+      } }, 'Переименовать'),
     !stages.length && p.status !== 'relations' ? el('span', { class: 'faint' }, 'проектов в работе нет') : null);
   const people = clientPeopleOf(p);
   const team = clientTeam(live);
@@ -3884,16 +3894,20 @@ function renderMeeting(id) {
   const err = crmCache.get(path)?.error;
   if (!v) return [head('Встреча'), el('div', { class: 'body' }, err ? el('div', { class: 'empty' }, 'Не открылась: ' + err) : loading())];
   const set = (s, msg) => meetOp({ op: 'meeting.set', id, set: s }, msg);
+  // Клиента нет в справочнике, а его подпись стоит ещё у встреч — поменять у всех (13.10.2026, владелец:
+  // «переименую клиента — чтобы и в истории встреч переименовалось»); сервер: meeting.set everywhere.
+  const setClient = (s, msg) => (v.same_label && confirm(`Встреч с «${v.label}» ещё ${v.same_label}. Поменять у всех?`)
+    ? meetOp({ op: 'meeting.set', id, set: s, everywhere: true }, `${msg} — у всех ${v.same_label + 1}`) : set(s, msg));
   const fact = (label, ctl) => el('label', { class: 'fact' }, el('span', {}, label), ctl);
   const inp = (field, ph) => {
     const i = el('input', { value: v[field] || '', placeholder: ph || '' });
-    i.addEventListener('change', () => { if (i.value.trim() !== (v[field] || '')) set({ [field]: i.value.trim() || null }, 'Записал — разбор это больше не трогает'); });
+    i.addEventListener('change', () => { if (i.value.trim() !== (v[field] || '')) (field === 'label' ? setClient : set)({ [field]: i.value.trim() || null }, 'Записал — разбор это больше не трогает'); });
     return i;
   };
   const projects = [...S.projects.values()].filter((p) => !p.archived_at || p.id === v.project_id).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   const client = el('select', {}, el('option', { value: '' }, '— без клиента —'),
     projects.map((p) => el('option', { value: p.id, selected: p.id === v.project_id }, p.name)));
-  client.addEventListener('change', () => set({ project_id: client.value || null }, client.value ? 'Клиент: ' + project(client.value)?.name : 'Без клиента'));
+  client.addEventListener('change', () => (v.project_id ? set : setClient)({ project_id: client.value || null }, client.value ? 'Клиент: ' + project(client.value)?.name : 'Без клиента'));
   const deals = v.project_id ? clientDeals(v.project_id) : [];
   const deal = el('select', { disabled: !deals.length }, el('option', { value: '' }, deals.length ? '— не про сделку —' : 'у клиента нет сделок'),
     deals.map((d) => el('option', { value: d.id, selected: d.id === v.deal_id }, d.name)));

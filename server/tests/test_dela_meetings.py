@@ -472,7 +472,7 @@ def test_migration_11_over_meetings_in_place(admin_dsn):
                        person_ids=[oleg], raw={"speakers": [{"name": "Дмитрий", "person_id": str(dima)},
                                                             {"name": "Саша", "person_id": str(me)}, "просто строка"]})
         with psycopg.connect(url, autocommit=True) as c:
-            assert dela_db.apply_pending(c, files) == ["dela_0011.sql"]
+            assert dela_db.apply_pending(c, {k: v for k, v in files.items() if k <= "dela_0011.sql"}) == ["dela_0011.sql"]
         with dela_db.session(url, "system", "test") as c:
             got = {r["ref"]: r for r in c.execute("SELECT * FROM crm.meetings").fetchall()}
             hist = c.execute("SELECT count(*) AS n FROM crm.history WHERE actor = 'svc:migrate' AND entity = 'crm.meetings'").fetchone()["n"]
@@ -492,3 +492,103 @@ def test_migration_11_over_meetings_in_place(admin_dsn):
     finally:
         with psycopg.connect(admin_dsn, autocommit=True) as a:
             a.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
+
+# ── Клиент переименован (dela_0012, 13.10.2026) ──────────────────────
+
+
+def _name(url, mid, **ans):
+    """Ответ разбора — в карточку, как его кладёт meetings_auto."""
+    with dela_db.session(url, "sasha", "svc:test") as c:
+        row = c.execute("SELECT * FROM crm.meetings WHERE id = %s", (mid,)).fetchone()
+        meetings.apply_names(c, row, {"sphere": "work", "client": "", "label": "", "topic": "", "people": [], "sure": True,
+                                      **ans}, "test")
+
+
+def _card(url, m):
+    return store.view(url, "sasha", "meeting", id=m["id"], lines="none")
+
+
+def _aliases(url, pid):
+    with dela_db.session(url, "sasha") as c:
+        return c.execute("SELECT aliases FROM crm.projects WHERE id = %s", (pid,)).fetchone()["aliases"]
+
+
+def test_renamed_client_renames_its_meetings_and_keeps_old_name(mt):
+    """Владелец, 13.10.2026: «переименую клиента — чтобы и в истории встреч тоже переименовалось»."""
+    url = mt["url"]
+    a, b = push(url, ref="301"), push(url, ref="302")
+    _name(url, a["id"], client="Вектор", topic="счета")
+    _name(url, b["id"], client="Вектор", topic="модель")
+    ok(url, "sasha", {"op": "meeting.set", "id": b["id"], "set": {"title": "Вектор: модель и залог, моё"}})
+    ok(url, "sasha", {"op": "project.set", "id": mt["project"], "set": {"name": "Новый Вектор"}})
+    ca, cb = _card(url, a), _card(url, b)
+    assert (ca["title"], ca["label"], ca["client"]) == ("Новый Вектор: счета", "Новый Вектор", "Новый Вектор")
+    assert cb["title"] == "Новый Вектор: модель и залог, моё"  # своё название — меняется только начало
+    assert _aliases(url, mt["project"]) == ["Вектор Плюс", "Вектор"]  # по старому имени клиент узнаётся и дальше
+    # Обратно: старое имя снова имя, а не другое имя самого себя.
+    ok(url, "sasha", {"op": "project.set", "id": mt["project"], "set": {"name": "Вектор"}})
+    assert _aliases(url, mt["project"]) == ["Вектор Плюс", "Новый Вектор"]
+    assert _card(url, a)["title"] == "Вектор: счета"
+
+
+def test_new_client_takes_meetings_signed_with_its_name(mt):
+    """Разбор подписал встречи «Сигма Пэй», пока клиента не было в справочнике; завели клиента — встречи его."""
+    url = mt["url"]
+    a, b, no = push(url, ref="311"), push(url, ref="312"), push(url, ref="313")
+    for m in (a, b, no):
+        _name(url, m["id"], label="Сигма Пэй", topic="оценка", sure=False, question="Сигма Пэй нет в справочнике — завести?")
+    ok(url, "sasha", {"op": "meeting.set", "id": no["id"], "set": {"project": "-"}},
+       {"op": "meeting.set", "id": no["id"], "set": {"label": "Сигма Пэй"}})  # «это не клиент» — слово владельца
+    pid = project(url, "sasha", "Сигма Пэй")
+    ca = _card(url, a)
+    assert str(ca["project_id"]) == str(pid) and ca["title"] == "Сигма Пэй: оценка" and not ca["question"]
+    assert str(_card(url, b)["project_id"]) == str(pid)
+    assert not _card(url, no)["project_id"]
+    # Другое имя, дописанное клиенту, тоже пристёгивает: «Дельта Капитал» — это Дельта Флоу.
+    k = push(url, ref="314")
+    _name(url, k["id"], label="Дельта Капитал", topic="знакомство")
+    cf = project(url, "sasha", "Дельта Флоу")
+    assert not _card(url, k)["project_id"]
+    ok(url, "sasha", {"op": "project.set", "id": cf, "set": {"aliases": ["Дельта Капитал"]}})
+    assert _card(url, k)["title"] == "Дельта Флоу: знакомство"
+
+
+def test_unlisted_client_renamed_on_all_its_meetings(mt):
+    """Клиента нет в справочнике — подпись «Вера (клуб)» у каждой встречи своя: меняется у всех разом (everywhere)."""
+    url = mt["url"]
+    ms = [push(url, ref=str(320 + i)) for i in range(3)]
+    for m, t in zip(ms, ("финмодель", "КП", "итоги")):
+        _name(url, m["id"], label="Вера (клуб)", topic=t)
+    other = push(url, ref="330")
+    _name(url, other["id"], label="Экспобанк", topic="кредит")
+    assert _card(url, ms[0])["same_label"] == 2 and _card(url, other)["same_label"] == 0
+    r = ok(url, "sasha", {"op": "meeting.set", "id": ms[0]["id"], "set": {"label": "Новая заря"}, "everywhere": True})[0]
+    assert r["also"] == 2
+    assert [_card(url, m)["title"] for m in ms] == ["Новая заря: финмодель", "Новая заря: КП", "Новая заря: итоги"]
+    assert all("project" in _card(url, m)["locked"] for m in ms)  # решил владелец — разбор не переспорит
+    assert _card(url, other)["title"] == "Экспобанк: кредит"
+    # Подпись — к клиенту из справочника: все её встречи к нему, подпись — его другое имя.
+    r = ok(url, "sasha", {"op": "meeting.set", "id": ms[1]["id"], "set": {"project": "Вектор"}, "everywhere": True})[0]
+    assert r["also"] == 2 and {_card(url, m)["title"] for m in ms} == {"Вектор: финмодель", "Вектор: КП", "Вектор: итоги"}
+    assert "Новая заря" in _aliases(url, mt["project"])
+    # У встречи клиента из справочника «у всех» — отказ словами: переименовывают самого клиента.
+    res = ops(url, "sasha", {"op": "meeting.set", "id": ms[0]["id"], "set": {"label": "x"}, "everywhere": True})
+    assert not res[0]["ok"] and "переименуй самого клиента" in res[0]["error"]
+
+
+def test_claude_renames_client_of_both_kinds(mt):
+    from pravka_dela import mcp_tools
+
+    url = mt["url"]
+    a, b = push(url, ref="340"), push(url, ref="341")
+    _name(url, a["id"], client="Вектор", topic="счета")
+    _name(url, b["id"], label="Вера", topic="КП")
+    assert mcp_tools.client_rename(url, "Вектор", "Вектор Групп").startswith("Готово")
+    assert _card(url, a)["title"] == "Вектор Групп: счета"
+    assert mcp_tools.client_rename(url, "Вера", "Новая заря").startswith("Готово")
+    assert _card(url, b)["title"] == "Новая заря: КП"
+    assert mcp_tools.client_rename(url, "Нет такого", "x").startswith("Не вышло")
+    project(url, "sasha", "Ромашка")
+    assert "уже другой клиент" in mcp_tools.client_rename(url, "Вектор Групп", "Ромашка")
+    assert meetings.retitle("Вера: КП и смета", "Вера", "Новая заря") == "Новая заря: КП и смета"
+    assert meetings.retitle("КП Веры", "Вера", "Новая заря") == "КП Веры"

@@ -539,6 +539,42 @@ def meeting_change(url: str, ref: str, title: str | None = None, topic: str | No
     return "Готово: " + r["meeting"]["line"]
 
 
+def client_rename(url: str, name: str, new_name: str) -> str:
+    """Клиент по-новому — везде (владелец 13.10.2026: «переименую клиента — чтобы и в истории встреч
+    переименовалось»). Клиент из справочника — project.set name: дела, сделки и хронология показывают его
+    ссылкой, встречи переименовывает база (dela_0012), старое имя ложится в другие имена. Нет в справочнике —
+    это подпись встреч («Вера (клуб)»): у всех встреч с ней — новое имя (meeting.set everywhere); новое имя —
+    клиент из справочника — встречи к нему."""
+    new_name = (new_name or "").strip()
+    if not new_name:
+        return "Не вышло: новое имя пустое."
+    with db.session(url, USER, via="mcp") as conn:
+        p = meetings.find_project(conn, name, strict=True)
+        target = meetings.find_project(conn, new_name, strict=True)
+        row = None if p else conn.execute(
+            "SELECT id FROM crm.meetings WHERE project_id IS NULL AND crm.norm(label) = crm.norm(%s) "
+            "ORDER BY started_at DESC LIMIT 1", (name,)).fetchone()
+        n = conn.execute("SELECT count(*) AS n FROM crm.meetings WHERE project_id = %s", (p["id"],)).fetchone()["n"] if p else 0
+    if p:
+        if target and target["id"] != p["id"]:
+            return (f"Не вышло: «{new_name}» — уже другой клиент ({target['name']}). Это слияние двух клиентов, "
+                    "а не переименование — скажи Саше.")
+        r = store.apply_ops(url, USER, [{"op": "project.set", "id": str(p["id"]), "set": {"name": new_name}}], via="mcp")["results"][0]
+        if not r["ok"]:
+            return f"Не вышло: {r['error']}"
+        return (f"Готово: «{p['name']}» теперь «{new_name}» — в делах, сделках, хронологии и встречах ({n}); "
+                f"старое имя осталось другим именем клиента.")
+    if not row:
+        return f"Не вышло: нет ни клиента, ни встреч с подписью «{name}»."
+    s = {"project_id": str(target["id"])} if target else {"label": new_name}
+    r = store.apply_ops(url, USER, [{"op": "meeting.set", "id": str(row["id"]), "set": s, "everywhere": True}], via="mcp")["results"][0]
+    if not r["ok"]:
+        return f"Не вышло: {r['error']}"
+    return (f"Готово: встречи с подписью «{name}» ({r['also'] + 1}) — " +
+            (f"клиента «{target['name']}» (его в справочнике; «{name}» — теперь его другое имя)." if target
+             else f"«{new_name}». В справочнике клиентов такого нет — заведёшь, встречи пристегнутся сами."))
+
+
 def person(url: str, name: str, also: list[str] | None = None, phone: str | None = None,
            telegram: str | None = None, merge_into: str | None = None) -> str:
     """Один человек на всю систему: другое имя, номер, Telegram — к карточке; дубль — в живую карточку.
@@ -689,6 +725,11 @@ def register(mcp, url: str) -> None:
                              archived: bool | None = None, rename: bool = False) -> str:
         """Поправить встречу по номеру: title — название целиком («Клиент: тема»), topic — тема (название пересоберётся), client — клиент или проект («-» — без клиента), deal — сделка клиента, sphere — work (рабочая) или home (личная), people — участники из справочника (все, кроме Саши), archived — убрать из списка. Что поправлено — разбор встреч больше не трогает. rename — отдать встречу разбору заново (поправленное остаётся)."""
         return await run(dela.meeting_change, ref, title, topic, client, deal, sphere, people, archived, rename)
+
+    @mcp.tool()
+    async def client_rename(name: str, new_name: str) -> str:
+        """Переименовать клиента везде: в делах, сделках, хронологии и названиях встреч («Клиент: тема»); старое имя остаётся его другим именем — по нему клиент узнаётся и дальше. name — как клиент зовётся сейчас: имя из справочника или подпись встреч, у которых клиента в справочнике нет (как в meetings). Новое имя — уже другой клиент из справочника: у подписи встречи переходят к нему; у клиента из справочника — отказ (это слияние, а не переименование)."""
+        return await run(dela.client_rename, name, new_name)
 
     @mcp.tool()
     async def dela_note(summary: str, kind: str = "note", project: str | None = None, deal: str | None = None,

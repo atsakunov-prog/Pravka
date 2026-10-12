@@ -17,6 +17,9 @@ Telegram. Где нужна одна строка целиком (Claude, выг
 - разбор (meetings_auto.py) — клиент, сделка, тема, участники, рабочая или личная, название;
 - владелец — meeting.set: что он поправил руками, ложится в locked, и разбор это больше не трогает (человек
   сильнее разборщика, как в Круге). «Разобрать заново» — rename.
+- переименованный клиент (13.10.2026): клиент из справочника — правилом базы (dela_0012: его встречи берут новое
+  имя, старое ложится в другие имена, встречи с его подписью без клиента пристёгиваются); подпись без
+  справочника («Вера (клуб)») — meeting.set с everywhere: у всех встреч с той же подписью.
 
 Новых путей HTTP нет — те же /api/ops и /api/view (новый путь пришлось бы ещё вписывать в закрытый список
 сайта-посредника, а служба встреч ходит в Дела на 127.0.0.1 мимо него).
@@ -485,8 +488,10 @@ def op_set(conn, user, op, err):
 
     set: title, topic, label, project (имя) или project_id, deal (имя) или deal_id, sphere, people (имена) или
     person_ids, guests, archived (true/false). unlock — снять замки (отдать поле разбору), rename — разобрать
-    заново (с unlock: всё, что не под замком)."""
+    заново (с unlock: всё, что не под замком). everywhere — у встречи без клиента из справочника: тот же клиент
+    или подпись — всем встречам с её подписью (_everywhere)."""
     row = _meeting(conn, op, err)
+    before = row
     s = dict(op.get("set") or {})
     extra = set(s) - {"title", "topic", "label", "project", "project_id", "deal", "deal_id", "sphere", "people",
                       "person_ids", "guests", "archived"}
@@ -569,9 +574,45 @@ def op_set(conn, user, op, err):
         data.update(named_at=None, question=None)
     elif "sphere" in data or "project_id" in data:
         data["question"] = None  # владелец ответил на вопрос разбора делом
+    if op.get("everywhere") and before["project_id"] and {"project_id", "label"} & set(data):
+        raise err("встреча: у неё клиент из справочника — переименуй самого клиента, его встречи переименуются сами")
     sets = ", ".join(f"{k} = %s" for k in data)
     row = conn.execute(f"UPDATE crm.meetings SET {sets} WHERE id = %s RETURNING *", [*data.values(), row["id"]]).fetchone()
-    return {"meeting": _card(conn, row, with_lines=False)}
+    also = _everywhere(conn, before, row) if op.get("everywhere") else 0
+    return {"meeting": _card(conn, row, with_lines=False), "also": also}
+
+
+def retitle(title: str | None, old: str | None, new: str | None) -> str | None:
+    """Название, написанное владельцем: «Старое: …» → «Новое: …», остальное как есть (как crm.meeting_retitle)."""
+    if not title or not norm(old) or norm(title[:len(old)]) != norm(old) or title[len(old):len(old) + 1] != ":":
+        return title
+    return (new or "").strip() + title[len(old):] if (new or "").strip() else title[len(old) + 1:].strip() or None
+
+
+def _everywhere(conn, before: dict, after: dict) -> int:
+    """Клиент без справочника назван по-новому у одной встречи — так же у всех встреч с той же подписью.
+
+    Владелец, 13.10.2026: «переименую клиента — чтобы и в истории встреч переименовалось». Клиент из справочника
+    переименовывается сам (dela_0012: его встречи следом). А «Вера (клуб)» или «Сигма Пэй» разбор пишет подписью
+    (label), пока клиента нет в справочнике, — у каждой встречи своей копией. Здесь подпись или клиент, выбранные
+    владельцем у одной встречи, ложатся на все встречи с прежней подписью, под замок (решил владелец), а прежняя
+    подпись становится другим именем выбранного клиента: следующую такую встречу разбор узнает сам."""
+    old = before["label"]
+    if before["project_id"] or not norm(old) or (after["project_id"] is None and norm(after["label"]) == norm(old)):
+        return 0
+    rows = conn.execute(
+        "SELECT * FROM crm.meetings WHERE project_id IS NULL AND id <> %s AND crm.norm(label) = crm.norm(%s)",
+        (after["id"], old)).fetchall()
+    for r in rows:
+        locked = set(r["locked"] or []) | {"project"}
+        title = retitle(r["title"], old, after["label"]) if "title" in locked else title_of(after["label"], r["topic"])
+        conn.execute("UPDATE crm.meetings SET project_id = %s, label = %s, title = %s, locked = %s, question = NULL "
+                     "WHERE id = %s", (after["project_id"], after["label"], title, sorted(locked), r["id"]))
+    if after["project_id"]:
+        conn.execute(
+            "UPDATE crm.projects SET aliases = array_append(aliases, %s) WHERE id = %s AND crm.project_named(%s) IS NULL",
+            (old, after["project_id"], old))
+    return len(rows)
 
 
 def _same(a, b) -> bool:
@@ -728,6 +769,10 @@ def _card(conn, r: dict, with_lines: bool = True, around: int | None = None, raw
     out["tasks"] = conn.execute(
         "SELECT id, num, title, status, project_name, person_short, due_date FROM tasks.v_tasks "
         "WHERE crm.meeting_ref(source_ref) = %s ORDER BY num", (full["ref"],)).fetchall()
+    # Клиента нет в справочнике — сколько ещё встреч с той же подписью: веб спросит «поменять у всех?» (everywhere).
+    out["same_label"] = 0 if full["project_id"] or not norm(full["label"]) else conn.execute(
+        "SELECT count(*) AS n FROM crm.meetings WHERE project_id IS NULL AND id <> %s AND crm.norm(label) = crm.norm(%s)",
+        (full["id"], full["label"])).fetchone()["n"]
     if raw:
         rr = conn.execute("SELECT raw, length(transcript) AS chars, received_at FROM crm.meeting_raw WHERE meeting_id = %s",
                           (full["id"],)).fetchone()
