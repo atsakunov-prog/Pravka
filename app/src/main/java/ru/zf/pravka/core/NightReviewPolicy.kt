@@ -22,31 +22,79 @@ object NightReviewPolicy {
     val AUTO_KINDS = setOf("dict_add", "dict_disable", "dict_mode", "rule_disable", "rule_enable")
 
     /**
-     * Что пора запускать. Дневной — раз в сутки, начиная с часа запуска;
-     * недельный — по пятницам: владелец («дневные утром, а недельные в
-     * пятницу») читает его утром пятницы, значит идёт он в ночь на пятницу.
-     * В пятницу дневного нет вовсе: недельный смотрит те же сутки в составе
-     * недели, а второй прогон той же ночью — лишние деньги и вторая карточка
-     * утром (18.09.2026: ночь на пятницу стоила как три обычные).
-     * Ручные запуски тоже считаются: разобрали сутки днём — ночью не повторяем.
-     * [dailyEnabled] — тумблер «сутки каждую ночь» (заводское выключен, 18.09:
-     * владелец — «может, оставить только недельный?»); недельный идёт всегда.
+     * «Разобрать сейчас» (12.10.2026; владелец: «наверху прямо сделаем кнопку
+     * разобрать сейчас, и тогда она тоже батчем уходит»): окно — от конца
+     * последнего удачного разбора до сейчас, не короче суток и не длиннее недели.
+     */
+    const val NOW = "now"
+
+    /**
+     * Что пора запускать. Недельный — по пятницам: владелец читает его утром
+     * пятницы, значит идёт он в ночь на пятницу. С 12.10.2026 — с ДОГОНОМ:
+     * если с последней «пятницы в час запуска» недельного не было (потолок
+     * трат не пустил весь день 25.09, телефон был выключен), он идёт при
+     * первом же тике после неё, а не ждёт следующей пятницы — раньше такая
+     * неделя пропадала целиком. В пятницу дневного нет вовсе: недельный
+     * смотрит те же сутки в составе недели (18.09.2026: ночь на пятницу стоила
+     * как три обычные). Ручные запуски тоже считаются: разобрали сутки днём —
+     * ночью не повторяем. [dailyEnabled] — тумблер «сутки каждую ночь»
+     * (заводское выключен, 18.09); недельный идёт всегда.
      */
     fun dueKinds(nowMs: Long, hour: Int, lastDailyStart: Long, lastWeeklyStart: Long, dailyEnabled: Boolean = true): List<String> {
+        if (lastWeeklyStart < lastMark(nowMs, hour, Calendar.FRIDAY)) return listOf(WEEKLY)
         val now = Calendar.getInstance().apply { timeInMillis = nowMs }
         if (now.get(Calendar.HOUR_OF_DAY) < hour) return emptyList()
-        if (now.get(Calendar.DAY_OF_WEEK) == Calendar.FRIDAY) {
-            return if (sameDay(lastWeeklyStart, nowMs)) emptyList() else listOf(WEEKLY)
-        }
+        if (now.get(Calendar.DAY_OF_WEEK) == Calendar.FRIDAY) return emptyList()
         if (!dailyEnabled) return emptyList()
         return if (sameDay(lastDailyStart, nowMs)) emptyList() else listOf(DAILY)
     }
 
-    /** Раз в неделю в заданный день недели (Calendar.SATURDAY…) после часа запуска — правка промпта. */
-    fun dueOnWeekday(nowMs: Long, hour: Int, lastStart: Long, weekday: Int): Boolean {
-        val now = Calendar.getInstance().apply { timeInMillis = nowMs }
-        if (now.get(Calendar.DAY_OF_WEEK) != weekday || now.get(Calendar.HOUR_OF_DAY) < hour) return false
-        return !sameDay(lastStart, nowMs) && nowMs - lastStart > 6 * 86_400_000L
+    /**
+     * Раз в неделю в заданный день недели (Calendar.SATURDAY…) после часа
+     * запуска — правка промпта; с догоном, как у недельного разбора: пропущенный
+     * срок наступает при первом тике после него. Не чаще раза в шесть дней —
+     * ручной запуск в четверг субботний не дублирует.
+     */
+    fun dueOnWeekday(nowMs: Long, hour: Int, lastStart: Long, weekday: Int): Boolean =
+        lastStart < lastMark(nowMs, hour, weekday) && nowMs - lastStart > 6 * 86_400_000L
+
+    /** Последний момент «день недели [weekday], [hour]:00», не позже [nowMs]. */
+    fun lastMark(nowMs: Long, hour: Int, weekday: Int): Long {
+        val cal = Calendar.getInstance().apply {
+            timeInMillis = nowMs
+            set(Calendar.HOUR_OF_DAY, hour); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+        }
+        while (cal.get(Calendar.DAY_OF_WEEK) != weekday || cal.timeInMillis > nowMs) cal.add(Calendar.DAY_OF_MONTH, -1)
+        return cal.timeInMillis
+    }
+
+    /**
+     * Окно «Разобрать сейчас»: от конца последнего удачного разбора, но не
+     * дальше недели назад и не ближе суток — разбор двух часов ни о чём не скажет.
+     */
+    fun windowNow(nowMs: Long, lastReviewedTo: Long): Pair<Long, Long> {
+        val from = lastReviewedTo.coerceIn(nowMs - 7 * 86_400_000L, nowMs - 86_400_000L)
+        return from to nowMs
+    }
+
+    /** Окно длиннее двух суток читается как неделя: объём текстов, повторы за месяц, ревизия словаря. */
+    fun weekLike(kind: String, fromMs: Long, toMs: Long): Boolean =
+        kind == WEEKLY || (kind == NOW && toMs - fromMs > 2 * 86_400_000L)
+
+    /**
+     * Сбой, который пройдёт сам: нет сети (27.09 «Unable to resolve host»
+     * посреди опроса убил недельный разбор, хотя батч у Anthropic считался),
+     * перегрузка или лимит Anthropic, ошибка записи на диск. Такой сбой не
+     * закрывает прогон — следующий тик спросит снова; сутки без ответа —
+     * провал по сроку батча.
+     */
+    fun isTransient(e: Throwable): Boolean {
+        var t: Throwable? = e
+        while (t != null) {
+            if (t is java.io.IOException) return true
+            t = t.cause
+        }
+        return Regex("^Anthropic ответил (429|5\\d\\d)").containsMatchIn(e.message.orEmpty())
     }
 
     /** Причина сбоя разбора ответа — коротко: JSONException тащит в message весь ответ модели. */
@@ -62,7 +110,7 @@ object NightReviewPolicy {
         return ca.get(Calendar.YEAR) == cb.get(Calendar.YEAR) && ca.get(Calendar.DAY_OF_YEAR) == cb.get(Calendar.DAY_OF_YEAR)
     }
 
-    /** Окно журналов: сутки или неделя назад от момента запуска. */
+    /** Окно журналов: сутки или неделя назад от момента запуска (у «сейчас» — [windowNow]). */
     fun window(kind: String, nowMs: Long): Pair<Long, Long> =
         (nowMs - (if (kind == WEEKLY) 7 else 1) * 86_400_000L) to nowMs
 
@@ -118,21 +166,6 @@ object NightReviewPolicy {
         return out
     }
 
-    data class ReplyPlan(val actions: List<Pair<String, String>>, val answer: String)
-
-    /** Ответ владельца, переведённый моделью в действия по id. */
-    fun parseReply(raw: String): ReplyPlan {
-        val o = jsonObject(raw)
-        val arr = o.optJSONArray("actions") ?: JSONArray()
-        val actions = mutableListOf<Pair<String, String>>()
-        for (i in 0 until arr.length()) {
-            val a = arr.optJSONObject(i) ?: continue
-            val action = a.optString("action").trim().lowercase()
-            if (action in setOf("revert", "apply", "reject")) actions += a.optString("id").trim() to action
-        }
-        return ReplyPlan(actions, o.optString("answer").trim())
-    }
-
     /**
      * Применять само: уверенность high и вид из списка, если проверка не
      * отклонила (approve или unsure; reject — не применяется) и согласование
@@ -141,8 +174,9 @@ object NightReviewPolicy {
      * нашла, за исключением низковероятных вещей» — раньше требовалось ещё и
      * явное approve, и половина высоких висела кнопками. Плюс страховка,
      * которой не доверили ни одной модели: HARD на короткое кириллическое
-     * слово (до четырёх букв — «губ», «поле», «прод») сам не ложится никогда,
-     * только предложением.
+     * слово (до четырёх букв — «губ», «поле», «прод») сам не ложится никогда.
+     * С 12.10.2026 «не ложится» значит «не применено» с причиной: владелец —
+     * «всё должно идти автоматом, я там не нужен», предложений он не решает.
      */
     fun autoApply(c: Change): Boolean {
         if (c.isNote || c.confidence != "high" || c.kind !in AUTO_KINDS) return false
@@ -158,9 +192,9 @@ object NightReviewPolicy {
      * изменениях (PROTECT и HARD на одно и то же, добавить и выключить), одно
      * правило и включить, и выключить, выключение или смена вида у записи,
      * которую разбор сам положил на этой неделе ([recentNightAdds] — слова в
-     * нижнем регистре). Спорное придерживается: verdict «hold», остаётся
-     * предложением владельцу и в проверку не уходит. Заметки и уже решённое
-     * (dropped, skipped) не трогаются.
+     * нижнем регистре). Спорное придерживается: verdict «hold», в проверку не
+     * уходит и не применяется (с 12.10.2026 — «не применено» с причиной, а не
+     * предложение владельцу). Заметки и уже решённое (dropped, skipped) не трогаются.
      */
     fun consistencyHolds(changes: List<Change>, recentNightAdds: Set<String>): List<Change> {
         val live = changes.filter { !it.isNote && it.status == "proposed" }
@@ -193,9 +227,11 @@ object NightReviewPolicy {
         return JSONObject(raw.substring(s, e + 1))
     }
 
-    fun headline(applied: Int, proposed: Int, rejected: Int, notes: Int, dropped: Int = 0): String = buildString {
+    fun headline(applied: Int, proposed: Int, rejected: Int, notes: Int, dropped: Int = 0, skipped: Int = 0): String = buildString {
         append("Применено ").append(applied)
-        append(", предложено ").append(proposed)
+        // С 12.10.2026 разбор ничего не оставляет владельцу; «предложено» — только у старых прогонов.
+        if (proposed > 0) append(", предложено ").append(proposed)
+        if (skipped > 0) append(", не применено ").append(skipped)
         if (rejected > 0) append(", отклонено проверкой ").append(rejected)
         if (dropped > 0) append(", отброшено низких ").append(dropped)
         if (notes > 0) append(", идей ").append(notes)
@@ -239,8 +275,8 @@ object NightReviewPolicy {
     ): String {
         val sb = StringBuilder("# Ночной разбор Правки — лог для Claude Code\n\n")
         sb.append("Выгружено ").append(dateOf(nowMs)).append(". Прогонов: ").append(runs.size).append(".\n")
-        sb.append("Статусы: применено — легло в словарь само или по кнопке; предложено — ждёт решения владельца; ")
-        sb.append("вернул / отклонил владелец — сигнал, что автомат ошибся.\n\n")
+        sb.append("Статусы: применено — легло в словарь само; не применено — отброшено проверкой, согласованием или страховкой (с причиной); ")
+        sb.append("вернул владелец — сигнал, что автомат ошибся. Предложено — только у прогонов до 12.10.2026.\n\n")
         if (board.isNotBlank()) sb.append("## Что работает, что нет\n").append(board.trimEnd()).append("\n\n")
         for (run in runs.sortedByDescending { it.startedAt }) {
             val kind = when {
@@ -248,6 +284,7 @@ object NightReviewPolicy {
                 run.isTune -> "правка промпта"
                 run.isCompare -> "сравнение моделей"
                 run.kind == WEEKLY -> "неделя"
+                run.kind == NOW -> "разбор сейчас"
                 else -> "сутки"
             }
             sb.append("## ").append(dateOf(run.startedAt)).append(" · ").append(kind)
@@ -292,9 +329,10 @@ object NightReviewPolicy {
             val notes = run.changes.filter { it.kind == "note" }
             val applied = run.changes.filter { it.status == "applied" }
             val proposed = run.changes.filter { it.status == "proposed" }
+            val skipped = run.changes.filter { !it.isNote && it.status == "skipped" }
             val reverted = run.changes.filter { it.status == "reverted" }
             val rejectedByOwner = run.changes.filter { it.status == "rejected" && "владелец" in it.statusNote }
-            sb.append(headline(applied.size, proposed.size, run.changes.count { it.status == "rejected" }, notes.size, run.changes.count { it.status == "dropped" }))
+            sb.append(headline(applied.size, proposed.size, run.changes.count { it.status == "rejected" }, notes.size, run.changes.count { it.status == "dropped" }, skipped.size))
             if (run.costUsd > 0) sb.append(" Стоил $").append("%.2f".format(java.util.Locale.US, run.costUsd)).append('.')
             sb.append("\n\n")
             fun section(title: String, list: List<Change>, render: (Change) -> String) {
@@ -310,6 +348,7 @@ object NightReviewPolicy {
             section("Предложено (владелец не решил)", proposed) { c ->
                 line(c) + " — " + c.why + if (c.verdictWhy.isNotBlank()) " [${c.verdictWhy}]" else ""
             }
+            section("Не применено", skipped) { c -> line(c) + " — " + c.statusNote.ifBlank { c.why } }
             section("Вернул владелец", reverted) { c -> line(c) + " — " + c.why }
             section("Отклонил владелец", rejectedByOwner) { c -> line(c) + " — " + c.why }
             val body = run.summary.split("\n\n").filterIndexed { i, p -> !(i == 0 && p.startsWith("Применено ")) }.joinToString("\n\n").trim()

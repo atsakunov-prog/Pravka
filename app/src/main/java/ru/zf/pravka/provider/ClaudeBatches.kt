@@ -48,7 +48,14 @@ class ClaudeBatches(private val settings: Settings, private val client: OkHttpCl
         val cacheWrite: Int,
         /** Какая модель ответила — из самого ответа: по ней и цена (см. [costUsd]). */
         val model: String = "",
+        /**
+         * Категория отказа (stop_details.category: cyber, bio, reasoning_extraction…)
+         * — без неё refusal правки промпта 03.10 не с чем было разбирать.
+         */
+        val refusalCategory: String = "",
     ) {
+        /** Обрезан по длине: мысли съели потолок — повод повторить на ступень ниже усилия. */
+        val truncated: Boolean get() = type == "succeeded" && stopReason == "max_tokens"
         /**
          * Fable может ответить отказом (stop_reason=refusal, HTTP 200) — это не
          * результат; обрезанный по длине ответ (max_tokens) — тоже: от JSON
@@ -57,7 +64,8 @@ class ClaudeBatches(private val settings: Settings, private val client: OkHttpCl
         val ok: Boolean get() = type == "succeeded" && stopReason != "refusal" && stopReason != "max_tokens"
         val failure: String
             get() = when {
-                stopReason == "refusal" -> "модель отказалась отвечать (refusal)"
+                stopReason == "refusal" -> "модель отказалась отвечать (refusal" +
+                    (if (refusalCategory.isNotBlank()) ", категория $refusalCategory" else "") + ")"
                 stopReason == "max_tokens" -> "ответ обрезан по длине (max_tokens): не хватило бюджета на мысли и ответ"
                 error.isNotBlank() -> error
                 type != "succeeded" -> type
@@ -92,7 +100,7 @@ class ClaudeBatches(private val settings: Settings, private val client: OkHttpCl
         ): JSONObject =
             JSONObject().apply {
                 put("model", model)
-                put("max_tokens", maxTokens + RequestPolicy.batchThinkingHeadroom(model, effort))
+                put("max_tokens", RequestPolicy.batchMaxTokens(model, effort, maxTokens))
                 if (effort.isNotBlank()) put("output_config", JSONObject().put("effort", effort))
                 RequestPolicy.thinkingOffType(model, effort)?.let { put("thinking", JSONObject().put("type", it)) }
                 if (system.isNotBlank()) {
@@ -155,6 +163,9 @@ class ClaudeBatches(private val settings: Settings, private val client: OkHttpCl
             }.orEmpty()
             val u = msg?.optJSONObject("usage")
             val err = res.optJSONObject("error")?.optString("message").orEmpty()
+            // optString у JSON null отдаёт строку «null» (правило 9) — читаем через isNull.
+            val details = msg?.optJSONObject("stop_details")
+            val category = if (details == null || details.isNull("category")) "" else details.optString("category")
             return Item(
                 customId = o.optString("custom_id"),
                 type = type,
@@ -166,6 +177,7 @@ class ClaudeBatches(private val settings: Settings, private val client: OkHttpCl
                 cacheRead = u?.optInt("cache_read_input_tokens") ?: 0,
                 cacheWrite = u?.optInt("cache_creation_input_tokens") ?: 0,
                 model = msg?.optString("model").orEmpty(),
+                refusalCategory = category,
             )
         }
 

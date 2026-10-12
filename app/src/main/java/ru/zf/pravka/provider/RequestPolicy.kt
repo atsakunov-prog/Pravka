@@ -67,10 +67,36 @@ object RequestPolicy {
      */
     fun batchThinkingHeadroom(model: String, effort: String): Int = when {
         thinkingOff(model, effort) -> 0
-        // Разборы с 22.09.2026 — Опус 5.5 на max: мысли длиннее, чем у Fable
-        // на medium, а батч потолка в 128 тысяч не боится.
-        effort.trim() == "max" -> 64_000
+        // Разборы с 22.09.2026 — Опус 5.5 на max. 64 тысяч не хватало: оба
+        // недельных разбора Опуса (02.10, 09.10) вернули ровно 72 000 токенов
+        // выхода — весь потолок ушёл на мысли над пачкой в 80 тысяч токенов,
+        // ответа не было, ~75 центов за раз в никуда. Max — до потолка модели
+        // (128K у Опуса 5.5, Сонета 5.5 и Fable).
+        effort.trim() == "max" -> MAX_OUTPUT_TOKENS
+        // Ступени ниже — с запасом: за неиспользованный потолок не платим, а
+        // повтор после обрезки на max должен успеть ответить.
+        effort.trim() == "xhigh" -> 96_000
+        effort.trim() == "high" -> 48_000
         else -> 32_000
+    }
+
+    /** Потолок выхода у нынешних моделей (Опус 5.5, Сонет 5.5, Fable 5.1 — 128K): больше — 400. */
+    const val MAX_OUTPUT_TOKENS = 128_000
+
+    /** Бюджет ответа в батче: ответ плюс запас на мысли, но не выше потолка модели. */
+    fun batchMaxTokens(model: String, effort: String, answerTokens: Int): Int =
+        (answerTokens + batchThinkingHeadroom(model, effort)).coerceAtMost(MAX_OUTPUT_TOKENS)
+
+    /**
+     * Ступенька вниз, когда ответ батча обрезан по длине: мысли съели весь
+     * потолок. Повтор на ступень ниже по тем же свидетельствам (они в кэше)
+     * дешевле пустого прогона, а max → xhigh → high — дальше не спускаемся:
+     * ниже high разбор недели теряет смысл. Пусто — вниз некуда.
+     */
+    fun lowerEffort(effort: String): String? = when (effort.trim()) {
+        "max" -> "xhigh"
+        "xhigh" -> "high"
+        else -> null
     }
 
     /**

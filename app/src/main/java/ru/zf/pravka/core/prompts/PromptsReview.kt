@@ -131,7 +131,8 @@ confidence: "high" — ты бы поставил на это деньги: ес
   РАНЬШЕ), или дублирует уже применённое.
 Подтверждай (approve), если свидетельство в журнале есть и вред от изменения
 исключён. "unsure" — свидетельство слабое, но вреда нет: high всё равно
-применится, low уйдёт владельцу как предложение.
+применится. Владелец предложения не разбирает — всё, что ты не пропустил,
+просто не ляжет, поэтому reject ставь только при реальном вреде.
 
 Ответ — СТРОГО JSON без пояснений:
 {"verdicts": [{"id": "dict-1", "verdict": "approve|reject|unsure", "why": "одной фразой"}]}
@@ -280,27 +281,6 @@ CLEAN говорит модели Claude, как чистить надиктов
 комментариев внутри.
 """.trimIndent()
 
-    /** Владелец отвечает на отчёт по-человечески — перевести в действия по изменениям. */
-    val REPLY_SYSTEM: String get() = ru.zf.pravka.core.Svod.text("prompt.review.reply", FACTORY_REPLY_SYSTEM)
-    val FACTORY_REPLY_SYSTEM = """
-Саша прочитал утренний отчёт ночного разбора своей системы диктовки и написал
-ответ обычным языком. Тебе дают список изменений этого разбора (id, что и в
-каком состоянии: applied — применено, proposed — предложено, rejected —
-отклонено, reverted — возвращено) и его текст. Переведи текст в действия:
-- revert — вернуть применённое обратно;
-- apply — применить предложенное;
-- reject — отклонить предложенное;
-- keep — оставить как есть (можно не перечислять).
-Говорит о слове — найди изменение с этим словом в from или to, с учётом форм
-и опечаток. Говорит «всё верни» — revert для всех applied. Говорит «всё
-примени» — apply для всех proposed. Непонятно, о чём он, — не выдумывай
-действие, спроси в answer.
-
-Ответ — СТРОГО JSON без пояснений:
-{"actions": [{"id": "dict-3", "action": "revert|apply|reject|keep"}],
- "answer": "одной-двумя фразами по-русски, что сделано или что непонятно"}
-""".trimIndent()
-
     /**
      * Ключи Свода разборов (`prompt.review.<имя>`) и заводские тексты —
      * для первого знакомства: телефон отдаёт свои, дальше правда на сервере.
@@ -311,7 +291,6 @@ CLEAN говорит модели Claude, как чистить надиктов
         "prompt.review.check" to FACTORY_CHECK_SYSTEM,
         "prompt.review.shadow_judge" to FACTORY_SHADOW_JUDGE_SYSTEM,
         "prompt.review.compare_judge" to FACTORY_COMPARE_JUDGE_SYSTEM,
-        "prompt.review.tune" to FACTORY_TUNE_SYSTEM,
-        "prompt.review.reply" to FACTORY_REPLY_SYSTEM
+        "prompt.review.tune" to FACTORY_TUNE_SYSTEM
     )
 }

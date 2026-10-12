@@ -443,7 +443,7 @@ private fun serviceHint(tab: Tab): String = when (tab) {
     Tab.DICTIONARY -> "как писать имена и термины"
     Tab.PROMPTS -> "тексты запросов ко всем режимам"
     Tab.LEARNING -> "разбор твоих правок и принятые правила"
-    Tab.REVIEWS -> "ночной разбор, правка промпта, сравнение"
+    Tab.REVIEWS -> "что Правка сама выучила, разобрать сейчас"
     Tab.LOGS -> "что делала служба, выгрузки для разбора"
     Tab.SHOWCASE -> "все детали набора во всех состояниях"
     Tab.FEEDBACK -> "сказанное с кнопок — раз в день в разбор"
@@ -481,6 +481,10 @@ private fun serviceGlyph(tab: Tab): androidx.compose.ui.graphics.vector.ImageVec
 @Composable
 private fun MoreList(app: PravkaApp, onOpen: (Tab) -> Unit, onMode: (Tab) -> Unit, onProfile: () -> Unit) {
     val profile by app.profileStore.flow.collectAsState()
+    // Красная точка на «Разборах» — та же, что на «С» в «Сегодня» (12.10.2026).
+    val reviewRuns by app.nightReviewStore.runsFlow.collectAsState()
+    val reviewsSeenAt by app.settings.reviewsSeenAtFlow.collectAsState(initial = Long.MAX_VALUE)
+    val reviewsNews = ru.zf.pravka.core.ReviewDigest.hasNews(reviewRuns, reviewsSeenAt)
     // Разворот: слева Правка, статистика и «кто пользуется», справа полки.
     ru.zf.pravka.ui.SplitColumns { side ->
         val left = side != 2
@@ -509,6 +513,7 @@ private fun MoreList(app: PravkaApp, onOpen: (Tab) -> Unit, onMode: (Tab) -> Uni
                         hint = serviceHint(item),
                         icon = serviceGlyph(item),
                         onClick = { onOpen(item) },
+                        trailing = if (item == Tab.REVIEWS && reviewsNews) ({ ru.zf.pravka.ui.NewsDotMark() }) else null,
                     )
                 }
             }

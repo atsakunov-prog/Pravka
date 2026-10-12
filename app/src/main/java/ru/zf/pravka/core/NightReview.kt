@@ -23,7 +23,7 @@ import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.data.TranscriptionLog
 import ru.zf.pravka.provider.ClaudeBatches
-import ru.zf.pravka.provider.Pricing
+import ru.zf.pravka.provider.RequestPolicy
 
 /**
  * Ночной разбор (16.09.2026). Владелец: «чтобы он каждую ночь делал всё, что
@@ -45,6 +45,11 @@ import ru.zf.pravka.provider.Pricing
  * ночь стоила две трети трат приложения, а всё, что ловило согласование
  * (одно слово в двух изменениях, включить и выключить одно правило, отмена
  * вчерашнего применённого), считается без модели и бесплатно.
+ *
+ * С 12.10.2026 разбор ничего не оставляет владельцу (владелец: «всё должно
+ * идти автоматом, я там не нужен»): одобренное проверкой применяется, всё
+ * остальное — «не применено» с причиной. Обрезанный по длине проход
+ * повторяется на ступень ниже усилия; сбой сети не закрывает прогон.
  */
 class NightReview(
     private val settings: Settings,
@@ -72,6 +77,11 @@ class NightReview(
         /** Окно «разбор сам положил на этой неделе»: выключать такое без владельца нельзя. */
         const val RECENT_ADDS_MS = 7 * 86_400_000L
         private const val OUT_TOKENS = 8000
+        /** Усилие, на котором ушёл текущий батч прохода, — в evidence прогона: повтор спускается от него. */
+        private const val EFFORT_ANALYSIS = "effort_analysis"
+        private const val EFFORT_CHECK = "effort_check"
+        /** Заметки о повторах на ступень ниже — в сводку прогона. */
+        private const val RETRIES = "retries"
     }
 
     private val mutex = Mutex()
@@ -90,12 +100,18 @@ class NightReview(
             val active = runs.filter { it.active }
             for (run in active) {
                 if (nowMs - run.lastPollAt < POLL_MS) continue
-                runCatching { poll(run, nowMs) }.onFailure { fail(run, it) }
+                runCatching { poll(run, nowMs) }.onFailure { failOrWait(run, it) }
             }
             if (active.isEmpty()) {
                 val hour = settings.nightReviewHourFlow.first()
                 val lastDaily = runs.filter { it.kind == NightReviewPolicy.DAILY }.maxOfOrNull { it.startedAt } ?: 0L
-                val lastWeekly = runs.filter { it.kind == NightReviewPolicy.WEEKLY }.maxOfOrNull { it.startedAt } ?: 0L
+                val weeklyRuns = runs.filter { it.kind == NightReviewPolicy.WEEKLY }
+                val friday = NightReviewPolicy.lastMark(nowMs, hour, java.util.Calendar.FRIDAY)
+                val sinceFriday = weeklyRuns.filter { it.startedAt >= friday && it.error != "отменено владельцем" }
+                // Упавший недельный этой недели — ещё одна попытка, но одна: второй
+                // провал подряд — это уже не случайность, кругами деньги не жжём.
+                val lastWeekly = if (sinceFriday.size == 1 && NightBoard.failed(sinceFriday[0])) 0L
+                else weeklyRuns.maxOfOrNull { it.startedAt } ?: 0L
                 // Один прогон за тик; в пятницу идёт только недельный — сутки в нём и так есть.
                 val dailyOn = settings.nightDailyEnabledFlow.first()
                 NightReviewPolicy.dueKinds(nowMs, hour, lastDaily, lastWeekly, dailyOn).firstOrNull()?.let { kind ->
@@ -105,11 +121,17 @@ class NightReview(
                     val budget = settings.nightBudgetUsdFlow.first()
                     val spent = stats.costRecentDayUsd()
                     if (spent > budget) {
-                        log.add("ночной разбор ($kind): не стартую — расход за сутки $" + "%.2f".format(Locale.US, spent) + " выше потолка $$budget")
+                        // Раз в сутки, а не каждые пять минут: 25.09 одна и та же
+                        // строка легла в журнал 224 раза и вытеснила всё остальное.
+                        // Пропущенную неделю догонит следующий день (dueKinds).
+                        logOncePerDay("budget-$kind", nowMs) {
+                            "ночной разбор ($kind): не стартую — расход за сутки $" + "%.2f".format(Locale.US, spent) +
+                                " выше потолка $$budget; догоню, когда расход опустится"
+                        }
                         return@let
                     }
                     start(kind, manual = false, nowMs = nowMs).onFailure {
-                        log.add("ночной разбор: не запустился ($kind): ${it.message}")
+                        logOncePerDay("start-$kind", nowMs) { "ночной разбор: не запустился ($kind): ${it.message} — попробую на следующих тиках" }
                     }
                 }
             }
@@ -120,8 +142,9 @@ class NightReview(
 
     /** Запуск прогона: собрать свидетельства, отправить батч первого прохода. */
     suspend fun start(kind: String, manual: Boolean, nowMs: Long = System.currentTimeMillis()): Result<Run> = runCatching {
-        val (from, to) = NightReviewPolicy.window(kind, nowMs)
-        val evidence = gather(kind, from, to)
+        val (from, to) = if (kind == NightReviewPolicy.NOW) NightReviewPolicy.windowNow(nowMs, lastReviewedTo())
+        else NightReviewPolicy.window(kind, nowMs)
+        val evidence = gather(NightReviewPolicy.weekLike(kind, from, to), from, to)
         if (evidence.isEmpty()) {
             // День без диктовок тоже фиксируется — иначе тик пробовал бы запуск до вечера.
             val empty = Run(
@@ -132,39 +155,59 @@ class NightReview(
             return@runCatching empty
         }
         val choice = settings.modelChoice(ModelRoute.NIGHT_REVIEW)
-        // Свидетельства — системным блоком под часовым кэшем: проверка через
-        // полчаса-час читает их же из кэша (у Fable чтение — сороковая часть
-        // цены). Инструкции и специфика ночи — в пользовательском сообщении.
-        val user = listOf(PromptsReview.ANALYZE_SYSTEM, PromptsReview.ANALYZE_TASKS, evidence["specific"].orEmpty())
-            .filter { it.isNotBlank() }.joinToString("\n\n")
-        val batchId = batches.create(
-            listOf("all" to ClaudeBatches.params(choice.model, choice.effort, OUT_TOKENS, evidence["common"].orEmpty(), user, cacheSystem = true))
-        )
+        val batchId = submitAnalysis(evidence, choice.model, choice.effort)
         val run = Run(
             id = nowMs, kind = kind, startedAt = nowMs, fromMs = from, toMs = to, stage = "analysis", manual = manual,
-            analysisBatchId = batchId, evidence = evidence, lastPollAt = nowMs,
+            analysisBatchId = batchId, evidence = evidence + (EFFORT_ANALYSIS to choice.effort), lastPollAt = nowMs,
         )
         store.save(run)
         log.add("ночной разбор ($kind): батч $batchId, ${choice.model} ${choice.effort}, свидетельств ${evidence["common"].orEmpty().length} зн.")
         run
     }
 
+    /**
+     * Батч первого прохода. Свидетельства — системным блоком под часовым кэшем:
+     * проверка и повтор на ступень ниже читают их же из кэша. Инструкции и
+     * специфика ночи — в пользовательском сообщении.
+     */
+    private suspend fun submitAnalysis(evidence: Map<String, String>, model: String, effort: String): String {
+        val user = listOf(PromptsReview.ANALYZE_SYSTEM, PromptsReview.ANALYZE_TASKS, evidence["specific"].orEmpty())
+            .filter { it.isNotBlank() }.joinToString("\n\n")
+        return batches.create(
+            listOf("all" to ClaudeBatches.params(model, effort, OUT_TOKENS, evidence["common"].orEmpty(), user, cacheSystem = true))
+        )
+    }
+
+    /** Конец окна последнего удачного разбора — откуда начинает «Разобрать сейчас». */
+    private suspend fun lastReviewedTo(): Long =
+        store.all().filter { it.isReview && it.stage == "done" && !NightBoard.failed(it) }.maxOfOrNull { it.toMs } ?: 0L
+
+    private val loggedDay = HashMap<String, String>()
+
+    /** Повторяющаяся строка журнала — раз в сутки на ключ. */
+    private fun logOncePerDay(key: String, nowMs: Long, line: () -> String) {
+        val day = date(nowMs)
+        if (loggedDay[key] == day) return
+        loggedDay[key] = day
+        log.add(line())
+    }
+
     // ---- свидетельства ----
 
-    private suspend fun gather(kind: String, from: Long, to: Long): Map<String, String> {
+    private suspend fun gather(weekly: Boolean, from: Long, to: Long): Map<String, String> {
         val pairs = history.readEntries(from, to)
         val corr = corrections.all().filter { it.ts in from until to }
         if (pairs.isEmpty() && corr.isEmpty()) return emptyMap()
         val takes = transcripts.readRange(from, to)
         val dict = dictionary.all()
         val ruleList = rules.all()
-        val weekly = kind == NightReviewPolicy.WEEKLY
         // Повторы — за окно длиннее сырых текстов, счётчиками (см. NightReviewEvidence).
         val aggFrom = to - if (weekly) WEEKLY_AGG_MS else DAILY_AGG_MS
         val agg = NightReviewEvidence.aggregate(history.readEntries(aggFrom, to).map { it.input to it.output })
         val aggBlock = NightReviewEvidence.render(agg, "ПОВТОРЫ за ${if (weekly) 30 else 7} дней (что во что модель заменяла, сколько раз)")
         val ledger = ledgerBlock(dict)
-        val period = "Период: ${date(from)}–${date(to)} (${if (weekly) "неделя" else "сутки"}). " +
+        val days = ((to - from + 43_200_000L) / 86_400_000L).coerceAtLeast(1)
+        val period = "Период: ${date(from)}–${date(to)} (${if (days == 1L) "сутки" else if (days == 7L) "неделя" else "$days дн."}). " +
             "Диктовок ${takes.size} (пустых ${takes.count { !it.ok }}), чисток моделью ${pairs.size}, правок руками ${corr.size}."
         val pairsBlock = block("ЧИСТКИ — <d> надиктовано, <m> что сделала модель", pairs, if (weekly) 90_000 else 40_000) {
             "<d>${it.input}</d>\n<m>${it.output}</m>"
@@ -282,6 +325,23 @@ class NightReview(
         val errors = ArrayList<String>()
         val changes = ArrayList<Change>()
         val item = items.firstOrNull { it.customId == "all" } ?: items.firstOrNull()
+        if (item != null && item.truncated) {
+            // Мысли съели весь потолок — повтор на ступень ниже по тем же
+            // свидетельствам (из кэша), а не пустой прогон (02.10 и 09.10).
+            val used = run.evidence[EFFORT_ANALYSIS] ?: settings.modelChoice(ModelRoute.NIGHT_REVIEW).effort
+            val lower = RequestPolicy.lowerEffort(used)
+            if (lower != null) {
+                val model = settings.modelChoice(ModelRoute.NIGHT_REVIEW).model
+                val batchId = submitAnalysis(run.evidence, model, lower)
+                val note = "первый проход на $used обрезан по длине — повторён на $lower"
+                log.add("ночной разбор (${run.kind}): $note, батч $batchId")
+                return run.copy(
+                    analysisBatchId = batchId,
+                    evidence = run.evidence + (EFFORT_ANALYSIS to lower) + (RETRIES to listOf(run.evidence[RETRIES].orEmpty(), note).filter { it.isNotBlank() }.joinToString("; ")),
+                    progress = "повтор на $lower",
+                )
+            }
+        }
         if (item == null || !item.ok) errors += "первый проход: ${item?.failure ?: "нет ответа"}"
         else runCatching { NightReviewPolicy.parseAnalysis(item.text, "n") }
             .onSuccess { a -> if (a.summary.isNotBlank()) summaries += a.summary; changes += a.changes }
@@ -289,7 +349,7 @@ class NightReview(
         // Память: что владелец вернул или отклонил за месяц, снова не предлагается —
         // даже если модель не послушала промпт.
         val blocked = NightReviewEvidence.blockedKeys(store.all(), System.currentTimeMillis() - LEDGER_MS)
-        val daily = run.kind == NightReviewPolicy.DAILY
+        val daily = !NightReviewPolicy.weekLike(run.kind, run.fromMs, run.toMs)
         val texts = run.evidence["texts"].orEmpty()
         val remembered = changes.map { c ->
             when {
@@ -306,24 +366,32 @@ class NightReview(
                 else -> c
             }
         }
-        // Согласование — в коде, до проверки: придержанное остаётся предложением
-        // владельцу и токенов второго прохода не стоит.
-        val reconciled = NightReviewPolicy.consistencyHolds(remembered, recentNightAdds())
-        val toCheck = reconciled.filter { !it.isNote && it.status == "proposed" && it.verdict != "hold" }
+        // Согласование — в коде, до проверки: придержанное не применяется
+        // (с причиной) и токенов второго прохода не стоит.
+        val reconciled = NightReviewPolicy.consistencyHolds(remembered, recentNightAdds()).map { c ->
+            if (!c.isNote && c.status == "proposed" && c.verdict == "hold") c.copy(status = "skipped", statusNote = c.verdictWhy) else c
+        }
+        val toCheck = reconciled.filter { !it.isNote && it.status == "proposed" }
         val partial = run.copy(summary = summaries.joinToString("\n\n"), error = errors.joinToString("; "), changes = reconciled)
         if (toCheck.isEmpty()) return finish(partial)
         val choice = settings.modelChoice(ModelRoute.NIGHT_CHECK)
+        val batchId = submitCheck(run, toCheck, choice.model, choice.effort)
+        log.add("ночной разбор: проверка, батч $batchId, изменений ${toCheck.size}")
+        return partial.copy(stage = "check", checkBatchId = batchId, evidence = partial.evidence + (EFFORT_CHECK to choice.effort))
+    }
+
+    /**
+     * Батч проверки. Тот же системный блок свидетельств байт-в-байт — читается
+     * из кэша первого прохода, если проверка успела за час. В сообщении —
+     * словарь и правила (state), без промпта CLEAN: проверке он не нужен.
+     */
+    private suspend fun submitCheck(run: Run, toCheck: List<Change>, model: String, effort: String): String {
         val list = JSONArray().apply { for (c in toCheck) put(changeJson(c)) }
-        // Тот же системный блок свидетельств байт-в-байт — читается из кэша
-        // первого прохода, если проверка успела за час. В сообщении — словарь и
-        // правила (state), без промпта CLEAN: проверке он не нужен.
         val user = listOf(PromptsReview.CHECK_SYSTEM, run.evidence["state"].orEmpty(), "ПРЕДЛОЖЕНИЯ ПЕРВОГО АУДИТОРА:\n$list")
             .filter { it.isNotBlank() }.joinToString("\n\n")
-        val batchId = batches.create(
-            listOf("check" to ClaudeBatches.params(choice.model, choice.effort, OUT_TOKENS, run.evidence["common"].orEmpty(), user, cacheSystem = true))
+        return batches.create(
+            listOf("check" to ClaudeBatches.params(model, effort, OUT_TOKENS, run.evidence["common"].orEmpty(), user, cacheSystem = true))
         )
-        log.add("ночной разбор: проверка, батч $batchId, изменений ${toCheck.size}")
-        return partial.copy(stage = "check", checkBatchId = batchId)
     }
 
     private fun changeJson(c: Change): JSONObject = JSONObject().apply {
@@ -335,6 +403,21 @@ class NightReview(
     }
 
     private suspend fun afterCheck(run: Run, items: List<ClaudeBatches.Item>): Run {
+        if (items.any { it.truncated }) {
+            val used = run.evidence[EFFORT_CHECK] ?: settings.modelChoice(ModelRoute.NIGHT_CHECK).effort
+            val lower = RequestPolicy.lowerEffort(used)
+            if (lower != null) {
+                val toCheck = run.changes.filter { !it.isNote && it.status == "proposed" }
+                val batchId = submitCheck(run, toCheck, settings.modelChoice(ModelRoute.NIGHT_CHECK).model, lower)
+                val note = "проверка на $used обрезана по длине — повторена на $lower"
+                log.add("ночной разбор (${run.kind}): $note, батч $batchId")
+                return run.copy(
+                    checkBatchId = batchId,
+                    evidence = run.evidence + (EFFORT_CHECK to lower) + (RETRIES to listOf(run.evidence[RETRIES].orEmpty(), note).filter { it.isNotBlank() }.joinToString("; ")),
+                    progress = "повтор проверки на $lower",
+                )
+            }
+        }
         val verdicts = HashMap<String, Pair<String, String>>()
         val errors = ArrayList<String>()
         for (item in items) {
@@ -345,12 +428,13 @@ class NightReview(
         }
         // Проверка не ответила вовсе (отказ, обрыв, не JSON) — это не «не
         // возразила»: без единственного модельного фильтра само не ложится
-        // ничего, всё остаётся предложениями владельцу.
+        // ничего. Владельцу это не оставляется (12.10.2026) — «не применено»
+        // с причиной, а сильные находки вернутся в следующем разборе.
         val checkFailed = verdicts.isEmpty() && errors.isNotEmpty()
         val updated = run.changes.map { c ->
             when {
                 c.isNote || c.status != "proposed" || c.verdict == "hold" -> c
-                checkFailed -> c.copy(verdictWhy = "проверка не ответила — решает владелец")
+                checkFailed -> c.copy(status = "skipped", statusNote = "проверка не ответила — без неё само не ложится", verdictWhy = errors.joinToString("; ").take(200))
                 else -> {
                     val (verdict, why) = verdicts[c.id] ?: ("unsure" to "проверка не дала вердикта")
                     val x = c.copy(verdict = verdict, verdictWhy = why)
@@ -363,19 +447,30 @@ class NightReview(
     }
 
     /**
-     * Итог ночи: high без reject и без hold ложится само, до AUTO_CAP за прогон;
-     * остальное — предложением. Раньше перед этим шёл третий батч — согласование
-     * моделью; теперь его вопросы решены в коде ещё до проверки
-     * (NightReviewPolicy.consistencyHolds).
+     * Итог ночи: high без reject и без hold ложится само, до AUTO_CAP за прогон.
+     * Остальное — «не применено» с причиной: с 12.10.2026 владелец ничего не
+     * решает («я там не нужен»), и висящее предложение — это просто мусор в
+     * отчёте. Раньше перед этим шёл третий батч — согласование моделью; его
+     * вопросы решены в коде ещё до проверки (NightReviewPolicy.consistencyHolds).
      */
     private suspend fun applyAndFinish(run: Run, apply: Boolean = true): Run {
         var applied = 0
         val updated = if (!apply) run.changes else run.changes.map { c ->
-            if (!c.isNote && c.status == "proposed" && NightReviewPolicy.autoApply(c) && applied < NightReviewPolicy.AUTO_CAP) {
-                val done = applyChange(c, run)
-                if (done.status == "applied") applied++
-                done
-            } else c
+            if (c.isNote || c.status != "proposed") return@map c
+            when {
+                !NightReviewPolicy.autoApply(c) -> c.copy(
+                    status = "skipped",
+                    statusNote = if (c.kind == "dict_add" && c.mode == "HARD" && NightReviewPolicy.shortCyrillicWord(c.from))
+                        "HARD на короткое слово сам не ложится — слишком легко сломать живое слово"
+                    else "не прошло проверку",
+                )
+                applied >= NightReviewPolicy.AUTO_CAP -> c.copy(status = "skipped", statusNote = "сверх ${NightReviewPolicy.AUTO_CAP} изменений за прогон — вернётся в следующем разборе")
+                else -> {
+                    val done = applyChange(c, run)
+                    if (done.status == "applied") applied++
+                    done
+                }
+            }
         }
         return finish(run.copy(changes = updated))
     }
@@ -396,7 +491,8 @@ class NightReview(
         } else ""
         val head = NightReviewPolicy.headline(
             run.applied(), run.proposed(), run.rejected(), run.changes.count { it.isNote }, run.changes.count { it.status == "dropped" },
-        ) + cache
+            run.changes.count { !it.isNote && it.status == "skipped" },
+        ) + cache + run.evidence[RETRIES].orEmpty().let { if (it.isBlank()) "" else " Повтор: $it." }
         log.add("ночной разбор (${run.kind}): $head стоил $" + "%.3f".format(Locale.US, run.costUsd))
         return run.copy(
             stage = "done",
@@ -413,7 +509,7 @@ class NightReview(
             // Читать под замком: снимок до ожидания устарел бы и повторил чужую работу.
             val run = store.get(runId) ?: error("Прогон не найден")
             if (!run.active) return@runCatching "Прогон уже завершён"
-            runCatching { poll(run, System.currentTimeMillis()) }.onFailure { fail(run, it) }.getOrThrow()
+            runCatching { poll(run, System.currentTimeMillis()) }.onFailure { failOrWait(run, it) }.getOrThrow()
         }
         val after = store.get(runId)
         if (after == null || !after.active) "Готово" else after.progress.ifBlank { "Ещё идёт" }
@@ -431,6 +527,15 @@ class NightReview(
         runCatching { batches.cancel(batchId) }.onFailure { log.add("ночной разбор: отмена батча $batchId не прошла: ${it.message}") }
         store.save(run.copy(stage = "failed", error = "отменено владельцем", finishedAt = System.currentTimeMillis(), evidence = emptyMap(), progress = ""))
         log.add("ночной разбор (${run.kind}): отменён владельцем на стадии ${run.stage}")
+    }
+
+    /** Сбой опроса: проходящий (сеть, перегрузка, диск) — ждём следующего тика, остальное — провал прогона. */
+    private suspend fun failOrWait(run: Run, e: Throwable) {
+        if (NightReviewPolicy.isTransient(e)) {
+            logOncePerDay("wait-${run.id}", System.currentTimeMillis()) { "ночной разбор (${run.kind}): опрос не прошёл (${e.message}) — прогон жив, спрошу на следующем тике" }
+            return
+        }
+        fail(run, e)
     }
 
     private suspend fun fail(run: Run, e: Throwable) {
@@ -538,50 +643,4 @@ class NightReview(
     }
 
     private val APPLICABLE = setOf("proposed", "rejected", "reverted")
-
-    /** «Принять все»: всё предложенное и возвращённое прогона — в словарь. */
-    suspend fun applyAll(runId: Long): Result<Int> = runCatching {
-        val run = store.get(runId) ?: error("Прогон не найден")
-        var n = 0
-        val changes = run.changes.map { c ->
-            if (!c.isNote && (c.status == "proposed" || c.status == "reverted")) {
-                val done = applyChange(c, run)
-                if (done.status == "applied") n++
-                done
-            } else c
-        }
-        store.save(run.copy(changes = changes))
-        log.add("ночной разбор: владелец принял всё предложенное → $n")
-        n
-    }
-
-    /** Ответ владельца обычным языком: модель переводит в действия, мы их выполняем. */
-    suspend fun reply(runId: Long, text: String): Result<String> = runCatching {
-        val run = store.get(runId) ?: error("Прогон не найден")
-        val choice = settings.modelChoice(ModelRoute.NIGHT_CHECK)
-        val list = run.changes.filter { !it.isNote }.joinToString("\n") { "${it.id} | ${it.title()} | ${it.status}" }
-        val item = batches.single(
-            ClaudeBatches.params(choice.model, choice.effort, 2000, PromptsReview.REPLY_SYSTEM, "ИЗМЕНЕНИЯ:\n$list\n\nОТВЕТ САШИ:\n$text")
-        )
-        if (!item.ok) error(item.failure)
-        stats.recordAux(
-            Pricing.costUsd(choice.model, item.inputTokens, item.outputTokens, item.cacheWrite, item.cacheRead),
-            item.inputTokens + item.cacheRead + item.cacheWrite, item.outputTokens, route = ModelRoute.NIGHT_CHECK.key,
-        )
-        val plan = NightReviewPolicy.parseReply(item.text)
-        var r = store.get(runId) ?: run
-        var did = 0
-        for ((id, action) in plan.actions) {
-            val c = r.changes.firstOrNull { it.id == id } ?: continue
-            val updated = ownerAction(c, r, action)
-            if (updated === c) continue
-            r = r.copy(changes = r.changes.map { if (it.id == id) updated else it })
-            did++
-        }
-        val answer = plan.answer.ifBlank { "Сделано." }
-        val result = "$answer (действий: $did)"
-        store.save(r.copy(replies = r.replies + NightReviewStore.Reply(System.currentTimeMillis(), text, result)))
-        log.add("ночной разбор: ответ владельца → действий $did")
-        result
-    }
 }

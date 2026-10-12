@@ -80,20 +80,58 @@ class PromptTuner(
         if (settings.apiKey().isBlank()) return
         if (!mutex.tryLock()) return
         try {
-            val runs = store.all().filter { it.isTune }
+            val all = store.all()
+            val runs = all.filter { it.isTune }
             val active = runs.filter { it.active }
-            for (run in active) runCatching { advance(run, nowMs) }.onFailure { fail(run, it) }
+            for (run in active) runCatching { advance(run, nowMs) }.onFailure { failOrWait(run, it) }
             if (active.isEmpty()) {
                 val hour = settings.nightReviewHourFlow.first()
                 val last = runs.maxOfOrNull { it.startedAt } ?: 0L
-                if (NightReviewPolicy.dueOnWeekday(nowMs, hour, last, WEEKDAY)) {
-                    if (overBudget()) log.add("правка промпта: не стартую — расход за сутки выше потолка $${settings.nightBudgetUsdFlow.first()}")
-                    else start(manual = false, nowMs = nowMs).onFailure { log.add("правка промпта: не запустилась: ${it.message}") }
+                if (NightReviewPolicy.dueOnWeekday(nowMs, hour, last, WEEKDAY) && weeklyReady(all, nowMs, hour)) {
+                    if (overBudget()) {
+                        val budget = settings.nightBudgetUsdFlow.first()
+                        logOncePerDay("budget", nowMs) { "правка промпта: не стартую — расход за сутки выше потолка $$budget; догоню, когда опустится" }
+                    }
+                    else start(manual = false, nowMs = nowMs).onFailure { e -> logOncePerDay("start", nowMs) { "правка промпта: не запустилась: ${e.message}" } }
                 }
             }
         } finally {
             mutex.unlock()
         }
+    }
+
+    /**
+     * Правка промпта питается идеями недельного разбора — без них она шла
+     * вслепую: три субботы подряд «идей 0», потому что недельный падал. Ждём,
+     * пока недельный этой недели отработает (или идёт догоном); двое суток
+     * без него — идём по правкам руками, как раньше.
+     */
+    private suspend fun weeklyReady(all: List<Run>, nowMs: Long, hour: Int): Boolean {
+        if (!settings.nightReviewEnabledFlow.first()) return true
+        val reviews = all.filter { it.isReview }
+        if (reviews.any { it.active }) return false
+        val friday = NightReviewPolicy.lastMark(nowMs, hour, Calendar.FRIDAY)
+        if (reviews.any { it.kind == NightReviewPolicy.WEEKLY && it.startedAt >= friday }) return true
+        return nowMs - NightReviewPolicy.lastMark(nowMs, hour, WEEKDAY) > 2 * 86_400_000L
+    }
+
+    private val loggedDay = HashMap<String, String>()
+
+    /** Повторяющаяся строка журнала — раз в сутки на ключ, а не каждые пять минут. */
+    private fun logOncePerDay(key: String, nowMs: Long, line: () -> String) {
+        val day = dayFmt.format(Date(nowMs))
+        if (loggedDay[key] == day) return
+        loggedDay[key] = day
+        log.add(line())
+    }
+
+    /** Сбой: проходящий (сеть, перегрузка, диск) — ждём следующего тика, остальное — провал прогона. */
+    private suspend fun failOrWait(run: Run, e: Throwable) {
+        if (NightReviewPolicy.isTransient(e)) {
+            logOncePerDay("wait-${run.id}", System.currentTimeMillis()) { "правка промпта: шаг не прошёл (${e.message}) — прогон жив, продолжу на следующем тике" }
+            return
+        }
+        fail(run, e)
     }
 
     private suspend fun advance(run: Run, nowMs: Long) {
@@ -437,7 +475,7 @@ class PromptTuner(
             if (!run.active) return@runCatching "Уже завершено"
             runCatching {
                 if (run.stage == PromptTunePolicy.STAGE_MEASURE) measureChunk(run, System.currentTimeMillis()) else poll(run, System.currentTimeMillis())
-            }.onFailure { fail(run, it) }.getOrThrow()
+            }.onFailure { failOrWait(run, it) }.getOrThrow()
         }
         val after = store.get(runId)
         if (after == null || !after.active) "Готово" else after.progress.ifBlank { "Ещё идёт" }

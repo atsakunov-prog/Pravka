@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -155,20 +156,38 @@ fun ZPill(score: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
 
 /** Аватар «С» — вход в «Ещё» (DESIGN §12.10). */
 @Composable
-fun AvatarKey(letter: String, onClick: () -> Unit, size: Dp = 44.dp) {
+fun AvatarKey(letter: String, onClick: () -> Unit, size: Dp = 44.dp, dot: Boolean = false) {
     val t = LocalPravkaType.current
-    Box(
-        Modifier
-            .size(size)
-            .clip(CircleShape)
-            .background(Color(0xFFFFE6C8).copy(alpha = 0.08f))
-            .border(1.dp, Color(0xFFFFDCB4).copy(alpha = 0.30f), CircleShape)
-            .clickable(role = Role.Button, onClickLabel = "Ещё и настройки", onClick = onClick)
-            .semantics { contentDescription = "Ещё и настройки" },
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(letter, style = t.valueS.copy(fontSize = 16.sp), color = Ink.Cream)
+    // Внешняя коробка без обрезки: точка «есть новенькое» сидит на кромке круга.
+    Box(Modifier.size(size)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .clip(CircleShape)
+                .background(Color(0xFFFFE6C8).copy(alpha = 0.08f))
+                .border(1.dp, Color(0xFFFFDCB4).copy(alpha = 0.30f), CircleShape)
+                .clickable(role = Role.Button, onClickLabel = "Ещё и настройки", onClick = onClick)
+                .semantics { contentDescription = if (dot) "Ещё и настройки, есть новый разбор" else "Ещё и настройки" },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(letter, style = t.valueS.copy(fontSize = 16.sp), color = Ink.Cream)
+        }
+        if (dot) NewsDotMark(Modifier.align(Alignment.TopEnd).padding(top = 2.dp, end = 2.dp))
     }
+}
+
+/** Красная точка «есть новенькое» (12.10.2026: новый разбор — на «С» и на «Разборах» в «Ещё»). */
+val NewsDot = Color(0xFFE5484D)
+
+@Composable
+fun NewsDotMark(modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .size(9.dp)
+            .clip(CircleShape)
+            .background(NewsDot)
+            .border(1.5.dp, Ink.Bg, CircleShape),
+    )
 }
 
 /**
@@ -186,6 +205,8 @@ fun DayHeader(
     avatar: String,
     onAvatar: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Красная точка на «С» — есть новый разбор (`ReviewDigest.hasNews`). */
+    avatarDot: Boolean = false,
     /** Тап по дню недели — навигатор дня (прошлый и будущий день). */
     onWeekday: (() -> Unit)? = null,
     /** Двойной тап по дню недели — шапка до минимума (баг №6). */
@@ -209,7 +230,7 @@ fun DayHeader(
             )
             if (score != null) ZPill(score, onScore)
             HeaderIcon(Glyphs.Stats, "Статистика дня", onStats, tint = Ink.PlanText)
-            AvatarKey(avatar, onAvatar)
+            AvatarKey(avatar, onAvatar, dot = avatarDot)
         }
         if (status != null) status()
     }

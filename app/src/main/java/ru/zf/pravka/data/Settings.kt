@@ -86,6 +86,7 @@ class Settings(private val context: Context) {
         private val KEY_NIGHT_REVIEW_HOUR = intPreferencesKey("night_review_hour")
         private val KEY_PROMPT_TUNE = booleanPreferencesKey("prompt_tune_enabled")
         private val KEY_NIGHT_BUDGET = intPreferencesKey("night_budget_usd")
+        private val KEY_REVIEWS_SEEN_AT = longPreferencesKey("reviews_seen_at")
         private val KEY_MIGRATED_OPUS = booleanPreferencesKey("migrated_pravka_opus_1")
         private val KEY_MIGRATED_OPUS_55 = booleanPreferencesKey("migrated_opus_5_5")
         private val KEY_MIGRATED_PRAVKA_SONNET_55 = booleanPreferencesKey("migrated_pravka_sonnet_5_5")
@@ -526,6 +527,16 @@ class Settings(private val context: Context) {
     // приложению выше потолка, автоматы сами не стартуют, а идущая чистка
     // тени или измерение промпта останавливаются до следующих суток; ручной
     // запуск кнопкой потолок не смотрит. Заводское — $4.
+    /**
+     * Когда владелец последний раз открывал «Разборы» — конец самого свежего
+     * прогона на тот момент (12.10.2026). Новее и значимее — красная точка на
+     * «С» в «Сегодня» и на «Разборах» (`core/ReviewDigest.hasNews`).
+     */
+    val reviewsSeenAtFlow = context.dataStore.data.map { it[KEY_REVIEWS_SEEN_AT] ?: 0L }
+    suspend fun setReviewsSeenAt(value: Long) {
+        context.dataStore.edit { if ((it[KEY_REVIEWS_SEEN_AT] ?: 0L) < value) it[KEY_REVIEWS_SEEN_AT] = value }
+    }
+
     val nightBudgetUsdFlow = context.dataStore.data.map { it[KEY_NIGHT_BUDGET] ?: 4 }
     suspend fun setNightBudgetUsd(value: Int) {
         context.dataStore.edit { it[KEY_NIGHT_BUDGET] = value.coerceIn(1, 50) }

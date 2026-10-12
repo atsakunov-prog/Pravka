@@ -208,6 +208,13 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
     val profile by app.profileStore.flow.collectAsState()
     val health by app.sportStore.healthFlow.collectAsState()
     val stateOn by app.settings.todayStateFlow.collectAsState(initial = true)
+    // Красная точка на «С» (12.10.2026; владелец: «если есть что-то новенькое,
+    // то в Сегодня наверху на С горит маленькая красная точка») — новый разбор,
+    // которого владелец ещё не видел; гаснет, когда открыл «Разборы».
+    val reviewRuns by app.nightReviewStore.runsFlow.collectAsState()
+    LaunchedEffect(Unit) { app.nightReviewStore.all() }
+    val reviewsSeenAt by app.settings.reviewsSeenAtFlow.collectAsState(initial = Long.MAX_VALUE)
+    val reviewsNews = ru.zf.pravka.core.ReviewDigest.hasNews(reviewRuns, reviewsSeenAt)
 
     // Календарь — раз в пять минут и при смене дня: чтение провайдера — не на главном потоке.
     val calendar by produceState(emptyList<ru.zf.pravka.core.CalEvent>(), day, todayCals, autoCals) {
@@ -312,9 +319,9 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
         val wide = twoPane()
         val head = TodayHead(state, onWeather = { weatherOpen = true })
         if (wide) {
-            TodayWide(model, weather, now, dayOffset, { dayOffset = it }, initial, nav, onItem, sayBar, head, entries)
+            TodayWide(model, weather, now, dayOffset, { dayOffset = it }, initial, nav, onItem, sayBar, head, entries, avatarDot = reviewsNews)
         } else {
-            TodayFolded(model, weather, now, dayOffset, { dayOffset = it }, initial, nav, onItem, sayBar, head)
+            TodayFolded(model, weather, now, dayOffset, { dayOffset = it }, initial, nav, onItem, sayBar, head, avatarDot = reviewsNews)
         }
     }
     val w = weather
@@ -388,6 +395,7 @@ private fun TodayFolded(
     act: ItemActions,
     sayBar: @Composable (Modifier) -> Unit,
     head: TodayHead,
+    avatarDot: Boolean = false,
 ) {
     val r = model.result
     val items = r.items
@@ -496,6 +504,7 @@ private fun TodayFolded(
                                 onStats = nav.stats,
                                 avatar = initial,
                                 onAvatar = nav.more,
+                                avatarDot = avatarDot,
                                 onWeekday = { showNav = !showNav },
                                 onWeekdayDouble = { showNav = false; forced = true },
                                 status = head.state?.let { st -> { DayStateLine(st, onClick = { nav.mode(Tab.SPORT) }) } },
@@ -634,6 +643,7 @@ private fun TodayWide(
     sayBar: @Composable (Modifier) -> Unit,
     head: TodayHead,
     entries: List<ru.zf.pravka.data.ZasechkaStore.Entry>,
+    avatarDot: Boolean = false,
 ) {
     val t = LocalPravkaType.current
     val f = model.facts
@@ -690,7 +700,7 @@ private fun TodayWide(
                 Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Хроника", style = t.titleL, color = Ink.TextStrong, modifier = Modifier.weight(1f))
                     HeaderIcon(Glyphs.Stats, "статистика", nav.stats)
-                    AvatarKey(initial, nav.more)
+                    AvatarKey(initial, nav.more, dot = avatarDot)
                 }
                 val list = rememberLazyListState(
                     initialFirstVisibleItemIndex = (r.items.indexOfFirst { it is DayItem.Entry && it.current } - 3).coerceAtLeast(0),

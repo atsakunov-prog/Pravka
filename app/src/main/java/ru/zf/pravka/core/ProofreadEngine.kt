@@ -94,11 +94,42 @@ class ProofreadEngine(
             return Outcome.Failed("Модель вернула испорченный ответ, текст не тронут.")
         }
 
+        // Потерянное отрицание (12.10.2026, core/NegationGuard.kt): «не» или «нет»
+        // пропало — смысл перевернулся. Один повтор с указанием, и берём его,
+        // только если отрицаний в нём стало больше; иначе — первый ответ. Только
+        // обычная чистка: переделка по чипу вправе менять фразу целиком.
+        var final = rawResult
+        var finalText = cleaned
+        val lost = if (directive.isBlank()) NegationGuard.lost(prepared.text, cleaned) else 0
+        if (lost > 0) {
+            val retry = claude.proofread(
+                prepared.text, mode, prepared.dictBlock, null,
+                directive = NegationGuard.retryDirective(prepared.text),
+                contextBefore = contextBefore,
+                strong = strong,
+                conversationContext = conversationContext,
+            ).getOrNull()
+            val retryText = retry?.let { ResponseCleaner.clean(it.text, prepared.text, lenient = false) }
+            if (retry != null && retryText != null && NegationGuard.lost(prepared.text, retryText) < lost) {
+                final = retry
+                finalText = retryText
+            }
+            // Деньги и время — за оба запроса, каким бы ни был итог.
+            if (retry != null) final = final.copy(
+                latencyMs = rawResult.latencyMs + retry.latencyMs,
+                inputTokens = rawResult.inputTokens + retry.inputTokens,
+                outputTokens = rawResult.outputTokens + retry.outputTokens,
+                costUsd = rawResult.costUsd + retry.costUsd,
+                cacheWriteTokens = rawResult.cacheWriteTokens + retry.cacheWriteTokens,
+                cacheReadTokens = rawResult.cacheReadTokens + retry.cacheReadTokens,
+            )
+        }
+
         // "changed" compares against the ORIGINAL input: a HARD replacement
         // alone must still count as a change and be written back.
-        val result = rawResult.copy(
-            text = cleaned,
-            changed = cleaned != input,
+        val result = final.copy(
+            text = finalText,
+            changed = finalText != input,
             appliedDictEntries = prepared.firedIds,
         )
         // Deliver the text FIRST - the user is waiting on it - then journal.
@@ -106,17 +137,17 @@ class ProofreadEngine(
         // adding disk latency at exactly the wrong moment.
         val outcome: Outcome = when {
             !result.changed -> Outcome.Unchanged(result)
-            target.write(cleaned) -> {
-                val (undoBefore, undoAfter) = target.undoPair(input, cleaned)
+            target.write(finalText) -> {
+                val (undoBefore, undoAfter) = target.undoPair(input, finalText)
                 UndoStack.push(before = undoBefore, after = undoAfter)
                 // Owner's request: every delivered result also lands on the
                 // clipboard - insurance against a flaky field write and a free
                 // way to paste the same text elsewhere.
-                clipboardFallback.write(cleaned)
+                clipboardFallback.write(finalText)
                 Outcome.Applied(result)
             }
             else -> {
-                clipboardFallback.write(cleaned)
+                clipboardFallback.write(finalText)
                 Outcome.CopiedToClipboard(result)
             }
         }
@@ -124,7 +155,7 @@ class ProofreadEngine(
         history.append(
             mode.name, result.providerId, result.modelId, result.latencyMs,
             result.inputTokens, result.outputTokens, result.costUsd,
-            result.changed, input, cleaned, null,
+            result.changed, input, finalText, null,
             cacheWriteTokens = result.cacheWriteTokens,
             cacheReadTokens = result.cacheReadTokens,
             // Тени второй модели нужно знать, что повторить (директиву прозы)

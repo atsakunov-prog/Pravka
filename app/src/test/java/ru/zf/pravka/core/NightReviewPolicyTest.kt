@@ -17,19 +17,58 @@ class NightReviewPolicyTest {
     @Test
     fun `дневной раз в сутки после часа запуска, в пятницу — только недельный`() {
         val fri = at(2026, 9, 18, 4)  // пятница
+        val prevFri = at(2026, 9, 11, 3)  // прошлый недельный
         // В пятницу дневного нет: недельный смотрит те же сутки в составе недели.
-        assertEquals(listOf("weekly"), NightReviewPolicy.dueKinds(fri, 3, 0L, 0L))
-        // До часа запуска — ничего.
-        assertEquals(emptyList<String>(), NightReviewPolicy.dueKinds(at(2026, 9, 18, 2), 3, 0L, 0L))
+        assertEquals(listOf("weekly"), NightReviewPolicy.dueKinds(fri, 3, 0L, prevFri))
+        // До часа запуска — ничего (прошлый недельный был неделю назад, вовремя).
+        assertEquals(emptyList<String>(), NightReviewPolicy.dueKinds(at(2026, 9, 18, 2), 3, 0L, prevFri))
         // Недельный сегодня уже был (в том числе вручную) — ничего.
         assertEquals(emptyList<String>(), NightReviewPolicy.dueKinds(fri, 3, 0L, at(2026, 9, 18, 3)))
         // Четверг — дневной, недельного нет.
-        assertEquals(listOf("daily"), NightReviewPolicy.dueKinds(at(2026, 9, 17, 5), 3, at(2026, 9, 16, 3), 0L))
+        assertEquals(listOf("daily"), NightReviewPolicy.dueKinds(at(2026, 9, 17, 5), 3, at(2026, 9, 16, 3), prevFri))
         // Сегодняшний дневной уже был (в том числе вручную) — ночью не повторяем.
-        assertEquals(emptyList<String>(), NightReviewPolicy.dueKinds(at(2026, 9, 17, 5), 3, at(2026, 9, 17, 3), 0L))
+        assertEquals(emptyList<String>(), NightReviewPolicy.dueKinds(at(2026, 9, 17, 5), 3, at(2026, 9, 17, 3), prevFri))
         // Тумблер суток выключен (заводское): в четверг ничего, в пятницу недельный как обычно.
-        assertEquals(emptyList<String>(), NightReviewPolicy.dueKinds(at(2026, 9, 17, 5), 3, 0L, 0L, dailyEnabled = false))
-        assertEquals(listOf("weekly"), NightReviewPolicy.dueKinds(fri, 3, 0L, 0L, dailyEnabled = false))
+        assertEquals(emptyList<String>(), NightReviewPolicy.dueKinds(at(2026, 9, 17, 5), 3, 0L, prevFri, dailyEnabled = false))
+        assertEquals(listOf("weekly"), NightReviewPolicy.dueKinds(fri, 3, 0L, prevFri, dailyEnabled = false))
+    }
+
+    @Test
+    fun `пропущенная пятница догоняется при первом тике, а не через неделю`() {
+        // 25.09 потолок трат не пустил недельный весь день — в субботу он идёт сам.
+        val lastWeekly = at(2026, 9, 18, 3)
+        assertEquals(listOf("weekly"), NightReviewPolicy.dueKinds(at(2026, 9, 26, 0), 3, 0L, lastWeekly, dailyEnabled = false))
+        assertEquals(listOf("weekly"), NightReviewPolicy.dueKinds(at(2026, 9, 28, 14), 3, 0L, lastWeekly, dailyEnabled = false))
+        // Догнали в субботу — до следующей пятницы тихо.
+        assertEquals(emptyList<String>(), NightReviewPolicy.dueKinds(at(2026, 9, 30, 14), 3, 0L, at(2026, 9, 26, 0), dailyEnabled = false))
+        // Свежая установка: недельного не было никогда — идёт сразу.
+        assertEquals(listOf("weekly"), NightReviewPolicy.dueKinds(at(2026, 9, 30, 14), 3, 0L, 0L, dailyEnabled = false))
+        // Последний срок — ровно пятница в час запуска.
+        assertEquals(at(2026, 9, 25, 3), NightReviewPolicy.lastMark(at(2026, 9, 28, 14), 3, Calendar.FRIDAY))
+        assertEquals(at(2026, 9, 18, 3), NightReviewPolicy.lastMark(at(2026, 9, 25, 2), 3, Calendar.FRIDAY))
+    }
+
+    @Test
+    fun `окно «разобрать сейчас» — от прошлого разбора, от суток до недели`() {
+        val now = at(2026, 10, 12, 22)
+        val day = 86_400_000L
+        assertEquals(now - 3 * day to now, NightReviewPolicy.windowNow(now, now - 3 * day))
+        assertEquals(now - day to now, NightReviewPolicy.windowNow(now, now - 2 * 3_600_000L))
+        assertEquals(now - 7 * day to now, NightReviewPolicy.windowNow(now, 0L))
+        assertTrue(NightReviewPolicy.weekLike("now", now - 3 * day, now))
+        assertFalse(NightReviewPolicy.weekLike("now", now - day, now))
+        assertTrue(NightReviewPolicy.weekLike("weekly", now - day, now))
+    }
+
+    @Test
+    fun `сеть и перегрузка не закрывают прогон, остальное — закрывает`() {
+        assertTrue(NightReviewPolicy.isTransient(java.net.UnknownHostException("Unable to resolve host \"api.anthropic.com\"")))
+        assertTrue(NightReviewPolicy.isTransient(RuntimeException("обёртка", java.net.SocketTimeoutException("timeout"))))
+        assertTrue(NightReviewPolicy.isTransient(java.io.IOException("close failed: EIO (I/O error)")))
+        assertTrue(NightReviewPolicy.isTransient(Exception("Anthropic ответил 529: Overloaded")))
+        assertTrue(NightReviewPolicy.isTransient(Exception("Anthropic ответил 429: rate limit")))
+        assertFalse(NightReviewPolicy.isTransient(Exception("Anthropic ответил 400: max_tokens too large")))
+        assertFalse(NightReviewPolicy.isTransient(IllegalStateException("батч не завершился за сутки")))
     }
 
     @Test
@@ -51,28 +90,25 @@ class NightReviewPolicyTest {
     }
 
     @Test
-    fun `вердикты и ответ владельца разбираются терпимо`() {
+    fun `вердикты разбираются терпимо`() {
         val v = NightReviewPolicy.parseVerdicts("""{"verdicts":[{"id":"dict-1","verdict":"Approved","why":"есть повтор"},{"id":"dict-2","verdict":"maybe"}]}""")
         assertEquals("approve" to "есть повтор", v["dict-1"])
         assertEquals("unsure", v["dict-2"]!!.first)
-        val plan = NightReviewPolicy.parseReply("""{"actions":[{"id":"dict-1","action":"revert"},{"id":"dict-2","action":"keep"},{"id":"dict-3","action":"apply"}],"answer":"Вернул губ."}""")
-        assertEquals(listOf("dict-1" to "revert", "dict-3" to "apply"), plan.actions)
-        assertEquals("Вернул губ.", plan.answer)
     }
 
     @Test
-    fun `раз в неделю в свой день недели, не раньше чем через шесть дней`() {
-        val cal = java.util.Calendar.getInstance()
-        // Ближайшая суббота, 04:00.
-        cal.set(java.util.Calendar.HOUR_OF_DAY, 4); cal.set(java.util.Calendar.MINUTE, 0)
-        while (cal.get(java.util.Calendar.DAY_OF_WEEK) != java.util.Calendar.SATURDAY) cal.add(java.util.Calendar.DAY_OF_MONTH, 1)
-        val sat = cal.timeInMillis
-        assertTrue(NightReviewPolicy.dueOnWeekday(sat, 3, 0L, java.util.Calendar.SATURDAY))
-        assertFalse(NightReviewPolicy.dueOnWeekday(sat, 5, 0L, java.util.Calendar.SATURDAY))
-        assertFalse(NightReviewPolicy.dueOnWeekday(sat + 86_400_000L, 3, 0L, java.util.Calendar.SATURDAY))
+    fun `раз в неделю в свой день недели, не раньше чем через шесть дней, с догоном`() {
+        val sat = at(2026, 10, 10, 4)  // суббота
+        val prev = at(2026, 10, 3, 3)  // прошлая правка
+        assertTrue(NightReviewPolicy.dueOnWeekday(sat, 3, prev, Calendar.SATURDAY))
+        // До часа запуска — ещё прошлая неделя, она уже отработана.
+        assertFalse(NightReviewPolicy.dueOnWeekday(sat, 5, at(2026, 10, 3, 5), Calendar.SATURDAY))
+        // Пропустили субботу — воскресенье догоняет.
+        assertTrue(NightReviewPolicy.dueOnWeekday(sat + 86_400_000L, 3, prev, Calendar.SATURDAY))
         // Запускали вручную в четверг — в субботу рано.
-        assertFalse(NightReviewPolicy.dueOnWeekday(sat, 3, sat - 2 * 86_400_000L, java.util.Calendar.SATURDAY))
-        assertTrue(NightReviewPolicy.dueOnWeekday(sat, 3, sat - 7 * 86_400_000L, java.util.Calendar.SATURDAY))
+        assertFalse(NightReviewPolicy.dueOnWeekday(sat, 3, sat - 2 * 86_400_000L, Calendar.SATURDAY))
+        // Сегодня уже была — ничего.
+        assertFalse(NightReviewPolicy.dueOnWeekday(sat + 3_600_000L, 3, sat, Calendar.SATURDAY))
     }
 
     @Test

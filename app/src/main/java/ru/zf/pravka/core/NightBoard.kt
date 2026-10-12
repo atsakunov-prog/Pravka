@@ -49,8 +49,18 @@ object NightBoard {
         run.isCompare -> "сравнение"
         run.isShadow -> "тень"
         run.kind == NightReviewPolicy.WEEKLY -> "неделя"
+        run.kind == NightReviewPolicy.NOW -> "сейчас"
         else -> "сутки"
     }
+
+    /**
+     * Прогон разбора, из которого ничего не вышло: упал первый проход. Раньше
+     * такой прогон закрывался «готово» с галочкой и «применено 0, со сбоем» —
+     * месяц (18.09–09.10) табло было зелёным, а недельный разбор не работал ни
+     * разу (владелец, 12.10: «везде было применено 0»).
+     */
+    fun failed(run: Run): Boolean =
+        run.stage == "failed" || (run.isReview && run.stage == "done" && run.error.isNotBlank() && run.changes.isEmpty())
 
     fun age(ms: Long): String {
         val min = (ms / 60_000L).coerceAtLeast(0)
@@ -80,6 +90,9 @@ object NightBoard {
         val tune = runs.filter { it.isTune }.maxByOrNull { it.startedAt }
         out += line("daily", "Разбор суток", daily, reviewOn, if (dailyOn) nextDaily(nowMs, hour) else "по кнопке «Сутки» (каждую ночь выключено)", nowMs)
         out += line("weekly", "Разбор недели", weekly, reviewOn, nextWeekday(nowMs, hour, Calendar.FRIDAY), nowMs)
+        runs.filter { it.isReview && it.kind == NightReviewPolicy.NOW }.maxByOrNull { it.startedAt }?.let {
+            out += line("now", "Разбор сейчас", it, true, "по кнопке «Разобрать сейчас»", nowMs)
+        }
         out += line("tune", "Правка промпта", tune, tuneOn, nextWeekday(nowMs, hour, Calendar.SATURDAY), nowMs)
         // Сравнение моделей автостарта не имеет — «следующий» всегда «по кнопке».
         val compare = runs.filter { it.isCompare }.maxByOrNull { it.startedAt }
@@ -104,7 +117,7 @@ object NightBoard {
                     nextText, run.id,
                 )
             }
-            run.stage == "failed" -> Line(key, title, "fail", "$at · не удался: ${run.error.ifBlank { "причина не записана" }}", nextText, run.id)
+            failed(run) -> Line(key, title, "fail", "$at · не удался: ${run.error.ifBlank { "причина не записана" }}", nextText, run.id)
             else -> Line(key, title, "ok", "$at · ${outcome(run)}", nextText, run.id)
         }
     }

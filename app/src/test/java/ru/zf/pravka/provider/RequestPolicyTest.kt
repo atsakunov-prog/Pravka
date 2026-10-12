@@ -68,10 +68,23 @@ class RequestPolicyTest {
         assertEquals(22_801, RequestPolicy.maxTokens(Settings.MODEL_OPUS, "xhigh", 10_000))
         assertEquals(24_384, RequestPolicy.maxTokens(Settings.MODEL_OPUS, "xhigh", 100_000))
         // В батче запас под мысли шире; Сонету без мыслей запаса нет и там.
-        assertEquals(32_000, RequestPolicy.batchThinkingHeadroom(Settings.MODEL_FABLE, "high"))
-        // Разборы на max — 64 тысячи.
-        assertEquals(64_000, RequestPolicy.batchThinkingHeadroom(Settings.MODEL_OPUS, "max"))
+        assertEquals(48_000, RequestPolicy.batchThinkingHeadroom(Settings.MODEL_FABLE, "high"))
+        assertEquals(32_000, RequestPolicy.batchThinkingHeadroom(Settings.MODEL_FABLE, "medium"))
+        // Разборы на max — до потолка модели: 64 тысяч не хватало (02.10, 09.10 —
+        // ровно 72 000 токенов выхода, ответа нет).
+        assertEquals(128_000, RequestPolicy.batchThinkingHeadroom(Settings.MODEL_OPUS, "max"))
         assertEquals(0, RequestPolicy.batchThinkingHeadroom(Settings.MODEL_SONNET, ""))
+        // Итоговый бюджет батча не выше потолка модели — иначе 400.
+        assertEquals(128_000, RequestPolicy.batchMaxTokens(Settings.MODEL_OPUS, "max", 16_000))
+        assertEquals(104_000, RequestPolicy.batchMaxTokens(Settings.MODEL_OPUS, "xhigh", 8000))
+    }
+
+    @Test
+    fun `обрезанный проход спускается max — xhigh — high и не ниже`() {
+        assertEquals("xhigh", RequestPolicy.lowerEffort("max"))
+        assertEquals("high", RequestPolicy.lowerEffort("xhigh"))
+        assertEquals(null, RequestPolicy.lowerEffort("high"))
+        assertEquals(null, RequestPolicy.lowerEffort(""))
     }
 
     @Test

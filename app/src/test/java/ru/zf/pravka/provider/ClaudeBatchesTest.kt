@@ -17,8 +17,10 @@ class ClaudeBatchesTest {
         assertEquals(Settings.MODEL_FABLE, p.getString("model"))
         assertFalse(p.has("thinking"))
         assertEquals("high", p.getJSONObject("output_config").getString("effort"))
-        // Батчу спешить некуда: запас под мысли Fable — 32 тысячи, а не дневные восемь.
-        assertEquals(8000 + 32_000, p.getInt("max_tokens"))
+        // Батчу спешить некуда: запас под мысли на high — 48 тысяч, а не дневные восемь.
+        assertEquals(8000 + 48_000, p.getInt("max_tokens"))
+        // На max — до потолка модели, не выше: 128K, иначе 400.
+        assertEquals(128_000, ClaudeBatches.params(Settings.MODEL_OPUS, "max", 16_000, "", "вопрос").getInt("max_tokens"))
         assertEquals("система", p.getString("system"))
         assertEquals("вопрос", p.getJSONArray("messages").getJSONObject(0).getString("content"))
     }
@@ -56,6 +58,8 @@ class ClaudeBatchesTest {
         val cut = ClaudeBatches.parseItem(JSONObject("""{"custom_id":"all","result":{"type":"succeeded","message":{"content":[{"type":"text","text":"{\"summary\": \"обр"}],"stop_reason":"max_tokens"}}}"""))
         assertFalse(cut.ok)
         assertTrue(cut.failure.contains("max_tokens"))
+        // По этому признаку разбор повторяет проход на ступень ниже усилия.
+        assertTrue(cut.truncated)
     }
 
     @Test
@@ -86,6 +90,11 @@ class ClaudeBatchesTest {
         val refused = ClaudeBatches.parseItem(JSONObject("""{"custom_id":"x","result":{"type":"succeeded","message":{"content":[],"stop_reason":"refusal"}}}"""))
         assertFalse(refused.ok)
         assertEquals("модель отказалась отвечать (refusal)", refused.failure)
+        // Категория отказа доходит до причины; JSON null — не строка «null».
+        val withCategory = ClaudeBatches.parseItem(JSONObject("""{"custom_id":"x","result":{"type":"succeeded","message":{"content":[],"stop_reason":"refusal","stop_details":{"type":"refusal","category":"cyber"}}}}"""))
+        assertEquals("модель отказалась отвечать (refusal, категория cyber)", withCategory.failure)
+        val nullCategory = ClaudeBatches.parseItem(JSONObject("""{"custom_id":"x","result":{"type":"succeeded","message":{"content":[],"stop_reason":"refusal","stop_details":{"type":"refusal","category":null}}}}"""))
+        assertEquals("модель отказалась отвечать (refusal)", nullCategory.failure)
 
         val errored = ClaudeBatches.parseItem(JSONObject("""{"custom_id":"y","result":{"type":"errored","error":{"type":"invalid_request","message":"bad"}}}"""))
         assertFalse(errored.ok)

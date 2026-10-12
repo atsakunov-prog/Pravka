@@ -45,6 +45,7 @@ import ru.zf.pravka.core.ComparePolicy
 import ru.zf.pravka.core.NightBoard
 import ru.zf.pravka.core.NightReviewPolicy
 import ru.zf.pravka.core.PromptTunePolicy
+import ru.zf.pravka.core.ReviewDigest
 import ru.zf.pravka.core.ShadowPolicy
 import ru.zf.pravka.data.NightReviewStore
 import ru.zf.pravka.data.PromptVersions
@@ -58,7 +59,6 @@ import ru.zf.pravka.ui.InfoButton
 import ru.zf.pravka.ui.PaperButton
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperChip
-import ru.zf.pravka.ui.PaperField
 import ru.zf.pravka.ui.PaperTextButton
 import ru.zf.pravka.ui.PaperToggle
 import ru.zf.pravka.ui.ScreenPad
@@ -78,6 +78,14 @@ import ru.zf.pravka.ui.fadingScroll
 // Второе издание (24.09.2026): тумблеры — строками с «i» (длинные пояснения
 // под каждым тумблером ушли за неё), степперы — значками «−/+», чипы и
 // кнопки — из набора; главная кнопка — одна на плашку.
+//
+// Третье издание (12.10.2026). Владелец: «надо сделать вкладку Разборы какой-то
+// понятной, наверху должно быть executive summary»; «всё должно идти
+// автоматом, я там не нужен»; «наверху прямо кнопку разобрать сейчас». Сверху —
+// сводка словами (core/ReviewDigest.kt) с кнопкой «Разобрать сейчас», под ней
+// последний удачный разбор (применено · не применено · идеи — решать нечего,
+// только вернуть применённое), промпт, «что работает», настройки, сравнение,
+// история. Открыл вкладку — красная точка на «С» в «Сегодня» гаснет.
 
 private val dayTime = SimpleDateFormat("EEE dd.MM HH:mm", Locale("ru"))
 
@@ -88,13 +96,20 @@ private fun kindLabel(run: NightReviewStore.Run): String = NightBoard.kindLabel(
 internal fun ReviewsTab(app: PravkaApp) {
     val runs by app.nightReviewStore.runsFlow.collectAsState()
     LaunchedEffect(Unit) { app.nightReviewStore.all() }
+    // Открыл вкладку — видел всё, что уже закончилось: красная точка гаснет.
+    // Закончится новое, пока вкладка открыта, — тоже видел.
+    val seen = ReviewDigest.seenMark(runs)
+    LaunchedEffect(seen) { if (seen > 0L) app.settings.setReviewsSeenAt(seen) }
     var openHistory by remember { mutableStateOf(setOf<Long>()) }
 
-    val daily = runs.filter { it.isReview && it.kind == NightReviewPolicy.DAILY }.maxByOrNull { it.startedAt }
-    val weekly = runs.filter { it.isReview && it.kind == NightReviewPolicy.WEEKLY }.maxByOrNull { it.startedAt }
+    val reviews = runs.filter { it.isReview }
+    // Под сводкой — последний удачный разбор (из него и «что выучено»); если
+    // удачных не было — последний вообще, чтобы сбой был виден с причиной.
+    val main = reviews.filter { it.stage == "done" && !NightBoard.failed(it) }.maxByOrNull { it.startedAt }
+        ?: reviews.maxByOrNull { it.startedAt }
     val tune = runs.filter { it.isTune }.maxByOrNull { it.startedAt }
     val compare = runs.filter { it.isCompare }.maxByOrNull { it.startedAt }
-    val shown = setOfNotNull(daily?.id, weekly?.id, tune?.id, compare?.id)
+    val shown = setOfNotNull(main?.id, tune?.id, compare?.id)
     val history = runs.filter { it.id !in shown }.sortedByDescending { it.startedAt }
 
     Column(
@@ -104,13 +119,11 @@ internal fun ReviewsTab(app: PravkaApp) {
             .padding(ScreenPad.Padding),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
+        SummaryCard(app, runs)
+        if (main != null) ReviewCard(app, "Последний разбор · ${kindLabel(main)}", main)
+        TuneCard(app, tune)
         BoardCard(app, runs)
         ControlsCard(app, runs)
-        if (daily != null) ReviewCard(app, "День", daily)
-        else SectionCard(label = "День") { HintText("Разбора ещё не было: ночью в назначенный час или кнопкой «Сутки».") }
-        if (weekly != null) ReviewCard(app, "Неделя", weekly)
-        else SectionCard(label = "Неделя") { HintText("Недельный разбор идёт в ночь на пятницу; вручную — «Неделю».") }
-        TuneCard(app, tune)
         CompareCard(app, compare)
         if (history.isNotEmpty()) {
             SectionCard(label = "История") {
@@ -124,6 +137,7 @@ internal fun ReviewsTab(app: PravkaApp) {
                         Text(
                             "${dayTime.format(Date(run.startedAt))} · ${kindLabel(run)} · ${statusLine(run)}",
                             style = MaterialTheme.typography.bodySmall,
+                            color = if (NightBoard.failed(run)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.weight(1f),
                         )
                         GlyphButton(
@@ -141,9 +155,98 @@ internal fun ReviewsTab(app: PravkaApp) {
                     run.isShadow -> ShadowCard(run)
                     run.isTune -> TuneCard(app, run)
                     run.isCompare -> CompareHistoryCard(app, run)
-                    else -> ReviewCard(app, if (run.kind == NightReviewPolicy.WEEKLY) "Неделя" else "День", run)
+                    else -> ReviewCard(app, kindLabel(run).replaceFirstChar { it.uppercase() }, run)
                 }
             }
+        }
+    }
+}
+
+/**
+ * Сводка — первой плашкой (12.10.2026): работает ли, что Правка сама выучила,
+ * что заметила, что с промптом, когда дальше и сколько стоит. Текст считает
+ * `ReviewDigest`; здесь только раскладка и главная кнопка «Разобрать сейчас»
+ * — батчем, окно от конца прошлого разбора до сейчас.
+ */
+@Composable
+private fun SummaryCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
+    val context = LocalContext.current
+    val settings = app.settings
+    val versions by app.promptVersions.flow.collectAsState()
+    LaunchedEffect(Unit) { app.promptVersions.all() }
+    val reviewOn by settings.nightReviewEnabledFlow.collectAsState(initial = true)
+    val tuneOn by settings.promptTuneEnabledFlow.collectAsState(initial = true)
+    val hour by settings.nightReviewHourFlow.collectAsState(initial = 3)
+    var busy by remember { mutableStateOf(false) }
+    var more by remember { mutableStateOf(false) }
+    val reviewRunning = runs.any { it.active && it.isReview }
+    val d = ReviewDigest.build(
+        runs, versions.firstOrNull { it.status == "active" }, reviewOn, tuneOn, hour,
+        app.lastNightTickMs, System.currentTimeMillis(),
+    )
+    val c = MaterialTheme.colorScheme
+    PaperCard(label = "Сводка") {
+        Text(
+            d.status,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = if (d.bad) c.error else c.onSurface,
+        )
+        if (d.learned.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(d.learned, style = MaterialTheme.typography.bodyMedium)
+        }
+        if (d.summary.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                d.summary,
+                style = MaterialTheme.typography.bodyMedium,
+                color = c.onSurfaceVariant,
+                maxLines = if (more) Int.MAX_VALUE else 5,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.clickable { more = !more },
+            )
+        }
+        if (d.ideas.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text("Заметил за моделью", style = MaterialTheme.typography.labelMedium, color = c.primary)
+            for (idea in d.ideas) {
+                Text(
+                    "· $idea",
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = if (more) Int.MAX_VALUE else 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp).clickable { more = !more },
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(d.prompt, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
+        Spacer(Modifier.height(4.dp))
+        Text("${d.next} ${d.spent}", style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.weight(1f))
+            PaperButton(
+                if (reviewRunning) "Разбор идёт…" else "Разобрать сейчас",
+                icon = Glyphs.Play,
+                primary = true,
+                enabled = !busy && !reviewRunning,
+                onClick = {
+                    busy = true
+                    app.appScope.launch {
+                        app.nightReview.start(NightReviewPolicy.NOW, manual = true)
+                            .onSuccess {
+                                Feedback.toast(
+                                    context,
+                                    if (it.active) "Отправлено батчем — результат обычно в течение часа, на «С» в «Сегодня» загорится точка" else it.summary,
+                                )
+                            }
+                            .onFailure { Feedback.toast(context, "Не запустился: ${it.message}") }
+                        busy = false
+                    }
+                },
+            )
         }
     }
 }
@@ -180,16 +283,15 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
     val tuneOn by settings.promptTuneEnabledFlow.collectAsState(initial = true)
     val hour by settings.nightReviewHourFlow.collectAsState(initial = 3)
     var busy by remember { mutableStateOf(false) }
-    val reviewRunning = runs.any { it.active && it.isReview }
     val tuneRunning = runs.any { it.active && it.isTune }
 
-    SectionCard(label = "Ночью") {
+    SectionCard(label = "Настройки разбора") {
         PaperToggle(
             title = "Разбор журналов батчем",
             hint = "разбор и проверка моделью, согласование — в коде",
             checked = enabled,
             onCheckedChange = { on -> scope.launch { settings.setNightReviewEnabled(on) } },
-            info = "Высоковероятное применяется само (кроме отклонённого проверкой и придержанного согласованием), низковероятное отбрасывается. Промпт не трогает. Недельный — в ночь на пятницу, всегда. Модель и усилие — в настройках, группа «Модели».",
+            info = "Всё само, решать ничего не нужно: одобренное проверкой ложится в словарь, остальное — «не применено» с причиной. Промпт не трогает. Недельный — в ночь на пятницу; пропущенный (потолок трат, выключенный телефон) догоняется при первой возможности. Обрезанный по длине проход повторяется на ступень ниже усилия. Модель и усилие — в настройках, группа «Модели».",
         )
         val dailyOn by settings.nightDailyEnabledFlow.collectAsState(initial = false)
         PaperToggle(
@@ -197,14 +299,14 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
             checked = dailyOn,
             enabled = enabled,
             onCheckedChange = { on -> scope.launch { settings.setNightDailyEnabled(on) } },
-            info = "Выключено с завода: ослышка становится словарной, когда повторяется, а за сутки она редко повторится — шесть ночей по $0,6–0,7 давали ту же картину, что одна недельная. Кнопка «Сутки» ниже работает и так.",
+            info = "Выключено с завода: ослышка становится словарной, когда повторяется, а за сутки она редко повторится — шесть ночей по $0,6–0,7 давали ту же картину, что одна недельная. «Разобрать сейчас» в сводке работает и так.",
         )
         PaperToggle(
             title = "Правка промпта раз в неделю",
             hint = "Опус 5.5 по идеям недели, с измерением",
             checked = tuneOn,
             onCheckedChange = { on -> scope.launch { settings.setPromptTuneEnabled(on) } },
-            info = "В ночь на субботу. Новый промпт перечищает диктовки недели, слепой судья сравнивает с прежним; принимается только заметный перевес; через неделю откат, если правок руками стало больше.",
+            info = "В ночь на субботу, после недельного разбора (ждёт его идей до двух суток). Новый промпт перечищает диктовки недели, слепой судья сравнивает с прежним; принимается только заметный перевес; через неделю откат, если правок руками стало больше.",
         )
         Spacer(Modifier.height(4.dp))
         val budget by settings.nightBudgetUsdFlow.collectAsState(initial = 4)
@@ -221,23 +323,11 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
             onPlus = { scope.launch { settings.setNightReviewHour((hour + 1) % 24) } },
         )
         Spacer(Modifier.height(6.dp))
-        // Главная — «Сутки», справа под пальцем; «Неделю» и «Промпт» — контуром.
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-        ) {
-            fun launchReview(kind: String) {
-                busy = true
-                scope.launch {
-                    app.nightReview.start(kind, manual = true)
-                        .onSuccess { Feedback.toast(context, if (it.active) "Отправлено батчем, результат обычно в течение часа" else it.summary) }
-                        .onFailure { Feedback.toast(context, "Не запустился: ${it.message}") }
-                    busy = false
-                }
-            }
-            PaperButton("Неделю", enabled = !busy && !reviewRunning, onClick = { launchReview(NightReviewPolicy.WEEKLY) })
+        // Разбор сейчас — главной кнопкой в сводке; здесь — только правка промпта вне очереди.
+        Row {
+            Spacer(Modifier.weight(1f))
             PaperButton(
-                "Промпт",
+                "Правка промпта сейчас",
                 enabled = !busy && !tuneRunning,
                 onClick = {
                     busy = true
@@ -248,12 +338,6 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
                         busy = false
                     }
                 },
-            )
-            PaperButton(
-                "Сутки",
-                primary = true,
-                enabled = !busy && !reviewRunning,
-                onClick = { launchReview(NightReviewPolicy.DAILY) },
             )
         }
         // Ревизия батчей у Anthropic по кнопке: то же, что делает старт приложения.
@@ -279,17 +363,20 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
 
 private fun statusLine(run: NightReviewStore.Run): String {
     if (run.active) return "идёт ${stageLabel(run.stage)}"
-    if (run.stage == "failed") return "не удался"
+    if (NightBoard.failed(run)) return "не удался"
     val money = if (run.costUsd > 0) " · $" + "%.2f".format(Locale.US, run.costUsd) else ""
     if (run.isShadow || run.isTune || run.isCompare) return "готово$money"
     val parts = ArrayList<String>()
     parts += "применено ${run.applied()}"
-    val waiting = run.changes.count { it.status == "proposed" || it.status == "reverted" }
-    if (waiting > 0) parts += "предложено $waiting"
+    val skipped = run.changes.count { !it.isNote && it.status in NOT_APPLIED }
+    if (skipped > 0) parts += "не применено $skipped"
     val ideas = run.changes.count { it.kind == "note" }
     if (ideas > 0) parts += "идей $ideas"
     return parts.joinToString(" · ") + money
 }
+
+/** Что разбор не применил — с причиной; «предложено» и «возвращено» — у прогонов до 12.10.2026. */
+private val NOT_APPLIED = setOf("skipped", "rejected", "proposed", "reverted", "failed")
 
 /** Сводка без первой строки-заголовка («Применено N…»): её карточка считает сама и показывает живьём. */
 private fun summaryBody(summary: String): String =
@@ -338,21 +425,22 @@ private fun LogButton(onClick: () -> Unit) {
 @Composable
 private fun ReviewCard(app: PravkaApp, title: String, run: NightReviewStore.Run) {
     val context = LocalContext.current
-    var replyText by remember(run.id) { mutableStateOf("") }
-    var sending by remember { mutableStateOf(false) }
     var showSummary by remember(run.id) { mutableStateOf(false) }
     val applied = run.changes.filter { it.status == "applied" }
-    // Возвращённое — снова к решению: принять ещё раз или отклонить (17.09: «возвращено — это что?»).
-    val proposed = run.changes.filter { it.status == "proposed" || it.status == "reverted" }
+    // Решать нечего (12.10.2026: «я там не нужен»): не применённое — с причиной,
+    // у старых прогонов сюда же ложатся их «предложено».
+    val skipped = run.changes.filter { !it.isNote && it.status in NOT_APPLIED }
     val ideas = run.changes.filter { it.kind == "note" }
-    var tab by remember(run.id, proposed.isNotEmpty()) {
-        mutableStateOf(if (proposed.isNotEmpty()) "proposed" else if (applied.isNotEmpty()) "applied" else "ideas")
+    val dropped = run.changes.count { it.status == "dropped" }
+    var tab by remember(run.id) {
+        mutableStateOf(if (applied.isNotEmpty()) "applied" else if (ideas.isNotEmpty()) "ideas" else "skipped")
     }
     SectionCard(label = "$title · ${dayTime.format(Date(run.startedAt))}${if (run.manual) " · вручную" else ""}") {
         Text(
             if (run.active) "идёт ${stageLabel(run.stage)}" + (if (run.progress.isNotBlank()) " · ${run.progress}" else "")
-            else if (run.stage == "failed") "не удался"
-            else "готово" + (if (run.costUsd > 0) " · $" + "%.2f".format(Locale.US, run.costUsd) else ""),
+            else if (NightBoard.failed(run)) "не удался"
+            else "готово" + (if (run.costUsd > 0) " · $" + "%.2f".format(Locale.US, run.costUsd) else "") +
+                (if (dropped > 0) " · отброшено низких $dropped" else ""),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -360,37 +448,18 @@ private fun ReviewCard(app: PravkaApp, title: String, run: NightReviewStore.Run)
             // Причина целиком (правило 6), но одной строкой на сбой — не простынёй.
             Text(run.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
-        Spacer(Modifier.height(8.dp))
-        ChipRow {
-            PaperChip("Применено ${applied.size}", selected = tab == "applied", onClick = { tab = "applied" })
-            PaperChip("Предложено ${proposed.size}", selected = tab == "proposed", onClick = { tab = "proposed" })
-            PaperChip("Идеи ${ideas.size}", selected = tab == "ideas", onClick = { tab = "ideas" })
-        }
-        Spacer(Modifier.height(4.dp))
-        when (tab) {
-            "applied" -> {
-                if (applied.isEmpty()) HintText("Само ничего не применилось.")
-                else GroupedRows(app, run, applied, proposedTab = false)
+        if (run.changes.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            ChipRow {
+                PaperChip("Применено ${applied.size}", selected = tab == "applied", onClick = { tab = "applied" })
+                PaperChip("Не применено ${skipped.size}", selected = tab == "skipped", onClick = { tab = "skipped" })
+                PaperChip("Идеи ${ideas.size}", selected = tab == "ideas", onClick = { tab = "ideas" })
             }
-            "proposed" -> {
-                if (proposed.isEmpty()) HintText("Решать нечего.")
-                else {
-                    if (!run.active) Row(verticalAlignment = Alignment.CenterVertically) {
-                        Spacer(Modifier.weight(1f))
-                        PaperTextButton("Принять все", icon = Glyphs.Check, onClick = {
-                            app.appScope.launch {
-                                app.nightReview.applyAll(run.id)
-                                    .onSuccess { Feedback.toast(context, "Принято: $it") }
-                                    .onFailure { Feedback.toast(context, "Не получилось: ${it.message}") }
-                            }
-                        })
-                    }
-                    GroupedRows(app, run, proposed, proposedTab = true)
-                }
-            }
-            else -> {
-                if (ideas.isEmpty()) HintText("Заметок про модель и распознаватель нет.")
-                else for (c in ideas) NoteRow(c)
+            Spacer(Modifier.height(4.dp))
+            when (tab) {
+                "applied" -> if (applied.isEmpty()) HintText("Само ничего не применилось.") else GroupedRows(app, run, applied)
+                "skipped" -> if (skipped.isEmpty()) HintText("Всё найденное легло в словарь.") else GroupedRows(app, run, skipped)
+                else -> if (ideas.isEmpty()) HintText("Заметок про модель и распознаватель нет.") else for (c in ideas) NoteRow(c)
             }
         }
         FlowRow {
@@ -414,41 +483,11 @@ private fun ReviewCard(app: PravkaApp, title: String, run: NightReviewStore.Run)
                 )
             }
         }
-        if (run.stage == "done" && (applied.isNotEmpty() || proposed.isNotEmpty())) {
-            Spacer(Modifier.height(6.dp))
-            PaperField(
-                value = replyText,
-                onValueChange = { replyText = it },
-                label = "Ответить по-человечески: что вернуть, что применить",
-                singleLine = false,
-                minLines = 2,
-            )
-            Spacer(Modifier.height(6.dp))
-            Row {
-                Spacer(Modifier.weight(1f))
-                PaperButton(
-                    if (sending) "Думаю…" else "Отправить",
-                    icon = Glyphs.Send,
-                    primary = true,
-                    enabled = replyText.isNotBlank() && !sending,
-                    onClick = {
-                        sending = true
-                        val text = replyText
-                        app.appScope.launch {
-                            app.nightReview.reply(run.id, text)
-                                .onSuccess { Feedback.toast(context, it); replyText = "" }
-                                .onFailure { Feedback.toast(context, "Не получилось: ${it.message}") }
-                            sending = false
-                        }
-                    },
-                )
-            }
-        }
     }
 }
 
 @Composable
-private fun GroupedRows(app: PravkaApp, run: NightReviewStore.Run, items: List<NightReviewStore.Change>, proposedTab: Boolean) {
+private fun GroupedRows(app: PravkaApp, run: NightReviewStore.Run, items: List<NightReviewStore.Change>) {
     val byGroup = items.groupBy { groupOf(it) }
     for (g in groupOrder + (byGroup.keys - groupOrder.toSet())) {
         val list = byGroup[g] ?: continue
@@ -458,24 +497,19 @@ private fun GroupedRows(app: PravkaApp, run: NightReviewStore.Run, items: List<N
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 6.dp),
         )
-        for (c in list) ChangeRow(app, run, c, proposedTab)
+        for (c in list) ChangeRow(app, run, c)
     }
 }
 
 /**
- * Строка изменения: слева действия (в «Предложено» — галка и крестик, в
- * «Применено» — крестик), справа слово и причина в две строки, тап раскрывает.
+ * Строка изменения: у применённого слева крестик «вернуть» (единственное
+ * действие, которое осталось владельцу), справа слово и причина в две строки,
+ * тап раскрывает. У не применённого вместо причины находки — почему не легло.
  */
 @Composable
-private fun ChangeRow(app: PravkaApp, run: NightReviewStore.Run, c: NightReviewStore.Change, proposedTab: Boolean) {
+private fun ChangeRow(app: PravkaApp, run: NightReviewStore.Run, c: NightReviewStore.Change) {
     val context = LocalContext.current
     var open by remember(c.id) { mutableStateOf(false) }
-    fun act(action: String) {
-        app.appScope.launch {
-            app.nightReview.act(run.id, c.id, action)
-                .onFailure { Feedback.toast(context, "Не получилось: ${it.message}") }
-        }
-    }
     // Вид уже назван подзаголовком группы — в строке само слово.
     val title = when (c.kind) {
         "dict_add", "dict_disable" -> c.from + if (c.to.isNotBlank()) " → ${c.to}" else ""
@@ -483,15 +517,14 @@ private fun ChangeRow(app: PravkaApp, run: NightReviewStore.Run, c: NightReviewS
         else -> c.title()
     }
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.Top) {
-        // Пока прогон идёт, кнопок нет: следующий проход перепишет список
-        // изменений своей копией и решение владельца потерялось бы.
-        if (!run.active) {
-            if (proposedTab) {
-                GlyphButton(Glyphs.Check, "Принять", onClick = { act("apply") }, tint = MaterialTheme.colorScheme.primary, size = 36.dp)
-                GlyphButton(Glyphs.Close, "Отклонить", onClick = { act("reject") }, tint = MaterialTheme.colorScheme.error, size = 36.dp)
-            } else {
-                GlyphButton(Glyphs.Close, "Вернуть", onClick = { act("revert") }, tint = MaterialTheme.colorScheme.error, size = 36.dp)
-            }
+        // Пока прогон идёт, кнопки нет: следующий проход перепишет список своей копией.
+        if (!run.active && c.status == "applied") {
+            GlyphButton(Glyphs.Close, "Вернуть", onClick = {
+                app.appScope.launch {
+                    app.nightReview.act(run.id, c.id, "revert")
+                        .onFailure { Feedback.toast(context, "Не получилось: ${it.message}") }
+                }
+            }, tint = MaterialTheme.colorScheme.error, size = 36.dp)
             Spacer(Modifier.width(4.dp))
         }
         Column(Modifier.weight(1f).clickable { open = !open }) {
@@ -500,13 +533,17 @@ private fun ChangeRow(app: PravkaApp, run: NightReviewStore.Run, c: NightReviewS
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = if (c.status == "applied") FontWeight.SemiBold else FontWeight.Normal,
             )
+            val reason = when (c.status) {
+                "applied" -> ""
+                "reverted" -> "ты вернул"
+                "rejected" -> "проверка отклонила" + if (c.verdictWhy.isNotBlank()) ": ${c.verdictWhy}" else ""
+                "proposed" -> "старый прогон: ждало решения"
+                else -> c.statusNote
+            }
             val details = listOf(
-                if (c.status == "reverted") "ты вернул — принять снова или отклонить" else "",
+                reason,
                 c.why,
-                if (c.verdict == "hold") "согласование придержало: ${c.verdictWhy}" else "",
-                // Вердикта нет, а причина есть — проверка не ответила: это видно сразу, не по тапу.
-                if (c.verdict.isBlank() && c.verdictWhy.isNotBlank()) c.verdictWhy else "",
-                if (open && c.verdict.isNotBlank() && c.verdict != "hold") "проверка: ${c.verdict}${if (c.verdictWhy.isNotBlank()) " — ${c.verdictWhy}" else ""}" else "",
+                if (open && c.verdict.isNotBlank() && c.verdict != "hold" && c.status != "rejected") "проверка: ${c.verdict}${if (c.verdictWhy.isNotBlank()) " — ${c.verdictWhy}" else ""}" else "",
             ).filter { it.isNotBlank() }.joinToString(" · ")
             if (details.isNotBlank()) {
                 Text(
@@ -784,7 +821,7 @@ private fun TuneCard(app: PravkaApp, run: NightReviewStore.Run?) {
             )
         }
         if (run == null) {
-            HintText("Правки промпта ещё не было: в ночь на субботу или кнопкой «Промпт». Без идей за неделю промпт не трогается.")
+            HintText("Правки промпта ещё не было: идёт сама в ночь на субботу, после недельного разбора.")
             return@SectionCard
         }
         Spacer(Modifier.height(6.dp))
