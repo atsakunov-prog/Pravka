@@ -397,12 +397,15 @@ internal fun MoneyTab(
                                 }
                                 MoneyTodayCardV2(journal, if (wide) 5 else 3) { editing = it }
                             }
-                            if (left) MoneyDaysCardV2(daily, period, today, pace)
+                            if (left) {
+                                MoneyDaysCardV2(daily, period, today, pace)
+                                // Разделы веба — под «По дням»: на развороте левая колонка короче, на сложенном — до регулярных.
+                                if (onWeb != null) MoneyWebCardV2(dengiWeb, onWeb)
+                            }
                             if (right) {
                                 MoneyRecurringCardV2(recurring)
                                 MoneyAskCardV2(ask)
                                 PatternsCard(app, state.insight, state.insightTs)
-                                if (onWeb != null) MoneyWebCardV2(dengiWeb, onWeb)
                             }
                         }
                         MONEY_SORT -> {

@@ -553,9 +553,13 @@ class ScreenShots {
                 RuntimeEnvironment.setQualifiers(q)
                 val c = launch(MainActivity.TAB_MONEY)
                 shot(c, "p5-money-$size-$theme")
-                if (size == "tall" && theme == "light" && tap(c, "Доля партнёра")) shot(c, "p5-money-web-$theme")
                 close(c)
             }
+            // Раздел, открытый с плашки, — страница сервиса внутри приложения (под Robolectric — шапка и заглушка).
+            RuntimeEnvironment.setQualifiers(OUTER)
+            val w = launch(MainActivity.TAB_MONEY)
+            if (tap(w, "Доля партнёра")) shot(w, "p5-money-web-$theme")
+            close(w)
         }
         val dayStart = java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
         val dinner = app.foodStore.mealsFlow.value.filter { it.ts >= dayStart + 17 * 3_600_000L }
@@ -853,6 +857,10 @@ class ScreenShots {
         if (prefix == "outer") {
             RuntimeEnvironment.setQualifiers(OUTER_TALL)
             c = launch(null); shot(c, "$prefix-t5-$theme-3-tall"); close(c)
+            // Доводка 5.0: раскрытый дайджест целиком — с «Раньше» под кнопками.
+            c = launch(null)
+            if (tap(c, "раскрыть")) shot(c, "$prefix-t5-$theme-5-digest-tall")
+            close(c)
             RuntimeEnvironment.setQualifiers(OUTER)
         }
     }
