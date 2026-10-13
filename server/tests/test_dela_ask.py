@@ -252,7 +252,7 @@ def test_ask_api(dela, monkeypatch):
     monkeypatch.setattr(ask, "client", lambda key, proxy: object())
     seen = {}
 
-    def fake(cl, s, u, model, effort):
+    def fake(cl, s, u, model, effort, **_):
         seen["model"], seen["effort"] = model, effort
         return {"route": "edit", "reply": "Готово", "create": [], "changes": [item(t["num"], estimate_min=15)],
                 "_usage": {"model": model, "input": 500, "output": 100, "cache_write": 0, "cache_read": 0}}
@@ -265,16 +265,16 @@ def test_ask_api(dela, monkeypatch):
         assert client.post("/api/ask", json={"text": "x"}).status_code == 401
         done = _wait(client, h, client.post("/api/ask", headers=h, json={"text": "15 минут", "scope": {"focus": t["id"]}}).json()["job"])
         assert done["status"] == "done" and done["reply"] == "Готово" and done["changed"][0]["after"] == {"estimate_min": 15}
-        assert (seen["model"], seen["effort"]) == ("claude-sonnet-5-5", "low")  # по умолчанию
-        # «Настройки»: Opus и «вдумчиво» — у этого человека; траты видит только владелец.
-        store.apply_ops(dela, "sasha", [{"op": "user.settings", "settings": {"claude_model": "opus", "claude_effort": "medium"}}], "web")
+        # Модель и глубина — дорога «talk» (13.10.2026): одна на всех, «Настройки» человека её не меняют.
+        assert (seen["model"], seen["effort"]) == ("claude-opus-5-5", "low")
+        store.apply_ops(dela, "sasha", [{"op": "user.settings", "settings": {"claude_model": "sonnet", "claude_effort": "medium"}}], "web")
         _wait(client, h, client.post("/api/ask", headers=h, json={"text": "15 минут", "scope": {"focus": t["id"]}}).json()["job"])
-        assert (seen["model"], seen["effort"]) == ("claude-opus-5-5", "medium")
+        assert (seen["model"], seen["effort"]) == ("claude-opus-5-5", "low")
         mine = client.get("/api/settings", headers=h).json()
-        assert mine["settings"]["claude_model"] == "opus" and mine["cost"]["by"]["ask"] > 0
+        assert mine["routes"]["talk"] == {"model": "claude-opus-5-5", "effort": "low"} and mine["cost"]["by"]["ask"] > 0
         assert "claude-opus-5-5" in mine["cost"]["models"] and mine["cost"]["today"] == mine["cost"]["total"]
         theirs = client.get("/api/settings", headers=nat).json()
-        assert "cost" not in theirs and theirs["default"]["claude_model"] == "sonnet"
+        assert "cost" not in theirs and "routes" in theirs
 
 
 def test_schema_is_strict():
@@ -288,3 +288,53 @@ def test_schema_is_strict():
             walk(node["items"])
 
     walk(ask.SCHEMA)
+
+
+def test_talk_screen_is_one_cached_head(dela):
+    """Разговор под строкой (13.10.2026): экран — голова сообщения, одна на разговор (вторая реплика читает её из
+    кэша); час, «Сейчас», разговор и команда — хвост. Ответ на вопрос — дела ссылками (refs)."""
+    a, b = mk(dela, "Сверка с банком"), mk(dela, "Позвонить юристу")
+    scope = {"title": "Сегодня", "task_ids": [a["id"], b["id"]], "talk_id": "t-1"}
+    one = ask.context(dela, "sasha", "что сегодня важнее всего?", scope)
+    assert one["message"] == one["screen"] + "\n\n" + one["tail"]
+    assert "#%d Сверка с банком" % a["num"] in one["screen"] and "КОМАНДА" not in one["screen"] and ", сейчас " not in one["screen"]
+    assert one["tail"].rstrip().endswith("КОМАНДА: что сегодня важнее всего?") and "В «Сейчас» сегодня" in one["tail"]
+    store.apply_ops(dela, "sasha", [{"op": "task.set", "id": a["id"], "set": {"title": "Сверка с банком до обеда"}}], "web")
+    two = ask.context(dela, "sasha", "а потом?", {**scope, "history": [{"said": "что важнее?", "reply": "Сверка", "done": ""}]})
+    assert two["screen"] == one["screen"] and "РАЗГОВОР" in two["tail"]  # тот же разговор — та же голова
+    fresh = ask.context(dela, "sasha", "а потом?", {**scope, "talk_id": "t-2"})
+    assert "Сверка с банком до обеда" in fresh["screen"]  # новый разговор — свежий экран
+
+    def fake(system, user_text):
+        return {"route": "edit", "reply": "Сначала сверка, потом юрист.", "changes": [], "create": [], "suggestions": [], "card": [],
+                "refs": [a["num"], 999999, b["num"], a["num"]], "_usage": None}
+
+    out = ask.run(dela, "sasha", "что сегодня важнее всего?", scope, "", None, ask_fn=fake)
+    assert [r["num"] for r in out["refs"]] == [a["num"], b["num"]] and not out["changed"]
+
+
+def test_ask_sends_screen_as_cached_block():
+    """Запрос: справочник и экран — две точки кэша, хвост — после них."""
+    seen = {}
+
+    class Stream:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get_final_message(self):
+            from types import SimpleNamespace as NS
+            return NS(stop_reason="end_turn", model="claude-opus-5-5", content=[NS(type="text", text='{"route": "edit", "reply": "ок"}')],
+                      usage=NS(input_tokens=10, output_tokens=5, cache_creation_input_tokens=0, cache_read_input_tokens=900))
+
+    from types import SimpleNamespace as NS
+    cl = NS(beta=NS(messages=NS(stream=lambda **kw: Stream(**kw))))
+    data = ask.ask(cl, "СПРАВОЧНИК", "ХВОСТ", "claude-opus-5-5", "low", prefix="ЭКРАН")
+    blocks = seen["messages"][0]["content"]
+    assert blocks[0] == {"type": "text", "text": "ЭКРАН", "cache_control": {"type": "ephemeral"}} and blocks[1]["text"] == "ХВОСТ"
+    assert seen["system"][0]["cache_control"] == {"type": "ephemeral"} and data["_usage"]["cache_read"] == 900

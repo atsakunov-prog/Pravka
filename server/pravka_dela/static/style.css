@@ -605,6 +605,21 @@ button.cr-task:hover { background: var(--hover); }
 .claude-result.talk { display: flex; flex-direction: column; max-height: min(calc(72vh / var(--kv-zoom, 1)), 680px); overflow: hidden; padding: 12px 12px 10px; }
 .claude-result.talk .cr-head { flex: none; padding: 0 4px; }
 .claude-result.talk .cr-head .cr-meta { font-weight: 400; margin: 0; }
+/* Разговор под строкой (13.10.2026): лента во всю ширину страницы, свежее сверху; в карточке дела — под её строкой. */
+.quick .talk-feed { order: 6; }
+.talk-feed { margin-top: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 4px 14px 8px; }
+.talk-feed.in-card { margin-top: 8px; padding: 2px 10px 6px; }
+.tf-head { display: flex; align-items: center; gap: 10px; padding: 8px 0 4px; font-size: 13px; color: var(--muted); }
+.tf-head .tf-t { font-weight: 600; color: var(--text); }
+.tf-head .link-btn { margin-left: auto; font-size: 13px; }
+.talk-feed .cr-turn { padding: 8px 0 10px; }
+.talk-feed .cr-said { margin: 2px 0 8px auto; }
+.talk-feed .cr-reply { margin: 0 2px 6px; line-height: 1.5; }
+.cr-refs { display: flex; flex-direction: column; margin: 2px 0 4px; border-left: 2px solid var(--accent-soft); padding-left: 6px; }
+.cr-ref > div:first-child { font-size: 14.5px; }
+.tf-old { border-top: 1px solid var(--line-soft); padding: 6px 0 2px; font-size: 13px; }
+.tf-old > summary { cursor: pointer; color: var(--faint); list-style: revert; padding: 2px 0; }
+.tf-old[open] > summary { margin-bottom: 4px; }
 .cr-thread { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin: 4px -4px 0; padding: 0 4px; }
 .cr-turn { padding: 6px 0 8px; }
 .cr-turn + .cr-turn { border-top: 1px solid var(--line-soft); }

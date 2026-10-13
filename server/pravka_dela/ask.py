@@ -23,10 +23,15 @@ suggestion.decide (принять с правками или отклонить 
 «как было», чтобы «Вернуть всё» отменило заведённое и вернуло поправленное. Отклонённое не
 возвращается: операции «вернуть в «Новое»» нет, причина отказа — урок автоматике.
 
-Модель и глубина — в «Настройках» веба, у каждого свои (crm.users.settings: claude_model —
-sonnet или opus, claude_effort — low, medium, high). По умолчанию Sonnet 5.5 и low — решение
-владельца (05.10.2026): правка короткая, ждать её не хочется. Справочник — в кэше (одинаков между
-командами одного человека и одной модели), дела страницы и команда — после него.
+Модель и глубина — с 13.10.2026 одна на всех: дорога TALK_ROUTE (llm.ROUTES, Свод models.dela; с завода Opus 5.5
+low). До того были «Настройки» веба у каждого (с завода Sonnet 5.5 low — решение владельца 05.10.2026). Справочник —
+в кэше (system), экран — второй точкой кэша (голова сообщения, одна на разговор — _snapshot), час, разговор и команда
+— хвостом после него.
+
+Разговор под строкой (13.10.2026, владелец: «строка вверху — „Саша, что ты хочешь спросить?“, разговор прямо под
+ней, можно продолжать сколько угодно; в нём же можно надиктовать новые дела, поправить, спросить; Claude видит то, что
+на экране»). Вопрос — ответ в reply, дела, о которых он, — номерами в refs (веб рисует их ссылками под ответом). В
+карточке клиента, сделки и человека Claude видит и последние встречи с договорённостями (crm.meetings).
 Траты — в crm.state 'llm_cost' (llm.py).
 
 Напоминания в Telegram (06.10.2026): «напомни в 11», «напомни, когда приеду домой», «через час ещё
@@ -69,6 +74,7 @@ import datetime as dt
 import json
 import logging
 import re
+import time
 import uuid
 
 from . import db, krug, llm, parse, people, remind, store
@@ -78,6 +84,10 @@ log = logging.getLogger("dela.ask")
 MODEL = "claude-sonnet-5-5"    # по умолчанию; в настройках — llm.MODELS
 CARD_MODEL = "claude-opus-5-5"  # карточка клиента, сделки, человека — решение владельца 06.10.2026
 TASK_ROUTE = "task"             # карточка дела и «Кстати» — модель и глубина в одном месте: llm.ROUTES / Свод models.dela
+TALK_ROUTE = "talk"             # строка страницы и разговор под ней (13.10.2026) — там же
+MAX_REFS = 30                   # дел ссылками под ответом
+SCREEN_TTL = 1800               # экран разговора помним полчаса: реплики того же разговора читают его из кэша
+SCREENS_MAX = 300
 HISTORY_SHOWN = 12              # записей журнала дела в его карточке для Claude
 STEPS_SHOWN = 8                 # соседних шагов и своих шагов дела — в «месте в дереве»
 NOW_MAX = 5                     # «Сейчас» — дела, которые обязан сделать сегодня: не больше пяти
@@ -175,6 +185,14 @@ reply — одна-две фразы Саше: что сделал — толь�
   чего там нет, того ты не сделал, и «добавил» про это не пиши. Чего не понял или не нашёл — скажи прямо,
   назвав дела, о которых думал. Дела — названием: номеров Саша не видит. Без вступлений. Нужен ответ
   Саши — закончи reply одним коротким вопросом: он ответит в том же окне, и ты увидишь разговор.
+refs — номера дел, о которых твой ответ (на вопрос — по порядку важности): под ответом они встанут кликабельным
+  списком. Ничего не называешь — пусто.
+
+ВОПРОС — Саша может и спросить, а не поручить: «что сегодня важнее всего?», «что мы этому клиенту должны?», «когда
+последний раз говорили с Иваном?». Отвечай в reply по существу — по тому, что видишь (экран, карточка, хронология,
+встречи, дела); чего не видишь — так и скажи, не выдумывай. Можно в несколько строк, но без воды и вступлений; дела —
+названием, а сами они — в refs. Ничего не меняй, если об этом не просили: route "edit", changes, create, suggestions и
+card пустые.
 
 РАЗГОВОР — если он есть в сообщении, команда — продолжение: Саша отвечает на твой вопрос или уточняет
 сказанное. Пойми её вместе с разговором («да», «на пятницу», «нет, второе», «и Лену туда же» — про то, о
@@ -308,8 +326,9 @@ SCHEMA = {
         "suggestions": {"type": "array", "items": _SUG},
         "card": {"type": "array", "items": _CARD},
         "reply": {"type": "string"},
+        "refs": {"type": "array", "items": {"type": "integer"}},
     },
-    "required": ["route", "changes", "create", "suggestions", "card", "reply"],
+    "required": ["route", "changes", "create", "suggestions", "card", "reply", "refs"],
     "additionalProperties": False,
 }
 NOTE_KINDS = {"call", "meeting", "zoom", "telegram", "email", "whatsapp", "note", "other"}
@@ -427,6 +446,26 @@ def _timeline_lines(conn, where: str, params: list) -> list[str]:
             + (f" · {r['deal']}" if r["deal"] else "") for r in rows] or ["(пусто)"]
 
 
+MEETINGS_SHOWN = 6  # встреч в карточке клиента, сделки, человека — «что мы ему должны?» видно по договорённостям
+
+
+def _meeting_lines(conn, where: str, params: list) -> list[str]:
+    """Последние встречи (crm.meetings, 13.10.2026): когда, о чём, итог и договорённости — коротко."""
+    try:
+        with conn.transaction():  # точка сохранения: сбой здесь не роняет остальную карточку
+            rows = conn.execute(
+                "SELECT m.started_at, coalesce(m.title, m.source_title) AS title, m.summary, m.agreements FROM crm.meetings m "
+                f"WHERE m.archived_at IS NULL AND {where} ORDER BY m.started_at DESC LIMIT %s", [*params, MEETINGS_SHOWN]).fetchall()
+    except Exception:  # noqa: BLE001 — встречи видит только владелец (RLS); у команды их просто нет
+        return []
+    out = []
+    for r in rows:
+        agr = "; ".join(str(a.get("text") or a.get("title") or "") if isinstance(a, dict) else str(a) for a in (r["agreements"] or [])[:6])
+        out.append(f"— {r['started_at'].astimezone(MSK).strftime('%d.%m')} {r['title'] or 'встреча'}: {_short(r['summary'], 300)}"
+                   + (f" · договорились: {_short(agr, 400)}" if agr.strip("; ") else ""))
+    return out
+
+
 def _person_line(conn, pe: dict) -> str:
     org = conn.execute("SELECT name FROM crm.orgs WHERE id = %s", (pe["org_id"],)).fetchone() if pe.get("org_id") else None
     label = pe.get("short") or pe["name"]
@@ -448,6 +487,9 @@ def _card(conn, scope: dict) -> tuple[list[str], dict | None]:
             lines.append(f"Тип: {d['deal_type']}")
         lines.append("Команда ЗФ: " + (_names_of(conn, d["team_ids"]) if d.get("team_ids") else "(никого, кроме ведущего)"))
         lines += ["Хронология сделки (свежие сверху):", *_timeline_lines(conn, "i.deal_id = %s", [d["id"]])]
+        met = _meeting_lines(conn, "m.deal_id = %s", [d["id"]])
+        if met:
+            lines += ["Встречи по ней (свежие сверху):", *met]
         return lines, {"kind": "deal", "deal": d, "project": pr}
     if kind == "client" and scope.get("project_id"):
         pr = conn.execute("SELECT * FROM crm.projects WHERE id = %s", (scope["project_id"],)).fetchone()
@@ -465,6 +507,9 @@ def _card(conn, scope: dict) -> tuple[list[str], dict | None]:
             (pr["org_id"], pr["id"])).fetchall()
         lines += ["Люди клиента:", *([f"— {_person_line(conn, x)}" for x in ppl] or ["(нет)"])]
         lines += ["Хронология (свежие сверху):", *_timeline_lines(conn, "i.project_id = %s", [pr["id"]])]
+        met = _meeting_lines(conn, "m.project_id = %s", [pr["id"]])
+        if met:
+            lines += ["Встречи с клиентом (свежие сверху):", *met]
         return lines, {"kind": "client", "project": pr, "deals": deals, "people": ppl}
     if kind == "person" and scope.get("person_id"):
         pe = conn.execute("SELECT * FROM crm.people WHERE id = %s", (scope["person_id"],)).fetchone()
@@ -476,6 +521,9 @@ def _card(conn, scope: dict) -> tuple[list[str], dict | None]:
             "OR source_person_id = %s ORDER BY stage = 'archive', name", [pe["id"]] * 4).fetchall()
         lines += ["Его сделки:", *([f"— {_deal_line(conn, d)}" for d in deals] or ["(нет)"])]
         lines += ["Хронология с ним (свежие сверху):", *_timeline_lines(conn, "%s = ANY (i.person_ids)", [pe["id"]])]
+        met = _meeting_lines(conn, "%s = ANY (m.person_ids)", [pe["id"]])
+        if met:
+            lines += ["Встречи с ним (свежие сверху):", *met]
         return lines, {"kind": "person", "person": pe}
     return [], None
 
@@ -565,6 +613,26 @@ def _task_card(conn, url: str, user: str, t: dict, today: dt.date) -> tuple[list
         if why:
             near["why_id"] = str(why)
     return lines, card, {k: v for k, v in near.items() if v}
+
+
+_screens: dict[tuple[str, str], tuple[float, str]] = {}
+
+
+def _snapshot(user: str, talk_id, text: str) -> str:
+    """Экран разговора — один на разговор (13.10.2026): вторая реплика получает ту же голову сообщения, что первая, и
+    читает её из кэша. Что поменялось за разговор, Claude видит в РАЗГОВОРЕ (сделанное), а дела по номерам — свежие."""
+    if not talk_id:
+        return text
+    key, now = (user, str(talk_id)[:64]), time.monotonic()
+    for k in [k for k, (at, _) in _screens.items() if now - at > SCREEN_TTL]:
+        _screens.pop(k, None)
+    got = _screens.get(key)
+    if got:
+        return got[1]
+    if len(_screens) >= SCREENS_MAX:
+        _screens.pop(min(_screens, key=lambda k: _screens[k][0]), None)
+    _screens[key] = (now, text)
+    return text
 
 
 def _deals_on_screen(conn, ids: list[str], visible: set[str]) -> list[str]:
@@ -1280,14 +1348,17 @@ def client(key: str, proxy: str | None):
     return parse.client(key, proxy)
 
 
-def ask(cl, system: str, user_text: str, model: str = MODEL, effort: str = EFFORT) -> dict:
-    """Один запрос: справочник в кэше, ответ — строго по схеме. Модель и глубина — из настроек человека."""
+def ask(cl, system: str, user_text: str, model: str = MODEL, effort: str = EFFORT, prefix: str | None = None) -> dict:
+    """Один запрос: справочник в кэше, ответ — строго по схеме. prefix — экран разговора (13.10.2026): своим блоком с
+    отметкой кэша — следующая реплика того же разговора читает его из кэша; user_text — хвост (час, разговор, команда)."""
+    content = ([{"type": "text", "text": prefix, "cache_control": {"type": "ephemeral"}}, {"type": "text", "text": user_text}]
+               if prefix else user_text)
     with cl.beta.messages.stream(
         model=model,
         max_tokens=16000,
         system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         output_config={"effort": effort, "format": {"type": "json_schema", "schema": SCHEMA}},
-        messages=[{"role": "user", "content": user_text}],
+        messages=[{"role": "user", "content": content}],
         # Отказ модели — повтор на резервной внутри того же запроса (как у разбора и встреч).
         betas=[parse.FALLBACK_BETA],
         fallbacks="default",
@@ -1307,13 +1378,6 @@ def ask(cl, system: str, user_text: str, model: str = MODEL, effort: str = EFFOR
 
 
 cost = llm.cost
-
-
-def settings_of(conn, user: str) -> tuple[str, str]:
-    """Модель и глубина из «Настроек» человека; чужое значение — по умолчанию."""
-    row = conn.execute("SELECT settings FROM crm.users WHERE id = %s", (user,)).fetchone()
-    s = (row and row["settings"]) or {}
-    return llm.MODELS.get(s.get("claude_model"), MODEL), s.get("claude_effort") if s.get("claude_effort") in llm.EFFORTS else EFFORT
 
 
 def _ids(scope: dict, key: str, limit: int) -> list[str]:
@@ -1371,10 +1435,7 @@ def context(url: str, user: str, text: str, scope: dict) -> dict:
         cat, index = _catalog(conn)
         today = conn.execute("SELECT crm.today() AS d").fetchone()["d"]
         me = conn.execute("SELECT name, id = crm.owner_id() AS owner FROM crm.users WHERE id = %s", (user,)).fetchone()
-        model, effort = settings_of(conn, user)
         card_lines, card = _card(conn, scope)
-        if card:
-            model = CARD_MODEL
         now_ids = {str(r["id"]) for r in conn.execute(
             "SELECT id FROM tasks.tasks WHERE owner_id = %s AND status = 'open' AND focus_on = crm.today()", (user,)).fetchall()}
         index["places"] = places = remind.places_of(conn, user)
@@ -1401,13 +1462,14 @@ def context(url: str, user: str, text: str, scope: dict) -> dict:
     by_sid = {str(s["id"]): s for s in srows}
     sugs = {k: by_sid[i] for k, i in enumerate(sids, 1) if i in by_sid}
     targets = {r["id"]: r for r in trows}
-    msg = [f"Сегодня {today.isoformat()}, {WD[today.weekday()]}, сейчас {hm}.", "Календарь: " + _calendar(today),
-           f"Страница: {(scope.get('title') or 'Дела').strip()[:200]}"]
+    model, effort = llm.route(url, TALK_ROUTE)
+    # Экран — кэшируемая голова сообщения (разговор, 13.10.2026): что меняется от реплики к реплике (час, «Сейчас»,
+    # разговор, команда) — после неё, в хвосте.
+    msg = ["Календарь: " + _calendar(today), f"Страница: {(scope.get('title') or 'Дела').strip()[:200]}"]
     if me and not me["owner"]:
         msg.append(f"Команду даёт не Саша, а {me['name']}: «Саша» и mine выше — про этого человека.")
     if card_lines:
         msg += ["", *card_lines]
-    msg.append(f"В «Сейчас» сегодня: {len(now_ids)} из {NOW_MAX}.")
     if focused:
         msg += ["", "ДЕЛО (команда про него):", _task_line(focused, today)]
     if picked:
@@ -1440,13 +1502,16 @@ def context(url: str, user: str, text: str, scope: dict) -> dict:
                 group = r["project_name"]
                 msg.append(f"{group or 'Входящие'}:")
             msg.append(_task_line(r, today, short=True))
+    screen = _snapshot(user, scope.get("talk_id"), "\n".join(msg))
+    tail = [f"Сегодня {today.isoformat()}, {WD[today.weekday()]}, сейчас {hm}.", f"В «Сейчас» сегодня: {len(now_ids)} из {NOW_MAX}."]
     if talk:
-        msg += ["", "РАЗГОВОР — команда ниже его продолжение (старое сверху; сделанное уже применено):", *talk]
-    msg += ["", f"КОМАНДА: {text}"]
+        tail += ["", "РАЗГОВОР — команда ниже его продолжение (старое сверху; сделанное уже применено):", *talk]
+    tail += ["", f"КОМАНДА: {text}"]
     # Справочник, правила напоминаний и места — в кэше: между командами одного человека они те же.
     system = (SYSTEM.replace("{REMIND}", remind_rules(url)).replace("{CATALOG}", cat)
               .replace("{PLACES}", remind.places_block(places)))
-    return {"text": text, "system": system, "message": "\n".join(msg), "model": model, "effort": effort,
+    return {"text": text, "system": system, "message": screen + "\n\n" + "\n".join(tail), "screen": screen,
+            "tail": "\n".join(tail), "model": model, "effort": effort,
             "tasks": {r["num"]: r for r in [*others, *rows]}, "focused": focused, "sugs": sugs, "targets": targets,
             "index": index, "today": today, "card": card, "now_ids": now_ids}
 
@@ -1469,17 +1534,19 @@ def _task_context(url: str, user: str, text: str, scope: dict) -> dict:
         hm = conn.execute("SELECT to_char(now() AT TIME ZONE 'Europe/Moscow', 'HH24:MI') AS hm").fetchone()["hm"]
         lines, card, near = _task_card(conn, url, user, t, today)
     model, effort = llm.route(url, TASK_ROUTE)
-    msg = [f"Сегодня {today.isoformat()}, {WD[today.weekday()]}, сейчас {hm}.", "Календарь: " + _calendar(today),
-           "Страница: карточка дела"]
+    msg = ["Календарь: " + _calendar(today), "Страница: карточка дела"]
     if me and not me["owner"]:
         msg.append(f"Команду даёт не Саша, а {me['name']}: «Саша» и mine выше — про этого человека.")
-    msg += ["", *lines, "", f"В «Сейчас» сегодня: {len(now_ids)} из {NOW_MAX}."]
+    msg += ["", *lines]
+    screen = _snapshot(user, scope.get("talk_id"), "\n".join(msg))
+    tail = [f"Сегодня {today.isoformat()}, {WD[today.weekday()]}, сейчас {hm}.", f"В «Сейчас» сегодня: {len(now_ids)} из {NOW_MAX}."]
     if talk:
-        msg += ["", "РАЗГОВОР — команда ниже его продолжение (старое сверху; сделанное уже применено):", *talk]
-    msg += ["", ("КСТАТИ — Саша вдогонку к этому делу: " if scope.get("kstati") else "КОМАНДА: ") + text]
+        tail += ["", "РАЗГОВОР — команда ниже его продолжение (старое сверху; сделанное уже применено):", *talk]
+    tail += ["", ("КСТАТИ — Саша вдогонку к этому делу: " if scope.get("kstati") else "КОМАНДА: ") + text]
     system = (SYSTEM.replace("{REMIND}", remind_rules(url)).replace("{CATALOG}", cat)
               .replace("{PLACES}", remind.places_block(places)))
-    return {"text": text, "system": system, "message": "\n".join(msg), "model": model, "effort": effort,
+    return {"text": text, "system": system, "message": screen + "\n\n" + "\n".join(tail), "screen": screen,
+            "tail": "\n".join(tail), "model": model, "effort": effort,
             "tasks": {t["num"]: t}, "focused": t, "sugs": {}, "targets": {}, "index": index, "today": today,
             "card": card, "now_ids": now_ids, "near": near}
 
@@ -1496,7 +1563,7 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
         if not key:
             raise AskError("Claude не настроен: нет ключа в dela.env")
         cl = client(key, proxy)
-        ask_fn = lambda s, u: ask(cl, s, u, model, effort)  # noqa: E731
+        ask_fn = lambda s, u: ask(cl, s, ctx["tail"], model, effort, prefix=ctx["screen"])  # noqa: E731
     data = ask_fn(ctx["system"], ctx["message"])
     if data.get("card"):
         for k, v in split_card(data["card"]).items():
@@ -1536,6 +1603,11 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
     created = [r["task"] for o, r in zip(ops, results) if o["op"] == "task.create" and r.get("ok") and r.get("task")]
     if errors:
         log.warning("правка: не прошли %d из %d: %s", len(errors), len(ops), errors[0])
+    refs = []
+    for n in data.get("refs") or []:
+        t = tasks.get(n)
+        if t and str(t["id"]) not in {r["id"] for r in refs}:
+            refs.append({"id": str(t["id"]), "num": t["num"], "title": t["title"]})
     return {"route": "edit", "reply": (data.get("reply") or "").strip(), "changed": undo, "tasks": created, "decided": done,
-            "crm": crm_done, "notes": [], "errors": errors + smiss + miss + cmiss, "usage": usage,
+            "crm": crm_done, "notes": [], "errors": errors + smiss + miss + cmiss, "usage": usage, "refs": refs[:MAX_REFS],
             "model": (usage or {}).get("model") or model}

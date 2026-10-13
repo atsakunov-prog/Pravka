@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from pravka_dela import ask, parse, store
+from pravka_dela import ask, llm, parse, store
 from test_dela_ask import item, mk
 from test_dela_schema import db_today, dela, project  # noqa: F401
 
@@ -151,7 +151,7 @@ def test_card_client_edits_timeline_people_deals_and_undo(dela):
     assert "КАРТОЧКА: клиент «Альфа»" in seen["user"] and "Альфа: фонды · в работе" in seen["user"]
     assert "— Ольга (Ольга Смирнова) · откуда: Альфа" in seen["user"]
     assert "КОМПАНИИ" in seen["system"] and "— Банк Гамма" in seen["system"]
-    assert out["model"] == ask.CARD_MODEL and not out["errors"], out["errors"]
+    assert out["model"] == llm.route(dela, "talk")[0] and not out["errors"], out["errors"]
     assert len(out["crm"]) == 5 and any("в хронологию" in c["what"] for c in out["crm"])
     with parse.db.session(dela, "sasha", "t") as c:
         note = c.execute("SELECT * FROM crm.interactions WHERE deleted_at IS NULL").fetchone()
@@ -199,7 +199,7 @@ def test_people_deals_and_notes_from_any_page(dela):
     assert (d["stage"], d["outcome"], d["lost_reason"]) == ("archive", "lost", "не работаем больше")
     assert [(n["project_id"], n["kind"], n["summary"]) for n in notes] == [(p, "call", "Ольга звонила: фонды не нужны")]
     assert any("к какому клиенту" in e for e in out["errors"])  # без сделки и клиента запись не пишется
-    assert out["model"] != ask.CARD_MODEL or ask.MODEL == ask.CARD_MODEL  # вне карточки — модель из «Настроек»
+    assert out["model"] == llm.route(dela, "talk")[0]  # модель одна на всех — дорога «talk» (13.10.2026)
     # «Вернуть всё» и тут: сделка снова в работе.
     back = [u for c_ in out["crm"] for u in c_["undo"]]
     assert all(x["ok"] for x in ops(dela, "sasha", back)), back
@@ -412,3 +412,18 @@ def test_task_card_api_scope(dela, monkeypatch):
     sc = seen["scope"]
     assert sc["card"] == "task" and sc["open"] == t["id"] and sc["kstati"] is True
     assert sc["history"] == [{"said": "перенеси", "reply": "На когда?", "done": "ничего не менял"}]
+
+
+def test_card_sees_meetings_with_agreements(dela):
+    """«Что мы клиенту сейчас должны?» (13.10.2026): в карточке клиента Claude видит и последние встречи с
+    договорённостями, а не только хронологию."""
+    p, org, bank, olga, ivan, deal = _client(dela)
+    with parse.db.session(dela, "system", "test") as c:
+        c.execute("INSERT INTO crm.meetings (ref, started_at, summary, agreements, project_id, deal_id, title, owner_id) "
+                  "VALUES ('m1', now() - interval '1 day', 'Обсудили фонды', '[\"Прислать тизер к пятнице\", {\"text\": \"Созвон в среду\"}]', "
+                  "%s, %s, 'Альфа: фонды', 'sasha')", (p, deal))
+    ctx = ask.context(dela, "sasha", "что мы им должны?", {"card": "client", "project_id": str(p)})
+    assert "Встречи с клиентом (свежие сверху):" in ctx["screen"]
+    assert "Альфа: фонды: Обсудили фонды · договорились: Прислать тизер к пятнице; Созвон в среду" in ctx["screen"]
+    ctx = ask.context(dela, "sasha", "что по сделке?", {"card": "deal", "deal_id": str(deal)})
+    assert "Встречи по ней (свежие сверху):" in ctx["screen"]

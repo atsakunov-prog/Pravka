@@ -32,6 +32,8 @@ EFFORTS = ("low", "medium", "high")
 ROUTES = {
     # Claude в карточке дела и «Кстати» — как Claude карточек (ask.CARD_MODEL): Opus, глубина явно.
     "task": {"model": "claude-opus-5-5", "effort": "low"},
+    # Строка страницы и разговор под ней (13.10.2026): вопросы, правки, новые дела — Opus, глубина явно.
+    "talk": {"model": "claude-opus-5-5", "effort": "low"},
     # «Когда» в карточке: фразу, которую не понял свой разбор (when.py), — Sonnet без размышлений.
     "when": {"model": "claude-sonnet-5-5", "effort": "low"},
 }

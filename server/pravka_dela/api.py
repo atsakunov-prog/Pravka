@@ -402,6 +402,10 @@ def build(cfg: Config) -> Starlette:
             scope.update(card="task", kstati=bool(raw.get("kstati")))
         # Разговор в окне ответа (09.10.2026): веб шлёт его с каждой репликой, а сюда он не доходил — Claude не видел,
         # о чём спрашивал (13.10.2026). Только строки: что сказал, что ответил, что сделано (ask._history режет длину).
+        # Разговор под строкой (13.10.2026): его номер — экран разговора один на все реплики (кэш, ask._snapshot).
+        talk = "".join(ch for ch in str(raw.get("talk_id") or "") if ch.isalnum() or ch in "-_")[:64]
+        if talk:
+            scope["talk_id"] = talk
         if isinstance(raw.get("history"), list):
             scope["history"] = [{k: str(x.get(k) or "")[:2000] for k in ("said", "reply", "done")}
                                 for x in raw["history"][-ask.TALK_TURNS:] if isinstance(x, dict)]
@@ -434,9 +438,9 @@ def build(cfg: Config) -> Starlette:
         if not who:
             return _err("нужен вход", 401)
         info = await anyio.to_thread.run_sync(_user_info, url, who.user)
-        out = {"ok": True, "settings": info.get("settings") or {}, "claude": bool(cfg.anthropic_key),
-               "models": {k: v for k, v in llm.MODELS.items()}, "efforts": list(llm.EFFORTS),
-               "default": {"claude_model": "sonnet", "claude_effort": ask.EFFORT}}
+        # Модель и глубина Claude — дороги владельца (llm.ROUTES, Свод models.dela), а не настройка человека (13.10.2026).
+        routes = await anyio.to_thread.run_sync(lambda: {k: dict(zip(("model", "effort"), llm.route(url, k))) for k in llm.ROUTES})
+        out = {"ok": True, "settings": info.get("settings") or {}, "claude": bool(cfg.anthropic_key), "routes": routes}
         if info.get("role") == "owner":
             out["cost"] = await anyio.to_thread.run_sync(llm.spent, url)
         return _json(out)
