@@ -90,7 +90,7 @@ import ru.zf.pravka.trigger.onFoodTap
 // делает его частью дня. До «✓» приём не идёт ни в сумму, ни в ленту, ни в
 // intervals.icu - но на диске лежит с первой секунды.
 
-private val mealTimeFormat = SimpleDateFormat("HH:mm", Locale.US)
+internal val mealTimeFormat = SimpleDateFormat("HH:mm", Locale.US)
 private val dayTitleFormat = SimpleDateFormat("EEEE, d MMMM", Locale("ru"))
 private val isoFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
 
@@ -106,7 +106,12 @@ internal fun FoodTab(
      * Шапка режима (Правка 4.0): её рисует вкладка — вторым тоном в ней день
      * дневника («Еда пн, 5 октября ⌄», `screens/10`), а день живёт здесь.
      */
-    header: @Composable (day: String, onDay: () -> Unit) -> Unit = { _, _ -> },
+    header: @Composable (day: String, onDay: () -> Unit, extra: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) -> Unit = { _, _, _ -> },
+    /**
+     * Вид v2 на сложенном (холст `Eda.dc.html`): вкладки «Тела» под шапкой —
+     * Еда рядом со Спортом. null — Спорта нет в профиле или разворот.
+     */
+    bodyTabs: (@Composable () -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val store = app.foodStore
@@ -325,8 +330,155 @@ internal fun FoodTab(
             result.onFailure { e -> Feedback.toast(app, e.message ?: "Не вышло", long = true) }
         }
     }
+    // Вид v2 на развороте: «День · Неделя · Рацион» сегментом в шапке (холст `Eda.dc.html`).
+    var foodView by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
+    if (ru.zf.pravka.ui.Look.v2) {
+        val wide = ru.zf.pravka.ui.twoPane()
+        val rightState = rememberLazyListState()
+        val goalWeight by app.settings.goalWeightFlow.collectAsState(initial = 0)
+        val health by app.sportStore.healthFlow.collectAsState()
+        val sub = ru.zf.pravka.core.Fmt.dayLong(dayDate) +
+            (if (dayMeals.isEmpty()) "" else " · " + plural(dayMeals.size, "приём", "приёма", "приёмов"))
+        Column(Modifier.fillMaxSize()) {
+            header(sub, { daySheet = true }) {
+                if (wide) {
+                    ru.zf.pravka.ui.KvSeg(
+                        listOf("День", "Неделя", "Рацион"), foodView, { foodView = it },
+                        modifier = Modifier.padding(end = 4.dp),
+                    )
+                }
+            }
+            bodyTabs?.invoke()
+            Box(Modifier.weight(1f)) {
+                val total2 = @Composable {
+                    FoodTotalCardV2(
+                        total = total,
+                        meals = dayMeals,
+                        pending = pendingDay,
+                        targetKcal = targetKcal,
+                        macros = listOf(
+                            Triple("Белок", total.protein, targetProtein),
+                            Triple("Жиры", total.fat, targetFat),
+                            Triple("Углеводы", total.carbs, targetCarbs),
+                        ),
+                        wide = wide,
+                    )
+                }
+                val diary2 = @Composable {
+                    FoodDiaryCardV2(
+                        app = app,
+                        meals = dayMeals,
+                        wide = wide,
+                        onEdit = { editing = it },
+                        onDelete = { id -> scope.launch { app.foodEngine.delete(id) } },
+                        onUnconfirm = { id -> scope.launch { app.foodEngine.unconfirm(id) } },
+                        pending = pending,
+                        onConfirm = confirmMeal,
+                        onReparse = reparseMeal,
+                    )
+                }
+                val goals2 = @Composable {
+                    FoodGoalsCardV2(
+                        targetKcal, targetProtein, targetFat, targetCarbs,
+                        goalWeight = goalWeight,
+                        weightNow = health.firstOrNull { it.weightKg > 0 }?.weightKg,
+                    )
+                }
+                val week = remember(meals) { store.recentDays(7) }
+                val week2 = @Composable {
+                    if (week.isNotEmpty()) {
+                        FoodWeekCardV2(
+                            week = week.reversed(),
+                            targetKcal = targetKcal,
+                            selected = date,
+                            onDay = { d -> dayOffset = daysBetween(d); foodView = 0 },
+                        )
+                    }
+                }
+                val body: androidx.compose.foundation.lazy.LazyListScope.(Int) -> Unit = { side ->
+                    // side: 0 — сложенный одной лентой, 1 и 2 — колонки разворота.
+                    when {
+                        side == 0 -> {
+                            item(key = "total") { total2() }
+                            item(key = "diary") { diary2() }
+                            item(key = "micro") { MicroCard(total) }
+                            item(key = "ration") { RationSection(app, dayStart) }
+                            item(key = "week") { week2() }
+                        }
+                        foodView == 0 && side == 1 -> {
+                            item(key = "total") { total2() }
+                            item(key = "goals") { goals2() }
+                            item(key = "micro") { MicroCard(total) }
+                        }
+                        foodView == 0 -> item(key = "diary") { diary2() }
+                        foodView == 1 && side == 1 -> {
+                            item(key = "week") { week2() }
+                            item(key = "goals") { goals2() }
+                        }
+                        foodView == 1 -> item(key = "days") {
+                            FoodDaysCardV2(week, selected = date, onDay = { d -> dayOffset = daysBetween(d); foodView = 0 })
+                        }
+                        side == 1 -> item(key = "ration") { RationSection(app, dayStart) }
+                        else -> {
+                            item(key = "goals") { goals2() }
+                            item(key = "micro") { MicroCard(total) }
+                        }
+                    }
+                }
+                val padV2 = PaddingValues(start = if (wide) 0.dp else 12.dp, end = if (wide) 0.dp else 12.dp, top = 10.dp, bottom = 96.dp)
+                if (wide) {
+                    Row(Modifier.fillMaxSize().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        for ((side, st) in listOf(1 to listState, 2 to rightState)) {
+                            LazyColumn(
+                                Modifier.weight(1f).fillMaxHeight().bottomFade().scrollFade(st),
+                                state = st,
+                                contentPadding = padV2,
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) { body(side) }
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        Modifier.fillMaxSize().bottomFade().scrollFade(listState),
+                        state = listState,
+                        contentPadding = padV2,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) { body(0) }
+                }
+                // Строка «что съел?» — во всю ширину и на развороте (холст: `.say` под обеими колонками).
+                ru.zf.pravka.ui.SayBar(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    placeholder = ru.zf.pravka.core.PillHint.say(ownerName, "что съел?"),
+                    onSend = { parseText(draft.trim()) },
+                    onMic = {
+                        val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                        if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
+                        else service.onFoodTap()
+                    },
+                    enabled = !busy,
+                    sendEnabled = !busy && draft.isNotBlank(),
+                    busy = busy || talking,
+                    maxLines = 4,
+                    focusRequester = inputFocus,
+                    trailing = {
+                        if (draft.isBlank()) {
+                            ru.zf.pravka.ui.SayIcon(Glyphs.Camera, "снять", takePhoto, enabled = !busy)
+                            ru.zf.pravka.ui.SayIcon(Glyphs.Image, "галерея", pickImage, enabled = !busy)
+                            ru.zf.pravka.ui.SayIcon(Glyphs.Barcode, "штрихкод", scanCode, enabled = !busy)
+                        }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .imePadding()
+                        .padding(start = if (wide) 20.dp else 12.dp, end = if (wide) 20.dp else 12.dp, bottom = if (wide) 14.dp else 8.dp),
+                )
+            }
+        }
+    } else
     Column(Modifier.fillMaxSize()) {
-    header(ru.zf.pravka.core.Fmt.dayList(dayDate)) { daySheet = true }
+    header(ru.zf.pravka.core.Fmt.dayList(dayDate), { daySheet = true }, {})
     Box(Modifier.weight(1f)) {
     // Разворот (DESIGN §13): слева день — итог, ждущее, приёмы; справа —
     // витамины, рацион, неделя. [side]: 0 — всё одной лентой, 1 — левая, 2 — правая.
@@ -533,20 +685,28 @@ private fun MicroCard(total: FoodStore.DayTotal) {
         val lvl = Micronutrients.level(n, totals[n.id] ?: 0.0)
         lvl == Micronutrients.Level.LOW || lvl == Micronutrients.Level.MID || lvl == Micronutrients.Level.OVER
     }.take(8)
-    Column(Modifier.fillMaxWidth()) {
-        ru.zf.pravka.ui.SectionHeader(
-            "витамины и элементы · ${all.size}",
-            info = "Витамины и элементы" to ("Сначала то, чего мало; все ${all.size} — строкой внизу. Вещества приезжают " +
-                "с разбором еды и с рационом; таблетки скажи отдельно — «выпил витамин D и магний». Риска на " +
-                "полосе — суточная норма мужчины 43 лет. Цифры считает модель по составу еды и точно — по " +
-                "рациону и штрихкоду: это порядок величины, а не анализ крови. У натрия норма — потолок, а не цель."),
-        )
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .glass(RoundedCornerShape(22.dp), mode.glass)
-                .padding(horizontal = 18.dp, vertical = 10.dp),
-        ) {
+    val microInfo = "Сначала то, чего мало; все ${all.size} — строкой внизу. Вещества приезжают " +
+        "с разбором еды и с рационом; таблетки скажи отдельно — «выпил витамин D и магний». Риска на " +
+        "полосе — суточная норма мужчины 43 лет. Цифры считает модель по составу еды и точно — по " +
+        "рациону и штрихкоду: это порядок величины, а не анализ крови. У натрия норма — потолок, а не цель."
+    // Вид v2: плашка `.card` с заголовком внутри; в 4.0 — надстрочник и стекло, как было.
+    val microBox: @Composable (@Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) -> Unit = { inner ->
+        if (ru.zf.pravka.ui.Look.v2) {
+            PaperCard(label = "Витамины и элементы", note = "${all.size}", info = microInfo, content = inner)
+        } else {
+            Column(Modifier.fillMaxWidth()) {
+                ru.zf.pravka.ui.SectionHeader("витамины и элементы · ${all.size}", info = "Витамины и элементы" to microInfo)
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .glass(RoundedCornerShape(22.dp), mode.glass)
+                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                    content = inner,
+                )
+            }
+        }
+    }
+    microBox {
             if (totals.isEmpty()) {
                 Text("За этот день веществ не посчитано.", style = ty.body, color = mode.meta, modifier = Modifier.padding(vertical = 6.dp))
             }
@@ -577,7 +737,6 @@ private fun MicroCard(total: FoodStore.DayTotal) {
                     )
                 }
             }
-        }
     }
 }
 
@@ -611,14 +770,19 @@ private fun MicroRow(
                 color = ru.zf.pravka.ui.Ink.Text,
                 modifier = Modifier.width(132.dp),
             )
-            androidx.compose.foundation.Canvas(Modifier.weight(1f).height(8.dp)) {
-                val r = androidx.compose.ui.geometry.CornerRadius(size.height / 2, size.height / 2)
-                drawRoundRect(mode.tint.copy(alpha = 0.14f), cornerRadius = r)
+            // Вид v2: полоса `.bar` (5, радиус 3, `--hover-2` и `--bar-fill`), риска нормы — цветом текста.
+            val v2 = ru.zf.pravka.ui.Look.v2
+            val track = if (v2) ru.zf.pravka.ui.Kv.hover2 else mode.tint.copy(alpha = 0.14f)
+            val fill = if (v2) ru.zf.pravka.ui.Kv.barFill else mode.ramp[1]
+            val notch = if (v2) ru.zf.pravka.ui.Kv.text.copy(alpha = 0.6f) else ru.zf.pravka.ui.Ink.Cream.copy(alpha = 0.7f)
+            androidx.compose.foundation.Canvas(Modifier.weight(1f).height(if (v2) 5.dp else 8.dp)) {
+                val r = if (v2) androidx.compose.ui.geometry.CornerRadius(3.dp.toPx(), 3.dp.toPx()) else androidx.compose.ui.geometry.CornerRadius(size.height / 2, size.height / 2)
+                drawRoundRect(track, cornerRadius = r)
                 val scale = nutrient.scale()
                 val w = size.width * (value / scale).toFloat().coerceIn(0f, 1f)
-                if (w > 0f) drawRoundRect(if (over) ru.zf.pravka.ui.Ink.Warn else mode.ramp[1], size = androidx.compose.ui.geometry.Size(w, size.height), cornerRadius = r)
+                if (w > 0f) drawRoundRect(if (over) ru.zf.pravka.ui.Ink.Warn else fill, size = androidx.compose.ui.geometry.Size(w, size.height), cornerRadius = r)
                 val x = size.width * (nutrient.norm / scale).toFloat()
-                drawLine(ru.zf.pravka.ui.Ink.Cream.copy(alpha = 0.7f), androidx.compose.ui.geometry.Offset(x, -3f), androidx.compose.ui.geometry.Offset(x, size.height + 3f), strokeWidth = 2f)
+                drawLine(notch, androidx.compose.ui.geometry.Offset(x, -3f), androidx.compose.ui.geometry.Offset(x, size.height + 3f), strokeWidth = 2f)
             }
             Text(
                 "${(nutrient.share(value) * 100).toInt()} %",
@@ -642,17 +806,17 @@ private fun MicroRow(
 }
 
 /** «Ужин: паста с курицей, салат» — вид приёма и что в нём. */
-private fun mealTitle(meal: FoodStore.Meal): String {
-    // Внутри строки позиции — с маленькой буквы («паста с курицей, салат»);
-    // аббревиатуры («ПП-батончик») не трогаем.
-    val list = meal.items.joinToString(", ") { item ->
+private fun mealTitle(meal: FoodStore.Meal): String =
+    meal.kind.replaceFirstChar { it.uppercase() } + ": " + mealList(meal)
+
+/** Что в приёме: «паста с курицей, салат». Позиции — с маленькой буквы, аббревиатуры («ПП-батончик») — как есть. */
+internal fun mealList(meal: FoodStore.Meal): String =
+    meal.items.joinToString(", ") { item ->
         val n = item.name
         if (n.length > 1 && n[1].isUpperCase()) n else n.replaceFirstChar { it.lowercase() }
     }.ifBlank { meal.raw }
-    return meal.kind.replaceFirstChar { it.uppercase() } + ": " + list
-}
 
-private fun macros(p: Int, f: Int, c: Int) = "Б $p · Ж $f · У $c"
+internal fun macros(p: Int, f: Int, c: Int) = "Б $p · Ж $f · У $c"
 
 private fun sourceWord(source: String): String? = when (source) {
     "photo" -> "по фото"
@@ -718,7 +882,7 @@ private fun MealCard(
 
 /** Позиции приёма, его витамины, замечание модели, снимок и сказанное — по тапу. */
 @Composable
-private fun MealDetails(app: PravkaApp, meal: FoodStore.Meal) {
+internal fun MealDetails(app: PravkaApp, meal: FoodStore.Meal) {
     val mode = ru.zf.pravka.ui.LocalMode.current
     val ty = ru.zf.pravka.ui.LocalPravkaType.current
     Spacer(Modifier.height(8.dp))
@@ -1275,7 +1439,7 @@ private fun dayStartBackFood(offsetDays: Int): Long {
 }
 
 /** «2026-08-21» → сколько дней назад это было (для листания дневника). */
-private fun daysBetween(date: String): Int {
+internal fun daysBetween(date: String): Int {
     val parsed = runCatching { isoFormat.parse(date)?.time }.getOrNull() ?: return 0
     val today = dayStartBackFood(0)
     return ((today - parsed) / 86_400_000L).toInt().coerceAtLeast(0)

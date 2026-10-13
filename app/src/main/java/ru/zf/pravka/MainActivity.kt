@@ -884,18 +884,31 @@ private fun MainScreen(
                     }
                     else -> {
                         // Шапку рисует вкладка: вторым тоном — день дневника (макет 10).
-                        val foodTitle = stringResource(R.string.tab_food)
+                        // Вид v2 на сложенном (холст `Eda.dc.html`): Еда — вкладка «Тела»
+                        // рядом со Спортом, шапка «Тело»; на развороте — свой экран «Еда».
+                        val bodyFolded = ru.zf.pravka.ui.Look.v2 && !ru.zf.pravka.ui.twoPane() && live(Tab.SPORT)
+                        val foodTitle = if (bodyFolded) "Тело" else stringResource(R.string.tab_food)
                         FoodTab(
                             app,
                             autoAction = foodActionPending,
                             onAutoConsumed = { foodActionPending = null },
-                            header = { day, onDay ->
+                            bodyTabs = if (!bodyFolded) null else ({
+                                BodyTabs(
+                                    selected = BODY_FOOD,
+                                    onSelect = { i -> if (i != BODY_FOOD) { bodyPart = i; openMode(Tab.SPORT) } },
+                                    food = true,
+                                    modifier = Modifier.padding(horizontal = 12.dp),
+                                )
+                            }),
+                            header = { day, onDay, extra ->
                                 TabHeader(
                                     title = foodTitle,
                                     onBack = modeBack,
                                     titleExtra = day,
                                     onTitleExtra = onDay,
                                     actions = {
+                                        // Вид v2 на развороте — сегмент «День · Неделя · Рацион» перед значками.
+                                        extra()
                                         StatsAction(openReport)
                                         CostAction(openCost)
                                         SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.FOOD)) }
