@@ -47,7 +47,7 @@ import java.util.TimeZone
  *
  * Сырьё — в `app/build/shots`, готовое — в `docs/design/screens` (не в git:
  * десятки мегабайт, пересъёмка — одна команда). Группы через запятую:
- * outer, tall, inner, overlay.
+ * outer, tall, inner, overlay; t5 — только «Сегодня» вида v2 (быстро).
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -65,7 +65,7 @@ class ScreenShots {
 
     private val dir = File(System.getProperty("pravka.shotsDir") ?: "build/shots").also { it.mkdirs() }
 
-    /** -Pshots=all или через запятую: outer, tall, inner, overlay. */
+    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5. */
     private fun want(group: String): Boolean {
         val v = System.getProperty("pravka.shots").orEmpty()
         return v == "1" || v == "all" || v.split(',').map { it.trim() }.contains(group)
