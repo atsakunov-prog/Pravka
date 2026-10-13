@@ -125,7 +125,8 @@ fun KvBar(fraction: Float, modifier: Modifier = Modifier, color: Color = Kv.barF
 /**
  * Строка с полосой `.cr`: название · полоса · значение справа (`--muted`).
  * Ширины колонок — как в макете у каждого экрана свои ([labelWidth],
- * [valueWidth]); тап — [onClick] (раскрыть статью магазинами).
+ * [valueWidth]); тап — [onClick] (раскрыть статью магазинами). [dot] —
+ * квадратик 10 впереди (`.cr .sq`: цвет категории «чей это» в итоге дня Засечки).
  */
 @Composable
 fun KvBarRow(
@@ -137,6 +138,7 @@ fun KvBarRow(
     valueWidth: Dp = 60.dp,
     color: Color = Kv.barFill,
     valueColor: Color = Kv.muted,
+    dot: Color? = null,
     onClick: (() -> Unit)? = null,
 ) {
     val t = LocalPravkaType.current
@@ -148,6 +150,7 @@ fun KvBarRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (dot != null) Box(Modifier.size(10.dp).clip(RoundedCornerShape(3.dp)).background(dot))
         Text(
             label,
             style = t.body.copy(fontSize = 13.5.sp, lineHeight = 18.sp),

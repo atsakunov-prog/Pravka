@@ -322,6 +322,15 @@ internal fun ZasechkaTab(
     /** Запись, которую открыть на правку сразу (лист записи «Сегодня» → «Поправить»). */
     editEntry: Long? = null,
     onEditHandled: () -> Unit = {},
+    /**
+     * Вид v2 (Правка 5.0, этап 3): шапку рисует вкладка через хозяина — подпись
+     * «день · очки» и навигатор дня знает только она (`ZasechkaV2.kt`).
+     */
+    header: (@Composable (subtitle: String, onTitle: () -> Unit, onTitleDouble: () -> Unit) -> Unit)? = null,
+    /** Вид v2: тап по событию ленты (еда, деньги, спорт, дело) — в его режим, как на «Сегодня». */
+    nav: TodayNav? = null,
+    /** Вид v2: «Настройки» у автопилота — группа Засечки. */
+    onSettings: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val store = app.zasechkaStore
@@ -417,16 +426,9 @@ internal fun ZasechkaTab(
         app.appScope.launch { app.zasechkaEngine.closeOpen() }
     }
 
-    // Правка 4.0 (07.10.2026, DESIGN §12.3, `screens/04`): сверху циферблат
-    // суток и плашка времени, ниже — лента, дела, итоги по категориям и
-    // телефон; строка «сказать» — внизу, со «стоп» и текущим занятием.
-    val bedtimeMin by app.settings.todayBedtimeFlow.collectAsState(initial = ru.zf.pravka.data.Settings.TODAY_BEDTIME_DEFAULT)
     val day = remember(dayStart) { DayFacts.localDay(dayStart) }
-    val facts = remember(entries, categories, day, now, bedtimeMin) {
-        DayFacts.of(entries, categories, day, now, bedtimeMin)
-    }
-    val wide = ru.zf.pravka.ui.twoPane()
-    val listState = rememberLazyListState()
+    // Тап по записи ленты (циферблат 4.0, строка ленты v2): заполнитель «не
+    // размечено» — «что это было», остальное — лист записи (у цепочки — головы).
     val openFromDial: (Long) -> Unit = { id ->
         val unit = dayUnits.firstOrNull { u -> u.fragments.any { it.id == id } || u.interruptions.any { it.id == id } }
         val head = unit?.fragments?.first()
@@ -434,224 +436,83 @@ internal fun ZasechkaTab(
             if (head.source == "gap") gapFor = gapTargetOf(dayUnits, dayUnits.indexOf(unit), head) else sheetFor = head.id
         }
     }
-    val dial: @Composable () -> Unit = {
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            ru.zf.pravka.ui.Dial(
-                sectors = facts.sectors,
-                nowMin = facts.nowMin,
-                score = Fmt.points(facts.score),
-                size = if (wide) 256.dp else 308.dp,
-                wide = wide,
-                compare = facts.weekAgo?.let { w -> { ru.zf.pravka.ui.DialCompare(facts.score - w, Fmt.dayShort(facts.weekAgoDate)) } },
-                place = if (wide) null else facts.rank?.let { "$it-й из 28 дней" },
-                onSector = openFromDial,
-            )
-        }
-    }
-    val plate: @Composable () -> Unit = {
-        ru.zf.pravka.ui.TimePlate(
-            big = facts.big,
-            sub = facts.sub,
-            right = if (facts.aheadMin > 0) Fmt.durFuture(facts.aheadMin) else null,
-            rightSub = if (facts.aheadMin > 0) "до сна в ${Fmt.hm(facts.bedtime)}" else null,
-            parts = facts.barParts,
-            legend = facts.legend,
-            wide = wide,
-            nav = {
-                DayNav(
-                    title = dayTitle(dayOffset, dayStart),
-                    subtitle = Fmt.dayLong(day),
-                    onPrev = { dayOffset += 1 },
-                    onNext = if (dayOffset > 0) ({ dayOffset = (dayOffset - 1).coerceAtLeast(0) }) else null,
-                )
-            },
-        )
-    }
-    // Лента — той же хроникой, что «Сегодня» (10.10.2026, владелец: «когда
-    // открываю засечку, мне приходится немножко думать и переставлять свою
-    // голову… давай синхронизируем»): записи по порядку дня сверху вниз,
-    // дорога жизни с разметкой своих дней, «сейчас» с пульсирующей точкой.
-    // Отметок других режимов и будущего здесь нет — у Засечки свои дела ниже;
-    // дыры без записи между записями остались строкой «··· 25 м без записи».
-    val ribbonItems = remember(entries, worthByCat, dayStart, now) {
-        val dayEndMs = dayStart + 86_400_000L
-        val ins = entries.filter { it.start < dayEndMs && (it.open || it.end > dayStart) }.map { e ->
-            ru.zf.pravka.core.DayAssembler.EntryIn(
-                id = e.id, start = e.start, end = e.end,
-                title = e.title.ifBlank { e.raw.take(60) }.ifBlank { e.category },
-                category = e.category, worth = worthOf(e.category),
-                client = e.client, useful = e.useful, comment = e.comment,
-                gap = e.source == "gap",
-            )
-        }
-        ru.zf.pravka.core.DayAssembler.assemble(ru.zf.pravka.core.DayAssembler.Input(dayStart, now, ins)).items
-            .filter { it is ru.zf.pravka.core.DayAssembler.DayItem.Entry || it is ru.zf.pravka.core.DayAssembler.DayItem.Now }
-    }
-    val ribbonLine = remember(ribbonItems, facts) { ru.zf.pravka.ui.balanceSpecs(ribbonItems, dayStart, facts.road) }
-    val ribbon: @Composable () -> Unit = {
-        Column(Modifier.fillMaxWidth()) {
-            ribbonItems.forEachIndexed { i, item ->
-                val next = ribbonItems.getOrNull(i + 1)
-                ru.zf.pravka.ui.TimelineItem(
-                    item, ru.zf.pravka.ui.lineColorAt(ribbonItems, i), next is ru.zf.pravka.core.DayAssembler.DayItem.Now, now,
-                    onEntry = { openFromDial(it.id) },
-                    balance = ribbonLine.getOrNull(i),
-                )
-                // Свежая дыра — тонкой строкой между записями: тап — «что это было».
-                if (item is ru.zf.pravka.core.DayAssembler.DayItem.Entry && next is ru.zf.pravka.core.DayAssembler.DayItem.Entry) {
-                    val gapMin = ((next.start - item.end) / 60_000L).toInt()
-                    if (gapMin >= 5) {
-                        val b = ribbonLine.getOrNull(i)
-                        ru.zf.pravka.ui.HoleRow(
-                            gapMin,
-                            b?.let {
-                                ru.zf.pravka.ui.BalanceSpec(
-                                    it.bottom, it.bottom, it.color, it.color, ru.zf.pravka.core.BalanceLine.Kind.THROUGH,
-                                    walls = it.walls,
-                                )
-                            },
-                        ) {
-                            gapFor = GapTarget(
-                                start = item.end,
-                                end = next.start,
-                                gap = null,
-                                prev = entries.firstOrNull { it.id == item.id }?.takeIf { it.source != "gap" },
-                                next = entries.firstOrNull { it.id == next.id }?.takeIf { it.source != "gap" },
-                            )
-                        }
-                    }
-                }
-            }
-            if (rangeEntries.isEmpty()) {
-                ru.zf.pravka.ui.EmptyState("Записей за этот день нет", icon = Glyphs.Calendar)
-            }
-        }
-    }
-    val totals: @Composable () -> Unit = {
-        val plus = facts.categories.filter { it.points > 0 }.sumOf { it.points }
-        val minus = facts.categories.filter { it.points < 0 }.sumOf { it.points }
-        PaperCard(
-            label = "итоги",
-            trailing = {
-                Text(
-                    "${Fmt.points(plus)} ${Fmt.MINUS} ${-minus}",
-                    style = ru.zf.pravka.ui.LocalPravkaType.current.label,
-                    color = ru.zf.pravka.ui.LocalMode.current.meta,
-                    modifier = Modifier.padding(end = 6.dp),
-                )
-            },
-            info = "Балл дня — сумма очков: час дела × ценность часа его категории " +
-                "(правится в настройках Засечки). Плюс и минус в заголовке — отдельно: " +
-                "ноль чаще всего честная ничья, час потерь съедает час работы. Строка — " +
-                "категория: время, доля дня и очки; сон — только его часть внутри суток.",
-        ) {
-            val total = facts.categories.sumOf { it.minutes }.coerceAtLeast(1)
-            val max = facts.categories.maxOfOrNull { it.minutes }?.coerceAtLeast(1) ?: 1
-            facts.categories.forEach { c ->
-                ru.zf.pravka.ui.CategoryRow(
-                    name = c.name,
-                    worth = c.worth,
-                    minutes = c.minutes,
-                    share = "${(c.minutes * 100f / total).toInt()} %",
-                    points = c.points,
-                    fraction = c.minutes / max.toFloat(),
-                )
-            }
-            if (facts.categories.isEmpty()) ru.zf.pravka.ui.EmptyState("Пока пусто")
-            if (facts.emptyCategories > 0) {
-                Text(
-                    "ещё ${facts.emptyCategories} без записей",
-                    style = ru.zf.pravka.ui.LocalPravkaType.current.meta,
-                    color = ru.zf.pravka.ui.LocalMode.current.meta,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
-        }
-    }
-    val tasks: @Composable () -> Unit = {
-        ZasechkaTasksCard(
+
+    if (ru.zf.pravka.ui.Look.v2) {
+        // Правка 5.0, этап 3 (`ZasechkaV2.kt`): «Сейчас» и «Дальше», профиль дня,
+        // лента с вечера к утру; на развороте — итог дня, автопилот и весь день.
+        // Дороги — те же, что у вкладки 4.0: листы, редактор, дыры, ▶ у дел.
+        ZasechkaV2Screen(
             app = app,
             entries = entries,
+            categories = categories,
+            day = day,
+            dayOffset = dayOffset,
+            setDay = { dayOffset = it.coerceAtLeast(0) },
             now = now,
-            onComment = { commenting = it },
-            onOpen = { openTask = it },
-        )
-    }
-
-    Box(Modifier.fillMaxSize()) {
-        if (wide) {
-            // Разворот (§12.3): слева круг, плашка времени и итоги; справа лента.
-            Row(Modifier.fillMaxSize()) {
-                Column(
-                    Modifier.width(386.dp).fillMaxHeight().fadingScroll().padding(start = 20.dp, bottom = 32.dp),
-                    verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
-                ) {
-                    dial()
-                    plate()
-                    totals()
-                    PhoneSection(app, dayStart, now)
-                }
-                Spacer(Modifier.width(24.dp))
-                LazyColumn(
-                    modifier = Modifier.weight(1f).fillMaxHeight().then(if (dayOffset == 0) Modifier.bottomFade() else Modifier).scrollFade(listState),
-                    state = listState,
-                    contentPadding = PaddingValues(end = 16.dp, bottom = 110.dp),
-                    verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
-                ) {
-                    if (dayOffset == 0) item(key = "tasks") { tasks() }
-                    item(key = "ribbon") { ribbon() }
-                }
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().then(if (dayOffset == 0) Modifier.bottomFade() else Modifier).scrollFade(listState),
-                state = listState,
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 110.dp),
-                verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
-            ) {
-                item(key = "dial") { dial() }
-                item(key = "plate") { plate() }
-                item(key = "ribbon") { ribbon() }
-                if (dayOffset == 0) item(key = "tasks") { tasks() }
-                item(key = "totals") { totals() }
-                item(key = "phone") { PhoneSection(app, dayStart, now) }
-            }
-        }
-        // Строка «сказать» Засечки (DESIGN §11.4): над подсказкой — текущее
-        // занятие, слева «стоп», справа голос — тот же тап, что «З» на стекле.
-        if (dayOffset == 0) {
-            val open = entries.lastOrNull { it.open && it.source != "gap" }
-            ru.zf.pravka.ui.SayBar(
-                value = draft,
-                onValueChange = { draft = it },
-                placeholder = "Чем занят дальше?",
-                onSend = submitText,
-                onMic = {
-                    val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
-                    if (service == null) Feedback.toast(context, context.getString(R.string.toast_no_service))
-                    else service.onZasechkaTap()
+            header = header,
+            act = ZasechkaV2Actions(
+                stop = doStop,
+                edit = { e ->
+                    // Разрезанное дело правится целиком, как из листа записи.
+                    val unit = dayUnits.firstOrNull { u -> u.fragments.any { it.id == e.id } }
+                    if (unit != null && unit.chain) editingChain = unit.fragments else editing = e
                 },
-                sendEnabled = !processing && draft.isNotBlank(),
-                maxLines = 1,
-                busy = processing,
-                busyLabel = "Разбираю",
-                above = open?.let { e ->
-                    {
-                        ru.zf.pravka.ui.SayAbove(
-                            "${capFirst(e.title.ifBlank { e.category })} · с ${fmtTime(e.start)}",
-                            Fmt.durMs(now - e.start),
-                        )
+                entry = openFromDial,
+                event = { ev ->
+                    // Как на «Сегодня»: еда, деньги, спорт, дело — в свой режим; без хозяина или ссылки — лист отрезка.
+                    when {
+                        nav != null && ev.ref == "sleep" -> nav.mode(Tab.SPORT)
+                        nav != null && ev.ref.isNotBlank() -> openMark(ev.ref, nav)
+                        else -> openFromDial(ev.entryId)
                     }
                 },
-                leading = open?.let { { ru.zf.pravka.ui.StopKey(doStop, "Остановить: ${it.title}") } },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .then(if (wide) Modifier.padding(start = 410.dp) else Modifier)
-                    .navigationBarsPadding()
-                    .imePadding()
-                    .padding(start = 12.dp, end = 12.dp, bottom = 18.dp),
-            )
-        }
+                task = { openTask = it },
+                settings = onSettings,
+            ),
+            phone = { PhoneSection(app, dayStart, now) },
+            sayBar = { m ->
+                // Строка «сказать» Засечки v2 (`.say` холста): голос — тот же тап, что «З»
+                // на стекле; набранное — тот же разбор ленты. «Стоп» и идущее — в «Сейчас».
+                ru.zf.pravka.ui.SayBar(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    placeholder = "Что делаешь? Скажи — запишу в ленту",
+                    onSend = submitText,
+                    onMic = {
+                        val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                        if (service == null) Feedback.toast(context, context.getString(R.string.toast_no_service))
+                        else service.onZasechkaTap()
+                    },
+                    sendEnabled = !processing && draft.isNotBlank(),
+                    maxLines = 1,
+                    busy = processing,
+                    busyLabel = "Разбираю",
+                    modifier = m,
+                )
+            },
+        )
+    } else {
+        Zasechka4Body(
+            app = app,
+            entries = entries,
+            categories = categories,
+            rangeEntries = rangeEntries,
+            worthByCat = worthByCat,
+            dayOffset = dayOffset,
+            setDayOffset = { dayOffset = it },
+            dayStart = dayStart,
+            day = day,
+            now = now,
+            draft = draft,
+            setDraft = { draft = it },
+            processing = processing,
+            submitText = submitText,
+            doStop = doStop,
+            openFromDial = openFromDial,
+            onGap = { gapFor = it },
+            onComment = { commenting = it },
+            onOpenTask = { openTask = it },
+        )
     }
 
     // Клиент — из справочника Дел, свободный текст — запасом (docs/dela-server.md).
@@ -899,6 +760,264 @@ internal fun ZasechkaTab(
                 }
             },
         )
+    }
+}
+
+/**
+ * Вкладка Засечки «Вида 4.0» (Правка 4.0, 07.10.2026, DESIGN §12.3,
+ * `screens/04`): сверху циферблат суток и плашка времени, ниже — лента, дела,
+ * итоги по категориям и телефон; строка «сказать» — внизу, со «стоп» и текущим
+ * занятием. С Правки 5.0 — откат на время переезда; состояние и листы держит
+ * `ZasechkaTab`, здесь только раскладка (вынесена без изменений, этап 3).
+ */
+@Composable
+private fun Zasechka4Body(
+    app: PravkaApp,
+    entries: List<ZasechkaStore.Entry>,
+    categories: List<ZasechkaStore.Category>,
+    rangeEntries: List<ZasechkaStore.Entry>,
+    worthByCat: Map<String, Int>,
+    dayOffset: Int,
+    setDayOffset: (Int) -> Unit,
+    dayStart: Long,
+    day: java.time.LocalDate,
+    now: Long,
+    draft: String,
+    setDraft: (String) -> Unit,
+    processing: Boolean,
+    submitText: () -> Unit,
+    doStop: () -> Unit,
+    openFromDial: (Long) -> Unit,
+    onGap: (GapTarget) -> Unit,
+    onComment: (ZasechkaStore.Entry) -> Unit,
+    onOpenTask: (ru.zf.pravka.core.Dela.Task) -> Unit,
+) {
+    val context = LocalContext.current
+    val worthOf: (String) -> Int = { worthByCat[it.trim().lowercase()] ?: 0 }
+    val bedtimeMin by app.settings.todayBedtimeFlow.collectAsState(initial = ru.zf.pravka.data.Settings.TODAY_BEDTIME_DEFAULT)
+    val facts = remember(entries, categories, day, now, bedtimeMin) {
+        DayFacts.of(entries, categories, day, now, bedtimeMin)
+    }
+    val wide = ru.zf.pravka.ui.twoPane()
+    val listState = rememberLazyListState()
+    val dial: @Composable () -> Unit = {
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            ru.zf.pravka.ui.Dial(
+                sectors = facts.sectors,
+                nowMin = facts.nowMin,
+                score = Fmt.points(facts.score),
+                size = if (wide) 256.dp else 308.dp,
+                wide = wide,
+                compare = facts.weekAgo?.let { w -> { ru.zf.pravka.ui.DialCompare(facts.score - w, Fmt.dayShort(facts.weekAgoDate)) } },
+                place = if (wide) null else facts.rank?.let { "$it-й из 28 дней" },
+                onSector = openFromDial,
+            )
+        }
+    }
+    val plate: @Composable () -> Unit = {
+        ru.zf.pravka.ui.TimePlate(
+            big = facts.big,
+            sub = facts.sub,
+            right = if (facts.aheadMin > 0) Fmt.durFuture(facts.aheadMin) else null,
+            rightSub = if (facts.aheadMin > 0) "до сна в ${Fmt.hm(facts.bedtime)}" else null,
+            parts = facts.barParts,
+            legend = facts.legend,
+            wide = wide,
+            nav = {
+                DayNav(
+                    title = dayTitle(dayOffset, dayStart),
+                    subtitle = Fmt.dayLong(day),
+                    onPrev = { setDayOffset(dayOffset + 1) },
+                    onNext = if (dayOffset > 0) ({ setDayOffset((dayOffset - 1).coerceAtLeast(0)) }) else null,
+                )
+            },
+        )
+    }
+    // Лента — той же хроникой, что «Сегодня» (10.10.2026, владелец: «когда
+    // открываю засечку, мне приходится немножко думать и переставлять свою
+    // голову… давай синхронизируем»): записи по порядку дня сверху вниз,
+    // дорога жизни с разметкой своих дней, «сейчас» с пульсирующей точкой.
+    // Отметок других режимов и будущего здесь нет — у Засечки свои дела ниже;
+    // дыры без записи между записями остались строкой «··· 25 м без записи».
+    val ribbonItems = remember(entries, worthByCat, dayStart, now) {
+        val dayEndMs = dayStart + 86_400_000L
+        val ins = entries.filter { it.start < dayEndMs && (it.open || it.end > dayStart) }.map { e ->
+            ru.zf.pravka.core.DayAssembler.EntryIn(
+                id = e.id, start = e.start, end = e.end,
+                title = e.title.ifBlank { e.raw.take(60) }.ifBlank { e.category },
+                category = e.category, worth = worthOf(e.category),
+                client = e.client, useful = e.useful, comment = e.comment,
+                gap = e.source == "gap",
+            )
+        }
+        ru.zf.pravka.core.DayAssembler.assemble(ru.zf.pravka.core.DayAssembler.Input(dayStart, now, ins)).items
+            .filter { it is ru.zf.pravka.core.DayAssembler.DayItem.Entry || it is ru.zf.pravka.core.DayAssembler.DayItem.Now }
+    }
+    val ribbonLine = remember(ribbonItems, facts) { ru.zf.pravka.ui.balanceSpecs(ribbonItems, dayStart, facts.road) }
+    val ribbon: @Composable () -> Unit = {
+        Column(Modifier.fillMaxWidth()) {
+            ribbonItems.forEachIndexed { i, item ->
+                val next = ribbonItems.getOrNull(i + 1)
+                ru.zf.pravka.ui.TimelineItem(
+                    item, ru.zf.pravka.ui.lineColorAt(ribbonItems, i), next is ru.zf.pravka.core.DayAssembler.DayItem.Now, now,
+                    onEntry = { openFromDial(it.id) },
+                    balance = ribbonLine.getOrNull(i),
+                )
+                // Свежая дыра — тонкой строкой между записями: тап — «что это было».
+                if (item is ru.zf.pravka.core.DayAssembler.DayItem.Entry && next is ru.zf.pravka.core.DayAssembler.DayItem.Entry) {
+                    val gapMin = ((next.start - item.end) / 60_000L).toInt()
+                    if (gapMin >= 5) {
+                        val b = ribbonLine.getOrNull(i)
+                        ru.zf.pravka.ui.HoleRow(
+                            gapMin,
+                            b?.let {
+                                ru.zf.pravka.ui.BalanceSpec(
+                                    it.bottom, it.bottom, it.color, it.color, ru.zf.pravka.core.BalanceLine.Kind.THROUGH,
+                                    walls = it.walls,
+                                )
+                            },
+                        ) {
+                            onGap(GapTarget(
+                                start = item.end,
+                                end = next.start,
+                                gap = null,
+                                prev = entries.firstOrNull { it.id == item.id }?.takeIf { it.source != "gap" },
+                                next = entries.firstOrNull { it.id == next.id }?.takeIf { it.source != "gap" },
+                            ))
+                        }
+                    }
+                }
+            }
+            if (rangeEntries.isEmpty()) {
+                ru.zf.pravka.ui.EmptyState("Записей за этот день нет", icon = Glyphs.Calendar)
+            }
+        }
+    }
+    val totals: @Composable () -> Unit = {
+        val plus = facts.categories.filter { it.points > 0 }.sumOf { it.points }
+        val minus = facts.categories.filter { it.points < 0 }.sumOf { it.points }
+        PaperCard(
+            label = "итоги",
+            trailing = {
+                Text(
+                    "${Fmt.points(plus)} ${Fmt.MINUS} ${-minus}",
+                    style = ru.zf.pravka.ui.LocalPravkaType.current.label,
+                    color = ru.zf.pravka.ui.LocalMode.current.meta,
+                    modifier = Modifier.padding(end = 6.dp),
+                )
+            },
+            info = "Балл дня — сумма очков: час дела × ценность часа его категории " +
+                "(правится в настройках Засечки). Плюс и минус в заголовке — отдельно: " +
+                "ноль чаще всего честная ничья, час потерь съедает час работы. Строка — " +
+                "категория: время, доля дня и очки; сон — только его часть внутри суток.",
+        ) {
+            val total = facts.categories.sumOf { it.minutes }.coerceAtLeast(1)
+            val max = facts.categories.maxOfOrNull { it.minutes }?.coerceAtLeast(1) ?: 1
+            facts.categories.forEach { c ->
+                ru.zf.pravka.ui.CategoryRow(
+                    name = c.name,
+                    worth = c.worth,
+                    minutes = c.minutes,
+                    share = "${(c.minutes * 100f / total).toInt()} %",
+                    points = c.points,
+                    fraction = c.minutes / max.toFloat(),
+                )
+            }
+            if (facts.categories.isEmpty()) ru.zf.pravka.ui.EmptyState("Пока пусто")
+            if (facts.emptyCategories > 0) {
+                Text(
+                    "ещё ${facts.emptyCategories} без записей",
+                    style = ru.zf.pravka.ui.LocalPravkaType.current.meta,
+                    color = ru.zf.pravka.ui.LocalMode.current.meta,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+        }
+    }
+    val tasks: @Composable () -> Unit = {
+        ZasechkaTasksCard(
+            app = app,
+            entries = entries,
+            now = now,
+            onComment = onComment,
+            onOpen = onOpenTask,
+        )
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        if (wide) {
+            // Разворот (§12.3): слева круг, плашка времени и итоги; справа лента.
+            Row(Modifier.fillMaxSize()) {
+                Column(
+                    Modifier.width(386.dp).fillMaxHeight().fadingScroll().padding(start = 20.dp, bottom = 32.dp),
+                    verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+                ) {
+                    dial()
+                    plate()
+                    totals()
+                    PhoneSection(app, dayStart, now)
+                }
+                Spacer(Modifier.width(24.dp))
+                LazyColumn(
+                    modifier = Modifier.weight(1f).fillMaxHeight().then(if (dayOffset == 0) Modifier.bottomFade() else Modifier).scrollFade(listState),
+                    state = listState,
+                    contentPadding = PaddingValues(end = 16.dp, bottom = 110.dp),
+                    verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+                ) {
+                    if (dayOffset == 0) item(key = "tasks") { tasks() }
+                    item(key = "ribbon") { ribbon() }
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().then(if (dayOffset == 0) Modifier.bottomFade() else Modifier).scrollFade(listState),
+                state = listState,
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 110.dp),
+                verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+            ) {
+                item(key = "dial") { dial() }
+                item(key = "plate") { plate() }
+                item(key = "ribbon") { ribbon() }
+                if (dayOffset == 0) item(key = "tasks") { tasks() }
+                item(key = "totals") { totals() }
+                item(key = "phone") { PhoneSection(app, dayStart, now) }
+            }
+        }
+        // Строка «сказать» Засечки (DESIGN §11.4): над подсказкой — текущее
+        // занятие, слева «стоп», справа голос — тот же тап, что «З» на стекле.
+        if (dayOffset == 0) {
+            val open = entries.lastOrNull { it.open && it.source != "gap" }
+            ru.zf.pravka.ui.SayBar(
+                value = draft,
+                onValueChange = setDraft,
+                placeholder = "Чем занят дальше?",
+                onSend = submitText,
+                onMic = {
+                    val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                    if (service == null) Feedback.toast(context, context.getString(R.string.toast_no_service))
+                    else service.onZasechkaTap()
+                },
+                sendEnabled = !processing && draft.isNotBlank(),
+                maxLines = 1,
+                busy = processing,
+                busyLabel = "Разбираю",
+                above = open?.let { e ->
+                    {
+                        ru.zf.pravka.ui.SayAbove(
+                            "${capFirst(e.title.ifBlank { e.category })} · с ${fmtTime(e.start)}",
+                            Fmt.durMs(now - e.start),
+                        )
+                    }
+                },
+                leading = open?.let { { ru.zf.pravka.ui.StopKey(doStop, "Остановить: ${it.title}") } },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .then(if (wide) Modifier.padding(start = 410.dp) else Modifier)
+                    .navigationBarsPadding()
+                    .imePadding()
+                    .padding(start = 12.dp, end = 12.dp, bottom = 18.dp),
+            )
+        }
     }
 }
 

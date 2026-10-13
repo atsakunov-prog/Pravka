@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -807,15 +808,35 @@ private fun MainScreen(
                         }
                     }
                     Tab.ZASECHKA -> {
-                        TabHeader(
-                            title = stringResource(R.string.tab_zasechka),
-                            onBack = modeBack,
-                            actions = {
-                                StatsAction(openReport)
-                                SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.ZASECHKA)) }
-                            },
-                        )
-                        ZasechkaTab(app, editEntry = zasechkaEdit, onEditHandled = { zasechkaEdit = null })
+                        val zasechkaActions: @Composable RowScope.() -> Unit = {
+                            StatsAction(openReport)
+                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.ZASECHKA)) }
+                        }
+                        val zasechkaTitle = stringResource(R.string.tab_zasechka)
+                        if (ru.zf.pravka.ui.Look.v2) {
+                            // Вид v2 (этап 3, холст `Zasechka.dc.html`): шапку рисует вкладка — подпись
+                            // «день · очки» и навигатор дня по тапу на название знает только она.
+                            ZasechkaTab(
+                                app,
+                                editEntry = zasechkaEdit,
+                                onEditHandled = { zasechkaEdit = null },
+                                header = { sub, onTitle, onTitleDouble ->
+                                    ru.zf.pravka.ui.KovchegHeader(
+                                        title = zasechkaTitle,
+                                        subtitle = sub,
+                                        onTitle = onTitle,
+                                        onTitleDouble = onTitleDouble,
+                                        actions = zasechkaActions,
+                                        modifier = Modifier.statusBarsPadding(),
+                                    )
+                                },
+                                nav = todayNav,
+                                onSettings = { pages = listOf(Page.ModeSettings(SettingsGroup.ZASECHKA)) },
+                            )
+                        } else {
+                            TabHeader(title = zasechkaTitle, onBack = modeBack, actions = zasechkaActions)
+                            ZasechkaTab(app, editEntry = zasechkaEdit, onEditHandled = { zasechkaEdit = null })
+                        }
                     }
                     Tab.TODOIST -> {
                         val delaActions: @Composable RowScope.() -> Unit = {

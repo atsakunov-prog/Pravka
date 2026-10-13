@@ -426,8 +426,8 @@ private class ItemActions(
     val planned: (DayItem.Planned) -> Unit,
 )
 
-/** Тап по отметке — режим на этой записи (DESIGN §11.5). */
-private fun openMark(ref: String, nav: TodayNav) {
+/** Тап по отметке — режим на этой записи (DESIGN §11.5); тем же путём — события ленты Засечки v2. */
+internal fun openMark(ref: String, nav: TodayNav) {
     when {
         ref.startsWith("meal:") -> nav.foodAction("edit:" + ref.removePrefix("meal:"))
         ref.startsWith("money") -> nav.mode(Tab.MONEY)
@@ -976,7 +976,11 @@ private fun EntrySheet4(
 // Сборка модели дня
 // ---------------------------------------------------------------------------
 
-private fun buildModel(
+/**
+ * Модель дня «Сегодня». Её же зовёт Засечка вида v2 (этап 3, `ZasechkaV2.kt`):
+ * лента строками там — из этой же хроники с отметками режимов, второго сбора нет.
+ */
+internal fun buildModel(
     app: PravkaApp,
     day: LocalDate,
     now: Long,
