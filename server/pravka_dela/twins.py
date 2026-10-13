@@ -24,6 +24,7 @@ from typing import Any
 from . import digest, life, sky, zasechka
 
 PAGES = ("day", "zasechka", "pravka")   # маршруты веба #/day, #/zasechka, #/pravka; в /api/me look.pages их объявляет kovcheg_ui.PAGES
+VIEWS = PAGES + ("pogoda",)            # виды страниц: службам с токеном владельца — 403 (api.view)
 TASK_DAYS = 30                          # «в ленте 1 ч 20 мин» у дела в «Дальше» — по записям за месяц
 PRAVKA_DAYS = 7                         # история диктовок с завода — неделя; «ещё» — дальше
 PRAVKA_MAX = 180

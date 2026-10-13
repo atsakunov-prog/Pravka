@@ -47,7 +47,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import ask, db, kovcheg_ui, llm, parse, remind, store, tokens, when
+from . import ask, db, kovcheg_ui, llm, parse, remind, store, tokens, twins, when
 from .config import Config
 
 log = logging.getLogger("dela.api")
@@ -273,6 +273,9 @@ def build(cfg: Config) -> Starlette:
             if not sc["ops"]:
                 return _err(f"службе {who.name} — только чтение {sc['svod_prefix']}*", 403)
             return _err(f"службе {who.name} можно только {', '.join(sorted(sc['ops']))} с ключами {sc['svod_prefix']}*", 403)
+        # Команды Засечки (zasechka.py) — дело владельца с его веба и телефона, а не служб с его токеном (встречи, бот).
+        if who.kind == "service" and any(isinstance(o, dict) and str(o.get("op") or "").startswith("zasechka.") for o in items):
+            return _err(f"службе {who.name} команды Засечки не положены", 403)
         out = await anyio.to_thread.run_sync(lambda: store.apply_ops(url, who.user, items, who.via, who.actor))
         bad = [r for r in out["results"] if not r.get("ok")]
         if bad:
@@ -284,6 +287,9 @@ def build(cfg: Config) -> Starlette:
         if not who:
             return _err("нужен вход", 401)
         name = request.path_params["name"]
+        # Страницы-двойники (twins.py) — день, лента и диктовки владельца: его вебу и телефону, не службам с его токеном.
+        if name in twins.VIEWS and who.kind == "service":
+            return _err(f"службе {who.name} этот вид не положен", 403)
         if name == "when" and not _scope(who):
             # «Когда» в карточке дела (13.10.2026, when.py): фраза → срок и напоминание. Путь — вид, а не новый адрес:
             # список адресов Дел на Aeza закрытый, а /api/view/<имя> в нём уже есть. local=1 — только свой разбор

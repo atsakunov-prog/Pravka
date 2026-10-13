@@ -302,6 +302,11 @@ def test_web_sees_pages_flag_and_tails_through_api(dela):
     r = cl.get("/api/view/day", headers={"Authorization": "Bearer " + member})
     assert r.status_code == 400 and "только владельцу" in r.json()["error"]
     assert cl.get("/api/view/day", headers={"Authorization": "Bearer " + owner}).status_code == 200
+    # Службы с токеном владельца (встречи, бот) — ни страниц, ни команд Засечки.
+    svc = {"Authorization": "Bearer " + tokens.issue(dela, "sasha", "service", "meetings")}
+    assert cl.get("/api/view/zasechka", headers=svc).status_code == 403
+    r = cl.post("/api/ops", headers=svc, json={"ops": [{"op": "zasechka.cmd", "cmd": {"kind": "start", "args": {"title": "x"}}}]})
+    assert r.status_code == 403
 
 
 def test_shabbat_like_the_phone_tile():
