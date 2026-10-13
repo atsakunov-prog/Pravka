@@ -47,7 +47,8 @@ import java.util.TimeZone
  *
  * Сырьё — в `app/build/shots`, готовое — в `docs/design/screens` (не в git:
  * десятки мегабайт, пересъёмка — одна команда). Группы через запятую:
- * outer, tall, inner, overlay; t5 — только «Сегодня» вида v2 (быстро); z5 — только Засечка v2.
+ * outer, tall, inner, overlay; t5 — только «Сегодня» вида v2 (быстро); z5 — только Засечка v2;
+ * svod — меню и вид из Свода (этап 7).
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -472,6 +473,58 @@ class ScreenShots {
 
         // ---- «Правка» 5.0 (этап 5): история диктовок телефона и компа — последней, её данные перекрывают «Правку» 4.0
         if (want("history")) history()
+
+        // ---- Этап 7: меню и вид из Свода — после всех, записи Свода не стираются, а остальным кадрам нужно заводское
+        if (want("svod")) svod()
+    }
+
+    /**
+     * Этап 7 (Свод `ui.menu` и `ui.look`): выдуманная запись Свода — «Пара» переставлена первой с новой подписью,
+     * «Кино» стало «Фильмами», «Быт» поднялся выше «Родительства», «Творчества» нет; акцент обеих тем — зелёный.
+     * «Сегодня», открытое меню и Дела — обе темы, оба экрана Fold.
+     */
+    private fun svod() {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        val menu = org.json.JSONObject(
+            """{"v": 1, "directions": [
+                 {"name": "Пара", "sub": "вдвоём хорошо", "items": [{"key": "kino", "name": "Фильмы"}]},
+                 {"name": "Здоровье", "sub": "сильное тело, ясная голова", "items": ["sport", "eda"]},
+                 {"name": "Ум", "sub": "много знаю и узнаю", "items": ["knigi"]},
+                 {"name": "Дело", "sub": "растёт вглубь и вширь", "items": ["dela", "meetings"]},
+                 {"name": "Деньги", "sub": "деньги — не ограничение", "items": ["dengi"]},
+                 {"name": "Круг", "sub": "знаю многих", "items": ["crm"]},
+                 {"name": "Быт", "sub": "дома хорошо всем пятерым", "items": ["dom", "vpn"]},
+                 {"name": "Родительство", "sub": "сыновья растут сильными", "items": ["deti", "shabbat"]}],
+               "create": null}""",
+        )
+        val look = org.json.JSONObject(
+            """{"v": 1, "light": {"accent": "#2f7d4f", "accent-soft": "#eaf2ed", "accent-ink": "#ffffff", "info": "#2f7d4f"},
+               "dark": {"accent": "#7cc59a", "accent-soft": "#24352b", "accent-ink": "#141414", "info": "#7cc59a"}}""",
+        )
+        runBlocking {
+            app.svodStore.applyAll(
+                listOf(
+                    ru.zf.pravka.core.Svod.Entry(ru.zf.pravka.core.Kovcheg.MENU_KEY, value = menu.toString(), rev = 2, author = "web"),
+                    ru.zf.pravka.core.Svod.Entry(ru.zf.pravka.core.Kovcheg.LOOK_KEY, value = look.toString(), rev = 1, author = "web"),
+                ),
+                System.currentTimeMillis(), fresh = false,
+            )
+        }
+        settle(8)
+        for ((prefix, q) in listOf("outer" to OUTER, "inner" to INNER)) {
+            RuntimeEnvironment.setQualifiers(q)
+            for (theme in listOf("light", "dark")) {
+                runBlocking { app.settings.setLookTheme(theme) }
+                settle(4)
+                val c = launch(null)
+                shot(c, "svod-$prefix-$theme-1-today")
+                if (tap(c, "Все сервисы Ковчега")) shot(c, "svod-$prefix-$theme-2-menu")
+                close(c)
+                val d = launch(MainActivity.TAB_TODOIST); shot(d, "svod-$prefix-$theme-3-dela"); close(d)
+            }
+        }
+        runBlocking { app.settings.setLookTheme("system") }
+        RuntimeEnvironment.setQualifiers(OUTER)
     }
 
     /**

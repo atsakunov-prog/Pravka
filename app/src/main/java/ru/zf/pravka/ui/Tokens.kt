@@ -315,7 +315,7 @@ object Modes {
         ModeDecor.SERVICE -> Service
     }
 
-    private val v2: ModeSetV2 get() = if (Look.dark) ModeSetV2.DARK else ModeSetV2.LIGHT
+    private val v2: ModeSetV2 get() = ModeSetV2.of(if (Look.dark) Look.paletteDark else Look.paletteLight)
 }
 
 /** Наборы режимов v2 на светлую и тёмную темы — по объекту на режим (см. [Modes]). */
@@ -330,8 +330,16 @@ private class ModeSetV2(p: KvPalette) {
     val service = v2Mode(p)
 
     companion object {
-        val LIGHT by lazy { ModeSetV2(KvPalette.LIGHT) }
-        val DARK by lazy { ModeSetV2(KvPalette.DARK) }
+        // По набору на палитру — тем же объектом, пока палитра та же: экраны сравнивают `mode === Modes.Today`.
+        // Палитр с этапа 7 больше двух (Свод `ui.look` меняет их), поэтому кэш по самой палитре, а не две ленивых.
+        private val sets = java.util.IdentityHashMap<KvPalette, ModeSetV2>()
+
+        fun of(p: KvPalette): ModeSetV2 = synchronized(sets) {
+            sets.getOrPut(p) {
+                if (sets.size >= 6) sets.clear()   // прежние палитры Свода больше не нужны
+                ModeSetV2(p)
+            }
+        }
     }
 }
 

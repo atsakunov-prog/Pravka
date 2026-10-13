@@ -1234,7 +1234,9 @@ private fun tabOfKovcheg(key: String): Tab? = when (key) {
  * Меню Ковчега с данными (план §3): большие кнопки и свои пункты — по
  * включённым режимам профиля, CRM — если Дела на своём сервере и она
  * открыта; сервисы, которых в приложении нет, — из `/api/me` сервера Дел
- * (`DelaSync.services`), адресов в коде нет. Веб — Custom Tab браузера,
+ * (`DelaSync.services`), адресов в коде нет. Что в меню и в каком порядке —
+ * Свод `ui.menu` (этап 7, правит владелец в вебе Дел; синк Свода), нет записи
+ * или она кривая — заводское `Kovcheg.FACTORY`. Веб — Custom Tab браузера,
  * Claude — его приложение (нет — claude.ai).
  */
 @Composable
@@ -1252,9 +1254,10 @@ private fun KovchegMenuHost(
     val link by app.delaSync.link.collectAsState()
     val onServer by app.delaServer.collectAsState()
     val snap by app.delaStore.view.collectAsState()
+    val svod by app.svodStore.view.collectAsState()
     val me = link?.user ?: app.delaStore.me
     val crm = onServer && ru.zf.pravka.core.Dela.crmOn(snap, me)
-    val model = remember(nav, link, crm, current, news, live) {
+    val model = remember(nav, link, crm, current, news, live, svod) {
         val K = ru.zf.pravka.core.Kovcheg
         val modes = buildSet {
             if (live(Tab.SPORT)) add(K.SPORT)
@@ -1262,10 +1265,12 @@ private fun KovchegMenuHost(
             if (live(Tab.TODOIST)) add(K.DELA)
             if (live(Tab.MONEY)) add(K.MONEY)
         }
+        val menu = K.menuFrom(ru.zf.pravka.core.Svod.value(K.MENU_KEY)) ?: K.FACTORY
+        val built = K.build(menu, K.own(modes, crm), nav, link?.url, zasechka = live(Tab.ZASECHKA))
         ru.zf.pravka.ui.KovchegMenuModel(
-            big = K.BIG.filter { (it.target as? ru.zf.pravka.core.Kovcheg.Target.Screen)?.key != K.ZASECHKA || live(Tab.ZASECHKA) },
-            directions = K.directions(K.own(modes, crm), nav, link?.url),
-            create = K.CREATE,
+            big = built.big,
+            directions = built.directions,
+            create = built.create,
             current = current,
             news = news,
         )

@@ -51,6 +51,28 @@ object Look {
     var dark by mutableStateOf(false)
 
     val v2: Boolean get() = !v4
+
+    /**
+     * Палитры v2 с поправками Свода `ui.look` поверх заводских (Правка 5.0,
+     * этап 7, 14.10.2026): акцент и при желании любые токены обеих тем
+     * владелец выбирает в вебе Дел — и тот же вид у телефона, веба и всех
+     * страниц Ковчега. Ставит `PravkaApp` по синку Свода ([tokens]); без
+     * записи — заводские [KvPalette.LIGHT] и [KvPalette.DARK]. Состояние:
+     * экран, прочитавший `Kv`, перерисуется сам.
+     */
+    var paletteLight by mutableStateOf(KvPalette.LIGHT)
+        private set
+    var paletteDark by mutableStateOf(KvPalette.DARK)
+        private set
+    private var applied = ru.zf.pravka.core.Kovcheg.Tokens()
+
+    /** Токены из Свода → палитры обеих тем. Те же — ничего не меняется (без лишней перерисовки). */
+    fun tokens(t: ru.zf.pravka.core.Kovcheg.Tokens) {
+        if (t == applied) return
+        applied = t
+        paletteLight = KvPalette.LIGHT.with(t.light, dark = false)
+        paletteDark = KvPalette.DARK.with(t.dark, dark = true)
+    }
 }
 
 /**
@@ -87,6 +109,29 @@ class KvPalette(
     /** Шкала графиков: [1] — главный цвет, [0] и [2] — соседи, [3] и [4] — бледнее (выключенное, фон). */
     val ramp: List<Color>,
 ) {
+    /**
+     * Та же палитра с поправками Свода `ui.look` (имя токена — переменная
+     * общего слоя без «--», цвет ARGB). Незнакомое имя — мимо. Новый акцент —
+     * и новая шкала графиков от него (`Kovcheg.ramp`): иначе столбики остались
+     * бы прежним синим. Пусто — эта же палитра, тем же объектом.
+     */
+    fun with(t: Map<String, Long>, dark: Boolean): KvPalette {
+        if (t.isEmpty()) return this
+        fun c(name: String, was: Color) = t[name]?.let { Color(it) } ?: was
+        val accentNew = t["accent"]?.let { Color(it) }?.takeIf { it != accent }
+        return KvPalette(
+            bg = c("bg", bg), side = c("side", side), panel = c("panel", panel), panel2 = c("panel-2", panel2),
+            hover = hover, hover2 = hover2, line = c("line", line), lineSoft = c("line-soft", lineSoft),
+            text = c("text", text), muted = c("muted", muted), faint = c("faint", faint), icon = c("icon", icon),
+            check = c("check", check), ok = c("ok", ok), warn = c("warn", warn), bad = c("bad", bad), claude = c("claude", claude),
+            accent = c("accent", accent), accentInk = c("accent-ink", accentInk), accentSoft = c("accent-soft", accentSoft),
+            barFill = c("bar-fill", barFill),
+            sp = sp.mapIndexed { i, was -> c("sp$i", was) },
+            scrim = scrim,
+            ramp = if (accentNew == null) ramp else ru.zf.pravka.core.Kovcheg.ramp(t.getValue("accent"), dark).map { Color(it) },
+        )
+    }
+
     companion object {
         val LIGHT = KvPalette(
             bg = Color(0xFFF6F4EF), side = Color(0xFFF1EEE8), panel = Color(0xFFFFFFFF), panel2 = Color(0xFFF3F1EC),
@@ -124,8 +169,8 @@ class KvPalette(
     }
 }
 
-/** Токены текущей темы v2 — `Kv.accent`, `Kv.line`… Читать там, где рисуют: это состояние. */
-val Kv: KvPalette get() = if (Look.dark) KvPalette.DARK else KvPalette.LIGHT
+/** Токены текущей темы v2 (с поправками Свода `ui.look`) — `Kv.accent`, `Kv.line`… Читать там, где рисуют: это состояние. */
+val Kv: KvPalette get() = if (Look.dark) Look.paletteDark else Look.paletteLight
 
 /** Размеры вида v2: панели 10, кнопки и поля 8, счётчики и метки 5 (план §2). */
 object KvShape {

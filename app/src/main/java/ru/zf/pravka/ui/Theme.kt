@@ -105,8 +105,6 @@ private fun kvScheme(p: KvPalette, dark: Boolean): ColorScheme {
     )
 }
 
-private val KvLightColors = kvScheme(KvPalette.LIGHT, dark = false)
-private val KvDarkColors = kvScheme(KvPalette.DARK, dark = true)
 
 private val PravkaShapes4 = Shapes(
     extraSmall = RoundedCornerShape(7.dp),
@@ -150,11 +148,9 @@ fun PravkaTheme(content: @Composable () -> Unit) {
     }
     if (Snapshot.withoutReadObservation { Look.dark } != dark) Look.dark = dark
     val type = remember(v4) { if (v4) PravkaType() else PravkaType.v2() }
-    val colors = when {
-        v4 -> DarkColors4
-        dark -> KvDarkColors
-        else -> KvLightColors
-    }
+    // Схема M3 — от текущей палитры: с этапа 7 её цвета может поменять Свод (`ui.look`, `Look.tokens`).
+    val palette = if (dark) Look.paletteDark else Look.paletteLight
+    val colors = if (v4) DarkColors4 else remember(palette, dark) { kvScheme(palette, dark) }
     MaterialTheme(
         colorScheme = colors,
         typography = remember(type) { pravkaM3Typography(type) },

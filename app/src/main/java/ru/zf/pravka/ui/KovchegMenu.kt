@@ -43,14 +43,15 @@ import ru.zf.pravka.core.Kovcheg
 // Меню Ковчега (Правка 5.0, план §3; холст «Ковчег на телефоне», классы .kmenu,
 // .kbig, .kdirs, .kcol, .kh, .ksub, .kcreate, .kitems): значок Ковчега в шапке
 // открывает все сервисы семьи поверх экрана — без нижней панели и колонки.
-// Выбрал — экран целиком сервису. Что в меню и куда ведёт — `core/Kovcheg.kt`;
-// здесь только вид.
+// Выбрал — экран целиком сервису. Что в меню и куда ведёт — `core/Kovcheg.kt`
+// (с этапа 7 — по Своду `ui.menu`, правит владелец в вебе Дел); здесь только вид.
 
 /** Что показать в меню: большие кнопки, направления, «Творчество», где мы сейчас и есть ли новенькое. */
 class KovchegMenuModel(
     val big: List<Kovcheg.Item>,
     val directions: List<Kovcheg.Direction>,
-    val create: Kovcheg.Direction,
+    /** «Творчество» строкой ниже направлений; null — в меню Свода её нет. */
+    val create: Kovcheg.Direction?,
     /** Ключ текущего экрана (`Kovcheg.TODAY`…) — его пункт подсвечен. */
     val current: String?,
     /** Новый разбор — метка у «Настроек телефона» (они ведут туда же, куда раньше «С»). */
@@ -106,14 +107,16 @@ fun KovchegMenu(
                 }
             }
             // «Творчество» — строкой ниже: надпись с подписью в первой колонке, Claude — во второй.
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) { DirectionHead(model.create.title, model.create.sub) }
-                Column(Modifier.weight(1f)) {
-                    for (x in model.create.items) MenuItem(x, on = false, onPick)
-                }
-                if (wide) {
-                    Spacer(Modifier.weight(1f))
-                    Spacer(Modifier.weight(1f))
+            model.create?.let { create ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) { DirectionHead(create.title, create.sub) }
+                    Column(Modifier.weight(1f)) {
+                        for (x in create.items) MenuItem(x, on = false, onPick)
+                    }
+                    if (wide) {
+                        Spacer(Modifier.weight(1f))
+                        Spacer(Modifier.weight(1f))
+                    }
                 }
             }
             Spacer(Modifier.height(8.dp))

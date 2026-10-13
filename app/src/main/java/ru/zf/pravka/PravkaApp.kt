@@ -168,6 +168,13 @@ class PravkaApp : Application() {
         appScope.launch {
             settings.lookV4Flow.collect { ru.zf.pravka.ui.Look.v4 = it }
         }
+        // Цвета вида из Свода (`ui.look`, этап 7): владелец выбирает акцент в вебе Дел — телефон берёт его тем же
+        // синком Свода и красит им всё приложение. `Svod.current` стор ставит до того, как отдаёт `view`.
+        appScope.launch {
+            svodStore.view.collect {
+                ru.zf.pravka.ui.Look.tokens(ru.zf.pravka.core.Kovcheg.tokens(ru.zf.pravka.core.Svod.value(ru.zf.pravka.core.Kovcheg.LOOK_KEY)))
+            }
+        }
         // Режим отладки: транспорт пишет каждый запрос к Claude целиком в
         // свой лог, пока тумблер включён (Настройки → Общее).
         appScope.launch {
