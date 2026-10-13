@@ -15,7 +15,7 @@
 | GET  /api/me | кто я; look — шапка веба: домен общей куки темы, значок «Ковчега», соседние сервисы (только владельцу) |
 | GET  /api/sync?since=N | всё изменившееся после N (телефон, веб) |
 | POST /api/ops | пачка операций с op_id (офлайн-очередь) |
-| GET  /api/view/<имя> | готовый список: now («Сейчас» — отмеченное), today («Сегодня» — срок сегодня), all («Все дела», просроченное сверху; later — старое имя), morning, new, waiting, person, quick, project, week, search; CRM — pipeline, clients, client, deal (с журналом), dossier, ties, money; «Где мы» — where, where_avatar?device= (where.py); встречи — meetings?sphere&q&project_id&person_id&sort&since&until&archived, meeting?id или ref (meetings.py); «Когда» — when?q=фраза&local=1&date=1: срок и напоминание словами в поля дела (when.py; без local непонятое — Claude) |
+| GET  /api/view/<имя> | готовый список: now («Сейчас» — отмеченное), today («Сегодня» — срок сегодня), all («Все дела», просроченное сверху; later — старое имя), morning, new, waiting, person, quick, project, week, search; CRM — pipeline, clients, client, deal (с журналом), dossier, ties, money; «Где мы» — where, where_avatar?device= (where.py); встречи — meetings?sphere&q&project_id&person_id&sort&since&until&archived, meeting?id или ref (meetings.py); «Когда» — when?q=фраза&local=1&date=1: срок и напоминание словами в поля дела (when.py; без local непонятое — Claude); дайджест Telegram — digest?days=2&limit или id / ref: последняя сводка и список, только владельцу (digest.py; приём — операция digest.put от службы дайджеста, последняя сводка — ещё и полем digest синка) |
 | GET  /api/task/<id или номер> | дело с комментариями, журналом и откуда оно (origin) |
 | POST /api/parse | {"text", "project_id"?, "person_id"?} — Claude режет текст на дела и заводит их; ответ — номер задания |
 | GET  /api/parse/<номер> | run, пока думает; потом done с делами и заметками или error |
@@ -286,7 +286,9 @@ def build(cfg: Config) -> Starlette:
                            # Встречи (12.10.2026): карточка (id, ref, окно расшифровки, сырьё) и список (сортировка,
                            # даты, убранные, неразобранные). Без них вид молча получал пусто: карточка — «нужен id».
                            "id", "ref", "around", "lines", "raw", "sort", "dir", "since", "until", "archived",
-                           "unnamed", "limit"}}
+                           "unnamed", "limit",
+                           # Дайджест Telegram (13.10.2026, digest.py): за сколько суток список
+                           "days"}}
         sc = _scope(who)
         if sc:
             if name not in sc["views"]:

@@ -21,7 +21,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from . import db, krug, meetings, people, place, where
+from . import db, digest, krug, meetings, people, place, where
 
 # Сколько номеров изменений синк захватывает назад. Номер берётся в начале
 # транзакции, а видна она после фиксации: изменение с меньшим номером может
@@ -38,7 +38,8 @@ TASK_FIELDS = {
 
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
-FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options"]
+FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
+            "digest"]
 # «svod» — Свод (crm.svod) в синке и операция svod.set; «people» — person.add / person.merge и вид who
 # (одна карточка человека, 06.10.2026). Без них телефон не шлёт этих операций.
 # «dictations» — операция dictation.add: текст наговорки, из которой вышли дела (их source_ref = её id),
@@ -57,6 +58,9 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug",
 # номер цели, которую делу выбрала модель разбора (блок «дерево жизни» — Свод krug.place). Без флага телефон его не шлёт.
 # «options» — ответы кнопками в «Подскажи» (13.10.2026): payload.options у предложения — 2–4 варианта {label, поля
 # payload или reject}, suggestion.decide с option — номер выбранного. Клиент без флага показывает «Да / Не надо».
+# «digest» — дайджест Telegram на телефоне (dela_0014, 13.10.2026, digest.py): последняя сводка — полем digest синка
+# (только владельцу), список — вид digest, приём — операция digest.put (только служба дайджеста). Без флага телефон
+# карточку дайджеста не показывает: сервер не обновлён.
 # Токен службы бота Ковчега (python -m pravka_dela token --name kovcheg): только он забирает
 # «что пора» и отмечает отправку (remind.py, task.reminded).
 REMIND_BOT = "kovcheg"
@@ -961,6 +965,12 @@ def sync(url: str, user: str, since: int) -> dict:
             out[name] = jsonable(rows)
             top = max([top, *(max(r["seq"], r.get("krug_seq") or 0) for r in rows)])
         out["labels"] = jsonable(conn.execute("SELECT name, color FROM tasks.labels ORDER BY name").fetchall())
+        # Последний дайджест Telegram (dela_0014): одной записью, а не таблицей — телефону на «Сегодня» нужна только
+        # последняя сводка, список за дни — видом digest. Только владельцу; поля нет — кэш не трогать.
+        put, last = digest.for_sync(conn, user, lo, full)
+        if put:
+            out["digest"] = jsonable(last)
+            top = max(top, last["seq"] if last else 0)
         out["seq"] = top
         out["today"] = conn.execute("SELECT crm.today() AS d").fetchone()["d"].isoformat()
     out["features"] = FEATURES
@@ -1222,6 +1232,8 @@ where.register(HANDLERS, VIEWS, OpError)
 krug.register(VIEWS)
 # Встречи (dela_0010): приём от службы встреч, правка владельцем, список и карточка (meetings.py).
 meetings.register(HANDLERS, VIEWS, OpError)
+# Дайджест Telegram (dela_0014): приём от службы дайджеста и выдача владельцу (digest.py).
+digest.register(HANDLERS, VIEWS, OpError)
 
 
 def view(url: str, user: str, name: str, **params) -> dict:
