@@ -464,6 +464,12 @@ class ScreenShots {
         }
         runBlocking { app.settings.setLookTheme("system") }
         settle(4)
+        // «Вид 4.0» — откат на время переезда: прежнее стекло и шапки целиком.
+        runBlocking { app.settings.setLookV4(true) }
+        settle(4)
+        val c = launch(null); shot(c, "$prefix-v4-1-today"); close(c)
+        runBlocking { app.settings.setLookV4(false) }
+        settle(4)
     }
 
     // ------------------------------------------------------------ кнопки на стекле

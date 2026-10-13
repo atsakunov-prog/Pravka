@@ -161,7 +161,7 @@ private fun PanelV2(
                     if (info != null) InfoDot(label ?: "Пояснение", info)
                     trailing?.invoke()
                 }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(4.dp))
             }
             Column(Modifier.fillMaxWidth(), content = content)
         }

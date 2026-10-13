@@ -151,7 +151,8 @@ fun Dial(
                     else -> DialGeometry.TICK_HALF
                 }
                 drawLine(
-                    Color(0xFFFFD6AA).copy(alpha = if (main) 0.80f else if (hour) 0.50f else 0.28f),
+                    // Риски — «бумагой» 4.0, в v2 — цветом текста той же силы.
+                    (if (Look.v4) Color(0xFFFFD6AA) else Kv.text).copy(alpha = if (main) 0.80f else if (hour) 0.50f else 0.28f),
                     p(DialGeometry.TICK_OUT - len, a), p(DialGeometry.TICK_OUT, a),
                     strokeWidth = (if (main) 2.6f else if (hour) 1.8f else 1.2f) * k, cap = StrokeCap.Round,
                 )

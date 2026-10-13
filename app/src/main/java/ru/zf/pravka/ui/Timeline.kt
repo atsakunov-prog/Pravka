@@ -490,13 +490,15 @@ fun DayAssembler.Source.decor(): ModeDecor = when (this) {
 fun EventChip(source: DayAssembler.Source, text: String, onClick: () -> Unit, modifier: Modifier = Modifier, coin: Boolean = true) {
     val m = Modes.of(source.decor())
     val t = LocalPravkaType.current
-    val shape = RoundedCornerShape(13.dp)
+    // v2 — `.ev` холста: панель с линией, радиус 6; цвета режима нет (акцент один).
+    val v2 = Look.v2
+    val shape = RoundedCornerShape(if (v2) 6.dp else 13.dp)
     Row(
         modifier
             .heightIn(min = 26.dp)
             .clip(shape)
-            .background(m.key.copy(alpha = 0.32f))
-            .border(1.dp, m.tint.copy(alpha = 0.29f), shape)
+            .background(if (v2) Kv.panel else m.key.copy(alpha = 0.32f))
+            .border(1.dp, if (v2) Kv.line else m.tint.copy(alpha = 0.29f), shape)
             .clickable(role = Role.Button, onClick = onClick)
             .padding(start = if (coin) 3.dp else 10.dp, end = 10.dp, top = 3.dp, bottom = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -555,22 +557,24 @@ fun PendingRow(source: DayAssembler.Source, text: String, line: Color, onOpen: (
         timeSmall = true,
         inset = 0.dp,
     ) {
-        val shape = RoundedCornerShape(18.dp)
+        // v2 — `.callout` холста: вторая панель с мягкой линией, «Записать» — `.btn.sm.p`.
+        val v2 = Look.v2
+        val shape = RoundedCornerShape(if (v2) KvShape.Control else 18.dp)
         Row(
             Modifier
                 .weight(1f)
                 .padding(bottom = 6.dp)
                 .heightIn(min = 36.dp)
                 .clip(shape)
-                .background(m.key.copy(alpha = 0.30f))
-                .border(1.dp, m.tint.copy(alpha = 0.38f), shape)
+                .background(if (v2) Kv.panel2 else m.key.copy(alpha = 0.30f))
+                .border(1.dp, if (v2) Kv.line else m.tint.copy(alpha = 0.38f), shape)
                 .clickable(onClick = onOpen)
                 .padding(start = TEXT_INSET, end = 3.dp, top = 3.dp, bottom = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(leadBold(text), style = t.label.copy(fontWeight = FontWeight.Normal), color = m.eventText, modifier = Modifier.weight(1f))
-            val bs = RoundedCornerShape(14.dp)
+            val bs = RoundedCornerShape(if (v2) 7.dp else 14.dp)
             Box(
                 Modifier
                     .height(28.dp)
@@ -580,7 +584,7 @@ fun PendingRow(source: DayAssembler.Source, text: String, line: Color, onOpen: (
                     .padding(horizontal = 12.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("Записать", style = t.label.copy(fontWeight = FontWeight.SemiBold), color = m.ink, maxLines = 1)
+                Text("Записать", style = t.label.copy(fontWeight = FontWeight.SemiBold), color = if (v2) Kv.accentInk else m.ink, maxLines = 1)
             }
         }
     }
@@ -634,7 +638,7 @@ fun NowLine(time: String, modifier: Modifier = Modifier, balance: BalanceSpec? =
                 style = t.nowBadge,
                 color = Ink.NowInk,
                 maxLines = 1,
-                modifier = Modifier.clip(RoundedCornerShape(9.dp)).background(Ink.Now).padding(horizontal = 6.dp, vertical = 1.dp),
+                modifier = Modifier.clip(RoundedCornerShape(if (Look.v2) KvShape.Tag else 9.dp)).background(Ink.Now).padding(horizontal = 6.dp, vertical = 1.dp),
             )
         }
         Box(Modifier.width(TIME_GAP).height(1.5.dp).background(nowLine))
@@ -689,7 +693,8 @@ fun PlannedRow(
         Column(Modifier.weight(1f).padding(bottom = 7.dp)) {
             Text(title, style = t.body, color = Ink.PlanText)
             Row(verticalAlignment = Alignment.Top) {
-                if (workout) TagChip("Спорт · план", sport.label, sport.key.copy(alpha = 0.45f))
+                // v2 — `.tag.acc` холста: мягкий акцент, а не залитый ключ режима.
+                if (workout) TagChip("Спорт · план", if (Look.v2) Kv.accent else sport.label, if (Look.v2) Kv.accentSoft else sport.key.copy(alpha = 0.45f))
                 else TagChip("Календарь", Ink.PlanText, Ink.Cream.copy(alpha = 0.12f))
                 Spacer(Modifier.width(4.dp))
                 val tail = listOf(Fmt.dur(minutes), note).filter { it.isNotBlank() }.joinToString(" · ")
@@ -705,9 +710,10 @@ fun TaskGroupRow(count: Int, minutes: Int, balance: BalanceSpec? = null) {
     val t = LocalPravkaType.current
     TimelineRow(height = 24.dp, rail = if (balance != null) Rail.None else Rail.Dashed(Modes.Dela.tint.copy(alpha = 0.45f)), balance = balance) {
         Text(
-            "ДЕЛА НА СЕГОДНЯ · $count · ${Fmt.dur(minutes).uppercase()}",
+            caps("Дела на сегодня · $count · ${Fmt.dur(minutes)}"),
             style = t.overline,
-            color = Color(0xFF8FB4D4),
+            // v2: надстрочник — `--faint`; голубой 4.0 на белом не читался.
+            color = if (ru.zf.pravka.ui.Look.v4) Color(0xFF8FB4D4) else Kv.faint,
             modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
         )
     }
@@ -734,7 +740,7 @@ fun TaskTimelineRow(
         rail = Rail.Ring(dela.tint, if (balance != null) null else dela.tint.copy(alpha = 0.45f), 12.dp),
         balance = balance,
         time = Fmt.hm(item.start),
-        timeColor = if (item.first || item.fixed) Color(0xFFC9D9E6) else dela.meta,
+        timeColor = if (item.first || item.fixed) (if (Look.v4) Color(0xFFC9D9E6) else Kv.text) else dela.meta,
         onClick = onOpen,
         onLongClick = onLong,
         railTap = onDone,
@@ -755,7 +761,7 @@ fun TaskTimelineRow(
 @Composable
 fun SleepRow(at: Long, overflowMin: Int, balance: BalanceSpec? = null) {
     val t = LocalPravkaType.current
-    TimelineRow(height = 40.dp, rail = Rail.Ring(Color(0xFF8A6A4E), null), time = Fmt.hm(at), timeColor = Ink.TextSecondary, balance = balance) {
+    TimelineRow(height = 40.dp, rail = Rail.Ring(if (Look.v4) Color(0xFF8A6A4E) else Kv.check, null), time = Fmt.hm(at), timeColor = Ink.TextSecondary, balance = balance) {
         Text(
             buildAnnotatedString {
                 append("Сон")

@@ -297,8 +297,9 @@ fun Counter(text: String, hot: Boolean = false, modifier: Modifier = Modifier) {
     )
 }
 
-/** Надстрочник: в 4.0 — прописными с разрядкой, в v2 — как написан (`.eyebrow` веба). */
-internal fun caps(text: String): String = if (Look.v4) text.uppercase(Locale.forLanguageTag("ru")) else text
+/** Надстрочник: в 4.0 — прописными с разрядкой, в v2 — с заглавной, как `.eyebrow` веба («Засечка · идёт»). */
+internal fun caps(text: String): String =
+    if (Look.v4) text.uppercase(Locale.forLanguageTag("ru")) else text.replaceFirstChar { it.titlecase(Locale.forLanguageTag("ru")) }
 
 /**
  * Ряд сегментов, листается вбок (DESIGN §11.7). Подпись вида «Новое 4» или

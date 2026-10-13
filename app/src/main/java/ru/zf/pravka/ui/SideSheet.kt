@@ -10,6 +10,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
@@ -87,11 +88,14 @@ fun SideSheet(
         // Системное затемнение — рывком и на весь экран; своё — плавное.
         val window = (LocalView.current.parent as? DialogWindowProvider)?.window
         LaunchedEffect(window) { window?.setDimAmount(0f) }
-        val scrim by animateFloatAsState(if (state.targetState) 0.55f else 0f, tween(220), label = "scrim")
+        // v2: затемнение — `--scrim` веба (светлой теме чёрное 0,55 — как выключенный свет).
+        val v2 = Look.v2
+        val scrimTo = if (v2) Kv.scrim.alpha else 0.55f
+        val scrim by animateFloatAsState(if (state.targetState) scrimTo else 0f, tween(220), label = "scrim")
         BoxWithConstraints(
             Modifier
                 .fillMaxSize()
-                .background(Color(0xFF080706).copy(alpha = scrim))
+                .background((if (v2) Kv.scrim else Color(0xFF080706)).copy(alpha = scrim))
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss),
         ) {
             val width = (maxWidth * 0.86f).coerceAtMost(360.dp)
@@ -104,7 +108,7 @@ fun SideSheet(
                 exit = slideOutHorizontally(tween(220)) { -it } + fadeOut(tween(200)),
                 modifier = Modifier.align(Alignment.CenterStart),
             ) {
-                val shape = RoundedCornerShape(24.dp)
+                val shape = RoundedCornerShape(if (v2) 12.dp else 24.dp)
                 Column(
                     Modifier
                         .windowInsetsPadding(WindowInsets.statusBars)
@@ -124,6 +128,7 @@ fun SideSheet(
                         .softShadow(shape)
                         .clip(shape)
                         .background(mode.ink.copy(alpha = 0.97f).compositeOver(Ink.Bg))
+                        .then(if (v2) Modifier.border(1.dp, Kv.line, shape) else Modifier)
                         // Тап по самой панели — не «мимо».
                         .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {}),
                 ) {

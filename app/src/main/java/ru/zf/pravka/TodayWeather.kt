@@ -48,7 +48,8 @@ import java.time.LocalTime
 // Правила строк — `core/DayState.kt`, `core/WeatherDay.kt`; здесь только вид.
 
 /** Осадки — холодным голубым: единственный цвет в листе погоды, кроме кремового текста. */
-private val RAIN = Color(0xFF8FB4D4)
+/** Осадки — голубым 4.0; в v2 — акцентом (на белом голубой пропадал). */
+private val RAIN: Color get() = if (ru.zf.pravka.ui.Look.v4) Color(0xFF8FB4D4) else ru.zf.pravka.ui.Kv.accent
 
 /** Столбец «утро» / «день» / «вечер» в списке на десять дней. */
 private val PART_W = 46.dp

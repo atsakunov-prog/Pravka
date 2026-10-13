@@ -564,7 +564,8 @@ private fun LastCard(app: PravkaApp) {
  */
 @Composable
 private fun SourceBubble(text: String, onEdit: (() -> Unit)?) {
-    val shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 6.dp, bottomStart = 20.dp)
+    val shape = if (ru.zf.pravka.ui.Look.v2) RoundedCornerShape(ru.zf.pravka.ui.KvShape.Panel)
+    else RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 6.dp, bottomStart = 20.dp)
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
         Text(
             text,
@@ -575,8 +576,9 @@ private fun SourceBubble(text: String, onEdit: (() -> Unit)?) {
             modifier = Modifier
                 .fillMaxWidth(0.88f)
                 .clip(shape)
-                .background(ru.zf.pravka.ui.LocalMode.current.key.copy(alpha = 0.30f))
-                .border(1.dp, ru.zf.pravka.ui.LocalMode.current.tint.copy(alpha = 0.30f), shape)
+                // Вид v2: «сказано» — вторая панель с линией (`.rashi` холста), а не пузырь цвета режима.
+                .background(if (ru.zf.pravka.ui.Look.v2) ru.zf.pravka.ui.Kv.panel2 else ru.zf.pravka.ui.LocalMode.current.key.copy(alpha = 0.30f))
+                .border(1.dp, if (ru.zf.pravka.ui.Look.v2) ru.zf.pravka.ui.Kv.line else ru.zf.pravka.ui.LocalMode.current.tint.copy(alpha = 0.30f), shape)
                 .then(if (onEdit != null) Modifier.clickable(onClick = onEdit) else Modifier)
                 .padding(horizontal = 14.dp, vertical = 10.dp),
         )
