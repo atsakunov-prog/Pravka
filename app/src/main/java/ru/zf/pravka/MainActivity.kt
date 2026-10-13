@@ -1302,7 +1302,7 @@ private fun KovchegMenuHost(
                 is ru.zf.pravka.core.Kovcheg.Target.Screen -> onScreen(target.key)
                 is ru.zf.pravka.core.Kovcheg.Target.Web -> {
                     // Страница сервиса — внутри приложения с шапкой Ковчега (`ServiceWebScreen.kt`); название и значок — из пункта.
-                    val item = (model.directions + model.create).flatMap { it.items }.firstOrNull { it.target == target }
+                    val item = (model.directions + listOfNotNull(model.create)).flatMap { it.items }.firstOrNull { it.target == target }
                     onDismiss()
                     onWeb(ru.zf.pravka.core.ServicePage(item?.name ?: target.url, item?.icon ?: "globe", target.url))
                 }
