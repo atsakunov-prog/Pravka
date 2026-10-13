@@ -76,7 +76,7 @@ import ru.zf.pravka.ui.RibbonRow
 import ru.zf.pravka.ui.SmallKey
 import ru.zf.pravka.ui.TileState
 import ru.zf.pravka.ui.bottomFade
-import ru.zf.pravka.ui.categoryFill
+import ru.zf.pravka.ui.categoryTone
 import ru.zf.pravka.ui.twoPane
 import java.time.LocalDate
 
@@ -352,7 +352,7 @@ private fun NowCard(c: TodayCards, wide: Boolean) {
                     if (sub != null) {
                         Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                             if (e != null && e.category.isNotBlank()) {
-                                Box(Modifier.size(8.dp).clip(RoundedCornerShape(2.dp)).background(categoryFill(e.category)))
+                                Box(Modifier.size(8.dp).clip(RoundedCornerShape(2.dp)).background(categoryTone(e.category)))
                                 Spacer(Modifier.width(6.dp))
                             }
                             Text(sub, style = t.caption, color = Kv.faint, maxLines = 1, overflow = TextOverflow.Ellipsis)

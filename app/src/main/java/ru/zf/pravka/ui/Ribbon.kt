@@ -149,7 +149,7 @@ fun RibbonEvent(
 
 /**
  * Строка ленты из `core/Lenta.kt`: отрезок или событие. Цвет квадратика — как
- * у горы дня (`categoryFill`, «не размечено» — линией), время — «от–до».
+ * у горы дня (`categoryTone`, «не размечено» — линией), время — «от–до».
  */
 @Composable
 fun RibbonRow(
@@ -161,7 +161,7 @@ fun RibbonRow(
     when (row) {
         is Lenta.Row.Seg -> RibbonSegment(
             time = Fmt.hm(row.from) + "–" + if (row.current) "сейчас" else Fmt.hm(row.to),
-            color = if (row.gap) Kv.line else categoryFill(row.category, row.worth),
+            color = if (row.gap) categoryTone(ru.zf.pravka.core.DayProfile.UNMARKED) else categoryTone(row.category, row.worth),
             title = row.title,
             sub = row.sub,
             duration = Fmt.dur(row.minutes),

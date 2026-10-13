@@ -401,6 +401,24 @@ fun categoryText(category: String, worth: Int? = null): Color =
     if (category.isBlank()) Ink.TextMeta else worthText(categoryWorth(category, worth))
 
 /**
+ * Цвет категории вида v2 — «чей это» (`core/CategoryTone.kt`, палитра `--sp`
+ * обеих тем; владелец 13.10.2026: «нравилась гамма как на макетах, а не
+ * светофор»): гора дня, полоса суток, квадратики ленты, легенда. Дорога и
+ * потери — пополам с фоном; «не размечено» — линией ([line]) или, в линии горы,
+ * `--check` ([line] = false). «Вид 4.0» — прежний светофор ([categoryFill]).
+ */
+fun categoryTone(category: String, worth: Int? = null, line: Boolean = true): Color {
+    if (Look.v4) return categoryFill(category, worth)
+    val t = ru.zf.pravka.core.CategoryTone.of(category)
+    val p = Kv
+    return when {
+        t.gap -> if (line) p.line else p.check
+        t.half -> androidx.compose.ui.graphics.lerp(p.sp[t.sp], p.bg, 0.5f)
+        else -> p.sp[t.sp]
+    }
+}
+
+/**
  * Светофор цены часа (владелец, 10.10.2026: «можно ли как-то сделать гамму
  * помягче… вырви глаз. Может, светофор с градацией? Красный совсем плохо,
  * жёлтый — обычные дела, зелёный — всякая работа»). Оттенок плавно идёт по

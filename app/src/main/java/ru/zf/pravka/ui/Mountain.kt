@@ -39,18 +39,25 @@ import ru.zf.pravka.core.Fmt
 // вниз; «сейчас» — вертикальным пунктиром. Под горой — полоса суток по
 // категориям (`.day`) и метки часов (`.ticks`).
 //
-// Цвет категории — тот же, что у неё везде в приложении (`categoryFill`:
-// светофор цены часа, владелец 10.10.2026 — «светофор нужно применить везде к
-// категориям»): гора, полоса и квадратики ленты говорят одним языком.
-// Засечка может дать свой [colorOf].
+// Цвет категории — «чей это» (`categoryTone`, `core/CategoryTone.kt`; владелец
+// 13.10.2026: «нравилась гамма как на макетах, а не светофор»): гора, полоса и
+// квадратики ленты говорят одним языком. Засечка может дать свой [colorOf].
 
-/** Цвет отрезка горы: «не размечено» — бледным `--check`, остальное — краской категории. */
-fun mountainColor(s: DayProfile.Seg): Color =
-    if (s.gap) Kv.check else categoryFill(s.category, s.worth)
+/**
+ * Цвет отрезка горы: «не размечено» — бледным `--check`, остальное — цветом
+ * категории «чей это». Дорога и потери в горе — полным цветом (`.pfl.c8` холста:
+ * штрих `--sp7` без примеси фона): линия в два пикселя пополам с фоном пропадала
+ * бы; в полосе и квадратиках они бледные.
+ */
+fun mountainColor(s: DayProfile.Seg): Color {
+    if (s.gap) return categoryTone(DayProfile.UNMARKED, line = false)
+    if (Look.v4) return categoryTone(s.category, s.worth)
+    return Kv.sp[ru.zf.pravka.core.CategoryTone.of(s.category).sp]
+}
 
 /** Цвет того же отрезка в полосе суток: «не размечено» — линией (`.cg` холста), не дырой. */
 fun mountainStripColor(s: DayProfile.Seg): Color =
-    if (s.gap) Kv.line else categoryFill(s.category, s.worth)
+    if (s.gap) categoryTone(DayProfile.UNMARKED) else categoryTone(s.category, s.worth)
 
 /**
  * Гора дня: профиль высотой [height], под ним полоса суток ([strip]) и метки
