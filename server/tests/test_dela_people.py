@@ -246,6 +246,7 @@ def test_scoped_eda_and_sport(dela):
     assert c.get("/api/view/svod", params={"key": "prompt.food"}, headers=eda).json()["items"][0]["body"] == "Еда."
     assert [i["key"] for i in c.get("/api/view/svod", headers=eda).json()["items"]] == ["food.goals"]
     assert c.get("/api/view/svod", params={"key": "money.partner"}, headers=eda).status_code == 403
+    assert c.get("/api/view/svod", params={"key": "models.routes"}, headers=eda).status_code == 200
     assert c.post("/api/ops", headers=eda, json={"ops": [
         {"op": "svod.set", "key": "prompt.food", "body": "взлом", "author": "eda"}]}).status_code == 403
     assert c.get("/api/sync", headers=eda).status_code == 403
