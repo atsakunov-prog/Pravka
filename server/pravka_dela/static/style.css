@@ -174,7 +174,9 @@ button.icon:hover:not(:disabled), .icon-btn:hover:not(:disabled), .ib:hover { co
 .kbd { font-size: 11px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; color: var(--muted); background: var(--panel); }
 
 /* ── Шапка Ковчега: «Ковчег», сервисы значками, справа тема, шестерёнка, имя и выход. Сплошная, без размытия. ── */
-.top { flex: none; position: relative; z-index: 12; background: var(--bg); border-bottom: 1px solid var(--line); }
+/* Шапка — контейнер: её ширина в px раскладки учитывает zoom «Размера текста», медиазапрос — нет (на 1280 при «Ещё
+   крупнее» правая часть уходила второй строкой, а сервисы оставались наверху). */
+.top { flex: none; position: relative; z-index: 12; background: var(--bg); border-bottom: 1px solid var(--line); container: kvtop / inline-size; }
 .top-in {
   display: flex; align-items: center; gap: 8px 18px; flex-wrap: wrap;
   padding: max(10px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) 10px max(24px, env(safe-area-inset-left));
@@ -1182,9 +1184,10 @@ a.pt-row:hover { color: var(--accent); text-decoration: none; }
   .shell.with-card main.list > .scroll { padding-left: 24px; padding-right: 24px; }
   .shell.with-card .tabs-row { margin-left: -24px; margin-right: -24px; padding-left: 24px; padding-right: 24px; }
 }
-/* Средняя ширина (планшет, окно сбоку): сервисы не влезают в строку с «Ковчегом» и темой — уходят второй строкой
-   с прокруткой вбок, а не переносом в три ряда (как в общем слое: шапка в три строки съедала экран). */
-@media (max-width: 1100px) {
+/* Средняя ширина (планшет, окно сбоку, крупный текст): сервисы не влезают в строку с «Ковчегом», темой и именем —
+   уходят второй строкой с прокруткой вбок, а не переносом в три ряда (как в общем слое: шапка в три строки съедала
+   экран). Порог — по шапке Дел: в одну строку ей нужно около 1150 px (с именем), 1280 при обычном размере влезает. */
+@container kvtop (max-width: 1180px) {
   .kv-nav { order: 9; flex: 1 0 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -24px; padding: 0 24px; }
   .kv-nav::-webkit-scrollbar { display: none; }
 }
