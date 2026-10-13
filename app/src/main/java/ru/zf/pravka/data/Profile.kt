@@ -129,6 +129,12 @@ internal data class Profile(
          * день. Профиль не выбран (база недоступна) — как было, не молчит.
          */
         fun zasechkaQuiet(chosen: Boolean?, p: Profile?): Boolean = chosen ?: (p != null && !p.owner)
+
+        /**
+         * Телефон в ленте (13.10.2026): не выбирали — только у владельца. Текст
+         * чужого экрана (Серёжи, Марианны) уходит Сонету только их тумблером.
+         */
+        fun phoneSit(chosen: Boolean?, p: Profile?): Boolean = chosen ?: (p?.owner == true)
     }
 }
 

@@ -2008,6 +2008,9 @@ private fun AutoPilotSection(app: PravkaApp) {
         )
     }
 
+    // ---- Телефон в ленте (13.10.2026) ----
+    PhoneSitSection(app)
+
     // ---- Подъём и отбой ----
     SubHead("Подъём и отбой", info = WAKE_INFO)
     val wakeDeal by settings.autoWakeDealFlow.collectAsState(initial = null)
@@ -2077,6 +2080,90 @@ private const val WAKE_INFO =
         "автосна утро узнаётся, как раньше, по ночи на экране."
 
 /** Встречи из календаря — за «i» у заголовка «Календарь». */
+/**
+ * Телефон в ленте (13.10.2026, `core/PhoneSit.kt`): тумблер, порог, текст
+ * экрана и что решено про последние сидения — молчаливая механика читается как
+ * поломка, поэтому решения на виду.
+ */
+@Composable
+private fun PhoneSitSection(app: PravkaApp) {
+    val context = LocalContext.current
+    val scope = app.appScope
+    val settings = app.settings
+    SubHead("Телефон в ленте", info = PHONE_SIT_INFO)
+    val on by app.zPhoneSitFlow.collectAsState(initial = false)
+    PaperToggle(
+        title = "Долгое сидение в телефоне режет дело",
+        checked = on,
+        onCheckedChange = { v -> scope.launch { settings.setZPhoneCut(v) } },
+    )
+    if (!on) return
+    var permTick by remember { mutableStateOf(0) }
+    val usage = remember(permTick) { ru.zf.pravka.data.PhoneSweeper.hasUsageAccess(context) }
+    if (!usage) {
+        PaperButton(
+            "Дать доступ к статистике использования",
+            icon = Glyphs.Key,
+            onClick = {
+                permTick++
+                runCatching {
+                    context.startActivity(
+                        android.content.Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }
+            },
+        )
+    }
+    val minutes by settings.zPhoneMinFlow.collectAsState(initial = ru.zf.pravka.core.PhoneSit.MIN_DEFAULT)
+    Text(
+        "С какой минуты — уже не «быстро ответил»",
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.padding(top = 6.dp, bottom = 4.dp),
+    )
+    ChipRow {
+        for (m in ru.zf.pravka.core.PhoneSit.MIN_CHOICES) {
+            PaperChip("$m мин", selected = minutes == m, onClick = { scope.launch { settings.setZPhoneMin(m) } })
+        }
+    }
+    val text by settings.zPhoneTextFlow.collectAsState(initial = true)
+    PaperToggle(
+        title = "Читать текст экрана — о чём переписка, что за ролик",
+        checked = text,
+        onCheckedChange = { v -> scope.launch { settings.setZPhoneText(v) } },
+    )
+    PaperHint(
+        if (text) {
+            "Раз в минуту, пока экран открыт: приложение и видимый текст — в память, Сонету при разборе; " +
+                "на диск не пишется. Пароли — никогда, банки, Госуслуги и Правка — только названием."
+        } else {
+            "Только приложения и минуты: Сонет судит по названию. В чужие окна служба не смотрит."
+        }
+    )
+    LaunchedEffect(Unit) { runCatching { app.phoneSit.load() } }
+    val recent by app.phoneSit.recent.collectAsState()
+    val peekAt = app.phoneSit.lastPeekAt
+    if (text && peekAt > 0L) {
+        PaperHint("Последний взгляд на экран — ${ru.zf.pravka.core.PhoneSit.hm(peekAt)}")
+    }
+    for (d in recent.take(4)) {
+        PaperHint(
+            "${ru.zf.pravka.core.PhoneSit.hm(d.from)}–${ru.zf.pravka.core.PhoneSit.hm(d.to)}" +
+                (if (d.apps.isNotBlank()) " · ${d.apps}" else "") + " → ${d.verdict}"
+        )
+    }
+}
+
+private const val PHONE_SIT_INFO =
+    "Владелец, 13.10.2026: «если написано, что я делаю завтрак, а я сижу уже минут семь в Клоде, " +
+        "то это систематизация, а не приготовление; а вспомнил, что по работе надо написать, быстро " +
+        "написал — это не работа». Сидение в телефоне от порога (паузы до полутора минут не в счёт) " +
+        "Сонет разбирает по приложениям и тексту экрана: чем занят и то ли это дело, что в ленте. " +
+        "Другое — врезка, как у звонка: дело режется и продолжается после, в пуше «Убрать». То же " +
+        "дело (переписка с клиентом посреди работы по нему) — не режет. Не трогает сон, встречу, " +
+        "дорогу, тренировку и время, про которое ты сам сказал в «З», пока сидел. Разбирает после " +
+        "конца сидения, на тике раз в пять минут."
+
 private const val CALLS_INFO =
     "Владелец, 06.10.2026: «звонки должны перебивать текущее дело… когда я говорю по " +
         "телефону, я не работаю; а если сижу и пришёл звонок по работе — я прямо работаю». " +

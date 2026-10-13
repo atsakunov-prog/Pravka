@@ -388,6 +388,8 @@ class AutoPilot(
         const val WHAT_CALL_CAT = "call_cat"
         /** Звонок в ленте — «Убрать»: врезка уходит, дело сшивается обратно. */
         const val WHAT_CALL_DROP = "call_drop"
+        /** Сидение в телефоне в ленте — «Убрать»: врезка уходит, дело сшивается обратно. */
+        const val WHAT_PHONE_DROP = "phone_drop"
         /** Звонок в ленте — «это он»: id человека Дел — в `to` (docs/svod-phone.md, 3.3). */
         const val WHAT_CALL_WHO = "call_who"
 
@@ -1290,6 +1292,25 @@ class AutoPilot(
             }
         lastFire = "звонок ${timeHm(start)} [$category]"
         notify(head, text, choices, quiet = sure)
+    }
+
+    /** Пуш последнего сидения в ленте — следующий его заменяет: десяток копий в шторке никому не нужен. */
+    @Volatile private var phoneNotifId = 0
+
+    /**
+     * Сидение в телефоне легло в ленту (13.10.2026, `data/PhoneSitEngine.kt`):
+     * тихой копией, как узнанный звонок, — владелец и так помнит, что сидел в
+     * телефоне; кнопка одна — «Убрать», дело сшивается обратно. Не та
+     * категория — правится тапом в ленте, как любая запись.
+     */
+    override fun phoneInRibbon(entryId: Long, title: String, category: String, start: Long, end: Long, cut: String, apps: String) {
+        val min = ((end - start + 30_000L) / 60_000L).coerceAtLeast(1L)
+        val text = "${timeHm(start)}–${timeHm(end)} [$category]." +
+            (if (apps.isNotBlank()) " В телефоне: $apps." else "") +
+            (if (cut.isNotBlank()) " «$cut» разрезано и идёт дальше." else "")
+        lastFire = "телефон ${timeHm(start)} [$category]"
+        cancelNotif(phoneNotifId)
+        phoneNotifId = notify("📱 $title, $min мин", text, listOf(action("Убрать", WHAT_PHONE_DROP, start, "", id = entryId)), quiet = true)
     }
 
     override fun leaveAnswered(by: String) {
@@ -2301,6 +2322,16 @@ class AutoPilot(
                         else "↩︎ Звонок убран" + (kept?.let { ", «${it.title}» без разрыва" } ?: ""),
                     )
                     if (call != null) app.eventLog.add("звонок: «${call.title}» убран из ленты кнопкой")
+                }
+                WHAT_PHONE_DROP -> {
+                    val sit = app.zasechkaStore.entryById(id)
+                    val kept = app.zasechkaStore.dissolveInterruption(id)
+                    Feedback.toast(
+                        app,
+                        if (sit == null) "Этой записи в ленте уже нет"
+                        else "↩︎ «${sit.title}» убрано" + (kept?.let { ", «${it.title}» без разрыва" } ?: ""),
+                    )
+                    if (sit != null) app.eventLog.add("телефон в ленте: «${sit.title}» убрано из ленты кнопкой")
                 }
                 WHAT_REOPEN -> {
                     val back = app.zasechkaStore.reopen(id)

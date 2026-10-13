@@ -573,4 +573,11 @@ interface AutoWitness {
      * [cut] — какое дело звонок разрезал (пусто — ничего не шло).
      */
     fun callInRibbon(entryId: Long, title: String, category: String, client: String, start: Long, end: Long, cut: String, sure: Boolean, candidates: List<CallRules.Candidate> = emptyList()) {}
+
+    /**
+     * Долгое сидение в телефоне легло в ленту врезкой (13.10.2026, `PhoneSit`):
+     * тихая копия в шторку с «Убрать» — одна на всех, новая заменяет прежнюю.
+     * [apps] — «Claude 12 мин · Telegram 3 мин», [cut] — какое дело разрезано.
+     */
+    fun phoneInRibbon(entryId: Long, title: String, category: String, start: Long, end: Long, cut: String, apps: String) {}
 }

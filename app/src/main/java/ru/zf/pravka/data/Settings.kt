@@ -131,6 +131,9 @@ class Settings(private val context: Context) {
         private val KEY_Z_CALL_CATEGORY = stringPreferencesKey("z_call_category")
         private val KEY_Z_CALLS_CUT = booleanPreferencesKey("z_calls_cut")
         private val KEY_Z_CALL_FAMILY = stringPreferencesKey("z_call_family")
+        private val KEY_Z_PHONE_CUT = booleanPreferencesKey("z_phone_cut")
+        private val KEY_Z_PHONE_TEXT = booleanPreferencesKey("z_phone_text")
+        private val KEY_Z_PHONE_MIN = intPreferencesKey("z_phone_min")
         private val KEY_Z_IMMERSIVE_MIN = intPreferencesKey("z_immersive_min")
         private val KEY_Z_CHECKINS = booleanPreferencesKey("z_checkins")
         private val KEY_Z_QUIET = booleanPreferencesKey("z_quiet")
@@ -936,6 +939,33 @@ class Settings(private val context: Context) {
     val zCallCategoryFlow = context.dataStore.data.map { it[KEY_Z_CALL_CATEGORY] ?: "Звонки" }
     suspend fun setZCallCategory(value: String) {
         context.dataStore.edit { it[KEY_Z_CALL_CATEGORY] = value.trim().ifEmpty { "Звонки" } }
+    }
+
+    /**
+     * Долгое сидение в телефоне режет дело (13.10.2026, `core/PhoneSit.kt`):
+     * выбор владельца или null — не выбирал; тогда решает профиль
+     * (`Profile.phoneSit`: у владельца да, у остальных нет — чужой экран Сонету
+     * без спроса не уходит).
+     */
+    val zPhoneCutSetFlow: Flow<Boolean?> = context.dataStore.data.map { it[KEY_Z_PHONE_CUT] }
+    suspend fun setZPhoneCut(value: Boolean) {
+        context.dataStore.edit { it[KEY_Z_PHONE_CUT] = value }
+    }
+
+    /**
+     * Читать текст экрана раз в минуту (о чём переписка, что за ролик). Откат,
+     * если на Fold вернётся чернота: выключено — Сонет судит по одним
+     * приложениям, в чужие окна служба не ходит.
+     */
+    val zPhoneTextFlow = context.dataStore.data.map { it[KEY_Z_PHONE_TEXT] ?: true }
+    suspend fun setZPhoneText(value: Boolean) {
+        context.dataStore.edit { it[KEY_Z_PHONE_TEXT] = value }
+    }
+
+    /** Порог сидения, минут: короче — «быстро ответил», дело не режется. */
+    val zPhoneMinFlow = context.dataStore.data.map { it[KEY_Z_PHONE_MIN] ?: ru.zf.pravka.core.PhoneSit.MIN_DEFAULT }
+    suspend fun setZPhoneMin(value: Int) {
+        context.dataStore.edit { it[KEY_Z_PHONE_MIN] = value.coerceIn(3, 30) }
     }
 
     /** An attention-eater session shorter than this stays out of the ribbon. */

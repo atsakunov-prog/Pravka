@@ -708,6 +708,10 @@ class PravkaAccessibilityService : AccessibilityService() {
         // Fold: окна висят, флаги честные, а диска на экране нет) — сторож
         // смотрит в список окон системы и лечит то, что свои флаги не видят.
         overlayWatch = OverlayWatch(this).also { it.start() }
+        // Телефон в ленте (13.10.2026): взгляд на экран раз в минуту своим
+        // потоком — что за приложение и о чём оно. Тумблеры решают внутри.
+        screenPeek?.stop()
+        screenPeek = ScreenPeek(this).also { it.start() }
     }
 
     // Main-thread lag sentinel. The fold black-screen class of bug is "the
@@ -2999,6 +3003,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             // otherwise nag about. Fire-and-forget - the check reads current data.
             // Телефон по дням — слой Засечки; тренировки в ленту — и Спорт, и Засечка.
             if (zasechka) scope.launch { app.phoneSweeper.sweep() }
+            // Телефон в ленте: кончившиеся сидения от порога — Сонету и врезкой в ленту.
+            if (zasechka) scope.launch { app.phoneSit.tick() }
             if (zasechka && sport) scope.launch { app.icuSweeper.sweep() }
             // Ночной разбор: запустить назревший прогон или спросить статус
             // батча. Сам себя дросселирует (раз в 10 минут), тику не мешает.
@@ -3139,6 +3145,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         // Ручки снимаются мгновенно и возвращаются через configSettled, когда
         // складывание уже прошло; полсекунды без ручки никто не заметит.
         folding = true
+        foldAtUptime = android.os.SystemClock.uptimeMillis()
         overlayWatch?.onFoldStart()
         val keep = cachedKeepOnFold
         if (keep) {
@@ -3224,6 +3231,15 @@ class PravkaAccessibilityService : AccessibilityService() {
     /** Сторож «окна висят, а их не видно» (`OverlayWatch`); живёт от подключения службы до onDestroy. */
     internal var overlayWatch: OverlayWatch? = null
 
+    /** Взгляд на экран для «Телефона в ленте» (`ScreenPeek`): свой поток, не главный. */
+    internal var screenPeek: ScreenPeek? = null
+
+    /**
+     * Когда началось последнее складывание (uptime): взгляд на экран ждёт
+     * двадцать секунд после него — переходу нечего ждать от чужих процессов.
+     */
+    @Volatile internal var foldAtUptime = 0L
+
     /**
      * Прямоугольники наших окон на экране по нашим параметрам — что сторож
      * ищет в списке окон системы: кнопки, стекло диска, шестерёнка (или точка).
@@ -3308,6 +3324,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         configHandler.removeCallbacks(configReport)
         overlayWatch?.stop()
         overlayWatch = null
+        screenPeek?.stop()
+        screenPeek = null
         runCatching { headsetVoice.close() }
         if (speakerLazy.isInitialized()) runCatching { speakerLazy.value.shutdown() }
         googleSession?.stop()

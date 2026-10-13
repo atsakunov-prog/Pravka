@@ -237,6 +237,14 @@ class PravkaApp : Application() {
             ru.zf.pravka.data.Profile.zasechkaQuiet(chosen, p)
         }
     }
+
+    /** Режет ли долгое сидение в телефоне дело (`Profile.phoneSit`): тумблер или профиль. */
+    val zPhoneSitFlow: kotlinx.coroutines.flow.Flow<Boolean> by lazy {
+        kotlinx.coroutines.flow.combine(settings.zPhoneCutSetFlow, profileStore.flow) { chosen, p ->
+            ru.zf.pravka.data.Profile.phoneSit(chosen, p)
+        }
+    }
+
     /** История «сколько идёт запрос» по тройкам «дорога + модель + усилие». */
     val paceStore by lazy { PaceStore(this) }
     val promptStore by lazy { PromptStore(this) }
@@ -879,6 +887,35 @@ class PravkaApp : Application() {
             delaOps = { ops -> delaDo(ops) },
             quiet = { zQuietFlow.first() },
         )
+    }
+
+    /**
+     * Телефон в ленте (13.10.2026, `core/PhoneSit.kt`): долгое сидение в
+     * телефоне — Сонету и врезкой в ленту. Снимки экрана кладёт служба
+     * (`trigger/ScreenPeek.kt`), только в память.
+     */
+    val phoneSit by lazy {
+        ru.zf.pravka.data.PhoneSitEngine(
+            this, zasechkaStore, phoneStore, settings, stats, eventLog,
+            claude = { claudeProvider },
+            on = { zPhoneSitFlow.first() && !zQuietFlow.first() },
+            witness = { ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.autoWitness() },
+            people = { phoneSitPeople() },
+        )
+    }
+
+    /**
+     * Свои люди для «Телефона в ленте»: семья — строкой из автопилота, как у
+     * звонков; люди Дел — с клиентом их организации. Сонету — подсказка, кто
+     * это в заголовке чата.
+     */
+    private suspend fun phoneSitPeople(): List<Pair<String, String>> {
+        val family = ru.zf.pravka.core.CallRules.familyList(settings.zCallFamilyFlow.first()).map { it to "семья" }
+        val work = runCatching { callPeople() }.getOrDefault(emptyList()).flatMap { p ->
+            val note = if (p.client.isNotBlank()) "работа, клиент ${p.client}" else "человек из Дел"
+            p.names.filter { it.length >= 3 }.map { it to note }
+        }
+        return family + work
     }
 
     /**

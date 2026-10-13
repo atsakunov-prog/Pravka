@@ -200,6 +200,51 @@ suspend fun ClaudeProvider.zasechkaFork(raw: String, context: String): Result<Za
         }
     }
 
+/**
+ * Телефон в ленте (13.10.2026, `core/PhoneSit.kt`): долгое сидение в телефоне —
+ * чем владелец был занят и режет ли это дело в ленте. Сонет на low без
+ * размышлений. [context] — хвост после {NOW} (лента, приложения по минутам,
+ * снимки экрана, категории, его названия); правила над ним стабильны и стоят
+ * под кэшем. Ответ разбирает `PhoneSit.parse`; сырой текст уходит наверх
+ * целиком (тот же контейнер, что у развилки), чтобы непрочитанный ответ был
+ * виден в журнале, а не общей фразой.
+ */
+suspend fun ClaudeProvider.zasechkaPhone(context: String): Result<ZasechkaForkReply> =
+    withContext(Dispatchers.IO) {
+        runCatchingApi {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) {
+                throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
+            }
+            val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.ZASECHKA_PHONE)
+            val cut = template.indexOf("{NOW}")
+            val head = if (cut > 0) template.substring(0, cut) else ""
+            // Владелец потерял {NOW} в «Промптах» — хвост дописывается в конец, а не теряется.
+            val tail = if (cut > 0) template.substring(cut).replace("{NOW}", context) else template.trimEnd() + "\n\n" + context
+            val parts = Prompts.PromptParts(
+                stablePrefix = head,
+                dictPart = tail,
+                afterInput = "",
+                cacheStableAlways = head.isNotBlank(),
+            )
+            val started = System.currentTimeMillis()
+            val choice = settings.modelChoice(ModelRoute.ZASECHKA_PHONE)
+            val reply = requestWithOneRetry(
+                apiKey, choice.model, parts, "", null,
+                effortOverride = choice.effort,
+                routeKey = ModelRoute.ZASECHKA_PHONE.key,
+                paceChars = context.length,
+            )
+            ZasechkaForkReply(
+                raw = reply.text,
+                costUsd = costUsd(choice.model, reply),
+                tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+                tokensOut = reply.outputTokens,
+                latencyMs = System.currentTimeMillis() - started,
+            )
+        }
+    }
+
 private fun ClaudeProvider.parseZasechka(raw: String): ZasechkaParse {
     var text = raw.trim()
     if (text.startsWith("```")) {

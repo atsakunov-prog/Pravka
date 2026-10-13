@@ -950,6 +950,8 @@ class ZasechkaStore(private val context: Context) {
         project: String = "",
         /** Человек Дел — с кем был звонок. */
         person: String = "",
+        /** Из чего врезка сложилась (телефон в ленте: «Телефон: Claude 12 мин»). */
+        comment: String = "",
     ): Entry? = mutex.withLock {
         ensureLoaded()
         if (end <= start) return@withLock null
@@ -980,6 +982,7 @@ class ZasechkaStore(private val context: Context) {
             createdAt = System.currentTimeMillis(),
             project = project.trim(),
             person = person.trim(),
+            comment = comment.trim(),
         )
         entries.add(entry)
         resumeTemplate?.let { t ->
