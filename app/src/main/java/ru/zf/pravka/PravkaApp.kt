@@ -182,6 +182,8 @@ class PravkaApp : Application() {
                 claudeProvider.requestLogger = if (on) ({ text -> requestLog.add(text) }) else null
             }
         }
+        // Настройки телефона на сервере (14.10.2026): следить за своими и раз в пять минут — пульс и правки с компьютера.
+        phoneRemote.start()
         // Сколько идёт запрос — в историю, а ход запроса — тому, кто его
         // показывает (20.09.2026). Та же одна точка на все дороги: здесь
         // известны и дорога, и модель с усилием, и длина входа.
@@ -468,6 +470,8 @@ class PravkaApp : Application() {
         ).also { sync ->
             // Команды Засечки из веба (docs/zasechka.md «Команды из веба»): синк отдаёт их сюда.
             sync.onZasechka = { cmds -> zasechkaWeb.onSync(cmds) }
+            // Настройки телефона на сервере (14.10.2026): поле phone синка — правки с компьютера (PhoneRemoteSync).
+            sync.listen { resp -> phoneRemote.onSync(resp) }
         }
     }
 
@@ -480,6 +484,12 @@ class PravkaApp : Application() {
             log = { eventLog.add(it) },
         )
     }
+
+    /**
+     * Настройки телефона на сервере Дел (14.10.2026, docs/phone-settings-server.md): снимок настроек — на
+     * страницу «Телефон» в вебе, правки оттуда — сюда, тем же путём, что тумблер. Какие настройки — `PhoneKnobs.kt`.
+     */
+    internal val phoneRemote by lazy { ru.zf.pravka.data.PhoneRemoteSync(this, appScope) { eventLog.add(it) } }
 
     /**
      * Свод (06.10.2026, docs/svod-phone.md): одна правда на сервере Дел —

@@ -76,6 +76,17 @@ class DelaSync(
     private val mutex = Mutex()
     private var pokeJob: Job? = null
 
+    /**
+     * Кто ещё читает ответ синка (14.10.2026: настройки телефона — поле `phone`, правки с компьютера, которые
+     * ждут этот телефон; `data/PhoneRemoteSync.kt`). Свой модуль, а не ветка здесь: синк дел о нём не знает,
+     * и сбой слушателя синк дел не роняет — он словами в журнал.
+     */
+    private val listeners = java.util.concurrent.CopyOnWriteArrayList<suspend (JSONObject) -> Unit>()
+
+    fun listen(l: suspend (JSONObject) -> Unit) {
+        listeners += l
+    }
+
     private val navFile: File get() = File(DataRoot.secrets(context), NAV_FILE)
     private val _services = MutableStateFlow(readNav())
 
@@ -276,6 +287,7 @@ class DelaSync(
         resp.optJSONArray("zasechka")?.let { cmds ->
             onZasechka?.let { f -> runCatching { f(cmds) }.onFailure { e -> log("засечка из веба: ${why(e)}") } }
         }
+        for (listener in listeners) runCatching { listener(resp) }.onFailure { e -> log("дела: слушатель синка — ${why(e)}") }
         // Фильтры Дел (10.10.2026) — в настройках человека на сервере, синк их не возит: берём из
         // `/api/me`. Оттуда же — сервисы для меню Ковчега (13.10.2026, `look.nav`): один запрос на
         // оба. Сбой не роняет синк дел — он словами в журнал.
