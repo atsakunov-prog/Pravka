@@ -263,9 +263,22 @@ internal fun LoadCardV2(workouts: List<SportStore.Workout>, days: Int) {
  * План недели (холст: `.sec` с датами, дни строками). Плана в календаре нет —
  * подсказка словами и «Обновить»: вдруг его только что запушили из чата.
  * Тап по дню раскрывает его комментарии из описаний событий.
+ *
+ * «Повторить прошлый» холста (доводка 5.0, 14.10.2026): копировать неделю
+ * телефон сам не умеет и не будет — писать тренировки в календарь intervals у
+ * него нечем и незачем (`docs/telo.md`, «Вид v2»): неделю ставит «Спорт» на
+ * компе, у него «Повторить неделю» (копия со сдвигом дат, без дублей). Поэтому
+ * при пустом плане — вход туда ([onSportWeb]: страница сервиса внутри
+ * приложения); нет сервиса в синке — только «Обновить», как было.
  */
 @Composable
-internal fun WeekPlanCardV2(app: PravkaApp, planDays: List<PlanStore.PlanDay>, onRefresh: () -> Unit, syncing: Boolean) {
+internal fun WeekPlanCardV2(
+    app: PravkaApp,
+    planDays: List<PlanStore.PlanDay>,
+    onRefresh: () -> Unit,
+    syncing: Boolean,
+    onSportWeb: (() -> Unit)? = null,
+) {
     val todayKey = remember { dayKey(System.currentTimeMillis()) }
     val upcoming = remember(planDays, todayKey) {
         app.planStore.upcoming(6).groupBy { it.date }.toList().sortedBy { it.first }
@@ -280,8 +293,12 @@ internal fun WeekPlanCardV2(app: PravkaApp, planDays: List<PlanStore.PlanDay>, o
     ) {
         if (upcoming.isEmpty()) {
             KvCallout(
-                "В intervals на эту неделю плана нет. Появится — приедет сам раз в сутки или по «Обновить».",
-                buttons = { KvSmallButton(if (syncing) "Обновляю…" else "Обновить", onRefresh, soft = true, enabled = !syncing, icon = Glyphs.Refresh) },
+                "В intervals на эту неделю плана нет. Появится — приедет сам раз в сутки или по «Обновить»." +
+                    if (onSportWeb != null) " Повторить прошлую неделю — в «Спорте» на компе." else "",
+                buttons = {
+                    KvSmallButton(if (syncing) "Обновляю…" else "Обновить", onRefresh, soft = true, enabled = !syncing, icon = Glyphs.Refresh)
+                    if (onSportWeb != null) KvSmallButton("Повторить прошлую", onSportWeb, icon = Glyphs.Copy)
+                },
             )
             return@PaperCard
         }

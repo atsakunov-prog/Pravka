@@ -900,6 +900,8 @@ private fun MainScreen(
                                 bodyPart = bodyPart,
                                 onBodyPart = { bodyPart = it },
                                 onFood = if (live(Tab.FOOD)) ({ openMode(Tab.FOOD) }) else null,
+                                // Пустой план недели → «Повторить прошлую» в «Спорте» на компе (страницей внутри приложения).
+                                onWeb = openServicePage,
                             )
                         } else {
                             TabHeader(

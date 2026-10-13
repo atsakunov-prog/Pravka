@@ -145,6 +145,11 @@ internal fun SportTab(
     onBodyPart: ((Int) -> Unit)? = null,
     /** Вкладка «Еда» в «Теле» на сложенном; null — Еды нет в профиле. */
     onFood: (() -> Unit)? = null,
+    /**
+     * Страница сервиса Ковчега внутри приложения (`MainActivity.openServicePage`): «Повторить прошлую»
+     * у пустого плана недели ведёт в «Спорт» на компе — неделю ставит он. null — входа нет.
+     */
+    onWeb: ((ru.zf.pravka.core.ServicePage) -> Unit)? = null,
 ) {
     val store = app.sportStore
     // Карточки, написанные под владельца (08.10.2026): «Цели октября» — его
@@ -162,6 +167,15 @@ internal fun SportTab(
     val gtgDays by app.strengthStore.gtgFlow.collectAsState()
     val rawTakes by app.strengthStore.rawFlow.collectAsState()
     val restSec by app.settings.restSecFlow.collectAsState(initial = 90)
+    // «Спорт» на компе (ключ `sport` в `look.nav`): адрес — только из синка Дел; нет — нет и входа.
+    val webNav by app.delaSync.services.collectAsState()
+    val webLink by app.delaSync.link.collectAsState()
+    val sportWeb: (() -> Unit)? = remember(webNav, webLink, onWeb) {
+        val nav = webNav.firstOrNull { it.key == "sport" }
+        val url = nav?.let { ru.zf.pravka.core.Kovcheg.absolute(it.url, webLink?.url) }
+        if (onWeb == null || nav == null || url == null) null
+        else ({ onWeb(ru.zf.pravka.core.ServicePage(nav.name, nav.icon, url)) })
+    }
 
     var syncing by remember { mutableStateOf(false) }
     var asking by remember { mutableStateOf(false) }
@@ -509,7 +523,7 @@ internal fun SportTab(
                                     ZaryadkaChecklist(app, gtgToday, chargerPlan, today)
                                 }
                                 if (side == 0 && ownerCards) item(key = "pullup") { PullupCard(app, gtgToday, streak, onRecord = { gtgDialog = true }) }
-                                item(key = "weekplan") { WeekPlanCardV2(app, planDays, refresh, syncing) }
+                                item(key = "weekplan") { WeekPlanCardV2(app, planDays, refresh, syncing, onSportWeb = sportWeb) }
                                 if (side == 0) {
                                     item(key = "last") {
                                         LastWorkoutsCardV2(workouts, "Последние", 3, skipToday = true, onAll = { setPart(PART_JOURNAL) })
