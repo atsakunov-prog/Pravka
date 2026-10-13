@@ -43,7 +43,8 @@ internal class PhoneGroup(
  * - **правятся с компьютера** — поведение приложения, которое одинаково понятно и с телефона, и с компа:
  *   модели и усилия дорог, ночной разбор, «Сегодня» (сон, город, отметки, бюджет), Правка, Засечка
  *   (напоминания, звонки, телефон в ленте, тумблеры автопилота), Спорт, лента и intervals у Еды, пуши Денег,
- *   распознавание (путь, режим, подсказки, звук «говори»), проверка связи, тема и «Вид 4.0», суточная копия,
+ *   распознавание (путь, режим, подсказки, звук «говори»), проверка связи, тема, «Вид 4.0» и сервисы вкладкой
+ *   браузера, суточная копия,
  *   обновления, лог запросов;
  * - **только показываются** — что привязано к железу или решается в руках: места Wi-Fi, машина по Bluetooth,
  *   метки NFC, календари телефона, кто слушает (телефон или гарнитура), движок Whisper (файлы модели на
@@ -96,7 +97,7 @@ internal object PhoneKnobs {
         PhoneGroup("net", "Связь с облаками", "проверка Google и Claude", "globe") { v ->
             if (v["net.probe"] == true) "проверка раз в ${v["net.every"]} мин" else "проверка выключена"
         },
-        PhoneGroup("look", "Вид приложения", "тема, «Вид 4.0»", "monitor") { v ->
+        PhoneGroup("look", "Вид приложения", "тема, «Вид 4.0», сервисы внутри или браузером", "monitor") { v ->
             if (v["look.v4"] == true) "«Вид 4.0»" else when (v["look.theme"]) { "light" -> "светлая"; "dark" -> "тёмная"; else -> "как в системе" }
         },
         PhoneGroup("data", "База данных", "копия раз в сутки, где лежит", "archive") { v ->
@@ -322,6 +323,8 @@ internal object PhoneKnobs {
         add(choice("look", "look.theme", "Тема", opts("system" to "Как в системе", "light" to "Светлая", "dark" to "Тёмная"),
             flow = { it.settings.lookThemeFlow }) { app, v -> app.settings.setLookTheme(v) })
         add(bool("look", "look.v4", "«Вид 4.0»", "стекло и свечение — на время переезда", flow = { it.settings.lookV4Flow }) { app, v -> app.settings.setLookV4(v) })
+        add(bool("look", "look.services_in_browser", "Сервисы Ковчега — вкладкой браузера", "запасной путь, если внутри приложения страница сервиса не работает",
+            flow = { it.settings.servicesInBrowserFlow }) { app, v -> app.settings.setServicesInBrowser(v) })
 
         // База данных.
         add(bool("data", "data.daily_backup", "Копия базы раз в сутки", "ночью, в Documents/Pravka-backups и в облако семьи",

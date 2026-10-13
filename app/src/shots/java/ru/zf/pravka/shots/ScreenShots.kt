@@ -15,6 +15,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
 import com.github.takahirom.roborazzi.captureRoboImage
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assume
 import org.junit.Before
@@ -280,6 +281,9 @@ class ScreenShots {
 
         // ---- Сервисы Ковчега внутри приложения (14.10.2026): страница сервиса с шапкой Ковчега
         if (want("web")) serviceWeb()
+
+        // ---- Настройки телефона на сервере (14.10.2026): правка с компьютера на настоящем PravkaApp и экран «Телефон»
+        if (want("ph")) phoneRemote()
 
         // ---- режимы по одному (Правка 4.0): сложенный, целиком, разворот
         for ((g, tab) in listOf(
@@ -729,6 +733,60 @@ class ScreenShots {
         c = launch(MainActivity.TAB_ZASECHKA); shot(c, "z5-v4-wide"); close(c)
         RuntimeEnvironment.setQualifiers(OUTER)
         runBlocking { app.settings.setLookV4(false) }
+        settle(4)
+    }
+
+    /**
+     * Настройки телефона на сервере (14.10.2026, docs/phone-settings-server.md). Сначала — применение на настоящем
+     * приложении: правка с компьютера ставится ТЕМ ЖЕ сеттером `Settings`, что тумблер (`PhoneRemoteSync.apply`), и
+     * поток настройки видит новое значение; показ (микрофон по умолчанию) и кривое значение не ставятся; правка,
+     * которую телефон перебил своей, более поздней, — спор, значение остаётся телефонным; взятая правка второй раз
+     * не ставится. Потом — экран «Телефон» с пометкой «поменяно с компьютера»: сложенный и разворот, обе темы.
+     */
+    private fun phoneRemote() {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        val r = app.phoneRemote
+        val dev = app.moneyCloudSync.device
+        fun edit(id: String, key: String, value: Any?, at: Long) = ru.zf.pravka.core.PhoneRemote.Edit(id, dev, key, value, at)
+        runBlocking {
+            app.settings.setZGapMin(45)
+            app.settings.setModel(ru.zf.pravka.data.ModelRoute.PRAVKA, ru.zf.pravka.data.Settings.MODEL_SONNET)
+            app.settings.setPhoneMicOnly(true)
+            val t0 = System.currentTimeMillis()
+            r.apply(listOf(
+                edit("ph-1", "z.gap", 60, t0),
+                edit("ph-2", "model.pravka", "claude-opus-5-5", t0),
+                edit("ph-3", "voice.mic", "гарнитура", t0),
+                edit("ph-4", "sport.rest", 7, t0),
+            ))
+            check(app.settings.zGapMinFlow.first() == 60) { "с компьютера: дыра во времени не встала" }
+            check(app.settings.modelChoice(ru.zf.pravka.data.ModelRoute.PRAVKA).model == "claude-opus-5-5") { "с компьютера: модель не встала" }
+            check(app.settings.phoneMicOnlyFlow.first()) { "показ поставился с компьютера" }
+            check(app.settings.restSecFlow.first() != 7) { "значение вне пределов поставилось" }
+            // Та же правка ещё раз (сервер не узнал ответа) — не ставится второй раз: руками вернули 45, 45 и остаётся.
+            app.settings.setZGapMin(45)
+            settle(4)
+            r.apply(listOf(edit("ph-1", "z.gap", 60, t0)))
+            check(app.settings.zGapMinFlow.first() == 45) { "взятая правка поставилась второй раз" }
+            // Правка, сделанная на компьютере раньше, чем телефон поменял сам, — спор: остаётся телефонное.
+            r.apply(listOf(edit("ph-5", "z.gap", 90, t0 - 3_600_000L)))
+            check(app.settings.zGapMinFlow.first() == 45) { "правка старше телефонной перебила её" }
+            app.settings.setZGapMin(60)
+        }
+        settle(8)
+        for (theme in listOf("light", "dark")) {
+            runBlocking { app.settings.setLookTheme(theme) }
+            settle(4)
+            for ((size, q) in listOf("folded" to OUTER, "wide" to INNER)) {
+                RuntimeEnvironment.setQualifiers(q)
+                var c = launch(MainActivity.TAB_SETTINGS)
+                shot(c, "ph-$size-$theme")
+                if (tap(c, "Засечка", exact = true)) shot(c, "ph-zasechka-$size-$theme")
+                close(c)
+            }
+        }
+        RuntimeEnvironment.setQualifiers(OUTER)
+        runBlocking { app.settings.setLookTheme("system") }
         settle(4)
     }
 
