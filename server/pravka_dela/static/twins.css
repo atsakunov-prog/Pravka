@@ -1,0 +1,268 @@
+/* ── Страницы-двойники экранов телефона «Правка 5.0»: «Сегодня», «Засечка», «Правка» (14.10.2026, twins.js) ──────────
+   Вид — v2 веба Дел (переменные style.css): белые панели с линией, радиус 10, один акцент, цвет «чей это» --sp0…7.
+   Раскладка — разложенный телефон, «мини-компьютер» холста (phone.css), только шире: две колонки на всю страницу.
+   Узкое окно (до 900 px) — столбиком в порядке сложенного телефона: колонки растворяются (display: contents), панели
+   встают по своему номеру .o0…o8. Отдаётся хвостом style.css (api.TAILS): своего адреса у файла нет. */
+
+.tw-page {
+  flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: 20px 28px calc(48px + env(safe-area-inset-bottom));
+}
+.tw-head, .tw-cols, .tw-page > .tw-callout, .tw-page > .tw-fresh, .tw-page > .tw-empty { max-width: 1480px; margin-left: auto; margin-right: auto; }
+.tw-head { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.tw-title { min-width: 0; flex: 1 1 240px; }
+.tw-title h1 { font: 600 26px/1.2 var(--font); letter-spacing: -.01em; }
+.tw-sub { font-size: 13.5px; color: var(--faint); margin-top: 2px; }
+.tw-hx { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tw-daynav { display: flex; align-items: center; gap: 4px; }
+.tw-daynav .tw-prev svg { transform: rotate(180deg); }
+.tw-daynav .ib:disabled { opacity: .35; cursor: default; }
+
+.tw-cols { display: grid; gap: 14px; align-items: start; }
+.tw-day { grid-template-columns: minmax(0, 1.15fr) minmax(340px, 1fr); }
+.tw-zs { grid-template-columns: minmax(340px, .95fr) minmax(0, 1.25fr); }
+.tw-pr-cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.tw-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* ── Панель и её заголовок (.card и .sec холста) ── */
+.tw-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+.tw-sec { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font: 600 14.5px/1.35 var(--font); min-width: 0; }
+.tw-sec > .kv-i { color: var(--icon); }
+.tw-sec small { font: 400 12.5px/1.4 var(--font); color: var(--faint); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tw-r { margin-left: auto; font: 500 13px/1.3 var(--font); color: var(--accent); white-space: nowrap; flex: none; }
+.tw-r0 { margin-left: auto; }
+.tw-count { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 5px; font-size: 12px; font-weight: 600; line-height: 19px;
+  text-align: center; background: var(--hover-2); color: var(--muted); }
+.tw-count.hot { background: var(--accent-soft); color: var(--accent); }
+.tw-eyebrow { font-size: 12px; font-weight: 600; color: var(--faint); display: block; }
+.tw-mt { margin-top: 12px; }
+.tw-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tw-grow { flex: 1; min-width: 0; }
+.tw-acts { flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.tw-empty { color: var(--faint); font-size: 13.5px; padding: 4px 0; }
+.tw-empty.loading, .tw-empty.err { padding: 24px; text-align: center; }
+.tw-empty.err { color: var(--bad); }
+.tw-callout { display: flex; gap: 10px; align-items: flex-start; border-radius: 8px; padding: 9px 12px; font-size: 13.5px; margin-bottom: 12px;
+  background: var(--panel-2); border: 1px solid var(--line-soft); }
+.tw-callout.warn { background: color-mix(in srgb, var(--warn) 8%, var(--panel)); border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
+.tw-callout.warn .kv-i { color: var(--warn); margin-top: 2px; }
+.tw-fresh { font-size: 12.5px; color: var(--warn); margin: -6px 0 10px; }
+.tw-tag { font-size: 12px; line-height: 19px; padding: 0 7px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); flex: none; }
+.tw-pill { margin-left: auto; font-size: 12.5px; color: var(--faint); white-space: nowrap; }
+.tw-page .warn { color: var(--warn); }
+.tw-page .acc { color: var(--accent); }
+
+/* ── Цвет «чей это» (core/CategoryTone.kt): квадратик и полоса; дорога и потери — пополам с фоном, дыра — линией ── */
+/* Выбор категории (choicePop) живёт вне страницы — квадратики и там. */
+:is(.tw-page, .ps-pop) .sq { width: 10px; height: 10px; border-radius: 3px; flex: none; display: inline-block; }
+:is(.tw-page, .ps-pop) .c0 { background: var(--sp0); } :is(.tw-page, .ps-pop) .c1 { background: var(--sp1); } :is(.tw-page, .ps-pop) .c2 { background: var(--sp2); }
+:is(.tw-page, .ps-pop) .c3 { background: var(--sp3); } :is(.tw-page, .ps-pop) .c4 { background: var(--sp4); } :is(.tw-page, .ps-pop) .c5 { background: var(--sp5); }
+:is(.tw-page, .ps-pop) .c6 { background: var(--sp6); } :is(.tw-page, .ps-pop) .c7 { background: var(--sp7); }
+:is(.tw-page, .ps-pop) .h6 { background: color-mix(in srgb, var(--sp6) 50%, var(--bg)); }
+:is(.tw-page, .ps-pop) .h7 { background: color-mix(in srgb, var(--sp7) 50%, var(--bg)); }
+:is(.tw-page, .ps-pop) .cg { background: var(--line); }
+
+/* ── «Идёт сейчас»: название 20/600, таймер 30/600 ── */
+.tw-nowrow { margin-top: 2px; align-items: center; }
+.tw-nt { font: 600 20px/1.2 var(--font); overflow-wrap: anywhere; }
+.tw-nt.big { font-size: 22px; }
+.tw-ns { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--faint); margin-top: 3px; min-width: 0; }
+.tw-ns .sq { width: 8px; height: 8px; border-radius: 2px; }
+.tw-timer { font: 600 30px/1 var(--font); letter-spacing: -.02em; font-variant-numeric: tabular-nums; flex: none; }
+.tw-timer.big { font-size: 34px; }
+.tw-val { display: flex; align-items: baseline; gap: 6px; margin-top: 6px; font-size: 12.5px; color: var(--faint); min-width: 0; }
+.tw-val b { font: 600 20px/1.2 var(--font); color: var(--text); }
+.tw-val b.warn { color: var(--warn); }
+
+/* ── Гора дня (ui/Mountain.kt): отрезок — цветом категории, заливка до нуля мягко; ноль — пунктиром, только если уходил ниже ── */
+.tw-mtn-box { margin-top: 10px; }
+.tw-mtn { width: 100%; display: block; overflow: visible; }
+.tw-mtn line, .tw-mtn path { vector-effect: non-scaling-stroke; }
+.tw-mtn [class^='s'] { stroke-width: 2; stroke-linecap: round; fill: none; }
+.tw-mtn [class^='f'] { stroke: none; fill-opacity: .2; }
+.tw-mtn .s0 { stroke: var(--sp0); } .tw-mtn .f0 { fill: var(--sp0); }
+.tw-mtn .s1 { stroke: var(--sp1); } .tw-mtn .f1 { fill: var(--sp1); }
+.tw-mtn .s2 { stroke: var(--sp2); } .tw-mtn .f2 { fill: var(--sp2); }
+.tw-mtn .s3 { stroke: var(--sp3); } .tw-mtn .f3 { fill: var(--sp3); }
+.tw-mtn .s4 { stroke: var(--sp4); } .tw-mtn .f4 { fill: var(--sp4); }
+.tw-mtn .s5 { stroke: var(--sp5); } .tw-mtn .f5 { fill: var(--sp5); }
+.tw-mtn .s6 { stroke: var(--sp6); } .tw-mtn .f6 { fill: var(--sp6); }
+.tw-mtn .s7 { stroke: var(--sp7); } .tw-mtn .f7 { fill: var(--sp7); }
+.tw-mtn .sg { stroke: var(--check); } .tw-mtn .fg { fill: var(--check); }
+.tw-mtn .hole { stroke: var(--check); stroke-width: 1; }
+.tw-mtn .z { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 4 4; }
+.tw-mtn .now { stroke: var(--text); stroke-width: 1; stroke-dasharray: 3 3; opacity: .5; }
+.tw-strip { position: relative; height: 14px; border-radius: 4px; overflow: hidden; background: var(--line-soft); margin-top: 4px; }
+.tw-strip i { position: absolute; top: 0; bottom: 0; display: block; min-width: 1px; }
+.tw-ticks { display: flex; justify-content: space-between; font-size: 11px; color: var(--faint); margin-top: 4px; }
+
+/* ── Лента строками (ui/Ribbon.kt): «от–до», квадратик, название и «категория · откуда», длительность ── */
+.tw-ribbon { display: flex; flex-direction: column; }
+.tw-lr { display: flex; align-items: center; gap: 9px; padding: 5px 0; border: 0; border-top: 1px solid var(--line-soft); background: none;
+  font: 400 13.5px/1.35 var(--font); color: var(--text); text-align: left; width: 100%; min-width: 0; border-radius: 0; }
+.tw-lr.first { border-top: 0; }
+button.tw-lr { cursor: pointer; }
+button.tw-lr:hover { background: var(--hover); }
+.tw-lr .tm { width: 92px; flex: none; color: var(--faint); font-size: 12.5px; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.tw-lr .lb { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.tw-lr .lt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tw-lr .ls { font-size: 11.5px; line-height: 1.3; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tw-lr .lc { font-size: 12px; color: var(--muted); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tw-lr .ld { color: var(--faint); font-size: 12.5px; flex: none; white-space: nowrap; }
+.tw-lr.gap .lt { color: var(--faint); font-style: italic; }
+.tw-lr.now { background: var(--accent-soft); border-radius: 7px; padding: 6px 8px; margin: 2px -8px; width: calc(100% + 16px); border-top-color: transparent; }
+.tw-lr.now .tm { color: var(--accent); }
+.tw-lr.now .lt { font-weight: 600; }
+.tw-lr.now + .tw-lr { border-top-color: transparent; }
+.tw-lx { border-top: 0; padding: 0 0 4px; font-size: 12.5px; color: var(--muted); }
+.tw-lx .tm { color: var(--muted); }
+.tw-lx .tm .kv-i { color: var(--icon); }
+.tw-lx .sq { visibility: hidden; }
+.tw-lx .lx { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.tw-lx.pending .lx { color: var(--warn); }
+.tw-scrollbox { overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; margin: 8px -8px 0; padding: 0 8px;
+  max-height: calc(100vh / var(--kv-zoom, 1) - 380px); min-height: 220px; }
+.tw-scrollbox.fade { -webkit-mask-image: linear-gradient(#000 85%, transparent); mask-image: linear-gradient(#000 85%, transparent); padding-bottom: 28px; }
+.tw-lenta .tw-scrollbox { max-height: calc(100vh / var(--kv-zoom, 1) - 470px); }
+
+/* ── Плитки (Еда, Спорт, Деньги, Шаббат) ── */
+.tw-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.tw-tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px 9px; min-width: 0;
+  display: flex; flex-direction: column; gap: 5px; color: var(--text); text-decoration: none; }
+a.tw-tile:hover { border-color: var(--check); text-decoration: none; }
+.tw-th { display: flex; align-items: center; gap: 8px; }
+.tw-th .kv-i { color: var(--icon); }
+.tw-th h3 { font: 600 13.5px/1.3 var(--font); }
+.tw-kpi { font: 600 22px/1.15 var(--font); letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tw-kpi small { font-size: 13px; font-weight: 500; color: var(--faint); margin-left: 4px; letter-spacing: 0; }
+.tw-kpi.dim { color: var(--faint); }
+.tw-ts { font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tw-bar { height: 5px; background: var(--hover-2); border-radius: 3px; overflow: hidden; }
+.tw-bar i { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+
+/* ── Погода: строка — сейчас и три части суток; раскрытие — сутки по часам вбок и неделя ── */
+.tw-wxc { padding: 9px 12px; }
+.tw-wx { display: flex; align-items: center; gap: 10px; width: 100%; padding: 0; border: 0; background: none; color: var(--text);
+  font: 400 13.5px/1.3 var(--font); text-align: left; cursor: pointer; }
+.tw-wx > .kv-i { color: var(--icon); }
+.tw-wx > b { font: 600 22px/1 var(--font); }
+.tw-wxp { display: flex; gap: 16px; margin-left: 6px; min-width: 0; overflow: hidden; }
+.tw-wxs { display: flex; flex-direction: column; font: 600 14px/1.15 var(--font); flex: none; }
+.tw-wxs small, .tw-wxs i { font-size: 11px; font-weight: 400; color: var(--faint); font-style: normal; }
+.tw-wx-off { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--faint); }
+.tw-hrs { display: flex; gap: 2px; overflow-x: auto; margin: 10px -4px 4px; padding-bottom: 4px; scrollbar-width: thin; }
+.tw-hr { flex: none; width: 46px; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px 0; font-size: 13px; }
+.tw-hr small { font-size: 11px; color: var(--faint); min-height: 13px; }
+.tw-hr small.rain { color: var(--accent); }
+.tw-hr .kv-i { color: var(--icon); }
+.tw-wkr { display: grid; grid-template-columns: 56px repeat(3, minmax(0, 1fr)) 110px; gap: 6px; padding: 5px 0; border-top: 1px solid var(--line-soft); font-size: 13px; }
+.tw-wkr.head { border-top: 0; padding-top: 8px; font-size: 11.5px; color: var(--faint); }
+.tw-wkr span:last-child { text-align: right; white-space: nowrap; }
+.tw-wkr .wet { color: var(--accent); font-weight: 500; }
+.tw-wx-note { font-size: 11.5px; color: var(--faint); margin-top: 6px; }
+
+/* ── Списки дел: квадрат-галка, название, ниже срок и кто ── */
+.tw-list { display: flex; flex-direction: column; }
+.tw-li { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line-soft); min-width: 0; color: var(--text); text-decoration: none; }
+.tw-li:first-child { border-top: 0; padding-top: 2px; }
+a.tw-li:hover { text-decoration: none; background: var(--hover); }
+.tw-li.run { background: var(--accent-soft); border-radius: 7px; padding: 6px 8px; margin: 0 -8px; border-top-color: transparent; }
+.tw-li.past { opacity: .65; }
+.tw-chk { width: 18px; height: 18px; flex: none; border: 1.5px solid var(--check); border-radius: 5px; background: var(--panel); padding: 0; cursor: pointer; }
+.tw-chk:hover { border-color: var(--accent); }
+.tw-chk.on { background: var(--accent); border-color: var(--accent); }
+.tw-lt { display: block; font-size: 14px; line-height: 1.35; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+a.tw-lt:hover { color: var(--accent); text-decoration: none; }
+.tw-ls { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 12.5px; color: var(--faint); margin-top: 1px; min-width: 0; }
+.tw-when { width: 52px; flex: none; color: var(--faint); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.tw-meet .kv-i { color: var(--icon); }
+.tw-tomorrow { font-size: 12.5px; color: var(--faint); padding-top: 6px; border-top: 1px solid var(--line-soft); margin-top: 4px; }
+.tw-asks { margin-top: 0; border: 0; background: none; }
+.tw-new .group.asks > * { padding-left: 0; padding-right: 0; }
+
+/* ── Дайджест: растворяется книзу, нажатие — целиком ── */
+.tw-dgb { max-height: 96px; overflow: hidden; cursor: pointer; -webkit-mask-image: linear-gradient(#000 35%, transparent); mask-image: linear-gradient(#000 35%, transparent); }
+.tw-dgb.open { max-height: none; -webkit-mask-image: none; mask-image: none; }
+.tw-dgb .tw-eyebrow { margin-top: 6px; }
+.tw-dgb .tw-eyebrow:first-child { margin-top: 0; }
+.tw-dgb p { font-size: 13.5px; line-height: 1.45; margin-top: 3px; }
+.tw-dgb p b { font-weight: 600; }
+
+/* ── Команды телефону: ждёт, взял, сделал, не стал ── */
+.tw-cmds { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line-soft); }
+.tw-cmd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+.tw-cmd .st { font-weight: 600; color: var(--faint); }
+.tw-cmd.wait .st, .tw-cmd.taken .st { color: var(--warn); }
+.tw-cmd.done .st { color: var(--ok); }
+.tw-cmd.refused .st { color: var(--bad); }
+.tw-cmd .nt { color: var(--faint); flex-basis: 100%; }
+.tw-cmd .chip-btn { padding: 1px 8px; font-size: 12.5px; }
+
+/* ── Формы: «Начать», «Поправить» ── */
+.tw-form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+.tw-in { flex: 1 1 220px; min-width: 0; }
+.tw-edit .tw-in { width: 100%; margin-top: 2px; }
+.tw-cat { max-width: 260px; }
+.tw-time { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--faint); }
+.tw-time input { width: 110px; }
+.tw-edit { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.tw-play { color: var(--accent); background: var(--accent-soft); width: 36px; height: 32px; }
+.tw-play:hover { color: var(--accent) !important; }
+
+/* ── Итог дня по категориям ── */
+.tw-crs { display: flex; flex-direction: column; }
+.tw-cr { display: grid; grid-template-columns: 10px minmax(90px, 140px) minmax(0, 1fr) 64px 44px; gap: 8px; align-items: center; padding: 4px 0; font-size: 13.5px; }
+.tw-cr .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tw-crbar { height: 4px; background: var(--hover-2); border-radius: 3px; overflow: hidden; }
+.tw-crbar i { display: block; height: 100%; border-radius: inherit; }
+.tw-cr .v { text-align: right; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.tw-cr .p { text-align: right; color: var(--faint); font-size: 12px; }
+
+/* ── «Правка»: фильтр, поиск, список днями, выбранная целиком ── */
+.tw-seg { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 2px; gap: 2px; flex: none; }
+.tw-seg button { padding: 4px 11px; border-radius: 7px; border: 0; background: none; color: var(--muted); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.tw-seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.tw-search { width: 100%; margin-bottom: 8px; }
+.tw-prd { display: flex; align-items: baseline; gap: 8px; padding: 12px 0 4px; font-size: 13px; color: var(--faint); border-bottom: 1px solid var(--line-soft); }
+.tw-prd b { color: var(--text); font-weight: 600; font-size: 13.5px; }
+.tw-pr { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 8px 6px; border: 0; border-bottom: 1px solid var(--line-soft);
+  background: none; text-align: left; font: inherit; color: var(--text); border-radius: 0; cursor: pointer; }
+.tw-pr:hover { background: var(--hover); }
+.tw-pr.sel { background: var(--accent-soft); border-radius: 7px; border-bottom-color: transparent; }
+.tw-pr .tm { width: 42px; flex: none; font-size: 12.5px; color: var(--faint); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.tw-pr .tw-lt { font-size: 13.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; }
+.tw-pr.miss .tw-lt { color: var(--faint); font-style: italic; }
+.tw-pr .tw-ls { display: block; }
+.tw-pr .tw-ls .kv-i { color: var(--icon); vertical-align: -2px; margin-right: 4px; }
+.tw-pr-side { position: sticky; top: 0; }
+.tw-pr-detail .tw-said { font-size: 14px; line-height: 1.55; color: var(--muted); margin-top: 4px; white-space: pre-wrap; }
+.tw-pr-detail .tw-wrote { font-size: 14.5px; line-height: 1.55; margin-top: 4px; white-space: pre-wrap; }
+.tw-sets { margin-top: 12px; }
+.tw-set { display: flex; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line-soft); font-size: 14px; }
+.tw-set .v { margin-left: auto; color: var(--muted); font-size: 13.5px; text-align: right; }
+.tw-more { margin-top: 12px; }
+.tw-pr-list .tw-pr-detail { padding: 10px 6px 14px; border-bottom: 1px solid var(--line); }
+
+/* ── Узкое окно — как сложенный телефон: одна колонка, панели в его порядке ── */
+@media (max-width: 900px) {
+  .tw-page { padding: 14px 12px calc(40px + env(safe-area-inset-bottom)); }
+  .tw-cols { display: flex; flex-direction: column; gap: 10px; align-items: stretch; }
+  .tw-cols > .tw-col > * { max-width: 100%; }
+  .tw-col { display: contents; }
+  .tw-title h1 { font-size: 23px; }
+  .o0 { order: 0; } .o1 { order: 1; } .o2 { order: 2; } .o3 { order: 3; } .o4 { order: 4; }
+  .o5 { order: 5; } .o6 { order: 6; } .o7 { order: 7; } .o8 { order: 8; }
+  .tw-scrollbox, .tw-lenta .tw-scrollbox { max-height: none; min-height: 0; overflow: visible; }
+  .tw-scrollbox.fade { -webkit-mask-image: none; mask-image: none; padding-bottom: 0; }
+  .tw-wxp { gap: 10px; }
+  .tw-wkr { grid-template-columns: 48px repeat(3, minmax(0, 1fr)) 88px; font-size: 12.5px; }
+  .tw-timer { font-size: 26px; }
+  .tw-timer.big { font-size: 28px; }
+  .tw-cr { grid-template-columns: 10px minmax(70px, 110px) minmax(0, 1fr) 56px 36px; font-size: 13px; }
+  .tw-lr .tm { width: 84px; }
+  .tw-pr-side { display: none; }
+}
+@media (max-width: 420px) {
+  .tw-wxp .tw-wxs:nth-child(3) { display: none; }
+  .tw-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

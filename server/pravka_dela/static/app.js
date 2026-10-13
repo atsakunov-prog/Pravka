@@ -774,6 +774,9 @@ function route() {
   if (kind === 'search') return { kind: 'search', q: decodeURIComponent(id || '') };
   if (kind === 'new' && id) return { kind: 'new', batch: decodeURIComponent(id) }; // ссылка из Telegram — одна пачка
   if (kind === 'task' && /^\d+$/.test(id || '')) return { kind: 'now', task: +id }; // кнопка «Открыть» под напоминанием
+  // Страницы-двойники телефона (twins.js, 14.10.2026): #/day, #/zasechka, #/pravka — только владельцу.
+  const twin = twinsRoute(kind);
+  if (twin) return twin;
   if (kind === 'settings') return { kind: 'settings' };
   if (kind === 'stats') return { kind: 'stats' };
   if (kind === 'inbox') return { kind: 'new' }; // старые закладки: «Входящие» теперь в «Новом»
@@ -815,6 +818,7 @@ async function boot() {
 function render() {
   if (!S.me) return;
   const r = route();
+  if (r.kind === 'twin' && twinsRender(r)) return; // страница-двойник телефона — свой каркас (twins.js)
   if (r.task) { // #task/61: карточка этого дела поверх главной («Сейчас»), адрес — обычный
     const t = all().find((x) => x.num === r.task);
     history.replaceState(null, '', '#/now');
