@@ -1448,3 +1448,74 @@ a.pt-row:hover { color: var(--accent); text-decoration: none; }
 .ui-more summary { cursor: pointer; color: var(--muted); font-size: 14px; padding: 4px 0; }
 .ui-actions { gap: 8px; margin-top: 4px; }
 .ui-status { font-size: 13px; min-height: 18px; }
+
+/* ── «Телефон»: настройки Правки на телефоне с компьютера (14.10.2026, static/phone.js) ──────────────────────
+   Раскладка — макет «Телефон» холста: группы слева строками («что стоит» серым), открытая группа справа панелями
+   разделов; на узком — группы списком, группа — своим экраном. Переключатель — квадратный, как флажки Ковчега. */
+.ph-callout { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; padding: 10px 14px; border-radius: 8px;
+  background: var(--panel-2); border: 1px solid var(--line-soft); color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+.ph-callout > .kv-i { color: var(--icon); flex: none; margin-top: 2px; }
+.ph-cols { display: grid; grid-template-columns: minmax(230px, 300px) minmax(0, 1fr); gap: 16px; align-items: start; margin-top: 16px; }
+.ph-cols > * { min-width: 0; }
+.ph-pane > .group:first-child { margin-top: 0; }
+.ph-ghead { display: flex; gap: 10px; align-items: flex-start; padding: 2px 2px 0; }
+.ph-ghead > .kv-i { color: var(--icon); flex: none; margin-top: 3px; }
+.ph-gtitle { font-size: 17px; font-weight: 600; line-height: 1.35; }
+.ph-ghead .ph-gs { white-space: normal; font-size: 13px; }
+.ph-note { margin-top: 12px; }
+.ph-note > .kv-i { margin-top: 3px; }
+.ph-groups { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-top: 16px; }
+.ph-cols .ph-groups { margin-top: 0; }
+.ph-g { display: flex; gap: 10px; align-items: flex-start; width: 100%; padding: 10px 14px; border: 0; border-top: 1px solid var(--line-soft);
+  background: none; color: var(--text); text-align: left; transition: background-color .12s; }
+.ph-g:first-child { border-top: 0; }
+.ph-g:hover { background: var(--hover); }
+.ph-g.on { background: var(--accent-soft); }
+.ph-g > .kv-i { color: var(--icon); flex: none; margin-top: 2px; }
+.ph-g.on > .kv-i, .ph-g.on .ph-gt { color: var(--accent); }
+.ph-gm { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.ph-gt { font-size: 14.5px; font-weight: 500; line-height: 1.35; }
+.ph-gs { color: var(--faint); font-size: 12.5px; line-height: 1.35; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ph-gn { flex: none; min-width: 20px; padding: 0 5px; border-radius: 5px; background: color-mix(in srgb, var(--warn) 14%, var(--panel));
+  color: var(--warn); font-size: 12px; font-weight: 600; line-height: 20px; text-align: center; }
+.ph-row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; padding: 10px 16px; }
+.ph-main { flex: 1 1 240px; min-width: 0; }
+.ph-t { font-size: 14.5px; line-height: 1.35; }
+.ph-row.ro .ph-t { color: var(--muted); }
+.ph-h { color: var(--faint); font-size: 12.5px; line-height: 1.4; margin-top: 1px; }
+.ph-why { color: var(--faint); font-size: 12.5px; line-height: 1.4; margin-top: 2px; }
+.ph-ctl { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; max-width: 100%; }
+.ph-val { color: var(--muted); font-size: 14px; text-align: right; }
+.ph-st { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: center; margin-top: 3px; color: var(--faint); font-size: 12.5px; line-height: 1.4; }
+.ph-st.wait, .ph-old, .group > h2 .sum.ph-wait { color: var(--warn); }
+.ph-st.ok { color: var(--ok); }
+.ph-st.bad { color: var(--bad); }
+.ph-st .link-btn { font-size: 12.5px; }
+.ph-sw { position: relative; flex: none; width: 36px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: var(--hover-2); }
+.ph-sw::after { content: ""; position: absolute; top: 4px; left: 4px; width: 14px; height: 14px; border-radius: 4px; background: var(--panel);
+  box-shadow: 0 0 0 1px var(--line); transition: left .12s; }
+.ph-sw.on { background: var(--accent); }
+.ph-sw.on::after { left: 18px; box-shadow: none; }
+.ph-inp { display: inline-flex; align-items: center; gap: 6px; }
+.ph-num, .ph-text { padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); font-size: 14px; }
+.ph-num { width: 104px; text-align: right; }
+.ph-text { width: min(280px, 60vw); }
+.ph-num:focus, .ph-text:focus { outline: none; border-color: var(--accent); }
+.ph-unit { color: var(--faint); font-size: 13px; }
+.ph-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.ph-back { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px; }
+.ph-dev button { white-space: nowrap; }
+.ph-log { display: grid; grid-template-columns: 104px minmax(0, 1fr) auto; gap: 2px 12px; align-items: baseline; padding: 8px 16px; font-size: 13.5px; }
+.ph-log .when { color: var(--faint); white-space: nowrap; }
+.ph-log .what b { font-weight: 500; }
+.ph-log .ph-st { margin: 0; justify-content: flex-end; text-align: right; }
+.ph-log .note { grid-column: 2 / -1; color: var(--faint); font-size: 12.5px; }
+.kv-svc-foot { border-top: 1px solid var(--line-soft); margin-top: 8px; padding-top: 6px; }
+@media (max-width: 900px) {
+  .ph-cols { grid-template-columns: 1fr; }
+  .ph-log { grid-template-columns: minmax(0, 1fr) auto; }
+  .ph-log .when { grid-column: 1 / -1; }
+  .ph-log .note { grid-column: 1 / -1; }
+  .ph-row { padding: 10px 14px; }
+  .ph-ctl { justify-content: flex-start; }
+}

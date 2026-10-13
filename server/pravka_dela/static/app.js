@@ -777,6 +777,7 @@ function route() {
   // Страницы-двойники телефона (twins.js, 14.10.2026): #/day, #/zasechka, #/pravka — только владельцу.
   const twin = twinsRoute(kind);
   if (twin) return twin;
+  if (kind === 'phone') return { kind: 'phone', id: decodeURIComponent(id || '') }; // настройки телефона (14.10.2026, phone.js)
   if (kind === 'settings') return { kind: 'settings' };
   if (kind === 'stats') return { kind: 'stats' };
   if (kind === 'inbox') return { kind: 'new' }; // старые закладки: «Входящие» теперь в «Новом»
@@ -1046,7 +1047,9 @@ function svcBrand(look) {
     el('div', { class: 'kv-svc-col' }, specs.filter((g, k) => k % n === c).map(([t, s, items]) => group(t, s, items)))));
   const menuBox = el('div', { class: 'kv-svc-menu', id: 'kv-svc-menu', hidden: true },
     big.length ? el('div', { class: 'kv-svc-top' }, big.map(link)) : null, cols(4), cols(2),
-    create.length ? el('div', { class: 'kv-svc-create' }, group(menu.create.name, menu.create.sub, []), el('div', { class: 'kv-svc-items' }, create.map(link))) : null);
+    create.length ? el('div', { class: 'kv-svc-create' }, group(menu.create.name, menu.create.sub, []), el('div', { class: 'kv-svc-items' }, create.map(link))) : null,
+    // Внизу меню — «Настройки телефона» (макет «Ковчег на телефоне», 14.10.2026): страница «Телефон» самих Дел.
+    phoneOn() ? el('div', { class: 'kv-svc-items kv-svc-foot' }, el('a', { href: '#/phone' }, icon('phone', 17), el('span', {}, 'Настройки телефона'))) : null);
   const brand = el('a', { class: 'brand kv-svc-btn', href: '#/now', role: 'button', title: 'Все сервисы Ковчега',
     'aria-haspopup': 'true', 'aria-expanded': 'false', 'aria-controls': 'kv-svc-menu' }, img(), el('b', {}, 'Дела'));
   const show = (open) => {
@@ -1224,6 +1227,7 @@ function renderSide(r) {
       groups,
       el('div', { class: 'side-foot' },
         navItem('#/stats', icon('chart', 17), 'Статистика', null, r.kind === 'stats'),
+        phoneOn() ? navItem('#/phone', icon('phone', 17), 'Телефон', null, r.kind === 'phone') : null,
         navItem('#/settings', icon('settings', 17), 'Настройки', null, r.kind === 'settings')),
       gameCard(),
       el('div', { class: 'side-keys' }, el('span', { class: 'kbd' }, 'n'), ' сказать Claude · ', el('span', { class: 'kbd' }, '/'), ' поиск')));
@@ -1534,6 +1538,9 @@ function renderMain(r) {
   if (r.kind === 'search') return renderSearch(r.q);
   if (r.kind === 'new') return renderNew(r.batch);
   if (r.kind === 'settings') return renderSettings();
+  // «Телефон» — своим файлом (static/phone.js, отдаётся хвостом app.js — api.TAILS); нет его — словами, а не пустотой.
+  if (r.kind === 'phone') return typeof renderPhone === 'function' ? renderPhone()
+    : [head('Телефон'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Страница «Телефон» не загрузилась — сервер отдал app.js без phone.js. Обнови страницу; не помогло — сервер Дел старый.'))];
   if (r.kind === 'stats') return renderStats();
   if (r.kind === 'crm') return renderPipeline();
   if (r.kind === 'clients') return renderClients();
@@ -4117,6 +4124,8 @@ const CRM_VIEWS = {
   meetings: { title: 'Встречи', icon: 'mic', owner: true },
 };
 const narrow = () => window.matchMedia('(max-width: 900px)').matches; // телефон: пустые колонки воронки не показываем
+/** Сервер держит настройки телефона (флаг phone, dela_0015): есть страница «Телефон» и её пункты в меню. */
+const phoneOn = () => ((S.me && S.me.features) || []).includes('phone');
 const crmOn = () => S.me && (S.me.role === 'owner' || S.me.clients !== 'own');
 const rub = (kop) => (kop ? Math.round(kop / 100).toLocaleString('ru') + ' ₽' : '');
 const rubShort = (kop) => {

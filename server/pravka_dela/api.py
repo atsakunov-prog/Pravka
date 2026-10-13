@@ -15,7 +15,7 @@
 | GET  /api/me | кто я; look — шапка веба: домен общей куки темы, значок «Ковчега», соседние сервисы (только владельцу), меню Ковчега (menu, только владельцу) и токены вида (tokens) из Свода ui.menu / ui.look — нет записи или кривая, заводские (kovcheg_ui.py) |
 | GET  /api/sync?since=N | всё изменившееся после N (телефон, веб); владельцу — ещё zasechka: команды Засечки из веба, ждущие телефона (zasechka.py) |
 | POST /api/ops | пачка операций с op_id (офлайн-очередь) |
-| GET  /api/view/<имя> | готовый список: now («Сейчас» — отмеченное), today («Сегодня» — срок сегодня), all («Все дела», просроченное сверху; later — старое имя), morning, new, waiting, person, quick, project, week, search; CRM — pipeline, clients, client, deal (с журналом), dossier, ties, money; «Где мы» — where, where_avatar?device= (where.py); встречи — meetings?sphere&q&project_id&person_id&sort&since&until&archived, meeting?id или ref (meetings.py); «Когда» — when?q=фраза&local=1&date=1: срок и напоминание словами в поля дела (when.py; без local непонятое — Claude); дайджест Telegram — digest?days=2&limit или id / ref: последняя сводка и список, только владельцу (digest.py; приём — операция digest.put от службы дайджеста, последняя сводка — ещё и полем digest синка); страницы-двойники телефона (только владельцу, twins.py) — day?day, zasechka?day, pravka?days&until, pogoda |
+| GET  /api/view/<имя> | готовый список: now («Сейчас» — отмеченное), today («Сегодня» — срок сегодня), all («Все дела», просроченное сверху; later — старое имя), morning, new, waiting, person, quick, project, week, search; CRM — pipeline, clients, client, deal (с журналом), dossier, ties, money; «Где мы» — where, where_avatar?device= (where.py); встречи — meetings?sphere&q&project_id&person_id&sort&since&until&archived, meeting?id или ref (meetings.py); «Когда» — when?q=фраза&local=1&date=1: срок и напоминание словами в поля дела (when.py; без local непонятое — Claude); дайджест Telegram — digest?days=2&limit или id / ref: последняя сводка и список, только владельцу (digest.py; приём — операция digest.put от службы дайджеста, последняя сводка — ещё и полем digest синка); страницы-двойники телефона (только владельцу, twins.py) — day?day, zasechka?day, pravka?days&until, pogoda; настройки телефона — phone?device=: свои телефоны, схема и значения одного, ждущие правки и журнал (phone.py; снимок — операция phone.snapshot от телефона, правка — phone.set из веба, ждущие правки — полем phone синка) |
 | GET  /api/task/<id или номер> | дело с комментариями, журналом и откуда оно (origin) |
 | POST /api/parse | {"text", "project_id"?, "person_id"?} — Claude режет текст на дела и заводит их; ответ — номер задания |
 | GET  /api/parse/<номер> | run, пока думает; потом done с делами и заметками или error |
@@ -80,7 +80,8 @@ STATIC = {
 # Страницы-двойники экранов телефона (twins.py, 14.10.2026) — свои файлы, но отдаются хвостом app.js и style.css: список
 # путей сайта-посредника у владельца закрытый, и новый файл в static/ был бы ещё одной правкой на Aeza. Своих адресов у
 # хвостов нет (в STATIC их нет): /static/twins.js — 404, как любое чужое имя.
-TAILS = {"app.js": ("twins.js", "day.js", "zasechka.js", "pravka.js"), "style.css": ("twins.css",)}
+# «Телефон» — настройки телефона на сервере (14.10.2026, phone.js) — так же хвостом app.js.
+TAILS = {"app.js": ("twins.js", "day.js", "zasechka.js", "pravka.js", "phone.js"), "style.css": ("twins.css",)}
 BRAND_MAX = 96 * 1024  # значок «Ковчега» уходит в /api/me строкой data: — большой картинке там не место
 
 
