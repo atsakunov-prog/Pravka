@@ -224,6 +224,40 @@ def test_api_who_svod_and_scoped_dengi(dela):
     assert store.view(dela, "sasha", "svod", key="prompt.food")["items"][0]["body"] == "Еда."
 
 
+def test_scoped_eda_and_sport(dela):
+    """«Еда» и «Спорт» на компе (13.10.2026): свои ключи Свода пишут и читают, «Еде» — ещё промпт еды; чужого — нет."""
+    from starlette.testclient import TestClient
+
+    from pravka_dela import api, tokens
+    from pravka_dela.config import Config
+
+    ops(dela, "sasha", {"op": "svod.set", "key": "prompt.food", "body": "Еда.", "author": "phone"},
+        {"op": "svod.set", "key": "money.partner", "value": {"pct": 30}, "author": "dengi"})
+    eda = {"Authorization": f"Bearer {tokens.issue(dela, 'sasha', 'service', 'eda')}"}
+    sport = {"Authorization": f"Bearer {tokens.issue(dela, 'sasha', 'service', 'sport')}"}
+    c = TestClient(api.build(Config(db_url=dela)))
+    r = c.post("/api/ops", headers=eda, json={"ops": [
+        {"op": "svod.set", "key": "food.goals", "value": {"kcal": 2500}, "author": "eda"}]})
+    assert r.status_code == 200 and r.json()["results"][0]["ok"]
+    rev = c.get("/api/view/svod", params={"key": "food.goals"}, headers=eda).json()["items"][0]["rev"]
+    stale = c.post("/api/ops", headers=eda, json={"ops": [
+        {"op": "svod.set", "key": "food.goals", "value": {"kcal": 2400}, "author": "eda", "base_rev": rev - 1}]})
+    assert not stale.json()["results"][0]["ok"]
+    assert c.get("/api/view/svod", params={"key": "prompt.food"}, headers=eda).json()["items"][0]["body"] == "Еда."
+    assert [i["key"] for i in c.get("/api/view/svod", headers=eda).json()["items"]] == ["food.goals"]
+    assert c.get("/api/view/svod", params={"key": "money.partner"}, headers=eda).status_code == 403
+    assert c.post("/api/ops", headers=eda, json={"ops": [
+        {"op": "svod.set", "key": "prompt.food", "body": "взлом", "author": "eda"}]}).status_code == 403
+    assert c.get("/api/sync", headers=eda).status_code == 403
+    r = c.post("/api/ops", headers=sport, json={"ops": [
+        {"op": "svod.set", "key": "sport.rules", "value": {"hr_ceiling": 152}, "author": "sport"}]})
+    assert r.status_code == 200 and r.json()["results"][0]["ok"]
+    assert c.get("/api/view/svod", params={"key": "prompt.food"}, headers=sport).status_code == 403
+    assert c.get("/api/view/svod", params={"key": "food.goals"}, headers=sport).json()["items"][0]["value"] == {"kcal": 2500}
+    assert c.post("/api/ops", headers=sport, json={"ops": [
+        {"op": "svod.set", "key": "food.goals", "value": {}, "author": "sport"}]}).status_code == 403
+
+
 def test_who_hints_abbreviation_role_and_first_name_with_company(dela):
     """Как спикеры подписаны во встречах: «(ЗФ)», «(финдир Ромашки)», «(терапевт)», одно имя с компанией."""
     firm = org(dela, "sasha", "Весёлый Огород")

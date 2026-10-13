@@ -117,12 +117,23 @@ def _look(cfg: Config) -> tuple[dict, dict]:
 
 # Службы с узкими правами (06.10.2026). «Деньги» смотрят наружу: их токену — только свои записи
 # Свода (money.*), без дел, людей и синка. Остальные службы (встречи, дайджест, бот) действуют как
-# владелец токена, как раньше.
-SCOPED = {"dengi": {"ops": {"svod.set"}, "views": {"svod"}, "svod_prefix": "money."}}
+# владелец токена, как раньше. С 13.10.2026 — «Еда» и «Спорт» на компе: «Еде» — рацион и цели
+# (food.*) и читать промпт разбора еды (тот же, что у телефона: один разбор на два окна),
+# «Спорту» — правила блока и справочник упражнений (sport.*) и читать цель веса (food.goals).
+# svod_read — что ещё можно читать.
+SCOPED = {
+    "dengi": {"ops": {"svod.set"}, "views": {"svod"}, "svod_prefix": "money."},
+    "eda": {"ops": {"svod.set"}, "views": {"svod"}, "svod_prefix": "food.", "svod_read": ("prompt.food",)},
+    "sport": {"ops": {"svod.set"}, "views": {"svod"}, "svod_prefix": "sport.", "svod_read": ("food.goals",)},
+}
 
 
 def _scope(who) -> dict | None:
     return SCOPED.get(who.name) if who and who.kind == "service" else None
+
+
+def _may_read(sc: dict, key: str) -> bool:
+    return key.startswith(sc["svod_prefix"]) or key in sc.get("svod_read", ())
 
 def _json(data, status: int = 200) -> JSONResponse:
     return JSONResponse(data, status_code=status, headers={"Cache-Control": "no-store", **SECURITY})
@@ -270,9 +281,12 @@ def build(cfg: Config) -> Starlette:
             if name not in sc["views"]:
                 return _err(f"службе {who.name} этот вид не положен", 403)
             if name == "svod":
-                params["prefix"] = sc["svod_prefix"] + (params.pop("prefix", "") or "").removeprefix(sc["svod_prefix"])
-                if params.get("key") and not params["key"].startswith(sc["svod_prefix"]):
-                    return _err(f"службе {who.name} — только {sc['svod_prefix']}*", 403)
+                if params.get("key"):
+                    if not _may_read(sc, params["key"]):
+                        return _err(f"службе {who.name} — только {sc['svod_prefix']}*", 403)
+                    params.pop("prefix", None)
+                else:
+                    params["prefix"] = sc["svod_prefix"] + (params.pop("prefix", "") or "").removeprefix(sc["svod_prefix"])
         try:
             out = await anyio.to_thread.run_sync(lambda: store.view(url, who.user, name, **params))
         except store.OpError as e:

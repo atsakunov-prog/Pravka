@@ -169,17 +169,30 @@ def _store_one(
 
 
 def ingest_batch(
-    conn: psycopg.Connection, batch: Any, owner_profile: str, people: tuple[str, ...] | list[str] = ()
+    conn: psycopg.Connection,
+    batch: Any,
+    owner_profile: str,
+    people: tuple[str, ...] | list[str] = (),
+    service: tuple[str, frozenset[str]] | None = None,
 ) -> tuple[int, dict[str, Any]]:
-    """Пачка с телефона целиком: (HTTP-код, ответ).
+    """Пачка с телефона или от службы компа целиком: (HTTP-код, ответ).
 
     owner_profile — хозяин архива (его записи — person ''), people — кого ещё
-    пускать (PRAVKA_PEOPLE): их записи ложатся под ключом профиля."""
+    пускать (PRAVKA_PEOPLE): их записи ложатся под ключом профиля. service —
+    (имя, виды), если пачку прислала служба своим токеном (13.10.2026, «Еда»):
+    тогда устройство только svc-<имя>, виды только её, приём пищи проверяется
+    по контракту (sync.check_meal), а свежесть пишется как svc:<имя>, не телефон."""
+    from .sync import check_meal, service_device
+
     if not isinstance(batch, dict):
         return 400, {"error": "тело — объект JSON"}
     device = batch.get("device")
     if not isinstance(device, str) or not DEVICE_RE.match(device) or device.startswith("intervals"):
         return 400, {"error": "device — имя устройства латиницей, например sasha-3f9a2c"}
+    if service is None and device.startswith("svc-"):
+        return 403, {"error": "устройства svc-* — службы компа, им нужен свой токен"}
+    if service is not None and device != service_device(service[0]):
+        return 403, {"error": f"служба «{service[0]}» пишет только от устройства {service_device(service[0])}"}
     profile = batch.get("profile")
     if profile == owner_profile:
         person = ""
@@ -197,8 +210,27 @@ def ingest_batch(
     if not isinstance(events, list) or len(events) > MAX_EVENTS:
         return 400, {"error": f"events — список до {MAX_EVENTS} событий"}
     app = batch.get("app") if isinstance(batch.get("app"), str) else None
+    early: list[dict[str, str]] = []
+    if service is not None:
+        # Чужой вид или кривой приём — отказ этому событию, остальные идут: как с форматом.
+        name, kinds = service
+        keep = []
+        for ev in events:
+            eid = str(ev.get("eid")) if isinstance(ev, dict) else "None"
+            kind = ev.get("kind") if isinstance(ev, dict) else None
+            if kind not in kinds:
+                early.append({"eid": eid, "why": f"службе «{name}» можно только {', '.join(sorted(kinds))}"})
+            elif kind == "food.meal" and ev.get("op") == "put" and (why := check_meal(str(ev.get("key")), ev.get("data"))):
+                early.append({"eid": eid, "why": why})
+            else:
+                keep.append(ev)
+        events = keep
     with conn.transaction():
         res = store_events(conn, device, events, app=app, schema=SCHEMA, person=person)
-        mark_source(conn, f"phone:{device}", ok=True, note={"app": app, "profile": profile, "last_batch": len(events)})
-        conn.execute("DELETE FROM core.sources WHERE source = 'phone'")
+        if service is not None:
+            mark_source(conn, f"svc:{service[0]}", ok=True, note={"app": app, "profile": profile, "last_batch": len(events)})
+        else:
+            mark_source(conn, f"phone:{device}", ok=True, note={"app": app, "profile": profile, "last_batch": len(events)})
+            conn.execute("DELETE FROM core.sources WHERE source = 'phone'")
+    res.rejected = early + res.rejected
     return 200, {"ok": True, **res.as_json()}

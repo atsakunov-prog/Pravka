@@ -26,7 +26,7 @@ from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, Re
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-from . import icu, tools
+from . import icu, sync, tools
 from .auth import SCOPE, OwnerAuth
 from .config import Config, env_suffix
 from .ingest import ingest_batch
@@ -160,32 +160,87 @@ def build(cfg: Config) -> tuple[FastMCP, OwnerAuth]:
     async def health(request: Request) -> Response:
         return JSONResponse({"ok": True, "service": "pravka-archive", "time": dt.datetime.now().astimezone().isoformat(timespec="seconds")})
 
-    @mcp.custom_route("/ingest", methods=["POST"])
-    async def ingest(request: Request) -> Response:
+    async def caller(request: Request):
+        """Кто пришёл: «phone» (общий токен телефона), (имя, виды) службы компа или None."""
         header = request.headers.get("authorization", "")
         token = header[7:] if header.lower().startswith("bearer ") else ""
-        if not token or not hmac.compare_digest(token.encode(), cfg.ingest_token.encode()):
-            return JSONResponse({"error": "нет или не тот токен телефона"}, status_code=401)
+        if not token:
+            return None
+        if hmac.compare_digest(token.encode(), cfg.ingest_token.encode()):
+            return "phone"
+
+        def find():
+            with psycopg.connect(cfg.db_url, autocommit=True) as conn:
+                return sync.service_of(conn, token)
+
+        return await anyio.to_thread.run_sync(find)
+
+    async def body_json(request: Request):
         body = await request.body()
         if len(body) > MAX_BODY:
-            return JSONResponse({"error": "пачка больше 64 МБ — дели на части"}, status_code=413)
+            return None, JSONResponse({"error": "пачка больше 64 МБ — дели на части"}, status_code=413)
         if request.headers.get("content-encoding", "").lower() == "gzip":
             try:
                 body = gzip.decompress(body)
             except OSError:
-                return JSONResponse({"error": "gzip не распаковался"}, status_code=400)
+                return None, JSONResponse({"error": "gzip не распаковался"}, status_code=400)
         try:
-            batch = json.loads(body)
+            return json.loads(body), None
         except ValueError as e:
-            return JSONResponse({"error": f"не JSON: {e}"}, status_code=400)
+            return None, JSONResponse({"error": f"не JSON: {e}"}, status_code=400)
+
+    @mcp.custom_route("/ingest", methods=["POST"])
+    async def ingest(request: Request) -> Response:
+        who = await caller(request)
+        if who is None:
+            return JSONResponse({"error": "нет или не тот токен телефона"}, status_code=401)
+        batch, err = await body_json(request)
+        if err is not None:
+            return err
 
         def work():
             with psycopg.connect(cfg.db_url, autocommit=True) as conn:
                 others = [p.profile for p in cfg.persons() if not p.owner]
-                return ingest_batch(conn, batch, cfg.profile, others)
+                return ingest_batch(conn, batch, cfg.profile, others, service=None if who == "phone" else who)
 
         status, payload = await anyio.to_thread.run_sync(work)
         return JSONResponse(payload, status_code=status)
+
+    @mcp.custom_route("/sync", methods=["POST"])
+    async def sync_route(request: Request) -> Response:
+        """Обратная дорога (13.10.2026): что поменял кто-то другой — телефону правки с компа,
+        службе компа — правки с телефона. Тело: device, profile, kinds, since (cursor прошлого
+        ответа или пусто), own. Ответ: cursor и записи — последнее слово по каждой."""
+        who = await caller(request)
+        if who is None:
+            return JSONResponse({"error": "нет или не тот токен"}, status_code=401)
+        req, err = await body_json(request)
+        if err is not None:
+            return err
+        if not isinstance(req, dict):
+            return JSONResponse({"error": "тело — объект JSON"}, status_code=400)
+        device = req.get("device")
+        if not isinstance(device, str) or not device:
+            return JSONResponse({"error": "device — имя устройства, как в /ingest"}, status_code=400)
+        allowed = sync.SYNC_KINDS if who == "phone" else who[1]
+        if who != "phone" and device != sync.service_device(who[0]):
+            return JSONResponse({"error": f"служба «{who[0]}» — только устройство {sync.service_device(who[0])}"}, status_code=403)
+        kinds = req.get("kinds") or sorted(allowed)
+        if not isinstance(kinds, list) or any(k not in allowed for k in kinds):
+            return JSONResponse({"error": f"забрать можно только {', '.join(sorted(allowed))}"}, status_code=403)
+        person = cfg.person_of(req.get("profile"))
+        if person is None:
+            return JSONResponse({"error": f"профиль «{req.get('profile')}» архив не знает"}, status_code=403)
+
+        def work():
+            with psycopg.connect(cfg.db_url, autocommit=True) as conn:
+                return sync.pull(conn, person.key, kinds, req.get("since"), device, own=bool(req.get("own")))
+
+        try:
+            payload = await anyio.to_thread.run_sync(work)
+        except sync.SyncError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse(payload)
 
     return mcp, auth
 

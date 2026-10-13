@@ -1,4 +1,4 @@
-"""python -m pravka_archive migrate | check | serve | supervise | pull [recent|deep|full] [--who marianna] | pair | night [--dry]"""
+"""python -m pravka_archive migrate | check | serve | supervise | pull [recent|deep|full] [--who marianna] | pair | night [--dry] | token [--name eda --out файл | --revoke]"""
 
 from __future__ import annotations
 
@@ -230,18 +230,51 @@ def cmd_supervise(cfg: config_mod.Config, env_file: str | None) -> int:
         time.sleep(delay)
 
 
+def cmd_token(cfg: config_mod.Config, name: str | None, kinds: str, out: str | None, revoke: bool) -> int:
+    """Узкий токен службы компа (13.10.2026, «Еда»): писать и забирать только свои виды от
+    устройства svc-<имя>. Токен виден один раз — в файл --out или на экран; в базе sha256."""
+    from . import sync
+
+    with psycopg.connect(cfg.db_url, autocommit=True) as conn:
+        if not name:
+            for n, k, created, revoked in conn.execute(
+                    "SELECT name, kinds, created_at, revoked_at FROM core.tokens ORDER BY name"):
+                print(f"{n:12} {','.join(k):24} выдан {created:%d.%m.%Y %H:%M}" + (f", отозван {revoked:%d.%m.%Y}" if revoked else ""))
+            return 0
+        if revoke:
+            print("отозван" if sync.revoke(conn, name) else "такого живого токена нет")
+            return 0
+        try:
+            token = sync.issue(conn, name, [k for k in kinds.split(",") if k])
+        except sync.SyncError as e:
+            print(e)
+            return 1
+    if out:
+        Path(out).write_text(token, encoding="utf-8")
+        print(f"токен службы «{name}» записан в {out}; устройство — {sync.service_device(name)}")
+    else:
+        print(token)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="pravka_archive")
-    ap.add_argument("command", choices=["migrate", "check", "serve", "supervise", "pull", "pair", "night"])
+    ap.add_argument("command", choices=["migrate", "check", "serve", "supervise", "pull", "pair", "night", "token"])
     ap.add_argument("mode", nargs="?", default="recent", choices=["recent", "deep", "full"])
     ap.add_argument("--dry", action="store_true", help="night: только сказать, разбудил бы ли")
     ap.add_argument("--env", help="файл секретов (по умолчанию D:\\PravkaArchive\\secrets\\server.env)")
     ap.add_argument("--who", help="pull: только этот человек архива (marianna); без него — все, у кого есть ключ intervals")
+    ap.add_argument("--name", help="token: имя службы (eda); без него — список токенов")
+    ap.add_argument("--kinds", default="food.meal", help="token: какие виды можно писать и забирать, через запятую")
+    ap.add_argument("--out", help="token: файл, куда положить токен (иначе — на экран)")
+    ap.add_argument("--revoke", action="store_true", help="token: отозвать токен службы --name")
     args = ap.parse_args(argv)
     cfg = config_mod.load(args.env)
 
     if args.command == "migrate":
         return cmd_migrate(cfg)
+    if args.command == "token":
+        return cmd_token(cfg, args.name, args.kinds, args.out, args.revoke)
     if args.command == "check":
         return cmd_check(cfg)
     if args.command == "pull":
