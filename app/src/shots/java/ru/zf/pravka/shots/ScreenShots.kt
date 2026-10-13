@@ -48,7 +48,8 @@ import java.util.TimeZone
  * Сырьё — в `app/build/shots`, готовое — в `docs/design/screens` (не в git:
  * десятки мегабайт, пересъёмка — одна команда). Группы через запятую:
  * outer, tall, inner, overlay; t5 — только «Сегодня» вида v2 (быстро); z5 — только Засечка v2;
- * svod — меню и вид из Свода (этап 7).
+ * svod — меню и вид из Свода (этап 7); web — страница сервиса внутри приложения (шапка Ковчега,
+ * заглушка вместо страницы).
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -68,7 +69,7 @@ class ScreenShots {
 
     private val dir = File(System.getProperty("pravka.shotsDir") ?: "build/shots").also { it.mkdirs() }
 
-    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5. */
+    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5, web. */
     private fun want(group: String): Boolean {
         val v = System.getProperty("pravka.shots").orEmpty()
         return v == "1" || v == "all" || v.split(',').map { it.trim() }.contains(group)
@@ -276,6 +277,9 @@ class ScreenShots {
 
         // ---- Правка 5.0, этап 6: Спорт, Еда, Деньги, Телефон в виде v2 — обе темы, оба экрана Fold
         if (want("s6")) screens6()
+
+        // ---- Сервисы Ковчега внутри приложения (14.10.2026): страница сервиса с шапкой Ковчега
+        if (want("web")) serviceWeb()
 
         // ---- режимы по одному (Правка 4.0): сложенный, целиком, разворот
         for ((g, tab) in listOf(
@@ -604,6 +608,35 @@ class ScreenShots {
         // Дела в виде 4.0 — после этапа 4 («Сейчас» первым разделом) прежние сегменты и стекло на месте.
         c = launch(MainActivity.TAB_TODOIST); shot(c, "$prefix-v4-3-dela"); close(c)
         runBlocking { app.settings.setLookV4(false) }
+        settle(4)
+    }
+
+    /**
+     * Страница сервиса внутри приложения (14.10.2026, `ServiceWebScreen.kt`): из меню Ковчега — Кино
+     * («Jellyfin» в шапке), Книги («Слушалка»), Встречи (только обновить и «в браузере»), сложенный и
+     * разложенный, обе темы; и меню поверх открытой страницы — с подсвеченным сервисом. WebView под
+     * Robolectric страницу не рисует (сети и движка нет): под шапкой — заглушка «Открываю «…»…», та же,
+     * что на телефоне до первого кадра страницы.
+     */
+    private fun serviceWeb() {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        for (theme in listOf("light", "dark")) {
+            runBlocking { app.settings.setLookTheme(theme) }
+            settle(4)
+            for ((size, q) in listOf("folded" to OUTER, "wide" to INNER)) {
+                RuntimeEnvironment.setQualifiers(q)
+                for ((name, key) in listOf("Кино" to "kino", "Книги" to "knigi", "Встречи" to "vstrechi")) {
+                    val c = launch(null)
+                    if (tap(c, "Все сервисы Ковчега") && tap(c, name, exact = true)) {
+                        shot(c, "web-$key-$size-$theme")
+                        if (key == "kino" && tap(c, "Все сервисы Ковчега")) shot(c, "web-$key-menu-$size-$theme")
+                    }
+                    close(c)
+                }
+            }
+        }
+        RuntimeEnvironment.setQualifiers(OUTER)
+        runBlocking { app.settings.setLookTheme("system") }
         settle(4)
     }
 
