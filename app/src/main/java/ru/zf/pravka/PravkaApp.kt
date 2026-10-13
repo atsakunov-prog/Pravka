@@ -460,11 +460,24 @@ class PravkaApp : Application() {
     // (settings.delaBackendFlow); Todoist пока не удалён, чтобы было куда
     // откатиться.
     val delaStore by lazy { ru.zf.pravka.data.DelaStore(this) }
-    val delaSync by lazy {
+    val delaSync: ru.zf.pravka.data.DelaSync by lazy {
         ru.zf.pravka.data.DelaSync(
             this, httpClient, delaStore, appScope, { eventLog.add(it) },
             svod = svodStore,
             svodSeed = { svodSeedTexts() },
+        ).also { sync ->
+            // Команды Засечки из веба (docs/zasechka.md «Команды из веба»): синк отдаёт их сюда.
+            sync.onZasechka = { cmds -> zasechkaWeb.onSync(cmds) }
+        }
+    }
+
+    /** Команды Засечки из веба Дел: «Начать», «Стоп», «Поправить» с компьютера применяет телефон. */
+    internal val zasechkaWeb: ru.zf.pravka.data.ZasechkaWebCommands by lazy {
+        ru.zf.pravka.data.ZasechkaWebCommands(
+            this, zasechkaStore,
+            ops = { list -> delaSync.rawOps(list) },
+            enabled = { profileStore.has(ru.zf.pravka.data.Profile.Mode.ZASECHKA) },
+            log = { eventLog.add(it) },
         )
     }
 

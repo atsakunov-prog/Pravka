@@ -88,6 +88,12 @@ class DelaSync(
      */
     val services: StateFlow<List<ru.zf.pravka.core.Kovcheg.Nav>> = _services
 
+    /**
+     * Команды Засечки из веба (14.10.2026, `docs/zasechka.md` «Команды из веба»): поле `zasechka` синка — тому, кто
+     * их применит (`ZasechkaWebCommands`, ставит `PravkaApp`). Нет поля (старый сервер, не владелец) — не зовётся.
+     */
+    @Volatile var onZasechka: (suspend (JSONArray) -> Unit)? = null
+
     private val iconFile: File get() = File(DataRoot.secrets(context), ICON_FILE)
     private val _brandIcon = MutableStateFlow(readIcon())
 
@@ -266,6 +272,10 @@ class DelaSync(
         // Дайджест — чужая переписка: в журнал только подпись и длина, без текста (docs/digest-phone.md).
         store.digest.value?.takeIf { it !== digestWas }?.let { d -> log("дела: дайджест: ${d.title}, ${d.text.length} знаков") }
         svod?.let { sv -> pullSvod(l, sv, resp) }
+        // Команды Засечки из веба — после дел: сбой их синк дел не роняет, он словами в журнал.
+        resp.optJSONArray("zasechka")?.let { cmds ->
+            onZasechka?.let { f -> runCatching { f(cmds) }.onFailure { e -> log("засечка из веба: ${why(e)}") } }
+        }
         // Фильтры Дел (10.10.2026) — в настройках человека на сервере, синк их не возит: берём из
         // `/api/me`. Оттуда же — сервисы для меню Ковчега (13.10.2026, `look.nav`): один запрос на
         // оба. Сбой не роняет синк дел — он словами в журнал.
