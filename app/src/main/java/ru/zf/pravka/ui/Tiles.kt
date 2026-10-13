@@ -36,6 +36,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 // Плашка режима на «Сегодня» (DESIGN §8 «Плашка режима», §11.3, `mockups/01`):
 // значок и подпись, цифра дня, полоса прогресса. Четыре в ряд — Дела, Спорт,
@@ -61,9 +62,13 @@ fun ModeTile(
     modifier: Modifier = Modifier,
     progress: Float? = null,
     state: TileState = TileState.NORMAL,
+    /** v2: мелко за цифрой («из 2 500», «₽ сегодня»), как `.kpi .n small`. */
+    unit: String? = null,
+    /** v2: строка под цифрой вместо полосы («сон 5,3 ч · форма +3,3»), как `.tile .s2`. */
+    sub: String? = null,
 ) {
     if (Look.v2) {
-        TileV2(icon, label, value, onClick, modifier, progress, state)
+        TileV2(icon, label, value, onClick, modifier, progress, state, unit, sub)
         return
     }
     val m = Modes.of(decor)
@@ -138,6 +143,8 @@ private fun TileV2(
     modifier: Modifier,
     progress: Float?,
     state: TileState,
+    unit: String? = null,
+    sub: String? = null,
 ) {
     val t = LocalPravkaType.current
     val shape = RoundedCornerShape(KvShape.Panel)
@@ -159,13 +166,29 @@ private fun TileV2(
             when (state) {
                 TileState.LOADING -> Text("считаю…", style = t.caption, color = Kv.faint, maxLines = 1)
                 TileState.EMPTY -> Text("—", style = t.valueL, color = Kv.faint, maxLines = 1)
-                else -> FitText(
+                else -> if (unit == null) FitText(
                     value,
                     style = t.valueL,
                     color = Kv.text.copy(alpha = if (state == TileState.OFFLINE) 0.55f else 1f),
                     minSize = 12f,
+                ) else Text(
+                    androidx.compose.ui.text.buildAnnotatedString {
+                        append(value)
+                        pushStyle(androidx.compose.ui.text.SpanStyle(fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium, color = Kv.faint))
+                        append(" ")
+                        append(unit)
+                        pop()
+                    },
+                    style = t.valueL,
+                    color = Kv.text.copy(alpha = if (state == TileState.OFFLINE) 0.55f else 1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+        if (sub != null && progress == null) {
+            Text(sub, style = t.caption, color = Kv.faint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            return@Column
         }
         val track = Kv.hover2
         val fill = Kv.barFill

@@ -138,7 +138,7 @@ internal class TodayNav(
 )
 
 /** Всё, что «Сегодня» знает о дне. */
-private class TodayModel(
+internal class TodayModel(
     val day: LocalDate,
     val dayStart: Long,
     val result: DayAssembler.Result,
@@ -246,7 +246,7 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
 
     val me = link?.user ?: app.delaStore.me
     val model = remember(entries, categories, meals, money, workouts, planDays, gtg, snap, calendar, now, day, bedtime, marksOn, kcalGoal, budget, pOn, zOn, onServer) {
-        buildModel(app, day, now, entries, categories, calendar, bedtime, marksOn, kcalGoal, budget, pOn, zOn, me, onServer)
+        buildModel(app, day, now, entries, categories, calendar, bedtime, marksOn, kcalGoal, budget, pOn, zOn, me, onServer, v2 = ru.zf.pravka.ui.Look.v2)
     }
 
     // ---- действия ----
@@ -315,14 +315,65 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
         )
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    val head = TodayHead(state, onWeather = { weatherOpen = true }, onTheme = {
+        // Значок темы в шапке «Сегодня» (холст): светлая ↔ тёмная, сразу.
+        val next = if (ru.zf.pravka.ui.Look.dark) ru.zf.pravka.ui.Look.Theme.LIGHT else ru.zf.pravka.ui.Look.Theme.DARK
+        ru.zf.pravka.ui.Look.theme = next
+        app.appScope.launch { app.settings.setLookTheme(next.key) }
+    })
+    // Вид v2 (Правка 5.0, этап 2): своя раскладка — `TodayV2.kt`; хроника 4.0 ниже — «Виду 4.0».
+    if (ru.zf.pravka.ui.Look.v2) {
+        val digest by app.digest.collectAsState()
+        val services by app.delaSync.services.collectAsState()
+        // Завтрашний календарь — строкой под «Сегодня» на развороте.
+        val tomorrowCal by produceState(emptyList<ru.zf.pravka.core.CalEvent>(), day, todayCals, autoCals) {
+            val zone = ZoneId.systemDefault()
+            val from = day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+            val watched = todayCals ?: autoCals
+            value = withContext(Dispatchers.IO) {
+                runCatching { CalendarPilot.query(context, from, from + DayFacts.DAY) }.getOrDefault(emptyList())
+                    .filter { CalendarRules.eligible(it, watched) }
+            }
+        }
+        val data = remember(model, entries, categories, snap, calendar, tomorrowCal, health, workouts, money, weather, onServer, me, kcalGoal, pOn, zOn) {
+            buildV2(app, model, entries, categories, snap, me, calendar, tomorrowCal, now, weather, onServer, kcalGoal, pOn, zOn)
+        }
+        val act = TodayV2Actions(
+            done = { t ->
+                scope.launch {
+                    app.delaDo(listOf(Dela.statusOp("task.done", t.id)))
+                    Feedback.toast(app, "✓ ${t.title.take(40)}")
+                }
+            },
+            accept = { sg ->
+                scope.launch {
+                    app.delaDo(listOf(Dela.decideOp(sg.id, accept = true)))
+                    Feedback.toast(app, "✓ поставлено")
+                }
+            },
+            reject = { sg, reason ->
+                scope.launch {
+                    app.delaDo(listOf(Dela.decideOp(sg.id, accept = false, reason = reason)))
+                    Feedback.toast(app, "Не надо" + if (reason.isNotBlank()) ": $reason" else "")
+                }
+            },
+            stop = { app.appScope.launch { runCatching { app.zasechkaEngine.closeOpen() } } },
+            shabbat = {
+                // Шаббат — страница сервиса на компе (меню Ковчега, значок «candles»); нет её — словами.
+                val url = services.firstOrNull { it.icon == "candles" }?.let { ru.zf.pravka.core.Kovcheg.absolute(it.url, link?.url) }
+                if (url != null) openWeb(context, url)
+                else Feedback.toast(context, "Страницы Шаббата в списке сервисов нет — она приходит из Дел")
+            },
+            lenta = { row ->
+                when (row) {
+                    is ru.zf.pravka.core.Lenta.Row.Seg -> sheetEntry = row.entryId
+                    is ru.zf.pravka.core.Lenta.Row.Event -> if (row.ref.isNotBlank() && row.ref != "sleep") openMark(row.ref, nav) else nav.mode(Tab.SPORT)
+                }
+            },
+        )
+        TodayV2(data, weather, digest, now, dayOffset, { dayOffset = it }, nav, head, act, sayBar)
+    } else BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = twoPane()
-        val head = TodayHead(state, onWeather = { weatherOpen = true }, onTheme = {
-            // Значок темы в шапке «Сегодня» (холст): светлая ↔ тёмная, сразу.
-            val next = if (ru.zf.pravka.ui.Look.dark) ru.zf.pravka.ui.Look.Theme.LIGHT else ru.zf.pravka.ui.Look.Theme.DARK
-            ru.zf.pravka.ui.Look.theme = next
-            app.appScope.launch { app.settings.setLookTheme(next.key) }
-        })
         if (wide) {
             TodayWide(model, weather, now, dayOffset, { dayOffset = it }, initial, nav, onItem, sayBar, head, entries, avatarDot = reviewsNews)
         } else {
@@ -590,7 +641,7 @@ internal class TodayHead(val state: DayState?, val onWeather: () -> Unit, val on
  * дня недели в 4.0). Аватара «С» нет: «Ещё» — в меню Ковчега («Настройки телефона»).
  */
 @Composable
-private fun TodayHeaderV2(
+internal fun TodayHeaderV2(
     model: TodayModel,
     now: Long,
     dayOffset: Int,
@@ -937,6 +988,8 @@ private fun buildModel(
     zOn: Boolean,
     me: String,
     delaOnServer: Boolean,
+    /** Вид v2: отметки словами холста («Обед · 640 ккал, белок 42 г») и сон строкой вместо готовности. */
+    v2: Boolean = false,
 ): TodayModel {
     val zone = ZoneId.systemDefault()
     val dayStart = day.atStartOfDay(zone).toInstant().toEpochMilli()
@@ -965,7 +1018,9 @@ private fun buildModel(
     val meals = app.foodStore.mealsOn(dateKey)
     if ("food" in marksOn) {
         meals.filter { !it.supplement }.forEach { m ->
-            marks += DayAssembler.MarkIn(m.ts, DayAssembler.Source.FOOD, "${Fmt.num(m.kcal)} ккал · ${m.shortList.ifBlank { m.kind }} · Б ${m.protein}", "meal:${m.id}")
+            val text = if (v2) "${m.kind.ifBlank { m.shortList }.replaceFirstChar { it.uppercase() }} · ${Fmt.num(m.kcal)} ккал, белок ${m.protein} г"
+            else "${Fmt.num(m.kcal)} ккал · ${m.shortList.ifBlank { m.kind }} · Б ${m.protein}"
+            marks += DayAssembler.MarkIn(m.ts, DayAssembler.Source.FOOD, text, "meal:${m.id}")
         }
     }
     app.foodStore.pending().filter { dayKey(it.ts) == dateKey }.forEach { m ->
@@ -982,7 +1037,10 @@ private fun buildModel(
     if ("money" in marksOn) {
         spent.filter { it.timeKnown }.forEach { e ->
             val what = e.what.ifBlank { e.note }.ifBlank { ru.zf.pravka.core.MoneyCategories.of(e.category)?.title.orEmpty() }
-            marks += DayAssembler.MarkIn(e.ts, DayAssembler.Source.MONEY, "${Fmt.rub(e.rubKop)} ₽" + (if (what.isNotBlank()) " · $what" else ""), "money:${e.id}")
+            // v2 — как в ленте холста: получатель или категория, потом сумма («Аптека · −1 250 ₽»).
+            val text = if (v2) (if (what.isNotBlank()) "$what · " else "") + "${Fmt.rub(e.rubKop)} ₽"
+            else "${Fmt.rub(e.rubKop)} ₽" + (if (what.isNotBlank()) " · $what" else "")
+            marks += DayAssembler.MarkIn(e.ts, DayAssembler.Source.MONEY, text, "money:${e.id}")
         }
     }
     val monthLen = java.time.YearMonth.from(day).lengthOfMonth()
@@ -992,6 +1050,18 @@ private fun buildModel(
     val done = app.sportStore.workoutsFlow.value.filter { dayKey(it.start) == dateKey }
     if ("sport" in marksOn) {
         done.forEach { w ->
+            if (v2) {
+                // «Тренировка · 45 мин, пульс 130, нагрузка 30» — как в ленте холста.
+                val nums = buildList {
+                    add("${w.minutes} мин")
+                    if (w.km >= 0.3) add(String.format(java.util.Locale.forLanguageTag("ru"), "%.2f км", w.km))
+                    if (w.avgHr > 0) add("пульс ${w.avgHr}")
+                    if (w.load > 0) add("нагрузка ${w.load}")
+                }
+                val name = w.name.ifBlank { ru.zf.pravka.core.LifeSchema.sportKind(w.type) }.replaceFirstChar { it.uppercase() }
+                marks += DayAssembler.MarkIn(w.start, DayAssembler.Source.SPORT, "$name · " + nums.joinToString(", "), "sport:${w.id}")
+                return@forEach
+            }
             val parts = buildList {
                 if (w.km >= 0.3) add(String.format(java.util.Locale.forLanguageTag("ru"), "%.2f км", w.km))
                 if (w.paceSecPerKm > 0) add("%d:%02d /км".format(w.paceSecPerKm / 60, w.paceSecPerKm % 60))
@@ -1000,7 +1070,18 @@ private fun buildModel(
             }
             marks += DayAssembler.MarkIn(w.start, DayAssembler.Source.SPORT, parts.joinToString(" · "), "sport:${w.id}")
         }
-        if (day == DayFacts.localDay(now)) {
+        // v2: сон строкой внутри ночного отрезка — часы, счёт, HRV (холст: «Сон 7,5 ч · счёт 80, HRV 55»).
+        val sleep = if (v2) app.sportStore.healthFlow.value.firstOrNull { it.date == dateKey && it.sleepHours > 0 } else null
+        if (sleep != null) {
+            val wake = DayReport.rhythm(entries, dayStart, now).wakeMs ?: (dayStart + 60_000L)
+            val extra = listOfNotNull(
+                sleep.sleepScore.takeIf { it > 0 }?.let { "счёт $it" },
+                sleep.hrv.takeIf { it > 0 }?.let { "HRV $it" },
+            ).joinToString(", ")
+            val hours = String.format(java.util.Locale.forLanguageTag("ru"), "%.1f", sleep.sleepHours)
+            marks += DayAssembler.MarkIn(wake - 60_000L, DayAssembler.Source.SPORT, "Сон $hours ч" + (if (extra.isNotBlank()) " · $extra" else ""), "sleep")
+        }
+        if (!v2 && day == DayFacts.localDay(now)) {
             val v = runCatching { app.trafficLight.today(dateKey) }.getOrNull()
             if (v != null && v.headline.isNotBlank()) {
                 val nums = v.numbers.take(2).joinToString(" · ") { "${it.label} ${it.value}" }

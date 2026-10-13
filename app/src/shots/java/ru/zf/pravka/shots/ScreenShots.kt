@@ -266,6 +266,7 @@ class ScreenShots {
             Seed.money(app)
         }
         Seed.weather(app)
+        Seed.digest(app)
         Seed.pravka(app)
         settle(20)
 
@@ -370,6 +371,21 @@ class ScreenShots {
             t = launch(null); shot(t, "today-03-tall"); close(t)
             RuntimeEnvironment.setQualifiers(INNER)
             t = launch(null); shot(t, "today-05-wide"); close(t)
+            RuntimeEnvironment.setQualifiers(OUTER)
+        }
+
+        // ---- «Сегодня» v2 (Правка 5.0, этап 2) отдельно — быстрый прогон без остальных экранов
+        if (want("t5")) {
+            for ((prefix, q) in listOf("outer" to OUTER, "inner" to INNER)) {
+                RuntimeEnvironment.setQualifiers(q)
+                for (theme in listOf("light", "dark")) {
+                    runBlocking { app.settings.setLookTheme(theme) }
+                    settle(4)
+                    val t = launch(null); shot(t, "$prefix-v2-$theme-1-today"); close(t)
+                    today5(prefix, theme)
+                }
+            }
+            runBlocking { app.settings.setLookTheme("system") }
             RuntimeEnvironment.setQualifiers(OUTER)
         }
 
@@ -520,6 +536,7 @@ class ScreenShots {
             } else if (tap(c, "Показать разделы")) shot(c, "$prefix-v2-$theme-7-dela-side")
             close(c)
             c = launch(MainActivity.TAB_ZASECHKA); shot(c, "$prefix-v2-$theme-4-zasechka"); close(c)
+            today5(prefix, theme)
         }
         runBlocking { app.settings.setLookTheme("system") }
         settle(4)
@@ -578,6 +595,24 @@ class ScreenShots {
         }
         runBlocking { app.settings.setLookV4(false) }
         settle(4)
+    }
+
+    /**
+     * «Сегодня» вида v2 (Правка 5.0, этап 2): раскрытая погода и раскрытый
+     * дайджест; на сложенном — ещё вся лента карточек высоким окном.
+     */
+    private fun today5(prefix: String, theme: String) {
+        var c = launch(null)
+        if (tap(c, "ощ.")) shot(c, "$prefix-t5-$theme-1-weather")
+        close(c)
+        c = launch(null)
+        if (tap(c, "раскрыть")) shot(c, "$prefix-t5-$theme-2-digest")
+        close(c)
+        if (prefix == "outer") {
+            RuntimeEnvironment.setQualifiers(OUTER_TALL)
+            c = launch(null); shot(c, "$prefix-t5-$theme-3-tall"); close(c)
+            RuntimeEnvironment.setQualifiers(OUTER)
+        }
     }
 
     // ------------------------------------------------------------ кнопки на стекле

@@ -49,6 +49,9 @@ class WeatherStore(private val context: Context) {
          * старый кэш годится как есть.
          */
         val ahead: List<WeatherDay.Hour> = emptyList(),
+        /** Где прогноз (широта, долгота города); NaN — неизвестно. Шаббат считает по ним закат. */
+        val lat: Double = Double.NaN,
+        val lon: Double = Double.NaN,
     )
 
     /** Сводка на [day] для города [city]; [force] — мимо часового кэша. */
@@ -58,7 +61,7 @@ class WeatherStore(private val context: Context) {
         val fresh = cache != null && cache.optString("city") == city &&
             System.currentTimeMillis() - cache.optLong("at") < CACHE_MS &&
             cache.optJSONObject("forecast")?.has("daily") == true
-        if (fresh && !force) return@withContext result(cache!!.getJSONObject("forecast"), day, city, stale = false, error = null)
+        if (fresh && !force) return@withContext result(cache!!.getJSONObject("forecast"), day, city, stale = false, error = null, at = cache.latLon())
         val out = runCatching {
             val (lat, lon) = coords(city, cache)
             val url = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon" +
@@ -72,16 +75,25 @@ class WeatherStore(private val context: Context) {
                 .put("at", System.currentTimeMillis())
                 .put("forecast", forecast)
             runCatching { file.writeText(save.toString()) }
-            result(forecast, day, city, stale = false, error = null)
+            result(forecast, day, city, stale = false, error = null, at = lat to lon)
         }
         out.getOrElse { e ->
             val old = cache?.optJSONObject("forecast")?.takeIf { cache.optString("city") == city }
             val why = "${e.javaClass.simpleName}: ${e.message}"
-            if (old != null) result(old, day, city, stale = true, error = why) else Result(null, stale = true, error = why, city = city)
+            if (old != null) result(old, day, city, stale = true, error = why, at = cache?.latLon() ?: (Double.NaN to Double.NaN)) else Result(null, stale = true, error = why, city = city)
         }
     }
 
-    private fun result(forecast: JSONObject, day: LocalDate, city: String, stale: Boolean, error: String?): Result {
+    private fun JSONObject.latLon(): Pair<Double, Double> = optDouble("lat", Double.NaN) to optDouble("lon", Double.NaN)
+
+    private fun result(
+        forecast: JSONObject,
+        day: LocalDate,
+        city: String,
+        stale: Boolean,
+        error: String?,
+        at: Pair<Double, Double> = Double.NaN to Double.NaN,
+    ): Result {
         val hours = hours(forecast, day)
         val now = LocalDateTime.now()
         return Result(
@@ -92,6 +104,8 @@ class WeatherStore(private val context: Context) {
             days = days(forecast).filter { !it.date.isBefore(now.toLocalDate()) },
             city = city,
             ahead = ahead(forecast, now),
+            lat = at.first.takeIf { !it.isNaN() } ?: forecast.optDouble("latitude", Double.NaN),
+            lon = at.second.takeIf { !it.isNaN() } ?: forecast.optDouble("longitude", Double.NaN),
         )
     }
 

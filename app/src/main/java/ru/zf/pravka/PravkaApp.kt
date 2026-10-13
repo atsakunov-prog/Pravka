@@ -234,6 +234,14 @@ class PravkaApp : Application() {
 
     val liveWork = kotlinx.coroutines.flow.MutableStateFlow<LiveWork?>(null)
 
+    /**
+     * Последний дайджест Telegram для «Сегодня» (Правка 5.0, этап 2). Сводка
+     * живёт у службы дайджеста на компе; дорога к телефону через сервер — своей
+     * работой (план §6). Пока её нет — null, и карточка не показывается; кто
+     * привезёт сводку, кладёт её сюда.
+     */
+    val digest = kotlinx.coroutines.flow.MutableStateFlow<ru.zf.pravka.core.DigestNote?>(null)
+
     val settings by lazy { Settings(this) }
     /** Кто пользуется установкой и какие режимы включены (data/Profile.kt). */
     internal val profileStore by lazy { ru.zf.pravka.data.ProfileStore(this) }

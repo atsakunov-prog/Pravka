@@ -65,6 +65,8 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -401,6 +403,43 @@ fun PrimaryKey(
             Spacer(Modifier.width(8.dp))
         }
         Text(text, style = t.bodyStrong.copy(fontSize = 15.sp), color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/**
+ * Малая кнопка вида v2 — `.btn.sm` веба (Правка 5.0, этап 2): значок и/или
+ * слово, прямоугольник 7, 13/500. [soft] — мягкий акцент (`.btn.soft`: «Да» в
+ * «Новом»), иначе панель с линией («Нет», «Стоп»). Зона касания — 48, как у
+ * всех кнопок: строка от неё не выше, рисунок — по размеру слова.
+ */
+@Composable
+fun SmallKey(
+    icon: ImageVector?,
+    text: String?,
+    description: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    soft: Boolean = false,
+    enabled: Boolean = true,
+) {
+    val t = LocalPravkaType.current
+    val shape = RoundedCornerShape(7.dp)
+    val ink = if (soft) Kv.accent else Kv.text
+    Row(
+        modifier
+            .minimumInteractiveComponentSize()
+            .dim(if (enabled) 1f else 0.4f)
+            .clip(shape)
+            .background(if (soft) Kv.accentSoft else Kv.panel)
+            .then(if (soft) Modifier else Modifier.border(1.dp, Kv.line, shape))
+            .clickable(enabled = enabled, role = Role.Button, onClickLabel = description, onClick = onClick)
+            .semantics { contentDescription = description }
+            .padding(horizontal = if (text == null) 8.dp else 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (icon != null) Icon(icon, null, tint = if (soft) Kv.accent else Kv.icon, modifier = Modifier.size(16.dp))
+        if (icon != null && text != null) Spacer(Modifier.width(6.dp))
+        if (text != null) Text(text, style = t.label.copy(fontSize = 13.sp, fontWeight = if (soft) FontWeight.SemiBold else FontWeight.Medium), color = ink, maxLines = 1)
     }
 }
 
