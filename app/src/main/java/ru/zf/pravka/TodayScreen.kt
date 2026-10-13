@@ -371,7 +371,8 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
                 }
             },
         )
-        TodayV2(data, weather, digest, now, dayOffset, { dayOffset = it }, nav, head, act, sayBar)
+        // Строка «сказать» v2 — одна на всё, своя развилка (`TodaySay.kt`).
+        TodayV2(data, weather, digest, now, dayOffset, { dayOffset = it }, nav, head, act) { m -> TodaySayBarV2(app, nav, data, m) }
     } else BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = twoPane()
         if (wide) {

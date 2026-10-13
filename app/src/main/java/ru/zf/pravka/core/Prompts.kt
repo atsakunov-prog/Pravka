@@ -84,6 +84,9 @@ object Prompts {
     // ---- Засечка: развилка — лента, мысль к делу, еда или дела. Сонет, одно (…см. prompts/PromptsZasechka.kt)
     val ZASECHKA_FORK: String get() = ru.zf.pravka.core.prompts.PromptsZasechka.FORK
 
+    // ---- «Сегодня»: строка «сказать» — лента, мысль, еда, дела, тело, деньги, вопрос. Сонет (…см. prompts/PromptsZasechka.kt)
+    val SAY_FORK: String get() = ru.zf.pravka.core.prompts.PromptsZasechka.SAY_FORK
+
     // ---- Засечка: долгое сидение в телефоне — чем занят и режет ли дело. Сонет (…см. prompts/PromptsZasechka.kt)
     val ZASECHKA_PHONE: String get() = ru.zf.pravka.core.prompts.PromptsZasechka.PHONE
 

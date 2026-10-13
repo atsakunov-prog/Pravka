@@ -31,6 +31,8 @@ class PromptStore(private val context: Context) {
         TASKS_DELA("tasks_dela"),
         // Засечка: развилка — лента, мысль к делу, еда или дела (Сонет).
         ZASECHKA_FORK("zasechka_fork"),
+        // «Сегодня»: строка «сказать» — к развилке «З» ещё тело, деньги и вопрос (Сонет).
+        SAY_FORK("say_fork"),
         // Засечка: долгое сидение в телефоне — чем занят и режет ли дело (Сонет).
         ZASECHKA_PHONE("zasechka_phone"),
         // Еда: сказанное -> КБЖУ (Сонет).
@@ -69,6 +71,7 @@ class PromptStore(private val context: Context) {
         PromptId.TASKS -> Prompts.TASKS
         PromptId.TASKS_DELA -> Prompts.TASKS_DELA
         PromptId.ZASECHKA_FORK -> Prompts.ZASECHKA_FORK
+        PromptId.SAY_FORK -> Prompts.SAY_FORK
         PromptId.ZASECHKA_PHONE -> Prompts.ZASECHKA_PHONE
         PromptId.FOOD -> Prompts.FOOD
         PromptId.MONEY -> Prompts.MONEY

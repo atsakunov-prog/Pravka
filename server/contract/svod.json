@@ -31,7 +31,7 @@
   "view": "GET /api/view/svod?key=… | ?prefix=money. → {items: [запись…]} — для служб компа (встречи, дайджест, «Деньги»), которые не держат синк.",
   "keys": {
    "_": "Кто пишет и кто читает. Новый ключ — сначала сюда. Телефон, впервые увидев svod, кладёт то, чего в Своде ещё нет (свой текущий текст, author = seed) — дальше правда на сервере, телефон держит кэш.",
-   "prompt.<имя>": "текст промпта телефона: clean, business, soften, prose, zasechka, zasechka_fork, food, body, trainer, rules, coach, money, money_match, money_ask, money_patterns, money_answer, patterns, review.*. Пишут: seed (телефон), tuner (недельная правка чистки — с base_rev), claude (сессия по просьбе владельца). Читает телефон. Владелец сам промпты не правит.",
+   "prompt.<имя>": "текст промпта телефона: clean, business, soften, prose, zasechka, zasechka_fork, say_fork, food, body, trainer, rules, coach, money, money_match, money_ask, money_patterns, money_answer, patterns, review.*. Пишут: seed (телефон), tuner (недельная правка чистки — с base_rev), claude (сессия по просьбе владельца). Читает телефон. Владелец сам промпты не правит.",
    "prompt.raznoska": "правила разбора наговора на дела — замена файла server/contract/prompts/raznoska.txt (файл остаётся заводским запасом). Читают телефон и parse.py / ask.py.",
    "dict.main": "словарь Правки (JSON: записи как в DictionaryStore). Пишут телефон (обучение, правка одного слова) и ночной разбор — с base_rev; читают телефон, встречи (вместо заводского seed), разбор дел ({DICT}).",
    "rules.pravka": "правила Правки (RulesStore). Пишет телефон, читает телефон.",

@@ -201,6 +201,51 @@ suspend fun ClaudeProvider.zasechkaFork(raw: String, context: String): Result<Za
     }
 
 /**
+ * Развилка строки «сказать» на «Сегодня» (Правка 5.0, этап 2, `core/SayFork.kt`):
+ * к четырём дорогам «З» — тело, деньги и вопрос. Тот же разговор, что у
+ * [zasechkaFork]: голова промпта под кэшем, время и текущее дело — хвостом;
+ * модель, усилие и дорога (секунды на «З», ожидание, рубильник флуда) — развилки
+ * «З» (`ModelRoute.ZASECHKA_FORK`): одна работа «понять, что за фраза».
+ */
+suspend fun ClaudeProvider.sayFork(raw: String, context: String): Result<ZasechkaForkReply> =
+    withContext(Dispatchers.IO) {
+        runCatchingApi {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) {
+                throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
+            }
+            require(raw.isNotBlank()) { "Пустая фраза — развилке нечего решать." }
+            val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.SAY_FORK)
+            val cut = template.indexOf("{NOW}")
+            val head = if (cut > 0) template.substring(0, cut) else ""
+            var tail = (if (cut > 0) template.substring(cut) else template).replace("{NOW}", context)
+            tail = if (tail.contains(Prompts.PLACEHOLDER_INPUT)) tail.replace(Prompts.PLACEHOLDER_INPUT, raw)
+            else tail.trimEnd() + "\n\nФраза:\n" + raw
+            val parts = Prompts.PromptParts(
+                stablePrefix = head,
+                dictPart = tail,
+                afterInput = "",
+                cacheStableAlways = head.isNotBlank(),
+            )
+            val started = System.currentTimeMillis()
+            val choice = settings.modelChoice(ModelRoute.ZASECHKA_FORK)
+            val reply = requestWithOneRetry(
+                apiKey, choice.model, parts, "", null,
+                effortOverride = choice.effort,
+                routeKey = ModelRoute.ZASECHKA_FORK.key,
+                paceChars = raw.length,
+            )
+            ZasechkaForkReply(
+                raw = reply.text,
+                costUsd = costUsd(choice.model, reply),
+                tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+                tokensOut = reply.outputTokens,
+                latencyMs = System.currentTimeMillis() - started,
+            )
+        }
+    }
+
+/**
  * Телефон в ленте (13.10.2026, `core/PhoneSit.kt`): долгое сидение в телефоне —
  * чем владелец был занят и режет ли это дело в ленте. Сонет на low без
  * размышлений. [context] — хвост после {NOW} (лента, приложения по минутам,
