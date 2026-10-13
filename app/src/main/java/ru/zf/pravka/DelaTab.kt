@@ -1078,8 +1078,14 @@ fun DelaTab(
                         mode = treeMode,
                         dir = treeDir,
                         folded = ::folded,
-                        onFold = { k, v -> scope.launch { app.delaStore.setGroup("fold:$k", if (v) "1" else "0") } },
-                        onFoldAll = { keys, v -> scope.launch { app.delaStore.setGroups(keys.associate { "fold:$it" to if (v) "1" else "0" }) } },
+                        // Ветку раскрыли руками — дерево уже не «до уровня N»: подсветка уровня снимается.
+                        onFold = { k, v -> scope.launch { app.delaStore.setGroups(mapOf("fold:$k" to if (v) "1" else "0", "tree:level" to "-1")) } },
+                        level = groupsPref["tree:level"]?.toIntOrNull() ?: -1,
+                        onLevel = { n, folds ->
+                            scope.launch {
+                                app.delaStore.setGroups(folds.entries.associate { "fold:${it.key}" to if (it.value) "1" else "0" } + ("tree:level" to n.toString()))
+                            }
+                        },
                         onMode = { m -> scope.launch { app.delaStore.setGroup("tree:mode", m) } },
                         onDir = { k -> scope.launch { app.delaStore.setGroup("tree:dir", k) } },
                         onDirPick = { treeDirPick = true },

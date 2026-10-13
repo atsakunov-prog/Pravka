@@ -346,21 +346,30 @@ object DelaKrug {
         return out
     }
 
-    /** Ключи «Раскрыть всё / Свернуть всё» (`fold` веба): направления [roots] и все цели под ними. */
-    fun foldKeys(m: Tree, roots: List<String>): List<String> {
-        val out = LinkedHashSet<String>()
-        fun walk(k: String, d: Int) {
-            if (d > 12) return
+    /** Кнопки уровней дерева: 1…[TREE_LEVELS] и «Всё» (0). */
+    const val TREE_LEVELS = 4
+
+    /**
+     * Уровни дерева (`level` веба; владелец 13.10.2026: «наверху — какой уровень нужен: первый — только
+     * направления, второй… нажал — и всё сжимается до этого уровня»). Направление — уровень 1, его цели,
+     * проекты и дела — 2, и так вниз. [level] — до какого уровня видно (0 — «Всё»): ветка уровня ≥ [level]
+     * свёрнута. Ответ — все ветки, которые сворачиваются (направления [roots], цели, проекты), с «свёрнута ли».
+     */
+    fun levelFolds(m: Tree, roots: List<String>, level: Int): Map<String, Boolean> {
+        val out = LinkedHashMap<String, Boolean>()
+        fun fold(lv: Int) = level > 0 && lv >= level
+        fun walk(k: String, lv: Int) {
+            if (lv > 14) return
             for (c in m.kids(k)) {
-                if (c.kind == Kind.GOAL) out += c.key
-                walk(c.key, d + 1)
+                if (c.kind != Kind.TASK) out[c.key] = fold(lv)
+                walk(c.key, lv + 1)
             }
         }
         for (r in roots) {
-            out += r
-            walk(r, 0)
+            out[r] = fold(1)
+            walk(r, 2)
         }
-        return out.toList()
+        return out
     }
 
     /** Дело или цель с путём в дереве — строка «Списка» и листа «Куда повесить». */

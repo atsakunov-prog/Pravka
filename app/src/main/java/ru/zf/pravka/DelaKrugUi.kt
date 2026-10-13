@@ -33,9 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.drawText
@@ -43,7 +41,6 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 import kotlin.math.abs
@@ -79,15 +76,6 @@ internal val TREE_MODES = listOf("tree" to "Дерево", "cols" to "Колон
 
 /** Отступ ступени дерева. */
 private val STEP = 14.dp
-
-/** Ромб цели (`gem` веба); у практики — ромб-кольцо: цель с ритмом не закрывается. */
-@Composable
-internal fun Gem(practice: Boolean, size: Dp = 9.dp, color: Color = LocalMode.current.value) {
-    Box(
-        Modifier.padding(horizontal = 3.dp).size(size).rotate(45f)
-            .then(if (practice) Modifier.border(1.5.dp, color) else Modifier.background(color)),
-    )
-}
 
 /** Плюсик или минус ветки; [enabled] = false — ветка пустая, место под плюсик остаётся. */
 @Composable
@@ -240,8 +228,6 @@ private fun KrugDirCard(d: DelaKrug.Direction, m: DelaKrug.Tree, move: DelaKrug.
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { actions.open(t) }.padding(vertical = 5.dp),
             ) {
-                Gem(t.rhythm.isNotBlank())
-                Spacer(Modifier.width(6.dp))
                 Text(t.title, style = ty.body, color = Ink.Text, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
                 val n = m.open(g.key)
                 if (n > 0) Text(n.toString(), style = ty.meta, color = mode.label)
@@ -261,8 +247,10 @@ internal class TreeUi(
     val dir: String,
     val folded: (String) -> Boolean,
     val onFold: (String, Boolean) -> Unit,
-    /** «Раскрыть всё» (false) / «Свернуть всё» (true) — ключи веток разом. */
-    val onFoldAll: (List<String>, Boolean) -> Unit,
+    /** До какого уровня раскрыто (1…4, 0 — «Всё», −1 — ветки раскрывали руками). */
+    val level: Int,
+    /** Нажали уровень: он и ветки разом — свёрнута ли каждая (`DelaKrug.levelFolds`). */
+    val onLevel: (Int, Map<String, Boolean>) -> Unit,
     val onMode: (String) -> Unit,
     val onDir: (String) -> Unit,
     val onDirPick: () -> Unit,
@@ -301,10 +289,17 @@ internal fun LazyListScope.treeView(
                     PaperChip(if (ui.goal.isBlank()) "Любая цель ▾" else "Цель: ${ui.goalTitle.take(30)}", selected = ui.goal.isNotBlank(), onClick = ui.onGoalPick)
                     if (ui.goal.isNotBlank()) PaperChip("✕ любая", selected = false, onClick = { ui.onGoal("") })
                     PaperChip("Без зачем", selected = ui.loose, onClick = ui.onLoose)
-                } else {
-                    val roots = shown.map { DelaKrug.dirKey(it.key) }
-                    PaperChip("Раскрыть всё", selected = false, onClick = { ui.onFoldAll(DelaKrug.foldKeys(m, roots), false) })
-                    PaperChip("Свернуть всё", selected = false, onClick = { ui.onFoldAll(DelaKrug.foldKeys(m, roots), true) })
+                }
+            }
+            if (ui.mode != "list") {
+                // Уровни вместо «Раскрыть всё / Свернуть всё» — своей строкой, чтобы влезли все: «1» — только
+                // направления, «2» — их цели, … «Всё».
+                val roots = shown.map { DelaKrug.dirKey(it.key) }
+                ChipRow {
+                    Text("Уровень", style = LocalPravkaType.current.meta, color = LocalMode.current.meta, modifier = Modifier.align(Alignment.CenterVertically))
+                    for (n in (1..DelaKrug.TREE_LEVELS) + 0) {
+                        PaperChip(if (n == 0) "Всё" else n.toString(), selected = ui.level == n, onClick = { ui.onLevel(n, DelaKrug.levelFolds(m, roots, n)) })
+                    }
                 }
             }
             Text(
@@ -371,7 +366,7 @@ private fun TreeDirCard(d: DelaKrug.Direction, m: DelaKrug.Tree, ui: TreeUi, act
     }
 }
 
-/** Строка «Дерева»: цель (плюсик, ромб, открыто, движение), проект (плюсик, число) или дело — строкой дела. */
+/** Строка «Дерева»: цель (плюсик, если есть что раскрыть; открыто, движение), проект (плюсик, число) или дело — строкой дела. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TreeLine(r: DelaKrug.Row, m: DelaKrug.Tree, ui: TreeUi, actions: DelaActions) {
@@ -391,8 +386,7 @@ private fun TreeLine(r: DelaKrug.Row, m: DelaKrug.Tree, ui: TreeUi, actions: Del
                     .combinedClickable(onClick = { actions.open(t) }, onLongClick = { ui.onHangTask(t) }).padding(vertical = 4.dp),
             ) {
                 Caret(r.expanded, r.hasKids) { ui.onFold(c.key, r.expanded) }
-                Gem(t.rhythm.isNotBlank())
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(2.dp))
                 Column(Modifier.weight(1f)) {
                     Text(t.title, style = ty.bodyStrong, color = Ink.TextStrong)
                     val more = listOfNotNull(
@@ -489,8 +483,6 @@ private fun ColumnLine(r: DelaKrug.Row, m: DelaKrug.Tree, ui: TreeUi, actions: D
         when (c.kind) {
             DelaKrug.Kind.GOAL -> {
                 Caret(r.expanded, r.hasKids) { ui.onFold(c.key, r.expanded) }
-                Gem(t?.rhythm?.isNotBlank() == true, 8.dp)
-                Spacer(Modifier.width(4.dp))
                 Text(t?.title.orEmpty(), style = ty.label, fontWeight = FontWeight.SemiBold, color = Ink.TextStrong, modifier = Modifier.weight(1f))
                 m.open(c.key).takeIf { it > 0 }?.let { Text(it.toString(), style = ty.meta, color = mode.value) }
             }
@@ -559,8 +551,6 @@ private fun GoalPickLine(text: String, more: String, goal: Boolean, selected: Bo
         Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(vertical = 8.dp, horizontal = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (goal) Gem(practice) else Spacer(Modifier.width(15.dp))
-        Spacer(Modifier.width(6.dp))
         Column(Modifier.weight(1f)) {
             Text(text, style = LocalPravkaType.current.body, color = if (selected) mode.value else Ink.Text, fontWeight = if (selected) FontWeight.SemiBold else null)
             if (more.isNotBlank()) Text(more, style = LocalPravkaType.current.meta, color = mode.meta)
@@ -605,16 +595,16 @@ internal fun PlaceBlock(
                 }
             } else {
                 PlaceLine(i + 1, onClick = { onTask(task) }) {
-                    Gem(task.rhythm.isNotBlank())
-                    Spacer(Modifier.width(6.dp))
                     Text(task.title + if (task.rhythm.isNotBlank()) " · ${task.rhythm}" else "", style = ty.body, color = Ink.Text)
                 }
             }
         }
         val d = p.chain.size + 1
         PlaceLine(d, onClick = null) {
-            if (t.goal) Gem(t.rhythm.isNotBlank()) else Box(Modifier.padding(horizontal = 2.dp).size(8.dp).clip(CircleShape).background(mode.value))
-            Spacer(Modifier.width(6.dp))
+            if (!t.goal) {
+                Box(Modifier.padding(horizontal = 2.dp).size(8.dp).clip(CircleShape).background(mode.value))
+                Spacer(Modifier.width(6.dp))
+            }
             Text(t.title, style = ty.bodyStrong, color = Ink.TextStrong)
         }
         for (s in p.kids.take(12)) StepLine(s, d + 1, onTask)
@@ -634,8 +624,10 @@ internal fun PlaceBlock(
 private fun StepLine(s: Dela.Task, depth: Int, onTask: (Dela.Task) -> Unit) {
     val mode = LocalMode.current
     PlaceLine(depth, onClick = { onTask(s) }) {
-        if (s.goal) Gem(s.rhythm.isNotBlank(), color = mode.label) else Box(Modifier.padding(horizontal = 3.dp).size(6.dp).clip(CircleShape).border(1.dp, mode.label, CircleShape))
-        Spacer(Modifier.width(6.dp))
+        if (!s.goal) {
+            Box(Modifier.padding(horizontal = 3.dp).size(6.dp).clip(CircleShape).border(1.dp, mode.label, CircleShape))
+            Spacer(Modifier.width(6.dp))
+        }
         Text(s.title, style = LocalPravkaType.current.body, color = Ink.TextSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }

@@ -181,7 +181,7 @@ class DelaKrugTest {
     }
 
     @Test
-    fun `ветки — проекты свёрнуты с завода, пустой проект не виден, «Раскрыть всё» знает цели`() {
+    fun `ветки — проекты свёрнуты с завода, пустой проект не виден, уровни сворачивают до своего`() {
         val g = task("g") { it.copy(goal = true, directions = listOf("health")) }
         val inProj = task("in-proj") { it.copy(projectId = "p-a") }
         val step = task("step") { it.copy(whyId = "g") }
@@ -193,7 +193,11 @@ class DelaKrugTest {
         val open = DelaKrug.outline(m, "d:health", { false })
         assertEquals(listOf("t:g", "p:p-a", "t:in-proj", "t:step"), open.map { it.item.key })
         assertEquals(listOf("t:g"), DelaKrug.outline(m, "d:health", { it == "t:g" }).map { it.item.key })
-        assertEquals(listOf("d:health", "t:g"), DelaKrug.foldKeys(m, listOf("d:health")))
+        // «1» — только направление; «2» — его цели свёрнуты; «3» — раскрыты цели, свёрнут проект под ними; «Всё» — всё.
+        assertEquals(mapOf("d:health" to true, "t:g" to true, "p:p-a" to true, "p:fam" to true), DelaKrug.levelFolds(m, listOf("d:health"), 1))
+        assertEquals(mapOf("d:health" to false, "t:g" to true, "p:p-a" to true, "p:fam" to true), DelaKrug.levelFolds(m, listOf("d:health"), 2))
+        assertEquals(mapOf("d:health" to false, "t:g" to false, "p:p-a" to true, "p:fam" to true), DelaKrug.levelFolds(m, listOf("d:health"), 3))
+        assertEquals(mapOf("d:health" to false, "t:g" to false, "p:p-a" to false, "p:fam" to false), DelaKrug.levelFolds(m, listOf("d:health"), 0))
     }
 
     @Test

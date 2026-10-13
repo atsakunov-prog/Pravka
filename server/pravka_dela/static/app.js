@@ -21,6 +21,7 @@ const S = {
   autoOpen: false, clientOpen: new Set(LS.get('clientOpen', [])), peopleQ: '', // «Сделано само» развёрнуто, клиенты со сделками, люди
   krug: { dirs: [], principles: [], proj: new Map() }, kpick: {}, // Круг жизни: направления и принципы (Свод), проекты в Круге; выбор в «Подскажи»
   treeMode: LS.get('treeMode', 'tree'), treeDir: LS.get('treeDir', null), treeF: null, // Дерево жизни: вид, направление, фильтры списка
+  treeLevel: LS.get('treeLevel', null), // до какого уровня раскрыто дерево (кнопки 1–4, 0 — «Всё»)
 };
 // Три группы дел (владелец 10.10.2026): «есть дела, которые ждут меня — люди что-то спросили и ждут, они
 // мега важные… второе — что я сам придумал… третье — проверить, что мне люди должны». Вечером назвал их:
@@ -1585,7 +1586,7 @@ function treeModel() {
 
 /** Свёрнуто ли: своё у каждой ветки, помнится в браузере. С завода направления и цели раскрыты, проекты — свёрнуты. */
 const isFolded = (key, def) => { const v = S.closed['tree:' + key]; return v === undefined ? def : !!v; };
-const setFolded = (key, v) => { S.closed['tree:' + key] = v; LS.set('closed', S.closed); };
+const setFolded = (key, v) => { S.closed['tree:' + key] = v; LS.set('closed', S.closed); S.treeLevel = null; LS.set('treeLevel', null); };
 const caret = (open) => el('span', { class: 'caret' + (open ? ' open' : '') }, open ? '−' : '+');
 /** Перетаскивание: дело или цель — на цель (новое «Зачем») или на направление («без зачем»); проект — на цель. */
 function dragFrom(node, kind, id) {
@@ -1624,12 +1625,11 @@ async function moveTo(kind, id, target) {
   }
 }
 
-/** Строка цели в дереве: плюсик, ромб, название (щелчок — карточка), практика, сколько открыто и движение. */
+/** Строка цели в дереве: плюсик (если есть что раскрыть), название (щелчок — карточка), практика, открыто и движение. */
 function goalHead(m, c, depth, open, toggle) {
   const t = c.t, n = m.open(c.key), mv = m.moved(c.key), steps = m.kids(c.key).length;
   const row = el('div', { class: 'tree-goal' + (open ? '' : ' folded') + (S.cardId === t.id ? ' open-now' : ''), style: '--indent:' + depth, 'data-id': t.id },
     steps ? el('button', { class: 'caret-btn', title: open ? 'Свернуть' : 'Раскрыть', onclick: (e) => { e.stopPropagation(); toggle(); } }, caret(open)) : el('span', { class: 'caret-btn none' }),
-    el('span', { class: 'gem' + (t.rhythm ? ' practice' : '') }),
     el('a', { class: 'g-title', href: '#', onclick: (e) => { e.preventDefault(); openCard(t.id); } }, t.title),
     t.rhythm ? el('span', { class: 'm practice', title: 'Практика: повторяется и не закрывается' }, t.rhythm) : null,
     t.no_steps ? el('span', { class: 'm faint', title: 'Ориентир, а не задача: дел под ним не заводят' }, 'ориентир') : null,
@@ -1686,7 +1686,7 @@ function treeCols(m, dirs) {
       const open = !isFolded(c.key, false);
       const row = el('div', { class: 'col-goal' + (t.rhythm ? ' practice' : '') + (S.cardId === t.id ? ' open-now' : ''), style: '--indent:' + depth, onclick: () => openCard(t.id) },
         m.kids(c.key).length ? el('button', { class: 'caret-btn', onclick: (e) => { e.stopPropagation(); setFolded(c.key, open); render(); } }, caret(open)) : el('span', { class: 'caret-btn none' }),
-        el('span', { class: 'gem' + (t.rhythm ? ' practice' : '') }), el('span', { class: 'g-title' }, t.title),
+        el('span', { class: 'g-title' }, t.title),
         m.open(c.key) ? el('span', { class: 'g-n' }, m.open(c.key)) : null);
       return [dropTo(dragFrom(row, 'task', t.id), { goal: t.id }), ...(open ? m.kids(c.key).flatMap((x) => item(x, depth + 1)) : [])];
     }
@@ -1731,16 +1731,20 @@ function renderTree() {
   const dirSel = el('select', { 'aria-label': 'Направление' }, el('option', { value: '' }, 'Все направления'),
     S.krug.dirs.map((d) => el('option', { value: d.key, selected: S.treeDir === d.key }, d.name)));
   dirSel.addEventListener('change', () => { S.treeDir = dirSel.value || null; LS.set('treeDir', S.treeDir); render(); });
-  const fold = (v) => () => {
-    for (const d of dirs) { setFolded('d:' + d.key, v); const walk = (k) => m.kids(k).forEach((c) => { if (c.kind === 'goal') setFolded(c.key, v); walk(c.key); }); walk('d:' + d.key); }
+  // Уровни (владелец 13.10.2026: «наверху — какой уровень нужен: первый — только направления, второй… нажал — и всё
+  // сжимается до этого уровня»). Направление — уровень 1, его цели, проекты и дела — 2, и так вниз; «Всё» — раскрыть всё.
+  const level = (n) => () => {
+    const walk = (k, lv) => m.kids(k).forEach((c) => { if (c.kind !== 'task') S.closed['tree:' + c.key] = !!n && lv >= n; walk(c.key, lv + 1); });
+    for (const d of dirs) { S.closed['tree:d:' + d.key] = !!n && n <= 1; walk('d:' + d.key, 2); }
+    S.treeLevel = n; LS.set('treeLevel', n); LS.set('closed', S.closed);
     render();
   };
   const bar = el('div', { class: 'toolbar' },
     el('div', { class: 'quick-dates' }, Object.entries(TREE_MODES).map(([k, l]) => el('button', { class: 'chip-btn' + (k === mode ? ' on' : ''),
       onclick: () => { S.treeMode = k; LS.set('treeMode', k); render(); } }, l))),
     el('label', {}, dirSel),
-    mode !== 'list' ? el('button', { class: 'chip-btn', onclick: fold(false) }, 'Раскрыть всё') : null,
-    mode !== 'list' ? el('button', { class: 'chip-btn', onclick: fold(true) }, 'Свернуть всё') : null);
+    mode !== 'list' ? el('div', { class: 'quick-dates tree-levels', title: 'До какого уровня раскрыть дерево' }, el('span', { class: 'lv-l' }, 'Уровень'),
+      [1, 2, 3, 4, 0].map((n) => el('button', { class: 'chip-btn' + (S.treeLevel === n ? ' on' : ''), onclick: level(n) }, n ? String(n) : 'Всё'))) : null);
   const none = m.kids('d:').filter((c) => c.kind !== 'project');
   const body = mode === 'cols' ? treeCols(m, dirs) : mode === 'list' ? treeList() : treeOutline(m, dirs);
   return [head('Дерево жизни', [plural(deeds().filter((t) => isOpen(t) && isMine(t)).length, 'дело', 'дела', 'дел'), plural(goals, 'цель', 'цели', 'целей'),
@@ -3099,12 +3103,12 @@ function placeBlock(t) {
   chain.forEach((x, i) => rows.push(x.kind === 'project'
     ? el('a', { class: 'pt-row pt-proj', style: '--d:' + (i + 1), href: '#/p/' + x.id }, '▣ ' + ((project(x.id) || {}).name || 'проект'))
     : el('a', { class: 'pt-row pt-goal' + (x.rhythm ? ' practice' : ''), style: '--d:' + (i + 1), href: '#', onclick: (e) => { e.preventDefault(); openCard(x.id); } },
-      el('span', { class: 'gem' + (x.rhythm ? ' practice' : '') }), x.title, x.rhythm ? el('span', { class: 'faint' }, ' · ' + x.rhythm) : null)));
+      x.title, x.rhythm ? el('span', { class: 'faint' }, ' · ' + x.rhythm) : null)));
   const d = chain.length + 1;
   const sibs = goalOf(parent) ? stepsOf(parent.id).filter((s) => s.id !== t.id).sort((a, b) => (b.goal ? 1 : 0) - (a.goal ? 1 : 0) || byTime(a, b)) : [];
-  rows.push(el('div', { class: 'pt-row pt-me', style: '--d:' + d }, t.goal ? el('span', { class: 'gem' + (t.rhythm ? ' practice' : '') }) : el('span', { class: 'me-dot' }), t.title));
+  rows.push(el('div', { class: 'pt-row pt-me', style: '--d:' + d }, t.goal ? null : el('span', { class: 'me-dot' }), t.title));
   const link = (s, dd, cls) => el('a', { class: 'pt-row ' + cls, style: '--d:' + dd, href: '#', onclick: (e) => { e.preventDefault(); openCard(s.id); } },
-    s.goal ? el('span', { class: 'gem' }) : el('span', { class: 'sib-dot' }), s.title);
+    s.goal ? null : el('span', { class: 'sib-dot' }), s.title);
   const kids = stepsOf(t.id).sort((a, b) => (b.goal ? 1 : 0) - (a.goal ? 1 : 0) || byTime(a, b));
   kids.slice(0, 12).forEach((s) => rows.push(link(s, d + 1, 'pt-kid')));
   if (kids.length > 12) rows.push(el('div', { class: 'pt-row faint', style: '--d:' + (d + 1) }, 'и ещё ' + (kids.length - 12)));

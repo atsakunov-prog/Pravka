@@ -1068,8 +1068,11 @@ textarea.about { width: 100%; min-height: 60px; resize: none; overflow: hidden; 
 .task.step { padding-left: calc(16px + var(--indent, 0) * 22px); }
 .task.step .title::before { content: '↳ '; color: var(--faint); }
 .sug .dir-pick { padding: 8px 0 2px; }
-/* Дерево жизни: цели ромбом, практики — ромбом-рамкой, проекты значком; плюсик — квадратиком. */
-.caret { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; border: 1px solid var(--line); background: var(--panel); font-size: 13px; line-height: 1; color: var(--muted); flex: none; }
+/* Дерево жизни: ветку раскрывает плюсик (ромбов нет — владелец 13.10.2026), проекты значком; сверху — уровни. */
+.tree-levels { align-items: center; }
+.tree-levels .lv-l { color: var(--muted); font-size: 12.5px; margin-right: 2px; }
+.tree-levels .chip-btn { min-width: 34px; justify-content: center; }
+.caret { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; border: 1px solid var(--icon); background: var(--panel); font-size: 15px; font-weight: 600; line-height: 1; color: var(--text); flex: none; }
 .caret.open { color: var(--accent); border-color: var(--accent); }
 .caret-btn .caret { pointer-events: none; }
 .gem { display: inline-block; width: 9px; height: 9px; transform: rotate(45deg); background: var(--accent); border-radius: 2px; flex: none; margin: 0 6px 0 2px; }
