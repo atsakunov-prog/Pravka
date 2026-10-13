@@ -26,6 +26,8 @@ object WeatherDay {
         val prob: Int,
         val code: Int,
         val feels: Double = Double.NaN,
+        /** День часа — у ленты «сутки вперёд», где часы переходят полночь; у часов одного дня — null. */
+        val date: java.time.LocalDate? = null,
     )
 
     /**
@@ -167,5 +169,76 @@ object WeatherDay {
             line += if (first > nowHour) " · $word с $first" else " · $word до ${last + 1}"
         }
         return Summary(cells, line)
+    }
+
+    // ---- Правка 5.0, этап 2: строка погоды над «Сейчас» и раскрытие ----
+    //
+    // Холст «Ковчег на телефоне» (13.10.2026): в строке — небо и температура
+    // сейчас и три ближайшие части суток ОТ ТЕКУЩЕГО ЧАСА вперёд (в 21:15 —
+    // «вечер, утро, день»), мелко «ощущается»; раскрытая — сутки по часам
+    // лентой вбок (вероятность осадков от 20 %) и неделя: утро, день, вечер,
+    // осадки.
+
+    /** Часть суток по часу: утро 5–11, день 12–16, вечер 17–22; ночь — null (её в строке нет). */
+    fun partOf(hour: Int): String? = when (hour) {
+        in 5..11 -> "утро"
+        in 12..16 -> "день"
+        in 17..22 -> "вечер"
+        else -> null
+    }
+
+    private val PART_HOUR = mapOf("утро" to 9, "день" to 14, "вечер" to 19)
+
+    /**
+     * Три ближайшие части суток из часов [ahead] (по порядку, от текущего
+     * часа): у каждой — её обычный час (9, 14, 19), а у уже идущей — ближайший
+     * оставшийся (в 21:00 вечер — это 21:00, а не прошедшие 19). Ночь
+     * пропускается.
+     */
+    fun nextParts(ahead: List<Hour>, count: Int = 3): List<Part> {
+        val groups = ArrayList<Pair<String, MutableList<Hour>>>()
+        for (h in ahead) {
+            val p = partOf(h.hour) ?: continue
+            val last = groups.lastOrNull()
+            if (last != null && last.first == p && last.second.last().let { it.date == h.date && h.hour - it.hour == 1 }) last.second += h
+            else groups += p to mutableListOf(h)
+        }
+        return groups.take(count).map { (label, hs) ->
+            val x = hs.firstOrNull { it.hour == PART_HOUR[label] } ?: hs.first()
+            Part(label, x.temp, x.feels)
+        }
+    }
+
+    /** Часы от [from] (включая его час) на [count] вперёд — через полночь, у каждого свой [Hour.date]. */
+    fun ahead(hours: List<Hour>, from: java.time.LocalDateTime, count: Int = 24): List<Hour> {
+        val start = from.toLocalDate().atTime(from.hour, 0)
+        return hours
+            .filter { it.date != null && !it.date.atTime(it.hour, 0).isBefore(start) }
+            .sortedWith(compareBy({ it.date }, { it.hour }))
+            .take(count)
+    }
+
+    /** «+9°» без знака градуса — для столбцов недели («+10», как на холсте). */
+    fun tempShort(t: Double): String = temp(t).removeSuffix("°")
+
+    /** Вероятность осадков часа строкой — от 20 %, ниже пусто: «35%». */
+    fun hourRain(prob: Int): String = if (prob >= 20) "$prob%" else ""
+
+    /** «Вт 13» — день недели с большой буквы и число. */
+    fun weekLabel(date: java.time.LocalDate): String =
+        WEEKDAYS[date.dayOfWeek.value - 1].replaceFirstChar { it.uppercase() } + " " + date.dayOfMonth
+
+    /**
+     * Осадки дня в неделе: «5,5 мм · 73%» и true (акцентом), если вероятность
+     * от 30 %; иначе «сухо» или «0,6 мм» бледно.
+     */
+    fun weekRain(prob: Int, mm: Double): Pair<String, Boolean> {
+        val amount = when {
+            mm < 0.1 -> "сухо"
+            else -> String.format(java.util.Locale.forLanguageTag("ru"), "%.1f мм", mm).replace(",0 мм", " мм")
+        }
+        return if (prob >= 30 && mm >= 0.1) "$amount · $prob%" to true
+        else if (prob >= 30) "$prob%" to true
+        else amount to false
     }
 }

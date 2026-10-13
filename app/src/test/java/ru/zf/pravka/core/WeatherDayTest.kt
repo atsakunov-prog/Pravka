@@ -83,4 +83,50 @@ class WeatherDayTest {
         assertEquals("2 мм", WeatherDay.mm(2.0))
         assertEquals("12 мм", WeatherDay.mm(12.4))
     }
+
+    // ---- Правка 5.0, этап 2: строка над «Сейчас» и сутки вперёд ----
+
+    private val d0 = java.time.LocalDate.of(2026, 10, 13)
+
+    /** Два дня часов: температура — номер часа, чтобы видеть, какой час взят. */
+    private fun twoDays() = (0..1).flatMap { k ->
+        (0..23).map { h -> WeatherDay.Hour(h, h.toDouble() + k * 100, 0.0, 0, 3, feels = h - 2.0, date = d0.plusDays(k.toLong())) }
+    }
+
+    @Test
+    fun `сутки вперёд — с текущего часа и через полночь`() {
+        val a = WeatherDay.ahead(twoDays(), d0.atTime(21, 15))
+        assertEquals(24, a.size)
+        assertEquals(21, a.first().hour)
+        assertEquals(d0, a.first().date)
+        assertEquals(20, a.last().hour)
+        assertEquals(d0.plusDays(1), a.last().date)
+    }
+
+    @Test
+    fun `в 21 15 — вечер сейчас, потом утро и день завтра`() {
+        val parts = WeatherDay.nextParts(WeatherDay.ahead(twoDays(), d0.atTime(21, 15)))
+        assertEquals(listOf("вечер", "утро", "день"), parts.map { it.label })
+        // Вечер — ближайший оставшийся час (21), утро и день — обычные 9 и 14 завтрашнего дня.
+        assertEquals(listOf(21.0, 109.0, 114.0), parts.map { it.temp })
+        assertEquals(19.0, parts[0].feels, 1e-9)
+    }
+
+    @Test
+    fun `утром — утро, день, вечер того же дня, ночью — с утра`() {
+        assertEquals(listOf(10.0, 14.0, 19.0), WeatherDay.nextParts(WeatherDay.ahead(twoDays(), d0.atTime(10, 5))).map { it.temp })
+        assertEquals(listOf(9.0, 14.0, 19.0), WeatherDay.nextParts(WeatherDay.ahead(twoDays(), d0.atTime(2, 0))).map { it.temp })
+        assertEquals(listOf("утро", "день", "вечер"), WeatherDay.nextParts(WeatherDay.ahead(twoDays(), d0.atTime(23, 30))).map { it.label })
+    }
+
+    @Test
+    fun `неделя — подпись дня и осадки`() {
+        assertEquals("Вт 13", WeatherDay.weekLabel(d0))
+        assertEquals("5,5 мм · 73%" to true, WeatherDay.weekRain(73, 5.5))
+        assertEquals("сухо" to false, WeatherDay.weekRain(6, 0.0))
+        assertEquals("0,6 мм" to false, WeatherDay.weekRain(8, 0.6))
+        assertEquals("35%", WeatherDay.hourRain(35))
+        assertEquals("", WeatherDay.hourRain(15))
+        assertEquals("+10", WeatherDay.tempShort(9.6))
+    }
 }

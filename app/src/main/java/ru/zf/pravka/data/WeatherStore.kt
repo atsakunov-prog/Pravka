@@ -42,6 +42,13 @@ class WeatherStore(private val context: Context) {
         val hours: List<WeatherDay.Hour> = emptyList(),
         val days: List<WeatherDay.Day> = emptyList(),
         val city: String = "",
+        /**
+         * Сутки вперёд от текущего часа — через полночь (Правка 5.0, этап 2):
+         * строка погоды над «Сейчас» и лента по часам в раскрытии. Берутся из
+         * того же почасового прогноза на десять дней, что уже лежит в кэше, —
+         * старый кэш годится как есть.
+         */
+        val ahead: List<WeatherDay.Hour> = emptyList(),
     )
 
     /** Сводка на [day] для города [city]; [force] — мимо часового кэша. */
@@ -84,6 +91,7 @@ class WeatherStore(private val context: Context) {
             hours = hours,
             days = days(forecast).filter { !it.date.isBefore(now.toLocalDate()) },
             city = city,
+            ahead = ahead(forecast, now),
         )
     }
 
@@ -124,7 +132,14 @@ class WeatherStore(private val context: Context) {
             WeatherDay.summary(hours(forecast, day), LocalDateTime.now().hour)
 
         /** Часы дня [day] из ответа Open-Meteo (`hourly.time` — местное время города). */
-        fun hours(forecast: JSONObject, day: LocalDate): List<WeatherDay.Hour> {
+        fun hours(forecast: JSONObject, day: LocalDate): List<WeatherDay.Hour> = allHours(forecast).filter { it.date == day }
+
+        /** Сутки вперёд от [from] — через полночь. */
+        fun ahead(forecast: JSONObject, from: LocalDateTime, count: Int = 24): List<WeatherDay.Hour> =
+            WeatherDay.ahead(allHours(forecast), from, count)
+
+        /** Все часы прогноза, у каждого — свой день. */
+        fun allHours(forecast: JSONObject): List<WeatherDay.Hour> {
             val h = forecast.optJSONObject("hourly") ?: return emptyList()
             val time = h.optJSONArray("time") ?: return emptyList()
             val temp = h.optJSONArray("temperature_2m") ?: return emptyList()
@@ -134,7 +149,6 @@ class WeatherStore(private val context: Context) {
             val code = h.optJSONArray("weather_code")
             return (0 until time.length()).mapNotNull { i ->
                 val t = runCatching { LocalDateTime.parse(time.getString(i)) }.getOrNull() ?: return@mapNotNull null
-                if (t.toLocalDate() != day) return@mapNotNull null
                 WeatherDay.Hour(
                     hour = t.hour,
                     temp = temp.optDouble(i, Double.NaN).takeIf { !it.isNaN() } ?: return@mapNotNull null,
@@ -142,6 +156,7 @@ class WeatherStore(private val context: Context) {
                     prob = prob?.optInt(i, 0) ?: 0,
                     code = code?.optInt(i, 3) ?: 3,
                     feels = feels?.optDouble(i, Double.NaN) ?: Double.NaN,
+                    date = t.toLocalDate(),
                 )
             }
         }

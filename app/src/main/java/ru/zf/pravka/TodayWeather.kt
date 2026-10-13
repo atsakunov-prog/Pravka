@@ -1,6 +1,7 @@
 package ru.zf.pravka
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -34,6 +35,8 @@ import ru.zf.pravka.core.DayState
 import ru.zf.pravka.core.WeatherDay
 import ru.zf.pravka.ui.Glyphs
 import ru.zf.pravka.ui.Ink
+import ru.zf.pravka.ui.Kv
+import ru.zf.pravka.ui.KvShape
 import ru.zf.pravka.ui.LocalPravkaType
 import ru.zf.pravka.ui.Modes
 import ru.zf.pravka.ui.PaperHint
@@ -236,6 +239,148 @@ private fun DayLine(d: WeatherDay.Day, today: LocalDate) {
                     textAlign = TextAlign.End,
                 )
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Вид v2 (Правка 5.0, этап 2; холст `Main`, `.wxc` в `phone.css`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Погода над «Сейчас»: в строке — небо и температура сейчас, три ближайшие
+ * части суток от текущего часа (`WeatherDay.nextParts`) с мелким
+ * «ощущается», справа «по часам». Нажатие раскрывает карточку на месте, как
+ * дайджест: сутки по часам лентой с прокруткой вбок (час, небо, температура,
+ * вероятность осадков от 20 %) и неделя — утро, день, вечер, осадки.
+ * Лист 4.0 (`WeatherSheet`) остаётся «Виду 4.0».
+ */
+@Composable
+internal fun WeatherCardV2(
+    w: ru.zf.pravka.data.WeatherStore.Result,
+    open: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val t = LocalPravkaType.current
+    val shape = RoundedCornerShape(KvShape.Panel)
+    val first = w.ahead.firstOrNull() ?: w.hours.firstOrNull()
+    val parts = WeatherDay.nextParts(w.ahead)
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Kv.panel)
+            .border(1.dp, Kv.line, shape)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(KvShape.Control))
+                .clickable(onClickLabel = if (open) "свернуть погоду" else "погода по часам", onClick = onToggle),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (first != null) {
+                Icon(skyIcon(WeatherDay.sky(first.code, first.hour)), null, tint = Kv.icon, modifier = Modifier.size(24.dp))
+                Spacer(Modifier.width(10.dp))
+                Text(WeatherDay.temp(first.temp), style = t.valueL.copy(fontSize = 22.sp, lineHeight = 24.sp), color = Kv.text, maxLines = 1)
+            }
+            Row(Modifier.padding(start = 14.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                for (p in parts) {
+                    Column {
+                        Text(p.label, style = t.caption.copy(fontSize = 11.sp, lineHeight = 13.sp), color = Kv.faint, maxLines = 1)
+                        Text(WeatherDay.tempShort(p.temp), style = t.weather.copy(lineHeight = 16.sp), color = Kv.text, maxLines = 1)
+                        if (!p.feels.isNaN()) {
+                            Text("ощ. " + WeatherDay.tempShort(p.feels), style = t.caption.copy(fontSize = 11.sp, lineHeight = 13.sp), color = Kv.faint, maxLines = 1)
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            Column(horizontalAlignment = Alignment.End) {
+                Text(if (open) "свернуть" else "по часам", style = t.label, color = Kv.accent, maxLines = 1)
+                if (w.stale) Text("нет связи", style = t.caption.copy(fontSize = 11.sp), color = Kv.faint, maxLines = 1)
+            }
+        }
+        if (!open) return@Column
+        val hours = w.ahead.ifEmpty { WeatherDay.hoursFrom(w.hours, LocalTime.now().hour) }
+        if (hours.isNotEmpty()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp, bottom = 4.dp)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                hours.forEachIndexed { i, h -> HourCellV2(h, now = i == 0) }
+            }
+        }
+        val week = w.days.take(7)
+        if (week.isNotEmpty()) {
+            WeekRow("", "утро", "день", "вечер", "осадки", head = true)
+            for (d in week) {
+                val ps = d.parts
+                val (rain, wet) = WeatherDay.weekRain(d.prob, d.precipMm)
+                WeekRow(
+                    WeatherDay.weekLabel(d.date),
+                    ps.getOrNull(0)?.let { WeatherDay.tempShort(it.temp) } ?: WeatherDay.tempShort(d.min),
+                    ps.getOrNull(1)?.let { WeatherDay.tempShort(it.temp) } ?: WeatherDay.tempShort(d.max),
+                    ps.getOrNull(2)?.let { WeatherDay.tempShort(it.temp) } ?: "",
+                    rain,
+                    wet = wet,
+                )
+            }
+        }
+        if (hours.isEmpty() && week.isEmpty()) {
+            Text(w.error?.let { "Прогноза нет: $it" } ?: "Прогноза пока нет.", style = t.meta, color = Kv.faint, modifier = Modifier.padding(top = 8.dp))
+        }
+    }
+}
+
+/** Час ленты: время («сейчас» у первого), небо, температура, осадки от 20 % акцентом. */
+@Composable
+private fun HourCellV2(h: WeatherDay.Hour, now: Boolean) {
+    val t = LocalPravkaType.current
+    Column(
+        Modifier
+            .width(46.dp)
+            .clip(RoundedCornerShape(7.dp))
+            .then(if (now) Modifier.background(Kv.accentSoft) else Modifier)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(if (now) "сейчас" else String.format(java.util.Locale.ROOT, "%02d", h.hour), style = t.caption.copy(fontSize = 11.sp, lineHeight = 13.sp), color = if (now) Kv.accent else Kv.faint, maxLines = 1)
+        Icon(skyIcon(WeatherDay.sky(h.code, h.hour)), null, tint = Kv.icon, modifier = Modifier.size(16.dp))
+        Text(WeatherDay.temp(h.temp), style = t.label.copy(fontWeight = FontWeight.SemiBold), color = Kv.text, maxLines = 1)
+        Text(WeatherDay.hourRain(h.prob), style = t.caption.copy(fontSize = 11.sp, lineHeight = 13.sp), color = Kv.accent, maxLines = 1, modifier = Modifier.height(13.dp))
+    }
+}
+
+/** Строка недели: день, утро, день, вечер, осадки — сеткой `.wkr` (52 · 1fr ×3 · 92). */
+@Composable
+private fun WeekRow(day: String, m: String, a: String, e: String, rain: String, head: Boolean = false, wet: Boolean = false) {
+    val t = LocalPravkaType.current
+    val style = if (head) t.caption.copy(fontSize = 11.5.sp) else t.label.copy(fontWeight = FontWeight.Normal)
+    val color = if (head) Kv.faint else Kv.text
+    Column {
+        if (!head) Box(Modifier.fillMaxWidth().height(1.dp).background(Kv.lineSoft))
+        Row(
+            Modifier.fillMaxWidth().padding(top = if (head) 8.dp else 5.dp, bottom = 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(day, style = style.copy(fontWeight = if (head) FontWeight.Normal else FontWeight.SemiBold), color = color, maxLines = 1, modifier = Modifier.width(52.dp))
+            for (v in listOf(m, a, e)) Text(v, style = style, color = color, maxLines = 1, modifier = Modifier.weight(1f))
+            Text(
+                rain,
+                style = style,
+                color = if (wet && !head) Kv.accent else Kv.faint,
+                maxLines = 1,
+                textAlign = TextAlign.End,
+                modifier = Modifier.width(92.dp),
+            )
         }
     }
 }
