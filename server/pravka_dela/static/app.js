@@ -243,7 +243,8 @@ function movement() {
 }
 /** «Моё» (бриф, §7; принцип «Делаю то, что хочу я»): до трёх открытых дел, которых никто не ждёт — «Хочу сам»
  *  и шаги к целям (есть «Зачем», своих шагов нет); первым закреплённое, потом шаги из направлений, где за неделю
- *  меньше всего движения. Не «отбить» и не «мониторить»: там ждут люди. Цели — не дела. Правило — krug.mine_from. */
+ *  меньше всего движения. Не «отбить» и не «мониторить»: там ждут люди. Цели — не дела. С 13.10.2026 — без того, что
+ *  и так на виду: срок сегодня («Сегодня») или уже в «Сейчас». Правило — krug.mine_from и store.view_today. */
 const MINE_MAX = 3;
 function mineTasks() {
   if (!krugOn()) return [];
@@ -251,7 +252,7 @@ function mineTasks() {
   const withSteps = new Set(all().filter((x) => isOpen(x) && x.why_id).map((x) => x.why_id));
   const least = (t) => { const k = dirsOf(t)[0]; return k ? (mv[k] || {}).events || 0 : 0; };
   return deeds().filter((t) => isOpen(t) && isMine(t) && inSphere(t) && !t.owed && t.ball !== 'waiting'
-    && (t.want || (t.why_id && !withSteps.has(t.id))))
+    && !isNow(t) && t.due_date !== S.today && (t.want || (t.why_id && !withSteps.has(t.id))))
     .sort((a, b) => (b.want ? 1 : 0) - (a.want ? 1 : 0) || least(a) - least(b)
       || (a.created_at || '').localeCompare(b.created_at || '') || a.num - b.num)
     .slice(0, MINE_MAX);
@@ -334,32 +335,41 @@ function whyPop(anchor, t) {
     toDir: (k) => setFields([t.id], { why_id: null, directions: [k] }, 'Направление: ' + dirName(k)) });
 }
 
-// Видов три (владелец 10.10.2026: «не надо этих всех странных видов. Просто надо говорить: на сегодня вот
-// такие дела»). «Сегодня» — главный список тремя группами; «Новое» — вопросы автоматики; «Все дела» — всё
-// открытое, с завода уровнями «проекты › группы › время»; свои сочетания — фильтрами на полке. «Сейчас», «Предстоящее», «Жду» и «Неделя» ушли: их дела — в «Сегодня» и «Всех делах».
-// «Сейчас» (focus_on) остаётся у телефона — такое дело тоже в «Сегодня».
+// Виды (владелец 10.10.2026: «не надо этих всех странных видов. Просто надо говорить: на сегодня вот такие дела»;
+// 13.10.2026: «В делах давай разделим: Сейчас (то, что отметил) и Сегодня (с датой сегодня)», порядок на главной —
+// Сейчас → Новое → Сегодня). С 10.10 по 13.10 «Сегодня» было одним котлом — срок сегодня или прошёл, «Сейчас»
+// телефона, «отбить» без срока, «мониторить» с напоминанием, — и в нём тонуло то, что владелец сам взял на день.
+// Правило одно с сервером (store.NOW_IF, TODAY_IF, LATE_IF) и телефоном (этап 4 «Правки 5.0»):
+// - «Сейчас» — только отмеченное владельцем (focus_on = сегодня), не больше пяти; это главная страница;
+// - «Сегодня» — свои открытые дела со сроком ровно сегодня;
+// - просроченное само ни туда, ни туда не попадает: оно во «Всех делах», группой «Просрочено» сверху.
+// «Новое» — вопросы автоматики; «Все дела» — всё открытое, с завода уровнями «Зачем › группы › время»; свои
+// сочетания — фильтрами на полке. «Предстоящее», «Жду» и «Неделя» ушли (10.10): их дела — во «Всех делах».
 const NOW_MAX = 5;
 const nowTasks = () => all().filter((t) => isOpen(t) && isMine(t) && isNow(t) && !t.goal);
-/** На сегодня — как store.TODAY_IF: срок сегодня или прошёл, «Сейчас» телефона, «отбить» без срока
- *  (человек ждёт — значит, сегодня), «мониторить», где пора напомнить. Не сделал — завтра оно снова здесь. */
-const inToday = (t) => isOpen(t) && isMine(t) && !t.goal && (isNow(t) || (!!t.due_date && t.due_date <= S.today)
-  || (!!t.owed && !t.due_date) || (t.ball === 'waiting' && !!t.nudge_on && t.nudge_on <= S.today));
+/** На сегодня — как store.TODAY_IF: своё открытое дело со сроком ровно сегодня. Не сделал — завтра оно не здесь,
+ *  а во «Всех делах», в «Просрочено». */
+const inToday = (t) => isOpen(t) && isMine(t) && !t.goal && t.due_date === S.today;
 const todayTasks = () => all().filter((t) => inToday(t) && inSphere(t));
-/** Когда дело делать — для уровня «время» и сортировки, как inToday: «Сейчас» и «отбить» без срока — сегодня,
- *  «мониторить» — к сроку или дню напоминания, что раньше. Сделанное и без срока — null. */
+/** Просрочено — как store.LATE_IF: своё открытое, срок прошёл. Живёт во «Всех делах», сверху. */
+const lateTasks = () => deeds().filter((t) => isLate(t) && isMine(t) && inSphere(t));
+/** Когда дело делать — для уровня «время» и сортировки: срок; «Сейчас» — сегодня (его взяли на сегодня);
+ *  «мониторить» — к сроку или дню напоминания, что раньше. «Отбить» без срока с 13.10.2026 — без срока: само оно
+ *  больше не «сегодня». Сделанное и без срока — null. */
 function whenDay(t) {
   if (!isOpen(t)) return null;
-  const days = [t.due_date, isNow(t) ? S.today : null, t.owed && !t.due_date ? S.today : null,
-    t.ball === 'waiting' ? t.nudge_on : null].filter(Boolean).sort();
+  const days = [t.due_date, isNow(t) ? S.today : null, t.ball === 'waiting' ? t.nudge_on : null].filter(Boolean).sort();
   return days[0] || null;
 }
 /** По времени (владелец: «внутри уже сортировка по времени»): когда делать, час, потом кто дольше ждёт. */
 const byTime = (a, b) => (whenDay(a) || '9999').localeCompare(whenDay(b) || '9999') || (a.due_time || '99').localeCompare(b.due_time || '99')
   || (a.created_at || '').localeCompare(b.created_at || '') || a.num - b.num;
+// hot — число акцентом (люди ждут); late — цветом беды. У «Всех дел» число — только просроченное: оно живёт там.
 const VIEWS = {
+  now: { title: 'Сейчас', icon: 'bolt', count: () => nowTasks().length },
   today: { title: 'Сегодня', icon: 'sun', count: () => todayTasks().length, hot: () => todayTasks().some((t) => t.owed) },
   new: { title: 'Новое', icon: 'inbox', count: () => newCount() },
-  all: { title: 'Все дела', icon: 'list' },
+  all: { title: 'Все дела', icon: 'list', count: () => lateTasks().length, late: () => lateTasks().length > 0 },
   // Круг жизни (12.10.2026): дерево дел от направлений — «где-то должно быть дерево дел, прямо от направлений».
   krug: { title: 'Круг жизни', icon: 'target', show: () => krugOn() },
   // Дерево жизни (13.10.2026): направления › цели › проекты и дела — плюсиками, колонками или списком с фильтрами.
@@ -474,7 +484,7 @@ const ICONS = {
   server: 'M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01',
   smile: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01',
   // Свои у Дел — тем же штрихом: «отдать Claude», «стоп» записи, раскрыть, меню, вопрос, разговор, огонь серии,
-  // дерево жизни.
+  // дерево жизни, молния «Сейчас» (13.10.2026 — та же молния, что у телефона).
   up: 'M12 19V5.5M6 11l6-6 6 6',
   stop: 'M8 7h8a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z',
   down: 'M7 10l5 5 5-5',
@@ -483,6 +493,7 @@ const ICONS = {
   chat: 'M5 5h14v10H10l-5 4z',
   flame: 'M12 3c1 3 4 4.5 4 8.5a4 4 0 0 1-8 0c0-2 1-3 2-4 0 1.5 1 2.5 2 2.5 0-3-1-5 0-7z',
   tree: 'M10 3h4v4h-4zM12 7v4M6 11h12M6 11v3M18 11v3M4 14h4v4H4zM16 14h4v4h-4z',
+  bolt: 'M13 3L5 13.5h6.5L10.5 21 19 10.5h-6.5z',
 };
 // Шестерёнка — восемь зубцов, считается один раз (как в общем слое): «солнце» рядом слишком на неё похоже.
 ICONS.gear = (() => {
@@ -734,13 +745,14 @@ function route() {
   if (kind === 'f' && id) return { kind: 'filter', id: decodeURIComponent(id) }; // сохранённый фильтр (10.10.2026)
   if (kind === 'search') return { kind: 'search', q: decodeURIComponent(id || '') };
   if (kind === 'new' && id) return { kind: 'new', batch: decodeURIComponent(id) }; // ссылка из Telegram — одна пачка
-  if (kind === 'task' && /^\d+$/.test(id || '')) return { kind: 'today', task: +id }; // кнопка «Открыть» под напоминанием
+  if (kind === 'task' && /^\d+$/.test(id || '')) return { kind: 'now', task: +id }; // кнопка «Открыть» под напоминанием
   if (kind === 'settings') return { kind: 'settings' };
   if (kind === 'stats') return { kind: 'stats' };
   if (kind === 'inbox') return { kind: 'new' }; // старые закладки: «Входящие» теперь в «Новом»
-  if (kind === 'week') return { kind: 'all' }; // 10.10.2026: «Неделя», «Сейчас», «Предстоящее», «Жду» — в «Сегодня» и «Всех делах»
+  if (kind === 'week') return { kind: 'all' }; // 10.10.2026: «Неделя», «Предстоящее», «Жду» — во «Всех делах»
   if (CRM_VIEWS[kind]) return { kind };
-  return { kind: VIEWS[kind] ? kind : 'today' };
+  // Главная — «Сейчас» (13.10.2026: Сейчас → Новое → Сегодня); незнакомый адрес — туда же.
+  return { kind: VIEWS[kind] ? kind : 'now' };
 }
 const go = (hash) => { location.hash = hash; };
 window.addEventListener('hashchange', () => { S.sel.clear(); S.dealFilter = null; S.pick.project = null; S.sideOpen = false; S.toTop = true; S.secOn = null; S.tlAll = null; render(); });
@@ -774,9 +786,9 @@ async function boot() {
 function render() {
   if (!S.me) return;
   const r = route();
-  if (r.task) { // #task/61: карточка этого дела поверх «Сегодня», адрес — обычный
+  if (r.task) { // #task/61: карточка этого дела поверх главной («Сейчас»), адрес — обычный
     const t = all().find((x) => x.num === r.task);
-    history.replaceState(null, '', '#/today');
+    history.replaceState(null, '', '#/now');
     if (t) { openCard(t.id); return; }
   }
   const ae = document.activeElement;
@@ -869,10 +881,11 @@ function afterBusy() { setTimeout(() => { if (S.dirty && !uiBusy()) { S.dirty = 
 document.addEventListener('focusout', afterBusy);
 document.addEventListener('change', (e) => { if (e.target.tagName === 'SELECT') afterBusy(); });
 
+/** hot — число цветом беды; строкой — своя подсказка к нему («люди ждут ответа»), иначе «есть просроченные». */
 function navItem(hash, ico, label, count, on, extra, hot) {
   return el('button', { class: 'nav-item' + (on ? ' on' : ''), onclick: () => go(hash), 'aria-current': on ? 'page' : null },
     el('span', { class: 'ico' }, ico), el('span', { class: 'label' }, label), extra || null,
-    count ? el('span', { class: 'n' + (hot ? ' hot' : ''), title: hot ? 'есть просроченные' : null }, count) : null);
+    count ? el('span', { class: 'n' + (hot ? ' hot' : ''), title: hot ? (typeof hot === 'string' ? hot : 'есть просроченные') : null }, count) : null);
 }
 
 /** Виды — на компьютере пунктами боковой колонки со значками (макет 13.10.2026), на телефоне — вкладками под
@@ -880,7 +893,7 @@ function navItem(hash, ico, label, count, on, extra, hot) {
 function viewPills(r) {
   return Object.entries(VIEWS).filter(([, v]) => !v.show || v.show()).map(([k, v]) => {
     const n = v.count ? v.count() : 0;
-    return el('a', { class: 'pill-tab' + (r.kind === k ? ' on' : '') + (v.hot && v.hot() ? ' hot' : ''),
+    return el('a', { class: 'pill-tab' + (r.kind === k ? ' on' : '') + ((v.hot && v.hot()) || (v.late && v.late()) ? ' hot' : ''),
       href: '#/' + k, onclick: () => { S.sideOpen = false; } },
     v.title, n ? el('b', {}, n) : null);
   });
@@ -918,9 +931,9 @@ function svcBrand(look) {
     ...((look.nav || []).length ? [{ name: 'Claude', icon: 'claude', url: 'https://claude.ai/', out: true }] : [])];
   const all = [...(list.some((x) => x.url === '/') ? list : [self, ...list]), ...inner];
   const img = () => el('img', { src: look.icon || '/static/icon.svg', alt: '' });
-  if (all.length < 2) return el('a', { class: 'brand', href: '#/today' }, img(), el('b', {}, 'Дела'));
+  if (all.length < 2) return el('a', { class: 'brand', href: '#/now' }, img(), el('b', {}, 'Дела'));
   const link = (x) => (x.url === '/'
-    ? el('a', { class: 'on', href: '#/today', 'aria-current': 'page' }, icon(x.icon, 17), el('span', {}, x.name))
+    ? el('a', { class: 'on', href: '#/now', 'aria-current': 'page' }, icon(x.icon, 17), el('span', {}, x.name))
     : el('a', { href: x.url, target: x.out ? '_blank' : null, rel: x.out ? 'noopener' : null },
       icon(x.icon, 17), el('span', {}, x.name)));
   const group = (title, sub, items) => el('div', { class: 'kv-svc-g' },
@@ -940,7 +953,7 @@ function svcBrand(look) {
     el('div', { class: 'kv-svc-col' }, specs.filter((g, k) => k % n === c).map(([t, s, items]) => group(t, s, items)))));
   const menu = el('div', { class: 'kv-svc-menu', id: 'kv-svc-menu', hidden: true }, cols(4), cols(2),
     create.length ? el('div', { class: 'kv-svc-create' }, group(SVC_CREATE[0], SVC_CREATE[1], []), el('div', { class: 'kv-svc-items' }, create.map(link))) : null);
-  const brand = el('a', { class: 'brand kv-svc-btn', href: '#/today', role: 'button', title: 'Все сервисы Ковчега',
+  const brand = el('a', { class: 'brand kv-svc-btn', href: '#/now', role: 'button', title: 'Все сервисы Ковчега',
     'aria-haspopup': 'true', 'aria-expanded': 'false', 'aria-controls': 'kv-svc-menu' }, img(), el('b', {}, 'Дела'));
   const show = (open) => { menu.hidden = !open; brand.setAttribute('aria-expanded', open ? 'true' : 'false'); };
   brand.addEventListener('click', (e) => { e.preventDefault(); show(menu.hidden); });
@@ -1076,11 +1089,12 @@ function renderSide(r) {
     .map(([k, v]) => navItem('#/' + k, icon(v.icon, 17), v.title, null, r.kind === k)) : [];
   const fnav = filters().map((f) => navItem('#/f/' + encodeURIComponent(f.id), icon('bookmark', 17), f.name, scopeItems(f.scope).length || null,
     r.kind === 'filter' && r.id === f.id));
-  // Виды — пунктами со значками и числами (макет 13.10.2026: Сегодня — солнце, Новое — лоток, Все дела — список,
-  // Круг жизни — мишень); у «Нового» число — только вопросы.
+  // Виды — пунктами со значками и числами (макет 13.10.2026: Сейчас — молния, как у телефона, Сегодня — солнце,
+  // Новое — лоток, Все дела — список, Круг жизни — мишень); у «Нового» число — только вопросы, у «Всех дел» —
+  // только просроченное, цветом беды.
   const views = Object.entries(VIEWS).filter(([, v]) => !v.show || v.show()).map(([k, v]) => {
     const n = v.count ? v.count() : 0;
-    return navItem('#/' + k, icon(v.icon, 17), v.title, n || null, r.kind === k);
+    return navItem('#/' + k, icon(v.icon, 17), v.title, n || null, r.kind === k, null, v.late ? v.late() && 'просрочено — во «Всех делах»' : false);
   });
   const groups = [group('filters', 'Фильтры', fnav), group('crm', 'CRM', crmNav), group('fav', 'Избранное', favs.map(projItem))];
   for (const [kind, title] of Object.entries(KIND)) {
@@ -1197,8 +1211,8 @@ function headKind(r) {
   const word = p ? KIND_ONE[p.kind] || 'Проект' : r.kind === 'person' ? 'Человек' : CRM_VIEWS[r.kind] ? 'CRM' : r.kind === 'filter' ? 'Фильтр' : null;
   return word ? el('span', { class: 'h-kind' }, word) : null;
 }
-/** Назад — туда, откуда пришёл; пришёл по ссылке — на «Сегодня». */
-const back = () => (history.length > 1 ? history.back() : go('#/today'));
+/** Назад — туда, откуда пришёл; пришёл по ссылке — на главную («Сейчас»). */
+const back = () => (history.length > 1 ? history.back() : go('#/now'));
 const INNER = new Set(['project', 'person', 'deal', 'meeting', 'search']);
 
 /** Строка под заголовком. В карточке клиента и проекта — разделы карточки: всё стоит одно под другим, а вкладки
@@ -1426,6 +1440,7 @@ function renderMain(r) {
   if (r.kind === 'money') return renderMoney();
   if (r.kind === 'meetings') return renderMeetings();
   if (r.kind === 'meeting') return renderMeeting(r.id);
+  if (r.kind === 'now') return renderNow();
   if (r.kind === 'today') return renderToday();
   if (r.kind === 'krug') return renderKrug();
   if (r.kind === 'tree') return renderTree();
@@ -1434,39 +1449,95 @@ function renderMain(r) {
     const lv = levelsOf('all');
     const every = deeds().filter((t) => isMine(t) && inSphere(t) && (S.showDone || isOpen(t)));
     const items = picked(every, lv, S.pick.all);
+    // «Просрочено» — сверху своей группой (13.10.2026): само оно ни в «Сейчас», ни в «Сегодня» не попадает и живёт
+    // здесь; в уровнях ниже его уже нет. Строки — со всеми подписями: группа не названа уровнями.
+    const late = items.filter(isLate).sort(byTime);
+    const rest = items.filter((t) => !isLate(t));
     const tb = el('div', { class: 'toolbar' }, levelsBar(lv, setLevels('all')), sphereSel(), doneToggle(),
       el('button', { class: 'chip-btn', onclick: () => addFilter('all', lv, S.pick.all) }, 'Сохранить фильтр'));
-    return [head(VIEWS.all.title, [plural(items.filter(isOpen).length, 'открытое', 'открытых', 'открытых')]),
+    return [head(VIEWS.all.title, [plural(items.filter(isOpen).length, 'открытое', 'открытых', 'открытых'),
+      late.length ? el('span', { class: 'late' }, 'просрочено ' + late.length) : null]),
       el('div', { class: 'body' }, quickAdd({}), tb, pickBar(every, lv, S.pick.all, setPick('all')),
-        pickNote(items, S.pick.all, lv) || (items.length ? nested(items, lv) : el('div', { class: 'empty' }, 'Пусто.')))];
+        pickNote(items, S.pick.all, lv) || [
+          late.length ? lateBox(late) : null,
+          rest.length ? nested(rest, lv) : late.length ? null : el('div', { class: 'empty' }, 'Пусто.')])];
   }
   return [head('Дела'), el('div', { class: 'body' })];
 }
 
-/** «Сегодня» — главный список (владелец 10.10.2026: «у меня должен быть очень чёткий, понятный список на
- *  каждый день… и по-хорошему я должен закрывать все такие дела на каждый день»). Три группы по приоритету:
- *  ждут от меня, сам, проверить; в каждой выше тот, кто дольше ждёт. Солнце у дела — «на завтра». */
+/** Сколько закрыто сегодня (по Москве) — в шапку «Сейчас» и «Сегодня». */
+const doneTodayN = () => deeds().filter((t) => t.status === 'done' && isMine(t) && t.completed_at && MSK_DAY(t.completed_at).day === S.today).length;
+/** «просрочено 3» в шапке — ссылкой во «Все дела»: само просроченное ни в «Сейчас», ни в «Сегодня» не попадает. */
+const lateLink = () => { const n = lateTasks().length; return n ? el('a', { class: 'late link', href: '#/all', title: 'Просроченное — во «Всех делах», сверху' }, 'просрочено ' + n) : null; };
+
+/** «Сейчас» — главная страница (владелец 13.10.2026: «В делах давай разделим: Сейчас (то, что отметил) и Сегодня
+ *  (с датой сегодня)», порядок — Сейчас → Новое → Сегодня). Блоки сверху вниз: что владелец сам взял на сегодня (до
+ *  пяти, во всех сферах сразу); вопросы автоматики с теми же кнопками, что в «Новом»; дела со сроком сегодня, кроме
+ *  уже взятых в «Сейчас». Просроченное сюда само не попадает — в шапке только его число ссылкой во «Все дела». */
+function renderNow() {
+  const now = nowTasks().sort(byTime);
+  const taken = new Set(now.map((t) => t.id));
+  const today = todayTasks().filter((t) => !taken.has(t.id));
+  const done = doneTodayN();
+  return [head('Сейчас', [D.long(S.today).toLowerCase(), `в «Сейчас» ${now.length} из ${NOW_MAX}`, done ? 'закрыто ' + done : null, lateLink()]),
+    el('div', { class: 'body' },
+      principleLine(),
+      quickAdd({}, { placeholder: '«это в Сейчас», «П1 поставь, срок пятница», «Гуркин ждёт звонка — на сегодня»' }),
+      groupBox('Сейчас', now, { cls: 'grp-now', sub: 'отметил сам — сделать сегодня', lead: () => icon('bolt', 17),
+        before: now.length ? null : el('div', { class: 'hint-line' },
+          'Пусто. Возьми до пяти дел на сегодня — «В «Сейчас»» в карточке дела, галочки и «В «Сейчас»» внизу или «!сейчас» в строке.') }),
+      newBox(),
+      todayBox(today, taken.size))];
+}
+
+/** «Новое» на главной: «Подскажи» с кнопками, как в «Новом» (П-номера — те же, их видит Claude); остальное «Нового»
+ *  (добавлено само, сделано само) — строкой-ссылкой: оно ответа не ждёт. Пусто совсем — блока нет. */
+function newBox() {
+  const asks = sortedAsks(pendingSugs());
+  const since = Date.now() - FEED_DAYS * 86400e3;
+  const fed = openMine().filter((t) => Date.parse(t.created_at) > since && !feedHidden().has(t.id)).length;
+  const auto = autoDone(7).length;
+  const rest = [fed ? `добавлено само за ${FEED_DAYS} дня: ${fed}` : null, auto ? `сделано само: ${auto}` : null].filter(Boolean).join(' · ');
+  const link = (text) => el('a', { class: 'new-link', href: '#/new' }, icon('inbox', 17), text);
+  if (!asks.length) return rest ? link('Новое: вопросов нет · ' + rest) : null;
+  return [asksBox(asks, { title: 'Новое', sub: 'подскажи — без тебя не поставлю' }), rest ? link('Всё «Новое»: ' + rest) : null];
+}
+
+/** «Сегодня» на главной — дела со сроком сегодня, кроме уже взятых в «Сейчас»; внутри — три группы. */
+function todayBox(items, taken) {
+  const h = groupHead('h2', 'Сегодня', items.length, { lead: () => icon('sun', 17), href: '#/today',
+    sub: 'срок сегодня' + (taken ? ' · что уже в «Сейчас» — выше' : '') });
+  if (!items.length) return el('div', { class: 'group grp-today' }, h,
+    el('div', { class: 'hint-line' }, taken ? 'Остальное со сроком на сегодня — уже в «Сейчас».' : 'Со сроком на сегодня — ничего.'));
+  // Первый уровень — сам блок «Сегодня», второй — группы: подзаголовками внутри одной панели.
+  return el('div', { class: 'group nest grp-today' }, h, nested(items, ['today', 'grp'], 1));
+}
+
+/** «Просрочено» — сверху «Всех дел» (13.10.2026): срок прошёл, само ни в «Сейчас», ни в «Сегодня» не встаёт. */
+const lateBox = (items) => groupBox('Просрочено', items, { late: true, cls: 'grp-late', lead: () => icon('alert', 17),
+  sub: 'срок прошёл — сделать, перенести или взять в «Сейчас»' }, null);
+
+/** «Сегодня» — свои открытые дела со сроком ровно сегодня (13.10.2026; до того — котёл с просроченным, «Сейчас»,
+ *  «отбить» без срока и напоминаниями). Три группы по приоритету: ждут от меня, сам, проверить. Солнце у дела —
+ *  «на завтра». Ниже — «Моё» Круга: что двигает жизнь, но срока на сегодня не имеет, — подсказка, что взять в «Сейчас». */
 function renderToday() {
   const lv = levelsOf('today');
-  // «Моё» (Круг жизни, 12.10.2026) — над тремя группами: дела, которые двигают жизнь, а не ждут чьего-то ответа;
-  // иначе они снова проиграют входящим. Его дела в группах не повторяются.
-  const mine = mineTasks();
-  const mineIds = new Set(mine.map((t) => t.id));
-  const every = todayTasks().filter((t) => !mineIds.has(t.id));
+  const every = todayTasks();
   const items = picked(every, lv, S.pick.today);
-  const doneToday = deeds().filter((t) => t.status === 'done' && isMine(t) && t.completed_at && MSK_DAY(t.completed_at).day === S.today).length;
+  // «Моё» (Круг жизни, 12.10.2026) — без того, что и так в «Сегодня» или уже в «Сейчас» (mineTasks).
+  const mine = mineTasks();
+  const done = doneTodayN();
   const n = newCount();
-  const left = items.length + mine.length;
-  return [head('Сегодня', [D.long(S.today).toLowerCase(), left ? 'осталось ' + left : null, doneToday ? 'закрыто ' + doneToday : null]),
+  return [head('Сегодня', [D.long(S.today).toLowerCase(), every.length ? 'со сроком сегодня ' + every.length : null, done ? 'закрыто ' + done : null, lateLink()]),
     el('div', { class: 'body' },
       principleLine(),
       quickAdd({}, { placeholder: 'Скажи, что сделать: «Гуркин ждёт звонка по фонду», «это на завтра», «это мониторить»' }),
       el('div', { class: 'toolbar' }, levelsBar(lv, setLevels('today')), sphereSel(),
         el('button', { class: 'chip-btn', onclick: () => addFilter('today', lv, S.pick.today) }, 'Сохранить фильтр')),
-      mine.length ? groupBox('Моё', mine, { cls: 'grp-mine', sub: 'никто не ждёт — двигает жизнь', lead: () => icon('user', 17) }, lv) : null,
       pickBar(every, lv, S.pick.today, setPick('today')),
       pickNote(items, S.pick.today, lv)
-        || (items.length ? nested(items, lv) : el('div', { class: 'empty' }, doneToday ? 'На сегодня всё закрыто.' : 'На сегодня пусто.')),
+        || (items.length ? nested(items, lv) : el('div', { class: 'empty' }, done ? 'Со сроком на сегодня всё закрыто.' : 'Со сроком на сегодня дел нет.')),
+      mine.length ? groupBox('Моё', mine, { cls: 'grp-mine', sub: 'никто не ждёт — двигает жизнь; берёшься сегодня — в «Сейчас»', lead: () => icon('user', 17) }, lv) : null,
       n ? el('a', { class: 'new-link', href: '#/new' }, icon('inbox', 17), 'Новое из встреч и чатов: ' + plural(n, 'вопрос', 'вопроса', 'вопросов')) : null)];
 }
 
@@ -1493,7 +1564,7 @@ function renderFilter(id) {
     el('button', { class: 'chip-btn', onclick: () => { const name = (prompt('Название фильтра', f.name) || '').trim(); if (name) put({ name }, 'Переименовал'); } }, 'Переименовать'),
     el('button', { class: 'chip-btn', onclick: async () => {
       if (!confirm(`Удалить фильтр «${f.name}»? Дела останутся.`)) return;
-      try { await saveFilters(filters().filter((x) => x.id !== id)); toast('Фильтр удалён'); go('#/today'); } catch (e) { fail(e); }
+      try { await saveFilters(filters().filter((x) => x.id !== id)); toast('Фильтр удалён'); go('#/now'); } catch (e) { fail(e); }
     } }, 'Удалить')];
   return [head(f.name, [SCOPES[scope], levelsName(lv) + (one ? ' — ' + one.title : ''), plural(items.length, 'дело', 'дела', 'дел')]),
     el('div', { class: 'body' },
@@ -1607,16 +1678,30 @@ function nowRoom(ids) {
   toast(`В «Сейчас» уже ${have.size} из ${NOW_MAX}` + (add > 1 ? ` — влезет ещё ${Math.max(0, NOW_MAX - have.size)}` : ' — сначала убери одно'));
   return false;
 }
-/** Солнце у дела: не на сегодня — «на сегодня» (срок сегодня); уже на сегодня — «на завтра»: срок завтра,
- *  у «проверить» — и день напоминания, «Сейчас» телефона снимается. Не успел — не теряется: завтра дело
- *  снова наверху «Сегодня». */
+/** Солнце у дела: не на сегодня (и просроченное) — «на сегодня»: срок сегодня; уже на сегодня — «на завтра»: срок
+ *  завтра, у «мониторить» — и день напоминания, а «Сейчас» снимается — оно на сегодня. С 13.10.2026 «на сегодня» —
+ *  ровно срок сегодня (store.TODAY_IF): просроченное солнцем переезжает в «Сегодня», а не горит само. */
 function toggleToday(t) {
   if (!inToday(t)) { setFields([t.id], { due_date: S.today }, 'На сегодня'); return; }
-  const tm = D.add(S.today, 1), set = {};
+  const tm = D.add(S.today, 1), set = { due_date: tm };
   if (isNow(t)) set.focus_on = null;
   if (t.ball === 'waiting' && t.nudge_on && t.nudge_on <= S.today) set.nudge_on = tm;
-  if ((t.due_date && t.due_date <= S.today) || (t.owed && !t.due_date) || !Object.keys(set).length) set.due_date = tm;
   setFields([t.id], set, 'На завтра');
+}
+/** «Сейчас» у дела (13.10.2026, владелец: «Сейчас — то, что отметил»): отметил — взял на сегодня, не больше пяти
+ *  (шестое не встаёт — nowRoom; предел держит и сервер, store._now_guard); снял — дело остаётся, где было: срок не
+ *  трогаем. */
+function toggleNow(ids) {
+  const list = ids.map((id) => S.tasks.get(id)).filter(Boolean);
+  if (list.length && list.every(isNow)) {
+    setFields(list.map((t) => t.id), { focus_on: null }, list.length > 1 ? `Убрал из «Сейчас»: ${list.length}` : 'Убрал из «Сейчас»');
+    return;
+  }
+  // Встаёт только своё открытое дело (цель — не дело): «Сейчас» — то, что владелец сам берёт на день.
+  const can = list.filter((t) => isOpen(t) && isMine(t) && !t.goal && !isNow(t)).map((t) => t.id);
+  if (!can.length) { toast('В «Сейчас» встают только свои открытые дела'); return; }
+  if (!nowRoom(can)) return;
+  setFields(can, { focus_on: S.today }, can.length > 1 ? `В «Сейчас»: ${can.length}` : 'В «Сейчас»');
 }
 
 // Строка дела — как TaskRow в Делах на телефоне (Правка 4.0): слева солнце «на сегодня» (10.10.2026, вместо
@@ -2108,6 +2193,7 @@ function renderBulk() {
     el('button', { onclick: () => toggleDone(ids.map((id) => S.tasks.get(id))) }, 'Сделано'),
     el('button', { onclick: (e) => reschedulePop(e.currentTarget, ids) }, 'Перенести'),
     el('button', { onclick: (e) => zachemPop(e.currentTarget, ids) }, 'Зачем…'),
+    el('button', { onclick: () => toggleNow(ids) }, ids.length && ids.every((id) => isNow(S.tasks.get(id))) ? 'Из «Сейчас»' : 'В «Сейчас»'),
     el('button', { onclick: () => setFields(ids, { due_date: S.today }, 'На сегодня') }, 'На сегодня'),
     el('button', { onclick: (e) => grpPop(e.currentTarget, ids) }, 'Группа'),
     el('button', {
@@ -2498,7 +2584,8 @@ function pageScope(defaults = {}) {
     visible_deal_ids: uniq(deals.filter(seen).map((x) => x.dataset.deal)).slice(0, 200) });
   if (S.sel.size) scope.selected_ids = [...S.sel].slice(0, 300);
   if (S.cardId && S.tasks.has(S.cardId)) scope.open = S.cardId;
-  if (r.kind === 'new') scope.suggestion_ids = S.sugOrder.slice(0, 150);
+  // П-номера — в «Новом» и на главной «Сейчас» (там «Подскажи» тоже с кнопками, 13.10.2026).
+  if (r.kind === 'new' || (r.kind === 'now' && S.sugOrder.length)) scope.suggestion_ids = S.sugOrder.slice(0, 150);
   for (const k of ['project_id', 'person_id', 'deal_id']) if (defaults[k]) scope[k] = defaults[k];
   // Карточка: Claude (Opus) видит её целиком и правит хронологию, людей и сделки, не только дела.
   if (crmOn() && p && p.kind === 'client') Object.assign(scope, { card: 'client', project_id: p.id });
@@ -3151,9 +3238,21 @@ function autoItem(s, seen) {
  *  старая встреча); «Поставил» — новые дела за три дня одной строкой со значком источника справа;
  *  «Сделано само» — свёрнуто. Наговорки целиком, «без проекта», минуты и «что сказала автоматика» сюда
  *  больше не идут: что сказано — в карточке дела, без проекта — в «Неделе». batch — пачка из Telegram. */
+/** Вопросы «Подскажи» — свежие сверху: по дате встречи, потом по появлению. */
+const sortedAsks = (list) => [...list].sort((a, b) => sugAt(b).localeCompare(sugAt(a)) || b.created_at.localeCompare(a.created_at));
+/** «Подскажи» — панель вопросов с кнопками; одна на «Новое» и на главную «Сейчас» (там она зовётся «Новое»). */
+function asksBox(asks, { title = 'Подскажи', sub = 'без тебя не поставлю' } = {}) {
+  const ids = asks.map((s) => s.id);
+  return el('div', { class: 'group asks' },
+    el('h2', {}, tint(icon('help', 17), 'var(--warn)'), title, el('span', { class: 'n' }, asks.length),
+      el('span', { class: 'gsub' }, sub),
+      ids.length > 1 && !asks.some(sugOptions) ? el('span', { class: 'act' },
+        el('button', { class: 'chip-btn', onclick: () => decide(ids, 'accept') }, 'Поставить все'), ' ',
+        el('button', { class: 'chip-btn', onclick: () => decide(ids, 'reject') }, 'Не надо все')) : null),
+    asks.map(askItem));
+}
 function renderNew(batch) {
-  const asks = pendingSugs().filter((s) => !batch || s.batch_ref === batch)
-    .sort((a, b) => sugAt(b).localeCompare(sugAt(a)) || b.created_at.localeCompare(a.created_at));
+  const asks = sortedAsks(pendingSugs().filter((s) => !batch || s.batch_ref === batch));
   const from = sugByTask();
   const since = Date.now() - FEED_DAYS * 86400e3;
   const feed = (batch ? all().filter((t) => isOpen(t) && from.get(t.id)?.batch_ref === batch)
@@ -3165,16 +3264,7 @@ function renderNew(batch) {
   box.append(quickAdd({}, { label: 'с новым', placeholder: asks.length
     ? '«П1 поставь, срок пятница; П2 не надо — делает Ольга»'
     : '«последние три — в Альфу», «полку — на субботу»' }));
-  if (asks.length) {
-    const ids = asks.map((s) => s.id);
-    box.append(el('div', { class: 'group asks' },
-      el('h2', {}, tint(icon('help', 17), 'var(--warn)'), 'Подскажи', el('span', { class: 'n' }, asks.length),
-        el('span', { class: 'gsub' }, 'без тебя не поставлю'),
-        ids.length > 1 && !asks.some(sugOptions) ? el('span', { class: 'act' },
-          el('button', { class: 'chip-btn', onclick: () => decide(ids, 'accept') }, 'Поставить все'), ' ',
-          el('button', { class: 'chip-btn', onclick: () => decide(ids, 'reject') }, 'Не надо все')) : null),
-      asks.map(askItem)));
-  }
+  if (asks.length) box.append(asksBox(asks));
   if (feed.length) box.append(feedBlock(feed, from));
   const done = autoBlock(auto, batch);
   if (done) box.append(done);
@@ -3623,6 +3713,10 @@ function renderCard() {
     [...zc.path.slice(-1), zc.title].join(' › ')) : el('span', { class: 'crumb' }, 'Без «Зачем»');
   const acts = t ? el('div', { class: 'card-acts' },
     isOpen(t) ? [
+      // «Сейчас» — отметка владельца (13.10.2026): только своё и не цель; «Сегодня» — срок, солнцем.
+      isMine(t) && !t.goal ? el('button', { class: 'btn' + (isNow(t) ? ' on' : ''), 'aria-pressed': isNow(t) ? 'true' : 'false',
+        title: isNow(t) ? 'Убрать из «Сейчас» — срок не меняется' : `Взять в «Сейчас» на сегодня — до ${NOW_MAX} дел`, onclick: () => toggleNow([t.id]) },
+      icon('bolt', 17), isNow(t) ? 'Из «Сейчас»' : 'В «Сейчас»') : null,
       el('button', { class: 'btn' + (inToday(t) ? ' on' : ''), title: inToday(t) ? 'Не сегодня — на завтра' : 'На сегодня', onclick: () => toggleToday(t) },
         icon('sun', 17), inToday(t) ? 'На завтра' : 'На сегодня'),
       el('button', { class: 'btn main done-key', title: 'Сделано', onclick: () => toggleDone([t]) }, icon('check', 17), 'Сделано'),
@@ -4967,7 +5061,8 @@ document.addEventListener('keydown', (e) => {
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === '/') { e.preventDefault(); document.querySelector('.side-search')?.focus(); }
   if (e.key === 'n' || e.key === 'т') { e.preventDefault(); document.getElementById('quick')?.focus(); }
-  const jump = { m: 'now', u: 'upcoming', i: 'new', w: 'waiting' }[e.key];
+  // m — «Сейчас», t — «Сегодня», i — «Новое», a — «Все дела» (13.10.2026; «Предстоящего» и «Жду» с 10.10 нет).
+  const jump = { m: 'now', t: 'today', i: 'new', a: 'all' }[e.key];
   if (jump) go('#/' + jump);
 });
 

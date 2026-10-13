@@ -411,7 +411,8 @@ def test_three_groups_and_today(dela):
     """Три группы дел (владелец 10.10.2026): «Отбить» (ждут от меня) — первым делом, «Запустить», «Мониторить».
     ball «owed» — так группу называет автоматика; в базе это mine и флаг owed (телефон до своего задания
     видит такое дело своим «моё»). Мяч ушёл к человеку — флаг гаснет сам; телефонное «моё» его не роняет.
-    «Сегодня» — срок сегодня или прошёл, «ждут от меня» без срока, «проверить», где пора напомнить."""
+    «Сегодня» с 13.10.2026 — только срок ровно сегодня; «ждут от меня» без срока, «мониторить» с напоминанием
+    и просроченное — во «Всех делах» (просроченное — сверху)."""
     today = db_today(dela)
     yday, tmrw = today - dt.timedelta(days=1), today + dt.timedelta(days=1)
     with store.db.session(dela, "system", "t") as c:
@@ -433,13 +434,16 @@ def test_three_groups_and_today(dela):
     v = store.view(dela, "sasha", "today")
     assert [g["key"] for g in v["groups"]] == ["owed", "self", "check"]
     assert {g["key"]: [t["title"] for t in g["items"]] for g in v["groups"]} == {
-        "owed": ["Перезвонить Гуркину по фонду"],
-        "self": ["Обсудить при встрече", "Попросить Наташу о тизере"],  # кто дольше ждёт — выше
+        "owed": [], "self": ["Попросить Наташу о тизере"], "check": []}
+    assert (v["overdue_count"], v["now_count"], v["now_max"]) == (1, 0, 5)
+    every = store.view(dela, "sasha", "all")
+    assert [t["title"] for t in every["overdue"]] == ["Обсудить при встрече"]
+    assert {g["key"]: [t["title"] for t in g["items"]] for g in every["groups"]} == {
+        "owed": ["Ответить банку к сроку", "Перезвонить Гуркину по фонду"],  # по сроку, без срока — ниже
+        "self": ["Попросить Наташу о тизере", "Купить магний"],
         "check": ["Гуркин: прислать структуру"]}
-    assert v["later"] == {"owed": 1, "self": 1, "check": 0}
-    later = store.view(dela, "sasha", "later")
-    assert {g["key"]: [t["title"] for t in g["items"]] for g in later["groups"]} == {
-        "owed": ["Ответить банку к сроку"], "self": ["Купить магний"], "check": []}
+    # «Дальше» (10.10–13.10) — старое имя «Всех дел»: коннектор мог его запомнить.
+    assert store.view(dela, "sasha", "later") == every
 
     def set_(**kw):
         return ops(dela, "sasha", {"op": "task.set", "id": owed["id"], "set": kw})[0]["task"]
@@ -458,3 +462,51 @@ def test_three_groups_and_today(dela):
         "payload": {"title": "Перезвонить Жене", "ball": "owed", "person_name": "Гуркин",
                     "meeting_at": today.isoformat(), "auto": True}}})[0]
     assert s["suggestion"]["status"] == "accepted" and s["task"]["owed"] is True and s["task"]["ball"] == "mine"
+
+
+def test_now_today_and_overdue_apart(dela):
+    """13.10.2026, владелец: «В делах давай разделим: Сейчас (то, что отметил) и Сегодня (с датой сегодня)»;
+    просроченное само ни туда, ни туда не попадает — оно во «Всех делах», сверху. Чужое и закрытое — нигде."""
+    from pravka_dela import mcp_tools
+
+    today = db_today(dela)
+    yday, tmrw = (today - dt.timedelta(days=1)).isoformat(), (today + dt.timedelta(days=1)).isoformat()
+    d = today.isoformat()
+    r = ops(dela, "sasha",
+            {"op": "task.create", "task": {"title": "Взял сам", "focus_on": d}},
+            {"op": "task.create", "task": {"title": "Взял и срок сегодня", "focus_on": d, "due_date": d}},
+            {"op": "task.create", "task": {"title": "Срок сегодня", "due_date": d, "due_time": "15:00"}},
+            {"op": "task.create", "task": {"title": "Сдать отчёт за сентябрь", "due_date": yday}},
+            {"op": "task.create", "task": {"title": "Вчера брал в Сейчас", "focus_on": yday}},
+            {"op": "task.create", "task": {"title": "Ждут ответа без срока", "ball": "owed"}},
+            {"op": "task.create", "task": {"title": "Пора напомнить", "ball": "waiting", "nudge_on": d}},
+            {"op": "task.create", "task": {"title": "На завтра", "due_date": tmrw}},
+            {"op": "task.create", "task": {"title": "Сделал сегодняшнее", "due_date": d}})
+    assert all(x["ok"] for x in r), r
+    assert ops(dela, "sasha", {"op": "task.done", "id": r[-1]["task"]["id"]})[0]["ok"]
+    assert ops(dela, "natasha", {"op": "task.create", "task": {"title": "Наташино на сегодня", "due_date": d, "focus_on": d}})[0]["ok"]
+
+    now = store.view(dela, "sasha", "now")
+    assert {t["title"] for t in now["items"]} == {"Взял сам", "Взял и срок сегодня"} and now["max"] == store.NOW_MAX
+    v = store.view(dela, "sasha", "today")
+    # Со временем — выше; «Сейчас» со сроком сегодня в «Сегодня» тоже есть (на главной веба — один раз, выше).
+    assert [t["title"] for g in v["groups"] for t in g["items"]] == ["Срок сегодня", "Взял и срок сегодня"]
+    assert (v["now_count"], v["overdue_count"], v["done_today"]) == (2, 1, 1)
+    every = store.view(dela, "sasha", "all")
+    assert [t["title"] for t in every["overdue"]] == ["Сдать отчёт за сентябрь"]
+    assert {t["title"] for g in every["groups"] for t in g["items"]} == {
+        "Взял сам", "Взял и срок сегодня", "Срок сегодня", "Вчера брал в Сейчас", "Ждут ответа без срока", "Пора напомнить",
+        "На завтра"}
+    # У Наташи — своё «Сейчас» и «Сегодня», Сашиного она там не видит.
+    assert [t["title"] for t in store.view(dela, "natasha", "now")["items"]] == ["Наташино на сегодня"]
+    assert [t["title"] for g in store.view(dela, "natasha", "today")["groups"] for t in g["items"]] == ["Наташино на сегодня"]
+
+    # Коннектор claude.ai говорит то же словами: «Сейчас» отдельно, просроченное — числом и во «Всех делах».
+    txt = mcp_tools.view(dela, "now")
+    assert "Взял сам" in txt and "В «Сейчас» 2 из 5" in txt and "Срок сегодня" not in txt, txt
+    txt = mcp_tools.view(dela, "today")
+    assert "Срок сегодня" in txt and "Взял сам" not in txt and "Сдать отчёт" not in txt, txt
+    assert "в «Сейчас»" in [x for x in txt.splitlines() if "Взял и срок сегодня" in x][0], txt
+    assert "В «Сейчас» (отметил Саша): 2 из 5" in txt and "Просрочено: 1" in txt and "view=all" in txt, txt
+    txt = mcp_tools.view(dela, "all")
+    assert txt.index("Просрочено (срок прошёл) (1):") < txt.index("Сдать отчёт") < txt.index("Отбить"), txt

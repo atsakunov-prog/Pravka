@@ -156,12 +156,17 @@ def test_today_has_mine_and_principle(kr):
     mk(kr, title="Ответить Гуркину", ball="owed", why_id=goal["id"])  # ждут от меня — не «Моё»
     pinned = mk(kr, title="Смонтировать ролик", want=True)
     mk(kr, title="Пустая цель", goal=True, why_id=goal["id"])  # цель без шагов — не дело, в «Моё» не идёт
+    mk(kr, title="Подобрать задачник", why_id=goal["id"])
     v = store.view(kr, "sasha", "today")
-    assert [t["title"] for t in v["mine"]] == ["Смонтировать ролик", "Распечатать столбики"]
-    assert v["principle"]["text"] in ("Страшно — значит, делаю.", "Решил — делаю сразу.")
-    # Дело из «Моё» в трёх группах не повторяется.
+    # С 13.10.2026 «Сегодня» — ровно срок сегодня: шаг со сроком — в группах, а «Моё» — подсказка из остального,
+    # без того, что и так на виду.
     in_groups = [t["id"] for g in v["groups"] for t in g["items"]]
-    assert step["id"] not in in_groups and pinned["id"] not in in_groups
+    assert step["id"] in in_groups and pinned["id"] not in in_groups
+    assert [t["title"] for t in v["mine"]] == ["Смонтировать ролик", "Подобрать задачник"]
+    assert v["principle"]["text"] in ("Страшно — значит, делаю.", "Решил — делаю сразу.")
+    # Взял в «Сейчас» — из «Моё» уходит: отобрано до трёх из оставшегося, а не обрезано после.
+    ok(kr, "sasha", {"op": "task.set", "id": pinned["id"], "set": {"focus_on": db_today(kr).isoformat()}})
+    assert [t["title"] for t in store.view(kr, "sasha", "today")["mine"]] == ["Подобрать задачник"]
 
 
 def test_movement_counts_goals_triple_and_only_main(kr):

@@ -360,6 +360,10 @@ a.h-kind:hover { color: var(--accent); }
 .h-sub .sep { color: var(--sep); }
 .h-sub .late, .h-sub .today { color: var(--bad); font-weight: 500; }
 .h-sub .link { color: var(--accent); }
+/* «просрочено 3» в шапке «Сейчас», «Сегодня» и «Всех дел» — ссылкой цветом беды (13.10.2026): просроченное
+   само ни в «Сейчас», ни в «Сегодня» не попадает, а забыть о нём нельзя. */
+.h-sub a.late { color: var(--bad); }
+.h-sub a.late:hover { text-decoration: underline; }
 .h-sub .pdot { margin-right: 4px; vertical-align: -3px; color: var(--icon); }
 .h-extra { display: inline-flex; align-self: center; }
 .star.on { color: var(--accent); }
@@ -454,6 +458,8 @@ a.h-kind:hover { color: var(--accent); }
 }
 @keyframes fill-once { to { background-size: 100% 100%, auto; } }
 .sec > .empty, .rows .empty { margin-top: 0; }
+/* Пустой блок главной («Сейчас», «Сегодня») — подсказка строкой внутри панели, без рамки пустого списка. */
+.group > .rows > .hint-line:only-child { margin: 12px 16px; }
 /* «Новое из встреч и чатов: 4 вопроса» — ссылкой акцентом под списком. */
 .new-link { margin-top: 18px; display: inline-flex; align-items: center; gap: 8px; color: var(--accent); font-weight: 500; }
 .new-link .kv-i { color: inherit; }

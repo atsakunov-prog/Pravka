@@ -1000,31 +1000,39 @@ def view_morning(conn, user, sphere=None, **_):
     }
 
 
-# «Сегодня» (10.10.2026) — главный список: «чёткий, понятный список на каждый день… и я должен закрывать
-# все такие дела на каждый день». Три группы по приоритету (GROUPS). В нём: срок сегодня или прошёл,
-# «Сейчас» с телефона, «отбить» без срока (человек ждёт — значит, сегодня) и «мониторить», где пора
-# напомнить. Не сделал — завтра дело снова здесь, просроченным. Порядок — кто дольше ждёт: срок, а без
-# срока — день, когда дело завели.
-# coalesce — не ради красоты: у дела без срока условие даёт NULL, и NOT (NULL) потерял бы его в «Дальше».
-TODAY_IF = (
-    "coalesce(focus_on = crm.today() OR due_date <= crm.today() "
-    "OR (owed AND due_date IS NULL) OR (ball = 'waiting' AND nudge_on <= crm.today()), false)"
-)
-TODAY_WHERE = "status = 'open' AND owner_id = %s AND " + TODAY_IF
-TODAY_ORDER = " ORDER BY coalesce(due_date, (created_at AT TIME ZONE 'Europe/Moscow')::date), due_time NULLS LAST, num"
+# «Сейчас», «Сегодня» и просроченное (13.10.2026, владелец: «В делах давай разделим: Сейчас (то, что отметил) и
+# Сегодня (с датой сегодня)»; порядок на экране — Сейчас → Новое → Сегодня). С 10.10 «Сегодня» было одним котлом:
+# срок сегодня или прошёл, «Сейчас» телефона, «отбить» без срока, «мониторить», где пора напомнить, — и в нём тонуло
+# то, что владелец сам взял на день. Теперь три правила, одно на сервер, веб (app.js: isNow, inToday, isLate) и
+# телефон (этап 4 «Правки 5.0», задание отдельно):
+# - «Сейчас» (NOW_IF) — только то, что владелец отметил сам: focus_on = сегодня, не больше NOW_MAX (_now_guard);
+# - «Сегодня» (TODAY_IF) — свои открытые дела со сроком ровно сегодня: без просроченного и без «ждут» без срока;
+# - просроченное (LATE_IF) само ни туда, ни туда не попадает — оно во «Всех делах» (view_all), группой сверху.
+# В «Сегодня» — три группы по приоритету (GROUPS), в группе выше срок со временем, потом кто дольше ждёт.
+NOW_IF = "focus_on = crm.today()"
+TODAY_IF = "due_date = crm.today()"
+LATE_IF = "due_date < crm.today()"
+OPEN_MINE = "status = 'open' AND owner_id = %s"
+TODAY_WHERE = f"{OPEN_MINE} AND {TODAY_IF}"
+TODAY_ORDER = " ORDER BY due_time NULLS LAST, created_at, num"
+
+
+def _by_group(rows: list[dict]) -> list[dict]:
+    return [{"key": k, "title": title, "items": [r for r in rows if group_of(r) == k]} for k, title in GROUPS]
 
 
 def view_today(conn, user, sphere=None, **_):
     rows = _list(conn, TODAY_WHERE, [user], sphere, TODAY_ORDER)
-    rest = _list(conn, f"status = 'open' AND owner_id = %s AND NOT {TODAY_IF}", [user], sphere)
-    # «Моё» (Круг жизни, 12.10.2026) — над тремя группами; его дела в группах не повторяются.
-    extra = krug.today_extra(conn, user)
-    shown = {r["id"] for r in extra["mine"]}
-    rows = [r for r in rows if r["id"] not in shown]
+    now = _list(conn, f"{OPEN_MINE} AND {NOW_IF}", [user])  # «Сейчас» — пять на день во всех сферах сразу
+    # «Моё» (Круг жизни, 12.10.2026) — подсказка, что ещё взять: дела, которые двигают жизнь, а срока на сегодня не
+    # имеют. В сам список «Сегодня» оно не входит; что уже в «Сегодня» или в «Сейчас», в «Моё» не повторяется.
+    extra = krug.today_extra(conn, user, skip={r["id"] for r in rows} | {r["id"] for r in now})
     return {
         **extra,
-        "groups": [{"key": k, "title": title, "items": [r for r in rows if group_of(r) == k]} for k, title in GROUPS],
-        "later": {k: sum(1 for r in rest if group_of(r) == k) for k, _ in GROUPS},
+        "groups": _by_group(rows),
+        "now_count": len(now),
+        "now_max": NOW_MAX,
+        "overdue_count": len(_list(conn, f"{OPEN_MINE} AND {LATE_IF}", [user], sphere)),
         "done_today": conn.execute(
             "SELECT count(*) AS n FROM tasks.tasks WHERE owner_id = %s AND status = 'done' "
             "AND (completed_at AT TIME ZONE 'Europe/Moscow')::date = crm.today()", (user,)).fetchone()["n"],
@@ -1034,10 +1042,14 @@ def view_today(conn, user, sphere=None, **_):
     }
 
 
-def view_later(conn, user, sphere=None, **_):
-    """Всё открытое, что не на сегодня, — теми же тремя группами, по сроку."""
-    rows = _list(conn, f"status = 'open' AND owner_id = %s AND NOT {TODAY_IF}", [user], sphere)
-    return {"groups": [{"key": k, "title": title, "items": [r for r in rows if group_of(r) == k]} for k, title in GROUPS]}
+def view_all(conn, user, sphere=None, **_):
+    """«Все дела»: всё своё открытое. Сверху — «Просрочено» (срок прошёл: само оно ни в «Сейчас», ни в «Сегодня» не
+    попадает и живёт здесь), дальше — остальное тремя группами по сроку."""
+    return {
+        "overdue": _list(conn, f"{OPEN_MINE} AND {LATE_IF}", [user], sphere),
+        # coalesce — не ради красоты: у дела без срока условие даёт NULL, и NOT (NULL) потерял бы его.
+        "groups": _by_group(_list(conn, f"{OPEN_MINE} AND NOT coalesce({LATE_IF}, false)", [user], sphere)),
+    }
 
 
 def view_new(conn, user, **_):
@@ -1126,7 +1138,9 @@ def view_quick(conn, user, sphere=None, **_):
 
 
 def view_now(conn, user, sphere=None, **_):
-    return {"items": _list(conn, "status = 'open' AND owner_id = %s AND focus_on = crm.today()", [user], sphere)}
+    """«Сейчас» — только то, что владелец отметил сам на сегодня (focus_on), не больше NOW_MAX. Срок тут ни при чём:
+    дело со сроком сегодня, но без отметки, — в «Сегодня»."""
+    return {"items": _list(conn, f"{OPEN_MINE} AND {NOW_IF}", [user], sphere), "max": NOW_MAX}
 
 
 def view_project(conn, user, project_id=None, **_):
@@ -1187,7 +1201,9 @@ VIEWS: dict[str, Callable] = {
     "svod": people.view_svod,
     "who": people.view_who,
     "today": view_today,
-    "later": view_later,
+    "all": view_all,
+    # «Дальше» (10.10–13.10.2026: всё, что не на сегодня) — старое имя «Всех дел»: коннектор Claude мог его запомнить.
+    "later": view_all,
     "morning": view_morning,
     "new": view_new,
     "dictations": view_dictations,

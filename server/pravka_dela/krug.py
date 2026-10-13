@@ -147,11 +147,13 @@ def mine_from(items: list[dict], moved: dict[str, dict]) -> list[dict]:
     return sorted(pool, key=weight)[:MINE_MAX]
 
 
-def mine(conn, user: str, today: dt.date) -> list[dict]:
+def mine(conn, user: str, today: dt.date, skip: set | frozenset = frozenset()) -> list[dict]:
+    """skip — что и так на виду («Сегодня» и «Сейчас», 13.10.2026): отсеивается до отбора трёх, а не после, иначе
+    «Моё» показывало бы меньше, чем есть."""
     items = conn.execute(
         "SELECT * FROM tasks.v_tasks WHERE owner_id = %s AND status = 'open' AND NOT goal AND NOT owed "
         "AND ball <> 'waiting' AND (want OR why_id IS NOT NULL)", (user,)).fetchall()
-    return mine_from(items, movement(conn, user, today))
+    return mine_from([t for t in items if t["id"] not in skip], movement(conn, user, today))
 
 
 # ── Дерево ─────────────────────────────────────────────────────────────
@@ -251,12 +253,13 @@ def find(tree_: dict, num: int | None = None) -> dict | None:
 # ── Виды ────────────────────────────────────────────────────────────────
 
 
-def today_extra(conn, user: str) -> dict:
-    """Добавка к «Сегодня»: «Моё» и принцип дня. Круг не настроен — пусто, «Сегодня» как было."""
+def today_extra(conn, user: str, skip: set | frozenset = frozenset()) -> dict:
+    """Добавка к «Сегодня»: «Моё» и принцип дня. Круг не настроен — пусто, «Сегодня» как было. skip — дела, которые
+    уже на виду (срок сегодня, «Сейчас»): в «Моё» они не повторяются."""
     today = conn.execute("SELECT crm.today() AS d").fetchone()["d"]
     if not directions(conn, user):
         return {"mine": [], "principle": principle_of_day(principles(conn, user), today)}
-    return {"mine": mine(conn, user, today), "principle": principle_of_day(principles(conn, user), today)}
+    return {"mine": mine(conn, user, today, skip), "principle": principle_of_day(principles(conn, user), today)}
 
 
 def view_krug(conn, user, **_) -> dict:

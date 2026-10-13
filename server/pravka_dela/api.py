@@ -15,7 +15,7 @@
 | GET  /api/me | кто я; look — шапка веба: домен общей куки темы, значок «Ковчега», соседние сервисы (только владельцу) |
 | GET  /api/sync?since=N | всё изменившееся после N (телефон, веб) |
 | POST /api/ops | пачка операций с op_id (офлайн-очередь) |
-| GET  /api/view/<имя> | готовый список: morning, new, waiting, person, quick, now, project, week, search; CRM — pipeline, clients, client, deal (с журналом), dossier, ties, money; «Где мы» — where, where_avatar?device= (where.py); встречи — meetings?sphere&q&project_id&person_id&sort&since&until&archived, meeting?id или ref (meetings.py); «Когда» — when?q=фраза&local=1&date=1: срок и напоминание словами в поля дела (when.py; без local непонятое — Claude) |
+| GET  /api/view/<имя> | готовый список: now («Сейчас» — отмеченное), today («Сегодня» — срок сегодня), all («Все дела», просроченное сверху; later — старое имя), morning, new, waiting, person, quick, project, week, search; CRM — pipeline, clients, client, deal (с журналом), dossier, ties, money; «Где мы» — where, where_avatar?device= (where.py); встречи — meetings?sphere&q&project_id&person_id&sort&since&until&archived, meeting?id или ref (meetings.py); «Когда» — when?q=фраза&local=1&date=1: срок и напоминание словами в поля дела (when.py; без local непонятое — Claude) |
 | GET  /api/task/<id или номер> | дело с комментариями, журналом и откуда оно (origin) |
 | POST /api/parse | {"text", "project_id"?, "person_id"?} — Claude режет текст на дела и заводит их; ответ — номер задания |
 | GET  /api/parse/<номер> | run, пока думает; потом done с делами и заметками или error |
