@@ -551,6 +551,24 @@ private fun MoreList(app: PravkaApp, onOpen: (Tab) -> Unit, onMode: (Tab) -> Uni
     }
 }
 
+/**
+ * Служебные экраны бывшего «Ещё» для «Телефона» (вид v2): Правка и Общая
+ * статистика, затем полки «Ещё» без «Настроек» — группы и так на экране.
+ */
+@Composable
+private fun phoneLinks(app: PravkaApp, openService: (Tab) -> Unit, openMode: (Tab) -> Unit): List<Pair<String, List<PhoneLink>>> {
+    val reviewRuns by app.nightReviewStore.runsFlow.collectAsState()
+    val reviewsSeenAt by app.settings.reviewsSeenAtFlow.collectAsState(initial = Long.MAX_VALUE)
+    val reviewsNews = ru.zf.pravka.core.ReviewDigest.hasNews(reviewRuns, reviewsSeenAt)
+    val pravka = PhoneLink(stringResource(R.string.tab_pravka), "чистка текста, расшифровки", Glyphs.Pravka, onClick = { openMode(Tab.PRAVKA) })
+    val report = PhoneLink(stringResource(R.string.tab_report), serviceHint(Tab.REPORT), Glyphs.Stats, onClick = { openService(Tab.REPORT) })
+    return listOf("Правка" to listOf(pravka, report)) + MORE_SHELVES.map { (label, items) ->
+        label.replaceFirstChar { it.uppercase() } to items.filter { it != Tab.SETTINGS }.map { t ->
+            PhoneLink(stringResource(t.titleRes), serviceHint(t), serviceGlyph(t), news = t == Tab.REVIEWS && reviewsNews, onClick = { openService(t) })
+        }
+    }
+}
+
 private val MORE_SHELVES: List<Pair<String, List<Tab>>> = listOf(
     "семья" to listOf(Tab.WHERE),
     "правка изнутри" to listOf(Tab.REVIEWS, Tab.DICTIONARY, Tab.PROMPTS, Tab.LEARNING),
@@ -1086,7 +1104,19 @@ private fun PageScreen(
                         )
                     }
                 }
-                is Page.Service -> {
+                // Вид v2 (этап 6, холст `Telefon.dc.html`): «Настройки телефона» из меню Ковчега и
+                // «Настройки» — один экран «Телефон»: группы строками, служебное бывшего «Ещё» — ниже.
+                is Page.Service -> if (ru.zf.pravka.ui.Look.v2 && (p.tab == Tab.MORE || p.tab == Tab.SETTINGS)) {
+                    // Без «‹»: «Телефон» — пункт меню Ковчега, как экраны режимов; назад — системным жестом.
+                    TabHeader(title = "Телефон", subtitle = phoneSubtitle(), actions = { CostAction(openCost) })
+                    PhoneSettingsScreen(
+                        app,
+                        serviceEnabled,
+                        onOpenAccessibilitySettings,
+                        onOpenGroup = openGroup,
+                        links = phoneLinks(app, openService, openMode),
+                    )
+                } else {
                     TabHeader(
                         // Вид v2: «Ещё» открывается из меню Ковчега строкой «Настройки телефона» — так и называется.
                         title = if (p.tab == Tab.MORE && ru.zf.pravka.ui.Look.v2) "Настройки телефона" else stringResource(p.tab.titleRes),

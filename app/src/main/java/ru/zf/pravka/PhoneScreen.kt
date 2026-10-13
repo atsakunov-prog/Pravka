@@ -1,0 +1,218 @@
+package ru.zf.pravka
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import ru.zf.pravka.ui.Glyphs
+import ru.zf.pravka.ui.Kv
+import ru.zf.pravka.ui.KvCallout
+import ru.zf.pravka.ui.KvListRow
+import ru.zf.pravka.ui.KvNote
+import ru.zf.pravka.ui.KvSetRow
+import ru.zf.pravka.ui.LocalPravkaType
+import ru.zf.pravka.ui.PaperCard
+import ru.zf.pravka.ui.fadingScroll
+
+// «Телефон» — настройки телефона в виде v2 (Правка 5.0, этап 6, холст
+// `Telefon.dc.html`): вход из меню Ковчега строкой «Настройки телефона».
+// Сами настройки и их смысл — прежние: группы `SettingsGroup`, их экраны —
+// `GroupContent` в `SettingsTab.kt`. Меняется только раскладка: группы
+// строками «название — что стоит», на развороте — группы слева, открытая
+// группа справа (та же страница будет в вебе Дел, когда настройки переедут
+// на сервер, план §1). Служебные экраны бывшего «Ещё» — строками ниже групп.
+
+/** Строка служебного экрана (словарь, промпты, логи…) — её собирает `MainActivity`, где живут вкладки. */
+internal class PhoneLink(
+    val title: String,
+    val hint: String,
+    val icon: ImageVector,
+    val news: Boolean = false,
+    val onClick: () -> Unit,
+)
+
+/** Подпись шапки «Телефона»: модель телефона и сборка Правки. */
+internal fun phoneSubtitle(): String = android.os.Build.MODEL.orEmpty().ifBlank { "телефон" } + " · Правка " + BuildConfig.VERSION_NAME
+
+/** Название полки с заглавной: «Голос и Claude» — имя Claude с большой и внутри строки. */
+private fun shelfTitle(shelf: SettingsShelf): String =
+    shelf.label.replaceFirstChar { it.uppercase() }.replace("claude", "Claude")
+
+/** Полки групп по порядку — как в меню настроек 4.0, «Обновления и служба» — в своей полке. */
+@Composable
+private fun phoneGroups(app: PravkaApp): List<Pair<SettingsShelf, List<SettingsGroup>>> {
+    val profile by app.profileStore.flow.collectAsState()
+    // Группы выключенного в профиле режима не показываются: их настройки ни на что не действуют.
+    return SettingsShelf.entries.map { shelf ->
+        shelf to SettingsGroup.entries.filter { it.shelf == shelf }
+            .filter { g -> g.modes.isEmpty() || g.modes.any { m -> profile?.has(m) ?: true } }
+    }.filter { it.second.isNotEmpty() }
+}
+
+/** «что стоит» под названием группы: состояние, а нет его — о чём группа. Сбой — словом справа. */
+@Composable
+private fun groupLine(app: PravkaApp, g: SettingsGroup): Pair<String, String?> {
+    val st = groupStatus(app, g)
+    return if (st?.ok == false) g.hint to st.text else (st?.text?.let { "$it · ${g.hint}" } ?: g.hint) to null
+}
+
+@Composable
+internal fun PhoneSettingsScreen(
+    app: PravkaApp,
+    serviceEnabled: Boolean,
+    onOpenAccessibilitySettings: () -> Unit,
+    onOpenGroup: (SettingsGroup) -> Unit,
+    links: List<Pair<String, List<PhoneLink>>>,
+) {
+    val wide = ru.zf.pravka.ui.twoPane()
+    val shelves = phoneGroups(app)
+    if (!wide) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .fadingScroll()
+                .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            PhoneServiceBlock(app, serviceEnabled, onOpenAccessibilitySettings) { onOpenGroup(SettingsGroup.APP) }
+            for ((shelf, groups) in shelves) {
+                PaperCard(label = shelfTitle(shelf)) {
+                    groups.forEachIndexed { i, g ->
+                        val (sub, bad) = groupLine(app, g)
+                        KvSetRow(
+                            g.title,
+                            icon = g.glyph,
+                            sub = sub,
+                            value = bad,
+                            valueColor = Kv.bad,
+                            divider = i > 0,
+                            onClick = { onOpenGroup(g) },
+                        )
+                    }
+                }
+            }
+            PhoneLinks(links)
+            BuildLine()
+        }
+        return
+    }
+    // Разворот (`.cols.c23` холста): группы слева узкой колонкой, открытая группа — справа.
+    var pickedName by rememberSaveable { mutableStateOf(SettingsGroup.MODELS.name) }
+    val all = shelves.flatMap { it.second }
+    val picked = all.firstOrNull { it.name == pickedName } ?: all.firstOrNull() ?: SettingsGroup.APP
+    Row(Modifier.fillMaxSize().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(
+            Modifier
+                .width(300.dp)
+                .fillMaxHeight()
+                .fadingScroll()
+                .padding(top = 4.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            // Группы — первыми, как на холсте; служба, обновления и служебные экраны — под ними.
+            for ((shelf, groups) in shelves) {
+                PaperCard(label = shelfTitle(shelf)) {
+                    groups.forEachIndexed { i, g ->
+                        val (sub, bad) = groupLine(app, g)
+                        KvListRow(
+                            title = g.title,
+                            sub = sub,
+                            icon = g.glyph,
+                            value = bad,
+                            valueColor = Kv.bad,
+                            valueSmall = true,
+                            titleLines = 1,
+                            subLines = 1,
+                            selected = g == picked,
+                            divider = i > 0 && g != picked && groups.getOrNull(i - 1) != picked,
+                            onClick = { pickedName = g.name },
+                        )
+                    }
+                }
+            }
+            PhoneServiceBlock(app, serviceEnabled, onOpenAccessibilitySettings) { pickedName = SettingsGroup.APP.name }
+            PhoneLinks(links)
+            BuildLine()
+        }
+        Column(Modifier.weight(1f).fillMaxHeight()) {
+            // Заголовок открытой группы, ниже — её же плашки, что за шестерёнкой режима (поля — как у них, 16).
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, top = 6.dp)) {
+                Text(picked.title, style = LocalPravkaType.current.titleS, color = Kv.text)
+            }
+            KvNote(picked.hint, Modifier.padding(start = 16.dp))
+            Box(Modifier.weight(1f)) {
+                ModeSettingsScreen(
+                    app,
+                    picked,
+                    serviceEnabled,
+                    onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                    onOpen = { g -> pickedName = g.name },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Что живёт только в этом телефоне (холст: «Только в руках») — служба
+ * доступности и плавающие кнопки, обновления; плюс честно, где лежат
+ * настройки: пока в телефоне, сервер и страница в вебе Дел — следующий шаг.
+ */
+@Composable
+private fun PhoneServiceBlock(
+    app: PravkaApp,
+    serviceEnabled: Boolean,
+    onOpenAccessibilitySettings: () -> Unit,
+    onOpen: () -> Unit,
+) {
+    KvCallout(
+        "Настройки живут в этом телефоне. Когда переедут на сервер, их будет видно и можно будет менять с компьютера — на странице «Телефон» в вебе Дел.",
+        icon = ru.zf.pravka.ui.KvGlyphs.byKey("server") ?: Glyphs.Phone,
+    )
+    UpdateNowCard(app)
+    StatusStrip(app, serviceEnabled, onOpenAccessibilitySettings, onOpen)
+}
+
+/** Служебные экраны бывшего «Ещё»: разборы, словарь, промпты, логи… — строками своих плашек. */
+@Composable
+private fun PhoneLinks(links: List<Pair<String, List<PhoneLink>>>) {
+    for ((label, items) in links) {
+        if (items.isEmpty()) continue
+        PaperCard(label = label) {
+            items.forEachIndexed { i, l ->
+                KvSetRow(
+                    l.title,
+                    icon = l.icon,
+                    sub = l.hint,
+                    divider = i > 0,
+                    onClick = l.onClick,
+                    trailing = if (l.news) ({ ru.zf.pravka.ui.NewsDotMark() }) else null,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BuildLine() {
+    KvNote(
+        stringResource(R.string.build_info, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE, BuildConfig.BUILD_TIME),
+        Modifier.padding(start = 4.dp),
+    )
+}

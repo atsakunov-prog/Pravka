@@ -188,6 +188,7 @@ fun KvListRow(
     titleColor: Color = Kv.text,
     titleWeight: FontWeight = FontWeight.Normal,
     titleLines: Int = 3,
+    subLines: Int = 3,
     divider: Boolean = true,
     selected: Boolean = false,
     onClick: (() -> Unit)? = null,
@@ -240,7 +241,7 @@ fun KvListRow(
                 overflow = TextOverflow.Ellipsis,
             )
             if (!sub.isNullOrBlank()) {
-                Text(sub, style = t.meta, color = Kv.faint, modifier = Modifier.padding(top = 2.dp), maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Text(sub, style = t.meta, color = Kv.faint, modifier = Modifier.padding(top = 2.dp), maxLines = subLines, overflow = TextOverflow.Ellipsis)
             }
             below?.invoke(this)
         }

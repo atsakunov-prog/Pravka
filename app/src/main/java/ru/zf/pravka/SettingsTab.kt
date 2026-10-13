@@ -212,7 +212,7 @@ internal fun SettingsTab(
  * Режимы, ради которых группа существует; пусто — группа нужна всегда.
  * intervals.icu нужен и Спорту, и Еде (итог дня в wellness).
  */
-private val SettingsGroup.modes: Set<ru.zf.pravka.data.Profile.Mode>
+internal val SettingsGroup.modes: Set<ru.zf.pravka.data.Profile.Mode>
     get() = when (this) {
         SettingsGroup.ZASECHKA -> setOf(ru.zf.pravka.data.Profile.Mode.ZASECHKA)
         SettingsGroup.DELA, SettingsGroup.TODOIST, SettingsGroup.DELA_SERVER -> setOf(ru.zf.pravka.data.Profile.Mode.DELA)
@@ -224,7 +224,7 @@ private val SettingsGroup.modes: Set<ru.zf.pravka.data.Profile.Mode>
     }
 
 /** Состояние группы для правого края строки меню. */
-private class GroupStatus(val text: String, val ok: Boolean? = null, val dot: Boolean = false)
+internal class GroupStatus(val text: String, val ok: Boolean? = null, val dot: Boolean = false)
 
 /**
  * Что писать справа от группы. Подключения говорят, есть ли ключ, а где
@@ -232,7 +232,7 @@ private class GroupStatus(val text: String, val ok: Boolean? = null, val dot: Bo
  * как поломка).
  */
 @Composable
-private fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
+internal fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
     val s = app.settings
     return when (g) {
         SettingsGroup.BUGS -> {
@@ -362,7 +362,7 @@ private fun keyStatus(present: Boolean) =
  * Причина неудачи — целой строкой под кнопкой (правило: ошибку не затирать).
  */
 @Composable
-private fun UpdateNowCard(app: PravkaApp) {
+internal fun UpdateNowCard(app: PravkaApp) {
     val context = LocalContext.current
     val updates = app.updates
     val state by updates.state.collectAsState()
@@ -443,7 +443,7 @@ private fun UpdateNowCard(app: PravkaApp) {
 
 /** Строка «служба · обновления» над меню. */
 @Composable
-private fun StatusStrip(
+internal fun StatusStrip(
     app: PravkaApp,
     serviceEnabled: Boolean,
     onOpenAccessibilitySettings: () -> Unit,
