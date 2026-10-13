@@ -842,7 +842,7 @@ class PravkaApp : Application() {
     // Рацион — запись Свода `food.ration` на сервере Дел (13.10.2026), без
     // неё — assets/ration.json.
     val exerciseBook by lazy { ru.zf.pravka.data.ExerciseBook(this) }
-    val rationBook by lazy { ru.zf.pravka.data.RationBook(this) { eventLog.add(it) } }
+    val rationBook by lazy { ru.zf.pravka.data.RationBook(this, { eventLog.add(it) }) { svodStore } }
 
     // Журнал силовых — самое незаменимое здесь: подходов нет больше НИГДЕ.
     val strengthStore by lazy {

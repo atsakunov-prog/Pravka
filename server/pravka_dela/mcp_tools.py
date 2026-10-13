@@ -651,6 +651,36 @@ def person(url: str, name: str, also: list[str] | None = None, phone: str | None
     return ("Записал. " if r.get("changed") else "Уже было. ") + f"{row['name']} — " + "; ".join(bits) + "."
 
 
+def ration_view(url: str, name: str | None = None) -> str:
+    """Рацион Саши текстом: блюда и продукты, или одно из них с веществами и блюдами, где он есть."""
+    from . import ration
+    try:
+        book, rev, source = ration.load(url, USER)
+        return ration.text(book, rev, source, name)
+    except ration.RationError as e:
+        return f"Не вышло: {e}."
+
+
+def ration_product(url: str, name: str, **fields) -> str:
+    """Продукт рациона: завести, поправить, убрать (и из блюд) — одной новой версией Свода."""
+    from . import ration
+    what = "убрать" if fields.get("remove") else "продукт"
+    try:
+        return ration.change(url, ration.put_product, f"claude: {what} «{name}»", name=name, **fields)
+    except ration.RationError as e:
+        return f"Не вышло: {e}."
+
+
+def ration_dish(url: str, name: str, **fields) -> str:
+    """Блюдо рациона: состав с граммами, приём, как называет Саша; завести или убрать."""
+    from . import ration
+    what = "убрать блюдо" if fields.get("remove") else "блюдо"
+    try:
+        return ration.change(url, ration.put_dish, f"claude: {what} «{name}»", name=name, **fields)
+    except ration.RationError as e:
+        return f"Не вышло: {e}."
+
+
 # ── Инструменты коннектора «Правка» в claude.ai ─────────────────────────
 
 
@@ -777,6 +807,31 @@ def register(mcp, url: str) -> None:
     async def client_rename(name: str, new_name: str) -> str:
         """Переименовать клиента везде: в делах, сделках, хронологии и названиях встреч («Клиент: тема»); старое имя остаётся его другим именем — по нему клиент узнаётся и дальше. name — как клиент зовётся сейчас: имя из справочника или подпись встреч, у которых клиента в справочнике нет (как в meetings). Новое имя — уже другой клиент из справочника: у подписи встречи переходят к нему; у клиента из справочника — отказ (это слияние, а не переименование)."""
         return await run(dela.client_rename, name, new_name)
+
+    @mcp.tool()
+    async def ration(name: str | None = None) -> str:
+        """Рацион Саши — его постоянная еда: блюда (наборы продуктов с граммами: «Моя каша», «Индейка с кускусом») и продукты (КБЖУ на 100 г с его этикеток, обычная порция, как он их называет голосом, вещества на 100 г). Телефон по нему разбирает еду голосом (названо блюдо — все его продукты) и пишет еду тапом. name — одно блюдо или продукт подробно (по названию или как его называет Саша); пусто — весь рацион. Перед правкой посмотри: имена и id — отсюда."""
+        return await run(dela.ration_view, name)
+
+    @mcp.tool()
+    async def ration_product(name: str, new_name: str | None = None, grams: int | None = None,
+                             kcal100: float | None = None, protein100: float | None = None, fat100: float | None = None,
+                             carbs100: float | None = None, aliases: list[str] | None = None,
+                             add_aliases: list[str] | None = None, sure: str | None = None, pill: bool | None = None,
+                             note: str | None = None, micro: dict[str, float] | None = None, remove: bool = False) -> str:
+        """Продукт рациона: завести, поправить или убрать. name — продукт (название, id или как его зовёт Саша); нет такого — заведётся новый, и тогда нужны kcal100, protein100, fat100, carbs100 (на 100 г) и grams (обычная порция, г). С фото этикетки — цифры на 100 г прямо с неё и sure «точно»; прикинул сам — sure «примерно». new_name — переименовать. aliases — как Саша его называет голосом (весь список заново), add_aliases — дописать к имеющимся: по ним телефон узнаёт продукт в речи, даже искажённой («индейка сладкий соус чили»). pill=true — добавка без калорий (креатин). note — заметка («упаковка 200 г»), пустая строка — убрать. micro — вещества на 100 г, только заметное: ключи va, vd, ve, vk, vc, b1, b2, b3, b6, b9 (фолат, мкг), b12, ca, fe, mg, zn, k, na, se, i, o3 (единицы — как у нормы: витамины A, D, K, B9, B12, селен, йод — мкг, омега-3 — г, остальное — мг); 0 — убрать вещество. remove=true — убрать продукт из рациона и из всех блюд. Что не передано — не меняется."""
+        return await run(dela.ration_product, name, new_name=new_name, grams=grams, kcal100=kcal100,
+                         protein100=protein100, fat100=fat100, carbs100=carbs100, aliases=aliases,
+                         add_aliases=add_aliases, sure=sure, pill=pill, note=note, micro=micro, remove=remove)
+
+    @mcp.tool()
+    async def ration_dish(name: str, new_name: str | None = None, kind: str | None = None,
+                          items: list[dict] | None = None, add: list[dict] | None = None, drop: list[str] | None = None,
+                          aliases: list[str] | None = None, add_aliases: list[str] | None = None,
+                          note: str | None = None, remove: bool = False) -> str:
+        """Блюдо рациона — набор его продуктов с граммами («Моя каша», «Индейка с кускусом»): завести, поправить или убрать. name — блюдо (название, id или как его зовёт Саша); нет такого — заведётся новое с составом items. items — состав целиком заново: [{"product": "Геркулес", "grams": 60}, …] (продукт — из рациона по названию или как его зовёт Саша; grams не дан — обычная порция продукта; у добавки граммов нет). add — добавить продукты или поменять граммы уже входящих, тем же видом; drop — убрать продукты из блюда по названию («убери из каши клубнику» — drop=["Клубника"]). Продукта в рационе нет — сначала ration_product. kind — обычный приём: завтрак, обед, ужин, перекус или пусто (по времени). aliases — как Саша называет блюдо («каша моя», «обычная каша»; весь список заново), add_aliases — дописать. note — заметка, пустая строка — убрать. remove=true — убрать блюдо (продукты остаются). Что не передано — не меняется."""
+        return await run(dela.ration_dish, name, new_name=new_name, kind=kind, items=items, add=add, drop=drop,
+                         aliases=aliases, add_aliases=add_aliases, note=note, remove=remove)
 
     @mcp.tool()
     async def dela_note(summary: str, kind: str = "note", project: str | None = None, deal: str | None = None,

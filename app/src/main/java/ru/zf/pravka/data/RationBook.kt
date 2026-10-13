@@ -20,9 +20,16 @@ import ru.zf.pravka.core.Svod
 // `food.ration` на сервере Дел. Телефон читает её из кэша Свода и работает
 // без сети; `assets/ration.json` — заводское семя: им телефон один раз кладёт
 // рацион в Свод (`svodSeedTexts`) и по нему работает, пока Свода нет.
+//
+// Правят его двое (владелец: «надо иметь возможность этот рацион
+// редактировать»): сам владелец во вкладке «Еда» — [save], целым значением
+// записи без `base_rev` (правка владельца — последнее слово), и Claude в
+// коннекторе claude.ai (`server/pravka_dela/ration.py`, с `base_rev`).
 class RationBook(
     private val context: Context,
     private val log: (String) -> Unit = {},
+    /** Свод, куда уходит правка владельца (`save`); ставит приложение. */
+    private val svod: () -> SvodStore? = { null },
 ) {
 
     companion object {
@@ -30,9 +37,10 @@ class RationBook(
     }
 
     @Volatile private var factory: Ration.Book? = null
-    // Разобранная запись Свода и сама запись — новая версия с сервера
-    // разбирается один раз, а не на каждом тапе.
-    @Volatile private var memo: Pair<Svod.Entry, Ration.Book?>? = null
+    // Разобранная запись Свода и её текст — новая версия разбирается один раз, а
+    // не на каждом тапе. По тексту, а не по записи: своя неотправленная правка
+    // пересобирает записи Свода на каждую перемену, а текст у неё тот же.
+    @Volatile private var memo: Pair<String, Ration.Book?>? = null
 
     /** Откуда сейчас рацион — строка во вкладке: «молчаливая механика читается как поломка». */
     enum class Source { SVOD, FACTORY, NONE }
@@ -67,15 +75,29 @@ class RationBook(
 
     private fun svodBook(): Ration.Book? {
         val e = Svod.current[Svod.FOOD_RATION] ?: return null
-        memo?.takeIf { it.first === e }?.let { return it.second }
-        val parsed = e.value?.let { Ration.parse(Svod.parseJson(it)) }?.takeIf { !it.empty }
+        val text = e.value ?: return null
+        memo?.takeIf { it.first == text }?.let { return it.second }
+        val parsed = Ration.parse(Svod.parseJson(text))?.takeIf { !it.empty }
         if (parsed == null) {
             log("рацион: запись Свода ${Svod.FOOD_RATION} (версия ${e.rev}) не читается — работаю по заводскому")
         } else if (parsed.problems.isNotEmpty()) {
             log("рацион: в Своде ${parsed.problems.take(3).joinToString("; ")}")
         }
-        memo = e to parsed
+        memo = text to parsed
         return parsed
+    }
+
+    /**
+     * Правка владельца: рацион целиком — новой версией записи Свода. Видна
+     * сразу (своя правка Свода), на сервер уходит очередью Дел; без сети и без
+     * сервера Дел — ждёт в очереди и работает на телефоне уже сейчас.
+     */
+    suspend fun save(book: Ration.Book, reason: String): Boolean {
+        val sv = svod() ?: return false
+        val today = java.time.LocalDate.now().toString()
+        sv.set(Svod.FOOD_RATION, value = Ration.toJson(book, today).toString(), author = "phone", reason = reason)
+        log("рацион: $reason")
+        return true
     }
 
     /** Блок промпта разбора еды: продукты и блюда с правилами. */

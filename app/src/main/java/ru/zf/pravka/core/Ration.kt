@@ -215,6 +215,105 @@ object Ration {
         return out
     }
 
+    // ------------------------------------------------------------ правка и запись
+
+    const val ABOUT = "Рацион владельца: продукты (КБЖУ на 100 г, обычная порция, как он их называет) и блюда — " +
+        "наборы продуктов с граммами. Правда — запись Свода food.ration на сервере Дел."
+
+    /**
+     * Книга → значение записи Свода: тот же вид, что читает [parse] и пишет
+     * коннектор (`server/pravka_dela/ration.py`). Пустое не пишется: «sure»
+     * только не «точно», «pill» только у добавки, заметка и вещества — если есть.
+     */
+    fun toJson(book: Book, updated: String): JSONObject = JSONObject()
+        .put("version", VERSION)
+        .put("updated", updated)
+        .put("about", ABOUT)
+        .put("products", JSONArray().apply {
+            for (p in book.products) put(JSONObject().apply {
+                put("id", p.id)
+                put("name", p.name)
+                put("aliases", JSONArray(p.aliases))
+                put("grams", p.grams)
+                put("kcal100", p.kcal100)
+                put("p100", p.protein100)
+                put("f100", p.fat100)
+                put("c100", p.carbs100)
+                if (p.sure != "точно") put("sure", p.sure)
+                if (p.pill) put("pill", true)
+                if (p.note.isNotBlank()) put("note", p.note)
+                if (p.micro100.isNotEmpty()) put("micro", JSONObject().apply { p.micro100.forEach { (k, v) -> put(k, v) } })
+            })
+        })
+        .put("dishes", JSONArray().apply {
+            for (d in book.dishes) put(JSONObject().apply {
+                put("id", d.id)
+                put("name", d.name)
+                put("kind", d.kind)
+                put("aliases", JSONArray(d.aliases))
+                put("items", JSONArray().apply {
+                    for (i in d.items) put(JSONObject().put("product", i.product).put("grams", i.grams))
+                })
+                if (d.note.isNotBlank()) put("note", d.note)
+            })
+        })
+
+    /**
+     * id нового продукта или блюда — латиницей из названия, как у коннектора:
+     * «Индейка с пастой» → `indeyka-s-pastoy`. Занят — с номером.
+     */
+    fun newId(name: String, taken: Set<String>): String {
+        val tr = mapOf(
+            'а' to "a", 'б' to "b", 'в' to "v", 'г' to "g", 'д' to "d", 'е' to "e", 'ё' to "e", 'ж' to "zh",
+            'з' to "z", 'и' to "i", 'й' to "y", 'к' to "k", 'л' to "l", 'м' to "m", 'н' to "n", 'о' to "o",
+            'п' to "p", 'р' to "r", 'с' to "s", 'т' to "t", 'у' to "u", 'ф' to "f", 'х' to "h", 'ц' to "c",
+            'ч' to "ch", 'ш' to "sh", 'щ' to "sch", 'ъ' to "", 'ы' to "y", 'ь' to "", 'э' to "e", 'ю' to "yu", 'я' to "ya",
+        )
+        val raw = name.lowercase().map { c -> tr[c] ?: c.toString() }.joinToString("")
+        val base = raw.replace(Regex("[^a-z0-9]+"), "-").trim('-').take(40).trimEnd('-').ifEmpty { "x" }
+        var id = base
+        var k = 2
+        while (id in taken) id = "$base-${k++}"
+        return id
+    }
+
+    /**
+     * Продукт поправлен или заведён ([was] — его прежний id, null — новый).
+     * Новому без id — id из названия. Место в списке — прежнее, новый — в конце.
+     */
+    fun withProduct(book: Book, was: String?, p: Product): Book {
+        val taken = book.products.map { it.id }.filter { it != was }.toSet()
+        val fixed = if (p.id.isNotBlank() && p.id !in taken) p else p.copy(id = newId(p.name, taken))
+        val list = book.products.toMutableList()
+        val at = list.indexOfFirst { it.id == was }
+        if (at >= 0) list[at] = fixed else list += fixed
+        // id поменялся (так не бывает с экрана, но чинить ссылки дешевле, чем их терять).
+        val dishes = if (was != null && was != fixed.id) {
+            book.dishes.map { d -> d.copy(items = d.items.map { if (it.product == was) it.copy(product = fixed.id) else it }) }
+        } else book.dishes
+        return book.copy(products = list, dishes = dishes)
+    }
+
+    /**
+     * Продукт убран — и из блюд: «перестал есть» значит и «не в каше». Блюдо,
+     * в котором ничего не осталось, уходит тоже: пустое блюдо — ссылка в никуда.
+     */
+    fun withoutProduct(book: Book, id: String): Book = book.copy(
+        products = book.products.filter { it.id != id },
+        dishes = book.dishes.map { d -> d.copy(items = d.items.filter { it.product != id }) }.filter { it.items.isNotEmpty() },
+    )
+
+    fun withDish(book: Book, was: String?, d: Dish): Book {
+        val taken = book.dishes.map { it.id }.filter { it != was }.toSet()
+        val fixed = if (d.id.isNotBlank() && d.id !in taken) d else d.copy(id = newId(d.name, taken))
+        val list = book.dishes.toMutableList()
+        val at = list.indexOfFirst { it.id == was }
+        if (at >= 0) list[at] = fixed else list += fixed
+        return book.copy(dishes = list)
+    }
+
+    fun withoutDish(book: Book, id: String): Book = book.copy(dishes = book.dishes.filter { it.id != id })
+
     // ------------------------------------------------------------ промпт
 
     /**

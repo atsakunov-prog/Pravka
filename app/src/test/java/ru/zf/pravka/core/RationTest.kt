@@ -141,4 +141,62 @@ class RationTest {
         assertNotNull(Ration.parse("""{"products": []}"""))
         assertTrue(Ration.parse("""{"products": []}""")!!.empty)
     }
+
+    // ---- Правка на телефоне (владелец: «надо иметь возможность этот рацион редактировать») ----
+
+    @Test
+    fun `запись Свода туда и обратно — тот же рацион`() {
+        val json = Ration.toJson(book, "2026-10-13")
+        assertEquals(Ration.VERSION, json.getInt("version"))
+        assertEquals("2026-10-13", json.getString("updated"))
+        val again = Ration.parse(json.toString())!!
+        assertEquals(book.products, again.products)
+        assertEquals(book.dishes, again.dishes)
+        // Пустое не пишется: «точно» и не-добавка — без полей.
+        val gerkules = json.getJSONArray("products").getJSONObject(0)
+        assertFalse(gerkules.has("sure") || gerkules.has("pill"))
+        val turkey = (0 until json.getJSONArray("products").length()).map { json.getJSONArray("products").getJSONObject(it) }
+            .first { it.getString("id") == "turkey-chili" }
+        assertEquals("примерно", turkey.getString("sure"))
+    }
+
+    @Test
+    fun `новый продукт получает id как у коннектора, правка — на своём месте`() {
+        assertEquals("indeyka-s-pastoy", Ration.newId("Индейка с пастой", emptySet()))
+        assertEquals("yogurt-grecheskiy-2", Ration.newId("Йогурт греческий 2%", emptySet()))
+        assertEquals("kuskus-2", Ration.newId("Кускус", setOf("kuskus")))
+        val yogurt = Ration.Product("", "Йогурт греческий 2%", listOf("греческий йогурт"), 150, 66.0, 8.0, 2.0, 4.0)
+        val added = Ration.withProduct(book, null, yogurt)
+        assertEquals("yogurt-grecheskiy-2", added.products.last().id)
+        assertEquals(21, added.products.size)
+        val turkey = book.product("turkey-chili")!!
+        val fixed = Ration.withProduct(added, turkey.id, turkey.copy(kcal100 = 140.0, sure = "точно"))
+        assertEquals(added.products.indexOfFirst { it.id == "turkey-chili" }, fixed.products.indexOfFirst { it.id == "turkey-chili" })
+        assertEquals(140.0, fixed.product("turkey-chili")!!.kcal100, 0.0)
+        assertTrue(Ration.parse(Ration.toJson(fixed, "2026-10-13").toString())!!.problems.isEmpty())
+    }
+
+    @Test
+    fun `убрал продукт — ушёл и из блюд, пустое блюдо — следом`() {
+        val noKuskus = Ration.withoutProduct(book, "kuskus")
+        assertEquals(listOf("turkey-chili"), noKuskus.dishes.first { it.id == "turkey-kuskus" }.items.map { it.product })
+        val noTurkey = Ration.withoutProduct(noKuskus, "turkey-chili")
+        assertNull(noTurkey.dishes.firstOrNull { it.id == "turkey-kuskus" })
+        assertTrue(Ration.parse(Ration.toJson(noTurkey, "2026-10-13").toString())!!.problems.isEmpty())
+    }
+
+    @Test
+    fun `блюдо заводится, правится и убирается`() {
+        val d = Ration.Dish("", "Индейка с пастой", "ужин", listOf("индейка с макаронами"),
+            listOf(Ration.Portion("turkey-chili", 300), Ration.Portion("pasta", 200)))
+        val added = Ration.withDish(book, null, d)
+        val dish = added.dishes.last()
+        assertEquals("indeyka-s-pastoy", dish.id)
+        assertEquals(393 + 260, added.kcal(dish))
+        val kasha = added.dishes.first { it.id == "kasha" }
+        val noBerries = Ration.withDish(added, "kasha", kasha.copy(items = kasha.items.filter { it.product != "klubnika" }))
+        assertEquals(905 - 48, noBerries.kcal(noBerries.dishes.first { it.id == "kasha" }))
+        assertEquals(added.dishes.map { it.id }, noBerries.dishes.map { it.id })
+        assertNull(Ration.withoutDish(noBerries, "kasha").dishes.firstOrNull { it.id == "kasha" })
+    }
 }
