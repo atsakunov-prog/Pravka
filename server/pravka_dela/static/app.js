@@ -466,6 +466,7 @@ const ICONS = {
   minus: 'M5 12h14',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
   phone: 'M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2',
+  claude: 'M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4',   // звёздочка — ссылка на приложение Claude в меню Ковчега
   // «Спорт» и «Еда» на компе (13.10.2026) — для шапки сервисов (DELA_NAV): тот же набор, что в общем слое Ковчега.
   activity: 'M3 12h4l3-8 4 16 3-8h4',
   food: 'M12 5a7 7 0 1 0 0 14a7 7 0 1 0 0-14zM12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6zM3 3v5a1.5 1.5 0 0 0 1.5 1.5h0A1.5 1.5 0 0 0 6 8V3M4.5 9.5V21M20.5 3c-1.4 1-2 2.6-2 4.5V12h2V21',
@@ -890,15 +891,17 @@ function viewPills(r) {
 // Круга жизни — как в общем слое Ковчега (GROUPS в kovcheg.js). Сервисы — из настроек сервера на компе (в публичном
 // коде адресов нет); владельцу — все, команде — одни Дела и их CRM. Направление сервиса узнаётся по его значку из
 // настройки (названий и адресов в коде нет), незнакомый значок — в «Ещё». Запись с адресом «/» — сами Дела.
+// Девять направлений по зонам «Я», «Мир», «Семья» (строками по три), под названием — подпись из формулы направления.
 const SVC_DIRS = [
-  ['Каждый день', ['dela']],
-  ['Здоровье', ['activity', 'food']],
-  ['Ум', ['book', 'film']],
-  ['Дело', ['mic', 'briefcase']],
-  ['Деньги', ['wallet']],
-  ['Круг', ['users']],
-  ['Родительство', ['kids', 'candles']],
-  ['Быт', ['home', 'shield']],
+  ['Здоровье', 'сильное тело, ясная голова', ['activity', 'food']],
+  ['Ум', 'много знаю и узнаю', ['book']],
+  ['Творчество', 'создаю новое', ['claude']],
+  ['Дело', 'растёт вглубь и вширь', ['dela', 'mic']],
+  ['Деньги', 'деньги — не ограничение', ['wallet']],
+  ['Круг', 'знаю многих', ['briefcase']],
+  ['Родительство', 'сыновья растут сильными', ['kids', 'candles']],
+  ['Пара', 'близкая живая пара', ['film']],
+  ['Быт', 'дома хорошо всем пятерым', ['home', 'shield']],
 ];
 // Шапка строится заново на каждый render(): закрывать меню щелчком мимо и Esc — одним слушателем на всё время.
 const svcMenu = { box: null, close: null };
@@ -908,23 +911,27 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && svcMenu.
 function svcBrand(look) {
   const self = { name: 'Дела', icon: 'dela', url: '/' };
   const list = (look.nav || []).length ? look.nav : [self];
-  const inner = crmOn() ? [{ name: 'CRM', icon: 'briefcase', url: '#/crm' }, { name: 'Люди', icon: 'users', url: '#/people' }] : [];
+  // CRM — раздел самих Дел (кому он открыт); Claude — внешняя ссылка, только владельцу (у него есть соседние сервисы).
+  const inner = [...(crmOn() ? [{ name: 'CRM', icon: 'briefcase', url: '#/crm' }] : []),
+    ...((look.nav || []).length ? [{ name: 'Claude', icon: 'claude', url: 'https://claude.ai/', out: true }] : [])];
   const all = [...(list.some((x) => x.url === '/') ? list : [self, ...list]), ...inner];
   const img = () => el('img', { src: look.icon || '/static/icon.svg', alt: '' });
   if (all.length < 2) return el('a', { class: 'brand', href: '#/today' }, img(), el('b', {}, 'Дела'));
   const link = (x) => (x.url === '/'
     ? el('a', { class: 'on', href: '#/today', 'aria-current': 'page' }, icon(x.icon, 17), el('span', {}, x.name))
-    : el('a', { href: x.url }, icon(x.icon, 17), el('span', {}, x.name)));
-  const group = (title, items, first) => el('div', { class: 'kv-svc-g' + (first ? ' all' : '') },
-    el('div', { class: 'kv-svc-h' }, title), el('div', { class: 'kv-svc-items' }, items.map(link)));
+    : el('a', { href: x.url, class: x.icon === 'claude' ? 'cl' : null, target: x.out ? '_blank' : null, rel: x.out ? 'noopener' : null },
+      icon(x.icon, 17), el('span', {}, x.name)));
+  const group = (title, sub, items) => el('div', { class: 'kv-svc-g' },
+    el('div', { class: 'kv-svc-h' }, title), sub ? el('div', { class: 'kv-svc-sub' }, sub) : null,
+    el('div', { class: 'kv-svc-items' }, items.map(link)));
   const used = new Set();
-  const groups = SVC_DIRS.map(([title, icons], k) => {
+  const groups = SVC_DIRS.map(([title, sub, icons]) => {
     const items = all.filter((x) => icons.includes(x.icon) && !used.has(x));
     items.forEach((x) => used.add(x));
-    return items.length ? group(title, items, k === 0) : null;
+    return items.length ? group(title, sub, items) : null;
   }).filter(Boolean);
   const rest = all.filter((x) => !used.has(x));
-  if (rest.length) groups.push(group('Ещё', rest, false));
+  if (rest.length) groups.push(group('Ещё', '', rest));
   const menu = el('div', { class: 'kv-svc-menu', id: 'kv-svc-menu', hidden: true }, el('div', { class: 'kv-svc-groups' }, groups));
   const brand = el('a', { class: 'brand kv-svc-btn', href: '#/today', role: 'button', title: 'Все сервисы Ковчега',
     'aria-haspopup': 'true', 'aria-expanded': 'false', 'aria-controls': 'kv-svc-menu' }, img(), el('b', {}, 'Дела'));

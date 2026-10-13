@@ -202,9 +202,9 @@ a.brand:hover { text-decoration: none; }
 .kv-svc-menu[hidden] { display: none; }
 .kv-svc-groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 10px; }
 .kv-svc-g { min-width: 0; }
-.kv-svc-g.all { grid-column: 1 / -1; }
-.kv-svc-g.all .kv-svc-items { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 10px; }
-.kv-svc-h { font-size: 12px; font-weight: 600; color: var(--faint); padding: 10px 8px 3px; }
+.kv-svc-h { font-size: 12px; font-weight: 600; color: var(--muted); padding: 10px 8px 0; }
+.kv-svc-sub { font-size: 11.5px; line-height: 1.3; color: var(--faint); padding: 0 8px 3px; }
+.kv-svc-items a.cl .kv-i { color: var(--claude); }
 .kv-svc-items a {
   display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 7px; font-size: 14.5px;
   color: var(--text); white-space: nowrap; min-width: 0;
