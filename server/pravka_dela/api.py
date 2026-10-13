@@ -56,8 +56,11 @@ MAX_BODY = 8 * 1024 * 1024
 MAX_OPS = 2000
 JOB_TTL = 15 * 60  # готовый разбор ждёт, пока веб его заберёт
 COOKIE = "dela_session"
+# Стили и шрифты — ещё и с Google Fonts (13.10.2026): шрифт в шестерёнке общего вида Ковчега выбирает человек, Golos
+# Text остаётся своим файлом. Скриптам и соединениям — по-прежнему только свой адрес.
 SECURITY = {
-    "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; "
+    "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; style-src 'self' https://fonts.googleapis.com; "
+                               "font-src 'self' https://fonts.gstatic.com; script-src 'self'; "
                                "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
     "X-Frame-Options": "DENY",
     "X-Content-Type-Options": "nosniff",

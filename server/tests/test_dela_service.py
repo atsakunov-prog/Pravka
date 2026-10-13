@@ -301,6 +301,10 @@ def test_look_nav_only_for_owner_and_from_local_settings(dela, tmp_path):
     look = plain.get("/api/me", headers=owner).json()["look"]
     assert look == {"domain": "", "icon": "", "nav": []}
     assert plain.get("/static/literata.woff2").status_code == 404 and plain.get("/static/golos.woff2").status_code == 200
+    # Шрифт в шестерёнке (13.10.2026): Google Fonts пускаем только в стили и шрифты, скрипты — по-прежнему свои.
+    csp = plain.get("/").headers["content-security-policy"]
+    assert "script-src 'self';" in csp and "connect-src 'self';" in csp
+    assert "style-src 'self' https://fonts.googleapis.com;" in csp and "font-src 'self' https://fonts.gstatic.com;" in csp
 
 
 def test_every_module_compiles_and_cli_parses():

@@ -495,10 +495,11 @@ function icon(name, size = 16) {
   return svg;
 }
 
-// ── Тема и узор (общий вид Ковчега) ─────────────────────────────────────
+// ── Вид: тема, шрифт, размер текста, узор (общий вид Ковчега) ───────────
 // Выбор человека — общий на все сервисы семьи: кука на родительский домен (его называет сервер в /api/me — в
-// публичном коде доменов нет) и запасом localStorage (адрес напрямую через роутер, локальная копия). Без выбора —
-// как в системе. Тема встаёт до первой отрисовки: app.js с defer — до DOMContentLoaded.
+// публичном коде доменов нет) и запасом localStorage (адрес напрямую через роутер, локальная копия). Значение по
+// умолчанию не храним — кука пустая. Тема без выбора — как в системе. Всё встаёт до первой отрисовки: app.js с defer —
+// до DOMContentLoaded. Списки и правила — как в общем слое остальных сервисов: выбрал в Доме — так же в Делах.
 const HTML = document.documentElement;
 const KV = {
   cookie(name) { const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)')); return m ? decodeURIComponent(m[1]) : ''; },
@@ -513,7 +514,7 @@ const KV = {
       + (d ? '; domain=' + d : '') + (location.protocol === 'https:' ? '; Secure' : '');
   },
   pref(name) { let v = KV.cookie(name); if (!v) { try { v = localStorage.getItem(name) || ''; } catch (e) { v = ''; } } return v; },
-  setPref(name, value) {
+  store(name, value) {
     KV.setCookie(name, value);
     try { if (value) localStorage.setItem(name, value); else localStorage.removeItem(name); } catch (e) { /* хватит куки */ }
   },
@@ -522,18 +523,83 @@ const KV = {
   theme() { return HTML.getAttribute('data-theme') || (KV.dark && KV.dark.matches ? 'dark' : 'light'); },
   /** t: 'light' | 'dark' | '' — пусто значит «как в системе». */
   setTheme(t) {
-    KV.setPref('kv-theme', t);
+    KV.store('kv-theme', t);
     if (t) HTML.setAttribute('data-theme', t); else HTML.removeAttribute('data-theme');
     paintLook();
   },
-  setPattern(on) { KV.setPref('kv-pattern', on ? '' : 'off'); paintLook(); },
+  setPattern(on) { KV.store('kv-pattern', on ? '' : 'off'); paintLook(); },
+  /** Остальной выбор вида: KV.set('font' | 'size' | 'pcolor' | 'pdens' | 'theme', id). */
+  set(what, v) {
+    if (what === 'theme') { KV.setTheme(v); return; }
+    const o = OPTS[what];
+    if (!o) return;
+    KV.store(o[0], v === o[2] ? '' : v);
+    if (what === 'font') applyFont();
+    if (what === 'size') applySize();
+    paintLook();
+  },
 };
 if (KV.chosen()) HTML.setAttribute('data-theme', KV.chosen());
 
+// Шрифты: [id, подпись, семейство Google Fonts, запасные]. Golos — свой файл (style.css); остальные — с Google Fonts
+// (CSP Дел пускает только их стили и шрифты), и только выбранный.
+const FONTS = [
+  ['golos', 'Golos', 'Golos+Text:wght@400;500;600', 'sans'],
+  ['onest', 'Onest', 'Onest:wght@400;500;600', 'sans'],
+  ['manrope', 'Manrope', 'Manrope:wght@400;500;600', 'sans'],
+  ['plex', 'IBM Plex', 'IBM+Plex+Sans:wght@400;500;600', 'sans'],
+  ['nunito', 'Nunito', 'Nunito:wght@400;500;600', 'sans'],
+  ['ptsans', 'PT Sans', 'PT+Sans:wght@400;700', 'sans'],
+  ['literata', 'Literata', 'Literata:opsz,wght@7..72,400;7..72,500;7..72,600', 'serif'],
+  ['ptserif', 'PT Serif', 'PT+Serif:wght@400;700', 'serif'],
+  ['lora', 'Lora', 'Lora:wght@400;500;600', 'serif'],
+];
+// Размер текста — масштабом всей страницы (zoom у body): размеры в px, и только так растёт всё вместе.
+const SIZES = [['s', 'Мельче', 0.92, 12], ['m', 'Обычный', 1, 14], ['l', 'Крупнее', 1.08, 16], ['xl', 'Ещё крупнее', 1.16, 18]];
+// Цвет узора: [id, название, светлая, тёмная, прозрачность в светлой, в тёмной]. Цветной чуть плотнее серого, иначе на
+// тёплом фоне его не видно вовсе.
+const PCOLORS = [
+  ['orange', 'Оранжевый', '#d9692c', '#f0a06a', 0.17, 0.16],
+  ['gray', 'Серый', '#1c1b19', '#eceae5', 0.08, 0.07],
+  ['blue', 'Синий', '#2747c9', '#93abf8', 0.13, 0.15],
+  ['green', 'Зелёный', '#2f7d4f', '#7cc59a', 0.15, 0.15],
+  ['lilac', 'Сиреневый', '#7a5cc7', '#b9a3f5', 0.15, 0.15],
+  ['pink', 'Розовый', '#c2477a', '#e58cbc', 0.14, 0.15],
+];
+const DENS = [['rare', 'Реже', 160], ['mid', 'Обычно', 120], ['dense', 'Гуще', 96]]; // шаг сетки, плитка 960
+const OPTS = { // что: [кука, список, значение по умолчанию]
+  font: ['kv-font', FONTS, 'golos'], size: ['kv-size', SIZES, 'm'],
+  pcolor: ['kv-pcolor', PCOLORS, 'orange'], pdens: ['kv-pdens', DENS, 'mid'],
+};
+function opt(what) {
+  const [name, list, def] = OPTS[what], v = KV.pref(name) || def;
+  return list.find((x) => x[0] === v) || list.find((x) => x[0] === def);
+}
+const fontStack = (f) => '"' + f[2].split(':')[0].replace(/\+/g, ' ') + '", '
+  + (f[3] === 'serif' ? 'Georgia, "Times New Roman", serif' : '"Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif');
+function loadCss(href, id) {
+  if (document.getElementById(id) || !document.head) return;
+  document.head.append(el('link', { id, rel: 'stylesheet', href }));
+}
+function applyFont() {
+  const f = opt('font');
+  if (f[0] === 'golos') { HTML.style.removeProperty('--font'); return; }
+  loadCss('https://fonts.googleapis.com/css2?family=' + f[2] + '&display=swap', 'kv-font-' + f[0]);
+  HTML.style.setProperty('--font', fontStack(f));
+}
+function applySize() {
+  const z = opt('size')[2];
+  if (z === 1) HTML.style.removeProperty('--kv-zoom'); else HTML.style.setProperty('--kv-zoom', String(z));
+}
+/** Масштаб «Размера текста» у элемента: экранные px на px раскладки. С zoom у body Chrome 128+ отдаёт
+ *  getBoundingClientRect и clientX/Y в экранных px, а style.left/top и offset* — в раскладочных: координаты мыши и
+ *  меню надо делить на него (как zk в Детях). Без zoom и в старых браузерах — 1. */
+const zk = (node) => (node && node.offsetHeight ? node.getBoundingClientRect().height / node.offsetHeight : 1) || 1;
+
 // Узор на фоне: значки Дел вразброс — под разными углами, разного размера, еле видные. Плитка 960×960 (SVG в data:,
-// CSP пускает img-src data:) ложится на фон <html>; панели белые, узор живёт в полях. Раскладка — от имени сервиса
-// (тот же генератор, что в общем слое): одинаковая при каждой загрузке и такая же, как у Дел в общем слое.
-// Выключается в шестерёнке — кукой kv-pattern=off, общей с остальными сервисами.
+// CSP пускает img-src data:) ложится на фон <html>; панели белые, узор живёт в полях. Раскладка — от имени сервиса и
+// плотности (тот же генератор, что в общем слое): одинаковая при каждой загрузке и такая же, как у Дел там.
+// В шестерёнке — выключить (kv-pattern=off), плотность и цвет: куки общие с остальными сервисами.
 const PATTERN = ['dela', 'clock', 'briefcase', 'users', 'link', 'inbox', 'target', 'bookmark', 'check', 'list', 'reply', 'eye'];
 const patternCache = {};
 function seeded(s) {
@@ -546,42 +612,48 @@ function seeded(s) {
     return ((t ^ t >>> 14) >>> 0) / 4294967296;
   };
 }
-function patternUrl(theme) {
-  if (patternCache[theme]) return patternCache[theme];
-  const TILE = 960, CELL = 160, rnd = seeded('dela'), g = [];
-  for (let y = 0; y < TILE; y += CELL) {
-    for (let x = 0; x < TILE; x += CELL) {
-      if (rnd() < 0.2) continue; // пустые клетки — чтобы не было сетки
-      const size = 20 + Math.round(Math.pow(rnd(), 1.4) * 46), s = size / 24, room = CELL - size - 28; // чаще мелкие
-      const px = x + 14 + rnd() * room, py = y + 14 + rnd() * room, rot = Math.round(rnd() * 64 - 32);
+function patternUrl(theme, col, den) {
+  const key = [theme, col[0], den[0]].join('|');
+  if (patternCache[key]) return patternCache[key];
+  const TILE = 960, cell = den[2], big = Math.round(cell * 0.42), rnd = seeded('dela' + den[0]), g = [];
+  for (let y = 0; y < TILE; y += cell) {
+    for (let x = 0; x < TILE; x += cell) {
+      if (rnd() < 0.18) continue; // пустые клетки — чтобы не было сетки
+      const size = 16 + Math.round(Math.pow(rnd(), 1.4) * (big - 16)), s = size / 24, room = cell - size - 16; // чаще мелкие
+      const px = x + 8 + rnd() * room, py = y + 8 + rnd() * room, rot = Math.round(rnd() * 64 - 32);
       const name = PATTERN[Math.floor(rnd() * PATTERN.length)];
       g.push(`<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)}) scale(${s.toFixed(3)}) rotate(${rot} 12 12)" stroke-width="${(1.5 / s).toFixed(2)}"><path d="${ICONS[name]}"/></g>`);
     }
   }
-  // Еле видно: светлая — тёмная линия с прозрачностью 7 %, тёмная — светлая с 5,5 %.
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${TILE}" height="${TILE}" fill="none" stroke="`
-    + (theme === 'dark' ? '#eceae5" stroke-opacity=".055"' : '#1c1b19" stroke-opacity=".07"')
-    + ` stroke-linecap="round" stroke-linejoin="round">${g.join('')}</svg>`;
-  return (patternCache[theme] = 'url("data:image/svg+xml,' + encodeURIComponent(svg) + '")');
+  const dk = theme === 'dark';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${TILE}" height="${TILE}" fill="none" stroke="${dk ? col[3] : col[2]}"`
+    + ` stroke-opacity="${dk ? col[5] : col[4]}" stroke-linecap="round" stroke-linejoin="round">${g.join('')}</svg>`;
+  return (patternCache[key] = 'url("data:image/svg+xml,' + encodeURIComponent(svg) + '")');
 }
-/** Переключатель, меню шестерёнки, узор и цвет строки браузера — по текущему выбору. */
+/** Переключатель темы, меню шестерёнки, узор и цвет строки браузера — по текущему выбору. */
 function paintLook() {
-  const t = KV.theme(), own = KV.chosen();
+  const t = KV.theme(), cur = { theme: KV.chosen() };
+  for (const w of Object.keys(OPTS)) cur[w] = opt(w)[0];
   for (const b of document.querySelectorAll('.kv-theme button[data-t]')) {
     b.classList.toggle('on', b.dataset.t === t);
     b.setAttribute('aria-pressed', b.dataset.t === t ? 'true' : 'false');
   }
-  for (const b of document.querySelectorAll('.kv-menu button[data-t]')) {
-    b.classList.toggle('on', b.dataset.t === own);
-    b.setAttribute('aria-checked', b.dataset.t === own ? 'true' : 'false');
+  for (const b of document.querySelectorAll('.kv-menu [data-kv-set]')) {
+    const on = cur[b.dataset.kvSet] === b.dataset.v;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
   }
-  for (const c of document.querySelectorAll('.kv-menu input[data-kv-pref=pattern]')) c.checked = KV.pref('kv-pattern') !== 'off';
-  if (KV.pref('kv-pattern') === 'off') HTML.style.removeProperty('--kv-pattern');
-  else HTML.style.setProperty('--kv-pattern', patternUrl(t));
+  const patOn = KV.pref('kv-pattern') !== 'off';
+  for (const c of document.querySelectorAll('.kv-menu input[data-kv-pref=pattern]')) c.checked = patOn;
+  for (const p of document.querySelectorAll('.kv-pat')) p.classList.toggle('off', !patOn);
+  if (!patOn) HTML.style.removeProperty('--kv-pattern');
+  else HTML.style.setProperty('--kv-pattern', patternUrl(t, opt('pcolor'), opt('pdens')));
   const meta = document.querySelector('meta[name=theme-color]');
   if (meta) meta.setAttribute('content', getComputedStyle(HTML).backgroundColor);
 }
 if (KV.dark && KV.dark.addEventListener) KV.dark.addEventListener('change', paintLook);
+applyFont();
+applySize();
 paintLook();
 
 // ── Помощники ───────────────────────────────────────────────────────────
@@ -825,18 +897,43 @@ function topBar() {
         onclick: async () => { try { await api('/auth/logout', {}); } catch (e) { /* и так выйдем */ } location.reload(); } }, icon('logout', 18)))));
 }
 
-/** Шестерёнка рядом с темой: тема (в том числе «как в системе» — переключатель её не умеет) и узор на фоне. */
+/** Шестерёнка рядом с темой — всё про вид, как в общем слое: тема (и «как в системе» — переключатель её не умеет),
+ *  размер текста, шрифт (каждое имя своим начертанием), узор — включён ли, плотность, цвет кружками (так просил
+ *  Саша). Стили образцов — через CSSOM: атрибут style CSP Дел не пускает. */
 function prefsMenu() {
-  const tick = () => el('span', { class: 'kv-tick' }, icon('check', 16));
-  const item = (t, ico, label) => el('button', { type: 'button', role: 'menuitemradio', 'data-t': t, onclick: () => KV.setTheme(t) }, icon(ico, 18), el('span', {}, label), tick());
+  const seg = (items) => el('div', { class: 'seg', role: 'radiogroup' }, items);
+  const item = (what, v, kids, label, cls) => el('button', { type: 'button', role: 'radio', class: cls || null, 'data-kv-set': what, 'data-v': v,
+    title: label || null, 'aria-label': label || null }, kids);
+  const sizes = SIZES.map((z) => { const a = el('span', {}, 'А'); a.style.fontSize = z[3] + 'px'; return item('size', z[0], a, z[1]); });
+  const fonts = FONTS.map((f) => { const b = item('font', f[0], f[1]); b.style.fontFamily = fontStack(f); return b; });
+  const swatches = PCOLORS.map((c) => {
+    const b = item('pcolor', c[0], null, c[1], 'kv-sw');
+    b.style.setProperty('--sw-l', c[2]); b.style.setProperty('--sw-d', c[3]);
+    return b;
+  });
   const pat = el('input', { type: 'checkbox', 'data-kv-pref': 'pattern' });
   pat.addEventListener('change', () => KV.setPattern(pat.checked));
-  const menu = el('div', { class: 'kv-menu', role: 'menu', hidden: true },
-    el('div', { class: 'kv-menu-h' }, 'Тема'), item('light', 'sun', 'Светлая'), item('dark', 'moon', 'Тёмная'), item('', 'monitor', 'Как в системе'),
-    el('div', { class: 'kv-menu-sep' }), el('label', { class: 'check' }, pat, el('span', {}, 'Узор на фоне')));
-  const btn = el('button', { type: 'button', class: 'icon', 'aria-haspopup': 'true', 'aria-expanded': 'false', title: 'Настройки вида', 'aria-label': 'Настройки вида' }, icon('gear', 18));
+  const menu = el('div', { class: 'kv-menu', role: 'dialog', 'aria-label': 'Настройки вида', hidden: true },
+    el('div', { class: 'kv-menu-h' }, 'Тема'),
+    seg([item('theme', 'light', [icon('sun', 15), el('span', {}, 'Светлая')]), item('theme', 'dark', [icon('moon', 15), el('span', {}, 'Тёмная')]),
+      item('theme', '', [icon('monitor', 15), el('span', {}, 'Авто')], 'Как в системе')]),
+    el('div', { class: 'kv-menu-h' }, 'Размер текста'), seg(sizes),
+    el('div', { class: 'kv-menu-h' }, 'Шрифт'), el('div', { class: 'kv-fonts', role: 'radiogroup' }, fonts),
+    el('div', { class: 'kv-menu-sep' }), el('label', { class: 'check' }, pat, el('span', {}, 'Узор на фоне')),
+    el('div', { class: 'kv-pat' }, el('div', { class: 'kv-menu-h' }, 'Плотность'), seg(DENS.map((d) => item('pdens', d[0], d[1]))),
+      el('div', { class: 'kv-menu-h' }, 'Цвет узора'), el('div', { class: 'kv-swatches', role: 'radiogroup' }, swatches)));
+  menu.addEventListener('click', (e) => { const b = e.target.closest('[data-kv-set]'); if (b) KV.set(b.dataset.kvSet, b.dataset.v); });
+  const btn = el('button', { type: 'button', class: 'icon', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', title: 'Настройки вида', 'aria-label': 'Настройки вида' }, icon('gear', 18));
   const box = el('div', { class: 'kv-prefs' }, btn, menu);
-  const show = (open) => { menu.hidden = !open; btn.setAttribute('aria-expanded', open ? 'true' : 'false'); if (open) paintLook(); };
+  const show = (open) => {
+    menu.hidden = !open;
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (!open) return;
+    // Образцы шрифтов — только буквы подписей, несколько килобайт, и только когда меню открыли.
+    loadCss('https://fonts.googleapis.com/css2?' + FONTS.slice(1).map((f) => 'family=' + f[2].split(':')[0]).join('&')
+      + '&text=' + encodeURIComponent(FONTS.map((f) => f[1]).join('')), 'kv-font-samples');
+    paintLook();
+  };
   btn.addEventListener('click', () => show(menu.hidden));
   document.addEventListener('click', (e) => { if (!menu.hidden && !box.contains(e.target)) show(false); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) { show(false); btn.focus(); } });
@@ -1136,7 +1233,8 @@ function pickPop(anchor, list, lv, onPick) {
     const pop = popAt(anchor, [el('div', { class: 'pop-h' }, 'Показать только'), q, box]);
     pop.classList.add('ps-pop');
     // Кнопка стоит слева — список открывается от её левого края, а не на полку.
-    pop.style.left = Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, anchor.getBoundingClientRect().left)) + 'px';
+    const z = zk(document.body); // экранные px якоря — в раскладочные (zoom у body), как в popAt
+    pop.style.left = Math.max(8, Math.min(window.innerWidth / z - pop.offsetWidth - 8, anchor.getBoundingClientRect().left / z)) + 'px';
     q.focus();
   }, 0);
 }
@@ -1787,10 +1885,13 @@ function popAt(anchor, children) {
   closePop();
   const pop = el('div', { class: 'pop' }, children);
   document.body.append(pop);
-  const r = anchor.getBoundingClientRect();
-  const w = pop.offsetWidth, h = pop.offsetHeight;
-  pop.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + 'px';
-  pop.style.top = (r.bottom + h + 8 > window.innerHeight ? Math.max(8, r.top - h - 4) : r.bottom + 4) + 'px';
+  // Якорь и окно — в экранных px, left/top и размеры меню — в раскладочных: при «Размере текста» (zoom у body) их
+  // надо свести, иначе меню уезжает от кнопки на 8–16 %.
+  const z = zk(document.body), r = anchor.getBoundingClientRect();
+  const w = pop.offsetWidth, h = pop.offsetHeight, W = window.innerWidth / z, H = window.innerHeight / z;
+  const top = r.top / z, bottom = r.bottom / z, right = r.right / z;
+  pop.style.left = Math.max(8, Math.min(W - w - 8, right - w)) + 'px';
+  pop.style.top = (bottom + h + 8 > H ? Math.max(8, top - h - 4) : bottom + 4) + 'px';
   return pop;
 }
 
