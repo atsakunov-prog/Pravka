@@ -12,7 +12,7 @@
 | GET  /health | жив ли |
 | GET  / , /static/… | веб (одна страница) |
 | POST /auth/redeem, /auth/logout | вход по приглашению, выход |
-| GET  /api/me | кто я; look — шапка веба: домен общей куки темы, значок «Ковчега», соседние сервисы (только владельцу) |
+| GET  /api/me | кто я; look — шапка веба: домен общей куки темы, значок «Ковчега», соседние сервисы (только владельцу), меню Ковчега (menu, только владельцу) и токены вида (tokens) из Свода ui.menu / ui.look — нет записи или кривая, заводские (kovcheg_ui.py) |
 | GET  /api/sync?since=N | всё изменившееся после N (телефон, веб) |
 | POST /api/ops | пачка операций с op_id (офлайн-очередь) |
 | GET  /api/view/<имя> | готовый список: now («Сейчас» — отмеченное), today («Сегодня» — срок сегодня), all («Все дела», просроченное сверху; later — старое имя), morning, new, waiting, person, quick, project, week, search; CRM — pipeline, clients, client, deal (с журналом), dossier, ties, money; «Где мы» — where, where_avatar?device= (where.py); встречи — meetings?sphere&q&project_id&person_id&sort&since&until&archived, meeting?id или ref (meetings.py); «Когда» — when?q=фраза&local=1&date=1: срок и напоминание словами в поля дела (when.py; без local непонятое — Claude); дайджест Telegram — digest?days=2&limit или id / ref: последняя сводка и список, только владельцу (digest.py; приём — операция digest.put от службы дайджеста, последняя сводка — ещё и полем digest синка) |
@@ -47,7 +47,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import ask, db, llm, parse, remind, store, tokens, when
+from . import ask, db, kovcheg_ui, llm, parse, remind, store, tokens, when
 from .config import Config
 
 log = logging.getLogger("dela.api")
@@ -118,10 +118,12 @@ def _brand_png(path: str) -> str:
 def _look(cfg: Config) -> tuple[dict, dict]:
     """Шапка веба (общий вид Ковчега, 13.10.2026): владельцу — соседние сервисы из настроек на компе, команде —
     только Дела. Это не защита (у каждого сервиса свой вход), а чтобы Наташе и Алёне не мешали чужие ссылки.
-    `icon_png` — значок Ковчега для телефона: в публичном репозитории его нет, он приходит отсюда."""
+    `icon_png` — значок Ковчега для телефона: в публичном репозитории его нет, он приходит отсюда. У сервиса — ещё
+    `key`, ключ в меню Свода (ui.menu, этап 7): по нему меню находит адрес. Меню и токены вида — в `me` на каждый
+    запрос (kovcheg_ui.effective): правка владельца видна сразу, без перезапуска службы."""
     base = {"domain": _cookie_domain(cfg.public_url), "icon": _brand_icon(cfg.brand_icon),
             "icon_png": _brand_png(cfg.brand_icon), "nav": []}
-    owner = {**base, "nav": [{"name": n, "icon": i, "url": u} for n, i, u in cfg.nav]}
+    owner = {**base, "nav": [{"name": n, "icon": i, "url": u, "key": k} for n, i, u, k in cfg.nav]}
     return owner, base
 
 
@@ -136,6 +138,9 @@ SCOPED = {
     "dengi": {"ops": {"svod.set"}, "views": {"svod"}, "svod_prefix": "money."},
     "eda": {"ops": {"svod.set"}, "views": {"svod"}, "svod_prefix": "food.", "svod_read": ("prompt.food", "models.routes")},
     "sport": {"ops": {"svod.set"}, "views": {"svod"}, "svod_prefix": "sport.", "svod_read": ("food.goals",)},
+    # Сборщик «Дома» (14.10.2026, этап 7): только читает вид и меню Ковчега (ui.*), чтобы sync.py вписал их в
+    # страницы всех служб на компе. Писать ему нечего — правит владелец в вебе Дел.
+    "dom": {"ops": set(), "views": {"svod"}, "svod_prefix": "ui."},
 }
 
 
@@ -216,8 +221,16 @@ def build(cfg: Config) -> Starlette:
         if not who:
             return _err("нужен вход", 401)
         info = await anyio.to_thread.run_sync(_user_info, url, who.user)
+        owner = info.get("role") == "owner"
+        # Вид и меню Ковчега из Свода (этап 7): токены — всем (вид у Ковчега один), меню — владельцу: в нём его
+        # направления Круга жизни с подписями, а команде сервисов всё равно нет.
+        ui = await anyio.to_thread.run_sync(kovcheg_ui.effective, url)
+        look = {**(look_owner if owner else look_team), "tokens": ui["tokens"]}
+        if owner:
+            # pages — страницы-двойники веба Дел для больших кнопок меню (kovcheg_ui.PAGES): нет страницы — нет кнопки.
+            look["menu"], look["pages"] = ui["menu"], list(kovcheg_ui.PAGES)
         return _json({"ok": True, "user": who.user, **info, "kind": who.kind, "claude": bool(cfg.anthropic_key),
-                      "features": store.FEATURES, "look": look_owner if info.get("role") == "owner" else look_team})
+                      "features": store.FEATURES, "look": look})
 
     async def sync(request: Request):
         who = await auth(request)
@@ -250,6 +263,8 @@ def build(cfg: Config) -> Starlette:
         sc = _scope(who)
         if sc and any(not isinstance(o, dict) or o.get("op") not in sc["ops"]
                       or not str(o.get("key") or "").startswith(sc["svod_prefix"]) for o in items):
+            if not sc["ops"]:
+                return _err(f"службе {who.name} — только чтение {sc['svod_prefix']}*", 403)
             return _err(f"службе {who.name} можно только {', '.join(sorted(sc['ops']))} с ключами {sc['svod_prefix']}*", 403)
         out = await anyio.to_thread.run_sync(lambda: store.apply_ops(url, who.user, items, who.via, who.actor))
         bad = [r for r in out["results"] if not r.get("ok")]
@@ -456,6 +471,12 @@ def build(cfg: Config) -> Starlette:
         out = {"ok": True, "settings": info.get("settings") or {}, "claude": bool(cfg.anthropic_key), "routes": routes}
         if info.get("role") == "owner":
             out["cost"] = await anyio.to_thread.run_sync(llm.spent, url)
+            # «Вид и меню» (этап 7): что сейчас действует, с какой версии Свода, и заводское — для «Вернуть заводское».
+            # Сервисы — какие ключи этому вебу знакомы (адреса из настроек компа): редактор не даст поставить чужой.
+            ui = await anyio.to_thread.run_sync(kovcheg_ui.effective, url)
+            out["ui"] = {**ui, "factory": {"menu": kovcheg_ui.FACTORY_MENU, "look": kovcheg_ui.FACTORY_LOOK},
+                         "catalog": [{"key": k, "name": n, "icon": i} for k, (n, i) in kovcheg_ui.CATALOG.items()],
+                         "tokens_all": list(kovcheg_ui.TOKENS)}
         return _json(out)
 
     # Напоминания в Telegram: шлёт бот Ковчега (служба встреч), Дела отдают ему «что пора»

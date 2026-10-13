@@ -332,6 +332,29 @@ with psycopg.connect(dsn, autocommit=True) as c:
         Remove-Item -LiteralPath $tmpTok -Force
         Ok 'дайджест получил токен: дела из переписки поедут в «Новое» со следующим дайджестом'
     }
+    # Меню и вид Ковчега из Свода (14.10.2026, Правка 5.0, этап 7): сборщик «Дома» раз в минуту читает ui.menu и ui.look
+    # своим токеном dom (api.SCOPED: только чтение ui.*) и перепекает страницы служб на компе (sync.py --svod). Секреты —
+    # рядом с данными сборщика; папку видят SYSTEM, администраторы и alex, веб «Дома» (NT SERVICE\ZF-Home) — нет.
+    $homeData = 'C:\ProgramData\ZF-Home'
+    $homeEnv = Join-Path $homeData 'secrets\dela.env'
+    if ((Test-Path $homeData) -and -not (Read-Env $homeEnv)['DELA_TOKEN']) {
+        $sec = Join-Path $homeData 'secrets'
+        New-Item -ItemType Directory -Force -Path $sec | Out-Null
+        $acl = New-Object Security.AccessControl.DirectorySecurity
+        $acl.SetAccessRuleProtection($true, $false)
+        $inh = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+        $none = [Security.AccessControl.PropagationFlags]::None
+        foreach ($who in @(@($Owner, 'Modify'), @('BUILTIN\Administrators', 'FullControl'), @('NT AUTHORITY\SYSTEM', 'FullControl'))) {
+            $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($who[0], $who[1], $inh, $none, 'Allow')))
+        }
+        Set-Acl -LiteralPath $sec -AclObject $acl
+        $tmpTok = Join-Path $env:TEMP 'dela-dom.tok'
+        Py 'токен «Дома»' @('-m', 'pravka_dela', '--env', $DelaEnv, 'token', '--user', 'sasha', '--kind', 'service', '--name', 'dom', '--out', $tmpTok)
+        Set-EnvLine $homeEnv 'DELA_URL' "http://127.0.0.1:$Port"
+        Set-EnvLine $homeEnv 'DELA_TOKEN' ((Get-Content -LiteralPath $tmpTok -Raw).Trim())
+        Remove-Item -LiteralPath $tmpTok -Force
+        Ok 'сборщик «Дома» получил токен: меню и вид Ковчега из Свода поедут на страницы служб'
+    }
     # Обработчик встреч перезапускается мягко: дорабатывает текущее задание (как кнопка в вебе).
     $restart = @'
 import json, sqlite3, time, datetime
@@ -347,7 +370,7 @@ print("обработчик встреч перезапустится, когд�
     try { Py 'перезапуск встреч' @($tmp) } finally { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue }
     if (Get-Service -Name 'ZF-Home-Collector' -ErrorAction SilentlyContinue) {
         & $Nssm restart ZF-Home-Collector | Out-Null
-        Ok 'сборщик «Дома» перезапущен: плашка «Дела»'
+        Ok 'сборщик «Дома» перезапущен: плашка «Дела», меню Ковчега из Свода'
     }
 
     # Ссылка входа — на основной адрес веба: кука живёт на том адресе, где вошёл

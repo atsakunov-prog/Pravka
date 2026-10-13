@@ -288,11 +288,12 @@ def test_look_nav_only_for_owner_and_from_local_settings(dela, tmp_path):
     (tmp_path / "brand.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>', encoding="utf-8")
     (tmp_path / "brand.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 16)  # телефону — тот же значок картинкой
     cfg = load(str(env))
-    assert cfg.nav == (("Дом", "home", "https://home.example.test/"), ("Дела", "dela", "/"))
+    assert cfg.nav == (("Дом", "home", "https://home.example.test/", "dom"), ("Дела", "dela", "/", "dela"))
     client = TestClient(api.build(cfg))
     owner = {"Authorization": "Bearer " + tokens.issue(dela, "sasha", "device", "телефон-шапка")}
     look = client.get("/api/me", headers=owner).json()["look"]
     assert [x["url"] for x in look["nav"]] == ["https://home.example.test/", "/"]
+    assert [x["key"] for x in look["nav"]] == ["dom", "dela"]   # ключ меню Свода — по значку (этап 7)
     assert look["domain"] == "example.test" and look["icon"].startswith("data:image/svg+xml;base64,")
     assert look["icon_png"].startswith("data:image/png;base64,")
     team = {"Authorization": "Bearer " + tokens.issue(dela, "natasha", "device", "телефон-наташи")}
@@ -301,7 +302,8 @@ def test_look_nav_only_for_owner_and_from_local_settings(dela, tmp_path):
     # Без настройки — только Дела; адрес без родителя (локальная копия) — кука темы на своём адресе.
     plain = TestClient(api.build(Config(db_url=dela, public_url="http://127.0.0.1:8195")))
     look = plain.get("/api/me", headers=owner).json()["look"]
-    assert look == {"domain": "", "icon": "", "icon_png": "", "nav": []}
+    assert {k: look[k] for k in ("domain", "icon", "icon_png", "nav")} == {"domain": "", "icon": "", "icon_png": "", "nav": []}
+    assert look["tokens"]["light"]["accent"] == "#2747c9" and look["menu"]["directions"][0]["name"] == "Здоровье"
     assert plain.get("/static/literata.woff2").status_code == 404 and plain.get("/static/golos.woff2").status_code == 200
     # Шрифт в шестерёнке (13.10.2026): Google Fonts пускаем только в стили и шрифты, скрипты — по-прежнему свои.
     csp = plain.get("/").headers["content-security-policy"]

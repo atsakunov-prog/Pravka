@@ -20,20 +20,26 @@ DEFAULT_ENV_FILE = r"C:\ProgramData\ZF-Dela\secrets\dela.env"
 
 _NAV_ICON = re.compile(r"^[a-z][a-zA-Z0-9]{0,23}$")
 _NAV_URL = re.compile(r"^(/|https?://[^\s\"'<>]+)$")
+_NAV_KEY = re.compile(r"^[a-z][a-z0-9_-]{0,23}$")
 
 
-def parse_nav(text: str) -> tuple[tuple[str, str, str], ...]:
+def parse_nav(text: str) -> tuple[tuple[str, str, str, str], ...]:
     """Сервисы в шапке веба (13.10.2026, общий вид Ковчега): «Название|значок|адрес» через «;». Адреса — только в
     файле настроек на компе: репозиторий публичный. Адрес «/» — сами Дела (так задаётся их место в ряду).
+    Четвёртое поле (с 14.10.2026, этап 7) — ключ сервиса в меню Свода (ui.menu): без него ключ узнаётся по значку
+    (kovcheg_ui.KEY_BY_ICON — home → dom, film → kino…), незнакомый значок — без ключа, и сервис встаёт в «Ещё».
     Кривая запись молча пропускается: шапка — не повод не подняться службе."""
+    from .kovcheg_ui import KEY_BY_ICON
+
     out = []
     for part in (text or "").split(";"):
         bits = [b.strip() for b in part.split("|")]
-        if len(bits) != 3 or not bits[0] or len(bits[0]) > 40:
+        if len(bits) not in (3, 4) or not bits[0] or len(bits[0]) > 40:
             continue
-        name, icon, url = bits
-        if _NAV_ICON.match(icon) and _NAV_URL.match(url):
-            out.append((name, icon, url))
+        name, icon, url = bits[:3]
+        key = bits[3] if len(bits) == 4 else KEY_BY_ICON.get(icon, "")
+        if _NAV_ICON.match(icon) and _NAV_URL.match(url) and (not key or _NAV_KEY.match(key)):
+            out.append((name, icon, url, key))
     return tuple(out)
 
 
@@ -53,7 +59,7 @@ class Config:
     claude_proxy: str = "http://127.0.0.1:11809"
     # Шапка веба в общем виде Ковчега: соседние сервисы (видит только владелец) и значок «Ковчега» — файл на
     # компе (картинка семейная, в публичный репозиторий её не кладём). Пусто — в шапке только «Дела».
-    nav: tuple[tuple[str, str, str], ...] = ()
+    nav: tuple[tuple[str, str, str, str], ...] = ()
     brand_icon: str = ""
 
     @property

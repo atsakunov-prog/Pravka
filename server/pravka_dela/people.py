@@ -17,6 +17,8 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from . import kovcheg_ui
+
 # Уменьшительное → полные имена. Только то, что реально встречается в речи и контактах;
 # неоднозначные (Саша, Женя, Валя) — к обоим полным.
 DIMINUTIVE: dict[str, tuple[str, ...]] = {
@@ -413,6 +415,17 @@ def op_svod_set(conn, user, op, error):
         raise error("свод: body — строка")
     author = str(op.get("author") or "").strip() or "app"
     owner = op.get("owner") or user
+    if key.startswith("ui."):
+        # Вид и меню Ковчега (этап 7, kovcheg_ui.py): одни на всех, правит владелец; проверка — до записи, иначе кривое
+        # меню уронило бы шапку на всех страницах и в телефоне разом. Команде база запись не запретила бы (свой Свод),
+        # но её никто не читает — лучше сказать прямо, чем молча принять.
+        role = conn.execute("SELECT role FROM crm.users WHERE id = %s", (owner,)).fetchone()
+        if not role or role["role"] != "owner":
+            raise error("свод: вид и меню Ковчега (ui.*) правит владелец")
+        try:
+            value = kovcheg_ui.check(key, body, value)
+        except kovcheg_ui.UiError as e:
+            raise error(f"свод: {e}") from None
     cur = conn.execute("SELECT rev FROM crm.svod WHERE owner_id = %s AND key = %s", (owner, key)).fetchone()
     base = op.get("base_rev")
     if base is not None and cur is not None and int(base) != cur["rev"]:
