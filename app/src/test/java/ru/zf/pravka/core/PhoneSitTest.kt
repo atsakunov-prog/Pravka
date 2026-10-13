@@ -76,16 +76,14 @@ class PhoneSitTest {
         val spans = listOf(PhoneSit.Span(claude, at(8, 10), at(8, 29)))
         val st = PhoneSit.stretches(spans, at(8, 30))
         assertFalse(st.single().finished)
-        assertTrue(PhoneSit.due(st, 0L, minMs).isEmpty())
         // Три минуты без телефона — кончилось.
         assertTrue(PhoneSit.stretches(spans, at(8, 32)).single().finished)
     }
 
     @Test
-    fun `быстро ответил — не режет, но отметку сдвигает`() {
+    fun `быстро ответил — до порога не дотянуло`() {
         val st = PhoneSit.stretches(listOf(PhoneSit.Span(tg, at(8, 10), at(8, 13))), at(9, 0))
-        val due = PhoneSit.due(st, 0L, minMs)
-        assertFalse(due.single().long)
+        assertTrue(st.single().useMs < minMs)
     }
 
     @Test
@@ -95,17 +93,18 @@ class PhoneSitTest {
             PhoneSit.Span(tg, at(8, 10), at(8, 13)),
             PhoneSit.Span(tg, at(8, 14, 30), at(8, 17)),
         )
-        val due = PhoneSit.due(PhoneSit.stretches(spans, at(9, 0)), 0L, minMs)
-        assertFalse(due.single().long)
+        val st = PhoneSit.stretches(spans, at(9, 0)).single()
+        assertEquals(7 * min, st.ms)
+        assertTrue(st.useMs < minMs)
     }
 
     @Test
-    fun `разобранное не повторяется, начало после отметки обрезается`() {
-        val st = PhoneSit.stretches(listOf(PhoneSit.Span(claude, at(8, 0), at(8, 30))), at(9, 0))
-        assertTrue(PhoneSit.due(st, at(8, 30), minMs).isEmpty())
-        val cut = PhoneSit.due(st, at(8, 20), minMs).single()
-        assertEquals(at(8, 20), cut.stretch.start)
-        assertTrue(cut.long)
+    fun `обрезка по отметке — края по оставшимся приложениям`() {
+        val st = PhoneSit.stretches(listOf(PhoneSit.Span(claude, at(8, 0), at(8, 30))), at(9, 0)).single()
+        val cut = st.clip(at(8, 20), st.end)
+        assertEquals(at(8, 20), cut.start)
+        assertEquals(10 * min, cut.useMs)
+        assertTrue(st.clip(at(8, 30), at(9, 0)).spans.isEmpty())
     }
 
     @Test
@@ -115,7 +114,6 @@ class PhoneSitTest {
         assertTrue(st[0].finished)
         assertEquals(at(10, 0), st[0].end)
         assertFalse(st[1].finished)
-        assertEquals(1, PhoneSit.due(st, 0L, minMs).size)
     }
 
     private fun seen(

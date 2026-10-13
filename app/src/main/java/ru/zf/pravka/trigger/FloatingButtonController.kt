@@ -497,6 +497,17 @@ class FloatingButtonController(
 
     fun hideTicker() = pill.hide()
 
+    /**
+     * Вопрос «да или нет» строкой пилюли «П» (13.10.2026): рубильник защиты от
+     * флуда спрашивает здесь — «П» есть при любом профиле. Пилюля пишет или
+     * экран на замке — false, вопрос остаётся пушем.
+     */
+    fun showYesNo(text: String, onYes: () -> Unit, onNo: () -> Unit): Boolean {
+        if (runCatching { service.keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)) return false
+        if (!pill.free || pill.isEditing) return false
+        return pill.askYesNo(text, onYes, onNo)
+    }
+
     /** Тейк кончился, запрос уходит: пилюля ждёт на месте с заливкой, итог встанет в неё же. */
     fun holdTicker() = pill.hold()
 

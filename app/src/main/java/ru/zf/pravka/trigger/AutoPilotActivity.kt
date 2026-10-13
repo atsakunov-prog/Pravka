@@ -24,6 +24,16 @@ class AutoPilotActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Защита от флуда — дело приложения, а не службы: отвечает и без неё.
+        when (val what = intent?.getStringExtra(EXTRA_WHAT).orEmpty()) {
+            ru.zf.pravka.data.FloodBreaker.WHAT_STOP, ru.zf.pravka.data.FloodBreaker.WHAT_OK -> {
+                val stop = what == ru.zf.pravka.data.FloodBreaker.WHAT_STOP
+                (application as ru.zf.pravka.PravkaApp).flood.answer(stop)
+                Feedback.toast(this, if (stop) "⛔ Запросы к Claude стоят — включить в Настройках → Модели" else "✓ Запросы к Claude снова идут")
+                finish()
+                return
+            }
+        }
         val service = PravkaAccessibilityService.instance
         if (service == null) {
             Feedback.toast(this, getString(R.string.toast_no_service))

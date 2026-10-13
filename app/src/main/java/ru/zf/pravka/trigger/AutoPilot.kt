@@ -1303,14 +1303,18 @@ class AutoPilot(
      * телефоне; кнопка одна — «Убрать», дело сшивается обратно. Не та
      * категория — правится тапом в ленте, как любая запись.
      */
-    override fun phoneInRibbon(entryId: Long, title: String, category: String, start: Long, end: Long, cut: String, apps: String) {
-        val min = ((end - start + 30_000L) / 60_000L).coerceAtLeast(1L)
-        val text = "${timeHm(start)}–${timeHm(end)} [$category]." +
+    override fun phoneInRibbon(entryId: Long, title: String, category: String, start: Long, end: Long, cut: String, apps: String, prevId: Long) {
+        val going = end == 0L
+        val min = (((if (going) System.currentTimeMillis() else end) - start + 30_000L) / 60_000L).coerceAtLeast(1L)
+        val text = (if (going) "С ${timeHm(start)}, идёт [$category] — на вопрос не ответил, молчание — «да»." else "${timeHm(start)}–${timeHm(end)} [$category].") +
             (if (apps.isNotBlank()) " В телефоне: $apps." else "") +
-            (if (cut.isNotBlank()) " «$cut» разрезано и идёт дальше." else "")
+            (if (cut.isNotBlank()) (if (going) " «$cut» закрыто, вернётся, когда отложишь телефон." else " «$cut» разрезано и идёт дальше.") else "")
         lastFire = "телефон ${timeHm(start)} [$category]"
         cancelNotif(phoneNotifId)
-        phoneNotifId = notify("📱 $title, $min мин", text, listOf(action("Убрать", WHAT_PHONE_DROP, start, "", id = entryId)), quiet = true)
+        phoneNotifId = notify(
+            "📱 $title, $min мин", text,
+            listOf(action("Убрать", WHAT_PHONE_DROP, start, "", id = entryId, prevId = prevId)), quiet = true,
+        )
     }
 
     override fun leaveAnswered(by: String) {
@@ -2325,7 +2329,10 @@ class AutoPilot(
                 }
                 WHAT_PHONE_DROP -> {
                     val sit = app.zasechkaStore.entryById(id)
-                    val kept = app.zasechkaStore.dissolveInterruption(id)
+                    // Идёт — убрать и открыть то, что шло до него; закрыто — сшить
+                    // дело вокруг него, как у звонка.
+                    val kept = if (sit?.open == true) app.zasechkaStore.revertAutoStart(id, prevId)
+                    else app.zasechkaStore.dissolveInterruption(id)
                     Feedback.toast(
                         app,
                         if (sit == null) "Этой записи в ленте уже нет"

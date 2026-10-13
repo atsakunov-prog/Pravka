@@ -575,9 +575,11 @@ interface AutoWitness {
     fun callInRibbon(entryId: Long, title: String, category: String, client: String, start: Long, end: Long, cut: String, sure: Boolean, candidates: List<CallRules.Candidate> = emptyList()) {}
 
     /**
-     * Долгое сидение в телефоне легло в ленту врезкой (13.10.2026, `PhoneSit`):
+     * Долгое сидение в телефоне легло в ленту (13.10.2026, `PhoneSit`):
      * тихая копия в шторку с «Убрать» — одна на всех, новая заменяет прежнюю.
      * [apps] — «Claude 12 мин · Telegram 3 мин», [cut] — какое дело разрезано.
+     * [end] = 0 — дело идёт (поставлено молчанием на вопрос), и «Убрать»
+     * возвращает [prevId] — то, что шло до него.
      */
-    fun phoneInRibbon(entryId: Long, title: String, category: String, start: Long, end: Long, cut: String, apps: String) {}
+    fun phoneInRibbon(entryId: Long, title: String, category: String, start: Long, end: Long, cut: String, apps: String, prevId: Long = 0L) {}
 }

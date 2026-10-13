@@ -130,7 +130,12 @@ class ZasechkaStore(private val context: Context) {
          * после. Не авто-факт или открытый — null: убирать нечего.
          */
         internal fun dissolved(entries: List<Entry>, id: Long): Pair<List<Entry>, Entry?>? {
-            val call = entries.firstOrNull { it.id == id && it.source == "auto" && !it.open } ?: return null
+            // Сидение в телефоне (13.10.2026) — тоже догадка робота, хоть и с
+            // владельческим источником после «да»: узнаётся по комментарию.
+            val call = entries.firstOrNull {
+                it.id == id && !it.open &&
+                    (it.source == "auto" || it.comment.startsWith(ru.zf.pravka.core.PhoneSit.COMMENT_PREFIX))
+            } ?: return null
             fun near(a: Long, b: Long) = kotlin.math.abs(a - b) < 60_000L
             val before = entries.firstOrNull { !it.open && it.id != id && it.source != GAP_SOURCE && near(it.end, call.start) }
             val after = entries.firstOrNull { it.id != id && it.source != GAP_SOURCE && near(it.start, call.end) }

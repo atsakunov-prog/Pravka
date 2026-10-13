@@ -297,8 +297,39 @@ class PravkaApp : Application() {
             // API returns the whole body only after generation completes, and
             // real long dictations (5000+ chars) already hit 25s.
             .readTimeout(90, TimeUnit.SECONDS)
+            // Защита от флуда (13.10.2026): каждый POST на Anthropic проходит здесь.
+            .addInterceptor(flood.interceptor())
             .build()
     }
+
+    /**
+     * Рубильник защиты от флуда (`data/FloodBreaker.kt`): сработал — запросы к
+     * Claude стоят, вопрос плашкой «П» (или «З») и громким пушем.
+     */
+    val flood by lazy {
+        ru.zf.pravka.data.FloodBreaker(
+            this, eventLog,
+            routeName = { key -> floodRouteName(key) },
+            ask = { text, stop, ok ->
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    val s = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                    runCatching {
+                        s?.floatingButton?.showYesNo(text, stop, ok) == true ||
+                            s?.zButton?.showYesNo(text, "", stop, ok) == true
+                    }
+                }
+            },
+        )
+    }
+
+    private fun floodRouteName(key: String): String =
+        ru.zf.pravka.data.ModelRoute.entries.firstOrNull { it.key == key }?.title ?: when (key) {
+            "compare" -> "Сравнение моделей"
+            "eval" -> "Эвал золотого набора"
+            "batch" -> "Батчи разборов"
+            "" -> "без дороги"
+            else -> key
+        }
 
     // UI-independent scope: learning accept/reject must survive tab switches
     // and the settings screen closing (rememberCoroutineScope dies with them -
@@ -901,6 +932,9 @@ class PravkaApp : Application() {
             on = { zPhoneSitFlow.first() && !zQuietFlow.first() },
             witness = { ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.autoWitness() },
             people = { phoneSitPeople() },
+            ask = { question, detail, yes, no ->
+                ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.zButton?.showYesNo(question, detail, yes, no) == true
+            },
         )
     }
 

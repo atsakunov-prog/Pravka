@@ -768,12 +768,14 @@ class ClaudeProvider(
         fun attempt(): ApiReply {
             runCatching { workStart?.invoke(work) }
             attemptAt = System.currentTimeMillis()
-            return request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
+            return request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation, routeKey)
         }
         val raw = try {
             try {
                 attempt()
             } catch (e: IOException) {
+                // Рубильник защиты от флуда — не сбой сети: повтор упёрся бы в него же.
+                if (e is ru.zf.pravka.core.FloodGuard.Blocked) throw e
                 Thread.sleep(1000)
                 attempt()
             } catch (e: ApiException) {
@@ -830,6 +832,8 @@ class ClaudeProvider(
          * красной надписи вместо него.
          */
         tolerateTruncation: Boolean = false,
+        /** Дорога — тегом запроса для рубильника защиты от флуда (`data/FloodBreaker.kt`). */
+        routeKey: String = "",
     ): ApiReply {
         // Rough token estimate for Russian text (~2.5 chars/token) + 30% headroom.
         // Counts BOTH slots: assist/learn tasks carry all their content in
@@ -959,6 +963,8 @@ class ClaudeProvider(
             .header("x-api-key", apiKey)
             .header("anthropic-version", "2023-06-01")
             .post(body.toString().toRequestBody("application/json".toMediaType()))
+            // Дорога — тегом для рубильника защиты от флуда; наружу тег не уходит.
+            .tag(ru.zf.pravka.core.FloodGuard.Route::class.java, ru.zf.pravka.core.FloodGuard.Route(routeKey))
             .build()
 
         // Опус думает адаптивно, и на разборе «Итогов» пауза между кусками

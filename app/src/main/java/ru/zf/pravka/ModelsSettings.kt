@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -39,6 +40,7 @@ import ru.zf.pravka.data.PaceStore
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.ui.ChipRow
 import ru.zf.pravka.ui.Glyphs
+import ru.zf.pravka.ui.PaperButton
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperChip
 import ru.zf.pravka.ui.PaperHint
@@ -69,6 +71,7 @@ internal fun ModelsSettings(app: PravkaApp) {
     // Калибровка кнопкой меняет прямые — всё, что показывает секунды, перечитывается.
     var round by remember { mutableStateOf(0) }
 
+    FloodCard(app)
     SecondsCard(app, round) { round++ }
 
     val byMode = ModelRoute.entries.groupBy { it.mode }
@@ -86,6 +89,33 @@ internal fun ModelsSettings(app: PravkaApp) {
         }
     }
 }
+
+/**
+ * Защита от флуда (13.10.2026, `data/FloodBreaker.kt`): сработала и стоит —
+ * почему и кнопка включить. Запросы идут — карточки нет: молчит, пока цела.
+ */
+@Composable
+private fun FloodCard(app: PravkaApp) {
+    LaunchedEffect(Unit) { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.flood.load() } } }
+    val why by app.flood.stopped.collectAsState()
+    val reason = why ?: return
+    PaperCard(label = "защита от флуда", info = FLOOD_INFO) {
+        Text(
+            "Запросы к Claude остановлены: $reason.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
+        )
+        PaperButton("Включить запросы", primary = true, onClick = { app.flood.answer(stop = false) })
+    }
+}
+
+private const val FLOOD_INFO =
+    "Владелец, 13.10.2026: «если он сломался и начал слать кучу запросов, то приложение дёргает " +
+        "рубильник и говорит, что защита от флуда сработала». Каждый запрос к Claude проходит один " +
+        "счётчик: дорога — 30 за десять минут (телефон в ленте — 12, сравнение и эвал — 100), всё вместе — " +
+        "80 за десять минут и 250 за час. Твой самый плотный кусок за два месяца — 17 диктовок за десять " +
+        "минут. Сработал — запросы стоят, вопрос плашкой и пушем: галочка — стоять, крестик — всё ок, " +
+        "и час пороги втрое."
 
 // ---- Секунды на кнопке (владелец, 26.09.2026: «выведи эту статистику в
 // настройки/модели? И примеры. И не забудь про остальное: засечка, тело,

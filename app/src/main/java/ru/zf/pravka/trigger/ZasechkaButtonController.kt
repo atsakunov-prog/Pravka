@@ -752,6 +752,25 @@ class ZasechkaButtonController(
         return shown
     }
 
+    /**
+     * Вопрос «да или нет» строкой пилюли (13.10.2026, телефон в ленте:
+     * «Кажется, это «Claude: Правка»?»). Как [showAsk], но справа галочка и
+     * крестик. Не на замке и не поверх слов — тогда false, и спрашивающий
+     * решает сам (у телефона в ленте молчание — «да»).
+     */
+    fun showYesNo(question: String, detail: String, onYes: () -> Unit, onNo: () -> Unit): Boolean {
+        hideMenu()
+        if (runCatching { service.keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)) return false
+        if (pill.showing && pill.isEditing) return false
+        val shown = pill.askYesNo(
+            text = if (detail.isBlank()) question else "$question\n$detail",
+            onYes = { askShown = false; onYes() },
+            onNo = { askShown = false; onNo() },
+        )
+        askShown = shown
+        return shown
+    }
+
     // ---- Серая «отмена» у идущей записи: как на «П» (владелец, 18.09.2026) ----
     // Общая на четыре кнопки (`CancelBubble.kt`): под ближним концом бегущей
     // строки, а не под кнопкой — под кнопкой стоит следующая кнопка стопки;

@@ -48,9 +48,6 @@ object PhoneSit {
     /** Дальше назад не смотрим: отметка отстала сильнее — служба спала, а гадать о давнем незачем. */
     const val LOOKBACK_MS = 6 * 3600_000L
 
-    /** Разбор не прошёл (нет сети) — пробуем снова, пока сидению меньше трёх часов. */
-    const val GIVE_UP_MS = 3 * 3600_000L
-
     /** Подсмотр раз в минуту, пока экран включён и открыт. */
     const val PEEK_EVERY_MS = 60_000L
 
@@ -184,26 +181,6 @@ object PhoneSit {
                 rest = rest.clip(rest.start + CHUNK_MS, rest.end)
             }
             if (rest.spans.isNotEmpty()) out += rest
-        }
-        return out
-    }
-
-    /** Сидение к разбору: [long] — дотянуло до порога, иначе только сдвигает отметку. */
-    data class Due(val stretch: Stretch, val long: Boolean)
-
-    /**
-     * Что разбирать сейчас: кончившиеся сидения после отметки [done] (уже
-     * разобранное начало обрезается). Идущее — ждёт конца: владелец, может,
-     * сейчас его и уберёт.
-     */
-    fun due(stretches: List<Stretch>, done: Long, minMs: Long): List<Due> {
-        val out = ArrayList<Due>()
-        for (s in stretches.sortedBy { it.start }) {
-            if (!s.finished) break
-            if (s.end <= done) continue
-            val c = if (s.start < done) s.clip(done, s.end) else s
-            if (c.spans.isEmpty()) continue
-            out += Due(c, c.useMs >= minMs)
         }
         return out
     }

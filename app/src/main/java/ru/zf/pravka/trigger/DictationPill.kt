@@ -453,6 +453,8 @@ class DictationPill(
         val chip: ResultAction? = null,
         val say: (() -> Unit)? = null,
         val yes: (() -> Unit)? = null,
+        /** Вопрос «да или нет»: вместо волны — крестик, «нет» (13.10.2026). */
+        val no: (() -> Unit)? = null,
     ) {
         val action: ResultAction? get() = if (ask) chip else actions.singleOrNull()
         val expandable: Boolean
@@ -930,6 +932,22 @@ class DictationPill(
     )
 
     /**
+     * Вопрос «да или нет» строкой пилюли (13.10.2026): та же строка, что у
+     * «Всё ещё …?», только справа галочка ([onYes]) и крестик ([onNo]) вместо
+     * волны. «Кажется, это «Claude: Правка»?» телефона в ленте, рубильник
+     * защиты от флуда. Что значит молчание, решает спрашивающий: пилюля
+     * уходит сама через [holdMs] и никого не зовёт.
+     */
+    fun askYesNo(
+        text: String,
+        onYes: () -> Unit,
+        onNo: () -> Unit,
+        holdMs: Long = PillLook.RESULT_OPEN_HOLD_MS,
+    ): Boolean = place(
+        ResultRequest(text, true, emptyList(), "", emptyList(), null, holdMs, ask = true, yes = onYes, no = onNo)
+    )
+
+    /**
      * Вопрос автопилота строкой пилюли (28.09.2026; владелец: «давай всё
      * переведём в эти плашки сверху, они мне очень нравятся»): [text] — заголовок
      * и текст пуша двумя строками, справа волна — «Сказать» ([say]), рядом
@@ -1057,6 +1075,7 @@ class DictationPill(
         if (req.ask) {
             val yes = req.yes
             val say = req.say
+            val no = req.no
             ao?.let {
                 it.setColor(PillLook.orb(colour))
                 it.mark = VoiceOrb.Mark.CHECK
@@ -1067,14 +1086,14 @@ class DictationPill(
                 }
             }
             o?.let {
-                it.visibility = if (say != null) View.VISIBLE else View.GONE
-                it.mark = VoiceOrb.Mark.WAVE
+                it.visibility = if (say != null || no != null) View.VISIBLE else View.GONE
+                it.mark = if (no != null) VoiceOrb.Mark.CROSS else VoiceOrb.Mark.WAVE
                 it.setLevel(0f)
                 it.isClickable = true
-                it.contentDescription = "Сказать"
+                it.contentDescription = if (no != null) "Нет" else "Сказать"
                 it.setOnClickListener {
                     hide()
-                    say?.invoke()
+                    if (no != null) no() else say?.invoke()
                 }
             }
         } else {
@@ -1916,7 +1935,7 @@ class DictationPill(
          * ввода, как у Gemini при наборе), галочка вниз «раскрыть» (итог со
          * списком), галочка «записано» и «!» — итог-ошибка.
          */
-        enum class Mark { WAVE, ARROW, CHEVRON, CHECK, ALERT }
+        enum class Mark { WAVE, ARROW, CHEVRON, CHECK, ALERT, CROSS }
 
         var mark = Mark.WAVE
             set(value) {
@@ -2015,6 +2034,13 @@ class DictationPill(
                     val h = r * 0.4f
                     canvas.drawLine(cx, cy - h, cx, cy + h * 0.25f, bar)
                     canvas.drawPoint(cx, cy + h * 0.85f, bar)
+                    return
+                }
+                Mark.CROSS -> {
+                    // «Нет» рядом с галочкой «да» — тем же штрихом.
+                    val w = r * 0.3f
+                    canvas.drawLine(cx - w, cy - w, cx + w, cy + w, bar)
+                    canvas.drawLine(cx - w, cy + w, cx + w, cy - w, bar)
                     return
                 }
             }

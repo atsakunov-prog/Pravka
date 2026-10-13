@@ -11,10 +11,14 @@ import kotlinx.coroutines.launch
 import ru.zf.pravka.core.PhoneSit
 
 /**
- * Взгляд на экран для «Телефона в ленте» (13.10.2026, `core/PhoneSit.kt`):
- * раз в минуту — какое приложение впереди и что в нём видно, словами. Снимок
- * уходит в память движка (`PhoneSitEngine.addSnap`), на диск — никогда; Сонет
- * видит его, только когда разбирает сидение от порога.
+ * Минута «Телефона в ленте» (13.10.2026, `core/PhoneSit.kt`, `core/PhoneLive.kt`):
+ * раз в минуту, пока экран открыт, — пульс автомата, а когда автомат проверяет
+ * кусок (с седьмой минуты сидения, три снимка до вопроса), — ещё и взгляд на
+ * экран: какое приложение впереди и что в нём видно, словами. В обычном
+ * взгляде на телефон, после «да» и после «нет» — ни одного снимка (владелец:
+ * «это оберегает от того, что он будет кучу скринов отправлять одного и того
+ * же»). Снимок уходит в память движка (`PhoneSitEngine.addSnap`), на диск —
+ * никогда; Сонет видит его, только когда разбирает кусок.
  *
  * Это исключение из правила «за чужими окнами не подглядывать» (складывание
  * Fold: четыре раза чернота от синхронных обращений службы в чужие процессы,
@@ -42,8 +46,11 @@ internal class ScreenPeek(private val service: PravkaAccessibilityService) {
         }
     }
 
-    /** Тумблер «Телефон в ленте» и «Читать текст экрана» включены, Засечка не молчит. */
+    /** Тумблер «Телефон в ленте» включён и Засечка не молчит — минуты идут. */
     @Volatile private var enabled = false
+
+    /** «Читать текст экрана» — без него минуты идут, но в чужие окна не смотрим. */
+    @Volatile private var text = true
 
     /** Первый удачный взгляд в эту жизнь службы — строкой в журнал, чтобы было видно, что смотрит. */
     @Volatile private var told = false
@@ -51,9 +58,12 @@ internal class ScreenPeek(private val service: PravkaAccessibilityService) {
     fun start() {
         val app = service.app
         service.scope.launch {
-            combine(app.zPhoneSitFlow, app.settings.zPhoneTextFlow, app.zQuietFlow) { on, text, quiet ->
-                on && text && !quiet
-            }.collect { enabled = it }
+            combine(app.zPhoneSitFlow, app.settings.zPhoneTextFlow, app.zQuietFlow) { on, read, quiet ->
+                (on && !quiet) to read
+            }.collect { (on, read) ->
+                enabled = on
+                text = read
+            }
         }
         exec.scheduleWithFixedDelay(
             { runCatching { look() } },
@@ -69,24 +79,32 @@ internal class ScreenPeek(private val service: PravkaAccessibilityService) {
         if (!enabled) return
         val app = service.app
         if (!app.profileStore.has(ru.zf.pravka.data.Profile.Mode.ZASECHKA)) return
-        if (service.folding || SystemClock.uptimeMillis() - service.foldAtUptime < FOLD_QUIET_MS) return
         val pm = service.getSystemService(PowerManager::class.java)
         if (pm != null && !pm.isInteractive) return
         if (runCatching { service.keyguardManager?.isKeyguardLocked == true }.getOrDefault(true)) return
+        val engine = app.phoneSit
+        // Снимок — только когда автомат проверяет кусок; минута идёт в любом случае.
+        val folded = service.folding || SystemClock.uptimeMillis() - service.foldAtUptime < FOLD_QUIET_MS
+        if (engine.wantsSnap && text && !folded) runCatching { snap() }
+        engine.minute()
+    }
+
+    private fun snap() {
+        val app = service.app
         val started = SystemClock.uptimeMillis()
         val root = service.rootInActiveWindow ?: return
         val pkg = root.packageName?.toString().orEmpty()
         if (pkg.isBlank() || pkg == service.packageName || PhoneSit.furniture(pkg)) return
-        val text = if (PhoneSit.privateText(pkg)) "" else PhoneSit.clean(collect(root, started))
+        val seen = if (PhoneSit.privateText(pkg)) "" else PhoneSit.clean(collect(root, started))
         val took = SystemClock.uptimeMillis() - started
-        app.phoneSit.addSnap(PhoneSit.Snap(System.currentTimeMillis(), pkg, text))
+        app.phoneSit.addSnap(PhoneSit.Snap(System.currentTimeMillis(), pkg, seen))
         if (took > SLOW_MS) {
             app.eventLog.add("телефон в ленте: взгляд в «${app.phoneSit.label(pkg)}» занял $took мс")
         } else if (!told) {
             told = true
             app.eventLog.add(
-                "телефон в ленте: смотрю на экран раз в минуту — «${app.phoneSit.label(pkg)}», " +
-                    "${text.length} знаков за $took мс"
+                "телефон в ленте: первый взгляд на экран — «${app.phoneSit.label(pkg)}», " +
+                    "${seen.length} знаков за $took мс"
             )
         }
     }
