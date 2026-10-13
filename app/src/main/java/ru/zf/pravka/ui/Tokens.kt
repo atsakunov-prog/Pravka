@@ -12,9 +12,12 @@ import androidx.compose.ui.graphics.Color
 // для состояний нет. Вторичный текст тёплый, не серый: серое на тёплой ночи
 // читалось грязью (владелец, 20.09: «как будто немного грязные»).
 // Исключение одно — категории ленты: они в светофоре цены часа (10.10.2026, ниже).
+//
+// Правка 5.0 (13.10.2026): у тех же имён теперь два вида — 4.0 ([Ink4], [Modes4])
+// и v2 Ковчега (`ui/Look.kt`, токены [Kv]); какой из них, решает `Look`.
 
-/** Основа — DESIGN §4.1. */
-object Ink {
+/** Основа 4.0 — DESIGN §4.1. Числа «Вида 4.0»; v2 берёт свои из [Kv]. */
+private object Ink4 {
     val Bg = Color(0xFF100F0D)
     val Text = Color(0xFFF0EADF)
     val TextStrong = Color(0xFFFFF5E8)
@@ -41,6 +44,37 @@ object Ink {
     val WeatherIcon = Color(0xFFD9CBB6)
     /** Подсказка в строке «сказать» на «Сегодня». */
     val Placeholder = Color(0xFFBDAE98)
+}
+
+/**
+ * Основные цвета экрана. Имена — 4.0, значения — текущего вида: в 4.0 числа
+ * [Ink4], в v2 — токены [Kv] (`Text` → `--text`, `TextMeta` → `--faint`, `Now`
+ * → акцент, `Cream` — нейтральная «бумага» 4.0 — → `--text`). Геттеры, а не
+ * значения: вид и тему переключают на ходу (`ui/Look.kt`).
+ */
+object Ink {
+    val Bg: Color get() = if (Look.v4) Ink4.Bg else Kv.bg
+    val Text: Color get() = if (Look.v4) Ink4.Text else Kv.text
+    val TextStrong: Color get() = if (Look.v4) Ink4.TextStrong else Kv.text
+    val TextSecondary: Color get() = if (Look.v4) Ink4.TextSecondary else Kv.muted
+    val TextMeta: Color get() = if (Look.v4) Ink4.TextMeta else Kv.faint
+    val TextNote: Color get() = if (Look.v4) Ink4.TextNote else Kv.faint
+    val TextDisabled: Color get() = if (Look.v4) Ink4.TextDisabled else Kv.check
+    val Cream: Color get() = if (Look.v4) Ink4.Cream else Kv.text
+    val PlanText: Color get() = if (Look.v4) Ink4.PlanText else Kv.muted
+    val Now: Color get() = if (Look.v4) Ink4.Now else Kv.accent
+    val NowInk: Color get() = if (Look.v4) Ink4.NowInk else Kv.accentInk
+    val TimePast: Color get() = if (Look.v4) Ink4.TimePast else Kv.muted
+    val Caption: Color get() = if (Look.v4) Ink4.Caption else Kv.faint
+    val FreeText: Color get() = if (Look.v4) Ink4.FreeText else Kv.faint
+    val PlanEnd: Color get() = if (Look.v4) Ink4.PlanEnd else Kv.faint
+    val Warn: Color get() = if (Look.v4) Ink4.Warn else Kv.warn
+    val LegendValue: Color get() = if (Look.v4) Ink4.LegendValue else Kv.text
+    val KeyIcon: Color get() = if (Look.v4) Ink4.KeyIcon else Kv.accentInk
+    val CoinLetter: Color get() = if (Look.v4) Ink4.CoinLetter else Kv.muted
+    val WeatherText: Color get() = if (Look.v4) Ink4.WeatherText else Kv.text
+    val WeatherIcon: Color get() = if (Look.v4) Ink4.WeatherIcon else Kv.icon
+    val Placeholder: Color get() = if (Look.v4) Ink4.Placeholder else Kv.faint
 }
 
 /**
@@ -118,7 +152,8 @@ private fun modeLight(key: Color, tint: Color, a1: Float = 0.95f, a2: Float = 0.
         ),
     )
 
-object Modes {
+/** Цвета режимов «Вида 4.0» — DESIGN §4.2, как были до 5.0. */
+private object Modes4 {
 
     val Pravka: ModeColors = run {
         val key = Color(0xFFEA580C); val ink = Color(0xFF2E1608); val tint = Color(0xFFF5925A)
@@ -216,11 +251,11 @@ object Modes {
      * тёплый янтарь справа, «цвет дня», а не метка Засечки (DESIGN §3.2).
      */
     val Today: ModeColors = run {
-        val cream = Ink.Cream
+        val cream = Ink4.Cream
         ModeColors(
             key = cream, ink = Color(0xFF221C16), tint = cream,
-            label = Ink.TextSecondary, value = Ink.TextStrong, meta = Ink.TextMeta,
-            eventText = Ink.Text, title = Ink.TextStrong,
+            label = Ink4.TextSecondary, value = Ink4.TextStrong, meta = Ink4.TextMeta,
+            eventText = Ink4.Text, title = Ink4.TextStrong,
             ramp = Zasechka.ramp,
             glass = GlassSpec(
                 base = Color(0xFF221C16), inkAlpha = 0.84f, keyTop = 0f, keyBottom = 0f,
@@ -235,7 +270,7 @@ object Modes {
                     LightBlob(0.90f, 0f, 0.50f, 0.44f, Color(0xFFF78810).copy(alpha = 0.30f)),
                 ),
             ),
-            placeholder = Ink.Placeholder,
+            placeholder = Ink4.Placeholder,
         )
     }
 
@@ -251,6 +286,23 @@ object Modes {
             p.placeholder,
         )
     }
+}
+
+/**
+ * Цвета режима текущего вида. В 4.0 у каждого режима своя краска — цвет его
+ * кнопки на стекле ([Modes4]); в v2 акцент один на всё (план §2), поэтому
+ * наборы режимов одинаковы по цвету, но остаются РАЗНЫМИ объектами: экраны
+ * сравнивают `mode === Modes.Today` и по нему выбирают поведение, а не цвет.
+ */
+object Modes {
+    val Pravka: ModeColors get() = if (Look.v4) Modes4.Pravka else v2.pravka
+    val Zasechka: ModeColors get() = if (Look.v4) Modes4.Zasechka else v2.zasechka
+    val Dela: ModeColors get() = if (Look.v4) Modes4.Dela else v2.dela
+    val Sport: ModeColors get() = if (Look.v4) Modes4.Sport else v2.sport
+    val Food: ModeColors get() = if (Look.v4) Modes4.Food else v2.food
+    val Money: ModeColors get() = if (Look.v4) Modes4.Money else v2.money
+    val Today: ModeColors get() = if (Look.v4) Modes4.Today else v2.today
+    val Service: ModeColors get() = if (Look.v4) Modes4.Service else v2.service
 
     fun of(decor: ModeDecor): ModeColors = when (decor) {
         ModeDecor.PRAVKA -> Pravka
@@ -262,7 +314,52 @@ object Modes {
         ModeDecor.TODAY -> Today
         ModeDecor.SERVICE -> Service
     }
+
+    private val v2: ModeSetV2 get() = if (Look.dark) ModeSetV2.DARK else ModeSetV2.LIGHT
 }
+
+/** Наборы режимов v2 на светлую и тёмную темы — по объекту на режим (см. [Modes]). */
+private class ModeSetV2(p: KvPalette) {
+    val pravka = v2Mode(p)
+    val zasechka = v2Mode(p)
+    val dela = v2Mode(p)
+    val sport = v2Mode(p)
+    val food = v2Mode(p)
+    val money = v2Mode(p)
+    val today = v2Mode(p)
+    val service = v2Mode(p)
+
+    companion object {
+        val LIGHT by lazy { ModeSetV2(KvPalette.LIGHT) }
+        val DARK by lazy { ModeSetV2(KvPalette.DARK) }
+    }
+}
+
+/**
+ * Режим в виде v2: «кнопка» и линии — акцент, подписи — `--muted`, цифры и
+ * заголовки — `--text`, второй тон — `--faint`. Стекло — плоская панель с
+ * линией (`Modifier.glass` рисует его тем же кодом: без налёта, блика и
+ * внутренней линии остаются заливка и рамка), света нет.
+ */
+private fun v2Mode(p: KvPalette) = ModeColors(
+    key = p.accent,
+    ink = p.panel,
+    tint = p.accent,
+    label = p.muted,
+    value = p.text,
+    meta = p.faint,
+    eventText = p.text,
+    title = p.text,
+    ramp = p.ramp,
+    glass = GlassSpec(
+        base = p.panel, key = Color.Transparent, inkAlpha = 1f, keyTop = 0f, keyBottom = 0f,
+        sheenColor = Color.Transparent, sheen = 0f,
+        rimColor = p.line, rim = 1f, rimTopColor = p.line, rimTop = 1f,
+        innerTop = Color.Transparent,
+    ),
+    light = LightSpec(0, 0f, emptyList()),
+    placeholder = p.faint,
+)
 
 /** Цвета текущего режима — детали набора берут их отсюда, а не из констант (DESIGN §14). */
 val LocalMode = staticCompositionLocalOf { Modes.Today }
@@ -311,10 +408,15 @@ fun categoryText(category: String, worth: Int? = null): Color =
  * быт, сон — песочно-жёлтый, семья — жёлто-зелёный, спорт и работа —
  * зелёный. Приглушённо (насыщенность 0.42): не неон.
  */
-fun worthTint(worth: Int): Color = Color.hsv(worthHue(worth), 0.42f, 0.88f)
+fun worthTint(worth: Int): Color =
+    // На светлой теме v2 пастель 4.0 тонула в белой панели — тот же оттенок плотнее и темнее.
+    if (Look.v2 && !Look.dark) Color.hsv(worthHue(worth), 0.55f, 0.76f)
+    else Color.hsv(worthHue(worth), 0.42f, 0.88f)
 
-/** Подпись тем же оттенком светофора — светлее и мягче заливки. */
-fun worthText(worth: Int): Color = Color.hsv(worthHue(worth), 0.32f, 0.97f)
+/** Подпись тем же оттенком светофора — светлее и мягче заливки (на светлой теме — темнее: это текст на белом). */
+fun worthText(worth: Int): Color =
+    if (Look.v2 && !Look.dark) Color.hsv(worthHue(worth), 0.78f, 0.46f)
+    else Color.hsv(worthHue(worth), 0.32f, 0.97f)
 
 private fun worthHue(worth: Int): Float {
     val stops = WORTH_HUES
@@ -345,7 +447,7 @@ enum class ZGroup(val typical: Int, val label: String) {
     ;
 
     val fill: Color get() = if (this == AHEAD) Ink.Cream else worthTint(typical)
-    val text: Color get() = if (this == AHEAD) Color(0xFFE8D3B8) else worthText(typical)
+    val text: Color get() = if (this == AHEAD) (if (Look.v4) Color(0xFFE8D3B8) else Kv.faint) else worthText(typical)
 
     /** Штриховка — у потерь и у «впереди» (DESIGN §4.3). */
     val hatched: Boolean get() = this == LOSS || this == AHEAD
@@ -383,7 +485,7 @@ enum class ZGroup(val typical: Int, val label: String) {
     }
 }
 
-/** Очки: плюс — #FFC261, минус — #F27A45 (DESIGN §4.3). */
-val PointsPlus = Color(0xFFFFC261)
-val PointsMinus = Color(0xFFF27A45)
+/** Очки: плюс — #FFC261, минус — #F27A45 (DESIGN §4.3); в v2 — `--ok` и `--warn` (янтарь на белом не читался). */
+val PointsPlus: Color get() = if (Look.v4) Color(0xFFFFC261) else Kv.ok
+val PointsMinus: Color get() = if (Look.v4) Color(0xFFF27A45) else Kv.warn
 fun pointsColor(p: Int): Color = if (p < 0) PointsMinus else PointsPlus

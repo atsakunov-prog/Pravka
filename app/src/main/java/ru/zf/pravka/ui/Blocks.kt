@@ -24,6 +24,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -45,10 +46,11 @@ import ru.zf.pravka.core.Micronutrients
  */
 @Composable
 fun PaperLabel(text: String, color: Color? = null) {
+    // Вид v2 — `.eyebrow` веба: как написано, 12/600, `--faint`.
     Text(
-        text.uppercase(Locale.forLanguageTag("ru")),
+        caps(text),
         style = LocalPravkaType.current.overline,
-        color = color ?: LocalMode.current.label,
+        color = color ?: if (Look.v2) Kv.faint else LocalMode.current.label,
         modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 6.dp, bottom = 8.dp),
     )
 }
@@ -62,6 +64,8 @@ fun PaperLabel(text: String, color: Color? = null) {
  * дизайна в одном экране.
  */
 fun Modifier.bevel(shape: Shape? = null): Modifier = composed {
+    // Вид v2: вместо фаски — ровная линия `--line`, как у всех панелей.
+    if (Look.v2) return@composed border(1.dp, Kv.line, shape ?: MaterialTheme.shapes.medium)
     border(
         width = 1.dp,
         brush = Brush.verticalGradient(
@@ -89,6 +93,10 @@ fun PaperCard(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val mode = LocalMode.current
+    if (Look.v2) {
+        PanelV2(label, labelColor, trailing, info, content)
+        return
+    }
     Column(Modifier.fillMaxWidth()) {
         if (label != null || trailing != null || info != null) {
             Row(
@@ -110,6 +118,52 @@ fun PaperCard(
             CompositionLocalProvider(LocalContentColor provides Ink.Text) {
                 Column(Modifier.fillMaxWidth().padding(16.dp), content = content)
             }
+        }
+    }
+}
+
+/**
+ * Плашка вида v2 — `.card` веба: панель, линия 1, радиус 10, поля 12/14;
+ * заголовок раздела — ВНУТРИ панели первой строкой (`.sec`: 14,5/600 цветом
+ * текста), а не надстрочником над ней, как в 4.0.
+ */
+@Composable
+private fun PanelV2(
+    label: String?,
+    labelColor: Color?,
+    trailing: (@Composable () -> Unit)?,
+    info: String?,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val shape = RoundedCornerShape(KvShape.Panel)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Kv.panel)
+            .border(1.dp, Kv.line, shape)
+            .padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 12.dp),
+    ) {
+        CompositionLocalProvider(LocalContentColor provides Kv.text) {
+            if (label != null || trailing != null || info != null) {
+                Row(
+                    // «i» и действие справа — со своей зоной касания 44: строка заголовка не растёт от них.
+                    Modifier.fillMaxWidth().height(24.dp).padding(bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        label.orEmpty().replaceFirstChar { it.uppercase() },
+                        style = LocalPravkaType.current.bodyStrong,
+                        color = labelColor ?: Kv.text,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                    )
+                    if (info != null) InfoDot(label ?: "Пояснение", info)
+                    trailing?.invoke()
+                }
+                Spacer(Modifier.height(6.dp))
+            }
+            Column(Modifier.fillMaxWidth(), content = content)
         }
     }
 }
@@ -140,7 +194,7 @@ fun GoalBar(
     overColor: Color = MaterialTheme.colorScheme.error,
     height: Dp = 8.dp,
 ) {
-    val track = MaterialTheme.colorScheme.surfaceVariant
+    val track = if (Look.v2) Kv.hover2 else MaterialTheme.colorScheme.surfaceVariant
     Box(
         Modifier
             .fillMaxWidth()

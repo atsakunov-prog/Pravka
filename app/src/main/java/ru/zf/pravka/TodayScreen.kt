@@ -317,7 +317,12 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = twoPane()
-        val head = TodayHead(state, onWeather = { weatherOpen = true })
+        val head = TodayHead(state, onWeather = { weatherOpen = true }, onTheme = {
+            // Значок темы в шапке «Сегодня» (холст): светлая ↔ тёмная, сразу.
+            val next = if (ru.zf.pravka.ui.Look.dark) ru.zf.pravka.ui.Look.Theme.LIGHT else ru.zf.pravka.ui.Look.Theme.DARK
+            ru.zf.pravka.ui.Look.theme = next
+            app.appScope.launch { app.settings.setLookTheme(next.key) }
+        })
         if (wide) {
             TodayWide(model, weather, now, dayOffset, { dayOffset = it }, initial, nav, onItem, sayBar, head, entries, avatarDot = reviewsNews)
         } else {
@@ -471,6 +476,13 @@ private fun TodayFolded(
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
+            val v2 = ru.zf.pravka.ui.Look.v2
+            // Вид v2: шапка Ковчега стоит всегда; сжимается только то, что под ней.
+            if (v2) TodayHeaderV2(
+                model, now, dayOffset, nav, head,
+                onTitle = { if (forced) forced = false else showNav = !showNav },
+                onTitleDouble = { showNav = false; forced = !forced },
+            )
             Box(
                 Modifier.fillMaxWidth().onSizeChanged { sz ->
                     val old = headPx
@@ -483,7 +495,13 @@ private fun TodayFolded(
                     transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(200)) },
                     label = "dayHeader",
                 ) { c ->
-                    if (c) {
+                    if (c && v2) {
+                        // v2: сжатая — одна строка мини-меток под шапкой Ковчега.
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp).onSizeChanged { shortPx = it.height },
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) { CompactMinis(model, nav) }
+                    } else if (c) {
                         CompactHeader(
                             model, weather?.summary?.line, nav,
                             modifier = Modifier.onSizeChanged { shortPx = it.height },
@@ -496,7 +514,8 @@ private fun TodayFolded(
                         )
                     } else {
                         Column(Modifier.onSizeChanged { tallPx = it.height }) {
-                            DayHeader(
+                            if (v2) head.state?.let { st -> Box(Modifier.padding(start = 6.dp)) { DayStateLine(st, onClick = { nav.mode(Tab.SPORT) }) } }
+                            else DayHeader(
                                 overline = Fmt.overline(model.day, model.day.minusDays(dayOffset.toLong())),
                                 weekday = Fmt.weekdayTitle(model.day),
                                 score = Fmt.points(r.score),
@@ -561,8 +580,38 @@ private fun TodayFolded(
     }
 }
 
-/** Что шапке «Сегодня» нужно сверх модели дня: строка состояния и тап по погоде. */
-internal class TodayHead(val state: DayState?, val onWeather: () -> Unit)
+/** Что шапке «Сегодня» нужно сверх модели дня: строка состояния, тап по погоде и смена темы (v2). */
+internal class TodayHead(val state: DayState?, val onWeather: () -> Unit, val onTheme: () -> Unit = {})
+
+/**
+ * Шапка «Сегодня» вида v2 (план §3, холст `Main`): значок Ковчега, «Сегодня»
+ * и подпись «вторник, 13 октября · 18:50 · очки +84»; справа статистика и
+ * тема. Тап по названию — навигатор дня, двойной — шапка до минимума (как у
+ * дня недели в 4.0). Аватара «С» нет: «Ещё» — в меню Ковчега («Настройки телефона»).
+ */
+@Composable
+private fun TodayHeaderV2(
+    model: TodayModel,
+    now: Long,
+    dayOffset: Int,
+    nav: TodayNav,
+    head: TodayHead,
+    onTitle: () -> Unit,
+    onTitleDouble: () -> Unit,
+) {
+    val score = Fmt.points(model.result.score)
+    ru.zf.pravka.ui.KovchegHeader(
+        title = if (dayOffset == 0) "Сегодня" else Fmt.weekdayTitle(model.day),
+        subtitle = if (dayOffset == 0) "${Fmt.dayLong(model.day)} · ${Fmt.hm(now)} · очки $score"
+        else "${Fmt.dayMonth(model.day)} · очки $score",
+        onTitle = onTitle,
+        onTitleDouble = onTitleDouble,
+        actions = {
+            HeaderIcon(Glyphs.Stats, "Статистика дня", nav.stats)
+            HeaderIcon(if (ru.zf.pravka.ui.Look.dark) Glyphs.Sunny else Glyphs.Moon, "светлая или тёмная", head.onTheme)
+        },
+    )
+}
 
 @Composable
 private fun WeatherBlock(weather: ru.zf.pravka.data.WeatherStore.Result?, onClick: () -> Unit) {
@@ -617,13 +666,17 @@ private fun TilesRow(model: TodayModel, nav: TodayNav, modifier: Modifier = Modi
 /** Сжатая шапка: «пн, 5 окт», погода строкой и пять мини-плашек (DESIGN §11.2). */
 @Composable
 private fun CompactHeader(model: TodayModel, weatherLine: String?, nav: TodayNav, modifier: Modifier = Modifier, onDate: (() -> Unit)? = null) {
-    DayHeaderCompact(Fmt.dayShort(model.day), weatherLine, modifier = modifier, onDate = onDate, minis = {
-        MiniStat(Fmt.points(model.result.score), Modes.Zasechka, "Засечка ${Fmt.points(model.result.score)}", { nav.mode(Tab.ZASECHKA) })
-        MiniStat("${model.delaDone}/${model.delaTotal}", Modes.Dela, "Дела", { nav.mode(Tab.TODOIST) })
-        MiniStat("${model.sportDone}/${model.sportTotal}", Modes.Sport, "Спорт", { nav.mode(Tab.SPORT) })
-        MiniStat(Fmt.num(model.kcal), Modes.Food, "Еда", { nav.mode(Tab.FOOD) })
-        MiniStat(Fmt.rub(model.spentKop), Modes.Money, "Деньги", { nav.mode(Tab.MONEY) })
-    })
+    DayHeaderCompact(Fmt.dayShort(model.day), weatherLine, modifier = modifier, onDate = onDate, minis = { CompactMinis(model, nav) })
+}
+
+/** Пять мини-плашек сжатой шапки: Засечка, Дела, Спорт, Еда, Деньги. */
+@Composable
+private fun androidx.compose.foundation.layout.RowScope.CompactMinis(model: TodayModel, nav: TodayNav) {
+    MiniStat(Fmt.points(model.result.score), Modes.Zasechka, "Засечка ${Fmt.points(model.result.score)}", { nav.mode(Tab.ZASECHKA) })
+    MiniStat("${model.delaDone}/${model.delaTotal}", Modes.Dela, "Дела", { nav.mode(Tab.TODOIST) })
+    MiniStat("${model.sportDone}/${model.sportTotal}", Modes.Sport, "Спорт", { nav.mode(Tab.SPORT) })
+    MiniStat(Fmt.num(model.kcal), Modes.Food, "Еда", { nav.mode(Tab.FOOD) })
+    MiniStat(Fmt.rub(model.spentKop), Modes.Money, "Деньги", { nav.mode(Tab.MONEY) })
 }
 
 // ---------------------------------------------------------------------------
@@ -649,15 +702,23 @@ private fun TodayWide(
     val f = model.facts
     val r = model.result
     val balance = remember(r.items, model.facts) { balanceSpecs(r.items, model.dayStart, model.facts.road) }
-    Row(Modifier.fillMaxSize().statusBarsPadding()) {
+    val v2 = ru.zf.pravka.ui.Look.v2
+    Column(Modifier.fillMaxSize().statusBarsPadding()) {
+    // Вид v2: шапка Ковчега во всю ширину над обеими колонками.
+    if (v2) TodayHeaderV2(model, now, dayOffset, nav, head, onTitle = { setDay(0) }, onTitleDouble = {})
+    Row(Modifier.fillMaxSize()) {
         // Слева — обзор: день с ‹ ›, погода, плашки, круг, плашка времени.
         Column(
             Modifier.width(386.dp).fillMaxHeight().fadingScroll().padding(start = 20.dp),
         ) {
             Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(Fmt.weekdayTitle(model.day), style = t.titleL, color = Ink.TextStrong, maxLines = 1)
-                Spacer(Modifier.width(6.dp))
-                Text(Fmt.dayMon(model.day), style = t.valueS.copy(fontWeight = FontWeight.Normal, fontSize = 14.sp), color = Ink.TextSecondary, modifier = Modifier.weight(1f).padding(top = 8.dp))
+                if (v2) {
+                    Text(Fmt.dayList(model.day), style = t.valueS, color = Ink.TextStrong, maxLines = 1, modifier = Modifier.weight(1f))
+                } else {
+                    Text(Fmt.weekdayTitle(model.day), style = t.titleL, color = Ink.TextStrong, maxLines = 1)
+                    Spacer(Modifier.width(6.dp))
+                    Text(Fmt.dayMon(model.day), style = t.valueS.copy(fontWeight = FontWeight.Normal, fontSize = 14.sp), color = Ink.TextSecondary, modifier = Modifier.weight(1f).padding(top = 8.dp))
+                }
                 HeaderIcon(Glyphs.Back, "день назад", { setDay(dayOffset - 1) })
                 HeaderIcon(Glyphs.Forward, "день вперёд", { setDay(dayOffset + 1) }, tint = if (dayOffset >= 0) Ink.TextDisabled else null)
             }
@@ -698,9 +759,12 @@ private fun TodayWide(
         Box(Modifier.weight(1f).fillMaxHeight().padding(end = 16.dp)) {
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Хроника", style = t.titleL, color = Ink.TextStrong, modifier = Modifier.weight(1f))
-                    HeaderIcon(Glyphs.Stats, "статистика", nav.stats)
-                    AvatarKey(initial, nav.more, dot = avatarDot)
+                    Text("Хроника", style = if (v2) t.valueS else t.titleL, color = Ink.TextStrong, modifier = Modifier.weight(1f))
+                    // v2: статистика — в шапке Ковчега, «Ещё» — в его меню.
+                    if (!v2) {
+                        HeaderIcon(Glyphs.Stats, "статистика", nav.stats)
+                        AvatarKey(initial, nav.more, dot = avatarDot)
+                    }
                 }
                 val list = rememberLazyListState(
                     initialFirstVisibleItemIndex = (r.items.indexOfFirst { it is DayItem.Entry && it.current } - 3).coerceAtLeast(0),
@@ -721,6 +785,7 @@ private fun TodayWide(
             }
             sayBar(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding().padding(bottom = 18.dp))
         }
+    }
     }
 }
 

@@ -161,6 +161,13 @@ class PravkaApp : Application() {
         appScope.launch {
             settings.iconsGeminiFlow.collect { ru.zf.pravka.ui.Glyphs.gemini = it }
         }
+        // Вид и тема (Правка 5.0, `ui/Look.kt`) — тоже одни на процесс: приложение перерисуется само.
+        appScope.launch {
+            settings.lookThemeFlow.collect { ru.zf.pravka.ui.Look.theme = ru.zf.pravka.ui.Look.Theme.of(it) }
+        }
+        appScope.launch {
+            settings.lookV4Flow.collect { ru.zf.pravka.ui.Look.v4 = it }
+        }
         // Режим отладки: транспорт пишет каждый запрос к Claude целиком в
         // свой лог, пока тумблер включён (Настройки → Общее).
         appScope.launch {

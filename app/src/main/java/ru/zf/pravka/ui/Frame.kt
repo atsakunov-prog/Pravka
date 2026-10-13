@@ -132,6 +132,18 @@ fun TabHeader(
     onTitleExtra: (() -> Unit)? = null,
     actions: (@Composable RowScope.() -> Unit)? = null,
 ) {
+    if (Look.v2) {
+        // Вид v2 (план §3): значок Ковчега вместо монеты и «‹» режима.
+        KovchegHeader(
+            title = title,
+            subtitle = titleExtra ?: subtitle,
+            onSubtitle = onTitleExtra,
+            onBack = onBack,
+            actions = actions,
+            modifier = Modifier.statusBarsPadding(),
+        )
+        return
+    }
     val decor = LocalModeDecor.current
     ModeHeader(
         title = title,
@@ -144,6 +156,16 @@ fun TabHeader(
         modifier = Modifier.statusBarsPadding(),
     )
 }
+
+/**
+ * Меню Ковчега для шапок (план §3): открыть или закрыть его, открыто ли оно и
+ * есть ли новенькое (красная метка на значке). Держит `MainActivity` — меню
+ * одно на приложение и рисуется поверх любого экрана; без него (витрина,
+ * окна поверх чужих приложений) значок просто не нажимается.
+ */
+class KovchegHost(val toggle: () -> Unit, val isOpen: Boolean, val news: Boolean)
+
+val LocalKovcheg = compositionLocalOf<KovchegHost?> { null }
 
 /** Значок действия в шапке — 22 dp в цели 44, без капсулы. */
 @Composable

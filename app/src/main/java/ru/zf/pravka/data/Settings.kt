@@ -123,6 +123,9 @@ class Settings(private val context: Context) {
         private val KEY_CARD_GRAIN = booleanPreferencesKey("card_grain")
         private val KEY_APP_GLOW = floatPreferencesKey("app_glow")
         private val KEY_ICONS_GEMINI = booleanPreferencesKey("icons_gemini")
+        // Правка 5.0 (13.10.2026): тема вида v2 и откат на «Вид 4.0».
+        private val KEY_LOOK_THEME = stringPreferencesKey("look_theme")
+        private val KEY_LOOK_V4 = booleanPreferencesKey("look_v4")
         private val KEY_APP_GLOW_MOTION = booleanPreferencesKey("app_glow_motion")
         private val KEY_Z_GAP_MIN = intPreferencesKey("z_gap_min")
         private val KEY_Z_DAY_START = intPreferencesKey("z_day_start")
@@ -835,6 +838,22 @@ class Settings(private val context: Context) {
     val iconsGeminiFlow = context.dataStore.data.map { it[KEY_ICONS_GEMINI] ?: ICONS_GEMINI_DEFAULT }
     suspend fun setIconsGemini(value: Boolean) {
         context.dataStore.edit { it[KEY_ICONS_GEMINI] = value }
+    }
+
+    /**
+     * Тема вида v2 (Правка 5.0, `ui/Look.kt`): «system» — как в телефоне,
+     * «light», «dark». С завода — как в системе: так же решает веб Ковчега,
+     * когда выбора нет.
+     */
+    val lookThemeFlow = context.dataStore.data.map { it[KEY_LOOK_THEME] ?: "system" }
+    suspend fun setLookTheme(value: String) {
+        context.dataStore.edit { it[KEY_LOOK_THEME] = value }
+    }
+
+    /** «Вид 4.0» — стекло, свечение и прежние шапки на время переезда (план 5.0 §6). С завода — выключен. */
+    val lookV4Flow = context.dataStore.data.map { it[KEY_LOOK_V4] ?: false }
+    suspend fun setLookV4(value: Boolean) {
+        context.dataStore.edit { it[KEY_LOOK_V4] = value }
     }
 
     /** Вернуть вид диска в счёт: размеры — к заводским, плотности — к формулам. */

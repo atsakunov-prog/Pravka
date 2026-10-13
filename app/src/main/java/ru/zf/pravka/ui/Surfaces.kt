@@ -2,6 +2,8 @@ package ru.zf.pravka.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -54,6 +56,10 @@ import ru.zf.pravka.R
 // `.cream`, `.coin`), CSS переложен в слои Compose: фон, налёт, блик, рамка
 // с более светлым верхом, внутренняя линия, тень. Размытия фона нет — в
 // Android оно бывает только прямоугольником окна.
+//
+// Вид v2 (Правка 5.0): те же функции рисуют плоско — стекло становится
+// панелью с линией, клавиша — прямоугольником 8 акцента, монета — меткой 5,
+// тени нет. Экраны ничего не меняют: вид переключается здесь (`Look`).
 
 // ---------------------------------------------------------------------------
 // Тень
@@ -82,7 +88,10 @@ fun Modifier.softShadow(
         }
     }
     val dyPx = dy.toPx()
+    // Вид v2 плоский: панели лежат на фоне линией, тени нет (план §2).
+    val flat = Look.v2
     onDrawBehind {
+        if (flat) return@onDrawBehind
         drawIntoCanvas { canvas ->
             canvas.save()
             canvas.translate(0f, dyPx)
@@ -117,6 +126,7 @@ fun Modifier.glass(
 ): Modifier = this
     .then(if (shadow) Modifier.softShadow(shape) else Modifier)
     .drawWithCache {
+        if (Look.v2) return@drawWithCache flatPanel(shape, glass)
         val outline = shape.createOutline(size, layoutDirection, this)
         val path = outlinePath(outline)
         val h = size.height.coerceAtLeast(1f)
@@ -150,6 +160,30 @@ fun Modifier.glass(
             drawOutline(outline, rimBrush, style = stroke)
         }
     }
+
+/**
+ * Панель вида v2 вместо стекла: заливка `--panel` и линия 1 dp `--line` (их
+ * несёт [GlassSpec] режима v2 — `base` и `rimColor`). Скругление — не больше
+ * [KvShape.Panel]: экраны 4.0 зовут стекло с радиусом 20–31, а у v2 панели 10,
+ * кнопки 8 — правка формы здесь переводит их все разом.
+ */
+private fun androidx.compose.ui.draw.CacheDrawScope.flatPanel(shape: Shape, glass: GlassSpec): androidx.compose.ui.draw.DrawResult {
+    val max = KvShape.Panel.toPx()
+    val outline = when (val o = shape.createOutline(size, layoutDirection, this)) {
+        is Outline.Rounded -> {
+            val r = o.roundRect
+            val k = minOf(max, r.topLeftCornerRadius.x, size.height / 2f)
+            Outline.Rounded(androidx.compose.ui.geometry.RoundRect(r.left, r.top, r.right, r.bottom, androidx.compose.ui.geometry.CornerRadius(k, k)))
+        }
+        else -> o
+    }
+    val line = 1.dp.toPx()
+    val fill = glass.base.copy(alpha = glass.base.alpha * glass.inkAlpha)
+    return onDrawBehind {
+        drawOutline(outline, fill)
+        if (glass.rim > 0f) drawOutline(outline, glass.rimColor.copy(alpha = glass.rimColor.alpha * glass.rim), style = Stroke(line))
+    }
+}
 
 private fun outlinePath(o: Outline): Path = when (o) {
     is Outline.Generic -> o.path
@@ -237,6 +271,16 @@ fun Modifier.keyDisc(
             startY = c.y - half,
             endY = c.y + half,
         )
+        // Вид v2: кнопка — плоский прямоугольник 8 цвета акцента, без блика и кружков.
+        if (Look.v2) {
+            val k = minOf(KvShape.Control.toPx(), half)
+            return@drawWithCache onDrawBehind {
+                drawRoundRect(
+                    if (pressed) color.copy(alpha = color.alpha * 0.85f) else color,
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(k, k),
+                )
+            }
+        }
         onDrawBehind {
             drawCircle(color, half, c)
             drawCircle(foot, half, c)
@@ -283,7 +327,8 @@ fun Key(
     val pressed by interaction.collectIsPressedAsState()
     // На «Сегодня» кнопка режима — кремовая (DESIGN §8 CreamKey).
     @Suppress("NAME_SHADOWING")
-    val cream = cream || (color == null && mode === Modes.Today)
+    val cream = Look.v4 && (cream || (color == null && mode === Modes.Today))
+    // В v2 кремовой клавиши нет: главное действие везде одно — акцент.
     val face = if (cream) Ink.Cream else color ?: mode.key
     Box(
         modifier
@@ -339,6 +384,18 @@ fun coinGlyph(decor: ModeDecor): Int = when (decor) {
  */
 @Composable
 fun Coin(decor: ModeDecor, size: Dp, modifier: Modifier = Modifier) {
+    if (Look.v2) {
+        // Вид v2: «без кружков» — метка источника квадратом 5 (8 у крупной) с
+        // тем же значком режима линией, что в меню Ковчега; цвета режима нет.
+        val shape = androidx.compose.foundation.shape.RoundedCornerShape(if (size >= 30.dp) KvShape.Control else KvShape.Tag)
+        Box(
+            modifier.size(size).clip(shape).background(Kv.hover2),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(decorGlyph(decor), null, tint = Kv.icon, modifier = Modifier.size(size * 0.62f))
+        }
+        return
+    }
     val key = Modes.of(decor).key
     Box(
         modifier

@@ -80,8 +80,9 @@ object LifeInk {
     val Gap = Color(0xFF3A4552)
     val Other = Color(0xFF9B8BC4)
     val Warn = Color(0xFFFB8B4B)
-    val Grid = Color(0x1FF0EADF)
-    val Axis = Color(0xFFA98F72)
+    // Сетка и оси — от фона, а не от данных: на светлой теме v2 светлая сетка 4.0 пропадала.
+    val Grid: Color get() = if (Look.v4) Color(0x1FF0EADF) else Kv.line
+    val Axis: Color get() = if (Look.v4) Color(0xFFA98F72) else Kv.faint
 
     fun of(g: LifeStats.Group): Color = when (g) {
         LifeStats.Group.SLEEP -> Sleep

@@ -455,6 +455,15 @@ internal object Seed {
             JSONObject().put("url", "https://dela.home.lan/").put("token", "t".repeat(40))
                 .put("user", "sasha").put("name", "Саша").put("at", System.currentTimeMillis()).toString(),
         )
+        // Сервисы Ковчега для меню значка (Правка 5.0) — как их отдал бы `/api/me`; адреса выдуманные.
+        java.io.File(ru.zf.pravka.data.DataRoot.secrets(app), ru.zf.pravka.data.DelaSync.NAV_FILE).writeText(
+            ru.zf.pravka.core.Kovcheg.navJson(
+                listOf(
+                    "Дела" to "dela", "Встречи" to "mic", "Дети" to "kids", "Шаббат" to "candles", "Книги" to "book",
+                    "Кино" to "film", "Дом" to "home", "VPN" to "shield", "Деньги" to "wallet",
+                ).map { (n, i) -> ru.zf.pravka.core.Kovcheg.Nav(n, i, if (i == "dela") "/" else "https://$i.example.org/") },
+            ).toString(),
+        )
         app.settings.setDelaBackend(ru.zf.pravka.data.Settings.DELA_BACKEND_SERVER)
         app.delaStore.setMe("sasha")
         // Круг жизни (задание 14): девять выдуманных направлений по зонам и принципы — как Свод их привёз бы.

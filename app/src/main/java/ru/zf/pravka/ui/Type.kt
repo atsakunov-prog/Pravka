@@ -23,6 +23,9 @@ import ru.zf.pravka.R
 // Literata переменная и по оптическому размеру (opsz 7…72): мелкий заголовок
 // чуть шире и контрастнее, крупный балл «+84» — тоньше в волосяных. Поэтому
 // у каждого размера своё семейство с `opsz` под себя, а не одно на всё.
+//
+// Вид v2 (Правка 5.0, 13.10.2026): только Golos — тот же файл, что уже в APK
+// (`PravkaType.v2`); Literata остаётся «Виду 4.0».
 
 @OptIn(ExperimentalTextApi::class)
 object PravkaFonts {
@@ -127,7 +130,46 @@ class PravkaType(
     val dialLabel: TextStyle = sans(11f, 400, 13f),
     /** Цифра плитки (StatTile) 17/21. */
     val tile: TextStyle = sans(17f, 600, 21f),
-)
+) {
+    companion object {
+        /**
+         * Стили вида v2 Ковчега (план §2): один Golos Text, засечек нет —
+         * заголовки и крупные цифры тем же шрифтом 600, как в вебе. Текст
+         * 15, заголовок экрана 23/600; надстрочник — `.eyebrow` (12/600, без
+         * разрядки — прописными его больше не пишут).
+         */
+        fun v2(): PravkaType = PravkaType(
+            displayXL = sans(44f, 600, 48f).tight(),
+            displayXLWide = sans(38f, 600, 42f).tight(),
+            displayL = sans(30f, 600, 34f).tight(),
+            displayLWide = sans(28f, 600, 32f).tight(),
+            titleL = sans(24f, 600, 30f).tight(),
+            titleM = sans(23f, 600, 28f).copy(letterSpacing = (-0.01).em),
+            titleS = sans(18f, 600, 24f),
+            valueL = sans(18f, 600, 22f),
+            valueXL = sans(28f, 600, 32f).tight(),
+            input = sans(15f, 400, 21f),
+            body = sans(14.5f, 400, 20f),
+            bodyStrong = sans(14.5f, 600, 20f),
+            bodyL = sans(15f, 400, 21f),
+            points = sans(14f, 600, 18f),
+            label = sans(13f, 500, 17f),
+            meta = sans(12.5f, 400, 17f),
+            caption = sans(12f, 400, 15f),
+            overline = sans(12f, 600, 16f),
+            time = sans(12.5f, 400, 16f),
+            valueS = sans(15f, 600, 19f),
+            weather = sans(14f, 600, 17f),
+            nowBadge = sans(12f, 600, 16f),
+            mini = sans(12.5f, 600, 16f),
+            dialLabel = sans(11f, 400, 13f),
+            tile = sans(17f, 600, 21f),
+        )
+    }
+}
+
+/** Крупное — чуть плотнее, как `letter-spacing: -.02em` у крупных чисел веба. */
+private fun TextStyle.tight(): TextStyle = copy(letterSpacing = (-0.02).em)
 
 val LocalPravkaType = staticCompositionLocalOf { PravkaType() }
 

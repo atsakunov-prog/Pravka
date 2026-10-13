@@ -80,6 +80,9 @@ import java.util.Locale
 // значок с подписью, переключатель, ползунок, «i», пусто / считаю / ошибка /
 // нет связи. Правило набора прежнее: новая деталь — сначала сюда, потом на
 // экран. Цвета — из `LocalMode`, не константами.
+//
+// Вид v2 (Правка 5.0): каждая деталь сама знает свой плоский вид (`Look.v2`) —
+// кнопки и поля прямоугольником 8, метки 5, выбранное — мягким акцентом.
 
 // ---------------------------------------------------------------------------
 // Лицо клавиши любой формы
@@ -95,6 +98,8 @@ import java.util.Locale
 fun Modifier.keyFace4(color: Color, shape: Shape, pressed: Boolean = false, cream: Boolean = false): Modifier =
     this.drawWithCache {
         val outline = shape.createOutline(size, layoutDirection, this)
+        // Вид v2: заливка без блика, фаски и тени (план §2).
+        if (Look.v2) return@drawWithCache onDrawBehind { drawOutline(outline, if (pressed) color.copy(alpha = color.alpha * 0.85f) else color) }
         val h = size.height
         val half = minOf(size.width, h) / 2f
         val lit = if (pressed) KeyLight.PRESSED_LIGHT else 1f
@@ -153,9 +158,9 @@ fun SectionHeader(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text.uppercase(Locale.forLanguageTag("ru")),
+            caps(text),
             style = t.overline,
-            color = color ?: mode.label,
+            color = color ?: if (Look.v2) Kv.faint else mode.label,
             modifier = Modifier.weight(1f),
         )
         if (trailing != null) {
@@ -197,6 +202,10 @@ fun Segment(
 ) {
     val mode = LocalMode.current
     val t = LocalPravkaType.current
+    if (Look.v2) {
+        SegmentV2(label, selected, onClick, count, icon, enabled, height)
+        return
+    }
     val shape = RoundedCornerShape(50)
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -236,6 +245,60 @@ fun Segment(
         }
     }
 }
+
+/**
+ * Сегмент вида v2 (`.seg span` веба): прямоугольник 8; выбранный — мягкий
+ * акцент и слово акцентом, остальные — `--muted` на панели с линией.
+ */
+@Composable
+private fun SegmentV2(label: String, selected: Boolean, onClick: () -> Unit, count: String?, icon: ImageVector?, enabled: Boolean, height: Dp) {
+    val t = LocalPravkaType.current
+    val shape = RoundedCornerShape(KvShape.Control)
+    val ink = if (selected) Kv.accent else Kv.muted
+    Row(
+        Modifier
+            .minimumInteractiveComponentSize()
+            .height(height.coerceAtMost(34.dp))
+            .dim(if (enabled) 1f else 0.4f)
+            .clip(shape)
+            .background(if (selected) Kv.accentSoft else Kv.panel)
+            .then(if (selected) Modifier else Modifier.border(1.dp, Kv.line, shape))
+            .clickable(enabled = enabled, role = Role.Tab, onClick = onClick)
+            .padding(horizontal = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (icon != null) Icon(icon, null, tint = if (selected) Kv.accent else Kv.icon, modifier = Modifier.size(16.dp))
+        Text(
+            label,
+            style = t.label.copy(fontSize = 13.5.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium),
+            color = ink,
+            maxLines = 1,
+        )
+        if (count != null) Counter(count, hot = selected)
+    }
+}
+
+/** Счётчик (`.count` веба): прямоугольник 5, «горячий» — мягким акцентом. */
+@Composable
+fun Counter(text: String, hot: Boolean = false, modifier: Modifier = Modifier) {
+    val t = LocalPravkaType.current
+    Text(
+        text,
+        style = t.caption.copy(fontWeight = FontWeight.SemiBold, lineHeight = 19.sp),
+        color = if (hot) Kv.accent else Kv.muted,
+        maxLines = 1,
+        textAlign = TextAlign.Center,
+        modifier = modifier
+            .clip(RoundedCornerShape(KvShape.Tag))
+            .background(if (hot) Kv.accentSoft else Kv.hover2)
+            .widthIn(min = 20.dp)
+            .padding(horizontal = 6.dp),
+    )
+}
+
+/** Надстрочник: в 4.0 — прописными с разрядкой, в v2 — как написан (`.eyebrow` веба). */
+internal fun caps(text: String): String = if (Look.v4) text.uppercase(Locale.forLanguageTag("ru")) else text
 
 /**
  * Ряд сегментов, листается вбок (DESIGN §11.7). Подпись вида «Новое 4» или
@@ -291,6 +354,29 @@ fun PrimaryKey(
 ) {
     val mode = LocalMode.current
     val t = LocalPravkaType.current
+    if (Look.v2) {
+        // `.btn.p` веба: акцент, прямоугольник 8, слово 600.
+        val shape8 = RoundedCornerShape(KvShape.Control)
+        Row(
+            modifier
+                .minimumInteractiveComponentSize()
+                .defaultMinSize(minHeight = height.coerceAtMost(40.dp))
+                .dim(if (enabled) 1f else 0.4f)
+                .clip(shape8)
+                .background(Kv.accent)
+                .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+                .padding(PaddingValues(start = if (icon != null) 12.dp else 14.dp, end = 14.dp)),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            if (icon != null) {
+                Icon(icon, null, tint = Kv.accentInk, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(text, style = t.bodyStrong.copy(fontSize = 14.sp), color = Kv.accentInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        return
+    }
     val shape = RoundedCornerShape(50)
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -329,24 +415,26 @@ fun GhostKey(
 ) {
     val mode = LocalMode.current
     val t = LocalPravkaType.current
-    val shape = RoundedCornerShape(50)
+    // Вид v2 — `.btn` веба: панель, линия, прямоугольник 8, слово цветом текста.
+    val v2 = Look.v2
+    val shape = if (v2) RoundedCornerShape(KvShape.Control) else RoundedCornerShape(50)
     Row(
         modifier
             .minimumInteractiveComponentSize()
-            .defaultMinSize(minHeight = height)
+            .defaultMinSize(minHeight = if (v2) height.coerceAtMost(38.dp) else height)
             .dim(if (enabled) 1f else 0.4f)
             .clip(shape)
-            .background(mode.tint.copy(alpha = 0.06f))
-            .border(1.dp, mode.tint.copy(alpha = 0.30f), shape)
+            .background(if (v2) Kv.panel else mode.tint.copy(alpha = 0.06f))
+            .border(1.dp, if (v2) Kv.line else mode.tint.copy(alpha = 0.30f), shape)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(PaddingValues(start = if (icon != null) 14.dp else 18.dp, end = 18.dp)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) {
-            Icon(icon, null, tint = mode.label, modifier = Modifier.size(18.dp))
+            Icon(icon, null, tint = if (v2) Kv.icon else mode.label, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
         }
-        Text(text, style = t.label.copy(fontSize = 14.sp), color = mode.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text, style = t.label.copy(fontSize = 14.sp), color = if (v2) Kv.text else mode.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -377,15 +465,18 @@ fun RowScope.IconLabel(
             .dim(if (enabled) 1f else 0.4f),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        val v2 = Look.v2
+        // v2: без кружков — квадрат 10 с линией, как плитка веба; включённое — мягкий акцент.
+        val badge = if (v2) RoundedCornerShape(KvShape.Panel) else CircleShape
         Box(
             Modifier
                 .size(48.dp)
-                .clip(CircleShape)
-                .background(mode.tint.copy(alpha = if (active) 0.30f else 0.14f))
-                .border(1.dp, mode.tint.copy(alpha = 0.28f), CircleShape),
+                .clip(badge)
+                .background(if (v2) (if (active) Kv.accentSoft else Kv.panel) else mode.tint.copy(alpha = if (active) 0.30f else 0.14f))
+                .border(1.dp, if (v2) (if (active) Kv.accentSoft else Kv.line) else mode.tint.copy(alpha = 0.28f), badge),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, null, tint = mode.value, modifier = Modifier.size(22.dp))
+            Icon(icon, null, tint = if (v2) (if (active) Kv.accent else Kv.icon) else mode.value, modifier = Modifier.size(22.dp))
         }
         Spacer(Modifier.height(6.dp))
         Text(label, style = t.label, color = Ink.Text, textAlign = TextAlign.Center)
@@ -408,6 +499,32 @@ internal fun Modifier.combinedTap(enabled: Boolean, onClick: () -> Unit, onLongC
 fun Toggle(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, enabled: Boolean = true, modifier: Modifier = Modifier) {
     val mode = LocalMode.current
     val pos by animateFloatAsState(if (checked) 1f else 0f, tween(160), label = "toggle")
+    if (Look.v2) {
+        // `.sw` веба: 34×20, радиус 6; включён — акцент, бегунок — квадрат 14 цвета панели.
+        Box(
+            modifier
+                .minimumInteractiveComponentSize()
+                .size(width = 34.dp, height = 20.dp)
+                .dim(if (enabled) 1f else 0.4f)
+                .clip(RoundedCornerShape(6.dp))
+                .background(if (checked) Kv.accent else Kv.hover2)
+                .then(
+                    if (onCheckedChange != null) Modifier.clickable(enabled = enabled, role = Role.Switch) { onCheckedChange(!checked) }
+                    else Modifier
+                ),
+        ) {
+            Box(
+                Modifier
+                    .padding(3.dp)
+                    .offset(x = 14.dp * pos)
+                    .size(14.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Kv.panel)
+                    .then(if (checked) Modifier else Modifier.border(1.dp, Kv.line, RoundedCornerShape(4.dp))),
+            )
+        }
+        return
+    }
     val track = RoundedCornerShape(50)
     Box(
         modifier
@@ -478,7 +595,7 @@ fun Slider4(
     ) {
         Canvas(Modifier.fillMaxWidth().height(4.dp).padding(horizontal = 10.dp)) {
             val r = CornerRadius(2.dp.toPx())
-            drawRoundRect(mode.tint.copy(alpha = 0.18f), cornerRadius = r)
+            drawRoundRect(if (Look.v2) Kv.hover2 else mode.tint.copy(alpha = 0.18f), cornerRadius = r)
             drawRoundRect(mode.tint, size = Size(size.width * frac, size.height), cornerRadius = r)
         }
         Box(Modifier.fillMaxWidth().padding(horizontal = 0.dp)) {
@@ -535,7 +652,7 @@ fun InfoDot(title: String, text: String, modifier: Modifier = Modifier) {
             .clickable(role = Role.Button, onClickLabel = "пояснение") { open = true },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(Glyphs.Info, "пояснение", tint = mode.label, modifier = Modifier.size(20.dp))
+        Icon(Glyphs.Info, "пояснение", tint = if (Look.v2) Kv.icon else mode.label, modifier = Modifier.size(if (Look.v2) 18.dp else 20.dp))
     }
     if (open) {
         PaperSheet(onDismiss = { open = false }, title = title.replaceFirstChar { it.uppercase() }) {
@@ -603,18 +720,20 @@ fun ErrorPlate(
     val mode = LocalMode.current
     val t = LocalPravkaType.current
     val clipboard = LocalClipboardManager.current
-    val shape = RoundedCornerShape(18.dp)
+    val v2 = Look.v2
+    val shape = RoundedCornerShape(if (v2) KvShape.Panel else 18.dp)
     Column(
         modifier
             .fillMaxWidth()
             .glass(shape, mode.glass, shadow = false)
-            .border(1.dp, mode.tint.copy(alpha = 0.7f), shape)
+            // v2: «сбой» — одно из двух мест, где статус красится (`--bad`).
+            .border(1.dp, if (v2) Kv.bad.copy(alpha = 0.5f) else mode.tint.copy(alpha = 0.7f), shape)
             .padding(start = 14.dp, end = 10.dp, top = 12.dp, bottom = 8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Glyphs.Error, null, tint = mode.value, modifier = Modifier.size(20.dp))
+            Icon(Glyphs.Error, null, tint = if (v2) Kv.bad else mode.value, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
-            Text(title, style = t.bodyStrong, color = mode.value)
+            Text(title, style = t.bodyStrong, color = if (v2) Kv.bad else mode.value)
         }
         Spacer(Modifier.height(4.dp))
         Text(reason, style = t.meta.copy(fontSize = 13.sp, lineHeight = 18.sp), color = Ink.Text)
@@ -643,17 +762,18 @@ fun ErrorPlate(
 @Composable
 fun OfflineChip(modifier: Modifier = Modifier, text: String = "нет связи") {
     val t = LocalPravkaType.current
-    val shape = RoundedCornerShape(7.dp)
+    val shape = RoundedCornerShape(if (Look.v2) KvShape.Tag else 7.dp)
     Row(
         modifier
             .clip(shape)
-            .border(1.dp, Ink.Cream.copy(alpha = 0.45f), shape)
+            .border(1.dp, if (Look.v2) Kv.warn.copy(alpha = 0.45f) else Ink.Cream.copy(alpha = 0.45f), shape)
             .padding(horizontal = 7.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        Icon(Glyphs.CloudOff, null, tint = Ink.Cream, modifier = Modifier.size(14.dp))
-        Text(text, style = t.caption.copy(fontWeight = FontWeight.SemiBold), color = Ink.Cream)
+        // v2: «нет связи» — «на заметку», цветом `--warn`.
+        Icon(Glyphs.CloudOff, null, tint = if (Look.v2) Kv.warn else Ink.Cream, modifier = Modifier.size(14.dp))
+        Text(text, style = t.caption.copy(fontWeight = FontWeight.SemiBold), color = if (Look.v2) Kv.warn else Ink.Cream)
     }
 }
 
@@ -661,7 +781,7 @@ fun OfflineChip(modifier: Modifier = Modifier, text: String = "нет связи
 @Composable
 fun TagChip(text: String, color: Color, background: Color, modifier: Modifier = Modifier, border: Color? = null) {
     val t = LocalPravkaType.current
-    val shape = RoundedCornerShape(7.dp)
+    val shape = RoundedCornerShape(if (Look.v2) KvShape.Tag else 7.dp)
     Text(
         text,
         style = t.caption.copy(fontWeight = FontWeight.SemiBold, lineHeight = 17.sp),
@@ -683,14 +803,17 @@ fun TagChip(text: String, color: Color, background: Color, modifier: Modifier = 
 fun CoachNote(text: String, modifier: Modifier = Modifier, title: String = "Тренер") {
     val mode = LocalMode.current
     val t = LocalPravkaType.current
+    val v2 = Look.v2
     Column(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(mode.tint.copy(alpha = 0.10f))
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .clip(RoundedCornerShape(if (v2) KvShape.Control else 16.dp))
+            // v2 — `.callout` веба: вторая панель с мягкой линией.
+            .background(if (v2) Kv.panel2 else mode.tint.copy(alpha = 0.10f))
+            .then(if (v2) Modifier.border(1.dp, Kv.lineSoft, RoundedCornerShape(KvShape.Control)) else Modifier)
+            .padding(horizontal = if (v2) 12.dp else 14.dp, vertical = if (v2) 9.dp else 10.dp),
     ) {
-        Text(title, style = t.label.copy(fontWeight = FontWeight.SemiBold), color = mode.label)
+        Text(title, style = t.label.copy(fontWeight = FontWeight.SemiBold), color = if (v2) Kv.text else mode.label)
         Spacer(Modifier.height(2.dp))
         Text(text, style = t.body.copy(lineHeight = 20.sp), color = Ink.Text)
     }
@@ -735,7 +858,7 @@ fun AskChips(questions: List<String>, onAsk: (String) -> Unit, modifier: Modifie
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         questions.forEachIndexed { i, q ->
-            val shape = RoundedCornerShape(50)
+            val shape = if (Look.v2) RoundedCornerShape(KvShape.Control) else RoundedCornerShape(50)
             Row(
                 Modifier
                     .minimumInteractiveComponentSize()
@@ -770,12 +893,14 @@ fun StatTile(
 ) {
     val mode = LocalMode.current
     val t = LocalPravkaType.current
-    val shape = RoundedCornerShape(16.dp)
+    val v2 = Look.v2
+    val shape = RoundedCornerShape(if (v2) KvShape.Panel else 16.dp)
     Column(
         modifier
             .clip(shape)
-            .background(mode.key.copy(alpha = 0.18f))
-            .border(1.dp, mode.tint.copy(alpha = 0.26f), shape)
+            // v2 — `.tile` веба: панель и линия, без краски режима.
+            .background(if (v2) Kv.panel else mode.key.copy(alpha = 0.18f))
+            .border(1.dp, if (v2) Kv.line else mode.tint.copy(alpha = 0.26f), shape)
             .padding(horizontal = 10.dp, vertical = 9.dp),
     ) {
         FitText(label, style = t.caption, color = mode.label, minSize = 9.5f)
@@ -818,7 +943,8 @@ fun Quote(text: String, modifier: Modifier = Modifier, color: Color = Ink.Text) 
 @Composable
 fun Hairline(modifier: Modifier = Modifier, alpha: Float = 0.10f) {
     val mode = LocalMode.current
-    Box(modifier.fillMaxWidth().height(1.dp).background(mode.tint.copy(alpha = alpha)))
+    // v2: линия между строками — `--line-soft`, как `border-top` строк веба.
+    Box(modifier.fillMaxWidth().height(1.dp).background(if (Look.v2) Kv.lineSoft else mode.tint.copy(alpha = alpha)))
 }
 
 /** Текст цветом содержимого — для старых экранов, которым нужен `LocalContentColor`. */

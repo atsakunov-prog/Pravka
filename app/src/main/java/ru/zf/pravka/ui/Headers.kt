@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -26,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -46,6 +48,20 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun HeaderIcon(icon: ImageVector, description: String, onClick: () -> Unit, tint: Color? = null) {
     val mode = LocalMode.current
+    if (Look.v2) {
+        // `.ib` веба: 40, прямоугольник 8, значок 20 цветом `--icon`.
+        Box(
+            Modifier
+                .size(40.dp)
+                .clip(RoundedCornerShape(KvShape.Control))
+                .clickable(role = Role.Button, onClickLabel = description, onClick = onClick)
+                .semantics { contentDescription = description },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, null, tint = tint ?: Kv.icon, modifier = Modifier.size(20.dp))
+        }
+        return
+    }
     Box(
         Modifier
             .size(44.dp)
@@ -240,6 +256,26 @@ fun DayHeader(
 @Composable
 fun MiniStat(text: String, mode: ModeColors, description: String, onClick: () -> Unit, dim: Boolean = false) {
     val t = LocalPravkaType.current
+    if (Look.v2) {
+        // v2 — метка `.tag` веба: прямоугольник 5, без краски режима.
+        Box(
+            Modifier
+                .height(40.dp)
+                .clip(RoundedCornerShape(KvShape.Control))
+                .clickable(role = Role.Button, onClickLabel = description, onClick = onClick)
+                .semantics { contentDescription = description },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text,
+                style = t.mini,
+                color = Kv.muted.copy(alpha = if (dim) 0.55f else 1f),
+                maxLines = 1,
+                modifier = Modifier.clip(RoundedCornerShape(KvShape.Tag)).background(Kv.hover2).padding(horizontal = 7.dp, vertical = 2.dp),
+            )
+        }
+        return
+    }
     val shape = RoundedCornerShape(14.dp)
     val zasechka = mode === Modes.Zasechka
     Box(
@@ -354,7 +390,7 @@ fun WeatherRow(cells: List<WeatherCell>, modifier: Modifier = Modifier, offline:
 @Composable
 fun NowJump(time: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val t = LocalPravkaType.current
-    val shape = RoundedCornerShape(20.dp)
+    val shape = RoundedCornerShape(if (Look.v2) KvShape.Control else 20.dp)
     Row(
         modifier
             .minimumInteractiveComponentSize()
@@ -366,7 +402,137 @@ fun NowJump(time: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Icon(Glyphs.ArrowDown, null, tint = Ink.Cream, modifier = Modifier.size(18.dp))
-        Text("сейчас · $time", style = t.label.copy(fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = Ink.Cream)
+        Icon(Glyphs.ArrowDown, null, tint = if (Look.v2) Kv.accent else Ink.Cream, modifier = Modifier.size(18.dp))
+        Text("сейчас · $time", style = t.label.copy(fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = if (Look.v2) Kv.accent else Ink.Cream)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Шапка Ковчега (Правка 5.0)
+// ---------------------------------------------------------------------------
+
+/**
+ * Значок Ковчега в шапке (план §3, `.kb` холста): 48 dp, во всю высоту
+ * заголовка с подписью, без стрелки. Тап — меню всех сервисов
+ * (`LocalKovcheg`); пока меню открыто — рамка акцентом вокруг, есть
+ * новенькое (новый разбор) — метка `--bad` в углу. Сам значок — иконка
+ * приложения: фон адаптивной иконки и её передний слой из ресурсов.
+ */
+@Composable
+fun KovchegMark(modifier: Modifier = Modifier, size: Dp = 48.dp) {
+    val host = LocalKovcheg.current
+    val open = host?.isOpen == true
+    val ring = Kv.accent
+    val bg = androidx.compose.ui.res.colorResource(ru.zf.pravka.R.color.ic_launcher_background)
+    Box(
+        modifier
+            .size(size)
+            .drawWithContent {
+                drawContent()
+                if (open) {
+                    val w = 2.dp.toPx()
+                    drawRoundRect(
+                        ring,
+                        // Кольцо 2 dp снаружи значка — `box-shadow: 0 0 0 2px` холста.
+                        topLeft = androidx.compose.ui.geometry.Offset(-w / 2f, -w / 2f),
+                        size = androidx.compose.ui.geometry.Size(this.size.width + w, this.size.height + w),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(12.dp.toPx()),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(w),
+                    )
+                }
+            }
+            .then(
+                if (host != null) Modifier
+                    .clip(RoundedCornerShape(11.dp))
+                    .clickable(role = Role.Button, onClickLabel = "все сервисы Ковчега", onClick = host.toggle)
+                else Modifier
+            )
+            .semantics { contentDescription = if (host?.news == true) "Все сервисы Ковчега, есть новый разбор" else "Все сервисы Ковчега" },
+    ) {
+        Box(
+            Modifier.fillMaxSize().clip(RoundedCornerShape(11.dp)).background(bg),
+            contentAlignment = Alignment.Center,
+        ) {
+            // Передний слой адаптивной иконки — 108 dp, из них видно среднее 72: показываем ровно его.
+            androidx.compose.foundation.Image(
+                androidx.compose.ui.res.painterResource(ru.zf.pravka.R.drawable.ic_launcher_foreground),
+                contentDescription = null,
+                modifier = Modifier.requiredSize(size * 1.5f),
+            )
+        }
+        if (host?.news == true) {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 3.dp, end = 3.dp)
+                    .size(10.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(Kv.bad)
+                    .border(1.5.dp, Kv.bg, RoundedCornerShape(3.dp)),
+            )
+        }
+    }
+}
+
+/**
+ * Шапка экрана вида v2 (план §3, `.top` холста): слева значок Ковчега 48,
+ * рядом название 23/600 и подпись `--faint`; справа значки `.ib`. [onBack] —
+ * только у экранов стопкой поверх (настройки, «Ещё»): у режимов назад —
+ * системный жест, а переход — через меню. [onSubtitle] — подпись нажимается
+ * («Сонет · high ⌄»); [onTitle] / [onTitleDouble] — тап по названию (у
+ * «Сегодня» — навигатор дня и шапка до минимума).
+ */
+@Composable
+fun KovchegHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    onSubtitle: (() -> Unit)? = null,
+    onTitle: (() -> Unit)? = null,
+    onTitleDouble: (() -> Unit)? = null,
+    onBack: (() -> Unit)? = null,
+    actions: (@Composable RowScope.() -> Unit)? = null,
+) {
+    val t = LocalPravkaType.current
+    Row(
+        modifier
+            .fillMaxWidth()
+            .padding(start = if (onBack != null) 4.dp else 16.dp, end = 8.dp, top = 10.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (onBack != null) {
+            HeaderIcon(Glyphs.Back, "назад", onBack)
+            Spacer(Modifier.width(2.dp))
+        }
+        KovchegMark()
+        Spacer(Modifier.width(10.dp))
+        Column(
+            Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(KvShape.Control))
+                .then(
+                    if (onTitle != null || onTitleDouble != null) Modifier.combinedClickable(
+                        onClickLabel = "другой день",
+                        onClick = onTitle ?: {},
+                        onDoubleClick = onTitleDouble,
+                    ) else Modifier
+                ),
+        ) {
+            Text(title, style = t.titleM, color = Kv.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (!subtitle.isNullOrBlank()) {
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(KvShape.Tag))
+                        .then(if (onSubtitle != null) Modifier.clickable(role = Role.DropdownList, onClick = onSubtitle) else Modifier),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(subtitle, style = t.meta.copy(fontSize = 13.sp, lineHeight = 17.sp), color = Kv.faint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (onSubtitle != null) {
+                        Icon(Glyphs.ChevronDown, null, tint = Kv.faint, modifier = Modifier.padding(start = 2.dp).size(14.dp))
+                    }
+                }
+            }
+        }
+        if (actions != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp), content = actions)
     }
 }

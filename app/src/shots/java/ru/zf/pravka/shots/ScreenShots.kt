@@ -371,6 +371,7 @@ class ScreenShots {
         // ---- сложенный: внешний экран
         var c: ActivityController<MainActivity>
         if (want("outer")) {
+        kovcheg("outer")
         c = launch(MainActivity.TAB_PRAVKA); shot(c, "outer-01-pravka"); close(c)
         c = launch(MainActivity.TAB_ZASECHKA); shot(c, "outer-02-zasechka")
         if (tap(c, "статистика")) shot(c, "outer-09-report")
@@ -386,9 +387,9 @@ class ScreenShots {
         c = launch(MainActivity.TAB_MONEY); shot(c, "outer-06-money")
         if (tap(c, "Журнал", exact = true)) shot(c, "outer-06b-money-zhurnal")
         close(c)
-        // «Ещё» — аватаром «С» в шапке «Сегодня» (Правка 4.0: нижней панели нет).
+        // «Ещё» — в меню Ковчега строкой «Настройки телефона» (Правка 5.0; в 4.0 — аватар «С»).
         c = launch(null)
-        if (tap(c, "Ещё и настройки")) shot(c, "outer-07-more")
+        if (tap(c, "Все сервисы Ковчега") && tap(c, "Настройки телефона")) shot(c, "outer-07-more")
         close(c)
         c = launch(MainActivity.TAB_SETTINGS); shot(c, "outer-08-settings"); close(c)
         // Баги и предложения (07.10.2026): две записи — новая и сделанная сборкой.
@@ -428,6 +429,7 @@ class ScreenShots {
         // ---- разложенный: внутренний экран
         if (want("inner")) {
         RuntimeEnvironment.setQualifiers(INNER)
+        kovcheg("inner")
         for ((tab, name) in listOf(
             MainActivity.TAB_PRAVKA to "inner-01-pravka",
             MainActivity.TAB_ZASECHKA to "inner-02-zasechka",
@@ -442,6 +444,26 @@ class ScreenShots {
         if (tap(c, "статистика")) shot(c, "inner-09-report")
         close(c)
         }
+    }
+
+    /**
+     * Вид v2 Ковчега (Правка 5.0, этап 1): «Сегодня», открытое меню значка и
+     * два режима — в светлой и тёмной теме, тем размером, что стоит сейчас.
+     */
+    private fun kovcheg(prefix: String) {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        for (theme in listOf("light", "dark")) {
+            runBlocking { app.settings.setLookTheme(theme) }
+            settle(4)
+            var c = launch(null)
+            shot(c, "$prefix-v2-$theme-1-today")
+            if (tap(c, "Все сервисы Ковчега")) shot(c, "$prefix-v2-$theme-2-menu")
+            close(c)
+            c = launch(MainActivity.TAB_TODOIST); shot(c, "$prefix-v2-$theme-3-dela"); close(c)
+            c = launch(MainActivity.TAB_ZASECHKA); shot(c, "$prefix-v2-$theme-4-zasechka"); close(c)
+        }
+        runBlocking { app.settings.setLookTheme("system") }
+        settle(4)
     }
 
     // ------------------------------------------------------------ кнопки на стекле

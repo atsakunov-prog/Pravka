@@ -118,7 +118,7 @@ internal enum class SettingsGroup(
     ARCHIVE("Архив", "вся жизнь на компе, к ней ходит Claude", SettingsShelf.LINKS, { Glyphs.Archive }),
     BUTTONS("Кнопки на экране", "какие, круг или стопка, размер", SettingsShelf.LOOK, { Glyphs.Disk }),
     DISK("Вид диска", "стекло, плотности, тени, инерция", SettingsShelf.LOOK, { Glyphs.Palette }),
-    CARDS("Плашки приложения", "значки, свечение режима, темнее, фаска, свет, зерно", SettingsShelf.LOOK, { Glyphs.Layers }),
+    CARDS("Вид приложения", "тема, «Вид 4.0»; в нём — значки, свечение, плашки", SettingsShelf.LOOK, { Glyphs.Layers }),
     // Владелец, 07.10.2026: «нам в самом приложении тоже нужна история, что он
     // починил по каждому багу (в настройках, думаю, „Баги“)».
     BUGS("Баги", "что починено по каждому, по сборкам; что ждёт ночного разбора", SettingsShelf.APP, { Glyphs.Bug }),
@@ -1127,6 +1127,30 @@ private fun DiskSettings(app: PravkaApp) {
 private fun CardsSettings(app: PravkaApp) {
     val scope = app.appScope
     val settings = app.settings
+    // Правка 5.0 (13.10.2026, docs/redesign-5-plan.md): с завода — вид v2 Ковчега,
+    // как веб Дел; тема — как в системе или выбором. «Вид 4.0» — откат на время
+    // переезда: стекло, свечение, монеты и прежние шапки; всё ниже — его ручки.
+    PaperCard(
+        label = "вид",
+        info = "Вид Ковчега — тот же, что у веба Дел и страниц сервера: светлый тёплый или " +
+            "тёмный графит, плоские панели, один акцент. «Как в системе» следует теме " +
+            "телефона. «Вид 4.0» возвращает прежнее стекло, свечение режима и шапки — " +
+            "на время переезда; тема у него всегда ночь, а настройки ниже работают только в нём.",
+    ) {
+        val theme by settings.lookThemeFlow.collectAsState(initial = "system")
+        val v4 by settings.lookV4Flow.collectAsState(initial = false)
+        ChipRow {
+            for ((key, label) in listOf("system" to "Как в системе", "light" to "Светлая", "dark" to "Тёмная")) {
+                PaperChip(label, selected = theme == key && !v4, enabled = !v4, onClick = { scope.launch { settings.setLookTheme(key) } })
+            }
+        }
+        PaperToggle(
+            "Вид 4.0",
+            v4,
+            { on -> scope.launch { settings.setLookV4(on) } },
+            hint = "стекло, свечение и прежние шапки — на время переезда",
+        )
+    }
     PaperCard(
         label = "плашки",
         info = "Те же три слоя, что у стекла диска, и та же логика света. Числа у них " +

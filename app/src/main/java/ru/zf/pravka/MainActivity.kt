@@ -289,8 +289,29 @@ class MainActivity : ComponentActivity() {
         runCatching {
             ru.zf.pravka.ui.Glyphs.gemini = kotlinx.coroutines.runBlocking { app.settings.iconsGeminiFlow.first() }
         }
+        // Вид и тема (Правка 5.0) — тоже до первого кадра: иначе холодный старт
+        // мигнул бы чужой темой. Дальше их держит `PravkaApp` подпиской.
+        runCatching {
+            kotlinx.coroutines.runBlocking {
+                ru.zf.pravka.ui.Look.theme = ru.zf.pravka.ui.Look.Theme.of(app.settings.lookThemeFlow.first())
+                ru.zf.pravka.ui.Look.v4 = app.settings.lookV4Flow.first()
+            }
+        }
         setContent {
             PravkaTheme {
+                // Окно под экраном и значки строки состояния — по теме: на светлой
+                // v2 белые значки на тёплом фоне не видны (тема окна — всегда ночь).
+                val windowBg = MaterialTheme.colorScheme.background
+                val lightBars = ru.zf.pravka.ui.Look.v2 && !ru.zf.pravka.ui.Look.dark
+                androidx.compose.runtime.SideEffect {
+                    window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.argb(
+                        (windowBg.alpha * 255).toInt(), (windowBg.red * 255).toInt(), (windowBg.green * 255).toInt(), (windowBg.blue * 255).toInt(),
+                    )))
+                    androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply {
+                        isAppearanceLightStatusBars = lightBars
+                        isAppearanceLightNavigationBars = lightBars
+                    }
+                }
                 // Вид плашек — из настроек, один раз на всё приложение
                 // (`ui/CardLook.kt`): `PaperCard` зовут из десятка мест, и
                 // протаскивать четыре тумблера через каждый вызов значило бы
@@ -703,6 +724,13 @@ private fun MainScreen(
 
     val openMode: (Tab) -> Unit = { t -> if (live(t)) { tab = t; pages = emptyList() } }
     val toToday = { tab = Tab.TODAY; pages = emptyList() }
+    // Вид v2 (Правка 5.0, план §3): у режима в шапке значок Ковчега, а не «‹» —
+    // назад остаётся системным жестом, переходы — через меню. В «Виде 4.0» — как было.
+    val modeBack: (() -> Unit)? = if (ru.zf.pravka.ui.Look.v4) toToday else null
+    // Меню Ковчега — одно на приложение, поверх любого экрана.
+    var menuOpen by remember { mutableStateOf(false) }
+    // Раздел Дел, который открыть из меню («CRM»).
+    var delaNav by remember { mutableStateOf<String?>(null) }
     val openCost = { pages = pages + Page.Cost }
     val openReport = { pages = pages + Page.Service(Tab.REPORT) }
     val todayNav = remember {
@@ -733,7 +761,7 @@ private fun MainScreen(
                         val clean by cleanFlow.collectAsState(initial = null)
                         TabHeader(
                             title = stringResource(R.string.tab_pravka),
-                            onBack = toToday,
+                            onBack = modeBack,
                             titleExtra = clean?.let { c ->
                                 ru.zf.pravka.data.Models.label(c.model).substringBefore(' ') + " · " +
                                     ru.zf.pravka.data.Models.effectiveEffort(c.model, c.effort)
@@ -750,7 +778,7 @@ private fun MainScreen(
                     Tab.ZASECHKA -> {
                         TabHeader(
                             title = stringResource(R.string.tab_zasechka),
-                            onBack = toToday,
+                            onBack = modeBack,
                             actions = {
                                 StatsAction(openReport)
                                 SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.ZASECHKA)) }
@@ -774,19 +802,21 @@ private fun MainScreen(
                                 app,
                                 openTaskId = delaOpen,
                                 onOpenHandled = { delaOpen = null },
+                                openNav = delaNav,
+                                onNavHandled = { delaNav = null },
                                 header = { sub, onSub ->
-                                    TabHeader(title = "Дела", onBack = toToday, titleExtra = sub, onTitleExtra = onSub, actions = delaActions)
+                                    TabHeader(title = "Дела", onBack = modeBack, titleExtra = sub, onTitleExtra = onSub, actions = delaActions)
                                 },
                             )
                         } else {
-                            TabHeader(title = "Дела", onBack = toToday, actions = delaActions)
+                            TabHeader(title = "Дела", onBack = modeBack, actions = delaActions)
                             TodoistTab(app)
                         }
                     }
                     Tab.SPORT -> {
                         TabHeader(
                             title = stringResource(R.string.tab_sport),
-                            onBack = toToday,
+                            onBack = modeBack,
                             // Вторым тоном — неделя года, как в макете 09 («Неделя 41»).
                             titleExtra = "Неделя " + java.time.LocalDate.now().get(java.time.temporal.WeekFields.ISO.weekOfWeekBasedYear()),
                             actions = {
@@ -803,7 +833,7 @@ private fun MainScreen(
                         var scopeSheet by remember { mutableStateOf(false) }
                         TabHeader(
                             title = stringResource(R.string.tab_money),
-                            onBack = toToday,
+                            onBack = modeBack,
                             titleExtra = when {
                                 pOn && zOn -> "Всё"
                                 zOn -> "ЗФ"
@@ -834,7 +864,7 @@ private fun MainScreen(
                             header = { day, onDay ->
                                 TabHeader(
                                     title = foodTitle,
-                                    onBack = toToday,
+                                    onBack = modeBack,
                                     titleExtra = day,
                                     onTitleExtra = onDay,
                                     actions = {
@@ -851,7 +881,15 @@ private fun MainScreen(
         }
     }
 
+    // Меню Ковчега: что в нём и куда ведёт (`core/Kovcheg.kt`), новенькое — новый разбор.
+    val reviewRuns by app.nightReviewStore.runsFlow.collectAsState()
+    val reviewsSeenAt by app.settings.reviewsSeenAtFlow.collectAsState(initial = Long.MAX_VALUE)
+    val news = ru.zf.pravka.core.ReviewDigest.hasNews(reviewRuns, reviewsSeenAt)
+    BackHandler(enabled = menuOpen) { menuOpen = false }
+    val host = ru.zf.pravka.ui.KovchegHost(toggle = { menuOpen = !menuOpen }, isOpen = menuOpen, news = news)
+
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalKovcheg provides host) {
         // Переходы — растворением, 250 мс (DESIGN §10): экран не едет, а сменяется.
         androidx.compose.animation.AnimatedContent(
             targetState = page to tab,
@@ -885,11 +923,30 @@ private fun MainScreen(
                 else -> modeScreen(t)
             }
         }
+        }
         // Пуши выключены — говорим сверху, а не в глубине настроек автопилота.
         if (!notifEnabled) {
             Box(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 92.dp)) {
                 NotificationsBanner(onFixNotifications)
             }
+        }
+        if (menuOpen && ru.zf.pravka.ui.Look.v2) {
+            KovchegMenuHost(
+                app = app,
+                live = live,
+                current = if (page != null) null else kovchegKey(tab),
+                news = news,
+                onScreen = { key ->
+                    menuOpen = false
+                    when (key) {
+                        ru.zf.pravka.core.Kovcheg.TODAY -> toToday()
+                        ru.zf.pravka.core.Kovcheg.CRM -> { delaNav = "crm"; openMode(Tab.TODOIST) }
+                        else -> tabOfKovcheg(key)?.let(openMode)
+                    }
+                },
+                onPhone = { menuOpen = false; pages = listOf(Page.Service(Tab.MORE)) },
+                onDismiss = { menuOpen = false },
+            )
         }
     }
 
@@ -962,7 +1019,8 @@ private fun PageScreen(
                 }
                 is Page.Service -> {
                     TabHeader(
-                        title = stringResource(p.tab.titleRes),
+                        // Вид v2: «Ещё» открывается из меню Ковчега строкой «Настройки телефона» — так и называется.
+                        title = if (p.tab == Tab.MORE && ru.zf.pravka.ui.Look.v2) "Настройки телефона" else stringResource(p.tab.titleRes),
                         glyph = if (p.tab == Tab.MORE) null else serviceGlyph(p.tab),
                         onBack = pop,
                         actions = {
@@ -1027,6 +1085,110 @@ private fun WideCap(content: @Composable () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Box(Modifier.fillMaxHeight().widthIn(max = 640.dp)) { content() }
     }
+}
+
+/** Ключ экрана в меню Ковчега — чтобы подсветить, где мы. */
+private fun kovchegKey(tab: Tab): String? = when (tab) {
+    Tab.TODAY -> ru.zf.pravka.core.Kovcheg.TODAY
+    Tab.ZASECHKA -> ru.zf.pravka.core.Kovcheg.ZASECHKA
+    Tab.PRAVKA -> ru.zf.pravka.core.Kovcheg.PRAVKA
+    Tab.SPORT -> ru.zf.pravka.core.Kovcheg.SPORT
+    Tab.FOOD -> ru.zf.pravka.core.Kovcheg.FOOD
+    Tab.TODOIST -> ru.zf.pravka.core.Kovcheg.DELA
+    Tab.MONEY -> ru.zf.pravka.core.Kovcheg.MONEY
+    else -> null
+}
+
+/** Экран приложения по ключу меню Ковчега. */
+private fun tabOfKovcheg(key: String): Tab? = when (key) {
+    ru.zf.pravka.core.Kovcheg.ZASECHKA -> Tab.ZASECHKA
+    ru.zf.pravka.core.Kovcheg.PRAVKA -> Tab.PRAVKA
+    ru.zf.pravka.core.Kovcheg.SPORT -> Tab.SPORT
+    ru.zf.pravka.core.Kovcheg.FOOD -> Tab.FOOD
+    ru.zf.pravka.core.Kovcheg.DELA -> Tab.TODOIST
+    ru.zf.pravka.core.Kovcheg.MONEY -> Tab.MONEY
+    else -> null
+}
+
+/**
+ * Меню Ковчега с данными (план §3): большие кнопки и свои пункты — по
+ * включённым режимам профиля, CRM — если Дела на своём сервере и она
+ * открыта; сервисы, которых в приложении нет, — из `/api/me` сервера Дел
+ * (`DelaSync.services`), адресов в коде нет. Веб — Custom Tab браузера,
+ * Claude — его приложение (нет — claude.ai).
+ */
+@Composable
+private fun KovchegMenuHost(
+    app: PravkaApp,
+    live: (Tab) -> Boolean,
+    current: String?,
+    news: Boolean,
+    onScreen: (String) -> Unit,
+    onPhone: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val nav by app.delaSync.services.collectAsState()
+    val link by app.delaSync.link.collectAsState()
+    val onServer by app.delaServer.collectAsState()
+    val snap by app.delaStore.view.collectAsState()
+    val me = link?.user ?: app.delaStore.me
+    val crm = onServer && ru.zf.pravka.core.Dela.crmOn(snap, me)
+    val model = remember(nav, link, crm, current, news, live) {
+        val K = ru.zf.pravka.core.Kovcheg
+        val modes = buildSet {
+            if (live(Tab.SPORT)) add(K.SPORT)
+            if (live(Tab.FOOD)) add(K.FOOD)
+            if (live(Tab.TODOIST)) add(K.DELA)
+            if (live(Tab.MONEY)) add(K.MONEY)
+        }
+        ru.zf.pravka.ui.KovchegMenuModel(
+            big = K.BIG.filter { (it.target as? ru.zf.pravka.core.Kovcheg.Target.Screen)?.key != K.ZASECHKA || live(Tab.ZASECHKA) },
+            directions = K.directions(K.own(modes, crm), nav, link?.url),
+            create = K.CREATE,
+            current = current,
+            news = news,
+        )
+    }
+    ru.zf.pravka.ui.KovchegMenu(
+        model = model,
+        onPick = { target ->
+            when (target) {
+                is ru.zf.pravka.core.Kovcheg.Target.Screen -> onScreen(target.key)
+                is ru.zf.pravka.core.Kovcheg.Target.Web -> { onDismiss(); openWeb(context, target.url) }
+                ru.zf.pravka.core.Kovcheg.Target.Claude -> { onDismiss(); openClaude(context) }
+            }
+        },
+        onPhone = onPhone,
+        onTheme = {
+            // Переключатель меню — между светлой и тёмной; «как в системе» — в настройках вида.
+            val next = if (ru.zf.pravka.ui.Look.dark) ru.zf.pravka.ui.Look.Theme.LIGHT else ru.zf.pravka.ui.Look.Theme.DARK
+            ru.zf.pravka.ui.Look.theme = next
+            app.appScope.launch { app.settings.setLookTheme(next.key) }
+        },
+        onDismiss = onDismiss,
+    )
+}
+
+/**
+ * Страница сервиса — Custom Tab браузера, если он их умеет, иначе обычный
+ * браузер. Протокол Custom Tabs — это просто пара extras у `ACTION_VIEW`
+ * (`androidx.browser` делает ровно это), поэтому без лишней библиотеки.
+ */
+internal fun openWeb(context: android.content.Context, url: String) {
+    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
+        putExtras(android.os.Bundle().apply { putBinder("android.support.customtabs.extra.SESSION", null) })
+        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    runCatching { context.startActivity(intent) }
+        .onFailure { e -> Feedback.toast(context, "Не открылось: ${e.javaClass.simpleName}: ${e.message}") }
+}
+
+/** Приложение Claude по пакету; не установлено — claude.ai в браузере. */
+internal fun openClaude(context: android.content.Context) {
+    val launch = context.packageManager.getLaunchIntentForPackage(ru.zf.pravka.core.Kovcheg.CLAUDE_PACKAGE)
+    if (launch != null && runCatching { context.startActivity(launch.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess) return
+    openWeb(context, ru.zf.pravka.core.Kovcheg.CLAUDE_WEB)
 }
 
 /**

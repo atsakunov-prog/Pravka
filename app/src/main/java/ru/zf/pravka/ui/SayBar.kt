@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
 // режиму» первой строкой (версия 3). Вид — стекло режима (на «Сегодня» —
 // нейтральное) и клавиша голоса справа внизу: главное действие экрана.
 // Пилюля диктовки поверх приложений не меняется: это вид ВНУТРИ приложения.
+// Вид v2 (Правка 5.0) — `.say` холста: панель 48 с линией и клавиша-акцент.
 
 /** Итог: одна строка «Записал в ленту · 2», тап — список с карандашами. */
 class SayResult(val text: String, val onClick: () -> Unit)
@@ -98,20 +99,25 @@ fun SayBar(
     val progress by LocalClaudeProgress.current
     val seconds by LocalClaudeSeconds.current
     val tall = above != null
-    val shape = RoundedCornerShape(if (tall) 32.dp else 31.dp)
+    // Вид v2 — `.say` холста: панель 48 с линией, радиус 10, клавиша голоса — акцент 8.
+    val v2 = Look.v2
+    val shape = RoundedCornerShape(if (v2) KvShape.Panel else if (tall) 32.dp else 31.dp)
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (error != null) ErrorPlate(error, onRetry = onRetry)
         Row(
             Modifier
                 .fillMaxWidth()
-                .heightIn(min = if (tall) 64.dp else 62.dp)
+                .heightIn(min = if (v2) (if (tall) 56.dp else 48.dp) else if (tall) 64.dp else 62.dp)
                 // Строка стоит поверх ленты — стекло плотнее плашек (`mockups`:
                 // .84–.86 у «Сегодня» и режимов, .86 и тёплый налёт у Засечки).
-                .glass(shape, mode.glass.copy(inkAlpha = maxOf(mode.glass.inkAlpha, 0.9f), keyTop = if (tall) 0.22f else mode.glass.keyTop, keyBottom = if (tall) 0.08f else mode.glass.keyBottom, key = if (tall) mode.key else mode.glass.key))
+                .then(
+                    if (v2) Modifier.glass(shape, mode.glass, shadow = false)
+                    else Modifier.glass(shape, mode.glass.copy(inkAlpha = maxOf(mode.glass.inkAlpha, 0.9f), keyTop = if (tall) 0.22f else mode.glass.keyTop, keyBottom = if (tall) 0.08f else mode.glass.keyBottom, key = if (tall) mode.key else mode.glass.key))
+                )
                 .then(
                     // В Засечке строка теплее и плотнее (`mockups/04`): налёт
                     // янтаря сверху и рамка ярче — она и есть пульт дня.
-                    if (tall) Modifier.border(1.dp, mode.tint.copy(alpha = 0.45f), shape) else Modifier
+                    if (tall && !v2) Modifier.border(1.dp, mode.tint.copy(alpha = 0.45f), shape) else Modifier
                 )
                 .clip(shape)
                 .drawBehind {
@@ -119,10 +125,10 @@ fun SayBar(
                     val p = progress
                     if (busy) {
                         val f = (p ?: 1f).coerceIn(0f, 1f)
-                        drawRect(mode.tint.copy(alpha = 0.25f), size = Size(size.width * f, size.height))
+                        drawRect(if (v2) Kv.accentSoft else mode.tint.copy(alpha = 0.25f), size = Size(size.width * f, size.height))
                     }
                 }
-                .padding(start = if (leading != null) 6.dp else if (trailing != null) 18.dp else 20.dp, end = 6.dp),
+                .padding(start = if (leading != null) 6.dp else if (v2) 14.dp else if (trailing != null) 18.dp else 20.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (leading != null) {
@@ -216,7 +222,7 @@ fun SayBar(
                     else -> "отправить"
                 },
                 onClick = { if (voice) onMic?.invoke() else if (sendEnabled && enabled) onSend() },
-                size = if (tall) 52.dp else 50.dp,
+                size = if (v2) 38.dp else if (tall) 52.dp else 50.dp,
                 cream = cream,
                 enabled = active || busy,
             ) {
@@ -233,8 +239,8 @@ fun SayBar(
                             Box(Modifier.width(3.dp).height(h.dp).clip(RoundedCornerShape(2.dp)).background(ink))
                         }
                     }
-                    voice -> Icon(Glyphs.Mic, null, tint = ink, modifier = Modifier.size(24.dp))
-                    else -> Icon(sendIcon, null, tint = ink, modifier = Modifier.size(22.dp))
+                    voice -> Icon(Glyphs.Mic, null, tint = ink, modifier = Modifier.size(if (v2) 20.dp else 24.dp))
+                    else -> Icon(sendIcon, null, tint = ink, modifier = Modifier.size(if (v2) 20.dp else 22.dp))
                 }
             }
         }
@@ -246,13 +252,13 @@ fun SayBar(
 fun SayIcon(icon: ImageVector, description: String, onClick: () -> Unit, enabled: Boolean = true) {
     Box(
         Modifier
-            .size(width = 40.dp, height = 44.dp)
-            .clip(CircleShape)
+            .size(width = if (Look.v2) 36.dp else 40.dp, height = if (Look.v2) 36.dp else 44.dp)
+            .clip(if (Look.v2) RoundedCornerShape(KvShape.Control) else CircleShape)
             .clickable(enabled = enabled, role = Role.Button, onClickLabel = description, onClick = onClick)
             .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, null, tint = LocalContentColor.current.copy(alpha = if (enabled) 1f else 0.35f), modifier = Modifier.size(22.dp))
+        Icon(icon, null, tint = (if (Look.v2) Kv.icon else LocalContentColor.current).copy(alpha = if (enabled) 1f else 0.35f), modifier = Modifier.size(if (Look.v2) 20.dp else 22.dp))
     }
 }
 
@@ -263,6 +269,23 @@ fun SayIcon(icon: ImageVector, description: String, onClick: () -> Unit, enabled
 @Composable
 fun StopKey(onClick: () -> Unit, description: String = "остановить") {
     val mode = LocalMode.current
+    if (Look.v2) {
+        // v2: «Стоп» — `.btn` со значком: панель, линия, прямоугольник 8, квадрат цветом текста.
+        val shape = RoundedCornerShape(KvShape.Control)
+        Box(
+            Modifier
+                .size(40.dp)
+                .clip(shape)
+                .background(Kv.panel2)
+                .border(1.dp, Kv.line, shape)
+                .clickable(role = Role.Button, onClickLabel = description, onClick = onClick)
+                .semantics { contentDescription = description },
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(Modifier.size(12.dp).clip(RoundedCornerShape(3.dp)).background(Kv.text))
+        }
+        return
+    }
     Box(
         Modifier
             .size(44.dp)
@@ -283,7 +306,7 @@ fun SayAbove(text: String, tail: String? = null) {
     val mode = LocalMode.current
     val t = LocalPravkaType.current
     Row {
-        Text(text, style = t.meta.copy(lineHeight = 15.sp), color = Color(0xFFD9A06A).takeIf { mode === Modes.Zasechka } ?: mode.label, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Text(text, style = t.meta.copy(lineHeight = 15.sp), color = if (Look.v2) Kv.muted else Color(0xFFD9A06A).takeIf { mode === Modes.Zasechka } ?: mode.label, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
         if (tail != null) Text(" · $tail", style = t.meta.copy(lineHeight = 15.sp, fontWeight = FontWeight.SemiBold), color = Ink.Now, maxLines = 1)
     }
 }

@@ -221,6 +221,9 @@ fun DelaTab(
      * шапки — сфера («Все сферы ⌄», `screens/06`), а сфера живёт здесь.
      */
     header: @Composable (sphere: String, onSphere: () -> Unit) -> Unit = { _, _ -> },
+    /** Раздел, который открыть сразу (меню Ковчега: «CRM» — `crm`). */
+    openNav: String? = null,
+    onNavHandled: () -> Unit = {},
 ) {
     val snap by app.delaStore.view.collectAsState()
     val queued by app.delaStore.queued.collectAsState()
@@ -264,6 +267,12 @@ fun DelaTab(
         val t = snap.tasks[id] ?: return@LaunchedEffect
         openTask = t
         onOpenHandled()
+    }
+    LaunchedEffect(openNav) {
+        val want = openNav ?: return@LaunchedEffect
+        nav = want
+        pages = emptyList()
+        onNavHandled()
     }
     var newTask by remember { mutableStateOf(false) }
     var editingSuggestion by remember { mutableStateOf<Dela.Suggestion?>(null) }

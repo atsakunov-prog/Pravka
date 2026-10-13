@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 // Плашка режима на «Сегодня» (DESIGN §8 «Плашка режима», §11.3, `mockups/01`):
 // значок и подпись, цифра дня, полоса прогресса. Четыре в ряд — Дела, Спорт,
 // Еда, Деньги: вход в режим и его итог дня одним взглядом.
+// Вид v2 (Правка 5.0) — плитка `.tile` веба (`TileV2`).
 
 /** Что показывает плашка: обычное, пусто «—», «считаю…» или нет связи (цифра @ .55). */
 enum class TileState { NORMAL, EMPTY, LOADING, OFFLINE }
@@ -61,6 +62,10 @@ fun ModeTile(
     progress: Float? = null,
     state: TileState = TileState.NORMAL,
 ) {
+    if (Look.v2) {
+        TileV2(icon, label, value, onClick, modifier, progress, state)
+        return
+    }
     val m = Modes.of(decor)
     val t = LocalPravkaType.current
     val shape = RoundedCornerShape(18.dp)
@@ -114,6 +119,66 @@ fun ModeTile(
                     drawRoundRect(m.tint.copy(alpha = 0.18f), cornerRadius = r)
                     val f = progress.coerceIn(0f, 1f)
                     if (f > 0f) drawRoundRect(lerp(m.tint, Color.White, 0.18f), size = Size(size.width * f, size.height), cornerRadius = r)
+                },
+        )
+    }
+}
+
+/**
+ * Плитка вида v2 — `.tile` веба: панель с линией, радиус 10; значок и
+ * название сверху, цифра 18/600, полоса 5 — заливка `--bar-fill` по
+ * `--hover-2`. Краски режима нет: акцент один, плитку узнают по значку.
+ */
+@Composable
+private fun TileV2(
+    icon: ImageVector,
+    label: String,
+    value: String,
+    onClick: () -> Unit,
+    modifier: Modifier,
+    progress: Float?,
+    state: TileState,
+) {
+    val t = LocalPravkaType.current
+    val shape = RoundedCornerShape(KvShape.Panel)
+    Column(
+        modifier
+            .clip(shape)
+            .background(Kv.panel)
+            .border(1.dp, Kv.line, shape)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = "$label: $value" }
+            .padding(start = 10.dp, end = 10.dp, top = 9.dp, bottom = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            Icon(icon, null, tint = Kv.icon, modifier = Modifier.size(15.dp))
+            Text(label, style = t.label, color = Kv.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Box(Modifier.height(22.dp), contentAlignment = Alignment.CenterStart) {
+            when (state) {
+                TileState.LOADING -> Text("считаю…", style = t.caption, color = Kv.faint, maxLines = 1)
+                TileState.EMPTY -> Text("—", style = t.valueL, color = Kv.faint, maxLines = 1)
+                else -> FitText(
+                    value,
+                    style = t.valueL,
+                    color = Kv.text.copy(alpha = if (state == TileState.OFFLINE) 0.55f else 1f),
+                    minSize = 12f,
+                )
+            }
+        }
+        val track = Kv.hover2
+        val fill = Kv.barFill
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(5.dp)
+                .drawBehind {
+                    if (progress == null) return@drawBehind
+                    val r = CornerRadius(3.dp.toPx())
+                    drawRoundRect(track, cornerRadius = r)
+                    val f = progress.coerceIn(0f, 1f)
+                    if (f > 0f) drawRoundRect(fill, size = Size(size.width * f, size.height), cornerRadius = r)
                 },
         )
     }

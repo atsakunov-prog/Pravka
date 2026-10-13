@@ -76,6 +76,32 @@ class DelaSync(
     private val mutex = Mutex()
     private var pokeJob: Job? = null
 
+    private val navFile: File get() = File(DataRoot.secrets(context), NAV_FILE)
+    private val _services = MutableStateFlow(readNav())
+
+    /**
+     * Сервисы Ковчега для меню значка (Правка 5.0, план §3): `/api/me` →
+     * `look.nav`, «название|значок|адрес» из настроек сервера на компе — так
+     * их уже получает веб Дел. Адреса живут рядом со входом в Дела (закрытая
+     * память установки), а не в коде: репозиторий публичный. Без связи —
+     * последнее, что сервер говорил.
+     */
+    val services: StateFlow<List<ru.zf.pravka.core.Kovcheg.Nav>> = _services
+
+    private fun readNav(): List<ru.zf.pravka.core.Kovcheg.Nav> = runCatching {
+        if (!navFile.isFile) emptyList() else ru.zf.pravka.core.Kovcheg.navFrom(JSONArray(navFile.readText()))
+    }.getOrDefault(emptyList())
+
+    /** Запомнить сервисы из ответа `/api/me`. Старый сервер без `look` ничего не меняет. */
+    private fun keepNav(me: JSONObject) {
+        if (me.optJSONObject("look") == null) return
+        val nav = ru.zf.pravka.core.Kovcheg.navFrom(me)
+        if (nav == _services.value) return
+        runCatching { StoreFiles.writeAtomic(navFile, ru.zf.pravka.core.Kovcheg.navJson(nav).toString()) }
+            .onFailure { e -> log("дела: сервисы Ковчега не записались — ${e.javaClass.simpleName}: ${e.message}") }
+        _services.value = nav
+    }
+
     init {
         _link.value?.let { l -> scope.launch { runCatching { store.setMe(l.user) } } }
     }
@@ -109,6 +135,7 @@ class DelaSync(
             )
             store.setMe(user)
             store.resetCopy()
+            keepNav(me)
             _link.value = l
             _status.value = Status()
             log("дела: подключены $clean как ${l.name}")
@@ -118,6 +145,8 @@ class DelaSync(
 
     fun disconnect() {
         runCatching { linkFile.delete() }
+        runCatching { navFile.delete() }
+        _services.value = emptyList()
         _link.value = null
         _status.value = Status()
         log("дела: отключены")
@@ -206,14 +235,16 @@ class DelaSync(
         if (refused.isNotBlank()) throw DelaException(refused)
         svod?.let { sv -> pullSvod(l, sv, resp) }
         // Фильтры Дел (10.10.2026) — в настройках человека на сервере, синк их не возит: берём из
-        // `/api/me`. Сбой фильтров синк дел не роняет — он словами в журнал.
-        if (ru.zf.pravka.core.Dela.FEATURE_GROUPS in store.view.value.features) {
-            runCatching {
-                val me = get(l.url, l.token, "api/me")
+        // `/api/me`. Оттуда же — сервисы для меню Ковчега (13.10.2026, `look.nav`): один запрос на
+        // оба. Сбой не роняет синк дел — он словами в журнал.
+        runCatching {
+            val me = get(l.url, l.token, "api/me")
+            if (ru.zf.pravka.core.Dela.FEATURE_GROUPS in store.view.value.features) {
                 val settings = me.optJSONObject("settings") ?: JSONObject()
                 store.setServerFilters(settings.optJSONArray("filters"))
-            }.onFailure { e -> log("дела: фильтры — ${why(e)}") }
-        }
+            }
+            keepNav(me)
+        }.onFailure { e -> log("дела: /api/me (фильтры, меню Ковчега) — ${why(e)}") }
     }
 
     /**
@@ -470,6 +501,8 @@ class DelaSync(
 
     companion object {
         const val LINK_FILE = "dela-link.json"
+        /** Сервисы Ковчега из `/api/me` (меню значка). */
+        const val NAV_FILE = "kovcheg-nav.json"
         const val PAIR_PREFIX = "pravka-dela:"
         private const val POKE_QUIET_MS = 10_000L
         /** Ответ «кто это» по номеру — на сутки (docs/svod-phone.md, 3.2). */

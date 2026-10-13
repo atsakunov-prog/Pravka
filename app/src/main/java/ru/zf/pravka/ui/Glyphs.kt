@@ -83,12 +83,21 @@ object Glyphs {
 
     private val ours = HashMap<String, ImageVector>()
     private val thin = HashMap<String, ImageVector>()
+    private val kv = HashMap<String, ImageVector>()
 
     /**
      * Значок в текущем почерке. У Gemini-почерка своей пары нет — наш знак
      * тоньше (1,5 вместо 2), чтобы не выпирал среди тонких Material.
+     *
+     * Вид v2 (Правка 5.0): почерк один — набор Ковчега линией 1,75
+     * (`KvGlyphs`, те же пути, что у веба); выбор «как у Gemini · наши»
+     * остаётся «Виду 4.0». Пары в наборе нет — наш знак той же толщины.
      */
     private fun pick(name: String, build: (Float) -> ImageVector): ImageVector {
+        if (Look.v2) {
+            KvGlyphs.forGlyph(name)?.let { return it }
+            return synchronized(kv) { kv.getOrPut(name) { build(KvGlyphs.STROKE) } }
+        }
         if (gemini) {
             GeminiGlyphs.vector(name)?.let { return it }
             return thin.getOrPut(name) { build(1.5f) }

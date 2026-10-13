@@ -215,10 +215,10 @@ fun balanceSpecs(items: List<DayAssembler.DayItem>, dayStart: Long, road: Balanc
 /** Точка записи — на уровне её времени. */
 private val DOT_Y = 9.dp
 private val DOT_R = 4.dp
-private val FUTURE_INK = Ink.Cream.copy(alpha = 0.35f)
+private val FUTURE_INK get() = Ink.Cream.copy(alpha = 0.35f)
 /** Разметка дороги — лёгкая: сплошная посередине чуть заметнее стенок. */
-private val TUBE_ZERO = Ink.Cream.copy(alpha = 0.24f)
-private val TUBE_WALL = Ink.Cream.copy(alpha = 0.18f)
+private val TUBE_ZERO get() = Ink.Cream.copy(alpha = 0.24f)
+private val TUBE_WALL get() = Ink.Cream.copy(alpha = 0.18f)
 /** Линия баланса — главная на рельсе, чуть толще прежнего рельса в 2 dp. */
 private val LINE_W = 2.5.dp
 

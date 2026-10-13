@@ -92,6 +92,8 @@
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
+        <!-- Меню Ковчега (Правка 5.0): «Творчество» открывает приложение Claude, нет его — claude.ai. -->
+        <package android:name="com.anthropic.claude" />
     </queries>
 
     <application

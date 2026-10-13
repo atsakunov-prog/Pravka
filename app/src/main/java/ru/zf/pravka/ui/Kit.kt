@@ -97,6 +97,9 @@ import androidx.compose.ui.unit.sp
 //
 // Плашка (`PaperCard`), подпись раздела и фаска живут рядом, в `Blocks.kt`;
 // шапка вкладки — в `Frame.kt`; значки — `Glyphs.kt`.
+//
+// Правка 5.0 (13.10.2026): у деталей два вида — 4.0 и v2 Ковчега (`ui/Look.kt`);
+// плоский v2 каждая деталь рисует сама, экранам об этом знать не нужно.
 
 // ---------------------------------------------------------------------------
 // Краска режима
@@ -118,6 +121,8 @@ internal fun ModeDecor.tint(base: ColorScheme): ColorScheme {
     // светлый tint, а не сама кнопка: старые экраны красят `primary` текст и
     // значки, и тёмно-синий #2A5D82 на ночи не читался бы (расхождение с
     // DESIGN §14 записано в отчёте); сама кнопка — `primaryContainer`.
+    // Вид v2: акцент один на всё (план §2) — схема темы уже в нём, режим её не красит.
+    if (Look.v2) return base
     val m = Modes.of(this)
     return base.copy(
         primary = m.tint,
@@ -153,9 +158,16 @@ object ScreenPad {
 fun IconBadge(
     icon: ImageVector,
     size: Dp = 40.dp,
-    tint: Color = LocalMode.current.value,
+    tint: Color = if (Look.v2) Kv.icon else LocalMode.current.value,
     container: Color = LocalMode.current.tint.copy(alpha = 0.14f),
 ) {
+    if (Look.v2) {
+        // v2: значок строки — просто линия цветом `--icon`, без круга (как в строках веба).
+        Box(Modifier.size(size), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(size * 0.55f))
+        }
+        return
+    }
     Box(
         Modifier
             .size(size)
@@ -229,6 +241,22 @@ fun PaperIconButton(
     val mode = LocalMode.current
     if (active) {
         Key(icon, description, onClick, modifier, size = size, enabled = enabled)
+        return
+    }
+    if (Look.v2) {
+        // `.btn` со значком: панель, линия, прямоугольник 8.
+        val shape = RoundedCornerShape(KvShape.Control)
+        Box(
+            modifier
+                .size(size)
+                .clip(shape)
+                .background(Kv.panel)
+                .border(1.dp, Kv.line, shape)
+                .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = description, tint = (tint ?: Kv.icon).copy(alpha = if (enabled) 1f else 0.35f), modifier = Modifier.size(size * 0.46f))
+        }
         return
     }
     Box(
@@ -373,7 +401,7 @@ fun PaperRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) {
-            val tint = badgeTint ?: c.onSurface
+            val tint = badgeTint ?: if (Look.v2) Kv.icon else c.onSurface
             IconBadge(
                 icon,
                 size = 36.dp,
@@ -512,14 +540,16 @@ fun SummaryLine(
 @Composable
 fun StatusDot(ok: Boolean?) {
     val c = MaterialTheme.colorScheme
+    val v2 = Look.v2
     Box(
         Modifier
             .size(8.dp)
-            .clip(CircleShape)
+            // v2: без кружков — квадратик, как метка категории; «сбой» — `--bad`.
+            .clip(if (v2) RoundedCornerShape(2.dp) else CircleShape)
             .background(
                 when (ok) {
-                    true -> LocalMode.current.tint
-                    false -> Ink.Warn
+                    true -> if (v2) Kv.ok else LocalMode.current.tint
+                    false -> if (v2) Kv.bad else Ink.Warn
                     null -> c.outline
                 }
             )
@@ -607,7 +637,9 @@ fun PaperSheet(
     // режима, верх 28, ручка 32×4 кремом @ .3, затемнение под ним .62.
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val mode = LocalMode.current
-    val shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+    val v2 = Look.v2
+    // v2: лист — панель с верхом 12, затемнение — `--scrim` веба, ручка — линией.
+    val shape = if (v2) RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp) else RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     // Высокий лист не заходит под строку состояния (баг №1, 07.10.2026: лист
     // Дел «вылезает слишком высоко… перекрывается статусной строкой»): окно
     // листа — во весь экран, своих отступов сверху у него нет (`contentWindowInsets`
@@ -619,9 +651,9 @@ fun PaperSheet(
         onDismissRequest = onDismiss,
         sheetState = state,
         shape = shape,
-        containerColor = mode.ink.copy(alpha = 0.97f).compositeOver(Ink.Bg),
+        containerColor = if (v2) Kv.panel else mode.ink.copy(alpha = 0.97f).compositeOver(Ink.Bg),
         contentColor = Ink.Text,
-        scrimColor = Color(0xFF080706).copy(alpha = 0.62f),
+        scrimColor = if (v2) Kv.scrim else Color(0xFF080706).copy(alpha = 0.62f),
         tonalElevation = 0.dp,
         dragHandle = {
             Box(
@@ -629,7 +661,7 @@ fun PaperSheet(
                     .padding(top = 10.dp, bottom = 8.dp)
                     .size(width = 32.dp, height = 4.dp)
                     .clip(RoundedCornerShape(2.dp))
-                    .background(Ink.Cream.copy(alpha = 0.30f))
+                    .background(if (v2) Kv.line else Ink.Cream.copy(alpha = 0.30f))
             )
         },
         contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
@@ -676,6 +708,7 @@ internal fun sheetMaxHeight(): androidx.compose.ui.unit.Dp {
 
 /** Налёт и блик листа (`screens/13`): key .16 → .06 сверху вниз и светлый tint у верхней кромки. */
 private fun Modifier.sheetGlass(mode: ModeColors): Modifier = this.drawBehind {
+    if (Look.v2) return@drawBehind
     drawRect(Brush.verticalGradient(0f to mode.key.copy(alpha = if (mode === Modes.Today) 0f else 0.16f), 1f to mode.key.copy(alpha = if (mode === Modes.Today) 0f else 0.06f)))
     drawRect(
         Brush.verticalGradient(
@@ -778,7 +811,7 @@ fun PaperField(
         trailingIcon = trailing,
         isError = isError,
         supportingText = supporting?.let { { Text(it) } },
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(if (Look.v2) KvShape.Control else 14.dp),
         colors = OutlinedTextFieldDefaults.colors(
             unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
         ),
@@ -874,7 +907,7 @@ fun ThinkingLine(label: String, modifier: Modifier = Modifier) {
     val t = LocalPravkaType.current
     val seconds by LocalClaudeSeconds.current
     val progress by LocalClaudeProgress.current
-    val shape = RoundedCornerShape(12.dp)
+    val shape = RoundedCornerShape(if (Look.v2) KvShape.Control else 12.dp)
     Row(
         modifier
             .clip(shape)
