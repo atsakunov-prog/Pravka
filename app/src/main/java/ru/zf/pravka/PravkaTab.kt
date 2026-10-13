@@ -142,41 +142,14 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
         val name = entry.audio ?: return
         replaying = name
         replayShare = 0f
-        app.appScope.launch {
-            val file = withContext(Dispatchers.IO) { app.takeAudio.file(name) }
-            if (file == null) {
-                replaying = null
-                withAudio = withAudio - name
-                Feedback.toast(context, "Звука этой фразы уже нет — ушёл, чтобы уложиться в 300 МБ")
-                return@launch
-            }
-            val network = app.settings.speechNetworkFlow.first()
-            val formatting = app.settings.speechFormattingFlow.first()
-            val biasing = if (app.settings.speechBiasingFlow.first()) {
-                runCatching {
-                    val store = app.dictionaryStore
-                    ru.zf.pravka.core.BiasingList.build(store.all(), isSeed = store::isSeed).strings
-                }.getOrDefault(emptyList())
-            } else emptyList()
-            val job = ru.zf.pravka.provider.SpeechReplay(
-                context.applicationContext, file, network, biasing, formatting,
-                log = { line -> app.eventLog.add(line) },
-            )
-            job.start(onProgress = { replayShare = it }) { result ->
-                replaying = null
-                val text = result.getOrNull().orEmpty()
-                val error = result.exceptionOrNull()?.message
-                app.transcriptionLog.append(
-                    engine = Settings.SPEECH_GOOGLE_REPLAY,
-                    audioMs = job.audioMs,
-                    transcribeMs = job.elapsedMs,
-                    text = text,
-                    error = error ?: if (text.isBlank()) "пустой результат" else null,
-                    audio = name,
-                )
-                replayOut = ReplayOut(was = entry.text, now = text, error = error, audioMs = job.audioMs, tookMs = job.elapsedMs)
-                reload++
-            }
+        replayTake(
+            app, context, name, entry.text,
+            onShare = { replayShare = it },
+            onGone = { replaying = null; withAudio = withAudio - name },
+        ) { out ->
+            replaying = null
+            replayOut = out
+            reload++
         }
     }
 
@@ -322,11 +295,60 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
     }
 }
 
+/**
+ * Разобрать фразу заново из её звука (`TakeAudio`) — одна дорога для вкладки 4.0 и экрана
+ * «Правка» 5.0: тем же Google трубой и тем же словарём, что живой тейк; итог — отдельной
+ * строкой в журнал (`google-replay`) и в [onDone]. Звука уже нет (ушёл за 300 МБ) — [onGone].
+ */
+internal fun replayTake(
+    app: PravkaApp,
+    context: android.content.Context,
+    name: String,
+    was: String,
+    onShare: (Float) -> Unit,
+    onGone: () -> Unit,
+    onDone: (ReplayOut) -> Unit,
+) {
+    app.appScope.launch {
+        val file = withContext(Dispatchers.IO) { app.takeAudio.file(name) }
+        if (file == null) {
+            onGone()
+            Feedback.toast(context, "Звука этой фразы уже нет — ушёл, чтобы уложиться в 300 МБ")
+            return@launch
+        }
+        val network = app.settings.speechNetworkFlow.first()
+        val formatting = app.settings.speechFormattingFlow.first()
+        val biasing = if (app.settings.speechBiasingFlow.first()) {
+            runCatching {
+                val store = app.dictionaryStore
+                ru.zf.pravka.core.BiasingList.build(store.all(), isSeed = store::isSeed).strings
+            }.getOrDefault(emptyList())
+        } else emptyList()
+        val job = ru.zf.pravka.provider.SpeechReplay(
+            context.applicationContext, file, network, biasing, formatting,
+            log = { line -> app.eventLog.add(line) },
+        )
+        job.start(onProgress = onShare) { result ->
+            val text = result.getOrNull().orEmpty()
+            val error = result.exceptionOrNull()?.message
+            app.transcriptionLog.append(
+                engine = Settings.SPEECH_GOOGLE_REPLAY,
+                audioMs = job.audioMs,
+                transcribeMs = job.elapsedMs,
+                text = text,
+                error = error ?: if (text.isBlank()) "пустой результат" else null,
+                audio = name,
+            )
+            onDone(ReplayOut(was = was, now = text, error = error, audioMs = job.audioMs, tookMs = job.elapsedMs))
+        }
+    }
+}
+
 /** Итог переразбора: что было в тейке, что вышло теперь. */
-private class ReplayOut(val was: String, val now: String, val error: String?, val audioMs: Long, val tookMs: Long)
+internal class ReplayOut(val was: String, val now: String, val error: String?, val audioMs: Long, val tookMs: Long)
 
 @Composable
-private fun ReplaySheet(out: ReplayOut, ruLoc: Locale, onCopy: () -> Unit, onDismiss: () -> Unit) {
+internal fun ReplaySheet(out: ReplayOut, ruLoc: Locale, onCopy: () -> Unit, onDismiss: () -> Unit) {
     val sub = String.format(ruLoc, "%.1f с звука · разобрано за %.1f с", out.audioMs / 1000.0, out.tookMs / 1000.0)
     PaperSheet(
         onDismiss = onDismiss,
@@ -352,7 +374,7 @@ private fun ReplaySheet(out: ReplayOut, ruLoc: Locale, onCopy: () -> Unit, onDis
     }
 }
 
-private fun putClipboard(context: android.content.Context, text: String) {
+internal fun putClipboard(context: android.content.Context, text: String) {
     val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
     cm.setPrimaryClip(android.content.ClipData.newPlainText("Правка", text))
 }
@@ -369,7 +391,7 @@ private fun putClipboard(context: android.content.Context, text: String) {
 // должен обрывать работу, за которую уже заплачено.
 // ---------------------------------------------------------------------------
 
-private object CleanBoxState {
+internal object CleanBoxState {
     val text = mutableStateOf("")
     val result = mutableStateOf<String?>(null)
     val streaming = mutableStateOf("")
@@ -387,7 +409,7 @@ private object CleanBoxState {
  * результат — в буфер (на Applied движок кладёт его сам). Запрос — в
  * appScope: уход со вкладки не обрывает работу, за которую уже заплачено.
  */
-private fun startClean(app: PravkaApp, context: android.content.Context) {
+internal fun startClean(app: PravkaApp, context: android.content.Context) {
     val input = CleanBoxState.text.value.trim()
     if (input.isEmpty() || CleanBoxState.busy.value) return
     CleanBoxState.busy.value = true
@@ -481,7 +503,7 @@ private fun CleanBar(app: PravkaApp, modifier: Modifier) {
  * иначе — последняя чистка «П» из журнала.
  */
 @Composable
-private fun LastCard(app: PravkaApp) {
+internal fun LastCard(app: PravkaApp, freshOnly: Boolean = false) {
     val context = LocalContext.current
     val result by CleanBoxState.result
     val streaming by CleanBoxState.streaming
@@ -490,8 +512,10 @@ private fun LastCard(app: PravkaApp) {
     val sent by CleanBoxState.sent
     val took by CleanBoxState.tookMs
     var last by remember { mutableStateOf<Pair<ru.zf.pravka.data.HistoryLog.Entry, Long>?>(null) }
-    LaunchedEffect(result) { last = withContext(Dispatchers.IO) { app.historyLog.lastClean() } }
+    LaunchedEffect(result, freshOnly) { if (!freshOnly) last = withContext(Dispatchers.IO) { app.historyLog.lastClean() } }
     val fresh = busy || result != null || error != null
+    // Экран «Правка» 5.0 показывает только свежую чистку из строки: прошлая и так в списке диктовок.
+    if (freshOnly && !fresh) return
     val input = if (fresh) sent else last?.first?.input.orEmpty()
     val output = if (fresh) result else last?.first?.output
     if (!fresh && last == null) return

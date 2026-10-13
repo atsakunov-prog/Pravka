@@ -758,23 +758,31 @@ private fun MainScreen(
             Column(Modifier.fillMaxSize()) {
                 when (t) {
                     Tab.PRAVKA -> {
-                        val cleanFlow = remember { app.settings.modelChoiceFlow(ru.zf.pravka.data.ModelRoute.PRAVKA) }
-                        val clean by cleanFlow.collectAsState(initial = null)
-                        TabHeader(
-                            title = stringResource(R.string.tab_pravka),
-                            onBack = modeBack,
-                            titleExtra = clean?.let { c ->
-                                ru.zf.pravka.data.Models.label(c.model).substringBefore(' ') + " · " +
-                                    ru.zf.pravka.data.Models.effectiveEffort(c.model, c.effort)
-                            },
-                            onTitleExtra = { pages = listOf(Page.ModeSettings(SettingsGroup.MODELS)) },
-                            actions = {
-                                StatsAction { pages = listOf(Page.Service(Tab.STATS)) }
-                                CostAction(openCost)
-                                SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.PRAVKA)) }
-                            },
-                        )
-                        PravkaTab(app, serviceEnabled)
+                        val pravkaActions: @Composable RowScope.() -> Unit = {
+                            StatsAction { pages = listOf(Page.Service(Tab.STATS)) }
+                            CostAction(openCost)
+                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.PRAVKA)) }
+                        }
+                        if (ru.zf.pravka.ui.Look.v2) {
+                            // Правка 5.0, этап 5: история всех диктовок — телефона и компьютера (`PravkaHistory.kt`).
+                            PravkaHistoryScreen(app, serviceEnabled) { sub ->
+                                TabHeader(title = stringResource(R.string.tab_pravka), onBack = modeBack, titleExtra = sub, actions = pravkaActions)
+                            }
+                        } else {
+                            val cleanFlow = remember { app.settings.modelChoiceFlow(ru.zf.pravka.data.ModelRoute.PRAVKA) }
+                            val clean by cleanFlow.collectAsState(initial = null)
+                            TabHeader(
+                                title = stringResource(R.string.tab_pravka),
+                                onBack = modeBack,
+                                titleExtra = clean?.let { c ->
+                                    ru.zf.pravka.data.Models.label(c.model).substringBefore(' ') + " · " +
+                                        ru.zf.pravka.data.Models.effectiveEffort(c.model, c.effort)
+                                },
+                                onTitleExtra = { pages = listOf(Page.ModeSettings(SettingsGroup.MODELS)) },
+                                actions = pravkaActions,
+                            )
+                            PravkaTab(app, serviceEnabled)
+                        }
                     }
                     Tab.ZASECHKA -> {
                         TabHeader(
@@ -2397,7 +2405,7 @@ private fun DictRow(entry: DictEntry, onClick: () -> Unit, onToggle: (Boolean) -
 }
 
 @Composable
-private fun DictEntryDialog(
+internal fun DictEntryDialog(
     entry: DictEntry?,
     onDismiss: () -> Unit,
     onSave: (from: String, to: String, mode: DictMode, note: String, enabled: Boolean) -> Unit,

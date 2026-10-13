@@ -696,8 +696,16 @@ class PravkaApp : Application() {
             sources = archiveSources,
             scope = appScope,
             log = { eventLog.add(it) },
-        )
+        ).also { s ->
+            // Обратная дорога (Правка 5.0, этап 5): диктовки компьютера — для экрана «Правка».
+            s.register(ru.zf.pravka.data.ArchiveSync.Pull(ru.zf.pravka.data.PcDictations.PULL, ru.zf.pravka.data.PcDictations.KINDS) { recs ->
+                pcDictations.apply(recs)
+            })
+        }
     }
+
+    /** Диктовки компьютера с сервера (`data/PcDictations.kt`) — копия для экрана «Правка». */
+    internal val pcDictations by lazy { ru.zf.pravka.data.PcDictations(this) }
 
     private val archiveSources = object : ru.zf.pravka.data.ArchiveSync.Sources {
         override val profile: String? get() = profileStore.current?.id

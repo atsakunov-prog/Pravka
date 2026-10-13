@@ -694,4 +694,85 @@ internal object Seed {
         st("Sent").value = "привет команда по отчёту за сентябрь в целом всё нормально но по маркетингу перерасход надо до пятницы прислать объяснение и план на октябрь"
         st("Result").value = "Привет, команда! По отчёту за сентябрь в целом всё нормально, но по маркетингу перерасход. До пятницы пришлите, пожалуйста, объяснение и план на октябрь."
     }
+
+    /**
+     * Экран «Правка» 5.0 (этап 5): к тейкам [pravka] — их чистки, тейк с гарнитуры, нераспознанный,
+     * вчерашние, и диктовки компа, будто забранные с сервера (`PcDictations.apply`, формат
+     * `server/contract/diktovka.json`). Всё выдумано. Свежую чистку из строки — убрать: она
+     * плашкой сверху заслонила бы список.
+     */
+    fun pravkaHistory(app: PravkaApp) {
+        val zone = ZoneId.systemDefault()
+        fun ts(back: Int, hm: String, plusSec: Long = 0) =
+            Instant.ofEpochMilli(at(back, hm) + plusSec * 1000).atZone(zone).toOffsetDateTime().truncatedTo(ChronoUnit.SECONDS).toString()
+        fun take(back: Int, hm: String, audioMs: Long, text: String, mic: String? = null, ok: Boolean = true) =
+            JSONObject().put("ts", ts(back, hm)).put("engine", "google").put("audio_ms", audioMs).put("transcribe_ms", 0L)
+                .put("chars", text.length).put("ok", ok).put("text", text).put("startup_ms", 380L).put("deaf_ms", 0L)
+                .apply { if (mic != null) put("mic", mic); if (!ok) put("error", "пустой результат") }.toString()
+        fun clean(back: Int, hm: String, input: String, output: String, cost: Double) =
+            JSONObject().put("ts", ts(back, hm, 3)).put("mode", "CLEAN").put("provider", "claude").put("model", "claude-sonnet-5-5")
+                .put("latency_ms", 1800L).put("input_tokens", 700).put("output_tokens", 60).put("cost_usd", cost)
+                .put("changed", true).put("input", input).put("output", output).toString()
+        val dir = ru.zf.pravka.data.DataRoot.dir(app)
+        val shokz = "гарнитура «OpenComm2 by Shokz_II»"
+        java.io.File(dir, "transcriptions.jsonl").writeText(
+            listOf(
+                take(1, "19:20", 14_000, "напомнить себе в пятницу забрать куртку из химчистки"),
+                take(1, "21:05", 41_000, "по проекту склада надо собрать три варианта планировки и сравнить по стоимости аренды", mic = shokz),
+                take(0, "08:12", 9_800, "напомни жене что у младшего в среду бассейн в семь а не в шесть"),
+                take(0, "09:47", 21_400, "иван добрый день посмотрел договор по второму траншу в целом всё ок но в пункте четыре два нужно убрать штраф за досрочное погашение"),
+                take(0, "11:03", 6_200, "созвон с ольгой перенести на четверг на одиннадцать", mic = shokz),
+                take(0, "12:07", 1_200, "", mic = shokz, ok = false),
+                take(0, "12:26", 15_900, "коллеги прикладываю обновлённую модель денежного потока на четвёртый квартал прогноз по выручке снизил на восемь процентов"),
+                take(0, "16:52", 11_300, "дима пришли пожалуйста акт сверки за сентябрь до среды", mic = shokz),
+            ).joinToString("\n", postfix = "\n"),
+        )
+        java.io.File(dir, "history.jsonl").writeText(
+            listOf(
+                clean(1, "19:20", "напомнить себе в пятницу забрать куртку из химчистки", "Напомнить себе в пятницу забрать куртку из химчистки.", 0.0021),
+                clean(1, "21:05", "по проекту склада надо собрать три варианта планировки и сравнить по стоимости аренды",
+                    "По проекту склада: собрать три варианта планировки и сравнить их по стоимости аренды.", 0.0034),
+                clean(0, "08:12", "напомни жене что у младшего в среду бассейн в семь а не в шесть",
+                    "Напомни жене, что у младшего в среду бассейн в семь, а не в шесть.", 0.0024),
+                clean(0, "09:47", "иван добрый день посмотрел договор по второму траншу в целом всё ок но в пункте четыре два нужно убрать штраф за досрочное погашение",
+                    "Иван, добрый день! Посмотрел договор по второму траншу — в целом всё ок, но в пункте 4.2 нужно убрать штраф за досрочное погашение.", 0.011),
+                clean(0, "11:03", "созвон с ольгой перенести на четверг на одиннадцать", "Созвон с Ольгой перенести на четверг на 11:00.", 0.0019),
+                clean(0, "12:26", "коллеги прикладываю обновлённую модель денежного потока на четвёртый квартал прогноз по выручке снизил на восемь процентов",
+                    "Коллеги, прикладываю обновлённую модель денежного потока на IV квартал. Прогноз по выручке снизил на 8%.", 0.0062),
+                clean(0, "16:52", "дима пришли пожалуйста акт сверки за сентябрь до среды", "Дима, пришли, пожалуйста, акт сверки за сентябрь до среды.", 0.0022),
+            ).joinToString("\n", postfix = "\n"),
+        )
+        fun iso(back: Int, hm: String) = Instant.ofEpochMilli(at(back, hm)).atZone(zone).toOffsetDateTime()
+            .format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+        fun pc(back: Int, hm: String, sec: Long, raw: String, out: String?, status: String = "pasted", engine: String = "gigaam cpu по ходу"): List<JSONObject> {
+            val ms = at(back, hm)
+            val key = "pc-$ms"
+            val day = Instant.ofEpochMilli(ms).atZone(zone).toLocalDate().toString()
+            val take = JSONObject().put("id", ms).put("day", day).put("at", iso(back, hm)).put("origin", "pc").put("engine", engine)
+                .put("audio_ms", sec * 1000).put("text", raw).put("ok", raw.isNotBlank()).put("error", if (raw.isBlank()) "ничего не разобрал" else "")
+                .put("audio", "").put("mic", "компьютер").put("status", status).put("final", out ?: raw)
+            val recs = mutableListOf(JSONObject().put("kind", "pravka.take").put("key", key).put("op", "put").put("data", take))
+            if (out != null) {
+                recs += JSONObject().put("kind", "pravka.clean").put("key", key).put("op", "put").put("data",
+                    JSONObject().put("id", ms).put("day", day).put("at", iso(back, hm)).put("origin", "pc").put("take", key)
+                        .put("mode", "CLEAN").put("style", "clean").put("model", "claude-sonnet-5-5").put("input", raw).put("output", out)
+                        .put("latency_ms", 2100).put("cost_usd", 0.0031).put("error", ""))
+            }
+            return recs
+        }
+        app.pcDictations.apply(
+            pc(1, "23:01", 118, "слушай давай соберём план на неделю сначала клиенты потом отчётность потом спорт",
+                "Слушай, давай соберём план на неделю: сначала клиенты, потом отчётность, потом спорт.") +
+                pc(0, "10:15", 37, "коллеги добрый день прикладываю обновлённую модель по второму кварталу посмотрите пожалуйста до пятницы",
+                    "Коллеги, добрый день! Прикладываю обновлённую модель по второму кварталу — посмотрите, пожалуйста, до пятницы.") +
+                pc(0, "14:40", 11, "так погоди а где лежит прошлогодний бюджет", "Так, погоди, а где лежит прошлогодний бюджет?", status = "clipboard") +
+                pc(0, "17:30", 2, "", null, status = "empty", engine = ""),
+        )
+        val cls = Class.forName("ru.zf.pravka.CleanBoxState")
+        val inst = cls.getDeclaredField("INSTANCE").apply { isAccessible = true }.get(null)
+        @Suppress("UNCHECKED_CAST")
+        fun st(p: String) = cls.getDeclaredMethod("get$p").apply { isAccessible = true }.invoke(inst) as androidx.compose.runtime.MutableState<Any?>
+        st("Sent").value = ""
+        st("Result").value = null
+    }
 }

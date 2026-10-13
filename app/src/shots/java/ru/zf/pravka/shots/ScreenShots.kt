@@ -446,6 +446,41 @@ class ScreenShots {
         if (tap(c, "статистика")) shot(c, "inner-09-report")
         close(c)
         }
+
+        // ---- «Правка» 5.0 (этап 5): история диктовок телефона и компа — последней, её данные перекрывают «Правку» 4.0
+        if (want("history")) history()
+    }
+
+    /**
+     * Экран «Правка» (Правка 5.0, этап 5): сложенный — список, фильтр «Компьютер», лист диктовки;
+     * разложенный — список и диктовка целиком справа (телефонная с гарнитуры и компьютерная). Обе темы.
+     */
+    private fun history() {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        Seed.pravkaHistory(app)
+        settle(8)
+        for (theme in listOf("light", "dark")) {
+            runBlocking { app.settings.setLookTheme(theme) }
+            settle(4)
+            RuntimeEnvironment.setQualifiers(OUTER)
+            var c = launch(MainActivity.TAB_PRAVKA)
+            shot(c, "history-$theme-1-folded")
+            if (tap(c, "Компьютер", exact = true)) {
+                shot(c, "history-$theme-2-pc")
+                // Лист диктовки — тап по строке, тем же окном.
+                if (tap(c, "Так, погоди")) screen("history-$theme-3-sheet")
+            }
+            close(c)
+            RuntimeEnvironment.setQualifiers(INNER)
+            c = launch(MainActivity.TAB_PRAVKA)
+            shot(c, "history-$theme-4-wide")
+            if (tap(c, "Созвон с Ольгой")) shot(c, "history-$theme-5-wide-headset")
+            if (tap(c, "Коллеги, добрый день")) shot(c, "history-$theme-6-wide-pc")
+            close(c)
+            RuntimeEnvironment.setQualifiers(OUTER)
+        }
+        runBlocking { app.settings.setLookTheme("system") }
+        settle(4)
     }
 
     /**

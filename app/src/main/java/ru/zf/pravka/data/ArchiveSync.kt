@@ -145,17 +145,105 @@ internal class ArchiveSync(
         }
     }
 
-    /** Тик службы: всё целиком — то, что не дошло раньше, и журналы Правки. */
+    /** Тик службы: всё целиком — то, что не дошло раньше, и журналы Правки; потом — забрать чужое. */
     suspend fun tick() {
         if (_link.value == null) return
         sync("тик", Domain.entries.toSet())
+        val names = synchronized(pulls) { pulls.map { it.name } }
+        for (n in names) runCatching { pull(n) }
+    }
+
+    // ------------------------------------------------------------ забрать чужое
+
+    /**
+     * Обратная дорога (`POST /sync`, 13.10.2026): что записал кто-то другой — сейчас
+     * диктовки компьютера для экрана «Правка» (`PcDictations`). [name] — ключ курсора,
+     * [kinds] — виды, [apply] кладёт записи `{kind, key, op, data?}` и говорит, сколько
+     * поменялось. Курсор — в своём файле (`archive-pull.json`), а не в квитанциях: проход
+     * отправки держит квитанции в памяти от начала до конца и записал бы их поверх.
+     */
+    class Pull(val name: String, val kinds: List<String>, val apply: (List<org.json.JSONObject>) -> Int)
+
+    /** Состояние забора: когда последний раз, что пришло, почему нет. */
+    data class PullState(
+        val lastOk: Long = 0L,
+        val got: Int = 0,
+        val error: String = "",
+        /** Сервер этих видов ещё не отдаёт (старый, до обновления) — не поломка, а ожидание. */
+        val waiting: Boolean = false,
+    )
+
+    private val pulls = mutableListOf<Pull>()
+    private val pullMutex = Mutex()
+    private val pulledAt = HashMap<String, Long>()
+    private val pullFile: File get() = File(DataRoot.dir(context), PULL_FILE)
+
+    private val _pullState = MutableStateFlow<Map<String, PullState>>(emptyMap())
+    val pullState: StateFlow<Map<String, PullState>> = _pullState
+
+    fun register(p: Pull) {
+        synchronized(pulls) { pulls.removeAll { it.name == p.name }; pulls += p }
+    }
+
+    /**
+     * Забрать чужое по [name]: не чаще раза в минуту, если не [force]. Без курсора — всё
+     * живое; ответ кладётся целиком, курсор сдвигается только после того, как записи легли.
+     * Возвращает, сколько записей поменялось (null — не ходили: нет связи с архивом или рано).
+     */
+    suspend fun pull(name: String, force: Boolean = false): Int? = withContext(Dispatchers.IO) {
+        val l = _link.value ?: return@withContext null
+        val p = synchronized(pulls) { pulls.firstOrNull { it.name == name } } ?: return@withContext null
+        pullMutex.withLock {
+            val now = System.currentTimeMillis()
+            if (!force && now - (pulledAt[name] ?: 0L) < PULL_EVERY_MS) return@withLock null
+            pulledAt[name] = now
+            val cursors = readCursors()
+            val body = JSONObject()
+                .put("device", deviceId())
+                .put("profile", sources.profile ?: "")
+                .put("kinds", JSONArray().apply { p.kinds.forEach { put(it) } })
+                .put("since", cursors.optString(name))
+            val reply = runCatching { post(l.url, l.token, body, "sync") }.getOrElse { e ->
+                // Старый сервер (до install-dela.ps1) отвечает 403 «забрать можно только …»:
+                // это ожидание обновления, а не поломка — словами так и сказать.
+                val msg = why(e)
+                val waiting = msg.contains("забрать можно только")
+                // В журнал — только новая причина: тик раз в пять минут повторял бы одну и ту же.
+                if (!waiting && _pullState.value[name]?.error != msg) log("архив: забрать ${p.name} — $msg")
+                setPull(name) { it.copy(error = if (waiting) "" else msg, waiting = waiting) }
+                return@withLock null
+            }
+            val arr = reply.optJSONArray("records") ?: JSONArray()
+            val records = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+            val changed = p.apply(records)
+            reply.optString("cursor").takeIf { it.isNotBlank() }?.let { c ->
+                cursors.put(name, c)
+                StoreFiles.writeAtomic(pullFile, cursors.toString())
+            }
+            setPull(name) { PullState(lastOk = now, got = it.got + changed) }
+            if (changed > 0) log("архив: забрал ${p.name} — $changed")
+            changed
+        }
+    }
+
+    private fun readCursors(): JSONObject =
+        runCatching { if (pullFile.isFile) JSONObject(pullFile.readText()) else null }.getOrNull() ?: JSONObject()
+
+    private fun setPull(name: String, f: (PullState) -> PullState) {
+        val m = _pullState.value.toMutableMap()
+        m[name] = f(m[name] ?: PullState())
+        _pullState.value = m
     }
 
     /** «Отправить всё заново»: квитанции забыты, сервер сам отбросит то, что у него уже есть. */
     suspend fun resendAll() {
         mutex.withLock { withContext(Dispatchers.IO) { runCatching { ledgerFile.delete() } } }
+        // И чужое — заново целиком: базу на компе собирали с нуля — курсоры тоже не годятся.
+        pullMutex.withLock { withContext(Dispatchers.IO) { runCatching { pullFile.delete() }; pulledAt.clear() } }
         log("архив: отправляю всё заново")
         sync("всё заново", Domain.entries.toSet())
+        val names = synchronized(pulls) { pulls.map { it.name } }
+        for (n in names) runCatching { pull(n, force = true) }
     }
 
     // ------------------------------------------------------------ проход
@@ -394,11 +482,11 @@ internal class ArchiveSync(
         return out
     }
 
-    private fun post(url: String, token: String, body: JSONObject): JSONObject {
+    private fun post(url: String, token: String, body: JSONObject, path: String = "ingest"): JSONObject {
         val raw = body.toString().toByteArray(Charsets.UTF_8)
         val gz = ByteArrayOutputStream().also { b -> GZIPOutputStream(b).use { it.write(raw) } }.toByteArray()
         val req = Request.Builder()
-            .url(url + "ingest")
+            .url(url + path)
             .header("Authorization", "Bearer $token")
             .header("Content-Encoding", "gzip")
             .post(gz.toRequestBody("application/json".toMediaType()))
@@ -476,6 +564,10 @@ internal class ArchiveSync(
         const val LINK_FILE = "archive.json"
         const val DEVICE_FILE = "archive-device.txt"
         const val LEDGER_FILE = "archive-ledger.json"
+        /** Курсоры забора (`/sync`) по имени: «откуда продолжать». */
+        const val PULL_FILE = "archive-pull.json"
+        /** Забор не чаще раза в минуту: экран «Правка» открывают часто, тик — раз в пять минут. */
+        private const val PULL_EVERY_MS = 60_000L
         const val PAIR_PREFIX = "pravka-archive:"
         private const val GONE = "del"
         private const val JOURNAL_KIND = "pravka.journal"
