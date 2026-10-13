@@ -167,12 +167,12 @@ class ScreenShots {
         return true
     }
 
-    /** CRM на телефоне — как веб: ☰ с проектами под клиентами, клиент, сделка, «откуда он», «Люди», поиск. */
+    /** CRM на телефоне — как веб: боковина (язычок у края) с проектами под клиентами, клиент, сделка, «откуда он», «Люди», поиск. */
     private fun crm() {
         // Первый запуск вкладки в прогоне рисует её без копии — прогреть и закрыть.
         close(launch(MainActivity.TAB_TODOIST))
         var c = launch(MainActivity.TAB_TODOIST)
-        if (tap(c, "разделы, CRM")) {
+        if (tap(c, "Показать разделы")) {
             tap(c, "раскрыть все")
             screen("crm-1-nav-clients")
             if (tap(c, "Бета Групп")) shot(c, "crm-2-client")
@@ -189,10 +189,10 @@ class ScreenShots {
         c = launch(MainActivity.TAB_TODOIST)
         settle()
         // Раскрытое помнится: клиенты уже раскрыты с прошлого запуска.
-        if (tap(c, "разделы, CRM") && tap(c, "финмодель 2027")) shot(c, "crm-4-deal")
+        if (tap(c, "Показать разделы") && tap(c, "финмодель 2027")) shot(c, "crm-4-deal")
         close(c)
         c = launch(MainActivity.TAB_TODOIST)
-        if (tap(c, "Люди", exact = true)) shot(c, "crm-5-people")
+        if (tap(c, "Показать разделы") && tap(c, "Люди", exact = true)) shot(c, "crm-5-people")
         close(c)
         // Задание 6: «Новое» — «Подскажи», «Поставил», «Сделано само» свёрнуто и развёрнуто.
         c = launch(MainActivity.TAB_TODOIST)
@@ -203,7 +203,7 @@ class ScreenShots {
         close(c)
         // Задание 8: на Воронке строка Claude видит сделки экрана.
         c = launch(MainActivity.TAB_TODOIST)
-        if (tap(c, "Воронка", exact = true)) shot(c, "crm-10-voronka")
+        if (tap(c, "Показать разделы") && tap(c, "Воронка", exact = true)) shot(c, "crm-10-voronka")
         close(c)
         RuntimeEnvironment.setQualifiers(OUTER)
         c = launch(MainActivity.TAB_TODOIST)
@@ -294,7 +294,7 @@ class ScreenShots {
                     if (tap(m, "Сегодня")) shot(m, "$g-11-segodnya")
                     close(m); m = launch(tab)
                     // Фильтр с завода: «Отбить — по людям».
-                    if (tap(m, "разделы, CRM") && tap(m, "Отбить — по людям")) {
+                    if (tap(m, "Показать разделы") && tap(m, "Отбить — по людям")) {
                         shot(m, "$g-8-filter")
                         // «Только одно»: список людей с поиском, выбор — одна ветка.
                         if (tap(m, "Все люди")) {
@@ -303,8 +303,8 @@ class ScreenShots {
                         }
                     }
                     close(m); m = launch(tab)
-                    // ☰ — боковая панель (баг №1, 07.10.2026).
-                    if (tap(m, "разделы, CRM")) screen("$g-5-nav")
+                    // Боковина — шторкой поверх по язычку у края (13.10.2026; раньше ☰, баг №1).
+                    if (tap(m, "Показать разделы")) screen("$g-5-nav")
                 }
                 "sport" -> if (tap(m, "Путь", exact = true)) shot(m, "$g-4-put")
                 "money" -> if (tap(m, "Журнал", exact = true)) shot(m, "$g-4-zhurnal")
@@ -505,6 +505,16 @@ class ScreenShots {
                     if (tap(c, "Карточка", exact = true)) screen("$prefix-v2-$theme-6-dela-card")
                 } else screen("$prefix-v2-$theme-5-dela-card")
             }
+            close(c)
+            // Боковина Дел (13.10.2026): на сложенном — шторка поверх по язычку у края; на разложенном — открыта с
+            // завода, язычок прячет её (выбор помнит устройство — после снимка вернуть как было).
+            c = launch(MainActivity.TAB_TODOIST)
+            if (prefix == "inner") {
+                if (tap(c, "Спрятать разделы")) {
+                    shot(c, "$prefix-v2-$theme-7-dela-side-off")
+                    tap(c, "Показать разделы")
+                }
+            } else if (tap(c, "Показать разделы")) shot(c, "$prefix-v2-$theme-7-dela-side")
             close(c)
             c = launch(MainActivity.TAB_ZASECHKA); shot(c, "$prefix-v2-$theme-4-zasechka"); close(c)
         }

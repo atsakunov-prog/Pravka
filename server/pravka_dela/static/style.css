@@ -258,7 +258,6 @@ a.brand:hover { text-decoration: none; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme=light]) .kv-sw { background: var(--sw-d); } }
 :root[data-theme=dark] .kv-sw { background: var(--sw-d); }
 .kv-out { color: var(--icon); }
-.burger { display: none !important; }
 
 /* ── Каркас: колонка разделов · страница · карточка ── */
 /* Дела — на всю ширину окна (владелец 13.10.2026: «не тянутся по ширине»): колонка, список и карточка без предела. */
@@ -270,7 +269,29 @@ a.brand:hover { text-decoration: none; }
 .card-grip:hover::after, .card-grip:focus-visible::after, .shell.resizing .card-grip::after { background: var(--accent); }
 .card-grip:focus-visible { outline: none; }
 .shell.resizing { user-select: none; cursor: col-resize; }
-aside.side { display: flex; flex-direction: column; min-height: 0; }
+aside.side { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+/* Боковина с язычком (13.10.2026, как в приложении Правка; холст «Ковчег на телефоне», блок «Боковина Дел»):
+   на широком язычок в щели между колонкой и списком прячет колонку — колонки «список | карточка» забирают её
+   место (ширина уезжает плавно); спрятана — язычок у левого края. На узком — у края экрана, тянет шторку. */
+.dgrip {
+  position: absolute; z-index: 9; top: 46%; left: 0; width: 18px; height: 56px; padding: 0; margin: 0;
+  display: grid; place-items: center; background: var(--panel); color: var(--muted); cursor: pointer;
+  border: 1px solid var(--line); border-left: 0; border-radius: 0 8px 8px 0; transition: left .22s, color .15s;
+}
+.dgrip:hover, .dgrip:focus-visible { color: var(--accent); }
+.dgrip svg { transition: transform .22s; }
+.dgrip.in { border-left: 1px solid var(--line); border-radius: 8px; }
+.dgrip.in svg { transform: rotate(180deg); }
+@media (min-width: 901px) {
+  .shell { transition: grid-template-columns .22s; }
+  .shell > .dgrip.in { left: calc(var(--side-w) - 9px); }
+  .shell.side-hidden { grid-template-columns: 0 minmax(0, 1fr); }
+  .shell.side-hidden.with-card { grid-template-columns: 0 minmax(0, 1fr) var(--card-w); }
+  /* Спрятанная колонка — и для клавиатуры: Tab по невидимым ссылкам не ходит (после того, как уехала). */
+  aside.side { transition: visibility 0s; }
+  .shell.side-hidden aside.side { visibility: hidden; transition: visibility 0s .22s; }
+}
+@media (prefers-reduced-motion: reduce) { .shell, .dgrip, .dgrip svg { transition: none; } }
 .side-top { flex: none; padding: 22px 14px 6px max(24px, env(safe-area-inset-left)); }
 .side-scroll {
   flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
@@ -1298,6 +1319,8 @@ a.pt-row:hover { color: var(--accent); text-decoration: none; }
 /* ── Компьютер поуже: карточка забирает место у колонки разделов ── */
 @media (min-width: 901px) and (max-width: 1320px) {
   .shell.with-card { grid-template-columns: 232px minmax(0, 1fr) var(--card-w); }
+  .shell.with-card.side-hidden { grid-template-columns: 0 minmax(0, 1fr) var(--card-w); }
+  .shell.with-card > .dgrip.in { left: 223px; }
   .shell.with-card main.list > .scroll { padding-left: 24px; padding-right: 24px; }
   .shell.with-card .tabs-row { margin-left: -24px; margin-right: -24px; padding-left: 24px; padding-right: 24px; }
 }
@@ -1312,7 +1335,6 @@ a.pt-row:hover { color: var(--accent); text-decoration: none; }
 /* ── Телефон: колонка разделов — шторкой; карточка — листом снизу ── */
 @media (max-width: 900px) {
   .top-in { padding: max(8px, env(safe-area-inset-top)) 14px 8px; gap: 6px 10px; }
-  .burger { display: inline-grid !important; margin-left: -6px; }
   /* Меню шестерёнки — от края шапки, а не от кнопки: справа от неё ещё «выйти», и на узком экране оно уезжало влево. */
   .kv-prefs { position: static; }
   .kv-menu { right: 8px; top: calc(100% + 4px); width: min(316px, calc(100vw / var(--kv-zoom, 1) - 16px)); }
@@ -1328,6 +1350,9 @@ a.pt-row:hover { color: var(--accent); text-decoration: none; }
   .side-top { padding: calc(16px + env(safe-area-inset-top)) 14px 6px 16px; }
   .side-scroll { padding: 6px 14px calc(24px + env(safe-area-inset-bottom)) 16px; }
   .shell.side-open aside.side { transform: none; }
+  /* Язычок — у левого края экрана поверх списка; шторка открыта — у её правого края, над затемнением. */
+  .shell > .dgrip { position: fixed; top: 50%; z-index: 26; transform: translateY(-50%); }
+  .shell > .dgrip.in { left: min(calc(86vw / var(--kv-zoom, 1)), 320px); }
   main.list > .scroll { padding: 16px 14px calc(48px + env(safe-area-inset-bottom)); }
   .kv-head h1 { font-size: 23px; }
   .h-sub { font-size: 14px; }

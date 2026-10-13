@@ -17,6 +17,7 @@ const S = {
   sphere: LS.get('sphere', ''), levels: LS.get('levels', {}), fdraft: {}, pick: {}, favs: LS.get('favs', []), closed: LS.get('closed', {}),
   showDone: false, upNoDate: false, upMineOnly: false, dealFilter: null,
   sel: new Set(), order: [], lastPick: null, cardId: null, draft: null, sideOpen: false,
+  sideHidden: LS.get('sideHidden', false), // боковина на широком спрятана язычком (13.10.2026) — помнит браузер
   parse: null, quickText: '', // идёт разбор Claude; текст строки Claude — живёт, пока его не отдали (перерисовка его не стирает)
   cardSay: {}, kstati: false, whenText: {}, // строка Claude в карточке дела (по делу), «Кстати», строка «Когда» (13.10.2026)
   selfOpen: null, selfText: {}, // «Сам допишу» у уточнения в «Подскажи»: какое открыто и что написано
@@ -794,8 +795,9 @@ function render() {
   const ae = document.activeElement;
   const q0 = ae && ['quick', 'side-search', 'main-search'].includes(ae.id) ? ae : null;
   const focused = q0 ? { id: q0.id, value: q0.value, a: q0.selectionStart, b: q0.selectionEnd } : null;
-  const shell = el('div', { class: 'shell' + (S.cardId || S.draft ? ' with-card' : '') + (S.sideOpen ? ' side-open' : '') + (S.sel.size ? ' selecting' : '') });
-  shell.append(renderSide(r), listColumn(r));
+  const shell = el('div', { class: 'shell' + (S.cardId || S.draft ? ' with-card' : '') + (S.sideOpen ? ' side-open' : '')
+    + (S.sideHidden ? ' side-hidden' : '') + (S.sel.size ? ' selecting' : '') });
+  shell.append(renderSide(r), listColumn(r), sideGrip());
   if (S.cardId || S.draft) shell.append(renderCard(), cardGrip(shell));
   shell.style.setProperty('--card-w', cardPct() + '%');
   const scroll = S.toTop ? 0 : document.querySelector('main.list > .scroll')?.scrollTop || 0; // новая страница — с начала
@@ -825,6 +827,45 @@ function render() {
     }
   }
   renderBulk();
+}
+
+/** Язычок боковины (13.10.2026, владелец: «Делу нужна боковина, которая вылезает и скрывается… Нужна кнопка у края
+ *  со стрелкой, которая её вытаскивает, и такая же кнопка, которая убирает») — как в приложении Правка: на широком
+ *  прячет колонку разделов и отдаёт её место списку и карточке (выбор помнит браузер), на узком вытаскивает шторку
+ *  поверх (тап мимо, Esc и выбор раздела — убирают). › — показать, ‹ — спрятать. Жеста от края нет: он спорит с
+ *  «назад» браузера и телефона. */
+const NARROW = window.matchMedia('(max-width: 900px)');
+NARROW.addEventListener('change', () => { S.sideOpen = false; render(); });
+function sideGrip() {
+  const open = NARROW.matches ? S.sideOpen : !S.sideHidden;
+  const btn = el('button', { class: 'dgrip', type: 'button', onclick: () => {
+    // Класс — на уже нарисованном каркасе, без перерисовки: тогда ширина колонки (и шторка) уезжает плавно, а не
+    // рывком — render() строит каркас заново, и переходу CSS не от чего было бы идти. Следующая перерисовка
+    // возьмёт то же состояние из S.
+    const shell = btn.closest('.shell');
+    let now;
+    if (NARROW.matches) {
+      now = S.sideOpen = !S.sideOpen;
+      shell?.classList.toggle('side-open', now);
+      if (now) $app.append(el('div', { class: 'scrim', onclick: () => { S.sideOpen = false; render(); } }));
+      else $app.querySelector(':scope > .scrim')?.remove();
+    } else {
+      S.sideHidden = !S.sideHidden;
+      LS.set('sideHidden', S.sideHidden);
+      now = !S.sideHidden;
+      shell?.classList.toggle('side-hidden', !now);
+    }
+    paint(now);
+  } }, icon('chevron', 15));
+  const paint = (on) => {
+    const label = on ? 'Спрятать разделы' : 'Показать разделы';
+    btn.classList.toggle('in', on);
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+  };
+  paint(open);
+  return btn;
 }
 
 /** Колонка страницы (общий вид Ковчега, 13.10.2026): заголовок, строка «говори дела» и содержимое прокручиваются
@@ -972,7 +1013,7 @@ function topBar() {
     el('button', { type: 'button', 'data-t': 'light', title: 'Светлая', 'aria-label': 'Светлая тема', onclick: () => KV.setTheme('light') }, icon('sun', 16)),
     el('button', { type: 'button', 'data-t': 'dark', title: 'Тёмная', 'aria-label': 'Тёмная тема', onclick: () => KV.setTheme('dark') }, icon('moon', 16)));
   return el('header', { class: 'top' }, el('div', { class: 'top-in' },
-    el('button', { class: 'icon burger', title: 'Разделы: виды, фильтры, CRM, клиенты', 'aria-label': 'Разделы', onclick: () => { S.sideOpen = !S.sideOpen; render(); } }, icon('menu', 20)),
+    // «☰» в шапке больше нет (13.10.2026): разделы — боковиной с язычком у левого края (sideGrip).
     svcBrand(look),
     el('div', { class: 'top-end' }, theme, prefsMenu(),
       el('span', { class: 'who' }, S.me.name || S.me.user),

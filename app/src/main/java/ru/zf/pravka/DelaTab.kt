@@ -19,12 +19,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -46,10 +50,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -129,6 +135,11 @@ private const val LOOSE_GROUP = "0"
 private const val FILTER_NAV = "f:"
 /** Ветка «Просрочено» сверху «Всех дел»: у неё — «Перенести все». */
 private const val LATE_NODE = "late"
+/** Боковина разложенного: открыта ли — помнит устройство (`dela-favs.json`, рядом с видом дерева): «0» — спрятана. */
+private const val SIDE_KEY = "ui:side"
+/** Ширина боковины колонкой (холст: 172) и шторкой на сложенном (холст: ~252). */
+private val SIDE_W = 172.dp
+private val DRAWER_W = 252.dp
 
 /** Список «только одно» экрана [key]: ветки первого уровня [lv] с числом дел. */
 private data class BranchPick(val key: String, val lv: DelaGroups.Level, val list: List<DelaGroups.Branch>)
@@ -258,7 +269,10 @@ fun DelaTab(
 
     // Раздел — ключ веба: now, today, new, all; CRM — crm, clients, ties. Первым — «Сейчас» (13.10.2026).
     var nav by rememberSaveable { mutableStateOf(DelaViews.View.NOW.key) }
+    // ☰ — боковая панель листом: только «Вид 4.0». В v2 разделы — боковиной с язычком (13.10.2026).
     var navOpen by remember { mutableStateOf(false) }
+    // Боковина v2 на сложенном — шторка поверх экрана: открыта, пока не выбрали раздел, не тапнули мимо или «назад».
+    var drawerOpen by rememberSaveable { mutableStateOf(false) }
     var sphere by rememberSaveable { mutableStateOf("all") }
     // «Сделанные» у списков, как в вебе.
     var showDone by rememberSaveable { mutableStateOf(false) }
@@ -341,6 +355,7 @@ fun DelaTab(
         query = ""
         searching = false
         navOpen = false
+        drawerOpen = false
     }
     fun groupOf(list: String, def: DelaViews.By) = DelaViews.By.of(groupsPref[list].orEmpty(), def)
     // Уровни группировки на виде (10.10.2026): помнит само устройство, как браузер у веба.
@@ -784,7 +799,11 @@ fun DelaTab(
             .onGloballyPositioned { seenRows.top = it.boundsInWindow().top },
         state = listState,
         // Разворот v2: слева колонка разделов — поля списка поуже, иначе карточкам дел не хватит ширины.
-        contentPadding = PaddingValues(start = if (navColumn) 8.dp else 16.dp, end = if (navColumn) 8.dp else 16.dp, top = 0.dp, bottom = if (navColumn) 24.dp else 150.dp),
+        // Боковина спрятана — слева место под язычок, чтобы он не лёг на карточки.
+        contentPadding = PaddingValues(
+            start = if (navColumn) (if (groupsPref[SIDE_KEY] == "0") 24.dp else 8.dp) else 16.dp,
+            end = if (navColumn) 8.dp else 16.dp, top = 0.dp, bottom = if (navColumn) 24.dp else 150.dp,
+        ),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
         // «▷ Идёт: Ужин с семьёй · 21 м · синк 18:40 · поиск · +» (`screens/06`):
@@ -906,18 +925,19 @@ fun DelaTab(
                     head,
                     sphere = "",
                     onBack = if (pages.isNotEmpty()) ({ pages = pages.dropLast(1) }) else null,
-                    onMenu = { navOpen = true },
+                    // v2: разделы — в боковине (язычок у края), своего «☰» у шапки страницы нет.
+                    onMenu = if (Look.v4) ({ navOpen = true }) else null,
                 )
             }
         }
         val crmNav = crmOn && CRM_NAV.any { it.first == nav }
         if (page == null && needle.isEmpty()) {
             if (navColumn) {
-                // Разворот вида v2 (как веб): разделы — колонкой слева (`DelaNavColumn`), ряда вкладок нет.
+                // Разворот вида v2 (как веб): разделы — боковиной слева (`DelaSide`), ряда вкладок нет.
             } else if (Look.v2) {
                 // Вид v2 (холст «Ковчег на телефоне», лист «Дела»): вкладки с чертой — Сейчас, Сегодня, Новое, Все
-                // дела; остальное (Круг, дерево, фильтры, CRM, проекты) — за ☰ справа. Открыт раздел не из
-                // четырёх — он пятой вкладкой, чтобы было видно, где ты.
+                // дела; остальное (Круг, дерево, фильтры, CRM, проекты) — в боковине: язычок у левого края. Открыт
+                // раздел не из четырёх — он пятой вкладкой, чтобы было видно, где ты.
                 item(key = "nav") {
                     val c = DelaViews.counts(snap, me, today, sphere, now)
                     val main = listOf(DelaViews.View.NOW, DelaViews.View.TODAY, DelaViews.View.NEW, DelaViews.View.ALL)
@@ -926,7 +946,7 @@ fun DelaTab(
                         listOfNotNull(
                             if (main.none { it.key == nav }) DelaTabItem(nav, navTitle(nav, view, filters), "") else null,
                         )
-                    DelaTabsV2(tabs, selected = nav, onSelect = go, onMenu = { navOpen = true })
+                    DelaTabsV2(tabs, selected = nav, onSelect = go)
                 }
             } else {
                 // Вид 4.0: разделы веба одним рядом, с его числами («Сегодня 7»); CRM — следом, если она видна.
@@ -1315,8 +1335,47 @@ fun DelaTab(
                 .padding(start = 12.dp, end = 12.dp, bottom = 18.dp),
         )
     }
+    // Боковина вида v2 (13.10.2026, владелец: «Делу нужна боковина, которая вылезает и скрывается. На разложенном
+    // вылезает и сжимает всё, а на сложенном вылезает сверху»): одна модель — колонкой на разложенном и шторкой на
+    // сложенном. «Назад» сначала прячет шторку — до страниц стопкой.
+    androidx.activity.compose.BackHandler(enabled = drawerOpen && Look.v2 && !wide) { drawerOpen = false }
+    LaunchedEffect(wide) { if (wide) drawerOpen = false }
+    val sideOn = groupsPref[SIDE_KEY] != "0"
+    val sideModel: DelaSideModel? = if (Look.v4) null else DelaSideModel(
+        nav = if (page == null && needle.isEmpty()) nav else "",
+        counts = DelaViews.counts(snap, me, today, sphere, now),
+        views = DelaViews.View.entries.filter { (it != DelaViews.View.KRUG || krugOn) && (it != DelaViews.View.TREE || treeOn) },
+        filters = filters.map { it to DelaGroups.scopeItems(snap, me, today, sphere, it.scope).size },
+        filterNav = FILTER_NAV,
+        crm = if (crmOn) CRM_NAV else emptyList(),
+        projects = Dela.projectsNav(snap, me, today, sphere, favs),
+        crmOn = crmOn,
+        sphere = sphere,
+        spheres = SPHERES,
+        query = query,
+        clientOpen = clientOpen,
+        // Открытая сделка раскрывает своего клиента сам.
+        hereClient = (page as? DelaPage.Deal)?.let { snap.deals[it.id]?.projectId }.orEmpty(),
+        hereDeal = (page as? DelaPage.Deal)?.id.orEmpty(),
+        clientDeals = { id -> if (crmOn) ru.zf.pravka.core.DelaCrm.navDeals(snap, id, today) else emptyList() },
+    )
+    // Из боковины — как переход по ссылке в вебе: страница вместо стопки; шторка уезжает.
+    val sideActions = DelaSideActions(
+        onNav = go,
+        onQuery = { query = it; pages = emptyList() },
+        onProject = { id -> drawerOpen = false; query = ""; searching = false; pages = listOf(DelaPage.Project(id)) },
+        onPerson = { id -> drawerOpen = false; query = ""; searching = false; pages = listOf(DelaPage.Person(id)) },
+        onDeal = { id -> drawerOpen = false; query = ""; searching = false; pages = listOf(DelaPage.Deal(id)) },
+        onSphere = { sphere = it },
+        onClientOpen = { ids, open -> crm.setClientOpen(ids, open) },
+        onSubmit = { drawerOpen = false },
+    )
     androidx.compose.runtime.CompositionLocalProvider(LocalSeenRows provides seenRows) {
-    Column(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize()) {
+    // Шторка открыта — экран под затемнением для чтения с экрана как бы нет (модальная шторка): касание попадёт
+    // в затемнение, а не в дело под ним.
+    val covered = drawerOpen && sideModel != null && !wide
+    Column(Modifier.fillMaxSize().then(if (covered) Modifier.clearAndSetSemantics {} else Modifier)) {
         val sphereName = if (sphere == "all") "Все сферы" else SPHERES.firstOrNull { it.first == sphere }?.second.orEmpty()
         // Подпись шапки вида v2 (холст: «сегодня 2 · закрыто 6 · просрочено 3») — сводка дня; сфера — словом
         // впереди, когда выбрана не «Всё»; тап по подписи — выбор сферы, как раньше. Вид 4.0 — сфера, как был.
@@ -1336,23 +1395,19 @@ fun DelaTab(
             // Разворот вида v2 — как веб Дел (лист «Дела» холста): колонка разделов с числами | список | карточка;
             // строка Claude — под всеми тремя, о деле, открытом справа.
             val shown = paneTask
-            Row(Modifier.weight(1f).fillMaxWidth()) {
+            // Боковина открыта с завода; тап по язычку — уезжает шириной (без рывка), «список | карточка»
+            // забирают её место. Выбор помнит устройство — после перезапуска как было.
+            val sideW by androidx.compose.animation.core.animateDpAsState(if (sideOn) SIDE_W else 0.dp, label = "side")
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+            Row(Modifier.fillMaxSize()) {
                 LaunchedEffect(Unit) { seenRows.bottom = Float.MAX_VALUE }
-                DelaNavColumn(
-                    nav = if (page == null && needle.isEmpty()) nav else "",
-                    counts = DelaViews.counts(snap, me, today, sphere, now),
-                    views = DelaViews.View.entries.filter { (it != DelaViews.View.KRUG || krugOn) && (it != DelaViews.View.TREE || treeOn) },
-                    filters = filters.map { it to DelaGroups.scopeItems(snap, me, today, sphere, it.scope).size },
-                    filterNav = FILTER_NAV,
-                    crm = if (crmOn) CRM_NAV else emptyList(),
-                    clients = Dela.projectsNav(snap, me, today, sphere, favs).groups.firstOrNull { it.first == "Клиенты" }?.second.orEmpty().take(8),
-                    query = query,
-                    onQuery = { query = it; pages = emptyList() },
-                    onNav = go,
-                    onProject = { id -> query = ""; searching = false; pages = listOf(DelaPage.Project(id)) },
-                    onMore = { navOpen = true },
-                    modifier = Modifier.width(172.dp),
-                )
+                // Содержимое не сжимается, пока боковина уезжает: оно прижато к правому краю и уходит за левый.
+                Box(Modifier.width(sideW).fillMaxHeight().clipToBounds()) {
+                    if (sideModel != null && sideW > 0.dp) DelaSide(
+                        sideModel, sideActions,
+                        Modifier.wrapContentWidth(Alignment.End, unbounded = true).width(SIDE_W).fillMaxHeight(),
+                    )
+                }
                 Box(Modifier.weight(1f)) { list(Modifier) }
                 Box(Modifier.weight(1f)) {
                     DelaTaskPane(
@@ -1372,6 +1427,14 @@ fun DelaTab(
                         onMove = { shown?.let { rescheduling = listOf(it) } },
                     )
                 }
+            }
+            // Язычок (`.dgrip` холста): открыта — в щели между боковиной и списком, ‹; спрятана — у края экрана, ›.
+            SideGrip(
+                open = sideOn,
+                attached = sideW < 4.dp,
+                onClick = { scope.launch { app.delaStore.setGroup(SIDE_KEY, if (sideOn) "0" else "1") } },
+                modifier = Modifier.align(androidx.compose.ui.BiasAlignment(-1f, -0.08f)).offset(x = (sideW - 9.dp).coerceAtLeast(0.dp)),
+            )
             }
             sayBar(Modifier, shown, false)
         } else if (wide) {
@@ -1403,6 +1466,59 @@ fun DelaTab(
                 sayBar(Modifier.align(Alignment.BottomCenter), null, true)
             }
         }
+    }
+    // Сложенный вида v2: язычок у левого края, боковина — шторкой ~252 dp поверх всего экрана (фон `--side`,
+    // линия справа), остальное — под затемнением; язычок с ‹ — у правого края шторки.
+    if (sideModel != null && !wide) {
+        androidx.compose.animation.AnimatedVisibility(
+            visible = drawerOpen,
+            enter = androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.fadeOut(),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Kv.scrim)
+                    .clickable(
+                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                        indication = null,
+                        onClickLabel = "спрятать разделы",
+                    ) { drawerOpen = false },
+            )
+        }
+        androidx.compose.animation.AnimatedVisibility(
+            visible = drawerOpen,
+            enter = androidx.compose.animation.slideInHorizontally { -it },
+            exit = androidx.compose.animation.slideOutHorizontally { -it },
+        ) {
+            val line = Kv.line
+            Box(
+                Modifier
+                    .width(DRAWER_W)
+                    .fillMaxHeight()
+                    .background(Kv.side)
+                    .drawBehind {
+                        drawRect(
+                            line,
+                            topLeft = androidx.compose.ui.geometry.Offset(size.width - 1.dp.toPx(), 0f),
+                            size = androidx.compose.ui.geometry.Size(1.dp.toPx(), size.height),
+                        )
+                    }
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(top = 18.dp),
+            ) {
+                DelaSide(sideModel, sideActions, Modifier.fillMaxSize())
+            }
+        }
+        val gx by androidx.compose.animation.core.animateDpAsState(if (drawerOpen) DRAWER_W else 0.dp, label = "grip")
+        SideGrip(
+            open = drawerOpen,
+            attached = !drawerOpen,
+            onClick = { drawerOpen = !drawerOpen },
+            modifier = Modifier.align(Alignment.CenterStart).offset(x = gx),
+        )
+    }
     }
     }
     if (sphereSheet) {
@@ -1452,7 +1568,7 @@ fun DelaTab(
     // успевает уехать (баг №1). Числа считаются, только пока она видна.
     run {
         DelaNavSheet(
-            visible = navOpen,
+            visible = navOpen && Look.v4,
             nav = if (page == null && needle.isEmpty()) nav else "",
             sphere = sphere,
             counts = { DelaViews.counts(snap, me, today, sphere, now) },
@@ -2308,13 +2424,16 @@ private fun LazyListScope.screenBody(
     }
 }
 
-/** Шапка раздела — как `head()` веба: «‹» на страницах, ☰ — боковая панель, заголовок, подзаголовок, тревога красным. */
+/**
+ * Шапка раздела — как `head()` веба: «‹» на страницах, ☰ — боковая панель (только «Вид 4.0»: в v2 разделы — в
+ * боковине), заголовок, подзаголовок, тревога красным.
+ */
 @Composable
-private fun DelaHead(sc: DelaScreen, sphere: String, onBack: (() -> Unit)?, onMenu: () -> Unit) {
+private fun DelaHead(sc: DelaScreen, sphere: String, onBack: (() -> Unit)?, onMenu: (() -> Unit)?) {
     val c = MaterialTheme.colorScheme
     Row(verticalAlignment = Alignment.CenterVertically) {
         if (onBack != null) GlyphButton(Glyphs.Back, "назад", onClick = onBack)
-        GlyphButton(Glyphs.ListLines, "разделы, CRM, проекты и люди — как боковая панель веба", onClick = onMenu)
+        if (onMenu != null) GlyphButton(Glyphs.ListLines, "разделы, CRM, проекты и люди — как боковая панель веба", onClick = onMenu)
         Column(Modifier.weight(1f).padding(start = 4.dp)) {
             Text(sc.title, style = MaterialTheme.typography.titleMedium, color = c.onSurface)
             val sub = listOf(sc.sub, sphere).filter { it.isNotBlank() }.joinToString(" · ")

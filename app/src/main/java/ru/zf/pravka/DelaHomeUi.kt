@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,10 +28,15 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.SolidColor
@@ -132,11 +138,11 @@ internal data class DelaTabItem(val key: String, val title: String, val count: S
 
 /**
  * Вкладки с чертой (`.tabs` холста): Сейчас · Сегодня · Новое · Все дела, у выбранной — черта акцентом и
- * слово цветом текста; ряд листается вбок, если не влез. Справа — ☰: остальные разделы, фильтры, CRM,
- * проекты и люди (боковая панель веба).
+ * слово цветом текста; ряд листается вбок, если не влез. Остальные разделы, фильтры, CRM, проекты и люди — в
+ * боковине (язычок у левого края, `SideGrip`): «☰» в ряду с 13.10.2026 нет.
  */
 @Composable
-internal fun DelaTabsV2(tabs: List<DelaTabItem>, selected: String, onSelect: (String) -> Unit, onMenu: () -> Unit) {
+internal fun DelaTabsV2(tabs: List<DelaTabItem>, selected: String, onSelect: (String) -> Unit) {
     val t = LocalPravkaType.current
     val line = Kv.line
     Row(
@@ -163,7 +169,7 @@ internal fun DelaTabsV2(tabs: List<DelaTabItem>, selected: String, onSelect: (St
                                 drawRect(accent, topLeft = Offset(0f, size.height - h), size = Size(size.width, h))
                             }
                         }
-                        .padding(start = 7.dp, end = 7.dp, top = 12.dp, bottom = 11.dp),
+                        .padding(start = 10.dp, end = 10.dp, top = 12.dp, bottom = 11.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
@@ -177,7 +183,6 @@ internal fun DelaTabsV2(tabs: List<DelaTabItem>, selected: String, onSelect: (St
                 }
             }
         }
-        GlyphButton(kv("list", Glyphs.Menu), "разделы, CRM, фильтры, проекты и люди", onClick = onMenu, tint = Kv.icon, size = 44.dp)
     }
 }
 
@@ -426,30 +431,104 @@ private fun NavEyebrow(text: String) {
     )
 }
 
+/** Надстрочник-переключатель группы (свернуть или раскрыть): «Клиенты · 12 ›». [trailing] — действие справа. */
+@Composable
+private fun NavFold(text: String, count: Int, open: Boolean, onToggle: () -> Unit, trailing: (@Composable () -> Unit)? = null) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+            .clip(RoundedCornerShape(7.dp))
+            .clickable(role = Role.Button, onClickLabel = if (open) "свернуть «$text»" else "раскрыть «$text»", onClick = onToggle)
+            .padding(start = 8.dp, end = 4.dp, top = 4.dp, bottom = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, style = LocalPravkaType.current.overline, color = Kv.faint)
+        Spacer(Modifier.width(6.dp))
+        Text(count.toString(), style = LocalPravkaType.current.overline.copy(fontWeight = FontWeight.Normal), color = Kv.faint)
+        Icon(
+            KvGlyphs.byKey("chevron") ?: Glyphs.Forward,
+            contentDescription = null,
+            tint = Kv.faint,
+            modifier = Modifier.padding(start = 2.dp).size(13.dp).rotate(if (open) 90f else 0f),
+        )
+        Spacer(Modifier.weight(1f))
+        trailing?.invoke()
+    }
+}
+
+/** Проект клиента под ним (`side-deals` веба): квадратик цвета стадии, короткое имя, число открытых дел. */
+@Composable
+private fun NavDealRow(d: ru.zf.pravka.core.DelaCrm.NavDeal, selected: Boolean, onClick: () -> Unit) {
+    val t = LocalPravkaType.current
+    val stage = stageColor(d.deal.stage)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(7.dp))
+            .background(if (selected) Kv.accentSoft else androidx.compose.ui.graphics.Color.Transparent)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(start = 32.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(7.dp).clip(RoundedCornerShape(2.dp)).background(stage))
+        Spacer(Modifier.width(8.dp))
+        Text(
+            d.short,
+            style = t.body.copy(fontSize = 13.sp, lineHeight = 17.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal),
+            color = if (selected) Kv.accent else Kv.muted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        KvCount(d.open.takeIf { it > 0 }?.toString().orEmpty(), bad = d.late)
+    }
+}
+
+/** Что показывает боковина Дел — одно на разложенный (колонкой) и сложенный (шторкой). */
+internal class DelaSideModel(
+    val nav: String,
+    val counts: DelaViews.Counts,
+    val views: List<DelaViews.View>,
+    val filters: List<Pair<DelaGroups.Filter, Int>>,
+    val filterNav: String,
+    val crm: List<Pair<String, String>>,
+    val projects: Dela.ProjectsNav,
+    /** Есть CRM — люди живут в разделе «Люди», отдельного списка людей в боковине нет (как в вебе). */
+    val crmOn: Boolean,
+    val sphere: String,
+    val spheres: List<Pair<String, String>>,
+    val query: String,
+    val clientOpen: Set<String>,
+    val hereClient: String,
+    val hereDeal: String,
+    val clientDeals: (String) -> List<ru.zf.pravka.core.DelaCrm.NavDeal>,
+)
+
+/** Что умеет боковина: перейти в раздел, на страницу, поискать, сменить сферу, раскрыть клиентов. */
+internal class DelaSideActions(
+    val onNav: (String) -> Unit,
+    val onQuery: (String) -> Unit,
+    val onProject: (String) -> Unit,
+    val onPerson: (String) -> Unit,
+    val onDeal: (String) -> Unit,
+    val onSphere: (String) -> Unit,
+    val onClientOpen: (Collection<String>, Boolean) -> Unit,
+    /** Поиск отправлен клавишей: на сложенном шторка уезжает — находки под ней (как Enter в поиске веба). */
+    val onSubmit: () -> Unit = {},
+)
+
 /**
- * Колонка разделов разворота (`.dside` холста, боковая панель веба): поиск, разделы с числами (Сейчас,
- * Сегодня, Новое, Все дела, Круг и дерево жизни), фильтры, CRM, клиенты по свежести и «Все проекты и
- * люди» — та же панель ☰, что на сложенном (избранное, проекты по видам, люди, архив, сфера).
+ * Боковина Дел (`.dside` холста и боковая колонка веба): поиск, разделы с числами (Сейчас, Сегодня, Новое, Все
+ * дела, Круг и дерево жизни), фильтры, CRM, избранное, проекты по видам (у клиента — его проекты под стрелкой,
+ * «раскрыть все»), люди, архив и сфера. Одна на разложенный — колонкой 172 dp, и сложенный — шторкой поверх
+ * (13.10.2026, владелец: «боковина, которая вылезает и скрывается»); то, что раньше открывал «☰», — теперь здесь.
  */
 @Composable
-internal fun DelaNavColumn(
-    nav: String,
-    counts: DelaViews.Counts,
-    views: List<DelaViews.View>,
-    filters: List<Pair<DelaGroups.Filter, Int>>,
-    filterNav: String,
-    crm: List<Pair<String, String>>,
-    clients: List<Dela.ProjectRow>,
-    query: String,
-    onQuery: (String) -> Unit,
-    onNav: (String) -> Unit,
-    onProject: (String) -> Unit,
-    onMore: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
+internal fun DelaSide(m: DelaSideModel, a: DelaSideActions, modifier: Modifier = Modifier) {
     val t = LocalPravkaType.current
-    Column(modifier.verticalScroll(rememberScrollState()).padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 24.dp)) {
-        // Поиск (`.dfind`): набрал — список посередине показывает находки, как поиск веба.
+    Column(modifier.verticalScroll(rememberScrollState()).padding(start = 10.dp, end = 6.dp, top = 2.dp, bottom = 28.dp)) {
+        // Поиск (`.dfind`): набрал — список показывает находки, как поиск веба.
         val shape = RoundedCornerShape(KvShape.Control)
         Row(
             Modifier
@@ -464,48 +543,165 @@ internal fun DelaNavColumn(
             Icon(Glyphs.Search, contentDescription = null, tint = Kv.faint, modifier = Modifier.size(15.dp))
             Spacer(Modifier.width(8.dp))
             Box(Modifier.weight(1f)) {
-                if (query.isEmpty()) Text("Поиск", style = t.body.copy(fontSize = 13.5.sp), color = Kv.faint, maxLines = 1)
+                if (m.query.isEmpty()) Text("Поиск", style = t.body.copy(fontSize = 13.5.sp), color = Kv.faint, maxLines = 1)
                 BasicTextField(
-                    value = query,
-                    onValueChange = onQuery,
+                    value = m.query,
+                    onValueChange = a.onQuery,
                     singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { a.onSubmit() }),
                     textStyle = t.body.copy(fontSize = 13.5.sp, color = Kv.text),
                     cursorBrush = SolidColor(Kv.accent),
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
-            if (query.isNotEmpty()) GlyphButton(Glyphs.Close, "закрыть поиск", onClick = { onQuery("") }, tint = Kv.faint, size = 24.dp)
+            if (m.query.isNotEmpty()) GlyphButton(Glyphs.Close, "закрыть поиск", onClick = { a.onQuery("") }, tint = Kv.faint, size = 24.dp)
         }
-        for (v in views) {
-            NavRow(viewIcon(v), v.title, selected = nav == v.key, count = counts.label(v), hot = counts.hot(v), bad = counts.bad(v)) { onNav(v.key) }
+        for (v in m.views) {
+            NavRow(viewIcon(v), v.title, selected = m.nav == v.key, count = m.counts.label(v), hot = m.counts.hot(v), bad = m.counts.bad(v)) { a.onNav(v.key) }
         }
-        if (filters.isNotEmpty()) {
+        if (m.filters.isNotEmpty()) {
             NavEyebrow("Фильтры")
-            for ((f, n) in filters) {
-                NavRow(kv("bookmark", Glyphs.ListLines), f.name, selected = nav == filterNav + f.id, count = n.takeIf { it > 0 }?.toString().orEmpty()) { onNav(filterNav + f.id) }
+            for ((f, n) in m.filters) {
+                NavRow(kv("bookmark", Glyphs.ListLines), f.name, selected = m.nav == m.filterNav + f.id, count = n.takeIf { it > 0 }?.toString().orEmpty()) {
+                    a.onNav(m.filterNav + f.id)
+                }
             }
         }
-        if (crm.isNotEmpty()) {
+        if (m.crm.isNotEmpty()) {
             NavEyebrow("CRM")
-            for ((k, title) in crm) {
+            for ((k, title) in m.crm) {
                 val icon = when (k) {
                     "crm" -> kv("funnel", Glyphs.Layers)
                     "clients" -> kv("briefcase", Glyphs.Layers)
                     "people" -> kv("users", Glyphs.Groups)
                     else -> kv("link", Glyphs.Link)
                 }
-                NavRow(icon, title, selected = nav == k) { onNav(k) }
+                NavRow(icon, title, selected = m.nav == k) { a.onNav(k) }
             }
         }
-        if (clients.isNotEmpty()) {
-            NavEyebrow("Клиенты")
-            for (r in clients) {
-                NavRow(kv("briefcase", Glyphs.Layers), r.project.name, selected = false, count = r.open.takeIf { it > 0 }?.toString().orEmpty(), bad = r.late) {
-                    onProject(r.project.id)
+        // Проекты — строкой, клиент — со своими проектами под стрелкой (`projItem` веба).
+        val row: @Composable (Dela.ProjectRow) -> Unit = { r ->
+            val deals = if (r.project.kind == "client") m.clientDeals(r.project.id) else emptyList()
+            val icon = if (r.project.kind == "client") kv("briefcase", Glyphs.Layers) else kv("folder", Glyphs.ListLines)
+            if (deals.isEmpty()) {
+                NavRow(icon, r.project.name, selected = false, count = r.open.takeIf { it > 0 }?.toString().orEmpty(), bad = r.late) { a.onProject(r.project.id) }
+            } else {
+                val open = r.project.id in m.clientOpen || r.project.id == m.hereClient
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) {
+                        NavRow(icon, r.project.name, selected = false, count = r.open.takeIf { it > 0 }?.toString().orEmpty(), bad = r.late) { a.onProject(r.project.id) }
+                    }
+                    Box(
+                        Modifier
+                            .size(28.dp)
+                            .clip(RoundedCornerShape(KvShape.Tag))
+                            .clickable(
+                                role = Role.Button,
+                                onClickLabel = if (open) "свернуть проекты" else "проекты клиента: ${deals.size}",
+                                onClick = { a.onClientOpen(listOf(r.project.id), !open) },
+                            )
+                            .semantics { contentDescription = if (open) "свернуть проекты" else "проекты клиента: ${deals.size}" },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            KvGlyphs.byKey("chevron") ?: Glyphs.Forward,
+                            contentDescription = null,
+                            tint = Kv.faint,
+                            modifier = Modifier.size(14.dp).rotate(if (open) 90f else 0f),
+                        )
+                    }
                 }
+                if (open) for (d in deals) NavDealRow(d, selected = d.deal.id == m.hereDeal) { a.onDeal(d.deal.id) }
             }
         }
-        Spacer(Modifier.height(6.dp))
-        NavRow(Glyphs.Forward, "Проекты и люди", selected = false, onClick = onMore)
+        if (m.projects.favorites.isNotEmpty()) {
+            NavEyebrow("Избранное")
+            for (r in m.projects.favorites) row(r)
+        }
+        for ((title, rows) in m.projects.groups) {
+            var open by rememberSaveable("side:$title") { mutableStateOf(true) }
+            // «Раскрыть все / свернуть все» — проекты всех клиентов разом (`openAllBtn` веба).
+            val withDeals = rows.filter { it.project.kind == "client" && m.clientDeals(it.project.id).isNotEmpty() }.map { it.project.id }
+            NavFold(title, rows.size, open, onToggle = { open = !open }, trailing = if (open && withDeals.isNotEmpty()) {
+                {
+                    val allOpen = withDeals.all { it in m.clientOpen }
+                    Text(
+                        // Колонка узкая (172 dp): видно одно слово, целиком — для чтения с экрана.
+                        if (allOpen) "свернуть" else "раскрыть",
+                        style = t.meta,
+                        color = Kv.faint,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(KvShape.Tag))
+                            .clickable(role = Role.Button) { a.onClientOpen(withDeals, !allOpen) }
+                            .semantics { contentDescription = if (allOpen) "свернуть все" else "раскрыть все" }
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                    )
+                }
+            } else null)
+            if (open) for (r in rows) row(r)
+        }
+        // С CRM люди — разделом «Люди» по компаниям; без неё — с кем больше открытых дел.
+        if (m.projects.people.isNotEmpty() && !m.crmOn) {
+            var open by rememberSaveable("side:people") { mutableStateOf(false) }
+            NavFold("Люди", m.projects.people.size, open, onToggle = { open = !open })
+            if (open) for ((p, n) in m.projects.people) {
+                NavRow(kv("user", Glyphs.Groups), p.label, selected = false, count = n.takeIf { it > 0 }?.toString().orEmpty()) { a.onPerson(p.id) }
+            }
+        }
+        if (m.projects.archived.isNotEmpty()) {
+            var open by rememberSaveable("side:arch") { mutableStateOf(false) }
+            NavFold("Архив", m.projects.archived.size, open, onToggle = { open = !open })
+            if (open) for (r in m.projects.archived) row(r)
+        }
+        // Сфера (поле `sphere` проекта; дела без проекта видны в любой) — словами, выбранная мягким акцентом.
+        NavEyebrow("Сфера")
+        Row(Modifier.padding(start = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            for ((k, title) in m.spheres) {
+                val on = m.sphere == k
+                Text(
+                    title,
+                    style = t.body.copy(fontSize = 13.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal),
+                    color = if (on) Kv.accent else Kv.muted,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(if (on) Kv.accentSoft else androidx.compose.ui.graphics.Color.Transparent)
+                        .clickable(role = Role.RadioButton) { a.onSphere(k) }
+                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Язычок боковины (`.dgrip` холста; владелец 13.10.2026: «кнопка у края со стрелкой, которая её вытаскивает, и
+ * такая же кнопка, которая убирает»): 18×56, панель с линией, шеврон линией — › показать, ‹ спрятать. [attached] —
+ * прижат к краю экрана: скругление 8 только со стороны экрана, линии у края нет. Жеста от края нет — он спорит с
+ * системным «назад».
+ */
+@Composable
+internal fun SideGrip(open: Boolean, attached: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val shape = if (attached) RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp) else RoundedCornerShape(8.dp)
+    val label = if (open) "Спрятать разделы" else "Показать разделы"
+    Box(
+        modifier
+            // Прижатый к краю — на 1 dp за край: левая линия уходит за экран, как `border-left: 0` холста.
+            .then(if (attached) Modifier.offset(x = (-1).dp) else Modifier)
+            .size(width = if (attached) 19.dp else 18.dp, height = 56.dp)
+            .clip(shape)
+            .background(Kv.panel)
+            .border(1.dp, Kv.line, shape)
+            .clickable(role = Role.Button, onClickLabel = label, onClick = onClick)
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            KvGlyphs.byKey("chevron") ?: Glyphs.Forward,
+            contentDescription = null,
+            tint = Kv.muted,
+            modifier = Modifier.padding(start = if (attached) 1.dp else 0.dp).size(15.dp).rotate(if (open) 180f else 0f),
+        )
     }
 }
