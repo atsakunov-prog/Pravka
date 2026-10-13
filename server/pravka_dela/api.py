@@ -15,11 +15,11 @@
 | GET  /api/me | кто я; look — шапка веба: домен общей куки темы, значок «Ковчега», соседние сервисы (только владельцу) |
 | GET  /api/sync?since=N | всё изменившееся после N (телефон, веб) |
 | POST /api/ops | пачка операций с op_id (офлайн-очередь) |
-| GET  /api/view/<имя> | готовый список: morning, new, waiting, person, quick, now, project, week, search; CRM — pipeline, clients, client, deal (с журналом), dossier, ties, money; «Где мы» — where, where_avatar?device= (where.py); встречи — meetings?sphere&q&project_id&person_id&sort&since&until&archived, meeting?id или ref (meetings.py) |
+| GET  /api/view/<имя> | готовый список: morning, new, waiting, person, quick, now, project, week, search; CRM — pipeline, clients, client, deal (с журналом), dossier, ties, money; «Где мы» — where, where_avatar?device= (where.py); встречи — meetings?sphere&q&project_id&person_id&sort&since&until&archived, meeting?id или ref (meetings.py); «Когда» — when?q=фраза&local=1&date=1: срок и напоминание словами в поля дела (when.py; без local непонятое — Claude) |
 | GET  /api/task/<id или номер> | дело с комментариями, журналом и откуда оно (origin) |
 | POST /api/parse | {"text", "project_id"?, "person_id"?} — Claude режет текст на дела и заводит их; ответ — номер задания |
 | GET  /api/parse/<номер> | run, пока думает; потом done с делами и заметками или error |
-| POST /api/ask | {"text", "scope": {"title", "task_ids", "visible_ids"?, "selected_ids"?, "open"?, "deal_ids"?, "visible_deal_ids"?, "focus"?, "project_id"?, "person_id"?, "deal_id"?, "card"?, "suggestion_ids"?}} — Claude правит дела словами: видит страницу (что в окне, что выбрано, что открыто) и все свои открытые дела коротко, в «Новом» — и решает предложения на экране, в карточке (card: client, person, deal) — и её хронологию, людей, сделки (ask.py); ответ — номер задания |
+| POST /api/ask | {"text", "scope": {"title", "task_ids", "visible_ids"?, "selected_ids"?, "open"?, "deal_ids"?, "visible_deal_ids"?, "focus"?, "project_id"?, "person_id"?, "deal_id"?, "card"?, "kstati"?, "suggestion_ids"?, "history"?}} — Claude правит дела словами: видит страницу (что в окне, что выбрано, что открыто) и все свои открытые дела коротко, в «Новом» — и решает предложения на экране, в карточке (card: client, person, deal) — и её хронологию, людей, сделки; в карточке дела (card: task, open) — только это дело, kstati — мысль вдогонку к нему; history — разговор в окне ответа (ask.py); ответ — номер задания |
 | GET  /api/ask/<номер> | как у разбора; done — что поменялось (changed: как было и стало), новые дела, решения по «Новому» (decided), ответ Claude |
 | GET  /api/reminders/due | только бот Ковчега: напоминания, которым пора в Telegram (remind.py) |
 | POST /api/reminders/act | только бот Ковчега: {"telegram_id", "num", "action": done, snooze, tomorrow, "minutes"?} — кнопка под напоминанием от имени нажавшего |
@@ -47,7 +47,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import ask, db, llm, parse, remind, store, tokens
+from . import ask, db, llm, parse, remind, store, tokens, when
 from .config import Config
 
 log = logging.getLogger("dela.api")
@@ -240,6 +240,21 @@ def build(cfg: Config) -> Starlette:
         if not who:
             return _err("нужен вход", 401)
         name = request.path_params["name"]
+        if name == "when" and not _scope(who):
+            # «Когда» в карточке дела (13.10.2026, when.py): фраза → срок и напоминание. Путь — вид, а не новый адрес:
+            # список адресов Дел на Aeza закрытый, а /api/view/<имя> в нём уже есть. local=1 — только свой разбор
+            # (пока человек печатает), без него непонятое спрашиваем у Claude; date=1 — нужен только день.
+            q = request.query_params
+            try:
+                out = await anyio.to_thread.run_sync(lambda: when.understand(
+                    url, who.user, q.get("q") or "", cfg.anthropic_key, cfg.claude_proxy,
+                    use_model=q.get("local") != "1", only_date=q.get("date") == "1"))
+            except when.WhenError as e:
+                return _json({"ok": False, "error": str(e)})
+            except Exception as e:  # noqa: BLE001 — сеть, ключ, лимит: человеку коротко, в журнал подробно
+                log.exception("«когда» %s", who.name)
+                return _json({"ok": False, "error": f"Claude недоступен: {type(e).__name__} — напиши проще"})
+            return _json(out)
         params = {k: v for k, v in request.query_params.items()
                   if k in {"sphere", "person_id", "project_id", "deal_id", "q", "status", "closed_days",
                            # Свод и «кто это» (06.10.2026)
@@ -366,6 +381,16 @@ def build(cfg: Config) -> Starlette:
             return _err("scope: id — не uuid", 400)
         if raw.get("card") in ("client", "person", "deal"):
             scope["card"] = raw["card"]  # карточка на экране: Claude видит и правит её (ask.card_ops)
+        if raw.get("card") == "task":
+            # Карточка дела (13.10.2026): Claude видит только это дело; «Кстати» — мысль вдогонку к нему.
+            if not scope.get("open"):
+                return _err("scope: карточке дела нужен open — id дела", 400)
+            scope.update(card="task", kstati=bool(raw.get("kstati")))
+        # Разговор в окне ответа (09.10.2026): веб шлёт его с каждой репликой, а сюда он не доходил — Claude не видел,
+        # о чём спрашивал (13.10.2026). Только строки: что сказал, что ответил, что сделано (ask._history режет длину).
+        if isinstance(raw.get("history"), list):
+            scope["history"] = [{k: str(x.get(k) or "")[:2000] for k in ("said", "reply", "done")}
+                                for x in raw["history"][-ask.TALK_TURNS:] if isinstance(x, dict)]
         now = time.monotonic()
         for k in [k for k, j in jobs.items() if now - j["at"] > JOB_TTL and j["status"] != "run"]:
             del jobs[k]

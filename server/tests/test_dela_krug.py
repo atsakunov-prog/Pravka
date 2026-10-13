@@ -286,3 +286,32 @@ def test_view_krug_overview_tree_and_life_view(kr, conn):
     assert t["kind"] == "goal" and t["open"] == 1 and t["children"][0]["title"] == "Распечатать столбики"
     row = conn.execute("SELECT directions, why, goal FROM life.tasks WHERE title = 'Распечатать столбики'").fetchone()
     assert row == (["parenting"], "Хорошо знает математику", False)
+
+
+def test_direction_follows_why(kr):
+    """Владелец 13.10.2026: выбрал «Зачем» — направление ставится само по ветке цели; руками направления правятся
+    по-прежнему. Прежнее своё главное (дело висело прямо на направлении) не остаётся меткой из чужой ветки."""
+    money = mk(kr, title="Бюджет сам собирается", goal=True, directions=["Дело"])
+    kids = mk(kr, title="Сын считает до 20", goal=True, directions=["Дети"])
+    t = mk(kr, title="Выгрузить пуши банка", directions=["Здоровье", "Быт"])
+    assert t["dirs"] == ["health", "home"]
+    ok(kr, "sasha", {"op": "task.set", "id": t["id"], "set": {"why_id": money["id"]}})
+    t = find(kr, "пуши банка")
+    assert t["dirs"] == ["work", "home"] and t["directions"] == ["home"]  # «Быт» поставлен руками — остался меткой
+    # Другая ветка — главное за ней; своё прежнее главное было не своим (от цели) — метки не трогаем.
+    ok(kr, "sasha", {"op": "task.set", "id": t["id"], "set": {"why_id": kids["id"]}})
+    assert find(kr, "пуши банка")["dirs"] == ["parenting", "home"]
+    # Направления в той же операции — решение человека.
+    ok(kr, "sasha", {"op": "task.set", "id": t["id"], "set": {"why_id": money["id"], "directions": ["Здоровье"]}})
+    t = find(kr, "пуши банка")
+    assert t["directions"] == ["health"] and t["dirs"] == ["work", "health"]
+    # «Зачем» убрали — дело не выпадает из дерева: прежнее главное остаётся своим.
+    ok(kr, "sasha", {"op": "task.set", "id": t["id"], "set": {"directions": []}})
+    assert find(kr, "пуши банка")["dirs"] == ["work"]
+    ok(kr, "sasha", {"op": "task.set", "id": t["id"], "set": {"why_id": None}})
+    t = find(kr, "пуши банка")
+    assert t["dirs"] == ["work"] and t["directions"] == ["work"]
+    # Цель без направления не отнимает своё: главному больше неоткуда взяться.
+    bare = mk(kr, title="Цель без ветки", goal=True)
+    ok(kr, "sasha", {"op": "task.set", "id": t["id"], "set": {"why_id": bare["id"]}})
+    assert find(kr, "пуши банка")["dirs"] == ["work"]

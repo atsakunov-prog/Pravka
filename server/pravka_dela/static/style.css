@@ -701,9 +701,35 @@ a.crumb:hover { color: var(--accent); text-decoration: none; }
 .quick-dates { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 8px; }
 .quick-dates .chip-btn { font-size: 13px; padding: 3px 9px; }
 .grp-pick .chip-btn { flex: 1 1 auto; }
-.remind-box { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 4px 0; }
-.remind-box .quick-dates { padding: 4px 0 2px; }
-.remind-state { color: var(--accent); font-size: 13px; padding: 4px 8px 0; }
+/* «Когда» (13.10.2026): что стоит сейчас, строка словами, как понято — до сохранения, и подсказки кнопками. */
+.when-now { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13.5px; padding: 6px 8px 0; color: var(--text); }
+.when-now.faint { color: var(--faint); }
+.when-now .late { color: var(--bad); }
+.when-rem { color: var(--accent); }
+.when-box { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.props input.when-in { border-color: var(--line); background-color: var(--panel); }
+.when-said { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: 13px; padding: 0 8px; min-height: 0; }
+.when-said:empty { display: none; }
+.when-said .when-ok { color: var(--accent); font-weight: 600; }
+.when-said .when-bad { color: var(--bad); }
+.when-said .link-btn { font-size: 13px; padding: 0; }
+.when-hints { padding: 4px 0 4px; }
+/* «Проект» сам: цель над делом ссылкой и тихая подпись, рядом — выбрать проект ЗФ руками. */
+.proj-derived { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding: 2px 0; }
+.proj-derived .faint { padding: 0; font-size: 12.5px; }
+/* Направление по цели: горит и подписано, щелчком не снимается — меняется «Зачем». */
+.dir-pick .chip-btn.auto { cursor: default; }
+.chip-note { font-weight: 400; font-size: 11.5px; margin-left: 5px; opacity: .8; }
+/* Claude в карточке дела (13.10.2026): строка «Что поправить в этом деле?» и «Кстати». */
+.card-say { margin: 0 0 14px; }
+.cs-h { display: flex; align-items: center; gap: 8px; margin: 0 2px 6px; }
+.cs-h label { flex: 1; min-width: 0; font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; }
+.cs-h .chip-btn { flex: none; font-size: 13px; padding: 3px 10px; }
+.card-say .quick-box { padding: 3px 3px 3px 12px; }
+.card-say .quick-box textarea { padding: 8px 0; line-height: 20px; height: 36px; max-height: 200px; font-size: 14.5px; }
+.card-say .q-btn { width: 36px; height: 36px; border-radius: 7px; }
+.card-say.kstati-on .quick-box { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.card-say .claude-status { margin: 6px 2px 0; }
 .notes { width: 100%; min-height: 96px; margin-top: 4px; line-height: 1.5; padding: 10px 12px; }
 /* Выбор из длинного списка — кнопкой, похожей на поле; щелчок — поповер со строкой поиска (choicePop). */
 .pick-sel {

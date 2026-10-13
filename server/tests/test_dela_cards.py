@@ -331,3 +331,84 @@ def test_schema_fits_grammar():
         return 0
 
     assert count(ask.SCHEMA) <= 52
+
+
+def test_task_card_sees_only_this_task_and_new_lands_next_to_it(dela):
+    """Карточка дела (13.10.2026): строка «Что поправить в этом деле?» — Claude видит только это дело (поля, заметку
+    целиком, журнал, место в дереве, проект и клиента коротко); новое дело ложится рядом — тот же проект, сделка и
+    цель; факт — в хронологию клиента дела; модель — дорога «task» (одно место, Свод models.dela)."""
+    from pravka_dela import krug, llm
+
+    p, org, bank, olga, ivan, deal = _client(dela)
+    ops(dela, "sasha", [{"op": "svod.set", "key": krug.DIRECTIONS_KEY, "author": "test",
+                         "value": [{"key": "work", "pos": 3, "name": "Дело", "short": "Дело"}]}])
+    goal = mk(dela, "Мандаты закрываются с гонораром", goal=True, directions=["work"])
+    sib = mk(dela, "Позвонить Ивану про фонды", why_id=goal["id"], project_id=str(p), deal_id=str(deal))
+    t = mk(dela, "Собрать тизер для фондов", why_id=goal["id"], project_id=str(p), deal_id=str(deal),
+           notes="Длинная заметка. " * 20 + "Хвост заметки")
+    other = mk(dela, "Совсем другое дело про ремонт")
+    ops(dela, "sasha", [{"op": "task.set", "id": t["id"], "set": {"due_date": db_today(dela).isoformat()}}])
+    seen = {}
+
+    def fake(system, user_text):
+        seen["user"] = user_text
+        return empty_card(route="new", changes=[item(t["num"], notes_add="фонды просят цифры за 3 года")],
+                          create=[item(0, title="Запросить у Ольги отчётность")], card=[cd("note", text="Фонды просят цифры")],
+                          reply="Дописал, завёл рядом и записал в хронологию.", _usage=None)
+
+    def no_parse(*_):
+        raise AssertionError("из карточки дела разбор надиктовки не зовём")
+
+    scope = {"card": "task", "open": t["id"], "kstati": True}
+    ctx = ask.context(dela, "sasha", "кстати фонды просят цифры", scope)
+    assert (ctx["model"], ctx["effort"]) == llm.route(dela, "task")
+    out = ask.run(dela, "sasha", "кстати фонды просят цифры", scope, "", None, ask_fn=fake, parse_fn=no_parse)
+    u = seen["user"]
+    assert "КАРТОЧКА ДЕЛА" in u and f"#{t['num']} Собрать тизер для фондов" in u and "Хвост заметки" in u
+    assert "Место в дереве: Дело › Мандаты закрываются с гонораром › (это дело)" in u
+    assert "Рядом шаги к той же цели: Позвонить Ивану про фонды" in u and "Сделка: Альфа: фонды" in u
+    assert "Журнал дела (свежие сверху):" in u and "due_date →" in u
+    assert "Совсем другое дело" not in u and "ДЕЛА НА ЭКРАНЕ" not in u and "ДРУГИЕ МОИ" not in u
+    assert u.rstrip().endswith("КСТАТИ — Саша вдогонку к этому делу: кстати фонды просят цифры")
+    assert out["route"] == "edit" and not out["errors"], out["errors"]
+    assert out["changed"][0]["after"]["notes"].endswith("фонды просят цифры за 3 года")
+    made = out["tasks"][0]
+    assert (made["project_id"], made["deal_id"], made["why_id"]) == (str(p), str(deal), goal["id"])
+    with parse.db.session(dela, "sasha", "t") as c:
+        note = c.execute("SELECT project_id, deal_id FROM crm.interactions WHERE summary = 'Фонды просят цифры'").fetchone()
+    assert (note["project_id"], note["deal_id"]) == (p, deal)
+    assert out["crm"] and out["crm"][0]["undo"]  # «Вернуть» снимает и запись хронологии
+    # У цели новое — её шагом.
+    ctx = ask.context(dela, "sasha", "добавь шаг", {"card": "task", "open": goal["id"]})
+    assert ctx["near"] == {"why_id": goal["id"]} and "Это цель (узел дерева)" in ctx["message"]
+    assert "Его шаги: " in ctx["message"] and other["title"] not in ctx["message"]
+
+
+def test_task_card_api_scope(dela, monkeypatch):
+    """API: карточке дела нужен open; kstati и разговор (history) доходят до ask.run — до 13.10.2026 разговор
+    по дороге терялся, и Claude не видел, о чём спрашивал."""
+    from starlette.testclient import TestClient
+
+    from pravka_dela import api, tokens
+    from pravka_dela.config import Config
+    from test_dela_ask import _wait
+
+    t = mk(dela, "Сверка с банком")
+    seen = {}
+
+    def fake_run(url, user, text, scope, key, proxy, via="web", actor=None, **_):
+        seen["scope"] = scope
+        return {"route": "edit", "reply": "ок", "changed": [], "tasks": [], "decided": [], "crm": [], "notes": [], "errors": []}
+
+    monkeypatch.setattr(ask, "run", fake_run)
+    h = {"Authorization": f"Bearer {tokens.issue(dela, 'sasha', 'device', 'телефон-карточка')}"}
+    with TestClient(api.build(Config(db_url=dela, anthropic_key="sk-test"))) as client:
+        r = client.post("/api/ask", headers=h, json={"text": "x", "scope": {"card": "task"}})
+        assert r.status_code == 400 and "open" in r.json()["error"]
+        hist = [{"said": "перенеси", "reply": "На когда?", "done": "ничего не менял", "лишнее": "x"}, "мусор"]
+        jid = client.post("/api/ask", headers=h, json={"text": "на пятницу", "scope": {
+            "card": "task", "open": t["id"], "kstati": 1, "history": hist}}).json()["job"]
+        assert _wait(client, h, jid)["reply"] == "ок"
+    sc = seen["scope"]
+    assert sc["card"] == "task" and sc["open"] == t["id"] and sc["kstati"] is True
+    assert sc["history"] == [{"said": "перенеси", "reply": "На когда?", "done": "ничего не менял"}]

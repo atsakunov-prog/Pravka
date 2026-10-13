@@ -18,6 +18,7 @@ const S = {
   showDone: false, upNoDate: false, upMineOnly: false, dealFilter: null,
   sel: new Set(), order: [], lastPick: null, cardId: null, draft: null, sideOpen: false,
   parse: null, quickText: '', // идёт разбор Claude; текст строки Claude — живёт, пока его не отдали (перерисовка его не стирает)
+  cardSay: {}, kstati: false, whenText: {}, // строка Claude в карточке дела (по делу), «Кстати», строка «Когда» (13.10.2026)
   autoOpen: false, clientOpen: new Set(LS.get('clientOpen', [])), peopleQ: '', // «Сделано само» развёрнуто, клиенты со сделками, люди
   krug: { dirs: [], principles: [], proj: new Map() }, kpick: {}, // Круг жизни: направления и принципы (Свод), проекты в Круге; выбор в «Подскажи»
   treeMode: LS.get('treeMode', 'tree'), treeDir: LS.get('treeDir', null), treeF: null, // Дерево жизни: вид, направление, фильтры списка
@@ -123,7 +124,6 @@ function dueLabel(t) {
 // Часы — московские при любом поясе браузера: в Москве нет перевода часов, сдвиг всегда +3.
 const MSK_MS = 3 * 3600e3;
 const msk = (ms) => { const s = new Date(ms + MSK_MS).toISOString(); return { day: s.slice(0, 10), hm: s.slice(11, 16) }; };
-const mskIso = (day, hm) => `${day}T${hm}:00+03:00`;
 const remindOn = () => ((S.me && S.me.features) || []).includes('remind');
 const myPlaces = () => ((S.me && S.me.settings && S.me.settings.places) || []).filter((x) => String(x || '').trim());
 /** «11:00», «завтра 09:00», «чт 09:00» (до недели вперёд), иначе «12.10 09:00». */
@@ -256,12 +256,24 @@ function principleToday() {
   return list[(Math.round(D.parse(S.today) / 86400e3) + 719163) % list.length];
 }
 const principleLine = () => { const p = principleToday(); return p ? el('div', { class: 'principle', title: 'Принцип дня' }, p) : null; };
-/** Направления дела — переключателями: свои горят. */
+/** Направления дела — переключателями: горят главное и метки (dirsOf). Главное по цели — само (владелец 13.10.2026:
+ *  «выбрал Зачем — направление ставится по ветке цели»): у него пометка «по цели», и щелчком его не снять — меняется
+ *  цель; остальные — свои, руками, как раньше. */
 function dirChips(t, onSet) {
   const own = t.directions || [];
-  return el('div', { class: 'quick-dates dir-pick' }, S.krug.dirs.map((d) => el('button', {
-    class: 'chip-btn' + (own.includes(d.key) ? ' on' : ''), title: d.formula || d.name,
-    onclick: () => onSet(own.includes(d.key) ? own.filter((k) => k !== d.key) : [...own, d.key]) }, d.short || d.name)));
+  const lit = dirsOf(t);
+  // Откуда главное: самое верхнее звено над делом, у которого есть направления, — цель или проект.
+  const src = lit[0] ? upOf(t).slice(1).reverse().find((x) => (x.directions || []).length) : null;
+  const by = src ? (src.kind === 'project' ? 'по проекту' : 'по цели') : '';
+  return el('div', { class: 'quick-dates dir-pick' }, S.krug.dirs.map((d) => {
+    const auto = !!src && d.key === lit[0];
+    return el('button', {
+      class: 'chip-btn' + (lit.includes(d.key) ? ' on' : '') + (auto ? ' auto' : ''),
+      title: auto ? `Главное — ${by}; сменить — поменяй «Зачем»` : d.formula || d.name,
+      onclick: () => (auto ? toast(`Главное направление — ${by}. Сменить его — поменяй «Зачем».`)
+        : onSet(own.includes(d.key) ? own.filter((k) => k !== d.key) : [...own, d.key])) },
+    d.short || d.name, auto ? el('span', { class: 'chip-note' }, by) : null);
+  }));
 }
 /** «Без направления» у дела — щелчок: цель из дерева или просто направление. */
 function dirPop(anchor, t) { whyPop(anchor, t); }
@@ -1446,7 +1458,9 @@ function levelKey(t, lv) {
   }
   // Ключ — имя и id: две «Наташи» — две ветки, а не одна (тогда заголовком — полное имя, opts.full).
   if (lv === 'project') {
-    const p = project(t.project_id);
+    const pl = placeOf(t);
+    const p = pl && pl.p;
+    if (pl && pl.g) return ['5' + pl.g.title + '\u0001' + pl.g.id, pl.g.title, { sub: 'цель в дереве', lead: () => icon('target', 16), find: [pl.g.title, 'цель'] }];
     return p ? ['1' + p.name + '\u0001' + p.id, p.name, { id: p.id, href: '#/p/' + p.id, lead: () => dot(p.id), find: projectKeys(p) }]
       : ['9', 'Без проекта', { lead: () => icon('inbox', 16), find: ['без проекта'] }];
   }
@@ -1570,8 +1584,10 @@ function taskRow(t, by, extra, opt = {}) {
     if (p) chips.push(el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, p.name));
   } else if (!grouped_('project') && !['project', 'deal'].includes(route().kind)) {
     // Без проекта — не тупик, а вопрос: щелчок — выбрать проект.
-    chips.push(p ? el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, p.name)
-      : el('button', { class: 'm noproj', title: 'Выбрать проект', onclick: (e) => { stop(e); projectPop(e.currentTarget, [t.id]); } }, 'без проекта'));
+    const pl = p ? null : placeOf(t);
+    if (p) chips.push(el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, p.name));
+    else if (pl && pl.p) chips.push(el('a', { class: 'm link', href: '#/p/' + pl.p.id, onclick: stop, title: 'Проект цели — сам' }, pl.p.name));
+    else if (!pl) chips.push(el('button', { class: 'm noproj', title: 'Выбрать проект', onclick: (e) => { stop(e); projectPop(e.currentTarget, [t.id]); } }, 'без проекта'));
   }
   const dl = !opt.compact && t.deal_id ? S.deals.get(t.deal_id) : null;
   if (dl && !grouped_('deal') && route().kind !== 'deal') chips.push(el('a', { class: 'm link', href: '#/d/' + dl.id, onclick: stop }, dl.name));
@@ -2201,7 +2217,7 @@ function quickAdd(defaults, { placeholder = null, label = null } = {}) {
     placeholder: `${S.me.name || 'Саша'}, говори дела`,
     title: placeholder || 'Скажи или напиши: «все просроченные — на пятницу», «Ивану позвонить завтра», надиктовка целиком' });
   // Пока Claude думает над командой отсюда — она в поле; над ответом в окне разговора — поле своё.
-  if (busy && !S.parse.talk) input.value = S.parse.text;
+  if (busy && !S.parse.talk && !S.parse.card) input.value = S.parse.text;
   else input.value = S.quickText || '';
   const preview = el('div', { class: 'preview' });
   const help = el('div', { class: 'help hidden' },
@@ -2483,14 +2499,17 @@ const DECIDED = { create: 'заведено', close: 'закрыто', update: '
 // вместе с разговором (scope.history): Claude помнит, о чём спрашивал и что уже сделал. Новая команда из строки страницы —
 // новый разговор; «Хорошо» или крестик — разговор окончен.
 const TALK_KEEP = 8; // реплик разговора, которые видит Claude
-async function claudeSay(text, defaults, cont) {
+async function claudeSay(text, defaults, cont, card) {
   if (S.parse) return;
-  const scope = pageScope(defaults); // экран — до перерисовки: что в окне, видно сейчас
-  const talk = cont && S.talk ? S.talk : { defaults, turns: [] };
+  const talk = cont && S.talk ? S.talk : { defaults, turns: [], card };
+  // Карточка дела (13.10.2026): Claude видит только это дело — экран ему не нужен; разговор в окне ответа — о нём же.
+  const one = talk.card;
+  const scope = one ? { title: 'Карточка дела', card: 'task', open: one.id, ...(one.kstati && !cont ? { kstati: true } : {}) }
+    : pageScope(defaults); // экран — до перерисовки: что в окне, видно сейчас
   if (talk.turns.length) scope.history = talk.turns.slice(-TALK_KEEP).map(turnMemo);
   S.talk = talk;
   talk.busy = text;
-  S.parse = { text, talk: !!cont };
+  S.parse = { text, talk: !!cont, card: one && !cont ? one.id : null };
   if (cont) S.talkText = '';
   render();
   showTalk();
@@ -2503,14 +2522,15 @@ async function claudeSay(text, defaults, cont) {
     // Ничего не сделал и не спросил — команда возвращается в поле: дополнить и отправить ещё раз, а не говорить
     // заново (08.10.2026: «нажимаю на микрофон, и всё стирается»). Спросил — отвечать в окне разговора.
     const did = ['changed', 'tasks', 'decided', 'crm', 'notes'].some((k) => (d[k] || []).length);
-    if (!cont) S.quickText = did || d.reply ? '' : text;
+    if (!cont && one) { S.cardSay[one.id] = did || d.reply ? '' : text; if (did || d.reply) S.kstati = false; }
+    else if (!cont) S.quickText = did || d.reply ? '' : text;
     talk.turns.push({ said: text, d });
     await sync().catch(() => {});
     render();
     showTalk(true);
   } catch (e) {
     talk.busy = null;
-    if (cont) S.talkText = text; else S.quickText = text;
+    if (cont) S.talkText = text; else if (one) S.cardSay[one.id] = text; else S.quickText = text;
     S.parse = null;
     if (!talk.turns.length) S.talk = null;
     render();
@@ -3160,25 +3180,169 @@ async function loadCardExtras(id) {
 
 // «Напомнить в Telegram»: время или место — одно из двух. Шлёт бот Ковчега; новое время или место
 // взводит напоминание заново, даже отправленное. Места — те, что прислал телефон (автопилот Засечки).
-function remindBlock(t) {
-  const set = (at, place) => setFields([t.id], { remind_at: at, remind_place: place });
-  const now = Date.now();
-  const hour = msk(now + 3600e3);
-  const quick = [['через час', mskIso(hour.day, hour.hm)]];
-  if (msk(now).hm < '18:30') quick.push(['вечером 19:00', mskIso(S.today, '19:00')]);
-  quick.push(['завтра 09:00', mskIso(D.add(S.today, 1), '09:00')]);
-  const same = (iso) => t.remind_at && Date.parse(t.remind_at) === Date.parse(iso);
-  const chips = quick.map(([label, iso]) => el('button', { class: 'chip-btn' + (same(iso) ? ' on' : ''), onclick: () => set(iso, null) }, label));
-  for (const p of myPlaces()) {
-    const on = !t.remind_at && norm(t.remind_place) === norm(p);
-    chips.push(el('button', { class: 'chip-btn' + (on ? ' on' : ''), onclick: () => set(null, p) }, 'приеду: ' + p));
-  }
-  if (t.remind_at || t.remind_place) chips.push(el('button', { class: 'chip-btn', onclick: () => set(null, null) }, 'убрать'));
-  const cur = t.remind_at ? msk(Date.parse(t.remind_at)) : null;
-  const own = el('input', { type: 'datetime-local', title: 'Своё время (по Москве)', value: cur ? `${cur.day}T${cur.hm}` : '' });
-  own.addEventListener('change', () => { if (own.value) set(mskIso(own.value.slice(0, 10), own.value.slice(11, 16)), null); });
-  const said = remindState(t);
-  return el('div', { class: 'remind-box' }, said ? el('div', { class: 'remind-state' }, said) : null, el('div', { class: 'quick-dates' }, chips), own);
+/** «Когда» (13.10.2026, владелец: «срок и напомнить — одна текстовая строка, которую разбирают»): «завтра в 11», «в пятницу
+ *  вечером», «через 2 часа», «когда приеду на дачу». Пока печатаешь — свой разбор сервера (when.py, без модели);
+ *  Enter — поставить, а непонятое сервер спросит у Claude. Как понято — строкой под полем, до сохранения. Кнопки под
+ *  строкой — подсказки, ставят сразу. dateOnly — нужен только день («Напомнить ему»). */
+async function whenAsk(q, { local = false, date = false } = {}) {
+  const r = await fetch('/api/view/when?' + new URLSearchParams({ q, ...(local ? { local: '1' } : {}), ...(date ? { date: '1' } : {}) }),
+    { credentials: 'same-origin', headers: { 'X-Dela': '1' } });
+  if (r.status === 401) { S.me = null; renderLogin(); throw new Error('нужен вход'); }
+  let d = {};
+  try { d = await r.json(); } catch (e) { /* пусто */ }
+  if (!r.ok && d.ok === undefined) throw new Error(r.status === 404 ? 'сервер не знает этот адрес (404) — нужен путь в настройках сайта' : 'ошибка ' + r.status);
+  return d;
+}
+function whenLine(key, { dateOnly = false, apply, hints = [] }) {
+  const input = el('input', { class: 'when-in', value: S.whenText[key] || '', autocomplete: 'off', enterkeyhint: 'done',
+    placeholder: dateOnly ? 'в пятницу, через неделю, 20.10' : 'завтра в 11, в пятницу вечером, через 2 часа, когда приеду домой',
+    'aria-label': dateOnly ? 'Когда напомнить ему — словами' : 'Когда — словами: срок и напоминание' });
+  const said = el('div', { class: 'when-said', 'aria-live': 'polite' });
+  let seq = 0, timer = null, last = null;
+  const go = async () => {
+    const q = input.value.trim();
+    if (!q) { input.focus(); return; }
+    const r = last && last.q === q && last.r.ok ? last.r : await look(true);
+    if (!r || !r.ok) return;
+    S.whenText[key] = '';
+    await apply(r.set, r.words);
+  };
+  const show = (r, q) => {
+    if (!q) { said.replaceChildren(); return; }
+    if (!r) { said.replaceChildren(el('span', { class: 'faint' }, 'Спрашиваю Claude…')); return; }
+    if (r.ok) {
+      said.replaceChildren(...[el('span', { class: 'when-ok' }, r.words || 'понял'),
+        r.by === 'claude' ? el('span', { class: 'faint' }, '· понял Claude') : null,
+        el('button', { class: 'link-btn', onmousedown: (e) => { e.preventDefault(); go(); } }, 'Поставить ↵')].filter(Boolean));
+    } else {
+      said.replaceChildren(el('span', { class: r.need_model ? 'faint' : 'when-bad' }, r.need_model ? 'Сам не понял — Enter, спрошу Claude' : r.error || 'не понял'));
+    }
+  };
+  const look = async (model) => {
+    const q = input.value.trim();
+    const my = ++seq;
+    if (!q) { last = null; show(null, ''); return null; }
+    if (model) show(null, q);
+    try {
+      const r = await whenAsk(q, { local: !model, date: dateOnly });
+      if (my !== seq) return null;
+      last = { q, r };
+      show(r, q);
+      return r;
+    } catch (e) {
+      if (my === seq) said.replaceChildren(el('span', { class: 'when-bad' }, e.message));
+      return null;
+    }
+  };
+  input.addEventListener('input', () => { S.whenText[key] = input.value; clearTimeout(timer); timer = setTimeout(() => look(false), 220); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); go(); }
+    if (e.key === 'Escape' && input.value) { e.preventDefault(); e.stopPropagation(); input.value = S.whenText[key] = ''; look(false); }
+  });
+  if (input.value) setTimeout(() => look(false));
+  return el('div', { class: 'when-box' }, input, said, hints.length ? el('div', { class: 'quick-dates when-hints' }, hints) : null);
+}
+/** Срок и напоминание сейчас — словами: «Срок: пт 16.10 11:00 · ⏰ напомню в Telegram 11:00». */
+function whenNow(src, t) {
+  const due = src.due_date ? dueLabel({ ...src, status: src.status || 'open' }) : null;
+  const rem = t ? remindState(t) : '';
+  if (!due && !rem) return el('div', { class: 'when-now faint' }, 'Срока нет');
+  return el('div', { class: 'when-now' }, due ? el('span', { class: due.cls === 'late' ? 'late' : '' }, 'Срок: ' + due.text) : null,
+    rem ? el('span', { class: 'when-rem' }, '⏰ ' + rem) : null);
+}
+/** Строка «Когда» у дела или предложения: поставить — как любую правку поля (у предложения — до «Принять»; напоминания у
+ *  него нет, только срок). Кнопки — частые фразы тем же разбором и места телефона. */
+function whenRow(src, t) {
+  const apply = async (set, words) => {
+    if (t) { await setFields([t.id], set, 'Когда: ' + words); return; }
+    for (const k of ['due_date', 'due_time']) if (k in set) src[k] = set[k];
+    render();
+  };
+  const phrase = (label, q) => el('button', { class: 'chip-btn', onclick: async () => {
+    try { const r = await whenAsk(q, { local: true }); if (r.ok) await apply(r.set, r.words); else toast(r.error || 'не понял'); } catch (e) { fail(e); }
+  } }, label);
+  const open = !!t && isOpen(t) && remindOn();
+  const hints = [phrase('Сегодня', 'сегодня'), phrase('Завтра', 'завтра'), phrase('Пн', 'в понедельник'), phrase('+неделя', 'через неделю'),
+    ...(open ? [phrase('через час', 'через час'), phrase('вечером', 'вечером'),
+      ...myPlaces().map((pl) => el('button', { class: 'chip-btn' + (!t.remind_at && norm(t.remind_place) === norm(pl) ? ' on' : ''),
+        onclick: () => apply({ remind_place: pl, remind_at: null }, 'напомню, когда приедешь: ' + pl) }, 'приеду: ' + pl))] : []),
+    src.due_date ? phrase('без срока', 'без срока') : null,
+    open && (t.remind_at || t.remind_place) ? phrase('без напоминания', 'без напоминания') : null].filter(Boolean);
+  return [whenNow(src, t), whenLine(t ? t.id : 'draft', { apply, hints })];
+}
+
+/** Проект дела для глаз (владелец 13.10.2026: «Проект» — сам): проект ЗФ, если дело к нему привязано; иначе — ближайшая
+ *  группировка выше в дереве: проект цели, на которой висит дело, или сама цель («Выгрузить выписку» — цель «Бюджет
+ *  собирается сам»). Поле project_id не трогаем: цель — не проект ЗФ, и её текст видит только хозяин. */
+function placeOf(t) {
+  if (!t) return null;
+  const p = project(t.project_id);
+  if (p) return { p };
+  if (!isMine(t) || !t.why_id) return null;
+  const up = upOf(t)[1];
+  if (!up) return null;
+  if (up.kind === 'project') return project(up.id) ? { p: project(up.id), derived: true } : null;
+  return project(up.project_id) ? { p: project(up.project_id), derived: true } : { g: up, derived: true };
+}
+
+/** Claude в карточке дела (13.10.2026): строка «Что поправить в этом деле?» — текстом и голосом, как строка страницы, но
+ *  Claude видит только это дело (поля, журнал, место в дереве, проект и клиента). «Кстати» — та же строка вдогонку:
+ *  Claude сам решает — уточнить это дело, завести рядом новое или записать факт клиенту. Ответ — в окне разговора,
+ *  с «Вернуть». Модель — одна настройка на сервере (llm.ROUTES «task», Свод models.dela). */
+function cardSay(t) {
+  const busy = !!S.parse;
+  const mine = busy && S.parse.card === t.id;
+  const k = S.kstati;
+  const input = el('textarea', { id: 'card-say', rows: 1, disabled: busy, autocomplete: 'off',
+    placeholder: k ? 'Кстати… — допишу к делу или заведу рядом' : 'Что поправить в этом деле?',
+    'aria-label': k ? 'Кстати — мысль вдогонку к этому делу' : 'Что поправить в этом деле' });
+  input.value = mine ? S.parse.text : S.cardSay[t.id] || '';
+  const send = () => {
+    const x = input.value.trim();
+    if (S.parse) return;
+    if (!x) { input.focus(); return; }
+    claudeSay(x, {}, false, { id: t.id, kstati: S.kstati });
+  };
+  const grow = () => { input.style.height = ''; if (input.scrollHeight > input.clientHeight + 2) input.style.height = Math.min(input.scrollHeight, 200) + 'px'; };
+  input.addEventListener('input', () => { S.cardSay[t.id] = input.value; box.classList.toggle('has-text', !!input.value.trim()); grow(); });
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    if (e.key === 'Escape') { e.preventDefault(); input.value = S.cardSay[t.id] = ''; box.classList.remove('has-text'); input.blur(); }
+  });
+  const hearing = !!(rec && S.listenCard);
+  const mic = el('button', { type: 'button', class: 'q-btn mic' + (hearing ? ' on' : ''), disabled: busy,
+    title: hearing ? 'Готово — отдать Claude' : 'Сказать голосом: нажми, говори, нажми ещё раз',
+    'aria-label': hearing ? 'Закончить и отдать Claude' : 'Сказать голосом', 'aria-pressed': hearing ? 'true' : 'false',
+    onclick: () => {
+      if (hearing) { stopListening(); return; }
+      const base = input.value.trim();
+      S.listenCard = true;
+      const ok = listen((txt) => {
+        S.cardSay[t.id] = (base ? base + ' ' : '') + txt;
+        const i = document.getElementById('card-say');
+        if (i) { i.value = S.cardSay[t.id]; i.dispatchEvent(new Event('input')); }
+      }, () => {
+        S.listenCard = false;
+        const x = (S.cardSay[t.id] || '').trim();
+        if (x && x !== base && voiceAuto()) claudeSay(x, {}, false, { id: t.id, kstati: S.kstati }); else render();
+      });
+      if (!ok) S.listenCard = false;
+      render();
+    } }, icon(hearing ? 'stop' : 'mic', 18));
+  const box = el('div', { class: 'quick-box' + (mine ? ' busy' : '') + (hearing ? ' hearing' : '') + (input.value.trim() ? ' has-text' : '') },
+    input, mic, el('button', { type: 'button', class: 'q-btn send-btn', disabled: busy,
+      title: busy ? 'Claude думает…' : 'Отдать Claude (Enter)', 'aria-label': 'Отдать Claude', onclick: send }, icon('up', 18)));
+  setTimeout(grow);
+  const kBtn = el('button', { class: 'chip-btn kstati' + (k ? ' on' : ''), 'aria-pressed': k ? 'true' : 'false', disabled: busy,
+    title: k ? 'Вернуть строку к правке дела' : 'Мысль вдогонку: Claude сам решит — дописать к делу или завести рядом',
+    onclick: () => { S.kstati = !S.kstati; render(); setTimeout(() => document.getElementById('card-say')?.focus()); } }, 'Кстати');
+  return el('div', { class: 'say card-say' + (k ? ' kstati-on' : '') },
+    el('div', { class: 'cs-h' }, el('label', { for: 'card-say' }, k ? 'Кстати: Claude сам решит — дописать к делу или завести рядом'
+      : 'Claude видит только это дело'), kBtn),
+    box,
+    mine ? el('div', { class: 'claude-status' }, 'Claude думает над этим делом…')
+      : hearing ? el('div', { class: 'claude-status listening' }, 'Слушаю — нажми микрофон ещё раз, и отдам Claude.') : null);
 }
 
 /** Место дела в дереве жизни (владелец 13.10.2026: «в каждом деле должно быть это дерево и его место в нём, чтобы
@@ -3245,7 +3409,7 @@ function krugProps(t, row) {
       el('button', { class: 'chip-btn', onclick: (e) => whyPop(e.currentTarget, t) }, t.why_id ? 'Поменять цель' : 'Повесить на цель'),
       kindBtn, t.goal ? el('label', { class: 'rhythm-l', title: 'Цель с ритмом — практика: повторяется и не закрывается' }, 'Ритм', rhythm) : null)),
     row('Направления', dirChips(t, (next) => setFields([t.id], { directions: next })),
-      own.length ? el('div', { class: 'hint-line krug-hint' }, 'главное — у корня цепочки «Зачем», остальные — метки (до двух)') : null),
+      own.length && t.why_id ? el('div', { class: 'hint-line krug-hint' }, 'главное — по цели, остальные — метки (до двух)') : null),
   ];
 }
 
@@ -3267,8 +3431,8 @@ function renderCard() {
   // Длинные списки — выбором со строкой поиска (как «Показать только»), не системным <select> (владелец 13.10.2026).
   const live = [...S.projects.values()].filter((p) => !p.archived_at || p.id === src.project_id).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   const setProject = (v) => { if (t) setFields([t.id], { project_id: v || null, deal_id: null }); else { src.project_id = v || null; src.deal_id = null; render(); } };
-  const projSel = choiceBtn(project(src.project_id)?.name || 'Без проекта', (a) => choicePop(a, { title: 'Проект', items: projectItems(live),
-    current: src.project_id || null, none: 'Без проекта', onPick: setProject }), { empty: !src.project_id });
+  const openProj = (a) => choicePop(a, { title: 'Проект', items: projectItems(live), current: src.project_id || null, none: 'Без проекта', onPick: setProject });
+  const projSel = choiceBtn(project(src.project_id)?.name || 'Без проекта', openProj, { empty: !src.project_id });
   const deals = [...S.deals.values()].filter((d) => d.project_id && d.project_id === src.project_id);
   const dealSel = choiceBtn(S.deals.get(src.deal_id)?.name || '—', (a) => choicePop(a, { title: 'Сделка', current: src.deal_id || null, none: 'Не про сделку',
     items: deals.map((d) => ({ v: d.id, title: d.name, note: stageWord(d), lead: () => el('span', { class: 'st-dot st-' + d.stage }) })),
@@ -3277,11 +3441,6 @@ function renderCard() {
   const who0 = person(src.person_id);
   const personSel = choiceBtn(who0 ? (who0.short && who0.short !== who0.name ? `${who0.short} — ${who0.name}` : who0.name) : '—', (a) => choicePop(a, {
     title: 'Человек', items: personItems(people), current: src.person_id || null, none: 'Никто', onPick: (v) => { save('person_id', v); if (!t) render(); } }), { empty: !who0 });
-  const date = (field) => {
-    const i = el('input', { type: 'date', value: src[field] || '' });
-    i.addEventListener('change', () => save(field, i.value || null));
-    return i;
-  };
   // Минуты — чипами 15, 30, 60 (владелец 13.10.2026: без свободного поля); нажал выбранное — снял.
   const minutes = el('div', { class: 'quick-dates' }, [15, 30, 60].map((m) => el('button', { class: 'chip-btn' + (src.estimate_min === m ? ' on' : ''),
     onclick: () => { save('estimate_min', src.estimate_min === m ? null : m); if (!t) render(); } }, m + ' мин')),
@@ -3296,9 +3455,6 @@ function renderCard() {
   title.addEventListener('change', () => title.value.trim() && save('title', title.value.trim()));
   const notes = el('textarea', { class: 'notes', placeholder: 'Заметки' }, src.notes || '');
   notes.addEventListener('change', () => save('notes', notes.value.trim() || null));
-  const quickDates = el('div', { class: 'quick-dates' },
-    [['Сегодня', S.today], ['Завтра', D.add(S.today, 1)], ['Пн', D.next(0)], ['+неделя', D.add(S.today, 7)], ['Нет', null]].map(([l, d]) =>
-      el('button', { class: 'chip-btn' + ((src.due_date || null) === d ? ' on' : ''), onclick: () => { save('due_date', d); if (!t) render(); } }, l)));
   // Группа — три кнопки (10.10.2026): «Отбить», «Запустить», «Мониторить»; человек — кто ждёт или от кого жду.
   const g = grpOf(src);
   const grpPick = el('div', { class: 'quick-dates grp-pick' }, Object.entries(GRP).map(([k, l]) =>
@@ -3310,14 +3466,26 @@ function renderCard() {
   // Свойства — строка на поле: подпись слева, значение справа и переносится внутри своей строки; тонкая линия — у каждой
   // строки (владелец 13.10.2026: «строки наезжают, разделители пропадают» — была одна сетка на всё, без строк).
   const row = (label, ...value) => el('div', { class: 'prop' }, el('div', { class: 'prop-l' }, label), el('div', { class: 'prop-v' }, value));
+  // «Проект» сам (владелец 13.10.2026): без проекта ЗФ — ближайшая группировка выше в дереве (цель, на которой висит
+  // дело); выбрать проект ЗФ руками можно по-прежнему.
+  const pl = t && !src.project_id ? placeOf(t) : null;
+  const derived = pl && pl.derived ? el('div', { class: 'proj-derived' },
+    pl.g ? el('a', { class: 'link', href: '#', onclick: (e) => { e.preventDefault(); openCard(pl.g.id); } }, pl.g.title)
+      : el('a', { class: 'link', href: '#/p/' + pl.p.id }, pl.p.name),
+    el('span', { class: 'faint' }, pl.g ? 'цель в дереве — проект сам' : 'проект цели — сам')) : null;
+  // «Напомнить ему» — день словами («в пятницу», «через неделю») тем же разбором, что «Когда»: без поля даты браузера.
+  const nudge = () => [src.nudge_on ? el('div', { class: 'when-now' }, 'Напомнить: ' + (dueLabel({ due_date: src.nudge_on, status: 'open' }) || {}).text) : null,
+    whenLine((t ? t.id : 'draft') + ':nudge', { dateOnly: true,
+      apply: async (set) => { if ('due_date' in set) save('nudge_on', set.due_date); if (!t) render(); },
+      hints: src.nudge_on ? [el('button', { class: 'chip-btn', onclick: () => { save('nudge_on', null); if (!t) render(); } }, 'не напоминать')] : [] })];
   const props = el('div', { class: 'props' },
-    row('Проект', t && t.goal ? el('span', { class: 'faint' }, 'цель живёт без проекта — её видишь только ты') : projSel),
+    row('Проект', t && t.goal ? el('span', { class: 'faint' }, 'цель живёт без проекта — её видишь только ты')
+      : derived ? [derived, choiceBtn('Выбрать проект ЗФ', openProj, { empty: true })] : projSel),
     deals.length ? row('Сделка', dealSel) : null,
     row('Группа', grpPick),
     row({ owed: 'Кто ждёт', check: 'От кого жду' }[g] || 'Человек', personSel),
-    row('Срок', date('due_date'), quickDates),
-    g === 'check' ? row('Напомнить ему', date('nudge_on')) : null,
-    t && isOpen(t) && remindOn() ? row('Напомнить в Telegram', remindBlock(t)) : null,
+    row('Когда', ...whenRow(src, t)),
+    g === 'check' ? row('Напомнить ему', ...nudge()) : null,
     row('Минут', minutes),
     row('Метки', labels),
     t && isMine(t) && krugOn() ? krugProps(t, row) : null);
@@ -3325,7 +3493,10 @@ function renderCard() {
   // Карточка (общий вид Ковчега): сверху проект ссылкой, название, ряд действий («На сегодня» или «На завтра» и
   // «Сделано» акцентом), свойства — строками через тонкую линию: подпись слева, поле справа.
   const cp = project(src.project_id);
-  const crumb = cp ? el('a', { class: 'crumb', href: '#/p/' + cp.id }, cp.name) : el('span', { class: 'crumb' }, 'Без проекта');
+  const cpl = !cp && t ? placeOf(t) : null;
+  const crumb = cp ? el('a', { class: 'crumb', href: '#/p/' + cp.id }, cp.name)
+    : cpl && cpl.g ? el('a', { class: 'crumb', href: '#', title: 'Цель в дереве, на которой висит дело', onclick: (e) => { e.preventDefault(); openCard(cpl.g.id); } }, cpl.g.title)
+      : cpl ? el('a', { class: 'crumb', href: '#/p/' + cpl.p.id }, cpl.p.name) : el('span', { class: 'crumb' }, 'Без проекта');
   const acts = t ? el('div', { class: 'card-acts' },
     isOpen(t) ? [
       el('button', { class: 'btn' + (inToday(t) ? ' on' : ''), title: inToday(t) ? 'Не сегодня — на завтра' : 'На сегодня', onclick: () => toggleToday(t) },
@@ -3340,6 +3511,8 @@ function renderCard() {
       el('button', { class: 'icon-btn card-x', title: 'Закрыть (Esc)', 'aria-label': 'Закрыть', onclick: close }, icon('x', 18))),
     // Откуда дело (наговор, встреча, Telegram…) — сразу под названием и заметно: владельцу это нравится (13.10.2026).
     title, t ? originLine(t) : null, acts,
+    // Claude только про это дело и «Кстати» (13.10.2026) — нет ключа на сервере, нет и строки.
+    t && S.me.claude ? cardSay(t) : null,
     // Место в дереве жизни: зачем это дело и что будет, когда сделаешь (13.10.2026).
     t && isMine(t) && krugOn() ? el('div', { class: 'place-box' }, el('div', { class: 'place-h' }, 'Место в дереве'), placeBlock(t)) : null,
     props,

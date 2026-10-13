@@ -189,6 +189,22 @@ def _krug_own(conn, user: str, kind: str, obj: dict, kr: dict) -> None:
         raise OpError("целью и практикой бывает дело, а не проект")
     if not data:
         return
+    # Направление идёт за «Зачем» (владелец 13.10.2026: «выбрал Зачем — направление ставится само по ветке цели»).
+    # Главное и так берётся у корня цепочки (tasks.krug_dirs), но прежнее своё главное (дело висело прямо на
+    # направлении) оставалось у дела меткой из чужой ветки. Новая цель с направлением — прежнее главное из своих
+    # уходит, метки, поставленные руками, остаются; «Зачем» убрали — прежнее главное остаётся своим, если иначе дело
+    # выпало бы из дерева. Направления в той же операции — решение человека: их не трогаем.
+    keep_main = None
+    if kind == "task" and "why_id" in data and "directions" not in kr:
+        was = conn.execute("SELECT tasks.krug_dirs(%s) AS dirs, (SELECT directions FROM tasks.krug WHERE id = %s) AS own",
+                           (obj["id"], obj["id"])).fetchone()
+        old_main, own = (was["dirs"] or [None])[0], list(was["own"] or [])
+        if old_main and data["why_id"]:
+            new_main = (conn.execute("SELECT tasks.krug_dirs(%s) AS d", (data["why_id"],)).fetchone()["d"] or [None])[0]
+            if new_main and new_main != old_main and old_main in own:
+                data["directions"] = [k for k in own if k != old_main]
+        elif old_main:
+            keep_main = (old_main, own)
     if data.get("goal") and kind == "task" and obj.get("project_id"):
         conn.execute("UPDATE tasks.tasks SET project_id = NULL, deal_id = NULL WHERE id = %s", (obj["id"],))
     cols = ["id", "kind", "owner_id", *data]
@@ -196,6 +212,10 @@ def _krug_own(conn, user: str, kind: str, obj: dict, kr: dict) -> None:
         sql.SQL(", ").join(map(sql.Identifier, cols)), sql.SQL(", ").join(sql.Placeholder() * len(cols)),
         sql.SQL(", ").join(sql.SQL("{0} = EXCLUDED.{0}").format(sql.Identifier(c)) for c in data))
     conn.execute(q, [obj["id"], kind, owner, *data.values()])
+    if keep_main and not conn.execute("SELECT tasks.krug_dirs(%s) AS d", (obj["id"],)).fetchone()["d"]:
+        main, own = keep_main
+        conn.execute("UPDATE tasks.krug SET directions = %s WHERE id = %s",
+                     ([main, *[k for k in own if k != main]][:krug.DIRS_MAX], obj["id"]))
 
 
 # ── Форма данных ────────────────────────────────────────────────────────

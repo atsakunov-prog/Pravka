@@ -26,9 +26,42 @@ PRICES = {
 MODELS = {"sonnet": "claude-sonnet-5-5", "opus": "claude-opus-5-5"}
 EFFORTS = ("low", "medium", "high")
 
+# Дороги Claude, у которых модель выбирает владелец, а не «Настройки» человека (13.10.2026): одна запись Свода
+# models.dela — {дорога: {model, effort}} — меняет их без выкладки («переведи карточку на Sonnet» — одна правка).
+# Здесь — заводские значения: Свода нет или в нём чужое слово — они.
+ROUTES = {
+    # Claude в карточке дела и «Кстати» — как Claude карточек (ask.CARD_MODEL): Opus, глубина явно.
+    "task": {"model": "claude-opus-5-5", "effort": "low"},
+    # «Когда» в карточке: фразу, которую не понял свой разбор (when.py), — Sonnet без размышлений.
+    "when": {"model": "claude-sonnet-5-5", "effort": "low"},
+}
+ROUTES_KEY = "models.dela"
+ROUTES_EVERY = 300  # Свод перечитывается раз в 5 минут: правка владельца доходит быстро, запрос — копеечный
+
 
 SVOD_EVERY = 3600
 _svod: dict = {"at": -SVOD_EVERY, "prices": {}}
+_routes: dict = {"at": -ROUTES_EVERY, "value": {}}
+
+
+def route(url: str | None, name: str) -> tuple[str, str]:
+    """Модель и глубина дороги: Свод владельца (models.dela), поверх заводских ROUTES. Модель — только знакомая
+    (есть цена), глубина — из EFFORTS; иначе заводское."""
+    if url and time.monotonic() - _routes["at"] >= ROUTES_EVERY:
+        _routes["at"] = time.monotonic()
+        try:
+            with db.session(url, "system", via="claude") as conn:
+                row = conn.execute("SELECT value FROM crm.svod WHERE owner_id = crm.owner_id() AND key = %s",
+                                   (ROUTES_KEY,)).fetchone()
+            got = (row or {}).get("value")
+            _routes["value"] = got if isinstance(got, dict) else {}
+        except Exception:  # noqa: BLE001
+            log.exception("дороги Claude из Свода")
+    base = ROUTES[name]
+    own = _routes["value"].get(name) if isinstance(_routes["value"].get(name), dict) else {}
+    model = MODELS.get(own.get("model"), own.get("model"))
+    effort = own.get("effort")
+    return (model if model in PRICES else base["model"]), (effort if effort in EFFORTS else base["effort"])
 
 
 def prices(url: str | None = None) -> dict:

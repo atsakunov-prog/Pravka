@@ -54,6 +54,13 @@ CRM и всё может править»; «написал: добавь <че�
 (scope.history: что Саша сказал, что ответил Claude, что сделано) — раздел РАЗГОВОР перед командой. Он
 после справочника, поэтому кэш тот же. В разговоре команда — всегда правка (route "edit"): ответ «да, на
 пятницу» не уходит в разбор надиктовки, который разговора не видит.
+
+Карточка дела (13.10.2026). Владелец: в карточке дела — строка «Что поправить в этом деле?» (текстом и голосом), и
+Claude видит только это дело: поля, заметку целиком, откуда оно, комментарии, журнал, место в дереве (цели над
+ним, соседние шаги, его шаги), проект и клиента коротко (scope.card = "task", scope.open — дело). Правит тем же
+(changes, create, card), новое дело ложится рядом — тот же проект, сделка и цель. «Кстати» (scope.kstati) — та же
+строка вдогонку: Claude сам решает, уточнить ли это дело, завести ли рядом новое или записать факт клиенту.
+Модель и глубина — дорога TASK_ROUTE (llm.ROUTES, Свод models.dela): одно место, а не по коду.
 """
 
 from __future__ import annotations
@@ -64,12 +71,15 @@ import logging
 import re
 import uuid
 
-from . import db, llm, parse, people, remind, store
+from . import db, krug, llm, parse, people, remind, store
 
 log = logging.getLogger("dela.ask")
 
 MODEL = "claude-sonnet-5-5"    # по умолчанию; в настройках — llm.MODELS
 CARD_MODEL = "claude-opus-5-5"  # карточка клиента, сделки, человека — решение владельца 06.10.2026
+TASK_ROUTE = "task"             # карточка дела и «Кстати» — модель и глубина в одном месте: llm.ROUTES / Свод models.dela
+HISTORY_SHOWN = 12              # записей журнала дела в его карточке для Claude
+STEPS_SHOWN = 8                 # соседних шагов и своих шагов дела — в «месте в дереве»
 NOW_MAX = 5                     # «Сейчас» — дела, которые обязан сделать сегодня: не больше пяти
 TIMELINE_SHOWN = 12             # записей хронологии в карточке для Claude
 EFFORT = "low"                 # правка короткая; ошибается — «Вдумчиво» в настройках
@@ -206,6 +216,16 @@ card — правки людей, сделок и хронологии, по з�
   do "client" — статус клиента. stage — "relations" (поддержание отношений: уже не лид, но и не сделка —
     работали, держим связь) или "-" — снять; org — клиент из ПРОЕКТОВ вне его карточки.
 «Сейчас» (now "on") — не больше пяти дел на сегодня: их Саша обязан сделать. Уже пять — скажи в reply.
+
+КАРТОЧКА ДЕЛА — если в сообщении раздел «КАРТОЧКА ДЕЛА»: Саша открыл одно дело и говорит про него («это»,
+«его», «перенеси» — оно). Других дел ты не видишь — и не трогай. Правки — в changes, num — его номер. Новое дело
+рядом с ним — create: проект, сделка и цель возьмутся от этого дела сами (project — только если Саша назвал
+другой). Что произошло у клиента или по сделке этого дела (звонок, договорились, новость) — card do "note"
+с пустыми name и org: запишется к ним. route — всегда "edit".
+КСТАТИ — если перед командой пометка «КСТАТИ»: Саша вдогонку говорит мысль к этому делу. Реши сам, что это, и
+сделай, не переспрашивая без нужды: уточнение самого дела — notes_add его словами (и срок, человек, название,
+если сказаны); отдельное действие — create рядом; что уже произошло у клиента — card do "note". Бывает и
+несколько сразу. В reply — одной фразой, что куда положил.
 
 ПРАВИЛА
 — Меняй только то, что сказано. Не выдумывай сроки, людей и проекты.
@@ -455,6 +475,93 @@ def _card(conn, scope: dict) -> tuple[list[str], dict | None]:
         lines += ["Хронология с ним (свежие сверху):", *_timeline_lines(conn, "%s = ANY (i.person_ids)", [pe["id"]])]
         return lines, {"kind": "person", "person": pe}
     return [], None
+
+
+HIST_SKIP = {"rev", "seq", "updated_at", "created_at", "created_by", "import_ref"}
+
+
+def _hist_line(h: dict) -> str:
+    """Запись журнала дела словами: когда, кто (откуда), что стало."""
+    when = h["at"].astimezone(MSK).strftime("%d.%m %H:%M")
+    who = f"{h['actor']} ({h['via']})"
+    if h["op"] == "insert":
+        return f"— {when} · {who} · завёл"
+    after = {k: v for k, v in (h.get("after") or {}).items() if k not in HIST_SKIP}
+    if not after:
+        return ""
+    bits = [f"{k} → {_short(str(v) if v is not None else '—', 60)}" for k, v in after.items()]
+    return f"— {when} · {who} · " + "; ".join(bits)
+
+
+def _task_card(conn, url: str, user: str, t: dict, today: dt.date) -> tuple[list[str], dict | None, dict]:
+    """Карточка дела для Claude — только это дело: поля, заметка целиком, откуда, комментарии, журнал, место в дереве,
+    проект и клиент коротко. Ещё — карточка для card_ops (хронология клиента или сделки дела) и что новому делу
+    рядом взять от этого (проект, сделка, цель)."""
+    lines = ["КАРТОЧКА ДЕЛА — Саша открыл одно это дело, команда про него:", _task_line(t, today)]
+    if (t.get("notes") or "").strip():
+        lines.append("Заметка целиком: " + _short(t["notes"], 2000))
+    origin = store.task_origin(conn, t)
+    if origin and origin.get("kind") == "dictation":
+        lines.append("Откуда: наговорка — «" + _short(origin.get("text"), 600) + "»")
+    elif origin:
+        lines.append("Откуда: " + " · ".join(x for x in [origin.get("batch_title"), origin.get("quote") and "«"
+                                                           + _short(origin["quote"], 400) + "»"] if x))
+    coms = conn.execute("SELECT c.text, c.created_at, coalesce(u.name, c.author_id) AS who FROM tasks.comments c "
+                        "LEFT JOIN crm.users u ON u.id = c.author_id WHERE c.task_id = %s AND c.deleted_at IS NULL "
+                        "ORDER BY c.created_at DESC LIMIT 10", (t["id"],)).fetchall()
+    if coms:
+        lines += ["Комментарии (свежие сверху):", *[f"— {c['created_at'].astimezone(MSK).strftime('%d.%m')} {c['who']}: "
+                                                    f"{_short(c['text'], 300)}" for c in coms]]
+    # Место в дереве — только хозяину дела: Круг личный (у остальных why_id и цели не видны).
+    if t.get("owner_id") == user:
+        chain, seen, x = [], {str(t["id"])}, t
+        while x and x.get("why_id") and str(x["why_id"]) not in seen and len(chain) < 12:
+            seen.add(str(x["why_id"]))
+            x = conn.execute("SELECT * FROM tasks.v_tasks WHERE id = %s", (x["why_id"],)).fetchone()
+            if x:
+                chain.append(x)
+        names = {d["key"]: d.get("name") or d["key"] for d in krug.directions(conn, user)}
+        main = (t.get("dirs") or [None])[0]
+        path = [names.get(main, main) if main else "без направления", *[c["title"] for c in reversed(chain)], "(это дело)"]
+        lines.append("Место в дереве: " + " › ".join(path)
+                     + (" · метки: " + ", ".join(names.get(k, k) for k in (t.get("dirs") or [])[1:]) if len(t.get("dirs") or []) > 1 else ""))
+        if t.get("goal"):
+            lines.append("Это цель (узел дерева)" + (f", практика: {t['rhythm']}" if t.get("rhythm") else "") + ".")
+        for title, pid in (("Рядом шаги к той же цели", t.get("why_id")), ("Его шаги", t["id"])):
+            if not pid:
+                continue
+            rows = conn.execute("SELECT v.title FROM tasks.v_tasks v WHERE v.why_id = %s AND v.status = 'open' AND v.id <> %s "
+                                "ORDER BY v.goal DESC, v.due_date NULLS LAST, v.num LIMIT %s", (pid, t["id"], STEPS_SHOWN)).fetchall()
+            if rows:
+                lines.append(f"{title}: " + "; ".join(r["title"] for r in rows))
+    card, pr = None, None
+    if t.get("project_id"):
+        pr = conn.execute("SELECT * FROM crm.projects WHERE id = %s", (t["project_id"],)).fetchone()
+    if pr:
+        lines.append(f"Проект: {pr['name']}" + (" (клиент)" if pr["kind"] == "client" else "")
+                     + (" — " + _short(pr.get("note"), 300) if (pr.get("note") or "").strip() else ""))
+    d = conn.execute("SELECT * FROM crm.v_deals WHERE id = %s", (t["deal_id"],)).fetchone() if t.get("deal_id") else None
+    if d:
+        lines.append(f"Сделка: {_deal_line(conn, d)}" + (" — " + _short(d.get("description"), 300) if (d.get("description") or "").strip() else ""))
+        card = {"kind": "deal", "deal": d, "project": pr}
+    elif pr and pr["kind"] == "client":
+        deals = conn.execute("SELECT * FROM crm.v_deals WHERE project_id = %s ORDER BY stage = 'archive', name", (pr["id"],)).fetchall()
+        card = {"kind": "client", "project": pr, "deals": deals, "people": []}
+    hist = []
+    with db.session(url, "system", "svc:view") as sys_conn:  # журнал читает system — дело база уже показала
+        rows = sys_conn.execute(
+            "SELECT at, actor, via, op, after FROM crm.history WHERE entity = 'tasks.tasks' AND entity_id = %s "
+            "ORDER BY id DESC LIMIT %s", (str(t["id"]), HISTORY_SHOWN)).fetchall()
+        hist = [x for x in (_hist_line(h) for h in rows) if x]
+    if hist:
+        lines += ["Журнал дела (свежие сверху):", *hist]
+    near = {"project_id": str(t["project_id"]) if t.get("project_id") else None,
+            "deal_id": str(t["deal_id"]) if t.get("deal_id") else None}
+    if t.get("owner_id") == user:  # новое рядом — к той же цели; у цели — её шагом
+        why = t["id"] if t.get("goal") else t.get("why_id")
+        if why:
+            near["why_id"] = str(why)
+    return lines, card, {k: v for k, v in near.items() if v}
 
 
 def _deals_on_screen(conn, ids: list[str], visible: set[str]) -> list[str]:
@@ -728,6 +835,9 @@ def to_ops(data: dict, tasks: dict, index: dict, today: dt.date, defaults: dict,
         # На странице сделки новое дело — её следующий шаг, если проект тот же.
         if defaults.get("deal_id") and "deal_id" not in task and task.get("project_id") == defaults.get("project_id"):
             task["deal_id"] = defaults["deal_id"]
+        # Из карточки дела новое ложится рядом — к той же цели дерева (у цели — её шагом).
+        if defaults.get("why_id"):
+            task["why_id"] = defaults["why_id"]
         if task.get("ball") in ("waiting", "agenda") and not task.get("person_id"):
             task["ball"] = "mine"
         if task.get("focus_on") and not fits(None):
@@ -1240,6 +1350,8 @@ def context(url: str, user: str, text: str, scope: dict) -> dict:
         raise AskError("пусто — скажи, что сделать")
     if len(text) > MAX_INPUT:
         raise AskError(f"больше {MAX_INPUT} знаков — для длинной надиктовки нажми звёздочку")
+    if scope.get("card") == "task":
+        return _task_context(url, user, text, scope)
     ids = _ids(scope, "task_ids", MAX_TASKS)
     visible = set(_ids(scope, "visible_ids", MAX_TASKS))
     selected = _ids(scope, "selected_ids", MAX_TASKS)
@@ -1336,6 +1448,39 @@ def context(url: str, user: str, text: str, scope: dict) -> dict:
             "index": index, "today": today, "card": card, "now_ids": now_ids}
 
 
+def _task_context(url: str, user: str, text: str, scope: dict) -> dict:
+    """Карточка дела (scope.card = "task"): Claude видит только это дело — без экрана и без остальных дел. Справочник
+    и правила — тот же system, что у строки страницы (кэш общий у одной модели)."""
+    tid = str(scope.get("open") or scope.get("focus") or "")
+    talk = _history(scope)
+    with db.session(url, user, via="ask") as conn:
+        t = conn.execute("SELECT * FROM tasks.v_tasks WHERE id = %s", (tid,)).fetchone() if tid else None
+        if not t:
+            raise AskError("этого дела нет или оно не видно — открой его заново")
+        cat, index = _catalog(conn)
+        today = conn.execute("SELECT crm.today() AS d").fetchone()["d"]
+        me = conn.execute("SELECT name, id = crm.owner_id() AS owner FROM crm.users WHERE id = %s", (user,)).fetchone()
+        now_ids = {str(r["id"]) for r in conn.execute(
+            "SELECT id FROM tasks.tasks WHERE owner_id = %s AND status = 'open' AND focus_on = crm.today()", (user,)).fetchall()}
+        index["places"] = places = remind.places_of(conn, user)
+        hm = conn.execute("SELECT to_char(now() AT TIME ZONE 'Europe/Moscow', 'HH24:MI') AS hm").fetchone()["hm"]
+        lines, card, near = _task_card(conn, url, user, t, today)
+    model, effort = llm.route(url, TASK_ROUTE)
+    msg = [f"Сегодня {today.isoformat()}, {WD[today.weekday()]}, сейчас {hm}.", "Календарь: " + _calendar(today),
+           "Страница: карточка дела"]
+    if me and not me["owner"]:
+        msg.append(f"Команду даёт не Саша, а {me['name']}: «Саша» и mine выше — про этого человека.")
+    msg += ["", *lines, "", f"В «Сейчас» сегодня: {len(now_ids)} из {NOW_MAX}."]
+    if talk:
+        msg += ["", "РАЗГОВОР — команда ниже его продолжение (старое сверху; сделанное уже применено):", *talk]
+    msg += ["", ("КСТАТИ — Саша вдогонку к этому делу: " if scope.get("kstati") else "КОМАНДА: ") + text]
+    system = (SYSTEM.replace("{REMIND}", remind_rules(url)).replace("{CATALOG}", cat)
+              .replace("{PLACES}", remind.places_block(places)))
+    return {"text": text, "system": system, "message": "\n".join(msg), "model": model, "effort": effort,
+            "tasks": {t["num"]: t}, "focused": t, "sugs": {}, "targets": {}, "index": index, "today": today,
+            "card": card, "now_ids": now_ids, "near": near}
+
+
 def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None,
         via: str = "web", actor: str | None = None, ask_fn=None, parse_fn=None) -> dict:
     """Команда → правки (или разбор новых дел) → применить. ask_fn/parse_fn — подмена Claude в тестах.
@@ -1354,11 +1499,14 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
         for k, v in split_card(data["card"]).items():
             data[k] = (data.get(k) or []) + v
     usage = data.get("_usage")
-    llm.account(url, "ask", llm.cost(usage, model, url), (usage or {}).get("model") or model)
+    in_task = scope.get("card") == "task"
+    llm.account(url, "task" if in_task else "ask", llm.cost(usage, model, url), (usage or {}).get("model") or model)
     defaults = {k: scope[k] for k in ("project_id", "person_id", "deal_id") if scope.get(k)}
     if card and card["kind"] == "deal":
         defaults["project_id"] = str(card["deal"]["project_id"])
-    if (data.get("route") == "new" and not focused and not data.get("suggestions") and not scope.get("history")
+    if in_task:  # новое из карточки дела — рядом с ним: тот же проект, сделка и цель
+        defaults = dict(ctx.get("near") or {})
+    if (data.get("route") == "new" and not focused and not in_task and not data.get("suggestions") and not scope.get("history")
             and not any(data.get(k) for k in ("notes", "people", "deals", "about", "clients"))):
         # Команда целиком про новые дела — разбор надиктовки, как у звёздочки (тот же промпт, что у телефона).
         out = parse.run(url, user, text, {k: v for k, v in defaults.items() if k != "deal_id"}, key, proxy,
