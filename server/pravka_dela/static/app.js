@@ -19,6 +19,7 @@ const S = {
   sel: new Set(), order: [], lastPick: null, cardId: null, draft: null, sideOpen: false,
   parse: null, quickText: '', // идёт разбор Claude; текст строки Claude — живёт, пока его не отдали (перерисовка его не стирает)
   cardSay: {}, kstati: false, whenText: {}, // строка Claude в карточке дела (по делу), «Кстати», строка «Когда» (13.10.2026)
+  selfOpen: null, selfText: {}, // «Сам допишу» у уточнения в «Подскажи»: какое открыто и что написано
   autoOpen: false, clientOpen: new Set(LS.get('clientOpen', [])), peopleQ: '', // «Сделано само» развёрнуто, клиенты со сделками, люди
   krug: { dirs: [], principles: [], proj: new Map() }, kpick: {}, // Круг жизни: направления и принципы (Свод), проекты в Круге; выбор в «Подскажи»
   treeMode: LS.get('treeMode', 'tree'), treeDir: LS.get('treeDir', null), treeF: null, // Дерево жизни: вид, направление, фильтры списка
@@ -2975,14 +2976,46 @@ function askWhy(s) {
   if (p.person_name && !byName([...S.people.values()], p.person_name)) return `Кто это — «${p.person_name}»?`;
   return null;
 }
-const ASK_YES = { create: 'Поставить', close: 'Закрыть', update: 'Уточнить', assign: 'Взять' };
+const ASK_YES = { create: 'Поставить', close: 'Закрыть', update: 'Да, согласен', assign: 'Взять' };
+/** Варианты ответа кнопками (13.10.2026): у вопроса автоматики — её собственные ответы («Родительство» / «Комфортный быт»),
+ *  а не «Да / Не надо»; сервер без флага options их не примет — тогда как раньше. */
+const sugOptions = (s) => (((S.me && S.me.features) || []).includes('options') && Array.isArray((s.payload || {}).options)
+  && s.payload.options.length >= 2 ? s.payload.options : null);
+async function answer(s, i) {
+  const o = s.payload.options[i];
+  try { await ops([{ op: 'suggestion.decide', id: s.id, option: i }]); toast((o.reject ? 'Не надо: ' : 'Ответ: ') + o.label); render(); } catch (e) { fail(e); render(); }
+}
+/** «Сам допишу» у уточнения: своё слово — в заметку дела, а предложение уходит с этим ответом (урок автоматике). Пусто —
+ *  просто «не надо». */
+async function selfWrite(s, text) {
+  const t = S.tasks.get(s.task_id);
+  const list = [];
+  if (text && t) list.push({ op: 'task.set', id: t.id, set: { notes: ((t.notes || '').trimEnd() ? t.notes.trimEnd() + '\n' : '') + text }, was: { notes: t.notes ?? null } });
+  list.push({ op: 'suggestion.decide', id: s.id, decision: 'reject', reason: text ? 'сам: ' + text : null });
+  try { await ops(list); delete S.selfText[s.id]; S.selfOpen = null; toast(text ? 'Дописал к делу' : 'Не надо'); render(); } catch (e) { fail(e); render(); }
+}
 function askItem(s) {
   const { title, hint, add } = sugText(s);
   S.sugOrder.push(s.id);
   const twin = s.source === 'krug' ? null : twinOf(s);
   const q = askWhy(s);
+  // Свои ответы кнопками (13.10.2026) — есть варианты, нет ни «Да», ни переключателей.
+  const opts = sugOptions(s);
+  // «Уточнить» (не Круг): «Да, согласен» или «Сам допишу» — поле, его слово ляжет в заметку дела.
+  const upd = !opts && s.kind === 'update' && s.source !== 'krug';
+  const writing = upd && S.selfOpen === s.id;
+  let selfBox = null;
+  if (writing) {
+    const area = el('textarea', { id: 'self-' + s.id, class: 'self-in', rows: 2, placeholder: 'Как на самом деле — допишу к делу' }, S.selfText[s.id] || '');
+    area.addEventListener('input', () => { S.selfText[s.id] = area.value; });
+    area.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); selfWrite(s, area.value.trim()); }
+      if (e.key === 'Escape') { S.selfOpen = null; render(); } });
+    selfBox = el('div', { class: 'self-box' }, area, el('div', { class: 'self-acts' },
+      el('button', { class: 'btn small ok', onclick: () => selfWrite(s, area.value.trim()) }, 'Готово'),
+      el('span', { class: 'faint' }, 'пусто — значит, не надо')));
+  }
   // Разборщик Круга не уверен: предложенные направления горят, щелчок — поправить; «Да» ставит выбранное.
-  const kr = s.source === 'krug' && krugOn() ? (S.kpick[s.id] || (s.payload || {}).directions || []) : null;
+  const kr = s.source === 'krug' && krugOn() && !opts ? (S.kpick[s.id] || (s.payload || {}).directions || []) : null;
   const krPick = kr ? dirChips({ directions: kr }, (next) => { S.kpick[s.id] = next; render(); }) : null;
   // Поправил направление — значит, не та цель: «Зачем» из предложения не ставим, дело ляжет на направление.
   const krSet = kr && JSON.stringify(kr) !== JSON.stringify((s.payload || {}).directions || []) ? { directions: kr, why_id: null } : undefined;
@@ -2998,14 +3031,34 @@ function askItem(s) {
       twin ? el('div', { class: 'twin' }, icon('link', 12), 'похоже, это уже есть: ',
         el('a', { class: 'link', href: '#', onclick: (e) => { e.preventDefault(); openCard(twin.id); } }, twin.title),
         el('button', { class: 'chip-btn', title: 'Не заводить второе: слова — комментарием к делу', onclick: () => mergeInto(s, twin) }, 'Это оно')) : null),
-    el('div', { class: 'acts' },
-      el('button', { class: 'btn small ok', disabled: kr && !kr.length && !(s.payload || {}).why_id, onclick: () => { delete S.kpick[s.id]; decide([s.id], 'accept', null, krSet); } },
-        kr ? 'Да' : ASK_YES[s.kind] || 'Да'),
-      s.kind === 'create' ? el('button', { class: 'btn small', onclick: () => { S.draft = s; S.cardId = null; render(); } }, 'Поправить') : null,
-      el('button', { class: 'btn small bad', onclick: () => { const r = prompt(s.kind === 'create' ? 'Почему не дело? (можно пусто)' : 'Почему нет? (можно пусто)'); if (r !== null) decide([s.id], 'reject', r || null); } }, 'Не надо')));
+    writing ? selfBox : null,
+    el('div', { class: 'acts' + (opts ? ' opts' : '') }, opts
+      ? [opts.map((o, i) => el('button', { class: 'btn small' + (o.reject ? ' bad' : i === 0 ? ' ok' : ''), title: 'Ответить: ' + o.label,
+        onclick: () => answer(s, i) }, o.label)),
+      opts.some((o) => o.reject) ? null : el('button', { class: 'link-btn quiet', onclick: () => decide([s.id], 'reject', null) }, 'Не надо')]
+      : upd ? [el('button', { class: 'btn small ok', onclick: () => decide([s.id], 'accept') }, 'Да, согласен'),
+        el('button', { class: 'btn small' + (writing ? ' on' : ''), onclick: () => { S.selfOpen = writing ? null : s.id; render(); if (!writing) setTimeout(() => document.getElementById('self-' + s.id)?.focus()); } }, 'Сам допишу')]
+        : [el('button', { class: 'btn small ok', disabled: kr && !kr.length && !(s.payload || {}).why_id, onclick: () => { delete S.kpick[s.id]; decide([s.id], 'accept', null, krSet); } },
+          kr ? 'Да' : ASK_YES[s.kind] || 'Да'),
+        s.kind === 'create' ? el('button', { class: 'btn small', onclick: () => { S.draft = s; S.cardId = null; render(); } }, 'Поправить') : null,
+        el('button', { class: 'btn small bad', onclick: () => { const r = prompt(s.kind === 'create' ? 'Почему не дело? (можно пусто)' : 'Почему нет? (можно пусто)'); if (r !== null) decide([s.id], 'reject', r || null); } }, 'Не надо')]));
 }
 
-/** «Поставил»: новые дела, свежие сверху, по дням; сделанные не показываем — они уже не новость. */
+/** Убрать дело из «Добавлено автоматически» (владелец 13.10.2026): только из списка — дело живёт дальше, удаляют его из
+ *  карточки. Помним у человека на сервере (settings.feed_hidden): другой компьютер покажет то же; старше списка — забываем. */
+const feedHidden = () => new Set(((S.me && S.me.settings) || {}).feed_hidden || []);
+async function feedHide(t, back) {
+  const keep = (id) => { const x = S.tasks.get(id); return x && Date.now() - Date.parse(x.created_at) < (FEED_DAYS + 1) * 86400e3; };
+  const cur = [...feedHidden()].filter(keep);
+  const next = back ? cur.filter((id) => id !== t.id) : [...cur.filter((id) => id !== t.id), t.id];
+  try {
+    await op1({ op: 'user.settings', settings: { feed_hidden: next } });
+    S.me.settings = { ...(S.me.settings || {}), feed_hidden: next };
+    render();
+    if (!back) toast('Убрал из списка: ' + t.title, () => feedHide(t, true));
+  } catch (e) { fail(e); }
+}
+/** «Добавлено автоматически» (до 13.10.2026 — «Поставил»): новые дела, свежие сверху, по дням; сделанные не показываем. */
 function feedBlock(list, from) {
   const days = new Map();
   for (const t of list.slice(0, FEED_MAX)) {
@@ -3015,10 +3068,11 @@ function feedBlock(list, from) {
   }
   const dayName = (d) => { const n = D.diff(S.today, d); return n === 0 ? 'Сегодня' : n === 1 ? 'Вчера' : D.long(d); };
   return el('div', { class: 'group feed' },
-    el('h2', {}, icon('inbox', 17), 'Поставил', el('span', { class: 'n' }, list.length),
-      el('span', { class: 'gsub' }, 'откуда — значок справа, что сказано — в карточке')),
+    el('h2', {}, icon('inbox', 17), 'Добавлено автоматически', el('span', { class: 'n' }, list.length),
+      el('span', { class: 'gsub' }, 'откуда — значок справа, что сказано — в карточке; крестик — убрать из списка')),
     [...days].map(([d, items]) => [el('div', { class: 'feed-day' }, dayName(d)),
-      items.map((t) => taskRow(t, null, null, { compact: true, mark: originMark(t, from.get(t.id)) }))]),
+      items.map((t) => taskRow(t, null, null, { compact: true, mark: el('span', { class: 'feed-end' }, originMark(t, from.get(t.id)), el('button', { class: 'feed-x icon-btn',
+        title: 'Убрать из этого списка (дело останется)', 'aria-label': 'Убрать из списка', onclick: (e) => { e.stopPropagation(); feedHide(t); } }, icon('x', 14))) }))]),
     list.length > FEED_MAX ? el('a', { class: 'faint pad link', href: '#/all' }, `и ещё ${list.length - FEED_MAX} — во «Всех делах»`) : null);
 }
 
@@ -3071,7 +3125,7 @@ function renderNew(batch) {
   const from = sugByTask();
   const since = Date.now() - FEED_DAYS * 86400e3;
   const feed = (batch ? all().filter((t) => isOpen(t) && from.get(t.id)?.batch_ref === batch)
-    : openMine().filter((t) => Date.parse(t.created_at) > since)).sort((a, b) => b.created_at.localeCompare(a.created_at));
+    : openMine().filter((t) => Date.parse(t.created_at) > since && !feedHidden().has(t.id))).sort((a, b) => b.created_at.localeCompare(a.created_at));
   const auto = batch ? autoDone(365).filter((s) => s.batch_ref === batch) : autoDone(7);
   const box = el('div', { class: 'body' });
   if (batch) box.append(el('div', { class: 'toolbar' }, el('a', { class: 'chip-btn', href: '#/new' }, 'Всё «Новое»')));
@@ -3084,7 +3138,7 @@ function renderNew(batch) {
     box.append(el('div', { class: 'group asks' },
       el('h2', {}, tint(icon('help', 17), 'var(--warn)'), 'Подскажи', el('span', { class: 'n' }, asks.length),
         el('span', { class: 'gsub' }, 'без тебя не поставлю'),
-        ids.length > 1 ? el('span', { class: 'act' },
+        ids.length > 1 && !asks.some(sugOptions) ? el('span', { class: 'act' },
           el('button', { class: 'chip-btn', onclick: () => decide(ids, 'accept') }, 'Поставить все'), ' ',
           el('button', { class: 'chip-btn', onclick: () => decide(ids, 'reject') }, 'Не надо все')) : null),
       asks.map(askItem)));
@@ -3096,7 +3150,7 @@ function renderNew(batch) {
     box.append(el('div', { class: 'empty' }, batch ? 'Эта пачка уже разобрана.' : 'Пусто. Новое появится, когда наговоришь или придёт со встречи и из Telegram.'));
   }
   return [head('Новое', [asks.length ? `подскажи: ${asks.length}` : 'вопросов нет',
-    feed.length ? (batch ? `поставил: ${feed.length}` : `поставил за ${FEED_DAYS} дня: ${feed.length}`) : null]), box];
+    feed.length ? (batch ? `добавлено: ${feed.length}` : `добавлено само за ${FEED_DAYS} дня: ${feed.length}`) : null]), box];
 }
 
 // ── Настройки: Claude (у человека на сервере), голос (на этом устройстве), траты (владельцу) ──
@@ -3193,7 +3247,7 @@ async function whenAsk(q, { local = false, date = false } = {}) {
   if (!r.ok && d.ok === undefined) throw new Error(r.status === 404 ? 'сервер не знает этот адрес (404) — нужен путь в настройках сайта' : 'ошибка ' + r.status);
   return d;
 }
-function whenLine(key, { dateOnly = false, apply, hints = [] }) {
+function whenLine(key, { dateOnly = false, apply, hints = [], example = '' }) {
   const input = el('input', { class: 'when-in', value: S.whenText[key] || '', autocomplete: 'off', enterkeyhint: 'done',
     placeholder: dateOnly ? 'в пятницу, через неделю, 20.10' : 'завтра в 11, в пятницу вечером, через 2 часа, когда приеду домой',
     'aria-label': dateOnly ? 'Когда напомнить ему — словами' : 'Когда — словами: срок и напоминание' });
@@ -3240,7 +3294,8 @@ function whenLine(key, { dateOnly = false, apply, hints = [] }) {
     if (e.key === 'Escape' && input.value) { e.preventDefault(); e.stopPropagation(); input.value = S.whenText[key] = ''; look(false); }
   });
   if (input.value) setTimeout(() => look(false));
-  return el('div', { class: 'when-box' }, input, said, hints.length ? el('div', { class: 'quick-dates when-hints' }, hints) : null);
+  return el('div', { class: 'when-box' }, input, said, hints.length ? el('div', { class: 'quick-dates when-hints' }, hints, example ? el('span', { class: 'when-ex' }, example) : null)
+    : example ? el('div', { class: 'when-ex' }, example) : null);
 }
 /** Срок и напоминание сейчас — словами: «Срок: пт 16.10 11:00 · ⏰ напомню в Telegram 11:00». */
 function whenNow(src, t) {
@@ -3261,14 +3316,11 @@ function whenRow(src, t) {
   const phrase = (label, q) => el('button', { class: 'chip-btn', onclick: async () => {
     try { const r = await whenAsk(q, { local: true }); if (r.ok) await apply(r.set, r.words); else toast(r.error || 'не понял'); } catch (e) { fail(e); }
   } }, label);
-  const open = !!t && isOpen(t) && remindOn();
-  const hints = [phrase('Сегодня', 'сегодня'), phrase('Завтра', 'завтра'), phrase('Пн', 'в понедельник'), phrase('+неделя', 'через неделю'),
-    ...(open ? [phrase('через час', 'через час'), phrase('вечером', 'вечером'),
-      ...myPlaces().map((pl) => el('button', { class: 'chip-btn' + (!t.remind_at && norm(t.remind_place) === norm(pl) ? ' on' : ''),
-        onclick: () => apply({ remind_place: pl, remind_at: null }, 'напомню, когда приедешь: ' + pl) }, 'приеду: ' + pl))] : []),
-    src.due_date ? phrase('без срока', 'без срока') : null,
-    open && (t.remind_at || t.remind_place) ? phrase('без напоминания', 'без напоминания') : null].filter(Boolean);
-  return [whenNow(src, t), whenLine(t ? t.id : 'draft', { apply, hints })];
+  // Подсказки — только «Сегодня» и «Завтра» (владелец 13.10.2026: остальное — словами); пример — строкой под полем.
+  const hints = [phrase('Сегодня', 'сегодня'), phrase('Завтра', 'завтра')];
+  const place = t && remindOn() ? ' · когда приеду ' + (myPlaces()[0] ? (norm(myPlaces()[0]) === 'дом' ? 'домой' : 'в ' + myPlaces()[0]) : 'домой') : '';
+  return [whenNow(src, t), whenLine(t ? t.id : 'draft', { apply, hints,
+    example: 'Можно словами: в пятницу вечером · через 2 часа' + place + ' · «нет» — убрать' })];
 }
 
 /** Проект дела для глаз (владелец 13.10.2026: «Проект» — сам): проект ЗФ, если дело к нему привязано; иначе — ближайшая
@@ -3445,8 +3497,6 @@ function renderCard() {
   const minutes = el('div', { class: 'quick-dates' }, [15, 30, 60].map((m) => el('button', { class: 'chip-btn' + (src.estimate_min === m ? ' on' : ''),
     onclick: () => { save('estimate_min', src.estimate_min === m ? null : m); if (!t) render(); } }, m + ' мин')),
   src.estimate_min && ![15, 30, 60].includes(src.estimate_min) ? el('span', { class: 'faint' }, dur(src.estimate_min)) : null);
-  const labels = el('input', { value: (src.labels || []).join(', '), placeholder: 'звонок, …' });
-  labels.addEventListener('change', () => save('labels', labels.value.split(',').map((x) => x.trim()).filter(Boolean)));
   const title = el('textarea', { class: 'title-edit', rows: 1 }, src.title || '');
   const fit = () => { title.style.height = ''; title.style.height = title.scrollHeight + 'px'; }; // название — сколько строк надо
   title.addEventListener('input', fit);
@@ -3487,7 +3537,6 @@ function renderCard() {
     row('Когда', ...whenRow(src, t)),
     g === 'check' ? row('Напомнить ему', ...nudge()) : null,
     row('Минут', minutes),
-    row('Метки', labels),
     t && isMine(t) && krugOn() ? krugProps(t, row) : null);
 
   // Карточка (общий вид Ковчега): сверху проект ссылкой, название, ряд действий («На сегодня» или «На завтра» и

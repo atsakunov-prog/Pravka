@@ -169,8 +169,16 @@ def _dir_block(d: dict) -> str:
     return "\n".join(lines)
 
 
+# Ответы кнопками — в коде, а не в Своде: правила Свода (prompt.krug) пишет владелец, а форма ответа — наша.
+OPTIONS_RULE = """ВАРИАНТЫ ОТВЕТА (options): когда sure — false, дай 2–4 варианта, между которыми сомневаешься, — владелец
+ответит одним нажатием кнопки. label — надпись на кнопке: коротко, название направления или цели, как он сам их
+зовёт («Родительство», «Комфортный быт», «Внешний вид»); у каждого варианта — свои goal_num и directions; первым —
+лучший (тот же, что в goal_num и directions самого дела). question — сам вопрос одной фразой («Стрижка с сыном —
+это время с ним или бытовое дело?»). Когда sure — true, options пустой."""
+
+
 def system_prompt(known: list[dict], rules_text: str = RULES) -> str:
-    return rules_text + "\n\nНАПРАВЛЕНИЯ\n" + "\n\n".join(_dir_block(d) for d in known)
+    return rules_text + "\n\n" + OPTIONS_RULE + "\n\nНАПРАВЛЕНИЯ\n" + "\n\n".join(_dir_block(d) for d in known)
 
 
 def user_prompt(tasks: list[dict], open_goals: list[dict], learned: tuple[list[str], list[str]], known: list[dict],
@@ -216,13 +224,23 @@ def schema(known: list[dict]) -> dict:
         "properties": {"items": {"type": "array", "items": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["num", "goal_num", "directions", "sure", "question"],
+            "required": ["num", "goal_num", "directions", "sure", "question", "options"],
             "properties": {
                 "num": {"type": "integer"},
                 "goal_num": {"type": ["integer", "null"]},
                 "directions": {"type": "array", "items": {"type": "string", "enum": keys}},
                 "sure": {"type": "boolean"},
                 "question": {"type": "string"},
+                # Ответы кнопками (13.10.2026): варианты, между которыми модель сомневается.
+                "options": {"type": "array", "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["label", "goal_num", "directions"],
+                    "properties": {
+                        "label": {"type": "string"},
+                        "goal_num": {"type": ["integer", "null"]},
+                        "directions": {"type": "array", "items": {"type": "string", "enum": keys}},
+                    }}},
             }}}},
     }
 
@@ -287,10 +305,22 @@ def apply(url: str, owner: str, slot: str, items: list[dict], known: list[dict],
             p = paths.get(it.get("goal_num")) if g else None
             where = " › ".join([name.get((p["dirs"] or [""])[0], "?"), *p["path"]]) if p else ", ".join(name[k] for k in dirs)
             q = (it.get("question") or "").strip() or f"«{t['title']}» — {where}?"
+            # Варианты кнопками (13.10.2026): у каждого своё место — цель («Зачем» и метки) или направление без цели.
+            opts = []
+            for o in it.get("options") or []:
+                od = [k for k in o.get("directions") or [] if k in keys][:krug.DIRS_MAX]
+                og = conn.execute("SELECT id, dirs FROM tasks.v_tasks WHERE num = %s AND owner_id = %s AND id <> %s",
+                                  (o["goal_num"], owner, t["id"])).fetchone() if o.get("goal_num") in paths else None
+                if og:
+                    om = (og["dirs"] or [None])[0]
+                    opts.append({"label": o.get("label"), "why_id": str(og["id"]), "directions": [k for k in own if k != om]})
+                elif od:
+                    opts.append({"label": o.get("label"), "why_id": None, "directions": od})
             ops.append({"op": "suggestion.create", "op_id": str(uuid.uuid4()), "suggestion": {
                 "kind": "update", "task_id": str(t["id"]), "source": "krug", "batch_ref": f"krug:{slot}",
                 "batch_title": "Место в дереве", "payload": {**patch, "ask": q, **({"goal_path": where} if g else {}),
-                                                              **({"directions": dirs} if not g else {})}}})
+                                                              **({"directions": dirs} if not g else {}),
+                                                              **({"options": opts} if len(opts) >= 2 else {})}}})
     res = store.apply_ops(url, owner, ops, "krug", "svc:krug")["results"] if ops else []
     bad = [r.get("error") for r in res if not r.get("ok")]
     if bad:

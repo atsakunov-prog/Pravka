@@ -38,7 +38,7 @@ TASK_FIELDS = {
 
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
-FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place"]
+FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options"]
 # «svod» — Свод (crm.svod) в синке и операция svod.set; «people» — person.add / person.merge и вид who
 # (одна карточка человека, 06.10.2026). Без них телефон не шлёт этих операций.
 # «dictations» — операция dictation.add: текст наговорки, из которой вышли дела (их source_ref = её id),
@@ -55,6 +55,8 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug",
 # у проекта (проект вешается на цель), в списке krug синка — why_id проекта, у дела — goal, rhythm, no_steps.
 # «place» — место в дереве при разборе (13.10.2026, place.py): поле why_auto в task.create и в предложении «завести» —
 # номер цели, которую делу выбрала модель разбора (блок «дерево жизни» — Свод krug.place). Без флага телефон его не шлёт.
+# «options» — ответы кнопками в «Подскажи» (13.10.2026): payload.options у предложения — 2–4 варианта {label, поля
+# payload или reject}, suggestion.decide с option — номер выбранного. Клиент без флага показывает «Да / Не надо».
 # Токен службы бота Ковчега (python -m pravka_dela token --name kovcheg): только он забирает
 # «что пора» и отмечает отправку (remind.py, task.reminded).
 REMIND_BOT = "kovcheg"
@@ -76,6 +78,10 @@ PAYMENT_FIELDS = {"deal_id", "kind", "title", "amount_kop", "due_on", "invoiced_
 SUGGESTION_FIELDS = {"kind", "task_id", "payload", "source", "source_ref", "quote", "batch_ref", "batch_title", "dup_of", "for_user", "expires_at"}
 
 SUGGESTION_TTL = dt.timedelta(days=7)
+# Что вариант ответа «Подскажи» (payload.options) может поменять — словарь payload: поля дела, имена, место в дереве.
+OPTION_FIELDS = (TASK_FIELDS | {"project_name", "person_name", "why_id", "directions", "why_auto", "note"}) - {
+    "status", "source", "source_ref", "owner_id", "requested_by"}
+OPTIONS_MAX = 4
 
 # «Сейчас» — дела, которые Саша обязан сделать сегодня (focus_on = сегодня), не больше пяти. До 06.10.2026
 # предел держали только веб, ask.py и телефон, а коннектор claude.ai, реплай в Telegram и любой клиент API
@@ -528,8 +534,32 @@ def op_access_set(conn, user, op):
     return {"row": row}
 
 
+def _options(payload) -> None:
+    """Варианты ответа «Подскажи» — от 2 до OPTIONS_MAX: подпись кнопки и что вариант меняет. Кривое — выкидываем;
+    меньше двух — вариантов нет вовсе (тогда «Да / Не надо», как раньше)."""
+    if not isinstance(payload, dict) or "options" not in payload:
+        return
+    out = []
+    for o in payload.get("options") if isinstance(payload.get("options"), list) else []:
+        label = " ".join(str((o or {}).get("label") or "").split())[:80] if isinstance(o, dict) else ""
+        if not label or label in {x["label"] for x in out}:
+            continue
+        x = {"label": label, **{k: v for k, v in o.items() if k in OPTION_FIELDS and v != ""}}  # None и [] — «снять»
+        if o.get("reject"):
+            x = {"label": label, "reject": True, **({"reason": str(o["reason"])[:200]} if o.get("reason") else {})}
+        out.append(x)
+    if 2 <= len(out):
+        payload["options"] = out[:OPTIONS_MAX]
+    else:
+        payload.pop("options", None)
+
+
 def op_suggestion_create(conn, user, op):
-    data = _pick(op.get("suggestion") or {}, SUGGESTION_FIELDS, "предложение")
+    raw = dict(op.get("suggestion") or {})
+    if isinstance(raw.get("payload"), dict):
+        raw["payload"] = dict(raw["payload"])
+        _options(raw["payload"])
+    data = _pick(raw, SUGGESTION_FIELDS, "предложение")
     data.setdefault("for_user", db_owner(conn))
     data.setdefault("expires_at", dt.datetime.now(dt.timezone.utc) + SUGGESTION_TTL)
     data["created_by"] = user
@@ -610,6 +640,24 @@ def op_suggestion_decide(conn, user, op):
     if not s:
         raise OpError("предложение уже разобрано или не твоё")
     decision = op.get("decision")
+    payload = dict(s["payload"] or {})
+    # Ответ кнопкой (13.10.2026, владелец: «Claude должен давать свои ответы кнопками, а не „Да / Не надо“»):
+    # payload.options — 2–4 варианта; option — номер выбранного. Вариант — те же поля, что у payload (имена проекта и
+    # человека, мяч, место в дереве), или reject — «не дело». Ответ — причиной: из неё учатся разборы (place.py).
+    if op.get("option") is not None:
+        opts = payload.get("options") if isinstance(payload.get("options"), list) else []
+        i = op.get("option")
+        if not isinstance(i, int) or isinstance(i, bool) or not 0 <= i < len(opts) or not isinstance(opts[i], dict):
+            raise OpError("нет такого варианта ответа")
+        opt = opts[i]
+        label = str(opt.get("label") or "").strip()
+        if opt.get("reject"):
+            decision = "reject"
+            op = {**op, "reason": op.get("reason") or opt.get("reason") or label or None}
+        else:
+            decision = "accept"
+            payload.update({k: v for k, v in opt.items() if k in OPTION_FIELDS})
+            op = {**op, "reason": op.get("reason") or (f"ответ: {label}" if label else None)}
     if decision == "reject":
         row = _update(conn, "tasks.suggestions", {"id": s["id"]},
                       {"status": "rejected", "reason": op.get("reason"), "decided_by": user, "decided_at": dt.datetime.now(dt.timezone.utc)})
@@ -619,7 +667,6 @@ def op_suggestion_decide(conn, user, op):
     fix_raw = dict(op.get("set") or {})
     fix_kr = _krug_split(fix_raw)  # «Подскажи» разборщика Круга: направления и «Зачем» — поправкой при «Да»
     fix = {**_pick(fix_raw, TASK_FIELDS, "дело"), **fix_kr}
-    payload = dict(s["payload"] or {})
     task, back = None, {}
     if s["kind"] == "create":
         fields = {k: v for k, v in payload.items() if k in TASK_FIELDS | KRUG_FIELDS}

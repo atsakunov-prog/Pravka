@@ -478,7 +478,14 @@ a.h-kind:hover { color: var(--accent); }
 .task.done .title { color: var(--faint); text-decoration-color: currentColor; }
 .task.compact { padding-top: 8px; padding-bottom: 8px; }
 .task.compact .title { font-size: 14.5px; }
-.task > .src-mark { order: 10; }
+.task > .src-mark, .task > .feed-end { order: 10; }
+/* «Добавлено автоматически» (13.10.2026): наведи — строка сереет, справа крестик «убрать из списка» (дело остаётся). */
+.feed-end { flex: none; display: inline-flex; align-items: center; gap: 2px; }
+.feed-x { width: 24px; height: 24px; opacity: 0; transition: opacity .12s; }
+.feed .task:hover { background: var(--hover-2); }
+.feed .task:hover .title { color: var(--muted); }
+.feed .task:hover .feed-x, .feed-x:focus-visible { opacity: 1; }
+@media (hover: none) { .feed-x { opacity: .6; } }
 
 /* Подпись дела: мелко серым через « · »; просрочка и «ждёт» — цветом беды, «сегодня» — акцентом. */
 .chips {
@@ -713,7 +720,9 @@ a.crumb:hover { color: var(--accent); text-decoration: none; }
 .when-said .when-ok { color: var(--accent); font-weight: 600; }
 .when-said .when-bad { color: var(--bad); }
 .when-said .link-btn { font-size: 13px; padding: 0; }
-.when-hints { padding: 4px 0 4px; }
+.when-hints { padding: 4px 0 4px; align-items: center; }
+.when-ex { font-size: 12.5px; color: var(--faint); line-height: 1.4; padding: 0 2px; }
+.when-hints .when-ex { flex: 1 1 200px; padding-left: 4px; }
 /* «Проект» сам: цель над делом ссылкой и тихая подпись, рядом — выбрать проект ЗФ руками. */
 .proj-derived { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding: 2px 0; }
 .proj-derived .faint { padding: 0; font-size: 12.5px; }
@@ -797,6 +806,15 @@ details summary:hover { color: var(--text); }
 .sug .q { margin-top: 4px; font-size: 14px; color: var(--warn); font-weight: 600; }
 .sug .quote { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; color: var(--muted); font-size: 13px; }
 .sug .acts { display: flex; gap: 6px; flex: none; align-items: center; }
+/* Ответы кнопками (13.10.2026): свои слова автоматики — кнопки во всю строку под вопросом, переносятся. */
+.sug .acts.opts { flex-basis: 100%; flex-wrap: wrap; flex: 1 1 100%; }
+.sug .acts.opts .btn { max-width: 100%; white-space: normal; text-align: left; line-height: 1.3; }
+.link-btn.quiet { color: var(--faint); font-size: 13px; margin-left: 4px; }
+.link-btn.quiet:hover { color: var(--bad); }
+/* «Сам допишу»: поле под вопросом, Enter — готово. */
+.sug .self-box { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; }
+.sug .self-in { width: 100%; min-height: 60px; resize: vertical; padding: 8px 10px; line-height: 1.45; }
+.sug .self-acts { display: flex; align-items: center; gap: 10px; font-size: 13px; }
 .sug.auto .main > div:first-child { font-weight: 500; }
 .sug .twin { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 13px; color: var(--muted); margin-top: 6px; }
 .sug .twin .link { color: var(--accent); font-weight: 600; }

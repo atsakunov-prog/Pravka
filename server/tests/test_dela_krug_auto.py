@@ -112,3 +112,55 @@ def test_schema_enum_is_owner_keys(kr):
     item = s["properties"]["items"]["items"]["properties"]
     assert item["directions"]["items"]["enum"] == [d["key"] for d in DIRS] and "goal_num" in item
     assert "Здоровье (ключ health, зона «Я»)" in krug_auto.system_prompt(DIRS) and krug.DIRECTIONS_KEY == "krug.directions"
+
+
+def test_unsure_answers_are_buttons(kr):
+    """Владелец 13.10.2026: «Подскажи» — свои ответы кнопками («Родительство» / «Комфортный быт»), а не «Да / Не надо»:
+    нажал — применилось, вопрос ушёл. Ответ — причиной (урок разборам)."""
+    kids = mk(kr, title="Время с сыном", goal=True, directions=["Дети"])
+    cut = mk(kr, title="Стрижка с сыном")
+    items = [{"num": cut["num"], "goal_num": kids["num"], "directions": ["parenting"], "sure": False,
+              "question": "Стрижка с сыном — время с ним или бытовое дело?",
+              "options": [{"label": "Родительство", "goal_num": kids["num"], "directions": ["parenting"]},
+                          {"label": "Комфортный быт", "goal_num": None, "directions": ["home"]},
+                          {"label": "Мусор", "goal_num": None, "directions": []}]}]
+    out = krug_auto.apply(kr, "sasha", "2026-10-13T10:00", items, DIRS)
+    assert out["asked"] == 1
+    s = store.view(kr, "sasha", "new")["batches"][0]["items"][0]
+    opts = s["payload"]["options"]
+    assert [o["label"] for o in opts] == ["Родительство", "Комфортный быт"]  # без места — не вариант
+    assert opts[0]["why_id"] == kids["id"] and opts[1] == {"label": "Комфортный быт", "why_id": None, "directions": ["home"]}
+    r = store.apply_ops(kr, "sasha", [{"op": "suggestion.decide", "id": s["id"], "option": 5}], "web")["results"][0]
+    assert not r["ok"] and "варианта" in r["error"]
+    r = store.apply_ops(kr, "sasha", [{"op": "suggestion.decide", "id": s["id"], "option": 1}], "web")["results"][0]
+    assert r["ok"], r
+    t = {x["num"]: x for x in store.sync(kr, "sasha", 0)["tasks"]}[cut["num"]]
+    assert t["dirs"] == ["home"] and t["why_id"] is None
+    assert r["suggestion"]["status"] == "accepted" and r["suggestion"]["reason"] == "ответ: Комфортный быт"
+
+
+def test_options_on_any_question(kr):
+    """Общий контракт «Нового»: варианты бывают у любого вопроса автоматики — встречи и дайджест шлют имена (проект,
+    человек, мяч) или «не дело». Меньше двух — вариантов нет (как раньше)."""
+    project(kr, "sasha", "Альфа")
+    project(kr, "sasha", "Бета")
+    base = {"kind": "create", "source": "meeting", "for_user": "sasha", "quote": "надо прислать тизер"}
+    res = store.apply_ops(kr, "sasha", [
+        {"op": "suggestion.create", "suggestion": {**base, "payload": {"title": "Прислать тизер", "ask": "Альфа или Бета?", "options": [
+            {"label": "Альфа", "project_name": "Альфа"}, {"label": "Бета", "project_name": "Бета"},
+            {"label": "Не дело", "reject": True, "project_name": "лишнее"}, {"label": ""}, "мусор"]}}},
+        {"op": "suggestion.create", "suggestion": {**base, "payload": {"title": "Одно", "ask": "?", "options": [{"label": "Только одно"}]}}},
+    ], "web")["results"]
+    assert all(r["ok"] for r in res), res
+    a, b = res[0]["suggestion"], res[1]["suggestion"]
+    assert [o["label"] for o in a["payload"]["options"]] == ["Альфа", "Бета", "Не дело"]
+    assert a["payload"]["options"][2] == {"label": "Не дело", "reject": True} and "options" not in b["payload"]
+    r = store.apply_ops(kr, "sasha", [{"op": "suggestion.decide", "id": a["id"], "option": 1}], "web")["results"][0]
+    assert r["ok"] and r["task"]["project_name"] == "Бета" and r["task"]["title"] == "Прислать тизер"
+    r = store.apply_ops(kr, "sasha", [{"op": "suggestion.decide", "id": b["id"], "decision": "reject"}], "web")["results"][0]
+    assert r["ok"]
+    c = store.apply_ops(kr, "sasha", [{"op": "suggestion.create", "suggestion": {**base, "payload": {
+        "title": "Третье", "ask": "Дело?", "options": [{"label": "Дело"}, {"label": "Не дело", "reject": True}]}}}], "web")["results"][0]["suggestion"]
+    r = store.apply_ops(kr, "sasha", [{"op": "suggestion.decide", "id": c["id"], "option": 1}], "web")["results"][0]
+    assert r["ok"] and r["suggestion"]["status"] == "rejected" and r["suggestion"]["reason"] == "Не дело"
+    assert "options" in store.FEATURES
