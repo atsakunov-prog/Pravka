@@ -859,27 +859,49 @@ private fun MainScreen(
                         val pOn by app.settings.mScopePersonalFlow.collectAsState(initial = true)
                         val zOn by app.settings.mScopeZfFlow.collectAsState(initial = false)
                         var scopeSheet by remember { mutableStateOf(false) }
-                        TabHeader(
-                            title = stringResource(R.string.tab_money),
-                            onBack = modeBack,
-                            titleExtra = when {
-                                pOn && zOn -> "Всё"
-                                zOn -> "ЗФ"
-                                else -> "Личное"
-                            },
-                            onTitleExtra = { scopeSheet = true },
-                            actions = {
-                                ExportAction { moneyExport = true }
-                                StatsAction(openReport)
-                                CostAction(openCost)
-                                SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.MONEY)) }
-                            },
-                        )
-                        MoneyTab(
-                            app,
-                            exportRequested = moneyExport,
-                            onExportHandled = { moneyExport = false },
-                        )
+                        val moneyActions: @Composable RowScope.() -> Unit = {
+                            ExportAction { moneyExport = true }
+                            StatsAction(openReport)
+                            CostAction(openCost)
+                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.MONEY)) }
+                        }
+                        if (ru.zf.pravka.ui.Look.v2) {
+                            // Вид v2 (этап 6, холст `Dengi.dc.html`): подпись шапки — период, тап — выбор
+                            // периода; «Личное · ЗФ · Всё» — сегментом (в шапке на развороте, в «По статьям»
+                            // на сложенном). Шапку с ними рисует вкладка.
+                            MoneyTab(
+                                app,
+                                exportRequested = moneyExport,
+                                onExportHandled = { moneyExport = false },
+                                header = { sub, onSub, extra ->
+                                    TabHeader(
+                                        title = stringResource(R.string.tab_money),
+                                        onBack = modeBack,
+                                        titleExtra = sub,
+                                        onTitleExtra = onSub,
+                                        actions = { extra(); moneyActions() },
+                                    )
+                                },
+                                onBudget = { pages = listOf(Page.ModeSettings(SettingsGroup.TODAY)) },
+                            )
+                        } else {
+                            TabHeader(
+                                title = stringResource(R.string.tab_money),
+                                onBack = modeBack,
+                                titleExtra = when {
+                                    pOn && zOn -> "Всё"
+                                    zOn -> "ЗФ"
+                                    else -> "Личное"
+                                },
+                                onTitleExtra = { scopeSheet = true },
+                                actions = moneyActions,
+                            )
+                            MoneyTab(
+                                app,
+                                exportRequested = moneyExport,
+                                onExportHandled = { moneyExport = false },
+                            )
+                        }
                         if (scopeSheet) MoneyScopeSheet(app, pOn, zOn, onDismiss = { scopeSheet = false })
                     }
                     else -> {

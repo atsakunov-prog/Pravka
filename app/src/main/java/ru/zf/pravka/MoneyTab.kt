@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -115,6 +116,14 @@ internal fun MoneyTab(
     // только просит: выгрузка та же, что была у кнопки, и живёт здесь.
     exportRequested: Boolean = false,
     onExportHandled: () -> Unit = {},
+    /**
+     * Вид v2 (этап 6, холст `Dengi.dc.html`): шапку рисует вкладка — подпись
+     * «октябрь, по 13-е · личное» (тап — период) и [extra] — «Личное · ЗФ ·
+     * Всё» на развороте; значки шапки — у `MainActivity`. null — «Вид 4.0».
+     */
+    header: (@Composable (subtitle: String, onSubtitle: () -> Unit, extra: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) -> Unit)? = null,
+    /** «Задать» у бюджета месяца — группа настроек «Сегодня», где он живёт. */
+    onBudget: (() -> Unit)? = null,
 ) {
     val state by app.moneyStore.stateFlow.collectAsState()
     val pOn by app.settings.mScopePersonalFlow.collectAsState(initial = true)
@@ -229,6 +238,261 @@ internal fun MoneyTab(
     val askListening = askLive?.owner == "ask"
     val talking = ru.zf.pravka.ui.rememberRouteBusy(app.liveWork, "money")
     val ownerName = app.profileStore.flow.collectAsState().value?.name
+    // Раздел v2 («Траты · Разобрать · ДДС · Баланс · Журнал») — свой, шире трёх частей 4.0.
+    var section by rememberSaveable { mutableIntStateOf(MONEY_SPEND) }
+    val budgetRub by app.settings.moneyMonthBudgetFlow.collectAsState(initial = 0L)
+    // Разобрать — одна раскладка на «Вид 4.0» и v2: слева вопросы сверки и
+    // траты без «ОК», справа выписки. [left] / [right] — колонки разворота.
+    val sortBlocks: @Composable ColumnScope.(Boolean, Boolean) -> Unit = { left, right ->
+                if (left) {
+                // ---- Вопросы карточками ----
+                QuestionCards(app, questions) {
+                    PaperTextButton(
+                        "Claude разложит очевидное",
+                        icon = Glyphs.Spark,
+                        enabled = busy.isEmpty(),
+                        onClick = {
+                            busy = "Claude думает…"
+                            scope.launch {
+                                app.moneyEngine.hint().onSuccess { n ->
+                                    Feedback.toast(context, if (n == 0) "Спрашивать не о чем" else "Claude подсказал по $n получателям")
+                                }.onFailure { e -> Feedback.toast(context, "Не вышло: ${e.message}", long = true) }
+                                busy = ""
+                            }
+                        },
+                    )
+                }
+
+                // ---- Ждут «ОК» — плашка на каждый наговор: одна главная «ОК» на плашку ----
+                drafts.groupBy { it.takeId }.entries.forEachIndexed { i, (takeId, group) ->
+                    PaperCard(label = if (i == 0) "ждут «ОК» · " + drafts.size else null) {
+                        for (e in group) EntryRow(e) { editing = e }
+                        Spacer(Modifier.height(6.dp))
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            if (PravkaAccessibilityService.instance != null) {
+                                PaperTextButton(
+                                    "Показать плашку",
+                                    icon = Glyphs.Layers,
+                                    onClick = { PravkaAccessibilityService.instance?.showMoneyPlate(takeId) },
+                                )
+                            }
+                            Spacer(Modifier.weight(1f))
+                            PaperButton(
+                                "ОК · " + group.size,
+                                icon = Glyphs.Check,
+                                primary = true,
+                                onClick = { scope.launch { app.moneyEngine.confirm(takeId, group.map { it.id }) } },
+                            )
+                        }
+                    }
+                }
+
+                }
+                if (right) {
+                // ---- Выписки ----
+                PaperCard(
+                    label = "выписки",
+                    info = "Тиньков и Альфа — CSV, МКБ — .xlsx, можно несколько файлов разом; «Плати по миру» — " +
+                        "текстом чата (скопируй и вставь). Можно и через «Поделиться» → «Деньги: выписка». " +
+                        "Повторы не удваиваются.",
+                ) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        PaperButton("Файлы выписок", icon = Glyphs.Scroll, enabled = busy.isEmpty(), onClick = {
+                            picker.launch(arrayOf("text/*", "application/csv", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/octet-stream"))
+                        })
+                        PaperButton("Вставить из буфера", icon = Glyphs.Paste, enabled = busy.isEmpty(), onClick = {
+                            val text = clipboard.getText()?.text.orEmpty()
+                            if (text.isBlank()) {
+                                Feedback.toast(context, "В буфере пусто")
+                            } else {
+                                busy = "загружаю…"
+                                scope.launch {
+                                    app.moneyEngine.import(text)
+                                        .onSuccess { o -> Feedback.toast(context, "${o.kind}: ${o.rows}, новых ${o.added}" + if (o.note.isNotBlank()) "\n${o.note}" else "", long = true) }
+                                        .onFailure { e -> Feedback.toast(context, e.message ?: "не вышло", long = true) }
+                                    busy = ""
+                                }
+                            }
+                        })
+                    }
+                    if (busy.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
+                        PaperHint(busy)
+                    }
+                    val lastImports = state.imports.takeLast(4).reversed()
+                    if (lastImports.isNotEmpty()) Spacer(Modifier.height(6.dp))
+                    for (i in lastImports) {
+                        PaperHint("${stamp(i.ts)} · ${i.kind}: ${i.rows} строк, новых ${i.added}" + if (i.note.isNotBlank()) " · ${i.note}" else "")
+                    }
+                }
+                }
+    }
+    if (ru.zf.pravka.ui.Look.v2) {
+        // ---- Вид v2 (холст `Dengi.dc.html`): разделы вкладками, как в вебе Денег ----
+        val wide = ru.zf.pravka.ui.twoPane()
+        val scopeWord = MONEY_SCOPES[moneyScopeIndex(pOn, zOn)].lowercase()
+        val todayKop = moneyTodayKop(daily, period, today)
+        Column(Modifier.fillMaxSize()) {
+            header?.invoke(
+                moneyPeriodWord(period, today) + " · " + if (wide) plural(totals.count, "трата", "траты", "трат") else scopeWord,
+                { periodSheet = true },
+            ) {
+                if (wide) MoneyScopeSeg(app, pOn, zOn, Modifier.padding(end = 4.dp))
+            }
+            ru.zf.pravka.ui.KvTabs(
+                moneySections(waiting),
+                section,
+                { section = it },
+                Modifier.padding(horizontal = if (wide) 20.dp else 12.dp),
+            )
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                // [side]: 0 — сложенный одной лентой, 1 и 2 — колонки разворота.
+                val bodyV2: @Composable ColumnScope.(Int) -> Unit = { side ->
+                    val left = side != 2
+                    val right = side != 1
+                    // Общие с семьёй: когда был обмен и что пришло (есть вход в облако семьи).
+                    if (left) MoneySyncLine(app)
+                    when (section) {
+                        MONEY_SPEND -> {
+                            if (left) {
+                                MoneyTotalsCardV2(period, totals, todayKop, budgetRub, wide)
+                                // Сегмент выше строки заголовка плашки (24): выходит за неё, а не сплющивается.
+                                MoneyCatsCardV2(cats, trailing = if (wide) null else ({
+                                    MoneyScopeSeg(app, pOn, zOn, Modifier.padding(start = 8.dp).then(Modifier.wrapContentHeight(unbounded = true)))
+                                }))
+                                if (period.kind == MoneyStats.Kind.MONTH && budgetRub <= 0L && pOn) {
+                                    ru.zf.pravka.ui.KvCallout(
+                                        "Бюджет месяца не задан — полосы «сколько осталось» нет.",
+                                        icon = ru.zf.pravka.ui.KvGlyphs.byKey("target") ?: Glyphs.Info,
+                                        action = if (onBudget != null) "Задать" else null,
+                                        onAction = onBudget,
+                                    )
+                                }
+                            }
+                            if (right) {
+                                MoneyAnswerCard(ask)
+                                if (waiting > 0) {
+                                    ru.zf.pravka.ui.KvCallout(
+                                        "Ждут разбора: " + listOfNotNull(
+                                            questions.size.takeIf { it > 0 }?.let { plural(it, "вопрос", "вопроса", "вопросов") },
+                                            drafts.size.takeIf { it > 0 }?.let { plural(it, "трата", "траты", "трат") + " без «ОК»" },
+                                        ).joinToString(", "),
+                                        icon = ru.zf.pravka.ui.KvGlyphs.byKey("eye") ?: Glyphs.Info,
+                                        tone = ru.zf.pravka.ui.KvTone.WARN,
+                                        action = "Открыть",
+                                        onAction = { section = MONEY_SORT },
+                                    )
+                                }
+                                MoneyTodayCardV2(journal, if (wide) 5 else 3) { editing = it }
+                            }
+                            if (left) MoneyDaysCardV2(daily, period, today, pace)
+                            if (right) {
+                                MoneyRecurringCardV2(recurring)
+                                MoneyAskCardV2(ask)
+                                PatternsCard(app, state.insight, state.insightTs)
+                            }
+                        }
+                        MONEY_SORT -> sortBlocks(left, right)
+                        MONEY_DDS -> {
+                            if (left) CashflowCard(app, entries, java.time.YearMonth.from(period.firstDay.plusDays((period.days - 1).toLong())), ms)
+                            if (right) {
+                                PaperCard(label = "Полгода", note = "ушло и пришло") {
+                                    MonthPairs(
+                                        labels = trend.map { monthShort(it.month) },
+                                        spent = trend.map { it.spentKop },
+                                        income = trend.map { it.incomeKop },
+                                        valueText = { MoneyFormat.k(it) },
+                                        highlight = trend.lastIndex,
+                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        LegendDot(spentBarColor()); PaperHint(" ушло   ")
+                                        LegendDot(incomeBarColor()); PaperHint(" пришло")
+                                    }
+                                    val avgSpent = trend.dropLast(1).filter { it.spentKop > 0 }.map { it.spentKop }.average().takeIf { !it.isNaN() }
+                                    if (avgSpent != null) PaperHint("средний месяц (без текущего): " + MoneyFormat.k(avgSpent.toLong()) + " " + MoneyFormat.K)
+                                }
+                            }
+                        }
+                        MONEY_BALANCE -> {
+                            if (left) BalanceCard(app, entries, ms)
+                            if (right) AccountsCard(app, entries, period, ms)
+                        }
+                        else -> {
+                            if (left) {
+                                MoneyTotalsCardV2(period, totals, todayKop, 0L, wide)
+                                PaperCard(label = "Журнал", note = plural(journal.size, "запись", "записи", "записей")) {
+                                    if (journal.isEmpty()) PaperHint("За этот период записей нет.")
+                                    for (e in journal.take(150)) EntryRow(e, onVoice = explain) { editing = e }
+                                    if (journal.size > 150) PaperHint("и ещё ${journal.size - 150} — в книге")
+                                }
+                            }
+                            if (right) PayeesCard(app)
+                        }
+                    }
+                }
+                if (wide) {
+                    Row(
+                        Modifier.fillMaxSize().padding(horizontal = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        for (side in 1..2) {
+                            Column(
+                                Modifier
+                                    .weight(1f)
+                                    .bottomFade()
+                                    .fadingScroll()
+                                    .padding(top = 12.dp, bottom = 96.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) { bodyV2(side) }
+                        }
+                    }
+                } else {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .bottomFade()
+                            .fadingScroll()
+                            .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 96.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) { bodyV2(0) }
+                }
+                // Строка внизу — во всю ширину (холст: `.say` под обеими колонками). Отправить и микрофон —
+                // вопрос Claude; «+» — трата: набранное — тем же разбором, что у «₽», пусто — голосом.
+                ru.zf.pravka.ui.SayBar(
+                    value = ask.question,
+                    onValueChange = { ask.question = it },
+                    placeholder = if (talking) "Разбираю трату…" else ru.zf.pravka.core.PillHint.say(ownerName, "спроси про деньги"),
+                    onSend = { ask.send(ask.question) },
+                    onMic = {
+                        if (askListening) PravkaAccessibilityService.instance?.finishMoneyTab(keep = true)
+                        else startMoneyVoice(app, "ask", "спроси про деньги") { spoken -> ask.send(spoken) }
+                    },
+                    listening = askListening,
+                    sendEnabled = !ask.busy && ask.question.isNotBlank(),
+                    busy = ask.busy || talking,
+                    busyLabel = if (talking) "Разбираю" else "Claude считает",
+                    maxLines = 3,
+                    trailing = {
+                        ru.zf.pravka.ui.SayIcon(Glyphs.Plus, "записать трату: набранное — тратой, пусто — голосом, как «₽»", onClick = {
+                            val service = PravkaAccessibilityService.instance
+                            val text = ask.question.trim()
+                            if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
+                            else if (text.isNotEmpty()) { ask.question = ""; service.onMoneyText(text) }
+                            else service.onMoneyTap()
+                        })
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .imePadding()
+                        .padding(start = if (wide) 20.dp else 12.dp, end = if (wide) 20.dp else 12.dp, bottom = if (wide) 14.dp else 8.dp),
+                )
+            }
+        }
+    } else
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         // Правка 4.0 (`screens/11`): части — сегментами, справа — период
@@ -387,93 +651,7 @@ internal fun MoneyTab(
                 }
             }
 
-            PART_SORT -> {
-                if (left) {
-                // ---- Вопросы карточками ----
-                QuestionCards(app, questions) {
-                    PaperTextButton(
-                        "Claude разложит очевидное",
-                        icon = Glyphs.Spark,
-                        enabled = busy.isEmpty(),
-                        onClick = {
-                            busy = "Claude думает…"
-                            scope.launch {
-                                app.moneyEngine.hint().onSuccess { n ->
-                                    Feedback.toast(context, if (n == 0) "Спрашивать не о чем" else "Claude подсказал по $n получателям")
-                                }.onFailure { e -> Feedback.toast(context, "Не вышло: ${e.message}", long = true) }
-                                busy = ""
-                            }
-                        },
-                    )
-                }
-
-                // ---- Ждут «ОК» — плашка на каждый наговор: одна главная «ОК» на плашку ----
-                drafts.groupBy { it.takeId }.entries.forEachIndexed { i, (takeId, group) ->
-                    PaperCard(label = if (i == 0) "ждут «ОК» · " + drafts.size else null) {
-                        for (e in group) EntryRow(e) { editing = e }
-                        Spacer(Modifier.height(6.dp))
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            if (PravkaAccessibilityService.instance != null) {
-                                PaperTextButton(
-                                    "Показать плашку",
-                                    icon = Glyphs.Layers,
-                                    onClick = { PravkaAccessibilityService.instance?.showMoneyPlate(takeId) },
-                                )
-                            }
-                            Spacer(Modifier.weight(1f))
-                            PaperButton(
-                                "ОК · " + group.size,
-                                icon = Glyphs.Check,
-                                primary = true,
-                                onClick = { scope.launch { app.moneyEngine.confirm(takeId, group.map { it.id }) } },
-                            )
-                        }
-                    }
-                }
-
-                }
-                if (right) {
-                // ---- Выписки ----
-                PaperCard(
-                    label = "выписки",
-                    info = "Тиньков и Альфа — CSV, МКБ — .xlsx, можно несколько файлов разом; «Плати по миру» — " +
-                        "текстом чата (скопируй и вставь). Можно и через «Поделиться» → «Деньги: выписка». " +
-                        "Повторы не удваиваются.",
-                ) {
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        PaperButton("Файлы выписок", icon = Glyphs.Scroll, enabled = busy.isEmpty(), onClick = {
-                            picker.launch(arrayOf("text/*", "application/csv", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/octet-stream"))
-                        })
-                        PaperButton("Вставить из буфера", icon = Glyphs.Paste, enabled = busy.isEmpty(), onClick = {
-                            val text = clipboard.getText()?.text.orEmpty()
-                            if (text.isBlank()) {
-                                Feedback.toast(context, "В буфере пусто")
-                            } else {
-                                busy = "загружаю…"
-                                scope.launch {
-                                    app.moneyEngine.import(text)
-                                        .onSuccess { o -> Feedback.toast(context, "${o.kind}: ${o.rows}, новых ${o.added}" + if (o.note.isNotBlank()) "\n${o.note}" else "", long = true) }
-                                        .onFailure { e -> Feedback.toast(context, e.message ?: "не вышло", long = true) }
-                                    busy = ""
-                                }
-                            }
-                        })
-                    }
-                    if (busy.isNotEmpty()) {
-                        Spacer(Modifier.height(6.dp))
-                        PaperHint(busy)
-                    }
-                    val lastImports = state.imports.takeLast(4).reversed()
-                    if (lastImports.isNotEmpty()) Spacer(Modifier.height(6.dp))
-                    for (i in lastImports) {
-                        PaperHint("${stamp(i.ts)} · ${i.kind}: ${i.rows} строк, новых ${i.added}" + if (i.note.isNotBlank()) " · ${i.note}" else "")
-                    }
-                }
-                }
-            }
+            PART_SORT -> sortBlocks(left, right)
 
             else -> {
                 if (left) {

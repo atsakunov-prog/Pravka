@@ -58,7 +58,8 @@ import ru.zf.pravka.ui.VoiceInput
 
 @Composable
 internal fun LegendDot(color: Color) {
-    Box(Modifier.size(9.dp).background(color, CircleShape))
+    // Вид v2: без кружков — квадратик, как метки категорий веба.
+    Box(Modifier.size(9.dp).background(color, if (ru.zf.pravka.ui.Look.v2) androidx.compose.foundation.shape.RoundedCornerShape(2.dp) else CircleShape))
 }
 
 /**
