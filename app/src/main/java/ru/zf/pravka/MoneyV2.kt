@@ -3,6 +3,7 @@ package ru.zf.pravka
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -45,7 +46,10 @@ import ru.zf.pravka.ui.PaperCard
 // операции. Раскладка — в `MoneyTab.kt` (ветка v2); расчёты — те же
 // `MoneyStats` и `MoneyEngine`, что у вкладки 4.0.
 
-/** Разделы Денег на телефоне — вкладками под шапкой. P&L и бюджета статьями на телефоне нет: они — в вебе Денег. */
+/**
+ * Разделы Денег на телефоне — вкладками под шапкой. P&L, бюджета, доли партнёра и
+ * «чего не видим» на телефоне нет: они — в вебе Денег, входом с «Трат» (`MoneyWebCardV2`).
+ */
 internal const val MONEY_SPEND = 0
 internal const val MONEY_SORT = 1
 internal const val MONEY_DDS = 2
@@ -258,6 +262,35 @@ internal fun MoneyRecurringCardV2(recurring: List<MoneyStats.Recurring>) {
                 sub = MoneyCategories.title(r.category) + " · ${r.months} мес. из 6",
                 value = "−" + MoneyFormat.k(r.avgKop),
                 divider = k > 0,
+            )
+        }
+    }
+}
+
+/**
+ * «В вебе Денег» (доводка 5.0, 14.10.2026; холст: вкладки «Бюджет», «P&L», «Доля» и
+ * подсказка «Чего не видим»): строки-входы в разделы, которые считает сервис
+ * «Деньги» на компе. Раздел открывается страницей сервиса внутри приложения тем же
+ * путём, что пункт меню Ковчега ([onOpen] — `ServicePage`). Адреса сервиса в синке
+ * нет (не владелец, старый сервер Дел) — плашки нет: входить некуда.
+ */
+@Composable
+internal fun MoneyWebCardV2(service: String?, onOpen: (ru.zf.pravka.core.ServicePage) -> Unit) {
+    if (service == null) return
+    PaperCard(label = "В вебе Денег", note = "считает «Деньги» на компе") {
+        ru.zf.pravka.core.MoneyWeb.SECTIONS.forEachIndexed { i, s ->
+            KvListRow(
+                title = s.title,
+                sub = s.sub,
+                icon = ru.zf.pravka.ui.KvGlyphs.byKey(s.icon) ?: Glyphs.Forward,
+                divider = i > 0,
+                onClick = { onOpen(ru.zf.pravka.core.ServicePage("Деньги", "wallet", ru.zf.pravka.core.MoneyWeb.url(service, s.tab))) },
+                trailing = {
+                    androidx.compose.material3.Icon(
+                        Glyphs.Forward, null, tint = Kv.faint,
+                        modifier = Modifier.padding(top = 1.dp).then(Modifier.size(18.dp)),
+                    )
+                },
             )
         }
     }

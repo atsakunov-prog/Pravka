@@ -940,6 +940,8 @@ private fun MainScreen(
                                     )
                                 },
                                 onBudget = { pages = listOf(Page.ModeSettings(SettingsGroup.TODAY)) },
+                                // Разделы веба «Деньги» (P&L, доля, «чего не видим») — страницей сервиса внутри приложения.
+                                onWeb = openServicePage,
                             )
                         } else {
                             TabHeader(

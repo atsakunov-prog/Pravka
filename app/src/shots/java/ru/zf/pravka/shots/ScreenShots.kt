@@ -541,10 +541,22 @@ class ScreenShots {
     /**
      * Доводка Правки 5.0 (группа `p5`): подсказка «в ленте едим, а в дневнике пусто» — на «Сегодня» (оба экрана,
      * обе темы) и в Еде. В посеве ужин идёт и уже разобран — на время снимков он убирается из дневника и потом
-     * возвращается тем же приёмом: остальным группам нужен прежний день.
+     * возвращается тем же приёмом: остальным группам нужен прежний день. Разделы веба «Деньги» — плашка «В вебе
+     * Денег» на «Тратах» (вкладка целиком высоким окном) и раздел, открытый страницей сервиса внутри приложения.
      */
     private fun polish() {
         val app = RuntimeEnvironment.getApplication() as PravkaApp
+        for (theme in listOf("light", "dark")) {
+            runBlocking { app.settings.setLookTheme(theme) }
+            settle(4)
+            for ((size, q) in listOf("tall" to OUTER_TALL, "wide" to INNER_TALL)) {
+                RuntimeEnvironment.setQualifiers(q)
+                val c = launch(MainActivity.TAB_MONEY)
+                shot(c, "p5-money-$size-$theme")
+                if (size == "tall" && theme == "light" && tap(c, "Доля партнёра")) shot(c, "p5-money-web-$theme")
+                close(c)
+            }
+        }
         val dayStart = java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
         val dinner = app.foodStore.mealsFlow.value.filter { it.ts >= dayStart + 17 * 3_600_000L }
         runBlocking { dinner.forEach { app.foodStore.delete(it.id) } }

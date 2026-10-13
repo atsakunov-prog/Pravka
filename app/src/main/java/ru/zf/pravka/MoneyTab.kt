@@ -124,6 +124,11 @@ internal fun MoneyTab(
     header: (@Composable (subtitle: String, onSubtitle: () -> Unit, extra: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) -> Unit)? = null,
     /** «Задать» у бюджета месяца — группа настроек «Сегодня», где он живёт. */
     onBudget: (() -> Unit)? = null,
+    /**
+     * Раздел веба «Деньги» (P&L, статьи, доля, «чего не видим») — страницей сервиса внутри
+     * приложения, тем же путём, что меню Ковчега (`MainActivity.openServicePage`). null — входов нет.
+     */
+    onWeb: ((ru.zf.pravka.core.ServicePage) -> Unit)? = null,
 ) {
     val state by app.moneyStore.stateFlow.collectAsState()
     val pOn by app.settings.mScopePersonalFlow.collectAsState(initial = true)
@@ -331,6 +336,10 @@ internal fun MoneyTab(
                 }
     }
     if (ru.zf.pravka.ui.Look.v2) {
+        // Адрес веба «Деньги» — из синка Дел (`look.nav`, ключ `dengi`): разделы, которых нет на телефоне.
+        val webNav by app.delaSync.services.collectAsState()
+        val webLink by app.delaSync.link.collectAsState()
+        val dengiWeb = remember(webNav, webLink) { ru.zf.pravka.core.MoneyWeb.service(webNav, webLink?.url) }
         // ---- Вид v2 (холст `Dengi.dc.html`): разделы вкладками, как в вебе Денег ----
         val wide = ru.zf.pravka.ui.twoPane()
         val scopeWord = MONEY_SCOPES[moneyScopeIndex(pOn, zOn)].lowercase()
@@ -393,6 +402,7 @@ internal fun MoneyTab(
                                 MoneyRecurringCardV2(recurring)
                                 MoneyAskCardV2(ask)
                                 PatternsCard(app, state.insight, state.insightTs)
+                                if (onWeb != null) MoneyWebCardV2(dengiWeb, onWeb)
                             }
                         }
                         MONEY_SORT -> {
