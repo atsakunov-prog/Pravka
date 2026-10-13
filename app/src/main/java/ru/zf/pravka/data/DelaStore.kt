@@ -47,6 +47,12 @@ class DelaStore(private val context: Context) {
          * не едет, с базой — едет.
          */
         const val FAVS_FILE = "dela-favs.json"
+        /**
+         * Последний дайджест Telegram (Правка 5.0, этап 2; `docs/digest-phone.md`):
+         * одна запись поля `digest` синка — карточка «Сегодня» рисуется сразу и без
+         * сети. Чужая переписка: только в базе телефона, в журнал — без текста.
+         */
+        const val DIGEST_FILE = "dela-digest.json"
     }
 
     /** Ответ CRM-вида и когда он пришёл: экран открывается с ним без сети и обновляется. */
@@ -65,6 +71,7 @@ class DelaStore(private val context: Context) {
     private val outboxFile: File get() = File(DataRoot.dir(context), OUTBOX_FILE)
     private val viewsFile: File get() = File(DataRoot.dir(context), VIEWS_FILE)
     private val favsFile: File get() = File(DataRoot.dir(context), FAVS_FILE)
+    private val digestFile: File get() = File(DataRoot.dir(context), DIGEST_FILE)
     private var loaded = false
 
     private var server = Dela.Snapshot()
@@ -74,6 +81,13 @@ class DelaStore(private val context: Context) {
     /** Кто я на сервере (id пользователя из `/api/me`): виды «моё» считаются от него. */
     @Volatile var me: String = ""
         private set
+
+    private val _digest = MutableStateFlow<ru.zf.pravka.core.DigestNote?>(null)
+    /**
+     * Последний дайджест с сервера (`digest` синка) или null. Показывать — только
+     * при флаге `digest` в `features` копии: без него сервер старый.
+     */
+    val digest: StateFlow<ru.zf.pravka.core.DigestNote?> = _digest
 
     private val _view = MutableStateFlow(Dela.Snapshot())
     /** Копия сервера с неотправленной очередью поверх — то, что показывает вкладка. */
@@ -214,15 +228,46 @@ class DelaStore(private val context: Context) {
         }
         server = next
         persist()
+        applyDigest(resp)
         publish()
         ""
     }
+
+    /**
+     * Поле `digest` синка (`server/contract/dela-digest.json`, «sync»): объект —
+     * последняя сводка (та же `id` и `rev` — уже есть, не трогаем); `null` при
+     * полном синке — сводок нет, кэш чистим; поля нет — не трогаем ничего.
+     */
+    private fun applyDigest(resp: JSONObject) {
+        if (!resp.has("digest")) return
+        val o = resp.optJSONObject("digest")
+        if (o == null) {
+            if (resp.optBoolean("full", false)) dropDigest()
+            return
+        }
+        val d = ru.zf.pravka.core.DigestNote.parse(o) ?: return
+        val was = _digest.value
+        if (was != null && was.id == d.id && was.rev == d.rev) return
+        _digest.value = d
+        val text = o.toString()
+        DiskWriter.post { StoreFiles.writeAtomic(digestFile, text) }
+    }
+
+    private fun dropDigest() {
+        if (_digest.value == null && !digestFile.exists()) return
+        _digest.value = null
+        DiskWriter.post { runCatching { digestFile.delete() } }
+    }
+
+    /** «Отключить Дела»: дайджест — того владельца, его на телефоне больше нет. */
+    fun clearDigest() = dropDigest()
 
     /** Подключились заново (может быть, к другому серверу): копию — с нуля, очередь остаётся. */
     suspend fun resetCopy() = mutex.withLock {
         ensureLoaded()
         server = Dela.Snapshot()
         persist()
+        dropDigest()
         // Виды CRM — того сервера, которого больше нет: и они с нуля.
         views.clear()
         _views.value = emptyMap()
@@ -392,6 +437,9 @@ class DelaStore(private val context: Context) {
             }
         }
         _views.value = LinkedHashMap(views)
+        withContext(Dispatchers.IO) {
+            StoreFiles.readOrQuarantine(digestFile) { JSONObject(it) }?.let { o -> _digest.value = ru.zf.pravka.core.DigestNote.parse(o) }
+        }
         withContext(Dispatchers.IO) {
             StoreFiles.readOrQuarantine(favsFile) { JSONObject(it) }?.let { o ->
                 o.optJSONArray("projects")?.let { a ->

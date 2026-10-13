@@ -323,7 +323,9 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
     })
     // Вид v2 (Правка 5.0, этап 2): своя раскладка — `TodayV2.kt`; хроника 4.0 ниже — «Виду 4.0».
     if (ru.zf.pravka.ui.Look.v2) {
-        val digest by app.digest.collectAsState()
+        // Последний дайджест — полем синка Дел (`DelaStore.digest`); без флага `digest` сервер старый — карточки нет.
+        val storedDigest by app.delaStore.digest.collectAsState()
+        val digest = storedDigest?.takeIf { onServer && ru.zf.pravka.core.DigestNote.FEATURE in snap.features }
         val services by app.delaSync.services.collectAsState()
         // Завтрашний календарь — строкой под «Сегодня» на развороте.
         val tomorrowCal by produceState(emptyList<ru.zf.pravka.core.CalEvent>(), day, todayCals, autoCals) {

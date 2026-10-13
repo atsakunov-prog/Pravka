@@ -5,31 +5,25 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 /**
- * Списки дел «Сегодня» вида v2 (Правка 5.0, этап 2; план §4): «Сейчас» —
- * только отмеченное владельцем, «Сегодня» — дела со сроком ровно сегодня и
- * встречи календаря, завтрашнее — одной строкой под ними. Просроченное само
- * ни туда, ни туда не попадает — оно во «Всех делах» (решение владельца,
- * план §4 «Дела»).
- *
- * Смысл «Сейчас» и «Сегодня» во вкладке Дел ведёт `core/DelaGroups.kt`; здесь —
- * маленький помощник одного экрана: не трогать чужие правила ради своей
- * раскладки.
+ * Строки «Сегодня» вида v2 (Правка 5.0, этап 2; план §4): дела со сроком
+ * сегодня и встречи календаря одним списком по времени, завтрашнее — одной
+ * строкой под ними. Какие дела — решает `core/DelaGroups.kt` (этап 4, одна
+ * правда с вкладкой Дел и сервером): «Сейчас» — `nowOrdered` (отмеченное,
+ * `focus_on` сегодня), «Сегодня» — `todayByGroups` без взятого в «Сейчас»
+ * (срок ровно сегодня); просроченное — ни там, ни там, оно во «Всех делах».
+ * Здесь — только раскладка экрана.
  */
 object TodayAgenda {
 
-    private fun mine(t: Dela.Task, me: String) = me.isBlank() || t.ownerId == me
+    /** «Сейчас» — отмеченное владельцем на сегодня (`DelaGroups.nowOrdered`). */
+    fun now(s: Dela.Snapshot, me: String, today: String): List<Dela.Task> = DelaGroups.nowOrdered(s, me, today)
 
-    /** «Сейчас»: открытые свои дела, отмеченные владельцем на сегодня (`focus_on`). */
-    fun now(s: Dela.Snapshot, me: String, today: String): List<Dela.Task> =
-        s.tasks.values
-            .filter { it.open && !it.goal && mine(it, me) && it.focusOn == today }
-            .sortedWith(Dela.ORDER)
-
-    /** Дела со сроком ровно [day] — по часу, потом кто дольше ждёт. Уже в «Сейчас» — не повторяются. */
+    /**
+     * Дела со сроком ровно [day] без взятого в «Сейчас» (`DelaGroups.todayByGroups`) — во всех сферах:
+     * «Сегодня» на главном экране — день целиком, а не одна сфера вкладки.
+     */
     fun due(s: Dela.Snapshot, me: String, day: String, today: String = day): List<Dela.Task> =
-        s.tasks.values
-            .filter { it.open && !it.goal && mine(it, me) && it.dueDate == day && it.focusOn != today }
-            .sortedWith(compareBy<Dela.Task>({ it.dueTime.ifBlank { "99" } }, { it.createdAt }, { it.num }))
+        DelaGroups.todayByGroups(s, me, day, "all", skip = now(s, me, today).map { it.id }.toSet())
 
     /** Строка «Сегодня»: когда, что, подпись; [past] — встреча уже прошла (бледно), [taskId] — дело. */
     data class Row(

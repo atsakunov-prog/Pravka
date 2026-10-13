@@ -266,7 +266,6 @@ class ScreenShots {
             Seed.money(app)
         }
         Seed.weather(app)
-        Seed.digest(app)
         Seed.pravka(app)
         settle(20)
 

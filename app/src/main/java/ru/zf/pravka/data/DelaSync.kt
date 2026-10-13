@@ -173,6 +173,7 @@ class DelaSync(
 
     fun disconnect() {
         runCatching { linkFile.delete() }
+        store.clearDigest()
         runCatching { navFile.delete() }
         _services.value = emptyList()
         _link.value = null
@@ -259,8 +260,11 @@ class DelaSync(
     private suspend fun pull(l: Link) {
         val since = store.seq()
         val resp = get(l.url, l.token, "api/sync?since=$since")
+        val digestWas = store.digest.value
         val refused = store.applySync(resp, System.currentTimeMillis())
         if (refused.isNotBlank()) throw DelaException(refused)
+        // Дайджест — чужая переписка: в журнал только подпись и длина, без текста (docs/digest-phone.md).
+        store.digest.value?.takeIf { it !== digestWas }?.let { d -> log("дела: дайджест: ${d.title}, ${d.text.length} знаков") }
         svod?.let { sv -> pullSvod(l, sv, resp) }
         // Фильтры Дел (10.10.2026) — в настройках человека на сервере, синк их не возит: берём из
         // `/api/me`. Оттуда же — сервисы для меню Ковчега (13.10.2026, `look.nav`): один запрос на

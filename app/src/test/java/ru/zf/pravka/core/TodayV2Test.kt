@@ -115,6 +115,40 @@ class TodayV2Test {
         assertEquals("", b[2].lead)
     }
 
+    @Test
+    fun `дайджест из синка — пример контракта, разделы из пунктов`() {
+        val f = listOf(java.io.File("../server/contract/dela-digest.json"), java.io.File("server/contract/dela-digest.json")).first { it.isFile }
+        val ex = org.json.JSONObject(f.readText()).getJSONObject("digest_object").getJSONObject("example")
+        val d = DigestNote.parse(ex)!!
+        assertEquals("вт 13.10, 20:00", d.title)
+        assertEquals("чатов 12 · сообщений 148", d.counts)
+        assertEquals("В Дела: поставлено 2, вопросов 1, закрыто само 1.", d.dela)
+        assertEquals("digest:2026-10-13T2000", d.batch)
+        val b = d.blocks()
+        assertEquals(listOf("Ждут тебя", "По работе", "Дом", "Прочее"), b.filter { it.heading }.map { it.text })
+        assertEquals("Иван Петров:", b[1].lead)
+        assertEquals("Олег (Бета Групп · сделка):", b[2].lead)
+        assertEquals("Бета Групп:", b[4].lead)
+        // Без чисел и Дел — не пишется ничего; пустая сводка — одна строка.
+        val bare = org.json.JSONObject(ex.toString()).put("chats", org.json.JSONObject.NULL).put("msgs", org.json.JSONObject.NULL)
+            .put("dela", org.json.JSONObject.NULL).put("summary", org.json.JSONObject())
+        val e = DigestNote.parse(bare)!!
+        assertEquals("", e.counts)
+        assertEquals("", e.dela)
+        assertEquals(listOf("Ничего, что ждёт тебя."), e.blocks().map { it.text })
+        // Без id — не сводка.
+        assertEquals(null, DigestNote.parse(org.json.JSONObject().put("ended_at", "2026-10-13T20:00:00+03:00")))
+    }
+
+    @Test
+    fun `кто и чат — как у сервера`() {
+        assertEquals("Иван Петров", DigestNote.whereOf("Иван Петров", "Иван Петров"))
+        assertEquals("Олег (Бета Групп · сделка)", DigestNote.whereOf("Олег", "Бета Групп · сделка"))
+        assertEquals("Олег", DigestNote.whereOf("Олег", ""))
+        assertEquals("Чат", DigestNote.whereOf("", "Чат"))
+        assertEquals("В Дела: новых дел нет.", DigestNote.delaLine(org.json.JSONObject()))
+    }
+
     // ---------------------------------------------------------------- Шаббат
 
     @Test

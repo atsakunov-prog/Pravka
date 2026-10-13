@@ -46,7 +46,7 @@
 - `core/DelaGroups.kt` — три группы, «Сейчас», «Сегодня» и просроченное врозь (`isNow`, `inToday`, `inLate`, `dayOrdered`, `whenDay`, `byTime`, солнце, молния), уровни (`nested`), ветки «только одно», фильтры (под тестом `DelaGroupsTest`)
 - `core/DelaAsk.kt` — `/api/ask`: что видит Claude, разбор ответа, отмена (под тестами)
 - `core/DelaCrm.kt` — ответы CRM-видов, операции CRM, своё поверх кэша (под тестами)
-- `data/DelaStore.kt` — копия сервера `dela.json`, очередь `dela-outbox.json`, кэш CRM-видов `dela-views.json`, избранное, группировки и раскрытые клиенты `dela-favs.json`
+- `data/DelaStore.kt` — копия сервера `dela.json`, очередь `dela-outbox.json`, последний дайджест `dela-digest.json` (`docs/digest-phone.md`), кэш CRM-видов `dela-views.json`, избранное, группировки и раскрытые клиенты `dela-favs.json`
 - `data/DelaSync.kt` — связь: `/api/me`, `/api/sync`, `/api/ops`, `/api/task`, `/api/view/…`, `/api/ask`; Свод (массив `svod` синка, `/api/view/svod`) и «кто это» (`/api/view/who`)
 - `core/Svod.kt`, `data/SvodStore.kt`, `SvodWiring.kt`, `SvodSettings.kt` — Свод: одна правда на сервере (раздел ниже)
 - `RaznoskaSection.kt`

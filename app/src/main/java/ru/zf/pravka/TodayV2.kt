@@ -231,7 +231,7 @@ private fun FoldedBody(c: TodayCards, modifier: Modifier) {
         NowCard(c, wide = false)
         c.weather?.takeIf { it.ahead.isNotEmpty() || it.hours.isNotEmpty() }?.let { WeatherCardV2(it, c.weatherOpen, c.onWeather) }
         if (c.data.dela) NowTasksCard(c, wide = false)
-        c.digest?.let { DigestCard(it, c.digestOpen, c.onDigest) }
+        c.digest?.let { DigestCard(it, c.digestOpen, c.onDigest, onNew = { c.nav.mode(Tab.TODOIST) }) }
         if (c.data.dela) NewCard(c, wide = false)
     }
 }
@@ -259,7 +259,7 @@ private fun WideBody(c: TodayCards, modifier: Modifier) {
         ) {
             c.weather?.takeIf { it.ahead.isNotEmpty() || it.hours.isNotEmpty() }?.let { WeatherCardV2(it, c.weatherOpen, c.onWeather) }
             if (c.data.dela) NowTasksCard(c, wide = true)
-            c.digest?.let { DigestCard(it, c.digestOpen, c.onDigest) }
+            c.digest?.let { DigestCard(it, c.digestOpen, c.onDigest, onNew = { c.nav.mode(Tab.TODOIST) }) }
             if (c.data.dela) NewCard(c, wide = true)
             TodayAgendaCard(c)
         }
@@ -456,14 +456,14 @@ private fun NowTasksCard(c: TodayCards, wide: Boolean) {
  * книзу; нажатие раскрывает целиком (`.dg`, `.dgb` холста).
  */
 @Composable
-private fun DigestCard(d: DigestNote, open: Boolean, onToggle: () -> Unit) {
+private fun DigestCard(d: DigestNote, open: Boolean, onToggle: () -> Unit, onNew: () -> Unit) {
     val t = LocalPravkaType.current
     PaperCard {
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(KvShape.Control)).clickable(onClickLabel = if (open) "свернуть дайджест" else "раскрыть дайджест", onClick = onToggle)) {
             SecHead(
                 kv("digest", Glyphs.Note),
                 "Дайджест",
-                small = listOf(Fmt.hm(d.at), d.title).filter { it.isNotBlank() }.joinToString(" · "),
+                small = listOf(d.title.ifBlank { Fmt.hm(d.at) }, d.counts).filter { it.isNotBlank() }.joinToString(" · "),
                 link = if (open) "свернуть" else "раскрыть",
                 onLink = onToggle,
             )
@@ -491,6 +491,21 @@ private fun DigestCard(d: DigestNote, open: Boolean, onToggle: () -> Unit) {
                             modifier = Modifier.padding(top = 3.dp),
                         )
                     }
+                }
+            }
+            // Раскрытая: что ушло в Дела из окна и где это ждёт; текст сводки — в буфер (docs/digest-phone.md, п. 2).
+            if (open) {
+                if (d.dela.isNotBlank()) {
+                    Text(d.dela, style = t.meta, color = Kv.faint, modifier = Modifier.padding(top = 8.dp))
+                }
+                val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+                val context = LocalContext.current
+                Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (d.dela.isNotBlank()) SmallKey(kv("inbox", Glyphs.Note), "Открыть «Новое»", "Открыть «Новое» в Делах", onNew)
+                    if (d.text.isNotBlank()) SmallKey(kv("copy", Glyphs.Copy), "Скопировать", "Скопировать сводку", {
+                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(d.text))
+                        Feedback.toast(context, "Сводка скопирована")
+                    })
                 }
             }
         }

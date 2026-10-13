@@ -328,26 +328,30 @@ internal object Seed {
     // ------------------------------------------------------------ дела
 
     /**
-     * Последний дайджест для «Сегодня» v2 (Правка 5.0, этап 2): дороги с компа
-     * к телефону пока нет — снимок кладёт сводку прямо в `app.digest`. Всё
-     * выдумано, люди и компании — те же, что в посеве Дел.
+     * Последний дайджест — так, как его отдал бы синк Дел (`digest_object`
+     * контракта `server/contract/dela-digest.json`): «Сегодня» v2 рисует карточку из
+     * пунктов. Всё выдумано, люди и компании — те же, что в посеве Дел.
      */
-    fun digest(app: PravkaApp) {
-        app.digest.value = ru.zf.pravka.core.DigestNote(
-            at = at(0, "15:00"),
-            title = "9 чатов · 214 сообщений",
-            text = """
-                # Ждут ответа
-                Ольга: когда сможем начать внедрение — просит ответ до пятницы.
-                Иван: прислал структуру долга, ждёт комментарии к четвергу.
-                # Работа
-                Бета Групп: банк запросил ковенанты, встреча переносится на среду.
-                Орион Логистик: КП читают, вопросы по срокам внедрения.
-                Фирма: Лена выложила шаблон ДДС — нужен взгляд до конца недели.
-                # Семья
-                Школа: родительское собрание в четверг в 19:00.
-            """.trimIndent(),
-        )
+    private fun digest(): JSONObject {
+        fun arr(vararg o: Any) = JSONArray().apply { o.forEach { put(it) } }
+        val end = OffsetDateTime.now().withHour(15).withMinute(0).withSecond(0).withNano(0)
+        return JSONObject().put("id", "6a1f0c2e-3b4d-4e5f-8a9b-0c1d2e3f4a5b").put("ref", "digest:${day(0)}T1500")
+            .put("started_at", end.minusHours(4).toString()).put("ended_at", end.toString())
+            .put("label", "сегодня, 15:00").put("chats", 9).put("msgs", 214)
+            .put("summary", JSONObject()
+                .put("waiting", arr(
+                    JSONObject().put("chat", "Орион Логистик · внедрение").put("who", "Ольга").put("what", "когда сможем начать внедрение — просит ответ до пятницы"),
+                    JSONObject().put("chat", "Иван Петров").put("who", "Иван Петров").put("what", "прислал структуру долга, ждёт комментарии к четвергу"),
+                ))
+                .put("work", arr(
+                    JSONObject().put("topic", "Бета Групп").put("text", "банк запросил ковенанты, встреча переносится на среду."),
+                    JSONObject().put("topic", "Фирма").put("text", "Лена выложила шаблон ДДС — нужен взгляд до конца недели."),
+                ))
+                .put("family", arr("Школа: родительское собрание в четверг в 19:00."))
+                .put("other", "В группах обсуждали погоду и отпуск."))
+            .put("text", "Ждут тебя\n• Ольга (Орион Логистик · внедрение): когда сможем начать внедрение")
+            .put("dela", JSONObject().put("created", 2).put("asks", 1).put("close", 0).put("update", 0).put("closed", 1).put("updated", 0).put("batch", "digest:${day(0)}T1500"))
+            .put("rev", 1).put("seq", 5120)
     }
 
     fun delaResponse(): JSONObject {
@@ -453,7 +457,8 @@ internal object Seed {
         // Круг (задание 14): проекты в Круге — направления и цель, на которой проект висит.
         fun krug(id: String, dir: String, why: String? = null) =
             JSONObject().put("id", id).put("kind", "project").put("directions", arr(dir)).put("why_id", why ?: JSONObject.NULL).put("seq", ++seq)
-        return JSONObject().put("ok", true).put("full", true).put("seq", seq).put("today", d(0)).put("features", arr("groups", "krug", "tree"))
+        return JSONObject().put("ok", true).put("full", true).put("seq", seq).put("today", d(0)).put("features", arr("groups", "krug", "tree", "digest"))
+            .put("digest", digest())
             .put("krug", arr(krug("p-beta", "work", "t-83"), krug("p-orion", "work"), krug("p-home", "home"), krug("p-dacha", "home", "t-84"), krug("p-zf", "work")))
             .put("tasks", tasks).put("projects", projects).put("people", people).put("suggestions", suggestions)
             .put("users", users).put("comments", JSONArray())
