@@ -86,6 +86,7 @@ CARD_MODEL = "claude-opus-5-5"  # карточка клиента, сделки,
 TASK_ROUTE = "task"             # карточка дела и «Кстати» — модель и глубина в одном месте: llm.ROUTES / Свод models.dela
 TALK_ROUTE = "talk"             # строка страницы и разговор под ней (13.10.2026) — там же
 MAX_REFS = 30                   # дел ссылками под ответом
+SYSTEM_TTL = "1h"               # справочник — в часовом кэше (13.10.2026), экран разговора — на 5 минут
 SCREEN_TTL = 1800               # экран разговора помним полчаса: реплики того же разговора читают его из кэша
 SCREENS_MAX = 300
 HISTORY_SHOWN = 12              # записей журнала дела в его карточке для Claude
@@ -381,7 +382,7 @@ def _catalog(conn) -> tuple[str, dict]:
     text, index = parse.catalog(conn)
     deals = conn.execute(
         "SELECT d.id, d.name, d.project_id, p.name AS project FROM crm.deals d JOIN crm.projects p ON p.id = d.project_id "
-        "WHERE d.stage <> 'archive' AND p.archived_at IS NULL ORDER BY p.name, d.name"
+        "WHERE d.stage <> 'archive' AND p.archived_at IS NULL ORDER BY p.name, d.name, d.id"
     ).fetchall()
     if deals:
         text += "\n\nСДЕЛКИ (deal — ровно имя из списка; после «·» — проект):\n" + "\n".join(
@@ -393,7 +394,7 @@ def _catalog(conn) -> tuple[str, dict]:
     orgs = conn.execute(
         "SELECT o.id, o.name, o.aliases, bool_or(p.id IS NOT NULL) AS client FROM crm.orgs o "
         "LEFT JOIN crm.projects p ON p.org_id = o.id AND p.archived_at IS NULL "
-        "WHERE o.archived_at IS NULL GROUP BY o.id ORDER BY o.name"
+        "WHERE o.archived_at IS NULL GROUP BY o.id ORDER BY o.name, o.id"
     ).fetchall()
     free = [o for o in orgs if not o["client"]]
     if free:
@@ -1353,10 +1354,13 @@ def ask(cl, system: str, user_text: str, model: str = MODEL, effort: str = EFFOR
     отметкой кэша — следующая реплика того же разговора читает его из кэша; user_text — хвост (час, разговор, команда)."""
     content = ([{"type": "text", "text": prefix, "cache_control": {"type": "ephemeral"}}, {"type": "text", "text": user_text}]
                if prefix else user_text)
+    # Справочник — в часовом кэше (владелец 13.10.2026: «справочник — в длинный кеш, остальное — на 5 минут»): он один у
+    # строки, разговора, карточек и «Кстати» и меняется только с самими проектами и людьми. Часовой блок идёт раньше
+    # пятиминутного экрана — так требует API.
     with cl.beta.messages.stream(
         model=model,
         max_tokens=16000,
-        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral", "ttl": SYSTEM_TTL}}],
         output_config={"effort": effort, "format": {"type": "json_schema", "schema": SCHEMA}},
         messages=[{"role": "user", "content": content}],
         # Отказ модели — повтор на резервной внутри того же запроса (как у разбора и встреч).

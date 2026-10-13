@@ -97,10 +97,10 @@ def _norm(s: str | None) -> str:
 def catalog(conn) -> tuple[str, dict]:
     """Справочник для промпта (как promptCatalog в Правке) и указатели имя → id."""
     projects = conn.execute(
-        "SELECT id, name, aliases, sphere, kind FROM crm.projects WHERE archived_at IS NULL ORDER BY name"
+        "SELECT id, name, aliases, sphere, kind FROM crm.projects WHERE archived_at IS NULL ORDER BY name, id"
     ).fetchall()
     people = conn.execute(
-        "SELECT id, name, short, aliases FROM crm.people WHERE archived_at IS NULL ORDER BY coalesce(short, name)"
+        "SELECT id, name, short, aliases FROM crm.people WHERE archived_at IS NULL ORDER BY coalesce(short, name), name, id"
     ).fetchall()
     labels = [r["name"] for r in conn.execute("SELECT name FROM tasks.labels ORDER BY name")]
     lines = []

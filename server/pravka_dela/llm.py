@@ -18,9 +18,10 @@ log = logging.getLogger("dela.llm")
 
 # $ за 1 млн токенов: вход, выход, запись кэша (5 мин), чтение кэша. Правда — Свод (claude.prices, prices() ниже),
 # эта таблица — запас, пока Свода нет (06.10.2026, LOGIC.md §11: было около 11 таблиц по службам).
+# cache_write_1h — запись часового кэша (справочник Claude Дел с 13.10.2026): вдвое дороже входа.
 PRICES = {
-    "claude-sonnet-5-5": {"in": 2.0, "out": 10.0, "cache_write": 2.5, "cache_read": 0.20},
-    "claude-opus-5-5": {"in": 4.0, "out": 20.0, "cache_write": 5.0, "cache_read": 0.20},
+    "claude-sonnet-5-5": {"in": 2.0, "out": 10.0, "cache_write": 2.5, "cache_write_1h": 4.0, "cache_read": 0.20},
+    "claude-opus-5-5": {"in": 4.0, "out": 20.0, "cache_write": 5.0, "cache_write_1h": 8.0, "cache_read": 0.20},
 }
 # Выбор в настройках веба («Настройки» → Claude): ключ настройки → модель.
 MODELS = {"sonnet": "claude-sonnet-5-5", "opus": "claude-opus-5-5"}
@@ -81,6 +82,7 @@ def prices(url: str | None = None) -> dict:
             for m, v in ((row["value"] if row else None) or {}).items():
                 if m.startswith("claude-") and isinstance(v, dict):
                     got[m] = {"in": float(v["in"]), "out": float(v["out"]), "cache_write": float(v["cache_write_5m"]),
+                              "cache_write_1h": float(v.get("cache_write_1h") or 2 * float(v["in"])),
                               "cache_read": float(v["cache_read"])}
             _svod["prices"] = got
         except Exception:  # noqa: BLE001
@@ -96,15 +98,24 @@ def cost(usage: dict | None, model: str | None = None, url: str | None = None) -
     table = prices(url)
     m = usage.get("model") or model or ""
     p = table.get(m) or next((v for k, v in table.items() if m.startswith(k)), table["claude-opus-5-5"])
+    # Запись кэша — по сроку: 5 минут (cache_write) и час (cache_write_1h, у справочника Дел) стоят по-разному.
     return (usage.get("input", 0) * p["in"] + usage.get("output", 0) * p["out"]
-            + usage.get("cache_write", 0) * p["cache_write"] + usage.get("cache_read", 0) * p["cache_read"]) / 1e6
+            + usage.get("cache_write", 0) * p["cache_write"]
+            + usage.get("cache_write_1h", 0) * p.get("cache_write_1h", 2 * p["in"])
+            + usage.get("cache_read", 0) * p["cache_read"]) / 1e6
 
 
 def usage_of(msg, model: str) -> dict:
+    """Токены ответа; запись кэша — раздельно: на 5 минут (cache_write) и на час (cache_write_1h) — у них разная цена."""
     u = msg.usage
-    return {"model": getattr(msg, "model", None) or model, "input": u.input_tokens, "output": u.output_tokens,
-            "cache_write": getattr(u, "cache_creation_input_tokens", 0) or 0,
-            "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0}
+    total = getattr(u, "cache_creation_input_tokens", 0) or 0
+    split = getattr(u, "cache_creation", None)
+    hour = (getattr(split, "ephemeral_1h_input_tokens", 0) or 0) if split is not None else 0
+    out = {"model": getattr(msg, "model", None) or model, "input": u.input_tokens, "output": u.output_tokens,
+           "cache_write": max(0, total - hour), "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0}
+    if hour:
+        out["cache_write_1h"] = hour
+    return out
 
 
 def account(url: str, what: str, usd: float, model: str | None = None) -> None:

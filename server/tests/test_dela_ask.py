@@ -337,4 +337,21 @@ def test_ask_sends_screen_as_cached_block():
     data = ask.ask(cl, "СПРАВОЧНИК", "ХВОСТ", "claude-opus-5-5", "low", prefix="ЭКРАН")
     blocks = seen["messages"][0]["content"]
     assert blocks[0] == {"type": "text", "text": "ЭКРАН", "cache_control": {"type": "ephemeral"}} and blocks[1]["text"] == "ХВОСТ"
-    assert seen["system"][0]["cache_control"] == {"type": "ephemeral"} and data["_usage"]["cache_read"] == 900
+    # Справочник — часовой кэш, и он раньше пятиминутного экрана (правило API: 1h — до 5m).
+    assert seen["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"} and data["_usage"]["cache_read"] == 900
+
+
+def test_cache_write_is_priced_by_ttl():
+    """Запись часового кэша — по своей цене (у Opus $8 за млн против $5 у пятиминутной): учёт трат не должен путать."""
+    from types import SimpleNamespace as NS
+
+    from pravka_dela import llm
+
+    msg = NS(model="claude-opus-5-5", usage=NS(input_tokens=100, output_tokens=10, cache_creation_input_tokens=30000,
+                                               cache_read_input_tokens=0,
+                                               cache_creation=NS(ephemeral_1h_input_tokens=24000, ephemeral_5m_input_tokens=6000)))
+    u = llm.usage_of(msg, "claude-opus-5-5")
+    assert (u["cache_write"], u["cache_write_1h"]) == (6000, 24000)
+    assert abs(llm.cost(u) - (100 * 4 + 10 * 20 + 6000 * 5 + 24000 * 8) / 1e6) < 1e-9
+    old = NS(model="claude-opus-5-5", usage=NS(input_tokens=1, output_tokens=1, cache_creation_input_tokens=50, cache_read_input_tokens=0))
+    assert llm.usage_of(old, "x")["cache_write"] == 50 and "cache_write_1h" not in llm.usage_of(old, "x")
