@@ -24,6 +24,7 @@ const S = {
   krug: { dirs: [], principles: [], proj: new Map() }, kpick: {}, // Круг жизни: направления и принципы (Свод), проекты в Круге; выбор в «Подскажи»
   treeMode: LS.get('treeMode', 'tree'), treeDir: LS.get('treeDir', null), treeF: null, // Дерево жизни: вид, направление, фильтры списка
   treeLevel: LS.get('treeLevel', null), // до какого уровня раскрыто дерево (кнопки 1–4, 0 — «Всё»)
+  renamed: new Map(), // id «Зачем» → старые названия (Свод zachem.renamed, 13.10.2026)
 };
 // Три группы дел (владелец 10.10.2026): «есть дела, которые ждут меня — люди что-то спросили и ждут, они
 // мега важные… второе — что я сам придумал… третье — проверить, что мне люди должны». Вечером назвал их:
@@ -94,6 +95,11 @@ async function sync(full) {
     const v = Array.isArray(r.value) ? r.value : [];
     if (r.key === 'krug.directions') S.krug.dirs = v.filter((x) => x && x.key).sort((a, b) => ((+a.pos || 0) % 12) - ((+b.pos || 0) % 12));
     if (r.key === 'krug.principles') S.krug.principles = v.map((x) => String(x).trim()).filter(Boolean);
+    // Переименование «Зачем» (13.10.2026): старые названия — чтобы поиск по ним находил (и было что вернуть).
+    if (r.key === 'zachem.renamed') {
+      S.renamed = new Map();
+      for (const x of v) if (x && x.id && x.was) S.renamed.set(x.id, [...(S.renamed.get(x.id) || []), x.was]);
+    }
   }
   S.seq = d.seq;
   S.today = d.today;
@@ -364,7 +370,7 @@ const VIEWS = {
 // что я могу сделать сегодня… и раздел слева „Фильтры“: сделал первый, второй, третий уровень — это
 // сохраняется как фильтр». Уровней до трёх; внутри последнего — по времени (byTime). Фильтр — что показать
 // (scope) и уровни; хранится у человека на сервере (users.settings.filters), чтобы телефон видел те же.
-const LEVELS = { project: 'проекты', grp: 'группы', date: 'время', person: 'люди', deal: 'сделки', dir: 'направления' };
+const LEVELS = { project: 'Зачем', grp: 'группы', date: 'время', person: 'люди', deal: 'сделки', dir: 'направления' };
 const LEVELS_DEF = { today: ['grp'], all: ['project', 'grp', 'date'], project: ['grp', 'date'] };
 const SCOPES = { today: 'Сегодня', all: 'Все дела', owed: 'Отбить', self: 'Запустить', check: 'Мониторить' };
 // С завода — пока человек не сохранил своих: сегодня по проектам (его же пример), и кому отбить и кого
@@ -997,7 +1003,7 @@ function renderSide(r) {
     if (!deals.length) return el('div', { class: 'side-client' }, el('span', { class: 'side-caret' }), plainItem(p));
     const here = r.kind === 'deal' && deals.some((d) => d.id === r.id);
     const open = S.clientOpen.has(p.id) || here;
-    const caret = el('button', { class: 'side-caret' + (open ? ' open' : ''), title: open ? 'Свернуть проекты' : `Проекты клиента: ${deals.length}`,
+    const caret = el('button', { class: 'side-caret' + (open ? ' open' : ''), title: open ? 'Свернуть «Зачем»' : `«Зачем» клиента: ${deals.length}`,
       'aria-expanded': open ? 'true' : 'false', onclick: (e) => { e.stopPropagation(); toggleClientOpen(p.id); } }, icon('chevron', 14));
     return el('div', { class: 'side-client' + (open ? ' open' : '') }, caret, plainItem(p),
       open ? el('div', { class: 'side-deals' }, deals.map((d) => {
@@ -1137,7 +1143,7 @@ function headKind(r) {
   if (VIEWS[r.kind]) return null;
   const p = r.kind === 'project' ? project(r.id) : null;
   const dl = r.kind === 'deal' ? S.deals.get(r.id) : null;
-  if (dl && project(dl.project_id)) return el('a', { class: 'h-kind', href: '#/p/' + dl.project_id }, 'Проект клиента · ' + project(dl.project_id).name);
+  if (dl && project(dl.project_id)) return el('a', { class: 'h-kind', href: '#/p/' + dl.project_id }, 'Зачем клиента · ' + project(dl.project_id).name);
   if (r.kind === 'meeting') return el('a', { class: 'h-kind', href: '#/meetings' }, 'Встреча');
   const word = p ? KIND_ONE[p.kind] || 'Проект' : r.kind === 'person' ? 'Человек' : CRM_VIEWS[r.kind] ? 'CRM' : r.kind === 'filter' ? 'Фильтр' : null;
   return word ? el('span', { class: 'h-kind' }, word) : null;
@@ -1217,7 +1223,7 @@ const setLevels = (key) => (lv) => { S.levels[key] = lv; LS.set('levels', S.leve
 // выпадающий список со всеми людьми и с поисковой строкой: набрать „Наташ“ — выпадут все Наташи, выберу свою…
 // по первому уровню группировки поиск, чтобы показывалось только одно»). pick = {lv, key, title}: ветка первого
 // уровня; уровни поменялись — выбор молча не действует. На видах живёт до перезагрузки, в фильтре — сохраняется.
-const ALL_OF = { project: 'Все проекты', grp: 'Все группы', date: 'Всё время', person: 'Все люди', deal: 'Все сделки', dir: 'Все направления' };
+const ALL_OF = { project: 'Все «Зачем»', grp: 'Все группы', date: 'Всё время', person: 'Все люди', deal: 'Все сделки', dir: 'Все направления' };
 const pickOn = (pick, levels) => !!pick && pick.lv === levels[0];
 // Человек, проект, сделка — по id: переименуешь — сохранённый фильтр не потеряет свою «Наташу».
 const isPicked = (t, lv, pick) => { const [k, , o] = levelKey(t, lv); return pick.id ? o.id === pick.id : k === pick.key; };
@@ -1458,12 +1464,14 @@ function levelKey(t, lv) {
     return [{ owed: '1', self: '2', check: '3' }[g], GRP[g], { sub: GRP_SUB[g], cls: 'grp-' + g, find: [GRP[g], GRP_SUB[g]], lead: () => icon(GRP_ICON[g], 17) }];
   }
   // Ключ — имя и id: две «Наташи» — две ветки, а не одна (тогда заголовком — полное имя, opts.full).
+  // Уровень «Зачем» (до 13.10.2026 — «проекты»): цель, проект клиента (под клиентом) или проект и раздел.
   if (lv === 'project') {
-    const pl = placeOf(t);
-    const p = pl && pl.p;
-    if (pl && pl.g) return ['5' + pl.g.title + '\u0001' + pl.g.id, pl.g.title, { sub: 'цель в дереве', lead: () => icon('target', 16), find: [pl.g.title, 'цель'] }];
-    return p ? ['1' + p.name + '\u0001' + p.id, p.name, { id: p.id, href: '#/p/' + p.id, lead: () => dot(p.id), find: projectKeys(p) }]
-      : ['9', 'Без проекта', { lead: () => icon('inbox', 16), find: ['без проекта'] }];
+    const z = zachemOf(t);
+    if (!z) return ['9', 'Без «Зачем»', { lead: () => icon('inbox', 16), find: ['без зачем', 'без проекта'] }];
+    if (z.kind === 'goal') return ['3' + z.title + '\u0001' + z.id, z.title, { note: z.path.join(' › '), lead: () => icon('target', 16), find: [z.title, ...z.path] }];
+    if (z.kind === 'deal') return ['2' + (z.c ? z.c.name : '') + '\u0001' + z.title + '\u0001' + z.id, z.title,
+      { id: z.id, href: '#/d/' + z.id, note: z.c ? z.c.name : '', lead: () => el('span', { class: 'st-dot st-' + z.d.stage }), find: [z.title, z.c && z.c.name, ...renamedOf(z.id)].filter(Boolean) }];
+    return ['1' + z.title + '\u0001' + z.id, z.title, { id: z.id, href: '#/p/' + z.id, lead: () => dot(z.id), find: [...projectKeys(z.p), ...renamedOf(z.id)] }];
   }
   if (lv === 'person') {
     const p = person(t.person_id);
@@ -1581,25 +1589,20 @@ function taskRow(t, by, extra, opt = {}) {
   else if (due && !grouped_('date')) chips.push(m(due.cls, due.text));
   const rem = remindChip(t);
   if (rem) chips.push(m('remind', rem));
+  // «Зачем» — одно (13.10.2026): цель, проект клиента или проект; нет — не тупик, а вопрос: щелчок — выбрать.
+  const z = zachemOf(t);
   if (opt.compact) {
-    if (p) chips.push(el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, p.name));
-  } else if (!grouped_('project') && !['project', 'deal'].includes(route().kind)) {
-    // Без проекта — не тупик, а вопрос: щелчок — выбрать проект.
-    const pl = p ? null : placeOf(t);
-    if (p) chips.push(el('a', { class: 'm link', href: '#/p/' + p.id, onclick: stop }, p.name));
-    else if (pl && pl.p) chips.push(el('a', { class: 'm link', href: '#/p/' + pl.p.id, onclick: stop, title: 'Проект цели — сам' }, pl.p.name));
-    else if (!pl) chips.push(el('button', { class: 'm noproj', title: 'Выбрать проект', onclick: (e) => { stop(e); projectPop(e.currentTarget, [t.id]); } }, 'без проекта'));
+    if (z) chips.push(zachemLink(z));
+  } else if (!grouped_('project') && !(opt.tree && z && z.kind === 'goal')
+    && !(route().kind === 'deal' && z && z.kind === 'deal') && !(route().kind === 'project' && z && z.kind === 'project')) {
+    if (z) chips.push(zachemLink(z));
+    else if (!t.goal) chips.push(el('button', { class: 'm noproj', title: 'Ради чего это дело — выбрать «Зачем»', onclick: (e) => { stop(e); zachemPop(e.currentTarget, [t.id]); } }, 'без «Зачем»'));
   }
-  const dl = !opt.compact && t.deal_id ? S.deals.get(t.deal_id) : null;
-  if (dl && !grouped_('deal') && route().kind !== 'deal') chips.push(el('a', { class: 'm link', href: '#/d/' + dl.id, onclick: stop }, dl.name));
   // Круг жизни: направления (своё — ярче, наследованное — тише), «Зачем» — к цели; без направления — вопрос.
   if (krugOn() && isMine(t) && !opt.compact) {
     const ks = dirsOf(t);
     if (ks.length && !grouped_('dir')) chips.push(m('dir' + ((t.directions || []).length ? '' : ' inherited'), ks.map(dirName).join(', ')));
     else if (!ks.length && isOpen(t)) chips.push(el('button', { class: 'm noproj nodir', title: 'Выбрать цель или направление', onclick: (e) => { stop(e); dirPop(e.currentTarget, t); } }, 'без направления'));
-    const goal = t.why_id && !opt.tree ? S.tasks.get(t.why_id) : null;
-    if (goal) chips.push(el('a', { class: 'm link why', href: '#', title: 'Зачем: ' + goal.title, onclick: (e) => { stop(e); e.preventDefault(); openCard(goal.id); } },
-      'зачем: ' + (goal.title.length > 34 ? goal.title.slice(0, 33) + '…' : goal.title)));
     const steps = isOpen(t) ? stepsOf(t.id).length : 0;
     if (t.goal) chips.push(m('goal', t.rhythm ? 'практика · ' + t.rhythm : steps ? 'цель · ' + plural(steps, 'шаг', 'шага', 'шагов') : 'цель'));
     else if (steps) chips.push(m('goal', 'цель · ' + plural(steps, 'шаг', 'шага', 'шагов')));
@@ -2037,14 +2040,6 @@ function grpPop(anchor, ids) {
   } }, label)));
 }
 
-function projectPop(anchor, ids) {
-  setTimeout(() => {
-    const live = [...S.projects.values()].filter((p) => !p.archived_at).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-    popAt(anchor, [el('button', { onclick: () => { closePop(); setFields(ids, { project_id: null, deal_id: null }, 'Без проекта'); } }, 'Без проекта'),
-      ...live.map((p) => el('button', { onclick: () => { closePop(); setFields(ids, { project_id: p.id, deal_id: null }, 'В проект ' + p.name); } }, p.name))]);
-  }, 0);
-}
-
 function togglePick(id, range) {
   if (range && S.lastPick && S.order.includes(S.lastPick)) {
     const a = S.order.indexOf(S.lastPick), b = S.order.indexOf(id);
@@ -2063,7 +2058,7 @@ function renderBulk() {
     el('b', {}, plural(ids.length, 'дело', 'дела', 'дел')),
     el('button', { onclick: () => toggleDone(ids.map((id) => S.tasks.get(id))) }, 'Сделано'),
     el('button', { onclick: (e) => reschedulePop(e.currentTarget, ids) }, 'Перенести'),
-    el('button', { onclick: (e) => projectPop(e.currentTarget, ids) }, 'В проект'),
+    el('button', { onclick: (e) => zachemPop(e.currentTarget, ids) }, 'Зачем…'),
     el('button', { onclick: () => setFields(ids, { due_date: S.today }, 'На сегодня') }, 'На сегодня'),
     el('button', { onclick: (e) => grpPop(e.currentTarget, ids) }, 'Группа'),
     el('button', {
@@ -2424,7 +2419,7 @@ function pageScope(defaults = {}) {
   const p = r.kind === 'project' ? project(r.id) : null, h = r.kind === 'person' ? person(r.id) : null;
   const dl = r.kind === 'deal' ? S.deals.get(r.id) : null;
   const one = r.kind === 'new' && r.batch ? pendingSugs().find((s) => s.batch_ref === r.batch) : null;
-  const title = p ? `${KIND[p.kind] || 'Проект'}: ${p.name}` : h ? `Человек: ${h.name}` : dl ? `Сделка: ${dl.name}`
+  const title = p ? `${KIND[p.kind] || 'Проект'}: ${p.name}` : h ? `Человек: ${h.name}` : dl ? `Зачем клиента (сделка): ${dl.name}`
     : r.kind === 'search' ? `Поиск: ${r.q}`
       : r.kind === 'new' && r.batch ? `Новое: одна пачка — ${one?.batch_title || r.batch}`
         : (VIEWS[r.kind] || CRM_VIEWS[r.kind] || { title: 'Дела' }).title;
@@ -2790,7 +2785,7 @@ function renderPerson(id) {
       quickAdd({ person_id: id }, { label: `с человеком «${p.name}»`,
         placeholder: '«он теперь CFO в Бете», «созвонились, пришлёт модель в пятницу», «жду от него договор»' }),
       info.length ? el('div', { class: 'person-info' }, info) : null,
-      crmOn() && personDeals(id).length ? el('div', { class: 'pchips projs' }, el('span', { class: 'pc-label' }, 'Проекты'),
+      crmOn() && personDeals(id).length ? el('div', { class: 'pchips projs' }, el('span', { class: 'pc-label' }, 'Зачем'),
         personDeals(id).map(({ d, role }) => dealChip(d, role))) : null,
       secs.map(([t, items]) => (items.length ? groupBox(t, items.sort(sortTasks)) : null)),
       secs.every(([, i]) => !i.length) ? el('div', { class: 'empty' }, 'Открытых дел с ним нет.') : null,
@@ -2803,14 +2798,15 @@ const SEARCH_SHOWN = 8;
 function renderSearch(q) {
   const words = norm(q).split(/\s+/).filter(Boolean);
   const hit = (...parts) => words.length > 0 && words.every((w) => norm(parts.flat().filter(Boolean).join(' ')).includes(w));
-  const projs = [...S.projects.values()].filter((p) => hit(p.name, p.aliases || [], p.note))
+  const projs = [...S.projects.values()].filter((p) => hit(p.name, p.aliases || [], p.note, renamedOf(p.id)))
     .sort((a, b) => !!a.archived_at - !!b.archived_at || a.name.localeCompare(b.name, 'ru'));
-  const deals = [...S.deals.values()].filter((d) => hit(d.name, project(d.project_id)?.name, d.deal_type))
+  const deals = [...S.deals.values()].filter((d) => hit(d.name, project(d.project_id)?.name, d.deal_type, renamedOf(d.id)))
     .sort((a, b) => (a.stage === 'archive') - (b.stage === 'archive') || a.name.localeCompare(b.name, 'ru'));
   const ppl = livePeople().filter((x) => !x.merged_into && hit(x.name, x.short, x.aliases || [], x.role, orgLabel(x.org_id)?.name))
     .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   const tasks = all().filter((t) => (S.showDone || isOpen(t)) && hit(t.title, t.notes, project(t.project_id)?.name,
-    personName(person(t.person_id)), t.deal_id && S.deals.get(t.deal_id)?.name, t.labels || []));
+    personName(person(t.person_id)), t.deal_id && S.deals.get(t.deal_id)?.name, t.labels || [], renamedOf(t.id),
+    t.why_id && S.tasks.get(t.why_id)?.title, t.deal_id && renamedOf(t.deal_id)));
   const openBy = (pid) => all().filter((t) => t.project_id === pid && isOpen(t)).length;
   const part = (title, list, row) => (list.length ? el('div', { class: 'group' }, el('h2', {}, title, el('span', { class: 'n' }, list.length)),
     list.slice(0, SEARCH_SHOWN).map(row),
@@ -2819,13 +2815,13 @@ function renderSearch(q) {
   box.addEventListener('input', () => liveSearch(box.value));
   const total = projs.length + deals.length + ppl.length + tasks.length;
   return [head(q ? 'Поиск: ' + q : 'Поиск', words.length ? [plural(total, 'находка', 'находки', 'находок'),
-    deals.length ? plural(deals.length, 'проект', 'проекта', 'проектов') : null, ppl.length ? plural(ppl.length, 'человек', 'человека', 'человек') : null,
+    deals.length ? deals.length + ' «Зачем»' : null, ppl.length ? plural(ppl.length, 'человек', 'человека', 'человек') : null,
     plural(tasks.length, 'дело', 'дела', 'дел')] : ['набирай в поле «Поиск» слева — результаты появляются сразу']),
   el('div', { class: 'body' }, box,
     part('Клиенты и разделы', projs, (p) => el('div', { class: 'crow', onclick: () => go('#/p/' + p.id) }, dot(p.id),
       el('div', { class: 'main' }, el('div', { class: 'title' }, p.name, p.archived_at ? el('span', { class: 'faint' }, ' · архив') : null),
         el('div', { class: 'chips' }, el('span', {}, KIND[p.kind] || p.kind), openBy(p.id) ? el('span', {}, plural(openBy(p.id), 'открытое дело', 'открытых дела', 'открытых дел')) : null)))),
-    part('Проекты клиентов', deals, (d) => el('div', { class: 'crow', onclick: () => openDeal(d.id) }, el('span', { class: 'st-dot st-' + d.stage }),
+    part('«Зачем» клиентов', deals, (d) => el('div', { class: 'crow', onclick: () => openDeal(d.id) }, el('span', { class: 'st-dot st-' + d.stage }),
       el('div', { class: 'main' }, el('div', { class: 'title' }, d.name),
         el('div', { class: 'chips' }, el('span', {}, stageWord(d)), project(d.project_id) ? el('span', {}, project(d.project_id).name) : null)))),
     part('Люди', ppl, (x) => el('div', { class: 'crow person-row', onclick: () => go('#/h/' + x.id) }, avatar(x),
@@ -3323,19 +3319,71 @@ function whenRow(src, t) {
     example: 'Можно словами: в пятницу вечером · через 2 часа' + place + ' · «нет» — убрать' })];
 }
 
-/** Проект дела для глаз (владелец 13.10.2026: «Проект» — сам): проект ЗФ, если дело к нему привязано; иначе — ближайшая
- *  группировка выше в дереве: проект цели, на которой висит дело, или сама цель («Выгрузить выписку» — цель «Бюджет
- *  собирается сам»). Поле project_id не трогаем: цель — не проект ЗФ, и её текст видит только хозяин. */
-function placeOf(t) {
+/** «Зачем» дела (владелец 13.10.2026, заход Г: «проекты и цели у нас одно и то же, и мы путаемся — называть это одним
+ *  большим словом „Зачем“»): ради чего дело — одна строка. Цель в дереве («Зачем» дела, why_id), иначе проект клиента
+ *  (сделка — «Помочь с хеджем» под клиентом), иначе проект или раздел (клиент целиком, ЗФ, Семья). Путь — что над ним:
+ *  направление и цели выше, у проекта клиента — клиент. Данные те же (why_id, deal_id, project_id): телефон, коннектор и
+ *  их контракты не меняются — «Зачем» считается из них. */
+function zachemOf(t) {
   if (!t) return null;
-  const p = project(t.project_id);
-  if (p) return { p };
-  if (!isMine(t) || !t.why_id) return null;
-  const up = upOf(t)[1];
-  if (!up) return null;
-  if (up.kind === 'project') return project(up.id) ? { p: project(up.id), derived: true } : null;
-  return project(up.project_id) ? { p: project(up.project_id), derived: true } : { g: up, derived: true };
+  const g = t.why_id && isMine(t) ? S.tasks.get(t.why_id) : null;
+  if (g) return { kind: 'goal', id: g.id, title: g.title, path: goalPath(g).split(' › ').slice(0, -1), g };
+  const d = !t.goal && t.deal_id ? S.deals.get(t.deal_id) : null;
+  if (d) { const c = project(d.project_id); return { kind: 'deal', id: d.id, title: d.name, path: c ? [c.name] : [], d, c }; }
+  const p = !t.goal ? project(t.project_id) : null;
+  if (p) {
+    const k = isMine(t) ? S.krug.proj.get(p.id) : null;
+    const pg = k && k.why_id ? S.tasks.get(k.why_id) : null;
+    return { kind: 'project', id: p.id, title: p.name, path: pg ? goalPath(pg).split(' › ') : [], p };
+  }
+  return null;
 }
+/** Открыть сам «Зачем»: цель — карточкой, проект клиента — его страницей, проект — своей. */
+const zachemGo = (z) => (z.kind === 'goal' ? openCard(z.id) : z.kind === 'deal' ? openDeal(z.id) : go('#/p/' + z.id));
+/** «Зачем» ссылкой: в строке дела, крошке карточки. */
+function zachemLink(z, cls = 'm link') {
+  const text = z.kind === 'deal' && z.c && !norm(z.title).startsWith(norm(z.c.name)) ? z.c.name + ' · ' + z.title : z.title;
+  return el('a', { class: cls + (z.kind === 'goal' ? ' why' : ''), href: z.kind === 'deal' ? '#/d/' + z.id : z.kind === 'project' ? '#/p/' + z.id : '#',
+    title: [...z.path, z.title].join(' › '), onclick: (e) => { e.stopPropagation(); if (z.kind === 'goal') { e.preventDefault(); openCard(z.id); } } }, text);
+}
+/** Выбор «Зачем» — один поповер с поиском: цели дерева (с путём), проекты клиентов (под клиентом), проекты и разделы;
+ *  набрал новое — новая цель. Выбрал цель — «Зачем» дела (направление встанет по ней — правило сервера), проект клиента —
+ *  клиент и проект, проект — он; соперник уходит: «Зачем» одно. Цели — только своим делам (Круг личный); у самой цели
+ *  «Зачем» — только цель (цель живёт без проекта). Черновик предложения — без целей: у него их нет. */
+function zachemPop(anchor, ids, { draft = null } = {}) {
+  const list = ids.map((id) => S.tasks.get(id)).filter(Boolean);
+  const mine = !draft && list.length && list.every(isMine) && krugOn();
+  const goalsOnly = list.length && list.every((x) => x.goal);
+  const below = new Set(list.flatMap((x) => [...belowOf(x.id)]));
+  const goals = mine ? all().filter((x) => isOpen(x) && isMine(x) && !below.has(x.id) && !x.no_steps && (x.goal || stepsOf(x.id).length))
+    .map((x) => ({ v: 'g:' + x.id, title: x.title, note: goalPath(x).split(' › ').slice(0, -1).join(' › ') || 'цель', lead: () => icon('target', 16) })) : [];
+  const deals = goalsOnly ? [] : [...S.deals.values()].filter((d) => d.stage !== 'archive' && project(d.project_id))
+    .map((d) => ({ v: 'd:' + d.id, title: d.name, note: project(d.project_id).name + ' · ' + stageWord(d), keys: [project(d.project_id).name, ...renamedOf(d.id)],
+      lead: () => el('span', { class: 'st-dot st-' + d.stage }) }));
+  const projs = goalsOnly ? [] : [...S.projects.values()].filter((p) => !p.archived_at)
+    .map((p) => ({ v: 'p:' + p.id, title: p.name, note: KIND_ONE[p.kind] || '', keys: [...(p.aliases || []), ...renamedOf(p.id)], lead: () => dot(p.id) }));
+  const first = list[0] || draft || {};
+  const z = draft ? zachemOf({ ...draft, why_id: null }) : list.length === 1 ? zachemOf(first) : null;
+  const cur = z ? { goal: 'g:', deal: 'd:', project: 'p:' }[z.kind] + z.id : null;
+  const set = (v) => {
+    if (v == null) return { deal_id: null, project_id: null, ...(mine ? { why_id: null } : {}) };
+    const [k, id] = [v.slice(0, 1), v.slice(2)];
+    if (k === 'g') return { why_id: id, deal_id: null };
+    if (k === 'd') { const d = S.deals.get(id); return { project_id: d.project_id, deal_id: id, ...(mine ? { why_id: null } : {}) }; }
+    return { project_id: id, deal_id: null, ...(mine ? { why_id: null } : {}) };
+  };
+  const word = (v) => (v == null ? 'Без «Зачем»' : 'Зачем: ' + ([...goals, ...deals, ...projs].find((x) => x.v === v) || {}).title);
+  choicePop(anchor, { title: 'Зачем', placeholder: mine ? 'Ради чего это? Найти или написать новое' : 'Найти…',
+    items: [...goals, ...deals, ...projs], current: cur, none: 'Без «Зачем»',
+    create: mine ? (title) => setFields(ids, { why_title: title, deal_id: null }, 'Новая цель: ' + title) : null,
+    onPick: (v) => {
+      if (draft) { const s = set(v); delete s.why_id; Object.assign(draft, s); render(); return; }
+      setFields(ids, set(v), word(v));
+    } });
+}
+/** Старые названия «Зачем» (переименование 13.10.2026, Свод zachem.renamed) — чтобы поиск по старому имени находил. */
+const renamedOf = (id) => (S.renamed && S.renamed.get(id)) || [];
+
 
 /** Claude в карточке дела (13.10.2026): строка «Что поправить в этом деле?» — текстом и голосом, как строка страницы, но
  *  Claude видит только это дело (поля, журнал, место в дереве, проект и клиента). «Кстати» — та же строка вдогонку:
@@ -3446,8 +3494,8 @@ function placeBlock(t) {
 
 /** Круг в карточке дела: «Зачем», цель или дело, ритм практики, направления (метки). Строки «Шаги» и подсказки
  *  «своих нет — направление по дереву…» больше нет (владелец 13.10.2026): шаги видны в «Месте в дереве», данные целы. */
-function krugProps(t, row) {
-  const own = t.directions || [];
+/** Под «Зачем» — само дело это или цель (узел дерева) и ритм практики. */
+function krugKind(t) {
   const rhythm = el('input', { class: 'rhythm', placeholder: 'ежедневно, 2 раза в неделю…', value: t.rhythm || '' });
   rhythm.addEventListener('change', () => setFields([t.id], { rhythm: rhythm.value.trim() || null }, rhythm.value.trim() ? 'Практика: ' + rhythm.value.trim() : 'Уже не практика'));
   const kindBtn = treeOn() ? el('button', { class: 'chip-btn' + (t.goal ? ' on' : ''),
@@ -3455,11 +3503,12 @@ function krugProps(t, row) {
     onclick: () => {
       if (!t.goal && t.project_id && !confirm('Цель живёт без проекта — её видишь только ты. Убрать дело из проекта и сделать целью?')) return;
       setFields([t.id], { goal: !t.goal }, t.goal ? 'Снова дело' : 'Теперь это цель');
-    } }, t.goal ? 'Цель' : 'Сделать целью') : null;
+    } }, t.goal ? 'Это цель' : 'Сделать целью') : null;
+  return el('div', { class: 'why-row' }, kindBtn, t.goal ? el('label', { class: 'rhythm-l', title: 'Цель с ритмом — практика: повторяется и не закрывается' }, 'Ритм', rhythm) : null);
+}
+function krugProps(t, row) {
+  const own = t.directions || [];
   return [
-    row('Зачем', el('div', { class: 'why-row' },
-      el('button', { class: 'chip-btn', onclick: (e) => whyPop(e.currentTarget, t) }, t.why_id ? 'Поменять цель' : 'Повесить на цель'),
-      kindBtn, t.goal ? el('label', { class: 'rhythm-l', title: 'Цель с ритмом — практика: повторяется и не закрывается' }, 'Ритм', rhythm) : null)),
     row('Направления', dirChips(t, (next) => setFields([t.id], { directions: next })),
       own.length && t.why_id ? el('div', { class: 'hint-line krug-hint' }, 'главное — по цели, остальные — метки (до двух)') : null),
   ];
@@ -3481,14 +3530,6 @@ function renderCard() {
   // Поле сохраняется само при изменении (как в Vikunja); у предложения — по кнопке «Принять».
   const save = (field, value) => { if (t) setFields([t.id], { [field]: value }); else src[field] = value; };
   // Длинные списки — выбором со строкой поиска (как «Показать только»), не системным <select> (владелец 13.10.2026).
-  const live = [...S.projects.values()].filter((p) => !p.archived_at || p.id === src.project_id).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-  const setProject = (v) => { if (t) setFields([t.id], { project_id: v || null, deal_id: null }); else { src.project_id = v || null; src.deal_id = null; render(); } };
-  const openProj = (a) => choicePop(a, { title: 'Проект', items: projectItems(live), current: src.project_id || null, none: 'Без проекта', onPick: setProject });
-  const projSel = choiceBtn(project(src.project_id)?.name || 'Без проекта', openProj, { empty: !src.project_id });
-  const deals = [...S.deals.values()].filter((d) => d.project_id && d.project_id === src.project_id);
-  const dealSel = choiceBtn(S.deals.get(src.deal_id)?.name || '—', (a) => choicePop(a, { title: 'Сделка', current: src.deal_id || null, none: 'Не про сделку',
-    items: deals.map((d) => ({ v: d.id, title: d.name, note: stageWord(d), lead: () => el('span', { class: 'st-dot st-' + d.stage }) })),
-    onPick: (v) => { save('deal_id', v); if (!t) render(); } }), { empty: !src.deal_id });
   const people = [...S.people.values()].filter((p) => !p.archived_at && !p.merged_into).sort((a, b) => personName(a).localeCompare(personName(b), 'ru'));
   const who0 = person(src.person_id);
   const personSel = choiceBtn(who0 ? (who0.short && who0.short !== who0.name ? `${who0.short} — ${who0.name}` : who0.name) : '—', (a) => choicePop(a, {
@@ -3516,22 +3557,22 @@ function renderCard() {
   // Свойства — строка на поле: подпись слева, значение справа и переносится внутри своей строки; тонкая линия — у каждой
   // строки (владелец 13.10.2026: «строки наезжают, разделители пропадают» — была одна сетка на всё, без строк).
   const row = (label, ...value) => el('div', { class: 'prop' }, el('div', { class: 'prop-l' }, label), el('div', { class: 'prop-v' }, value));
-  // «Проект» сам (владелец 13.10.2026): без проекта ЗФ — ближайшая группировка выше в дереве (цель, на которой висит
-  // дело); выбрать проект ЗФ руками можно по-прежнему.
-  const pl = t && !src.project_id ? placeOf(t) : null;
-  const derived = pl && pl.derived ? el('div', { class: 'proj-derived' },
-    pl.g ? el('a', { class: 'link', href: '#', onclick: (e) => { e.preventDefault(); openCard(pl.g.id); } }, pl.g.title)
-      : el('a', { class: 'link', href: '#/p/' + pl.p.id }, pl.p.name),
-    el('span', { class: 'faint' }, pl.g ? 'цель в дереве — проект сам' : 'проект цели — сам')) : null;
+  // «Зачем» — одна строка вместо «Проекта», «Сделки» и цели (владелец 13.10.2026, заход Г): путь сверху тихо, само
+  // «Зачем» — кнопкой выбора с поиском, стрелка — открыть его.
+  const zc = zachemOf(t || { ...src, why_id: null });
+  const zachem = el('div', { class: 'zachem' },
+    zc && zc.path.length ? el('div', { class: 'z-path' }, zc.path.join(' › ')) : null,
+    el('div', { class: 'z-line' },
+      choiceBtn(zc ? zc.title : 'Без «Зачем» — выбрать', (a) => zachemPop(a, t ? [t.id] : [], { draft: t ? null : src }), { empty: !zc, cls: 'z-pick' }),
+      zc && t ? el('button', { class: 'icon-btn z-go', title: 'Открыть «Зачем»', 'aria-label': 'Открыть «Зачем»', onclick: () => zachemGo(zc) }, icon('chevron', 16)) : null),
+    t && isMine(t) && krugOn() ? krugKind(t) : null);
   // «Напомнить ему» — день словами («в пятницу», «через неделю») тем же разбором, что «Когда»: без поля даты браузера.
   const nudge = () => [src.nudge_on ? el('div', { class: 'when-now' }, 'Напомнить: ' + (dueLabel({ due_date: src.nudge_on, status: 'open' }) || {}).text) : null,
     whenLine((t ? t.id : 'draft') + ':nudge', { dateOnly: true,
       apply: async (set) => { if ('due_date' in set) save('nudge_on', set.due_date); if (!t) render(); },
       hints: src.nudge_on ? [el('button', { class: 'chip-btn', onclick: () => { save('nudge_on', null); if (!t) render(); } }, 'не напоминать')] : [] })];
   const props = el('div', { class: 'props' },
-    row('Проект', t && t.goal ? el('span', { class: 'faint' }, 'цель живёт без проекта — её видишь только ты')
-      : derived ? [derived, choiceBtn('Выбрать проект ЗФ', openProj, { empty: true })] : projSel),
-    deals.length ? row('Сделка', dealSel) : null,
+    row('Зачем', zachem),
     row('Группа', grpPick),
     row({ owed: 'Кто ждёт', check: 'От кого жду' }[g] || 'Человек', personSel),
     row('Когда', ...whenRow(src, t)),
@@ -3541,11 +3582,8 @@ function renderCard() {
 
   // Карточка (общий вид Ковчега): сверху проект ссылкой, название, ряд действий («На сегодня» или «На завтра» и
   // «Сделано» акцентом), свойства — строками через тонкую линию: подпись слева, поле справа.
-  const cp = project(src.project_id);
-  const cpl = !cp && t ? placeOf(t) : null;
-  const crumb = cp ? el('a', { class: 'crumb', href: '#/p/' + cp.id }, cp.name)
-    : cpl && cpl.g ? el('a', { class: 'crumb', href: '#', title: 'Цель в дереве, на которой висит дело', onclick: (e) => { e.preventDefault(); openCard(cpl.g.id); } }, cpl.g.title)
-      : cpl ? el('a', { class: 'crumb', href: '#/p/' + cpl.p.id }, cpl.p.name) : el('span', { class: 'crumb' }, 'Без проекта');
+  const crumb = zc ? el('a', { class: 'crumb', href: '#', title: 'Зачем: ' + [...zc.path, zc.title].join(' › '), onclick: (e) => { e.preventDefault(); zachemGo(zc); } },
+    [...zc.path.slice(-1), zc.title].join(' › ')) : el('span', { class: 'crumb' }, 'Без «Зачем»');
   const acts = t ? el('div', { class: 'card-acts' },
     isOpen(t) ? [
       el('button', { class: 'btn' + (inToday(t) ? ' on' : ''), title: inToday(t) ? 'Не сегодня — на завтра' : 'На сегодня', onclick: () => toggleToday(t) },
@@ -3800,7 +3838,7 @@ function renderClients() {
   const tb = el('div', { class: 'toolbar' }, search,
     el('button', { class: 'chip-btn' + (allOpen ? ' on' : ''), onclick: () => {
       rows.forEach((c) => (allOpen ? S.clientOpen.delete(c.id) : S.clientOpen.add(c.id))); LS.set('clientOpen', [...S.clientOpen]); render();
-    } }, allOpen ? 'Свернуть проекты' : 'Раскрыть проекты'),
+    } }, allOpen ? 'Свернуть «Зачем»' : 'Раскрыть «Зачем»'),
     el('button', { class: 'chip-btn' + (S.clientRel ? ' on' : ''), title: 'Уже не лид, но и не сделка: работали, держим связь',
       onclick: () => { S.clientRel = !S.clientRel; render(); } }, 'Поддержание отношений'),
     el('button', { class: 'chip-btn' + (S.clientArch ? ' on' : ''), onclick: () => { S.clientArch = !S.clientArch; render(); } }, 'И архив'),
@@ -3827,12 +3865,12 @@ function renderClients() {
     const open = S.clientOpen.has(c.id);
     return el('div', { class: 'cblock' + (open ? ' open' : '') },
       el('div', { class: 'crow', onclick: () => go('#/p/' + c.id) },
-        el('button', { class: 'caret-btn', title: open ? 'Свернуть проекты' : 'Показать проекты', disabled: !deals.length,
+        el('button', { class: 'caret-btn', title: open ? 'Свернуть «Зачем»' : 'Показать «Зачем»', disabled: !deals.length,
           'aria-expanded': open ? 'true' : 'false', onclick: (e) => { e.stopPropagation(); toggle(c.id); } }, deals.length ? icon('chevron', 15) : null),
         el('div', { class: 'main' },
           el('div', { class: 'title' }, c.name, c.org && norm(c.org) !== norm(c.name) ? el('span', { class: 'faint' }, ' · ' + c.org) : null,
             c.archived_at ? el('span', { class: 'faint' }, ' · архив') : null,
-            deals.length ? el('span', { class: 'faint' }, ' · ' + plural(deals.length, 'проект', 'проекта', 'проектов')) : null),
+            deals.length ? el('span', { class: 'faint' }, ' · «Зачем»: ' + deals.length) : null),
           el('div', { class: 'chips' }, bits),
           !open && c.next_task ? el('div', { class: 'next' }, c.next_task.title + (c.next_task.due_date ? ' · ' + D.ddmm(c.next_task.due_date) : ''))
             : (!open && c.live_deals ? el('div', { class: 'next none' }, 'нет следующего дела') : null))),
@@ -4304,9 +4342,9 @@ function renderClientCard(p, { picker, g, items, sub, star }) {
     }));
   const tiles = el('div', { class: 'dlist' }, deals.filter((d) => d.stage !== 'archive' || S.clientArch)
     .map((d) => dealTile({ ...d, project_name: p.name, ...(full.get(d.id) || {}) })),
-  el('button', { class: 'dtile add', onclick: () => newDeal(p.id) }, icon('plus', 14), ' Проект'));
+  el('button', { class: 'dtile add', onclick: () => newDeal(p.id) }, icon('plus', 14), ' Зачем'));
   const archived = deals.length - live.length;
-  const nav = [['about', 'О клиенте'], ['deals', 'Проекты'], ['tasks', 'Дела'], ['timeline', 'Хронология'], money ? ['money', 'Деньги'] : null, ['files', 'Файлы']].filter(Boolean);
+  const nav = [['about', 'О клиенте'], ['deals', 'Зачем'], ['tasks', 'Дела'], ['timeline', 'Хронология'], money ? ['money', 'Деньги'] : null, ['files', 'Файлы']].filter(Boolean);
   const pays = v ? v.payments || [] : [];
   return [head(p.name, sub, star, nav),
     el('div', { class: 'body card-body' },
@@ -4316,7 +4354,7 @@ function renderClientCard(p, { picker, g, items, sub, star }) {
         aboutBox(p.note, 'Кто они, чем занимаются, как пришли, о чём договорённость. Можно сказать словами в строке Claude.', (x) => projectSet(p, { note: x }, 'Описание сохранено')),
         status),
       sides,
-      sec('deals', 'Проекты', [secN(live.length), archived ? el('button', { class: 'link-btn', onclick: () => { S.clientArch = !S.clientArch; render(); } },
+      sec('deals', 'Зачем', [secN(live.length), archived ? el('button', { class: 'link-btn', onclick: () => { S.clientArch = !S.clientArch; render(); } },
         S.clientArch ? 'скрыть архив' : `и в архиве: ${archived}`) : null], tiles),
       sec('tasks', 'Дела', secN(items.filter(isOpen).length), el('div', { class: 'toolbar' }, picker, doneToggle()),
         items.length ? grouped(items, g) : el('div', { class: 'empty' }, 'Дел нет. Следующий шаг — скажи в строке Claude.')),

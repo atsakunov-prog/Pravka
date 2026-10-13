@@ -36,6 +36,7 @@
    "dict.main": "словарь Правки (JSON: записи как в DictionaryStore). Пишут телефон (обучение, правка одного слова) и ночной разбор — с base_rev; читают телефон, встречи (вместо заводского seed), разбор дел ({DICT}).",
    "rules.pravka": "правила Правки (RulesStore). Пишет телефон, читает телефон.",
    "models.routes": "модель и усилие по дорогам телефона (ModelRoutes): {route: {model, effort}}. Пишет телефон из «Моделей», читает телефон.",
+   "zachem.renamed": "«Зачем» по-человечески (13.10.2026, pravka_dela/zachem.py): список переименований [{kind: deal | goal, id, was, now, at}] — было и стало. Пишет claude (zachem apply / rollback), читает веб (поиск находит и по старому названию) и rollback (вернуть как было).",
    "models.dela": "модель и глубина по дорогам Claude в Делах, которые решает владелец, а не «Настройки» человека: {task: {model, effort}, when: {model, effort}} — task: Claude в карточке дела и «Кстати», when: «Когда», что не понял свой разбор. model — claude-opus-5-5, claude-sonnet-5-5 (или opus, sonnet), effort — low, medium, high; чужое слово — заводское (llm.ROUTES: task — Opus low, when — Sonnet low). Пишет claude по слову владельца, читает сервер Дел (раз в 5 минут).",
    "claude.prices": "цены Claude, $ за миллион: {model: {in, out, cache_write_5m, cache_write_1h, cache_read}}. Пишет claude по C:\\Bot\\README.md §5.1, читают телефон и службы компа.",
    "people.team": "кто есть кто в команде и семье для промптов ({TEAM}): текст. Пишет claude/web, читают встречи, дайджест, «Деньги», промпты телефона.",

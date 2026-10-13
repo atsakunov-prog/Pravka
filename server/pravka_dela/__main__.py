@@ -16,6 +16,7 @@
   svod     Свод: list, get <ключ>, set <ключ> --file (промпты, словарь, правила — одна правда)
   krug-seed  Круг жизни: направления и принципы из файла владельца в Свод, направления проектам
   meetings  встречи: что с разбором; rename [--all | --ref N] — разобрать заново (замки владельца остаются)
+  zachem   «Зачем» по-человечески: propose [--limit N] [--now] --out файл; apply --file файл; rollback
 """
 
 from __future__ import annotations
@@ -413,6 +414,28 @@ def cmd_meetings(args) -> int:
     return 0
 
 
+def cmd_zachem(args) -> int:
+    """«Зачем» по-человечески (13.10.2026, zachem.py): предложения Claude — в файл, применить файл, вернуть как было.
+    Перед apply — своя копия базы (правило 9): pravka-before-zachem-rename.dump."""
+    from . import zachem
+
+    cfg = config_mod.load(args.env)
+    if args.action == "propose":
+        out = zachem.propose(cfg.db_url, args.user, cfg.anthropic_key, cfg.claude_proxy, limit=args.limit, batch=not args.now)
+        Path(args.out).write_text(json.dumps(out, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+        print(f"посмотрел {out.get('seen', 0)}, предлагаю переименовать {len(out['items'])}, ${out['usd']:.4f} → {args.out}")
+        for x in out["items"]:
+            print(f"  {x.get('client', 'цель') + ': ' if x['kind'] == 'deal' else 'цель: '}{x['was']} → {x['now']}")
+        return 0
+    if args.action == "apply":
+        data = json.loads(Path(args.file).read_text(encoding="utf-8"))
+        out = zachem.apply(cfg.db_url, args.user, data["items"])
+    else:
+        out = zachem.rollback(cfg.db_url, args.user)
+    print(f"переименовано: {len(out['done'])}" + (f"; не вышло: {'; '.join(out['errors'])}" if out["errors"] else ""))
+    return 0 if not out["errors"] else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="pravka_dela", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--env", help=f"файл секретов Дел (с завода {config_mod.DEFAULT_ENV_FILE})")
@@ -510,6 +533,14 @@ def main(argv: list[str] | None = None) -> int:
     mt.add_argument("--all", action="store_true", help="rename: все встречи (замки владельца остаются)")
     mt.add_argument("--ref", action="append", help="rename: номер встречи у службы (можно несколько)")
     mt.set_defaults(fn=cmd_meetings)
+    zc = sub.add_parser("zachem", help="«Зачем» по-человечески: предложить, применить, вернуть")
+    zc.add_argument("action", choices=["propose", "apply", "rollback"])
+    zc.add_argument("--user", default="sasha")
+    zc.add_argument("--limit", type=int, help="propose: только первые N (проба на малом)")
+    zc.add_argument("--now", action="store_true", help="propose: сразу, а не пачкой (дороже вдвое)")
+    zc.add_argument("--out", default="zachem-propose.json", help="propose: куда положить предложения")
+    zc.add_argument("--file", help="apply: файл предложений (можно поправить руками)")
+    zc.set_defaults(fn=cmd_zachem)
     ks = sub.add_parser("krug-seed", help="Круг жизни: направления и принципы из файла владельца")
     ks.add_argument("--file", required=True, help="seed.json владельца (на компе, не в репозитории)")
     ks.add_argument("--user", default="sasha")
