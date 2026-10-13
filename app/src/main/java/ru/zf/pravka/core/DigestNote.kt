@@ -49,6 +49,15 @@ data class DigestNote(
         }
     }
 
+    /**
+     * Первые слова сводки — свёрнутая строка «Раньше»: из пунктов, без заголовков
+     * разделов («Ждут тебя» в каждой второй сводке — не то, по чему их различают).
+     */
+    fun preview(max: Int = PREVIEW_MAX): String {
+        val line = blocks().filter { !it.heading }.joinToString(" · ") { b -> listOf(b.lead, b.text).filter { it.isNotBlank() }.joinToString(" ") }
+        return if (line.length <= max) line else line.take(max).trimEnd().trimEnd(',', ';', ':', '·').trimEnd() + "…"
+    }
+
     /** «чатов 12 · сообщений 148» — чего нет, то не пишется. */
     val counts: String
         get() = listOfNotNull(chats?.let { "чатов $it" }, msgs?.let { "сообщений $it" }).joinToString(" · ")
@@ -59,6 +68,25 @@ data class DigestNote(
 
         /** Флаг сервера: дайджест он хранит (`features`). */
         const val FEATURE = "digest"
+
+        /** «Раньше» у раскрытой карточки — вид сервера за двое суток (`docs/digest-phone.md`, п. 2). */
+        const val EARLIER_PATH = "digest?days=2&limit=20"
+
+        /** Сколько знаков первых слов у свёрнутой строки «Раньше». */
+        const val PREVIEW_MAX = 90
+
+        /**
+         * Ответ вида `digest` (`{"last": …, "items": [свежие сверху], "days": 2}`) → «Раньше»:
+         * сводки окна без той, что уже на карточке ([currentId]); кривые — мимо. Порядок —
+         * как у сервера (свежие сверху), на всякий случай ещё и по концу окна.
+         */
+        fun earlier(resp: JSONObject, currentId: String): List<DigestNote> {
+            val items = resp.optJSONArray("items") ?: JSONArray()
+            return (0 until items.length()).mapNotNull { i -> items.optJSONObject(i)?.let(::parse) }
+                .filter { it.id != currentId }
+                .distinctBy { it.id }
+                .sortedByDescending { it.at }
+        }
 
         /**
          * «Кто (чат)» — по тому же правилу, что сервер (`digest.where_of`): чат не

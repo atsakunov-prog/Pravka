@@ -277,6 +277,34 @@ object DelaViews {
         }
     }
 
+    // ------------------------------------------------------------ «Новое» одной пачкой
+
+    /*
+     * Одна пачка «Нового» (`renderNew(batch)` веба, `#/new/<batch_ref>`; доводка 5.0, 14.10.2026):
+     * «Открыть «Новое»» у дайджеста на «Сегодня» ведёт к пачке ЭТОЙ сводки (`dela.batch` —
+     * тот же `batch_ref`, что у предложений из неё), а не во всё «Новое». Правило — как в вебе:
+     * вопросы пачки, все открытые дела, заведённые из её предложений (без окна в три дня),
+     * сделанное само по ней за год.
+     */
+
+    /** «Подскажи» пачки [batch] — в том же порядке, что [asks]. */
+    fun asksOfBatch(s: Dela.Snapshot, me: String, batch: String): List<Dela.Suggestion> =
+        asks(s, me).filter { it.batchRef == batch }
+
+    /** «Поставил» пачки: открытые дела, заведённые из её предложений, свежие сверху. */
+    fun feedOfBatch(s: Dela.Snapshot, batch: String): List<Dela.Task> {
+        val from = sugByTask(s)
+        return s.tasks.values.filter { it.open && from[it.id]?.batchRef == batch }.sortedByDescending { ms(it.createdAt) }
+    }
+
+    /** «Сделано само» пачки — за год, как в вебе: пачка из старой сводки тоже открывается целиком. */
+    fun autoOfBatch(s: Dela.Snapshot, me: String, batch: String, now: Long): List<Dela.Suggestion> =
+        Dela.autoDone(s, me, now, days = 365).filter { it.batchRef == batch }
+
+    /** Подпись пачки: название из её предложений, нет — сам `batch_ref`. */
+    fun batchTitle(s: Dela.Snapshot, batch: String): String =
+        s.suggestions.values.firstOrNull { it.batchRef == batch && it.batchTitle.isNotBlank() }?.batchTitle ?: batch
+
     private fun byName(n: String, vararg names: String): Boolean {
         val key = Dela.norm(n) ?: return false
         return key.isNotBlank() && names.any { it.isNotBlank() && Dela.norm(it) == key }

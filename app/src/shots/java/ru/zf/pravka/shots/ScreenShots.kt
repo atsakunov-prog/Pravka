@@ -799,7 +799,11 @@ class ScreenShots {
         if (tap(c, "ощ.")) shot(c, "$prefix-t5-$theme-1-weather")
         close(c)
         c = launch(null)
-        if (tap(c, "раскрыть")) shot(c, "$prefix-t5-$theme-2-digest")
+        if (tap(c, "раскрыть")) {
+            shot(c, "$prefix-t5-$theme-2-digest")
+            // Доводка 5.0: «Открыть «Новое»» — вкладка Дел на пачке этой сводки, «Всё «Новое»» сверху.
+            if (tap(c, "Открыть «Новое»")) shot(c, "$prefix-t5-$theme-4-digest-batch")
+        }
         close(c)
         if (prefix == "outer") {
             RuntimeEnvironment.setQualifiers(OUTER_TALL)

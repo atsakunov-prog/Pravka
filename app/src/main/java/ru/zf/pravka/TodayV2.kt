@@ -124,6 +124,8 @@ internal class TodayV2Actions(
     val accept: (Dela.Suggestion) -> Unit,
     val reject: (Dela.Suggestion, String) -> Unit,
     val stop: () -> Unit,
+    /** «Раньше» у дайджеста: сводки за двое суток без [currentId]; нет сети или старый сервер — исключение. */
+    val earlier: suspend (currentId: String) -> List<DigestNote>,
     val shabbat: () -> Unit,
     val lenta: (Lenta.Row) -> Unit,
 )
@@ -227,7 +229,7 @@ private fun FoldedBody(c: TodayCards, modifier: Modifier) {
         NowCard(c, wide = false)
         c.weather?.takeIf { it.ahead.isNotEmpty() || it.hours.isNotEmpty() }?.let { WeatherCardV2(it, c.weatherOpen, c.onWeather) }
         if (c.data.dela) NowTasksCard(c, wide = false)
-        c.digest?.let { DigestCard(it, c.digestOpen, c.onDigest, onNew = { c.nav.mode(Tab.TODOIST) }) }
+        c.digest?.let { DigestCard(it, c.digestOpen, c.onDigest, onNew = { digestNew(c, it) }, onEarlier = c.act.earlier) }
         if (c.data.dela) NewCard(c, wide = false)
     }
 }
@@ -255,7 +257,7 @@ private fun WideBody(c: TodayCards, modifier: Modifier) {
         ) {
             c.weather?.takeIf { it.ahead.isNotEmpty() || it.hours.isNotEmpty() }?.let { WeatherCardV2(it, c.weatherOpen, c.onWeather) }
             if (c.data.dela) NowTasksCard(c, wide = true)
-            c.digest?.let { DigestCard(it, c.digestOpen, c.onDigest, onNew = { c.nav.mode(Tab.TODOIST) }) }
+            c.digest?.let { DigestCard(it, c.digestOpen, c.onDigest, onNew = { digestNew(c, it) }, onEarlier = c.act.earlier) }
             if (c.data.dela) NewCard(c, wide = true)
             TodayAgendaCard(c)
         }
@@ -447,12 +449,24 @@ private fun NowTasksCard(c: TodayCards, wide: Boolean) {
 
 // ---- дайджест ----
 
+/** «Открыть «Новое»» — к пачке этой сводки (`dela.batch`), а не во всё «Новое»; пачки нет — вкладка Дел. */
+private fun digestNew(c: TodayCards, d: DigestNote) {
+    if (d.batch.isNotBlank()) c.nav.delaBatch(d.batch) else c.nav.mode(Tab.TODOIST)
+}
+
 /**
  * Последний дайджест — того же размера, что соседние карточки, растворяется
- * книзу; нажатие раскрывает целиком (`.dg`, `.dgb` холста).
+ * книзу; нажатие раскрывает целиком (`.dg`, `.dgb` холста). Раскрытая — ещё
+ * «Раньше»: сводки за двое суток видом сервера, по запросу при раскрытии.
  */
 @Composable
-private fun DigestCard(d: DigestNote, open: Boolean, onToggle: () -> Unit, onNew: () -> Unit) {
+private fun DigestCard(
+    d: DigestNote,
+    open: Boolean,
+    onToggle: () -> Unit,
+    onNew: () -> Unit,
+    onEarlier: suspend (String) -> List<DigestNote>,
+) {
     val t = LocalPravkaType.current
     PaperCard {
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(KvShape.Control)).clickable(onClickLabel = if (open) "свернуть дайджест" else "раскрыть дайджест", onClick = onToggle)) {
@@ -468,26 +482,7 @@ private fun DigestCard(d: DigestNote, open: Boolean, onToggle: () -> Unit, onNew
                     .fillMaxWidth()
                     .then(if (open) Modifier else Modifier.heightIn(max = 92.dp).bottomFade(bar = 0.dp, fade = 60.dp)),
             ) {
-                for (b in d.blocks()) {
-                    if (b.heading) {
-                        Eyebrow(b.text, Modifier.padding(top = 6.dp))
-                    } else {
-                        Text(
-                            androidx.compose.ui.text.buildAnnotatedString {
-                                if (b.lead.isNotBlank()) {
-                                    pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.SemiBold))
-                                    append(b.lead)
-                                    pop()
-                                    append(" ")
-                                }
-                                append(b.text)
-                            },
-                            style = t.label.copy(fontSize = 13.5.sp, lineHeight = 19.5.sp, fontWeight = FontWeight.Normal),
-                            color = Kv.text,
-                            modifier = Modifier.padding(top = 3.dp),
-                        )
-                    }
-                }
+                DigestBlocks(d)
             }
             // Раскрытая: что ушло в Дела из окна и где это ждёт; текст сводки — в буфер (docs/digest-phone.md, п. 2).
             if (open) {
@@ -497,11 +492,108 @@ private fun DigestCard(d: DigestNote, open: Boolean, onToggle: () -> Unit, onNew
                 val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
                 val context = LocalContext.current
                 Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (d.dela.isNotBlank()) SmallKey(kv("inbox", Glyphs.Note), "Открыть «Новое»", "Открыть «Новое» в Делах", onNew)
+                    if (d.dela.isNotBlank()) SmallKey(kv("inbox", Glyphs.Note), "Открыть «Новое»", "Открыть «Новое» этой сводки в Делах", onNew)
                     if (d.text.isNotBlank()) SmallKey(kv("copy", Glyphs.Copy), "Скопировать", "Скопировать сводку", {
                         clipboard.setText(androidx.compose.ui.text.AnnotatedString(d.text))
                         Feedback.toast(context, "Сводка скопирована")
                     })
+                }
+            }
+        }
+        if (open) DigestEarlier(d, onEarlier)
+    }
+}
+
+/** Тело сводки: разделы надстрочником, пункты — «Кто (чат):» жирным и что. */
+@Composable
+private fun DigestBlocks(d: DigestNote) {
+    val t = LocalPravkaType.current
+    for (b in d.blocks()) {
+        if (b.heading) {
+            Eyebrow(b.text, Modifier.padding(top = 6.dp))
+        } else {
+            Text(
+                androidx.compose.ui.text.buildAnnotatedString {
+                    if (b.lead.isNotBlank()) {
+                        pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.SemiBold))
+                        append(b.lead)
+                        pop()
+                        append(" ")
+                    }
+                    append(b.text)
+                },
+                style = t.label.copy(fontSize = 13.5.sp, lineHeight = 19.5.sp, fontWeight = FontWeight.Normal),
+                color = Kv.text,
+                modifier = Modifier.padding(top = 3.dp),
+            )
+        }
+    }
+}
+
+/**
+ * «Раньше» раскрытого дайджеста (`docs/digest-phone.md`, п. 2): вид сервера
+ * `digest?days=2` — по запросу при раскрытии, только в сети, без кэша (это
+ * чужая переписка: на диск и в журнал не ложится). Сводка — свёрнутой строкой
+ * «подпись · первые слова», нажатие раскрывает её на месте. Без сети — «только
+ * последний»; старый сервер или отказ — причина словами (правило 6).
+ */
+@Composable
+private fun DigestEarlier(d: DigestNote, load: suspend (String) -> List<DigestNote>) {
+    val t = LocalPravkaType.current
+    var list by remember(d.id) { mutableStateOf<List<DigestNote>?>(null) }
+    var error by remember(d.id) { mutableStateOf("") }
+    var opened by remember(d.id) { mutableStateOf<String?>(null) }
+    androidx.compose.runtime.LaunchedEffect(d.id) {
+        try {
+            list = load(d.id)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // Нет кода HTTP — не дошли до сервера: это «без сети», а не поломка.
+            error = if (e is ru.zf.pravka.data.DelaSync.DelaException && e.code > 0) e.message.orEmpty().ifBlank { "не вышло" }
+            else "без сети — только последний"
+        }
+    }
+    Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+        ListLine()
+        Eyebrow("Раньше", Modifier.padding(top = 8.dp))
+        val l = list
+        when {
+            error.isNotEmpty() -> Text(error, style = t.meta, color = Kv.faint, modifier = Modifier.padding(top = 4.dp))
+            l == null -> Text("загружаю сводки за двое суток…", style = t.meta, color = Kv.faint, modifier = Modifier.padding(top = 4.dp))
+            l.isEmpty() -> Text("За двое суток других сводок нет.", style = t.meta, color = Kv.faint, modifier = Modifier.padding(top = 4.dp))
+            else -> l.forEachIndexed { i, x ->
+                if (i > 0) ListLine()
+                val isOpen = opened == x.id
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(KvShape.Control))
+                        .clickable(onClickLabel = if (isOpen) "свернуть сводку" else "раскрыть сводку") { opened = if (isOpen) null else x.id }
+                        .padding(vertical = 6.dp),
+                ) {
+                    Text(
+                        androidx.compose.ui.text.buildAnnotatedString {
+                            pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.SemiBold, color = Kv.text))
+                            append(x.title.ifBlank { Fmt.hm(x.at) })
+                            pop()
+                            if (!isOpen) {
+                                append(" · ")
+                                append(x.preview())
+                            } else if (x.counts.isNotBlank()) {
+                                append(" · ")
+                                append(x.counts)
+                            }
+                        },
+                        style = t.label.copy(fontSize = 13.5.sp, lineHeight = 19.sp, fontWeight = FontWeight.Normal),
+                        color = Kv.faint,
+                        maxLines = if (isOpen) 2 else 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (isOpen) {
+                        DigestBlocks(x)
+                        if (x.dela.isNotBlank()) Text(x.dela, style = t.meta, color = Kv.faint, modifier = Modifier.padding(top = 6.dp))
+                    }
                 }
             }
         }

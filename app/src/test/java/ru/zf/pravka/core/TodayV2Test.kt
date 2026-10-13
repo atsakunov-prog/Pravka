@@ -141,6 +141,33 @@ class TodayV2Test {
     }
 
     @Test
+    fun `раньше — сводки вида без той, что на карточке, свежие сверху, первые слова`() {
+        val f = listOf(java.io.File("../server/contract/dela-digest.json"), java.io.File("server/contract/dela-digest.json")).first { it.isFile }
+        val ex = org.json.JSONObject(f.readText()).getJSONObject("digest_object").getJSONObject("example")
+        fun copy(id: String, ended: String, label: String) =
+            org.json.JSONObject(ex.toString()).put("id", id).put("ended_at", ended).put("label", label)
+        val resp = org.json.JSONObject()
+            .put("last", ex)
+            .put("items", org.json.JSONArray()
+                .put(ex)
+                .put(copy("b", "2026-10-13T11:00:00+03:00", "вт 13.10, 11:00 · ночь"))
+                .put(copy("c", "2026-10-13T15:00:00+03:00", "вт 13.10, 15:00"))
+                .put(org.json.JSONObject().put("label", "без id"))
+                .put(copy("b", "2026-10-13T11:00:00+03:00", "повтор")))
+            .put("days", 2)
+        val list = DigestNote.earlier(resp, ex.getString("id"))
+        assertEquals(listOf("c", "b"), list.map { it.id })
+        assertEquals(listOf("вт 13.10, 15:00", "вт 13.10, 11:00 · ночь"), list.map { it.title })
+        // Пустой ответ (сводок за окно нет) — пустой список, а не сбой.
+        assertTrue(DigestNote.earlier(org.json.JSONObject().put("last", org.json.JSONObject.NULL), "x").isEmpty())
+        // Первые слова — пункты без заголовков разделов, длинное — с многоточием.
+        val p = list.first().preview()
+        assertTrue(p, p.startsWith("Иван Петров: ждёт модель по фондам до пятницы · Олег (Бета Групп · сделка):"))
+        assertTrue(p.length <= DigestNote.PREVIEW_MAX + 1 && p.endsWith("…"))
+        assertEquals("Ничего, что ждёт тебя.", DigestNote(0L, "").copy(parsed = DigestNote.blocksOf(null)).preview())
+    }
+
+    @Test
     fun `кто и чат — как у сервера`() {
         assertEquals("Иван Петров", DigestNote.whereOf("Иван Петров", "Иван Петров"))
         assertEquals("Олег (Бета Групп · сделка)", DigestNote.whereOf("Олег", "Бета Групп · сделка"))

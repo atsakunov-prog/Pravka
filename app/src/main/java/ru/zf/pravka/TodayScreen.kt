@@ -135,6 +135,8 @@ internal class TodayNav(
     val zasechkaEntry: (Long) -> Unit,
     val foodAction: (String) -> Unit,
     val delaTask: (String) -> Unit,
+    /** «Новое» Дел одной пачкой (`batch_ref`): дайджест → «Открыть «Новое»» — к предложениям этой сводки. */
+    val delaBatch: (String) -> Unit = { mode(Tab.TODOIST) },
     /** Страница сервиса Ковчега — внутри приложения или браузером, по настройке (`ServiceWebScreen.kt`). */
     val web: (ru.zf.pravka.core.ServicePage) -> Unit,
 )
@@ -362,6 +364,10 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
                 }
             },
             stop = { app.appScope.launch { runCatching { app.zasechkaEngine.closeOpen() } } },
+            // «Раньше» у дайджеста — вид сервера за двое суток; без кэша и без журнала: это чужая переписка.
+            earlier = { currentId ->
+                ru.zf.pravka.core.DigestNote.earlier(app.delaSync.rawView(ru.zf.pravka.core.DigestNote.EARLIER_PATH), currentId)
+            },
             shabbat = {
                 // Шаббат — страница сервиса на компе (меню Ковчега, значок «candles»), внутри приложения; нет её — словами.
                 val s = services.firstOrNull { it.icon == "candles" }

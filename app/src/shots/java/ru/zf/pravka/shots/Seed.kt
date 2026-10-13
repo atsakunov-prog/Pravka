@@ -429,7 +429,8 @@ internal object Seed {
             sug(
                 "s-1", JSONObject().put("title", "Ольга: ответить про сроки внедрения").put("project_name", "Орион Логистик").put("person_name", "Ольга")
                     .put("ask", "Ответить сразу или после созвона с Ольгой?"),
-                "telegram", "Саша, когда сможете начать? Нам бы до ноября",
+                // Вопрос из окна последнего дайджеста — «Открыть «Новое»» у карточки ведёт к этой пачке (доводка 5.0).
+                "telegram", "Саша, когда сможете начать? Нам бы до ноября", "digest:${day(0)}T1500", "Telegram · сегодня, 15:00",
             ),
             sug(
                 "s-2", JSONObject().put("title", "Бета: пересчитать ковенанты по кредиту").put("project_name", "Бета Холдинг").put("due_date", d(2)),
@@ -442,7 +443,8 @@ internal object Seed {
             sug("s-4", JSONObject().put("title", "Позвонить нотариусу"), "bot", "", status = "expired"),
             // «Сделано само» (задание 5): закрытие и уточнение по свежей встрече, с «как было».
             sug("s-5", JSONObject().put("auto", true), "telegram", "Лицензия продлена до октября 2027", status = "accepted")
-                .put("kind", "close").put("task_id", "t-68").put("reason", "закрыто само").put("batch_title", "Telegram · сегодня")
+                .put("kind", "close").put("task_id", "t-68").put("reason", "закрыто само")
+                .put("batch_ref", "digest:${day(0)}T1500").put("batch_title", "Telegram · сегодня, 15:00")
                 .put("result", JSONObject().put("status", "done").put("was", JSONObject().put("status", "open")).put("comment_id", "c-1")),
             sug("s-6", JSONObject().put("auto", true).put("person_name", "Ольга").put("note", "две версии: с внедрением и без"), "meeting",
                 "Ольга: КП нужно к пятнице, не к концу месяца", "meet-orion", "Встреча с Орионом", status = "accepted")

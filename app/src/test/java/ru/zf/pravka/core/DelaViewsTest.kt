@@ -233,6 +233,38 @@ class DelaViewsTest {
     }
 
     @Test
+    fun `новое одной пачкой — вопросы, поставленное и сделанное само этой сводки, как в вебе`() {
+        val batch = "digest:2026-10-05T0800"
+        val s0 = snap(
+            task("from-batch") { it.copy(createdAt = "2026-09-20T10:00:00+03:00") },
+            task("from-other") { it.copy(createdAt = "2026-10-05T07:00:00+03:00") },
+            task("closed-batch") { it.copy(status = Dela.DONE) },
+        )
+        fun sug(id: String, b: String, status: String = "pending", kind: String = "create", task: String = "", result: String = "", reason: String = "") =
+            Dela.Suggestion(
+                id = id, forUser = "sasha", kind = kind, payload = "{\"title\": \"$id\"}", status = status, batchRef = b,
+                batchTitle = if (b == batch) "Дайджест 08:00" else "", createdAt = "2026-10-05T08:00:00+03:00", taskId = task,
+                resultTaskId = result, reason = reason, decidedAt = if (status == "pending") "" else "2026-10-05T08:10:00+03:00",
+            )
+        val s = s0.copy(suggestions = listOf(
+            sug("ask-1", batch),
+            sug("ask-other", "meeting:42"),
+            sug("made", batch, status = "accepted", result = "from-batch"),
+            sug("made-other", "meeting:42", status = "accepted", result = "from-other"),
+            sug("made-closed", batch, status = "accepted", result = "closed-batch"),
+            sug("auto-close", batch, status = "accepted", kind = "close", task = "from-other", reason = "закрыто само"),
+            sug("auto-other", "", status = "accepted", kind = "close", task = "from-other", reason = "закрыто само"),
+        ).associateBy { it.id })
+        assertEquals(listOf("ask-1"), DelaViews.asksOfBatch(s, "sasha", batch).map { it.id })
+        // Поставленное из пачки — без окна в три дня, только открытое.
+        assertEquals(listOf("from-batch"), DelaViews.feedOfBatch(s, batch).map { it.id })
+        assertEquals(listOf("auto-close"), DelaViews.autoOfBatch(s, "sasha", batch, now).map { it.id })
+        assertEquals("Дайджест 08:00", DelaViews.batchTitle(s, batch))
+        assertEquals("digest:нет-такой", DelaViews.batchTitle(s, "digest:нет-такой"))
+        assertTrue(DelaViews.asksOfBatch(s, "sasha", "digest:нет-такой").isEmpty())
+    }
+
+    @Test
     fun `карточка — откуда дело — наговорка дословно или встреча с цитатой`() {
         assertNull(DelaViews.origin(null))
         val zone = java.time.ZoneId.of("Europe/Moscow")

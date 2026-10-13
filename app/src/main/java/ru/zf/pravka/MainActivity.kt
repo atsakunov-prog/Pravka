@@ -780,6 +780,8 @@ private fun MainScreen(
             zasechkaEntry = { id -> zasechkaEdit = id; openMode(Tab.ZASECHKA) },
             foodAction = { a -> foodActionPending = a; openMode(Tab.FOOD) },
             delaTask = { id -> delaOpen = id; openMode(Tab.TODOIST) },
+            // Дайджест → «Открыть «Новое»»: вкладка Дел сразу на пачке этой сводки (`#/new/<batch_ref>` веба).
+            delaBatch = { ref -> delaNav = NEW_BATCH + ref; openMode(Tab.TODOIST) },
             web = openServicePage,
         )
     }

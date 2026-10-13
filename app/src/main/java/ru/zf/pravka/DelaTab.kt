@@ -129,6 +129,9 @@ import ru.zf.pravka.ui.scrollFade
 // откуда пришло: наговорки с их делами, предложения встреч и Telegram,
 // поставленное другими, дела без проекта, закрытое само с «Понятно».
 private const val NAV_NEW = "new"
+
+/** `openNav` «new/<batch_ref>» — «Новое» одной пачкой (как `#/new/<batch_ref>` веба). */
+internal const val NEW_BATCH = "new/"
 /** Группа «Без проекта» по проектам (ключ `DelaViews.group`): у неё — «Все в проект…». */
 private const val LOOSE_GROUP = "0"
 /** Раздел-фильтр: ключ «f:<id>» (`#/f/<id>` веба). */
@@ -232,8 +235,12 @@ private class NewParts(
     val empty: Boolean get() = asks.isEmpty() && feed.isEmpty() && autoDone.isEmpty()
 
     companion object {
-        fun of(snap: Dela.Snapshot, me: String, sphere: String, now: Long): NewParts =
-            NewParts(DelaViews.asks(snap, me), DelaViews.feed(snap, me, sphere, now), Dela.autoDone(snap, me, now))
+        /** [batch] не пустой — одна пачка (дайджест на «Сегодня» → «Открыть «Новое»», `#/new/<batch_ref>` веба). */
+        fun of(snap: Dela.Snapshot, me: String, sphere: String, now: Long, batch: String = ""): NewParts =
+            if (batch.isNotEmpty()) NewParts(
+                DelaViews.asksOfBatch(snap, me, batch), DelaViews.feedOfBatch(snap, batch), DelaViews.autoOfBatch(snap, me, batch, now),
+            )
+            else NewParts(DelaViews.asks(snap, me), DelaViews.feed(snap, me, sphere, now), Dela.autoDone(snap, me, now))
     }
 }
 
@@ -248,7 +255,10 @@ fun DelaTab(
      * шапки — сфера («Все сферы ⌄», `screens/06`), а сфера живёт здесь.
      */
     header: @Composable (sphere: String, onSphere: () -> Unit) -> Unit = { _, _ -> },
-    /** Раздел, который открыть сразу (меню Ковчега: «CRM» — `crm`). */
+    /**
+     * Раздел, который открыть сразу (меню Ковчега: «CRM» — `crm`). «new/<batch_ref>» — «Новое» одной
+     * пачкой, как `#/new/<batch_ref>` веба (дайджест на «Сегодня» → «Открыть «Новое»»).
+     */
     openNav: String? = null,
     onNavHandled: () -> Unit = {},
 ) {
@@ -274,6 +284,8 @@ fun DelaTab(
     // Боковина v2 на сложенном — шторка поверх экрана: открыта, пока не выбрали раздел, не тапнули мимо или «назад».
     var drawerOpen by rememberSaveable { mutableStateOf(false) }
     var sphere by rememberSaveable { mutableStateOf("all") }
+    // «Новое» одной пачкой (`#/new/<batch_ref>` веба): пусто — всё «Новое». Любой переход по разделам сбрасывает.
+    var newBatch by rememberSaveable { mutableStateOf("") }
     // «Сделанные» у списков, как в вебе.
     var showDone by rememberSaveable { mutableStateOf(false) }
     // «Перенести все» у просроченного — дела, которым выбирают новый срок.
@@ -300,7 +312,13 @@ fun DelaTab(
     }
     LaunchedEffect(openNav) {
         val want = openNav ?: return@LaunchedEffect
-        nav = want
+        if (want.startsWith(NEW_BATCH)) {
+            nav = NAV_NEW
+            newBatch = want.removePrefix(NEW_BATCH)
+        } else {
+            nav = want
+            newBatch = ""
+        }
         pages = emptyList()
         onNavHandled()
     }
@@ -351,6 +369,7 @@ fun DelaTab(
     /** Перейти в раздел — как ссылка боковой панели веба: страницы и поиск закрываются. */
     val go: (String) -> Unit = { key ->
         nav = key
+        newBatch = ""
         pages = emptyList()
         query = ""
         searching = false
@@ -671,7 +690,7 @@ fun DelaTab(
 
     // «Новое» — своими кусками (наговорки, предложения, без проекта, закрытое само); наговорки — вид сервера.
     val newParts: NewParts? =
-        if (page == null && needle.isEmpty() && view == DelaViews.View.NEW) NewParts.of(snap, me, sphere, now) else null
+        if (page == null && needle.isEmpty() && view == DelaViews.View.NEW) NewParts.of(snap, me, sphere, now, newBatch) else null
 
     // Страница проекта — как в вебе: группировка своя (без «по проектам»), «Сделанные», фильтр сделки.
     val projectScreen: DelaScreen? = (page as? DelaPage.Project)?.let { pg ->
@@ -740,7 +759,11 @@ fun DelaTab(
             // Воронка, клиенты, люди, связи: дел нет, зато сделки экрана (`deal_ids`) — Claude правит их отсюда.
             ?: CRM_NAV.firstOrNull { crmOn && it.first == nav && needle.isEmpty() }?.let { (_, t) -> AskScreen(t, DelaAsk.scope(t, emptyList())) }
             // П1, П2… — те же, что в «Подскажи» (`scope.suggestion_ids`): «П1 поставь, срок пятница».
-            ?: newParts?.let { AskScreen("Новое", DelaAsk.scope("Новое", it.ids, suggestionIds = it.asks.map { sg -> sg.id })) }
+            ?: newParts?.let {
+                // Одна пачка — Claude видит, что на экране только она (`pageScope` веба: «Новое: одна пачка — …»).
+                val title = if (newBatch.isNotEmpty()) "Новое: одна пачка — " + DelaViews.batchTitle(snap, newBatch) else "Новое"
+                AskScreen(title, DelaAsk.scope(title, it.ids, suggestionIds = it.asks.map { sg -> sg.id }))
+            }
     }
 
     /**
@@ -1144,6 +1167,9 @@ fun DelaTab(
             val seenOn = snap.dictationsOn
             newView(
                 parts = np,
+                batch = newBatch,
+                batchTitle = if (newBatch.isNotEmpty()) DelaViews.batchTitle(snap, newBatch) else "",
+                onAllNew = { newBatch = "" },
                 crm = crm,
                 actions = actions,
                 today = today,
@@ -1960,6 +1986,11 @@ private fun delaStatusLine(
  */
 private fun LazyListScope.newView(
     parts: NewParts,
+    /** Одна пачка (`batch_ref`) или пусто — всё «Новое». */
+    batch: String,
+    batchTitle: String,
+    /** «Всё «Новое»» — снять пачку. */
+    onAllNew: () -> Unit,
     crm: DelaCrmContext,
     actions: DelaActions,
     today: String,
@@ -1978,6 +2009,23 @@ private fun LazyListScope.newView(
 ) {
     val snap = crm.snap
     val zone = java.time.ZoneId.systemDefault()
+    // Одна пачка — сверху её подпись и «Всё «Новое»» (`toolbar` веба у `#/new/<batch_ref>`).
+    if (batch.isNotEmpty()) {
+        item(key = "n:batch") {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Одна пачка: $batchTitle",
+                    style = ru.zf.pravka.ui.LocalPravkaType.current.label,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ru.zf.pravka.ui.LocalMode.current.label,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                PaperTextButton("Всё «Новое»", onClick = onAllNew)
+            }
+        }
+    }
     if (parts.asks.isNotEmpty()) {
         item(key = "n:asks") {
             val mode = ru.zf.pravka.ui.LocalMode.current
@@ -2048,7 +2096,9 @@ private fun LazyListScope.newView(
     }
     if (parts.empty) {
         item(key = "n:empty") {
-            Box(Modifier.padding(start = 4.dp)) { PaperHint("Пусто. Новое появится, когда наговоришь или придёт со встречи и из Telegram.") }
+            Box(Modifier.padding(start = 4.dp)) {
+                PaperHint(if (batch.isNotEmpty()) "Эта пачка уже разобрана." else "Пусто. Новое появится, когда наговоришь или придёт со встречи и из Telegram.")
+            }
         }
     }
 }
