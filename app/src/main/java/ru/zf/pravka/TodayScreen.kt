@@ -358,7 +358,7 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
             reject = { sg, reason ->
                 scope.launch {
                     app.delaDo(listOf(Dela.decideOp(sg.id, accept = false, reason = reason)))
-                    Feedback.toast(app, "Не надо" + if (reason.isNotBlank()) ": $reason" else "")
+                    Feedback.toast(app, "Отклонено" + if (reason.isNotBlank()) ": $reason" else "")
                 }
             },
             stop = { app.appScope.launch { runCatching { app.zasechkaEngine.closeOpen() } } },

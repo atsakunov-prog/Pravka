@@ -3584,10 +3584,12 @@ private fun LabelsSheet(all: List<String>, chosen: List<String>, onDismiss: () -
 /**
  * «Отклонить» предложение: причина — материал для промптов, поэтому её
  * просят, но не требуют. Готовые причины — одним касанием; своя — словами
- * или голосом (микрофон — тот же движок, что у «Д»).
+ * или голосом (микрофон — тот же движок, что у «Д»). Один лист на вкладку Дел
+ * и «Новое» на «Сегодня» (доводка 5.0, 14.10.2026): причина — одна правда для
+ * разбора, и спрашивать её двумя разными окнами незачем.
  */
 @Composable
-private fun RejectSheet(suggestion: Dela.Suggestion, onDismiss: () -> Unit, onReject: (String) -> Unit) {
+internal fun RejectSheet(suggestion: Dela.Suggestion, onDismiss: () -> Unit, onReject: (String) -> Unit) {
     var reason by remember { mutableStateOf("") }
     var listening by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current

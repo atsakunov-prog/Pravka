@@ -67,11 +67,6 @@ import ru.zf.pravka.ui.ModeDecor
 import ru.zf.pravka.ui.ModeTile
 import ru.zf.pravka.ui.MountainValue
 import ru.zf.pravka.ui.PaperCard
-import ru.zf.pravka.ui.PaperChip
-import ru.zf.pravka.ui.ChipRow
-import ru.zf.pravka.ui.PaperField
-import ru.zf.pravka.ui.PaperButton
-import ru.zf.pravka.ui.PaperSheet
 import ru.zf.pravka.ui.RibbonRow
 import ru.zf.pravka.ui.SmallKey
 import ru.zf.pravka.ui.TileState
@@ -189,8 +184,9 @@ internal fun TodayV2(
                 .padding(start = 12.dp, end = 12.dp, bottom = 14.dp),
         )
     }
+    // «Нет» — тот же лист причины, что во вкладке Дел (`RejectSheet`): цитата, готовые причины, своя голосом.
     rejecting?.let { sg ->
-        RejectReasonSheet(sg, onDismiss = { rejecting = null }, onReject = { reason ->
+        RejectSheet(sg, onDismiss = { rejecting = null }, onReject = { reason ->
             rejecting = null
             act.reject(sg, reason)
         })
@@ -551,32 +547,6 @@ private fun NewCard(c: TodayCards, wide: Boolean) {
                 SmallKey(kv("x", Glyphs.Close), null, "Нет: ${txt.title}", { c.onReject(sg) })
             }
         }
-    }
-}
-
-/**
- * «Нет» с причиной: причина — материал для промптов разбора, поэтому её
- * просят, но не требуют; готовые — одним касанием (те же, что во вкладке Дел).
- */
-@Composable
-private fun RejectReasonSheet(sg: Dela.Suggestion, onDismiss: () -> Unit, onReject: (String) -> Unit) {
-    var reason by remember { mutableStateOf("") }
-    PaperSheet(
-        onDismiss = onDismiss,
-        title = "Не надо",
-        icon = Glyphs.Close,
-        subtitle = sg.title.take(80),
-        footer = {
-            Spacer(Modifier.weight(1f))
-            PaperButton("Не надо", icon = Glyphs.Close, primary = true, onClick = { onReject(reason.trim()) })
-        },
-    ) {
-        ChipRow {
-            for (r in listOf("это идея, не дело", "уже сделано", "дубль", "не моё", "не сейчас")) {
-                PaperChip(r, selected = reason == r, onClick = { onReject(r) })
-            }
-        }
-        PaperField(value = reason, onValueChange = { reason = it }, label = "Своя причина", singleLine = false, maxLines = 4)
     }
 }
 
