@@ -891,9 +891,10 @@ function viewPills(r) {
 // Круга жизни — как в общем слое Ковчега (GROUPS в kovcheg.js). Сервисы — из настроек сервера на компе (в публичном
 // коде адресов нет); владельцу — все, команде — одни Дела и их CRM. Направление сервиса узнаётся по его значку из
 // настройки (названий и адресов в коде нет), незнакомый значок — в «Ещё». Запись с адресом «/» — сами Дела.
-// Восемь направлений ровной таблицей 4×2 (на узком 2×4), под названием — подпись из формулы направления;
-// «Творчество» — не в таблице, а строкой ниже: надпись и рядом серый значок Claude (SVC_CREATE).
-const SVC_CREATE = ['claude'];
+// Восемь направлений столбиками (4, на узкой шапке 2): направление с одним сервисом не оставляет дыры под собой;
+// под названием — подпись из формулы направления. «Творчество» — строкой ниже: название с подписью, Claude — во второй
+// колонке (SVC_CREATE).
+const SVC_CREATE = ['Творчество', 'создаю новое', ['claude']];
 const SVC_DIRS = [
   ['Здоровье', 'сильное тело, ясная голова', ['activity', 'food']],
   ['Ум', 'много знаю и узнаю', ['book']],
@@ -925,17 +926,20 @@ function svcBrand(look) {
   const group = (title, sub, items) => el('div', { class: 'kv-svc-g' },
     el('div', { class: 'kv-svc-h' }, title), sub ? el('div', { class: 'kv-svc-sub' }, sub) : null,
     el('div', { class: 'kv-svc-items' }, items.map(link)));
-  const create = all.filter((x) => SVC_CREATE.includes(x.icon));
+  const create = all.filter((x) => SVC_CREATE[2].includes(x.icon));
   const used = new Set(create);
-  const groups = SVC_DIRS.map(([title, sub, icons]) => {
+  const specs = SVC_DIRS.map(([title, sub, icons]) => {
     const items = all.filter((x) => icons.includes(x.icon) && !used.has(x));
     items.forEach((x) => used.add(x));
-    return items.length ? group(title, sub, items) : null;
+    return items.length ? [title, sub, items] : null;
   }).filter(Boolean);
   const rest = all.filter((x) => !used.has(x));
-  if (rest.length) groups.push(group('Ещё', '', rest));
-  const menu = el('div', { class: 'kv-svc-menu', id: 'kv-svc-menu', hidden: true }, el('div', { class: 'kv-svc-groups' }, groups),
-    create.length ? el('div', { class: 'kv-svc-create' }, el('span', { class: 'kv-svc-h' }, 'Творчество'), create.map(link)) : null);
+  if (rest.length) specs.push(['Ещё', '', rest]);
+  // Две раскладки — на 4 и на 2 столбика; какую показать, решает ширина шапки (контейнерный запрос в css).
+  const cols = (n) => el('div', { class: 'kv-svc-cols n' + n }, Array.from({ length: n }, (_, c) =>
+    el('div', { class: 'kv-svc-col' }, specs.filter((g, k) => k % n === c).map(([t, s, items]) => group(t, s, items)))));
+  const menu = el('div', { class: 'kv-svc-menu', id: 'kv-svc-menu', hidden: true }, cols(4), cols(2),
+    create.length ? el('div', { class: 'kv-svc-create' }, group(SVC_CREATE[0], SVC_CREATE[1], []), el('div', { class: 'kv-svc-items' }, create.map(link))) : null);
   const brand = el('a', { class: 'brand kv-svc-btn', href: '#/today', role: 'button', title: 'Все сервисы Ковчега',
     'aria-haspopup': 'true', 'aria-expanded': 'false', 'aria-controls': 'kv-svc-menu' }, img(), el('b', {}, 'Дела'));
   const show = (open) => { menu.hidden = !open; brand.setAttribute('aria-expanded', open ? 'true' : 'false'); };

@@ -200,18 +200,19 @@ a.brand:hover { text-decoration: none; }
   box-shadow: var(--shadow);
 }
 .kv-svc-menu[hidden] { display: none; }
-.kv-svc-groups { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 8px; }
+/* Столбики: направление с одним сервисом не оставляет дыры — следующее встаёт прямо под ним. Раскладок две (4 и 2
+   столбика), видна одна — по ширине шапки. «Творчество» — той же сеткой, Claude — во второй колонке. */
+.kv-svc-cols, .kv-svc-create { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 8px; }
+.kv-svc-cols { align-items: start; }
+.kv-svc-cols.n2 { display: none; }
+.kv-svc-create { align-items: center; }
+.kv-svc-col { display: flex; flex-direction: column; min-width: 0; }
 .kv-svc-g { min-width: 0; }
-.kv-svc-h { font-size: 12px; font-weight: 600; color: var(--muted); padding: 10px 8px 0; }
-.kv-svc-sub { font-size: 11.5px; line-height: 1.3; color: var(--faint); padding: 0 8px 3px; }
-.kv-svc-create {
-  display: flex; align-items: center; gap: 4px; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line-soft);
-}
-.kv-svc-create .kv-svc-h { padding: 0 4px 0 8px; }
-.kv-svc-create a { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; font-size: 14px; color: var(--muted); }
-.kv-svc-create a:hover { text-decoration: none; background: var(--hover); color: var(--text); }
+/* Название направления — крупно: это разделы, а не подписи (Саша: «не выглядят направлениями»). */
+.kv-svc-h { font: 600 15.5px/1.25 var(--font); color: var(--text); padding: 10px 8px 0; }
+.kv-svc-sub { font-size: 11.5px; line-height: 1.3; color: var(--faint); padding: 1px 8px 3px; }
 .kv-svc-items a {
-  display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 7px; font-size: 14.5px;
+  display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 7px; font-size: 14px;
   color: var(--text); white-space: nowrap; min-width: 0;
 }
 .kv-svc-items a .kv-i { color: var(--icon); }
@@ -1297,7 +1298,9 @@ a.pt-row:hover { color: var(--accent); text-decoration: none; }
 /* Узкая шапка (телефон, окно сбоку, крупный текст): меню сервисов — в две колонки. Строки сервисов, которая здесь
    раньше уходила второй строкой, с 13.10.2026 нет. */
 @container kvtop (max-width: 620px) {
-  .kv-svc-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kv-svc-cols.n4 { display: none; }
+  .kv-svc-cols.n2 { display: grid; }
+  .kv-svc-cols, .kv-svc-create { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* ── Телефон: колонка разделов — шторкой; карточка — листом снизу ── */
