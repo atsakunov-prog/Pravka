@@ -210,7 +210,9 @@ LIMIT %(limit)s
 def due(url: str, public_url: str = "") -> dict:
     """Что пора отправить: открытые дела с remind_at <= now(), не отправленные, у владельцев с
     telegram_id. Читает system (бот напоминает всем, у кого есть Telegram), журнал — от имени бота."""
-    base = (public_url or "https://dela.kovcheg.am").rstrip("/")
+    # Адрес Дел — только из настройки DELA_PUBLIC_URL (репозиторий публичный: своего адреса в коде нет).
+    # Без неё ссылка остаётся относительной — бот всё равно пришлёт дело, только без перехода.
+    base = (public_url or "").rstrip("/")
     with db.session(url, "system", ACTOR, BOT) as conn:
         rows = conn.execute(DUE, {"bot": ACTOR, "limit": LIMIT}).fetchall()
         at = conn.execute("SELECT now() AS n").fetchone()["n"]
