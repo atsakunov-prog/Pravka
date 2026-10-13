@@ -54,6 +54,10 @@ APP_TABLES = {
     "crm.digests": "SELECT, INSERT, UPDATE",
     # Команды Засечки из веба телефону (dela_0016): только владельцу; строки не удаляются.
     "crm.zasechka_cmds": "SELECT, INSERT, UPDATE",
+    # Настройки телефона (dela_0015): копия по устройству и журнал правок; правки не удаляются, телефон из списка —
+    # пометкой hidden_at (новый снимок его вернёт).
+    "crm.phone_devices": "SELECT, INSERT, UPDATE",
+    "crm.phone_edits": "SELECT, INSERT, UPDATE",
 }
 APP_VIEWS = ["tasks.v_tasks", "crm.v_deals"]
 APP_SEQUENCES = ["tasks.task_num"]

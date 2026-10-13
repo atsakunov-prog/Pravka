@@ -21,7 +21,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from . import db, digest, krug, meetings, people, place, twins, where, zasechka
+from . import db, digest, krug, meetings, people, phone, place, twins, where, zasechka
 
 # Сколько номеров изменений синк захватывает назад. Номер берётся в начале
 # транзакции, а видна она после фиксации: изменение с меньшим номером может
@@ -39,7 +39,7 @@ TASK_FIELDS = {
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
-            "digest", "zasechka"]
+            "digest", "zasechka", "phone"]
 # «svod» — Свод (crm.svod) в синке и операция svod.set; «people» — person.add / person.merge и вид who
 # (одна карточка человека, 06.10.2026). Без них телефон не шлёт этих операций.
 # «dictations» — операция dictation.add: текст наговорки, из которой вышли дела (их source_ref = её id),
@@ -64,6 +64,9 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug",
 # «zasechka» — команды Засечки из веба (dela_0016, 14.10.2026, zasechka.py): поле zasechka синка (только владельцу) —
 # команды, ждущие телефона; операции zasechka.take и zasechka.done — телефон берёт и отмечает. Без флага телефон
 # поля не ищет. Страницы-двойники «Сегодня», «Засечка», «Правка» (twins.py) — виды day, zasechka, pravka, pogoda.
+# «phone» — настройки телефона на сервере (dela_0015, 14.10.2026, phone.py): операции phone.snapshot (телефон), phone.set,
+# phone.cancel, phone.hide (веб), вид phone; правки, которые ждут телефон, — полем phone синка. Без флага телефон снимков
+# не шлёт, а веб страницу «Телефон» не показывает: сервер не обновлён.
 # Токен службы бота Ковчега (python -m pravka_dela token --name kovcheg): только он забирает
 # «что пора» и отмечает отправку (remind.py, task.reminded).
 REMIND_BOT = "kovcheg"
@@ -979,6 +982,11 @@ def sync(url: str, user: str, since: int) -> dict:
         cmds = zasechka.for_sync(conn, user)
         if cmds is not None:
             out["zasechka"] = jsonable(cmds)
+        # Настройки телефона (dela_0015): правки с компьютера, которые ждут телефоны этого человека. Не таблицей «после
+        # seq», а списком ждущих: их единицы, а взятые телефон помнит сам. Нет ждущих — поля нет.
+        edits = phone.for_sync(conn, user)
+        if edits:
+            out["phone"] = {"edits": jsonable(edits)}
         out["seq"] = top
         out["today"] = conn.execute("SELECT crm.today() AS d").fetchone()["d"].isoformat()
     out["features"] = FEATURES
@@ -1245,6 +1253,8 @@ digest.register(HANDLERS, VIEWS, OpError)
 # Страницы-двойники экранов телефона (dela_0016): команды Засечки телефону и виды day, zasechka, pravka, pogoda.
 zasechka.register(HANDLERS, OpError)
 twins.register(VIEWS, OpError)
+# Настройки телефона (dela_0015): снимок от телефона, правка с компьютера, вид phone (phone.py).
+phone.register(HANDLERS, VIEWS, OpError)
 
 
 def view(url: str, user: str, name: str, **params) -> dict:
