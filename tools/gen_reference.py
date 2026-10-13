@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Справочники упражнений и рациона -> статический JSON в assets.
+Справочник упражнений -> статический JSON в assets.
 
 С сентября по 12.10.2026 приложение читало упражнения из Notion живыми и
 клало их в кэш на телефоне (`exercises_live.json`); Notion снят, и кэш
@@ -10,17 +10,17 @@
 правда свежее последнего живого чтения. Голосовые имена (ALIASES) и единицы
 подхода (UNITS) живут только здесь: приложение берёт их из этого файла по
 совпадению id.
-Рацион пока только отсюда - вместе с витаминами и элементами на 100 г
-(«Микро»), которых в Notion нет вовсе: на этикетках их не пишут.
+Рацион отсюда уехал (13.10.2026): он - запись Свода `food.ration` на сервере
+Дел (продукты и блюда, core/Ration.kt), заводское семя - assets/ration.json,
+который этот скрипт больше не пишет: прежний снимок Notion затёр бы блюда.
 
 Как перегенерировать: поправить DATA в reference_data.py (руками или попросив
-Клода перечитать базы «Упражнения» и «Рацион» в Notion, если владелец их ещё
+Клода перечитать базу «Упражнения» в Notion, если владелец её ещё
 ведёт), потом `python3 tools/gen_reference.py`. Снимок был взят из баз Notion
 ниже; приложение с 12.10.2026 Notion не читает, правда о справочнике - здесь.
 
 Notion:
   Упражнения  collection://dd441aa8-7186-4a95-aaf2-f78433d4ed20
-  Рацион      collection://7375a462-0499-455a-80ae-0460777b0f1b
 Снято: 2026-09-04
 """
 import json
@@ -156,28 +156,6 @@ def build_exercises(rows):
     return {"source": "notion:Упражнения", "snapshot": SNAPSHOT, "items": items}
 
 
-def build_ration(rows):
-    items = []
-    for r in rows:
-        name = r["Продукт"]
-        items.append({
-            "id": slug(name),
-            "name": name,
-            "meal": r.get("Приём") or "",
-            "grams": r.get("Грамм") or 0,
-            "kcal100": r.get("Ккал100") or 0,
-            "p100": r.get("Б100") or 0,
-            "f100": r.get("Ж100") or 0,
-            "c100": r.get("У100") or 0,
-            "note": r.get("Заметка") or "",
-            # Витамины и элементы на 100 г - только заметное, и только там, где
-            # есть справочное число. Пустая карта в файл не пишется.
-            "micro": r.get("Микро") or {},
-        })
-    return {"source": "notion:Рацион", "snapshot": SNAPSHOT, "items": items}
-
-
 if __name__ == "__main__":
-    from reference_data import EXERCISES, RATION
+    from reference_data import EXERCISES
     write("exercises.json", build_exercises(EXERCISES))
-    write("ration.json", build_ration(RATION))

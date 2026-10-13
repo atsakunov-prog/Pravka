@@ -48,7 +48,7 @@ class SvodTest {
             assertTrue(k, Svod.validKey(k))
         }
         for (k in listOf(Svod.DICT, Svod.RULES, Svod.MODELS, Svod.PRICES, Svod.TEAM, Svod.CATEGORIES,
-            Svod.MONEY_PARTNER, Svod.MONEY_SUMMARY, Svod.MONEY_PAYEES, Svod.RAZNOSKA)) {
+            Svod.MONEY_PARTNER, Svod.MONEY_SUMMARY, Svod.MONEY_PAYEES, Svod.RAZNOSKA, Svod.FOOD_RATION)) {
             assertTrue("ключ $k есть в контракте", svod.getJSONObject("keys").has(k))
         }
     }

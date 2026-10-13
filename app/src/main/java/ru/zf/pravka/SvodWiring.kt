@@ -196,6 +196,9 @@ internal suspend fun PravkaApp.svodSeedTexts(): Map<String, Pair<String?, String
         fun asset(name: String) = runCatching { assets.open(name).bufferedReader().use { it.readText() } }.getOrNull()
         asset("money_balances.txt")?.takeIf { it.isNotBlank() }?.let { out[Svod.MONEY_ANCHORS] = it to null }
         asset("money_manual.txt")?.takeIf { it.isNotBlank() }?.let { out[Svod.MONEY_MANUAL] = it to null }
+        // Рацион — его еда, не чужой установки (13.10.2026, `core/Ration.kt`).
+        asset(ru.zf.pravka.data.RationBook.ASSET)?.takeIf { ru.zf.pravka.core.Ration.parse(it)?.empty == false }
+            ?.let { out[Svod.FOOD_RATION] = null to it }
     }
     return out
 }

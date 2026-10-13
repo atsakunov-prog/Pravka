@@ -34,6 +34,8 @@ object Svod {
     const val MONEY_ANCHORS = "money.anchors.factory"
     const val MONEY_MANUAL = "money.manual.factory"
     const val RAZNOSKA = "prompt.raznoska"
+    /** Рацион владельца: продукты и блюда (`core/Ration.kt`), 13.10.2026. */
+    const val FOOD_RATION = "food.ration"
 
     /** Отказ `base_rev`: «на сервере уже версии N» — не ошибка, а повод слить и послать снова. */
     private const val STALE_MARK = "на сервере уже версии"

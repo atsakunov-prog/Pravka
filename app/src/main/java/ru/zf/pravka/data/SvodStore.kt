@@ -84,6 +84,8 @@ class SvodStore(
     /** Ключи, которые первое знакомство отдало (или застало уже на сервере). */
     private val given = HashSet<String>()
     private var seededAt = 0L
+    /** Сборка, которая последней сверяла свои ключи со Сводом (поздний засев). */
+    private var seededBuild = 0
     /** Когда последний раз брали весь Свод видом (первое знакомство, «Взять заново»). */
     private var fetchedAt = 0L
 
@@ -312,11 +314,22 @@ class SvodStore(
      * ещё нет (`base_rev: 0`, `author: "seed"`). Зеркала, которые на сервере
      * уже есть, сливаются со своим объединением (база неизвестна): выученное
      * телефоном за месяцы не пропадает, и чужое не затирается.
+     *
+     * Новая сборка после знакомства — поздний засев (13.10.2026): ключ,
+     * которого в Своде ещё нет (рацион `food.ration`, промпт новой дороги),
+     * ложится так же — один раз на сборку, `base_rev: 0`. Без этого знание,
+     * появившееся в телефоне после первого знакомства, до сервера не доезжало
+     * никогда. Что на сервере уже есть, не трогается, зеркала — тоже.
      */
     suspend fun seedIfNeeded(build: Int, mine: suspend () -> Map<String, Pair<String?, String?>>) {
         if (!enabled()) return
         val (done, have) = mutex.withLock { ensureLoaded(); (seededAt > 0) to entries.keys.toSet() }
-        if (done) return
+        if (done) {
+            val (late, queued) = mutex.withLock { (build > seededBuild) to pending.values.map { it.key }.toSet() }
+            // Своя правка ключа уже в пути — засевать его поверх незачем.
+            if (late) seedLate(build, have + queued, mine())
+            return
+        }
         val texts = mine()
         val plan = Svod.seedPlan(have, texts)
         val list = ArrayList<Svod.Pending>()
@@ -331,12 +344,31 @@ class SvodStore(
             for (key in mirrors.keys) if (key in have) { dirty += key; bases.remove(key); applied.remove(key); given += key }
             for (key in texts.keys) if (key in have) given += key
             seededAt = System.currentTimeMillis()
+            seededBuild = build
             persist()
             publish()
         }
         log("свод: первое знакомство — отдаю ${list.size}, на сервере уже ${have.size}")
         send(list)
         reconcile()
+    }
+
+    private suspend fun seedLate(build: Int, have: Set<String>, texts: Map<String, Pair<String?, String?>>) {
+        val plan = Svod.seedPlan(have, texts)
+        val list = ArrayList<Svod.Pending>()
+        mutex.withLock {
+            for (key in plan) {
+                val (body, value) = texts.getValue(key)
+                val p = Svod.Pending(key, body, value, "seed", "сборка $build: нового ключа на сервере не было", 0, UUID.randomUUID().toString(), System.currentTimeMillis())
+                pending[p.opId] = p
+                list += p
+            }
+            seededBuild = build
+            persist()
+            publish()
+        }
+        if (list.isNotEmpty()) log("свод: сборка $build — отдаю новые ключи: ${list.joinToString { it.key }}")
+        send(list)
     }
 
     /** Операции Свода, которых сервер ещё не видел (после отключения или без умения) — снова в очередь. */
@@ -377,6 +409,7 @@ class SvodStore(
                 o.optJSONArray("dirty")?.let { a -> for (i in 0 until a.length()) dirty += a.optString(i) }
                 o.optJSONArray("given")?.let { a -> for (i in 0 until a.length()) given += a.optString(i) }
                 seededAt = o.optLong("seededAt")
+                seededBuild = o.optInt("seededBuild")
                 fetchedAt = o.optLong("fetchedAt")
             }
         }
@@ -394,6 +427,7 @@ class SvodStore(
             .put("dirty", JSONArray().apply { dirty.sorted().forEach { put(it) } })
             .put("given", JSONArray().apply { given.sorted().forEach { put(it) } })
             .put("seededAt", seededAt)
+            .put("seededBuild", seededBuild)
             .put("fetchedAt", fetchedAt)
         val text = o.toString()
         DiskWriter.post { StoreFiles.writeAtomic(file, text) }

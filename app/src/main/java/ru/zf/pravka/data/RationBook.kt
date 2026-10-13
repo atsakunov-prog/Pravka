@@ -3,219 +3,84 @@ package ru.zf.pravka.data
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
-import ru.zf.pravka.core.MealItem
-import ru.zf.pravka.core.Micronutrients
+import ru.zf.pravka.core.Ration
+import ru.zf.pravka.core.Svod
 
-// Справочник продуктов: 24 позиции штатного рациона владельца с КБЖУ на 100 г,
-// снятыми с настоящих этикеток (база Notion «Рацион»).
+// Рацион владельца: его постоянные продукты с КБЖУ на 100 г и блюда — наборы
+// этих продуктов («моя каша», «индейка с кускусом»). Модель и формат —
+// `core/Ration.kt`.
 //
-// Зачем, если модель и так считает: «творог» в её голове — это средний творог
-// из интернета, а у владельца это ВкусВилл 5% на 117 ккал/100 г, и на этикетке
-// написано именно 5%, а не 6% («сверено» — его же пометка). Половина его еды
-// повторяется каждый день, и по этой половине угадывать нечего.
+// Зачем, если модель и так считает: «творог» в её голове — средний творог из
+// интернета, а у владельца это ВкусВилл 5% на 117 ккал/100 г, и «моя каша» —
+// ровно шесть вещей с ровно этими граммами. Половина его еды повторяется
+// каждый день, и по этой половине угадывать нечего.
 //
-// Работает как словарь Правки: сначала подсказка модели блоком в промпте,
-// потом — точный пересчёт по граммам, если продукт узнан. Файл статический
-// (assets), собирается `tools/gen_reference.py`.
-class RationBook(private val context: Context) {
+// Где правда (13.10.2026, владелец: «положить на сервер, и я бы говорил
+// "индейка, сладкий соус чили" — и он понимал бы»): запись Свода
+// `food.ration` на сервере Дел. Телефон читает её из кэша Свода и работает
+// без сети; `assets/ration.json` — заводское семя: им телефон один раз кладёт
+// рацион в Свод (`svodSeedTexts`) и по нему работает, пока Свода нет.
+class RationBook(
+    private val context: Context,
+    private val log: (String) -> Unit = {},
+) {
 
     companion object {
-        private const val ASSET = "ration.json"
-
-        /** Приёмы в порядке дня — так они и подписаны в Notion. */
-        val MEALS = listOf("1 Завтрак", "2 Обед", "3 Ужин", "Слот · опция")
-
-        /** «1 Завтрак» → «Завтрак»: цифра нужна Notion для сортировки, не глазу. */
-        fun mealTitle(meal: String): String =
-            meal.trimStart { it.isDigit() || it == ' ' }.ifBlank { meal }
-
-        /** Приём → вид записи в дневнике. */
-        fun mealKind(meal: String): String = when {
-            meal.contains("Завтрак") -> "завтрак"
-            meal.contains("Обед") -> "обед"
-            meal.contains("Ужин") -> "ужин"
-            else -> "перекус"
-        }
+        const val ASSET = "ration.json"
     }
 
-    /** Продукт рациона. Все числа — на 100 г. */
-    data class Product(
-        val id: String,
-        val name: String,
-        val meal: String,        // «1 Завтрак» | «2 Обед» | «3 Ужин» | «Слот · опция»
-        val defaultGrams: Int,   // штатная порция владельца
-        val kcal100: Double,
-        val protein100: Double,
-        val fat100: Double,
-        val carbs100: Double,
-        val note: String,
-        /**
-         * Витамины и элементы на 100 г, ключами `Micronutrients`. В Notion их
-         * нет: КБЖУ рациона сняты с этикеток, а витаминов на этикетках почти
-         * не пишут. Числа справочные (таблицы состава продуктов) — порядок
-         * величины, и только заметное. Нужны затем, что половина еды
-         * записывается ТАПОМ, без модели, и без них полоски витаминов после
-         * «весь завтрак» стояли бы пустыми.
-         */
-        val micro100: Map<String, Double> = emptyMap(),
-    ) {
-        /** Позиция дневника на [grams] граммов. */
-        fun item(grams: Int): MealItem {
-            val weight = if (grams > 0) grams else defaultGrams.coerceAtLeast(100)
-            val k = weight / 100.0
-            return MealItem(
-                name = shortName + ", $weight г",
-                grams = weight,
-                kcal = Math.round(kcal100 * k).toInt(),
-                protein = Math.round(protein100 * k).toInt(),
-                fat = Math.round(fat100 * k).toInt(),
-                carbs = Math.round(carbs100 * k).toInt(),
-                sureness = "точно",
-                micro = Micronutrients.scaleBy(micro100, k),
-            )
+    @Volatile private var factory: Ration.Book? = null
+    // Разобранная запись Свода и сама запись — новая версия с сервера
+    // разбирается один раз, а не на каждом тапе.
+    @Volatile private var memo: Pair<Svod.Entry, Ration.Book?>? = null
+
+    /** Откуда сейчас рацион — строка во вкладке: «молчаливая механика читается как поломка». */
+    enum class Source { SVOD, FACTORY, NONE }
+
+    /** Рацион сейчас: запись Свода, а нет её или не читается — файл сборки. */
+    val book: Ration.Book get() = svodBook() ?: factory ?: Ration.Book()
+
+    val source: Source
+        get() = when {
+            svodBook() != null -> Source.SVOD
+            factory != null -> Source.FACTORY
+            else -> Source.NONE
         }
 
-        /** Без служебных уточнений в скобках: «Творог 5%», а не «Творог 5% (ужин)». */
-        val shortName: String
-            get() = name.substringBefore(" (").trim().ifBlank { name }
-    }
+    /** Версия записи Свода (0 — рацион из сборки). */
+    val svodRev: Int get() = if (svodBook() != null) Svod.current[Svod.FOOD_RATION]?.rev ?: 0 else 0
 
-    @Volatile private var items: List<Product> = emptyList()
-    val all: List<Product> get() = items
-    val loaded: Boolean get() = items.isNotEmpty()
+    val loaded: Boolean get() = !book.empty
 
-    suspend fun load(): List<Product> {
-        if (items.isNotEmpty()) return items
-        val parsed = withContext(Dispatchers.IO) {
-            runCatching {
-                val text = context.assets.open(ASSET).bufferedReader().use { it.readText() }
-                parse(JSONObject(text))
-            }.getOrNull()
-        }
-        if (parsed != null) items = parsed
-        return items
-    }
-
-    private fun parse(o: JSONObject): List<Product> {
-        val out = mutableListOf<Product>()
-        val array = o.optJSONArray("items") ?: return out
-        for (i in 0 until array.length()) {
-            val p = array.optJSONObject(i) ?: continue
-            out.add(
-                Product(
-                    id = p.optString("id"),
-                    name = p.optString("name"),
-                    meal = p.optString("meal"),
-                    defaultGrams = p.optInt("grams"),
-                    kcal100 = p.optDouble("kcal100", 0.0),
-                    protein100 = p.optDouble("p100", 0.0),
-                    fat100 = p.optDouble("f100", 0.0),
-                    carbs100 = p.optDouble("c100", 0.0),
-                    note = p.optString("note"),
-                    micro100 = microOf(p.optJSONObject("micro")),
-                )
-            )
-        }
-        return out
-    }
-
-    private fun microOf(o: JSONObject?): Map<String, Double> {
-        if (o == null) return emptyMap()
-        val out = LinkedHashMap<String, Double>()
-        for (key in o.keys()) {
-            val n = Micronutrients.byId(key) ?: continue
-            val v = o.optDouble(key, 0.0)
-            if (v > 0) out[n.id] = v
-        }
-        return out
-    }
-
-    /**
-     * Сказанное название → продукт рациона. По основам слов: «творожок мягкий»
-     * найдёт «Творог мягкий высокобелковый 1.5%». Не нашли — null, и тогда
-     * КБЖУ считает модель как обычно.
-     */
-    fun match(spoken: String): Product? {
-        val said = ExerciseBook.normalize(spoken).split(' ')
-            .filter { it.length > 2 }.map { ExerciseBook.stem(it) }.toSet()
-        if (said.isEmpty()) return null
-        var best: Product? = null
-        var bestScore = 0.0
-        for (p in items) {
-            val theirs = ExerciseBook.normalize(p.shortName).split(' ')
-                .filter { it.length > 2 }.map { ExerciseBook.stem(it) }.toSet()
-            if (theirs.isEmpty()) continue
-            val shared = theirs.count { it in said }
-            if (shared == 0) continue
-            val score = shared.toDouble() / theirs.size
-            if (score > bestScore) {
-                bestScore = score
-                best = p
+    /** Заводское семя в память; Свод уже в памяти — его читать не надо. */
+    suspend fun load(): Ration.Book {
+        if (factory == null) {
+            factory = withContext(Dispatchers.IO) {
+                runCatching { Ration.parse(assetText()) }.getOrNull()?.takeIf { !it.empty }
             }
         }
-        return if (bestScore >= 0.5) best else null
+        return book
     }
 
-    /** Позиции приёма как они лежат в Notion, включая переключатели на нуле. */
-    fun ofMeal(meal: String): List<Product> = items.filter { it.meal == meal }
+    /** Текст файла сборки — его и кладёт в Свод первое знакомство. */
+    fun assetText(): String = context.assets.open(ASSET).bufferedReader().use { it.readText() }
 
-    /** Приёмы с их позициями, в порядке дня. Пустые приёмы не показываем. */
-    fun byMeal(): List<Pair<String, List<Product>>> =
-        MEALS.map { it to ofMeal(it) }.filter { it.second.isNotEmpty() }
-
-    /**
-     * ШТАТНЫЙ набор приёма — то, что владелец правда ест, а не весь список.
-     *
-     * В Notion граммы работают переключателем: у выбранного варианта порция
-     * стоит, у альтернативы ноль («Переключатель с бедром: у одного граммы, у
-     * другого 0» — его же пометка). Поэтому набор это позиции с граммами, иначе
-     * «весь обед» посчитал бы и грудку, и бедро.
-     */
-    fun mealSet(meal: String): List<Product> = ofMeal(meal).filter { it.defaultGrams > 0 }
-
-    /**
-     * Блок промпта: штатный рацион с точными цифрами, разложенный по приёмам.
-     * Уезжает в разбор еды — дешевле пары сотен токенов, а «творог» перестаёт
-     * быть средним по стране.
-     *
-     * Приёмы здесь не украшение: владелец говорит блюдами — «каша моя», «обед
-     * как обычно», — и без разбивки модель на такой фразе сдаётся, потому что
-     * «каши» в списке продуктов нет. С разбивкой она разворачивает фразу в
-     * набор позиций сама.
-     */
-    fun promptBlock(): String {
-        if (items.isEmpty()) return ""
-        return buildString {
-            append("Штатный рацион владельца — КБЖУ на 100 г с настоящих этикеток.\n")
-            append("Если сказанное похоже на позицию отсюда, считай ПО ЭТИМ цифрам.\n")
-            append("Порции сгруппированы по приёмам: «мой завтрак», «каша моя», ")
-            append("«обед как обычно» — это ВЕСЬ набор приёма с этими порциями.\n")
-            for ((meal, list) in byMeal()) {
-                append('\n').append(mealTitle(meal)).append(":\n")
-                for (p in list) {
-                    append("- ").append(p.shortName)
-                    append(": ").append(fmt(p.kcal100)).append(" ккал")
-                    append(", Б").append(fmt(p.protein100))
-                    append(" Ж").append(fmt(p.fat100))
-                    append(" У").append(fmt(p.carbs100))
-                    append(" на 100 г")
-                    if (p.defaultGrams > 0) {
-                        append("; обычная порция ").append(p.defaultGrams).append(" г")
-                    } else {
-                        append("; сейчас не в наборе (вариант на замену)")
-                    }
-                    if (p.note.isNotBlank()) append(" — ").append(p.note.take(90))
-                    append('\n')
-                }
-            }
+    private fun svodBook(): Ration.Book? {
+        val e = Svod.current[Svod.FOOD_RATION] ?: return null
+        memo?.takeIf { it.first === e }?.let { return it.second }
+        val parsed = e.value?.let { Ration.parse(Svod.parseJson(it)) }?.takeIf { !it.empty }
+        if (parsed == null) {
+            log("рацион: запись Свода ${Svod.FOOD_RATION} (версия ${e.rev}) не читается — работаю по заводскому")
+        } else if (parsed.problems.isNotEmpty()) {
+            log("рацион: в Своде ${parsed.problems.take(3).joinToString("; ")}")
         }
+        memo = e to parsed
+        return parsed
     }
 
-    private fun fmt(v: Double): String =
-        if (v == Math.floor(v)) v.toInt().toString()
-        else String.format(java.util.Locale.US, "%.1f", v)
+    /** Блок промпта разбора еды: продукты и блюда с правилами. */
+    fun promptBlock(): String = Ration.promptBlock(book)
 
-    /** Голосовые имена продуктов для смещения распознавателя. */
-    fun biasing(): List<String> = items.map { it.shortName }.distinct()
+    /** Голосовые имена продуктов и блюд для смещения распознавателя. */
+    fun biasing(): List<String> = book.biasing()
 }

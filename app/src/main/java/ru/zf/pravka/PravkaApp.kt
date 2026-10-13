@@ -799,10 +799,11 @@ class PravkaApp : Application() {
     //
     // Справочник упражнений — семя из assets плюс последний живой справочник,
     // прочитанный из Notion до 12.10.2026 и с тех пор замороженный на диске
-    // (Notion владелец убрал). Рацион — только из assets. Оба файла сборки
-    // собирает скрипт tools/gen_reference.py.
+    // (Notion владелец убрал); файл сборки собирает tools/gen_reference.py.
+    // Рацион — запись Свода `food.ration` на сервере Дел (13.10.2026), без
+    // неё — assets/ration.json.
     val exerciseBook by lazy { ru.zf.pravka.data.ExerciseBook(this) }
-    val rationBook by lazy { ru.zf.pravka.data.RationBook(this) }
+    val rationBook by lazy { ru.zf.pravka.data.RationBook(this) { eventLog.add(it) } }
 
     // Журнал силовых — самое незаменимое здесь: подходов нет больше НИГДЕ.
     val strengthStore by lazy {

@@ -140,7 +140,32 @@ internal fun FoodTab(
     val total = remember(meals, date) { store.dayTotal(date) }
     val pending = remember(meals) { store.pending() }
 
-    /** Один путь на все четыре дороги: разобрал → показал → «✓» подтверждает. */
+    /**
+     * Разобралось — сразу в дневник (13.10.2026, владелец: «Опус очень классно
+     * разбирает еду с картинки… вообще не нужно вот это подтверждение. Просто
+     * записывай сразу»). Снимок, текст и штрихкод ждали «✓», и неподтверждённый
+     * приём стоял в дне нулём — а владелец был уверен, что записал. Поправить
+     * или убрать — в списке приёмов, итог — тостом.
+     */
+    val commit: suspend (ru.zf.pravka.core.FoodEngine.Parsed) -> Unit = { parsed ->
+        val outcome = runCatching { app.foodEngine.confirm(parsed.meal.id) }.getOrNull()
+        val meal = outcome?.meal
+        if (meal == null) {
+            Feedback.toast(app, "Разобрал, а в дневник не записал — приём ждёт подтверждения", long = true)
+        } else {
+            val total = app.foodStore.dayTotal(ru.zf.pravka.data.dayKey(meal.ts))
+            Feedback.toast(
+                app,
+                "Записал: " + (if (meal.supplement) "добавки" else "${meal.kcal} ккал") +
+                    " · за день ${total.kcal} ккал" +
+                    (if (parsed.note.isNotBlank()) "\n" + parsed.note else "") +
+                    (if (outcome.icuError.isNotBlank()) "\nВ intervals.icu не уехало: ${outcome.icuError}" else ""),
+                long = parsed.note.isNotBlank() || outcome.icuError.isNotBlank(),
+            )
+        }
+    }
+
+    /** Один путь на все четыре дороги: разобрал → записал → итог тостом. */
     val parseText: (String) -> Unit = parse@{ text ->
         if (busy || text.isBlank()) return@parse
         busy = true
@@ -151,7 +176,7 @@ internal fun FoodTab(
             val result = runCatching { app.foodEngine.parse(text, source = "text") }
                 .getOrElse { Result.failure(it) }
             busy = false
-            result.onFailure { e ->
+            result.onSuccess { commit(it) }.onFailure { e ->
                 Feedback.toast(app, e.message ?: "Не разобрал", long = true)
             }
         }
@@ -167,7 +192,7 @@ internal fun FoodTab(
             // Кадр из кэша убираем всегда: движок уже положил свою копию рядом
             // с дневником, а этот файл был только транспортом.
             runCatching { file.delete() }
-            result.onFailure { e ->
+            result.onSuccess { commit(it) }.onFailure { e ->
                 Feedback.toast(app, e.message ?: "Не разобрал снимок", long = true)
             }
         }
@@ -222,7 +247,7 @@ internal fun FoodTab(
             app.appScope.launch {
                 val result = runCatching { app.foodEngine.parseBarcode(code) }.getOrElse { Result.failure(it) }
                 busy = false
-                result.onFailure { e ->
+                result.onSuccess { commit(it) }.onFailure { e ->
                     Feedback.toast(app, (e.message ?: "Штрихкод не нашёлся") + " — сними этикетку камерой", long = true)
                 }
             }
@@ -272,7 +297,7 @@ internal fun FoodTab(
                     app.appScope.launch {
                         val result = runCatching { app.foodEngine.parseBarcode(code) }
                             .getOrElse { Result.failure(it) }
-                        result.onFailure { e ->
+                        result.onSuccess { commit(it) }.onFailure { e ->
                             Feedback.toast(
                                 app,
                                 (e.message ?: "Штрихкод не нашёлся") + " — сними этикетку камерой",
@@ -1285,31 +1310,26 @@ private fun copyToCache(context: android.content.Context, uri: Uri): File {
 
 
 /**
- * «Мой рацион» — сворачиваемый список штатной еды, где порция записывается
- * тапом.
+ * «Мой рацион» — сворачиваемый список его еды: блюда («моя каша», «индейка с
+ * кускусом») и продукты, где порция записывается тапом.
  *
  * Зачем он, если есть микрофон. Половина еды владельца повторяется каждый день
- * и уже посчитана с настоящих этикеток в базе Notion «Рацион». Говорить про неё
- * — это платить модели за то, что и так известно точно, и получать «примерно»
- * там, где есть «точно». Хуже того, владелец говорит блюдами: на «каша моя»
- * модель отвечала «сказано только каша без подробностей» и не записывала
- * ничего.
+ * и уже посчитана с настоящих этикеток. Говорить про неё — это платить модели
+ * за то, что и так известно точно. Голос рацион тоже знает (он уезжает в
+ * промпт блюдами и тем, как владелец их называет), но тап надёжнее любого
+ * промпта: он бесплатный, мгновенный и работает на даче без интернета.
  *
- * Промпт теперь такие фразы разворачивает сам (рацион уезжает в него по
- * приёмам), но тап надёжнее любого промпта: он бесплатный, мгновенный и
- * работает на даче без интернета.
- *
- * Приёмы взяты из Notion как есть. Граммы там работают переключателем: у
- * выбранного варианта порция стоит, у альтернативы ноль — поэтому «весь обед»
- * берёт грудку ИЛИ бедро, а не обе, а вариант на замену показан бледным и
- * записывается только по отдельному тапу.
+ * Сам рацион — запись Свода `food.ration` на сервере Дел (13.10.2026):
+ * правится там, телефон его только читает. Внизу карточки — откуда он сейчас.
  */
 @Composable
 private fun RationSection(app: PravkaApp, dayStart: Long) {
     var open by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(app.rationBook.loaded) }
-    var asking by remember { mutableStateOf<RationBook.Product?>(null) }
-    val scope = rememberCoroutineScope()
+    var asking by remember { mutableStateOf<ru.zf.pravka.core.Ration.Product?>(null) }
+    // Новая версия рациона приезжает синком Свода — карточка перечитывает её.
+    val svod by app.svodStore.view.collectAsState()
+    val book = remember(svod, loaded) { app.rationBook.book }
 
     LaunchedEffect(open) {
         if (open && !loaded) {
@@ -1319,16 +1339,14 @@ private fun RationSection(app: PravkaApp, dayStart: Long) {
     }
 
     /** Записать порции сразу подтверждённым приёмом: цифры с этикеток, спорить не о чем. */
-    val put: (String, List<Pair<RationBook.Product, Int>>) -> Unit = { meal, chosen ->
-        if (chosen.isNotEmpty()) {
+    val put: (String, String, List<MealItem>) -> Unit = { title, kind, items ->
+        if (items.isNotEmpty()) {
             app.appScope.launch {
                 val parsed = app.foodEngine.record(
-                    items = chosen.map { (p, g) -> p.item(g) },
-                    kind = RationBook.mealKind(meal),
+                    items = items,
+                    kind = kind,
                     timeOfDay = "",
-                    raw = "рацион: " + chosen.joinToString(", ") {
-                        it.first.shortName + " " + it.second + " г"
-                    },
+                    raw = "рацион: $title",
                     note = "",
                     source = "ration",
                     // Листаешь дневник назад — запись ложится в тот день, а не в
@@ -1347,59 +1365,62 @@ private fun RationSection(app: PravkaApp, dayStart: Long) {
     }
 
     // Свёрнутый рацион — одна строка-сводка с шевроном (24.09.2026), а что это
-    // и как им пользоваться — за «i»: абзац про этикетки нужен раз, а стоял
-    // на свёрнутой плашке каждый день.
+    // и как им пользоваться — за «i»: абзац нужен раз, а стоял бы каждый день.
     PaperCard(
         label = "мой рацион",
-        info = "Штатная еда с настоящих этикеток: завтрак, обед, ужин и восемь " +
-            "вариантов углеводного слота. Тап вместо диктовки — бесплатно, " +
-            "точно и без интернета. Тап по строке — записать порцию, тап по " +
-            "граммам — сменить вес.",
+        info = "Его постоянная еда: блюда — наборы продуктов («моя каша»), и " +
+            "продукты с КБЖУ с этикеток. Тап по блюду — записать его целиком, " +
+            "тап по продукту — его порцию, тап по граммам — другой вес. Голосом " +
+            "рацион тоже понятен: «моя каша без клубники», «индейка с кускусом». " +
+            "Живёт на сервере Дел (Свод, food.ration) и правится там.",
     ) {
         SummaryLine(
-            title = "Штатная еда с этикеток",
-            summary = if (loaded) "${app.rationBook.byMeal().sumOf { it.second.size }} поз." else "",
+            title = "Блюда и продукты",
+            summary = if (loaded) "${book.dishes.size} бл. · ${book.products.size} прод." else "",
             expanded = open,
             onToggle = { open = !open },
         ) {
             if (!loaded) {
-                PaperHint("Читаю справочник…")
+                PaperHint("Читаю рацион…")
                 return@SummaryLine
             }
             // Своя колонка без шага: у набора шаг 8 между всеми детьми, а тут
-            // строки рациона плотные и отбиваются только заголовки приёмов.
+            // строки рациона плотные и отбиваются только заголовки.
             Column {
-                for ((meal, list) in app.rationBook.byMeal()) {
-                    val set = list.filter { it.defaultGrams > 0 }
-                    val kcal = set.sumOf { Math.round(it.kcal100 * it.defaultGrams / 100.0).toInt() }
+                if (book.dishes.isNotEmpty()) {
                     Spacer(Modifier.height(10.dp))
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                RationBook.mealTitle(meal),
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            PaperHint("${set.size} поз. · $kcal ккал")
-                        }
-                        // «Слот · опция» — это варианты на замену пюре, а не приём:
-                        // целиком их не едят, и кнопки «весь слот» быть не должно.
-                        if (set.size > 1 && !meal.contains("Слот")) {
-                            PaperButton(
-                                "Весь " + RationBook.mealTitle(meal).lowercase(),
-                                onClick = { put(meal, set.map { it to it.defaultGrams }) },
-                                icon = Glyphs.Plus,
-                            )
-                        }
-                    }
-                    for (p in list) {
-                        RationRow(
-                            product = p,
-                            onPut = { put(meal, listOf(p to p.defaultGrams)) },
-                            onGrams = { asking = p },
+                    Text("Блюда", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    for (d in book.dishes) {
+                        val items = book.items(d)
+                        DishRow(
+                            dish = d,
+                            book = book,
+                            // Приём блюда — его обычный; у блюда без приёма движок возьмёт по часу.
+                            onPut = { put(d.name, d.kind, items) },
                         )
                     }
                 }
+                Spacer(Modifier.height(10.dp))
+                Text("Продукты", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                for (p in book.products) {
+                    RationRow(
+                        product = p,
+                        onPut = { p.item().let { put(gramsTitle(it), "", listOf(it)) } },
+                        onGrams = { asking = p },
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                PaperHint(
+                    when {
+                        app.rationBook.source == RationBook.Source.SVOD && app.rationBook.svodRev > 0 ->
+                            "С сервера Дел · версия ${app.rationBook.svodRev}"
+                        // Засев в очереди Дел: запись видна сразу, версии у неё ещё нет.
+                        app.rationBook.source == RationBook.Source.SVOD -> "Кладу на сервер Дел — уйдёт с синком"
+                        app.rationBook.source == RationBook.Source.NONE -> "Рацион не прочитался"
+                        !app.svodOn() -> "Из сборки — сервер Дел не подключён, рациону там негде жить"
+                        else -> "Из сборки — на сервере Дел рациона пока нет: ляжет со следующим синком Дел"
+                    }
+                )
             }
         }
     }
@@ -1411,21 +1432,22 @@ private fun RationSection(app: PravkaApp, dayStart: Long) {
             onClose = { asking = null },
             onPut = { grams ->
                 asking = null
-                put(ask.meal, listOf(ask to grams))
+                ask.item(grams).let { put(gramsTitle(it), "", listOf(it)) }
             },
         )
     }
 }
 
+/** «Творог 5% 400 г» — сырьё записи рациона: что и сколько, как сказал бы владелец. */
+private fun gramsTitle(i: MealItem): String = if (i.pill || i.grams <= 0) i.name else "${i.name} ${i.grams} г"
+
 @Composable
-private fun RationRow(
-    product: RationBook.Product,
+private fun DishRow(
+    dish: ru.zf.pravka.core.Ration.Dish,
+    book: ru.zf.pravka.core.Ration.Book,
     onPut: () -> Unit,
-    onGrams: () -> Unit,
 ) {
-    val switchable = product.defaultGrams <= 0
-    val grams = if (switchable) 100 else product.defaultGrams
-    val kcal = Math.round(product.kcal100 * grams / 100.0).toInt()
+    val items = book.items(dish)
     Row(
         Modifier
             .fillMaxWidth()
@@ -1434,39 +1456,62 @@ private fun RationRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(
-                product.shortName,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (switchable) MaterialTheme.colorScheme.onSurfaceVariant
-                else MaterialTheme.colorScheme.onSurface,
-            )
+            Text(dish.name, style = MaterialTheme.typography.bodyMedium)
             PaperHint(
-                if (switchable) "вариант на замену · $kcal ккал за 100 г"
-                else "$kcal ккал · Б${r(product.protein100, grams)} " +
-                    "Ж${r(product.fat100, grams)} У${r(product.carbs100, grams)}"
+                items.joinToString(", ") { if (it.pill) it.name else it.name + " " + it.grams } +
+                    " · ${items.sumOf { it.kcal }} ккал"
             )
         }
         Spacer(Modifier.width(10.dp))
-        // Граммы — своя кнопка: порция меняется чаще, чем состав.
-        PaperTextButton("$grams г", onClick = onGrams)
+        GlyphButton(Glyphs.Plus, "записать «${dish.name}»", onClick = onPut)
+    }
+}
+
+@Composable
+private fun RationRow(
+    product: ru.zf.pravka.core.Ration.Product,
+    onPut: () -> Unit,
+    onGrams: () -> Unit,
+) {
+    val i = product.item()
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onPut)
+            .padding(vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(product.name, style = MaterialTheme.typography.bodyMedium)
+            PaperHint(
+                if (product.pill) "добавка" + (if (product.note.isNotBlank()) " · " + product.note else "")
+                else "${i.kcal} ккал · Б${i.protein} Ж${i.fat} У${i.carbs}" +
+                    (if (product.sure != "точно") " · ${product.sure}" else "")
+            )
+        }
+        if (!product.pill) {
+            Spacer(Modifier.width(10.dp))
+            // Граммы — своя кнопка: порция меняется чаще, чем состав.
+            PaperTextButton("${i.grams} г", onClick = onGrams)
+        }
     }
 }
 
 @Composable
 private fun GramsDialog(
-    product: RationBook.Product,
+    product: ru.zf.pravka.core.Ration.Product,
     onClose: () -> Unit,
     onPut: (Int) -> Unit,
 ) {
     var text by remember {
-        mutableStateOf(product.defaultGrams.takeIf { it > 0 }?.toString() ?: "100")
+        mutableStateOf(product.grams.takeIf { it > 0 }?.toString() ?: "100")
     }
     val grams = text.toIntOrNull() ?: 0
     PaperAlert(
         onDismiss = onClose,
-        title = product.shortName,
+        title = product.name,
         icon = Glyphs.Food,
-        subtitle = RationBook.mealTitle(product.meal),
+        subtitle = if (product.grams > 0) "обычная порция ${product.grams} г" else null,
         confirm = SheetAction("Записать", icon = Glyphs.Check, enabled = grams > 0) {
             if (grams > 0) onPut(grams)
         },
