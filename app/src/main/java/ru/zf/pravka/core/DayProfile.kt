@@ -167,13 +167,20 @@ object DayProfile {
      * самого значения (оно стоит крупно рядом). Пусто — сказать нечего.
      */
     fun caption(p: Profile): String = listOfNotNull(
-        // Пик, равный нынешнему, — не новость: «сейчас» и есть вершина.
+        peak(p),
+        p.unmarkedMin.takeIf { it > 0 }?.let { "не размечено ${Fmt.dur(it)}" },
+    ).joinToString(" · ")
+
+    /**
+     * «пик +97 в 16:08»; null — сказать нечего. Пик, равный нынешнему, — не
+     * новость: «сейчас» и есть вершина. Отдельно — для Засечки, где «не
+     * размечено» стоит в легенде, а не в подписи.
+     */
+    fun peak(p: Profile): String? =
         p.peak?.takeIf { it.round() != p.value.round() }?.let { pk ->
             val at = p.peakMin!!.toInt()
             "пик ${Fmt.points(pk.round())} в ${if (at >= 1440) "24:00" else Fmt.hmOfMin(at)}"
-        },
-        p.unmarkedMin.takeIf { it > 0 }?.let { "не размечено ${Fmt.dur(it)}" },
-    ).joinToString(" · ")
+        }
 
     /** Очки целым числом — как в шапке «очки +84». */
     fun Double.round(): Int = kotlin.math.round(this).toInt()
