@@ -733,10 +733,26 @@ internal object Seed {
         val zone = ZoneId.systemDefault()
         fun ts(back: Int, hm: String, plusSec: Long = 0) =
             Instant.ofEpochMilli(at(back, hm) + plusSec * 1000).atZone(zone).toOffsetDateTime().truncatedTo(ChronoUnit.SECONDS).toString()
-        fun take(back: Int, hm: String, audioMs: Long, text: String, mic: String? = null, ok: Boolean = true) =
+        fun take(back: Int, hm: String, audioMs: Long, text: String, mic: String? = null, ok: Boolean = true, audio: String? = null) =
             JSONObject().put("ts", ts(back, hm)).put("engine", "google").put("audio_ms", audioMs).put("transcribe_ms", 0L)
                 .put("chars", text.length).put("ok", ok).put("text", text).put("startup_ms", 380L).put("deaf_ms", 0L)
-                .apply { if (mic != null) put("mic", mic); if (!ok) put("error", "пустой результат") }.toString()
+                .apply { if (mic != null) put("mic", mic); if (!ok) put("error", "пустой результат"); if (audio != null) put("audio", audio) }.toString()
+        // Звук одного тейка лежит на телефоне (`TakeAudio`) — у него «Слушать» и «Разобрать заново» (доводка 14.10.2026).
+        // Тихий шум, 6,2 с: снимку нужен только файл нужной длины, а не голос.
+        val seedAudio = "take_seed_olga.wav"
+        java.io.File(app.filesDir, "take-audio").apply { mkdirs() }.let { d ->
+            val w = ru.zf.pravka.data.WavFile.Writer(java.io.File(d, seedAudio))
+            val rnd = java.util.Random(7)
+            val buf = ByteArray(3200)
+            repeat(31) {
+                for (i in buf.indices step 2) {
+                    val v = rnd.nextInt(200) - 100
+                    buf[i] = (v and 0xff).toByte(); buf[i + 1] = (v shr 8 and 0xff).toByte()
+                }
+                w.write(buf, buf.size)
+            }
+            w.close()
+        }
         fun clean(back: Int, hm: String, input: String, output: String, cost: Double) =
             JSONObject().put("ts", ts(back, hm, 3)).put("mode", "CLEAN").put("provider", "claude").put("model", "claude-sonnet-5-5")
                 .put("latency_ms", 1800L).put("input_tokens", 700).put("output_tokens", 60).put("cost_usd", cost)
@@ -749,7 +765,7 @@ internal object Seed {
                 take(1, "21:05", 41_000, "по проекту склада надо собрать три варианта планировки и сравнить по стоимости аренды", mic = shokz),
                 take(0, "08:12", 9_800, "напомни жене что у младшего в среду бассейн в семь а не в шесть"),
                 take(0, "09:47", 21_400, "иван добрый день посмотрел договор по второму траншу в целом всё ок но в пункте четыре два нужно убрать штраф за досрочное погашение"),
-                take(0, "11:03", 6_200, "созвон с ольгой перенести на четверг на одиннадцать", mic = shokz),
+                take(0, "11:03", 6_200, "созвон с ольгой перенести на четверг на одиннадцать", mic = shokz, audio = seedAudio),
                 take(0, "12:07", 1_200, "", mic = shokz, ok = false),
                 take(0, "12:26", 15_900, "коллеги прикладываю обновлённую модель денежного потока на четвёртый квартал прогноз по выручке снизил на восемь процентов"),
                 take(0, "16:52", 11_300, "дима пришли пожалуйста акт сверки за сентябрь до среды", mic = shokz),

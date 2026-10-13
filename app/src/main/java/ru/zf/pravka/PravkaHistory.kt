@@ -49,6 +49,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -61,6 +69,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.zf.pravka.core.Dictations
 import ru.zf.pravka.core.Fmt
+import ru.zf.pravka.core.Playback
+import ru.zf.pravka.provider.TakePlayer
 import ru.zf.pravka.data.DataRoot
 import ru.zf.pravka.data.DictationHistory
 import ru.zf.pravka.data.HistoryLog
@@ -91,7 +101,10 @@ import ru.zf.pravka.ui.twoPane
 // выбранная диктовка целиком справа: «Сказал» и «Записалось», чем распознано, чем и за сколько
 // почищено, и действия — только те, что в приложении уже есть: «Скопировать», «Разобрать заново»
 // (телефонная, пока её звук лежит, — `replayTake`), «В словарь» (окно добавления словаря).
-// «Слушать» не сделано: проигрывателя тейков в приложении нет, а выдумывать его здесь — не задача.
+// «Слушать» (доводка 14.10.2026) — простой плеер звука телефонной диктовки, пока он лежит в
+// `TakeAudio`: пуск и пауза, полоса с перемоткой, время (`provider/TakePlayer.kt`). Звук компа на
+// телефон не едет — у компьютерных плеера нет. Ушёл с экрана, закрыл лист, выбрал другую диктовку
+// на развороте — звук стоит; свернул приложение — пауза: играющий за спиной тейк читается поломкой.
 //
 // Что было во вкладке 4.0 и нужно по-прежнему, здесь тоже: нерасшифрованные записи, черновик после
 // сбоя и «причесать текст» — значком в строке: текст из буфера уходит в чистку, как с поля вкладки
@@ -124,6 +137,24 @@ internal fun PravkaHistoryScreen(app: PravkaApp, serviceEnabled: Boolean, header
     val link by app.archiveSync.link.collectAsState()
     val pulls by app.archiveSync.pullState.collectAsState()
     val cleanResult by CleanBoxState.result
+    // «Слушать»: один плеер на экран; ушёл с экрана — звук стоит и фокус отпущен.
+    val player = remember { TakePlayer(context) }
+    val play by player.state.collectAsState()
+    DisposableEffect(Unit) { onDispose { player.stop() } }
+    // Свернул приложение или погасил экран — пауза (не стоп: вернулся — продолжил кнопкой).
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val obs = LifecycleEventObserver { _, e -> if (e == Lifecycle.Event.ON_STOP) player.pause() }
+        lifecycle.addObserver(obs)
+        onDispose { lifecycle.removeObserver(obs) }
+    }
+    // У `MediaPlayer` нет подписки на позицию — спрашиваем, пока играет.
+    LaunchedEffect(play.playing) {
+        while (play.playing) {
+            player.tick()
+            delay(200)
+        }
+    }
 
     // Журналы — диск: читаем на IO и перечитываем, когда что-то поменялось.
     LaunchedEffect(reload, pcRev) {
@@ -169,6 +200,8 @@ internal fun PravkaHistoryScreen(app: PravkaApp, serviceEnabled: Boolean, header
     fun replay(item: Dictations.Item) {
         val name = item.audio ?: return
         if (replaying != null) return
+        // Переразбор гонит тот же звук распознавателю — свой плеер в этот миг только мешал бы.
+        player.stop()
         replaying = name
         replayShare = 0f
         replayTake(
@@ -182,13 +215,33 @@ internal fun PravkaHistoryScreen(app: PravkaApp, serviceEnabled: Boolean, header
         }
     }
 
+    fun listen(item: Dictations.Item) {
+        val name = item.audio ?: return
+        if (play.name == name && play.playing) { player.pause(); return }
+        val file = app.takeAudio.file(name)
+        if (file == null) {
+            // Уборка `TakeAudio` унесла звук, пока экран был открыт: значок пропадает, как у «Разобрать заново».
+            withAudio = withAudio - name
+            Feedback.toast(context, "Звука этой диктовки на телефоне уже нет")
+            return
+        }
+        player.play(name, file, startMs = if (play.name == name) play.posMs else 0L)
+    }
+
     val actions = DetailActions(
         copy = { i -> copy(i.wrote?.takeIf { it.isNotBlank() } ?: i.said) },
         replay = { i -> replay(i) },
         dict = { dictAdd = true },
         canReplay = { i -> i.origin != Dictations.Origin.PC && i.audio != null && i.audio in withAudio },
         replayShare = { i -> if (i.audio != null && i.audio == replaying) replayShare else null },
+        listen = { i -> listen(i) },
+        seek = { i, f -> if (i.audio != null && i.audio == play.name) player.seek(f) },
+        playOf = { i -> play.takeIf { i.audio != null && it.name == i.audio } },
     )
+    // Разворот: выбрал другую диктовку — звук прежней стоит (её плеера на экране уже нет).
+    LaunchedEffect(pick?.audio, wide) {
+        if (wide && play.name != null && play.name != pick?.audio) player.stop()
+    }
 
     header(
         if (wide) statsLine(st, filter)
@@ -289,7 +342,7 @@ internal fun PravkaHistoryScreen(app: PravkaApp, serviceEnabled: Boolean, header
 
     sheet?.let { s ->
         PaperSheet(
-            onDismiss = { sheet = null },
+            onDismiss = { sheet = null; player.stop() },
             title = "Диктовка",
             icon = originIcon(s.origin),
             subtitle = whenLine(s, today),
@@ -319,8 +372,15 @@ private class DetailActions(
     val copy: (Dictations.Item) -> Unit,
     val replay: (Dictations.Item) -> Unit,
     val dict: () -> Unit,
+    /** Звук лежит на телефоне — его можно и разобрать заново, и послушать. */
     val canReplay: (Dictations.Item) -> Boolean,
     val replayShare: (Dictations.Item) -> Float?,
+    /** «Слушать»: пуск или пауза этой диктовки. */
+    val listen: (Dictations.Item) -> Unit,
+    /** Перемотка по доле полосы — только у той, что в плеере. */
+    val seek: (Dictations.Item, Float) -> Unit,
+    /** Состояние плеера, если в нём эта диктовка; иначе null — полоса в начале. */
+    val playOf: (Dictations.Item) -> TakePlayer.State?,
 )
 
 /** «сегодня 30 диктовок · 25,6 мин голоса · 3 не распознаны» — подпись шапки разложенного. */
@@ -475,6 +535,8 @@ private fun ColumnScope.DictationDetail(item: Dictations.Item, actions: DetailAc
     } else {
         Text(originLabel(item), style = t.meta.copy(fontSize = 12.5.sp), color = Kv.faint)
     }
+    // «Слушать» — сразу под «когда и откуда», как голосовое в мессенджере: сначала услышать, потом читать.
+    if (actions.canReplay(item)) ListenRow(item, actions)
     Eyebrow("Сказал")
     SelectionContainer {
         Text(
@@ -515,6 +577,62 @@ private fun ColumnScope.DictationDetail(item: Dictations.Item, actions: DetailAc
             GhostKey("Разобрать заново", onClick = { actions.replay(item) }, icon = Glyphs.Wave)
         }
         SoftKey("В словарь", Glyphs.Dictionary, onClick = actions.dict)
+    }
+}
+
+/**
+ * Плеер звука диктовки: кнопка пуск/пауза, полоса (тап и протяжка — перемотка),
+ * «0:07 / 0:42». Этой диктовки в плеере нет — полоса в начале, длина из журнала.
+ */
+@Composable
+private fun ListenRow(item: Dictations.Item, actions: DetailActions) {
+    val t = LocalPravkaType.current
+    val st = actions.playOf(item)
+    val playing = st?.playing == true
+    val dur = st?.durMs?.takeIf { it > 0 } ?: item.audioMs
+    val pos = st?.posMs ?: 0L
+    Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        val shape = RoundedCornerShape(KvShape.Control)
+        val what = if (playing) "пауза" else "слушать"
+        Box(
+            Modifier
+                .minimumInteractiveComponentSize()
+                .size(36.dp)
+                .clip(shape)
+                .background(Kv.accentSoft)
+                .clickable(onClickLabel = what) { actions.listen(item) }
+                .semantics { contentDescription = what },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(if (playing) Glyphs.Pause else Glyphs.Play, null, tint = Kv.accent, modifier = Modifier.size(20.dp))
+        }
+        Spacer(Modifier.width(10.dp))
+        SeekLine(Playback.fraction(pos, dur), enabled = st != null, onSeek = { actions.seek(item, it) }, modifier = Modifier.weight(1f))
+        Spacer(Modifier.width(10.dp))
+        Text(Playback.label(pos, dur), style = t.meta.copy(fontSize = 12.5.sp), color = Kv.faint, maxLines = 1)
+    }
+    st?.error?.let { Text("Не играет: $it", style = t.meta.copy(fontSize = 12.5.sp), color = Kv.warn, modifier = Modifier.padding(top = 4.dp)) }
+}
+
+/**
+ * Полоса плеера (`.bar` веба): линия, сыгранное — акцентом. Тап и протяжка —
+ * перемотка ([enabled] — только у той диктовки, что в плеере).
+ */
+@Composable
+private fun SeekLine(fraction: Float, enabled: Boolean, onSeek: (Float) -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .height(28.dp)
+            .then(
+                if (!enabled) Modifier
+                else Modifier
+                    .pointerInput(Unit) { detectTapGestures { o -> onSeek(o.x / size.width.coerceAtLeast(1)) } }
+                    .pointerInput(Unit) { detectHorizontalDragGestures { ch, _ -> onSeek(ch.position.x / size.width.coerceAtLeast(1)) } },
+            ),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(Kv.line))
+        Box(Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).height(4.dp).clip(RoundedCornerShape(2.dp)).background(Kv.accent))
     }
 }
 

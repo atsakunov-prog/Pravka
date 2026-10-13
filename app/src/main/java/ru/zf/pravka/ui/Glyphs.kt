@@ -159,6 +159,8 @@ object Glyphs {
     /** Звук тейка — разобрать фразу заново (30.09.2026). */
     val Wave: ImageVector get() = pick("Wave") { sw -> glyph("Wave", sw, "M3 10.5v3M7.5 7v10M12 3v18M16.5 7v10M21 10.5v3") }
     val Play: ImageVector get() = pick("Play") { sw -> glyph("Play", sw, circle(12f, 12f, 9f), "M10 8.5l5 3.5-5 3.5z") }
+    /** Пауза плеера тейков («Слушать» в «Правке», 14.10.2026): тот же круг, что у «Play», две черты. */
+    val Pause: ImageVector get() = pick("Pause") { sw -> glyph("Pause", sw, circle(12f, 12f, 9f), "M10 9v6M14 9v6") }
     /** Как делать: раскрытая книжка. */
     val Book: ImageVector get() = pick("Book") { sw -> glyph("Book", sw, "M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z", "M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5") }
     val Camera: ImageVector get() = pick("Camera") { sw -> glyph("Camera", sw, "M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z", circle(12f, 13f, 4f)) }

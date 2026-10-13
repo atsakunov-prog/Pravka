@@ -51,6 +51,8 @@ object KvGlyphs {
         "user" to "M12 3.5a4 4 0 1 0 0 8a4 4 0 1 0 0-8zM4.5 20.5a7.5 7.5 0 0 1 15 0",
         "reply" to "M9 14L4 9l5-5M4 9h10a6 6 0 0 1 6 6v5",
         "play" to "M7 4.5l12 7.5-12 7.5z",
+        // Пауза плеера тейков — пара к «play» тем же штрихом (у веба своей нет: там плеера нет).
+        "pause" to "M8 5h3v14H8zM13 5h3v14h-3z",
         "eye" to "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z",
         "plus" to "M12 5v14M5 12h14",
         "check" to "M5 12.5l4.5 4.5L19 7.5",
@@ -109,7 +111,7 @@ object KvGlyphs {
         "Pravka" to "edit", "Zasechka" to "clock", "Delo" to "dela", "Sport" to "activity", "Food" to "food",
         "Money" to "wallet", "Stats" to "chart", "Export" to "upload", "Gear" to "gear", "More" to "more",
         "Forward" to "chevron", "ChevronDown" to "chevronDown", "Close" to "x", "Info" to "info", "Mic" to "mic",
-        "Send" to "send", "Ask" to "help", "Timer" to "clock", "Bolt" to "bolt", "Play" to "play", "Book" to "book",
+        "Send" to "send", "Ask" to "help", "Timer" to "clock", "Bolt" to "bolt", "Play" to "play", "Pause" to "pause", "Book" to "book",
         "Camera" to "camera", "Image" to "image", "Edit" to "edit", "Delete" to "trash", "Copy" to "copy",
         "Refresh" to "refresh", "Note" to "chat", "Stop" to "stop", "Check" to "check", "Plus" to "plus",
         "Minus" to "minus", "Search" to "search", "Tune" to "settings", "Undo" to "reply", "Download" to "download",
