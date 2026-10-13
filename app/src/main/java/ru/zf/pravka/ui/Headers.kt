@@ -415,8 +415,9 @@ fun NowJump(time: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
  * Значок Ковчега в шапке (план §3, `.kb` холста): 48 dp, во всю высоту
  * заголовка с подписью, без стрелки. Тап — меню всех сервисов
  * (`LocalKovcheg`); пока меню открыто — рамка акцентом вокруг, есть
- * новенькое (новый разбор) — метка `--bad` в углу. Сам значок — иконка
- * приложения: фон адаптивной иконки и её передний слой из ресурсов.
+ * новенькое (новый разбор) — метка `--bad` в углу. Сам значок — значок
+ * Ковчега с сервера (`KovchegHost.icon`, в репозитории его нет); пока он не
+ * пришёл — иконка приложения: фон адаптивной иконки и передний слой.
  */
 @Composable
 fun KovchegMark(modifier: Modifier = Modifier, size: Dp = 48.dp) {
@@ -453,12 +454,22 @@ fun KovchegMark(modifier: Modifier = Modifier, size: Dp = 48.dp) {
             Modifier.fillMaxSize().clip(RoundedCornerShape(11.dp)).background(bg),
             contentAlignment = Alignment.Center,
         ) {
-            // Передний слой адаптивной иконки — 108 dp, из них видно среднее 72: показываем ровно его.
-            androidx.compose.foundation.Image(
-                androidx.compose.ui.res.painterResource(ru.zf.pravka.R.drawable.ic_launcher_foreground),
-                contentDescription = null,
-                modifier = Modifier.requiredSize(size * 1.5f),
-            )
+            val brand = host?.icon
+            if (brand != null) {
+                androidx.compose.foundation.Image(
+                    brand,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                )
+            } else {
+                // Передний слой адаптивной иконки — 108 dp, из них видно среднее 72: показываем ровно его.
+                androidx.compose.foundation.Image(
+                    androidx.compose.ui.res.painterResource(ru.zf.pravka.R.drawable.ic_launcher_foreground),
+                    contentDescription = null,
+                    modifier = Modifier.requiredSize(size * 1.5f),
+                )
+            }
         }
         if (host?.news == true) {
             Box(

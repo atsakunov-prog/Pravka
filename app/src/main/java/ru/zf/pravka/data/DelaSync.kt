@@ -88,6 +88,33 @@ class DelaSync(
      */
     val services: StateFlow<List<ru.zf.pravka.core.Kovcheg.Nav>> = _services
 
+    private val iconFile: File get() = File(DataRoot.secrets(context), ICON_FILE)
+    private val _brandIcon = MutableStateFlow(readIcon())
+
+    /**
+     * Значок Ковчега картинкой PNG для шапки (Правка 5.0, план §3): `/api/me` →
+     * `look.icon_png`. В публичном репозитории его нет — он лежит в настройках
+     * сервера на компе, как и адреса сервисов; телефон помнит последний.
+     */
+    val brandIcon: StateFlow<ByteArray?> = _brandIcon
+
+    private fun readIcon(): ByteArray? = runCatching { if (iconFile.isFile) iconFile.readBytes() else null }.getOrNull()
+
+    /** Запомнить значок из ответа `/api/me`. Нет поля (старый сервер) или не PNG — остаётся прежний. */
+    private fun keepIcon(me: JSONObject) {
+        val s = me.optJSONObject("look")?.optString("icon_png").orEmpty()
+        if (!s.startsWith(PNG_PREFIX)) return
+        val bytes = runCatching { android.util.Base64.decode(s.substring(PNG_PREFIX.length), android.util.Base64.DEFAULT) }
+            .getOrNull() ?: return
+        if (_brandIcon.value?.contentEquals(bytes) == true) return
+        runCatching {
+            val tmp = File(iconFile.parentFile, iconFile.name + ".tmp")
+            tmp.writeBytes(bytes)
+            if (!tmp.renameTo(iconFile)) { iconFile.delete(); check(tmp.renameTo(iconFile)) { "не переименовался" } }
+        }.onFailure { e -> log("дела: значок Ковчега не записался — ${e.javaClass.simpleName}: ${e.message}") }
+        _brandIcon.value = bytes
+    }
+
     private fun readNav(): List<ru.zf.pravka.core.Kovcheg.Nav> = runCatching {
         if (!navFile.isFile) emptyList() else ru.zf.pravka.core.Kovcheg.navFrom(JSONArray(navFile.readText()))
     }.getOrDefault(emptyList())
@@ -136,6 +163,7 @@ class DelaSync(
             store.setMe(user)
             store.resetCopy()
             keepNav(me)
+            keepIcon(me)
             _link.value = l
             _status.value = Status()
             log("дела: подключены $clean как ${l.name}")
@@ -244,6 +272,7 @@ class DelaSync(
                 store.setServerFilters(settings.optJSONArray("filters"))
             }
             keepNav(me)
+            keepIcon(me)
         }.onFailure { e -> log("дела: /api/me (фильтры, меню Ковчега) — ${why(e)}") }
     }
 
@@ -503,6 +532,9 @@ class DelaSync(
         const val LINK_FILE = "dela-link.json"
         /** Сервисы Ковчега из `/api/me` (меню значка). */
         const val NAV_FILE = "kovcheg-nav.json"
+        /** Значок Ковчега из `/api/me` (`look.icon_png`) — шапка каждого экрана. */
+        const val ICON_FILE = "kovcheg-icon.png"
+        private const val PNG_PREFIX = "data:image/png;base64,"
         const val PAIR_PREFIX = "pravka-dela:"
         private const val POKE_QUIET_MS = 10_000L
         /** Ответ «кто это» по номеру — на сутки (docs/svod-phone.md, 3.2). */

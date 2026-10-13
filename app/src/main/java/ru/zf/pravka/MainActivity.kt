@@ -56,6 +56,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -886,7 +887,13 @@ private fun MainScreen(
     val reviewsSeenAt by app.settings.reviewsSeenAtFlow.collectAsState(initial = Long.MAX_VALUE)
     val news = ru.zf.pravka.core.ReviewDigest.hasNews(reviewRuns, reviewsSeenAt)
     BackHandler(enabled = menuOpen) { menuOpen = false }
-    val host = ru.zf.pravka.ui.KovchegHost(toggle = { menuOpen = !menuOpen }, isOpen = menuOpen, news = news)
+    // Значок Ковчега — картинкой с сервера (в публичном репозитории его нет); пока не пришла — запасной.
+    val brandBytes by app.delaSync.brandIcon.collectAsState()
+    val brand = remember(brandBytes) {
+        brandBytes?.let { b -> runCatching { android.graphics.BitmapFactory.decodeByteArray(b, 0, b.size) }.getOrNull() }
+            ?.asImageBitmap()
+    }
+    val host = ru.zf.pravka.ui.KovchegHost(toggle = { menuOpen = !menuOpen }, isOpen = menuOpen, news = news, icon = brand)
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalKovcheg provides host) {

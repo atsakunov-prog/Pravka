@@ -106,10 +106,21 @@ def _brand_icon(path: str) -> str:
     return f"data:{kind};base64,{base64.b64encode(body).decode()}"
 
 
+def _brand_png(path: str) -> str:
+    """Тот же значок картинкой PNG — для телефона (Правка 5.0: значок Ковчега в шапке каждого экрана): SVG Android
+    сам не рисует. Лежит рядом со значком веба под тем же именем; нет файла — пусто, телефон покажет свой запасной."""
+    if not path:
+        return ""
+    png = Path(path).with_suffix(".png")
+    return _brand_icon(str(png)) if png.is_file() else ""
+
+
 def _look(cfg: Config) -> tuple[dict, dict]:
     """Шапка веба (общий вид Ковчега, 13.10.2026): владельцу — соседние сервисы из настроек на компе, команде —
-    только Дела. Это не защита (у каждого сервиса свой вход), а чтобы Наташе и Алёне не мешали чужие ссылки."""
-    base = {"domain": _cookie_domain(cfg.public_url), "icon": _brand_icon(cfg.brand_icon), "nav": []}
+    только Дела. Это не защита (у каждого сервиса свой вход), а чтобы Наташе и Алёне не мешали чужие ссылки.
+    `icon_png` — значок Ковчега для телефона: в публичном репозитории его нет, он приходит отсюда."""
+    base = {"domain": _cookie_domain(cfg.public_url), "icon": _brand_icon(cfg.brand_icon),
+            "icon_png": _brand_png(cfg.brand_icon), "nav": []}
     owner = {**base, "nav": [{"name": n, "icon": i, "url": u} for n, i, u in cfg.nav]}
     return owner, base
 

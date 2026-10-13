@@ -163,7 +163,13 @@ fun TabHeader(
  * одно на приложение и рисуется поверх любого экрана; без него (витрина,
  * окна поверх чужих приложений) значок просто не нажимается.
  */
-class KovchegHost(val toggle: () -> Unit, val isOpen: Boolean, val news: Boolean)
+/** `icon` — значок Ковчега с сервера (`DelaSync.brandIcon`); нет — запасной из ресурсов приложения. */
+class KovchegHost(
+    val toggle: () -> Unit,
+    val isOpen: Boolean,
+    val news: Boolean,
+    val icon: androidx.compose.ui.graphics.ImageBitmap? = null,
+)
 
 val LocalKovcheg = compositionLocalOf<KovchegHost?> { null }
 
