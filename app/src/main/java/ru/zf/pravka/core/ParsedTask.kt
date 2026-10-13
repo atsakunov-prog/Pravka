@@ -48,6 +48,10 @@ data class ParsedTask(
     // Напоминание в Telegram: момент ISO со смещением или место автопилота («дом»).
     val remindAt: String = "",
     val remindPlace: String = "",
+    // ---- Место в дереве жизни (13.10.2026, docs/dela-phone-15.md) ----
+    // Номер цели, к которой дело ведёт, — его назвала модель по блоку «дерево жизни» из Свода (krug.place).
+    // 0 — без места. Сервер проверит номер сам (why_auto) и поставит «Зачем» от службы.
+    val whyAuto: Int = 0,
 ) {
     val sent: Boolean get() = sentId.isNotBlank()
 

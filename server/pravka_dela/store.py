@@ -21,7 +21,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from . import db, krug, meetings, people, where
+from . import db, krug, meetings, people, place, where
 
 # Сколько номеров изменений синк захватывает назад. Номер берётся в начале
 # транзакции, а видна она после фиксации: изменение с меньшим номером может
@@ -38,7 +38,7 @@ TASK_FIELDS = {
 
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
-FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree"]
+FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place"]
 # «svod» — Свод (crm.svod) в синке и операция svod.set; «people» — person.add / person.merge и вид who
 # (одна карточка человека, 06.10.2026). Без них телефон не шлёт этих операций.
 # «dictations» — операция dictation.add: текст наговорки, из которой вышли дела (их source_ref = её id),
@@ -53,6 +53,8 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug",
 # у проекта, список krug в синке (направления проектов), у дела в синке — directions, why_id, dirs, steps_open.
 # «tree» — дерево целей (Круг 7.2, dela_0013, 13.10.2026): поля goal, rhythm, no_steps в task.create и task.set, why_id
 # у проекта (проект вешается на цель), в списке krug синка — why_id проекта, у дела — goal, rhythm, no_steps.
+# «place» — место в дереве при разборе (13.10.2026, place.py): поле why_auto в task.create и в предложении «завести» —
+# номер цели, которую делу выбрала модель разбора (блок «дерево жизни» — Свод krug.place). Без флага телефон его не шлёт.
 # Токен службы бота Ковчега (python -m pravka_dela token --name kovcheg): только он забирает
 # «что пора» и отмечает отправку (remind.py, task.reminded).
 REMIND_BOT = "kovcheg"
@@ -121,7 +123,9 @@ class OpError(Exception):
 # до _pick и пишутся отдельно (_krug_write). why_title — «Зачем» новой целью: такая цель заводится тут же.
 # Дерево целей (7.2, dela_0013): goal — дело стало узлом дерева (цель-состояние), rhythm — ритм практики,
 # no_steps — под целью дел не заводят; у проекта — why_id (цель, на которой он висит).
-KRUG_FIELDS = {"directions", "why_id", "why_title", "goal", "rhythm", "no_steps"}
+# why_auto (13.10.2026, place.py) — номер цели, которую делу при разборе выбрала модель, а не владелец: сервер проверяет
+# его сам и ставит «Зачем» от службы; не подошло — дело заводится без места, без ошибки.
+KRUG_FIELDS = {"directions", "why_id", "why_title", "goal", "rhythm", "no_steps", "why_auto"}
 
 
 def _krug_split(data: dict) -> dict:
@@ -139,6 +143,16 @@ def _krug_write(conn, user: str, kind: str, obj: dict, kr: dict) -> None:
     Узел дерева (goal) — всегда без проекта: текст цели видит только хозяин (бриф 7.2, §12: узлы — личные формулировки
     владельца, общее дело видно без своего «зачем»), а дело без проекта база показывает только ему.
     """
+    auto = kr.pop("why_auto", None)
+    if kr:
+        _krug_own(conn, user, kind, obj, kr)
+    # Место от модели разбора — после своих полей владельца и только если «Зачем» он не назвал сам: журнал должен
+    # видеть, что поставила служба, а что он (place.learned учится только на его правках).
+    if auto not in (None, "", 0) and kind == "task" and not {"why_id", "why_title", "goal"} & set(kr):
+        place.write_auto(conn, user, obj, auto)
+
+
+def _krug_own(conn, user: str, kind: str, obj: dict, kr: dict) -> None:
     owner = obj["owner_id"]
     if user not in (owner, "system"):
         raise OpError("направления и «зачем» ставит только хозяин")

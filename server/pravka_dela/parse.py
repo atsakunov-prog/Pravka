@@ -37,7 +37,7 @@ PROMPTS = Path(__file__).resolve().parents[1] / "contract" / "prompts"
 
 
 def template(url: str | None = None) -> str:
-    """Текст правил с подстановками {CATALOG}, {PLACES}, {TODAY}, {NOW}.
+    """Текст правил с подстановками {CATALOG}, {PLACES}, {TREE}, {TODAY}, {NOW}.
 
     Правда — Свод (prompt.raznoska, 06.10.2026): его правит тюнер телефона по субботам, и разбор на сервере
     меняется вместе с ним. Файл контракта — запас (Свод недоступен, url не дан) и то, что телефон кладёт в Свод
@@ -57,6 +57,33 @@ def template(url: str | None = None) -> str:
 def schema() -> dict:
     """Схема ответа (structured output) — та же, по которой телефон разбирает ответ."""
     return json.loads((PROMPTS / "raznoska.schema.json").read_text(encoding="utf-8"))
+
+
+NO_TREE = "Дерева жизни нет — goal у всех дел 0."
+
+
+def tree_block(url: str, user: str) -> str:
+    """Блок «дерево жизни» (place.py). Не собрался — разбор идёт без него: место доберёт разборщик Круга."""
+    from . import place
+
+    try:
+        return place.block(url, user)
+    except Exception:  # noqa: BLE001 — место в дереве не должно ронять разбор
+        log.exception("дерево жизни для разбора не собралось")
+        return ""
+
+
+def with_tree(text: str, tree: str) -> str:
+    """{TREE} — блоком дерева. В правилах нет {TREE} (тюнер телефона переписал их раньше 13.10.2026) — блок перед
+    строкой с датой: там у телефона кончается голова промпта под кэшем, и сервер ставит его туда же."""
+    tree = tree or NO_TREE
+    if "{TREE}" in text:
+        return text.replace("{TREE}", tree)
+    cut = text.find("{TODAY}")
+    if cut < 0:
+        return text.rstrip() + "\n\n" + tree
+    line = text.rfind("\n", 0, cut) + 1
+    return text[:line] + tree + "\n\n" + text[line:]
 
 
 class ParseError(Exception):
@@ -200,6 +227,9 @@ def to_ops(data: dict, index: dict, defaults: dict, source: str, places: list[st
         labels = [x for x in t.get("labels") or [] if x in index["labels"]]
         if labels:
             task["labels"] = labels
+        # Место в дереве жизни (13.10.2026, place.py): номер цели — серверу, он проверит и поставит сам.
+        if isinstance(t.get("goal"), int) and t["goal"] > 0:
+            task["why_auto"] = t["goal"]
         ops.append({"op": "task.create", "task": task})
     for i, n in enumerate(data.get("notes") or []):
         text = (n.get("text") or "").strip()
@@ -237,7 +267,9 @@ def run(url: str, user: str, text: str, defaults: dict, key: str, proxy: str | N
     speaker = "" if not me or me["owner"] else (
         f"\n\nСейчас говорит не Саша, а {me['name']}. Везде выше, где «Саша», читай «{me['name']}»: "
         "mine — дело этого человека, waiting и agenda — от его имени.")
-    system = (template(url).replace("{CATALOG}", cat)
+    # Дерево жизни — только хозяину: Круг личный (у Наташи и Марианны goal всегда 0).
+    tree = tree_block(url, user) if me and me["owner"] else ""
+    system = (with_tree(template(url), tree).replace("{CATALOG}", cat)
               .replace("{PLACES}", remind.places_block(places))
               .replace("{TODAY}", f"{today.isoformat()}, {WD[today.weekday()]}")
               .replace("{NOW}", clock["hm"])) + speaker

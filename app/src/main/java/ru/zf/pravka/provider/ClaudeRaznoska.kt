@@ -86,6 +86,7 @@ suspend fun ClaudeProvider.splitTasksDela(
         val call = askSplit(
             PromptStore.PromptId.TASKS_DELA, transcript, dictBlock, catalogBlock,
             placesBlock = ru.zf.pravka.core.DelaRemind.placesBlock(places),
+            treeBlock = ru.zf.pravka.core.DelaPlace.block(),
         )
         val (tasks, notes) = parseTasksDela(call.reply.text, snapshot, places)
         call.result(tasks, notes.joinToString("\n") { it.text }, notes)
@@ -112,13 +113,17 @@ private suspend fun ClaudeProvider.askSplit(
     dictBlock: String,
     catalogBlock: String,
     placesBlock: String = "",
+    treeBlock: String? = null,
 ): SplitCall {
     val apiKey = settings.apiKey()
     if (apiKey.isBlank()) {
         throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
     }
     require(transcript.isNotBlank()) { "Пустой наговор — разбирать нечего." }
-    val template = Prompts.speakerNote(author()) + promptStore.effective(promptId)
+    // Дерево жизни (13.10.2026) — только Разноске для Дел: {TREE} или, если тюнер его потерял, перед датой — в голове
+    // под кэшем. [treeBlock] null — промпт без дерева (Todoist).
+    val template = (Prompts.speakerNote(author()) + promptStore.effective(promptId))
+        .let { if (treeBlock != null) ru.zf.pravka.core.DelaPlace.withTree(it, treeBlock) else it }
     val catalog = catalogBlock.ifBlank {
         "Каталог проектов не загружен — оставь project пустым, владелец выберет сам."
     }
@@ -250,6 +255,8 @@ internal fun parseTasksDela(
             dueTime = dueTime,
             remindAt = remindAt,
             remindPlace = remindPlace,
+            // Номер цели — как назвала модель; проверяет и ставит сервер (why_auto), телефон не угадывает.
+            whyAuto = t.optInt("goal", 0).coerceAtLeast(0),
         )
     }
     val notes = mutableListOf<ru.zf.pravka.core.ParsedNote>()

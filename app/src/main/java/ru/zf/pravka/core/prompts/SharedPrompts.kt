@@ -19,7 +19,7 @@ internal object SharedPrompts {
     const val RAZNOSKA = "raznoska.txt"
     const val RAZNOSKA_SCHEMA = "raznoska.schema.json"
 
-    /** Правила разбора наговора на дела. Плейсхолдеры: {CATALOG}, {PLACES}, {TODAY}, {NOW}. */
+    /** Правила разбора наговора на дела. Плейсхолдеры: {CATALOG}, {PLACES}, {TREE}, {TODAY}, {NOW}. */
     val raznoska: String by lazy { read(RAZNOSKA) }
 
     /**

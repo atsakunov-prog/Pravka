@@ -287,7 +287,8 @@ class RaznoskaEngine(
         if (keyed != queue) store.replaceTasks(draftId, draft.tasks.map { t -> keyed.firstOrNull { it.id == t.id } ?: t })
         val remindOn = delaStore.view.value.remindOn
         val groupsOn = delaStore.view.value.groupsOn
-        for (t in keyed) ops += Dela.createOp(asDela(t, draft.id, remindOn, groupsOn), t.opId)
+        val placeOn = delaStore.view.value.placeOn
+        for (t in keyed) ops += DelaPlace.withPlace(Dela.createOp(asDela(t, draft.id, remindOn, groupsOn), t.opId), t.whyAuto, placeOn)
         val at = java.time.OffsetDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString()
         for ((i, n) in notes.withIndex()) {
             ops += Dela.noteOp(

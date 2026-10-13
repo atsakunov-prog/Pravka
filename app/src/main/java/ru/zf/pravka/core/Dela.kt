@@ -401,6 +401,9 @@ object Dela {
         /** Сервер Дел знает «Отбить» (`owed`): только тогда телефон его шлёт. */
         val groupsOn: Boolean get() = FEATURE_GROUPS in features
 
+        /** Сервер ставит место в дереве по номеру цели от разбора (`why_auto`, docs/dela-phone-15.md). */
+        val placeOn: Boolean get() = FEATURE_PLACE in features
+
         val empty: Boolean
             get() = tasks.isEmpty() && projects.isEmpty() && people.isEmpty() && suggestions.isEmpty()
 
@@ -1072,6 +1075,9 @@ object Dela {
 
     /** Круг жизни (12.10.2026, docs/dela-phone-12.md): сервер знает `directions`, `why_id` и шлёт список `krug`. */
     const val FEATURE_KRUG = "krug"
+
+    /** Место в дереве при разборе (13.10.2026, docs/dela-phone-15.md): сервер принимает `why_auto` в `task.create`. */
+    const val FEATURE_PLACE = "place"
 
     /** Что сервер умеет сверх контракта части 1 — `features` ответа синка. */
     const val FEATURE_REMIND = "remind"

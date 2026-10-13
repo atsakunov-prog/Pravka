@@ -270,13 +270,23 @@ def cmd_serve(args) -> int:
     async def krug_loop():
         # Разборщик Круга (krug_auto.py): раз в минуту — досмотреть пачку или, в свой слот, отправить новую.
         # Слоты — по слову владельца: будни раз в полчаса, выходные раз в час, ночью с 00 до 8 — тишина.
-        from . import krug_auto
+        # Там же (place.py, 13.10.2026): блок «дерево жизни» для разборов — в Свод, если поменялся (не чаще раза в
+        # пять минут), и раз в неделю — выводы из правок владельца.
+        from . import krug_auto, place
 
         while cfg.anthropic_key:
             try:
                 await asyncio.to_thread(krug_auto.tick, cfg.db_url, cfg.anthropic_key, cfg.claude_proxy)
             except Exception:
                 log.exception("разборщик Круга")
+            try:
+                await asyncio.to_thread(place.refresh, cfg.db_url)
+            except Exception:
+                log.exception("дерево жизни для разборов")
+            try:
+                await asyncio.to_thread(place.tune, cfg.db_url, cfg.anthropic_key, cfg.claude_proxy)
+            except Exception:
+                log.exception("выводы Круга из правок")
             await asyncio.sleep(60)
 
     async def meetings_loop():

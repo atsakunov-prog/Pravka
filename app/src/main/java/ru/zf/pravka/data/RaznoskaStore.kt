@@ -196,6 +196,7 @@ class RaznoskaStore(private val context: Context) {
                             dueTime = t.optString("dueTime"),
                             remindAt = t.optString("remindAt"),
                             remindPlace = t.optString("remindPlace"),
+                            whyAuto = t.optInt("whyAuto", 0),
                         )
                     )
                 }
@@ -281,6 +282,7 @@ class RaznoskaStore(private val context: Context) {
                                 if (t.dueTime.isNotBlank()) put("dueTime", t.dueTime)
                                 if (t.remindAt.isNotBlank()) put("remindAt", t.remindAt)
                                 if (t.remindPlace.isNotBlank()) put("remindPlace", t.remindPlace)
+                                if (t.whyAuto > 0) put("whyAuto", t.whyAuto)
                             }
                         )
                     }

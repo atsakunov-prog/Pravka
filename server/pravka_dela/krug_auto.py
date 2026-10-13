@@ -17,9 +17,11 @@
   нём «без зачем»); от имени владельца со службой svc:krug в журнале. Не уверен — вопрос в «Подскажи» (правило
   Дел №5: «уверен — поставил, не уверен — подскажи»). Цели сам не заводит («Узлы создаёт Саша»), под целью с
   пометкой no_steps ничего не ставит, свои направления владельца не переписывает.
-- Учится на правках владельца: что он сам поставил или поправил в Круге (журнал tasks.krug, не служба) —
-  примерами в запрос. Механизма «учиться на причинах отклонения» в Делах не было (бриф думал, что есть) —
-  этот свой.
+- Учится на правках владельца — так же, как разбор надиктовки, встреч и переписки (place.py, 13.10.2026): что он
+  переставил после автоматики, что ответил на вопрос о месте, что поставил сам — примерами в запрос; недельные
+  выводы из правок (Свод krug.lessons) — рядом с правилами.
+- С 13.10.2026 место ставят уже при разборе (place.py): сюда доходят дела, которым модель разбора места не нашла,
+  и всё, что завели руками без места.
 - Кэша нет сознательно: запросы редкие (полчаса и реже), кэш на 5 минут не доживёт, а запись часового кэша
   дороже обычного входа, пока за час нет двух запросов.
 """
@@ -35,7 +37,7 @@ from zoneinfo import ZoneInfo
 
 from psycopg.types.json import Jsonb
 
-from . import db, krug, llm
+from . import db, krug, llm, place
 
 log = logging.getLogger("dela.krug")
 
@@ -47,7 +49,6 @@ BATCH_MAX_AGE = 2 * 3600  # пачка не кончилась за два ча�
 MAX_TASKS = 80  # за один запрос; остальные — следующим слотом
 ASKED_DAYS = 14  # о деле уже спрашивали (вопрос висит, отклонён или погас) — не переспрашивать
 SEEN_MAX = 2000  # сколько просмотренных дел помнить (id → версия); старое выпадает
-EXAMPLES = 40  # правок владельца в запрос
 MSK = ZoneInfo("Europe/Moscow")
 
 
@@ -120,21 +121,12 @@ def goals(conn, owner: str) -> list[dict]:
     return out
 
 
-def examples(url: str, owner: str) -> list[dict]:
-    """Как владелец сам ставил: последние правки Круга не службой и не засевом — дело и куда он его поставил
-    (цель или направление). Правки самих целей не в счёт: учимся месту дел. Тот же смысл, что у причины
-    отклонения в «Подскажи» (бриф 7.2, §10): ответ владельца — пример на будущее."""
-    with db.session(url, "system", via="krug") as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT ON (h.entity_id) h.entity_id, h.after -> 'directions' AS dirs, h.at, t.title, "
-            "w.title AS why FROM crm.history h JOIN tasks.tasks t ON t.id::text = h.entity_id "
-            "JOIN tasks.krug k ON k.id = t.id AND NOT k.goal "
-            "LEFT JOIN tasks.tasks w ON w.id::text = h.after ->> 'why_id' "
-            "WHERE h.entity = 'tasks.krug' AND h.actor NOT LIKE 'svc:%%' AND h.actor NOT LIKE 'cli:%%' "
-            "AND (h.after ? 'directions' OR h.after ? 'why_id') AND t.owner_id = %s "
-            "ORDER BY h.entity_id, h.at DESC", (owner,)).fetchall()
-    rows = sorted(rows, key=lambda r: r["at"], reverse=True)[:EXAMPLES]
-    return [{"title": r["title"], "dirs": list(r["dirs"] or []), "why": r["why"]} for r in rows if r["dirs"] or r["why"]]
+def examples(url: str, owner: str, known: list[dict] | None = None) -> tuple[list[str], list[str]]:
+    """Как владелец ставил сам и поправлял автоматику — строками (place.example_lines): (поправки и ответы, своё).
+    Правки самих целей не в счёт: учимся месту дел. Ответ владельца — пример на будущее (бриф 7.2, §10)."""
+    if known is None:
+        known = krug.directions_of(url, owner)
+    return place.example_lines(url, owner, known)
 
 
 # ── Запрос ─────────────────────────────────────────────────────────────
@@ -181,13 +173,17 @@ def system_prompt(known: list[dict], rules_text: str = RULES) -> str:
     return rules_text + "\n\nНАПРАВЛЕНИЯ\n" + "\n\n".join(_dir_block(d) for d in known)
 
 
-def user_prompt(tasks: list[dict], open_goals: list[dict], learned: list[dict], known: list[dict]) -> str:
+def user_prompt(tasks: list[dict], open_goals: list[dict], learned: tuple[list[str], list[str]], known: list[dict],
+                lessons: list[str] | None = None) -> str:
     name = {d["key"]: d.get("name") or d["key"] for d in known}
     parts = []
-    if learned:
-        parts.append("КАК ВЛАДЕЛЕЦ СТАВИЛ САМ (свежие сверху — это сильнее общих правил):\n" + "\n".join(
-            f"— «{e['title']}»: " + (f"цель «{e['why']}»" if e.get("why") else ", ".join(name.get(k, k) for k in e["dirs"]))
-            for e in learned))
+    fixes, own = learned
+    if lessons:
+        parts.append("ВЫВОДЫ ИЗ ПРАВОК ВЛАДЕЛЬЦА (сильнее общих правил):\n" + "\n".join(f"- {x}" for x in lessons))
+    if fixes:
+        parts.append("КАК ВЛАДЕЛЕЦ ПОПРАВЛЯЛ АВТОМАТИКУ (свежие сверху — это сильнее общих правил):\n" + "\n".join(fixes))
+    if own:
+        parts.append("КАК ВЛАДЕЛЕЦ СТАВИЛ САМ (свежие сверху — это сильнее общих правил):\n" + "\n".join(own))
     if open_goals:
         parts.append("ЦЕЛИ (номер — путь от направления):\n" + "\n".join(
             f"#{g['num']} " + " › ".join([name.get((g["dirs"] or [""])[0], "?"), *g["path"]])
@@ -385,10 +381,11 @@ def tick(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
         tasks = candidates(conn, owner, st.get("seen")) if known else []
         open_goals = goals(conn, owner) if tasks else []
         rules_text = rules(conn, owner)
+        learnt = place.lessons(conn, owner)
     if not tasks:
         _save(url, {**st, "slot": key_})
         return None
-    p = params(system_prompt(known, rules_text), user_prompt(tasks, open_goals, examples(url, owner), known), known)
+    p = params(system_prompt(known, rules_text), user_prompt(tasks, open_goals, examples(url, owner, known), known, learnt), known)
     b = client.messages.batches.create(requests=[{"custom_id": "krug", "params": p}])
     looked = {str(t["id"]): version(t) for t in tasks}  # ответ про дело не пришёл — всё равно не слать его снова
     _save(url, {**st, "slot": key_, "batch": {"id": b.id, "at": time.time(), "slot": key_, "params": p, "n": len(tasks),
