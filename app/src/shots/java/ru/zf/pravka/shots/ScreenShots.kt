@@ -47,7 +47,7 @@ import java.util.TimeZone
  *
  * Сырьё — в `app/build/shots`, готовое — в `docs/design/screens` (не в git:
  * десятки мегабайт, пересъёмка — одна команда). Группы через запятую:
- * outer, tall, inner, overlay; t5 — только «Сегодня» вида v2 (быстро).
+ * outer, tall, inner, overlay; t5 — только «Сегодня» вида v2 (быстро); z5 — только Засечка v2.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -61,11 +61,13 @@ class ScreenShots {
         const val INNER = "w791dp-h820dp-420dpi"
         /** Длинная лента внешнего экрана: вкладка целиком, без прокрутки. */
         const val OUTER_TALL = "w411dp-h2600dp-420dpi"
+        /** Разворот высоким окном — колонки целиком (Засечка v2: итог, автопилот, телефон слева). */
+        const val INNER_TALL = "w791dp-h1700dp-420dpi"
     }
 
     private val dir = File(System.getProperty("pravka.shotsDir") ?: "build/shots").also { it.mkdirs() }
 
-    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5. */
+    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5. */
     private fun want(group: String): Boolean {
         val v = System.getProperty("pravka.shots").orEmpty()
         return v == "1" || v == "all" || v.split(',').map { it.trim() }.contains(group)
@@ -373,6 +375,9 @@ class ScreenShots {
             RuntimeEnvironment.setQualifiers(OUTER)
         }
 
+        // ---- Засечка v2 (Правка 5.0, этап 3) отдельно — быстрый прогон без остальных экранов
+        if (want("z5")) zasechka5()
+
         // ---- «Сегодня» v2 (Правка 5.0, этап 2) отдельно — быстрый прогон без остальных экранов
         if (want("t5")) {
             for ((prefix, q) in listOf("outer" to OUTER, "inner" to INNER)) {
@@ -592,6 +597,51 @@ class ScreenShots {
             shot(c, "s6-$name-v4")
             close(c)
         }
+        runBlocking { app.settings.setLookV4(false) }
+        settle(4)
+    }
+
+    /**
+     * Засечка вида v2 (Правка 5.0, этап 3; холст `Zasechka.dc.html`):
+     * сложенный, высокий сложенный (вкладка целиком) и разложенный — в светлой
+     * и тёмной теме; на сложенном и высоком — ещё лента «Весь день» раскрытой,
+     * на сложенном светлом — редактор «Поправить». Плюс «Вид 4.0» — прежняя вкладка.
+     */
+    private fun zasechka5() {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        for (theme in listOf("light", "dark")) {
+            runBlocking { app.settings.setLookTheme(theme) }
+            settle(4)
+            // «wide-tall» — разворот высоким окном: левая колонка целиком (итог, автопилот, телефон).
+            for ((size, q) in listOf("folded" to OUTER, "tall" to OUTER_TALL, "wide" to INNER, "wide-tall" to INNER_TALL)) {
+                RuntimeEnvironment.setQualifiers(q)
+                var c = launch(MainActivity.TAB_ZASECHKA)
+                shot(c, "z5-$size-$theme")
+                if (!size.startsWith("wide") && tap(c, "Весь день", exact = true)) shot(c, "z5-$size-all-$theme")
+                close(c)
+                if ((size == "folded" || size == "wide") && theme == "light") {
+                    if (size == "folded") {
+                        c = launch(MainActivity.TAB_ZASECHKA)
+                        if (tap(c, "Поправить", exact = true)) screen("z5-$size-edit-$theme")
+                        close(c)
+                    }
+                    // Вчера: тап по названию — навигатор дня, «‹» — день назад; «Сейчас» и строки «сказать» нет.
+                    c = launch(MainActivity.TAB_ZASECHKA)
+                    if (tap(c, "Засечка", exact = true) && tap(c, "день назад")) shot(c, "z5-$size-yesterday-$theme")
+                    close(c)
+                }
+            }
+        }
+        RuntimeEnvironment.setQualifiers(OUTER)
+        runBlocking { app.settings.setLookTheme("system") }
+        settle(4)
+        // «Вид 4.0» — откат: прежняя вкладка с циферблатом, лентой хроники и строкой «стоп».
+        runBlocking { app.settings.setLookV4(true) }
+        settle(4)
+        var c = launch(MainActivity.TAB_ZASECHKA); shot(c, "z5-v4-folded"); close(c)
+        RuntimeEnvironment.setQualifiers(INNER)
+        c = launch(MainActivity.TAB_ZASECHKA); shot(c, "z5-v4-wide"); close(c)
+        RuntimeEnvironment.setQualifiers(OUTER)
         runBlocking { app.settings.setLookV4(false) }
         settle(4)
     }
