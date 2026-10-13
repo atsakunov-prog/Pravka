@@ -290,6 +290,8 @@ class ScreenShots {
                     close(m); m = launch(tab)
                     if (tap(m, "Новое")) shot(m, "$g-4-novoe")
                     if (tap(m, "Все дела")) shot(m, "$g-6-vse")
+                    // Этап 4 «Правки 5.0»: «Сегодня» отдельно от «Сейчас» — срок сегодня, «Моё» ниже.
+                    if (tap(m, "Сегодня")) shot(m, "$g-11-segodnya")
                     close(m); m = launch(tab)
                     // Фильтр с завода: «Отбить — по людям».
                     if (tap(m, "разделы, CRM") && tap(m, "Отбить — по людям")) {
@@ -459,7 +461,16 @@ class ScreenShots {
             shot(c, "$prefix-v2-$theme-1-today")
             if (tap(c, "Все сервисы Ковчега")) shot(c, "$prefix-v2-$theme-2-menu")
             close(c)
-            c = launch(MainActivity.TAB_TODOIST); shot(c, "$prefix-v2-$theme-3-dela"); close(c)
+            c = launch(MainActivity.TAB_TODOIST); shot(c, "$prefix-v2-$theme-3-dela")
+            // Этап 4: карточка дела с молнией «В «Сейчас»» — на сложенном листом, на разложенном справа
+            // (и лист «Карточка» поверх).
+            if (tap(c, "Ольга: ответить про сроки")) {
+                if (prefix == "inner") {
+                    shot(c, "$prefix-v2-$theme-5-dela-pane")
+                    if (tap(c, "Карточка", exact = true)) screen("$prefix-v2-$theme-6-dela-card")
+                } else screen("$prefix-v2-$theme-5-dela-card")
+            }
+            close(c)
             c = launch(MainActivity.TAB_ZASECHKA); shot(c, "$prefix-v2-$theme-4-zasechka"); close(c)
         }
         runBlocking { app.settings.setLookTheme("system") }
@@ -467,7 +478,9 @@ class ScreenShots {
         // «Вид 4.0» — откат на время переезда: прежнее стекло и шапки целиком.
         runBlocking { app.settings.setLookV4(true) }
         settle(4)
-        val c = launch(null); shot(c, "$prefix-v4-1-today"); close(c)
+        var c = launch(null); shot(c, "$prefix-v4-1-today"); close(c)
+        // Дела в виде 4.0 — после этапа 4 («Сейчас» первым разделом) прежние сегменты и стекло на месте.
+        c = launch(MainActivity.TAB_TODOIST); shot(c, "$prefix-v4-3-dela"); close(c)
         runBlocking { app.settings.setLookV4(false) }
         settle(4)
     }

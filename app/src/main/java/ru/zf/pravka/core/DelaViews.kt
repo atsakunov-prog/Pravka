@@ -28,12 +28,16 @@ object DelaViews {
     // ------------------------------------------------------------ разделы
 
     /**
-     * Разделы веба (`VIEWS` веба). С 10.10.2026 их три (docs/dela-phone-11.md,
+     * Разделы веба (`VIEWS` веба). С 10.10.2026 их было три (docs/dela-phone-11.md,
      * владелец: «не надо этих всех странных видов. Просто надо говорить: на
-     * сегодня вот такие дела»): «Сегодня» — главный список тремя группами,
-     * «Новое» — вопросы автоматики, «Все дела» — всё открытое.
+     * сегодня вот такие дела»); с 13.10.2026 (этап 4 «Правки 5.0», docs/dela-phone-19.md)
+     * первым — «Сейчас»: что владелец отметил сам, под ним вопросы «Нового» и «Сегодня» без
+     * уже взятого. «Сегодня» — срок сегодня, «Новое» — вопросы автоматики, «Все дела» — всё
+     * открытое, просроченное сверху.
      */
     enum class View(val key: String, val title: String) {
+        /** Главная (`renderNow` веба): «Сейчас», «Новое» с кнопками, «Сегодня» без взятого в «Сейчас». */
+        NOW("now", "Сейчас"),
         TODAY("today", "Сегодня"),
         NEW("new", "Новое"),
         ALL("all", "Все дела"),
@@ -47,12 +51,14 @@ object DelaViews {
 
         companion object {
             /**
-             * Ключ раздела, как маршрут веба: «Сейчас», «Предстоящее», «Жду»,
-             * «Неделя» и старое «Утро» ведут в «Сегодня», «Входящие» — в «Новое».
+             * Ключ раздела, как маршрут веба (`route` в `app.js`): «Входящие» — в «Новое»,
+             * «Неделя» — во «Все дела»; «Утро», «Предстоящее», «Жду» и незнакомое — на главную,
+             * в «Сейчас». Старый ключ «Сегодня» остаётся «Сегодня».
              */
             fun of(key: String): View = when (key) {
                 "inbox" -> NEW
-                else -> entries.firstOrNull { it.key == key } ?: TODAY
+                "week" -> ALL
+                else -> entries.firstOrNull { it.key == key } ?: NOW
             }
         }
     }
@@ -133,25 +139,38 @@ object DelaViews {
         openMine(s, me, sphere).filter { it.projectId.isBlank() }.sortedWith(Dela.ORDER)
 
     /**
-     * Числа у разделов в меню — как `count()` у `VIEWS` веба: «Сегодня» — сколько
-     * дел на сегодня, [todayHot] — среди них есть «отбить» (люди ждут), «Новое» —
-     * только вопросы.
+     * Числа у разделов — как `count()` у `VIEWS` веба: «Сейчас» — сколько взято (во
+     * всех сферах), «Сегодня» — со сроком сегодня, [todayHot] — среди них есть «отбить»
+     * (люди ждут), «Новое» — только вопросы, «Все дела» — только просроченное ([late]
+     * цветом беды: оно живёт там и само никуда не встаёт).
      */
-    data class Counts(val today: Int, val new: Int, val todayHot: Boolean = false) {
+    data class Counts(val today: Int, val new: Int, val todayHot: Boolean = false, val now: Int = 0, val late: Int = 0) {
         fun of(v: View): Int = when (v) {
+            View.NOW -> now
             View.TODAY -> today
             View.NEW -> new
-            View.ALL, View.KRUG, View.TREE -> 0
+            View.ALL -> late
+            View.KRUG, View.TREE -> 0
         }
 
-        fun hot(v: View): Boolean = v == View.TODAY && todayHot
+        /** Число акцентом (`.count.hot` холста): взятое в «Сейчас», «Сегодня», где люди ждут, и вопросы «Нового». */
+        fun hot(v: View): Boolean = (v == View.NOW && now > 0) || (v == View.TODAY && todayHot) || (v == View.NEW && new > 0)
+
+        /** Число цветом беды (`.count.bad`): просроченное у «Всех дел». */
+        fun bad(v: View): Boolean = v == View.ALL && late > 0
 
         fun label(v: View): String = of(v).takeIf { it > 0 }?.toString().orEmpty()
     }
 
     fun counts(s: Dela.Snapshot, me: String, today: String, sphere: String, now: Long): Counts {
         val t = DelaGroups.todayTasks(s, me, today, sphere)
-        return Counts(today = t.size, new = newCount(s, me, sphere, now), todayHot = t.any { DelaGroups.grpOf(it) == DelaGroups.Grp.OWED })
+        return Counts(
+            today = t.size,
+            new = newCount(s, me, sphere, now),
+            todayHot = t.any { DelaGroups.grpOf(it) == DelaGroups.Grp.OWED },
+            now = nowTasks(s, me, today).size,
+            late = DelaGroups.lateTasks(s, me, today, sphere).size,
+        )
     }
 
     /**

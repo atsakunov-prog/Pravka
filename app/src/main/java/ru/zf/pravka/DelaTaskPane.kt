@@ -1,10 +1,12 @@
 package ru.zf.pravka
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -30,6 +32,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import ru.zf.pravka.core.Dela
 import ru.zf.pravka.core.Fmt
 import ru.zf.pravka.ui.GhostKey
@@ -37,6 +40,8 @@ import ru.zf.pravka.ui.Glyphs
 import ru.zf.pravka.ui.Hairline
 import ru.zf.pravka.ui.Ink
 import ru.zf.pravka.ui.Key
+import ru.zf.pravka.ui.Kv
+import ru.zf.pravka.ui.KvShape
 import ru.zf.pravka.ui.LocalMode
 import ru.zf.pravka.ui.LocalPravkaType
 import ru.zf.pravka.ui.SectionHeader
@@ -69,7 +74,17 @@ internal fun DelaTaskPane(
     onProject: (String) -> Unit = {},
     /** Кто смотрит: место в дереве — только у своего дела. */
     me: String = "",
+    /** Молния «В «Сейчас»» / «Из «Сейчас»» (вид v2, 13.10.2026); null — кнопки нет. */
+    onNow: (() -> Unit)? = null,
+    /** Солнце «На сегодня» / «На завтра»; null — кнопки нет. */
+    onSun: (() -> Unit)? = null,
+    /** «Перенести» — лист сроков, как «Перенести все»; null — кнопки нет. */
+    onMove: (() -> Unit)? = null,
 ) {
+    if (ru.zf.pravka.ui.Look.v2) {
+        DelaTaskPaneV2(app, task, snap, spentMs, onStart, onEdit, onDone, onPerson, modifier, onTask, onProject, me, onNow, onSun, onMove)
+        return
+    }
     val mode = LocalMode.current
     val ty = LocalPravkaType.current
     if (task == null) {
@@ -290,4 +305,275 @@ private fun historyPaneLine(o: org.json.JSONObject, snap: Dela.Snapshot): String
         }.take(4).joinToString(", ")
     } else ""
     return "$at · $op" + (if (changed.isNotBlank()) ": $changed" else "") + (who?.let { " — $it" } ?: "")
+}
+
+// ---------------------------------------------------------------- вид v2
+
+/**
+ * Карточка дела справа в виде v2 (этап 4 «Правки 5.0», лист «Дела» холста; карточка веба Дел): панелью с
+ * линией — надстрочник «Дело» и группа, название 17/600, метки (проект, сделка, «в «Сейчас»», свои), свойства
+ * строками через тонкую линию (кто ждёт, срок, напомнить, оценка, откуда), заметки и ряд действий:
+ * «Сделано» акцентом, молния «В «Сейчас»», солнце, «Перенести», «Начать», «Карточка» (вся правка — тем же листом).
+ * Ниже — место в дереве (Круг) и журнал: заметки к делу и правки сервера по времени. Номера дела нет нигде.
+ */
+@Composable
+private fun DelaTaskPaneV2(
+    app: PravkaApp,
+    task: Dela.Task?,
+    snap: Dela.Snapshot,
+    spentMs: Long,
+    onStart: () -> Unit,
+    onEdit: () -> Unit,
+    onDone: () -> Unit,
+    onPerson: (String) -> Unit,
+    modifier: Modifier,
+    onTask: (Dela.Task) -> Unit,
+    onProject: (String) -> Unit,
+    me: String,
+    onNow: (() -> Unit)?,
+    onSun: (() -> Unit)?,
+    onMove: (() -> Unit)?,
+) {
+    val ty = LocalPravkaType.current
+    if (task == null) {
+        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            ru.zf.pravka.ui.EmptyState("Тап по делу слева — оно откроется здесь", icon = Glyphs.Delo)
+        }
+        return
+    }
+    val today = LocalDate.now()
+    val iso = today.toString()
+    var journal by remember(task.id) { mutableStateOf<List<String>?>(null) }
+    var journalNote by remember(task.id) { mutableStateOf("") }
+    LaunchedEffect(task.id) {
+        app.delaSync.card(task.id)
+            .onSuccess { c -> journal = c.history.map { historyPaneLine(it, snap) } }
+            .onFailure { e -> journalNote = "журнал не прочитался: ${e.message}" }
+    }
+    val listState = rememberLazyListState()
+    LazyColumn(
+        modifier = modifier.fillMaxSize().scrollFade(listState),
+        state = listState,
+        contentPadding = PaddingValues(start = 4.dp, end = 16.dp, top = 2.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item(key = "card") {
+            PanelV2 {
+                val g = ru.zf.pravka.core.DelaGroups.grpOf(task)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Дело" + when (task.status) { Dela.DONE -> " · сделано"; Dela.CANCELLED -> " · отменено"; else -> "" },
+                        style = ty.overline,
+                        color = Kv.faint,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        if (task.ball == Dela.AGENDA) "При встрече" else g.title,
+                        style = ty.meta,
+                        color = if (g == ru.zf.pravka.core.DelaGroups.Grp.OWED) Kv.warn else Kv.faint,
+                        fontWeight = if (g == ru.zf.pravka.core.DelaGroups.Grp.OWED) androidx.compose.ui.text.font.FontWeight.SemiBold else null,
+                    )
+                }
+                Text(
+                    task.title,
+                    style = ty.bodyStrong.copy(fontSize = 17.sp, lineHeight = 22.sp),
+                    color = Kv.text,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                // Метки (`.tag` холста): проект — акцентом и ссылкой на страницу, сделка, «в «Сейчас»», свои.
+                val project = snap.projects[task.projectId]?.name ?: task.projectName.takeIf { task.projectId.isNotBlank() }.orEmpty()
+                val deal = snap.deals[task.dealId]?.name.orEmpty()
+                val isNow = ru.zf.pravka.core.DelaGroups.isNow(task, iso)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(top = 8.dp),
+                ) {
+                    if (project.isNotBlank()) KvTag(project, accent = true, onClick = { onProject(task.projectId) })
+                    else KvTag("без проекта")
+                    if (deal.isNotBlank()) KvTag(deal)
+                    if (isNow) KvTag("в «Сейчас»", accent = true)
+                    for (l in task.labels) KvTag(l)
+                }
+                // Свойства — строками через тонкую линию (`.set` холста): подпись мелко, значение строкой.
+                val who = snap.people[task.personId]?.label ?: task.who
+                val props = buildList {
+                    val wait = ru.zf.pravka.core.DelaGroups.wait(task, who, iso, personGrouped = false)?.text
+                    when {
+                        g == ru.zf.pravka.core.DelaGroups.Grp.OWED -> add(Triple("Ждёт", wait ?: "ждут", false))
+                        task.ball == Dela.WAITING -> add(Triple("Жду от", wait ?: "жду", false))
+                        task.ball == Dela.AGENDA -> add(Triple("При встрече", who.ifBlank { "человек не выбран" }, false))
+                        who.isNotBlank() -> add(Triple("Человек", who, false))
+                    }
+                    val d = runCatching { LocalDate.parse(task.dueDate.take(10)) }.getOrNull()
+                    if (d != null) {
+                        val k = ChronoUnit.DAYS.between(today, d).toInt()
+                        val rel = when {
+                            k == 0 -> "сегодня"
+                            k == 1 -> "завтра"
+                            k > 1 -> "через " + plural(k, "день", "дня", "дней")
+                            else -> "просрочено ${-k} дн."
+                        }
+                        add(Triple("Срок", Fmt.dayList(d) + (if (task.dueTime.isNotBlank()) ", ${task.dueTime.take(5)}" else "") + " · " + rel, k < 0 && task.open))
+                    }
+                    if (task.ball == Dela.WAITING && task.nudgeOn.isNotBlank()) {
+                        add(Triple("Напомнить ему", runCatching { Fmt.dayList(LocalDate.parse(task.nudgeOn.take(10))) }.getOrDefault(task.nudgeOn), false))
+                    }
+                    if (task.estimateMin > 0 || spentMs > 0) {
+                        add(Triple(
+                            "Оценка",
+                            (if (task.estimateMin > 0) Fmt.dur(task.estimateMin) else "без оценки") +
+                                (if (spentMs > 0) " · в Засечке уже ${Fmt.durMs(spentMs)}" else ""),
+                            false,
+                        ))
+                    }
+                    val created = task.createdAt.take(10).takeIf { it.isNotBlank() }?.let { runCatching { Fmt.dayShort(LocalDate.parse(it)) }.getOrNull() }
+                    val src = listOfNotNull(sourcePaneName(task.source), created).joinToString(", ")
+                    if (src.isNotBlank()) add(Triple("Откуда", src, false))
+                }
+                Column(Modifier.padding(top = 8.dp)) {
+                    props.forEachIndexed { i, (k, v, warn) ->
+                        if (i > 0) ru.zf.pravka.ui.Hairline()
+                        val person = k in setOf("Ждёт", "Жду от", "При встрече", "Человек") && task.personId.isNotBlank()
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(KvShape.Tag))
+                                .then(if (person) Modifier.clickable { onPerson(task.personId) } else Modifier)
+                                .padding(vertical = 8.dp),
+                        ) {
+                            Text(k, style = ty.meta, color = Kv.faint)
+                            Text(v + if (person) " ›" else "", style = ty.body.copy(fontSize = 14.sp), color = if (warn) Kv.warn else Kv.text)
+                        }
+                    }
+                }
+                if (task.notes.isNotBlank()) {
+                    Text(
+                        task.notes.take(600),
+                        style = ty.label.copy(fontWeight = null, lineHeight = 19.sp),
+                        color = Kv.muted,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+                // Действия (`.btn.sm` холста): «Сделано» — акцент, «Сейчас» — мягким акцентом, когда взято.
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(top = 12.dp),
+                ) {
+                    KvSmallKey(if (task.open) "Сделано" else "Вернуть в работу", if (task.open) Glyphs.Check else Glyphs.Undo, kind = if (task.open) 2 else 0, onClick = onDone)
+                    if (task.open) {
+                        val mine = me.isBlank() || task.ownerId.isBlank() || task.ownerId == me
+                        if (onNow != null && mine && !task.goal) KvSmallKey(if (isNow) "Из «Сейчас»" else "В «Сейчас»", Glyphs.Bolt, kind = if (isNow) 1 else 0, onClick = onNow)
+                        if (onSun != null) {
+                            val on = ru.zf.pravka.core.DelaGroups.inToday(task, task.ownerId, iso)
+                            KvSmallKey(if (on) "На завтра" else "На сегодня", Glyphs.Sunny, kind = 0, onClick = onSun)
+                        }
+                        if (onMove != null) KvSmallKey("Перенести", Glyphs.Calendar, kind = 0, onClick = onMove)
+                        KvSmallKey("Начать", Glyphs.Play, kind = 0, onClick = onStart)
+                    }
+                    KvSmallKey("Карточка", Glyphs.Edit, kind = 0, onClick = onEdit)
+                }
+            }
+        }
+        // Место в дереве жизни (`placeBlock` веба): зачем это дело и что будет, когда сделаешь.
+        val dirs = ru.zf.pravka.core.DelaKrug.directions()
+        if (ru.zf.pravka.core.DelaKrug.on(snap, dirs) && (me.isBlank() || task.ownerId.isBlank() || task.ownerId == me)) {
+            item(key = "place") {
+                PlaceBlock(task, ru.zf.pravka.core.DelaKrug.place(task, snap, iso, me), dirs, snap, onTask, onProject)
+            }
+        }
+        // Журнал (`.eyebrow` и `.lr` холста): заметки к делу и правки сервера — по времени.
+        val comments = snap.commentsOf(task.id)
+        val lines = comments.map { it.createdAt.take(16).replace('T', ' ') to it.text } +
+            journal.orEmpty().map { it.substringBefore(" · ") to it.substringAfter(" · ") }
+        item(key = "journal") {
+            PanelV2 {
+                Text("Журнал", style = ty.overline, color = Kv.faint)
+                if (lines.isEmpty()) {
+                    Text(
+                        if (journal == null && journalNote.isBlank()) "читаю журнал…" else journalNote.ifBlank { "правок нет" },
+                        style = ty.meta,
+                        color = Kv.faint,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                } else {
+                    lines.sortedBy { it.first }.forEachIndexed { i, (at, text) ->
+                        if (i > 0) ru.zf.pravka.ui.Hairline()
+                        Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.Top) {
+                            Text(paneStamp(at), style = ty.meta, color = Kv.faint, modifier = Modifier.width(84.dp))
+                            Text(text, style = ty.label.copy(fontWeight = null), color = Kv.text, modifier = Modifier.weight(1f))
+                        }
+                    }
+                    if (journalNote.isNotBlank()) Text(journalNote, style = ty.meta, color = Kv.faint)
+                }
+            }
+        }
+    }
+}
+
+/** Панель вида v2 (`.card` холста): белая, линия, радиус 10, поля 12/14. */
+@Composable
+private fun PanelV2(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    val shape = RoundedCornerShape(KvShape.Panel)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Kv.panel)
+            .border(1.dp, Kv.line, shape)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        content = content,
+    )
+}
+
+/** Метка (`.tag` холста): прямоугольник 5; [accent] — мягким акцентом. */
+@Composable
+private fun KvTag(text: String, accent: Boolean = false, onClick: (() -> Unit)? = null) {
+    Text(
+        text,
+        style = LocalPravkaType.current.caption.copy(lineHeight = 19.sp),
+        color = if (accent) Kv.accent else Kv.muted,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .clip(RoundedCornerShape(KvShape.Tag))
+            .background(if (accent) Kv.accentSoft else Kv.hover2)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 7.dp),
+    )
+}
+
+/**
+ * Маленькая кнопка (`.btn.sm` холста): [kind] 0 — панель с линией, 1 — мягкий акцент (`.soft`: включено),
+ * 2 — акцент (`.p`: главное действие).
+ */
+@Composable
+private fun KvSmallKey(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector?, kind: Int, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(7.dp)
+    val (bg, ink) = when (kind) {
+        2 -> Kv.accent to Kv.accentInk
+        1 -> Kv.accentSoft to Kv.accent
+        else -> Kv.panel to Kv.text
+    }
+    Row(
+        Modifier
+            .clip(shape)
+            .background(bg)
+            .then(if (kind == 0) Modifier.border(1.dp, Kv.line, shape) else Modifier)
+            .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (icon != null) {
+            androidx.compose.material3.Icon(icon, contentDescription = null, tint = if (kind == 0) Kv.icon else ink, modifier = Modifier.size(15.dp))
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(
+            text,
+            style = LocalPravkaType.current.label.copy(fontSize = 13.sp, fontWeight = if (kind == 0) androidx.compose.ui.text.font.FontWeight.Medium else androidx.compose.ui.text.font.FontWeight.SemiBold),
+            color = ink,
+            maxLines = 1,
+        )
+    }
 }

@@ -215,6 +215,9 @@ object DelaKrug {
      * дел, не «отбить» и не «мониторить», у которых «Хочу сам» или «Зачем» без своих
      * открытых шагов. Порядок: закреплённое «Хочу сам», потом главные направления, где за
      * неделю меньше всего движения, потом кто дольше ждёт. Цели — не дела: их здесь нет.
+     * С 13.10.2026 — без того, что и так на виду: срок сегодня («Сегодня») или уже в «Сейчас»;
+     * отсеивается до отбора трёх, а не после, иначе «Моё» показывало бы меньше, чем есть
+     * (`krug.mine(skip=…)` сервера).
      */
     fun mine(s: Dela.Snapshot, me: String, today: String, sphere: String): List<Dela.Task> {
         val mv = movement(s, me, today)
@@ -222,6 +225,7 @@ object DelaKrug {
         fun least(t: Dela.Task): Int = dirsOf(t, s, me).firstOrNull()?.let { mv[it]?.events } ?: 0
         return s.tasks.values.filter {
             it.open && !it.goal && (me.isBlank() || it.ownerId == me) && Dela.inSphere(it, sphere) && !it.owed && it.ball != Dela.WAITING &&
+                !DelaGroups.isNow(it, today) && it.dueDate != today &&
                 (it.want || (it.whyId.isNotBlank() && it.id !in withSteps))
         }.sortedWith(compareBy<Dela.Task>({ !it.want }, { least(it) }, { it.createdAt }, { it.num })).take(MINE_MAX)
     }

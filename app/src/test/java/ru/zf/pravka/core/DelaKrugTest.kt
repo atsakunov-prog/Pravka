@@ -120,6 +120,19 @@ class DelaKrugTest {
     }
 
     @Test
+    fun `«Моё» — без того, что и так на виду, отсеяно до отбора трёх`() {
+        // 13.10.2026 (`krug.mine(skip=…)` сервера, `mineTasks` веба): срок сегодня — в «Сегодня», отмеченное — в «Сейчас».
+        val wants = (1..3).map { i -> task("w$i") { it.copy(want = true, createdAt = "2026-10-0${i}T10:00:00+03:00") } }
+        val dueToday = wants[0].copy(dueDate = today)
+        val taken = wants[1].copy(focusOn = today)
+        val more = task("w4") { it.copy(want = true, createdAt = "2026-10-08T10:00:00+03:00") }
+        val late = task("w5") { it.copy(want = true, dueDate = "2026-10-01", createdAt = "2026-10-09T10:00:00+03:00") }
+        val s = snap(dueToday, taken, wants[2], more, late)
+        // Двое на виду ушли — на их место встали следующие, а не пустота; просроченное «Моё» не прячет.
+        assertEquals(listOf("w3", "w4", "w5"), DelaKrug.mine(s, "me", today, "all").map { it.id })
+    }
+
+    @Test
     fun `движение — только главное направление, дело 1, цель 3`() {
         val goal = task("goal") { it.copy(goal = true, directions = listOf("health"), status = Dela.DONE, completedAt = "2026-10-11T12:00:00+03:00") }
         val step = task("step") { it.copy(whyId = "goal", directions = listOf("home"), status = Dela.DONE, completedAt = "2026-10-10T12:00:00+03:00") }

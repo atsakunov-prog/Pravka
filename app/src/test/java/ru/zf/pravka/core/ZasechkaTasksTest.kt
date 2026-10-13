@@ -47,7 +47,7 @@ class ZasechkaTasksTest {
     }
 
     @Test
-    fun `список взяться - идущее, сегодня по группам, недавнее, без повторов`() {
+    fun `список взяться - идущее, Сейчас, сегодня по группам, недавнее, без повторов`() {
         val today = "2026-10-05"
         val s = snap(
             task("run", 1),
@@ -59,6 +59,8 @@ class ZasechkaTasksTest {
             task("waiting", 7, due = "2026-10-01", ball = Dela.WAITING),
             task("other", 8, due = "2026-10-01", owner = "natasha"),
             task("closed", 9, due = "2026-10-01", status = Dela.DONE),
+            task("todayWait", 10, due = today, ball = Dela.WAITING),
+            task("todayMine", 11, due = today),
         )
         val entries = listOf(
             entry(now - 30 * 24 * h, now - 30 * 24 * h + h, task = "old"),
@@ -67,15 +69,15 @@ class ZasechkaTasksTest {
             entry(now - 10 * m, 0L, task = "run"),
         )
         val ids = ZasechkaTasks.shortlist(s, "me", today, entries, now).map { it.id }
-        // «Сегодня» — по группам и времени: просроченное «запустить» выше «Сейчас», «мониторить» — последним;
-        // «due» начато из ленты сегодня, но второй раз не встаёт.
-        assertEquals(listOf("run", "due", "focus", "waiting", "recent"), ids)
+        // 13.10.2026: дела дня — «Сейчас» (что взял сам), потом срок сегодня по группам («мониторить» — последним).
+        // Просроченное само сюда не встаёт («waiting» с прошлым сроком — нет); «due» — только как начатое из ленты.
+        assertEquals(listOf("run", "focus", "todayMine", "todayWait", "due", "recent"), ids)
 
-        // По частям: идущее не на сегодня — первым, «Сегодня» — своим заголовком, ниже начатое за неделю.
+        // По частям: идущее не на сегодня — первым, дела дня — своим заголовком, ниже начатое за неделю.
         val p = ZasechkaTasks.parts(s, "me", today, entries, now)
         assertEquals("run", p.running?.id)
-        assertEquals(listOf("due", "focus", "waiting"), p.now.map { it.id })
-        assertEquals(listOf("recent"), p.rest.map { it.id })
+        assertEquals(listOf("focus", "todayMine", "todayWait"), p.now.map { it.id })
+        assertEquals(listOf("due", "recent"), p.rest.map { it.id })
         assertEquals(ids, p.all.map { it.id })
     }
 

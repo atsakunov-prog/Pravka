@@ -367,10 +367,12 @@ internal object Seed {
             person("pe-dima", "Дмитрий Кузнецов", "Дима", "o-buh", "бухгалтер"), person("pe-lena", "Елена Орлова", "Лена").put("user_id", "lena"),
             person("pe-anna", "Анна Белова", "Анна", "o-beta", "казначей"), person("pe-petr", "Пётр Ершов", "Пётр"),
         )
+        // «Сейчас» и «Сегодня» врозь (этап 4 «Правки 5.0»): в «Сейчас» — три отмеченных (и просроченное КП),
+        // в «Сегодня» — срок сегодня тремя группами, просроченное без отметки — только во «Всех делах».
         val tasks = arr(
             task(61, "Бета: финмодель — сценарий без кредита") { put("project_id", "p-beta"); put("deal_id", "d-beta-model"); put("focus_on", d(0)); put("estimate_min", 60) },
             task(58, "Иван: созвон по бюджету IV квартала") { put("project_id", "p-beta"); put("person_id", "pe-ivan"); put("due_date", d(0)); put("due_time", "11:30"); put("labels", arr("звонок")); put("created_at", ago(3)); put("source", "meeting") },
-            task(55, "Орион: КП на управленческий учёт") { put("project_id", "p-orion"); put("deal_id", "d-orion-uu"); put("due_date", d(-1)); put("estimate_min", 120) },
+            task(55, "Орион: КП на управленческий учёт") { put("project_id", "p-orion"); put("deal_id", "d-orion-uu"); put("due_date", d(-1)); put("estimate_min", 120); put("focus_on", d(0)) },
             task(63, "Дача: оплатить электричество за сентябрь") { put("project_id", "p-dacha"); put("due_date", d(0)); put("estimate_min", 5); put("created_at", ago(26)) },
             task(41, "Налоговый вычет: собрать чеки за лечение") { put("project_id", "p-home"); put("due_date", d(-17)) },
             task(57, "Иван: прислать выгрузку из 1С") { put("project_id", "p-beta"); put("ball", "waiting"); put("person_id", "pe-ivan"); put("waiting_since", d(-5)); put("nudge_on", d(0)) },
@@ -378,8 +380,8 @@ internal object Seed {
             task(62, "Дима: акт сверки за сентябрь") { put("project_id", "p-zf"); put("ball", "waiting"); put("person_id", "pe-dima"); put("waiting_since", d(-2)); put("nudge_on", d(3)) },
             task(66, "Иван: обсудить продление договора") { put("project_id", "p-beta"); put("ball", "agenda"); put("person_id", "pe-ivan") },
             // «Отбить» (задание 11): люди ждут ответа — первым делом.
-            task(69, "Ольга: ответить про сроки внедрения") { put("project_id", "p-orion"); put("owed", true); put("person_id", "pe-olga"); put("created_at", ago(75)); put("source", "telegram") },
-            task(70, "Пётр: вернуть расчёт по аренде гаража") { put("project_id", "p-home"); put("owed", true); put("person_id", "pe-petr"); put("created_at", ago(130)) },
+            task(69, "Ольга: ответить про сроки внедрения") { put("project_id", "p-orion"); put("owed", true); put("person_id", "pe-olga"); put("created_at", ago(75)); put("source", "telegram"); put("focus_on", d(0)) },
+            task(70, "Пётр: вернуть расчёт по аренде гаража") { put("project_id", "p-home"); put("owed", true); put("person_id", "pe-petr"); put("created_at", ago(130)); put("due_date", d(0)) },
             task(71, "Анна: прислать реквизиты для оплаты") { put("project_id", "p-beta"); put("owed", true); put("person_id", "pe-anna"); put("due_date", d(2)) },
             task(64, "Бета: проверить платёжный календарь на октябрь") { put("project_id", "p-beta"); put("deal_id", "d-beta-refi") },
             task(65, "Отчёт ДДС: посмотреть шаблон от Лены") { put("project_id", "p-zf"); put("created_by", "lena"); put("created_at", ago(20)); put("source", "web") },

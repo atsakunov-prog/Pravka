@@ -9,9 +9,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Три группы, «Сегодня», уровни и «только одно» — как веб (`app.js`: `grpOf`,
- * `inToday`, `whenDay`, `byTime`, `levelKey`, `nested`, `branches`) и сервер
- * (`store.group_of`, `TODAY_IF`). Данные выдуманные.
+ * Три группы, «Сейчас», «Сегодня» и просроченное врозь, уровни и «только одно» — как веб (`app.js`:
+ * `grpOf`, `isNow`, `inToday`, `isLate`, `whenDay`, `byTime`, `toggleToday`, `toggleNow`, `levelKey`,
+ * `nested`, `branches`) и сервер (`store.group_of`, `NOW_IF`, `TODAY_IF`, `LATE_IF`). Данные выдуманные.
  */
 class DelaGroupsTest {
 
@@ -74,26 +74,61 @@ class DelaGroupsTest {
         assertTrue(Dela.createOp(task("b") { it.copy(owed = true) }).getJSONObject("task").getBoolean("owed"))
     }
 
+    /**
+     * Те же дела, что в `test_now_today_and_overdue_apart` сервера (13.10.2026, владелец: «В делах давай
+     * разделим: Сейчас (то, что отметил) и Сегодня (с датой сегодня)»; просроченное само ни туда, ни туда —
+     * оно во «Всех делах», сверху). Чужое, закрытое и цель — нигде.
+     */
     @Test
-    fun `на сегодня — срок, Сейчас, отбить без срока, мониторить с напоминанием`() {
+    fun `сейчас, сегодня и просроченное врозь — как сервер`() {
+        val yday = "2026-10-09"
         val s = snap(
-            task("due") { it.copy(dueDate = today) },
-            task("late") { it.copy(dueDate = "2026-10-08") },
-            task("now") { it.copy(focusOn = today) },
-            task("owed") { it.copy(owed = true) },
-            task("owedLater") { it.copy(owed = true, dueDate = "2026-10-14") },
-            task("nudge") { it.copy(ball = Dela.WAITING, nudgeOn = today) },
-            task("nudgeLater") { it.copy(ball = Dela.WAITING, nudgeOn = "2026-10-12") },
-            task("self"),
-            task("done") { it.copy(dueDate = today, status = Dela.DONE) },
-            task("other") { it.copy(dueDate = today, ownerId = "lena") },
+            task("Взял сам") { it.copy(focusOn = today) },
+            task("Взял и срок сегодня") { it.copy(focusOn = today, dueDate = today, createdAt = "2026-10-01T10:01:00+03:00") },
+            task("Срок сегодня") { it.copy(dueDate = today, dueTime = "15:00", createdAt = "2026-10-01T10:02:00+03:00") },
+            task("Сдать отчёт за сентябрь") { it.copy(dueDate = yday) },
+            task("Вчера брал в Сейчас") { it.copy(focusOn = yday) },
+            task("Ждут ответа без срока") { it.copy(owed = true) },
+            task("Пора напомнить") { it.copy(ball = Dela.WAITING, nudgeOn = today) },
+            task("На завтра") { it.copy(dueDate = tomorrow) },
+            task("Сделал сегодняшнее") { it.copy(dueDate = today, status = Dela.DONE, completedAt = "2026-10-10T12:00:00+03:00") },
+            task("Наташино на сегодня") { it.copy(dueDate = today, focusOn = today, ownerId = "natasha") },
+            task("Цель на сегодня") { it.copy(dueDate = today, focusOn = today, goal = true) },
         )
-        assertEquals(setOf("due", "late", "now", "owed", "nudge"), DelaGroups.todayTasks(s, "me", today, "all").map { it.id }.toSet())
+        val ids = { l: List<Dela.Task> -> l.map { it.id } }
+        // «Сейчас» — только отмеченное владельцем; срок ни при чём.
+        assertEquals(setOf("Взял сам", "Взял и срок сегодня"), ids(DelaGroups.nowOrdered(s, "me", today)).toSet())
+        assertEquals(2, DelaViews.nowTasks(s, "me", today).size)
+        // «Сегодня» — срок ровно сегодня: со временем — выше; «Сейчас» со сроком сегодня тоже здесь.
+        assertEquals(listOf("Срок сегодня", "Взял и срок сегодня"), ids(DelaGroups.todayByGroups(s, "me", today, "all")))
+        // На главной «Сегодня» — без уже взятого в «Сейчас».
+        val taken = DelaGroups.nowOrdered(s, "me", today).map { it.id }.toSet()
+        assertEquals(listOf("Срок сегодня"), ids(DelaGroups.todayByGroups(s, "me", today, "all", taken)))
+        // Просроченное — только во «Всех делах», сверху.
+        assertEquals(listOf("Сдать отчёт за сентябрь"), ids(DelaGroups.lateTasks(s, "me", today, "all")))
+        for (id in listOf("Сдать отчёт за сентябрь", "Вчера брал в Сейчас", "Ждут ответа без срока", "Пора напомнить", "На завтра")) {
+            val t = s.tasks.getValue(id)
+            assertFalse(id, DelaGroups.inToday(t, "me", today))
+            assertFalse(id, DelaGroups.isNow(t, today) && t.open)
+        }
+        assertEquals(1, DelaGroups.doneToday(s, "me", today))
+        // Числа разделов: «Сейчас» 2, «Сегодня» 2, у «Всех дел» — только просроченное.
+        val c = DelaViews.counts(s, "me", today, "all", 0L)
+        assertEquals(listOf(2, 2, 1), listOf(c.now, c.today, c.late))
+        assertEquals("1", c.label(DelaViews.View.ALL))
+        assertTrue(c.bad(DelaViews.View.ALL))
+        // Дела дня (Засечка, разворот): сначала «Сейчас», потом «Сегодня» без повторов, просроченного нет.
+        assertEquals(listOf("Взял сам", "Взял и срок сегодня", "Срок сегодня"), ids(DelaGroups.dayOrdered(s, "me", today, "all")))
+        assertEquals(DelaGroups.dayOrdered(s, "me", today, "all"), DelaGroups.todayOrdered(s, "me", today, "all"))
+        // У Наташи — своё «Сейчас» и «Сегодня», Сашиного она там не видит.
+        assertEquals(listOf("Наташино на сегодня"), ids(DelaGroups.nowOrdered(s, "natasha", today)))
+        assertEquals(listOf("Наташино на сегодня"), ids(DelaGroups.todayByGroups(s, "natasha", today, "all")))
     }
 
     @Test
-    fun `когда делать — отбить без срока сегодня, мониторить к раннему из срока и напоминания`() {
-        assertEquals(today, DelaGroups.whenDay(task("a") { it.copy(owed = true) }, today))
+    fun `когда делать — Сейчас сегодня, отбить без срока без срока, мониторить к раннему из срока и напоминания`() {
+        // С 13.10.2026 «отбить» без срока само больше не «сегодня».
+        assertNull(DelaGroups.whenDay(task("a") { it.copy(owed = true) }, today))
         assertEquals(today, DelaGroups.whenDay(task("b") { it.copy(focusOn = today, dueDate = "2026-10-20") }, today))
         assertEquals("2026-10-12", DelaGroups.whenDay(task("c") { it.copy(ball = Dela.WAITING, dueDate = "2026-10-15", nudgeOn = "2026-10-12") }, today))
         assertNull(DelaGroups.whenDay(task("d"), today))
@@ -103,37 +138,67 @@ class DelaGroupsTest {
     @Test
     fun `порядок в группе — когда делать, час, кто дольше ждёт`() {
         val s = snap(
-            task("fresh") { it.copy(owed = true, createdAt = "2026-10-09T10:00:00+03:00") },
-            task("old") { it.copy(owed = true, createdAt = "2026-10-02T10:00:00+03:00") },
+            task("fresh") { it.copy(owed = true, dueDate = today, createdAt = "2026-10-09T10:00:00+03:00") },
+            task("old") { it.copy(owed = true, dueDate = today, createdAt = "2026-10-02T10:00:00+03:00") },
             task("late") { it.copy(owed = true, dueDate = "2026-10-07", createdAt = "2026-10-09T12:00:00+03:00") },
             task("at9") { it.copy(owed = true, dueDate = today, dueTime = "09:00", createdAt = "2026-10-09T12:00:00+03:00") },
         )
         val tree = DelaGroups.nested(DelaGroups.todayTasks(s, "me", today, "all"), listOf(DelaGroups.Level.GRP), s, today)
         assertEquals(listOf("Отбить"), tree.map { it.title })
-        assertEquals(listOf("late", "at9", "old", "fresh"), tree.single().items.map { it.id })
+        // Просроченного в «Сегодня» нет; со временем — выше, потом кто дольше ждёт.
+        assertEquals(listOf("at9", "old", "fresh"), tree.single().items.map { it.id })
     }
 
     @Test
     fun `группы по приоритету, пустая не показывается`() {
-        val s = snap(task("c") { it.copy(ball = Dela.WAITING, nudgeOn = today) }, task("o") { it.copy(owed = true) })
+        val s = snap(
+            task("c") { it.copy(ball = Dela.WAITING, dueDate = today) },
+            task("o") { it.copy(owed = true, dueDate = today) },
+            task("o2") { it.copy(owed = true) },
+        )
         val tree = DelaGroups.nested(DelaGroups.todayTasks(s, "me", today, "all"), listOf(DelaGroups.Level.GRP), s, today)
         assertEquals(listOf("Отбить", "Мониторить"), tree.map { it.title })
+        assertEquals(listOf("o", "c"), DelaGroups.todayByGroups(s, "me", today, "all").map { it.id })
     }
 
     @Test
-    fun `солнце — на сегодня, на завтра снимает Сейчас и двигает напоминание`() {
+    fun `солнце — на сегодня и у просроченного, на завтра снимает Сейчас и двигает напоминание`() {
         val (on, w1) = DelaGroups.toggleToday(task("a"), "me", today, tomorrow)
         assertEquals("На сегодня", w1)
         assertEquals("{\"due_date\":\"$today\"}", on.toString())
-        val (off, w2) = DelaGroups.toggleToday(task("b") { it.copy(focusOn = today) }, "me", today, tomorrow)
+        // Просроченное солнцем переезжает в «Сегодня».
+        val (late, w0) = DelaGroups.toggleToday(task("late") { it.copy(dueDate = "2026-10-08") }, "me", today, tomorrow)
+        assertEquals("На сегодня", w0)
+        assertEquals("{\"due_date\":\"$today\"}", late.toString())
+        // «Сейчас» без срока — не «Сегодня»: солнце ставит срок сегодня, отметку не трогает.
+        val (nowOnly, w3) = DelaGroups.toggleToday(task("b") { it.copy(focusOn = today) }, "me", today, tomorrow)
+        assertEquals("На сегодня", w3)
+        assertEquals("{\"due_date\":\"$today\"}", nowOnly.toString())
+        // На сегодня — «на завтра»: срок завтра, «Сейчас» снимается.
+        val (off, w2) = DelaGroups.toggleToday(task("b2") { it.copy(focusOn = today, dueDate = today) }, "me", today, tomorrow)
         assertEquals("На завтра", w2)
+        assertEquals(tomorrow, off.getString("due_date"))
         assertEquals(JSONObject.NULL, off.get("focus_on"))
-        // Только «Сейчас» — оно и снимается: срока у дела не было, его и не появится (как в вебе).
-        assertFalse(off.has("due_date"))
-        val (nudge, _) = DelaGroups.toggleToday(task("c") { it.copy(ball = Dela.WAITING, nudgeOn = today) }, "me", today, tomorrow)
-        assertEquals("{\"nudge_on\":\"$tomorrow\"}", nudge.toString())
-        val (owed, _) = DelaGroups.toggleToday(task("d") { it.copy(owed = true) }, "me", today, tomorrow)
-        assertEquals("{\"due_date\":\"$tomorrow\"}", owed.toString())
+        val (nudge, _) = DelaGroups.toggleToday(task("c") { it.copy(ball = Dela.WAITING, nudgeOn = today, dueDate = today) }, "me", today, tomorrow)
+        assertEquals(tomorrow, nudge.getString("nudge_on"))
+        assertEquals(tomorrow, nudge.getString("due_date"))
+    }
+
+    @Test
+    fun `молния — своё открытое в Сейчас, шестое не встаёт, снять — срок не трогать`() {
+        val five = (1..5).map { i -> task("n$i") { it.copy(focusOn = today) } }
+        val s = snap(*five.toTypedArray(), task("sixth"), task("foreign") { it.copy(ownerId = "lena") }, task("goal") { it.copy(goal = true) })
+        val (full, why) = DelaGroups.toggleNow(s.tasks.getValue("sixth"), s, "me", today)
+        assertNull(full)
+        assertEquals(DelaViews.NOW_FULL, why)
+        assertNull(DelaGroups.toggleNow(s.tasks.getValue("foreign"), s, "me", today).first)
+        assertNull(DelaGroups.toggleNow(s.tasks.getValue("goal"), s, "me", today).first)
+        val (off, said) = DelaGroups.toggleNow(s.tasks.getValue("n1") , s, "me", today)
+        assertEquals("{\"focus_on\":null}", off.toString())
+        assertEquals("Убрал из «Сейчас»", said)
+        // Место есть — встаёт на сегодня.
+        val roomy = snap(task("x"))
+        assertEquals("{\"focus_on\":\"$today\"}", DelaGroups.toggleNow(roomy.tasks.getValue("x"), roomy, "me", today).first.toString())
     }
 
     @Test
@@ -151,7 +216,7 @@ class DelaGroupsTest {
     @Test
     fun `уровни — проекты, группы, время, ветки людей по id`() {
         val s = snap(
-            task("a1") { it.copy(projectId = "p-a", owed = true, personId = "h-1") },
+            task("a1") { it.copy(projectId = "p-a", owed = true, personId = "h-1", dueDate = today) },
             task("a2") { it.copy(projectId = "p-a", ball = Dela.WAITING, personId = "h-2", dueDate = "2026-10-13") },
             task("b1") { it.copy(projectId = "p-b", dueDate = "2026-10-08") },
             task("x"),

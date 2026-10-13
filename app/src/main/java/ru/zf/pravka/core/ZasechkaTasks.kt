@@ -35,9 +35,10 @@ object ZasechkaTasks {
         entries.lastOrNull { it.open }?.task.orEmpty()
 
     /**
-     * Короткий список «взяться за дело»: то, что идёт; дела «Сегодня» в порядке
-     * вкладки (10.10.2026, docs/dela-phone-11.md: «отбить» — люди ждут, потом
-     * «запустить», потом «мониторить»; «Сейчас» и просроченное — тоже здесь);
+     * Короткий список «взяться за дело»: то, что идёт; дела дня — сначала «Сейчас»
+     * (что владелец взял сам), потом «Сегодня» (срок сегодня) в порядке групп
+     * («отбить» — люди ждут, потом «запустить», потом «мониторить»; с 13.10.2026,
+     * docs/dela-phone-19.md, просроченное сюда само не встаёт — оно во «Всех делах»);
      * начатое из ленты за неделю (свежее выше — к нему обычно и возвращаются).
      * Только открытые дела владельца, без повторов и без целей: время пишут на дело, а
      * цель — узел дерева жизни (13.10.2026), её не делают.
@@ -56,7 +57,7 @@ object ZasechkaTasks {
             if (t != null && t.id !in out) out[t.id] = t
         }
         add(byId[running(entries)])
-        DelaGroups.todayOrdered(s, me, today, "all").forEach(::add)
+        DelaGroups.dayOrdered(s, me, today, "all").forEach(::add)
         entries.asSequence()
             .filter { it.task.isNotBlank() && it.start >= now - RECENT_MS }
             .sortedByDescending { it.start }
@@ -65,9 +66,9 @@ object ZasechkaTasks {
     }
 
     /**
-     * Тот же список по частям: идущее — первым, если оно не на сегодня; дела
-     * «Сегодня» — под своим заголовком (идущее среди них — на своём месте);
-     * ниже — начатое за неделю.
+     * Тот же список по частям: идущее — первым, если оно не на сегодня; дела дня
+     * («Сейчас» и «Сегодня») — под своим заголовком (идущее среди них — на своём
+     * месте); ниже — начатое за неделю.
      */
     data class Parts(val running: Dela.Task?, val now: List<Dela.Task>, val rest: List<Dela.Task>) {
         val all: List<Dela.Task> get() = listOfNotNull(running) + now + rest
@@ -82,7 +83,7 @@ object ZasechkaTasks {
     ): Parts {
         val list = shortlist(s, me, today, entries, now)
         val runId = running(entries)
-        val todayIds = list.filter { DelaGroups.inToday(it, me, today) }.map { it.id }.toSet()
+        val todayIds = list.filter { DelaGroups.inDay(it, me, today) }.map { it.id }.toSet()
         val head = list.firstOrNull { it.id == runId && it.id !in todayIds }
         return Parts(
             running = head,

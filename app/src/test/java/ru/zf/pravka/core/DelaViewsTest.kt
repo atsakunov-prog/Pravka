@@ -111,21 +111,32 @@ class DelaViewsTest {
     }
 
     @Test
-    fun `числа меню — сегодня и вопросы, отбить горит`() {
+    fun `числа меню — сейчас, сегодня, вопросы и просроченное у всех дел, отбить горит`() {
         val s = snap(
             task("now") { it.copy(focusOn = today, dueDate = "2026-10-20") },
             task("overdue") { it.copy(dueDate = "2026-10-03") },
             task("nudge") { it.copy(ball = Dela.WAITING, nudgeOn = today) },
+            task("due") { it.copy(dueDate = today) },
             task("far") { it.copy(dueDate = "2026-12-01") },
         )
+        // 13.10.2026 (`count()` у `VIEWS` веба): «Сейчас» — отмеченное, «Сегодня» — срок ровно сегодня (без
+        // просроченного, «Сейчас» и напоминаний), «Все дела» — число просроченного цветом беды.
         val c = DelaViews.counts(s, "sasha", today, "all", now)
-        assertEquals(3, c.today)
+        assertEquals(1, c.now)
+        assertEquals(1, c.today)
+        assertEquals(1, c.late)
         assertFalse(c.todayHot)
-        assertEquals("3", c.label(DelaViews.View.TODAY))
+        assertEquals("1", c.label(DelaViews.View.NOW))
+        assertEquals("1", c.label(DelaViews.View.TODAY))
+        assertEquals("1", c.label(DelaViews.View.ALL))
+        assertTrue(c.bad(DelaViews.View.ALL))
+        assertTrue(c.hot(DelaViews.View.NOW))
         // «Новое» — как newCount веба (08.10.2026): только вопросы.
         assertEquals(0, c.new)
         assertEquals("", c.label(DelaViews.View.NEW))
-        assertTrue(DelaViews.counts(snap(task("o") { it.copy(owed = true) }), "sasha", today, "all", now).todayHot)
+        assertTrue(DelaViews.counts(snap(task("o") { it.copy(owed = true, dueDate = today) }), "sasha", today, "all", now).todayHot)
+        // «Отбить» без срока — уже не «Сегодня»: число не горит.
+        assertFalse(DelaViews.counts(snap(task("o") { it.copy(owed = true) }), "sasha", today, "all", now).todayHot)
     }
 
     @Test
@@ -236,9 +247,14 @@ class DelaViewsTest {
 
     @Test
     fun `разделы — старые ключи ведут туда, где их дела теперь`() {
-        // «Круг жизни» (12.10.2026) — четвёртым, «Дерево жизни» (13.10.2026) — за ним; видны, только когда сервер их знает.
-        assertEquals(listOf("today", "new", "all", "krug", "tree"), DelaViews.View.entries.map { it.key })
-        for (old in listOf("now", "morning", "upcoming", "waiting", "week", "непонятное")) assertEquals(DelaViews.View.TODAY, DelaViews.View.of(old))
+        // 13.10.2026: первым — «Сейчас» (главная, как `#/now` веба), за ним «Сегодня», «Новое», «Все дела»;
+        // «Круг жизни» и «Дерево жизни» — следом, видны, только когда сервер их знает.
+        assertEquals(listOf("now", "today", "new", "all", "krug", "tree"), DelaViews.View.entries.map { it.key })
+        // Как `route` веба: незнакомое и старые «Утро», «Предстоящее», «Жду» — на главную; «Неделя» — во «Все дела».
+        for (old in listOf("now", "morning", "upcoming", "waiting", "непонятное")) assertEquals(DelaViews.View.NOW, DelaViews.View.of(old))
+        assertEquals(DelaViews.View.ALL, DelaViews.View.of("week"))
+        // Старый ключ «Сегодня» остаётся «Сегодня».
+        assertEquals(DelaViews.View.TODAY, DelaViews.View.of("today"))
         assertEquals(DelaViews.View.NEW, DelaViews.View.of("inbox"))
     }
 
@@ -295,6 +311,27 @@ class DelaViewsTest {
         val s = snap(task("inbox"), task("done") { it.copy(status = Dela.DONE) }, task("foreign") { it.copy(ownerId = "natasha") })
         assertEquals(2, DelaViews.list(s, "sasha", "all", showDone = false).size)
         assertEquals(3, DelaViews.list(s, "sasha", "all", showDone = true).size)
+    }
+
+    @Test
+    fun `все дела — просрочено сверху своей группой, в уровнях ниже его нет`() {
+        // 13.10.2026 (`view_all` сервера, «Все дела» веба): просроченное само ни в «Сейчас», ни в «Сегодня» не
+        // попадает — оно здесь, сверху; вчерашняя отметка «Сейчас» и «отбить» без срока — в обычных группах.
+        val s = snap(
+            task("late") { it.copy(dueDate = "2026-10-01") },
+            task("today") { it.copy(dueDate = today) },
+            task("yNow") { it.copy(focusOn = "2026-10-04") },
+            task("owed") { it.copy(owed = true) },
+        )
+        val every = DelaViews.list(s, "sasha", "all", showDone = false)
+        val late = every.filter { DelaViews.isLate(it, today) }
+        assertEquals(listOf("late"), late.map { it.id })
+        assertEquals(listOf("late"), DelaGroups.lateTasks(s, "sasha", today, "all").map { it.id })
+        val rest = every.filter { !DelaViews.isLate(it, today) }
+        val tree = DelaGroups.nested(rest, listOf(DelaGroups.Level.DATE), s, today)
+        assertFalse(tree.any { it.late })
+        assertTrue(rest.map { it.id }.containsAll(listOf("today", "yNow", "owed")))
+        assertFalse(rest.any { it.id == "late" })
     }
 
     @Test

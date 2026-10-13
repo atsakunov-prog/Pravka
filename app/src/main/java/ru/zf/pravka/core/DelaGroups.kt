@@ -57,39 +57,61 @@ object DelaGroups {
     /** Поля операции для группы — `grpSet` веба: `{ball, owed}`. */
     fun grpSet(t: Dela.Task, g: Grp): JSONObject = withGrp(t, g).let { JSONObject().put("ball", it.ball).put("owed", it.owed) }
 
-    // ------------------------------------------------------------ «Сегодня»
+    // ------------------------------------------------------------ «Сейчас», «Сегодня», просрочено
+
+    /*
+     * 13.10.2026 (этап 4 «Правки 5.0», docs/dela-phone-19.md), владелец: «В делах давай разделим: Сейчас (то,
+     * что отметил) и Сегодня (с датой сегодня)»; порядок на экране — Сейчас → Новое → Сегодня; просроченное
+     * само ни туда, ни туда не попадает — оно во «Всех делах», сверху. С 10.10 «Сегодня» было котлом (срок
+     * сегодня или прошёл, «Сейчас», «отбить» без срока, «мониторить» с напоминанием) — в нём тонуло то, что
+     * владелец сам взял на день. Три правила, одни на сервер (`store.NOW_IF`, `TODAY_IF`, `LATE_IF`), веб
+     * (`isNow`, `inToday`, `isLate`) и телефон — здесь, под `DelaGroupsTest`.
+     */
 
     private fun mine(me: String, t: Dela.Task) = me.isBlank() || t.ownerId == me
     private fun le(d: String, today: String) = d.isNotBlank() && d <= today
 
-    /**
-     * На сегодня (`inToday` веба, сервер — `store.TODAY_IF`): открытое своё дело,
-     * у которого срок сегодня или прошёл, «Сейчас» телефона, «отбить» без срока
-     * (человек ждёт — значит, сегодня) или «мониторить», где пора напомнить.
-     * Не сделал — завтра оно снова здесь, просроченным. Цели здесь не бывает: её не делают,
-     * к ней идут (дерево жизни, 13.10.2026) — значит, нет её и в «Сейчас», Засечке и числах.
-     */
-    fun inToday(t: Dela.Task, me: String, today: String): Boolean =
-        t.open && !t.goal && mine(me, t) && (
-            t.focusOn == today || le(t.dueDate, today) ||
-                (grpOf(t) == Grp.OWED && t.dueDate.isBlank()) ||
-                (t.ball == Dela.WAITING && le(t.nudgeOn, today))
-            )
+    /** Своё открытое дело, не цель: цель не делают, к ней идут (дерево жизни) — её нет ни в одном списке дня. */
+    private fun deed(t: Dela.Task, me: String) = t.open && !t.goal && mine(me, t)
 
+    /** «Сейчас» (`isNow` веба, `store.NOW_IF`): владелец сам отметил дело на сегодня. Срок ни при чём. */
+    fun isNow(t: Dela.Task, today: String): Boolean = t.focusOn == today
+
+    /**
+     * На сегодня (`inToday` веба, `store.TODAY_IF`): своё открытое дело со сроком ровно сегодня. Не сделал —
+     * завтра его здесь нет: оно во «Всех делах», в «Просрочено». «Сейчас» без срока, «отбить» без срока и
+     * «мониторить» с напоминанием сюда сами не встают.
+     */
+    fun inToday(t: Dela.Task, me: String, today: String): Boolean = deed(t, me) && t.dueDate == today
+
+    /** Просрочено (`isLate` веба, `store.LATE_IF`): своё открытое, срок прошёл. Живёт во «Всех делах», сверху. */
+    fun inLate(t: Dela.Task, me: String, today: String): Boolean = deed(t, me) && t.dueDate.isNotBlank() && t.dueDate < today
+
+    /** Дело дня — в «Сейчас» или со сроком сегодня: то, за что браться сегодня (Засечка, день на «Сегодня»). */
+    fun inDay(t: Dela.Task, me: String, today: String): Boolean = deed(t, me) && (isNow(t, today) || t.dueDate == today)
+
+    /** «Сегодня» — срок ровно сегодня, в сфере. */
     fun todayTasks(s: Dela.Snapshot, me: String, today: String, sphere: String): List<Dela.Task> =
         s.tasks.values.filter { inToday(it, me, today) && Dela.inSphere(it, sphere) }
 
+    /** «Сейчас» по времени (`nowTasks().sort(byTime)` веба): пять на день во всех сферах сразу, а не на сферу. */
+    fun nowOrdered(s: Dela.Snapshot, me: String, today: String): List<Dela.Task> =
+        s.tasks.values.filter { deed(it, me) && isNow(it, today) }.sortedWith(byTime(today))
+
+    /** Просроченное по времени (`lateTasks` веба): число у «Всех дел», «просрочено N» в шапке, группа сверху. */
+    fun lateTasks(s: Dela.Snapshot, me: String, today: String, sphere: String): List<Dela.Task> =
+        s.tasks.values.filter { inLate(it, me, today) && Dela.inSphere(it, sphere) }.sortedWith(byTime(today))
+
     /**
-     * Когда дело делать (`whenDay` веба) — для уровня «время» и порядка:
-     * срок; «Сейчас» и «отбить» без срока — сегодня; «мониторить» — срок или
-     * день напоминания, что раньше. Сделанное и без срока — null.
+     * Когда дело делать (`whenDay` веба) — для уровня «время» и порядка: срок; «Сейчас» — сегодня (его взяли
+     * на сегодня); «мониторить» — срок или день напоминания, что раньше. «Отбить» без срока с 13.10.2026 —
+     * без срока: само оно больше не «сегодня». Сделанное и без срока — null.
      */
     fun whenDay(t: Dela.Task, today: String): String? {
         if (!t.open) return null
         return listOfNotNull(
             t.dueDate.ifBlank { null },
-            today.takeIf { t.focusOn == today },
-            today.takeIf { grpOf(t) == Grp.OWED && t.dueDate.isBlank() },
+            today.takeIf { isNow(t, today) },
             t.nudgeOn.ifBlank { null }?.takeIf { t.ball == Dela.WAITING },
         ).minOrNull()
     }
@@ -101,9 +123,30 @@ object DelaGroups {
     fun byTime(today: String): Comparator<Dela.Task> =
         compareBy<Dela.Task>({ whenDay(it, today) ?: "9999" }, { it.dueTime.ifBlank { "99" } }, { it.createdAt }, { it.num })
 
-    /** «Сегодня» одним списком в порядке групп — для Засечки и дня: «отбить», потом «запустить», потом «мониторить». */
-    fun todayOrdered(s: Dela.Snapshot, me: String, today: String, sphere: String): List<Dela.Task> =
-        todayTasks(s, me, today, sphere).sortedWith(compareBy<Dela.Task> { grpOf(it).ordinal }.then(byTime(today)))
+    private fun byGroups(today: String): Comparator<Dela.Task> = compareBy<Dela.Task> { grpOf(it).ordinal }.then(byTime(today))
+
+    /**
+     * «Сегодня» одним списком в порядке групп — «отбить», «запустить», «мониторить» — без дел из [skip]
+     * (на первом разделе — без уже взятого в «Сейчас»: оно там выше).
+     */
+    fun todayByGroups(s: Dela.Snapshot, me: String, today: String, sphere: String, skip: Set<String> = emptySet()): List<Dela.Task> =
+        todayTasks(s, me, today, sphere).filter { it.id !in skip }.sortedWith(byGroups(today))
+
+    /**
+     * Дела дня одним списком: сначала «Сейчас» (что владелец взял сам), потом «Сегодня» по группам без
+     * повторов. Для Засечки («взяться за дело»), дня на главном экране и правой половины разворота, пока
+     * дело не выбрано. Просроченное сюда не входит — оно во «Всех делах».
+     */
+    fun dayOrdered(s: Dela.Snapshot, me: String, today: String, sphere: String): List<Dela.Task> {
+        val now = nowOrdered(s, me, today)
+        return now + todayByGroups(s, me, today, sphere, now.map { it.id }.toSet())
+    }
+
+    /**
+     * Старое имя (до 13.10.2026 «Сегодня» включало «Сейчас»): дела дня — [dayOrdered]. Его зовут день на
+     * главном экране и Засечка; новое «Сегодня» без «Сейчас» — [todayByGroups].
+     */
+    fun todayOrdered(s: Dela.Snapshot, me: String, today: String, sphere: String): List<Dela.Task> = dayOrdered(s, me, today, sphere)
 
     /**
      * Быстрый ввод: «!отбить» (и старое «!ждут») — «Отбить», «!мониторить» (и
@@ -127,7 +170,7 @@ object DelaGroups {
         return q.copy(title = words.joinToString(" "))
     }
 
-    /** Сделано сегодня (по Москве): «закрыто M» в шапке «Сегодня». */
+    /** Сделано сегодня (по Москве): «закрыто M» в шапке «Сейчас» и «Сегодня». */
     fun doneToday(s: Dela.Snapshot, me: String, today: String): Int =
         s.tasks.values.count { it.status == Dela.DONE && !it.goal && mine(me, it) && it.completedAt.isNotBlank() && mskDay(it.completedAt) == today }
 
@@ -138,18 +181,30 @@ object DelaGroups {
         runCatching { OffsetDateTime.parse(iso).atZoneSameInstant(MSK).toLocalDate().toString() }.getOrDefault(iso.take(10))
 
     /**
-     * Солнце у дела (`toggleToday` веба): не на сегодня — срок сегодня; уже на
-     * сегодня — «на завтра»: срок завтра, у «мониторить» с напоминанием сегодня —
-     * и напоминание завтра, «Сейчас» снимается. [tomorrow] — завтрашний день.
-     * Ответ — поля операции и подпись тоста («На сегодня» / «На завтра»).
+     * Солнце у дела (`toggleToday` веба): не на сегодня (и просроченное) — «На сегодня»: срок сегодня, и
+     * просроченное солнцем переезжает в «Сегодня»; на сегодня — «На завтра»: срок завтра, у «мониторить» с
+     * напоминанием сегодня или раньше — и напоминание завтра, а «Сейчас» снимается — оно на сегодня.
+     * [tomorrow] — завтрашний день. Ответ — поля операции и подпись тоста.
      */
     fun toggleToday(t: Dela.Task, me: String, today: String, tomorrow: String): Pair<JSONObject, String> {
         if (!inToday(t, me, today)) return JSONObject().put("due_date", today) to "На сегодня"
-        val set = JSONObject()
-        if (t.focusOn == today) set.put("focus_on", JSONObject.NULL)
+        val set = JSONObject().put("due_date", tomorrow)
+        if (isNow(t, today)) set.put("focus_on", JSONObject.NULL)
         if (t.ball == Dela.WAITING && le(t.nudgeOn, today)) set.put("nudge_on", tomorrow)
-        if (le(t.dueDate, today) || (grpOf(t) == Grp.OWED && t.dueDate.isBlank()) || set.length() == 0) set.put("due_date", tomorrow)
         return set to "На завтра"
+    }
+
+    /**
+     * Молния «Сейчас» (`toggleNow` веба, 13.10.2026: «Сейчас — то, что отметил»): в «Сейчас» — убрать
+     * (`focus_on` = null, срок не трогаем: дело остаётся, где было); не в нём — взять на сегодня. Встаёт
+     * только своё открытое дело, не цель; шестое не встаёт ([DelaViews.NOW_FULL], предел держит и сервер —
+     * `store._now_guard`). Ответ — поля операции (null — нельзя) и слова для тоста.
+     */
+    fun toggleNow(t: Dela.Task, s: Dela.Snapshot, me: String, today: String): Pair<JSONObject?, String> = when {
+        isNow(t, today) -> JSONObject().put("focus_on", JSONObject.NULL) to "Убрал из «Сейчас»"
+        !deed(t, me) -> null to "В «Сейчас» встают только свои открытые дела"
+        !DelaViews.nowRoom(s, me, today, listOf(t.id)) -> null to DelaViews.NOW_FULL
+        else -> JSONObject().put("focus_on", today) to "В «Сейчас»"
     }
 
     /** Как было — для `was` правки и «Вернуть» в тосте: те же ключи, прежние значения. */
