@@ -732,6 +732,10 @@ private fun MainScreen(
     var menuOpen by remember { mutableStateOf(false) }
     // Раздел Дел, который открыть из меню («CRM»).
     var delaNav by remember { mutableStateOf<String?>(null) }
+    // Вид v2 (этап 6): вкладки «Тела» на сложенном — одни у Спорта и Еды
+    // («Спорт · Путь · Журнал · Еда»), поэтому часть Спорта живёт здесь: «Путь»
+    // с экрана Еды открывает Спорт сразу на «Пути».
+    var bodyPart by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
     val openCost = { pages = pages + Page.Cost }
     val openReport = { pages = pages + Page.Service(Tab.REPORT) }
     val todayNav = remember {
@@ -823,18 +827,33 @@ private fun MainScreen(
                         }
                     }
                     Tab.SPORT -> {
-                        TabHeader(
-                            title = stringResource(R.string.tab_sport),
-                            onBack = modeBack,
-                            // Вторым тоном — неделя года, как в макете 09 («Неделя 41»).
-                            titleExtra = "Неделя " + java.time.LocalDate.now().get(java.time.temporal.WeekFields.ISO.weekOfWeekBasedYear()),
-                            actions = {
-                                StatsAction(openReport)
-                                CostAction(openCost)
-                                SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.SPORT)) }
-                            },
-                        )
-                        SportTab(app)
+                        val sportActions: @Composable RowScope.() -> Unit = {
+                            StatsAction(openReport)
+                            CostAction(openCost)
+                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.SPORT)) }
+                        }
+                        if (ru.zf.pravka.ui.Look.v2) {
+                            // Вид v2 (этап 6, холст `Sport.dc.html`): шапку с названием и сегментом
+                            // периода рисует вкладка, вкладки «Тела» — тоже она.
+                            SportTab(
+                                app,
+                                header = { title, sub, extra ->
+                                    TabHeader(title = title, onBack = modeBack, titleExtra = sub, actions = { extra(); sportActions() })
+                                },
+                                bodyPart = bodyPart,
+                                onBodyPart = { bodyPart = it },
+                                onFood = if (live(Tab.FOOD)) ({ openMode(Tab.FOOD) }) else null,
+                            )
+                        } else {
+                            TabHeader(
+                                title = stringResource(R.string.tab_sport),
+                                onBack = modeBack,
+                                // Вторым тоном — неделя года, как в макете 09 («Неделя 41»).
+                                titleExtra = "Неделя " + java.time.LocalDate.now().get(java.time.temporal.WeekFields.ISO.weekOfWeekBasedYear()),
+                                actions = sportActions,
+                            )
+                            SportTab(app)
+                        }
                     }
                     Tab.MONEY -> {
                         val pOn by app.settings.mScopePersonalFlow.collectAsState(initial = true)

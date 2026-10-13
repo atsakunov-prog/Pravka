@@ -90,11 +90,13 @@ fun PaperCard(
     labelColor: Color? = null,
     trailing: (@Composable () -> Unit)? = null,
     info: String? = null,
+    /** Подпись рядом с заголовком мелко и бледно (`.sec small` веба): «12–19 октября», «2 приёма». Только v2. */
+    note: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val mode = LocalMode.current
     if (Look.v2) {
-        PanelV2(label, labelColor, trailing, info, content)
+        PanelV2(label, labelColor, trailing, info, note, content)
         return
     }
     Column(Modifier.fillMaxWidth()) {
@@ -133,6 +135,7 @@ private fun PanelV2(
     labelColor: Color?,
     trailing: (@Composable () -> Unit)?,
     info: String?,
+    note: String?,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val shape = RoundedCornerShape(KvShape.Panel)
@@ -155,9 +158,20 @@ private fun PanelV2(
                         label.orEmpty().replaceFirstChar { it.uppercase() },
                         style = LocalPravkaType.current.bodyStrong,
                         color = labelColor ?: Kv.text,
-                        modifier = Modifier.weight(1f),
+                        modifier = if (note.isNullOrBlank()) Modifier.weight(1f) else Modifier,
                         maxLines = 1,
                     )
+                    if (!note.isNullOrBlank()) {
+                        // `.sec small`: сразу за заголовком, а не у правого края — справа место статусу и действию.
+                        Text(
+                            note,
+                            style = LocalPravkaType.current.meta,
+                            color = Kv.faint,
+                            modifier = Modifier.padding(start = 8.dp).weight(1f),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                    }
                     if (info != null) InfoDot(label ?: "Пояснение", info)
                     trailing?.invoke()
                 }

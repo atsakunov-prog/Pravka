@@ -49,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -130,7 +131,21 @@ private fun toneColor(tone: Int): Color = when (tone) {
 }
 
 @Composable
-internal fun SportTab(app: PravkaApp) {
+internal fun SportTab(
+    app: PravkaApp,
+    /**
+     * Вид v2 (Правка 5.0, этап 6): шапку рисует вкладка — название («Тело» на
+     * сложенном, «Спорт» на развороте), подпись дня и [extra] — сегмент
+     * периода на развороте; значки шапки (статистика, $, шестерёнка) — у
+     * `MainActivity`. null — «Вид 4.0», шапка снаружи, как было.
+     */
+    header: (@Composable (title: String, subtitle: String, extra: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) -> Unit)? = null,
+    /** Часть вкладки снаружи (вкладки «Тела» общие у Спорта и Еды): 0 — сегодня, 1 — путь, 2 — журнал. */
+    bodyPart: Int? = null,
+    onBodyPart: ((Int) -> Unit)? = null,
+    /** Вкладка «Еда» в «Теле» на сложенном; null — Еды нет в профиле. */
+    onFood: (() -> Unit)? = null,
+) {
     val store = app.sportStore
     // Карточки, написанные под владельца (08.10.2026): «Цели октября» — его
     // 80 кг к 31.10 и его дорожная карта, «путь к первому подтягиванию» — его
@@ -163,7 +178,11 @@ internal fun SportTab(app: PravkaApp) {
     var days by remember { mutableStateOf(14) }
     // Часть вкладки переживает поворот и уход на соседнюю вкладку: открыл
     // «Журнал», сходил в Засечку — вернулся в «Журнал», а не в «Сегодня».
-    var part by rememberSaveable { mutableStateOf(PART_TODAY) }
+    var localPart by rememberSaveable { mutableStateOf(PART_TODAY) }
+    // Вид v2: часть держит `MainActivity` — вкладки «Тела» одни у Спорта и Еды,
+    // и «Путь» с экрана Еды должен открыть Спорт сразу на «Пути».
+    val part = bodyPart?.takeIf { it in PART_TODAY..PART_JOURNAL } ?: localPart
+    val setPart: (Int) -> Unit = { p -> if (onBodyPart != null) onBodyPart(p) else localPart = p }
     // Своя прокрутка у каждой части: вернулся в «Журнал» — там же, где был,
     // а переключился из середины длинного журнала — «Сегодня» с начала.
     val listStates = listOf(rememberLazyListState(), rememberLazyListState(), rememberLazyListState())
@@ -305,12 +324,342 @@ internal fun SportTab(app: PravkaApp) {
     // роутер, что у «Т»: зарядка, подходы, ощущение — он сам поймёт.
     var sayDraft by remember { mutableStateOf("") }
     var sayBusy by remember { mutableStateOf(false) }
+    val sayHear: () -> Unit = {
+        val text = sayDraft.trim()
+        if (text.isNotBlank() && !sayBusy) {
+            sayBusy = true
+            sayDraft = ""
+            app.appScope.launch {
+                val result = app.bodyEngine.hear(text, source = "text", whereSaid = "")
+                sayBusy = false
+                Feedback.toast(app, result.fold({ "✓ " + it.headline() }, { e -> e.message ?: "Не разобрал" }), long = true)
+            }
+        }
+    }
+    if (ru.zf.pravka.ui.Look.v2) {
+        // ---- Вид v2 (холст `Sport.dc.html`): «Тело» вкладками на сложенном, «Спорт» колонками на развороте ----
+        val wide = ru.zf.pravka.ui.twoPane()
+        val rightState = rememberLazyListState()
+        val sayName = app.profileStore.flow.collectAsState().value?.name
+        Column(Modifier.fillMaxSize()) {
+            header?.invoke(
+                if (!wide && onFood != null) "Тело" else "Спорт",
+                // На сложенном рядом три значка — подпись короче, иначе её режет многоточием.
+                if (wide) ru.zf.pravka.core.Fmt.dayLong(java.time.LocalDate.now()) + " · данные intervals"
+                else ru.zf.pravka.core.Fmt.dayList(java.time.LocalDate.now()) + " · intervals",
+            ) {
+                // Период — у нагрузки и журнала; «Путь» считает свои окна сам (90 дней, 4 недели).
+                if (wide && part != PART_PATH) {
+                    ru.zf.pravka.ui.KvSeg(
+                        SPORT_PERIODS.map { it.second },
+                        SPORT_PERIODS.indexOfFirst { it.first == days }.coerceAtLeast(0),
+                        onSelect = { days = SPORT_PERIODS[it].first },
+                        modifier = Modifier.padding(end = 4.dp),
+                    )
+                }
+            }
+            if (wide) {
+                ru.zf.pravka.ui.KvTabs(SPORT_SECTIONS, part, setPart, Modifier.padding(horizontal = 20.dp))
+            } else {
+                BodyTabs(
+                    selected = part,
+                    onSelect = { i -> if (i == BODY_FOOD) onFood?.invoke() else setPart(i) },
+                    food = onFood != null,
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                )
+            }
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                val bodyV2: androidx.compose.foundation.lazy.LazyListScope.(Int) -> Unit = { side ->
+                    // side: 0 — сложенный одной лентой, 1 и 2 — левая и правая колонки разворота.
+                    when (part) {
+                        PART_TODAY -> {
+                            if (side != 2) {
+                                item(key = "ready") { ReadinessCardV2(verdict, health, app.icuSportSync.lastError(), wide) }
+                                item(key = "plan") {
+                                    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+                                    val mainTasks = dayGroups.firstOrNull { it.first.eventId == mainPlan?.eventId }?.second.orEmpty()
+                                    val doneToday = workouts.filter { dayKey(it.start) == today }.sortedBy { it.start }
+                                    PaperCard(
+                                        label = "Сегодня",
+                                        note = mainPlan?.time?.takeIf { it.isNotBlank() },
+                                        info = "План приезжает из календаря intervals — ты его туда пушишь, " +
+                                            "когда собираешь блок. Галочки — «сделал по схеме», тап по упражнению — " +
+                                            "техника, таймер и тренер.",
+                                        trailing = {
+                                            if (syncing) {
+                                                Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+                                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = ru.zf.pravka.ui.Kv.accent)
+                                                }
+                                            } else {
+                                                GlyphButton(Glyphs.Refresh, "Обновить", onClick = refresh, tint = ru.zf.pravka.ui.Kv.icon, size = 36.dp)
+                                            }
+                                        },
+                                    ) {
+                                        if (mainPlan != null) {
+                                            Text(mainPlan.name, style = ty.bodyStrong.copy(fontSize = 16.sp, lineHeight = 21.sp), color = ru.zf.pravka.ui.Kv.text)
+                                            val meta = listOf(
+                                                verdict.planLine.substringAfter(mainPlan.name).trim(' ', '·'),
+                                                if (mainTasks.isNotEmpty()) "${mainTasks.size} упр." else "",
+                                            ).filter { it.isNotBlank() }.joinToString(" · ")
+                                            if (meta.isNotBlank()) Text(meta, style = ty.meta, color = ru.zf.pravka.ui.Kv.faint, modifier = Modifier.padding(top = 2.dp))
+                                            val coach = listOf(mainPlan.noteBefore(), mainPlan.noteAfter()).filter { it.isNotBlank() }.joinToString("\n")
+                                            if (coach.isNotBlank()) {
+                                                Spacer(Modifier.height(10.dp))
+                                                ru.zf.pravka.ui.CoachNote(coach.take(600))
+                                            }
+                                            if (!mainPlan.strength) {
+                                                val cues = mainPlan.plannedLines()
+                                                if (cues.isNotEmpty()) {
+                                                    Spacer(Modifier.height(6.dp))
+                                                    for (cue in PlanLine.parseAll(cues, app.exerciseBook)) {
+                                                        ru.zf.pravka.ui.ExerciseRow(cue.name, cue.note.takeIf { it.isNotBlank() }, cue.dose.takeIf { it.isNotBlank() })
+                                                    }
+                                                }
+                                            }
+                                            if (mainTasks.isNotEmpty()) {
+                                                Spacer(Modifier.height(6.dp))
+                                                mainTasks.forEachIndexed { i, task ->
+                                                    if (i > 0) ru.zf.pravka.ui.Hairline()
+                                                    ExerciseLine(app, task, todaySession, today, dayTasks, restSec,
+                                                        onAskCoach = { auto -> coachTopic = Triple(task.title, task.exercise, auto) },
+                                                        onFeel = { feelDialog = it })
+                                                }
+                                            }
+                                            val extras = app.planStore.dayOf(today)
+                                                .filterNot { it.eventId == mainPlan.eventId || it.charger }
+                                                .filterNot { e -> dayGroups.any { it.first.eventId == e.eventId } }
+                                                .sortedBy { it.time.ifBlank { "99:99" } }
+                                            if (extras.isNotEmpty()) {
+                                                Spacer(Modifier.height(6.dp))
+                                                Text(
+                                                    "Ещё сегодня: " + extras.joinToString("; ") { e ->
+                                                        (if (e.time.isNotBlank()) e.time + " " else "") +
+                                                            e.name + (if (e.minutes > 0) " · ${ru.zf.pravka.core.Fmt.dur(e.minutes)}" else "")
+                                                    },
+                                                    style = ty.meta,
+                                                    color = ru.zf.pravka.ui.Kv.faint,
+                                                )
+                                            }
+                                            Spacer(Modifier.height(10.dp))
+                                            Row(
+                                                Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                            ) {
+                                                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                    if (todaySession?.done == true) DoneLine("Сделано")
+                                                    if (todaySession != null && todaySession.feel in 1..5) {
+                                                        Text("самочувствие ${todaySession.feel}/5", style = ty.meta, color = ru.zf.pravka.ui.Kv.faint)
+                                                    }
+                                                    if (todaySession != null && todaySession.feel !in 1..5) {
+                                                        ru.zf.pravka.ui.KvSmallButton("Самочувствие", { feelDialog = todaySession.id }, icon = Glyphs.Heart)
+                                                    }
+                                                }
+                                                if (todaySession?.done != true) {
+                                                    ru.zf.pravka.ui.KvSmallButton(
+                                                        "Сделано",
+                                                        onClick = {
+                                                            app.appScope.launch {
+                                                                val session = app.strengthEngine.markDone(today, mainPlan.minutes)
+                                                                feelDialog = session.id
+                                                            }
+                                                        },
+                                                        primary = true,
+                                                        icon = Glyphs.Check,
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        // Что приехало с часов — строками с галочкой под планом (холст «Сегодня»).
+                                        if (doneToday.isNotEmpty()) {
+                                            if (mainPlan != null) Spacer(Modifier.height(6.dp))
+                                            DoneTodayRowsV2(doneToday, first = mainPlan == null)
+                                        }
+                                        if (mainPlan == null && doneToday.isEmpty()) {
+                                            ru.zf.pravka.ui.KvNote("В календаре intervals на сегодня ничего нет.")
+                                        }
+                                    }
+                                }
+                                // Вторая силовая дня (турник с прессом после гири) — своей плашкой.
+                                for ((session, tasks) in dayGroups) {
+                                    if (session.eventId == mainPlan?.eventId) continue
+                                    item(key = "pl" + session.eventId) {
+                                        val checkedCount = tasks.count { todaySession?.isChecked(it.id) == true }
+                                        PaperCard(
+                                            label = session.shortName,
+                                            note = session.time.takeIf { it.isNotBlank() },
+                                            trailing = { ru.zf.pravka.ui.KvPill("$checkedCount из ${tasks.size}") },
+                                        ) {
+                                            val note = listOf(session.noteBefore(), session.noteAfter()).filter { it.isNotBlank() }.joinToString(" ")
+                                            if (note.isNotBlank()) ru.zf.pravka.ui.KvNote(note.take(300), Modifier.padding(bottom = 4.dp))
+                                            tasks.forEachIndexed { i, task ->
+                                                if (i > 0) ru.zf.pravka.ui.Hairline()
+                                                ExerciseLine(app, task, todaySession, today, dayTasks, restSec,
+                                                    onAskCoach = { auto -> coachTopic = Triple(task.title, task.exercise, auto) },
+                                                    onFeel = { feelDialog = it })
+                                            }
+                                        }
+                                    }
+                                }
+                                if (todaySession != null && (!todaySession.empty || todaySession.done)) {
+                                    item(key = "strength") { StrengthTodayCard(app, todaySession, onFeel = { feelDialog = todaySession.id }) }
+                                }
+                                item(key = "zaryadka") {
+                                    val chargerPlan = remember(planDays, today) { app.planStore.chargerOf(today) }
+                                    ZaryadkaChecklist(app, gtgToday, chargerPlan, today)
+                                }
+                                if (side == 0 && ownerCards) item(key = "pullup") { PullupCard(app, gtgToday, streak, onRecord = { gtgDialog = true }) }
+                                item(key = "weekplan") { WeekPlanCardV2(app, planDays, refresh, syncing) }
+                                if (side == 0) {
+                                    item(key = "last") {
+                                        LastWorkoutsCardV2(workouts, "Последние", 3, skipToday = true, onAll = { setPart(PART_JOURNAL) })
+                                    }
+                                }
+                            }
+                            if (side == 2) {
+                                item(key = "load") { LoadCardV2(workouts, days) }
+                                item(key = "last") {
+                                    LastWorkoutsCardV2(workouts, "Последние тренировки", 5, skipToday = false, onAll = { setPart(PART_JOURNAL) })
+                                }
+                                if (ownerCards) item(key = "pullup") { PullupCard(app, gtgToday, streak, onRecord = { gtgDialog = true }) }
+                            }
+                        }
+                        PART_PATH -> {
+                            if (side != 2) {
+                                if (health.isEmpty() && workouts.isEmpty()) {
+                                    item(key = "empty") {
+                                        ru.zf.pravka.ui.KvCallout("Графики появятся, когда intervals.icu пришлёт первые дни и тренировки.")
+                                    }
+                                }
+                                item(key = "load") { LoadCardV2(workouts, if (wide) 30 else 14) }
+                                if (health.size >= 4) item(key = "fitness") { FitnessCardV2(health) }
+                                item(key = "kpd") { EfficiencyCard(workouts) }
+                            }
+                            if (side != 1) {
+                                if (ownerCards) item(key = "goals") { GoalsCard(app, health, gtgDays, rules) }
+                                if (weights.size >= 3) item(key = "weight") { WeightCardV2(health, weights) }
+                            }
+                        }
+                        else -> {
+                            if (side != 2) {
+                                if (!wide) {
+                                    item(key = "period") {
+                                        ru.zf.pravka.ui.KvSeg(
+                                            SPORT_PERIODS.map { it.second },
+                                            SPORT_PERIODS.indexOfFirst { it.first == days }.coerceAtLeast(0),
+                                            onSelect = { days = SPORT_PERIODS[it].first },
+                                        )
+                                    }
+                                }
+                                if (shownWorkouts.isEmpty()) {
+                                    item(key = "none") {
+                                        ru.zf.pravka.ui.KvCallout(
+                                            if (workouts.isEmpty()) "Тренировок в кэше нет. Они приезжают из intervals.icu: проверь athlete id " +
+                                                "и ключ («Настройки» → «Подключения» → «intervals.icu») и нажми «Обновить» в «Сегодня»."
+                                            else "За $days дней тренировок не было.",
+                                        )
+                                    }
+                                } else {
+                                    for ((weekLabel, list) in byWeek) {
+                                        item(key = "w-$weekLabel") {
+                                            PaperCard(label = weekLabel, note = weekNote(list)) {
+                                                list.forEachIndexed { i, w ->
+                                                    WorkoutLineV2(
+                                                        workout = w,
+                                                        expanded = openWorkout == w.id,
+                                                        onToggle = { openWorkout = if (openWorkout == w.id) null else w.id },
+                                                        maxHr = profile.runMaxHr,
+                                                        rules = rules,
+                                                        onComment = { commenting = w },
+                                                        divider = i > 0,
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if (side != 1) {
+                                item(key = "ask") {
+                                    PaperCard(label = "Спросить про тренировки", info = SPORT_ASK_INFO) {
+                                        VoiceInput(
+                                            value = question,
+                                            onValueChange = { question = it },
+                                            placeholder = "Стоит ли сегодня бежать интервалы?",
+                                            onSend = ask,
+                                            sendEnabled = !asking,
+                                            enabled = !asking,
+                                            busy = asking,
+                                        )
+                                        if (asking && streaming.isBlank()) {
+                                            Spacer(Modifier.height(10.dp))
+                                            BusyLine("Думает…")
+                                        }
+                                        if (streaming.isNotBlank()) {
+                                            Spacer(Modifier.height(10.dp))
+                                            Text(streaming, style = MaterialTheme.typography.bodyMedium)
+                                        }
+                                    }
+                                }
+                                if (talks.isNotEmpty()) {
+                                    items(talks.size, key = { i -> talks[i].id }) { i ->
+                                        val talk = talks[i]
+                                        TalkCard(talk = talk, onDelete = { scope.launch { store.deleteTalk(talk.id) } })
+                                    }
+                                }
+                                val unparsed = rawTakes.filter { it.kind.isBlank() || it.kind == "unknown" }.take(5)
+                                if (unparsed.isNotEmpty()) {
+                                    item(key = "raw") { UnparsedCardV2(app, unparsed) }
+                                }
+                            }
+                        }
+                    }
+                }
+                val padV2 = PaddingValues(start = if (wide) 0.dp else 12.dp, end = if (wide) 0.dp else 12.dp, top = 10.dp, bottom = 96.dp)
+                if (wide) {
+                    Row(Modifier.fillMaxSize().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        for ((side, st) in listOf(1 to listState, 2 to rightState)) {
+                            LazyColumn(
+                                Modifier.weight(1f).fillMaxHeight().bottomFade().scrollFade(st),
+                                state = st,
+                                contentPadding = padV2,
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) { bodyV2(side) }
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        Modifier.fillMaxSize().bottomFade().scrollFade(listState),
+                        state = listState,
+                        contentPadding = padV2,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) { bodyV2(0) }
+                }
+                // Строка «сказать» во всю ширину и на развороте (холст: `.say` под обеими колонками).
+                ru.zf.pravka.ui.SayBar(
+                    value = sayDraft,
+                    onValueChange = { sayDraft = it },
+                    placeholder = ru.zf.pravka.core.PillHint.say(sayName, "как тренировка?"),
+                    onSend = sayHear,
+                    sendEnabled = !sayBusy && sayDraft.isNotBlank(),
+                    enabled = !sayBusy,
+                    maxLines = 3,
+                    busy = sayBusy,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .imePadding()
+                        .padding(start = if (wide) 20.dp else 12.dp, end = if (wide) 20.dp else 12.dp, bottom = if (wide) 14.dp else 8.dp),
+                )
+            }
+        }
+    } else
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxWidth()) {
         Segments(
             options = PARTS,
             selected = part,
-            onSelect = { part = it },
+            onSelect = setPart,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 6.dp),
         )
         // Разворот (DESIGN §13): две колонки — слева главное части, справа
@@ -791,18 +1140,7 @@ internal fun SportTab(app: PravkaApp) {
         value = sayDraft,
         onValueChange = { sayDraft = it },
         placeholder = ru.zf.pravka.core.PillHint.say(app.profileStore.flow.collectAsState().value?.name, "как тренировка?"),
-        onSend = {
-            val text = sayDraft.trim()
-            if (text.isNotBlank() && !sayBusy) {
-                sayBusy = true
-                sayDraft = ""
-                app.appScope.launch {
-                    val result = app.bodyEngine.hear(text, source = "text", whereSaid = "")
-                    sayBusy = false
-                    Feedback.toast(app, result.fold({ "✓ " + it.headline() }, { e -> e.message ?: "Не разобрал" }), long = true)
-                }
-            }
-        },
+        onSend = sayHear,
         sendEnabled = !sayBusy && sayDraft.isNotBlank(),
         enabled = !sayBusy,
         maxLines = 3,
@@ -1530,10 +1868,11 @@ private data class DayTask(
 
 // Правка 4.0: графики — шкалой краски Спорта (`Modes.Sport.ramp`), чужие
 // цвета не примешиваются: тренированность — светлым, усталость — тёплым.
-private val CTL_COLOR = Color(0xFFCDEBDB)
-private val ATL_COLOR = Color(0xFFF27A45)
-private val RUN_COLOR = Color(0xFF16A34A)
-private val RIDE_COLOR = Color(0xFF2563EB)
+// Вид v2: один акцент — тренированность и бег акцентом, усталость и вело — `--bar-fill`.
+private val CTL_COLOR: Color get() = if (ru.zf.pravka.ui.Look.v2) ru.zf.pravka.ui.Kv.accent else Color(0xFFCDEBDB)
+private val ATL_COLOR: Color get() = if (ru.zf.pravka.ui.Look.v2) ru.zf.pravka.ui.Kv.barFill else Color(0xFFF27A45)
+private val RUN_COLOR: Color get() = if (ru.zf.pravka.ui.Look.v2) ru.zf.pravka.ui.Kv.accent else Color(0xFF16A34A)
+private val RIDE_COLOR: Color get() = if (ru.zf.pravka.ui.Look.v2) ru.zf.pravka.ui.Kv.barFill else Color(0xFF2563EB)
 
 /**
  * Круглая галочка чек-листа: пустой кружок кромкой → залитый краской режима
@@ -1544,6 +1883,26 @@ private val RIDE_COLOR = Color(0xFF2563EB)
 private fun CheckDot(ticked: Boolean, onCheck: () -> Unit) {
     // Правка 4.0: кольцо 22 в зоне 40 краской режима; сделано — залито клавишей.
     val mode = ru.zf.pravka.ui.LocalMode.current
+    if (ru.zf.pravka.ui.Look.v2) {
+        // `.chk` веба: квадрат 18, радиус 5, кромка `--check`; сделано — акцент с галочкой.
+        val box = RoundedCornerShape(5.dp)
+        Box(
+            Modifier.size(40.dp).clip(RoundedCornerShape(ru.zf.pravka.ui.KvShape.Control)).clickable(onClick = onCheck),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                Modifier
+                    .size(20.dp)
+                    .clip(box)
+                    .background(if (ticked) ru.zf.pravka.ui.Kv.accent else ru.zf.pravka.ui.Kv.panel)
+                    .border(1.5.dp, if (ticked) ru.zf.pravka.ui.Kv.accent else ru.zf.pravka.ui.Kv.check, box),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (ticked) Icon(Glyphs.Check, contentDescription = "сделано", tint = ru.zf.pravka.ui.Kv.accentInk, modifier = Modifier.size(14.dp))
+            }
+        }
+        return
+    }
     Box(
         Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onCheck),
         contentAlignment = Alignment.Center,
@@ -1566,7 +1925,7 @@ private fun CheckDot(ticked: Boolean, onCheck: () -> Unit) {
 private fun DoneLine(text: String, modifier: Modifier = Modifier, big: Boolean = false) {
     val color = toneColor(1)
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        Icon(Glyphs.Check, contentDescription = null, tint = color, modifier = Modifier.size(if (big) 20.dp else 18.dp))
+        Icon(Glyphs.Check, contentDescription = null, tint = if (ru.zf.pravka.ui.Look.v2) ru.zf.pravka.ui.Kv.ok else color, modifier = Modifier.size(if (big) 20.dp else 18.dp))
         Spacer(Modifier.width(6.dp))
         Text(
             text,
@@ -1666,17 +2025,16 @@ private fun ZaryadkaChecklist(
     val mode = ru.zf.pravka.ui.LocalMode.current
     val ty = ru.zf.pravka.ui.LocalPravkaType.current
     val doneCount = if (charged) items.size else allIds.count { it in doneIds }
-    Column(Modifier.fillMaxWidth()) {
-        ru.zf.pravka.ui.SectionHeader(
-            "зарядка · $doneCount из ${items.size}",
-            trailing = chargerPlan?.minutes?.takeIf { it > 0 }?.let { ru.zf.pravka.core.Fmt.dur(it) },
-            info = "Зарядка" to "Тап по упражнению — отметить, долгое нажатие — техника, таймер и " +
-                "заметка, как пошло. Отметишь всё — зарядка закроется сама.",
-        )
+    // Вид v2: заголовок — внутри плашки (`.sec`), чипы — прямоугольником 8, отмеченное — мягким акцентом.
+    val v2 = ru.zf.pravka.ui.Look.v2
+    val inset = if (v2) 0.dp else 8.dp
+    val zInfo = "Тап по упражнению — отметить, долгое нажатие — техника, таймер и " +
+        "заметка, как пошло. Отметишь всё — зарядка закроется сама."
+    val zBody: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit = {
         // Заметка дня из календаря: «сокращённая версия», «дачная — турник заменяется резинкой».
         val dayNote = chargerPlan?.noteBefore().orEmpty()
         if (dayNote.isNotBlank()) {
-            Text(dayNote.take(400), style = ty.meta, color = mode.meta, modifier = Modifier.padding(start = 8.dp, bottom = 8.dp))
+            Text(dayNote.take(400), style = ty.meta, color = mode.meta, modifier = Modifier.padding(start = inset, bottom = 8.dp))
         }
         androidx.compose.foundation.layout.FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1692,12 +2050,29 @@ private fun ZaryadkaChecklist(
                     else -> null
                 }
                 val warn = report != null && report.status != "ok"
-                val shape = RoundedCornerShape(50)
+                val shape = if (v2) RoundedCornerShape(ru.zf.pravka.ui.KvShape.Control) else RoundedCornerShape(50)
                 Row(
                     Modifier
                         .clip(shape)
-                        .background(if (ticked || warn) mode.tint.copy(alpha = 0.12f) else Color.Transparent)
-                        .border(1.dp, mode.tint.copy(alpha = if (ticked) 0.42f else 0.24f), shape)
+                        .background(
+                            when {
+                                v2 && warn -> ru.zf.pravka.ui.Kv.warn.copy(alpha = 0.10f)
+                                v2 && ticked -> ru.zf.pravka.ui.Kv.accentSoft
+                                v2 -> ru.zf.pravka.ui.Kv.panel
+                                ticked || warn -> mode.tint.copy(alpha = 0.12f)
+                                else -> Color.Transparent
+                            }
+                        )
+                        .border(
+                            1.dp,
+                            when {
+                                v2 && warn -> ru.zf.pravka.ui.Kv.warn.copy(alpha = 0.35f)
+                                v2 && ticked -> ru.zf.pravka.ui.Kv.accentSoft
+                                v2 -> ru.zf.pravka.ui.Kv.line
+                                else -> mode.tint.copy(alpha = if (ticked) 0.42f else 0.24f)
+                            },
+                            shape,
+                        )
                         .combinedTap(
                             enabled = true,
                             onClick = {
@@ -1710,13 +2085,22 @@ private fun ZaryadkaChecklist(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (mark != null) {
-                        Icon(mark, contentDescription = null, tint = if (warn) ru.zf.pravka.ui.Ink.Warn else mode.value, modifier = Modifier.size(16.dp))
+                        Icon(
+                            mark, contentDescription = null,
+                            tint = if (warn) ru.zf.pravka.ui.Ink.Warn else if (v2) ru.zf.pravka.ui.Kv.accent else mode.value,
+                            modifier = Modifier.size(16.dp),
+                        )
                         Spacer(Modifier.width(6.dp))
                     }
                     Text(
                         listOf(task.name.ifBlank { task.title }, task.dose).filter { it.isNotBlank() }.joinToString(" "),
                         style = ty.label,
-                        color = if (ticked) ru.zf.pravka.ui.Ink.Text else mode.label,
+                        color = when {
+                            v2 && ticked && !warn -> ru.zf.pravka.ui.Kv.accent
+                            v2 -> ru.zf.pravka.ui.Kv.text
+                            ticked -> ru.zf.pravka.ui.Ink.Text
+                            else -> mode.label
+                        },
                     )
                 }
             }
@@ -1724,13 +2108,13 @@ private fun ZaryadkaChecklist(
         // Его текст ПОСЛЕ списка: «Минимум на плохое утро: 1 + 3 + шесть отжиманий».
         val afterNote = chargerPlan?.noteAfter().orEmpty()
         if (afterNote.isNotBlank()) {
-            Text(afterNote.take(400), style = ty.meta, color = mode.meta, modifier = Modifier.padding(start = 8.dp, top = 10.dp))
+            Text(afterNote.take(400), style = ty.meta, color = mode.meta, modifier = Modifier.padding(start = inset, top = 10.dp))
         }
         Spacer(Modifier.height(10.dp))
         // Отметить всю зарядку разом — одной клавишей; сделана — словами и «Отменить».
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             if (charged) {
-                DoneLine("Зарядка сделана", modifier = Modifier.weight(1f).padding(start = 8.dp))
+                DoneLine("Зарядка сделана", modifier = Modifier.weight(1f).padding(start = inset))
                 PaperTextButton(
                     "Отменить",
                     onClick = { app.appScope.launch { app.bodyEngine.unchargeToday(today) } },
@@ -1744,7 +2128,7 @@ private fun ZaryadkaChecklist(
         // Самочувствие — в нативное поле feel зарядки-активности: intervals рисует по нему кривую.
         if (charged || doneIds.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
-            Text("самочувствие · 1 отлично — 5 развалина (шкала intervals)", style = ty.meta, color = mode.meta, modifier = Modifier.padding(start = 8.dp))
+            Text("самочувствие · 1 отлично — 5 развалина (шкала intervals)", style = ty.meta, color = mode.meta, modifier = Modifier.padding(start = inset))
             Spacer(Modifier.height(6.dp))
             ru.zf.pravka.ui.Segmented(
                 options = (1..5).map { "$it" },
@@ -1755,7 +2139,25 @@ private fun ZaryadkaChecklist(
         // Накопленные за день пометки — видно, что уедет в intervals вместе с итогом.
         val accumNote = gtgToday?.note.orEmpty()
         if (accumNote.isNotBlank()) {
-            Text("Заметки дня: $accumNote", style = ty.meta, color = mode.meta, modifier = Modifier.padding(start = 8.dp, top = 8.dp))
+            Text("Заметки дня: $accumNote", style = ty.meta, color = mode.meta, modifier = Modifier.padding(start = inset, top = 8.dp))
+        }
+    }
+    val zMinutes = chargerPlan?.minutes?.takeIf { it > 0 }?.let { ru.zf.pravka.core.Fmt.dur(it) }
+    if (v2) {
+        PaperCard(
+            label = "Зарядка",
+            note = listOfNotNull("$doneCount из ${items.size}", zMinutes).joinToString(" · "),
+            info = zInfo,
+            content = zBody,
+        )
+    } else {
+        Column(Modifier.fillMaxWidth()) {
+            ru.zf.pravka.ui.SectionHeader(
+                "зарядка · $doneCount из ${items.size}",
+                trailing = zMinutes,
+                info = "Зарядка" to zInfo,
+            )
+            zBody()
         }
     }
     // Лист упражнения по долгому нажатию: доза, его пояснение, отчёт, техника и действия.
@@ -2174,7 +2576,7 @@ private fun EfficiencyCard(workouts: List<SportStore.Workout>) {
     }
     if (runs.size < 3 && rides.size < 3) return
     PaperCard(
-        label = "кпд · темп и ватты на удар пульса",
+        label = "КПД · темп и ватты на удар пульса",
         info = "Это твоя месячная контрольная, посчитанная сама: рост — база " +
             "строится, темп на том же пульсе ускоряется. Сравниваются " +
             "средние по четырём неделям, одиночные точки шумят.",
@@ -2364,6 +2766,23 @@ private fun WorkoutRow(
         }
         if (!expanded) return@PaperCard
         Spacer(Modifier.height(10.dp))
+        WorkoutFacts(workout, maxHr, rules, onComment)
+    }
+}
+
+/**
+ * Всё, что записали часы, — раскрытая тренировка журнала: темп, пульс,
+ * мощность, каденс против правила, зоны столбиками, «Комментарий в intervals».
+ * Одна на строку 4.0 и строку v2.
+ */
+@Composable
+private fun WorkoutFacts(
+    workout: SportStore.Workout,
+    maxHr: Int,
+    rules: PlanStore.Rules,
+    onComment: (() -> Unit)?,
+) {
+    run {
         val facts = buildList {
             if (workout.paceSecPerKm > 0) add("Темп" to pace(workout.paceSecPerKm) + "/км")
             if (workout.gapSecPerKm > 0 &&
@@ -2425,6 +2844,129 @@ private fun WorkoutRow(
         if (onComment != null) {
             Spacer(Modifier.height(8.dp))
             PaperButton("Комментарий в intervals", onClick = onComment, icon = Glyphs.Note)
+        }
+    }
+}
+
+/**
+ * Тренировка журнала в виде v2 — строкой `.li` внутри плашки недели: дата
+ * мелко, вид и название, подробности и вердикт пробежки по его правилам,
+ * минуты справа; тап раскрывает все цифры (`WorkoutFacts`). Цветной полосы
+ * вида нет: акцент один, вид назван словом.
+ */
+@Composable
+private fun WorkoutLineV2(
+    workout: SportStore.Workout,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    maxHr: Int,
+    rules: PlanStore.Rules,
+    onComment: (() -> Unit)?,
+    divider: Boolean,
+) {
+    val verdictRun = runRuleVerdict(workout, rules)
+    val name = SportCoach.sportName(workout.type) +
+        (if (workout.name.isNotBlank() && !workout.name.equals(workout.type, true) && !workout.name.equals(SportCoach.sportName(workout.type), true)) " · ${workout.name}" else "")
+    ru.zf.pravka.ui.KvListRow(
+        title = name,
+        sub = workoutSub(workout),
+        lead = workoutDay(workout),
+        value = ru.zf.pravka.core.Fmt.dur(workout.minutes.toInt()).replace(" м", " мин"),
+        valueSmall = true,
+        divider = divider,
+        onClick = onToggle,
+        below = {
+            if (verdictRun != null) {
+                Text(
+                    verdictRun.first,
+                    style = ru.zf.pravka.ui.LocalPravkaType.current.meta,
+                    color = if (verdictRun.second < 0) ru.zf.pravka.ui.Kv.warn else ru.zf.pravka.ui.Kv.muted,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            if (expanded) {
+                Spacer(Modifier.height(8.dp))
+                WorkoutFacts(workout, maxHr, rules, onComment)
+            }
+        },
+    )
+}
+
+/** Тренированность и усталость (v2): график и три числа под ним — CTL, ATL, форма. */
+@Composable
+private fun FitnessCardV2(health: List<SportStore.Health>) {
+    PaperCard(
+        label = "Тренированность и усталость",
+        note = "90 дней",
+        info = "Тренированность — накопленная нагрузка за шесть недель, " +
+            "усталость — за неделю. Их разница и есть форма: минус — " +
+            "работаешь в долг, плюс — свежий.",
+    ) {
+        FitnessChart(health.take(90).reversed())
+        val today = health.firstOrNull() ?: return@PaperCard
+        Spacer(Modifier.height(10.dp))
+        ru.zf.pravka.ui.KvKpiRow {
+            ru.zf.pravka.ui.KvKpi(ru1(today.ctl), Modifier.weight(1f), label = "тренированность", color = CTL_COLOR)
+            ru.zf.pravka.ui.KvKpi(ru1(today.atl), Modifier.weight(1f), label = "усталость", color = ATL_COLOR)
+            ru.zf.pravka.ui.KvKpi(ruSigned1(today.tsb), Modifier.weight(1f), label = "форма")
+        }
+    }
+}
+
+/** Вес (v2): ломаная от минимума и числа — сейчас, за сколько замеров, VO₂max. */
+@Composable
+private fun WeightCardV2(health: List<SportStore.Health>, weights: List<SportStore.Health>) {
+    PaperCard(label = "Вес", note = "${weights.size} замеров") {
+        WeightChart(weights.reversed())
+        Spacer(Modifier.height(10.dp))
+        val newest = weights.first()
+        val delta = newest.weightKg - weights.last().weightKg
+        ru.zf.pravka.ui.KvKpiRow {
+            ru.zf.pravka.ui.KvKpi(ru1(newest.weightKg), Modifier.weight(1f), unit = "кг", label = "сейчас")
+            ru.zf.pravka.ui.KvKpi(ruSigned1(delta), Modifier.weight(1f), unit = "кг", label = "за ${weights.size} замеров")
+            val vo2 = health.firstOrNull { it.vo2max > 0 }?.vo2max ?: 0.0
+            if (vo2 > 0) ru.zf.pravka.ui.KvKpi(fmt0(vo2), Modifier.weight(1f), label = "VO₂max")
+        }
+    }
+}
+
+/**
+ * Неразобранное (v2): сказанное, на чём споткнулась модель, — строками в
+ * одной плашке, у каждой «Разобрать заново». Сырая надиктовка не удаляется
+ * никогда; кнопка — чтобы её можно было переиграть после правки промпта.
+ */
+@Composable
+private fun UnparsedCardV2(app: PravkaApp, unparsed: List<StrengthStore.RawTake>) {
+    PaperCard(label = "Неразобранное", note = "${unparsed.size}") {
+        unparsed.forEachIndexed { i, take ->
+            var busy by remember(take.id) { mutableStateOf(false) }
+            ru.zf.pravka.ui.KvListRow(
+                title = "«${take.text}»",
+                sub = rawDayFormat.format(Date(take.ts)) + (if (take.error.isBlank()) "" else " · ${take.error.take(120)}"),
+                divider = i > 0,
+                below = {
+                    Spacer(Modifier.height(6.dp))
+                    ru.zf.pravka.ui.KvSmallButton(
+                        if (busy) "Разбираю…" else "Разобрать заново",
+                        onClick = {
+                            if (!busy) {
+                                busy = true
+                                app.appScope.launch {
+                                    val result = app.bodyEngine.rehear(take.id)
+                                    busy = false
+                                    Feedback.toast(
+                                        app,
+                                        result.fold({ "✓ " + it.headline() }, { e -> e.message ?: "Опять не вышло" }),
+                                        long = true,
+                                    )
+                                }
+                            }
+                        },
+                        icon = Glyphs.Refresh,
+                        enabled = !busy,
+                    )
+                },
+            )
         }
     }
 }
@@ -2929,19 +3471,28 @@ private fun PullupCard(app: PravkaApp, gtgToday: StrengthStore.GtgDay?, streak: 
     val bestPull = app.strengthStore.bestPullups()
     val hang = gtgToday?.hangSec ?: 0
     val neg = gtgToday?.negatives ?: 0
-    Column(Modifier.fillMaxWidth()) {
-        ru.zf.pravka.ui.SectionHeader(
-            "путь к первому подтягиванию",
-            trailing = if (streak > 0) "серия " + plural(streak, "день", "дня", "дней") else null,
-            info = "Турник" to "Турник — отдельные числа: зарядку они не отмечают. Точки — зарядка " +
-                "за две недели, полоса — вис сегодня против рекорда.",
-        )
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .glass(RoundedCornerShape(22.dp), mode.glass)
-                .padding(horizontal = 18.dp, vertical = 14.dp),
-        ) {
+    val v2 = ru.zf.pravka.ui.Look.v2
+    val pInfo = "Турник — отдельные числа: зарядку они не отмечают. Точки — зарядка " +
+        "за две недели, полоса — вис сегодня против рекорда."
+    val pStreak = if (streak > 0) "серия " + plural(streak, "день", "дня", "дней") else null
+    // Вид v2: плашка с заголовком внутри (`.sec` и подпись серии), без стекла и кружков.
+    val pBox: @Composable (@Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) -> Unit = { inner ->
+        if (v2) {
+            PaperCard(label = "Путь к первому подтягиванию", note = pStreak, info = pInfo, content = inner)
+        } else {
+            Column(Modifier.fillMaxWidth()) {
+                ru.zf.pravka.ui.SectionHeader("путь к первому подтягиванию", trailing = pStreak, info = "Турник" to pInfo)
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .glass(RoundedCornerShape(22.dp), mode.glass)
+                        .padding(horizontal = 18.dp, vertical = 14.dp),
+                    content = inner,
+                )
+            }
+        }
+    }
+    pBox {
             if ((gtgToday?.pullups ?: 0) > 0) {
                 Text(
                     "Подтягивания сегодня: ${gtgToday?.pullups}" + (if (bestPull == gtgToday?.pullups) " — рекорд" else ""),
@@ -2973,18 +3524,21 @@ private fun PullupCard(app: PravkaApp, gtgToday: StrengthStore.GtgDay?, streak: 
                 Spacer(Modifier.height(10.dp))
                 // Шкала — рекорд с запасом: отметка рекорда видна, сегодняшний вис идёт к ней.
                 val scale = maxOf(best, hang) * 1.25f
-                androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(10.dp)) {
-                    val r = size.height / 2
-                    drawRoundRect(mode.tint.copy(alpha = 0.16f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(r, r))
+                val trackColor = if (v2) ru.zf.pravka.ui.Kv.hover2 else mode.tint.copy(alpha = 0.16f)
+                val fillColor = if (v2) ru.zf.pravka.ui.Kv.accent else mode.value
+                val markColor = if (v2) ru.zf.pravka.ui.Kv.text else ru.zf.pravka.ui.Ink.Cream
+                androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(if (v2) 6.dp else 10.dp)) {
+                    val r = if (v2) 3.dp.toPx() else size.height / 2
+                    drawRoundRect(trackColor, cornerRadius = androidx.compose.ui.geometry.CornerRadius(r, r))
                     if (hang > 0) {
                         drawRoundRect(
-                            mode.value,
+                            fillColor,
                             size = androidx.compose.ui.geometry.Size(size.width * (hang / scale), size.height),
                             cornerRadius = androidx.compose.ui.geometry.CornerRadius(r, r),
                         )
                     }
                     val x = size.width * (best / scale)
-                    drawLine(ru.zf.pravka.ui.Ink.Cream, Offset(x, -3f), Offset(x, size.height + 3f), strokeWidth = 2.5f)
+                    drawLine(markColor, Offset(x, -3f), Offset(x, size.height + 3f), strokeWidth = 2.5f)
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -3004,12 +3558,16 @@ private fun PullupCard(app: PravkaApp, gtgToday: StrengthStore.GtgDay?, streak: 
                     for (d in dates) {
                         val on = d in done
                         val isToday = d == todayKey
+                        // v2: квадратик 3 вместо кружка — метки дней, как квадратики категорий веба.
+                        val dot = if (v2) RoundedCornerShape(3.dp) else CircleShape
+                        val onColor = if (v2) ru.zf.pravka.ui.Kv.accent else mode.value
+                        val offColor = if (v2) ru.zf.pravka.ui.Kv.check else mode.tint.copy(alpha = 0.45f)
                         Box(
                             Modifier
                                 .size(if (isToday) 15.dp else 12.dp)
-                                .clip(CircleShape)
-                                .background(if (on) mode.value else Color.Transparent)
-                                .border(if (isToday) 2.dp else 1.5.dp, if (on) mode.value else mode.tint.copy(alpha = 0.45f), CircleShape),
+                                .clip(dot)
+                                .background(if (on) onColor else Color.Transparent)
+                                .border(if (isToday) 2.dp else 1.5.dp, if (on) onColor else offColor, dot),
                         )
                     }
                 }
@@ -3019,7 +3577,6 @@ private fun PullupCard(app: PravkaApp, gtgToday: StrengthStore.GtgDay?, streak: 
             }
             Spacer(Modifier.height(12.dp))
             ru.zf.pravka.ui.GhostKey("Записать вис, негативы, колено", onRecord, icon = Glyphs.Edit)
-        }
     }
 }
 

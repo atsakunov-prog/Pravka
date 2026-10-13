@@ -271,6 +271,9 @@ class ScreenShots {
 
         if (want("overlay")) overlays()
 
+        // ---- Правка 5.0, этап 6: Спорт, Еда, Деньги, Телефон в виде v2 — обе темы, оба экрана Fold
+        if (want("s6")) screens6()
+
         // ---- режимы по одному (Правка 4.0): сложенный, целиком, разворот
         for ((g, tab) in listOf(
             "zasechka" to MainActivity.TAB_ZASECHKA,
@@ -527,6 +530,43 @@ class ScreenShots {
         // Дела в виде 4.0 — после этапа 4 («Сейчас» первым разделом) прежние сегменты и стекло на месте.
         c = launch(MainActivity.TAB_TODOIST); shot(c, "$prefix-v4-3-dela"); close(c)
         runBlocking { app.settings.setLookV4(false) }
+        settle(4)
+    }
+
+    /**
+     * Этап 6 (docs/redesign-5-plan.md): экраны Спорта («Тело»), Еды, Денег и
+     * Телефона по холсту — сложенный (и он же целиком, высоким окном) и
+     * разложенный, в светлой и тёмной теме. Разделы — нажатием, как пальцем.
+     */
+    private fun screens6() {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        // Экран → вкладка и разделы, которые снять кроме первого (подпись вкладки → имя кадра).
+        val screens = listOf(
+            Triple("sport", MainActivity.TAB_SPORT, listOf("Путь" to "put", "Журнал" to "zhurnal")),
+            Triple("food", MainActivity.TAB_FOOD, listOf("Неделя" to "nedelya", "Рацион" to "racion")),
+            Triple("money", MainActivity.TAB_MONEY, listOf("Разобрать" to "razobrat", "ДДС" to "dds", "Баланс" to "balans", "Журнал" to "zhurnal")),
+            Triple("phone", MainActivity.TAB_SETTINGS, emptyList()),
+        )
+        for (theme in listOf("light", "dark")) {
+            runBlocking { app.settings.setLookTheme(theme) }
+            settle(4)
+            for ((size, q) in listOf("folded" to OUTER, "tall" to OUTER_TALL, "wide" to INNER)) {
+                RuntimeEnvironment.setQualifiers(q)
+                for ((name, tab, parts) in screens) {
+                    var c = launch(tab)
+                    shot(c, "s6-$name-$size-$theme")
+                    // Разделы — на сложенном и развороте; высокое окно — только первый, целиком.
+                    if (size != "tall") {
+                        for ((label, key) in parts) {
+                            if (tap(c, label, exact = true)) shot(c, "s6-$name-$key-$size-$theme")
+                        }
+                    }
+                    close(c)
+                }
+            }
+        }
+        RuntimeEnvironment.setQualifiers(OUTER)
+        runBlocking { app.settings.setLookTheme("system") }
         settle(4)
     }
 
