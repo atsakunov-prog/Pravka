@@ -666,9 +666,36 @@ function patternUrl(theme, col, den) {
     + ` stroke-opacity="${dk ? col[5] : col[4]}" stroke-linecap="round" stroke-linejoin="round">${g.join('')}</svg>`;
   return (patternCache[key] = 'url("data:image/svg+xml,' + encodeURIComponent(svg) + '")');
 }
-/** Переключатель темы, меню шестерёнки, узор и цвет строки браузера — по текущему выбору. */
+// Вид из Свода (ui.look, Правка 5.0, этап 7): токены обеих тем поверх style.css — сервер отдаёт их всем в /api/me
+// (look.tokens; без записи — заводской акцент v2). Кладём свойствами на <html> через CSSOM: атрибут style и свой
+// <style> CSP Дел не пускает, а свойства, поставленные скриптом, — можно. Они сильнее тем из style.css, поэтому кладём
+// токены ТЕКУЩЕЙ темы и перекладываем при каждой её смене (paintLook). До ответа сервера — последние известные из
+// localStorage: иначе каждая загрузка мигала бы заводским синим.
+const TOKEN_NAMES = new Set(['bg', 'side', 'panel', 'panel-2', 'line', 'line-soft', 'text', 'muted', 'faint', 'icon', 'check',
+  'ok', 'warn', 'bad', 'info', 'claude', 'accent', 'accent-ink', 'accent-soft', 'bar-fill', 'sp0', 'sp1', 'sp2', 'sp3', 'sp4',
+  'sp5', 'sp6', 'sp7']);
+let tokensOn = [];
+function lookTokens() { return (S.me && S.me.look && S.me.look.tokens) || LS.get('kvTokens', null) || {}; }
+function applyTokens(theme) {
+  for (const n of tokensOn) HTML.style.removeProperty('--' + n);
+  tokensOn = [];
+  const m = lookTokens()[theme] || {};
+  for (const [n, v] of Object.entries(m)) {
+    if (!TOKEN_NAMES.has(n) || !/^#[0-9a-f]{6}$/i.test(String(v))) continue;   // чужое — мимо, без единого исключения
+    HTML.style.setProperty('--' + n, v);
+    tokensOn.push(n);
+  }
+}
+/** Ответ /api/me пришёл — запомнить токены на следующую загрузку и перекрасить. */
+function rememberLook() {
+  const t = S.me && S.me.look && S.me.look.tokens;
+  if (t) LS.set('kvTokens', t);
+  paintLook();
+}
+/** Переключатель темы, меню шестерёнки, узор, токены вида из Свода и цвет строки браузера — по текущему выбору. */
 function paintLook() {
   const t = KV.theme(), cur = { theme: KV.chosen() };
+  applyTokens(t);
   for (const w of Object.keys(OPTS)) cur[w] = opt(w)[0];
   for (const b of document.querySelectorAll('.kv-theme button[data-t]')) {
     b.classList.toggle('on', b.dataset.t === t);
@@ -775,6 +802,7 @@ async function boot() {
     }
   }
   if (!S.me) { try { S.me = await api('/api/me'); } catch (e) { return; } }
+  rememberLook();
   await sync(true);
   render();
   // Пока человек набирает новое дело, фон только подтягивает данные, а не перерисовывает.
@@ -942,64 +970,93 @@ function viewPills(r) {
 
 // ── Шапка Ковчега: значок «Ковчег» с подписью «Дела», справа тема, шестерёнка, имя и выход ──
 // С 13.10.2026 (вечер, Саша) ряда сервисов в шапке нет: значок по нажатию открывает меню всех сервисов по направлениям
-// Круга жизни — как в общем слое Ковчега (GROUPS в kovcheg.js). Сервисы — из настроек сервера на компе (в публичном
-// коде адресов нет); владельцу — все, команде — одни Дела и их CRM. Направление сервиса узнаётся по его значку из
-// настройки (названий и адресов в коде нет), незнакомый значок — в «Ещё». Запись с адресом «/» — сами Дела.
-// Восемь направлений столбиками (4, на узкой шапке 2): направление с одним сервисом не оставляет дыры под собой;
-// под названием — подпись из формулы направления. «Творчество» — строкой ниже: название с подписью, Claude — во второй
-// колонке (SVC_CREATE).
-const SVC_CREATE = ['Творчество', 'создаю новое', ['claude']];
-const SVC_DIRS = [
-  ['Здоровье', 'сильное тело, ясная голова', ['activity', 'food']],
-  ['Ум', 'много знаю и узнаю', ['book']],
-  ['Дело', 'растёт вглубь и вширь', ['dela', 'mic']],
-  ['Деньги', 'деньги — не ограничение', ['wallet']],
-  ['Круг', 'знаю многих', ['briefcase']],
-  ['Родительство', 'сыновья растут сильными', ['kids', 'candles']],
-  ['Пара', 'близкая живая пара', ['film']],
-  ['Быт', 'дома хорошо всем пятерым', ['home', 'shield']],
-];
+// Круга жизни. С 14.10.2026 (Правка 5.0, этап 7) что в меню и в каком порядке — Свод ui.menu, одна правда для веба,
+// телефона и всех страниц Ковчега: сервер отдаёт его владельцу в /api/me (look.menu; нет записи или она кривая —
+// заводское), правит владелец здесь же — «Настройки → Вид и меню». В меню — КЛЮЧИ сервисов, а адрес каждого — отсюда:
+// сами Дела, их CRM, страницы-двойники Дел (look.pages: «Сегодня», «Засечка», «Правка» — только те, что сервер умеет),
+// Claude, соседние сервисы из настроек на компе (look.nav: ключ даёт сервер, у старого — по значку). Знакомый, но не
+// поставленный в меню сервис — в «Ещё» (ничего не теряется), ключ без дороги не показывается. Восемь направлений —
+// столбиками (4, на узкой шапке 2): направление с одним сервисом не оставляет дыры под собой; «Творчество» — строкой
+// ниже, большие кнопки — сверху. Команде (сервисов нет) меню не нужно — значок остаётся ссылкой на «Сейчас».
+// Запас на сервер без look.menu — ровно ui.menu_factory контракта svod.json (его сверяет test_dela_ui.py).
+/* ui.menu_factory */ const MENU_FACTORY = {"v":1,"big":[{"key":"today","name":"Сегодня","icon":"sun","sub":"день целиком"},{"key":"zasechka","name":"Засечка","icon":"clock","sub":"что делаю сейчас"},{"key":"pravka","name":"Правка","icon":"edit","sub":"все диктовки"}],"directions":[{"name":"Здоровье","sub":"сильное тело, ясная голова","items":[{"key":"sport","name":"Спорт","icon":"activity"},{"key":"eda","name":"Еда","icon":"food"}]},{"name":"Ум","sub":"много знаю и узнаю","items":[{"key":"knigi","name":"Книги","icon":"book"}]},{"name":"Дело","sub":"растёт вглубь и вширь","items":[{"key":"dela","name":"Дела","icon":"dela"},{"key":"meetings","name":"Встречи","icon":"mic"}]},{"name":"Деньги","sub":"деньги — не ограничение","items":[{"key":"dengi","name":"Деньги","icon":"wallet"}]},{"name":"Круг","sub":"знаю многих","items":[{"key":"crm","name":"CRM","icon":"briefcase"}]},{"name":"Родительство","sub":"сыновья растут сильными","items":[{"key":"deti","name":"Дети","icon":"kids"},{"key":"shabbat","name":"Шаббат","icon":"candles"}]},{"name":"Пара","sub":"близкая живая пара","items":[{"key":"kino","name":"Кино","icon":"film"}]},{"name":"Быт","sub":"дома хорошо всем пятерым","items":[{"key":"dom","name":"Дом","icon":"home"},{"key":"vpn","name":"VPN","icon":"shield"}]}],"create":{"name":"Творчество","sub":"создаю новое","items":[{"key":"claude","name":"Claude","icon":"claude"}]}};
+const KEY_BY_ICON = {"sun": "today", "clock": "zasechka", "edit": "pravka", "activity": "sport", "food": "eda", "book": "knigi", "dela": "dela", "mic": "meetings", "wallet": "dengi", "briefcase": "crm", "kids": "deti", "candles": "shabbat", "film": "kino", "home": "dom", "shield": "vpn", "claude": "claude"};
+// Большая кнопка → страница-двойник веба Дел (её маршрут — #/<страница>; kovcheg_ui.PAGE_OF).
+const PAGE_OF = { today: 'day', zasechka: 'zasechka', pravka: 'pravka' };
+const knownIcon = (n) => !!(n && (ICONS[n] || ICON_ALIAS[n]));
 // Шапка строится заново на каждый render(): закрывать меню щелчком мимо и Esc — одним слушателем на всё время.
 const svcMenu = { box: null, close: null };
 document.addEventListener('click', (e) => { if (svcMenu.box && svcMenu.close && !svcMenu.box.contains(e.target)) svcMenu.close(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && svcMenu.close) svcMenu.close(); });
 
-function svcBrand(look) {
-  const self = { name: 'Дела', icon: 'dela', url: '/' };
-  const list = (look.nav || []).length ? look.nav : [self];
+/** Дорога каждого ключа меню — что этому вебу открыть по пункту. */
+function svcRoads(look) {
+  const nav = look.nav || [];
+  const road = new Map([['dela', { name: 'Дела', icon: 'dela', url: '/' }]]);
   // CRM — раздел самих Дел (кому он открыт); Claude — внешняя ссылка, только владельцу (у него есть соседние сервисы).
-  const inner = [...(crmOn() ? [{ name: 'CRM', icon: 'briefcase', url: '#/crm' }] : []),
-    ...((look.nav || []).length ? [{ name: 'Claude', icon: 'claude', url: 'https://claude.ai/', out: true }] : [])];
-  const all = [...(list.some((x) => x.url === '/') ? list : [self, ...list]), ...inner];
+  if (crmOn()) road.set('crm', { name: 'CRM', icon: 'briefcase', url: '#/crm' });
+  if (nav.length) road.set('claude', { name: 'Claude', icon: 'claude', url: 'https://claude.ai/', out: true });
+  for (const [k, p] of Object.entries(PAGE_OF)) {
+    if ((look.pages || []).includes(p)) road.set(k, { name: '', icon: '', url: '#/' + p });
+  }
+  const loose = [];   // сервисы настройки без ключа (незнакомый значок) — в «Ещё»
+  for (const n of nav) {
+    if (n.url === '/') continue;   // сами Дела — уже есть
+    const k = n.key || KEY_BY_ICON[n.icon] || '';
+    if (k && !road.has(k)) road.set(k, { name: n.name, icon: n.icon, url: n.url });
+    else if (!k) loose.push({ name: n.name, icon: n.icon, url: n.url });
+  }
+  return { road, loose };
+}
+
+function svcBrand(look) {
+  const menu = look.menu && Array.isArray(look.menu.directions) ? look.menu : MENU_FACTORY;
+  const { road, loose } = svcRoads(look);
+  const used = new Set();
+  // Пункт меню → ссылка: подпись и значок — из меню (значок, которого веб не знает, — свой у дороги).
+  const pick = (items) => (Array.isArray(items) ? items : []).map((x) => {
+    const k = typeof x === 'string' ? x : x && x.key, r = road.get(k);
+    if (!r || used.has(k)) return null;
+    used.add(k);
+    const icon0 = x && knownIcon(x.icon) ? x.icon : r.icon || (MENU_FACTORY.big.find((b) => b.key === k) || {}).icon || 'list';
+    return { ...r, key: k, name: (x && x.name) || r.name || k, icon: icon0, sub: (x && x.sub) || '' };
+  }).filter(Boolean);
+  const big = pick(menu.big);
+  const specs = (menu.directions || []).map((d) => [d && d.name, d && d.sub, pick(d && d.items)]).filter((s) => s[2].length);
+  const create = menu.create ? pick(menu.create.items) : [];
+  const rest = [...road].filter(([k]) => !used.has(k)).map(([k, r]) => ({ ...r, key: k, name: r.name || k, icon: r.icon || 'list' }))
+    .concat(loose);
+  if (rest.length) specs.push(['Ещё', '', rest]);
+  const count = big.length + create.length + specs.reduce((n, s) => n + s[2].length, 0);
   const img = () => el('img', { src: look.icon || '/static/icon.svg', alt: '' });
-  if (all.length < 2) return el('a', { class: 'brand', href: '#/now' }, img(), el('b', {}, 'Дела'));
+  if (count < 2) return el('a', { class: 'brand', href: '#/now' }, img(), el('b', {}, 'Дела'));
   const link = (x) => (x.url === '/'
     ? el('a', { class: 'on', href: '#/now', 'aria-current': 'page' }, icon(x.icon, 17), el('span', {}, x.name))
     : el('a', { href: x.url, target: x.out ? '_blank' : null, rel: x.out ? 'noopener' : null },
-      icon(x.icon, 17), el('span', {}, x.name)));
+      icon(x.icon, 17), el('span', {}, x.name), x.sub ? el('small', {}, x.sub) : null));
   const group = (title, sub, items) => el('div', { class: 'kv-svc-g' },
     el('div', { class: 'kv-svc-h' }, title), sub ? el('div', { class: 'kv-svc-sub' }, sub) : null,
     el('div', { class: 'kv-svc-items' }, items.map(link)));
-  const create = all.filter((x) => SVC_CREATE[2].includes(x.icon));
-  const used = new Set(create);
-  const specs = SVC_DIRS.map(([title, sub, icons]) => {
-    const items = all.filter((x) => icons.includes(x.icon) && !used.has(x));
-    items.forEach((x) => used.add(x));
-    return items.length ? [title, sub, items] : null;
-  }).filter(Boolean);
-  const rest = all.filter((x) => !used.has(x));
-  if (rest.length) specs.push(['Ещё', '', rest]);
   // Две раскладки — на 4 и на 2 столбика; какую показать, решает ширина шапки (контейнерный запрос в css).
   const cols = (n) => el('div', { class: 'kv-svc-cols n' + n }, Array.from({ length: n }, (_, c) =>
     el('div', { class: 'kv-svc-col' }, specs.filter((g, k) => k % n === c).map(([t, s, items]) => group(t, s, items)))));
-  const menu = el('div', { class: 'kv-svc-menu', id: 'kv-svc-menu', hidden: true }, cols(4), cols(2),
-    create.length ? el('div', { class: 'kv-svc-create' }, group(SVC_CREATE[0], SVC_CREATE[1], []), el('div', { class: 'kv-svc-items' }, create.map(link))) : null);
+  const menuBox = el('div', { class: 'kv-svc-menu', id: 'kv-svc-menu', hidden: true },
+    big.length ? el('div', { class: 'kv-svc-top' }, big.map(link)) : null, cols(4), cols(2),
+    create.length ? el('div', { class: 'kv-svc-create' }, group(menu.create.name, menu.create.sub, []), el('div', { class: 'kv-svc-items' }, create.map(link))) : null);
   const brand = el('a', { class: 'brand kv-svc-btn', href: '#/now', role: 'button', title: 'Все сервисы Ковчега',
     'aria-haspopup': 'true', 'aria-expanded': 'false', 'aria-controls': 'kv-svc-menu' }, img(), el('b', {}, 'Дела'));
-  const show = (open) => { menu.hidden = !open; brand.setAttribute('aria-expanded', open ? 'true' : 'false'); };
-  brand.addEventListener('click', (e) => { e.preventDefault(); show(menu.hidden); });
-  menu.addEventListener('click', (e) => { if (e.target.closest('a')) show(false); });   // переход внутри Дел (#/crm)
-  const box = el('nav', { class: 'kv-svc', 'aria-label': 'Сервисы Ковчега' }, brand, menu);
+  const show = (open) => {
+    menuBox.hidden = !open;
+    brand.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (!open) return;
+    // Шапка строится один раз, а маршрут меняется: страница Дел, на которой мы сейчас (#/crm, #/day…), подсвечивается
+    // при каждом открытии меню.
+    const here = '#/' + location.hash.replace(/^#\/?/, '').split('/')[0];
+    for (const a of menuBox.querySelectorAll('a[href^="#/"]:not([href="#/now"])')) a.classList.toggle('on', a.getAttribute('href') === here);
+  };
+  brand.addEventListener('click', (e) => { e.preventDefault(); show(menuBox.hidden); });
+  menuBox.addEventListener('click', (e) => { if (e.target.closest('a')) show(false); });   // переход внутри Дел (#/crm)
+  const box = el('nav', { class: 'kv-svc', 'aria-label': 'Сервисы Ковчега' }, brand, menuBox);
   svcMenu.box = box;
   svcMenu.close = () => show(false);
   return box;
@@ -3349,7 +3406,7 @@ function renderSettings() {
   auto.addEventListener('change', () => { LS.set('voiceAuto', auto.checked); render(); });
   const cost = v.cost;
   const kinds = { ask: 'строка и разговор', parse: 'разбор надиктовки', task: 'карточка дела', when: '«Когда»', krug: 'разборщик Круга', meetings: 'разборщик встреч', zachem: '«Зачем»' };
-  return [head('Настройки', ['Claude в Делах, голос и траты']),
+  return [head('Настройки', ['Claude в Делах, голос и траты' + (v.ui ? ', вид и меню Ковчега' : '')]),
     el('div', { class: 'body settings' },
       el('div', { class: 'group' }, el('h2', {}, icon('chat', 17), 'Claude в Делах'),
         el('div', { class: 'hint-line' }, 'Одна строка вверху каждой страницы: спросить, поручить, надиктовать новые дела — разговор идёт прямо под ней. Claude видит, что на экране и в окне, что выбрано галочками и открыто в карточке, — и все остальные открытые дела коротко.'),
@@ -3370,7 +3427,221 @@ function renderSettings() {
           el('div', { class: 'tile' }, el('div', { class: 'tl' }, 'За 30 дней'), el('div', { class: 'tv' }, usd(cost.month))),
           el('div', { class: 'tile' }, el('div', { class: 'tl' }, 'Всего с 05.10'), el('div', { class: 'tv' }, usd(cost.total)))),
         el('div', { class: 'hint-line' }, [...Object.entries(cost.by || {}).map(([k, x]) => `${kinds[k] || k} ${usd(x)}`),
-          ...Object.entries(cost.models || {}).map(([k, x]) => `${k.replace('claude-', '').replace(/-(\d)-(\d)$/, ' $1.$2')} ${usd(x)}`)].join(' · ') || 'Пока ничего.')) : null)];
+          ...Object.entries(cost.models || {}).map(([k, x]) => `${k.replace('claude-', '').replace(/-(\d)-(\d)$/, ' $1.$2')} ${usd(x)}`)].join(' · ') || 'Пока ничего.')) : null,
+      v.ui ? el('div', { class: 'group' }, el('h2', {}, icon('menu', 17), 'Вид и меню', el('span', { class: 'gsub' }, 'всего Ковчега')),
+        uiEditor(v)) : null)];
+}
+
+// ── «Вид и меню» (Правка 5.0, этап 7, 14.10.2026): меню значка Ковчега и акцент — Свод ui.menu и ui.look, одни на
+// веб, телефон и все страницы Ковчега. Форма, а не свободный текст: подписи направлений, их порядок, порядок сервисов и
+// куда какой сервис, акцент обеих тем; «Как JSON» — для правки целиком. Сломать меню отсюда нельзя: та же проверка, что
+// у сервера (checkMenu), — до отправки, сервер проверяет ещё раз до записи; «Сохранить» шлёт с base_rev (вторая вкладка
+// не затрёт первую), «Вернуть заводское» — заводское сервера. Только владельцу: сервер отдаёт ui в /api/settings ему одному.
+const UI_KEY = /^[a-z][a-z0-9_-]{0,23}$/, UI_ICON = /^[a-z][a-zA-Z0-9]{0,23}$/, UI_BAD = /[\u0000-\u001f\u007f<>]/;
+const uiText = (s) => String(s == null ? '' : s).trim().replace(/\s+/g, ' ');
+/** Проверка меню — словами, как у сервера (kovcheg_ui.check_menu); '' — годится. Подсказка до отправки, не защита. */
+function checkMenu(m, catalog) {
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return 'нужен объект {big, directions, create}';
+  const seen = new Set();
+  const text = (s, what, most, need = true) => {
+    if (s != null && typeof s !== 'string') return what + ': нужен текст';
+    const t = uiText(s);
+    if (need && !t) return what + ': пусто';
+    if (t.length > most) return `${what}: длиннее ${most} знаков`;
+    return UI_BAD.test(t) ? what + ': угловые скобки нельзя' : '';
+  };
+  const item = (x, where) => {
+    const it = typeof x === 'string' ? { key: x } : x;
+    if (!it || typeof it !== 'object') return where + ': нужен сервис {key, name, icon}';
+    if (!UI_KEY.test(it.key || '')) return where + ': ключ сервиса — латиницей: sport, dela, kino';
+    if (seen.has(it.key)) return `«${it.key}» в меню дважды — сервис живёт в одном месте`;
+    seen.add(it.key);
+    const cat = catalog[it.key] || {};
+    return text(it.name || cat.name, `${where} (${it.key}): название`, 24)
+      || (UI_ICON.test(it.icon || cat.icon || '') ? '' : `${where} (${it.key}): значок — имя из набора латиницей`)
+      || text(it.sub, `${where} (${it.key}): подпись`, 40, false);
+  };
+  const group = (d, where) => {
+    if (!d || typeof d !== 'object' || Array.isArray(d)) return where + ': нужен объект {name, sub, items}';
+    const items = d.items || [];
+    if (!Array.isArray(items) || items.length > 10) return where + ': сервисов — до 10';
+    return text(d.name, where + ': название', 24) || text(d.sub, where + ': подпись', 60, false)
+      || items.map((x, i) => item(x, `«${uiText(d.name)}», сервис ${i + 1}`)).find(Boolean) || '';
+  };
+  const big = m.big || [];
+  if (!Array.isArray(big) || big.length > 4) return 'больших кнопок — до 4';
+  const e1 = big.map((x, i) => item(x, 'большая кнопка ' + (i + 1))).find(Boolean);
+  if (e1) return e1;
+  const dirs = m.directions;
+  if (!Array.isArray(dirs) || !dirs.length || dirs.length > 12) return 'направлений — от 1 до 12';
+  const e2 = dirs.map((d, i) => group(d, 'направление ' + (i + 1))).find(Boolean);
+  if (e2) return e2;
+  const names = dirs.map((d) => uiText(d.name).toLowerCase());
+  if (new Set(names).size !== names.length) return 'два направления с одним названием';
+  const e3 = m.create ? group(m.create, '«Творчество»') : '';
+  if (e3) return e3;
+  return seen.size > 40 ? 'больше 40 пунктов' : '';
+}
+/** Смесь цветов #rrggbb — как kovcheg_ui.mix на сервере: показать мягкий акцент до сохранения. */
+function mixHex(a, b, wa) {
+  const p = (h, i) => parseInt(h.slice(1 + 2 * i, 3 + 2 * i), 16);
+  return '#' + [0, 1, 2].map((i) => Math.round(p(a, i) * wa + p(b, i) * (1 - wa)).toString(16).padStart(2, '0')).join('');
+}
+const UI_SOFT = { light: ['#ffffff', 0.10], dark: ['#161513', 0.22] };
+const uiClone = (x) => JSON.parse(JSON.stringify(x));
+
+function uiEditor(v) {
+  const ui = v.ui, catalog = Object.fromEntries(ui.catalog.map((c) => [c.key, c]));
+  const fac = ui.factory, base = ui.menu_rev + ':' + ui.tokens_rev;
+  // Черновик живёт, пока его не сохранили или не отменили; новая версия с сервера заменяет только нетронутый.
+  if (!S.ui || (S.ui.base !== base && !S.ui.dirty)) {
+    S.ui = { base, dirty: false, menu: uiClone(ui.menu), json: null, err: '',
+      accent: { light: (ui.tokens.light || {}).accent || fac.look.light.accent, dark: (ui.tokens.dark || {}).accent || fac.look.dark.accent } };
+  }
+  const st = S.ui, m = st.menu;
+  m.big = m.big || [];
+  const status = el('div', { class: 'ui-status', 'aria-live': 'polite' });
+  const save = el('button', { class: 'btn main', onclick: () => uiSave(v) }, 'Сохранить');
+  const undo = el('button', { class: 'btn', onclick: () => { S.ui = null; render(); } }, 'Отменить правки');
+  const refresh = () => {
+    st.err = checkMenu(m, catalog);
+    status.replaceChildren(st.err ? el('span', { class: 'when-bad' }, st.err)
+      : el('span', { class: 'faint' }, st.dirty ? 'Есть несохранённые правки.' : 'Сохранено.'));
+    save.disabled = !st.dirty || !!st.err;
+    undo.disabled = !st.dirty;
+  };
+  const touch = (redraw) => { st.dirty = true; st.json = null; if (redraw) render(); else refresh(); };
+  const input = (obj, field, max, ph, label) => el('input', { class: 'ui-in', value: obj[field] || '', maxlength: max, placeholder: ph,
+    'aria-label': label, oninput: (e) => { obj[field] = e.target.value; touch(false); } });
+  const arrow = (list, i, d, label) => el('button', { class: 'icon ui-arrow', title: label, 'aria-label': label,
+    disabled: i + d < 0 || i + d >= list.length, onclick: () => { [list[i], list[i + d]] = [list[i + d], list[i]]; touch(true); } },
+  icon(d < 0 ? 'up' : 'down', 15));
+  // Куда можно унести сервис: направления по порядку, «Творчество», «не в меню».
+  const homes = () => [...m.directions.map((d, j) => ['d' + j, uiText(d.name) || 'направление ' + (j + 1)]),
+    ...(m.create ? [['c', uiText(m.create.name) || 'Творчество']] : []), ['x', '— не в меню']];
+  const listOf = (h) => (h === 'c' ? m.create.items : h[0] === 'd' ? m.directions[+h.slice(1)].items : null);
+  const itemRow = (list, i, here) => {
+    const it = list[i] = typeof list[i] === 'string' ? { key: list[i] } : list[i];
+    const cat = catalog[it.key] || {};
+    const move = el('select', { class: 'ui-move', 'aria-label': 'Куда перенести «' + (it.name || cat.name || it.key) + '»',
+      onchange: (e) => {
+        const to = e.target.value;
+        if (to === here) return;
+        list.splice(i, 1);
+        const dest = listOf(to);
+        if (dest) dest.push(it);
+        touch(true);
+      } }, homes().map(([h, t]) => el('option', { value: h, selected: h === here || null }, t)));
+    return el('div', { class: 'ui-item' }, icon(it.icon || cat.icon || 'list', 16),
+      input(it, 'name', 24, cat.name || it.key, 'Название сервиса ' + it.key),
+      el('span', { class: 'faint ui-key' }, it.key), arrow(list, i, -1, 'Выше'), arrow(list, i, 1, 'Ниже'), move);
+  };
+  const groupBox = (d, j) => el('div', { class: 'ui-dir' },
+    el('div', { class: 'ui-head' },
+      input(d, 'name', 24, 'Название', 'Название направления'), input(d, 'sub', 60, 'подпись из формулы', 'Подпись направления'),
+      j == null ? null : [arrow(m.directions, j, -1, 'Направление выше'), arrow(m.directions, j, 1, 'Направление ниже'),
+        el('button', { class: 'icon ui-arrow', title: 'Убрать пустое направление', 'aria-label': 'Убрать направление',
+          disabled: (d.items || []).length > 0 || m.directions.length < 2,
+          onclick: () => { m.directions.splice(j, 1); touch(true); } }, icon('x', 15))]),
+    (d.items = d.items || []).length ? d.items.map((_, i) => itemRow(d.items, i, j == null ? 'c' : 'd' + j))
+      : el('div', { class: 'faint ui-empty' }, 'Пусто — в меню не видно.'));
+  // Сервисы, которых нет в меню: их можно вернуть в любое направление.
+  const placed = new Set([...m.big, ...m.directions.flatMap((d) => d.items || []), ...((m.create && m.create.items) || [])]
+    .map((x) => (typeof x === 'string' ? x : x.key)));
+  const outside = ui.catalog.filter((c) => !placed.has(c.key) && !PAGE_OF[c.key]);
+  const backIn = outside.length ? el('div', { class: 'ui-dir' }, el('div', { class: 'ui-head' }, el('b', {}, 'Не в меню')),
+    outside.map((c) => el('div', { class: 'ui-item' }, icon(c.icon, 16), el('span', {}, c.name), el('span', { class: 'faint ui-key' }, c.key),
+      el('select', { class: 'ui-move', 'aria-label': 'Куда поставить «' + c.name + '»', onchange: (e) => {
+        const dest = listOf(e.target.value);
+        if (dest) { dest.push({ key: c.key, name: c.name, icon: c.icon }); touch(true); }
+      } }, el('option', { value: 'x', selected: true }, 'поставить в…'), homes().filter(([h]) => h !== 'x').map(([h, t]) => el('option', { value: h }, t)))))) : null;
+  const accentRow = (theme, title) => {
+    const a = st.accent[theme], [bg, share] = UI_SOFT[theme];
+    const pickA = el('input', { type: 'color', value: a, 'aria-label': 'Акцент: ' + title, oninput: (e) => {
+      st.accent[theme] = e.target.value; touch(false);
+      sample.style.setProperty('--a', e.target.value); sample.style.setProperty('--s', mixHex(e.target.value, bg, share));
+    } });
+    const sample = el('span', { class: 'ui-sample ' + theme, style: `--a:${a};--s:${mixHex(a, bg, share)}` }, el('b', {}, 'Выбранное'), ' ссылка');
+    return el('div', { class: 'ui-accent' }, el('span', { class: 'ui-at' }, title), pickA, sample,
+      el('button', { class: 'chip-btn', disabled: a === fac.look[theme].accent || null,
+        onclick: () => { st.accent[theme] = fac.look[theme].accent; touch(true); } }, 'заводской'));
+  };
+  // «Как JSON»: весь черновик меню текстом — правка целиком (переименовать сервис, новый ключ); проверка до «Взять».
+  const area = el('textarea', { class: 'ui-json', rows: 14, spellcheck: 'false', 'aria-label': 'Меню целиком, JSON',
+    oninput: (e) => { st.json = e.target.value; } });
+  area.value = st.json != null ? st.json : JSON.stringify(m, null, 1);
+  const jsonErr = el('span', { class: 'when-bad' });
+  const take = el('button', { class: 'btn small', onclick: () => {
+    let got;
+    try { got = JSON.parse(area.value); } catch (e) { jsonErr.textContent = 'не JSON: ' + e.message; return; }
+    const err = checkMenu(got, catalog);
+    if (err) { jsonErr.textContent = err; return; }
+    if (!Array.isArray(got.big)) got.big = uiClone(fac.menu.big);
+    if (got.create === undefined) got.create = uiClone(fac.menu.create);
+    st.menu = got; touch(true);
+  } }, 'Взять из JSON');
+  const box = el('div', { class: 'ui-edit' },
+    // Одним span: строка подсказки — flex, и каждый кусок текста иначе встал бы отдельным блоком.
+    el('div', { class: 'hint-line' }, el('span', {}, 'Меню значка Ковчега и акцент — одни на веб, телефон и все страницы Ковчега (Свод ',
+      el('code', {}, 'ui.menu'), ' и ', el('code', {}, 'ui.look'), '). Телефон возьмёт правку со следующим синком, остальные страницы — за минуту-две: их перепекает сборщик «Дома».')),
+    el('div', { class: 'hint-line faint' }, `Сейчас: меню — ${ui.menu_from === 'svod' ? 'из Свода, версия ' + ui.menu_rev : 'заводское'}; вид — ${ui.tokens_from === 'svod' ? 'из Свода, версия ' + ui.tokens_rev : 'заводской'}.`),
+    el('h3', { class: 'ui-h' }, 'Большие кнопки'),
+    el('div', { class: 'ui-dir' }, m.big.map((b, i) => el('div', { class: 'ui-item' }, icon(b.icon || (catalog[b.key] || {}).icon || 'list', 16),
+      input(b, 'name', 24, (catalog[b.key] || {}).name || b.key, 'Название большой кнопки'), input(b, 'sub', 40, 'подпись', 'Подпись большой кнопки'),
+      arrow(m.big, i, -1, 'Левее'), arrow(m.big, i, 1, 'Правее')))),
+    el('h3', { class: 'ui-h' }, 'Направления — по порядку'),
+    m.directions.map((d, j) => groupBox(d, j)),
+    el('div', { class: 'toolbar' }, el('button', { class: 'chip-btn', disabled: m.directions.length >= 12 || null,
+      onclick: () => { m.directions.push({ name: 'Новое направление'.slice(0, 24), sub: '', items: [] }); touch(true); } }, '+ направление')),
+    m.create ? [el('h3', { class: 'ui-h' }, 'Строка ниже'), groupBox(m.create, null)] : null,
+    backIn,
+    el('h3', { class: 'ui-h' }, 'Акцент'),
+    accentRow('light', 'Светлая тема'), accentRow('dark', 'Тёмная тема'),
+    el('div', { class: 'hint-line faint' }, 'Мягкая подложка выбранного и цвет текста на кнопке выводятся из акцента сами.'),
+    el('details', { class: 'ui-more', open: st.json != null || null }, el('summary', {}, 'Как JSON'), area, el('div', { class: 'toolbar' }, take, jsonErr)),
+    el('div', { class: 'toolbar ui-actions' }, save, undo,
+      el('button', { class: 'btn bad', onclick: () => {
+        if (!confirm('Вернуть заводские меню и акцент? Своё меню уйдёт в историю Свода.')) return;
+        st.menu = uiClone(fac.menu); st.accent = { light: fac.look.light.accent, dark: fac.look.dark.accent }; touch(true);
+      } }, 'Вернуть заводское')),
+    status);
+  refresh();
+  return box;
+}
+
+async function uiSave(v) {
+  const st = S.ui, ui = v.ui;
+  const err = checkMenu(st.menu, Object.fromEntries(ui.catalog.map((c) => [c.key, c])));
+  if (err) { toast('Не сохранил: ' + err); return; }
+  const items = [];
+  if (JSON.stringify(st.menu) !== JSON.stringify(ui.menu)) {
+    items.push({ op: 'svod.set', key: 'ui.menu', value: st.menu, author: 'web', reason: 'веб Дел: «Вид и меню»', base_rev: ui.menu_rev });
+  }
+  // Вид: свои токены (если их ставил Claude) остаются, меняется только акцент — мягкий, текст на нём и info сервер выведет.
+  const look = { v: 1 };
+  for (const th of ['light', 'dark']) {
+    const was = { ...((ui.tokens || {})[th] || {}) };
+    if (st.accent[th] !== was.accent) { delete was['accent-soft']; delete was['accent-ink']; delete was.info; }
+    look[th] = { ...was, accent: st.accent[th] };
+  }
+  if (['light', 'dark'].some((th) => st.accent[th] !== ((ui.tokens || {})[th] || {}).accent)) {
+    items.push({ op: 'svod.set', key: 'ui.look', value: look, author: 'web', reason: 'веб Дел: акцент', base_rev: ui.tokens_rev });
+  }
+  if (!items.length) { S.ui = null; render(); return; }
+  try {
+    await ops(items);
+    S.ui = null;
+    crmDirty();
+    S.me = await api('/api/me');
+    S.top = null;   // шапка строится один раз — с новым меню её надо собрать заново
+    rememberLook();
+    toast('Сохранил в Свод: телефон — со следующим синком, страницы Ковчега — за минуту-две');
+  } catch (e) {
+    // «На сервере уже версии N» — правили в другой вкладке: свежая версия придёт с настройками, черновик — пока жив.
+    toast('Не сохранил: ' + e.message);
+    crmDirty();
+  }
+  render();
 }
 
 async function decide(ids, decision, reason, set) {
