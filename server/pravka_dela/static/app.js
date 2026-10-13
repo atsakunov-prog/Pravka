@@ -761,7 +761,8 @@ function render() {
   const focused = q0 ? { id: q0.id, value: q0.value, a: q0.selectionStart, b: q0.selectionEnd } : null;
   const shell = el('div', { class: 'shell' + (S.cardId || S.draft ? ' with-card' : '') + (S.sideOpen ? ' side-open' : '') + (S.sel.size ? ' selecting' : '') });
   shell.append(renderSide(r), listColumn(r));
-  if (S.cardId || S.draft) shell.append(renderCard());
+  if (S.cardId || S.draft) shell.append(renderCard(), cardGrip(shell));
+  shell.style.setProperty('--card-w', cardPct() + '%');
   const scroll = S.toTop ? 0 : document.querySelector('main.list > .scroll')?.scrollTop || 0; // новая страница — с начала
   S.toTop = false;
   const old = document.querySelector('section.card-pane');
@@ -889,7 +890,7 @@ function topBar() {
   };
   if (window.ResizeObserver) new ResizeObserver(toCurrent).observe(nav);
   return el('header', { class: 'top' }, el('div', { class: 'top-in' },
-    el('button', { class: 'icon burger', title: 'Разделы: виды, фильтры, CRM, клиенты', 'aria-label': 'Разделы', onclick: () => { S.sideOpen = true; render(); } }, icon('menu', 20)),
+    el('button', { class: 'icon burger', title: 'Разделы: виды, фильтры, CRM, клиенты', 'aria-label': 'Разделы', onclick: () => { S.sideOpen = !S.sideOpen; render(); } }, icon('menu', 20)),
     el('a', { class: 'brand', href: '#/today' }, el('img', { src: look.icon || '/static/icon.svg', alt: '' }), el('b', {}, 'Ковчег')),
     nav,
     el('div', { class: 'top-end' }, theme, prefsMenu(),
@@ -1031,7 +1032,7 @@ function renderSide(r) {
 
   // Боковая колонка (макет 13.10.2026): сверху стоят поиск и виды, ниже прокручиваются фильтры, CRM, избранное,
   // клиенты, проекты, люди, архив; внизу — статистика, настройки и путь (стоянка, серия).
-  return el('aside', { class: 'side', 'aria-label': 'Разделы' },
+  const aside = el('aside', { class: 'side', 'aria-label': 'Разделы' },
     el('div', { class: 'side-top' },
       el('label', { class: 'side-find' }, icon('search', 16), search),
       el('nav', { class: 'side-views', 'aria-label': 'Виды' }, views)),
@@ -1042,6 +1043,47 @@ function renderSide(r) {
         navItem('#/settings', icon('settings', 17), 'Настройки', null, r.kind === 'settings')),
       gameCard(),
       el('div', { class: 'side-keys' }, el('span', { class: 'kbd' }, 'n'), ' сказать Claude · ', el('span', { class: 'kbd' }, '/'), ' поиск')));
+  // На телефоне колонка — шторка, как в приложении Claude: кнопка в шапке открывает и закрывает, тап по затемнению
+  // и свайп влево — закрывают (владелец 13.10.2026).
+  let sx = null, sy = null;
+  aside.addEventListener('touchstart', (e) => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
+  aside.addEventListener('touchend', (e) => {
+    if (sx == null || !S.sideOpen) return;
+    const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
+    sx = null;
+    if (dx < -60 && Math.abs(dy) < Math.abs(dx)) { S.sideOpen = false; render(); }
+  }, { passive: true });
+  return aside;
+}
+
+/** Ширина карточки дела справа — ручкой на её левом краю (владелец 13.10.2026), в процентах окна, помнится в
+ *  браузере. Доля считается из экранных px мыши и колонки — при «Размере текста» (zoom) она та же. */
+const CARD_MIN = 28, CARD_MAX = 65, CARD_DEF = 36;
+const cardPct = () => Math.min(CARD_MAX, Math.max(CARD_MIN, +LS.get('cardPct', CARD_DEF) || CARD_DEF));
+function cardGrip(shell) {
+  const grip = el('div', { class: 'card-grip', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Ширина карточки', tabindex: '0',
+    title: 'Потяни — карточка шире или уже' });
+  let pct = cardPct();
+  const put = (p) => { pct = Math.round(Math.min(CARD_MAX, Math.max(CARD_MIN, p)) * 10) / 10; shell.style.setProperty('--card-w', pct + '%'); };
+  grip.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    try { grip.setPointerCapture(e.pointerId); } catch (err) { /* без захвата тоже тянется, пока мышь над ручкой */ }
+    shell.classList.add('resizing');
+    const move = (ev) => { const r = shell.getBoundingClientRect(); put((r.right - ev.clientX) / r.width * 100); };
+    const up = () => {
+      grip.removeEventListener('pointermove', move);
+      shell.classList.remove('resizing');
+      LS.set('cardPct', pct);
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up, { once: true });
+    grip.addEventListener('pointercancel', up, { once: true });
+  });
+  grip.addEventListener('keydown', (e) => {
+    const k = { ArrowLeft: 2, ArrowRight: -2 }[e.key];
+    if (k) { e.preventDefault(); put(pct + k); LS.set('cardPct', pct); }
+  });
+  return grip;
 }
 
 /** «Раскрыть все / свернуть все» — проекты всех клиентов списка разом (владелец, 06.10.2026). */
@@ -1147,14 +1189,10 @@ function head(title, sub, extra, nav) {
 function levelsBar(levels, onChange, omit = []) {
   const opts = Object.entries(LEVELS).filter(([k]) => !omit.includes(k) && (k !== 'dir' || krugOn()));
   const sel = (i) => {
-    const cur = levels[i] || '';
-    const s = el('select', { 'aria-label': `Уровень ${i + 1}` }, [['', i ? '—' : 'без групп'], ...opts]
-      .map(([v, l]) => el('option', { value: v, selected: cur === v }, l)));
-    s.addEventListener('change', () => {
-      const next = s.value ? [...levels.slice(0, i), s.value, ...levels.slice(i + 1)] : levels.slice(0, i);
-      onChange([...new Set(next)].slice(0, 3));
-    });
-    return s;
+    const cur = levels[i] || null;
+    const pick = (v) => onChange([...new Set(v ? [...levels.slice(0, i), v, ...levels.slice(i + 1)] : levels.slice(0, i))].slice(0, 3));
+    return choiceBtn(cur ? LEVELS[cur] : i ? '—' : 'без групп', (a) => choicePop(a, { title: `Уровень ${i + 1}`, current: cur,
+      none: i ? '— (убрать уровень)' : 'Без групп', items: opts.map(([v, l]) => ({ v, title: l })), onPick: pick }), { empty: !cur });
   };
   const sels = [];
   for (let i = 0; i < Math.min(3, levels.length + 1); i++) sels.push(i ? el('span', { class: 'lv-sep' }, '›') : null, sel(i));
@@ -1240,6 +1278,58 @@ function pickPop(anchor, list, lv, onPick) {
   }, 0);
 }
 const setPick = (key) => (pk) => { S.pick[key] = pk; S.toTop = true; render(); };
+
+/** Выбор из длинного списка — поповер со строкой поиска сверху, точно как «Показать только» (владелец 13.10.2026:
+ *  «вот образец», вместо системных выпадающих списков): фокус сразу в поле, фильтр по мере ввода (каждое слово —
+ *  в названии, подписи или других именах), стрелки и Enter, Esc — закрыть. items: [{v, title, note?, keys?, lead?}];
+ *  current — выбранное (галочка); none — пункт «без …» наверху; create(text) — «Новый: …», если набрано то, чего нет. */
+function choicePop(anchor, { title, items, current = null, none = null, onPick, create = null, placeholder = 'Найти…' }) {
+  setTimeout(() => {
+    const q = el('input', { class: 'ps-q', placeholder, autocomplete: 'off', 'aria-label': placeholder });
+    const box = el('div', { class: 'ps-list', role: 'listbox' });
+    let shown = [], at = -1;
+    const choose = (it) => { closePop(); if (it.make != null) create(it.make); else onPick(it.v); };
+    const draw = () => {
+      const words = norm(q.value).split(/\s+/).filter(Boolean), typed = q.value.trim();
+      const hit = items.filter((it) => words.every((w) => [it.title, it.note, ...(it.keys || [])].some((k) => k && norm(k).includes(w))));
+      shown = [...(!words.length && none ? [{ v: null, title: none }] : []), ...hit.slice(0, 80)];
+      if (typed && create && !hit.some((it) => norm(it.title) === norm(typed))) shown.push({ make: typed, title: `Новый: «${typed}»` });
+      if (at < 0) at = Math.max(0, shown.findIndex((it) => it.make == null && it.v === current));
+      at = Math.min(at, Math.max(0, shown.length - 1));
+      box.replaceChildren(...shown.map((it, i) => el('button', { type: 'button', role: 'option', class: 'ps-item' + (i === at ? ' on' : '') + (it.make != null ? ' ps-new' : ''),
+        'aria-selected': it.make == null && it.v === current ? 'true' : 'false', onmousedown: (e) => { e.preventDefault(); choose(it); } },
+      it.make != null ? icon('plus', 16) : (typeof it.lead === 'function' ? it.lead() : it.lead) || el('span', { class: 'ps-dot' }),
+      el('span', { class: 'ps-t' }, el('span', { class: 'ps-n' }, it.title), it.note ? el('span', { class: 'ps-s' }, it.note) : null),
+      it.make == null && it.v === current ? el('span', { class: 'ps-c' }, icon('check', 16)) : null)),
+      ...(words.length && !shown.length ? [el('div', { class: 'ps-empty' }, 'Не нашёл')] : []));
+      box.querySelector('.ps-item.on')?.scrollIntoView({ block: 'nearest' });
+    };
+    q.addEventListener('input', () => { at = 0; draw(); });
+    q.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' && shown.length) { e.preventDefault(); at = (at + 1) % shown.length; draw(); }
+      if (e.key === 'ArrowUp' && shown.length) { e.preventDefault(); at = (at - 1 + shown.length) % shown.length; draw(); }
+      if (e.key === 'Enter' && shown[at]) { e.preventDefault(); choose(shown[at]); }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePop(); }
+    });
+    draw();
+    const pop = popAt(anchor, [title ? el('div', { class: 'pop-h' }, title) : null, q, box]);
+    pop.classList.add('ps-pop');
+    // От левого края кнопки, как «Показать только»; экранные px якоря — в раскладочные (zoom у body).
+    const z = zk(document.body);
+    pop.style.left = Math.max(8, Math.min(window.innerWidth / z - pop.offsetWidth - 8, anchor.getBoundingClientRect().left / z)) + 'px';
+    q.focus();
+  }, 0);
+}
+/** Кнопка вместо длинного <select>: показывает выбранное, щелчок — choicePop со строкой поиска. */
+function choiceBtn(text, open, { title = null, empty = false, cls = '' } = {}) {
+  return el('button', { type: 'button', class: 'pick-sel' + (cls ? ' ' + cls : ''), title, 'aria-haspopup': 'listbox',
+    onclick: (e) => open(e.currentTarget) }, el('span', { class: 'pick-sel-t' + (empty ? ' faint' : '') }, text), icon('chevronDown', 15));
+}
+/** Пункты для choicePop: проекты (клиенты — с подписью «клиент») и люди (короткое имя, компания, должность). */
+const projectItems = (list) => list.map((p) => ({ v: p.id, title: p.name, note: [KIND_ONE[p.kind], p.archived_at ? 'архив' : null].filter(Boolean).join(' · '),
+  keys: p.aliases || [], lead: () => dot(p.id) }));
+const personItems = (list) => list.map((p) => ({ v: p.id, title: p.name, lead: () => avatar(p),
+  note: [p.short && p.short !== p.name ? p.short : null, orgLabel(p.org_id)?.name, p.role].filter(Boolean).join(' · '), keys: personKeys(p) }));
 const pickNote = (items, pick, levels) => (pickOn(pick, levels) && !items.length ? el('div', { class: 'empty' }, `У «${pick.title}» здесь дел нет.`) : null);
 
 /** «Сохранить фильтр»: что показано и как сгруппировано — в «Фильтры» слева. Имя — предложенное, можно своё. */
@@ -1705,10 +1795,10 @@ function treeCols(m, dirs) {
 /** «Список»: открытые дела (без целей) плоско, с фильтрами — направление, цель (со всем, что под ней), «без зачем». */
 function treeList() {
   const f = S.treeF || (S.treeF = {});
-  const goalSel = el('select', { 'aria-label': 'Цель' }, el('option', { value: '' }, 'Любая цель'),
-    all().filter((x) => isOpen(x) && isMine(x) && x.goal).map((x) => ({ x, p: goalPath(x) })).sort((a, b) => a.p.localeCompare(b.p, 'ru'))
-      .map(({ x, p }) => el('option', { value: x.id, selected: f.goal === x.id }, p)));
-  goalSel.addEventListener('change', () => { f.goal = goalSel.value || null; render(); });
+  const goals = all().filter((x) => isOpen(x) && isMine(x) && x.goal).map((x) => ({ x, p: goalPath(x) })).sort((a, b) => a.p.localeCompare(b.p, 'ru'));
+  const goalSel = choiceBtn(f.goal && S.tasks.get(f.goal) ? S.tasks.get(f.goal).title : 'Любая цель', (a) => choicePop(a, { title: 'Цель', current: f.goal || null,
+    none: 'Любая цель', items: goals.map(({ x, p }) => ({ v: x.id, title: x.title, note: p.split(' › ').slice(0, -1).join(' › ') })),
+    onPick: (v) => { f.goal = v; render(); } }), { empty: !f.goal });
   const under = f.goal ? belowOf(f.goal) : null;
   const loose = (t) => !upOf(t).slice(1).some((x) => x.kind !== 'project');
   const items = deeds().filter((t) => isOpen(t) && isMine(t) && inSphere(t)
@@ -1728,9 +1818,9 @@ function renderTree() {
   const m = treeModel();
   const dirs = S.krug.dirs.filter((d) => !S.treeDir || d.key === S.treeDir);
   const goals = all().filter((x) => isOpen(x) && isMine(x) && x.goal).length;
-  const dirSel = el('select', { 'aria-label': 'Направление' }, el('option', { value: '' }, 'Все направления'),
-    S.krug.dirs.map((d) => el('option', { value: d.key, selected: S.treeDir === d.key }, d.name)));
-  dirSel.addEventListener('change', () => { S.treeDir = dirSel.value || null; LS.set('treeDir', S.treeDir); render(); });
+  const dirSel = choiceBtn(S.treeDir ? dirName(S.treeDir) : 'Все направления', (a) => choicePop(a, { title: 'Направление', current: S.treeDir || null,
+    none: 'Все направления', items: S.krug.dirs.map((d) => ({ v: d.key, title: d.name, note: d.zone || '', keys: [d.short, d.formula].filter(Boolean) })),
+    onPick: (v) => { S.treeDir = v; LS.set('treeDir', S.treeDir); render(); } }), { empty: !S.treeDir });
   // Уровни (владелец 13.10.2026: «наверху — какой уровень нужен: первый — только направления, второй… нажал — и всё
   // сжимается до этого уровня»). Направление — уровень 1, его цели, проекты и дела — 2, и так вниз; «Всё» — раскрыть всё.
   const level = (n) => () => {
@@ -2624,10 +2714,9 @@ async function personSet(x, set, msg) {
 function personPop(anchor, x, extra) {
   setTimeout(() => {
     const { clients, other } = orgChoices();
-    const sel = el('select', {}, el('option', { value: '' }, '— ни откуда —'),
-      el('optgroup', { label: 'Клиенты' }, clients.map((o) => el('option', { value: o.id, selected: x.org_id === o.id }, o.name))),
-      other.length ? el('optgroup', { label: 'Другие компании' }, other.map((o) => el('option', { value: o.id, selected: x.org_id === o.id }, o.name))) : null);
-    sel.addEventListener('change', () => { closePop(); personSet(x, { org_id: sel.value || null }, `${personName(x)}: ` + (sel.value ? 'откуда — ' + orgLabel(sel.value)?.name : 'без компании')); });
+    const sel = choiceBtn(orgLabel(x.org_id)?.name || 'ни откуда', (a) => choicePop(a, { title: `Откуда ${personName(x)}`, current: x.org_id || null,
+      none: 'Ни откуда', items: [...clients.map((o) => ({ v: o.id, title: o.name, note: 'клиент' })), ...other.map((o) => ({ v: o.id, title: o.name, note: 'компания' }))],
+      onPick: (v) => personSet(x, { org_id: v }, `${personName(x)}: ` + (v ? 'откуда — ' + orgLabel(v)?.name : 'без компании')) }), { empty: !x.org_id });
     const role = el('input', { value: x.role || '', placeholder: 'должность: CFO, партнёр…' });
     role.addEventListener('keydown', (e) => { if (e.key === 'Enter') { closePop(); personSet(x, { role: role.value.trim() || null }, `${personName(x)}: ` + (role.value.trim() || 'без должности')); } });
     popAt(anchor, [el('div', { class: 'pop-h' }, x.name), el('div', { class: 'pop-l' }, 'Откуда он'), sel,
@@ -2805,14 +2894,19 @@ function sugMark(s) {
     ? el('a', { class: 'src-mark', href: s.source_ref, target: '_blank', rel: 'noopener noreferrer', title, onclick: (e) => e.stopPropagation() }, tint(icon(ic, 16), col))
     : el('span', { class: 'src-mark', title }, tint(icon(ic, 16), col));
 }
-/** Откуда дело — в карточке: наговорка дословно или встреча и Telegram с цитатой (origin у /api/task). */
+/** Откуда дело — в карточке, сразу под названием: наговорка дословно или встреча и Telegram с цитатой (origin у
+ *  /api/task). Пока подробности не пришли — хотя бы откуда и когда (источник есть у самого дела). */
 function originLine(t) {
   const o = extras.get(t.id)?.origin;
-  if (!o) return null;
-  const [ic, col, word] = origin(o.kind === 'dictation' ? 'voice' : o.source);
+  if (!o) {
+    const [ic, , word] = origin(t.source);
+    return el('div', { class: 'origin' }, icon(ic, 18), el('div', {}, el('span', { class: 'o-h' }, word[0].toUpperCase() + word.slice(1)
+      + (t.created_at ? ' · ' + whenWords(t.created_at) : ''))));
+  }
+  const [ic, , word] = origin(o.kind === 'dictation' ? 'voice' : o.source);
   const top = o.kind === 'dictation' ? 'Наговорка · ' + whenWords(o.at) : [o.batch_title || word, o.auto ? 'поставлено само' : null].filter(Boolean).join(' · ');
   const text = o.kind === 'dictation' ? o.text : o.quote;
-  return el('div', { class: 'origin' }, tint(icon(ic, 16), col),
+  return el('div', { class: 'origin' }, icon(ic, 18),
     el('div', {}, el('span', { class: 'o-h' }, top),
       o.url ? el('a', { class: 'link', href: o.url, target: '_blank', rel: 'noopener noreferrer' }, ' · встреча →') : null,
       text ? el('div', { class: 'o-t' }, text) : null));
@@ -3084,9 +3178,7 @@ function remindBlock(t) {
   const own = el('input', { type: 'datetime-local', title: 'Своё время (по Москве)', value: cur ? `${cur.day}T${cur.hm}` : '' });
   own.addEventListener('change', () => { if (own.value) set(mskIso(own.value.slice(0, 10), own.value.slice(11, 16)), null); });
   const said = remindState(t);
-  return [el('span', { class: 'top-label' }, 'Напомнить в Telegram'),
-    el('div', { class: 'remind-box' }, said ? el('div', { class: 'remind-state' }, said) : null,
-      el('div', { class: 'quick-dates' }, chips), own)];
+  return el('div', { class: 'remind-box' }, said ? el('div', { class: 'remind-state' }, said) : null, el('div', { class: 'quick-dates' }, chips), own);
 }
 
 /** Место дела в дереве жизни (владелец 13.10.2026: «в каждом деле должно быть это дерево и его место в нём, чтобы
@@ -3136,16 +3228,10 @@ function placeBlock(t) {
   return el('div', { class: 'place' }, rows, el('div', { class: 'pt-next' }, next));
 }
 
-/** Круг в карточке дела: место в дереве, «Зачем», цель или дело, ритм практики, направления (метки), новый шаг. */
-function krugProps(t) {
+/** Круг в карточке дела: «Зачем», цель или дело, ритм практики, направления (метки). Строки «Шаги» и подсказки
+ *  «своих нет — направление по дереву…» больше нет (владелец 13.10.2026): шаги видны в «Месте в дереве», данные целы. */
+function krugProps(t, row) {
   const own = t.directions || [];
-  const add = el('input', { class: 'step-add', placeholder: (t.goal ? 'Новый шаг к этой цели' : 'Новый шаг к этому делу') + ' — Enter' });
-  add.addEventListener('keydown', async (e) => {
-    if (e.key !== 'Enter' || !add.value.trim()) return;
-    e.preventDefault();
-    const task = { title: add.value.trim(), why_id: t.id, source: 'web', ...(!t.goal && t.project_id ? { project_id: t.project_id } : {}) };
-    try { await op1({ op: 'task.create', task }); add.value = ''; render(); } catch (err) { fail(err); }
-  });
   const rhythm = el('input', { class: 'rhythm', placeholder: 'ежедневно, 2 раза в неделю…', value: t.rhythm || '' });
   rhythm.addEventListener('change', () => setFields([t.id], { rhythm: rhythm.value.trim() || null }, rhythm.value.trim() ? 'Практика: ' + rhythm.value.trim() : 'Уже не практика'));
   const kindBtn = treeOn() ? el('button', { class: 'chip-btn' + (t.goal ? ' on' : ''),
@@ -3155,14 +3241,11 @@ function krugProps(t) {
       setFields([t.id], { goal: !t.goal }, t.goal ? 'Снова дело' : 'Теперь это цель');
     } }, t.goal ? 'Цель' : 'Сделать целью') : null;
   return [
-    el('span', {}, 'Зачем'), el('div', { class: 'why-row' },
+    row('Зачем', el('div', { class: 'why-row' },
       el('button', { class: 'chip-btn', onclick: (e) => whyPop(e.currentTarget, t) }, t.why_id ? 'Поменять цель' : 'Повесить на цель'),
-      kindBtn, t.goal ? el('label', { class: 'rhythm-l', title: 'Цель с ритмом — практика: повторяется и не закрывается' }, 'Ритм', rhythm) : null),
-    el('span', {}, 'Направления'), dirChips(t, (next) => setFields([t.id], { directions: next })),
-    el('span', {}), el('div', { class: 'hint-line krug-hint' }, own.length
-      ? 'главное — у корня цепочки «Зачем», остальные — метки (до двух)'
-      : 'своих нет — направление по дереву; отметь, если дело двигает ещё и другую сторону'),
-    el('span', {}, 'Шаги'), el('div', { class: 'steps' }, add),
+      kindBtn, t.goal ? el('label', { class: 'rhythm-l', title: 'Цель с ритмом — практика: повторяется и не закрывается' }, 'Ритм', rhythm) : null)),
+    row('Направления', dirChips(t, (next) => setFields([t.id], { directions: next })),
+      own.length ? el('div', { class: 'hint-line krug-hint' }, 'главное — у корня цепочки «Зачем», остальные — метки (до двух)') : null),
   ];
 }
 
@@ -3181,23 +3264,28 @@ function renderCard() {
   const src = t || sug._src;
   // Поле сохраняется само при изменении (как в Vikunja); у предложения — по кнопке «Принять».
   const save = (field, value) => { if (t) setFields([t.id], { [field]: value }); else src[field] = value; };
-  const sel = (field, options, value) => {
-    const s = el('select', {}, options.map(([v, label]) => el('option', { value: v, selected: String(value ?? '') === String(v) }, label)));
-    s.addEventListener('change', () => save(field, s.value || null));
-    return s;
-  };
+  // Длинные списки — выбором со строкой поиска (как «Показать только»), не системным <select> (владелец 13.10.2026).
   const live = [...S.projects.values()].filter((p) => !p.archived_at || p.id === src.project_id).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-  const projSel = el('select', {}, [['', 'Без проекта'], ...live.map((p) => [p.id, p.name])].map(([v, l]) => el('option', { value: v, selected: (src.project_id || '') === v }, l)));
-  projSel.addEventListener('change', () => { if (t) setFields([t.id], { project_id: projSel.value || null, deal_id: null }); else { src.project_id = projSel.value || null; src.deal_id = null; render(); } });
+  const setProject = (v) => { if (t) setFields([t.id], { project_id: v || null, deal_id: null }); else { src.project_id = v || null; src.deal_id = null; render(); } };
+  const projSel = choiceBtn(project(src.project_id)?.name || 'Без проекта', (a) => choicePop(a, { title: 'Проект', items: projectItems(live),
+    current: src.project_id || null, none: 'Без проекта', onPick: setProject }), { empty: !src.project_id });
   const deals = [...S.deals.values()].filter((d) => d.project_id && d.project_id === src.project_id);
-  const people = [...S.people.values()].filter((p) => !p.archived_at).sort((a, b) => personName(a).localeCompare(personName(b), 'ru'));
+  const dealSel = choiceBtn(S.deals.get(src.deal_id)?.name || '—', (a) => choicePop(a, { title: 'Сделка', current: src.deal_id || null, none: 'Не про сделку',
+    items: deals.map((d) => ({ v: d.id, title: d.name, note: stageWord(d), lead: () => el('span', { class: 'st-dot st-' + d.stage }) })),
+    onPick: (v) => { save('deal_id', v); if (!t) render(); } }), { empty: !src.deal_id });
+  const people = [...S.people.values()].filter((p) => !p.archived_at && !p.merged_into).sort((a, b) => personName(a).localeCompare(personName(b), 'ru'));
+  const who0 = person(src.person_id);
+  const personSel = choiceBtn(who0 ? (who0.short && who0.short !== who0.name ? `${who0.short} — ${who0.name}` : who0.name) : '—', (a) => choicePop(a, {
+    title: 'Человек', items: personItems(people), current: src.person_id || null, none: 'Никто', onPick: (v) => { save('person_id', v); if (!t) render(); } }), { empty: !who0 });
   const date = (field) => {
     const i = el('input', { type: 'date', value: src[field] || '' });
     i.addEventListener('change', () => save(field, i.value || null));
     return i;
   };
-  const num = el('input', { type: 'number', min: 1, value: src.estimate_min || '' });
-  num.addEventListener('change', () => save('estimate_min', num.value ? +num.value : null));
+  // Минуты — чипами 15, 30, 60 (владелец 13.10.2026: без свободного поля); нажал выбранное — снял.
+  const minutes = el('div', { class: 'quick-dates' }, [15, 30, 60].map((m) => el('button', { class: 'chip-btn' + (src.estimate_min === m ? ' on' : ''),
+    onclick: () => { save('estimate_min', src.estimate_min === m ? null : m); if (!t) render(); } }, m + ' мин')),
+  src.estimate_min && ![15, 30, 60].includes(src.estimate_min) ? el('span', { class: 'faint' }, dur(src.estimate_min)) : null);
   const labels = el('input', { value: (src.labels || []).join(', '), placeholder: 'звонок, …' });
   labels.addEventListener('change', () => save('labels', labels.value.split(',').map((x) => x.trim()).filter(Boolean)));
   const title = el('textarea', { class: 'title-edit', rows: 1 }, src.title || '');
@@ -3211,12 +3299,6 @@ function renderCard() {
   const quickDates = el('div', { class: 'quick-dates' },
     [['Сегодня', S.today], ['Завтра', D.add(S.today, 1)], ['Пн', D.next(0)], ['+неделя', D.add(S.today, 7)], ['Нет', null]].map(([l, d]) =>
       el('button', { class: 'chip-btn' + ((src.due_date || null) === d ? ' on' : ''), onclick: () => { save('due_date', d); if (!t) render(); } }, l)));
-  const chk = (field, label, on, value) => {
-    const c = el('input', { type: 'checkbox' });
-    c.checked = !!on;
-    c.addEventListener('change', () => save(field, c.checked ? value : (field === 'want' ? false : null)));
-    return el('label', {}, c, label);
-  };
   // Группа — три кнопки (10.10.2026): «Отбить», «Запустить», «Мониторить»; человек — кто ждёт или от кого жду.
   const g = grpOf(src);
   const grpPick = el('div', { class: 'quick-dates grp-pick' }, Object.entries(GRP).map(([k, l]) =>
@@ -3225,17 +3307,20 @@ function renderCard() {
       if (t) setFields([t.id], set); else { Object.assign(src, set); render(); }
     } }, l)));
 
+  // Свойства — строка на поле: подпись слева, значение справа и переносится внутри своей строки; тонкая линия — у каждой
+  // строки (владелец 13.10.2026: «строки наезжают, разделители пропадают» — была одна сетка на всё, без строк).
+  const row = (label, ...value) => el('div', { class: 'prop' }, el('div', { class: 'prop-l' }, label), el('div', { class: 'prop-v' }, value));
   const props = el('div', { class: 'props' },
-    el('span', {}, 'Проект'), t && t.goal ? el('span', { class: 'faint' }, 'цель живёт без проекта — её видишь только ты') : projSel,
-    deals.length ? el('span', {}, 'Сделка') : null, deals.length ? sel('deal_id', [['', '—'], ...deals.map((d) => [d.id, d.name])], src.deal_id) : null,
-    el('span', {}, 'Группа'), grpPick,
-    el('span', {}, { owed: 'Кто ждёт', check: 'От кого жду' }[g] || 'Человек'), sel('person_id', [['', '—'], ...people.map((p) => [p.id, p.short && p.short !== p.name ? `${p.short} — ${p.name}` : p.name])], src.person_id),
-    el('span', {}, 'Срок'), date('due_date'), el('span', {}), quickDates,
-    g === 'check' ? el('span', {}, 'Напомнить ему') : null, g === 'check' ? date('nudge_on') : null,
-    t && isOpen(t) && remindOn() ? remindBlock(t) : null,
-    el('span', {}, 'Минут'), num,
-    el('span', {}, 'Метки'), labels,
-    t && isMine(t) && krugOn() ? krugProps(t) : null);
+    row('Проект', t && t.goal ? el('span', { class: 'faint' }, 'цель живёт без проекта — её видишь только ты') : projSel),
+    deals.length ? row('Сделка', dealSel) : null,
+    row('Группа', grpPick),
+    row({ owed: 'Кто ждёт', check: 'От кого жду' }[g] || 'Человек', personSel),
+    row('Срок', date('due_date'), quickDates),
+    g === 'check' ? row('Напомнить ему', date('nudge_on')) : null,
+    t && isOpen(t) && remindOn() ? row('Напомнить в Telegram', remindBlock(t)) : null,
+    row('Минут', minutes),
+    row('Метки', labels),
+    t && isMine(t) && krugOn() ? krugProps(t, row) : null);
 
   // Карточка (общий вид Ковчега): сверху проект ссылкой, название, ряд действий («На сегодня» или «На завтра» и
   // «Сделано» акцентом), свойства — строками через тонкую линию: подпись слева, поле справа.
@@ -3249,14 +3334,15 @@ function renderCard() {
     ] : el('button', { class: 'btn', onclick: () => toggleDone([t]) }, 'Вернуть в работу')) : null;
   const card = el('div', { class: 'card' },
     el('div', { class: 'card-top' },
+      el('button', { class: 'icon-btn card-back', title: 'Назад', 'aria-label': 'Назад к списку', onclick: close }, icon('arrowLeft', 20)),
       sug ? el('span', { class: 'crumb' }, 'Предложение') : crumb,
       t && t.status !== 'open' ? el('span', { class: 'faint' }, t.status === 'done' ? 'сделано' : 'отменено') : null,
-      el('button', { class: 'icon-btn', title: 'Закрыть (Esc)', 'aria-label': 'Закрыть', onclick: close }, icon('x', 18))),
-    title, acts, t ? originLine(t) : null,
-    // Место в дереве жизни — сразу под названием: зачем это дело и что будет, когда сделаешь (13.10.2026).
+      el('button', { class: 'icon-btn card-x', title: 'Закрыть (Esc)', 'aria-label': 'Закрыть', onclick: close }, icon('x', 18))),
+    // Откуда дело (наговор, встреча, Telegram…) — сразу под названием и заметно: владельцу это нравится (13.10.2026).
+    title, t ? originLine(t) : null, acts,
+    // Место в дереве жизни: зачем это дело и что будет, когда сделаешь (13.10.2026).
     t && isMine(t) && krugOn() ? el('div', { class: 'place-box' }, el('div', { class: 'place-h' }, 'Место в дереве'), placeBlock(t)) : null,
     props,
-    el('div', { class: 'checks' }, chk('want', 'Хочу сам', src.want, true)),
     notes);
   const btns = el('div', { class: 'btns' });
   let personLink = null;
@@ -3605,24 +3691,20 @@ function renderUnmatched(list) {
     const cur = (S.me.settings && S.me.settings.time_ignore) || [];
     try { await op1({ op: 'user.settings', settings: { time_ignore: [...cur, name] } }); S.me.settings = { ...(S.me.settings || {}), time_ignore: [...cur, name] }; crmDirty(); render(); } catch (e) { fail(e); }
   };
-  const alias = (anchor, name) => setTimeout(() => {
+  const alias = (anchor, name) => {
     const projs = liveProjects().filter((p) => p.kind === 'client').sort((a, b) => a.name.localeCompare(b.name, 'ru'));
     const ppl = livePeople().sort((a, b) => personName(a).localeCompare(personName(b), 'ru'));
-    const sel = el('select', {}, el('option', { value: '' }, 'выбрать…'),
-      el('optgroup', { label: 'Клиенты' }, projs.map((p) => el('option', { value: 'p:' + p.id }, p.name))),
-      el('optgroup', { label: 'Люди' }, ppl.map((p) => el('option', { value: 'h:' + p.id }, p.name))));
-    sel.addEventListener('change', async () => {
-      if (!sel.value) return;
-      closePop();
-      const [k, id] = sel.value.split(':');
+    choicePop(anchor, { title: `«${name}» — это:`, items: [...projectItems(projs).map((x) => ({ ...x, v: 'p:' + x.v })), ...personItems(ppl).map((x) => ({ ...x, v: 'h:' + x.v }))],
+      onPick: async (v) => {
+      if (!v) return;
+      const [k, id] = v.split(':');
       const x = k === 'p' ? project(id) : person(id);
       try {
         await op1({ op: k === 'p' ? 'project.set' : 'person.set', id, set: { aliases: [...(x.aliases || []), name] } });
         crmDirty(); toast(`«${name}» теперь ${k === 'p' ? 'клиент' : 'человек'} ${x.name} — часы встали на место`); render();
       } catch (e) { fail(e); }
-    });
-    popAt(anchor, [el('div', { class: 'pop-h' }, `«${name}» — это:`), sel]);
-  }, 0);
+    } });
+  };
   return el('div', { class: 'group' },
     el('h2', {}, 'Засечка знает, справочник нет', el('span', { class: 'n' }, list.length)),
     el('div', { class: 'hint-line' }, 'Клиенты из ленты времени, которых нет в справочнике. Заведи клиентом или привяжи к существующему — прошлые часы сами встанут на место.'),
@@ -4103,7 +4185,9 @@ function renderDeal(id) {
     fact('Вероятность, %', inp('probability', 'number', d.probability, (x) => Math.max(0, Math.min(100, Math.round(+x))))),
     fact('Решение ждём', inp('expected_on', 'date', d.expected_on)),
     fact('Дедлайн', inp('deadline', 'date', d.deadline)),
-    fact('Привёл', sel('source_person_id', livePeople().sort((a, b) => personName(a).localeCompare(personName(b), 'ru')).map((x) => [x.id, x.name]), d.source_person_id)));
+    fact('Привёл', choiceBtn(person(d.source_person_id)?.name || '—', (a) => choicePop(a, { title: 'Кто привёл', current: d.source_person_id || null, none: 'Никто',
+      items: personItems(livePeople().filter((x) => !x.merged_into).sort((a2, b2) => personName(a2).localeCompare(personName(b2), 'ru'))),
+      onPick: (v) => save('source_person_id', v) }), { empty: !d.source_person_id })));
   // «Как я вижу» и «Идеи» — старые заметки владельца: видны, только если в них что-то есть.
   const notes = [d.my_view ? ['Как я вижу (только мне)', 'my_view'] : null, d.ideas ? ['Идеи', 'ideas'] : null].filter(Boolean);
   const more = notes.length ? el('details', { class: 'deal-more', open: S.dealMore ? true : null, ontoggle: (e) => { S.dealMore = e.currentTarget.open; } },
@@ -4451,12 +4535,14 @@ function renderMeetings() {
     if (k === 'none' && !n) return null;
     return el('button', { class: 'chip-btn' + (f.sphere === k ? ' on' : ''), onclick: () => mtSave({ sphere: k }) }, l, n ? el('b', {}, ' ' + n) : null);
   });
-  const clientSel = el('select', { 'aria-label': 'Клиент' }, el('option', { value: '' }, 'все клиенты'),
-    (v ? v.clients : []).map((c) => el('option', { value: c.id || 'none', selected: f.client === (c.id || 'none') }, `${c.name} · ${c.n}`)));
-  clientSel.addEventListener('change', () => mtSave({ client: clientSel.value }));
-  const personSel = el('select', { 'aria-label': 'Человек' }, el('option', { value: '' }, 'все люди'),
-    (v ? v.people : []).map((x) => el('option', { value: x.id, selected: f.person === x.id }, `${x.short || x.name} · ${x.n}`)));
-  personSel.addEventListener('change', () => mtSave({ person: personSel.value }));
+  // Клиенты и люди встреч — выбором с поиском: их десятки.
+  const mClients = (v ? v.clients : []).map((c) => ({ v: c.id || 'none', title: c.name, note: plural(c.n, 'встреча', 'встречи', 'встреч') }));
+  const mPeople = (v ? v.people : []).map((x) => ({ v: x.id, title: x.short || x.name, note: [x.short && x.short !== x.name ? x.name : null,
+    plural(x.n, 'встреча', 'встречи', 'встреч')].filter(Boolean).join(' · '), keys: [x.name] }));
+  const clientSel = choiceBtn(mClients.find((c) => c.v === f.client)?.title || 'все клиенты', (a) => choicePop(a, { title: 'Клиент', current: f.client || null,
+    none: 'Все клиенты', items: mClients, onPick: (x) => mtSave({ client: x || '' }) }), { empty: !f.client });
+  const personSel = choiceBtn(mPeople.find((x) => x.v === f.person)?.title || 'все люди', (a) => choicePop(a, { title: 'Человек', current: f.person || null,
+    none: 'Все люди', items: mPeople, onPick: (x) => mtSave({ person: x || '' }) }), { empty: !f.person });
   const tb = el('div', { class: 'toolbar mt-top' }, search, spheres);
   const tb2 = el('div', { class: 'toolbar mt-tools' }, el('label', {}, 'Сортировать'), sel('sort', MT_SORT, 'Сортировка'),
     el('label', {}, 'Группы'), sel('group', MT_GROUP, 'Группы'), clientSel, personSel,
@@ -4498,9 +4584,9 @@ function renderMeeting(id) {
     return i;
   };
   const projects = [...S.projects.values()].filter((p) => !p.archived_at || p.id === v.project_id).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-  const client = el('select', {}, el('option', { value: '' }, '— без клиента —'),
-    projects.map((p) => el('option', { value: p.id, selected: p.id === v.project_id }, p.name)));
-  client.addEventListener('change', () => (v.project_id ? set : setClient)({ project_id: client.value || null }, client.value ? 'Клиент: ' + project(client.value)?.name : 'Без клиента'));
+  const client = choiceBtn(project(v.project_id)?.name || 'без клиента', (a) => choicePop(a, { title: 'Клиент встречи', current: v.project_id || null,
+    none: 'Без клиента', items: projectItems(projects),
+    onPick: (x) => (v.project_id ? set : setClient)({ project_id: x }, x ? 'Клиент: ' + project(x)?.name : 'Без клиента') }), { empty: !v.project_id });
   const deals = v.project_id ? clientDeals(v.project_id) : [];
   const deal = el('select', { disabled: !deals.length }, el('option', { value: '' }, deals.length ? '— не про сделку —' : 'у клиента нет сделок'),
     deals.map((d) => el('option', { value: d.id, selected: d.id === v.deal_id }, d.name)));
@@ -4514,10 +4600,9 @@ function renderMeeting(id) {
   const guestChips = (v.guests || []).map((g) => el('span', { class: 'pchip' },
     el('span', { class: 'pc-main' }, el('span', { class: 'pc-name' }, g), el('span', { class: 'pc-role' }, 'нет в справочнике')),
     el('button', { class: 'pc-x', title: 'Убрать', onclick: () => set({ guests: v.guests.filter((y) => y !== g) }) }, icon('x', 12))));
-  const addPerson = el('select', { class: 'pchip add' }, el('option', { value: '' }, '+ участник'),
-    livePeople().filter((x) => !x.merged_into && !ids.includes(x.id)).sort((a, b) => personName(a).localeCompare(personName(b), 'ru'))
-      .map((x) => el('option', { value: x.id }, x.name)));
-  addPerson.addEventListener('change', () => { if (addPerson.value) set({ person_ids: [...ids, addPerson.value] }); });
+  const addPerson = el('button', { type: 'button', class: 'pchip add', onclick: (e) => choicePop(e.currentTarget, { title: 'Кто был на встрече',
+    items: personItems(livePeople().filter((x) => !x.merged_into && !ids.includes(x.id)).sort((a, b) => personName(a).localeCompare(personName(b), 'ru'))),
+    onPick: (x) => { if (x) set({ person_ids: [...ids, x] }); } }) }, icon('plus', 12), 'участник');
   const locks = (v.locked || []).map((k) => MT_LOCK[k]).filter(Boolean);
   const when = `${D.long(v.day)}, ${mtTime(v.started_at)}` + (v.duration_min ? ' · ' + dur(v.duration_min) : '') + (MT_KIND[v.kind] ? ' · ' + MT_KIND[v.kind] : '');
   const card = sec('card', null, null,
@@ -4577,6 +4662,7 @@ document.addEventListener('keydown', (e) => {
     if (document.querySelector('.kv-menu:not([hidden])')) return; // меню шестерёнки закрывается само
     if (document.querySelector('.pop')) { closePop(); return; }
     if (rec) { stopListening(); S.listenQuick = false; render(); return; }
+    if (S.sideOpen) { S.sideOpen = false; render(); return; }
     if (S.cardId || S.draft) { S.cardId = null; S.draft = null; render(); return; }
     if (S.sel.size) { S.sel.clear(); render(); }
     return;
