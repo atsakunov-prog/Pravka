@@ -885,36 +885,68 @@ function viewPills(r) {
   });
 }
 
-// ── Шапка Ковчега: «Ковчег», сервисы значками (Дела подсвечены), справа тема, шестерёнка, имя и выход ──
-// Сервисы — из настроек сервера на компе (в публичном коде адресов нет); владельцу — все, команде — одни Дела.
-// Запись с адресом «/» — сами Дела: так в настройке задаётся их место в ряду; без неё Дела — первыми.
-function topBar() {
-  const look = S.me.look || {};
+// ── Шапка Ковчега: значок «Ковчег» с подписью «Дела», справа тема, шестерёнка, имя и выход ──
+// С 13.10.2026 (вечер, Саша) ряда сервисов в шапке нет: значок по нажатию открывает меню всех сервисов по направлениям
+// Круга жизни — как в общем слое Ковчега (GROUPS в kovcheg.js). Сервисы — из настроек сервера на компе (в публичном
+// коде адресов нет); владельцу — все, команде — одни Дела и их CRM. Направление сервиса узнаётся по его значку из
+// настройки (названий и адресов в коде нет), незнакомый значок — в «Ещё». Запись с адресом «/» — сами Дела.
+const SVC_DIRS = [
+  ['Каждый день', ['dela']],
+  ['Здоровье', ['activity', 'food']],
+  ['Ум', ['book', 'film']],
+  ['Дело', ['mic', 'briefcase']],
+  ['Деньги', ['wallet']],
+  ['Круг', ['users']],
+  ['Родительство', ['kids', 'candles']],
+  ['Быт', ['home', 'shield']],
+];
+// Шапка строится заново на каждый render(): закрывать меню щелчком мимо и Esc — одним слушателем на всё время.
+const svcMenu = { box: null, close: null };
+document.addEventListener('click', (e) => { if (svcMenu.box && svcMenu.close && !svcMenu.box.contains(e.target)) svcMenu.close(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && svcMenu.close) svcMenu.close(); });
+
+function svcBrand(look) {
   const self = { name: 'Дела', icon: 'dela', url: '/' };
   const list = (look.nav || []).length ? look.nav : [self];
-  const items = (list.some((x) => x.url === '/') ? list : [self, ...list]).map((x) => (x.url === '/'
+  const inner = crmOn() ? [{ name: 'CRM', icon: 'briefcase', url: '#/crm' }, { name: 'Люди', icon: 'users', url: '#/people' }] : [];
+  const all = [...(list.some((x) => x.url === '/') ? list : [self, ...list]), ...inner];
+  const img = () => el('img', { src: look.icon || '/static/icon.svg', alt: '' });
+  if (all.length < 2) return el('a', { class: 'brand', href: '#/today' }, img(), el('b', {}, 'Дела'));
+  const link = (x) => (x.url === '/'
     ? el('a', { class: 'on', href: '#/today', 'aria-current': 'page' }, icon(x.icon, 17), el('span', {}, x.name))
-    : el('a', { href: x.url }, icon(x.icon, 17), el('span', {}, x.name))));
+    : el('a', { href: x.url }, icon(x.icon, 17), el('span', {}, x.name)));
+  const group = (title, items, first) => el('div', { class: 'kv-svc-g' + (first ? ' all' : '') },
+    el('div', { class: 'kv-svc-h' }, title), el('div', { class: 'kv-svc-items' }, items.map(link)));
+  const used = new Set();
+  const groups = SVC_DIRS.map(([title, icons], k) => {
+    const items = all.filter((x) => icons.includes(x.icon) && !used.has(x));
+    items.forEach((x) => used.add(x));
+    return items.length ? group(title, items, k === 0) : null;
+  }).filter(Boolean);
+  const rest = all.filter((x) => !used.has(x));
+  if (rest.length) groups.push(group('Ещё', rest, false));
+  const menu = el('div', { class: 'kv-svc-menu', id: 'kv-svc-menu', hidden: true }, el('div', { class: 'kv-svc-groups' }, groups));
+  const brand = el('a', { class: 'brand kv-svc-btn', href: '#/today', role: 'button', title: 'Все сервисы Ковчега',
+    'aria-haspopup': 'true', 'aria-expanded': 'false', 'aria-controls': 'kv-svc-menu' }, img(), el('b', {}, 'Дела'));
+  const show = (open) => { menu.hidden = !open; brand.setAttribute('aria-expanded', open ? 'true' : 'false'); };
+  brand.addEventListener('click', (e) => { e.preventDefault(); show(menu.hidden); });
+  menu.addEventListener('click', (e) => { if (e.target.closest('a')) show(false); });   // переход внутри Дел (#/crm)
+  const box = el('nav', { class: 'kv-svc', 'aria-label': 'Сервисы Ковчега' }, brand, menu);
+  svcMenu.box = box;
+  svcMenu.close = () => show(false);
+  return box;
+}
+
+function topBar() {
+  const look = S.me.look || {};
   // Как у остальных страниц «только Саше»: кука kv-nav=owner — семейные страницы (Дети, Шаббат) покажут ему все сервисы.
   if ((look.nav || []).length && KV.cookie('kv-nav') !== 'owner') KV.setCookie('kv-nav', 'owner');
   const theme = el('div', { class: 'kv-theme', role: 'group', 'aria-label': 'Тема' },
     el('button', { type: 'button', 'data-t': 'light', title: 'Светлая', 'aria-label': 'Светлая тема', onclick: () => KV.setTheme('light') }, icon('sun', 16)),
     el('button', { type: 'button', 'data-t': 'dark', title: 'Тёмная', 'aria-label': 'Тёмная тема', onclick: () => KV.setTheme('dark') }, icon('moon', 16)));
-  const nav = el('nav', { class: 'kv-nav', 'aria-label': 'Сервисы' }, items);
-  // Уже 1100 px строка сервисов прокручивается вбок — показать текущий, а не начало списка. Шапка строится, пока
-  // страница ещё без размеров, поэтому один раз, когда строка впервые получит ширину; дальше её крутит человек.
-  const on = nav.querySelector('a.on');
-  let shown = false;
-  const toCurrent = () => {
-    if (shown || !nav.clientWidth) return;
-    shown = true;
-    if (on && nav.scrollWidth > nav.clientWidth) nav.scrollLeft = Math.max(0, on.offsetLeft - nav.offsetLeft - 24);
-  };
-  if (window.ResizeObserver) new ResizeObserver(toCurrent).observe(nav);
   return el('header', { class: 'top' }, el('div', { class: 'top-in' },
     el('button', { class: 'icon burger', title: 'Разделы: виды, фильтры, CRM, клиенты', 'aria-label': 'Разделы', onclick: () => { S.sideOpen = !S.sideOpen; render(); } }, icon('menu', 20)),
-    el('a', { class: 'brand', href: '#/today' }, el('img', { src: look.icon || '/static/icon.svg', alt: '' }), el('b', {}, 'Ковчег')),
-    nav,
+    svcBrand(look),
     el('div', { class: 'top-end' }, theme, prefsMenu(),
       el('span', { class: 'who' }, S.me.name || S.me.user),
       el('button', { class: 'icon kv-out', title: 'Выйти', 'aria-label': 'Выйти',

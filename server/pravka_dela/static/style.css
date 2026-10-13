@@ -177,24 +177,42 @@ button.icon:hover:not(:disabled), .icon-btn:hover:not(:disabled), .ib:hover { co
    крупнее» правая часть уходила второй строкой, а сервисы оставались наверху). */
 .top { flex: none; position: relative; z-index: 12; background: var(--bg); border-bottom: 1px solid var(--line); container: kvtop / inline-size; }
 .top-in {
+  position: relative;   /* меню сервисов выпадает от левого края шапки */
   display: flex; align-items: center; gap: 8px 18px; flex-wrap: wrap;
   padding: max(10px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) 10px max(24px, env(safe-area-inset-left));
 }
 .brand { display: flex; align-items: center; gap: 10px; color: var(--text); min-width: 0; }
 a.brand:hover { text-decoration: none; }
-.brand img { width: 26px; height: 26px; border-radius: 6px; flex: none; display: block; }
-.brand b { font: 600 16px/1.2 var(--font); white-space: nowrap; }
+/* Значок крупнее прежнего (26): он теперь кнопка меню всех сервисов, а не подпись (как в общем слое Ковчега). */
+.brand img { width: 32px; height: 32px; border-radius: 8px; flex: none; display: block; }
+.brand b { font: 600 17px/1.2 var(--font); white-space: nowrap; }
+.brand.kv-svc-btn { cursor: pointer; border-radius: 10px; padding: 3px 10px 3px 3px; margin-left: -3px; }
+.brand.kv-svc-btn:hover, .brand.kv-svc-btn[aria-expanded=true] { background: var(--hover-2); }
 .top-end { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .top-end .who { font-size: 13px; color: var(--faint); white-space: nowrap; }
-.kv-nav { display: flex; flex-wrap: wrap; gap: 2px; min-width: 0; }
-.kv-nav a {
-  display: flex; align-items: center; gap: 7px; padding: 6px 10px; border-radius: 7px; font-size: 14px;
-  color: var(--muted); white-space: nowrap;
+/* Меню сервисов по направлениям Круга жизни (13.10.2026, вместо ряда сервисов): «Каждый день» — во всю ширину,
+   направления — блоками в три колонки. Копия общего слоя Ковчега. */
+.kv-svc { display: contents; }
+.kv-svc-menu {
+  position: absolute; z-index: 30; top: calc(100% - 4px); left: max(16px, env(safe-area-inset-left));
+  width: min(580px, calc(calc(100vw / var(--kv-zoom, 1)) - 28px)); max-height: calc(calc(100vh / var(--kv-zoom, 1)) - 80px);
+  overflow-y: auto; padding: 4px 10px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: var(--shadow);
 }
-.kv-nav a .kv-i { color: var(--icon); }
-.kv-nav a:hover { text-decoration: none; background: var(--hover); color: var(--text); }
-.kv-nav a.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-.kv-nav a.on .kv-i { color: var(--accent); }
+.kv-svc-menu[hidden] { display: none; }
+.kv-svc-groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 10px; }
+.kv-svc-g { min-width: 0; }
+.kv-svc-g.all { grid-column: 1 / -1; }
+.kv-svc-g.all .kv-svc-items { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 10px; }
+.kv-svc-h { font-size: 12px; font-weight: 600; color: var(--faint); padding: 10px 8px 3px; }
+.kv-svc-items a {
+  display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 7px; font-size: 14.5px;
+  color: var(--text); white-space: nowrap; min-width: 0;
+}
+.kv-svc-items a .kv-i { color: var(--icon); }
+.kv-svc-items a:hover { text-decoration: none; background: var(--hover); }
+.kv-svc-items a.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.kv-svc-items a.on .kv-i { color: var(--accent); }
 .kv-theme { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
 .kv-theme button {
   width: 32px; height: 28px; padding: 0; border: 0; border-radius: 7px; background: none; color: var(--icon);
@@ -1271,22 +1289,20 @@ a.pt-row:hover { color: var(--accent); text-decoration: none; }
   .shell.with-card main.list > .scroll { padding-left: 24px; padding-right: 24px; }
   .shell.with-card .tabs-row { margin-left: -24px; margin-right: -24px; padding-left: 24px; padding-right: 24px; }
 }
-/* Средняя ширина (планшет, окно сбоку, крупный текст): сервисы не влезают в строку с «Ковчегом», темой и именем —
-   уходят второй строкой с прокруткой вбок, а не переносом в три ряда (как в общем слое: шапка в три строки съедала
-   экран). Порог — по шапке Дел: в одну строку ей нужно около 1150 px (с именем), 1280 при обычном размере влезает. */
-@container kvtop (max-width: 1180px) {
-  .kv-nav { order: 9; flex: 1 0 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -24px; padding: 0 24px; }
-  .kv-nav::-webkit-scrollbar { display: none; }
+/* Узкая шапка (телефон, окно сбоку, крупный текст): меню сервисов — в две колонки. Строки сервисов, которая здесь
+   раньше уходила второй строкой, с 13.10.2026 нет. */
+@container kvtop (max-width: 620px) {
+  .kv-svc-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* ── Телефон: сервисы — второй строкой с прокруткой вбок; колонка разделов — шторкой; карточка — листом снизу ── */
+/* ── Телефон: колонка разделов — шторкой; карточка — листом снизу ── */
 @media (max-width: 900px) {
   .top-in { padding: max(8px, env(safe-area-inset-top)) 14px 8px; gap: 6px 10px; }
   .burger { display: inline-grid !important; margin-left: -6px; }
   /* Меню шестерёнки — от края шапки, а не от кнопки: справа от неё ещё «выйти», и на узком экране оно уезжало влево. */
   .kv-prefs { position: static; }
   .kv-menu { right: 8px; top: calc(100% + 4px); width: min(316px, calc(100vw / var(--kv-zoom, 1) - 16px)); }
-  .kv-nav { margin: 0 -14px; padding: 0 14px; }
+  .kv-svc-menu { left: 8px; }
   .top-end { gap: 6px; }
   .top-end .who { display: none; }
   .shell, .shell.with-card { grid-template-columns: minmax(0, 1fr); }
