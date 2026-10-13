@@ -243,23 +243,25 @@ object AutoPilotRules {
     // как отбой») ----
 
     /**
-     * Отбой узнаётся по трём вещам сразу: телефон поставлен на зарядку
-     * ВЕЧЕРОМ (сам факт подключения после этого часа — на тумбочке, а не на
-     * столе с семи вечера), экран погашен и тишина датчика значимого
-     * движения. С 01.10.2026 отбой не только закрывает день — с него
-     * начинается сон ([sleepPlan]).
+     * Отбой узнаётся по трём вещам сразу: телефон на зарядке, экран погашен и
+     * тишина датчика значимого движения. С 01.10.2026 с отбоя начинается сон
+     * ([sleepPlan]). Час — у мига, когда телефон ПОЛОЖИЛИ (13.10.2026), а не у
+     * мига подключения: см. [sleepPlan].
      */
     const val BEDTIME_FROM_HOUR = 22
     const val BEDTIME_TO_HOUR = 4
 
-    /** Час подключения к зарядке, который считается вечерним: с 22:00 до 04:00. */
+    /** Час, в который «положил телефон и затих» может быть отбоем: с 22:00 до 04:00. */
     fun bedtimeHour(hour: Int): Boolean = hour >= BEDTIME_FROM_HOUR || hour < BEDTIME_TO_HOUR
 
     // ---- Сон сам (владелец, 01.10.2026: «если я сам не включил сон через NFC
     // или через что-то ещё… то сон включается в момент, когда [подключается]
     // зарядка и плюс телефон неподвижен полчаса… плюс вечернее время, после
     // 11. И уведомление, что включается он, и давать мне возможность убрать.
-    // И выключается он, когда телефон задвигался с утра») ----
+    // И выключается он, когда телефон задвигался с утра»; 13.10.2026: «самый
+    // длинный недвигающийся период и подключена зарядка. А утром я могу взять
+    // его ещё на зарядке, и он задвигается… и надо переключать не на утро с
+    // детьми, а „просыпаюсь“») ----
 
     /** Как зовётся сон, начатый автопилотом: по названию его узнают Garmin и «Отменить». */
     const val SLEEP_TITLE = "Сон"
@@ -276,16 +278,40 @@ object AutoPilotRules {
      */
     const val SLEEP_WAKE_FROM_HOUR = 5
 
+    /**
+     * Экран горит ночью дольше этого — не «взял, глянул, положил», а не спит:
+     * читает, пишет. Та же граница, что у взгляда в детекторе ночи по экрану
+     * (`SleepGuess.BLIP_MS`): короче — сон сшивается, дольше — режется.
+     */
+    const val NIGHT_USE_MS = 10 * 60_000L
+
+    /** Короче трёх часов — не ночь (та же граница, что `SleepGuess.MIN_SLEEP_MS`). */
+    const val NIGHT_MIN_MS = 3 * 3_600_000L
+
+    /**
+     * Сон только что начался — взял телефон, дошёл до кровати, поставил
+     * будильник: это ещё не подъём. Подъём считается, только если перед ним
+     * сон шёл хотя бы столько (от начала сна или от «Ещё сплю»).
+     */
+    const val WAKE_SETTLE_MS = 20 * 60_000L
+
     /** Сон сам: с какого мига ([from]) и когда решать ([decideAt]). */
     data class SleepPlan(val from: Long, val decideAt: Long)
 
     /**
-     * Кандидат в сон. Телефон на зарядке, подключённой ВЕЧЕРОМ ([bedtimeHour]
-     * часа подключения: на тумбочке, а не на столе с семи), экран погашен.
-     * Лёг — позднее из подключения, гашения экрана, последнего толчка
-     * [lastMotionAt] и последнего слова владельца [ownerSaidAt]: что было
-     * позже, то он и делал последним, бодрствуя. Решать — через
-     * [SLEEP_STILL_MS] тишины, но не раньше [SLEEP_DECIDE_HOUR] той ночи.
+     * Кандидат в сон: телефон на зарядке ([chargingSince] > 0) и экран погашен
+     * ([screenOffSince] > 0). Лёг — позднее из подключения, гашения экрана,
+     * последнего толчка [lastMotionAt] и последнего слова владельца
+     * [ownerSaidAt]: что было позже, то он и делал последним, бодрствуя.
+     * Решать — через [SLEEP_STILL_MS] тишины, но не раньше [SLEEP_DECIDE_HOUR]
+     * той ночи.
+     *
+     * Вечерним должен быть миг «лёг» ([bedtimeHour]), а не миг подключения
+     * зарядки. До 13.10.2026 было наоборот — и сон не начался ни разу за
+     * неделю журнала, хотя телефон каждую ночь стоял на зарядке (ночная копия
+     * базы в два часа её видела): телефон ставят на зарядку до десяти, а
+     * ложатся в час. Стол с семи вечера отсекает то же правило: телефон, не
+     * тронутый с 19:05, — «лёг в 19:05», не вечер.
      */
     fun sleepPlan(
         chargingSince: Long,
@@ -295,8 +321,8 @@ object AutoPilotRules {
         zone: java.util.TimeZone = java.util.TimeZone.getDefault(),
     ): SleepPlan? {
         if (chargingSince <= 0L || screenOffSince <= 0L) return null
-        if (!bedtimeHour(hourOf(chargingSince, zone))) return null
         val from = maxOf(chargingSince, screenOffSince, lastMotionAt, ownerSaidAt)
+        if (!bedtimeHour(hourOf(from, zone))) return null
         val c = java.util.Calendar.getInstance(zone)
         c.timeInMillis = from
         // 23:00 той ночи: после полуночи — вчерашние, они уже прошли.
@@ -311,26 +337,88 @@ object AutoPilotRules {
     /** Толчок в этот час кончает сон: с пяти утра до десяти вечера. Ночью — взгляд, не подъём. */
     fun sleepWakeHour(hour: Int): Boolean = hour in SLEEP_WAKE_FROM_HOUR until BEDTIME_FROM_HOUR
 
+    /**
+     * Взял телефон в [at] (разблокировал, датчик движения, долго смотрит в
+     * экран), а в ленте открыт сон с [sleepStart]: подъём ли это. Утро ([sleepWakeHour])
+     * и сон перед этим шёл хотя бы [WAKE_SETTLE_MS] — от начала или от «Ещё
+     * сплю» ([backAt]). Чей сон — автопилота, метки NFC или «сплю» голосом —
+     * всё равно (13.10.2026: сон по метке в 02:02 простоял открытым всё утро —
+     * автопилот закрывал только свой).
+     */
+    fun isWake(
+        sleepStart: Long,
+        backAt: Long,
+        at: Long,
+        zone: java.util.TimeZone = java.util.TimeZone.getDefault(),
+    ): Boolean {
+        if (sleepStart <= 0L || at <= sleepStart) return false
+        if (!sleepWakeHour(hourOf(at, zone))) return false
+        return at - maxOf(sleepStart, backAt) >= WAKE_SETTLE_MS
+    }
+
+    /** Что делать со сном автопилота, когда ночью телефоном пользуются всерьёз. */
+    enum class NightUse {
+        /** Короче ночи — это был не сон: убрать, прежнее дело обратно. */
+        RETRACT,
+        /** Ночь уже была (три часа и больше): сон закрыть там, где взял телефон. */
+        CLOSE,
+    }
+
+    /**
+     * Сон автопилота идёт с [sleepFrom], а в [useAt] экран зажёгся и горит
+     * [NIGHT_USE_MS] — владелец не спит. «Самый длинный недвигающийся период»
+     * — сон; тишина короче [NIGHT_MIN_MS] перед тем, как телефон взяли
+     * надолго, — не ночь, а вечер без телефона (кино, разговор): её сон
+     * убирается. Длиннее — ночь была, сон закрывается в [useAt]. В обоих
+     * случаях сон этой ночью может начаться снова — с нового «положил».
+     */
+    fun nightUse(sleepFrom: Long, useAt: Long): NightUse =
+        if (useAt - sleepFrom < NIGHT_MIN_MS) NightUse.RETRACT else NightUse.CLOSE
+
+    /**
+     * Начало сна, который идёт открытым с [openStart]: полночь режет запись на
+     * куски, и открытый — только хвост с 00:00. Идём назад по кускам сна
+     * [pieces] (начало, конец), стоящим встык, — до самого раннего.
+     */
+    fun chainStart(openStart: Long, pieces: List<Pair<Long, Long>>): Long {
+        var cur = openStart
+        while (true) {
+            val prev = pieces.firstOrNull { (s, e) -> s < cur && kotlin.math.abs(e - cur) < 1_000L } ?: return cur
+            cur = prev.first
+        }
+    }
+
     private fun hourOf(ms: Long, zone: java.util.TimeZone): Int {
         val c = java.util.Calendar.getInstance(zone)
         c.timeInMillis = ms
         return c.get(java.util.Calendar.HOUR_OF_DAY)
     }
 
-    /** Подъём в будни считается в эти часы: раньше пяти — не подъём, после десяти — не сборы. */
+    /**
+     * Подъём считается в эти часы: раньше пяти — не подъём, после полудня — не
+     * утро (сон от Garmin, приехавший к обеду, дела по подъёму не начинает).
+     */
     const val WAKE_DEAL_FROM_HOUR = 5
-    const val WAKE_DEAL_TO_HOUR = 10
+    const val WAKE_DEAL_TO_HOUR = 12
 
     /**
-     * Начинать ли дело по подъёму. [dayOfWeek] — как в `Calendar` (1 —
-     * воскресенье, 2 — понедельник … 7 — суббота): только пн–пт. [wakeHour] —
-     * час подъёма. [latestOwnerStart] — начало последней записи владельца:
-     * сказал что-то с подъёма — он в курсе, робот молчит.
+     * Подъём узнан позже этого (служба лежала, сборка приехала к обеду) — дело
+     * по подъёму задним числом не начинается: три часа «Просыпаюсь» поверх
+     * утра, прожитого без слов, — враньё. Сон закрывается всё равно.
      */
-    fun wakeDealDue(dayOfWeek: Int, wakeHour: Int, wakeAt: Long, latestOwnerStart: Long): Boolean {
-        if (dayOfWeek !in 2..6) return false
+    const val WAKE_DEAL_LATE_MS = 60 * 60_000L
+
+    /**
+     * Начинать ли дело по подъёму («Просыпаюсь», 13.10.2026; до этого —
+     * «Сборы детей» в будни). Каждый день: просыпается владелец и в субботу.
+     * [wakeHour] — час подъёма. [latestOwnerAt] — когда владелец последний
+     * раз что-то сказал Засечке (или начало его последней записи, что позже):
+     * сказал с подъёма — он в курсе, робот молчит. [now] — когда подъём узнали.
+     */
+    fun wakeDealDue(wakeHour: Int, wakeAt: Long, latestOwnerAt: Long, now: Long = wakeAt): Boolean {
         if (wakeHour !in WAKE_DEAL_FROM_HOUR until WAKE_DEAL_TO_HOUR) return false
-        if (latestOwnerStart >= wakeAt) return false
+        if (latestOwnerAt >= wakeAt) return false
+        if (now - wakeAt > WAKE_DEAL_LATE_MS) return false
         return true
     }
 

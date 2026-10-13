@@ -381,15 +381,16 @@ class PhoneSweeper(
             return false
         }
         // Сон идёт открытым (автопилот начал его вечером, или метка NFC): ночь
-        // поверх него не пишем. Свой сон автопилот закрывает этим подъёмом
-        // сам (утро — с пяти); иначе ждём, пока сон закроется толчком или
-        // словом владельца, и тогда время уже занято.
+        // поверх него не пишем. Утренним подъёмом (с пяти) автопилот закрывает
+        // любой открытый сон — и свой, и по метке (13.10.2026: сон по метке
+        // простоял открытым всё утро); иначе ждём, пока сон закроется
+        // подъёмом или словом владельца, и тогда время уже занято.
         val openNow = zasechkaStore.openEntry()
         if (openNow != null && ru.zf.pravka.core.DayReport.isSleep(openNow.category)) {
             val handled = runCatching { witness()?.nightSeen(night.end) == true }.getOrDefault(false)
             if (handled) {
                 prefs.edit().putString("z_sleep_day", todayKey).apply()
-                eventLog.add("телефон: подъём по экрану ${hm(night.end)} закрыл сон автопилота")
+                eventLog.add("телефон: подъём по экрану ${hm(night.end)} закрыл сон")
                 return true
             }
             if (openSleepToldDay != todayKey) {

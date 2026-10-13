@@ -123,6 +123,9 @@ class PravkaApp : Application() {
         // Снятые интеграции (12.10.2026: Notion и Google Sheets) — их ключи,
         // токены и адреса из базы.
         appScope.launch { runCatching { settings.dropRetiredLinks() } }
+        // Дело по подъёму: сохранённое прежнее заводское «Сборы детей» — на
+        // «Просыпаюсь» (13.10.2026), один раз.
+        appScope.launch { runCatching { settings.retireOldWakeDeal() } }
         // Тень снята (18.09.2026; владелец: «убери эту тень, она снова запустилась
         // и ест деньги»): её прогоны, застрявшие активными, закрываются, движка
         // больше нет. Затем — ревизия батчей у Anthropic: всё идущее, за чем в
@@ -867,7 +870,7 @@ class PravkaApp : Application() {
     val phoneSweeper by lazy {
         ru.zf.pravka.data.PhoneSweeper(
             this, phoneStore, zasechkaStore, settings, eventLog,
-            // Нашёл ночь — автопилот решает про дело по подъёму (сборы детей в будни).
+            // Нашёл ночь — автопилот решает про дело по подъёму («Просыпаюсь»).
             witness = { ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.autoWitness() },
             callPeople = { callPeople() },
             callWho = { phone, name -> delaSync.who(phone, name) },

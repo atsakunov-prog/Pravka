@@ -428,8 +428,25 @@ class AutoPilotBedtimeTest {
     }
 
     @Test
-    fun `зарядка с семи вечера на столе - не сон`() {
-        assertNull(AutoPilotRules.sleepPlan(at(1, 19, 0), at(1, 23, 0), 0L, 0L, zone))
+    fun `телефон не трогали с семи вечера на столе - не сон`() {
+        // Зарядка с 19:00, экран погас в 19:05, ни слова до утра: «лёг в 19:05» — не вечер.
+        assertNull(AutoPilotRules.sleepPlan(at(1, 19, 0), at(1, 19, 5), 0L, 0L, zone))
+    }
+
+    @Test
+    fun `зарядка с девяти вечера, а лёг в час ночи - сон с часу`() {
+        // 13.10.2026: неделю журнала сон не начался ни разу — телефон ставили на
+        // зарядку до десяти, и правило «час подключения» отсекало каждую ночь.
+        val p = AutoPilotRules.sleepPlan(at(1, 21, 0), at(2, 1, 18), 0L, at(1, 23, 10), zone)!!
+        assertEquals(at(2, 1, 18), p.from)
+        assertEquals(at(2, 1, 48), p.decideAt)
+    }
+
+    @Test
+    fun `зарядка с вечера, последнее слово в 22-30 - сон с 22-30, решаем в 23-00`() {
+        val p = AutoPilotRules.sleepPlan(at(1, 19, 0), at(1, 19, 5), 0L, at(1, 22, 30), zone)!!
+        assertEquals(at(1, 22, 30), p.from)
+        assertEquals(at(1, 23, 0), p.decideAt)
     }
 
     @Test
@@ -439,32 +456,94 @@ class AutoPilotBedtimeTest {
     }
 
     @Test
+    fun `положил в пять утра - не отбой`() {
+        assertNull(AutoPilotRules.sleepPlan(at(2, 4, 50), at(2, 5, 0), 0L, 0L, zone))
+    }
+
+    @Test
     fun `взял телефон в четыре ночи - не подъём, с пяти утра - подъём`() {
         for (hour in listOf(22, 23, 0, 1, 2, 3, 4)) assertFalse("час $hour", AutoPilotRules.sleepWakeHour(hour))
         for (hour in listOf(5, 6, 7, 9, 13, 21)) assertTrue("час $hour", AutoPilotRules.sleepWakeHour(hour))
     }
 
+    // ---- подъём для любого сна (13.10.2026: сон по метке в 02:02 простоял открытым всё утро) ----
+
     @Test
-    fun `подъём в будни в семь - сборы детей`() {
-        assertTrue(AutoPilotRules.wakeDealDue(dayOfWeek = 2, wakeHour = 7, wakeAt = now, latestOwnerStart = now - 9 * h))
-        assertTrue(AutoPilotRules.wakeDealDue(dayOfWeek = 6, wakeHour = 6, wakeAt = now, latestOwnerStart = 0L))
+    fun `сон по метке в 02-02, разблокировал в 07-25 - подъём`() {
+        assertTrue(AutoPilotRules.isWake(at(13, 2, 2), 0L, at(13, 7, 25), zone))
     }
 
     @Test
-    fun `суббота и воскресенье - без сборов`() {
-        assertFalse(AutoPilotRules.wakeDealDue(dayOfWeek = 7, wakeHour = 7, wakeAt = now, latestOwnerStart = 0L))
-        assertFalse(AutoPilotRules.wakeDealDue(dayOfWeek = 1, wakeHour = 7, wakeAt = now, latestOwnerStart = 0L))
+    fun `взял ночью - не подъём`() {
+        assertFalse(AutoPilotRules.isWake(at(13, 2, 2), 0L, at(13, 4, 10), zone))
     }
 
     @Test
-    fun `проснулся в одиннадцать или в четыре - не сборы`() {
-        assertFalse(AutoPilotRules.wakeDealDue(2, 11, now, 0L))
-        assertFalse(AutoPilotRules.wakeDealDue(2, 4, now, 0L))
+    fun `сказал «сплю» и пошёл к кровати - ещё не подъём`() {
+        // Дневной сон с 15:00: толчок в 15:05 — дошёл до кровати, не проснулся.
+        assertFalse(AutoPilotRules.isWake(at(13, 15, 0), 0L, at(13, 15, 5), zone))
+        assertTrue(AutoPilotRules.isWake(at(13, 15, 0), 0L, at(13, 15, 40), zone))
     }
 
     @Test
-    fun `владелец уже сказал зарядка после подъёма - молчим`() {
-        assertFalse(AutoPilotRules.wakeDealDue(3, 7, now, latestOwnerStart = now + 3 * m))
+    fun `«Ещё сплю» - подъём не раньше чем через двадцать минут`() {
+        val back = at(13, 6, 1)
+        assertFalse(AutoPilotRules.isWake(at(13, 1, 0), back, at(13, 6, 10), zone))
+        assertTrue(AutoPilotRules.isWake(at(13, 1, 0), back, at(13, 6, 30), zone))
+    }
+
+    @Test
+    fun `подъём раньше начала сна - не подъём`() {
+        assertFalse(AutoPilotRules.isWake(at(13, 8, 0), 0L, at(13, 7, 25), zone))
+        assertFalse(AutoPilotRules.isWake(0L, 0L, at(13, 7, 25), zone))
+    }
+
+    // ---- ночью взял надолго: самый длинный недвигающийся период — сон ----
+
+    @Test
+    fun `сон с 22-10, в 00-30 полчаса в телефоне - это было кино, сон убрать`() {
+        assertEquals(AutoPilotRules.NightUse.RETRACT, AutoPilotRules.nightUse(at(1, 22, 10), at(2, 0, 30)))
+    }
+
+    @Test
+    fun `сон с 01-00, в 04-10 проснулся и читает - ночь была, закрыть`() {
+        assertEquals(AutoPilotRules.NightUse.CLOSE, AutoPilotRules.nightUse(at(2, 1, 0), at(2, 4, 10)))
+    }
+
+    @Test
+    fun `начало сна, разрезанного полуночью, - самый ранний кусок встык`() {
+        val pieces = listOf(
+            at(1, 23, 40) to at(2, 0, 0),
+            at(1, 21, 0) to at(1, 22, 0), // вечерний дневной сон — не встык
+        )
+        assertEquals(at(1, 23, 40), AutoPilotRules.chainStart(at(2, 0, 0), pieces))
+        assertEquals(at(2, 2, 2), AutoPilotRules.chainStart(at(2, 2, 2), pieces))
+    }
+
+    // ---- дело по подъёму: «Просыпаюсь» каждый день (13.10.2026) ----
+
+    @Test
+    fun `подъём в семь - просыпаюсь, и в будни, и в субботу`() {
+        assertTrue(AutoPilotRules.wakeDealDue(wakeHour = 7, wakeAt = now, latestOwnerAt = now - 9 * h))
+        assertTrue(AutoPilotRules.wakeDealDue(wakeHour = 6, wakeAt = now, latestOwnerAt = 0L))
+        assertTrue(AutoPilotRules.wakeDealDue(wakeHour = 11, wakeAt = now, latestOwnerAt = 0L))
+    }
+
+    @Test
+    fun `проснулся после полудня или в четыре - не утро`() {
+        assertFalse(AutoPilotRules.wakeDealDue(12, now, 0L))
+        assertFalse(AutoPilotRules.wakeDealDue(4, now, 0L))
+    }
+
+    @Test
+    fun `владелец уже сказал после подъёма - молчим`() {
+        assertFalse(AutoPilotRules.wakeDealDue(7, now, latestOwnerAt = now + 3 * m))
+    }
+
+    @Test
+    fun `подъём узнан через три часа - просыпаюсь задним числом не начинаем`() {
+        assertTrue(AutoPilotRules.wakeDealDue(7, now, 0L, now = now + 10 * m))
+        assertFalse(AutoPilotRules.wakeDealDue(7, now, 0L, now = now + 3 * h))
     }
 
     // ---- тренировка с часов уже в ленте (22.09.2026: две BJJ, 1497 минут в сутках) ----

@@ -202,8 +202,11 @@ class Settings(private val context: Context) {
         private val KEY_AUTO_WAKE_DEAL = stringPreferencesKey("auto_wake_deal")
         private val KEY_AUTO_PLATES = booleanPreferencesKey("auto_plates")
         private val KEY_AUTO_BEDTIME = booleanPreferencesKey("auto_bedtime_close")
-        /** Заводское дело по подъёму в будни — см. [autoWakeDealFlow]. */
-        private val FACTORY_WAKE_DEAL = PlaceDeal("Сборы детей", "Семья")
+        /** Заводское дело по подъёму — см. [autoWakeDealFlow]. */
+        private val FACTORY_WAKE_DEAL = PlaceDeal("Просыпаюсь", "Отдых")
+        /** Прежнее заводское (27.09–13.10.2026) — переезжает на новое один раз, [retireOldWakeDeal]. */
+        private val OLD_FACTORY_WAKE_DEAL = PlaceDeal("Сборы детей", "Семья")
+        private val KEY_WAKE_DEAL_MOVED = booleanPreferencesKey("auto_wake_deal_moved_v2")
 
         /**
          * Ключи снятых интеграций (12.10.2026: Notion и Google Sheets).
@@ -1418,11 +1421,13 @@ class Settings(private val context: Context) {
     }
 
     /**
-     * Дело по подъёму в будни (владелец, 27.09.2026: «дело по подъёму в будни
-     * — сборы детей с пн по пт»): телефон нашёл ночь, подъём в будний день
-     * между пятью и десятью утра — с момента подъёма начинается это дело.
-     * Заводское — «Сборы детей» [Семья]; null — владелец убрал, заводское
-     * не возвращается (пустая строка в хранилище).
+     * Дело по подъёму (владелец, 27.09.2026: «дело по подъёму в будни — сборы
+     * детей с пн по пт»; 13.10.2026: «надо переключать не на утро с детьми, а
+     * „просыпаюсь“»): сон кончился утром (взял телефон, ночь по экрану) между
+     * пятью и полуднем — с момента подъёма начинается это дело, каждый день.
+     * Заводское — «Просыпаюсь» [Отдых] (так владелец сам писал по утрам:
+     * «Лежал в кровати, просыпался» [Отдых]); null — владелец убрал,
+     * заводское не возвращается (пустая строка в хранилище).
      */
     val autoWakeDealFlow: kotlinx.coroutines.flow.Flow<PlaceDeal?> = context.dataStore.data.map { prefs ->
         val raw = prefs[KEY_AUTO_WAKE_DEAL]
@@ -1431,6 +1436,24 @@ class Settings(private val context: Context) {
             val o = org.json.JSONObject(raw)
             PlaceDeal(o.optString("title"), o.optString("category"))
         }.getOrNull()?.takeIf { it.title.isNotBlank() }
+    }
+
+    /**
+     * Прежнее заводское «Сборы детей» [Семья], если оно лежит в хранилище
+     * (сохранили лист, не меняя), — один раз переезжает на новое заводское:
+     * владелец просил «просыпаюсь», а сохранённая копия старого заводского
+     * держала бы «Сборы детей» вечно. Своё дело владельца не трогается.
+     */
+    suspend fun retireOldWakeDeal() {
+        context.dataStore.edit { p ->
+            if (p[KEY_WAKE_DEAL_MOVED] == true) return@edit
+            p[KEY_WAKE_DEAL_MOVED] = true
+            val raw = p[KEY_AUTO_WAKE_DEAL] ?: return@edit
+            val o = runCatching { org.json.JSONObject(raw) }.getOrNull() ?: return@edit
+            if (o.optString("title") == OLD_FACTORY_WAKE_DEAL.title && o.optString("category") == OLD_FACTORY_WAKE_DEAL.category) {
+                p.remove(KEY_AUTO_WAKE_DEAL)
+            }
+        }
     }
 
     /** Пустое [title] — дела по подъёму больше нет. */
@@ -1454,10 +1477,11 @@ class Settings(private val context: Context) {
     }
 
     /**
-     * Отбой по телефону (владелец, 27.09.2026: «зарядку телефона, бездвижение
-     * и выключенный экран — как отбой»): поставил на зарядку вечером, экран
-     * погас, двадцать минут без движения — вечернее дело закрывается моментом
-     * отбоя, а утренний сон начинается не раньше него.
+     * Сон сам (владелец, 27.09.2026: «зарядку телефона, бездвижение и
+     * выключенный экран — как отбой»; 01.10 — с отбоя начинается «Сон»):
+     * телефон на зарядке, экран погас, полчаса без движения, положил после
+     * 22:00 — сон с того мига, вечернее дело закрыто. Ключ — прежний, со
+     * времён «Отбоя».
      */
     val autoBedtimeFlow = context.dataStore.data.map { it[KEY_AUTO_BEDTIME] ?: true }
     suspend fun setAutoBedtime(value: Boolean) {
