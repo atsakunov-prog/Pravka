@@ -126,6 +126,8 @@ class Settings(private val context: Context) {
         // Правка 5.0 (13.10.2026): тема вида v2 и откат на «Вид 4.0».
         private val KEY_LOOK_THEME = stringPreferencesKey("look_theme")
         private val KEY_LOOK_V4 = booleanPreferencesKey("look_v4")
+        // 14.10.2026: страницы сервисов Ковчега — внутри приложения; запасной путь — браузером.
+        private val KEY_SERVICES_IN_BROWSER = booleanPreferencesKey("services_in_browser")
         private val KEY_APP_GLOW_MOTION = booleanPreferencesKey("app_glow_motion")
         private val KEY_Z_GAP_MIN = intPreferencesKey("z_gap_min")
         private val KEY_Z_DAY_START = intPreferencesKey("z_day_start")
@@ -854,6 +856,17 @@ class Settings(private val context: Context) {
     val lookV4Flow = context.dataStore.data.map { it[KEY_LOOK_V4] ?: false }
     suspend fun setLookV4(value: Boolean) {
         context.dataStore.edit { it[KEY_LOOK_V4] = value }
+    }
+
+    /**
+     * Страницы сервисов Ковчега (Встречи, Шаббат, Дети, Книги, Кино, Дом, VPN)
+     * — вкладкой браузера, как до 14.10.2026, а не внутри приложения
+     * (`ServiceWebScreen.kt`). Запасной путь на случай, если внутри что-то не
+     * работает. С завода — внутри.
+     */
+    val servicesInBrowserFlow = context.dataStore.data.map { it[KEY_SERVICES_IN_BROWSER] ?: false }
+    suspend fun setServicesInBrowser(value: Boolean) {
+        context.dataStore.edit { it[KEY_SERVICES_IN_BROWSER] = value }
     }
 
     /** Вернуть вид диска в счёт: размеры — к заводским, плотности — к формулам. */

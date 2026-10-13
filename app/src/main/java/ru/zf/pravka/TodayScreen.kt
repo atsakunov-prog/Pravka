@@ -135,6 +135,8 @@ internal class TodayNav(
     val zasechkaEntry: (Long) -> Unit,
     val foodAction: (String) -> Unit,
     val delaTask: (String) -> Unit,
+    /** Страница сервиса Ковчега — внутри приложения или браузером, по настройке (`ServiceWebScreen.kt`). */
+    val web: (ru.zf.pravka.core.ServicePage) -> Unit,
 )
 
 /** Всё, что «Сегодня» знает о дне. */
@@ -361,9 +363,10 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
             },
             stop = { app.appScope.launch { runCatching { app.zasechkaEngine.closeOpen() } } },
             shabbat = {
-                // Шаббат — страница сервиса на компе (меню Ковчега, значок «candles»); нет её — словами.
-                val url = services.firstOrNull { it.icon == "candles" }?.let { ru.zf.pravka.core.Kovcheg.absolute(it.url, link?.url) }
-                if (url != null) openWeb(context, url)
+                // Шаббат — страница сервиса на компе (меню Ковчега, значок «candles»), внутри приложения; нет её — словами.
+                val s = services.firstOrNull { it.icon == "candles" }
+                val url = s?.let { ru.zf.pravka.core.Kovcheg.absolute(it.url, link?.url) }
+                if (s != null && url != null) nav.web(ru.zf.pravka.core.ServicePage(s.name, s.icon, url))
                 else Feedback.toast(context, "Страницы Шаббата в списке сервисов нет — она приходит из Дел")
             },
             lenta = { row ->

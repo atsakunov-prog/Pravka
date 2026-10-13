@@ -52,7 +52,7 @@ class KovchegMenuModel(
     val directions: List<Kovcheg.Direction>,
     /** «Творчество» строкой ниже направлений; null — в меню Свода её нет. */
     val create: Kovcheg.Direction?,
-    /** Ключ текущего экрана (`Kovcheg.TODAY`…) — его пункт подсвечен. */
+    /** Ключ текущего экрана (`Kovcheg.TODAY`…) или адрес открытой страницы сервиса — его пункт подсвечен. */
     val current: String?,
     /** Новый разбор — метка у «Настроек телефона» (они ведут туда же, куда раньше «С»). */
     val news: Boolean,
@@ -168,7 +168,8 @@ private fun Direction(d: Kovcheg.Direction, current: String?, onPick: (Kovcheg.T
     Column(Modifier.fillMaxWidth()) {
         DirectionHead(d.title, d.sub)
         for (x in d.items) {
-            MenuItem(x, on = (x.target as? Kovcheg.Target.Screen)?.key == current, onPick)
+            // Текущий экран — по ключу; страница сервиса внутри приложения — по её адресу.
+            MenuItem(x, on = (x.target as? Kovcheg.Target.Screen)?.key == current || (x.target as? Kovcheg.Target.Web)?.url == current, onPick)
         }
     }
 }

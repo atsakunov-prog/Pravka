@@ -94,6 +94,12 @@
         </intent>
         <!-- Меню Ковчега (Правка 5.0): «Творчество» открывает приложение Claude, нет его — claude.ai. -->
         <package android:name="com.anthropic.claude" />
+        <!-- Страницы сервисов внутри приложения (14.10.2026): кнопка в шапке Кино
+             запускает Jellyfin, в шапке Книг — Слушалку; нет приложения — веб
+             Jellyfin со страницы Кино или слово. QUERY_ALL_PACKAGES выше их и так
+             видит, но запросы по пакетам говорят, ради чего видимость нужна. -->
+        <package android:name="org.jellyfin.mobile" />
+        <package android:name="ru.zf.slushalka" />
     </queries>
 
     <application

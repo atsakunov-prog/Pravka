@@ -118,7 +118,7 @@ internal enum class SettingsGroup(
     ARCHIVE("Архив", "вся жизнь на компе, к ней ходит Claude", SettingsShelf.LINKS, { Glyphs.Archive }),
     BUTTONS("Кнопки на экране", "какие, круг или стопка, размер", SettingsShelf.LOOK, { Glyphs.Disk }),
     DISK("Вид диска", "стекло, плотности, тени, инерция", SettingsShelf.LOOK, { Glyphs.Palette }),
-    CARDS("Вид приложения", "тема, «Вид 4.0»; в нём — значки, свечение, плашки", SettingsShelf.LOOK, { Glyphs.Layers }),
+    CARDS("Вид приложения", "тема, сервисы внутри или в браузере, «Вид 4.0»", SettingsShelf.LOOK, { Glyphs.Layers }),
     // Владелец, 07.10.2026: «нам в самом приложении тоже нужна история, что он
     // починил по каждому багу (в настройках, думаю, „Баги“)».
     BUGS("Баги", "что починено по каждому, по сборкам; что ждёт ночного разбора", SettingsShelf.APP, { Glyphs.Bug }),
@@ -1149,6 +1149,15 @@ private fun CardsSettings(app: PravkaApp) {
             v4,
             { on -> scope.launch { settings.setLookV4(on) } },
             hint = "стекло, свечение и прежние шапки — на время переезда",
+        )
+        // 14.10.2026: страницы сервисов — внутри Правки с шапкой Ковчега (`ServiceWebScreen.kt`);
+        // если внутри что-то не работает — запасной путь, вкладкой браузера, как было.
+        val inBrowser by settings.servicesInBrowserFlow.collectAsState(initial = false)
+        PaperToggle(
+            "Сервисы — в браузере",
+            inBrowser,
+            { on -> scope.launch { settings.setServicesInBrowser(on) } },
+            hint = "Встречи, Шаббат, Дети, Книги, Кино, Дом, VPN — вкладкой браузера, а не внутри Правки",
         )
     }
     PaperCard(

@@ -703,6 +703,18 @@ private fun MainScreen(
     }
     val page = pages.lastOrNull()
     val pop = { pages = pages.dropLast(1) }
+    // Страница сервиса внутри приложения (14.10.2026, `ServiceWebScreen.kt`): Встречи, Шаббат, Дети… —
+    // экраном поверх вкладки, как пункт меню Ковчега. Сохраняется в состоянии: складывание Fold
+    // пересоздаёт активити, и без этого страница закрылась бы на полуслове.
+    var web by androidx.compose.runtime.saveable.rememberSaveable(stateSaver = ServicePageSaver) {
+        mutableStateOf<ru.zf.pravka.core.ServicePage?>(null)
+    }
+    // «Сервисы — в браузере» (настройки вида): запасной путь, если внутри что-то не работает.
+    val servicesInBrowser = app.settings.servicesInBrowserFlow.collectAsState(initial = false)
+    val webContext = LocalContext.current
+    val openServicePage: (ru.zf.pravka.core.ServicePage) -> Unit = { s ->
+        openService(webContext, s, servicesInBrowser.value) { web = it; pages = emptyList() }
+    }
     var foodActionPending by remember { mutableStateOf(foodAction.ifBlank { null }) }
     // Глубокие переходы с «Сегодня»: запись Засечки на правку, дело карточкой.
     var zasechkaEdit by remember { mutableStateOf<Long?>(null) }
@@ -721,8 +733,10 @@ private fun MainScreen(
         val want = tabRequest ?: return@LaunchedEffect
         if (want in service) {
             pages = listOf(Page.Service(want))
+            web = null
         } else {
             tab = if (live(want)) want else Tab.TODAY
+            web = null
             pages = emptyList()
         }
         onTabRequestHandled()
@@ -730,6 +744,7 @@ private fun MainScreen(
     LaunchedEffect(groupRequest) {
         val g = groupRequest ?: return@LaunchedEffect
         pages = listOf(Page.Service(Tab.SETTINGS), Page.ModeSettings(g))
+        web = null
         onGroupRequestHandled()
     }
     LaunchedEffect(foodActionRequest) {
@@ -742,8 +757,8 @@ private fun MainScreen(
         if (pages.isNotEmpty()) pop() else tab = Tab.TODAY
     }
 
-    val openMode: (Tab) -> Unit = { t -> if (live(t)) { tab = t; pages = emptyList() } }
-    val toToday = { tab = Tab.TODAY; pages = emptyList() }
+    val openMode: (Tab) -> Unit = { t -> if (live(t)) { tab = t; pages = emptyList(); web = null } }
+    val toToday = { tab = Tab.TODAY; pages = emptyList(); web = null }
     // Вид v2 (Правка 5.0, план §3): у режима в шапке значок Ковчега, а не «‹» —
     // назад остаётся системным жестом, переходы — через меню. В «Виде 4.0» — как было.
     val modeBack: (() -> Unit)? = if (ru.zf.pravka.ui.Look.v4) toToday else null
@@ -765,6 +780,7 @@ private fun MainScreen(
             zasechkaEntry = { id -> zasechkaEdit = id; openMode(Tab.ZASECHKA) },
             foodAction = { a -> foodActionPending = a; openMode(Tab.FOOD) },
             delaTask = { id -> delaOpen = id; openMode(Tab.TODOIST) },
+            web = openServicePage,
         )
     }
 
@@ -1000,16 +1016,17 @@ private fun MainScreen(
         androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalKovcheg provides host) {
         // Переходы — растворением, 250 мс (DESIGN §10): экран не едет, а сменяется.
         androidx.compose.animation.AnimatedContent(
-            targetState = page to tab,
+            targetState = Triple(web, page, tab),
             transitionSpec = {
                 androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(250)) togetherWith
                     androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200))
             },
             // Внутри карусели смена вкладки — не смена экрана: едет пейджер.
-            contentKey = { (p, t) -> p?.toString() ?: if (t in ring) "ring" else t.name },
+            contentKey = { (w, p, t) -> w?.let { "web:" + it.url } ?: p?.toString() ?: if (t in ring) "ring" else t.name },
             label = "screen",
-        ) { (p, t) ->
+        ) { (w, p, t) ->
             when {
+                w != null -> ServiceWebScreen(app, w, onClose = { web = null })
                 p != null -> PageScreen(
                     app, p, pop, openCost,
                     openService = { pages = pages + Page.Service(it) },
@@ -1042,7 +1059,7 @@ private fun MainScreen(
             KovchegMenuHost(
                 app = app,
                 live = live,
-                current = if (page != null) null else kovchegKey(tab),
+                current = web?.url ?: if (page != null) null else kovchegKey(tab),
                 news = news,
                 onScreen = { key ->
                     menuOpen = false
@@ -1052,7 +1069,8 @@ private fun MainScreen(
                         else -> tabOfKovcheg(key)?.let(openMode)
                     }
                 },
-                onPhone = { menuOpen = false; pages = listOf(Page.Service(Tab.MORE)) },
+                onPhone = { menuOpen = false; web = null; pages = listOf(Page.Service(Tab.MORE)) },
+                onWeb = { s -> menuOpen = false; openServicePage(s) },
                 onDismiss = { menuOpen = false },
             )
         }
@@ -1236,7 +1254,8 @@ private fun tabOfKovcheg(key: String): Tab? = when (key) {
  * открыта; сервисы, которых в приложении нет, — из `/api/me` сервера Дел
  * (`DelaSync.services`), адресов в коде нет. Что в меню и в каком порядке —
  * Свод `ui.menu` (этап 7, правит владелец в вебе Дел; синк Свода), нет записи
- * или она кривая — заводское `Kovcheg.FACTORY`. Веб — Custom Tab браузера,
+ * или она кривая — заводское `Kovcheg.FACTORY`. Веб — страница сервиса внутри
+ * приложения ([onWeb], `ServiceWebScreen.kt`; настройкой — Custom Tab браузера),
  * Claude — его приложение (нет — claude.ai).
  */
 @Composable
@@ -1247,6 +1266,7 @@ private fun KovchegMenuHost(
     news: Boolean,
     onScreen: (String) -> Unit,
     onPhone: () -> Unit,
+    onWeb: (ru.zf.pravka.core.ServicePage) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -1280,7 +1300,12 @@ private fun KovchegMenuHost(
         onPick = { target ->
             when (target) {
                 is ru.zf.pravka.core.Kovcheg.Target.Screen -> onScreen(target.key)
-                is ru.zf.pravka.core.Kovcheg.Target.Web -> { onDismiss(); openWeb(context, target.url) }
+                is ru.zf.pravka.core.Kovcheg.Target.Web -> {
+                    // Страница сервиса — внутри приложения с шапкой Ковчега (`ServiceWebScreen.kt`); название и значок — из пункта.
+                    val item = (model.directions + model.create).flatMap { it.items }.firstOrNull { it.target == target }
+                    onDismiss()
+                    onWeb(ru.zf.pravka.core.ServicePage(item?.name ?: target.url, item?.icon ?: "globe", target.url))
+                }
                 ru.zf.pravka.core.Kovcheg.Target.Claude -> { onDismiss(); openClaude(context) }
             }
         },
