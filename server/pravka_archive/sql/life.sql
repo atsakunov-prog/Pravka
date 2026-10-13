@@ -394,10 +394,16 @@ SELECT r.key                              AS id,
        COALESCE((d->>'ok')::boolean, true) AS ok,
        NULLIF(d->>'error', '')            AS error,
        NULLIF(d->>'audio', '')            AS audio,
-       NULLIF(d->>'mic', '')              AS mic
+       NULLIF(d->>'mic', '')              AS mic,
+       COALESCE(d->>'origin', 'phone')    AS origin,
+       NULLIF(d->>'status', '')           AS status,
+       NULLIF(d->>'final', '')            AS final
 FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'pravka.take' AND NOT r.deleted;
-COMMENT ON VIEW life.dictations IS 'Каждая диктовка Правки: распознанный текст до чистки. Это всё, что владелец наговаривал в любые поля: сообщения людям, заметки, письма.';
+COMMENT ON VIEW life.dictations IS 'Каждая диктовка Правки: распознанный текст до чистки. Это всё, что владелец наговаривал в любые поля: сообщения людям, заметки, письма. С 13.10.2026 здесь и диктовки компьютера («Диктовка» на ПК): origin = pc, id = pc-<мс>, чистка — строка life.cleanups с тем же id.';
+COMMENT ON COLUMN life.dictations.origin IS 'Откуда: phone — телефон (Правка), pc — компьютер (Диктовка на ПК).';
+COMMENT ON COLUMN life.dictations.status IS 'Только у компьютера: pasted — вставлено в окно, clipboard — оставлено в буфере, cancelled — отменено (Esc), empty — ничего не разобрал, error — распознавание упало.';
+COMMENT ON COLUMN life.dictations.final IS 'Только у компьютера: что ушло в окно или буфер — после Сонета или словаря.';
 
 CREATE VIEW life.cleanups AS
 SELECT r.key                       AS id,
@@ -409,10 +415,13 @@ SELECT r.key                       AS id,
        d->>'output'                AS output,
        (d->>'latency_ms')::int     AS latency_ms,
        (d->>'cost_usd')::numeric   AS cost_usd,
-       NULLIF(d->>'error', '')     AS error
+       NULLIF(d->>'error', '')     AS error,
+       COALESCE(d->>'origin', 'phone') AS origin,
+       NULLIF(d->>'take', '')      AS take_id,
+       NULLIF(d->>'style', '')     AS style
 FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'pravka.clean' AND NOT r.deleted;
-COMMENT ON VIEW life.cleanups IS 'Чистка диктовки моделью: что пришло (input) и что модель вернула (output).';
+COMMENT ON VIEW life.cleanups IS 'Чистка диктовки моделью: что пришло (input) и что модель вернула (output). У компьютера (origin = pc) take_id — id диктовки в life.dictations; у телефона связи нет — чистка идёт секундами позже своего тейка.';
 
 CREATE VIEW life.corrections AS
 SELECT r.key AS id, (d->>'day')::date AS day, (d->>'at')::timestamptz AS at,

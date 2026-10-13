@@ -504,10 +504,13 @@ def day(cfg: Config, date: str, full: bool = False, who: str | None = None) -> s
                 out.append("  звонки: " + ", ".join(f"{w_} {cell(m)} мин" for w_, m in calls))
 
         dic = conn.execute(
-            "SELECT count(*), min(time_local), max(time_local) FROM life.dictations WHERE day = %s", (d,)
+            "SELECT count(*), min(time_local), max(time_local), count(*) FILTER (WHERE origin = 'pc') "
+            "FROM life.dictations WHERE day = %s", (d,)
         ).fetchone()
         if dic and dic[0]:
-            out.append(f"\nПравка: {dic[0]} диктовок, с {dic[1]} до {dic[2]} (тексты — life.dictations или search)")
+            # С 13.10.2026 здесь и диктовки компа («Диктовка» на ПК) — их доля видна сразу.
+            pc = f", из них с компа {dic[3]}" if dic[3] else ""
+            out.append(f"\nПравка: {dic[0]} диктовок{pc}, с {dic[1]} до {dic[2]} (тексты — life.dictations или search)")
         talks = conn.execute("SELECT time_local, text FROM life.said WHERE day = %s AND domain = 'тренер' AND part = 'question' ORDER BY at", (d,)).fetchall()
         for t, q in talks:
             out.append(f"\nТренеру в {t}: {cell(q, lim)}")

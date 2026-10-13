@@ -17,6 +17,17 @@
 Здесь же — проверка приёма пищи от службы (check_meal): виды life читают поля приёма с
 приведением типов, и одно кривое число от чужого клиента сломало бы life.meals целиком.
 Телефону верим как раньше: его формат — контракт batch.json, его держат тесты.
+
+Диктовки компьютера (13.10.2026, Правка 5.0, этап 5: «история всех диктовок — с телефона и
+с компьютера, одна на сервере»). Диктовка на ПК пишет каждый тейк теми же видами, что
+телефон, — pravka.take (распознанное) и pravka.clean (чистка Сонетом), с "origin": "pc",
+ключом «pc-<мс>» у обоих (так чистка находит свой тейк) и от устройства svc-diktovka.
+Свой вид не заводили: life.dictations, life.cleanups, поиск по сказанному и разборы видят
+диктовки компа сразу, без второй ветки в каждом виде. Чужой ключ служба не перепишет:
+её ключи — только «pc-…», у телефона «<мс>-<отпечаток>» (check_dictation). Телефону свои
+диктовки назад не нужны, поэтому /sync отдаёт по этим видам только записанное службами
+(FROM_SERVICES) — и после переустановки телефона прежнее устройство не приедет к нему
+тысячами чужих тейков. Формат — contract/diktovka.json.
 """
 
 from __future__ import annotations
@@ -31,10 +42,15 @@ import psycopg
 
 OVERLAP = dt.timedelta(seconds=60)
 # Какие виды отдаёт /sync телефону. Расширять — когда правдой сервера становится ещё
-# что-то, что правят с двух сторон (силовые, зарядка).
-SYNC_KINDS = frozenset({"food.meal"})
+# что-то, что правят с двух сторон (силовые, зарядка) или что пишет комп (диктовки).
+DICTATION_KINDS = frozenset({"pravka.take", "pravka.clean"})
+SYNC_KINDS = frozenset({"food.meal"}) | DICTATION_KINDS
+# Виды, которые /sync отдаёт только записанными службами компа: свои диктовки телефону
+# назад не нужны, а «кроме своего устройства» после переустановки отдало бы ему всю
+# прежнюю историю с прошлого устройства.
+FROM_SERVICES = DICTATION_KINDS
 # Что служба может получить токеном. Выдаёт `python -m pravka_archive token`.
-SERVICE_KINDS = frozenset({"food.meal"})
+SERVICE_KINDS = frozenset({"food.meal"}) | DICTATION_KINDS
 SERVICE_DEVICE = "svc-{name}"
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
 
@@ -123,24 +139,28 @@ def pull(
     own: bool = False,
 ) -> dict[str, Any]:
     """Записи видов kinds, поменявшиеся после since (или все живые, если since пуст), кроме
-    тех, где последним писал device (own=true — и их). Ответ — {cursor, records}."""
+    тех, где последним писал device (own=true — и их). Виды FROM_SERVICES — только
+    записанные службами компа (svc-*). Ответ — {cursor, records}."""
     after = _since(since)
     now = conn.execute("SELECT now()").fetchone()[0]
+    svc_only = sorted(FROM_SERVICES)
     if after is None:
         rows = conn.execute(
             "SELECT kind, key, deleted, data, at, device FROM core.records "
             "WHERE person = %s AND kind = ANY(%s) AND NOT deleted AND (%s OR device <> %s) "
+            "AND (NOT kind = ANY(%s) OR device LIKE 'svc-%%') "
             "ORDER BY kind, key",
-            (person, kinds, own, device),
+            (person, kinds, own, device, svc_only),
         ).fetchall()
     else:
         rows = conn.execute(
             "SELECT r.kind, r.key, r.deleted, r.data, r.at, r.device FROM core.records r "
-            "WHERE r.person = %s AND r.kind = ANY(%s) AND (%s OR r.device <> %s) AND EXISTS ("
+            "WHERE r.person = %s AND r.kind = ANY(%s) AND (%s OR r.device <> %s) "
+            "AND (NOT r.kind = ANY(%s) OR r.device LIKE 'svc-%%') AND EXISTS ("
             " SELECT 1 FROM core.events e WHERE e.person = r.person AND e.kind = r.kind AND e.key = r.key"
             " AND e.received_at > %s) "
             "ORDER BY r.kind, r.key",
-            (person, kinds, own, device, after),
+            (person, kinds, own, device, svc_only, after),
         ).fetchall()
     cursor = now - OVERLAP
     if after is not None and cursor < after:
@@ -219,4 +239,78 @@ def check_meal(key: str, data: Any) -> str | None:
     for f in TOTAL_NUMS:
         if abs(totals[f] - sums[f]) > 1.5:
             return f"totals.{f} не сходится с суммой позиций ({totals[f]} против {round(sums[f])})"
+    return None
+
+
+# ── Диктовка компьютера ─────────────────────────────────────────────────
+
+PC_KEY_RE = re.compile(r"^pc-(\d{10,16})$")
+MAX_TEXT = 100_000      # десять минут речи — около 10 тыс. знаков; запас вдесятеро
+TAKE_STATUS = ("pasted", "clipboard", "cancelled", "empty", "error")
+
+
+def _str(v: Any, hi: int) -> bool:
+    return isinstance(v, str) and len(v) <= hi
+
+
+def _int(v: Any, hi: int) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= hi
+
+
+def check_dictation(kind: str, key: str, data: Any) -> str | None:
+    """Что не так с диктовкой компа — словами; None — годится. Формат — contract/diktovka.json:
+    поля те же, что у телефона (batch.json), плюс origin, а ключ — «pc-<мс>», чтобы служба
+    не могла переписать телефонную диктовку."""
+    m = PC_KEY_RE.match(key or "")
+    if not m:
+        return "key — «pc-<миллисекунды>»: диктовки компа живут отдельно от телефонных"
+    if not isinstance(data, dict):
+        return "диктовка — объект"
+    if data.get("origin") != "pc":
+        return "origin — «pc»"
+    if not isinstance(data.get("id"), int) or isinstance(data.get("id"), bool) or str(data["id"]) != m.group(1):
+        return "id — целое, а key — «pc-<id>»"
+    if not isinstance(data.get("day"), str) or not DAY_RE.match(data["day"]):
+        return "day — ГГГГ-ММ-ДД"
+    if not _iso(data.get("at")):
+        return "at — время ISO 8601 с поясом"
+    if kind == "pravka.take":
+        if not _str(data.get("text"), MAX_TEXT):
+            return f"text — строка до {MAX_TEXT} знаков"
+        if not _int(data.get("audio_ms"), 36_000_000):
+            return "audio_ms — целое от 0 до 10 часов"
+        if not isinstance(data.get("ok"), bool):
+            return "ok — да или нет"
+        if data.get("status") not in TAKE_STATUS:
+            return f"status — {', '.join(TAKE_STATUS)}"
+        for f in ("engine", "error", "audio", "mic"):
+            if data.get(f) is not None and not _str(data[f], 4000):
+                return f"{f} — строка до 4000 знаков"
+        if data.get("final") is not None and not _str(data["final"], MAX_TEXT):
+            return f"final — строка до {MAX_TEXT} знаков"
+        return None
+    if kind == "pravka.clean":
+        if data.get("take") != key:
+            return "take — ключ своего тейка (тот же «pc-<id>»)"
+        for f in ("input", "output"):
+            if not _str(data.get(f), MAX_TEXT):
+                return f"{f} — строка до {MAX_TEXT} знаков"
+        for f in ("mode", "model", "error", "style"):
+            if data.get(f) is not None and not _str(data[f], 4000):
+                return f"{f} — строка до 4000 знаков"
+        if not _int(data.get("latency_ms"), 3_600_000):
+            return "latency_ms — целое от 0 до часа"
+        if not _num(data.get("cost_usd"), 100):
+            return "cost_usd — число от 0 до 100"
+        return None
+    return f"вид {kind} — не диктовка"
+
+
+def check_service(kind: str, key: str, data: Any) -> str | None:
+    """Проверка записи от службы компа по её виду: приём пищи — check_meal, диктовка —
+    check_dictation. Вид без проверки (удаление, например) — годится."""
+    if kind == "food.meal":
+        return check_meal(key, data)
+    if kind in DICTATION_KINDS:
+        return check_dictation(kind, key, data)
     return None

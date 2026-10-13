@@ -181,8 +181,10 @@ def ingest_batch(
     пускать (PRAVKA_PEOPLE): их записи ложатся под ключом профиля. service —
     (имя, виды), если пачку прислала служба своим токеном (13.10.2026, «Еда»):
     тогда устройство только svc-<имя>, виды только её, приём пищи проверяется
-    по контракту (sync.check_meal), а свежесть пишется как svc:<имя>, не телефон."""
-    from .sync import check_meal, service_device
+    по контракту (sync.check_meal), а свежесть пишется как svc:<имя>, не телефон.
+    Диктовки компа (13.10.2026, «Диктовка», sync.check_dictation) — тем же путём:
+    ключи только «pc-…», и удаление тоже — чужой телефонный тейк служба не тронет."""
+    from .sync import PC_KEY_RE, DICTATION_KINDS, check_service, service_device
 
     if not isinstance(batch, dict):
         return 400, {"error": "тело — объект JSON"}
@@ -220,8 +222,10 @@ def ingest_batch(
             kind = ev.get("kind") if isinstance(ev, dict) else None
             if kind not in kinds:
                 early.append({"eid": eid, "why": f"службе «{name}» можно только {', '.join(sorted(kinds))}"})
-            elif kind == "food.meal" and ev.get("op") == "put" and (why := check_meal(str(ev.get("key")), ev.get("data"))):
+            elif ev.get("op") == "put" and (why := check_service(kind, str(ev.get("key")), ev.get("data"))):
                 early.append({"eid": eid, "why": why})
+            elif kind in DICTATION_KINDS and not PC_KEY_RE.match(str(ev.get("key"))):
+                early.append({"eid": eid, "why": "key — «pc-<миллисекунды>»: телефонные диктовки служба не трогает"})
             else:
                 keep.append(ev)
         events = keep

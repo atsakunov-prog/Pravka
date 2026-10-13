@@ -264,8 +264,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry", action="store_true", help="night: только сказать, разбудил бы ли")
     ap.add_argument("--env", help="файл секретов (по умолчанию D:\\PravkaArchive\\secrets\\server.env)")
     ap.add_argument("--who", help="pull: только этот человек архива (marianna); без него — все, у кого есть ключ intervals")
-    ap.add_argument("--name", help="token: имя службы (eda); без него — список токенов")
-    ap.add_argument("--kinds", default="food.meal", help="token: какие виды можно писать и забирать, через запятую")
+    ap.add_argument("--name", help="token: имя службы (eda, diktovka); без него — список токенов")
+    ap.add_argument("--kinds", default="food.meal",
+                    help="token: какие виды можно писать и забирать, через запятую (eda — food.meal, "
+                         "diktovka — pravka.take,pravka.clean)")
     ap.add_argument("--out", help="token: файл, куда положить токен (иначе — на экран)")
     ap.add_argument("--revoke", action="store_true", help="token: отозвать токен службы --name")
     args = ap.parse_args(argv)

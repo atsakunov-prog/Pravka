@@ -71,8 +71,8 @@ location / { return 404; }
 | Путь | Кто ходит | Вход |
 |---|---|---|
 | `/mcp` | Claude из claude.ai | OAuth: страница `/login`, пароль `PRAVKA_OWNER_PASSWORD` |
-| `/ingest` | телефон; службы компа (с 13.10.2026 — «Еда», только `food.meal`, устройство `svc-<имя>`) | `Authorization: Bearer PRAVKA_INGEST_TOKEN`; служба — свой токен из `core.tokens` |
-| `/sync` | телефон и службы компа: что поменял кто-то другой (с 13.10.2026 — еда, `sync.py`) | те же токены |
+| `/ingest` | телефон; службы компа (с 13.10.2026 — «Еда», только `food.meal`, и «Диктовка», только `pravka.take` и `pravka.clean` с ключами `pc-…`; устройство `svc-<имя>`) | `Authorization: Bearer PRAVKA_INGEST_TOKEN`; служба — свой токен из `core.tokens` |
+| `/sync` | телефон и службы компа: что поменял кто-то другой (с 13.10.2026 — еда и диктовки компа; по диктовкам — только записанное службами, `sync.FROM_SERVICES`) | те же токены |
 | `/.well-known/…`, `/register`, `/authorize`, `/token`, `/revoke` | Claude при подключении | — |
 | `/health` | проверка | — |
 
