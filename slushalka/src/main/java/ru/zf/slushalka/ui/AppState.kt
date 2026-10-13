@@ -95,6 +95,19 @@ class AppState(private val app: SlushalkaApp) {
     val moved: StateFlow<Moved?> = _moved
 
     /**
+     * Место из читалки в вебе «Книг» новее здешнего и далеко от него ([ru.zf.slushalka.data.WebPlace]). Его не
+     * берём молча, как место своего устройства, а спрашиваем строкой «продолжить?»: в вебе книгу открывают
+     * «чуть посмотреть», и молча перескочить туда - сбить место.
+     */
+    data class WebOffer(val bookId: String, val title: String, val char: Int, val textChars: Int, val at: Long)
+
+    private val _webOffer = MutableStateFlow<WebOffer?>(null)
+    val webOffer: StateFlow<WebOffer?> = _webOffer
+
+    /** На какое место веба по книге уже ответили (время места): второй раз про него не спрашиваем. */
+    private val webSeen by lazy { app.getSharedPreferences("web-place", android.content.Context.MODE_PRIVATE) }
+
+    /**
      * Место чтения открытой книги приехало с другого устройства, пока читалка
      * открыта: она переходит туда. Иначе следующая же страница записала бы
      * здешнюю со свежим временем - и приехавшее место пропало бы.
@@ -263,6 +276,19 @@ class AppState(private val app: SlushalkaApp) {
         if (id == null) return null
         fun find(k: String) = _books.value.firstOrNull { it.id == k } ?: _serverBooks.value.firstOrNull { it.id == k }
         return find(id) ?: canonicalOf(id).takeIf { it != id }?.let(::find)
+    }
+
+    /**
+     * Книга по имени папки в `Книги/` - для ссылки «Открыть в Слушалке» из веба ([ru.zf.slushalka.DeepLink]):
+     * ключ сервера (по имени и по прежним именам - `canonicalOf`), а без оглавления сервера - своя папка с тем
+     * же именем (без регистра, как `folderKey`). null - такой книги нет ни на полке, ни на сервере.
+     */
+    fun bookByFolder(folder: String): Book? {
+        bookById(canonicalOf(folder))?.let { return it }
+        val k = ru.zf.slushalka.data.ServerLibrary.folderKey(folder)
+        fun same(b: Book) = ru.zf.slushalka.data.ServerLibrary.folderKey(b.folderName) == k ||
+            ru.zf.slushalka.data.ServerLibrary.folderKey(b.phoneFolder) == k
+        return _books.value.firstOrNull(::same) ?: _serverBooks.value.firstOrNull(::same)
     }
 
     /** Главная папка библиотеки: сюда качает каталог и здесь лежит `_Слушалка`. */
@@ -1314,6 +1340,8 @@ class AppState(private val app: SlushalkaApp) {
         }
         if (moved != null) _moved.value = moved
 
+        // Место веба - после своих: сравнивается уже со слитым свежим своим.
+        pullWebPlace(p)
 
         bump()
         // Вопросы и пометки - отдельно и после: места нужны сразу, а эти файлы
@@ -1367,6 +1395,56 @@ class AppState(private val app: SlushalkaApp) {
 
     fun dismissMoved() {
         _moved.value = null
+    }
+
+    /**
+     * Место из читалки в вебе «Книг»: файл `_Веб/места-<имя>.json` в корне домашней библиотеки (пишет сервер,
+     * здесь только читается). Есть место новее здешнего, далеко от него и без ответа - строка «продолжить?».
+     * Только у домашней библиотеки (есть оглавление сервера) и только когда места и так ездят через облако.
+     */
+    private suspend fun pullWebPlace(p: Settings.Prefs) {
+        if (!p.cloudReady || !p.cloudSync || p.profile.isBlank() || app.server.index.value == null) return
+        val text = app.cloud.getText(ru.zf.slushalka.data.WebPlace.path(p.profile)).getOrNull() ?: return
+        val remote = PositionSync.parsePlaces(text) ?: return
+        if (!remote.profile.equals(p.profile, ignoreCase = true)) return
+        val o = ru.zf.slushalka.data.WebPlace.pick(
+            web = remote.states,
+            canonical = ::canonicalOf,
+            local = { app.positions.get(it) },
+            seen = { webSeen.getLong(it, 0L) },
+            exists = { bookById(it) != null },
+            current = _current.value?.id,
+        ) ?: return
+        val shown = _webOffer.value
+        if (shown != null && shown.bookId == o.bookId && shown.at == o.at) return
+        _webOffer.value = WebOffer(o.bookId, bookById(o.bookId)?.title ?: o.bookId.substringAfterLast('/'), o.char, o.textChars, o.at)
+    }
+
+    /**
+     * «Продолжить»: место веба становится местом чтения - со свежим временем, оно и уедет на другие свои
+     * устройства. Открытая читалка переходит туда, плеер этой книги подтягивается к странице. Возвращает книгу -
+     * экран откроет её читалкой, если открыта другая.
+     */
+    fun acceptWebOffer(): String? {
+        val o = _webOffer.value ?: return null
+        _webOffer.value = null
+        webSeen.edit().putLong(o.bookId, o.at).apply()
+        app.positions.setReadChar(o.bookId, o.char, o.textChars)
+        if (_current.value?.id == o.bookId) {
+            if (readerVisible) _readJump.value = o.char
+            val align = _alignment.value
+            if (align != null && app.player.isOpen(o.bookId)) app.player.followReading(align.audioAt(o.char))
+        }
+        bump()
+        schedulePush(o.bookId, 0)
+        return o.bookId
+    }
+
+    /** «Нет»: здешнее место верное. Про это место веба больше не спрашиваем, своё не трогаем. */
+    fun declineWebOffer() {
+        val o = _webOffer.value ?: return
+        _webOffer.value = null
+        webSeen.edit().putLong(o.bookId, o.at).apply()
     }
 
     /**

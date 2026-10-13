@@ -25,6 +25,9 @@
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
+        <!-- «Открыть Jellyfin» из панели «Кино» (OpenAppActivity): без этого Android 11+ не покажет, что
+             Jellyfin установлен, и пересадка всегда уходила бы в браузер. -->
+        <package android:name="org.jellyfin.mobile" />
     </queries>
 
     <application
@@ -44,6 +47,31 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- «Открыть в Слушалке» из панели «Книги» в браузере: slushalka://book?folder=<папка> (DeepLink).
+                 BROWSABLE - иначе Chrome по ссылке со страницы сюда не пустит. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="slushalka" android:host="book" />
+            </intent-filter>
+        </activity>
+
+        <!-- Пересадка в другое приложение семьи по белому списку (slushalka://app?id=jellyfin): прозрачная, вне
+             истории и вне задачи Слушалки - «назад» из Jellyfin ведёт в браузер. -->
+        <activity
+            android:name=".OpenAppActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="slushalka" android:host="app" />
             </intent-filter>
         </activity>
 

@@ -67,10 +67,14 @@ class MainActivity : ComponentActivity() {
     /** «Спросить голосом» из шторки или с виджета. */
     private val voiceAsked = kotlinx.coroutines.flow.MutableStateFlow(false)
 
+    /** «Открыть в Слушалке» из веба «Книг»: имя папки книги, которую открыть ([DeepLink]). */
+    private val folderAsked = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+
     private fun takeIntent(intent: Intent?) {
         when (intent?.action) {
             ContinueWidget.ACTION_CONTINUE -> continueAsked.value = true
             ru.zf.slushalka.player.Shade.ACTION_VOICE_ASK -> voiceAsked.value = true
+            Intent.ACTION_VIEW -> (DeepLink.parse(intent.dataString) as? DeepLink.Link.Book)?.let { folderAsked.value = it.folder }
         }
     }
 
@@ -232,6 +236,33 @@ class MainActivity : ComponentActivity() {
             asking = true
         }
 
+        // Ссылка из веба «Книг»: книга по имени папки. Полка и оглавление сервера при холодном старте приезжают не
+        // сразу - перемена books/serverBooks перезапускает поиск; не нашлась и за DEEP_LINK_WAIT_MS - строка внизу.
+        val folder by folderAsked.collectAsState()
+        val loaded by state.booksLoaded.collectAsState()
+        LaunchedEffect(folder, books, serverBooks, loaded) {
+            val f = folder ?: return@LaunchedEffect
+            if (!loaded) return@LaunchedEffect
+            val book = state.bookByFolder(f)
+            if (book != null) {
+                folderAsked.value = null
+                asking = false
+                talking = false
+                if (current?.id == book.id) {
+                    screen = if (book.hasAudio) Screen.PLAYER else Screen.READER
+                } else {
+                    openBook(book)
+                }
+                return@LaunchedEffect
+            }
+            kotlinx.coroutines.delay(DEEP_LINK_WAIT_MS)
+            folderAsked.value = null
+            state.say(
+                if (!app.settings.now().cloudReady) "«$f»: этой книги нет на телефоне, а облако домашней библиотеки не настроено"
+                else "«$f»: такой книги нет ни на телефоне, ни в домашней библиотеке",
+            )
+        }
+
         BackHandler(enabled = screen != Screen.LIBRARY || asking || talking) {
             when {
                 talking -> talking = false
@@ -348,8 +379,30 @@ class MainActivity : ComponentActivity() {
             // любого экрана - взяли самое свежее, а если здешнее было вернее,
             // «Вернуть».
             val moved by state.moved.collectAsState()
-            moved?.let { m ->
-                MovedBar(m, Modifier.align(androidx.compose.ui.Alignment.BottomCenter))
+            // Место из веба «Книг» - вопросом «продолжить?», молча не берётся. Обе строки - столбиком внизу.
+            val webOffer by state.webOffer.collectAsState()
+            if (moved != null || webOffer != null) {
+                androidx.compose.foundation.layout.Column(
+                    Modifier.align(androidx.compose.ui.Alignment.BottomCenter).navigationBarsPadding(),
+                ) {
+                    webOffer?.let { o ->
+                        WebOfferBar(
+                            o,
+                            onYes = {
+                                val id = state.acceptWebOffer()
+                                val book = id?.let(state::bookById)
+                                // Продолжают читать: книга - читалкой, на месте веба (ушла на диск выше).
+                                if (book != null && book.hasText) {
+                                    if (current?.id != book.id) openBook(book)
+                                    app.player.pauseForAsking()
+                                    screen = Screen.READER
+                                }
+                            },
+                            onNo = { state.declineWebOffer() },
+                        )
+                    }
+                    moved?.let { m -> MovedBar(m, Modifier) }
+                }
             }
 
             // Звук с сервера упёрся в мобильную сеть при «спрашивать»: вопрос
@@ -389,8 +442,7 @@ class MainActivity : ComponentActivity() {
         val at = maxOf(if (m.listen) m.now.listenAt else 0L, if (m.read) m.now.readAt else 0L)
         androidx.compose.material3.Surface(
             modifier = modifier
-                .padding(horizontal = 12.dp, vertical = 16.dp)
-                .navigationBarsPadding(),
+                .padding(horizontal = 12.dp, vertical = 16.dp),
             shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
             color = MaterialTheme.colorScheme.inverseSurface,
             contentColor = MaterialTheme.colorScheme.inverseOnSurface,
@@ -409,6 +461,41 @@ class MainActivity : ComponentActivity() {
                 )
                 androidx.compose.material3.TextButton(onClick = { app.state.undoMoved() }) {
                     androidx.compose.material3.Text("Вернуть", color = MaterialTheme.colorScheme.inversePrimary)
+                }
+            }
+        }
+    }
+
+    /**
+     * «В вебе дочитал до стр. N - продолжить?» Сама не гаснет: это вопрос, а не известие, и молча место не
+     * меняется. «Нет» - здешнее верное, про это место веба больше не спросим.
+     */
+    @Composable
+    private fun WebOfferBar(o: ru.zf.slushalka.ui.AppState.WebOffer, onYes: () -> Unit, onNo: () -> Unit) {
+        val page = o.char / ru.zf.slushalka.data.Settings.PAGE_CHARS + 1
+        val share = if (o.textChars > 0) " (${(o.char * 100L / o.textChars).coerceIn(0, 100)}%)" else ""
+        androidx.compose.material3.Surface(
+            modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 16.dp, bottom = 8.dp),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.inverseSurface,
+            contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+            shadowElevation = 6.dp,
+        ) {
+            androidx.compose.foundation.layout.Column(Modifier.padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 2.dp)) {
+                androidx.compose.material3.Text(
+                    "«${o.title}»: в вебе дочитал до стр. $page$share - ${ru.zf.slushalka.ui.formatAgo(o.at)}. Продолжить отсюда?",
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 4,
+                )
+                androidx.compose.foundation.layout.Row(
+                    Modifier.align(androidx.compose.ui.Alignment.End),
+                ) {
+                    androidx.compose.material3.TextButton(onClick = onNo) {
+                        androidx.compose.material3.Text("Нет, здесь вернее", color = MaterialTheme.colorScheme.inversePrimary)
+                    }
+                    androidx.compose.material3.TextButton(onClick = onYes) {
+                        androidx.compose.material3.Text("Продолжить", color = MaterialTheme.colorScheme.inversePrimary)
+                    }
                 }
             }
         }
@@ -448,6 +535,11 @@ class MainActivity : ComponentActivity() {
                 }
             },
         )
+    }
+
+    private companion object {
+        /** Сколько ждать полку и оглавление сервера, прежде чем сказать «такой книги нет». */
+        const val DEEP_LINK_WAIT_MS = 15_000L
     }
 
     private fun startPlayback() {
