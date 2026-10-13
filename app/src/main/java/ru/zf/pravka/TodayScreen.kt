@@ -365,6 +365,8 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
             },
             stop = { app.appScope.launch { runCatching { app.zasechkaEngine.closeOpen() } } },
             // «Раньше» у дайджеста — вид сервера за двое суток; без кэша и без журнала: это чужая переписка.
+            mealVoice = { mealVoice(context) },
+            mealPhoto = { nav.foodAction("photo") },
             earlier = { currentId ->
                 ru.zf.pravka.core.DigestNote.earlier(app.delaSync.rawView(ru.zf.pravka.core.DigestNote.EARLIER_PATH), currentId)
             },

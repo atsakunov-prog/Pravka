@@ -35,6 +35,7 @@ import ru.zf.pravka.ui.KvSetRow
 import ru.zf.pravka.ui.KvSmallButton
 import ru.zf.pravka.ui.LocalPravkaType
 import ru.zf.pravka.ui.PaperCard
+import ru.zf.pravka.trigger.onFoodTap
 
 // «Еда» в виде v2 (Правка 5.0, этап 6, холст `Eda.dc.html`): итог дня
 // крупным числом и полосами КБЖУ, дневник строками, цели, неделя столбиками.
@@ -268,4 +269,39 @@ internal fun FoodDaysCardV2(week: List<FoodStore.DayTotal>, selected: String, on
             )
         }
     }
+}
+
+/**
+ * Отрезки «Еды», про которые сказано «не надо» (подсказка «в ленте едим, а в
+ * дневнике пусто»): одни на «Сегодня» и вкладку Еды, живут до перезапуска
+ * приложения — подсказка про старый обед после него уже не встанет сама
+ * (`MealGap.RECENT_MS`).
+ */
+internal object MealGapDismissed {
+    val ids = androidx.compose.runtime.mutableStateListOf<Long>()
+}
+
+/**
+ * Подсказка `MealGap` (доводка 5.0, 14.10.2026): «Сейчас в ленте «Обед» (с 13:10),
+ * а в дневнике еды пусто. Записать?» — голосом (тот же тап, что у кнопки еды),
+ * снимком (камера вкладки Еды) и «не надо». Ни Claude, ни записи сама она не делает.
+ */
+@Composable
+internal fun MealGapCallout(gap: ru.zf.pravka.core.MealGap.Gap, onVoice: () -> Unit, onPhoto: () -> Unit) {
+    ru.zf.pravka.ui.KvCallout(
+        ru.zf.pravka.core.MealGap.words(gap),
+        icon = ru.zf.pravka.ui.KvGlyphs.byKey("food") ?: Glyphs.Food,
+        buttons = {
+            KvSmallButton("Голосом", onVoice, soft = true, icon = Glyphs.Mic)
+            KvSmallButton("Снять", onPhoto, icon = Glyphs.Camera)
+            KvSmallButton("Не надо", { MealGapDismissed.ids.add(gap.entryId) }, icon = Glyphs.Close)
+        },
+    )
+}
+
+/** Голосом — та же дорога, что тап по кнопке еды (`onFoodTap`); службы нет — словами. */
+internal fun mealVoice(context: android.content.Context) {
+    val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+    if (service == null) ru.zf.pravka.ui.Feedback.toast(context, context.getString(R.string.toast_no_service))
+    else with(service) { onFoodTap() }
 }

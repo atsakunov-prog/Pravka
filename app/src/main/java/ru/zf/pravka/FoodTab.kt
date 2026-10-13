@@ -385,6 +385,23 @@ internal fun FoodTab(
                         weightNow = health.firstOrNull { it.weightKg > 0 }?.weightKg,
                     )
                 }
+                // «В ленте едим, а в дневнике пусто» (доводка 5.0, `MealGap`): только сегодня; лента — та же, что у Засечки.
+                val ribbon by app.zasechkaStore.entriesFlow.collectAsState()
+                LaunchedEffect(Unit) { runCatching { app.zasechkaStore.all() } }
+                val minute by androidx.compose.runtime.produceState(System.currentTimeMillis()) {
+                    while (true) {
+                        kotlinx.coroutines.delay(60_000L - System.currentTimeMillis() % 60_000L + 50L)
+                        value = System.currentTimeMillis()
+                    }
+                }
+                val gap = remember(ribbon, meals, minute, dayOffset) {
+                    if (dayOffset != 0) null else ru.zf.pravka.core.MealGap.find(ribbon, meals.map { it.ts }, minute)
+                }?.takeIf { it.entryId !in MealGapDismissed.ids }
+                val gap2: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {
+                    if (gap != null) item(key = "mealgap") {
+                        MealGapCallout(gap, onVoice = { mealVoice(context) }, onPhoto = takePhoto)
+                    }
+                }
                 val week = remember(meals) { store.recentDays(7) }
                 val week2 = @Composable {
                     if (week.isNotEmpty()) {
@@ -400,6 +417,7 @@ internal fun FoodTab(
                     // side: 0 — сложенный одной лентой, 1 и 2 — колонки разворота.
                     when {
                         side == 0 -> {
+                            gap2()
                             item(key = "total") { total2() }
                             item(key = "diary") { diary2() }
                             item(key = "micro") { MicroCard(total) }
@@ -407,6 +425,7 @@ internal fun FoodTab(
                             item(key = "week") { week2() }
                         }
                         foodView == 0 && side == 1 -> {
+                            gap2()
                             item(key = "total") { total2() }
                             item(key = "goals") { goals2() }
                             item(key = "micro") { MicroCard(total) }

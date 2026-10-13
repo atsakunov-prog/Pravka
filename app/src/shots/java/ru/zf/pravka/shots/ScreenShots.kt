@@ -50,7 +50,7 @@ import java.util.TimeZone
  * десятки мегабайт, пересъёмка — одна команда). Группы через запятую:
  * outer, tall, inner, overlay; t5 — только «Сегодня» вида v2 (быстро); z5 — только Засечка v2;
  * svod — меню и вид из Свода (этап 7); web — страница сервиса внутри приложения (шапка Ковчега,
- * заглушка вместо страницы).
+ * заглушка вместо страницы); p5 — доводка 5.0 (подсказка еды, разделы веба Денег).
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -482,6 +482,9 @@ class ScreenShots {
         // ---- «Правка» 5.0 (этап 5): история диктовок телефона и компа — последней, её данные перекрывают «Правку» 4.0
         if (want("history")) history()
 
+        // ---- Доводка 5.0: то, что этапы срезали с холста (подсказка еды, разделы веба Денег)
+        if (want("p5")) polish()
+
         // ---- Этап 7: меню и вид из Свода — после всех, записи Свода не стираются, а остальным кадрам нужно заводское
         if (want("svod")) svod()
     }
@@ -533,6 +536,36 @@ class ScreenShots {
         }
         runBlocking { app.settings.setLookTheme("system") }
         RuntimeEnvironment.setQualifiers(OUTER)
+    }
+
+    /**
+     * Доводка Правки 5.0 (группа `p5`): подсказка «в ленте едим, а в дневнике пусто» — на «Сегодня» (оба экрана,
+     * обе темы) и в Еде. В посеве ужин идёт и уже разобран — на время снимков он убирается из дневника и потом
+     * возвращается тем же приёмом: остальным группам нужен прежний день.
+     */
+    private fun polish() {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        val dayStart = java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val dinner = app.foodStore.mealsFlow.value.filter { it.ts >= dayStart + 17 * 3_600_000L }
+        runBlocking { dinner.forEach { app.foodStore.delete(it.id) } }
+        settle(8)
+        for (theme in listOf("light", "dark")) {
+            runBlocking { app.settings.setLookTheme(theme) }
+            settle(4)
+            for ((size, q) in listOf("folded" to OUTER, "wide" to INNER)) {
+                RuntimeEnvironment.setQualifiers(q)
+                var c = launch(null); shot(c, "p5-mealgap-today-$size-$theme"); close(c)
+                c = launch(MainActivity.TAB_FOOD); shot(c, "p5-mealgap-food-$size-$theme"); close(c)
+            }
+        }
+        RuntimeEnvironment.setQualifiers(OUTER)
+        runBlocking {
+            dinner.forEach { m ->
+                app.foodStore.add(ts = m.ts, kind = m.kind, raw = m.raw, items = m.items, note = m.note, source = m.source, photo = m.photo, costUsd = m.costUsd, model = m.model)
+            }
+            app.settings.setLookTheme("system")
+        }
+        settle(4)
     }
 
     /**

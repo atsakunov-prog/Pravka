@@ -104,6 +104,8 @@ internal class TodayV2Data(
     val tiles: TodayTiles,
     /** Дела подключены: без них «Сейчас» и «Новое» не показываются. */
     val dela: Boolean,
+    /** В ленте идёт или только что была «Еда», а в дневнике пусто (`MealGap`); null — подсказки нет. */
+    val mealGap: ru.zf.pravka.core.MealGap.Gap? = null,
 )
 
 /** Числа плиток разложенного: еда, спорт, деньги, Шаббат. */
@@ -126,6 +128,9 @@ internal class TodayV2Actions(
     val stop: () -> Unit,
     /** «Раньше» у дайджеста: сводки за двое суток без [currentId]; нет сети или старый сервер — исключение. */
     val earlier: suspend (currentId: String) -> List<DigestNote>,
+    /** Подсказка «в ленте едим, а в дневнике пусто»: записать голосом или снимком — дороги Еды. */
+    val mealVoice: () -> Unit,
+    val mealPhoto: () -> Unit,
     val shabbat: () -> Unit,
     val lenta: (Lenta.Row) -> Unit,
 )
@@ -227,6 +232,7 @@ private fun FoldedBody(c: TodayCards, modifier: Modifier) {
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         NowCard(c, wide = false)
+        MealGapLine(c)
         c.weather?.takeIf { it.ahead.isNotEmpty() || it.hours.isNotEmpty() }?.let { WeatherCardV2(it, c.weatherOpen, c.onWeather) }
         if (c.data.dela) NowTasksCard(c, wide = false)
         c.digest?.let { DigestCard(it, c.digestOpen, c.onDigest, onNew = { digestNew(c, it) }, onEarlier = c.act.earlier) }
@@ -244,6 +250,7 @@ private fun WideBody(c: TodayCards, modifier: Modifier) {
         Column(Modifier.weight(1f).fillMaxHeight().padding(bottom = 76.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             TilesGrid(c)
             NowCard(c, wide = true)
+            MealGapLine(c)
             LentaCard(c, Modifier.weight(1f, fill = false))
         }
         Column(
@@ -374,6 +381,16 @@ private fun NowCard(c: TodayCards, wide: Boolean) {
             )
         }
     }
+}
+
+/**
+ * «Сейчас в ленте «Обед», а в дневнике пусто. Записать?» — под «идёт сейчас»: про
+ * то же самое, что идёт (доводка 5.0). Только сегодня; «не надо» прячет до перезапуска.
+ */
+@Composable
+private fun MealGapLine(c: TodayCards) {
+    val g = c.data.mealGap?.takeIf { c.today && it.entryId !in MealGapDismissed.ids } ?: return
+    MealGapCallout(g, onVoice = c.act.mealVoice, onPhoto = c.act.mealPhoto)
 }
 
 /** «0:08» — сколько идёт дело: часы и минуты. */
@@ -834,7 +851,11 @@ internal fun buildV2(
         moneyMonth = if (monthKop != 0L) "$monthName ${Fmt.rub(-monthKop)} ₽" else null,
         shabbat = ShabbatTimes.next(now, lat, lon),
     )
+    // Еда в ленте без приёма в дневнике — только сегодня и только если Еда включена в профиле.
+    val mealGap = if (day == DayFacts.localDay(now) && app.profileStore.has(ru.zf.pravka.data.Profile.Mode.FOOD)) {
+        ru.zf.pravka.core.MealGap.find(entries, app.foodStore.mealsFlow.value.map { it.ts }, now)
+    } else null
     return TodayV2Data(
-        model, profile, lenta, open, last, nowTasks, asks, todayRows, tomorrow, snap, todayKey, tiles, delaOn,
+        model, profile, lenta, open, last, nowTasks, asks, todayRows, tomorrow, snap, todayKey, tiles, delaOn, mealGap,
     )
 }
