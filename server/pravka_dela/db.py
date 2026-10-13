@@ -52,9 +52,13 @@ APP_TABLES = {
     "crm.meeting_raw": "SELECT, INSERT, UPDATE",
     # Дайджест Telegram (dela_0014): сводки службы дайджеста, только владельцу; строки не удаляются.
     "crm.digests": "SELECT, INSERT, UPDATE",
+    # Команды Засечки из веба телефону (dela_0016): только владельцу; строки не удаляются.
+    "crm.zasechka_cmds": "SELECT, INSERT, UPDATE",
 }
 APP_VIEWS = ["tasks.v_tasks", "crm.v_deals"]
 APP_SEQUENCES = ["tasks.task_num"]
+# Архив жизни для страниц-двойников (dela_0016): не схема life, а узкие функции — с них снят PUBLIC, право — здесь.
+APP_FUNCTIONS = ["crm.life_rows(text, date, date)", "crm.life_ok()"]
 
 
 def _sql_files() -> list[tuple[str, str]]:
@@ -111,6 +115,8 @@ def grant_app(conn: psycopg.Connection, role: str) -> None:
         conn.execute(sql.SQL("GRANT SELECT ON {} TO {}").format(sql.SQL(view), r))
     for seq in APP_SEQUENCES:
         conn.execute(sql.SQL("GRANT USAGE ON SEQUENCE {} TO {}").format(sql.SQL(seq), r))
+    for fn in APP_FUNCTIONS:
+        conn.execute(sql.SQL("GRANT EXECUTE ON FUNCTION " + fn + " TO {}").format(r))
 
 
 def life_views(conn: psycopg.Connection, reader_role: str) -> bool:

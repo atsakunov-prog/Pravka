@@ -129,7 +129,8 @@ def test_api_me_menu_tokens_and_pages(dela, tmp_path, monkeypatch):
     # Ключ сервиса: четвёртым полем настройки или по значку; незнакомый значок — без ключа («Ещё»).
     assert [(x["name"], x["key"]) for x in look["nav"]] == [("Дом", "dom"), ("Дела", "dela"), ("Курсы", "kursy"), ("Копии", "")]
     assert look["menu"] == kovcheg_ui.FACTORY_MENU and look["tokens"]["light"]["accent"] == "#2747c9"
-    assert look["pages"] == []   # двойников «Сегодня», «Засечки», «Правки» этот сервер ещё не умеет — кнопок в вебе нет
+    # Двойники «Сегодня», «Засечки», «Правки» (twins.py, 14.10.2026) сервер умеет — большие кнопки в вебе есть.
+    assert look["pages"] == ["day", "zasechka", "pravka"] == list(kovcheg_ui.PAGES)
     ops(dela, "sasha", {"op": "svod.set", "key": "ui.menu", "value": moved(), "author": "web"},
         {"op": "svod.set", "key": "ui.look", "value": {"light": {"accent": "#2f7d4f"}}, "author": "web"})
     look = c.get("/api/me", headers=owner).json()["look"]
@@ -169,7 +170,7 @@ def test_dom_token_reads_only_ui(dela):
     assert [i["key"] for i in items] == ["ui.menu"]
     assert c.get("/api/view/svod", params={"prefix": "prompt."}, headers=dom).json()["items"] == []
     assert c.get("/api/view/svod", params={"key": "prompt.food"}, headers=dom).status_code == 403
-    assert c.get("/api/me", headers=dom).json()["look"]["pages"] == []   # сборщику — ради look.pages
+    assert c.get("/api/me", headers=dom).json()["look"]["pages"] == list(kovcheg_ui.PAGES)   # сборщику — ради look.pages
     for path in ("/api/sync", "/api/view/now"):
         assert c.get(path, headers=dom).status_code == 403
     r = c.post("/api/ops", headers=dom, json={"ops": [{"op": "svod.set", "key": "ui.menu", "value": {}, "author": "dom"}]})

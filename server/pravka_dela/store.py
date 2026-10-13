@@ -21,7 +21,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from . import db, digest, krug, meetings, people, place, where
+from . import db, digest, krug, meetings, people, place, twins, where, zasechka
 
 # Сколько номеров изменений синк захватывает назад. Номер берётся в начале
 # транзакции, а видна она после фиксации: изменение с меньшим номером может
@@ -39,7 +39,7 @@ TASK_FIELDS = {
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
-            "digest"]
+            "digest", "zasechka"]
 # «svod» — Свод (crm.svod) в синке и операция svod.set; «people» — person.add / person.merge и вид who
 # (одна карточка человека, 06.10.2026). Без них телефон не шлёт этих операций.
 # «dictations» — операция dictation.add: текст наговорки, из которой вышли дела (их source_ref = её id),
@@ -61,6 +61,9 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug",
 # «digest» — дайджест Telegram на телефоне (dela_0014, 13.10.2026, digest.py): последняя сводка — полем digest синка
 # (только владельцу), список — вид digest, приём — операция digest.put (только служба дайджеста). Без флага телефон
 # карточку дайджеста не показывает: сервер не обновлён.
+# «zasechka» — команды Засечки из веба (dela_0016, 14.10.2026, zasechka.py): поле zasechka синка (только владельцу) —
+# команды, ждущие телефона; операции zasechka.take и zasechka.done — телефон берёт и отмечает. Без флага телефон
+# поля не ищет. Страницы-двойники «Сегодня», «Засечка», «Правка» (twins.py) — виды day, zasechka, pravka, pogoda.
 # Токен службы бота Ковчега (python -m pravka_dela token --name kovcheg): только он забирает
 # «что пора» и отмечает отправку (remind.py, task.reminded).
 REMIND_BOT = "kovcheg"
@@ -971,6 +974,11 @@ def sync(url: str, user: str, since: int) -> dict:
         if put:
             out["digest"] = jsonable(last)
             top = max(top, last["seq"] if last else 0)
+        # Команды Засечки из веба (dela_0016): не по seq, а всё, что ждёт телефона, — их мало и они короткоживущие.
+        # Только владельцу; не владельцу поля нет.
+        cmds = zasechka.for_sync(conn, user)
+        if cmds is not None:
+            out["zasechka"] = jsonable(cmds)
         out["seq"] = top
         out["today"] = conn.execute("SELECT crm.today() AS d").fetchone()["d"].isoformat()
     out["features"] = FEATURES
@@ -1234,6 +1242,9 @@ krug.register(VIEWS)
 meetings.register(HANDLERS, VIEWS, OpError)
 # Дайджест Telegram (dela_0014): приём от службы дайджеста и выдача владельцу (digest.py).
 digest.register(HANDLERS, VIEWS, OpError)
+# Страницы-двойники экранов телефона (dela_0016): команды Засечки телефону и виды day, zasechka, pravka, pogoda.
+zasechka.register(HANDLERS, OpError)
+twins.register(VIEWS, OpError)
 
 
 def view(url: str, user: str, name: str, **params) -> dict:
