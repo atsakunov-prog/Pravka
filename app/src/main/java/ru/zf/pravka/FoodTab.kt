@@ -337,7 +337,8 @@ internal fun FoodTab(
         val rightState = rememberLazyListState()
         val goalWeight by app.settings.goalWeightFlow.collectAsState(initial = 0)
         val health by app.sportStore.healthFlow.collectAsState()
-        val sub = ru.zf.pravka.core.Fmt.dayLong(dayDate) +
+        // На сложенном рядом три значка — день короче («вт, 13 октября»), иначе подпись режется.
+        val sub = (if (wide) ru.zf.pravka.core.Fmt.dayLong(dayDate) else ru.zf.pravka.core.Fmt.dayList(dayDate)) +
             (if (dayMeals.isEmpty()) "" else " · " + plural(dayMeals.size, "приём", "приёма", "приёмов"))
         Column(Modifier.fillMaxSize()) {
             header(sub, { daySheet = true }) {

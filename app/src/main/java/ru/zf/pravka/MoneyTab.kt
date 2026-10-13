@@ -395,7 +395,13 @@ internal fun MoneyTab(
                                 PatternsCard(app, state.insight, state.insightTs)
                             }
                         }
-                        MONEY_SORT -> sortBlocks(left, right)
+                        MONEY_SORT -> {
+                            // Пустой раздел читается поломкой — скажем словами, что ждать нечего.
+                            if (left && questions.isEmpty() && drafts.isEmpty()) {
+                                ru.zf.pravka.ui.KvCallout("Разбирать нечего: вопросов сверки и трат без «ОК» нет. Выписки — справа" + if (wide) "." else " ниже.")
+                            }
+                            sortBlocks(left, right)
+                        }
                         MONEY_DDS -> {
                             if (left) CashflowCard(app, entries, java.time.YearMonth.from(period.firstDay.plusDays((period.days - 1).toLong())), ms)
                             if (right) {

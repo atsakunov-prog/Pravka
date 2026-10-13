@@ -568,6 +568,16 @@ class ScreenShots {
         RuntimeEnvironment.setQualifiers(OUTER)
         runBlocking { app.settings.setLookTheme("system") }
         settle(4)
+        // «Вид 4.0» — откат: те же экраны должны остаться прежними (стекло, части, шапки 4.0).
+        runBlocking { app.settings.setLookV4(true) }
+        settle(4)
+        for ((name, tab, _) in screens) {
+            val c = launch(tab)
+            shot(c, "s6-$name-v4")
+            close(c)
+        }
+        runBlocking { app.settings.setLookV4(false) }
+        settle(4)
     }
 
     // ------------------------------------------------------------ кнопки на стекле
