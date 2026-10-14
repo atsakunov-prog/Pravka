@@ -46,6 +46,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import ru.zf.pravka.core.ServicePage
 import ru.zf.pravka.core.ServiceWeb
+import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.HeaderIcon
 import ru.zf.pravka.ui.KovchegHeader
 import ru.zf.pravka.ui.Kv
@@ -73,10 +74,13 @@ internal val ServicePageSaver: Saver<ServicePage?, ArrayList<String>> = Saver(
 /**
  * Открыть сервис: внутри приложения ([inside]) или — настройкой «Сервисы —
  * в браузере» (на случай, если внутри что-то не работает) и в «Виде 4.0» —
- * вкладкой браузера, как было до 14.10.2026.
+ * вкладкой браузера, как было до 14.10.2026. Сервис, который входит паролем
+ * браузера (HTTP Basic — панель VPN; устройство это помнит месяц), — тоже
+ * браузером сразу: внутри приложения пароль не спросить, не пропустив его через наш код.
  */
 internal fun openService(context: Context, page: ServicePage, inBrowser: Boolean, inside: (ServicePage) -> Unit) {
-    if (inBrowser || Look.v4) openWeb(context, page.url) else inside(page)
+    val basic = ServiceWeb.host(page.url)?.let { it in ServiceWebLinks.basicHosts(context) } == true
+    if (inBrowser || Look.v4 || basic) openWeb(context, page.url) else inside(page)
 }
 
 /** Страница сервиса целиком: шапка Ковчега, тонкая полоска загрузки акцентом, сама страница. */
@@ -86,7 +90,10 @@ internal fun ServiceWebScreen(app: PravkaApp, page: ServicePage, onClose: () -> 
     val nav by app.delaSync.services.collectAsState()
     val link by app.delaSync.link.collectAsState()
     // Внутри — только сервисы из синка и их домен; адрес открытой страницы — тоже (Шаббат с плитки «Сегодня»).
-    val rules = remember(nav, link, page.url) { ServiceWeb.rules(nav, link?.url, page.url) }
+    // Кроме тех, что входят паролем браузера (HTTP Basic): ссылка на них со страницы («Дом» → VPN) — браузером.
+    val rules = remember(nav, link, page.url) {
+        ServiceWeb.rules(nav, link?.url, page.url, outside = ServiceWebLinks.basicHosts(context))
+    }
     val appBtn = ServiceWeb.appLink(page.icon)
     // Где была страница — переживает и смерть процесса: вернёмся туда же, а не на главную сервиса.
     var lastUrl by rememberSaveable(page.url) { mutableStateOf<String?>(null) }
@@ -104,7 +111,17 @@ internal fun ServiceWebScreen(app: PravkaApp, page: ServicePage, onClose: () -> 
                 gen++
             }
         }
-        LaunchedEffect(rules) { web.rules = rules }
+        // Сам сервис входит паролем браузера (панель VPN): страница уже ушла в браузер — экран закрыть, а пустую
+        // страницу выбросить из пула, когда экран её отпустит (сразу — WebView ещё на экране, гаснет растворением).
+        LaunchedEffect(web.handedOff) {
+            if (web.handedOff) {
+                Feedback.toast(context, "«${page.name}» спрашивает пароль браузера — открыл в браузере; дальше он сразу там", long = true)
+                onClose()
+                web.view.postDelayed({ ServiceWebPool.drop(page.url, web) }, 1_000)
+            }
+        }
+        // Новые правила из синка — с хостами «пароль браузера», выясненными этой страницей по ходу.
+        LaunchedEffect(rules) { web.rules = web.rules.outside.fold(rules) { r, h -> r.withOutside(h) } }
         LaunchedEffect(web.current) { web.current?.let { lastUrl = it } }
         // Тема приложения → кука темы и сама страница (общий слой Ковчега переключается без перезагрузки).
         val dark = Look.dark
@@ -112,11 +129,12 @@ internal fun ServiceWebScreen(app: PravkaApp, page: ServicePage, onClose: () -> 
         FilePicker(web)
         WebLifecycle(web)
     }
-    // «Назад»: история страницы, потом закрыть. Пока открыто меню Ковчега — его «назад», не наше.
+    // «Назад»: открытое окно страницы (карточка книги), потом история страницы, потом закрыть. Пока открыто меню
+    // Ковчега — его «назад», не наше.
     val menuOpen = LocalKovcheg.current?.isOpen == true
     BackHandler(enabled = !menuOpen) {
         val w = web
-        if (w != null && w.canBack && w.error == null) w.view.goBack() else onClose()
+        if (w != null) w.back(onClose) else onClose()
     }
 
     val title = web?.title?.trim().orEmpty()

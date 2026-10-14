@@ -95,6 +95,54 @@ class ServiceWebTest {
     }
 
     @Test
+    fun `вход паролем браузера — свой хост страницы уходит браузером, чужой — просто отказ`() {
+        val vpn = "https://vpn.example.org/status?x=1"
+        // Спрашивает хост той страницы, что грузим, — её и открыть браузером (регистр и точка в конце — не помеха).
+        assertEquals(vpn, ServiceWeb.basicAuthLeave("vpn.example.org", vpn))
+        assertEquals(vpn, ServiceWeb.basicAuthLeave("VPN.Example.org.", vpn))
+        assertEquals(vpn, ServiceWeb.basicAuthLeave("vpn.example.org:443", vpn))
+        // Картинка или рамка чужого хоста просит пароль — страница остаётся, только отказ.
+        assertNull(ServiceWeb.basicAuthLeave("cdn.example.net", vpn))
+        assertNull(ServiceWeb.basicAuthLeave("example.org", vpn))
+        assertNull(ServiceWeb.basicAuthLeave(null, vpn))
+        assertNull(ServiceWeb.basicAuthLeave("vpn.example.org", null))
+        assertNull(ServiceWeb.basicAuthLeave("vpn.example.org", "about:blank"))
+    }
+
+    @Test
+    fun `хост с паролем браузера — наружу, даже под общим доменом, и помнится месяц`() {
+        val r = ServiceWeb.rules(nav, base, outside = setOf("VPN.example.org"))
+        assertFalse(r.inside("https://vpn.example.org/"))
+        assertEquals(ServiceWeb.Route.Browser("https://vpn.example.org/"), ServiceWeb.route("https://vpn.example.org/", r))
+        assertTrue(r.inside("https://meet.example.org/"))
+        // Выяснили по ходу — добавляется к правилам, прежнее остаётся.
+        val r2 = rules.withOutside("kino.example.org")
+        assertFalse(r2.inside("https://kino.example.org/"))
+        assertTrue(r2.inside("https://meet.example.org/"))
+        assertEquals(rules.domain, r2.domain)
+
+        val now = 1_000L * ServiceWeb.BASIC_TTL_MS
+        val saved = mapOf(
+            "vpn.example.org" to now - 1_000L,
+            "old.example.org" to now - ServiceWeb.BASIC_TTL_MS,
+            // Часы телефона ушли назад — запись «из будущего» не считаем.
+            "odd.example.org" to now + 60_000L,
+        )
+        assertEquals(setOf("vpn.example.org"), ServiceWeb.freshHosts(saved, now))
+        assertTrue(ServiceWeb.freshHosts(emptyMap(), now).isEmpty())
+    }
+
+    @Test
+    fun `назад закрывает открытое окно страницы`() {
+        val js = ServiceWeb.CLOSE_DIALOG_SCRIPT
+        assertTrue(js.contains("dialog[open]"))
+        assertTrue(js.contains("'cancel'"))
+        assertTrue(js.contains("x.close()"))
+        // Ответ «1» — окно было; иначе — история страницы.
+        assertTrue(js.contains("return 1") && js.contains("return 0"))
+    }
+
+    @Test
     fun `кука темы — как у kovcheg js`() {
         assertEquals(
             "kv-theme=dark; Path=/; Max-Age=31536000; SameSite=Lax; Domain=example.org; Secure",

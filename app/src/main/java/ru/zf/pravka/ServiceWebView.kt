@@ -15,6 +15,7 @@ import android.os.Environment
 import android.os.SystemClock
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.HttpAuthHandler
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
 import android.webkit.URLUtil
@@ -70,6 +71,18 @@ internal class ServiceWebPage private constructor(
 
     /** Процесс отрисовки WebView умер: страницу выбросить и создать заново. */
     var gone by mutableStateOf(false)
+
+    /**
+     * Сам сервис входит паролем браузера (HTTP Basic — панель VPN): страница
+     * ушла в браузер, экран закрывается сам ([ServiceWeb.basicAuthLeave]).
+     */
+    var handedOff by mutableStateOf(false)
+
+    /** Адрес, который главная рамка сейчас грузит (ещё не начат): для него — запрос пароля браузера. */
+    private var loading: String? = null
+
+    /** Хосты, которые эта страница уже отдала браузеру из-за пароля браузера. */
+    private val leftHosts = HashSet<String>()
 
     /** Тема, с которой страница сейчас (кука `kv-theme`); null — ещё не ставили. */
     private var dark: Boolean? = null
@@ -146,7 +159,28 @@ internal class ServiceWebPage private constructor(
     }
 
     private fun load(url: String) {
+        loading = url
         setThemeCookies(dark ?: false, listOf(url)) { view.loadUrl(url) }
+    }
+
+    /**
+     * Системное «назад»: сначала открытое окно страницы (карточка книги —
+     * `<dialog>`) — закрыть, как в Chrome; нет окна — история страницы, потом
+     * закрыть экран ([close]). Ответ страницы ждём недолго: зависла — «назад» всё
+     * равно срабатывает, а не пропадает.
+     */
+    fun back(close: () -> Unit) {
+        fun fallback() = if (canBack && error == null) view.goBack() else close()
+        if (error != null || !committed) return fallback()
+        var done = false
+        val late = Runnable { if (!done) { done = true; fallback() } }
+        view.evaluateJavascript(ServiceWeb.CLOSE_DIALOG_SCRIPT) { r ->
+            if (done) return@evaluateJavascript
+            done = true
+            view.removeCallbacks(late)
+            if (r?.trim() != "1") fallback()
+        }
+        view.postDelayed(late, 400)
     }
 
     /**
@@ -196,6 +230,12 @@ internal class ServiceWebPage private constructor(
         val v = WebView(wrapper)
         view = v
         this.dark = dark
+        // Размер — «во всё место», заранее и явно. Без этого Compose (`AndroidView` → `addView` без параметров) даёт
+        // WebView WRAP_CONTENT, а WebView по высоте WRAP_CONTENT меняет раскладку: высота окна страницы для неё — ноль
+        // («force zero layout height»). Тогда 100vh = 0, и всё, что меряется окном, схлопывается: карточка книги в
+        // Книгах (`<dialog>` с max-height: calc(100vh − 32px)) не видна вовсе (владелец 14.10.2026: «не показывается её
+        // карточка»), меню и шестерёнка общего слоя — тоже; `position: fixed` — от верха страницы, а не экрана.
+        v.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         with(v.settings) {
             // Страницы сервисов — приложения на JS (тема, меню Ковчега, вход); без него не живут.
             javaScriptEnabled = true
@@ -237,12 +277,36 @@ internal class ServiceWebPage private constructor(
             if (r is ServiceWeb.Route.Browser && !committed) {
                 error = "Страница ушла на чужой адрес (${ServiceWeb.host(url) ?: url.take(60)}) — он открыт в браузере"
             }
+            if (r == ServiceWeb.Route.Inside) loading = url
             return handle(r)
         }
 
         override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
             error = null
             current = url
+            if (url != null) loading = url
+        }
+
+        /**
+         * Вход паролем браузера (HTTP Basic, панель VPN). Пароль приложение не
+         * берёт ни при каком раскладе — отказ всегда. Просит хост страницы, которую
+         * грузим, — она уходит в браузер (Chrome спросит пароль и запомнит), хост
+         * запоминается: дальше — браузером сразу. Это сам сервис экрана или его
+         * первая страница — экран закрывается; ссылка с другого сервиса («Дом» →
+         * VPN) — остаёмся, где были.
+         */
+        override fun onReceivedHttpAuthRequest(view: WebView, handler: HttpAuthHandler, host: String?, realm: String?) {
+            handler.cancel()
+            val leave = ServiceWeb.basicAuthLeave(host, loading) ?: ServiceWeb.basicAuthLeave(host, current) ?: return
+            val h = ServiceWeb.host(leave) ?: return
+            // Второй запрос того же хоста (значок вкладки, повтор) — уже ушли в браузер, второй вкладки не надо.
+            if (!leftHosts.add(h)) return
+            view.stopLoading()
+            rules = rules.withOutside(h)
+            ServiceWebLinks.rememberBasic(view.context, h)
+            openWeb(view.context, leave)
+            if (!committed || h == ServiceWeb.host(page.url)) handedOff = true
+            else Feedback.toast(view.context, "$h спрашивает пароль браузера — открыл в браузере", long = true)
         }
 
         override fun onPageCommitVisible(view: WebView, url: String?) {
@@ -369,13 +433,17 @@ internal object ServiceWebPool {
         return p
     }
 
-    /** Выбросить страницу (умер процесс отрисовки) — следующий [obtain] создаст новую. */
-    fun drop(key: String) {
+    /**
+     * Выбросить страницу (умер процесс отрисовки, сервис ушёл в браузер) — следующий [obtain] создаст новую.
+     * [only] — только эту: за время отложенного выброса под тем же ключом могла встать новая.
+     */
+    fun drop(key: String, only: ServiceWebPage? = null) {
+        if (only != null && pages[key] !== only) return
         pages.remove(key)?.destroy()
     }
 }
 
-/** Ссылки со страницы, которые WebView не открывает сам: приложения, загрузки. */
+/** Ссылки со страницы, которые WebView не открывает сам: приложения, загрузки, вход паролем браузера. */
 internal object ServiceWebLinks {
 
     private const val PREFS = "service-web"
@@ -474,6 +542,25 @@ internal object ServiceWebLinks {
 
     private fun remembered(ctx: Context, pkg: String): String? =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("fallback.$pkg", null)
+
+    /**
+     * Хост входит паролем браузера (HTTP Basic): запомнить на устройстве, когда это выяснилось
+     * ([ServiceWeb.basicAuthLeave]). Только хост и время — ни пароля, ни имени: их знает один Chrome.
+     */
+    fun rememberBasic(ctx: Context, host: String) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putLong(BASIC + host.lowercase(), System.currentTimeMillis()).apply()
+    }
+
+    /** Хосты, которые открываются браузером сразу: вход паролем браузера, выяснено не дольше месяца назад. */
+    fun basicHosts(ctx: Context): Set<String> {
+        val all = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).all
+        val saved = all.entries.filter { it.key.startsWith(BASIC) }
+            .mapNotNull { e -> (e.value as? Long)?.let { e.key.removePrefix(BASIC) to it } }.toMap()
+        return ServiceWeb.freshHosts(saved, System.currentTimeMillis())
+    }
+
+    private const val BASIC = "basic."
 
     private fun start(ctx: Context, intent: Intent): Boolean = try {
         ctx.startActivity(intent)

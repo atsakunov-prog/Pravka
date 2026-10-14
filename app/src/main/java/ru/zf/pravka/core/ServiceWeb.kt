@@ -24,7 +24,8 @@ data class ServicePage(val name: String, val icon: String, val url: String) {
  * Здесь — чистая логика без Android, под тестом `ServiceWebTest`:
  * какой адрес открывается внутри, какой уходит наружу и куда; домен общей
  * куки темы и сама кука; разбор ссылок `intent://`; какое приложение зовёт
- * шапка сервиса (Jellyfin у Кино, Слушалка у Книг).
+ * шапка сервиса (Jellyfin у Кино, Слушалка у Книг); вход паролем браузера
+ * (HTTP Basic) — браузером; «назад» закрывает открытое окно страницы.
  *
  * Почему внутри — только адреса сервисов. WebView держит вход владельца во
  * все сервисы семьи (куки); чужая страница в нём жила бы рядом с этими
@@ -73,27 +74,72 @@ object ServiceWeb {
     /**
      * Что пускать внутрь: точные хосты сервисов [hosts] и всё под общим
      * доменом [domain] (у сервисов семьи он один — `<сервис>.<домен>`).
+     * [outside] — свои хосты, которые всё равно открываются браузером: они
+     * входят паролем браузера (HTTP Basic, [basicAuthLeave]).
      */
-    class Rules(val hosts: Set<String>, val domain: String?) {
+    class Rules(val hosts: Set<String>, val domain: String?, val outside: Set<String> = emptySet()) {
         fun inside(url: String): Boolean {
             val u = parse(url) ?: return false
             if (u.scheme != "http" && u.scheme != "https") return false
             val h = u.host
+            if (h in outside) return false
             return h in hosts || under(h, domain)
         }
+
+        /** Те же правила, и ещё [host] — браузером (сервис только что попросил пароль браузера). */
+        fun withOutside(host: String): Rules = Rules(hosts, domain, outside + host.lowercase())
     }
 
     /**
      * Правила по сервисам из синка: [nav] — `look.nav`, [base] — адрес Дел
      * (относительные адреса меню — от него), [extra] — адрес открытой
      * страницы (Шаббат с плитки «Сегодня» — тоже из `look.nav`, но пусть
-     * откроется, даже если список пока пуст).
+     * откроется, даже если список пока пуст), [outside] — хосты, которые
+     * устройство помнит как «вход паролем браузера» ([freshHosts]).
      */
-    fun rules(nav: List<Kovcheg.Nav>, base: String?, extra: String? = null): Rules {
+    fun rules(nav: List<Kovcheg.Nav>, base: String?, extra: String? = null, outside: Set<String> = emptySet()): Rules {
         val urls = nav.mapNotNull { Kovcheg.absolute(it.url, base) } + listOfNotNull(base, extra)
         val hosts = urls.mapNotNull { host(it) }.toSet()
-        return Rules(hosts, familyDomain(nav, base))
+        return Rules(hosts, familyDomain(nav, base), outside.map { it.lowercase() }.toSet())
     }
+
+    /**
+     * Сколько помнить, что сервис входит паролем браузера: потом приложение
+     * снова пробует его внутри (вдруг вход стал формой) — один лишний заход в месяц.
+     */
+    const val BASIC_TTL_MS = 30L * 24 * 60 * 60_000
+
+    /**
+     * Сервис ответил «401, нужен пароль» окном браузера (HTTP Basic — так
+     * входит панель VPN, 14.10.2026: «VPN вообще не включается» — WebView без
+     * обработчика молча отменял вход, и страница оставалась пустой). Своего окна
+     * пароля у приложения нет и не будет: пароль шёл бы через наш код. Поэтому
+     * запрос хоста страницы, которую сейчас грузим ([loading]), — повод открыть
+     * её браузером (Custom Tab: Chrome спросит пароль и сам его запомнит), а хост
+     * запомнить, чтобы дальше открывать его браузером сразу. Запрос другого хоста
+     * (картинка, рамка внутри страницы) — просто отказ, страница остаётся.
+     * Ответ — адрес для браузера или null.
+     */
+    fun basicAuthLeave(authHost: String?, loading: String?): String? {
+        val url = loading ?: return null
+        val u = parse(url) ?: return null
+        if (u.scheme != "http" && u.scheme != "https") return null
+        val asked = authHost?.trim()?.lowercase()?.trimEnd('.')?.takeIf { it.isNotEmpty() } ?: return null
+        return if (asked == u.host || asked.substringBeforeLast(':') == u.host) url else null
+    }
+
+    /** Хосты «вход паролем браузера», запомненные не дольше [BASIC_TTL_MS] назад ([saved] — хост → когда). */
+    fun freshHosts(saved: Map<String, Long>, now: Long): Set<String> =
+        saved.filterValues { at -> now - at in 0 until BASIC_TTL_MS }.keys.map { it.lowercase() }.toSet()
+
+    /**
+     * Системное «назад» на странице с открытым окном (`<dialog>` — карточка
+     * книги в Книгах): закрыть окно, как это делает Chrome на Android, а не
+     * уходить со страницы, оставив окно открытым. Сначала событие `cancel`
+     * (страница может не отпустить), потом `close`. Ответ «1» — «назад» съело окно.
+     */
+    const val CLOSE_DIALOG_SCRIPT = "(function(){try{var d=document.querySelectorAll('dialog[open]');if(!d.length)return 0;" +
+        "var x=d[d.length-1];if(x.dispatchEvent(new Event('cancel',{cancelable:true})))x.close();return 1}catch(e){return 0}})()"
 
     /**
      * Общий домен сервисов — им ставится кука темы, так же как её ставит
