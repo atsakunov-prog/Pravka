@@ -308,6 +308,7 @@ class NightReview(
         val route = if (r.stage == "analysis") ModelRoute.NIGHT_REVIEW else ModelRoute.NIGHT_CHECK
         val choice = settings.modelChoice(route)
         val cost = ClaudeBatches.costUsd(items, choice.model)
+        ru.zf.pravka.data.SpendHook.batch(route.key, items, choice.model)
         val tokensIn = items.sumOf { it.inputTokens + it.cacheRead + it.cacheWrite }
         val cacheRead = items.sumOf { it.cacheRead }
         val cacheWrite = items.sumOf { it.cacheWrite }

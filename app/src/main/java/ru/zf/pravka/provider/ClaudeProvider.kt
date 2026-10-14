@@ -97,6 +97,8 @@ class ClaudeProvider(
         val outputTokens: Int,
         /** Ключ дороги (ModelRoute.key), которой ушёл запрос — для доли кэша по дорогам на экране «$». */
         val route: String = "",
+        /** Модель, которой ушёл запрос, — книге трат Claude (`data/ClaudeSpend.kt`): дорога ≠ модель. */
+        val model: String = "",
     )
 
     override suspend fun proofread(
@@ -800,7 +802,7 @@ class ClaudeProvider(
             else -> null
         }
         runCatching { workDone?.invoke(work, System.currentTimeMillis() - attemptAt, true, cache) }
-        val reply = raw.copy(route = routeKey)
+        val reply = raw.copy(route = routeKey, model = model)
         // Ответ — в тот же лог отладки, что и запрос (владелец, 18.09.2026: «надо
         // проверить, что точно промпт кэшируется»): единственная правда о кэше —
         // поля usage ответа, а не наличие точки в запросе.

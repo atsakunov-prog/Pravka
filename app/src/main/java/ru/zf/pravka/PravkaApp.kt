@@ -184,6 +184,7 @@ class PravkaApp : Application() {
         }
         // Настройки телефона на сервере (14.10.2026): следить за своими и раз в пять минут — пульс и правки с компьютера.
         phoneRemote.start()
+        claudeSpend.start()
         // Сколько идёт запрос — в историю, а ход запроса — тому, кто его
         // показывает (20.09.2026). Та же одна точка на все дороги: здесь
         // известны и дорога, и модель с усилием, и длина входа.
@@ -221,6 +222,9 @@ class PravkaApp : Application() {
                 // проверка, что точка кэша не просто стоит в запросе, а читается.
                 stats.recordRouteUsage(r.route, r.inputTokens + r.cacheWriteTokens + r.cacheReadTokens, r.cacheReadTokens)
             }
+            // Книга трат Claude (14.10.2026): каждый ответ потока — здесь, одной точкой, с моделью и токенами. Режимы
+            // пишут Stats сами и не все (оплаченный, но не разобранный ответ туда не попадал), транспорт видит всё.
+            ru.zf.pravka.data.SpendHook.call(r.route, r.model, r.inputTokens, r.outputTokens, r.cacheWriteTokens, r.cacheReadTokens)
         }
     }
 
@@ -472,6 +476,7 @@ class PravkaApp : Application() {
             sync.onZasechka = { cmds -> zasechkaWeb.onSync(cmds) }
             // Настройки телефона на сервере (14.10.2026): поле phone синка — правки с компьютера (PhoneRemoteSync).
             sync.listen { resp -> phoneRemote.onSync(resp) }
+            sync.listen { resp -> claudeSpend.onSync(resp) }
         }
     }
 
@@ -490,6 +495,8 @@ class PravkaApp : Application() {
      * страницу «Телефон» в вебе, правки оттуда — сюда, тем же путём, что тумблер. Какие настройки — `PhoneKnobs.kt`.
      */
     internal val phoneRemote by lazy { ru.zf.pravka.data.PhoneRemoteSync(this, appScope) { eventLog.add(it) } }
+    /** Книга трат Claude телефона и её дорога в общую книгу на сервере Дел (14.10.2026, `data/ClaudeSpend.kt`). */
+    internal val claudeSpend by lazy { ru.zf.pravka.data.ClaudeSpend(this, appScope) { eventLog.add(it) } }
 
     /**
      * Свод (06.10.2026, docs/svod-phone.md): одна правда на сервере Дел —

@@ -270,6 +270,33 @@ class Stats(private val context: Context) {
     }
 
     /**
+     * Деньги по дорогам и дням и сумма каждого дня за [days] дней (не больше 62) — для книги трат Claude
+     * (`core/SpendBook.wire`, 14.10.2026): дни до неё и то, что видит только режим, уходят на сервер разницей.
+     * Дорога — из ключа route_<дорога>_ГГГГММДД (в имени дороги бывают «_», дата — последние 8 знаков).
+     */
+    suspend fun routeDays(days: Int): Pair<List<ru.zf.pravka.core.SpendBook.Legacy>, Map<String, Double>> {
+        val prefs = context.statsDataStore.data.first()
+        val from = dayKey(days.coerceIn(1, 62) - 1).removePrefix("cost_")
+        fun iso(d: String) = d.substring(0, 4) + "-" + d.substring(4, 6) + "-" + d.substring(6, 8)
+        val routes = ArrayList<ru.zf.pravka.core.SpendBook.Legacy>()
+        val totals = HashMap<String, Double>()
+        for ((k, v) in prefs.asMap()) {
+            val name = k.name
+            val micros = (v as? Long) ?: continue
+            if (name.startsWith("route_") && name.length > 15) {
+                val date = name.takeLast(8)
+                if (!date.all(Char::isDigit) || date < from) continue
+                routes += ru.zf.pravka.core.SpendBook.Legacy(iso(date), name.substring(6, name.length - 9), micros / 1_000_000.0)
+            } else if (name.startsWith("cost_") && name.length == 13) {
+                val date = name.removePrefix("cost_")
+                if (!date.all(Char::isDigit) || date < from) continue
+                totals[iso(date)] = micros / 1_000_000.0
+            }
+        }
+        return routes to totals
+    }
+
+    /**
      * Потолок дня для ночных автоматов сравнивают с этим, а не с costTodayUsd:
      * в три ночи «сегодня» — три часа и ноль долларов, и потолок не ловил ничего
      * (18.09.2026: день на $11,58 — и разбор ночью стартовал как ни в чём не

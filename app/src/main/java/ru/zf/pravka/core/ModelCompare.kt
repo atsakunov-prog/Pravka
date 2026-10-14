@@ -192,6 +192,7 @@ class ModelCompare(
         val items = batches.results(url)
         val model = runCatching { JSONObject(r.evidence["models"].orEmpty()).optString("judge") }.getOrDefault("").ifBlank { ModelRoute.SHADOW_JUDGE.defaultModel }
         val cost = ClaudeBatches.costUsd(items, model)
+        ru.zf.pravka.data.SpendHook.batch(ModelRoute.SHADOW_JUDGE.key, items, model)
         val tokensIn = items.sumOf { it.inputTokens + it.cacheRead + it.cacheWrite }
         stats.recordAux(cost, tokensIn, items.sumOf { it.outputTokens }, route = ModelRoute.SHADOW_JUDGE.key)
         stats.recordCache(items.sumOf { it.cacheRead }, items.sumOf { it.cacheWrite })

@@ -783,6 +783,7 @@ private fun MainScreen(
             // Дайджест → «Открыть «Новое»»: вкладка Дел сразу на пачке этой сводки (`#/new/<batch_ref>` веба).
             delaBatch = { ref -> delaNav = NEW_BATCH + ref; openMode(Tab.TODOIST) },
             web = openServicePage,
+            cost = openCost,
         )
     }
 
@@ -1129,8 +1130,10 @@ private fun PageScreen(
         Column(Modifier.fillMaxSize()) {
             when (p) {
                 is Page.Cost -> {
-                    TabHeader(title = stringResource(R.string.stats_header), onBack = pop)
-                    WideCap { CostScreen(app) }
+                    // Одна страница трат на все входы (значок на «Сегодня», «$» в шапках режимов): все службы и телефон,
+                    // вторая вкладка — прежний экран дорог телефона (14.10.2026).
+                    TabHeader(title = "Claude: траты", onBack = pop)
+                    WideCap { ClaudeSpendScreen(app) }
                 }
                 is Page.ModeSettings -> {
                     TabHeader(

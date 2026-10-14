@@ -81,6 +81,8 @@ class DictMiner(
                         val tIn = u.optInt("input_tokens")
                         val tOut = u.optInt("output_tokens")
                         stats.recordAux(Pricing.costUsd(choice.model, tIn, tOut), tIn, tOut, route = ModelRoute.PRAVKA_LEARN.key)
+                        // Мимо транспорта — книге трат отдельно, с настоящей моделью (дорога — обучение, модель — чистки).
+                        ru.zf.pravka.data.SpendHook.call(ModelRoute.PRAVKA_LEARN.key, choice.model, tIn, tOut, 0, 0)
                     }
                     val content = root.getJSONArray("content")
                     val sb = StringBuilder()

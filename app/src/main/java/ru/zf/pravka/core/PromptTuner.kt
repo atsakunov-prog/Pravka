@@ -272,6 +272,7 @@ class PromptTuner(
         val route = if (propose) ModelRoute.PROMPT_TUNE else ModelRoute.SHADOW_JUDGE
         val model = settings.modelChoice(route).model
         val cost = ClaudeBatches.costUsd(items, model)
+        ru.zf.pravka.data.SpendHook.batch(route.key, items, model)
         val tokensIn = items.sumOf { it.inputTokens + it.cacheRead + it.cacheWrite }
         stats.recordAux(cost, tokensIn, items.sumOf { it.outputTokens }, route = route.key)
         stats.recordCache(items.sumOf { it.cacheRead }, items.sumOf { it.cacheWrite })
