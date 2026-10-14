@@ -40,13 +40,21 @@ import ru.zf.pravka.provider.zasechkaPhone
  *    на диск не пишется никогда, наружу — лишь Сонету при разборе;
  *  - три снимка — Сонету (`ClaudeProvider.zasechkaPhone`), его догадка —
  *    вопросом на плашке «З»: «Кажется, это «Claude: Правка»?» с галочкой и
- *    крестиком. Галочка или молчание — дело в ленту вживую с начала сидения,
- *    отложил телефон на пять минут — закрыто в миг, когда отложил, и
- *    продолжается то, что шло до него. Крестик — молчим до конца сидения,
- *    пока впереди эти приложения;
+ *    крестиком. Галочка или молчание — дело в ленту вживую с начала сидения.
+ *    Крестик — молчим до конца сидения, пока впереди эти приложения;
+ *  - после «да» (14.10.2026): экран погас на полминуты — дело закрыто в миг
+ *    погасания и продолжается то, что шло до него; гас меньше — поминутное
+ *    наблюдение; горит — подтверждение раз в пять минут одним снимком. То же
+ *    приложение и тот же предмет (хэш первых строк текста экрана) —
+ *    подтверждено без запроса, другое — проверка и вопрос. Погасание и
+ *    зажигание экрана — из той же статистики использования, новых разрешений
+ *    нет;
+ *  - запрос Сонету: правила, категории, клиенты и названия за неделю — под
+ *    часовым кэшем, сидение и снимки — после (`PhoneSit.phoneParts`);
  *  - сидение, кончившееся до вопроса (7–10 минут), — как в первом заходе:
  *    врезкой задним числом и тихим пушем с «Убрать»;
- *  - состояние автомата и последние решения — `phone-sit.json` в базе.
+ *  - состояние автомата и последние решения — `phone-sit.json` в базе (текста
+ *    экрана там нет: подтверждённое хранится хэшем).
  */
 class PhoneSitEngine(
     private val context: Context,
@@ -78,6 +86,12 @@ class PhoneSitEngine(
 
         /** Кусок живой проверки — от минуты: после переключения он короче порога. */
         private const val LIVE_PART_MS = 60_000L
+
+        /** Снимок этой минуты: служба кладёт его прямо перед минутой автомата. */
+        private const val SNAP_FRESH_MS = 20_000L
+
+        /** Приложение впереди по статистике — если его кусок идёт сейчас. */
+        private const val FRONT_FRESH_MS = 5_000L
     }
 
     /** Что решено про одно сидение — строкой в настройки и в журнал. */
@@ -94,15 +108,19 @@ class PhoneSitEngine(
     @Volatile var lastPeekAt: Long = 0L
         private set
 
-    /** Снимок нужен: идёт проверка куска (служба смотрит ТОЛЬКО тогда). */
-    @Volatile var wantsSnap: Boolean = false
-        private set
+    /**
+     * Снимок нужен в эту минуту: идёт проверка куска или пора подтвердить
+     * стоящее дело (раз в пять минут, после короткого погасания — каждую).
+     * Служба смотрит ТОЛЬКО тогда. Зависит от времени — поэтому считается при
+     * чтении, а не зеркалом состояния.
+     */
+    val wantsSnap: Boolean get() = live.snapDue(System.currentTimeMillis())
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Mutex()
     private val snaps = ArrayDeque<PhoneSit.Snap>()
     @Volatile private var loaded = false
-    private var live = PhoneLive.State()
+    @Volatile private var live = PhoneLive.State()
 
     private val file: File get() = File(DataRoot.dir(context), FILE_NAME)
 
@@ -127,8 +145,7 @@ class PhoneSitEngine(
             guarded("минута") {
                 lock.withLock {
                     ensureLoaded()
-                    live = PhoneLive.minute(live)
-                    pulseLocked()
+                    pulseLocked(minute = true)
                 }
             }
         }
@@ -139,7 +156,7 @@ class PhoneSitEngine(
         guarded("тик") {
             lock.withLock {
                 ensureLoaded()
-                pulseLocked()
+                pulseLocked(minute = false)
             }
         }
     }
@@ -154,7 +171,7 @@ class PhoneSitEngine(
         }
     }
 
-    private suspend fun pulseLocked() {
+    private suspend fun pulseLocked(minute: Boolean) {
         val now = System.currentTimeMillis()
         if (!on()) {
             // Выключено — автомата нет: включат — смотрим с того момента, а не
@@ -175,7 +192,8 @@ class PhoneSitEngine(
             eventLog.add("телефон в ленте: «$title» больше не веду — ты переключился сам")
         }
         val minMs = settings.zPhoneMinFlow.first().coerceIn(3, 30) * 60_000L
-        val spans = spansNow(now)
+        val events = eventsNow(now)
+        val spans = spansOf(events, now)
         // Сказал что-то в «З», пока шла проверка, — его слово про это время, не спрашиваем.
         if (live.watching) {
             ownerSpokeSince(live.watchFrom)?.let { e ->
@@ -187,6 +205,13 @@ class PhoneSitEngine(
                 eventLog.add("телефон в ленте: ты сказал «${e.title}» в ${hm(e.createdAt)} — не спрашиваю")
             }
         }
+        val before = live
+        if (minute) {
+            // Минута экрана: снимок в счёт проверки или сверка стоящего дела.
+            val m = PhoneLive.minute(live, seenNow(spans, now), now)
+            set(m.state)
+            for (d in m.dos) perform(d, spans, minMs)
+        }
         val sittings = PhoneSit.stretches(spans.filter { it.end > live.handled }, now)
             .map { if (it.start < live.handled) it.clip(live.handled, it.end) else it }
             .filter { it.spans.isNotEmpty() }
@@ -194,12 +219,25 @@ class PhoneSitEngine(
             sitting = sittings.lastOrNull(),
             lastUse = spans.maxOfOrNull { it.end } ?: 0L,
             outsideSince = PhoneLive.outsideSince(spans, live.apps, now),
+            offs = PhoneLive.merge(PhoneLive.offs(events), spans),
         )
-        val before = live
         val step = PhoneLive.pulse(live, view, now, minMs)
         set(step.state)
         if (!before.watching && live.watching) startedWatch(spans, now)
         for (d in step.dos) perform(d, spans, minMs)
+    }
+
+    /**
+     * Что впереди в эту минуту: снимок, взятый службой только что, — приложение
+     * и предмет (хэш первых строк текста; сам текст остаётся в памяти снимков);
+     * снимка нет (не нужен, текст выключен, Fold складывали) — приложение, чей
+     * кусок идёт сейчас по статистике, без предмета. Впереди рабочий стол — null.
+     */
+    private fun seenNow(spans: List<PhoneSit.Span>, now: Long): PhoneLive.Mark? {
+        val snap = synchronized(snaps) { snaps.lastOrNull() }?.takeIf { now - it.at in 0..SNAP_FRESH_MS }
+        if (snap != null) return PhoneLive.Mark(snap.pkg, PhoneLive.subject(snap.text))
+        val front = spans.maxByOrNull { it.end }?.takeIf { now - it.end <= FRONT_FRESH_MS } ?: return null
+        return PhoneLive.Mark(front.pkg, null)
     }
 
     /**
@@ -238,6 +276,7 @@ class PhoneSitEngine(
             }
             is PhoneLive.Close -> close(d)
             is PhoneLive.Open -> open(d)
+            is PhoneLive.Note -> eventLog.add("телефон в ленте: ${d.text}")
         }
     }
 
@@ -246,14 +285,15 @@ class PhoneSitEngine(
         val apps = seg.spans.map { it.pkg }.toSet()
         val categories = zasechkaStore.categories()
         val clients = zasechkaStore.clients()
-        val reply = claude().zasechkaPhone(promptTail(seg, LIVE_PART_MS, categories, clients, live = true))
+        val (stable, context) = prompt(seg, LIVE_PART_MS, categories, clients, live = true)
+        val reply = claude().zasechkaPhone(stable, context)
         val r = reply.getOrNull()
         if (r == null) {
             lock.withLock { set(PhoneLive.failed(live).copy(snaps = 0)) }
             eventLog.add("телефон в ленте: Сонет не ответил — ${reply.exceptionOrNull()?.message}; ещё три минуты и спрошу снова")
             return
         }
-        runCatching { stats.recordAux(r.costUsd, r.tokensIn, r.tokensOut, route = ModelRoute.ZASECHKA_PHONE.key) }
+        spent(r)
         val parsed = PhoneSit.parse(r.raw, seg, categories.map { it.name }, LIVE_PART_MS)
         if (parsed == null) eventLog.add("телефон в ленте: ответ Сонета не прочитан: ${r.raw.take(200)}")
         // Что он делает СЕЙЧАС — последний кусок, если он доходит до конца проверки.
@@ -298,11 +338,14 @@ class PhoneSitEngine(
                     ensureLoaded()
                     val g = live.guess ?: return@withLock
                     val apps = live.segApps
-                    val step = PhoneLive.answer(live, yes)
+                    val wasOn = live.base == PhoneLive.Base.ON
+                    val now = System.currentTimeMillis()
+                    val step = PhoneLive.answer(live, yes, now = now)
                     set(step.state)
                     if (!yes) {
-                        record(PhoneSit.Stretch(g.from, System.currentTimeMillis(), emptyList(), true), appsNames(apps),
-                            "нет — «${g.title}» не ставлю, верно то, что в ленте")
+                        record(PhoneSit.Stretch(g.from, now, emptyList(), true), appsNames(apps),
+                            "нет — «${g.title}» не ставлю, верно то, что в ленте" +
+                                (if (wasOn) "; «${live.title}» веду дальше, по экрану больше не сверяю" else ""))
                     }
                     for (d in step.dos) perform(d, emptyList(), 0L)
                 }
@@ -338,7 +381,12 @@ class PhoneSitEngine(
             source = "voice",
         )
         zasechkaStore.setComment(entry.id, PhoneSit.COMMENT_PREFIX + apps)
-        set(PhoneLive.opened(live, entry.id, entry.title, d.apps, prev?.id ?: 0L))
+        set(
+            PhoneLive.opened(
+                live, entry.id, entry.title, d.apps, prev?.id ?: 0L,
+                since = d.since, mark = d.mark, now = System.currentTimeMillis(),
+            )
+        )
         record(
             PhoneSit.Stretch(g.from, System.currentTimeMillis(), emptyList(), false), apps,
             (if (d.silent) "молчание — «да»: " else "да: ") + "«${g.title}» [${g.category}] с ${hm(g.from)}" +
@@ -351,7 +399,10 @@ class PhoneSitEngine(
         }
     }
 
-    /** Отложил телефон: дело закрыто в миг, когда отложил, и продолжается прежнее. */
+    /**
+     * Экран погас на полминуты (или телефоном не пользуются пять минут): дело
+     * закрыто в миг погасания (последнего касания), и продолжается прежнее.
+     */
     private suspend fun close(d: PhoneLive.Close) {
         val open = zasechkaStore.openEntry()
         if (open == null || open.id != d.entryId) return
@@ -366,7 +417,9 @@ class PhoneSitEngine(
             }
         record(
             PhoneSit.Stretch(closed.start, d.at, emptyList(), true), closed.comment.removePrefix(PhoneSit.COMMENT_PREFIX),
-            "«${closed.title}» до ${hm(d.at)} — телефон отложен" + (back?.let { ", снова «${it.title}»" } ?: ""),
+            "«${closed.title}» до ${hm(d.at)} — " +
+                (if (d.dark) "экран погас" else "телефоном не пользовались пять минут") +
+                (back?.let { ", снова «${it.title}»" } ?: ""),
         )
     }
 
@@ -388,13 +441,12 @@ class PhoneSitEngine(
         val apps = PhoneSit.appsLine(piece, ::label)
         val categories = zasechkaStore.categories()
         val clients = zasechkaStore.clients()
-        val reply = claude().zasechkaPhone(promptTail(piece, minMs, categories, clients, live = false)).getOrElse {
+        val (stable, context) = prompt(piece, minMs, categories, clients, live = false)
+        val reply = claude().zasechkaPhone(stable, context).getOrElse {
             record(piece, apps, "не разобрано — ${it.message ?: it.javaClass.simpleName}")
             return
         }
-        runCatching {
-            stats.recordAux(reply.costUsd, reply.tokensIn, reply.tokensOut, route = ModelRoute.ZASECHKA_PHONE.key)
-        }
+        spent(reply)
         val parsed = PhoneSit.parse(reply.raw, piece, categories.map { it.name }, minMs)
         if (parsed == null) {
             // Не сеть, а ответ: повтор дал бы то же самое за те же деньги.
@@ -441,14 +493,21 @@ class PhoneSitEngine(
         }
     }
 
-    /** Хвост промпта: сидение, лента, снимки, свои люди, категории, его названия. */
-    private suspend fun promptTail(
+    /**
+     * Запрос Сонету двумя частями (14.10.2026, деньги): постоянная — категории,
+     * клиенты, названия за неделю до сегодня — идёт под часовой кэш вслед за
+     * правилами; переменная — время, сидение, лента, приложения по минутам,
+     * снимки экрана, кого из своих видно, сегодняшние новые названия. Своих
+     * людей целиком в постоянную не кладём: их сотни (люди Дел), а нужны те,
+     * кого видно в тексте, — их телефон находит сам, бесплатно.
+     */
+    private suspend fun prompt(
         s: PhoneSit.Stretch,
         minMs: Long,
         categories: List<ZasechkaStore.Category>,
         clients: List<String>,
         live: Boolean,
-    ): String {
+    ): Pair<String, String> {
         val now = System.currentTimeMillis()
         val inLane = zasechkaStore.forRange(s.start, s.end).sortedBy { it.start }.map { e ->
             val end = if (e.open) "…" else hm(e.end)
@@ -469,22 +528,31 @@ class PhoneSitEngine(
         val text = all.filter { it.at in s.start..s.end }.joinToString(" · ") { it.text }
         val who = PhoneSit.whoInText(text, runCatching { people() }.getOrDefault(emptyList()))
         val dayStart = dayStartMs(now)
-        val recent = zasechkaStore.forRange(dayStart - RECENT_DAYS * 86_400_000L, now)
+        val named = zasechkaStore.forRange(dayStart - RECENT_DAYS * 86_400_000L, now)
             .filter { it.source != "gap" && it.source != "auto" && it.title.isNotBlank() }
-            .groupBy { "${it.title.trim().lowercase()}|${it.category.trim().lowercase()}" }
-            .values
-            .mapNotNull { group -> group.maxByOrNull { it.start }?.let { it to group.size } }
-            .sortedByDescending { (last, _) -> last.start }
-            .take(30)
-            .map { (last, times) -> "- «${last.title}» [${last.category}]" + (if (times > 1) " ×$times" else "") }
-        return buildString {
+            .map { PhoneSit.Named(it.title, it.category, it.start) }
+        val stable = PhoneSit.stableBlock(
+            categories.map { it.name to it.hint },
+            clients,
+            PhoneSit.weekNames(named, dayStart, RECENT_DAYS.toInt()),
+        )
+        val today = PhoneSit.todayNames(named, dayStart, RECENT_DAYS.toInt())
+        val ownPhoneEntry = live && this.live.base == PhoneLive.Base.ON
+        val context = buildString {
             append("Сейчас: ").append(nowFormat.format(Date(now))).append(".\n")
             append("Сидение: ${hm(s.start)}–${hm(s.end)}, телефон в руках ${PhoneSit.minutes(s.useMs)}. ")
             if (live) {
                 append(
                     "Сидение ещё идёт: последний кусок — то, чем он занят сейчас; его спросят вопросом " +
-                        "«кажется, это …?». Здесь это продолжение долгого сидения, кусок — от минуты.\n\n"
+                        "«кажется, это …?». Здесь это продолжение долгого сидения, кусок — от минуты."
                 )
+                if (ownPhoneEntry) {
+                    append(
+                        " В ленте сейчас идёт дело, поставленное по телефону и подтверждённое владельцем; " +
+                            "на экране поменялось приложение или предмет — реши, то же ли это дело."
+                    )
+                }
+                append("\n\n")
             } else {
                 append("Порог владельца — ${minMs / 60_000L} мин.\n\n")
             }
@@ -493,41 +561,54 @@ class PhoneSitEngine(
             append("По минутам:\n").append(PhoneSit.timeline(s, ::label)).append("\n\n")
             append("Снимки экрана (раз в минуту, видимый текст):\n")
             append(if (snapLines.isEmpty()) "(текст экрана не читался — суди по приложениям)" else snapLines.joinToString("\n"))
-            append("\n\n")
-            if (who.isNotEmpty()) append("Кого из своих видно в тексте:\n").append(who.joinToString("\n") { "- $it" }).append("\n\n")
-            append("Категории (после тире — что сюда относится):\n")
-            append(categories.joinToString("\n") { c -> "- «${c.name}»" + (if (c.hint.isBlank()) "" else " — ${c.hint}") })
-            append("\n\nКлиенты и проекты владельца:\n")
-            append(if (clients.isEmpty()) "(список пуст)" else clients.joinToString("\n") { "- $it" })
-            if (recent.isNotEmpty()) {
-                append("\n\nКак владелец называл свои дела в последние дни:\n").append(recent.joinToString("\n"))
-            }
+            if (who.isNotEmpty()) append("\n\nКого из своих видно в тексте:\n").append(who.joinToString("\n") { "- $it" })
+            if (today.isNotEmpty()) append("\n\nСегодня он ещё называл дела:\n").append(today.joinToString("\n"))
         }
+        return stable to context
+    }
+
+    /**
+     * Деньги вызова: в статистику — как у всех дорог (`stats.recordAux`, цена
+     * уже с кэшем: запись на час вдвое, чтение — десятая часть), в журнал —
+     * сколько прочитано из кэша и записано в него: так видно, что кэш работает
+     * (из кэша 0 на втором вызове за час — что-то в постоянной части пляшет).
+     */
+    private suspend fun spent(r: ClaudeProvider.ZasechkaForkReply) {
+        runCatching { stats.recordAux(r.costUsd, r.tokensIn, r.tokensOut, route = ModelRoute.ZASECHKA_PHONE.key) }
+        eventLog.add(
+            "телефон в ленте: Сонет — вход ${r.tokensIn} (из кэша ${r.cacheReadTokens}, в кэш ${r.cacheWriteTokens}), " +
+                "выход ${r.tokensOut}, $" + String.format(Locale.US, "%.4f", r.costUsd)
+        )
     }
 
     /** Кусок [from, to) из кусков переднего плана. */
     private fun segment(spans: List<PhoneSit.Span>, from: Long, to: Long): PhoneSit.Stretch =
         PhoneSit.Stretch(from, to, spans, finished = false).clip(from, to)
 
-    /** Куски переднего плана за последние часы — из статистики использования. */
-    private fun spansNow(now: Long): List<PhoneSit.Span> {
+    /** События экрана за последние часы — из статистики использования. */
+    private fun eventsNow(now: Long): List<PhoneSit.Ev> {
         val usm = context.getSystemService(UsageStatsManager::class.java) ?: return emptyList()
         val from = maxOf(live.handled, now - PhoneSit.LOOKBACK_MS) - 3600_000L
+        return readEvents(usm, from, now)
+    }
+
+    /** Куски переднего плана после разобранного. */
+    private fun spansOf(events: List<PhoneSit.Ev>, now: Long): List<PhoneSit.Span> {
         val home = homePackages()
-        return PhoneSit.spans(readEvents(usm, from, now), now) { PhoneSit.furniture(it, home) }
+        return PhoneSit.spans(events, now) { PhoneSit.furniture(it, home) }
             .filter { it.end > live.handled }
     }
 
     private fun appsNames(apps: Set<String>): String = apps.joinToString(" · ") { label(it) }
 
-    /** Новое состояние автомата: зеркала для службы и настроек, файл — если поменялось решённое. */
+    /** Новое состояние автомата: зеркало для настроек, файл — если поменялось решённое. */
     private fun set(s: PhoneLive.State) {
         val old = live
         live = s
-        wantsSnap = s.wantsSnap
         _status.value = statusLine(s)
         if (old.base != s.base || old.apps != s.apps || old.entryId != s.entryId || old.handled != s.handled ||
-            old.resumeId != s.resumeId || old.title != s.title
+            old.resumeId != s.resumeId || old.title != s.title || old.since != s.since || old.marks != s.marks ||
+            old.litAt != s.litAt
         ) persist()
     }
 
@@ -535,7 +616,14 @@ class PhoneSitEngine(
         s.guess != null -> "спросил: «${s.guess.title}»?"
         s.thinking -> "Сонет смотрит, что это"
         s.watching -> "смотрю на экран с ${hm(s.watchFrom)} — снимок ${s.snaps} из ${PhoneLive.ASK_SNAPS}"
-        s.base == PhoneLive.Base.ON -> "веду «${s.title}» — на экран не смотрю, пока впереди ${appsNames(s.apps)}"
+        s.base == PhoneLive.Base.ON && s.everyMinute ->
+            "веду «${s.title}» — экран гас, сверяю каждую минуту (то же ${s.sameRun} из ${PhoneLive.MINUTE_RUN})"
+        s.base == PhoneLive.Base.ON && s.marks.isNotEmpty() ->
+            "веду «${s.title}» — сверяю экран раз в пять минут" +
+                (if (s.confirmAt > 0L) ", следующий раз в ${hm(s.confirmAt)}" else "") +
+                "; экран погаснет на полминуты — дело кончится"
+        s.base == PhoneLive.Base.ON ->
+            "веду «${s.title}» — на экран не смотрю, пока впереди ${appsNames(s.apps)}; экран погаснет на полминуты — дело кончится"
         s.base == PhoneLive.Base.OFF -> "молчу до конца сидения, пока впереди ${appsNames(s.apps)}"
         else -> "жду сидения от порога — на экран не смотрю"
     }
@@ -558,6 +646,10 @@ class PhoneSitEngine(
                 UsageEvents.Event.ACTIVITY_RESUMED -> if (pkg.isNotBlank()) out += PhoneSit.Front(e.timeStamp, pkg)
                 UsageEvents.Event.ACTIVITY_PAUSED -> if (pkg.isNotBlank()) out += PhoneSit.Back(e.timeStamp, pkg)
                 UsageEvents.Event.SCREEN_NON_INTERACTIVE -> out += PhoneSit.Dark(e.timeStamp)
+                // Константа с Android 9 (вписывается при сборке, как у `PhoneSweeper`);
+                // на восьмёрке события нет — погасание тянется до конца, и дело
+                // кончается по полуминуте темноты, как и должно.
+                UsageEvents.Event.SCREEN_INTERACTIVE -> out += PhoneSit.Lit(e.timeStamp)
             }
         }
         return out
@@ -592,17 +684,30 @@ class PhoneSitEngine(
                     }
                 }
                 val appsArr = o.optJSONArray("apps") ?: JSONArray()
+                val marksArr = o.optJSONArray("marks") ?: JSONArray()
+                val base = runCatching { PhoneLive.Base.valueOf(o.optString("base", "IDLE")) }.getOrDefault(PhoneLive.Base.IDLE)
+                val now = System.currentTimeMillis()
                 live = PhoneLive.State(
-                    base = runCatching { PhoneLive.Base.valueOf(o.optString("base", "IDLE")) }.getOrDefault(PhoneLive.Base.IDLE),
+                    base = base,
                     apps = (0 until appsArr.length()).map { appsArr.optString(it) }.filter { it.isNotBlank() }.toSet(),
                     entryId = o.optLong("entry", 0L),
                     title = o.optString("title"),
                     resumeId = o.optLong("resume", 0L),
+                    // Дело второго захода (до 14.10) погасаний не знало — считаем их с загрузки.
+                    since = o.optLong("since", if (base == PhoneLive.Base.ON) now else 0L),
+                    marks = (0 until marksArr.length()).mapNotNull { i ->
+                        marksArr.optJSONObject(i)?.let { m ->
+                            val pkg = m.optString("pkg")
+                            if (pkg.isBlank()) null else PhoneLive.Mark(pkg, if (m.has("s")) m.optInt("s") else null)
+                        }
+                    }.toSet(),
+                    litAt = o.optLong("lit", 0L),
+                    // Своё видели при загрузке: другое на ближайшей сверке смотрится с неё, а не с «да» часы назад.
+                    seenAt = if (base == PhoneLive.Base.ON) now else 0L,
                     // Первый заход хранил «разобрано до» полем done.
                     handled = o.optLong("handled", o.optLong("done", 0L)),
                 )
             }
-            wantsSnap = live.wantsSnap
             _status.value = statusLine(live)
             loaded = true
         }
@@ -617,6 +722,17 @@ class PhoneSitEngine(
             .put("entry", s.entryId)
             .put("title", s.title)
             .put("resume", s.resumeId)
+            .put("since", s.since)
+            // Подтверждённое — приложение и ХЭШ предмета: текст экрана на диск не пишется никогда.
+            .put(
+                "marks",
+                JSONArray().apply {
+                    s.marks.forEach { m ->
+                        put(JSONObject().put("pkg", m.pkg).apply { m.subject?.let { put("s", it) } })
+                    }
+                },
+            )
+            .put("lit", s.litAt)
             .put("handled", s.handled)
             .put(
                 "log",

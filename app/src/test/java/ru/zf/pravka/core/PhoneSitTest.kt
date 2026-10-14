@@ -300,4 +300,66 @@ class PhoneSitTest {
             PhoneSit.snapLines(s, snaps, label),
         )
     }
+
+    // ------------------------------------------------------------ запрос: кэш отдельно от переменного
+
+    private val template = "Ты — глаз Засечки.\nПравила…\n\n{NOW}\n"
+    private val day = at(0, 0)
+    private val named = listOf(
+        PhoneSit.Named("Завтрак", "Быт", day - 86_400_000L + 8 * 3_600_000L),
+        PhoneSit.Named("Claude: Правка", "Систематизация", day - 86_400_000L + 9 * 3_600_000L),
+        PhoneSit.Named("Claude: Правка", "Систематизация", day - 2 * 86_400_000L + 9 * 3_600_000L),
+        PhoneSit.Named("Уроки с Борей", "Семья", day - 3 * 86_400_000L + 18 * 3_600_000L),
+        // Восемь дней назад — за окном недели.
+        PhoneSit.Named("Старое", "Быт", day - 8 * 86_400_000L),
+    )
+
+    @Test
+    fun `кэш-префикс — правила и постоянный блок, переменное — после`() {
+        val stable = PhoneSit.stableBlock(
+            listOf("Систематизация" to "порядок в делах", "Быт" to ""),
+            listOf("Ромашка"),
+            PhoneSit.weekNames(named, day),
+        )
+        val context = "Сейчас: среда, 14 октября 2026, 10:15.\nСидение: 10:00–10:15\nСнимки экрана:\n10:05 · Telegram · Женя Соколов"
+        val parts = PhoneSit.phoneParts(template, stable, context)
+        assertTrue(parts.cacheStableAlways)
+        assertTrue(parts.stablePrefix.startsWith("Ты — глаз Засечки."))
+        assertTrue(parts.stablePrefix.contains("- «Систематизация» — порядок в делах"))
+        assertTrue(parts.stablePrefix.contains("- Ромашка"))
+        assertTrue(parts.stablePrefix.contains("- «Claude: Правка» [Систематизация] ×2"))
+        // Ничего переменного в голове: ни времени, ни сидения, ни текста экрана, ни метки {NOW}.
+        assertFalse(parts.stablePrefix.contains("Сейчас:"))
+        assertFalse(parts.stablePrefix.contains("Женя Соколов"))
+        assertFalse(parts.stablePrefix.contains("{NOW}"))
+        assertEquals(context + "\n", parts.dictPart)
+        assertEquals("", parts.afterInput)
+        // Другое сидение, другое время — голова байт в байт та же: кэш читается.
+        val later = PhoneSit.phoneParts(template, stable, "Сейчас: среда, 14 октября 2026, 15:40.\nСидение: 15:30–15:40")
+        assertEquals(parts.stablePrefix, later.stablePrefix)
+    }
+
+    @Test
+    fun `названия за неделю — без сегодняшних и в одном порядке, сегодняшние новые — в переменную часть`() {
+        val week = PhoneSit.weekNames(named, day)
+        assertEquals(
+            listOf("- «Claude: Правка» [Систематизация] ×2", "- «Завтрак» [Быт]", "- «Уроки с Борей» [Семья]"),
+            week,
+        )
+        // Сегодняшние записи постоянную часть не трогают — кэш живёт весь день.
+        val today = named + listOf(
+            PhoneSit.Named("Переписка: Женя Соколов", "Работа: текущая", day + 10 * 3_600_000L),
+            PhoneSit.Named("Завтрак", "Быт", day + 8 * 3_600_000L),
+        )
+        assertEquals(week, PhoneSit.weekNames(today, day))
+        assertEquals(week, PhoneSit.weekNames(today.shuffled(java.util.Random(7)), day))
+        assertEquals(listOf("- «Переписка: Женя Соколов» [Работа: текущая]"), PhoneSit.todayNames(today, day))
+    }
+
+    @Test
+    fun `потерял {NOW} в «Промптах» — правила головой, переменное после`() {
+        val parts = PhoneSit.phoneParts("Правила без метки", "Категории: …", "Сейчас: 10:15")
+        assertEquals("Правила без метки\n\nКатегории: …\n\n", parts.stablePrefix)
+        assertEquals("Сейчас: 10:15", parts.dictPart)
+    }
 }

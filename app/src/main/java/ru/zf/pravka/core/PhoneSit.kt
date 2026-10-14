@@ -78,6 +78,12 @@ object PhoneSit {
     /** Экран погас (SCREEN_NON_INTERACTIVE). */
     data class Dark(override val at: Long) : Ev
 
+    /**
+     * Экран зажёгся (SCREEN_INTERACTIVE, 14.10.2026): с ним видно, сколько экран
+     * был тёмным — полминуты темноты кончают дело из телефона (`PhoneLive.OFF_MS`).
+     */
+    data class Lit(override val at: Long) : Ev
+
     data class Span(val pkg: String, val start: Long, val end: Long) {
         val ms: Long get() = end - start
     }
@@ -149,6 +155,8 @@ object PhoneSit {
                 }
                 is Back -> if (e.pkg == cur) close(e.at)
                 is Dark -> close(e.at)
+                // Зажёгся экран — куска ещё нет: он начнётся с приложения впереди.
+                is Lit -> {}
             }
         }
         close(now)
@@ -322,6 +330,82 @@ object PhoneSit {
             .map { (name, note) -> if (note.isBlank()) name else "$name — $note" }
             .distinct()
             .take(5)
+    }
+
+    // ------------------------------------------------------------ запрос: постоянное под кэш, переменное после
+
+    /** Дело ленты для списков «как владелец называл свои дела». */
+    data class Named(val title: String, val category: String, val start: Long)
+
+    private const val DAY_MS = 86_400_000L
+
+    private fun nameKey(n: Named): String = "${n.title.trim().lowercase()}|${n.category.trim().lowercase()}"
+
+    private fun nameLine(n: Named): String = "- «${n.title.trim()}» [${n.category.trim()}]"
+
+    /**
+     * Названия владельца за [days] дней ДО сегодняшнего — в постоянную часть
+     * запроса (14.10.2026, деньги): весь день она байт в байт одна, и Сонет
+     * читает её из кэша. Порядок — по частоте, потом по алфавиту: прежний
+     * «свежие сверху» с сегодняшними менялся с каждой новой записью ленты и
+     * ломал кэш на каждом вызове. Сегодняшние новые — в переменной части
+     * ([todayNames]).
+     */
+    fun weekNames(entries: List<Named>, dayStart: Long, days: Int = 7, cap: Int = 30): List<String> =
+        entries.filter { it.title.isNotBlank() && it.start >= dayStart - days * DAY_MS && it.start < dayStart }
+            .groupBy(::nameKey)
+            .values
+            .map { group -> group.maxBy { it.start } to group.size }
+            .sortedWith(compareByDescending<Pair<Named, Int>> { it.second }.thenBy { nameKey(it.first) })
+            .take(cap)
+            .map { (n, times) -> nameLine(n) + (if (times > 1) " ×$times" else "") }
+
+    /** Сегодняшние названия, которых не было за неделю, — в переменную часть, по порядку дня. */
+    fun todayNames(entries: List<Named>, dayStart: Long, days: Int = 7, cap: Int = 15): List<String> {
+        val week = entries.filter { it.start >= dayStart - days * DAY_MS && it.start < dayStart }.map(::nameKey).toSet()
+        return entries.filter { it.title.isNotBlank() && it.start >= dayStart && nameKey(it) !in week }
+            .sortedBy { it.start }
+            .distinctBy(::nameKey)
+            .take(cap)
+            .map(::nameLine)
+    }
+
+    /**
+     * Постоянная часть запроса после правил: категории с подсказками, клиенты,
+     * названия за неделю. Меняется, только когда владелец правит категории или
+     * клиентов, и раз в сутки — названиями.
+     */
+    fun stableBlock(categories: List<Pair<String, String>>, clients: List<String>, week: List<String>): String =
+        buildString {
+            append("Категории (после тире — что сюда относится):\n")
+            append(categories.joinToString("\n") { (name, hint) -> "- «$name»" + (if (hint.isBlank()) "" else " — $hint") })
+            append("\n\nКлиенты и проекты владельца:\n")
+            append(if (clients.isEmpty()) "(список пуст)" else clients.joinToString("\n") { "- $it" })
+            if (week.isNotEmpty()) append("\n\nКак владелец называл свои дела в последние дни:\n").append(week.joinToString("\n"))
+        }
+
+    private const val NOW_MARK = "{NOW}"
+
+    /**
+     * Запрос Сонету (14.10.2026, деньги): правила промпта (всё до {NOW}) и
+     * постоянный блок [stable] — одной головой под кэш на час (`cache_control`
+     * ставит `ClaudeProvider` по `cacheStableAlways`), переменное [context] —
+     * сидение, лента, снимки экрана, время — после неё. Час, а не пять минут:
+     * Сонета зовут, только когда на экране поменялось, и между вызовами
+     * обычно больше пяти минут. Владелец потерял {NOW} в «Промптах» — весь
+     * текст правил идёт головой, переменное дописывается после, а не теряется.
+     */
+    fun phoneParts(template: String, stable: String, context: String): Prompts.PromptParts {
+        val cut = template.indexOf(NOW_MARK)
+        val head = if (cut >= 0) template.substring(0, cut) else template.trimEnd() + "\n\n"
+        val after = if (cut >= 0) template.substring(cut + NOW_MARK.length) else ""
+        val prefix = if (stable.isBlank()) head else head + stable.trim() + "\n\n"
+        return Prompts.PromptParts(
+            stablePrefix = prefix,
+            dictPart = context + after,
+            afterInput = "",
+            cacheStableAlways = prefix.isNotBlank(),
+        )
     }
 
     // ------------------------------------------------------------ ответ Сонета

@@ -248,13 +248,16 @@ suspend fun ClaudeProvider.sayFork(raw: String, context: String): Result<Zasechk
 /**
  * Телефон в ленте (13.10.2026, `core/PhoneSit.kt`): долгое сидение в телефоне —
  * чем владелец был занят и режет ли это дело в ленте. Сонет на low без
- * размышлений. [context] — хвост после {NOW} (лента, приложения по минутам,
- * снимки экрана, категории, его названия); правила над ним стабильны и стоят
- * под кэшем. Ответ разбирает `PhoneSit.parse`; сырой текст уходит наверх
+ * размышлений. С 14.10.2026 (деньги — подтверждения раз в пять минут) запрос
+ * собирает `PhoneSit.phoneParts`: правила промпта и [stable] (категории,
+ * клиенты, названия за неделю — весь день одни) — головой под часовым кэшем,
+ * [context] (сидение, лента, приложения по минутам, снимки экрана, время) —
+ * после неё. Ответ разбирает `PhoneSit.parse`; сырой текст уходит наверх
  * целиком (тот же контейнер, что у развилки), чтобы непрочитанный ответ был
- * виден в журнале, а не общей фразой.
+ * виден в журнале, а не общей фразой; чтение и запись кэша — отдельно, журнал
+ * показывает, что кэш работает.
  */
-suspend fun ClaudeProvider.zasechkaPhone(context: String): Result<ZasechkaForkReply> =
+suspend fun ClaudeProvider.zasechkaPhone(stable: String, context: String): Result<ZasechkaForkReply> =
     withContext(Dispatchers.IO) {
         runCatchingApi {
             val apiKey = settings.apiKey()
@@ -262,16 +265,7 @@ suspend fun ClaudeProvider.zasechkaPhone(context: String): Result<ZasechkaForkRe
                 throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
             }
             val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.ZASECHKA_PHONE)
-            val cut = template.indexOf("{NOW}")
-            val head = if (cut > 0) template.substring(0, cut) else ""
-            // Владелец потерял {NOW} в «Промптах» — хвост дописывается в конец, а не теряется.
-            val tail = if (cut > 0) template.substring(cut).replace("{NOW}", context) else template.trimEnd() + "\n\n" + context
-            val parts = Prompts.PromptParts(
-                stablePrefix = head,
-                dictPart = tail,
-                afterInput = "",
-                cacheStableAlways = head.isNotBlank(),
-            )
+            val parts = ru.zf.pravka.core.PhoneSit.phoneParts(template, stable, context)
             val started = System.currentTimeMillis()
             val choice = settings.modelChoice(ModelRoute.ZASECHKA_PHONE)
             val reply = requestWithOneRetry(
@@ -286,6 +280,8 @@ suspend fun ClaudeProvider.zasechkaPhone(context: String): Result<ZasechkaForkRe
                 tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
                 tokensOut = reply.outputTokens,
                 latencyMs = System.currentTimeMillis() - started,
+                cacheReadTokens = reply.cacheReadTokens,
+                cacheWriteTokens = reply.cacheWriteTokens,
             )
         }
     }

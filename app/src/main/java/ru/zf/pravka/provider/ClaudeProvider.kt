@@ -448,6 +448,9 @@ class ClaudeProvider(
         val tokensIn: Int,
         val tokensOut: Int,
         val latencyMs: Long,
+        /** Из них прочитано из кэша и записано в кэш — журнал «Телефона в ленте» показывает, что кэш работает. */
+        val cacheReadTokens: Int = 0,
+        val cacheWriteTokens: Int = 0,
     )
 
     // ---- Разноска: наговор -> дела в Todoist (Опус) ----
