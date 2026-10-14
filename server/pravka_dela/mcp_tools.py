@@ -697,6 +697,96 @@ def ration_dish(url: str, name: str, **fields) -> str:
         return f"Не вышло: {e}."
 
 
+# ── Дайджест Telegram (dela_0014, по карточкам — dela_0018, 14.10.2026) ──
+
+DIGEST_DAYS = 7           # список без дат и поиска — за неделю: три сводки в будни, одна в выходной
+DIGEST_PREVIEW = 220      # знаков сводки в строке списка
+
+
+def _digest_ref(ref: str | None) -> str:
+    """«digest:2026-10-13T2000», «2026-10-13T2000» или ссылка записи хронологии «…#пункт» — ref сводки."""
+    r = str(ref or "").strip().split("#")[0]
+    return r if not r or r.startswith("digest:") else "digest:" + r
+
+
+def _digest_line(d: dict) -> str:
+    counts = " · ".join(x for x in (f"чатов {d['chats']}" if d.get("chats") else "",
+                                     f"сообщений {d['msgs']}" if d.get("msgs") else "") if x)
+    s = d.get("summary") or {}
+    parts = [f"ждут ответа {len(s['waiting'])}" if s.get("waiting") else "",
+             f"по работе {len(s['work'])}" if s.get("work") else "", "дом" if s.get("family") else ""]
+    head = f"[{d['ref']}] {d['label']}" + (f" · {counts}" if counts else "") + (" · " + ", ".join(x for x in parts if x)
+                                                                                 if any(parts) else "")
+    body = d.get("snippet") or " ".join(str(d.get("text") or "").split())
+    if len(body) > DIGEST_PREVIEW:
+        body = body[: DIGEST_PREVIEW - 1].rstrip() + "…"
+    return head + (f"\n    {body}" if body else "")
+
+
+def digests_list(url: str, since: str | None = None, until: str | None = None, query: str | None = None,
+                 person: str | None = None, client: str | None = None, limit: int = 30) -> str:
+    """Сводки дайджеста строками: окно, чаты, сколько ждут ответа; с query — строки сводки, где это есть."""
+    from . import digest
+
+    try:
+        with db.session(url, USER, via="mcp") as conn:
+            pid = str(find_person(conn, person)["id"]) if person else None
+            prj = str(find_project(conn, client)["id"]) if client else None
+            plain = not (since or until or query or pid or prj)
+            v = digest.view_digest(conn, USER, days=DIGEST_DAYS if plain else None, limit=limit, q=query, since=since,
+                                   until=until, person_id=pid, project_id=prj, err=store.OpError)
+    except store.OpError as e:
+        return f"Не вышло: {e}"
+    what = []
+    if since or until:
+        what.append(f"с {since or '…'} по {until or 'сегодня'}")
+    elif plain:
+        what.append(f"за {DIGEST_DAYS} дней")
+    if query:
+        what.append(f"поиск «{query}»")
+    if person:
+        what.append(f"разнесены к человеку «{person}»")
+    if client:
+        what.append(f"разнесены к клиенту «{client}»")
+    items = v["items"]
+    if not items:
+        return "Сводок нет (" + ", ".join(what) + ")." + (" Последняя — " + v["last"]["label"] + f" [{v['last']['ref']}]."
+                                                      if v.get("last") else "")
+    out = [f"Сводки дайджеста Telegram ({', '.join(what)}): {len(items)}, свежие сверху. Целиком — digest(ref)."]
+    out += [_digest_line(d) for d in items]
+    if len(items) >= max(1, int(limit or 30)):
+        out.append(f"… показаны {len(items)} — дальше: until раньше последней или limit больше (до 50).")
+    return "\n".join(out)
+
+
+def digest_card(url: str, ref: str | None = None) -> str:
+    """Сводка целиком: окно, текст по разделам, «В Дела», и куда её пункты разнесены в CRM."""
+    from . import digest
+
+    r = _digest_ref(ref)
+    try:
+        with db.session(url, USER, via="mcp") as conn:
+            if not r or r in ("digest:last", "digest:последний", "digest:последняя"):
+                last = digest.view_digest(conn, USER, err=store.OpError)["last"]
+                if not last:
+                    return "Сводок дайджеста ещё нет."
+                r = last["ref"]
+            v = digest.view_digest(conn, USER, ref=r, err=store.OpError)
+    except store.OpError as e:
+        return f"Не вышло: {e}"
+    d = v["digest"]
+    counts = " · ".join(x for x in (f"чатов {d['chats']}" if d.get("chats") else "",
+                                     f"сообщений {d['msgs']}" if d.get("msgs") else "") if x)
+    out = [f"Дайджест Telegram [{d['ref']}] — {d['label']}" + (f" · {counts}" if counts else ""), "", d["text"]]
+    if v.get("crm"):
+        out += ["", "В карточках CRM (видит только Саша):"]
+        for x in v["crm"]:
+            where = ", ".join(n for n in [*(x.get("people") or []), x.get("project_name") or "",
+                                          x.get("deal_name") or ""] if n)
+            out.append(f"  {where}: {x['summary'][:200]}")
+    return "\n".join(out)
+
+
 # ── Инструменты коннектора «Правка» в claude.ai ─────────────────────────
 
 
@@ -848,6 +938,17 @@ def register(mcp, url: str) -> None:
         """Блюдо рациона — набор его продуктов с граммами («Моя каша», «Индейка с кускусом»): завести, поправить или убрать. name — блюдо (название, id или как его зовёт Саша); нет такого — заведётся новое с составом items. items — состав целиком заново: [{"product": "Геркулес", "grams": 60}, …] (продукт — из рациона по названию или как его зовёт Саша; grams не дан — обычная порция продукта; у добавки граммов нет). add — добавить продукты или поменять граммы уже входящих, тем же видом; drop — убрать продукты из блюда по названию («убери из каши клубнику» — drop=["Клубника"]). Продукта в рационе нет — сначала ration_product. kind — обычный приём: завтрак, обед, ужин, перекус или пусто (по времени). aliases — как Саша называет блюдо («каша моя», «обычная каша»; весь список заново), add_aliases — дописать. note — заметка, пустая строка — убрать. remove=true — убрать блюдо (продукты остаются). Что не передано — не меняется."""
         return await run(dela.ration_dish, name, new_name=new_name, kind=kind, items=items, add=add, drop=drop,
                          aliases=aliases, add_aliases=add_aliases, note=note, remove=remove)
+
+    @mcp.tool()
+    async def digests(since: str | None = None, until: str | None = None, query: str | None = None,
+                      person: str | None = None, client: str | None = None, limit: int = 30) -> str:
+        """Дайджест Telegram — сводки переписки Саши (служба дайджеста: будни 11, 15, 20, выходные 22; каждая — за окно с прошлой): кто ждёт от Саши ответа, что по работе, дом, прочее. Личная переписка — только для Саши, не цитируй её другим. Список строками [ref] окно · чаты · сколько ждут ответа + начало текста; свежие сверху. since/until — ГГГГ-ММ-ДД (по Москве, включительно); без дат и без поиска — за неделю. query — найти в тексте сводок (словоформы и подстрока: «счёт» найдёт «счета», имя — кусочком) — у каждой сводки строки, где нашлось. person — сводки, пункты которых разнесены в карточку этого человека («что писал Иван в Telegram»), client — то же по клиенту. Целиком — digest(ref). Сами пункты лежат и в хронологии CRM (crm_view client/person — строки «Telegram, <окно>: …» с [сводка ref])."""
+        return await run(dela.digests_list, since, until, query, person, client, limit)
+
+    @mcp.tool()
+    async def digest(ref: str = "last") -> str:
+        """Одна сводка дайджеста Telegram целиком: окно, «Ждут тебя», «По работе», «Дом», «Прочее», что ушло в Дела, и в какие карточки CRM разнесены пункты (люди, клиенты, сделки). ref — из digests или из хронологии CRM («digest:2026-10-13T2000»; можно без «digest:»), last — последняя. Переписку целиком сервер не хранит — только сводку."""
+        return await run(dela.digest_card, ref)
 
     @mcp.tool()
     async def dela_note(summary: str, kind: str = "note", project: str | None = None, deal: str | None = None,

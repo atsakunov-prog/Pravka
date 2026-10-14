@@ -194,8 +194,11 @@ def _settings(conn, user) -> dict:
 
 
 def _timeline(conn, where: str, params: list, limit: int = 300) -> list[dict]:
+    # digest_ref — сводка дайджеста, из которой запись (dela_0018): веб и телефон ведут на неё по нажатию. Записи из
+    # дайджеста приватные — их видит только владелец (RLS), команде строки просто нет.
     return conn.execute(
-        "SELECT i.*, d.name AS deal_name, p.name AS project_name FROM crm.interactions i "
+        "SELECT i.*, d.name AS deal_name, p.name AS project_name, "
+        "CASE WHEN i.source = 'digest' THEN split_part(i.source_ref, '#', 1) END AS digest_ref FROM crm.interactions i "
         "LEFT JOIN crm.deals d ON d.id = i.deal_id LEFT JOIN crm.projects p ON p.id = i.project_id "
         f"WHERE i.deleted_at IS NULL AND ({where}) ORDER BY i.at DESC LIMIT {int(limit)}",
         params,
@@ -367,13 +370,17 @@ TIMELINE_PER_CLIENT = 3
 def view_timeline(conn, user, **_):
     """Недавняя хронология всех живых клиентов: по TIMELINE_PER_CLIENT последних записей за
     TIMELINE_DAYS дней — свежие сверху. Вход сверки встреч и дайджеста с делами: модель видит,
-    что с клиентом было до этой встречи (владелец 08.10.2026: «и что там до этого было»)."""
+    что с клиентом было до этой встречи (владелец 08.10.2026: «и что там до этого было»).
+
+    Приватные записи (пункты дайджеста, dela_0018) сюда не идут: дайджест и так читает саму переписку, а у встреч
+    три свежих записи клиента вытеснялись бы строками Telegram — и запрос Claude рос бы без пользы."""
     return {"items": conn.execute(
         "SELECT at, kind, summary, next_step, project_id, project_name, deal_name, person_ids, source FROM ("
         " SELECT i.*, p.name AS project_name, d.name AS deal_name,"
         "  row_number() OVER (PARTITION BY i.project_id ORDER BY i.at DESC) AS k"
         " FROM crm.interactions i JOIN crm.projects p ON p.id = i.project_id LEFT JOIN crm.deals d ON d.id = i.deal_id"
-        " WHERE i.deleted_at IS NULL AND p.archived_at IS NULL AND i.at >= now() - make_interval(days => %s)) x "
+        " WHERE i.deleted_at IS NULL AND NOT i.private AND p.archived_at IS NULL"
+        "  AND i.at >= now() - make_interval(days => %s)) x "
         "WHERE k <= %s ORDER BY project_name, at DESC",
         (TIMELINE_DAYS, TIMELINE_PER_CLIENT),
     ).fetchall()}

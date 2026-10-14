@@ -229,15 +229,23 @@ def _name_score(q: str, person: dict) -> float:
     return best
 
 
-def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any = None,
-        telegram: str | None = None, email: str | None = None, limit: int = 5) -> dict:
-    """Кто это. Видимые человеку люди (RLS), живые: архив и слитые — нет."""
-    rows = conn.execute(
+def who_rows(conn) -> list[dict]:
+    """Люди, среди которых ищет who: видимые человеку (RLS), живые — архив и слитые нет."""
+    return conn.execute(
         "SELECT pe.id, pe.name, pe.short, pe.aliases, pe.phones, pe.emails, pe.telegram_id, pe.telegram_username, "
         "pe.org_id, pe.role, pe.user_id, o.name AS org_name, o.aliases AS org_aliases "
         "FROM crm.people pe LEFT JOIN crm.orgs o ON o.id = pe.org_id "
         "WHERE pe.archived_at IS NULL AND pe.merged_into IS NULL"
     ).fetchall()
+
+
+def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any = None,
+        telegram: str | None = None, email: str | None = None, limit: int = 5, rows: list[dict] | None = None) -> dict:
+    """Кто это. Видимые человеку люди (RLS), живые: архив и слитые — нет.
+
+    rows — уже прочитанные who_rows: дайджест узнаёт за раз десятки имён (digest_crm.py), и каждый раз читать всех
+    людей заново незачем; правило узнавания то же."""
+    rows = who_rows(conn) if rows is None else rows
     pk = phone_key(phone)
     tg_user = norm(telegram).lstrip("@") if telegram else ""
     mail = norm(email) if email else ""

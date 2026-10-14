@@ -172,6 +172,8 @@ def test_dela_tools_appear_with_dela_db(cfg, clean, dela_url):
         assert {"dela_view", "dela_task", "dela_add", "dela_change", "dela_decide", "dela_note"} <= names
         assert {"meetings", "meeting", "meeting_change"} <= names
         assert {"ration", "ration_product", "ration_dish"} <= names
+        assert {"digests", "digest"} <= names  # дайджест Telegram (dela_0018): сводки за даты, поиск, одна целиком
+        assert "Дайджест Telegram" in init["result"]["instructions"]
         assert "Рацион Саши" in init["result"]["instructions"]
         # Состав блюда — списком объектов: схема коннектора их пропускает, правка ложится в Свод.
         out = rpc(client, tok, "tools/call", {"name": "ration_dish", "arguments": {

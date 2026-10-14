@@ -39,7 +39,7 @@ TASK_FIELDS = {
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
-            "digest", "zasechka", "phone", "spend"]
+            "digest", "zasechka", "phone", "spend", "digest_crm"]
 # «svod» — Свод (crm.svod) в синке и операция svod.set; «people» — person.add / person.merge и вид who
 # (одна карточка человека, 06.10.2026). Без них телефон не шлёт этих операций.
 # «dictations» — операция dictation.add: текст наговорки, из которой вышли дела (их source_ref = её id),
@@ -71,6 +71,10 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug",
 # сборщик «Дома» — службы компа; итог дня, повтор безвреден) и spend.seen (владелец открыл советы), вид spend
 # (экран «Claude: траты»), поле spend синка — значок на «Сегодня»: $ за 7 дней и красная точка непрочитанных советов
 # (только владельцу). Без флага телефон трат не шлёт и значка не рисует.
+# «digest_crm» — дайджест по карточкам CRM (dela_0018, 14.10.2026, digest_crm.py): digest.put принимает sources (чаты окна)
+# и разносит пункты сводки в хронологию людей и клиентов (запись private — только владельцу, digest_ref у записи в видах
+# client, deal, dossier); вид digest — поиск q, даты since/until, person_id, project_id и crm у одной сводки. Догрузка
+# прошлых сводок (C:\Bot\Digest\backfill_dela.py на компе) без флага не идёт: старый сервер сводки сохранил бы, но не разнёс.
 # Токен службы бота Ковчега (python -m pravka_dela token --name kovcheg): только он забирает
 # «что пора» и отмечает отправку (remind.py, task.reminded).
 REMIND_BOT = "kovcheg"

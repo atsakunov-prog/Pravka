@@ -103,13 +103,16 @@ CREATE VIEW life.interactions AS
 SELECT i.at, (i.at AT TIME ZONE 'Europe/Moscow')::date AS day, i.kind, i.summary, i.next_step, i.duration_min,
        p.name AS project, d.name AS deal,
        ARRAY(SELECT coalesce(pe.short, pe.name) FROM crm.people pe WHERE pe.id = ANY (i.person_ids)) AS people,
-       i.source, i.source_ref, i.id, i.project_id
+       i.source, i.source_ref, i.id, i.project_id,
+       -- Дайджест Telegram (dela_0018): пункт сводки у человека и клиента — source digest, ссылка на сводку — до «#».
+       i.private, CASE WHEN i.source = 'digest' THEN split_part(i.source_ref, '#', 1) END AS digest_ref
 FROM crm.interactions i
 LEFT JOIN crm.projects p ON p.id = i.project_id
 LEFT JOIN crm.deals d ON d.id = i.deal_id
 WHERE i.deleted_at IS NULL
-  AND (i.owner_id = crm.owner_id() OR (i.project_id IS NOT NULL AND crm.sees_project(crm.owner_id(), i.project_id)));
-COMMENT ON VIEW life.interactions IS 'Хронология контактов: звонки, встречи, переписка, заметки (бывший «Лог взаимодействий» Notion).';
+  AND (i.owner_id = crm.owner_id()
+       OR (NOT i.private AND i.project_id IS NOT NULL AND crm.sees_project(crm.owner_id(), i.project_id)));
+COMMENT ON VIEW life.interactions IS 'Хронология контактов: звонки, встречи, переписка, заметки (бывший «Лог взаимодействий» Notion); source digest — пункты дайджеста Telegram (digest_ref — сводка, целиком — инструмент digest).';
 
 CREATE OR REPLACE VIEW life.suggestions AS
 SELECT s.kind, s.status, s.payload ->> 'title' AS title, s.payload, s.source, s.source_ref, s.quote,

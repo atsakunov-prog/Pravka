@@ -158,7 +158,9 @@ def view(url: str, name: str = "pipeline", project: str | None = None, deal: str
             for i in tl:
                 who = ", ".join(names[x] for x in i["person_ids"] if names.get(x))
                 out.append(f"  {_d(i['at'])} {i['kind']}: {i['summary'][:220]}" + (f" ({who})" if who else "")
-                           + (f" → {i['next_step'][:120]}" if i.get("next_step") else ""))
+                           + (f" → {i['next_step'][:120]}" if i.get("next_step") else "")
+                           # Пункт дайджеста Telegram (dela_0018): сводку целиком — инструментом digest по этому ref.
+                           + (f" [сводка {i['digest_ref']}]" if i.get("digest_ref") else ""))
     elif name == "ties":
         out.append(f"Пора напомнить о себе: {sum(1 for p in v['people'] if p['due'])}")
         for p in v["people"]:

@@ -17,17 +17,27 @@ digest.put через /api/ops тем же токеном, которым раз
 Повтор безвреден: строка находится по (владелец, ref), та же сводка версии не двигает. op_id службе не нужен — с
 ним отказ старого сервера («нет такой операции») запомнился бы в crm.ops_seen и вернулся бы и после установки.
 Claude здесь не участвует: сводка уже готова, сервер только хранит её и собирает из пунктов простой текст.
+
+С 14.10.2026 (dela_0018, digest_crm.py) та же операция раскладывает пункты сводки по карточкам CRM — записью
+хронологии у рабочего человека и его клиента, видимой только владельцу; служба для этого шлёт ещё чаты окна
+(sources: название, личный или группа, id в Telegram, кто писал). Разнос не удался — сводка всё равно ложится: телефону
+она нужна и без карточек. Сводки ищутся и читаются видом digest (q, since, until, person_id, project_id) — им же
+пользуются веб (#/digest) и коннектор claude.ai (инструменты digests и digest, mcp_tools.py).
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import uuid
 from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from . import digest_crm, people
 from .meetings import MSK
+
+log = logging.getLogger("pravka_dela.digest")
 
 ACTOR = "svc:digest"     # токен службы дайджеста: python -m pravka_dela token --kind service --name digest
 DAYS = 2                 # вид digest с завода — за двое суток: вчерашний вечер и сегодня
@@ -37,6 +47,8 @@ LIMIT_MAX = 50
 ITEMS_MAX = 40           # пунктов в разделе: сводка — «за минуту между делами», больше — мусор или сбой
 FIELD_MAX = 1000         # знаков в поле пункта
 OTHER_MAX = 2000
+SNIPPET_LINES = 3        # строк сводки у найденного: искомое и рядом
+SNIPPET_MAX = 400
 COUNTS = ("created", "asks", "close", "update", "closed", "updated")
 WD = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 COLUMNS = "id, ref, started_at, ended_at, label, chats, msgs, summary, text, dela, created_at, updated_at, rev, seq"
@@ -163,7 +175,7 @@ def label_of(ended: dt.datetime) -> str:
 
 
 def op_put(conn, user: str, op: dict, err) -> dict:
-    """Сводка от службы дайджеста: завести или обновить по (владелец, ref)."""
+    """Сводка от службы дайджеста: завести или обновить по (владелец, ref), и её пункты — по карточкам CRM."""
     if conn.execute("SELECT crm.actor() AS a").fetchone()["a"] != ACTOR:
         raise err("дайджест пишет только служба дайджеста (токен digest)")
     if not is_owner(conn, user):
@@ -176,6 +188,8 @@ def op_put(conn, user: str, op: dict, err) -> dict:
         raise err("дайджест: нужен ref — окно у службы (digest:2026-10-13T2000)")
     if len(ref) > 64:
         raise err("дайджест: ref длиннее 64 знаков")
+    if "#" in ref:
+        raise err("дайджест: в ref нет «#» — им запись хронологии отделяет пункт от сводки")
     ended = _at(d.get("ended_at"), "ended_at", err)
     if ended is None:
         raise err("дайджест: нужен ended_at — конец окна")
@@ -184,18 +198,36 @@ def op_put(conn, user: str, op: dict, err) -> dict:
         raise err("дайджест: started_at не раньше конца окна")
     summary = norm_summary(d.get("summary"), err)
     dela = norm_dela(d.get("dela"), err)
+    sources = digest_crm.norm_sources(d.get("sources"), err)
     data = {
         "started_at": started, "ended_at": ended, "label": _s(d.get("label"), 120) or label_of(ended),
         "chats": _count(d.get("chats"), "chats", err), "msgs": _count(d.get("msgs"), "msgs", err),
         "summary": Jsonb(summary), "text": text_of(summary, dela), "dela": Jsonb(dela) if dela else None,
+        "sources": Jsonb(sources) if sources is not None else None,
     }
     cols = list(data)
+    # Чаты окна старая служба (или догрузка без них) не шлёт — прежние не затираем: по ним узнаются люди.
+    sets = ", ".join("sources = coalesce(EXCLUDED.sources, crm.digests.sources)" if c == "sources"
+                     else f"{c} = EXCLUDED.{c}" for c in cols)
     row = conn.execute(
         f"INSERT INTO crm.digests (owner_id, ref, {', '.join(cols)}) VALUES (%s, %s, {', '.join(['%s'] * len(cols))}) "
-        f"ON CONFLICT (owner_id, ref) DO UPDATE SET {', '.join(f'{c} = EXCLUDED.{c}' for c in cols)} "
-        "RETURNING id, ref, label, rev, seq",
+        f"ON CONFLICT (owner_id, ref) DO UPDATE SET {sets} "
+        "RETURNING id, ref, label, rev, seq, ended_at, sources",
         [user, ref, *data.values()]).fetchone()
-    return {"digest": row}
+    return {"digest": {k: row[k] for k in ("id", "ref", "label", "rev", "seq")},
+            "crm": _to_crm(conn, user, row, summary)}
+
+
+def _to_crm(conn, user: str, row: dict, summary: dict) -> dict:
+    """Пункты сводки — по карточкам CRM (digest_crm.py) своей точкой сохранения: не вышло — сводка всё равно
+    ложится (телефону она нужна и без карточек), а в ответе службе — почему."""
+    try:
+        with conn.transaction():
+            return digest_crm.link(conn, user, {"ref": row["ref"], "label": row["label"], "ended_at": row["ended_at"]},
+                                   summary, row["sources"])
+    except Exception as e:  # noqa: BLE001 — разнос не должен ронять сводку
+        log.exception("дайджест %s: разнос по карточкам CRM не вышел", row["ref"])
+        return {"error": type(e).__name__}
 
 
 def last(conn, user: str) -> dict | None:
@@ -216,8 +248,53 @@ def for_sync(conn, user: str, lo: int, full: bool) -> tuple[bool, dict | None]:
     return False, None
 
 
-def view_digest(conn, user: str, days=None, limit=None, id=None, ref=None, err=None, **_) -> dict:
-    """Вид digest: последняя сводка (last) и список за days суток (с завода двое), свежие сверху; id или ref — одна."""
+def _day(v, what: str, err) -> dt.date | None:
+    if v in (None, ""):
+        return None
+    try:
+        return dt.date.fromisoformat(str(v).strip()[:10])
+    except ValueError:
+        raise err(f"дайджест: {what} — дата ГГГГ-ММ-ДД") from None
+
+
+def snippet(text: str, q: str, summary: dict | None = None) -> str:
+    """Строки сводки, где нашлось искомое: целиком (подстрокой) или основой слова («счёт» — «счета»). Пункт «Ждут тебя»
+    — с полным названием чата: в тексте сводки «Кто (чат)» сокращён, а искать человека будут по фамилии."""
+    s = summary or {}
+    if s:
+        lines = [*(f"{w.get('who') or ''} ({w['chat']}): {w.get('what') or ''}" if w.get("chat") and w.get("chat") != w.get("who")
+                   else f"{w.get('who') or ''}: {w.get('what') or ''}" for w in s.get("waiting") or []),
+                 *(f"{w.get('topic') or ''}: {w.get('text') or ''}" for w in s.get("work") or []),
+                 *(s.get("family") or []), s.get("other") or ""]
+    else:
+        lines = (text or "").splitlines()
+    stems = [people.stem(w) for w in people.words(q) if len(w) >= 3]
+    ql = people.norm(q)
+    hits = [ln.strip().lstrip("•").strip() for ln in lines
+            if ln.strip() and (ql in people.norm(ln) or any(st in people.norm(ln) for st in stems))]
+    out = " … ".join(list(dict.fromkeys(hits))[:SNIPPET_LINES])
+    return out if len(out) <= SNIPPET_MAX else out[: SNIPPET_MAX - 1].rstrip() + "…"
+
+
+def links(conn, user: str, ref: str) -> list[dict]:
+    """Куда сводка разнесена (dela_0018): записи хронологии с людьми и клиентом — «В карточках» у сводки. people и
+    people_ids — в одном порядке (по имени): имя и ссылка на карточку — одна пара."""
+    return conn.execute(
+        "SELECT i.id, i.summary, i.project_id, p.name AS project_name, i.deal_id, d.name AS deal_name, i.person_ids, "
+        "ARRAY(SELECT pe.name FROM crm.people pe WHERE pe.id = ANY (i.person_ids) ORDER BY pe.name, pe.id) AS people, "
+        "ARRAY(SELECT pe.id FROM crm.people pe WHERE pe.id = ANY (i.person_ids) ORDER BY pe.name, pe.id) AS people_ids "
+        "FROM crm.interactions i LEFT JOIN crm.projects p ON p.id = i.project_id LEFT JOIN crm.deals d ON d.id = i.deal_id "
+        "WHERE i.owner_id = %s AND i.source = 'digest' AND i.deleted_at IS NULL AND split_part(i.source_ref, '#', 1) = %s "
+        "ORDER BY i.created_at, i.id", (user, ref)).fetchall()
+
+
+def view_digest(conn, user: str, days=None, limit=None, id=None, ref=None, q=None, since=None, until=None,
+                person_id=None, project_id=None, err=None, **_) -> dict:
+    """Вид digest: последняя сводка (last) и список, свежие сверху; id или ref — одна (и crm — куда она разнесена).
+
+    Список — за days суток (с завода двое), либо за даты since..until (ГГГГ-ММ-ДД по Москве, включительно), либо
+    поиск q по тексту сводок (словоформы и подстрока; у каждой — snippet), либо сводки, разнесённые в карточку
+    человека (person_id) или клиента (project_id). Поиск и карточка без дат — за всё время."""
     if not is_owner(conn, user):
         raise err("дайджест — только владельцу Дел")
     if id or ref:
@@ -227,21 +304,55 @@ def view_digest(conn, user: str, days=None, limit=None, id=None, ref=None, err=N
             except ValueError:
                 raise err("дайджест: id — не uuid") from None
         else:
-            key, where = str(ref), "ref = %s"
+            key, where = str(ref).split("#")[0], "ref = %s"
         row = conn.execute(f"SELECT {COLUMNS} FROM crm.digests WHERE owner_id = %s AND {where}", (user, key)).fetchone()
         if not row:
             raise err("нет такого дайджеста")
-        return {"digest": row}
+        return {"digest": row, "crm": links(conn, user, row["ref"])}
     try:
         days = min(DAYS_MAX, max(1, int(days or DAYS)))
         limit = min(LIMIT_MAX, max(1, int(limit or LIMIT)))
     except (TypeError, ValueError):
         raise err("дайджест: days и limit — числа") from None
-    rows = conn.execute(
-        f"SELECT {COLUMNS} FROM crm.digests WHERE owner_id = %s AND ended_at > now() - make_interval(days => %s) "
-        "ORDER BY ended_at DESC LIMIT %s", (user, days, limit)).fetchall()
+    lo, hi = _day(since, "since", err), _day(until, "until", err)
+    q = " ".join(str(q or "").split())[:200]
+    where, params = ["owner_id = %s"], [user]
+    if lo or hi:
+        if lo:
+            where.append("ended_at >= (%s::date)::timestamp AT TIME ZONE 'Europe/Moscow'")
+            params.append(lo)
+        if hi:
+            where.append("ended_at < (%s::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow'")
+            params.append(hi)
+    elif not (q or person_id or project_id):
+        where.append("ended_at > now() - make_interval(days => %s)")
+        params.append(days)
+    if q:
+        # Ищем и в пунктах (summary): названия чатов текст сводки сокращает («Иван» вместо «Иван Соколов (Ромашка)»).
+        # ё — как е с обеих сторон: русский стеммер их не сводит, и «счёт» иначе не нашёл бы «счета».
+        doc = "translate(text || ' ' || summary::text, 'ёЁ', 'еЕ')"
+        where.append(f"(to_tsvector('russian', {doc}) @@ websearch_to_tsquery('russian', translate(%s, 'ёЁ', 'еЕ')) "
+                     f"OR position(translate(lower(%s), 'ё', 'е') in lower({doc})) > 0)")
+        params += [q, q]
+    for col, v in (("person", person_id), ("project", project_id)):
+        if not v:
+            continue
+        try:
+            v = str(uuid.UUID(str(v)))
+        except ValueError:
+            raise err(f"дайджест: {col}_id — не uuid") from None
+        cond = "%s::uuid = ANY (i.person_ids)" if col == "person" else "i.project_id = %s::uuid"
+        where.append("ref IN (SELECT split_part(i.source_ref, '#', 1) FROM crm.interactions i WHERE i.owner_id = %s "
+                     f"AND i.source = 'digest' AND i.deleted_at IS NULL AND {cond})")
+        params += [user, v]
+    rows = conn.execute(f"SELECT {COLUMNS} FROM crm.digests WHERE {' AND '.join(where)} ORDER BY ended_at DESC LIMIT %s",
+                        [*params, limit]).fetchall()
+    if q:
+        rows = [{**r, "snippet": snippet(r["text"], q, r["summary"])} for r in rows]
+    plain = not (lo or hi or q or person_id or project_id)
     # Последняя — даже если старше окна (выходные, комп спал): карточке «Сегодня» всегда есть что показать.
-    return {"last": rows[0] if rows else last(conn, user), "items": rows, "days": days}
+    out = {"last": rows[0] if plain and rows else last(conn, user), "items": rows, "days": days}
+    return {**out, **{k: v for k, v in (("q", q), ("since", lo), ("until", hi)) if v}}
 
 
 def register(handlers: dict, views: dict, err) -> None:
