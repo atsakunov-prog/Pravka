@@ -31,9 +31,18 @@ package ru.zf.pravka.core
  * одним снимком. Снимок то же приложение и тот же предмет — подтверждено без
  * запроса; другое — проверка куска, как после переключения.
  *
+ * Без вечного молчания (14.10.2026, после жалобы «сижу в телефоне, а он мне
+ * даже ничего не говорит»): из каждого состояния есть дорога назад к
+ * проверке — тишина три минуты, другое приложение две минуты, а слово
+ * владельца и охрана ленты — только про своё время: сидение от порога ПОСЛЕ
+ * них — новая проверка ([State.freshFrom]). Проверка без снимков (служба не
+ * смотрит) и Сонет без ответа — по часам ([STALE_MS], [THINK_MS]), а не
+ * «пока сидение не кончится». Каждый конец проверки — строкой в журнал.
+ *
  * Здесь — решения без Android, Claude и ленты: движок (`data/PhoneSitEngine.kt`)
  * кормит автомат тем, что видно по статистике использования и снимкам, и
- * делает то, что автомат велит.
+ * делает то, что автомат велит. Удар движка целиком — [beat]: тот же путь
+ * прогоняют тесты.
  */
 object PhoneLive {
 
@@ -81,6 +90,23 @@ object PhoneLive {
      */
     const val SUBJECT_PIECES = 2
 
+    /**
+     * Проверка идёт столько по часам, а трёх снимков нет (минуты экрана не
+     * приходят: служба не смотрит, телефон то гас, то зажигался) — Сонету по
+     * тому, что есть. Иначе проверка висела бы до конца сидения: снимки
+     * считает только минута экрана, а пятиминутный тик их не прибавляет.
+     */
+    const val STALE_MS = 5 * 60_000L
+
+    /**
+     * Сонет думает дольше этого — ответа не ждём, проверка остаётся и через
+     * три минуты спросит снова. Запрос с одним повтором — до двух раз по 90 с
+     * (чтение у общего клиента), так что живой ответ сюда не попадает; а
+     * зависший (или упавший мимо `failed`) больше не держит «думает» до конца
+     * сидения.
+     */
+    const val THINK_MS = 4 * 60_000L
+
     /** Подтверждённых «приложение + предмет» у одного дела — не больше. */
     private const val MARKS_MAX = 12
 
@@ -125,16 +151,28 @@ object PhoneLive {
         /** Проверяем кусок с этого мига (0 — не проверяем); снимков в нём. */
         val watchFrom: Long = 0L,
         val snaps: Int = 0,
+        /** Когда проверка началась по часам ([watchFrom] — начало куска, бывает и раньше): для [STALE_MS]. */
+        val watchAt: Long = 0L,
         /** Последний снимок: что впереди сейчас (приложение и предмет). */
         val lastMark: Mark? = null,
-        /** Сонет думает над куском — второй запрос не шлём. */
+        /** Сонет думает над куском — второй запрос не шлём; с какого мига — для [THINK_MS]. */
         val thinking: Boolean = false,
+        val thinkingAt: Long = 0L,
         /** Вопрос на плашке, с какого мига висит, приложения проверенного куска. */
         val guess: Guess? = null,
         val askedAt: Long = 0L,
         val segApps: Set<String> = emptySet(),
         /** Сидения до этого мига разобраны. */
         val handled: Long = 0L,
+        /**
+         * OFF: молчим из-за слова владельца или охраны ленты (сон, встреча,
+         * дорога, тренировка, факт робота), а они — про своё время, до этого
+         * мига. Сидение ПОСЛЕ него дотянуло до порога — новая проверка
+         * (14.10.2026: «ты сам сказал «Завтрак»» — и двадцать минут в телефоне
+         * тишина). 0 — молчим до конца сидения: крестик и «то же» Сонета —
+         * ответ про это занятие, их договорённость прежняя.
+         */
+        val freshFrom: Long = 0L,
     ) {
         val watching: Boolean get() = watchFrom > 0L
 
@@ -152,8 +190,30 @@ object PhoneLive {
                 (everyMinute || now >= confirmAt))
 
         fun unwatched(): State =
-            copy(watchFrom = 0L, snaps = 0, lastMark = null, thinking = false, guess = null, askedAt = 0L, segApps = emptySet())
+            copy(
+                watchFrom = 0L, snaps = 0, watchAt = 0L, lastMark = null, thinking = false, thinkingAt = 0L,
+                guess = null, askedAt = 0L, segApps = emptySet(),
+            )
+
+        /**
+         * С какого мига считать сидение: обычно — после разобранного; в OFF
+         * после слова владельца — ещё и после него ([freshFrom]).
+         */
+        fun countFrom(): Long = if (base == Base.OFF && freshFrom > 0L) maxOf(handled, freshFrom) else handled
     }
+
+    /**
+     * Начать проверку куска с [from]: снимки с нуля (или с [snaps], если снимок
+     * этой минуты уже в счёт), поминутная сверка дела кончается. Отсрочка после
+     * слова владельца ([State.freshFrom]) тоже: дальше решает проверка — иначе
+     * то же сидение после её «то же» снова дотягивало бы до порога, и Сонета
+     * звали бы по кругу.
+     */
+    private fun watch(s: State, from: Long, now: Long, snaps: Int = 0, mark: Mark? = null): State =
+        s.copy(
+            watchFrom = from, snaps = snaps, watchAt = now, lastMark = mark, thinking = false, thinkingAt = 0L,
+            everyMinute = false, sameRun = 0, freshFrom = 0L,
+        )
 
     /** Экран погас в [from] и зажёгся в [to] (0 — ещё тёмный). */
     data class Off(val from: Long, val to: Long) {
@@ -240,7 +300,7 @@ object PhoneLive {
         }
         val from = maxOf(s.seenAt, s.since).takeIf { it > 0L } ?: now
         return Step(
-            s.copy(watchFrom = from, snaps = 1, lastMark = seen, everyMinute = false, sameRun = 0),
+            watch(s, from, now, snaps = 1, mark = seen),
             listOf(Note("«${s.title}»: впереди другое — смотрю на экран с ${PhoneSit.hm(from)}")),
         )
     }
@@ -323,6 +383,10 @@ object PhoneLive {
         if (s0.guess != null && now - s0.askedAt >= ANSWER_MS) return answer(s0, yes = true, silent = true, now = now)
         var s = s0
         val notes = ArrayList<Do>()
+        if (s.thinking && s.thinkingAt > 0L && now - s.thinkingAt >= THINK_MS) {
+            notes += Note("Сонет молчит ${(now - s.thinkingAt) / 60_000L} мин — ответа не жду; ещё три минуты и спрошу снова")
+            s = failed(s, now)
+        }
         if (s.base == Base.ON && s.guess == null) {
             val off = v.offs.firstOrNull { it.from >= s.since && it.ms(now) >= OFF_MS }
             if (off != null) {
@@ -331,11 +395,11 @@ object PhoneLive {
                 val behind = if (s.watching && s.watchFrom < off.from) Behind(s.watchFrom, off.from) else null
                 return Step(
                     State(handled = maxOf(s.handled, off.from)),
-                    listOfNotNull(Close(s.entryId, s.resumeId, off.from, dark = true), behind),
+                    notes + listOfNotNull(Close(s.entryId, s.resumeId, off.from, dark = true), behind),
                 )
             }
             if (v.lastUse > 0L && now - v.lastUse >= PUTDOWN_MS) {
-                return Step(State(handled = maxOf(s.handled, v.lastUse)), listOf(Close(s.entryId, s.resumeId, v.lastUse)))
+                return Step(State(handled = maxOf(s.handled, v.lastUse)), notes + listOf(Close(s.entryId, s.resumeId, v.lastUse)))
             }
             val blink = v.offs.lastOrNull { it.to > 0L && it.from >= s.since && it.to > s.litAt }
             if (blink != null) {
@@ -354,15 +418,24 @@ object PhoneLive {
         val quiet = v.lastUse == 0L || now - v.lastUse >= PhoneSit.QUIET_MS
         if (s.watching && s.guess == null) {
             if (quiet) {
+                // Конец проверки — строкой в журнал: 14.10 «смотрю на экран три
+                // минуты» и дальше ничего читалось как поломка, а телефон просто
+                // отложили до третьего снимка.
+                val ended = "проверка с ${PhoneSit.hm(s.watchFrom)} кончилась до вопроса — " +
+                    "телефон отложен в ${PhoneSit.hm(v.lastUse)}, снимков ${s.snaps} из $ASK_SNAPS"
                 return when (s.base) {
                     Base.IDLE -> {
                         val sit = v.sitting
-                        val behind = if (sit != null && sit.useMs >= minMs) listOf(Behind(s.watchFrom, v.lastUse)) else emptyList()
-                        Step(State(handled = maxOf(s.handled, v.lastUse)), behind)
+                        val behind = sit != null && sit.useMs >= minMs
+                        Step(
+                            State(handled = maxOf(s.handled, v.lastUse)),
+                            listOf(Note(ended + if (behind) "; сидение — Сонету задним числом" else "; короче порога — не режу")) +
+                                (if (behind) listOf(Behind(s.watchFrom, v.lastUse)) else emptyList()),
+                        )
                     }
-                    Base.OFF -> Step(State(handled = maxOf(s.handled, v.lastUse)))
+                    Base.OFF -> Step(State(handled = maxOf(s.handled, v.lastUse)), listOf(Note(ended)))
                     // Подтверждённое дело закроется по погасанию экрана или пяти минутам без телефона.
-                    Base.ON -> Step(s.unwatched())
+                    Base.ON -> Step(s.unwatched(), listOf(Note("«${s.title}»: $ended")))
                 }
             }
             if (!s.thinking && s.snaps >= ASK_SNAPS) {
@@ -375,13 +448,43 @@ object PhoneLive {
                         listOf(Note("«${s.title}»: впереди снова своё — Сонета не зову")),
                     )
                 }
-                return Step(s.copy(thinking = true), listOf(Classify(s.watchFrom, now)))
+                return Step(s.copy(thinking = true, thinkingAt = now), listOf(Classify(s.watchFrom, now)))
+            }
+            if (!s.thinking && s.watchAt > 0L && now - s.watchAt >= STALE_MS) {
+                // Телефон в руках, а минуты экрана не приходят — снимков не будет.
+                return Step(
+                    s.copy(thinking = true, thinkingAt = now),
+                    listOf(
+                        Note(
+                            "проверка с ${PhoneSit.hm(s.watchFrom)} идёт ${(now - s.watchAt) / 60_000L} мин, а снимков " +
+                                "${s.snaps} из $ASK_SNAPS — служба на экран не смотрит; Сонету по приложениям"
+                        ),
+                        Classify(s.watchFrom, now),
+                    ),
+                )
             }
             return Step(s)
         }
         if (s.watching) return Step(s)
         return when (s.base) {
-            Base.OFF -> if (quiet) Step(State(handled = maxOf(s.handled, v.lastUse))) else switched(s, v, now)
+            Base.OFF -> {
+                val sit = v.sitting
+                when {
+                    quiet -> Step(State(handled = maxOf(s.handled, v.lastUse)))
+                    // Слово владельца (охрана ленты) — про своё время: после него
+                    // снова сидение от порога — это уже новое сидение.
+                    s.freshFrom > 0L && sit != null && sit.useMs >= minMs -> Step(
+                        watch(s, sit.start, now),
+                        listOf(
+                            Note(
+                                "после ${PhoneSit.hm(s.freshFrom)} снова ${PhoneSit.minutes(sit.useMs)} в телефоне — " +
+                                    "новое сидение, смотрю на экран"
+                            )
+                        ),
+                    )
+                    else -> switched(s, v, now)
+                }
+            }
             Base.ON -> switched(s, v, now)
             Base.IDLE -> {
                 val sit = v.sitting ?: return Step(s)
@@ -391,7 +494,7 @@ object PhoneLive {
                         s.copy(handled = maxOf(s.handled, sit.end)),
                         if (sit.useMs >= minMs) listOf(Behind(sit.start, sit.end)) else emptyList(),
                     )
-                    sit.useMs >= minMs -> Step(s.copy(watchFrom = sit.start, snaps = 0))
+                    sit.useMs >= minMs -> Step(watch(s, sit.start, now))
                     else -> Step(s)
                 }
             }
@@ -400,18 +503,35 @@ object PhoneLive {
 
     private fun switched(s: State, v: View, now: Long): Step =
         if (v.outsideSince > 0L && now - v.outsideSince >= SWITCH_MS) {
-            Step(s.copy(watchFrom = v.outsideSince, snaps = 0, lastMark = null, everyMinute = false, sameRun = 0))
+            Step(watch(s, v.outsideSince, now))
         } else {
             Step(s)
         }
 
     /**
+     * Время занято (сон, встреча, дорога, тренировка, факт робота) или
+     * владелец сам сказал в «З» про это время — на экран не смотрим, молчим о
+     * тех же приложениях. Но охрана — про своё время, до [now]: сидение от
+     * порога после него — новая проверка ([State.freshFrom]). Стоящее дело из
+     * телефона ведётся дальше — у него своя сверка.
+     */
+    fun guarded(s: State, apps: Set<String>, now: Long): State = when (s.base) {
+        Base.IDLE -> s.unwatched().copy(base = Base.OFF, apps = apps, freshFrom = now)
+        Base.OFF -> s.unwatched().copy(apps = s.apps + apps, freshFrom = now)
+        Base.ON -> s.unwatched().copy(apps = s.apps + apps)
+    }
+
+    /**
      * Сонет ответил про кусок: [guess] null — то же, что в ленте (молчим, пока
      * впереди эти приложения; у стоящего дела увиденное становится
-     * подтверждённым), иначе — вопрос на плашку.
+     * подтверждённым), иначе — вопрос на плашку. Ответа уже не ждали (проверка
+     * кончилась или Сонет думал дольше [THINK_MS]) — не спрашиваем: вопрос без
+     * проверки за ним галочкой ничего бы не поставил.
      */
     fun classified(s: State, guess: Guess?, segApps: Set<String>, now: Long): Step {
-        if (!s.watching) return Step(s.copy(thinking = false))
+        if (!s.watching || !s.thinking) {
+            return Step(s.copy(thinking = false, thinkingAt = 0L), listOf(Note("ответ Сонета пришёл, когда его уже не ждали, — не спрашиваю")))
+        }
         if (guess == null) {
             return Step(
                 when (s.base) {
@@ -426,7 +546,7 @@ object PhoneLive {
                 }
             )
         }
-        return Step(s.copy(thinking = false, guess = guess, askedAt = now, segApps = segApps))
+        return Step(s.copy(thinking = false, thinkingAt = 0L, guess = guess, askedAt = now, segApps = segApps))
     }
 
     /** Подтверждённые с новым: сверяли по приложениям (пусто) — так и остаётся. */
@@ -435,8 +555,12 @@ object PhoneLive {
         return (marks.toList() + m).takeLast(MARKS_MAX).toSet()
     }
 
-    /** Сонет не ответил (сеть): проверка остаётся, следующий пульс спросит снова. */
-    fun failed(s: State): State = s.copy(thinking = false)
+    /**
+     * Сонет не ответил (сеть) или думал дольше [THINK_MS]: проверка остаётся,
+     * снимки — с нуля, и часы [STALE_MS] — тоже с [now]: иначе часы проверки
+     * давно вышли, и каждый пульс без сети звал бы Сонета снова.
+     */
+    fun failed(s: State, now: Long): State = s.copy(thinking = false, thinkingAt = 0L, snaps = 0, watchAt = now)
 
     /**
      * Ответ на «кажется, это …»: галочка (или молчание) — поставить дело,
@@ -493,10 +617,112 @@ object PhoneLive {
         )
 
     /**
-     * Владелец сам сказал в «З» (или убрал запись): его слово сильнее. До
-     * конца сидения молчим о тех же приложениях, ничего не возвращаем.
+     * Владелец сам сказал в «З» (или убрал запись) посреди дела из телефона:
+     * его слово сильнее — дело больше не ведём и ничего не возвращаем, о тех
+     * же приложениях молчим. Слово — про время до [now]: сидит дальше от
+     * порога — новая проверка ([State.freshFrom]).
      */
-    fun ownerTook(s: State): State = State(base = Base.OFF, apps = s.apps, handled = s.handled)
+    fun ownerTook(s: State, now: Long): State = State(base = Base.OFF, apps = s.apps, handled = s.handled, freshFrom = now)
+
+    /**
+     * Что видно по статистике для этого состояния: последнее сидение после
+     * [State.countFrom] (обрезанное по нему), конец последнего куска, с какого
+     * мига впереди не приложения занятия и погасания экрана. [spans] — куски
+     * без мебели после разобранного, [events] — те же события статистики.
+     */
+    fun view(s: State, events: List<PhoneSit.Ev>, spans: List<PhoneSit.Span>, now: Long): View {
+        val from = s.countFrom()
+        val sittings = PhoneSit.stretches(spans.filter { it.end > from }, now)
+            .map { if (it.start < from) it.clip(from, it.end) else it }
+            .filter { it.spans.isNotEmpty() }
+        return View(
+            sitting = sittings.lastOrNull(),
+            lastUse = spans.maxOfOrNull { it.end } ?: 0L,
+            outsideSince = outsideSince(spans, s.apps, now),
+            offs = merge(offs(events), spans),
+        )
+    }
+
+    /**
+     * Удар движка: минута экрана ([minute]; [seen] — что впереди, снимок уже
+     * взят, если был нужен), потом пульс по статистике. Минута — только
+     * строки журнала и сверка дела, поэтому их шаги идут раньше шагов пульса.
+     * Здесь, а не в движке, чтобы тест гнал тот же путь, что телефон.
+     */
+    fun beat(
+        s: State,
+        events: List<PhoneSit.Ev>,
+        spans: List<PhoneSit.Span>,
+        seen: Mark?,
+        minute: Boolean,
+        now: Long,
+        minMs: Long,
+    ): Step {
+        val m = if (minute) minute(s, seen, now) else Step(s)
+        val p = pulse(m.state, view(m.state, events, spans, now), now, minMs)
+        return Step(p.state, m.dos + p.dos)
+    }
+
+    // ------------------------------------------------------------ файл
+
+    /**
+     * Решённое — в `phone-sit.json` (без журнала решений: его пишет движок).
+     * Проверка, снимки, вопрос и «думает» на диск не ложатся: после
+     * перезапуска (обновление посреди сидения) сидение заново дотягивает до
+     * порога и проверяется с начала. Текста экрана здесь нет — предмет хэшем.
+     */
+    fun toJson(s: State): org.json.JSONObject =
+        org.json.JSONObject()
+            .put("base", s.base.name)
+            .put("apps", org.json.JSONArray(s.apps.toList()))
+            .put("entry", s.entryId)
+            .put("title", s.title)
+            .put("resume", s.resumeId)
+            .put("since", s.since)
+            .put(
+                "marks",
+                org.json.JSONArray().apply {
+                    s.marks.forEach { m ->
+                        put(org.json.JSONObject().put("pkg", m.pkg).apply { m.subject?.let { put("s", it) } })
+                    }
+                },
+            )
+            .put("lit", s.litAt)
+            .put("fresh", s.freshFrom)
+            .put("handled", s.handled)
+
+    /**
+     * Состояние из файла любой сборки: второй заход (до 14.10) не знал
+     * погасаний, предмета и отсрочки слова — погасания считаем с загрузки,
+     * сверка по приложениям. [now] — миг загрузки.
+     */
+    fun fromJson(o: org.json.JSONObject, now: Long): State {
+        val appsArr = o.optJSONArray("apps") ?: org.json.JSONArray()
+        val marksArr = o.optJSONArray("marks") ?: org.json.JSONArray()
+        val base = runCatching { Base.valueOf(o.optString("base", "IDLE")) }.getOrDefault(Base.IDLE)
+        return State(
+            base = base,
+            apps = (0 until appsArr.length()).map { appsArr.optString(it) }.filter { it.isNotBlank() }.toSet(),
+            entryId = o.optLong("entry", 0L),
+            title = o.optString("title"),
+            resumeId = o.optLong("resume", 0L),
+            since = o.optLong("since", if (base == Base.ON) now else 0L),
+            marks = (0 until marksArr.length()).mapNotNull { i ->
+                marksArr.optJSONObject(i)?.let { m ->
+                    val pkg = m.optString("pkg")
+                    if (pkg.isBlank()) null else Mark(pkg, if (m.has("s")) m.optInt("s") else null)
+                }
+            }.toSet(),
+            litAt = o.optLong("lit", 0L),
+            // Своё видели при загрузке: другое на ближайшей сверке смотрится с неё, а не с «да» часы назад.
+            seenAt = if (base == Base.ON) now else 0L,
+            // Первый заход хранил «разобрано до» полем done.
+            handled = o.optLong("handled", o.optLong("done", 0L)),
+            // Файл сборки до 14.10 (вечер) отсрочки не знал: молчание оттуда не
+            // переносим навечно — сидение от порога после загрузки проверяется.
+            freshFrom = if (base == Base.OFF) o.optLong("fresh", now) else 0L,
+        )
+    }
 
     /**
      * С какого мига впереди подряд не [apps]: от конца назад по кускам, пока

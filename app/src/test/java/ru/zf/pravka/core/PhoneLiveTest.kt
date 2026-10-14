@@ -398,7 +398,9 @@ class PhoneLiveTest {
         // Телефон в руках до 0:08, в 0:12 — сидение кончилось.
         val v = view(claude, 8, at(12))
         val step = PhoneLive.pulse(s8, v, at(12), minMs)
-        assertEquals(listOf(PhoneLive.Behind(at(0), at(8))), step.dos)
+        assertEquals(listOf(PhoneLive.Behind(at(0), at(8))), step.dos.acts())
+        // Конец проверки — строкой в журнал (14.10.2026: тишина читалась как поломка).
+        assertTrue((step.dos.first() as PhoneLive.Note).text.contains("кончилась до вопроса"))
         assertEquals(PhoneLive.Base.IDLE, step.state.base)
         assertFalse(step.state.watching)
     }
@@ -412,11 +414,13 @@ class PhoneLiveTest {
     }
 
     @Test
-    fun `владелец сказал сам — молчим до конца сидения`() {
-        val off = PhoneLive.ownerTook(on())
+    fun `владелец сказал сам — молчим о тех же приложениях, сидение кончилось — снова с нуля`() {
+        val off = PhoneLive.ownerTook(on(), at(20))
         assertEquals(PhoneLive.Base.OFF, off.base)
         assertEquals(0L, off.resumeId)
         assertTrue(off.marks.isEmpty())
+        // Его слово — про время до 0:20; дальше сидение от порога — проверка (PhoneLiveSilenceTest).
+        assertEquals(at(20), off.freshFrom)
         // Сидение кончилось — снова с нуля.
         val idle = PhoneLive.pulse(off, PhoneLive.View(null, at(30), 0L), at(34), minMs).state
         assertEquals(PhoneLive.Base.IDLE, idle.base)

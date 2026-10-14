@@ -53,6 +53,11 @@ import ru.zf.pravka.provider.zasechkaPhone
  *    часовым кэшем, сидение и снимки — после (`PhoneSit.phoneParts`);
  *  - сидение, кончившееся до вопроса (7–10 минут), — как в первом заходе:
  *    врезкой задним числом и тихим пушем с «Убрать»;
+ *  - слово владельца и охрана ленты — про своё время (14.10.2026, «сказал
+ *    «Завтрак» — и двадцать минут в телефоне тишина»): сидение от порога
+ *    после них — новая проверка; конец проверки без вопроса — строкой в
+ *    журнал; удар автомата целиком — `PhoneLive.beat`, файл — `toJson`/
+ *    `fromJson`: тесты гонят тот же путь, включая файл прежней сборки;
  *  - состояние автомата и последние решения — `phone-sit.json` в базе (текста
  *    экрана там нет: подтверждённое хранится хэшем).
  */
@@ -188,8 +193,8 @@ class PhoneSitEngine(
         // Владелец сам переключился (сказал в «З», убрал запись) — его слово сильнее.
         if (live.base == PhoneLive.Base.ON && zasechkaStore.openEntry()?.id != live.entryId) {
             val title = live.title
-            set(PhoneLive.ownerTook(live))
-            eventLog.add("телефон в ленте: «$title» больше не веду — ты переключился сам")
+            set(PhoneLive.ownerTook(live, now))
+            eventLog.add("телефон в ленте: «$title» больше не веду — ты переключился сам; дальше сидение от порога — посмотрю снова")
         }
         val minMs = settings.zPhoneMinFlow.first().coerceIn(3, 30) * 60_000L
         val events = eventsNow(now)
@@ -198,30 +203,13 @@ class PhoneSitEngine(
         if (live.watching) {
             ownerSpokeSince(live.watchFrom)?.let { e ->
                 val apps = segment(spans, live.watchFrom, now).spans.map { it.pkg }.toSet()
-                set(
-                    if (live.base == PhoneLive.Base.IDLE) live.unwatched().copy(base = PhoneLive.Base.OFF, apps = apps)
-                    else live.unwatched().copy(apps = live.apps + apps)
-                )
+                set(PhoneLive.guarded(live, apps, now))
                 eventLog.add("телефон в ленте: ты сказал «${e.title}» в ${hm(e.createdAt)} — не спрашиваю")
             }
         }
+        // Минута экрана (снимок в счёт проверки или сверка стоящего дела) и пульс — одним ударом автомата.
         val before = live
-        if (minute) {
-            // Минута экрана: снимок в счёт проверки или сверка стоящего дела.
-            val m = PhoneLive.minute(live, seenNow(spans, now), now)
-            set(m.state)
-            for (d in m.dos) perform(d, spans, minMs)
-        }
-        val sittings = PhoneSit.stretches(spans.filter { it.end > live.handled }, now)
-            .map { if (it.start < live.handled) it.clip(live.handled, it.end) else it }
-            .filter { it.spans.isNotEmpty() }
-        val view = PhoneLive.View(
-            sitting = sittings.lastOrNull(),
-            lastUse = spans.maxOfOrNull { it.end } ?: 0L,
-            outsideSince = PhoneLive.outsideSince(spans, live.apps, now),
-            offs = PhoneLive.merge(PhoneLive.offs(events), spans),
-        )
-        val step = PhoneLive.pulse(live, view, now, minMs)
+        val step = PhoneLive.beat(live, events, spans, if (minute) seenNow(spans, now) else null, minute, now, minMs)
         set(step.state)
         if (!before.watching && live.watching) startedWatch(spans, now)
         for (d in step.dos) perform(d, spans, minMs)
@@ -254,11 +242,12 @@ class PhoneSitEngine(
         val reachesNow = g.pieces.any { now - it.end <= PhoneSit.GAP_MS }
         val apps = seg.spans.map { it.pkg }.toSet()
         if (g.why.isNotBlank() && !reachesNow) {
-            set(
-                if (live.base == PhoneLive.Base.IDLE) live.unwatched().copy(base = PhoneLive.Base.OFF, apps = apps)
-                else live.unwatched().copy(apps = live.apps + apps)
+            // Охрана — про своё время: дальше сидение от порога — новая проверка.
+            set(PhoneLive.guarded(live, apps, now))
+            eventLog.add(
+                "телефон в ленте: на экран не смотрю — ${g.why}" +
+                    (if (live.base == PhoneLive.Base.OFF) "; дальше сидение от порога — посмотрю снова" else "")
             )
-            eventLog.add("телефон в ленте: на экран не смотрю — ${g.why}")
             return
         }
         eventLog.add("телефон в ленте: с ${hm(from)} в телефоне — ${PhoneSit.appsLine(seg, ::label)}; смотрю на экран три минуты")
@@ -289,7 +278,7 @@ class PhoneSitEngine(
         val reply = claude().zasechkaPhone(stable, context)
         val r = reply.getOrNull()
         if (r == null) {
-            lock.withLock { set(PhoneLive.failed(live).copy(snaps = 0)) }
+            lock.withLock { if (live.thinking) set(PhoneLive.failed(live, System.currentTimeMillis())) }
             eventLog.add("телефон в ленте: Сонет не ответил — ${reply.exceptionOrNull()?.message}; ещё три минуты и спрошу снова")
             return
         }
@@ -302,15 +291,24 @@ class PhoneSitEngine(
             PhoneLive.Guess(it.title, it.category, clients.firstOrNull { c -> c.equals(it.client, ignoreCase = true) }.orEmpty(), it.start)
         }
         val shownApps = PhoneSit.appsLine(seg, ::label)
-        lock.withLock {
-            set(PhoneLive.classified(live, guess, apps, System.currentTimeMillis()).state)
+        val ask = lock.withLock {
+            // Ответа уже не ждали (проверка кончилась, Сонет думал дольше
+            // THINK_MS) — ни записи, ни плашки: галочка на ней ничего бы не поставила.
+            val awaited = live.watching && live.thinking
+            val step = PhoneLive.classified(live, guess, apps, System.currentTimeMillis())
+            set(step.state)
+            if (!awaited) {
+                for (d in step.dos) perform(d, emptyList(), 0L)
+                return@withLock false
+            }
             if (guess == null) {
                 record(seg, shownApps, "то же дело — ${parsed?.why?.ifBlank { null } ?: "Сонет не режет"}; молчу, пока впереди эти приложения")
-                return@withLock
+                return@withLock false
             }
             record(seg, shownApps, "спрашиваю: «${guess.title}» [${guess.category}] — ${parsed?.why.orEmpty()}")
+            true
         }
-        if (guess != null) question(guess)
+        if (ask && guess != null) question(guess)
     }
 
     /** Плашка «Кажется, это …?» на «З». Не встала — молчание, «да» по сроку. */
@@ -363,7 +361,7 @@ class PhoneSitEngine(
     private suspend fun open(d: PhoneLive.Open) {
         val g = d.guess
         ownerSpokeSince(g.from)?.let { e ->
-            set(PhoneLive.ownerTook(live.copy(apps = live.apps + d.apps)))
+            set(PhoneLive.ownerTook(live.copy(apps = live.apps + d.apps), System.currentTimeMillis()))
             eventLog.add("телефон в ленте: «${g.title}» не ставлю — ты сам сказал «${e.title}» в ${hm(e.createdAt)}")
             return
         }
@@ -608,7 +606,7 @@ class PhoneSitEngine(
         _status.value = statusLine(s)
         if (old.base != s.base || old.apps != s.apps || old.entryId != s.entryId || old.handled != s.handled ||
             old.resumeId != s.resumeId || old.title != s.title || old.since != s.since || old.marks != s.marks ||
-            old.litAt != s.litAt
+            old.litAt != s.litAt || old.freshFrom != s.freshFrom
         ) persist()
     }
 
@@ -624,6 +622,8 @@ class PhoneSitEngine(
                 "; экран погаснет на полминуты — дело кончится"
         s.base == PhoneLive.Base.ON ->
             "веду «${s.title}» — на экран не смотрю, пока впереди ${appsNames(s.apps)}; экран погаснет на полминуты — дело кончится"
+        s.base == PhoneLive.Base.OFF && s.freshFrom > 0L ->
+            "молчу, пока впереди ${appsNames(s.apps)}; сидение от порога после ${hm(s.freshFrom)} — посмотрю снова"
         s.base == PhoneLive.Base.OFF -> "молчу до конца сидения, пока впереди ${appsNames(s.apps)}"
         else -> "жду сидения от порога — на экран не смотрю"
     }
@@ -683,30 +683,8 @@ class PhoneSitEngine(
                         Decision(it.optLong("at"), it.optLong("from"), it.optLong("to"), it.optString("apps"), it.optString("verdict"))
                     }
                 }
-                val appsArr = o.optJSONArray("apps") ?: JSONArray()
-                val marksArr = o.optJSONArray("marks") ?: JSONArray()
-                val base = runCatching { PhoneLive.Base.valueOf(o.optString("base", "IDLE")) }.getOrDefault(PhoneLive.Base.IDLE)
-                val now = System.currentTimeMillis()
-                live = PhoneLive.State(
-                    base = base,
-                    apps = (0 until appsArr.length()).map { appsArr.optString(it) }.filter { it.isNotBlank() }.toSet(),
-                    entryId = o.optLong("entry", 0L),
-                    title = o.optString("title"),
-                    resumeId = o.optLong("resume", 0L),
-                    // Дело второго захода (до 14.10) погасаний не знало — считаем их с загрузки.
-                    since = o.optLong("since", if (base == PhoneLive.Base.ON) now else 0L),
-                    marks = (0 until marksArr.length()).mapNotNull { i ->
-                        marksArr.optJSONObject(i)?.let { m ->
-                            val pkg = m.optString("pkg")
-                            if (pkg.isBlank()) null else PhoneLive.Mark(pkg, if (m.has("s")) m.optInt("s") else null)
-                        }
-                    }.toSet(),
-                    litAt = o.optLong("lit", 0L),
-                    // Своё видели при загрузке: другое на ближайшей сверке смотрится с неё, а не с «да» часы назад.
-                    seenAt = if (base == PhoneLive.Base.ON) now else 0L,
-                    // Первый заход хранил «разобрано до» полем done.
-                    handled = o.optLong("handled", o.optLong("done", 0L)),
-                )
+                // Состояние — тем же разбором, что в тестах (`PhoneLive.fromJson`): обновление посреди сидения.
+                live = PhoneLive.fromJson(o, System.currentTimeMillis())
             }
             _status.value = statusLine(live)
             loaded = true
@@ -714,26 +692,9 @@ class PhoneSitEngine(
     }
 
     private fun persist() {
-        val s = live
-        val o = JSONObject()
+        // Подтверждённое — приложение и ХЭШ предмета: текст экрана на диск не пишется никогда.
+        val o = PhoneLive.toJson(live)
             .put("format", "pravka-phone-sit")
-            .put("base", s.base.name)
-            .put("apps", JSONArray(s.apps.toList()))
-            .put("entry", s.entryId)
-            .put("title", s.title)
-            .put("resume", s.resumeId)
-            .put("since", s.since)
-            // Подтверждённое — приложение и ХЭШ предмета: текст экрана на диск не пишется никогда.
-            .put(
-                "marks",
-                JSONArray().apply {
-                    s.marks.forEach { m ->
-                        put(JSONObject().put("pkg", m.pkg).apply { m.subject?.let { put("s", it) } })
-                    }
-                },
-            )
-            .put("lit", s.litAt)
-            .put("handled", s.handled)
             .put(
                 "log",
                 JSONArray().apply {
