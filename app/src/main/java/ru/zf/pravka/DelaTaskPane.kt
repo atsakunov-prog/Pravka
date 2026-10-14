@@ -74,15 +74,16 @@ internal fun DelaTaskPane(
     onProject: (String) -> Unit = {},
     /** Кто смотрит: место в дереве — только у своего дела. */
     me: String = "",
-    /** Молния «В «Сейчас»» / «Из «Сейчас»» (вид v2, 13.10.2026); null — кнопки нет. */
+    /**
+     * Молния «В «Сейчас»» / «Из «Сейчас»» (вид v2, 13.10.2026); null — кнопки нет. С 14.10.2026 — единственная
+     * отметка: солнца «На сегодня» / «На завтра» нет (его принимали за «Сейчас», а оно двигало срок).
+     */
     onNow: (() -> Unit)? = null,
-    /** Солнце «На сегодня» / «На завтра»; null — кнопки нет. */
-    onSun: (() -> Unit)? = null,
     /** «Перенести» — лист сроков, как «Перенести все»; null — кнопки нет. */
     onMove: (() -> Unit)? = null,
 ) {
     if (ru.zf.pravka.ui.Look.v2) {
-        DelaTaskPaneV2(app, task, snap, spentMs, onStart, onEdit, onDone, onPerson, modifier, onTask, onProject, me, onNow, onSun, onMove)
+        DelaTaskPaneV2(app, task, snap, spentMs, onStart, onEdit, onDone, onPerson, modifier, onTask, onProject, me, onNow, onMove)
         return
     }
     val mode = LocalMode.current
@@ -313,7 +314,7 @@ private fun historyPaneLine(o: org.json.JSONObject, snap: Dela.Snapshot): String
  * Карточка дела справа в виде v2 (этап 4 «Правки 5.0», лист «Дела» холста; карточка веба Дел): панелью с
  * линией — надстрочник «Дело» и группа, название 17/600, метки (проект, сделка, «в «Сейчас»», свои), свойства
  * строками через тонкую линию (кто ждёт, срок, напомнить, оценка, откуда), заметки и ряд действий:
- * «Сделано» акцентом, молния «В «Сейчас»», солнце, «Перенести», «Начать», «Карточка» (вся правка — тем же листом).
+ * «Сделано» акцентом, молния «В «Сейчас»», «Перенести», «Начать», «Карточка» (вся правка — тем же листом).
  * Ниже — место в дереве (Круг) и журнал: заметки к делу и правки сервера по времени. Номера дела нет нигде.
  */
 @Composable
@@ -331,7 +332,6 @@ private fun DelaTaskPaneV2(
     onProject: (String) -> Unit,
     me: String,
     onNow: (() -> Unit)?,
-    onSun: (() -> Unit)?,
     onMove: (() -> Unit)?,
 ) {
     val ty = LocalPravkaType.current
@@ -463,11 +463,9 @@ private fun DelaTaskPaneV2(
                 ) {
                     KvSmallKey(if (task.open) "Сделано" else "Вернуть в работу", if (task.open) Glyphs.Check else Glyphs.Undo, kind = if (task.open) 2 else 0, onClick = onDone)
                     if (task.open) {
-                        val mine = me.isBlank() || task.ownerId.isBlank() || task.ownerId == me
-                        if (onNow != null && mine && !task.goal) KvSmallKey(if (isNow) "Из «Сейчас»" else "В «Сейчас»", Glyphs.Bolt, kind = if (isNow) 1 else 0, onClick = onNow)
-                        if (onSun != null) {
-                            val on = ru.zf.pravka.core.DelaGroups.inToday(task, task.ownerId, iso)
-                            KvSmallKey(if (on) "На завтра" else "На сегодня", Glyphs.Sunny, kind = 0, onClick = onSun)
+                        // Молния — сразу, срок не трогает; срок — «Перенести». Кнопка есть, только если её можно нажать.
+                        if (onNow != null && ru.zf.pravka.core.DelaGroups.canNow(task, me)) {
+                            KvSmallKey(if (isNow) "Из «Сейчас»" else "В «Сейчас»", Glyphs.Bolt, kind = if (isNow) 1 else 0, onClick = onNow)
                         }
                         if (onMove != null) KvSmallKey("Перенести", Glyphs.Calendar, kind = 0, onClick = onMove)
                         KvSmallKey("Начать", Glyphs.Play, kind = 0, onClick = onStart)

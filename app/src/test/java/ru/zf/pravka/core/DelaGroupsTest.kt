@@ -10,7 +10,7 @@ import org.junit.Test
 
 /**
  * Три группы, «Сейчас», «Сегодня» и просроченное врозь, уровни и «только одно» — как веб (`app.js`:
- * `grpOf`, `isNow`, `inToday`, `isLate`, `whenDay`, `byTime`, `toggleToday`, `toggleNow`, `levelKey`,
+ * `grpOf`, `isNow`, `inToday`, `isLate`, `whenDay`, `byTime`, `toggleNow`, `levelKey`,
  * `nested`, `branches`) и сервер (`store.group_of`, `NOW_IF`, `TODAY_IF`, `LATE_IF`). Данные выдуманные.
  */
 class DelaGroupsTest {
@@ -161,27 +161,54 @@ class DelaGroupsTest {
         assertEquals(listOf("o", "c"), DelaGroups.todayByGroups(s, "me", today, "all").map { it.id })
     }
 
+    /**
+     * 14.10.2026, владелец: «Если нажимаю на „сейчас“, то дело пропадает и не ставится в сейчас… Надо оставить
+     * только сейчас». Солнце у строки (`toggleToday`) он принимал за «Сейчас», а оно у дела со сроком сегодня
+     * ставило срок на завтра — дело уезжало. Теперь у строки и в карточке одна молния, и ни взятие, ни снятие не
+     * трогают ни срок, ни время, ни напоминание: в операции — только `focus_on`. Сроки — какие угодно.
+     */
     @Test
-    fun `солнце — на сегодня и у просроченного, на завтра снимает Сейчас и двигает напоминание`() {
-        val (on, w1) = DelaGroups.toggleToday(task("a"), "me", today, tomorrow)
-        assertEquals("На сегодня", w1)
-        assertEquals("{\"due_date\":\"$today\"}", on.toString())
-        // Просроченное солнцем переезжает в «Сегодня».
-        val (late, w0) = DelaGroups.toggleToday(task("late") { it.copy(dueDate = "2026-10-08") }, "me", today, tomorrow)
-        assertEquals("На сегодня", w0)
-        assertEquals("{\"due_date\":\"$today\"}", late.toString())
-        // «Сейчас» без срока — не «Сегодня»: солнце ставит срок сегодня, отметку не трогает.
-        val (nowOnly, w3) = DelaGroups.toggleToday(task("b") { it.copy(focusOn = today) }, "me", today, tomorrow)
-        assertEquals("На сегодня", w3)
-        assertEquals("{\"due_date\":\"$today\"}", nowOnly.toString())
-        // На сегодня — «на завтра»: срок завтра, «Сейчас» снимается.
-        val (off, w2) = DelaGroups.toggleToday(task("b2") { it.copy(focusOn = today, dueDate = today) }, "me", today, tomorrow)
-        assertEquals("На завтра", w2)
-        assertEquals(tomorrow, off.getString("due_date"))
-        assertEquals(JSONObject.NULL, off.get("focus_on"))
-        val (nudge, _) = DelaGroups.toggleToday(task("c") { it.copy(ball = Dela.WAITING, nudgeOn = today, dueDate = today) }, "me", today, tomorrow)
-        assertEquals(tomorrow, nudge.getString("nudge_on"))
-        assertEquals(tomorrow, nudge.getString("due_date"))
+    fun `молния не трогает срок — ни взять, ни снять`() {
+        val yday = "2026-10-09"
+        val cases = listOf(
+            task("без срока"),
+            task("срок сегодня") { it.copy(dueDate = today, dueTime = "15:00") },
+            task("просрочено") { it.copy(dueDate = yday) },
+            task("на завтра") { it.copy(dueDate = tomorrow) },
+            task("мониторить с напоминанием") { it.copy(ball = Dela.WAITING, dueDate = today, nudgeOn = today) },
+            task("отбить") { it.copy(owed = true, dueDate = today) },
+        )
+        for (t in cases) {
+            val s = snap(t)
+            val (on, said) = DelaGroups.toggleNow(t, s, "me", today)
+            assertEquals(t.id, "В «Сейчас»", said)
+            assertEquals(t.id, listOf("focus_on"), on!!.keys().asSequence().toList())
+            assertEquals(t.id, today, on.getString("focus_on"))
+            // Легло в копию — срок, время и напоминание те же, дело в «Сейчас».
+            val taken = Dela.applyFields(t, on, today, "")
+            assertEquals(t.id, Triple(t.dueDate, t.dueTime, t.nudgeOn), Triple(taken.dueDate, taken.dueTime, taken.nudgeOn))
+            assertTrue(t.id, DelaGroups.isNow(taken, today))
+            // Повторное нажатие — «Из «Сейчас»»: снова только `focus_on`, срок на месте.
+            val (off, said2) = DelaGroups.toggleNow(taken, snap(taken), "me", today)
+            assertEquals(t.id, "Убрал из «Сейчас»", said2)
+            assertEquals(t.id, listOf("focus_on"), off!!.keys().asSequence().toList())
+            val back = Dela.applyFields(taken, off, today, "")
+            assertEquals(t.id, Triple(t.dueDate, t.dueTime, t.nudgeOn), Triple(back.dueDate, back.dueTime, back.nudgeOn))
+            assertFalse(t.id, DelaGroups.isNow(back, today))
+            // «Вернуть» — та же операция наоборот, тоже без срока.
+            assertEquals(t.id, listOf("focus_on"), DelaGroups.was(t, on).keys().asSequence().toList())
+        }
+    }
+
+    @Test
+    fun `молния есть только там, где её можно нажать — своё открытое, не цель`() {
+        assertTrue(DelaGroups.canNow(task("a"), "me"))
+        assertTrue(DelaGroups.canNow(task("b") { it.copy(focusOn = today) }, "me"))
+        // Кто смотрит — не знаем (страница без входа): всё своё.
+        assertTrue(DelaGroups.canNow(task("c") { it.copy(ownerId = "lena") }, ""))
+        assertFalse(DelaGroups.canNow(task("d") { it.copy(ownerId = "lena") }, "me"))
+        assertFalse(DelaGroups.canNow(task("e") { it.copy(goal = true) }, "me"))
+        assertFalse(DelaGroups.canNow(task("f") { it.copy(status = Dela.DONE) }, "me"))
     }
 
     @Test

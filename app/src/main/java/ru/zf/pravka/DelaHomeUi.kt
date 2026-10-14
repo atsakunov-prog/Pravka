@@ -295,12 +295,12 @@ internal fun LazyListScope.homeView(
     item(key = "home:now") {
         HomeBlock(Glyphs.Bolt, "Сейчас", h.now.size, hot = true, sub = "отметил сам — сделать сегодня") {
             if (h.now.isEmpty()) {
-                BlockNote("Пусто. Возьми до ${DelaViews.NOW_MAX} дел на сегодня — молния «В «Сейчас»» в карточке дела или «!сейчас» в строке.")
+                BlockNote("Пусто. Возьми до ${DelaViews.NOW_MAX} дел на сегодня — молния у дела или в его карточке, «!сейчас» в строке.")
             } else {
                 // Жирным здесь не выделяем: весь блок — «Сейчас».
                 TaskRows(h.now, actions, today, nowBold = false)
                 if (h.now.size < DelaViews.NOW_MAX) {
-                    BlockNote("Ещё ${DelaViews.NOW_MAX - h.now.size} — молния «В «Сейчас»» в карточке дела", top = true)
+                    BlockNote("Ещё ${DelaViews.NOW_MAX - h.now.size} — молнией у дела или в его карточке", top = true)
                 }
             }
         }

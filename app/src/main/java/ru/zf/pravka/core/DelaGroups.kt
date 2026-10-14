@@ -17,7 +17,7 @@ import ru.zf.pravka.core.Dela.str
  * уровень группировки — проекты, второй — по категориям, третий — по времени».
  *
  * Эталон — веб (`server/pravka_dela/static/app.js`: `GRP`, `grpOf`, `grpSet`,
- * `inToday`, `whenDay`, `byTime`, `toggleToday`, `LEVELS`, `levelKey`,
+ * `inToday`, `whenDay`, `byTime`, `toggleNow`, `LEVELS`, `levelKey`,
  * `nested`, `branches`, `FILTERS_DEF`) и правила 17–18 сервера. Одно правило в
  * четырёх местах (сервер, вид базы, веб, телефон): поправил веб — поправь здесь
  * и тест `DelaGroupsTest`.
@@ -69,10 +69,16 @@ object DelaGroups {
      */
 
     private fun mine(me: String, t: Dela.Task) = me.isBlank() || t.ownerId == me
-    private fun le(d: String, today: String) = d.isNotBlank() && d <= today
 
     /** Своё открытое дело, не цель: цель не делают, к ней идут (дерево жизни) — её нет ни в одном списке дня. */
     private fun deed(t: Dela.Task, me: String) = t.open && !t.goal && mine(me, t)
+
+    /**
+     * Молния «Сейчас» у дела есть (строка, карточка): своё открытое, не цель — как `isMine(t) && !t.goal` веба.
+     * У чужого дела (страница клиента) и у цели её нет: нажать — только тост «нельзя», а кнопка, которая
+     * всегда отказывает, читается как поломка. Условие — ровно то, по которому [toggleNow] берёт дело.
+     */
+    fun canNow(t: Dela.Task, me: String): Boolean = deed(t, me)
 
     /** «Сейчас» (`isNow` веба, `store.NOW_IF`): владелец сам отметил дело на сегодня. Срок ни при чём. */
     fun isNow(t: Dela.Task, today: String): Boolean = t.focusOn == today
@@ -180,25 +186,21 @@ object DelaGroups {
     fun mskDay(iso: String): String =
         runCatching { OffsetDateTime.parse(iso).atZoneSameInstant(MSK).toLocalDate().toString() }.getOrDefault(iso.take(10))
 
-    /**
-     * Солнце у дела (`toggleToday` веба): не на сегодня (и просроченное) — «На сегодня»: срок сегодня, и
-     * просроченное солнцем переезжает в «Сегодня»; на сегодня — «На завтра»: срок завтра, у «мониторить» с
-     * напоминанием сегодня или раньше — и напоминание завтра, а «Сейчас» снимается — оно на сегодня.
-     * [tomorrow] — завтрашний день. Ответ — поля операции и подпись тоста.
+    /*
+     * Солнца «На сегодня» / «На завтра» (`toggleToday`, 10.10–14.10.2026) больше нет. Владелец 14.10.2026:
+     * «Если нажимаю на „сейчас“, то дело пропадает и не ставится в сейчас… Надо оставить только сейчас».
+     * Солнце у строки он принимал за «Сейчас»: у дела со сроком сегодня оно делало «На завтра» — срок уезжал
+     * на завтра, «Сейчас» снималось, и дело пропадало с экрана (в журнале трёх дел утром — только `due_date`
+     * с телефона). Теперь у строки и в карточке одна отметка — молния ниже; срок меняют «Перенести» и дата.
      */
-    fun toggleToday(t: Dela.Task, me: String, today: String, tomorrow: String): Pair<JSONObject, String> {
-        if (!inToday(t, me, today)) return JSONObject().put("due_date", today) to "На сегодня"
-        val set = JSONObject().put("due_date", tomorrow)
-        if (isNow(t, today)) set.put("focus_on", JSONObject.NULL)
-        if (t.ball == Dela.WAITING && le(t.nudgeOn, today)) set.put("nudge_on", tomorrow)
-        return set to "На завтра"
-    }
 
     /**
      * Молния «Сейчас» (`toggleNow` веба, 13.10.2026: «Сейчас — то, что отметил»): в «Сейчас» — убрать
-     * (`focus_on` = null, срок не трогаем: дело остаётся, где было); не в нём — взять на сегодня. Встаёт
-     * только своё открытое дело, не цель; шестое не встаёт ([DelaViews.NOW_FULL], предел держит и сервер —
-     * `store._now_guard`). Ответ — поля операции (null — нельзя) и слова для тоста.
+     * (`focus_on` = null); не в нём — взять на сегодня. В операции ТОЛЬКО `focus_on`: срок, напоминание и
+     * группа не трогаются ни при взятии, ни при снятии — дело остаётся, где было (под `DelaGroupsTest`:
+     * «молния не трогает срок»). Встаёт только своё открытое дело, не цель; шестое не встаёт
+     * ([DelaViews.NOW_FULL], предел держит и сервер — `store._now_guard`). Ответ — поля операции (null —
+     * нельзя) и слова для тоста.
      */
     fun toggleNow(t: Dela.Task, s: Dela.Snapshot, me: String, today: String): Pair<JSONObject?, String> = when {
         isNow(t, today) -> JSONObject().put("focus_on", JSONObject.NULL) to "Убрал из «Сейчас»"

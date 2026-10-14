@@ -454,7 +454,7 @@ fun DelaTab(
         }
     }
 
-    // «Вернуть» после крестика, «откуда он», «+ человек», солнца — полоской наверху вкладки, пока не закрыли.
+    // «Вернуть» после крестика, «откуда он», «+ человек», молнии — полоской наверху вкладки, пока не закрыли.
     var undoOffer by remember { mutableStateOf<UndoOffer?>(null) }
     // На развороте дело открывается справа (`DelaTaskPane`), а не листом.
     val wideNow = ru.zf.pravka.ui.twoPane()
@@ -482,17 +482,10 @@ fun DelaTab(
         },
         person = { id -> if (id.isNotBlank()) push(DelaPage.Person(id)) },
         project = { id -> if (id.isNotBlank()) push(DelaPage.Project(id)) },
-        // Солнце (10.10.2026, `toggleToday` веба): не на сегодня — «На сегодня» (срок сегодня);
-        // уже на сегодня — «На завтра». Тост с «Вернуть» — как в вебе.
-        toggleNow = { t ->
-            val tomorrow = LocalDate.parse(today).plusDays(1).toString()
-            val (set, said) = DelaGroups.toggleToday(t, me, today, tomorrow)
-            val was = DelaGroups.was(t, set)
-            undoOffer = UndoOffer(said + ": " + t.title.take(40), listOf(Dela.setOp(t.id, was, set)), emptyList())
-            scope.launch { app.delaDo(listOf(Dela.setOp(t.id, set, was))) }
-        },
-        // Молния (13.10.2026, `toggleNow` веба): взял на сегодня — в «Сейчас», снял — дело остаётся, где было.
-        // Шестое не встаёт — тост словами, как у веба и у правки словами на сервере.
+        // Молния (13.10.2026, `toggleNow` веба): взял на сегодня — в «Сейчас», снял — дело остаётся, где было:
+        // в операции только `focus_on`, срок не трогается. С 14.10.2026 она одна у строки и в карточке —
+        // солнца «На сегодня» / «На завтра» нет (владелец принимал его за «Сейчас», и дело уезжало на завтра).
+        // Шестое не встаёт — тост словами, как у веба и у правки словами на сервере. «Вернуть» — полоской.
         bolt = { t ->
             val (set, said) = DelaGroups.toggleNow(t, snap, me, today)
             if (set == null) Feedback.toast(app, said)
@@ -1449,7 +1442,6 @@ fun DelaTab(
                         onProject = { id -> push(DelaPage.Project(id)) },
                         me = me,
                         onNow = { shown?.let { actions.bolt(it) } },
-                        onSun = { shown?.let { actions.toggleNow(it) } },
                         onMove = { shown?.let { rescheduling = listOf(it) } },
                     )
                 }
@@ -1585,6 +1577,8 @@ fun DelaTab(
                 scope.launch { app.delaDo(listOf(Dela.statusOp(op, fresh.id))) }
             },
             onStart = { openTask = null; actions.start(fresh) },
+            // Молния — сразу, как у строки: «Вернуть» той же полоской наверху вкладки.
+            onNow = { actions.bolt(it) },
             // Микрофона у дела нет (поправки задания 10): та же строка Claude — над карточкой, с `open`.
             say = if (link != null) ({ sayBar(Modifier, fresh, false) }) else null,
         )
@@ -1925,9 +1919,10 @@ internal class DelaActions(
     val person: (String) -> Unit,
     val project: (String) -> Unit,
     val starting: String,
-    /** Солнце: «на сегодня» и «на завтра» (`toggleToday` веба). Имя старое — до 10.10.2026 тут была молния. */
-    val toggleNow: (Dela.Task) -> Unit = {},
-    /** Молния «В «Сейчас»» / «Из «Сейчас»» (`toggleNow` веба, 13.10.2026): отметка владельца, шестое — тост. */
+    /**
+     * Молния «В «Сейчас»» / «Из «Сейчас»» (`toggleNow` веба, 13.10.2026): отметка владельца, шестое — тост.
+     * С 14.10.2026 — единственная отметка у строки и в карточке: солнца «на сегодня / на завтра» нет.
+     */
     val bolt: (Dela.Task) -> Unit = {},
     /** «без проекта» у строки — кнопка выбора проекта; null — подпись просто текстом. */
     val pickProject: ((List<Dela.Task>) -> Unit)? = null,
@@ -1944,7 +1939,7 @@ internal class DelaActions(
     /** Дело, открытое справа на развороте: строка подсвечена (`.li.sel` холста). "" — никакое. */
     val selectedId: String = "",
     /**
-     * Короткая строка (разворот вида v2, `.li` холста): только квадрат и слова. Солнце и ▶ — в карточке справа,
+     * Короткая строка (разворот вида v2, `.li` холста): только квадрат и слова. Молния и ▶ — в карточке справа,
      * куда строка и ведёт: в средней колонке на них уходила половина ширины, и названия ломались по слову.
      */
     val compact: Boolean = false,
@@ -2873,8 +2868,8 @@ internal fun TaskRow(
     // Правка 4.0 (DESIGN §11.7 TaskRow в Делах, `screens/06`): кольцо 22 в
     // зоне 44, «Кто: действие» до двух строк, вторая строка — подписи веба;
     // справа ▶ по 40. Просроченное — толще кольцо и «просрочено N дн» жирным,
-    // без красного. Солнце «на сегодня» (10.10.2026, вместо молнии «Сейчас») —
-    // слева; кольцо по группе: «отбить» — светлое, «мониторить» — пунктир,
+    // без красного. Слева — молния «Сейчас» (с 14.10.2026; 10.10–14.10 там было
+    // солнце «на сегодня»); кольцо по группе: «отбить» — светлое, «мониторить» — пунктир,
     // повестка — точки. Жирным — только дело в «Сейчас» (оно у Засечки).
     // Вид v2 (холст, `.li` и `.chk`): квадрат 18 с радиусом 5 вместо кольца, «просрочено» —
     // цветом «внимание», выбранное справа дело — мягким акцентом (`.li.sel`).
@@ -2895,15 +2890,22 @@ internal fun TaskRow(
                 .padding(vertical = 4.dp),
         ) {
             if (t.open && !actions.compact) {
-                // Солнце горит у дел на сегодня. Владелец дела — «я» для правила «Сегодня»: строка
-                // показывает и чужие дела (страница клиента), и у них своё «сегодня».
-                val on = DelaGroups.inToday(t, t.ownerId, today)
-                Icon(
-                    Glyphs.Sunny,
-                    contentDescription = if (on) "Не сегодня — на завтра" else "На сегодня",
-                    tint = if (v2) (if (on) Kv.accent else Kv.check) else if (on) mode.value else mode.meta.copy(alpha = 0.45f),
-                    modifier = Modifier.size(30.dp).clip(if (v2) RoundedCornerShape(KvShape.Control) else CircleShape).clickable { actions.toggleNow(t) }.padding(6.dp),
-                )
+                // Молния «Сейчас» (14.10.2026, вместо солнца «на сегодня / на завтра»: его принимали за «Сейчас»,
+                // а оно двигало срок — дело уезжало на завтра и пропадало). Горит у дела в «Сейчас»; тап —
+                // в «Сейчас» или из него, сразу, срок не трогается. У чужого дела и у цели молнии нет (её
+                // нельзя нажать) — на её месте пусто той же ширины, чтобы флажки строк стояли ровно.
+                if (DelaGroups.canNow(t, actions.me)) {
+                    val on = DelaGroups.isNow(t, today)
+                    Icon(
+                        Glyphs.Bolt,
+                        contentDescription = if (on) "Из «Сейчас»" else "В «Сейчас»",
+                        tint = if (v2) (if (on) Kv.accent else Kv.check) else if (on) mode.value else mode.meta.copy(alpha = 0.45f),
+                        modifier = Modifier.size(30.dp).clip(if (v2) RoundedCornerShape(KvShape.Control) else CircleShape)
+                            .clickable(onClickLabel = if (on) "убрать из «Сейчас»" else "взять в «Сейчас»") { actions.bolt(t) }.padding(6.dp),
+                    )
+                } else {
+                    Spacer(Modifier.size(30.dp))
+                }
             }
             Box(
                 Modifier.size(if (v2) 40.dp else 44.dp).clip(if (v2) RoundedCornerShape(KvShape.Control) else CircleShape).clickable { actions.done(t) },
@@ -3047,7 +3049,7 @@ internal fun DelaTaskSheet(
      * у дела нет (поправки задания 10). null — новое дело, черновик, нет сервера.
      */
     say: (@Composable () -> Unit)? = null,
-    /** Предложение автоматики: «на сегодня» в нём не ставится (как в вебе). */
+    /** Предложение автоматики: «Сейчас» в нём не ставится (как в вебе). */
     suggestion: Boolean = false,
     /**
      * «Место в дереве»: тап по цели — её карточка. Ответ — дело, как его поправили здесь
@@ -3056,6 +3058,11 @@ internal fun DelaTaskSheet(
     onOpenTask: ((Dela.Task, Dela.Task) -> Unit)? = null,
     /** «Место в дереве»: тап по проекту (▣) — его страница. */
     onOpenProject: ((String) -> Unit)? = null,
+    /**
+     * Молния «В «Сейчас»» / «Из «Сейчас»» у существующего дела — сразу, мимо «Сохранить» (вкладка Дел даёт
+     * свою — с «Вернуть» полоской). null — карточка ставит операцию сама и говорит тостом (Засечка).
+     */
+    onNow: ((Dela.Task) -> Unit)? = null,
 ) {
     var f by remember(task.id) { mutableStateOf(task) }
     var picking by remember { mutableStateOf("") }
@@ -3068,6 +3075,10 @@ internal fun DelaTaskSheet(
     val today = LocalDate.now()
     val comments = snap.commentsOf(task.id)
     val existing = !isNew
+    // «Сейчас» у существующего дела ставит молния сразу, своей операцией; «Сохранить» его не шлёт — отметка в
+    // [f] та, что была при открытии (или уже живая — у Засечки [task] из копии), иначе правка карточки вернула
+    // бы прежнее «Сейчас» поверх только что поставленного.
+    fun pinNow(x: Dela.Task): Dela.Task = if (existing) x.copy(focusOn = task.focusOn) else x
     LaunchedEffect(task.id, existing) {
         if (existing && !task.local && app.delaSync.link.value != null) app.delaSync.card(task.id).onSuccess { card = it }
     }
@@ -3093,7 +3104,7 @@ internal fun DelaTaskSheet(
                 PaperIconButton(Glyphs.Delete, "убрать это дело", onClick = onDrop, tint = MaterialTheme.colorScheme.error)
             }
             Spacer(Modifier.weight(1f))
-            PaperButton(saveText, primary = true, enabled = f.title.isNotBlank(), onClick = { onSave(f.copy(title = f.title.trim(), notes = f.notes.trim())) })
+            PaperButton(saveText, primary = true, enabled = f.title.isNotBlank(), onClick = { onSave(pinNow(f).copy(title = f.title.trim(), notes = f.notes.trim())) })
         },
     ) {
         if (say != null && existing) {
@@ -3103,25 +3114,33 @@ internal fun DelaTaskSheet(
         if (quote.isNotBlank()) PaperHint("«${quote.take(300)}»")
         if (warn.isNotBlank()) PaperHint(warn, MaterialTheme.colorScheme.error)
         PaperField(value = f.title, onValueChange = { f = f.copy(title = it) }, label = "Кто: что сделать", singleLine = false)
-        // Сразу под названием, как ряд действий карточки веба: молния «В «Сейчас»» (13.10.2026, `toggleNow` веба:
-        // «Сейчас — то, что отметил») и солнце «На сегодня» / «На завтра» (`toggleToday` веба) — два разных дела:
-        // отметка владельца и срок. В предложении и черновике их нет — как в вебе. Ложится при «Сохранить».
+        // Сразу под названием, как ряд действий карточки веба: молния «В «Сейчас»» / «Из «Сейчас»» (13.10.2026,
+        // `toggleNow` веба: «Сейчас — то, что отметил»). Солнца «На сегодня» / «На завтра» нет с 14.10.2026:
+        // владелец принимал его за «Сейчас», а оно двигало срок — срок меняют «Срок» ниже и «Перенести».
+        // У существующего дела молния ложится СРАЗУ (владелец: нажал «Сейчас» — дело в «Сейчас»), а не при
+        // «Сохранить»: закрыл карточку крестиком — отметка всё равно стоит. В операции только `focus_on`.
+        // У нового дела ставить на сервер ещё нечего — отметка уходит вместе с созданием. В предложении и
+        // черновике её нет — как в вебе.
         if (onDrop == null && !suggestion && f.open) {
             val me = app.delaSync.link.value?.user ?: app.delaStore.me
             val iso = today.toString()
-            val taken = DelaGroups.isNow(f, iso)
+            // Что сейчас на самом деле: у существующего — копия с очередью (молния уже легла), у нового — черновик.
+            val live = if (existing) snap.tasks[task.id] ?: task else f
+            val taken = DelaGroups.isNow(live, iso)
             val on = DelaGroups.inToday(f, me, iso)
-            ChipRow {
-                if (!f.goal && (me.isBlank() || f.ownerId.isBlank() || f.ownerId == me)) {
-                    PaperChip("В «Сейчас»", selected = taken, icon = Glyphs.Bolt, onClick = {
+            if (DelaGroups.canNow(live, me)) ChipRow {
+                PaperChip(if (taken) "Из «Сейчас»" else "В «Сейчас»", selected = taken, icon = Glyphs.Bolt, onClick = {
+                    if (!existing) {
                         // Шестое не встаёт (предел — и на сервере, `store._now_guard`): тост, отметка не ставится.
                         val (set, said) = DelaGroups.toggleNow(f, snap, me, iso)
                         if (set == null) Feedback.toast(app, said) else f = Dela.applyFields(f, set, iso, f.updatedAt)
-                    })
-                }
-                PaperChip(if (on) "На завтра" else "На сегодня", selected = false, icon = Glyphs.Sunny, onClick = {
-                    val (set, _) = DelaGroups.toggleToday(f, me, iso, today.plusDays(1).toString())
-                    f = Dela.applyFields(f, set, iso, f.updatedAt)
+                    } else if (onNow != null) {
+                        onNow(live)
+                    } else {
+                        val (set, said) = DelaGroups.toggleNow(live, snap, me, iso)
+                        if (set != null) scope.launch { app.delaDo(listOf(Dela.setOp(live.id, set, DelaGroups.was(live, set)))) }
+                        Feedback.toast(app, said)
+                    }
                 })
             }
             PaperHint(
@@ -3146,7 +3165,7 @@ internal fun DelaTaskSheet(
             val live = snap.copy(tasks = snap.tasks + (f.id to f))
             PlaceBlock(
                 f, DelaKrug.place(f, live, today.toString(), krugMe), krugDirs, snap,
-                onTask = { to -> onOpenTask?.invoke(f, to) },
+                onTask = { to -> onOpenTask?.invoke(pinNow(f), to) },
                 onProject = { id -> onOpenProject?.invoke(id) },
             )
         }
