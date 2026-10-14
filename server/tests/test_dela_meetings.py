@@ -323,7 +323,8 @@ def test_namer_skips_stale_answers_and_marks_failures(mt):
     push(url, ref="401", transcript="Олег Ветров: совсем другой разговор о залоге.")  # пока шла пачка
     fb.status = "ended"
     out = meetings_auto.tick(url, "key", None, now=1100.0, client=cl)
-    assert out == {"named": 0, "failed": 1, "stale": 1, "usd": 0.0}
+    # Ответ по встрече, присланной заново, не кладётся, но оплачен — он в учёте (аудит трат 14.10.2026).
+    assert {k: out[k] for k in ("named", "failed", "stale")} == {"named": 0, "failed": 1, "stale": 1} and out["usd"] > 0
     st = meetings_auto.status(url)
     assert st["waiting"] == 1 and st["failed"] == 1
     assert meetings_auto.rename(url) == 1  # неудавшиеся — заново

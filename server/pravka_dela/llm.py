@@ -22,6 +22,9 @@ log = logging.getLogger("dela.llm")
 PRICES = {
     "claude-sonnet-5-5": {"in": 2.0, "out": 10.0, "cache_write": 2.5, "cache_write_1h": 4.0, "cache_read": 0.20},
     "claude-opus-5-5": {"in": 4.0, "out": 20.0, "cache_write": 5.0, "cache_write_1h": 8.0, "cache_read": 0.20},
+    # Haiku Дела не зовут, но книга трат (spend.py) считает по этой таблице и строки служб компа (Шаббат грузит
+    # главу Haiku): без неё чужая модель считалась бы по цене Opus.
+    "claude-haiku-4-5": {"in": 1.0, "out": 5.0, "cache_write": 1.25, "cache_write_1h": 2.0, "cache_read": 0.10},
 }
 # Выбор в настройках веба («Настройки» → Claude): ключ настройки → модель.
 MODELS = {"sonnet": "claude-sonnet-5-5", "opus": "claude-opus-5-5"}
@@ -67,6 +70,27 @@ def route(url: str | None, name: str) -> tuple[str, str]:
     return (model if model in PRICES else base["model"]), (effort if effort in EFFORTS else base["effort"])
 
 
+def parse_prices(value) -> dict:
+    """Запись Свода claude.prices → таблица как PRICES. Кривая модель пропускается, а не роняет всё."""
+    got = {}
+    for m, v in (value if isinstance(value, dict) else {}).items():
+        if not (m.startswith("claude-") and isinstance(v, dict)):
+            continue
+        try:
+            got[m] = {"in": float(v["in"]), "out": float(v["out"]), "cache_write": float(v["cache_write_5m"]),
+                      "cache_write_1h": float(v.get("cache_write_1h") or 2 * float(v["in"])),
+                      "cache_read": float(v["cache_read"])}
+        except (KeyError, TypeError, ValueError):
+            log.warning("цены Claude из Свода: %s — кривая запись", m)
+    return got
+
+
+def price_of(table: dict, model: str | None) -> dict:
+    """Цена модели из таблицы: точное имя, потом начало имени (claude-opus-5-5-20261001), иначе Opus — дороже не бывает."""
+    m = model or ""
+    return table.get(m) or next((v for k, v in table.items() if m.startswith(k)), table["claude-opus-5-5"])
+
+
 def prices(url: str | None = None) -> dict:
     """Цены по моделям: из Свода (claude.prices, перечитывается раз в час), поверх запасной PRICES.
 
@@ -78,13 +102,7 @@ def prices(url: str | None = None) -> dict:
             with db.session(url, "system", via="claude") as conn:
                 row = conn.execute("SELECT value FROM crm.svod WHERE key = 'claude.prices' AND value IS NOT NULL "
                                    "ORDER BY updated_at DESC LIMIT 1").fetchone()
-            got = {}
-            for m, v in ((row["value"] if row else None) or {}).items():
-                if m.startswith("claude-") and isinstance(v, dict):
-                    got[m] = {"in": float(v["in"]), "out": float(v["out"]), "cache_write": float(v["cache_write_5m"]),
-                              "cache_write_1h": float(v.get("cache_write_1h") or 2 * float(v["in"])),
-                              "cache_read": float(v["cache_read"])}
-            _svod["prices"] = got
+            _svod["prices"] = parse_prices(row["value"] if row else None)
         except Exception:  # noqa: BLE001
             log.exception("цены Claude из Свода")
     return {**PRICES, **_svod["prices"]}
@@ -95,9 +113,7 @@ def cost(usage: dict | None, model: str | None = None, url: str | None = None) -
     цены из Свода (не чаще раза в час)."""
     if not usage:
         return 0.0
-    table = prices(url)
-    m = usage.get("model") or model or ""
-    p = table.get(m) or next((v for k, v in table.items() if m.startswith(k)), table["claude-opus-5-5"])
+    p = price_of(prices(url), usage.get("model") or model)
     # Запись кэша — по сроку: 5 минут (cache_write) и час (cache_write_1h, у справочника Дел) стоят по-разному.
     return (usage.get("input", 0) * p["in"] + usage.get("output", 0) * p["out"]
             + usage.get("cache_write", 0) * p["cache_write"]
@@ -118,8 +134,41 @@ def usage_of(msg, model: str) -> dict:
     return out
 
 
-def account(url: str, what: str, usd: float, model: str | None = None) -> None:
-    """Траты в crm.state 'llm_cost': total, days (последние 120), by (вид), models. Сбой учёта правку не роняет."""
+def paid(err: Exception, msg, model: str) -> Exception:
+    """Ответ оплачен, но не годится (отказ, обрыв, не JSON): ошибка несёт его токены (err.usage) — вызывающий
+    запишет траты (account_failed). До 14.10.2026 такие ответы в учёт не попадали вовсе (аудит трат)."""
+    try:
+        err.usage = usage_of(msg, model)
+    except Exception:  # noqa: BLE001 — учёт не должен подменять настоящую ошибку
+        pass
+    return err
+
+
+def account_failed(url: str, what: str, err: Exception, model: str) -> None:
+    """Траты ответа, который не пригодился (см. paid). Нет токенов в ошибке — сеть, ключ: платить было не за что."""
+    u = getattr(err, "usage", None)
+    if u:
+        account(url, what, cost(u, model, url), u.get("model") or model, usage=u)
+
+
+def add_usage(a: dict | None, b: dict | None) -> dict:
+    """Сумма токенов двух ответов (пачка из многих встреч — одна строка книги)."""
+    out = dict(a or {})
+    for k, v in (b or {}).items():
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[k] = out.get(k, 0) + v
+        elif k == "model" and v:
+            out.setdefault("model", v)
+    return out
+
+
+def account(url: str, what: str, usd: float, model: str | None = None, usage: dict | None = None,
+            batch: bool = False, calls: int = 1) -> None:
+    """Траты в crm.state 'llm_cost' (total, days — последние 120, by — вид, models) и строкой в общую книгу трат
+    Claude (crm.claude_spend, spend.py, с 14.10.2026): с токенами, кэшем и признаком пачки — чтобы экран трат и
+    недельный советник видели не только $, но и почему столько. Сбой учёта правку не роняет.
+
+    usd — уже со скидкой пачки (вызывающий умножил на 0,5); batch — так ли было; calls — сколько ответов в сумме."""
     if usd <= 0:
         return
     try:
@@ -138,6 +187,12 @@ def account(url: str, what: str, usd: float, model: str | None = None) -> None:
                          "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (Jsonb(v),))
     except Exception:  # noqa: BLE001
         log.exception("учёт трат Claude")
+    try:
+        from . import spend
+
+        spend.add(url, what, usd, (usage or {}).get("model") or model, usage, batch, calls)
+    except Exception:  # noqa: BLE001
+        log.exception("книга трат Claude")
 
 
 def spent(url: str) -> dict:

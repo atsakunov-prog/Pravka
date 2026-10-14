@@ -452,11 +452,12 @@ def tune_request(url: str, owner: str, since: dt.datetime) -> dict | None:
 
 
 def tune_apply(url: str, owner: str, msg, batch: bool = True) -> dict:
-    if getattr(msg, "stop_reason", None) in ("refusal", "max_tokens"):
-        raise RuntimeError(f"выводы Круга: ответ оборван ({msg.stop_reason})")
+    # Сначала траты, потом проверка ответа: оборванный ответ тоже оплачен (аудит трат 14.10.2026).
     usage = llm.usage_of(msg, TUNE_MODEL)
     usd = llm.cost(usage, TUNE_MODEL, url) * (0.5 if batch else 1.0)
-    llm.account(url, "krug_tune", usd, usage.get("model") or TUNE_MODEL)
+    llm.account(url, "krug_tune", usd, usage.get("model") or TUNE_MODEL, usage=usage, batch=batch)
+    if getattr(msg, "stop_reason", None) in ("refusal", "max_tokens"):
+        raise RuntimeError(f"выводы Круга: ответ оборван ({msg.stop_reason})")
     data = json.loads(next((b.text for b in msg.content if getattr(b, "type", "") == "text"), "") or "{}")
     items = [" ".join(str(x).split())[:300] for x in data.get("lessons") or [] if str(x).strip()][:LESSONS_MAX]
     from . import store

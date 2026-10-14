@@ -58,6 +58,9 @@ APP_TABLES = {
     # пометкой hidden_at (новый снимок его вернёт).
     "crm.phone_devices": "SELECT, INSERT, UPDATE",
     "crm.phone_edits": "SELECT, INSERT, UPDATE",
+    # Книга трат Claude и недельные советы (dela_0017): строки не удаляются — книга итогов дней и советы недель.
+    "crm.claude_spend": "SELECT, INSERT, UPDATE",
+    "crm.claude_tips": "SELECT, INSERT, UPDATE",
 }
 APP_VIEWS = ["tasks.v_tasks", "crm.v_deals"]
 APP_SEQUENCES = ["tasks.task_num"]

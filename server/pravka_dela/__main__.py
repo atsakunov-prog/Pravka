@@ -236,7 +236,7 @@ def cmd_serve(args) -> int:
 
     import uvicorn
 
-    from . import api, store
+    from . import api, spend, store
 
     cfg = config_mod.load(args.env)
     if cfg.problems():
@@ -258,6 +258,13 @@ def cmd_serve(args) -> int:
             await asyncio.sleep(600)
 
     async def chores():
+        # Один раз: прежний учёт трат Claude Дел — в книгу строками «до книги» (spend.backfill, 14.10.2026).
+        try:
+            n = await asyncio.to_thread(spend.backfill, cfg.db_url)
+            if n:
+                log.info("книга трат Claude: прежний учёт Дел — %d дней", n)
+        except Exception:
+            log.exception("книга трат Claude: прежний учёт")
         # Раз в час: неразобранные предложения старше недели гаснут.
         while True:
             try:
@@ -302,12 +309,24 @@ def cmd_serve(args) -> int:
                 log.exception("разборщик встреч")
             await asyncio.sleep(60)
 
+    async def spend_loop():
+        # Советник по тратам Claude (spend_advice.py, 14.10.2026): раз в минуту — досмотреть пачку или, в воскресенье
+        # в 21:30 по Москве, отправить сводку недели. Трат нет — ни запроса.
+        from . import spend_advice
+
+        while cfg.anthropic_key:
+            try:
+                await asyncio.to_thread(spend_advice.tick, cfg.db_url, cfg.anthropic_key, cfg.claude_proxy)
+            except Exception:
+                log.exception("советы по тратам Claude")
+            await asyncio.sleep(60)
+
     async def main():
         server = uvicorn.Server(uvicorn.Config(
             api.build(cfg), host=cfg.listen_host, port=cfg.listen_port,
             log_level="info", log_config=None, proxy_headers=False, server_header=False,
         ))
-        await asyncio.gather(server.serve(), chores(), bridge_loop(), krug_loop(), meetings_loop())
+        await asyncio.gather(server.serve(), chores(), bridge_loop(), krug_loop(), meetings_loop(), spend_loop())
 
     log.info("Дела: слушаю %s:%d", cfg.listen_host, cfg.listen_port)
     asyncio.run(main())
@@ -436,6 +455,41 @@ def cmd_zachem(args) -> int:
     return 0 if not out["errors"] else 1
 
 
+def cmd_spend(args) -> int:
+    """Книга трат Claude (14.10.2026, spend.py): status — неделя по службам и задачам; advise — советы прямо сейчас
+    (проба советника на малом: --direct — без пачки, вдвое дороже, но сразу; --dry — только показать вход)."""
+    import datetime as dt
+
+    from . import spend, spend_advice, store
+
+    cfg = config_mod.load(args.env)
+    if args.action == "status":
+        with db.session(cfg.db_url, "system", via="claude") as conn:
+            owner = conn.execute("SELECT crm.owner_id() AS id").fetchone()["id"]
+        v = store.view(cfg.db_url, owner, "spend")
+        w = v["periods"]["week"]
+        print(f"за 7 дней ${w['usd']:.2f} (прошлая неделя ${v['prev_week']:.2f}); кэш сэкономил ${w['cache_saved']:.2f}, "
+              f"пачки ${w['batch_saved']:.2f}")
+        for t in w["tasks"]:
+            print(f"  ${t['usd']:8.3f}  {t['service_title']} · {t['title']}  ({t['calls']} выз., {', '.join(t['models'])})")
+        for s_ in v["sources"]:
+            print(f"  источник {s_['src']}: {', '.join(s_['titles'])} — по {s_['day']}, обновлён {s_['at']}")
+        return 0
+    last = dt.date.fromisoformat(args.day) if args.day else dt.datetime.now(spend_advice.MSK).date()
+    if args.dry:
+        with db.session(cfg.db_url, "system", via="claude") as conn:
+            owner = conn.execute("SELECT crm.owner_id() AS id").fetchone()["id"]
+        f = spend_advice.facts(cfg.db_url, owner, last)
+        print(spend_advice.message(f) if f else "трат за неделю нет — советнику нечего смотреть")
+        return 0
+    if not cfg.anthropic_key:
+        print("нет ключа Claude в dela.env")
+        return 2
+    out = spend_advice.send(cfg.db_url, cfg.anthropic_key, cfg.claude_proxy, last, batch=not args.direct)
+    print(out or "трат за неделю нет — советнику нечего смотреть")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="pravka_dela", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--env", help=f"файл секретов Дел (с завода {config_mod.DEFAULT_ENV_FILE})")
@@ -541,6 +595,12 @@ def main(argv: list[str] | None = None) -> int:
     zc.add_argument("--out", default="zachem-propose.json", help="propose: куда положить предложения")
     zc.add_argument("--file", help="apply: файл предложений (можно поправить руками)")
     zc.set_defaults(fn=cmd_zachem)
+    sp = sub.add_parser("spend", help="траты Claude: сводка недели; советы экономии сейчас")
+    sp.add_argument("action", nargs="?", choices=["status", "advise"], default="status")
+    sp.add_argument("--day", help="advise: последний день недели (с завода сегодня)")
+    sp.add_argument("--direct", action="store_true", help="advise: сразу, без пачки (дороже вдвое)")
+    sp.add_argument("--dry", action="store_true", help="advise: только показать сводку, Claude не звать")
+    sp.set_defaults(fn=cmd_spend)
     ks = sub.add_parser("krug-seed", help="Круг жизни: направления и принципы из файла владельца")
     ks.add_argument("--file", required=True, help="seed.json владельца (на компе, не в репозитории)")
     ks.add_argument("--user", default="sasha")

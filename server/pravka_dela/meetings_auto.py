@@ -254,9 +254,16 @@ def _save(url: str, value: dict) -> None:
 def _collect(url: str, owner: str, client, b: dict) -> dict:
     """Ответы законченной пачки — в карточки. Ошибка одной встречи не роняет остальные."""
     named, failed, stale, usd = 0, 0, 0, 0.0
+    tokens, calls = {}, 0  # вся пачка — одной строкой книги трат: токены и число ответов
     sent = b.get("md5") or {}
     for res in client.messages.batches.results(b["id"]):
         mid = res.custom_id
+        # Ответ оплачен, даже если класть его некуда (встречу уже назвали или прислали заново) — считаем сразу
+        # (аудит трат 14.10.2026: раньше пропущенные ответы шли мимо учёта).
+        u = llm.usage_of(res.result.message, MODEL) if res.result.type == "succeeded" else None
+        if u:
+            usd += llm.cost(u, MODEL, url) * 0.5
+            tokens, calls = llm.add_usage(tokens, u), calls + 1
         with db.session(url, owner, "svc:meetings-names", "names") as conn:
             row = conn.execute("SELECT * FROM crm.meetings WHERE id = %s", (mid,)).fetchone()
             if row is None or row["named_at"] is not None:
@@ -270,8 +277,6 @@ def _collect(url: str, owner: str, client, b: dict) -> dict:
                              (f"error: {res.result.type}", mid))
                 continue
             msg = res.result.message
-            u = llm.usage_of(msg, MODEL)
-            usd += llm.cost(u, MODEL, url) * 0.5
             try:
                 ans = _parse(msg)
             except (RuntimeError, ValueError) as e:
@@ -288,7 +293,7 @@ def _collect(url: str, owner: str, client, b: dict) -> dict:
                 log.warning("встречи: разбор %s не лёг: %s", row["ref"], e)
                 conn.execute("UPDATE crm.meetings SET named_at = now(), named_by = %s WHERE id = %s",
                              (f"error: {str(e)[:120]}", mid))
-    llm.account(url, "meetings", usd, MODEL)
+    llm.account(url, "meetings", usd, tokens.get("model") or MODEL, usage=tokens, batch=True, calls=calls)
     return {"named": named, "failed": failed, "stale": stale, "usd": round(usd, 4)}
 
 

@@ -1370,14 +1370,14 @@ def ask(cl, system: str, user_text: str, model: str = MODEL, effort: str = EFFOR
     ) as stream:
         msg = stream.get_final_message()
     if msg.stop_reason == "refusal":
-        raise AskError("Claude отказался выполнять эту команду")
+        raise llm.paid(AskError("Claude отказался выполнять эту команду"), msg, model)
     if msg.stop_reason == "max_tokens":
-        raise AskError("команда слишком большая для одного раза — раздели на части")
+        raise llm.paid(AskError("команда слишком большая для одного раза — раздели на части"), msg, model)
     text = next((b.text for b in msg.content if getattr(b, "type", "") == "text"), "")
     try:
         data = json.loads(text)
     except ValueError as e:
-        raise AskError(f"Claude ответил не JSON ({e})") from e
+        raise llm.paid(AskError(f"Claude ответил не JSON ({e})"), msg, model) from e
     data["_usage"] = llm.usage_of(msg, model)
     return data
 
@@ -1569,13 +1569,18 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
             raise AskError("Claude не настроен: нет ключа в dela.env")
         cl = client(key, proxy)
         ask_fn = lambda s, u: ask(cl, s, ctx["tail"], model, effort, prefix=ctx["screen"])  # noqa: E731
-    data = ask_fn(ctx["system"], ctx["message"])
+    try:
+        data = ask_fn(ctx["system"], ctx["message"])
+    except AskError as e:  # ответ оплачен, но не годится — траты всё равно в книгу
+        llm.account_failed(url, "task" if scope.get("card") == "task" else "ask", e, model)
+        raise
     if data.get("card"):
         for k, v in split_card(data["card"]).items():
             data[k] = (data.get(k) or []) + v
     usage = data.get("_usage")
     in_task = scope.get("card") == "task"
-    llm.account(url, "task" if in_task else "ask", llm.cost(usage, model, url), (usage or {}).get("model") or model)
+    llm.account(url, "task" if in_task else "ask", llm.cost(usage, model, url), (usage or {}).get("model") or model,
+                usage=usage)
     defaults = {k: scope[k] for k in ("project_id", "person_id", "deal_id") if scope.get(k)}
     if card and card["kind"] == "deal":
         defaults["project_id"] = str(card["deal"]["project_id"])

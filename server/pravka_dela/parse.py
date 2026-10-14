@@ -159,14 +159,14 @@ def ask(cl, system: str, user_text: str) -> dict:
     ) as stream:
         msg = stream.get_final_message()
     if msg.stop_reason == "refusal":
-        raise ParseError("Claude отказался разбирать этот текст")
+        raise llm.paid(ParseError("Claude отказался разбирать этот текст"), msg, MODEL)
     if msg.stop_reason == "max_tokens":
-        raise ParseError("текст слишком длинный для одного разбора — раздели на части")
+        raise llm.paid(ParseError("текст слишком длинный для одного разбора — раздели на части"), msg, MODEL)
     text = next((b.text for b in msg.content if getattr(b, "type", "") == "text"), "")
     try:
         data = json.loads(text)
     except ValueError as e:
-        raise ParseError(f"Claude ответил не JSON ({e})") from e
+        raise llm.paid(ParseError(f"Claude ответил не JSON ({e})"), msg, MODEL) from e
     data["_usage"] = llm.usage_of(msg, MODEL)
     return data
 
@@ -279,9 +279,13 @@ def run(url: str, user: str, text: str, defaults: dict, key: str, proxy: str | N
             raise ParseError("разбор Claude не настроен: нет ключа в dela.env")
         cl = client(key, proxy)
         ask_fn = lambda s, u: ask(cl, s, u)  # noqa: E731
-    data = ask_fn(system, user_text)
+    try:
+        data = ask_fn(system, user_text)
+    except ParseError as e:  # ответ оплачен, но не годится — траты всё равно в книгу
+        llm.account_failed(url, "parse", e, MODEL)
+        raise
     usage = data.get("_usage")
-    llm.account(url, "parse", llm.cost(usage, MODEL, url), (usage or {}).get("model") or MODEL)
+    llm.account(url, "parse", llm.cost(usage, MODEL, url), (usage or {}).get("model") or MODEL, usage=usage)
     # Наговорка — строкой рядом с делами: «Новое» показывает, что сказано и куда что попало.
     ref = f"parse:{uuid.uuid4()}"
     ops = to_ops(data, index, defaults or {}, source, places, ref)

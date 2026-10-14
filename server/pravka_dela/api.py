@@ -143,9 +143,11 @@ SCOPED = {
     "dengi": {"ops": {"svod.set"}, "views": {"svod"}, "svod_prefix": "money."},
     "eda": {"ops": {"svod.set"}, "views": {"svod"}, "svod_prefix": "food.", "svod_read": ("prompt.food", "models.routes")},
     "sport": {"ops": {"svod.set"}, "views": {"svod"}, "svod_prefix": "sport.", "svod_read": ("food.goals",)},
-    # Сборщик «Дома» (14.10.2026, этап 7): только читает вид и меню Ковчега (ui.*), чтобы sync.py вписал их в
-    # страницы всех служб на компе. Писать ему нечего — правит владелец в вебе Дел.
-    "dom": {"ops": set(), "views": {"svod"}, "svod_prefix": "ui."},
+    # Сборщик «Дома» (14.10.2026, этап 7): читает вид и меню Ковчега (ui.*), чтобы sync.py вписал их в страницы всех
+    # служб на компе. С того же дня он же приносит траты Claude служб компа в общую книгу (spend.put, dela_0017): он от
+    # SYSTEM и читает их книги; какие службы ему можно — решает spend.op_put (всё, кроме телефона и самих Дел).
+    # free_ops — операции без ключа Свода: префикс svod_prefix их не касается.
+    "dom": {"ops": {"spend.put"}, "free_ops": {"spend.put"}, "views": {"svod"}, "svod_prefix": "ui."},
 }
 
 
@@ -270,9 +272,11 @@ def build(cfg: Config) -> Starlette:
             return _err(f"ops — список до {MAX_OPS} операций", 400)
         sc = _scope(who)
         if sc and any(not isinstance(o, dict) or o.get("op") not in sc["ops"]
-                      or not str(o.get("key") or "").startswith(sc["svod_prefix"]) for o in items):
-            if not sc["ops"]:
-                return _err(f"службе {who.name} — только чтение {sc['svod_prefix']}*", 403)
+                      or (o.get("op") not in sc.get("free_ops", ())
+                          and not str(o.get("key") or "").startswith(sc["svod_prefix"])) for o in items):
+            if not sc["ops"] - set(sc.get("free_ops", ())):
+                extra = "".join(f" и {o}" for o in sorted(sc.get("free_ops", ())))
+                return _err(f"службе {who.name} — только чтение {sc['svod_prefix']}*{extra}", 403)
             return _err(f"службе {who.name} можно только {', '.join(sorted(sc['ops']))} с ключами {sc['svod_prefix']}*", 403)
         # Команды Засечки (zasechka.py) — дело владельца с его веба и телефона, а не служб с его токеном (встречи, бот).
         if who.kind == "service" and any(isinstance(o, dict) and str(o.get("op") or "").startswith("zasechka.") for o in items):
@@ -481,6 +485,10 @@ def build(cfg: Config) -> Starlette:
         who = await auth(request)
         if not who:
             return _err("нужен вход", 401)
+        # Узкие токены служб (Деньги, Еда, Спорт, «Дом») действуют от имени владельца — без этой проверки они видели бы его
+        # настройки и траты Claude (аудит трат 14.10.2026).
+        if _scope(who):
+            return _err(f"службе {who.name} настройки не положены", 403)
         info = await anyio.to_thread.run_sync(_user_info, url, who.user)
         # Модель и глубина Claude — дороги владельца (llm.ROUTES, Свод models.dela), а не настройка человека (13.10.2026).
         routes = await anyio.to_thread.run_sync(lambda: {k: dict(zip(("model", "effort"), llm.route(url, k))) for k in llm.ROUTES})

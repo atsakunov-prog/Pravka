@@ -353,7 +353,7 @@ def _save(url: str, value: dict) -> None:
 def _account(url: str, msg, batch: bool) -> float:
     usage = llm.usage_of(msg, MODEL)
     usd = llm.cost(usage, MODEL, url) * (0.5 if batch else 1.0)
-    llm.account(url, "krug", usd, usage.get("model") or MODEL)
+    llm.account(url, "krug", usd, usage.get("model") or MODEL, usage=usage, batch=batch)
     return usd
 
 

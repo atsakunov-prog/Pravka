@@ -149,7 +149,7 @@ def propose(url: str, owner: str, key: str, proxy: str | None, limit: int | None
         msg = cl.beta.messages.create(**p, betas=[FALLBACK_BETA], fallbacks="default")
     usage = llm.usage_of(msg, MODEL)
     usd = llm.cost(usage, MODEL, url) * (0.5 if batch else 1.0)
-    llm.account(url, "zachem", usd, usage.get("model") or MODEL)
+    llm.account(url, "zachem", usd, usage.get("model") or MODEL, usage=usage, batch=batch)
     got = _parse(msg)
     out = []
     for it in items:

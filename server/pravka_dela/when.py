@@ -448,12 +448,12 @@ def ask(cl, model: str, effort: str, text: str) -> dict:
         **extra,
     )
     if msg.stop_reason == "refusal":
-        raise WhenError("Claude отказался разбирать эту фразу")
+        raise llm.paid(WhenError("Claude отказался разбирать эту фразу"), msg, model)
     body = next((b.text for b in msg.content if getattr(b, "type", "") == "text"), "")
     try:
         data = json.loads(body)
     except ValueError as e:
-        raise WhenError(f"Claude ответил не JSON ({e})") from e
+        raise llm.paid(WhenError(f"Claude ответил не JSON ({e})"), msg, model) from e
     data["_usage"] = llm.usage_of(msg, model)
     return data
 
@@ -549,10 +549,14 @@ def understand(url: str, user: str, text: str, key: str = "", proxy: str | None 
             raise WhenError("слишком часто спрашиваю Claude — подожди пару минут или напиши проще")
         cl = parse.client(key, proxy)
         ask_fn = lambda m: ask(cl, model, effort, m)  # noqa: E731
-    data = ask_fn(message(text, now, places, only_date))
+    try:
+        data = ask_fn(message(text, now, places, only_date))
+    except WhenError as e:  # ответ оплачен, но не годится — траты всё равно в книгу
+        llm.account_failed(url, "when", e, model)
+        raise
     usage = data.get("_usage")
     usd = llm.cost(usage, model, url)
-    llm.account(url, "when", usd, (usage or {}).get("model") or model)
+    llm.account(url, "when", usd, (usage or {}).get("model") or model, usage=usage)
     res = from_model(data, now, places, only_date)
     log.info("«когда» Claude: %d знаков, $%.4f, токены %s", len(text), usd, usage)
     return {"ok": True, "by": "claude", **res, "words": words(res, now.date()), "usd": round(usd, 5)}
