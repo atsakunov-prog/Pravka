@@ -70,7 +70,8 @@ class ZasechkaDayTest {
     @Test
     fun `подписи шапки и профиля`() {
         val day = LocalDate.of(2026, 10, 13)
-        assertEquals("вторник, 13 октября · очки +36", ZasechkaDay.subtitle(day, 36, 122, wide = false))
+        // Сложенный — день недели коротко (14.10.2026), разложенный — полностью.
+        assertEquals("вт, 13 октября · очки +36", ZasechkaDay.subtitle(day, 36, 122, wide = false))
         assertEquals("вторник, 13 октября · очки +36 · не размечено 2 ч 2 м", ZasechkaDay.subtitle(day, 36, 122, wide = true))
         assertEquals("вторник, 13 октября · очки ${Fmt.MINUS}3", ZasechkaDay.subtitle(day, -3, 0, wide = true))
 

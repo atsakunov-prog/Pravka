@@ -390,4 +390,11 @@ class DelaViewsTest {
         val back = Dela.person(JSONObject(Dela.json(p).toString()))
         assertEquals(p, back)
     }
+
+    @Test
+    fun `подпись шапки - число впереди слова, просрочка раньше закрытого`() {
+        assertEquals("3 сегодня · 2 просрочено · 1 закрыто", DelaViews.headLine(null, today = 3, late = 2, done = 1))
+        assertEquals("0 сегодня", DelaViews.headLine(null, today = 0, late = 0, done = 0))
+        assertEquals("Работа · 4 сегодня · 5 закрыто", DelaViews.headLine("Работа", today = 4, late = 0, done = 5))
+    }
 }

@@ -861,7 +861,9 @@ fun DelaTab(
                                 append("Идёт: ")
                                 pushStyle(androidx.compose.ui.text.SpanStyle(color = ru.zf.pravka.ui.Ink.PlanText))
                                 append(running.title.ifBlank { "без названия" })
-                                append(" · " + ru.zf.pravka.core.Fmt.durMs(now - running.start))
+                                // v2: «23 м» не рвётся на «23» и «м» по разным строкам (14.10.2026) — перенос после « · ».
+                                val dur = " · " + ru.zf.pravka.core.Fmt.durMs(now - running.start)
+                                append(if (Look.v2) ru.zf.pravka.core.HeadLine.wrap(dur) else dur)
                                 pop()
                             },
                             style = ty.label,
@@ -1417,18 +1419,11 @@ fun DelaTab(
     val covered = drawerOpen && sideModel != null && !wide
     Column(Modifier.fillMaxSize().then(if (covered) Modifier.clearAndSetSemantics {} else Modifier)) {
         val sphereName = if (sphere == "all") "Все сферы" else SPHERES.firstOrNull { it.first == sphere }?.second.orEmpty()
-        // Подпись шапки вида v2 (холст: «сегодня 2 · закрыто 6 · просрочено 3») — сводка дня; сфера — словом
-        // впереди, когда выбрана не «Всё»; тап по подписи — выбор сферы, как раньше. Вид 4.0 — сфера, как был.
+        // Подпись шапки вида v2 — сводка дня «3 сегодня · 2 просрочено · 1 закрыто» (`DelaViews.headLine`); сфера —
+        // словом впереди, когда выбрана не «Всё»; тап по подписи — выбор сферы, как раньше. Вид 4.0 — сфера, как был.
         val headSub = if (Look.v4) sphereName else {
             val c = DelaViews.counts(snap, me, today, sphere, now)
-            val done = DelaGroups.doneToday(snap, me, today)
-            listOfNotNull(
-                sphereName.takeIf { sphere != "all" },
-                "сегодня ${c.today}",
-                // Просрочка — раньше «закрыто»: строка короткая и режется справа, а это важнее.
-                "просрочено ${c.late}".takeIf { c.late > 0 },
-                "закрыто $done".takeIf { done > 0 },
-            ).joinToString(" · ")
+            DelaViews.headLine(sphereName.takeIf { sphere != "all" }, c.today, c.late, DelaGroups.doneToday(snap, me, today))
         }
         header(headSub) { sphereSheet = true }
         if (navColumn) {
@@ -2022,7 +2017,8 @@ private fun LazyListScope.newView(
                     style = ru.zf.pravka.ui.LocalPravkaType.current.label,
                     fontWeight = FontWeight.SemiBold,
                     color = ru.zf.pravka.ui.LocalMode.current.label,
-                    maxLines = 2,
+                    // v2 — подпись пачки целиком, переносом по словам (14.10.2026: «…» резал название сводки).
+                    maxLines = if (Look.v2) Int.MAX_VALUE else 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )

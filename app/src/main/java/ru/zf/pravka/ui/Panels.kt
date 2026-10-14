@@ -554,8 +554,9 @@ fun KvColumns(
 
 /**
  * Строка настройки `.set`: значок 18 `--icon`, название 14,5 и под ним
- * значение 12,5 `--faint` в одну строку, справа [value] или шеврон. Тап —
- * открыть группу.
+ * значение 12,5 `--faint`, справа [value] или шеврон. Тап — открыть группу.
+ * Значение переносится по словам, а не режется «…» (14.10.2026, владелец: «где-то
+ * можно переносить по словам»): у «Кто пользуется» «имя · 6 из 6 · имя, род…» на сложенном — на краю.
  */
 @Composable
 fun KvSetRow(
@@ -586,7 +587,7 @@ fun KvSetRow(
         Column(Modifier.weight(1f)) {
             Text(title, style = t.body.copy(fontSize = 14.5.sp, lineHeight = 19.sp), color = Kv.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (!sub.isNullOrBlank()) {
-                Text(sub, style = t.meta, color = Kv.faint, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 1.dp))
+                Text(ru.zf.pravka.core.HeadLine.wrap(sub), style = t.meta, color = Kv.faint, modifier = Modifier.padding(top = 1.dp))
             }
         }
         if (!value.isNullOrBlank()) {

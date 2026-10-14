@@ -346,7 +346,8 @@ internal fun MoneyTab(
         val todayKop = moneyTodayKop(daily, period, today)
         Column(Modifier.fillMaxSize()) {
             header?.invoke(
-                moneyPeriodWord(period, today) + " · " + if (wide) plural(totals.count, "трата", "траты", "трат") else scopeWord,
+                // На сложенном период коротко («1–14 окт»): рядом четыре значка (14.10.2026).
+                moneyPeriodWord(period, today, short = !wide) + " · " + if (wide) plural(totals.count, "трата", "траты", "трат") else scopeWord,
                 { periodSheet = true },
             ) {
                 if (wide) MoneyScopeSeg(app, pOn, zOn, Modifier.padding(end = 4.dp))

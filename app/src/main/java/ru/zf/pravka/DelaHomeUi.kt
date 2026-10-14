@@ -378,7 +378,10 @@ private fun NewLine(text: String, onClick: () -> Unit) {
     ) {
         Icon(kv("inbox", Glyphs.Groups), contentDescription = null, tint = if (v2) Kv.icon else ink, modifier = Modifier.size(17.dp))
         Spacer(Modifier.width(8.dp))
-        Text(text, style = t.label, color = ink, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        // v2 — переносом по словам целиком, без «…» (14.10.2026: «Всё «Новое»: добавлено за 3 дня…» на сложенном
+        // обрезалось посреди счёта); «Вид 4.0» — как был.
+        if (v2) Text(ru.zf.pravka.core.HeadLine.wrap(text), style = t.label, color = ink, modifier = Modifier.weight(1f))
+        else Text(text, style = t.label, color = ink, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
         Icon(Glyphs.Forward, contentDescription = null, tint = if (v2) Kv.faint else ink, modifier = Modifier.size(16.dp))
     }
 }

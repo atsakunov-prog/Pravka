@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -531,19 +532,42 @@ fun KovchegHeader(
         ) {
             Text(title, style = t.titleM, color = Kv.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (!subtitle.isNullOrBlank()) {
-                Row(
-                    Modifier
+                // Подпись — до двух строк переносом по словам (14.10.2026, владелец: «где-то можно переносить по
+                // словам»): в одну строку рядом со значками она на сложенном резалась «…». Число держится за своё
+                // слово, « · » остаётся в конце строки (`HeadLine.wrap`); многоточие — только если не хватило и двух.
+                // «⌄» — внутри текста за последним словом: при переносе он едет со второй строкой, а не висит
+                // справа от первой.
+                val chevron = onSubtitle != null
+                Text(
+                    androidx.compose.ui.text.buildAnnotatedString {
+                        append(ru.zf.pravka.core.HeadLine.wrap(subtitle))
+                        if (chevron) {
+                            append(ru.zf.pravka.core.HeadLine.NBSP)
+                            appendInlineContent(SUB_CHEVRON, "⌄")
+                        }
+                    },
+                    style = t.meta.copy(fontSize = 13.sp, lineHeight = 17.sp),
+                    color = Kv.faint,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    inlineContent = if (chevron) subChevron else emptyMap(),
+                    modifier = Modifier
                         .clip(RoundedCornerShape(KvShape.Tag))
                         .then(if (onSubtitle != null) Modifier.clickable(role = Role.DropdownList, onClick = onSubtitle) else Modifier),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(subtitle, style = t.meta.copy(fontSize = 13.sp, lineHeight = 17.sp), color = Kv.faint, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (onSubtitle != null) {
-                        Icon(Glyphs.ChevronDown, null, tint = Kv.faint, modifier = Modifier.padding(start = 2.dp).size(14.dp))
-                    }
-                }
+                )
             }
         }
         if (actions != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp), content = actions)
     }
 }
+
+private const val SUB_CHEVRON = "chevron"
+
+/** «⌄» подписи шапки — значок 14 dp в строке текста (`appendInlineContent`). */
+private val subChevron = mapOf(
+    SUB_CHEVRON to androidx.compose.foundation.text.InlineTextContent(
+        androidx.compose.ui.text.Placeholder(14.sp, 14.sp, androidx.compose.ui.text.PlaceholderVerticalAlign.TextCenter),
+    ) {
+        Icon(Glyphs.ChevronDown, null, tint = Kv.faint, modifier = Modifier.fillMaxSize())
+    },
+)

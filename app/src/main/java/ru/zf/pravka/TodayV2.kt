@@ -291,7 +291,9 @@ private fun SecHead(
         if (icon != null) Icon(icon, null, tint = Kv.icon, modifier = Modifier.size(18.dp))
         Text(title, style = t.bodyStrong, color = Kv.text, maxLines = 1)
         if (count != null && count > 0) Counter(count.toString(), hot = hot)
-        if (small != null) Text(small, style = t.meta, color = Kv.faint, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        // Подпись — переносом по словам, а не «…» (14.10.2026): у дайджеста в ней время и счёт чатов, обрезанные
+        // они теряли смысл. Число держится за своё слово, как в шапке (`HeadLine.wrap`).
+        if (small != null) Text(ru.zf.pravka.core.HeadLine.wrap(small), style = t.meta, color = Kv.faint, modifier = Modifier.weight(1f))
         else Spacer(Modifier.weight(1f))
         if (link != null && onLink != null) {
             Text(

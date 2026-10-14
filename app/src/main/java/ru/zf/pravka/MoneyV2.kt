@@ -81,14 +81,22 @@ internal fun MoneyScopeSeg(app: PravkaApp, personal: Boolean, zf: Boolean, modif
     )
 }
 
-/** «октябрь, по 13-е» — период в подписи шапки; неделя — «5–11 октября». */
-internal fun moneyPeriodWord(p: MoneyStats.Period, today: LocalDate): String {
+/**
+ * «октябрь, по 13-е» — период в подписи шапки; неделя — «5–11 октября». [short] — сложенный (14.10.2026,
+ * владелец: «укорачиваем подписи»): рядом с четырьмя значками «октябрь, по 14-е · личное ⌄» уже не влезал в
+ * строку, поэтому идущий месяц — «1–14 окт», неделя — «5–11 окт»; прошедший месяц — словом, он и так короткий.
+ */
+internal fun moneyPeriodWord(p: MoneyStats.Period, today: LocalDate, short: Boolean = false): String {
     val last = p.firstDay.plusDays((p.days - 1).toLong())
     return if (p.kind == MoneyStats.Kind.MONTH) {
         val month = Fmt.monthTitle(p.firstDay.monthValue).lowercase()
-        if (!today.isBefore(p.firstDay) && !today.isAfter(last)) "$month, по ${today.dayOfMonth}-е" else month
+        when {
+            today.isBefore(p.firstDay) || today.isAfter(last) -> month
+            short -> "1–" + Fmt.dayMon(today)
+            else -> "$month, по ${today.dayOfMonth}-е"
+        }
     } else {
-        "${p.firstDay.dayOfMonth}–" + Fmt.dayMonth(last)
+        "${p.firstDay.dayOfMonth}–" + if (short) Fmt.dayMon(last) else Fmt.dayMonth(last)
     }
 }
 

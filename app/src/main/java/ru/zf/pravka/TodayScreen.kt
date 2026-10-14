@@ -324,12 +324,9 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
     // Значок трат Claude: $ за 7 дней и красная точка непрочитанных советов недели — поле spend синка Дел.
     val spendBadge by app.claudeSpend.badge.collectAsState()
     val spendSeen by app.claudeSpend.seenTips.collectAsState()
-    val head = TodayHead(state, spend = spendBadge, spendDot = ru.zf.pravka.core.SpendBook.dot(spendBadge, spendSeen), onWeather = { weatherOpen = true }, onTheme = {
-        // Значок темы в шапке «Сегодня» (холст): светлая ↔ тёмная, сразу.
-        val next = if (ru.zf.pravka.ui.Look.dark) ru.zf.pravka.ui.Look.Theme.LIGHT else ru.zf.pravka.ui.Look.Theme.DARK
-        ru.zf.pravka.ui.Look.theme = next
-        app.appScope.launch { app.settings.setLookTheme(next.key) }
-    })
+    // Луны темы в шапке больше нет (14.10.2026): тема — в меню значка Ковчега и в Настройках, а место в шапке
+    // нужнее подписи дня.
+    val head = TodayHead(state, spend = spendBadge, spendDot = ru.zf.pravka.core.SpendBook.dot(spendBadge, spendSeen), onWeather = { weatherOpen = true })
     // Вид v2 (Правка 5.0, этап 2): своя раскладка — `TodayV2.kt`; хроника 4.0 ниже — «Виду 4.0».
     if (ru.zf.pravka.ui.Look.v2) {
         // Последний дайджест — полем синка Дел (`DelaStore.digest`); без флага `digest` сервер старый — карточки нет.
@@ -650,11 +647,10 @@ private fun TodayFolded(
     }
 }
 
-/** Что шапке «Сегодня» нужно сверх модели дня: строка состояния, тап по погоде и смена темы (v2). */
+/** Что шапке «Сегодня» нужно сверх модели дня: строка состояния, тап по погоде, траты Claude (v2). */
 internal class TodayHead(
     val state: DayState?,
     val onWeather: () -> Unit,
-    val onTheme: () -> Unit = {},
     /** Траты Claude для значка (поле `spend` синка Дел); null — сервер старый или не отвечал. */
     val spend: ru.zf.pravka.core.SpendBook.Badge? = null,
     /** Красная точка над значком: советы недели ещё не открыты. */
@@ -663,9 +659,15 @@ internal class TodayHead(
 
 /**
  * Шапка «Сегодня» вида v2 (план §3, холст `Main`): значок Ковчега, «Сегодня»
- * и подпись «вторник, 13 октября · 18:50 · очки +84»; справа статистика и
- * тема. Тап по названию — навигатор дня, двойной — шапка до минимума (как у
- * дня недели в 4.0). Аватара «С» нет: «Ещё» — в меню Ковчега («Настройки телефона»).
+ * и подпись дня; справа статистика и «$» трат. Тап по названию — навигатор
+ * дня, двойной — шапка до минимума (как у дня недели в 4.0). Аватара «С» нет:
+ * «Ещё» — в меню Ковчега («Настройки телефона»).
+ *
+ * С 14.10.2026 (владелец: «укорачиваем подписи, убираем луну»): луны темы
+ * нет — тема в меню Ковчега и в Настройках; на сложенном подпись короткая —
+ * «ср, 14 окт · 18:50 · очки +84» (полная «среда, 14 октября · …» резалась
+ * «…» и прятала очки за значками), на развороте — полная. Не влезла и так —
+ * переносится второй строкой (`KovchegHeader`).
  */
 @Composable
 internal fun TodayHeaderV2(
@@ -678,9 +680,10 @@ internal fun TodayHeaderV2(
     onTitleDouble: () -> Unit,
 ) {
     val score = Fmt.points(model.result.score)
+    val day = if (ru.zf.pravka.ui.twoPane()) Fmt.dayLong(model.day) else Fmt.dayShort(model.day)
     ru.zf.pravka.ui.KovchegHeader(
         title = if (dayOffset == 0) "Сегодня" else Fmt.weekdayTitle(model.day),
-        subtitle = if (dayOffset == 0) "${Fmt.dayLong(model.day)} · ${Fmt.hm(now)} · очки $score"
+        subtitle = if (dayOffset == 0) "$day · ${Fmt.hm(now)} · очки $score"
         else "${Fmt.dayMonth(model.day)} · очки $score",
         onTitle = onTitle,
         onTitleDouble = onTitleDouble,
@@ -688,7 +691,6 @@ internal fun TodayHeaderV2(
             HeaderIcon(Glyphs.Stats, "Статистика дня", nav.stats)
             // Траты Claude (14.10.2026): все запросы — телефона и служб компа; точка — советы недели не открыты.
             SpendAction(head.spend, head.spendDot, nav.cost)
-            HeaderIcon(if (ru.zf.pravka.ui.Look.dark) Glyphs.Sunny else Glyphs.Moon, "светлая или тёмная", head.onTheme)
         },
     )
 }
