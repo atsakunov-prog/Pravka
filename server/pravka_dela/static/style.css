@@ -190,6 +190,9 @@ a.brand:hover { text-decoration: none; }
 .brand.kv-svc-btn:hover, .brand.kv-svc-btn[aria-expanded=true] { background: var(--hover-2); }
 .top-end { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .top-end .who { font-size: 13px; color: var(--faint); white-space: nowrap; }
+/* Внутри приложения Правки (14.10.2026; app.js ставит <html data-kv-app> по метке PravkaApp в User-Agent): значок с
+   меню, название и тему рисует приложение — своя шапка была бы второй такой же. Как в общем слое Ковчега. */
+html[data-kv-app] .top { display: none; }
 /* Меню сервисов по направлениям Круга жизни (13.10.2026, вместо ряда сервисов): «Каждый день» — во всю ширину,
    направления — блоками в три колонки. Копия общего слоя Ковчега. */
 .kv-svc { display: contents; }
