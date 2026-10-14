@@ -102,6 +102,8 @@ async function sync(full) {
       for (const x of v) if (x && x.id && x.was) S.renamed.set(x.id, [...(S.renamed.get(x.id) || []), x.was]);
     }
   }
+  // Траты Claude (dela_0017): $ за 7 дней и непрочитанные советы — для значка на «Сегодня»; только владельцу.
+  S.spend = d.spend || null;
   S.seq = d.seq;
   S.today = d.today;
 }
@@ -466,6 +468,8 @@ const ICONS = {
   arrowLeft: 'M19 12H5M11 6l-6 6 6 6',
   chevron: 'M9 6l6 6-6 6',
   coin: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM10 7.5h3.2a2.3 2.3 0 0 1 0 4.6H10M10 7.5v9M8.5 14.3h4.5',
+  // Траты Claude в долларах (14.10.2026, «Claude: траты»): у Ковчега только рубль (coin). Тот же путь — в GlyphsKv телефона.
+  usd: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM14.6 9.2c-.4-1-1.4-1.7-2.6-1.7c-1.6 0-2.7.9-2.7 2.1c0 2.9 5.6 1.7 5.6 4.6c0 1.3-1.2 2.2-2.9 2.2c-1.3 0-2.4-.7-2.8-1.7M12 6v1.5M12 16.4V18',
   car: 'M4 16v-4.5l2.2-5a1.5 1.5 0 0 1 1.4-1h8.8a1.5 1.5 0 0 1 1.4 1l2.2 5V16M3 16h18v2.5H3zM6.5 18.5V20M17.5 18.5V20M4 11.5h16M7 14h.01M17 14h.01',
   chevronDown: 'M6 9l6 6 6-6',
   copy: 'M9 9h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1zM5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1',
@@ -783,6 +787,7 @@ function route() {
   const twin = twinsRoute(kind);
   if (twin) return twin;
   if (kind === 'phone') return { kind: 'phone', id: decodeURIComponent(id || '') }; // настройки телефона (14.10.2026, phone.js)
+  if (kind === 'spend') return { kind: 'spend' }; // «Claude: траты» (14.10.2026, spend.js) — только владельцу
   if (kind === 'settings') return { kind: 'settings' };
   if (kind === 'stats') return { kind: 'stats' };
   if (kind === 'inbox') return { kind: 'new' }; // старые закладки: «Входящие» теперь в «Новом»
@@ -1546,6 +1551,9 @@ function renderMain(r) {
   // «Телефон» — своим файлом (static/phone.js, отдаётся хвостом app.js — api.TAILS); нет его — словами, а не пустотой.
   if (r.kind === 'phone') return typeof renderPhone === 'function' ? renderPhone()
     : [head('Телефон'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Страница «Телефон» не загрузилась — сервер отдал app.js без phone.js. Обнови страницу; не помогло — сервер Дел старый.'))];
+  // «Claude: траты» — своим файлом (static/spend.js, хвостом app.js), как «Телефон».
+  if (r.kind === 'spend') return typeof renderSpend === 'function' ? renderSpend()
+    : [head('Claude: траты'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Страница трат не загрузилась — сервер отдал app.js без spend.js. Обнови страницу; не помогло — сервер Дел старый.'))];
   if (r.kind === 'stats') return renderStats();
   if (r.kind === 'crm') return renderPipeline();
   if (r.kind === 'clients') return renderClients();

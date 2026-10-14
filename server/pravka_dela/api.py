@@ -81,7 +81,8 @@ STATIC = {
 # путей сайта-посредника у владельца закрытый, и новый файл в static/ был бы ещё одной правкой на Aeza. Своих адресов у
 # хвостов нет (в STATIC их нет): /static/twins.js — 404, как любое чужое имя.
 # «Телефон» — настройки телефона на сервере (14.10.2026, phone.js) — так же хвостом app.js.
-TAILS = {"app.js": ("twins.js", "day.js", "zasechka.js", "pravka.js", "phone.js"), "style.css": ("twins.css",)}
+# «Claude: траты» (14.10.2026, spend.js и spend.css) — тоже хвостами: страница #/spend и значок на «Сегодня».
+TAILS = {"app.js": ("twins.js", "day.js", "zasechka.js", "pravka.js", "phone.js", "spend.js"), "style.css": ("twins.css", "spend.css")}
 BRAND_MAX = 96 * 1024  # значок «Ковчега» уходит в /api/me строкой data: — большой картинке там не место
 
 

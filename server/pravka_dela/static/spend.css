@@ -1,0 +1,50 @@
+/* «Claude: траты» (#/spend) и значок трат на «Сегодня» — 14.10.2026, spend.js. Отдаётся хвостом style.css (api.TAILS).
+   Только токены общего вида Ковчега v2: панели, линия, один акцент, «на заметку» и «сбой» — цветом, без кружков. */
+
+.sp-badge { position: relative; display: inline-flex; align-items: center; gap: 5px; height: 34px; padding: 0 9px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--icon); text-decoration: none; }
+.sp-badge:hover { background: var(--hover); color: var(--text); }
+.sp-bsum { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sp-dot { position: absolute; top: -4px; right: -4px; width: 10px; height: 10px; border-radius: 3px; background: var(--bad);
+  border: 1.5px solid var(--bg); }
+
+.sp-body { padding-bottom: 32px; }
+.sp-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(320px, 1fr); gap: 14px; align-items: start; }
+.sp-colx { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+@media (max-width: 900px) { .sp-grid { grid-template-columns: minmax(0, 1fr); } }
+.sp-in { padding: 10px 16px 12px; }
+.sp-note { font-size: 12.5px; color: var(--faint); margin-top: 6px; }
+.sp-label { font-size: 12px; font-weight: 600; color: var(--faint); margin: 10px 0 2px; }
+
+.sp-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
+.sp-kpi b { display: block; font: 600 22px/1.15 var(--font); letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.sp-kpi span { font-size: 12px; color: var(--faint); }
+.sp-kpi.warn b { color: var(--warn); }
+
+.sp-bars { display: flex; flex-direction: column; }
+.sp-bar { display: grid; grid-template-columns: minmax(120px, 44%) minmax(40px, 1fr) 64px; gap: 10px; align-items: center; padding: 4px 0; }
+.sp-bl { font-size: 13.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-bl small { display: block; font-size: 11.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; }
+.sp-bt { height: 5px; background: var(--hover-2); border-radius: 3px; overflow: hidden; }
+.sp-bt i { display: block; height: 100%; background: var(--bar-fill); border-radius: 3px; }
+.sp-bv { font-size: 13px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+
+.sp-claude { font-size: 13.5px; border-radius: 8px; padding: 9px 12px; margin-bottom: 8px;
+  background: color-mix(in srgb, var(--claude) 7%, var(--panel)); border: 1px solid color-mix(in srgb, var(--claude) 30%, var(--line)); }
+.sp-tips { display: flex; flex-direction: column; }
+.sp-tip { padding: 8px 0; border-top: 1px solid var(--line-soft); }
+.sp-tip:first-child { border-top: 0; }
+.sp-tt { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.sp-tt b { font-weight: 600; font-size: 14px; min-width: 0; }
+.sp-where { font-size: 12px; line-height: 19px; padding: 0 7px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); flex: none; }
+.sp-save { margin-left: auto; font-size: 13px; color: var(--ok); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sp-ts { font-size: 12.5px; color: var(--faint); margin-top: 3px; }
+
+.sp-cols { display: flex; align-items: flex-end; gap: 3px; height: 96px; }
+.sp-col { flex: 1 1 0; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 3px; }
+.sp-col i { display: block; width: 100%; min-height: 1px; background: var(--bar-fill); opacity: .85; border-radius: 3px 3px 0 0; }
+.sp-col.on i { background: var(--accent); opacity: 1; }
+.sp-col span { font-size: 10px; color: var(--faint); line-height: 1; }
+.sp-src { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.sp-gaps { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--faint); }
+.sp-gaps li { margin: 2px 0; }

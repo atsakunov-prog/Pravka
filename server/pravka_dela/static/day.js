@@ -186,7 +186,9 @@ TWINS.pages.day = (() => {
     const prof = T.profile(list, day);
     const rows = T.rows(list, day, T.events(d, day, list));
     const sub = [T.dayLong(day), day === S.today ? msk(T.now()).hm : null, 'очки ' + T.points(prof.value)].filter(Boolean).join(' · ');
-    return [T.pageHead('Сегодня', sub, T.dayNav('day', day)), T.archiveNote(d), T.freshNote(d),
+    // Справа в шапке — значок трат Claude (spend.js, 14.10.2026): $ за 7 дней и метка непрочитанных советов недели.
+    const spend = typeof spendBadge === 'function' ? spendBadge() : null;
+    return [T.pageHead('Сегодня', sub, [T.dayNav('day', day), spend].filter(Boolean)), T.archiveNote(d), T.freshNote(d),
       el('div', { class: 'tw-cols tw-day' },
         el('div', { class: 'tw-col' }, tiles(d.tiles), nowCard(d, list, prof, day), lentaCard(rows)),
         el('div', { class: 'tw-col' }, weatherCard(wx), nowTasksCard(), digestCard(d.digest), newCard(), todayCard(d, day)))];
