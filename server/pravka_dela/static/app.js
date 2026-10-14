@@ -789,6 +789,8 @@ function route() {
   if (twin) return twin;
   if (kind === 'phone') return { kind: 'phone', id: decodeURIComponent(id || '') }; // настройки телефона (14.10.2026, phone.js)
   if (kind === 'spend') return { kind: 'spend' }; // «Claude: траты» (14.10.2026, spend.js) — только владельцу
+  // Дайджест Telegram (14.10.2026, digest.js): список и поиск, одна сводка — по ref (ссылка из хронологии CRM).
+  if (kind === 'digest') return id ? { kind: 'digest', id: decodeURIComponent(id) } : { kind: 'digests' };
   if (kind === 'settings') return { kind: 'settings' };
   if (kind === 'stats') return { kind: 'stats' };
   if (kind === 'inbox') return { kind: 'new' }; // старые закладки: «Входящие» теперь в «Новом»
@@ -1380,6 +1382,7 @@ function renderSide(r) {
       el('div', { class: 'side-foot' },
         navItem('#/stats', icon('chart', 17), 'Статистика', r.kind === 'stats'),
         phoneOn() ? navItem('#/phone', icon('phone', 17), 'Телефон', r.kind === 'phone') : null,
+        typeof digestOn === 'function' && digestOn() ? navItem('#/digest', icon('digest', 17), 'Дайджест', r.kind === 'digests' || r.kind === 'digest') : null,
         navItem('#/settings', icon('settings', 17), 'Настройки', r.kind === 'settings')),
       gameCard(),
       el('div', { class: 'side-keys' }, el('span', { class: 'kbd' }, 'n'), ' сказать Claude · ', el('span', { class: 'kbd' }, '/'), ' поиск')));
@@ -1446,7 +1449,7 @@ function headKind(r) {
 }
 /** Назад — туда, откуда пришёл; пришёл по ссылке — на главную («Сейчас»). */
 const back = () => (history.length > 1 ? history.back() : go('#/now'));
-const INNER = new Set(['project', 'person', 'deal', 'meeting', 'search']);
+const INNER = new Set(['project', 'person', 'deal', 'meeting', 'search', 'digest']);
 
 /** Строка под заголовком. В карточке клиента и проекта — разделы карточки: всё стоит одно под другим, а вкладки
  *  листают к разделу (владелец 09.10.2026: «такие переключения внутри: статус, команда и дела, хронология, деньги,
@@ -1671,6 +1674,9 @@ function renderMain(r) {
   // «Claude: траты» — своим файлом (static/spend.js, хвостом app.js), как «Телефон».
   if (r.kind === 'spend') return typeof renderSpend === 'function' ? renderSpend()
     : [head('Claude: траты'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Страница трат не загрузилась — сервер отдал app.js без spend.js. Обнови страницу; не помогло — сервер Дел старый.'))];
+  // «Дайджест» — своим файлом (static/digest.js, хвостом app.js), как «Телефон» и траты.
+  if (r.kind === 'digests' || r.kind === 'digest') return typeof renderDigest === 'function' ? renderDigest(r)
+    : [head('Дайджест'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Страница дайджеста не загрузилась — сервер отдал app.js без digest.js. Обнови страницу; не помогло — сервер Дел старый.'))];
   if (r.kind === 'stats') return renderStats();
   if (r.kind === 'crm') return renderPipeline();
   if (r.kind === 'clients') return renderClients();
@@ -4786,18 +4792,22 @@ function tlLine(r, showDeal) {
   const steps = (i.next_step || '').split(/\s*;\s*|\n+/).map((x) => x.replace(/^[→\-–•\s]+/, '').replace(/[.;]\s*$/, '').trim()).filter(Boolean);
   const open = S.tlOpen === i.id;
   const meeting = /^https:\/\//.test(i.source_ref || '') ? i.source_ref : null;
+  // Пункт дайджеста Telegram (dela_0018): видит только владелец; «сводка →» — сама сводка, откуда пункт.
+  const dg = i.digest_ref || null;
   return el('div', { class: 'tl-row' + (open ? ' open' : ''), onclick: (ev) => { if (ev.target.closest('a, button')) return; S.tlOpen = open ? null : i.id; render(); } },
     el('div', { class: 'tl-when' }, D.ddmm(i.at.slice(0, 10))),
     el('div', { class: 'tl-what' },
-      el('div', { class: 'tl-head' }, el('span', { class: 'tl-kind' }, IKIND[i.kind] || i.kind), ' ', m ? el('b', {}, m[1]) : null),
+      el('div', { class: 'tl-head' }, el('span', { class: 'tl-kind' }, dg ? icon('send', 12) : null, dg ? ' ' : null, IKIND[i.kind] || i.kind), ' ', m ? el('b', {}, m[1]) : null),
       el('div', { class: 'tl-body' }, m ? m[2] : sum),
       steps.length ? el('ul', { class: 'tl-steps' }, (open ? steps : steps.slice(0, 2)).map((x) => el('li', {}, x)),
         !open && steps.length > 2 ? el('li', { class: 'more' }, `ещё ${steps.length - 2}`) : null) : null,
       el('div', { class: 'tl-meta' }, [showDeal && i.deal_name, who.length && who.join(', '), i.duration_min && dur(i.duration_min),
-        i.source === 'meeting' && 'из встречи'].filter(Boolean).join(' · '),
-      meeting ? el('a', { class: 'src', href: meeting, target: '_blank', rel: 'noopener noreferrer' }, ' встреча →') : null)),
+        i.source === 'meeting' && 'из встречи', dg && 'из дайджеста · видишь только ты'].filter(Boolean).join(' · '),
+      meeting ? el('a', { class: 'src', href: meeting, target: '_blank', rel: 'noopener noreferrer' }, ' встреча →') : null,
+      dg ? el('a', { class: 'src', href: '#/digest/' + encodeURIComponent(dg) }, ' сводка →') : null)),
     el('button', { class: 'icon-btn tl-del', title: 'Убрать из хронологии', onclick: async () => {
-      if (!confirm('Убрать запись из хронологии? Она останется в журнале.')) return;
+      if (!confirm(dg ? 'Убрать запись из хронологии? Сводка останется в дайджесте, повтор её сюда не вернёт.'
+        : 'Убрать запись из хронологии? Она останется в журнале.')) return;
       await dealOp({ op: 'interaction.delete', id: i.id });
     } }, icon('x', 12)));
 }

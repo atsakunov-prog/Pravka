@@ -136,6 +136,8 @@ TWINS.pages.day = (() => {
         n.closed ? 'закрыто само ' + n.closed : null, n.updated ? 'уточнено само ' + n.updated : null].filter(Boolean).join(', ') || 'новых дел нет') + '.' : '';
       kids.push(el('div', { class: 'tw-row tw-acts' }, line ? el('span', { class: 'tw-ls' }, line) : null,
         el('a', { class: 'btn small', href: '#/new' }, icon('inbox', 15), 'Открыть «Новое»'),
+        // Вся сводка, куда разнесена в CRM, и все прошлые с поиском (digest.js, 14.10.2026).
+        el('a', { class: 'btn small', href: '#/digest' }, icon('list', 15), 'Все сводки'),
         el('button', { class: 'btn small', onclick: () => navigator.clipboard.writeText(g.text || '').then(() => toast('Сводка скопирована'), fail) }, icon('copy', 15), 'Скопировать')));
     }
     return T.card('tw-dg o4', ...kids);

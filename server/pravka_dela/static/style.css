@@ -1331,6 +1331,8 @@ a.pt-row:hover { color: var(--accent); text-decoration: none; }
 .mhits { margin-top: 5px; display: grid; gap: 3px; font-size: 13.5px; color: var(--muted); line-height: 1.45; }
 .mhits b { color: var(--text); font-weight: 600; }
 .mhits mark, .tline mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px; padding: 0 2px; }
+/* «Дайджест» (digest.js, 14.10.2026): сводка разделами — как карточка на «Сегодня» (.tw-dgb), только с полями панели. */
+.dg-one { padding: 10px 16px 12px; }
 .mq { border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; font-size: 14px; line-height: 1.45;
   background: color-mix(in srgb, var(--warn) 8%, var(--panel)); border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line)); }
 .mq .faint { margin-top: 3px; font-size: 13px; }

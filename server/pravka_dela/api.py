@@ -82,7 +82,9 @@ STATIC = {
 # хвостов нет (в STATIC их нет): /static/twins.js — 404, как любое чужое имя.
 # «Телефон» — настройки телефона на сервере (14.10.2026, phone.js) — так же хвостом app.js.
 # «Claude: траты» (14.10.2026, spend.js и spend.css) — тоже хвостами: страница #/spend и значок на «Сегодня».
-TAILS = {"app.js": ("twins.js", "day.js", "zasechka.js", "pravka.js", "phone.js", "spend.js"), "style.css": ("twins.css", "spend.css")}
+# «Дайджест» (14.10.2026, digest.js) — тоже хвостом: страница #/digest — сводки, поиск и куда сводка разнесена в CRM.
+TAILS = {"app.js": ("twins.js", "day.js", "zasechka.js", "pravka.js", "phone.js", "spend.js", "digest.js"),
+         "style.css": ("twins.css", "spend.css")}
 BRAND_MAX = 96 * 1024  # значок «Ковчега» уходит в /api/me строкой data: — большой картинке там не место
 
 
