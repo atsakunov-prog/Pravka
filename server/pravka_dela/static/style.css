@@ -275,38 +275,56 @@ html[data-kv-app] .top { display: none; }
 .kv-out { color: var(--icon); }
 
 /* ── Каркас: колонка разделов · страница · карточка ── */
-/* Дела — на всю ширину окна (владелец 13.10.2026: «не тянутся по ширине»): колонка, список и карточка без предела. */
-.shell { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr); position: relative; }
-.shell.with-card { grid-template-columns: var(--side-w) minmax(0, 1fr) var(--card-w); }
-/* Ручка ширины карточки — на её левом краю; ширина в процентах (app.js кладёт её в --card-w на .shell). */
-.card-grip { position: absolute; top: 0; bottom: 0; right: var(--card-w); width: 10px; margin-right: -5px; z-index: 6; cursor: col-resize; touch-action: none; }
-.card-grip::after { content: ''; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px; background: transparent; transition: background-color .12s; }
-.card-grip:hover::after, .card-grip:focus-visible::after, .shell.resizing .card-grip::after { background: var(--accent); }
-.card-grip:focus-visible { outline: none; }
+/* Дела — на всю ширину окна (владелец 13.10.2026: «не тянутся по ширине»): колонка, список и карточка без предела.
+   Три дорожки всегда (14.10.2026): боковина --sw, список, карточка --cw; спрятанная колонка — 0, и ширина уезжает
+   плавно. Ширины тянут язычки (app.js: --side-w в px, --card-w в процентах — на .shell). */
+.shell {
+  flex: 1; min-height: 0; display: grid; position: relative;
+  --sw: var(--side-w); --cw: 0px;
+  grid-template-columns: var(--sw) minmax(0, 1fr) var(--cw);
+}
+/* Карточка уступает боковине место до своего минимума (28 %), чтобы списку осталось 40 %: тянут боковину — карточка
+   уже сама, и снова прежняя, когда боковину сузили (как у приложения, core/DelaColumns.kt). */
+.shell.with-card { --cw: max(28%, min(var(--card-w), calc(60% - var(--sw)))); }
 .shell.resizing { user-select: none; cursor: col-resize; }
 aside.side { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
 /* Боковина с язычком (13.10.2026, как в приложении Правка; холст «Ковчег на телефоне», блок «Боковина Дел»):
    на широком язычок в щели между колонкой и списком прячет колонку — колонки «список | карточка» забирают её
    место (ширина уезжает плавно); спрятана — язычок у левого края. На узком — у края экрана, тянет шторку. */
-.dgrip {
-  position: absolute; z-index: 9; top: 46%; left: 0; width: 18px; height: 56px; padding: 0; margin: 0;
+.dgrip, .cgrip {
+  position: absolute; z-index: 9; top: 46%; width: 18px; height: 56px; padding: 0; margin: 0;
   display: grid; place-items: center; background: var(--panel); color: var(--muted); cursor: pointer;
-  border: 1px solid var(--line); border-left: 0; border-radius: 0 8px 8px 0; transition: left .22s, color .15s;
+  border: 1px solid var(--line); touch-action: none;
 }
-.dgrip:hover, .dgrip:focus-visible { color: var(--accent); }
-.dgrip svg { transition: transform .22s; }
-.dgrip.in { border-left: 1px solid var(--line); border-radius: 8px; }
-.dgrip.in svg { transform: rotate(180deg); }
+.dgrip { left: 0; border-left: 0; border-radius: 0 8px 8px 0; transition: left .22s, color .15s; }
+/* Язычок карточки (14.10.2026) — зеркально, у правого края: › — спрятать, ‹ — показать. */
+.cgrip { right: 0; border-right: 0; border-radius: 8px 0 0 8px; transition: right .22s, color .15s; }
+.dgrip:hover, .dgrip:focus-visible, .cgrip:hover, .cgrip:focus-visible { color: var(--accent); }
+.dgrip svg, .cgrip svg { transition: transform .22s; }
+.dgrip.in, .cgrip.in { border: 1px solid var(--line); border-radius: 8px; }
+.dgrip.in svg, .cgrip:not(.in) svg { transform: rotate(180deg); }
+/* Зона касания шире видимого: палец и мышь попадают в неё, а не в край окна (заходит на список). */
+.dgrip::before, .cgrip::before { content: ''; position: absolute; top: -8px; bottom: -8px; left: -1px; right: -8px; }
+.cgrip::before { left: -8px; right: -1px; }
+.dgrip.in::before, .cgrip.in::before { left: -7px; right: -7px; }
 @media (min-width: 901px) {
   .shell { transition: grid-template-columns .22s; }
-  .shell > .dgrip.in { left: calc(var(--side-w) - 9px); }
-  .shell.side-hidden { grid-template-columns: 0 minmax(0, 1fr); }
-  .shell.side-hidden.with-card { grid-template-columns: 0 minmax(0, 1fr) var(--card-w); }
+  .shell.resizing, .shell.resizing > .dgrip, .shell.resizing > .cgrip { transition: none; }
+  .shell.side-hidden { --sw: 0px; }
+  .shell.card-hidden { --cw: 0px; }
+  .shell > .dgrip.in { left: calc(var(--sw) - 9px); }
+  .shell > .cgrip.in { right: calc(var(--cw) - 9px); }
+  /* В доке — крупнее (владелец 14.10.2026: «стрелочка должна быть по горизонтали побольше — иначе не каждый раз
+     пальцем получается нажать, слишком надо целиться у края экрана»). */
+  .dgrip:not(.in), .cgrip:not(.in) { width: 24px; height: 64px; }
+  .dgrip:not(.in)::before { right: -12px; }
+  .cgrip:not(.in)::before { left: -12px; }
+  .dgrip, .cgrip { cursor: col-resize; }
   /* Спрятанная колонка — и для клавиатуры: Tab по невидимым ссылкам не ходит (после того, как уехала). */
-  aside.side { transition: visibility 0s; }
-  .shell.side-hidden aside.side { visibility: hidden; transition: visibility 0s .22s; }
+  aside.side, section.card-pane { transition: visibility 0s; }
+  .shell.side-hidden aside.side, .shell.card-hidden section.card-pane { visibility: hidden; transition: visibility 0s .22s; }
 }
-@media (prefers-reduced-motion: reduce) { .shell, .dgrip, .dgrip svg { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .shell, .dgrip, .dgrip svg, .cgrip, .cgrip svg { transition: none; } }
 .side-top { flex: none; padding: 22px 14px 6px max(24px, env(safe-area-inset-left)); }
 .side-scroll {
   flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
@@ -318,7 +336,7 @@ main.list > .scroll {
   padding: 24px 32px calc(64px + env(safe-area-inset-bottom));
 }
 section.card-pane {
-  min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  min-height: 0; min-width: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
   background: var(--panel); border-left: 1px solid var(--line);
 }
 
@@ -342,11 +360,12 @@ section.card-pane {
 .side-views .nav-item { padding: 7px 10px; }
 .nav-item:hover { background: var(--hover); }
 .nav-item .ico { width: 18px; display: grid; place-items: center; color: var(--icon); flex: none; }
-.nav-item .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nav-item .n { font-size: 13px; color: var(--faint); font-variant-numeric: tabular-nums; }
-.nav-item .n.hot { color: var(--bad); font-weight: 600; }
+/* Чисел у пунктов нет (14.10.2026), длинное название переносится, а не режется «…». */
+.nav-item { align-items: flex-start; }
+.nav-item .ico { margin-top: 1px; }
+.nav-item .label { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.35; }
 .nav-item.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-.nav-item.on .ico, .nav-item.on .n { color: var(--accent); }
+.nav-item.on .ico { color: var(--accent); }
 .side-group { margin-top: 18px; }
 .gh-row { display: flex; align-items: center; }
 .gh-row .gh { flex: 1; min-width: 0; }
@@ -358,7 +377,6 @@ section.card-pane {
 .side-group .gh .caret { display: inline-grid; color: var(--icon); opacity: 0; transition: transform .15s, opacity .12s; }
 .side-group .gh:hover .caret, .side-group.closed .gh .caret { opacity: 1; }
 .side-group.closed .gh .caret { transform: rotate(-90deg); }
-.side-group .gh .n { margin-left: auto; font-weight: 400; }
 .side-group.closed > .items { display: none; }
 .items { display: flex; flex-direction: column; gap: 1px; }
 .gh-act { flex: none; border: 0; background: none; color: var(--faint); font-size: 12px; padding: 2px 8px; border-radius: 6px; }
@@ -420,8 +438,6 @@ a.h-kind:hover { color: var(--accent); }
 }
 .pill-tab:hover { color: var(--text); text-decoration: none; }
 .pill-tab.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
-.pill-tab b { font-weight: 500; color: var(--faint); }
-.pill-tab.hot b { color: var(--accent); font-weight: 600; }
 
 /* ── Тело страницы ── */
 .body { padding: 0; min-width: 0; }
@@ -1334,9 +1350,8 @@ a.pt-row:hover { color: var(--accent); text-decoration: none; }
 
 /* ── Компьютер поуже: карточка забирает место у колонки разделов ── */
 @media (min-width: 901px) and (max-width: 1320px) {
-  .shell.with-card { grid-template-columns: 232px minmax(0, 1fr) var(--card-w); }
-  .shell.with-card.side-hidden { grid-template-columns: 0 minmax(0, 1fr) var(--card-w); }
-  .shell.with-card > .dgrip.in { left: 223px; }
+  /* Карточка видна — боковина поуже (232), если её не тянули сами (тогда --side-w-c — их ширина). */
+  .shell.with-card:not(.side-hidden):not(.card-hidden) { --sw: var(--side-w-c, 232px); }
   .shell.with-card main.list > .scroll { padding-left: 24px; padding-right: 24px; }
   .shell.with-card .tabs-row { margin-left: -24px; margin-right: -24px; padding-left: 24px; padding-right: 24px; }
 }
@@ -1357,7 +1372,7 @@ a.pt-row:hover { color: var(--accent); text-decoration: none; }
   .kv-svc-menu { left: 8px; }
   .top-end { gap: 6px; }
   .top-end .who { display: none; }
-  .shell, .shell.with-card { grid-template-columns: minmax(0, 1fr); }
+  .shell, .shell.with-card, .shell.card-hidden { grid-template-columns: minmax(0, 1fr); }
   aside.side {
     position: fixed; z-index: 25; top: 0; bottom: 0; left: 0; width: min(calc(86vw / var(--kv-zoom, 1)), 320px);
     background: var(--bg); border-right: 1px solid var(--line); box-shadow: var(--shadow);
@@ -1384,7 +1399,9 @@ a.pt-row:hover { color: var(--accent); text-decoration: none; }
   .group > h2 .act { margin-left: 0; }
   /* Дело — поверх основного экрана, листом на весь экран со стрелкой «назад» (владелец 13.10.2026: «а не под списком»). */
   section.card-pane { position: fixed; z-index: 29; inset: 0; border-left: 0; overscroll-behavior: contain; }
-  .card-grip { display: none; }
+  /* Язычка карточки на узком нет: карточка — лист поверх, а «спрятанная» показывается как обычно. */
+  .cgrip { display: none; }
+  .shell.card-hidden section.card-pane { visibility: visible; }
   .card-top { position: sticky; top: 0; z-index: 2; background: var(--panel); margin: 0 -16px; padding: max(6px, env(safe-area-inset-top)) 16px 6px; border-bottom: 1px solid var(--line-soft); }
   .card-back { display: inline-grid !important; margin-left: -6px; }
   .card-x { display: none !important; }

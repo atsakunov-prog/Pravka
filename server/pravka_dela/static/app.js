@@ -18,6 +18,7 @@ const S = {
   showDone: false, upNoDate: false, upMineOnly: false, dealFilter: null,
   sel: new Set(), order: [], lastPick: null, cardId: null, draft: null, sideOpen: false,
   sideHidden: LS.get('sideHidden', false), // боковина на широком спрятана язычком (13.10.2026) — помнит браузер
+  cardHidden: LS.get('cardHidden', false), lastCard: null, // карточка справа спрятана язычком (14.10.2026); какая была открыта
   parse: null, quickText: '', // идёт разбор Claude; текст строки Claude — живёт, пока его не отдали (перерисовка его не стирает)
   cardSay: {}, kstati: false, whenText: {}, // строка Claude в карточке дела (по делу), «Кстати», строка «Когда» (13.10.2026)
   selfOpen: null, selfText: {}, // «Сам допишу» у уточнения в «Подскажи»: какое открыто и что написано
@@ -838,11 +839,17 @@ function render() {
   const ae = document.activeElement;
   const q0 = ae && ['quick', 'side-search', 'main-search'].includes(ae.id) ? ae : null;
   const focused = q0 ? { id: q0.id, value: q0.value, a: q0.selectionStart, b: q0.selectionEnd } : null;
-  const shell = el('div', { class: 'shell' + (S.cardId || S.draft ? ' with-card' : '') + (S.sideOpen ? ' side-open' : '')
-    + (S.sideHidden ? ' side-hidden' : '') + (S.sel.size ? ' selecting' : '') });
+  // Карточка спрятана язычком, а открыли другое дело (или новое) — она выезжает с ним: щелчок по делу и значит «покажи».
+  const cardKey = S.cardId || S.draft || null;
+  if (cardKey && cardKey !== S.lastCard && S.cardHidden) { S.cardHidden = false; LS.set('cardHidden', false); }
+  S.lastCard = cardKey;
+  const shell = el('div', { class: 'shell' + (cardKey ? ' with-card' : '') + (cardKey && S.cardHidden ? ' card-hidden' : '')
+    + (S.sideOpen ? ' side-open' : '') + (S.sideHidden ? ' side-hidden' : '') + (S.sel.size ? ' selecting' : '') });
   shell.append(renderSide(r), listColumn(r), sideGrip());
-  if (S.cardId || S.draft) shell.append(renderCard(), cardGrip(shell));
+  if (cardKey) shell.append(renderCard(), cardGrip());
   shell.style.setProperty('--card-w', cardPct() + '%');
+  const sw = sideW();
+  if (sw) { shell.style.setProperty('--side-w', sw + 'px'); shell.style.setProperty('--side-w-c', sw + 'px'); }
   const scroll = S.toTop ? 0 : document.querySelector('main.list > .scroll')?.scrollTop || 0; // новая страница — с начала
   S.toTop = false;
   const old = document.querySelector('section.card-pane');
@@ -882,6 +889,7 @@ NARROW.addEventListener('change', () => { S.sideOpen = false; render(); });
 function sideGrip() {
   const open = NARROW.matches ? S.sideOpen : !S.sideHidden;
   const btn = el('button', { class: 'dgrip', type: 'button', onclick: () => {
+    if (Date.now() - (btn.dragged || 0) < 400) return; // щелчок сразу после протяжки — это была протяжка
     // Класс — на уже нарисованном каркасе, без перерисовки: тогда ширина колонки (и шторка) уезжает плавно, а не
     // рывком — render() строит каркас заново, и переходу CSS не от чего было бы идти. Следующая перерисовка
     // возьмёт то же состояние из S.
@@ -903,12 +911,162 @@ function sideGrip() {
   const paint = (on) => {
     const label = on ? 'Спрятать разделы' : 'Показать разделы';
     btn.classList.toggle('in', on);
-    btn.title = label;
+    btn.title = label + (NARROW.matches ? '' : ' · потяни — шире или уже');
     btn.setAttribute('aria-label', label);
     btn.setAttribute('aria-expanded', on ? 'true' : 'false');
   };
   paint(open);
+  gripDrag(btn, 'side', paint);
   return btn;
+}
+
+/** Ширина боковины, которую дотянули (px страницы); не тянули — 0: ширину даёт css (264, рядом с карточкой — 232). */
+const SIDE_MIN = 180;
+const sideW = () => { const w = +LS.get('sideW', 0) || 0; return w >= SIDE_MIN ? Math.round(w) : 0; };
+/** Списку — не меньше 40 % ширины (как у приложения, core/DelaColumns.kt): боковине и карточке вместе — 60 %. */
+const MID_SHARE = 0.4;
+
+/** Язычок карточки справа (14.10.2026, владелец: «И то же самое с правой колонкой, где само дело… справа и слева
+ *  должен иметь возможность эти колонки убирать. Механика одинаковая»): щелчок — спрятать карточку к правому краю
+ *  или показать снова, протяжка — ширина (бывшая ручка на её краю). Щелчок по другому делу показывает её сам. */
+function cardGrip() {
+  const btn = el('button', { class: 'cgrip', type: 'button', onclick: () => {
+    if (Date.now() - (btn.dragged || 0) < 400) return; // щелчок сразу после протяжки — это была протяжка
+    S.cardHidden = !S.cardHidden;
+    LS.set('cardHidden', S.cardHidden);
+    btn.closest('.shell')?.classList.toggle('card-hidden', S.cardHidden);
+    paint(!S.cardHidden);
+  } }, icon('chevron', 15));
+  const paint = (on) => {
+    const label = on ? 'Спрятать карточку' : 'Показать карточку';
+    btn.classList.toggle('in', on);
+    btn.title = label + ' · потяни — шире или уже';
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+  };
+  paint(!S.cardHidden);
+  gripDrag(btn, 'card', paint);
+  return btn;
+}
+
+/** Протяжка язычка мышью или пальцем — одна у обеих колонок (14.10.2026; владелец: «если я держу эту кнопку, она
+ *  двигает ширину столбца»), счёт — как у приложения (core/DelaColumns.kt). Сдвиг больше 4 px — тянешь ширину, и
+ *  щелчка после этого нет; отпустил у самого края (меньше половины наименьшей ширины) — колонка уходит в док, а её
+ *  ширина остаётся прежней; тянул спрятанную — она выезжает. Сосед уступает место до своего минимума: карточка —
+ *  на время (это делает сам css: --cw не шире, чем оставляют боковина и доля списка), боковина — насовсем (так и
+ *  остаётся уже, какой её видели). Боковина помнит ширину в px, карточка — в процентах окна. Px мыши — экранные:
+ *  при «Размере текста» (zoom) страница считает в своих, поэтому сдвиг пересчитывается долей ширины каркаса.
+ *  Стрелки с клавиатуры — тот же шаг без мыши. На узком экране протяжки нет: там шторка и лист. */
+function gripDrag(btn, edge, paint) {
+  const isSide = edge === 'side';
+  const hidden = () => (isSide ? S.sideHidden : S.cardHidden);
+  const setHidden = (h, shell) => {
+    if (isSide) { S.sideHidden = h; LS.set('sideHidden', h); shell.classList.toggle('side-hidden', h); }
+    else { S.cardHidden = h; LS.set('cardHidden', h); shell.classList.toggle('card-hidden', h); }
+    paint(!h);
+  };
+  const scale = (shell) => shell.offsetWidth / shell.getBoundingClientRect().width || 1;
+  const widthOf = (shell, sel) => { const x = shell.querySelector(sel); return x ? x.getBoundingClientRect().width * scale(shell) : 0; };
+  const cardOn = (shell) => shell.classList.contains('with-card') && !S.cardHidden;
+  // Пределы: соседу — его минимум, списку — его доля (40 %).
+  const limits = (shell, W) => {
+    const room = W * (1 - MID_SHARE), cmin = W * CARD_MIN / 100;
+    return isSide
+      ? { min: SIDE_MIN, max: Math.max(SIDE_MIN, room - (cardOn(shell) ? cmin : 0)) }
+      : { min: cmin, max: Math.min(W * CARD_MAX / 100, Math.max(cmin, room - (S.sideHidden ? 0 : SIDE_MIN))) };
+  };
+  const putSide = (shell, w) => { shell.style.setProperty('--side-w', w + 'px'); shell.style.setProperty('--side-w-c', w + 'px'); };
+  const put = (shell, w, W) => (isSide ? putSide(shell, w) : shell.style.setProperty('--card-w', (w / W * 100) + '%'));
+  const restoreSide = (shell) => {
+    const sw = sideW();
+    if (sw) putSide(shell, sw);
+    else { shell.style.removeProperty('--side-w'); shell.style.removeProperty('--side-w-c'); }
+  };
+  const restore = (shell) => (isSide ? restoreSide(shell) : shell.style.setProperty('--card-w', cardPct() + '%'));
+  // Карточку тянут шире, чем оставляет боковина, — боковина уже (до своего минимума); null — уступать не надо.
+  const squeeze = (st, card) => {
+    if (isSide || S.sideHidden) return null;
+    const room = st.W * (1 - MID_SHARE);
+    return st.side0 + Math.max(card, st.W * CARD_MIN / 100) > room ? Math.max(SIDE_MIN, room - Math.max(card, st.W * CARD_MIN / 100)) : null;
+  };
+  let st = null;
+  btn.addEventListener('pointerdown', (e) => {
+    if (NARROW.matches || e.button !== 0) return;
+    const shell = btn.closest('.shell');
+    if (!shell) return;
+    const w0 = hidden() ? 0 : widthOf(shell, isSide ? 'aside.side' : 'section.card-pane');
+    st = { shell, k: scale(shell), W: shell.offsetWidth, x: e.clientX, w0, w: w0, moved: false, was: hidden(),
+      side0: S.sideHidden ? 0 : widthOf(shell, 'aside.side') };
+    try { btn.setPointerCapture(e.pointerId); } catch (err) { /* без захвата тоже тянется, пока мышь над язычком */ }
+  });
+  btn.addEventListener('pointermove', (e) => {
+    if (!st) return;
+    const dx = (e.clientX - st.x) * st.k * (isSide ? 1 : -1);
+    if (!st.moved) {
+      if (Math.abs(dx) < 4) return;
+      st.moved = true;
+      st.shell.classList.add('resizing');
+      if (st.was) { put(st.shell, 0, st.W); st.shell.classList.remove(isSide ? 'side-hidden' : 'card-hidden'); }
+    }
+    st.w = Math.min(limits(st.shell, st.W).max, Math.max(0, st.w0 + dx));
+    put(st.shell, st.w, st.W);
+    const sq = squeeze(st, st.w);
+    if (sq != null) putSide(st.shell, sq); else if (!isSide) restoreSide(st.shell);
+  });
+  const end = () => {
+    if (!st) return;
+    const cur = st;
+    st = null;
+    if (!cur.moved) return;
+    btn.dragged = Date.now(); // щелчок, который браузер пришлёт следом за отпусканием, — не в счёт
+    const { shell, W, w, was } = cur;
+    shell.classList.remove('resizing');
+    const { min, max } = limits(shell, W);
+    if (w < min / 2) {
+      restore(shell);
+      if (!isSide) restoreSide(shell);
+      setHidden(true, shell);
+      return;
+    }
+    const fin = Math.min(max, Math.max(min, w));
+    put(shell, fin, W);
+    if (isSide) LS.set('sideW', Math.round(fin));
+    else {
+      LS.set('cardPct', Math.round(fin / W * 1000) / 10);
+      const sq = squeeze(cur, fin);
+      if (sq != null) { putSide(shell, sq); LS.set('sideW', Math.round(sq)); }
+    }
+    if (was) setHidden(false, shell);
+  };
+  btn.addEventListener('pointerup', end);
+  btn.addEventListener('pointercancel', () => {
+    if (!st) return;
+    const { shell, was } = st;
+    st = null;
+    shell.classList.remove('resizing');
+    restore(shell);
+    if (!isSide) restoreSide(shell);
+    if (was) shell.classList.add(isSide ? 'side-hidden' : 'card-hidden');
+  });
+  // Клавиатура: стрелка от списка — колонка шире, к списку — уже (шаг 24 px).
+  btn.addEventListener('keydown', (e) => {
+    const sign = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
+    if (!sign || NARROW.matches || hidden()) return;
+    e.preventDefault();
+    const shell = btn.closest('.shell');
+    if (!shell) return;
+    const W = shell.offsetWidth;
+    const w0 = widthOf(shell, isSide ? 'aside.side' : 'section.card-pane');
+    const { min, max } = limits(shell, W);
+    const fin = Math.min(max, Math.max(min, w0 + 24 * sign * (isSide ? 1 : -1)));
+    put(shell, fin, W);
+    if (isSide) LS.set('sideW', Math.round(fin));
+    else {
+      LS.set('cardPct', Math.round(fin / W * 1000) / 10);
+      const sq = squeeze({ W, side0: S.sideHidden ? 0 : widthOf(shell, 'aside.side') }, fin);
+      if (sq != null) { putSide(shell, sq); LS.set('sideW', Math.round(sq)); }
+    }
+  });
 }
 
 /** Колонка страницы (общий вид Ковчега, 13.10.2026): заголовок, строка «говори дела» и содержимое прокручиваются
@@ -965,22 +1123,19 @@ function afterBusy() { setTimeout(() => { if (S.dirty && !uiBusy()) { S.dirty = 
 document.addEventListener('focusout', afterBusy);
 document.addEventListener('change', (e) => { if (e.target.tagName === 'SELECT') afterBusy(); });
 
-/** hot — число цветом беды; строкой — своя подсказка к нему («люди ждут ответа»), иначе «есть просроченные». */
-function navItem(hash, ico, label, count, on, extra, hot) {
+/** Пункт боковины: значок и название. Чисел нет с 14.10.2026 (владелец: «Давай уберём эти количества дел везде,
+ *  потому что они съедают пространство… плашки с номерами в клиентах не нужно»): длинное название переносится, а не
+ *  режется «…». Просроченное видно строкой «просрочено N» в шапке «Сейчас» и «Сегодня». */
+function navItem(hash, ico, label, on) {
   return el('button', { class: 'nav-item' + (on ? ' on' : ''), onclick: () => go(hash), 'aria-current': on ? 'page' : null },
-    el('span', { class: 'ico' }, ico), el('span', { class: 'label' }, label), extra || null,
-    count ? el('span', { class: 'n' + (hot ? ' hot' : ''), title: hot ? (typeof hot === 'string' ? hot : 'есть просроченные') : null }, count) : null);
+    el('span', { class: 'ico' }, ico), el('span', { class: 'label' }, label));
 }
 
 /** Виды — на компьютере пунктами боковой колонки со значками (макет 13.10.2026), на телефоне — вкладками под
- *  заголовком. «Сегодня» с делами «отбить» — число акцентом: люди ждут. */
+ *  заголовком; без чисел (14.10.2026), как вкладки приложения. */
 function viewPills(r) {
-  return Object.entries(VIEWS).filter(([, v]) => !v.show || v.show()).map(([k, v]) => {
-    const n = v.count ? v.count() : 0;
-    return el('a', { class: 'pill-tab' + (r.kind === k ? ' on' : '') + ((v.hot && v.hot()) || (v.late && v.late()) ? ' hot' : ''),
-      href: '#/' + k, onclick: () => { S.sideOpen = false; } },
-    v.title, n ? el('b', {}, n) : null);
-  });
+  return Object.entries(VIEWS).filter(([, v]) => !v.show || v.show()).map(([k, v]) =>
+    el('a', { class: 'pill-tab' + (r.kind === k ? ' on' : ''), href: '#/' + k, onclick: () => { S.sideOpen = false; } }, v.title));
 }
 
 // ── Шапка Ковчега: значок «Ковчег» с подписью «Дела», справа тема, шестерёнка, имя и выход ──
@@ -1159,19 +1314,13 @@ function renderSide(r) {
     if (e.key === 'Escape') { search.value = ''; search.blur(); }
   });
 
-  // Проекты: избранные сверху, дальше по видам; число открытых и точка просрочки. Клиенты — по свежести дел.
-  const openBy = new Map(), lateBy = new Set();
-  for (const t of all()) {
-    if (!isOpen(t) || !t.project_id) continue;
-    openBy.set(t.project_id, (openBy.get(t.project_id) || 0) + 1);
-    if (isLate(t)) lateBy.add(t.project_id);
-  }
+  // Проекты: избранные сверху, дальше по видам. Клиенты — по свежести дел.
   const fresh = freshBy();
   const live = [...S.projects.values()].filter((p) => !p.archived_at && (!S.sphere || p.sphere === S.sphere))
     .sort((a, b) => (a.kind === 'client' && b.kind === 'client' ? (fresh.get(b.id) || '').localeCompare(fresh.get(a.id) || '') : 0)
       || a.name.localeCompare(b.name, 'ru'));
-  // Проект — значком (клиент — портфель, остальное — папка); просрочка — числом цветом беды.
-  const plainItem = (p) => navItem('#/p/' + p.id, dot(p.id), p.name, openBy.get(p.id), r.kind === 'project' && r.id === p.id, null, lateBy.has(p.id));
+  // Проект — значком (клиент — портфель, остальное — папка).
+  const plainItem = (p) => navItem('#/p/' + p.id, dot(p.id), p.name, r.kind === 'project' && r.id === p.id);
   // Клиент — с раскрывающимися проектами (сделками) прямо в меню (владелец, 06.10.2026: «проекты
   // группируются под клиента… в клиентах раскрываемый список у каждого клиента по проектам»).
   const projItem = (p) => {
@@ -1183,45 +1332,38 @@ function renderSide(r) {
     const caret = el('button', { class: 'side-caret' + (open ? ' open' : ''), title: open ? 'Свернуть «Зачем»' : `«Зачем» клиента: ${deals.length}`,
       'aria-expanded': open ? 'true' : 'false', onclick: (e) => { e.stopPropagation(); toggleClientOpen(p.id); } }, icon('chevron', 14));
     return el('div', { class: 'side-client' + (open ? ' open' : '') }, caret, plainItem(p),
-      open ? el('div', { class: 'side-deals' }, deals.map((d) => {
-        const ts = all().filter((t) => t.deal_id === d.id && isOpen(t));
-        return navItem('#/d/' + d.id, el('span', { class: 'st-dot st-' + d.stage, title: STAGE[d.stage] }), dealShort(d, p), ts.length || null,
-          r.kind === 'deal' && r.id === d.id, null, ts.some(isLate));
-      })) : null);
+      open ? el('div', { class: 'side-deals' }, deals.map((d) =>
+        navItem('#/d/' + d.id, el('span', { class: 'st-dot st-' + d.stage, title: STAGE[d.stage] }), dealShort(d, p), r.kind === 'deal' && r.id === d.id))) : null);
   };
-  // Раздел полки: заголовок мелким серым (макет: «Фильтры», «CRM»), щелчок сворачивает; сколько внутри — справа.
+  // Раздел полки: заголовок мелким серым (макет: «Фильтры», «CRM»), щелчок сворачивает. Сколько внутри — не пишем
+  // (14.10.2026, как в приложении: числа съедали место, «раскрыть все» уезжало за край).
   const group = (key, title, items, act) => {
     if (!items.length) return null;
     return el('div', { class: 'side-group' + (S.closed[key] ? ' closed' : '') },
       el('div', { class: 'gh-row' },
         el('button', { class: 'gh', 'aria-expanded': S.closed[key] ? 'false' : 'true', onclick: () => { S.closed[key] = !S.closed[key]; LS.set('closed', S.closed); render(); } },
-          title, el('span', { class: 'caret' }, icon('down', 14)), el('span', { class: 'n' }, items.length)),
+          title, el('span', { class: 'caret' }, icon('down', 14))),
         act && !S.closed[key] ? act : null),
       el('div', { class: 'items' }, items));
   };
   const favs = live.filter((p) => S.favs.includes(p.id));
   const crmNav = crmOn() ? Object.entries(CRM_VIEWS).filter(([, v]) => (!v.money || S.me.money) && (!v.owner || S.me.role === 'owner'))
-    .map(([k, v]) => navItem('#/' + k, icon(v.icon, 17), v.title, null, r.kind === k)) : [];
-  const fnav = filters().map((f) => navItem('#/f/' + encodeURIComponent(f.id), icon('bookmark', 17), f.name, scopeItems(f.scope).length || null,
-    r.kind === 'filter' && r.id === f.id));
-  // Виды — пунктами со значками и числами (макет 13.10.2026: Сейчас — молния, как у телефона, Сегодня — солнце,
-  // Новое — лоток, Все дела — список, Круг жизни — мишень); у «Нового» число — только вопросы, у «Всех дел» —
-  // только просроченное, цветом беды.
-  const views = Object.entries(VIEWS).filter(([, v]) => !v.show || v.show()).map(([k, v]) => {
-    const n = v.count ? v.count() : 0;
-    return navItem('#/' + k, icon(v.icon, 17), v.title, n || null, r.kind === k, null, v.late ? v.late() && 'просрочено — во «Всех делах»' : false);
-  });
+    .map(([k, v]) => navItem('#/' + k, icon(v.icon, 17), v.title, r.kind === k)) : [];
+  const fnav = filters().map((f) => navItem('#/f/' + encodeURIComponent(f.id), icon('bookmark', 17), f.name, r.kind === 'filter' && r.id === f.id));
+  // Виды — пунктами со значками (макет 13.10.2026: Сейчас — молния, как у телефона, Сегодня — солнце, Новое — лоток,
+  // Все дела — список, Круг жизни — мишень); чисел нет с 14.10.2026.
+  const views = Object.entries(VIEWS).filter(([, v]) => !v.show || v.show()).map(([k, v]) => navItem('#/' + k, icon(v.icon, 17), v.title, r.kind === k));
   const groups = [group('filters', 'Фильтры', fnav), group('crm', 'CRM', crmNav), group('fav', 'Избранное', favs.map(projItem))];
   for (const [kind, title] of Object.entries(KIND)) {
     const list = live.filter((p) => p.kind === kind && !S.favs.includes(p.id));
     groups.push(group('k-' + kind, title, list.map(projItem), kind === 'client' ? openAllBtn(list) : null));
   }
-  // Люди: с кем больше всего открытых дел. С CRM — отдельная страница «Люди» по компаниям.
+  // Люди: с кем больше всего открытых дел (порядок — по их числу, самого числа нет). С CRM — страница «Люди» по компаниям.
   if (!crmOn()) {
     const byPerson = new Map();
     for (const t of all()) if (isOpen(t) && t.person_id) byPerson.set(t.person_id, (byPerson.get(t.person_id) || 0) + 1);
-    const people = [...byPerson.entries()].sort((a, b) => b[1] - a[1]).map(([id, n]) => [person(id), n]).filter(([p]) => p);
-    groups.push(group('people', 'Люди', people.map(([p, n]) => navItem('#/h/' + p.id, avatar(p), personName(p), n, r.kind === 'person' && r.id === p.id))));
+    const people = [...byPerson.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => person(id)).filter(Boolean);
+    groups.push(group('people', 'Люди', people.map((p) => navItem('#/h/' + p.id, avatar(p), personName(p), r.kind === 'person' && r.id === p.id))));
   }
   const archived = [...S.projects.values()].filter((p) => p.archived_at).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   if (S.closed.arch === undefined) S.closed.arch = true;
@@ -1236,9 +1378,9 @@ function renderSide(r) {
     el('div', { class: 'side-scroll' },
       groups,
       el('div', { class: 'side-foot' },
-        navItem('#/stats', icon('chart', 17), 'Статистика', null, r.kind === 'stats'),
-        phoneOn() ? navItem('#/phone', icon('phone', 17), 'Телефон', null, r.kind === 'phone') : null,
-        navItem('#/settings', icon('settings', 17), 'Настройки', null, r.kind === 'settings')),
+        navItem('#/stats', icon('chart', 17), 'Статистика', r.kind === 'stats'),
+        phoneOn() ? navItem('#/phone', icon('phone', 17), 'Телефон', r.kind === 'phone') : null,
+        navItem('#/settings', icon('settings', 17), 'Настройки', r.kind === 'settings')),
       gameCard(),
       el('div', { class: 'side-keys' }, el('span', { class: 'kbd' }, 'n'), ' сказать Claude · ', el('span', { class: 'kbd' }, '/'), ' поиск')));
   // На телефоне колонка — шторка, как в приложении Claude: кнопка в шапке открывает и закрывает, тап по затемнению
@@ -1254,35 +1396,10 @@ function renderSide(r) {
   return aside;
 }
 
-/** Ширина карточки дела справа — ручкой на её левом краю (владелец 13.10.2026), в процентах окна, помнится в
- *  браузере. Доля считается из экранных px мыши и колонки — при «Размере текста» (zoom) она та же. */
+/** Ширина карточки дела справа (владелец 13.10.2026), в процентах окна, помнится в браузере; тянут её язычком
+ *  (cardGrip, с 14.10.2026 — вместо ручки на краю). */
 const CARD_MIN = 28, CARD_MAX = 65, CARD_DEF = 36;
 const cardPct = () => Math.min(CARD_MAX, Math.max(CARD_MIN, +LS.get('cardPct', CARD_DEF) || CARD_DEF));
-function cardGrip(shell) {
-  const grip = el('div', { class: 'card-grip', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Ширина карточки', tabindex: '0',
-    title: 'Потяни — карточка шире или уже' });
-  let pct = cardPct();
-  const put = (p) => { pct = Math.round(Math.min(CARD_MAX, Math.max(CARD_MIN, p)) * 10) / 10; shell.style.setProperty('--card-w', pct + '%'); };
-  grip.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    try { grip.setPointerCapture(e.pointerId); } catch (err) { /* без захвата тоже тянется, пока мышь над ручкой */ }
-    shell.classList.add('resizing');
-    const move = (ev) => { const r = shell.getBoundingClientRect(); put((r.right - ev.clientX) / r.width * 100); };
-    const up = () => {
-      grip.removeEventListener('pointermove', move);
-      shell.classList.remove('resizing');
-      LS.set('cardPct', pct);
-    };
-    grip.addEventListener('pointermove', move);
-    grip.addEventListener('pointerup', up, { once: true });
-    grip.addEventListener('pointercancel', up, { once: true });
-  });
-  grip.addEventListener('keydown', (e) => {
-    const k = { ArrowLeft: 2, ArrowRight: -2 }[e.key];
-    if (k) { e.preventDefault(); put(pct + k); LS.set('cardPct', pct); }
-  });
-  return grip;
-}
 
 /** «Раскрыть все / свернуть все» — проекты всех клиентов списка разом (владелец, 06.10.2026). */
 function openAllBtn(clients) {
@@ -1605,7 +1722,7 @@ function renderNow() {
     el('div', { class: 'body' },
       principleLine(),
       quickAdd({}, { placeholder: '«это в Сейчас», «П1 поставь, срок пятница», «Гуркин ждёт звонка — на сегодня»' }),
-      groupBox('Сейчас', now, { cls: 'grp-now', sub: 'отметил сам — сделать сегодня', lead: () => icon('bolt', 17),
+      groupBox('Сейчас', now, { cls: 'grp-now', n: false, sub: 'отметил сам — сделать сегодня', lead: () => icon('bolt', 17),
         before: now.length ? null : el('div', { class: 'hint-line' },
           'Пусто. Возьми до пяти дел на сегодня — молния у дела или в карточке, галочки и «В «Сейчас»» внизу или «!сейчас» в строке.') }),
       newBox(),
@@ -1622,12 +1739,12 @@ function newBox() {
   const rest = [fed ? `добавлено само за ${FEED_DAYS} дня: ${fed}` : null, auto ? `сделано само: ${auto}` : null].filter(Boolean).join(' · ');
   const link = (text) => el('a', { class: 'new-link', href: '#/new' }, icon('inbox', 17), text);
   if (!asks.length) return rest ? link('Новое: вопросов нет · ' + rest) : null;
-  return [asksBox(asks, { title: 'Новое', sub: 'подскажи — без тебя не поставлю' }), rest ? link('Всё «Новое»: ' + rest) : null];
+  return [asksBox(asks, { title: 'Новое', sub: 'подскажи — без тебя не поставлю', n: false }), rest ? link('Всё «Новое»: ' + rest) : null];
 }
 
 /** «Сегодня» на главной — дела со сроком сегодня, кроме уже взятых в «Сейчас»; внутри — три группы. */
 function todayBox(items, taken) {
-  const h = groupHead('h2', 'Сегодня', items.length, { lead: () => icon('sun', 17), href: '#/today',
+  const h = groupHead('h2', 'Сегодня', items.length, { lead: () => icon('sun', 17), href: '#/today', n: false,
     sub: 'срок сегодня' + (taken ? ' · что уже в «Сейчас» — выше' : '') });
   if (!items.length) return el('div', { class: 'group grp-today' }, h,
     el('div', { class: 'hint-line' }, taken ? 'Остальное со сроком на сегодня — уже в «Сейчас».' : 'Со сроком на сегодня — ничего.'));
@@ -1748,10 +1865,12 @@ function levelKey(t, lv) {
   return ['0', null, {}];
 }
 
+/** opts.n === false — без числа: блоки главной «Сейчас» (14.10.2026, как блоки приложения — «уберём эти количества
+ *  дел везде»). У групп списков число остаётся — оно в строке заголовка и места не отнимает. */
 function groupHead(tag, title, n, opts = {}) {
   const lead = typeof opts.lead === 'function' ? opts.lead() : opts.lead;
   return el(tag, { class: opts.late ? 'late' : '' }, lead || null,
-    opts.href ? el('a', { class: 'link', href: opts.href }, title) : title, el('span', { class: 'n' }, n),
+    opts.href ? el('a', { class: 'link', href: opts.href }, title) : title, opts.n === false ? null : el('span', { class: 'n' }, n),
     opts.sub ? el('span', { class: 'gsub' }, opts.sub) : null);
 }
 
@@ -1784,7 +1903,7 @@ const grouped = (items, by) => nested(items, Array.isArray(by) ? by : by === 'no
 function groupBox(title, items, opts = {}, by) {
   const lead = typeof opts.lead === 'function' ? opts.lead() : opts.lead;
   const h = title ? el('h2', { class: opts.late ? 'late' : '' }, lead || null,
-    opts.href ? el('a', { class: 'link', href: opts.href }, title) : title, el('span', { class: 'n' }, items.length),
+    opts.href ? el('a', { class: 'link', href: opts.href }, title) : title, opts.n === false ? null : el('span', { class: 'n' }, items.length),
     opts.sub ? el('span', { class: 'gsub' }, opts.sub) : null,
     opts.sum && !opts.act ? el('span', { class: 'sum' }, opts.sum) : null,
     opts.act ? el('span', { class: 'act' }, opts.act) : opts.late && items.length > 1 ? el('span', { class: 'act' },
@@ -3362,10 +3481,10 @@ function autoItem(s, seen) {
 /** Вопросы «Подскажи» — свежие сверху: по дате встречи, потом по появлению. */
 const sortedAsks = (list) => [...list].sort((a, b) => sugAt(b).localeCompare(sugAt(a)) || b.created_at.localeCompare(a.created_at));
 /** «Подскажи» — панель вопросов с кнопками; одна на «Новое» и на главную «Сейчас» (там она зовётся «Новое»). */
-function asksBox(asks, { title = 'Подскажи', sub = 'без тебя не поставлю' } = {}) {
+function asksBox(asks, { title = 'Подскажи', sub = 'без тебя не поставлю', n = true } = {}) {
   const ids = asks.map((s) => s.id);
   return el('div', { class: 'group asks' },
-    el('h2', {}, tint(icon('help', 17), 'var(--warn)'), title, el('span', { class: 'n' }, asks.length),
+    el('h2', {}, tint(icon('help', 17), 'var(--warn)'), title, n ? el('span', { class: 'n' }, asks.length) : null,
       el('span', { class: 'gsub' }, sub),
       ids.length > 1 && !asks.some(sugOptions) ? el('span', { class: 'act' },
         el('button', { class: 'chip-btn', onclick: () => decide(ids, 'accept') }, 'Поставить все'), ' ',
@@ -3677,7 +3796,12 @@ async function decide(ids, decision, reason, set) {
 }
 
 // ── Карточка дела (справа; на телефоне — лист снизу) ─────────────────────
-function openCard(id) { S.cardId = id; S.draft = null; render(); loadCardExtras(id); }
+// Открыть дело — и показать карточку, даже если её спрятали язычком: щелчок по делу и значит «покажи его».
+function openCard(id) {
+  S.cardId = id; S.draft = null;
+  if (S.cardHidden) { S.cardHidden = false; LS.set('cardHidden', false); }
+  render(); loadCardExtras(id);
+}
 const extras = new Map(); // комментарии и журнал — по требованию
 async function loadCardExtras(id) {
   const t = S.tasks.get(id);
