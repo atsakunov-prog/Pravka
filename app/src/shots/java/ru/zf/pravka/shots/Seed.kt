@@ -821,4 +821,89 @@ internal object Seed {
         st("Sent").value = ""
         st("Result").value = null
     }
+
+    // ---- Траты Claude (14.10.2026): выдуманный вид spend сервера Дел и поле spend синка — для снимков «sp»
+
+    /** Поле `spend` синка: $ за 7 дней, блоки и непрочитанные советы — красная метка над значком. */
+    fun spendBadge(): JSONObject = JSONObject().put("week", 21.04).put("today", 2.91).put("week_phone", 12.62)
+        .put("week_server", 8.42)
+        .put("tips", JSONObject().put("id", "tips-shot").put("week", "2026-10-12").put("count", 3).put("unseen", true))
+
+    private fun line(service: String, task: String, title: String, serviceTitle: String, usd: Double, calls: Int,
+                     model: String, how: String): JSONObject =
+        JSONObject().put("service", service).put("task", task).put("title", title).put("service_title", serviceTitle)
+            .put("usd", usd).put("calls", calls).put("models", JSONArray().put(model)).put("how", how)
+
+    private fun svc(service: String, title: String, usd: Double, calls: Int, vararg models: String): JSONObject =
+        JSONObject().put("service", service).put("title", title).put("usd", usd).put("calls", calls)
+            .put("models", JSONArray(models.toList()))
+
+    private fun period(k: Double): JSONObject {
+        fun r(x: Double) = Math.round(x * k * 100) / 100.0
+        val phoneTasks = JSONArray()
+            .put(line("phone", "zasechka", "Засечка: разбор фразы", "Правка (телефон)", r(6.9), 98, "claude-opus-5-5", "Opus 5.5 xhigh, кэш 1 ч, сразу"))
+            .put(line("phone", "pravka", "Правка: чистка диктовки", "Правка (телефон)", r(2.3), 240, "claude-sonnet-5-5", "Sonnet 5.5 high, кэш 1 ч"))
+            .put(line("phone", "food", "Еда: КБЖУ", "Правка (телефон)", r(1.6), 17, "claude-opus-5-5", "Opus 5.5 xhigh"))
+            .put(line("phone", "night_review", "Ночной разбор Правки", "Правка (телефон)", r(1.4), 2, "claude-opus-5-5", "Opus 5.5 max, пачкой"))
+            .put(line("phone", "zasechka_fork", "Засечка: развилка", "Правка (телефон)", r(0.42), 105, "claude-sonnet-5-5", "Sonnet 5.5 low"))
+        val serverTasks = JSONArray()
+            .put(line("digest", "window", "Сводка и разноска окна", "Дайджест", r(3.5), 15, "claude-opus-5-5", "Opus 5.5 high, пачкой"))
+            .put(line("meetings", "clean", "Чистка расшифровки", "Встречи", r(2.1), 12, "claude-sonnet-5-5", "Sonnet 5.5, пачкой"))
+            .put(line("meetings", "sverka", "Сверка встречи с Делами", "Встречи", r(1.5), 12, "claude-opus-5-5", "Opus 5.5 high, пачкой"))
+            .put(line("diktovka", "clean", "Чистка диктовки", "Диктовка (комп)", r(0.7), 160, "claude-sonnet-5-5", "Sonnet 5.5, кэш 1 ч"))
+            .put(line("shabbat", "study", "Подготовка главы", "Шаббат", r(0.43), 9, "claude-opus-5-5", "Opus 5.5 medium, пачкой"))
+            .put(line("dela", "ask", "Строка Claude и разговор", "Дела", r(0.19), 6, "claude-opus-5-5", "Opus 5.5 low, кэш 1 ч"))
+        val phone = r(12.62)
+        val server = r(8.42)
+        return JSONObject().put("usd", phone + server).put("calls", (690 * k).toInt()).put("batch_calls", (40 * k).toInt())
+            .put("cache_read", (3_400_000 * k).toLong()).put("cache_write", (120_000 * k).toLong())
+            .put("cache_saved", r(7.6)).put("batch_saved", r(4.4)).put("inexact_usd", 0)
+            .put("models", JSONArray()
+                .put(JSONObject().put("model", "claude-opus-5-5").put("usd", r(15.4)).put("calls", (280 * k).toInt()))
+                .put(JSONObject().put("model", "claude-sonnet-5-5").put("usd", r(5.6)).put("calls", (410 * k).toInt())))
+            .put("blocks", JSONArray()
+                .put(JSONObject().put("block", "phone").put("title", "Телефон").put("usd", phone)
+                    .put("services", JSONArray().put(svc("phone", "Правка (телефон)", phone, 462, "claude-opus-5-5", "claude-sonnet-5-5")))
+                    .put("tasks", phoneTasks))
+                .put(JSONObject().put("block", "server").put("title", "Сервер").put("usd", server)
+                    .put("services", JSONArray()
+                        .put(svc("meetings", "Встречи", r(3.6), 24, "claude-sonnet-5-5", "claude-opus-5-5"))
+                        .put(svc("digest", "Дайджест", r(3.5), 15, "claude-opus-5-5"))
+                        .put(svc("diktovka", "Диктовка (комп)", r(0.7), 160, "claude-sonnet-5-5"))
+                        .put(svc("shabbat", "Шаббат", r(0.43), 9, "claude-opus-5-5"))
+                        .put(svc("dela", "Дела", r(0.19), 6, "claude-opus-5-5")))
+                    .put("tasks", serverTasks)))
+    }
+
+    /** Вид `spend` сервера Дел, как его отдаёт spend.view_spend: три периода, тренд, источники, пробелы, советы. */
+    fun spendView(today: String): JSONObject {
+        val day = java.time.LocalDate.parse(today)
+        val trend = JSONArray()
+        for (i in 29 downTo 0) {
+            val d = day.minusDays(i.toLong())
+            trend.put(JSONObject().put("day", d.toString()).put("usd", 1.6 + ((i * 37) % 23) / 10.0))
+        }
+        return JSONObject().put("ok", true).put("today", today).put("prev_week", 19.4)
+            .put("periods", JSONObject().put("today", period(0.14)).put("week", period(1.0)).put("month", period(4.2)))
+            .put("trend", trend)
+            .put("sources", JSONArray()
+                .put(JSONObject().put("src", "pc").put("titles", JSONArray(listOf("Встречи", "Дайджест", "Диктовка (комп)", "Шаббат"))).put("day", today))
+                .put(JSONObject().put("src", "Fold 7 · ab12cd").put("titles", JSONArray(listOf("Правка (телефон)"))).put("day", today))
+                .put(JSONObject().put("src", "dela").put("titles", JSONArray(listOf("Дела"))).put("day", today)))
+            .put("gaps", JSONArray(listOf(
+                "Claude Code и claude.ai по подписке — не ключом API, в книге их нет.",
+                "Тестовые копии служб платят настоящими ключами, а пишут в свои папки.")))
+            .put("tips", JSONObject().put("id", "tips-shot").put("week", "2026-10-12").put("seen_at", JSONObject.NULL)
+                .put("note", "Неделя на 8 % дороже прошлой: Засечка и дайджест.")
+                .put("tips", JSONArray()
+                    .put(JSONObject().put("where", "phone").put("title", "Засечка: xhigh → high")
+                        .put("why", "Засечка — треть недели, дорог выход с размышлениями.").put("how", "Модели → Засечка: усилие high")
+                        .put("save_usd_month", 6.5).put("risk", "реже ловит тонкие развилки"))
+                    .put(JSONObject().put("where", "server").put("title", "Сводка дайджеста — на Sonnet")
+                        .put("why", "три окна в день по 55 тыс. токенов входа").put("how", "auto.py: модель сводки")
+                        .put("save_usd_month", 3.1).put("risk", "сводка чуть суше"))
+                    .put(JSONObject().put("where", "server").put("title", "Сверка встреч: medium")
+                        .put("why", "вход ~50 тыс. токенов, ответ короткий").put("how", "dela.py: effort")
+                        .put("save_usd_month", 1.2).put("risk", "реже замечает закрытые дела"))))
+    }
 }

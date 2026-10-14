@@ -184,12 +184,12 @@ private fun TipsCard(s: SpendBook.Screen) {
             KvGap()
         }
         s.tips.forEachIndexed { i, t ->
-            val where = when (t.where) { "phone" -> "телефон"; "server" -> "сервер"; else -> "" }
+            // Где тратится — первым словом подписи (у строки списка слева место только под время: «телеф» не годится).
+            val where = when (t.where) { "phone" -> "Телефон"; "server" -> "Сервер"; else -> null }
             KvListRow(
                 title = t.title,
-                sub = listOf(t.why, t.how.takeIf { it.isNotBlank() }?.let { "как: $it" }, t.risk.takeIf { it.isNotBlank() }?.let { "риск: $it" })
+                sub = listOf(where, t.why, t.how.takeIf { it.isNotBlank() }?.let { "как: $it" }, t.risk.takeIf { it.isNotBlank() }?.let { "риск: $it" })
                     .filterNot { it.isNullOrBlank() }.joinToString(" · "),
-                lead = where.ifBlank { null },
                 value = if (t.saveMonth > 0) "−${SpendBook.money(t.saveMonth)}/мес" else null,
                 valueColor = Kv.ok,
                 valueSmall = true,
@@ -254,7 +254,11 @@ private fun TrendCard(s: SpendBook.Screen) {
     if (s.trend.isEmpty()) return
     val days = s.trend.takeLast(TREND_DAYS)
     PaperCard(label = "По дням", note = "${days.size} дней") {
-        KvColumns(days.map { (d, v) -> KvColumn(v.toFloat(), d.takeLast(2).trimStart('0'), accent = d == s.today) }, height = 96.dp)
+        // Подпись — каждый пятый день и сегодня: тридцать чисел под тридцатью столбиками на сложенном не влезают.
+        KvColumns(days.mapIndexed { i, (d, v) ->
+            val label = if (d == s.today || (days.size - 1 - i) % 5 == 0) d.takeLast(2).trimStart('0') else ""
+            KvColumn(v.toFloat(), label, accent = d == s.today)
+        }, height = 96.dp)
         KvGap()
         val sum = days.sumOf { it.second }
         KvNote("За ${days.size} дней ${SpendBook.money(sum)} · в среднем ${SpendBook.money(sum / days.size)} в день")

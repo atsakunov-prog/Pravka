@@ -68,6 +68,15 @@ internal class ClaudeSpend(private val app: PravkaApp, private val scope: Corout
 
     private var started = false
 
+    /** Снимки экранов (Robolectric, `app/src/shots`): вид сервера без сервера. В приложении всегда null. */
+    @Volatile
+    internal var shotView: JSONObject? = null
+
+    /** Снимкам — советы снова «не открыты»: точка над значком видна в каждом круге. */
+    internal fun shotUnseen() {
+        _seen.value = ""
+    }
+
     fun start() {
         if (started) return
         started = true
@@ -198,6 +207,7 @@ internal class ClaudeSpend(private val app: PravkaApp, private val scope: Corout
 
     /** Экран «Claude: траты»: вид сервера целиком. null — сервера нет или он старый. */
     suspend fun view(): JSONObject? {
+        shotView?.let { return it }
         if (app.delaSync.link.value == null) return null
         val features = app.delaStore.view.value.features
         if (features.isNotEmpty() && SpendBook.FEATURE !in features) return null

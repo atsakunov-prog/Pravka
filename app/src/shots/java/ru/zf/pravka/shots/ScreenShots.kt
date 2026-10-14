@@ -50,7 +50,8 @@ import java.util.TimeZone
  * десятки мегабайт, пересъёмка — одна команда). Группы через запятую:
  * outer, tall, inner, overlay; t5 — только «Сегодня» вида v2 (быстро); z5 — только Засечка v2;
  * svod — меню и вид из Свода (этап 7); web — страница сервиса внутри приложения (шапка Ковчега,
- * заглушка вместо страницы); p5 — доводка 5.0 (подсказка еды, разделы веба Денег).
+ * заглушка вместо страницы); p5 — доводка 5.0 (подсказка еды, разделы веба Денег); sp — траты Claude (значок
+ * на «Сегодня» с меткой советов и экран «Claude: траты»).
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -284,6 +285,9 @@ class ScreenShots {
 
         // ---- Настройки телефона на сервере (14.10.2026): правка с компьютера на настоящем PravkaApp и экран «Телефон»
         if (want("ph")) phoneRemote()
+
+        // ---- Траты Claude (14.10.2026): значок «$» с красной меткой на «Сегодня» и экран «Claude: траты»
+        if (want("sp")) spend()
 
         // ---- режимы по одному (Правка 4.0): сложенный, целиком, разворот
         for ((g, tab) in listOf(
@@ -792,6 +796,33 @@ class ScreenShots {
      * которую телефон перебил своей, более поздней, — спор, значение остаётся телефонным; взятая правка второй раз
      * не ставится. Потом — экран «Телефон» с пометкой «поменяно с компьютера»: сложенный и разворот, обе темы.
      */
+    /**
+     * Траты Claude (14.10.2026): значок в шапке «Сегодня» с меткой непрочитанных советов и экран «Claude: траты»
+     * (общий итог, «Телефон» и «Сервер», советы, кэш и пачки, по дням) — на выдуманном виде сервера ([Seed.spendView]),
+     * обе темы, оба экрана Fold; экран — ещё и высоким окном, чтобы видно было всё.
+     */
+    private fun spend() {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        runBlocking { app.claudeSpend.onSync(org.json.JSONObject().put("spend", Seed.spendBadge())) }
+        app.claudeSpend.shotView = Seed.spendView(java.time.LocalDate.now().toString())
+        settle(4)
+        for (theme in listOf("light", "dark")) {
+            runBlocking { app.settings.setLookTheme(theme) }
+            settle(4)
+            for ((size, q) in listOf("folded" to OUTER, "wide" to INNER, "folded-tall" to OUTER_TALL)) {
+                RuntimeEnvironment.setQualifiers(q)
+                app.claudeSpend.shotUnseen()
+                val c = launch(null)
+                if (!size.endsWith("tall")) shot(c, "sp-today-$size-$theme")
+                if (tap(c, "траты Claude")) shot(c, "sp-spend-$size-$theme") else println("shots: значка трат нет на «Сегодня»")
+                close(c)
+            }
+        }
+        RuntimeEnvironment.setQualifiers(OUTER)
+        runBlocking { app.settings.setLookTheme("system") }
+        app.claudeSpend.shotView = null
+    }
+
     private fun phoneRemote() {
         val app = RuntimeEnvironment.getApplication() as PravkaApp
         val r = app.phoneRemote
