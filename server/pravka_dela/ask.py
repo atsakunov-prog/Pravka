@@ -715,6 +715,10 @@ def _sug_line(s: dict, t: dict | None) -> str:
     """Предложение словами, как его показывает веб (sugText): завести, закрыть, уточнить, взять себе."""
     p = s.get("payload") or {}
     quote = f" — «{_short(s['quote'], 200)}»" if s.get("quote") else ""
+    if s["kind"] == "person":
+        # Новый человек (dela_0019): кого завести или к кому дописать; принять — завести, отклонить — «не для CRM».
+        return (f"человек: {p.get('title') or (p.get('person') or {}).get('name') or ''}"
+                + (f" — {p['ask']}" if p.get("ask") else "") + quote)
     if s["kind"] == "create":
         title = p.get("title") or s.get("quote") or ""
         who = p.get("person_name")
@@ -1298,6 +1302,11 @@ def sug_ops(data: dict, sugs: dict, targets: dict, index: dict, today: dt.date) 
             plan.append({"n": n, "sid": str(s["id"]), "kind": s["kind"], "decision": "reject", "what": what, "reason": why})
             continue
         if x.get("decision") != "accept":
+            continue
+        if s["kind"] == "person":
+            # Человека не правят полями дела: «да» — как предложено (завести или дописать), остальное — «не для CRM».
+            ops.append({"op": "suggestion.decide", "id": str(s["id"]), "decision": "accept"})
+            plan.append({"n": n, "sid": str(s["id"]), "kind": s["kind"], "decision": "accept", "what": what, "fix": {}, "target": None})
             continue
         p = s.get("payload") or {}
         if s["kind"] == "create":

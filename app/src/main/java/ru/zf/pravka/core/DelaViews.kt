@@ -349,6 +349,16 @@ object DelaViews {
         val p = sg.payloadObj()
         fun v(k: String) = p.str(k)
         val ball = v("ball")
+        // Новый человек (dela_0019, `sugText` веба): кто и откуда; у «это он?» — с кем похож. Полный вид — docs/dela-phone-20.md.
+        if (sg.kind == "person") {
+            val d = p.optJSONObject("person") ?: JSONObject()
+            val like = s.people[v("person_id")]?.takeIf { !p.optBoolean("rename") }
+            return SugText(
+                v("title").ifBlank { d.str("name") },
+                listOfNotNull(v("where").takeIf { it.isNotBlank() }, like?.let { "похоже: ${it.name}" }, d.str("role").takeIf { it.isNotBlank() })
+                    .joinToString(" · "),
+            )
+        }
         if (sg.kind == "create") {
             return SugText(
                 v("title").ifBlank { sg.quote },
@@ -391,8 +401,13 @@ object DelaViews {
         "close" -> "Закрыть"
         "update" -> "Уточнить"
         "assign" -> "Взять"
+        "person" -> "Завести"
         else -> "Поставить"
     }
+
+    /** То же по самому предложению: вопрос «это он?» о человеке (`person_id` в payload) — «Да, это он», а не «Завести». */
+    fun askYes(sg: Dela.Suggestion): String =
+        if (sg.kind == "person" && sg.payloadObj().str("person_id").isNotBlank()) "Да, это он" else askYes(sg.kind)
 
     private fun stems(text: String): Set<String> =
         (Dela.norm(text) ?: "").replace(Regex("[^a-zа-я0-9]+"), " ").split(' ').filter { it.length > 3 }.map { it.take(5) }.toSet()

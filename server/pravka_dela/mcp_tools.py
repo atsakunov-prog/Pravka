@@ -370,7 +370,10 @@ def view(url: str, name: str = "today", sphere: str | None = None, person: str |
             out.append(f"{b['title'] or 'Без пачки'}:")
             for s in b["items"]:
                 p = s["payload"] or {}
-                if s["kind"] == "create":
+                if s["kind"] == "person":
+                    what = "человек: " + (p.get("title") or (p.get("person") or {}).get("name") or "")
+                    hint = p.get("ask") or ""
+                elif s["kind"] == "create":
                     what = p.get("title") or ""
                     hint = " · ".join(x for x in (p.get("project_name"), p.get("person_name"), BALL.get(p.get("ball", "mine")), p.get("due_date")) if x)
                 else:

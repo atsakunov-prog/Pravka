@@ -409,8 +409,9 @@ const pendingSugs = () => [...S.sugs.values()].filter((s) => s.status === 'pendi
  *  закрывай и спокойно уточняй»), — за days дней, свежие сверху. Узнаются по причине решения: принятое руками
  *  предложение с payload.auto сюда не попадает. «Понятно» (seen_at) убирает их совсем: 06.10.2026 #268 висел
  *  неделю и «никуда не уходил». */
-const AUTO_REASONS = ['закрыто само', 'уточнено само'];
-const autoDone = (days) => [...S.sugs.values()].filter((s) => (s.kind === 'close' || s.kind === 'update') && s.status === 'accepted'
+// «человек заведён сам» (dela_0019, 14.10.2026) — новый человек из Telegram или телефонной книжки: строкой с «Вернуть».
+const AUTO_REASONS = ['закрыто само', 'уточнено само', 'человек заведён сам'];
+const autoDone = (days) => [...S.sugs.values()].filter((s) => (s.kind === 'close' || s.kind === 'update' || s.kind === 'person') && s.status === 'accepted'
   && AUTO_REASONS.includes(s.reason) && !s.seen_at && s.for_user === S.me.user && s.decided_at && Date.now() - Date.parse(s.decided_at) < days * 86400e3)
   .sort((a, b) => b.decided_at.localeCompare(a.decided_at));
 // Число у «Нового» — только вопросы: поставленное и сделанное само ответа не ждут (владелец 08.10.2026).
@@ -3205,6 +3206,12 @@ function renderSearch(q) {
 /** Что предлагает автоматика — словами: завести, закрыть или поправить дело. */
 function sugText(s) {
   const p = s.payload || {};
+  // Новый человек (dela_0019): кто он и откуда; что спросить — вопросом автоматики (askWhy), ответ — кнопками.
+  if (s.kind === 'person') {
+    const d = p.person || {};
+    const was = p.person_id ? S.people.get(p.person_id) : null;
+    return { title: p.title || d.name || '', hint: [p.where, was && !p.rename ? 'похоже: ' + was.name : null, d.role].filter(Boolean).join(' · ') };
+  }
   if (s.kind === 'create') {
     return { title: p.title || s.quote || '',
       hint: [grpWord(p), p.project_name, p.person_name, p.due_date && 'срок ' + D.ddmm(p.due_date)].filter(Boolean).join(' · ') };
@@ -3252,7 +3259,7 @@ const ORIGIN = {
   voice: ['mic', 'var(--plan)', 'наговорка'], meeting: ['meet', 'var(--plan)', 'встреча'], telegram: ['send', 'var(--plan)', 'Telegram'],
   userbot: ['send', 'var(--plan)', 'Telegram'], bot: ['send', 'var(--plan)', 'ответ в Telegram'], mcp: ['chat', 'var(--plan)', 'Claude'],
   web: ['pen', 'var(--meta)', 'в вебе'], manual: ['pen', 'var(--meta)', 'руками'], import: ['list', 'var(--meta)', 'перенос'],
-  krug: ['circle', 'var(--plan)', 'разборщик Круга'],
+  krug: ['circle', 'var(--plan)', 'разборщик Круга'], contacts: ['phone', 'var(--plan)', 'телефонная книжка'],
 };
 const origin = (src) => ORIGIN[src] || ORIGIN.manual;
 /** Предложение, из которого вышло дело: пачка встречи или окна Telegram. */
@@ -3341,7 +3348,7 @@ function askWhy(s) {
   if (p.person_name && !byName([...S.people.values()], p.person_name)) return `Кто это — «${p.person_name}»?`;
   return null;
 }
-const ASK_YES = { create: 'Поставить', close: 'Закрыть', update: 'Да, согласен', assign: 'Взять' };
+const ASK_YES = { create: 'Поставить', close: 'Закрыть', update: 'Да, согласен', assign: 'Взять', person: 'Завести' };
 /** Варианты ответа кнопками (13.10.2026): у вопроса автоматики — её собственные ответы («Родительство» / «Комфортный быт»),
  *  а не «Да / Не надо»; сервер без флага options их не примет — тогда как раньше. */
 const sugOptions = (s) => (((S.me && S.me.features) || []).includes('options') && Array.isArray((s.payload || {}).options)
@@ -3406,7 +3413,8 @@ function askItem(s) {
         : [el('button', { class: 'btn small ok', disabled: kr && !kr.length && !(s.payload || {}).why_id, onclick: () => { delete S.kpick[s.id]; decide([s.id], 'accept', null, krSet); } },
           kr ? 'Да' : ASK_YES[s.kind] || 'Да'),
         s.kind === 'create' ? el('button', { class: 'btn small', onclick: () => { S.draft = s; S.cardId = null; render(); } }, 'Поправить') : null,
-        el('button', { class: 'btn small bad', onclick: () => { const r = prompt(s.kind === 'create' ? 'Почему не дело? (можно пусто)' : 'Почему нет? (можно пусто)'); if (r !== null) decide([s.id], 'reject', r || null); } }, 'Не надо')]));
+        s.kind === 'person' ? el('button', { class: 'btn small bad', title: 'Больше не спрошу про этого человека', onclick: () => decide([s.id], 'reject', 'не для CRM') }, 'Не для CRM')
+          : el('button', { class: 'btn small bad', onclick: () => { const r = prompt(s.kind === 'create' ? 'Почему не дело? (можно пусто)' : 'Почему нет? (можно пусто)'); if (r !== null) decide([s.id], 'reject', r || null); } }, 'Не надо')]));
 }
 
 /** Убрать дело из «Добавлено автоматически» (владелец 13.10.2026): только из списка — дело живёт дальше, удаляют его из
@@ -3447,16 +3455,42 @@ function autoBlock(auto, batch) {
   const open = !!batch || S.autoOpen;
   const seen = async (ids) => { try { await op1({ op: 'suggestion.seen', ids }); render(); } catch (e) { fail(e); } };
   const nc = auto.filter((s) => s.kind === 'close').length;
-  const what = [nc ? `закрыл ${nc}` : null, auto.length - nc ? `уточнил ${auto.length - nc}` : null].filter(Boolean).join(', ');
+  const np = auto.filter((s) => s.kind === 'person').length;
+  const what = [nc ? `закрыл ${nc}` : null, auto.length - nc - np ? `уточнил ${auto.length - nc - np}` : null,
+    np ? `завёл людей: ${np}` : null].filter(Boolean).join(', ');
   return el('div', { class: 'group auto-done' + (open ? '' : ' folded') },
     el('h2', {}, icon('check', 17), 'Сделано само', el('span', { class: 'n' }, auto.length),
-      el('span', { class: 'gsub' }, what + ' по встречам и Telegram'),
+      el('span', { class: 'gsub' }, what + (np && np === auto.length ? ' из Telegram и телефона' : ' по встречам и Telegram')),
       el('span', { class: 'act' },
         open && auto.length > 1 ? el('button', { class: 'chip-btn', title: 'Видел, согласен — убрать отсюда', onclick: () => seen(auto.map((s) => s.id)) }, 'Понятно, все') : null, ' ',
         batch ? null : el('button', { class: 'chip-btn', onclick: () => { S.autoOpen = !S.autoOpen; render(); } }, open ? 'Свернуть' : 'Показать'))),
     open ? auto.map((s) => autoItem(s, seen)) : null);
 }
+/** Человек, заведённый сам (dela_0019): «Понятно» — согласен; «Вернуть» — карточку в архив (и компанию, если её завели
+ *  ради него и больше в ней никого нет). Строки не удаляются (правило 8) — архив и есть «как было». */
+function autoPerson(s, seen) {
+  const r = s.result || {};
+  const p = S.people.get(r.person_id);
+  const live = p && !p.archived_at;
+  const undo = async () => {
+    const now = new Date().toISOString();
+    const list = [{ op: 'person.set', id: p.id, set: { archived_at: now } }];
+    const others = [...S.people.values()].some((x) => x.id !== p.id && x.org_id === r.org_id && !x.archived_at);
+    if (r.org_created && r.org_id && !others) list.push({ op: 'org.set', id: r.org_id, set: { archived_at: now } });
+    list.push({ op: 'suggestion.seen', ids: [s.id] });
+    try { await ops(list); toast('Убрал в архив: ' + p.name); render(); } catch (e) { fail(e); }
+  };
+  return el('div', { class: 'sug auto' },
+    el('div', { class: 'main' }, el('div', {}, 'Новый человек: ',
+      p ? el('a', { class: 'link', href: '#/h/' + p.id }, p.name) : ((s.payload || {}).title || 'карточка не видна')),
+      el('div', { class: 'hint' }, [(s.payload || {}).where, s.quote ? '«' + s.quote.slice(0, 160) + '»' : null].filter(Boolean).join(' · '))),
+    el('div', { class: 'acts' },
+      el('button', { class: 'btn small ok', title: 'Согласен — убрать отсюда', onclick: () => seen([s.id]) }, 'Понятно'),
+      live ? el('button', { class: 'btn small', title: 'Не нужен в CRM — карточку в архив', onclick: undo }, 'Вернуть') : null),
+    sugMark(s));
+}
 function autoItem(s, seen) {
+  if (s.kind === 'person') return autoPerson(s, seen);
   const t = S.tasks.get(s.task_id);
   if (t) S.order.push(t.id); // сделанное само — тоже дело на экране: «верни акт» Claude поймёт
   const r = s.result || {};

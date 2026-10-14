@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 import decimal
+import re
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -39,9 +40,12 @@ TASK_FIELDS = {
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
-            "digest", "zasechka", "phone", "spend", "digest_crm"]
+            "digest", "zasechka", "phone", "spend", "digest_crm", "people_new"]
 # «svod» — Свод (crm.svod) в синке и операция svod.set; «people» — person.add / person.merge и вид who
 # (одна карточка человека, 06.10.2026). Без них телефон не шлёт этих операций.
+# «people_new» — люди сами (dela_0019, 14.10.2026): предложение kind = person — новый человек из Telegram или телефонной
+# книжки (вопрос в «Подскажи» или «Сделано само» с «Вернуть»), источник contacts. Без флага служба дайджеста людей не
+# предлагает: старый сервер отверг бы и вид, и источник.
 # «dictations» — операция dictation.add: текст наговорки, из которой вышли дела (их source_ref = её id),
 # для «Нового» веба (06.10.2026).
 # «where» — «Где мы» (10.10.2026, where.py): операции where.set / where.off / where.ask и виды where,
@@ -97,7 +101,8 @@ SUGGESTION_FIELDS = {"kind", "task_id", "payload", "source", "source_ref", "quot
 
 SUGGESTION_TTL = dt.timedelta(days=7)
 # Что вариант ответа «Подскажи» (payload.options) может поменять — словарь payload: поля дела, имена, место в дереве.
-OPTION_FIELDS = (TASK_FIELDS | {"project_name", "person_name", "why_id", "directions", "why_auto", "note"}) - {
+OPTION_FIELDS = (TASK_FIELDS | {"project_name", "person_name", "why_id", "directions", "why_auto", "note"}
+                 | {"new", "org_name", "rename"}) - {  # у вопроса о человеке (kind person): «это он», «новый», компания
     "status", "source", "source_ref", "owner_id", "requested_by"}
 OPTIONS_MAX = 4
 
@@ -581,6 +586,15 @@ def op_suggestion_create(conn, user, op):
     data.setdefault("for_user", db_owner(conn))
     data.setdefault("expires_at", dt.datetime.now(dt.timezone.utc) + SUGGESTION_TTL)
     data["created_by"] = user
+    if data.get("source_ref") and data.get("kind") == "person":
+        # О человеке служба спрашивает один раз: повтор (служба перезапустилась до записи памяти) вернёт прежнее.
+        same = conn.execute(
+            "SELECT * FROM tasks.suggestions WHERE source_ref = %s AND kind = 'person' AND for_user = %s "
+            "AND status IN ('pending', 'accepted', 'edited') ORDER BY created_at DESC LIMIT 1",
+            (data["source_ref"], data["for_user"]),
+        ).fetchone()
+        if same:
+            return {"suggestion": same}
     if data.get("source_ref") and data.get("kind", "create") == "create":
         # Повтор той же находки (встреча разобрана заново) не плодит дубль.
         same = conn.execute(
@@ -604,7 +618,8 @@ AUTO_DAYS = 3
 AUTO_CLOSE_REASON = "закрыто само"
 AUTO_UPDATE_REASON = "уточнено само"
 AUTO_CREATE_REASON = "заведено само"
-AUTO_REASONS = (AUTO_CLOSE_REASON, AUTO_UPDATE_REASON, AUTO_CREATE_REASON)
+AUTO_PERSON_REASON = "человек заведён сам"
+AUTO_REASONS = (AUTO_CLOSE_REASON, AUTO_UPDATE_REASON, AUTO_CREATE_REASON, AUTO_PERSON_REASON)
 
 
 def _auto(conn, user, s: dict) -> str | None:
@@ -626,6 +641,12 @@ def _auto(conn, user, s: dict) -> str | None:
     """
     p = s.get("payload") or {}
     kind = s.get("kind")
+    if kind == "person":
+        # Новый человек (14.10.2026, владелец согласился: «уверен — заводит сам»): только новая карточка и с основанием;
+        # «это тот же человек?» — всегда вопрос: склеивает людей только владелец (LOGIC.md, закон 3). Свежесть не нужна —
+        # человек не протухает, как дело из старой встречи.
+        ok = p.get("auto") is True and user == s.get("for_user") and s.get("quote") and not p.get("person_id")
+        return AUTO_PERSON_REASON if ok else None
     if kind not in ("create", "close", "update") or p.get("auto") is not True or user != s.get("for_user") or not s.get("quote"):
         return None
     try:
@@ -682,6 +703,12 @@ def op_suggestion_decide(conn, user, op):
         return {"suggestion": row}
     if decision != "accept":
         raise OpError("решение: accept или reject")
+    if s["kind"] == "person":
+        res = _person_sug(conn, user, s, payload)
+        row = _update(conn, "tasks.suggestions", {"id": s["id"]}, {
+            "status": "accepted", "reason": op.get("reason"), "decided_by": user,
+            "decided_at": dt.datetime.now(dt.timezone.utc), "result": Jsonb(jsonable(res))})
+        return {"suggestion": row, "person": res}
     fix_raw = dict(op.get("set") or {})
     fix_kr = _krug_split(fix_raw)  # «Подскажи» разборщика Круга: направления и «Зачем» — поправкой при «Да»
     fix = {**_pick(fix_raw, TASK_FIELDS, "дело"), **fix_kr}
@@ -718,6 +745,74 @@ def op_suggestion_decide(conn, user, op):
         "result": Jsonb(jsonable({**{k: task[k] for k in TASK_FIELDS | {"directions", "why_id"} if task and k in task}, **back})),
     })
     return {"suggestion": row, "task": task}
+
+
+PERSON_SUG_ADD = ("aliases", "phones", "emails", "telegram_id", "telegram_username")
+PERSON_SUG_NEW = ("name", "short", "aliases", "phones", "emails", "telegram_id", "telegram_username", "role", "note", "source")
+# Новую компанию автоматика заводит любым видом, кроме клиента: клиентом её делает владелец (сверка 08.10.2026).
+ORG_AUTO_KINDS = {"partner", "fund", "bank", "other"}
+
+
+def _org_key(name: Any) -> str:
+    """«Альфа-Банк» = «Альфа Банк», «Ромашка (группа)» = «Ромашка»: без знаков, пробелов и пояснения в скобках."""
+    return "".join(people.words(re.sub(r"\([^)]*\)", " ", str(name or ""))))
+
+
+def _org_for(conn, user, name: Any, kind: Any, note: str) -> tuple[Any, bool]:
+    """Компания по имени: есть такая (имя или другое имя) — она, нет — новая. Ответ — (id, заведена ли сейчас)."""
+    name = " ".join(str(name or "").split())[:120]
+    key = _org_key(name)
+    if not key:
+        return None, False
+    for o in conn.execute("SELECT id, name, aliases FROM crm.orgs WHERE archived_at IS NULL ORDER BY created_at").fetchall():
+        if key in {_org_key(x) for x in [o["name"], *(o["aliases"] or [])]}:
+            return o["id"], False
+    row = org_create(conn, user, {"data": {"name": name, "kind": kind if kind in ORG_AUTO_KINDS else "other", "note": note}})["row"]
+    return row["id"], True
+
+
+def _person_sug(conn, user, s: dict, payload: dict) -> dict:
+    """Принятый «новый человек» (kind person, dela_0019): дописать в карточку или завести новую.
+
+    payload.person — что известно (имя, другие имена, номера, почта, Telegram, должность, заметка); person_id — «это
+    он» (вариант ответа или вопрос «это X?»), new — «новый человек» поверх предложенного; rename — имя из person
+    становится именем карточки (старое — другим именем). Пока вопрос ждал, тот же номер, Telegram или почта могли
+    появиться в чьей-то карточке — тогда дописываем туда, а не плодим дубль. Ответ — в result: person_id, created и
+    org_created (заведена ли компания) — по ним «Вернуть» уберёт ровно сделанное.
+    """
+    d = payload.get("person") if isinstance(payload.get("person"), dict) else {}
+    pid = None if payload.get("new") else payload.get("person_id")
+    if not pid:
+        keys = [{"telegram_id": d.get("telegram_id")}, {"telegram": d.get("telegram_username")},
+                *({"phone": x} for x in d.get("phones") or []), *({"email": x} for x in d.get("emails") or [])]
+        for kw in keys:
+            if not any(kw.values()):
+                continue
+            w = people.who(conn, **kw)
+            if w["sure"] and w["best"]["how"] in ("номер", "telegram", "почта"):
+                pid = w["best"]["id"]
+                break
+    if pid:
+        add = {k: d[k] for k in PERSON_SUG_ADD if d.get(k)}
+        if d.get("name") and not payload.get("rename"):
+            add["aliases"] = [*(add.get("aliases") or []), d["name"]]  # как его зовут в Telegram или книжке — другим именем
+        res = people.op_person_add(conn, user, {"id": pid, "add": add}, OpError)
+        out = {"person_id": pid, "created": False, "changed": res["changed"]}
+        old = res["row"]["name"]
+        if payload.get("rename") and d.get("name") and d["name"] != old:
+            person_set(conn, user, {"id": pid, "set": {"name": d["name"]}})
+            people.op_person_add(conn, user, {"id": pid, "add": {"aliases": [old]}}, OpError)
+            out["was_name"] = old
+        return out
+    if not d.get("name"):
+        raise OpError("человек: нужно имя")
+    where = {"telegram": "Telegram", "contacts": "телефонной книжки", "meeting": "встречи"}.get(s.get("source"), s.get("source"))
+    org_id, org_made = _org_for(conn, user, payload.get("org_name"), payload.get("org_kind"), f"Заведена сама из {where}")
+    data = {k: d[k] for k in PERSON_SUG_NEW if d.get(k) not in (None, "", [])}
+    if org_id:
+        data["org_id"] = org_id
+    row = person_create(conn, user, {"data": data})["row"]
+    return {"person_id": row["id"], "created": True, "org_id": org_id, "org_created": org_made}
 
 
 def _trace(conn, user, s: dict, task: dict | None) -> str | None:

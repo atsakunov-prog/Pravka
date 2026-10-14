@@ -2272,7 +2272,7 @@ internal fun AskRow(
                 if (chosen == proposed) onAccept()
                 else onAcceptSet(org.json.JSONObject().put("directions", org.json.JSONArray(chosen)).put("why_id", org.json.JSONObject.NULL))
             })
-            else PaperButton(DelaViews.askYes(sg.kind), icon = Glyphs.Check, primary = true, onClick = onAccept)
+            else PaperButton(DelaViews.askYes(sg), icon = Glyphs.Check, primary = true, onClick = onAccept)
         }
     }
 }

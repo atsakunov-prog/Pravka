@@ -223,6 +223,15 @@ class DelaViewsTest {
         assertNull(DelaViews.askWhy(s.suggestions.getValue("q4"), s))
         assertEquals("Поставить", DelaViews.askYes("create"))
         assertEquals("Закрыть", DelaViews.askYes("close"))
+        // Новый человек (dela_0019): кто и откуда; «это он?» — «Да, это он» и с кем похож.
+        val someone = s.people.values.first()
+        val pNew = Dela.Suggestion(id = "p1", forUser = "sasha", kind = "person",
+            payload = "{\"title\": \"Пётр Сидоров (Ромашка)\", \"where\": \"Telegram: 24 сообщения\", \"person\": {\"name\": \"Пётр Сидоров (Ромашка)\", \"role\": \"партнёр\"}}")
+        assertEquals(DelaViews.SugText("Пётр Сидоров (Ромашка)", "Telegram: 24 сообщения · партнёр"), DelaViews.sugText(pNew, s, today))
+        assertEquals("Завести", DelaViews.askYes(pNew))
+        val pSame = pNew.copy(id = "p2", payload = "{\"person\": {\"name\": \"Petr S\"}, \"person_id\": \"${someone.id}\"}")
+        assertEquals(DelaViews.SugText("Petr S", "похоже: ${someone.name}"), DelaViews.sugText(pSame, s, today))
+        assertEquals("Да, это он", DelaViews.askYes(pSame))
         // Свёрнутое «Сделано само» одной строкой.
         val c = Dela.Suggestion(id = "c", kind = "close")
         val u = Dela.Suggestion(id = "u", kind = "update")
