@@ -177,9 +177,16 @@ object DelaCrm {
         val dealName: String = "",
         val projectName: String = "",
         val local: Boolean = false,
+        /**
+         * Сводка дайджеста Telegram, из которой запись (`digest_ref` видов client, deal, dossier; 14.10.2026,
+         * dela_0018): пункт сводки о рабочем человеке или клиенте. Такую запись видит только владелец (сервер
+         * команде строки не отдаёт); тап «сводка →» — сама сводка видом `digest?ref=`. Пусто — обычная запись.
+         */
+        val digestRef: String = "",
     ) {
         val day: String get() = at.take(10)
         val kindWord: String get() = IKIND[kind] ?: kind
+        val fromDigest: Boolean get() = digestRef.isNotBlank()
     }
 
     data class PersonRow(
@@ -277,6 +284,8 @@ object DelaCrm {
             projectId = o.str("project_id"), dealId = o.str("deal_id"), personIds = o.strings("person_ids"),
             source = o.str("source"), sourceRef = o.str("source_ref"), durationMin = o.intOrNull("duration_min"),
             deletedAt = o.str("deleted_at"), dealName = o.str("deal_name"), projectName = o.str("project_name"),
+            // Старый сервер поля не шлёт — ссылка на сводку та же: всё до «#» у записи из дайджеста.
+            digestRef = o.str("digest_ref").ifBlank { if (o.str("source") == "digest") o.str("source_ref").substringBefore('#') else "" },
         )
     }
 
@@ -493,6 +502,8 @@ object DelaCrm {
     fun clientPath(projectId: String) = "client?project_id=$projectId"
     fun dealPath(dealId: String) = "deal?deal_id=$dealId"
     fun dossierPath(personId: String) = "dossier?person_id=$personId"
+    /** Одна сводка дайджеста по ref (`digest:2026-10-13T2000`) — вид `digest` сервера, только владельцу. */
+    fun digestPath(ref: String) = "digest?ref=" + java.net.URLEncoder.encode(ref.substringBefore('#'), "UTF-8")
 
     // ------------------------------------------------------------ операции
 

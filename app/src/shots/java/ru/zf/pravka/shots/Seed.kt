@@ -541,6 +541,11 @@ internal object Seed {
                 .put("source_ref", "https://meet.example.ru/beta-1").put("deal_name", "Бета Групп: финмодель 2027").put("person_ids", JSONArray().put("pe-ivan")))
             .put(JSONObject().put("id", "i-2").put("at", ago(120)).put("kind", "call").put("project_id", "p-beta").put("deal_id", "d-beta-refi")
                 .put("summary", "Анна: банк готов смотреть рефинансирование после модели").put("deal_name", "Бета Групп: рефинансирование").put("person_ids", JSONArray().put("pe-anna")))
+            // Пункт дайджеста Telegram (14.10.2026, dela_0018): «Telegram, окно: …», значок Telegram и «сводка →».
+            .put(JSONObject().put("id", "i-3").put("at", ago(4)).put("kind", "telegram").put("project_id", "p-beta").put("deal_id", "d-beta-model")
+                .put("summary", "Telegram, ср 14.10, 11:00 · ночь: ждёт тебя — Иван: Просит подтвердить созвон в четверг в 15:00 и прислать тизер.")
+                .put("source", "digest").put("source_ref", "digest:2026-10-14T1100#wait-0a1b2c3d4e5f").put("digest_ref", "digest:2026-10-14T1100")
+                .put("deal_name", "Бета Групп: финмодель 2027").put("person_ids", JSONArray().put("pe-ivan")))
         app.delaStore.putView(
             ru.zf.pravka.core.DelaCrm.clientPath("p-beta"),
             JSONObject().put("project", sync.getJSONArray("projects").getJSONObject(0)).put("timeline", timeline)

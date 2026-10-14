@@ -90,6 +90,8 @@ internal class CrmUiState {
     var clientRelations by mutableStateOf(false)
     /** Убрать запись хронологии — с подтверждением: строка останется в журнале. */
     var deleting by mutableStateOf<Pair<DelaCrm.Interaction, List<String>>?>(null)
+    /** «сводка →» у записи из дайджеста Telegram — ref сводки, открытой листом (`DigestRefSheet`); пусто — закрыто. */
+    var digestRef by mutableStateOf("")
     /** Тап по плашке человека — «откуда он» и должность (`personPop` веба). */
     var personFor by mutableStateOf<String?>(null)
     /** «+ человек»: к клиенту, в люди клиента или в команду сделки. */
@@ -1175,11 +1177,15 @@ private fun TlItem(ctx: DelaCrmContext, it: DelaCrm.Interaction, refresh: List<S
     Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
         .clickable { ctx.ui.tlOpen = if (open) "" else it.id }.padding(vertical = 4.dp)) {
         Column(Modifier.weight(1f)) {
-            Text(
-                DelaAsk.ddmm(it.day, ctx.today) + " · " + it.kindWord + if (it.local) " ⏳" else "",
-                style = MaterialTheme.typography.bodySmall,
-                color = c.primary,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Пункт дайджеста Telegram (dela_0018) — со значком Telegram: видно, что это переписка, а не звонок.
+                if (it.fromDigest) Icon(Glyphs.Telegram, contentDescription = null, tint = c.primary, modifier = Modifier.padding(end = 3.dp).size(12.dp))
+                Text(
+                    DelaAsk.ddmm(it.day, ctx.today) + " · " + it.kindWord + if (it.local) " ⏳" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.primary,
+                )
+            }
             if (topic != null) Text(topic, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
             if (body.isNotBlank()) Text(body, style = MaterialTheme.typography.bodyMedium, maxLines = if (open) Int.MAX_VALUE else 3, overflow = TextOverflow.Ellipsis)
             for (st in if (open) steps else steps.take(2)) Text("• $st", style = MaterialTheme.typography.bodySmall)
@@ -1189,15 +1195,25 @@ private fun TlItem(ctx: DelaCrmContext, it: DelaCrm.Interaction, refresh: List<S
                 it.personIds.map { id -> ctx.personName(id) }.filter { n -> n.isNotBlank() }.takeIf { l -> l.isNotEmpty() }?.joinToString(", "),
                 it.durationMin?.takeIf { m -> m > 0 }?.let { m -> "$m мин" },
                 "из встречи".takeIf { _ -> it.source == "meeting" },
+                "из дайджеста · видишь только ты".takeIf { _ -> it.fromDigest },
             ).joinToString(" · ")
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
+                if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, modifier = Modifier.weight(1f, fill = false))
                 if (it.sourceRef.startsWith("https://")) {
                     Text(
                         (if (meta.isNotBlank()) " · " else "") + "встреча →",
                         style = MaterialTheme.typography.bodySmall,
                         color = c.primary,
                         modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { openLink(context, it.sourceRef) },
+                    )
+                }
+                // Тап — сама сводка, из которой пункт (вид digest?ref=, по запросу и без кэша — DigestRefSheet).
+                if (it.fromDigest) {
+                    Text(
+                        (if (meta.isNotBlank()) " · " else "") + "сводка →",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = c.primary,
+                        modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClickLabel = "открыть сводку дайджеста") { ctx.ui.digestRef = it.digestRef },
                     )
                 }
             }
@@ -1475,7 +1491,71 @@ internal fun CrmSheets(ctx: DelaCrmContext) {
             },
         ) {
             PaperHint(i.summary)
-            PaperHint("Строка не удаляется: сервер помечает её убранной, журнал помнит.")
+            PaperHint(
+                if (i.fromDigest) "Сводка останется в дайджесте, повтор сводки запись сюда не вернёт."
+                else "Строка не удаляется: сервер помечает её убранной, журнал помнит."
+            )
+        }
+    }
+    ui.digestRef.takeIf { it.isNotBlank() }?.let { DigestRefSheet(ctx, it) }
+}
+
+/**
+ * Сводка дайджеста Telegram по «сводка →» у записи хронологии (14.10.2026, dela_0018; веб — `#/digest/<ref>`):
+ * вид `digest?ref=` — запросом при открытии, без кэша и без журнала, как «Раньше» у карточки дайджеста на
+ * «Сегодня»: это личная переписка, на диск она не ложится. Разделы — те же блоки, что у карточки (`DigestNote`).
+ * Без сети — словами; сервер отказал — его слова (команде он сводку не отдаёт вовсе).
+ */
+@Composable
+private fun DigestRefSheet(ctx: DelaCrmContext, ref: String) {
+    val c = MaterialTheme.colorScheme
+    var note by remember(ref) { mutableStateOf<ru.zf.pravka.core.DigestNote?>(null) }
+    var error by remember(ref) { mutableStateOf("") }
+    LaunchedEffect(ref) {
+        try {
+            note = ctx.app.delaSync.rawView(DelaCrm.digestPath(ref)).optJSONObject("digest")?.let(ru.zf.pravka.core.DigestNote::parse)
+            if (note == null) error = "Сводки нет на сервере."
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // Нет кода HTTP — не дошли до сервера: это «без сети», а не поломка.
+            error = if (e is ru.zf.pravka.data.DelaSync.DelaException && e.code > 0) e.message.orEmpty().ifBlank { "Не вышло." }
+            else "Без сети — сводку не открыть."
+        }
+    }
+    val n = note
+    PaperSheet(
+        onDismiss = { ctx.ui.digestRef = "" },
+        title = "Дайджест",
+        icon = Glyphs.Telegram,
+        subtitle = n?.let { listOf(it.title, it.counts).filter { s -> s.isNotBlank() }.joinToString(" · ") },
+    ) {
+        when {
+            error.isNotEmpty() -> PaperHint(error)
+            n == null -> PaperHint("Загружаю сводку…")
+            else -> {
+                for (b in n.blocks()) {
+                    if (b.heading) {
+                        Text(b.text, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(top = 6.dp))
+                    } else {
+                        Text(
+                            androidx.compose.ui.text.buildAnnotatedString {
+                                if (b.lead.isNotBlank()) {
+                                    pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.SemiBold))
+                                    append(b.lead)
+                                    pop()
+                                    append(" ")
+                                }
+                                append(b.text)
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+                if (n.dela.isNotBlank()) PaperHint(n.dela)
+                PaperHint("Личная переписка — видишь только ты.")
+            }
         }
     }
 }

@@ -681,4 +681,30 @@ class DelaCrmTest {
         assertNotNull(DelaCrm.STAGE["proposal"])
         assertEquals("КП", DelaCrm.STAGE["proposal"])
     }
+
+    // ------------------------------------------------------------ дайджест в хронологии (14.10.2026, dela_0018)
+
+    @Test
+    fun `пункт дайджеста в хронологии — со ссылкой на сводку, у старого сервера — из source_ref`() {
+        // Как его отдают виды client, deal, dossier (контракт dela-digest.json, раздел crm): kind telegram, source digest.
+        val row = JSONObject().put("id", "i-9").put("at", "2026-10-13T20:00:00+03:00").put("kind", "telegram")
+            .put("summary", "Telegram, вт 13.10, 20:00: ждёт тебя — Иван Петров: ждёт модель к пятнице")
+            .put("source", "digest").put("source_ref", "digest:2026-10-13T2000#wait-0a1b2c3d4e5f")
+            .put("person_ids", JSONArray().put("pe-ivan")).put("project_id", "p-beta")
+        val fresh = DelaCrm.interaction(JSONObject(row.toString()).put("digest_ref", "digest:2026-10-13T2000"))!!
+        assertTrue(fresh.fromDigest)
+        assertEquals("digest:2026-10-13T2000", fresh.digestRef)
+        assertEquals("Telegram", fresh.kindWord)
+        // Сервер без поля digest_ref — то же из source_ref: всё до «#».
+        assertEquals("digest:2026-10-13T2000", DelaCrm.interaction(row)!!.digestRef)
+        // Тема и итог — как у встреч: жирным «окно: ждёт тебя — кто», под ней — что.
+        val (topic, body) = DelaCrm.meetingParts(fresh.summary)
+        assertEquals("Telegram, вт 13.10, 20:00: ждёт тебя — Иван Петров", topic)
+        assertEquals("ждёт модель к пятнице", body)
+        // Обычная запись — без ссылки на сводку, даже с source_ref.
+        val call = DelaCrm.interaction(JSONObject().put("id", "i-1").put("at", "2026-10-13").put("kind", "call")
+            .put("summary", "Созвон").put("source", "phone").put("source_ref", "call:12"))!!
+        assertFalse(call.fromDigest)
+        assertEquals("digest?ref=digest%3A2026-10-13T2000", DelaCrm.digestPath("digest:2026-10-13T2000#wait-0a1b"))
+    }
 }

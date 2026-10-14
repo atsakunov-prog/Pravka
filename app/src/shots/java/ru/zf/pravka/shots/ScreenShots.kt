@@ -232,6 +232,14 @@ class ScreenShots {
         c = launch(MainActivity.TAB_TODOIST)
         if (tap(c, "поиск: клиенты") && type(c, "бета")) shot(c, "crm-6-search")
         close(c)
+        // Дайджест в карточках CRM (14.10.2026, dela_0018): запись Telegram со значком, «из дайджеста» и «сводка →»
+        // в хронологии клиента (клиент к этому кадру уже переименован в «Бета Холдинг» кадром crm-13).
+        // Высоким окном — вся карточка до хронологии: прокрутка к разделу при стоящих часах Robolectric кадр не дорисовывает.
+        RuntimeEnvironment.setQualifiers(OUTER_TALL)
+        c = launch(MainActivity.TAB_TODOIST)
+        if (tap(c, "Показать разделы") && (tap(c, "Бета Холдинг") || tap(c, "Бета Групп"))) shot(c, "crm-14-client-digest")
+        close(c)
+        RuntimeEnvironment.setQualifiers(OUTER)
     }
 
     /** Набрать текст в поле верхнего окна (лист живёт своим окном поверх вкладки). */
