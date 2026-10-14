@@ -71,7 +71,7 @@ class ScreenShots {
 
     private val dir = File(System.getProperty("pravka.shotsDir") ?: "build/shots").also { it.mkdirs() }
 
-    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5, web. */
+    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5, web, dcol. */
     private fun want(group: String): Boolean {
         val v = System.getProperty("pravka.shots").orEmpty()
         return v == "1" || v == "all" || v.split(',').map { it.trim() }.contains(group)
@@ -161,6 +161,23 @@ class ScreenShots {
         }
         println("shots: «$what» не нажимается")
         return false
+    }
+
+    /**
+     * Своё действие узла для чтения с экрана ([action] у узла с подписью [what]) — так снимки тянут язычок колонки
+     * («Шире» / «Уже»): протяжку пальцем Robolectric без касаний не сыграет. Узел ищется заново на каждый шаг —
+     * после шага колонка уже другая.
+     */
+    private fun act(c: ActivityController<MainActivity>, what: String, action: String, times: Int = 1): Boolean {
+        repeat(times) {
+            val nodes = roots(c).flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true) }
+            val a = nodes.firstOrNull { it.label().contains(what) }
+                ?.config?.getOrNull(SemanticsActions.CustomActions)?.firstOrNull { it.label == action }
+                ?: return false.also { println("shots: у «$what» нет действия «$action»") }
+            a.action()
+            settle(8)
+        }
+        return true
     }
 
     /** Набрать текст в первое поле ввода на экране — как пальцем. */
@@ -282,6 +299,20 @@ class ScreenShots {
 
         // ---- Сервисы Ковчега внутри приложения (14.10.2026): страница сервиса с шапкой Ковчега
         if (want("web")) serviceWeb()
+
+        // ---- Три колонки разложенных Дел (14.10.2026): быстрый прогон без остальных экранов, обе темы
+        if (want("dcol")) {
+            RuntimeEnvironment.setQualifiers(INNER)
+            close(launch(MainActivity.TAB_TODOIST))   // первый запуск вкладки рисует её без копии — прогреть
+            for (theme in listOf("light", "dark")) {
+                runBlocking { app.settings.setLookTheme(theme) }
+                settle(4)
+                delaCols(theme)
+            }
+            runBlocking { app.settings.setLookTheme("system") }
+            RuntimeEnvironment.setQualifiers(OUTER)
+            settle(4)
+        }
 
         // ---- Настройки телефона на сервере (14.10.2026): правка с компьютера на настоящем PravkaApp и экран «Телефон»
         if (want("ph")) phoneRemote()
@@ -645,14 +676,12 @@ class ScreenShots {
             close(c)
             // Боковина Дел (13.10.2026): на сложенном — шторка поверх по язычку у края; на разложенном — открыта с
             // завода, язычок прячет её (выбор помнит устройство — после снимка вернуть как было).
-            c = launch(MainActivity.TAB_TODOIST)
-            if (prefix == "inner") {
-                if (tap(c, "Спрятать разделы")) {
-                    shot(c, "$prefix-v2-$theme-7-dela-side-off")
-                    tap(c, "Показать разделы")
-                }
-            } else if (tap(c, "Показать разделы")) shot(c, "$prefix-v2-$theme-7-dela-side")
-            close(c)
+            if (prefix == "inner") delaCols(theme)
+            else {
+                c = launch(MainActivity.TAB_TODOIST)
+                if (tap(c, "Показать разделы")) shot(c, "$prefix-v2-$theme-7-dela-side")
+                close(c)
+            }
             c = launch(MainActivity.TAB_ZASECHKA); shot(c, "$prefix-v2-$theme-4-zasechka"); close(c)
             today5(prefix, theme)
         }
@@ -665,6 +694,26 @@ class ScreenShots {
         // Дела в виде 4.0 — после этапа 4 («Сейчас» первым разделом) прежние сегменты и стекло на месте.
         c = launch(MainActivity.TAB_TODOIST); shot(c, "$prefix-v4-3-dela"); close(c)
         runBlocking { app.settings.setLookV4(false) }
+        settle(4)
+    }
+
+    /**
+     * Три колонки разложенных Дел (14.10.2026, `core/DelaColumns.kt`): все три; боковина спрятана; карточка
+     * спрятана (строки снова с молнией и ▶); обе спрятаны — список во всю ширину; боковина шире (карточка уступила
+     * до своего минимума). Выбор помнит устройство — в конце вернуть как с завода.
+     */
+    private fun delaCols(theme: String) {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        val c = launch(MainActivity.TAB_TODOIST)
+        shot(c, "inner-v2-$theme-7-dela-cols-all")
+        if (tap(c, "Спрятать разделы")) shot(c, "inner-v2-$theme-7-dela-side-off")
+        if (tap(c, "Спрятать карточку")) shot(c, "inner-v2-$theme-7-dela-cols-none")
+        if (tap(c, "Показать разделы")) shot(c, "inner-v2-$theme-7-dela-pane-off")
+        if (tap(c, "Показать карточку") && act(c, "Спрятать разделы", "Шире", times = 3)) shot(c, "inner-v2-$theme-7-dela-side-wide")
+        close(c)
+        runBlocking {
+            app.delaStore.setGroups(mapOf("ui:side" to "1", "ui:pane" to "1", "ui:sideW" to "172"))
+        }
         settle(4)
     }
 

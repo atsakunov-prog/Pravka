@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -50,7 +49,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.layout.boundsInWindow
@@ -138,10 +136,10 @@ private const val LOOSE_GROUP = "0"
 private const val FILTER_NAV = "f:"
 /** Ветка «Просрочено» сверху «Всех дел»: у неё — «Перенести все». */
 private const val LATE_NODE = "late"
-/** Боковина разложенного: открыта ли — помнит устройство (`dela-favs.json`, рядом с видом дерева): «0» — спрятана. */
-private const val SIDE_KEY = "ui:side"
-/** Ширина боковины колонкой (холст: 172) и шторкой на сложенном (холст: ~252). */
-private val SIDE_W = 172.dp
+/**
+ * Шторка разделов на сложенном (холст: ~252). Колонки разложенного — боковина, список, карточка — считает
+ * `core/DelaColumns.kt`: ширины и «спрятана» помнит устройство (`dela-favs.json`, рядом с видом дерева).
+ */
 private val DRAWER_W = 252.dp
 
 /** Список «только одно» экрана [key]: ветки первого уровня [lv] с числом дел. */
@@ -459,11 +457,28 @@ fun DelaTab(
     // На развороте дело открывается справа (`DelaTaskPane`), а не листом.
     val wideNow = ru.zf.pravka.ui.twoPane()
     var paneId by rememberSaveable { mutableStateOf<String?>(null) }
+    // Три колонки разложенного вида v2 (14.10.2026, `core/DelaColumns.kt`): боковину и карточку прячут и тянут их
+    // язычки. Своё состояние — сразу на экране (язычок не ждёт записи файла), в файл — следом одной записью;
+    // пришло из файла (запуск, другая вкладка) — его и показываем.
+    var cols by remember { mutableStateOf(ru.zf.pravka.core.DelaColumns.read(groupsPref)) }
+    LaunchedEffect(groupsPref) { cols = ru.zf.pravka.core.DelaColumns.read(groupsPref) }
+    fun saveCols(next: ru.zf.pravka.core.DelaColumns.State) {
+        cols = next
+        scope.launch { app.delaStore.setGroups(ru.zf.pravka.core.DelaColumns.write(next)) }
+    }
+    // Карточка справа спрятана (только вид v2 разложенного; у «Вида 4.0» разворот как был).
+    val paneHidden = wideNow && Look.v2 && !cols.paneOn
     // Открытое справа дело; не выбрано — первое из дел дня: сначала «Сейчас», потом «Сегодня» («отбить» — выше).
     val paneTask: Dela.Task? = if (!wideNow) null
     else paneId?.let { snap.tasks[it] } ?: DelaGroups.dayOrdered(snap, me, today, sphere).firstOrNull()
     val actions = DelaActions(
-        open = { if (wideNow) paneId = it.id else openTask = it },
+        // Карточка спрятана, а дело тронули — колонка выезжает с ним: тап по делу и значит «покажи его».
+        open = {
+            if (wideNow) {
+                paneId = it.id
+                if (paneHidden) saveCols(cols.copy(paneOn = true))
+            } else openTask = it
+        },
         start = { t ->
             if (starting.isBlank()) {
                 starting = t.id
@@ -504,8 +519,10 @@ fun DelaTab(
         stop = { scope.launch { app.zasechkaEngine.closeOpen() } },
         snap = snap,
         me = me,
-        selectedId = paneTask?.id.orEmpty(),
-        compact = wideNow && Look.v2,
+        // Выбранное справа — мягким акцентом; карточка спрятана — выбранного на экране нет.
+        selectedId = if (paneHidden) "" else paneTask?.id.orEmpty(),
+        // Строка короткая, пока молния и ▶ — в карточке справа; спрятали карточку — они снова у строки.
+        compact = wideNow && Look.v2 && !paneHidden,
     )
 
     // Дерево жизни: вид, направление и свёрнутые ветки помнит устройство (как браузер у веба), фильтры
@@ -811,14 +828,19 @@ fun DelaTab(
     val navColumn = wide && Look.v2
     val list: @Composable (Modifier) -> Unit = { listModifier ->
     LazyColumn(
-        modifier = listModifier.fillMaxSize().bottomFade().scrollFade(listState)
+        // Лента тает под строкой «сказать», когда та лежит поверх списка, и сверху при прокрутке. На развороте v2
+        // строка — под всеми тремя колонками, не поверх, и растворение за 116 dp до низа только прятало последние дела
+        // (владелец 14.10.2026: «слишком рано начинается растворение в средней колонке… может, вообще его убрать?»;
+        // подтвердил — убрать совсем): у средней колонки разворота v2 растворения нет ни снизу, ни сверху.
+        modifier = listModifier.fillMaxSize().then(if (navColumn) Modifier else Modifier.bottomFade().scrollFade(listState))
             .onGloballyPositioned { seenRows.top = it.boundsInWindow().top },
         state = listState,
         // Разворот v2: слева колонка разделов — поля списка поуже, иначе карточкам дел не хватит ширины.
-        // Боковина спрятана — слева место под язычок, чтобы он не лёг на карточки.
+        // Колонка спрятана — с её стороны место под язычок в доке, чтобы он не лёг на карточки.
         contentPadding = PaddingValues(
-            start = if (navColumn) (if (groupsPref[SIDE_KEY] == "0") 24.dp else 8.dp) else 16.dp,
-            end = if (navColumn) 8.dp else 16.dp, top = 0.dp, bottom = if (navColumn) 24.dp else 150.dp,
+            start = if (navColumn) (if (!cols.sideOn) GRIP_DOCK_W + 6.dp else 8.dp) else 16.dp,
+            end = if (navColumn) (if (!cols.paneOn) GRIP_DOCK_W + 6.dp else 8.dp) else 16.dp,
+            top = 0.dp, bottom = if (navColumn) 24.dp else 150.dp,
         ),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
@@ -957,10 +979,11 @@ fun DelaTab(
                 item(key = "nav") {
                     val c = DelaViews.counts(snap, me, today, sphere, now)
                     val main = listOf(DelaViews.View.NOW, DelaViews.View.TODAY, DelaViews.View.NEW, DelaViews.View.ALL)
-                    // «Все» — коротко, как на холсте: «Все дела» с числами в 411 dp не влезают.
-                    val tabs = main.map { DelaTabItem(it.key, if (it == DelaViews.View.ALL) "Все" else it.title, c.label(it), hot = c.hot(it), bad = c.bad(it), full = it.title) } +
+                    // «Все» — коротко, как на холсте. Чисел у вкладок нет с 14.10.2026 (владелец: «уберём эти количества
+                    // дел везде»): просроченное — строкой «просрочено N» ниже.
+                    val tabs = main.map { DelaTabItem(it.key, if (it == DelaViews.View.ALL) "Все" else it.title, full = it.title) } +
                         listOfNotNull(
-                            if (main.none { it.key == nav }) DelaTabItem(nav, navTitle(nav, view, filters), "") else null,
+                            if (main.none { it.key == nav }) DelaTabItem(nav, navTitle(nav, view, filters)) else null,
                         )
                     DelaTabsV2(tabs, selected = nav, onSelect = go)
                 }
@@ -1359,12 +1382,10 @@ fun DelaTab(
     // сложенном. «Назад» сначала прячет шторку — до страниц стопкой.
     androidx.activity.compose.BackHandler(enabled = drawerOpen && Look.v2 && !wide) { drawerOpen = false }
     LaunchedEffect(wide) { if (wide) drawerOpen = false }
-    val sideOn = groupsPref[SIDE_KEY] != "0"
     val sideModel: DelaSideModel? = if (Look.v4) null else DelaSideModel(
         nav = if (page == null && needle.isEmpty()) nav else "",
-        counts = DelaViews.counts(snap, me, today, sphere, now),
         views = DelaViews.View.entries.filter { (it != DelaViews.View.KRUG || krugOn) && (it != DelaViews.View.TREE || treeOn) },
-        filters = filters.map { it to DelaGroups.scopeItems(snap, me, today, sphere, it.scope).size },
+        filters = filters,
         filterNav = FILTER_NAV,
         crm = if (crmOn) CRM_NAV else emptyList(),
         projects = Dela.projectsNav(snap, me, today, sphere, favs),
@@ -1411,24 +1432,18 @@ fun DelaTab(
         }
         header(headSub) { sphereSheet = true }
         if (navColumn) {
-            // Разворот вида v2 — как веб Дел (лист «Дела» холста): колонка разделов с числами | список | карточка;
-            // строка Claude — под всеми тремя, о деле, открытом справа.
+            // Разворот вида v2 — как веб Дел (лист «Дела» холста): боковина разделов | список | карточка; строка
+            // Claude — под всеми тремя, о деле, открытом справа (карточка спрятана — о делах на экране).
             val shown = paneTask
-            // Боковина открыта с завода; тап по язычку — уезжает шириной (без рывка), «список | карточка»
-            // забирают её место. Выбор помнит устройство — после перезапуска как было.
-            val sideW by androidx.compose.animation.core.animateDpAsState(if (sideOn) SIDE_W else 0.dp, label = "side")
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-            Row(Modifier.fillMaxSize()) {
-                LaunchedEffect(Unit) { seenRows.bottom = Float.MAX_VALUE }
-                // Содержимое не сжимается, пока боковина уезжает: оно прижато к правому краю и уходит за левый.
-                Box(Modifier.width(sideW).fillMaxHeight().clipToBounds()) {
-                    if (sideModel != null && sideW > 0.dp) DelaSide(
-                        sideModel, sideActions,
-                        Modifier.wrapContentWidth(Alignment.End, unbounded = true).width(SIDE_W).fillMaxHeight(),
-                    )
-                }
-                Box(Modifier.weight(1f)) { list(Modifier) }
-                Box(Modifier.weight(1f)) {
+            DelaColumnsRow(
+                cols = cols,
+                onCols = ::saveCols,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                side = { m ->
+                    if (sideModel != null) DelaSide(sideModel, sideActions, m)
+                },
+                list = { list(Modifier) },
+                pane = { m ->
                     DelaTaskPane(
                         app = app,
                         task = shown,
@@ -1438,23 +1453,17 @@ fun DelaTab(
                         onEdit = { openTask = shown },
                         onDone = { shown?.let { actions.done(it) } },
                         onPerson = { id -> push(DelaPage.Person(id)) },
+                        modifier = m,
                         onTask = { paneId = it.id },
                         onProject = { id -> push(DelaPage.Project(id)) },
                         me = me,
                         onNow = { shown?.let { actions.bolt(it) } },
                         onMove = { shown?.let { rescheduling = listOf(it) } },
                     )
-                }
-            }
-            // Язычок (`.dgrip` холста): открыта — в щели между боковиной и списком, ‹; спрятана — у края экрана, ›.
-            SideGrip(
-                open = sideOn,
-                attached = sideW < 4.dp,
-                onClick = { scope.launch { app.delaStore.setGroup(SIDE_KEY, if (sideOn) "0" else "1") } },
-                modifier = Modifier.align(androidx.compose.ui.BiasAlignment(-1f, -0.08f)).offset(x = (sideW - 9.dp).coerceAtLeast(0.dp)),
+                },
             )
-            }
-            sayBar(Modifier, shown, false)
+            LaunchedEffect(Unit) { seenRows.bottom = Float.MAX_VALUE }
+            sayBar(Modifier, if (paneHidden) null else shown, false)
         } else if (wide) {
             Row(Modifier.weight(1f).fillMaxWidth()) {
                 LaunchedEffect(Unit) { seenRows.bottom = Float.MAX_VALUE }
@@ -1532,9 +1541,9 @@ fun DelaTab(
         val gx by androidx.compose.animation.core.animateDpAsState(if (drawerOpen) DRAWER_W else 0.dp, label = "grip")
         SideGrip(
             open = drawerOpen,
-            attached = !drawerOpen,
+            at = gx,
             onClick = { drawerOpen = !drawerOpen },
-            modifier = Modifier.align(Alignment.CenterStart).offset(x = gx),
+            modifier = Modifier.align(Alignment.CenterStart),
         )
     }
     }
