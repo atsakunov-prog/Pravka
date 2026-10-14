@@ -407,6 +407,54 @@ def test_now_holds_five_on_the_server(dela, conn):
     assert ops(dela, "natasha", {"op": "task.create", "task": {"title": "Наташино", "focus_on": today}})[0]["ok"]
 
 
+def test_now_mark_leaves_due_alone(dela):
+    """14.10.2026, владелец: «Если нажимаю на „сейчас“, то дело пропадает и не ставится в сейчас… Надо оставить только
+    сейчас». Солнце у строки (`toggleToday` веба и телефона) принимали за «Сейчас», а оно у дела со сроком сегодня
+    ставило срок на завтра — в журнале трёх дел утром только `due_date` с телефона. Теперь отметка одна — молния, и ни
+    взятие, ни снятие не трогают срок, время и напоминание: ни сервер (операция с одним `focus_on`, как шлют телефон и
+    веб, с `was`), ни сам веб — его правило в `app.js`, поэтому оно проверяется текстом."""
+    from pathlib import Path
+
+    today = db_today(dela)
+    d, yday, tmrw = today.isoformat(), (today - dt.timedelta(days=1)).isoformat(), (today + dt.timedelta(days=1)).isoformat()
+    made = ops(dela, "sasha",
+               {"op": "task.create", "task": {"title": "Без срока"}},
+               {"op": "task.create", "task": {"title": "Срок сегодня", "due_date": d, "due_time": "15:00"}},
+               {"op": "task.create", "task": {"title": "Просрочено", "due_date": yday}},
+               {"op": "task.create", "task": {"title": "На завтра", "due_date": tmrw}},
+               {"op": "task.create", "task": {"title": "Жду с напоминанием", "ball": "waiting", "due_date": d, "nudge_on": d}})
+    assert all(r["ok"] for r in made), made
+    keep = ("due_date", "due_time", "nudge_on", "ball", "owed")
+    for r in made:
+        t = r["task"]
+        before = {k: t[k] for k in keep}
+        on = ops(dela, "sasha", {"op": "task.set", "id": t["id"], "set": {"focus_on": d}, "was": {"focus_on": None}}, via="app")[0]
+        assert on["ok"] and not on["conflicts"], on
+        assert str(on["task"]["focus_on"]) == d and {k: on["task"][k] for k in keep} == before, t["title"]
+        off = ops(dela, "sasha", {"op": "task.set", "id": t["id"], "set": {"focus_on": None}, "was": {"focus_on": d}}, via="web")[0]
+        assert off["ok"] and not off["conflicts"], off
+        assert off["task"]["focus_on"] is None and {k: off["task"][k] for k in keep} == before, t["title"]
+    # «Сейчас» — сам по себе: дело со сроком сегодня осталось в «Сегодня», просроченное — во «Всех делах».
+    assert ops(dela, "sasha", {"op": "task.set", "id": made[2]["task"]["id"], "set": {"focus_on": d}})[0]["ok"]
+    assert [t["title"] for t in store.view(dela, "sasha", "now")["items"]] == ["Просрочено"]
+    assert [t["title"] for t in store.view(dela, "sasha", "all")["overdue"]] == ["Просрочено"]
+
+    # Веб: молния шлёт только focus_on, солнца и «На сегодня» нет ни у строки, ни в карточке, ни в панели выбранных.
+    # read_text читает с переводом строк Python: «\r\n» файла здесь — «\n», конец функции — «}» с начала строки.
+    js = (Path(store.__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
+
+    def fn(head: str) -> str:
+        body = js[js.index(head):]
+        return body[:body.index("\n}\n")]
+
+    now = fn("function toggleNow(ids)")
+    assert "focus_on" in now and "due_date" not in now and "nudge_on" not in now
+    assert "function toggleToday" not in js and "toggleToday(" not in js
+    assert "'На сегодня'" not in js and "'На завтра'" not in js
+    row = fn("function taskRow(")
+    assert "icon('bolt'" in row and "toggleNow([t.id])" in row and "icon('sun'" not in row
+
+
 def test_three_groups_and_today(dela):
     """Три группы дел (владелец 10.10.2026): «Отбить» (ждут от меня) — первым делом, «Запустить», «Мониторить».
     ball «owed» — так группу называет автоматика; в базе это mine и флаг owed (телефон до своего задания

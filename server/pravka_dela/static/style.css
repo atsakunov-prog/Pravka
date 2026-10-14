@@ -497,7 +497,7 @@ a.h-kind:hover { color: var(--accent); }
 .new-link { margin-top: 18px; display: inline-flex; align-items: center; gap: 8px; color: var(--accent); font-weight: 500; }
 .new-link .kv-i { color: inherit; }
 
-/* ── Строка дела: квадратный флажок, название, ниже подпись через « · ». Солнце «на сегодня» и выбор — справа ── */
+/* ── Строка дела: квадратный флажок, название, ниже подпись через « · ». Молния «Сейчас» и выбор — справа ── */
 .task {
   display: flex; align-items: flex-start; gap: 12px; padding: 10px 14px 10px 16px; position: relative; cursor: pointer;
   transition: background-color .12s;
@@ -513,8 +513,9 @@ a.h-kind:hover { color: var(--accent); }
 }
 .task:hover .now-btn, .now-btn:focus-visible { opacity: 1; }
 .now-btn:hover { color: var(--text); background: var(--hover-2); }
-.now-btn.on { color: var(--accent); }
-.task.done .now-btn { visibility: hidden; }
+/* Взятое в «Сейчас» видно и без наведения: молния горит акцентом — снять одним щелчком. */
+.now-btn.on { color: var(--accent); opacity: 1; }
+.task.done .now-btn, .now-btn.off { visibility: hidden; }
 /* Флажок — 18 px, скругление 5; сделанное — заливка акцентом и белая галочка. Поле касания шире самого квадрата. */
 .tick {
   flex: none; width: 18px; height: 18px; margin-top: 2px; padding: 0; position: relative; cursor: pointer;

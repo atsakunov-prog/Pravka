@@ -1594,7 +1594,7 @@ function renderNow() {
       quickAdd({}, { placeholder: '«это в Сейчас», «П1 поставь, срок пятница», «Гуркин ждёт звонка — на сегодня»' }),
       groupBox('Сейчас', now, { cls: 'grp-now', sub: 'отметил сам — сделать сегодня', lead: () => icon('bolt', 17),
         before: now.length ? null : el('div', { class: 'hint-line' },
-          'Пусто. Возьми до пяти дел на сегодня — «В «Сейчас»» в карточке дела, галочки и «В «Сейчас»» внизу или «!сейчас» в строке.') }),
+          'Пусто. Возьми до пяти дел на сегодня — молния у дела или в карточке, галочки и «В «Сейчас»» внизу или «!сейчас» в строке.') }),
       newBox(),
       todayBox(today, taken.size))];
 }
@@ -1787,19 +1787,16 @@ function nowRoom(ids) {
   toast(`В «Сейчас» уже ${have.size} из ${NOW_MAX}` + (add > 1 ? ` — влезет ещё ${Math.max(0, NOW_MAX - have.size)}` : ' — сначала убери одно'));
   return false;
 }
-/** Солнце у дела: не на сегодня (и просроченное) — «на сегодня»: срок сегодня; уже на сегодня — «на завтра»: срок
- *  завтра, у «мониторить» — и день напоминания, а «Сейчас» снимается — оно на сегодня. С 13.10.2026 «на сегодня» —
- *  ровно срок сегодня (store.TODAY_IF): просроченное солнцем переезжает в «Сегодня», а не горит само. */
-function toggleToday(t) {
-  if (!inToday(t)) { setFields([t.id], { due_date: S.today }, 'На сегодня'); return; }
-  const tm = D.add(S.today, 1), set = { due_date: tm };
-  if (isNow(t)) set.focus_on = null;
-  if (t.ball === 'waiting' && t.nudge_on && t.nudge_on <= S.today) set.nudge_on = tm;
-  setFields([t.id], set, 'На завтра');
-}
+// Солнца «на сегодня / на завтра» (toggleToday, 10.10–14.10.2026) больше нет. Владелец 14.10.2026: «Если нажимаю на
+// „сейчас“, то дело пропадает и не ставится в сейчас… Надо оставить только сейчас». Солнце у строки принимали за
+// «Сейчас», а у дела со сроком сегодня оно ставило срок на завтра и снимало «Сейчас» — дело уезжало. Теперь у строки,
+// в карточке и в панели выбранных одна отметка — молния; срок меняют «Когда» и «Перенести».
+/** Можно ли взять дело в «Сейчас» — своё открытое, не цель. У чужого и у цели молнии нет: кнопка, которая всегда
+ *  отказывает, читается как поломка. */
+const canNow = (t) => isOpen(t) && isMine(t) && !t.goal;
 /** «Сейчас» у дела (13.10.2026, владелец: «Сейчас — то, что отметил»): отметил — взял на сегодня, не больше пяти
- *  (шестое не встаёт — nowRoom; предел держит и сервер, store._now_guard); снял — дело остаётся, где было: срок не
- *  трогаем. */
+ *  (шестое не встаёт — nowRoom; предел держит и сервер, store._now_guard); снял — дело остаётся, где было. В операции
+ *  ТОЛЬКО focus_on: ни взятие, ни снятие не трогают срок (тест сервера test_now_mark_leaves_due_alone читает и это). */
 function toggleNow(ids) {
   const list = ids.map((id) => S.tasks.get(id)).filter(Boolean);
   if (list.length && list.every(isNow)) {
@@ -1807,14 +1804,14 @@ function toggleNow(ids) {
     return;
   }
   // Встаёт только своё открытое дело (цель — не дело): «Сейчас» — то, что владелец сам берёт на день.
-  const can = list.filter((t) => isOpen(t) && isMine(t) && !t.goal && !isNow(t)).map((t) => t.id);
+  const can = list.filter((t) => canNow(t) && !isNow(t)).map((t) => t.id);
   if (!can.length) { toast('В «Сейчас» встают только свои открытые дела'); return; }
   if (!nowRoom(can)) return;
   setFields(can, { focus_on: S.today }, can.length > 1 ? `В «Сейчас»: ${can.length}` : 'В «Сейчас»');
 }
 
-// Строка дела — как TaskRow в Делах на телефоне (Правка 4.0): слева солнце «на сегодня» (10.10.2026, вместо
-// молнии «Сейчас»), кольцо-галочка (зона касания 44), «Кто: действие» и вторая строка meta через «·» — срок,
+// Строка дела — как TaskRow в Делах на телефоне (Правка 4.0): молния «Сейчас» (с 14.10.2026; 10.10–14.10 тут было
+// солнце «на сегодня»), кольцо-галочка (зона касания 44), «Кто: действие» и вторая строка meta через «·» — срок,
 // проект, кто ждёт или от кого жду, минуты. Просроченное — жирным «просрочено 2 дн» и толстым кольцом, без красного.
 // extra — подписи от места, где строка стоит. opt.compact — короткая строка «Нового» (владелец 08.10.2026:
 // «ужасно всё засоряет»): только срок и проект, а справа вместо номера — значок, откуда дело (opt.mark).
@@ -1824,7 +1821,7 @@ function taskRow(t, by, extra, opt = {}) {
   const p = project(t.project_id);
   const who = person(t.person_id);
   const due = dueLabel(t);
-  const now = inToday(t);
+  const now = isNow(t);
   const stop = (e) => e.stopPropagation();
   const m = (cls, ...kids) => el('span', { class: 'm' + (cls ? ' ' + cls : '') }, ...kids);
   const chips = [];
@@ -1877,9 +1874,12 @@ function taskRow(t, by, extra, opt = {}) {
     onclick: () => openCard(t.id),
   },
   pick,
-  el('div', { class: 'lead' },
-    el('button', { class: 'now-btn' + (now ? ' on' : ''), title: now ? 'Не сегодня — на завтра' : 'На сегодня',
-      onclick: (e) => { e.stopPropagation(); toggleToday(t); } }, icon('sun', 18))),
+  // Молния — сразу, срок не трогает; у чужого и у цели — пустое место той же ширины (строки стоят ровно).
+  el('div', { class: 'lead' }, canNow(t)
+    ? el('button', { class: 'now-btn' + (now ? ' on' : ''), title: now ? 'Из «Сейчас» — срок не меняется' : `В «Сейчас» — до ${NOW_MAX} дел`,
+      'aria-label': now ? 'Из «Сейчас»' : 'В «Сейчас»', 'aria-pressed': now ? 'true' : 'false',
+      onclick: (e) => { e.stopPropagation(); toggleNow([t.id]); } }, icon('bolt', 18))
+    : el('span', { class: 'now-btn off', 'aria-hidden': 'true' })),
   el('button', { class: 'tick' + (isOpen(t) ? '' : ' done'), title: isOpen(t) ? 'Сделано' : 'Вернуть', onclick: (e) => { e.stopPropagation(); toggleDone([t]); } }),
   el('div', { class: 'main' }, el('div', { class: 'title' }, t.title), chips.length ? el('div', { class: 'chips' }, chips) : null),
   opt.mark || null);
@@ -2303,7 +2303,6 @@ function renderBulk() {
     el('button', { onclick: (e) => reschedulePop(e.currentTarget, ids) }, 'Перенести'),
     el('button', { onclick: (e) => zachemPop(e.currentTarget, ids) }, 'Зачем…'),
     el('button', { onclick: () => toggleNow(ids) }, ids.length && ids.every((id) => isNow(S.tasks.get(id))) ? 'Из «Сейчас»' : 'В «Сейчас»'),
-    el('button', { onclick: () => setFields(ids, { due_date: S.today }, 'На сегодня') }, 'На сегодня'),
     el('button', { onclick: (e) => grpPop(e.currentTarget, ids) }, 'Группа'),
     el('button', {
       onclick: async () => {
@@ -4030,18 +4029,17 @@ function renderCard() {
     row('Минут', minutes),
     t && isMine(t) && krugOn() ? krugProps(t, row) : null);
 
-  // Карточка (общий вид Ковчега): сверху проект ссылкой, название, ряд действий («На сегодня» или «На завтра» и
+  // Карточка (общий вид Ковчега): сверху проект ссылкой, название, ряд действий («В «Сейчас»» / «Из «Сейчас»» и
   // «Сделано» акцентом), свойства — строками через тонкую линию: подпись слева, поле справа.
   const crumb = zc ? el('a', { class: 'crumb', href: '#', title: 'Зачем: ' + [...zc.path, zc.title].join(' › '), onclick: (e) => { e.preventDefault(); zachemGo(zc); } },
     [...zc.path.slice(-1), zc.title].join(' › ')) : el('span', { class: 'crumb' }, 'Без «Зачем»');
   const acts = t ? el('div', { class: 'card-acts' },
     isOpen(t) ? [
-      // «Сейчас» — отметка владельца (13.10.2026): только своё и не цель; «Сегодня» — срок, солнцем.
-      isMine(t) && !t.goal ? el('button', { class: 'btn' + (isNow(t) ? ' on' : ''), 'aria-pressed': isNow(t) ? 'true' : 'false',
+      // «Сейчас» — отметка владельца (13.10.2026): только своё и не цель, сразу, срок не трогает. Солнца
+      // «На сегодня» / «На завтра» нет с 14.10.2026 — срок ставит строка «Когда» ниже.
+      canNow(t) ? el('button', { class: 'btn' + (isNow(t) ? ' on' : ''), 'aria-pressed': isNow(t) ? 'true' : 'false',
         title: isNow(t) ? 'Убрать из «Сейчас» — срок не меняется' : `Взять в «Сейчас» на сегодня — до ${NOW_MAX} дел`, onclick: () => toggleNow([t.id]) },
       icon('bolt', 17), isNow(t) ? 'Из «Сейчас»' : 'В «Сейчас»') : null,
-      el('button', { class: 'btn' + (inToday(t) ? ' on' : ''), title: inToday(t) ? 'Не сегодня — на завтра' : 'На сегодня', onclick: () => toggleToday(t) },
-        icon('sun', 17), inToday(t) ? 'На завтра' : 'На сегодня'),
       el('button', { class: 'btn main done-key', title: 'Сделано', onclick: () => toggleDone([t]) }, icon('check', 17), 'Сделано'),
     ] : el('button', { class: 'btn', onclick: () => toggleDone([t]) }, 'Вернуть в работу')) : null;
   const card = el('div', { class: 'card' },
