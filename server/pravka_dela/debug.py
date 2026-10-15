@@ -306,7 +306,7 @@ def _one_line(v: Any, n: int = 300) -> str:
 
 
 def line(x: dict) -> str:
-    """Записка строкой списка: «№12 15.10 21:40 · web · новая · Сегодня — текст»."""
+    """Записка строкой списка: «№12 15.10 21:40 · web · новое · Сегодня — текст»."""
     where = " · ".join(p for p in (x.get("title") or "", x.get("route") or "") if p)
     head = f"№{x['num']} {_msk(x['said_at'])} · {x['source']}" + (f" {x['version']}" if x.get("version") else "") \
         + f" · {STATUS_WORD.get(x['status'], x['status'])}" + (f" · {where}" if where else "") \

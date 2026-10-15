@@ -52,7 +52,7 @@ COMMENT ON COLUMN crm.debug_notes.screen IS 'Размер экрана: «1280×
 COMMENT ON COLUMN crm.debug_notes.snapshot IS 'Что было на экране, данными (не картинкой): маршрут, заголовок, режим и фильтры, выбранное, открытая карточка, видимые строки списка, свёрнутые блоки, «Новое» на экране, разговор с Claude. Формат — server/contract/dela-debug.json.';
 COMMENT ON COLUMN crm.debug_notes.actions IS 'Последние события страницы (до 100), старые первыми: операции, правка словами и ответ Claude, тосты, ошибки сети, переходы.';
 COMMENT ON COLUMN crm.debug_notes.shot IS 'Картинка экрана строкой data:image/… (телефон, сжатая, до ~300 КБ); пусто — не снимали.';
-COMMENT ON COLUMN crm.debug_notes.status IS 'new — новая; taken — взял в работу; fixed — починено; not_bug — не баг; later — потом.';
+COMMENT ON COLUMN crm.debug_notes.status IS 'new — новое; taken — разбираю; fixed — починено; not_bug — не баг; later — потом (слова владельца — debug.STATUS_WORD).';
 COMMENT ON COLUMN crm.debug_notes.answer IS 'Ответ разбора: что нашёл и что сделал (пишет сессия Claude), видно в вебе и на телефоне.';
 COMMENT ON COLUMN crm.debug_notes.status_by IS 'Кто последним поменял статус или ответ: claude (коннектор, командная строка) или пользователь.';
 
