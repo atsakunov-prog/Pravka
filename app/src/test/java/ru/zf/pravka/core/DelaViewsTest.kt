@@ -736,7 +736,7 @@ class DelaViewsTest {
         return Dela.Suggestion(
             id = id, forUser = forUser, kind = if (task.isBlank()) "create" else "update", taskId = task, payload = p.toString(),
             source = "plan", sourceRef = "plan:$day:$basket:$id", batchRef = "plan:$day", batchTitle = "Сейчас на вт 06.10 · встреч ~3 — возьми 3",
-            status = status, expiresAt = expires, createdAt = "2026-10-04T19:00:04+03:00",
+            status = status, expiresAt = expires, createdAt = "2026-10-04T18:00:04+03:00",
         )
     }
 
@@ -890,7 +890,7 @@ class DelaViewsTest {
         val t = Dela.Task(id = sg.taskId, title = "Иван Тестов: прислать договор", ownerId = "sasha")
         val s = planSnap(planOn, listOf(t), listOf(sg))
         val day = "2026-10-15"
-        val nowThu = java.time.OffsetDateTime.parse("2026-10-15T19:05:00+03:00").toInstant().toEpochMilli()
+        val nowThu = java.time.OffsetDateTime.parse("2026-10-15T18:05:00+03:00").toInstant().toEpochMilli()
         val p = DelaViews.plan(s, "sasha", day, nowThu)!!
         assertEquals("plan:2026-10-16", p.batch)
         assertEquals(listOf(sg.id), p.items.map { it.id })

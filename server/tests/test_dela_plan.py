@@ -57,7 +57,7 @@ def cfg_of(url):
 
 def build(url, today, for_date, now=None):
     with dela_db.session(url, "sasha", "svc:plan", "plan") as c:
-        return plan.build(c, "sasha", today, for_date, plan.config(c, "sasha"), now or at(today, 19, 5))
+        return plan.build(c, "sasha", today, for_date, plan.config(c, "sasha"), now or at(today, 18, 5))
 
 
 def plan_sugs(url, status=None):
@@ -213,7 +213,9 @@ def test_nudge_and_no_krug_reserve(world, dela, monkeypatch):
 def test_rhythm_friday_and_candles():
     rh, bad = asks.norm(None)
     assert not bad
-    assert asks.evening_at(rh, dt.date(2026, 10, 15)) == at(dt.date(2026, 10, 15), 19)       # чт
+    assert asks.evening_at(rh, dt.date(2026, 10, 15)) == at(dt.date(2026, 10, 15), 18)       # чт (Саша, 15.10: не 19:00)
+    assert asks.evening_at(rh, dt.date(2026, 10, 12)) == at(dt.date(2026, 10, 12), 18)       # пн
+    assert asks.evening_at(rh, dt.date(2026, 10, 15)) + plan.LATE == at(dt.date(2026, 10, 15), 22)  # догонка — до 22:00
     assert asks.evening_at(rh, dt.date(2026, 10, 16)) == at(dt.date(2026, 10, 16), 14)       # пт
     assert asks.evening_at(rh, dt.date(2026, 11, 13)) == at(dt.date(2026, 11, 13), 14)       # до окна
     assert asks.evening_at(rh, dt.date(2026, 11, 20)) == at(dt.date(2026, 11, 20), 13, 30)   # в окне
@@ -231,7 +233,7 @@ def test_rhythm_friday_and_candles():
         day += dt.timedelta(days=7)
     # Свод поверх заводского по полю; кривое поле — заводское.
     rh, bad = asks.norm({"fri": "13:45", "evening": "25:00", "winter": ["11-31", "01-15"], "later": "15:00"})
-    assert rh["fri"] == "13:45" and rh["evening"] == "19:00" and rh["winter"] == ["11-15", "01-15"] and rh["later"] == "15:00"
+    assert rh["fri"] == "13:45" and rh["evening"] == "18:00" and rh["winter"] == ["11-15", "01-15"] and rh["later"] == "15:00"
     assert len(bad) == 2
     assert plan.next_day(dt.date(2026, 10, 16)) == dt.date(2026, 10, 19) and plan.next_day(dt.date(2026, 10, 15)) == dt.date(2026, 10, 16)
     assert plan.next_day(dt.date(2026, 10, 18)) == dt.date(2026, 10, 19) and plan.run_day(dt.date(2026, 10, 19)) == dt.date(2026, 10, 16)
@@ -241,7 +243,7 @@ def test_rhythm_from_svod(dela):
     ok(dela, "sasha", {"op": "svod.set", "key": asks.SVOD_KEY, "value": {"fri": "13:15", "evening": "кривое"}, "author": "test"})
     with dela_db.session(dela, "sasha", via="test") as c:
         rh = asks.rhythm(c, "sasha")
-    assert rh["fri"] == "13:15" and rh["evening"] == "19:00"
+    assert rh["fri"] == "13:15" and rh["evening"] == "18:00"
 
 
 def test_friday_three_for_monday(dela):
@@ -263,25 +265,25 @@ def test_friday_three_for_monday(dela):
 
 def test_tick_runs_once_and_catches_up_late(dela, monkeypatch):
     today = db_today(dela)
-    monkeypatch.setattr(plan.asks, "evening_at", lambda rh, day: at(day, 19))
+    monkeypatch.setattr(plan.asks, "evening_at", lambda rh, day: at(day, 18))
     for i in range(3):
         t = mk(dela, title=f"Ответить {i}", ball="owed")
         aged(dela, t["id"], 4)
-    assert (plan.tick(dela, at(today, 18, 59)) or {}).get("run") is None
-    first = plan.tick(dela, at(today, 19, 1))
+    assert (plan.tick(dela, at(today, 17, 59)) or {}).get("run") is None
+    first = plan.tick(dela, at(today, 18, 1))
     assert first["run"]["made"] == 3, first
-    again = plan.tick(dela, at(today, 19, 2))
+    again = plan.tick(dela, at(today, 18, 2))
     assert again is None or "run" not in again
     assert len(plan_sugs(dela)) == 3
     # Прогон руками тем же днём — пачка дня уже есть: ничего нового.
-    r = plan.run(dela, at(today, 19, 3))
+    r = plan.run(dela, at(today, 18, 3))
     assert r["skipped"].endswith("уже предложено 3 — второй прогон ничего не пишет") and r["offered"] == 3, r
     assert len(plan_sugs(dela)) == 3
     # Служба лежала: догонка — до четырёх часов после слота, позже — нет.
     with dela_db.session(dela, "system", "test") as c:
         c.execute("UPDATE crm.state SET value = value - 'run_day' WHERE key = 'plan'")
-    assert "run" not in (plan.tick(dela, at(today, 23, 30)) or {})
-    late = plan.tick(dela, at(today, 22, 59))["run"]
+    assert "run" not in (plan.tick(dela, at(today, 22, 1)) or {})
+    late = plan.tick(dela, at(today, 21, 59))["run"]
     assert "уже предложено 3" in late["skipped"], late  # кандидаты дня уже в базе — новых нет
     assert len(plan_sugs(dela)) == 3
     with dela_db.session(dela, "system", "t") as c:
@@ -295,7 +297,7 @@ def test_second_run_same_day_writes_nothing(world, dela, monkeypatch):
     (blocked держит только ждущих, отказанных и дважды молчавших — без этого в пачке становилось 11)."""
     w = world
     tm = w["tmrw"]
-    first = plan.run(dela, at(w["today"], 19, 5), for_date=tm)
+    first = plan.run(dela, at(w["today"], 18, 5), for_date=tm)
     assert first["made"] == 7 and not first["errors"], first
     # Саша ответил на часть: отметил, «не надо», одно дело закрыл — уборка его погасила.
     assert decide(dela, sug_of(dela, w["o_mid"]["id"]), option=0)["ok"]
@@ -311,7 +313,7 @@ def test_second_run_same_day_writes_nothing(world, dela, monkeypatch):
     dry = plan.run(dela, at(w["today"], 20, 31), for_date=tm, dry=True)
     assert dry["dry"] and dry["offered"] == 7 and dry["items"] and len(plan_sugs(dela)) == 7
     # Служба перезапустилась между прогоном и памятью run_day: tick в окне догонки — тоже ничего.
-    monkeypatch.setattr(plan.asks, "evening_at", lambda rh, day: at(day, 19))
+    monkeypatch.setattr(plan.asks, "evening_at", lambda rh, day: at(day, 18))
     monkeypatch.setattr(plan, "next_day", lambda d: d + dt.timedelta(days=1))
     got = plan.tick(dela, at(w["today"], 21))
     assert "уже предложено 7" in got["run"]["skipped"], got
@@ -325,7 +327,7 @@ def test_second_run_same_day_writes_nothing(world, dela, monkeypatch):
 
 def test_answers(world, dela):
     w = world
-    out = plan.run(dela, at(w["today"], 19, 5), for_date=w["tmrw"])
+    out = plan.run(dela, at(w["today"], 18, 5), for_date=w["tmrw"])
     assert out["made"] == 7 and not out["errors"], out
     tm = w["tmrw"].isoformat()
     # Вариант 0 — «☆ На завтра»: focus_on завтра.
@@ -368,7 +370,7 @@ def test_answers(world, dela):
         assert store.automation(c, "sasha")["all"]["asked"] == 0
     assert store.view(dela, "sasha", "today")["new_count"] == 0
     # Следующий вечер: отказанное и отмеченное — не кандидаты.
-    nxt = plan.run(dela, at(w["tmrw"], 19, 5), for_date=w["tmrw"] + dt.timedelta(days=1), dry=True)
+    nxt = plan.run(dela, at(w["tmrw"], 18, 5), for_date=w["tmrw"] + dt.timedelta(days=1), dry=True)
     assert "Собрать отчёт" not in titles(nxt)
 
 
@@ -376,7 +378,7 @@ def test_nudge_accept_sets_nudge_on(world, dela, monkeypatch):
     w = world
     ok(dela, "sasha", {"op": "task.done", "id": w["step"]["id"]})
     monkeypatch.setattr(store, "FEATURES", [f for f in store.FEATURES if f != "deal_steps"])
-    plan.run(dela, at(w["today"], 19, 5), for_date=w["tmrw"])
+    plan.run(dela, at(w["today"], 18, 5), for_date=w["tmrw"])
     s = next(x for x in plan_sugs(dela) if x["payload"]["basket"] == "nudge")
     r = decide(dela, s, option=0)
     assert r["ok"] and str(r["task"]["focus_on"]) == w["tmrw"].isoformat() and r["task"]["title"].startswith("Напомнить:")
@@ -423,7 +425,7 @@ def test_silence_twice_pauses(dela):
 
 def test_sweep(world, dela):
     w = world
-    plan.run(dela, at(w["today"], 19, 5), for_date=w["tmrw"])
+    plan.run(dela, at(w["today"], 18, 5), for_date=w["tmrw"])
     tm = w["tmrw"].isoformat()
     keep = sug_of(dela, w["o_mid"]["id"])
     assert decide(dela, keep, option=0)["ok"]
@@ -496,13 +498,19 @@ def test_tick_snaps_and_catches_up_missed_day(dela, monkeypatch):
     with dela_db.session(dela, "system", "t") as c:
         st = c.execute("SELECT value FROM crm.state WHERE key = 'plan'").fetchone()["value"]
     assert st["snaps"][today.isoformat()] == ["11"] and "2355" in st["snaps"][yday.isoformat()]
+    # Вечерний снимок — в 18:00, вместе с заходом Пн–Чт (Саша, 15.10: не 19:00), и в дни без прогона.
+    assert (plan.tick(dela, at(today, 17, 59)) or {}).get("snap") is None
+    assert plan.tick(dela, at(today, 18, 0))["snap"] == today.isoformat()
+    with dela_db.session(dela, "system", "t") as c:
+        st = c.execute("SELECT value FROM crm.state WHERE key = 'plan'").fetchone()["value"]
+    assert st["snaps"][today.isoformat()] == ["11", "18"]
 
 
 # ── 8. Вид plan ──────────────────────────────────────────────────────────
 
 def test_view_plan(world, dela):
     w = world
-    plan.run(dela, at(w["today"], 19, 5), for_date=w["tmrw"])
+    plan.run(dela, at(w["today"], 18, 5), for_date=w["tmrw"])
     assert decide(dela, sug_of(dela, w["o_mid"]["id"]), option=0)["ok"]
     v = store.view(dela, "sasha", "plan")
     assert v["for_date"] == w["tmrw"].isoformat() and v["batch_ref"] == f"plan:{v['for_date']}"
@@ -526,7 +534,7 @@ def test_claude_sees_plan_candidates(world, dela):
     from pravka_dela import ask
 
     w = world
-    plan.run(dela, at(w["today"], 19, 5), for_date=w["tmrw"])
+    plan.run(dela, at(w["today"], 18, 5), for_date=w["tmrw"])
     day = store.day_label(w["tmrw"])
     s = sug_of(dela, w["o_old"]["id"])
     with dela_db.session(dela, "sasha", via="t") as c:

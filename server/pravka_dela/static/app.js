@@ -524,7 +524,7 @@ const scopeItems = (scope) => (scope === 'today' ? todayTasks()
   : deeds().filter((t) => isOpen(t) && isMine(t) && inSphere(t) && (scope === 'all' || grpOf(t) === scope)));
 const levelsOf = (key) => { const v = S.levels[key]; return Array.isArray(v) ? v.filter((x) => LEVELS[x]) : LEVELS_DEF[key] || ['grp']; };
 const levelsName = (levels) => (levels.length ? levels.map((l) => LEVELS[l]).join(' › ') : 'без групп');
-// «Сейчас на завтра» (шаг 1 петли этапа 4, 15.10.2026; сервер — plan.py, контракт dela-plan.json): с 19:00 (Пт — 14:00,
+// «Сейчас на завтра» (шаг 1 петли этапа 4, 15.10.2026; сервер — plan.py, контракт dela-plan.json): с 18:00 (Пт — 14:00,
 // с 15.11 по 15.01 — 13:30) сервер кладёт до семи кандидатов правилом — предложения с source plan, batch_ref plan:<день>,
 // payload.for_date, why, from. Это выбор Саши на завтра, а не вопрос автоматики: в «Подскажи», число «Нового» и «Поставить
 // все» они не входят — свой блок под «Подскажи» (planBox): сначала ответить на вопросы, потом план (судья §3.3).

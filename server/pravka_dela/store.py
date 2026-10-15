@@ -51,7 +51,7 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug",
             "privacy", "context_index", "claude_guard", "nest", "debug", "capture", "capture_model", "ideas", "did",
             "remind_phone", "speaker_link", "people_final", "plan"]
 # «plan» — «Сейчас на завтра» (шаг 1 петли этапа 4, 15.10.2026, dela_0024, plan.py; контракт dela-plan.json): Пн–Чт в
-# 19:00 (Пт — 14:00, с 15.11 по 15.01 — 13:30, на понедельник) сервер кладёт в «Подскажи» до семи кандидатов правилом
+# 18:00 (Пт — 14:00, с 15.11 по 15.01 — 13:30, на понедельник) сервер кладёт в «Подскажи» до семи кандидатов правилом
 # (source plan, batch_ref plan:<день>, payload.for_date, why, from, basket), варианты «☆ На завтра» (focus_on будущим
 # днём), «✓ Уже сделал» (флаг done — только у source plan), «Не надо»; в 12:00 следующего дня гаснут. Предел пяти —
 # на КАЖДЫЙ день (_now_guard): focus_on в синке бывает будущей датой. Вид plan — шапка блока и строка дайджеста 20:03.
@@ -2414,7 +2414,7 @@ def _list(conn, where: str, params: list, sphere: str | None = None, order: str 
 
 
 # Число «Нового» — только вопросы автоматики: кандидаты «Сейчас на завтра» (source plan, шаг 1 петли) — выбор Саши на
-# завтра, а не находка; с 19:00 до 12:00 они подняли бы число на семь. Свой блок и свой счёт у них — вид plan.
+# завтра, а не находка; с 18:00 до 12:00 они подняли бы число на семь. Свой блок и свой счёт у них — вид plan.
 NEW_COUNT_IF = "for_user = %s AND status = 'pending' AND source <> 'plan'"
 
 
