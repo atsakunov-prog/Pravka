@@ -23,7 +23,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from . import db, digest, focus, insights, krug, meetings, people, phone, place, spend, twins, where, zasechka
+from . import db, digest, focus, guard, insights, krug, meetings, people, phone, place, spend, twins, where, zasechka
 
 log = logging.getLogger("dela.store")
 
@@ -44,7 +44,11 @@ TASK_FIELDS = {
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
             "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
-            "privacy", "context_index"]
+            "privacy", "context_index", "claude_guard"]
+# «claude_guard» — защита от петли Claude на сервере (15.10.2026, аудит №12, guard.py): операции claude.guard {action:
+# resume|keep, task} (владелец — веб, телефон; бот Ковчега — кнопка в Telegram) и claude.alert_sent (бот Ковчега), поле
+# alerts у /api/reminders/due (сообщения владельцу: «защита от петли», сумма дня за порогом), поле guard у вида spend
+# (что стоит). Без флага служба встреч сообщений Дел не ждёт и кнопок guard:dela не шлёт.
 # «context_index» — контекст по делу (15.10.2026, аудит №13, №67; focus.py): вид context_index — кто связан с делами
 # (related) и ключи имён людей и проектов с таблицами матчера (контракт dela-context.json). По флагу служба встреч,
 # дайджест и телефон кладут в промпт связанных и названных, а не весь справочник; без флага — как раньше (все люди).
@@ -2054,6 +2058,8 @@ phone.register(HANDLERS, VIEWS, OpError)
 spend.register(HANDLERS, VIEWS, OpError)
 # «Только тебе» (dela_0027, аудит №8–11; место этапа 6): наблюдения только владельцу — insight.*, вид insights.
 insights.register(HANDLERS, VIEWS, OpError)
+# Защита от петли Claude (аудит №12, guard.py): «Продолжать» / «Оставить» и «сообщение отправлено».
+guard.register(HANDLERS, VIEWS, OpError)
 # Контекст по делу (аудит №13): вид context_index — связанные люди и ключи имён (focus.py).
 focus.register(VIEWS)
 

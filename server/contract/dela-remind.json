@@ -165,6 +165,44 @@
   "rule": "Открытые дела с remind_at <= now() и reminded_at IS NULL у пользователей с telegram_id. Опоздавшее (служба лежала) — тоже, с late_min: бот пишет «должно было в 11:00» (when — подпись времени remind_at, как DelaRemind.whenWords: «11:00», «завтра 09:00», «чт 09:00», «12.10 09:00»; бот её не считает сам), а больше трёх опоздавших — одной сводкой. Дело закрыто до отправки — не напоминаем. Кому напоминания не нужны (settings.reminders = false, Марианна) — только те, что он поставил себе сам."
  },
 
+ "reminders_due_alerts": {
+  "_": "С 15.10.2026 (аудит №12, флаг claude_guard): у ответа reminders_due — ещё поле alerts, сообщения владельцу о Claude (защита от петли, сумма дня за порогом); старый бот его не читает. Подробно — dela-spend.json, раздел guard.",
+  "example": [
+   {
+    "id": "<uuid>",
+    "kind": "guard",
+    "service": "dela",
+    "task": "ask",
+    "text": "⛔ <b>Дела</b> · защита от петли\nстрока Claude и разговор: 31 вызов за 10 минут, порог 30.\nЗадача стоит, деньги не тратятся.\n<i>↩️ продолжать?</i>",
+    "buttons": [
+     {
+      "text": "Продолжать",
+      "data": "guard:dela:ask:on"
+     },
+     {
+      "text": "Оставить остановленным",
+      "data": "guard:dela:ask:keep"
+     }
+    ],
+    "at": "2026-10-15T12:00:00+00:00"
+   },
+   {
+    "id": "<uuid>",
+    "kind": "cap",
+    "service": "dela",
+    "task": "svc:meetings",
+    "text": "💸 <b>Claude</b> · за сегодня «Встречи» — $6,40 (порог $6); всего $9,10.",
+    "buttons": [
+     {
+      "text": "Траты",
+      "url": "https://dela.example.org/#/spend"
+     }
+    ],
+    "at": "2026-10-15T18:00:00+00:00"
+   }
+  ],
+  "after": "Отправил — операция claude.alert_sent {id, message_id} (только svc:kovcheg); кнопку guard:dela:<задача>:on|keep нажал владелец (проверка по settings.owner_tg службы встреч) — операция claude.guard {action: resume|keep, task}."
+ },
  "reminders_act": {
   "_": "Кнопка под напоминанием (сделано 06.10.2026 вместо обычных /api/ops: токен бота выдан на Сашу, а жмёт владелец дела). Дела узнают нажавшего по telegram_id и применяют операцию от его имени и его правами; в журнал — svc:kovcheg. Чужое дело и незнакомый Telegram — 422.",
   "request": "POST /api/reminders/act  (Authorization: Bearer <токен службы бота>)",

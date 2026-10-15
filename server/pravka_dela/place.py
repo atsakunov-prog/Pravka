@@ -505,8 +505,8 @@ def tune(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
     if st.get("batch"):
         b = st["batch"]
         if client is None:
-            from . import parse
-            client = parse.client(key, proxy)
+            from . import guard
+            client = guard.client(url, key, proxy, "krug_tune")
         info = client.messages.batches.retrieve(b["id"])
         if info.processing_status != "ended":
             if time.time() - b["at"] < TUNE_BATCH_MAX_AGE:
@@ -538,8 +538,8 @@ def tune(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
         _save(url, {**st, "week": week, "since": until})
         return None
     if client is None:
-        from . import parse
-        client = parse.client(key, proxy)
+        from . import guard
+        client = guard.client(url, key, proxy, "krug_tune")  # защита от петли (аудит №12)
     b = client.messages.batches.create(requests=[{"custom_id": "krug-tune", "params": p}])
     _save(url, {**st, "week": week, "batch": {"id": b.id, "at": time.time(), "week": week, "owner": owner, "until": until}})
     log.info("Круг: правки за неделю — на выводы, пачка %s", b.id)

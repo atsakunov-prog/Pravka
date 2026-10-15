@@ -249,7 +249,7 @@ def test_ask_api(dela, monkeypatch):
     client = TestClient(api.build(Config(db_url=dela)))
     r = client.post("/api/ask", headers=h, json={"text": "на завтра", "scope": {"task_ids": [t["id"]]}})
     assert r.status_code == 422 and "нет ключа" in r.json()["error"]
-    monkeypatch.setattr(ask, "client", lambda key, proxy: object())
+    monkeypatch.setattr(parse, "client", lambda key, proxy: object())  # клиент строит parse.client (в обёртке guard)
     seen = {}
 
     def fake(cl, s, u, model, effort, **_):

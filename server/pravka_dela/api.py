@@ -51,6 +51,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from . import ask, db, kovcheg_ui, llm, parse, remind, store, tokens, twins, when
+from . import guard as claude_guard  # защита от петли (аудит №12); имя guard у API — обёртка маршрутов
 from .config import Config
 
 log = logging.getLogger("dela.api")
@@ -405,7 +406,7 @@ def build(cfg: Config) -> Starlette:
             job.update(status="done", result=store.jsonable(out))
             log.info("разбор %s: %d знаков, дел %d, заметок %d, токены %s",
                      who.name, len(text), len(out["tasks"]), len(out["notes"]), out.get("usage"))
-        except parse.ParseError as e:
+        except (parse.ParseError, claude_guard.Stopped) as e:  # стоит защитой от петли — словами, не «Claude недоступен»
             job.update(status="error", error=str(e))
         except Exception as e:  # сеть, ключ, лимит — человеку коротко, в журнал подробно
             log.exception("разбор %s", who.name)
@@ -424,6 +425,11 @@ def build(cfg: Config) -> Starlette:
             return _err("пусто — нечего разбирать", 422)
         if not cfg.anthropic_key:
             return _err("разбор Claude не настроен: нет ключа в dela.env", 422)
+        # Суточный предел не-владельцу (аудит №12, claude_guard.quota): 20 разборов; владелец и службы — без него.
+        try:
+            await anyio.to_thread.run_sync(claude_guard.quota, url, who.user, "parse")
+        except claude_guard.OverQuota as e:
+            return _err(str(e), 429)
         defaults = {}
         for k in ("project_id", "person_id"):
             v = body.get(k)
@@ -456,7 +462,7 @@ def build(cfg: Config) -> Starlette:
                      who.name, len(text), len(scope.get("task_ids") or []), len(scope.get("suggestion_ids") or []),
                      out.get("route"), len(out.get("changed") or []), len(out.get("tasks") or []),
                      len(out.get("decided") or []), out.get("usage"))
-        except (ask.AskError, parse.ParseError) as e:
+        except (ask.AskError, parse.ParseError, claude_guard.Stopped) as e:
             job.update(status="error", error=str(e))
         except Exception as e:  # сеть, ключ, лимит — человеку коротко, в журнал подробно
             log.exception("правка %s", who.name)
@@ -475,6 +481,11 @@ def build(cfg: Config) -> Starlette:
             return _err("пусто — скажи, что сделать", 422)
         if not cfg.anthropic_key:
             return _err("Claude не настроен: нет ключа в dela.env", 422)
+        # Суточный предел не-владельцу (аудит №12): 40 правок словами в сутки по Москве.
+        try:
+            await anyio.to_thread.run_sync(claude_guard.quota, url, who.user, "ask")
+        except claude_guard.OverQuota as e:
+            return _err(str(e), 429)
         raw = body.get("scope") or {}
         scope: dict = {"title": str(raw.get("title") or "")[:200]}
         try:

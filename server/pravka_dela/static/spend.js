@@ -132,6 +132,20 @@ const SPEND = (() => {
       el('ul', { class: 'sp-gaps' }, (v.gaps || []).map((g) => el('li', {}, g))));
   }
 
+  /** Защита от петли (аудит №12): что на сервере стоит — полосой сверху с «Продолжать» (claude.guard resume: час
+   *  пороги втрое). Ничего не стоит — полосы нет. */
+  function guardStrip(g) {
+    if (!g || !(g.stopped || []).length) return null;
+    const hm = (iso) => (iso ? new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '');
+    return el('section', { class: 'group panel sp-card sp-guard' },
+      el('h2', {}, icon('alert', 17), 'Claude на сервере остановлен защитой от петли'),
+      el('div', { class: 'sp-in' }, g.stopped.map((x) => el('div', { class: 'sp-note' },
+        `⛔ ${x.title}: ${x.why}` + (x.at ? ` · с ${hm(x.at)}` : ''), ' ',
+        el('button', { class: 'btn small', onclick: async () => {
+          try { await ops([{ op: 'claude.guard', action: 'resume', task: x.task }]); crmDirty(); toast('Продолжаю — час пороги втрое'); render(); } catch (e) { fail(e); }
+        } }, 'Продолжать')))));
+  }
+
   function page() {
     if (!on()) {
       return [head('Claude: траты'), el('div', { class: 'body' }, el('div', { class: 'empty' },
@@ -152,7 +166,7 @@ const SPEND = (() => {
     return [head('Claude: траты', ['все запросы: телефон и службы компа'], seg),
       el('div', { class: 'body sp-body' },
         el('div', { class: 'sp-grid' },
-          el('div', { class: 'sp-colx' }, totalCard(v, p), tipsCard(t), ...(p.blocks || []).map((b) => blockCard(b, p.usd))),
+          el('div', { class: 'sp-colx' }, guardStrip(v.guard), totalCard(v, p), tipsCard(t), ...(p.blocks || []).map((b) => blockCard(b, p.usd))),
           el('div', { class: 'sp-colx' }, savingsCard(p), modelsCard(p), trendCard(v), sourcesCard(v))))];
   }
 

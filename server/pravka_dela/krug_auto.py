@@ -368,8 +368,8 @@ def tick(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
     if not owner or not key:
         return None
     if client is None:
-        from . import parse
-        client = parse.client(key, proxy)
+        from . import guard
+        client = guard.client(url, key, proxy, "krug")  # защита от петли (аудит №12): стоит — тик пропускается
 
     if st.get("batch"):
         b = st["batch"]

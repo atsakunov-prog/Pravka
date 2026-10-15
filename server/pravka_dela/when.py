@@ -27,7 +27,7 @@ import re
 import threading
 import time
 
-from . import db, llm, parse, remind
+from . import db, guard, llm, parse, remind
 
 log = logging.getLogger("dela.when")
 
@@ -547,10 +547,12 @@ def understand(url: str, user: str, text: str, key: str = "", proxy: str | None 
             raise WhenError("не понял, а Claude не настроен: напиши проще — «завтра в 11», «в пятницу вечером»")
         if not _room(user):
             raise WhenError("слишком часто спрашиваю Claude — подожди пару минут или напиши проще")
-        cl = parse.client(key, proxy)
+        cl = guard.client(url, key, proxy, "when")  # защита от петли (аудит №12)
         ask_fn = lambda m: ask(cl, model, effort, m)  # noqa: E731
     try:
         data = ask_fn(message(text, now, places, only_date))
+    except guard.Stopped as e:  # защита от петли — словами, а не «Claude недоступен»
+        raise WhenError(str(e)) from None
     except WhenError as e:  # ответ оплачен, но не годится — траты всё равно в книгу
         llm.account_failed(url, "when", e, model)
         raise

@@ -21,6 +21,8 @@
   privacy-fix [--dry] [--locked-private]  пакет «Приватность» по прежним данным: основания и заметки машины —
             приватными, записи встреч — по переключателю, события доступа (dela_0024–0028, разово, после своей копии)
   zachem   «Зачем» по-человечески: propose [--limit N] [--now] --out файл; apply --file файл; rollback
+  guard    защита от петли Claude (аудит №12): status — что стоит; on ЗАДАЧА — «Продолжать» (час пороги втрое);
+           keep ЗАДАЧА — оставить остановленным (когда Telegram недоступен)
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ from pathlib import Path
 from pravka_archive import config as archive_config
 
 from . import config as config_mod
-from . import db, tokens
+from . import db, guard, tokens
 
 log = logging.getLogger("dela")
 
@@ -289,6 +291,8 @@ def cmd_serve(args) -> int:
         while cfg.anthropic_key:
             try:
                 await asyncio.to_thread(krug_auto.tick, cfg.db_url, cfg.anthropic_key, cfg.claude_proxy)
+            except guard.Stopped:
+                pass  # защита от петли (аудит №12): тик пропускается, строка журнала — одна, при срабатывании
             except Exception:
                 log.exception("разборщик Круга")
             try:
@@ -297,6 +301,8 @@ def cmd_serve(args) -> int:
                 log.exception("дерево жизни для разборов")
             try:
                 await asyncio.to_thread(place.tune, cfg.db_url, cfg.anthropic_key, cfg.claude_proxy)
+            except guard.Stopped:
+                pass
             except Exception:
                 log.exception("выводы Круга из правок")
             await asyncio.sleep(60)
@@ -309,6 +315,8 @@ def cmd_serve(args) -> int:
         while cfg.anthropic_key:
             try:
                 await asyncio.to_thread(meetings_auto.tick, cfg.db_url, cfg.anthropic_key, cfg.claude_proxy)
+            except guard.Stopped:
+                pass
             except Exception:
                 log.exception("разборщик встреч")
             await asyncio.sleep(60)
@@ -321,6 +329,8 @@ def cmd_serve(args) -> int:
         while cfg.anthropic_key:
             try:
                 await asyncio.to_thread(spend_advice.tick, cfg.db_url, cfg.anthropic_key, cfg.claude_proxy)
+            except guard.Stopped:
+                pass
             except Exception:
                 log.exception("советы по тратам Claude")
             await asyncio.sleep(60)
@@ -487,6 +497,24 @@ def cmd_privacy_fix(args) -> int:
 
     cfg = config_mod.load(args.env)
     print(privacy_fix.words(privacy_fix.run(cfg.db_url, dry=args.dry, locked_private=args.locked_private)))
+    return 0
+
+
+def cmd_guard(args) -> int:
+    """Защита от петли Claude (аудит №12, guard.py): что стоит; «Продолжать» и «Оставить» — когда Telegram недоступен."""
+    cfg = config_mod.load(args.env)
+    if args.action == "status":
+        st = guard.status(cfg.db_url)
+        if not st["stopped"]:
+            print(f"ничего не стоит; вызовов Claude за час: {st['hits_hour']}")
+        for x in st["stopped"]:
+            print(f"стоит: {x['title']} — {x['why']} (с {x['at']})")
+        for x in st["relax"]:
+            print(f"пороги втрое до {x['until']}: {x['title']}")
+        return 0
+    out = guard.answer(cfg.db_url, args.task or guard.ALL, "resume" if args.action == "on" else "keep", "cli")
+    print(("продолжаю — час пороги втрое: " if args.action == "on" else "оставлено остановленным: ") + (args.task or "всё")
+          + (f"; стоит ещё: {', '.join(out['stopped'])}" if out["stopped"] else ""))
     return 0
 
 
@@ -663,6 +691,10 @@ def main(argv: list[str] | None = None) -> int:
     zc.add_argument("--out", default="zachem-propose.json", help="propose: куда положить предложения")
     zc.add_argument("--file", help="apply: файл предложений (можно поправить руками)")
     zc.set_defaults(fn=cmd_zachem)
+    gd = sub.add_parser("guard", help="защита от петли Claude: что стоит, «Продолжать», «Оставить»")
+    gd.add_argument("action", nargs="?", choices=["status", "on", "keep"], default="status")
+    gd.add_argument("task", nargs="?", help="задача (ask, parse, when, krug, meetings…) или * — всё")
+    gd.set_defaults(fn=cmd_guard)
     sp = sub.add_parser("spend", help="траты Claude: сводка недели; советы экономии сейчас")
     sp.add_argument("action", nargs="?", choices=["status", "advise"], default="status")
     sp.add_argument("--day", help="advise: последний день недели (с завода сегодня)")

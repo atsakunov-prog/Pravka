@@ -225,7 +225,18 @@ def due(url: str, public_url: str = "") -> dict:
         # там, где телефон и веб — «чт 09:00». Теперь бот берёт готовое.
         r["when"] = when_words(r["remind_at"], today) if r.get("remind_at") else None
         out.append(r)
-    return store.jsonable({"ok": True, "now": iso(at), "reminders": out})
+    # Сообщения владельцу о Claude (аудит №12): защита от петли и сумма дня за порогом — бот шлёт их рядом с
+    # напоминаниями и отмечает claude.alert_sent. Старый бот поле не читает — ему не мешает.
+    from . import guard
+
+    try:
+        alerts = guard.alerts_due(url, public_url)
+    except Exception:  # noqa: BLE001 — напоминания важнее: без сообщений, но с делами
+        import logging
+
+        logging.getLogger("dela.remind").exception("сообщения о Claude для бота")
+        alerts = []
+    return store.jsonable({"ok": True, "now": iso(at), "reminders": out, "alerts": alerts})
 
 
 ACTIONS = ("done", "snooze", "tomorrow")

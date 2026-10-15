@@ -128,14 +128,14 @@ def propose(url: str, owner: str, key: str, proxy: str | None, limit: int | None
             client=None, wait: float = 5.0) -> dict:
     """Предложения новых названий: {items: [{key, kind, id, was, now}], usd}. Ничего не пишет. Пачкой — Message
     Batches (−50 %, обычно минуты); batch=False — сразу (для малой пробы, если ждать некогда)."""
-    from . import parse
+    from . import guard
 
     items = collect(url, owner)
     if limit:
         items = items[:limit]
     if not items:
         return {"items": [], "usd": 0.0}
-    cl = client or parse.client(key, proxy)
+    cl = client or guard.client(url, key, proxy, "zachem")  # защита от петли (аудит №12): стоит — ошибка словами
     p = params(items)
     if batch:
         b = cl.messages.batches.create(requests=[{"custom_id": "zachem", "params": p}])

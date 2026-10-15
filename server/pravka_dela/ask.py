@@ -77,7 +77,7 @@ import re
 import time
 import uuid
 
-from . import crm, db, krug, llm, parse, people, remind, store
+from . import crm, db, guard, krug, llm, parse, people, remind, store
 
 log = logging.getLogger("dela.ask")
 
@@ -1363,10 +1363,6 @@ def decided(plan: list[dict], results: list[dict]) -> tuple[list[dict], list[str
     return out, errors
 
 
-def client(key: str, proxy: str | None):
-    return parse.client(key, proxy)
-
-
 def ask(cl, system: str, user_text: str, model: str = MODEL, effort: str = EFFORT, prefix: str | None = None) -> dict:
     """Один запрос: справочник в кэше, ответ — строго по схеме. prefix — экран разговора (13.10.2026): своим блоком с
     отметкой кэша — следующая реплика того же разговора читает его из кэша; user_text — хвост (час, разговор, команда)."""
@@ -1584,7 +1580,8 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
     if ask_fn is None:
         if not key:
             raise AskError("Claude не настроен: нет ключа в dela.env")
-        cl = client(key, proxy)
+        # Защита от петли (аудит №12, guard.py): задача — ask или task (карточка дела); стоит — ошибка словами.
+        cl = guard.client(url, key, proxy, "task" if scope.get("card") == "task" else "ask")
         ask_fn = lambda s, u: ask(cl, s, ctx["tail"], model, effort, prefix=ctx["screen"])  # noqa: E731
     try:
         data = ask_fn(ctx["system"], ctx["message"])

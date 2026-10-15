@@ -268,8 +268,8 @@ def tick(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
     if st.get("batch"):
         b = st["batch"]
         if client is None:
-            from . import parse
-            client = parse.client(key, proxy)
+            from . import guard
+            client = guard.client(url, key, proxy, TASK)
         info = client.messages.batches.retrieve(b["id"])
         if info.processing_status != "ended":
             if time.time() - b["at"] < BATCH_MAX_AGE:
@@ -312,8 +312,8 @@ def send(url: str, key: str, proxy: str | None, last_day: dt.date, client=None, 
         _save(url, {**st, "week": week.isoformat(), "last": {"week": week.isoformat(), "skipped": "трат нет"}})
         return None
     if client is None:
-        from . import parse
-        client = parse.client(key, proxy)
+        from . import guard
+        client = guard.client(url, key, proxy, TASK)  # защита от петли (аудит №12)
     p = params(f)
     if not batch:
         from .parse import FALLBACK_BETA

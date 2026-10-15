@@ -290,7 +290,9 @@ def run(url: str, user: str, text: str, defaults: dict, key: str, proxy: str | N
     if ask_fn is None:
         if not key:
             raise ParseError("разбор Claude не настроен: нет ключа в dela.env")
-        cl = client(key, proxy)
+        from . import guard
+
+        cl = guard.client(url, key, proxy, "parse")  # защита от петли (аудит №12): стоит — ошибка словами
         ask_fn = lambda s, u: ask(cl, s, u)  # noqa: E731
     try:
         data = ask_fn(system, user_text)

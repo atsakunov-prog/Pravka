@@ -217,6 +217,8 @@ def op_put(conn, user: str, op: dict, err) -> dict:
             raise err(f"траты: строка {r['day']} · {r['service']} · {r['task']} · {r['model'] or '—'} дважды в одной присылке")
         seen.add(k)
         changed += _upsert(conn, {**r, "owner_id": user, "src": src}, add=False)
+    if changed:
+        watch(conn)  # сумма дня могла перейти порог (телефон, службы компа)
     return {"put": len(clean), "changed": changed, "src": src}
 
 
@@ -234,6 +236,26 @@ def add(url: str, task: str, usd: float, model: str | None, usage: dict | None, 
         if not owner["id"]:
             return
         _upsert(conn, {**row, "owner_id": owner["id"], "day": owner["d"]}, add=True)
+        watch(conn)
+
+
+def watch(conn) -> list[dict]:
+    """Сторож суммы дня (аудит №12): после каждой строки книги — суммы сегодняшнего дня всего, по службе и по
+    «служба.задача» против Свода claude.caps.day; перешли порог — сообщение владельцу ботом Ковчега (один раз на день и
+    порог). Только уведомление: остановку делает рубильник (guard), а сумма дня бывает плановой. crm.state пишет только
+    system — на время сторожа пользователь сессии он, потом прежний. Сбой сторожа строку книги не роняет."""
+    from . import guard
+
+    me = conn.execute("SELECT current_setting('dela.user', true) AS u").fetchone()["u"]
+    try:
+        with conn.transaction():
+            conn.execute("SELECT set_config('dela.user', 'system', true)")
+            return guard.watch_day(conn)
+    except Exception:  # noqa: BLE001
+        log.exception("сторож суммы дня")
+        return []
+    finally:
+        conn.execute("SELECT set_config('dela.user', %s, true)", (me or "",))
 
 
 # ── Чтение ──────────────────────────────────────────────────────────────
@@ -403,7 +425,21 @@ def view_spend(conn, user: str, err=None, **_) -> dict:
                     for s in src],
         "gaps": c.get("gaps") or [],
         "tips": tips,
+        # Защита от петли (аудит №12): что стоит, почему, с какого времени, послабления — полоса «остановлено» с
+        # «Продолжать» (операция claude.guard).
+        "guard": _guard(conn),
     }
+
+
+def _guard(conn) -> dict:
+    from . import guard
+
+    me = conn.execute("SELECT current_setting('dela.user', true) AS u").fetchone()["u"]
+    conn.execute("SELECT set_config('dela.user', 'system', true)")
+    try:
+        return guard.status_of(conn)
+    finally:
+        conn.execute("SELECT set_config('dela.user', %s, true)", (me or "",))
 
 
 def op_seen(conn, user: str, op: dict, err) -> dict:
