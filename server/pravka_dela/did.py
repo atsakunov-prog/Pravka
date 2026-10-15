@@ -170,8 +170,11 @@ def _touch(conn, user: str, task: dict, person_id, said: str, at, error) -> dict
     else:
         mine = digest_crm._person_clients(ctx, pid)
         project = mine[0] if len(mine) == 1 else None
+    # В хронологии — как сказано («Позвонил Ольге»), а не название закрытого обещания («Позвонить Ольге»): это факт.
+    said_ = " ".join(str(said or "").split())
+    summary = (said_[:1].upper() + said_[1:]) if said_ else task["title"]
     data = {"at": when.isoformat() if isinstance(when, dt.datetime) else str(when), "kind": kind,
-            "summary": task["title"], "person_ids": [pid], "source": "raznoska", "source_ref": f"did:{task['id']}"}
+            "summary": summary[:2000], "person_ids": [pid], "source": "raznoska", "source_ref": f"did:{task['id']}"}
     if project:
         data["project_id"] = project
     row = store.op_interaction_add(conn, user, {"data": data})["row"]

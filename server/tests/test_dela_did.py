@@ -65,7 +65,7 @@ def test_one_promise_closes_itself(dela):
     assert s["status"] == "accepted" and s["reason"] == store.AUTO_CLOSE_REASON and s["result"]["was"] == {"status": "open"}
     assert s["batch_ref"].startswith("said:") and n == 0 and com["text"].startswith("Сказал · ")
     [touch] = touches(dela, ivan)
-    assert touch["kind"] == "call" and touch["summary"] == "Позвонить Ивану" and touch["source_ref"] == f"did:{t['id']}"
+    assert touch["kind"] == "call" and touch["summary"] == "Позвонил Ивану" and touch["source_ref"] == f"did:{t['id']}"
     # «Сделано само» в «Новом» — с «Вернуть»: веб и старый телефон видят закрытое само.
     week = store.view(dela, "sasha", "week")["automation"]
     assert week["all"]["closed"] == 0 and week["sources"]["said"]["closed"] == 1
