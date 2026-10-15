@@ -511,15 +511,82 @@ def op_task_reminded(conn, user, op):
 
 
 def op_comment_add(conn, user, op):
-    data = _pick(op.get("comment") or {}, {"id", "task_id", "text"}, "комментарий")
+    """Комментарий к делу. private (аудит №8, dela_0024) — «только мне»: видит только автор, журнала нет, приватность
+    не снимается. Старый сервер поле отверг бы целиком («нет таких полей») — клиенты шлют его только при флаге privacy."""
+    data = _pick(op.get("comment") or {}, {"id", "task_id", "text", "private"}, "комментарий")
     task = task_by(conn, data.get("task_id"))
     if not task:
         raise OpError("нет такого дела или оно не видно")
     data["task_id"] = task["id"]
     data["author_id"] = user
+    data["private"] = bool(data.get("private"))
     if data.get("id") and conn.execute("SELECT 1 FROM tasks.comments WHERE id = %s", (data["id"],)).fetchone():
         return {"comment": conn.execute("SELECT * FROM tasks.comments WHERE id = %s", (data["id"],)).fetchone()}
     return {"comment": _insert(conn, "tasks.comments", data)}
+
+
+# ── Закон приватности (аудит 15.10.2026, №8–11, правило 26 карты) ───────────────────
+# Личные каналы владельца: переписка Telegram (сверка дайджеста — telegram, юзербот — userbot), встречи (расшифровка и
+# разбор) и телефонная книжка. Машина из них пишет только в приватное: основание «закрыть»/«уточнить», заметку дела
+# («завести» — при «только факт» у встреч), «Человек не поставлен: …» — приватным комментарием; в общее переносит только
+# рука владельца (его set.notes, отличный от заметки машины).
+PRIVATE_SOURCES = ("meeting", "telegram", "userbot", "contacts")
+SOURCE_HEAD = {"meeting": "Встреча", "telegram": "Telegram", "userbot": "Telegram", "contacts": "Телефонная книжка"}
+
+
+def team_sees_meetings(conn) -> str:
+    """Что команда видит из встреч: fact — только факт (название, когда, с кем), summary — и итог с договорённостями.
+    Пакет dela-p2 (№9) кладёт правило в базу (crm.team_sees_meetings, Свод privacy.team); до него — fact."""
+    return "fact"
+
+
+def _same_text(a: Any, b: Any) -> bool:
+    """Тот же текст с точностью до пробелов: «Поправить → Принять» шлёт заметку предложения без правки — это не слово
+    владельца."""
+    return " ".join(str(a or "").split()) == " ".join(str(b or "").split())
+
+
+def _notes_private(conn, source: str | None) -> bool:
+    """Заметка машины при «завести» — в приватный комментарий, а не в дело: Telegram — всегда, встреча — пока команда видит
+    из встреч только факт."""
+    if source in ("telegram", "userbot"):
+        return True
+    return source == "meeting" and team_sees_meetings(conn) == "fact"
+
+
+def _sug_head(s: dict) -> str:
+    return s.get("batch_title") or SOURCE_HEAD.get(s.get("source"), s.get("source") or "")
+
+
+def _comment(conn, user, task_id, text: str, private: bool) -> str | None:
+    """Комментарий автоматики к делу; тот же живой текст у дела уже есть — второй не пишем (повторное «уточнить» без
+    заметки в деле — частое следствие приватной заметки), ответ — None."""
+    if conn.execute("SELECT 1 FROM tasks.comments WHERE task_id = %s AND deleted_at IS NULL AND text = %s",
+                    (task_id, text)).fetchone():
+        return None
+    return op_comment_add(conn, user, {"comment": {"task_id": task_id, "text": text, "private": private}})["comment"]["id"]
+
+
+def task_history(url: str, task: dict, viewer: str, limit: int | None = None, newest_first: bool = False) -> list[dict]:
+    """Журнал дела (crm.history) — тому, кому база уже показала дело. Читает system (журнал целиком роли службы не виден);
+    не владельцу Дел у дел из Telegram и встреч — без значений заметки (аудит №8): заметку машины прежних дел приватной
+    сделает privacy-fix, а журнал хранит её текст навсегда. Одна функция для карточки дела (/api/task) и Claude
+    карточки дела (ask._task_card)."""
+    q = ("SELECT at, actor, via, op, before, after FROM crm.history WHERE entity = 'tasks.tasks' AND entity_id = %s "
+         f"ORDER BY id{' DESC' if newest_first else ''}{' LIMIT %s' if limit else ''}")
+    with db.session(url, "system", "svc:view") as conn:
+        rows = conn.execute(q, (str(task["id"]), limit) if limit else (str(task["id"]),)).fetchall()
+        owner = conn.execute("SELECT crm.owner_id() AS o").fetchone()["o"]
+    if viewer in (owner, "system") or task.get("source") not in ("telegram", "meeting"):
+        return rows
+    out = []
+    for h in rows:
+        before = {k: v for k, v in (h["before"] or {}).items() if k != "notes"} if h["before"] is not None else None
+        after = {k: v for k, v in (h["after"] or {}).items() if k != "notes"} if h["after"] is not None else None
+        if h["op"] == "update" and not after:
+            continue  # правка была только заметкой — строке нечего сказать
+        out.append({**h, "before": before, "after": after})
+    return out
 
 
 def op_comment_delete(conn, user, op):
@@ -1045,10 +1112,18 @@ def op_suggestion_decide(conn, user, op):
     cache: dict = {}
     held = _who_guard(conn, s, payload, fix, op.get("option") is not None, cache)
     task, back = None, {}
+    private = s["source"] in PRIVATE_SOURCES
+    # Заметка машины (payload.notes — пересказ переписки или строка разбора встречи) из личного канала в дело не идёт
+    # (аудит №8): дело видит команда клиента. Владелец написал в «Поправить» свою заметку — это его слово, она в деле.
+    machine = str(payload.get("notes") or "").strip()
+    owners_notes = "notes" in fix and not _same_text(fix.get("notes"), machine)
     if s["kind"] == "create":
         fields = {k: v for k, v in payload.items() if k in TASK_FIELDS | KRUG_FIELDS}
         fields.update(_names(conn, payload, cache))
         fields.update(fix)
+        hide = bool(machine) and not owners_notes and _notes_private(conn, s["source"])
+        if hide:
+            fields.pop("notes", None)
         if (s["source"] in AUTO_DEAL_SOURCES and fields.get("project_id") and not fields.get("deal_id")
                 and "deal_id" not in fix):
             # Дело автоматики у клиента с одной живой сделкой — её шаг (аудит №2): с 05.10 автоматика не поставила
@@ -1060,21 +1135,27 @@ def op_suggestion_decide(conn, user, op):
         fields.setdefault("source", _task_source(s["source"]))
         fields.setdefault("source_ref", s["source_ref"])
         task = op_task_create(conn, user, {"task": fields})["task"]
+        if hide:
+            head = _sug_head(s)
+            back["notes_comment_id"] = _comment(conn, user, task["id"], f"{head}: {machine}" if head else machine, True)
         if held:
-            back = {"held": held, "comment_id": op_comment_add(conn, user, {"comment": {
-                "task_id": task["id"], "text": f"Человек не поставлен: {held}"}})["comment"]["id"]}
+            back.update(held=held, comment_id=_comment(conn, user, task["id"], f"Человек не поставлен: {held}", private))
     elif s["kind"] in ("close", "update"):
         fields = {k: v for k, v in payload.items() if k in TASK_FIELDS | KRUG_FIELDS}
         fields.update(_names(conn, payload, cache))  # «уточнить»: мяч перешёл к другому человеку — по имени
         if s["kind"] == "close":
             fields.setdefault("status", "done")
         fields.update(fix)
+        hidden = None
+        if private and machine and not owners_notes:
+            fields.pop("notes", None)  # заметка машины из личного канала — в тот же приватный комментарий-основание
+            hidden = machine
         _ball_norm(fields)  # «как было» — и про флаг «ждут от меня», иначе «Вернуть» его не снимет
         cur = task_by(conn, s["task_id"]) or {}
         task = op_task_set(conn, user, {"id": s["task_id"], "set": fields})["task"]
         # «Вернуть» у сделанного само: как было (только то, что поменялось) и чем это объяснили.
         back = {"was": {k: cur.get(k) for k in fields if k in cur and not _same(cur.get(k), task.get(k))},
-                "comment_id": _trace(conn, user, s, task, f"человек не поставлен: {held}" if held else None)}
+                "comment_id": _trace(conn, user, s, task, f"человек не поставлен: {held}" if held else None, hidden)}
         if held:
             back["held"] = held
     elif s["kind"] == "assign":
@@ -1173,21 +1254,26 @@ def _person_sug(conn, user, s: dict, payload: dict) -> dict:
     return out
 
 
-def _trace(conn, user, s: dict, task: dict | None, extra: str | None = None) -> str | None:
+def _trace(conn, user, s: dict, task: dict | None, extra: str | None = None, notes: str | None = None) -> str | None:
     """Принятое «закрыть» или «поправить» оставляет при деле комментарий: откуда и почему.
 
     Уточнение из встречи или переписки (payload.note — новые подробности) иначе осталось бы
     только в «Новом», а через неделю там его уже не найти; у закрытого — основание (quote).
     extra — что не вышло (человек двусмыслен после ответа на другой вопрос) — в тот же комментарий.
+    notes — заметка машины из личного канала, которая не легла в дело (аудит №8), — туда же.
+    Основание из личного канала (PRIVATE_SOURCES) — приватным комментарием: это цитата переписки или расшифровки.
+    Тот же текст у дела уже есть — второго не пишем (ответ None).
     Возвращает id комментария: «Вернуть» у сделанного само убирает и его.
     """
     text = ((s.get("payload") or {}).get("note") or s.get("quote") or "").strip()
+    if notes:
+        text = f"{text}\n{notes}" if text else notes
     if extra:
         text = f"{text} — {extra}" if text else extra
     if not text or not task:
         return None
-    head = s.get("batch_title") or {"meeting": "Встреча", "telegram": "Telegram"}.get(s.get("source"), s.get("source") or "")
-    return op_comment_add(conn, user, {"comment": {"task_id": task["id"], "text": f"{head}: {text}" if head else text}})["comment"]["id"]
+    head = _sug_head(s)
+    return _comment(conn, user, task["id"], f"{head}: {text}" if head else text, s.get("source") in PRIVATE_SOURCES)
 
 
 def _names(conn, payload: dict, cache: dict | None = None) -> dict:

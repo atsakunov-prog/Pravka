@@ -635,9 +635,7 @@ def task_card(url: str, user: str, ref: str) -> dict | None:
             "SELECT * FROM tasks.comments WHERE task_id = %s AND deleted_at IS NULL ORDER BY created_at", (t["id"],)
         ).fetchall()
         origin = store.task_origin(conn, t)
-    with db.session(url, "system", "svc:view") as conn:
-        history = conn.execute(
-            "SELECT at, actor, via, op, before, after FROM crm.history WHERE entity = 'tasks.tasks' AND entity_id = %s ORDER BY id",
-            (str(t["id"]),),
-        ).fetchall()
+    # Журнал — store.task_history: читает system, а не владельцу у дел из Telegram и встреч — без заметки (аудит №8).
+    # Комментарии приватные (private) база отдаёт только автору — их фильтр здесь не нужен.
+    history = store.task_history(url, t, user)
     return store.jsonable({"task": t, "comments": comments, "history": history, "origin": origin})

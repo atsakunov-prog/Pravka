@@ -863,6 +863,10 @@ a.crumb:hover { color: var(--accent); text-decoration: none; }
 .comment .who { color: var(--faint); font-size: 12.5px; margin-bottom: 2px; }
 .add-comment { display: flex; gap: 8px; margin-top: 8px; }
 .add-comment input { flex: 1; min-width: 0; }
+/* «Только тебе» (15.10.2026, аудит №8–10): приватный комментарий, запись хронологии, пометки о человеке. */
+.lock-mark { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; color: var(--faint); font-size: 12px; }
+.comment.private { background: var(--line-soft); border-radius: 6px; padding-left: 8px; padding-right: 8px; }
+.add-comment .only-me { display: inline-flex; align-items: center; gap: 4px; color: var(--faint); font-size: 13px; white-space: nowrap; }
 .hist { font-size: 12.5px; color: var(--faint); padding: 3px 2px; }
 details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-top: 18px; padding: 0 2px; }
 details summary:hover { color: var(--text); }

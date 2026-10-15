@@ -509,6 +509,8 @@ const ICONS = {
   flame: 'M12 3c1 3 4 4.5 4 8.5a4 4 0 0 1-8 0c0-2 1-3 2-4 0 1.5 1 2.5 2 2.5 0-3-1-5 0-7z',
   tree: 'M10 3h4v4h-4zM12 7v4M6 11h12M6 11v3M18 11v3M4 14h4v4H4zM16 14h4v4h-4z',
   bolt: 'M13 3L5 13.5h6.5L10.5 21 19 10.5h-6.5z',
+  // Замок «только тебе» (15.10.2026, аудит №8–10): приватный комментарий, запись хронологии, пометки о человеке.
+  lock: 'M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3',
 };
 // Шестерёнка — восемь зубцов, считается один раз (как в общем слое): «солнце» рядом слишком на неё похоже.
 ICONS.gear = (() => {
@@ -3403,7 +3405,9 @@ async function mergeInto(s, t) {
   const p = s.payload || {};
   const said = [p.title, s.quote && s.quote !== p.title ? '«' + s.quote + '»' : null, p.notes].filter(Boolean).join(' — ');
   try {
-    await ops([{ op: 'comment.add', comment: { task_id: t.id, text: `${s.batch_title || SUG_FROM[s.source] || 'Автоматика'}: ${said}` } },
+    // Слова из переписки и встреч — только владельцу (аудит №8): комментарий приватный, команда дела его не видит.
+    const priv = privacyOn() && PRIVATE_SOURCES.includes(s.source);
+    await ops([{ op: 'comment.add', comment: { task_id: t.id, text: `${s.batch_title || SUG_FROM[s.source] || 'Автоматика'}: ${said}`, ...(priv ? { private: true } : {}) } },
       { op: 'suggestion.decide', id: s.id, decision: 'reject', reason: `уже есть: ${t.title}` }]);
     toast(`Срослось с «${t.title}»: слова — комментарием к делу`);
     render();
@@ -4416,14 +4420,17 @@ function renderCard() {
       class: 'btn main',
       onclick: () => {
         const set = {};
-        for (const k of ['notes', 'project_id', 'deal_id', 'ball', 'owed', 'person_id', 'due_date', 'nudge_on', 'estimate_min', 'money', 'labels', 'focus_on', 'want']) {
+        for (const k of ['project_id', 'deal_id', 'ball', 'owed', 'person_id', 'due_date', 'nudge_on', 'estimate_min', 'money', 'labels', 'focus_on', 'want']) {
           if (src[k] !== undefined && src[k] !== null && src[k] !== '') set[k] = src[k];
         }
         // Выбрал «Никто» у названного человека — так и скажем серверу: без этого «Да» при двусмысленном имени он
         // отклонит («Кто это — X или Y?», аудит 15.10.2026, №1).
         if (src.person_id === null && (sug.payload || {}).person_name) set.person_id = null;
         set.title = title.value.trim() || src.title;
-        if (notes.value.trim()) set.notes = notes.value.trim();
+        // Заметку — только если её правили (аудит №8): заметка машины из переписки и встреч ложится приватным
+        // комментарием, а не в дело; та же заметка в set.notes была бы «словом владельца». Сервер сверяет и сам.
+        const said = (sug.payload || {}).notes || '';
+        if (notes.value.trim().split(/\s+/).join(' ') !== said.trim().split(/\s+/).join(' ')) set.notes = notes.value.trim() || null;
         decide([sug.id], 'accept', null, set);
       },
     }, 'Принять'), el('button', { class: 'btn', onclick: close }, 'Закрыть'));
@@ -4432,14 +4439,19 @@ function renderCard() {
   if (t) {
     const x = extras.get(t.id);
     const add = el('input', { placeholder: 'Комментарий…' });
+    // «Только мне» (аудит №8): приватный комментарий — команда, которая видит дело, его не видит. Только при флаге privacy.
+    const mine = privacyOn() ? el('input', { type: 'checkbox', title: 'Команда этого комментария не увидит' }) : null;
     const send = async () => {
       if (!add.value.trim()) return;
-      try { await op1({ op: 'comment.add', comment: { task_id: t.id, text: add.value.trim() } }); add.value = ''; loadCardExtras(t.id); } catch (e) { fail(e); }
+      const c = { task_id: t.id, text: add.value.trim(), ...(mine && mine.checked ? { private: true } : {}) };
+      try { await op1({ op: 'comment.add', comment: c }); add.value = ''; loadCardExtras(t.id); } catch (e) { fail(e); }
     };
     add.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
     card.append(el('h3', {}, 'Комментарии'),
-      el('div', {}, (x ? x.comments : []).map((c) => el('div', { class: 'comment' }, el('div', { class: 'who' }, `${c.author_id} · ${c.created_at.slice(0, 16).replace('T', ' ')}`), c.text))),
-      el('div', { class: 'add-comment' }, add, el('button', { class: 'btn small', onclick: send }, 'Добавить')));
+      el('div', {}, (x ? x.comments : []).map((c) => el('div', { class: 'comment' + (c.private ? ' private' : '') },
+        el('div', { class: 'who' }, `${c.author_id} · ${c.created_at.slice(0, 16).replace('T', ' ')}`, c.private ? lockMark('только тебе') : null), c.text))),
+      el('div', { class: 'add-comment' }, add, mine ? el('label', { class: 'only-me' }, mine, ' только мне') : null,
+        el('button', { class: 'btn small', onclick: send }, 'Добавить')));
     if (x) {
       card.append(el('details', {}, el('summary', {}, 'Журнал правок'), x.history.map((h) =>
         el('div', { class: 'hist' }, `${h.at.slice(0, 16).replace('T', ' ')} · ${h.actor} (${h.via}) · ${h.op === 'update' ? Object.keys(h.after || {}).join(', ') : h.op}`))));
@@ -4471,6 +4483,12 @@ const CRM_VIEWS = {
 const narrow = () => window.matchMedia('(max-width: 900px)').matches; // телефон: пустые колонки воронки не показываем
 /** Сервер держит настройки телефона (флаг phone, dela_0015): есть страница «Телефон» и её пункты в меню. */
 const phoneOn = () => ((S.me && S.me.features) || []).includes('phone');
+// Закон приватности (15.10.2026, аудит №8–11): «только мне», «скрыть от команды», «Только тебе». Без флага старый сервер
+// отверг бы операцию с полем private целиком («нет таких полей») — поэтому всё новое только при нём.
+const privacyOn = () => ((S.me && S.me.features) || []).includes('privacy');
+// Личные каналы владельца: из них машина пишет только в приватное (store.PRIVATE_SOURCES).
+const PRIVATE_SOURCES = ['meeting', 'telegram', 'userbot', 'contacts'];
+const lockMark = (title = 'видишь только ты') => el('span', { class: 'lock-mark', title }, icon('lock', 12), ' ' + title);
 const crmOn = () => S.me && (S.me.role === 'owner' || S.me.clients !== 'own');
 const rub = (kop) => (kop ? Math.round(kop / 100).toLocaleString('ru') + ' ₽' : '');
 const rubShort = (kop) => {

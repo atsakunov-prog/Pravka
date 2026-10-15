@@ -561,11 +561,14 @@ def _task_card(conn, url: str, user: str, t: dict, today: dt.date) -> tuple[list
     elif origin:
         lines.append("Откуда: " + " · ".join(x for x in [origin.get("batch_title"), origin.get("quote") and "«"
                                                            + _short(origin["quote"], 400) + "»"] if x))
-    coms = conn.execute("SELECT c.text, c.created_at, coalesce(u.name, c.author_id) AS who FROM tasks.comments c "
+    # Приватный комментарий (основание из переписки и встреч, «только мне», аудит №8) база отдаёт только автору — Claude
+    # видит его там же, где видит человек, с пометкой: людям его не цитируют.
+    coms = conn.execute("SELECT c.text, c.created_at, c.private, coalesce(u.name, c.author_id) AS who FROM tasks.comments c "
                         "LEFT JOIN crm.users u ON u.id = c.author_id WHERE c.task_id = %s AND c.deleted_at IS NULL "
                         "ORDER BY c.created_at DESC LIMIT 10", (t["id"],)).fetchall()
     if coms:
-        lines += ["Комментарии (свежие сверху):", *[f"— {c['created_at'].astimezone(MSK).strftime('%d.%m')} {c['who']}: "
+        lines += ["Комментарии (свежие сверху):", *[f"— {c['created_at'].astimezone(MSK).strftime('%d.%m')} {c['who']}"
+                                                    f"{' (только тебе)' if c['private'] else ''}: "
                                                     f"{_short(c['text'], 300)}" for c in coms]]
     # Место в дереве — только хозяину дела: Круг личный (у остальных why_id и цели не видны).
     if t.get("owner_id") == user:
@@ -602,12 +605,10 @@ def _task_card(conn, url: str, user: str, t: dict, today: dt.date) -> tuple[list
     elif pr and pr["kind"] == "client":
         deals = conn.execute("SELECT * FROM crm.v_deals WHERE project_id = %s ORDER BY stage = 'archive', name", (pr["id"],)).fetchall()
         card = {"kind": "client", "project": pr, "deals": deals, "people": []}
-    hist = []
-    with db.session(url, "system", "svc:view") as sys_conn:  # журнал читает system — дело база уже показала
-        rows = sys_conn.execute(
-            "SELECT at, actor, via, op, after FROM crm.history WHERE entity = 'tasks.tasks' AND entity_id = %s "
-            "ORDER BY id DESC LIMIT %s", (str(t["id"]), HISTORY_SHOWN)).fetchall()
-        hist = [x for x in (_hist_line(h) for h in rows) if x]
+    # Журнал читает system — дело база уже показала; не владельцу у дел из Telegram и встреч — без заметки (аудит №8,
+    # store.task_history — одна функция с карточкой дела в вебе).
+    rows = store.task_history(url, t, user, limit=HISTORY_SHOWN, newest_first=True)
+    hist = [x for x in (_hist_line(h) for h in rows) if x]
     if hist:
         lines += ["Журнал дела (свежие сверху):", *hist]
     near = {"project_id": str(t["project_id"]) if t.get("project_id") else None,

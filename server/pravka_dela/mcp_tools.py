@@ -487,7 +487,9 @@ def card(url: str, ref: str) -> str:
     if t.get("notes"):
         out += [t["notes"], ""]
     for cm in c["comments"]:
-        out.append(f"— {cm['author_id']} {cm['created_at'][:16].replace('T', ' ')}: {cm['text']}")
+        # Приватный комментарий (основание из переписки и встреч, «только мне», аудит №8) — пометкой: людям не цитировать.
+        mark = " (только тебе)" if cm.get("private") else ""
+        out.append(f"— {cm['author_id']} {cm['created_at'][:16].replace('T', ' ')}{mark}: {cm['text']}")
     if c["history"]:
         out.append("Журнал:")
         for h in c["history"][-12:]:
@@ -511,7 +513,7 @@ def add(url: str, **fields) -> str:
     return "Записал: " + line(r["task"], None, dn)
 
 
-def change(url: str, ref: str, comment: str | None = None, **fields) -> str:
+def change(url: str, ref: str, comment: str | None = None, comment_private: bool = False, **fields) -> str:
     try:
         with db.session(url, USER, via="mcp") as conn:
             t = store.task_by(conn, ref)
@@ -526,7 +528,9 @@ def change(url: str, ref: str, comment: str | None = None, **fields) -> str:
     if data:
         ops.append({"op": "task.set", "id": str(t["id"]), "set": data})
     if comment:
-        ops.append({"op": "comment.add", "comment": {"task_id": str(t["id"]), "text": comment}})
+        # comment_private (аудит №8): «только Саше» — команда комментария не увидит (приватный комментарий).
+        ops.append({"op": "comment.add", "comment": {"task_id": str(t["id"]), "text": comment,
+                                                     **({"private": True} if comment_private else {})}})
     if not ops:
         return "Нечего менять."
     res = store.apply_ops(url, USER, ops, via="mcp")["results"]
@@ -910,9 +914,9 @@ def register(mcp, url: str) -> None:
                           want: bool | None = None, now: bool | None = None, labels: list[str] | None = None,
                           status: str | None = None, comment: str | None = None, remind_at: str | None = None,
                           remind_place: str | None = None, directions: list[str] | None = None, why: str | None = None,
-                          goal: bool | None = None, rhythm: str | None = None) -> str:
-        """Поправить дело по номеру: любые поля как у dela_add; status: done (сделано), cancelled (отменено), open (вернуть); comment — дописать комментарий. Пустая строка в поле — очистить его (due_date="" — без срока, remind_at="" — без напоминания). Новое remind_at или remind_place взводит напоминание заново, даже если старое уже приходило. Что не передано — не меняется. directions=[] — снять свои направления (дело снова наследует); why="" — убрать «Зачем» (дело повиснет на направлении). goal=true/false — сделать делом-целью дерева или вернуть в дела (только по слову Саши: цели ставит он); rhythm — ритм практики, rhythm="" — уже не практика."""
-        return await run(dela.change, ref, comment=comment, title=title, notes=notes, project=project, deal=deal,
+                          goal: bool | None = None, rhythm: str | None = None, comment_private: bool = False) -> str:
+        """Поправить дело по номеру: любые поля как у dela_add; status: done (сделано), cancelled (отменено), open (вернуть); comment — дописать комментарий (comment_private=true — «только Саше»: команда, которая видит дело, его не увидит; для личного — оценок людей, пересказа переписки). Пустая строка в поле — очистить его (due_date="" — без срока, remind_at="" — без напоминания). Новое remind_at или remind_place взводит напоминание заново, даже если старое уже приходило. Что не передано — не меняется. directions=[] — снять свои направления (дело снова наследует); why="" — убрать «Зачем» (дело повиснет на направлении). goal=true/false — сделать делом-целью дерева или вернуть в дела (только по слову Саши: цели ставит он); rhythm — ритм практики, rhythm="" — уже не практика."""
+        return await run(dela.change, ref, comment=comment, comment_private=comment_private, title=title, notes=notes, project=project, deal=deal,
                          person=person, ball=ball, due_date=due_date, due_time=due_time, nudge_on=nudge_on,
                          requested_by=requested_by, estimate_min=estimate_min, money=money, want=want, now=now,
                          labels=labels, status=status, remind_at=remind_at, remind_place=remind_place,
