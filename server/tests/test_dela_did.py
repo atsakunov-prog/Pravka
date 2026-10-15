@@ -181,3 +181,14 @@ def test_said_object_picks_the_promise(dela):
     r = did_op(dela, "Иван: прислал сверку", ball="waiting", person_id=ivan)
     assert r["did"]["closed"] == sverka["id"] and not r["did"]["asked"]
     assert status(dela, model["id"]) == "open"
+
+
+def test_closed_and_similar_line_says_both(dela):
+    """Одно обещание закрыто, а о похожих «Запустить» ушли вопросы — строка говорит и о них (сквозной тест 15.10.2026:
+    вопросы появлялись в «Подскажи», а строка молчала)."""
+    ivan = person(dela, "Иван Тестов", "Иван")
+    t = mk(dela, "Позвонить Ивану", ball="owed", person_id=ivan)
+    mk(dela, "Иван: позвонить про договор", person_id=ivan)
+    d = did_op(dela, "Позвонил Ивану", person_id=ivan)["did"]
+    assert d["closed"] == t["id"] and len(d["asked"]) == 1
+    assert d["line"] == "закрыл «Позвонить Ивану» · ещё 1 похожее — спрошу вечером · у Ивана в хронологии"

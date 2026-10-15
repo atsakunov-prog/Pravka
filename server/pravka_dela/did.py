@@ -197,6 +197,9 @@ def line(res: dict, gen: str = "") -> str:
     at = f" · у {gen} в хронологии" if gen else " · в хронологии"
     if res.get("closed_title"):
         out = f"закрыл «{res['closed_title']}»"
+        if res.get("asked"):  # сквозной тест 15.10.2026: вопросы о похожих уходили в «Подскажи», а строка о них молчала
+            n = len(res["asked"])
+            out += f" · ещё {n} похож{'ее' if n == 1 else 'их'} — спрошу вечером"
     elif res.get("asked"):
         out = "записал сделанным · " + (f"похожих у {gen} " if gen else "похожих ") + f"{len(res['asked'])} — спрошу вечером"
     else:

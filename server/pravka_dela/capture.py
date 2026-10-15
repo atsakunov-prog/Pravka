@@ -51,6 +51,7 @@ DEFAULT_EVENING = (19, 0)  # «напомни …» без времени — с
 LATE_HOUR = 18             # после 18:00 — завтра 9:00
 MORNING = (9, 0)
 WAKE = threading.Event()   # capture.say с ждущей наговоркой будит фоновый разбор (__main__.capture_loop)
+SYNC_GRACE_MIN = 5         # наговорку строки веба (say_now) фоновый цикл не трогает 5 минут — её разбирает сам запрос
 REF_PREFIX = "capture:"
 ROUTE = "capture"
 CAPTURE_KEY = "prompt.raznoska_capture"
@@ -290,6 +291,11 @@ def tokens(text: str) -> list[dict]:
 
 def _words_of(tt: list[dict]) -> list[str]:
     return [t["n"] for t in tt]
+
+
+def _text(tt: list[dict]) -> str:
+    """Слова обратно в текст с запятыми, как сказано (заметка, идея): «в январе, но может сдвинуться», а не «в январе но»."""
+    return " ".join(t["w"] + ("," if t["comma"] and i < len(tt) - 1 else "") for i, t in enumerate(tt))
 
 
 # Неопределённая форма: на -ть, -ться, -чь и известные на -ти. Существительные на -ть и -ость — не глаголы.
@@ -690,7 +696,9 @@ def _rule_remind(tt: list[dict], ctx: Ctx) -> dict | None:
                 "place_words": _place_words(named or nom, prep)}
         if not named:
             item["warn"] = f"место «{nom}» телефон не знает: добавь его в автопилоте"
-        return item
+        # Человек и клиент — как у дела (сквозной тест 15.10.2026: «… договор для Ромашки» ложилось без клиента, а
+        # «… отправить Ивану договор» — без Ивана, и «отправил договор Ивану» потом не гасило напоминание).
+        return _task_people(item, rest, ctx)
     lo, hi = trig
     after = _when_edges(tt, hi, len(tt), ctx.now, at_start=True, at_end=True)
     before = _when_edges(tt, 0, lo, ctx.now, at_start=True, at_end=False) if lo > 0 else []
@@ -711,20 +719,40 @@ def _rule_remind(tt: list[dict], ctx: Ctx) -> dict | None:
     if not _rest_ok(rest):
         return None
     at = _remind_at(got, ctx.now)
-    return {"bucket": "remind", "title": _title(rest), "fields": {"kind": "remind", "remind_at": remind.iso(at)}}
+    return _task_people({"bucket": "remind", "title": _title(rest), "fields": {"kind": "remind", "remind_at": remind.iso(at)}},
+                        rest, ctx)
 
 
 def _rule_idea(tt: list[dict], ctx: Ctx) -> dict | None:
-    """И: «идея: …», «есть идея …», «мысль на будущее …» — идея у клиента и человека из слов."""
-    for head in IDEA_HEAD:
-        if _match(tt, 0, head):
-            rest = tt[len(head):]
+    """И: «идея: …», «есть идея …», «мысль на будущее …» — идея у клиента и человека из слов. И «Ромашка: идея — …»
+    («Иван: идея …»): кому — первыми словами до двоеточия или тире (сквозной тест 15.10.2026: эта форма уходила модели,
+    5–6 с вместо доли секунды)."""
+    to: list[dict] = []
+    for start in [0] + [k + 1 for k in range(min(3, len(tt) - 1)) if tt[k]["comma"]][:1]:
+        head = next((h for h in IDEA_HEAD if _match(tt, start, h)), None)
+        if head:
+            to, rest = tt[:start], tt[start + len(head):]
             break
     else:
         return None
-    text = " ".join(t["w"] for t in rest).strip(" ,:-—")
+    text = _text(rest).strip(" ,:-—")
     if not text:
         return None
+    if to:
+        # «X:» — клиент или человек; иначе это не адрес идеи, а начало мысли — модели.
+        got = ctx.person(_words_of(to)[:2])
+        proj = None if got and "person" in got else ctx.project(_words_of(to))
+        if not proj and not (got and "person" in got):
+            return None
+        item = {"bucket": "idea", "text": text}
+        if proj:
+            item["project_id"] = str(proj["id"])
+        else:
+            item["person_id"] = got["person"]["id"]
+            client = ctx.client_of(got["person"]["id"])
+            if client:
+                item["project_id"] = client
+        return item
     words = _words_of(rest)
     proj = ctx.project(words)
     who, _, _ = ctx.find_person(rest)
@@ -745,7 +773,7 @@ def _rule_note(tt: list[dict], ctx: Ctx) -> dict | None:
     if end is None:
         return None
     named = tt[2:end + 1]
-    text = " ".join(t["w"] for t in tt[end + 1:]).strip(" ,:-—")
+    text = _text(tt[end + 1:]).strip(" ,:-—")
     if not text:
         return None
     item = {"bucket": "note", "text": _cap(text)}
@@ -776,6 +804,20 @@ def _person_head(tt: list[dict], ctx: Ctx) -> tuple[dict | None, int]:
     return (got, 1) if got else (None, 0)
 
 
+def _task_clause(body: list[dict]) -> bool:
+    """В словах человека — дело: часть фразы (начало или после запятой) начинается с глагола, хоть после «надо»
+    («Ольга говорит, подпишут в среду, надо подготовить счёт»; «Иван сказал подготовить счёт»). Это факт и дело разом —
+    модели (сквозной тест 15.10.2026: правило клало всю фразу заметкой, и счёт терялся)."""
+    starts = [0] + [j + 1 for j, t in enumerate(body[:-1]) if t["comma"]]
+    for j in starts:
+        k = j
+        while k < len(body) and body[k]["n"] in LEAD_FILLER:
+            k += 1
+        if k < len(body) and is_inf(body[k]["n"]):
+            return True
+    return False
+
+
 def _rule_said(tt: list[dict], ctx: Ctx) -> dict | None:
     """З1 «Иван сказал, …» — заметка у человека; С2 «Иван прислал сверку» — сделано, ждал от него."""
     got, k = _person_head(tt, ctx)
@@ -789,9 +831,9 @@ def _rule_said(tt: list[dict], ctx: Ctx) -> dict | None:
             pass  # «Иван написал письмо» — не речь; ниже — как «прислал»
         else:
             body = rest[1:] if rest and rest[0]["n"] == "что" else rest
-            if not body or (v in SPEECH_TASK and is_inf(body[0]["n"])):
+            if not body or (v in SPEECH_TASK and is_inf(body[0]["n"])) or _task_clause(body):
                 return None
-            text = " ".join(t["w"] for t in body).strip(" ,:-—")
+            text = _text(body).strip(" ,:-—")
             item = {"bucket": "note", "text": text, "summary": f"{_cap(said)}: {text}", "person_said": said}
             if "person" in got:
                 item["person_id"] = got["person"]["id"]
@@ -827,6 +869,10 @@ def _rule_did(tt: list[dict], ctx: Ctx) -> dict | None:
     if not prefixed and not (1 <= len(who_words) <= 2):
         return None
     got = ctx.person(_words_of(who_words)[:2]) if who_words else None
+    if not got and who_words:
+        # «отправил договор Ивану» — предмет, потом человек (сквозной тест 15.10.2026: человек терялся, и обещание
+        # «Отправить договор Ивану» оставалось открытым).
+        got, _, _ = ctx.find_person(who_words)
     item = {"bucket": "did", "title": _cap(" ".join(t["w"] for t in body)), "said": " ".join(t["w"] for t in body),
             "fields": {"ball": "mine"}}
     if got and "person" in got:
@@ -957,6 +1003,26 @@ def _project_row(conn, pid) -> dict | None:
     return conn.execute("SELECT id, name, kind FROM crm.projects WHERE id = %s", (str(pid),)).fetchone()
 
 
+_PERSON_PREPS = frozenset({"для", "у", "к", "ко", "с", "со", "от"})
+
+
+def _without(body: str, p: dict | None) -> str:
+    """Строка «Ждёт от тебя Иван Тестов: прислать Ивану модель» → «… : прислать модель»: человек уже назван в начале
+    строки (сквозной тест 15.10.2026: «Ждёт от тебя Ольга …: подготовить договор для Ольги»). Только строка — название
+    дела остаётся, как сказано. Ничего не осталось — как было."""
+    if not p:
+        return body
+    keys = [k for k in people.words(f"{p['name']} {p.get('short') or ''}") if len(k) >= 3]
+    words, out = body.split(), []
+    for w in words:
+        if any(people.same(_n(w.strip(_EDGE)), k) for k in keys):
+            if out and _n(out[-1]) in _PERSON_PREPS:
+                out.pop()
+            continue
+        out.append(w)
+    return " ".join(out) if out else body
+
+
 def line_of(conn, item: dict, now: dt.datetime) -> str:
     """Строка подтверждения корзины (spec-0 §2.5): «Напомню сегодня в 12:00: отправить счёт в Контуре»."""
     today = now.date()
@@ -977,6 +1043,16 @@ def line_of(conn, item: dict, now: dt.datetime) -> str:
         tail = ""
         if t.get("due_time"):
             tail = f" · {'к' if item.get('by_deadline') else 'в'} {str(t['due_time'])[:5].lstrip('0') or '0:00'}"
+        # «Жду» и «Отбить» со сроком — чьё дело, видно в строке (сквозной тест 15.10.2026: «На завтра: Иван: прислать
+        # отчёт» читалось как своё дело на завтра).
+        p = _person_row(conn, t.get("person_id")) if (t.get("ball") == "waiting" or t.get("owed")) else None
+        if p:
+            body = _without(_lowfirst(re.sub(r"^[^:]{1,40}:\s*", "", t.get("title") or "")), p)
+            day = day_on(d, today)
+            day = day[0].lower() + day[1:]
+            if t.get("ball") == "waiting":
+                return f"Жду от {genitive(p['name'])}: {body} · {day}{tail}"
+            return f"Ждёт от тебя {p['name']}: {body} · {day}{tail}"
         return f"{day_on(d, today)}: {what}{tail}"
     if b == "back":
         d = dt.date.fromisoformat(str(t.get("back_on"))[:10])
@@ -988,7 +1064,7 @@ def line_of(conn, item: dict, now: dt.datetime) -> str:
     if b in ("waiting", "owed", "agenda"):
         p = _person_row(conn, t.get("person_id"))
         name = p["name"] if p else ""
-        body = re.sub(r"^[^:]{1,40}:\s*", "", t.get("title") or "")
+        body = _without(re.sub(r"^[^:]{1,40}:\s*", "", t.get("title") or ""), p)
         if b == "waiting":
             return f"Жду от {genitive(name)}: {_lowfirst(body)} · неделя без ответа — на виду" if name else f"Жду: {what}"
         if b == "owed":
@@ -1075,6 +1151,19 @@ def short_of(item: dict, now: dt.datetime) -> str:
     if b == "back" and t.get("back_on"):
         d = dt.date.fromisoformat(str(t["back_on"])[:10])
         return f"потом — верну {WD_SHORT[d.weekday()]}" if 1 < (d - today).days < 7 else "потом — " + back_say(d, today)
+    # Сквозной тест 15.10.2026: «Разложил 2: на день · жду» не говорил, когда и от кого, — а строка для того и есть.
+    who = re.match(r"^([^:]{1,40}):", t.get("title") or "")
+    if b in ("day", "task_remind") and t.get("due_date"):
+        d = dt.date.fromisoformat(str(t["due_date"])[:10])
+        word = day_on(d, today)
+        word = word[0].lower() + word[1:]
+        if b == "day" and who and t.get("ball") == "waiting":
+            return f"жду от {genitive(who.group(1).strip())} {word}"
+        return ("дело " if b == "task_remind" else "") + word
+    if b in ("waiting", "owed", "agenda") and who:
+        name = who.group(1).strip()
+        return {"waiting": f"жду от {genitive(name)}", "owed": f"ждёт {name}",
+                "agenda": f"при встрече с {instrumental(name)}"}[b]
     return {"now": "в «Сейчас»", "today": "на сегодня", "day": "на день", "task_remind": "дело с напоминанием",
             "waiting": "жду", "owed": "ждут от тебя", "agenda": "при встрече", "note": "заметка", "idea": "идея",
             "did": "сделано", "cancelled": "отменено", "error": "не разложено"}.get(b, b)
@@ -1338,6 +1427,15 @@ def _move(conn, user, item: dict, to: str, op: dict, ctx: Ctx, ref: str, source:
         _undo_all(conn, user, item)
         return {**item, "bucket": "cancelled", "was_line": item.get("line"), "undo": []}
     if b in TASK_BUCKETS and item.get("task"):
+        # Дело могли поправить мимо пилюли (кнопка уведомления «Через час», карточка): кнопка работает с ним, каким оно
+        # стало, а не со снимком захвата (сквозной тест 15.10.2026: «Через час», потом «Это дело» — дело ложилось на
+        # день прежнего напоминания, а напоминание — на сегодня).
+        fresh = store.task_by(conn, str(item["task"]["id"]))
+        if fresh:
+            item = {**item, "task": _snap(fresh)}
+            if fresh["status"] != "open":
+                raise CaptureError("дело уже " + ("сделано" if fresh["status"] == "done" else "отменено")
+                                   + " — поправь в самом деле")
         clear_back = {"back_on": None, "back_said": None}
         if to == "time":
             at = _at_option(str(op.get("at") or "hour"), ctx.now)
@@ -1432,6 +1530,7 @@ def op_capture_move(conn, user, op):
     if row["capture"] == "error" or to in ("retry", "back_task"):
         if to == "retry":
             res = {**res, "error": None, "head": f"Записал «{_short(row['text'], 40)}» — раскладываю", "items": []}
+            res.pop("sync_at", None)  # повтор — уже фоновому циклу, не строке веба
             conn.execute("UPDATE tasks.dictations SET capture = 'pending', capture_result = %s WHERE id = %s",
                          (Jsonb(store.jsonable(res)), row["id"]))
             WAKE.set()
@@ -1495,6 +1594,24 @@ def with_capture(text: str, block: str) -> str:
 IDEA_WORD = re.compile(r"(?:^|[\s,.:;!(«])(?:идея|идею|идеи|мысль на будущее)(?:$|[\s,.:;!)»])", re.I)
 
 
+_SAID_HEAD = re.compile(r"^(?P<who>[^\s,:]+(?:\s+[^\s,:]+)?)\s+(?P<v>" + "|".join(sorted(SPEECH, key=len, reverse=True))
+                        + r")(?=[\s,:—–-])[\s,:—–-]*(?:что\b[\s,]*)?", re.I)
+
+
+def _said_off(text: str, ctx: Ctx, person_id: str) -> tuple[str, str | None]:
+    """«Иван сказал, что бюджет будет в январе» → («бюджет будет в январе», «Иван»): кто сказал — уже человек заметки,
+    как у правила З1 (там же и запись хронологии «Иван: …»). Сквозной тест 15.10.2026: модель клала заметку целиком, и
+    строка выходила «Заметка у Ивана Петрова: иван сказал, что …». Говорит не этот человек — текст как есть."""
+    m = _SAID_HEAD.match(text)
+    if not m:
+        return text, None
+    got = ctx.person([_n(w) for w in m.group("who").split()])
+    if not got or "person" not in got or got["person"]["id"] != person_id:
+        return text, None
+    rest = text[m.end():].strip(" ,:-—")
+    return (rest, m.group("who")) if rest else (text, None)
+
+
 def _model_date(s: str, today: dt.date) -> dt.date | None:
     try:
         d = dt.date.fromisoformat(str(s or "").strip()[:10])
@@ -1556,8 +1673,13 @@ def from_model(data: dict, index: dict, text: str, ctx: Ctx, places: list[str], 
         said_place = (t.get("remind_place") or "").strip()
         place = "" if at else remind.match_place(said_place, places)
         if at or place:
-            at_d = remind.at_of(at).date() if at else None
-            own_due = due_d and not (at_d and due_d == at_d and not due_time)
+            at_t = remind.at_of(at) if at else None
+            at_d = at_t.date() if at_t else None
+            # Свой срок — только другой день или другой час, чем у напоминания. «в 12 … не забыть»: модель ставит и
+            # срок с часом 12:00, и напоминание в 12:00 — это один миг, то есть напоминание, а не дело в куче
+            # (сквозной тест 15.10.2026: легло «Дело на завтра … напомню завтра в 12:00»).
+            same = bool(at_t) and due_d == at_d and (not due_time or due_time == at_t.strftime("%H:%M"))
+            own_due = due_d and not same
             if place and not own_due:
                 items.append({"bucket": "place", "title": title,
                               "fields": {**fields, "kind": "remind", "remind_place": place}})
@@ -1591,9 +1713,14 @@ def from_model(data: dict, index: dict, text: str, ctx: Ctx, places: list[str], 
         text_ = " ".join(str(n.get("text") or "").split())
         if not text_:
             continue
-        item = {"bucket": "note", "text": text_}
         pid = parse._one(index, "projects", n.get("project") or "") or defaults.get("project_id")
         person = parse._one(index, "people", n.get("person") or "")
+        said_by = None
+        if person:
+            text_, said_by = _said_off(text_, ctx, str(person))
+        item = {"bucket": "note", "text": text_}
+        if said_by:
+            item.update(summary=f"{_cap(said_by)}: {text_}", person_said=said_by)
         if person:
             item["person_id"] = str(person)
             client = ctx.client_of(str(person)) if not pid else None
@@ -1743,7 +1870,9 @@ def tick(url: str, key: str = "", proxy: str | None = None, ask_fn=None, limit: 
     службы посреди разбора безвреден: наговорка так и ждёт и доразберётся в следующий тик. Ответ — сколько разобрано."""
     with db.session(url, "system", via="capture") as conn:
         rows = conn.execute("SELECT id, owner_id, text, at, capture_from, capture_hint FROM tasks.dictations "
-                            "WHERE capture = 'pending' ORDER BY at LIMIT %s", (limit,)).fetchall()
+                            "WHERE capture = 'pending' AND coalesce((capture_result ->> 'sync_at')::timestamptz, "
+                            "'-infinity') < now() - make_interval(mins => %s) ORDER BY at LIMIT %s",
+                            (SYNC_GRACE_MIN, limit)).fetchall()
     n = 0
     for r in rows:
         ref = r["id"][len(REF_PREFIX):]
@@ -1803,7 +1932,11 @@ def say_now(url: str, user: str, text: str, frm: str, key: str, proxy: str | Non
     with db.session(url, user, actor, via) as conn:
         store.op_dictation_add(conn, user, {"dictation": {"id": REF_PREFIX + ref, "text": text,
                                                            "source": "web" if frm == "web" else "phone"}})
-        conn.execute("UPDATE tasks.dictations SET capture = 'pending', capture_result = %s, capture_from = %s WHERE id = %s",
+        # sync_at — «эту наговорку разбирает строка веба сама»: фоновый цикл той же службы (tick) её не берёт, пока не
+        # прошло SYNC_GRACE_MIN (запрос веба умер — доразберёт цикл). Без метки цикл брал её через ≤ 5 с, пока строка
+        # ждала Claude: два запроса и два набора дел (сквозной тест 15.10.2026).
+        conn.execute("UPDATE tasks.dictations SET capture = 'pending', capture_result = %s || jsonb_build_object('sync_at', now()), "
+                     "capture_from = %s WHERE id = %s",
                      (Jsonb({"by": None, "from": frm, "items": []}), frm, REF_PREFIX + ref))
     now = dt.datetime.now(MSK)
     try:

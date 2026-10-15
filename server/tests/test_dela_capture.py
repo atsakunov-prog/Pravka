@@ -110,6 +110,8 @@ def test_capture_cases(dela, at, case):
         for k, v in case["task"].items():
             if k == "person":
                 assert (str(t["person_id"]) if t["person_id"] else None) == (ids[v] if v else None), (k, t["person_id"])
+            elif k == "project":
+                assert (str(t["project_id"]) if t["project_id"] else None) == (ids[v] if v else None), (k, t["project_id"])
             elif k == "remind_at" and v:
                 assert same_at(t["remind_at"], v), (t["remind_at"], v)
             else:
@@ -259,11 +261,76 @@ def test_model_buckets_by_fields(dela, at):
     lines = [x["line"] for x in got["items"]]
     assert lines[1].startswith("Дело на завтра: подготовить договор · напомню сегодня в 18:00")
     assert lines[3] == "Жду от Ивана Тестова: прислать модель · неделя без ответа — на виду"
-    assert lines[4] == "Ждёт от тебя Ольга Тестова: ответить Ольге · в «Отбить»"
+    assert lines[4] == "Ждёт от тебя Ольга Тестова: ответить · в «Отбить»"  # кто — уже в начале строки
     assert lines[5] == "При встрече с Иваном Тестовым: обсудить фонды"
     assert task(dela, got["items"][6]["task"]["id"])["back_on"].isoformat() == "2026-10-20"
     assert str(got["items"][7].get("project_id")) == ids["romashka"]
     assert got["items"][8]["title"] == "Предложить дашборд"  # слова «идея» не было — дело
+
+
+def test_model_same_moment_is_a_reminder(dela, at):
+    """«в 12 … не забыть»: модель ставит и срок с часом 12:00, и напоминание в 12:00 — один миг, значит напоминание, не
+    дело в куче (сквозной тест 15.10.2026). Свой час или свой день у дела — дело с напоминанием, как было."""
+    seed(dela)
+    cap = say(dela, "короче в 12 Контур счёт отправить не забыть")
+    capture.tick(dela, ask_fn=lambda h, u: _model(tasks=[
+        {"title": "Отправить счёт в Контуре", "due": "2026-10-15", "due_time": "12:00", "remind_at": "2026-10-15 12:00"},
+        {"title": "Созвон с Иваном", "person": "Иван", "due": "2026-10-15", "due_time": "15:00", "remind_at": "2026-10-15 14:00"}]))
+    got = store.view(dela, "sasha", "capture", ref=cap["ref"])["capture"]
+    assert [x["bucket"] for x in got["items"]] == ["remind", "task_remind"]
+    t = task(dela, got["items"][0]["task"]["id"])
+    assert t["kind"] == "remind" and t["due_date"] is None and t["due_time"] is None
+    assert got["items"][0]["line"] == "Напомню сегодня в 12:00: отправить счёт в Контуре"
+
+
+def test_model_note_without_said_prefix(dela, at):
+    """Заметка со слов человека — сам факт, «Иван: …» в хронологии, как у правила З1; говорит другой — как есть."""
+    ids = seed(dela)
+    cap = say(dela, "Иван сказал, бюджет будет в январе. Ольга — что договор в пятницу.")
+    capture.tick(dela, ask_fn=lambda h, u: _model(notes=[
+        {"text": "Иван сказал, что бюджет будет в январе", "project": "", "person": "Иван"},
+        {"text": "Ольга сказала, что договор в пятницу", "project": "", "person": "Иван"}]))
+    got = store.view(dela, "sasha", "capture", ref=cap["ref"])["capture"]
+    assert got["items"][0]["line"] == "Заметка у Ивана Тестова: бюджет будет в январе · покажу перед встречей"
+    assert got["items"][1]["line"].startswith("Заметка у Ивана Тестова: ольга сказала, что договор")
+    with dela_db.session(dela, "sasha") as c:
+        row = c.execute("SELECT summary, project_id FROM crm.interactions WHERE id = %s", (got["items"][0]["note_id"],)).fetchone()
+    assert row["summary"] == "Иван: бюджет будет в январе" and str(row["project_id"]) == ids["romashka"]
+
+
+def test_model_waiting_and_owed_with_due_say_whose(dela, at):
+    """«Жду» и «Отбить» со сроком — в строке чьё («На завтра: Иван: прислать отчёт» читалось своим делом); человек,
+    названный в начале строки, второй раз не повторяется («… : прислать Ивану модель», «… для Ольги» — сквозной тест)."""
+    seed(dela)
+    cap = say(dela, "Иван обещал прислать отчёт до пятницы и я сказал Ивану что пришлём модель к среде, а Ольге — договор")
+    capture.tick(dela, ask_fn=lambda h, u: _model(tasks=[
+        {"title": "Иван: прислать отчёт", "person": "Иван", "ball": "waiting", "due": "2026-10-16"},
+        {"title": "Прислать Ивану модель", "person": "Иван", "ball": "owed", "due": "2026-10-21"},
+        {"title": "Подготовить договор для Ольги", "person": "Ольга", "ball": "owed", "due": "2026-10-16"}]))
+    got = store.view(dela, "sasha", "capture", ref=cap["ref"])["capture"]
+    assert [x["line"] for x in got["items"]] == ["Жду от Ивана Тестова: прислать отчёт · на завтра",
+                                                  "Ждёт от тебя Иван Тестов: прислать модель · на среду 21.10",
+                                                  "Ждёт от тебя Ольга Тестова: подготовить договор · на завтра"]
+    assert got["head"] == "Разложил 3: жду от Ивана на завтра · на среду 21.10 · на завтра"
+    # Название дела — как сказано: строка только не повторяет человека.
+    assert task(dela, got["items"][1]["task"]["id"])["title"] == "Прислать Ивану модель"
+
+
+def test_move_sees_task_as_it_is_now(dela, at):
+    """Кнопка под строкой — с делом, каким оно стало: «Завтра» в уведомлении, потом «Это дело» — дело на завтра; сделанное
+    кнопкой уведомления — пилюля словами отказывает (сквозной тест 15.10.2026)."""
+    seed(dela)
+    cap = say(dela, "напомни в 12 в Контуре отправить счёт")
+    tid = cap["items"][0]["task"]["id"]
+    tomorrow = db_today(dela) + dt.timedelta(days=1)  # кнопка живёт в настоящем «сейчас» сервера
+    ops(dela, "sasha", {"op": "task.set", "id": tid, "set": {"remind_at": f"{tomorrow.isoformat()}T09:00:00+03:00",
+                                                             "remind_place": None}})
+    moved = move(dela, cap["ref"], "task")
+    assert task(dela, tid)["due_date"] == tomorrow
+    assert moved["head"] == "Переложил: Дело на завтра: отправить счёт в Контуре · напомню завтра в 9:00"
+    ops(dela, "sasha", {"op": "task.done", "id": tid})
+    r = ops(dela, "sasha", {"op": "capture.move", "ref": cap["ref"], "item": 0, "to": "remind"})[0]
+    assert not r["ok"] and "уже сделано" in r["error"]
 
 
 def test_model_idea_only_with_the_word(dela, at):
@@ -528,6 +595,33 @@ def test_web_line_rule_without_claude(dela, at):
     with pytest.raises(ask.AskError):
         ask.run(dela, "sasha", "купить магний", {"title": "Сейчас", "history": [{"said": "x", "reply": "y", "done": ""}]},
                 "", None)
+
+
+def test_web_line_model_not_taken_by_loop(dela, at):
+    """Строка веба раскладывает моделью сама (say_now, route new): фоновый цикл той же службы её наговорку не берёт,
+    пока строка ждёт Claude, — иначе два запроса и два набора дел (сквозной тест 15.10.2026: цикл будится каждые 5 с,
+    а Opus high думает 5–15 с). Сбой и «Повторить» — уже циклу."""
+    seed(dela)
+    calls, loop_calls = [], []
+
+    def fake(head, user_text):
+        calls.append(user_text)
+        assert capture.tick(dela, ask_fn=lambda h, u: loop_calls.append(u)) == 0  # тик посреди запроса
+        return _model(tasks=[{"title": "Подготовить счёт Ромашке"}])
+
+    out = capture.say_now(dela, "sasha", "фраза без формы правила про счёт", "web", "", None, ask_fn=fake, skip_rule=True)
+    assert out["status"] == "done" and len(calls) == 1 and loop_calls == []
+    assert [x["bucket"] for x in out["items"]] == ["back"]
+
+    def boom(head, user_text):
+        raise capture.CaptureError("Claude отказался разбирать эту фразу")
+
+    ref = str(uuid.uuid4())
+    with pytest.raises(capture.CaptureError):
+        capture.say_now(dela, "sasha", "ещё фраза без формы правила", "web", "", None, ask_fn=boom, skip_rule=True, ref=ref)
+    assert move(dela, ref, "retry", item=-1)["status"] == "pending"
+    assert capture.tick(dela, ask_fn=lambda h, u: _model(tasks=[{"title": "Ещё фраза"}])) == 1
+    assert store.view(dela, "sasha", "capture", ref=ref)["capture"]["status"] == "done"
 
 
 def test_web_line_without_key_rule_answers(dela):
