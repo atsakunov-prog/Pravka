@@ -140,6 +140,7 @@ private const val FILTER_NAV = "f:"
 private const val LATE_NODE = "late"
 /** Блок «Напоминания» внизу «Всех дел» (захват, 15.10.2026): напоминания — не дела, в уровнях их нет. */
 private const val REMIND_NODE = "reminders"
+private const val REMIND_STALE_NODE = "reminders-stale"
 
 /** Подпись блока напоминаний: куда они приходят — телефоном или ботом (как `remindBox` веба). */
 internal fun remindSub(snap: Dela.Snapshot): String =
@@ -695,8 +696,14 @@ fun DelaTab(
             // Напоминания (захват, 15.10.2026) — не дела: в уровнях их нет, они внизу своим блоком, по времени
             // (`remindersAll` веба). На «Сегодня» они стоят в свой час.
             val reminders = if (pk != null) emptyList() else DelaGroups.remindersAll(snap, me)
-            val remindNode = if (reminders.isEmpty()) emptyList()
-            else listOf(DelaGroups.Node(REMIND_NODE, "Напоминания", 0, null, reminders, sub = remindSub(snap)))
+            // Прошедшие больше суток назад и не отмеченные — своей группой ниже (на «Сегодня» их уже нет).
+            val (stale, live) = reminders.partition { DelaGroups.isRemindStale(it, today) }
+            val remindNode = listOfNotNull(
+                live.takeIf { it.isNotEmpty() }?.let { DelaGroups.Node(REMIND_NODE, "Напоминания", 0, null, it, sub = remindSub(snap)) },
+                stale.takeIf { it.isNotEmpty() }?.let {
+                    DelaGroups.Node(REMIND_STALE_NODE, "Напоминания: прошли — не отмечено", 0, null, it, sub = "старше вчерашнего — отметь, перенеси или отмени")
+                },
+            )
             DelaScreen(
                 "Все дела",
                 listOfNotNull(

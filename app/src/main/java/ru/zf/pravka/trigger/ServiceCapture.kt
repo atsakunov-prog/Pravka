@@ -142,11 +142,11 @@ internal fun PravkaAccessibilityService.showCapture(face: CaptureFace, r: Captur
     )
 }
 
-/** Кнопка поправки: у «Время» — сперва варианты часа (той же пилюлей), остальное — сразу на сервер. */
+/** Кнопка поправки: у «Время» и «Какой Иван» — сперва варианты (той же пилюлей), остальное — сразу на сервер. */
 private fun PravkaAccessibilityService.onCaptureChip(face: CaptureFace, r: Capture.Result, i: Int, chip: Capture.Chip) {
     if (chip.options.isNotEmpty()) {
         showOn(
-            face, "Когда напомнить?",
+            face, Capture.optionsQuestion(chip),
             actions = chip.options.map { opt -> DictationPill.ResultAction(opt.label) { captureMove(face, r, i, chip, opt) } },
             holdMs = CAPTURE_HOLD_MS,
         )

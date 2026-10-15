@@ -193,15 +193,21 @@ object DelaGroups {
      */
 
     /**
-     * Напоминание на «Сегодня» (`isRemindToday` веба): открытое своё напоминание с мигом до конца сегодня (и прошедшее
+     * Напоминание на «Сегодня» (`isRemindToday` веба): открытое своё напоминание с мигом сегодня или вчера (вчерашнее
      * неотмеченное — «вчера 12:00 · не отмечено»), по месту без времени; плюс дело с напоминанием на сегодня, если его
-     * срок не сегодня (иначе оно и так в «Сегодня»).
+     * срок не сегодня (иначе оно и так в «Сегодня»). Старше вчерашнего — во «Всех делах» группой «прошли — не отмечено»
+     * ([isRemindStale]): смахнул уведомление — и строка висела бы на «Сегодня» бессрочно (проверка 16.10.2026).
      */
     fun isRemindToday(t: Dela.Task, me: String, today: String): Boolean {
         if (!t.open || !mine(me, t) || t.goal) return false
-        if (t.remind) return if (t.remindAt.isNotBlank()) mskDay(t.remindAt) <= today else t.remindPlace.isNotBlank()
+        if (t.remind) return if (t.remindAt.isNotBlank()) mskDay(t.remindAt) <= today && !isRemindStale(t, today) else t.remindPlace.isNotBlank()
         return t.remindAt.isNotBlank() && mskDay(t.remindAt) == today && t.dueDate != today
     }
+
+    /** Напоминание прошло больше суток назад и не отмечено (`isRemindStale` веба, `capture.REMIND_STALE_IF` сервера). */
+    fun isRemindStale(t: Dela.Task, today: String): Boolean =
+        t.remind && t.remindAt.isNotBlank() &&
+            mskDay(t.remindAt) < runCatching { java.time.LocalDate.parse(today).minusDays(1).toString() }.getOrDefault(today)
 
     /** Миг напоминания в мс; нет времени (по месту) — в конец списка. */
     fun remindMs(t: Dela.Task): Long =

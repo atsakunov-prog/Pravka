@@ -54,7 +54,10 @@ class CaptureE2eModelTest {
         assertEquals(listOf("did", "day"), buckets(said("позвонил Ольге, договорились на пятницу подготовить договор")))
         // Без слова «идея» — дело «потом», не идея.
         assertEquals(listOf("back"), buckets(said("надо бы Ромашке предложить дашборд")))
-        assertEquals(listOf("day", "note"), buckets(said("Ольга говорит, подпишут в среду, надо подготовить счёт")))
+        val olga = said("Ольга говорит, подпишут в среду, надо подготовить счёт")
+        assertEquals(listOf("day", "note"), buckets(olga))
+        // День в заметке — словами, как сказано, без даты в скобках (перепрогон моделью 16.10.2026).
+        assertTrue(olga.items[1].line, olga.items[1].line.contains("в среду") && !olga.items[1].line.contains("(20"))
         // «в 12 … не забыть» — напоминание (один миг), а не дело в куче.
         val bill = said("короче в 12 Контур счёт отправить не забыть")
         assertEquals(listOf("remind"), buckets(bill))
@@ -71,6 +74,10 @@ class CaptureE2eModelTest {
         assertTrue(Capture.line(promised), Capture.line(promised).startsWith("Ждёт от тебя Иван Петров: прислать модель · "))
         assertTrue(Capture.line(said("Иван обещал прислать отчёт до пятницы")).startsWith("Жду от Ивана Петрова: прислать отчёт · "))
         assertTrue(Capture.line(said("завтра созвон с Иваном в 15:00 по бюджету")).endsWith(" · в 15:00"))
+        // Проверка 16.10.2026: правило с ними молчит — раскладывает модель, глагол не теряется.
+        assertEquals("Заметка у Ивана Петрова: Иван хочет скидку · в карточке", Capture.line(said("Иван хочет скидку")))
+        assertEquals(listOf("waiting"), buckets(said("Иван обещал отчёт")))
+        assertEquals(listOf("back"), buckets(said("когда буду свободен, позвонить Ивану")))
     }
 
     @Test
@@ -91,6 +98,6 @@ class CaptureE2eModelTest {
             assertEquals(res.head, Capture.line(res))
         }
         val note = Capture.parse(control.first { it.getString("say").startsWith("Иван сказал") }.getJSONObject("capture"))!!
-        assertEquals("Заметка у Ивана Петрова: бюджет будет в январе · покажу перед встречей", Capture.line(note))
+        assertEquals("Заметка у Ивана Петрова: бюджет будет в январе · в карточке", Capture.line(note))
     }
 }

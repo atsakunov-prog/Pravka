@@ -48,12 +48,15 @@ object Capture {
         }
     }
 
-    /** Вариант кнопки «Время ▾»: «через час» → `at: hour`. */
-    data class Option(val label: String, val at: String)
+    /**
+     * Вариант кнопки со списком: у «Время ▾» — час («через час» → `at: hour`), у «Какой Иван ▾» — человек из тёзок
+     * (`person_id`; проверка 16.10.2026: тёзки — одна кнопка со списком, а не случайный Иван первым в строке пилюли).
+     */
+    data class Option(val label: String, val at: String = "", val personId: String = "")
 
     /**
      * Кнопка поправки одним касанием (`chips[]` сервера): подпись и куда переложить. [options] — у «Время» (выбор
-     * часа), [personId] — у тёзок заметки («Иван Тестов» · «Иван Петров»).
+     * часа) и «Какой Иван» (выбор человека), [personId] — у прежней кнопки человека (сервер до 16.10.2026).
      */
     data class Chip(val label: String, val move: String, val options: List<Option> = emptyList(), val personId: String = "") {
         /** «Отменить» — полная отмена записи. */
@@ -109,6 +112,7 @@ object Capture {
 
     const val MOVE_CANCEL = "cancel"
     const val MOVE_TIME = "time"
+    const val MOVE_PERSON = "person"
 
     // ------------------------------------------------------------ операции
 
@@ -130,9 +134,12 @@ object Capture {
                 if (personId.isNotBlank()) put("person_id", personId)
             }
 
-    /** Нажатая кнопка (или выбранный вариант «Время») — операция. */
+    /** Нажатая кнопка (или выбранный вариант «Время» / «Какой Иван») — операция. */
     fun moveFor(ref: String, item: Int, chip: Chip, option: Option? = null, opId: String = Dela.newId()): JSONObject =
-        moveOp(ref, item, chip.move, at = option?.at.orEmpty(), personId = chip.personId, opId = opId)
+        moveOp(ref, item, chip.move, at = option?.at.orEmpty(), personId = option?.personId?.ifBlank { null } ?: chip.personId, opId = opId)
+
+    /** Вопрос над вариантами кнопки: «Когда напомнить?» у времени, «Кто это?» у тёзок. */
+    fun optionsQuestion(chip: Chip): String = if (chip.move == MOVE_PERSON) "Кто это?" else "Когда напомнить?"
 
     /** Свой id захвата: uuid без лишнего — сервер берёт `[A-Za-z0-9_-]{1,64}`. */
     fun newRef(): String = Dela.newId()
@@ -182,7 +189,10 @@ object Capture {
             val label = c.str("label").ifBlank { return@mapNotNull null }
             val move = c.str("move").ifBlank { return@mapNotNull null }
             val opts = c.optJSONArray("options")?.let { oa ->
-                (0 until oa.length()).mapNotNull { j -> oa.optJSONObject(j)?.let { x -> Option(x.str("label"), x.str("at")).takeIf { it.label.isNotBlank() && it.at.isNotBlank() } } }
+                (0 until oa.length()).mapNotNull { j ->
+                    oa.optJSONObject(j)?.let { x -> Option(x.str("label"), x.str("at"), x.str("person_id")) }
+                        ?.takeIf { it.label.isNotBlank() && (it.at.isNotBlank() || it.personId.isNotBlank()) }
+                }
             }.orEmpty()
             Chip(label, move, opts, c.str("person_id"))
         }.take(3)
@@ -207,6 +217,15 @@ object Capture {
 
     /** Без связи с Делами: фраза ждёт в очереди на диске (spec-0 §2.5, строка «нет связи»). */
     const val OFFLINE_LINE = "Нет связи с Делами — записал, разложу, как появится связь"
+
+    /** Связь не падала, но Дела не ответили за 6 с (медленная сеть): фраза в очереди, итог придёт уведомлением. */
+    const val SLOW_LINE = "Записал — строка придёт уведомлением"
+
+    /** Ответа нет дольше 2,5 с — «Отправляю…» на месте строки, пока ждём (до 6 с). */
+    fun sendingLine(text: String): String {
+        val t = text.trim().replace(Regex("\\s+"), " ")
+        return "Отправляю «" + (if (t.length > 40) t.take(39) + "…" else t) + "»…"
+    }
 
     /** Пока модель раскладывает — то же, что скажет сервер, но до его ответа. */
     fun pendingLine(text: String): String {

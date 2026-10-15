@@ -51,6 +51,12 @@ class ReminderPlanTest {
         val y = snap(task("y", "2026-10-14T21:00:00+03:00"))
         val d2 = ReminderPlan.due(y, "me", ms("2026-10-15T08:00:00+03:00"), emptySet()).single()
         assertEquals("должно было вчера в 21:00 · Дела", ReminderPlan.body(d2, ms("2026-10-15T08:00:00+03:00"), msk))
+        // Бот уже прислал (телефон был без связи дольше запаса) — тихо и честно, своей отметкой не перебиваем.
+        val bot = task("b", "2026-10-15T12:00:00+03:00").copy(remindedAt = "2026-10-15T12:10:00+03:00", remindedVia = "bot")
+        val d3 = ReminderPlan.due(snap(bot), "me", now, emptySet()).single()
+        assertTrue(ReminderPlan.afterBot(d3))
+        assertFalse(ReminderPlan.afterBot(due.single()))
+        assertEquals("должно было в 12:00 · уже было в Telegram · Дела", ReminderPlan.body(d3, now, msk))
     }
 
     @Test

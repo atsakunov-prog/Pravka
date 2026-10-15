@@ -61,8 +61,8 @@ class CaptureE2eTest {
         val did = said("позвонил Ольге", "auto")
         assertEquals("did", did.items.single().bucket)
         assertEquals(listOf("Не закрывать", "Отменить"), did.lineChips.map { it.second.label })
-        // Правило не узнало («созвон с Женей…» — существительное первым): ничего не записано, решает развилка телефона.
-        assertEquals(Capture.Status.NONE, said("созвон с Женей завтра в 12:30", "rule").status)
+        // Правило не узнало («созвон с Иваном Тестовым…» — существительное первым): ничего не записано, решает развилка телефона.
+        assertEquals(Capture.Status.NONE, said("созвон с Иваном Тестовым завтра в 12:30", "rule").status)
     }
 
     @Test

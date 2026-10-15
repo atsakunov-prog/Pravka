@@ -40,8 +40,9 @@ class CaptureClient(
 ) {
 
     /**
-     * Чем кончилось: [result] — итог сервера (done, pending, error, none); [offline] — фраза в очереди, связи нет;
-     * [refused] — сервер отказал (его словами); [ms] — сколько ждали строку.
+     * Чем кончилось: [result] — итог сервера (done, pending, error, none); [offline] — фраза в очереди, ответа нет;
+     * [slow] — при этом связь не падала (медленная сеть, первый запрос после простоя): не «нет связи», а «строка придёт
+     * уведомлением»; [refused] — сервер отказал (его словами); [ms] — сколько ждали строку.
      */
     data class Outcome(
         val result: Capture.Result? = null,
@@ -49,11 +50,13 @@ class CaptureClient(
         val refused: String = "",
         val ms: Long = 0,
         val ref: String = "",
+        val slow: Boolean = false,
     ) {
         /** Строка для глаз — что бы ни случилось. */
         val line: String
             get() = when {
                 refused.isNotBlank() -> "Сервер не принял: $refused"
+                offline && slow -> Capture.SLOW_LINE
                 offline -> Capture.OFFLINE_LINE
                 result != null -> Capture.line(result)
                 else -> "Нет ответа Дел"
@@ -111,12 +114,16 @@ class CaptureClient(
         val op = Capture.sayOp(text, ref, lane, from, saidAt(), hint)
         val opId = op.optString("op_id")
         store.enqueue(listOf(op))
-        val reply = push(opId)
+        // Медленно (больше 2,5 с) — «Отправляю…» на месте строки, ждём до 6 с (проверка 16.10.2026: LTE с VPN и первый
+        // запрос после простоя давали «Нет связи с Делами», хотя запрос был в пути и ложился через секунду).
+        val reply = push(opId) { onPending(Capture.Result(ref, Capture.Status.PENDING, head = Capture.sendingLine(text), text = text)) }
         if (reply == null) {
             if (store.isQueued(opId)) {
-                log("захват ($from): нет связи с Делами — фраза в очереди («${text.take(60)}»)")
+                val down = netFailedSince(started)
+                log("захват ($from): " + (if (down) "нет связи с Делами" else "Дела не ответили за ${PUSH_MAX_MS / 1000} с") +
+                    " — фраза в очереди («${text.take(60)}»)")
                 follow(opId, ref, from)
-                return Outcome(offline = true, ms = System.currentTimeMillis() - started, ref = ref)
+                return Outcome(offline = true, slow = !down, ms = System.currentTimeMillis() - started, ref = ref)
             }
             // Ушла, а ответа в памяти нет (снята из очереди или ответ потерялся) — спросим вид.
             return finish(poll(ref, from, onPending), from, started, ref, pull = true)
@@ -138,12 +145,26 @@ class CaptureClient(
 
     /**
      * Отправить очередь сейчас и ждать ответа именно этой операции — не всего прохода: синк после очереди строку не
-     * задерживает. Не дождались за [PUSH_WAIT_MS] — null (связи нет или сервер медлит; проход идёт дальше сам).
+     * задерживает. Не дождались за [PUSH_WAIT_MS] — [onSlow] (строка «Отправляю…») и ждём дальше, до [PUSH_MAX_MS], пока
+     * проход не кончится; null — ответа нет (связь упала или сервер медлит; проход идёт дальше сам).
      */
-    private suspend fun push(opId: String): JSONObject? {
-        scope.launch(Dispatchers.IO) { runCatching { sync.pushNow(PUSH_WAIT_MS) } }
-        return withTimeoutOrNull(PUSH_WAIT_MS) { store.captured.first { it.containsKey(opId) }[opId] }
+    private suspend fun push(opId: String, onSlow: () -> Unit = {}): JSONObject? {
+        val job = scope.async(Dispatchers.IO) { runCatching { sync.pushNow(PUSH_MAX_MS) }.getOrDefault(false) }
+        withTimeoutOrNull(PUSH_WAIT_MS) { store.captured.first { it.containsKey(opId) }[opId] }?.let { return it }
+        if (job.isCompleted) return store.captureReply(opId)
+        onSlow()
+        return withTimeoutOrNull(PUSH_MAX_MS - PUSH_WAIT_MS) {
+            var got: JSONObject? = store.captureReply(opId)
+            while (got == null && !job.isCompleted) {
+                delay(150)
+                got = store.captureReply(opId)
+            }
+            got ?: store.captureReply(opId)
+        }
     }
+
+    /** Проход синка упал с ошибкой после [since] — связи с Делами правда нет (а не просто медленно). */
+    private fun netFailedSince(since: Long): Boolean = sync.status.value.lastErrorAt >= since
 
     private fun finish(res: Capture.Result?, from: String, started: Long, ref: String, pull: Boolean): Outcome {
         val ms = System.currentTimeMillis() - started
@@ -267,8 +288,10 @@ class CaptureClient(
     companion object {
         /** Сколько ждать правила мимо очереди: сам ответ — доли секунды, остальное — сеть через посредника. */
         const val RULE_WAIT_MS = 2_500L
-        /** Сколько ждать отправки очереди, прежде чем сказать «нет связи». */
+        /** Сколько ждать ответа очереди молча; дольше — строка «Отправляю…». */
         const val PUSH_WAIT_MS = 2_500L
+        /** Дольше этого ответа не ждём: «нет связи» (проход упал) или «строка придёт уведомлением» (медленно). */
+        const val PUSH_MAX_MS = 6_000L
         private const val POLL_MISSES = 5
         private const val FOLLOW_MAX_MS = 12 * 3_600_000L
         private const val LATE_STEP_MS = 30_000L

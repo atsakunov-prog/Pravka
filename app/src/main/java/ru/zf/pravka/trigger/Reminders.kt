@@ -47,6 +47,10 @@ class Reminders(private val app: PravkaApp) {
 
     companion object {
         const val CHANNEL = "dela_remind"
+        /** Напоминание, которое бот уже прислал в Telegram, — тихо, без всплытия ([ReminderPlan.afterBot]). */
+        const val QUIET_CHANNEL = "dela_remind_quiet"
+        /** Отметка показа не ушла (нет сети) — повторить через столько, а не ждать тика службы через 5 минут. */
+        private const val POKE_MS = 45_000L
         /** Итог захвата, пришедший позже (фраза ждала связи или модели), — тихо, без звука. */
         const val CAPTURE_CHANNEL = "dela_capture"
         /** Идеи за 10 минут до встречи с этим клиентом или человеком. */
@@ -80,14 +84,22 @@ class Reminders(private val app: PravkaApp) {
         runCatching { androidx.core.app.NotificationManagerCompat.from(app).areNotificationsEnabled() }.getOrDefault(false)
 
     /**
+     * Канал «Напоминания Дел» не выключен в Android: иначе телефон «показывает» в пустоту, отмечает показ — и бот молчит
+     * (проверка 16.10.2026). Канала ещё нет — он заведётся при первом показе, считаем включённым.
+     */
+    private fun channelOn(): Boolean = runCatching {
+        app.getSystemService(NotificationManager::class.java).getNotificationChannel(CHANNEL)?.importance != NotificationManager.IMPORTANCE_NONE
+    }.getOrDefault(true)
+
+    /**
      * Показывает ли телефон напоминания: Дела на сервере и в профиле, сервер это умеет (флаг `remind_phone`: бот ждёт
-     * отметку показа 3 минуты), тумблер включён, уведомления разрешены. Сервер старый — всё по-старому: шлёт бот, телефон
-     * молчит (иначе напоминание пришло бы дважды).
+     * отметку показа 10 минут), тумблер включён, уведомления разрешены и канал «Напоминания Дел» не выключен. Сервер
+     * старый — всё по-старому: шлёт бот, телефон молчит (иначе напоминание пришло бы дважды).
      */
     suspend fun on(): Boolean {
         if (!app.delaOnServer() || !app.profileStore.has(Profile.Mode.DELA)) return false
         app.delaStore.load()
-        return app.delaStore.view.value.remindPhoneOn && app.settings.remindPhoneFlow.first() && notificationsOn()
+        return app.delaStore.view.value.remindPhoneOn && app.settings.remindPhoneFlow.first() && notificationsOn() && channelOn()
     }
 
     /**
@@ -97,6 +109,10 @@ class Reminders(private val app: PravkaApp) {
     suspend fun fire(why: String): Unit = withContext(Dispatchers.IO) { mutex.withLock { fireLocked(why) } }
 
     private suspend fun fireLocked(why: String) {
+        // Сначала — сказать серверу, показывает ли телефон (шлётся, только когда поменялось): раньше это делали лишь тик
+        // службы доступности и тумблер, и без поднятой службы после обновления сервер не знал remind_phone — каждое
+        // напоминание приходило дважды (проверка 16.10.2026).
+        runCatching { syncSetting() }.onFailure { e -> app.eventLog.add("напоминания: настройка серверу — ${e.message}") }
         if (!on()) {
             ReminderAlarms.schedule(app, null)
             alarmNote = ""
@@ -117,10 +133,13 @@ class Reminders(private val app: PravkaApp) {
         if (due.isNotEmpty()) {
             shown.add(due.map { it.key })
             app.eventLog.add("напоминания ($why): показал ${due.size} — " + due.joinToString(", ") { "«${it.task.title.take(40)}»" + if (it.late) " (опоздал)" else "" })
-            // Бот у такого владельца ждёт 3 минуты отметки — отмечаем сразу, иначе придёт и в Telegram.
-            if (snap.remindPhoneOn) {
-                app.delaStore.enqueue(due.map { ReminderPlan.shownOp(it, now, ZONE) })
-                runCatching { app.delaSync.pushNow(4_000L) }
+            // Бот у такого владельца ждёт 10 минут отметки — отмечаем сразу, иначе придёт и в Telegram. Не ушло (нет
+            // сети) — ещё раз через 45 с, не дожидаясь тика службы. Уже присланное ботом своим показом не отмечаем.
+            val marks = due.filterNot { ReminderPlan.afterBot(it) }
+            if (snap.remindPhoneOn && marks.isNotEmpty()) {
+                app.delaStore.enqueue(marks.map { ReminderPlan.shownOp(it, now, ZONE) })
+                val sent = runCatching { app.delaSync.pushNow(4_000L) }.getOrDefault(false)
+                if (!sent) poke()
             }
         }
         // Перед встречей (ответ 5а: идеи «всплывают перед встречей»): за 10 минут до встречи, у клиента или человека
@@ -132,6 +151,16 @@ class Reminders(private val app: PravkaApp) {
         val shownNow = keys + due.map { it.key } + meetDue.map { it.key }
         val next = listOfNotNull(ReminderPlan.next(snap, me, now, shownNow), ReminderPlan.meetNext(meets, now, shownNow)).minOrNull()
         alarmNote = ReminderAlarms.schedule(app, next)
+    }
+
+    /** Отметка показа не ушла сразу — две попытки через [POKE_MS] (очередь Дел повторяет её и сама, но тиком в 5 минут). */
+    private fun poke() {
+        app.appScope.launch(Dispatchers.IO) {
+            repeat(2) {
+                kotlinx.coroutines.delay(POKE_MS)
+                if (runCatching { app.delaSync.pushNow(4_000L) }.getOrDefault(false)) return@launch
+            }
+        }
     }
 
     /** Встречи на сутки вперёд с идеями; нет идей, календаря или разрешения — пусто. */
@@ -209,6 +238,10 @@ class Reminders(private val app: PravkaApp) {
                 // HIGH — всплывает поверх экрана: DEFAULT на Samsung — тихая строка в шторке (урок автопилота).
                 nm.createNotificationChannel(NotificationChannel(CHANNEL, "Напоминания Дел", NotificationManager.IMPORTANCE_HIGH))
             }
+            val quiet = ReminderPlan.afterBot(d)
+            if (quiet && nm.getNotificationChannel(QUIET_CHANNEL) == null) {
+                nm.createNotificationChannel(NotificationChannel(QUIET_CHANNEL, "Напоминания Дел — уже в Telegram", NotificationManager.IMPORTANCE_LOW))
+            }
             val id = d.task.id
             fun action(label: String, what: String, code: Int): Notification.Action {
                 val pi = PendingIntent.getBroadcast(
@@ -226,7 +259,7 @@ class Reminders(private val app: PravkaApp) {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
             val body = ReminderPlan.body(d, now, ZONE)
-            val n = Notification.Builder(app, CHANNEL)
+            val n = Notification.Builder(app, if (quiet) QUIET_CHANNEL else CHANNEL)
                 .setContentTitle(ReminderPlan.title(d.task))
                 .setContentText(body)
                 .setStyle(Notification.BigTextStyle().bigText(body))
@@ -275,7 +308,7 @@ class Reminders(private val app: PravkaApp) {
 
     /**
      * Сказать серверу, показывает ли телефон напоминания (`user.settings {remind_phone: {on}}`): включено — бот ждёт
-     * 3 минуты отметки показа, выключено (тумблер, уведомления запрещены, Дела выключены) — бот шлёт сразу, как раньше.
+     * 10 минут отметки показа, выключено (тумблер, уведомления или канал запрещены, Дела выключены) — бот шлёт сразу.
      * Только серверу с флагом `remind_phone`; шлётся, когда поменялось.
      */
     suspend fun syncSetting() {
@@ -295,6 +328,6 @@ class Reminders(private val app: PravkaApp) {
         !on -> "выключено — напоминания шлёт бот в Telegram"
         !snap.remindPhoneOn -> "сервер Дел ещё не обновлён — пока напоминает бот в Telegram, телефон начнёт сам после обновления"
         alarmNote.startsWith("неточно") -> "напоминания могут опоздать на минуты — разреши «Будильники и напоминания» в настройках Android"
-        else -> "уведомлением на телефоне; Telegram — только если телефон молчит 3 минуты"
+        else -> "уведомлением на телефоне; Telegram — только если телефон не отметил показ за 10 минут"
     }
 }

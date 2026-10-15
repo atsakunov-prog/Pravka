@@ -533,6 +533,8 @@ object DelaViews {
                     .joinToString(" · "),
             )
         }
+        // «Какой Иван?» захвата (kind capture, `sugText` веба): тёзки в сказанном — запись ждёт человека, ответ — кнопками.
+        if (sg.kind == "capture") return SugText(v("title").ifBlank { sg.quote }, "")
         if (sg.kind == "create") {
             return SugText(
                 v("title").ifBlank { sg.quote },

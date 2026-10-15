@@ -54,6 +54,21 @@ class CaptureTest {
         val twin = Capture.moveFor("r", 0, Capture.Chip("Иван Тестов", "person", personId = "p-1"))
         assertEquals("p-1", twin.getString("person_id"))
         assertFalse(twin.has("at"))
+        // С 16.10.2026 тёзки — одна кнопка «Какой Иван ▾» со списком: человек — из выбранного варианта, вопрос — «Кто это?».
+        val who = Capture.parse(JSONObject().put("ref", "r").put("status", "done").put("items", JSONArray().put(
+            JSONObject().put("bucket", "note").put("line", "Заметка: x — у какого Ивана? · вопрос в «Подскажи»").put("chips", JSONArray()
+                .put(JSONObject().put("label", "Какой Иван").put("move", "person").put("options", JSONArray()
+                    .put(JSONObject().put("label", "Иван Тестов (ООО Ромашка)").put("person_id", "p-1"))
+                    .put(JSONObject().put("label", "Иван Петров").put("person_id", "p-2"))))
+                .put(JSONObject().put("label", "Отменить").put("move", "cancel"))))))!!
+        val whoChip = who.items.single().chips.first()
+        assertEquals(listOf("p-1", "p-2"), whoChip.options.map { it.personId })
+        assertEquals("Кто это?", Capture.optionsQuestion(whoChip))
+        assertEquals("Когда напомнить?", Capture.optionsQuestion(Capture.Chip("Время", "time", listOf(Capture.Option("через час", "hour")))))
+        val picked = Capture.moveFor("r", 0, whoChip, whoChip.options[1])
+        assertEquals("p-2", picked.getString("person_id"))
+        assertEquals("person", picked.getString("to"))
+        assertFalse(picked.has("at"))
         // Каждое «куда» кнопки — из словаря контракта.
         val tos = contract().getJSONObject("move").getJSONObject("to").keys().asSequence().toSet()
         for (to in listOf("cancel", "task", "time", "remind", "today", "now", "back", "idea", "note", "person", "keep_open", "retry", "back_task")) {
@@ -75,8 +90,8 @@ class CaptureTest {
         val item = res.items.single()
         assertEquals("remind", item.bucket)
         assertEquals("2026-10-15T12:00:00+03:00", item.remindAt)
-        assertEquals(listOf("Это дело", "Время", "Отменить"), item.chips.map { it.label })
-        assertEquals(4, item.chips[1].options.size)
+        assertEquals(listOf("Время", "Это дело", "Отменить"), item.chips.map { it.label })
+        assertEquals(4, item.chips[0].options.size)
         assertTrue(item.chips[2].cancel)
         // У одной записи кнопки — прямо под строкой; списка нет: запись и есть строка.
         assertEquals(3, res.lineChips.size)
@@ -144,6 +159,18 @@ class CaptureTest {
             assertEquals(c.getString("bucket"), r.items.single().bucket)
             if (chips != null) assertEquals(c.getString("say"), chips.length(), r.lineChips.size)
         }
+    }
+
+    @Test
+    fun `медленная сеть — «Отправляю…», а не «нет связи»`() {
+        // Проверка 16.10.2026: LTE с VPN и первый запрос после простоя давали «Нет связи с Делами» за 2,5 с, хотя запрос
+        // был в пути. «Нет связи» — только когда проход синка упал; медленно — «строка придёт уведомлением».
+        assertEquals("Отправляю «купить магний»…", Capture.sendingLine(" купить   магний "))
+        assertEquals(Capture.OFFLINE_LINE, ru.zf.pravka.data.CaptureClient.Outcome(offline = true).line)
+        assertEquals(Capture.SLOW_LINE, ru.zf.pravka.data.CaptureClient.Outcome(offline = true, slow = true).line)
+        assertTrue(ru.zf.pravka.data.CaptureClient.PUSH_MAX_MS > ru.zf.pravka.data.CaptureClient.PUSH_WAIT_MS)
+        val pending = Capture.Result("r", Capture.Status.PENDING, head = Capture.sendingLine("купить магний"), text = "купить магний")
+        assertEquals("Отправляю «купить магний»…", Capture.line(pending))
     }
 
     // ------------------------------------------------------------ развилка и промпт

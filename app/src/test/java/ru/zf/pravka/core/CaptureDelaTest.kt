@@ -137,6 +137,21 @@ class CaptureDelaTest {
     }
 
     @Test
+    fun `прошедшее больше суток — не на Сегодня, а в «прошли — не отмечено»`() {
+        // Проверка 16.10.2026: смахнул уведомление — строка висела бы на «Сегодня» бессрочно. Одно правило с сервером
+        // (`capture.REMIND_STALE_IF`) и вебом (`isRemindStale`): вчерашнее ещё здесь, позавчерашнее — во «Всех делах».
+        val yesterday = t("y", kind = Dela.KIND_REMIND, remindAt = "2026-10-14T12:00:00+03:00")
+        val old = t("o", kind = Dela.KIND_REMIND, remindAt = "2026-10-13T23:30:00+03:00")
+        val deedOld = t("d", due = "2026-10-20", remindAt = "2026-10-10T09:00:00+03:00")
+        val s = snap(yesterday, old, deedOld)
+        assertEquals(listOf("y"), DelaGroups.remindersToday(s, "me", today).map { it.id })
+        assertTrue(DelaGroups.isRemindStale(old, today))
+        assertFalse(DelaGroups.isRemindStale(yesterday, today))
+        assertFalse("дело с напоминанием — не напоминание", DelaGroups.isRemindStale(deedOld, today))
+        assertEquals(listOf("o", "y"), DelaGroups.remindersAll(s, "me").map { it.id })
+    }
+
+    @Test
     fun `Вернулось — дело потом, чей день настал`() {
         val back = t("b", "Позвонить Ивану", backOn = "2026-10-15").copy(backSaid = "на неделе", createdAt = "2026-10-13T10:00:00+03:00")
         val future = t("f", backOn = "2026-10-19")
@@ -193,9 +208,9 @@ class CaptureDelaTest {
     @Test
     fun `дело-созвон и его событие — одна строка`() {
         val dayStart = ms("2026-10-15T00:00:00+03:00")
-        val call = t("c", "Созвон с Женей", due = today).copy(dueTime = "12:30")
+        val call = t("c", "Созвон с Иваном Тестовым", due = today).copy(dueTime = "12:30")
         val other = t("o", "Позвонить в банк", due = today).copy(dueTime = "12:30")
-        val ev = CalEvent(1, 1, "Созвон с Женей", ms("2026-10-15T12:30:00+03:00"), ms("2026-10-15T13:00:00+03:00"), false, false, false, "a@b", true)
+        val ev = CalEvent(1, 1, "Созвон с Иваном Тестовым", ms("2026-10-15T12:30:00+03:00"), ms("2026-10-15T13:00:00+03:00"), false, false, false, "a@b", true)
         assertEquals(listOf("o"), TodayAgenda.dropTwinCalls(listOf(call, other), listOf(ev), dayStart).map { it.id })
         assertEquals(2, TodayAgenda.dropTwinCalls(listOf(call, other), emptyList(), dayStart).size)
     }

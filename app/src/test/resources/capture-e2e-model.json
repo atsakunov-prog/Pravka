@@ -1,6 +1,6 @@
 {
- "_": "Ответы сервера захвата из сквозного теста шага 0 С НАСТОЯЩЕЙ МОДЕЛЬЮ (Opus 5.5 high) на тестовой копии Дел, 15.10.2026: фразы, которых правило не узнало, — дорогой «Д» (capture.say lane auto → вид capture?ref=); control — шесть живых фраз моделью мимо правила (строка веба). Данные выдуманные. Записан скриптом сквозного теста (вне репозитория); читает app/src/test/java/ru/zf/pravka/core/CaptureE2eModelTest.kt.",
- "at": "2026-10-15T23:22:14+03:00",
+ "_": "Ответы сервера захвата из сквозного теста шага 0 С НАСТОЯЩЕЙ МОДЕЛЬЮ (Opus 5.5 high) на тестовой копии Дел: ответы модели 15.10.2026, раскладка и строки — кодом после проверки 16.10.2026 (прогон replay: записанные ответы модели через нынешний код, новые фразы — моделью по-настоящему); фразы, которых правило не узнало, — дорогой «Д» (capture.say lane auto → вид capture?ref=); control — шесть живых фраз моделью мимо правила (строка веба). Данные выдуманные. Записан скриптом сквозного теста (вне репозитория); читает app/src/test/java/ru/zf/pravka/core/CaptureE2eModelTest.kt.",
+ "at": "2026-10-16T00:57:43+03:00",
  "me": "sasha",
  "runs": [
   {
@@ -8,11 +8,11 @@
    "lane": "auto",
    "from": "d",
    "first_line": "Записал «сказал Ивану, что пришлём модель к среде» — раскладываю",
-   "line_ms": 7664,
+   "line_ms": 3300,
    "reply": {
     "ok": true,
     "capture": {
-     "ref": "b390a797-6dbc-4511-bf10-d1a085fb9c73",
+     "ref": "8b564911-1cbb-4535-8e2a-debbe61c53eb",
      "status": "done",
      "text": "сказал Ивану, что пришлём модель к среде",
      "by": "model",
@@ -40,7 +40,7 @@
        ],
        "title": "Прислать Ивану модель",
        "task": {
-        "id": "2f827428-9bd5-4de9-9a9f-73bfc4a7ec06",
+        "id": "d2a38929-32b1-4d87-9eaf-6303aecf70bd",
         "title": "Прислать Ивану модель",
         "kind": "task",
         "status": "open",
@@ -53,7 +53,7 @@
         "back_on": null,
         "back_said": null,
         "focus_on": null,
-        "person_id": "ab72cb82-b394-4004-9634-5aed9b91ea75",
+        "person_id": "f51b2580-988a-458c-beb6-c8053a127c97",
         "project_id": null,
         "deal_id": null
        }
@@ -67,11 +67,11 @@
    "lane": "auto",
    "from": "d",
    "first_line": "Записал «Иван обещал прислать отчёт до пятницы» — раскладываю",
-   "line_ms": 5385,
+   "line_ms": 1184,
    "reply": {
     "ok": true,
     "capture": {
-     "ref": "0d42f157-6d2e-488c-9650-d240705b9390",
+     "ref": "bbf86b68-d4ab-4719-9690-9fc522e10f08",
      "status": "done",
      "text": "Иван обещал прислать отчёт до пятницы",
      "by": "model",
@@ -99,7 +99,7 @@
        ],
        "title": "Иван: прислать отчёт",
        "task": {
-        "id": "fdee462d-ffaa-4aac-84b3-b549254aae22",
+        "id": "4852fac9-9295-4361-94b9-8cfbc4637080",
         "title": "Иван: прислать отчёт",
         "kind": "task",
         "status": "open",
@@ -112,7 +112,7 @@
         "back_on": null,
         "back_said": null,
         "focus_on": null,
-        "person_id": "b043be2c-1d68-416a-886d-31d5c69cd84d",
+        "person_id": "f51b2580-988a-458c-beb6-c8053a127c97",
         "project_id": null,
         "deal_id": null
        }
@@ -126,27 +126,23 @@
    "lane": "auto",
    "from": "d",
    "first_line": "Записал «напомни завтра утром отправить Ивану мо…» — раскладываю",
-   "line_ms": 7230,
+   "line_ms": 1084,
    "reply": {
     "ok": true,
     "capture": {
-     "ref": "b39bbadc-3660-4d0d-bb50-4addce4587e0",
+     "ref": "6a091d64-1ede-44ab-a24f-e768bec46d01",
      "status": "done",
      "text": "напомни завтра утром отправить Ивану модель и позвонить маме вечером",
      "by": "model",
      "form": null,
      "from": "d",
-     "head": "Разложил 2: напоминание завтра в 9:00 · напоминание завтра в 19:00",
+     "head": "Разложил 2: напоминание завтра в 9:00: отправить Ивану модель · напоминание завтра в 19:00: позвонить маме",
      "error": null,
      "items": [
       {
        "bucket": "remind",
        "line": "Напомню завтра в 9:00: отправить Ивану модель",
        "chips": [
-        {
-         "move": "task",
-         "label": "Это дело"
-        },
         {
          "move": "time",
          "label": "Время",
@@ -170,13 +166,17 @@
          ]
         },
         {
+         "move": "task",
+         "label": "Это дело"
+        },
+        {
          "move": "cancel",
          "label": "Отменить"
         }
        ],
        "title": "Отправить Ивану модель",
        "task": {
-        "id": "b163d03c-817a-4a21-91a7-8306f997c662",
+        "id": "eed6baf1-5f16-48c5-9c09-10f7d7bd344d",
         "title": "Отправить Ивану модель",
         "kind": "remind",
         "status": "open",
@@ -189,7 +189,7 @@
         "back_on": null,
         "back_said": null,
         "focus_on": null,
-        "person_id": "b043be2c-1d68-416a-886d-31d5c69cd84d",
+        "person_id": "f51b2580-988a-458c-beb6-c8053a127c97",
         "project_id": null,
         "deal_id": null
        }
@@ -198,10 +198,6 @@
        "bucket": "remind",
        "line": "Напомню завтра в 19:00: позвонить маме",
        "chips": [
-        {
-         "move": "task",
-         "label": "Это дело"
-        },
         {
          "move": "time",
          "label": "Время",
@@ -225,13 +221,17 @@
          ]
         },
         {
+         "move": "task",
+         "label": "Это дело"
+        },
+        {
          "move": "cancel",
          "label": "Отменить"
         }
        ],
        "title": "Позвонить маме",
        "task": {
-        "id": "f9f333d7-3c12-45b9-a148-7f9da1d00f78",
+        "id": "64fecffc-43d0-44eb-8727-957f563a93ef",
         "title": "Позвонить маме",
         "kind": "remind",
         "status": "open",
@@ -245,7 +245,7 @@
         "back_said": null,
         "focus_on": null,
         "person_id": null,
-        "project_id": "6064c607-0ac9-482b-ad15-e14100a50637",
+        "project_id": "61fa4778-2db2-4698-8829-3d63b3fe8847",
         "deal_id": null
        }
       }
@@ -258,17 +258,17 @@
    "lane": "auto",
    "from": "d",
    "first_line": "Записал «Наташе подготовить сверку до пятницы, ж…» — раскладываю",
-   "line_ms": 7781,
+   "line_ms": 844,
    "reply": {
     "ok": true,
     "capture": {
-     "ref": "3471cc2f-9ab4-4604-a491-9d9554945a26",
+     "ref": "ab1195ae-c639-4097-bb35-3406723d6c10",
      "status": "done",
      "text": "Наташе подготовить сверку до пятницы, жду от Ивана модель",
      "by": "model",
      "form": null,
      "from": "d",
-     "head": "Разложил 2: жду от Наташи на завтра · жду от Ивана",
+     "head": "Разложил 2: жду от Наташи на завтра: подготовить сверку · жду от Ивана: прислать модель",
      "error": null,
      "items": [
       {
@@ -290,7 +290,7 @@
        ],
        "title": "Наташа: подготовить сверку",
        "task": {
-        "id": "38318735-2f27-43a2-9823-ed4ee6f49710",
+        "id": "9427ec50-d49d-4af9-9d2c-aba23c2423aa",
         "title": "Наташа: подготовить сверку",
         "kind": "task",
         "status": "open",
@@ -303,7 +303,7 @@
         "back_on": null,
         "back_said": null,
         "focus_on": null,
-        "person_id": "9fe48f98-e3fd-4d69-a134-3005656ef3ef",
+        "person_id": "19e13490-8bbb-431c-9588-fbaf39cdfeec",
         "project_id": null,
         "deal_id": null
        }
@@ -319,7 +319,7 @@
        ],
        "title": "Иван: прислать модель",
        "task": {
-        "id": "82a8076e-f209-4b76-a6e0-019c7d69c4fb",
+        "id": "b58baf1a-6199-4239-99b2-f8ca3cba24b6",
         "title": "Иван: прислать модель",
         "kind": "task",
         "status": "open",
@@ -332,7 +332,7 @@
         "back_on": null,
         "back_said": null,
         "focus_on": null,
-        "person_id": "b043be2c-1d68-416a-886d-31d5c69cd84d",
+        "person_id": "f51b2580-988a-458c-beb6-c8053a127c97",
         "project_id": null,
         "deal_id": null
        }
@@ -346,27 +346,23 @@
    "lane": "auto",
    "from": "d",
    "first_line": "Записал «позвонил Ольге, договорились на пятницу…» — раскладываю",
-   "line_ms": 6470,
+   "line_ms": 1289,
    "reply": {
     "ok": true,
     "capture": {
-     "ref": "27d7b0e5-0232-41a2-8eef-14b99c2909fd",
+     "ref": "49b472e6-0ef4-435d-bcf7-cba727ea8f9d",
      "status": "done",
      "text": "позвонил Ольге, договорились на пятницу подготовить договор",
      "by": "model",
      "form": null,
      "from": "d",
-     "head": "Разложил 2: сделано · на завтра",
+     "head": "Разложил 2: сделано: позвонил Ольге · на завтра: подготовить договор для Ольги",
      "error": null,
      "items": [
       {
        "bucket": "did",
-       "line": "Сделано: позвонил Ольге · закрыл «Позвонить Ольге» · ещё 2 похожих — спрошу вечером · у Ольги в хронологии",
+       "line": "Сделано: позвонил Ольге · записал сделанным · похожих у Ольги 2 — вопросы в «Подскажи» · звонок уже записан",
        "chips": [
-        {
-         "move": "keep_open",
-         "label": "Не закрывать"
-        },
         {
          "move": "cancel",
          "label": "Отменить"
@@ -374,12 +370,12 @@
        ],
        "title": "Позвонил Ольге",
        "task": {
-        "id": "43ee9890-5b61-4f1f-8a36-349b09d36513",
-        "title": "Позвонить Ольге",
+        "id": "c441d1a2-679b-4f7d-80b8-2148171a5db3",
+        "title": "Позвонил Ольге",
         "kind": "task",
         "status": "done",
         "ball": "mine",
-        "owed": true,
+        "owed": false,
         "due_date": null,
         "due_time": null,
         "remind_at": null,
@@ -387,18 +383,18 @@
         "back_on": null,
         "back_said": null,
         "focus_on": null,
-        "person_id": "9994c1d2-7299-4e21-87b8-9c9970c6632c",
+        "person_id": "de31d8b2-b271-46de-b82f-aaf5a124ddbd",
         "project_id": null,
         "deal_id": null
        },
        "did": {
-        "line": "закрыл «Позвонить Ольге» · ещё 2 похожих — спрошу вечером · у Ольги в хронологии",
-        "closed": "43ee9890-5b61-4f1f-8a36-349b09d36513",
-        "closed_title": "Позвонить Ольге",
-        "created": null,
+        "line": "записал сделанным · похожих у Ольги 2 — вопросы в «Подскажи» · звонок уже записан",
+        "closed": null,
+        "closed_title": null,
+        "created": "c441d1a2-679b-4f7d-80b8-2148171a5db3",
         "asked": [
-         "82a5dd8d-52a1-46dd-9ebf-e7f8eafebebf",
-         "9e915b4e-67d2-4f2b-bd85-f2062d1e8865"
+         "ac24cda9-dfb5-432f-b2cf-785d8b97343f",
+         "31e90a97-f396-4d23-98d0-2dd9d641ad79"
         ]
        }
       },
@@ -421,7 +417,7 @@
        ],
        "title": "Подготовить договор для Ольги",
        "task": {
-        "id": "81b82b6a-da0b-4fde-9b16-edcac942d3c4",
+        "id": "f3d6d384-088c-4821-9d70-401da23aa67c",
         "title": "Подготовить договор для Ольги",
         "kind": "task",
         "status": "open",
@@ -434,7 +430,7 @@
         "back_on": null,
         "back_said": null,
         "focus_on": null,
-        "person_id": "9994c1d2-7299-4e21-87b8-9c9970c6632c",
+        "person_id": "de31d8b2-b271-46de-b82f-aaf5a124ddbd",
         "project_id": null,
         "deal_id": null
        }
@@ -448,11 +444,11 @@
    "lane": "auto",
    "from": "d",
    "first_line": "Записал «надо бы Ромашке предложить дашборд» — раскладываю",
-   "line_ms": 6659,
+   "line_ms": 1185,
    "reply": {
     "ok": true,
     "capture": {
-     "ref": "17c339fa-0096-436e-8a42-accc406dc7ba",
+     "ref": "5bad25e7-4634-4391-a1e5-ace4bbcdca8a",
      "status": "done",
      "text": "надо бы Ромашке предложить дашборд",
      "by": "model",
@@ -480,7 +476,7 @@
        ],
        "title": "Предложить Ромашке дашборд",
        "task": {
-        "id": "75f5c2dd-b8bd-47c2-bcb0-5fea7d91a74b",
+        "id": "e44789f3-85cd-4fec-b0ec-22d2c9bbb9f0",
         "title": "Предложить Ромашке дашборд",
         "kind": "task",
         "status": "open",
@@ -494,7 +490,7 @@
         "back_said": null,
         "focus_on": null,
         "person_id": null,
-        "project_id": "9aaab821-fd10-4079-a647-03400adad15a",
+        "project_id": "cc75de46-cf64-40ad-b7b5-be063065c692",
         "deal_id": null
        }
       }
@@ -507,17 +503,17 @@
    "lane": "auto",
    "from": "d",
    "first_line": "Записал «Ольга говорит, подпишут в среду, надо п…» — раскладываю",
-   "line_ms": 8283,
+   "line_ms": 1410,
    "reply": {
     "ok": true,
     "capture": {
-     "ref": "8dbfc4b4-cae0-4007-8f71-a7d61566d83a",
+     "ref": "ce6dcec2-e6d7-424f-a249-05af0df51fd7",
      "status": "done",
      "text": "Ольга говорит, подпишут в среду, надо подготовить счёт",
      "by": "model",
      "form": null,
      "from": "d",
-     "head": "Разложил 2: на среду 21.10 · заметка",
+     "head": "Разложил 2: на среду 21.10: подготовить счёт к подписанию в среду · заметка: подпишут в среду",
      "error": null,
      "items": [
       {
@@ -539,7 +535,7 @@
        ],
        "title": "Подготовить счёт к подписанию в среду",
        "task": {
-        "id": "c2f88126-1432-4054-8d41-4d6caf6e3c22",
+        "id": "bbc88723-daad-4171-ac86-594f50fdbcb6",
         "title": "Подготовить счёт к подписанию в среду",
         "kind": "task",
         "status": "open",
@@ -552,14 +548,14 @@
         "back_on": null,
         "back_said": null,
         "focus_on": null,
-        "person_id": "0afd88ac-aabb-4ab1-a7d2-d2661f03b571",
+        "person_id": "de31d8b2-b271-46de-b82f-aaf5a124ddbd",
         "project_id": null,
         "deal_id": null
        }
       },
       {
        "bucket": "note",
-       "line": "Заметка у Ольги Смирновой: подпишут в среду · покажу перед встречей",
+       "line": "Заметка у Ольги Смирновой: подпишут в среду · в карточке",
        "chips": [
         {
          "move": "task",
@@ -575,9 +571,9 @@
         }
        ],
        "text": "Подпишут в среду",
-       "note_id": "7b666e7e-7a97-4ea0-90b5-130c1f08fbfe",
-       "project_id": "662c925a-1f50-4c70-abfa-30e48e1b531d",
-       "person_id": "0afd88ac-aabb-4ab1-a7d2-d2661f03b571"
+       "note_id": "9a628069-38db-4f40-9813-8f6aa658e260",
+       "project_id": "67811af2-8457-49c5-9eab-c39681403381",
+       "person_id": "de31d8b2-b271-46de-b82f-aaf5a124ddbd"
       }
      ]
     }
@@ -588,11 +584,11 @@
    "lane": "auto",
    "from": "d",
    "first_line": "Записал «короче в 12 Контур счёт отправить не за…» — раскладываю",
-   "line_ms": 8879,
+   "line_ms": 1219,
    "reply": {
     "ok": true,
     "capture": {
-     "ref": "ccf24971-7d11-4aa5-b0f2-283759e2b41c",
+     "ref": "918ad77f-484d-4170-bcaa-e0e6d4c9ecc5",
      "status": "done",
      "text": "короче в 12 Контур счёт отправить не забыть",
      "by": "model",
@@ -605,10 +601,6 @@
        "bucket": "remind",
        "line": "Напомню завтра в 12:00: отправить счёт через Контур",
        "chips": [
-        {
-         "move": "task",
-         "label": "Это дело"
-        },
         {
          "move": "time",
          "label": "Время",
@@ -632,13 +624,17 @@
          ]
         },
         {
+         "move": "task",
+         "label": "Это дело"
+        },
+        {
          "move": "cancel",
          "label": "Отменить"
         }
        ],
        "title": "Отправить счёт через Контур",
        "task": {
-        "id": "fc3aa76b-dea2-42c2-b59f-7916b3afbbcb",
+        "id": "dd40a5ec-aaed-4c45-b340-3f1cdd195c0b",
         "title": "Отправить счёт через Контур",
         "kind": "remind",
         "status": "open",
@@ -665,11 +661,11 @@
    "lane": "auto",
    "from": "d",
    "first_line": "Записал «как приеду в офис, напомни Наташе про с…» — раскладываю",
-   "line_ms": 8156,
+   "line_ms": 1312,
    "reply": {
     "ok": true,
     "capture": {
-     "ref": "67fa1b0e-cc63-4f0f-9093-26795d628b00",
+     "ref": "b09f25bc-177b-4660-b61e-d2e81f53e7c3",
      "status": "done",
      "text": "как приеду в офис, напомни Наташе про сверку",
      "by": "model",
@@ -711,7 +707,7 @@
        ],
        "title": "Напомнить Наташе про сверку",
        "task": {
-        "id": "cf523aba-3eca-4882-b0d7-076e4e947630",
+        "id": "00fa869f-5b35-4ba0-ba30-81a43bb17aa5",
         "title": "Напомнить Наташе про сверку",
         "kind": "remind",
         "status": "open",
@@ -724,7 +720,7 @@
         "back_on": null,
         "back_said": null,
         "focus_on": null,
-        "person_id": "a4492c3d-e59d-47b1-b834-b3f233fa1b7c",
+        "person_id": "19e13490-8bbb-431c-9588-fbaf39cdfeec",
         "project_id": null,
         "deal_id": null
        }
@@ -738,11 +734,11 @@
    "lane": "auto",
    "from": "d",
    "first_line": "Записал «завтра созвон с Иваном в 15:00 по бюдже…» — раскладываю",
-   "line_ms": 6793,
+   "line_ms": 1079,
    "reply": {
     "ok": true,
     "capture": {
-     "ref": "4feb1cd5-f66d-4947-b763-4cf8c0825f45",
+     "ref": "6e455450-78d6-4bd0-958e-379b708bea1a",
      "status": "done",
      "text": "завтра созвон с Иваном в 15:00 по бюджету",
      "by": "model",
@@ -770,7 +766,7 @@
        ],
        "title": "Созвон с Иваном по бюджету",
        "task": {
-        "id": "ec209e46-f1d4-4f38-8af8-0dcc4de6cf50",
+        "id": "28c08cde-20f9-4e41-b27a-200065ffd501",
         "title": "Созвон с Иваном по бюджету",
         "kind": "task",
         "status": "open",
@@ -783,7 +779,161 @@
         "back_on": null,
         "back_said": null,
         "focus_on": null,
-        "person_id": "b043be2c-1d68-416a-886d-31d5c69cd84d",
+        "person_id": "f51b2580-988a-458c-beb6-c8053a127c97",
+        "project_id": null,
+        "deal_id": null
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "say": "Иван хочет скидку",
+   "lane": "auto",
+   "from": "d",
+   "first_line": "Записал «Иван хочет скидку» — раскладываю",
+   "line_ms": 1294,
+   "reply": {
+    "ok": true,
+    "capture": {
+     "ref": "16a2d7ad-6d8e-4b57-9ed7-8265a7fbf483",
+     "status": "done",
+     "text": "Иван хочет скидку",
+     "by": "model",
+     "form": null,
+     "from": "d",
+     "head": "Заметка у Ивана Петрова: Иван хочет скидку · в карточке",
+     "error": null,
+     "items": [
+      {
+       "bucket": "note",
+       "line": "Заметка у Ивана Петрова: Иван хочет скидку · в карточке",
+       "chips": [
+        {
+         "move": "task",
+         "label": "Это дело"
+        },
+        {
+         "move": "idea",
+         "label": "Идея"
+        },
+        {
+         "move": "cancel",
+         "label": "Отменить"
+        }
+       ],
+       "text": "Иван хочет скидку",
+       "note_id": "ca2261a2-06d7-4256-b537-b36bd7fc2a2a",
+       "project_id": "cc75de46-cf64-40ad-b7b5-be063065c692",
+       "person_id": "f51b2580-988a-458c-beb6-c8053a127c97"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "say": "Иван обещал отчёт",
+   "lane": "auto",
+   "from": "d",
+   "first_line": "Записал «Иван обещал отчёт» — раскладываю",
+   "line_ms": 1435,
+   "reply": {
+    "ok": true,
+    "capture": {
+     "ref": "8cbc82eb-815f-4066-9116-1fc7062faa8a",
+     "status": "done",
+     "text": "Иван обещал отчёт",
+     "by": "model",
+     "form": null,
+     "from": "d",
+     "head": "Жду от Ивана Петрова: прислать отчёт · неделя без ответа — на виду",
+     "error": null,
+     "items": [
+      {
+       "bucket": "waiting",
+       "line": "Жду от Ивана Петрова: прислать отчёт · неделя без ответа — на виду",
+       "chips": [
+        {
+         "move": "cancel",
+         "label": "Отменить"
+        }
+       ],
+       "title": "Иван: прислать отчёт",
+       "task": {
+        "id": "92974724-0ff6-4c24-bc43-f19c4f382229",
+        "title": "Иван: прислать отчёт",
+        "kind": "task",
+        "status": "open",
+        "ball": "waiting",
+        "owed": false,
+        "due_date": null,
+        "due_time": null,
+        "remind_at": null,
+        "remind_place": null,
+        "back_on": null,
+        "back_said": null,
+        "focus_on": null,
+        "person_id": "f51b2580-988a-458c-beb6-c8053a127c97",
+        "project_id": null,
+        "deal_id": null
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "say": "когда буду свободен, позвонить Ивану",
+   "lane": "auto",
+   "from": "d",
+   "first_line": "Записал «когда буду свободен, позвонить Ивану» — раскладываю",
+   "line_ms": 1183,
+   "reply": {
+    "ok": true,
+    "capture": {
+     "ref": "b8a3f2d2-98a3-4f2b-a2e6-40a0cd03e03f",
+     "status": "done",
+     "text": "когда буду свободен, позвонить Ивану",
+     "by": "model",
+     "form": null,
+     "from": "d",
+     "head": "Потом: позвонить Ивану · верну в пятницу 16.10",
+     "error": null,
+     "items": [
+      {
+       "bucket": "back",
+       "line": "Потом: позвонить Ивану · верну в пятницу 16.10",
+       "chips": [
+        {
+         "move": "today",
+         "label": "Сегодня"
+        },
+        {
+         "move": "now",
+         "label": "В «Сейчас»"
+        },
+        {
+         "move": "cancel",
+         "label": "Отменить"
+        }
+       ],
+       "title": "Позвонить Ивану",
+       "task": {
+        "id": "4d8a8b50-ad60-4ace-95df-c0b7b8a7cd4d",
+        "title": "Позвонить Ивану",
+        "kind": "task",
+        "status": "open",
+        "ball": "mine",
+        "owed": false,
+        "due_date": null,
+        "due_time": null,
+        "remind_at": null,
+        "remind_place": null,
+        "back_on": "2026-10-16",
+        "back_said": null,
+        "focus_on": null,
+        "person_id": "f51b2580-988a-458c-beb6-c8053a127c97",
         "project_id": null,
         "deal_id": null
        }
@@ -811,10 +961,6 @@
       "line": "Напомню завтра в 12:00: отправить счёт в Контуре",
       "chips": [
        {
-        "move": "task",
-        "label": "Это дело"
-       },
-       {
         "move": "time",
         "label": "Время",
         "options": [
@@ -837,13 +983,17 @@
         ]
        },
        {
+        "move": "task",
+        "label": "Это дело"
+       },
+       {
         "move": "cancel",
         "label": "Отменить"
        }
       ],
       "title": "Отправить счёт в Контуре",
       "task": {
-       "id": "89aa450b-aef9-45f1-bfee-c773c9bfe1bd",
+       "id": "576bf2c8-1f7d-430d-849b-811aca050aa1",
        "title": "Отправить счёт в Контуре",
        "kind": "remind",
        "status": "open",
@@ -909,7 +1059,7 @@
       ],
       "title": "Позвонить маме",
       "task": {
-       "id": "d3f998b7-d31a-4121-bc45-12de18a3c135",
+       "id": "5b24edad-a64a-4240-8c07-4d37e5dedcb9",
        "title": "Позвонить маме",
        "kind": "remind",
        "status": "open",
@@ -923,7 +1073,7 @@
        "back_said": null,
        "focus_on": null,
        "person_id": null,
-       "project_id": "6064c607-0ac9-482b-ad15-e14100a50637",
+       "project_id": "61fa4778-2db2-4698-8829-3d63b3fe8847",
        "deal_id": null
       }
      }
@@ -961,7 +1111,7 @@
       ],
       "title": "Позвонить Ивану",
       "task": {
-       "id": "261f6278-7755-4ce9-bf86-ebaa75498c0e",
+       "id": "55520b73-ca00-4282-b892-f7af83367f0b",
        "title": "Позвонить Ивану",
        "kind": "task",
        "status": "open",
@@ -974,7 +1124,7 @@
        "back_on": "2026-10-16",
        "back_said": null,
        "focus_on": null,
-       "person_id": "b043be2c-1d68-416a-886d-31d5c69cd84d",
+       "person_id": "f51b2580-988a-458c-beb6-c8053a127c97",
        "project_id": null,
        "deal_id": null
       }
@@ -1012,8 +1162,8 @@
        }
       ],
       "text": "Предложить Ромашке косткаттинг",
-      "idea_id": "cb484834-6759-45db-b281-9bdafd19f2c5",
-      "project_id": "9aaab821-fd10-4079-a647-03400adad15a"
+      "idea_id": "d3a735a1-f1b6-459b-8ca4-2caacf0f7d5c",
+      "project_id": "cc75de46-cf64-40ad-b7b5-be063065c692"
      }
     ]
    }
@@ -1027,12 +1177,12 @@
     "by": "model",
     "form": null,
     "from": null,
-    "head": "Заметка у Ивана Петрова: бюджет будет в январе · покажу перед встречей",
+    "head": "Заметка у Ивана Петрова: бюджет будет в январе · в карточке",
     "error": null,
     "items": [
      {
       "bucket": "note",
-      "line": "Заметка у Ивана Петрова: бюджет будет в январе · покажу перед встречей",
+      "line": "Заметка у Ивана Петрова: бюджет будет в январе · в карточке",
       "chips": [
        {
         "move": "task",
@@ -1048,9 +1198,9 @@
        }
       ],
       "text": "Бюджет будет в январе",
-      "note_id": "1de2ea13-5f6b-4d44-a70f-b312ea120cdf",
-      "project_id": "9aaab821-fd10-4079-a647-03400adad15a",
-      "person_id": "b043be2c-1d68-416a-886d-31d5c69cd84d"
+      "note_id": "86b4ad13-14ec-49fb-a545-33b79151f345",
+      "project_id": "cc75de46-cf64-40ad-b7b5-be063065c692",
+      "person_id": "f51b2580-988a-458c-beb6-c8053a127c97"
      }
     ]
    }
@@ -1064,12 +1214,12 @@
     "by": "model",
     "form": null,
     "from": null,
-    "head": "Сделано: позвонил Ольге · закрыл «Позвонить Ольге» · ещё 2 похожих — спрошу вечером · звонок уже записан",
+    "head": "Сделано: позвонил Ольге · закрыл «Позвонить Ольге» · ещё 2 похожих — вопросы в «Подскажи» · звонок уже записан",
     "error": null,
     "items": [
      {
       "bucket": "did",
-      "line": "Сделано: позвонил Ольге · закрыл «Позвонить Ольге» · ещё 2 похожих — спрошу вечером · звонок уже записан",
+      "line": "Сделано: позвонил Ольге · закрыл «Позвонить Ольге» · ещё 2 похожих — вопросы в «Подскажи» · звонок уже записан",
       "chips": [
        {
         "move": "keep_open",
@@ -1082,7 +1232,7 @@
       ],
       "title": "Позвонил Ольге",
       "task": {
-       "id": "5124677d-bf2b-407f-a915-97d25f5038c5",
+       "id": "c8fe2e77-c03d-4108-95e4-bc1489152f59",
        "title": "Позвонить Ольге",
        "kind": "task",
        "status": "done",
@@ -1095,18 +1245,18 @@
        "back_on": null,
        "back_said": null,
        "focus_on": null,
-       "person_id": "43f5e5c9-0338-415d-8081-9edf96282704",
+       "person_id": "de31d8b2-b271-46de-b82f-aaf5a124ddbd",
        "project_id": null,
        "deal_id": null
       },
       "did": {
-       "line": "закрыл «Позвонить Ольге» · ещё 2 похожих — спрошу вечером · звонок уже записан",
-       "closed": "5124677d-bf2b-407f-a915-97d25f5038c5",
+       "line": "закрыл «Позвонить Ольге» · ещё 2 похожих — вопросы в «Подскажи» · звонок уже записан",
+       "closed": "c8fe2e77-c03d-4108-95e4-bc1489152f59",
        "closed_title": "Позвонить Ольге",
        "created": null,
        "asked": [
-        "3052101d-b9f6-43f4-8ff0-359df159efda",
-        "ab29fd57-6c29-4861-8897-da74303fc169"
+        "7d067279-985a-418d-a7af-8e485c50f259",
+        "52d3e065-d3dd-484d-b923-8d94a06d8c25"
        ]
       }
      }

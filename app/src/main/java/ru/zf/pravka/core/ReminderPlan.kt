@@ -14,7 +14,7 @@ import org.json.JSONObject
  * только ботом в Telegram — там я почти не отвечаю), после срабатывания — „Сделано / Через час / Завтра“ и исчезает».
  * С 06.10 напоминание шлёт только бот; с 02.10 по 15.10 он послал три, нажата одна кнопка. Теперь главный канал —
  * телефон: точный будильник на ближайший миг (`trigger/ReminderAlarms.kt`), показ — `trigger/Reminders.kt`; бот —
- * запасной, через 3 минуты, если телефон не отметил показ (`task.reminded {via: phone}`, флаг `remind_phone`).
+ * запасной, через 10 минут, если телефон не отметил показ (`task.reminded {via: phone}`, флаг `remind_phone`).
  *
  * Здесь — чистое решение под JVM-тестом: что пора показать, когда будить в следующий раз, что написать и какие
  * операции у кнопок. Напоминание по месту («когда приеду домой») становится мигом здесь же: приезд ставит делу
@@ -105,8 +105,15 @@ object ReminderPlan {
             else -> "должно было ${DelaAsk.ddmm(day.toString(), today.toString())} в $hm"
         }
         val tail = if (!t.remind && t.dueDate.isNotBlank()) " · дело на " + dueWords(t.dueDate, today) else ""
-        return "$whenWords$tail · Дела"
+        return "$whenWords$tail" + (if (afterBot(d)) " · уже было в Telegram" else "") + " · Дела"
     }
+
+    /**
+     * Бот уже прислал это напоминание в Telegram (`reminded_via = bot`: телефон был выключен или без связи дольше
+     * запаса) — телефон показывает его поздно и тихо, без всплытия и звука, и не отмечает показ своим: не будить второй
+     * раз тем, что уже пришло (проверка 16.10.2026).
+     */
+    fun afterBot(d: Due): Boolean = d.task.remindedVia == "bot" && d.task.remindedAt.isNotBlank()
 
     /** «ты дома», «приехал: Офис» — как сказано место автопилота. */
     fun placeWords(place: String): String =
