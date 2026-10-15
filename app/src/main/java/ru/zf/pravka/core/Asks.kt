@@ -325,7 +325,11 @@ object Asks {
      * предмет: клиент и человек — по id (без id — по названию), встреча — по id или названию, мелочь — одна. Внутри вида
      * — у кого самый старый вопрос (дольше ждёт); «старше» — по `created_at` до секунды, равные — по id.
      */
-    fun groups(sugs: Collection<Dela.Suggestion>, day: String, title: (About) -> String = { it.title }): Triple<List<Group>, List<Dela.Suggestion>, Int> {
+    fun groups(
+        sugs: Collection<Dela.Suggestion>,
+        day: String,
+        title: (About, Dela.Suggestion) -> String = { a, sg -> if (a.kind == KIND_MEETING) sg.batchTitle.ifBlank { a.title } else a.title },
+    ): Triple<List<Group>, List<Dela.Suggestion>, Int> {
         class G(val kind: String, val id: String?, val title: String, val old: Long) {
             val hot = ArrayList<Dela.Suggestion>()
             val cold = ArrayList<Dela.Suggestion>()
@@ -341,7 +345,7 @@ object Asks {
             }
             val small = a.kind == KIND_SMALL
             val key = if (small) KIND_SMALL else a.kind + "\u0000" + (a.id ?: a.title)
-            val g = gs.getOrPut(key) { G(a.kind, if (small) null else a.id, if (small) SMALL else title(a), stamp(sg).ts) }
+            val g = gs.getOrPut(key) { G(a.kind, if (small) null else a.id, if (small) SMALL else title(a, sg), stamp(sg).ts) }
             (if (urgent(sg, day)) g.hot else g.cold) += sg
         }
         val order = gs.values.sortedWith(compareBy({ it.hot.isEmpty() }, { KINDS.indexOf(it.kind) }, { it.old }))
@@ -363,15 +367,19 @@ object Asks {
             return Queue(false, ph, nx, day, emptyList(), emptyList(), list.size, list.size, 0, rh.todayMax, rh.eveningMax, list)
         }
         val mine = s.suggestions.values.filter { it.pending && (me.isBlank() || it.forUser == me) }
-        val (gs, hot, plan) = groups(mine, day) { a -> fresh(s, a) }
+        val (gs, hot, plan) = groups(mine, day) { a, sg -> fresh(s, a, sg) }
         val total = gs.sumOf { it.n }
         return Queue(true, ph, nx, day, gs, hot, total, total - hot.size, plan, rh.todayMax, rh.eveningMax, gs.flatMap { it.items })
     }
 
-    /** Имя группы: клиент и человек — свежее из копии; нет — имя штампа, пустое — «Встреча» / «Прочее» (`asksTitle` веба). */
-    private fun fresh(s: Dela.Snapshot, a: About): String {
+    /**
+     * Имя группы (`asksTitle` веба, `asks._title` сервера): клиент и человек — свежее из копии; встреча — текущее название
+     * пачки вопроса (сервер переименовывает её вслед за встречей); нет — имя штампа, пустое — «Встреча» / «Прочее».
+     */
+    private fun fresh(s: Dela.Snapshot, a: About, sg: Dela.Suggestion): String {
         val id = a.id
         val got = when {
+            a.kind == KIND_MEETING -> sg.batchTitle
             id == null -> null
             a.kind == KIND_CLIENT -> s.projects[id]?.name
             a.kind == KIND_PERSON -> s.person(id)?.label
@@ -420,7 +428,10 @@ object Asks {
         val rows: List<Dela.Suggestion> = emptyList(),
         val groups: List<Pair<Group, List<Dela.Suggestion>>> = emptyList(),
         val more: Int = 0,
-    )
+    ) {
+        /** Вопросы на экране в порядке показа — по ним П-номера (их же видит Claude: «П1 поставь»); свёрнуто — пусто. */
+        val shown: List<Dela.Suggestion> get() = rows + groups.flatMap { it.second }
+    }
 
     /**
      * Карточка «Подскажи» по фазе ([opened] — [Queue.openKey], в котором раскрыли тапом; сменилась фаза — снова
@@ -430,7 +441,7 @@ object Asks {
     fun card(q: Queue, opened: String?, legacyMax: Int): Card? {
         if (!q.on) {
             if (q.all.isEmpty()) return null
-            return Card(Mode.LEGACY, q.all.size, "ждёт твоего да", null, rows = q.all.take(legacyMax), more = q.all.size - legacyMax)
+            return Card(Mode.LEGACY, q.all.size, "ждёт твоего да", null, rows = q.all.take(legacyMax), more = (q.all.size - legacyMax).coerceAtLeast(0))
         }
         if (q.total == 0) return null
         if (q.phase == Phase.EVENING || opened == q.openKey) {
@@ -451,6 +462,12 @@ object Asks {
         }
         return Card(Mode.FOLD, q.total, null, foldText(q))
     }
+
+    /**
+     * Блок «Подскажи» главной «Сейчас» вкладки Дел (`newBox` веба; правило 15 — вкладка устроена как веб): та же
+     * раскладка по фазе, что на «Сегодня», а без флага — все ждущие вопросы, как раньше (предела строк у вкладки нет).
+     */
+    fun homeCard(q: Queue, opened: String?): Card? = card(q, opened, Int.MAX_VALUE)
 
     /** Подзаголовок группы: «ООО Ромашка · 2», сгорающее — отдельной частью (её карточка красит). */
     fun groupHead(g: Group): String = "${g.title} · ${g.n}"

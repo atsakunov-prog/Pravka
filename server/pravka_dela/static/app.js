@@ -633,11 +633,13 @@ const aboutOf = (s) => {
   if (a && typeof a === 'object' && ASKS_KINDS.includes(a.kind)) return { kind: a.kind, id: a.id || null, title: String(a.title || '') };
   return { kind: 'small', id: null, title: s.batch_title || ASKS_ELSE };
 };
-/** Название группы — свежее по id из синка (клиента переименовали после вопроса); title штампа — запас. */
-function asksTitle(a) {
+/** Название группы — свежее по id из синка (клиента переименовали после вопроса); встреча — текущее название пачки
+ *  вопроса (сервер переименовывает её вслед за встречей), как asks._title; title штампа — запас. */
+function asksTitle(a, s) {
   if (a.kind === 'small') return ASKS_SMALL;
   if (a.kind === 'client' && a.id && project(a.id)) return project(a.id).name;
   if (a.kind === 'person' && a.id && person(a.id)) return personName(person(a.id));
+  if (a.kind === 'meeting' && s && s.batch_title) return s.batch_title;
   return a.title || (a.kind === 'meeting' ? 'Встреча' : ASKS_ELSE);
 }
 /** Очередь «Подскажи» на сейчас — как asks.queue и вид asks: фаза, ближайший заход, группы в порядке экрана (со
@@ -654,7 +656,7 @@ function asksQueue() {
   for (const s of list) {
     const a = aboutOf(s);
     const key = a.kind === 'small' ? 'small' : a.kind + ':' + (a.id || a.title);
-    if (!groups.has(key)) groups.set(key, { kind: a.kind, id: a.kind === 'small' ? null : a.id, title: asksTitle(a), hot: [], cold: [], old: s.created_at });
+    if (!groups.has(key)) groups.set(key, { kind: a.kind, id: a.kind === 'small' ? null : a.id, title: asksTitle(a, s), hot: [], cold: [], old: s.created_at });
     const g = groups.get(key);
     (isUrgent(s, day) ? g.hot : g.cold).push(s);
   }
@@ -676,9 +678,12 @@ function asksFoldText(q) {
     : [q.phase === 'before' && q.next && q.urgent.length ? `к ${q.next.label}: ${q.urgent.length}` : null, q.rest ? 'к вечеру: ' + q.rest : null];
   return ['Подскажи', ...parts.filter(Boolean)].join(' · ');
 }
-/** Раскрыть очередь щелчком — до смены фазы (S.asksOpen хранит фазу, в которую раскрыли). */
-const asksExpand = (phase) => () => { S.asksOpen = phase; render(); };
-const asksExpanded = (q) => q.phase === 'evening' || S.asksOpen === q.phase;
+/** Раскрыть очередь щелчком — до смены фазы. Ключ — фаза и её ближайший заход (как Queue.openKey телефона): одно слово
+ *  фазы держало раскрытое до следующего отрезка с той же фазой — раскрытое в пн 10:00 без перезагрузки вкладки снова
+ *  стояло раскрытым во вт 10:00 (проверка шага 2). */
+const asksKey = (q) => q.phase + '@' + (q.next ? q.next.at : 0);
+const asksExpand = (q) => () => { S.asksOpen = asksKey(q); render(); };
+const asksExpanded = (q) => q.phase === 'evening' || S.asksOpen === asksKey(q);
 /** Значок группы: клиент — портфель, человек — инициалы, встреча — люди, мелочь — список. */
 function asksLead(g) {
   if (g.kind === 'client') return icon('briefcase', 16);
@@ -690,7 +695,7 @@ const asksHref = (g) => (!g.id ? null : g.kind === 'client' ? '#/p/' + g.id : g.
 /** Строка «Подскажи» по фазе на главной «Сейчас»: свёрнута, сгорающее или всё группами. П-номера — по порядку экрана
  *  (askItem кладёт их в S.sugOrder) — так их видит и Claude. */
 function asksPhased(q) {
-  const expand = asksExpand(q.phase);
+  const expand = asksExpand(q);
   if (asksExpanded(q)) return asksGrouped(q);
   if (q.phase === 'today' && q.urgent.length) {
     const shown = q.urgent.slice(0, q.max.today);

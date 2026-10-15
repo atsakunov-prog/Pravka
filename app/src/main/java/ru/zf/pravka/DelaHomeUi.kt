@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.max
 import androidx.compose.ui.unit.sp
+import ru.zf.pravka.core.Asks
 import ru.zf.pravka.core.Dela
 import ru.zf.pravka.core.DelaColumns
 import ru.zf.pravka.core.DelaGroups
@@ -104,6 +105,7 @@ internal class Home(
     val today: List<Dela.Task>,
     /** Сколько дел со сроком сегодня уже в «Сейчас» — подпись «что уже в «Сейчас» — выше». */
     val taken: Int,
+    /** Вопросы «Подскажи» на экране в порядке показа — по ним П-номера (их видит Claude); свёрнуто — пусто. */
     val asks: List<Dela.Suggestion>,
     /** «Новое», которое ответа не ждёт: поставлено за три дня и сделано само — строкой-ссылкой. */
     val fed: Int,
@@ -115,6 +117,14 @@ internal class Home(
     val inner: List<Pair<Dela.Task, Int>> = emptyList(),
     /** «Сейчас на завтра» (docs/dela-phone-27.md): строкой под «Новым», тап — пачка кандидатов; null — строки нет. */
     val plan: DelaViews.Plan? = null,
+    /**
+     * «Подскажи» по фазе, как `newBox` веба (шаг 2 петли, docs/dela-phone-23.md; раскладку решает `Asks.homeCard` под
+     * JVM-тестом): до 15:00 — строка «Подскажи · к 15:00: N · к вечеру: M», с 15:00 — сгорающее, вечером — группами.
+     * Без флага `asks` — [Asks.Mode.LEGACY]: все вопросы, как раньше. null — вопросов нет.
+     */
+    val card: Asks.Card? = null,
+    /** Тап по свёрнутой строке — раскрыть до смены фазы (ключ — `Asks.Queue.openKey`). */
+    val onOpen: () -> Unit = {},
 )
 
 /** Значок набора Ковчега по имени веба; нет такого — запасной штрих приложения. */
@@ -337,30 +347,76 @@ internal fun LazyListScope.homeView(
             }
         }
     }
-    if (h.asks.isNotEmpty()) {
-        item(key = "home:new") {
-            HomeBlock(
-                kv("inbox", Glyphs.Groups), "Новое", h.asks.size, sub = "подскажи — без тебя не поставлю",
-                onTitle = onNew,
-            ) {
+    // Строка вопроса — та же, что в «Новом»; П-номер — место на экране (h.asks — в порядке показа).
+    val ask: @Composable (Dela.Suggestion, Int) -> Unit = { sg, i ->
+        AskRow(
+            sg, i + 1, crm.snap, crm.me, today,
+            onAccept = { onAccept(listOf(sg)) }, onEdit = { onEdit(sg) }, onReject = { onReject(sg) },
+            onOpen = actions.open, onMerge = { t -> onMerge(sg, t) },
+            onAcceptSet = { set -> onAcceptSet(sg, set) },
+            onAnswer = { o -> onAnswer(sg, o) },
+            onRejectNow = { reason -> onRejectNow(sg, reason) },
+        )
+    }
+    // «Все» — под вопросами, а не в заголовке: там они съедали подпись блока. Только когда у каждого вопроса ответ —
+    // одно «Да» (как веб): при вариантах или выборе человека «Поставить все» соврало бы.
+    val bulk: @Composable (List<Dela.Suggestion>) -> Unit = { list ->
+        if (DelaViews.bulkOk(list, crm.snap)) Row {
+            Spacer(Modifier.weight(1f))
+            PaperTextButton("Не надо все", onClick = { onRejectAll(list) })
+            PaperTextButton("Поставить все", onClick = { onAccept(list) })
+        }
+    }
+    val card = h.card
+    when (card?.mode) {
+        null -> Unit
+        // Без флага `asks` у сервера — как раньше: «Новое», все вопросы.
+        Asks.Mode.LEGACY -> item(key = "home:new") {
+            HomeBlock(kv("inbox", Glyphs.Groups), "Новое", h.asks.size, sub = "подскажи — без тебя не поставлю", onTitle = onNew) {
                 h.asks.forEachIndexed { i, sg ->
                     if (i > 0) RowRule()
-                    AskRow(
-                        sg, i + 1, crm.snap, crm.me, today,
-                        onAccept = { onAccept(listOf(sg)) }, onEdit = { onEdit(sg) }, onReject = { onReject(sg) },
-                        onOpen = actions.open, onMerge = { t -> onMerge(sg, t) },
-                        onAcceptSet = { set -> onAcceptSet(sg, set) },
-                        onAnswer = { o -> onAnswer(sg, o) },
-                        onRejectNow = { reason -> onRejectNow(sg, reason) },
-                    )
+                    ask(sg, i)
                 }
-                // «Все» — под вопросами, а не в заголовке: там они съедали подпись блока. Только когда у каждого
-                // вопроса ответ — одно «Да» (как веб): при вариантах или выборе человека «Поставить все» соврало бы.
-                if (DelaViews.bulkOk(h.asks, crm.snap)) Row {
-                    Spacer(Modifier.weight(1f))
-                    PaperTextButton("Не надо все", onClick = { onRejectAll(h.asks) })
-                    PaperTextButton("Поставить все", onClick = { onAccept(h.asks) })
+                bulk(h.asks)
+            }
+        }
+        // Шаг 2 петли (флаг `asks`): до 15:00, с 15:00 без сгорающего и в тишине выходных — одна строка (`asksPhased` веба).
+        Asks.Mode.FOLD -> item(key = "home:new") { AsksFoldLine(card.fold.orEmpty(), lead = true, onOpen = h.onOpen) }
+        // С 15:00 — только сгорающее (люди и договорённости сегодняшних встреч), под ним «к вечеру: M».
+        Asks.Mode.URGENT -> item(key = "home:new") {
+            Column(Modifier.fillMaxWidth()) {
+                HomeBlock(
+                    kv("help", Glyphs.Ask), "Подскажи", card.count, sub = "сгорает сегодня — люди и договорённости сегодняшних встреч",
+                    onTitle = onNew,
+                ) {
+                    h.asks.forEachIndexed { i, sg ->
+                        if (i > 0) RowRule()
+                        ask(sg, i)
+                    }
+                    bulk(h.asks)
+                    card.fold?.let {
+                        RowRule()
+                        AsksFoldLine(it, lead = false, onOpen = h.onOpen)
+                    }
                 }
+                if (card.more > 0) NewLine("ещё сгорает ${card.more} — в «Новом»", onNew)
+            }
+        }
+        // Вечер (или раскрыто тапом) — всё группами «ООО Ромашка · 2», до `evening_max`, дальше «ещё K — в «Новом»».
+        Asks.Mode.GROUPED -> item(key = "home:new") {
+            Column(Modifier.fillMaxWidth()) {
+                HomeBlock(kv("help", Glyphs.Ask), "Подскажи", card.count, sub = card.sub.orEmpty(), onTitle = onNew) {
+                    var i = 0
+                    card.groups.forEachIndexed { gi, (g, items) ->
+                        GroupHead(Asks.groupHead(g), top = gi > 0, hot = Asks.groupUrgent(g))
+                        items.forEachIndexed { k, sg ->
+                            if (k > 0) RowRule()
+                            ask(sg, i++)
+                        }
+                    }
+                    bulk(h.asks)
+                }
+                if (card.more > 0) NewLine("ещё ${card.more} — в «Новом»", onNew)
             }
         }
     }
@@ -370,7 +426,7 @@ internal fun LazyListScope.homeView(
     ).joinToString(" · ")
     if (rest.isNotBlank()) {
         item(key = "home:newlink") {
-            NewLine(if (h.asks.isEmpty()) "Новое: вопросов нет · $rest" else "Всё «Новое»: $rest", onNew)
+            NewLine(if (h.card == null) "Новое: вопросов нет · $rest" else "Всё «Новое»: $rest", onNew)
         }
     }
     // «Сейчас на завтра» — под «Новым» (судья §3.3, `planBox` веба): сначала ответить на вопросы, потом план. Кандидаты
@@ -398,16 +454,52 @@ internal fun LazyListScope.homeView(
     }
 }
 
-/** Подзаголовок группы внутри блока: «Отбить · 2». */
+/** Подзаголовок группы внутри блока: «Отбить · 2»; у группы «Подскажи» — сгорающее в ней «· сгорает 1» тоном внимания. */
 @Composable
-private fun GroupHead(text: String, top: Boolean) {
+private fun GroupHead(text: String, top: Boolean, hot: String? = null) {
     val t = LocalPravkaType.current
+    val ink = if (Look.v2) Kv.muted else ru.zf.pravka.ui.LocalMode.current.label
     Text(
-        text,
+        androidx.compose.ui.text.buildAnnotatedString {
+            append(text)
+            if (hot != null) {
+                pushStyle(androidx.compose.ui.text.SpanStyle(color = if (Look.v2) Kv.warn else ink))
+                append(" · $hot")
+                pop()
+            }
+        },
         style = t.label.copy(fontWeight = FontWeight.SemiBold),
-        color = if (Look.v2) Kv.muted else ru.zf.pravka.ui.LocalMode.current.label,
+        color = ink,
         modifier = Modifier.padding(top = if (top) 10.dp else 2.dp, bottom = 2.dp),
     )
+}
+
+/**
+ * Свёрнутая очередь «Подскажи» одной строкой (`.asks-fold` веба): «Подскажи · к 15:00: 1 · к вечеру: 6» (или «к
+ * вечеру: M» под сгорающим) и «раскрыть» — тап раскрывает всё до смены фазы. [lead] — значок слева, когда строка —
+ * весь блок.
+ */
+@Composable
+private fun AsksFoldLine(text: String, lead: Boolean, onOpen: () -> Unit) {
+    val t = LocalPravkaType.current
+    val v2 = Look.v2
+    val ink = if (v2) Kv.text else ru.zf.pravka.ui.LocalMode.current.label
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(KvShape.Control))
+            .clickable(role = Role.Button, onClickLabel = "раскрыть «Подскажи»", onClick = onOpen)
+            .padding(horizontal = if (lead) 8.dp else 0.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (lead) {
+            Icon(kv("help", Glyphs.Ask), contentDescription = null, tint = if (v2) Kv.warn else ink, modifier = Modifier.size(17.dp))
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(ru.zf.pravka.core.HeadLine.wrap(text), style = t.label, color = ink, modifier = Modifier.weight(1f))
+        Spacer(Modifier.width(6.dp))
+        Text("раскрыть", style = t.label, color = if (v2) Kv.accent else ink, maxLines = 1)
+    }
 }
 
 /** Строка-ссылка в «Новое» (`.new-link` веба): значок, слова, стрелка. */

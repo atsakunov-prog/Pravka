@@ -231,6 +231,13 @@ class AsksTest {
         val q = Asks.queue(s, "me", msk("2026-10-15T20:00"), Asks.FACTORY, Asks.QUIET_FACTORY)
         assertEquals(listOf("ООО Ромашка-Плюс", "Ваня", "Встреча"), q.groups.map { it.title })
         assertEquals(listOf("c", "b"), q.groups[1].items.map { it.id })
+        // Группа встречи — текущим названием пачки: сервер переименовывает её вслед за встречей (и триггером клиента в
+        // базе, мимо пересчёта about), а title штампа застывает при записи (проверка шага 2, как asks._title).
+        val renamed = s.copy(suggestions = s.suggestions + ("d" to s.suggestions.getValue("d").copy(
+            batchTitle = "ООО Лютик: модель · 13.10", payload = """{"about":{"kind":"meeting","id":"m1","title":"Созвон · 13.10"}}""",
+        )))
+        val r = Asks.queue(renamed, "me", msk("2026-10-15T20:00"), Asks.FACTORY, Asks.QUIET_FACTORY)
+        assertEquals("ООО Лютик: модель · 13.10", r.groups.last().title)
     }
 
     @Test
@@ -281,6 +288,31 @@ class AsksTest {
         assertEquals("Подскажи: 7 — до понедельника тихо", Asks.foldText(queueAt("2026-10-17T12:00", 1, 6)))
         // Ночь на понедельник — ещё тихо, заход сегодня в 15:00.
         assertEquals("Подскажи: 7 — до 15:00 тихо", Asks.foldText(queueAt("2026-10-19T04:00", 1, 6)))
+    }
+
+    @Test
+    fun `главная «Сейчас» вкладки Дел — та же раскладка по фазе, П-номера по порядку экрана`() {
+        // Проверка шага 2: вкладка Дел устроена как веб (правило 15), а показывала все вопросы в любой час.
+        val before = Asks.homeCard(queueAt("2026-10-15T10:00", 2, 3), null)!!
+        assertEquals(Asks.Mode.FOLD, before.mode)
+        assertEquals("Подскажи · к 15:00: 2 · к вечеру: 3", before.fold)
+        assertTrue("свёрнуто — П-номеров нет", before.shown.isEmpty())
+        val q = queueAt("2026-10-15T10:00", 2, 3)
+        assertEquals(Asks.Mode.GROUPED, Asks.homeCard(q, q.openKey)!!.mode)
+        // С 15:00 — только сгорающее; вечером — группами, П-номера сверху вниз: сгорающее, потом группы.
+        val today = Asks.homeCard(queueAt("2026-10-15T15:30", 2, 3), null)!!
+        assertEquals(Asks.Mode.URGENT, today.mode)
+        assertEquals(listOf("h1", "h2"), today.shown.map { it.id })
+        val evening = Asks.homeCard(queueAt("2026-10-15T18:30", 2, 3), null)!!
+        assertEquals(Asks.Mode.GROUPED, evening.mode)
+        assertEquals(evening.groups.flatMap { it.second }.map { it.id }, evening.shown.map { it.id })
+        assertEquals(listOf("h1", "h2", "c1", "c2", "c3"), evening.shown.map { it.id })
+        // Без флага — все вопросы, как раньше (предела строк у вкладки нет).
+        val s = Dela.Snapshot(suggestions = (1..9).map { ask("o$it", "2026-10-1${it % 5}T10:00:00+03:00") }.associateBy { it.id })
+        val legacy = Asks.homeCard(Asks.queue(s, "me", msk("2026-10-15T10:00"), Asks.FACTORY, Asks.QUIET_FACTORY), null)!!
+        assertEquals(Asks.Mode.LEGACY, legacy.mode)
+        assertEquals(DelaViews.asks(s, "me").map { it.id }, legacy.shown.map { it.id })
+        assertEquals(0, legacy.more)
     }
 
     @Test

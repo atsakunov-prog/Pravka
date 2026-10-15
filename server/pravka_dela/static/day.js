@@ -161,7 +161,7 @@ TWINS.pages.day = (() => {
     S.asksShown = q.phase;
     if (!q.total) return null;
     const head = (small) => T.sec('inbox', 'Подскажи', { count: q.total, hot: true, small, link: 'все в «Новом»', href: '#/new' });
-    const fold = (text) => el('button', { class: 'asks-fold', onclick: asksExpand(q.phase) }, text, el('span', { class: 'faint' }, 'раскрыть'));
+    const fold = (text) => el('button', { class: 'asks-fold', onclick: asksExpand(q) }, text, el('span', { class: 'faint' }, 'раскрыть'));
     if (asksExpanded(q)) {
       let left = q.max.evening;
       const rows = [];
@@ -177,11 +177,15 @@ TWINS.pages.day = (() => {
         el('div', { class: 'group asks tw-asks' }, rows), more > 0 ? el('div', { class: 'tw-ls' }, `ещё ${more} — в «Новом»`) : null);
     }
     if (q.phase === 'today' && q.urgent.length) {
+      const over = q.urgent.length - q.max.today;
       return T.card('tw-new o5', head('сгорает сегодня'),
         el('div', { class: 'group asks tw-asks' }, q.urgent.slice(0, q.max.today).map(askItem)),
+        over > 0 ? el('div', { class: 'tw-ls' }, `ещё сгорает ${over} — в «Новом»`) : null,
         q.rest ? fold('к вечеру: ' + q.rest) : null);
     }
-    return T.card('tw-new o5', head(null), fold(asksFoldText(q)));
+    // «Подскажи» и число уже в шапке карточки — в свёрнутой строке без них: «к 15:00: 3 · к вечеру: 8», «до
+    // понедельника тихо» (телефон шапки над свёрнутой строкой не рисует вовсе).
+    return T.card('tw-new o5', head(null), fold(asksFoldText(q).replace(/^Подскажи(?: · |: \d+ — )/, '')));
   }
 
   /** «Сегодня» — дела со сроком сегодня (кроме взятых в «Сейчас») и встречи дня по времени; завтрашнее — строкой. */

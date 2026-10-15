@@ -38,6 +38,8 @@ import re
 import uuid
 from typing import Any
 
+from psycopg.types.json import Jsonb
+
 from .meetings import MSK
 
 log = logging.getLogger("dela.asks")
@@ -388,6 +390,35 @@ def stamp(conn, data: dict, payload: dict, names=None) -> None:
     payload["about"] = about(conn, data, payload, names, meeting)
 
 
+def restamp_meeting(conn, mid, names=None) -> int:
+    """Встреча получила клиента, сделку или новое название (разбор, правка владельца, присылка службы —
+    meetings.after_edit) — предмет ждущих вопросов её пачки пересчитать тем же правилом about. Иначе он застывал при
+    записи: вопрос сверки, записанный до разбора Дел, стоял вечером отдельной группой «встреча» со старым названием, а не
+    у клиента, которого встрече потом дал разборщик (проверка шага 2, 15.10.2026). Срочность не трогаем: она — про день
+    встречи и слово службы, а они не менялись. Вопрос без штампа (записан до выката шага 2) остаётся мелочью — разовой
+    правки данных нет. Ответ — сколько вопросов поправлено."""
+    m = conn.execute("SELECT ref, owner_id FROM crm.meetings WHERE id = %s", (mid,)).fetchone()
+    if not m or not m["ref"]:
+        return 0
+    ref = "meeting:" + m["ref"]
+    rows = conn.execute(
+        "SELECT id, kind, source, task_id, batch_ref, batch_title, payload FROM tasks.suggestions "
+        "WHERE batch_ref = %s AND for_user = %s AND status = 'pending'", (ref, m["owner_id"])).fetchall()
+    meeting = _meeting(conn, {"batch_ref": ref}) if rows else None
+    n = 0
+    for r in rows:
+        p = r["payload"]
+        old = p.get("about") if isinstance(p, dict) else None
+        if not isinstance(old, dict) or old.get("kind") not in KINDS or r["source"] in ("krug", "plan"):
+            continue
+        new = about(conn, r, p, names, meeting)
+        if new != old:
+            conn.execute("UPDATE tasks.suggestions SET payload = jsonb_set(payload, '{about}', %s) WHERE id = %s",
+                         (Jsonb(new), r["id"]))
+            n += 1
+    return n
+
+
 # ── Очередь: группы в порядке экрана ────────────────────────────────────
 
 def is_urgent(payload: dict | None, day: str) -> bool:
@@ -417,6 +448,17 @@ def _ts(v: Any) -> int:
         return 0
 
 
+def _title(a: dict, s: dict) -> str:
+    """Название группы: мелочь — одна «Мелочь»; встреча — текущее название её пачки (batch_title: сервер переименовывает
+    пачку вслед за встречей — и триггером клиента в базе, мимо restamp_meeting), title штампа — запас; клиент и человек —
+    title штампа, свежее имя по id ставит _fresh."""
+    if a["kind"] == "small":
+        return SMALL
+    if a["kind"] == "meeting":
+        return s.get("batch_title") or a["title"]
+    return a["title"]
+
+
 def queue(sugs: list[dict], day: str) -> dict:
     """Ждущие вопросы одного человека → {total, urgent, rest, plan, groups, urgent_ids}. Группа — предмет (клиент и
     человек — по id, без id — по имени; встреча — по id или названию пачки; мелочь — одна). Порядок групп — как на
@@ -432,7 +474,7 @@ def queue(sugs: list[dict], day: str) -> dict:
         small = a["kind"] == "small"
         key = (a["kind"], None if small else (a.get("id") or a["title"]))
         g = groups.setdefault(key, {"kind": a["kind"], "id": None if small else a.get("id"),
-                                    "title": SMALL if small else a["title"], "n": 0, "urgent": 0,
+                                    "title": _title(a, s), "n": 0, "urgent": 0,
                                     "_u": [], "_r": [], "_old": _ts(s.get("created_at"))})
         hot = is_urgent(s.get("payload"), day)
         g["n"] += 1

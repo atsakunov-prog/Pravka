@@ -43,6 +43,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -63,7 +64,9 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import ru.zf.pravka.core.Asks
 import ru.zf.pravka.core.Dela
 import ru.zf.pravka.core.DelaRemind
 import ru.zf.pravka.core.DelaAsk
@@ -383,6 +386,23 @@ fun DelaTab(
     val me = link?.user ?: app.delaStore.me
     val today = LocalDate.now().toString()
     val now = System.currentTimeMillis()
+    // «Подскажи» на главной «Сейчас» — по фазе, как на «Сегодня» и в вебе (шаг 2 петли, docs/dela-phone-23.md):
+    // раскрытое тапом — до смены фазы (`Asks.Queue.openKey`); раз в минуту фаза сверяется с часами и блок
+    // перерисовывается, только когда она сменилась (`refresh` веба) — минутного тика у вкладки нет и не нужно.
+    var asksOpen by rememberSaveable { mutableStateOf<String?>(null) }
+    var asksTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(nav, snap.asksOn) {
+        if (nav != DelaViews.View.NOW.key || !snap.asksOn) return@LaunchedEffect
+        var shown = Asks.phase(System.currentTimeMillis())
+        while (true) {
+            delay(60_000L)
+            val p = Asks.phase(System.currentTimeMillis())
+            if (p != shown) {
+                shown = p
+                asksTick++
+            }
+        }
+    }
     // Круг жизни (12.10.2026): справочник — из Свода (едет синком), включён — когда сервер его знает.
     val krugDirs = DelaKrug.directions()
     val krugOn = DelaKrug.on(snap, krugDirs)
@@ -640,6 +660,8 @@ fun DelaTab(
             val taken = nowList.map { it.id }.toSet() + inner.map { it.first.id }
             val rest = DelaGroups.todayByGroups(snap, me, today, sphere, taken)
             val done = DelaGroups.doneToday(snap, me, today)
+            val queue = remember(snap, me, asksTick) { Asks.queue(snap, me, System.currentTimeMillis()) }
+            val asksCard = Asks.homeCard(queue, asksOpen)
             DelaScreen(
                 "Сейчас",
                 listOfNotNull(
@@ -654,10 +676,12 @@ fun DelaTab(
                     inner = inner,
                     today = rest,
                     taken = DelaGroups.todayTasks(snap, me, today, sphere).count { it.id in taken },
-                    asks = DelaViews.asks(snap, me),
+                    asks = asksCard?.shown.orEmpty(),
                     fed = DelaViews.feed(snap, me, sphere, now).size,
                     auto = Dela.autoDone(snap, me, now).size,
                     plan = DelaViews.plan(snap, me, today, now)?.takeIf { it.visible },
+                    card = asksCard,
+                    onOpen = { asksOpen = queue.openKey },
                 ),
                 late = DelaGroups.lateTasks(snap, me, today, sphere).size,
                 waits = waits,

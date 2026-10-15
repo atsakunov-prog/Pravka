@@ -195,6 +195,46 @@ def test_about_first_that_fits(dela):
     assert sug(dela, payload={"title": "l", "project_id": "не-uuid", "person_id": 42})["payload"]["about"]["kind"] == "small"
 
 
+def test_meeting_got_client_later_question_moves_to_client(dela):
+    """Вопрос сверки записан до разбора Дел — у встречи ещё нет клиента, предмет «встреча». Разборщик или владелец дал
+    встрече клиента (meetings.after_edit → asks.restamp_meeting) — вопрос в группе клиента, срочность прежняя; клиента
+    убрали — снова встреча. Название группы встречи — текущее название пачки (её переименовывает и триггер клиента в
+    базе, мимо restamp). Вопрос без штампа (до выката) restamp не трогает — он мелочь (проверка шага 2, 15.10.2026)."""
+    today = db_today(dela)
+    romashka = project(dela, "sasha", "ООО Ромашка")
+    m = meeting(dela, "601", today, title="Созвон")
+    s = sug(dela, source="meeting", batch_ref="meeting:601", batch_title="Созвон · 15.10", payload={"title": "Прислать модель"})
+    assert s["payload"]["about"] == {"kind": "meeting", "id": str(m["id"]), "title": "Созвон · 15.10"}
+    assert s["payload"]["urgency"] == "today"
+    with dela_db.session(dela, "system", "test") as conn:
+        bare = conn.execute("INSERT INTO tasks.suggestions (for_user, kind, source, batch_ref, batch_title, payload, "
+                            "created_by) VALUES ('sasha', 'create', 'meeting', 'meeting:601', 'Созвон · 15.10', "
+                            "'{\"title\": \"Старый\"}', 'sasha') RETURNING id").fetchone()["id"]
+
+    def stamped(sid):
+        with dela_db.session(dela, "sasha", via="test") as conn:
+            return conn.execute("SELECT batch_title, payload FROM tasks.suggestions WHERE id = %s", (sid,)).fetchone()
+
+    ok(dela, "sasha", {"op": "meeting.set", "id": str(m["id"]), "set": {"project_id": str(romashka), "topic": "модель"}})
+    row = stamped(s["id"])
+    assert row["payload"]["about"] == {"kind": "client", "id": str(romashka), "title": "ООО Ромашка"}
+    assert (row["payload"]["urgency"], row["payload"]["urgent_on"]) == ("today", today.isoformat())
+    assert "about" not in stamped(bare)["payload"], "без штампа — мелочь, разовой правки нет"
+    v = store.view(dela, "sasha", "asks", at=at(today, 20).isoformat())
+    assert [(g["kind"], g["id"], g["n"]) for g in v["groups"]] == [("client", str(romashka), 1), ("small", None, 1)]
+    # Клиента убрали — снова встреча, названием пачки после правки.
+    ok(dela, "sasha", {"op": "meeting.set", "id": str(m["id"]), "set": {"project_id": None}})
+    row = stamped(s["id"])
+    assert row["payload"]["about"]["kind"] == "meeting"
+    v = store.view(dela, "sasha", "asks", at=at(today, 20).isoformat())
+    assert (v["groups"][0]["kind"], v["groups"][0]["title"]) == ("meeting", row["batch_title"])
+    # Пачку переименовали мимо restamp (триггер клиента в базе) — группа встречи берёт новое название пачки.
+    with dela_db.session(dela, "system", "test") as conn:
+        conn.execute("UPDATE tasks.suggestions SET batch_title = 'ООО Лютик: модель · 15.10' WHERE batch_ref = 'meeting:601'")
+    v = store.view(dela, "sasha", "asks", at=at(today, 20).isoformat())
+    assert v["groups"][0]["title"] == "ООО Лютик: модель · 15.10"
+
+
 def test_plan_candidate_is_plan_and_evening(dela):
     t = ok(dela, "sasha", {"op": "task.create", "task": {"title": "Дело на завтра"}})[0]["task"]
     s = sug(dela, source="plan", kind="update", task_id=str(t["id"]), batch_ref="plan:2026-10-16",
@@ -353,6 +393,15 @@ def test_web_has_the_same_rule():
     card = day[day.index("function newCard()"):]
     assert "if (asksOn()) return asksCard();" in card[:card.index("\n  }\n")]
     card = day[day.index("function asksCard()"):]
-    assert "asksQueue()" in card[:card.index("\n  }\n")]
+    card = card[:card.index("\n  }\n")]
+    assert "asksQueue()" in card
+    # Раскрыто щелчком — до смены фазы: ключ — фаза и миг ближайшего захода (как Queue.openKey телефона), а не одно слово
+    # фазы — иначе раскрытое в пн 10:00 стояло раскрытым и во вт 10:00 (проверка шага 2). Ключ берут и главная, и #/day.
+    key = re.search(r"const asksKey = \(q\) => (.+);", js)
+    assert key and "q.phase" in key.group(1) and "q.next.at" in key.group(1), "ключ раскрытия — с мигом захода"
+    assert "S.asksOpen = asksKey(q)" in js and "S.asksOpen === asksKey(q)" in js
+    assert "asksExpand(q)" in card and "asksExpand(q.phase)" not in js + card
+    # Группа встречи — названием пачки (её переименовывает сервер вслед за встречей), как asks._title.
+    assert "s.batch_title" in js[js.index("function asksTitle("):js.index("function asksQueue(")]
     # Подписи групп — те же слова, что у сервера (мелочь — одна группа).
     assert f"'{asks.SMALL}'" in js and re.search(r"KINDS = \['client', 'person', 'meeting', 'small'\]", js)

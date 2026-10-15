@@ -316,9 +316,14 @@ def retitle_batches(conn, mid) -> int:
 
 
 def after_edit(conn, mid, titled: bool = True) -> None:
-    """После правки карточки: пачки «Нового» (если могло смениться название) и запись в хронологии."""
+    """После правки карточки: пачки «Нового» (если могло смениться название), предмет их ждущих вопросов (клиент мог
+    появиться и у присылки службы — подсказкой) и запись в хронологии."""
+    from . import asks, store  # круговой импорт: оба берут у встреч MSK
+
     if titled:
         retitle_batches(conn, mid)
+    cache: dict = {}
+    asks.restamp_meeting(conn, mid, lambda p: store._names(conn, p, cache))
     touch(conn, mid)
 
 
