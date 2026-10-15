@@ -26,7 +26,9 @@ SELECT t.num, t.title, t.notes, t.status,
        coalesce(k.goal, false) AS goal, k.rhythm,
        -- Дела внутри дела (dela_0030): «Зачем» — цель дерева (why_goal) или обычное дело, внутри которого это дело;
        -- pos — место среди соседей (дел с тем же «Зачем»).
-       coalesce(wk.goal, false) AS why_goal, t.pos
+       coalesce(wk.goal, false) AS why_goal, t.pos,
+       -- Захват (dela_0024c): kind — task или remind (напоминание, в списках дел его нет); back_on — когда вернётся дело «потом».
+       t.kind, t.back_on
 FROM tasks.tasks t
 LEFT JOIN crm.projects p ON p.id = t.project_id
 LEFT JOIN crm.deals d ON d.id = t.deal_id
@@ -36,7 +38,7 @@ LEFT JOIN tasks.krug k ON k.id = t.id AND k.kind = 'task' AND k.owner_id = crm.o
 LEFT JOIN tasks.tasks w ON w.id = k.why_id
 LEFT JOIN tasks.krug wk ON wk.id = k.why_id AND wk.kind = 'task'
 WHERE crm.sees_task(crm.owner_id(), t.project_id, t.owner_id);
-COMMENT ON VIEW life.tasks IS 'Дела владельца (сервис «Дела»). num — короткий номер «#57». status: open, done, cancelled. grp — группа дела, как Саша их видит: owed — «Отбить» (ждут от меня: person ждёт от Саши ответа или дела; первым делом), self — «Запустить» (сам придумал: mine и agenda), check — «Мониторить» (ждёт от person, ball waiting). ball: mine — моё, waiting — мяч у person, agenda — поднять при встрече с person; owed — флаг «ждут от меня». money — paid (оплата согласована), potential (развитие), none; пусто у задачи = как у проекта. project пусто — «Входящие». remind_at — когда напомнить в Telegram, remind_place — напомнить по приезду (место автопилота телефона), reminded_at — когда напоминание ушло. directions — направления Круга жизни (ключи Свода krug.directions: health, work…) с наследованием от «Зачем» и проекта; why_num и why — «Зачем»: цель, к которой ведёт это дело (why_goal true), или обычное дело, внутри которого оно лежит (why_goal false: дела внутри дела — обычные дела, pos — место среди соседей, 1 — первым); directions[1] — главное направление, у корня цепочки; остальные — метки. goal — узел дерева целей Круга жизни (цель-состояние, а не дело); rhythm — ритм практики (цель, которая повторяется). Менять дела — инструментами dela_* (вложить — dela_change inside), не SQL.';
+COMMENT ON VIEW life.tasks IS 'Дела владельца (сервис «Дела»). num — короткий номер «#57». status: open, done, cancelled. grp — группа дела, как Саша их видит: owed — «Отбить» (ждут от меня: person ждёт от Саши ответа или дела; первым делом), self — «Запустить» (сам придумал: mine и agenda), check — «Мониторить» (ждёт от person, ball waiting). ball: mine — моё, waiting — мяч у person, agenda — поднять при встрече с person; owed — флаг «ждут от меня». money — paid (оплата согласована), potential (развитие), none; пусто у задачи = как у проекта. project пусто — «Входящие». remind_at — когда напомнить в Telegram, remind_place — напомнить по приезду (место автопилота телефона), reminded_at — когда напоминание ушло. directions — направления Круга жизни (ключи Свода krug.directions: health, work…) с наследованием от «Зачем» и проекта; why_num и why — «Зачем»: цель, к которой ведёт это дело (why_goal true), или обычное дело, внутри которого оно лежит (why_goal false: дела внутри дела — обычные дела, pos — место среди соседей, 1 — первым); directions[1] — главное направление, у корня цепочки; остальные — метки. goal — узел дерева целей Круга жизни (цель-состояние, а не дело); rhythm — ритм практики (цель, которая повторяется). kind — task (дело) или remind (напоминание «напомни в 12 …»: не дело, своего срока нет — remind_at); back_on — день, когда дело «потом» вернётся на «Сегодня». Менять дела — инструментами dela_* (вложить — dela_change inside), не SQL.';
 
 CREATE OR REPLACE VIEW life.projects AS
 SELECT p.name, p.aliases, p.sphere, p.kind, o.name AS org, p.owner_id AS owner, p.money_default, p.note, p.archived_at,
@@ -68,7 +70,7 @@ SELECT d.name, p.name AS project, d.stage, d.outcome, d.lost_reason, d.closed_on
        crm.deal_last_touch(d.id) AS last_touch,
        d.wheel, d.ball, d.next_step, d.my_view, d.ideas, d.log,
        (SELECT count(*) FROM tasks.tasks t
-         WHERE t.status = 'open'
+         WHERE t.status = 'open' AND t.kind = 'task'
            AND (t.deal_id = d.id
                 OR (t.deal_id IS NULL AND t.project_id = d.project_id AND crm.only_deal(d.project_id) = d.id
                     AND NOT EXISTS (SELECT 1 FROM tasks.krug k WHERE k.id = t.id AND k.kind = 'task' AND k.goal)))) AS open_tasks,

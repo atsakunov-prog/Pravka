@@ -243,7 +243,7 @@ def cmd_serve(args) -> int:
 
     import uvicorn
 
-    from . import api, spend, store
+    from . import api, capture, spend, store
 
     cfg = config_mod.load(args.env)
     if cfg.problems():
@@ -272,7 +272,8 @@ def cmd_serve(args) -> int:
                 log.info("книга трат Claude: прежний учёт Дел — %d дней", n)
         except Exception:
             log.exception("книга трат Claude: прежний учёт")
-        # Раз в час: неразобранные предложения старше недели гаснут.
+        # Раз в час: неразобранные предложения старше недели гаснут; дела «потом», которые вернулись и остались
+        # нетронутыми, уходят на ближайший понедельник (захват, capture.back_shift).
         while True:
             try:
                 n = await asyncio.to_thread(store.expire_suggestions, cfg.db_url)
@@ -280,6 +281,12 @@ def cmd_serve(args) -> int:
                     log.info("погасло предложений: %d", n)
             except Exception:
                 log.exception("уборка предложений упала")
+            try:
+                n = await asyncio.to_thread(capture.back_shift, cfg.db_url)
+                if n:
+                    log.info("«Вернулось» не тронуто — на понедельник: %d", n)
+            except Exception:
+                log.exception("перенос дел «потом»")
             await asyncio.sleep(3600)
 
     async def krug_loop():
@@ -336,12 +343,17 @@ def cmd_serve(args) -> int:
                 log.exception("советы по тратам Claude")
             await asyncio.sleep(60)
 
+    async def capture_loop():
+        # Захват (capture.py, 15.10.2026): фразы, которые правило не узнало, ждут модели (pending) — capture.loop.
+        await capture.loop(cfg.db_url, cfg.anthropic_key, cfg.claude_proxy)
+
     async def main():
         server = uvicorn.Server(uvicorn.Config(
             api.build(cfg), host=cfg.listen_host, port=cfg.listen_port,
             log_level="info", log_config=None, proxy_headers=False, server_header=False,
         ))
-        await asyncio.gather(server.serve(), chores(), bridge_loop(), krug_loop(), meetings_loop(), spend_loop())
+        await asyncio.gather(server.serve(), chores(), bridge_loop(), krug_loop(), meetings_loop(), spend_loop(),
+                             capture_loop())
 
     log.info("Дела: слушаю %s:%d", cfg.listen_host, cfg.listen_port)
     asyncio.run(main())

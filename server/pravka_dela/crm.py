@@ -36,8 +36,9 @@ EPOCH = dt.date(2000, 1, 1)
 # сделки, кроме целей дерева (их в списках дел нет). Открытое такое дело — шаг сделки (open_tasks, next_task, «застыла»),
 # закрытое — её движение и «сделано». Одно правило для DEALS_SQL, карточки сделки (view_deal) и строки Claude
 # (ask._deals_on_screen); у коннектора — то же в life.deals (life_dela.sql). {t} — дело, {d} — сделка.
-STEP = ("({t}.deal_id = {deal} OR ({solo} AND {t}.deal_id IS NULL AND {t}.project_id = {project}"
-        " AND NOT EXISTS (SELECT 1 FROM tasks.krug k WHERE k.id = {t}.id AND k.kind = 'task' AND k.goal)))")
+# Напоминание (захват, kind 'remind') — не шаг сделки: оно не дело, а «не забыть» в свой час.
+STEP = ("({t}.kind = 'task' AND ({t}.deal_id = {deal} OR ({solo} AND {t}.deal_id IS NULL AND {t}.project_id = {project}"
+        " AND NOT EXISTS (SELECT 1 FROM tasks.krug k WHERE k.id = {t}.id AND k.kind = 'task' AND k.goal))))")
 SOLO = "crm.only_deal({d}.project_id) IS NOT DISTINCT FROM {d}.id"
 
 
@@ -241,7 +242,7 @@ def _steps(conn, d: dict, done: bool) -> list[dict]:
     else:
         where, order = f"status = 'open' AND {cond}", store.ORDER
     since = conn.execute("SELECT crm.deal_from(%s) AS s", (d["id"],)).fetchone()["s"]
-    rows = conn.execute(f"SELECT * FROM tasks.v_tasks WHERE ({where}) AND NOT goal{order}",
+    rows = conn.execute(f"SELECT * FROM tasks.v_tasks WHERE ({where}) AND NOT goal AND kind = 'task'{order}",
                         {"solo": bool(d.get("solo")), "since": since, "deal": d["id"], "project": d["project_id"]}).fetchall()
     return [{**t, "via_client": t["deal_id"] is None} for t in rows]
 

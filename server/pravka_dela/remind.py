@@ -114,16 +114,20 @@ def chip(t: dict, today: dt.date) -> str:
     return f"⏰ {t['remind_place']}" if t.get("remind_place") else ""
 
 
-def state(t: dict, today: dt.date) -> str:
-    """Напоминание словами — для Claude и карточки (DelaRemind.state). Нет напоминания — пусто."""
+def state(t: dict, today: dt.date, phone: bool = False) -> str:
+    """Напоминание словами — для Claude и карточки (DelaRemind.state). Нет напоминания — пусто. phone — напоминания
+    показывает телефон (user.settings remind_phone.on, захват 15.10.2026): «напомню на телефоне»."""
+    where = "на телефоне" if phone else "в Telegram"
     sent = at_of(t.get("reminded_at")) if t.get("reminded_at") else None
     if sent:
+        if t.get("reminded_via") == "phone":
+            return "напоминание показано на телефоне " + when_words(sent, today)
         return "напоминание отправлено в Telegram " + when_words(sent, today)
     at = at_of(t.get("remind_at")) if t.get("remind_at") else None
     if at:
-        return (f"приехал «{t['remind_place']}» — " if t.get("remind_place") else "") + "напомню в Telegram " + when_words(at, today)
+        return (f"приехал «{t['remind_place']}» — " if t.get("remind_place") else "") + f"напомню {where} " + when_words(at, today)
     if t.get("remind_place"):
-        return f"напомню в Telegram, когда приедет: {t['remind_place']}"
+        return f"напомню {where}, когда приедет: {t['remind_place']}"
     return ""
 
 
@@ -185,16 +189,23 @@ def is_home(place: str | None) -> bool:
 
 # ── Бот: что пора, кнопки ───────────────────────────────────────────────
 
+# Телефон — главный канал (захват, 15.10.2026; владелец: «не только ботом в Telegram — там я почти не отвечаю»): у того,
+# чей телефон показывает напоминания сам (user.settings remind_phone.on), бот ждёт PHONE_GRACE — успел телефон отметить
+# показ (task.reminded via phone) — бот молчит; телефон выключен или без связи — Telegram с припиской «телефон молчит».
+PHONE_GRACE_MIN = 3
+PHONE_ON = "coalesce(u.settings -> 'remind_phone' ->> 'on', 'false') = 'true'"
 DUE = """
 SELECT t.id AS task_id, t.num, t.owner_id AS "user", u.telegram_id, t.title,
        p.name AS project, coalesce(pe.short, pe.name) AS person,
        t.due_date, t.due_time, t.remind_at, t.remind_place,
-       greatest(0, floor(extract(epoch FROM now() - t.remind_at) / 60))::int AS late_min
+       greatest(0, floor(extract(epoch FROM now() - t.remind_at) / 60))::int AS late_min,
+       t.kind, """ + PHONE_ON + """ AS phone
 FROM tasks.tasks t
 JOIN crm.users u ON u.id = t.owner_id
 LEFT JOIN crm.projects p ON p.id = t.project_id
 LEFT JOIN crm.people pe ON pe.id = t.person_id
-WHERE t.status = 'open' AND t.reminded_at IS NULL AND t.remind_at <= now() AND u.telegram_id IS NOT NULL
+WHERE t.status = 'open' AND t.reminded_at IS NULL AND u.telegram_id IS NOT NULL
+  AND t.remind_at <= now() - CASE WHEN """ + PHONE_ON + """ THEN make_interval(mins => %(grace)s) ELSE interval '0' END
   -- Кому напоминания не нужны (Марианна: settings.reminders = false), тому — только те, что он
   -- поставил себе сам (или кнопкой бота под своим же напоминанием); чужих — нет (правило 6).
   AND (coalesce(u.settings ->> 'reminders', 'true') <> 'false'
@@ -214,7 +225,7 @@ def due(url: str, public_url: str = "") -> dict:
     # Без неё ссылка остаётся относительной — бот всё равно пришлёт дело, только без перехода.
     base = (public_url or "").rstrip("/")
     with db.session(url, "system", ACTOR, BOT) as conn:
-        rows = conn.execute(DUE, {"bot": ACTOR, "limit": LIMIT}).fetchall()
+        rows = conn.execute(DUE, {"bot": ACTOR, "limit": LIMIT, "grace": PHONE_GRACE_MIN}).fetchall()
         at = conn.execute("SELECT now() AS n").fetchone()["n"]
     today = at.astimezone(MSK).date()
     out = []

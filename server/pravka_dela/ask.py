@@ -164,6 +164,8 @@ route — "edit", если команда про дела или предлож�
   отменить, отдать другому, дописать, принять, отклонить). "new", если вся команда — только новые
   дела или надиктовка о новом без ссылки на то, что на экране: тогда changes, create и suggestions
   пустые, её разберёт другой разбор. «До этого / для этого надо…» при открытом деле — ссылка на него: "edit".
+  Сделанное Сашей в прошлом про человека («позвонил Ивану», «Иван прислал сверку») без «это» и без
+  открытой карточки — тоже "new": разбор закроет совпавшее обещание и запишет касание у человека.
 suggestions — решения по предложениям из НОВОГО, только П-номера из списка.
   n — номер П; decision — "accept" (принять, можно с правками) или "reject" (не нужно, не дело);
   reason — для reject коротко почему, словами Саши («делает Наташа», «уже сделано»); для accept — "".
@@ -1719,10 +1721,48 @@ def fell_said(fell: list[dict], today: dt.date) -> str:
     return " ".join(f"Срок «{r['title']}» — снова {_when_words(r.get('due_date'), today)}." for r in fell)
 
 
+# Захват (15.10.2026, capture.py): строка веба — та же дверь, что «сказать» и «Д». Фраза, которую правило узнаёт
+# («напомни в 12 …», «позвонить Ивану на неделе», «идея: …», «Иван сказал …», «позвонил Ольге»), раскладывается без
+# Claude — и без ключа; route «new» от Claude — та же раскладка корзинами, что у телефона (capture.say_now).
+RULE_SKIP = ("history", "card", "project_id", "person_id", "deal_id", "selected_ids", "open", "focus")
+# Строка веба — ещё и правка того, что на экране: «перенести на завтра», «закрыть все просроченные», «это в сейчас».
+# Такие команды правилу захвата не отдаём — иначе «перенести» стало бы новым делом. У «Д» на телефоне этой развилки нет:
+# туда говорят только новое.
+EDIT_FIRST = frozenset("""перенести перенеси закрыть закрой отменить отмени удалить удали убрать убери поменять поменяй
+переименовать переименуй сдвинуть сдвинь отложить отложи принять прими отклонить отклони назначить назначь отдать отдай
+поставить поставь снять сними вернуть верни объединить объедини""".split())
+SCREEN_WORDS = re.compile(r"(?:^|\s)(?:это|эти|этих|этому|его|их|все|всё|просроченн\w*|выбранн\w*|#\d+|п\d+)(?:$|[\s,.!?:])", re.I)
+
+
+def rule_first(url: str, user: str, text: str, scope: dict, via: str = "web", actor: str | None = None) -> dict | None:
+    """Правило захвата до Claude: в разговоре, в карточке, на странице проекта, человека или сделки и при выбранных
+    делах — нет (там «это» и экран важнее); команда про экран («перенести…», «эти…», «все просроченные») — тоже нет.
+    Узнало — ответ строки (route «capture»), нет — None."""
+    if any(scope.get(k) for k in RULE_SKIP):
+        return None
+    words = text.lower().replace("ё", "е").split()
+    if not words or words[0].strip(",.:!") in EDIT_FIRST or SCREEN_WORDS.search(text.lower().replace("ё", "е")):
+        return None
+    got = store.apply_ops(url, user, [{"op": "capture.say", "text": text, "ref": str(uuid.uuid4()), "lane": "rule",
+                                       "from": "web"}], via, actor)["results"][0]
+    if not got.get("ok") or (got.get("capture") or {}).get("status") in (None, "none"):
+        return None
+    from . import capture
+
+    cap = got["capture"]
+    tasks, notes = capture.rows_of(url, user, cap)
+    return {"route": "capture", "reply": "", "changed": [], "decided": [], "crm": [], "tasks": tasks, "notes": notes,
+            "errors": [x["error"] for x in cap.get("items") or [] if x.get("bucket") == "error"], "refs": [],
+            "usage": None, "capture": cap}
+
+
 def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None,
         via: str = "web", actor: str | None = None, ask_fn=None, parse_fn=None) -> dict:
     """Команда → правки (или разбор новых дел) → применить. ask_fn/parse_fn — подмена Claude в тестах.
-    Что видит Claude — context (там же scope)."""
+    Что видит Claude — context (там же scope). Сначала — правило захвата (rule_first): узнало — Claude не нужен."""
+    first = rule_first(url, user, text, scope, via, actor)
+    if first:
+        return first
     ctx = context(url, user, text, scope)
     text, model, effort = ctx["text"], ctx["model"], ctx["effort"]
     tasks, focused, sugs, targets = ctx["tasks"], ctx["focused"], ctx["sugs"], ctx["targets"]
@@ -1780,9 +1820,18 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
         defaults = dict(ctx.get("near") or {})
     if (data.get("route") == "new" and not focused and not in_task and not data.get("suggestions") and not scope.get("history")
             and not any(data.get(k) for k in ("notes", "people", "deals", "about", "clients"))):
-        # Команда целиком про новые дела — разбор надиктовки, как у звёздочки (тот же промпт, что у телефона).
-        out = parse.run(url, user, text, {k: v for k, v in defaults.items() if k != "deal_id"}, key, proxy,
-                        via=via, actor=actor, ask_fn=parse_fn)
+        # Команда целиком про новые дела — та же раскладка, что у «Д» и «сказать» (захват, 15.10.2026): разбор
+        # надиктовки (тот же промпт, что у телефона, с блоком КОРЗИНЫ), корзины — кодом, строки и кнопки — в capture.
+        from . import capture
+
+        try:
+            cap = capture.say_now(url, user, text, "web", key, proxy, via=via, actor=actor, ask_fn=parse_fn,
+                                  skip_rule=True, defaults={k: v for k, v in defaults.items() if k != "deal_id"})
+        except capture.CaptureError as e:
+            raise AskError(str(e)) from None
+        tasks_, notes_ = capture.rows_of(url, user, cap)
+        out = {"tasks": tasks_, "notes": notes_, "capture": cap,
+               "errors": [x["error"] for x in cap.get("items") or [] if x.get("bucket") == "error"]}
         if defaults.get("deal_id"):  # на странице сделки новые дела — её шаги
             fix = [{"op": "task.set", "id": str(t["id"]), "set": {"deal_id": defaults["deal_id"]}} for t in out["tasks"]
                    if str(t.get("project_id")) == defaults["project_id"] and not t.get("deal_id")]

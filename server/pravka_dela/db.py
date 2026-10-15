@@ -65,6 +65,8 @@ APP_TABLES = {
     "crm.insights": "SELECT, INSERT, UPDATE",
     # Режим отладки (dela_0031, правило 28): записки владельца о багах; не удаляются — разобранная уходит статусом.
     "crm.debug_notes": "SELECT, INSERT, UPDATE",
+    # Идеи у клиента, человека, сделки (dela_0024c, захват): только хозяину; не удаляются — dropped.
+    "crm.ideas": "SELECT, INSERT, UPDATE",
 }
 # crm.v_interactions (dela_0025, аудит №9): хронология для показа — итог встречи владельцу с карточки, ссылка на веб
 # встреч только хозяину записи, team_sees.

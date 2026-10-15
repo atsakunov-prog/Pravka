@@ -709,6 +709,7 @@ REFS = (
     ("crm.interactions", "person_ids", True),
     ("crm.meetings", "person_ids", True),
     ("crm.insights", "person_ids", True),  # «Только тебе» (dela_0027)
+    ("crm.ideas", "person_id", False),
     ("tasks.suggestions", "payload.person_id, payload.options[].person_id (только ждущие)", False),
     ("crm.svod", "people.family", True),
     ("crm.people", "merged_into", False),

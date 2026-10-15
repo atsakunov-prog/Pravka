@@ -58,8 +58,10 @@
   },
   "ops_list": ["task.create", "task.set", "task.done", "task.reopen", "task.cancel", "comment.add", "comment.delete",
                "suggestion.decide", "person.create", "person.set", "project.create", "project.set", "deal.create", "deal.set",
-               "org.create", "org.set", "access.set", "interaction.add", "interaction.set"],
-  "views": ["morning", "new", "waiting", "person?person_id=", "quick", "now", "project?project_id=", "week", "search?q=", "krug", "tree?direction=&node="],
+               "org.create", "org.set", "access.set", "interaction.add", "interaction.set",
+               "capture.say", "capture.move", "idea.add", "idea.set", "task.did"],
+  "views": ["morning", "new", "waiting", "person?person_id=", "quick", "now", "project?project_id=", "week", "search?q=", "krug", "tree?direction=&node=",
+            "capture?ref=", "reminders", "ideas"],
   "rules": [
     "op_id — uuid на операцию, телефон хранит его в очереди: повтор отдаёт прежний ответ, дублей нет.",
     "id нового дела телефон может создать сам (uuid) — офлайн-создание; номер num приходит с ответом.",

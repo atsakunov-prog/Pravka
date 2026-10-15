@@ -35,10 +35,10 @@ def _events(conn, user: str) -> list[dict]:
                {DONE} + CASE WHEN t.focus_on = (t.completed_at {MSK})::date OR t.owed
                                 OR t.due_date <= (t.completed_at {MSK})::date THEN {PROMISED} ELSE 0 END AS pts,
                t.project_id, t.source, t.due_date, (t.completed_at {MSK})::date AS at_day
-        FROM tasks.tasks t WHERE t.owner_id = %(u)s AND t.status = 'done' AND t.completed_at IS NOT NULL
+        FROM tasks.tasks t WHERE t.owner_id = %(u)s AND t.status = 'done' AND t.completed_at IS NOT NULL AND t.kind = 'task'
         UNION ALL
         SELECT (t.updated_at {MSK})::date, 'cancelled', {CANCEL}, t.project_id, t.source, NULL, NULL
-        FROM tasks.tasks t WHERE t.owner_id = %(u)s AND t.status = 'cancelled'
+        FROM tasks.tasks t WHERE t.owner_id = %(u)s AND t.status = 'cancelled' AND t.kind = 'task'
         UNION ALL
         SELECT (s.decided_at {MSK})::date, 'triage', {TRIAGE}, NULL, s.source, NULL, NULL
         FROM tasks.suggestions s

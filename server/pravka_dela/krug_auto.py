@@ -92,7 +92,7 @@ def candidates(conn, owner: str, seen: dict | None = None) -> list[dict]:
     rows = conn.execute(
         "SELECT t.id, t.num, t.title, t.notes, t.project_name, t.project_kind, t.deal_name, t.person_name, t.grp, "
         "t.dirs, t.directions, t.seq, t.krug_seq FROM tasks.v_tasks t "
-        "WHERE t.owner_id = %s AND t.status = 'open' AND NOT t.goal AND t.why_id IS NULL AND t.deal_id IS NULL "
+        "WHERE t.owner_id = %s AND t.status = 'open' AND NOT t.goal AND t.kind = 'task' AND t.why_id IS NULL AND t.deal_id IS NULL "
         "AND coalesce(t.project_kind, '') <> 'client' "
         "AND NOT EXISTS (SELECT 1 FROM tasks.suggestions s WHERE s.task_id = t.id AND s.source = 'krug' "
         "                AND (s.status = 'pending' OR s.created_at > now() - make_interval(days => %s))) "

@@ -34,9 +34,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import gzip
 import json
 import logging
+import os
 import secrets
 import time
 import uuid
@@ -487,8 +489,6 @@ def build(cfg: Config) -> Starlette:
         raw = body.get("scope") if isinstance(body.get("scope"), dict) else {}
         # «Для этого» (15.10.2026) работает и без ключа: дело внутри заводится названием, как сказано (ask.run).
         step_only = raw.get("card") == "task" and bool(raw.get("step"))
-        if not cfg.anthropic_key and not step_only:
-            return _err("Claude не настроен: нет ключа в dela.env", 422)
         # Суточный предел не-владельцу (аудит №12): 40 правок словами в сутки по Москве.
         no_claude = False
         try:
@@ -535,6 +535,15 @@ def build(cfg: Config) -> Starlette:
         now = time.monotonic()
         for k in [k for k, j in jobs.items() if now - j["at"] > JOB_TTL and j["status"] != "run"]:
             del jobs[k]
+        if not cfg.anthropic_key and not step_only:
+            # Захват (15.10.2026): «напомни в 12 …», «позвонить Ивану на неделе» раскладывает правило — без Claude и без
+            # ключа; остальное без ключа — отказ словами, как раньше («Для этого» без ключа — названием, ask.run).
+            got = await anyio.to_thread.run_sync(lambda: ask.rule_first(url, who.user, text, scope, who.via, who.actor))
+            if not got:
+                return _err("Claude не настроен: нет ключа в dela.env", 422)
+            jid = secrets.token_urlsafe(12)
+            jobs[jid] = {"user": who.user, "status": "done", "at": now, "result": store.jsonable(got)}
+            return _json({"ok": True, "job": jid}, 202)
         if not slots:
             slots.append(anyio.CapacityLimiter(2))
         jid = secrets.token_urlsafe(12)
@@ -640,7 +649,23 @@ def build(cfg: Config) -> Starlette:
         ("/api/reminders/act", reminders_act, ["POST"]),
     ]
     # Каждый /api/-путь — через guard (белый список узких токенов): новый путь, добавленный сюда, закрыт им сам.
-    return Starlette(routes=[Route(p, guard(p, fn) if p.startswith("/api/") else fn, methods=m) for p, fn, m in routes])
+    # Захват (capture.py): фразы, которые правило не узнало, разбирает фоновый цикл. Служба (python -m pravka_dela serve)
+    # заводит его сама рядом с прочими циклами; тестовой копии (dev.py) его включает DELA_CAPTURE_LOOP=1 — без него
+    # «ждёт модели» в копии так и висело бы. Тесты (TestClient) его не включают: им фон не нужен.
+    lifespan = None
+    if os.environ.get("DELA_CAPTURE_LOOP") == "1":
+        from . import capture
+
+        @contextlib.asynccontextmanager
+        async def lifespan(app):
+            task = asyncio.create_task(capture.loop(url, cfg.anthropic_key, cfg.claude_proxy))
+            try:
+                yield
+            finally:
+                task.cancel()
+
+    return Starlette(routes=[Route(p, guard(p, fn) if p.startswith("/api/") else fn, methods=m) for p, fn, m in routes],
+                     lifespan=lifespan)
 
 
 def _user_info(url: str, user: str) -> dict:

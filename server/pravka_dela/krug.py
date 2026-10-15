@@ -174,7 +174,7 @@ def mine(conn, user: str, today: dt.date, skip: set | frozenset = frozenset()) -
     """skip — что и так на виду («Сегодня» и «Сейчас», 13.10.2026): отсеивается до отбора трёх, а не после, иначе
     «Моё» показывало бы меньше, чем есть."""
     items = conn.execute(
-        "SELECT * FROM tasks.v_tasks WHERE owner_id = %s AND status = 'open' AND NOT goal AND NOT owed "
+        "SELECT * FROM tasks.v_tasks WHERE owner_id = %s AND status = 'open' AND NOT goal AND NOT owed AND kind = 'task' "
         "AND ball <> 'waiting' AND (want OR why_id IS NOT NULL)", (user,)).fetchall()
     links = {r["id"]: (r["why_id"], r["goal"]) for r in conn.execute(
         "SELECT id, why_id, goal FROM tasks.krug WHERE kind = 'task' AND owner_id = %s", (user,)).fetchall()}

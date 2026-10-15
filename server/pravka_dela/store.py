@@ -23,7 +23,8 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from . import db, digest, focus, guard, insights, krug, meetings, people, phone, place, spend, twins, where, zasechka
+from . import (db, did, digest, focus, guard, ideas, insights, krug, meetings, people, phone, place, spend, twins, where,
+               zasechka)
 
 log = logging.getLogger("dela.store")
 
@@ -37,14 +38,29 @@ TASK_FIELDS = {
     "title", "notes", "project_id", "deal_id", "owner_id", "ball", "owed", "person_id", "nudge_on", "requested_by",
     "due_date", "due_time", "estimate_min", "money", "want", "focus_on", "labels", "status",
     "source", "source_ref", "remind_at", "remind_place", "pos",
+    # Захват (dela_0024c, 15.10.2026): вид дела (task | remind — напоминание, не в списках дел) и «потом» — день возврата
+    # и как сказано. Старый сервер этих полей не знает: телефон шлёт их, только увидев флаг capture в синке.
+    "kind", "back_on", "back_said",
 }
-# reminded_at в TASK_FIELDS нет: его ставит только сервер (task.reminded от бота).
+# reminded_at в TASK_FIELDS нет: его ставит только сервер (task.reminded от бота или телефона, показавшего уведомление).
 
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
             "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
-            "privacy", "context_index", "claude_guard", "nest", "debug"]
+            "privacy", "context_index", "claude_guard", "nest", "debug", "capture", "capture_model", "ideas", "did",
+            "remind_phone"]
+# Захват (шаг 0 петли, 15.10.2026, capture.py, dela_0024c; владелец: «захват за три секунды, которому я доверяю»):
+# «capture» — операции capture.say (фраза одной дверью: правило за миллисекунды, иначе модель на сервере) и capture.move
+# (поправка одной кнопкой), вид capture?ref (итог), поля дела kind ('remind' — напоминание, в списках дел его нет),
+# back_on и back_said (дело «потом»), у вида today — reminders и back («Вернулось»), вид reminders. Без флага телефон
+# раскладывает прежней Разноской сам и полей kind/back_on не шлёт.
+# «capture_model» — фразу, которую правило не узнало, раскладывает модель на сервере (lane auto: Разноска телефона больше
+# не зовётся). Без него — lane auto не слать: только правило, остальное — прежней дорогой телефона.
+# «ideas» — идеи у клиента, человека, сделки (crm.ideas): операции idea.add / idea.set, вид ideas, поле ideas синка.
+# «did» — task.did: «позвонил Ольге» закрывает совпавшее обещание, касание у человека (did.py, spec-5 §2).
+# «remind_phone» — напоминание показывает телефон (уведомление по синку, task.reminded {via: phone}); бот шлёт, только если
+# телефон за 3 минуты не отметил показ (user.settings remind_phone.on). Без флага телефон task.reminded не шлёт.
 # «debug» — режим отладки (15.10.2026, правило 28, dela_0031; debug.py): операции debug.add (записка владельца со снимком
 # экрана данными и последними действиями; повтор — по op_id и id записки) и debug.set (статус и ответ разбора), вид debug
 # (список и одна записка целиком), поле debug синка ({on, new, last, answered} — только владельцу), настройка
@@ -400,7 +416,7 @@ def task_origin(conn: psycopg.Connection, t: dict) -> dict | None:
     раньше занимало полэкрана в самом «Новом» (владелец: «ужасно всё засоряет»), теперь — в карточке.
     """
     ref = t.get("source_ref") or ""
-    if ref.startswith(("raznoska:", "parse:")):
+    if ref.startswith(("raznoska:", "parse:", "capture:")):
         d = conn.execute("SELECT at, text, source FROM tasks.dictations WHERE id = %s", (ref,)).fetchone()
         if d:
             return {"kind": "dictation", **d}
@@ -570,12 +586,43 @@ def _pos(v) -> int | None:
 # ── Операции ────────────────────────────────────────────────────────────
 
 
+def _next_workday(conn) -> str:
+    """Следующий рабочий день по Москве (пт–вс — понедельник): день возврата «потом» с завода (capture.default_back)."""
+    today = conn.execute("SELECT crm.today() AS d").fetchone()["d"]
+    d = today + dt.timedelta(days=1)
+    while d.weekday() >= 5:
+        d += dt.timedelta(days=1)
+    return d.isoformat()
+
+
+def _kind_norm(conn, before: dict | None, data: dict) -> dict:
+    """Напоминание (kind 'remind') — без своего срока, со временем или местом (захват, dela_0024c). Получило срок —
+    это уже дело с напоминанием (kind 'task'); потеряло и время, и место — дело «потом» (вернётся завтра), а не
+    напоминание ни о чём. Новое напоминание снимает «потом» и «Сейчас»: у него своё время."""
+    after = {**(before or {}), **data}
+    if after.get("kind") != "remind":
+        return data
+    if after.get("due_date"):
+        data["kind"] = "task"
+        return data
+    if not after.get("remind_at") and not after.get("remind_place"):
+        data["kind"] = "task"
+        if not after.get("back_on"):
+            data["back_on"] = _next_workday(conn)
+        return data
+    for k in ("back_on", "back_said", "due_time", "focus_on"):
+        if after.get(k):
+            data[k] = None
+    return data
+
+
 def op_task_create(conn, user, op):
     raw = dict(op.get("task") or {})
     kr = _krug_split(raw)
     data = _ball_norm(_pick(raw, TASK_FIELDS | {"id", "import_ref"}, "дело"))
     if "pos" in data:
         data["pos"] = _pos(data["pos"])
+    _kind_norm(conn, None, data)
     if not data.get("title"):
         raise OpError("у дела нет названия")
     if data.get("id"):
@@ -607,6 +654,8 @@ def op_task_set(conn, user, op):
     moved = "pos" not in changes and _why_moves(conn, cur, kr)
     if moved and cur.get("pos") is not None:
         changes["pos"] = None
+    if "kind" in changes or cur.get("kind") == "remind":
+        _kind_norm(conn, cur, changes)
     was = op.get("was") or {}
     # Поле поменяли с двух сторон: побеждает пришедшее последним, прежнее
     # значение остаётся в журнале, а клиент узнаёт, что спорил не один.
@@ -654,8 +703,23 @@ def op_task_reminded(conn, user, op):
     не ставится — новое напоминание уйдёт в своё время. message_id — в ответе (crm.ops_seen).
     """
     actor = conn.execute("SELECT crm.actor() AS a").fetchone()["a"]
+    if op.get("via") == "phone" and actor != f"svc:{REMIND_BOT}":
+        # Телефон показал уведомление (захват, 15.10.2026; владелец: «не только ботом в Telegram — там я почти не
+        # отвечаю»): отметку ставит хозяин дела своим токеном — и бот молчит. Чужое дело — отказ.
+        cur = task_by(conn, op.get("id"))
+        if not cur:
+            raise OpError("нет такого дела или оно не видно")
+        if cur["owner_id"] != user:
+            raise OpError("показ напоминания отмечает только хозяин дела")
+        sent_for = _instant(op.get("remind_at"))
+        if op.get("remind_at") and sent_for != cur["remind_at"]:
+            return {"task": cur, "stale": True}
+        at = _instant(op.get("at")) or dt.datetime.now(dt.timezone.utc)
+        conn.execute("UPDATE tasks.tasks SET reminded_at = %s, reminded_via = 'phone' WHERE id = %s AND reminded_at IS NULL",
+                     (at, cur["id"]))
+        return {"task": _full(conn, cur["id"])}
     if actor != f"svc:{REMIND_BOT}":
-        raise OpError("task.reminded шлёт только бот напоминаний")
+        raise OpError("task.reminded шлёт только бот напоминаний (телефон — с via: phone)")
     at = _instant(op.get("at")) or dt.datetime.now(dt.timezone.utc)
     conn.execute("SELECT set_config('dela.user', 'system', true)")
     try:
@@ -665,7 +729,8 @@ def op_task_reminded(conn, user, op):
         sent_for = _instant(op.get("remind_at"))
         if op.get("remind_at") and sent_for != cur["remind_at"]:
             return {"task": cur, "stale": True, "message_id": op.get("message_id")}
-        conn.execute("UPDATE tasks.tasks SET reminded_at = %s WHERE id = %s AND reminded_at IS NULL", (at, cur["id"]))
+        conn.execute("UPDATE tasks.tasks SET reminded_at = %s, reminded_via = 'bot' WHERE id = %s AND reminded_at IS NULL",
+                     (at, cur["id"]))
         return {"task": _full(conn, cur["id"]), "message_id": op.get("message_id")}
     finally:
         conn.execute("SELECT set_config('dela.user', %s, true)", (user,))
@@ -1871,6 +1936,10 @@ def sync(url: str, user: str, since: int) -> dict:
         # Режим отладки (debug.py): включён ли, сколько записок ждут разбора — только владельцу; не владельцу поля нет.
         if (dbg := debug.for_sync(conn, user)) is not None:
             out["debug"] = jsonable(dbg)
+        # Идеи (dela_0024c): свои, по номеру изменения — телефону для карточек и подписи встречи «💡 2».
+        got = ideas.for_sync(conn, user, lo)
+        out["ideas"] = jsonable(got)
+        top = max([top, *(r["seq"] for r in got)])
         out["seq"] = top
         out["today"] = conn.execute("SELECT crm.today() AS d").fetchone()["d"].isoformat()
     out["features"] = FEATURES
@@ -1892,9 +1961,12 @@ ORDER = " ORDER BY due_date NULLS LAST, due_time NULLS LAST, created_at"
 
 
 def _list(conn, where: str, params: list, sphere: str | None = None, order: str = ORDER) -> list[dict]:
-    # Узлы дерева целей (Круг 7.2) — не дела: в списках их нет, они живут в дереве и в цепочке «Зачем».
+    # Узлы дерева целей (Круг 7.2) — не дела: в списках их нет, они живут в дереве и в цепочке «Зачем». Напоминания
+    # (захват, kind 'remind') — тоже: они стоят на «Сегодня» в свой час (вид today: reminders) и во «Все дела →
+    # Напоминания» (вид reminders), а не в куче дел.
     s, sp = _sphere(sphere)
-    return conn.execute(f"SELECT * FROM tasks.v_tasks WHERE ({where}) AND NOT goal{s}{order}", [*params, *sp]).fetchall()
+    return conn.execute(f"SELECT * FROM tasks.v_tasks WHERE ({where}) AND NOT goal AND kind = 'task'{s}{order}",
+                        [*params, *sp]).fetchall()
 
 
 def view_morning(conn, user, sphere=None, **_):
@@ -1946,8 +2018,13 @@ def view_today(conn, user, sphere=None, **_):
     # «Моё» (Круг жизни, 12.10.2026) — подсказка, что ещё взять: дела, которые двигают жизнь, а срока на сегодня не
     # имеют. В сам список «Сегодня» оно не входит; что уже в «Сегодня» или в «Сейчас», в «Моё» не повторяется.
     extra = krug.today_extra(conn, user, skip={r["id"] for r in rows} | {r["id"] for r in now})
+    # Захват (15.10.2026): напоминания в своё время и «Вернулось» — дела «потом», чей день настал (capture.REMIND_TODAY_IF,
+    # BACK_IF; то же правило — app.js isRemindToday, isBack и телефон).
+    from . import capture
+
     return {
         **extra,
+        **capture.today_extra(conn, user),
         "groups": _by_group(rows),
         "now_count": len(now),
         "now_max": NOW_MAX,
@@ -2006,7 +2083,7 @@ def view_dictations(conn, user, **_):
         "SELECT id AS ref, at, text, source FROM tasks.dictations WHERE owner_id = %s "
         "UNION ALL "
         "SELECT t.source_ref, min(t.created_at), NULL, CASE WHEN bool_or(t.source = 'voice') THEN 'phone' ELSE 'web' END "
-        "FROM tasks.tasks t WHERE t.created_by = %s AND t.source_ref ~ '^(raznoska|parse):[^:]+$' "
+        "FROM tasks.tasks t WHERE t.created_by = %s AND t.source_ref ~ '^(raznoska|parse|capture):[^:]+$' "
         "AND NOT EXISTS (SELECT 1 FROM tasks.dictations x WHERE x.id = t.source_ref) GROUP BY t.source_ref "
         "ORDER BY at DESC LIMIT %s", (user, user, DICTATIONS_SHOWN)).fetchall()
     refs = [h["ref"] for h in heads]
@@ -2132,7 +2209,8 @@ def automation(conn, user, days: int = AUTO_DAYS_WEEK) -> dict:
       человека («уже в CRM», «уже убран») — не вопрос.
     Ответ — {days, all: {…}, sources: {meeting: {…}, telegram: {…}, …}} (только источники, где что-то было)."""
     rows = conn.execute(
-        "SELECT s.kind, s.status, s.reason, s.decided_by, s.source, rt.status AS made_status, t.status AS task_status, "
+        "SELECT s.kind, s.status, s.reason, s.decided_by, s.source, s.batch_ref, rt.status AS made_status, "
+        "t.status AS task_status, "
         "c.deleted_at IS NOT NULL AS comment_gone, pe.archived_at IS NOT NULL AS person_gone, "
         "CASE WHEN s.kind = 'person' THEN coalesce((s.result ->> 'created')::boolean, true) ELSE true END AS person_made "
         "FROM tasks.suggestions s "
@@ -2145,8 +2223,13 @@ def automation(conn, user, days: int = AUTO_DAYS_WEEK) -> dict:
     out = {"days": days, "all": _auto_bucket(), "sources": {}}
     for r in rows:
         src = "telegram" if r["source"] == "userbot" else r["source"] if r["source"] in AUTO_SOURCES else "other"
+        # Фраза владельца («позвонил Ольге» закрыла обещание, did.py) — его слово, не автоматика: в all не идёт,
+        # отдельно — sources.said (шаг 6 считает по нему «сказал — сделано»).
+        said = str(r.get("batch_ref") or "").startswith(did.SAID_PREFIX)
+        if said:
+            src = "said"
         b2 = out["sources"].setdefault(src, _auto_bucket())
-        for b in (out["all"], b2):
+        for b in ((b2,) if said else (out["all"], b2)):
             if r["status"] == "accepted" and r["reason"] == AUTO_CREATE_REASON:
                 b["created"] += 1
                 b["created_undone"] += r["made_status"] == "cancelled"
@@ -2234,6 +2317,25 @@ focus.register(VIEWS)
 # Режим отладки (dela_0031, 15.10.2026, правило 28): записки о багах с экраном данными — debug.add / debug.set, вид debug (debug.py).
 from . import debug  # noqa: E402  (свой модуль; импорт здесь — крючок одной строкой, ветку собирают в поезд с другими)
 debug.register(HANDLERS, VIEWS, FEATURES, OpError)
+# Захват (dela_0024c, шаг 0 петли): «позвонил X» (did.py), идеи (ideas.py), фраза одной дверью и поправка кнопкой
+# (capture.py — его модуль тянет when → parse → store, поэтому он приходит сюда только при вызове).
+did.register(HANDLERS, OpError)
+ideas.register(HANDLERS, VIEWS, OpError)
+
+
+def _late(name: str):
+    def call(*a, **kw):
+        from . import capture
+        return getattr(capture, name)(*a, **kw)
+    call.__name__ = name
+    return call
+
+
+HANDLERS["capture.say"] = _late("op_capture_say")
+HANDLERS["capture.move"] = _late("op_capture_move")
+VIEWS["capture"] = _late("view_capture")
+VIEWS["reminders"] = _late("view_reminders")
+VIEWS["kuda"] = _late("view_kuda")
 
 
 def view(url: str, user: str, name: str, **params) -> dict:
