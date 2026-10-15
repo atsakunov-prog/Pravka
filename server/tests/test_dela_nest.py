@@ -9,12 +9,15 @@ Claude подменён готовым ответом по схеме: пров�
 from __future__ import annotations
 
 import datetime as dt
+import time
+from types import SimpleNamespace as NS
 
 from starlette.testclient import TestClient
 
 import psycopg
+import pytest
 
-from pravka_dela import api, ask, parse, store, tokens
+from pravka_dela import api, ask, guard, parse, store, tokens
 from pravka_dela.config import Config
 from test_dela_ask import _wait, item, mk
 from test_dela_cards import _client, cd, empty_card, ops
@@ -181,6 +184,55 @@ def test_api_step_scope_and_no_key(dela, monkeypatch):
         jid = client.post("/api/ask", headers=h, json={"text": "x", "scope": {"card": "task", "open": t["id"], "step": 1}}).json()["job"]
         _wait(client, h, jid)
     assert seen["scope"]["step"] is True and seen["scope"]["card"] == "task"
+
+
+def test_step_without_claude_when_stopped_or_over_quota(dela, monkeypatch):
+    """Стык вагонов поезда (16.10.2026): «Для этого» работает и без Claude — и когда задача стоит защитой от петли, и
+    когда не-владельцу кончился суточный предел: дело названием, как без ключа, без вызова и трат, с пометкой в ответе
+    (почему без Claude). Остальные правки словами — как были: Stopped словами и 429."""
+    guard._caps.update(at=-guard.CAPS_EVERY, value=None)  # пороги — заводские (кэш Свода в процессе)
+
+    def no_call(**_):
+        raise AssertionError("Claude не зовём: защита стоит до вызова")
+
+    monkeypatch.setattr(parse, "client", lambda key, proxy: NS(beta=NS(messages=NS(stream=no_call, create=no_call))))
+    t = mk(dela, "Отчёт фонду")
+    now = time.time()
+    for i in range(31):  # задача «task» (Claude карточки дела) — 31 вызов за 10 минут: стоит
+        try:
+            guard.hit(dela, "task", now - 60 + i)
+        except guard.Stopped:
+            pass
+    assert guard.blocked(dela, "task")
+    with parse.db.session(dela, "system", "t") as c:
+        before = c.execute("SELECT value FROM crm.state WHERE key = 'llm_cost'").fetchone()
+    out = ask.run(dela, "sasha", "  собрать   выписки ", {"card": "task", "open": t["id"], "step": True}, "sk-test", None)
+    assert [x["title"] for x in out["tasks"]] == ["собрать выписки"] and out["tasks"][0]["why_id"] == t["id"]
+    assert out["reply"].startswith("Завёл для «Отчёт фонду»: «собрать выписки»") and "защитой от петли" in out["reply"]
+    assert out["usage"] is None
+    with parse.db.session(dela, "system", "t") as c:
+        assert c.execute("SELECT value FROM crm.state WHERE key = 'llm_cost'").fetchone() == before
+    # Не «Для этого» — как было: защита словами, ничего не заведено.
+    with pytest.raises(guard.Stopped):
+        ask.run(dela, "sasha", "перенеси на завтра", {"card": "task", "open": t["id"]}, "sk-test", None)
+
+    # Не-владелец сверх суточного предела (40 правок словами): «Для этого» — 202 и дело названием, остальное — 429.
+    mine = store.apply_ops(dela, "natasha", [{"op": "task.create", "task": {"title": "Сверка для фонда"}}],
+                           "web")["results"][0]["task"]
+    for _ in range(40):
+        guard.quota(dela, "natasha", "ask")
+    team = {"Authorization": f"Bearer {tokens.issue(dela, 'natasha', 'device', 'телефон-наташи-шаги')}"}
+    with TestClient(api.build(Config(db_url=dela, anthropic_key="sk-test"))) as client:
+        r = client.post("/api/ask", headers=team, json={"text": "перенеси", "scope": {"card": "task", "open": mine["id"]}})
+        assert r.status_code == 429 and "40 из 40" in r.json()["error"]
+        # no_claude из запроса не берётся: его ставит только сервер.
+        r = client.post("/api/ask", headers=team, json={"text": "позвонить в банк", "scope": {
+            "card": "task", "open": mine["id"], "step": True, "no_claude": True}})
+        assert r.status_code == 202
+        done = _wait(client, team, r.json()["job"])
+    assert done["status"] == "done", done
+    assert [x["title"] for x in done["tasks"]] == ["позвонить в банк"] and done["tasks"][0]["why_id"] == mine["id"]
+    assert done["reply"].startswith("Завёл для «Сверка для фонда»") and "на сегодня для тебя — всё" in done["reply"]
 
 
 def test_put_existing_inside_and_take_out(dela):

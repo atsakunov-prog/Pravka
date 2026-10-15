@@ -72,9 +72,9 @@ Claude видит только это дело: поля, заметку цел�
 комментарий… под делом должно быть „до этого“ / „для этого“ / „поправить это дело“». «До этого / сначала / для этого
 надо X» — новое дело create со step: true, а не notes_add: шаг связывается с делом («Зачем» — само дело, только
 хозяину), берёт его проект, сделку и человека и срок по правилу store.step_due. «Для этого» (scope.step) — свой режим
-строки карточки и строки дела в списках: всё названное — шаги, само дело не меняется; без ключа Claude — шаг названием,
-как сказано (правило то же). О них reply пишет сервер одной строкой («Завёл для «…»: «…», на сегодня»); сделано
-последнее дело внутри — родитель поднимается (store._nest_rise), и reply говорит «всё внутри сделано — теперь: «…»».
+строки карточки и строки дела в списках: всё названное — шаги, само дело не меняется; без Claude (нет ключа, задача
+стоит защитой от петли, не-владельцу кончился суточный предел) — шаг названием, как сказано (правило то же). О них
+reply пишет сервер одной строкой («Завёл для «…»: «…», на сегодня»); сделано последнее дело внутри — родитель поднимается (store._nest_rise), и reply говорит «всё внутри сделано — теперь: «…»».
 Вложить уже существующее дело — into у changes («положи это в дело про термшит»; -1 — вынуть); «вложи сюда X» из
 карточки родителя — правка X, где заполнено одно into. Остальные свои открытые дела карточка дела показывает Claude
 только когда о вложении речь (NEST_WORDS) и не в «Для этого» — хвостом сообщения: список в 400 строк стоил бы ~$0,05
@@ -1731,11 +1731,16 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
     only = bool(step and step["only"])
     plain_title = " ".join(text.split())[:500]
     plain = False
+    plain_note = ""  # почему «Для этого» обошлось без Claude (кроме «нет ключа» — там Claude и не ждут)
+    by_title = lambda s, u: {"route": "edit", "reply": "", "changes": [], "create": [{"title": plain_title, "step": True}]}  # noqa: E731
     if ask_fn is None:
-        if not key and only:
-            # «Для этого» без ключа Claude: шаг названием, как сказано, — то же правило связи и срока (store.step_of).
+        if only and (not key or scope.get("no_claude")):
+            # «Для этого» без Claude — шаг названием, как сказано, тем же правилом связи и срока (store.step_of): без
+            # ключа или сверх суточного предела не-владельцу (api.ask_start ставит no_claude вместо ответа 429).
             plain = True
-            ask_fn = lambda s, u: {"route": "edit", "reply": "", "changes": [], "create": [{"title": plain_title, "step": True}]}  # noqa: E731
+            ask_fn = by_title
+            if key:
+                plain_note = "Claude на сегодня для тебя — всё: завёл названием, как сказано."
         elif not key:
             raise AskError("Claude не настроен: нет ключа в dela.env")
         else:
@@ -1744,6 +1749,13 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
             ask_fn = lambda s, u: ask(cl, s, ctx["tail"], model, effort, prefix=ctx["screen"])  # noqa: E731
     try:
         data = ask_fn(ctx["system"], ctx["message"])
+    except guard.Stopped:
+        if not only:
+            raise
+        # «Для этого» при стоящей защите от петли — так же названием (правило 27: «работает и без Claude»; стык вагонов
+        # поезда 16.10). Защита останавливает ДО вызова: платного ответа не было, в книгу трат писать нечего.
+        plain, data = True, by_title(None, None)
+        plain_note = "Claude стоит защитой от петли: завёл названием, как сказано."
     except AskError as e:  # ответ оплачен, но не годится — траты всё равно в книгу
         llm.account_failed(url, "task" if scope.get("card") == "task" else "ask", e, model)
         raise
@@ -1805,7 +1817,7 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
     # «Для этого»: строка сервера и есть ответ — «Готово.» модели к ней ничего не добавляет (проба 15.10.2026).
     said = (data.get("reply") or "").strip() if not (only and made) else ""
     reply = " ".join(x for x in [steps_said(step["parent"], made, today) if step else "", raised_said(raised),
-                                 fell_said(fell, today), said] if x)
+                                 fell_said(fell, today), said, plain_note] if x)
     return {"route": "edit", "reply": reply, "changed": undo, "tasks": created, "decided": done,
             "crm": crm_done, "notes": [], "errors": errors + smiss + miss + cmiss, "usage": usage, "refs": refs[:MAX_REFS],
             "model": (usage or {}).get("model") or model, "steps": [str(x["id"]) for x in made], "raised": raised,

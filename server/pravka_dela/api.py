@@ -481,13 +481,19 @@ def build(cfg: Config) -> Starlette:
             return _err("пусто — скажи, что сделать", 422)
         raw = body.get("scope") if isinstance(body.get("scope"), dict) else {}
         # «Для этого» (15.10.2026) работает и без ключа: дело внутри заводится названием, как сказано (ask.run).
-        if not cfg.anthropic_key and not (raw.get("card") == "task" and raw.get("step")):
+        step_only = raw.get("card") == "task" and bool(raw.get("step"))
+        if not cfg.anthropic_key and not step_only:
             return _err("Claude не настроен: нет ключа в dela.env", 422)
         # Суточный предел не-владельцу (аудит №12): 40 правок словами в сутки по Москве.
+        no_claude = False
         try:
             await anyio.to_thread.run_sync(claude_guard.quota, url, who.user, "ask")
         except claude_guard.OverQuota as e:
-            return _err(str(e), 429)
+            if not step_only:
+                return _err(str(e), 429)
+            # «Для этого» сверх предела — не отказ, а дело названием без Claude, как без ключа (правило 27: «работает
+            # и без Claude»; стык вагонов поезда 16.10 — предел не должен отнимать то, что работает без ключа).
+            no_claude = True
         scope: dict = {"title": str(raw.get("title") or "")[:200]}
         try:
             for k in ("task_ids", "visible_ids", "selected_ids"):  # экран: дела страницы, в окне, выбранные
@@ -510,6 +516,8 @@ def build(cfg: Config) -> Starlette:
             # «Для этого» (15.10.2026): всё сказанное — новые дела внутри этого, само дело не меняется.
             if raw.get("step"):
                 scope["step"] = True
+                if no_claude:
+                    scope["no_claude"] = True  # ставит только сервер: из raw это поле не берётся
         # Разговор в окне ответа (09.10.2026): веб шлёт его с каждой репликой, а сюда он не доходил — Claude не видел,
         # о чём спрашивал (13.10.2026). Только строки: что сказал, что ответил, что сделано (ask._history режет длину).
         # Разговор под строкой (13.10.2026): его номер — экран разговора один на все реплики (кэш, ask._snapshot).
