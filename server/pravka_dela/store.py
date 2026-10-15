@@ -943,12 +943,29 @@ def _options(payload) -> None:
         payload.pop("options", None)
 
 
+CLIP_URL_MAX = 500
+
+
+def _speaker_clip(payload: dict) -> None:
+    """«▶ послушать» спикера встречи (payload.speaker.clip_url, 15.10.2026 — добавка к людям встречи: 5–8 с его голоса на
+    странице Встреч за её паролем). Веб и телефон кладут её в ссылку как есть — поэтому только https:// и не длиннее
+    CLIP_URL_MAX: «javascript:…» в href сработал бы в вебе Дел. Не такая — поле убираем молча, вопрос остаётся."""
+    sp = payload.get("speaker")
+    if not isinstance(sp, dict) or "clip_url" not in sp:
+        return
+    url = sp.get("clip_url")
+    if not (isinstance(url, str) and url.startswith("https://") and len(url) <= CLIP_URL_MAX and url.isprintable()
+            and not any(ch.isspace() for ch in url)):
+        payload["speaker"] = {k: v for k, v in sp.items() if k != "clip_url"}
+
+
 def op_suggestion_create(conn, user, op):
     raw = dict(op.get("suggestion") or {})
     payload = raw.get("payload")
     if isinstance(payload, dict):
         payload = raw["payload"] = dict(payload)
         _options(payload)
+        _speaker_clip(payload)
     data = _pick(raw, SUGGESTION_FIELDS, "предложение")
     data.setdefault("for_user", db_owner(conn))
     data.setdefault("expires_at", dt.datetime.now(dt.timezone.utc) + SUGGESTION_TTL)

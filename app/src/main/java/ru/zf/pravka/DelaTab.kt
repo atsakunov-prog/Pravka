@@ -2536,6 +2536,10 @@ internal fun AskRow(
         if (held != null) Text(held, style = ty.label, color = mode.label)
         if (txt.hint.isNotBlank()) Text(txt.hint, style = ty.label, color = mode.meta)
         if (txt.add.isNotBlank()) Text("+ ${txt.add}", style = ty.label, color = mode.label)
+        // «▶ послушать» спикера встречи (`clipOf` веба, docs/dela-phone-22.md): 5–8 с его голоса — страница Встреч
+        // браузером, как ссылка на встречу выше (вход — паролем Встреч, браузер его помнит).
+        val voice = DelaViews.clipLink(sg)
+        if (voice != null) PaperTextButton("Послушать", icon = Glyphs.Play, onClick = { openBrowser(context, voice) })
         if (sg.quote.isNotBlank() && sg.quote != txt.title) {
             Text(
                 "«${sg.quote}»",
@@ -2617,9 +2621,20 @@ internal fun AskRow(
 }
 
 /**
+ * Ссылка браузером («▶ послушать» спикера встречи): страница Встреч за её паролем — вход помнит браузер, как у
+ * ссылки на встречу в шапке вопроса; не открылась — словами, а не молча.
+ */
+private fun openBrowser(context: android.content.Context, url: String) {
+    runCatching {
+        context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+    }.onFailure { Feedback.toast(context, "Не открылось: ${it.message ?: it.javaClass.simpleName}") }
+}
+
+/**
  * Человек, заведённый сам (`autoPerson` веба, docs/dela-phone-20.md): «Новый человек: <имя>» (тап — карточка), откуда
  * («встреча «Альфа: фонды» 14.10 · 5 мин речи · имя дал ты», «Telegram: 24 сообщения»), «Понятно» и «Вернуть» —
- * карточку в архив (строки не удаляются: архив и есть «как было»).
+ * карточку в архив (строки не удаляются: архив и есть «как было»); со встречи — и «Послушать» его голос.
  */
 @Composable
 private fun AutoPersonRow(sg: Dela.Suggestion, snap: Dela.Snapshot, onUndo: () -> Unit, onSeen: (() -> Unit)?, onOpen: (String) -> Unit) {
@@ -2635,7 +2650,11 @@ private fun AutoPersonRow(sg: Dela.Suggestion, snap: Dela.Snapshot, onUndo: () -
                 modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(enabled = a.personId.isNotBlank()) { onOpen(a.personId) },
             )
             if (a.hint.isNotBlank()) Text(a.hint, style = ty.label, color = mode.meta, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            // Заведён со встречи по имени — его голос рядом (`autoPerson` веба): ошибся ли автомат, слышно за 5 секунд.
+            val voice = DelaViews.clipLink(sg)
+            val context = androidx.compose.ui.platform.LocalContext.current
             Row(verticalAlignment = Alignment.CenterVertically) {
+                if (voice != null) PaperTextButton("Послушать", icon = Glyphs.Play, onClick = { openBrowser(context, voice) })
                 if (onSeen != null) PaperTextButton("Понятно", onClick = onSeen)
                 if (a.live) PaperTextButton("Вернуть", icon = Glyphs.Undo, onClick = onUndo)
                 else if (a.made && a.personId.isNotBlank()) Text("в архиве", style = ty.label, color = mode.meta)

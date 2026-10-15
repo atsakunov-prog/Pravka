@@ -524,6 +524,13 @@ class DelaViewsTest {
         assertEquals("Не для CRM", DelaViews.rejectOption(maria, on)?.label)
         assertEquals("Ждёт: имя из одного слова", DelaViews.heldLine(maria, DelaViews.askWhy(maria, on)))
         assertEquals("https://meetings.example/m/101", DelaViews.sugLink(maria))
+        // «▶ послушать» (добавка 15.10): ссылки на голос нет — кнопки нет; есть — только https без пробелов.
+        assertNull(DelaViews.clipLink(maria))
+        val heard = ask(JSONObject().put("title", "Мария").put("speaker", JSONObject().put("url", "https://meetings.example/m/101")
+            .put("clip_url", "https://meetings.example/m/101/clip/SPEAKER_02")), kind = "person")
+        assertEquals("https://meetings.example/m/101/clip/SPEAKER_02", DelaViews.clipLink(heard))
+        for (bad in listOf("javascript:alert(1)", "http://meetings.example/m/101/clip/S", "https://x.example/a b", "https://"))
+            assertNull(bad, DelaViews.clipLink(ask(JSONObject().put("speaker", JSONObject().put("clip_url", bad)), kind = "person")))
         assertEquals(DelaViews.SugText("Мария", "встреча «Альфа: фонды» 14.10 · 7 мин речи · по голосу"), DelaViews.sugText(maria, on, today))
         assertFalse(DelaViews.choiceOnly(maria))
         val rej = Dela.overlay(on.copy(suggestions = mapOf(maria.id to maria)), listOf(Dela.answerOp(maria.id, 1)), "sasha", today, nowIso)

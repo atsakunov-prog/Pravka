@@ -294,6 +294,32 @@ def test_address_field_set_sync_and_merge(sp):
     assert card(url, sp["timur"])["address"] == "вы, Тимур"
 
 
+def test_clip_url_only_https_on_both_speaker_questions(sp):
+    """«▶ послушать» (добавка 15.10: 5–8 с голоса спикера на странице Встреч за её паролем): payload.speaker.clip_url
+    доходит до вопроса из кандидатов службы и до вопроса по имени (new_person); веб и телефон кладут её в ссылку как есть
+    — поэтому только https://, иначе поле уходит, а вопрос остаётся."""
+    url = sp["url"]
+    q = one(url, ask_sug([{"person_id": str(sp["timur"]), "signs": [SPEECH]}], key="meeting-speaker:101:SPEAKER_05"))
+    assert q["suggestion"]["payload"]["speaker"]["clip_url"] == "https://meetings.example.org/m/101/clip/SPEAKER_03"
+    for bad in ("javascript:alert(1)", "http://meetings.example.org/m/101/clip/S", "https://x.example/a b",
+                "https://x.example/" + "a" * store.CLIP_URL_MAX, 42):
+        op = ask_sug([{"person_id": str(sp["timur"]), "signs": [SPEECH]}], key=f"meeting-speaker:102:S{abs(hash(bad))}")
+        op["suggestion"]["payload"]["speaker"]["clip_url"] = bad
+        s = one(url, op)["suggestion"]
+        assert "clip_url" not in s["payload"]["speaker"] and s["payload"]["ask"], bad
+        assert s["payload"]["speaker"]["url"] == "https://meetings.example.org/m/101"
+    # Вопрос по имени («Кто это — «Мария»?», служба: people._person_op) — ссылка та же.
+    s = one(url, {"op": "suggestion.create", "suggestion": {
+        "kind": "person", "source": "meeting", "source_ref": "meeting-person:мария", "batch_ref": "meeting:101",
+        "batch_title": "Бета: аудит · 14.10", "quote": "Встреча «Бета: аудит» 14.10: «Мария» — 7 мин речи (по голосу)",
+        "payload": {"title": "Мария", "person": {"name": "Мария"}, "auto": True,
+                    "speaker": {"meeting_ref": "101", "label": "SPEAKER_09", "seconds": 420, "name_source": "voice",
+                                "url": "https://meetings.example.org/m/101",
+                                "clip_url": "https://meetings.example.org/m/101/clip/SPEAKER_09"}}}})["suggestion"]
+    assert s["status"] == "pending" and s["payload"]["ask"]
+    assert s["payload"]["speaker"]["clip_url"].endswith("/clip/SPEAKER_09")
+
+
 def test_people_day_is_contacts_of_the_day_for_owner_only(sp):
     """С кем была переписка в день встречи — основание вопроса службы (не признак): пункты дайджеста и звонки, без
     упоминаний и без самих встреч; только владельцу."""

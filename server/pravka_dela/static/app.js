@@ -3754,6 +3754,18 @@ function sugMark(s) {
     ? el('a', { class: 'src-mark', href, target: '_blank', rel: 'noopener noreferrer', title, onclick: (e) => e.stopPropagation() }, tint(icon(ic, 16), col))
     : el('span', { class: 'src-mark', title }, tint(icon(ic, 16), col));
 }
+/** «▶ послушать» спикера встречи (15.10.2026, добавка к людям встречи): 5–8 с его голоса на странице Встреч за её
+ *  паролем (payload.speaker.clip_url кладёт служба встреч). Только https:// — как у ссылки на встречу (сервер и так
+ *  другое не пропустит, store._speaker_clip). Нет — null. */
+function clipOf(s) {
+  const u = (((s || {}).payload || {}).speaker || {}).clip_url;
+  return /^https:\/\//.test(u || '') ? u : null;
+}
+function clipLink(s, cls) {
+  const u = clipOf(s);
+  return u ? el('a', { class: cls || 'link small', href: u, target: '_blank', rel: 'noopener noreferrer',
+    title: 'Его голос, 5–8 секунд (страница Встреч)', onclick: (e) => e.stopPropagation() }, '▶ послушать') : null;
+}
 /** Откуда дело — в карточке, сразу под названием: наговорка дословно или встреча и Telegram с цитатой (origin у
  *  /api/task). Пока подробности не пришли — хотя бы откуда и когда (источник есть у самого дела). */
 function originLine(t) {
@@ -3925,9 +3937,9 @@ function askItem(s) {
       q ? el('div', { class: 'q' }, q) : null,
       held ? el('div', { class: 'hint held' }, held) : null,
       hint ? el('div', { class: 'hint' }, hint) : null,
-      // Вопрос о спикере встречи (этап 6 аудита): послушать его голос — на странице встречи, за её паролем.
-      ((s.payload || {}).speaker || {}).clip_url ? el('a', { class: 'link small', href: s.payload.speaker.clip_url, target: '_blank',
-        rel: 'noopener noreferrer', title: 'Его голос, 5–8 секунд' }, '▶ послушать') : null,
+      // Вопрос о спикере встречи (этап 6 аудита; и по имени — «Кто это — «Мария»?»): послушать его голос — на странице
+      // встречи, за её паролем.
+      clipOf(s) ? el('div', { class: 'hint clip' }, clipLink(s)) : null,
       krPick,
       add ? el('div', { class: 'add' }, add) : null,
       s.quote && s.quote !== title ? el('div', { class: 'hint quote' }, '«' + s.quote.slice(0, 160) + (s.quote.length > 160 ? '…' : '') + '»') : null,
@@ -4049,7 +4061,9 @@ function autoPerson(s, seen) {
   return el('div', { class: 'sug auto' },
     el('div', { class: 'main' }, el('div', {}, made ? 'Новый человек: ' : 'Дописано в карточку: ',
       p ? el('a', { class: 'link', href: '#/h/' + p.id }, p.name) : ((s.payload || {}).title || 'карточка не видна')),
-      el('div', { class: 'hint' }, [(s.payload || {}).where, s.quote ? '«' + s.quote.slice(0, 160) + '»' : null].filter(Boolean).join(' · '))),
+      el('div', { class: 'hint' }, [(s.payload || {}).where, s.quote ? '«' + s.quote.slice(0, 160) + '»' : null].filter(Boolean).join(' · '),
+        // Заведён со встречи по имени — его голос рядом: ошибся ли автомат, слышно за 5 секунд.
+        clipOf(s) ? ' ' : null, clipLink(s, 'link'))),
     el('div', { class: 'acts' },
       el('button', { class: 'btn small ok', title: 'Согласен — убрать отсюда', onclick: () => seen([s.id]) }, 'Понятно'),
       live ? el('button', { class: 'btn small', title: 'Не нужен в CRM — карточку в архив', onclick: undo }, 'Вернуть') : null),
@@ -4061,7 +4075,6 @@ function autoPerson(s, seen) {
 function autoLink(s, seen) {
   const r = s.result || {}, p = S.people.get(r.person_id), pl = s.payload || {};
   const signs = (((pl.ident || {}).candidates || [])[0] || {}).signs || [];
-  const clip = (pl.speaker || {}).clip_url;
   const undo = async () => {
     try { await op1({ op: 'suggestion.undo', id: s.id }); toast('Привязку снял: ' + (p ? p.name : 'спикер')); render(); } catch (e) { fail(e); }
   };
@@ -4069,7 +4082,7 @@ function autoLink(s, seen) {
     el('div', { class: 'main' }, el('div', {}, 'Спикер узнан: ' + ((pl.speaker || {}).label || '') + ' — ',
       p ? el('a', { class: 'link', href: '#/h/' + p.id }, p.name) : 'карточка не видна', r.undone ? el('span', { class: 'faint' }, ' · возвращено') : null),
       el('div', { class: 'hint' }, [pl.where, signs.map((x) => x.text).filter(Boolean).join('; ')].filter(Boolean).join(' · '),
-        clip ? el('a', { class: 'link', href: clip, target: '_blank', rel: 'noopener noreferrer', title: 'Послушать его голос' }, ' ▶ послушать') : null)),
+        clipOf(s) ? ' ' : null, clipLink(s, 'link'))),
     el('div', { class: 'acts' },
       el('button', { class: 'btn small ok', title: 'Согласен — убрать отсюда', onclick: () => seen([s.id]) }, 'Понятно'),
       r.undone ? null : el('button', { class: 'btn small', title: 'Это не он — снять привязку спикера', onclick: undo }, 'Вернуть')),
