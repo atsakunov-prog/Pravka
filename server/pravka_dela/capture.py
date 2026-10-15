@@ -81,9 +81,11 @@ def _v(day: dt.date) -> str:
 
 
 def when_say(at: dt.datetime, now: dt.datetime) -> str:
-    """Миг напоминания словами: «сегодня в 12:00», «завтра в 9:00», «в пятницу в 9:00», «23 октября в 9:00»."""
+    """Миг напоминания словами: «сегодня в 12:00», «завтра в 9:00», «во вторник 20.10 в 9:00», «23 октября в 9:00».
+    День недели — с датой (проверка 16.10.2026: «напомни 20 октября …» давало «во вторник в 9:00» — какой вторник?)."""
     at = at.astimezone(MSK)
-    n = (at.date() - now.astimezone(MSK).date()).days
+    today = now.astimezone(MSK).date()
+    n = (at.date() - today).days
     if n == 0:
         return f"сегодня в {_hm(at)}"
     if n == 1:
@@ -91,7 +93,7 @@ def when_say(at: dt.datetime, now: dt.datetime) -> str:
     if n == 2:
         return f"послезавтра в {_hm(at)}"
     if 2 < n <= 6:
-        return f"{_v(at.date())} {WD_ACC[at.weekday()]} в {_hm(at)}"
+        return f"{_v(at.date())} {WD_ACC[at.weekday()]} {_ddmm(at.date(), today)} в {_hm(at)}"
     if n < 0:
         return f"{at.day} {MONTHS_GEN[at.month - 1]} в {_hm(at)}" if n < -1 else f"вчера в {_hm(at)}"
     return f"{at.day} {MONTHS_GEN[at.month - 1]} в {_hm(at)}"
@@ -324,18 +326,26 @@ BAD_EDGE = frozenset({"напомни", "напомнить", "мне", "пож�
 
 TRIGGERS = (("не", "дай", "мне", "забыть"), ("не", "дай", "забыть"), ("пни", "меня"), ("поставь", "напоминание"),
             ("напомни",), ("напомнить",), ("напомните",), ("напоминалка",), ("напоминание",))
-ARRIVE = frozenset({"приеду", "приедем", "буду", "будем", "доберусь", "доберемся", "окажусь", "вернусь", "вернемся",
-                    "появлюсь", "приду", "придем", "зайду"})
+# «Напомни про оплату аренды» — без глагола: напоминание с названием «Про оплату аренды» (проверка 16.10.2026: форма
+# частая, а уходила модели — 5–10 с и платно).
+ABOUT = frozenset({"про", "о", "об", "обо"})
+# Глагол приезда — как сказать Саше в строке: «когда буду в Москве» → «Напомню, когда будешь в Москве».
+ARRIVE_YOU = {"приеду": "приедешь", "приедем": "приедете", "буду": "будешь", "будем": "будете", "доберусь": "доберёшься",
+              "доберемся": "доберётесь", "окажусь": "окажешься", "вернусь": "вернёшься", "вернемся": "вернётесь",
+              "появлюсь": "появишься", "приду": "придёшь", "придем": "придёте", "зайду": "зайдёшь"}
+ARRIVE = frozenset(ARRIVE_YOU)
 ARRIVE_PREPS = frozenset({"на", "в", "во", "до", "к", "ко"})
 HOME = frozenset({"домой", "дома", "дом", "домах"})
 NOW_WORDS = (("в", "сейчас"), ("первым", "делом"), ("в", "первую", "очередь"))
 IDEA_HEAD = (("есть", "идея"), ("запиши", "идею"), ("мысль", "на", "будущее"), ("идея", "на", "будущее"), ("идея",))
+IDEA_TO = frozenset({"для", "про", "к", "ко", "по"})  # «идея для Ивана: …» — адрес идеи
 NOTE_HEAD = ("заметка", "заметку", "запиши", "запомни")
 DONE_HEAD = ("сделано", "готово", "сделал", "сделала")
 SPEECH = frozenset({"сказал", "сказала", "говорит", "говорил", "говорила", "считает", "думает", "пишет", "написал",
                     "написала", "обещал", "обещала", "просил", "просила", "хочет", "предложил", "предложила",
                     "рассказал", "рассказала", "жалуется", "сообщил", "сообщила", "сказали", "говорят"})
-# После них неопределённая форма — это уже дело, а не факт («Иван просил прислать модель» — ждут от меня): модели.
+# Глагол — уже смысл: «Иван просил прислать модель» — ждут от меня, «Иван хочет скидку» — его ожидание, «обещал отчёт» —
+# жду от него. Правило с ними молчит всегда, корзину выбирает модель (проверка 16.10.2026).
 SPEECH_TASK = frozenset({"обещал", "обещала", "просил", "просила", "хочет", "предложил", "предложила"})
 _PAST_BASE = ("позвонил", "перезвонил", "написал", "ответил", "отправил", "скинул", "переслал", "передал", "оплатил",
               "заплатил", "поговорил", "отписал", "набрал")
@@ -357,7 +367,12 @@ def one_thought(text: str) -> bool:
     if re.search(r"(?:^|[\s,])(?:а потом|и потом|а еще|и еще|а также|плюс ко всему)(?:$|[\s,])", low):
         return False
     tt = tokens(s)
-    verbs = [i for i, t in enumerate(tt) if is_inf(t["n"]) and not (i > 0 and tt[i - 1]["n"] in ("чтобы", "что"))]
+    # Слова «напомнить», «не дай забыть» — не глагол дела (проверка 16.10.2026: «не дай мне забыть купить подарок Ольге»
+    # считалось двумя мыслями, и правило его не узнавало никогда).
+    trig = _find_trigger(tt)
+    skip = set(range(*trig)) if trig else set()
+    verbs = [i for i, t in enumerate(tt) if i not in skip and is_inf(t["n"])
+             and not (i > 0 and tt[i - 1]["n"] in ("чтобы", "что"))]
     return len(verbs) <= 1
 
 
@@ -481,7 +496,8 @@ def _lowfirst(title: str, ctx: Ctx | None = None) -> str:
     if not t:
         return t
     head = t.split()[0].strip(_EDGE)
-    if re.match(r"^[^:]{1,40}:", t) or (ctx and (ctx.maybe_name(_n(head)) or ctx.project([_n(head)]))) or head.isupper():
+    if (re.match(r"^[^:]{1,40}:", t) or (ctx and (ctx.maybe_name(_n(head)) or ctx.project([_n(head)]))) or head.isupper()
+            or (head[:1].isupper() and people.is_first(_n(head)))):  # «Иван хочет скидку» — имя с большой и без справочника
         return t
     return t[:1].lower() + t[1:]
 
@@ -624,7 +640,9 @@ def _place_words(place: str, prep: str | None) -> str:
 
 def _find_place(tt: list[dict], places: list[str], after_trigger: int | None) -> dict | None:
     """«когда приеду домой», «как буду на даче», «по приезде в офис», «напомни дома …» — где и как сказано.
-    Кусок — в начале фразы, после запятой или после «напомни»; кончается концом фразы, запятой или «напомни»."""
+    Кусок — в начале фразы, после запятой или после «напомни»; кончается концом фразы, запятой или «напомни».
+    После глагола приезда место — только «домой» / «дома» или предлог и слово: «когда буду свободен», «когда освобожусь»
+    — не место, правило молчит, разбирает модель (проверка 16.10.2026: «свободен» ложилось местом напоминания)."""
     starts = {0} | {i + 1 for i, t in enumerate(tt) if t["comma"]} | ({after_trigger} if after_trigger is not None else set())
     for i in sorted(starts):
         j = i
@@ -632,7 +650,9 @@ def _find_place(tt: list[dict], places: list[str], after_trigger: int | None) ->
             j += 1
             if j < len(tt) and tt[j]["n"] == "только":
                 j += 1
+        verb = None
         if j < len(tt) and tt[j]["n"] in ARRIVE:
+            verb = ARRIVE_YOU[tt[j]["n"]]
             j += 1
         elif j + 1 < len(tt) and tt[j]["n"] == "по" and tt[j + 1]["n"] in ("приезде", "приезду"):
             j += 2
@@ -647,13 +667,10 @@ def _find_place(tt: list[dict], places: list[str], after_trigger: int | None) ->
             continue
         else:
             continue
-        prep = None
-        if j < len(tt) and tt[j]["n"] in ARRIVE_PREPS:
-            prep = tt[j]["n"]
-            j += 1
-        if j >= len(tt):
-            continue
-        return {"start": i, "end": j + 1, "word": tt[j]["w"], "prep": prep}
+        if j < len(tt) and tt[j]["n"] in HOME:
+            return {"start": i, "end": j + 1, "word": tt[j]["w"], "prep": None, "verb": verb}
+        if j + 1 < len(tt) and tt[j]["n"] in ARRIVE_PREPS and not tt[j]["comma"]:
+            return {"start": i, "end": j + 2, "word": tt[j + 1]["w"], "prep": tt[j]["n"], "verb": verb}
     return None
 
 
@@ -677,6 +694,21 @@ def _rest_ok(tt: list[dict]) -> bool:
     return bool(tt) and _verb_start(tt) is not None and not _agenda(tt)
 
 
+def _about(tt: list[dict]) -> str | None:
+    """«(напомни) про оплату аренды» — без глагола: название напоминания «Про оплату аренды». Иначе None."""
+    tt = _strip_lead(list(tt))
+    if len(tt) < 2 or tt[0]["n"] not in ABOUT or any(is_inf(t["n"]) for t in tt):
+        return None
+    return _cap(_text(tt))
+
+
+def _remind_title(rest: list[dict]) -> str | None:
+    """Название напоминания: дело с глагола или «про X»; иначе — не узнало (None)."""
+    if _rest_ok(rest):
+        return _title(rest)
+    return _about(rest)
+
+
 def _rule_remind(tt: list[dict], ctx: Ctx) -> dict | None:
     """Н1 «напомни + когда» и Н2 «напомни + место»."""
     trig = _find_trigger(tt)
@@ -687,15 +719,24 @@ def _rule_remind(tt: list[dict], ctx: Ctx) -> dict | None:
     if place:
         skip |= set(range(place["start"], place["end"]))
         rest = [t for i, t in enumerate(tt) if i not in skip]
-        if not _rest_ok(rest):
+        title = _remind_title(rest)
+        if not title:
             return None
         word, prep = place["word"], place["prep"]
-        nom = _nominative(word, prep)
-        named = remind.match_place(nom, ctx.places) or remind.match_place(_n(word), ctx.places)
-        item = {"bucket": "place", "title": _title(rest), "fields": {"kind": "remind", "remind_place": named or nom},
-                "place_words": _place_words(named or nom, prep)}
-        if not named:
-            item["warn"] = f"место «{nom}» телефон не знает: добавь его в автопилоте"
+        named = (remind.match_place(_nominative(word, prep), ctx.places) or remind.match_place(_n(word), ctx.places)
+                 or (remind.match_place("дом", ctx.places) if _n(word) in HOME else ""))
+        if named:
+            item = {"bucket": "place", "title": title, "fields": {"kind": "remind", "remind_place": named},
+                    "place_words": _place_words(named, prep)}
+        else:
+            # Места нет у телефона — как сказано («к маме», «в Москве»), без выдуманного именительного падежа (проверка
+            # 16.10.2026: «когда приеду к маме» давало место «мам», «в Москве» — «москв»), и честно: телефон его не знает.
+            said = f"{prep} {word}" if prep else word
+            if _n(word) not in HOME and ctx.maybe_name(_n(word)):
+                return None  # «когда приеду к Ивану» — человек, а не место: модели
+            item = {"bucket": "place", "title": title, "fields": {"kind": "remind", "remind_place": said},
+                    "place_words": said, "place_verb": place.get("verb") or "приедешь",
+                    "warn": f"место «{said}» телефон не знает: добавь его в автопилоте"}
         # Человек и клиент — как у дела (сквозной тест 15.10.2026: «… договор для Ромашки» ложилось без клиента, а
         # «… отправить Ивану договор» — без Ивана, и «отправил договор Ивану» потом не гасило напоминание).
         return _task_people(item, rest, ctx)
@@ -716,10 +757,11 @@ def _rule_remind(tt: list[dict], ctx: Ctx) -> dict | None:
     for a, b, _ in used:
         skip |= set(range(a, b))
     rest = [t for i, t in enumerate(tt) if i not in skip]
-    if not _rest_ok(rest):
+    title = _remind_title(rest)
+    if not title:
         return None
     at = _remind_at(got, ctx.now)
-    return _task_people({"bucket": "remind", "title": _title(rest), "fields": {"kind": "remind", "remind_at": remind.iso(at)}},
+    return _task_people({"bucket": "remind", "title": title, "fields": {"kind": "remind", "remind_at": remind.iso(at)}},
                         rest, ctx)
 
 
@@ -753,6 +795,25 @@ def _rule_idea(tt: list[dict], ctx: Ctx) -> dict | None:
             if client:
                 item["project_id"] = client
         return item
+    # «идея для Ивана: показать модель», «идея по Ромашке — дашборд»: адрес — предлог и одно-два слова до двоеточия или
+    # тире; узнан — снимаем его с текста (проверка 16.10.2026: текст выходил «для Ивана, показать модель»).
+    if len(rest) >= 3 and rest[0]["n"] in IDEA_TO:
+        k = next((k for k in (1, 2) if k < len(rest) - 1 and rest[k]["comma"]), None)
+        if k:
+            named = _words_of(rest[1:k + 1])
+            got = ctx.person(named[:2])
+            proj = None if got and "person" in got else ctx.project(named)
+            body = _text(rest[k + 1:]).strip(" ,:-—")
+            if body and (proj or (got and "person" in got)):
+                item = {"bucket": "idea", "text": body}
+                if proj:
+                    item["project_id"] = str(proj["id"])
+                else:
+                    item["person_id"] = got["person"]["id"]
+                    client = ctx.client_of(got["person"]["id"])
+                    if client:
+                        item["project_id"] = client
+                return item
     words = _words_of(rest)
     proj = ctx.project(words)
     who, _, _ = ctx.find_person(rest)
@@ -826,12 +887,16 @@ def _rule_said(tt: list[dict], ctx: Ctx) -> dict | None:
     v = tt[k]["n"]
     said = " ".join(t["w"] for t in tt[:k])
     rest = tt[k + 1:]
+    if v in SPEECH_TASK:
+        # «Иван хочет скидку», «Иван обещал отчёт», «Ольга просила скидку» — по смыслу «жду от Ивана» или «ждёт от тебя»,
+        # а не заметка; без глагола правило клало «Заметка у Ивана: скидку» (проверка 16.10.2026). Решает модель.
+        return None
     if v in SPEECH:
         if v in SENT_PAST and not (tt[k]["comma"] or (rest and rest[0]["n"] == "что")):
             pass  # «Иван написал письмо» — не речь; ниже — как «прислал»
         else:
             body = rest[1:] if rest and rest[0]["n"] == "что" else rest
-            if not body or (v in SPEECH_TASK and is_inf(body[0]["n"])) or _task_clause(body):
+            if not body or _task_clause(body):
                 return None
             text = _text(body).strip(" ,:-—")
             item = {"bucket": "note", "text": text, "summary": f"{_cap(said)}: {text}", "person_said": said}
@@ -1023,16 +1088,57 @@ def _without(body: str, p: dict | None) -> str:
     return " ".join(out) if out else body
 
 
+def _twin_short(item: dict) -> str:
+    """Короткое имя тёзок («Иван») — для вопроса «какой Иван?»."""
+    tw = item.get("twins") or []
+    if not tw:
+        return ""
+    return str(tw[0].get("short") or str(tw[0].get("name") or "").split()[0] or "")
+
+
+def _who_word(short: str) -> str:
+    """«какой Иван», «какая Ольга» — именительным: падеж фразы («Ивану», «по Ивану») в вопросе не нужен."""
+    return ("какая " if _gender(short) == "f" else "какой ") + short
+
+
+def _who_of(short: str) -> str:
+    """«у какого Ивана», «у какой Ольги»."""
+    return ("у какой " if _gender(short) == "f" else "у какого ") + genitive(short)
+
+
+def _has_person(item: dict) -> bool:
+    return bool(item.get("person_id") or (item.get("fields") or {}).get("person_id"))
+
+
+def _remind_what(conn, t: dict, what: str) -> str:
+    """Что напомнить — без двойного двоеточия (проверка 16.10.2026: «Напомню, когда приедешь в офис: Наташа: прислать
+    сверку»): напоминание о «жду» — «жду от Наташи Тестовой — прислать сверку», об «отбить» — «ждёт Наташа Тестова — …»,
+    иначе «Наташа — прислать сверку». Без «Кто:» — как есть."""
+    m = re.match(r"^([^:]{1,40}):\s*(.+)$", str(t.get("title") or ""))
+    if not m:
+        return what
+    who, body = m.group(1).strip(), _lowfirst(m.group(2).strip())
+    p = _person_row(conn, t.get("person_id"))
+    if t.get("ball") == "waiting":
+        return _short(f"жду от {genitive(p['name'] if p else who)} — {_without(body, p)}", 110)
+    if t.get("owed"):
+        return _short(f"ждёт {p['name'] if p else who} — {_without(body, p)}", 110)
+    return _short(f"{who} — {body}", 110)
+
+
 def line_of(conn, item: dict, now: dt.datetime) -> str:
-    """Строка подтверждения корзины (spec-0 §2.5): «Напомню сегодня в 12:00: отправить счёт в Контуре»."""
+    """Строка подтверждения корзины (spec-0 §2.5): «Напомню сегодня в 12:00: отправить счёт в Контуре». Обещает только
+    то, что правда случится (проверка 16.10.2026): заметка — «в карточке» (у встречи телефон показывает только идеи),
+    идея без адреса — «в списке «Идеи»», вопрос о похожих и тёзках — «в «Подскажи»» (он встаёт туда сразу)."""
     today = now.date()
     b = item["bucket"]
     t = item.get("task") or {}
     what = _short(_lowfirst(t.get("title") or item.get("title") or item.get("text") or ""), 100)
     if b == "remind":
-        return f"Напомню {when_say(remind.at_of(t['remind_at']), now)}: {what}"
+        return f"Напомню {when_say(remind.at_of(t['remind_at']), now)}: {_remind_what(conn, t, what)}"
     if b == "place":
-        out = f"Напомню, когда приедешь {item.get('place_words') or _place_words(t.get('remind_place') or '', None)}: {what}"
+        where = item.get("place_words") or _place_words(t.get("remind_place") or "", None)
+        out = f"Напомню, когда {item.get('place_verb') or 'приедешь'} {where}: {_remind_what(conn, t, what)}"
         return out + (f" — но {item['warn']}" if item.get("warn") else "")
     if b == "now":
         if item.get("now_full"):
@@ -1073,28 +1179,32 @@ def line_of(conn, item: dict, now: dt.datetime) -> str:
     if b == "note":
         text = _short(item.get("text") or "", 100)
         if item.get("twins") and not item.get("person_id"):
-            first = (item.get("person_said") or "").split()[0] if item.get("person_said") else ""
-            return f"Заметка: {_lowfirst(text)} — у какого {genitive(_cap(first)) if first else 'человека'}?"
+            return f"Заметка: {_lowfirst(text)} — {_who_of(_twin_short(item))}? · вопрос в «Подскажи»"
         p = _person_row(conn, item.get("person_id"))
         pr = _project_row(conn, item.get("project_id"))
         to = genitive(p["name"]) if p else (pr["name"] if pr else "")
-        return (f"Заметка у {to}: {_lowfirst(text)} · покажу перед встречей" if to
-                else f"Заметка: {_lowfirst(text)} · в хронологии")
+        return (f"Заметка у {to}: {_lowfirst(text)} · в карточке" if to
+                else f"Заметка: {_lowfirst(text)} · ни к кому — не понял чья")
     if b == "idea":
         text = _short(item.get("text") or "", 100)
         pr = _project_row(conn, item.get("project_id"))
         p = _person_row(conn, item.get("person_id"))
         to = pr["name"] if pr else genitive(p["name"]) if p else ""
         return (f"Идея у {to}: {_lowfirst(text)} · покажу перед встречей" if to
-                else f"Идея: {_lowfirst(text)} · в «Идеях», к кому — кнопкой")
+                else f"Идея: {_lowfirst(text)} · в списке «Идеи»")
     if b == "did":
         d = item.get("did") or {}
         said = item.get("said") or item.get("title") or ""
         pid = (item.get("fields") or {}).get("person_id")
+        twins = bool(item.get("twins")) and not pid
         p = _person_row(conn, pid)
         head = _n(said.split()[0]) if said.split() else ""
         named = p and any(people.same(head, w) for w in people.words(f"{p['name']} {p['short'] or ''}"))
+        if twins:  # «Иван позвонил…» с тёзками — имя первым словом, большая буква остаётся
+            named = any(people.same(head, w) for c in item["twins"] for w in people.words(f"{c['name']} {c.get('short') or ''}"))
         said = _short(said if named else _lowfirst(said), 80)
+        if twins:
+            return f"Сделано: {said} — {_who_word(_twin_short(item))}? · вопрос в «Подскажи»"
         return f"Сделано: {said} · {d.get('line') or 'записал сделанным'}"
     if b == "cancelled":
         was = re.sub(r"^Переложил:\s*", "", item.get("was_line") or what)
@@ -1108,12 +1218,22 @@ TIME_OPTIONS = [{"label": "через час", "at": "hour"}, {"label": "веч�
                 {"label": "завтра 9:00", "at": "tomorrow"}, {"label": "в пн 9:00", "at": "monday"}]
 
 
+def _who_chip(item: dict) -> dict:
+    """Тёзки — одна кнопка «Какой Иван ▾» со списком (проверка 16.10.2026: в пилюле первой в строке стояла кнопка
+    «Иван Петров», и одно касание клало заметку к случайному из тёзок)."""
+    return {"label": _cap(_who_word(_twin_short(item))), "move": "person",
+            "options": [{"label": _short(c["name"] + (f" ({c['org']})" if c.get("org") else ""), 40), "person_id": c["id"]}
+                        for c in (item.get("twins") or [])[:3]]}
+
+
 def chips_of(item: dict) -> list[dict]:
-    """До трёх кнопок поправки одним касанием (spec-0 §2.6): подпись и куда переложить (capture.move)."""
+    """До трёх кнопок поправки одним касанием (spec-0 §2.6): подпись и куда переложить (capture.move). Первая — частая
+    поправка: пилюля «Д» и «З» показывает в строке только её (у напоминания — «Время ▾»: «в 9», сказанное в 10:30, —
+    это сегодня 21:00, а не завтра утром)."""
     b = item["bucket"]
     cancel = {"label": "Отменить", "move": "cancel"}
     if b == "remind":
-        return [{"label": "Это дело", "move": "task"}, {"label": "Время", "move": "time", "options": TIME_OPTIONS}, cancel]
+        return [{"label": "Время", "move": "time", "options": TIME_OPTIONS}, {"label": "Это дело", "move": "task"}, cancel]
     if b == "place":
         return [{"label": "Время", "move": "time", "options": TIME_OPTIONS}, cancel]
     if b == "back":
@@ -1126,12 +1246,13 @@ def chips_of(item: dict) -> list[dict]:
         return [{"label": "Только напомнить", "move": "remind"}, cancel]
     if b == "note":
         if item.get("twins") and not item.get("person_id"):
-            return [*({"label": _short(c["name"] + (f" ({c['org']})" if c.get("org") else ""), 40), "move": "person",
-                       "person_id": c["id"]} for c in item["twins"][:2]), cancel]
+            return [_who_chip(item), cancel]
         return [{"label": "Это дело", "move": "task"}, {"label": "Идея", "move": "idea"}, cancel]
     if b == "idea":
         return [{"label": "Это дело", "move": "task"}, {"label": "Заметка", "move": "note"}, cancel]
     if b == "did":
+        if item.get("twins") and not _has_person(item):
+            return [_who_chip(item), cancel]
         d = item.get("did") or {}
         return ([{"label": "Не закрывать", "move": "keep_open"}] if d.get("closed") else []) + [cancel]
     if b in ("waiting", "owed", "agenda"):
@@ -1142,31 +1263,39 @@ def chips_of(item: dict) -> list[dict]:
 
 
 def short_of(item: dict, now: dt.datetime) -> str:
-    """Корзина коротко — для строки «Разложил 3: …»."""
+    """Корзина коротко — для строки «Разложил 3: …»: куда и что («сделано: позвонил Ольге · на завтра: подготовить
+    договор»; проверка 16.10.2026: «Разложил 2: сделано · на завтра» не говорило, что именно)."""
     b, t, today = item["bucket"], item.get("task") or {}, now.date()
-    if b == "remind":
-        return "напоминание " + when_say(remind.at_of(t["remind_at"]), now)
-    if b == "place":
-        return "напоминание по месту"
-    if b == "back" and t.get("back_on"):
-        d = dt.date.fromisoformat(str(t["back_on"])[:10])
-        return f"потом — верну {WD_SHORT[d.weekday()]}" if 1 < (d - today).days < 7 else "потом — " + back_say(d, today)
-    # Сквозной тест 15.10.2026: «Разложил 2: на день · жду» не говорил, когда и от кого, — а строка для того и есть.
+    title = str((item.get("said") if b == "did" else None) or t.get("title") or item.get("title") or item.get("text") or "")
     who = re.match(r"^([^:]{1,40}):", t.get("title") or "")
-    if b in ("day", "task_remind") and t.get("due_date"):
+    if who and b in ("day", "waiting", "owed", "agenda"):
+        title = title[who.end():]
+    what = _short(_lowfirst(title.strip()), 40)
+    if b == "remind":
+        word = "напоминание " + when_say(remind.at_of(t["remind_at"]), now)
+    elif b == "place":
+        word = "напоминание по месту"
+    elif b == "back" and t.get("back_on"):
+        d = dt.date.fromisoformat(str(t["back_on"])[:10])
+        word = f"потом — верну {WD_SHORT[d.weekday()]}" if 1 < (d - today).days < 7 else "потом — " + back_say(d, today)
+    elif b in ("day", "task_remind") and t.get("due_date"):
+        # Сквозной тест 15.10.2026: «Разложил 2: на день · жду» не говорил, когда и от кого, — а строка для того и есть.
         d = dt.date.fromisoformat(str(t["due_date"])[:10])
         word = day_on(d, today)
         word = word[0].lower() + word[1:]
         if b == "day" and who and t.get("ball") == "waiting":
-            return f"жду от {genitive(who.group(1).strip())} {word}"
-        return ("дело " if b == "task_remind" else "") + word
-    if b in ("waiting", "owed", "agenda") and who:
+            word = f"жду от {genitive(who.group(1).strip())} {word}"
+        elif b == "task_remind":
+            word = "дело " + word
+    elif b in ("waiting", "owed", "agenda") and who:
         name = who.group(1).strip()
-        return {"waiting": f"жду от {genitive(name)}", "owed": f"ждёт {name}",
+        word = {"waiting": f"жду от {genitive(name)}", "owed": f"ждёт {name}",
                 "agenda": f"при встрече с {instrumental(name)}"}[b]
-    return {"now": "в «Сейчас»", "today": "на сегодня", "day": "на день", "task_remind": "дело с напоминанием",
-            "waiting": "жду", "owed": "ждут от тебя", "agenda": "при встрече", "note": "заметка", "idea": "идея",
-            "did": "сделано", "cancelled": "отменено", "error": "не разложено"}.get(b, b)
+    else:
+        word = {"now": "в «Сейчас»", "today": "на сегодня", "day": "на день", "task_remind": "дело с напоминанием",
+                "waiting": "жду", "owed": "ждут от тебя", "agenda": "при встрече", "note": "заметка", "idea": "идея",
+                "did": "сделано", "cancelled": "отменено", "error": "не разложено"}.get(b, b)
+    return f"{word}: {what}" if what and b not in ("cancelled", "error") else word
 
 
 def _snap(t: dict) -> dict:
@@ -1246,6 +1375,54 @@ def _apply_one(conn, user: str, item: dict, ref: str, source: str, ctx: Ctx, i: 
     raise CaptureError(f"нет такой корзины: {b}")
 
 
+ASK_KIND = "capture"  # вопрос «Какой Иван?» в «Подскажи» (dela_0024c: kind capture)
+
+
+def _ask_who(conn, user: str, item: dict, ref: str, i: int, now: dt.datetime) -> None:
+    """Тёзки — запись без человека и вопрос в «Подскажи» с кнопками людей (как pick у «Нового»): кнопка под строкой живёт
+    12 секунд пилюли, а вопрос дождётся (проверка 16.10.2026: не нажал — заметки не было ни в одной карточке, а «позвонил
+    Ивану» при двух Иванах не закрывало «Позвонить Ивану»). Ответ — тем же capture.move person (store: kind capture);
+    кнопка под строкой гасит вопрос, «Отменить» — тоже."""
+    from . import did, store
+
+    short = _twin_short(item)
+    if item["bucket"] == "note":
+        text = _short(item.get("text") or "", 120)
+        ask_ = f"Заметка «{text}» — {_who_of(short)}?"
+        title = f"Заметка: {text}"
+        quote = item.get("person_said") and f"{item['person_said']}: {text}" or text
+    else:
+        said = _short(_cap(item.get("said") or item.get("title") or ""), 120)
+        ask_ = f"«{said}» — {_who_word(short)}?"
+        title = f"Сделано: {said}"
+        quote = said
+    opts = [{"label": _short(c["name"] + (f" ({c['org']})" if c.get("org") else ""), 80), "person_id": c["id"]}
+            for c in (item.get("twins") or [])[:3]]
+    row = store._insert(conn, "tasks.suggestions", {
+        "kind": ASK_KIND, "task_id": (item.get("task") or {}).get("id") if item["bucket"] == "did" else None,
+        "source": "user", "for_user": user, "created_by": user, "quote": quote,
+        "expires_at": dt.datetime.now(dt.timezone.utc) + store.SUGGESTION_TTL,
+        # «said:» — фраза владельца: в счётчике автоматики — sources.said, не all (как вопросы did.py).
+        "batch_ref": f"{did.SAID_PREFIX}capture-{ref}", "batch_title": f"Сказал · {now.astimezone(MSK):%d.%m}",
+        "payload": Jsonb({"ask": ask_, "title": title, "options": opts, "pick": True,
+                          "capture": {"ref": ref, "item": i}})})
+    item["ask_id"] = str(row["id"])
+    item["undo"] = [*(item.get("undo") or []),
+                    {"op": "suggestion.decide", "id": str(row["id"]), "decision": "reject", "reason": "вернул"}]
+
+
+def _close_ask(conn, user: str, item: dict, pid: str, skip: str | None) -> None:
+    """Тёзку выбрали кнопкой под строкой — вопрос в «Подскажи» отвечен тем же (skip — его закрывает сам ответ вопроса)."""
+    from . import store
+
+    sid = item.get("ask_id")
+    if not sid or sid == skip:
+        return
+    conn.execute("UPDATE tasks.suggestions SET status = 'accepted', reason = 'ответ кнопкой под строкой', decided_by = %s, "
+                 "decided_at = now(), result = %s WHERE id = %s AND status = 'pending'",
+                 (user, Jsonb(store.jsonable({"person_id": pid})), sid))
+
+
 def apply(conn, user: str, items: list[dict], ref: str, source: str, ctx: Ctx) -> list[dict]:
     """Корзины → записи в Делах, каждая своей точкой сохранения: упавшая не роняет соседей. У каждой — строка и кнопки."""
     from . import store
@@ -1256,6 +1433,8 @@ def apply(conn, user: str, items: list[dict], ref: str, source: str, ctx: Ctx) -
         try:
             with conn.transaction():
                 item = _apply_one(conn, user, item, ref, source, ctx, i)
+                if item.get("twins") and not _has_person(item) and item["bucket"] in ("note", "did"):
+                    _ask_who(conn, user, item, ref, i, ctx.now)
         except (store.OpError, CaptureError) as e:
             item = {"bucket": "error", "error": str(e), "title": item.get("title") or item.get("text"), "was": item}
         except store.PERMANENT as e:
@@ -1419,7 +1598,7 @@ def _undo_all(conn, user, item: dict) -> None:
 
 
 def _move(conn, user, item: dict, to: str, op: dict, ctx: Ctx, ref: str, source: str, i: int) -> dict:
-    from . import store
+    from . import did, store
 
     b = item["bucket"]
     today = ctx.today.isoformat()
@@ -1461,15 +1640,26 @@ def _move(conn, user, item: dict, to: str, op: dict, ctx: Ctx, ref: str, source:
             item = _set_task(conn, user, item, {"kind": "task", "due_date": None, "due_time": None, "focus_on": None,
                                                 "back_on": d.isoformat(), "back_said": None})
             return {**item, "bucket": "back"}
-    if b == "note":
-        if to == "person":
-            pid = str(op.get("person_id") or "")
-            if not any(c["id"] == pid for c in item.get("twins") or []):
-                raise CaptureError("такого человека в вопросе не было")
+    if to == "person" and b in ("note", "did"):
+        pid = str(op.get("person_id") or "")
+        if not any(c["id"] == pid for c in item.get("twins") or []):
+            raise CaptureError("такого человека в вопросе не было")
+        _close_ask(conn, user, item, pid, op.get("_ask"))
+        undo = [o for o in item.get("undo") or [] if o.get("id") != item.get("ask_id")]
+        if b == "note":
             client = ctx.client_of(pid)
             set_ = {"person_ids": [pid], **({"project_id": client} if client else {})}
             _run(conn, user, {"op": "interaction.set", "id": item["note_id"], "set": set_})
-            return {**item, "person_id": pid, **({"project_id": client} if client else {}), "twins": None}
+            return {**item, "person_id": pid, **({"project_id": client} if client else {}), "twins": None,
+                    "undo": undo, "ask_id": None}
+        # Сделанное: прежнее дело-основу (без человека) — отменить, и то же сказанное — заново с человеком: закроет его
+        # обещание и запишет касание (как если бы тёзок не было).
+        _undo_all(conn, user, {**item, "undo": undo})
+        new = {"bucket": "did", "title": item.get("title"), "said": item.get("said"),
+               "fields": {**(item.get("fields") or {}), "person_id": pid}}
+        got = _apply_one(conn, user, new, ref, source, ctx, i)
+        return {**got, "twins": None, "ask_id": None}
+    if b == "note":
         if to in ("task", "idea"):
             _undo_all(conn, user, item)
             if to == "idea":
@@ -1508,7 +1698,9 @@ def _move(conn, user, item: dict, to: str, op: dict, ctx: Ctx, ref: str, source:
                     _run(conn, user, {"op": "comment.delete", "id": str(d["comment"])})
             except store.OpError:
                 pass
-        d = {**d, "closed": None, "line": f"«{d.get('closed_title')}» оставил открытым · звонок в хронологии остался"}
+        word = did.TOUCH_WORD.get(d.get("touch_kind") or "", "касание")
+        left = {"звонок": "записан", "встреча": "записана"}.get(word, "записано")
+        d = {**d, "closed": None, "line": f"«{d.get('closed_title')}» оставил открытым · {word} {left}"}
         undo = [o for o in item.get("undo") or [] if o["op"] not in ("task.reopen", "comment.delete")]
         return {**item, "did": d, "undo": undo}
     raise CaptureError(f"так переложить нельзя: {b} → {to}")
@@ -1530,7 +1722,8 @@ def op_capture_move(conn, user, op):
     if row["capture"] == "error" or to in ("retry", "back_task"):
         if to == "retry":
             res = {**res, "error": None, "head": f"Записал «{_short(row['text'], 40)}» — раскладываю", "items": []}
-            res.pop("sync_at", None)  # повтор — уже фоновому циклу, не строке веба
+            for k in ("sync_at", "tries", "retry_at", "last_error"):  # повтор — фоновому циклу, с чистого счёта
+                res.pop(k, None)
             conn.execute("UPDATE tasks.dictations SET capture = 'pending', capture_result = %s WHERE id = %s",
                          (Jsonb(store.jsonable(res)), row["id"]))
             WAKE.set()
@@ -1594,7 +1787,9 @@ def with_capture(text: str, block: str) -> str:
 IDEA_WORD = re.compile(r"(?:^|[\s,.:;!(«])(?:идея|идею|идеи|мысль на будущее)(?:$|[\s,.:;!)»])", re.I)
 
 
-_SAID_HEAD = re.compile(r"^(?P<who>[^\s,:]+(?:\s+[^\s,:]+)?)\s+(?P<v>" + "|".join(sorted(SPEECH, key=len, reverse=True))
+# Только глаголы речи («сказал», «говорит»), не смысла («хочет», «обещал», «просил»): «Иван хочет скидку» — так и остаётся
+# (сквозной тест 16.10.2026: модель отдала заметку «Иван хочет скидку», а срез оставил «скидку»).
+_SAID_HEAD = re.compile(r"^(?P<who>[^\s,:]+(?:\s+[^\s,:]+)?)\s+(?P<v>" + "|".join(sorted(SPEECH - SPEECH_TASK, key=len, reverse=True))
                         + r")(?=[\s,:—–-])[\s,:—–-]*(?:что\b[\s,]*)?", re.I)
 
 
@@ -1864,35 +2059,82 @@ def _fail(url: str, user: str, ref: str, err: str) -> None:
                      (Jsonb(store.jsonable(res)), REF_PREFIX + ref))
 
 
-def tick(url: str, key: str = "", proxy: str | None = None, ask_fn=None, limit: int = 4) -> int:
-    """Фоновый разбор ждущих наговорок (pending): по одной, старые первыми. Каждая — модель, раскладка, итог в виде
-    capture. Сбой модели — error словами (текст — в наговорке, «Повторить» и «Дело потом» — кнопками). Перезапуск
-    службы посреди разбора безвреден: наговорка так и ждёт и доразберётся в следующий тик. Ответ — сколько разобрано."""
+RETRY_PAUSES = (5, 15, 45)  # сеть, VPN, перегрузка Claude — повторить через 5, 15, 45 с, потом «не разложил»
+WORKERS = 2                 # два разбора разом: три сложные фразы подряд не ждут друг друга по 20–30 с
+
+
+def _transient(e: Exception) -> bool:
+    """Сбой, который проходит сам: нет связи (VPN, прокси), таймаут, 5xx, «перегружен», 429. Отказ, не JSON, нет ключа —
+    не проходит (CaptureError), повтор их не спасёт."""
+    try:
+        import anthropic
+    except ImportError:  # pragma: no cover — сервер без SDK
+        return False
+    if isinstance(e, (anthropic.APIConnectionError, anthropic.APITimeoutError)):
+        return True
+    code = getattr(e, "status_code", None)
+    return isinstance(e, anthropic.APIStatusError) and isinstance(code, int) and (code >= 500 or code in (408, 409, 429))
+
+
+def _retry_later(url: str, user: str, ref: str, tries: int, err: str) -> None:
+    """Оставить наговорку ждать (pending) и повторить через RETRY_PAUSES[tries - 1] секунд."""
+    pause = RETRY_PAUSES[min(tries, len(RETRY_PAUSES)) - 1]
+    with db.session(url, user, via="capture") as conn:
+        conn.execute("UPDATE tasks.dictations SET capture_result = capture_result || jsonb_build_object("
+                     "'tries', %s::int, 'retry_at', now() + make_interval(secs => %s), 'last_error', %s::text) "
+                     "WHERE id = %s AND capture = 'pending'", (tries, pause, err[:200], REF_PREFIX + ref))
+
+
+def _tick_one(url: str, r: dict, key: str, proxy: str | None, ask_fn) -> None:
+    ref = r["id"][len(REF_PREFIX):]
+    started = time.monotonic()
+    try:
+        data, parts, usage = _model_items(url, r["owner_id"], r["text"], r["capture_hint"], key, proxy, ask_fn, r["at"])
+        source = "web" if r["capture_from"] == "web" else "voice"
+        lay_out(url, r["owner_id"], ref, r["text"], data, parts, source, r["at"].astimezone(MSK))
+        log.info("захват моделью: %s — %.1f с, токены %s", _short(r["text"], 60), time.monotonic() - started, usage)
+        with db.session(url, r["owner_id"], via="capture") as conn:
+            conn.execute("UPDATE tasks.dictations SET capture_result = (capture_result - 'retry_at' - 'last_error') || %s "
+                         "WHERE id = %s", (Jsonb({"ms": int((time.monotonic() - started) * 1000)}), r["id"]))
+    except CaptureError as e:
+        _fail(url, r["owner_id"], ref, str(e))
+    except Exception as e:  # noqa: BLE001 — сеть, ключ, лимит: человеку коротко, в журнал подробно
+        tries = int(r.get("tries") or 0) + 1
+        if _transient(e) and tries <= len(RETRY_PAUSES):
+            # Правило Ковчега — служба переживает минуты без VPN: сеть к Claude моргнула — повторить, а не сразу
+            # «не разложил» (проверка 16.10.2026).
+            log.warning("захват моделью: %s — повтор %d через %d с", type(e).__name__, tries,
+                        RETRY_PAUSES[tries - 1])
+            _retry_later(url, r["owner_id"], ref, tries, f"{type(e).__name__}: {e}")
+            return
+        log.exception("захват моделью")
+        _fail(url, r["owner_id"], ref, f"Claude недоступен: {type(e).__name__}"
+              + (f" (повторял {tries - 1} раза)" if tries > 1 else ""))
+
+
+def tick(url: str, key: str = "", proxy: str | None = None, ask_fn=None, limit: int = 4, workers: int = WORKERS) -> int:
+    """Фоновый разбор ждущих наговорок (pending): старые первыми, до двух разом. Каждая — модель, раскладка, итог в виде
+    capture. Сбой сети, таймаут, 5xx и «перегружен» — наговорка ждёт дальше и повторяется через 5, 15, 45 с; не прошло —
+    error словами. Отказ, не JSON, нет ключа — error сразу (текст — в наговорке, «Повторить» и «Дело потом» — кнопками).
+    Перезапуск службы посреди разбора безвреден: наговорка так и ждёт и доразберётся в следующий тик. Ответ — сколько
+    взято."""
     with db.session(url, "system", via="capture") as conn:
-        rows = conn.execute("SELECT id, owner_id, text, at, capture_from, capture_hint FROM tasks.dictations "
+        rows = conn.execute("SELECT id, owner_id, text, at, capture_from, capture_hint, "
+                            "coalesce((capture_result ->> 'tries')::int, 0) AS tries FROM tasks.dictations "
                             "WHERE capture = 'pending' AND coalesce((capture_result ->> 'sync_at')::timestamptz, "
-                            "'-infinity') < now() - make_interval(mins => %s) ORDER BY at LIMIT %s",
+                            "'-infinity') < now() - make_interval(mins => %s) "
+                            "AND coalesce((capture_result ->> 'retry_at')::timestamptz, '-infinity') <= now() "
+                            "ORDER BY at LIMIT %s",
                             (SYNC_GRACE_MIN, limit)).fetchall()
-    n = 0
-    for r in rows:
-        ref = r["id"][len(REF_PREFIX):]
-        started = time.monotonic()
-        try:
-            data, parts, usage = _model_items(url, r["owner_id"], r["text"], r["capture_hint"], key, proxy, ask_fn,
-                                              r["at"])
-            source = "web" if r["capture_from"] == "web" else "voice"
-            lay_out(url, r["owner_id"], ref, r["text"], data, parts, source, r["at"].astimezone(MSK))
-            log.info("захват моделью: %s — %.1f с, токены %s", _short(r["text"], 60), time.monotonic() - started, usage)
-            with db.session(url, r["owner_id"], via="capture") as conn:
-                conn.execute("UPDATE tasks.dictations SET capture_result = capture_result || %s WHERE id = %s",
-                             (Jsonb({"ms": int((time.monotonic() - started) * 1000)}), r["id"]))
-        except CaptureError as e:
-            _fail(url, r["owner_id"], ref, str(e))
-        except Exception as e:  # noqa: BLE001 — сеть, ключ, лимит: человеку коротко, в журнал подробно
-            log.exception("захват моделью")
-            _fail(url, r["owner_id"], ref, f"Claude недоступен: {type(e).__name__}")
-        n += 1
-    return n
+    if workers > 1 and len(rows) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="capture") as pool:
+            list(pool.map(lambda r: _tick_one(url, r, key, proxy, ask_fn), rows))
+    else:
+        for r in rows:
+            _tick_one(url, r, key, proxy, ask_fn)
+    return len(rows)
 
 
 async def loop(url: str, key: str = "", proxy: str | None = None) -> None:
@@ -1963,13 +2205,18 @@ def rows_of(url: str, user: str, cap: dict) -> tuple[list[dict], list[dict]]:
 
 # ── «Сегодня»: напоминания и «Вернулось» ────────────────────────────────
 
-# Напоминание на «Сегодня» (одно правило: здесь, app.js isRemindToday, телефон DelaGroups.remindersToday): открытые
-# напоминания с мигом до конца сегодня (и прошедшие неотмеченные — «вчера 12:00 · не отмечено»), по месту без времени;
-# плюс дела с напоминанием на сегодня, если их срок не сегодня (иначе они и так в «Сегодня»).
-REMIND_TODAY_IF = ("((kind = 'remind' AND ((remind_at AT TIME ZONE 'Europe/Moscow')::date <= crm.today() "
+# Напоминание на «Сегодня» (одно правило: здесь, app.js isRemindToday, телефон DelaGroups.isRemindToday): открытые
+# напоминания с мигом сегодня или вчера (прошедшее неотмеченное — «вчера 12:00 · не отмечено»), по месту без времени;
+# плюс дела с напоминанием на сегодня, если их срок не сегодня (иначе они и так в «Сегодня»). Старше вчерашнего — не
+# здесь, а во «Все дела → Напоминания» группой «прошли — не отмечено» (REMIND_STALE_IF): смахнул уведомление — и
+# строка висела бы на «Сегодня» бессрочно, через пару недель — новая куча (проверка 16.10.2026).
+REMIND_TODAY_IF = ("((kind = 'remind' AND ((remind_at AT TIME ZONE 'Europe/Moscow')::date "
+                   "BETWEEN crm.today() - 1 AND crm.today() "
                    "OR (remind_at IS NULL AND remind_place IS NOT NULL))) "
                    "OR (kind = 'task' AND (remind_at AT TIME ZONE 'Europe/Moscow')::date = crm.today() "
                    "AND due_date IS DISTINCT FROM crm.today()))")
+# Прошло больше суток, не отмечено (одно правило: здесь, app.js isRemindStale, телефон DelaGroups.isRemindStale).
+REMIND_STALE_IF = "(kind = 'remind' AND (remind_at AT TIME ZONE 'Europe/Moscow')::date < crm.today() - 1)"
 # «Вернулось» (одно правило: здесь, app.js isBack, телефон): своё открытое дело «потом» без срока, день возврата
 # наступил, не в «Сейчас».
 BACK_IF = ("kind = 'task' AND ball = 'mine' AND NOT owed AND due_date IS NULL AND back_on <= crm.today() "
@@ -1988,10 +2235,11 @@ def today_extra(conn, user: str) -> dict:
 
 
 def view_reminders(conn, user, **_):
-    """«Все дела → Напоминания»: все открытые напоминания по времени, по месту — в конце."""
-    rows = conn.execute("SELECT * FROM tasks.v_tasks WHERE status = 'open' AND owner_id = %s AND kind = 'remind' "
-                        "ORDER BY remind_at NULLS LAST, num", (user,)).fetchall()
-    return {"items": rows}
+    """«Все дела → Напоминания»: все открытые напоминания по времени, по месту — в конце; stale — id прошедших больше
+    суток назад и не отмеченных (группа «прошли — не отмечено»)."""
+    rows = conn.execute(f"SELECT *, {REMIND_STALE_IF} AS stale FROM tasks.v_tasks WHERE status = 'open' AND owner_id = %s "
+                        "AND kind = 'remind' ORDER BY remind_at NULLS LAST, num", (user,)).fetchall()
+    return {"items": rows, "stale": [str(r["id"]) for r in rows if r["stale"]]}
 
 
 def back_shift(url: str) -> int:

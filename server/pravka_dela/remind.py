@@ -191,8 +191,10 @@ def is_home(place: str | None) -> bool:
 
 # Телефон — главный канал (захват, 15.10.2026; владелец: «не только ботом в Telegram — там я почти не отвечаю»): у того,
 # чей телефон показывает напоминания сам (user.settings remind_phone.on), бот ждёт PHONE_GRACE — успел телефон отметить
-# показ (task.reminded via phone) — бот молчит; телефон выключен или без связи — Telegram с припиской «телефон молчит».
-PHONE_GRACE_MIN = 3
+# показ (task.reminded via phone) — бот молчит; телефон выключен или без связи — Telegram с припиской. 10 минут, а не 3
+# (проверка 16.10.2026): телефон показал, а отметка не ушла сразу (нет сети) — его очередь повторяет её за минуту-пять,
+# и бот через 3 минуты присылал то же второй раз.
+PHONE_GRACE_MIN = 10
 PHONE_ON = "coalesce(u.settings -> 'remind_phone' ->> 'on', 'false') = 'true'"
 DUE = """
 SELECT t.id AS task_id, t.num, t.owner_id AS "user", u.telegram_id, t.title,

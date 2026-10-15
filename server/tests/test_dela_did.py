@@ -78,7 +78,7 @@ def test_two_promises_ask_instead(dela):
     tid = str(uuid.uuid4())
     r = did_op(dela, "Позвонил Ивану", id=tid, person_id=ivan)
     d = r["did"]
-    assert d["created"] == tid and not d["closed"] and len(d["asked"]) == 2 and "похожих у Ивана 2 — спрошу вечером" in d["line"]
+    assert d["created"] == tid and not d["closed"] and len(d["asked"]) == 2 and "похожих у Ивана 2 — вопросы в «Подскажи»" in d["line"]
     assert status(dela, a["id"]) == "open" and status(dela, b["id"]) == "open" and status(dela, tid) == "done"
     with dela_db.session(dela, "sasha") as c:
         asks = c.execute("SELECT payload FROM tasks.suggestions WHERE status = 'pending' ORDER BY created_at").fetchall()
@@ -191,4 +191,29 @@ def test_closed_and_similar_line_says_both(dela):
     mk(dela, "Иван: позвонить про договор", person_id=ivan)
     d = did_op(dela, "Позвонил Ивану", person_id=ivan)["did"]
     assert d["closed"] == t["id"] and len(d["asked"]) == 1
-    assert d["line"] == "закрыл «Позвонить Ивану» · ещё 1 похожее — спрошу вечером · у Ивана в хронологии"
+    assert d["line"] == "закрыл «Позвонить Ивану» · ещё одно похожее — вопрос в «Подскажи» · звонок у Ивана"
+
+
+def test_said_other_object_asks_not_closes(dela):
+    """«Иван прислал модель» при одном обещании «Иван: прислать сверку» — предмет сказан и не совпал: сверку само не
+    закрываем (проверка 16.10.2026: закрывало чужое обещание), а спрашиваем «Это закрывает…?»; дело-основа — сделанным."""
+    ivan = person(dela, "Иван Тестов", "Иван")
+    sverka = mk(dela, "Иван: прислать сверку", ball="waiting", person_id=ivan)
+    r = did_op(dela, "Иван: прислал модель", "Иван прислал модель", ball="waiting", person_id=ivan)
+    d = r["did"]
+    assert not d["closed"] and d["created"] and len(d["asked"]) == 1 and status(dela, sverka["id"]) == "open"
+    assert d["line"] == "записал сделанным · есть похожее у Ивана — вопрос в «Подскажи» · касание у Ивана"
+    with dela_db.session(dela, "sasha") as c:
+        q = c.execute("SELECT payload FROM tasks.suggestions WHERE id = %s", (d["asked"][0],)).fetchone()
+    assert q["payload"]["ask"].startswith("Это закрывает «Иван: прислать сверку»?")
+
+
+def test_promise_without_object_closes_on_any_object(dela):
+    """Обещание без своего предмета («Позвонить Ольге») закрывается и «позвонил Ольге по договору»: предмет сказан, но
+    спорить ему не с чем. Обещание с другим предметом рядом — вопросом."""
+    olga = person(dela, "Ольга Тестова", "Ольга")
+    plain = mk(dela, "Позвонить Ольге", ball="owed", person_id=olga)
+    other = mk(dela, "Позвонить Ольге про отпуск", ball="owed", person_id=olga)
+    d = did_op(dela, "Позвонил Ольге по договору", person_id=olga)["did"]
+    assert d["closed"] == plain["id"] and status(dela, other["id"]) == "open" and len(d["asked"]) == 1
+    assert d["line"].startswith("закрыл «Позвонить Ольге» · ещё одно похожее — вопрос в «Подскажи»")

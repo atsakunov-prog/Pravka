@@ -285,3 +285,16 @@ BEGIN
     UPDATE crm.people SET merged_into = p_into, archived_at = coalesce(archived_at, now()) WHERE id = p_dup;
     RETURN jsonb_build_object('dup', to_jsonb(v_dup), 'moved', v_n);
 END $$;
+
+-- ── «Какой Иван?» — вопрос захвата в «Подскажи» (проверка 16.10.2026) ─────────
+-- Тёзки в сказанном («Иван сказал, …», «позвонил Ивану» при двух Иванах): запись ложится без человека, а кнопка под
+-- строкой живёт 12 секунд пилюли — не нажал, и заметки нет ни в одной карточке. Теперь ещё и вопрос kind capture:
+-- payload.ask, options — люди (person_id), pick, capture {ref, item}; ответ — тот же capture.move person (store).
+-- Дела у вопроса может не быть (заметка) — как у create и person.
+ALTER TABLE tasks.suggestions DROP CONSTRAINT suggestions_kind_check;
+ALTER TABLE tasks.suggestions ADD CONSTRAINT suggestions_kind_check
+    CHECK (kind IN ('create', 'close', 'update', 'assign', 'person', 'capture'));
+ALTER TABLE tasks.suggestions DROP CONSTRAINT suggestions_task_check;
+ALTER TABLE tasks.suggestions ADD CONSTRAINT suggestions_task_check
+    CHECK (kind IN ('create', 'person', 'capture') OR task_id IS NOT NULL);
+COMMENT ON COLUMN tasks.suggestions.kind IS 'create — новое дело; close — предложить закрыть («отправил»); update — поправить; assign — предложить дело пользователю (Марианне — только с её согласия); person — новый человек из Telegram или телефонной книжки (dela_0019); capture — «какой Иван?» захвата (dela_0024c): тёзки в сказанном, ответ кнопкой человека (payload.capture — какая запись).';

@@ -450,13 +450,15 @@ const nowTasks = () => all().filter((t) => isOpen(t) && isMine(t) && isNow(t) &&
  *  а во «Всех делах», в «Просрочено». */
 const inToday = (t) => isOpen(t) && isMine(t) && !t.goal && !isRemind(t) && t.due_date === S.today;
 /** Напоминание на «Сегодня» — одно правило с сервером (capture.REMIND_TODAY_IF) и телефоном: открытое напоминание с
- *  мигом до конца сегодня (и прошедшее неотмеченное), по месту без времени; плюс дело с напоминанием на сегодня, если
- *  его срок не сегодня (иначе оно и так в «Сегодня»). */
+ *  мигом сегодня или вчера (вчерашнее неотмеченное — «вчера 12:00 · не отмечено»), по месту без времени; плюс дело с
+ *  напоминанием на сегодня, если его срок не сегодня (иначе оно и так в «Сегодня»). Старше вчерашнего — во «Всех делах»
+ *  группой «прошли — не отмечено» (isRemindStale = capture.REMIND_STALE_IF): иначе висело бы на «Сегодня» бессрочно. */
 function isRemindToday(t) {
   if (!isOpen(t) || !isMine(t) || t.goal) return false;
-  if (isRemind(t)) return t.remind_at ? msk(Date.parse(t.remind_at)).day <= S.today : !!t.remind_place;
+  if (isRemind(t)) return t.remind_at ? (msk(Date.parse(t.remind_at)).day <= S.today && !isRemindStale(t)) : !!t.remind_place;
   return !!t.remind_at && msk(Date.parse(t.remind_at)).day === S.today && t.due_date !== S.today;
 }
+const isRemindStale = (t) => isRemind(t) && !!t.remind_at && msk(Date.parse(t.remind_at)).day < D.add(S.today, -1);
 const remAt = (t) => (t.remind_at ? Date.parse(t.remind_at) : 9e15);
 const remindersToday = () => all().filter(isRemindToday).sort((a, b) => remAt(a) - remAt(b) || a.num - b.num);
 const remindersAll = () => all().filter((t) => isOpen(t) && isMine(t) && isRemind(t)).sort((a, b) => remAt(a) - remAt(b) || a.num - b.num);
@@ -1843,7 +1845,8 @@ function renderMain(r) {
           pickNote(items, S.pick.all, lv) || [
             late.length ? lateBox(late) : null,
             rest.length ? nested(rest, lv) : late.length ? null : el('div', { class: 'empty' }, 'Пусто.')],
-          remindBox(remindersAll(), { title: 'Напоминания', sub: 'все — по времени; на «Сейчас» встают в свой день' }))];
+          remindBox(remindersAll().filter((t) => !isRemindStale(t)), { title: 'Напоминания', sub: 'все — по времени; на «Сейчас» встают в свой день' }),
+          remindBox(remindersAll().filter(isRemindStale), { title: 'Напоминания: прошли — не отмечено', sub: 'старше вчерашнего — отметь, перенеси или отмени' }))];
     } finally { NEST = null; }
   }
   return [head('Дела'), el('div', { class: 'body' })];
@@ -3294,7 +3297,8 @@ function captureBlock(t) {
 }
 async function capMove(t, i, c, anchor) {
   if (c.options) {
-    popAt(anchor, c.options.map((o) => el('button', { onclick: () => { closePop(); capMove(t, i, { ...c, options: null, at: o.at }); } }, o.label)));
+    // «Время ▾» — варианты часа (at), «Какой Иван ▾» — тёзки (person_id).
+    popAt(anchor, c.options.map((o) => el('button', { onclick: () => { closePop(); capMove(t, i, { ...c, options: null, at: o.at, person_id: o.person_id }); } }, o.label)));
     return;
   }
   try {
@@ -3659,6 +3663,8 @@ function sugText(s) {
     const was = p.person_id ? S.people.get(p.person_id) : null;
     return { title: p.title || d.name || '', hint: [p.where, was && !p.rename ? 'похоже: ' + was.name : null, d.role].filter(Boolean).join(' · ') };
   }
+  // «Какой Иван?» захвата (kind capture): тёзки в сказанном — запись ждёт человека; ответ — кнопками людей.
+  if (s.kind === 'capture') return { title: p.title || s.quote || '', hint: '' };
   if (s.kind === 'create') {
     return { title: p.title || s.quote || '',
       hint: [grpWord(p), p.project_name, p.person_name, p.due_date && 'срок ' + D.ddmm(p.due_date)].filter(Boolean).join(' · ') };
@@ -3856,7 +3862,7 @@ function heldLine(s, q) {
     && !(s.kind === 'person' && p.ask && x.startsWith('похожие уже есть')));
   return left.length ? 'Ждёт: ' + left.join('; ') : null;
 }
-const ASK_YES = { create: 'Поставить', close: 'Закрыть', update: 'Да, согласен', assign: 'Взять', person: 'Завести' };
+const ASK_YES = { create: 'Поставить', close: 'Закрыть', update: 'Да, согласен', assign: 'Взять', person: 'Завести', capture: 'Да' };
 /** Варианты ответа кнопками (13.10.2026): у вопроса автоматики — её собственные ответы («Родительство» / «Комфортный быт»),
  *  а не «Да / Не надо»; сервер без флага options их не примет — тогда как раньше. */
 const sugOptions = (s) => (((S.me && S.me.features) || []).includes('options') && Array.isArray((s.payload || {}).options)

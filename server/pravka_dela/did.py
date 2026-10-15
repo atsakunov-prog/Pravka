@@ -82,6 +82,18 @@ def _rest_key(title: str) -> tuple[str, ...]:
     return tuple(people.stem(w) for w in body(title)[1:] if len(w) > 1)
 
 
+# Служебные слова — не предмет: «позвонил Ольге про договор» и «Позвонить Ольге про отпуск» не совпадают по «про».
+_NOT_SUBJECT = frozenset("""про для при без над под через после перед около насчет насчёт это его ему ей её ее им их мне
+меня нам нас вам вас тебе тебя уже еще ещё тоже также очень""".split())
+
+
+def _subject(title: str, names: set[str]) -> set[str]:
+    """Предмет обещания или сказанного — основы слов после глагола без имени человека и служебных слов."""
+    from . import people
+
+    return {people.stem(w) for w in body(title)[1:] if len(w) >= 3 and w not in _NOT_SUBJECT} - names
+
+
 def _name_keys(conn, person_id) -> set[str]:
     """Основы слов имени человека — их во «что сделано» не считаем предметом («позвонил Ольге» — без предмета)."""
     from . import people
@@ -117,17 +129,27 @@ def candidates(conn, user: str, person_id, title: str, waiting: bool) -> tuple[l
         rows = [r for r in rows if key and _rest_key(r["title"]) == key]
     rows = [r for r in rows if family(verb(r["title"])) == fam]
     # Сказан предмет («Иван прислал сверку») — из обещаний того же глагола берём те, где он тот же: «прислать сверку», а не
-    # «прислать модель». Предмета нет («позвонил Ольге») или ни одно не совпало — все, как были.
-    said = set(_rest_key(title)) - _name_keys(conn, person_id)
+    # «прислать модель». Совпавших нет — точные только обещания без своего предмета («Позвонить Ольге» закрывает и
+    # «позвонил Ольге по договору»); обещание с другим предметом — не точное, а похожее: вопрос «Это закрывает…?», само
+    # не закрываем (проверка 16.10.2026: «Иван прислал модель» при одном «Иван: прислать сверку» закрывало сверку).
+    names = _name_keys(conn, person_id)
+    said = _subject(title, names)
+    other: list[dict] = []
     if said:
-        same = [r for r in rows if set(_rest_key(r["title"])) & said]
-        rows = same or rows
+        subj = {str(r["id"]): _subject(r["title"], names) for r in rows}
+        same = [r for r in rows if subj[str(r["id"])] & said]
+        if same:
+            rows = same
+        else:
+            other = [r for r in rows if subj[str(r["id"])]]
+            rows = [r for r in rows if not subj[str(r["id"])]]
     if waiting:
         exact = [r for r in rows if r["ball"] == "waiting"]
-        like: list[dict] = []
+        like = [r for r in other if r["ball"] == "waiting"]
     else:
         exact = [r for r in rows if r["ball"] != "waiting" and (r["owed"] or r["ball"] == "agenda" or r["kind"] == "remind")]
         like = [r for r in rows if r["ball"] == "mine" and not r["owed"] and r["kind"] != "remind"]
+        like += [r for r in other if r["ball"] != "waiting"]
     return exact, like
 
 
@@ -179,6 +201,7 @@ def _touch(conn, user: str, task: dict, person_id, said: str, at, error) -> dict
         data["project_id"] = project
     row = store.op_interaction_add(conn, user, {"data": data})["row"]
     out["touch"] = row["id"]
+    out["touch_kind"] = kind
     return out
 
 
@@ -192,16 +215,23 @@ def _gen(conn, person_id) -> str:
     return capture.genitive(p["short"] or p["name"]) if p else ""
 
 
+TOUCH_WORD = {"call": "звонок", "meeting": "встреча"}
+
+
 def line(res: dict, gen: str = "") -> str:
-    """Одна строка для всех клиентов: «закрыл «Позвонить Ивану» · у Ивана в хронологии»."""
-    at = f" · у {gen} в хронологии" if gen else " · в хронологии"
+    """Одна строка для всех клиентов: «закрыл «Позвонить Ивану» · звонок у Ивана». Вопрос о похожих встаёт в «Подскажи»
+    сразу — так и сказано (проверка 16.10.2026: «спрошу вечером» обещало заход, которого до шага 2 нет)."""
+    word = TOUCH_WORD.get(res.get("touch_kind") or "", "касание")
+    at = f" · {word} у {gen}" if gen else f" · {word} записано"
     if res.get("closed_title"):
         out = f"закрыл «{res['closed_title']}»"
         if res.get("asked"):  # сквозной тест 15.10.2026: вопросы о похожих уходили в «Подскажи», а строка о них молчала
             n = len(res["asked"])
-            out += f" · ещё {n} похож{'ее' if n == 1 else 'их'} — спрошу вечером"
+            out += " · ещё " + ("одно похожее — вопрос" if n == 1 else f"{n} похожих — вопросы") + " в «Подскажи»"
     elif res.get("asked"):
-        out = "записал сделанным · " + (f"похожих у {gen} " if gen else "похожих ") + f"{len(res['asked'])} — спрошу вечером"
+        n = len(res["asked"])
+        at_ = f" у {gen}" if gen else ""
+        out = "записал сделанным · " + (f"есть похожее{at_} — вопрос" if n == 1 else f"похожих{at_} {n} — вопросы") + " в «Подскажи»"
     else:
         out = "записал сделанным"
     if res.get("skip") == "семья":

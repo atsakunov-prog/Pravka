@@ -60,7 +60,8 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug",
 # «ideas» — идеи у клиента, человека, сделки (crm.ideas): операции idea.add / idea.set, вид ideas, поле ideas синка.
 # «did» — task.did: «позвонил Ольге» закрывает совпавшее обещание, касание у человека (did.py, spec-5 §2).
 # «remind_phone» — напоминание показывает телефон (уведомление по синку, task.reminded {via: phone}); бот шлёт, только если
-# телефон за 3 минуты не отметил показ (user.settings remind_phone.on). Без флага телефон task.reminded не шлёт.
+# телефон за 10 минут (remind.PHONE_GRACE_MIN) не отметил показ (user.settings remind_phone.on). Без флага телефон
+# task.reminded не шлёт.
 # «debug» — режим отладки (15.10.2026, правило 28, dela_0031; debug.py): операции debug.add (записка владельца со снимком
 # экрана данными и последними действиями; повтор — по op_id и id записки) и debug.set (статус и ответ разбора), вид debug
 # (список и одна записка целиком), поле debug синка ({on, new, last, answered} — только владельцу), настройка
@@ -1317,6 +1318,23 @@ def op_suggestion_decide(conn, user, op):
         return {"suggestion": row}
     if decision != "accept":
         raise OpError("решение: accept или reject")
+    if s["kind"] == "capture":
+        # «Какой Иван?» захвата (dela_0024c, проверка 16.10.2026): тёзки в сказанном — запись без человека и вопрос
+        # кнопками людей. Ответ — тот же capture.move person, что кнопка под строкой: заметка встаёт к человеку,
+        # сделанное закрывает его обещание и пишет касание. «Да» без выбора — отказ словами (pick).
+        named = (op.get("set") or {}).get("person_id") if isinstance(op.get("set"), dict) else None
+        pid = str(named or payload.get("person_id") or "")
+        if not pid:
+            raise OpError(f"{payload.get('ask') or 'Кто это?'} Ответь кнопкой в вебе или в «Подскажи» на телефоне.")
+        where = payload.get("capture") if isinstance(payload.get("capture"), dict) else {}
+        from . import capture
+
+        got = capture.op_capture_move(conn, user, {"ref": where.get("ref"), "item": where.get("item", 0), "to": "person",
+                                                   "person_id": pid, "_ask": str(s["id"])})
+        row = _update(conn, "tasks.suggestions", {"id": s["id"]}, {
+            "status": "accepted", "reason": op.get("reason"), "decided_by": user,
+            "decided_at": dt.datetime.now(dt.timezone.utc), "result": Jsonb(jsonable({"person_id": pid}))})
+        return {"suggestion": row, "capture": got.get("capture")}
     if s["kind"] == "person":
         named = (op.get("set") or {}).get("person_id") if isinstance(op.get("set"), dict) else None
         if named:
