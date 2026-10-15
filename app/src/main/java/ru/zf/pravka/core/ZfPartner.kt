@@ -175,7 +175,7 @@ object MoneySummary {
     fun parse(o: JSONObject?): Summary? {
         o ?: return null
         val at = o.optString("at").takeIf { it.isNotBlank() && it != "null" } ?: return null
-        val ms = runCatching { java.time.OffsetDateTime.parse(at).toInstant().toEpochMilli() }.getOrNull() ?: return null
+        val ms = atMs(at) ?: return null
         val p = o.optJSONObject("partner")
         fun kop(src: JSONObject?, vararg keys: String): Long? {
             src ?: return null
@@ -183,6 +183,16 @@ object MoneySummary {
             return null
         }
         return Summary(kop(p, "debt_kop", "debt"), kop(o, "networth_kop"), at, ms)
+    }
+
+    /**
+     * Время записи «Денег» в миллисекундах. Пояс — и "+03:00", и "+0300": до 15.10 «Деньги» писали его
+     * strftime("%z") без двоеточия, `OffsetDateTime.parse` такое не берёт, и число «Денег» не доходило
+     * до вкладки ни разу (аудит №75). Чего не разобрать — null: тогда своя прикидка, как без записи.
+     */
+    fun atMs(at: String): Long? {
+        val iso = Regex("""([+-]\d{2})(\d{2})$""").replace(at.trim()) { "${it.groupValues[1]}:${it.groupValues[2]}" }
+        return runCatching { java.time.OffsetDateTime.parse(iso).toInstant().toEpochMilli() }.getOrNull()
     }
 
     fun current(): Summary? = parse(Svod.obj(Svod.MONEY_SUMMARY))

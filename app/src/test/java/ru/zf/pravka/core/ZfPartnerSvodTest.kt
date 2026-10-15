@@ -92,4 +92,18 @@ class ZfPartnerSvodTest {
         assertTrue(MoneySummary.diverges(-9_000_000L, s))
         assertNull(MoneySummary.parse(JSONObject().put("partner", JSONObject())))
     }
+
+    @Test
+    fun `время «Денег» — и с двоеточием в поясе, и без (аудит №75)`() {
+        val colon = MoneySummary.atMs("2026-10-06T14:05:00+03:00")!!
+        // Так «Деньги» писали до 15.10 — strftime("%z"); телефон не разбирал, и число не доходило ни разу.
+        assertEquals(colon, MoneySummary.atMs("2026-10-06T14:05:00+0300"))
+        assertEquals(colon, MoneySummary.atMs("2026-10-06T11:05:00Z"))
+        assertEquals(colon - 4 * 3_600_000L - 30 * 60_000L, MoneySummary.atMs("2026-10-06T14:05:00+0730"))
+        val s = MoneySummary.parse(JSONObject().put("partner", JSONObject().put("debt", 5_000)).put("at", "2026-10-06T14:05:00+0300"))!!
+        assertEquals(5_000L, s.debtKop)
+        assertEquals(colon, s.atMs)
+        assertNull(MoneySummary.atMs("вчера"))
+        assertNull(MoneySummary.parse(JSONObject().put("at", "2026-10-06 14:05")))
+    }
 }
