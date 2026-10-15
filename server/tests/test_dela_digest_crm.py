@@ -431,16 +431,24 @@ def test_digest_relink_dry_writes_nothing_and_real_sets_flags(crm, tmp_path, cap
     # Как было до установки: флага нет, сделки у записи нет.
     with dela_db.session(url, "sasha", "svc:test") as c:
         c.execute("UPDATE crm.interactions SET mention = false, deal_id = NULL WHERE source = 'digest'")
-    before = {x["id"]: (x["mention"], x["deal_id"]) for x in rows(url)}
+        # Пункт, которого в нынешнем разносе нет (человек перестал узнаваться уверенно): relink его уберёт — --dry
+        # называет такие записи списком, а не только числом.
+        c.execute("INSERT INTO crm.interactions (at, kind, summary, source, source_ref, owner_id, private) VALUES "
+                  "('2026-10-14T11:00:00+03:00', 'telegram', 'Telegram, утро: был узнан', 'digest', "
+                  "'digest:2026-10-14T1100#work-zzzz', 'sasha', true)")
+    before = {x["id"]: (x["mention"], x["deal_id"], x["deleted_at"]) for x in rows(url)}
     env = tmp_path / "dela.env"
     env.write_text(f"DELA_DB_URL={url}\n", encoding="utf-8")
     monkeypatch.delenv("DELA_DB_URL", raising=False)
     assert cli.main(["--env", str(env), "digest-relink", "--dry"]) == 0
     said = capsys.readouterr().out
     assert said.startswith("вхолостую (ничего не записано): сводок: 2; ") and "упоминаний было 0, стало 1" in said, said
-    assert {x["id"]: (x["mention"], x["deal_id"]) for x in rows(url)} == before
+    assert "убрано (1):\n  digest:2026-10-14T1100#work-zzzz  Telegram, утро: был узнан" in said, said
+    assert "новые" not in said, said
+    assert {x["id"]: (x["mention"], x["deal_id"], x["deleted_at"]) for x in rows(url)} == before
     real = digest_crm.relink(url)
     assert real["digests"] == 2 and real["new"] == 0 and real["after"]["mentions"] == 1, real
+    assert [x["ref"] for x in real["retired_rows"]] == ["digest:2026-10-14T1100#work-zzzz"] and real["new_rows"] == []
     [e] = [x for x in rows(url, project_id=prj["Ромашка"]) if "подать модель" in x["summary"]]
     assert e["mention"] and str(e["deal_id"]) == str(crm["deal"])
     again = digest_crm.relink(url)

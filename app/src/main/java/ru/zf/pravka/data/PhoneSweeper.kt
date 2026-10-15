@@ -552,7 +552,7 @@ class PhoneSweeper(
         // разговор с человеком клиента ложится в хронологию CRM.
         val p = people.firstOrNull { it.id == verdict.personId && it.id.isNotBlank() }
         val ops = listOfNotNull(
-            p?.let { rules.learnOp(it, c) },
+            p?.let { rules.learnOp(it, c, people) },
             if (verdict.category != rules.FAMILY) rules.interactionOp(c, entry.title, verdict.personId, verdict.project, iso(c.start)) else null,
         )
         if (ops.isNotEmpty()) runCatching { delaOps(ops) }.onFailure { eventLog.add("звонок: в Дела не ушло — ${it.message}") }

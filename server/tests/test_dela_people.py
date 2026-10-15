@@ -612,8 +612,15 @@ def test_merge_refs_cover_every_person_column(dela):
             "WHERE c.table_schema IN ('crm', 'tasks') AND tb.table_type = 'BASE TABLE' "
             "AND (c.column_name LIKE %s OR c.column_name IN ('requested_by', 'team_ids', 'merged_into'))",
             ("%person%",)).fetchall()
+        body = c.execute("SELECT pg_get_functiondef('crm.person_merge(uuid,uuid)'::regprocedure) AS d").fetchone()["d"]
     missing = {(r["t"], r["c"]) for r in cols} - known
     assert not missing, missing
+    # REFS — описание для читателя; переносит ссылки тело функции базы. Колонку дописали в REFS, а в функцию забыли —
+    # слияние молча её пропускало бы (проверка 15.10.2026): каждая колонка — своим UPDATE в теле.
+    flat = " ".join(body.split())
+    lost = {(r["t"], r["c"]) for r in cols if f"UPDATE {r['t']} SET {r['c']} " not in flat}
+    assert not lost, lost
+    assert cols, "запрос колонок пуст — проверять нечего"
 
 
 def test_migration_23_over_live_people(admin_dsn):

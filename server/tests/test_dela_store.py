@@ -33,6 +33,18 @@ def test_repeat_op_returns_same_answer(dela):
     assert len(found) == 1
 
 
+def test_crooked_op_id_is_one_refusal_not_a_failed_batch(dela):
+    """op_id не в формате uuid ронял транзакцию всей пачки (InvalidTextRepresentation до try — HTTP 500). Теперь — отказ
+    этой операции словами, соседние проходят."""
+    res = ops(dela, "sasha", {"op": "task.create", "op_id": "meeting:215:1", "task": {"title": "Кривой ключ"}},
+              {"op": "task.create", "op_id": "urn:uuid:" + str(uuid.uuid4()), "task": {"title": "И этот кривой"}},
+              {"op": "task.create", "op_id": str(uuid.uuid4()).upper(), "task": {"title": "Ровный ключ"}})
+    assert [(r["ok"], r.get("error")) for r in res[:2]] == [(False, "op_id — не uuid")] * 2, res
+    assert res[0]["op_id"] == "meeting:215:1"
+    assert res[2]["ok"] and res[2]["task"]["title"] == "Ровный ключ", res
+    assert [x["title"] for x in store.view(dela, "sasha", "search", q="ключ")["items"]] == ["Ровный ключ"]
+
+
 def test_offline_create_with_own_id_is_idempotent(dela):
     tid = str(uuid.uuid4())
     a = ops(dela, "sasha", {"op": "task.create", "task": {"id": tid, "title": "Выкинуть велосипед"}})[0]
@@ -826,6 +838,13 @@ def test_week_counts_what_automation_did_and_what_was_undone(dela):
     known = sug("person", auto=False, source_ref="meeting-person:ольга смирнова",
                 payload={"person": {"name": "Ольга Смирнова"}, "speaker": {"meeting_ref": "77"}})["suggestion"]
     assert known["status"] == "accepted" and known["decided_by"] is None, known
+    # «Человек заведён сам», а на деле дописано в живую карточку (её Telegram уже был): result.created = false — не новый
+    # человек, в счёт «людей» не идёт (проверка 15.10.2026; веб и телефон «Вернуть» такому не показывают).
+    with store.db.session(dela, "system", "t") as c:
+        c.execute("INSERT INTO crm.people (name, telegram_id, owner_id) VALUES ('Вера Ключева', 900011, 'sasha')")
+    added = sug("person", source="telegram", source_ref="tg:900011",
+                payload={"person": {"name": "Вера К.", "telegram_id": 900011}})["suggestion"]
+    assert (added["reason"], added["result"]["created"]) == (store.AUTO_PERSON_REASON, False), added
 
     a = store.view(dela, "sasha", "week")["automation"]
     b = a["all"]

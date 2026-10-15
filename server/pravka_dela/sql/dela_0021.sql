@@ -33,6 +33,19 @@ ALTER TABLE crm.meetings ADD CONSTRAINT meetings_locked_check
     CHECK (locked <@ '{title,topic,project,sphere,people,touch}'::text[]);
 COMMENT ON COLUMN crm.meetings.locked IS 'Что владелец поправил руками (title, topic, project, sphere, people): разбор это не переписывает. touch — запись встречи в хронологии в руках владельца (убрал или поправил сам): сервер её не трогает и не возвращает (meeting.set unlock touch — снова по карточке).';
 
+-- Решения человека о записи встречи, принятые до этой миграции, — тоже замок touch. Замка тогда не было: запись, которую
+-- владелец убрал (deleted_at) или переписал своими словами, crm.meeting_touch завёл бы заново или затёр данными карточки
+-- при первом же meeting.upsert, переразборе или переименовании клиента (проверка 15.10.2026). Человек — любая правка
+-- записи в журнале не от службы (actor не «svc:…»): владелец, кто-то из команды, Claude от их имени. Номера таких встреч
+-- печатает «meetings touch --dry» отдельной строкой («под замком»); вернуть встречу правилу — meeting.set unlock touch.
+UPDATE crm.meetings m SET locked = array_append(m.locked, 'touch')
+ WHERE NOT ('touch' = ANY (m.locked))
+   AND EXISTS (SELECT 1 FROM crm.interactions i
+                 JOIN crm.history h ON h.entity = 'crm.interactions' AND h.entity_id = i.id::text AND h.op = 'update'
+                                   AND h.actor NOT LIKE 'svc:%'
+                WHERE i.source = 'meeting' AND i.owner_id = m.owner_id
+                  AND crm.meeting_ref(i.source_ref) = crm.meeting_ref(coalesce(m.url, '/m/' || m.ref)));
+
 -- ── Одна живая запись на встречу ───────────────────────────────────────
 
 -- Живые дубли записей одной встречи (на 14.10 их 0 — служба глушила их сама, _twin): остаётся первая, лишним — deleted_at.
@@ -72,15 +85,21 @@ $$;
 
 -- Запись встречи по карточке: заводит, правит или убирает живую запись (source = meeting, ключ — номер встречи).
 -- Подходит — с 01.09, живая, рабочая, клиент — клиент, у самого полного из двойников (больше текста, при равенстве —
--- меньший id). Замок touch — запись в руках владельца (убрал или поправил сам): сервер её не трогает — ни правит, ни
--- убирает, ни заводит заново; кроме личной встречи — её запись гаснет всегда (точка №9). Ответ — что сделано словом
--- (для «meetings touch --dry»): заведена, обновлена, убрана, убрана у двойника, под замком, архив, нечего.
+-- меньший id). Новую запись заводит только разобранной встрече (разбор хоть раз лёг — named_by) или той, чью сферу
+-- поставил владелец (замок sphere): до разбора «рабочая» и клиент — подсказка службы (её голосование давало «клиент не тот» у 3 записей из 26),
+-- а запись общая — команда увидела бы личную встречу раньше, чем разбор её погасит (инцидент 09.10). Живую запись
+-- правит и до разбора: переразбор новой расшифровки её не гасит. Замок touch — запись в руках владельца (убрал или
+-- поправил сам): сервер её не трогает — ни правит, ни убирает, ни заводит заново; замок любого из двойников — замок
+-- всей группы (иначе запись вернулась бы через вторую половину, ставшую полнее); кроме личной встречи — её запись
+-- гаснет всегда (точка №9). Ответ — что сделано словом (для «meetings touch --dry»): заведена, обновлена, убрана,
+-- убрана у двойника, под замком, ждёт разбора, архив, нечего.
 CREATE FUNCTION crm.meeting_touch(m_id uuid) RETURNS text LANGUAGE plpgsql SET search_path = crm, pg_temp AS $$
 DECLARE
     m crm.meetings;
     w crm.meetings;
     x crm.meetings;
     grp uuid[];
+    held boolean;
     src text;
     rec crm.interactions;
     ok boolean;
@@ -107,9 +126,13 @@ BEGIN
     IF NOT FOUND THEN
         w := m;
     END IF;
-    -- Остальные из группы записи не держат (кроме взятой владельцем в руки).
+    -- Замок touch у любого из группы (кроме личной встречи) — запись всей группы в руках владельца: он убрал запись
+    -- половины Zoom, а вторая половина (Plaud) стала полнее и повела — без этого запись вернулась бы через неё.
+    held := EXISTS (SELECT 1 FROM crm.meetings WHERE id = ANY (grp) AND 'touch' = ANY (locked)
+                                                 AND sphere IS DISTINCT FROM 'home');
+    -- Остальные из группы записи не держат; под замком группы чужие записи не трогаем — кроме личной встречи.
     FOR x IN SELECT * FROM crm.meetings WHERE id = ANY (grp) AND id <> w.id LOOP
-        CONTINUE WHEN 'touch' = ANY (x.locked) AND x.sphere IS DISTINCT FROM 'home';
+        CONTINUE WHEN held AND x.sphere IS DISTINCT FROM 'home';
         UPDATE crm.interactions i SET deleted_at = now()
          WHERE i.source = 'meeting' AND i.deleted_at IS NULL AND i.owner_id = x.owner_id
            AND crm.meeting_ref(i.source_ref) = crm.meeting_ref(coalesce(x.url, '/m/' || x.ref));
@@ -119,7 +142,7 @@ BEGIN
     IF crm.meeting_ref(src) IS NULL THEN
         RETURN CASE WHEN twin_gone THEN 'убрана у двойника' ELSE 'нечего' END;  -- без номера записи не по чему держаться
     END IF;
-    IF 'touch' = ANY (w.locked) AND w.sphere IS DISTINCT FROM 'home' THEN
+    IF held AND w.sphere IS DISTINCT FROM 'home' THEN
         RETURN CASE WHEN twin_gone THEN 'убрана у двойника' ELSE 'под замком' END;
     END IF;
     SELECT * INTO rec FROM crm.interactions i
@@ -133,6 +156,14 @@ BEGIN
             RETURN 'убрана';
         END IF;
         RETURN CASE WHEN twin_gone THEN 'убрана у двойника' ELSE 'нечего' END;
+    END IF;
+    -- Новую запись — только разобранной встрече или со сферой от владельца: до разбора «рабочая» и клиент — подсказка
+    -- службы, а запись видит команда клиента (09.10 так в хронологию клиента ушла личная встреча). Разобрана — разбор
+    -- хоть раз лёг (named_by — модель; «error: …» — разбор не вышел, а named_at стоит): новая расшифровка сбрасывает
+    -- named_at, но сфера и клиент остаются от разбора — подсказка службы их не перебивает. Живую запись — правим.
+    IF rec.id IS NULL AND NOT ('sphere' = ANY (w.locked))
+       AND (w.named_by IS NULL OR w.named_by LIKE 'error%') THEN
+        RETURN CASE WHEN twin_gone THEN 'убрана у двойника' ELSE 'ждёт разбора' END;
     END IF;
     v_kind := CASE w.kind WHEN 'zoom' THEN 'zoom' WHEN 'call' THEN 'call' ELSE 'meeting' END;
     v_title := coalesce(nullif(btrim(w.title), ''), nullif(btrim(w.label), ''), nullif(btrim(w.source_title), ''), 'Встреча');
@@ -169,7 +200,7 @@ BEGIN
     RETURN CASE WHEN twin_gone THEN 'убрана у двойника' ELSE 'нечего' END;
 END $$;
 
-COMMENT ON FUNCTION crm.meeting_touch(uuid) IS 'Запись встречи в хронологии по её карточке (аудит №6, 15.10.2026): с 01.09, рабочая, клиент — клиент, у полного из двойников — заводит или правит (название Дел и итог, договорённости, клиент, сделка, люди без команды); иначе живую запись убирает. Замок touch — запись в руках владельца (кроме личной встречи). Ответ — что сделано.';
+COMMENT ON FUNCTION crm.meeting_touch(uuid) IS 'Запись встречи в хронологии по её карточке (аудит №6, 15.10.2026): с 01.09, рабочая, клиент — клиент, у полного из двойников — заводит (только разобранной встрече или со сферой от владельца) или правит (название Дел и итог, договорённости, клиент, сделка, люди без команды); иначе живую запись убирает. Замок touch у любого из двойников — запись группы в руках владельца (кроме личной встречи). Ответ — что сделано.';
 
 -- ── Пачки «Нового» встречи — названием Дел (№43) ─────────────────────────
 

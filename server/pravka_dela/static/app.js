@@ -3428,6 +3428,15 @@ function byName(list, name, tiers) {
   return { hit: null, many: [] };
 }
 const orWords = (names) => (names.length > 1 ? names.slice(0, -1).join(', ') + ' или ' + names[names.length - 1] : names[0] || '');
+/** Часть held про имя (проект или человека), которое теперь узнаётся однозначно по справочнику (byName): записано
+ *  сервером при создании предложения, а справочник с тех пор пополнился — часть устарела. */
+function heldResolved(p, x) {
+  if (p.project_name && !p.project_id && x.includes(`«${p.project_name}»`) && /проект/.test(x))
+    return !!byName([...S.projects.values()], p.project_name, PROJECT_TIERS).hit;
+  if (p.person_name && !p.person_id && x.includes(`«${p.person_name}»`) && !/проект/.test(x))
+    return !!byName([...S.people.values()], p.person_name, PERSON_TIERS).hit;
+  return false;
+}
 /** Почему предложение ждёт человека: вопрос самой автоматики или что не узналось по имени. */
 function askWhy(s) {
   const p = s.payload || {};
@@ -3435,7 +3444,9 @@ function askWhy(s) {
   if (typeof p.held === 'string') {
     // Сервер уже посмотрел имена (held есть, хоть пустой): его вердикт сильнее своего точного сравнения — «Женя Соколов»
     // он узнаёт уверенным «кто это», а byName только точным именем. Спрашиваем то, что не узнал он.
-    const parts = p.held.split('; ');
+    // Только пока имя и сейчас не узнаётся: владелец мог завести недостающий проект или человека после того, как
+    // сервер записал held, — тогда вопрос снят (при «Да» сервер имя уже узнает; проверка 15.10.2026).
+    const parts = p.held.split('; ').filter((x) => !heldResolved(p, x));
     if (p.project_name && !p.project_id && parts.some((x) => x.includes(`«${p.project_name}»`) && /проект/.test(x)))
       return parts.find((x) => x.startsWith('не один проект')) ? `Какой проект — «${p.project_name}»?` : `Не знаю проект «${p.project_name}» — куда?`;
     if (p.person_name && !p.person_id && parts.some((x) => x.includes(`«${p.person_name}»`) && !/проект/.test(x)))
@@ -3462,9 +3473,10 @@ function heldLine(s, q) {
   // Часть про имя, о котором уже спрашивает вопрос («Кто это — «X»?» и «не знаю человека «X»»), — повтор: не пишем.
   const asked = (x) => [p.person_name, p.project_name].some((n) => n && x.includes(`«${n}»`) && nq.includes(norm(`«${n}»`)));
   const left = String(p.held || '').split('; ').map((x) => x.trim()).filter((x) => x && !nq.includes(norm(x))
-    && !(p.pick && p.person_name && x.includes(`«${p.person_name}»`)) && !asked(x)
-    // вопрос о человеке со встречи «Это A или B?» (№25) уже называет похожих — строка о них повторила бы его
-    && !(s.kind === 'person' && p.pick && x.startsWith('похожие уже есть')));
+    && !(p.pick && p.person_name && x.includes(`«${p.person_name}»`)) && !asked(x) && !heldResolved(p, x)
+    // вопрос о человеке со встречи («Это A или B?», а похожих больше двух — «кто это: A, B или C?», №25) уже называет
+    // похожих — строка о них повторила бы его
+    && !(s.kind === 'person' && p.ask && x.startsWith('похожие уже есть')));
   return left.length ? 'Ждёт: ' + left.join('; ') : null;
 }
 const ASK_YES = { create: 'Поставить', close: 'Закрыть', update: 'Да, согласен', assign: 'Взять', person: 'Завести' };
@@ -3577,8 +3589,9 @@ function autoBlock(auto, batch) {
   const seen = async (ids) => { try { await op1({ op: 'suggestion.seen', ids }); render(); } catch (e) { fail(e); } };
   const nc = auto.filter((s) => s.kind === 'close').length;
   const np = auto.filter((s) => s.kind === 'person').length;
+  const nadd = auto.filter((s) => s.kind === 'person' && (s.result || {}).created === false).length; // дописал в живую
   const what = [nc ? `закрыл ${nc}` : null, auto.length - nc - np ? `уточнил ${auto.length - nc - np}` : null,
-    np ? `завёл людей: ${np}` : null].filter(Boolean).join(', ');
+    np - nadd ? `завёл людей: ${np - nadd}` : null, nadd ? `дописал в карточки: ${nadd}` : null].filter(Boolean).join(', ');
   return el('div', { class: 'group auto-done' + (open ? '' : ' folded') },
     el('h2', {}, icon('check', 17), 'Сделано само', el('span', { class: 'n' }, auto.length),
       el('span', { class: 'gsub' }, what + ' ' + autoFrom(auto)),
@@ -3619,7 +3632,10 @@ function autoFrom(auto) {
 function autoPerson(s, seen) {
   const r = s.result || {};
   const p = S.people.get(r.person_id);
-  const live = p && !p.archived_at;
+  // created: false — сервер не заводил карточку, а дописал номер, Telegram или почту в уже живую (ключ нашёлся у
+  // неё): «Вернуть» с архивом убрал бы настоящую карточку, и имя со встреч потом не завелось бы («уже убран»).
+  const made = r.created !== false;
+  const live = made && p && !p.archived_at;
   const undo = async () => {
     const now = new Date().toISOString();
     const list = [{ op: 'person.set', id: p.id, set: { archived_at: now } }];
@@ -3629,7 +3645,7 @@ function autoPerson(s, seen) {
     try { await ops(list); toast('Убрал в архив: ' + p.name); render(); } catch (e) { fail(e); }
   };
   return el('div', { class: 'sug auto' },
-    el('div', { class: 'main' }, el('div', {}, 'Новый человек: ',
+    el('div', { class: 'main' }, el('div', {}, made ? 'Новый человек: ' : 'Дописано в карточку: ',
       p ? el('a', { class: 'link', href: '#/h/' + p.id }, p.name) : ((s.payload || {}).title || 'карточка не видна')),
       el('div', { class: 'hint' }, [(s.payload || {}).where, s.quote ? '«' + s.quote.slice(0, 160) + '»' : null].filter(Boolean).join(' · '))),
     el('div', { class: 'acts' },

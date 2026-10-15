@@ -299,9 +299,11 @@ def touch_all(url: str, since: str = "2026-09-01", dry: bool = False) -> dict:
     from . import db
 
     counts: dict[str, int] = {}
+    held: list[dict] = []
     retitled = 0
     with db.session(url, "system", "svc:meetings-touch", "system") as conn:
-        rows = conn.execute("SELECT id FROM crm.meetings WHERE (started_at AT TIME ZONE 'Europe/Moscow')::date >= %s::date "
+        rows = conn.execute("SELECT id, ref, started_at, coalesce(nullif(btrim(title), ''), source_title) AS title "
+                            "FROM crm.meetings WHERE (started_at AT TIME ZONE 'Europe/Moscow')::date >= %s::date "
                             "ORDER BY started_at", (since,)).fetchall()
         try:
             with conn.transaction():
@@ -309,11 +311,16 @@ def touch_all(url: str, since: str = "2026-09-01", dry: bool = False) -> dict:
                     retitled += retitle_batches(conn, r["id"])
                     a = touch(conn, r["id"])
                     counts[a] = counts.get(a, 0) + 1
+                    if a == "под замком":
+                        # Запись в руках человека (убрал или переписал сам, в том числе до установки — замок ставит
+                        # dela_0021 по журналу): номера — отдельно, чтобы владелец видел, что сервер их не тронул.
+                        held.append({"ref": r["ref"], "title": r["title"],
+                                     "day": r["started_at"].astimezone(MSK).strftime("%d.%m")})
                 if dry:
                     raise _DryRun
         except _DryRun:
             pass
-    return {"meetings": len(rows), "actions": counts, "retitled": retitled, "dry": dry}
+    return {"meetings": len(rows), "actions": counts, "retitled": retitled, "dry": dry, "held": held}
 
 
 def _voice_into(conn, row: dict) -> dict:

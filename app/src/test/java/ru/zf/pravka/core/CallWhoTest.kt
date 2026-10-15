@@ -137,5 +137,27 @@ class CallWhoTest {
             .put("candidates", JSONArray().put(JSONObject().put("id", "c2f8").put("name", "Евгений Соколов").put("score", 1.0).put("how", "номер слитой карточки"))))
         assertEquals("номер слитой карточки", parsed.best?.how)
         assertTrue(parsed.callSure)
+        // Сосед «похоже» рядом (сервер развязал его alias_only при любом балле) — тоже развязка, а не запас: звонок —
+        // вопрос (проверка 15.10.2026).
+        val near = CallRules.Who(a, true, listOf(a, b.copy(score = 0.9, how = "похоже")))
+        assertTrue(near.sure)
+        assertFalse(near.callSure)
+        assertEquals("", CallRules.verdict(call("Женя"), emptyList(), people, null, near).personId)
+    }
+
+    @Test
+    fun `чужое имя контакта телефон не учит — сервер его всё равно не допишет`() {
+        // Номер — Соколова, а контакт подписан «Петя» — так зовут другую карточку: имя не предлагаем (каждый звонок
+        // слал бы ту же операцию и получал тот же skipped заметкой), номер — учим.
+        val sokolov = CallRules.Person(listOf("Евгений Соколов", "Женя"), emptyList(), id = "c2f8")
+        val petya = CallRules.Person(listOf("Пётр Новиков", "Петя"), emptyList(), id = "p1")
+        val op = CallRules.learnOp(sokolov, call("Петя"), listOf(sokolov, petya))!!
+        val add = op.getJSONObject("add")
+        assertFalse(add.has("aliases"))
+        assertEquals("+7 916 123-45-67", add.getJSONArray("phones").getString(0))
+        // Номер уже знает — и учить нечему.
+        assertNull(CallRules.learnOp(sokolov.copy(phones = listOf("+79161234567")), call("Петя"), listOf(sokolov, petya)))
+        // Без списка — как раньше.
+        assertTrue(CallRules.learnOp(sokolov, call("Петя"))!!.getJSONObject("add").has("aliases"))
     }
 }

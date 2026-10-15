@@ -555,10 +555,9 @@ fun DelaTab(
             return
         }
         scope.launch {
-            val since = System.currentTimeMillis()
             app.delaStore.enqueue(ops)
             val sent = app.delaSync.pushNow(4_000L)
-            val refused = app.delaStore.noticesFlow.value.firstOrNull { it.error && it.at >= since }
+            val refused = app.delaStore.noticesFor(ops).firstOrNull { it.error }
             Feedback.toast(app, refused?.text ?: if (sent || link == null) said else "$said — уйдёт на сервер, когда будет связь")
         }
     }
@@ -586,6 +585,7 @@ fun DelaTab(
         )
         // «Сейчас» — главная (13.10.2026, `renderNow` веба): своими блоками, у модели — только дела в порядке показа.
         view == DelaViews.View.NOW -> {
+            val waits = remember(snap, me, today, sphere) { DelaViews.waits(snap, me, today, sphere, now) }
             val nowList = DelaGroups.nowOrdered(snap, me, today)
             val taken = nowList.map { it.id }.toSet()
             val rest = DelaGroups.todayByGroups(snap, me, today, sphere, taken)
@@ -608,7 +608,7 @@ fun DelaTab(
                     auto = Dela.autoDone(snap, me, now).size,
                 ),
                 late = DelaGroups.lateTasks(snap, me, today, sphere).size,
-                waits = DelaViews.waits(snap, me, today, sphere, now),
+                waits = waits,
             )
         }
         // «Сегодня» (`renderToday` веба, 13.10.2026): свои дела со сроком ровно сегодня, три группы по приоритету —
@@ -2403,7 +2403,7 @@ private fun AutoPersonRow(sg: Dela.Suggestion, snap: Dela.Snapshot, onUndo: () -
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Column(Modifier.weight(1f)) {
             Text(
-                "Новый человек: " + a.name,
+                (if (a.made) "Новый человек: " else "Дописано в карточку: ") + a.name,
                 style = ty.body,
                 color = ru.zf.pravka.ui.Ink.Text,
                 modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(enabled = a.personId.isNotBlank()) { onOpen(a.personId) },
@@ -2412,7 +2412,7 @@ private fun AutoPersonRow(sg: Dela.Suggestion, snap: Dela.Snapshot, onUndo: () -
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (onSeen != null) PaperTextButton("Понятно", onClick = onSeen)
                 if (a.live) PaperTextButton("Вернуть", icon = Glyphs.Undo, onClick = onUndo)
-                else if (a.personId.isNotBlank()) Text("в архиве", style = ty.label, color = mode.meta)
+                else if (a.made && a.personId.isNotBlank()) Text("в архиве", style = ty.label, color = mode.meta)
             }
         }
         SourceMark(sg.source)
@@ -3838,8 +3838,14 @@ internal fun RejectSheet(suggestion: Dela.Suggestion, onDismiss: () -> Unit, onR
         },
     ) {
         if (suggestion.quote.isNotBlank()) PaperHint("«${suggestion.quote.take(300)}»")
+        // Вопрос о человеке (№25, «Люди сами»): «нет» запоминается навсегда — служба больше не спросит; причина — та, что
+        // у его варианта «нет» («не он в Telegram»), иначе «не для CRM». Причины дел («это идея, не дело») здесь не к месту.
+        val person = suggestion.kind == "person"
+        if (person) PaperHint("Больше не спрошу о нём.")
         ChipRow {
-            for (r in listOf("это идея, не дело", "уже сделано", "дубль", "не моё", "не сейчас")) {
+            val chips = if (person) listOf(DelaViews.personNoReason(suggestion))
+            else listOf("это идея, не дело", "уже сделано", "дубль", "не моё", "не сейчас")
+            for (r in chips) {
                 PaperChip(r, selected = reason == r, onClick = { onReject(r) })
             }
         }

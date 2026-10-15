@@ -81,14 +81,16 @@ object CallRules {
          * своим именем, а соперник рядом — только своим другим именем («Ваня» — короткое имя у А и другое имя у Б).
          * Для звонка этого мало: номер звонившего закрепился бы за карточкой без вопроса, и запись легла бы в хронологию.
          * Поэтому такой звонок — вопрос, как раньше. Совпадение железом (номер, Telegram, почта, номер слитой карточки) —
-         * уверенно всегда.
+         * уверенно всегда. Любой соперник ближе [WHO_GAP] при `sure` — это развязка, а не запас: сервер развязывает и
+         * соперника «похоже», у которого совпало только другое имя (`alias_only` — при любом балле), а смотреть только
+         * на «другое имя» значило пропустить его (проверка 15.10.2026).
          */
         val callSure: Boolean
             get() {
                 val b = best ?: return false
                 if (!sure) return false
                 if (b.how in KEY_HOWS) return true
-                return candidates.none { it.id != b.id && it.how == "другое имя" && b.score - it.score < WHO_GAP }
+                return candidates.none { it.id != b.id && b.score - it.score < WHO_GAP }
             }
     }
 
@@ -199,12 +201,19 @@ object CallRules {
      * `person.add` (дописывает, не затирая). Дальше узнают все: встречи, CRM,
      * следующий звонок. Нечего дописать — null. op_id постоянный от того, что
      * дописываем: второй звонок с того же номера дубля не ставит.
+     *
+     * Имя контакта, которое уже носит другой человек из [others] (так зовут его — сервер чужое имя другим именем не
+     * пишет, `skipped`, аудит №1), не предлагаем: иначе каждый звонок слал ту же операцию, сервер отвечал тем же
+     * `skipped`, и во вкладке Дел снова висела заметка «… не дописал — так зовут …» (проверка 15.10.2026).
      */
-    fun learnOp(p: Person, c: Call): org.json.JSONObject? {
+    fun learnOp(p: Person, c: Call, others: List<Person> = emptyList()): org.json.JSONObject? {
         if (p.id.isBlank()) return null
         val d = digits(c.number)
         val phone = c.number.trim().takeIf { d.length >= 7 && p.phones.none { digits(it) == d } }
-        val alias = c.name.trim().takeIf { it.isNotEmpty() && p.names.none { n -> norm(n) == norm(it) } }
+        val alias = c.name.trim().takeIf {
+            it.isNotEmpty() && p.names.none { n -> norm(n) == norm(it) } &&
+                others.none { o -> o.id != p.id && o.names.any { n -> norm(n) == norm(it) } }
+        }
         if (phone == null && alias == null) return null
         val add = org.json.JSONObject()
         if (alias != null) add.put("aliases", org.json.JSONArray().put(alias))

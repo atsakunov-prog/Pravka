@@ -657,8 +657,9 @@ private fun NewCard(c: TodayCards, wide: Boolean) {
                 }
                 Spacer(Modifier.width(6.dp))
                 // Вопрос со своими ответами или выбором человека (аудит №1, №25): «Да» сервер не примет — ответ в Делах,
-                // где варианты кнопками. «Нет» — вариантом «нет» вопроса («Не для CRM», «Никто»), у человека без
-                // вариантов — «не для CRM» сразу, у остального — лист причины.
+                // где варианты кнопками. «Нет» — вариантом «нет» вопроса («Никто» и т. п.), у остального — лист причины.
+                // У вопроса о человеке — всегда лист: «нет» там — навсегда (служба больше не спросит), а маленький «✕»
+                // легко задеть, и ушедший ответ из приложения не вернуть (проверка 15.10.2026).
                 if (DelaViews.plainYes(sg, c.data.snap)) {
                     SmallKey(kv("check", Glyphs.Check), if (wide) "Да" else null, "Да: ${txt.title}", { c.act.accept(sg) }, soft = true)
                 } else {
@@ -669,8 +670,8 @@ private fun NewCard(c: TodayCards, wide: Boolean) {
                 val no = DelaViews.rejectOption(sg, c.data.snap)
                 SmallKey(kv("x", Glyphs.Close), null, "Нет: ${txt.title}", {
                     when {
+                        sg.kind == "person" -> c.onReject(sg)
                         no != null -> c.act.answer(sg, no)
-                        sg.kind == "person" && DelaViews.options(sg, c.data.snap) == null -> c.act.reject(sg, DelaViews.NOT_CRM)
                         else -> c.onReject(sg)
                     }
                 })

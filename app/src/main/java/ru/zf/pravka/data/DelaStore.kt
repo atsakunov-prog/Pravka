@@ -63,8 +63,11 @@ class DelaStore(private val context: Context) {
         val opId: String get() = op.optString("op_id")
     }
 
-    /** То, что владелец должен узнать словами: отказ сервера, спор правок. */
-    data class Notice(val at: Long, val text: String, val error: Boolean)
+    /**
+     * То, что владелец должен узнать словами: отказ сервера, спор правок. [opId] — чья это заметка: тост после отправки
+     * ([noticesFor]) показывает заметку своей операции, а не первую свежую из той же пачки (проверка 15.10.2026).
+     */
+    data class Notice(val at: Long, val text: String, val error: Boolean, val opId: String = "")
 
     private val mutex = Mutex()
     private val file: File get() = File(DataRoot.dir(context), FILE_NAME)
@@ -304,6 +307,12 @@ class DelaStore(private val context: Context) {
     /** Что отправить: вся очередь по порядку. */
     suspend fun pending(): List<Queued> = mutex.withLock { ensureLoaded(); outbox.toList() }
 
+    /** Заметки этих операций (по op_id), свежие первыми: отказ — раньше прочих. */
+    fun noticesFor(ops: List<JSONObject>): List<Notice> {
+        val mine = ops.map { it.optString("op_id") }.filter { it.isNotBlank() }.toSet()
+        return _notices.value.filter { it.opId in mine }.sortedByDescending { it.error }
+    }
+
     /** Есть ли ещё в очереди эта операция (не дошла до сервера). */
     fun isQueued(opId: String): Boolean = _queued.value.any { it.opId == opId }
 
@@ -342,20 +351,24 @@ class DelaStore(private val context: Context) {
                 // «На сервере уже версии N» у записи Свода — не отказ, а повод
                 // слить своё со свежим: это делает SvodStore, владельцу шуметь незачем.
                 if (q.op.optString("op") == "svod.set" && ru.zf.pravka.core.Svod.isStale(r.optString("error"))) continue
-                notices.add(0, Notice(now, "Сервер не принял $what: ${r.optString("error").ifBlank { "без причины" }}", true))
+                notices.add(0, Notice(now, "Сервер не принял $what: ${r.optString("error").ifBlank { "без причины" }}", true, id))
                 continue
             }
             // Чужое имя другим именем не пишется (аудит 15.10.2026, №1): сервер говорит, что не дописал и почему, —
             // заметкой, а экран CRM показывает её тостом вместо «Имя дописано» (имя иначе молча пропадало).
             if (q.op.optString("op") in setOf("person.add", "person.merge")) {
                 ru.zf.pravka.core.DelaCrm.skippedWords(r)?.let { w ->
-                    notices.add(0, Notice(now, if (q.op.optString("op") == "person.merge") "Слито, но $w" else w, false))
+                    val text = if (q.op.optString("op") == "person.merge") "Слито, но $w" else w
+                    // Та же заметка уже висит — вторая не нужна (повтор той же операции, проверка 15.10.2026): прежняя
+                    // уступает место свежей — наверх и с этой операцией.
+                    notices.removeAll { it.text == text }
+                    notices.add(0, Notice(now, text, false, id))
                 }
             }
             val conflicts = r.optJSONArray("conflicts")
             if (conflicts != null && conflicts.length() > 0) {
                 val fields = (0 until conflicts.length()).joinToString(", ") { fieldName(conflicts.optString(it)) }
-                notices.add(0, Notice(now, "$what: $fields меняли и с другой стороны — осталось твоё, прежнее в журнале дела", false))
+                notices.add(0, Notice(now, "$what: $fields меняли и с другой стороны — осталось твоё, прежнее в журнале дела", false, id))
             }
         }
         if (done.isNotEmpty()) {
@@ -431,7 +444,7 @@ class DelaStore(private val context: Context) {
                 o.optJSONArray("notices")?.let { a ->
                     for (i in 0 until a.length()) {
                         val n = a.optJSONObject(i) ?: continue
-                        notices += Notice(n.optLong("at"), n.optString("text"), n.optBoolean("error"))
+                        notices += Notice(n.optLong("at"), n.optString("text"), n.optBoolean("error"), n.optString("op_id"))
                     }
                 }
             }
@@ -475,7 +488,7 @@ class DelaStore(private val context: Context) {
                 for (q in outbox) put(JSONObject().put("op", q.op).put("at", q.at).put("tries", q.tries).put("error", q.error))
             })
             .put("notices", JSONArray().apply {
-                for (n in notices) put(JSONObject().put("at", n.at).put("text", n.text).put("error", n.error))
+                for (n in notices) put(JSONObject().put("at", n.at).put("text", n.text).put("error", n.error).put("op_id", n.opId))
             })
         val text = o.toString()
         withContext(Dispatchers.IO) { StoreFiles.writeAtomic(outboxFile, text) }

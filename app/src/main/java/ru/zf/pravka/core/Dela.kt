@@ -1241,16 +1241,19 @@ object Dela {
 
     /**
      * «Поправить» у предложения (лист карточки): в `set` — только поправленное, остальное сервер возьмёт из
-     * предложения сам. Человек назван именем, а в листе его не выбрали («Никто» или имя двусмысленно и не узналось)
-     * — `person_id: null` явно (аудит №1): без этого сервер на двусмысленном имени откажет («Кто это — X или Y?»),
-     * ведь «Поправить» — ответ, что человека нет.
+     * предложения сам. Кроме человека: предложение называет его именем (`person_name` без `person_id`), и человек в
+     * листе — всегда в `set`, как в вебе (там выбранный `person_id` уходит всегда): кого лист показал — того и ставим,
+     * «Никто» — `person_id: null` явно (аудит №1). Иначе сервер решал бы по имени сам: у «уточнить» лист показывает
+     * человека дела, а сервер на двусмысленном «Ваня» отказывал («Кто это — X или Y?»), и правка срока терялась; у
+     * «завести» лист подставляет догадку телефона (`findPerson`, и по началу имени), а сервер мог поставить другого или
+     * никого (проверка 15.10.2026).
      */
     fun acceptEditSet(sg: Suggestion, proposed: Task, after: Task, tree: Boolean = false): JSONObject {
         val (set, _) = diff(proposed, after, tree)
         val p = sg.payloadObj()
         if (sg.kind in setOf("create", "update") && p.str("person_name").isNotBlank() && p.str("person_id").isBlank() &&
-            after.personId.isBlank() && !set.has("person_id")
-        ) set.put("person_id", JSONObject.NULL)
+            !set.has("person_id")
+        ) set.put("person_id", after.personId.ifBlank { null } ?: JSONObject.NULL)
         return set
     }
 
@@ -1456,11 +1459,14 @@ object Dela {
      * (`person.set archived_at`; строки не удаляются — архив и есть «как было»), компанию — тоже, если сервер завёл её
      * ради него (`result.org_created`) и живых в ней больше никого нет; потом [seen] — `suggestion.seen`. После
      * «Вернуть» это имя со встреч больше не заводится: сервер видит карточку в архиве («уже убран»). null — вернуть
-     * нечего: карточки в копии нет или она уже в архиве.
+     * нечего: карточки в копии нет, она уже в архиве или сервер её не заводил (`result.created` = false — дописал ключ
+     * в живую карточку).
      */
     fun autoPersonUndoOps(sg: Suggestion, s: Snapshot, seen: Boolean, nowIso: String): List<JSONObject>? {
         if (sg.kind != "person") return null
         val r = sg.resultObj()
+        // created: false — карточку не заводили, а дописали в живую: в архив её не убираем (проверка 15.10.2026).
+        if (!r.optBoolean("created", true)) return null
         val p = s.people[r.str("person_id")] ?: return null
         if (!p.live) return null
         val list = mutableListOf<JSONObject>(
@@ -1587,10 +1593,7 @@ object Dela {
             (it.dueDate.isNotBlank() && twoWeeks.isNotBlank() && it.dueDate < twoWeeks) ||
                 ((ms(it.updatedAt) ?: Long.MAX_VALUE) < now - 21 * DAY_MS)
         }.sortedWith(ORDER)
-        val waitingStale = open.filter {
-            it.ball == WAITING && it.waitingSince.isNotBlank() && oneWeek.isNotBlank() && it.waitingSince < oneWeek &&
-                (it.nudgeOn.isBlank() || it.nudgeOn < today)
-        }.sortedWith(ORDER)
+        val waitingStale = waitingStale(open, today, oneWeek).sortedWith(ORDER)
         val withNext = s.tasks.values.filter { it.open && it.ball == MINE }.map { it.projectId }.toSet()
         val noNext = s.projects.values.filter {
             it.live && (me.isBlank() || it.ownerId == me) && it.moneyDefault in setOf("paid", "potential") && it.id !in withNext &&
@@ -1601,6 +1604,19 @@ object Dela {
         }
         return Week(stale, waitingStale, noNext, expired)
     }
+
+    /**
+     * «Жду больше недели» (`store.WAITING_STALE_IF`, аудит №5): ждёт дольше 7 дней, напоминание не назначено или прошло.
+     * Одно правило для [week] и шапки «Сейчас» (`DelaViews.waits`) — та не считает ради одного числа залежалое, деньги
+     * без шага и погасшее (и не разбирает даты правки каждого открытого дела на каждой перерисовке).
+     */
+    fun waitingStale(open: List<Task>, today: String, oneWeek: String = minusDays(today, 7)): List<Task> = open.filter {
+        it.ball == WAITING && it.waitingSince.isNotBlank() && oneWeek.isNotBlank() && it.waitingSince < oneWeek &&
+            (it.nudgeOn.isBlank() || it.nudgeOn < today)
+    }
+
+    /** Свои открытые дела сферы — вход «Недели» и шапки «Сейчас». */
+    fun myOpen(s: Snapshot, me: String, sphere: String): List<Task> = mineOpen(s, me, sphere)
 
     /** Поиск по названию и заметкам, без регистра и «ё». */
     fun search(s: Snapshot, q: String, withClosed: Boolean = false): List<Task> {

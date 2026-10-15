@@ -205,7 +205,7 @@ object DelaViews {
         openMine(s, me, sphere).filter { DelaGroups.grpOf(it) == DelaGroups.Grp.OWED && it.dueDate.isBlank() }
 
     fun waits(s: Dela.Snapshot, me: String, today: String, sphere: String, now: Long): Waits =
-        Waits(owedNoDue(s, me, sphere).size, Dela.week(s, me, today, sphere, now).waitingStale.size)
+        Waits(owedNoDue(s, me, sphere).size, Dela.waitingStale(Dela.myOpen(s, me, sphere), today).size)
 
     /** Части строки: «ждут от тебя без срока: N», «жду больше недели: M»; ноль — части нет. */
     fun waitWords(w: Waits): List<String> = listOfNotNull(
@@ -390,7 +390,12 @@ object DelaViews {
         val project = p.str("project_name").takeIf { p.str("project_id").isBlank() }.orEmpty()
         val person = p.str("person_name").takeIf { p.str("person_id").isBlank() }.orEmpty()
         if (p.has("held") && !p.isNull("held")) {
-            val parts = p.optString("held").split("; ")
+            // Только пока имя и сейчас не узнаётся (`heldResolved` веба): справочник мог пополниться после того, как
+            // сервер записал held, — тогда вопрос снят, при «Да» сервер имя узнает (проверка 15.10.2026).
+            val parts = p.optString("held").split("; ").filterNot { x ->
+                (project.isNotBlank() && x.contains("«$project»") && x.contains("проект") && projectMatch(s, project).hit != null) ||
+                    (person.isNotBlank() && x.contains("«$person»") && !x.contains("проект") && personMatch(s, person).hit != null)
+            }
             if (project.isNotBlank() && parts.any { it.contains("«$project»") && it.contains("проект") }) {
                 return if (parts.any { it.startsWith("не один проект") }) "Какой проект — «$project»?" else "Не знаю проект «$project» — куда?"
             }
@@ -427,7 +432,7 @@ object DelaViews {
         val left = held.split("; ").map { it.trim() }.filter { x ->
             x.isNotBlank() && !(nq.isNotBlank() && nq.contains(Dela.norm(x).orEmpty())) &&
                 !(pick && person.isNotBlank() && x.contains("«$person»")) && !asked(x) &&
-                !(sg.kind == "person" && pick && x.startsWith("похожие уже есть"))
+                !(sg.kind == "person" && p.str("ask").isNotBlank() && x.startsWith("похожие уже есть"))
         }
         return if (left.isEmpty()) null else "Ждёт: " + left.joinToString("; ")
     }
@@ -491,6 +496,16 @@ object DelaViews {
 
     /** Причина «нет» у вопроса о человеке без вариантов (кнопка «Не для CRM» веба): служба больше не спросит. */
     const val NOT_CRM = "не для CRM"
+
+    /** Причина «нет» вопроса о человеке: та, что у его варианта «нет» («не он в Telegram»), иначе [NOT_CRM]. */
+    fun personNoReason(sg: Dela.Suggestion): String {
+        val a = sg.payloadObj().optJSONArray("options") ?: return NOT_CRM
+        for (i in 0 until a.length()) {
+            val o = a.optJSONObject(i) ?: continue
+            if (o.optBoolean("reject", false)) return o.str("reason").ifBlank { NOT_CRM }
+        }
+        return NOT_CRM
+    }
 
     /**
      * Ссылка значка источника (`sugMark` веба): встреча — у дела её адрес в `source_ref`, у вопроса о человеке со
@@ -595,11 +610,14 @@ object DelaViews {
     fun autoSummary(list: List<Dela.Suggestion>): String {
         val closed = list.count { it.kind == "close" }
         val people = list.count { it.kind == "person" }
+        // created: false — сервер дописал ключ в живую карточку, человека не заводил.
+        val added = list.count { it.kind == "person" && !it.resultObj().optBoolean("created", true) }
         val upd = list.size - closed - people
         return listOfNotNull(
             "закрыл $closed".takeIf { closed > 0 },
             "уточнил $upd".takeIf { upd > 0 },
-            "завёл людей: $people".takeIf { people > 0 },
+            "завёл людей: ${people - added}".takeIf { people - added > 0 },
+            "дописал в карточки: $added".takeIf { added > 0 },
         ).joinToString(", ")
     }
 
@@ -614,17 +632,25 @@ object DelaViews {
         return if (words.isEmpty()) "" else "по " + orWords(words).replace(" или ", " и ")
     }
 
-    /** Строка человека, заведённого само: «Новый человек: Пётр Новиков»; карточки не видно — как его назвали. */
-    data class AutoPerson(val personId: String, val name: String, val hint: String, val live: Boolean)
+    /**
+     * Строка человека, заведённого само: «Новый человек: Пётр Новиков»; карточки не видно — как его назвали.
+     * [made] — сервер завёл карточку (`result.created`); false — дописал номер, Telegram или почту в уже живую (ключ
+     * нашёлся у неё): строка «Дописано в карточку: …» и без «Вернуть» — архив убрал бы настоящую карточку (проверка
+     * 15.10.2026). [live] — есть что вернуть: заведена, видна и не в архиве.
+     */
+    data class AutoPerson(val personId: String, val name: String, val hint: String, val live: Boolean, val made: Boolean = true)
 
     fun autoPerson(sg: Dela.Suggestion, s: Dela.Snapshot): AutoPerson {
-        val p = s.people[sg.resultObj().str("person_id")]
+        val r = sg.resultObj()
+        val p = s.people[r.str("person_id")]
         val pl = sg.payloadObj()
+        val made = r.optBoolean("created", true)
         return AutoPerson(
             personId = p?.id.orEmpty(),
             name = p?.name ?: pl.str("title").ifBlank { pl.optJSONObject("person")?.str("name").orEmpty() }.ifBlank { "карточка не видна" },
             hint = listOfNotNull(pl.str("where").takeIf { it.isNotBlank() }, sg.quote.takeIf { it.isNotBlank() }?.let { "«" + it.take(160) + "»" }).joinToString(" · "),
-            live = p != null && p.live,
+            live = made && p != null && p.live,
+            made = made,
         )
     }
 

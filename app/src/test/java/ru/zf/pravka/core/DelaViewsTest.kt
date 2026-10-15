@@ -441,6 +441,9 @@ class DelaViewsTest {
         // Сервер уже посмотрел имена (held есть, хоть пустой) — его вердикт сильнее своего точного сравнения.
         assertNull(DelaViews.askWhy(ask(JSONObject().put("person_name", "Женя Соколов").put("held", "")), people(pA)))
         assertEquals("Кто это — «Петя»?", DelaViews.askWhy(ask(JSONObject().put("person_name", "Петя").put("held", "не знаю человека «Петя»")), people(pA)))
+        // Сервер записал «не знаю человека» раньше, а с тех пор карточку завели — вопрос снят (как heldResolved веба).
+        val later = Dela.Person("pp", "Пётр Тестов", short = "Петя")
+        assertNull(DelaViews.askWhy(ask(JSONObject().put("person_name", "Петя").put("held", "не знаю человека «Петя»")), people(pA, later)))
         assertEquals("Какой проект — «Альфа»?",
             DelaViews.askWhy(ask(JSONObject().put("project_name", "Альфа").put("held", "не один проект с именем «Альфа»: Альфа Банк, Альфа Групп")), people(pA)))
         // Проекты — имя и другие имена одним ярусом: двое — «Какой проект — …: A или B?».
@@ -547,6 +550,9 @@ class DelaViewsTest {
                 .put(JSONObject().put("label", "Никто").put("reject", true).put("reason", "не он в Telegram"))), kind = "person", source = "telegram", id = "tgfind")
         assertEquals("Никто", DelaViews.rejectOption(tg, on)?.label)
         assertTrue(DelaViews.choiceOnly(tg))
+        // Лист «Отклонить» у вопроса о человеке — причина его варианта «нет», без вариантов — «не для CRM».
+        assertEquals("не он в Telegram", DelaViews.personNoReason(tg))
+        assertEquals("не для CRM", DelaViews.personNoReason(ask(JSONObject().put("title", "+7 900"), kind = "person")))
         // Человек без вариантов («Новый номер — завести?») — «Не для CRM» причиной, без вопроса.
         assertEquals("не для CRM", DelaViews.NOT_CRM)
         assertTrue(DelaViews.plainYes(ask(JSONObject().put("title", "+7 900 000-00-00"), kind = "person", source = "contacts"), on))
@@ -567,6 +573,29 @@ class DelaViewsTest {
         val plain = ask(JSONObject().put("title", "Купить бумагу"))
         val p2 = Dela.draftOf(plain, s, "sasha")
         assertFalse(Dela.acceptEditSet(plain, p2, p2.copy(title = "Бумага")).has("person_id"))
+    }
+
+    @Test
+    fun `поправить — человек из листа уходит всегда, даже нетронутый`() {
+        // «Уточнить» дело с человеком X, предложение называет двусмысленное «Ваня»: владелец меняет только срок — лист
+        // показывал X, его и ставим (без этого сервер отказал бы «Кто это — «Ваня»…», и правка срока потерялась бы).
+        val px = Dela.Person("px", "Пётр Иксов")
+        val base = task("t1") { it.copy(personId = "px") }
+        val s = people(pA, pB, px).copy(tasks = mapOf("t1" to base))
+        val upd = ask(JSONObject().put("title", "t1").put("person_name", "Ваня"), kind = "update").copy(taskId = "t1")
+        val before = Dela.draftOf(upd, s, "sasha")
+        assertEquals("px", before.personId)
+        val set = Dela.acceptEditSet(upd, before, before.copy(dueDate = "2026-10-09"))
+        assertEquals("2026-10-09", set.getString("due_date"))
+        assertEquals("px", set.getString("person_id"))
+        // «Завести»: лист подставил догадку телефона по началу имени («Пётр» → «Пётр Иксов») — она и уходит, а не
+        // решение сервера по имени (старый match_name такого имени не знает — дело встало бы без человека).
+        val cr = ask(JSONObject().put("title", "Позвонить").put("person_name", "Пётр"))
+        val draft = Dela.draftOf(cr, s, "sasha")
+        assertEquals("px", draft.personId)
+        val set2 = Dela.acceptEditSet(cr, draft, draft.copy(title = "Позвонить завтра"))
+        assertEquals("px", set2.getString("person_id"))
+        assertEquals("Позвонить завтра", set2.getString("title"))
     }
 
     @Test
@@ -607,6 +636,17 @@ class DelaViewsTest {
         assertFalse("карточки в копии нет — «Вернуть» не показываем", DelaViews.autoPerson(contacts, s).live)
         // Понятно — уходит.
         assertTrue(Dela.autoDone(s.copy(suggestions = mapOf("s1" to sg.copy(seenAt = nowIso))), "sasha", nowMs).isEmpty())
+        // created: false — сервер не заводил карточку, а дописал номер в живую («человек заведён сам» с ключом, который
+        // уже был у Ольги): строка «Дописано в карточку», «Вернуть» нет — архив убрал бы настоящую карточку.
+        val olga = Dela.Person("po", "Ольга Тестова")
+        val added = auto("s3", "contacts", JSONObject().put("person_id", "po").put("created", false).put("changed", true))
+        val s2 = s.copy(people = s.people + ("po" to olga))
+        val ar = DelaViews.autoPerson(added, s2)
+        assertEquals("Ольга Тестова", ar.name)
+        assertFalse(ar.made)
+        assertFalse("дописано в живую — не «Вернуть»", ar.live)
+        assertNull(Dela.autoPersonUndoOps(added, s2, seen = true, nowIso = nowIso))
+        assertEquals("завёл людей: 1, дописал в карточки: 1", DelaViews.autoSummary(listOf(sg, added)))
     }
 
     @Test
@@ -624,10 +664,14 @@ class DelaViewsTest {
         )
         val w = DelaViews.waits(s, "sasha", today, "all", now)
         assertEquals(listOf("owed"), DelaViews.owedNoDue(s, "sasha", "all").map { it.id }.filter { it.startsWith("owed") })
-        assertEquals(2, Dela.week(s, "sasha", today, "all", now).waitingStale.count { it.id.startsWith("w") })
-        // Числа — те же списки (контракт синка тоже несёт дела: сравниваем с ними, а не с константой).
-        assertEquals(DelaViews.owedNoDue(s, "sasha", "all").size, w.owedNoDue)
-        assertEquals(Dela.week(s, "sasha", today, "all", now).waitingStale.size, w.waitingStale)
+        // Какие именно: напоминание прошло (w10-past) — ждёт; назначено вперёд (w10-future) и ждёт меньше недели — нет.
+        val stale = Dela.week(s, "sasha", today, "all", now).waitingStale.map { it.id }.filter { it.startsWith("w") }.toSet()
+        assertEquals(setOf("w10", "w10-past"), stale)
+        // Шапка считает тем же правилом и по тем же делам (контракт синка несёт свои — их добавка одна и та же).
+        val extraOwed = DelaViews.owedNoDue(s, "sasha", "all").count { !it.id.startsWith("owed") }
+        val extraWait = Dela.week(s, "sasha", today, "all", now).waitingStale.count { !it.id.startsWith("w") }
+        assertEquals(1 + extraOwed, w.owedNoDue)
+        assertEquals(2 + extraWait, w.waitingStale)
         val words = DelaViews.waitWords(DelaViews.Waits(3, 2))
         assertEquals(listOf("ждут от тебя без срока: 3", "жду больше недели: 2"), words)
         assertEquals(listOf("жду больше недели: 1"), DelaViews.waitWords(DelaViews.Waits(0, 1)))

@@ -445,6 +445,14 @@ object DelaCrm {
         return fromView
     }
 
+    /**
+     * Запасной список дел из ответа вида (копия своих не знает) — без того, что копия уже знает закрытым или ушедшим
+     * ([fits] — где дело должно стоять): только что закрытое в копии дело иначе снова показывалось открытым, пока вид не
+     * обновится (проверка 15.10.2026; [nextFor] от этого уже защищён).
+     */
+    fun viewSteps(s: Dela.Snapshot, fromView: List<Dela.Task>, fits: (Dela.Task) -> Boolean): List<Dela.Task> =
+        fromView.filter { v -> val k = s.tasks[v.id]; k == null || (k.open && fits(k)) }
+
     /** Открытые дела клиента без сделки (не цели) — шаги его единственной живой сделки, ранние сверху. */
     fun clientSteps(s: Dela.Snapshot, projectId: String): List<Dela.Task> =
         s.tasks.values.filter { it.open && !it.goal && it.projectId == projectId && it.dealId.isBlank() }.sortedWith(Dela.ORDER)

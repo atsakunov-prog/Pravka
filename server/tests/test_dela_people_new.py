@@ -248,6 +248,74 @@ def test_meeting_person_removed_known_and_repeat(dela):
     assert fresh["id"] != q["id"] and fresh["status"] == "pending"
 
 
+def test_meeting_person_removed_only_by_full_own_name(dela):
+    """«Уже убран» — только полное собственное имя архивной карточки и только без живых похожих (проверка 15.10.2026).
+    Совпало одно слово, короткое или другое имя архивной — это не он: вопрос с подсказкой, а не «нет» навсегда
+    (требование владельца №25/№60: названный попадает в CRM, неясно — один вопрос)."""
+    with store.db.session(dela, "sasha", "t") as c:
+        c.execute("INSERT INTO crm.people (name, short, aliases, owner_id, archived_at) VALUES "
+                  "('Мария Старая', 'Мария', '{}', 'sasha', now()), ('Олег Прежний', NULL, '{Олег}', 'sasha', now()), "
+                  "('Пётр Старый', 'Петя', '{Петя Старый}', 'sasha', now()), ('Глеб Архивов', NULL, '{}', 'sasha', now())")
+        c.execute("INSERT INTO crm.orgs (name, kind, owner_id) VALUES ('Альфа', 'other', 'sasha'), ('Бета', 'other', 'sasha')")
+        c.execute("INSERT INTO crm.people (name, org_id, owner_id) VALUES ('Пётр Сомов', NULL, 'sasha'), "
+                  "('Глеб Архивов', (SELECT id FROM crm.orgs WHERE name = 'Альфа'), 'sasha'), "
+                  "('Глеб Архивов', (SELECT id FROM crm.orgs WHERE name = 'Бета'), 'sasha')")
+    got = {}
+    for name in ("Мария", "Олег", "Петя", "Петя Старый"):
+        s = ops(dela, "sasha", meet_sug(name))[0]["suggestion"]
+        got[name] = (s["status"], s["payload"].get("held"))
+    assert got["Мария"] == ("pending", "имя из одного слова; в архиве есть «Мария Старая»"), got
+    assert got["Олег"] == ("pending", "имя из одного слова; в архиве есть «Олег Прежний»"), got
+    # Короткое имя архивной при живом «Пётр Сомов» — вопрос (раньше — «уже убран»).
+    assert got["Петя"][0] == "pending" and got["Петя"][1].endswith("в архиве есть «Пётр Старый»"), got
+    # Другое имя архивной из двух слов — тоже не «уже убран»: вопрос, а не карточка сама.
+    assert got["Петя Старый"] == ("pending", "в архиве есть «Пётр Старый»"), got
+    assert not people_named(dela, "Петя Старый")
+    # Полное своё имя архивной — «уже убран»; но если есть живые похожие (два «Глеба Архивова»), — вопрос.
+    with store.db.session(dela, "sasha", "t") as c:
+        c.execute("INSERT INTO crm.people (name, owner_id, archived_at) VALUES ('Анна Убранная', 'sasha', now())")
+    s = ops(dela, "sasha", meet_sug("Анна Убранная"))[0]["suggestion"]
+    assert (s["status"], s["reason"]) == ("rejected", "уже убран в архив: Анна Убранная"), s
+    s = ops(dela, "sasha", meet_sug("Глеб Архивов"))[0]["suggestion"]
+    assert s["status"] == "pending" and s["payload"]["pick"] is True, s
+    assert s["payload"]["held"].endswith("в архиве есть «Глеб Архивов»"), s
+
+
+def test_meeting_person_many_alike_asks_in_words_and_takes_person_from_claude(dela):
+    """Похожих больше, чем кнопок «Это X» (две): вопрос словами со всеми, кнопки — «Новый человек» и «Не для CRM»;
+    нужного третьего выбирает Claude — suggestion.decide с set.person_id (проверка 15.10.2026)."""
+    with store.db.session(dela, "sasha", "t") as c:
+        ids = [c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES (%s, 'Иван', 'sasha') RETURNING id",
+                         (n,)).fetchone()["id"] for n in ("Иван Петров", "Иван Сидоров", "Иван Третьяков")]
+    s = ops(dela, "sasha", meet_sug("Иван", key="meeting-speaker:101:SPEAKER_07"))[0]["suggestion"]
+    p = s["payload"]
+    assert s["status"] == "pending" and not p.get("pick"), s
+    assert p["ask"].startswith("«Иван» на встрече «Альфа: фонды» 14.10 — кто это: ") and "Иван Третьяков" in p["ask"], p
+    assert [o["label"] for o in p["options"]] == ["Новый человек", "Не для CRM"]
+    # Кривой или чужой id — отказ словами, предложение ждёт.
+    bad = ops(dela, "sasha", {"op": "suggestion.decide", "id": s["id"], "decision": "accept", "set": {"person_id": "x"}})[0]
+    assert not bad["ok"] and "person_id" in bad["error"], bad
+    # «Это Иван Третьяков» — Claude: карточка та, нового человека нет, «Иван» — его своё короткое имя (не дописываем).
+    r = ops(dela, "sasha", {"op": "suggestion.decide", "id": s["id"], "decision": "accept",
+                            "set": {"person_id": str(ids[2])}})[0]
+    assert r["ok"] and str(r["person"]["person_id"]) == str(ids[2]) and not r["person"]["created"], r
+    assert r["suggestion"]["result"]["person_id"] == str(ids[2])
+    assert len(people_named(dela, "Иван")) == 0
+    # И у вопроса кнопками (pick) выбор человека словами сильнее pick: «Да» без выбора — по-прежнему отказ.
+    with store.db.session(dela, "sasha", "t") as c:
+        c.execute("UPDATE crm.people SET archived_at = now() WHERE id = %s", (ids[2],))
+    q = ops(dela, "sasha", meet_sug("Иван", key="meeting-speaker:102:SPEAKER_01", meeting_ref="102"))[0]["suggestion"]
+    assert q["payload"]["pick"] is True
+    r = ops(dela, "sasha", {"op": "suggestion.decide", "id": q["id"], "decision": "accept",
+                            "set": {"person_id": str(ids[0])}})[0]
+    assert r["ok"] and str(r["person"]["person_id"]) == str(ids[0]), r
+    # Архивную карточку так не выбрать.
+    z = ops(dela, "sasha", meet_sug("Иван", key="meeting-speaker:103:SPEAKER_01", meeting_ref="103"))[0]["suggestion"]
+    r = ops(dela, "sasha", {"op": "suggestion.decide", "id": z["id"], "decision": "accept",
+                            "set": {"person_id": str(ids[2])}})[0]
+    assert not r["ok"] and "живой карточки нет" in r["error"], r
+
+
 def test_option_person_dict_binds_telegram(dela):
     """«Это он в Telegram?» («Люди сами», контракт §3.4): вариант ответа несёт person — что дописать в карточку."""
     with store.db.session(dela, "sasha", "t") as c:

@@ -447,6 +447,7 @@ ASK_MIN = 0.6  # похожий не слабее — вопрос «Это X?»
 NOISE = ("speaker", "спикер", "участник", "гость", "guest", "unknown", "неизвестн", "user", "zoom", "iphone", "ipad",
          "android")
 NEW_ASK_MAX = 2  # «Это X» кнопками: два кандидата, «Новый человек» и «Не для CRM» — четыре кнопки (OPTIONS_MAX)
+NEW_SAY_MAX = 5  # похожих больше NEW_ASK_MAX — вопрос словами с этими именами, ответ — Claude (set.person_id)
 # «Хоть одно слово — имя» для нового человека: FIRST_NAMES собран из уменьшительных (около ста имён) — «Кирилл Иванов»,
 # «Марина Орлова» и «Глеб Соколов» по нему не люди, и каждое такое имя со встречи стало бы вопросом. Здесь — частые
 # полные имена сверх него. Только для этой проверки: в who FIRST_NAMES отделяет имя от фамилии, и расширять его — менять
@@ -516,9 +517,12 @@ def new_person(conn, name: str) -> dict:
     verdict:
     - «known» — «кто это» уверенно знает его (служба не успела узнать или карточку только что завели): это он, новой
       карточки нет;
-    - «removed» — живой карточки с таким именем нет, а в архиве (не слитая) есть: владелец её убрал — больше не заводим;
+    - «removed» — похожих живых нет, а в архиве (не слитая) есть карточка ровно с этим полным именем (от двух слов):
+      владелец её убрал — больше не заводим. Совпало одно слово, короткое или другое имя архивной — вопрос с подсказкой
+      «в архиве есть «…»» (требование №25/№60: названный попадает в CRM, неясно — один вопрос);
     - «ask» — вопрос: одно слово, больше четырёх слов, шум (цифры, «iPhone», «SPEAKER_03»), ни одного имени, латиница,
-      которую translit не делает русским именем, или похожие карточки от ASK_MIN (до NEW_ASK_MAX — кнопками «Это X»);
+      которую translit не делает русским именем, или похожие карточки от ASK_MIN (до NEW_ASK_MAX — кнопками «Это X»,
+      больше — словами);
     - «auto» — завести самому: 2–4 слова, хоть одно — имя (looks_first), похожих нет (однофамилец с другим именем — 0,5).
     Подпись в скобках — компания, только если такая уже есть (org_named): org_id, org_name; иначе — заметкой note
     («на встрече подписан «…»»), новую компанию из подписи спикера не заводим. «(2)» и «(iPhone)» от Zoom — не подпись.
@@ -535,15 +539,23 @@ def new_person(conn, name: str) -> dict:
         out.update(verdict="known", known=w["best"])
         return out
     near = [c for c in w["candidates"] if c["score"] >= ASK_MIN]
-    if n and not [c for c in near if c["score"] >= 0.95]:
+    why = out["why"]
+    if n:
         gone = conn.execute(
             "SELECT id, name, short, aliases FROM crm.people WHERE archived_at IS NOT NULL AND merged_into IS NULL "
             "ORDER BY archived_at DESC, id").fetchall()
-        hit = next((p for p in gone if _named_like(n, p)), None)
-        if hit:
+        # «Уже убран» — только полное собственное имя архивной карточки (от двух слов) и только когда живых похожих нет:
+        # так владелец сказал «нет» именно этому человеку («Вернуть» у заведённого само). Одно слово, короткое или другое
+        # имя архивной — не он: «Мария» — не «Мария Старая», а ответ «нет» служба встреч запомнила бы навсегда, и
+        # названный человек в CRM не попал бы никогда (проверка 15.10.2026; требование владельца №25/№60 — «нет карточки —
+        # заводится, неясно — один вопрос»). Такое совпадение — подсказкой в вопросе.
+        hit = next((p for p in gone if len(ws) >= 2 and norm(bare_name(p["name"])[0]) == n), None)
+        if hit and not near:
             out.update(verdict="removed", removed={"id": hit["id"], "name": hit["name"]})
             return out
-    why = out["why"]
+        like = [p for p in gone if _named_like(n, p)]
+    else:
+        like = []
     if noise(bare):
         why.append("не похоже на имя человека")
     elif len(ws) == 1:
@@ -555,8 +567,14 @@ def new_person(conn, name: str) -> dict:
         if not any(looks_first(x) or (latin and looks_first(translit(x))) for x in ws):
             why.append("латиница — как назвать, реши сам" if latin else "не похоже на имя человека")
     if near:
-        out["candidates"] = near[:NEW_ASK_MAX]
-        why.append("похожие уже есть: " + ", ".join(c["name"] for c in near[:NEW_ASK_MAX + 1]))
+        # Кандидаты — все похожие (до NEW_SAY_MAX): кнопками «Это X» сервер спросит, только если их не больше
+        # NEW_ASK_MAX, иначе — словами (нужный третий иначе не выбирался бы вовсе).
+        out["candidates"] = near[:NEW_SAY_MAX]
+        why.append("похожие уже есть: " + ", ".join(c["name"] for c in near[:NEW_ASK_MAX + 1])
+                   + (f" и ещё {len(near) - NEW_ASK_MAX - 1}" if len(near) > NEW_ASK_MAX + 1 else ""))
+    if like:
+        # Сам по себе — тоже вопрос, а не «завести»: владелец уже убирал человека с таким именем.
+        why.append("в архиве есть " + ", ".join(f"«{p['name']}»" for p in like[:2]))
     if hint:
         org = org_named(conn, hint)
         if org:

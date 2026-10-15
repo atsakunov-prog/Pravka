@@ -528,10 +528,9 @@ class PravkaApp : Application() {
      */
     suspend fun delaSend(ops: List<org.json.JSONObject>, said: String): String {
         if (ops.isEmpty()) return said
-        val since = System.currentTimeMillis()
         delaStore.enqueue(ops)
         val sent = delaSync.pushNow(4_000L)
-        val refused = delaStore.noticesFlow.value.firstOrNull { it.error && it.at >= since }
+        val refused = delaStore.noticesFor(ops).firstOrNull { it.error }
         return refused?.text ?: if (sent) said else "$said — уйдёт на сервер, когда будет связь"
     }
 

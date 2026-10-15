@@ -753,7 +753,15 @@ def _meeting_person(conn, user, data: dict, payload: dict) -> dict | None:
     payload.pop("auto", None)
     at = f" на встрече {where}" if where else ""
     cands = v["candidates"]
-    if cands:
+    if len(cands) > people.NEW_ASK_MAX:
+        # Похожих больше, чем кнопок «Это X»: две случайные кнопки и pick не дали бы выбрать третьего, а «Новый человек»
+        # завёл бы дубль (проверка 15.10.2026). Спрашиваем словами — всех по имени; ответ «это X» — Claude
+        # (suggestion.decide с set.person_id), кнопками — только «Новый человек» и «Не для CRM».
+        labels = [_cand_label(c) for c in cands]
+        payload["ask"] = f"«{v['name']}»{at} — кто это: {_or_words(labels)}? Скажи Claude, кто из них, или заведи нового."
+        payload["options"] = [{"label": "Новый человек", "new": True},
+                              {"label": "Не для CRM", "reject": True, "reason": "не для CRM"}]
+    elif cands:
         labels = [_cand_label(c) for c in cands]
         payload["ask"] = f"«{v['name']}»{at} — это {_or_words(labels)}?"
         names = [str(c["name"]) for c in cands]
@@ -1009,7 +1017,20 @@ def op_suggestion_decide(conn, user, op):
     if decision != "accept":
         raise OpError("решение: accept или reject")
     if s["kind"] == "person":
-        if payload.get("pick") and op.get("option") is None:
+        named = (op.get("set") or {}).get("person_id") if isinstance(op.get("set"), dict) else None
+        if named:
+            # «Это Иван Третьяков» словами (Claude: set.person_id; проверка 15.10.2026): похожих больше, чем кнопок, —
+            # нужного не было среди «Это X», а «Новый человек» завёл бы дубль. Выбор человека сильнее варианта и pick.
+            try:
+                named = str(uuid.UUID(str(named)))
+            except ValueError:
+                raise OpError("человек: person_id — не id карточки") from None
+            if not conn.execute("SELECT 1 FROM crm.people WHERE id = %s AND archived_at IS NULL AND merged_into IS NULL",
+                                (named,)).fetchone():
+                raise OpError("человек: такой живой карточки нет или она не видна")
+            payload["person_id"] = named
+            payload.pop("new", None)
+        elif payload.get("pick") and op.get("option") is None:
             # «Это X или Y?» («Иван» со встречи, два-три контакта в Telegram): «Да» без выбора завело бы нового человека
             # или привязало не того — ответ только кнопкой.
             raise OpError(f"{payload.get('ask') or 'Кто это?'} Ответь кнопкой в вебе или скажи Claude.")
@@ -1324,7 +1345,7 @@ def op_interaction_add(conn, user, op):
             return {"row": have, "existing": True}
         if m:
             raise OpError("запись этой встречи в хронологии ведёт сервер по карточке встречи: по ней записи нет "
-                          "(личная, без клиента, двойник или убрана владельцем)")
+                          "(ещё не разобрана, личная, без клиента, двойник или убрана владельцем)")
     if isinstance(d, dict) and "deal_id" not in d and d.get("project_id"):
         # Сделку не назвали (ключа нет) — «сделка касания»: названная у клиента, одна живая, по людям записи (аудит №3).
         # Ключ есть, хоть null, — решение человека: не трогаем.
@@ -1455,6 +1476,15 @@ def apply_ops(url: str, user: str, ops: list[dict], via: str, actor: str | None 
         for op in ops:
             op_id = op.get("op_id")
             if op_id:
+                # op_id — uuid (crm.ops_seen.op_id): кривой ронял транзакцию всей пачки (InvalidTextRepresentation до try,
+                # HTTP 500). Теперь — отказ этой одной операции словами; в ops_seen его не кладём — ключ не ляжет.
+                try:
+                    uuid.UUID(str(op_id))
+                    if not isinstance(op_id, str) or op_id.lower().startswith(("urn", "uuid")):
+                        raise ValueError  # питон эти формы берёт, PostgreSQL — нет
+                except ValueError:
+                    results.append({"op_id": op_id, "ok": False, "error": "op_id — не uuid"})
+                    continue
                 seen = conn.execute("SELECT result FROM crm.ops_seen WHERE op_id = %s", (op_id,)).fetchone()
                 if seen:
                     results.append(seen["result"])
@@ -1796,13 +1826,15 @@ def automation(conn, user, days: int = AUTO_DAYS_WEEK) -> dict:
     - закрыто само / открыто снова — дело снова open («Вернуть»);
     - уточнено само / «Вернуть» — комментарий-основание (result.comment_id) убран: «Вернуть» веба и телефона убирает его
       вместе с полями (у уточнения самого основание есть всегда — без цитаты само не встаёт);
-    - людей заведено само / в архиве — карточка из result.person_id убрана («Вернуть» или слита);
+    - людей заведено само / в архиве — карточка из result.person_id убрана («Вернуть» или слита); дописанное само в
+      живую карточку (result.created = false) — не новый человек, не считается;
     - вопросы (решил человек или погасли): да, с правкой, нет (три частые причины), погасло. Решённое сервером без
       человека («уже в CRM», «уже убран») — не вопрос.
     Ответ — {days, all: {…}, sources: {meeting: {…}, telegram: {…}, …}} (только источники, где что-то было)."""
     rows = conn.execute(
         "SELECT s.kind, s.status, s.reason, s.decided_by, s.source, rt.status AS made_status, t.status AS task_status, "
-        "c.deleted_at IS NOT NULL AS comment_gone, pe.archived_at IS NOT NULL AS person_gone "
+        "c.deleted_at IS NOT NULL AS comment_gone, pe.archived_at IS NOT NULL AS person_gone, "
+        "CASE WHEN s.kind = 'person' THEN coalesce((s.result ->> 'created')::boolean, true) ELSE true END AS person_made "
         "FROM tasks.suggestions s "
         "LEFT JOIN tasks.tasks rt ON rt.id = s.result_task_id "
         "LEFT JOIN tasks.tasks t ON t.id = s.task_id "
@@ -1825,8 +1857,10 @@ def automation(conn, user, days: int = AUTO_DAYS_WEEK) -> dict:
                 b["updated"] += 1
                 b["updated_undone"] += bool(r["comment_gone"])
             elif r["status"] == "accepted" and r["reason"] == AUTO_PERSON_REASON:
-                b["people"] += 1
-                b["people_undone"] += bool(r["person_gone"])
+                # created: false — дописано в живую карточку (ключ нашёлся у неё), человека не заводили: не считаем.
+                if r["person_made"]:
+                    b["people"] += 1
+                    b["people_undone"] += bool(r["person_gone"])
             elif r["status"] == "expired":
                 b["asked"] += 1
                 b["expired"] += 1

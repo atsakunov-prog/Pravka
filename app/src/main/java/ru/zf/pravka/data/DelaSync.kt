@@ -224,17 +224,22 @@ class DelaSync(
     suspend fun pushNow(waitMs: Long): Boolean {
         if (_link.value == null) return false
         pokeJob?.cancel()
-        val job = scope.async(Dispatchers.IO) { runCatching { sync("сразу") } }
+        // Ждёт идущий проход (открытие вкладки — тик), а не сдаётся: tryLock оставлял ответ «Подскажи» в очереди до
+        // следующего тика, до пяти минут, а отложенную отправку мы только что отменили (проверка 15.10.2026).
+        val job = scope.async(Dispatchers.IO) { runCatching { sync("сразу", wait = true) } }
         withTimeoutOrNull(waitMs) { job.await() }
         return store.queued.value.isEmpty()
     }
 
     // ------------------------------------------------------------ проход
 
-    /** Очередь — на сервер, потом синк. Идёт один проход: второй ждёт первого. */
-    suspend fun sync(why: String): Boolean = withContext(Dispatchers.IO) {
+    /**
+     * Очередь — на сервер, потом синк. Идёт один проход: второй при занятом выходит сразу (тик, «правка» — следующий
+     * проход и так отправит), а с [wait] — ждёт первого и идёт следом (отправка «сейчас», [pushNow]).
+     */
+    suspend fun sync(why: String, wait: Boolean = false): Boolean = withContext(Dispatchers.IO) {
         val l = _link.value ?: return@withContext false
-        if (!mutex.tryLock()) return@withContext false
+        if (wait) mutex.lock() else if (!mutex.tryLock()) return@withContext false
         try {
             _status.value = _status.value.copy(running = true)
             val problem = runCatching {

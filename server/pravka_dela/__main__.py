@@ -440,6 +440,11 @@ def cmd_meetings(args) -> int:
               f"без изменений {sum(same.values())}"
               + (f" ({', '.join(f'{k} {v}' for k, v in sorted(same.items()))})" if same else "")
               + f"; пачек «Нового» с новым названием: {r['retitled']}")
+        if r["held"]:
+            # Запись этих встреч правил или убирал человек (и до установки — замок по журналу, dela_0021): сервер их не
+            # трогает. Вернуть встречу правилу — meeting.set unlock touch («убрано из хронологии — вернуть» в вебе).
+            print("под замком — запись в руках человека, не трогаю: "
+                  + "; ".join(f"№{h['ref']} {h['day']} «{h['title'] or 'без названия'}»" for h in r["held"]))
         return 0
     if args.action == "rename":
         n = meetings_auto.rename(cfg.db_url, everything=args.all, refs=args.ref)
@@ -462,6 +467,14 @@ def cmd_digest_relink(args) -> int:
           + f"сводок: {r['digests']}; записей дайджеста в хронологии было {b['live']}, стало {a['live']} "
           f"(новых {r['new']}, убрано {r['retired']}); упоминаний было {b['mentions']}, стало {a['mentions']}; "
           f"со сделкой было {b['with_deal']}, стало {a['with_deal']}")
+    # Какие записи уйдут и придут — списком: relink разносит историю заново нынешним «кто это», и пункт, где человек или
+    # клиент перестал узнаваться уверенно, теряет запись (её правка владельцем журнала не имеет). «Убрано» больше нуля —
+    # решить до запуска без --dry.
+    for title, rows in (("убрано", r["retired_rows"]), ("новые", r["new_rows"])):
+        if rows:
+            print(f"{title} ({len(rows)}):")
+            for x in rows:
+                print(f"  {x['ref']}  {(x['summary'] or '')[:140]}")
     return 0
 
 

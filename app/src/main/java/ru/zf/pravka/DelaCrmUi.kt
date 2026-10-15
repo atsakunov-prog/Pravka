@@ -171,13 +171,12 @@ internal class DelaCrmContext(
     fun run(ops: List<JSONObject>, refresh: List<String>, done: String = "") {
         if (ops.isEmpty()) return
         app.appScope.launch {
-            val since = System.currentTimeMillis()
             app.delaStore.enqueue(ops)
             val sent = app.delaSync.pushNow(4_000L)
             // Тост — после ответа сервера и его словами (правило 6 карты): отказ («склеивает людей только владелец»)
             // или заметка ответа (««Ваня» не дописал — так зовут Иван Петров», аудит №1) — вместо «Имя дописано».
-            val fresh = app.delaStore.noticesFlow.value.filter { it.at >= since }
-            val said = (fresh.firstOrNull { it.error } ?: fresh.firstOrNull())?.text
+            // Только заметки своих операций: свежая чужая (фоновая отправка той же минуты) — не ответ на эту правку.
+            val said = app.delaStore.noticesFor(ops).firstOrNull()?.text
             if (done.isNotBlank() || said != null) Feedback.toast(app, said ?: if (sent) done else "$done — уйдёт, когда будет связь")
             if (sent) for (p in refresh.distinct()) app.delaSync.crmView(p)
         }
@@ -1034,9 +1033,11 @@ internal fun LazyListScope.crmDealPage(ctx: DelaCrmContext, dealId: String) {
     // Дела проекта: следующий шаг — его открытое дело (правило 12 сервера), из своей копии. Пока проект у клиента
     // один живой (solo, аудит №2), его шаги — и дела клиента без проекта: ниже группой «Дела клиента» (`renderDeal` веба).
     val open = ctx.snap.tasks.values.filter { it.dealId == dealId && it.open && !it.goal }.sortedWith(Dela.ORDER)
-        .ifEmpty { v?.open.orEmpty().filter { it.dealId == dealId } }
+        .ifEmpty { DelaCrm.viewSteps(ctx.snap, v?.open.orEmpty().filter { it.dealId == dealId }) { it.dealId == dealId } }
     val viaClient = if (d.solo && !d.closed) {
-        DelaCrm.clientSteps(ctx.snap, d.projectId).ifEmpty { v?.open.orEmpty().filter { it.dealId.isBlank() } }
+        DelaCrm.clientSteps(ctx.snap, d.projectId).ifEmpty {
+            DelaCrm.viewSteps(ctx.snap, v?.open.orEmpty().filter { it.dealId.isBlank() }) { it.dealId.isBlank() && it.projectId == d.projectId }
+        }
     } else emptyList()
     item(key = "sec:tasks") {
         PaperCard(label = "Дела · ${open.size + viaClient.size}") {

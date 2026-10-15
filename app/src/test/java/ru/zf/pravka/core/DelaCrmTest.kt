@@ -776,6 +776,10 @@ class DelaCrmTest {
         val unknown = DelaCrm.NextTask("x", 1, "Чужое", "", "sasha", Dela.MINE, viaClient = true)
         assertEquals("x", DelaCrm.nextFor(Dela.Snapshot(), "d1", proj, solo = true, fromView = unknown)?.id)
         assertEquals(listOf("client-early", "client-late"), DelaCrm.clientSteps(s, proj).map { it.id })
+        // Запасной список «Дела клиента» из ответа вида: закрытое в копии и ушедшее в другую сделку — долой, незнакомое
+        // копии — как сказал сервер (проверка 15.10.2026).
+        val fromViewList = listOf(t("client-done", ""), t("other-deal", ""), t("y", ""))
+        assertEquals(listOf("y"), DelaCrm.viewSteps(s, fromViewList) { it.dealId.isBlank() && it.projectId == proj }.map { it.id })
     }
 
     @Test

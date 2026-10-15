@@ -658,6 +658,47 @@ def test_meeting_record_follows_its_card(mt):
     assert _live(url) == []
 
 
+def test_meeting_record_waits_for_naming_even_with_client_hint(mt):
+    """Служба шлёт подсказку клиента (её голосование meeting_client — «клиент не тот» у 3 записей из 26), а op_upsert
+    по ней ставит клиента и «рабочую». До разбора записи в хронологии нет: команда клиента не должна увидеть личную
+    встречу раньше, чем разбор её погасит (инцидент 09.10; проверка 15.10.2026). Разобрал — запись есть; сферу
+    поставил сам владелец — тоже; живую запись новая расшифровка не гасит."""
+    url = mt["url"]
+    with dela_db.session(url, "system", "test") as c:
+        c.execute("INSERT INTO crm.project_access (project_id, user_id, role, granted_by) VALUES (%s, 'natasha', 'view', "
+                  "'sasha')", (mt["project"],))
+
+    def natasha_sees():
+        return [i["summary"] for i in store.view(url, "natasha", "client", project_id=str(mt["project"]))["timeline"]]
+
+    m = push(url, project="Вектор", summary="Личное: обсуждали развод и здоровье.")
+    card = _card(url, m)
+    assert (card["named"], card["sphere"], card["project_id"]) == (False, "work", str(mt["project"]))  # подсказка встала
+    assert _live(url) == [] and natasha_sees() == []
+    assert meetings.touch_all(url)["actions"] == {"ждёт разбора": 1}
+    # Разбор сказал «личная» — записи так и не было.
+    _name(url, m["id"], sphere="home", client="Вектор", topic="личное")
+    assert _live(url) == [] and natasha_sees() == [] and _records(url) == []
+    # Вторая встреча с той же подсказкой: разбор — рабочая, тогда запись есть, и команда клиента её видит.
+    later = {"started_at": "2026-10-12T15:00:00+03:00", "ended_at": "2026-10-12T15:40:00+03:00"}  # не двойник первой
+    w = push(url, ref="216", project="Вектор", **later)
+    assert _live(url) == []
+    _name(url, w["id"], client="Вектор", topic="счета")
+    [r] = _live(url)
+    assert natasha_sees() == [r["summary"]]
+    # Новая расшифровка (named_at сброшен — ждёт переразбора): живая запись не гаснет, итог в ней — свежий.
+    again = push(url, ref="216", project="Вектор", summary="Новый итог.", **later,
+                 transcript=TRANSCRIPT + "\n[00:03:00] Олег Ветров: И ещё про залог.")
+    assert again["changed"] and not again["named"]
+    [r2] = _live(url)
+    assert r2["id"] == r["id"] and r2["summary"] == "Вектор: счета: Новый итог."
+    # Сферу поставил сам владелец (замок sphere) — запись и без разбора.
+    o = push(url, ref="217", started_at="2026-10-12T18:00:00+03:00", ended_at="2026-10-12T18:30:00+03:00")
+    assert _card(url, o)["sphere"] is None
+    ok(url, "sasha", {"op": "meeting.set", "id": o["id"], "set": {"sphere": "work", "project": "Вектор"}})
+    assert "sphere" in _card(url, o)["locked"] and not _card(url, o)["named"] and len(_live(url, "217")) == 1
+
+
 def test_owner_hand_on_meeting_record(mt):
     """Убрал или поправил запись встречи сам владелец — замок touch: сервер её не трогает, «вернуть» — снова по карточке."""
     url = mt["url"]
@@ -733,6 +774,31 @@ def test_twins_keep_one_record_at_the_fuller(mt):
     assert len(_live(url)) == 2
 
 
+def test_owner_lock_on_one_twin_holds_the_whole_pair(mt):
+    """Владелец убрал запись встречи (половина Zoom, она вела пару), а вторая половина (Plaud) стала полнее — запись не
+    возвращается через неё: замок touch любого из двойников — замок всей пары (проверка 15.10.2026)."""
+    url = mt["url"]
+    a = push(url, ref="401", started_at="2026-10-13T10:00:00+03:00", ended_at="2026-10-13T10:40:00+03:00")
+    b = push(url, ref="402", started_at="2026-10-13T10:02:00+03:00", ended_at="2026-10-13T10:41:00+03:00",
+             transcript=TRANSCRIPT + "\n[00:03:00] Олег Ветров: И ещё про залог.")
+    for x in (a, b):
+        _name(url, x["id"], client="Вектор", topic="счета")
+    [r] = _live(url)
+    assert r["source_ref"].endswith("/m/402")
+    ok(url, "sasha", {"op": "interaction.delete", "id": str(r["id"])})
+    assert ("touch" not in _card(url, a)["locked"], "touch" in _card(url, b)["locked"]) == (True, True)
+    # Служба прислала 401 с длинной расшифровкой — теперь ведёт она; разбор лёг — записи всё равно нет.
+    push(url, ref="401", started_at="2026-10-13T10:00:00+03:00", ended_at="2026-10-13T10:40:00+03:00",
+         transcript=TRANSCRIPT + "\n[00:03:00] Олег Ветров: И ещё про залог, подробно, с цифрами и сроками по каждому траншу.")
+    _name(url, a["id"], client="Вектор", topic="счета")
+    assert _live(url) == []
+    assert meetings.touch_all(url, since="2026-10-13")["actions"] == {"под замком": 2}
+    # «Вернуть» у той, что владелец убирал, — пара снова по правилу: запись у полной (теперь 401).
+    ok(url, "sasha", {"op": "meeting.set", "id": b["id"], "unlock": ["touch"]})
+    [r2] = _live(url)
+    assert r2["source_ref"].endswith("/m/401")
+
+
 def test_recognised_speaker_joins_without_renaming(mt):
     """№60: служба узнала спикера (голос, ответ владельца) — встреча уходит с тем же текстом и person_id в raw.speakers:
     он встаёт в участники без переразбора, гость с тем же именем уходит из гостей, запись хронологии — следом."""
@@ -802,18 +868,22 @@ def test_meetings_touch_command_counts_and_dry_writes_nothing(mt, tmp_path, caps
     with dela_db.session(url, "sasha", "svc:test") as c:
         deal = c.execute("SELECT id FROM crm.deals WHERE project_id = %s", (mt["project"],)).fetchone()["id"]
 
-        def card(ref, at, sphere="work", **kw):
+        def card(ref, at, sphere="work", named="claude-opus-5-5", locked=(), **kw):
             return c.execute(
                 "INSERT INTO crm.meetings (ref, url, started_at, duration_min, owner_id, sphere, project_id, deal_id, label, "
-                "topic, title, person_ids, summary) VALUES (%s, %s, %s, 40, 'sasha', %s, %s, %s, 'Вектор', 'счета', "
-                "'Вектор: счета', %s, 'Итог.') RETURNING id",
+                "topic, title, person_ids, summary, named_at, named_by, locked) VALUES (%s, %s, %s, 40, 'sasha', %s, %s, %s, "
+                "'Вектор', 'счета', 'Вектор: счета', %s, 'Итог.', CASE WHEN %s::text IS NULL THEN NULL ELSE now() END, %s, "
+                "%s) RETURNING id",
                 (ref, f"https://meetings.example.org/m/{ref}", at, sphere, mt["project"], kw.get("deal"),
-                 kw.get("people", []))).fetchone()["id"]
+                 kw.get("people", []), named, named, list(locked))).fetchone()["id"]
 
         card("601", "2026-09-10T11:00:00+03:00", deal=deal, people=[mt["Олег"]])  # потерянная сентябрьская
         card("602", "2026-09-20T11:00:00+03:00")                                   # запись службы — без сделки и людей
         card("603", "2026-09-25T11:00:00+03:00", sphere="home")                     # личная, а запись есть
         card("604", "2026-08-20T11:00:00+03:00")                                   # архив до 01.09 — не трогаем
+        card("605", "2026-09-26T11:00:00+03:00", named=None)                       # клиент и «рабочая» — подсказка службы
+        card("606", "2026-09-27T11:00:00+03:00", named="error: timeout")           # разбор не вышел — тоже ждёт
+        card("607", "2026-09-28T11:00:00+03:00", locked=["touch"])                 # запись убрал человек — не трогаем
         for ref, at in (("602", "2026-09-20T11:00:00+03:00"), ("603", "2026-09-25T11:00:00+03:00")):
             c.execute("INSERT INTO crm.interactions (at, kind, summary, project_id, source, source_ref, owner_id) VALUES "
                       "(%s, 'meeting', 'запись службы', %s, 'meeting', %s, 'sasha')",
@@ -827,12 +897,14 @@ def test_meetings_touch_command_counts_and_dry_writes_nothing(mt, tmp_path, caps
     monkeypatch.delenv("DELA_DB_URL", raising=False)
     assert cli.main(["--env", str(env), "meetings", "touch", "--dry"]) == 0
     said = capsys.readouterr().out
-    assert said.startswith("вхолостую (ничего не записано): встреч с 2026-09-01: 3; записи в хронологии — создано 1, "
-                           "обновлено 1, убрано 1, без изменений 0"), said
+    assert said.startswith("вхолостую (ничего не записано): встреч с 2026-09-01: 6; записи в хронологии — создано 1, "
+                           "обновлено 1, убрано 1, без изменений 3 (ждёт разбора 2, под замком 1)"), said
+    assert "под замком — запись в руках человека, не трогаю: №607 28.09 «Вектор: счета»" in said, said
     assert [(r["id"], r["summary"], r["deleted_at"]) for r in _records(url)] == before
     dry = meetings.touch_all(url, dry=True)
-    assert dry["dry"] and dry["meetings"] == 3, dry  # с 01.09
-    assert dry["actions"] == {"заведена": 1, "обновлена": 1, "убрана": 1}, dry
+    assert dry["dry"] and dry["meetings"] == 6, dry  # с 01.09
+    assert dry["actions"] == {"заведена": 1, "обновлена": 1, "убрана": 1, "ждёт разбора": 2, "под замком": 1}, dry
+    assert [h["ref"] for h in dry["held"]] == ["607"]
     assert [(r["id"], r["summary"], r["deleted_at"]) for r in _records(url)] == before  # ничего не записано
     real = meetings.touch_all(url)
     assert real["actions"] == dry["actions"] and not real["dry"]
@@ -840,7 +912,7 @@ def test_meetings_touch_command_counts_and_dry_writes_nothing(mt, tmp_path, caps
     assert set(got) == {"601", "602"}
     assert (got["601"]["deal_id"], got["601"]["person_ids"]) == (deal, [mt["Олег"]])
     assert got["602"]["summary"] == "Вектор: счета: Итог."
-    assert meetings.touch_all(url)["actions"] == {"нечего": 3}  # повтор ничего не меняет
+    assert meetings.touch_all(url)["actions"] == {"нечего": 3, "ждёт разбора": 2, "под замком": 1}  # повтор — ничего
 
 
 def test_migration_21_over_meeting_records(admin_dsn):
@@ -875,18 +947,45 @@ def test_migration_21_over_meeting_records(admin_dsn):
                                       ("дубль", "https://meetings.example.org/m/77", "2026-10-02T12:00:00+03:00"),
                                       ("другая", "https://meetings.example.org/m/78", "2026-10-02T12:00:00+03:00"),
                                       ("заметка", None, "2026-10-02T12:00:00+03:00"))]
-            mid = c.execute("INSERT INTO crm.meetings (ref, url, started_at, duration_min, owner_id, sphere, project_id, title) "
-                            "VALUES ('77', 'https://meetings.example.org/m/77', '2026-10-01T11:00:00+03:00', 30, 'sasha', "
-                            "'work', %s, 'Вектор: счета') RETURNING id", (pid,)).fetchone()["id"]
+            mids = {}
+            for ref, h in (("77", 11), ("78", 13), ("79", 15), ("80", 17)):
+                mids[ref] = c.execute(
+                    "INSERT INTO crm.meetings (ref, url, started_at, duration_min, owner_id, sphere, project_id, title, "
+                    "named_at, named_by) VALUES (%s, %s, %s, 30, 'sasha', 'work', %s, 'Вектор: счета', now(), 'test') "
+                    "RETURNING id", (ref, f"https://meetings.example.org/m/{ref}", f"2026-10-01T{h}:00:00+03:00",
+                                     pid)).fetchone()["id"]
+            mid = mids["77"]
+            more = {ref: c.execute("INSERT INTO crm.interactions (at, kind, summary, project_id, source, source_ref, owner_id) "
+                                   "VALUES ('2026-10-01T15:00:00+03:00', 'meeting', %s, %s, 'meeting', %s, 'sasha') RETURNING id",
+                                   (f"запись {ref}", pid, f"https://meetings.example.org/m/{ref}")).fetchone()["id"]
+                    for ref in ("79", "80")}
+        # До установки замка не было: решения человека о записях встреч — только в журнале. 78 — переписал своими
+        # словами, 79 — убрал; 80 правила только служба (svc:meetings) — это не решение человека.
+        with dela_db.session(url, "system", "sasha") as c:
+            c.execute("UPDATE crm.interactions SET summary = 'Вектор: моими словами' WHERE id = %s", (ids[2],))
+            c.execute("UPDATE crm.interactions SET deleted_at = now() WHERE id = %s", (more["79"],))
+        with dela_db.session(url, "system", "svc:meetings") as c:
+            c.execute("UPDATE crm.interactions SET summary = 'итог службы' WHERE id = %s", (more["80"],))
+        with dela_db.session(url, "system", "test") as c:
             rev = {r["id"]: r["rev"] for r in c.execute("SELECT id, rev FROM crm.interactions").fetchall()}
         with psycopg.connect(url, autocommit=True) as c:
             assert dela_db.apply_pending(c, files)[0] == "dela_0021.sql"
         with dela_db.session(url, "system", "test") as c:
             got = {r["id"]: r for r in c.execute("SELECT * FROM crm.interactions").fetchall()}
-            hist = c.execute("SELECT actor FROM crm.history WHERE entity = 'crm.interactions' AND op = 'update'").fetchall()
+            hist = c.execute("SELECT entity_id FROM crm.history WHERE entity = 'crm.interactions' AND op = 'update' "
+                             "AND actor = 'svc:migrate'").fetchall()
             assert got[ids[0]]["deleted_at"] is None and got[ids[1]]["deleted_at"] is not None
-            assert all(got[i]["rev"] == rev[i] for i in (ids[0], ids[2], ids[3]))  # прочие не тронуты
-            assert [h["actor"] for h in hist] == ["svc:migrate"]
+            assert all(got[i]["rev"] == rev[i] for i in (ids[0], ids[2], ids[3], more["79"], more["80"]))  # не тронуты
+            assert [h["entity_id"] for h in hist] == [str(ids[1])]
+            # Решения человека — замок touch: запись не затирается карточкой и не заводится заново.
+            locks = {r["ref"]: r["locked"] for r in c.execute("SELECT ref, locked FROM crm.meetings").fetchall()}
+            assert locks == {"77": [], "78": ["touch"], "79": ["touch"], "80": []}, locks
+            touched = [c.execute("SELECT crm.meeting_touch(%s) AS a", (mids[r],)).fetchone()["a"] for r in ("78", "79", "80")]
+            assert touched == ["под замком", "под замком", "обновлена"], touched
+            got = {r["id"]: r for r in c.execute("SELECT * FROM crm.interactions").fetchall()}
+            assert got[ids[2]]["summary"] == "Вектор: моими словами" and got[more["79"]]["deleted_at"] is not None
+            assert c.execute("SELECT count(*) AS n FROM crm.interactions WHERE source_ref LIKE '%%/m/79' "
+                             "AND deleted_at IS NULL").fetchone()["n"] == 0
             # Запись по карточке — в ту же живую строку, второй живой той же встречи база не даст.
             assert c.execute("SELECT crm.meeting_touch(%s) AS a", (mid,)).fetchone()["a"] == "обновлена"
             c.execute("UPDATE crm.meetings SET locked = '{touch}' WHERE id = %s", (mid,))

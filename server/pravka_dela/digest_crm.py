@@ -483,7 +483,7 @@ def apply(conn, owner: str, digest: dict, planned: dict) -> dict:
     """Записи плана — в хронологию (повтор находит свою по ключу), записи этой сводки, которых в плане больше нет, —
     убранными. Убранное владельцем не возвращается: повтор правит только живую запись. Сделка записи — правилом базы
     (crm.touch_deal, аудит №3), упоминание — флагом mention (№28): повтор сводки обновляет и то и другое."""
-    made, kept = 0, []
+    made, kept, fresh = 0, [], []
     for r in planned["rows"]:
         got = conn.execute(
             "INSERT INTO crm.interactions (at, kind, summary, project_id, deal_id, person_ids, source, source_ref, "
@@ -498,15 +498,21 @@ def apply(conn, owner: str, digest: dict, planned: dict) -> dict:
              "deal_people": r.get("deal_people", r["person_ids"]), "ref": r["ref"], "owner": owner,
              "mention": bool(r.get("mention"))},
         ).fetchone()
-        made += bool(got and got["new"])
+        if got and got["new"]:
+            made += 1
+            fresh.append({"ref": r["ref"], "summary": r["summary"]})
         kept.append(r["ref"])
     gone = conn.execute(
         "UPDATE crm.interactions SET deleted_at = now() WHERE owner_id = %s AND source = 'digest' "
-        "AND split_part(source_ref, '#', 1) = %s AND deleted_at IS NULL AND NOT (source_ref = ANY (%s)) RETURNING id",
+        "AND split_part(source_ref, '#', 1) = %s AND deleted_at IS NULL AND NOT (source_ref = ANY (%s)) "
+        "RETURNING id, source_ref AS ref, summary",
         (owner, digest["ref"], kept)).fetchall()
     rows = planned["rows"]
     return {
         "linked": len(rows), "new": made, "retired": len(gone), "mentions": sum(1 for r in rows if r.get("mention")),
+        # Какие именно — для «digest-relink --dry»: числа не скажут, чьи записи пропадут (правка владельца в записи
+        # дайджеста журнала не имеет — приватная).
+        "new_rows": fresh, "retired_rows": [{"ref": g["ref"], "summary": g["summary"]} for g in gone],
         "people": len({p for r in rows for p in r["person_ids"]}),
         "clients": len({r["project_id"] for r in rows if r["project_id"]}),
         "skipped": planned["skipped"],
@@ -514,8 +520,12 @@ def apply(conn, owner: str, digest: dict, planned: dict) -> dict:
 
 
 def link(conn, owner: str, digest: dict, summary: dict, sources: list[dict] | None) -> dict:
-    """Разнести сводку по карточкам: справочник, план, запись. digest — {ref, label, ended_at}."""
-    return apply(conn, owner, digest, plan(load(conn, owner), digest, summary, sources))
+    """Разнести сводку по карточкам: справочник, план, запись. digest — {ref, label, ended_at}. Списки записей (их видит
+    только digest-relink) службе дайджеста в ответе digest.put не нужны."""
+    r = apply(conn, owner, digest, plan(load(conn, owner), digest, summary, sources))
+    r.pop("new_rows", None)
+    r.pop("retired_rows", None)
+    return r
 
 
 # ── Разнести заново все сводки (digest-relink) ─────────────────────────────
@@ -542,7 +552,7 @@ def relink(url: str, dry: bool = False) -> dict:
 
     with db.session(url, "system", "svc:digest-relink", "system") as c:
         owner = c.execute("SELECT crm.owner_id() AS id").fetchone()["id"]
-    total = {"digests": 0, "linked": 0, "new": 0, "retired": 0, "mentions": 0, "dry": dry}
+    total = {"digests": 0, "linked": 0, "new": 0, "retired": 0, "mentions": 0, "dry": dry, "new_rows": [], "retired_rows": []}
     with db.session(url, owner, "svc:digest-relink", "system") as conn:
         total["before"] = _counts(conn, owner)
         rows = conn.execute("SELECT ref, label, ended_at, summary, sources FROM crm.digests WHERE owner_id = %s "
@@ -554,7 +564,7 @@ def relink(url: str, dry: bool = False) -> dict:
                     digest = {"ref": d["ref"], "label": d["label"], "ended_at": d["ended_at"]}
                     r = apply(conn, owner, digest, plan(ctx, digest, d["summary"] or {}, d["sources"]))
                     total["digests"] += 1
-                    for k in ("linked", "new", "retired", "mentions"):
+                    for k in ("linked", "new", "retired", "mentions", "new_rows", "retired_rows"):
                         total[k] += r[k]
                 total["after"] = _counts(conn, owner)
                 if dry:
