@@ -17,6 +17,7 @@
   krug-seed  Круг жизни: направления и принципы из файла владельца в Свод, направления проектам
   meetings  встречи: что с разбором; rename [--all | --ref N] — разобрать заново (замки владельца остаются);
             touch [--since 2026-09-01] [--dry] — записи встреч в хронологии и пачки «Нового» по карточкам (dela_0021)
+  digest-relink [--dry]  сводки дайджеста заново по карточкам CRM: упоминание и сделка записи (dela_0022, разово)
   zachem   «Зачем» по-человечески: propose [--limit N] [--now] --out файл; apply --file файл; rollback
 """
 
@@ -449,6 +450,21 @@ def cmd_meetings(args) -> int:
     return 0
 
 
+def cmd_digest_relink(args) -> int:
+    """Сводки дайджеста — заново по карточкам CRM (аудит №28, №3; dela_0022): флаг упоминания и сделка касания старым
+    записям. Перед запуском без --dry — своя копия базы (правило 9): pravka-before-digest-relink.dump."""
+    from . import digest_crm
+
+    cfg = config_mod.load(args.env)
+    r = digest_crm.relink(cfg.db_url, dry=args.dry)
+    b, a = r["before"], r.get("after") or r["before"]
+    print(("вхолостую (ничего не записано): " if r["dry"] else "")
+          + f"сводок: {r['digests']}; записей дайджеста в хронологии было {b['live']}, стало {a['live']} "
+          f"(новых {r['new']}, убрано {r['retired']}); упоминаний было {b['mentions']}, стало {a['mentions']}; "
+          f"со сделкой было {b['with_deal']}, стало {a['with_deal']}")
+    return 0
+
+
 def cmd_zachem(args) -> int:
     """«Зачем» по-человечески (13.10.2026, zachem.py): предложения Claude — в файл, применить файл, вернуть как было.
     Перед apply — своя копия базы (правило 9): pravka-before-zachem-rename.dump."""
@@ -605,6 +621,9 @@ def main(argv: list[str] | None = None) -> int:
     mt.add_argument("--all", action="store_true", help="rename: все встречи (замки владельца остаются)")
     mt.add_argument("--ref", action="append", help="rename: номер встречи у службы (можно несколько)")
     mt.set_defaults(fn=cmd_meetings)
+    dr = sub.add_parser("digest-relink", help="сводки дайджеста заново по карточкам CRM: упоминания и сделка записи")
+    dr.add_argument("--dry", action="store_true", help="только посчитать, ничего не записывать")
+    dr.set_defaults(fn=cmd_digest_relink)
     zc = sub.add_parser("zachem", help="«Зачем» по-человечески: предложить, применить, вернуть")
     zc.add_argument("action", choices=["propose", "apply", "rollback"])
     zc.add_argument("--user", default="sasha")

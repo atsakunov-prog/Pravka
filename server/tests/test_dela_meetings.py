@@ -896,3 +896,29 @@ def test_migration_21_over_meeting_records(admin_dsn):
     finally:
         with psycopg.connect(admin_dsn, autocommit=True) as a:
             a.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
+
+
+def test_meeting_record_takes_touch_deal_when_card_has_none(mt):
+    """№3 (dela_0022): у карточки встречи сделки нет — запись в хронологии берёт «сделку касания»: у клиента одна живая
+    сделка — она; вторая живая — по людям клиента встречи, если такая одна; сделка карточки сильнее."""
+    url = mt["url"]
+    with dela_db.session(url, "system", "test") as c:
+        vec = c.execute("SELECT id FROM crm.deals WHERE project_id = %s", (mt["project"],)).fetchone()["id"]
+        c.execute("UPDATE crm.deals SET created_at = '2026-10-01T10:00:00+03:00' WHERE id = %s", (vec,))  # до встречи
+    m = push(url)
+    _name(url, m["id"], client="Вектор", topic="счета", people=[{"name": "Олег Ветров", "person": "Олег Ветров"}])
+    assert _card(url, m)["deal_id"] is None
+    [r] = _live(url)
+    assert r["deal_id"] == vec
+    # Вторая живая сделка клиента, Олег — в ней: запись — к ней.
+    with dela_db.session(url, "system", "test") as c:
+        other = c.execute("INSERT INTO crm.deals (project_id, name, stage, person_ids, created_at) VALUES "
+                          "(%s, 'Вектор: залог', 'lead', %s, '2026-10-01T10:00:00+03:00') RETURNING id",
+                          (mt["project"], [mt["Олег"]])).fetchone()["id"]
+    ok(url, "sasha", {"op": "meeting.set", "id": m["id"], "set": {"topic": "залог"}})
+    [r] = _live(url)
+    assert r["deal_id"] == other
+    # Сделка на карточке — сильнее.
+    ok(url, "sasha", {"op": "meeting.set", "id": m["id"], "set": {"deal_id": str(vec)}})
+    [r] = _live(url)
+    assert r["deal_id"] == vec

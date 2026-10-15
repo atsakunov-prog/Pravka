@@ -737,9 +737,10 @@ def _item(r: dict, names: dict) -> dict:
 
 
 def view_meetings(conn, user, sphere=None, q=None, project_id=None, person_id=None, since=None, until=None,
-                  sort="date", dir=None, archived=None, unnamed=None, limit=None, **_):
-    """Список встреч: фильтры (рабочие и личные, клиент, человек, даты, поиск по названию, сводке и расшифровке),
-    сортировка и разрезы для веба — клиенты и люди со счётом встреч. Группирует веб сам: встреч сотни, не тысячи."""
+                  sort="date", dir=None, archived=None, unnamed=None, limit=None, deal_id=None, **_):
+    """Список встреч: фильтры (рабочие и личные, клиент, сделка, человек, даты, поиск по названию, сводке и расшифровке),
+    сортировка и разрезы для веба — клиенты и люди со счётом встреч. Группирует веб сам: встреч сотни, не тысячи.
+    deal_id (аудит №3, 15.10.2026) — встречи сделки по её карточке: «все встречи сделки →» из карточки сделки."""
     where, params = ["TRUE"], []
     if str(archived or "") not in ("1", "true", "all"):
         where.append("m.archived_at IS NULL")
@@ -754,6 +755,12 @@ def view_meetings(conn, user, sphere=None, q=None, project_id=None, person_id=No
         else:
             where.append("m.project_id::text = %s")
             params.append(str(project_id))
+    if deal_id:
+        if deal_id == "none":
+            where.append("m.deal_id IS NULL")
+        else:
+            where.append("m.deal_id::text = %s")
+            params.append(str(deal_id))
     if person_id:
         where.append("%s::uuid = ANY(m.person_ids)")
         params.append(str(person_id))

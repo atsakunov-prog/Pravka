@@ -7,6 +7,12 @@
 
 Живой следующий шаг сделки — её открытое дело (tasks.deal_id). Тексты «Следующий
 шаг» и «Мяч» из Notion остались справкой: им полгода, и правдой они не станут.
+
+Шаги и контакт сделки — одним правилом (аудит 15.10.2026, №2, №3, №7; dela_0022): пока сделка у клиента одна живая
+(crm.only_deal), её шаги — и открытые дела клиента без сделки (у такого next_task — via_client), её хронология — и
+записи клиента без сделки (crm.deal_records: не из Notion, не раньше её заведения), последний контакт — их свежая дата
+без упоминаний (crm.deal_last_touch; та же функция у коннектора в life.deals). Упоминание клиента в сводке Telegram
+(mention, №28) в хронологии видно, но контактом клиента, сделки и человека не считается.
 """
 
 from __future__ import annotations
@@ -14,7 +20,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from . import store
+from . import meetings, store
 
 STAGES = ["lead", "proposal", "mandate", "active", "closing", "archive"]
 OPEN_STAGES = STAGES[:-1]
@@ -26,18 +32,33 @@ CADENCE_DAYS = {"month": 30, "quarter": 90, "year": 365}
 STALE_DAYS = 30
 EPOCH = dt.date(2000, 1, 1)
 
+# Дело сделки (аудит №2): её дело, а пока сделка у клиента одна живая (solo — crm.only_deal) — и дело клиента без
+# сделки, кроме целей дерева (их в списках дел нет). Открытое такое дело — шаг сделки (open_tasks, next_task, «застыла»),
+# закрытое — её движение и «сделано». Одно правило для DEALS_SQL, карточки сделки (view_deal) и строки Claude
+# (ask._deals_on_screen); у коннектора — то же в life.deals (life_dela.sql). {t} — дело, {d} — сделка.
+STEP = ("({t}.deal_id = {deal} OR ({solo} AND {t}.deal_id IS NULL AND {t}.project_id = {project}"
+        " AND NOT EXISTS (SELECT 1 FROM tasks.krug k WHERE k.id = {t}.id AND k.kind = 'task' AND k.goal)))")
+SOLO = "crm.only_deal({d}.project_id) IS NOT DISTINCT FROM {d}.id"
+
+
+def step(t: str = "t", d: str = "d", solo: str | None = None) -> str:
+    """Условие «дело t — дело сделки d» SQL-строкой; solo — готовое «сделка у клиента одна живая» (иначе — функцией)."""
+    return STEP.format(t=t, deal=f"{d}.id", project=f"{d}.project_id", solo=solo or SOLO.format(d=d))
+
+
 # Сделка с тем, что о ней надо знать в списке: клиент, стадия с какого дня,
-# следующее дело, последний контакт и движение, деньги по оплатам.
+# следующее дело, последний контакт и движение, деньги по оплатам. Шаги — по правилу STEP (solo считается раз на
+# сделку), next_task — сначала её собственные дела, потом дела клиента (via_client: веб подписывает «дело клиента»);
+# last_touch — crm.deal_last_touch (записи сделки и, при одной живой, клиента без сделки; без упоминаний).
 DEALS_SQL = """
-SELECT d.*, p.name AS project_name, p.org_id, crm.stage_since(d.id) AS stage_since,
-       (SELECT count(*) FROM tasks.tasks t WHERE t.deal_id = d.id AND t.status = 'open') AS open_tasks,
+SELECT d.*, p.name AS project_name, p.org_id, crm.stage_since(d.id) AS stage_since, s.solo,
+       (SELECT count(*) FROM tasks.tasks t WHERE t.status = 'open' AND """ + step(solo="s.solo") + """) AS open_tasks,
        (SELECT json_build_object('id', t.id, 'num', t.num, 'title', t.title, 'due_date', t.due_date,
-                                 'owner_id', t.owner_id, 'ball', t.ball)
-          FROM tasks.tasks t WHERE t.deal_id = d.id AND t.status = 'open'
-          ORDER BY t.due_date NULLS LAST, t.created_at LIMIT 1) AS next_task,
-       (SELECT max(i.at) FROM crm.interactions i
-         WHERE i.deleted_at IS NULL AND (i.deal_id = d.id OR (i.deal_id IS NULL AND i.project_id = d.project_id))) AS last_touch,
-       (SELECT max(greatest(t.created_at, t.completed_at)) FROM tasks.tasks t WHERE t.deal_id = d.id) AS last_task_move,
+                                 'owner_id', t.owner_id, 'ball', t.ball, 'via_client', t.deal_id IS NULL)
+          FROM tasks.tasks t WHERE t.status = 'open' AND """ + step(solo="s.solo") + """
+          ORDER BY t.deal_id IS NULL, t.due_date NULLS LAST, t.created_at LIMIT 1) AS next_task,
+       crm.deal_last_touch(d.id) AS last_touch,
+       (SELECT max(greatest(t.created_at, t.completed_at)) FROM tasks.tasks t WHERE """ + step(solo="s.solo") + """) AS last_task_move,
        (SELECT sum(pm.amount_kop) FROM crm.payments pm
          WHERE pm.deal_id = d.id AND pm.cancelled_at IS NULL AND pm.paid_on IS NOT NULL) AS paid_kop,
        (SELECT sum(pm.amount_kop) FROM crm.payments pm
@@ -46,6 +67,7 @@ SELECT d.*, p.name AS project_name, p.org_id, crm.stage_since(d.id) AS stage_sin
          WHERE pm.deal_id = d.id AND pm.cancelled_at IS NULL AND pm.paid_on IS NULL AND pm.invoiced_on IS NULL) AS planned_kop
 FROM crm.v_deals d
 JOIN crm.projects p ON p.id = d.project_id
+CROSS JOIN LATERAL (SELECT crm.only_deal(d.project_id) IS NOT DISTINCT FROM d.id AS solo) s
 """
 
 
@@ -143,7 +165,7 @@ SELECT p.id, p.name, p.aliases, p.org_id, o.name AS org, p.money_default, p.arch
        (SELECT count(*) FROM crm.deals d WHERE d.project_id = p.id AND d.stage <> 'archive') AS live_deals,
        (SELECT count(*) FROM crm.deals d WHERE d.project_id = p.id) AS all_deals,
        (SELECT array_agg(DISTINCT d.stage) FROM crm.deals d WHERE d.project_id = p.id AND d.stage <> 'archive') AS stages,
-       (SELECT max(i.at) FROM crm.interactions i WHERE i.project_id = p.id AND i.deleted_at IS NULL) AS last_touch,
+       (SELECT max(i.at) FROM crm.interactions i WHERE i.project_id = p.id AND i.deleted_at IS NULL AND NOT i.mention) AS last_touch,
        (SELECT count(*) FROM tasks.tasks t WHERE t.project_id = p.id AND t.status = 'open') AS open_tasks,
        (SELECT json_build_object('id', t.id, 'num', t.num, 'title', t.title, 'due_date', t.due_date, 'owner_id', t.owner_id, 'ball', t.ball)
           FROM tasks.tasks t WHERE t.project_id = p.id AND t.status = 'open'
@@ -205,6 +227,39 @@ def _timeline(conn, where: str, params: list, limit: int = 300) -> list[dict]:
     ).fetchall()
 
 
+def _steps(conn, d: dict, done: bool) -> list[dict]:
+    """Дела сделки для карточки — правилом STEP: её дела и, пока она у клиента одна живая, дела клиента без сделки
+    (via_client: веб и телефон подписывают «дело клиента»). Сделанные дела клиента — не раньше дня заведения сделки
+    (у переноса из Notion — без границы): иначе в новую сделку легли бы закрытые дела прежних."""
+    cond = STEP.format(t="v_tasks", deal="%(deal)s::uuid", project="%(project)s::uuid", solo="%(solo)s")
+    if done:
+        where = (f"status <> 'open' AND {cond} AND (deal_id IS NOT NULL OR %(since)s::date IS NULL "
+                 "OR (completed_at AT TIME ZONE 'Europe/Moscow')::date >= %(since)s::date)")
+        order = " ORDER BY completed_at DESC LIMIT 30"
+    else:
+        where, order = f"status = 'open' AND {cond}", store.ORDER
+    since = conn.execute("SELECT crm.deal_from(%s) AS s", (d["id"],)).fetchone()["s"]
+    rows = conn.execute(f"SELECT * FROM tasks.v_tasks WHERE ({where}) AND NOT goal{order}",
+                        {"solo": bool(d.get("solo")), "since": since, "deal": d["id"], "project": d["project_id"]}).fetchall()
+    return [{**t, "via_client": t["deal_id"] is None} for t in rows]
+
+
+MEETINGS_CARD = 50  # встреч в карточке; остальные — страницей «Встречи» с отбором (deal_id, project_id)
+
+
+def meetings_of(conn, where: str, params: list) -> tuple[list[dict], int]:
+    """Встречи карточки клиента или сделки (аудит №3): свежие сверху (до MEETINGS_CARD) и сколько их всего, без
+    убранных из списка; архив до 01.09 — тоже (его нет в хронологии, а договорённости там). Встречи видит только их
+    владелец (RLS crm.meetings) — команде список пуст."""
+    rows = conn.execute(
+        "SELECT m.*, p.name AS project_name, dl.name AS deal_name FROM crm.meetings m "
+        "LEFT JOIN crm.projects p ON p.id = m.project_id LEFT JOIN crm.deals dl ON dl.id = m.deal_id "
+        f"WHERE m.archived_at IS NULL AND ({where}) ORDER BY m.started_at DESC LIMIT {MEETINGS_CARD}", params).fetchall()
+    n = conn.execute(f"SELECT count(*) AS n FROM crm.meetings m WHERE m.archived_at IS NULL AND ({where})", params).fetchone()["n"]
+    names = meetings._names(conn, [x for r in rows for x in r["person_ids"] or []])
+    return [meetings._item(r, names) for r in rows], n
+
+
 def view_deal(conn, user, deal_id=None, **_):
     if not deal_id:
         raise store.OpError("нужен deal_id")
@@ -214,16 +269,20 @@ def view_deal(conn, user, deal_id=None, **_):
     d = found[0]
     out: dict[str, Any] = {
         "deal": d,
-        "open": store._list(conn, "status = 'open' AND deal_id = %s", [deal_id]),
-        "done": store._list(conn, "status <> 'open' AND deal_id = %s", [deal_id], order=" ORDER BY completed_at DESC LIMIT 30"),
+        "open": _steps(conn, d, done=False),
+        "done": _steps(conn, d, done=True),
         "payments": conn.execute(
             "SELECT * FROM crm.payments WHERE deal_id = %s ORDER BY coalesce(paid_on, invoiced_on, due_on, created_at::date)", (deal_id,)
         ).fetchall(),
-        "timeline": _timeline(conn, "i.deal_id = %s", [deal_id]),
+        # Хронология сделки — её записи и, пока сделка у клиента одна живая, записи клиента без сделки (crm.deal_records:
+        # не из Notion, не раньше её заведения; приватное — только хозяину).
+        "timeline": _timeline(conn, "i.id IN (SELECT crm.deal_records(%s))", [deal_id]),
         "history": conn.execute("SELECT * FROM crm.deal_history(%s)", (deal_id,)).fetchall(),
         "money": money_ok(conn, user),
         "owner": is_owner(conn, user),
     }
+    # Встречи сделки по карточке встречи (deal_id) — только владельцу встреч (RLS); список — до MEETINGS_CARD.
+    out["meetings"], out["meetings_n"] = meetings_of(conn, "m.deal_id = %s", [deal_id])
     if out["owner"]:
         out["entries"] = conn.execute("SELECT * FROM crm.time_entries(%s, %s, 200)", (d["project_id"], deal_id)).fetchall()
         out["minutes_all"] = (_minutes(conn, "crm.time_by_deal", EPOCH, "deal_id").get(d["id"]) or {}).get("minutes")
@@ -256,6 +315,8 @@ def view_client(conn, user, project_id=None, **_):
         "money": money_ok(conn, user),
         "owner": is_owner(conn, user),
     }
+    # Встречи клиента по карточке встречи (project_id) — только владельцу встреч (RLS).
+    out["meetings"], out["meetings_n"] = meetings_of(conn, "m.project_id = %s", [project_id])
     if out["owner"]:
         out["entries"] = conn.execute("SELECT * FROM crm.time_entries(%s, NULL, 300)", (project_id,)).fetchall()
         months: dict[str, int] = {}
@@ -280,7 +341,7 @@ def view_dossier(conn, user, person_id=None, **_):
 TIES_SQL = """
 SELECT pe.id, pe.name, pe.short, pe.org_id, o.name AS org, pe.role, pe.cadence, pe.hub, pe.telegram_username, pe.phones,
        pe.birth_day, pe.birth_month, pe.seeks, pe.offers,
-       (SELECT max(i.at) FROM crm.interactions i WHERE pe.id = ANY (i.person_ids) AND i.deleted_at IS NULL) AS last_touch,
+       (SELECT max(i.at) FROM crm.interactions i WHERE pe.id = ANY (i.person_ids) AND i.deleted_at IS NULL AND NOT i.mention) AS last_touch,
        (SELECT count(*) FROM crm.deals d WHERE d.source_person_id = pe.id) AS brought,
        (SELECT count(*) FROM tasks.tasks t WHERE t.person_id = pe.id AND t.status = 'open' AND t.ball = 'agenda') AS agenda
 FROM crm.people pe

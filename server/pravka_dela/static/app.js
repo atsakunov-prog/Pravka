@@ -4423,7 +4423,9 @@ function dealTile(d, { drag } = {}) {
   if (d.lead_person_id) meta.push(el('span', {}, pName(d.lead_person_id)));
   if (d.minutes_30) meta.push(el('span', { title: 'время из Засечки за 30 дней' }, hrs(d.minutes_30)));
   const next = d.next_task
-    ? el('div', { class: 'next' }, d.next_task.title + (d.next_task.due_date ? ' · ' + D.ddmm(d.next_task.due_date) : ''))
+    ? el('div', { class: 'next' }, d.next_task.title + (d.next_task.due_date ? ' · ' + D.ddmm(d.next_task.due_date) : ''),
+      // Дело клиента без проекта — шаг этого проекта, пока он у клиента один (аудит №2): сервер так и считает «застыла».
+      d.next_task.via_client ? el('span', { class: 'via-client', title: 'Дело клиента без проекта: проект у клиента один — это его шаг' }, ' · дело клиента') : null)
     : (d.stage !== 'archive' ? el('div', { class: 'next none' }, 'нет следующего дела') : null);
   const quiet = d.stage !== 'archive' && d.quiet_days > 30 ? el('span', { class: 'quiet' }, `тишина ${d.quiet_days} дн.`) : null;
   const tile = el('div', { class: 'dtile' + (route().id === d.id ? ' on' : '') + (d.stale ? ' stale' : ''), 'data-deal': d.id, onclick: () => openDeal(d.id),
@@ -4503,6 +4505,12 @@ function renderPipeline() {
 // Проект клиента — его сделка в CRM («ПТИЦ: хедж юаня» у клиента «ПТИЦ»): владелец зовёт их проектами.
 const clientDeals = (id) => [...S.deals.values()].filter((d) => d.project_id === id)
   .sort((a, b) => (a.stage === 'archive') - (b.stage === 'archive') || OPEN_STAGES.indexOf(a.stage) - OPEN_STAGES.indexOf(b.stage) || a.name.localeCompare(b.name, 'ru'));
+/** Пока проект (сделка) у клиента один живой, открытые дела клиента без проекта — его шаги («дело клиента»): то же
+ *  правило, что у сервера (crm.STEP, crm.only_deal; аудит 15.10.2026, №2) — иначе Воронка говорила «застыла» при живом
+ *  деле клиента. Сервер присылает своё слово (deal.solo) — ему и верим. */
+const dealSolo = (d) => (d.solo != null ? !!d.solo
+  : d.stage !== 'archive' && clientDeals(d.project_id).filter((x) => x.stage !== 'archive').length === 1);
+const clientSteps = (d) => (dealSolo(d) ? all().filter((t) => !t.deal_id && t.project_id === d.project_id && isOpen(t) && !t.goal) : []);
 function toggleClientOpen(id) {
   if (S.clientOpen.has(id)) S.clientOpen.delete(id); else S.clientOpen.add(id);
   LS.set('clientOpen', [...S.clientOpen]);
@@ -4536,11 +4544,12 @@ function renderClients() {
     el('button', { class: 'chip-btn' + (S.clientArch ? ' on' : ''), onclick: () => { S.clientArch = !S.clientArch; render(); } }, 'И архив'),
     el('button', { class: 'chip-btn', onclick: () => newClient() }, '+ Клиент'));
   const dealLine = (d) => {
-    const next = all().filter((t) => t.deal_id === d.id && isOpen(t)).sort(sortTasks)[0];
+    const next = all().filter((t) => t.deal_id === d.id && isOpen(t)).sort(sortTasks)[0] || clientSteps(d).sort(sortTasks)[0];
     return el('div', { class: 'cdeal' + (d.stage === 'archive' ? ' arch' : ''), 'data-deal': d.id, onclick: (e) => { e.stopPropagation(); openDeal(d.id); } },
       el('span', { class: 'cd-stage st-' + d.stage }, stageWord(d)),
       el('span', { class: 'cd-name' }, dealShort(d, project(d.project_id))),
-      next ? el('span', { class: 'cd-next' + (isLate(next) ? ' late' : '') }, next.title + (next.due_date ? ' · ' + D.ddmm(next.due_date) : ''))
+      next ? el('span', { class: 'cd-next' + (isLate(next) ? ' late' : '') }, next.title + (next.due_date ? ' · ' + D.ddmm(next.due_date) : ''),
+        next.deal_id ? null : el('span', { class: 'via-client' }, ' · дело клиента'))
         : d.stage !== 'archive' ? el('span', { class: 'cd-next none' }, 'нет следующего дела') : null);
   };
   const row = (c) => {
@@ -4889,7 +4898,7 @@ function tlLine(r, showDeal) {
   const meeting = /^https:\/\//.test(i.source_ref || '') ? i.source_ref : null;
   // Пункт дайджеста Telegram (dela_0018): видит только владелец; «сводка →» — сама сводка, откуда пункт.
   const dg = i.digest_ref || null;
-  return el('div', { class: 'tl-row' + (open ? ' open' : ''), onclick: (ev) => { if (ev.target.closest('a, button')) return; S.tlOpen = open ? null : i.id; render(); } },
+  return el('div', { class: 'tl-row' + (open ? ' open' : '') + (i.mention ? ' mention' : ''), onclick: (ev) => { if (ev.target.closest('a, button')) return; S.tlOpen = open ? null : i.id; render(); } },
     el('div', { class: 'tl-when' }, D.ddmm(i.at.slice(0, 10))),
     el('div', { class: 'tl-what' },
       el('div', { class: 'tl-head' }, el('span', { class: 'tl-kind' }, dg ? icon('send', 12) : null, dg ? ' ' : null, IKIND[i.kind] || i.kind), ' ', m ? el('b', {}, m[1]) : null),
@@ -4897,7 +4906,9 @@ function tlLine(r, showDeal) {
       steps.length ? el('ul', { class: 'tl-steps' }, (open ? steps : steps.slice(0, 2)).map((x) => el('li', {}, x)),
         !open && steps.length > 2 ? el('li', { class: 'more' }, `ещё ${steps.length - 2}`) : null) : null,
       el('div', { class: 'tl-meta' }, [showDeal && i.deal_name, who.length && who.join(', '), i.duration_min && dur(i.duration_min),
-        i.source === 'meeting' && 'из встречи', dg && 'из дайджеста · видишь только ты'].filter(Boolean).join(' · '),
+        i.source === 'meeting' && 'из встречи', dg && 'из дайджеста · видишь только ты',
+        // Упоминание (аудит №28): клиента назвали в сводке, а его чата в окне не было — в «контакт» не идёт.
+        i.mention && 'упоминание — не контакт'].filter(Boolean).join(' · '),
       meeting ? el('a', { class: 'src', href: meeting, target: '_blank', rel: 'noopener noreferrer' }, ' встреча →') : null,
       dg ? el('a', { class: 'src', href: '#/digest/' + encodeURIComponent(dg) }, ' сводка →') : null)),
     el('button', { class: 'icon-btn tl-del', title: 'Убрать из хронологии', onclick: async () => {
@@ -5192,12 +5203,15 @@ function renderDeal(id) {
       empty: 'никого — первый станет ведущим',
     }));
 
-  // Дела: следующий шаг — открытое дело проекта; без него проект застынет.
+  // Дела: следующий шаг — открытое дело проекта; без него проект застынет. Пока проект у клиента один живой, его шаги —
+  // и открытые дела клиента без проекта (аудит №2, то же правило у сервера): отдельной группой «Дела клиента».
   const items = all().filter((t) => t.deal_id === d.id && (S.showDone || isOpen(t)));
   const open = items.filter(isOpen);
-  const tasks = sec('tasks', 'Дела', [secN(open.length), el('span', { class: 'act' }, doneToggle())],
-    open.length || d.stage === 'archive' ? null : el('div', { class: 'empty' }, 'Нет следующего дела — проект без шага застынет. Скажи его в строке Claude.'),
-    items.length ? nested(items, ['grp', 'date']) : null);
+  const viaClient = clientSteps(d);
+  const tasks = sec('tasks', 'Дела', [secN(open.length + viaClient.length), el('span', { class: 'act' }, doneToggle())],
+    open.length || viaClient.length || d.stage === 'archive' ? null : el('div', { class: 'empty' }, 'Нет следующего дела — проект без шага застынет. Скажи его в строке Claude.'),
+    items.length ? nested(items, ['grp', 'date']) : null,
+    viaClient.length ? groupBox('Дела клиента', viaClient, { sub: 'без проекта — пока проект у клиента один, это его шаги' }, ['date']) : null);
 
   const pays = v ? v.payments : [...S.pays.values()].filter((x) => x.deal_id === d.id);
   let moneySec = null;

@@ -43,7 +43,13 @@ TASK_FIELDS = {
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
-            "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch"]
+            "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps"]
+# «deal_steps» — шаги и контакт сделки одним правилом (15.10.2026, аудит №2, №3, №7, №28; dela_0022): пока сделка у
+# клиента одна живая, его открытые дела без сделки — её шаги (next_task.via_client), записи без сделки — её хронология,
+# последний контакт — crm.deal_last_touch (упоминания не в счёт); payload.deal_name в предложениях встреч и дайджеста —
+# сделка по точному имени (_names), автоматике у единственной живой сделки клиента сделка ставится сама; interaction.add
+# без ключа deal_id — «сделка касания» (crm.touch_deal). По флагу дайджест показывает «CRM на неделю»: до него «нет
+# следующего дела» у сделок было наполовину ложным. Старый сервер deal_name молча хранит в payload.
 # «people_link» — назвал человека во встрече — он в CRM и сверен с Telegram (15.10.2026, аудит №25/№60): предложение kind
 # person, source meeting решает сервер (people.new_person: завести сам, вопрос кнопками, «уже убран»), повтор той же
 # находки (source_ref) — прежнее предложение в любом статусе, вариант ответа может нести person (что дописать: telegram_id,
@@ -1016,6 +1022,14 @@ def op_suggestion_decide(conn, user, op):
         fields = {k: v for k, v in payload.items() if k in TASK_FIELDS | KRUG_FIELDS}
         fields.update(_names(conn, payload, cache))
         fields.update(fix)
+        if (s["source"] in AUTO_DEAL_SOURCES and fields.get("project_id") and not fields.get("deal_id")
+                and "deal_id" not in fix):
+            # Дело автоматики у клиента с одной живой сделкой — её шаг (аудит №2): с 05.10 автоматика не поставила
+            # сделку ни одному делу, и сделки горели «застывшими». Только у предложений встреч и переписки: дело,
+            # сказанное самим владельцем (task.create), молча к сделке не пристёгиваем; «Поправить» без сделки — его слово.
+            only = conn.execute("SELECT crm.only_deal(%s::uuid) AS d", (str(fields["project_id"]),)).fetchone()["d"]
+            if only:
+                fields["deal_id"] = only
         fields.setdefault("source", _task_source(s["source"]))
         fields.setdefault("source_ref", s["source_ref"])
         task = op_task_create(conn, user, {"task": fields})["task"]
@@ -1155,6 +1169,7 @@ def _names(conn, payload: dict, cache: dict | None = None) -> dict:
     Встречи и юзербот не знают id: шлют project_name и person_name. Не нашлось
     или проект не виден принимающему — поле остаётся пустым, человек поправит.
     cache — «кто это» по имени на одну операцию (_person_who).
+    С 15.10.2026 (аудит №2) и deal_name — сделка по точному имени (_deal_named).
     """
     out: dict = {}
     for key, col in (("project_name", "project_id"), ("person_name", "person_id")):
@@ -1172,7 +1187,31 @@ def _names(conn, payload: dict, cache: dict | None = None) -> dict:
             w = _person_who(conn, name, cache)
             if w["sure"]:
                 out[col] = w["best"]["id"]
+    if payload.get("deal_name") and not payload.get("deal_id"):
+        out.update(_deal_named(conn, payload["deal_name"], out.get("project_id") or payload.get("project_id")))
     return out
+
+
+def _deal_named(conn, name: Any, project: Any) -> dict:
+    """Сделка дела из встречи или переписки (аудит 15.10.2026, №2): модель называет её точным именем из блока
+    <сделки> (payload.deal_name). Ищем точное имя (crm.norm) среди живых сделок клиента; клиента не назвали или не
+    узнали — среди всех живых, если такая одна (тогда и клиент — её). Не нашлось или двое — пусто: дело встанет без
+    сделки, самопринятию это не мешает (а у единственной живой сделки клиента её подставит op_suggestion_decide).
+    Видимость — RLS принимающего."""
+    name = " ".join(str(name or "").split())
+    if not name:
+        return {}
+    if project:
+        rows = conn.execute(
+            "SELECT id, project_id FROM crm.deals WHERE project_id::text = %s AND stage <> 'archive' "
+            "AND crm.norm(name) = crm.norm(%s) LIMIT 2", (str(project), name)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, project_id FROM crm.deals WHERE stage <> 'archive' AND crm.norm(name) = crm.norm(%s) LIMIT 2",
+            (name,)).fetchall()
+    if len(rows) != 1:
+        return {}
+    return {"deal_id": rows[0]["id"]} if project else {"deal_id": rows[0]["id"], "project_id": rows[0]["project_id"]}
 
 
 def _who_guard(conn, s: dict, payload: dict, fix: dict, by_option: bool, cache: dict | None = None) -> str | None:
@@ -1242,6 +1281,22 @@ def deal_set(conn, user, op):
     return {"row": _shown_deal(conn, _deal_set(conn, user, op)["row"]["id"])}
 
 
+# Чьим предложениям «завести» сделка клиента ставится сама, когда она у него одна живая (аудит №2).
+AUTO_DEAL_SOURCES = ("meeting", "telegram", "userbot")
+
+
+def _touch_deal(conn, d: dict) -> Any:
+    """«Сделка касания» записи без ключа deal_id (crm.touch_deal, аудит №3). Кривой id или дата — None: отказ словами
+    даст сама запись (interaction_create), а не этот вспомогательный вопрос."""
+    ppl = d.get("person_ids") if isinstance(d.get("person_ids"), list) else []
+    try:
+        with conn.transaction():
+            return conn.execute("SELECT crm.touch_deal(%s::uuid, %s::uuid[], %s::timestamptz) AS d",
+                                (str(d["project_id"]), [str(x) for x in ppl], d.get("at") or None)).fetchone()["d"]
+    except psycopg.Error:
+        return None
+
+
 def op_interaction_add(conn, user, op):
     """Запись хронологии. Запись встречи (source meeting) ведёт сервер по её карточке (meetings.touch, аудит №6,
     флаг meeting_touch): старая служба встреч, которая шлёт её сама (crm_note), получает запись сервера — её карточка
@@ -1264,6 +1319,12 @@ def op_interaction_add(conn, user, op):
         if m:
             raise OpError("запись этой встречи в хронологии ведёт сервер по карточке встречи: по ней записи нет "
                           "(личная, без клиента, двойник или убрана владельцем)")
+    if isinstance(d, dict) and "deal_id" not in d and d.get("project_id"):
+        # Сделку не назвали (ключа нет) — «сделка касания»: названная у клиента, одна живая, по людям записи (аудит №3).
+        # Ключ есть, хоть null, — решение человека: не трогаем.
+        deal = _touch_deal(conn, d)
+        if deal:
+            op = {**op, "data": {**d, "deal_id": str(deal)}}
     return interaction_create(conn, user, op)
 
 

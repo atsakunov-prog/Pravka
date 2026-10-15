@@ -55,7 +55,8 @@ def deal_line(d: dict, names: dict) -> str:
         bits.append("осталось получить " + rub(d["to_get_kop"]))
     if d.get("next_task"):
         nt = d["next_task"]
-        bits.append(f"следующее: #{nt['num']} {nt['title']}" + (f" до {_d(nt['due_date'])}" if nt.get("due_date") else ""))
+        bits.append(f"следующее: #{nt['num']} {nt['title']}" + (f" до {_d(nt['due_date'])}" if nt.get("due_date") else "")
+                    + (" (дело клиента без сделки: сделка у клиента одна)" if nt.get("via_client") else ""))
     elif d["stage"] != "archive":
         bits.append("НЕТ следующего дела")
     if d.get("last_touch"):

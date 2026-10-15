@@ -91,8 +91,10 @@ def crm(dela):
             prj[name] = c.execute(
                 "INSERT INTO crm.projects (name, sphere, kind, org_id, owner_id) VALUES (%s, 'work', 'client', %s, 'sasha') "
                 "RETURNING id", (name, org[name])).fetchone()["id"]
+        # Сделка заведена до сводок (с 15.10.2026 сделка, заведённая в Делах позже окна, его записей не берёт — №3).
         deal = c.execute(
-            "INSERT INTO crm.deals (project_id, name, stage, person_ids, team_ids) VALUES (%s, 'Модель', 'active', %s, %s) "
+            "INSERT INTO crm.deals (project_id, name, stage, person_ids, team_ids, created_at) VALUES "
+            "(%s, 'Модель', 'active', %s, %s, '2026-10-01T10:00:00+03:00') "
             "RETURNING id", (prj["Ромашка"], [ppl["ivan"]], [ppl["natasha"]])).fetchone()["id"]
         # Наташе Ромашка открыта: клиента и его хронологию она видит — но не записи из Telegram владельца.
         c.execute("INSERT INTO crm.project_access (project_id, user_id, role, granted_by) VALUES (%s, 'natasha', 'edit', 'sasha')",
@@ -127,8 +129,9 @@ def test_items_land_in_person_client_and_deal_cards(crm):
     client = store.view(url, "sasha", "client", project_id=str(prj["Ромашка"]))["timeline"]
     assert len(client) == 2 and {x["digest_ref"] for x in client} == {REF}
     assert any("допсоглашение" in x["summary"] for x in client)
+    # Сделка у Ромашки одна живая — обе записи клиента в её хронологии и с ней (сделка касания, аудит №3).
     deal = store.view(url, "sasha", "deal", deal_id=str(crm["deal"]))["timeline"]
-    assert len(deal) == 1 and deal[0]["id"] == e["id"]
+    assert {x["id"] for x in deal} == {x["id"] for x in client} and {str(x["deal_id"]) for x in deal} == {str(crm["deal"])}
     beta = store.view(url, "sasha", "client", project_id=str(prj["Бета Групп"]))["timeline"]
     assert len(beta) == 1 and "NDA" in beta[0]["summary"] and [str(x) for x in beta[0]["person_ids"]] == [str(ppl["misha"])]
     nat = store.view(url, "sasha", "dossier", person_id=str(ppl["natasha"]))["timeline"]
@@ -202,7 +205,7 @@ def test_team_and_family_never_see_digest_entries(crm):
         "web")["results"][0]["ok"]
     seen = store.view(url, "natasha", "client", project_id=str(prj["Ромашка"]))["timeline"]
     assert [x["summary"] for x in seen] == ["Созвон с Иваном"]
-    assert store.view(url, "natasha", "deal", deal_id=str(crm["deal"]))["timeline"] == []
+    assert [x["summary"] for x in store.view(url, "natasha", "deal", deal_id=str(crm["deal"]))["timeline"]] == ["Созвон с Иваном"]
     for user in ("natasha", "marianna"):
         assert rows(url, user) == [], user
         with dela_db.session(url, user, via="app") as c:
@@ -322,3 +325,109 @@ def test_family_by_surname_until_listed_even_for_team_users():
     assert ctx["family"] == {"papa"} and digest_crm.is_work(ctx, "team") and not digest_crm.is_work(ctx, "papa")
     listed = digest_crm.build(rows, [], [], [], "me", [], family_listed=[])
     assert listed["family"] == set() and digest_crm.is_work(listed, "papa")
+
+
+# ── Упоминание — не контакт; сделка записи — правилом базы (аудит 15.10.2026, №28, №3; dela_0022) ─────────────
+
+
+def _client(url, name, user="sasha"):
+    return next(c for c in store.view(url, user, "clients")["clients"] if c["name"] == name)
+
+
+def test_client_from_its_group_is_a_contact(crm):
+    """Клиент из группы клиента — контакт: и когда тема — сам чат, и когда модель назвала тему именем клиента, а группа
+    клиента в окне была. Ждут тебя — контакт всегда."""
+    url, prj = crm["url"], crm["projects"]
+    work = {"waiting": [], "work": [{"topic": "(Бета Групп) сделка", "text": "Согласовали NDA."},
+                                    {"topic": "Бета Групп", "text": "Ждут график платежей."}], "family": [], "other": ""}
+    assert put(url, window(summary=work))["crm"]["mentions"] == 0
+    beta = rows(url, project_id=prj["Бета Групп"])
+    assert len(beta) == 2 and not any(x["mention"] for x in beta)
+    assert _client(url, "Бета Групп")["last_touch"] is not None
+    full = put(url, window(ref="digest:2026-10-13T2100", ended="2026-10-13T21:00:00+03:00"))["crm"]
+    assert full["mentions"] == 0, full  # «Ромашка» темой — у Ивана из Ромашки был личный чат в окне
+
+
+def test_client_named_only_in_topic_is_a_mention(crm):
+    """Клиент, названный только текстом темы, когда его чата (группы клиента, личного с его человеком) в окне нет, —
+    упоминание: в хронологии есть, «последний контакт» клиента и сделки не двигает. Повтор сводки с его чатом — контакт:
+    флаг обновляется."""
+    url, prj = crm["url"], crm["projects"]
+    work = {"waiting": [], "work": [{"topic": "Ромашка", "text": "Обсуждали, как подать модель."}], "family": [], "other": ""}
+    no_chat = [s for s in SOURCES if s.get("peer_id") != 1001]  # без личного чата Ивана из Ромашки
+    r = put(url, window(summary=work, sources=no_chat))["crm"]
+    assert (r["linked"], r["mentions"]) == (1, 1), r
+    [e] = rows(url, project_id=prj["Ромашка"])
+    assert e["mention"] and str(e["deal_id"]) == str(crm["deal"])  # сделка — правилом базы: одна живая у клиента
+    assert _client(url, "Ромашка")["last_touch"] is None
+    deal = store.view(url, "sasha", "deal", deal_id=str(crm["deal"]))
+    assert deal["deal"]["last_touch"] is None and [x["id"] for x in deal["timeline"]] == [str(e["id"])]
+    # Та же сводка, но в окне был чат Ивана — контакт; запись та же.
+    r = put(url, window(summary=work))["crm"]
+    assert (r["new"], r["mentions"]) == (0, 0), r
+    [e2] = rows(url, project_id=prj["Ромашка"])
+    assert e2["id"] == e["id"] and not e2["mention"]
+    assert _client(url, "Ромашка")["last_touch"] is not None
+    # Сводка без списка чатов (до 14.10) — как раньше, контакт: отличить не по чему.
+    r = put(url, window(ref="digest:2026-10-12T2000", ended="2026-10-12T20:00:00+03:00", started_at="2026-10-12T15:00:00+03:00",
+                        summary=work, sources=None))["crm"]
+    assert r["mentions"] == 0, r
+
+
+def test_python_deal_rule_matches_the_base(crm):
+    """Сделку записи пишет база (crm.touch_deal); питонья _deal (прогон вхолостую) — то же правило: одна живая у
+    клиента; две — по людям пункта; заведённая позже окна — не берёт."""
+    url, ppl, prj = crm["url"], crm["people"], crm["projects"]
+
+    def same():
+        with dela_db.session(url, "sasha", via="test") as c:
+            planned = digest_crm.plan(digest_crm.load(c, "sasha"), {"ref": REF, "label": LABEL,
+                                                                     "ended_at": "2026-10-13T20:00:00+03:00"}, SUMMARY, SOURCES)
+        stored = {x["source_ref"]: (str(x["deal_id"]) if x["deal_id"] else None) for x in rows(url) if x["deleted_at"] is None}
+        want = {r["ref"]: (str(r["deal_id"]) if r["deal_id"] else None) for r in planned["rows"]}
+        assert stored == want
+        return stored
+
+    put(url, window())
+    assert set(same().values()) == {str(crm["deal"]), None}  # Ромашка — её сделка; Бета (сделок нет), Наташа — без
+    with dela_db.session(url, "system", "test") as c:
+        # Вторая живая сделка Ромашки, без Ивана: запись Ивана — к его сделке, тема «Ромашка» без людей — ни к какой.
+        c.execute("INSERT INTO crm.deals (project_id, name, stage, created_at) VALUES (%s, 'Аудит', 'lead', '2026-10-01')",
+                  (prj["Ромашка"],))
+        # У Беты — единственная сделка, заведённая позже окна: записи окна она не берёт.
+        c.execute("INSERT INTO crm.deals (project_id, name, stage, person_ids) VALUES (%s, 'Бета: NDA', 'active', %s)",
+                  (prj["Бета Групп"], [ppl["misha"]]))
+    put(url, window())
+    got = same()
+    ivan = next(x for x in rows(url) if "модель к пятнице" in x["summary"])
+    topic = next(x for x in rows(url) if "допсоглашение" in x["summary"])
+    nda = next(x for x in rows(url) if "NDA" in x["summary"])
+    assert got[ivan["source_ref"]] == str(crm["deal"]) and got[topic["source_ref"]] is None and got[nda["source_ref"]] is None
+
+
+def test_digest_relink_dry_writes_nothing_and_real_sets_flags(crm, tmp_path, capsys, monkeypatch):
+    """digest-relink: сохранённые сводки — заново тем же разносом; --dry считает и ничего не пишет; без него — флаг
+    упоминания и сделка старым записям (до dela_0022 их не было)."""
+    from pravka_dela import __main__ as cli
+
+    url, prj = crm["url"], crm["projects"]
+    work = {"waiting": [], "work": [{"topic": "Ромашка", "text": "Обсуждали, как подать модель."}], "family": [], "other": ""}
+    put(url, window(summary=work, sources=[s for s in SOURCES if s.get("peer_id") != 1001]))
+    put(url, window(ref="digest:2026-10-14T1100", ended="2026-10-14T11:00:00+03:00"))
+    # Как было до установки: флага нет, сделки у записи нет.
+    with dela_db.session(url, "sasha", "svc:test") as c:
+        c.execute("UPDATE crm.interactions SET mention = false, deal_id = NULL WHERE source = 'digest'")
+    before = {x["id"]: (x["mention"], x["deal_id"]) for x in rows(url)}
+    env = tmp_path / "dela.env"
+    env.write_text(f"DELA_DB_URL={url}\n", encoding="utf-8")
+    monkeypatch.delenv("DELA_DB_URL", raising=False)
+    assert cli.main(["--env", str(env), "digest-relink", "--dry"]) == 0
+    said = capsys.readouterr().out
+    assert said.startswith("вхолостую (ничего не записано): сводок: 2; ") and "упоминаний было 0, стало 1" in said, said
+    assert {x["id"]: (x["mention"], x["deal_id"]) for x in rows(url)} == before
+    real = digest_crm.relink(url)
+    assert real["digests"] == 2 and real["new"] == 0 and real["after"]["mentions"] == 1, real
+    [e] = [x for x in rows(url, project_id=prj["Ромашка"]) if "подать модель" in x["summary"]]
+    assert e["mention"] and str(e["deal_id"]) == str(crm["deal"])
+    again = digest_crm.relink(url)
+    assert again["after"] == real["after"] and again["new"] == 0  # повтор безвреден

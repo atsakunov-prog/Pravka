@@ -26,15 +26,26 @@
 Приватность — правило 21: запись private (dela_0018) — команда не видит её ни в карточке клиента, ни в синке, ни в
 журнале (его у приватной записи нет). Повтор той же сводки не плодит записей: ключ записи — сводка, пункт и клиент
 (source_ref «<ref сводки>#<ключ>», уникальный индекс); пункт пропал из сводки — запись помечается убранной.
+
+Упоминание — не контакт (15.10.2026, аудит №28, dela_0022): клиент или человек, названный только текстом темы «По
+работе» («обсуждали Ромашку» в командном чате), когда его чата (личного или группы клиента) в окне нет, — запись с
+mention: в хронологии видна, но «последний контакт» клиента, сделки и человека не двигает. «Ждут тебя» и части темы,
+совпавшие с чатом окна, — контакт; сводка без списка чатов (до 14.10) — как раньше, контакт: отличить не по чему.
+Сделка записи — «сделка касания» базы (crm.touch_deal: у клиента одна живая — она, иначе живая с кем-то из людей пункта,
+если такая одна; заведённая в Делах позже окна — нет); питонья _deal — то же правило для прогона вхолостую.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import re
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from . import people
+
+MSK = ZoneInfo("Europe/Moscow")
 
 SECTIONS = ("waiting", "work")
 PRIVATE_CHAT = "личный"
@@ -127,7 +138,8 @@ def load(conn, owner: str) -> dict:
         projects=conn.execute(
             "SELECT id, name, aliases, org_id, archived_at FROM crm.projects WHERE kind = 'client'").fetchall(),
         deals=conn.execute(
-            "SELECT id, project_id, stage, lead_person_id, team_ids, person_ids, source_person_id FROM crm.deals").fetchall(),
+            "SELECT id, project_id, stage, lead_person_id, team_ids, person_ids, source_person_id, created_at, notion_id "
+            "FROM crm.deals").fetchall(),
         me_person=me["person_id"] if me else None,
         family_ids=family,
         family_listed=listed,
@@ -175,7 +187,10 @@ def build(rows: list[dict], orgs: list[dict], projects: list[dict], deals: list[
         "deals": [{"id": sid(d["id"]), "project_id": sid(d["project_id"]),
                    "people": {sid(x) for x in [d.get("lead_person_id"), d.get("source_person_id"),
                                                *(d.get("team_ids") or []), *(d.get("person_ids") or [])] if sid(x)},
-                   "side": {sid(x) for x in d.get("person_ids") or [] if sid(x)}}
+                   "side": {sid(x) for x in d.get("person_ids") or [] if sid(x)},
+                   # С какого дня сделка берёт записи (crm.deal_from): заведённая в Делах — с дня заведения, из Notion —
+                   # без границы. Старый снимок без created_at — без границы.
+                   "from": None if d.get("notion_id") else _msk_day(d.get("created_at"))}
                   for d in deals if d.get("stage") != "archive"],
         "by_tg": by_tg, "by_user": by_user,
     }
@@ -189,6 +204,18 @@ def _unique(pairs) -> dict:
             continue
         seen[k] = None if k in seen and seen[k] != pid else pid
     return {k: v for k, v in seen.items() if v}
+
+
+def _msk_day(v: Any) -> dt.date | None:
+    """День по Москве из даты базы или строки ISO снимка синка; нет или кривая — None."""
+    if isinstance(v, str):
+        try:
+            v = dt.datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if isinstance(v, dt.datetime):
+        return (v.astimezone(MSK) if v.tzinfo else v).date()
+    return v if isinstance(v, dt.date) else None
 
 
 def _surname(name: Any) -> str | None:
@@ -287,16 +314,54 @@ def _person_clients(ctx: dict, pid: str) -> list[str]:
     return out if len(out) <= PROJECTS_PER_ITEM else []
 
 
-def _deal(ctx: dict, project: str, persons: list[str]) -> str | None:
-    """Сделка записи — живая сделка клиента, где есть кто-то из узнанных; ровно одна, иначе — у клиента."""
-    hits = [d["id"] for d in ctx["deals"] if d["project_id"] == project and d["people"] & set(persons)]
+def _deal(ctx: dict, project: str, persons: list[str], day: dt.date | None = None) -> str | None:
+    """Сделка записи — правило crm.touch_deal (аудит №3; пишет её apply базой, здесь — для прогона вхолостую): у клиента
+    одна живая сделка — она; иначе живая сделка клиента, где есть кто-то из узнанных, если такая одна; иначе — у клиента.
+    Сделка, заведённая в Делах позже дня записи (day), её не берёт."""
+    live = [d for d in ctx["deals"] if d["project_id"] == project]
+    fits = lambda d: day is None or d.get("from") is None or d["from"] <= day  # noqa: E731
+    if len(live) == 1:
+        return live[0]["id"] if fits(live[0]) else None
+    hits = [d["id"] for d in live if fits(d) and d["people"] & set(persons)]
     return hits[0] if len(hits) == 1 else None
 
 
-def resolve(ctx: dict, section: str, item: dict, sources: list[dict]) -> tuple[list[str], list[str], str]:
-    """Пункт → (люди, клиенты, почему пусто). Узнан кто-то из семьи — пусто целиком («family")."""
+def _window(ctx: dict, sources: list[dict]) -> tuple[set[str], set[str]]:
+    """С кем был контакт в окне, по самим чатам окна (аудит №28): собеседники личных чатов (по id Telegram, @имени или
+    названию чата, равному имени карточки — дёшево, без who) и клиенты — групп (имя в названии группы) и этих
+    собеседников (их компания или сделка). Клиент или человек, названный в теме «По работе» текстом, — контакт, если
+    его чат в окне был: модель пишет темой «клиент, проект или чат», и «Бета Групп» из группы «(Бета Групп) сделка» или
+    «Ромашка» из личного чата с человеком Ромашки — не упоминание."""
+    clients: set[str] = set()
+    persons: set[str] = set()
+    by_name = ctx.get("by_name")
+    if by_name is None:
+        by_name = ctx["by_name"] = _unique((_key(p.get("name")), pid) for pid, p in ctx["people"].items())
+    for s in sources:
+        if s.get("kind") == PRIVATE_CHAT:
+            pid = next((ctx["by_tg"][str(s[k])] for k in ("peer_id", "tg_id")
+                        if s.get(k) is not None and ctx["by_tg"].get(str(s[k]))), None)
+            if not pid and s.get("username"):
+                pid = ctx["by_user"].get(people.norm(s["username"]))
+            pid = pid or by_name.get(_key(s["name"]))
+            if pid:
+                persons.add(pid)
+                if is_work(ctx, pid):
+                    clients |= set(_person_clients(ctx, pid))
+        else:
+            clients |= set(_clients_named(ctx, s["name"], whole=False))
+    return clients, persons
+
+
+def resolve(ctx: dict, section: str, item: dict, sources: list[dict],
+            window: tuple[set[str], set[str]] | None = None) -> tuple[list[str], list[str], str, set[str]]:
+    """Пункт → (люди, клиенты, почему пусто, с кем из них был контакт). Узнан кто-то из семьи — пусто целиком
+    («family»). Контакт (аудит №28): «Ждут тебя» — все; «По работе» — часть темы, совпавшая с чатом окна, и названные в
+    теме текстом, чей чат в окне был (window — _window); остальные названные текстом — упоминание. window None — сводка
+    без списка чатов: контакт все, как до 15.10."""
     found: list[str] = []
     clients: list[str] = []
+    direct: set[str] = set()
     if section == "waiting":
         chat, who = item.get("chat") or "", item.get("who") or ""
         src = _find_source(sources, chat) if chat else None
@@ -309,30 +374,46 @@ def resolve(ctx: dict, section: str, item: dict, sources: list[dict]) -> tuple[l
             # Чата нет в списке (старая служба): сначала само название — у личного чата это человек, потом кто.
             found.append(_by_name(ctx, chat) or _sender(ctx, None, who))
             clients += _clients_named(ctx, chat, whole=True)
+        direct |= {x for x in [*found, *clients] if x}  # человек сам написал владельцу — это контакт
     else:
         topic = item.get("topic") or ""
         parts = [p for p in [topic, *PARTS.split(topic)] if _key(p)]
+        w_clients, w_people = window if window is not None else (set(), set())
         for part in dict.fromkeys(parts):
             src = _find_source(sources, part)
             if src and src.get("kind") == PRIVATE_CHAT:
-                found.append(_private_person(ctx, src))
+                pid = _private_person(ctx, src)
+                found.append(pid)
+                direct.add(pid)
             elif src:
-                clients += _clients_named(ctx, src["name"], whole=False)
+                named = _clients_named(ctx, src["name"], whole=False)
+                clients += named
+                direct |= set(named)
             else:
                 named = _clients_named(ctx, part, whole=True)
                 clients += named
+                direct |= {c for c in named if c in w_clients}
                 if not named:
-                    found.append(_by_name(ctx, part))
+                    pid = _by_name(ctx, part)
+                    found.append(pid)
+                    if pid in w_people:
+                        direct.add(pid)
     found = list(dict.fromkeys(p for p in found if p and p != ctx["me"]))
     if any(p in ctx["family"] for p in found):
-        return [], [], "family"
+        return [], [], "family", set()
     work = [p for p in found if is_work(ctx, p)]
     for p in work:
-        clients += _person_clients(ctx, p)
+        own = _person_clients(ctx, p)
+        clients += own
+        if p in direct:
+            direct |= set(own)  # человек был на связи — значит, и его клиент
     clients = list(dict.fromkeys(clients))[:PROJECTS_PER_ITEM]
     if not work and not clients:
-        return [], [], "personal" if found else "unknown"
-    return work, clients, ""
+        return [], [], "personal" if found else "unknown", set()
+    if section == "work" and window is None:
+        direct = {*work, *clients}  # без списка чатов не отличить — как до 15.10, контакт
+    direct.discard(None)
+    return work, clients, "", direct
 
 
 # ── Записи хронологии ───────────────────────────────────────────────────
@@ -358,9 +439,11 @@ def plan(ctx: dict, digest: dict, summary: dict, sources: list[dict] | None) -> 
     """Что положить в хронологию по сводке: записи и счёт пропущенного (семья, личные, не узнанные)."""
     rows: list[dict] = []
     skipped = {"family": 0, "personal": 0, "unknown": 0}
+    window = _window(ctx, sources) if sources is not None else None
+    day = _msk_day(digest.get("ended_at"))
     for section in SECTIONS:
         for item in summary.get(section) or []:
-            persons, clients, why = resolve(ctx, section, item, sources or [])
+            persons, clients, why, direct = resolve(ctx, section, item, sources or [], window)
             if why:
                 skipped[why] += 1
                 continue
@@ -374,23 +457,33 @@ def plan(ctx: dict, digest: dict, summary: dict, sources: list[dict] | None) -> 
                 who = persons if i == 0 else []
                 rows.append({
                     "ref": f"{digest['ref']}#{section[:4]}-{key}", "section": section, "summary": text,
-                    "person_ids": who, "project_id": project, "deal_id": _deal(ctx, project, persons) if project else None,
+                    "person_ids": who, "project_id": project,
+                    # Сделка — по всем узнанным пункта (и у второй записи пункта, где людей нет): так было и до 15.10.
+                    "deal_people": persons, "deal_id": _deal(ctx, project, persons, day) if project else None,
+                    # Упоминание: ни клиент записи, ни её люди на связи в окне не были (№28).
+                    "mention": not ({project, *who} & direct),
                 })
     return {"rows": rows, "skipped": skipped}
 
 
 def apply(conn, owner: str, digest: dict, planned: dict) -> dict:
     """Записи плана — в хронологию (повтор находит свою по ключу), записи этой сводки, которых в плане больше нет, —
-    убранными. Убранное владельцем не возвращается: повтор правит только живую запись."""
+    убранными. Убранное владельцем не возвращается: повтор правит только живую запись. Сделка записи — правилом базы
+    (crm.touch_deal, аудит №3), упоминание — флагом mention (№28): повтор сводки обновляет и то и другое."""
     made, kept = 0, []
     for r in planned["rows"]:
         got = conn.execute(
             "INSERT INTO crm.interactions (at, kind, summary, project_id, deal_id, person_ids, source, source_ref, "
-            "owner_id, private) VALUES (%s, 'telegram', %s, %s, %s, %s::uuid[], 'digest', %s, %s, true) "
+            "owner_id, private, mention) VALUES (%(at)s, 'telegram', %(summary)s, %(project)s, "
+            "crm.touch_deal(%(project)s::uuid, %(deal_people)s::uuid[], %(at)s::timestamptz), %(people)s::uuid[], 'digest', "
+            "%(ref)s, %(owner)s, true, %(mention)s) "
             "ON CONFLICT (owner_id, source_ref) WHERE source = 'digest' DO UPDATE SET at = EXCLUDED.at, "
-            "summary = EXCLUDED.summary, deal_id = EXCLUDED.deal_id, person_ids = EXCLUDED.person_ids "
+            "summary = EXCLUDED.summary, deal_id = EXCLUDED.deal_id, person_ids = EXCLUDED.person_ids, "
+            "mention = EXCLUDED.mention "
             "WHERE crm.interactions.deleted_at IS NULL RETURNING (xmax = 0) AS new",
-            (digest["ended_at"], r["summary"], r["project_id"], r["deal_id"], r["person_ids"], r["ref"], owner),
+            {"at": digest["ended_at"], "summary": r["summary"], "project": r["project_id"], "people": r["person_ids"],
+             "deal_people": r.get("deal_people", r["person_ids"]), "ref": r["ref"], "owner": owner,
+             "mention": bool(r.get("mention"))},
         ).fetchone()
         made += bool(got and got["new"])
         kept.append(r["ref"])
@@ -400,7 +493,7 @@ def apply(conn, owner: str, digest: dict, planned: dict) -> dict:
         (owner, digest["ref"], kept)).fetchall()
     rows = planned["rows"]
     return {
-        "linked": len(rows), "new": made, "retired": len(gone),
+        "linked": len(rows), "new": made, "retired": len(gone), "mentions": sum(1 for r in rows if r.get("mention")),
         "people": len({p for r in rows for p in r["person_ids"]}),
         "clients": len({r["project_id"] for r in rows if r["project_id"]}),
         "skipped": planned["skipped"],
@@ -410,3 +503,49 @@ def apply(conn, owner: str, digest: dict, planned: dict) -> dict:
 def link(conn, owner: str, digest: dict, summary: dict, sources: list[dict] | None) -> dict:
     """Разнести сводку по карточкам: справочник, план, запись. digest — {ref, label, ended_at}."""
     return apply(conn, owner, digest, plan(load(conn, owner), digest, summary, sources))
+
+
+# ── Разнести заново все сводки (digest-relink) ─────────────────────────────
+
+
+class _DryRun(Exception):
+    pass
+
+
+def _counts(conn, owner: str) -> dict:
+    return dict(conn.execute(
+        "SELECT count(*) AS live, count(*) FILTER (WHERE mention) AS mentions, "
+        "count(*) FILTER (WHERE deal_id IS NOT NULL) AS with_deal FROM crm.interactions "
+        "WHERE owner_id = %s AND source = 'digest' AND deleted_at IS NULL", (owner,)).fetchone())
+
+
+def relink(url: str, dry: bool = False) -> dict:
+    """Команда «digest-relink» (аудит 15.10.2026, №28, №3): все сохранённые сводки (crm.digests: пункты и чаты окна) —
+    заново по карточкам тем же link: старым записям — флаг упоминания и сделка по правилу crm.touch_deal; повтор
+    безвреден (ключ пункта тот же), убранное владельцем не возвращается. Идёт от владельца Дел (его RLS, как служба
+    дайджеста), справочник читает один раз. dry — посчитать и ничего не записать (точка сохранения откатывается).
+    Запускает главная сессия после установки dela_0022 и своей копии базы."""
+    from . import db
+
+    with db.session(url, "system", "svc:digest-relink", "system") as c:
+        owner = c.execute("SELECT crm.owner_id() AS id").fetchone()["id"]
+    total = {"digests": 0, "linked": 0, "new": 0, "retired": 0, "mentions": 0, "dry": dry}
+    with db.session(url, owner, "svc:digest-relink", "system") as conn:
+        total["before"] = _counts(conn, owner)
+        rows = conn.execute("SELECT ref, label, ended_at, summary, sources FROM crm.digests WHERE owner_id = %s "
+                            "ORDER BY ended_at", (owner,)).fetchall()
+        try:
+            with conn.transaction():
+                ctx = load(conn, owner)
+                for d in rows:
+                    digest = {"ref": d["ref"], "label": d["label"], "ended_at": d["ended_at"]}
+                    r = apply(conn, owner, digest, plan(ctx, digest, d["summary"] or {}, d["sources"]))
+                    total["digests"] += 1
+                    for k in ("linked", "new", "retired", "mentions"):
+                        total[k] += r[k]
+                total["after"] = _counts(conn, owner)
+                if dry:
+                    raise _DryRun
+        except _DryRun:
+            pass
+    return total

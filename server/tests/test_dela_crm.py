@@ -258,3 +258,225 @@ def test_life_views_apply_pending_dela_migrations_first(dela, conn):
     finally:
         conn.execute("DROP TABLE IF EXISTS crm.zz_probe")
         conn.execute("DELETE FROM core.migrations WHERE name = 'dela_9999.sql'")
+
+
+# ── Шаги и контакт сделки — одним правилом (аудит 15.10.2026, №2, №3, №7, №28; dela_0022) ──────────────────────
+
+
+def _rec(url, user="sasha", **data):
+    r = ops(url, user, {"op": "interaction.add", "data": {"kind": "call", "summary": "созвон", **data}})[0]
+    assert r["ok"], r
+    return r["row"]
+
+
+def _pipe(url, user="sasha"):
+    return {d["name"]: d for d in store.view(url, user, "pipeline")["deals"]}
+
+
+def _day(v) -> str | None:
+    """День по Москве из ответа вида (строка ISO) или базы."""
+    if v is None:
+        return None
+    v = dt.datetime.fromisoformat(v) if isinstance(v, str) else v
+    return v.astimezone(dt.timezone(dt.timedelta(hours=3))).date().isoformat()
+
+
+def _since(url, deal_id, at):
+    """Сделку «завели» раньше: тестовые сделки заводятся сегодня, а записи — задним числом."""
+    with dela_db.session(url, "system", "test") as c:
+        c.execute("UPDATE crm.deals SET created_at = %s WHERE id = %s", (at, deal_id))
+
+
+def test_client_task_is_the_single_deal_step(team, cfg):
+    """№2: у клиента одна живая сделка — его открытое дело без сделки — её шаг: «застыла» не горит, у next_task —
+    via_client; своё дело сделки — первым. Вторая живая сделка — правило выключено, новая без дел горит. Коннектор
+    (life.deals) считает шаги так же."""
+    url = team["url"]
+    p = project(url, "sasha", "Ромашка")
+    a = deal(url, "sasha", p, "Ромашка: модель", stage="active")
+    old = deal(url, "sasha", p, "Ромашка: прошлое")
+    ops(url, "sasha", {"op": "deal.set", "id": old["id"], "set": {"outcome": "won"}})  # архив — не в счёт
+    task(url, "sasha", "Ромашка: прислать модель", project_id=p)
+    task(url, "sasha", "Ромашка: закрытое", project_id=p, status="done")
+    m = _pipe(url)["Ромашка: модель"]
+    assert m["solo"] and not m["stale"] and m["open_tasks"] == 1, m
+    assert m["next_task"]["title"] == "Ромашка: прислать модель" and m["next_task"]["via_client"]
+    card = store.view(url, "sasha", "deal", deal_id=a["id"])
+    assert [(x["title"], x["via_client"]) for x in card["open"]] == [("Ромашка: прислать модель", True)]
+    assert not _pipe(url)["Ромашка: прошлое"]["solo"]  # архивной сделке дела клиента не шаги
+    # Строка Claude на Воронке видит тот же шаг.
+    from pravka_dela import ask
+
+    with as_(url, "sasha") as c:
+        [line] = ask._deals_on_screen(c, [a["id"]], set())
+    assert "Ромашка: прислать модель — дело клиента без сделки" in line, line
+    # Своё дело сделки — следующим шагом, дело клиента — после.
+    task(url, "sasha", "Ромашка: созвон по модели", project_id=p, deal_id=a["id"], due_date=db_today(url) + dt.timedelta(days=9))
+    m = _pipe(url)["Ромашка: модель"]
+    assert m["open_tasks"] == 2 and m["next_task"]["title"] == "Ромашка: созвон по модели" and not m["next_task"]["via_client"]
+    # Наташа (видит всех клиентов) видит то же.
+    assert _pipe(url, "natasha")["Ромашка: модель"]["open_tasks"] == 2
+    with psycopg.connect(cfg.reader_url) as r:
+        life = dict(r.execute("SELECT name, open_tasks FROM life.deals WHERE project = 'Ромашка'").fetchall())
+    assert life == {"Ромашка: модель": 2, "Ромашка: прошлое": 0}
+    # Вторая живая сделка — дела клиента больше ничьи шаги.
+    deal(url, "sasha", p, "Ромашка: допсоглашение")
+    v = _pipe(url)
+    assert v["Ромашка: допсоглашение"]["stale"] and v["Ромашка: допсоглашение"]["open_tasks"] == 0
+    assert v["Ромашка: модель"]["open_tasks"] == 1 and not v["Ромашка: модель"]["solo"]
+    assert [x["title"] for x in store.view(url, "sasha", "deal", deal_id=a["id"])["open"]] == ["Ромашка: созвон по модели"]
+    with psycopg.connect(cfg.reader_url) as r:
+        assert r.execute("SELECT open_tasks FROM life.deals WHERE name = 'Ромашка: модель'").fetchone()[0] == 1
+
+
+def test_deal_timeline_takes_client_records_only_while_single(team):
+    """№3: хронология сделки — её записи и, пока сделка у клиента одна живая, записи клиента без сделки: не из Notion и
+    не раньше дня её заведения (у сделки из Notion — без границы). Вторая живая сделка — записи клиента уходят."""
+    url = team["url"]
+    p = project(url, "sasha", "Сигма")
+    d = deal(url, "sasha", p, "Сигма: аудит", stage="active")
+    _since(url, d["id"], "2026-10-01T10:00:00+03:00")
+    # deal_id: None — запись именно клиента (без ключа сервер сам поставил бы сделку касания).
+    _rec(url, summary="после заведения", at="2026-10-05T12:00:00+03:00", project_id=str(p), deal_id=None)
+    _rec(url, summary="до заведения", at="2026-09-20T12:00:00+03:00", project_id=str(p), deal_id=None)
+    _rec(url, summary="из Notion", at="2026-10-06T12:00:00+03:00", project_id=str(p), deal_id=None, source="notion")
+    _rec(url, summary="своя", at="2026-09-10T12:00:00+03:00", project_id=str(p), deal_id=d["id"])
+
+    def tl(user="sasha"):
+        return [x["summary"] for x in store.view(url, user, "deal", deal_id=d["id"])["timeline"]]
+
+    assert tl() == ["после заведения", "своя"]
+    assert tl("natasha") == ["после заведения", "своя"]
+    # Сделка из Notion жила и до переноса — записи клиента без нижней границы (но не сами записи Notion).
+    with dela_db.session(url, "system", "test") as c:
+        c.execute("UPDATE crm.deals SET notion_id = 'https://notion.example.org/x' WHERE id = %s", (d["id"],))
+    assert tl() == ["после заведения", "до заведения", "своя"]
+    # Вторая живая сделка — записи клиента без сделки ничьи.
+    deal(url, "sasha", p, "Сигма: оценка")
+    assert tl() == ["своя"]
+
+
+def test_interaction_without_deal_takes_touch_deal(team):
+    """№3: interaction.add без ключа deal_id — «сделка касания»: одна живая у клиента — она; иначе живая, где есть
+    кто-то из людей записи, если такая одна; иначе без сделки. Ключ есть, хоть null, — не трогаем. Названная — по имени."""
+    url = team["url"]
+    p = project(url, "sasha", "Тета")
+    with dela_db.session(url, "system", "test") as c:
+        ivan = c.execute("INSERT INTO crm.people (name, owner_id) VALUES ('Иван Тестов', 'sasha') RETURNING id").fetchone()["id"]
+    a = deal(url, "sasha", p, "Тета: модель", stage="active")
+    _since(url, a["id"], "2026-10-01T10:00:00+03:00")
+    now = "2026-10-10T12:00:00+03:00"
+    assert str(_rec(url, at=now, project_id=str(p))["deal_id"]) == a["id"]
+    assert _rec(url, at=now, project_id=str(p), deal_id=None)["deal_id"] is None
+    # Запись раньше заведения сделки (заведена в Делах, не из Notion) — не её.
+    assert _rec(url, at="2026-09-15T12:00:00+03:00", project_id=str(p))["deal_id"] is None
+    # Две живые: по людям записи — та, где человек; без людей — никакая.
+    b = deal(url, "sasha", p, "Тета: оценка", stage="lead", person_ids=[str(ivan)])
+    _since(url, b["id"], "2026-10-01T10:00:00+03:00")
+    assert str(_rec(url, at=now, project_id=str(p), person_ids=[str(ivan)])["deal_id"]) == b["id"]
+    assert _rec(url, at=now, project_id=str(p))["deal_id"] is None
+    with as_(url, "sasha") as c:
+        named = c.execute("SELECT crm.touch_deal(%s, '{}', now(), 'тета:  МОДЕЛЬ') AS d", (p,)).fetchone()["d"]
+        assert str(named) == a["id"]
+
+
+def test_deal_last_touch_one_rule_for_web_and_connector(team, cfg):
+    """№7, №28: последний контакт сделки — одна функция (crm.deal_last_touch) для веба и коннектора: записи сделки и,
+    при одной живой, клиента без сделки; упоминание не освежает; приватную запись видит только её хозяин — владелец и
+    life.deals видят одну дату, команда — без приватной."""
+    url = team["url"]
+    p = project(url, "sasha", "Йота")
+    a = deal(url, "sasha", p, "Йота: модель", stage="active")
+    b = deal(url, "sasha", p, "Йота: оценка", stage="lead")
+    for x in (a, b):
+        _since(url, x["id"], "2026-10-01T10:00:00+03:00")
+    _rec(url, at="2026-10-05T12:00:00+03:00", project_id=str(p), deal_id=None)
+    v = _pipe(url)
+    assert v["Йота: модель"]["last_touch"] is None and v["Йота: оценка"]["last_touch"] is None  # две живые — ничья
+    ops(url, "sasha", {"op": "deal.set", "id": b["id"], "set": {"outcome": "lost"}})
+    assert _day(_pipe(url)["Йота: модель"]["last_touch"]) == "2026-10-05"
+    # Пункт сводки Telegram: упоминание (клиента назвали в теме) не освежает, контакт — освежает только владельцу.
+    with dela_db.session(url, "sasha", "svc:digest") as c:
+        for ref, at, mention in (("digest:x#work-1", "2026-10-09T20:00:00+03:00", True),
+                                 ("digest:x#wait-2", "2026-10-07T20:00:00+03:00", False)):
+            c.execute("INSERT INTO crm.interactions (at, kind, summary, project_id, source, source_ref, owner_id, private, "
+                      "mention) VALUES (%s, 'telegram', 'Telegram: пункт', %s, 'digest', %s, 'sasha', true, %s)",
+                      (at, p, ref, mention))
+    assert _day(_pipe(url)["Йота: модель"]["last_touch"]) == "2026-10-07"
+    assert _day(_pipe(url, "natasha")["Йота: модель"]["last_touch"]) == "2026-10-05"
+    with as_(url, "sasha") as c:
+        own = c.execute("SELECT crm.deal_last_touch(%s) AS t", (a["id"],)).fetchone()["t"]
+    with psycopg.connect(cfg.reader_url) as r:
+        life = r.execute("SELECT last_touch FROM life.deals WHERE name = 'Йота: модель'").fetchone()[0]
+        assert life == own and own.date() == dt.date(2026, 10, 7)
+        ints = dict(r.execute("SELECT source_ref, mention FROM life.interactions WHERE source = 'digest'").fetchall())
+    assert ints == {"digest:x#work-1": True, "digest:x#wait-2": False}
+    # «Клиенты» — та же правда: упоминание не контакт.
+    c = next(x for x in store.view(url, "sasha", "clients")["clients"] if x["name"] == "Йота")
+    assert _day(c["last_touch"]) == "2026-10-07"
+
+
+def test_deal_and_client_show_their_meetings_to_owner_only(team):
+    """№3: у сделки и клиента — их встречи по карточке встречи (и до 01.09), только владельцу; встречи сделки — и
+    отбором deal_id на странице «Встречи»."""
+    url = team["url"]
+    p = project(url, "sasha", "Каппа")
+    a = deal(url, "sasha", p, "Каппа: сделка", stage="active")
+    with dela_db.session(url, "sasha", "svc:test") as c:
+        for ref, at, did in (("901", "2026-08-10T11:00:00+03:00", a["id"]), ("902", "2026-10-10T11:00:00+03:00", a["id"]),
+                             ("903", "2026-10-11T11:00:00+03:00", None)):
+            c.execute("INSERT INTO crm.meetings (ref, url, started_at, duration_min, owner_id, sphere, project_id, deal_id, title) "
+                      "VALUES (%s, %s, %s, 40, 'sasha', 'work', %s, %s, 'Каппа: встреча')",
+                      (ref, f"https://meetings.example.org/m/{ref}", at, p, did))
+    card = store.view(url, "sasha", "deal", deal_id=a["id"])
+    assert [m["ref"] for m in card["meetings"]] == ["902", "901"] and card["meetings_n"] == 2
+    client = store.view(url, "sasha", "client", project_id=str(p))
+    assert [m["ref"] for m in client["meetings"]] == ["903", "902", "901"] and client["meetings_n"] == 3
+    for view, kw in (("deal", {"deal_id": a["id"]}), ("client", {"project_id": str(p)})):
+        got = store.view(url, "natasha", view, **kw)
+        assert got["meetings"] == [] and got["meetings_n"] == 0, view
+    assert [m["ref"] for m in store.view(url, "sasha", "meetings", deal_id=a["id"])["items"]] == ["902", "901"]
+    assert [m["ref"] for m in store.view(url, "sasha", "meetings", deal_id="none")["items"]] == ["903"]
+
+
+def test_migration_22_over_deals_and_records(admin_dsn):
+    """dela_0022 поверх Дел с записями, сделками и делами: прежние записи — не упоминания, функции отвечают, ничего не
+    переписано."""
+    import secrets as _secrets
+    from urllib.parse import urlparse, urlunparse
+
+    from psycopg import sql
+
+    name = f"pa_mig22_{_secrets.token_hex(4)}"
+    with psycopg.connect(admin_dsn, autocommit=True) as a:
+        a.execute(sql.SQL("CREATE DATABASE {} ENCODING 'UTF8' TEMPLATE template0").format(sql.Identifier(name)))
+    u = urlparse(admin_dsn)
+    url = urlunparse((u.scheme, u.netloc, "/" + name, "", "", ""))
+    try:
+        files = dict(dela_db._sql_files())
+        before = {k: v for k, v in files.items() if k.startswith("dela_") and k < "dela_0022.sql"}
+        with psycopg.connect(url, autocommit=True) as c:
+            c.execute("CREATE SCHEMA core")
+            c.execute("CREATE TABLE core.migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
+            dela_db.apply_pending(c, before)
+        with dela_db.session(url, "system", "test") as c:
+            c.execute("INSERT INTO crm.users (id, name, role) VALUES ('sasha', 'Саша', 'owner')")
+            pid = c.execute("INSERT INTO crm.projects (name, sphere, kind, owner_id) VALUES ('Вектор', 'work', 'client', 'sasha') "
+                            "RETURNING id").fetchone()["id"]
+            did = c.execute("INSERT INTO crm.deals (project_id, name, stage, created_at) VALUES (%s, 'Вектор: заём', 'active', "
+                            "'2026-10-01') RETURNING id", (pid,)).fetchone()["id"]
+            c.execute("INSERT INTO crm.interactions (at, kind, summary, project_id, source, owner_id) VALUES "
+                      "('2026-10-05T12:00:00+03:00', 'call', 'созвон', %s, 'web', 'sasha')", (pid,))
+            c.execute("INSERT INTO tasks.tasks (title, project_id, owner_id, created_by) VALUES ('Вектор: договор', %s, 'sasha', 'sasha')",
+                      (pid,))
+            rev = c.execute("SELECT rev FROM crm.interactions").fetchone()["rev"]
+        with psycopg.connect(url, autocommit=True) as c:
+            assert dela_db.apply_pending(c, files)[0] == "dela_0022.sql"
+        with dela_db.session(url, "sasha", "test") as c:
+            row = c.execute("SELECT mention, rev, deal_id FROM crm.interactions").fetchone()
+            assert (row["mention"], row["rev"], row["deal_id"]) == (False, rev, None)
+            assert c.execute("SELECT crm.only_deal(%s) AS d", (pid,)).fetchone()["d"] == did
+            assert c.execute("SELECT crm.deal_last_touch(%s) AS t", (did,)).fetchone()["t"].date() == dt.date(2026, 10, 5)
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as a:
+            a.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))

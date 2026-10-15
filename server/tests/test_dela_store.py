@@ -693,3 +693,57 @@ def test_surname_namesakes_are_a_real_question(dela):
     p = _sug(dela, "Петров: счёт", {"person_name": "Петров"}, auto=False)["suggestion"]["payload"]
     assert p["pick"] and {o.get("person_id") for o in p["options"]} >= {a, b}, p
     assert p["held"].startswith("на «Петров» похожи: "), p["held"]
+
+
+# ── Сделка дела из встречи и переписки (аудит 15.10.2026, №2; dela_0022) ─────────────────────────────────────
+
+
+def _deal(url, project_id, name, stage="active"):
+    r = ops(url, "sasha", {"op": "deal.create", "data": {"project_id": str(project_id), "name": name, "stage": stage}})[0]
+    assert r["ok"], r
+    return r["row"]["id"]
+
+
+def test_deal_name_finds_the_deal(dela):
+    """payload.deal_name (сверка встреч и разноска дайджеста) — сделка по точному имени среди живых сделок клиента;
+    чужое имя — без сделки, но дело встаёт само; клиента не назвали — единственная живая с таким именем, и её клиент."""
+    p, q = project(dela, "sasha", "Ромашка"), project(dela, "sasha", "Бета Групп")
+    model = _deal(dela, p, "Ромашка: модель")
+    _deal(dela, p, "Ромашка: аудит")
+    funds = _deal(dela, q, "Бета: фонды")
+    r = _sug(dela, "Ромашка: прислать модель", {"project_name": "Ромашка", "deal_name": "ромашка:  МОДЕЛЬ"})
+    assert r["suggestion"]["status"] == "accepted" and r["task"]["deal_id"] == model, r
+    r = _sug(dela, "Ромашка: чужое", {"project_name": "Ромашка", "deal_name": "Бета: фонды"})
+    assert r["suggestion"]["status"] == "accepted" and r["task"]["deal_id"] is None, r  # две живые — без сделки
+    assert r["suggestion"]["payload"]["held"] == ""  # неузнанная сделка самопринятию не мешает
+    r = _sug(dela, "Фонды: список", {"deal_name": "Бета: фонды"})
+    assert (r["task"]["deal_id"], r["task"]["project_id"]) == (funds, str(q)), r
+
+
+def test_automation_takes_single_live_deal_but_own_word_does_not(dela):
+    """Дело автоматики (встреча, переписка) у клиента с одной живой сделкой — её шаг; дело, сказанное самим владельцем
+    (task.create), и «Поправить» без сделки — без неё; две живые — без сделки."""
+    p = project(dela, "sasha", "Ромашка")
+    only = _deal(dela, p, "Ромашка: модель")
+    _deal(dela, p, "Ромашка: прошлое", stage="lead")
+    ops(dela, "sasha", {"op": "deal.set", "id": _deal(dela, p, "Ромашка: закрыто"), "set": {"outcome": "won"}})
+    # Пока живых две — сделки нет.
+    r = _sug(dela, "Ромашка: счёт", {"project_name": "Ромашка"})
+    assert r["task"]["deal_id"] is None
+    with store.db.session(dela, "system", "t") as c:
+        c.execute("UPDATE crm.deals SET stage = 'archive', outcome = 'paused' WHERE name = 'Ромашка: прошлое'")
+    r = _sug(dela, "Ромашка: прислать модель", {"project_name": "Ромашка"})
+    assert r["suggestion"]["status"] == "accepted" and r["task"]["deal_id"] == only, r
+    tg = ops(dela, "sasha", {"op": "suggestion.create", "suggestion": {
+        "for_user": "sasha", "kind": "create", "source": "telegram", "batch_ref": "digest:x", "quote": "…",
+        "payload": {"title": "Ромашка: ответить в чате", "project_name": "Ромашка"}}})[0]["suggestion"]
+    t = ops(dela, "sasha", {"op": "suggestion.decide", "id": tg["id"], "decision": "accept"})[0]["task"]
+    assert t["deal_id"] == only
+    # «Поправить» без сделки — слово владельца.
+    s = _sug(dela, "Ромашка: созвон", {"project_name": "Ромашка", "ask": "Это к модели?"}, auto=False)["suggestion"]
+    t = ops(dela, "sasha", {"op": "suggestion.decide", "id": s["id"], "decision": "accept", "set": {"deal_id": None}})[0]["task"]
+    assert t["deal_id"] is None
+    # Сказанное самим владельцем — без сделки.
+    t = ops(dela, "sasha", {"op": "task.create", "task": {"title": "Ромашка: подумать", "project_id": str(p)}})[0]["task"]
+    assert t["deal_id"] is None
+    assert "deal_steps" in store.FEATURES

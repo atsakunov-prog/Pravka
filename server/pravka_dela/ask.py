@@ -77,7 +77,7 @@ import re
 import time
 import uuid
 
-from . import db, krug, llm, parse, people, remind, store
+from . import crm, db, krug, llm, parse, people, remind, store
 
 log = logging.getLogger("dela.ask")
 
@@ -488,7 +488,9 @@ def _card(conn, scope: dict) -> tuple[list[str], dict | None]:
         if d.get("deal_type"):
             lines.append(f"Тип: {d['deal_type']}")
         lines.append("Команда ЗФ: " + (_names_of(conn, d["team_ids"]) if d.get("team_ids") else "(никого, кроме ведущего)"))
-        lines += ["Хронология сделки (свежие сверху):", *_timeline_lines(conn, "i.deal_id = %s", [d["id"]])]
+        # Хронология сделки — тем же правилом, что карточка в вебе (crm.deal_records, аудит №3): её записи и, пока сделка у
+        # клиента одна живая, записи клиента без сделки.
+        lines += ["Хронология сделки (свежие сверху):", *_timeline_lines(conn, "i.id IN (SELECT crm.deal_records(%s))", [d["id"]])]
         met = _meeting_lines(conn, "m.deal_id = %s", [d["id"]])
         if met:
             lines += ["Встречи по ней (свежие сверху):", *met]
@@ -639,15 +641,18 @@ def _snapshot(user: str, talk_id, text: str) -> str:
 
 def _deals_on_screen(conn, ids: list[str], visible: set[str]) -> list[str]:
     """Сделки на экране (Воронка, клиенты, человек) — по порядку экрана: стадия, клиент, кто ведёт, следующее дело.
-    Деньги — не здесь: правке они не нужны, а crm.v_deals прячет их от тех, кому не положено."""
+    Деньги — не здесь: правке они не нужны, а crm.v_deals прячет их от тех, кому не положено. Следующее дело — тем же
+    правилом, что Воронка (crm.STEP, аудит №2): её дело, а пока сделка у клиента одна живая — и дело клиента без сделки
+    («дело клиента»)."""
     if not ids:
         return []
     rows = {str(d["id"]): d for d in conn.execute(
         "SELECT d.*, p.name AS project_name FROM crm.v_deals d JOIN crm.projects p ON p.id = d.project_id "
         "WHERE d.id = ANY(%s::uuid[])", (ids,)).fetchall()}
-    nxt = {str(r["deal_id"]): r for r in conn.execute(
-        "SELECT DISTINCT ON (deal_id) deal_id, num, title, due_date FROM tasks.tasks WHERE deal_id = ANY(%s::uuid[]) "
-        "AND status = 'open' ORDER BY deal_id, due_date NULLS LAST, num", (ids,)).fetchall()}
+    nxt = {str(r["did"]): r for r in conn.execute(
+        "SELECT DISTINCT ON (d.id) d.id AS did, t.num, t.title, t.due_date, t.deal_id IS NULL AS via_client "
+        "FROM crm.deals d JOIN tasks.tasks t ON t.status = 'open' AND " + crm.step() + " "
+        "WHERE d.id = ANY(%s::uuid[]) ORDER BY d.id, t.deal_id IS NULL, t.due_date NULLS LAST, t.num", (ids,)).fetchall()}
     out = []
     for i in ids:
         d = rows.get(i)
@@ -655,6 +660,7 @@ def _deals_on_screen(conn, ids: list[str], visible: set[str]) -> list[str]:
             continue
         n = nxt.get(i)
         step = (f"следующее дело #{n['num']} {n['title']}" + (f" (срок {n['due_date'].isoformat()})" if n["due_date"] else "")
+                + (" — дело клиента без сделки" if n["via_client"] else "")
                 if n else "нет следующего дела" if d["stage"] != "archive" else "")
         out.append(("в окне · " if i in visible else "") + " · ".join(
             x for x in [_deal_line(conn, d), f"клиент {d['project_name']}", step] if x))

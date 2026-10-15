@@ -311,6 +311,7 @@
       "project_name": "Альфа Групп",
       "org_id": null,
       "stage_since": "2026-10-05",
+      "solo": false,
       "open_tasks": 0,
       "next_task": null,
       "last_touch": null,
@@ -431,9 +432,12 @@
       "duration_min": null,
       "deleted_at": null,
       "deal_name": "Альфа: фонды",
-      "project_name": "Альфа Групп"
+      "project_name": "Альфа Групп",
+      "mention": false
      }
     ],
+    "meetings": [],
+    "meetings_n": 0,
     "deals": [
      {
       "id": "1082327c-9cee-49b9-94b6-ecd6d701d206",
@@ -523,6 +527,7 @@
   },
   "deal": {
    "request": "GET /api/view/deal?deal_id=<deal_id>",
+   "_": "15.10.2026 (аудит №2, №3, №7, №28; dela_0022, флаг deal_steps): пока сделка у клиента одна живая (deal.solo), её шаги — и открытые дела клиента без сделки (в open и next_task у них via_client: true — «дело клиента»), её хронология — и записи клиента без сделки (не из Notion, не раньше заведения сделки), last_touch — их последняя дата без упоминаний (mention: true — клиента назвали в сводке Telegram, его чата в окне не было). meetings — встречи по карточке встречи (до 50, свежие сверху; всего — meetings_n), только владельцу встреч.",
    "response": {
     "deal": {
      "id": "de2f9b8f-eb9b-443a-bfc8-992c5534fa85",
@@ -560,6 +565,7 @@
      "project_name": "Альфа Групп",
      "org_id": null,
      "stage_since": "2026-10-05",
+     "solo": false,
      "open_tasks": 2,
      "next_task": {
       "id": "5a59065b-e8aa-4fe3-b0a4-770017ed9038",
@@ -567,7 +573,8 @@
       "title": "Иван: прислать модель",
       "due_date": "2026-10-02",
       "owner_id": "sasha",
-      "ball": "waiting"
+      "ball": "waiting",
+      "via_client": false
      },
      "last_touch": "2026-10-04T19:10:25+03:00",
      "last_task_move": "2026-10-05T19:10:26+03:00",
@@ -621,7 +628,8 @@
       "person_name": "Иван Петров",
       "requested_by_short": null,
       "overdue": true,
-      "now_": null
+      "now_": null,
+      "via_client": false
      }
     ],
     "done": [],
@@ -666,9 +674,12 @@
       "duration_min": null,
       "deleted_at": null,
       "deal_name": "Альфа: фонды",
-      "project_name": "Альфа Групп"
+      "project_name": "Альфа Групп",
+      "mention": false
      }
     ],
+    "meetings": [],
+    "meetings_n": 0,
     "history": [
      {
       "at": "2026-10-05T19:10:25+03:00",

@@ -995,6 +995,8 @@ a.src-mark:hover { color: var(--accent); }
 .board .dtile.dragging, .dragging { opacity: .45; }
 .next { color: var(--faint); font-size: 13px; margin-top: 3px; }
 .next.none { color: var(--warn); font-weight: 500; }
+/* Дело клиента без проекта — шаг единственного живого проекта клиента (аудит №2): подпись тише самого дела. */
+.via-client { color: var(--faint); font-weight: 400; }
 .out-won { color: var(--ok); font-weight: 600; }
 .out-lost { color: var(--faint); text-decoration: line-through; }
 .out-paused, .out-none { color: var(--faint); }
@@ -1039,6 +1041,8 @@ a.src-mark:hover { color: var(--accent); }
 .tl-row { display: grid; grid-template-columns: 54px 1fr auto; gap: 10px; padding: 10px 14px 10px 16px; font-size: 14px; }
 .rows > .tl-row + .tl-row { border-top: 1px solid var(--line); }
 .tl-row.work { color: var(--muted); }
+/* Упоминание в сводке Telegram (аудит №28): не контакт — тише остальных записей. */
+.tl-row.mention .tl-body, .tl-row.mention .tl-head { color: var(--muted); }
 .tl-when { color: var(--faint); font-size: 13px; padding-top: 1px; }
 .tl-kind { color: var(--muted); font-size: 13px; display: inline-flex; align-items: center; gap: 4px; }
 .tl-kind .kv-i { width: 13px; height: 13px; }

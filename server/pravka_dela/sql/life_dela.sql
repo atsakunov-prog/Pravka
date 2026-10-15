@@ -59,16 +59,22 @@ SELECT d.name, p.name AS project, d.stage, d.outcome, d.lost_reason, d.closed_on
        (SELECT round(sum(pm.amount_kop) / 100.0) FROM crm.payments pm WHERE pm.deal_id = d.id AND pm.paid_on IS NOT NULL AND pm.cancelled_at IS NULL) AS paid_rub,
        (SELECT round(sum(pm.amount_kop) / 100.0) FROM crm.payments pm WHERE pm.deal_id = d.id AND pm.paid_on IS NULL AND pm.cancelled_at IS NULL) AS unpaid_rub,
        crm.stage_since(d.id) AS stage_since,
-       (SELECT max(i.at) FROM crm.interactions i WHERE i.deal_id = d.id AND i.deleted_at IS NULL) AS last_touch,
+       -- Последний контакт и шаги сделки — тем же правилом, что веб и телефон (аудит №2, №7, dela_0022): её записи и дела
+       -- плюс, пока сделка у клиента одна живая, записи и открытые дела клиента без сделки; упоминания — не контакт.
+       crm.deal_last_touch(d.id) AS last_touch,
        d.wheel, d.ball, d.next_step, d.my_view, d.ideas, d.log,
-       (SELECT count(*) FROM tasks.tasks t WHERE t.deal_id = d.id AND t.status = 'open') AS open_tasks,
+       (SELECT count(*) FROM tasks.tasks t
+         WHERE t.status = 'open'
+           AND (t.deal_id = d.id
+                OR (t.deal_id IS NULL AND t.project_id = d.project_id AND crm.only_deal(d.project_id) = d.id
+                    AND NOT EXISTS (SELECT 1 FROM tasks.krug k WHERE k.id = t.id AND k.kind = 'task' AND k.goal)))) AS open_tasks,
        d.updated_at, d.id, d.project_id, d.description, d.folder_url, d.files
 FROM crm.deals d
 JOIN crm.projects p ON p.id = d.project_id
 LEFT JOIN crm.people lp ON lp.id = d.lead_person_id
 LEFT JOIN crm.people sp ON sp.id = d.source_person_id
 WHERE crm.sees_project(crm.owner_id(), d.project_id);
-COMMENT ON VIEW life.deals IS 'Сделки CRM (бывшие «Сделки» Notion). stage: lead, proposal (КП), mandate, active, closing, archive; у архива outcome: won (сделали), lost (проиграли), paused (заморожено). fee_rub — гонорар ЗФ всего, retainer_rub — в месяц, success_pct — процент успеха; probability — вероятность (пустая по стадии подставлена). paid_rub / unpaid_rub — из оплат (life.payments). lead и team — команда ЗФ, people — люди клиента. description — что за проект словами; folder_url и files — папка и документы ссылками. next_step, ball, log — тексты из Notion до 04.10.2026; живой следующий шаг — открытые дела сделки (life.tasks.deal).';
+COMMENT ON VIEW life.deals IS 'Сделки CRM (бывшие «Сделки» Notion). stage: lead, proposal (КП), mandate, active, closing, archive; у архива outcome: won (сделали), lost (проиграли), paused (заморожено). fee_rub — гонорар ЗФ всего, retainer_rub — в месяц, success_pct — процент успеха; probability — вероятность (пустая по стадии подставлена). paid_rub / unpaid_rub — из оплат (life.payments). lead и team — команда ЗФ, people — люди клиента. description — что за проект словами; folder_url и files — папка и документы ссылками. next_step, ball, log — тексты из Notion до 04.10.2026; живой следующий шаг — открытые дела сделки (life.tasks.deal), а пока сделка у клиента одна живая — и открытые дела клиента без сделки (их считает open_tasks). last_touch — последний контакт: самая свежая запись хронологии сделки (и записи клиента без сделки, пока сделка одна; не из Notion), упоминания не в счёт.';
 
 CREATE OR REPLACE VIEW life.payments AS
 SELECT d.name AS deal, p.name AS project, pm.kind, pm.title, round(pm.amount_kop / 100.0) AS amount_rub,
@@ -85,12 +91,15 @@ SELECT pe.name, pe.short, pe.aliases, o.name AS org, pe.role, pe.phones, pe.emai
        CASE WHEN pe.birth_day IS NOT NULL THEN lpad(pe.birth_day::text, 2, '0') || '.' || lpad(pe.birth_month::text, 2, '0')
             || coalesce('.' || pe.birth_year, '') END AS birthday,
        pe.source, pe.seeks, pe.offers, pe.traits, pe.cadence, pe.hub, pe.user_id, pe.note, pe.archived_at,
-       (SELECT max(i.at) FROM crm.interactions i WHERE pe.id = ANY (i.person_ids) AND i.deleted_at IS NULL) AS last_contact,
+       -- Упоминание в сводке Telegram (mention, dela_0022) — не контакт; чужие приватные записи — не в счёт.
+       (SELECT max(i.at) FROM crm.interactions i WHERE pe.id = ANY (i.person_ids) AND i.deleted_at IS NULL AND NOT i.mention
+           AND (i.owner_id = crm.owner_id()
+                OR (NOT i.private AND i.project_id IS NOT NULL AND crm.sees_project(crm.owner_id(), i.project_id)))) AS last_contact,
        pe.id, pe.org_id
 FROM crm.people pe
 LEFT JOIN crm.orgs o ON o.id = pe.org_id
 WHERE crm.sees_person(crm.owner_id(), pe.id);
-COMMENT ON VIEW life.people IS 'Люди: команда, семья, клиенты, контакты (бывшие «Контакты» Notion). cadence — как часто видеться (month, quarter, year, none); last_contact — последнее взаимодействие.';
+COMMENT ON VIEW life.people IS 'Люди: команда, семья, клиенты, контакты (бывшие «Контакты» Notion). cadence — как часто видеться (month, quarter, year, none); last_contact — последнее взаимодействие (упоминание в сводке Telegram — не взаимодействие).';
 
 CREATE OR REPLACE VIEW life.orgs AS
 SELECT o.name, o.aliases, o.kind, o.note, o.archived_at, o.id
@@ -105,14 +114,16 @@ SELECT i.at, (i.at AT TIME ZONE 'Europe/Moscow')::date AS day, i.kind, i.summary
        ARRAY(SELECT coalesce(pe.short, pe.name) FROM crm.people pe WHERE pe.id = ANY (i.person_ids)) AS people,
        i.source, i.source_ref, i.id, i.project_id,
        -- Дайджест Telegram (dela_0018): пункт сводки у человека и клиента — source digest, ссылка на сводку — до «#».
-       i.private, CASE WHEN i.source = 'digest' THEN split_part(i.source_ref, '#', 1) END AS digest_ref
+       i.private, CASE WHEN i.source = 'digest' THEN split_part(i.source_ref, '#', 1) END AS digest_ref,
+       -- Упоминание (dela_0022): клиент или человек назван в теме сводки, а его чата в окне нет — не контакт.
+       i.mention
 FROM crm.interactions i
 LEFT JOIN crm.projects p ON p.id = i.project_id
 LEFT JOIN crm.deals d ON d.id = i.deal_id
 WHERE i.deleted_at IS NULL
   AND (i.owner_id = crm.owner_id()
        OR (NOT i.private AND i.project_id IS NOT NULL AND crm.sees_project(crm.owner_id(), i.project_id)));
-COMMENT ON VIEW life.interactions IS 'Хронология контактов: звонки, встречи, переписка, заметки (бывший «Лог взаимодействий» Notion); source digest — пункты дайджеста Telegram (digest_ref — сводка, целиком — инструмент digest).';
+COMMENT ON VIEW life.interactions IS 'Хронология контактов: звонки, встречи, переписка, заметки (бывший «Лог взаимодействий» Notion); source digest — пункты дайджеста Telegram (digest_ref — сводка, целиком — инструмент digest); mention — упоминание (клиента или человека назвали в теме сводки, а его чата в окне не было): в хронологии есть, контактом не считается.';
 
 CREATE OR REPLACE VIEW life.suggestions AS
 SELECT s.kind, s.status, s.payload ->> 'title' AS title, s.payload, s.source, s.source_ref, s.quote,
