@@ -5001,7 +5001,7 @@ function aboutBox(value, placeholder, save) {
 
 // ── Люди: с двух сторон, добавление — поиском ───────────────────────────
 /** Колонка людей: плашки (щелчок — откуда он и должность, крестик — убрать отсюда) и «+ человек». */
-function sideCol(title, list, { remove, add, mark, empty, note } = {}) {
+function sideCol(title, list, { remove, removable, add, mark, empty, note } = {}) {
   return el('div', { class: 'side-col' },
     el('div', { class: 'sc-h' }, title, list.length ? el('span', { class: 'n' }, list.length) : null),
     el('div', { class: 'sc-chips' },
@@ -5009,7 +5009,7 @@ function sideCol(title, list, { remove, add, mark, empty, note } = {}) {
         el('button', { class: 'pc-main', title: 'Откуда он, должность', onclick: (e) => personPop(e.currentTarget, x, mark && mark.acts ? mark.acts(x) : null) },
           avatar(x), el('span', { class: 'pc-name' }, personName(x)),
           mark && mark.word(x) ? el('span', { class: 'pc-role lead' }, mark.word(x)) : x.role ? el('span', { class: 'pc-role' }, x.role) : null),
-        remove ? el('button', { class: 'pc-x', title: 'Убрать отсюда', onclick: () => remove(x) }, icon('x', 11)) : null)),
+        remove && (!removable || removable(x)) ? el('button', { class: 'pc-x', title: 'Убрать отсюда', onclick: () => remove(x) }, icon('x', 11)) : null)),
       !list.length ? el('span', { class: 'faint' }, empty || 'никого') : null,
       add ? el('button', { class: 'pchip add', onclick: (e) => add(e.currentTarget) }, icon('plus', 12), 'человек') : null),
     note ? el('div', { class: 'sc-note' }, note) : null);
@@ -5412,6 +5412,9 @@ function renderDeal(id) {
 
   // С двух сторон: люди клиента и команда (ведущий — первым, с пометкой).
   const clientSide = (d.person_ids || []).map(person).filter(Boolean);
+  // Состав команды правит хозяин проекта (аудит №11, crm.grants_project): владелец Дел или хозяин клиента. Старый сервер
+  // (без флага privacy) этого правила не знает — тогда как раньше.
+  const grants = !privacyOn() || S.me.role === 'owner' || (p && p.owner_id === S.me.user);
   const teamIds = [d.lead_person_id, ...(d.team_ids || [])].filter((x, k, a) => x && a.indexOf(x) === k);
   const teamSide = teamIds.map(person).filter(Boolean);
   const newPerson = async (name, field) => {
@@ -5425,7 +5428,7 @@ function renderDeal(id) {
       add: (a) => personSearchPop(a, { title: 'Кто от клиента', base: () => (p ? clientPeopleOf(p) : []), exclude: d.person_ids || [],
         pick: (pid) => save('person_ids', [...(d.person_ids || []), pid]), create: (name) => newPerson(name, 'person_ids') }),
     }),
-    sideCol('Команда', teamSide, {
+    grants ? sideCol('Команда', teamSide, {
       mark: {
         word: (x) => (x.id === d.lead_person_id ? 'ведёт' : ''),
         acts: (x) => (x.id === d.lead_person_id ? null : el('button', { onclick: () => { closePop(); setDeal(d.id, { lead_person_id: x.id, team_ids: [...new Set([...(d.team_ids || []), d.lead_person_id].filter((y) => y && y !== x.id))] }); } }, 'Ведёт проект', el('span', { class: 'k' }, '★'))),
@@ -5435,6 +5438,14 @@ function renderDeal(id) {
         pick: (pid) => (d.lead_person_id ? save('team_ids', [...(d.team_ids || []), pid]) : save('lead_person_id', pid)),
         create: (name) => newPerson(name, 'team_ids') }),
       empty: 'никого — первый станет ведущим',
+    }) : sideCol('Команда', teamSide, {
+      // Не хозяину проекта (аудит №11): кто из команды на сделке — тем и открыт клиент, это решает хозяин. Себя убрать —
+      // можно; коллег ставить, убирать и назначать ведущим — нет (сервер откажет словами и сам).
+      mark: { word: (x) => (x.id === d.lead_person_id ? 'ведёт' : ''), acts: () => null },
+      removable: (x) => x.user_id === S.me.user || x.id === S.me.person_id,
+      remove: (x) => (x.id === d.lead_person_id ? save('lead_person_id', null) : save('team_ids', (d.team_ids || []).filter((y) => y !== x.id))),
+      empty: 'никого',
+      note: 'кого из команды ставить на проект — решает Саша',
     }));
 
   // Дела: следующий шаг — открытое дело проекта; без него проект застынет. Пока проект у клиента один живой, его шаги —

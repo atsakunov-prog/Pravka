@@ -480,3 +480,58 @@ def test_migration_22_over_deals_and_records(admin_dsn):
     finally:
         with psycopg.connect(admin_dsn, autocommit=True) as a:
             a.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
+
+
+# ── Доступ по сделке: пока живая, состав — хозяин проекта, синк знает (аудит №11, dela_0028) ────────
+
+
+def test_team_access_only_while_deal_is_live_and_owner_decides_who(team):
+    url = team["url"]
+    with dela_db.session(url, "system", "test") as c:
+        boris = c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Борис Тестов', 'Борис', 'sasha') "
+                          "RETURNING id").fetchone()["id"]
+        c.execute("INSERT INTO crm.users (id, name, role, person_id, clients) VALUES ('boris', 'Борис', 'member', %s, 'team')",
+                  (boris,))
+        ivan = c.execute("INSERT INTO crm.people (name, owner_id) VALUES ('Иван Тестов', 'sasha') RETURNING id").fetchone()["id"]
+    p = project(url, "sasha", "ООО Ромашка")
+    t = task(url, "sasha", "Ромашка: договор", project_id=p)
+    d = deal(url, "sasha", p, "Ромашка: модель", lead_person_id=str(team["alena"]))
+
+    def sees(user):
+        with as_(url, user) as c:
+            return bool(c.execute("SELECT 1 FROM crm.projects WHERE id = %s", (p,)).fetchone()) and bool(
+                c.execute("SELECT 1 FROM tasks.tasks WHERE id = %s", (t["id"],)).fetchone())
+
+    seq = store.sync(url, "alena", 0)["seq"]
+    assert sees("alena")
+    # Сделка ушла в архив — клиента больше не видно, событие — полный синк.
+    ops(url, "sasha", {"op": "deal.set", "id": d["id"], "set": {"stage": "archive"}})
+    assert not sees("alena")
+    s = store.sync(url, "alena", seq)
+    assert s["full"] and not any(x["id"] == str(t["id"]) for x in s["tasks"])
+    seq = s["seq"]
+    # Вернули в работу — снова видно, снова событие.
+    ops(url, "sasha", {"op": "deal.set", "id": d["id"], "set": {"stage": "active"}})
+    assert sees("alena")
+    s = store.sync(url, "alena", seq)
+    assert s["full"] and any(x["id"] == str(t["id"]) for x in s["tasks"])
+    # Алёна не ставит на сделку коллегу — ни в команду, ни ведущим, ни к людям клиента; человека клиента — ставит.
+    for field, val in (("team_ids", [str(boris)]), ("person_ids", [str(boris)]), ("lead_person_id", str(boris))):
+        bad = ops(url, "alena", {"op": "deal.set", "id": d["id"], "set": {field: val}})[0]
+        assert not bad["ok"] and "решает хозяин проекта" in bad["error"], (field, bad)
+    assert not sees("boris")
+    ok = ops(url, "alena", {"op": "deal.set", "id": d["id"], "set": {"person_ids": [str(ivan)]}})[0]
+    assert ok["ok"], ok
+    # Саша ставит коллегу — у него событие, и полный синк приносит старые дела клиента.
+    bseq = store.sync(url, "boris", 0)["seq"]
+    ops(url, "sasha", {"op": "deal.set", "id": d["id"], "set": {"team_ids": [str(boris)]}})
+    s = store.sync(url, "boris", bseq)
+    assert s["full"] and any(x["id"] == str(t["id"]) for x in s["tasks"])
+    # Себя убрать может каждый.
+    assert ops(url, "alena", {"op": "deal.set", "id": d["id"], "set": {"lead_person_id": None}})[0]["ok"]
+    assert not sees("alena") and sees("boris")
+    # Команда user поменяла доступ — событие этому человеку.
+    nseq = store.sync(url, "natasha", 0)["seq"]
+    with dela_db.session(url, "system", "test") as c:
+        c.execute("UPDATE crm.users SET clients = 'team' WHERE id = 'natasha'")
+    assert store.sync(url, "natasha", nseq)["full"]
