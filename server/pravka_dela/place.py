@@ -83,8 +83,9 @@ def resolve(conn, task: dict, num) -> str | None:
     """id цели, которую модель назвала делу номером (why_auto); None — не ставить.
 
     Не ставим: дело — само цель; у дела уже есть «Зачем»; дело в сделке или в проекте-клиенте (клиент висит на
-    цели целиком, у сделки «зачем» — она сама); цель чужая, закрыта, «ориентир» (no_steps) или это не цель и не
-    дело с шагами (то же, что разборщик Круга видит в своём списке ЦЕЛИ)."""
+    цели целиком, у сделки «зачем» — она сама); цель чужая, закрыта, «ориентир» (no_steps) или это не цель (то же,
+    что разборщик Круга видит в своём списке ЦЕЛИ). Дело с делами внутри (правило 26, 15.10.2026) — не цель: до того
+    «дело с шагами» тоже годилось, и драфт по клиенту ушёл бы моделью под клиентское дело как под цель дерева."""
     n = _int(num)
     if n <= 0:
         return None
@@ -94,7 +95,7 @@ def resolve(conn, task: dict, num) -> str | None:
         return None
     g = conn.execute(
         "SELECT id FROM tasks.v_tasks WHERE num = %s AND owner_id = %s AND status = 'open' AND id <> %s "
-        "AND NOT no_steps AND (goal OR steps_open > 0)", (n, t["owner_id"], task["id"])).fetchone()
+        "AND NOT no_steps AND goal", (n, t["owner_id"], task["id"])).fetchone()
     return g["id"] if g else None
 
 
@@ -124,11 +125,12 @@ def write_auto(conn, user: str, task: dict, num) -> bool:
 
 
 def targets(conn, owner: str) -> list[dict]:
-    """Узлы дерева, на которые вешают дела: открытые цели и дела с шагами. Ориентиры (no_steps) — тоже: под ними
-    бывают подцели; сами они в блоке помечены, а resolve под них не ставит."""
+    """Узлы дерева, на которые вешают дела: открытые цели. Ориентиры (no_steps) — тоже: под ними бывают подцели; сами
+    они в блоке помечены, а resolve под них не ставит. Дела с делами внутри — не узлы (правило 26): их дела внутри —
+    часть дела, а не дерево жизни, и названия клиентских дел в блок дерева не идут."""
     return conn.execute(
         "SELECT id, num, title, why_id, dirs, goal, rhythm, no_steps FROM tasks.v_tasks WHERE owner_id = %s "
-        "AND status = 'open' AND (goal OR steps_open > 0) ORDER BY num", (owner,)).fetchall()
+        "AND status = 'open' AND goal ORDER BY num", (owner,)).fetchall()
 
 
 def paths(rows: list[dict], known: list[dict]) -> dict:

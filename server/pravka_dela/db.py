@@ -70,7 +70,8 @@ APP_TABLES = {
 APP_VIEWS = ["tasks.v_tasks", "crm.v_deals", "crm.v_interactions", "crm.v_people", "crm.v_orgs"]
 APP_SEQUENCES = ["tasks.task_num"]
 # Архив жизни для страниц-двойников (dela_0016): не схема life, а узкие функции — с них снят PUBLIC, право — здесь.
-APP_FUNCTIONS = ["crm.life_rows(text, date, date)", "crm.life_ok()"]
+# Подъём родителя и его «Вернуть» (dela_0024, правило 26): пишут мимо RLS Круга — тоже только роли службы.
+APP_FUNCTIONS = ["crm.life_rows(text, date, date)", "crm.life_ok()", "tasks.nest_rise(uuid)", "tasks.nest_fall(uuid)"]
 
 
 def _sql_files() -> list[tuple[str, str]]:

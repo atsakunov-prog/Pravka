@@ -109,13 +109,14 @@ def movement(conn, user: str, today: dt.date) -> dict[str, dict]:
     """Движение за неделю по направлениям: закрытое дело — 1, закрытая цель — 3 (бриф 7.2, §6).
 
     Считается только в главном направлении дела (v_tasks.dirs[1]): метка движения не даёт. Радиус точки —
-    min(10, 3·√N): корень, чтобы тридцать мелких покупок в Быте не забивали шкалу. Цель — узел дерева или дело,
-    у которого были шаги.
+    min(10, 3·√N): корень, чтобы тридцать мелких покупок в Быте не забивали шкалу. Цель — узел дерева (goal). До
+    15.10.2026 целью считалось и дело, у которого были шаги, но с делами внутри дела (правило 26) так стало бы любое
+    клиентское дело с драфтом внутри — 3 очка и +1 к целям; на живой базе таких «родителей-дел» не было — история не
+    сдвинулась.
     """
     since = today - dt.timedelta(days=MOVE_DAYS - 1)
     rows = conn.execute(
-        "SELECT t.id, t.dirs, t.goal OR EXISTS (SELECT 1 FROM tasks.krug c WHERE c.why_id = t.id) AS goal "
-        "FROM tasks.v_tasks t WHERE t.owner_id = %s AND t.status = 'done' "
+        "SELECT t.id, t.dirs, t.goal FROM tasks.v_tasks t WHERE t.owner_id = %s AND t.status = 'done' "
         "AND (t.completed_at AT TIME ZONE 'Europe/Moscow')::date >= %s", (user, since)).fetchall()
     out: dict[str, dict] = {}
     for r in rows:
@@ -130,20 +131,42 @@ def movement(conn, user: str, today: dt.date) -> dict[str, dict]:
     return out
 
 
-def mine_from(items: list[dict], moved: dict[str, dict]) -> list[dict]:
+def toward_goal(links: dict) -> set:
+    """Шаги к целям: дела, у которых вверх по цепочке «Зачем» есть цель дерева. links — {id: (why_id, goal)} строк Круга
+    дел хозяина. Дело внутри обычного дела (правило 26), над которым целей нет (драфт для термшита клиенту), — не шаг
+    к цели: «Моё» — то, что хочу я, а не часть того, что ждёт клиент. Дело внутри дела, которое само ведёт к цели, — шаг."""
+    out = set()
+    for start in links:
+        x, n = links[start][0], 0
+        while x is not None and n < 60:
+            up = links.get(x)
+            if up is None:
+                break
+            if up[1]:
+                out.add(start)
+                break
+            x, n = up[0], n + 1
+    return out
+
+
+def mine_from(items: list[dict], moved: dict[str, dict], toward: set | None = None) -> list[dict]:
     """«Моё» (бриф, §7; принцип «Делаю то, что хочу я»): до трёх открытых дел, которых никто не ждёт.
 
-    Кандидаты — «Хочу сам» (want — закреплённое руками) и шаги к целям (у дела есть «Зачем», своих открытых
-    шагов нет). Сами цели — не дела: их нет. Не «отбить» и не «мониторить»: там ждут люди, это не моё. Порядок:
-    закреплённое, потом шаги из направлений, где за неделю меньше всего движения, потом кто дольше ждёт.
+    Кандидаты — «Хочу сам» (want — закреплённое руками) и шаги к целям (вверх по «Зачем» есть цель — toward_goal;
+    своих открытых дел внутри нет). Сами цели — не дела: их нет. Не «отбить» и не «мониторить»: там ждут люди, это не
+    моё. Порядок: закреплённое, потом шаги из направлений, где за неделю меньше всего движения, потом кто дольше ждёт.
+    toward — id шагов к целям; None — как до 15.10.2026: любое дело с «Зачем».
     """
     def weight(t: dict) -> tuple:
         main = (t.get("dirs") or [None])[0]
         least = moved.get(main, {}).get("events", 0) if main else 0
         return (not t.get("want"), least, str(t.get("created_at") or ""), t.get("num") or 0)
 
+    def step(t: dict) -> bool:
+        return bool(t.get("why_id")) and not t.get("steps_open") and (toward is None or t["id"] in toward)
+
     pool = [t for t in items if t.get("status") == "open" and not t.get("goal") and not t.get("owed")
-            and t.get("ball") != "waiting" and (t.get("want") or (t.get("why_id") and not t.get("steps_open")))]
+            and t.get("ball") != "waiting" and (t.get("want") or step(t))]
     return sorted(pool, key=weight)[:MINE_MAX]
 
 
@@ -153,7 +176,9 @@ def mine(conn, user: str, today: dt.date, skip: set | frozenset = frozenset()) -
     items = conn.execute(
         "SELECT * FROM tasks.v_tasks WHERE owner_id = %s AND status = 'open' AND NOT goal AND NOT owed "
         "AND ball <> 'waiting' AND (want OR why_id IS NOT NULL)", (user,)).fetchall()
-    return mine_from([t for t in items if t["id"] not in skip], movement(conn, user, today))
+    links = {r["id"]: (r["why_id"], r["goal"]) for r in conn.execute(
+        "SELECT id, why_id, goal FROM tasks.krug WHERE kind = 'task' AND owner_id = %s", (user,)).fetchall()}
+    return mine_from([t for t in items if t["id"] not in skip], movement(conn, user, today), toward_goal(links))
 
 
 # ── Дерево ─────────────────────────────────────────────────────────────
@@ -208,8 +233,11 @@ def tree(conn, user: str, today: dt.date) -> dict:
             else:
                 break
 
-    def sort(items: list[dict]) -> list[dict]:
-        # Дела внутри дела — по месту среди соседей (pos, dela_0024; пусто — после, по номеру), как веб и телефон.
+    def sort(items: list[dict], by_pos: bool = False) -> list[dict]:
+        # Дела внутри обычного дела — по месту среди соседей (pos, dela_0024; пусто — после, по номеру), как веб и
+        # телефон; под целями и направлениями места нет (его там не ставят — старое место вынутого дела не в счёт).
+        if not by_pos:
+            return sorted(items, key=lambda c: (ORDER[c["kind"]], c.get("num") or 0, c.get("name") or ""))
         return sorted(items, key=lambda c: (ORDER[c["kind"]], c.get("pos") is None, c.get("pos") or 0, c.get("num") or 0,
                                             c.get("name") or ""))
 
@@ -222,7 +250,8 @@ def tree(conn, user: str, today: dt.date) -> dict:
             for k in ("rhythm", "project_name", "deal_name", "due_date", "owed", "ball", "want", "no_steps", "pos"):
                 if r.get(k):
                     n[k] = r[k]
-        below = sort([node(k, c, depth + 1) for k, c in kids.get(key, [])]) if depth < TREE_DEPTH else []
+        inside = kind == "t" and not r["goal"]
+        below = sort([node(k, c, depth + 1) for k, c in kids.get(key, [])], inside) if depth < TREE_DEPTH else []
         n["open"] = sum(c["open"] + (1 if c["kind"] == "task" else 0) for c in below)
         n["moved"] = moved.get(key, 0)
         if below:

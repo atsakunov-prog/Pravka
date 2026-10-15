@@ -244,17 +244,45 @@ const insideOf = (id) => all().filter((x) => x.why_id === id && isOpen(x) && !x.
  *  сегодня; позже — тот же; без срока — без срока. */
 const stepDue = (p) => (p.focus_on === S.today || (p.due_date && p.due_date <= S.today) ? S.today : p.due_date || null);
 const shortTitle = (s, n = 40) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
-/** В одном плоском списке дело внутри — прямо перед своим родителем (вложенное вложенного — перед ним). */
+/** В одном плоском списке дело внутри — прямо перед своим родителем (вложенное вложенного — перед ним). Дела внутри
+ *  одного дела, чьего родителя в списке нет, — подряд и по месту (pos), там, где стоит первое из них. */
 function stepsFirst(items) {
   const ids = new Set(items.map((t) => t.id));
   const under = (t) => t.why_id && t.why_id !== t.id && ids.has(t.why_id);
-  const kids = new Map();
-  for (const t of items) if (under(t)) { if (!kids.has(t.why_id)) kids.set(t.why_id, []); kids.get(t.why_id).push(t); }
-  if (!kids.size) return items;
+  const kids = new Map(), lone = new Map();
+  for (const t of items) {
+    const at = under(t) ? kids : parentOf(t) ? lone : null;
+    if (at) { if (!at.has(t.why_id)) at.set(t.why_id, []); at.get(t.why_id).push(t); }
+  }
+  if (!kids.size && ![...lone.values()].some((v) => v.length > 1)) return items;
   const out = [], placed = new Set();
   const place = (t) => { if (placed.has(t.id)) return; placed.add(t.id); for (const c of (kids.get(t.id) || []).sort(byPos)) place(c); out.push(t); };
-  for (const t of items) if (!under(t)) place(t);
+  for (const t of items) {
+    if (under(t)) continue;
+    const sibs = lone.get(t.why_id);
+    if (sibs && sibs.length > 1 && parentOf(t)) [...sibs].sort(byPos).forEach(place); else place(t);
+  }
   for (const t of items) place(t); // круг «Зачем» (база его не пускает) — всё равно никого не теряем
+  return out;
+}
+/** Верхний предок дела среди дел этого же списка (само дело — если его родителя в списке нет). По нему уровни
+ *  группировки кладут дело внутри туда же, где родитель (15.10.2026): иначе «Отбить» и «Запустить» растащили бы их,
+ *  и «прямо перед родителем» не вышло бы. */
+function topIn(items) {
+  const by = new Map(items.map((t) => [t.id, t]));
+  return (t) => {
+    let x = t;
+    for (let n = 0; n < 60; n++) { const p = x.why_id && x.why_id !== x.id ? by.get(x.why_id) : null; if (!p || p === t) break; x = p; }
+    return x;
+  };
+}
+/** Открытые дела внутри дел списка (все уровни, кроме тех, что и так в нём): [дело, глубина]. */
+function innerOf(list) {
+  const have = new Set(list.map((t) => t.id)), out = [];
+  const walk = (id, depth) => {
+    for (const c of insideOf(id)) { if (have.has(c.id)) continue; have.add(c.id); out.push([c, depth]); walk(c.id, depth + 1); }
+  };
+  for (const t of list) walk(t.id, 1);
   return out;
 }
 /** «Деревом»: корни списка (их родителя в списке нет) и дети по месту. Только дела из самого списка. */
@@ -276,10 +304,10 @@ function goalPath(g) {
   return [main ? dirName(main) : null, ...upOf(g).reverse().filter((x) => x.kind !== 'project').map((x) => x.title)]
     .filter(Boolean).join(' › ');
 }
-/** Движение за неделю по направлениям (как krug.movement): закрытое дело — 1, закрытая цель — 3; только главное. */
+/** Движение за неделю по направлениям (как krug.movement): закрытое дело — 1, закрытая цель — 3; только главное.
+ *  Цель — только узел дерева: дело с делами внутри (15.10.2026) — обычное дело, 1 очко (раньше «было у кого шаги» — 3). */
 function movement() {
   const since = D.add(S.today, -6);
-  const parents = new Set(all().map((x) => x.why_id).filter(Boolean));
   const m = {};
   for (const t of all()) {
     if (t.status !== 'done' || !isMine(t) || !t.completed_at || MSK_DAY(t.completed_at).day < since) continue;
@@ -287,15 +315,26 @@ function movement() {
     if (!k) continue;
     const x = m[k] || (m[k] = { done: 0, events: 0 });
     x.done++;
-    x.events += t.goal || parents.has(t.id) ? 3 : 1;
+    x.events += t.goal ? 3 : 1;
   }
   for (const x of Object.values(m)) x.radius = Math.min(10, Math.round(3 * Math.sqrt(x.events) * 10) / 10);
   return m;
 }
+/** Шаг к цели (как krug.toward_goal): вверх по «Зачем» есть цель дерева. Дело внутри обычного дела, над которым целей
+ *  нет (драфт для термшита клиенту, 15.10.2026), — не шаг к цели: «Моё» — то, что хочу я, а не то, чего ждёт клиент. */
+function towardGoal(t) {
+  for (let x = t, n = 0; x && x.why_id && n < 60; n++) {
+    const w = S.tasks.get(x.why_id);
+    if (!w || w.goal) return !!w;
+    x = w;
+  }
+  return false;
+}
 /** «Моё» (бриф, §7; принцип «Делаю то, что хочу я»): до трёх открытых дел, которых никто не ждёт — «Хочу сам»
- *  и шаги к целям (есть «Зачем», своих шагов нет); первым закреплённое, потом шаги из направлений, где за неделю
- *  меньше всего движения. Не «отбить» и не «мониторить»: там ждут люди. Цели — не дела. С 13.10.2026 — без того, что
- *  и так на виду: срок сегодня («Сегодня») или уже в «Сейчас». Правило — krug.mine_from и store.view_today. */
+ *  и шаги к целям (вверх по «Зачем» есть цель, своих открытых дел внутри нет); первым закреплённое, потом шаги из
+ *  направлений, где за неделю меньше всего движения. Не «отбить» и не «мониторить»: там ждут люди. Цели — не дела. С
+ *  13.10.2026 — без того, что и так на виду: срок сегодня («Сегодня») или уже в «Сейчас». Правило — krug.mine_from и
+ *  store.view_today. */
 const MINE_MAX = 3;
 function mineTasks() {
   if (!krugOn()) return [];
@@ -303,7 +342,7 @@ function mineTasks() {
   const withSteps = new Set(all().filter((x) => isOpen(x) && x.why_id).map((x) => x.why_id));
   const least = (t) => { const k = dirsOf(t)[0]; return k ? (mv[k] || {}).events || 0 : 0; };
   return deeds().filter((t) => isOpen(t) && isMine(t) && inSphere(t) && !t.owed && t.ball !== 'waiting'
-    && !isNow(t) && t.due_date !== S.today && (t.want || (t.why_id && !withSteps.has(t.id))))
+    && !isNow(t) && t.due_date !== S.today && (t.want || (t.why_id && !withSteps.has(t.id) && towardGoal(t))))
     .sort((a, b) => (b.want ? 1 : 0) - (a.want ? 1 : 0) || least(a) - least(b)
       || (a.created_at || '').localeCompare(b.created_at || '') || a.num - b.num)
     .slice(0, MINE_MAX);
@@ -339,7 +378,8 @@ function dirPop(anchor, t) { whyPop(anchor, t); }
 /** Выбор цели: открытые цели с путём от направления и поиском; сверху — «Новая цель» по набранному, без набранного —
  *  направления (повесить прямо на направление, «без зачем») и «Убрать «Зачем»». */
 function goalPop(anchor, { exclude = new Set(), current = null, pick, make, toDir, title = 'Зачем' }) {
-  const pool = all().filter((x) => isOpen(x) && isMine(x) && !exclude.has(x.id) && !x.no_steps && (x.goal || stepsOf(x.id).length))
+  // Только цели дерева (15.10.2026): дело с делами внутри целью не стало — вкладывают «Вложить в…».
+  const pool = all().filter((x) => isOpen(x) && isMine(x) && !exclude.has(x.id) && !x.no_steps && x.goal)
     .map((x) => ({ x, path: goalPath(x) })).sort((a, b) => a.path.localeCompare(b.path, 'ru'));
   const done = (fn) => (e) => { e.preventDefault(); closePop(); fn(); };
   setTimeout(() => {
@@ -1808,7 +1848,12 @@ const waitLinks = () => {
  *  уже взятых в «Сейчас». Просроченное сюда само не попадает — в шапке только его число ссылкой во «Все дела». */
 function renderNow() {
   const now = nowTasks().sort(byTime);
-  const taken = new Set(now.map((t) => t.id));
+  // Дела внутри дел из «Сейчас» (15.10.2026: «Для этого» у дела в «Сейчас» ставит дело внутри на сегодня, а не в
+  // «Сейчас»): открытые — прямо над родителем в блоке «Сейчас», отступом; в предел пяти не считаются и в «Сегодня»
+  // ниже не повторяются. Одно правило с телефоном (DelaSteps.inner, «Сейчас» вкладки).
+  const inner = nestOn() ? innerOf(now) : [];
+  const depth = new Map(inner.map(([t, d]) => [t.id, d]));
+  const taken = new Set([...now.map((t) => t.id), ...depth.keys()]);
   const today = todayTasks().filter((t) => !taken.has(t.id));
   const done = doneTodayN();
   return [head('Сейчас', [D.long(S.today).toLowerCase(), `в «Сейчас» ${now.length} из ${NOW_MAX}`, done ? 'закрыто ' + done : null, lateLink(),
@@ -1816,7 +1861,8 @@ function renderNow() {
     el('div', { class: 'body' },
       principleLine(),
       quickAdd({}, { placeholder: '«это в Сейчас», «П1 поставь, срок пятница», «Гуркин ждёт звонка — на сегодня»' }),
-      groupBox('Сейчас', now, { cls: 'grp-now', n: false, sub: 'отметил сам — сделать сегодня', lead: () => icon('bolt', 17),
+      groupBox('Сейчас', [...now, ...inner.map(([t]) => t)], { cls: 'grp-now', n: false, sub: 'отметил сам — сделать сегодня', lead: () => icon('bolt', 17),
+        rowOpt: (t) => (depth.has(t.id) ? { indent: depth.get(t.id) } : {}),
         before: now.length ? null : el('div', { class: 'hint-line' },
           'Пусто. Возьми до пяти дел на сегодня — молния у дела или в карточке, галочки и «В «Сейчас»» внизу или «!сейчас» в строке.') }),
       newBox(),
@@ -1974,9 +2020,12 @@ function nested(items, levels, depth = 0) {
   items = [...items].sort(byTime);
   const lv = levels[depth];
   if (!lv) return depth === 0 ? groupBox(null, items, {}, levels) : el('div', { class: 'rows' }, taskRows(items, levels));
+  // Дело внутри дела — в группе своего верхнего предка из этого списка (15.10.2026), кроме уровня «время»: там срок
+  // дела внутри и есть суть («сегодня», а родитель — в пятницу).
+  const top = lv === 'date' ? null : topIn(items);
   const buckets = new Map();
   for (const t of items) {
-    const [key, title, opts] = levelKey(t, lv);
+    const [key, title, opts] = levelKey(top ? top(t) : t, lv);
     if (!buckets.has(key)) buckets.set(key, { title, opts, items: [] });
     buckets.get(key).items.push(t);
   }
@@ -2002,15 +2051,15 @@ function groupBox(title, items, opts = {}, by) {
     opts.sum && !opts.act ? el('span', { class: 'sum' }, opts.sum) : null,
     opts.act ? el('span', { class: 'act' }, opts.act) : opts.late && items.length > 1 ? el('span', { class: 'act' },
       el('button', { class: 'chip-btn', onclick: (e) => reschedulePop(e.currentTarget, items.map((t) => t.id)) }, 'Перенести все')) : null) : null;
-  return el('div', { class: 'group' + (opts.cls ? ' ' + opts.cls : '') }, h, opts.before || null, taskRows(items, by, opts.chips));
+  return el('div', { class: 'group' + (opts.cls ? ' ' + opts.cls : '') }, h, opts.before || null, taskRows(items, by, opts.chips, opts.rowOpt));
 }
 
 /** «Деревом» во «Всех делах» (15.10.2026): родитель → дела внутри него из того же списка — на время отрисовки вида. */
 let NEST = null;
 /** Строки дел одного списка. Плоско — дело внутри стоит прямо перед своим родителем («Сейчас», «Сегодня», группы);
  *  «Деревом» — родитель, под ним отступом дела внутри по месту, плюсик сворачивает (помнит браузер). */
-function taskRows(items, by, chips) {
-  if (!NEST) return stepsFirst(items).map((t) => taskRow(t, by, chips && chips(t)));
+function taskRows(items, by, chips, rowOpt) {
+  if (!NEST) return stepsFirst(items).map((t) => taskRow(t, by, chips && chips(t), rowOpt ? rowOpt(t) : {}));
   const out = [];
   const walk = (t, depth, seen) => {
     const kids = (NEST.get(t.id) || []).filter((c) => !seen.has(c.id));
@@ -2020,7 +2069,7 @@ function taskRows(items, by, chips) {
     out.push(dropTo(dragFrom(row, 'task', t.id), { nest: t.id }));
     if (open) for (const c of kids) { seen.add(c.id); walk(c, depth + 1, seen); }
   };
-  for (const t of items) walk(t, 0, new Set([t.id]));
+  for (const t of stepsFirst(items)) walk(t, 0, new Set([t.id])); // корни: соседи без родителя в списке — по месту
   return out;
 }
 
@@ -2436,14 +2485,17 @@ function markDone(id, on) {
   r.querySelector('.tick')?.classList.toggle('done', on);
 }
 
+/** Дело внутри снова открыто — подъём родителя отменён, срок вернулся (fell, 15.10.2026): «срок «…» — снова 20.10». */
+const fellWords = (res) => (res || []).map((r) => r && r.fell).filter(Boolean)
+  .map((r) => `срок «${r.title}» — снова ` + (r.due_date ? D.ddmm(r.due_date) : 'без срока')).join(' · ');
 async function toggleDone(list) {
   const again = list.filter((t) => finishing.has(t.id));
   if (again.length) {
     again.forEach((t) => { finishing.delete(t.id); markDone(t.id, false); });
     await Promise.allSettled(again.map((t) => inflight.get(t.id)));
     try {
-      await ops(again.map((t) => ({ op: 'task.reopen', id: t.id })));
-      toast('Вернул в работу');
+      const back = fellWords(await ops(again.map((t) => ({ op: 'task.reopen', id: t.id }))));
+      toast('Вернул в работу' + (back ? ' · ' + back : ''));
     } catch (e) { fail(e); }
     render();
     return;
@@ -2459,7 +2511,8 @@ async function toggleDone(list) {
     const res = await sent.finally(() => target.forEach((t) => { if (inflight.get(t.id) === sent) inflight.delete(t.id); }));
     // Сделано последнее дело внутри (15.10.2026): родитель не закрылся, а поднялся — сервер говорит, какой (raised).
     const up = (res || []).map((r) => r && r.raised).filter(Boolean);
-    const upWords = up.map((r) => `всё внутри сделано — теперь: «${r.title}»` + (r.moved ? ', на сегодня' : '')).join(' · ');
+    const upWords = up.map((r) => `всё внутри сделано — теперь: «${r.title}»` + (r.moved ? ', на сегодня' : '')).join(' · ')
+      || fellWords(res);
     if (open.length && !target.some((t) => finishing.has(t.id))) return; // передумал, пока сервер отвечал
     S.sel.clear();
     renderBulk();
@@ -2481,14 +2534,16 @@ async function toggleDone(list) {
   }
 }
 
+/** set — поля для всех дел или функция id → поля (своё у каждого: «Зачем» у дела внутри дела не снимается). */
 async function setFields(ids, set, msg) {
+  const sets = new Map(ids.map((id) => [id, typeof set === 'function' ? set(id) : set]));
   const before = ids.map((id) => ({ ...S.tasks.get(id) }));
   try {
-    await ops(ids.map((id) => ({ op: 'task.set', id, set, was: Object.fromEntries(Object.keys(set).map((k) => [k, S.tasks.get(id)[k] ?? null])) })));
+    await ops(ids.map((id) => ({ op: 'task.set', id, set: sets.get(id), was: Object.fromEntries(Object.keys(sets.get(id)).map((k) => [k, S.tasks.get(id)[k] ?? null])) })));
     if (msg) S.sel.clear();
     render();
     if (msg) {
-      toast(msg, () => ops(before.map((t) => ({ op: 'task.set', id: t.id, set: Object.fromEntries(Object.keys(set).map((k) => [k, t[k] ?? null])) }))));
+      toast(msg, () => ops(before.map((t) => ({ op: 'task.set', id: t.id, set: Object.fromEntries(Object.keys(sets.get(t.id)).map((k) => [k, t[k] ?? null])) }))));
     }
   } catch (e) { fail(e); render(); }
 }
@@ -3167,7 +3222,8 @@ function turnView(t) {
       : back.length ? el('div', { class: 'cr-turn-acts' }, el('button', { class: 'link-btn',
         title: dropped ? 'Отклонённое остаётся отклонённым — вернуть его нельзя' : 'Вернуть всё, что сделано этой репликой',
         onclick: async () => {
-          try { await ops(back); t.undone = true; render(); toast('Вернул как было'); } catch (e) { fail(e); }
+          // «Вернуть» сделанного последним дела внутри возвращает и срок родителя — это делает сервер (fell).
+          try { const fw = fellWords(await ops(back)); t.undone = true; render(); toast('Вернул как было' + (fw ? ' · ' + fw : '')); } catch (e) { fail(e); }
         } }, dropped ? 'Вернуть принятое' : 'Вернуть')) : null);
 }
 
@@ -3772,7 +3828,10 @@ function autoItem(s, seen) {
       : Object.keys(was).length ? [{ op: 'task.set', id: t.id, set: was }] : [];
     if (r.comment_id) list.push({ op: 'comment.delete', id: r.comment_id });
     list.push({ op: 'suggestion.seen', ids: [s.id] });
-    try { await ops(list); toast((s.kind === 'close' ? 'Вернул в работу: ' : 'Вернул как было: ') + (was.title || t.title)); render(); } catch (e) { fail(e); }
+    try {
+      const fw = fellWords(await ops(list)); // закрытое само было последним внутри — родителю вернулся срок (fell)
+      toast((s.kind === 'close' ? 'Вернул в работу: ' : 'Вернул как было: ') + (was.title || t.title) + (fw ? ' · ' + fw : '')); render();
+    } catch (e) { fail(e); }
   };
   const words = s.kind === 'update' ? autoWords(s) : '';
   return el('div', { class: 'sug auto' },
@@ -4247,10 +4306,12 @@ function whenRow(src, t) {
  *  (сделка — «Помочь с хеджем» под клиентом), иначе проект или раздел (клиент целиком, ЗФ, Семья). Путь — что над ним:
  *  направление и цели выше, у проекта клиента — клиент. Данные те же (why_id, deal_id, project_id): телефон, коннектор и
  *  их контракты не меняются — «Зачем» считается из них. */
-function zachemOf(t) {
+function zachemOf(t, seen = new Set()) {
   if (!t) return null;
-  const g = t.why_id && isMine(t) ? S.tasks.get(t.why_id) : null;
-  if (g) return { kind: 'goal', id: g.id, title: g.title, path: goalPath(g).split(' › ').slice(0, -1), g };
+  // «Зачем» — цель дерева. Дело внутри обычного дела (15.10.2026, правило 26: why_id — родитель) целью его не делает:
+  // у такого «Зачем» — своя сделка или проект (их и так ставит «Для этого»), нет их — «Зачем» родителя.
+  const w = t.why_id && isMine(t) ? S.tasks.get(t.why_id) : null;
+  if (w && w.goal) return { kind: 'goal', id: w.id, title: w.title, path: goalPath(w).split(' › ').slice(0, -1), g: w };
   const d = !t.goal && t.deal_id ? S.deals.get(t.deal_id) : null;
   if (d) { const c = project(d.project_id); return { kind: 'deal', id: d.id, title: d.name, path: c ? [c.name] : [], d, c }; }
   const p = !t.goal ? project(t.project_id) : null;
@@ -4259,6 +4320,7 @@ function zachemOf(t) {
     const pg = k && k.why_id ? S.tasks.get(k.why_id) : null;
     return { kind: 'project', id: p.id, title: p.name, path: pg ? goalPath(pg).split(' › ') : [], p };
   }
+  if (w && !seen.has(w.id) && seen.size < 60) { seen.add(t.id); return zachemOf(w, seen); } // круга база не пускает — страховка
   return null;
 }
 /** Открыть сам «Зачем»: цель — карточкой, проект клиента — его страницей, проект — своей. */
@@ -4278,7 +4340,8 @@ function zachemPop(anchor, ids, { draft = null } = {}) {
   const mine = !draft && list.length && list.every(isMine) && krugOn();
   const goalsOnly = list.length && list.every((x) => x.goal);
   const below = new Set(list.flatMap((x) => [...belowOf(x.id)]));
-  const goals = mine ? all().filter((x) => isOpen(x) && isMine(x) && !below.has(x.id) && !x.no_steps && (x.goal || stepsOf(x.id).length))
+  // Только цели дерева: дело с делами внутри целью не стало (15.10.2026) — вкладывают «Вложить в…», не «Зачем».
+  const goals = mine ? all().filter((x) => isOpen(x) && isMine(x) && !below.has(x.id) && !x.no_steps && x.goal)
     .map((x) => ({ v: 'g:' + x.id, title: x.title, note: goalPath(x).split(' › ').slice(0, -1).join(' › ') || 'цель', lead: () => icon('target', 16) })) : [];
   const deals = goalsOnly ? [] : [...S.deals.values()].filter((d) => d.stage !== 'archive' && project(d.project_id))
     .map((d) => ({ v: 'd:' + d.id, title: d.name, note: project(d.project_id).name + ' · ' + stageWord(d), keys: [project(d.project_id).name, ...renamedOf(d.id)],
@@ -4288,20 +4351,23 @@ function zachemPop(anchor, ids, { draft = null } = {}) {
   const first = list[0] || draft || {};
   const z = draft ? zachemOf({ ...draft, why_id: null }) : list.length === 1 ? zachemOf(first) : null;
   const cur = z ? { goal: 'g:', deal: 'd:', project: 'p:' }[z.kind] + z.id : null;
-  const set = (v) => {
-    if (v == null) return { deal_id: null, project_id: null, ...(mine ? { why_id: null } : {}) };
+  // Соперник уходит — «Зачем» одно; но дело внутри дела (why_id — родитель, а не цель) из родителя не вынимаем: это не
+  // «Зачем», а место дела (15.10.2026). Вынуть — «Вынуть», вложить — «Вложить в…».
+  const dropWhy = (t) => (mine && t && t.why_id && !parentOf(t) ? { why_id: null } : {});
+  const set = (v, t) => {
+    if (v == null) return { deal_id: null, project_id: null, ...dropWhy(t) };
     const [k, id] = [v.slice(0, 1), v.slice(2)];
     if (k === 'g') return { why_id: id, deal_id: null };
-    if (k === 'd') { const d = S.deals.get(id); return { project_id: d.project_id, deal_id: id, ...(mine ? { why_id: null } : {}) }; }
-    return { project_id: id, deal_id: null, ...(mine ? { why_id: null } : {}) };
+    if (k === 'd') { const d = S.deals.get(id); return { project_id: d.project_id, deal_id: id, ...dropWhy(t) }; }
+    return { project_id: id, deal_id: null, ...dropWhy(t) };
   };
   const word = (v) => (v == null ? 'Без «Зачем»' : 'Зачем: ' + ([...goals, ...deals, ...projs].find((x) => x.v === v) || {}).title);
   choicePop(anchor, { title: 'Зачем', placeholder: mine ? 'Ради чего это? Найти или написать новое' : 'Найти…',
     items: [...goals, ...deals, ...projs], current: cur, none: 'Без «Зачем»',
     create: mine ? (title) => setFields(ids, { why_title: title, deal_id: null }, 'Новая цель: ' + title) : null,
     onPick: (v) => {
-      if (draft) { const s = set(v); delete s.why_id; Object.assign(draft, s); render(); return; }
-      setFields(ids, set(v), word(v));
+      if (draft) { const s = set(v, null); delete s.why_id; Object.assign(draft, s); render(); return; }
+      setFields(ids, (id) => set(v, S.tasks.get(id)), word(v));
     } });
 }
 /** Старые названия «Зачем» (переименование 13.10.2026, Свод zachem.renamed) — чтобы поиск по старому имени находил. */
@@ -4745,10 +4811,30 @@ function renderCard() {
         el('button', { class: 'btn small', onclick: send }, 'Добавить')));
     if (x) {
       card.append(el('details', {}, el('summary', {}, 'Журнал правок'), x.history.map((h) =>
-        el('div', { class: 'hist' }, `${h.at.slice(0, 16).replace('T', ' ')} · ${h.actor} (${h.via}) · ${h.op === 'update' ? Object.keys(h.after || {}).join(', ') : h.op}`))));
+        el('div', { class: 'hist' }, `${h.at.slice(0, 16).replace('T', ' ')} · ${h.actor} (${h.via}) · ${histWhat(h)}`))));
     }
   }
   return el('section', { class: 'card-pane', 'data-key': 'task:' + (S.cardId || 'draft') }, card);
+}
+
+/** Что в строке журнала карточки: поля дела; у строки Круга (её сервер отдаёт только хозяину, 15.10.2026) —
+ *  «вложено в «…»», «вынуто», «Зачем: …», направления — словами: так видно, когда и куда дело вложили. */
+function histWhat(h) {
+  const a = h.after || {};
+  if (h.entity === 'tasks.krug' && ('why_id' in a || 'directions' in a || 'goal' in a)) {
+    const out = [];
+    if ('why_id' in a) {
+      const w = a.why_id ? S.tasks.get(a.why_id) : null;
+      out.push(!a.why_id ? (h.before && h.before.why_id ? 'вынуто, без «Зачем»' : 'без «Зачем»')
+        : w && !w.goal ? 'вложено в «' + w.title + '»' : 'Зачем: ' + (w ? w.title : 'цель'));
+    }
+    if ('directions' in a && (h.op === 'update' || (a.directions || []).length)) {
+      out.push('направления: ' + ((a.directions || []).map(dirName).join(', ') || 'свои сняты'));
+    }
+    if ('goal' in a && (h.op === 'update' || a.goal)) out.push(a.goal ? 'стало целью' : 'стало делом');
+    if (out.length) return out.join(', ');
+  }
+  return h.op === 'update' ? Object.keys(a).join(', ') : h.op;
 }
 
 // ── CRM: воронка, клиенты, связи, деньги, карточка сделки ───────────────

@@ -12,6 +12,8 @@ import datetime as dt
 
 from starlette.testclient import TestClient
 
+import psycopg
+
 from pravka_dela import api, ask, parse, store, tokens
 from pravka_dela.config import Config
 from test_dela_ask import _wait, item, mk
@@ -74,7 +76,7 @@ def test_before_this_goes_inside_not_to_notes(dela):
 
     out = ask.run(dela, "sasha", "до этого надо из расшифровки встречи набросать драфт", {"card": "task", "open": t["id"]},
                   "", None, ask_fn=fake, parse_fn=no_parse)
-    assert "step — true только в КАРТОЧКЕ ДЕЛА" in seen["system"] and "НЕ notes_add" in seen["system"]
+    assert "step — true, если открыто дело" in seen["system"] and "НЕ notes_add" in seen["system"]
     assert not out["errors"], out["errors"]
     inside, near = out["tasks"]
     assert (inside["why_id"], inside["project_id"], inside["deal_id"], inside["person_id"], inside["due_date"]) == (
@@ -320,8 +322,341 @@ def test_web_uses_same_rules():
     assert "...(card && card.step ? { step: true } : {})" in js
     due = js[js.index("const stepDue"):js.index("\n", js.index("const stepDue"))]
     assert "p.focus_on === S.today" in due and "p.due_date <= S.today) ? S.today : p.due_date || null" in due
-    assert "taskRows(items, by, opts.chips)" in fn("function groupBox(") and "stepsFirst(items)" in fn("function taskRows(")
+    assert "taskRows(items, by, opts.chips, opts.rowOpt)" in fn("function groupBox(") and "stepsFirst(items)" in fn("function taskRows(")
+    # Хвост 3 (15.10.2026): соседи, чьего родителя в списке нет, — подряд и по месту; уровни группировки (кроме «время»)
+    # кладут дело внутри в ветку его верхнего предка из этого же списка — как «Деревом», только плоско.
+    sf = fn("function stepsFirst(")
+    assert "lone" in sf and "[...sibs].sort(byPos)" in sf
+    ns = fn("function nested(")
+    assert "const top = lv === 'date' ? null : topIn(items);" in ns and "levelKey(top ? top(t) : t, lv)" in ns
+    # Главная «Сейчас»: дела внутри дел из «Сейчас» — над родителем отступом, в «Сегодня» ниже не повторяются.
+    rn = fn("function renderNow(")
+    assert "innerOf(now)" in rn and "...depth.keys()" in rn and "rowOpt" in rn
+    # «Зачем» — только цель дерева (у дела внутри — своя сделка или проект, иначе «Зачем» родителя); выбор целей —
+    # только цели; движение Круга — без «родителей»; «Моё» — шаги к целям (krug.toward_goal).
+    zo = fn("function zachemOf(")
+    assert "if (w && w.goal) return { kind: 'goal'" in zo and "return zachemOf(w, seen)" in zo
+    assert "&& x.goal)" in fn("function goalPop(") and "stepsOf(x.id).length" not in fn("function zachemPop(")
+    assert "!parentOf(t)" in fn("function zachemPop(")  # выбор сделки не вынимает дело из родителя
+    assert "parents" not in fn("function movement(") and "t.goal ? 3 : 1" in fn("function movement(")
+    assert "towardGoal(t)" in fn("function mineTasks(")
+    # «Вернуть» после «Сделано» — срок родителя возвращает сервер (fell), веб говорит это словами.
+    assert "fellWords(res)" in fn("async function toggleDone(")
     assert "insideOf(t.id)" in fn("function stepChips(") and ".sort(byPos)" in js[js.index("const insideOf"):js.index("const stepDue")]
     # «Шаг» — не имя сущности (владелец 15.10.2026): ни в кнопках, ни в подписях новых мест.
     for name in ("function stepChips(", "function stepPop(", "function insideBox(", "function forLine(", "function nestPop("):
         assert "шаг" not in fn(name).lower().replace("шага, шагов", ""), name
+
+
+# ── Найденное при проверке пакета (15.10.2026, ночь) ─────────────────────
+
+
+def test_reopen_brings_parent_due_back(dela):
+    """«Вернуть» после «Сделано» последнего дела внутри возвращает и срок родителя (tasks.nest_fall): тост веба,
+    повторный тап телефона, «Вернуть» у «Закрыто само» — task.reopen, «Вернуть» реплики Claude — status open; одно
+    место на сервере. Срок родителя правили между ними — «Вернуть» его не трогает (память подъёма гаснет)."""
+    today = db_today(dela)
+    later = (today + dt.timedelta(days=5)).isoformat()
+    p = mk(dela, "Термшит Альфе", due_date=later)
+    a = mk(dela, "Драфт", why_id=p["id"])
+    up = ops(dela, "sasha", [{"op": "task.done", "id": a["id"]}])[0]
+    assert up["raised"]["moved"] and row(dela, p["id"])["due_date"] == today.isoformat()
+    back = ops(dela, "sasha", [{"op": "task.reopen", "id": a["id"]}])[0]
+    assert back["fell"] == {"id": p["id"], "num": p["num"], "title": "Термшит Альфе", "due_date": later}
+    assert row(dela, p["id"])["due_date"] == later
+    # Второй раз — снова поднят (moved, а не «уже сегодня»).
+    assert ops(dela, "sasha", [{"op": "task.done", "id": a["id"]}])[0]["raised"]["moved"] is True
+    # Срок родителя перенесли руками — «Вернуть» его не трогает.
+    fri = (today + dt.timedelta(days=2)).isoformat()
+    ops(dela, "sasha", [{"op": "task.set", "id": p["id"], "set": {"due_date": fri}}])
+    r = ops(dela, "sasha", [{"op": "task.reopen", "id": a["id"]}])[0]
+    assert r["ok"] and "fell" not in r and row(dela, p["id"])["due_date"] == fri
+    # Был без срока — «Вернуть» снова без срока; реплика Claude «верни» — тем же правилом и словами в ответе.
+    q = mk(dela, "Отчёт банку")
+    b = mk(dela, "Выписки", why_id=q["id"])
+    ops(dela, "sasha", [{"op": "task.done", "id": b["id"]}])
+    assert row(dela, q["id"])["due_date"] == today.isoformat()
+    out = ask.run(dela, "sasha", "выписки ещё не готовы", {"task_ids": [b["id"]]}, "", None,
+                  ask_fn=lambda s, u: empty_card(changes=[item(b["num"], status="open")], reply="Вернул.", _usage=None))
+    assert row(dela, q["id"])["due_date"] is None and out["fell"][0]["title"] == "Отчёт банку"
+    assert out["reply"] == "Срок «Отчёт банку» — снова без срока. Вернул."
+    # Просроченный родитель не поднимался (moved false) — «Вернуть» ему нечего возвращать.
+    old = mk(dela, "Старое", due_date=(today - dt.timedelta(days=2)).isoformat())
+    c = mk(dela, "Внутри старого", why_id=old["id"])
+    ops(dela, "sasha", [{"op": "task.done", "id": c["id"]}])
+    assert "fell" not in ops(dela, "sasha", [{"op": "task.reopen", "id": c["id"]}])[0]
+    assert row(dela, old["id"])["due_date"] == (today - dt.timedelta(days=2)).isoformat()
+
+
+def test_team_member_closing_last_inside_raises_owner_parent(dela):
+    """Последнее дело внутри (дело Саши в общем проекте «Кто: действие») закрыла Наташа — родитель Саши поднимается:
+    подъём делает база мимо RLS Круга. Ей об этом не говорим (raised и fell — только хозяину родителя), why_id ей
+    по-прежнему не виден. Родитель в личном проекте Саши, которого Наташа не видит вовсе, — поднимается тоже."""
+    p = project(dela, "sasha", "Ромашка")
+    with parse.db.session(dela, "system", "t") as c:
+        c.execute("INSERT INTO crm.project_access (project_id, user_id, role, granted_by) VALUES (%s, 'natasha', 'edit', 'sasha')", (p,))
+    today = db_today(dela)
+    later = (today + dt.timedelta(days=6)).isoformat()
+    parent = mk(dela, "Ромашка: акт сверки за сентябрь", project_id=str(p), due_date=later)
+    kid = mk(dela, "Наташа: запросить акт у бухгалтерии", project_id=str(p), why_id=parent["id"])
+    r = ops(dela, "natasha", [{"op": "task.done", "id": kid["id"]}])[0]
+    assert r["ok"] and "raised" not in r
+    assert row(dela, parent["id"])["due_date"] == today.isoformat() and row(dela, parent["id"])["status"] == "open"
+    assert row(dela, kid["id"], user="natasha")["why_id"] is None
+    r = ops(dela, "natasha", [{"op": "task.reopen", "id": kid["id"]}])[0]
+    assert r["ok"] and "fell" not in r and row(dela, parent["id"])["due_date"] == later
+    # Журнал родителя пишет ту, кто закрыла и открыла (подъём — следствие её «Сделано»).
+    with parse.db.session(dela, "system", "t") as c:
+        who = c.execute("SELECT actor FROM crm.history WHERE entity = 'tasks.tasks' AND entity_id = %s AND after ? 'due_date' "
+                        "ORDER BY id", (parent["id"],)).fetchall()
+    assert [h["actor"] for h in who][-2:] == ["natasha", "natasha"]
+    # Родитель — в личном проекте Саши (Наташе не виден), дело внутри — в общем.
+    mine = project(dela, "sasha", "Личное", kind="personal", sphere="home")
+    hidden = mk(dela, "Подготовиться к сверке", project_id=str(mine))
+    k2 = mk(dela, "Наташа: выгрузить реестр", project_id=str(p), why_id=hidden["id"])
+    assert row(dela, hidden["id"], user="natasha") is None
+    assert "raised" not in ops(dela, "natasha", [{"op": "task.done", "id": k2["id"]}])[0]
+    assert row(dela, hidden["id"])["due_date"] == today.isoformat()
+
+
+def test_pos_resets_when_nested_elsewhere_and_is_from_one(dela):
+    """Сменил «Зачем» (вложил в другое дело, вынул), места не назвал — место снимается: дело встаёт после
+    занумерованных новых соседей, а не первым (и «сначала: …» у нового родителя — не оно). Место — с единицы: 0, минус и
+    не число — отказ словами; CHECK в базе — страховка."""
+    from pravka_dela import krug
+
+    q1, q2 = mk(dela, "Оценка бизнеса"), mk(dela, "Тизер для покупателей")
+    y1 = mk(dela, "Запросить отчётность", why_id=q1["id"], pos=2)
+    mk(dela, "Собрать мультипликаторы", why_id=q1["id"], pos=1)
+    z1 = mk(dela, "Набросать структуру", why_id=q2["id"], pos=1)
+    z2 = mk(dela, "Согласовать с Ольгой", why_id=q2["id"], pos=2)
+    r = ops(dela, "sasha", [{"op": "task.set", "id": y1["id"], "set": {"why_id": q2["id"]}}])[0]
+    assert r["ok"] and r["task"]["pos"] is None
+    with parse.db.session(dela, "sasha", "t") as c:
+        tree = krug.tree(c, "sasha", db_today(dela))
+    node = next(n for n in tree["none"] if n["title"] == "Тизер для покупателей")
+    assert [x["title"] for x in node["children"]] == [z1["title"], z2["title"], y1["title"]]
+    # Вынуть — место тоже уходит; названное в той же операции — остаётся.
+    assert ops(dela, "sasha", [{"op": "task.set", "id": z1["id"], "set": {"why_id": None}}])[0]["task"]["pos"] is None
+    r = ops(dela, "sasha", [{"op": "task.set", "id": z2["id"], "set": {"why_id": q1["id"], "pos": 3}}])[0]
+    assert r["task"]["pos"] == 3
+    # Тот же «Зачем» (номером) — место не трогаем.
+    assert ops(dela, "sasha", [{"op": "task.set", "id": z2["id"], "set": {"why_id": str(q1["num"])}}])[0]["task"]["pos"] == 3
+    for bad in (0, -1, "первым", True):
+        r = ops(dela, "sasha", [{"op": "task.set", "id": z2["id"], "set": {"pos": bad}}])[0]
+        assert not r["ok"] and "целое число от 1" in r["error"], (bad, r)
+    assert not ops(dela, "sasha", [{"op": "task.create", "task": {"title": "x", "pos": 0}}])[0]["ok"]
+    assert ops(dela, "sasha", [{"op": "task.set", "id": z2["id"], "set": {"pos": "2"}}])[0]["task"]["pos"] == 2
+    with parse.db.session(dela, "system", "t") as c:
+        try:
+            with c.transaction():
+                c.execute("UPDATE tasks.tasks SET pos = 0 WHERE id = %s", (z2["id"],))
+            raise AssertionError("CHECK pos > 0 не сработал")
+        except psycopg.errors.CheckViolation:
+            pass
+
+
+def test_nested_elsewhere_goes_last_among_unnumbered(dela):
+    """Сквозной тест, п. 5б: старое дело вложили к более новым соседям без места — пустое место поставило бы его по
+    времени заведения первым («сначала: …» у родителя — оно). Сервер нумерует соседей в нынешнем порядке, вложенное —
+    последним; когда оно и так последнее (новее соседей или они занумерованы), соседей не трогает."""
+    old = mk(dela, "Запросить отчётность")  # заведено раньше всех
+    q = mk(dela, "Тизер для покупателей")
+    a, b = mk(dela, "Набросать структуру", why_id=q["id"]), mk(dela, "Согласовать с Ольгой", why_id=q["id"])
+    r = ops(dela, "sasha", [{"op": "task.set", "id": old["id"], "set": {"why_id": q["id"]}}])[0]
+    assert r["ok"] and r["task"]["pos"] == 3
+    assert [row(dela, x["id"])["pos"] for x in (a, b)] == [1, 2]
+    with parse.db.session(dela, "sasha", "t") as c:
+        first = c.execute("SELECT title FROM tasks.v_tasks WHERE why_id = %s AND status = 'open' "
+                          "ORDER BY pos NULLS LAST, created_at, num LIMIT 1", (q["id"],)).fetchone()["title"]
+    assert first == a["title"]
+    # Новое дело, вложенное к старым незанумерованным, и так последнее — соседей не нумеруем.
+    p = mk(dela, "Отчёт банку")
+    k1, k2 = mk(dela, "Выписки", why_id=p["id"]), mk(dela, "Сверка")
+    r = ops(dela, "sasha", [{"op": "task.set", "id": k2["id"], "set": {"why_id": p["id"]}}])[0]
+    assert r["task"]["pos"] is None and row(dela, k1["id"])["pos"] is None
+
+
+def test_tree_orders_by_pos_only_inside_plain_tasks(dela):
+    """Дерево Круга учитывает место только у дел внутри обычного дела, как веб и телефон: под целью старое место
+    дела не поднимает его выше соседей."""
+    from pravka_dela import krug
+
+    g = mk(dela, "Хорошо знает математику", goal=True)
+    a = mk(dela, "Распечатать примеры", why_id=g["id"])
+    b = mk(dela, "Купить тетрадь", why_id=g["id"], pos=1)
+    with parse.db.session(dela, "sasha", "t") as c:
+        tree = krug.tree(c, "sasha", db_today(dela))
+    node = next(n for n in tree["none"] if n["title"] == "Хорошо знает математику")
+    assert [x["title"] for x in node["children"]] == [a["title"], b["title"]]
+
+
+def test_mine_and_movement_know_inside_from_steps(dela):
+    """«Моё» — шаги к целям (вверх по «Зачем» есть цель), а не дела внутри клиентских дел: драфт для термшита Ивану
+    — не «то, что хочу я». Движение Круга: сделанный родитель дел внутри — обычное дело (1), цель — 3."""
+    from pravka_dela import krug
+
+    ops(dela, "sasha", [{"op": "svod.set", "key": krug.DIRECTIONS_KEY, "author": "test",
+                         "value": [{"key": "work", "pos": 3, "name": "Дело", "short": "Дело"}]}])
+    goal = mk(dela, "Сделки закрываются", goal=True, directions=["work"])
+    deal_task = mk(dela, "Термшит Ивану", directions=["work"])
+    draft = mk(dela, "Набросать драфт термшита", why_id=deal_task["id"])
+    step = mk(dela, "Позвонить фондам", why_id=goal["id"])
+    inner = mk(dela, "Найти телефоны фондов", why_id=step["id"])
+    titles = [t["title"] for t in store.view(dela, "sasha", "today")["mine"]]
+    assert draft["title"] not in titles and inner["title"] in titles and step["title"] not in titles, titles  # step — не лист
+    ops(dela, "sasha", [{"op": "task.done", "id": draft["id"]}, {"op": "task.done", "id": deal_task["id"]}])
+    with parse.db.session(dela, "sasha", "t") as c:
+        mv = krug.movement(c, "sasha", db_today(dela))
+    assert mv["work"]["done"] == 2 and mv["work"]["goals"] == 0 and mv["work"]["events"] == 2
+
+
+def test_place_and_krug_sorter_offer_only_goals(dela):
+    """Блок «дерево жизни» для разборов и список целей разборщика Круга — только цели: дело с делами внутри — не узел
+    дерева (до 15.10.2026 «дело с шагами» годилось, и модель могла повесить новое дело под клиентское дело)."""
+    from pravka_dela import krug_auto, place
+
+    goal = mk(dela, "Сын считает до 20", goal=True)
+    parent = mk(dela, "Термшит Альфе")
+    mk(dela, "Драфт", why_id=parent["id"])
+    loose = mk(dela, "Купить прописи")
+    with parse.db.session(dela, "sasha", "t") as c:
+        assert [r["title"] for r in place.targets(c, "sasha")] == [goal["title"]]
+        assert [g["path"][-1] for g in krug_auto.goals(c, "sasha")] == [goal["title"]]
+        assert place.resolve(c, {"id": loose["id"]}, parent["num"]) is None
+        assert str(place.resolve(c, {"id": loose["id"]}, goal["num"])) == goal["id"]
+
+
+def test_page_line_with_open_task_puts_before_this_inside(dela):
+    """Хвост 2: строка Claude над открытым делом (телефон — строка внизу вкладки, веб — строка страницы с карточкой
+    справа) шлёт scope.open, а не карточку дела. «До этого надо X» — дело внутри открытого (step у create), строку о
+    нём пишет сервер; без открытого дела step ничего не вкладывает."""
+    today = db_today(dela)
+    parent = mk(dela, "Подготовить термшит", due_date=today.isoformat())
+    other = mk(dela, "Позвонить юристу")
+    seen = {}
+
+    def fake(system, user_text):
+        seen["system"], seen["user"] = system, user_text
+        return empty_card(create=[cr("Набросать драфт", step=True)], reply="", _usage=None)
+
+    out = ask.run(dela, "sasha", "до этого надо набросать драфт", {"task_ids": [other["id"], parent["id"]], "open": parent["id"]},
+                  "", None, ask_fn=fake)
+    made = out["tasks"][0]
+    assert (made["why_id"], made["due_date"]) == (parent["id"], today.isoformat())
+    assert "ОТКРЫТО В КАРТОЧКЕ СПРАВА" in seen["user"] and "step — true, если открыто дело" in seen["system"]
+    assert out["reply"] == "Завёл для «Подготовить термшит»: «Набросать драфт», на сегодня." and out["steps"] == [made["id"]]
+    # Ничего не открыто — step не вкладывает: обычное новое дело.
+    out = ask.run(dela, "sasha", "x", {"task_ids": [other["id"]]}, "", None,
+                  ask_fn=lambda s, u: empty_card(create=[cr("Просто дело", step=True)], _usage=None))
+    assert out["tasks"][0]["why_id"] is None and out["steps"] == []
+
+
+def test_card_sees_others_only_for_nesting_and_takes_put_here(dela):
+    """Цена: остальные открытые дела карточка дела показывает Claude, только когда о вложении речь (и не в «Для
+    этого»), и хвостом. «Вложи сюда X» из карточки родителя — правка X, где заполнено одно into = это дело; любую
+    другую правку X отсюда не принимаем."""
+    parent = mk(dela, "Подготовить термшит")
+    x = mk(dela, "Набросать драфт")
+    seen = {}
+
+    def fake(system, user_text):
+        seen["user"] = user_text
+        return empty_card(changes=[item(x["num"], into=parent["num"])], _usage=None)
+
+    ctx = ask.context(dela, "sasha", "перенеси на завтра", {"card": "task", "open": parent["id"]})
+    assert "ДРУГИЕ МОИ" not in ctx["message"]
+    ctx = ask.context(dela, "sasha", "вложи туда выписку", {"card": "task", "open": parent["id"], "step": True})
+    assert "ДРУГИЕ МОИ" not in ctx["message"]
+    out = ask.run(dela, "sasha", "вложи сюда драфт", {"card": "task", "open": parent["id"]}, "", None, ask_fn=fake)
+    assert "ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА" in seen["user"].split("КОМАНДА:")[0] and not out["errors"], out["errors"]
+    assert row(dela, x["id"])["why_id"] == parent["id"]
+    # Разговор: слова о вложении были в прошлой реплике — список есть и сейчас.
+    ctx = ask.context(dela, "sasha", "про термшит", {"card": "task", "open": x["id"],
+                                                     "history": [{"said": "положи это в другое дело", "reply": "В какое?", "done": ""}]})
+    assert "ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА" in ctx["message"]
+    # Не только into — не трогаем.
+    y = mk(dela, "Позвонить юристу")
+    out = ask.run(dela, "sasha", "вложи сюда звонок и перенеси", {"card": "task", "open": parent["id"]}, "", None,
+                  ask_fn=lambda s, u: empty_card(changes=[item(y["num"], into=parent["num"], due="2099-01-01")], _usage=None))
+    assert out["errors"] and row(dela, y["id"])["why_id"] is None and row(dela, y["id"])["due_date"] is None
+
+
+def test_loop_refusal_in_words_of_nesting(dela):
+    """Петля «Вложить в…» — отказ словами вложенности, а не прежнего «шаг к самому себе» (текст базы прежний)."""
+    a, b = mk(dela, "Сделка"), mk(dela, "Термшит")
+    ops(dela, "sasha", [{"op": "task.set", "id": b["id"], "set": {"why_id": a["id"]}}])
+    bad = ops(dela, "sasha", [{"op": "task.set", "id": a["id"], "set": {"why_id": b["id"]}}])[0]
+    assert bad["error"] == "Нельзя: это дело уже внутри того, куда вкладываешь («зачем» по кругу)"
+
+
+def test_card_journal_shows_nesting_to_owner_only(dela):
+    """«Вложить в…» и «Вынуть» живут в строке Круга (tasks.krug): хозяину карточка дела отдаёт и её журнал, команде —
+    нет (Круг личный)."""
+    p = project(dela, "sasha", "Ромашка")
+    with parse.db.session(dela, "system", "t") as c:
+        c.execute("INSERT INTO crm.project_access (project_id, user_id, role, granted_by) VALUES (%s, 'natasha', 'edit', 'sasha')", (p,))
+    parent, kid = mk(dela, "Термшит", project_id=str(p)), mk(dela, "Драфт", project_id=str(p))
+    ops(dela, "sasha", [{"op": "task.set", "id": kid["id"], "set": {"why_id": parent["id"]}},
+                        {"op": "task.set", "id": kid["id"], "set": {"why_id": None}}])
+    mine = api.task_card(dela, "sasha", kid["id"])["history"]
+    krug_rows = [h for h in mine if h["entity"] == "tasks.krug"]
+    assert [(h["after"] or {}).get("why_id") for h in krug_rows][-2:] == [parent["id"], None]
+    hers = api.task_card(dela, "natasha", kid["id"])["history"]
+    assert hers and all(h["entity"] == "tasks.tasks" for h in hers)
+
+
+def test_connector_speaks_inside(dela):
+    """Хвост 1 — коннектор claude.ai: inside у dela_add (поля от родителя тем же правилом, что «Для этого») и
+    dela_change (вложить, вынуть, место); why — только цель: на номер или название обычного дела — подсказка inside, а
+    не новая цель с именем дела. Строка: «внутри #N …» у дела внутри, «внутри открыто N, сначала: …» у родителя; done
+    последнего — «всё внутри сделано — теперь: …», open — срок родителя «снова …»."""
+    from pravka_dela import mcp_tools
+
+    p, org, bank, olga, ivan, deal = _client(dela)
+    today = db_today(dela)
+    parent = mk(dela, "Подготовить термшит Ивану", project_id=str(p), deal_id=str(deal), person_id=str(ivan),
+                focus_on=today.isoformat())
+    said = mcp_tools.add(dela, title="Набросать драфт", inside=str(parent["num"]))
+    assert said.startswith("Записал: #") and f"внутри #{parent['num']} Подготовить термшит Ивану" in said, said
+    num = int(said.split("#", 1)[1].split(" ", 1)[0])
+    with parse.db.session(dela, "sasha", "t") as c:
+        d = store.task_by(c, num)
+    assert (str(d["project_id"]), str(d["deal_id"]), str(d["person_id"]), d["due_date"], d["focus_on"]) == (
+        str(p), str(deal), str(ivan), today, None)
+    # Названное сильнее родительского; inside — и по точному названию.
+    other = mcp_tools.add(dela, title="Сверить цифры", inside="подготовить термшит ивану", due_date="2099-01-02")
+    assert "срок 02.01" in other and "внутри #" in other, other
+    n2 = int(other.split("#", 1)[1].split(" ", 1)[0])
+    # Родитель: сколько внутри и что сначала; место — pos.
+    assert mcp_tools.change(dela, str(n2), pos=1).startswith("Готово:")
+    view = mcp_tools.view(dela, "now")
+    assert f"внутри открыто 2, сначала: #{n2} Сверить цифры" in view, view
+    card = mcp_tools.card(dela, str(parent["num"]))
+    assert f"1. #{n2} Сверить цифры" in card and f"2. #{num} Набросать драфт" in card, card
+    # why — только цель: номер дела — подсказка inside; название дела — подсказка, а не новая цель.
+    bad = mcp_tools.add(dela, title="x", why=str(parent["num"]))
+    assert bad.startswith("Не записал") and f"inside={parent['num']}" in bad, bad
+    bad = mcp_tools.add(dela, title="y", why="термшит ивану")
+    assert bad.startswith("Не записал") and "похоже на дело" in bad, bad
+    with parse.db.session(dela, "sasha", "t") as c:
+        assert not c.execute("SELECT 1 FROM tasks.v_tasks WHERE goal AND title ILIKE '%%термшит%%'").fetchone()
+    # Вложить, вынуть; цель в inside — отказ (это why).
+    loose = mk(dela, "Позвонить юристу")
+    assert "внутри #" in mcp_tools.change(dela, str(loose["num"]), inside=str(parent["num"]))
+    assert "внутри #" not in mcp_tools.change(dela, str(loose["num"]), inside="")
+    aim = mk(dela, "Цель", goal=True)
+    assert "цель дерева" in mcp_tools.change(dela, str(loose["num"]), inside=str(aim["num"]))
+    # why и пустой inside в одной правке — «Зачем» решает why: цель ставится, а не снимается «вынуть».
+    said = mcp_tools.change(dela, str(loose["num"]), why=str(aim["num"]), inside="")
+    assert f"зачем #{aim['num']} Цель" in said and row(dela, loose["id"])["why_id"] == aim["id"], said
+    # Под целью «вынуть» (inside="") — подсказка why="", а why="" и inside="" вместе — снять цель.
+    assert "убрать цель" in mcp_tools.change(dela, str(loose["num"]), inside="")
+    assert mcp_tools.change(dela, str(loose["num"]), why="", inside="").startswith("Готово:")
+    assert row(dela, loose["id"])["why_id"] is None
+    # Сделано последнее — родитель поднимается (он в «Сейчас» без срока — на сегодня); вернул — срок снова пуст.
+    mcp_tools.change(dela, str(num), status="done")
+    done = mcp_tools.change(dela, str(n2), status="done")
+    assert f"всё внутри сделано — теперь: #{parent['num']} «Подготовить термшит Ивану», на сегодня" in done, done
+    back = mcp_tools.change(dela, str(n2), status="open")
+    assert f"срок #{parent['num']} «Подготовить термшит Ивану» — снова без срока" in back, back

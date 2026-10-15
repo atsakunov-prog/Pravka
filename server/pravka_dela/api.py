@@ -650,7 +650,11 @@ def _team_sees(url: str) -> str:
 
 def task_card(url: str, user: str, ref: str) -> dict | None:
     """Дело, его комментарии, журнал и откуда оно (наговорка, встреча, Telegram). Журнал читает
-    system — но только после того, как сама база показала дело этому пользователю."""
+    system — но только после того, как сама база показала дело этому пользователю.
+
+    Хозяину дела — и журнал его строки Круга (15.10.2026): «Вложить в…», «Вынуть», «Зачем», направления живут в
+    tasks.krug, и до того карточка не показывала, когда и куда дело вложили. Остальным — нет: Круг личный (правило 19).
+    У строки журнала — entity (tasks.tasks или tasks.krug)."""
     with db.session(url, user, via="view") as conn:
         t = store.task_by(conn, ref)
         if not t:
@@ -659,7 +663,8 @@ def task_card(url: str, user: str, ref: str) -> dict | None:
             "SELECT * FROM tasks.comments WHERE task_id = %s AND deleted_at IS NULL ORDER BY created_at", (t["id"],)
         ).fetchall()
         origin = store.task_origin(conn, t)
-    # Журнал — store.task_history: читает system, а не владельцу у дел из Telegram и встреч — без заметки (аудит №8).
+    # Журнал — store.task_history: читает system, а не владельцу у дел из Telegram и встреч — без заметки (аудит №8);
+    # хозяину дела — и строки Круга (krug=True, 15.10.2026: когда и куда дело вложили или вынули), команде — нет.
     # Комментарии приватные (private) база отдаёт только автору — их фильтр здесь не нужен.
-    history = store.task_history(url, t, user)
+    history = store.task_history(url, t, user, krug=True)
     return store.jsonable({"task": t, "comments": comments, "history": history, "origin": origin})

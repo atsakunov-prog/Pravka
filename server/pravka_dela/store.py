@@ -45,9 +45,11 @@ TASK_FIELDS = {
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
             "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
             "privacy", "context_index", "claude_guard", "nest"]
-# «nest» — дела внутри дела (15.10.2026, dela_0024): поле pos у дела (место среди соседей с тем же «Зачем») в task.create
-# и task.set, task.done последнего открытого дела внутри поднимает родителя (ответ — raised, _nest_rise), /api/ask знает
-# scope.step («Для этого»). Без флага телефон pos не шлёт: старый сервер отверг бы операцию целиком.
+# «nest» — дела внутри дела (15.10.2026, dela_0024): поле pos у дела (место среди соседей с тем же «Зачем», от 1) в
+# task.create и task.set (сменил «Зачем», места не назвал — место снимается), task.done последнего открытого дела
+# внутри поднимает родителя (ответ — raised, только хозяину родителя), task.reopen дела внутри возвращает родителю
+# прежний срок, если его не правили (ответ — fell); /api/ask знает scope.step («Для этого»), у дела в синке — why_goal
+# («Зачем» — цель или дело). Без флага телефон pos не шлёт: старый сервер отверг бы операцию целиком.
 # «claude_guard» — защита от петли Claude на сервере (15.10.2026, аудит №12, guard.py): операции claude.guard {action:
 # resume|keep, task} (владелец — веб, телефон; бот Ковчега — кнопка в Telegram) и claude.alert_sent (бот Ковчега), поле
 # alerts у /api/reminders/due (сообщения владельцу: «защита от петли», сумма дня за порогом), поле guard у вида spend
@@ -449,7 +451,9 @@ def _now_guard(conn: psycopg.Connection, before: dict | None, after: dict) -> No
 # дело». Вложенное дело — обычное дело, у которого «Зачем» (why_id) — другое дело (не цель): свои поля, карточка, свои
 # вложенные, «Сейчас», напоминание. Порядок среди соседей — pos (dela_0024), петли и чужие дела не пускает база
 # (tasks.krug_rules). Одно правило в трёх местах: здесь (ask.py — строка Claude «Для этого», и она же без ключа Claude;
-# подъём родителя — _nest_rise), веб (stepDue, stepChips, stepsFirst, nestTree в app.js) и телефон (core/DelaSteps.kt).
+# подъём родителя и его «Вернуть» — функции базы tasks.nest_rise / nest_fall через _nest_rise), веб (stepDue, stepChips,
+# stepsFirst, nestForest в app.js) и телефон (core/DelaSteps.kt). «Шаг к цели» — только дело, у которого вверх по
+# «Зачем» есть цель (krug.toward_goal): дело внутри клиентского дела — не «Моё» и не цель для движения Круга.
 
 
 def _day(v) -> dt.date | None:
@@ -488,22 +492,74 @@ def step_of(parent: dict, user: str, today: dt.date) -> dict:
     return out
 
 
-def _nest_rise(conn, before: dict, after: dict) -> dict | None:
-    """Сделано последнее открытое дело внутри — родитель НЕ закрывается сам (владелец 15.10.2026), а поднимается: без
-    срока или со сроком позже — на сегодня (просроченное и сегодняшнее остаются как есть). Родитель — открытое дело, не
-    цель (у цели свои правила, она живёт в дереве). Ответ — что поднялось, для тоста «всё внутри сделано — теперь: …».
-    Правку пишет тот же человек той же операцией: родитель — его дело («зачем» — только своё, правило базы)."""
-    if (before.get("status") or "open") == "done" or after.get("status") != "done" or not after.get("why_id"):
+def _nest_rise(conn, user: str, before: dict, after: dict) -> tuple[dict | None, dict | None]:
+    """Подъём родителя и его «Вернуть» — функциями базы (dela_0024), для любого, кто закрыл или открыл дело.
+
+    Сделано последнее открытое дело внутри — родитель НЕ закрывается сам (владелец 15.10.2026), а поднимается: без
+    срока или со сроком позже — на сегодня (просроченное и сегодняшнее остаются как есть); родитель — открытое дело, не
+    цель (у цели свои правила, она живёт в дереве). Дело снова открыто («Вернуть», повторный тап, «Вернуть» у
+    «Закрыто само») — родитель возвращается к прежнему сроку, если его с тех пор не правили (tasks.nest_fall).
+    Раньше подъём смотрел why_id правами того, кто закрыл, и у члена команды (Круг ему не виден) молча не срабатывал.
+
+    Ответ — (поднялось, вернулось) для тоста «всё внутри сделано — теперь: …»; только хозяину родителя: что внутри
+    чего, команда не знает (Круг личный, правило 19), её синк просто привезёт новый срок родителя, если он ей виден."""
+    was, now = before.get("status") or "open", after.get("status")
+    if now == "done" and was != "done":
+        fn = "tasks.nest_rise"
+    elif now == "open" and was != "open":
+        fn = "tasks.nest_fall"
+    else:
+        return None, None
+    got = conn.execute(f"SELECT {fn}(%s) AS r", (after["id"],)).fetchone()["r"]
+    if not got or got.get("owner_id") != user:
+        return None, None
+    out = {k: got[k] for k in ("id", "num", "title", "moved", "due_date") if k in got}
+    return (out, None) if fn == "tasks.nest_rise" else (None, out)
+
+
+def _why_moves(conn, cur: dict, kr: dict) -> bool:
+    """Меняет ли операция «Зачем» дела (вложить в другое, вынуть, новая цель словами)."""
+    if "why_title" in kr:
+        return True
+    if "why_id" not in kr:
+        return False
+    ref = kr["why_id"]
+    if ref in (None, ""):
+        return cur.get("why_id") is not None
+    t = task_by(conn, ref)
+    return not t or str(t["id"]) != str(cur.get("why_id") or "")
+
+
+def _nest_last(conn, t: dict) -> bool:
+    """Вложили без места — дело встаёт в конец соседей (дел внутри того же дела). Пустое место ставит дело после
+    занумерованных, но среди незанумерованных — по времени заведения: старое дело, вложенное к более новым, встало бы
+    первым, и «сначала: …» у родителя показало бы его (сквозной тест 15.10.2026, п. 5б). Тогда соседи нумеруются 1, 2,
+    3… в нынешнем порядке (как «Раньше» / «Позже» веба и телефона), а это дело — следующим номером. Ответ — нумеровали ли.
+    Соседи — дела того же хозяина: «Зачем» только своё (krug_rules), RLS их правку пропускает."""
+    kids = conn.execute(
+        "SELECT t.id, t.pos, t.created_at, t.num FROM tasks.krug k JOIN tasks.tasks t ON t.id = k.id "
+        "WHERE k.why_id = %s AND k.kind = 'task' AND NOT k.goal AND t.status = 'open' AND t.id <> %s "
+        "ORDER BY t.pos NULLS LAST, t.created_at, t.num", (t["why_id"], t["id"])).fetchall()
+    me = (t["created_at"], t["num"])
+    if not any(k["pos"] is None and (k["created_at"], k["num"]) > me for k in kids):
+        return False  # и так последнее: после занумерованных и новее незанумерованных
+    for n, k in enumerate(kids, 1):
+        if k["pos"] != n:
+            _update(conn, "tasks.tasks", {"id": k["id"]}, {"pos": n})
+    _update(conn, "tasks.tasks", {"id": t["id"]}, {"pos": len(kids) + 1})
+    return True
+
+
+def _pos(v) -> int | None:
+    """Место среди соседей (dela_0024): 1, 2, 3… или пусто. Ноль и минус веб считал бы местом «первым», а телефон и
+    дерево — «не задано»: порядок на устройствах разошёлся бы. Кривое — отказ словами, а не ошибка SQL."""
+    if v is None:
         return None
-    p = conn.execute("SELECT * FROM tasks.v_tasks WHERE id = %s", (after["why_id"],)).fetchone()
-    if not p or p["goal"] or p["status"] != "open" or p["steps_open"]:
-        return None
-    today = conn.execute("SELECT crm.today() AS d").fetchone()["d"]
-    moved = p["due_date"] is None or p["due_date"] > today
-    if moved:
-        _update(conn, "tasks.tasks", {"id": p["id"]}, {"due_date": today})
-    return {"id": str(p["id"]), "num": p["num"], "title": p["title"], "moved": moved,
-            "due_date": (today if moved else p["due_date"]).isoformat()}
+    if isinstance(v, str) and v.strip().isdigit():
+        v = int(v.strip())
+    if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+        raise OpError("место среди соседей (pos) — целое число от 1 или пусто")
+    return v
 
 
 # ── Операции ────────────────────────────────────────────────────────────
@@ -513,6 +569,8 @@ def op_task_create(conn, user, op):
     raw = dict(op.get("task") or {})
     kr = _krug_split(raw)
     data = _ball_norm(_pick(raw, TASK_FIELDS | {"id", "import_ref"}, "дело"))
+    if "pos" in data:
+        data["pos"] = _pos(data["pos"])
     if not data.get("title"):
         raise OpError("у дела нет названия")
     if data.get("id"):
@@ -536,6 +594,14 @@ def op_task_set(conn, user, op):
     raw = dict(op.get("set") or {})
     kr = _krug_split(raw)
     changes = _ball_norm(_pick(raw, TASK_FIELDS, "дело"))
+    if "pos" in changes:
+        changes["pos"] = _pos(changes["pos"])
+    # Вложили в другое дело или вынули (why_id сменился), а места не назвали — прежнее место было среди прежних
+    # соседей: оно уходит, дело встаёт в конец новых соседей (иначе «Вложить в…» ставило его первым, и «сначала: …»
+    # у нового родителя показывало его; _nest_last ниже). Одно правило для веба, телефона, Claude и коннектора — здесь.
+    moved = "pos" not in changes and _why_moves(conn, cur, kr)
+    if moved and cur.get("pos") is not None:
+        changes["pos"] = None
     was = op.get("was") or {}
     # Поле поменяли с двух сторон: побеждает пришедшее последним, прежнее
     # значение остаётся в журнале, а клиент узнаёт, что спорил не один.
@@ -550,8 +616,10 @@ def op_task_set(conn, user, op):
     if kr:
         _krug_write(conn, user, "task", row, kr)
     full = _full(conn, row["id"])
-    raised = _nest_rise(conn, cur, full)
-    return {"task": full, "conflicts": conflicts, **({"raised": raised} if raised else {})}
+    if moved and full.get("why_id") and not full.get("why_goal") and full.get("status") == "open" and _nest_last(conn, full):
+        full = _full(conn, row["id"])
+    raised, fell = _nest_rise(conn, user, cur, full)
+    return {"task": full, "conflicts": conflicts, **({"raised": raised} if raised else {}), **({"fell": fell} if fell else {})}
 
 
 def _status(status):
@@ -656,15 +724,22 @@ def _comment(conn, user, task_id, text: str, private: bool) -> str | None:
     return op_comment_add(conn, user, {"comment": {"task_id": task_id, "text": text, "private": private}})["comment"]["id"]
 
 
-def task_history(url: str, task: dict, viewer: str, limit: int | None = None, newest_first: bool = False) -> list[dict]:
+def task_history(url: str, task: dict, viewer: str, limit: int | None = None, newest_first: bool = False,
+                 krug: bool = False) -> list[dict]:
     """Журнал дела (crm.history) — тому, кому база уже показала дело. Читает system (журнал целиком роли службы не виден);
     не владельцу Дел у дел из Telegram и встреч — без значений заметки (аудит №8): заметку машины прежних дел приватной
     сделает privacy-fix, а журнал хранит её текст навсегда. Одна функция для карточки дела (/api/task) и Claude
-    карточки дела (ask._task_card)."""
-    q = ("SELECT at, actor, via, op, before, after FROM crm.history WHERE entity = 'tasks.tasks' AND entity_id = %s "
+    карточки дела (ask._task_card).
+
+    krug — и журнал строки Круга (tasks.krug: «Вложить в…», «Вынуть», «Зачем», направления; 15.10.2026, дела внутри
+    дела), но только хозяину дела: Круг личный (правило 19), команде его строк нет. У строки — entity (tasks.tasks или
+    tasks.krug)."""
+    entities = ["tasks.tasks", "tasks.krug"] if krug and task.get("owner_id") == viewer else ["tasks.tasks"]
+    q = ("SELECT at, actor, via, op, before, after, entity FROM crm.history WHERE entity = ANY(%s) AND entity_id = %s "
          f"ORDER BY id{' DESC' if newest_first else ''}{' LIMIT %s' if limit else ''}")
     with db.session(url, "system", "svc:view") as conn:
-        rows = conn.execute(q, (str(task["id"]), limit) if limit else (str(task["id"]),)).fetchall()
+        args = (entities, str(task["id"])) + ((limit,) if limit else ())
+        rows = conn.execute(q, args).fetchall()
         owner = conn.execute("SELECT crm.owner_id() AS o").fetchone()["o"]
     if viewer in (owner, "system") or task.get("source") not in ("telegram", "meeting"):
         return rows
@@ -1663,9 +1738,21 @@ PERMANENT = (
 )
 
 
+# Слова базы, которые человеку читать неудобно, — его словами (текст в базе тот же: на него опираются тесты и старые
+# клиенты). «Шаг к самому себе» — слова прежнего «Зачем»; с 15.10.2026 так же отказывает «Вложить в…» (правило 26).
+DB_WORDS = {
+    "«зачем» по кругу — дело не может быть шагом к самому себе":
+        "Нельзя: это дело уже внутри того, куда вкладываешь («зачем» по кругу)",
+}
+
+
 def _db_error(e: psycopg.Error) -> str:
     d = e.diag
-    return (d.message_primary or str(e)).strip() + (f" ({d.message_detail})" if d.message_detail else "")
+    msg = (d.message_primary or str(e)).strip()
+    for k, v in DB_WORDS.items():
+        if k in msg:
+            return v
+    return msg + (f" ({d.message_detail})" if d.message_detail else "")
 
 
 def apply_ops(url: str, user: str, ops: list[dict], via: str, actor: str | None = None) -> dict:

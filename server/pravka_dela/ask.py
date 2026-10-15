@@ -75,8 +75,11 @@ Claude видит только это дело: поля, заметку цел�
 строки карточки и строки дела в списках: всё названное — шаги, само дело не меняется; без ключа Claude — шаг названием,
 как сказано (правило то же). О них reply пишет сервер одной строкой («Завёл для «…»: «…», на сегодня»); сделано
 последнее дело внутри — родитель поднимается (store._nest_rise), и reply говорит «всё внутри сделано — теперь: «…»».
-Вложить уже существующее дело — into у changes («положи это в дело про термшит»; -1 — вынуть), в карточке дела Claude
-для этого видит и остальные свои открытые дела одной строкой.
+Вложить уже существующее дело — into у changes («положи это в дело про термшит»; -1 — вынуть); «вложи сюда X» из
+карточки родителя — правка X, где заполнено одно into. Остальные свои открытые дела карточка дела показывает Claude
+только когда о вложении речь (NEST_WORDS) и не в «Для этого» — хвостом сообщения: список в 400 строк стоил бы ~$0,05
+каждому холодному вызову карточки. Строка страницы с открытым делом (scope.open — веб с карточкой справа, строка внизу
+вкладки телефона) понимает «до этого надо X» так же: дело внутри открытого (step у create).
 """
 
 from __future__ import annotations
@@ -108,6 +111,11 @@ EFFORT = "low"                 # правка короткая; ошибаетс
 MAX_INPUT = 4000
 MAX_TASKS = 300
 MAX_OTHER = 400                 # остальные открытые дела — коротко, чтобы названное находилось и не с этой страницы
+# О вложении речь (карточка дела, 15.10.2026): только тогда Claude видит остальные открытые дела — найти, куда вложить
+# это дело или что вложить сюда. «Положи/вложи/засунь/переложи», «внутрь», «часть того дела», «в дело/к делу/для
+# дела…», «под то дело». Не нашлось слов — список не нужен: «вынь» (into -1) обходится без него.
+NEST_WORDS = re.compile(r"полож|влож|засун|перелож|внутр|част[ьию]\b|\b(?:в|к|для|под)\s+(?:то\s+|эт\w+\s+)?дел[оауе]\b",
+                        re.IGNORECASE)
 MAX_SUGS = 150
 MAX_DEALS = 200                 # сделки на экране: Воронка, клиенты, человек (08.10.2026)
 NOTE_CHARS = 100
@@ -155,7 +163,7 @@ SYSTEM = """Ты правишь дела Саши в его сервисе «Д�
 route — "edit", если команда про дела или предложения на экране (поправить, перенести, закрыть,
   отменить, отдать другому, дописать, принять, отклонить). "new", если вся команда — только новые
   дела или надиктовка о новом без ссылки на то, что на экране: тогда changes, create и suggestions
-  пустые, её разберёт другой разбор.
+  пустые, её разберёт другой разбор. «До этого / для этого надо…» при открытом деле — ссылка на него: "edit".
 suggestions — решения по предложениям из НОВОГО, только П-номера из списка.
   n — номер П; decision — "accept" (принять, можно с правками) или "reject" (не нужно, не дело);
   reason — для reject коротко почему, словами Саши («делает Наташа», «уже сделано»); для accept — "".
@@ -197,7 +205,8 @@ changes — правки дел на экране, по одной записи 
     НАПОМИНАНИЕ ниже; «ещё раз через час» — от времени «сейчас» в сообщении.
 create — новые дела, только если Саша прямо просит завести их внутри правки. Поля — как у changes
   (title обязателен; due, now, project, person, ball, notes_add — заметка нового дела).
-  step — true только в КАРТОЧКЕ ДЕЛА: новое дело — шаг к этому делу (раздел ниже); иначе false.
+  step — true, если открыто дело (раздел КАРТОЧКА ДЕЛА или ОТКРЫТО В КАРТОЧКЕ СПРАВА) и Саша говорит, что сделать до
+    него или для него: новое дело — шаг к этому делу (раздел КАРТОЧКА ДЕЛА ниже); иначе false.
 reply — одна-две фразы Саше: что сделал — только то, что есть в changes, create, suggestions и card;
   чего там нет, того ты не сделал, и «добавил» про это не пиши. Чего не понял или не нашёл — скажи прямо,
   назвав дела, о которых думал. Дела — названием: номеров Саша не видит. Без вступлений. Нужен ответ
@@ -256,8 +265,11 @@ card — правки людей, сделок и хронологии, по з�
 «Сейчас» (now "on") — не больше пяти дел на сегодня: их Саша обязан сделать. Уже пять — скажи в reply.
 
 КАРТОЧКА ДЕЛА — если в сообщении раздел «КАРТОЧКА ДЕЛА»: Саша открыл одно дело и говорит про него («это»,
-«его», «перенеси» — оно). Правки — в changes, num — его номер. ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА — только чтобы
-вложить это дело в одно из них (into) или назвать в ответе: их самих не правь.
+«его», «перенеси» — оно). Правки — в changes, num — его номер. ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА (если они есть в
+сообщении) — только чтобы вложить это дело в одно из них (into) или одно из них в это дело («вложи сюда…», «это тоже
+для этого дела» — changes с его num, где заполнено одно into — номер этого дела), или назвать в ответе; больше их не
+правь. Если на странице дел открыто дело (ОТКРЫТО В КАРТОЧКЕ СПРАВА) и Саша говорит, что сделать до него или для
+него, — это тоже шаг к нему: create с step true, как ниже.
 ШАГ К ЭТОМУ ДЕЛУ — то, что надо сделать до него или для него: «до этого надо…», «сначала…», «перед этим…», «для
 этого…», «чтобы это сделать, надо…». Это новое дело — create с step true, а НЕ notes_add и не правка этого дела
 (его не меняй). Шаг сам свяжется с этим делом и возьмёт его проект, сделку, человека и срок: project, person и due
@@ -613,11 +625,16 @@ def _task_card(conn, url: str, user: str, t: dict, today: dt.date) -> tuple[list
                      + (" · метки: " + ", ".join(names.get(k, k) for k in (t.get("dirs") or [])[1:]) if len(t.get("dirs") or []) > 1 else ""))
         if t.get("goal"):
             lines.append("Это цель (узел дерева)" + (f", практика: {t['rhythm']}" if t.get("rhythm") else "") + ".")
-        for title, pid in (("Рядом шаги к той же цели", t.get("why_id")), ("Его шаги", t["id"])):
+        # Дела внутри обычного дела (15.10.2026, правило 26) — не «шаги к цели»: у них место среди соседей (pos).
+        up_goal = bool(chain and chain[0].get("goal"))
+        for title, pid, inside in (
+                ("Рядом шаги к той же цели" if up_goal else "Рядом — другие дела внутри того же дела", t.get("why_id"), not up_goal),
+                ("Его шаги" if t.get("goal") else "Внутри него (по порядку)", t["id"], not t.get("goal"))):
             if not pid:
                 continue
-            rows = conn.execute("SELECT v.title FROM tasks.v_tasks v WHERE v.why_id = %s AND v.status = 'open' AND v.id <> %s "
-                                "ORDER BY v.goal DESC, v.due_date NULLS LAST, v.num LIMIT %s", (pid, t["id"], STEPS_SHOWN)).fetchall()
+            order = "v.pos NULLS LAST, v.created_at, v.num" if inside else "v.goal DESC, v.due_date NULLS LAST, v.num"
+            rows = conn.execute(f"SELECT v.title FROM tasks.v_tasks v WHERE v.why_id = %s AND v.status = 'open' AND v.id <> %s "
+                                f"ORDER BY {order} LIMIT %s", (pid, t["id"], STEPS_SHOWN)).fetchall()
             if rows:
                 lines.append(f"{title}: " + "; ".join(r["title"] for r in rows))
     card, pr = None, None
@@ -890,6 +907,13 @@ def _fields(x: dict, t: dict | None, index: dict, today: dt.date) -> tuple[dict,
 _wire = store.jsonable  # значение поля так, как его шлёт веб: даты и uuid строкой, время ЧЧ:ММ
 
 
+def _into_only(x: dict) -> bool:
+    """Правка, в которой заполнено одно into (вложить в дело) — «вложи сюда X» из карточки дела."""
+    return (int(x.get("into") or 0) > 0 and not any(str(x.get(k) or "").strip() for k in _TEXT_FIELDS)
+            and not x.get("ball") and not x.get("now") and not x.get("estimate_min") and not x.get("labels_add")
+            and not x.get("labels_remove") and not x.get("status"))
+
+
 def to_ops(data: dict, tasks: dict, index: dict, today: dt.date, defaults: dict,
            now_ids: set[str] | None = None, step: dict | None = None,
            pool: dict | None = None) -> tuple[list[dict], list[dict], list[str], list[int]]:
@@ -899,9 +923,11 @@ def to_ops(data: dict, tasks: dict, index: dict, today: dt.date, defaults: dict,
     step — карточка дела (15.10.2026): {"near": store.step_of, "only": режим «Для этого»}; create со step: true (а в
     режиме «Для этого» — любой) — шаг к этому делу: «Зачем», проект, сделка, человек и срок — от него, если Саша не
     назвал своих. Последнее в ответе — номера операций-шагов (для строки reply).
-    pool — дела, в которые можно вложить (into): по умолчанию те же tasks; в карточке дела — и все свои открытые.
+    pool — дела, в которые можно вложить (into): по умолчанию те же tasks; в карточке дела — и все свои открытые
+    (если Claude их видел). Из pool в карточке дела правится только одно: вложить в это дело («вложи сюда X»).
     """
     pool = pool if pool is not None else tasks
+    here = step.get("parent") if step else None
     ops, undo, miss, steps = [], [], [], []
     seen = set()
     room = None
@@ -919,6 +945,8 @@ def to_ops(data: dict, tasks: dict, index: dict, today: dt.date, defaults: dict,
 
     for x in data.get("changes") or []:
         t = tasks.get(x.get("num"))
+        if not t and here and _into_only(x) and int(x["into"]) == here["num"]:
+            t = pool.get(x.get("num"))  # «вложи сюда X» из карточки дела: другое дело правим только так
         if not t:
             miss.append("одного из названных дел нет ни на экране, ни среди открытых")
             continue
@@ -1535,6 +1563,12 @@ def context(url: str, user: str, text: str, scope: dict) -> dict:
     focused = byid.get(focus) if focus else None
     picked = [byid[i] for i in selected if i in byid]
     shown = byid.get(opened) if opened else None
+    # Открыто дело (15.10.2026, хвост «Для этого» у строки внизу вкладки телефона и у строки страницы веба с карточкой
+    # справа): «до этого надо X» — дело внутри него, как в карточке дела, а не заметка или соседнее дело. То же правило
+    # связи и срока (store.step_of); строку о заведённом пишет сервер (steps_said). Старые телефоны шлют так же — open.
+    par = shown or focused
+    step = ({"parent": par, "near": store.step_of(par, user, today), "only": False}
+            if par and par["status"] == "open" and not par.get("goal") else None)
     # П-номер — место на экране, а не в выборке: разобранное с другого устройства оставляет дырку,
     # и «третье» по-прежнему про третье сверху.
     by_sid = {str(s["id"]): s for s in srows}
@@ -1591,7 +1625,7 @@ def context(url: str, user: str, text: str, scope: dict) -> dict:
     return {"text": text, "system": system, "message": screen + "\n\n" + "\n".join(tail), "screen": screen,
             "tail": "\n".join(tail), "model": model, "effort": effort,
             "tasks": {r["num"]: r for r in [*others, *rows]}, "focused": focused, "sugs": sugs, "targets": targets,
-            "index": index, "today": today, "card": card, "now_ids": now_ids}
+            "index": index, "today": today, "card": card, "now_ids": now_ids, "step": step}
 
 
 def _task_context(url: str, user: str, text: str, scope: dict) -> dict:
@@ -1611,26 +1645,33 @@ def _task_context(url: str, user: str, text: str, scope: dict) -> dict:
         index["places"] = places = remind.places_of(conn, user)
         hm = conn.execute("SELECT to_char(now() AT TIME ZONE 'Europe/Moscow', 'HH24:MI') AS hm").fetchone()["hm"]
         lines, card, near = _task_card(conn, url, user, t, today)
-        # Остальные свои открытые — одной строкой (15.10.2026): «положи это в дело про термшит» — Claude должен найти,
-        # куда вложить (into). Править их отсюда нельзя: в tasks только это дело.
+        # Остальные свои открытые — одной строкой (15.10.2026): «положи это в дело про термшит», «вложи сюда драфт» —
+        # Claude должен найти, куда (или что) вложить (into). Только когда о вложении речь (NEST_WORDS — в команде или
+        # разговоре) и не в «Для этого» (там правки дела всё равно отбрасываются): до 400 строк — 8–10 тыс. токенов
+        # Opus к каждому холодному вызову карточки (~$0,05), а нужны они редко. И хвостом, а не в голове экрана: голова
+        # карточки кэшируется на разговор, и список в ней остался бы с первой реплики.
+        talk_said = " ".join(str(x.get("said") or "") for x in scope.get("history") or [] if isinstance(x, dict))
+        want_others = not scope.get("step") and bool(NEST_WORDS.search(text + " " + talk_said))
         others = conn.execute(
-            "SELECT * FROM tasks.v_tasks WHERE owner_id = %s AND status = 'open' AND id <> %s "
-            "ORDER BY project_name NULLS FIRST, due_date NULLS LAST, num LIMIT %s", (user, t["id"], MAX_OTHER)).fetchall()
+            "SELECT * FROM tasks.v_tasks WHERE owner_id = %s AND status = 'open' AND id <> %s AND NOT goal "
+            "ORDER BY project_name NULLS FIRST, due_date NULLS LAST, num LIMIT %s",
+            (user, t["id"], MAX_OTHER)).fetchall() if want_others else []
     model, effort = llm.route(url, TASK_ROUTE)
     msg = ["Календарь: " + _calendar(today), "Страница: карточка дела"]
     if me and not me["owner"]:
         msg.append(f"Команду даёт не Саша, а {me['name']}: «Саша» и mine выше — про этого человека.")
     msg += ["", *lines]
+    screen = _snapshot(user, scope.get("talk_id"), "\n".join(msg))
+    tail = [f"Сегодня {today.isoformat()}, {WD[today.weekday()]}, сейчас {hm}.", f"В «Сейчас» сегодня: {len(now_ids)} из {NOW_MAX}."]
     if others:
-        msg += ["", f"ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА ({len(others)}) — только чтобы вложить это дело (into), не правь их:"]
+        tail += ["", f"ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА ({len(others)}) — только чтобы вложить это дело в одно из них или одно из "
+                     "них сюда (into), больше их не правь:"]
         group = object()
         for r in others:
             if r["project_name"] != group:
                 group = r["project_name"]
-                msg.append(f"{group or 'Входящие'}:")
-            msg.append(_task_line(r, today, short=True))
-    screen = _snapshot(user, scope.get("talk_id"), "\n".join(msg))
-    tail = [f"Сегодня {today.isoformat()}, {WD[today.weekday()]}, сейчас {hm}.", f"В «Сейчас» сегодня: {len(now_ids)} из {NOW_MAX}."]
+                tail.append(f"{group or 'Входящие'}:")
+            tail.append(_task_line(r, today, short=True))
     if talk:
         tail += ["", "РАЗГОВОР — команда ниже его продолжение (старое сверху; сделанное уже применено):", *talk]
     head = ("ДЛЯ ЭТОГО — Саша называет, что сделать для этого дела: " if scope.get("step")
@@ -1671,6 +1712,11 @@ def raised_said(raised: list[dict]) -> str:
     """Сделано последнее дело внутри — родитель поднялся (store._nest_rise): «Всё внутри сделано — теперь: «…»»."""
     return " ".join(f"Всё внутри сделано — теперь: «{r['title']}»" + (", на сегодня" if r.get("moved") else "") + "."
                     for r in raised)
+
+
+def fell_said(fell: list[dict], today: dt.date) -> str:
+    """Дело внутри снова открыто — подъём родителя отменён (tasks.nest_fall): «Срок «…» — снова на 20.10.»"""
+    return " ".join(f"Срок «{r['title']}» — снова {_when_words(r.get('due_date'), today)}." for r in fell)
 
 
 def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None,
@@ -1755,9 +1801,12 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
     # Шаги и поднятые дела — строкой сервера (15.10.2026): Claude шагов в reply не называет, срок считает сервер.
     made = [r["task"] for r in (results[len(sops) + i] for i in step_at) if r.get("ok") and r.get("task")]
     raised = [r["raised"] for r in results if r.get("ok") and r.get("raised")]
+    fell = [r["fell"] for r in results if r.get("ok") and r.get("fell")]
     # «Для этого»: строка сервера и есть ответ — «Готово.» модели к ней ничего не добавляет (проба 15.10.2026).
     said = (data.get("reply") or "").strip() if not (only and made) else ""
-    reply = " ".join(x for x in [steps_said(step["parent"], made, today) if step else "", raised_said(raised), said] if x)
+    reply = " ".join(x for x in [steps_said(step["parent"], made, today) if step else "", raised_said(raised),
+                                 fell_said(fell, today), said] if x)
     return {"route": "edit", "reply": reply, "changed": undo, "tasks": created, "decided": done,
             "crm": crm_done, "notes": [], "errors": errors + smiss + miss + cmiss, "usage": usage, "refs": refs[:MAX_REFS],
-            "model": (usage or {}).get("model") or model, "steps": [str(x["id"]) for x in made], "raised": raised}
+            "model": (usage or {}).get("model") or model, "steps": [str(x["id"]) for x in made], "raised": raised,
+            "fell": fell}

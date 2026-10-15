@@ -101,11 +101,12 @@ def candidates(conn, owner: str, seen: dict | None = None) -> list[dict]:
 
 
 def goals(conn, owner: str) -> list[dict]:
-    """Цели дерева — куда разборщик может повесить «Зачем»: открытые узлы (и дела, у которых есть шаги), кроме
-    тех, под которыми дел не заводят. С путём от направления: «Здоровье › Еда › Белок»."""
+    """Цели дерева — куда разборщик может повесить «Зачем»: открытые узлы, кроме тех, под которыми дел не заводят. С
+    путём от направления: «Здоровье › Еда › Белок». Дело с делами внутри (правило 26) — не цель: до 15.10.2026 сюда шли
+    и «дела с шагами», и разборщик мог бы повесить дело под клиентское дело как под цель."""
     rows = conn.execute(
         "SELECT id, num, title, why_id, dirs, goal, rhythm, no_steps FROM tasks.v_tasks WHERE owner_id = %s "
-        "AND status = 'open' AND (goal OR steps_open > 0) ORDER BY num", (owner,)).fetchall()
+        "AND status = 'open' AND goal ORDER BY num", (owner,)).fetchall()
     by = {r["id"]: r for r in rows}
     out = []
     for r in rows:

@@ -369,10 +369,14 @@ def test_task_card_sees_only_this_task_and_new_lands_next_to_it(dela):
     assert "Место в дереве: Дело › Мандаты закрываются с гонораром › (это дело)" in u
     assert "Рядом шаги к той же цели: Позвонить Ивану про фонды" in u and "Сделка: Альфа: фонды" in u
     assert "Журнал дела (свежие сверху):" in u and "due_date →" in u
-    # Остальные свои открытые — одной строкой и только чтобы вложить это дело (into, 15.10.2026); экрана нет.
-    card_part, other_part = u.split("ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА")
-    assert "Совсем другое дело" not in card_part and "Совсем другое дело" in other_part and "ДЕЛА НА ЭКРАНЕ" not in u
+    # Экрана нет; остальные свои открытые — только когда о вложении речь (15.10.2026): здесь не о нём — их нет.
+    assert "Совсем другое дело" not in u and "ДЕЛА НА ЭКРАНЕ" not in u and "ДРУГИЕ МОИ" not in u
     assert list(ask.context(dela, "sasha", "x", scope)["tasks"]) == [t["num"]]  # править можно только это дело
+    # О вложении речь — они есть, одной строкой и хвостом: голова экрана карточки та же (кэш), «вложить» — только into.
+    nest = ask.context(dela, "sasha", "положи это в дело про ремонт", {"card": "task", "open": t["id"]})
+    head, other_part = nest["message"].split("ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА")
+    assert "Совсем другое дело" not in head and "Совсем другое дело" in other_part and nest["screen"] in head
+    assert other["num"] in nest["pool"] and list(nest["tasks"]) == [t["num"]]
     assert u.rstrip().endswith("КСТАТИ — Саша вдогонку к этому делу: кстати фонды просят цифры")
     assert out["route"] == "edit" and not out["errors"], out["errors"]
     assert out["changed"][0]["after"]["notes"].endswith("фонды просят цифры за 3 года")
@@ -385,7 +389,7 @@ def test_task_card_sees_only_this_task_and_new_lands_next_to_it(dela):
     # У цели новое — её шагом.
     ctx = ask.context(dela, "sasha", "добавь шаг", {"card": "task", "open": goal["id"]})
     assert ctx["near"] == {"why_id": goal["id"]} and "Это цель (узел дерева)" in ctx["message"]
-    assert "Его шаги: " in ctx["message"] and other["title"] not in ctx["message"].split("ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА")[0]
+    assert "Его шаги: " in ctx["message"] and other["title"] not in ctx["message"]
 
 
 def test_task_card_api_scope(dela, monkeypatch):
