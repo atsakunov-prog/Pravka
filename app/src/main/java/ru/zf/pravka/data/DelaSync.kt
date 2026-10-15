@@ -425,6 +425,10 @@ class DelaSync(
             val job = start.optString("job").takeIf { it.isNotBlank() && it != "null" }
                 ?: throw DelaException("Дела не дали номер задания: ${start.toString().take(200)}")
             log("дела: Claude, ${clean.length} знаков, дел на экране ${scope.optJSONArray("task_ids")?.length() ?: 0}")
+            // Режим отладки (docs/dela-phone-24.md): «сказал X — сделал Y» — главное в записке «Что не так?».
+            ru.zf.pravka.core.DelaDebug.note("ask", clean, JSONObject().put("card", scope.optString("card")).put("open", scope.optString("open"))
+                .put("step", scope.optBoolean("step")).put("on_screen", scope.optJSONArray("task_ids")?.length() ?: 0)
+                .put("in_view", scope.optJSONArray("visible_ids")?.length() ?: 0))
             var misses = 0
             for (i in 0 until ru.zf.pravka.core.DelaAsk.MAX_POLLS) {
                 delay(ru.zf.pravka.core.DelaAsk.pollDelayMs(i))
@@ -446,11 +450,23 @@ class DelaSync(
                 if (d.optString("status") == "run") continue
                 val r = ru.zf.pravka.core.DelaAsk.parse(d)
                 log("дела: Claude ответил — ${r.route}, поправлено ${r.changed.size}, заведено ${r.tasks.size}, ошибок ${r.errors.size}")
+                runCatching {
+                    val s = store.view.value
+                    ru.zf.pravka.core.DelaDebug.note("reply", r.reply.ifBlank { "(без ответа словами)" }, JSONObject().put("route", r.route)
+                        .put("changed", JSONArray(r.changed.map { c -> (c.after.optString("title").ifBlank { c.title }) + ": " + ru.zf.pravka.core.DelaAsk.describe(c, s) }))
+                        .put("tasks", JSONArray(r.tasks.map { "#${it.num} ${it.title}" }))
+                        .put("errors", JSONArray(r.errors))
+                        .put("steps", d.optJSONArray("steps") ?: JSONArray()).put("raised", d.optJSONArray("raised") ?: JSONArray())
+                        .put("fell", d.optJSONArray("fell") ?: JSONArray()))
+                }
                 pullAfterClaude()
                 return@runCatching r
             }
             throw DelaException("Claude думает дольше пяти минут — правка появится сама, когда он закончит")
-        }.recoverCatching { e -> throw DelaException(why(e)) }
+        }.recoverCatching { e ->
+            ru.zf.pravka.core.DelaDebug.note("error", "Claude: " + why(e))
+            throw DelaException(why(e))
+        }
     }
 
     /**

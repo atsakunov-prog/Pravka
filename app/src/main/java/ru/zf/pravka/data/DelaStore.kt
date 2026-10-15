@@ -355,7 +355,18 @@ class DelaStore(private val context: Context) {
                 // слить своё со свежим: это делает SvodStore, владельцу шуметь незачем.
                 if (q.op.optString("op") == "svod.set" && ru.zf.pravka.core.Svod.isStale(r.optString("error"))) continue
                 notices.add(0, Notice(now, "Сервер не принял $what: ${r.optString("error").ifBlank { "без причины" }}", true, id))
+                DelaDebug.note("op_fail", "Сервер не принял $what: ${r.optString("error").ifBlank { "без причины" }}", now = now)
                 continue
+            }
+            // Режим отладки (правило 27 сервера): сделано последнее дело внутри — родитель поднялся (raised); дело снова
+            // открыто — родителю вернули срок (fell). Тост об этом телефон пишет сам, а здесь — что сказал сервер.
+            r.optJSONObject("raised")?.let { x ->
+                DelaDebug.note("op_result", "всё внутри сделано — поднят «#${x.optInt("num")} ${x.optString("title")}»" +
+                    if (x.optBoolean("moved")) ", на сегодня" else "", x, now)
+            }
+            r.optJSONObject("fell")?.let { x ->
+                DelaDebug.note("op_result", "родителю вернули срок: «#${x.optInt("num")} ${x.optString("title")}» — " +
+                    x.optString("due_date").takeIf { it.isNotBlank() && it != "null" }.orEmpty().ifBlank { "без срока" }, x, now)
             }
             // Чужое имя другим именем не пишется (аудит 15.10.2026, №1): сервер говорит, что не дописал и почему, —
             // заметкой, а экран CRM показывает её тостом вместо «Имя дописано» (имя иначе молча пропадало).

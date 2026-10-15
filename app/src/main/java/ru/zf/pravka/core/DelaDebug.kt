@@ -27,6 +27,8 @@ object DelaDebug {
     const val ROWS = 200
     const val EVENTS = 30
     const val OPS = 30
+    /** События, что не операции и не журнал: сказал Claude, ответ, тост, что сервер не принял или сделал сверх. */
+    const val NOTES = 30
     const val TEXT_MAX = 4000
 
     /**
@@ -47,8 +49,11 @@ object DelaDebug {
 
     fun infoJson(i: Info): JSONObject = JSONObject().put("on", i.on).put("new", i.new).put("last", i.last).put("answered", i.answered)
 
-    /** Строка списка, как видна: id дела, было ли в окне, под каким заголовком группы. */
-    data class Row(val id: String, val inView: Boolean, val group: String = "")
+    /**
+     * Строка списка, как видна: id дела, было ли в окне, под каким заголовком группы; [depth] — отступ на экране
+     * («Деревом», дела внутри над родителем в «Сейчас», шаги к цели), [folded] — родитель «Деревом» свёрнут.
+     */
+    data class Row(val id: String, val inView: Boolean, val group: String = "", val depth: Int = 0, val folded: Boolean = false)
 
     /** Разговор с Claude на экране — как `turnMemo` веба: сказал, ответил, что сделано. */
     data class Said(val said: String, val reply: String, val done: String)
@@ -95,7 +100,30 @@ object DelaDebug {
 
     fun recentOps(): List<Pair<Long, JSONObject>> = synchronized(recent) { recent.toList() }
 
-    internal fun clearOps() = synchronized(recent) { recent.clear() }
+    private val said = ArrayDeque<Pair<Long, JSONObject>>()
+
+    /**
+     * Событие страницы, которое не операция очереди и не строка журнала (поезд 16.10.2026, приёмка: «что сказал строке
+     * Claude, что он ответил и поменял, тосты, ошибки сети»): [kind] — `ask`, `reply`, `toast`, `op_fail` (сервер не
+     * принял), `op_result` (сервер сделал сверх: поднял родителя, вернул срок), `error`. В памяти процесса, как кольцо
+     * операций; тосты самой записки («🐞 …») не копятся — каждая следующая несла бы предыдущие.
+     */
+    fun note(kind: String, text: String, data: JSONObject? = null, now: Long = System.currentTimeMillis()) {
+        if (kind == "toast" && text.startsWith("🐞")) return
+        val o = JSONObject().put("kind", kind).put("text", text.trim().take(600))
+        if (data != null) o.put("data", shrink(data, 0))
+        synchronized(said) {
+            said.addLast(now to o)
+            while (said.size > NOTES) said.removeFirst()
+        }
+    }
+
+    fun recentNotes(): List<Pair<Long, JSONObject>> = synchronized(said) { said.toList() }
+
+    internal fun clearOps() {
+        synchronized(recent) { recent.clear() }
+        synchronized(said) { said.clear() }
+    }
 
     /** Значение коротко: строки до 300, списки до 20, глубина 3 — одна операция не съест записку. */
     fun shrink(v: Any?, depth: Int): Any? = when (v) {
@@ -137,8 +165,17 @@ object DelaDebug {
         if (!t.open) o.put("status", t.status)
         if (DelaGroups.isNow(t, today)) o.put("now", true)
         if (t.goal) o.put("goal", true)
+        // Дела внутри дела (правило 27): родитель, место среди соседей, сколько внутри открыто — данными, как у веба;
+        // отступ на экране и свёрнутый родитель «Деревом».
+        DelaSteps.parentOf(t, s)?.let { o.put("in", numTitle(it)) }
+        if (t.pos > 0) o.put("pos", t.pos)
+        DelaSteps.insideOf(t.id, s).size.takeIf { it > 0 }?.let { o.put("inside", it) }
+        if (r.depth > 0) o.put("depth", r.depth)
+        if (r.folded) o.put("folded", true)
         return o.put("in_view", r.inView)
     }
+
+    private fun numTitle(t: Dela.Task): String = (if (t.num > 0) "#${t.num} " else "") + t.title.take(80)
 
     /** Открытое дело целиком — все поля строки, как их знает копия, и имена вместо id. */
     private fun cardJson(t: Dela.Task, s: Dela.Snapshot): JSONObject {
@@ -151,6 +188,13 @@ object DelaDebug {
         s.projects[t.projectId]?.let { f.put("project_name", it.name) }
         s.deals[t.dealId]?.let { f.put("deal_name", it.name) }
         s.tasks[t.whyId]?.let { f.put("why_title", it.title) }
+        // Дела внутри дела (правило 27): внутри чего это дело и что внутри него — по месту, как блок «Внутри».
+        DelaSteps.parentOf(t, s)?.let { f.put("for", numTitle(it)) }
+        val kids = DelaSteps.insideOf(t.id, s)
+        if (kids.isNotEmpty()) f.put("inside", JSONArray(kids.mapIndexed { i, k ->
+            "${i + 1}. ${numTitle(k)}" + (if (k.dueDate.isNotBlank()) " · срок ${k.dueDate}" else "") + (if (k.pos > 0) " · pos ${k.pos}" else "")
+        }))
+        DelaSteps.doneInside(t.id, s).takeIf { it > 0 }?.let { f.put("inside_done", it) }
         return JSONObject().put("kind", if (t.goal) "goal" else "task").put("id", t.id).putIf("num", t.num).put("title", t.title).put("fields", f)
     }
 
@@ -221,27 +265,138 @@ object DelaDebug {
     }
 
     /**
-     * Действия записки — как кольцо веба, старые первыми: операции очереди ([ops] — миг и операция) и строки журнала
-     * приложения ([events]); последние [EVENTS] + [OPS] вместе, по времени.
+     * Действия записки — как кольцо веба, старые первыми: операции очереди ([ops] — миг и операция), события кольца
+     * ([notes]: сказал Claude, ответ, тосты, что сервер не принял или сделал сверх) и строки журнала приложения
+     * ([events]); все вместе по времени, не больше [EVENTS] + [OPS] + [NOTES]. [s] — копия: названия дел вместо id и
+     * вложенность словами («внутрь «#12 …»», «вынуть из дела», «место 2»).
      */
-    fun actions(ops: List<Pair<Long, JSONObject>>, events: List<String>, now: OffsetDateTime): JSONArray {
+    fun actions(
+        ops: List<Pair<Long, JSONObject>>,
+        events: List<String>,
+        now: OffsetDateTime,
+        notes: List<Pair<Long, JSONObject>> = emptyList(),
+        s: Dela.Snapshot? = null,
+    ): JSONArray {
         val all = ArrayList<Pair<String, JSONObject>>()
+        fun iso(at: Long) = java.time.Instant.ofEpochMilli(at).atOffset(now.offset).toString()
         for ((at, op) in ops) {
-            val iso = java.time.Instant.ofEpochMilli(at).atOffset(now.offset).toString()
-            all += iso to JSONObject().put("at", iso).put("kind", "op").put("text", opWords(op)).put("data", op)
+            val t = iso(at)
+            all += t to JSONObject().put("at", t).put("kind", "op").put("text", opWords(op, s)).put("data", op)
+        }
+        for ((at, n) in notes) {
+            val t = iso(at)
+            all += t to JSONObject(n.toString()).put("at", t)
         }
         for (line in events.takeLast(EVENTS)) {
-            val iso = logAt(line, now) ?: continue
-            all += iso to JSONObject().put("at", iso).put("kind", "event").put("text", line.substring(minOf(line.length, 19)).trim().take(600))
+            val t = logAt(line, now) ?: continue
+            all += t to JSONObject().put("at", t).put("kind", "event").put("text", line.substring(minOf(line.length, 19)).trim().take(600))
         }
-        return JSONArray().apply { all.sortedBy { it.first }.takeLast(EVENTS + OPS).forEach { put(it.second) } }
+        return JSONArray().apply { all.sortedBy { it.first }.takeLast(EVENTS + OPS + NOTES).forEach { put(it.second) } }
     }
 
-    private fun opWords(op: JSONObject): String {
+    private fun opWords(op: JSONObject, s: Dela.Snapshot? = null): String {
         val what = op.optJSONObject("task")?.optString("title").orEmpty().ifBlank {
             op.optJSONObject("data")?.let { it.optString("name").ifBlank { it.optString("summary") } }.orEmpty()
+        }.ifBlank { s?.tasks?.get(op.optString("id"))?.title.orEmpty() }
+        val nest = nestWords(op, s)
+        return op.optString("op", "?") + (if (what.isNotBlank()) " «${what.take(80)}»" else "") + if (nest.isNotBlank()) " — $nest" else ""
+    }
+
+    private fun JSONObject.idOrNull(k: String): String? = opt(k)?.takeIf { it != JSONObject.NULL }?.toString()?.takeIf { it.isNotBlank() && it != "null" }
+
+    /**
+     * Вложенность словами (правило 27): без них в записке только uuid в `why_id`, и «вложил — а оно не там» Claude не
+     * прочтёт. `why_id` на цель — это «Зачем», а не «внутрь».
+     */
+    internal fun nestWords(op: JSONObject, s: Dela.Snapshot?): String {
+        val kind = op.optString("op")
+        val set = when (kind) { "task.set" -> op.optJSONObject("set"); "task.create" -> op.optJSONObject("task"); else -> null } ?: return ""
+        val out = ArrayList<String>()
+        val why = set.idOrNull("why_id")
+        if (set.has("why_id") && (kind == "task.set" || why != null)) {
+            val p = why?.let { s?.tasks?.get(it) }
+            out += when {
+                why == null -> "вынуть из дела"
+                p?.goal == true -> "Зачем — цель «${p.title.take(60)}»"
+                else -> "внутрь «" + (p?.let { numTitle(it) } ?: why) + "»"
+            }
         }
-        return op.optString("op", "?") + if (what.isNotBlank()) " «${what.take(80)}»" else ""
+        if (set.has("pos")) out += set.idOrNull("pos")?.toIntOrNull()?.takeIf { it > 0 }?.let { "место $it" } ?: "место снято"
+        return out.joinToString(", ")
+    }
+
+    // ------------------------------------------------------------ записка словами (лист «Отладка»)
+
+    private fun oneLine(v: Any?, n: Int): String {
+        val s = when (v) { null, JSONObject.NULL -> ""; is JSONArray -> (0 until v.length()).joinToString("; ") { v.opt(it).toString() }; else -> v.toString() }
+        val x = s.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+        return if (x.length <= n) x else x.take(n - 1) + "…"
+    }
+
+    private val ROW_SKIP = setOf("id", "num", "title", "in_view", "depth", "in", "pos", "inside", "folded")
+    private val SNAP_SKIP = setOf("v", "title", "route", "sub", "mode", "card", "selected", "rows", "rows_total", "kind")
+
+    /**
+     * Снимок записки словами — как `snapshot_lines` сервера (что видит Claude в `debug show`): экран, режим, открытое
+     * полями, строки списка по порядку (★ — были в окне, «↳» — отступ, «внутри #N …», место, сколько внутри), прочее —
+     * строкой на ключ. Лист «Отладка» раскрывает его под запиской.
+     */
+    fun snapshotLines(s: JSONObject?): List<String> {
+        if (s == null || s.length() == 0) return listOf("снимка нет")
+        val out = ArrayList<String>()
+        out += "экран: " + listOf(s.optString("title"), s.optString("route"), s.optString("sub")).filter { it.isNotBlank() }.joinToString(" · ")
+        s.optJSONObject("mode")?.let { m -> for (k in m.keys()) out += "  $k: ${oneLine(m.opt(k), 200)}" }
+        s.optJSONObject("card")?.let { c ->
+            out += "открыто: " + listOf(c.optString("kind"), c.optInt("num").takeIf { it > 0 }?.let { "#$it" }, c.optString("title"))
+                .filter { !it.isNullOrBlank() }.joinToString(" ")
+            c.optJSONObject("fields")?.let { f ->
+                for (k in f.keys()) {
+                    val v = f.opt(k)
+                    if (v is JSONArray && v.length() > 0 && v.opt(0) is String) {
+                        out += "  $k:"
+                        for (i in 0 until v.length()) out += "    " + oneLine(v.opt(i), 200)
+                    } else out += "  $k: ${oneLine(v, 300)}"
+                }
+            }
+        }
+        val rows = s.optJSONArray("rows")
+        if (rows != null && rows.length() > 0) {
+            val total = s.optInt("rows_total", rows.length())
+            out += "строки списка: ${rows.length()}" + (if (total > rows.length()) " из $total" else "") + " · ★ — были в окне"
+            for (i in 0 until rows.length()) {
+                val r = rows.optJSONObject(i) ?: continue
+                val nest = listOfNotNull(
+                    r.optString("in").takeIf { it.isNotBlank() }?.let { "внутри $it" },
+                    r.optInt("pos").takeIf { it > 0 }?.let { "место $it" },
+                    r.optInt("inside").takeIf { it > 0 }?.let { "внутри открыто $it" + if (r.optBoolean("folded")) " (свёрнуто)" else "" },
+                )
+                val rest = r.keys().asSequence().filter { it !in ROW_SKIP }.mapNotNull { k ->
+                    r.opt(k)?.takeIf { it != JSONObject.NULL && it.toString().isNotBlank() && it != false }?.let { if (it == true) k else oneLine(it, 80) }
+                }.toList()
+                out += "  " + (if (r.optBoolean("in_view")) "★ " else "  ") + "  ".repeat(minOf(r.optInt("depth"), 4)) +
+                    (if (r.optInt("depth") > 0) "↳ " else "") + (r.optInt("num").takeIf { it > 0 }?.let { "#$it " } ?: "") +
+                    r.optString("title").ifBlank { r.optString("id") } + (nest + rest).joinToString(" · ").let { if (it.isBlank()) "" else " — $it" }
+            }
+        }
+        for (k in s.keys()) {
+            if (k in SNAP_SKIP) continue
+            val v = s.opt(k)
+            if (v == null || v == JSONObject.NULL || v.toString().isBlank()) continue
+            out += "$k: ${oneLine(v, 600)}"
+        }
+        return out
+    }
+
+    /** Последние действия словами, старые сверху: «10:14:52 Claude ответил: …». */
+    fun actionLines(a: JSONArray?): List<String> {
+        if (a == null || a.length() == 0) return listOf("действий нет")
+        val word = mapOf("op" to "операция", "op_fail" to "сервер не принял", "op_result" to "сервер сделал", "ask" to "сказал Claude",
+            "reply" to "Claude ответил", "toast" to "подсказка", "error" to "ошибка", "nav" to "переход", "event" to "журнал", "parse" to "разбор")
+        return (0 until a.length()).mapNotNull { a.optJSONObject(it) }.map { x ->
+            val at = x.optString("at")
+            val hm = runCatching { OffsetDateTime.parse(at).atZoneSameInstant(ZoneId.of("Europe/Moscow")).toLocalTime().withNano(0).toString() }.getOrDefault(at.take(19))
+            "$hm ${word[x.optString("kind")] ?: x.optString("kind")}: ${oneLine(x.optString("text"), 400)}"
+        }
     }
 
     // ------------------------------------------------------------ операции и ответы

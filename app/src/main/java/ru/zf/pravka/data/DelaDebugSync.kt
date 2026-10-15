@@ -71,6 +71,15 @@ internal class DelaDebugSync(private val app: PravkaApp, private val log: (Strin
         DelaDebug.notes(app.delaSync.rawView(q))
     }
 
+    /**
+     * Одна записка целиком (`debug?id=`): снимок, действия, картинка — лист «Отладка» раскрывает её под строкой (приёмка
+     * 16.10.2026: «снимок раскрывается» и на телефоне, как «Снимок и действия» веба).
+     */
+    suspend fun one(id: String): Result<JSONObject> = runCatching {
+        app.delaSync.rawView("debug?id=" + java.net.URLEncoder.encode(id, "UTF-8")).optJSONObject("note")
+            ?: throw IllegalStateException("записки нет")
+    }
+
     /** Статус записки — сразу на сервер (из очереди тоже уйдёт, если связи нет). */
     suspend fun setStatus(id: String, status: String): String =
         app.delaSend(listOf(DelaDebug.setOp(Dela.newId(), id, status = status)), "Статус: ${DelaDebug.STATUS[status] ?: status}")

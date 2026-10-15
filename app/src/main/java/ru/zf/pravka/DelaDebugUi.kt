@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
@@ -57,6 +58,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
 import ru.zf.pravka.core.Dela
 import ru.zf.pravka.core.DelaDebug
 import ru.zf.pravka.trigger.PravkaAccessibilityService
@@ -131,7 +133,7 @@ internal fun DelaDebugBar(app: PravkaApp, screen: () -> DelaDebug.Screen, modifi
             )
             val op = DelaDebug.addOp(
                 Dela.newId(), Dela.newId(), body, version, size, now.toString(), snapJson,
-                DelaDebug.actions(DelaDebug.recentOps(), events, now), shot,
+                DelaDebug.actions(DelaDebug.recentOps(), events, now, DelaDebug.recentNotes(), app.delaStore.view.value), shot,
             )
             val words = runCatching { app.delaDebug.send(op) }.getOrElse { "Не записал: ${it.message}" }
             // Отказ сервера — текст остаётся в поле: дописать и отправить ещё раз. Легло в очередь — поле пустое.
@@ -219,6 +221,8 @@ private fun DelaDebugSheet(app: PravkaApp, onDismiss: () -> Unit) {
     var notes by remember { mutableStateOf<List<DelaDebug.Note>?>(null) }
     var error by remember { mutableStateOf("") }
     var reload by remember { mutableIntStateOf(0) }
+    // Раскрытая записка: снимок и действия под ней (одна за раз — лист не раздувается).
+    var openId by rememberSaveable { mutableStateOf("") }
     val today = LocalDate.now().toString()
     LaunchedEffect(filter, reload, info?.answered) {
         app.delaDebug.list(filter).onSuccess { notes = it; error = "" }.onFailure { error = it.message.orEmpty().ifBlank { "сервер не ответил" } }
@@ -247,7 +251,7 @@ private fun DelaDebugSheet(app: PravkaApp, onDismiss: () -> Unit) {
             list != null && list.isEmpty() -> PaperHint(if (filter == "open") "Новых записок нет." else "Записок нет.")
             list != null -> for (n in list) {
                 RowRule()
-                NoteRow(n, today) { status ->
+                NoteRow(app, n, today, open = openId == n.id, onOpen = { openId = if (openId == n.id) "" else n.id }) { status ->
                     app.appScope.launch {
                         Feedback.toast(app, app.delaDebug.setStatus(n.id, status))
                         reload++
@@ -259,7 +263,7 @@ private fun DelaDebugSheet(app: PravkaApp, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun NoteRow(n: DelaDebug.Note, today: String, onStatus: (String) -> Unit) {
+private fun NoteRow(app: PravkaApp, n: DelaDebug.Note, today: String, open: Boolean, onOpen: () -> Unit, onStatus: (String) -> Unit) {
     val t = LocalPravkaType.current
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
@@ -288,6 +292,53 @@ private fun NoteRow(n: DelaDebug.Note, today: String, onStatus: (String) -> Unit
                         .padding(horizontal = 8.dp, vertical = 5.dp),
                 )
             }
+        }
+        Text(
+            if (open) "Свернуть" else "Снимок и действия" + if (n.hasShot) " · картинка" else "",
+            style = t.meta,
+            color = Kv.accent,
+            modifier = Modifier.clip(RoundedCornerShape(KvShape.Tag)).clickable(onClick = onOpen).padding(horizontal = 4.dp, vertical = 5.dp),
+        )
+        if (open) NoteDetail(app, n)
+    }
+}
+
+/**
+ * Записка целиком под строкой листа: что было на экране и последние действия — теми же словами, что видит Claude
+ * (`DelaDebug.snapshotLines` / `actionLines`, как `debug show` сервера), и картинка экрана, если она есть.
+ */
+@Composable
+private fun NoteDetail(app: PravkaApp, n: DelaDebug.Note) {
+    val t = LocalPravkaType.current
+    var note by remember(n.id) { mutableStateOf<JSONObject?>(null) }
+    var error by remember(n.id) { mutableStateOf("") }
+    LaunchedEffect(n.id) {
+        app.delaDebug.one(n.id).onSuccess { note = it }.onFailure { error = it.message.orEmpty().ifBlank { "сервер не ответил" } }
+    }
+    val x = note
+    when {
+        error.isNotBlank() -> PaperHint("Записка не пришла: $error", Kv.bad)
+        x == null -> PaperHint("Загружаю снимок…")
+        else -> Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(KvShape.Tag)).background(Kv.panel).padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(1.dp),
+        ) {
+            val small = t.meta.copy(fontSize = 12.sp)
+            Text("Что было на экране", style = t.meta.copy(fontWeight = FontWeight.SemiBold), color = Kv.muted)
+            for (line in DelaDebug.snapshotLines(x.optJSONObject("snapshot"))) Text(line, style = small, color = Kv.text)
+            Text("Последние действия", style = t.meta.copy(fontWeight = FontWeight.SemiBold), color = Kv.muted, modifier = Modifier.padding(top = 6.dp))
+            for (line in DelaDebug.actionLines(x.optJSONArray("actions"))) Text(line, style = small, color = Kv.text)
+            val shot = x.optString("shot").takeIf { it.startsWith("data:image/") }
+            val bmp = remember(shot) {
+                shot?.let {
+                    runCatching {
+                        val b = android.util.Base64.decode(it.substringAfter(","), android.util.Base64.DEFAULT)
+                        android.graphics.BitmapFactory.decodeByteArray(b, 0, b.size)?.asImageBitmap()
+                    }.getOrNull()
+                }
+            }
+            if (bmp != null) androidx.compose.foundation.Image(bmp, contentDescription = "Экран в миг записки",
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
         }
     }
 }

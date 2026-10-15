@@ -38,6 +38,8 @@ object Feedback {
     }
 
     fun toast(context: Context, message: String, long: Boolean = false) {
+        // Режим отладки Дел (docs/dela-phone-24.md): тост — событие записки «Что не так?» (кольцо в памяти, без диска).
+        ru.zf.pravka.core.DelaDebug.note("toast", message)
         Toast.makeText(
             context.applicationContext,
             message,

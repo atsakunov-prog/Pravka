@@ -125,6 +125,96 @@ class DelaDebugTest {
         assertNull(DelaDebug.logAt("коротко", now))
     }
 
+    /** Поезд 16.10.2026 (правило 27 сервера): родитель #12, внутри него #13 (место 2) и #14 (место 1), цель #20. */
+    private fun nest() = Dela.Snapshot(
+        tasks = listOf(
+            Dela.Task(id = "p", num = 12, title = "Отправить термшит Ивану", ownerId = "me", dueDate = today),
+            Dela.Task(id = "k1", num = 13, title = "Набросать драфт", ownerId = "me", whyId = "p", pos = 2),
+            Dela.Task(id = "k2", num = 14, title = "Взять цифры из расшифровки", ownerId = "me", whyId = "p", pos = 1, dueDate = today),
+            Dela.Task(id = "k3", num = 15, title = "Старое внутри", ownerId = "me", whyId = "p", status = Dela.DONE),
+            Dela.Task(id = "g", num = 20, title = "Сделки закрываются", ownerId = "me", goal = true),
+        ).associateBy { it.id },
+        features = setOf(DelaDebug.FEATURE, "nest"),
+    )
+
+    @Test
+    fun `вложенность в снимке — у строки родитель, место, отступ, у карточки «для» и «Внутри» по месту`() {
+        val s = nest()
+        val o = DelaDebug.snapshot(
+            DelaDebug.Screen("nav:all", "Все дела", mode = mapOf("all_tree" to true),
+                rows = listOf(DelaDebug.Row("p", true, "Ромашка", folded = false), DelaDebug.Row("k2", true, "Ромашка", depth = 1),
+                    DelaDebug.Row("k1", false, "Ромашка", depth = 1)),
+                openTaskId = "p"),
+            s, today, "",
+        )
+        val rows = o.getJSONArray("rows")
+        val parent = rows.getJSONObject(0)
+        assertEquals("у родителя — сколько внутри открыто", 2, parent.getInt("inside"))
+        assertFalse(parent.has("in") || parent.has("depth"))
+        val k2 = rows.getJSONObject(1)
+        assertEquals("#12 Отправить термшит Ивану", k2.getString("in"))
+        assertEquals(1, k2.getInt("pos"))
+        assertEquals(1, k2.getInt("depth"))
+        assertTrue(o.getJSONObject("mode").getBoolean("all_tree"))
+        val f = o.getJSONObject("card").getJSONObject("fields")
+        assertEquals("1. #14 Взять цифры из расшифровки · срок $today · pos 1", f.getJSONArray("inside").getString(0))
+        assertEquals("2. #13 Набросать драфт · pos 2", f.getJSONArray("inside").getString(1))
+        assertEquals(1, f.getInt("inside_done"))
+        val child = DelaDebug.snapshot(DelaDebug.Screen("nav:all", "Все дела", openTaskId = "k1"), s, today, "")
+        assertEquals("#12 Отправить термшит Ивану", child.getJSONObject("card").getJSONObject("fields").getString("for"))
+        // Свёрнутый родитель «Деревом» — помечен, дела внутри него в строках нет.
+        val folded = DelaDebug.snapshot(DelaDebug.Screen("nav:all", "Все дела", rows = listOf(DelaDebug.Row("p", true, folded = true))), s, today, "")
+        assertTrue(folded.getJSONArray("rows").getJSONObject(0).getBoolean("folded"))
+        // Цель «Зачем» — не родитель: строки «внутри» у дела под целью нет.
+        val underGoal = s.copy(tasks = s.tasks + ("x" to Dela.Task(id = "x", num = 30, title = "Шаг к цели", ownerId = "me", whyId = "g")))
+        val r = DelaDebug.snapshot(DelaDebug.Screen("nav:all", "Все дела", rows = listOf(DelaDebug.Row("x", true))), underGoal, today, "")
+        assertFalse(r.getJSONArray("rows").getJSONObject(0).has("in"))
+    }
+
+    @Test
+    fun `действия — вложить и вынуть словами, Claude, тосты и ответы сервера по времени`() {
+        DelaDebug.clearOps() // кольца — на весь процесс: тосты других тестов здесь ни к чему
+        val s = nest()
+        val now = OffsetDateTime.of(2026, 10, 16, 10, 20, 0, 0, ZoneOffset.ofHours(3))
+        val t0 = now.minusMinutes(3).toInstant().toEpochMilli()
+        DelaDebug.noteOps(listOf(
+            JSONObject().put("op", "task.set").put("id", "k1").put("set", JSONObject().put("why_id", "p").put("pos", 2)),
+            JSONObject().put("op", "task.set").put("id", "k2").put("set", JSONObject().put("why_id", JSONObject.NULL)),
+            JSONObject().put("op", "task.set").put("id", "k2").put("set", JSONObject().put("why_id", "g")),
+        ), now = t0)
+        DelaDebug.note("ask", "положи драфт в термшит", now = t0 + 1000)
+        DelaDebug.note("reply", "Вложил.", JSONObject().put("changed", JSONArray().put("Набросать драфт: внутрь")), now = t0 + 2000)
+        DelaDebug.note("toast", "🐞 №3 записал", now = t0 + 3000)
+        DelaDebug.note("toast", "Сделано: Набросать драфт", now = t0 + 4000)
+        DelaDebug.note("op_result", "всё внутри сделано — поднят «#12 Отправить термшит Ивану»", now = t0 + 5000)
+        val a = DelaDebug.actions(DelaDebug.recentOps(), emptyList(), now, DelaDebug.recentNotes(), s)
+        val texts = (0 until a.length()).map { a.getJSONObject(it).getString("text") }
+        assertEquals("task.set «Набросать драфт» — внутрь «#12 Отправить термшит Ивану», место 2", texts[0])
+        assertEquals("task.set «Взять цифры из расшифровки» — вынуть из дела", texts[1])
+        assertEquals("task.set «Взять цифры из расшифровки» — Зачем — цель «Сделки закрываются»", texts[2])
+        assertEquals(listOf("ask", "reply", "toast", "op_result"), (3 until a.length()).map { a.getJSONObject(it).getString("kind") })
+        assertFalse("тост самой записки в кольцо не идёт", texts.any { it.startsWith("🐞") })
+        assertEquals("Набросать драфт: внутрь", a.getJSONObject(4).getJSONObject("data").getJSONArray("changed").getString(0))
+        repeat(DelaDebug.NOTES + 3) { DelaDebug.note("toast", "т$it", now = t0 + 10_000L + it) }
+        assertEquals(DelaDebug.NOTES, DelaDebug.recentNotes().size)
+    }
+
+    @Test
+    fun `записка словами — экран, строки с отступом и вложенностью, действия по-русски`() {
+        val snapJson = DelaDebug.snapshot(
+            DelaDebug.Screen("nav:all", "Все дела", sub = "открытых 3",
+                rows = listOf(DelaDebug.Row("p", true, "Ромашка"), DelaDebug.Row("k2", false, "Ромашка", depth = 1)), openTaskId = "p"),
+            nest(), today, "")
+        val lines = DelaDebug.snapshotLines(snapJson)
+        assertEquals("экран: Все дела · nav:all · открытых 3", lines[0])
+        assertTrue(lines.any { it.trim() == "1. #14 Взять цифры из расшифровки · срок $today · pos 1" })
+        assertTrue(lines.any { it.startsWith("  ★ #12 Отправить термшит Ивану") && "внутри открыто 2" in it })
+        assertTrue(lines.any { "↳ #14 Взять цифры из расшифровки" in it && "внутри #12 Отправить термшит Ивану" in it && "место 1" in it })
+        assertEquals(listOf("снимка нет"), DelaDebug.snapshotLines(JSONObject()))
+        val acts = DelaDebug.actionLines(JSONArray().put(JSONObject().put("at", "2026-10-16T07:14:52Z").put("kind", "reply").put("text", "Перенёс  два\nдела")))
+        assertEquals(listOf("10:14:52 Claude ответил: Перенёс два дела"), acts)
+    }
+
     @Test
     fun `операции записки и статуса — как в контракте`() {
         val op = DelaDebug.addOp("op-1", "n-1", "  Сказал X — сделал Y  ", "999", "411×914 dp сложен", "2026-10-16T10:15:00+03:00",

@@ -1437,16 +1437,45 @@ fun DelaTab(
     fun debugScreen(): ru.zf.pravka.core.DelaDebug.Screen {
         val pg = page
         val sc = when (pg) { is DelaPage.Project -> projectScreen; is DelaPage.Person -> personScreen; else -> screen }
-        val grp = HashMap<String, String>()
-        fun walk(ns: List<DelaGroups.Node>, up: String) {
-            for (n in ns) { val t = listOf(up, n.title).filter { it.isNotBlank() }.joinToString(" › "); n.items.forEach { grp.putIfAbsent(it.id, t) }; walk(n.children, t) }
-        }
-        sc?.nodes?.let { walk(it, "") }
-        sc?.groups?.forEach { g -> g.items.forEach { grp.putIfAbsent(it.id, g.title) } }
-        sc?.home?.let { h -> h.now.forEach { grp.putIfAbsent(it.id, "Сейчас") }; h.today.forEach { grp.putIfAbsent(it.id, "Сегодня") } }
         val seen = seenRows.visible("t:").toSet()
-        val dealId = (pg as? DelaPage.Deal)?.id
-        val ids = sc?.ids ?: newParts?.ids ?: dealId?.let { d -> snap.tasks.values.filter { it.dealId == d && it.open }.sortedWith(Dela.ORDER).map { it.id } }.orEmpty()
+        // Строки по порядку экрана — как их рисуют NodeRows и TaskRows (поезд 16.10.2026, вложенность правила 27):
+        // «Деревом» — родитель, под ним дела внутри отступом (свёрнутое не раскрывается), плоско — дело внутри прямо
+        // перед родителем (`DelaSteps.stepsFirst`), на главной — дела внутри дел из «Сейчас» над родителем отступом.
+        // Раньше дела внутри «Деревом» шли в снимке хвостом после всех строк, без отступа, а плоский порядок — до
+        // перестановки «перед родителем»: записка «вложил — а оно не там» показывала Claude не тот экран.
+        val rows = ArrayList<ru.zf.pravka.core.DelaDebug.Row>()
+        fun row(t: Dela.Task, group: String, depth: Int = 0, folded: Boolean = false) {
+            rows += ru.zf.pravka.core.DelaDebug.Row(t.id, t.id in seen, group, depth, folded)
+        }
+        fun leaf(items: List<Dela.Task>, group: String, indent: Map<String, Int>, nest: Map<String, List<Dela.Task>>) {
+            if (nest.isNotEmpty()) DelaSteps.lines(items, nest, nestFolded).forEach { ln -> row(ln.task, group, ln.depth, ln.fold == false) }
+            else (if (indent.isEmpty()) DelaSteps.stepsFirst(items, snap) else items).forEach { row(it, group, indent[it.id] ?: 0) }
+        }
+        fun walk(ns: List<DelaGroups.Node>, up: String, indent: Map<String, Int>, nest: Map<String, List<Dela.Task>>) {
+            for (n in ns) {
+                val t = listOf(up, n.title).filter { it.isNotBlank() }.joinToString(" › ")
+                if (n.leaf) leaf(n.items, t, indent, nest) else walk(n.children, t, emptyMap(), nest)
+            }
+        }
+        val homeSc = sc?.home
+        when {
+            homeSc != null -> {
+                val depthIn = homeSc.inner.associate { it.first.id to it.second }
+                DelaSteps.stepsFirst(homeSc.now + homeSc.inner.map { it.first }, snap).forEach { row(it, "Сейчас", depthIn[it.id] ?: 0) }
+                homeSc.today.forEach { row(it, "Сегодня") }
+            }
+            sc != null -> {
+                sc.nodes?.let { walk(it, "", sc.indent, sc.nest) }
+                sc.groups.forEach { g -> leaf(g.items, g.title, emptyMap(), emptyMap()) }
+                // Нарисованное не группами (Круг и дерево жизни) — отступом шага к цели.
+                sc.taskIds.mapNotNull { snap.tasks[it] }.forEach { row(it, "", sc.indent[it.id] ?: 0) }
+            }
+            else -> {
+                val dealId = (pg as? DelaPage.Deal)?.id
+                (newParts?.ids ?: dealId?.let { d -> snap.tasks.values.filter { it.dealId == d && it.open }.sortedWith(Dela.ORDER).map { it.id } }.orEmpty())
+                    .forEach { id -> rows += ru.zf.pravka.core.DelaDebug.Row(id, id in seen) }
+            }
+        }
         return ru.zf.pravka.core.DelaDebug.Screen(
             route = when (pg) {
                 is DelaPage.Person -> "page:person:${pg.id}"; is DelaPage.Project -> "page:project:${pg.id}"; is DelaPage.Deal -> "page:deal:${pg.id}"
@@ -1457,8 +1486,10 @@ fun DelaTab(
             mode = mapOf("sphere" to sphere, "show_done" to showDone, "levels" to sc?.levels?.joinToString(" › ") { it.title },
                 "pick" to sc?.pick?.title, "filter" to filters.firstOrNull { it.id == filterId }?.name, "search" to needle.ifBlank { null },
                 "look" to if (Look.v2) "v2" else "4.0", "wide" to wide, "side_on" to if (navColumn) cols.sideOn else null,
-                "pane_on" to if (wideNow) !paneHidden else null, "tree" to if (view == DelaViews.View.TREE) "$treeMode $treeDir".trim() else null),
-            rows = ids.map { ru.zf.pravka.core.DelaDebug.Row(it, it in seen, grp[it].orEmpty()) },
+                "pane_on" to if (wideNow) !paneHidden else null, "tree" to if (view == DelaViews.View.TREE) "$treeMode $treeDir".trim() else null,
+                // «Деревом» во «Всех делах» (правило 27): дела внутри — под родителем отступом, а не плоско перед ним.
+                "all_tree" to sc?.nestTree),
+            rows = rows,
             openTaskId = openTask?.id ?: paneTask?.id.orEmpty(),
             pageKind = when (pg) { is DelaPage.Person -> "person"; is DelaPage.Project -> "project"; is DelaPage.Deal -> "deal"; null -> "" },
             pageId = when (pg) { is DelaPage.Person -> pg.id; is DelaPage.Project -> pg.id; is DelaPage.Deal -> pg.id; null -> "" },
