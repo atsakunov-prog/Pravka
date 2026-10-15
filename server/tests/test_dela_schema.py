@@ -102,8 +102,8 @@ def test_done_sets_completed_and_reopen_clears(dela):
 
 
 def test_project_privacy_and_roles(dela):
-    p = project(dela, "sasha", "ПТИЦ")
-    t = task(dela, "sasha", "Тимофей: остаток", project_id=p)
+    p = project(dela, "sasha", "РОМАШКА")
+    t = task(dela, "sasha", "Тестов: остаток", project_id=p)
     with as_(dela, "natasha") as c:
         assert c.execute("SELECT count(*) AS n FROM tasks.tasks").fetchone()["n"] == 0
         assert c.execute("SELECT count(*) AS n FROM crm.projects").fetchone()["n"] == 0
@@ -127,7 +127,7 @@ def test_project_privacy_and_roles(dela):
     task(dela, "natasha", "Своё", project_id=own)
     with as_(dela, "sasha") as c:
         names = {r["name"] for r in c.execute("SELECT name FROM crm.projects")}
-        assert names == {"ПТИЦ"}
+        assert names == {"РОМАШКА"}
         assert c.execute("SELECT count(*) AS n FROM tasks.tasks WHERE title = 'Своё'").fetchone()["n"] == 0
 
 
@@ -167,15 +167,15 @@ def test_owner_must_see_project(dela):
 
 def test_match_name_aliases_people_and_orgs(dela, conn):
     with dela_db.session(dela, "system", "test") as c:
-        org = c.execute("INSERT INTO crm.orgs (name, owner_id) VALUES ('ПТИЦ', 'sasha') RETURNING id").fetchone()["id"]
+        org = c.execute("INSERT INTO crm.orgs (name, owner_id) VALUES ('РОМАШКА', 'sasha') RETURNING id").fetchone()["id"]
         c.execute(
             "INSERT INTO crm.projects (name, aliases, sphere, kind, owner_id, org_id) VALUES "
-            "('ПТИЦ', '{Птиц}', 'work', 'client', 'sasha', %s), ('Додо', '{\"Додо Пицца\"}', 'work', 'client', 'sasha', NULL)",
+            "('РОМАШКА', '{Ромашка}', 'work', 'client', 'sasha', %s), ('Додо', '{\"Додо Пицца\"}', 'work', 'client', 'sasha', NULL)",
             (org,),
         )
         c.execute(
             "INSERT INTO crm.people (name, short, aliases, owner_id, org_id) VALUES "
-            "('Тимофей', 'Тимофей', '{\"Тимофей Птиц\"}', 'sasha', %s), ('Марианна Тестова', 'Марианна', '{}', 'sasha', NULL)",
+            "('Тестов', 'Тестов', '{\"Тестов Ромашка\"}', 'sasha', %s), ('Марианна Тестова', 'Марианна', '{}', 'sasha', NULL)",
             (org,),
         )
 
@@ -188,8 +188,8 @@ def test_match_name_aliases_people_and_orgs(dela, conn):
         return tuple(r)
 
     assert m("додо пицца") == ("Додо", None)
-    assert m("Птиц") == ("ПТИЦ", None)
-    assert m("Тимофей Птиц") == ("ПТИЦ", "Тимофей")
+    assert m("Ромашка") == ("РОМАШКА", None)
+    assert m("Тестов Ромашка") == ("РОМАШКА", "Тестов")
     assert m("Марианна Тестова") == (None, "Марианна")
     assert m("Неизвестный") == (None, None)
 
