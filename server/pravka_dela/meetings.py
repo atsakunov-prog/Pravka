@@ -254,6 +254,49 @@ def voice_people(conn, meeting_id) -> list[dict]:
     return found
 
 
+def speakers_final(conn, meeting_id) -> list[dict] | None:
+    """Люди встречи от службы, когда её сверка людей прошла (этап 6 аудита, п. 5 Саши: «людей встречи определяет разбор +
+    сверка кодом»; raw.people_final, флаг people_final): [{label, person_id, name, show, state, role, company}] —
+    person_id только у привязанных (живая карточка; слитая — живой, в архиве — нет). None — служба старая или сверки ещё
+    не было: тогда людей, как раньше, собирает разбор."""
+    row = conn.execute("SELECT raw FROM crm.meeting_raw WHERE meeting_id = %s", (meeting_id,)).fetchone()
+    raw = (row and row["raw"]) or {}
+    if raw.get("people_final") is not True:
+        return None
+    out: list[dict] = []
+    for x in raw.get("speakers") if isinstance(raw.get("speakers"), list) else []:
+        if not isinstance(x, dict):
+            continue
+        try:
+            pid = str(uuid.UUID(str(x.get("person_id") or "")))
+        except ValueError:
+            pid = None
+        live = conn.execute(
+            "SELECT p.id FROM crm.people p0 JOIN crm.people p ON p.id = coalesce(p0.merged_into, p0.id) "
+            "WHERE p0.id = %s::uuid AND p.archived_at IS NULL", (pid,)).fetchone() if pid else None
+        word = lambda k: " ".join(str(x.get(k) or "").split())[:80] if isinstance(x.get(k), str) else ""  # noqa: E731
+        out.append({"label": word("label"), "person_id": live["id"] if live else None, "name": word("name"),
+                    "show": word("show"), "state": word("state"), "role": word("role"), "company": word("company")})
+    return out
+
+
+def final_people(conn, row: dict, final: list[dict]) -> tuple[list, list[str]]:
+    """Участники и гости карточки из людей службы (speakers_final): привязанные — участники (кроме владельца), без
+    карточки, но с именем — гости словами (неподтверждённые: «Глеб»), одна роль без имени — никто."""
+    me = owner_person(conn, row["owner_id"])
+    ids: list = []
+    guests: list[str] = []
+    for x in final:
+        if x["person_id"]:
+            if x["person_id"] != me and x["person_id"] not in ids:
+                ids.append(x["person_id"])
+            continue
+        name = x["name"].rstrip("?").strip()
+        if name and not people.noise(name) and norm(name) not in map(norm, guests):
+            guests.append(name)
+    return ids, guests[:30]
+
+
 def _kind(v: Any) -> str:
     k = str(v or "meeting").strip().lower()
     return k if k in KINDS else KIND_WORDS.get(k, "other")
@@ -331,6 +374,15 @@ def _voice_into(conn, row: dict) -> dict:
     потом соберёт людей заново, начиная с них же (apply_names). Замок people — слово владельца: не трогаем."""
     if "people" in (row["locked"] or []):
         return row
+    final = speakers_final(conn, row["id"])
+    if final is not None:
+        # Люди встречи определены службой (people_final): список — правда целиком, а не прибавка — снятая привязка
+        # («Вернуть» у «Сделано само», ответ «нет») уходит из участников так же сразу, как пришла.
+        ids, guests = final_people(conn, row, final)
+        if ids == list(row["person_ids"] or []) and guests == list(row["guests"] or []):
+            return row
+        return conn.execute("UPDATE crm.meetings SET person_ids = %s, guests = %s WHERE id = %s RETURNING *",
+                            (ids, guests, row["id"])).fetchone()
     me = owner_person(conn, row["owner_id"])
     ids = list(row["person_ids"] or [])
     guests = list(row["guests"] or [])
@@ -525,7 +577,13 @@ def apply_names(conn, row: dict, ans: dict, by: str) -> dict:
     if "topic" not in locked:
         topic = clean_topic(ans.get("topic"))
         data["topic"] = topic
-    if "people" not in locked:
+    final = speakers_final(conn, row["id"]) if "people" not in locked else None
+    if final is not None:
+        # Одна правда о людях (этап 6 аудита, people_final): их определили служба и сверка кодом — ответ модели о людях
+        # не читаем вовсе, даже если в Своде ещё старый промпт (12.10 один ночной проход вписал 183 встречам 435 человек).
+        ids, guests = final_people(conn, row, final)
+        data.update(person_ids=ids, guests=guests)
+    elif "people" not in locked:
         me = owner_person(conn, row["owner_id"])
         ids: list = []
         guests: list[str] = []

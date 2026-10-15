@@ -547,6 +547,7 @@
       "emails": [],
       "telegram_id": null,
       "telegram_username": null,
+      "address": null,
       "birth_day": null,
       "birth_month": null,
       "birth_year": null,

@@ -49,7 +49,21 @@ TASK_FIELDS = {
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
             "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
             "privacy", "context_index", "claude_guard", "nest", "debug", "capture", "capture_model", "ideas", "did",
-            "remind_phone"]
+            "remind_phone", "speaker_link", "people_final"]
+# «speaker_link» — люди встречи: служба предлагает, кто говорит, с основаниями, решает код (этап 6 аудита, 15.10.2026,
+# Саша: «два независимых признака сошлись — привязать и показать в „Сделано само“; один — один вопрос с основаниями и
+# кнопками; признаки спорят — вопрос»). Предложение kind person, source meeting с payload.link (привязка: person_id и
+# признаки по группам) — сервер ставит само («спикер узнан сам», «Сделано само» с «Вернуть» — suggestion.undo), только если
+# у карточки два сильных признака разных групп и никто не спорит; иначе — вопрос. payload.ident — вопрос из кандидатов
+# службы (живые видимые карточки, у кнопки — свои основания, «▶ послушать» — payload.speaker.clip_url), а не из «кто это»
+# по имени. Ответ владельца учит карточку (ident.learn: почта, обращение, подпись Zoom — people.learn); «Сделано само» не
+# учит. person.learn — то же обучение после «да» вне «Подскажи» (веб встреч, «Уточнить»); поле карточки address
+# (dela_0024) — как к человеку обращаются; вид people_day — с кем был контакт в день встречи (основание вопроса). Без флага
+# служба шлёт людей, как раньше (people_link): старый сервер link и ident не понял бы и спросил бы по имени.
+# «people_final» — одна правда о людях встречи (этап 6 аудита, п. 5 Саши): raw.people_final в meeting.upsert — люди встречи
+# определены службой (разбор и сверка кодом); участники карточки — привязанные из raw.speakers, гости — неподтверждённые с
+# именем, разборщик названия людей не угадывает (meetings_auto: строка «ЛЮДИ ВСТРЕЧИ», ans.people не читается). Без флага
+# служба поле не шлёт; без поля — как раньше.
 # Захват (шаг 0 петли, 15.10.2026, capture.py, dela_0032; владелец: «захват за три секунды, которому я доверяю»):
 # «capture» — операции capture.say (фраза одной дверью: правило за миллисекунды, иначе модель на сервере) и capture.move
 # (поправка одной кнопкой), вид capture?ref (итог), поля дела kind ('remind' — напоминание, в списках дел его нет),
@@ -150,7 +164,7 @@ DEAL_FIELDS = {
 PERSON_FIELDS = {
     "name", "short", "aliases", "org_id", "role", "phones", "emails", "telegram_id", "telegram_username",
     "birth_day", "birth_month", "birth_year", "source", "seeks", "offers", "traits", "cadence", "hub",
-    "note", "archived_at",
+    "note", "archived_at", "address",  # address — как обращаться (dela_0024, этап 6 аудита)
 }
 ORG_FIELDS = {"name", "aliases", "kind", "note", "archived_at"}
 # private (dela_0018, с 15.10.2026 и в операциях — аудит №9): interaction.add — запись сразу «только мне», interaction.set
@@ -917,6 +931,11 @@ def _options(payload) -> None:
             x.pop("person")  # что дописать человеку — только словарём («это он в Telegram?»: telegram_id, ник, имена)
         if o.get("reject"):
             x = {"label": label, "reject": True, **({"reason": str(o["reason"])[:200]} if o.get("reason") else {})}
+        why = " ".join(str(o.get("why") or "").split())[:200] if isinstance(o.get("why"), str) else ""
+        if why:
+            # Основания этой кнопки — для глаз (подсказка у кнопки, этап 6 аудита: «у каждой кнопки — свои основания»).
+            # В payload при ответе не копируется: его нет в OPTION_FIELDS.
+            x["why"] = why
         out.append(x)
     if 2 <= len(out):
         payload["options"] = out[:OPTIONS_MAX]
@@ -947,6 +966,11 @@ def op_suggestion_create(conn, user, op):
         if same and not _new_occasion(same, data, payload):
             return {"suggestion": same}
     if data.get("kind") == "person" and data.get("source") == "meeting" and isinstance(payload, dict) \
+            and (payload.get("link") or isinstance(payload.get("ident"), dict)):
+        # Спикер встречи с основаниями (этап 6 аудита, флаг speaker_link): привязка по двум признакам или вопрос из
+        # кандидатов службы — не «кто это» по имени.
+        _meeting_speaker(conn, user, data, payload)
+    elif data.get("kind") == "person" and data.get("source") == "meeting" and isinstance(payload, dict) \
             and not payload.get("person_id"):
         decided = _meeting_person(conn, user, data, payload)
         if decided is not None:
@@ -981,7 +1005,9 @@ def op_suggestion_create(conn, user, op):
     if reason:
         try:
             with conn.transaction():
-                return op_suggestion_decide(conn, user, {"id": row["id"], "decision": "accept", "reason": reason})
+                # _auto — решил сервер, а не человек: ответ ничему не учит (ident.learn — только после «да» владельца).
+                return op_suggestion_decide(conn, user, {"id": row["id"], "decision": "accept", "reason": reason,
+                                                         "_auto": True})
         except OpError as e:  # не вышло само (дело поменяли, «Сейчас» полно) — ждёт человека, и видно почему
             held = f"само не встало: {e}"
         except PERMANENT as e:
@@ -1113,6 +1139,224 @@ def _meeting_person(conn, user, data: dict, payload: dict) -> dict | None:
     return None
 
 
+# ── Люди встречи: привязка по двум признакам и вопрос с основаниями (этап 6 аудита, 15.10.2026) ──────────────
+# Саша: «Модель предлагает, решает код… Два независимых признака сошлись — привязать и показать в „Сделано само“; один —
+# один вопрос с основаниями и кнопками; признаки спорят — вопрос». Признаки собирает служба встреч (голос, учётка Zoom,
+# речь — проверенные основания разбора, твоё слово, приглашение; проект — stage6/speakers.md §3), здесь — последняя
+# проверка правила и вопрос: карточки живые и видимые, два сильных признака разных групп у одной карточки, против — никого.
+# Telegram дня и клиент встречи — не признаки (круг поиска и слова вопроса), поэтому и групп у них нет.
+
+AUTO_LINK_REASON = "спикер узнан сам"
+SIGN_GROUPS = ("voice", "account", "speech", "owner", "invite")
+SIGN_WORDS = {"voice": "голос", "account": "учётка Zoom", "speech": "разговор", "owner": "твоё слово",
+              "invite": "приглашение"}
+SIGNS_MAX = 6
+IDENT_CANDS = 2  # «Это X» кнопками: два кандидата, «Завести» и «Не для CRM» — четыре кнопки (OPTIONS_MAX)
+
+
+def _talk(sec: Any) -> str:
+    """Сколько говорил: «40 с», «17 мин», «1 ч 5 мин»."""
+    try:
+        s = float(sec or 0)
+    except (TypeError, ValueError):
+        return ""
+    if s <= 0:
+        return ""
+    if s < 60:
+        return f"{round(s)} с"
+    m = round(s / 60)
+    return f"{m} мин" if m < 60 else f"{m // 60} ч" + (f" {m % 60} мин" if m % 60 else "")
+
+
+def _signs(raw: Any) -> list[dict]:
+    """Признаки одного кандидата — [{group, strong, text}]: группа из SIGN_GROUPS, strong — только true, текст для глаз."""
+    out = []
+    for x in raw if isinstance(raw, list) else []:
+        if not isinstance(x, dict) or x.get("group") not in SIGN_GROUPS:
+            continue
+        text = " ".join(str(x.get("text") or "").split())[:200]
+        out.append({"group": x["group"], "strong": x.get("strong") is True, **({"text": text} if text else {})})
+    return out[:SIGNS_MAX]
+
+
+def two_signs(signs: list[dict]) -> bool:
+    """Два сильных признака разных групп (speakers.md §3.4). Приглашение — второй признак только вместе с голосом или
+    разговором: оно говорит, что человек был позван, а не что эта метка — он (§3.2)."""
+    groups = {s["group"] for s in signs if s.get("strong")}
+    if "invite" in groups and not groups & {"voice", "speech"}:
+        groups.discard("invite")
+    return len(groups) >= 2
+
+
+def _live_person(conn, pid: Any) -> dict | None:
+    """Живая видимая карточка по id (слитая — та, в которую слили) с компанией — или None."""
+    try:
+        pid = str(uuid.UUID(str(pid)))
+    except ValueError:
+        return None
+    return conn.execute(
+        "SELECT p.id, p.name, p.short, p.role, o.name AS org FROM crm.people p0 "
+        "JOIN crm.people p ON p.id = coalesce(p0.merged_into, p0.id) LEFT JOIN crm.orgs o ON o.id = p.org_id "
+        "WHERE p0.id = %s AND p.archived_at IS NULL AND p.merged_into IS NULL", (pid,)).fetchone()
+
+
+def _ident(conn, payload: dict) -> dict:
+    """payload.ident и payload.link службы — в одну форму: кто это по разговору (name, role, company), почему (why), спор
+    (dispute), кандидаты — только живые видимые карточки, слитые — живыми, без повторов; у привязки (link) её карточка —
+    первой. learn — что выучить карточке после «да» (по id кандидата или «new»), только знакомые поля."""
+    raw = dict(payload.get("ident")) if isinstance(payload.get("ident"), dict) else {}
+    cands_raw = [c for c in raw.get("candidates") or [] if isinstance(c, dict)] if isinstance(raw.get("candidates"), list) else []
+    link_pid = str(payload.get("person_id") or "") if payload.get("link") else ""
+    if link_pid:
+        same = next((c for c in cands_raw if str(c.get("person_id")) == link_pid), None)
+        cands_raw = [{"person_id": link_pid, "signs": (same or {}).get("signs") or payload.get("signs") or []},
+                     *(c for c in cands_raw if c is not same)]
+    cands, seen, dead = [], set(), []
+    for c in cands_raw:
+        p = _live_person(conn, c.get("person_id"))
+        if p is None:
+            dead.append(str(c.get("person_id")))
+            continue
+        if str(p["id"]) in seen:
+            continue
+        seen.add(str(p["id"]))
+        cands.append({**p, "signs": _signs(c.get("signs"))})
+    word = lambda k, n: " ".join(str(raw.get(k) or "").split())[:n] if isinstance(raw.get(k), str) else ""  # noqa: E731
+    learn = {}
+    for k, v in (raw.get("learn") or {}).items() if isinstance(raw.get("learn"), dict) else []:
+        p = _live_person(conn, k) if k != "new" else None
+        key = "new" if k == "new" else (str(p["id"]) if p else None)
+        d = people.learn_data(v)
+        if key and d:
+            learn[key] = d
+    # Карточка привязки шла первой: жива — она и есть cands[0] (слитая — уже живой), нет — она в dead.
+    alive = bool(link_pid) and link_pid not in dead and bool(cands)
+    return {"name": word("name", 80), "role": word("role", 80), "company": word("company", 80),
+            "address": word("address", 120), "why": word("why", 300), "label": word("label", 40),
+            "dispute": raw.get("dispute") is True, "cands": cands, "learn": learn,
+            "link": str(cands[0]["id"]) if alive else None}
+
+
+def _meeting_speaker(conn, user, data: dict, payload: dict) -> None:
+    """Спикер встречи с основаниями (kind person, source meeting, payload.link или payload.ident; флаг speaker_link).
+
+    Привязка (link): два сильных признака разных групп у карточки, никто не спорит (другой кандидат с признаками или
+    dispute), служба просила само (auto) — payload остаётся привязкой, _auto ставит её сам («спикер узнан сам», «Сделано
+    само» с «Вернуть»). Иначе — один вопрос из кандидатов службы: «SPEAKER_00 (17 мин) на встрече «…» 09.10 — это A или
+    B? <почему>», кнопки «Это A» (у каждой — свои основания, why), «Завести «имя»» или «Нет, не он», «Не для CRM», pick;
+    held — почему не встало само. Кандидатов нет, имя есть — «кто это» с «Завести»; нет ни того, ни другого — отказ
+    словами (спрашивать не о чем). Почему не «кто это» по имени: имя на встрече услышано распознаванием и моделью, а
+    круг кандидатов служба уже сузила (люди клиента, голос, учётка) — п. 6 этапа 6: «Ольга (Бета)» по имени уверенно
+    вставала к «Ольге» из другой компании."""
+    idt = _ident(conn, payload)
+    payload["ident"] = {k: v for k, v in {
+        "name": idt["name"], "role": idt["role"], "company": idt["company"], "address": idt["address"],
+        "why": idt["why"], "label": idt["label"], "dispute": idt["dispute"] or None,
+        "candidates": [{"person_id": str(c["id"]), "signs": c["signs"]} for c in idt["cands"]],
+        "learn": idt["learn"] or None}.items() if v not in (None, "", [], {})}
+    held: list[str] = []
+    cands = idt["cands"]
+    if payload.get("link"):
+        first = cands[0] if idt["link"] else None
+        against = [c for c in cands[1:] if c["signs"]]
+        if first is None:
+            held.append("карточка привязки в архиве или не видна")
+        elif against or idt["dispute"]:
+            held.append("признаки спорят: " + ", ".join(_cand_label(c) for c in [first, *against]) if against
+                        else "признаки спорят")
+        elif not two_signs(first["signs"]):
+            have = sorted({SIGN_WORDS[s["group"]] for s in first["signs"] if s.get("strong")})
+            held.append("сильных признаков нет" if not have else f"один сильный признак: {have[0]}" if len(have) == 1
+                        else "приглашение — второй признак только с голосом или разговором")
+        elif payload.get("auto") is not True:
+            held.append("служба не просила привязать само")
+        if not held:
+            payload["person_id"] = str(first["id"])  # слитая карточка — живой
+            for k in ("ask", "options", "pick", "held", "new"):
+                payload.pop(k, None)
+            if not data.get("quote"):
+                sp = payload.get("speaker") if isinstance(payload.get("speaker"), dict) else {}
+                data["quote"] = f"{sp.get('label') or 'Спикер'} — {first['name']}"
+            return  # _auto поставит само
+    elif idt["dispute"] or len([c for c in cands if c["signs"]]) >= 2:
+        held.append("признаки спорят")
+    _speaker_question(conn, data, payload, idt, held)
+
+
+def _speaker_question(conn, data: dict, payload: dict, idt: dict, held: list[str]) -> None:
+    """Вопрос о спикере кнопками (см. _meeting_speaker). Привязки и auto после него нет: вопрос — всегда вопрос."""
+    for k in ("link", "person_id", "auto", "new", "ask", "options", "pick"):
+        payload.pop(k, None)
+    title, dm, dmy = _meeting_of(conn, payload, data.get("batch_title"))
+    where = f"«{title}»{' ' + dm if dm else ''}" if title else ""
+    sp = payload.get("speaker") if isinstance(payload.get("speaker"), dict) else {}
+    label = str(sp.get("label") or idt["label"] or "Спикер")
+    talk = _talk(sp.get("seconds"))
+    head = label + (f" ({talk})" if talk else "") + (f" на встрече {where}" if where else "")
+    cands = idt["cands"][:IDENT_CANDS]
+    name = idt["name"]
+    full = f"{name} ({idt['company']})" if name and idt["company"] and "(" not in name else name
+    if not cands and not full:
+        raise OpError("спикер встречи: ни кандидатов, ни имени — спрашивать не о чем")
+    q = f"{head} — это {_or_words([_cand_label(c) for c in cands])}?" if cands else f"{head} — «{full}»: кто это?"
+    payload["ask"] = (q + (f" {idt['why']}" if idt["why"] else ""))[:600]
+    names = [str(c["name"]) for c in cands]
+    opts: list[dict] = []
+    for i, c in enumerate(cands):
+        text = ("Это " + (str(c["name"]) if names.count(str(c["name"])) == 1 else _cand_label(c)))[:80]
+        if any(o["label"] == text for o in opts):
+            text = f"{text[:74]} · {i + 1}"
+        why = "; ".join(s.get("text") or SIGN_WORDS[s["group"]] for s in c["signs"])
+        opts.append({"label": text, "person_id": str(c["id"]), **({"why": why} if why else {})})
+    if full:
+        opts.append({"label": f"Завести «{full}»"[:80], "new": True})
+    else:
+        opts.append({"label": "Нет, не он" if len(cands) == 1 else "Никто из них", "reject": True, "reason": "не он"})
+    opts.append({"label": "Не для CRM", "reject": True, "reason": "не для CRM"})
+    payload["options"] = opts
+    if cands:
+        payload["pick"] = True  # «Да» без выбора привязало бы наугад — ответ только кнопкой
+    if full:
+        # Карточка на «Завести»: голое имя и откуда она; подпись в скобках — компания, только если такая уже есть
+        # (как у _meeting_person), роль — из разговора.
+        bare, hint = people.bare_name(full)
+        if hint and people.noise(hint):
+            hint = ""
+        d = dict(payload.get("person")) if isinstance(payload.get("person"), dict) else {}
+        d["name"] = bare
+        if not d.get("source"):
+            d["source"] = f"встреча {dmy}: {title}" if dmy else (f"встреча: {title}" if title else "встреча")
+        if idt["role"] and not d.get("role"):
+            d["role"] = idt["role"]
+        org = people.org_named(conn, hint) if hint else None
+        if org:
+            payload["org_name"] = org["name"]
+        elif hint:
+            d["note"] = "; ".join(x for x in (d.get("note"), f"на встрече подписан «{full}»") if x)
+        payload["person"] = d
+    payload.setdefault("title", full or label)
+    payload.setdefault("where", f"встреча {where}" if where else "встреча")
+    payload["held"] = "; ".join(held) or ("один признак — нужен твой ответ" if cands else "имя без карточки")
+    _options(payload)
+
+
+def _learn_answer(conn, user, payload: dict, res: dict) -> dict | None:
+    """Ответ владельца на вопрос о спикере — учит карточку (ident.learn: почта, обращение, подпись Zoom; people.learn).
+    Выбрал карточку — её строка learn, завёл нового — строка «new». Не вышло — словами в result, ответ не теряется."""
+    lm = (payload.get("ident") or {}).get("learn") if isinstance(payload.get("ident"), dict) else None
+    if not isinstance(lm, dict) or not res.get("person_id"):
+        return None
+    data = lm.get("new") if res.get("created") else lm.get(str(res["person_id"]))
+    if not data:
+        return None
+    try:
+        with conn.transaction():
+            out = people.learn(conn, user, res["person_id"], data, OpError)
+    except OpError as e:
+        return {"error": str(e)}
+    return {"wrote": out["wrote"], "refused": out["refused"]}
+
+
 # ── «Кто это — X или Y?» и почему ждёт (аудит 15.10.2026, №1) ───────────────
 
 _HOW_MANY = {2: "двое", 3: "трое", 4: "четверо", 5: "пятеро", 6: "шестеро", 7: "семеро"}
@@ -1232,7 +1476,7 @@ AUTO_CLOSE_REASON = "закрыто само"
 AUTO_UPDATE_REASON = "уточнено само"
 AUTO_CREATE_REASON = "заведено само"
 AUTO_PERSON_REASON = "человек заведён сам"
-AUTO_REASONS = (AUTO_CLOSE_REASON, AUTO_UPDATE_REASON, AUTO_CREATE_REASON, AUTO_PERSON_REASON)
+AUTO_REASONS = (AUTO_CLOSE_REASON, AUTO_UPDATE_REASON, AUTO_CREATE_REASON, AUTO_PERSON_REASON, AUTO_LINK_REASON)
 
 
 def _auto(conn, user, s: dict, problems: list[str] | None = None, cache: dict | None = None) -> tuple[str | None, str | None]:
@@ -1257,6 +1501,17 @@ def _auto(conn, user, s: dict, problems: list[str] | None = None, cache: dict | 
     """
     p = s.get("payload") or {}
     kind = s.get("kind")
+    if kind == "person" and p.get("link"):
+        # Спикер встречи узнан двумя независимыми признаками (этап 6 аудита): новое исключение из «это он? — всегда
+        # вопрос» — это не склейка двух карточек, а кто говорил на встрече. Только встреча, только своим токеном, с
+        # основанием, живой карточкой и двумя сильными признаками разных групп (_meeting_speaker уже снял спорное и
+        # слабое в вопрос; здесь — та же проверка для любого пути).
+        cands = (p.get("ident") or {}).get("candidates") if isinstance(p.get("ident"), dict) else None
+        first = cands[0] if isinstance(cands, list) and cands and isinstance(cands[0], dict) else {}
+        ok = (s.get("source") == "meeting" and p.get("auto") is True and user == s.get("for_user") and s.get("quote")
+              and p.get("person_id") and str(first.get("person_id")) == str(p["person_id"]) and not p.get("ask")
+              and two_signs(_signs(first.get("signs"))) and _live_person(conn, p["person_id"]) is not None)
+        return (AUTO_LINK_REASON, None) if ok else (None, None)
     if kind == "person":
         # Новый человек (14.10.2026, владелец согласился: «уверен — заводит сам»): только новая карточка и с основанием;
         # «это тот же человек?» — всегда вопрос: склеивает людей только владелец (LOGIC.md, закон 3). Свежесть не нужна —
@@ -1380,6 +1635,11 @@ def op_suggestion_decide(conn, user, op):
             # или привязало не того — ответ только кнопкой.
             raise OpError(f"{payload.get('ask') or 'Кто это?'} Ответь кнопкой в вебе или скажи Claude.")
         res = _person_sug(conn, user, s, payload)
+        if not op.get("_auto"):
+            # Ответ владельца на вопрос о спикере учит карточку (этап 6 аудита); «Сделано само» не учит ничему.
+            learned = _learn_answer(conn, user, payload, res)
+            if learned:
+                res["learned"] = learned
         row = _update(conn, "tasks.suggestions", {"id": s["id"]}, {
             "status": "accepted", "reason": op.get("reason"), "decided_by": user,
             "decided_at": dt.datetime.now(dt.timezone.utc), "result": Jsonb(jsonable(res))})
@@ -1483,6 +1743,14 @@ def _person_sug(conn, user, s: dict, payload: dict) -> dict:
     """
     d = payload.get("person") if isinstance(payload.get("person"), dict) else {}
     pid = None if payload.get("new") else payload.get("person_id")
+    if pid and s.get("source") == "meeting" and (payload.get("link") or isinstance(payload.get("ident"), dict)):
+        # Спикер встречи (этап 6 аудита) — кто говорил, а не новые имена карточки: имя на встрече услышали распознавание
+        # и модель, другими именами такое не пишем никогда (speakers.md §5). Карточку учит только ответ владельца —
+        # ident.learn (_learn_answer); привязку держит служба встреч.
+        live = _live_person(conn, pid)
+        if live is None:
+            raise OpError("человек: такой живой карточки нет или она не видна")
+        return {"person_id": live["id"], "created": False, "changed": False, **({"link": True} if payload.get("link") else {})}
     if not pid:
         keys = [{"telegram_id": d.get("telegram_id")}, {"telegram": d.get("telegram_username")},
                 *({"phone": x} for x in d.get("phones") or []), *({"email": x} for x in d.get("emails") or [])]
@@ -1809,6 +2077,62 @@ def op_suggestion_seen(conn, user, op):
     return {"seen": [r["id"] for r in rows]}
 
 
+def op_suggestion_undo(conn, user, op):
+    """«Вернуть» у привязки спикера, сделанной само (этап 6 аудита, «спикер узнан сам»). В карточке Дел такая привязка
+    ничего не меняла — её держит служба встреч (спикер → карточка), поэтому возврат — отметка у предложения:
+    result.undone (когда и кто) и «Понятно». Служба читает её из синка и снимает привязку (эту карточку спикеру больше не
+    предлагает). Повтор безвреден; другие «Сделано само» возвращаются как раньше — правкой того, что сделано."""
+    try:
+        sid = str(uuid.UUID(str(op.get("id"))))
+    except ValueError:
+        raise OpError("вернуть: нужен id предложения") from None
+    s = conn.execute("SELECT * FROM tasks.suggestions WHERE id = %s FOR UPDATE", (sid,)).fetchone()
+    if not s or s["for_user"] != user:
+        raise OpError("вернуть: предложения нет или оно не твоё")
+    if s["kind"] != "person" or s["status"] != "accepted" or s["reason"] != AUTO_LINK_REASON:
+        raise OpError("вернуть так можно только привязку спикера встречи, сделанную само")
+    res = dict(s["result"] or {})
+    if res.get("undone"):
+        return {"suggestion": s}
+    res.update(undone=True, undone_at=dt.datetime.now(dt.timezone.utc).isoformat(), undone_by=user)
+    row = _update(conn, "tasks.suggestions", {"id": s["id"]},
+                  {"result": Jsonb(jsonable(res)), "seen_at": dt.datetime.now(dt.timezone.utc)})
+    return {"suggestion": row}
+
+
+def _live_id(conn, pid: Any) -> str | None:
+    """id живой карточки (слитая — та, в которую слили), без проверки архива: сравнить «о той ли карточке» ответ."""
+    try:
+        pid = str(uuid.UUID(str(pid)))
+    except ValueError:
+        return None
+    r = conn.execute("SELECT coalesce(merged_into, id) AS id FROM crm.people WHERE id = %s", (pid,)).fetchone()
+    return str(r["id"]) if r else None
+
+
+def op_person_learn(conn, user, op):
+    """Обучение после подтверждения спикера встречи (этап 6 аудита): почта учётки Zoom или гостя, обращение («вы,
+    Иван Петрович»), подпись Zoom — в карточку по правилам people.learn («не чужое»). Подтверждение — «да»
+    владельца вне «Подскажи» (имя в вебе встреч, «Уточнить» в Telegram); ответ в «Подскажи» учит сам (ident.learn).
+    suggestion_id — на какой ответ опирается: тогда сервер проверяет, что это ответ человека (не «Сделано само») и о той
+    же карточке."""
+    sid = op.get("suggestion_id")
+    if sid:
+        try:
+            sid = str(uuid.UUID(str(sid)))
+        except ValueError:
+            raise OpError("обучение: suggestion_id — не id предложения") from None
+        s = conn.execute("SELECT kind, status, reason, decided_by, result FROM tasks.suggestions WHERE id = %s",
+                         (sid,)).fetchone()
+        if not s or s["kind"] != "person":
+            raise OpError("обучение: нет такого вопроса о человеке")
+        if s["status"] not in ("accepted", "edited") or s["decided_by"] is None or s["reason"] in AUTO_REASONS:
+            raise OpError("обучение — только после «да» владельца: «Сделано само» и решённое сервером не учат")
+        if _live_id(conn, (s["result"] or {}).get("person_id")) != _live_id(conn, op.get("id")):
+            raise OpError("обучение: ответ был о другой карточке")
+    return people.learn(conn, user, op.get("id"), {k: op.get(k) for k in people.LEARN_KEYS}, OpError)
+
+
 HANDLERS: dict[str, Callable] = {
     "task.create": op_task_create,
     "task.set": op_task_set,
@@ -1824,6 +2148,7 @@ HANDLERS: dict[str, Callable] = {
     "person.set": person_set,
     "person.add": lambda conn, user, op: people.op_person_add(conn, user, op, OpError),
     "person.merge": lambda conn, user, op: people.op_person_merge(conn, user, op, OpError),
+    "person.learn": op_person_learn,
     "svod.set": lambda conn, user, op: people.op_svod_set(conn, user, op, OpError),
     "project.create": project_create,
     "project.set": project_set,
@@ -1839,6 +2164,7 @@ HANDLERS: dict[str, Callable] = {
     "suggestion.create": op_suggestion_create,
     "suggestion.decide": op_suggestion_decide,
     "suggestion.seen": op_suggestion_seen,
+    "suggestion.undo": op_suggestion_undo,
     "dictation.add": op_dictation_add,
 }
 
@@ -2237,7 +2563,8 @@ AUTO_NO_TOP = 3
 
 def _auto_bucket() -> dict:
     return {"created": 0, "created_undone": 0, "closed": 0, "closed_undone": 0, "updated": 0, "updated_undone": 0,
-            "people": 0, "people_undone": 0, "asked": 0, "yes": 0, "edited": 0, "no": 0, "expired": 0, "no_reasons": {}}
+            "people": 0, "people_undone": 0, "linked": 0, "linked_undone": 0,
+            "asked": 0, "yes": 0, "edited": 0, "no": 0, "expired": 0, "no_reasons": {}}
 
 
 def automation(conn, user, days: int = AUTO_DAYS_WEEK) -> dict:
@@ -2249,6 +2576,7 @@ def automation(conn, user, days: int = AUTO_DAYS_WEEK) -> dict:
       вместе с полями (у уточнения самого основание есть всегда — без цитаты само не встаёт);
     - людей заведено само / в архиве — карточка из result.person_id убрана («Вернуть» или слита); дописанное само в
       живую карточку (result.created = false) — не новый человек, не считается;
+    - спикеров узнано само (этап 6 аудита, «спикер узнан сам») / «Вернуть» — result.undone (suggestion.undo);
     - вопросы (решил человек или погасли): да, с правкой, нет (три частые причины), погасло. Решённое сервером без
       человека («уже в CRM», «уже убран») — не вопрос.
     Ответ — {days, all: {…}, sources: {meeting: {…}, telegram: {…}, …}} (только источники, где что-то было)."""
@@ -2256,6 +2584,7 @@ def automation(conn, user, days: int = AUTO_DAYS_WEEK) -> dict:
         "SELECT s.kind, s.status, s.reason, s.decided_by, s.source, s.batch_ref, rt.status AS made_status, "
         "t.status AS task_status, "
         "c.deleted_at IS NOT NULL AS comment_gone, pe.archived_at IS NOT NULL AS person_gone, "
+        "coalesce((s.result ->> 'undone')::boolean, false) AS undone, "
         "CASE WHEN s.kind = 'person' THEN coalesce((s.result ->> 'created')::boolean, true) ELSE true END AS person_made "
         "FROM tasks.suggestions s "
         "LEFT JOIN tasks.tasks rt ON rt.id = s.result_task_id "
@@ -2283,6 +2612,9 @@ def automation(conn, user, days: int = AUTO_DAYS_WEEK) -> dict:
             elif r["status"] == "accepted" and r["reason"] == AUTO_UPDATE_REASON:
                 b["updated"] += 1
                 b["updated_undone"] += bool(r["comment_gone"])
+            elif r["status"] == "accepted" and r["reason"] == AUTO_LINK_REASON:
+                b["linked"] += 1
+                b["linked_undone"] += bool(r["undone"])
             elif r["status"] == "accepted" and r["reason"] == AUTO_PERSON_REASON:
                 # created: false — дописано в живую карточку (ключ нашёлся у неё), человека не заводили: не считаем.
                 if r["person_made"]:
@@ -2318,9 +2650,32 @@ def view_search(conn, user, q=None, status="open", **_):
     return {"items": rows}
 
 
+def view_people_day(conn, user, day=None, **_):
+    """С кем был контакт в этот день, кроме встреч (этап 6 аудита, люди встречи): записи хронологии — пункты дайджеста
+    Telegram, звонки, заметки — с их людьми. Служба встреч берёт отсюда «переписывались в день встречи» — круг поиска и
+    слова вопроса о спикере, но не признак привязки (speakers.md §3.2: единственный Александр в переписке того дня бывал
+    из другой встречи). Только владельцу: пункты дайджеста — его личная переписка (правило 21); упоминание — не контакт."""
+    role = conn.execute("SELECT role FROM crm.users WHERE id = %s", (user,)).fetchone()
+    if not role or role["role"] != "owner":
+        raise OpError("вид people_day — только владельцу")
+    try:
+        d = dt.date.fromisoformat(str(day or "")[:10])
+    except ValueError:
+        raise OpError("people_day: нужен day — ГГГГ-ММ-ДД") from None
+    rows = conn.execute(
+        "SELECT pe.id, pe.name, o.name AS org, array_agg(DISTINCT i.source) AS sources, "
+        "array_agg(DISTINCT i.kind) AS kinds, count(*) AS n FROM crm.interactions i "
+        "JOIN crm.people pe ON pe.id = ANY (i.person_ids) LEFT JOIN crm.orgs o ON o.id = pe.org_id "
+        "WHERE i.deleted_at IS NULL AND NOT i.mention AND i.source <> 'meeting' AND i.kind NOT IN ('meeting', 'zoom') "
+        "AND (i.at AT TIME ZONE 'Europe/Moscow')::date = %s AND pe.archived_at IS NULL AND pe.merged_into IS NULL "
+        "GROUP BY pe.id, pe.name, o.name ORDER BY count(*) DESC, pe.name, pe.id", (d,)).fetchall()
+    return {"day": d.isoformat(), "people": rows}
+
+
 VIEWS: dict[str, Callable] = {
     "svod": people.view_svod,
     "who": people.view_who,
+    "people_day": view_people_day,
     "today": view_today,
     "all": view_all,
     # «Дальше» (10.10–13.10.2026: всё, что не на сегодня) — старое имя «Всех дел»: коннектор Claude мог его запомнить.

@@ -101,11 +101,14 @@ SELECT pe.name, pe.short, pe.aliases, o.name AS org, pe.role, pe.phones, pe.emai
        (SELECT max(i.at) FROM crm.interactions i WHERE pe.id = ANY (i.person_ids) AND i.deleted_at IS NULL AND NOT i.mention
            AND (i.owner_id = crm.owner_id()
                 OR (NOT i.private AND i.project_id IS NOT NULL AND crm.sees_project(crm.owner_id(), i.project_id)))) AS last_contact,
-       pe.id, pe.org_id
+       pe.id, pe.org_id,
+       -- Как к человеку обращаются (dela_0024, этап 6 аудита): «вы, Иван Петрович». В конце — CREATE OR REPLACE
+       -- добавляет колонку только последней.
+       pe.address
 FROM crm.people pe
 LEFT JOIN crm.orgs o ON o.id = pe.org_id
 WHERE crm.sees_person(crm.owner_id(), pe.id);
-COMMENT ON VIEW life.people IS 'Люди: команда, семья, клиенты, контакты (бывшие «Контакты» Notion). cadence — как часто видеться (month, quarter, year, none); last_contact — последнее взаимодействие (упоминание в сводке Telegram — не взаимодействие).';
+COMMENT ON VIEW life.people IS 'Люди: команда, семья, клиенты, контакты (бывшие «Контакты» Notion). cadence — как часто видеться (month, quarter, year, none); last_contact — последнее взаимодействие (упоминание в сводке Telegram — не взаимодействие); address — как к нему обращаются («вы, Иван Петрович»).';
 
 CREATE OR REPLACE VIEW life.orgs AS
 SELECT o.name, o.aliases, o.kind, o.note, o.archived_at, o.id

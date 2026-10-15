@@ -530,7 +530,8 @@ const pendingSugs = () => [...S.sugs.values()].filter((s) => s.status === 'pendi
  *  предложение с payload.auto сюда не попадает. «Понятно» (seen_at) убирает их совсем: 06.10.2026 #268 висел
  *  неделю и «никуда не уходил». */
 // «человек заведён сам» (dela_0019, 14.10.2026) — новый человек из Telegram или телефонной книжки: строкой с «Вернуть».
-const AUTO_REASONS = ['закрыто само', 'уточнено само', 'человек заведён сам'];
+// «спикер узнан сам» (этап 6 аудита, флаг speaker_link) — спикер встречи привязан к карточке двумя признаками.
+const AUTO_REASONS = ['закрыто само', 'уточнено само', 'человек заведён сам', 'спикер узнан сам'];
 const autoDone = (days) => [...S.sugs.values()].filter((s) => (s.kind === 'close' || s.kind === 'update' || s.kind === 'person') && s.status === 'accepted'
   && AUTO_REASONS.includes(s.reason) && !s.seen_at && s.for_user === S.me.user && s.decided_at && Date.now() - Date.parse(s.decided_at) < days * 86400e3)
   .sort((a, b) => b.decided_at.localeCompare(a.decided_at));
@@ -3551,6 +3552,13 @@ function renderPerson(id) {
   row('Телефон', (p.phones || []).join(', '));
   row('Почта', (p.emails || []).join(', '));
   row('Telegram', p.telegram_username ? '@' + p.telegram_username : null);
+  // Как к нему обращаться (dela_0024, этап 6 аудита): ставит обучение после твоего «да» спикеру встречи — только в пустое;
+  // поправить — щелчком (или строкой Claude). У команды не ведём.
+  if (!p.user_id) info.push(el('span', {}, 'Обращение'), el('span', {}, el('button', { class: 'link-btn' + (p.address ? '' : ' faint'),
+    title: 'Как к нему обращаться — поправить', onclick: () => {
+      const v = prompt('Как к нему обращаться? Например: «вы, Иван Петрович» или «ты, Оля»', p.address || '');
+      if (v !== null) personSet(p, { address: v.trim() || null }, `${personName(p)}: ` + (v.trim() || 'обращение снято'));
+    } }, p.address || 'не знаю')));
   // Пометки о человеке (аудит №10): видит только тот, кто видит карточку целиком (владелец, автор) — сервер другим их не
   // отдаёт (crm.v_people). Владельцу — под «Только тебе» с замком: команда этого не видит.
   const marks = [];
@@ -3917,6 +3925,9 @@ function askItem(s) {
       q ? el('div', { class: 'q' }, q) : null,
       held ? el('div', { class: 'hint held' }, held) : null,
       hint ? el('div', { class: 'hint' }, hint) : null,
+      // Вопрос о спикере встречи (этап 6 аудита): послушать его голос — на странице встречи, за её паролем.
+      ((s.payload || {}).speaker || {}).clip_url ? el('a', { class: 'link small', href: s.payload.speaker.clip_url, target: '_blank',
+        rel: 'noopener noreferrer', title: 'Его голос, 5–8 секунд' }, '▶ послушать') : null,
       krPick,
       add ? el('div', { class: 'add' }, add) : null,
       s.quote && s.quote !== title ? el('div', { class: 'hint quote' }, '«' + s.quote.slice(0, 160) + (s.quote.length > 160 ? '…' : '') + '»') : null,
@@ -3925,8 +3936,9 @@ function askItem(s) {
         el('button', { class: 'chip-btn', title: 'Не заводить второе: слова — комментарием к делу', onclick: () => mergeInto(s, twin) }, 'Это оно')) : null),
     writing ? selfBox : null,
     el('div', { class: 'acts' + (opts ? ' opts' : '') }, opts
-      ? [opts.map((o, i) => el('button', { class: 'btn small' + (o.reject ? ' bad' : i === 0 ? ' ok' : ''), title: 'Ответить: ' + o.label,
-        onclick: () => answer(s, i) }, o.label)),
+      ? [opts.map((o, i) => el('button', { class: 'btn small' + (o.reject ? ' bad' : i === 0 ? ' ok' : ''),
+        // У кнопки вопроса о спикере — свои основания (why: голос, учётка, обращение), этап 6 аудита.
+        title: 'Ответить: ' + o.label + (o.why ? '\n' + o.why : ''), onclick: () => answer(s, i) }, o.label)),
       opts.some((o) => o.reject) ? null : el('button', { class: 'link-btn quiet', onclick: () => decide([s.id], 'reject', null) }, 'Не надо')]
       : upd ? [el('button', { class: 'btn small ok', onclick: () => decide([s.id], 'accept') }, 'Да, согласен'),
         el('button', { class: 'btn small' + (writing ? ' on' : ''), onclick: () => { S.selfOpen = writing ? null : s.id; render(); if (!writing) setTimeout(() => document.getElementById('self-' + s.id)?.focus()); } }, 'Сам допишу')]
@@ -3975,10 +3987,12 @@ function autoBlock(auto, batch) {
   const open = !!batch || S.autoOpen;
   const seen = async (ids) => { try { await op1({ op: 'suggestion.seen', ids }); render(); } catch (e) { fail(e); } };
   const nc = auto.filter((s) => s.kind === 'close').length;
-  const np = auto.filter((s) => s.kind === 'person').length;
-  const nadd = auto.filter((s) => s.kind === 'person' && (s.result || {}).created === false).length; // дописал в живую
-  const what = [nc ? `закрыл ${nc}` : null, auto.length - nc - np ? `уточнил ${auto.length - nc - np}` : null,
-    np - nadd ? `завёл людей: ${np - nadd}` : null, nadd ? `дописал в карточки: ${nadd}` : null].filter(Boolean).join(', ');
+  const nl = auto.filter((s) => s.kind === 'person' && (s.result || {}).link).length; // спикер узнан сам — не новый человек
+  const np = auto.filter((s) => s.kind === 'person').length - nl;
+  const nadd = auto.filter((s) => s.kind === 'person' && !(s.result || {}).link && (s.result || {}).created === false).length; // дописал в живую
+  const what = [nc ? `закрыл ${nc}` : null, auto.length - nc - np - nl ? `уточнил ${auto.length - nc - np - nl}` : null,
+    np - nadd ? `завёл людей: ${np - nadd}` : null, nadd ? `дописал в карточки: ${nadd}` : null,
+    nl ? `узнал спикеров: ${nl}` : null].filter(Boolean).join(', ');
   return el('div', { class: 'group auto-done' + (open ? '' : ' folded') },
     el('h2', {}, icon('check', 17), 'Сделано само', el('span', { class: 'n' }, auto.length),
       el('span', { class: 'gsub' }, what + ' ' + autoFrom(auto)),
@@ -4000,6 +4014,7 @@ function autoWeekLine() {
     b.closed ? `закрыто ${b.closed} (вернул ${b.closed_undone})` : null,
     b.updated ? `уточнено ${b.updated} (${b.updated_undone})` : null,
     b.people ? `людей ${b.people} (${b.people_undone})` : null,
+    b.linked ? `спикеров узнано ${b.linked} (вернул ${b.linked_undone})` : null,
     b.asked ? `вопросов ${b.asked}: ${ans.join(', ')}` : null].filter(Boolean);
   if (!parts.length) return null;
   const no = (b.no_reasons || []).map((x) => `«${x.reason}» — ${x.n}`).join('; ');
@@ -4040,7 +4055,28 @@ function autoPerson(s, seen) {
       live ? el('button', { class: 'btn small', title: 'Не нужен в CRM — карточку в архив', onclick: undo }, 'Вернуть') : null),
     sugMark(s));
 }
+/** Спикер встречи, узнанный сам двумя признаками (этап 6 аудита, «спикер узнан сам»): кто и почему — признаки строкой;
+ *  «Вернуть» — не архив карточки (она живёт своей жизнью), а отметка у предложения (suggestion.undo): служба встреч
+ *  снимет привязку и эту карточку спикеру больше не предложит. «▶» — послушать его голос на странице встречи. */
+function autoLink(s, seen) {
+  const r = s.result || {}, p = S.people.get(r.person_id), pl = s.payload || {};
+  const signs = (((pl.ident || {}).candidates || [])[0] || {}).signs || [];
+  const clip = (pl.speaker || {}).clip_url;
+  const undo = async () => {
+    try { await op1({ op: 'suggestion.undo', id: s.id }); toast('Привязку снял: ' + (p ? p.name : 'спикер')); render(); } catch (e) { fail(e); }
+  };
+  return el('div', { class: 'sug auto' },
+    el('div', { class: 'main' }, el('div', {}, 'Спикер узнан: ' + ((pl.speaker || {}).label || '') + ' — ',
+      p ? el('a', { class: 'link', href: '#/h/' + p.id }, p.name) : 'карточка не видна', r.undone ? el('span', { class: 'faint' }, ' · возвращено') : null),
+      el('div', { class: 'hint' }, [pl.where, signs.map((x) => x.text).filter(Boolean).join('; ')].filter(Boolean).join(' · '),
+        clip ? el('a', { class: 'link', href: clip, target: '_blank', rel: 'noopener noreferrer', title: 'Послушать его голос' }, ' ▶ послушать') : null)),
+    el('div', { class: 'acts' },
+      el('button', { class: 'btn small ok', title: 'Согласен — убрать отсюда', onclick: () => seen([s.id]) }, 'Понятно'),
+      r.undone ? null : el('button', { class: 'btn small', title: 'Это не он — снять привязку спикера', onclick: undo }, 'Вернуть')),
+    sugMark(s));
+}
 function autoItem(s, seen) {
+  if (s.kind === 'person' && (s.result || {}).link) return autoLink(s, seen);
   if (s.kind === 'person') return autoPerson(s, seen);
   const t = S.tasks.get(s.task_id);
   if (t) S.order.push(t.id); // сделанное само — тоже дело на экране: «верни акт» Claude поймёт

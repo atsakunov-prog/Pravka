@@ -651,6 +651,27 @@ def _owned_names(conn, pid, names: list[str], ignore: tuple = ()) -> dict[str, d
     return out
 
 
+def foreign_emails(conn, pid, keys: list[str], ignore: tuple = ()) -> dict[str, dict]:
+    """Какие из почт keys (нормой) уже лежат в ДРУГОЙ живой карточке (не архив, не слитая): {почта: та карточка}.
+    Почта — железо «кто это» (1,0): у двух карточек она сделала бы обе неуверенными (этап 6 аудита, 15.10.2026)."""
+    keys = sorted({k for k in keys if k})
+    if not keys:
+        return {}
+    rows = conn.execute(
+        "SELECT id, name, emails FROM crm.people WHERE archived_at IS NULL AND merged_into IS NULL "
+        "AND id IS DISTINCT FROM %s::uuid AND NOT (id = ANY(%s::uuid[])) "
+        "AND EXISTS (SELECT 1 FROM unnest(emails) e WHERE lower(btrim(e)) = ANY(%s)) ORDER BY created_at, id",
+        (pid, [str(x) for x in ignore], keys),
+    ).fetchall()
+    out: dict[str, dict] = {}
+    for r in rows:
+        for e in r["emails"] or []:
+            k = norm(e)
+            if k in keys:
+                out.setdefault(k, {"id": r["id"], "name": r["name"]})
+    return out
+
+
 def op_person_add(conn, user, op, error, ignore: tuple = ()):
     """Дописать человеку другие имена, номера, почту и Telegram — без затирания чужого.
 
@@ -661,6 +682,8 @@ def op_person_add(conn, user, op, error, ignore: tuple = ()):
     Другое имя, которое уже есть имя или короткое имя другой живой карточки, не дописывается (аудит 15.10.2026, №1:
     сверка контактов дописала второй карточке короткое имя сотрудника — и «Ваня» перестал узнаваться у обоих). Ответ
     говорит об этом в skipped: [{alias, person_id, name}] — кто так зовётся; старые клиенты поле не читают.
+    Почта другой живой карточки — тоже не дописывается (этап 6 аудита, «не чужое»): refused [{field: "emails", value,
+    why, person_id, name}]. До того сверка встреч могла положить почту учётки Zoom, с которой говорил другой человек.
     ignore — чьи имена не мешают: слияние дописывает живой карточке имя дубля, пока дубль ещё не убран.
     """
     pid = op.get("id")
@@ -682,7 +705,10 @@ def op_person_add(conn, user, op, error, ignore: tuple = ()):
     if isinstance(new_aliases, str):
         new_aliases = [new_aliases]
     others = _owned_names(conn, pid, [str(x) for x in new_aliases], ignore)
+    new_mails = data.get("emails") or []
+    mails = foreign_emails(conn, pid, [norm(x) for x in ([new_mails] if isinstance(new_mails, str) else new_mails)], ignore)
     skipped: list[dict] = []
+    refused: list[dict] = []
     for col in ADD_ARRAYS:
         new = data.get(col) or []
         if isinstance(new, str):
@@ -698,6 +724,12 @@ def op_person_add(conn, user, op, error, ignore: tuple = ()):
                 if all(norm(s["alias"]) != k for s in skipped):
                     skipped.append({"alias": x, "person_id": o["id"], "name": o["name"]})
                 continue
+            if col == "emails" and k in mails and k not in seen:
+                o = mails[k]
+                if all(r["value"] != k for r in refused):
+                    refused.append({"field": "emails", "value": k, "why": f"почта карточки «{o['name']}»",
+                                    "person_id": o["id"], "name": o["name"]})
+                continue
             if x and k and k not in seen:
                 have.append(x)
                 seen.add(k)
@@ -709,14 +741,14 @@ def op_person_add(conn, user, op, error, ignore: tuple = ()):
         sets["telegram_username"] = str(data["telegram_username"]).lstrip("@")
     if not sets:
         return {"row": conn.execute("SELECT * FROM crm.v_people WHERE id = %s", (pid,)).fetchone() or row,
-                "changed": False, "skipped": skipped}
+                "changed": False, "skipped": skipped, "refused": refused}
     cols = ", ".join(f"{k} = %s" for k in sets)
     out = conn.execute(f"UPDATE crm.people SET {cols} WHERE id = %s RETURNING id", [*sets.values(), pid]).fetchone()
     if out is None:
         raise error("человек: нет прав менять")
     # Ответ — из вида по ярусу (аудит №10): RETURNING * отдал бы и пометки владельца.
     return {"row": conn.execute("SELECT * FROM crm.v_people WHERE id = %s", (pid,)).fetchone(), "changed": True,
-            "skipped": skipped}
+            "skipped": skipped, "refused": refused}
 
 
 # Где живут ссылки на человека: (таблица, колонка или ключ, массив ли). Переносит их функция базы crm.person_merge
@@ -775,10 +807,198 @@ def op_person_merge(conn, user, op, error):
     me = conn.execute("SELECT current_setting('dela.user', true) AS u").fetchone()["u"]
     conn.execute("SELECT set_config('dela.user', 'system', true)")
     skipped = op_person_add(conn, user, {"id": into, "add": add}, error)["skipped"]
+    if a.get("address"):
+        # Как к нему обращаются (dela_0024) — пустое у живой берёт из дубля, как компанию и должность crm.person_merge.
+        conn.execute("UPDATE crm.people SET address = %s WHERE id = %s AND nullif(btrim(address), '') IS NULL",
+                     (a["address"], into))
     row = conn.execute("SELECT * FROM crm.people WHERE id = %s", (into,)).fetchone()
     conn.execute("SELECT set_config('dela.user', %s, true)", (me or "",))
     # Имена дубля, которые так зовут кого-то ещё, живой не дописаны (№1) — сказать, а не потерять молча.
     return {"row": row, "moved": r["moved"], "skipped": skipped}
+
+
+# ── Обучение после подтверждения спикера встречи (этап 6 аудита, 15.10.2026) ─────────────
+# Саша: «Обучение после подтверждения: email — в карточку, голос — в voices.db, подпись — в aliases, addressed_as — в
+# карточку». Голос и своя память подписей — у службы встреч; сюда — то, что живёт в карточке: почта учётки Zoom (или
+# гостя календаря), обращение («вы, Иван Петрович») и подпись Zoom другим именем. Только после «да» владельца:
+# «Сделано само» не учит ничему, кроме самой привязки (store.op_person_learn проверяет ответ, если он назван). Имена,
+# услышанные распознаванием, другими именами не пишем никогда — подпись Zoom человек набрал сам, это не ослышка.
+
+EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Общие ящики: адрес отдела, робота или переговорной — не человек; в карточку его не пишем.
+MAILBOX = frozenset("""
+info office hello hi contact contacts admin administrator support help sales team mail noreply no-reply donotreply
+do-not-reply secretary reception manager hr pr press marketing billing accounting buh zakaz order orders service events
+zoom meeting meetings invite invites calendar notifications notify bot robot postmaster webmaster
+""".split())
+# Почтовые службы для всех: домен такой почты у сотрудника не делает её «почтой команды».
+PUBLIC_MAIL = frozenset("""
+gmail.com googlemail.com mail.ru inbox.ru list.ru bk.ru internet.ru yandex.ru ya.ru yandex.com icloud.com me.com mac.com
+outlook.com hotmail.com live.com msn.com yahoo.com rambler.ru proton.me protonmail.com gmx.de gmx.net
+""".split())
+ADDRESS_MAX = 120
+LEARN_KEYS = ("emails", "address", "zoom_name")
+
+
+def learn_data(raw: Any) -> dict:
+    """Что выучить карточке — только знакомые поля и в своих пределах: emails (до 5 строк), address, zoom_name.
+    Кривое — молча мимо: это проверка формы, отказы по смыслу — в learn."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, Any] = {}
+    mails = raw.get("emails")
+    mails = [mails] if isinstance(mails, str) else mails if isinstance(mails, list) else []
+    mails = [" ".join(str(x).split())[:120] for x in mails if isinstance(x, str) and x.strip()][:5]
+    if mails:
+        out["emails"] = mails
+    for k, cap in (("address", 300), ("zoom_name", 120)):
+        v = " ".join(str(raw.get(k) or "").split()) if isinstance(raw.get(k), str) else ""
+        if v:
+            out[k] = v[:cap]
+    return out
+
+
+def _team_and_family(conn, card: dict) -> str:
+    """Свой ли человек: «команда» (учётка Дел или компания владельца), «семья» (флаг family или Свод people.family),
+    «владелец» — или пусто. Обращение таким не пишем: это не клиент, к которому надо помнить «вы»."""
+    owner = conn.execute(
+        "SELECT u.id, u.person_id, pe.org_id FROM crm.users u LEFT JOIN crm.people pe ON pe.id = u.person_id "
+        "WHERE u.id = crm.owner_id()").fetchone()
+    if owner and owner["person_id"] and str(owner["person_id"]) == str(card["id"]):
+        return "владелец"
+    if card.get("user_id"):
+        return "команда"
+    if owner and owner["org_id"] and card.get("org_id") and str(owner["org_id"]) == str(card["org_id"]):
+        return "команда"
+    fam = {str(r["person_id"]) for r in conn.execute(
+        "SELECT person_id FROM crm.users WHERE family AND person_id IS NOT NULL").fetchall()}
+    sv = conn.execute("SELECT value FROM crm.svod WHERE owner_id = crm.owner_id() AND key = 'people.family'").fetchone()
+    if sv and isinstance(sv["value"], list):
+        fam |= {str(x) for x in sv["value"]}
+    return "семья" if str(card["id"]) in fam else ""
+
+
+def _team_domains(conn) -> set[str]:
+    """Домены почт команды (люди с учёткой Дел), кроме общих почтовых служб: такой адрес у клиента — чужой."""
+    out: set[str] = set()
+    for r in conn.execute("SELECT emails FROM crm.people WHERE user_id IS NOT NULL AND archived_at IS NULL").fetchall():
+        for e in r["emails"] or []:
+            d = norm(e).rpartition("@")[2]
+            if d and d not in PUBLIC_MAIL:
+                out.add(d)
+    return out
+
+
+def _signature(conn, card: dict, sig: str, refused: list[dict]) -> str | None:
+    """Подпись Zoom — другим именем карточки или None (с причиной в refused). Подпись набрал человек сам, но учётка
+    бывает общей и подпись — инициалом: такая ведёт ко многим, и одним другим именем стала бы «уверенно» (who даёт
+    другому имени 1,0). Поэтому — только полное имя: от двух слов, без инициалов, хоть одно слово — имя; не шум
+    устройства; не чужое имя (это решит op_person_add — skipped) и не подпись другой живой карточки (общая учётка)."""
+    ws = words(sig)
+    if noise(sig) or EMAIL.fullmatch(norm(sig)):
+        refused.append({"field": "zoom_name", "value": sig, "why": "не имя человека — подпись устройства или почта"})
+        return None
+    if len(ws) < 2 or any(len(w) == 1 for w in ws):
+        refused.append({"field": "zoom_name", "value": sig,
+                        "why": "подпись из одного слова или с инициалом — по ней одной человека не узнать"})
+        return None
+    if not any(looks_first(w) or looks_first(translit(w)) for w in ws):
+        refused.append({"field": "zoom_name", "value": sig, "why": "не похоже на имя человека"})
+        return None
+    k = norm(sig)
+    if k in {norm(x) for x in [card["name"], card["short"], *(card["aliases"] or [])] if x}:
+        return None  # уже его имя
+    other = conn.execute(
+        "SELECT id, name FROM crm.people WHERE archived_at IS NULL AND merged_into IS NULL AND id <> %s "
+        "AND EXISTS (SELECT 1 FROM unnest(aliases) a WHERE replace(crm.norm(a), 'ё', 'е') = %s) ORDER BY created_at LIMIT 1",
+        (card["id"], k)).fetchone()
+    if other:
+        refused.append({"field": "zoom_name", "value": sig, "why": f"общая подпись: так подписана и карточка «{other['name']}»",
+                        "person_id": other["id"], "name": other["name"]})
+        return None
+    return sig
+
+
+def learn(conn, user, pid, raw: Any, error) -> dict:
+    """Выучить карточке pid то, что служба встреч узнала о подтверждённом спикере (поля — learn_data).
+
+    - Почта: адрес; не общий ящик (MAILBOX); не почта команды у чужого человека (_team_domains); не почта другой
+      живой карточки — «не чужое» (одна почта — один человек: иначе «кто это» по почте перестал бы быть уверенным).
+    - Обращение: только в пустое поле (поменять — владелец), не команде, семье и самому владельцу; длиннее
+      ADDRESS_MAX — мимо.
+    - Подпись Zoom: другим именем — по правилам _signature.
+    Ответ — {row, changed, wrote: {emails, address, aliases}, refused: [{field, value, why, person_id?, name?}],
+    skipped} (skipped — как у person.add: чужое имя). Слитая карточка — учится живая, в архиве — отказ словами."""
+    data = learn_data(raw)
+    card = conn.execute("SELECT * FROM crm.people WHERE id = %s", (pid,)).fetchone()
+    if card is not None and card["merged_into"]:
+        card = conn.execute("SELECT * FROM crm.people WHERE id = %s", (card["merged_into"],)).fetchone()
+    if card is None:
+        raise error("человек: нет такого или нет прав")
+    if card["archived_at"]:
+        raise error(f"человек: «{card['name']}» в архиве — учить нечему")
+    wrote: dict[str, Any] = {"emails": [], "address": None, "aliases": []}
+    refused: list[dict] = []
+    add: dict[str, list] = {}
+
+    have = {norm(x) for x in card["emails"] or []}
+    team = None
+    for x in data.get("emails") or []:
+        k = norm(x)
+        if not EMAIL.fullmatch(k):
+            refused.append({"field": "emails", "value": x, "why": "не адрес почты"})
+            continue
+        if k in have or k in add.get("emails", []):
+            continue
+        local, _, dom = k.partition("@")
+        if local.split("+")[0] in MAILBOX:
+            refused.append({"field": "emails", "value": k, "why": "общий ящик, не человек"})
+            continue
+        if team is None:
+            team = _team_domains(conn) if not card["user_id"] else set()
+        if dom in team:
+            refused.append({"field": "emails", "value": k, "why": "почта команды"})
+            continue
+        add.setdefault("emails", []).append(k)
+
+    sig = data.get("zoom_name")
+    if sig:
+        alias = _signature(conn, card, sig, refused)
+        if alias:
+            add["aliases"] = [alias]
+
+    row, changed, skipped = card, False, []
+    if add:
+        res = op_person_add(conn, user, {"id": card["id"], "add": add}, error)
+        row, changed, skipped = res["row"], res["changed"], res["skipped"]
+        refused += res.get("refused") or []
+        now = {norm(x) for x in row["emails"] or []}
+        wrote["emails"] = [x for x in add.get("emails", []) if x in now and x not in have]
+        names = {norm(x) for x in row["aliases"] or []}
+        wrote["aliases"] = [x for x in add.get("aliases", []) if norm(x) in names
+                            and norm(x) not in {norm(a) for a in card["aliases"] or []}]
+        for s in skipped:
+            refused.append({"field": "zoom_name", "value": s["alias"], "why": f"так зовут карточку «{s['name']}»",
+                            "person_id": s["person_id"], "name": s["name"]})
+
+    addr = data.get("address")
+    if addr:
+        addr = addr.strip(" .;,«»\"'")
+        mine = _team_and_family(conn, card)
+        if len(addr) > ADDRESS_MAX:
+            refused.append({"field": "address", "value": addr[:ADDRESS_MAX], "why": "слишком длинно для обращения"})
+        elif mine:
+            refused.append({"field": "address", "value": addr, "why": f"{mine} — обращение не записываем"})
+        elif (row.get("address") or "").strip():
+            if norm(row["address"]) != norm(addr):
+                refused.append({"field": "address", "value": addr,
+                                "why": f"уже записано «{row['address']}» — меняет владелец"})
+        else:
+            out = conn.execute("UPDATE crm.people SET address = %s WHERE id = %s AND nullif(btrim(address), '') IS NULL "
+                               "RETURNING *", (addr, card["id"])).fetchone()
+            if out is not None:
+                row, changed, wrote["address"] = out, True, addr
+    return {"row": row, "changed": changed, "wrote": wrote, "refused": refused, "skipped": skipped}
 
 
 # ── Свод ────────────────────────────────────────────────────────────────
