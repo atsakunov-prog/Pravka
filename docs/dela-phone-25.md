@@ -3,7 +3,7 @@
 > Шаг 0 петли этапа 4 (в ветке — задание «22c»; номер 25 дала сборка поезда веток 16.10.2026: 22 — замки и «Только
 > тебе», 23 — дела внутри дела, 24 — режим отладки).
 > **Сервер и веб сделаны** в ветке `capture` (миграция `dela_0032`, `server/pravka_dela/capture.py`, `did.py`,
-> `ideas.py`, правило 26 в `server/pravka_dela/CLAUDE.md`). Контракт — `server/contract/dela-capture.json`, общие случаи
+> `ideas.py`, правило 29 в `server/pravka_dela/CLAUDE.md`). Контракт — `server/contract/dela-capture.json`, общие случаи
 > правила — `server/contract/capture-cases.json`, страница для Саши — `server/contract/prompts/kuda-chto.md` (в APK она
 > уже ресурсом: каталог `server/contract/prompts` — источник ресурсов). Телефону — ниже.
 
