@@ -325,6 +325,9 @@ class ScreenShots {
         // ---- Настройки телефона на сервере (14.10.2026): правка с компьютера на настоящем PravkaApp и экран «Телефон»
         if (want("ph")) phoneRemote()
 
+        // ---- Дела внутри дела (15.10.2026, задание 22): «для: …» / «сначала: …», «Деревом», «Внутри», меню строки
+        if (want("nest")) nest()
+
         // ---- Траты Claude (14.10.2026): значок «$» с красной меткой на «Сегодня» и экран «Claude: траты»
         if (want("sp")) spend()
 
@@ -722,6 +725,53 @@ class ScreenShots {
         runBlocking {
             app.delaStore.setGroups(mapOf("ui:side" to "1", "ui:pane" to "1", "ui:sideW" to "172"))
         }
+        settle(4)
+    }
+
+    /** Долгое нажатие по тому, что видно на экране (меню строки дела). */
+    private fun long(c: ActivityController<MainActivity>, what: String): Boolean {
+        val nodes = roots(c).flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true) }
+        var n: SemanticsNode? = nodes.firstOrNull { it.label().contains(what) } ?: return false.also { println("shots: не нашёл «$what» для долгого нажатия") }
+        while (n != null) {
+            n.config.getOrNull(SemanticsActions.OnLongClick)?.action?.let { it(); settle(); return true }
+            n = n.parent
+        }
+        println("shots: «$what» не нажимается долго")
+        return false
+    }
+
+    /**
+     * Дела внутри дела (15.10.2026, docs/dela-phone-22.md): «Сейчас» плоско — дело внутри прямо перед родителем, «для: …»
+     * и «сначала: …»; «Все дела» «Деревом»; карточка родителя с «Внутри» и «Для этого»; меню строки (долгое нажатие);
+     * лист нового дела «Для этого» с полями от родителя; разворот — карточка справа с «Внутри».
+     */
+    private fun nest() {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        // Высоким окном — весь список сразу: строки ниже окна Compose не собирает, и тап по ним не находит.
+        RuntimeEnvironment.setQualifiers(OUTER_TALL)
+        close(launch(MainActivity.TAB_TODOIST)) // первый запуск вкладки рисует её без копии — прогреть
+        var c = launch(MainActivity.TAB_TODOIST)
+        shot(c, "nest-1-now-flat")
+        if (tap(c, "Все дела")) {
+            shot(c, "nest-2a-all")
+            if (tap(c, "Деревом")) shot(c, "nest-2-all-tree")
+        }
+        close(c)
+        c = launch(MainActivity.TAB_TODOIST)
+        if (tap(c, "Бета: подготовить термшит")) screen("nest-3-card-inside")
+        close(c)
+        c = launch(MainActivity.TAB_TODOIST)
+        if (long(c, "Набросать драфт из расшифровки")) {
+            screen("nest-4-row-menu")
+            if (tap(c, "Для этого…")) screen("nest-5-for-this-sheet")
+        }
+        close(c)
+        RuntimeEnvironment.setQualifiers(INNER_TALL)
+        c = launch(MainActivity.TAB_TODOIST)
+        if (tap(c, "Бета: подготовить термшит")) shot(c, "nest-6-inner-pane")
+        close(c)
+        runBlocking { app.delaStore.setGroup("nest:tree", "0") }
+        RuntimeEnvironment.setQualifiers(OUTER)
         settle(4)
     }
 

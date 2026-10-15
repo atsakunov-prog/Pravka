@@ -70,6 +70,7 @@ import ru.zf.pravka.core.DelaAsk
 import ru.zf.pravka.core.DelaViews
 import ru.zf.pravka.core.DelaGroups
 import ru.zf.pravka.core.DelaKrug
+import ru.zf.pravka.core.DelaSteps
 import ru.zf.pravka.trigger.PravkaAccessibilityService
 import ru.zf.pravka.trigger.finishDelaReason
 import ru.zf.pravka.trigger.listenForDelaReason
@@ -205,9 +206,17 @@ private data class DelaScreen(
     val late: Int = 0,
     /** «ждут от тебя без срока: N · жду больше недели: M» — у «Сейчас» рядом с просрочкой (аудит №5); null — строки нет. */
     val waits: DelaViews.Waits? = null,
+    /**
+     * «Деревом» (15.10.2026, `nestForest` веба): родитель → дела внутри него из того же списка; группы собраны из
+     * корней, дела внутри идут за родителем отступом. Пусто — плоско (дело внутри — прямо перед родителем).
+     */
+    val nest: Map<String, List<Dela.Task>> = emptyMap(),
+    /** Переключатель «Деревом» над списком: null — его нет, true / false — включён ли. */
+    val nestTree: Boolean? = null,
 ) {
     /** Дела экрана в порядке показа — то, что видит Claude. */
-    val ids: List<String> get() = (nodes?.let { n -> DelaGroups.flat(n).map { it.id } } ?: groups.flatMap { g -> g.items.map { it.id } }) + taskIds
+    val ids: List<String> get() = (nodes?.let { n -> DelaGroups.flat(n).map { it.id } } ?: groups.flatMap { g -> g.items.map { it.id } }) +
+        nest.values.flatten().map { it.id } + taskIds
 }
 
 /**
@@ -295,6 +304,11 @@ fun DelaTab(
     var projectFor by remember { mutableStateOf<List<Dela.Task>?>(null) }
     // «Сделано само» в «Новом» — свёрнуто, пока не попросили показать.
     var autoOpen by rememberSaveable { mutableStateOf(false) }
+    // Дела внутри дела (15.10.2026, docs/dela-phone-22.md): меню строки (долгое нажатие), «Для этого» — новое дело внутри
+    // (лист нового дела с полями от родителя), «Вложить в…» — выбор дела.
+    var rowMenu by remember { mutableStateOf<Dela.Task?>(null) }
+    var stepFor by remember { mutableStateOf<Dela.Task?>(null) }
+    var nestFor by remember { mutableStateOf<Dela.Task?>(null) }
     val groupsPref by app.delaStore.groupsFlow.collectAsState()
     // Набранное в строке Claude живёт, пока его не отправили или не стёрли: смена раздела и синк его не стирают.
     var draft by rememberSaveable { mutableStateOf("") }
@@ -378,6 +392,9 @@ fun DelaTab(
         drawerOpen = false
     }
     fun groupOf(list: String, def: DelaViews.By) = DelaViews.By.of(groupsPref[list].orEmpty(), def)
+    // «Деревом» во «Всех делах» и свёрнутые родители (15.10.2026) — помнит устройство, как браузер у веба.
+    val allTree = groupsPref["nest:tree"] == "1"
+    val nestFolded = remember(groupsPref) { groupsPref.filter { (k, v) -> k.startsWith("nf:") && v == "1" }.keys.map { it.removePrefix("nf:") }.toSet() }
     // Уровни группировки на виде (10.10.2026): помнит само устройство, как браузер у веба.
     fun levelsOf(key: String) = DelaGroups.parseLevels(groupsPref["lv:$key"]) ?: DelaGroups.levelsDef(key)
     // Фильтр на экране: правка до «Сохранить» — черновиком (`S.fdraft` веба).
@@ -493,9 +510,12 @@ fun DelaTab(
             }
         },
         done = { t ->
+            // Сделано последнее дело внутри (15.10.2026): родитель не закрывается, а поднимается — сервер (и копия поверх
+            // очереди) ставит его на сегодня; тост говорит, что теперь.
+            val up = if (t.open && snap.nestOn) DelaSteps.rise(t, snap, today) else null
             scope.launch {
                 app.delaDo(listOf(Dela.statusOp(if (t.open) "task.done" else "task.reopen", t.id)))
-                Feedback.toast(app, if (t.open) "✓ ${t.title.take(40)}" else "Дело снова открыто")
+                Feedback.toast(app, if (t.open) "✓ ${t.title.take(40)}" + (up?.let { " · " + DelaSteps.riseWords(it) } ?: "") else "Дело снова открыто")
             }
         },
         person = { id -> if (id.isNotBlank()) push(DelaPage.Person(id)) },
@@ -526,6 +546,10 @@ fun DelaTab(
         selectedId = if (paneHidden) "" else paneTask?.id.orEmpty(),
         // Строка короткая, пока молния и ▶ — в карточке справа; спрятали карточку — они снова у строки.
         compact = wideNow && Look.v2 && !paneHidden,
+        // Долгое нажатие (15.10.2026): меню дела — «Для этого», «Вложить в…», «Вынуть», «Раньше» / «Позже».
+        menu = { rowMenu = it },
+        folded = nestFolded,
+        fold = { id -> scope.launch { app.delaStore.setGroup("nf:$id", if (id in nestFolded) "0" else "1") } },
     )
 
     // Дерево жизни: вид, направление и свёрнутые ветки помнит устройство (как браузер у веба), фильтры
@@ -648,7 +672,11 @@ fun DelaTab(
             val every = DelaViews.list(snap, me, sphere, showDone = showDone)
             val pk = picks["all"]?.takeIf { DelaGroups.pickOn(it, lv) }
             val items = DelaGroups.picked(every, lv, pk, snap, today)
-            val late = items.filter { DelaViews.isLate(it, today) }.sortedWith(DelaGroups.byTime(today))
+            // «Деревом» (15.10.2026, `nestForest` веба): группируются только корни, дела внутри идут за родителем
+            // отступом, куда бы их ни развели уровни (иначе время растащило бы их врозь).
+            val forest = if (allTree && snap.nestOn) DelaSteps.forest(items) else null
+            val base = forest?.roots ?: items
+            val late = base.filter { DelaViews.isLate(it, today) }.sortedWith(DelaGroups.byTime(today))
             val lateIds = late.map { it.id }.toSet()
             val lateNode = if (late.isEmpty()) emptyList()
             else listOf(DelaGroups.Node(LATE_NODE, "Просрочено", 0, null, late, sub = "срок прошёл — сделать, перенести или взять в «Сейчас»", late = true))
@@ -656,9 +684,11 @@ fun DelaTab(
                 "Все дела",
                 listOfNotNull(
                     plural(items.count { it.open }, "открытое", "открытых", "открытых"),
-                    "просрочено ${late.size}".takeIf { late.isNotEmpty() },
+                    items.count { DelaViews.isLate(it, today) }.takeIf { it > 0 }?.let { "просрочено $it" },
                 ).joinToString(" · "),
-                nodes = lateNode + DelaGroups.nested(items.filter { it.id !in lateIds }, lv, snap, today),
+                nest = forest?.kids.orEmpty(),
+                nestTree = if (snap.nestOn) allTree else null,
+                nodes = lateNode + DelaGroups.nested(base.filter { it.id !in lateIds }, lv, snap, today),
                 levels = lv, levelKey = "all", saveScope = DelaGroups.Scope.ALL,
                 pick = pk, branches = lv.firstOrNull()?.let { DelaGroups.branches(every, it, snap, today) }.orEmpty(),
                 done = true, add = true, empty = if (pk != null) "У «${pk.title}» здесь дел нет." else "Пусто.",
@@ -1062,6 +1092,7 @@ fun DelaTab(
                 naming = DelaGroups.Filter("f-" + java.lang.Long.toString(System.currentTimeMillis(), 36), DelaGroups.suggestName(sc, lv, pk), sc, lv, pk)
                 namingNew = true
             },
+            onNestTree = { scope.launch { app.delaStore.setGroup("nest:tree", if (allTree) "0" else "1") } },
         )
 
         val pg = page
@@ -1496,6 +1527,8 @@ fun DelaTab(
                         me = me,
                         onNow = { shown?.let { actions.bolt(it) } },
                         onMove = { shown?.let { rescheduling = listOf(it) } },
+                        // «Для этого» (15.10.2026): новое дело внутри — листом нового дела с полями от этого.
+                        onStep = { shown?.let { if (it.open && !it.goal) stepFor = it } },
                     )
                 },
             )
@@ -1627,7 +1660,85 @@ fun DelaTab(
             onNow = { actions.bolt(it) },
             // Микрофона у дела нет (поправки задания 10): та же строка Claude — над карточкой, с `open`.
             say = if (link != null) ({ sayBar(Modifier, fresh, false) }) else null,
+            // Дела внутри дела (15.10.2026): «Для этого» — лист нового дела с полями от этого; «Вложить в…» — выбор дела.
+            onStep = if (fresh.open && !fresh.goal) ({ openTask = null; stepFor = fresh }) else null,
+            onNest = if (DelaSteps.canNest(fresh, snap, me)) ({ openTask = null; nestFor = fresh }) else null,
         )
+    }
+    // Меню строки (долгое нажатие, 15.10.2026): «Для этого», «Вложить в…», «Вынуть», «Раньше» / «Позже», «Открыть».
+    rowMenu?.let { t0 ->
+        val t = snap.tasks[t0.id] ?: t0
+        val par = DelaSteps.parentOf(t, snap)
+        val nestable = DelaSteps.canNest(t, snap, me)
+        PaperSheet(onDismiss = { rowMenu = null }, title = t.title.take(80), icon = Glyphs.Delo,
+            subtitle = par?.let { "для: " + it.title.take(60) }) {
+            if (t.open && !t.goal) PaperRow("Для этого…", onClick = { rowMenu = null; stepFor = t }, icon = Glyphs.Plus,
+                hint = "новое дело внутри этого: проект, человек и срок — от него")
+            if (nestable) PaperRow("Вложить в…", onClick = { rowMenu = null; nestFor = t }, icon = Glyphs.Layers,
+                hint = "положить это дело внутрь другого")
+            if (nestable && par != null) {
+                PaperRow("Вынуть из «${par.title.take(40)}»", onClick = {
+                    rowMenu = null
+                    hangSend(listOf(DelaSteps.nestOp(t, "")), "Вынул из «${par.title.take(40)}»")
+                }, icon = Glyphs.Undo, hint = "дело станет само по себе")
+                if (snap.nestOn) {
+                    val up = DelaSteps.moveOps(t, -1, snap)
+                    val down = DelaSteps.moveOps(t, 1, snap)
+                    if (up.isNotEmpty()) PaperRow("Раньше", onClick = { rowMenu = null; hangSend(up, "Раньше: ${t.title.take(40)}") },
+                        icon = Glyphs.ArrowUp, hint = "среди дел внутри «${par.title.take(40)}»")
+                    if (down.isNotEmpty()) PaperRow("Позже", onClick = { rowMenu = null; hangSend(down, "Позже: ${t.title.take(40)}") },
+                        icon = Glyphs.ArrowDown, hint = "среди дел внутри «${par.title.take(40)}»")
+                }
+            }
+            PaperRow("Открыть", onClick = { rowMenu = null; actions.open(t) }, icon = Glyphs.Forward, hint = "карточка дела")
+        }
+    }
+    // «Для этого»: привычный лист нового дела — название (текстом или голосом через «П»), а «Зачем», проект, сделка,
+    // человек и срок уже от родителя (`DelaSteps.draft`, правило сервера `store.step_of`).
+    stepFor?.let { parent ->
+        val draft = remember(parent.id) { DelaSteps.draft(parent, snap, me, today) }
+        DelaTaskSheet(
+            app = app,
+            task = draft,
+            snap = snap,
+            isNew = true,
+            title = "Для: " + parent.title.take(48),
+            onDismiss = { stepFor = null },
+            onSave = { after ->
+                stepFor = null
+                if (after.title.isNotBlank()) scope.launch {
+                    app.delaDo(listOf(Dela.createOp(after, tree = snap.treeOn)))
+                    Feedback.toast(app, DelaSteps.madeWords(parent, after, today))
+                }
+            },
+            onStatus = { stepFor = null },
+            onStart = { stepFor = null },
+        )
+    }
+    // «Вложить в…» — дело с поиском: свои открытые, кроме самого дела и того, что внутри него (петлю не предлагаем;
+    // сервер её и так не пустит). «Само по себе» — вынуть.
+    nestFor?.let { t0 ->
+        val t = snap.tasks[t0.id] ?: t0
+        val par = DelaSteps.parentOf(t, snap)
+        PickSheet(
+            title = "Вложить «${t.title.take(40)}» в…",
+            none = if (par != null) "Само по себе — вынуть из «${par.title.take(30)}»" else "Само по себе",
+            items = DelaSteps.pool(snap, me, listOf(t.id)).map { x ->
+                Triple(x.id, x.title, listOfNotNull(
+                    DelaSteps.parentOf(x, snap)?.let { "внутри «${it.title.take(30)}»" },
+                    snap.projects[x.projectId]?.name,
+                    DelaViews.due(x, today)?.text,
+                ).joinToString(" · "))
+            },
+            selected = par?.id.orEmpty(),
+            onDismiss = { nestFor = null },
+        ) { id ->
+            nestFor = null
+            // «Само по себе» у дела под целью — не трогаем: «Зачем» цели меняют в карточке, а не здесь.
+            if (id != t.whyId && (id.isNotBlank() || par != null)) {
+                hangSend(listOf(DelaSteps.nestOp(t, id)), if (id.isBlank()) "Вынул из «${par?.title?.take(40)}»" else "Внутри «${snap.tasks[id]?.title?.take(40)}»")
+            }
+        }
     }
     CrmSheets(crm)
     // Боковая панель всегда в дереве: закрытая — пуста, а закрываясь,
@@ -1983,6 +2094,11 @@ internal class DelaActions(
      * куда строка и ведёт: в средней колонке на них уходила половина ширины, и названия ломались по слову.
      */
     val compact: Boolean = false,
+    /** Долгое нажатие на строку (15.10.2026): меню дела — «Для этого», «Вложить в…», «Вынуть», «Раньше» / «Позже». */
+    val menu: ((Dela.Task) -> Unit)? = null,
+    /** «Деревом»: свёрнутые родители и плюсик свернуть / раскрыть (помнит устройство). */
+    val folded: Set<String> = emptySet(),
+    val fold: (String) -> Unit = {},
 )
 
 /** «обновлено 20:42 · в очереди 2» или причина целиком — молчаливая очередь читается как поломка. */
@@ -2475,6 +2591,8 @@ private data class ListTools(
     /** «Только одно»: выбрать ветку (null — показать все) и открыть список с поиском. */
     val onPick: (String, DelaGroups.Pick?) -> Unit = { _, _ -> },
     val onPickOpen: (String, List<DelaGroups.Branch>, DelaGroups.Level) -> Unit = { _, _, _ -> },
+    /** «Деревом» — включить или выключить (15.10.2026). */
+    val onNestTree: () -> Unit = {},
 )
 
 /**
@@ -2512,6 +2630,8 @@ private fun LazyListScope.screenBody(
                                 onClick = { tools.onLevel(lk, i, sc.levels, sc.levelOmit) },
                             )
                         }
+                        // «Деревом» (15.10.2026): дела внутри дел — под родителем, отступом.
+                        sc.nestTree?.let { on -> PaperChip("Деревом", selected = on, onClick = tools.onNestTree) }
                         val save = sc.saveScope
                         if (save != null) PaperChip("Сохранить фильтр", selected = false, onClick = { tools.onSaveFilter(save) })
                     }
@@ -2575,7 +2695,7 @@ private fun LazyListScope.screenBody(
                         Spacer(Modifier.weight(1f))
                         PaperTextButton("Перенести все", icon = Glyphs.Calendar, onClick = { tools.onReschedule(n.items) })
                     }
-                    NodeRows(n, actions, if (lateTop) emptySet() else also, onProjectPage, sc.indent)
+                    NodeRows(n, actions, if (lateTop) emptySet() else also, onProjectPage, sc.indent, sc.nest)
                 }
             }
         }
@@ -2945,9 +3065,16 @@ private fun Modifier.groupRing(
  * глубже — подзаголовок с числом и его ветки.
  */
 @Composable
-private fun NodeRows(n: DelaGroups.Node, actions: DelaActions, also: Set<DelaViews.By>, onProjectPage: Boolean, indent: Map<String, Int> = emptyMap()) {
+private fun NodeRows(
+    n: DelaGroups.Node,
+    actions: DelaActions,
+    also: Set<DelaViews.By>,
+    onProjectPage: Boolean,
+    indent: Map<String, Int> = emptyMap(),
+    nest: Map<String, List<Dela.Task>> = emptyMap(),
+) {
     if (n.leaf) {
-        TaskRows(n.items, actions, by = n.level?.let { DelaViews.byOf(it) }, onProjectPage = onProjectPage, also = also, indent = indent)
+        TaskRows(n.items, actions, by = n.level?.let { DelaViews.byOf(it) }, onProjectPage = onProjectPage, also = also, indent = indent, nest = nest)
         return
     }
     val mode = ru.zf.pravka.ui.LocalMode.current
@@ -2960,7 +3087,7 @@ private fun NodeRows(n: DelaGroups.Node, actions: DelaActions, also: Set<DelaVie
         )
         if (c.sub.isNotBlank() && c.grp != null) Text(c.sub, style = MaterialTheme.typography.bodySmall, color = mode.meta,
             modifier = Modifier.padding(start = if (c.depth > 1) 10.dp else 0.dp))
-        Box(Modifier.padding(start = if (c.depth > 1) 10.dp else 0.dp)) { Column { NodeRows(c, actions, also, onProjectPage) } }
+        Box(Modifier.padding(start = if (c.depth > 1) 10.dp else 0.dp)) { Column { NodeRows(c, actions, also, onProjectPage, nest = nest) } }
     }
 }
 
@@ -2989,8 +3116,21 @@ internal fun TaskRows(
     onLong: ((Dela.Task) -> Unit)? = null,
     /** Жирным — дело в «Сейчас»; в самом блоке «Сейчас» это шум — там false. */
     nowBold: Boolean = true,
+    /** «Деревом» (15.10.2026): родитель → дела внутри; пусто — плоско, дело внутри прямо перед родителем. */
+    nest: Map<String, List<Dela.Task>> = emptyMap(),
 ) {
-    list.forEachIndexed { i, t ->
+    if (nest.isNotEmpty()) {
+        DelaSteps.lines(list, nest, actions.folded).forEachIndexed { i, ln ->
+            if (i > 0) RowRule()
+            val t = ln.task
+            TaskRow(t, actions, today, by, onProjectPage, extra(t), also, ln.depth, inTree, note(t), onLong?.let { f -> { f(t) } }, nowBold,
+                fold = ln.fold, nested = true)
+        }
+        return
+    }
+    // Плоский список (15.10.2026): дело внутри другого — прямо перед родителем, если оба здесь (`stepsFirst` веба).
+    val rows = if (indent.isEmpty() && !inTree) DelaSteps.stepsFirst(list) else list
+    rows.forEachIndexed { i, t ->
         if (i > 0) RowRule()
         TaskRow(t, actions, today, by, onProjectPage, extra(t), also, indent[t.id] ?: 0, inTree, note(t), onLong?.let { f -> { f(t) } }, nowBold)
     }
@@ -3023,6 +3163,10 @@ internal fun TaskRow(
     onLong: (() -> Unit)? = null,
     /** Жирным — дело в «Сейчас»; в самом блоке «Сейчас» — нет. */
     nowBold: Boolean = true,
+    /** «Деревом»: плюсик у родителя — null (внутри пусто), true (раскрыто), false (свёрнуто). */
+    fold: Boolean? = null,
+    /** Строка «Деревом»: «для: …» и «сначала: …» не нужны — вложенность видна отступом. */
+    nested: Boolean = false,
 ) {
     // Правка 4.0 (DESIGN §11.7 TaskRow в Делах, `screens/06`): кольцо 22 в
     // зоне 44, «Кто: действие» до двух строк, вторая строка — подписи веба;
@@ -3045,9 +3189,23 @@ internal fun TaskRow(
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(if (v2) 7.dp else 12.dp))
-                .then(if (onLong != null) Modifier.combinedClickable(onClick = { actions.open(t) }, onLongClick = onLong) else Modifier.clickable { actions.open(t) })
+                .then(
+                    // Долгое нажатие — своё у места (дерево жизни: «Куда повесить»), иначе меню дела (15.10.2026).
+                    (onLong ?: actions.menu?.let { m -> { m(t) } })?.let { long -> Modifier.combinedClickable(onClick = { actions.open(t) }, onLongClick = long) }
+                        ?: Modifier.clickable { actions.open(t) },
+                )
                 .padding(vertical = 4.dp),
         ) {
+            if (fold != null) {
+                // «Деревом»: свернуть / раскрыть дела внутри (как плюсик дерева веба).
+                Box(
+                    Modifier.size(28.dp).clip(RoundedCornerShape(if (v2) 6.dp else 14.dp))
+                        .clickable(onClickLabel = if (fold) "свернуть дела внутри" else "раскрыть дела внутри") { actions.fold(t.id) },
+                    contentAlignment = Alignment.Center,
+                ) { Text(if (fold) "−" else "+", style = ty.bodyL, color = if (v2) Kv.accent else mode.value) }
+            } else if (nested) {
+                Spacer(Modifier.size(28.dp))
+            }
             if (t.open && !actions.compact) {
                 // Молния «Сейчас» (14.10.2026, вместо солнца «на сегодня / на завтра»: его принимали за «Сейчас»,
                 // а оно двигало срок — дело уезжало на завтра и пропадало). Горит у дела в «Сейчас»; тап —
@@ -3107,7 +3265,7 @@ internal fun TaskRow(
                 // Просроченное: «просрочено N дн» уже впереди жирным — у срока остаётся дата, без второго «N дн. назад»
                 // (как `taskRow` веба: «просрочено 2 дн · 11.10»).
                 val lateDue = if (lateDays > 0) DelaViews.due(t, today)?.text else null
-                val chips = DelaViews.chips(t, by, actions.snap, today, onProjectPage, also, me = actions.me, inTree = inTree)
+                val chips = DelaViews.chips(t, by, actions.snap, today, onProjectPage, also, me = actions.me, inTree = inTree, nested = nested)
                     .map { if (lateDue != null && it == lateDue) DelaViews.ddmm(t.dueDate, today) else it }
                 val pick = actions.pickProject
                 val loose = pick != null && t.open && DelaViews.NO_PROJECT in chips
@@ -3222,6 +3380,10 @@ internal fun DelaTaskSheet(
      * свою — с «Вернуть» полоской). null — карточка ставит операцию сама и говорит тостом (Засечка).
      */
     onNow: ((Dela.Task) -> Unit)? = null,
+    /** «Для этого» (15.10.2026): новое дело внутри этого — лист нового дела с полями от него; null — нет. */
+    onStep: (() -> Unit)? = null,
+    /** «Вложить в…» — выбор дела, внутрь которого положить это; null — нет. */
+    onNest: (() -> Unit)? = null,
 ) {
     var f by remember(task.id) { mutableStateOf(task) }
     var picking by remember { mutableStateOf("") }
@@ -3275,6 +3437,28 @@ internal fun DelaTaskSheet(
         if (quote.isNotBlank()) PaperHint("«${quote.take(300)}»")
         if (warn.isNotBlank()) PaperHint(warn, MaterialTheme.colorScheme.error)
         PaperField(value = f.title, onValueChange = { f = f.copy(title = it) }, label = "Кто: что сделать", singleLine = false)
+        // «для: <дело>» (15.10.2026): дело внутри другого — ссылкой на родителя и «Вынуть» (сразу, мимо «Сохранить»).
+        val nestMe = app.delaSync.link.value?.user ?: app.delaStore.me
+        val parent = if (existing) DelaSteps.parentOf(snap.tasks[task.id] ?: task, snap) else null
+        if (parent != null) {
+            val sibs = DelaSteps.insideOf(parent.id, snap)
+            val at = sibs.indexOfFirst { it.id == task.id }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "для: " + parent.title + if (at >= 0 && sibs.size > 1) " · ${at + 1} из ${sibs.size}" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp))
+                        .clickable(enabled = onOpenTask != null) { onOpenTask?.invoke(pinNow(f), parent) }.padding(vertical = 4.dp),
+                )
+                if (DelaSteps.canNest(task, snap, nestMe)) PaperTextButton("Вынуть", onClick = {
+                    scope.launch { app.delaDo(listOf(DelaSteps.nestOp(task, ""))) }
+                    Feedback.toast(app, "Вынул из «${parent.title.take(40)}»")
+                })
+            }
+        } else if (!existing && f.whyId.isNotBlank() && snap.tasks[f.whyId]?.goal == false) {
+            PaperHint("для: " + snap.tasks[f.whyId]?.title.orEmpty())
+        }
         // Сразу под названием, как ряд действий карточки веба: молния «В «Сейчас»» / «Из «Сейчас»» (13.10.2026,
         // `toggleNow` веба: «Сейчас — то, что отметил»). Солнца «На сегодня» / «На завтра» нет с 14.10.2026:
         // владелец принимал его за «Сейчас», а оно двигало срок — срок меняют «Срок» ниже и «Перенести».
@@ -3289,8 +3473,8 @@ internal fun DelaTaskSheet(
             val live = if (existing) snap.tasks[task.id] ?: task else f
             val taken = DelaGroups.isNow(live, iso)
             val on = DelaGroups.inToday(f, me, iso)
-            if (DelaGroups.canNow(live, me)) ChipRow {
-                PaperChip(if (taken) "Из «Сейчас»" else "В «Сейчас»", selected = taken, icon = Glyphs.Bolt, onClick = {
+            if (DelaGroups.canNow(live, me) || onStep != null || onNest != null) ChipRow {
+                if (DelaGroups.canNow(live, me)) PaperChip(if (taken) "Из «Сейчас»" else "В «Сейчас»", selected = taken, icon = Glyphs.Bolt, onClick = {
                     if (!existing) {
                         // Шестое не встаёт (предел — и на сервере, `store._now_guard`): тост, отметка не ставится.
                         val (set, said) = DelaGroups.toggleNow(f, snap, me, iso)
@@ -3303,6 +3487,10 @@ internal fun DelaTaskSheet(
                         Feedback.toast(app, said)
                     }
                 })
+                // «Для этого» (15.10.2026, владелец: «под делом должно быть „до этого“ / „для этого“ / „поправить это
+                // дело“»): новое дело внутри этого; «Вложить в…» — это дело внутрь другого.
+                if (onStep != null) PaperChip("Для этого", selected = false, icon = Glyphs.Plus, onClick = onStep)
+                if (onNest != null && parent == null) PaperChip("Вложить в…", selected = false, icon = Glyphs.Layers, onClick = onNest)
             }
             PaperHint(
                 listOfNotNull(
@@ -3330,6 +3518,8 @@ internal fun DelaTaskSheet(
                 onProject = { id -> onOpenProject?.invoke(id) },
             )
         }
+        // «Внутри» (15.10.2026): открытые дела внутри по месту — «сделано», карточка, раньше / позже; сделанные — числом.
+        if (existing && !task.goal) InsideBlock(app, task, snap, onOpen = onOpenTask?.let { go -> { c: Dela.Task -> go(pinNow(f), c) } })
         DelaViews.origin(card?.origin)?.let { OriginPlate(it) }
         PaperField(value = f.notes, onValueChange = { f = f.copy(notes = it) }, label = "Заметки", singleLine = false, maxLines = 6)
 
@@ -3418,7 +3608,7 @@ internal fun DelaTaskSheet(
                     }
                 })
             }
-            if (!existing && f.whyId.isNotBlank()) PaperHint("зачем: " + (snap.tasks[f.whyId]?.title ?: "цель"))
+            if (!existing && f.whyId.isNotBlank() && snap.tasks[f.whyId]?.goal != false) PaperHint("зачем: " + (snap.tasks[f.whyId]?.title ?: "цель"))
             if (treeHere && f.goal) {
                 PaperField(
                     value = f.rhythm,
@@ -3442,10 +3632,10 @@ internal fun DelaTaskSheet(
                 if (f.directions.isNotEmpty()) "главное — у корня цепочки «Зачем», остальные — метки (до двух)"
                 else "своих нет — направление по дереву; отметь, если дело двигает ещё и другую сторону",
             )
-            // Новый шаг — Enter: дело с этим «Зачем»; у цели — без проекта, у дела — в его проекте. Под ориентиром
-            // (`no_steps`) шагов не заводят — сервер отказал бы, поля нет.
+            // Новый шаг к цели — Enter: дело с этим «Зачем», без проекта. Под ориентиром (`no_steps`) шагов не заводят —
+            // сервер отказал бы, поля нет. У обычного дела новое внутри — «Для этого» выше (15.10.2026): с полями от него.
             if (existing && task.noSteps) PaperHint("Ориентир, а не задача: шагов под ним не заводят")
-            else if (existing) QuickAddRow(if (task.goal) "Новый шаг к этой цели" else "Новый шаг к этому делу") { name ->
+            else if (existing && task.goal) QuickAddRow("Новый шаг к этой цели") { name ->
                 val step = Dela.Task(id = Dela.newId(), title = name.trim(), projectId = if (task.goal) "" else task.projectId, whyId = task.id, source = "manual")
                 if (step.title.isNotBlank()) scope.launch {
                     app.delaDo(listOf(Dela.createOp(step)))
@@ -3574,6 +3764,44 @@ internal fun DelaTaskSheet(
             }
         }
     }
+}
+
+/**
+ * «Внутри» в карточке (15.10.2026, `insideBox` веба): открытые дела внутри по месту — квадрат «сделано» (сразу, с
+ * подъёмом родителя), название — карточка, срок, «раньше» / «позже» (перенумерация `pos`); сделанные — числом.
+ */
+@Composable
+private fun InsideBlock(app: PravkaApp, task: Dela.Task, snap: Dela.Snapshot, onOpen: ((Dela.Task) -> Unit)?) {
+    val kids = DelaSteps.insideOf(task.id, snap)
+    val done = DelaSteps.doneInside(task.id, snap)
+    if (kids.isEmpty() && done == 0) return
+    val scope = app.appScope
+    val today = LocalDate.now().toString()
+    val me = app.delaSync.link.value?.user ?: app.delaStore.me
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    PaperHint("Внутри" + if (kids.isNotEmpty()) " · ${kids.size}" else "")
+    kids.forEachIndexed { i, k ->
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Box(
+                Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).clickable(onClickLabel = "сделано") {
+                    val up = if (snap.nestOn) DelaSteps.rise(k, snap, today) else null
+                    scope.launch { app.delaDo(listOf(Dela.statusOp("task.done", k.id))) }
+                    Feedback.toast(app, "✓ ${k.title.take(40)}" + (up?.let { " · " + DelaSteps.riseWords(it) } ?: ""))
+                },
+                contentAlignment = Alignment.Center,
+            ) { Box(Modifier.size(16.dp).clip(RoundedCornerShape(4.dp)).border(1.5.dp, mode.meta, RoundedCornerShape(4.dp))) }
+            Column(Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).clickable(enabled = onOpen != null) { onOpen?.invoke(k) }.padding(vertical = 4.dp)) {
+                Text(k.title, style = ty.body.copy(fontWeight = if (i == 0) FontWeight.SemiBold else ty.body.fontWeight), color = ru.zf.pravka.ui.Ink.Text)
+                DelaViews.due(k, today)?.let { Text(it.text, style = ty.label, color = mode.meta) }
+            }
+            if (snap.nestOn && kids.size > 1 && DelaSteps.canNest(k, snap, me)) {
+                GlyphButton(Glyphs.ArrowUp, "раньше", enabled = i > 0, onClick = { scope.launch { app.delaDo(DelaSteps.moveOps(k, -1, snap)) } }, size = 34.dp)
+                GlyphButton(Glyphs.ArrowDown, "позже", enabled = i < kids.size - 1, onClick = { scope.launch { app.delaDo(DelaSteps.moveOps(k, 1, snap)) } }, size = 34.dp)
+            }
+        }
+    }
+    if (done > 0) PaperHint("сделано внутри: $done")
 }
 
 /**

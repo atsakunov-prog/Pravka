@@ -424,6 +424,11 @@ internal object Seed {
             task(83, "Бета — клиент надолго") { put("goal", true); put("directions", arr("work")) },
             task(84, "Дача готова к маю") { put("goal", true); put("directions", arr("home")) },
             task(86, "Новая цель без шагов") { put("goal", true); put("directions", arr("mind")) },
+            // Дела внутри дела (15.10.2026, задание 22): родитель «отбить», внутри — по месту (pos), вложенное вложенного.
+            task(90, "Бета: подготовить термшит и отправить Ивану") { put("project_id", "p-beta"); put("deal_id", "d-beta-refi"); put("owed", true); put("person_id", "pe-ivan"); put("due_date", d(0)); put("source", "web") },
+            task(91, "Набросать драфт из расшифровки встречи") { put("project_id", "p-beta"); put("deal_id", "d-beta-refi"); put("why_id", "t-90"); put("due_date", d(0)); put("pos", 2); put("source", "web") },
+            task(92, "Сверить цифры с моделью") { put("project_id", "p-beta"); put("deal_id", "d-beta-refi"); put("why_id", "t-90"); put("due_date", d(0)); put("pos", 1); put("source", "web") },
+            task(93, "Найти запись встречи") { put("project_id", "p-beta"); put("why_id", "t-91"); put("source", "web") },
         )
         val suggestions = arr(
             sug(
@@ -459,7 +464,7 @@ internal object Seed {
         // Круг (задание 14): проекты в Круге — направления и цель, на которой проект висит.
         fun krug(id: String, dir: String, why: String? = null) =
             JSONObject().put("id", id).put("kind", "project").put("directions", arr(dir)).put("why_id", why ?: JSONObject.NULL).put("seq", ++seq)
-        return JSONObject().put("ok", true).put("full", true).put("seq", seq).put("today", d(0)).put("features", arr("groups", "krug", "tree", "digest"))
+        return JSONObject().put("ok", true).put("full", true).put("seq", seq).put("today", d(0)).put("features", arr("groups", "krug", "tree", "digest", "nest"))
             .put("digest", digest())
             .put("krug", arr(krug("p-beta", "work", "t-83"), krug("p-orion", "work"), krug("p-home", "home"), krug("p-dacha", "home", "t-84"), krug("p-zf", "work")))
             .put("tasks", tasks).put("projects", projects).put("people", people).put("suggestions", suggestions)

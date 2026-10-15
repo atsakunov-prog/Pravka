@@ -316,7 +316,8 @@ object DelaKrug {
             if (r != 0) r else when (a.kind) {
                 Kind.PROJECT -> collator.compare(a.project?.name.orEmpty(), b.project?.name.orEmpty())
                 Kind.GOAL -> (a.task?.num ?: 0).compareTo(b.task?.num ?: 0)
-                Kind.TASK -> order.compare(a.task!!, b.task!!)
+                // Дела внутри обычного дела — по месту среди соседей (15.10.2026, `pos`), как сервер и веб.
+                Kind.TASK -> if (DelaSteps.parentOf(a.task!!, s) != null) DelaSteps.BY_POS.compare(a.task, b.task!!) else order.compare(a.task, b.task!!)
             }
         }
         return Tree(kids.mapValues { (_, list) -> list.sortedWith(byKind) }, moved, ::parentKey)
@@ -476,7 +477,8 @@ object DelaKrug {
         val order = compareBy<Dela.Task> { !it.goal }.then(DelaGroups.byTime(today))
         val g = parent?.task
         val sibs = if (g != null) steps(s, g.id).filter { it.id != t.id }.sortedWith(order) else emptyList()
-        val kids = steps(s, t.id).sortedWith(order)
+        // У цели — её шаги и подцели; дела внутри обычного дела — блоком «Внутри» карточки (15.10.2026), здесь не повторяем.
+        val kids = if (t.goal) steps(s, t.id).sortedWith(order) else emptyList()
         // Цель над целью: у дела-цели её «Зачем», проект не в счёт.
         val gg = g?.let { upOf(it, s).getOrNull(1)?.task }
         val next = when {
@@ -488,6 +490,12 @@ object DelaKrug {
                 ).joinToString(" и ")
                 if (parts.isNotEmpty()) "Под целью $parts" + (g?.let { " — а сама она ведёт к «${it.title}»" } ?: "")
                 else "Пустая цель — сигнал, а не мусор: какой первый шаг к ней? Впиши его ниже."
+            }
+            // Дело внутри обычного дела (15.10.2026): родитель не закроется сам — поднимется, когда сделано всё внутри.
+            g != null && !g.goal -> {
+                val left = sibs.count { !it.goal }
+                if (left > 0) "Сделаешь — внутри «${g.title}» останется ещё $left"
+                else "Последнее открытое внутри «${g.title}» — сделаешь, и оно поднимется: без срока или позже — на сегодня"
             }
             g != null -> {
                 val left = sibs.count { !it.goal }
@@ -506,6 +514,8 @@ object DelaKrug {
 
     /** Подпись цели в строке (`taskRow` веба): «практика · ежедневно», «цель · 3 шага» или просто «цель». */
     fun goalChip(t: Dela.Task, s: Dela.Snapshot): String? {
+        // У обычного дела с делами внутри — «сначала: …» (`DelaSteps.firstLine`, 15.10.2026): целью оно не стало.
+        if (!t.goal) return null
         val n = if (t.open) steps(s, t.id).size else 0
         return when {
             t.goal && t.rhythm.isNotBlank() -> "практика · " + t.rhythm

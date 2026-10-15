@@ -111,6 +111,11 @@ object Dela {
         val rhythm: String = "",
         /** Под целью дел не заводят — ориентир, а не задача (правило базы: шаг сюда сервер отвергнет). */
         val noSteps: Boolean = false,
+        /**
+         * Место среди соседей — дел с тем же «Зачем» (15.10.2026, dela_0024, docs/dela-phone-22.md): меньше — раньше,
+         * 0 — не задано (после занумерованных, по времени заведения). Общее поле дела; уходит серверу только с фичей nest.
+         */
+        val pos: Int = 0,
     ) {
         val open: Boolean get() = status == OPEN
         /** Как человек называется в строке: короткое имя, иначе полное. */
@@ -410,6 +415,9 @@ object Dela {
         /** Сервер знает дерево целей (`goal`, `rhythm`, `no_steps`, `why_id` проекта): только тогда телефон их шлёт. */
         val treeOn: Boolean get() = FEATURE_TREE in features
 
+        /** Сервер знает дела внутри дела (15.10.2026): поле `pos`, подъём родителя после последнего дела внутри. */
+        val nestOn: Boolean get() = FEATURE_NEST in features
+
         /** Сервер Дел знает напоминания (поля `remind_*`) и шлёт их в Telegram. */
         val remindOn: Boolean get() = FEATURE_REMIND in features
 
@@ -505,7 +513,7 @@ object Dela {
             personShort = o.str("person_short"), personName = o.str("person_name"),
             requestedByShort = o.str("requested_by_short"), local = o.bool("_local"),
             directions = o.strings("directions"), whyId = o.str("why_id"), whyNum = o.int("why_num"), whyTitle = o.str("why_title"),
-            goal = o.bool("goal"), rhythm = o.str("rhythm"), noSteps = o.bool("no_steps"),
+            goal = o.bool("goal"), rhythm = o.str("rhythm"), noSteps = o.bool("no_steps"), pos = o.int("pos"),
         )
     }
 
@@ -526,6 +534,7 @@ object Dela {
         .put("directions", arr(t.directions)).put("why_id", nul(t.whyId))
         .put("why_num", if (t.whyNum > 0) t.whyNum else JSONObject.NULL).put("why_title", nul(t.whyTitle))
         .put("goal", t.goal).put("rhythm", nul(t.rhythm)).put("no_steps", t.noSteps)
+        .put("pos", if (t.pos > 0) t.pos else JSONObject.NULL)
         .apply { if (t.local) put("_local", true) }
 
     fun project(o: JSONObject): Project? {
@@ -835,6 +844,11 @@ object Dela {
                     val t = find(op.str("id")) ?: continue
                     val status = when (op.str("op")) { "task.done" -> DONE; "task.cancel" -> CANCELLED; else -> OPEN }
                     tasks[t.id] = t.copy(status = status, completedAt = if (status == OPEN) "" else nowIso, local = true)
+                    // Сделано последнее дело внутри — родитель поднимается и здесь, как на сервере (`_nest_rise`):
+                    // офлайн видно сразу, синк потом привезёт ту же строку.
+                    if (status == DONE && FEATURE_NEST in s.features) {
+                        DelaSteps.risen(tasks.getValue(t.id), tasks, today)?.let { up -> tasks[up.parent.id] = up.parent.copy(local = true) }
+                    }
                 }
                 "comment.add" -> {
                     val c = op.optJSONObject("comment") ?: continue
@@ -1043,6 +1057,7 @@ object Dela {
                     if (r.isEmpty()) out.copy(rhythm = "") else out.copy(rhythm = r, goal = true, projectId = "", dealId = "")
                 }
                 "no_steps" -> out.copy(noSteps = f.bool(k))
+                "pos" -> out.copy(pos = if (f.isNull(k)) 0 else f.optInt(k, 0))
                 else -> out
             }
         }
@@ -1100,6 +1115,12 @@ object Dela {
 
     /** Дерево целей (13.10.2026, docs/dela-phone-14.md): сервер знает `goal`, `rhythm`, `no_steps` и `why_id` проекта. */
     const val FEATURE_TREE = "tree"
+
+    /**
+     * Дела внутри дела (15.10.2026, dela_0024, docs/dela-phone-22.md): поле `pos` у дела в `task.create` и `task.set`,
+     * `task.done` последнего открытого дела внутри поднимает родителя. Без флага телефон `pos` не шлёт.
+     */
+    const val FEATURE_NEST = "nest"
 
     /** Круг жизни (12.10.2026, docs/dela-phone-12.md): сервер знает `directions`, `why_id` и шлёт список `krug`. */
     const val FEATURE_KRUG = "krug"
@@ -1195,6 +1216,7 @@ object Dela {
         "goal" -> t.goal
         "rhythm" -> nul(t.rhythm)
         "no_steps" -> t.noSteps
+        "pos" -> if (t.pos > 0) t.pos else JSONObject.NULL
         else -> JSONObject.NULL
     }
 

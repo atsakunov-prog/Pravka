@@ -50,6 +50,7 @@ import ru.zf.pravka.ui.glass
 import ru.zf.pravka.ui.scrollFade
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
+import kotlinx.coroutines.launch
 
 // Карточка дела правой половиной разворота (Правка 4.0, `screens/08`): на
 // разложенном Fold дело открывается не листом поверх списка, а рядом с ним —
@@ -81,9 +82,11 @@ internal fun DelaTaskPane(
     onNow: (() -> Unit)? = null,
     /** «Перенести» — лист сроков, как «Перенести все»; null — кнопки нет. */
     onMove: (() -> Unit)? = null,
+    /** «Для этого» (15.10.2026): новое дело внутри этого — листом нового дела; null — кнопки нет. */
+    onStep: (() -> Unit)? = null,
 ) {
     if (ru.zf.pravka.ui.Look.v2) {
-        DelaTaskPaneV2(app, task, snap, spentMs, onStart, onEdit, onDone, onPerson, modifier, onTask, onProject, me, onNow, onMove)
+        DelaTaskPaneV2(app, task, snap, spentMs, onStart, onEdit, onDone, onPerson, modifier, onTask, onProject, me, onNow, onMove, onStep)
         return
     }
     val mode = LocalMode.current
@@ -334,6 +337,7 @@ private fun DelaTaskPaneV2(
     me: String,
     onNow: (() -> Unit)?,
     onMove: (() -> Unit)?,
+    onStep: (() -> Unit)?,
 ) {
     val ty = LocalPravkaType.current
     if (task == null) {
@@ -395,6 +399,8 @@ private fun DelaTaskPaneV2(
                     if (deal.isNotBlank()) KvTag(deal)
                     if (isNow) KvTag("в «Сейчас»", accent = true)
                     for (l in task.labels) KvTag(l)
+                    // Дело внутри другого (15.10.2026): «для: <дело>» — тап открывает его справа.
+                    ru.zf.pravka.core.DelaSteps.parentOf(task, snap)?.let { par -> KvTag("для: " + par.title.take(40), accent = true, onClick = { onTask(par) }) }
                 }
                 // Свойства — строками через тонкую линию (`.set` холста): подпись мелко, значение строкой.
                 val who = snap.people[task.personId]?.label ?: task.who
@@ -469,9 +475,37 @@ private fun DelaTaskPaneV2(
                             KvSmallKey(if (isNow) "Из «Сейчас»" else "В «Сейчас»", Glyphs.Bolt, kind = if (isNow) 1 else 0, onClick = onNow)
                         }
                         if (onMove != null) KvSmallKey("Перенести", Glyphs.Calendar, kind = 0, onClick = onMove)
+                        if (onStep != null && !task.goal) KvSmallKey("Для этого", Glyphs.Plus, kind = 0, onClick = onStep)
                         KvSmallKey("Начать", Glyphs.Play, kind = 0, onClick = onStart)
                     }
                     KvSmallKey("Карточка", Glyphs.Edit, kind = 0, onClick = onEdit)
+                }
+            }
+        }
+        // «Внутри» (15.10.2026, `insideBox` веба): открытые дела внутри по месту — тап открывает справа, квадрат — «сделано».
+        val inside = ru.zf.pravka.core.DelaSteps.insideOf(task.id, snap)
+        if (inside.isNotEmpty() && !task.goal) {
+            item(key = "inside") {
+                PanelV2 {
+                    Text("Внутри · ${inside.size}", style = ty.overline, color = Kv.faint)
+                    inside.forEachIndexed { i, k ->
+                        if (i > 0) ru.zf.pravka.ui.Hairline()
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                            Box(
+                                Modifier.size(34.dp).clip(RoundedCornerShape(KvShape.Tag)).clickable(onClickLabel = "сделано") {
+                                    val up = if (snap.nestOn) ru.zf.pravka.core.DelaSteps.rise(k, snap, iso) else null
+                                    app.appScope.launch { app.delaDo(listOf(Dela.statusOp("task.done", k.id))) }
+                                    ru.zf.pravka.ui.Feedback.toast(app, "✓ ${k.title.take(40)}" + (up?.let { " · " + ru.zf.pravka.core.DelaSteps.riseWords(it) } ?: ""))
+                                },
+                                contentAlignment = Alignment.Center,
+                            ) { Box(Modifier.size(16.dp).clip(RoundedCornerShape(5.dp)).border(1.5.dp, Kv.check, RoundedCornerShape(5.dp))) }
+                            Column(Modifier.weight(1f).clip(RoundedCornerShape(KvShape.Tag)).clickable { onTask(k) }.padding(vertical = 6.dp)) {
+                                Text(k.title, style = ty.body.copy(fontSize = 14.sp), color = Kv.text,
+                                    fontWeight = if (i == 0) androidx.compose.ui.text.font.FontWeight.SemiBold else null)
+                                ru.zf.pravka.core.DelaViews.due(k, iso)?.let { Text(it.text, style = ty.meta, color = Kv.faint) }
+                            }
+                        }
+                    }
                 }
             }
         }

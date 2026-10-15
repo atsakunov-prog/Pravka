@@ -876,6 +876,8 @@ object DelaViews {
         me: String = "",
         /** Строка в дереве жизни: направление и «зачем» названы самим деревом. */
         inTree: Boolean = false,
+        /** Строка «Деревом» (15.10.2026): дела внутри видны отступом — «для: …» и «сначала: …» не нужны. */
+        nested: Boolean = false,
     ): List<String> {
         // [also] — остальные уровни группировки (10.10.2026): что названо заголовком, в строке не повторяется.
         fun on(b: By) = by == b || b in also
@@ -896,6 +898,8 @@ object DelaViews {
         out += t.labels
         // Круг жизни (12.10.2026, `taskRow` веба): направления дела (главное, потом метки) и «зачем: <цель>»;
         // у цели — «цель · N шагов» или «практика · ритм» (13.10.2026). В дереве место дела видно и так.
+        // Дела внутри дела (15.10.2026, `DelaSteps`): у вложенного — «для: <дело>» вместо «зачем», у родителя —
+        // «сначала: <первое открытое внутри>» и сколько ещё (раньше — «цель · N шагов»: дело с делами внутри целью не стало).
         val mine = me.isBlank() || t.ownerId.isBlank() || t.ownerId == me
         if (s.krugOn && mine) {
             val dirs = DelaKrug.directions()
@@ -903,8 +907,12 @@ object DelaViews {
                 val ks = DelaKrug.dirsOf(t, s)
                 if (ks.isNotEmpty() && !inTree) out += DelaKrug.names(ks, dirs)
                 else if (ks.isEmpty() && t.open) out += NO_DIRECTION
-                if (!inTree) s.tasks[t.whyId]?.let { g -> out += "зачем: " + if (g.title.length > 34) g.title.take(33) + "…" else g.title }
+                if (!inTree) s.tasks[t.whyId]?.takeIf { it.goal }?.let { g -> out += "зачем: " + if (g.title.length > 34) g.title.take(33) + "…" else g.title }
                 DelaKrug.goalChip(t, s)?.let { out += it }
+            }
+            if (!inTree && !nested) {
+                DelaSteps.forLine(t, s)?.let { out += it }
+                DelaSteps.firstLine(t, s)?.let { out += it }
             }
         }
         return out.filter { it.isNotBlank() }
