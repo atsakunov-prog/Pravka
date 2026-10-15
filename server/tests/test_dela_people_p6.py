@@ -10,14 +10,11 @@
 3. Риск второй. Фамилия-ослышка лежит в карточке отдельным другим именем — по одной фамилии who уверенно ведёт к этой
    карточке и любого будущего носителя настоящей такой фамилии.
 
-Без базы: who(rows=…) людей сам не читает (так же его зовёт разнос дайджеста по снимку). Ожидание «после починки» —
-xfail(strict): на коде 5e0ca088 (живое 15.10) он падает, как и положено ложной привязке; починка who должна снять
-пометку, иначе strict напомнит.
+Без базы: who(rows=…) людей сам не читает (так же его зовёт разнос дайджеста по снимку). На живом коде (5e0ca088) первый
+случай давал 0,85 и «уверенно» (тест с пометкой xfail — коммит 40610cba); с починкой — HINT_CAP и KIN в people.py.
 """
 
 from __future__ import annotations
-
-import pytest
 
 from pravka_dela import people as pp
 
@@ -47,19 +44,13 @@ def score(w, pid):
     return next((c["score"] for c in w["candidates"] if c["id"] == pid), None)
 
 
-def test_p6_today_hint_of_other_company_is_still_sure():
-    """Что есть на 5e0ca088: 1,0 − 0,15 = 0,85 = SURE — ложная привязка 18:36 воспроизводится."""
-    w = who("Ольга (Бета)")
-    assert w["best"]["id"] == "p-olga-a" and score(w, "p-olga-a") == 0.85 and w["sure"], w
-
-
-@pytest.mark.xfail(strict=True, reason="п. 6: подсказка чужой компании не должна оставлять «уверенно» (проект "
-                                       "stage6\\speakers.md §6, починка people.who)")
 def test_p6_hint_of_other_company_is_a_question_not_a_binding():
+    """Было на 5e0ca088: 1,0 − 0,15 = 0,85 = SURE — ложная привязка 18:36. Теперь — кандидат для вопроса."""
     w = who("Ольга (Бета)")
     assert not w["sure"], w
     # Кандидатом остаётся — вопрос «Это Ольга (Альфа Банк)?» с кнопкой, а не тишина.
     assert w["best"]["id"] == "p-olga-a" and pp.ASK_MIN <= score(w, "p-olga-a") < pp.SURE, w
+    assert score(w, "p-olga-a") == pp.HINT_CAP, w
 
 
 def test_p6_alias_with_role_hint_stays_sure():
@@ -71,13 +62,16 @@ def test_p6_alias_with_role_hint_stays_sure():
 
 def test_p6_kinship_hint_is_not_a_company():
     """«(отец)», «(терапевт)» — родство и роль, а не компания: спор с компанией карточки им не считается (так спикер
-    «Сергей (отец)» не должен стать вопросом при починке первого случая)."""
-    w = who("Сергей Тестов (отец)")
-    assert w["sure"] and w["best"]["id"] == "p-serg", w
+    «Сергей (отец)» не стал вопросом с починкой первого случая)."""
+    for q in ("Сергей Тестов (отец)", "Сергей Тестов (папа Бори)"):
+        w = who(q)
+        assert w["sure"] and w["best"]["id"] == "p-serg" and score(w, "p-serg") == 1.0, (q, w)
 
 
-@pytest.mark.xfail(strict=True, reason="п. 6, риск: фамилия-ослышка отдельным другим именем уверенно ведёт к карточке "
-                                       "(проект stage6\\speakers.md §6)")
 def test_p6_surname_only_alias_is_not_sure():
+    """Одна фамилия, совпавшая только с другим именем (ослышка расшифровки), — кандидат, а не «уверенно». Имя с этой
+    фамилией и своё имя карточки — как раньше."""
     w = who("Сокольникова")
-    assert w["best"]["id"] == "p-vera" and not w["sure"], w
+    assert w["best"]["id"] == "p-vera" and not w["sure"] and score(w, "p-vera") == pp.HINT_CAP, w
+    w = who("Вера Сокольникова")
+    assert w["sure"] and w["best"]["id"] == "p-vera", w
