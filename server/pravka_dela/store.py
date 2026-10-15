@@ -1075,7 +1075,7 @@ def _meeting_person(conn, user, data: dict, payload: dict) -> dict | None:
     v = people.new_person(conn, raw_name)
     if v["verdict"] in ("known", "removed"):
         known = v["known"]
-        res = {"person_id": known["id"], "created": False} if known else None
+        res = {"person_id": known["id"], "created": False, "by_owner": False} if known else None
         # Решил сервер, а не человек: decided_by пуст — очков за «разобрал Новое» (stats.py) это не даёт.
         row = _insert(conn, "tasks.suggestions", {
             **data, "payload": Jsonb(payload), "status": "accepted" if known else "rejected",
@@ -1169,23 +1169,35 @@ def _talk(sec: Any) -> str:
 
 
 def _signs(raw: Any) -> list[dict]:
-    """Признаки одного кандидата — [{group, strong, text}]: группа из SIGN_GROUPS, strong — только true, текст для глаз."""
+    """Признаки одного кандидата — [{group, strong, text, hint}]: группа из SIGN_GROUPS, strong — только true, hint —
+    только подсказка (подпись-инициал учётки, подсказка голоса 0,60–0,72; у сильного не бывает), текст для глаз."""
     out = []
     for x in raw if isinstance(raw, list) else []:
         if not isinstance(x, dict) or x.get("group") not in SIGN_GROUPS:
             continue
         text = " ".join(str(x.get("text") or "").split())[:200]
-        out.append({"group": x["group"], "strong": x.get("strong") is True, **({"text": text} if text else {})})
+        strong = x.get("strong") is True
+        out.append({"group": x["group"], "strong": strong, **({"text": text} if text else {}),
+                    **({"hint": True} if x.get("hint") is True and not strong else {})})
     return out[:SIGNS_MAX]
 
 
+HEARD = {"voice", "speech"}
+
+
 def two_signs(signs: list[dict]) -> bool:
-    """Два сильных признака разных групп (speakers.md §3.4). Приглашение — второй признак только вместе с голосом или
-    разговором: оно говорит, что человек был позван, а не что эта метка — он (§3.2)."""
+    """Два сильных признака разных групп (speakers.md §3.4), и среди них — голос или разговор (§3.2): учётка Zoom — это
+    устройство, а не человек, и твоё слово о её подписи — та же учётка (проверка 15.10: выученная подпись и «твоё слово» о
+    ней привязывали само того, кто говорил с чужой учётки); приглашение говорит, что человек был позван, а не что эта
+    метка — он. Одно правило со службой встреч (meetings/ident.py, two_groups)."""
     groups = {s["group"] for s in signs if s.get("strong")}
-    if "invite" in groups and not groups & {"voice", "speech"}:
-        groups.discard("invite")
-    return len(groups) >= 2
+    return len(groups) >= 2 and bool(groups & HEARD)
+
+
+def _rival(c: dict) -> bool:
+    """Соперник привязки: у другого кандидата есть признак не-подсказка (сильный или слабый). Подсказка (подпись-инициал
+    чужой учётки, подсказка голоса) привязке не мешает — так и служба встреч (ident.decide)."""
+    return any(s.get("strong") or not s.get("hint") for s in c["signs"])
 
 
 def _live_person(conn, pid: Any) -> dict | None:
@@ -1258,7 +1270,7 @@ def _meeting_speaker(conn, user, data: dict, payload: dict) -> None:
     cands = idt["cands"]
     if payload.get("link"):
         first = cands[0] if idt["link"] else None
-        against = [c for c in cands[1:] if c["signs"]]
+        against = [c for c in cands[1:] if _rival(c)]
         if first is None:
             held.append("карточка привязки в архиве или не видна")
         elif against or idt["dispute"]:
@@ -1267,7 +1279,7 @@ def _meeting_speaker(conn, user, data: dict, payload: dict) -> None:
         elif not two_signs(first["signs"]):
             have = sorted({SIGN_WORDS[s["group"]] for s in first["signs"] if s.get("strong")})
             held.append("сильных признаков нет" if not have else f"один сильный признак: {have[0]}" if len(have) == 1
-                        else "приглашение — второй признак только с голосом или разговором")
+                        else "без голоса и разговора само не ставится: " + ", ".join(have))
         elif payload.get("auto") is not True:
             held.append("служба не просила привязать само")
         if not held:
@@ -1635,6 +1647,10 @@ def op_suggestion_decide(conn, user, op):
             # или привязало не того — ответ только кнопкой.
             raise OpError(f"{payload.get('ask') or 'Кто это?'} Ответь кнопкой в вебе или скажи Claude.")
         res = _person_sug(conn, user, s, payload)
+        # Чьё решение — прямо в ответе (этап 6 аудита, проверка 15.10): decided_by у «Сделано само» и «человек заведён сам» —
+        # тоже владелец токена, и служба встреч принимала их за «да» владельца и училась на них. by_owner — ответил человек
+        # (кнопка, Claude, «Это он» в вебе встреч), а не сервер сам.
+        res["by_owner"] = not op.get("_auto")
         if not op.get("_auto"):
             # Ответ владельца на вопрос о спикере учит карточку (этап 6 аудита); «Сделано само» не учит ничему.
             learned = _learn_answer(conn, user, payload, res)

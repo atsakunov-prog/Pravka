@@ -9,6 +9,9 @@ addressed_as — в карточку». «Одна правда: людей вс
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from starlette.testclient import TestClient
@@ -94,7 +97,8 @@ def test_two_signs_link_by_itself_teach_nothing_and_undo(sp):
     r = one(url, link_sug(sp["denis"], [VOICE, OWNER], learn={str(sp["denis"]): {"address": "ты, Денис"}}))
     s = r["suggestion"]
     assert (s["status"], s["reason"]) == ("accepted", store.AUTO_LINK_REASON), s
-    assert s["result"] == {"person_id": str(sp["denis"]), "created": False, "changed": False, "link": True}
+    assert s["result"] == {"person_id": str(sp["denis"]), "created": False, "changed": False, "link": True,
+                           "by_owner": False}                                # решил сервер, не владелец
     p = card(url, sp["denis"])
     assert (p["aliases"], p["address"]) == ([], None)  # «Сделано само» не учит
     assert s["payload"]["ident"]["candidates"][0]["signs"][0]["text"] == VOICE["text"]
@@ -143,7 +147,7 @@ def test_one_sign_is_a_question_with_reasons_buttons_and_learning(sp):
     assert not ops(url, "sasha", {"op": "suggestion.decide", "id": s["id"], "decision": "accept"})[0]["ok"]
     r = one(url, {"op": "suggestion.decide", "id": s["id"], "option": 0})
     res = r["suggestion"]["result"]
-    assert res["person_id"] == str(sp["denis"]) and not res["created"]
+    assert res["person_id"] == str(sp["denis"]) and not res["created"] and res["by_owner"] is True
     assert res["learned"]["wrote"] == {"emails": ["denis.o@beta-test.ru"], "address": "вы, Денис Ильич",
                                        "aliases": ["Denis Obraztsov"]}, res
     p = card(url, sp["denis"])
@@ -191,7 +195,18 @@ def test_two_signs_but_rival_or_dead_card_is_a_question(sp):
     assert [o["label"] for o in p["options"]] == ["Это Тимур Беталов", "Это Павел Орлов", "Никто из них", "Не для CRM"]
     s = one(url, link_sug(sp["timur"], [{"group": "account", "strong": True}, {"group": "invite", "strong": True}],
                           key="meeting-speaker:101:SPEAKER_05"))["suggestion"]
-    assert s["status"] == "pending" and s["payload"]["pick"] and s["payload"]["held"].startswith("приглашение — второй признак")
+    assert s["status"] == "pending" and s["payload"]["pick"]
+    assert s["payload"]["held"] == "без голоса и разговора само не ставится: приглашение, учётка Zoom"
+    # Учётка и твоё слово о её подписи — та же учётка (проверка 15.10): без голоса и разговора само не ставится.
+    s = one(url, link_sug(sp["timur"], [{"group": "account", "strong": True}, {"group": "owner", "strong": True}],
+                          key="meeting-speaker:101:SPEAKER_08"))["suggestion"]
+    assert s["status"] == "pending" and s["payload"]["held"].startswith("без голоса и разговора")
+    # Соперник только с подсказкой (подпись-инициал чужой учётки) привязке само не мешает — как у службы встреч.
+    hint = {"person_id": str(sp["pavel"]), "signs": [{"group": "account", "strong": False, "hint": True,
+                                                      "text": "подпись «P. Orlov»"}]}
+    s = one(url, link_sug(sp["timur"], [VOICE, SPEECH], others=[hint], key="meeting-speaker:101:SPEAKER_09"))["suggestion"]
+    assert (s["status"], s["reason"]) == ("accepted", store.AUTO_LINK_REASON), s
+    assert s["payload"]["ident"]["candidates"][1]["signs"][0]["hint"] is True
     with dela_db.session(url, "sasha", "t") as c:
         c.execute("UPDATE crm.people SET archived_at = now() WHERE id = %s", (sp["pavel"],))
     r = ops(url, "sasha", link_sug(sp["pavel"], [VOICE, OWNER], key="meeting-speaker:101:SPEAKER_06"))[0]
@@ -226,6 +241,12 @@ def test_learn_is_not_foreign(sp):
     assert r["refused"][0]["why"].startswith("не имя человека")
     r = one(url, {"op": "person.learn", "id": str(sp["timur"]), "zoom_name": "Timur Betalov"})
     assert r["wrote"]["aliases"] == ["Timur Betalov"] and not r["refused"]
+    # Подпись чужой учётки (проверка 15.10, 211): с учётки «Pavel Orlov» говорил Тимур — подтвердили Тимура, но подпись
+    # не его имя; другим именем она вела бы к нему каждого с этой учётки.
+    r = one(url, {"op": "person.learn", "id": str(sp["timur"]), "zoom_name": "Pavel Orlov"})
+    assert [x["why"] for x in r["refused"]] == ["подпись чужой учётки: имя в ней — не его"] and not r["wrote"]["aliases"]
+    r = one(url, {"op": "person.learn", "id": str(sp["timur"]), "zoom_name": "Timur Petrov"})       # фамилия другая
+    assert [x["why"] for x in r["refused"]] == ["подпись чужой учётки: имя в ней — не его"]
     # Своим — обращение не пишется: команда, владелец.
     for who, word in (("nata", "команда"), ("me", "владелец")):
         r = one(url, {"op": "person.learn", "id": str(sp[who]), "address": "ты, коллега"})
@@ -291,6 +312,51 @@ def test_people_day_is_contacts_of_the_day_for_owner_only(sp):
     assert store.view(url, "sasha", "people_day", day="2026-10-10")["people"] == []
     with pytest.raises(store.OpError):
         store.view(url, "natasha", "people_day", day="2026-10-09")
+
+
+SAMPLE = Path(__file__).resolve().parents[1] / "contract" / "dela-meetings-speakers.json"
+
+
+def test_service_sample_runs_through_ops(sp):
+    """Образец нагрузки службы встреч (contract/dela-meetings-speakers.json — его же собирает своим кодом и сверяет тест
+    Встреч test_speakers_contract.py): что шлёт служба, то сервер и понимает (проверка 15.10: стороны не понимали друг
+    друга — служба слала cands, conflict, признаки строками и группу zoom, а сервер ждал candidates, dispute, account)."""
+    url = sp["url"]
+    sample = json.loads(SAMPLE.read_text(encoding="utf-8"))
+    with dela_db.session(url, "sasha", "t") as c:
+        orgs = {n: c.execute("INSERT INTO crm.orgs (name, kind, owner_id) VALUES (%s, 'other', 'sasha') RETURNING id",
+                             (n,)).fetchone()["id"] for n in ("Пицца", "Бета")}
+        orgs["Альфа Банк"] = sp["org"]["Альфа Банк"]
+        ids = {}
+        for key, p in sample["people"].items():
+            ids[key] = str(c.execute(
+                "INSERT INTO crm.people (name, short, org_id, emails, owner_id) VALUES (%s, %s, %s, %s, 'sasha') "
+                "RETURNING id", (p["name"], p.get("short"), orgs.get(p.get("org")), p.get("emails") or [])
+            ).fetchone()["id"])
+    text = json.dumps(sample["cases"], ensure_ascii=False).replace("{dmy}", "14.10.2026").replace("{dm}", "14.10")
+    text = text.replace("{url}", "https://meetings.example.org")
+    for key, pid in ids.items():
+        text = text.replace(key, pid)
+    cases = {c["name"]: c["op"] for c in json.loads(text)}
+    # «Сделано само» (речь + учётка Zoom) — принято само; карточку не учит.
+    s = one(url, cases["link"])["suggestion"]
+    assert (s["status"], s["reason"]) == ("accepted", store.AUTO_LINK_REASON), s
+    assert s["result"]["person_id"] == ids["{vlad}"] and s["result"]["by_owner"] is False
+    assert card(url, ids["{vlad}"])["address"] is None
+    # Спор: вопрос с кандидатом и «Завести «Ольга (Бета)»»; «Завести» — карточка в «Бете», обращение — ей.
+    s = one(url, cases["dispute"])["suggestion"]
+    assert s["status"] == "pending" and s["payload"]["held"] == "признаки спорят", s
+    assert [o["label"] for o in s["payload"]["options"]] == ["Это Ольга Альфова", "Завести «Ольга (Бета)»", "Не для CRM"]
+    assert s["payload"]["ask"].startswith("S3 (34 с) на встрече «Бета: знакомство» 14.10 — это Ольга Альфова (Альфа Банк)?")
+    res = one(url, {"op": "suggestion.decide", "id": s["id"], "option": 1})["suggestion"]["result"]
+    assert res["created"] and res["by_owner"] is True and res["learned"]["wrote"]["address"] == "ты, Оля"
+    assert (card(url, res["person_id"])["name"], card(url, res["person_id"])["org_name"]) == ("Ольга", "Бета")
+    # Один признак (учётка): вопрос «Это Глеб Сорокин?»; «да» — почта учётки в карточку.
+    s = one(url, cases["one_sign"])["suggestion"]
+    assert s["status"] == "pending" and s["payload"]["held"] == "один признак — нужен твой ответ" and s["payload"]["pick"]
+    res = one(url, {"op": "suggestion.decide", "id": s["id"], "option": 0})["suggestion"]["result"]
+    assert res["learned"]["wrote"]["emails"] == ["gleb@sorokin.test"], res
+    assert card(url, ids["{gleb}"])["emails"] == ["gleb@sorokin.test"]
 
 
 TRANSCRIPT = """[00:00:05] SPEAKER_00: Добрый день, коллеги.

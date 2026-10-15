@@ -1,0 +1,185 @@
+{
+ "_": "Образец нагрузки службы встреч для раздела speaker_link (dela-meetings.json): «Сделано само», спор и один признак — как их собирает служба своим кодом (tests/test_speakers_contract.py Встреч). Тест Дел (test_dela_speakers.py) прогоняет его через apply_ops. {…} — карточки (people: что завести), {dm}/{dmy} — день встречи, {url} — адрес веба встреч. Имена выдуманные.",
+ "people": {
+  "{vlad}": {
+   "name": "Владимир Горохов",
+   "org": "Пицца",
+   "emails": [
+    "v.g@pizza.test"
+   ]
+  },
+  "{olga}": {
+   "name": "Ольга Альфова",
+   "org": "Альфа Банк",
+   "short": "Ольга"
+  },
+  "{gleb}": {
+   "name": "Глеб Сорокин",
+   "org": null
+  }
+ },
+ "cases": [
+  {
+   "name": "link",
+   "op": {
+    "op": "suggestion.create",
+    "suggestion": {
+     "kind": "person",
+     "source": "meeting",
+     "source_ref": "meeting-speaker:1:S4",
+     "batch_ref": "meeting:1",
+     "batch_title": "Пицца: бюджет · {dm}",
+     "quote": "Встреча «Пицца: бюджет» {dm}: S4 — Владимир Горохов (речь + учётка Zoom)",
+     "payload": {
+      "title": "Владимир Горохов",
+      "where": "встреча «Пицца: бюджет» {dm} · 7 мин речи",
+      "speaker": {
+       "meeting_ref": "1",
+       "label": "S4",
+       "seconds": 400,
+       "name_source": null,
+       "url": "{url}/m/1"
+      },
+      "ident": {
+       "label": "S4",
+       "company": "Пицца",
+       "role": "финдир",
+       "address": "вы, Владимир",
+       "why": "Владимир Г.: почта учётки Zoom v.g@pizza.test — в карточке",
+       "candidates": [
+        {
+         "person_id": "{vlad}",
+         "signs": [
+          {
+           "group": "account",
+           "strong": true,
+           "text": "почта учётки Zoom v.g@pizza.test — в карточке"
+          },
+          {
+           "group": "speech",
+           "strong": true,
+           "text": "обратились 1:40 «Владимир, добрый день»; обратились 8:20 «Володя, а что с поставками»"
+          }
+         ]
+        }
+       ],
+       "learn": {
+        "{vlad}": {
+         "address": "вы, Владимир"
+        }
+       }
+      },
+      "link": true,
+      "person_id": "{vlad}",
+      "auto": true
+     }
+    }
+   }
+  },
+  {
+   "name": "dispute",
+   "op": {
+    "op": "suggestion.create",
+    "suggestion": {
+     "kind": "person",
+     "source": "meeting",
+     "source_ref": "meeting-speaker:2:S3",
+     "batch_ref": "meeting:2",
+     "batch_title": "Бета: знакомство · {dm}",
+     "quote": "Встреча «Бета: знакомство» {dm}: S3 — Ольга? (34 с речи)",
+     "payload": {
+      "title": "Ольга?",
+      "where": "встреча «Бета: знакомство» {dm} · 34 с речи",
+      "speaker": {
+       "meeting_ref": "2",
+       "label": "S3",
+       "seconds": 34,
+       "name_source": "voice",
+       "url": "{url}/m/2"
+      },
+      "ident": {
+       "label": "S3",
+       "name": "Ольга",
+       "company": "Бета",
+       "address": "ты, Оля",
+       "why": "спор: Ольга А. (Альфа Банк) или Ольга (Бета); Ольга А.: голос · выучен только на этой встрече · с карточкой связан догадкой «кто это»; Ольга (Бета): представили 3:21 «Ольга с нашей стороны тоже стучится»; обратились 23:25 «Давайте, может быть, Оля, у тебя есть вопросы по сути»",
+       "dispute": true,
+       "candidates": [
+        {
+         "person_id": "{olga}",
+         "signs": [
+          {
+           "group": "voice",
+           "strong": false,
+           "text": "голос · выучен только на этой встрече · с карточкой связан догадкой «кто это»"
+          }
+         ]
+        }
+       ],
+       "learn": {
+        "{olga}": {
+         "address": "ты, Оля"
+        },
+        "new": {
+         "address": "ты, Оля"
+        }
+       }
+      },
+      "person": {
+       "source": "встреча {dmy}: Бета: знакомство"
+      }
+     }
+    }
+   }
+  },
+  {
+   "name": "one_sign",
+   "op": {
+    "op": "suggestion.create",
+    "suggestion": {
+     "kind": "person",
+     "source": "meeting",
+     "source_ref": "meeting-speaker:3:S0",
+     "batch_ref": "meeting:3",
+     "batch_title": "Созвон · {dm}",
+     "quote": "Встреча «Созвон» {dm}: S0 — Глеб С.? (5 мин речи)",
+     "payload": {
+      "title": "Глеб С.?",
+      "where": "встреча «Созвон» {dm} · 5 мин речи",
+      "speaker": {
+       "meeting_ref": "3",
+       "label": "S0",
+       "seconds": 300,
+       "name_source": "zoom",
+       "url": "{url}/m/3"
+      },
+      "ident": {
+       "label": "S0",
+       "why": "Глеб С.: подпись Zoom «Глеб Сорокин» (1,00)",
+       "candidates": [
+        {
+         "person_id": "{gleb}",
+         "signs": [
+          {
+           "group": "account",
+           "strong": true,
+           "text": "подпись Zoom «Глеб Сорокин» (1,00)"
+          }
+         ]
+        }
+       ],
+       "learn": {
+        "{gleb}": {
+         "zoom_name": "Глеб Сорокин",
+         "emails": [
+          "gleb@sorokin.test"
+         ]
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ ]
+}

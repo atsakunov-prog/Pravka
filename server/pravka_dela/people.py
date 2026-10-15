@@ -916,7 +916,28 @@ def _signature(conn, card: dict, sig: str, refused: list[dict]) -> str | None:
         refused.append({"field": "zoom_name", "value": sig, "why": f"общая подпись: так подписана и карточка «{other['name']}»",
                         "person_id": other["id"], "name": other["name"]})
         return None
+    if not _signature_names(conn, card, sig):
+        # Подпись чужой учётки (этап 6 аудита, проверка 15.10): с учётки «Pavel Orlov» говорил Тимур — подтвердили
+        # Тимура, но подпись не его, и другим именем его карточки она вела бы к нему каждого с этой учётки.
+        refused.append({"field": "zoom_name", "value": sig, "why": "подпись чужой учётки: имя в ней — не его"})
+        return None
     return sig
+
+
+def _signature_names(conn, card: dict, sig: str) -> bool:
+    """Подпись называет этого человека: имя то же (уменьшительные, латиница) и фамилия не спорит — или «кто это» по подписи
+    ≥ 0,95 ведёт к нему. Одно правило со службой встреч (meetings/ident.py, card_fits)."""
+    sw = [translit(w) if re.search(r"[a-z]", w) else w for w in words(sig)]
+    full = [w for w in words(card["name"]) if len(w) > 1]
+    first = [w for n in [card["name"], card["short"], *(card["aliases"] or [])] if n for w in words(n) if looks_first(w)]
+    sf = [w for w in sw if looks_first(w)]
+    ss = [w for w in sw if len(w) > 1 and not looks_first(w)]
+    cs = [w for w in full if not looks_first(w)]
+    if sf and any(same_first(a, b) and not _gender_clash([a], [b]) for a in sf for b in first) \
+            and (not ss or not cs or any(same(a, b) for a in ss for b in cs)):
+        return True
+    w = who(conn, q=sig)
+    return bool(w["sure"] and w["best"] and str(w["best"]["id"]) == str(card["id"]) and w["best"]["score"] >= 0.95)
 
 
 def learn(conn, user, pid, raw: Any, error) -> dict:
