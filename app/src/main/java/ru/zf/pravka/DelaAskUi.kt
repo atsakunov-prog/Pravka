@@ -176,6 +176,12 @@ internal fun DelaSayBar(
     onMic: () -> Unit,
     onSend: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * «Для этого» над открытым делом (15.10.2026, docs/dela-phone-22.md, `cardSay` веба): null — чипа нет (дело не
+     * открыто, сервер без фичи nest), true — всё сказанное станет делами внутри открытого, false — обычная строка.
+     */
+    step: Boolean? = null,
+    onStep: () -> Unit = {},
 ) {
     val mode = ru.zf.pravka.ui.LocalMode.current
     val ty = ru.zf.pravka.ui.LocalPravkaType.current
@@ -195,7 +201,13 @@ internal fun DelaSayBar(
         val head = when {
             listening -> "Слушаю — говори сколько нужно. Нажми микрофон ещё раз — отдам Claude"
             busy -> "Claude думает… Можно уходить на другие разделы — изменения появятся сами"
+            step == true -> "Для этого: что назовёшь — заведу делами внутри"
             else -> "Скажи, что сделать $about"
+        }
+        // «Для этого» — переключатель над строкой: «до этого надо X» становится делом внутри, а не заметкой (жалоба
+        // владельца 15.10.2026), и сервер ставит связь, проект и срок тем же правилом, что «Для этого» в карточке.
+        if (step != null && !listening && !busy) Row(Modifier.padding(start = 8.dp)) {
+            ru.zf.pravka.ui.PaperChip("Для этого", selected = step, onClick = onStep, icon = Glyphs.Plus)
         }
         Row(
             Modifier

@@ -381,6 +381,9 @@ object DelaGroups {
      * Дела уровнями (`nested` веба). Без уровней — одна ветка без заголовка.
      * Внутри последнего — по времени. Пустых веток не бывает: они собираются из
      * самих дел. Ключ ветки — путь от корня, чтобы списку было за что держаться.
+     * Дело внутри дела (15.10.2026) — в ветке своего верхнего предка из этого же списка
+     * ([DelaSteps.topIn]), кроме уровня «время»: иначе «Отбить» и «Запустить» растащили бы
+     * его от родителя, и «прямо перед родителем» (`DelaSteps.stepsFirst`) не вышло бы.
      */
     fun nested(items: List<Dela.Task>, levels: List<Level>, s: Dela.Snapshot, today: String, depth: Int = 0, path: String = ""): List<Node> {
         val sorted = items.sortedWith(byTime(today))
@@ -388,8 +391,9 @@ object DelaGroups {
             ?: return if (depth == 0 && sorted.isNotEmpty()) listOf(Node("all", "", 0, null, sorted)) else emptyList()
         data class B(val k: Key, val list: MutableList<Dela.Task>)
         val buckets = LinkedHashMap<String, B>()
+        val top = if (lv == Level.DATE) null else DelaSteps.topIn(sorted)
         for (t in sorted) {
-            val k = levelKey(t, lv, s, today)
+            val k = levelKey(top?.invoke(t) ?: t, lv, s, today)
             buckets.getOrPut(k.order) { B(k, mutableListOf()) }.list += t
         }
         val titles = buckets.values.groupingBy { it.k.title }.eachCount()

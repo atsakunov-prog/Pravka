@@ -821,6 +821,8 @@ object Dela {
         val orgs = LinkedHashMap(s.orgs)
         val projects = LinkedHashMap(s.projects)
         val krug = LinkedHashMap(s.krug)
+        // Родитель до подъёма этой же очередью (дела внутри дела, 15.10.2026): «Вернуть» возвращает его срок офлайн.
+        val raisedFrom = HashMap<String, Task>()
         fun find(ref: String): Task? {
             tasks[ref]?.let { return it }
             val n = ref.trim().removePrefix("#").toIntOrNull() ?: return null
@@ -839,6 +841,9 @@ object Dela {
                     val t = find(op.str("id")) ?: continue
                     val set = op.optJSONObject("set") ?: continue
                     tasks[t.id] = applyFields(t, set, today, nowIso).copy(local = true)
+                    if (set.has("due_date")) raisedFrom.remove(t.id) // срок правили — «Вернуть» его не тронет (сервер так же)
+                    // Вложили в другое дело или вынули, а места не назвали — прежнее место уходит (как `op_task_set`).
+                    if (set.has("why_id") && !set.has("pos") && set.str("why_id") != t.whyId) tasks[t.id] = tasks.getValue(t.id).copy(pos = 0)
                 }
                 "task.done", "task.reopen", "task.cancel" -> {
                     val t = find(op.str("id")) ?: continue
@@ -847,7 +852,18 @@ object Dela {
                     // Сделано последнее дело внутри — родитель поднимается и здесь, как на сервере (`_nest_rise`):
                     // офлайн видно сразу, синк потом привезёт ту же строку.
                     if (status == DONE && FEATURE_NEST in s.features) {
-                        DelaSteps.risen(tasks.getValue(t.id), tasks, today)?.let { up -> tasks[up.parent.id] = up.parent.copy(local = true) }
+                        DelaSteps.risen(tasks.getValue(t.id), tasks, today)?.let { up ->
+                            if (up.moved) raisedFrom[up.parent.id] = tasks.getValue(up.parent.id)
+                            tasks[up.parent.id] = up.parent.copy(local = true)
+                        }
+                    }
+                    // «Вернуть» (повторный тап) — подъём отменяется, если его подняла эта же очередь и срок не правили
+                    // (`tasks.nest_fall` сервера; поднятое прежним синком вернёт сервер — прежний срок знает он).
+                    if (status == OPEN && FEATURE_NEST in s.features) {
+                        val pid = t.whyId
+                        val was = raisedFrom.remove(pid)
+                        val p = tasks[pid]
+                        if (was != null && p != null && p.open && p.dueDate.take(10) == today) tasks[pid] = p.copy(dueDate = was.dueDate, local = true)
                     }
                 }
                 "comment.add" -> {

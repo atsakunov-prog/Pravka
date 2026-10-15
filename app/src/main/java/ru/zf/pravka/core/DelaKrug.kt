@@ -190,21 +190,35 @@ object DelaKrug {
 
     /**
      * Движение за неделю по направлениям (`movement` веба, `krug.movement` сервера): закрытое
-     * дело — 1, закрытая цель (узел или дело, у которого были шаги) — 3. Считается только в
-     * главном направлении: метка свою сторону не двигает.
+     * дело — 1, закрытая цель (узел дерева) — 3. Считается только в главном направлении: метка
+     * свою сторону не двигает. До 15.10.2026 целью считалось и дело, у которого были шаги, но с
+     * делами внутри дела (docs/dela-phone-22.md) так стало бы любое дело с драфтом внутри.
      */
     fun movement(s: Dela.Snapshot, me: String, today: String): Map<String, Move> {
         val since = weekStart(today)
-        val parents = s.tasks.values.mapNotNull { it.whyId.ifBlank { null } }.toHashSet()
         val out = HashMap<String, Move>()
         for (t in s.tasks.values) {
             if (t.status != Dela.DONE || (me.isNotBlank() && t.ownerId != me) || t.completedAt.isBlank()) continue
             if (DelaGroups.mskDay(t.completedAt) < since) continue
             val k = dirsOf(t, s, me).firstOrNull() ?: continue
             val m = out[k] ?: Move(0, 0)
-            out[k] = Move(m.done + 1, m.events + if (t.goal || t.id in parents) GOAL_POINTS else 1)
+            out[k] = Move(m.done + 1, m.events + if (t.goal) GOAL_POINTS else 1)
         }
         return out
+    }
+
+    /**
+     * Шаг к цели (`towardGoal` веба, `krug.toward_goal` сервера): вверх по «Зачем» есть цель дерева. Дело внутри
+     * обычного дела, над которым целей нет (драфт для клиентского дела), — не шаг к цели: «Моё» — то, что хочу я.
+     */
+    fun towardGoal(t: Dela.Task, s: Dela.Snapshot): Boolean {
+        var x = t
+        repeat(60) {
+            val w = x.whyId.takeIf { it.isNotBlank() && it != x.id }?.let { s.tasks[it] } ?: return false
+            if (w.goal) return true
+            x = w
+        }
+        return false
     }
 
     /** Радиус точки движения: min(10, 3·√N) — корень, чтобы мелкие покупки не забивали шкалу. */
@@ -212,8 +226,8 @@ object DelaKrug {
 
     /**
      * «Моё» (`mineTasks` веба, сервер — `krug.mine_from`): до трёх открытых своих
-     * дел, не «отбить» и не «мониторить», у которых «Хочу сам» или «Зачем» без своих
-     * открытых шагов. Порядок: закреплённое «Хочу сам», потом главные направления, где за
+     * дел, не «отбить» и не «мониторить», у которых «Хочу сам» или «Зачем» к цели ([towardGoal])
+     * без своих открытых дел внутри. Порядок: закреплённое «Хочу сам», потом главные направления, где за
      * неделю меньше всего движения, потом кто дольше ждёт. Цели — не дела: их здесь нет.
      * С 13.10.2026 — без того, что и так на виду: срок сегодня («Сегодня») или уже в «Сейчас»;
      * отсеивается до отбора трёх, а не после, иначе «Моё» показывало бы меньше, чем есть
@@ -226,7 +240,7 @@ object DelaKrug {
         return s.tasks.values.filter {
             it.open && !it.goal && (me.isBlank() || it.ownerId == me) && Dela.inSphere(it, sphere) && !it.owed && it.ball != Dela.WAITING &&
                 !DelaGroups.isNow(it, today) && it.dueDate != today &&
-                (it.want || (it.whyId.isNotBlank() && it.id !in withSteps))
+                (it.want || (it.whyId.isNotBlank() && it.id !in withSteps && towardGoal(it, s)))
         }.sortedWith(compareBy<Dela.Task>({ !it.want }, { least(it) }, { it.createdAt }, { it.num })).take(MINE_MAX)
     }
 
@@ -416,12 +430,13 @@ object DelaKrug {
             .map { Placed(it, goalPath(it, s, dirs)) }.sortedWith { a, b -> collator.compare(a.path, b.path) }
 
     /**
-     * Куда повесить (`goalPop` веба): открытые свои цели и дела с шагами — кроме [exclude]
-     * (само дело и то, что ниже него) и ориентиров (`no_steps`), с путём от направления.
+     * Куда повесить (`goalPop` веба): открытые свои цели — кроме [exclude] (само дело и то, что
+     * ниже него) и ориентиров (`no_steps`), с путём от направления. Дело с делами внутри (15.10.2026)
+     * целью не стало: вкладывают «Вложить в…» (`DelaSteps.pool`), а не «Зачем».
      */
     fun goalPool(s: Dela.Snapshot, me: String, dirs: List<Direction>, exclude: Set<String> = emptySet()): List<Placed> =
         s.tasks.values.filter {
-            it.open && (me.isBlank() || it.ownerId == me) && it.id !in exclude && !it.noSteps && (it.goal || steps(s, it.id).isNotEmpty())
+            it.open && (me.isBlank() || it.ownerId == me) && it.id !in exclude && !it.noSteps && it.goal
         }.map { Placed(it, goalPath(it, s, dirs)) }.sortedWith { a, b -> collator.compare(a.path, b.path) }
 
     /** Поиск в листе целей: каждое слово — где-то в пути (`goalPop` веба), до сорока строк. */

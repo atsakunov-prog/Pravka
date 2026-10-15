@@ -309,6 +309,8 @@ fun DelaTab(
     var rowMenu by remember { mutableStateOf<Dela.Task?>(null) }
     var stepFor by remember { mutableStateOf<Dela.Task?>(null) }
     var nestFor by remember { mutableStateOf<Dela.Task?>(null) }
+    // Строка Claude внизу над открытым делом — в режиме «Для этого» (чип над строкой; сбрасывается после отправки).
+    var sayStep by remember { mutableStateOf(false) }
     val groupsPref by app.delaStore.groupsFlow.collectAsState()
     // Набранное в строке Claude живёт, пока его не отправили или не стёрли: смена раздела и синк его не стирают.
     var draft by rememberSaveable { mutableStateOf("") }
@@ -611,7 +613,9 @@ fun DelaTab(
         view == DelaViews.View.NOW -> {
             val waits = remember(snap, me, today, sphere) { DelaViews.waits(snap, me, today, sphere, now) }
             val nowList = DelaGroups.nowOrdered(snap, me, today)
-            val taken = nowList.map { it.id }.toSet()
+            // Дела внутри дел из «Сейчас» (15.10.2026, `renderNow` веба): над родителем, в «Сегодня» не повторяются.
+            val inner = if (snap.nestOn) DelaSteps.inner(nowList, snap) else emptyList()
+            val taken = nowList.map { it.id }.toSet() + inner.map { it.first.id }
             val rest = DelaGroups.todayByGroups(snap, me, today, sphere, taken)
             val done = DelaGroups.doneToday(snap, me, today)
             DelaScreen(
@@ -622,9 +626,10 @@ fun DelaTab(
                     "закрыто $done".takeIf { done > 0 },
                 ).joinToString(" · "),
                 principle = principle,
-                taskIds = nowList.map { it.id } + rest.map { it.id },
+                taskIds = DelaSteps.stepsFirst(nowList + inner.map { it.first }, snap).map { it.id } + rest.map { it.id },
                 home = Home(
                     now = nowList,
+                    inner = inner,
                     today = rest,
                     taken = DelaGroups.todayTasks(snap, me, today, sphere).count { it.id in taken },
                     asks = DelaViews.asks(snap, me),
@@ -1394,7 +1399,10 @@ fun DelaTab(
     fun saySend(text: String, openId: String) {
         val t = text.trim()
         if (t.isEmpty()) return
-        val sc = if (link != null) sayScope(openId) else null
+        // «Для этого» над открытым делом (15.10.2026): всё сказанное — дела внутри него (scope карточки дела со step).
+        val stepOn = sayStep && openId.isNotBlank() && snap.nestOn
+        val sc = if (link == null) null else if (stepOn) DelaAsk.stepScope(openId) else sayScope(openId)
+        if (stepOn) sayStep = false
         if (sc == null) {
             val service = PravkaAccessibilityService.instance
             if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
@@ -1426,7 +1434,11 @@ fun DelaTab(
     }
     val sayBar: @Composable (Modifier, Dela.Task?, Boolean) -> Unit = { barModifier, opened, coversList ->
         val openId = opened?.id.orEmpty()
+        // «Для этого» — только у открытого своего или видимого дела (не цели) и с сервером, который знает дела внутри.
+        val canStep = link != null && snap.nestOn && opened != null && opened.open && !opened.goal
         DelaSayBar(
+            step = if (canStep) sayStep else null,
+            onStep = { sayStep = !sayStep },
             value = draft,
             onValueChange = { draft = it; if (sayNote.isNotBlank() && !sayNoteError) sayNote = "" },
             placeholder = ru.zf.pravka.core.PillHint.say(ownerName, "говори дела"),
@@ -3129,7 +3141,7 @@ internal fun TaskRows(
         return
     }
     // Плоский список (15.10.2026): дело внутри другого — прямо перед родителем, если оба здесь (`stepsFirst` веба).
-    val rows = if (indent.isEmpty() && !inTree) DelaSteps.stepsFirst(list) else list
+    val rows = if (indent.isEmpty() && !inTree) DelaSteps.stepsFirst(list, actions.snap) else list
     rows.forEachIndexed { i, t ->
         if (i > 0) RowRule()
         TaskRow(t, actions, today, by, onProjectPage, extra(t), also, indent[t.id] ?: 0, inTree, note(t), onLong?.let { f -> { f(t) } }, nowBold)

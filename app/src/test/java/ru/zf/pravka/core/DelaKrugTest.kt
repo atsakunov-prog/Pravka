@@ -120,6 +120,28 @@ class DelaKrugTest {
     }
 
     @Test
+    fun `«Моё» — дело внутри обычного дела без цели выше не шаг к цели, внутри дела под целью — шаг`() {
+        // 15.10.2026 (`krug.toward_goal` сервера, `towardGoal` веба): драфт для клиентского термшита — не «то, что хочу я».
+        val goal = task("goal") { it.copy(goal = true, directions = listOf("education")) }
+        val client = task("client") { it.copy(title = "Термшит Альфе", projectId = "p-a") }
+        val draft = task("draft") { it.copy(whyId = "client", createdAt = "2026-10-03T10:00:00+03:00") }
+        val under = task("under") { it.copy(whyId = "goal") }
+        val deep = task("deep") { it.copy(whyId = "under", createdAt = "2026-10-04T10:00:00+03:00") }
+        val s = snap(goal, client, draft, under, deep)
+        assertFalse(DelaKrug.towardGoal(draft, s))
+        assertTrue(DelaKrug.towardGoal(deep, s))
+        // «under» — с открытым делом внутри: не лист; «deep» — шаг к цели через него.
+        assertEquals(listOf("deep"), DelaKrug.mine(s, "me", today, "all").map { it.id })
+    }
+
+    @Test
+    fun `движение — сделанный родитель дел внутри не цель, одно очко`() {
+        val parent = task("parent") { it.copy(directions = listOf("work"), status = Dela.DONE, completedAt = "2026-10-11T12:00:00+03:00") }
+        val kid = task("kid") { it.copy(whyId = "parent", status = Dela.DONE, completedAt = "2026-10-11T11:00:00+03:00") }
+        assertEquals(mapOf("work" to DelaKrug.Move(2, 2)), DelaKrug.movement(snap(parent, kid), "me", today))
+    }
+
+    @Test
     fun `«Моё» — без того, что и так на виду, отсеяно до отбора трёх`() {
         // 13.10.2026 (`krug.mine(skip=…)` сервера, `mineTasks` веба): срок сегодня — в «Сегодня», отмеченное — в «Сейчас».
         val wants = (1..3).map { i -> task("w$i") { it.copy(want = true, createdAt = "2026-10-0${i}T10:00:00+03:00") } }
@@ -232,16 +254,18 @@ class DelaKrugTest {
     }
 
     @Test
-    fun `куда повесить — цели и дела с шагами, без ориентиров и того, что ниже`() {
+    fun `куда повесить — только цели, без ориентиров и того, что ниже (дело с делами внутри — не цель)`() {
         val g = task("g") { it.copy(goal = true, directions = listOf("health")) }
         val mark = task("mark") { it.copy(goal = true, noSteps = true, directions = listOf("work")) }
         val step = task("step") { it.copy(whyId = "g") }
         val sub = task("sub") { it.copy(whyId = "step") }
         val inProj = task("in-proj") { it.copy(projectId = "p-a", directions = listOf("work")) }
         val s = snap(g, mark, step, sub, inProj, krug = mapOf("p-a" to Dela.KrugProject(listOf("work"))))
-        assertEquals(listOf("g", "step"), DelaKrug.goalPool(s, "me", dirs).map { it.task.id })
+        // 15.10.2026: «step» с делом внутри («sub») — обычное дело, а не цель: вкладывают «Вложить в…» (DelaSteps.pool).
+        assertEquals(listOf("g"), DelaKrug.goalPool(s, "me", dirs).map { it.task.id })
         assertEquals(listOf("g"), DelaKrug.goalPool(s, "me", dirs, DelaKrug.below(s, "step")).map { it.task.id })
-        assertEquals(listOf("step"), DelaKrug.findGoals(DelaKrug.goalPool(s, "me", dirs), "здоровье step").map { it.task.id })
+        assertEquals(listOf("g"), DelaKrug.findGoals(DelaKrug.goalPool(s, "me", dirs), "здоровье").map { it.task.id })
+        assertTrue(DelaKrug.findGoals(DelaKrug.goalPool(s, "me", dirs), "step").isEmpty())
         // На цель — новое «Зачем»; ориентир и своё же — отказ словами; на направление — «без зачем».
         assertEquals("g", DelaKrug.hang(inProj, s, dirs, goal = g).set?.getString("why_id"))
         assertNull(DelaKrug.hang(inProj, s, dirs, goal = mark).set)

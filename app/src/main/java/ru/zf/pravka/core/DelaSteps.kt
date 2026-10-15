@@ -98,14 +98,18 @@ object DelaSteps {
 
     /**
      * В одном плоском списке дело внутри — прямо перед своим родителем (вложенное вложенного — перед ним), соседи — по
-     * месту. Остальной порядок — как был; чего в списке нет, то не подтягивается.
+     * месту. Дела внутри одного дела, чьего родителя в списке нет ([s] знает, что родитель — дело, а не цель), — подряд
+     * и по месту, там, где стоит первое из них (`stepsFirst` веба). Остальной порядок — как был; чего в списке нет, то не
+     * подтягивается.
      */
-    fun stepsFirst(list: List<Dela.Task>): List<Dela.Task> {
+    fun stepsFirst(list: List<Dela.Task>, s: Dela.Snapshot? = null): List<Dela.Task> {
         if (list.size < 2) return list
         val ids = list.map { it.id }.toSet()
         fun under(t: Dela.Task) = t.whyId.isNotBlank() && t.whyId in ids && t.whyId != t.id
         val kids = list.filter(::under).groupBy { it.whyId }.mapValues { (_, v) -> v.sortedWith(BY_POS) }
-        if (kids.isEmpty()) return list
+        val lone = if (s == null) emptyMap()
+        else list.filter { !under(it) && parentOf(it, s) != null }.groupBy { it.whyId }.filterValues { it.size > 1 }
+        if (kids.isEmpty() && lone.isEmpty()) return list
         val out = ArrayList<Dela.Task>(list.size)
         val placed = HashSet<String>()
         fun place(x: Dela.Task) {
@@ -113,9 +117,49 @@ object DelaSteps {
             for (c in kids[x.id].orEmpty()) place(c)
             out.add(x)
         }
-        for (x in list) if (!under(x)) place(x)
+        for (x in list) {
+            if (under(x)) continue
+            val sibs = lone[x.whyId]
+            if (sibs != null && sibs.any { it.id == x.id }) sibs.sortedWith(BY_POS).forEach(::place) else place(x)
+        }
         // Круг «Зачем» внутри списка (правило базы его не пускает) — всё равно никого не теряем.
         for (x in list) place(x)
+        return out
+    }
+
+    /**
+     * Верхний предок дела среди дел [list] (само дело — если его родителя в списке нет), `topIn` веба: по нему уровни
+     * группировки ([DelaGroups.nested]) кладут дело внутри туда же, где родитель.
+     */
+    fun topIn(list: List<Dela.Task>): (Dela.Task) -> Dela.Task {
+        val by = list.associateBy { it.id }
+        return { t ->
+            var x = t
+            for (n in 0 until 60) {
+                val p = x.whyId.takeIf { it.isNotBlank() && it != x.id }?.let { by[it] } ?: break
+                if (p.id == t.id) break
+                x = p
+            }
+            x
+        }
+    }
+
+    /**
+     * Открытые дела внутри дел [list] — все уровни, кроме тех, что и так в нём, с глубиной (`innerOf` веба). Главная
+     * «Сейчас»: дела внутри дел из «Сейчас» стоят прямо над родителем отступом (в предел пяти не считаются) и в
+     * «Сегодня» ниже не повторяются — «Для этого» у дела в «Сейчас» ставит дело внутри на сегодня, а не в «Сейчас».
+     */
+    fun inner(list: List<Dela.Task>, s: Dela.Snapshot): List<Pair<Dela.Task, Int>> {
+        val have = list.map { it.id }.toHashSet()
+        val out = ArrayList<Pair<Dela.Task, Int>>()
+        fun walk(id: String, depth: Int) {
+            for (c in insideOf(id, s)) {
+                if (!have.add(c.id)) continue
+                out += c to depth
+                walk(c.id, depth + 1)
+            }
+        }
+        for (t in list) walk(t.id, 1)
         return out
     }
 
