@@ -349,7 +349,7 @@ def who_rows(conn, with_merged: bool = False) -> list[dict]:
     и номер дубля, если у живой свои, а встреча, звонок или Telegram помнят ключ дубля. По имени слитые не участвуют."""
     cols = ("pe.id, pe.name, pe.short, pe.aliases, pe.phones, pe.emails, pe.telegram_id, pe.telegram_username, "
             "pe.org_id, pe.role, pe.user_id, pe.merged_into, o.name AS org_name, o.aliases AS org_aliases "
-            "FROM crm.people pe LEFT JOIN crm.orgs o ON o.id = pe.org_id ")
+            "FROM crm.v_people pe LEFT JOIN crm.orgs o ON o.id = pe.org_id ")  # поля по ярусу: коллегу по номеру не узнать
     rows = conn.execute(f"SELECT {cols} WHERE pe.archived_at IS NULL AND pe.merged_into IS NULL").fetchall()
     if with_merged:
         rows += conn.execute(f"SELECT {cols} WHERE pe.merged_into IS NOT NULL").fetchall()
@@ -682,12 +682,15 @@ def op_person_add(conn, user, op, error, ignore: tuple = ()):
     if data.get("telegram_username") and not row["telegram_username"]:
         sets["telegram_username"] = str(data["telegram_username"]).lstrip("@")
     if not sets:
-        return {"row": row, "changed": False, "skipped": skipped}
+        return {"row": conn.execute("SELECT * FROM crm.v_people WHERE id = %s", (pid,)).fetchone() or row,
+                "changed": False, "skipped": skipped}
     cols = ", ".join(f"{k} = %s" for k in sets)
-    out = conn.execute(f"UPDATE crm.people SET {cols} WHERE id = %s RETURNING *", [*sets.values(), pid]).fetchone()
+    out = conn.execute(f"UPDATE crm.people SET {cols} WHERE id = %s RETURNING id", [*sets.values(), pid]).fetchone()
     if out is None:
         raise error("человек: нет прав менять")
-    return {"row": out, "changed": True, "skipped": skipped}
+    # Ответ — из вида по ярусу (аудит №10): RETURNING * отдал бы и пометки владельца.
+    return {"row": conn.execute("SELECT * FROM crm.v_people WHERE id = %s", (pid,)).fetchone(), "changed": True,
+            "skipped": skipped}
 
 
 # Где живут ссылки на человека: (таблица, колонка или ключ, массив ли). Переносит их функция базы crm.person_merge

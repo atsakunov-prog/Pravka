@@ -507,7 +507,7 @@ def _card(conn, scope: dict) -> tuple[list[str], dict | None]:
         lines += ["Сделки клиента (его проекты):", *([f"— {_deal_line(conn, d)}" + (f" · команда: {_names_of(conn, d['team_ids'])}"
                                                                                     if d.get("team_ids") else "") for d in deals] or ["(нет)"])]
         ppl = conn.execute(
-            "SELECT pe.* FROM crm.people pe WHERE pe.archived_at IS NULL AND ((pe.org_id IS NOT NULL AND pe.org_id = %s) "
+            "SELECT pe.* FROM crm.v_people pe WHERE pe.archived_at IS NULL AND ((pe.org_id IS NOT NULL AND pe.org_id = %s) "
             "OR EXISTS (SELECT 1 FROM crm.deals d WHERE d.project_id = %s AND pe.id = ANY (d.person_ids))) ORDER BY pe.name",
             (pr["org_id"], pr["id"])).fetchall()
         lines += ["Люди клиента:", *([f"— {_person_line(conn, x)}" for x in ppl] or ["(нет)"])]
@@ -517,7 +517,7 @@ def _card(conn, scope: dict) -> tuple[list[str], dict | None]:
             lines += ["Встречи с клиентом (свежие сверху):", *met]
         return lines, {"kind": "client", "project": pr, "deals": deals, "people": ppl}
     if kind == "person" and scope.get("person_id"):
-        pe = conn.execute("SELECT * FROM crm.people WHERE id = %s", (scope["person_id"],)).fetchone()
+        pe = conn.execute("SELECT * FROM crm.v_people WHERE id = %s", (scope["person_id"],)).fetchone()  # аудит №10
         if not pe:
             return [], None
         lines = [f"КАРТОЧКА: человек — {_person_line(conn, pe)}"]
@@ -938,7 +938,7 @@ def _person_ref(conn, index: dict, name: str) -> dict | None:
     if not pid:
         w = people.who(conn, q=name)
         pid = w["best"]["id"] if w["sure"] else None
-    return conn.execute("SELECT * FROM crm.people WHERE id = %s", (pid,)).fetchone() if pid else None
+    return conn.execute("SELECT * FROM crm.v_people WHERE id = %s", (pid,)).fetchone() if pid else None
 
 
 def _org_ref(index: dict, name: str):

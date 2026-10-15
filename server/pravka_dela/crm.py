@@ -308,7 +308,7 @@ def view_client(conn, user, project_id=None, **_):
             "WHERE d.project_id = %s ORDER BY coalesce(pm.paid_on, pm.invoiced_on, pm.due_on, pm.created_at::date)", (project_id,)
         ).fetchall(),
         "people": conn.execute(
-            "SELECT pe.* FROM crm.people pe WHERE pe.archived_at IS NULL AND ("
+            "SELECT pe.* FROM crm.v_people pe WHERE pe.archived_at IS NULL AND ("  # поля — по ярусу (аудит №10)
             " (pe.org_id IS NOT NULL AND pe.org_id = %s)"
             " OR EXISTS (SELECT 1 FROM crm.deals d WHERE d.project_id = %s AND pe.id = ANY (d.person_ids)))"
             " ORDER BY pe.name",
@@ -346,7 +346,7 @@ SELECT pe.id, pe.name, pe.short, pe.org_id, o.name AS org, pe.role, pe.cadence, 
        (SELECT max(i.at) FROM crm.interactions i WHERE pe.id = ANY (i.person_ids) AND i.deleted_at IS NULL AND NOT i.mention) AS last_touch,
        (SELECT count(*) FROM crm.deals d WHERE d.source_person_id = pe.id) AS brought,
        (SELECT count(*) FROM tasks.tasks t WHERE t.person_id = pe.id AND t.status = 'open' AND t.ball = 'agenda') AS agenda
-FROM crm.people pe
+FROM crm.v_people pe
 LEFT JOIN crm.orgs o ON o.id = pe.org_id
 WHERE pe.archived_at IS NULL AND pe.user_id IS NULL
   AND (pe.cadence IN ('month', 'quarter', 'year') OR pe.hub

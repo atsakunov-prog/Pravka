@@ -1238,6 +1238,11 @@ def _person_sug(conn, user, s: dict, payload: dict) -> dict:
         return out
     if not d.get("name"):
         raise OpError("человек: нужно имя")
+    if s.get("source") in ("telegram", "userbot", "contacts"):
+        # Пометка новой карточки из Telegram и телефонной книжки — только откуда (аудит №10): старая служба «Людей сами»
+        # клала туда «<откуда>. <почему>» — пересказ переписки, который команда видела бы в карточке. Почему — в цитате
+        # и вопросе предложения.
+        d = {**d, "note": str(payload.get("where") or "").strip() or None}
     where = {"telegram": "Telegram", "contacts": "телефонной книжки", "meeting": "встречи"}.get(s.get("source"), s.get("source"))
     org_id, org_made = _org_for(conn, user, payload.get("org_name"), payload.get("org_kind"), f"Заведена сама из {where}")
     data = {k: d[k] for k in PERSON_SUG_NEW if d.get(k) not in (None, "", [])}
@@ -1360,8 +1365,22 @@ def db_owner(conn) -> str:
     return conn.execute("SELECT crm.owner_id() AS id").fetchone()["id"]
 
 
-org_create, org_set = _entity("crm.orgs", ORG_FIELDS, "организация")
-person_create, person_set = _entity("crm.people", PERSON_FIELDS, "человек")
+_org_create, _org_set = _entity("crm.orgs", ORG_FIELDS, "организация")
+_person_create, _person_set = _entity("crm.people", PERSON_FIELDS, "человек")
+
+
+def _shown(view: str, fn):
+    """Ответ операции с человеком или компанией — строкой из вида (crm.v_people, crm.v_orgs; аудит №10), а не RETURNING *:
+    пометки владельца о сотруднике (черты, заметка) не должны уйти ему в ответе на правку его же телефона."""
+    def handler(conn, user, op):
+        res = fn(conn, user, op)
+        row = conn.execute(f"SELECT * FROM {view} WHERE id = %s", (res["row"]["id"],)).fetchone()
+        return {**res, "row": row or res["row"]}
+    return handler
+
+
+org_create, org_set = _shown("crm.v_orgs", _org_create), _shown("crm.v_orgs", _org_set)
+person_create, person_set = _shown("crm.v_people", _person_create), _shown("crm.v_people", _person_set)
 _project_create, _project_set = _entity("crm.projects", PROJECT_FIELDS, "проект", extra=("id", "import_ref"))
 
 
@@ -1614,8 +1633,10 @@ SYNC_TABLES = {
     "projects": "SELECT * FROM crm.projects WHERE seq > %s",
     "deals": "SELECT * FROM crm.v_deals WHERE seq > %s",
     "payments": "SELECT * FROM crm.payments WHERE seq > %s",
-    "people": "SELECT * FROM crm.people WHERE seq > %s",
-    "orgs": "SELECT * FROM crm.orgs WHERE seq > %s",
+    # Люди и компании — поля по тому, кто смотрит (аудит №10, dela_0026): пометки владельца, черты, «ищет / предлагает»,
+    # день рождения и пометка компании команде не едут; коллегам (пользователям Дел) — только имя и должность.
+    "people": "SELECT * FROM crm.v_people WHERE seq > %s",
+    "orgs": "SELECT * FROM crm.v_orgs WHERE seq > %s",
     "comments": "SELECT * FROM tasks.comments WHERE seq > %s",
     "suggestions": "SELECT * FROM tasks.suggestions WHERE seq > %s",
     "access": "SELECT * FROM crm.project_access WHERE seq > %s",
@@ -1843,7 +1864,7 @@ def view_person(conn, user, person_id=None, **_):
         raise OpError("нужен person_id")
     open_ = "status = 'open' AND "
     return {
-        "person": conn.execute("SELECT * FROM crm.people WHERE id = %s", (person_id,)).fetchone(),
+        "person": conn.execute("SELECT * FROM crm.v_people WHERE id = %s", (person_id,)).fetchone(),  # аудит №10
         "agenda": _list(conn, open_ + "ball = 'agenda' AND person_id = %s", [person_id]),
         "waiting": _list(conn, open_ + "ball = 'waiting' AND person_id = %s", [person_id]),
         "asked": _list(conn, open_ + "requested_by = %s", [person_id]),

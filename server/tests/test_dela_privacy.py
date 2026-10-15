@@ -262,3 +262,77 @@ def test_team_cannot_touch_meeting_record_and_home_takes_none(mt):
                                                               "source": "meeting",
                                                               "source_ref": "https://meetings.example.org/m/990"}})[0]
     assert not bad["ok"] and "личный проект" in bad["error"]
+
+
+# ── №10: карточка человека и компании — поля по тому, кто смотрит ─────────────────────────────
+
+
+@pytest.fixture()
+def cards(team):
+    """Клиент «ООО Ромашка» с компанией и человеком клиента (со всеми пометками владельца), Алёна — пользователь Дел со
+    своей карточкой (user_id) и пометкой владельца о ней."""
+    url = team["url"]
+    p = project(url, "sasha", "ООО Ромашка")
+    with dela_db.session(url, "system", "t") as c:
+        org = c.execute("INSERT INTO crm.orgs (name, owner_id, note) VALUES ('ООО Ромашка', 'sasha', 'МЕТКА-ОРГ') "
+                        "RETURNING id").fetchone()["id"]
+        c.execute("UPDATE crm.projects SET org_id = %s WHERE id = %s", (org, p))
+        ivan = c.execute(
+            "INSERT INTO crm.people (name, short, owner_id, org_id, role, phones, emails, telegram_username, traits, note, "
+            "seeks, offers, source, birth_day, birth_month, cadence, hub) VALUES ('Иван Тестов', 'Иван', 'sasha', %s, "
+            "'финдиректор', '{+7 000 000-00-02}', '{ivan@example.org}', 'ivan_test', 'МЕТКА-ЧЕРТЫ', 'МЕТКА-ЗАМЕТКА', "
+            "'МЕТКА-ИЩЕТ', 'МЕТКА-ПРЕДЛАГАЕТ', 'МЕТКА-ОТКУДА', 5, 6, 'month', true) RETURNING id", (org,)).fetchone()["id"]
+        c.execute("UPDATE crm.people SET user_id = 'alena', phones = '{+7 000 000-00-01}', traits = 'МЕТКА-ОБ-АЛЁНЕ', "
+                  "birth_day = 1, birth_month = 2 WHERE id = %s", (team["alena"],))
+    deal(url, "sasha", p, "Ромашка: модель", person_ids=[str(ivan)])
+    return {**team, "project": p, "org": org, "ivan": ivan}
+
+
+MARKS = ("МЕТКА-ЧЕРТЫ", "МЕТКА-ЗАМЕТКА", "МЕТКА-ИЩЕТ", "МЕТКА-ПРЕДЛАГАЕТ", "МЕТКА-ОТКУДА")
+
+
+def test_person_card_fields_by_who_looks(cards):
+    url, ivan = cards["url"], str(cards["ivan"])
+    synced = store.sync(url, "natasha", 0)
+    row = next(x for x in synced["people"] if x["id"] == ivan)
+    assert (row["name"], row["role"], row["phones"], row["emails"], row["telegram_username"]) == (
+        "Иван Тестов", "финдиректор", ["+7 000 000-00-02"], ["ivan@example.org"], "ivan_test")
+    assert (row["birth_day"], row["cadence"], row["hub"], row["tier"]) == (None, None, False, "work")
+    client_people = store.view(url, "natasha", "client", project_id=str(cards["project"]))["people"]
+    seen = repr(synced) + repr(client_people) + repr(store.view(url, "natasha", "person", person_id=ivan))
+    seen += repr(store.view(url, "natasha", "ties"))
+    assert not [m for m in (*MARKS, "МЕТКА-ОРГ", "МЕТКА-ОБ-АЛЁНЕ") if m in seen]
+    assert all(m in repr(store.view(url, "sasha", "person", person_id=ivan)) for m in MARKS)
+    assert next(o for o in store.sync(url, "sasha", 0)["orgs"] if o["id"] == str(cards["org"]))["note"] == "МЕТКА-ОРГ"
+    # Коллега (пользователь Дел, ничем не связан) — имя и должность, без контактов.
+    al = next(x for x in synced["people"] if x["id"] == str(cards["alena"]))
+    assert (al["name"], al["phones"], al["birth_day"], al["traits"], al["tier"]) == ("Алёна Юристова", [], None, None,
+                                                                                     "colleague")
+    # «Кто это» сотрудника коллегу по номеру не узнаёт; владелец — узнаёт.
+    assert not store.view(url, "natasha", "who", phone="+7 000 000-00-01")["candidates"]
+    assert store.view(url, "sasha", "who", phone="+7 000 000-00-01")["best"]["id"] == str(cards["alena"])
+
+
+def test_own_card_contacts_yes_marks_no(cards):
+    url, me = cards["url"], str(cards["alena"])
+    mine = next(x for x in store.sync(url, "alena", 0)["people"] if x["id"] == me)
+    assert (mine["phones"], mine["birth_day"], mine["traits"], mine["tier"]) == (["+7 000 000-00-01"], 1, None, "self")
+    bad = ops(url, "alena", {"op": "person.set", "id": me, "set": {"traits": "сама о себе"}})[0]
+    assert not bad["ok"] and "пометки о человеке" in bad["error"]
+    got = one(url, "alena", {"op": "person.set", "id": me, "set": {"phones": ["+7 000 000-00-09"]}})["row"]
+    assert got["phones"] == ["+7 000 000-00-09"] and got["traits"] is None and "МЕТКА" not in repr(got)
+    added = one(url, "alena", {"op": "person.add", "id": me, "add": {"emails": ["alena@example.org"]}})["row"]
+    assert "МЕТКА" not in repr(added)
+    with as_(url, "sasha") as c:
+        assert c.execute("SELECT traits FROM crm.people WHERE id = %s", (me,)).fetchone()["traits"] == "МЕТКА-ОБ-АЛЁНЕ"
+
+
+def test_people_by_themselves_note_is_only_where(cards):
+    """«Люди сами» старой службы клали в пометку «<откуда>. <почему>» — в карточку идёт только «откуда»."""
+    url = cards["url"]
+    s = sug(url, "person", "telegram", {"person": {"name": "Пётр Новый", "note": "Telegram: «Ромашка». МЕТКА-ПОЧЕМУ"},
+                                        "where": "Telegram: «Ромашка»"}, quote="МЕТКА-ПОЧЕМУ он писал про модель")
+    r = one(url, "sasha", {"op": "suggestion.decide", "id": s["id"], "decision": "accept"})
+    with as_(url, "sasha") as c:
+        note = c.execute("SELECT note FROM crm.people WHERE id = %s", (r["person"]["person_id"],)).fetchone()["note"]
+    assert note == "Telegram: «Ромашка»"

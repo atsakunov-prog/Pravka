@@ -3178,14 +3178,22 @@ function renderPerson(id) {
   row('Телефон', (p.phones || []).join(', '));
   row('Почта', (p.emails || []).join(', '));
   row('Telegram', p.telegram_username ? '@' + p.telegram_username : null);
-  row('День рождения', p.birth_day ? `${p.birth_day} ${MONTHS[p.birth_month - 1]}` + (p.birth_year ? ' ' + p.birth_year : '') : null);
-  row('Как часто', { month: 'раз в месяц', quarter: 'раз в 2–3 месяца', year: 'раз в год', none: 'не видимся' }[p.cadence]);
-  row('Ищет', p.seeks); row('Предлагает', p.offers); row('Характер', p.traits); row('Откуда', p.source); row('Заметка', p.note);
+  // Пометки о человеке (аудит №10): видит только тот, кто видит карточку целиком (владелец, автор) — сервер другим их не
+  // отдаёт (crm.v_people). Владельцу — под «Только тебе» с замком: команда этого не видит.
+  const marks = [];
+  const mark = (k, v) => { if (v) marks.push(el('span', {}, k), el('span', {}, v)); };
+  const whole = personWhole(p);
+  (whole && privacyOn() ? mark : row)('День рождения', p.birth_day ? `${p.birth_day} ${MONTHS[p.birth_month - 1]}` + (p.birth_year ? ' ' + p.birth_year : '') : null);
+  const put = whole && privacyOn() ? mark : row;
+  put('Как часто', { month: 'раз в месяц', quarter: 'раз в 2–3 месяца', year: 'раз в год', none: 'не видимся' }[p.cadence]);
+  put('Ищет', p.seeks); put('Предлагает', p.offers); put('Характер', p.traits); put('Откуда', p.source); put('Заметка', p.note);
   return [head(p.name, p.short && p.short !== p.name ? ['в задачах — ' + p.short] : null),
     el('div', { class: 'body' },
       quickAdd({ person_id: id }, { label: `с человеком «${p.name}»`,
         placeholder: '«он теперь CFO в Бете», «созвонились, пришлёт модель в пятницу», «жду от него договор»' }),
       info.length ? el('div', { class: 'person-info' }, info) : null,
+      marks.length ? el('div', { class: 'only-you' }, el('div', { class: 'only-you-h' }, icon('lock', 13), ' Только тебе'),
+        el('div', { class: 'person-info' }, marks)) : null,
       mergeRow(p),
       crmOn() && personDeals(id).length ? el('div', { class: 'pchips projs' }, el('span', { class: 'pc-label' }, 'Зачем'),
         personDeals(id).map(({ d, role }) => dealChip(d, role))) : null,
@@ -5444,8 +5452,16 @@ function renderDeal(id) {
 }
 
 // ── Человек в CRM (на его странице) ─────────────────────────────────────
+/** Видит ли смотрящий карточку целиком (ярус owner: владелец Дел, автор карточки — crm.v_people, аудит №10). Старый
+ *  сервер яруса не шлёт — тогда по роли: пометки там видит всякий, кто видит карточку. */
+const personWhole = (p) => (p.tier ? p.tier === 'owner' : S.me.role === 'owner' || p.owner_id === S.me.user);
 function personCrmBlock(p) {
   const v = crmGet('/api/view/dossier?person_id=' + p.id);
+  // «Теплота» и «хаб» — пометки владельца: только тому, кто видит карточку целиком (у остальных правку отвергнет база).
+  if (!personWhole(p)) {
+    return el('div', { class: 'crm-person' },
+      sec('timeline', 'Хронология', null, v ? timelineBlock('h:' + p.id, { items: v.timeline, showDeal: true }) : loading()));
+  }
   const cad = el('select', {}, [['', '—'], ...Object.entries(CADENCE)].map(([k, l]) => el('option', { value: k, selected: (p.cadence || '') === k }, l)));
   cad.addEventListener('change', async () => { try { await op1({ op: 'person.set', id: p.id, set: { cadence: cad.value || null } }); crmDirty(); render(); } catch (e) { fail(e); } });
   const hub = el('input', { type: 'checkbox' });

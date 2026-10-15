@@ -64,7 +64,8 @@ APP_TABLES = {
 }
 # crm.v_interactions (dela_0025, аудит №9): хронология для показа — итог встречи владельцу с карточки, ссылка на веб
 # встреч только хозяину записи, team_sees.
-APP_VIEWS = ["tasks.v_tasks", "crm.v_deals", "crm.v_interactions"]
+# crm.v_people, crm.v_orgs (dela_0026, аудит №10): карточки человека и компании — поля по тому, кто смотрит.
+APP_VIEWS = ["tasks.v_tasks", "crm.v_deals", "crm.v_interactions", "crm.v_people", "crm.v_orgs"]
 APP_SEQUENCES = ["tasks.task_num"]
 # Архив жизни для страниц-двойников (dela_0016): не схема life, а узкие функции — с них снят PUBLIC, право — здесь.
 APP_FUNCTIONS = ["crm.life_rows(text, date, date)", "crm.life_ok()"]
