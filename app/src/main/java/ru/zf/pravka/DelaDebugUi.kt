@@ -237,7 +237,7 @@ private fun DelaDebugSheet(app: PravkaApp, onDismiss: () -> Unit) {
     ) {
         PaperHint("Записки о багах — с тем, что было на экране, и последними действиями. Разбирает сессия Claude на компе: статус и ответ появляются здесь.")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PaperChip("Новые и взятые", selected = filter == "open", onClick = { filter = "open" })
+            PaperChip("Новое и разбираю", selected = filter == "open", onClick = { filter = "open" })
             PaperChip("Все", selected = filter == "all", onClick = { filter = "all" })
         }
         if (error.isNotBlank()) PaperHint("Список не пришёл: $error", Kv.bad)

@@ -151,6 +151,8 @@ class DelaDebugTest {
             .put("title", "Сегодня").put("has_shot", true))))
         assertEquals(1, list.size)
         assertEquals("не баг", list[0].statusWord)
+        // Слова статусов — владельца (приёмка 16.10.2026), как веб и сервер.
+        assertEquals(listOf("новое", "разбираю", "починено", "не баг", "потом"), DelaDebug.STATUS.values.toList())
         assertEquals("claude", list[0].statusBy)
         assertTrue(list[0].hasShot)
         assertEquals("сегодня 10:15", DelaDebug.whenWords(list[0].at, today))

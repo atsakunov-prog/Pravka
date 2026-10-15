@@ -33,9 +33,12 @@ from . import db, digest
 VIEW = "debug"
 FEATURE = "debug"
 STATUSES = ("new", "taken", "fixed", "not_bug", "later")
-STATUS_WORD = {"new": "новая", "taken": "взял", "fixed": "починено", "not_bug": "не баг", "later": "потом"}
-# Как Claude и человек называют статус словами — в CLI и коннекторе.
-STATUS_ALIAS = {"новая": "new", "взял": "taken", "в работе": "taken", "починено": "fixed", "починил": "fixed",
+# Слова статусов — владельца (16.10.2026, приёмка режима: «новое / разбираю / починено / не баг / потом»); те же в вебе,
+# на телефоне и в ответах Claude.
+STATUS_WORD = {"new": "новое", "taken": "разбираю", "fixed": "починено", "not_bug": "не баг", "later": "потом"}
+# Как Claude и человек называют статус словами — в CLI и коннекторе (и прежние слова ветки: «новая», «взял»).
+STATUS_ALIAS = {"новое": "new", "новая": "new", "разбираю": "taken", "разбор": "taken", "взял": "taken", "в работе": "taken",
+                "починено": "fixed", "починил": "fixed",
                 "готово": "fixed", "не баг": "not_bug", "нет": "not_bug", "потом": "later", "notbug": "not_bug",
                 "not-bug": "not_bug"}
 SOURCES = ("web", "phone")
@@ -406,7 +409,7 @@ def _owner(url: str) -> str:
 
 def tool(url: str, user: str, action: str = "list", note: str | None = None, status: str | None = None,
          answer: str | None = None, show_all: bool = False, via: str = "mcp") -> str:
-    """Один вход для коннектора и командной строки: list — новые и взятые (show_all — все), show — записка целиком,
+    """Один вход для коннектора и командной строки: list — новые и в разборе (show_all — все), show — записка целиком,
     set — статус и/или ответ."""
     from . import store
 
@@ -428,7 +431,7 @@ def tool(url: str, user: str, action: str = "list", note: str | None = None, sta
                     if action == "on" else "Режим отладки выключен: строки больше нет, записки целы.") \
                 if r["ok"] else "Не вышло: " + r["error"]
         v = store.view(url, user, VIEW, status=None if show_all else "open", limit=LIST_MAX if show_all else 50)
-        return list_text(v, "все" if show_all else "новые и взятые")
+        return list_text(v, "все" if show_all else "новое и разбираю")
     except store.OpError as e:
         return f"Не вышло: {e}"
 
@@ -437,9 +440,9 @@ def add_cli(sub) -> None:
     p = sub.add_parser("debug", help="режим отладки: записки о багах с экраном — list, show N, set N статус «ответ», on/off")
     p.add_argument("action", nargs="?", choices=["list", "show", "set", "on", "off"], default="list")
     p.add_argument("note", nargs="?", help="номер записки (show, set)")
-    p.add_argument("status", nargs="?", help="set: " + ", ".join(STATUSES) + " (или словом: починено, не баг, потом…)")
+    p.add_argument("status", nargs="?", help="set: " + ", ".join(STATUSES) + " (или словом: разбираю, починено, не баг, потом…)")
     p.add_argument("answer", nargs="?", help="set: ответ разбора текстом (заменяет прежний)")
-    p.add_argument("--all", action="store_true", help="list: все записки, а не только новые и взятые")
+    p.add_argument("--all", action="store_true", help="list: все записки, а не только новое и разбираю")
     p.add_argument("--answer-file", help="set: ответ из файла (длинный, с переносами)")
     p.add_argument("--json", action="store_true", help="show: записка как есть, JSON")
     p.add_argument("--shot", help="show: сохранить картинку экрана в этот файл")

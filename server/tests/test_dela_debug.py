@@ -182,6 +182,13 @@ def test_set_status_and_answer(dela):
     assert not run(id="7", status="fixed")["ok"]
     rev = r["note"]["rev"]
     assert run(id="1", status="not_bug")["note"]["rev"] == rev  # то же самое — без новой версии
+    # Слова статусов — владельца (приёмка 16.10.2026): «новое / разбираю / починено / не баг / потом»; словом в set —
+    # и они, и прежние слова ветки («взял», «новая»).
+    assert [debug.STATUS_WORD[s] for s in debug.STATUSES] == ["новое", "разбираю", "починено", "не баг", "потом"]
+    assert {debug.status_of(w) for w in ("разбираю", "Разбираю", "взял", "в работе")} == {"taken"}
+    assert debug.status_of("новое") == debug.status_of("новая") == "new"
+    assert run(id="1", status="разбираю")["note"]["status"] == "taken"
+    assert "разбираю" in debug.tool(dela, "sasha", "list")
 
 
 def test_claude_reads_and_answers(dela):
@@ -189,7 +196,7 @@ def test_claude_reads_and_answers(dela):
     add(dela)
     add(dela, text="Вторая записка")
     out = debug.tool(dela, "sasha", "list")
-    assert out.startswith("Записки отладки (новые и взятые): 2") and "№2" in out and "№1" in out
+    assert out.startswith("Записки отладки (новое и разбираю): 2") and "№2" in out and "№1" in out
     card = debug.tool(dela, "sasha", "show", "1")
     assert "Что было на экране:" in card and "#57 Иван Тестов: прислать модель" in card and "срок: 16.10" in card
     assert "reply: Перенёс два дела" in card and "перенеси Ивана на пятницу" in card

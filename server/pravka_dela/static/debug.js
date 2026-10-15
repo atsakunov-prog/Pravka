@@ -29,8 +29,9 @@ const DEBUG = (() => {
   let openId = null;          // раскрытая записка на странице
   const rawOn = new Set();    // записки, показанные «как есть»
 
-  const STATUS = { new: 'новая', taken: 'взял', fixed: 'починено', not_bug: 'не баг', later: 'потом' };
-  const FILTERS = [['open', 'Новые и взятые'], ['all', 'Все'], ['fixed', 'Починено'], ['not_bug', 'Не баг'], ['later', 'Потом']];
+  // Слова статусов — владельца (16.10.2026: «новое / разбираю / починено / не баг / потом»), как debug.STATUS_WORD.
+  const STATUS = { new: 'новое', taken: 'разбираю', fixed: 'починено', not_bug: 'не баг', later: 'потом' };
+  const FILTERS = [['open', 'Новое и разбираю'], ['all', 'Все'], ['fixed', 'Починено'], ['not_bug', 'Не баг'], ['later', 'Потом']];
   const KIND = { op: 'операция', op_fail: 'сервер не принял', ask: 'сказал Claude', parse: 'разбор', reply: 'Claude ответил',
     toast: 'подсказка', error: 'ошибка', nav: 'переход', event: 'событие' };
 

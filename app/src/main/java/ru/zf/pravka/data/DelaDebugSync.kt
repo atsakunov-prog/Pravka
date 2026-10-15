@@ -65,7 +65,7 @@ internal class DelaDebugSync(private val app: PravkaApp, private val log: (Strin
         return if (num > 0) "🐞 №$num записал" else "🐞 Записал"
     }
 
-    /** Список записок (`status`: open — новые и взятые, all — все) — свежие сверху. */
+    /** Список записок (`status`: open — «новое» и «разбираю», all — все) — свежие сверху. */
     suspend fun list(status: String): Result<List<DelaDebug.Note>> = runCatching {
         val q = if (status == "all") "debug?limit=200" else "debug?limit=200&status=$status"
         DelaDebug.notes(app.delaSync.rawView(q))

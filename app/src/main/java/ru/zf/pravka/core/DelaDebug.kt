@@ -29,9 +29,12 @@ object DelaDebug {
     const val OPS = 30
     const val TEXT_MAX = 4000
 
-    /** Статус записки словом — как веб (`STATUS` в debug.js) и сервер (`debug.STATUS_WORD`). */
+    /**
+     * Статус записки словом — слова владельца (16.10.2026: «новое / разбираю / починено / не баг / потом»), как веб
+     * (`STATUS` в debug.js) и сервер (`debug.STATUS_WORD`).
+     */
     val STATUS: Map<String, String> = linkedMapOf(
-        "new" to "новая", "taken" to "взял", "fixed" to "починено", "not_bug" to "не баг", "later" to "потом",
+        "new" to "новое", "taken" to "разбираю", "fixed" to "починено", "not_bug" to "не баг", "later" to "потом",
     )
 
     /** Поле `debug` синка: включён ли режим, сколько записок ждут разбора, номер последней, когда разбор отвечал. */
