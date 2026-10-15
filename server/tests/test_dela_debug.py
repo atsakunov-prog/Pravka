@@ -243,7 +243,9 @@ def test_card_text_shows_nesting(dela):
     подъём родителя — в действиях."""
     snap = {**SNAP, "mode": {"all_tree": True},
             "card": {"kind": "task", "id": "p", "num": 12, "title": "Отправить термшит Ивану",
-                     "fields": {"inside": ["1. #14 Взять цифры · pos 1", "2. #13 Набросать драфт · pos 2"], "inside_done": 1}},
+                     "fields": {"inside": ["1. #14 Взять цифры · pos 1", "2. #13 Набросать драфт · pos 2"], "inside_done": 1,
+                                # Комментарии карточки (проверка вагона 3): приватный — с пометкой «только тебе».
+                                "comments": ["2026-10-16 09:30 · sasha · только тебе · Основание из Telegram"]}},
             "rows": [{"id": "p", "num": 12, "title": "Отправить термшит Ивану", "inside": 2, "in_view": True},
                      {"id": "k2", "num": 14, "title": "Взять цифры", "in": "#12 Отправить термшит Ивану", "pos": 1, "depth": 1,
                       "in_view": True},
@@ -259,6 +261,7 @@ def test_card_text_shows_nesting(dela):
     assert "  *   ↳ #14 Взять цифры — внутри #12 Отправить термшит Ивану · место 1" in card, card
     assert "#40 Свёрнутый родитель — внутри открыто 3 (свёрнуто)" in card, card
     assert "    inside:\n      1. #14 Взять цифры · pos 1\n      2. #13 Набросать драфт · pos 2" in card, card
+    assert "    comments:\n      2026-10-16 09:30 · sasha · только тебе · Основание из Telegram" in card, card
     assert "op: task.set «Взять цифры» — внутрь «#12" in card and "op_result: всё внутри сделано" in card, card
 
 

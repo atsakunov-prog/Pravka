@@ -217,6 +217,11 @@ const DEBUG = (() => {
         + (k.pos != null ? ' · pos ' + k.pos : ''));
       const doneIn = safe(() => all().filter((k) => k.why_id === t.id && !isOpen(k) && !k.goal).length, 0);
       if (doneIn) f.inside_done = doneIn;
+      // Комментарии строками «дата · автор · [только тебе · ]текст» (поезд 16.10.2026; как `DelaDebug.comments` телефона):
+      // приватность правила 26 — данными, а не только текстом карточки.
+      const cs = safe(() => (extras.get(t.id) || {}).comments || [], []);
+      if (cs.length) f.comments = cs.slice(-30).map((c) => [String(c.created_at || '').slice(0, 16).replace('T', ' '), c.author_id,
+        c.private ? 'только тебе' : '', cut(String(c.text || '').trim(), 300)].filter(Boolean).join(' · '));
       return { kind: t.goal ? 'goal' : 'task', id: t.id, num: t.num, title: t.title, fields: f,
         text: cut(txtBut(document.querySelector('section.card-pane'), bar), 3000) || undefined };
     }

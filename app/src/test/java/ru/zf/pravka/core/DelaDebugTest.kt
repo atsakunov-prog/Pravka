@@ -199,6 +199,33 @@ class DelaDebugTest {
     }
 
     @Test
+    fun `карточка — комментарии строками, приватный с пометкой «только тебе», удалённого нет`() {
+        // Поезд 16.10.2026, проверка вагона 3: «Журнал» карточки показывает комментарии и «только тебе · » у приватных
+        // (правило 26) — в снимке они тоже есть, иначе записка о багах приватности их не покажет.
+        val s0 = nest()
+        val s = s0.copy(comments = listOf(
+            Dela.Comment(id = "c1", taskId = "p", authorId = "me", text = "Основание из Telegram: Иван просил без цифр",
+                createdAt = "2026-10-16T09:30:00+03:00", private = true),
+            Dela.Comment(id = "c0", taskId = "p", authorId = "me", text = "  Общий  ", createdAt = "2026-10-16T09:00:00+03:00"),
+            Dela.Comment(id = "c2", taskId = "p", authorId = "me", text = "убранный", createdAt = "2026-10-16T09:40:00+03:00",
+                deletedAt = "2026-10-16T09:41:00+03:00"),
+            Dela.Comment(id = "c3", taskId = "k1", authorId = "me", text = "чужое дело", createdAt = "2026-10-16T09:50:00+03:00"),
+            Dela.Comment(id = "c4", taskId = "p", authorId = "me", text = "д".repeat(DelaDebug.COMMENT_MAX + 50), createdAt = "2026-10-16T10:00:00+03:00"),
+        ).associateBy { it.id })
+        val o = DelaDebug.snapshot(DelaDebug.Screen("nav:all", "Все дела", openTaskId = "p"), s, today, "")
+        val c = o.getJSONObject("card").getJSONObject("fields").getJSONArray("comments")
+        assertEquals(3, c.length())
+        assertEquals("2026-10-16 09:00 · me · Общий", c.getString(0))
+        assertEquals("2026-10-16 09:30 · me · только тебе · Основание из Telegram: Иван просил без цифр", c.getString(1))
+        assertTrue("длинный — коротко", c.getString(2).endsWith("…") && c.getString(2).length < DelaDebug.COMMENT_MAX + 30)
+        // Словами (лист «Отладка», `debug show`) — строкой на комментарий.
+        assertTrue(DelaDebug.snapshotLines(o).any { it.trim() == "2026-10-16 09:30 · me · только тебе · Основание из Telegram: Иван просил без цифр" })
+        // У дела без комментариев ключа нет.
+        val bare = DelaDebug.snapshot(DelaDebug.Screen("nav:all", "Все дела", openTaskId = "k2"), s, today, "")
+        assertFalse(bare.getJSONObject("card").getJSONObject("fields").has("comments"))
+    }
+
+    @Test
     fun `действия — вложить и вынуть словами, Claude, тосты и ответы сервера по времени`() {
         DelaDebug.clearOps() // кольца — на весь процесс: тосты других тестов здесь ни к чему
         val s = nest()

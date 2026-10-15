@@ -195,7 +195,27 @@ object DelaDebug {
             "${i + 1}. ${numTitle(k)}" + (if (k.dueDate.isNotBlank()) " · срок ${k.dueDate}" else "") + (if (k.pos > 0) " · pos ${k.pos}" else "")
         }))
         DelaSteps.doneInside(t.id, s).takeIf { it > 0 }?.let { f.put("inside_done", it) }
+        // Комментарии — как их рисует «Журнал» карточки (поезд 16.10.2026, проверка вагона 3): с пометкой «только тебе» у
+        // приватных (правило 26 сервера). Без них записка с карточки о багах приватности («основание из Telegram ушло не в
+        // приватный комментарий», «Это оно») не показала бы Claude ни комментариев, ни их приватности. Строки журнала
+        // сервера карточка подгружает сама и сюда не попадают.
+        val notes = comments(t.id, s)
+        if (notes.isNotEmpty()) f.put("comments", JSONArray(notes))
         return JSONObject().put("kind", if (t.goal) "goal" else "task").put("id", t.id).putIf("num", t.num).put("title", t.title).put("fields", f)
+    }
+
+    /** Сколько последних комментариев дела в снимке и сколько знаков у каждого. */
+    const val COMMENTS = 30
+    const val COMMENT_MAX = 300
+
+    /**
+     * Комментарии дела строками «дата · автор · [только тебе · ]текст», старые первыми, последние [COMMENTS] — как
+     * карточка (`DelaTaskPane`, «Журнал») и веб (`cardOf` в debug.js).
+     */
+    internal fun comments(taskId: String, s: Dela.Snapshot): List<String> = s.commentsOf(taskId).takeLast(COMMENTS).map { c ->
+        val text = c.text.trim().let { if (it.length > COMMENT_MAX) it.take(COMMENT_MAX - 1) + "…" else it }
+        listOf(c.createdAt.take(16).replace('T', ' '), c.authorId, if (c.private) "только тебе" else "", text)
+            .filter { it.isNotBlank() }.joinToString(" · ")
     }
 
     /**
