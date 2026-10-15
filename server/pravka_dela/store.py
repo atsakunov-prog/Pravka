@@ -2226,7 +2226,7 @@ insights.register(HANDLERS, VIEWS, OpError)
 guard.register(HANDLERS, VIEWS, OpError)
 # Контекст по делу (аудит №13): вид context_index — связанные люди и ключи имён (focus.py).
 focus.register(VIEWS)
-# Режим отладки (dela_0024_debug, 15.10.2026): записки о багах с экраном данными — debug.add / debug.set, вид debug (debug.py).
+# Режим отладки (dela_0031, 15.10.2026): записки о багах с экраном данными — debug.add / debug.set, вид debug (debug.py).
 from . import debug  # noqa: E402  (свой модуль; импорт здесь — крючок одной строкой, ветку собирают в поезд с другими)
 debug.register(HANDLERS, VIEWS, FEATURES, OpError)
 

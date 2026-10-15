@@ -1,4 +1,4 @@
-"""Режим отладки Дел (debug.py, dela_0024_debug): записки владельца о багах с экраном данными.
+"""Режим отладки Дел (debug.py, dela_0031): записки владельца о багах с экраном данными.
 
 Записка ложится одна на повтор (op_id и id записки), видит её только владелец (не команда, не службы с его токеном, не
 узкие токены), вид — список и одна целиком, разбор — статус и ответ, текст и снимок не переписываются. Все данные
@@ -203,12 +203,15 @@ def test_claude_reads_and_answers(dela):
 
 
 def test_migration_again_is_harmless(dela, cfg):
-    """Поезд веток переименует файл в свой номер: на копии, где он уже стоял под этим именем, второй прогон не падает."""
+    """Сборка поезда (16.10.2026) дала файлу номер 31 (в ветке — dela_0024_debug.sql): на копии, где он уже стоял под
+    прежним именем, dela_0031 применится второй раз — и не падает, и записки целы."""
     from importlib import resources
 
-    # Файл ищется по содержимому, а не по имени: при сборке поезда он получит свой номер.
-    sql_text = next(t for f in (resources.files("pravka_dela") / "sql").iterdir() if f.name.startswith("dela_")
-                    and "CREATE TABLE IF NOT EXISTS crm.debug_notes" in (t := f.read_text(encoding="utf-8")))
+    # Ровно один файл заводит crm.debug_notes — и это dela_0031 (номер поезда, без «0024_debug» рядом).
+    found = [(f.name, t) for f in (resources.files("pravka_dela") / "sql").iterdir() if f.name.startswith("dela_")
+             and "CREATE TABLE IF NOT EXISTS crm.debug_notes" in (t := f.read_text(encoding="utf-8"))]
+    assert [n for n, _ in found] == ["dela_0031.sql"], [n for n, _ in found]
+    sql_text = found[0][1]
     add(dela)
     with psycopg.connect(cfg.db_url, autocommit=True) as c:
         with c.transaction():

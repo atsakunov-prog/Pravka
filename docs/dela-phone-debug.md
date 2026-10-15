@@ -2,7 +2,7 @@
 
 > Сервер, веб и телефон сделаны в ветке `debug` (15.10.2026, к выкату утром 16.10). Номер задания даст сборка поезда
 > веток. Контракт — `server/contract/dela-debug.json`; сервер — `server/pravka_dela/debug.py` (миграция
-> `dela_0024_debug.sql`), веб — `static/debug.js`; телефон — `core/DelaDebug.kt` (под тестом `DelaDebugTest`),
+> `dela_0031.sql`), веб — `static/debug.js`; телефон — `core/DelaDebug.kt` (под тестом `DelaDebugTest`),
 > `data/DelaDebugSync.kt`, `DelaDebugUi.kt`.
 
 Владелец (15.10.2026, вечер): «Давай сделаем в делах накопление багов. Прямо такой debug mode. Наверху где-то прямо
