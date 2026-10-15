@@ -501,6 +501,9 @@ object Dela {
          */
         val privacyOn: Boolean get() = FEATURE_PRIVACY in features
 
+        /** Сервер кладёт кандидатов «Сейчас на завтра» (`source = plan`, docs/dela-phone-22.md): свой блок, не «Новое». */
+        val planOn: Boolean get() = FEATURE_PLAN in features
+
         val empty: Boolean
             get() = tasks.isEmpty() && projects.isEmpty() && people.isEmpty() && suggestions.isEmpty()
 
@@ -982,6 +985,22 @@ object Dela {
                     val reject = if (opt != null) opt.optBoolean("reject", false) else op.str("decision") == "reject"
                     val reason = op.str("reason").ifBlank { opt?.let { o -> if (reject) o.str("reason").ifBlank { o.str("label") } else "ответ: " + o.str("label") }.orEmpty() }
                     suggestions[sg.id] = sg.copy(status = if (reject) "rejected" else "accepted", reason = reason, decidedAt = nowIso, local = true)
+                    // Ответ виден на деле сразу, как его решит сервер (docs/dela-phone-22.md): вариант с `focus_on` ставит
+                    // дело в «Сейчас» своего дня («☆ На завтра» — и «отмечено k из 5» растёт до синка, а шестое ловится
+                    // ещё до запроса); «✓ Уже сделал» (`done`, сервер слушает его ТОЛЬКО у кандидата плана) закрывает
+                    // дело; старое «Да» у кандидата плана — `focus_on` из его payload. Новое дело (`create`) — синком:
+                    // id ему даёт сервер.
+                    val t = if (!reject && sg.kind == "update") find(sg.taskId) else null
+                    if (t != null) {
+                        val plan = sg.source == PLAN_SOURCE
+                        val focus = when {
+                            opt != null -> opt.str("focus_on")
+                            plan -> sg.payloadObj().str("focus_on")
+                            else -> ""
+                        }
+                        if (plan && opt?.optBoolean("done", false) == true) tasks[t.id] = t.copy(status = DONE, completedAt = nowIso, local = true)
+                        else if (focus.isNotBlank()) tasks[t.id] = applyFields(t, JSONObject().put("focus_on", focus), today, nowIso).copy(local = true)
+                    }
                 }
                 // «Понятно» у закрытого само — уходит из «Нового» сразу, до ответа.
                 "suggestion.seen" -> for (id in op.strings("ids")) {
@@ -1361,6 +1380,16 @@ object Dela {
     const val FEATURE_DICTATIONS = "dictations"
 
     /**
+     * «Сейчас на завтра» (15.10.2026, шаг 1 петли, docs/dela-phone-22.md, контракт `server/contract/dela-plan.json`):
+     * с 19:00 (Пт — 14:00) сервер кладёт до семи кандидатов правилом — предложения с [PLAN_SOURCE], `batch_ref
+     * plan:<день>`. Нет флага — телефон ведёт себя по-старому: блока нет, ждущее (если вдруг есть) — в «Новом».
+     */
+    const val FEATURE_PLAN = "plan"
+
+    /** Источник кандидата «Сейчас на завтра» (`tasks.suggestions.source`): правило сервера, а не модель. */
+    const val PLAN_SOURCE = "plan"
+
+    /**
      * Поля нового дела: карточкины плюс деньги. Деньги ставит только Разноска —
      * тот же промпт, что у разбора сервера (`TASKS_DELA`), который их по-прежнему
      * пишет: данные не трогаем, только не показываем.
@@ -1640,9 +1669,14 @@ object Dela {
         return Morning(nowList, todayList, nudge, others, newOnes(s, me).size)
     }
 
-    /** Неразобранные предложения владельцу — «Новое». Счётчик — только они. */
+    /**
+     * Неразобранные предложения владельцу — «Новое». Счётчик — только они. Кандидаты «Сейчас на завтра»
+     * ([PLAN_SOURCE], docs/dela-phone-22.md) — не вопросы автоматики, а выбор владельца на завтра: у сервера с
+     * планом их нет ни в «Подскажи», ни в числе «Нового» (`store.NEW_COUNT_IF`), ни в «Поставить все» — свой блок
+     * (`DelaViews.plan`). Без флага [FEATURE_PLAN] — как раньше.
+     */
     fun newOnes(s: Snapshot, me: String): List<Suggestion> =
-        s.suggestions.values.filter { it.pending && (me.isBlank() || it.forUser == me) }
+        s.suggestions.values.filter { it.pending && (me.isBlank() || it.forUser == me) && !(s.planOn && it.source == PLAN_SOURCE) }
 
     /**
      * Пачка «Нового»: одна встреча или одно окно дайджеста. `source` — откуда

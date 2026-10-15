@@ -244,20 +244,34 @@ private class NewParts(
     val asks: List<Dela.Suggestion>,
     val feed: List<Dela.Task>,
     val autoDone: List<Dela.Suggestion>,
+    /**
+     * «Сейчас на завтра» (docs/dela-phone-22.md): во всём «Новом» — строкой сверху (`planBox` веба там же), в пачке
+     * `plan:<день>` — сама пачка: тогда [asks] — её кандидаты (П-номера для Claude), а поставленного и сделанного само нет.
+     */
+    val plan: DelaViews.Plan? = null,
+    /** Это пачка плана (`plan:<день>`): рисуется своим блоком, а не «Подскажи». */
+    val planBatch: Boolean = false,
 ) {
     /** Дела экрана в порядке показа — то, что видит Claude (и сделанное само: «верни акт» он поймёт). */
     val ids: List<String>
-        get() = feed.take(DelaViews.FEED_MAX).map { it.id } + autoDone.mapNotNull { sg -> sg.taskId.takeIf { it.isNotBlank() } }
+        get() = (if (planBatch) plan?.marked.orEmpty().map { it.id } + asks.mapNotNull { sg -> sg.taskId.takeIf { it.isNotBlank() } } else emptyList()) +
+            feed.take(DelaViews.FEED_MAX).map { it.id } + autoDone.mapNotNull { sg -> sg.taskId.takeIf { it.isNotBlank() } }
 
-    val empty: Boolean get() = asks.isEmpty() && feed.isEmpty() && autoDone.isEmpty()
+    val empty: Boolean get() = asks.isEmpty() && feed.isEmpty() && autoDone.isEmpty() && plan?.visible != true
 
     companion object {
         /** [batch] не пустой — одна пачка (дайджест на «Сегодня» → «Открыть «Новое»», `#/new/<batch_ref>` веба). */
-        fun of(snap: Dela.Snapshot, me: String, sphere: String, now: Long, batch: String = ""): NewParts =
-            if (batch.isNotEmpty()) NewParts(
+        fun of(snap: Dela.Snapshot, me: String, sphere: String, now: Long, today: String, batch: String = ""): NewParts =
+            if (batch.startsWith(DelaViews.PLAN_BATCH) && snap.planOn) {
+                val p = DelaViews.plan(snap, me, today, now, day = batch.removePrefix(DelaViews.PLAN_BATCH))
+                NewParts(p?.items.orEmpty(), emptyList(), emptyList(), plan = p, planBatch = true)
+            } else if (batch.isNotEmpty()) NewParts(
                 DelaViews.asksOfBatch(snap, me, batch), DelaViews.feedOfBatch(snap, batch), DelaViews.autoOfBatch(snap, me, batch, now),
             )
-            else NewParts(DelaViews.asks(snap, me), DelaViews.feed(snap, me, sphere, now), Dela.autoDone(snap, me, now))
+            else NewParts(
+                DelaViews.asks(snap, me), DelaViews.feed(snap, me, sphere, now), Dela.autoDone(snap, me, now),
+                plan = DelaViews.plan(snap, me, today, now)?.takeIf { it.visible },
+            )
     }
 }
 
@@ -643,6 +657,7 @@ fun DelaTab(
                     asks = DelaViews.asks(snap, me),
                     fed = DelaViews.feed(snap, me, sphere, now).size,
                     auto = Dela.autoDone(snap, me, now).size,
+                    plan = DelaViews.plan(snap, me, today, now)?.takeIf { it.visible },
                 ),
                 late = DelaGroups.lateTasks(snap, me, today, sphere).size,
                 waits = waits,
@@ -758,7 +773,7 @@ fun DelaTab(
 
     // «Новое» — своими кусками (наговорки, предложения, без проекта, закрытое само); наговорки — вид сервера.
     val newParts: NewParts? =
-        if (page == null && needle.isEmpty() && view == DelaViews.View.NEW) NewParts.of(snap, me, sphere, now, newBatch) else null
+        if (page == null && needle.isEmpty() && view == DelaViews.View.NEW) NewParts.of(snap, me, sphere, now, today, newBatch) else null
 
     // Страница проекта — как в вебе: группировка своя (без «по проектам»), «Сделанные», фильтр сделки.
     val projectScreen: DelaScreen? = (page as? DelaPage.Project)?.let { pg ->
@@ -828,8 +843,13 @@ fun DelaTab(
             ?: CRM_NAV.firstOrNull { crmOn && it.first == nav && needle.isEmpty() }?.let { (_, t) -> AskScreen(t, DelaAsk.scope(t, emptyList())) }
             // П1, П2… — те же, что в «Подскажи» (`scope.suggestion_ids`): «П1 поставь, срок пятница».
             ?: newParts?.let {
-                // Одна пачка — Claude видит, что на экране только она (`pageScope` веба: «Новое: одна пачка — …»).
-                val title = if (newBatch.isNotEmpty()) "Новое: одна пачка — " + DelaViews.batchTitle(snap, newBatch) else "Новое"
+                // Одна пачка — Claude видит, что на экране только она (`pageScope` веба: «Новое: одна пачка — …»); пачка
+                // плана — «Сейчас на завтра»: П-номера — её кандидаты («П2 на завтра»).
+                val title = when {
+                    it.planBatch -> "Сейчас " + (it.plan?.label ?: "на завтра") + " — кандидаты, отметить до пяти"
+                    newBatch.isNotEmpty() -> "Новое: одна пачка — " + DelaViews.batchTitle(snap, newBatch)
+                    else -> "Новое"
+                }
                 AskScreen(title, DelaAsk.scope(title, it.ids, suggestionIds = it.asks.map { sg -> sg.id }))
             }
     }
@@ -1233,9 +1253,12 @@ fun DelaTab(
         val onRejectAll: (List<Dela.Suggestion>) -> Unit = { items ->
             hangSend(items.map { Dela.decideOp(it.id, accept = false) }, "Не надо: ${items.size}")
         }
-        // Ответ кнопкой (`answer` веба): номер варианта — что он значит, решает сервер.
+        // Ответ кнопкой (`answer` веба): номер варианта — что он значит, решает сервер. «☆ На завтра» кандидата плана, когда
+        // на тот день уже пять, — тост до запроса (`planRoom` веба): сервер всё равно откажет, но словами через сеть.
         val onAnswer: (Dela.Suggestion, DelaViews.Option) -> Unit = { sg, o ->
-            hangSend(listOf(Dela.answerOp(sg.id, o.index)), DelaViews.answerSaid(o))
+            val p = if (DelaViews.isPlan(sg) && o.focusOn.isNotBlank()) DelaViews.plan(snap, me, today, now, day = o.focusOn) else null
+            if (p != null && !p.room) Feedback.toast(app, DelaViews.planFull(p))
+            else hangSend(listOf(Dela.answerOp(sg.id, o.index)), DelaViews.answerSaid(o))
         }
         // «Не для CRM» у человека — причина без вопроса (служба больше не спросит).
         val onRejectNow: (Dela.Suggestion, String) -> Unit = { sg, reason ->
@@ -1306,12 +1329,26 @@ fun DelaTab(
                 week = views["week"]?.data,
                 weekAt = views["week"]?.at ?: 0L,
                 onWeek = { scope.launch { app.delaSync.crmView("week") } },
+                onPlan = { b -> newBatch = b },
+                // «Убрать» у отмеченного заранее — «Вернуть» полоской, как у молнии.
+                onUnmark = { t ->
+                    val set = org.json.JSONObject().put("focus_on", org.json.JSONObject.NULL)
+                    val was = DelaGroups.was(t, set)
+                    val w = np.plan?.label ?: "на завтра"
+                    undoOffer = UndoOffer("Убрал из «Сейчас» $w: " + t.title.take(40), listOf(Dela.setOp(t.id, was, set)), emptyList())
+                    scope.launch { app.delaDo(listOf(Dela.setOp(t.id, set, was))) }
+                },
+                planView = views["plan"]?.data,
+                planAt = views["plan"]?.at ?: 0L,
+                onPlanView = { scope.launch { app.delaSync.crmView("plan") } },
             )
         } else if (home != null) {
             // Главная «Сейчас»: Сейчас → Новое → Сегодня; «Остального» здесь нет.
             homeView(
                 home, crm, actions, today,
                 onNew = { go(NAV_NEW) },
+                // «Сейчас на завтра» — пачка кандидатов (`#/new/plan:<день>` веба): «Новое» одной пачкой.
+                onPlan = { b -> go(NAV_NEW); newBatch = b },
                 onToday = { go(DelaViews.View.TODAY.key) },
                 onAccept = onAccept,
                 onRejectAll = onRejectAll,
@@ -2267,15 +2304,30 @@ private fun LazyListScope.newView(
     week: org.json.JSONObject? = null,
     weekAt: Long = 0L,
     onWeek: () -> Unit = {},
+    /** «Сейчас на завтра»: открыть пачку `plan:<день>` (строка сверху всего «Нового»). */
+    onPlan: (String) -> Unit = {},
+    /** «Убрать» у отмеченного заранее — `task.set {focus_on: null}`: молния знает только сегодня. */
+    onUnmark: (Dela.Task) -> Unit = {},
+    /** Ответ `GET /api/view/plan` (кэш вида) — «сегодня сделано x из y» и «третий день в «Сейчас»»; null — нет. */
+    planView: org.json.JSONObject? = null,
+    planAt: Long = 0L,
+    onPlanView: () -> Unit = {},
 ) {
     val snap = crm.snap
     val zone = java.time.ZoneId.systemDefault()
+    // «Сейчас на завтра» во всём «Новом» — строкой сверху (`planBox` веба стоит там же): кандидаты не вопросы автоматики.
+    val plan = parts.plan
+    if (batch.isEmpty() && plan != null) {
+        item(key = "n:planline") { PlanLine(DelaViews.planLine(plan), onClick = { onPlan(plan.batch) }) }
+    }
     // Одна пачка — сверху её подпись и «Всё «Новое»» (`toolbar` веба у `#/new/<batch_ref>`).
     if (batch.isNotEmpty()) {
         item(key = "n:batch") {
             Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "Одна пачка: $batchTitle",
+                    // Пачка плана — своей подписью сервера: «Сейчас на пт 16.10 · встреч ~3 — возьми 3».
+                    if (parts.planBatch) batchTitle.takeIf { it.isNotBlank() && it != batch } ?: ("Сейчас " + (plan?.label ?: "на завтра"))
+                    else "Одна пачка: $batchTitle",
                     style = ru.zf.pravka.ui.LocalPravkaType.current.label,
                     fontWeight = FontWeight.SemiBold,
                     color = ru.zf.pravka.ui.LocalMode.current.label,
@@ -2287,6 +2339,10 @@ private fun LazyListScope.newView(
                 PaperTextButton("Всё «Новое»", onClick = onAllNew)
             }
         }
+    }
+    if (parts.planBatch) {
+        planBlock(parts, plan, crm, actions, today, onAccept, onAnswer, onReject, onRejectNow, onUnmark, planView, planAt, onPlanView)
+        return
     }
     if (parts.asks.isNotEmpty()) {
         item(key = "n:asks") {
@@ -2387,6 +2443,89 @@ private fun LazyListScope.newView(
 }
 
 /**
+ * Пачка «Сейчас на завтра» (`plan:<день>`, docs/dela-phone-22.md; `planBox` веба). Владелец (ответ 1а): «до семи кандидатов,
+ * у каждого — почему и откуда; отмечаю до пяти». Сверху — «сегодня сделано x из y» и «третий день в «Сейчас»» из
+ * вида `plan` (тот берётся не чаще раза в минуту и не на главном потоке, как `week`; без него — только копия синка),
+ * отмеченное заранее — строками с «Убрать» (молния знает только сегодня), ниже — кандидаты: название (тап — карточка),
+ * «почему · откуда» и кнопки сервера «☆ На завтра · ✓ Уже сделал · Не надо». «Поставить все» нет: отмечает он сам.
+ */
+private fun LazyListScope.planBlock(
+    parts: NewParts,
+    p: DelaViews.Plan?,
+    crm: DelaCrmContext,
+    actions: DelaActions,
+    today: String,
+    onAccept: (List<Dela.Suggestion>) -> Unit,
+    onAnswer: (Dela.Suggestion, DelaViews.Option) -> Unit,
+    onReject: (Dela.Suggestion) -> Unit,
+    onRejectNow: (Dela.Suggestion, String) -> Unit,
+    onUnmark: (Dela.Task) -> Unit,
+    view: org.json.JSONObject?,
+    viewAt: Long,
+    onView: () -> Unit,
+) {
+    val snap = crm.snap
+    item(key = "n:plan") {
+        LaunchedEffect(Unit) { if (System.currentTimeMillis() - viewAt > 60_000L) onView() }
+        val mode = ru.zf.pravka.ui.LocalMode.current
+        val ty = ru.zf.pravka.ui.LocalPravkaType.current
+        val marked = p?.marked.orEmpty()
+        PaperCard(label = "Отметь до пяти · отмечено ${marked.size} из ${DelaViews.NOW_MAX}") {
+            Text(
+                listOfNotNull(
+                    p?.let { DelaViews.planToday(view, it) }?.takeIf { it.isNotBlank() },
+                    "не отмеченное погаснет в 12:00 — само ничего не встанет",
+                ).joinToString(" · "),
+                style = ty.meta,
+                color = mode.meta,
+            )
+            for (x in DelaViews.planStuck(view)) {
+                val t = snap.tasks[x.id]
+                Text(
+                    DelaViews.stuckLine(x),
+                    style = ty.label,
+                    color = ru.zf.pravka.ui.Ink.Warn,
+                    modifier = Modifier.padding(top = 4.dp).clip(RoundedCornerShape(6.dp)).clickable(enabled = t != null) { t?.let(actions.open) },
+                )
+            }
+            if (p != null && p.ahead) marked.forEach { t ->
+                RowRule()
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                    Icon(Glyphs.Bolt, contentDescription = null, tint = mode.tint, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        t.title,
+                        style = ty.body,
+                        color = ru.zf.pravka.ui.Ink.Text,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).clickable { actions.open(t) },
+                    )
+                    PaperTextButton("Убрать", onClick = { onUnmark(t) })
+                }
+            }
+            parts.asks.forEachIndexed { i, sg ->
+                RowRule()
+                AskRow(
+                    sg, i + 1, snap, crm.me, today,
+                    onAccept = { onAccept(listOf(sg)) }, onEdit = {}, onReject = { onReject(sg) },
+                    onOpen = actions.open, onMerge = {},
+                    onAnswer = { o -> onAnswer(sg, o) },
+                    onRejectNow = { reason -> onRejectNow(sg, reason) },
+                    plan = true,
+                )
+            }
+            if (parts.asks.isEmpty()) {
+                PaperHint(
+                    if (p?.ahead == true) "Кандидатов больше нет — отмеченное встанет в «Сейчас» само в свой день."
+                    else "Кандидатов на этот день больше нет — отмеченное уже в «Сейчас»."
+                )
+            }
+        }
+    }
+}
+
+/**
  * Значок источника (`ORIGIN` веба): форма — откуда, цвет — кремовый `plan` у
  * наговорки, встречи, Telegram и Claude, бледный у сделанного руками и
  * перенесённого (без радуги — поправка задания 10).
@@ -2403,6 +2542,7 @@ internal fun SourceMark(source: String, size: androidx.compose.ui.unit.Dp = 16.d
             "list" -> Glyphs.ListLines
             "phone" -> Glyphs.Phone
             "circle" -> ru.zf.pravka.ui.KvGlyphs.byKey("target") ?: Glyphs.Spark
+            "bolt" -> Glyphs.Bolt
             else -> Glyphs.Edit
         },
         contentDescription = m.word,
@@ -2489,12 +2629,18 @@ internal fun AskRow(
     onAcceptSet: (org.json.JSONObject) -> Unit = { onAccept() },
     onAnswer: (DelaViews.Option) -> Unit = {},
     onRejectNow: (String) -> Unit = { onReject() },
+    /**
+     * Кандидат «Сейчас на завтра» (docs/dela-phone-22.md, `planItem` веба): строки пачки над ним нет (она — заголовок
+     * пачки), вопроса `ask` нет (он — для телефона без блока), «похоже, это уже есть» и «Поправить» нет; название — тап в
+     * карточку дела, под ним «почему · откуда».
+     */
+    plan: Boolean = false,
 ) {
     val mode = ru.zf.pravka.ui.LocalMode.current
     val ty = ru.zf.pravka.ui.LocalPravkaType.current
     val context = androidx.compose.ui.platform.LocalContext.current
     val txt = DelaViews.sugText(sg, snap, today)
-    val q = DelaViews.askWhy(sg, snap)
+    val q = if (plan) null else DelaViews.askWhy(sg, snap)
     val held = DelaViews.heldLine(sg, q)
     val opts = DelaViews.options(sg, snap)
     val choice = DelaViews.choiceOnly(sg)
@@ -2506,11 +2652,13 @@ internal fun AskRow(
     var chosen by remember(sg.id) { mutableStateOf(proposed) }
     // Свои ответы кнопками у вопроса разборщика — вместо чипов направлений (`kr` веба: только без вариантов).
     val krugAsk = sg.source == "krug" && DelaKrug.on(snap, krugDirs) && opts == null
-    val twin = if (sg.source == "krug") null else DelaViews.twinOf(sg, snap, me)
+    val twin = if (sg.source == "krug" || plan) null else DelaViews.twinOf(sg, snap, me)
     // Встреча — ссылкой: у дела её адрес в source_ref, у вопроса о человеке со встречи — в payload.speaker.url (№25).
     val link = DelaViews.sugLink(sg)
+    // У кандидата плана название ведёт в карточку дела (`planItem` веба): отметить — здесь, разбить или отдать — там.
+    val planTask = if (plan) snap.tasks[sg.taskId] else null
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Row(
+        if (!plan) Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(enabled = link != null) {
                 runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(link)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
@@ -2529,7 +2677,7 @@ internal fun AskRow(
             },
             style = ty.bodyStrong,
             color = ru.zf.pravka.ui.Ink.TextStrong,
-            modifier = Modifier.padding(top = 2.dp),
+            modifier = Modifier.padding(top = 2.dp).clip(RoundedCornerShape(6.dp)).clickable(enabled = planTask != null) { planTask?.let(onOpen) },
         )
         if (q != null) Text(q, style = ty.label, fontWeight = FontWeight.SemiBold, color = ru.zf.pravka.ui.Ink.Warn)
         // Почему не встало само — словами сервера, без того, что уже сказал вопрос (`heldLine` веба).
@@ -2569,7 +2717,7 @@ internal fun AskRow(
         }
         // «Поправить» — у «завести» всегда, у «уточнить» — когда нужен выбор человека: кандидатов кнопками до трёх,
         // нужного среди них может не быть (сверка задания 21, п. 5).
-        val canEdit = sg.kind == "create" || (sg.kind == "update" && choice)
+        val canEdit = !plan && (sg.kind == "create" || (sg.kind == "update" && choice))
         if (opts != null) {
             // Свои ответы кнопками (`askItem` веба): первый — главной кнопкой, «нет»-варианты тише. Есть среди них «нет»
             // («Не для CRM», «Никто») — своего «Не надо» не нужно.
@@ -2594,6 +2742,8 @@ internal fun AskRow(
                 Spacer(Modifier.weight(1f))
                 // Человек без вариантов («Новый номер — завести?») — «Не для CRM» сразу: служба больше не спросит.
                 if (sg.kind == "person") PaperTextButton("Не для CRM", onClick = { onRejectNow(DelaViews.NOT_CRM) })
+                // Кандидат плана без кнопок сервера — «Не надо» с его причиной, без листа (`planItem` веба).
+                else if (plan) PaperTextButton("Не надо", onClick = { onRejectNow(DelaViews.PLAN_NO) })
                 else PaperTextButton("Не надо", onClick = onReject)
                 if (canEdit) PaperTextButton("Поправить", onClick = onEdit)
                 // «Да» — как есть (и без чипов, если предложена цель); поправил направление — значит, цель не та:

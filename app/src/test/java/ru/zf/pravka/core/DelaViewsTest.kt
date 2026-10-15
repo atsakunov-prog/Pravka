@@ -708,4 +708,197 @@ class DelaViewsTest {
         assertNull(DelaViews.automationLine(null))
         assertNull("всё по нулям — строки нет", DelaViews.automationLine(JSONObject().put("automation", JSONObject().put("all", JSONObject()))))
     }
+
+    // ------------------------------------------------------------ задание 22 (шаг 1 петли): «Сейчас на завтра»
+
+    private val tomorrow = "2026-10-06"
+    private val planOn = setOf(Dela.FEATURE_OPTIONS, Dela.FEATURE_PLAN)
+
+    /** Кандидат плана — как его кладёт сервер (`plan.py`, пример — `server/contract/dela-plan.json`). */
+    private fun cand(
+        id: String,
+        order: Int,
+        task: String = "",
+        day: String = tomorrow,
+        basket: String = "owed",
+        status: String = "pending",
+        forUser: String = "sasha",
+        expires: String = day + "T12:00:00+03:00",
+        title: String = "",
+    ): Dela.Suggestion {
+        val opts = JSONArray().put(JSONObject().put("label", "☆ На завтра").put("focus_on", day))
+        if (basket == "owed" || basket == "carry") opts.put(JSONObject().put("label", "✓ Уже сделал").put("done", true))
+        opts.put(JSONObject().put("label", "Не надо").put("reject", true).put("reason", "план: не надо"))
+        val p = JSONObject().put("basket", basket).put("for_date", day).put("focus_on", day).put("order", order)
+            .put("why", "Иван ждёт 4 дня · срок завтра").put("from", "встреча «ООО Ромашка: модель» 01.10")
+            .put("ask", "В «Сейчас» на вт 06.10? Иван ждёт 4 дня").put("options", opts).put("held", "")
+        if (title.isNotBlank()) p.put("title", title).put("ball", "mine")
+        return Dela.Suggestion(
+            id = id, forUser = forUser, kind = if (task.isBlank()) "create" else "update", taskId = task, payload = p.toString(),
+            source = "plan", sourceRef = "plan:$day:$basket:$id", batchRef = "plan:$day", batchTitle = "Сейчас на вт 06.10 · встреч ~3 — возьми 3",
+            status = status, expiresAt = expires, createdAt = "2026-10-04T19:00:04+03:00",
+        )
+    }
+
+    private fun planSnap(features: Set<String>, tasks: List<Dela.Task>, sugs: List<Dela.Suggestion>) =
+        Dela.Snapshot(tasks = tasks.associateBy { it.id }, suggestions = sugs.associateBy { it.id }, features = features)
+
+    @Test
+    fun `сейчас на завтра — кандидаты по order, отмеченное по дню, не в Новом и не в числе`() {
+        val tasks = listOf(
+            task("a") { it.copy(title = "Иван Тестов: прислать договор") },
+            task("b") { it.copy(title = "Собрать отчёт", focusOn = today) },
+            task("m") { it.copy(title = "Отмеченное заранее", focusOn = tomorrow) },
+            task("m-foreign") { it.copy(focusOn = tomorrow, ownerId = "natasha") },
+            task("m-done") { it.copy(focusOn = tomorrow, status = Dela.DONE) },
+            task("m-goal") { it.copy(focusOn = tomorrow, goal = true) },
+        )
+        val q = ask(JSONObject().put("title", "Купить бумагу"), id = "q1")
+        val sugs = listOf(
+            cand("c1", 3, task = "a"),
+            cand("c2", 1, task = "b", basket = "carry"),
+            cand("c3", 2, basket = "deal", title = "Решить следующий шаг: ООО Ромашка — продажа доли"),
+            cand("c4", 4, task = "a", status = "rejected"),
+            cand("c5", 5, task = "a", forUser = "natasha"),
+            cand("old", 1, task = "a", day = "2026-10-04"),
+            q,
+        )
+        val s = planSnap(planOn, tasks, sugs)
+        val p = DelaViews.plan(s, "sasha", today, now)!!
+        assertEquals(tomorrow, p.forDate)
+        assertEquals("plan:$tomorrow", p.batch)
+        assertEquals("на завтра", p.label)
+        assertEquals("Сейчас на вт 06.10 · встреч ~3 — возьми 3", p.title)
+        // Порядок — payload.order сервера; решённые, чужие и вчерашние не ждут ответа.
+        assertEquals(listOf("c2", "c3", "c1"), p.items.map { it.id })
+        // Предложено — вся пачка дня, с решёнными (как строка дайджеста 20:03); чужого и вчерашнего нет.
+        assertEquals(4, p.offered)
+        // Отмечено — только своё открытое не-цель с focus_on этого дня.
+        assertEquals(listOf("m"), p.marked.map { it.id })
+        assertTrue(p.visible)
+        assertTrue(p.ahead)
+        assertTrue(p.room)
+        assertEquals("Сейчас на завтра: предложено 4 · отмечено 1 из 5", DelaViews.planLine(p))
+        // Не вопросы автоматики: в «Подскажи», числе «Нового» и «Поставить все» их нет (`store.NEW_COUNT_IF`).
+        assertEquals(listOf("q1"), DelaViews.asks(s, "sasha").map { it.id })
+        assertEquals(1, DelaViews.newCount(s, "sasha", "all", now))
+        assertEquals(1, Dela.newOnes(s, "sasha").size)
+        // Кандидат словами: само дело (у create — название из payload) и «почему · откуда».
+        assertEquals(
+            DelaViews.SugText("Иван Тестов: прислать договор", "Иван ждёт 4 дня · срок завтра · встреча «ООО Ромашка: модель» 01.10"),
+            DelaViews.sugText(s.suggestions.getValue("c1"), s, today),
+        )
+        assertEquals("Решить следующий шаг: ООО Ромашка — продажа доли", DelaViews.sugText(s.suggestions.getValue("c3"), s, today).title)
+        assertEquals("В «Сейчас»", DelaViews.askYes(s.suggestions.getValue("c1")))
+        // Кнопки сервера: «☆ На завтра» несёт день, «✓ Уже сделал» — только у обещаний и несделанного.
+        val o = DelaViews.options(s.suggestions.getValue("c1"), s)!!
+        assertEquals(listOf("☆ На завтра", "✓ Уже сделал", "Не надо"), o.map { it.label })
+        assertEquals(tomorrow, o[0].focusOn)
+        assertTrue(o[1].done)
+        assertTrue(o[2].reject)
+        assertEquals("Не надо", DelaViews.answerSaid(o[2]))
+        assertEquals("Не надо: Не для CRM", DelaViews.answerSaid(DelaViews.Option(0, "Не для CRM", reject = true)))
+        assertEquals(listOf("☆ На завтра", "Не надо"), DelaViews.options(s.suggestions.getValue("c3"), s)!!.map { it.label })
+        assertEquals(DelaViews.Mark("bolt", true, "план на завтра"), DelaViews.mark("plan"))
+        // Пачка `plan:<день>` — та же: «Сегодня» и дайджест открывают её по batch_ref.
+        assertEquals(p, DelaViews.plan(s, "sasha", today, now, day = tomorrow))
+        // Старый сервер (флага plan нет) — по-старому: блока нет, ждущее (если вдруг есть) — в «Новом» вопросами.
+        val old = s.copy(features = setOf(Dela.FEATURE_OPTIONS))
+        assertNull(DelaViews.plan(old, "sasha", today, now))
+        assertEquals(setOf("q1", "c1", "c2", "c3", "old"), Dela.newOnes(old, "sasha").map { it.id }.toSet())
+    }
+
+    @Test
+    fun `сейчас на завтра — пятница на понедельник, после полуночи до 12, погасшее по сроку`() {
+        assertEquals("на завтра", DelaViews.planWhen("2026-10-06", today))
+        assertEquals("на понедельник", DelaViews.planWhen("2026-10-12", "2026-10-09"))
+        assertEquals("на среду", DelaViews.planWhen("2026-10-07", today))
+        assertEquals("на сегодня, до 12:00", DelaViews.planWhen(today, today))
+        val a = task("a")
+        // После полуночи вчерашние кандидаты — «на сегодня, до 12:00»; погасшее по expires_at (синк ещё не привёз) не ждёт.
+        val s = planSnap(planOn, listOf(a), listOf(
+            cand("live", 1, task = "a", day = today),
+            cand("gone", 2, task = "a", day = today, expires = "2026-10-05T08:00:00+03:00"),
+        ))
+        val p = DelaViews.plan(s, "sasha", today, now)!!
+        assertEquals(listOf("live"), p.items.map { it.id })
+        assertEquals("на сегодня, до 12:00", p.label)
+        assertFalse(p.ahead)
+        // В 12:00 погасли все — блока нет: на прошедший час нечего отмечать, «Сейчас» сегодня — у молнии.
+        val noon = java.time.OffsetDateTime.parse("2026-10-05T12:00:01+03:00").toInstant().toEpochMilli()
+        assertNull(DelaViews.plan(s, "sasha", today, noon))
+        // Ответил на всех, отмеченное заранее стоит — блок виден до своего дня: «Убрать» есть только здесь.
+        val marked = task("m") { it.copy(focusOn = tomorrow) }
+        val answered = planSnap(planOn, listOf(a, marked), listOf(cand("c1", 1, task = "a", status = "rejected")))
+        val q = DelaViews.plan(answered, "sasha", today, now)!!
+        assertTrue(q.items.isEmpty())
+        assertTrue(q.visible)
+        assertEquals("Сейчас на завтра: отмечено 1 из 5", DelaViews.planLine(q))
+        // Ничего не отмечено и ждать нечего — не виден.
+        assertFalse(DelaViews.plan(planSnap(planOn, listOf(a), listOf(cand("c1", 1, task = "a", status = "rejected"))), "sasha", today, now)!!.visible)
+        assertNull(DelaViews.plan(planSnap(planOn, listOf(a), emptyList()), "sasha", today, now))
+    }
+
+    @Test
+    fun `сейчас на завтра — ответ поверх копии, уже сделал закрывает только у плана, шестое — до запроса`() {
+        val five = (1..5).map { i -> task("t$i") { it.copy(focusOn = tomorrow) } }
+        val a = task("a")
+        val s = planSnap(planOn, listOf(a), listOf(cand("c1", 1, task = "a"), cand("c2", 2, task = "a")))
+        // «☆ На завтра» — дело сразу на свой день: «отмечено k из 5» растёт до синка.
+        val yes = Dela.overlay(s, listOf(Dela.answerOp("c1", 0)), "sasha", today, nowIso)
+        assertEquals(tomorrow, yes.tasks.getValue("a").focusOn)
+        assertEquals("accepted", yes.suggestions.getValue("c1").status)
+        assertEquals("ответ: ☆ На завтра", yes.suggestions.getValue("c1").reason)
+        assertEquals(listOf("a"), DelaViews.plan(yes, "sasha", today, now)!!.marked.map { it.id })
+        // Сегодняшнее «Сейчас» это не трогает: дело встанет туда в свой день.
+        assertTrue(DelaViews.nowTasks(yes, "sasha", today).isEmpty())
+        // «✓ Уже сделал» — дело закрыто, «Сейчас» завтра не ставится.
+        val done = Dela.overlay(s, listOf(Dela.answerOp("c1", 1)), "sasha", today, nowIso).tasks.getValue("a")
+        assertEquals(Dela.DONE, done.status)
+        assertEquals("", done.focusOn)
+        // Тот же done у вопроса автоматики ничего не закрывает — его слушает сервер только у плана.
+        val other = cand("m1", 1, task = "a").copy(source = "meeting")
+        val notPlan = Dela.overlay(planSnap(planOn, listOf(a), listOf(other)), listOf(Dela.answerOp("m1", 1)), "sasha", today, nowIso)
+        assertTrue(notPlan.tasks.getValue("a").open)
+        // «Не надо» дело не трогает; старое «Да» без варианта — день из payload, как решит сервер.
+        assertEquals("", Dela.overlay(s, listOf(Dela.answerOp("c1", 2)), "sasha", today, nowIso).tasks.getValue("a").focusOn)
+        val oldYes = Dela.overlay(s, listOf(Dela.decideOp("c1", accept = true)), "sasha", today, nowIso)
+        assertEquals(tomorrow, oldYes.tasks.getValue("a").focusOn)
+        // Пять на завтра — шестое не встаёт, тост до запроса (сервер держит то же: store._now_guard).
+        val full = DelaViews.plan(planSnap(planOn, five + a, listOf(cand("c1", 1, task = "a"))), "sasha", today, now)!!
+        assertFalse(full.room)
+        assertEquals("На завтра уже пять — сначала убери одно", DelaViews.planFull(full))
+        val todayFull = DelaViews.plan(planSnap(planOn, listOf(a), listOf(cand("c1", 1, task = "a", day = today))), "sasha", today, now)!!
+        assertEquals(DelaViews.NOW_FULL, DelaViews.planFull(todayFull))
+    }
+
+    @Test
+    fun `сейчас на завтра — пример контракта и шапка из вида plan`() {
+        val f = listOf(File("../server/contract/dela-plan.json"), File("server/contract/dela-plan.json")).first { it.isFile }
+        val c = JSONObject(f.readText())
+        assertEquals(Dela.FEATURE_PLAN, c.getJSONObject("features").getString("flag"))
+        val sg = Dela.suggestion(c.getJSONObject("suggestion").getJSONObject("example_update"))!!
+        assertTrue(DelaViews.isPlan(sg))
+        assertEquals("2026-10-16", DelaViews.planDay(sg))
+        val t = Dela.Task(id = sg.taskId, title = "Иван Тестов: прислать договор", ownerId = "sasha")
+        val s = planSnap(planOn, listOf(t), listOf(sg))
+        val day = "2026-10-15"
+        val nowThu = java.time.OffsetDateTime.parse("2026-10-15T19:05:00+03:00").toInstant().toEpochMilli()
+        val p = DelaViews.plan(s, "sasha", day, nowThu)!!
+        assertEquals("plan:2026-10-16", p.batch)
+        assertEquals(listOf(sg.id), p.items.map { it.id })
+        assertEquals("Иван ждёт 4 дня · срок завтра · сделка живая · встреча «ООО Ромашка: модель» 13.10", DelaViews.sugText(sg, s, day).hint)
+        val o = DelaViews.options(sg, s)!!
+        assertEquals("2026-10-16", o.first().focusOn)
+        assertTrue(o.any { it.done })
+        // Шапка пачки — из вида plan того же дня: «сегодня сделано 2 из 4» и «третий день в «Сейчас»».
+        val view = c.getJSONObject("view").getJSONObject("example")
+        assertEquals("сегодня сделано 2 из 4", DelaViews.planToday(view, p))
+        assertEquals("", DelaViews.planToday(JSONObject(view.toString()).put("for_date", "2026-10-19"), p))
+        assertEquals("", DelaViews.planToday(null, p))
+        val stuck = DelaViews.planStuck(view)
+        assertEquals(listOf(DelaViews.Stuck("6e7f8a9b-0c1d-4e2f-8a3b-4c5d6e7f8a9b", "Собрать отчёт", 3)), stuck)
+        assertEquals("3 дня в «Сейчас»: Собрать отчёт — разбить, отдать или убрать?", DelaViews.stuckLine(stuck.single()))
+        assertTrue(DelaViews.planStuck(null).isEmpty())
+    }
 }

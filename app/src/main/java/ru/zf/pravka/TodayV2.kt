@@ -113,6 +113,8 @@ internal class TodayV2Data(
     val reminders: List<TodayAgenda.RemindRow> = emptyList(),
     /** «Вернулось» — дела «потом», чей день настал (`TodayAgenda.backRows`). */
     val back: List<TodayAgenda.BackRow> = emptyList(),
+    /** «Сейчас на завтра» (docs/dela-phone-22.md): строкой последней в «Новом»; null — строки нет. */
+    val plan: DelaViews.Plan? = null,
 )
 
 /** Числа плиток разложенного: еда, спорт, деньги, Шаббат. */
@@ -763,15 +765,20 @@ private const val NEW_MAX = 4
 /**
  * «Новое» — то, что ждёт «да» владельца (`DelaViews.asks`, «Подскажи» вкладки
  * Дел): название, почему спрашивает или откуда; «да» — поставить как
- * предложено, «нет» — с причиной (материал промптов). Пусто — карточки нет.
+ * предложено, «нет» — с причиной (материал промптов). Последней строкой —
+ * «Сейчас на завтра» (docs/dela-phone-22.md): кандидаты на завтра четыре строки
+ * «Нового» не занимают. Пусто и плана нет — карточки нет.
  */
 @Composable
 private fun NewCard(c: TodayCards, wide: Boolean) {
     val t = LocalPravkaType.current
     val asks = c.data.asks
-    if (asks.isEmpty()) return
+    val plan = c.data.plan
+    if (asks.isEmpty() && plan == null) return
     PaperCard {
-        SecHead(kv("inbox", Glyphs.Note), "Новое", asks.size, hot = true, small = "ждёт твоего да", link = if (asks.size > NEW_MAX) "все" else null, onLink = { c.nav.mode(Tab.TODOIST) })
+        if (asks.isNotEmpty()) {
+            SecHead(kv("inbox", Glyphs.Note), "Новое", asks.size, hot = true, small = "ждёт твоего да", link = if (asks.size > NEW_MAX) "все" else null, onLink = { c.nav.mode(Tab.TODOIST) })
+        }
         asks.take(NEW_MAX).forEachIndexed { i, sg ->
             if (i > 0) ListLine()
             val txt = DelaViews.sugText(sg, c.data.snap, c.data.todayKey)
@@ -811,6 +818,34 @@ private fun NewCard(c: TodayCards, wide: Boolean) {
                 })
             }
         }
+        if (plan != null) {
+            if (asks.isNotEmpty()) ListLine()
+            PlanRow(c, plan)
+        }
+    }
+}
+
+/**
+ * «Сейчас на завтра: предложено 7 · отмечено 2 из 5 · Открыть» — одна строка в «Новом» (docs/dela-phone-22.md):
+ * тап — пачка кандидатов `plan:<день>` во вкладке Дел, там «☆ На завтра · ✓ Уже сделал · Не надо» у каждого.
+ */
+@Composable
+private fun PlanRow(c: TodayCards, plan: DelaViews.Plan) {
+    val t = LocalPravkaType.current
+    val open = { c.nav.delaBatch(plan.batch) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(KvShape.Control))
+            .clickable(onClickLabel = "открыть кандидатов", onClick = open)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Glyphs.Bolt, null, tint = Kv.accent, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(ru.zf.pravka.core.HeadLine.wrap(DelaViews.planLine(plan)), style = t.meta, color = Kv.text, modifier = Modifier.weight(1f))
+        Spacer(Modifier.width(6.dp))
+        SmallKey(kv("arrow-right", Glyphs.Forward), "Открыть", "Открыть «Сейчас ${plan.label}»", open, soft = true)
     }
 }
 
@@ -976,6 +1011,8 @@ internal fun buildV2(
     val last = if (open == null) entries.filter { !it.open && it.source != "gap" && it.end <= now }.maxByOrNull { it.end } else null
     val nowTasks = if (delaOn) TodayAgenda.now(snap, me, todayKey) else emptyList()
     val asks = if (delaOn) DelaViews.asks(snap, me) else emptyList()
+    // Кандидаты «Сейчас на завтра» в «Новое» не входят (`Dela.newOnes`) — у них одна строка внизу карточки.
+    val plan = if (delaOn) DelaViews.plan(snap, me, todayKey, now)?.takeIf { it.visible } else null
     // Дело-созвон с часом и его событие в календаре (`gcal.py` ставит созвоны из Дел) — одной строкой: событием.
     val dueToday = if (delaOn) TodayAgenda.dropTwinCalls(TodayAgenda.due(snap, me, dayKey, todayKey), calendar, model.dayStart) else emptyList()
     val dueTomorrow = if (delaOn) TodayAgenda.due(snap, me, day.plusDays(1).toString(), todayKey) else emptyList()
@@ -1022,6 +1059,6 @@ internal fun buildV2(
     } else null
     return TodayV2Data(
         model, profile, lenta, open, last, nowTasks, asks, todayRows, tomorrow, snap, todayKey, tiles, delaOn, mealGap,
-        reminders = reminders, back = back,
+        reminders = reminders, back = back, plan = plan,
     )
 }

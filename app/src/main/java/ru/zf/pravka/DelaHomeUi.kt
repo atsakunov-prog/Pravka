@@ -113,6 +113,8 @@ internal class Home(
      * отступом, в предел пяти не считаются; в «Сегодня» ниже их нет.
      */
     val inner: List<Pair<Dela.Task, Int>> = emptyList(),
+    /** «Сейчас на завтра» (docs/dela-phone-22.md): строкой под «Новым», тап — пачка кандидатов; null — строки нет. */
+    val plan: DelaViews.Plan? = null,
 )
 
 /** Значок набора Ковчега по имени веба; нет такого — запасной штрих приложения. */
@@ -315,6 +317,8 @@ internal fun LazyListScope.homeView(
     onAcceptSet: (Dela.Suggestion, org.json.JSONObject) -> Unit,
     onAnswer: (Dela.Suggestion, DelaViews.Option) -> Unit = { _, _ -> },
     onRejectNow: (Dela.Suggestion, String) -> Unit = { sg, _ -> onReject(sg) },
+    /** Строка «Сейчас на завтра» — открыть пачку `plan:<день>`. */
+    onPlan: (String) -> Unit = {},
 ) {
     item(key = "home:now") {
         HomeBlock(Glyphs.Bolt, "Сейчас", h.now.size, sub = "отметил сам — сделать сегодня") {
@@ -369,6 +373,11 @@ internal fun LazyListScope.homeView(
             NewLine(if (h.asks.isEmpty()) "Новое: вопросов нет · $rest" else "Всё «Новое»: $rest", onNew)
         }
     }
+    // «Сейчас на завтра» — под «Новым» (судья §3.3, `planBox` веба): сначала ответить на вопросы, потом план. Кандидаты
+    // не занимают строк «Нового» — одна строка, тап — их пачка с кнопками «☆ На завтра · ✓ Уже сделал · Не надо».
+    h.plan?.let { p ->
+        item(key = "home:plan") { PlanLine(DelaViews.planLine(p), onClick = { onPlan(p.batch) }) }
+    }
     item(key = "home:today") {
         HomeBlock(
             Glyphs.Sunny, "Сегодня", h.today.size,
@@ -403,10 +412,21 @@ private fun GroupHead(text: String, top: Boolean) {
 
 /** Строка-ссылка в «Новое» (`.new-link` веба): значок, слова, стрелка. */
 @Composable
-private fun NewLine(text: String, onClick: () -> Unit) {
+private fun NewLine(text: String, onClick: () -> Unit) = LinkLine(kv("inbox", Glyphs.Groups), text, onClick)
+
+/**
+ * Строка «Сейчас на завтра: предложено 7 · отмечено 2 из 5 ›» (docs/dela-phone-22.md) — в «Сейчас» Дел под «Новым» и
+ * сверху «Нового»: молния, слова, стрелка; тап — пачка кандидатов. Акцентом: это выбор на завтра, а не справка.
+ */
+@Composable
+internal fun PlanLine(text: String, onClick: () -> Unit) = LinkLine(Glyphs.Bolt, text, onClick, accent = true)
+
+/** Строка-ссылка блока: значок, слова переносом, стрелка; [accent] — краской акцента («Сейчас на завтра»). */
+@Composable
+private fun LinkLine(icon: ImageVector, text: String, onClick: () -> Unit, accent: Boolean = false) {
     val t = LocalPravkaType.current
     val v2 = Look.v2
-    val ink = if (v2) Kv.muted else ru.zf.pravka.ui.LocalMode.current.label
+    val ink = if (v2) (if (accent) Kv.accent else Kv.muted) else ru.zf.pravka.ui.LocalMode.current.label
     Row(
         Modifier
             .fillMaxWidth()
@@ -415,7 +435,7 @@ private fun NewLine(text: String, onClick: () -> Unit) {
             .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(kv("inbox", Glyphs.Groups), contentDescription = null, tint = if (v2) Kv.icon else ink, modifier = Modifier.size(17.dp))
+        Icon(icon, contentDescription = null, tint = if (v2) (if (accent) Kv.accent else Kv.icon) else ink, modifier = Modifier.size(17.dp))
         Spacer(Modifier.width(8.dp))
         // v2 — переносом по словам целиком, без «…» (14.10.2026: «Всё «Новое»: добавлено за 3 дня…» на сложенном
         // обрезалось посреди счёта); «Вид 4.0» — как был.

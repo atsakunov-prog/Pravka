@@ -345,6 +345,140 @@ object DelaViews {
     fun batchTitle(s: Dela.Snapshot, batch: String): String =
         s.suggestions.values.firstOrNull { it.batchRef == batch && it.batchTitle.isNotBlank() }?.batchTitle ?: batch
 
+    // ------------------------------------------------------------ «Сейчас на завтра»
+
+    /*
+     * «Сейчас на завтра» (15.10.2026, шаг 1 петли этапа 4, docs/dela-phone-22.md; `planBox` веба, сервер — `plan.py`,
+     * контракт `server/contract/dela-plan.json`). Владелец (ответ 1а): «с 19:00 в „Подскажи“ до семи кандидатов „Сейчас на
+     * завтра“, у каждого — почему и откуда; отмечаю до пяти». Кандидаты — обычные предложения (`source = plan`,
+     * `batch_ref plan:<день>`), но это выбор владельца на завтра, а не вопрос автоматики: в «Подскажи», число «Нового» и
+     * «Поставить все» они не входят (`Dela.newOnes`) — у них одна строка на «Сегодня» и в «Сейчас» Дел и своя пачка.
+     * Всё — из копии синка; вид `plan` нужен только шапке пачки («сегодня сделано x из y», «третий день в «Сейчас»»).
+     */
+
+    /** Пачка плана на день — `plan:<YYYY-MM-DD>` (`batch_ref` кандидатов): её открывают «Сегодня», вкладка и дайджест. */
+    const val PLAN_BATCH = "plan:"
+
+    fun isPlan(sg: Dela.Suggestion): Boolean = sg.source == Dela.PLAN_SOURCE
+
+    /** Причина «Не надо» у кандидата (`plan.tomorrow.words.no` сервера): это дело план не предлагает три дня. */
+    const val PLAN_NO = "план: не надо"
+
+    /**
+     * На какой день кандидат: из `batch_ref` (`plan:<for_date>` — тот же день, контракт), нет — `payload.for_date`. Строка,
+     * а не разбор JSON: кандидатов копится до семи в день, а план считается при каждой отрисовке «Сегодня» и вкладки.
+     */
+    fun planDay(sg: Dela.Suggestion): String =
+        sg.batchRef.takeIf { it.startsWith(PLAN_BATCH) }?.removePrefix(PLAN_BATCH) ?: sg.payloadObj().str("for_date")
+
+    /** План на один день — что рисует блок «Сейчас на завтра». */
+    data class Plan(
+        /** День, НА который план (`for_date`). */
+        val forDate: String,
+        /** «на завтра», «на понедельник», после полуночи — «на сегодня, до 12:00» (`planWhen` веба). */
+        val label: String,
+        /** `plan:<forDate>` — пачка. */
+        val batch: String,
+        /** Подпись пачки от сервера: «Сейчас на пт 16.10 · встреч ~3 — возьми 3»; нет — "". */
+        val title: String,
+        /** Ждущие ответа кандидаты — в порядке `payload.order` (несделанное → обещания → сделки → «жду» → Круг). */
+        val items: List<Dela.Suggestion>,
+        /** Сколько всего предложено на этот день, с уже решёнными (`offered` вида и строки дайджеста). */
+        val offered: Int,
+        /** Свои открытые дела, уже отмеченные на этот день, — «отмечено k из 5». */
+        val marked: List<Dela.Task>,
+        /** День впереди: отмеченное ещё не «Сейчас», снять его можно только «Убрать» (молния знает лишь сегодня). */
+        val ahead: Boolean,
+    ) {
+        /** Виден, пока есть ждущие кандидаты или отмеченное заранее (`planBox` веба). */
+        val visible: Boolean get() = items.isNotEmpty() || (ahead && marked.isNotEmpty())
+
+        /** Шестое на этот день не встанет — предел пяти на КАЖДЫЙ день держит и сервер (`store._now_guard`). */
+        val room: Boolean get() = marked.size < NOW_MAX
+    }
+
+    /**
+     * План [day] (пачка `plan:<день>`) или ближайший: день первого ждущего кандидата — не прошедший и не погасший по
+     * `expires_at` (12:00 того дня; синк мог ещё не привезти погасание), а нет ждущих — ближайший будущий день, на который
+     * кандидаты были (там стоит отмеченное заранее). Нет флага `plan` у сервера или кандидатов не было — null: блока нет.
+     */
+    fun plan(s: Dela.Snapshot, me: String, today: String, now: Long, day: String? = null): Plan? {
+        if (!s.planOn) return null
+        val all = s.suggestions.values.filter { isPlan(it) && (me.isBlank() || it.forUser == me) }
+            .map { it to planDay(it) }.filter { it.second.isNotBlank() }
+        val live = all.filter { (sg, d) -> sg.pending && d >= today && !planGone(sg, now) }
+        val d = day ?: live.minOfOrNull { it.second } ?: all.map { it.second }.filter { it > today }.minOrNull() ?: return null
+        val items = live.filter { it.second == d }.map { it.first to it.first.payloadObj().optInt("order", 99) }
+            .sortedWith(compareBy({ it.second }, { it.first.createdAt })).map { it.first }
+        val batch = all.filter { it.second == d }.map { it.first }
+        return Plan(
+            forDate = d,
+            label = planWhen(d, today),
+            batch = PLAN_BATCH + d,
+            title = batch.firstOrNull { it.batchTitle.isNotBlank() }?.batchTitle.orEmpty(),
+            items = items,
+            offered = batch.size,
+            marked = planMarked(s, me, d),
+            ahead = d > today,
+        )
+    }
+
+    /** Погас по сроку (`expires_at`), хоть синк ещё не привёз `expired`: в 12:00 кандидат на сегодня уже не нужен. */
+    private fun planGone(sg: Dela.Suggestion, now: Long): Boolean = ms(sg.expiresAt).let { it in 1..now }
+
+    /** Отмеченное на [day] — свои открытые дела не-цели с `focus_on` этого дня (`planMarked` веба), во всех сферах. */
+    fun planMarked(s: Dela.Snapshot, me: String, day: String): List<Dela.Task> =
+        s.tasks.values.filter { it.open && !it.goal && mine(s, me, it) && it.focusOn == day }.sortedWith(Dela.ORDER)
+
+    private val WD_ACC = listOf("понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье")
+
+    /** На какой день план словами от сегодня (`planWhen` веба): «на завтра», «на понедельник», «на сегодня, до 12:00». */
+    fun planWhen(day: String, today: String): String {
+        val n = days(today, day)
+        return when {
+            n <= 0 -> "на сегодня, до 12:00"
+            n == 1L -> "на завтра"
+            else -> "на " + WD_ACC[weekday(day)]
+        }
+    }
+
+    /**
+     * Одна строка плана — на «Сегодня» последней в «Новом», в «Сейчас» Дел под «Новым», сверху «Нового» (как строка
+     * дайджеста 20:03): «Сейчас на завтра: предложено 7 · отмечено 2 из 5». Ответил на всех — только «отмечено».
+     */
+    fun planLine(p: Plan): String = "Сейчас ${p.label}: " + listOfNotNull(
+        "предложено ${p.offered}".takeIf { p.items.isNotEmpty() },
+        "отмечено ${p.marked.size} из $NOW_MAX",
+    ).joinToString(" · ")
+
+    /** Тост до запроса, когда шестое на день не встанет (`planRoom` веба); на сегодня — тот же, что у молнии. */
+    fun planFull(p: Plan): String =
+        if (!p.ahead) NOW_FULL else p.label.replaceFirstChar { it.uppercase() } + " уже пять — сначала убери одно"
+
+    /** «Третий день в «Сейчас»» из вида `plan` (`stuck`): разбить, отдать или убрать — правкой в карточке. */
+    data class Stuck(val id: String, val title: String, val days: Int)
+
+    fun planStuck(view: JSONObject?): List<Stuck> {
+        val a = view?.optJSONArray("stuck") ?: return emptyList()
+        return (0 until a.length()).mapNotNull { a.optJSONObject(it) }
+            .mapNotNull { o -> o.str("id").takeIf { it.isNotBlank() }?.let { Stuck(it, o.str("title"), o.optInt("days", 3)) } }
+    }
+
+    /** «3 дня в «Сейчас»: X — разбить, отдать или убрать?» (`planBox` веба). */
+    fun stuckLine(x: Stuck): String = DelaKrug.plural(x.days, "день", "дня", "дней") + " в «Сейчас»: ${x.title} — разбить, отдать или убрать?"
+
+    /**
+     * Шапка пачки из вида `plan` (тот же день): «сегодня сделано 2 из 4» — счёт сервера (`store.now_counts`, с
+     * перенесённым кнопкой на завтра: копия телефона его уже не видит в сегодняшнем). Встречи и «возьми K» — в подписи
+     * пачки. Вида нет, день другой или «Сейчас» сегодня пусто — "".
+     */
+    fun planToday(view: JSONObject?, p: Plan): String {
+        if (view == null || view.str("for_date") != p.forDate) return ""
+        val t = view.optJSONObject("today") ?: return ""
+        val total = t.optInt("total", 0)
+        return if (total > 0) "сегодня сделано ${t.optInt("done", 0)} из $total" else ""
+    }
+
     /** Кто назван именем: [hit] — он один; [many] — двое и больше на одном ярусе (не узнан). */
     data class Match<T>(val hit: T?, val many: List<T>)
 
@@ -437,8 +571,12 @@ object DelaViews {
         return if (left.isEmpty()) null else "Ждёт: " + left.joinToString("; ")
     }
 
-    /** Вариант ответа кнопкой (`payload.options`): номер, подпись и «нет» ли это (`reject`). */
-    data class Option(val index: Int, val label: String, val reject: Boolean)
+    /**
+     * Вариант ответа кнопкой (`payload.options`): номер, подпись и «нет» ли это (`reject`). [focusOn] — на какой день
+     * вариант ставит дело в «Сейчас» («☆ На завтра» кандидата плана: шестое на тот день ловится до запроса), [done] —
+     * «✓ Уже сделал» (закрывает дело только у кандидата плана, docs/dela-phone-22.md).
+     */
+    data class Option(val index: Int, val label: String, val reject: Boolean, val focusOn: String = "", val done: Boolean = false)
 
     /**
      * Варианты ответа кнопками (`sugOptions` веба, 13.10.2026): у вопроса автоматики — её собственные ответы
@@ -451,7 +589,7 @@ object DelaViews {
         val out = (0 until a.length()).mapNotNull { i ->
             val o = a.optJSONObject(i) ?: return@mapNotNull null
             val label = o.str("label").ifBlank { return@mapNotNull null }
-            Option(i, label, o.optBoolean("reject", false))
+            Option(i, label, o.optBoolean("reject", false), o.str("focus_on"), o.optBoolean("done", false))
         }
         return out.takeIf { it.size >= 2 }
     }
@@ -491,8 +629,12 @@ object DelaViews {
     /** Вариант «нет» среди кнопок — «Не для CRM», «Никто», «Нет»: им отвечает «Нет» там, где кнопок не видно. */
     fun rejectOption(sg: Dela.Suggestion, s: Dela.Snapshot): Option? = options(sg, s)?.firstOrNull { it.reject }
 
-    /** Тост после ответа кнопкой (`answer` веба): «Ответ: Это Иван Петров» или «Не надо: Не для CRM». */
-    fun answerSaid(o: Option): String = (if (o.reject) "Не надо: " else "Ответ: ") + o.label
+    /** Тост после ответа кнопкой (`answer` веба): «Ответ: Это Иван Петров» или «Не надо: Не для CRM»; сам «Не надо» — без повтора. */
+    fun answerSaid(o: Option): String = when {
+        o.reject && o.label.startsWith("Не надо") -> o.label
+        o.reject -> "Не надо: " + o.label
+        else -> "Ответ: " + o.label
+    }
 
     /** Причина «нет» у вопроса о человеке без вариантов (кнопка «Не для CRM» веба): служба больше не спросит. */
     const val NOT_CRM = "не для CRM"
@@ -545,6 +687,12 @@ object DelaViews {
         }
         // «Какой Иван?» захвата (kind capture, `sugText` веба): тёзки в сказанном — запись ждёт человека, ответ — кнопками.
         if (sg.kind == "capture") return SugText(v("title").ifBlank { sg.quote }, "")
+        // Кандидат «Сейчас на завтра» (`planItem` веба, docs/dela-phone-22.md): само дело, без «Уточнить:», и под ним
+        // «почему · откуда» словами сервера — их и спрашивал владелец («у каждого — почему и откуда»).
+        if (sg.source == Dela.PLAN_SOURCE) {
+            val title = if (sg.kind == "create") v("title").ifBlank { sg.quote } else s.tasks[sg.taskId]?.title ?: "дело не видно"
+            return SugText(title, listOf(v("why"), v("from")).filter { it.isNotBlank() }.joinToString(" · "))
+        }
         if (sg.kind == "create") {
             return SugText(
                 v("title").ifBlank { sg.quote },
@@ -591,9 +739,15 @@ object DelaViews {
         else -> "Поставить"
     }
 
-    /** То же по самому предложению: вопрос «это он?» о человеке (`person_id` в payload) — «Да, это он», а не «Завести». */
-    fun askYes(sg: Dela.Suggestion): String =
-        if (sg.kind == "person" && sg.payloadObj().str("person_id").isNotBlank()) "Да, это он" else askYes(sg.kind)
+    /**
+     * То же по самому предложению: вопрос «это он?» о человеке (`person_id` в payload) — «Да, это он», а не «Завести»;
+     * кандидат плана без кнопок сервера — «В «Сейчас»» (`planItem` веба), а не «Уточнить».
+     */
+    fun askYes(sg: Dela.Suggestion): String = when {
+        isPlan(sg) -> "В «Сейчас»"
+        sg.kind == "person" && sg.payloadObj().str("person_id").isNotBlank() -> "Да, это он"
+        else -> askYes(sg.kind)
+    }
 
     private fun stems(text: String): Set<String> =
         (Dela.norm(text) ?: "").replace(Regex("[^a-zа-я0-9]+"), " ").split(' ').filter { it.length > 3 }.map { it.take(5) }.toSet()
@@ -710,6 +864,8 @@ object DelaViews {
         // Люди из телефонной книжки (dela_0019) и разборщик Круга — как `ORIGIN` веба.
         "contacts" -> Mark("phone", true, "телефонная книжка")
         "krug" -> Mark("circle", true, "разборщик Круга")
+        // Кандидат «Сейчас на завтра» (docs/dela-phone-22.md): правило сервера, молния (`ORIGIN.plan` веба).
+        "plan" -> Mark("bolt", true, "план на завтра")
         "web" -> Mark("pen", false, "в вебе")
         "import" -> Mark("list", false, "перенос")
         else -> Mark("pen", false, "руками")
