@@ -36,7 +36,7 @@ OVERLAP = 200
 TASK_FIELDS = {
     "title", "notes", "project_id", "deal_id", "owner_id", "ball", "owed", "person_id", "nudge_on", "requested_by",
     "due_date", "due_time", "estimate_min", "money", "want", "focus_on", "labels", "status",
-    "source", "source_ref", "remind_at", "remind_place",
+    "source", "source_ref", "remind_at", "remind_place", "pos",
 }
 # reminded_at в TASK_FIELDS нет: его ставит только сервер (task.reminded от бота).
 
@@ -44,7 +44,10 @@ TASK_FIELDS = {
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
             "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
-            "privacy", "context_index", "claude_guard"]
+            "privacy", "context_index", "claude_guard", "nest"]
+# «nest» — дела внутри дела (15.10.2026, dela_0024): поле pos у дела (место среди соседей с тем же «Зачем») в task.create
+# и task.set, task.done последнего открытого дела внутри поднимает родителя (ответ — raised, _nest_rise), /api/ask знает
+# scope.step («Для этого»). Без флага телефон pos не шлёт: старый сервер отверг бы операцию целиком.
 # «claude_guard» — защита от петли Claude на сервере (15.10.2026, аудит №12, guard.py): операции claude.guard {action:
 # resume|keep, task} (владелец — веб, телефон; бот Ковчега — кнопка в Telegram) и claude.alert_sent (бот Ковчега), поле
 # alerts у /api/reminders/due (сообщения владельцу: «защита от петли», сумма дня за порогом), поле guard у вида spend
@@ -438,6 +441,71 @@ def _now_guard(conn: psycopg.Connection, before: dict | None, after: dict) -> No
         raise OpError(f"в «Сейчас» уже {_NOW_WORD.get(len(rows), len(rows))} дел: {names} — сначала убери одно")
 
 
+# ── Дела внутри дела (15.10.2026) ───────────────────────────────────────
+# Владелец: «Пишу „до этого надо из расшифровки встречи набросать драфт“ в „Что поправить в этом деле“ — он добавляет
+# в комментарии вместо того, чтобы сделать новое дело… Под делом должно быть „до этого“ / „для этого“ / „поправить это
+# дело“ — и в карточке, и в списке. И тогда дело ставится на сегодня и т. д. — оно связывается с этим делом»; вечером —
+# «вложенность одного в другое и показывать тоже в дереве», «это не отдельная сущность, а обычные дела, вложенные в
+# дело». Вложенное дело — обычное дело, у которого «Зачем» (why_id) — другое дело (не цель): свои поля, карточка, свои
+# вложенные, «Сейчас», напоминание. Порядок среди соседей — pos (dela_0024), петли и чужие дела не пускает база
+# (tasks.krug_rules). Одно правило в трёх местах: здесь (ask.py — строка Claude «Для этого», и она же без ключа Claude;
+# подъём родителя — _nest_rise), веб (stepDue, stepChips, stepsFirst, nestTree в app.js) и телефон (core/DelaSteps.kt).
+
+
+def _day(v) -> dt.date | None:
+    if isinstance(v, dt.datetime):
+        return v.date()
+    if isinstance(v, dt.date):
+        return v
+    try:
+        return dt.date.fromisoformat(str(v)[:10]) if v else None
+    except ValueError:
+        return None
+
+
+def step_due(parent: dict, today: dt.date) -> dt.date | None:
+    """Срок шага, когда его не назвали: дело в «Сейчас», просрочено или на сегодня — сегодня (до него надо успеть);
+    на будущую дату — тот же срок; без срока — без срока. Названный срок сильнее; «Сейчас» шагу — только если сказал."""
+    due = _day(parent.get("due_date"))
+    if _day(parent.get("focus_on")) == today or (due and due <= today):
+        return today
+    return due
+
+
+def step_of(parent: dict, user: str, today: dt.date) -> dict:
+    """Что новый шаг берёт от дела [parent]: «Зачем» — само дело (только хозяину: правило базы «„зачем“ — только своё
+    дело», Круг личный), проект, сделку и человека (у цели их нет — она живёт без проекта) и срок (step_due)."""
+    out: dict = {}
+    if not parent.get("goal"):
+        for k in ("project_id", "deal_id", "person_id"):
+            if parent.get(k):
+                out[k] = str(parent[k])
+    if parent.get("owner_id") == user:
+        out["why_id"] = str(parent["id"])
+    due = step_due(parent, today)
+    if due:
+        out["due_date"] = due.isoformat()
+    return out
+
+
+def _nest_rise(conn, before: dict, after: dict) -> dict | None:
+    """Сделано последнее открытое дело внутри — родитель НЕ закрывается сам (владелец 15.10.2026), а поднимается: без
+    срока или со сроком позже — на сегодня (просроченное и сегодняшнее остаются как есть). Родитель — открытое дело, не
+    цель (у цели свои правила, она живёт в дереве). Ответ — что поднялось, для тоста «всё внутри сделано — теперь: …».
+    Правку пишет тот же человек той же операцией: родитель — его дело («зачем» — только своё, правило базы)."""
+    if (before.get("status") or "open") == "done" or after.get("status") != "done" or not after.get("why_id"):
+        return None
+    p = conn.execute("SELECT * FROM tasks.v_tasks WHERE id = %s", (after["why_id"],)).fetchone()
+    if not p or p["goal"] or p["status"] != "open" or p["steps_open"]:
+        return None
+    today = conn.execute("SELECT crm.today() AS d").fetchone()["d"]
+    moved = p["due_date"] is None or p["due_date"] > today
+    if moved:
+        _update(conn, "tasks.tasks", {"id": p["id"]}, {"due_date": today})
+    return {"id": str(p["id"]), "num": p["num"], "title": p["title"], "moved": moved,
+            "due_date": (today if moved else p["due_date"]).isoformat()}
+
+
 # ── Операции ────────────────────────────────────────────────────────────
 
 
@@ -481,7 +549,9 @@ def op_task_set(conn, user, op):
         raise OpError("это дело можно только смотреть")
     if kr:
         _krug_write(conn, user, "task", row, kr)
-    return {"task": _full(conn, row["id"]), "conflicts": conflicts}
+    full = _full(conn, row["id"])
+    raised = _nest_rise(conn, cur, full)
+    return {"task": full, "conflicts": conflicts, **({"raised": raised} if raised else {})}
 
 
 def _status(status):

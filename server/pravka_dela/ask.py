@@ -66,6 +66,17 @@ Claude видит только это дело: поля, заметку цел�
 (changes, create, card), новое дело ложится рядом — тот же проект, сделка и цель. «Кстати» (scope.kstati) — та же
 строка вдогонку: Claude сам решает, уточнить ли это дело, завести ли рядом новое или записать факт клиенту.
 Модель и глубина — дорога TASK_ROUTE (llm.ROUTES, Свод models.dela): одно место, а не по коду.
+
+Шаг для дела (15.10.2026). Владелец: «Пишу „до этого надо из расшифровки встречи набросать драфт“ в „Что поправить в
+этом деле“ — он добавляет в комментарии вместо того, чтобы сделать новое дело. Нажимаю „Кстати“ — всё равно в
+комментарий… под делом должно быть „до этого“ / „для этого“ / „поправить это дело“». «До этого / сначала / для этого
+надо X» — новое дело create со step: true, а не notes_add: шаг связывается с делом («Зачем» — само дело, только
+хозяину), берёт его проект, сделку и человека и срок по правилу store.step_due. «Для этого» (scope.step) — свой режим
+строки карточки и строки дела в списках: всё названное — шаги, само дело не меняется; без ключа Claude — шаг названием,
+как сказано (правило то же). О них reply пишет сервер одной строкой («Завёл для «…»: «…», на сегодня»); сделано
+последнее дело внутри — родитель поднимается (store._nest_rise), и reply говорит «всё внутри сделано — теперь: «…»».
+Вложить уже существующее дело — into у changes («положи это в дело про термшит»; -1 — вынуть), в карточке дела Claude
+для этого видит и остальные свои открытые дела одной строкой.
 """
 
 from __future__ import annotations
@@ -176,6 +187,9 @@ changes — правки дел на экране, по одной записи 
   notes_add — что дописать к заметке дела: подробности, цифры, условия — коротко, его словами.
   estimate_min — оценка в минутах; -1 — убрать оценку.
   labels_add, labels_remove — метки только из справочника.
+  into — вложить дело в другое дело (оно станет делом внутри него): номер того дела — с экрана, из ДРУГИХ или из
+    карточки; -1 — вынуть из дела, внутри которого оно лежит; 0 — не трогать. «Положи это в дело про термшит», «это
+    часть того дела», «это для дела X» — into; «вынь его оттуда», «это само по себе» — -1.
   status — "done": сделано; "cancelled": не нужно, отменить; "open": вернуть в работу.
   remind_at — когда напомнить Саше в Telegram, «ГГГГ-ММ-ДД ЧЧ:ММ» по местному времени; «-» —
     убрать напоминание. remind_place — напомнить по приезду: ровно имя из МЕСТ ниже; «-» — убрать.
@@ -183,6 +197,7 @@ changes — правки дел на экране, по одной записи 
     НАПОМИНАНИЕ ниже; «ещё раз через час» — от времени «сейчас» в сообщении.
 create — новые дела, только если Саша прямо просит завести их внутри правки. Поля — как у changes
   (title обязателен; due, now, project, person, ball, notes_add — заметка нового дела).
+  step — true только в КАРТОЧКЕ ДЕЛА: новое дело — шаг к этому делу (раздел ниже); иначе false.
 reply — одна-две фразы Саше: что сделал — только то, что есть в changes, create, suggestions и card;
   чего там нет, того ты не сделал, и «добавил» про это не пиши. Чего не понял или не нашёл — скажи прямо,
   назвав дела, о которых думал. Дела — названием: номеров Саша не видит. Без вступлений. Нужен ответ
@@ -241,14 +256,24 @@ card — правки людей, сделок и хронологии, по з�
 «Сейчас» (now "on") — не больше пяти дел на сегодня: их Саша обязан сделать. Уже пять — скажи в reply.
 
 КАРТОЧКА ДЕЛА — если в сообщении раздел «КАРТОЧКА ДЕЛА»: Саша открыл одно дело и говорит про него («это»,
-«его», «перенеси» — оно). Других дел ты не видишь — и не трогай. Правки — в changes, num — его номер. Новое дело
-рядом с ним — create: проект, сделка и цель возьмутся от этого дела сами (project — только если Саша назвал
-другой). Что произошло у клиента или по сделке этого дела (звонок, договорились, новость) — card do "note"
-с пустыми name и org: запишется к ним. route — всегда "edit".
+«его», «перенеси» — оно). Правки — в changes, num — его номер. ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА — только чтобы
+вложить это дело в одно из них (into) или назвать в ответе: их самих не правь.
+ШАГ К ЭТОМУ ДЕЛУ — то, что надо сделать до него или для него: «до этого надо…», «сначала…», «перед этим…», «для
+этого…», «чтобы это сделать, надо…». Это новое дело — create с step true, а НЕ notes_add и не правка этого дела
+(его не меняй). Шаг сам свяжется с этим делом и возьмёт его проект, сделку, человека и срок: project, person и due
+у шага — только если Саша назвал их для шага; now — только если сказал «в сейчас». notes_add — только уточнение
+самого дела: подробности, цифры, условия. Другое новое дело рядом, не шаг к этому, — create с step false: проект,
+сделка и цель возьмутся от этого дела сами (project — только если Саша назвал другой). Что произошло у клиента или
+по сделке этого дела (звонок, договорились, новость) — card do "note" с пустыми name и org: запишется к ним.
+route — всегда "edit". Шаги в reply не называй — строку о них сервер добавит сам.
 КСТАТИ — если перед командой пометка «КСТАТИ»: Саша вдогонку говорит мысль к этому делу. Реши сам, что это, и
 сделай, не переспрашивая без нужды: уточнение самого дела — notes_add его словами (и срок, человек, название,
-если сказаны); отдельное действие — create рядом; что уже произошло у клиента — card do "note". Бывает и
-несколько сразу. В reply — одной фразой, что куда положил.
+если сказаны); что надо сделать до него или для него — шаг (create, step true); отдельное действие — create рядом
+(step false); что уже произошло у клиента — card do "note". Бывает и несколько сразу. В reply — одной фразой, что
+куда положил (кроме шагов).
+ДЛЯ ЭТОГО — если перед командой пометка «ДЛЯ ЭТОГО»: Саша называет одно или несколько действий, которые надо
+сделать для этого дела. Каждое — отдельный create с step true, title — его словами («Кто: действие»; мяч у Саши —
+сразу с действия), по порядку, как сказаны. Само дело не меняй: changes и card пустые.
 
 ПРАВИЛА
 — Меняй только то, что сказано. Не выдумывай сроки, людей и проекты.
@@ -276,8 +301,9 @@ _ITEM = {
         "labels_add": {"type": "array", "items": {"type": "string"}},
         "labels_remove": {"type": "array", "items": {"type": "string"}},
         "status": {"type": "string", "enum": ["", "done", "cancelled", "open"]},
+        "into": {"type": "integer"},  # 15.10.2026: вложить в дело №, -1 — вынуть (why_id)
     },
-    "required": ["num", *_TEXT_FIELDS, "ball", "now", "estimate_min", "labels_add", "labels_remove", "status"],
+    "required": ["num", *_TEXT_FIELDS, "ball", "now", "estimate_min", "labels_add", "labels_remove", "status", "into"],
     "additionalProperties": False,
 }
 # Решение по предложению «Нового»: правки — те же поля, что у changes, только нужные при принятии.
@@ -297,11 +323,12 @@ _SUG = {
 }
 # Новые дела внутри правки — только нужные поля: каждое поле схемы растит грамматику ответа, а у неё
 # предел (06.10.2026: с карточкой полный набор полей у create не прошёл — «compiled grammar is too large»).
+# step (15.10.2026) — шаг к делу карточки: одно булево поле сверх предела 52 (проба на API — test_schema_fits_grammar).
 _CREATE = {
     "type": "object",
     "properties": {**{k: {"type": "string"} for k in ["title", "notes_add", "project", "person", "due"]},
-                   "ball": _ITEM["properties"]["ball"], "now": _ITEM["properties"]["now"]},
-    "required": ["title", "notes_add", "project", "person", "due", "ball", "now"],
+                   "ball": _ITEM["properties"]["ball"], "now": _ITEM["properties"]["now"], "step": {"type": "boolean"}},
+    "required": ["title", "notes_add", "project", "person", "due", "ball", "now", "step"],
     "additionalProperties": False,
 }
 # Карточка (06.10.2026): хронология, люди, сделки — одним массивом и без перечислений, по той же причине.
@@ -864,12 +891,18 @@ _wire = store.jsonable  # значение поля так, как его шлё
 
 
 def to_ops(data: dict, tasks: dict, index: dict, today: dt.date, defaults: dict,
-           now_ids: set[str] | None = None) -> tuple[list[dict], list[dict], list[str]]:
-    """Ответ Claude → операции Дел, «как было» для отмены и чего не получилось.
+           now_ids: set[str] | None = None, step: dict | None = None,
+           pool: dict | None = None) -> tuple[list[dict], list[dict], list[str], list[int]]:
+    """Ответ Claude → операции Дел, «как было» для отмены, чего не получилось и какие из операций — шаги.
 
     now_ids — дела, уже стоящие в «Сейчас»: больше NOW_MAX туда не встанет (None — без счёта).
+    step — карточка дела (15.10.2026): {"near": store.step_of, "only": режим «Для этого»}; create со step: true (а в
+    режиме «Для этого» — любой) — шаг к этому делу: «Зачем», проект, сделка, человек и срок — от него, если Саша не
+    назвал своих. Последнее в ответе — номера операций-шагов (для строки reply).
+    pool — дела, в которые можно вложить (into): по умолчанию те же tasks; в карточке дела — и все свои открытые.
     """
-    ops, undo, miss = [], [], []
+    pool = pool if pool is not None else tasks
+    ops, undo, miss, steps = [], [], [], []
     seen = set()
     room = None
     if now_ids is not None:
@@ -894,6 +927,17 @@ def to_ops(data: dict, tasks: dict, index: dict, today: dt.date, defaults: dict,
         seen.add(t["id"])
         set_, why = _fields(x, t, index, today)
         miss += [f"«{t['title']}»: не нашёл {w}" for w in why]
+        into = int(x.get("into") or 0)
+        if into < 0:  # вынуть из дела (15.10.2026): «Зачем» снимается — дело само по себе
+            set_["why_id"] = None
+        elif into:
+            p = pool.get(into)
+            if not p:
+                miss.append(f"«{t['title']}»: не нашёл дело, куда вложить")
+            elif str(p["id"]) == str(t["id"]):
+                miss.append(f"«{t['title']}»: в самого себя не вложить")
+            else:
+                set_["why_id"] = str(p["id"])
         set_ = {k: v for k, v in set_.items() if _wire(t.get(k)) != v and not (t.get(k) in (None, [], "") and v in (None, [], ""))}
         if set_.get("focus_on") and not fits(str(t["id"])):
             del set_["focus_on"]
@@ -914,22 +958,38 @@ def to_ops(data: dict, tasks: dict, index: dict, today: dt.date, defaults: dict,
         set_, why = _fields(x, None, index, today)
         miss += [f"«{x['title']}»: не нашёл {w}" for w in why]
         task = {**{k: v for k, v in set_.items() if v is not None}, "title": x["title"].strip(), "source": "web"}
-        for k in ("project_id", "person_id"):
-            if k not in task and defaults.get(k) and not (k == "project_id" and (x.get("project") or "").strip() == "-"):
-                task[k] = defaults[k]
-        # На странице сделки новое дело — её следующий шаг, если проект тот же.
-        if defaults.get("deal_id") and "deal_id" not in task and task.get("project_id") == defaults.get("project_id"):
-            task["deal_id"] = defaults["deal_id"]
-        # Из карточки дела новое ложится рядом — к той же цели дерева (у цели — её шагом).
-        if defaults.get("why_id"):
-            task["why_id"] = defaults["why_id"]
+        said = lambda k: (x.get(k) or "").strip()  # noqa: E731
+        if step and (x.get("step") or step.get("only")):
+            # Шаг к делу карточки (15.10.2026): названное Сашей сильнее, остальное — от дела; «-» — не брать.
+            near = step.get("near") or {}
+            if said("project") != "-" and "project_id" not in task and near.get("project_id"):
+                task["project_id"] = near["project_id"]
+            if "deal_id" not in task and near.get("deal_id") and task.get("project_id") == near.get("project_id"):
+                task["deal_id"] = near["deal_id"]
+            if said("person") != "-" and "person_id" not in task and near.get("person_id"):
+                task["person_id"] = near["person_id"]
+            if not said("due") and near.get("due_date"):
+                task["due_date"] = near["due_date"]
+            if near.get("why_id"):
+                task["why_id"] = near["why_id"]
+            steps.append(len(ops))
+        else:
+            for k in ("project_id", "person_id"):
+                if k not in task and defaults.get(k) and not (k == "project_id" and said("project") == "-"):
+                    task[k] = defaults[k]
+            # На странице сделки новое дело — её следующий шаг, если проект тот же.
+            if defaults.get("deal_id") and "deal_id" not in task and task.get("project_id") == defaults.get("project_id"):
+                task["deal_id"] = defaults["deal_id"]
+            # Из карточки дела новое ложится рядом — к той же цели дерева (у цели — её шагом).
+            if defaults.get("why_id"):
+                task["why_id"] = defaults["why_id"]
         if task.get("ball") in ("waiting", "agenda") and not task.get("person_id"):
             task["ball"] = "mine"
         if task.get("focus_on") and not fits(None):
             del task["focus_on"]
             miss.append(f"«{task['title']}»: в «Сейчас» уже {NOW_MAX} — завёл без него")
         ops.append({"op": "task.create", "task": task})
-    return ops, undo, miss
+    return ops, undo, miss, steps
 
 
 def _person_ref(conn, index: dict, name: str) -> dict | None:
@@ -1551,22 +1611,66 @@ def _task_context(url: str, user: str, text: str, scope: dict) -> dict:
         index["places"] = places = remind.places_of(conn, user)
         hm = conn.execute("SELECT to_char(now() AT TIME ZONE 'Europe/Moscow', 'HH24:MI') AS hm").fetchone()["hm"]
         lines, card, near = _task_card(conn, url, user, t, today)
+        # Остальные свои открытые — одной строкой (15.10.2026): «положи это в дело про термшит» — Claude должен найти,
+        # куда вложить (into). Править их отсюда нельзя: в tasks только это дело.
+        others = conn.execute(
+            "SELECT * FROM tasks.v_tasks WHERE owner_id = %s AND status = 'open' AND id <> %s "
+            "ORDER BY project_name NULLS FIRST, due_date NULLS LAST, num LIMIT %s", (user, t["id"], MAX_OTHER)).fetchall()
     model, effort = llm.route(url, TASK_ROUTE)
     msg = ["Календарь: " + _calendar(today), "Страница: карточка дела"]
     if me and not me["owner"]:
         msg.append(f"Команду даёт не Саша, а {me['name']}: «Саша» и mine выше — про этого человека.")
     msg += ["", *lines]
+    if others:
+        msg += ["", f"ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА ({len(others)}) — только чтобы вложить это дело (into), не правь их:"]
+        group = object()
+        for r in others:
+            if r["project_name"] != group:
+                group = r["project_name"]
+                msg.append(f"{group or 'Входящие'}:")
+            msg.append(_task_line(r, today, short=True))
     screen = _snapshot(user, scope.get("talk_id"), "\n".join(msg))
     tail = [f"Сегодня {today.isoformat()}, {WD[today.weekday()]}, сейчас {hm}.", f"В «Сейчас» сегодня: {len(now_ids)} из {NOW_MAX}."]
     if talk:
         tail += ["", "РАЗГОВОР — команда ниже его продолжение (старое сверху; сделанное уже применено):", *talk]
-    tail += ["", ("КСТАТИ — Саша вдогонку к этому делу: " if scope.get("kstati") else "КОМАНДА: ") + text]
+    head = ("ДЛЯ ЭТОГО — Саша называет, что сделать для этого дела: " if scope.get("step")
+            else "КСТАТИ — Саша вдогонку к этому делу: " if scope.get("kstati") else "КОМАНДА: ")
+    tail += ["", head + text]
     system = (SYSTEM.replace("{REMIND}", remind_rules(url)).replace("{CATALOG}", cat)
               .replace("{PLACES}", remind.places_block(places)))
+    # Шаг к этому делу (15.10.2026): что он берёт от дела — одно правило store.step_of (веб и телефон — так же).
+    step = {"parent": t, "near": store.step_of(t, user, today), "only": bool(scope.get("step"))}
     return {"text": text, "system": system, "message": screen + "\n\n" + "\n".join(tail), "screen": screen,
             "tail": "\n".join(tail), "model": model, "effort": effort,
             "tasks": {t["num"]: t}, "focused": t, "sugs": {}, "targets": {}, "index": index, "today": today,
-            "card": card, "now_ids": now_ids, "near": near}
+            "card": card, "now_ids": now_ids, "near": near, "step": step, "pool": {**{r["num"]: r for r in others}, t["num"]: t}}
+
+
+def _when_words(due, today: dt.date) -> str:
+    """Срок шага словами для reply: «на сегодня», «на завтра», «на 17.10», «без срока»."""
+    d = store._day(due)
+    if not d:
+        return "без срока"
+    return "на сегодня" if d == today else "на завтра" if d == today + dt.timedelta(days=1) else "на " + d.strftime("%d.%m")
+
+
+def steps_said(parent: dict, made: list[dict], today: dt.date) -> str:
+    """Строка reply о делах, заведённых внутри этого (сервер пишет её сам, Claude их в reply не называет): «Завёл для
+    «…»: «…», на сегодня». «Шаг» — не имя сущности (владелец 15.10.2026: это обычные дела внутри дела). Не вложилось
+    (дело чужое — «Зачем» ставит только хозяин) — честно: заведено отдельным делом."""
+    if not made:
+        return ""
+    bits = "; ".join(f"«{x['title']}», {_when_words(x.get('due_date'), today)}"
+                     + (", в «Сейчас»" if store._day(x.get("focus_on")) == today else "") for x in made)
+    if all(str(x.get("why_id") or "") == str(parent["id"]) for x in made):
+        return f"Завёл для «{parent['title']}»: {bits}."
+    return f"Завёл {bits} — отдельно: вложить в «{parent['title']}» может только его хозяин."
+
+
+def raised_said(raised: list[dict]) -> str:
+    """Сделано последнее дело внутри — родитель поднялся (store._nest_rise): «Всё внутри сделано — теперь: «…»»."""
+    return " ".join(f"Всё внутри сделано — теперь: «{r['title']}»" + (", на сегодня" if r.get("moved") else "") + "."
+                    for r in raised)
 
 
 def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None,
@@ -1577,24 +1681,40 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
     text, model, effort = ctx["text"], ctx["model"], ctx["effort"]
     tasks, focused, sugs, targets = ctx["tasks"], ctx["focused"], ctx["sugs"], ctx["targets"]
     index, today, card, now_ids = ctx["index"], ctx["today"], ctx["card"], ctx["now_ids"]
+    step = ctx.get("step")  # карточка дела: шаг к ней (15.10.2026)
+    only = bool(step and step["only"])
+    plain_title = " ".join(text.split())[:500]
+    plain = False
     if ask_fn is None:
-        if not key:
+        if not key and only:
+            # «Для этого» без ключа Claude: шаг названием, как сказано, — то же правило связи и срока (store.step_of).
+            plain = True
+            ask_fn = lambda s, u: {"route": "edit", "reply": "", "changes": [], "create": [{"title": plain_title, "step": True}]}  # noqa: E731
+        elif not key:
             raise AskError("Claude не настроен: нет ключа в dela.env")
-        # Защита от петли (аудит №12, guard.py): задача — ask или task (карточка дела); стоит — ошибка словами.
-        cl = guard.client(url, key, proxy, "task" if scope.get("card") == "task" else "ask")
-        ask_fn = lambda s, u: ask(cl, s, ctx["tail"], model, effort, prefix=ctx["screen"])  # noqa: E731
+        else:
+            # Защита от петли (аудит №12, guard.py): задача — ask или task (карточка дела); стоит — ошибка словами.
+            cl = guard.client(url, key, proxy, "task" if scope.get("card") == "task" else "ask")
+            ask_fn = lambda s, u: ask(cl, s, ctx["tail"], model, effort, prefix=ctx["screen"])  # noqa: E731
     try:
         data = ask_fn(ctx["system"], ctx["message"])
     except AskError as e:  # ответ оплачен, но не годится — траты всё равно в книгу
         llm.account_failed(url, "task" if scope.get("card") == "task" else "ask", e, model)
         raise
+    if only:
+        # «Для этого»: само дело не меняется — только шаги; Claude ничего не завёл — шаг названием, как сказано (поле
+        # «Для этого» без шага — ровно жалоба владельца 15.10.2026: «добавляет в комментарии вместо нового дела»).
+        data["changes"], data["card"], data["suggestions"] = [], [], []
+        if not any((x.get("title") or "").strip() for x in data.get("create") or []):
+            data["create"] = [{"title": plain_title, "step": True}]
     if data.get("card"):
         for k, v in split_card(data["card"]).items():
             data[k] = (data.get(k) or []) + v
     usage = data.get("_usage")
     in_task = scope.get("card") == "task"
-    llm.account(url, "task" if in_task else "ask", llm.cost(usage, model, url), (usage or {}).get("model") or model,
-                usage=usage)
+    if not plain:
+        llm.account(url, "task" if in_task else "ask", llm.cost(usage, model, url), (usage or {}).get("model") or model,
+                    usage=usage)
     defaults = {k: scope[k] for k in ("project_id", "person_id", "deal_id") if scope.get(k)}
     if card and card["kind"] == "deal":
         defaults["project_id"] = str(card["deal"]["project_id"])
@@ -1614,7 +1734,7 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
                 out["tasks"] = [byid.get(str(t["id"]), t) for t in out["tasks"]]
         return {"route": "new", "reply": "", "changed": [], "decided": [], "crm": [], **out, "usage": usage}
     sops, plan, smiss = sug_ops(data, sugs, targets, index, today)
-    tops, undo, miss = to_ops(data, tasks, index, today, defaults, now_ids)
+    tops, undo, miss, step_at = to_ops(data, tasks, index, today, defaults, now_ids, step=step, pool=ctx.get("pool"))
     with db.session(url, user, via="ask") as conn:
         cops, cplan, cmiss = card_ops(conn, data, card, index, today)
     ops = sops + tops + cops
@@ -1632,6 +1752,12 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
         t = tasks.get(n)
         if t and str(t["id"]) not in {r["id"] for r in refs}:
             refs.append({"id": str(t["id"]), "num": t["num"], "title": t["title"]})
-    return {"route": "edit", "reply": (data.get("reply") or "").strip(), "changed": undo, "tasks": created, "decided": done,
+    # Шаги и поднятые дела — строкой сервера (15.10.2026): Claude шагов в reply не называет, срок считает сервер.
+    made = [r["task"] for r in (results[len(sops) + i] for i in step_at) if r.get("ok") and r.get("task")]
+    raised = [r["raised"] for r in results if r.get("ok") and r.get("raised")]
+    # «Для этого»: строка сервера и есть ответ — «Готово.» модели к ней ничего не добавляет (проба 15.10.2026).
+    said = (data.get("reply") or "").strip() if not (only and made) else ""
+    reply = " ".join(x for x in [steps_said(step["parent"], made, today) if step else "", raised_said(raised), said] if x)
+    return {"route": "edit", "reply": reply, "changed": undo, "tasks": created, "decided": done,
             "crm": crm_done, "notes": [], "errors": errors + smiss + miss + cmiss, "usage": usage, "refs": refs[:MAX_REFS],
-            "model": (usage or {}).get("model") or model}
+            "model": (usage or {}).get("model") or model, "steps": [str(x["id"]) for x in made], "raised": raised}

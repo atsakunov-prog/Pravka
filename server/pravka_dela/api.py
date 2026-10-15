@@ -19,7 +19,7 @@
 | GET  /api/task/<id или номер> | дело с комментариями, журналом и откуда оно (origin) |
 | POST /api/parse | {"text", "project_id"?, "person_id"?} — Claude режет текст на дела и заводит их; ответ — номер задания |
 | GET  /api/parse/<номер> | run, пока думает; потом done с делами и заметками или error |
-| POST /api/ask | {"text", "scope": {"title", "task_ids", "visible_ids"?, "selected_ids"?, "open"?, "deal_ids"?, "visible_deal_ids"?, "focus"?, "project_id"?, "person_id"?, "deal_id"?, "card"?, "kstati"?, "suggestion_ids"?, "history"?}} — Claude правит дела словами: видит страницу (что в окне, что выбрано, что открыто) и все свои открытые дела коротко, в «Новом» — и решает предложения на экране, в карточке (card: client, person, deal) — и её хронологию, людей, сделки; в карточке дела (card: task, open) — только это дело, kstati — мысль вдогонку к нему; history — разговор в окне ответа (ask.py); ответ — номер задания |
+| POST /api/ask | {"text", "scope": {"title", "task_ids", "visible_ids"?, "selected_ids"?, "open"?, "deal_ids"?, "visible_deal_ids"?, "focus"?, "project_id"?, "person_id"?, "deal_id"?, "card"?, "kstati"?, "step"?, "suggestion_ids"?, "history"?}} — Claude правит дела словами: видит страницу (что в окне, что выбрано, что открыто) и все свои открытые дела коротко, в «Новом» — и решает предложения на экране, в карточке (card: client, person, deal) — и её хронологию, людей, сделки; в карточке дела (card: task, open) — это дело (остальные свои открытые — только чтобы вложить его, into), kstati — мысль вдогонку к нему, step — «Для этого»: всё сказанное — новые дела внутри него (без ключа Claude — одно, названием как сказано); history — разговор в окне ответа (ask.py); ответ — номер задания |
 | GET  /api/ask/<номер> | как у разбора; done — что поменялось (changed: как было и стало), новые дела, решения по «Новому» (decided), ответ Claude |
 | GET  /api/reminders/due | только бот Ковчега: напоминания, которым пора в Telegram (remind.py) |
 | POST /api/reminders/act | только бот Ковчега: {"telegram_id", "num", "action": done, snooze, tomorrow, "minutes"?} — кнопка под напоминанием от имени нажавшего |
@@ -479,14 +479,15 @@ def build(cfg: Config) -> Starlette:
             return _err("ожидается JSON {\"text\": ..., \"scope\": ...}", 400)
         if not text:
             return _err("пусто — скажи, что сделать", 422)
-        if not cfg.anthropic_key:
+        raw = body.get("scope") if isinstance(body.get("scope"), dict) else {}
+        # «Для этого» (15.10.2026) работает и без ключа: дело внутри заводится названием, как сказано (ask.run).
+        if not cfg.anthropic_key and not (raw.get("card") == "task" and raw.get("step")):
             return _err("Claude не настроен: нет ключа в dela.env", 422)
         # Суточный предел не-владельцу (аудит №12): 40 правок словами в сутки по Москве.
         try:
             await anyio.to_thread.run_sync(claude_guard.quota, url, who.user, "ask")
         except claude_guard.OverQuota as e:
             return _err(str(e), 429)
-        raw = body.get("scope") or {}
         scope: dict = {"title": str(raw.get("title") or "")[:200]}
         try:
             for k in ("task_ids", "visible_ids", "selected_ids"):  # экран: дела страницы, в окне, выбранные
@@ -506,6 +507,9 @@ def build(cfg: Config) -> Starlette:
             if not scope.get("open"):
                 return _err("scope: карточке дела нужен open — id дела", 400)
             scope.update(card="task", kstati=bool(raw.get("kstati")))
+            # «Для этого» (15.10.2026): всё сказанное — новые дела внутри этого, само дело не меняется.
+            if raw.get("step"):
+                scope["step"] = True
         # Разговор в окне ответа (09.10.2026): веб шлёт его с каждой репликой, а сюда он не доходил — Claude не видел,
         # о чём спрашивал (13.10.2026). Только строки: что сказал, что ответил, что сделано (ask._history режет длину).
         # Разговор под строкой (13.10.2026): его номер — экран разговора один на все реплики (кэш, ask._snapshot).

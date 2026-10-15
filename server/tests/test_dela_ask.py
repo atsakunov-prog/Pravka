@@ -19,7 +19,7 @@ from test_dela_schema import db_today, dela, project  # noqa: F401
 def item(num, **kw):
     """Запись правки, как её вернёт Claude: всё пусто, кроме сказанного."""
     base = {"num": num, "title": "", "notes_add": "", "project": "", "deal": "", "person": "", "due": "", "due_time": "",
-            "ball": "", "now": "", "estimate_min": 0, "labels_add": [], "labels_remove": [], "status": ""}
+            "ball": "", "now": "", "estimate_min": 0, "labels_add": [], "labels_remove": [], "status": "", "into": 0}
     return {**base, **kw}
 
 

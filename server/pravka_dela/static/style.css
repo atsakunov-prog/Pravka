@@ -1565,3 +1565,37 @@ a.pt-row:hover { color: var(--accent); text-decoration: none; }
   .ph-row { padding: 10px 14px; }
   .ph-ctl { justify-content: flex-start; }
 }
+
+/* ── Дела внутри дела (15.10.2026): «Для этого» у строки и в карточке, «Внутри», «для: …», «Деревом» ── */
+.task .lead { gap: 2px; }
+.step-btn .kv-i { width: 17px; height: 17px; }
+.task > .fold-btn { order: -1; margin: -2px -6px 0 -6px; }
+.chips .for, .chips .first { color: var(--muted); }
+.chips .first { font-style: italic; }
+.for-line { margin: -2px 2px 8px; font-size: 13.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.for-line > * { display: inline; }
+.for-line .link { color: var(--accent); }
+.for-line .link-btn { font-size: 13px; margin-left: 8px; padding: 0; }
+.card-say.step-on .quick-box { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.inside-box { margin: 10px 0 12px; padding: 8px 12px 10px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line-soft); }
+.inside-box .place-h .n { margin-left: 6px; font-weight: 400; }
+.in-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; min-width: 0; }
+.in-row + .in-row { border-top: 1px solid var(--line-soft); }
+.in-row .tick { margin-top: 0; }
+.in-row .in-t { flex: 1; min-width: 0; color: var(--text); text-decoration: none; overflow-wrap: anywhere; font-size: 14.5px; }
+.in-row .in-t:hover { color: var(--accent); }
+.in-row.next .in-t { font-weight: 600; }
+.in-row .in-due { flex: none; font-size: 12.5px; color: var(--faint); }
+.in-row .in-due.today { color: var(--accent); }
+.in-row .in-due.late { color: var(--bad); }
+.in-move { flex: none; display: inline-flex; gap: 2px; }
+.in-move .icon-btn { width: 26px; height: 26px; }
+.in-move .icon-btn:disabled { opacity: .3; }
+.in-done { font-size: 12.5px; margin-top: 4px; }
+.step-pop { width: min(380px, calc(100vw - 16px)); }
+.pop .step-q { display: block; resize: vertical; min-height: 44px; line-height: 1.4; }
+.step-pop .step-acts { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 2px 4px; }
+.pop .step-acts button { width: auto; justify-content: center; padding: 4px 10px; font-size: 13px; }
+.step-status { padding: 2px 6px; font-size: 13px; }
+.nest-tree .task.step .title::before { content: none; }
+@media (hover: none) { .step-btn { opacity: .55; } }

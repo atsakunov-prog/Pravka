@@ -26,6 +26,7 @@ const S = {
   krug: { dirs: [], principles: [], proj: new Map() }, kpick: {}, // Круг жизни: направления и принципы (Свод), проекты в Круге; выбор в «Подскажи»
   treeMode: LS.get('treeMode', 'tree'), treeDir: LS.get('treeDir', null), treeF: null, // Дерево жизни: вид, направление, фильтры списка
   treeLevel: LS.get('treeLevel', null), // до какого уровня раскрыто дерево (кнопки 1–4, 0 — «Всё»)
+  allTree: LS.get('allTree', false), cardStep: false, // «Все дела» деревом; строка карточки в режиме «Для этого» (15.10.2026)
   renamed: new Map(), // id «Зачем» → старые названия (Свод zachem.renamed, 13.10.2026)
   merge: null, // «Это тот же, что…»: {from, to} — лист подтверждения слияния на странице человека (аудит №23)
 };
@@ -223,6 +224,51 @@ function belowOf(id) {
     for (const x of all()) if (x.why_id && below.has(x.why_id) && !below.has(x.id)) { below.add(x.id); grew = true; }
   }
   return below;
+}
+// ── Дела внутри дела (15.10.2026) ────────────────────────────────────────
+// Владелец: «до этого надо из расшифровки встречи набросать драфт… под делом должно быть „до этого“ / „для этого“ /
+// „поправить это дело“ — и в карточке, и в обычном списке»; вечером — «вложенность одного в другое и показывать тоже в
+// дереве»; «это не отдельная сущность, а обычные дела, вложенные в дело». Вложенное — обычное дело, у которого «Зачем»
+// (why_id) — другое дело, не цель: свои поля, карточка, свои вложенные. Порядок среди соседей — pos (dela_0024).
+// Одно правило с сервером (store.step_of, step_due, _nest_rise) и телефоном (core/DelaSteps.kt). «Зачем» видит только
+// хозяин дела — у команды дела внутри стоят плоско, обычными делами.
+const nestOn = () => ((S.me && S.me.features) || []).includes('nest');
+/** Дело, внутри которого это дело (не цель: у цели своё «Зачем»). */
+const parentOf = (t) => { const p = t && t.why_id ? S.tasks.get(t.why_id) : null; return p && !p.goal ? p : null; };
+/** Место среди соседей: pos; пусто — после занумерованных, по времени заведения (как krug.tree и телефон). */
+const byPos = (a, b) => (a.pos == null) - (b.pos == null) || (a.pos || 0) - (b.pos || 0)
+  || (a.created_at || '').localeCompare(b.created_at || '') || a.num - b.num;
+/** Открытые дела внутри — по месту; первое — «следующее» («сначала: …» у родителя). */
+const insideOf = (id) => all().filter((x) => x.why_id === id && isOpen(x) && !x.goal).sort(byPos);
+/** Срок нового дела внутри, если его не назвали (store.step_due): родитель в «Сейчас», просрочен или на сегодня —
+ *  сегодня; позже — тот же; без срока — без срока. */
+const stepDue = (p) => (p.focus_on === S.today || (p.due_date && p.due_date <= S.today) ? S.today : p.due_date || null);
+const shortTitle = (s, n = 40) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+/** В одном плоском списке дело внутри — прямо перед своим родителем (вложенное вложенного — перед ним). */
+function stepsFirst(items) {
+  const ids = new Set(items.map((t) => t.id));
+  const under = (t) => t.why_id && t.why_id !== t.id && ids.has(t.why_id);
+  const kids = new Map();
+  for (const t of items) if (under(t)) { if (!kids.has(t.why_id)) kids.set(t.why_id, []); kids.get(t.why_id).push(t); }
+  if (!kids.size) return items;
+  const out = [], placed = new Set();
+  const place = (t) => { if (placed.has(t.id)) return; placed.add(t.id); for (const c of (kids.get(t.id) || []).sort(byPos)) place(c); out.push(t); };
+  for (const t of items) if (!under(t)) place(t);
+  for (const t of items) place(t); // круг «Зачем» (база его не пускает) — всё равно никого не теряем
+  return out;
+}
+/** «Деревом»: корни списка (их родителя в списке нет) и дети по месту. Только дела из самого списка. */
+function nestForest(items) {
+  const ids = new Set(items.map((t) => t.id));
+  const kids = new Map();
+  for (const t of items) if (t.why_id && t.why_id !== t.id && ids.has(t.why_id)) { if (!kids.has(t.why_id)) kids.set(t.why_id, []); kids.get(t.why_id).push(t); }
+  for (const v of kids.values()) v.sort(byPos);
+  const roots = items.filter((t) => !(t.why_id && t.why_id !== t.id && ids.has(t.why_id)));
+  // Круг «Зачем» внутри списка (не бывает — правило базы): без корня его дела пропали бы — показываем их корнями.
+  const shown = new Set();
+  const walk = (t) => { if (shown.has(t.id)) return; shown.add(t.id); (kids.get(t.id) || []).forEach(walk); };
+  roots.forEach(walk);
+  return { roots: [...roots, ...items.filter((t) => !shown.has(t.id))], kids };
 }
 /** Путь цели словами: «Здоровье › Еда › Белок 140+». */
 function goalPath(g) {
@@ -1710,18 +1756,28 @@ function renderMain(r) {
     const lv = levelsOf('all');
     const every = deeds().filter((t) => isMine(t) && inSphere(t) && (S.showDone || isOpen(t)));
     const items = picked(every, lv, S.pick.all);
+    // «Деревом» (15.10.2026, владелец: «вложенность одного в другое и показывать тоже в дереве»): группируются только
+    // корни, дела внутри идут за родителем отступом, куда бы их ни развели уровни (иначе время растащило бы их врозь).
+    const forest = S.allTree && nestOn() ? nestForest(items) : null;
+    const base = forest ? forest.roots : items;
     // «Просрочено» — сверху своей группой (13.10.2026): само оно ни в «Сейчас», ни в «Сегодня» не попадает и живёт
     // здесь; в уровнях ниже его уже нет. Строки — со всеми подписями: группа не названа уровнями.
-    const late = items.filter(isLate).sort(byTime);
-    const rest = items.filter((t) => !isLate(t));
+    const late = base.filter(isLate).sort(byTime);
+    const rest = base.filter((t) => !isLate(t));
     const tb = el('div', { class: 'toolbar' }, levelsBar(lv, setLevels('all')), sphereSel(), doneToggle(),
+      nestOn() ? el('button', { class: 'chip-btn' + (S.allTree ? ' on' : ''), 'aria-pressed': S.allTree ? 'true' : 'false',
+        title: 'Дела внутри дел — под родителем, отступом; перетащи дело на дело — положишь внутрь',
+        onclick: () => { S.allTree = !S.allTree; LS.set('allTree', S.allTree); render(); } }, 'Деревом') : null,
       el('button', { class: 'chip-btn', onclick: () => addFilter('all', lv, S.pick.all) }, 'Сохранить фильтр'));
-    return [head(VIEWS.all.title, [plural(items.filter(isOpen).length, 'открытое', 'открытых', 'открытых'),
-      late.length ? el('span', { class: 'late' }, 'просрочено ' + late.length) : null]),
-      el('div', { class: 'body' }, quickAdd({}), tb, pickBar(every, lv, S.pick.all, setPick('all')),
-        pickNote(items, S.pick.all, lv) || [
-          late.length ? lateBox(late) : null,
-          rest.length ? nested(rest, lv) : late.length ? null : el('div', { class: 'empty' }, 'Пусто.')])];
+    NEST = forest && forest.kids;
+    try {
+      return [head(VIEWS.all.title, [plural(items.filter(isOpen).length, 'открытое', 'открытых', 'открытых'),
+        items.filter(isLate).length ? el('span', { class: 'late' }, 'просрочено ' + items.filter(isLate).length) : null]),
+        el('div', { class: 'body' + (forest ? ' nest-tree' : '') }, quickAdd({}), tb, pickBar(every, lv, S.pick.all, setPick('all')),
+          pickNote(items, S.pick.all, lv) || [
+            late.length ? lateBox(late) : null,
+            rest.length ? nested(rest, lv) : late.length ? null : el('div', { class: 'empty' }, 'Пусто.')])];
+    } finally { NEST = null; }
   }
   return [head('Дела'), el('div', { class: 'body' })];
 }
@@ -1917,7 +1973,7 @@ function groupHead(tag, title, n, opts = {}) {
 function nested(items, levels, depth = 0) {
   items = [...items].sort(byTime);
   const lv = levels[depth];
-  if (!lv) return depth === 0 ? groupBox(null, items, {}, levels) : el('div', { class: 'rows' }, items.map((t) => taskRow(t, levels)));
+  if (!lv) return depth === 0 ? groupBox(null, items, {}, levels) : el('div', { class: 'rows' }, taskRows(items, levels));
   const buckets = new Map();
   for (const t of items) {
     const [key, title, opts] = levelKey(t, lv);
@@ -1946,7 +2002,26 @@ function groupBox(title, items, opts = {}, by) {
     opts.sum && !opts.act ? el('span', { class: 'sum' }, opts.sum) : null,
     opts.act ? el('span', { class: 'act' }, opts.act) : opts.late && items.length > 1 ? el('span', { class: 'act' },
       el('button', { class: 'chip-btn', onclick: (e) => reschedulePop(e.currentTarget, items.map((t) => t.id)) }, 'Перенести все')) : null) : null;
-  return el('div', { class: 'group' + (opts.cls ? ' ' + opts.cls : '') }, h, opts.before || null, items.map((t) => taskRow(t, by, opts.chips && opts.chips(t))));
+  return el('div', { class: 'group' + (opts.cls ? ' ' + opts.cls : '') }, h, opts.before || null, taskRows(items, by, opts.chips));
+}
+
+/** «Деревом» во «Всех делах» (15.10.2026): родитель → дела внутри него из того же списка — на время отрисовки вида. */
+let NEST = null;
+/** Строки дел одного списка. Плоско — дело внутри стоит прямо перед своим родителем («Сейчас», «Сегодня», группы);
+ *  «Деревом» — родитель, под ним отступом дела внутри по месту, плюсик сворачивает (помнит браузер). */
+function taskRows(items, by, chips) {
+  if (!NEST) return stepsFirst(items).map((t) => taskRow(t, by, chips && chips(t)));
+  const out = [];
+  const walk = (t, depth, seen) => {
+    const kids = (NEST.get(t.id) || []).filter((c) => !seen.has(c.id));
+    const open = !S.closed['nest:' + t.id];
+    const row = taskRow(t, by, chips && chips(t), { indent: depth || 0, nest: true,
+      fold: kids.length ? { open, toggle: () => { S.closed['nest:' + t.id] = open; LS.set('closed', S.closed); render(); } } : null });
+    out.push(dropTo(dragFrom(row, 'task', t.id), { nest: t.id }));
+    if (open) for (const c of kids) { seen.add(c.id); walk(c, depth + 1, seen); }
+  };
+  for (const t of items) walk(t, 0, new Set([t.id]));
+  return out;
 }
 
 /** «Сейчас» — не больше пяти: шестое не встаёт, пока не убрал одно (владелец, 06.10.2026). */
@@ -2000,10 +2075,12 @@ function taskRow(t, by, extra, opt = {}) {
   const rem = remindChip(t);
   if (rem) chips.push(m('remind', rem));
   // «Зачем» — одно (13.10.2026): цель, проект клиента или проект; нет — не тупик, а вопрос: щелчок — выбрать.
-  const z = zachemOf(t);
+  // Дело внутри другого дела (15.10.2026) — вместо «Зачем» подпись «для: <дело>» (stepChips ниже).
+  const par = parentOf(t);
+  const z = par ? null : zachemOf(t);
   if (opt.compact) {
     if (z) chips.push(zachemLink(z));
-  } else if (!grouped_('project') && !(opt.tree && z && z.kind === 'goal')
+  } else if (!par && !grouped_('project') && !(opt.tree && z && z.kind === 'goal')
     && !(route().kind === 'deal' && z && z.kind === 'deal') && !(route().kind === 'project' && z && z.kind === 'project')) {
     if (z) chips.push(zachemLink(z));
     else if (!t.goal) chips.push(el('button', { class: 'm noproj', title: 'Ради чего это дело — выбрать «Зачем»', onclick: (e) => { stop(e); zachemPop(e.currentTarget, [t.id]); } }, 'без «Зачем»'));
@@ -2015,8 +2092,10 @@ function taskRow(t, by, extra, opt = {}) {
     else if (!ks.length && isOpen(t)) chips.push(el('button', { class: 'm noproj nodir', title: 'Выбрать цель или направление', onclick: (e) => { stop(e); dirPop(e.currentTarget, t); } }, 'без направления'));
     const steps = isOpen(t) ? stepsOf(t.id).length : 0;
     if (t.goal) chips.push(m('goal', t.rhythm ? 'практика · ' + t.rhythm : steps ? 'цель · ' + plural(steps, 'шаг', 'шага', 'шагов') : 'цель'));
-    else if (steps) chips.push(m('goal', 'цель · ' + plural(steps, 'шаг', 'шага', 'шагов')));
   }
+  // Дела внутри дела (15.10.2026): «для: <дело>» у вложенного, «сначала: <первое открытое>» у родителя (до 15.10 у
+  // родителя было «цель · N шагов» — целью он не стал). В дереве вложенность видна отступом — подписи не нужны.
+  if (!opt.tree && !opt.nest) chips.push(...stepChips(t));
   // В короткой строке группа и человек — в самом названии («Кто: действие»), минуты и метки — в карточке.
   // «Отбить» — сколько ждут: «Гуркин ждёт 3 дн» (с того дня, как дело завели); «мониторить» — «жду Наташу 5 дн».
   const g = grpOf(t), name = who ? personName(who) : '';
@@ -2036,6 +2115,10 @@ function taskRow(t, by, extra, opt = {}) {
   if (extra) chips.push(...[].concat(extra).filter(Boolean));
   const pick = el('input', { type: 'checkbox', class: 'pick', title: 'Выбрать (Shift — диапазон)' });
   pick.checked = S.sel.has(t.id);
+  // «Деревом»: у родителя — плюсик свернуть/раскрыть, у остальных — пусто той же ширины (строки стоят ровно).
+  const fold = opt.fold ? el('button', { class: 'caret-btn fold-btn', title: opt.fold.open ? 'Свернуть дела внутри' : 'Раскрыть дела внутри',
+    'aria-expanded': opt.fold.open ? 'true' : 'false', onclick: (e) => { stop(e); opt.fold.toggle(); } }, caret(opt.fold.open))
+    : opt.nest ? el('span', { class: 'caret-btn fold-btn none', 'aria-hidden': 'true' }) : null;
   pick.addEventListener('click', (e) => { e.stopPropagation(); togglePick(t.id, e.shiftKey); });
   const row = el('div', {
     class: 'task ball-' + t.ball + ' grp-' + g + (opt.compact ? ' compact' : '') + (isOpen(t) ? '' : ' done') + (isNow(t) ? ' now' : '') + (isLate(t) ? ' late' : '')
@@ -2043,9 +2126,12 @@ function taskRow(t, by, extra, opt = {}) {
     'data-id': t.id,
     onclick: () => openCard(t.id),
   },
-  pick,
+  pick, fold,
   // Молния — сразу, срок не трогает; у чужого и у цели — пустое место той же ширины (строки стоят ровно).
-  el('div', { class: 'lead' }, canNow(t)
+  // Рядом «Для этого» (15.10.2026): строка ввода — новое дело внутри, и «Вложить в…», «Вынуть», «Выше» / «Ниже».
+  el('div', { class: 'lead' }, canStep(t) ? el('button', { class: 'now-btn step-btn', title: 'Для этого — завести дело внутри; вложить, вынуть, порядок',
+    'aria-label': 'Для этого', onclick: (e) => { e.stopPropagation(); stepPop(e.currentTarget, t); } }, icon('plus', 18)) : null,
+  canNow(t)
     ? el('button', { class: 'now-btn' + (now ? ' on' : ''), title: now ? 'Из «Сейчас» — срок не меняется' : `В «Сейчас» — до ${NOW_MAX} дел`,
       'aria-label': now ? 'Из «Сейчас»' : 'В «Сейчас»', 'aria-pressed': now ? 'true' : 'false',
       onclick: (e) => { e.stopPropagation(); toggleNow([t.id]); } }, icon('bolt', 18))
@@ -2103,7 +2189,8 @@ function treeModel() {
   }
   const rank = { goal: 0, project: 1, task: 2 };
   const sorted = (key) => (kids.get(key) || []).slice().sort((a, b) => rank[a.kind] - rank[b.kind]
-    || (a.kind === 'project' ? a.p.name.localeCompare(b.p.name, 'ru') : a.kind === 'goal' ? a.t.num - b.t.num : byTime(a.t, b.t)));
+    || (a.kind === 'project' ? a.p.name.localeCompare(b.p.name, 'ru') : a.kind === 'goal' ? a.t.num - b.t.num
+      : parentOf(a.t) ? byPos(a.t, b.t) : byTime(a.t, b.t))); // внутри дела — по месту среди соседей (15.10.2026)
   return { kids: sorted, open: openUnder, moved: (k) => moved.get(k) || 0, parentKey };
 }
 
@@ -2129,6 +2216,7 @@ function dropTo(node, target) {
   return node;
 }
 async function moveTo(kind, id, target) {
+  if (target.nest) { if (kind === 'task') nestInto([id], target.nest); return; } // «Деревом»: дело на дело — внутрь
   const goal = target.goal ? S.tasks.get(target.goal) : null;
   if (kind === 'project') {
     if (!goal) return toast('Проект вешается на цель, а не прямо на направление');
@@ -2163,7 +2251,7 @@ function goalHead(m, c, depth, open, toggle) {
 /** Ветка «Дерева»: цель (плюсиком), проект (свёрнут), дело (строкой дела) — и всё, что под ними. */
 function treeBranch(m, c, depth) {
   if (c.kind === 'task') {
-    const row = dragFrom(taskRow(c.t, ['dir'], null, { indent: depth, tree: true }), 'task', c.t.id);
+    const row = dropTo(dragFrom(taskRow(c.t, ['dir'], null, { indent: depth, tree: true }), 'task', c.t.id), { nest: c.t.id });
     const below = m.kids(c.key);
     return [row, ...below.flatMap((x) => treeBranch(m, x, depth + 1))];
   }
@@ -2368,12 +2456,16 @@ async function toggleDone(list) {
   try {
     const sent = ops(target.map((t) => ({ op: opName, id: t.id })));
     target.forEach((t) => inflight.set(t.id, sent));
-    await sent.finally(() => target.forEach((t) => { if (inflight.get(t.id) === sent) inflight.delete(t.id); }));
+    const res = await sent.finally(() => target.forEach((t) => { if (inflight.get(t.id) === sent) inflight.delete(t.id); }));
+    // Сделано последнее дело внутри (15.10.2026): родитель не закрылся, а поднялся — сервер говорит, какой (raised).
+    const up = (res || []).map((r) => r && r.raised).filter(Boolean);
+    const upWords = up.map((r) => `всё внутри сделано — теперь: «${r.title}»` + (r.moved ? ', на сегодня' : '')).join(' · ');
     if (open.length && !target.some((t) => finishing.has(t.id))) return; // передумал, пока сервер отвечал
     S.sel.clear();
     renderBulk();
     const pts = open.length ? target.reduce((sum, t) => sum + pointsFor(t), 0) : 0;
-    toast((open.length ? (target.length > 1 ? `Сделано: ${target.length}` : 'Сделано: ' + target[0].title) : 'Вернул в работу') + (pts ? ` · +${pts}` : ''),
+    toast((open.length ? (target.length > 1 ? `Сделано: ${target.length}` : 'Сделано: ' + target[0].title) : 'Вернул в работу') + (pts ? ` · +${pts}` : '')
+      + (upWords ? ' · ' + upWords : ''),
       () => { target.forEach((t) => finishing.delete(t.id)); return ops(target.map((t) => ({ op: open.length ? 'task.reopen' : 'task.done', id: t.id }))); });
     if (!open.length) { render(); return; }
     setTimeout(() => {
@@ -2472,6 +2564,7 @@ function renderBulk() {
     el('button', { onclick: () => toggleDone(ids.map((id) => S.tasks.get(id))) }, 'Сделано'),
     el('button', { onclick: (e) => reschedulePop(e.currentTarget, ids) }, 'Перенести'),
     el('button', { onclick: (e) => zachemPop(e.currentTarget, ids) }, 'Зачем…'),
+    nestOn() && ids.every((id) => isMine(S.tasks.get(id))) ? el('button', { onclick: (e) => nestPop(e.currentTarget, ids) }, 'Вложить в…') : null,
     el('button', { onclick: () => toggleNow(ids) }, ids.length && ids.every((id) => isNow(S.tasks.get(id))) ? 'Из «Сейчас»' : 'В «Сейчас»'),
     el('button', { onclick: (e) => grpPop(e.currentTarget, ids) }, 'Группа'),
     el('button', {
@@ -2893,6 +2986,7 @@ function describe(c) {
     out.push(('ball' in a || 'owed' in a ? grpWord(a) : 'человек') + (who ? ' ' + who : ''));
   }
   if ('notes' in a) out.push('дописал заметку');
+  if ('why_id' in a) out.push(a.why_id ? 'внутрь «' + ((S.tasks.get(a.why_id) || {}).title || 'дела') + '»' : 'вынул из дела');
   if ('estimate_min' in a) out.push(a.estimate_min ? a.estimate_min + ' мин' : 'без оценки');
   if ('labels' in a) out.push(a.labels.length ? 'метки ' + a.labels.join(', ') : 'без меток');
   if (a.remind_at) out.push('напомню в Telegram ' + remindWords(a.remind_at));
@@ -2933,7 +3027,8 @@ async function claudeSay(text, defaults, cont, card) {
   }
   const one = talk.card;
   // Карточка дела (13.10.2026): Claude видит только это дело — экран ему не нужен.
-  const scope = one ? { title: 'Карточка дела', card: 'task', open: one.id, ...(card && card.kstati ? { kstati: true } : {}) }
+  const scope = one ? { title: 'Карточка дела', card: 'task', open: one.id, ...(card && card.kstati ? { kstati: true } : {}),
+    ...(card && card.step ? { step: true } : {}) }
     : pageScope(defaults); // экран — до перерисовки: что в окне, видно сейчас
   scope.talk_id = talk.id;
   if (talk.turns.length) scope.history = talk.turns.slice(-TALK_KEEP).map(turnMemo);
@@ -2951,7 +3046,7 @@ async function claudeSay(text, defaults, cont, card) {
     // заново (08.10.2026: «нажимаю на микрофон, и всё стирается»).
     const did = ['changed', 'tasks', 'decided', 'crm', 'notes', 'refs'].some((k) => (d[k] || []).length);
     if (!did && !d.reply) { if (one) S.cardSay[one.id] = text; else S.quickText = text; }
-    if (one && (did || d.reply)) S.kstati = false;
+    if (one && (did || d.reply)) { S.kstati = false; S.cardStep = false; }
     talk.turns.push({ said: text, d });
     await sync().catch(() => {});
     render();
@@ -4213,23 +4308,170 @@ function zachemPop(anchor, ids, { draft = null } = {}) {
 const renamedOf = (id) => (S.renamed && S.renamed.get(id)) || [];
 
 
+/** Подписи строки (15.10.2026): у дела внутри — «для: <родитель>», у родителя — «сначала: <первое открытое внутри>»
+ *  (и сколько ещё). Ссылками: щелчок — карточка. */
+function stepChips(t) {
+  const out = [];
+  const go = (id) => (e) => { e.preventDefault(); e.stopPropagation(); openCard(id); };
+  const p = parentOf(t);
+  if (p) out.push(el('a', { class: 'm link for', href: '#', title: 'Внутри дела «' + p.title + '» — открыть его', onclick: go(p.id) },
+    'для: ' + shortTitle(p.title)));
+  if (isOpen(t) && !t.goal) {
+    const k = insideOf(t.id);
+    if (k.length) out.push(el('a', { class: 'm link first', href: '#', title: 'Следующее дело внутри — открыть', onclick: go(k[0].id) },
+      'сначала: ' + shortTitle(k[0].title) + (k.length > 1 ? ` (ещё ${k.length - 1})` : '')));
+  }
+  return out;
+}
+/** «Для этого» у строки: открытое дело, не цель (у чужого — заведётся рядом, вложить в чужое нельзя). */
+const canStep = (t) => isOpen(t) && !t.goal;
+/** Вложить, вынуть, поменять место — только своё дело в своё (правило базы: «зачем» — только своё дело). */
+const canNest = (t) => nestOn() && isMine(t) && !t.goal;
+
+/** «Для этого» у строки дела (15.10.2026, владелец: «и в карточке дела, и в обычном списке»): короткая строка ввода —
+ *  тем же запросом, что строка карточки в режиме «Для этого» (scope.step): всё названное — дела внутри этого, само дело
+ *  не меняется; без ключа Claude — одно дело, названием как написано (сервер). Ниже — «Вложить в…», «Вынуть», место. */
+function stepPop(anchor, t) {
+  setTimeout(() => {
+    const q = el('textarea', { class: 'ps-q step-q', rows: 2, placeholder: 'Что сделать для этого? — заведу внутри', 'aria-label': 'Что сделать для этого дела' });
+    const status = el('div', { class: 'step-status faint' });
+    const send = async () => {
+      const text = q.value.trim();
+      if (!text) { q.focus(); return; }
+      q.disabled = true;
+      status.textContent = S.me.claude ? 'Claude думает…' : 'Завожу…';
+      try {
+        const d = await runJob('/api/ask', { text, scope: { title: 'Строка дела', card: 'task', open: t.id, step: true } });
+        for (const x of d.tasks || []) S.tasks.set(x.id, x);
+        closePop();
+        await sync().catch(() => {});
+        render();
+        const made = d.tasks || [];
+        const err = (d.errors || []).length ? ' Не вышло: ' + d.errors[0] : '';
+        toast((d.reply || (made.length ? 'Завёл: ' + made.map((x) => x.title).join(', ') : 'Ничего не завёл')) + err,
+          made.length ? () => ops(made.map((x) => ({ op: 'task.cancel', id: x.id }))) : null);
+      } catch (e) { q.disabled = false; status.textContent = ''; fail(e); }
+    };
+    q.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+      if (e.key === 'Escape') { e.preventDefault(); closePop(); }
+    });
+    const pop = popAt(anchor, [el('div', { class: 'pop-h' }, 'Для этого: ' + shortTitle(t.title, 48)), q,
+      el('div', { class: 'step-acts' }, el('button', { class: 'chip-btn on', onclick: send }, 'Завести внутри'), ...nestActs(t, true)), status]);
+    pop.classList.add('step-pop');
+    q.focus();
+  }, 0);
+}
+/** Вложить, вынуть и место среди соседей — кнопками (меню строки и карточка). */
+function nestActs(t, inPop = false) {
+  if (!canNest(t)) return [];
+  const p = parentOf(t);
+  const sibs = p ? insideOf(p.id) : [];
+  const i = sibs.findIndex((x) => x.id === t.id);
+  const act = (label, fn, title) => el('button', { class: 'chip-btn', title, onclick: (e) => { if (inPop) closePop(); fn(e); } }, label);
+  return [
+    act('Вложить в…', (e) => nestPop(inPop ? anchorOf(t) : e.currentTarget, [t.id]), 'Положить это дело внутрь другого'),
+    p ? act('Вынуть', () => unnest([t.id]), `Вынуть из «${p.title}» — дело станет само по себе`) : null,
+    p && i > 0 ? act('Раньше', () => moveInside(t, -1), 'Поставить раньше среди дел внутри «' + p.title + '»') : null,
+    p && i >= 0 && i < sibs.length - 1 ? act('Позже', () => moveInside(t, 1), 'Поставить позже') : null,
+  ].filter(Boolean);
+}
+/** Якорь для выбора после закрытого меню строки: строка дела на экране, иначе — середина экрана. */
+const anchorOf = (t) => document.querySelector(`.task[data-id="${t.id}"] .main`) || document.querySelector('main.list') || document.body;
+/** «Вложить в…» — выбор дела с поиском: свои открытые, кроме самого дела и того, что уже внутри него (иначе круг). */
+function nestPop(anchor, ids) {
+  const below = new Set(ids.flatMap((id) => [...belowOf(id)]));
+  const items = deeds().filter((x) => isOpen(x) && isMine(x) && !below.has(x.id) && !x.no_steps)
+    .sort((a, b) => a.title.localeCompare(b.title, 'ru'))
+    .map((x) => {
+      const p = parentOf(x), z = p ? null : zachemOf(x), due = dueLabel(x);
+      return { v: x.id, title: x.title, note: [p ? 'внутри «' + shortTitle(p.title, 30) + '»' : z && z.title, due && due.text].filter(Boolean).join(' · '),
+        lead: () => icon('list', 16) };
+    });
+  choicePop(anchor, { title: ids.length > 1 ? `Вложить ${plural(ids.length, 'дело', 'дела', 'дел')} в…` : 'Вложить в…', placeholder: 'Найти дело…',
+    items, onPick: (v) => v && nestInto(ids, v) });
+}
+/** Положить дела внутрь дела: «Зачем» — оно. Круг и чужие дела не пускает и сервер (tasks.krug_rules). */
+function nestInto(ids, pid) {
+  const p = S.tasks.get(pid);
+  if (!p) return;
+  const list = ids.filter((id) => id !== pid && S.tasks.get(id) && S.tasks.get(id).why_id !== pid);
+  if (!list.length) return;
+  if (list.some((id) => belowOf(id).has(pid))) { toast('Дело не ложится внутрь своего же вложенного — сначала вынь то'); return; }
+  if (!isMine(p) || !list.every((id) => isMine(S.tasks.get(id)))) { toast('Вкладывать можно только свои дела в свои'); return; }
+  setFields(list, { why_id: pid }, `Внутри «${shortTitle(p.title)}»` + (list.length > 1 ? ': ' + list.length : ''));
+}
+/** Вынуть из дела: «Зачем» снимается — дело само по себе. */
+function unnest(ids) {
+  const p = parentOf(S.tasks.get(ids[0]));
+  setFields(ids, { why_id: null }, p ? `Вынул из «${shortTitle(p.title)}»` : 'Вынул');
+}
+/** Раньше / позже среди дел внутри родителя: соседи нумеруются 1, 2, 3… (pos), шлются только сдвинутые. */
+async function moveInside(t, dir) {
+  const p = parentOf(t);
+  if (!p) return;
+  const list = insideOf(p.id);
+  const i = list.findIndex((x) => x.id === t.id), j = i + dir;
+  if (i < 0 || j < 0 || j >= list.length) return;
+  [list[i], list[j]] = [list[j], list[i]];
+  const moved = list.map((x, n) => ({ x, pos: n + 1 })).filter(({ x, pos }) => x.pos !== pos);
+  try {
+    await ops(moved.map(({ x, pos }) => ({ op: 'task.set', id: x.id, set: { pos }, was: { pos: x.pos ?? null } })));
+    render();
+  } catch (e) { fail(e); render(); }
+}
+/** «Для: <дело>» под названием в карточке дела внутри: ссылкой, место среди соседей и «Вынуть». */
+function forLine(t) {
+  const p = parentOf(t);
+  if (!p) return null;
+  const sibs = insideOf(p.id), i = sibs.findIndex((x) => x.id === t.id);
+  return el('div', { class: 'for-line' }, el('span', { class: 'faint' }, 'для: '),
+    el('a', { class: 'link', href: '#', title: 'Открыть дело, внутри которого это', onclick: (e) => { e.preventDefault(); openCard(p.id); } }, p.title),
+    i >= 0 && sibs.length > 1 ? el('span', { class: 'faint' }, ` · ${i + 1} из ${sibs.length}`) : null,
+    canNest(t) ? el('button', { class: 'link-btn', title: 'Вынуть — дело станет само по себе', onclick: () => unnest([t.id]) }, 'Вынуть') : null);
+}
+/** «Внутри» в карточке (15.10.2026, владелец: «блок в карточке — „Внутри“»): открытые дела внутри по месту — флажок
+ *  «сделано», название (карточка), срок, «раньше» / «позже»; сделанные — числом. Новое внутрь — строкой «Для этого». */
+function insideBox(t) {
+  if (t.goal) return null;
+  const kids = insideOf(t.id);
+  const done = all().filter((x) => x.why_id === t.id && x.status === 'done' && !x.goal).length;
+  if (!kids.length && !done) return null;
+  return el('div', { class: 'inside-box' },
+    el('div', { class: 'place-h' }, 'Внутри', kids.length ? el('span', { class: 'n' }, String(kids.length)) : null),
+    kids.map((k, i) => {
+      const due = dueLabel(k);
+      return el('div', { class: 'in-row' + (i === 0 ? ' next' : ''), 'data-id': k.id },
+        el('button', { class: 'tick', title: 'Сделано', 'aria-label': 'Сделано: ' + k.title, onclick: () => toggleDone([k]) }),
+        el('a', { class: 'in-t', href: '#', onclick: (e) => { e.preventDefault(); openCard(k.id); } }, k.title),
+        due ? el('span', { class: 'in-due ' + (due.cls || '') }, due.text) : null,
+        canNest(k) && kids.length > 1 ? el('span', { class: 'in-move' },
+          el('button', { class: 'icon-btn', disabled: i === 0, title: 'Раньше', 'aria-label': 'Раньше', onclick: () => moveInside(k, -1) }, icon('up', 15)),
+          el('button', { class: 'icon-btn', disabled: i === kids.length - 1, title: 'Позже', 'aria-label': 'Позже', onclick: () => moveInside(k, 1) }, icon('down', 15))) : null);
+    }),
+    done ? el('div', { class: 'faint in-done' }, 'сделано внутри: ' + done) : null);
+}
+
 /** Claude в карточке дела (13.10.2026): строка «Что поправить в этом деле?» — текстом и голосом, как строка страницы, но
  *  Claude видит только это дело (поля, журнал, место в дереве, проект и клиента). «Кстати» — та же строка вдогонку:
  *  Claude сам решает — уточнить это дело, завести рядом новое или записать факт клиенту. Ответ — в окне разговора,
  *  с «Вернуть». Модель — одна настройка на сервере (llm.ROUTES «task», Свод models.dela). */
-function cardSay(t) {
+function cardSay(t, { stepOnly = false } = {}) {
   const busy = !!S.parse;
   const mine = busy && S.parse.card === t.id;
-  const k = S.kstati;
+  // «Для этого» (15.10.2026): всё сказанное — новые дела внутри этого (scope.step). Без ключа Claude строка только такая.
+  const st = stepOnly || S.cardStep;
+  const k = !st && S.kstati;
   const input = el('textarea', { id: 'card-say', rows: 1, disabled: busy, autocomplete: 'off',
-    placeholder: k ? 'Кстати… — допишу к делу или заведу рядом' : 'Что поправить в этом деле?',
-    'aria-label': k ? 'Кстати — мысль вдогонку к этому делу' : 'Что поправить в этом деле' });
+    placeholder: st ? 'Что сделать для этого? — заведу внутри' : k ? 'Кстати… — допишу к делу или заведу рядом' : 'Что поправить в этом деле?',
+    'aria-label': st ? 'Для этого — что сделать для этого дела' : k ? 'Кстати — мысль вдогонку к этому делу' : 'Что поправить в этом деле' });
   input.value = S.cardSay[t.id] || '';
   const send = () => {
     const x = input.value.trim();
     if (S.parse) return;
     if (!x) { input.focus(); return; }
-    claudeSay(x, {}, false, { id: t.id, kstati: S.kstati });
+    claudeSay(x, {}, false, { id: t.id, kstati: k, step: st });
   };
   const grow = () => { input.style.height = ''; if (input.scrollHeight > input.clientHeight + 2) input.style.height = Math.min(input.scrollHeight, 200) + 'px'; };
   input.addEventListener('input', () => { S.cardSay[t.id] = input.value; box.classList.toggle('has-text', !!input.value.trim()); grow(); });
@@ -4253,7 +4495,7 @@ function cardSay(t) {
       }, () => {
         S.listenCard = false;
         const x = (S.cardSay[t.id] || '').trim();
-        if (x && x !== base && voiceAuto()) claudeSay(x, {}, false, { id: t.id, kstati: S.kstati }); else render();
+        if (x && x !== base && voiceAuto()) claudeSay(x, {}, false, { id: t.id, kstati: k, step: st }); else render();
       });
       if (!ok) S.listenCard = false;
       render();
@@ -4262,14 +4504,19 @@ function cardSay(t) {
     input, mic, el('button', { type: 'button', class: 'q-btn send-btn', disabled: busy,
       title: busy ? 'Claude думает…' : 'Отдать Claude (Enter)', 'aria-label': 'Отдать Claude', onclick: send }, icon('up', 18)));
   setTimeout(grow);
-  const kBtn = el('button', { class: 'chip-btn kstati' + (k ? ' on' : ''), 'aria-pressed': k ? 'true' : 'false', disabled: busy,
+  const focusSay = () => setTimeout(() => document.getElementById('card-say')?.focus());
+  const kBtn = stepOnly ? null : el('button', { class: 'chip-btn kstati' + (k ? ' on' : ''), 'aria-pressed': k ? 'true' : 'false', disabled: busy,
     title: k ? 'Вернуть строку к правке дела' : 'Мысль вдогонку: Claude сам решит — дописать к делу или завести рядом',
-    onclick: () => { S.kstati = !S.kstati; render(); setTimeout(() => document.getElementById('card-say')?.focus()); } }, 'Кстати');
-  return el('div', { class: 'say card-say' + (k ? ' kstati-on' : '') },
-    el('div', { class: 'cs-h' }, el('label', { for: 'card-say' }, k ? 'Кстати: Claude сам решит — дописать к делу или завести рядом'
-      : 'Claude видит только это дело'), kBtn),
+    onclick: () => { S.kstati = !S.kstati; S.cardStep = false; render(); focusSay(); } }, 'Кстати');
+  const sBtn = stepOnly ? null : el('button', { class: 'chip-btn step' + (st ? ' on' : ''), 'aria-pressed': st ? 'true' : 'false', disabled: busy,
+    title: st ? 'Вернуть строку к правке дела' : 'Что надо сделать до этого или для этого — заведу делом внутри этого',
+    onclick: () => { S.cardStep = !S.cardStep; S.kstati = false; render(); focusSay(); } }, 'Для этого');
+  return el('div', { class: 'say card-say' + (k ? ' kstati-on' : '') + (st ? ' step-on' : '') },
+    el('div', { class: 'cs-h' }, el('label', { for: 'card-say' }, st ? (stepOnly ? 'Для этого: заведу внутри — названием, как написано (Claude не настроен)'
+      : 'Для этого: что назовёшь — заведу делами внутри этого') : k ? 'Кстати: Claude сам решит — дописать к делу или завести рядом'
+      : 'Claude видит только это дело'), sBtn, kBtn),
     box,
-    mine ? el('div', { class: 'claude-status' }, 'Claude думает над этим делом…')
+    mine ? el('div', { class: 'claude-status' }, stepOnly ? 'Завожу…' : 'Claude думает над этим делом…')
       : hearing ? el('div', { class: 'claude-status listening' }, 'Слушаю — нажми микрофон ещё раз, и отдам Claude.') : null,
     talkFeed(S.cardTalk && S.cardTalk.card.id === t.id ? S.cardTalk : null, { inCard: true }));
 }
@@ -4294,7 +4541,8 @@ function placeBlock(t) {
   rows.push(el('div', { class: 'pt-row pt-me', style: '--d:' + d }, t.goal ? null : el('span', { class: 'me-dot' }), t.title));
   const link = (s, dd, cls) => el('a', { class: 'pt-row ' + cls, style: '--d:' + dd, href: '#', onclick: (e) => { e.preventDefault(); openCard(s.id); } },
     s.goal ? null : el('span', { class: 'sib-dot' }), s.title);
-  const kids = stepsOf(t.id).sort((a, b) => (b.goal ? 1 : 0) - (a.goal ? 1 : 0) || byTime(a, b));
+  // У цели — её шаги и подцели; у дела его дела внутри — в блоке «Внутри» ниже (15.10.2026), здесь не повторяем.
+  const kids = t.goal ? stepsOf(t.id).sort((a, b) => (b.goal ? 1 : 0) - (a.goal ? 1 : 0) || byTime(a, b)) : [];
   kids.slice(0, 12).forEach((s) => rows.push(link(s, d + 1, 'pt-kid')));
   if (kids.length > 12) rows.push(el('div', { class: 'pt-row faint', style: '--d:' + (d + 1) }, 'и ещё ' + (kids.length - 12)));
   sibs.slice(0, 6).forEach((s) => rows.push(link(s, d, 'pt-sib')));
@@ -4308,6 +4556,11 @@ function placeBlock(t) {
       kids.length - sub ? plural(kids.length - sub, 'шаг', 'шага', 'шагов') : null].filter(Boolean).join(' и ');
     next = parts ? `Под целью ${parts}` + (g ? ` — а сама она ведёт к «${g.title}»` : '')
       : 'Пустая цель — сигнал, а не мусор: какой первый шаг к ней? Впиши его ниже.';
+  } else if (g && !g.goal) {
+    // Дело внутри дела (15.10.2026): родитель не закроется сам — поднимется, когда сделано всё внутри.
+    const left = sibs.filter((s) => !s.goal).length;
+    next = left ? `Сделаешь — внутри «${g.title}» останется ещё ${left}`
+      : `Последнее открытое внутри «${g.title}» — сделаешь, и оно поднимется: без срока или позже — на сегодня`;
   } else if (g) {
     const left = sibs.filter((s) => !s.goal).length;
     next = left ? `Сделаешь — к цели «${g.title}» останется ${plural(left, 'шаг', 'шага', 'шагов')}`
@@ -4421,6 +4674,8 @@ function renderCard() {
       canNow(t) ? el('button', { class: 'btn' + (isNow(t) ? ' on' : ''), 'aria-pressed': isNow(t) ? 'true' : 'false',
         title: isNow(t) ? 'Убрать из «Сейчас» — срок не меняется' : `Взять в «Сейчас» на сегодня — до ${NOW_MAX} дел`, onclick: () => toggleNow([t.id]) },
       icon('bolt', 17), isNow(t) ? 'Из «Сейчас»' : 'В «Сейчас»') : null,
+      canNest(t) && !parentOf(t) ? el('button', { class: 'btn', title: 'Положить это дело внутрь другого', onclick: (e) => nestPop(e.currentTarget, [t.id]) },
+        icon('list', 17), 'Вложить в…') : null,
       el('button', { class: 'btn main done-key', title: 'Сделано', onclick: () => toggleDone([t]) }, icon('check', 17), 'Сделано'),
     ] : el('button', { class: 'btn', onclick: () => toggleDone([t]) }, 'Вернуть в работу')) : null;
   const card = el('div', { class: 'card' },
@@ -4430,9 +4685,12 @@ function renderCard() {
       t && t.status !== 'open' ? el('span', { class: 'faint' }, t.status === 'done' ? 'сделано' : 'отменено') : null,
       el('button', { class: 'icon-btn card-x', title: 'Закрыть (Esc)', 'aria-label': 'Закрыть', onclick: close }, icon('x', 18))),
     // Откуда дело (наговор, встреча, Telegram…) — сразу под названием и заметно: владельцу это нравится (13.10.2026).
-    title, t ? originLine(t) : null, acts,
-    // Claude только про это дело и «Кстати» (13.10.2026) — нет ключа на сервере, нет и строки.
-    t && S.me.claude ? cardSay(t) : null,
+    title, t ? forLine(t) : null, t ? originLine(t) : null, acts,
+    // Claude только про это дело и «Кстати» (13.10.2026); нет ключа на сервере — строка только «Для этого» (15.10.2026):
+    // дело внутри заводится и без Claude, названием, как написано.
+    t ? (S.me.claude ? cardSay(t) : canStep(t) ? cardSay(t, { stepOnly: true }) : null) : null,
+    // Дела внутри этого (15.10.2026): по месту, флажок, раньше / позже.
+    t ? insideBox(t) : null,
     // Место в дереве жизни: зачем это дело и что будет, когда сделаешь (13.10.2026).
     t && isMine(t) && krugOn() ? el('div', { class: 'place-box' }, el('div', { class: 'place-h' }, 'Место в дереве'), placeBlock(t)) : null,
     props,

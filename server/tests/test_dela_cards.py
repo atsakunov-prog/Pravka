@@ -322,7 +322,8 @@ def test_talk_history_and_no_parse_route(dela):
 
 def test_schema_fits_grammar():
     """У схемы ответа предел: 06.10.2026 с карточкой тремя массивами и полным create API ответил
-    «compiled grammar is too large» (62 поля — нет, 52 — да). Новое поле — сначала проба на API."""
+    «compiled grammar is too large» (62 поля — нет, 52 — да). Новое поле — сначала проба на API.
+    15.10.2026: 54 — да (step у create и into у changes — булево и целое, проба на API Opus 5.5 прошла)."""
     def count(node):
         if node.get("type") == "object":
             return sum(1 + count(v) for v in node["properties"].values())
@@ -330,7 +331,7 @@ def test_schema_fits_grammar():
             return count(node["items"])
         return 0
 
-    assert count(ask.SCHEMA) <= 52
+    assert count(ask.SCHEMA) <= 54
 
 
 def test_task_card_sees_only_this_task_and_new_lands_next_to_it(dela):
@@ -368,7 +369,10 @@ def test_task_card_sees_only_this_task_and_new_lands_next_to_it(dela):
     assert "Место в дереве: Дело › Мандаты закрываются с гонораром › (это дело)" in u
     assert "Рядом шаги к той же цели: Позвонить Ивану про фонды" in u and "Сделка: Альфа: фонды" in u
     assert "Журнал дела (свежие сверху):" in u and "due_date →" in u
-    assert "Совсем другое дело" not in u and "ДЕЛА НА ЭКРАНЕ" not in u and "ДРУГИЕ МОИ" not in u
+    # Остальные свои открытые — одной строкой и только чтобы вложить это дело (into, 15.10.2026); экрана нет.
+    card_part, other_part = u.split("ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА")
+    assert "Совсем другое дело" not in card_part and "Совсем другое дело" in other_part and "ДЕЛА НА ЭКРАНЕ" not in u
+    assert list(ask.context(dela, "sasha", "x", scope)["tasks"]) == [t["num"]]  # править можно только это дело
     assert u.rstrip().endswith("КСТАТИ — Саша вдогонку к этому делу: кстати фонды просят цифры")
     assert out["route"] == "edit" and not out["errors"], out["errors"]
     assert out["changed"][0]["after"]["notes"].endswith("фонды просят цифры за 3 года")
@@ -381,7 +385,7 @@ def test_task_card_sees_only_this_task_and_new_lands_next_to_it(dela):
     # У цели новое — её шагом.
     ctx = ask.context(dela, "sasha", "добавь шаг", {"card": "task", "open": goal["id"]})
     assert ctx["near"] == {"why_id": goal["id"]} and "Это цель (узел дерева)" in ctx["message"]
-    assert "Его шаги: " in ctx["message"] and other["title"] not in ctx["message"]
+    assert "Его шаги: " in ctx["message"] and other["title"] not in ctx["message"].split("ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА")[0]
 
 
 def test_task_card_api_scope(dela, monkeypatch):

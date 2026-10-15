@@ -169,7 +169,7 @@ def tree(conn, user: str, today: dt.date) -> dict:
     since = today - dt.timedelta(days=MOVE_DAYS - 1)
     rows = conn.execute(
         "SELECT id, num, title, status, goal, rhythm, no_steps, why_id, dirs, project_id, project_name, deal_name, "
-        "due_date, owed, ball, want FROM tasks.v_tasks WHERE owner_id = %s AND (status = 'open' "
+        "due_date, owed, ball, want, pos FROM tasks.v_tasks WHERE owner_id = %s AND (status = 'open' "
         "OR (status = 'done' AND (completed_at AT TIME ZONE 'Europe/Moscow')::date >= %s)) ORDER BY num",
         (user, since)).fetchall()
     projects = {r["id"]: r for r in conn.execute(
@@ -209,7 +209,9 @@ def tree(conn, user: str, today: dt.date) -> dict:
                 break
 
     def sort(items: list[dict]) -> list[dict]:
-        return sorted(items, key=lambda c: (ORDER[c["kind"]], c.get("num") or 0, c.get("name") or ""))
+        # Дела внутри дела — по месту среди соседей (pos, dela_0024; пусто — после, по номеру), как веб и телефон.
+        return sorted(items, key=lambda c: (ORDER[c["kind"]], c.get("pos") is None, c.get("pos") or 0, c.get("num") or 0,
+                                            c.get("name") or ""))
 
     def node(kind: str, r: dict, depth: int) -> dict:
         key = (kind, r["id"])
@@ -217,7 +219,7 @@ def tree(conn, user: str, today: dt.date) -> dict:
             n = {"kind": "project", "name": r["name"], "client": r["kind"] == "client"}
         else:
             n = {"kind": "goal" if r["goal"] else "task", "num": r["num"], "title": r["title"]}
-            for k in ("rhythm", "project_name", "deal_name", "due_date", "owed", "ball", "want", "no_steps"):
+            for k in ("rhythm", "project_name", "deal_name", "due_date", "owed", "ball", "want", "no_steps", "pos"):
                 if r.get(k):
                     n[k] = r[k]
         below = sort([node(k, c, depth + 1) for k, c in kids.get(key, [])]) if depth < TREE_DEPTH else []
