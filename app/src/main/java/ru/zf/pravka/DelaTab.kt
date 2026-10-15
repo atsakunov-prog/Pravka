@@ -1440,7 +1440,8 @@ fun DelaTab(
         val seen = seenRows.visible("t:").toSet()
         // Строки по порядку экрана — как их рисуют NodeRows и TaskRows (поезд 16.10.2026, вложенность правила 27):
         // «Деревом» — родитель, под ним дела внутри отступом (свёрнутое не раскрывается), плоско — дело внутри прямо
-        // перед родителем (`DelaSteps.stepsFirst`), на главной — дела внутри дел из «Сейчас» над родителем отступом.
+        // перед родителем (`DelaSteps.stepsFirst`), на главной — дела внутри дел из «Сейчас» над родителем отступом, а
+        // «Сегодня» — подгруппами «Отбить / Запустить / Мониторить» (`DelaDebug.homeRows`).
         // Раньше дела внутри «Деревом» шли в снимке хвостом после всех строк, без отступа, а плоский порядок — до
         // перестановки «перед родителем»: записка «вложил — а оно не там» показывала Claude не тот экран.
         val rows = ArrayList<ru.zf.pravka.core.DelaDebug.Row>()
@@ -1459,11 +1460,8 @@ fun DelaTab(
         }
         val homeSc = sc?.home
         when {
-            homeSc != null -> {
-                val depthIn = homeSc.inner.associate { it.first.id to it.second }
-                DelaSteps.stepsFirst(homeSc.now + homeSc.inner.map { it.first }, snap).forEach { row(it, "Сейчас", depthIn[it.id] ?: 0) }
-                homeSc.today.forEach { row(it, "Сегодня") }
-            }
+            // Главная — как её рисует DelaHomeUi: «Сейчас» с делами внутри над родителем, «Сегодня» — тремя подгруппами.
+            homeSc != null -> rows += ru.zf.pravka.core.DelaDebug.homeRows(homeSc.now, homeSc.inner, homeSc.today, snap, today, seen)
             sc != null -> {
                 sc.nodes?.let { walk(it, "", sc.indent, sc.nest) }
                 sc.groups.forEach { g -> leaf(g.items, g.title, emptyMap(), emptyMap()) }

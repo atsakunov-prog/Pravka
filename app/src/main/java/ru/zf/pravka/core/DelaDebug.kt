@@ -198,6 +198,31 @@ object DelaDebug {
         return JSONObject().put("kind", if (t.goal) "goal" else "task").put("id", t.id).putIf("num", t.num).put("title", t.title).put("fields", f)
     }
 
+    /**
+     * Главная вкладки («Сейчас» и «Сегодня») по порядку экрана — как её рисует `DelaHomeUi` (поезд 16.10.2026, проверка
+     * вагона 3): в «Сейчас» дела внутри дел из «Сейчас» — прямо над родителем отступом ([inner] — дело и глубина), в
+     * «Сегодня» — три подгруппы («Отбить», «Запустить», «Мониторить» — `DelaGroups.nested` по группе), в каждой дело
+     * внутри — прямо перед родителем (`DelaSteps.stepsFirst`, как `TaskRows`). Раньше «Сегодня» шло в снимке одним куском
+     * в порядке вида: дело внутри, получившее срок «сегодня» от родителя, на экране стояло перед ним, а в снимке — нет, и
+     * подпись группы была без подгруппы. [seen] — id дел, бывших в окне.
+     */
+    fun homeRows(
+        now: List<Dela.Task>,
+        inner: List<Pair<Dela.Task, Int>>,
+        todayList: List<Dela.Task>,
+        s: Dela.Snapshot,
+        today: String,
+        seen: Set<String> = emptySet(),
+    ): List<Row> {
+        val out = ArrayList<Row>()
+        val depthIn = inner.associate { it.first.id to it.second }
+        DelaSteps.stepsFirst(now + inner.map { it.first }, s).forEach { out += Row(it.id, it.id in seen, "Сейчас", depthIn[it.id] ?: 0) }
+        DelaGroups.nested(todayList, listOf(DelaGroups.Level.GRP), s, today).forEach { n ->
+            DelaSteps.stepsFirst(n.items, s).forEach { out += Row(it.id, it.id in seen, "Сегодня › ${n.title}") }
+        }
+        return out
+    }
+
     private fun pageJson(kind: String, id: String, s: Dela.Snapshot): JSONObject? = when (kind) {
         "person" -> s.people[id]?.let { JSONObject().put("kind", "person").put("id", id).put("title", it.name).put("fields", Dela.json(it)) }
         "project" -> s.projects[id]?.let {
