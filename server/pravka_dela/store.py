@@ -44,7 +44,12 @@ TASK_FIELDS = {
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
             "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
-            "privacy", "context_index", "claude_guard", "nest"]
+            "privacy", "context_index", "claude_guard", "nest", "debug"]
+# «debug» — режим отладки (15.10.2026, правило 28, dela_0031; debug.py): операции debug.add (записка владельца со снимком
+# экрана данными и последними действиями; повтор — по op_id и id записки) и debug.set (статус и ответ разбора), вид debug
+# (список и одна записка целиком), поле debug синка ({on, new, last, answered} — только владельцу), настройка
+# users.settings.debug. Без флага веб и телефон строки «Что не так?» не рисуют и debug.* не шлют: старый сервер отверг бы
+# операцию целиком.
 # «nest» — дела внутри дела (15.10.2026, dela_0030): поле pos у дела (место среди соседей с тем же «Зачем», от 1) в
 # task.create и task.set (сменил «Зачем», места не назвал — место снимается), task.done последнего открытого дела
 # внутри поднимает родителя (ответ — raised, только хозяину родителя), task.reopen дела внутри возвращает родителю
@@ -2226,7 +2231,7 @@ insights.register(HANDLERS, VIEWS, OpError)
 guard.register(HANDLERS, VIEWS, OpError)
 # Контекст по делу (аудит №13): вид context_index — связанные люди и ключи имён (focus.py).
 focus.register(VIEWS)
-# Режим отладки (dela_0031, 15.10.2026): записки о багах с экраном данными — debug.add / debug.set, вид debug (debug.py).
+# Режим отладки (dela_0031, 15.10.2026, правило 28): записки о багах с экраном данными — debug.add / debug.set, вид debug (debug.py).
 from . import debug  # noqa: E402  (свой модуль; импорт здесь — крючок одной строкой, ветку собирают в поезд с другими)
 debug.register(HANDLERS, VIEWS, FEATURES, OpError)
 
