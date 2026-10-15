@@ -4943,6 +4943,52 @@ function meetingsSec(v, href, what) {
 }
 const MEET_CARD = 8; // в карточке — свежие; остальные — страницей «Встречи» с отбором
 
+// ── «Только тебе» (dela_0027, аудит №8–11; место этапа 6) ───────────────
+// Наблюдения владельца — оценки людей, несостыковки, неуверенность, «кто за столом», что уточнить: видит только он
+// (сервер отдаёт поле insights видов только ему; команде — []). Пишет рукой «+ только мне» и разбор встреч и дайджеста
+// (этап 6). «Видел», «Мимо», «Убрать»; «Мимо» и «Неверно» свёрнуты строкой «ещё N». Только при флаге privacy.
+const INSIGHT_KIND = { note: 'заметка', conflict: 'несостыковка', numbers: 'цифры', hedge: 'неуверенность', self: 'о себе',
+  objection: 'возражение', table: 'кто за столом', ask: 'уточнить', bypass: 'в обход', signal: 'сигнал', risk: 'риск',
+  mandate: 'мандат', position: 'позиция', personal: 'личное', occasion: 'повод' };
+const INSIGHT_OFF = ['dismissed', 'wrong'];
+async function insightOp(op, msg) {
+  try { await op1(op); crmDirty(); if (msg) toast(msg); render(); } catch (e) { fail(e); }
+}
+function insightRow(x) {
+  const from = x.meeting_id ? el('a', { class: 'src', href: '#/m/' + x.meeting_id }, ' встреча →')
+    : x.source === 'digest' && x.source_ref ? el('a', { class: 'src', href: '#/digest/' + encodeURIComponent(x.source_ref) }, ' сводка →') : null;
+  return el('div', { class: 'ins-row' + (x.state === 'new' ? ' new' : '') },
+    el('div', { class: 'tl-when' }, D.ddmm(String(x.at).slice(0, 10))),
+    el('div', { class: 'tl-what' },
+      el('div', { class: 'tl-head' }, el('span', { class: 'tl-kind' }, INSIGHT_KIND[x.kind] || x.kind), ' ', x.text),
+      x.quote ? el('div', { class: 'ins-quote' }, '«' + x.quote + '»') : null,
+      el('div', { class: 'tl-meta' }, (x.people || []).join(', '), from,
+        x.state === 'new' ? el('button', { class: 'link-btn', onclick: () => insightOp({ op: 'insight.set', id: x.id, set: { state: 'seen' } }) }, ' видел') : null,
+        INSIGHT_OFF.includes(x.state) ? null : el('button', { class: 'link-btn', onclick: () => insightOp({ op: 'insight.set', id: x.id, set: { state: 'dismissed' } }, 'Мимо — свернул') }, ' мимо'),
+        el('button', { class: 'link-btn', onclick: () => insightOp({ op: 'insight.delete', id: x.id }, 'Убрал') }, ' убрать'))));
+}
+/** Блок «Только тебе» карточки: v — вид (client, deal, dossier, meeting) с полем insights; about — о ком новая запись. */
+function insightsSec(v, about) {
+  if (!privacyOn() || !S.me || S.me.role !== 'owner' || !v || !Array.isArray(v.insights)) return null;
+  const key = 'ins:' + JSON.stringify(about);
+  const live = v.insights.filter((x) => !INSIGHT_OFF.includes(x.state));
+  const off = v.insights.filter((x) => INSIGHT_OFF.includes(x.state));
+  const open = S.insOpen === key;
+  const add = el('input', { placeholder: '+ только мне: что заметил, как оцениваю, что уточнить…' });
+  const send = () => {
+    const text = add.value.trim();
+    if (text) insightOp({ op: 'insight.add', insight: { kind: 'note', source: 'web', text, ...about } }, 'Записал — видишь только ты');
+  };
+  add.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+  return sec('only-you', null, null, el('div', { class: 'only-you' },
+    el('div', { class: 'only-you-h' }, icon('lock', 13), ' Только тебе', live.length ? el('span', { class: 'n' }, ' ' + live.length) : null,
+      el('span', { class: 'faint' }, ' · команда этого не видит')),
+    el('div', { class: 'rows tl-rows' }, live.map(insightRow)),
+    off.length ? el('button', { class: 'link-btn', onclick: () => { S.insOpen = open ? null : key; render(); } }, open ? 'свернуть' : `ещё ${off.length}`) : null,
+    open ? el('div', { class: 'rows tl-rows faint' }, off.map(insightRow)) : null,
+    el('div', { class: 'add-comment' }, add, el('button', { class: 'btn small', onclick: send }, 'Записать'))));
+}
+
 /** Описание — поле, которое растёт по тексту и сохраняется, когда из него вышел. */
 function aboutBox(value, placeholder, save) {
   const ta = el('textarea', { class: 'about', rows: 2, placeholder }, value || '');
@@ -5252,6 +5298,7 @@ function renderClientCard(p, { picker, g, items, sub, star }) {
       sec('tasks', 'Дела', secN(items.filter(isOpen).length), el('div', { class: 'toolbar' }, picker, doneToggle()),
         items.length ? grouped(items, g) : el('div', { class: 'empty' }, 'Дел нет. Следующий шаг — скажи в строке Claude.')),
       sec('timeline', 'Хронология', null, v ? timelineBlock('c:' + p.id, { items: v.timeline, entries: v.entries, pays: money ? pays : [], showDeal: true }) : loading()),
+      insightsSec(v, { project_id: p.id }),
       meets,
       money ? sec('money', 'Деньги', null, clientMoney(pays)) : null,
       sec('files', 'Файлы', secN((p.files || []).length), filesBlock(p, (set, msg) => projectSet(p, set, msg))))];
@@ -5438,6 +5485,7 @@ function renderDeal(id) {
     sides,
     tasks,
     sec('timeline', 'Хронология', null, v ? timelineBlock('d:' + d.id, { items: v.timeline, entries: v.entries, pays: money ? pays : [] }) : loading()),
+    insightsSec(v, { project_id: d.project_id, deal_id: d.id }),
     meets,
     moneySec,
     sec('files', 'Файлы', secN((d.files || []).length), filesBlock(d, (set, msg) => dealOp({ op: 'deal.set', id: d.id, set }).then((r) => r && msg && toast(msg)))));
@@ -5469,6 +5517,7 @@ function personCrmBlock(p) {
   hub.addEventListener('change', async () => { try { await op1({ op: 'person.set', id: p.id, set: { hub: hub.checked } }); crmDirty(); } catch (e) { fail(e); } });
   return el('div', { class: 'crm-person' },
     el('div', { class: 'toolbar' }, el('label', {}, 'Теплота', cad), el('label', {}, hub, 'хаб — через него идут темы')),
+    insightsSec(v, { person_ids: [p.id] }),
     sec('timeline', 'Хронология', null, v ? timelineBlock('h:' + p.id, { items: v.timeline, showDeal: true }) : loading()));
 }
 
@@ -5838,7 +5887,9 @@ function renderMeeting(id) {
   const text = sec('text', 'Расшифровка', secN(v.lines_n), el('div', { class: 'toolbar' }, box),
     lines.length ? el('div', { class: 'rows' }, lines) : el('div', { class: 'empty' }, v.lines_n ? 'В расшифровке такого нет.' : 'Расшифровки служба не прислала.'));
   const nav = [['card', 'Карточка'], ['sum', 'Сводка'], v.tasks.length ? ['tasks', 'Дела'] : null, ['text', 'Расшифровка']].filter(Boolean);
-  return [head(v.title || v.source_title || 'Встреча', [when], null, nav), el('div', { class: 'body' }, card, summary, tasks, text)];
+  // «Только тебе» по встрече (личной — нет: сервер такие строки не держит).
+  const mine = v.sphere === 'home' ? null : insightsSec(v, { meeting_id: v.id });
+  return [head(v.title || v.source_title || 'Встреча', [when], null, nav), el('div', { class: 'body' }, card, summary, mine, tasks, text)];
 }
 
 // ── Клавиши ─────────────────────────────────────────────────────────────

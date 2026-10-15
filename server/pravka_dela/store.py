@@ -23,7 +23,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from . import db, digest, krug, meetings, people, phone, place, spend, twins, where, zasechka
+from . import db, digest, insights, krug, meetings, people, phone, place, spend, twins, where, zasechka
 
 log = logging.getLogger("dela.store")
 
@@ -2042,6 +2042,8 @@ twins.register(VIEWS, OpError)
 phone.register(HANDLERS, VIEWS, OpError)
 # Книга трат Claude (dela_0017): итоги дней от телефона и сборщика «Дома», «советы прочитаны», вид spend (spend.py).
 spend.register(HANDLERS, VIEWS, OpError)
+# «Только тебе» (dela_0027, аудит №8–11; место этапа 6): наблюдения только владельцу — insight.*, вид insights.
+insights.register(HANDLERS, VIEWS, OpError)
 
 
 def view(url: str, user: str, name: str, **params) -> dict:

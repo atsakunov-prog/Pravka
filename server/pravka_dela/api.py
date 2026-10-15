@@ -368,7 +368,9 @@ def build(cfg: Config) -> Starlette:
                            # Дайджест Telegram (13.10.2026, digest.py): за сколько суток список
                            "days",
                            # Страницы-двойники (14.10.2026, twins.py): какие сутки показать
-                           "day"}}
+                           "day",
+                           # «Только тебе» (dela_0027): отбор вида insights по компании, встрече и состоянию
+                           "org_id", "meeting_id", "state"}}
         sc = _scope(who)
         if sc:
             if name not in sc["views"]:

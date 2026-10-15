@@ -868,6 +868,9 @@ a.crumb:hover { color: var(--accent); text-decoration: none; }
 .comment.private { background: var(--line-soft); border-radius: 6px; padding-left: 8px; padding-right: 8px; }
 .only-you { margin: 10px 0; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; }
 .only-you-h { display: flex; align-items: center; gap: 4px; color: var(--faint); font-size: 12.5px; margin-bottom: 4px; }
+.ins-row { display: grid; grid-template-columns: 52px 1fr; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line-soft); }
+.ins-row.new .tl-head { font-weight: 600; }
+.ins-quote { color: var(--muted); font-size: 13px; margin-top: 2px; }
 .add-comment .only-me { display: inline-flex; align-items: center; gap: 4px; color: var(--faint); font-size: 13px; white-space: nowrap; }
 .hist { font-size: 12.5px; color: var(--faint); padding: 3px 2px; }
 details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-top: 18px; padding: 0 2px; }

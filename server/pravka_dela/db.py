@@ -61,6 +61,8 @@ APP_TABLES = {
     # Книга трат Claude и недельные советы (dela_0017): строки не удаляются — книга итогов дней и советы недель.
     "crm.claude_spend": "SELECT, INSERT, UPDATE",
     "crm.claude_tips": "SELECT, INSERT, UPDATE",
+    # «Только тебе» (dela_0027): наблюдения только владельцу Дел; строки не удаляются (deleted_at), журнала нет.
+    "crm.insights": "SELECT, INSERT, UPDATE",
 }
 # crm.v_interactions (dela_0025, аудит №9): хронология для показа — итог встречи владельцу с карточки, ссылка на веб
 # встреч только хозяину записи, team_sees.

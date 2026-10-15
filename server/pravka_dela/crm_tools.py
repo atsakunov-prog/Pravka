@@ -153,6 +153,7 @@ def view(url: str, name: str = "pipeline", project: str | None = None, deal: str
                 out.append("  сделка: " + deal_line(d, names))
         if v.get("months"):
             out.append("Время по месяцам: " + ", ".join(f"{m['month']} {hours(m['minutes'])}" for m in v["months"][:6]))
+        out += only_you_lines(v.get("insights") or [])
         tl = v["timeline"][:40]
         if tl:
             out += ["", "Хронология (свежие сверху):"]
@@ -184,6 +185,70 @@ def view(url: str, name: str = "pipeline", project: str | None = None, deal: str
         if v["unplanned"]:
             out += ["", "Подписано, а оплаты расписаны не на всю сумму: " + ", ".join(d["name"] for d in v["unplanned"])]
     return "\n".join(out).rstrip() + "\n"
+
+
+# «Только тебе» (dela_0027, аудит №8–11): наблюдения Саши — оценки людей, несостыковки, что уточнить. Видит только он.
+KIND_RU = {"note": "заметка", "conflict": "несостыковка", "numbers": "цифры", "hedge": "неуверенность", "self": "о себе",
+           "objection": "возражение", "table": "кто за столом", "ask": "уточнить", "bypass": "в обход", "signal": "сигнал",
+           "risk": "риск", "mandate": "мандат", "position": "позиция", "personal": "личное", "occasion": "повод"}
+STATE_RU = {"new": "новое", "seen": "видел", "useful": "пригодилось", "dismissed": "мимо", "wrong": "неверно",
+            "moved": "перенёс"}
+
+
+def insight_line(x: dict) -> str:
+    bits = [f"{_d(x['at'])} {KIND_RU.get(x['kind'], x['kind'])}: {x['text']}"]
+    if x.get("quote"):
+        bits.append(f"«{x['quote'][:200]}»")
+    about = [*(x.get("people") or []), x.get("project_name"), x.get("deal_name"), x.get("org_name"),
+             x.get("meeting_title") and f"встреча «{x['meeting_title']}»"]
+    if any(about):
+        bits.append("о ком: " + ", ".join(a for a in about if a))
+    if x.get("state") and x["state"] != "new":
+        bits.append(STATE_RU.get(x["state"], x["state"]))
+    return " · ".join(bits)
+
+
+def only_you_lines(items: list[dict]) -> list[str]:
+    """Блок «Только тебе» в выводе карточек: пометка — людям не цитировать."""
+    live = [x for x in items if x.get("state") not in ("dismissed", "wrong")]
+    if not live:
+        return []
+    return ["", "Только тебе (видит только Саша; людям не цитировать):", *(f"  {insight_line(x)}" for x in live[:20])]
+
+
+def private(url: str, text: str | None = None, person: str | None = None, client: str | None = None,
+            deal: str | None = None, kind: str = "note") -> str:
+    """«Только тебе»: с text — записать наблюдение о человеке, клиенте или сделке; без — показать их."""
+    try:
+        with db.session(url, USER, via="mcp") as conn:
+            about: dict = {}
+            if person:
+                about["person_ids"] = [str(find_person(conn, person)["id"])]
+            if client or deal:
+                pid = find_project(conn, client or "")["id"] if client else None
+                if deal:
+                    if not pid:
+                        return "Сделка — вместе с клиентом (client)."
+                    about["deal_id"] = str(find_deal(conn, pid, deal)["id"])
+                about["project_id"] = str(pid) if pid else None
+            about = {k: v for k, v in about.items() if v}
+    except store.OpError as e:
+        return f"Не вышло: {e}"
+    if text:
+        if not about:
+            return "О ком это? Назови человека (person), клиента (client) или сделку (client и deal)."
+        r = store.apply_ops(url, USER, [{"op": "insight.add", "insight": {"kind": kind or "note", "text": text,
+                                                                          "source": "mcp", **about}}], via="mcp")["results"][0]
+        return "Записал — только тебе: команда не увидит." if r["ok"] else f"Не записал: {r['error']}"
+    params = {"person_id": about["person_ids"][0]} if about.get("person_ids") else {}
+    for k in ("project_id", "deal_id"):
+        if about.get(k):
+            params[k] = about[k]
+    v = store.view(url, USER, "insights", **params)
+    if not v["items"]:
+        return "«Только тебе» пусто."
+    lines = ["Только тебе (видит только Саша; людям не цитировать):", *(f"  {insight_line(x)}" for x in v["items"])]
+    return "\n".join(lines) + "\n"
 
 
 DEAL_ARGS = {"stage", "outcome", "lost_reason", "deal_type", "probability", "expected_on", "deadline", "my_view", "ideas", "fee_kind",

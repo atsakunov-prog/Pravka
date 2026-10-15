@@ -20,7 +20,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from . import meetings, store
+from . import insights, meetings, store
 
 STAGES = ["lead", "proposal", "mandate", "active", "closing", "archive"]
 OPEN_STAGES = STAGES[:-1]
@@ -285,6 +285,8 @@ def view_deal(conn, user, deal_id=None, **_):
     }
     # Встречи сделки по карточке встречи (deal_id) — только владельцу встреч (RLS); список — до MEETINGS_CARD.
     out["meetings"], out["meetings_n"] = meetings_of(conn, "m.deal_id = %s", [deal_id])
+    # «Только тебе» (dela_0027): наблюдения владельца о сделке; команде — [] (RLS).
+    out["insights"] = insights.of(conn, "i.deal_id = %s", [deal_id])
     if out["owner"]:
         out["entries"] = conn.execute("SELECT * FROM crm.time_entries(%s, %s, 200)", (d["project_id"], deal_id)).fetchall()
         out["minutes_all"] = (_minutes(conn, "crm.time_by_deal", EPOCH, "deal_id").get(d["id"]) or {}).get("minutes")
@@ -319,6 +321,7 @@ def view_client(conn, user, project_id=None, **_):
     }
     # Встречи клиента по карточке встречи (project_id) — только владельцу встреч (RLS).
     out["meetings"], out["meetings_n"] = meetings_of(conn, "m.project_id = %s", [project_id])
+    out["insights"] = insights.of(conn, "i.project_id = %s", [project_id])  # «Только тебе»: команде — []
     if out["owner"]:
         out["entries"] = conn.execute("SELECT * FROM crm.time_entries(%s, NULL, 300)", (project_id,)).fetchall()
         months: dict[str, int] = {}
@@ -337,6 +340,8 @@ def view_dossier(conn, user, person_id=None, **_):
         "timeline": _timeline(conn, "%s = ANY (i.person_ids)", [person_id], 150),
         "deals": deals(conn, "d.lead_person_id = %s OR %s = ANY (d.team_ids) OR %s = ANY (d.person_ids) OR d.source_person_id = %s",
                        [person_id] * 4),
+        # «Только тебе» (dela_0027): наблюдения владельца о человеке; команде — [] (RLS).
+        "insights": insights.of(conn, "%s = ANY (i.person_ids)", [person_id]),
     }
 
 

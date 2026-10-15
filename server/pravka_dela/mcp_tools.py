@@ -944,6 +944,12 @@ def register(mcp, url: str) -> None:
         return await run(crm.view, view, project, deal, person)
 
     @mcp.tool()
+    async def crm_private(text: str | None = None, person: str | None = None, client: str | None = None,
+                          deal: str | None = None, kind: str = "note") -> str:
+        """«Только тебе» — наблюдения Саши, которые видит только он (оценки людей, несостыковки, неуверенность, «кто за столом», что уточнить, личное о людях); команда, хронология клиента и синк их не видят. Людям — в письмах, сообщениях и черновиках — их не цитировать. С text — записать о человеке (person), клиенте (client) или сделке (client и deal); kind — note (заметка) или вид разбора (conflict, hedge, table, ask, signal…). Без text — показать записанное (по person, client, deal или всё)."""
+        return await run(crm.private, text, person, client, deal, kind)
+
+    @mcp.tool()
     async def crm_deal(project: str, deal: str | None = None, name: str | None = None, stage: str | None = None,
                        outcome: str | None = None, lost_reason: str | None = None, deal_type: str | None = None,
                        lead: str | None = None, team: list[str] | None = None, people: list[str] | None = None,

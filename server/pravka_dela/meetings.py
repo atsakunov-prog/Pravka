@@ -879,6 +879,10 @@ def _card(conn, r: dict, with_lines: bool = True, around: int | None = None, raw
         rr = conn.execute("SELECT raw, length(transcript) AS chars, received_at FROM crm.meeting_raw WHERE meeting_id = %s",
                           (full["id"],)).fetchone()
         out["raw"] = rr
+    # «Только тебе» (dela_0027): наблюдения владельца по встрече (этап 6 — разбор встречи; сейчас — рукой).
+    from . import insights
+
+    out["insights"] = insights.of(conn, "i.meeting_id = %s", [full["id"]])
     return out
 
 

@@ -336,3 +336,71 @@ def test_people_by_themselves_note_is_only_where(cards):
     with as_(url, "sasha") as c:
         note = c.execute("SELECT note FROM crm.people WHERE id = %s", (r["person"]["person_id"],)).fetchone()["note"]
     assert note == "Telegram: «Ромашка»"
+
+
+# ── «Только тебе» (crm.insights, dela_0027) — место этапа 6 ─────────────────────────────────
+
+
+def test_only_you_insights_owner_only(cards, conn):
+    url, ivan, p = cards["url"], str(cards["ivan"]), str(cards["project"])
+    with as_(url, "sasha") as c:
+        d = c.execute("SELECT id FROM crm.deals WHERE project_id = %s", (p,)).fetchone()["id"]
+    a = one(url, "sasha", {"op": "insight.add", "insight": {"kind": "hedge", "text": "МЕТКА-ТТ сомневается в сроках",
+                                                             "quote": "МЕТКА-ЦИТАТА «ну, посмотрим»", "person_ids": [ivan],
+                                                             "deal_id": str(d), "source": "web"}})["insight"]
+    assert (a["project_id"], a["author"], a["state"], a["people"]) == (p, "sasha", "new", ["Иван"])  # клиент — от сделки
+    # Владелец видит везде: клиент, сделка, человек, вид insights, коннектор.
+    assert [x["id"] for x in store.view(url, "sasha", "client", project_id=p)["insights"]] == [a["id"]]
+    assert [x["id"] for x in store.view(url, "sasha", "deal", deal_id=str(d))["insights"]] == [a["id"]]
+    assert [x["id"] for x in store.view(url, "sasha", "dossier", person_id=ivan)["insights"]] == [a["id"]]
+    assert [x["id"] for x in store.view(url, "sasha", "insights", person_id=ivan)["items"]] == [a["id"]]
+    assert conn.execute("SELECT text, people, client, deal FROM life.insights").fetchall() == [
+        ("МЕТКА-ТТ сомневается в сроках", ["Иван"], "ООО Ромашка", "Ромашка: модель")]
+    # Команде — пусто везде, записать — отказ базы, журнала нет, в синке нет.
+    assert store.view(url, "natasha", "client", project_id=p)["insights"] == []
+    assert store.view(url, "natasha", "deal", deal_id=str(d))["insights"] == []
+    assert store.view(url, "natasha", "insights")["items"] == []
+    with as_(url, "natasha") as c:
+        assert not c.execute("SELECT 1 FROM crm.insights").fetchall()
+    bad = ops(url, "natasha", {"op": "insight.add", "insight": {"text": "моё", "project_id": p}})[0]
+    assert not bad["ok"] and "только владельцу Дел" in bad["error"]
+    assert "МЕТКА-ТТ" not in repr(store.sync(url, "natasha", 0)) and "МЕТКА-ТТ" not in repr(store.sync(url, "sasha", 0))
+    with dela_db.session(url, "system", "t") as c:
+        assert not c.execute("SELECT 1 FROM crm.history WHERE entity = 'crm.insights'").fetchall()
+    # «Видел», «Мимо», «Убрать».
+    assert one(url, "sasha", {"op": "insight.set", "id": a["id"], "set": {"state": "seen"}})["insight"]["state"] == "seen"
+    one(url, "sasha", {"op": "insight.delete", "id": a["id"]})
+    assert store.view(url, "sasha", "client", project_id=p)["insights"] == []
+
+
+def test_only_you_repeat_finding_and_home_meeting(mt):
+    """Служба этапа 6: повтор той же находки (item_key) — та же строка; убранную не возвращает. Встреча стала личной —
+    её «Только тебе» убраны, новую на личную — отказ. Слияние людей переносит person_ids."""
+    url = mt["url"]
+    m = push(url)
+    _name(url, m["id"], client="Вектор", topic="счета")
+    item = {"kind": "conflict", "text": "в КП 300, на встрече — 250", "meeting_ref": "215", "source": "meeting",
+            "source_ref": "https://meetings.example.org/m/215", "item_key": "conflict-1", "person_ids": [str(mt["Олег"])]}
+    a = one(url, "sasha", {"op": "insight.add", "insight": item})
+    assert not a.get("existing") and a["insight"]["meeting_id"] == m["id"]
+    again = one(url, "sasha", {"op": "insight.add", "insight": {**item, "text": "в КП 300, на встрече — 260"}})
+    assert again["existing"] and again["insight"]["id"] == a["insight"]["id"] and again["insight"]["text"].endswith("260")
+    assert [x["id"] for x in store.view(url, "sasha", "meeting", id=m["id"], lines="none")["insights"]] == [a["insight"]["id"]]
+    one(url, "sasha", {"op": "insight.delete", "id": a["insight"]["id"]})
+    gone = one(url, "sasha", {"op": "insight.add", "insight": item})
+    assert gone["existing"] and gone["insight"]["deleted_at"] is not None
+    # Слияние людей: наблюдение о дубле — о живой.
+    b = one(url, "sasha", {"op": "insight.add", "insight": {"text": "любит цифры", "person_ids": [str(mt["Олег"])]}})["insight"]
+    with as_(url, "sasha") as c:
+        dup = c.execute("INSERT INTO crm.people (name, owner_id) VALUES ('Олег В.', 'sasha') RETURNING id").fetchone()["id"]
+    one(url, "sasha", {"op": "insight.set", "id": b["id"], "set": {"person_ids": [str(dup)]}})
+    one(url, "sasha", {"op": "person.merge", "id": str(dup), "into": str(mt["Олег"])})
+    assert store.view(url, "sasha", "insights", person_id=str(mt["Олег"]))["items"][0]["id"] == b["id"]
+    # Встреча стала личной — её строки убраны; новую на личную — отказ.
+    c_ = one(url, "sasha", {"op": "insight.add", "insight": {**item, "item_key": "conflict-2"}})["insight"]
+    one(url, "sasha", {"op": "meeting.set", "id": m["id"], "set": {"sphere": "home"}})
+    assert store.view(url, "sasha", "insights", meeting_id=m["id"])["items"] == []
+    with as_(url, "sasha") as c:
+        assert c.execute("SELECT deleted_at FROM crm.insights WHERE id = %s", (c_["id"],)).fetchone()["deleted_at"]
+    bad = ops(url, "sasha", {"op": "insight.add", "insight": {**item, "item_key": "conflict-3"}})[0]
+    assert not bad["ok"] and "личная встреча" in bad["error"]

@@ -199,3 +199,22 @@ FROM crm.meeting_lines l
 JOIN crm.meetings m ON m.id = l.meeting_id
 WHERE m.owner_id = crm.owner_id();
 COMMENT ON VIEW life.meeting_lines IS 'Расшифровки встреч репликами: n — порядок, start_sec — секунда от начала, speaker — кто говорит (как распознала служба). Поиск по словоформам: tsv @@ websearch_to_tsquery(''russian'', ''счёт оплата''); имена — text ILIKE ''%Павел%''. Встреча — life.meetings по meeting_id = id.';
+
+-- «Только тебе» (dela_0027, аудит №8–11; место этапа 6): наблюдения владельца — оценки людей, несостыковки,
+-- неуверенность, «кто за столом», что уточнить. Только его строки и без убранных: вид от владельца базы, RLS не
+-- действует — поэтому явно owner_id = crm.owner_id().
+DROP VIEW IF EXISTS life.insights;
+CREATE VIEW life.insights AS
+SELECT i.at, (i.at AT TIME ZONE 'Europe/Moscow')::date AS day, i.kind, i.text, i.quote, i.state,
+       ARRAY(SELECT coalesce(pe.short, pe.name) FROM unnest(i.person_ids) WITH ORDINALITY AS u(pid, n)
+             JOIN crm.people pe ON pe.id = u.pid ORDER BY u.n) AS people,
+       p.name AS client, d.name AS deal, o.name AS org,
+       coalesce(nullif(btrim(m.title), ''), m.source_title) AS meeting, m.ref AS meeting_ref, i.at_sec,
+       i.source, i.source_ref, i.id, i.person_ids, i.project_id, i.deal_id, i.org_id, i.meeting_id
+FROM crm.insights i
+LEFT JOIN crm.projects p ON p.id = i.project_id
+LEFT JOIN crm.deals d ON d.id = i.deal_id
+LEFT JOIN crm.orgs o ON o.id = i.org_id
+LEFT JOIN crm.meetings m ON m.id = i.meeting_id
+WHERE i.owner_id = crm.owner_id() AND i.deleted_at IS NULL;
+COMMENT ON VIEW life.insights IS 'Только Саше. Не цитировать в письмах, сообщениях и черновиках людям. «Только тебе» — его наблюдения о людях, клиентах, сделках и встречах: kind — вид (note — заметка; conflict — несостыковка, hedge — неуверенность, table — кто за столом, objection — возражение, signal — сигнал, ask — что уточнить и другие ключи разбора встреч и дайджеста), text и quote, people/client/deal/org/meeting — о ком, at_sec — секунда встречи, state: new, seen (видел), useful, dismissed (мимо), wrong (неверно), moved (перенёс). Записать — инструмент crm_private.';
