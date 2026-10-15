@@ -521,6 +521,21 @@ class PravkaApp : Application() {
     }
 
     /**
+     * Правка Дел сразу на сервер — и что сказать владельцу после ответа: отказ сервера его словами (правило 6 карты:
+     * «Кто это — «Ваня»: Иван Петров или Иван Сидоров? Ответь кнопкой…»), иначе [said]; без связи — «уйдёт, когда будет
+     * связь». Ответы «Подскажи» (сверка задания 21): до 15.10 «✓ поставлено» показывалось до ответа, и отказ молча
+     * возвращал строку через десять секунд.
+     */
+    suspend fun delaSend(ops: List<org.json.JSONObject>, said: String): String {
+        if (ops.isEmpty()) return said
+        val since = System.currentTimeMillis()
+        delaStore.enqueue(ops)
+        val sent = delaSync.pushNow(4_000L)
+        val refused = delaStore.noticesFlow.value.firstOrNull { it.error && it.at >= since }
+        return refused?.text ?: if (sent) said else "$said — уйдёт на сервер, когда будет связь"
+    }
+
+    /**
      * Места автопилота Засечки (SSID → имя, без повторов имени): по ним
      * Разноска ставит «напомни, когда приеду домой», а автопилот узнаёт приезд.
      */

@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -202,6 +203,8 @@ private data class DelaScreen(
     val home: Home? = null,
     /** Просрочено N — ссылкой во «Все дела» под разделами (`lateLink` веба); 0 — строки нет. */
     val late: Int = 0,
+    /** «ждут от тебя без срока: N · жду больше недели: M» — у «Сейчас» рядом с просрочкой (аудит №5); null — строки нет. */
+    val waits: DelaViews.Waits? = null,
 ) {
     /** Дела экрана в порядке показа — то, что видит Claude. */
     val ids: List<String> get() = (nodes?.let { n -> DelaGroups.flat(n).map { it.id } } ?: groups.flatMap { g -> g.items.map { it.id } }) + taskIds
@@ -605,6 +608,7 @@ fun DelaTab(
                     auto = Dela.autoDone(snap, me, now).size,
                 ),
                 late = DelaGroups.lateTasks(snap, me, today, sphere).size,
+                waits = DelaViews.waits(snap, me, today, sphere, now),
             )
         }
         // «Сегодня» (`renderToday` веба, 13.10.2026): свои дела со сроком ровно сегодня, три группы по приоритету —
@@ -1013,7 +1017,8 @@ fun DelaTab(
             val headed = view == DelaViews.View.NOW || view == DelaViews.View.TODAY || view == DelaViews.View.KRUG || view == DelaViews.View.TREE
             if (headed && screen != null) {
                 val showSub = !(Look.v2 && view == DelaViews.View.NOW)
-                if (showSub || screen.principle.isNotBlank() || screen.late > 0) item(key = "today:head") {
+                val waits = screen.waits?.takeIf { it.any }
+                if (showSub || screen.principle.isNotBlank() || screen.late > 0 || waits != null) item(key = "today:head") {
                     Column(Modifier.padding(start = 6.dp)) {
                         if (showSub) Text(
                             screen.sub,
@@ -1028,6 +1033,13 @@ fun DelaTab(
                             modifier = Modifier.padding(top = 4.dp),
                         )
                         if (screen.late > 0) LateLink(screen.late) { go(DelaViews.View.ALL.key) }
+                        // Аудит №5: «Отбить» без срока и «Мониторить» без движения — числами, тапом — фильтр по людям
+                        // (свой с той же группой или заводской), перед звонком видно всё, что должен и чего жду.
+                        if (waits != null) WaitLinks(
+                            waits,
+                            onOwed = { go(DelaGroups.scopeFilter(filters, "f-owed-people", DelaGroups.Scope.OWED)?.let { FILTER_NAV + it.id } ?: DelaViews.View.ALL.key) },
+                            onStale = { go(DelaGroups.scopeFilter(filters, "f-check-people", DelaGroups.Scope.CHECK)?.let { FILTER_NAV + it.id } ?: DelaViews.View.ALL.key) },
+                        )
                     }
                 }
             }
@@ -1147,18 +1159,22 @@ fun DelaTab(
         // Разобранные наговоры, которые ещё ждут решения, — над разделом.
         item(key = "raznoska") { RaznoskaSection(app, voiceInBar = true) }
 
-        // Кнопки вопросов «Подскажи» — одни и те же в «Новом» и в блоке «Новое» на главной «Сейчас».
+        // Кнопки вопросов «Подскажи» — одни и те же в «Новом» и в блоке «Новое» на главной «Сейчас». Ответ уходит сразу,
+        // тост — после ответа сервера (`hangSend`, сверка задания 21): до 15.10 «✓ поставлено» показывалось сразу, а
+        // отказ сервера («Кто это — X или Y?») уходил в заметки, и строка молча возвращалась через десять секунд.
         val onAccept: (List<Dela.Suggestion>) -> Unit = { items ->
-            scope.launch {
-                app.delaDo(items.map { Dela.decideOp(it.id, accept = true) })
-                Feedback.toast(app, if (items.size == 1) "✓ поставлено" else "✓ поставлено: ${items.size}")
-            }
+            hangSend(items.map { Dela.decideOp(it.id, accept = true) }, if (items.size == 1) "✓ поставлено" else "✓ поставлено: ${items.size}")
         }
         val onRejectAll: (List<Dela.Suggestion>) -> Unit = { items ->
-            scope.launch {
-                app.delaDo(items.map { Dela.decideOp(it.id, accept = false) })
-                Feedback.toast(app, "Не надо: ${items.size}")
-            }
+            hangSend(items.map { Dela.decideOp(it.id, accept = false) }, "Не надо: ${items.size}")
+        }
+        // Ответ кнопкой (`answer` веба): номер варианта — что он значит, решает сервер.
+        val onAnswer: (Dela.Suggestion, DelaViews.Option) -> Unit = { sg, o ->
+            hangSend(listOf(Dela.answerOp(sg.id, o.index)), DelaViews.answerSaid(o))
+        }
+        // «Не для CRM» у человека — причина без вопроса (служба больше не спросит).
+        val onRejectNow: (Dela.Suggestion, String) -> Unit = { sg, reason ->
+            hangSend(listOf(Dela.decideOp(sg.id, accept = false, reason = reason)), "Не надо: $reason")
         }
         // «Это оно» (`mergeInto` веба): слова предложения — комментарием к делу, само предложение отклонено с причиной.
         val onMerge: (Dela.Suggestion, Dela.Task) -> Unit = { sg, t ->
@@ -1211,6 +1227,18 @@ fun DelaTab(
                 onEdit = { editingSuggestion = it },
                 onReject = { rejecting = it },
                 onAcceptSet = onAcceptSet,
+                onAnswer = onAnswer,
+                onRejectNow = onRejectNow,
+                // «Вернуть» человека, заведённого само: карточку (и компанию, заведённую ради него) — в архив.
+                onUndoPerson = { sg ->
+                    val nowIso = java.time.OffsetDateTime.now().withNano(0).toString()
+                    val ops = Dela.autoPersonUndoOps(sg, snap, seenOn, nowIso)
+                    if (ops != null) hangSend(ops, "Убрал в архив: " + DelaViews.autoPerson(sg, snap).name.take(40))
+                },
+                onPerson = { id -> push(DelaPage.Person(id)) },
+                week = views["week"]?.data,
+                weekAt = views["week"]?.at ?: 0L,
+                onWeek = { scope.launch { app.delaSync.crmView("week") } },
             )
         } else if (home != null) {
             // Главная «Сейчас»: Сейчас → Новое → Сегодня; «Остального» здесь нет.
@@ -1224,6 +1252,8 @@ fun DelaTab(
                 onReject = { rejecting = it },
                 onMerge = onMerge,
                 onAcceptSet = onAcceptSet,
+                onAnswer = onAnswer,
+                onRejectNow = onRejectNow,
             )
         } else if (screen != null) {
             // «Сегодня»: что ждёт в «Новом» — ссылкой под делами, как в вебе.
@@ -1821,12 +1851,9 @@ fun DelaTab(
             onSave = { after ->
                 editingSuggestion = null
                 // В set — только поправленное: остальное сервер возьмёт из
-                // предложения сам (имена — в id по своему справочнику).
-                val (set, _) = Dela.diff(proposed, after)
-                scope.launch {
-                    app.delaDo(listOf(Dela.decideOp(sg.id, accept = true, set = set)))
-                    Feedback.toast(app, "✓ принято с поправкой")
-                }
+                // предложения сам (имена — в id по своему справочнику). Человека
+                // не выбрали — «без человека» явно (аудит №1, `Dela.acceptEditSet`).
+                hangSend(listOf(Dela.decideOp(sg.id, accept = true, set = Dela.acceptEditSet(sg, proposed, after))), "✓ принято с поправкой")
             },
             onStatus = { editingSuggestion = null },
             onStart = { editingSuggestion = null },
@@ -1839,10 +1866,7 @@ fun DelaTab(
             onDismiss = { rejecting = null },
             onReject = { reason ->
                 rejecting = null
-                scope.launch {
-                    app.delaDo(listOf(Dela.decideOp(rj.id, accept = false, reason = reason)))
-                    Feedback.toast(app, "Отклонено")
-                }
+                hangSend(listOf(Dela.decideOp(rj.id, accept = false, reason = reason)), "Отклонено")
             },
         )
     }
@@ -2005,6 +2029,18 @@ private fun LazyListScope.newView(
     onMerge: (Dela.Suggestion, Dela.Task) -> Unit,
     /** «Да» с поправкой — вопрос разборщика Круга: выбранные направления. */
     onAcceptSet: (Dela.Suggestion, org.json.JSONObject) -> Unit = { sg, _ -> onAccept(listOf(sg)) },
+    /** Ответ кнопкой — вариант вопроса (`payload.options`). */
+    onAnswer: (Dela.Suggestion, DelaViews.Option) -> Unit = { _, _ -> },
+    /** «Нет» с готовой причиной без листа («Не для CRM» у человека). */
+    onRejectNow: (Dela.Suggestion, String) -> Unit = { sg, _ -> onReject(sg) },
+    /** «Вернуть» у человека, заведённого само. */
+    onUndoPerson: (Dela.Suggestion) -> Unit = {},
+    /** Тап по «Новый человек: …» — его карточка. */
+    onPerson: (String) -> Unit = {},
+    /** Ответ `GET /api/view/week` (кэш вида) — строка счётчика автоматики (№29); null — ещё нет или старый сервер. */
+    week: org.json.JSONObject? = null,
+    weekAt: Long = 0L,
+    onWeek: () -> Unit = {},
 ) {
     val snap = crm.snap
     val zone = java.time.ZoneId.systemDefault()
@@ -2031,7 +2067,8 @@ private fun LazyListScope.newView(
             val mode = ru.zf.pravka.ui.LocalMode.current
             PaperCard(
                 label = "Подскажи · ${parts.asks.size}",
-                trailing = if (parts.asks.size > 1) {
+                // «Все» — только когда у каждого вопроса ответ — одно «Да» (как веб: при вариантах кнопки «все» нет).
+                trailing = if (DelaViews.bulkOk(parts.asks, snap)) {
                     {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             PaperTextButton("Не надо все", onClick = { onRejectAll(parts.asks) })
@@ -2048,6 +2085,8 @@ private fun LazyListScope.newView(
                         onAccept = { onAccept(listOf(sg)) }, onEdit = { onEdit(sg) }, onReject = { onReject(sg) },
                         onOpen = actions.open, onMerge = { t -> onMerge(sg, t) },
                         onAcceptSet = { set -> onAcceptSet(sg, set) },
+                        onAnswer = { o -> onAnswer(sg, o) },
+                        onRejectNow = { reason -> onRejectNow(sg, reason) },
                     )
                 }
             }
@@ -2086,10 +2125,28 @@ private fun LazyListScope.newView(
                     }
                 },
             ) {
-                Text(DelaViews.autoSummary(autoDone) + " по встречам и Telegram", style = ru.zf.pravka.ui.LocalPravkaType.current.meta, color = mode.meta)
+                // Откуда — по источникам (`autoFrom` веба): с 15.10 людей заводят и встречи, и телефонная книжка.
+                Text(listOf(DelaViews.autoSummary(autoDone), DelaViews.autoFrom(autoDone)).filter { it.isNotBlank() }.joinToString(" "),
+                    style = ru.zf.pravka.ui.LocalPravkaType.current.meta, color = mode.meta)
                 if (autoOpen) autoDone.forEach { sg ->
                     RowRule()
-                    AutoDoneRow(sg, snap.tasks[sg.taskId], today, onReopen = { t -> onReopen(t, sg) }, onSeen = onSeen?.let { f -> { f(listOf(sg)) } })
+                    if (sg.kind == "person") AutoPersonRow(sg, snap, onUndo = { onUndoPerson(sg) }, onSeen = onSeen?.let { f -> { f(listOf(sg)) } }, onOpen = onPerson)
+                    else AutoDoneRow(sg, snap.tasks[sg.taskId], today, onReopen = { t -> onReopen(t, sg) }, onSeen = onSeen?.let { f -> { f(listOf(sg)) } })
+                }
+            }
+        }
+    }
+    // Счётчик откатов автоматики за неделю (№29) — строкой под «Сделано само», как в вебе; считает сервер (вид week),
+    // не чаще раза в минуту и не на главном потоке (`crmView` — на IO). Старый сервер поля не знает — строки нет.
+    if (batch.isEmpty()) {
+        item(key = "n:week") {
+            LaunchedEffect(Unit) { if (System.currentTimeMillis() - weekAt > 60_000L) onWeek() }
+            val line = DelaViews.automationLine(week)
+            if (line != null) {
+                val no = DelaViews.automationNo(week)
+                Column(Modifier.padding(start = 6.dp, end = 6.dp, top = 2.dp)) {
+                    Text(line, style = ru.zf.pravka.ui.LocalPravkaType.current.meta, color = ru.zf.pravka.ui.LocalMode.current.meta)
+                    if (no.isNotBlank()) Text("частые «нет»: $no", style = ru.zf.pravka.ui.LocalPravkaType.current.meta, color = ru.zf.pravka.ui.LocalMode.current.meta)
                 }
             }
         }
@@ -2118,6 +2175,8 @@ internal fun SourceMark(source: String, size: androidx.compose.ui.unit.Dp = 16.d
             "send" -> Glyphs.Telegram
             "chat" -> Glyphs.Ask
             "list" -> Glyphs.ListLines
+            "phone" -> Glyphs.Phone
+            "circle" -> ru.zf.pravka.ui.KvGlyphs.byKey("target") ?: Glyphs.Spark
             else -> Glyphs.Edit
         },
         contentDescription = m.word,
@@ -2179,9 +2238,16 @@ private fun FeedRow(t: Dela.Task, actions: DelaActions, today: String, where: St
 /**
  * Вопрос «Подскажи» (`askItem` веба): сверху — значок и пачка (встреча —
  * ссылкой), П-номер (его же видит Claude: «П1 поставь, срок пятница») и что
- * предлагается, вопрос цветом «внимание», подсказка, цитата одной строкой,
- * «похоже, это уже есть» с «Это оно»; «Поставить» · «Поправить» · «Не надо».
+ * предлагается, вопрос цветом «внимание», «Ждёт: …» (почему не встало само —
+ * `payload.held`), подсказка, цитата одной строкой, «похоже, это уже есть» с
+ * «Это оно»; «Поставить» · «Поправить» · «Не надо» — или варианты кнопками.
+ *
+ * С 15.10.2026 (аудит №1, №25/№60, docs/dela-phone-21.md): у вопроса со своими
+ * ответами (`payload.options`) — кнопки вариантов вместо «Да»; у вопроса с
+ * `pick` и у двусмысленного имени «Да» нет вовсе (сервер его не примет);
+ * у человека без вариантов — «Не для CRM» сразу, без листа причины.
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 internal fun AskRow(
     sg: Dela.Suggestion,
@@ -2195,21 +2261,28 @@ internal fun AskRow(
     onOpen: (Dela.Task) -> Unit,
     onMerge: (Dela.Task) -> Unit,
     onAcceptSet: (org.json.JSONObject) -> Unit = { onAccept() },
+    onAnswer: (DelaViews.Option) -> Unit = {},
+    onRejectNow: (String) -> Unit = { onReject() },
 ) {
     val mode = ru.zf.pravka.ui.LocalMode.current
     val ty = ru.zf.pravka.ui.LocalPravkaType.current
     val context = androidx.compose.ui.platform.LocalContext.current
     val txt = DelaViews.sugText(sg, snap, today)
     val q = DelaViews.askWhy(sg, snap)
+    val held = DelaViews.heldLine(sg, q)
+    val opts = DelaViews.options(sg, snap)
+    val choice = DelaViews.choiceOnly(sg)
     // Вопрос разборщика Круга (`askItem` веба): предложенные направления горят, тап — поправить; «Да» — выбранное.
     // С деревом (13.10.2026) разборщик предлагает и цель (`why_id`, путь — `goal_path` в подсказке строкой ниже).
     val krugDirs = DelaKrug.directions()
     val proposed = remember(sg.id) { Dela.run { sg.payloadObj().strings("directions") } }
     val proposedGoal = remember(sg.id) { Dela.run { sg.payloadObj().str("why_id") } }
     var chosen by remember(sg.id) { mutableStateOf(proposed) }
-    val krugAsk = sg.source == "krug" && DelaKrug.on(snap, krugDirs)
+    // Свои ответы кнопками у вопроса разборщика — вместо чипов направлений (`kr` веба: только без вариантов).
+    val krugAsk = sg.source == "krug" && DelaKrug.on(snap, krugDirs) && opts == null
     val twin = if (sg.source == "krug") null else DelaViews.twinOf(sg, snap, me)
-    val link = sg.sourceRef.takeIf { it.startsWith("https://") }
+    // Встреча — ссылкой: у дела её адрес в source_ref, у вопроса о человеке со встречи — в payload.speaker.url (№25).
+    val link = DelaViews.sugLink(sg)
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -2233,6 +2306,8 @@ internal fun AskRow(
             modifier = Modifier.padding(top = 2.dp),
         )
         if (q != null) Text(q, style = ty.label, fontWeight = FontWeight.SemiBold, color = ru.zf.pravka.ui.Ink.Warn)
+        // Почему не встало само — словами сервера, без того, что уже сказал вопрос (`heldLine` веба).
+        if (held != null) Text(held, style = ty.label, color = mode.label)
         if (txt.hint.isNotBlank()) Text(txt.hint, style = ty.label, color = mode.meta)
         if (txt.add.isNotBlank()) Text("+ ${txt.add}", style = ty.label, color = mode.label)
         if (sg.quote.isNotBlank() && sg.quote != txt.title) {
@@ -2262,18 +2337,85 @@ internal fun AskRow(
                 PaperTextButton("Это оно", onClick = { onMerge(twin) })
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Spacer(Modifier.weight(1f))
-            PaperTextButton("Не надо", onClick = onReject)
-            if (sg.kind == "create") PaperTextButton("Поправить", onClick = onEdit)
-            // «Да» — как есть (и без чипов, если предложена цель); поправил направление — значит, цель не та:
-            // дело ляжет прямо на направление (`why_id: null`, как `askItem` веба).
-            if (krugAsk) PaperButton("Да", icon = Glyphs.Check, primary = true, enabled = chosen.isNotEmpty() || proposedGoal.isNotBlank(), onClick = {
-                if (chosen == proposed) onAccept()
-                else onAcceptSet(org.json.JSONObject().put("directions", org.json.JSONArray(chosen)).put("why_id", org.json.JSONObject.NULL))
-            })
-            else PaperButton(DelaViews.askYes(sg), icon = Glyphs.Check, primary = true, onClick = onAccept)
+        // «Поправить» — у «завести» всегда, у «уточнить» — когда нужен выбор человека: кандидатов кнопками до трёх,
+        // нужного среди них может не быть (сверка задания 21, п. 5).
+        val canEdit = sg.kind == "create" || (sg.kind == "update" && choice)
+        if (opts != null) {
+            // Свои ответы кнопками (`askItem` веба): первый — главной кнопкой, «нет»-варианты тише. Есть среди них «нет»
+            // («Не для CRM», «Никто») — своего «Не надо» не нужно.
+            val first = opts.firstOrNull { !it.reject }
+            FlowRow(
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp, Alignment.End),
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            ) {
+                if (opts.none { it.reject }) PaperTextButton("Не надо", onClick = onReject)
+                if (canEdit) PaperTextButton("Поправить", onClick = onEdit)
+                for (o in opts) {
+                    when {
+                        o == first -> PaperButton(o.label, icon = Glyphs.Check, primary = true, onClick = { onAnswer(o) })
+                        o.reject -> PaperTextButton(o.label, onClick = { onAnswer(o) })
+                        else -> PaperButton(o.label, onClick = { onAnswer(o) })
+                    }
+                }
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Spacer(Modifier.weight(1f))
+                // Человек без вариантов («Новый номер — завести?») — «Не для CRM» сразу: служба больше не спросит.
+                if (sg.kind == "person") PaperTextButton("Не для CRM", onClick = { onRejectNow(DelaViews.NOT_CRM) })
+                else PaperTextButton("Не надо", onClick = onReject)
+                if (canEdit) PaperTextButton("Поправить", onClick = onEdit)
+                // «Да» — как есть (и без чипов, если предложена цель); поправил направление — значит, цель не та:
+                // дело ляжет прямо на направление (`why_id: null`, как `askItem` веба).
+                if (krugAsk) PaperButton("Да", icon = Glyphs.Check, primary = true, enabled = chosen.isNotEmpty() || proposedGoal.isNotBlank(), onClick = {
+                    if (chosen == proposed) onAccept()
+                    else onAcceptSet(org.json.JSONObject().put("directions", org.json.JSONArray(chosen)).put("why_id", org.json.JSONObject.NULL))
+                })
+                // Двусмысленный человек без кнопок: «Да» сервер не примет — выбор в «Поправить» или словами Claude.
+                else if (!choice) PaperButton(DelaViews.askYes(sg), icon = Glyphs.Check, primary = true, onClick = onAccept)
+            }
+            if (choice) Text(
+                when {
+                    sg.kind == "create" -> "выбери человека в «Поправить» или скажи Claude"
+                    canEdit -> "скажи Claude, кто это — или «Поправить»"
+                    else -> "ответь в вебе Дел или скажи Claude"
+                },
+                style = ty.meta,
+                color = mode.meta,
+                modifier = Modifier.fillMaxWidth().padding(end = 8.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            )
         }
+    }
+}
+
+/**
+ * Человек, заведённый сам (`autoPerson` веба, docs/dela-phone-20.md): «Новый человек: <имя>» (тап — карточка), откуда
+ * («встреча «Альфа: фонды» 14.10 · 5 мин речи · имя дал ты», «Telegram: 24 сообщения»), «Понятно» и «Вернуть» —
+ * карточку в архив (строки не удаляются: архив и есть «как было»).
+ */
+@Composable
+private fun AutoPersonRow(sg: Dela.Suggestion, snap: Dela.Snapshot, onUndo: () -> Unit, onSeen: (() -> Unit)?, onOpen: (String) -> Unit) {
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    val ty = ru.zf.pravka.ui.LocalPravkaType.current
+    val a = DelaViews.autoPerson(sg, snap)
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Новый человек: " + a.name,
+                style = ty.body,
+                color = ru.zf.pravka.ui.Ink.Text,
+                modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(enabled = a.personId.isNotBlank()) { onOpen(a.personId) },
+            )
+            if (a.hint.isNotBlank()) Text(a.hint, style = ty.label, color = mode.meta, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (onSeen != null) PaperTextButton("Понятно", onClick = onSeen)
+                if (a.live) PaperTextButton("Вернуть", icon = Glyphs.Undo, onClick = onUndo)
+                else if (a.personId.isNotBlank()) Text("в архиве", style = ty.label, color = mode.meta)
+            }
+        }
+        SourceMark(sg.source)
     }
 }
 

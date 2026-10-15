@@ -171,25 +171,23 @@ internal class DelaCrmContext(
     fun run(ops: List<JSONObject>, refresh: List<String>, done: String = "") {
         if (ops.isEmpty()) return
         app.appScope.launch {
+            val since = System.currentTimeMillis()
             app.delaStore.enqueue(ops)
             val sent = app.delaSync.pushNow(4_000L)
-            if (done.isNotBlank()) Feedback.toast(app, if (sent) done else "$done — уйдёт, когда будет связь")
+            // Тост — после ответа сервера и его словами (правило 6 карты): отказ («склеивает людей только владелец»)
+            // или заметка ответа (««Ваня» не дописал — так зовут Иван Петров», аудит №1) — вместо «Имя дописано».
+            val fresh = app.delaStore.noticesFlow.value.filter { it.at >= since }
+            val said = (fresh.firstOrNull { it.error } ?: fresh.firstOrNull())?.text
+            if (done.isNotBlank() || said != null) Feedback.toast(app, said ?: if (sent) done else "$done — уйдёт, когда будет связь")
             if (sent) for (p in refresh.distinct()) app.delaSync.crmView(p)
         }
     }
 
-    /**
-     * Следующее дело сделки — из своей копии (там и своя только что поставленная
-     * галка), а не из ответа вида, который мог устареть: открытое дело с
-     * ближайшим сроком. Копия ещё не знает дел сделки — то, что сказал сервер.
-     */
-    fun nextFor(dealId: String, fromView: DelaCrm.NextTask?): DelaCrm.NextTask? {
-        val mine = snap.tasks.values.filter { it.dealId == dealId }
-        val open = mine.filter { it.open }.sortedWith(Dela.ORDER)
-        open.firstOrNull()?.let { return DelaCrm.NextTask(it.id, it.num, it.title, it.dueDate, it.ownerId, it.ball) }
-        if (fromView != null && mine.any { it.id == fromView.id }) return null
-        return fromView
-    }
+    /** Следующее дело сделки — тем же правилом, что сервер, из своей копии (`DelaCrm.nextFor`). */
+    fun nextFor(d: DelaCrm.Deal): DelaCrm.NextTask? = DelaCrm.nextFor(snap, d.id, d.projectId, d.solo, d.nextTask)
+
+    /** Владелец Дел: только ему — склейка людей («Это тот же, что…», аудит №23; сервер остальным откажет). */
+    val owner: Boolean get() = DelaCrm.canMerge(snap, me)
 
     fun personName(id: String): String = snap.people[id]?.label.orEmpty()
 }
@@ -408,17 +406,13 @@ private fun DealRow(ctx: DelaCrmContext, d: DelaCrm.Deal, money: Boolean) {
                 .filter { it.isNotBlank() }.joinToString(" · ")
             Text(out, style = MaterialTheme.typography.bodySmall, color = if (d.outcome == "won") c.primary else c.onSurfaceVariant, maxLines = 2)
         } else {
-            val next = ctx.nextFor(d.id, d.nextTask)
+            val next = ctx.nextFor(d)
             val warn = listOfNotNull(
                 "застыла".takeIf { d.stale },
                 "тишина ${d.quietDays} дн.".takeIf { d.quiet },
             ).joinToString(" · ")
             if (next != null) {
-                Text(
-                    "→ ${next.title}" + if (next.dueDate.isNotBlank()) " · " + DelaAsk.ddmm(next.dueDate, ctx.today) else "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (next.dueDate.isNotBlank() && next.dueDate < ctx.today) c.error else c.onSurface,
-                )
+                NextLine(next, ctx.today, c.onSurface)
             } else {
                 Text("нет следующего дела", style = MaterialTheme.typography.bodySmall, color = c.error)
             }
@@ -484,13 +478,36 @@ internal fun StageDot(stage: String) {
 }
 
 /**
+ * «→ Иван: прислать модель · 12.10 · дело клиента» — следующее дело сделки; у дела клиента без сделки (сделка у клиента
+ * одна живая, аудит №2) — приписка «· дело клиента» тише текста (`.via-client` веба).
+ */
+@Composable
+private fun NextLine(next: DelaCrm.NextTask, today: String, ink: Color) {
+    val c = MaterialTheme.colorScheme
+    Text(
+        androidx.compose.ui.text.buildAnnotatedString {
+            append("→ ${next.title}" + if (next.dueDate.isNotBlank()) " · " + DelaAsk.ddmm(next.dueDate, today) else "")
+            if (next.viaClient) {
+                pushStyle(androidx.compose.ui.text.SpanStyle(color = c.onSurfaceVariant))
+                append(" · дело клиента")
+                pop()
+            }
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = if (next.dueDate.isNotBlank() && next.dueDate < today) c.error else ink,
+    )
+}
+
+/**
  * Проект клиента строкой под ним (`dealLine` веба): стадия цветом, короткое
  * имя, следующее дело или красное «нет следующего дела». Тап — страница сделки.
  */
 @Composable
 private fun ClientDealLine(ctx: DelaCrmContext, d: Dela.Deal, client: Dela.Project?) {
     val c = MaterialTheme.colorScheme
-    val next = ctx.snap.tasks.values.filter { it.dealId == d.id && it.open }.sortedWith(Dela.ORDER).firstOrNull()
+    // Одна живая сделка у клиента — её шаг и дело клиента без сделки (аудит №2), как у сервера.
+    val solo = ctx.snap.allDealsOf(d.projectId).count { !it.closed } == 1 && !d.closed
+    val next = DelaCrm.nextFor(ctx.snap, d.id, d.projectId, solo, null)
     Column(Modifier.fillMaxWidth().seen("d:" + d.id).clip(RoundedCornerShape(10.dp)).clickable { ctx.push(DelaPage.Deal(d.id)) }.padding(start = 30.dp, top = 4.dp, bottom = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             StageDot(d.stage)
@@ -502,11 +519,7 @@ private fun ClientDealLine(ctx: DelaCrmContext, d: Dela.Deal, client: Dela.Proje
             Text(DelaCrm.dealShort(d.name, client), style = MaterialTheme.typography.bodyMedium)
         }
         if (next != null) {
-            Text(
-                "→ ${next.title}" + if (next.dueDate.isNotBlank()) " · " + DelaAsk.ddmm(next.dueDate, ctx.today) else "",
-                style = MaterialTheme.typography.bodySmall,
-                color = if (next.dueDate.isNotBlank() && next.dueDate < ctx.today) c.error else c.onSurfaceVariant,
-            )
+            NextLine(next, ctx.today, c.onSurfaceVariant)
         } else if (!d.closed) {
             Text("нет следующего дела", style = MaterialTheme.typography.bodySmall, color = c.error)
         }
@@ -861,6 +874,8 @@ internal fun LazyListScope.crmClientBottom(ctx: DelaCrmContext, projectId: Strin
     val project = ctx.snap.projects[projectId] ?: v?.project
     val money = ctx.money && v?.money == true
     val pays = DelaCrm.overlayPayments(v?.payments.orEmpty(), ctx.ops)
+    // Встречи клиента (аудит №3) — только владельцу встреч: команде поле пустое, блока нет.
+    if (v != null && v.meetings.isNotEmpty()) item(key = "sec:meetings") { MeetingsCard(ctx, "c:$projectId", v.meetings, v.meetingsN, "клиента") }
     item(key = "sec:timeline") {
         val items = DelaCrm.overlayTimeline(v?.timeline.orEmpty(), ctx.ops, ctx.snap) { it.projectId == projectId }
         TimelineBlock(ctx, "c:$projectId", items, if (money) pays else emptyList(), loaded = v != null, refresh = listOf(path), showDeal = true)
@@ -1016,13 +1031,21 @@ internal fun LazyListScope.crmDealPage(ctx: DelaCrmContext, dealId: String) {
             )
         }
     }
-    // Дела проекта: следующий шаг — его открытое дело (правило 12 сервера), из своей копии.
-    val open = ctx.snap.tasks.values.filter { it.dealId == dealId && it.open }.sortedWith(Dela.ORDER)
-        .ifEmpty { v?.open.orEmpty() }
+    // Дела проекта: следующий шаг — его открытое дело (правило 12 сервера), из своей копии. Пока проект у клиента
+    // один живой (solo, аудит №2), его шаги — и дела клиента без проекта: ниже группой «Дела клиента» (`renderDeal` веба).
+    val open = ctx.snap.tasks.values.filter { it.dealId == dealId && it.open && !it.goal }.sortedWith(Dela.ORDER)
+        .ifEmpty { v?.open.orEmpty().filter { it.dealId == dealId } }
+    val viaClient = if (d.solo && !d.closed) {
+        DelaCrm.clientSteps(ctx.snap, d.projectId).ifEmpty { v?.open.orEmpty().filter { it.dealId.isBlank() } }
+    } else emptyList()
     item(key = "sec:tasks") {
-        PaperCard(label = "Дела · ${open.size}") {
+        PaperCard(label = "Дела · ${open.size + viaClient.size}") {
             if (open.isNotEmpty()) TaskRows(open, ctx.actions)
-            else if (!d.closed) PaperHint("Нет следующего дела — проект без шага застынет. Скажи его Claude внизу.", MaterialTheme.colorScheme.error)
+            if (viaClient.isNotEmpty()) {
+                PaperHint("Дела клиента — без проекта: пока проект у клиента один, это его шаги")
+                TaskRows(viaClient, ctx.actions)
+            }
+            if (open.isEmpty() && viaClient.isEmpty() && !d.closed) PaperHint("Нет следующего дела — проект без шага застынет. Скажи его Claude внизу.", MaterialTheme.colorScheme.error)
             val done = v?.done.orEmpty()
             if (done.isNotEmpty()) {
                 var shown by remember { mutableStateOf(false) }
@@ -1033,6 +1056,8 @@ internal fun LazyListScope.crmDealPage(ctx: DelaCrmContext, dealId: String) {
         }
     }
     val pays = DelaCrm.overlayPayments(v?.payments ?: ctx.snap.paymentsOf(dealId), ctx.ops)
+    // Встречи сделки по карточке встречи (аудит №3) — только владельцу встреч: команде поле пустое, блока нет.
+    if (v != null && v.meetings.isNotEmpty()) item(key = "sec:meetings") { MeetingsCard(ctx, "d:$dealId", v.meetings, v.meetingsN, "проекта") }
     item(key = "sec:timeline") {
         val items = DelaCrm.overlayTimeline(v?.timeline.orEmpty(), ctx.ops, ctx.snap) { it.dealId == dealId }
         TimelineBlock(ctx, "d:$dealId", items, if (money) pays else emptyList(), loaded = v != null, refresh = refreshDeal)
@@ -1167,6 +1192,41 @@ private fun TimelineBlock(
     }
 }
 
+/**
+ * «Встречи» карточки сделки и клиента (аудит 15.10.2026, №3; `meetingsSec` веба): свежие [DelaCrm.MEET_CARD]
+ * строками — дата, название Дел, длительность, «встреча →» (её страница в вебе встреч); «все встречи · N» раскрывает
+ * остальные, что пришли с видом (до 50). Больше — подсказкой: страница «Встречи» в вебе Дел с отбором.
+ */
+@Composable
+private fun MeetingsCard(ctx: DelaCrmContext, key: String, items: List<DelaCrm.Meeting>, total: Int, what: String) {
+    val c = MaterialTheme.colorScheme
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var all by remember(key) { mutableStateOf(false) }
+    val n = maxOf(total, items.size)
+    PaperCard(label = "Встречи · $n") {
+        val shown = if (all) items else items.take(DelaCrm.MEET_CARD)
+        shown.forEachIndexed { i, m ->
+            if (i > 0) RowRule()
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(DelaCrm.meetingLine(m, ctx.today), style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (m.people.isNotEmpty()) Text(m.people.joinToString(", "), style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                if (m.url.isNotBlank()) Text(
+                    "встреча →",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.primary,
+                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClickLabel = "открыть встречу") { openLink(context, m.url) }.padding(6.dp),
+                )
+            }
+        }
+        if (items.size > DelaCrm.MEET_CARD) {
+            PaperTextButton(if (all) "Свернуть" else "все встречи $what · $n", onClick = { all = !all })
+        }
+        if (all && total > items.size) PaperHint("ещё ${total - items.size} — на странице «Встречи» в вебе Дел")
+    }
+}
+
 @Composable
 private fun TlItem(ctx: DelaCrmContext, it: DelaCrm.Interaction, refresh: List<String>, showDeal: Boolean) {
     val c = MaterialTheme.colorScheme
@@ -1186,8 +1246,10 @@ private fun TlItem(ctx: DelaCrmContext, it: DelaCrm.Interaction, refresh: List<S
                     color = c.primary,
                 )
             }
-            if (topic != null) Text(topic, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-            if (body.isNotBlank()) Text(body, style = MaterialTheme.typography.bodyMedium, maxLines = if (open) Int.MAX_VALUE else 3, overflow = TextOverflow.Ellipsis)
+            // Упоминание — текст тише (`.tl-row.mention` веба): правда сводки, но не разговор с ним.
+            val ink = if (it.mention) c.onSurfaceVariant else androidx.compose.ui.graphics.Color.Unspecified
+            if (topic != null) Text(topic, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = ink)
+            if (body.isNotBlank()) Text(body, style = MaterialTheme.typography.bodyMedium, color = ink, maxLines = if (open) Int.MAX_VALUE else 3, overflow = TextOverflow.Ellipsis)
             for (st in if (open) steps else steps.take(2)) Text("• $st", style = MaterialTheme.typography.bodySmall)
             if (!open && steps.size > 2) Text("ещё ${steps.size - 2}", style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
             val meta = listOfNotNull(
@@ -1196,6 +1258,8 @@ private fun TlItem(ctx: DelaCrmContext, it: DelaCrm.Interaction, refresh: List<S
                 it.durationMin?.takeIf { m -> m > 0 }?.let { m -> "$m мин" },
                 "из встречи".takeIf { _ -> it.source == "meeting" },
                 "из дайджеста · видишь только ты".takeIf { _ -> it.fromDigest },
+                // Аудит №28: клиента назвали в теме сводки, его чата в окне не было — запись видна, контактом не считается.
+                "упоминание — не контакт".takeIf { _ -> it.mention },
             ).joinToString(" · ")
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, modifier = Modifier.weight(1f, fill = false))
@@ -1374,9 +1438,12 @@ private fun PersonNamesCard(ctx: DelaCrmContext, p: Dela.Person, path: String) {
                 text = ""
             })
         }
-        RowRule()
-        PaperTextButton(if (picking) "Не сливать" else "Это тот же, что…", onClick = { picking = !picking })
-        if (picking) {
+        // Склеивает людей только владелец Дел (аудит №23): сервер остальным откажет, кнопка им ни к чему.
+        if (ctx.owner) {
+            RowRule()
+            PaperTextButton(if (picking) "Не сливать" else "Это тот же, что…", onClick = { picking = !picking })
+        }
+        if (picking && ctx.owner) {
             PaperField(value = query, onValueChange = { query = it }, placeholder = "найти карточку")
             val n = Dela.normName(query)
             val found = ctx.snap.livePeople().filter { it.id != p.id && n.length >= 2 && Dela.normName(it.name + " " + it.short + " " + it.aliases.joinToString(" ")).contains(n) }.take(6)

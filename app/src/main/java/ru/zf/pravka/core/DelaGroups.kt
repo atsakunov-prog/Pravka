@@ -500,6 +500,13 @@ object DelaGroups {
         Filter("f-check-people", "Мониторить — по людям", Scope.CHECK, listOf(Level.PERSON)),
     )
 
+    /**
+     * Куда ведёт «ждут от тебя без срока» и «жду больше недели» в шапке «Сейчас» (`scopeHref` веба, аудит №5):
+     * заводской фильтр по id, иначе свой с той же группой и без «только одно»; нет — null («Все дела»).
+     */
+    fun scopeFilter(filters: List<Filter>, id: String, scope: Scope): Filter? =
+        filters.firstOrNull { it.id == id } ?: filters.firstOrNull { it.scope == scope && it.pick == null }
+
     /** `settings.filters` из `/api/me`: нет поля (или не список) — заводские; незнакомое внутри — мимо. */
     fun filters(raw: Any?): List<Filter> {
         val a = raw as? JSONArray ?: return FILTERS_DEF

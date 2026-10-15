@@ -329,9 +329,13 @@ object Dela {
          * `payload.auto`: такое предложение, принятое руками (встреча старая),
          * — решение человека, сюда не идёт. Старый сервер закрывал с той же
          * причиной «закрыто само» — его строки видны как были.
+         *
+         * С 15.10.2026 (docs/dela-phone-20.md, -21.md) — и человек, заведённый сам
+         * («человек заведён сам»: из Telegram, телефонной книжки, со встречи) — строкой
+         * «Новый человек: …» с «Понятно» и «Вернуть», как `autoPerson` веба.
          */
         val autoDone: Boolean
-            get() = (kind == "close" || kind == "update") && status == "accepted" && reason in AUTO_REASONS
+            get() = (kind == "close" || kind == "update" || kind == "person") && status == "accepted" && reason in AUTO_REASONS
 
         /** Дата встречи или переписки, иначе — когда предложение появилось: по ней пачки идут свежими сверху. */
         val at: String get() = payloadObj().str("meeting_at").ifBlank { createdAt.take(10) }
@@ -825,8 +829,11 @@ object Dela {
                 "suggestion.decide" -> {
                     val sg = suggestions[op.str("id")] ?: continue
                     if (!sg.pending) continue
-                    val status = if (op.str("decision") == "reject") "rejected" else "accepted"
-                    suggestions[sg.id] = sg.copy(status = status, reason = op.str("reason"), decidedAt = nowIso, local = true)
+                    // Ответ кнопкой: принять или отклонить — по самому варианту (`reject`), как решит сервер.
+                    val opt = if (op.has("option")) sg.payloadObj().optJSONArray("options")?.optJSONObject(op.optInt("option", -1)) else null
+                    val reject = if (opt != null) opt.optBoolean("reject", false) else op.str("decision") == "reject"
+                    val reason = op.str("reason").ifBlank { opt?.let { o -> if (reject) o.str("reason").ifBlank { o.str("label") } else "ответ: " + o.str("label") }.orEmpty() }
+                    suggestions[sg.id] = sg.copy(status = if (reject) "rejected" else "accepted", reason = reason, decidedAt = nowIso, local = true)
                 }
                 // «Понятно» у закрытого само — уходит из «Нового» сразу, до ответа.
                 "suggestion.seen" -> for (id in op.strings("ids")) {
@@ -1221,6 +1228,32 @@ object Dela {
                 if (set != null && set.length() > 0) put("set", set)
             }
 
+    /** Сервер принимает ответ кнопкой (`suggestion.decide` с `option`, `payload.options`, 13.10.2026). */
+    const val FEATURE_OPTIONS = "options"
+
+    /**
+     * Ответ кнопкой на вопрос «Подскажи» (`answer` веба): номер варианта `payload.options`, без `decision` — принять
+     * или отклонить решает сам вариант (`reject`), что он меняет — тоже он (имя, человек, «новый», что дописать).
+     * С 15.10.2026 (аудит №1, №25) — единственный ответ на вопрос с `pick`: «Да» без выбора сервер не примет.
+     */
+    fun answerOp(id: String, option: Int, opId: String = newId()): JSONObject =
+        JSONObject().put("op", "suggestion.decide").put("op_id", opId).put("id", id).put("option", option)
+
+    /**
+     * «Поправить» у предложения (лист карточки): в `set` — только поправленное, остальное сервер возьмёт из
+     * предложения сам. Человек назван именем, а в листе его не выбрали («Никто» или имя двусмысленно и не узналось)
+     * — `person_id: null` явно (аудит №1): без этого сервер на двусмысленном имени откажет («Кто это — X или Y?»),
+     * ведь «Поправить» — ответ, что человека нет.
+     */
+    fun acceptEditSet(sg: Suggestion, proposed: Task, after: Task, tree: Boolean = false): JSONObject {
+        val (set, _) = diff(proposed, after, tree)
+        val p = sg.payloadObj()
+        if (sg.kind in setOf("create", "update") && p.str("person_name").isNotBlank() && p.str("person_id").isBlank() &&
+            after.personId.isBlank() && !set.has("person_id")
+        ) set.put("person_id", JSONObject.NULL)
+        return set
+    }
+
     /**
      * Наговорка, из которой вышли дела (06.10.2026, docs/dela-phone-3.md): текст
      * дословно — то, что ушло в разбор, не чистка. [ref] — ровно `source_ref` её
@@ -1268,7 +1301,10 @@ object Dela {
             "task.cancel" -> "отменить ${taskName(op.str("id"))}"
             "comment.add" -> "комментарий к ${taskName(op.optJSONObject("comment")?.str("task_id").orEmpty())}"
             "comment.delete" -> "убрать комментарий"
-            "suggestion.decide" -> (if (op.str("decision") == "reject") "отклонить" else "принять") + " предложение"
+            "suggestion.decide" -> if (op.has("option")) {
+                val label = s.suggestions[op.str("id")]?.payloadObj()?.optJSONArray("options")?.optJSONObject(op.optInt("option", -1))?.str("label")
+                if (label.isNullOrBlank()) "ответ на вопрос" else "ответ «${label.take(60)}»"
+            } else (if (op.str("decision") == "reject") "отклонить" else "принять") + " предложение"
             "suggestion.seen" -> "«понятно» у закрытого само"
             "dictation.add" -> "текст наговорки"
             "interaction.add" -> "заметка в хронологию"
@@ -1281,6 +1317,7 @@ object Dela {
             "svod.set" -> "запись Свода «${op.str("key")}»"
             "person.create" -> "новый человек «${op.optJSONObject("data")?.str("name").orEmpty().take(60)}»"
             "org.create" -> "организация «${op.optJSONObject("data")?.str("name").orEmpty().take(60)}»"
+            "org.set" -> "организация «${s.orgs[op.str("id")]?.name?.take(60) ?: "?"}»"
             "project.set" -> "проект «${s.projects[op.str("id")]?.name?.take(60) ?: "?"}»"
             "user.settings" -> "фильтры Дел"
             else -> op.str("op")
@@ -1365,8 +1402,14 @@ object Dela {
         }.sortedByDescending { it.at }
     }
 
-    /** Причины решения, которые ставит сам сервер (`store.AUTO_REASONS`). */
-    val AUTO_REASONS = setOf("закрыто само", "уточнено само")
+    /** Человек, которого сервер завёл сам (`store.AUTO_PERSON_REASON`, dela_0019; со встреч — с 15.10.2026, №25). */
+    const val AUTO_PERSON_REASON = "человек заведён сам"
+
+    /**
+     * Причины решения, которые ставит сам сервер (`store.AUTO_REASONS`). «Заведено само» сюда не входит, как и в вебе:
+     * дело, заведённое само, — в «Поставил», а не в «Сделано само».
+     */
+    val AUTO_REASONS = setOf("закрыто само", "уточнено само", AUTO_PERSON_REASON)
 
     /**
      * «Сделано само» за [days] дней, свежие сверху (`autoDone` веба): синк
@@ -1404,6 +1447,30 @@ object Dela {
             }
         }
         if (comment.isNotBlank()) list += JSONObject().put("op", "comment.delete").put("op_id", newId()).put("id", comment)
+        if (seen) list += seenOp(listOf(sg.id))
+        return list
+    }
+
+    /**
+     * «Вернуть» у человека, заведённого само (`autoPerson` веба, docs/dela-phone-20.md): карточку — в архив
+     * (`person.set archived_at`; строки не удаляются — архив и есть «как было»), компанию — тоже, если сервер завёл её
+     * ради него (`result.org_created`) и живых в ней больше никого нет; потом [seen] — `suggestion.seen`. После
+     * «Вернуть» это имя со встреч больше не заводится: сервер видит карточку в архиве («уже убран»). null — вернуть
+     * нечего: карточки в копии нет или она уже в архиве.
+     */
+    fun autoPersonUndoOps(sg: Suggestion, s: Snapshot, seen: Boolean, nowIso: String): List<JSONObject>? {
+        if (sg.kind != "person") return null
+        val r = sg.resultObj()
+        val p = s.people[r.str("person_id")] ?: return null
+        if (!p.live) return null
+        val list = mutableListOf<JSONObject>(
+            JSONObject().put("op", "person.set").put("op_id", newId()).put("id", p.id).put("set", JSONObject().put("archived_at", nowIso)),
+        )
+        val org = r.str("org_id")
+        val others = s.people.values.any { it.id != p.id && it.orgId == org && it.archivedAt.isBlank() }
+        if (r.optBoolean("org_created", false) && org.isNotBlank() && !others) {
+            list += JSONObject().put("op", "org.set").put("op_id", newId()).put("id", org).put("set", JSONObject().put("archived_at", nowIso))
+        }
         if (seen) list += seenOp(listOf(sg.id))
         return list
     }
@@ -1631,11 +1698,20 @@ object Dela {
         return live.filter { p -> norm(p.name)?.startsWith(n) == true }.singleOrNull()
     }
 
-    /** Человек по короткому имени, полному или алиасу. */
+    /**
+     * Человек по имени — ярусами, как сервер (`crm.match_name`, dela_0020; аудит 15.10.2026, №1): сначала своё имя
+     * или короткое имя живой карточки, потом её другие имена. Один на ярусе — он; двое своим именем — не узнан (к другим
+     * именам не идём: «Ваня» — короткое имя двоих, а у третьего другое имя — это не он). До того телефон брал всех трёх
+     * одним ярусом и при двоих молчал, а при «короткое у А, другое имя у Б» не узнавал никого — сервер же узнаёт А.
+     * Не нашлось точно — однозначное начало имени (модель могла сократить).
+     */
     fun findPerson(s: Snapshot, text: String): Person? {
         val n = norm(text.trim().trim('@')) ?: return null
         val live = s.people.values.filter { it.live }
-        live.filter { named(n, it.name, it.aliases, it.short) }.let { if (it.size == 1) return it.first() }
+        val own = live.filter { n == norm(it.name) || (it.short.isNotBlank() && n == norm(it.short)) }
+        if (own.size == 1) return own.first()
+        if (own.size > 1) return null
+        live.filter { p -> p.aliases.any { norm(it) == n } }.let { if (it.size == 1) return it.first() else if (it.size > 1) return null }
         return live.filter { p -> norm(p.label)?.startsWith(n) == true || norm(p.name)?.startsWith(n) == true }.singleOrNull()
     }
 

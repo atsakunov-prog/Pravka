@@ -1,6 +1,7 @@
 package ru.zf.pravka.core
 
 import java.io.File
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -405,5 +406,255 @@ class DelaViewsTest {
         assertEquals("3 сегодня · 2 просрочено · 1 закрыто", DelaViews.headLine(null, today = 3, late = 2, done = 1))
         assertEquals("0 сегодня", DelaViews.headLine(null, today = 0, late = 0, done = 0))
         assertEquals("Работа · 4 сегодня · 5 закрыто", DelaViews.headLine("Работа", today = 4, late = 0, done = 5))
+    }
+
+    // ------------------------------------------------------------ задание 21 (аудит 15.10.2026): вопросы кнопками
+
+    private val pA = Dela.Person("pa", "Иван Альфин", short = "Ваня")
+    private val pB = Dela.Person("pb", "Иван Бетов", aliases = listOf("Ваня"))
+
+    private fun people(vararg list: Dela.Person, features: Set<String> = emptySet()) =
+        Dela.Snapshot(people = linkedMapOf(*list.map { it.id to it }.toTypedArray()), features = features)
+
+    private fun ask(payload: JSONObject, kind: String = "create", source: String = "meeting", id: String = "q") = Dela.Suggestion(
+        id = id, forUser = "sasha", kind = kind, payload = payload.toString(), source = source, createdAt = "2026-10-05T08:00:00+03:00",
+    )
+
+    @Test
+    fun `кто это — ярусами, как сервер — своё имя сильнее чужого другого имени, двое — вопрос`() {
+        val q = ask(JSONObject().put("title", "Позвонить").put("person_name", "Ваня"))
+        // Короткое имя у А, другое имя у Б — узнан А, вопроса нет (раньше телефон не узнавал никого).
+        assertNull(DelaViews.askWhy(q, people(pA, pB)))
+        assertEquals("pa", DelaViews.personMatch(people(pA, pB), "ваня").hit?.id)
+        assertEquals("pa", Dela.findPerson(people(pA, pB), "Ваня")?.id)
+        // Короткое имя у обоих — «Кто это — «Ваня»: А или Б?», к другим именам не идём.
+        val b2 = pB.copy(short = "Ваня", aliases = emptyList())
+        assertEquals("Кто это — «Ваня»: Иван Альфин или Иван Бетов?", DelaViews.askWhy(q, people(pA, b2)))
+        assertNull(Dela.findPerson(people(pA, b2), "Ваня"))
+        // Архивная и слитая карточки не в счёт.
+        val gone = b2.copy(id = "pc", archivedAt = "2026-10-01T00:00:00+03:00")
+        val merged = b2.copy(id = "pd", mergedInto = "pa")
+        assertNull(DelaViews.askWhy(q, people(pA, gone, merged)))
+        // Никого — «Кто это — «Петя»?»; человек уже стоит id — имя не спрашиваем.
+        assertEquals("Кто это — «Петя»?", DelaViews.askWhy(ask(JSONObject().put("person_name", "Петя")), people(pA)))
+        assertNull(DelaViews.askWhy(ask(JSONObject().put("person_name", "Петя").put("person_id", "pa")), people(pA)))
+        // Сервер уже посмотрел имена (held есть, хоть пустой) — его вердикт сильнее своего точного сравнения.
+        assertNull(DelaViews.askWhy(ask(JSONObject().put("person_name", "Женя Соколов").put("held", "")), people(pA)))
+        assertEquals("Кто это — «Петя»?", DelaViews.askWhy(ask(JSONObject().put("person_name", "Петя").put("held", "не знаю человека «Петя»")), people(pA)))
+        assertEquals("Какой проект — «Альфа»?",
+            DelaViews.askWhy(ask(JSONObject().put("project_name", "Альфа").put("held", "не один проект с именем «Альфа»: Альфа Банк, Альфа Групп")), people(pA)))
+        // Проекты — имя и другие имена одним ярусом: двое — «Какой проект — …: A или B?».
+        val s = Dela.Snapshot(projects = linkedMapOf(
+            "x" to Dela.Project("x", "Альфа Банк", aliases = listOf("Альфа")), "y" to Dela.Project("y", "Альфа Групп", aliases = listOf("Альфа")),
+        ))
+        assertEquals("Какой проект — «Альфа»: Альфа Банк или Альфа Групп?", DelaViews.askWhy(ask(JSONObject().put("project_name", "Альфа")), s))
+    }
+
+    @Test
+    fun `ждёт — строка held без того, что уже сказал вопрос`() {
+        val held = "двое с именем «Ваня»: Иван Альфин, Иван Бетов; встреча старше 3 дней"
+        val p = JSONObject().put("title", "Позвонить").put("person_name", "Ваня").put("held", held).put("pick", true)
+            .put("ask", "Кто это — «Ваня»: Иван Альфин или Иван Бетов?")
+        val sg = ask(p)
+        assertEquals("Ждёт: встреча старше 3 дней", DelaViews.heldLine(sg, DelaViews.askWhy(sg, people(pA))))
+        // Только про имя при pick — строки нет.
+        assertNull(DelaViews.heldLine(ask(JSONObject(p.toString()).put("held", "двое с именем «Ваня»: Иван Альфин, Иван Бетов")), p.getString("ask")))
+        // Без held (старый сервер) — строки нет; «не знаю человека «Петя»» при вопросе «Кто это — «Петя»?» — повтор.
+        assertNull(DelaViews.heldLine(ask(JSONObject().put("title", "x")), null))
+        assertNull(DelaViews.heldLine(ask(JSONObject().put("person_name", "Петя").put("held", "не знаю человека «Петя»")), "Кто это — «Петя»?"))
+        assertEquals("Ждёт: само не встало: в «Сейчас» уже пять дел",
+            DelaViews.heldLine(ask(JSONObject().put("held", "само не встало: в «Сейчас» уже пять дел")), null))
+    }
+
+    @Test
+    fun `вопрос с вариантами и pick — ответ кнопкой, Да и Поставить все не показываются`() {
+        val opts = JSONArray()
+            .put(JSONObject().put("label", "Иван Альфин (Альфа)").put("person_id", "pa"))
+            .put(JSONObject().put("label", "Иван Бетов (Бета)").put("person_id", "pb"))
+            .put(JSONObject().put("label", "Без человека").put("person_id", JSONObject.NULL).put("person_name", JSONObject.NULL))
+        val sg = ask(JSONObject().put("title", "Позвонить").put("person_name", "Ваня").put("options", opts).put("pick", true)
+            .put("held", "двое с именем «Ваня»: Иван Альфин (Альфа), Иван Бетов (Бета)"))
+        val on = people(pA, pB, features = setOf(Dela.FEATURE_OPTIONS))
+        val o = DelaViews.options(sg, on)!!
+        assertEquals(listOf("Иван Альфин (Альфа)", "Иван Бетов (Бета)", "Без человека"), o.map { it.label })
+        assertTrue(DelaViews.pick(sg))
+        assertTrue(DelaViews.choiceOnly(sg))
+        assertFalse(DelaViews.plainYes(sg, on))
+        val plain = ask(JSONObject().put("title", "Купить бумагу"), id = "q2")
+        assertTrue(DelaViews.plainYes(plain, on))
+        assertFalse("при вариантах «все» нет", DelaViews.bulkOk(listOf(sg, plain), on))
+        assertTrue(DelaViews.bulkOk(listOf(plain, plain.copy(id = "q3")), on))
+        // Что уходит: номер варианта, без decision — решает сам вариант.
+        val op = Dela.answerOp(sg.id, o[1].index)
+        assertEquals("suggestion.decide", op.getString("op"))
+        assertEquals(1, op.getInt("option"))
+        assertFalse(op.has("decision"))
+        assertEquals("Ответ: Иван Бетов (Бета)", DelaViews.answerSaid(o[1]))
+        // Поверх копии — сразу решено, как решит сервер.
+        val s = on.copy(suggestions = mapOf(sg.id to sg))
+        val after = Dela.overlay(s, listOf(op), "sasha", today, nowIso).suggestions.getValue(sg.id)
+        assertEquals("accepted", after.status)
+        assertEquals("ответ: Иван Бетов (Бета)", after.reason)
+        // Без фичи options — кнопок нет, но и «Да» нет: pick всё равно ждёт выбора.
+        assertNull(DelaViews.options(sg, people(pA, pB)))
+        assertTrue(DelaViews.choiceOnly(sg))
+        // Двусмысленное имя без pick (модель спросила своё, вариантов кнопками нет) — «Да» сервер не примет.
+        val many = ask(JSONObject().put("person_name", "Маша").put("held", "четверо с именем «Маша»: А, Б, В и ещё 1"))
+        assertTrue(DelaViews.choiceOnly(many))
+        assertTrue(DelaViews.choiceOnly(ask(JSONObject().put("person_name", "Маша").put("held", "на «Маша» похожи: А, Б"))))
+        assertFalse(DelaViews.choiceOnly(ask(JSONObject().put("person_name", "Петя").put("held", "не знаю человека «Петя»"))))
+        assertFalse("старый сервер — как раньше", DelaViews.choiceOnly(ask(JSONObject().put("person_name", "Ваня"))))
+    }
+
+    @Test
+    fun `вопросы о людях со встречи и «это он в Telegram» — кнопки, Не для CRM, ссылка на встречу`() {
+        val on = people(pA, pB, features = setOf(Dela.FEATURE_OPTIONS))
+        // «Мария» — имя неизвестно: «Завести «Мария»» и «Не для CRM», почему не завёл сам — строкой.
+        val maria = ask(JSONObject().put("title", "Мария").put("where", "встреча «Альфа: фонды» 14.10 · 7 мин речи · по голосу")
+            .put("ask", "Кто это на встрече «Альфа: фонды» 14.10 — «Мария»?").put("held", "имя из одного слова")
+            .put("person", JSONObject().put("name", "Мария"))
+            .put("speaker", JSONObject().put("url", "https://meetings.example/m/101").put("label", "SPEAKER_02"))
+            .put("options", JSONArray().put(JSONObject().put("label", "Завести «Мария»").put("new", true))
+                .put(JSONObject().put("label", "Не для CRM").put("reject", true).put("reason", "не для CRM"))), kind = "person")
+        val mo = DelaViews.options(maria, on)!!
+        assertEquals(listOf("Завести «Мария»", "Не для CRM"), mo.map { it.label })
+        assertEquals("Не для CRM", DelaViews.rejectOption(maria, on)?.label)
+        assertEquals("Ждёт: имя из одного слова", DelaViews.heldLine(maria, DelaViews.askWhy(maria, on)))
+        assertEquals("https://meetings.example/m/101", DelaViews.sugLink(maria))
+        assertEquals(DelaViews.SugText("Мария", "встреча «Альфа: фонды» 14.10 · 7 мин речи · по голосу"), DelaViews.sugText(maria, on, today))
+        assertFalse(DelaViews.choiceOnly(maria))
+        val rej = Dela.overlay(on.copy(suggestions = mapOf(maria.id to maria)), listOf(Dela.answerOp(maria.id, 1)), "sasha", today, nowIso)
+        assertEquals("rejected", rej.suggestions.getValue(maria.id).status)
+        assertEquals("не для CRM", rej.suggestions.getValue(maria.id).reason)
+        // «Иван» — похожие есть: четыре кнопки, «Завести» среди них нет, pick, строка «похожие уже есть» не повторяет вопрос.
+        val ivan = ask(JSONObject().put("title", "Иван").put("pick", true).put("held", "похожие уже есть: Иван Альфин, Иван Бетов")
+            .put("ask", "«Иван» на встрече «Альфа: фонды» 14.10 — это Иван Альфин или Иван Бетов?")
+            .put("options", JSONArray().put(JSONObject().put("label", "Это Иван Альфин").put("person_id", "pa"))
+                .put(JSONObject().put("label", "Это Иван Бетов").put("person_id", "pb"))
+                .put(JSONObject().put("label", "Новый человек").put("new", true))
+                .put(JSONObject().put("label", "Не для CRM").put("reject", true).put("reason", "не для CRM"))), kind = "person", id = "q-ivan")
+        val io = DelaViews.options(ivan, on)!!
+        assertEquals(4, io.size)
+        assertTrue(io.none { it.label.startsWith("Завести") })
+        assertTrue(DelaViews.choiceOnly(ivan))
+        assertNull(DelaViews.heldLine(ivan, DelaViews.askWhy(ivan, on)))
+        // «Это он в Telegram?» с двумя контактами — pick, «Никто» — reject.
+        val tg = ask(JSONObject().put("title", "Мария Котова").put("person_id", "pa").put("pick", true)
+            .put("ask", "Мария Котова в Telegram — это «Мария Котова» (@mkot) или «Мария Белова»?")
+            .put("options", JSONArray().put(JSONObject().put("label", "Это «Мария Котова» (@mkot)").put("person_id", "pa")
+                .put("person", JSONObject().put("telegram_id", 900102)))
+                .put(JSONObject().put("label", "Это «Мария Белова»").put("person_id", "pa"))
+                .put(JSONObject().put("label", "Никто").put("reject", true).put("reason", "не он в Telegram"))), kind = "person", source = "telegram", id = "tgfind")
+        assertEquals("Никто", DelaViews.rejectOption(tg, on)?.label)
+        assertTrue(DelaViews.choiceOnly(tg))
+        // Человек без вариантов («Новый номер — завести?») — «Не для CRM» причиной, без вопроса.
+        assertEquals("не для CRM", DelaViews.NOT_CRM)
+        assertTrue(DelaViews.plainYes(ask(JSONObject().put("title", "+7 900 000-00-00"), kind = "person", source = "contacts"), on))
+        assertEquals(DelaViews.Mark("phone", true, "телефонная книжка"), DelaViews.mark("contacts"))
+    }
+
+    @Test
+    fun `поправить — человек не выбран — без человека явно, выбран — он`() {
+        val s = people(pA, pB.copy(short = "Ваня", aliases = emptyList()))
+        val sg = ask(JSONObject().put("title", "Позвонить").put("person_name", "Ваня"))
+        val proposed = Dela.draftOf(sg, s, "sasha")
+        assertEquals("", proposed.personId)
+        val none = Dela.acceptEditSet(sg, proposed, proposed.copy(title = "Позвонить завтра"))
+        assertTrue(none.has("person_id") && none.isNull("person_id"))
+        val picked = Dela.acceptEditSet(sg, proposed, proposed.copy(personId = "pa"))
+        assertEquals("pa", picked.getString("person_id"))
+        // Человека не называли — и ключа нет.
+        val plain = ask(JSONObject().put("title", "Купить бумагу"))
+        val p2 = Dela.draftOf(plain, s, "sasha")
+        assertFalse(Dela.acceptEditSet(plain, p2, p2.copy(title = "Бумага")).has("person_id"))
+    }
+
+    @Test
+    fun `сделано само — человек заведён сам — строка, Вернуть в архив с компанией`() {
+        val nowMs = now
+        val decided = "2026-10-05T08:30:00+03:00"
+        fun auto(id: String, source: String, result: JSONObject) = Dela.Suggestion(
+            id = id, forUser = "sasha", kind = "person", source = source, status = "accepted", reason = Dela.AUTO_PERSON_REASON,
+            decidedAt = decided, createdAt = decided, payload = JSONObject().put("title", "Пётр Новиков").put("where", "встреча «Альфа: фонды» 04.10 · 5 мин речи · имя дал ты").toString(),
+            result = result.toString(),
+        )
+        val p = Dela.Person("pn", "Пётр Новиков", orgId = "org1")
+        val sg = auto("s1", "meeting", JSONObject().put("person_id", "pn").put("created", true).put("org_id", "org1").put("org_created", true))
+        val contacts = auto("s2", "contacts", JSONObject().put("person_id", "pz").put("created", true))
+        val s = Dela.Snapshot(people = mapOf("pn" to p), suggestions = mapOf("s1" to sg, "s2" to contacts))
+        val list = Dela.autoDone(s, "sasha", nowMs)
+        assertEquals(setOf("s1", "s2"), list.map { it.id }.toSet())
+        assertEquals("завёл людей: 2", DelaViews.autoSummary(list))
+        assertEquals("по встречам и телефонной книжке", DelaViews.autoFrom(list))
+        assertEquals("закрыл 1, уточнил 1, завёл людей: 1",
+            DelaViews.autoSummary(listOf(Dela.Suggestion("c", kind = "close"), Dela.Suggestion("u", kind = "update"), sg)))
+        val row = DelaViews.autoPerson(sg, s)
+        assertEquals("Пётр Новиков", row.name)
+        assertEquals("pn", row.personId)
+        assertTrue(row.live)
+        // «Вернуть»: карточку и компанию, заведённую ради него, — в архив, потом «понятно».
+        val ops = Dela.autoPersonUndoOps(sg, s, seen = true, nowIso = nowIso)!!
+        assertEquals(listOf("person.set", "org.set", "suggestion.seen"), ops.map { it.getString("op") })
+        assertEquals(nowIso, ops[0].getJSONObject("set").getString("archived_at"))
+        assertEquals("org1", ops[1].getString("id"))
+        // В компании есть ещё живой — её не трогаем.
+        val busy = s.copy(people = s.people + ("px" to Dela.Person("px", "Ольга Тестова", orgId = "org1")))
+        assertEquals(listOf("person.set"), Dela.autoPersonUndoOps(sg, busy, seen = false, nowIso = nowIso)!!.map { it.getString("op") })
+        // Уже в архиве или не видна — вернуть нечего.
+        assertNull(Dela.autoPersonUndoOps(sg, s.copy(people = mapOf("pn" to p.copy(archivedAt = nowIso))), seen = true, nowIso = nowIso))
+        assertNull(Dela.autoPersonUndoOps(contacts, s, seen = true, nowIso = nowIso))
+        assertEquals("Пётр Новиков", DelaViews.autoPerson(contacts, s).name)
+        assertFalse("карточки в копии нет — «Вернуть» не показываем", DelaViews.autoPerson(contacts, s).live)
+        // Понятно — уходит.
+        assertTrue(Dela.autoDone(s.copy(suggestions = mapOf("s1" to sg.copy(seenAt = nowIso))), "sasha", nowMs).isEmpty())
+    }
+
+    @Test
+    fun `шапка — ждут от тебя без срока и жду больше недели — правило сервера`() {
+        fun t(id: String, f: (Dela.Task) -> Dela.Task) = task(id, f)
+        val s = snap(
+            t("owed") { it.copy(owed = true) },
+            t("owed-due") { it.copy(owed = true, dueDate = "2026-10-09") },
+            t("owed-goal") { it.copy(owed = true, goal = true) },
+            t("w10") { it.copy(ball = Dela.WAITING, waitingSince = "2026-09-25") },
+            t("w10-past") { it.copy(ball = Dela.WAITING, waitingSince = "2026-09-25", nudgeOn = "2026-10-01") },
+            t("w10-future") { it.copy(ball = Dela.WAITING, waitingSince = "2026-09-25", nudgeOn = "2026-10-07") },
+            t("w3") { it.copy(ball = Dela.WAITING, waitingSince = "2026-10-02") },
+            t("w7") { it.copy(ball = Dela.WAITING, waitingSince = "2026-09-28") },
+        )
+        val w = DelaViews.waits(s, "sasha", today, "all", now)
+        assertEquals(listOf("owed"), DelaViews.owedNoDue(s, "sasha", "all").map { it.id }.filter { it.startsWith("owed") })
+        assertEquals(2, Dela.week(s, "sasha", today, "all", now).waitingStale.count { it.id.startsWith("w") })
+        // Числа — те же списки (контракт синка тоже несёт дела: сравниваем с ними, а не с константой).
+        assertEquals(DelaViews.owedNoDue(s, "sasha", "all").size, w.owedNoDue)
+        assertEquals(Dela.week(s, "sasha", today, "all", now).waitingStale.size, w.waitingStale)
+        val words = DelaViews.waitWords(DelaViews.Waits(3, 2))
+        assertEquals(listOf("ждут от тебя без срока: 3", "жду больше недели: 2"), words)
+        assertEquals(listOf("жду больше недели: 1"), DelaViews.waitWords(DelaViews.Waits(0, 1)))
+        assertFalse(DelaViews.Waits(0, 0).any)
+        // Куда ведёт тап: заводской фильтр по людям, нет его — свой с той же группой.
+        assertEquals("f-owed-people", DelaGroups.scopeFilter(DelaGroups.FILTERS_DEF, "f-owed-people", DelaGroups.Scope.OWED)?.id)
+        val mine = listOf(DelaGroups.Filter("my", "Мои отбить", DelaGroups.Scope.OWED, listOf(DelaGroups.Level.PROJECT)))
+        assertEquals("my", DelaGroups.scopeFilter(mine, "f-owed-people", DelaGroups.Scope.OWED)?.id)
+        assertNull(DelaGroups.scopeFilter(mine, "f-check-people", DelaGroups.Scope.CHECK))
+    }
+
+    @Test
+    fun `счётчик автоматики за неделю — строка как в вебе, нули пропускаются`() {
+        val all = JSONObject().put("created", 23).put("created_undone", 1).put("closed", 9).put("closed_undone", 0)
+            .put("updated", 5).put("updated_undone", 0).put("people", 2).put("people_undone", 0)
+            .put("asked", 12).put("yes", 9).put("edited", 0).put("no", 2).put("expired", 1)
+            .put("no_reasons", JSONArray().put(JSONObject().put("reason", "не дело").put("n", 2)))
+        val week = JSONObject().put("automation", JSONObject().put("days", 7).put("all", all))
+        assertEquals(
+            "за неделю: поставлено само 23 (отменил 1) · закрыто 9 (вернул 0) · уточнено 5 (0) · людей 2 (0) · вопросов 12: да 9, нет 2, погасло 1",
+            DelaViews.automationLine(week),
+        )
+        assertEquals("«не дело» — 2", DelaViews.automationNo(week))
+        all.put("edited", 1)
+        assertTrue(DelaViews.automationLine(week)!!.contains("да 9, с правкой 1, нет 2"))
+        assertNull("старый сервер — строки нет", DelaViews.automationLine(JSONObject().put("stale", JSONArray())))
+        assertNull(DelaViews.automationLine(null))
+        assertNull("всё по нулям — строки нет", DelaViews.automationLine(JSONObject().put("automation", JSONObject().put("all", JSONObject()))))
     }
 }

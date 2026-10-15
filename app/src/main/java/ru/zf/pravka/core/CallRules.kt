@@ -57,8 +57,17 @@ object CallRules {
         val userId: String = "",
     )
 
-    /** Кандидат ответа «кто это». */
-    data class Candidate(val id: String, val name: String, val score: Double = 0.0)
+    /**
+     * Кандидат ответа «кто это». [how] — чем совпал (сервер, 15.10.2026, аудит №1 и №23): «имя» — своё имя или
+     * короткое имя карточки, «другое имя» — только её другие имена, «похоже», и совпадения железом — [KEY_HOWS].
+     */
+    data class Candidate(val id: String, val name: String, val score: Double = 0.0, val how: String = "")
+
+    /** Совпало железом, а не именем (`people.KEY_HOWS`): номер, Telegram, почта, номер слитой карточки (аудит №23). */
+    val KEY_HOWS = setOf("номер", "telegram", "почта", "номер слитой карточки")
+
+    /** Соперник ближе этого к лучшему — «рядом» (`people.GAP` сервера). */
+    const val WHO_GAP = 0.15
 
     /**
      * Ответ сервера «кто это» (`GET /api/view/who`, контракт svod.json):
@@ -66,13 +75,28 @@ object CallRules {
      * порядком «Фамилия Имя» и компанией. [sure] — лучший один и с запасом;
      * неуверенное решает владелец.
      */
-    data class Who(val best: Candidate?, val sure: Boolean, val candidates: List<Candidate>)
+    data class Who(val best: Candidate?, val sure: Boolean, val candidates: List<Candidate>) {
+        /**
+         * Уверен ли «кто это» для звонка (аудит 15.10.2026, №1): сервер теперь уверен и тогда, когда лучший совпал
+         * своим именем, а соперник рядом — только своим другим именем («Ваня» — короткое имя у А и другое имя у Б).
+         * Для звонка этого мало: номер звонившего закрепился бы за карточкой без вопроса, и запись легла бы в хронологию.
+         * Поэтому такой звонок — вопрос, как раньше. Совпадение железом (номер, Telegram, почта, номер слитой карточки) —
+         * уверенно всегда.
+         */
+        val callSure: Boolean
+            get() {
+                val b = best ?: return false
+                if (!sure) return false
+                if (b.how in KEY_HOWS) return true
+                return candidates.none { it.id != b.id && it.how == "другое имя" && b.score - it.score < WHO_GAP }
+            }
+    }
 
     fun parseWho(o: org.json.JSONObject): Who {
         fun cand(c: org.json.JSONObject?): Candidate? {
             c ?: return null
             val id = c.optString("id").takeIf { it.isNotBlank() && it != "null" } ?: return null
-            return Candidate(id, c.optString("name"), c.optDouble("score", 0.0))
+            return Candidate(id, c.optString("name"), c.optDouble("score", 0.0), c.optString("how").takeIf { it != "null" }.orEmpty())
         }
         val list = o.optJSONArray("candidates")?.let { a -> (0 until a.length()).mapNotNull { cand(a.optJSONObject(it)) } }.orEmpty()
         val best = if (o.isNull("best")) null else cand(o.optJSONObject("best"))
@@ -142,7 +166,7 @@ object CallRules {
     ): Verdict {
         val title = title(c)
         val p = if (who != null) {
-            if (who.sure) people.firstOrNull { it.id == who.best?.id } else null
+            if (who.callSure) people.firstOrNull { it.id == who.best?.id } else null
         } else {
             person(c, people)
         }

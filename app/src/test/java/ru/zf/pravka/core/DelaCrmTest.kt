@@ -707,4 +707,88 @@ class DelaCrmTest {
         assertFalse(call.fromDigest)
         assertEquals("digest?ref=digest%3A2026-10-13T2000", DelaCrm.digestPath("digest:2026-10-13T2000#wait-0a1b"))
     }
+
+    // ------------------------------------------------------------ задание 21 (аудит 15.10.2026): сделка и её встречи
+
+    @Test
+    fun `сделка — дело клиента, solo, встречи, упоминание — разбор ответа сервера`() {
+        val o = JSONObject(view("deal").toString())
+        val deal = o.getJSONObject("deal").put("solo", true)
+        deal.getJSONObject("next_task").put("via_client", true)
+        o.put("open", JSONArray().put(JSONObject().put("id", "t-own").put("num", 7).put("title", "Своё дело").put("deal_id", deal.getString("id"))
+            .put("project_id", deal.getString("project_id")).put("owner_id", "sasha").put("status", "open").put("via_client", false))
+            .put(JSONObject().put("id", "t-cl").put("num", 8).put("title", "Дело клиента").put("deal_id", JSONObject.NULL)
+                .put("project_id", deal.getString("project_id")).put("owner_id", "sasha").put("status", "open").put("via_client", true)))
+        o.put("meetings", JSONArray().put(JSONObject().put("id", "m1").put("ref", "101").put("url", "https://meetings.example/m/101")
+            .put("started_at", "2026-10-04T12:00:00+03:00").put("day", "2026-10-04").put("duration_min", 75).put("title", "Альфа: фонды")
+            .put("people", JSONArray().put("Иван")).put("summary", "Договорились о тизере"))
+            .put(JSONObject().put("id", "m2").put("url", "http://insecure.example").put("started_at", "2026-10-01T12:00:00+03:00").put("title", "Созвон")))
+        o.put("meetings_n", 12)
+        o.getJSONArray("timeline").getJSONObject(0).put("mention", true)
+        val v = DelaCrm.dealView(o)
+        assertTrue(v.deal!!.solo)
+        assertTrue(v.deal!!.nextTask!!.viaClient)
+        assertEquals(listOf("t-own", "t-cl"), v.open.map { it.id })
+        assertEquals(listOf("t-cl"), v.open.filter { it.dealId.isBlank() }.map { it.id })
+        assertEquals(2, v.meetings.size)
+        assertEquals(12, v.meetingsN)
+        val m = v.meetings.first()
+        assertEquals("https://meetings.example/m/101", m.url)
+        assertEquals("04.10 · Альфа: фонды · 1 ч 15 мин", DelaCrm.meetingLine(m, today))
+        assertEquals("", v.meetings[1].url)
+        assertEquals("2026-10-01", v.meetings[1].day)
+        assertTrue(v.timeline.single().mention)
+        // Старый сервер — полей нет: не solo, не дело клиента, встреч нет, не упоминание.
+        val old = DelaCrm.dealView(view("deal"))
+        assertFalse(old.deal!!.solo)
+        assertFalse(old.deal!!.nextTask!!.viaClient)
+        assertTrue(old.meetings.isEmpty())
+        assertFalse(old.timeline.single().mention)
+        // Клиент — те же встречи; команде поле пустое (сервер не отдаёт).
+        val c = DelaCrm.client(JSONObject(view("client").toString()).put("meetings", JSONArray().put(JSONObject().put("id", "m1").put("title", "Альфа: фонды")
+            .put("started_at", "2026-10-04T12:00:00+03:00"))).put("meetings_n", 1))
+        assertEquals(listOf("m1"), c.meetings.map { it.id })
+        assertTrue(DelaCrm.client(view("client")).meetings.isEmpty())
+    }
+
+    @Test
+    fun `следующее дело сделки — своё, при одной живой — дело клиента из копии, иначе — нет`() {
+        val proj = "p-alfa"
+        fun t(id: String, deal: String, due: String = "", status: String = Dela.OPEN, goal: Boolean = false) =
+            Dela.Task(id = id, title = id, num = id.length, projectId = proj, dealId = deal, dueDate = due, status = status, goal = goal, ownerId = "sasha")
+        val s = Dela.Snapshot(tasks = listOf(
+            t("client-late", "", "2026-10-09"), t("client-early", "", "2026-10-06"), t("client-goal", "", "2026-10-01", goal = true),
+            t("client-done", "", "2026-10-02", status = Dela.DONE), t("other-deal", "d2", "2026-10-01"),
+        ).associateBy { it.id })
+        val solo = DelaCrm.nextFor(s, "d1", proj, solo = true, fromView = null)!!
+        assertEquals("client-early", solo.id)
+        assertTrue(solo.viaClient)
+        // Вторая живая сделка — дела клиента ничьи.
+        assertNull(DelaCrm.nextFor(s, "d1", proj, solo = false, fromView = null))
+        // Своё дело сделки — первым, даже при solo.
+        val own = s.copy(tasks = s.tasks + ("mine" to t("mine", "d1", "2026-10-20")))
+        val n = DelaCrm.nextFor(own, "d1", proj, solo = true, fromView = null)!!
+        assertEquals("mine", n.id)
+        assertFalse(n.viaClient)
+        // Сервер назвал дело, а в копии оно уже закрыто — не следующее; копия дела не знает — что сказал сервер.
+        val fromView = DelaCrm.NextTask("client-done", 1, "client-done", "2026-10-02", "sasha", Dela.MINE, viaClient = true)
+        assertNull(DelaCrm.nextFor(s.copy(tasks = s.tasks - "client-early" - "client-late"), "d1", proj, solo = true, fromView = fromView))
+        val unknown = DelaCrm.NextTask("x", 1, "Чужое", "", "sasha", Dela.MINE, viaClient = true)
+        assertEquals("x", DelaCrm.nextFor(Dela.Snapshot(), "d1", proj, solo = true, fromView = unknown)?.id)
+        assertEquals(listOf("client-early", "client-late"), DelaCrm.clientSteps(s, proj).map { it.id })
+    }
+
+    @Test
+    fun `имена не дописаны — словами, склейка людей — только владельцу`() {
+        val r = JSONObject().put("ok", true).put("skipped", JSONArray().put(JSONObject().put("alias", "Ваня").put("person_id", "pa").put("name", "Иван Альфин")))
+        assertEquals("«Ваня» не дописал — так зовут Иван Альфин", DelaCrm.skippedWords(r))
+        assertNull(DelaCrm.skippedWords(JSONObject().put("ok", true).put("skipped", JSONArray())))
+        assertNull("старый сервер поля не шлёт", DelaCrm.skippedWords(JSONObject().put("ok", true)))
+        val s = Dela.Snapshot(users = mapOf(
+            "sasha" to Dela.User("sasha", "Саша Тестов", role = "owner"), "olga" to Dela.User("olga", "Ольга Тестова", role = "member", clients = "all"),
+        ))
+        assertTrue(DelaCrm.canMerge(s, "sasha"))
+        assertFalse(DelaCrm.canMerge(s, "olga"))
+        assertFalse(DelaCrm.canMerge(s, "nobody"))
+    }
 }

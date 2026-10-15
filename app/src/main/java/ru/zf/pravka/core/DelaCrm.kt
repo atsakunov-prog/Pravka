@@ -45,8 +45,19 @@ object DelaCrm {
 
     // ------------------------------------------------------------ строки видов
 
-    /** Следующее дело сделки или клиента — открытое дело с ближайшим сроком. */
-    data class NextTask(val id: String, val num: Int, val title: String, val dueDate: String, val ownerId: String, val ball: String)
+    /**
+     * Следующее дело сделки или клиента — открытое дело с ближайшим сроком. [viaClient] (15.10.2026, аудит №2,
+     * `deal_steps`): дело клиента без сделки, а сделка у клиента одна живая — её шаг; строка подписывает «дело клиента».
+     */
+    data class NextTask(
+        val id: String,
+        val num: Int,
+        val title: String,
+        val dueDate: String,
+        val ownerId: String,
+        val ball: String,
+        val viaClient: Boolean = false,
+    )
 
     /**
      * Сделка в виде — строка `v_deals` плюс посчитанное сервером. Деньги —
@@ -89,6 +100,11 @@ object DelaCrm {
         val deadline: String = "",
         /** «Идеи» — старые заметки владельца (Notion): видны, только если в них что-то есть. */
         val ideas: String = "",
+        /**
+         * Сделка у клиента одна живая (`crm.only_deal`, 15.10.2026, аудит №2): тогда её шаги — и открытые дела клиента
+         * без сделки, хронология — и его записи без сделки. Вторая живая сделка — правило молчит.
+         */
+        val solo: Boolean = false,
     ) {
         val closed: Boolean get() = stage == "archive"
         /** «в работе», а у закрытой — итог: «выиграли», «проиграли». */
@@ -183,6 +199,11 @@ object DelaCrm {
          * команде строки не отдаёт); тап «сводка →» — сама сводка видом `digest?ref=`. Пусто — обычная запись.
          */
         val digestRef: String = "",
+        /**
+         * Упоминание, не контакт (15.10.2026, аудит №28): клиента или человека назвали в теме сводки Telegram, а его
+         * чата в окне не было. Запись — правда сводки, видна; «последний контакт» она не двигает (считает сервер).
+         */
+        val mention: Boolean = false,
     ) {
         val day: String get() = at.take(10)
         val kindWord: String get() = IKIND[kind] ?: kind
@@ -198,6 +219,23 @@ object DelaCrm {
         val hub: Boolean,
     )
 
+    /**
+     * Встреча карточки сделки или клиента (15.10.2026, аудит №3; поле `meetings` видов `deal` и `client`): строка вида
+     * «Встречи» сервера — когда, название Дел, сколько шла, ссылка на неё в вебе встреч. Видит только владелец встреч.
+     */
+    data class Meeting(
+        val id: String,
+        val day: String,
+        val startedAt: String,
+        val durationMin: Int?,
+        val title: String,
+        val url: String = "",
+        val client: String = "",
+        val deal: String = "",
+        val people: List<String> = emptyList(),
+        val summary: String = "",
+    )
+
     data class ClientView(
         val project: Dela.Project?,
         val timeline: List<Interaction>,
@@ -206,10 +244,14 @@ object DelaCrm {
         val money: Boolean,
         /** Оплаты всех проектов клиента (09.10.2026) — тем, кому открыты деньги. */
         val payments: List<Dela.Payment> = emptyList(),
+        /** Встречи клиента (свежие сверху, до 50) и сколько их всего; команде — пусто (аудит №3). */
+        val meetings: List<Meeting> = emptyList(),
+        val meetingsN: Int = 0,
     )
 
     data class DealView(
         val deal: Deal?,
+        /** Открытые шаги — её дела и, при [Deal.solo], дела клиента без сделки (у них `dealId` пуст: «дело клиента»). */
         val open: List<Dela.Task>,
         val done: List<Dela.Task>,
         val payments: List<Dela.Payment>,
@@ -217,6 +259,9 @@ object DelaCrm {
         val history: List<String>,
         val money: Boolean,
         val minutesAll: Int?,
+        /** Встречи сделки по карточке встречи (свежие сверху, до 50) и сколько их всего; команде — пусто (аудит №3). */
+        val meetings: List<Meeting> = emptyList(),
+        val meetingsN: Int = 0,
     )
 
     data class Tie(
@@ -257,7 +302,7 @@ object DelaCrm {
     private fun next(o: JSONObject?): NextTask? {
         o ?: return null
         val id = o.str("id").ifBlank { return null }
-        return NextTask(id, o.int("num"), o.str("title"), o.str("due_date"), o.str("owner_id"), o.str("ball"))
+        return NextTask(id, o.int("num"), o.str("title"), o.str("due_date"), o.str("owner_id"), o.str("ball"), o.bool("via_client"))
     }
 
     fun deal(o: JSONObject): Deal? {
@@ -273,7 +318,7 @@ object DelaCrm {
             toGetKop = o.longOrNull("to_get_kop"), weightedKop = o.longOrNull("weighted_kop"),
             minutes30 = o.intOrNull("minutes_30"), minutesAll = o.intOrNull("minutes_all"), myView = o.str("my_view"),
             sourcePersonId = o.str("source_person_id"), probability = o.intOrNull("probability"),
-            expectedOn = o.str("expected_on"), deadline = o.str("deadline"), ideas = o.str("ideas"),
+            expectedOn = o.str("expected_on"), deadline = o.str("deadline"), ideas = o.str("ideas"), solo = o.bool("solo"),
         )
     }
 
@@ -286,8 +331,22 @@ object DelaCrm {
             deletedAt = o.str("deleted_at"), dealName = o.str("deal_name"), projectName = o.str("project_name"),
             // Старый сервер поля не шлёт — ссылка на сводку та же: всё до «#» у записи из дайджеста.
             digestRef = o.str("digest_ref").ifBlank { if (o.str("source") == "digest") o.str("source_ref").substringBefore('#') else "" },
+            mention = o.bool("mention"),
         )
     }
+
+    /** Строка `meetings` вида сделки или клиента (`meetings._item` сервера). */
+    fun meeting(o: JSONObject): Meeting? {
+        val id = o.str("id").ifBlank { return null }
+        return Meeting(
+            id = id, day = o.str("day").ifBlank { o.str("started_at").take(10) }, startedAt = o.str("started_at"),
+            durationMin = o.intOrNull("duration_min"), title = o.str("title").ifBlank { o.str("source_title") },
+            url = o.str("url").takeIf { it.startsWith("https://") }.orEmpty(), client = o.str("client"), deal = o.str("deal"),
+            people = o.strings("people"), summary = o.str("summary"),
+        )
+    }
+
+    private fun meetings(o: JSONObject): List<Meeting> = objs(o, "meetings").mapNotNull(::meeting)
 
     private fun timeline(o: JSONObject): List<Interaction> =
         objs(o, "timeline").mapNotNull(::interaction).filter { it.deletedAt.isBlank() }
@@ -334,6 +393,8 @@ object DelaCrm {
         people = objs(o, "people").mapNotNull(::personRow),
         money = money(o),
         payments = objs(o, "payments").mapNotNull { Dela.payment(it) },
+        meetings = meetings(o),
+        meetingsN = o.int("meetings_n"),
     )
 
     fun dealView(o: JSONObject): DealView = DealView(
@@ -345,7 +406,61 @@ object DelaCrm {
         history = objs(o, "history").map(::historyLine),
         money = money(o),
         minutesAll = o.intOrNull("minutes_all"),
+        meetings = meetings(o),
+        meetingsN = o.int("meetings_n"),
     )
+
+    /**
+     * Склеивает людей («Это тот же, что…», `person.merge`) только владелец Дел (аудит 15.10.2026, №23): сервер остальным
+     * отказывает, кнопка члену команды ни к чему. Роль — из `users[]` синка.
+     */
+    fun canMerge(s: Dela.Snapshot, me: String): Boolean = s.users[me]?.owner == true
+
+    /** Встреч в карточке сделки и клиента — свежие; остальные — «все встречи · N» (`MEET_CARD` веба). */
+    const val MEET_CARD = 8
+
+    /** «14.10 · Альфа: фонды · 45 мин» — строка встречи в карточке (дата, название Дел, длительность). */
+    fun meetingLine(m: Meeting, today: String): String = listOfNotNull(
+        m.day.takeIf { it.isNotBlank() }?.let { DelaAsk.ddmm(it, today) },
+        m.title.ifBlank { "встреча" },
+        hours(m.durationMin).takeIf { it.isNotBlank() },
+    ).joinToString(" · ")
+
+    /**
+     * Следующее дело сделки — тем же правилом, что сервер (`crm.STEP`, аудит №2): её открытое дело из своей копии (там и
+     * своя только что поставленная галка); своих нет, а сделка у клиента одна живая ([solo]) — открытое дело клиента без
+     * сделки (не цель), самое раннее по сроку, с [NextTask.viaClient]; копия дел сделки не знает — что сказал сервер.
+     * Дело из ответа вида, уже закрытое в копии, — не следующее: иначе только что закрытое висело бы до обновления вида.
+     */
+    fun nextFor(s: Dela.Snapshot, dealId: String, projectId: String, solo: Boolean, fromView: NextTask?): NextTask? {
+        fun row(t: Dela.Task, via: Boolean) = NextTask(t.id, t.num, t.title, t.dueDate, t.ownerId, t.ball, via)
+        val own = s.tasks.values.filter { it.dealId == dealId && !it.goal }
+        own.filter { it.open }.sortedWith(Dela.ORDER).firstOrNull()?.let { return row(it, false) }
+        if (solo && projectId.isNotBlank()) {
+            clientSteps(s, projectId).firstOrNull()?.let { return row(it, true) }
+        }
+        // Копия знает дело из ответа: закрыто или ушло из сделки (и не шаг клиента при одной сделке) — не следующее.
+        val known = fromView?.let { s.tasks[it.id] }
+        if (known != null && (!known.open || (known.dealId != dealId && !(solo && known.dealId.isBlank() && known.projectId == projectId)))) return null
+        return fromView
+    }
+
+    /** Открытые дела клиента без сделки (не цели) — шаги его единственной живой сделки, ранние сверху. */
+    fun clientSteps(s: Dela.Snapshot, projectId: String): List<Dela.Task> =
+        s.tasks.values.filter { it.open && !it.goal && it.projectId == projectId && it.dealId.isBlank() }.sortedWith(Dela.ORDER)
+
+    /**
+     * Не дописанные имена (`skipped` ответа `person.add` и `person.merge`, аудит №1): другим именем не пишется то, что
+     * уже имя или короткое имя другой живой карточки — «Ваня» не дописал — так зовут Иван Петров». Пусто — null.
+     */
+    fun skippedWords(result: JSONObject?): String? {
+        val a = result?.optJSONArray("skipped") ?: return null
+        val parts = (0 until a.length()).mapNotNull { a.optJSONObject(it) }.mapNotNull { x ->
+            val alias = x.str("alias").ifBlank { return@mapNotNull null }
+            "«$alias» не дописал — так зовут " + x.str("name").ifBlank { "другого человека" }
+        }
+        return parts.takeIf { it.isNotEmpty() }?.joinToString("; ")
+    }
 
     fun ties(o: JSONObject): Ties = Ties(
         people = objs(o, "people").mapNotNull { p ->

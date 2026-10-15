@@ -113,4 +113,29 @@ class CallWhoTest {
         assertNull("без клиента — не CRM", CallRules.interactionOp(call("Женя"), "З", "c2f8", "", "x"))
         assertNotNull(CallRules.interactionOp(call("Женя", min = 2), "З", "c2f8", "p", "x"))
     }
+
+    @Test
+    fun `звонок — своё имя рядом с чужим другим именем — спросить, железом — уверенно`() {
+        // Сервер уверен: «Ваня» — короткое имя у А, другое имя у Б (развязка аудита №1). Для звонка — вопрос, как раньше.
+        val a = CallRules.Candidate("c2f8", "Евгений Соколов", 0.95, how = "имя")
+        val b = CallRules.Candidate("e1a0", "Евгений Иванов", 0.95, how = "другое имя")
+        val who = CallRules.Who(a, true, listOf(a, b))
+        assertTrue(who.sure)
+        assertFalse(who.callSure)
+        val v = CallRules.verdict(call("Женя"), emptyList(), people, null, who)
+        assertEquals("", v.personId)
+        assertFalse(v.sure)
+        assertEquals(listOf("c2f8", "e1a0"), v.candidates.map { it.id })
+        // Совпало железом — номер слитой карточки (аудит №23) — уверенно, как «номер».
+        val key = CallRules.Who(a.copy(how = "номер слитой карточки", score = 1.0), true, listOf(a.copy(how = "номер слитой карточки", score = 1.0), b))
+        assertTrue(key.callSure)
+        assertEquals("c2f8", CallRules.verdict(call("Женя"), emptyList(), people, null, key).personId)
+        // Соперник далеко — уверенно; how из ответа сервера читается.
+        assertTrue(CallRules.Who(a, true, listOf(a, b.copy(score = 0.5))).callSure)
+        val parsed = CallRules.parseWho(JSONObject().put("sure", true)
+            .put("best", JSONObject().put("id", "c2f8").put("name", "Евгений Соколов").put("score", 1.0).put("how", "номер слитой карточки"))
+            .put("candidates", JSONArray().put(JSONObject().put("id", "c2f8").put("name", "Евгений Соколов").put("score", 1.0).put("how", "номер слитой карточки"))))
+        assertEquals("номер слитой карточки", parsed.best?.how)
+        assertTrue(parsed.callSure)
+    }
 }

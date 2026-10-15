@@ -345,6 +345,13 @@ class DelaStore(private val context: Context) {
                 notices.add(0, Notice(now, "Сервер не принял $what: ${r.optString("error").ifBlank { "без причины" }}", true))
                 continue
             }
+            // Чужое имя другим именем не пишется (аудит 15.10.2026, №1): сервер говорит, что не дописал и почему, —
+            // заметкой, а экран CRM показывает её тостом вместо «Имя дописано» (имя иначе молча пропадало).
+            if (q.op.optString("op") in setOf("person.add", "person.merge")) {
+                ru.zf.pravka.core.DelaCrm.skippedWords(r)?.let { w ->
+                    notices.add(0, Notice(now, if (q.op.optString("op") == "person.merge") "Слито, но $w" else w, false))
+                }
+            }
             val conflicts = r.optJSONArray("conflicts")
             if (conflicts != null && conflicts.length() > 0) {
                 val fields = (0 until conflicts.length()).joinToString(", ") { fieldName(conflicts.optString(it)) }

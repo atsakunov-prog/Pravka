@@ -353,17 +353,17 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
                     Feedback.toast(app, "✓ ${t.title.take(40)}")
                 }
             },
+            // Тост — после ответа сервера и его словами: отказ («Кто это — X или Y?») не прячется за «✓ поставлено».
             accept = { sg ->
-                scope.launch {
-                    app.delaDo(listOf(Dela.decideOp(sg.id, accept = true)))
-                    Feedback.toast(app, "✓ поставлено")
-                }
+                scope.launch { Feedback.toast(app, app.delaSend(listOf(Dela.decideOp(sg.id, accept = true)), "✓ поставлено")) }
             },
             reject = { sg, reason ->
                 scope.launch {
-                    app.delaDo(listOf(Dela.decideOp(sg.id, accept = false, reason = reason)))
-                    Feedback.toast(app, "Отклонено" + if (reason.isNotBlank()) ": $reason" else "")
+                    Feedback.toast(app, app.delaSend(listOf(Dela.decideOp(sg.id, accept = false, reason = reason)), "Отклонено" + if (reason.isNotBlank()) ": $reason" else ""))
                 }
+            },
+            answer = { sg, o ->
+                scope.launch { Feedback.toast(app, app.delaSend(listOf(Dela.answerOp(sg.id, o.index)), ru.zf.pravka.core.DelaViews.answerSaid(o))) }
             },
             stop = { app.appScope.launch { runCatching { app.zasechkaEngine.closeOpen() } } },
             // «Раньше» у дайджеста — вид сервера за двое суток; без кэша и без журнала: это чужая переписка.

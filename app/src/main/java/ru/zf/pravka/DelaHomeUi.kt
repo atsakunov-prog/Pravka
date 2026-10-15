@@ -197,6 +197,31 @@ internal fun LateLink(n: Int, onClick: () -> Unit) {
 }
 
 /**
+ * «ждут от тебя без срока: 3 · жду больше недели: 2» (аудит 15.10.2026, №5; `waitLinks` веба) — под «просрочено N»
+ * в шапке «Сейчас». Цвет — обычный акцент, не «беда»: это не просрочка, а то, о чём нельзя забыть. Ноль — части нет.
+ */
+@Composable
+internal fun WaitLinks(w: DelaViews.Waits, onOwed: () -> Unit, onStale: () -> Unit) {
+    val t = LocalPravkaType.current
+    val ink = if (Look.v2) Kv.accent else ru.zf.pravka.ui.LocalMode.current.label
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        val parts = DelaViews.waitWords(w)
+        parts.forEachIndexed { i, word ->
+            if (i > 0) Text(" · ", style = t.label, color = ink)
+            Text(
+                "$word ›",
+                style = t.label.copy(fontWeight = FontWeight.SemiBold),
+                color = ink,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(KvShape.Tag))
+                    .clickable(role = Role.Button, onClick = if (word.startsWith("ждут")) onOwed else onStale)
+                    .padding(vertical = 6.dp),
+            )
+        }
+    }
+}
+
+/**
  * Блок главной (`.card` и `.sec` холста): значок, название, мелкая подпись (не влезла — второй строкой) — и дела
  * панелью с линией. [onTitle] — заголовок ведёт в свой раздел («Сегодня» → «Сегодня»). Числа-плашки у названия нет с
  * 14.10.2026 («в плашках номера» — владелец, «уберём эти количества дел везде»); [count] остался для
@@ -283,6 +308,8 @@ internal fun LazyListScope.homeView(
     onReject: (Dela.Suggestion) -> Unit,
     onMerge: (Dela.Suggestion, Dela.Task) -> Unit,
     onAcceptSet: (Dela.Suggestion, org.json.JSONObject) -> Unit,
+    onAnswer: (Dela.Suggestion, DelaViews.Option) -> Unit = { _, _ -> },
+    onRejectNow: (Dela.Suggestion, String) -> Unit = { sg, _ -> onReject(sg) },
 ) {
     item(key = "home:now") {
         HomeBlock(Glyphs.Bolt, "Сейчас", h.now.size, sub = "отметил сам — сделать сегодня") {
@@ -310,10 +337,13 @@ internal fun LazyListScope.homeView(
                         onAccept = { onAccept(listOf(sg)) }, onEdit = { onEdit(sg) }, onReject = { onReject(sg) },
                         onOpen = actions.open, onMerge = { t -> onMerge(sg, t) },
                         onAcceptSet = { set -> onAcceptSet(sg, set) },
+                        onAnswer = { o -> onAnswer(sg, o) },
+                        onRejectNow = { reason -> onRejectNow(sg, reason) },
                     )
                 }
-                // «Все» — под вопросами, а не в заголовке: там они съедали подпись блока.
-                if (h.asks.size > 1) Row {
+                // «Все» — под вопросами, а не в заголовке: там они съедали подпись блока. Только когда у каждого
+                // вопроса ответ — одно «Да» (как веб): при вариантах или выборе человека «Поставить все» соврало бы.
+                if (DelaViews.bulkOk(h.asks, crm.snap)) Row {
                     Spacer(Modifier.weight(1f))
                     PaperTextButton("Не надо все", onClick = { onRejectAll(h.asks) })
                     PaperTextButton("Поставить все", onClick = { onAccept(h.asks) })

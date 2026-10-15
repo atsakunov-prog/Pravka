@@ -187,6 +187,33 @@ object DelaViews {
     ).joinToString(" · ")
 
     /**
+     * «Ждут от тебя без срока» и «жду больше недели» (аудит 15.10.2026, №5) — числами в шапке «Сейчас» рядом с
+     * «просрочено N» (`waitLinks` веба). Правило одно в трёх местах — сервер (`store.OWED_NODUE_IF`,
+     * `WAITING_STALE_IF`), веб (`owedNoDue`, `waitingStale`) и здесь: свои открытые, не цели, в сфере; «Отбить» без
+     * срока; «Мониторить», где человек молчит дольше [WAITING_STALE_DAYS] дней, а напоминание не назначено или прошло
+     * (`Dela.week().waitingStale` — то же правило, второе не пишем). Сами ни в «Сейчас», ни в «Сегодня» не встают:
+     * сроков не выдумываем, только показываем.
+     */
+    data class Waits(val owedNoDue: Int, val waitingStale: Int) {
+        val any: Boolean get() = owedNoDue > 0 || waitingStale > 0
+    }
+
+    /** Дней молчания до «жду больше недели» — `store.WAITING_STALE_DAYS`; правило считает `Dela.week`. */
+    const val WAITING_STALE_DAYS = 7
+
+    fun owedNoDue(s: Dela.Snapshot, me: String, sphere: String): List<Dela.Task> =
+        openMine(s, me, sphere).filter { DelaGroups.grpOf(it) == DelaGroups.Grp.OWED && it.dueDate.isBlank() }
+
+    fun waits(s: Dela.Snapshot, me: String, today: String, sphere: String, now: Long): Waits =
+        Waits(owedNoDue(s, me, sphere).size, Dela.week(s, me, today, sphere, now).waitingStale.size)
+
+    /** Части строки: «ждут от тебя без срока: N», «жду больше недели: M»; ноль — части нет. */
+    fun waitWords(w: Waits): List<String> = listOfNotNull(
+        "ждут от тебя без срока: ${w.owedNoDue}".takeIf { w.owedNoDue > 0 },
+        "жду больше недели: ${w.waitingStale}".takeIf { w.waitingStale > 0 },
+    )
+
+    /**
      * Число «Нового» (`newCount` веба, 08.10.2026): только вопросы — ждущие
      * предложения. Поставленное и сделанное само ответа не ждут (владелец:
      * «уверен — поставил, не уверен — подскажи»).
@@ -318,29 +345,159 @@ object DelaViews {
     fun batchTitle(s: Dela.Snapshot, batch: String): String =
         s.suggestions.values.firstOrNull { it.batchRef == batch && it.batchTitle.isNotBlank() }?.batchTitle ?: batch
 
-    private fun byName(n: String, vararg names: String): Boolean {
-        val key = Dela.norm(n) ?: return false
-        return key.isNotBlank() && names.any { it.isNotBlank() && Dela.norm(it) == key }
+    /** Кто назван именем: [hit] — он один; [many] — двое и больше на одном ярусе (не узнан). */
+    data class Match<T>(val hit: T?, val many: List<T>)
+
+    /**
+     * Кто назван именем — тем же правилом, что сервер (`crm.match_name`, dela_0020; аудит 15.10.2026, №1) и веб
+     * (`byName`): живые карточки, ярусами. Один на ярусе — он; двое и больше — не узнан, [Match.many] — кто они (к
+     * следующему ярусу не идём). До того телефон смотрел имя, короткое и другие имена одним ярусом и видел только «ни
+     * одного такого» — двусмысленности не замечал вовсе.
+     */
+    fun <T> byName(list: Collection<T>, name: String, tiers: List<(T) -> List<String>>): Match<T> {
+        val n = Dela.norm(name) ?: return Match(null, emptyList())
+        for (tier in tiers) {
+            val got = list.filter { x -> tier(x).any { it.isNotBlank() && Dela.norm(it) == n } }
+            if (got.size == 1) return Match(got.first(), emptyList())
+            if (got.size > 1) return Match(null, got)
+        }
+        return Match(null, emptyList())
     }
+
+    /** Ярусы людей: своё имя и короткое имя, потом другие имена. Только живые (не архив, не слитые). */
+    fun personMatch(s: Dela.Snapshot, name: String): Match<Dela.Person> =
+        byName(s.people.values.filter { it.live }, name, listOf({ p -> listOf(p.name, p.short) }, { p -> p.aliases }))
+
+    /** У проектов имя и другие имена — один ярус. */
+    fun projectMatch(s: Dela.Snapshot, name: String): Match<Dela.Project> =
+        byName(s.projects.values.filter { it.live }, name, listOf({ p -> listOf(p.name) + p.aliases }))
+
+    /** «A», «A или B», «A, B или C» (`orWords` веба). */
+    fun orWords(names: List<String>): String =
+        if (names.size > 1) names.dropLast(1).joinToString(", ") + " или " + names.last() else names.firstOrNull().orEmpty()
 
     /**
      * Почему предложение ждёт человека (`askWhy` веба): вопрос самой автоматики
-     * (`payload.ask`), не узнан проект, не узнан человек — по имени, короткому
-     * и другим именам, без регистра. null — вопроса нет (старая встреча и т. п.).
+     * (`payload.ask`), иначе — что не узналось по имени. Сервер уже посмотрел имена
+     * (`payload.held` есть, хоть пустой, — с 15.10.2026) — его вердикт сильнее своего
+     * точного сравнения: «Женя Соколов» он узнаёт уверенным «кто это». Нет `held`
+     * (старый сервер) — сами, ярусами ([personMatch]): двое — «Кто это — «X»: A или B?»,
+     * никого — «Кто это — «X»?». Имя смотрим, только если id не стоит. null — вопроса нет.
      */
     fun askWhy(sg: Dela.Suggestion, s: Dela.Snapshot): String? {
         val p = sg.payloadObj()
         p.str("ask").takeIf { it.isNotBlank() }?.let { return it }
-        val project = p.str("project_name")
-        if (project.isNotBlank() && s.projects.values.none { byName(project, it.name, *it.aliases.toTypedArray()) }) {
-            return "Не знаю проект «$project» — куда?"
+        val project = p.str("project_name").takeIf { p.str("project_id").isBlank() }.orEmpty()
+        val person = p.str("person_name").takeIf { p.str("person_id").isBlank() }.orEmpty()
+        if (p.has("held") && !p.isNull("held")) {
+            val parts = p.optString("held").split("; ")
+            if (project.isNotBlank() && parts.any { it.contains("«$project»") && it.contains("проект") }) {
+                return if (parts.any { it.startsWith("не один проект") }) "Какой проект — «$project»?" else "Не знаю проект «$project» — куда?"
+            }
+            if (person.isNotBlank() && parts.any { it.contains("«$person»") && !it.contains("проект") }) return "Кто это — «$person»?"
+            return null
         }
-        val person = p.str("person_name")
-        if (person.isNotBlank() && s.people.values.none { byName(person, it.name, it.short, *it.aliases.toTypedArray()) }) {
-            return "Кто это — «$person»?"
+        if (project.isNotBlank()) {
+            val r = projectMatch(s, project)
+            if (r.many.isNotEmpty()) return "Какой проект — «$project»: ${orWords(r.many.take(3).map { it.name })}?"
+            if (r.hit == null) return "Не знаю проект «$project» — куда?"
+        }
+        if (person.isNotBlank()) {
+            val r = personMatch(s, person)
+            if (r.many.isNotEmpty()) return "Кто это — «$person»: ${orWords(r.many.take(3).map { it.name })}?"
+            if (r.hit == null) return "Кто это — «$person»?"
         }
         return null
     }
+
+    /**
+     * Почему не встало само — строкой сервера (`payload.held`: причины через «; », `heldLine` веба) без того, что
+     * уже сказал вопрос [q]: часть, целиком входящая в вопрос; часть про имя, о котором вопрос и спрашивает; при
+     * `pick` — часть про человека (вопрос «Кто это — X или Y?» и есть она); у вопроса о человеке со встречи с
+     * `pick` — «похожие уже есть: …» (вопрос «Это A или B?» их называет). Пусто — null, строки нет.
+     */
+    fun heldLine(sg: Dela.Suggestion, q: String?): String? {
+        val p = sg.payloadObj()
+        val held = if (p.has("held") && !p.isNull("held")) p.optString("held") else return null
+        val nq = Dela.norm(q).orEmpty()
+        val person = p.str("person_name")
+        val project = p.str("project_name")
+        val pick = pick(sg)
+        fun asked(x: String) = listOf(person, project).any { n -> n.isNotBlank() && x.contains("«$n»") && nq.contains(Dela.norm("«$n»").orEmpty()) }
+        val left = held.split("; ").map { it.trim() }.filter { x ->
+            x.isNotBlank() && !(nq.isNotBlank() && nq.contains(Dela.norm(x).orEmpty())) &&
+                !(pick && person.isNotBlank() && x.contains("«$person»")) && !asked(x) &&
+                !(sg.kind == "person" && pick && x.startsWith("похожие уже есть"))
+        }
+        return if (left.isEmpty()) null else "Ждёт: " + left.joinToString("; ")
+    }
+
+    /** Вариант ответа кнопкой (`payload.options`): номер, подпись и «нет» ли это (`reject`). */
+    data class Option(val index: Int, val label: String, val reject: Boolean)
+
+    /**
+     * Варианты ответа кнопками (`sugOptions` веба, 13.10.2026): у вопроса автоматики — её собственные ответы
+     * («Это Иван Петров», «Без человека», «Не для CRM»), а не «Да / Не надо». Сервер без фичи `options` их не примет —
+     * тогда null, как раньше. Меньше двух — тоже null (сервер такие и не хранит).
+     */
+    fun options(sg: Dela.Suggestion, s: Dela.Snapshot): List<Option>? {
+        if (Dela.FEATURE_OPTIONS !in s.features) return null
+        val a = sg.payloadObj().optJSONArray("options") ?: return null
+        val out = (0 until a.length()).mapNotNull { i ->
+            val o = a.optJSONObject(i) ?: return@mapNotNull null
+            val label = o.str("label").ifBlank { return@mapNotNull null }
+            Option(i, label, o.optBoolean("reject", false))
+        }
+        return out.takeIf { it.size >= 2 }
+    }
+
+    /** Вопрос ждёт выбора (`payload.pick`): «Да» без варианта сервер не примет (аудит №1, №25). */
+    fun pick(sg: Dela.Suggestion): Boolean = sg.payloadObj().optBoolean("pick", false)
+
+    private val MANY_WORDS = listOf("двое", "трое", "четверо", "пятеро", "шестеро", "семеро")
+    private val MANY_NUM = Regex("^\\d+ с именем")
+
+    /**
+     * «Да» без выбора сервер не примет (`store._who_guard`, аудит №1): вопрос с `pick` или человек «завести» /
+     * «уточнить» назван именем, которое у сервера двусмысленно, — его `held` говорит «двое с именем «X»: …» или «на
+     * «X» похожи: …». Тогда «Поставить» и «Поставить все» не показываем: ответ — кнопкой варианта, «Поправить» с
+     * выбором человека или словами Claude. Без `held` (старый сервер) — как раньше: старый «Да» принимал.
+     */
+    fun choiceOnly(sg: Dela.Suggestion): Boolean {
+        if (pick(sg)) return true
+        if (sg.kind != "create" && sg.kind != "update") return false
+        val p = sg.payloadObj()
+        val name = p.str("person_name")
+        if (name.isBlank() || p.str("person_id").isNotBlank() || !p.has("held") || p.isNull("held")) return false
+        return p.optString("held").split("; ").map { it.trim() }.any { x ->
+            x.contains("«$name»") && (x.startsWith("на «") || MANY_WORDS.any { x.startsWith("$it с именем") } || MANY_NUM.containsMatchIn(x))
+        }
+    }
+
+    /** Ответить можно одним «Да»: вариантов кнопками нет и выбор не нужен. */
+    fun plainYes(sg: Dela.Suggestion, s: Dela.Snapshot): Boolean = options(sg, s) == null && !choiceOnly(sg)
+
+    /**
+     * «Поставить все» / «Не надо все» — только когда у каждого вопроса ответ — одно «Да» (как веб: при вариантах
+     * кнопки «все» нет). Иначе «Поставить все» считало бы отказанные сервером в «поставлено: N».
+     */
+    fun bulkOk(asks: List<Dela.Suggestion>, s: Dela.Snapshot): Boolean = asks.size > 1 && asks.all { plainYes(it, s) }
+
+    /** Вариант «нет» среди кнопок — «Не для CRM», «Никто», «Нет»: им отвечает «Нет» там, где кнопок не видно. */
+    fun rejectOption(sg: Dela.Suggestion, s: Dela.Snapshot): Option? = options(sg, s)?.firstOrNull { it.reject }
+
+    /** Тост после ответа кнопкой (`answer` веба): «Ответ: Это Иван Петров» или «Не надо: Не для CRM». */
+    fun answerSaid(o: Option): String = (if (o.reject) "Не надо: " else "Ответ: ") + o.label
+
+    /** Причина «нет» у вопроса о человеке без вариантов (кнопка «Не для CRM» веба): служба больше не спросит. */
+    const val NOT_CRM = "не для CRM"
+
+    /**
+     * Ссылка значка источника (`sugMark` веба): встреча — у дела её адрес в `source_ref`, у вопроса о человеке со
+     * встречи (№25) — в `payload.speaker.url`. Только `https://`.
+     */
+    fun sugLink(sg: Dela.Suggestion): String? =
+        listOf(sg.sourceRef, sg.payloadObj().optJSONObject("speaker")?.str("url").orEmpty()).firstOrNull { it.startsWith("https://") }
 
     /** Предложение словами (`sugText` веба): что, подсказка одной строкой и подробности уточнения. */
     data class SugText(val title: String, val hint: String, val add: String = "")
@@ -352,9 +509,11 @@ object DelaViews {
         // Новый человек (dela_0019, `sugText` веба): кто и откуда; у «это он?» — с кем похож. Полный вид — docs/dela-phone-20.md.
         if (sg.kind == "person") {
             val d = p.optJSONObject("person") ?: JSONObject()
-            val like = s.people[v("person_id")]?.takeIf { !p.optBoolean("rename") }
+            val title = v("title").ifBlank { d.str("name") }
+            // «Это он в Telegram?» (№25): заголовок — сама карточка; «похоже: <она же>» повторило бы его.
+            val like = s.people[v("person_id")]?.takeIf { !p.optBoolean("rename") && it.name != title }
             return SugText(
-                v("title").ifBlank { d.str("name") },
+                title,
                 listOfNotNull(v("where").takeIf { it.isNotBlank() }, like?.let { "похоже: ${it.name}" }, d.str("role").takeIf { it.isNotBlank() })
                     .joinToString(" · "),
             )
@@ -432,13 +591,69 @@ object DelaViews {
         return best.takeIf { score >= 0.6 }
     }
 
-    /** «Сделано само» свёрнутым — одной строкой: «закрыл 3, уточнил 2». */
+    /** «Сделано само» свёрнутым — одной строкой: «закрыл 3, уточнил 2, завёл людей: 1» (`autoBlock` веба). */
     fun autoSummary(list: List<Dela.Suggestion>): String {
         val closed = list.count { it.kind == "close" }
+        val people = list.count { it.kind == "person" }
+        val upd = list.size - closed - people
         return listOfNotNull(
             "закрыл $closed".takeIf { closed > 0 },
-            "уточнил ${list.size - closed}".takeIf { list.size > closed },
+            "уточнил $upd".takeIf { upd > 0 },
+            "завёл людей: $people".takeIf { people > 0 },
         ).joinToString(", ")
+    }
+
+    /**
+     * Откуда сделанное само — словами под заголовком (`autoFrom` веба): «по встречам и Telegram», «по Telegram и
+     * телефонной книжке». С 15.10.2026 людей заводят и встречи (№25): прежнее «по встречам и Telegram» на всё подряд
+     * стало неправдой у людей из книжки.
+     */
+    fun autoFrom(list: List<Dela.Suggestion>): String {
+        fun has(src: String) = list.any { it.source == src || (src == "telegram" && it.source == "userbot") }
+        val words = listOfNotNull("встречам".takeIf { has("meeting") }, "Telegram".takeIf { has("telegram") }, "телефонной книжке".takeIf { has("contacts") })
+        return if (words.isEmpty()) "" else "по " + orWords(words).replace(" или ", " и ")
+    }
+
+    /** Строка человека, заведённого само: «Новый человек: Пётр Новиков»; карточки не видно — как его назвали. */
+    data class AutoPerson(val personId: String, val name: String, val hint: String, val live: Boolean)
+
+    fun autoPerson(sg: Dela.Suggestion, s: Dela.Snapshot): AutoPerson {
+        val p = s.people[sg.resultObj().str("person_id")]
+        val pl = sg.payloadObj()
+        return AutoPerson(
+            personId = p?.id.orEmpty(),
+            name = p?.name ?: pl.str("title").ifBlank { pl.optJSONObject("person")?.str("name").orEmpty() }.ifBlank { "карточка не видна" },
+            hint = listOfNotNull(pl.str("where").takeIf { it.isNotBlank() }, sg.quote.takeIf { it.isNotBlank() }?.let { "«" + it.take(160) + "»" }).joinToString(" · "),
+            live = p != null && p.live,
+        )
+    }
+
+    /**
+     * Счётчик откатов автоматики за неделю (аудит 15.10.2026, №29) — строкой под «Сделано само» (`autoWeekLine`
+     * веба): что поставлено, закрыто, уточнено и заведено само и сколько из этого ты отменил или вернул (в скобках),
+     * как ответил на её вопросы. Считает сервер (`GET /api/view/week`, поле `automation.all`) — по делам, людям и
+     * комментариям; старый сервер поля не знает — null, строки нет. Нули пропускаются.
+     */
+    fun automationLine(week: JSONObject?): String? {
+        val b = week?.optJSONObject("automation")?.optJSONObject("all") ?: return null
+        fun n(k: String) = b.optInt(k, 0)
+        val ans = listOf("yes" to "да", "edited" to "с правкой", "no" to "нет", "expired" to "погасло").filter { n(it.first) > 0 }
+            .joinToString(", ") { "${it.second} ${n(it.first)}" }
+        val parts = listOfNotNull(
+            "поставлено само ${n("created")} (отменил ${n("created_undone")})".takeIf { n("created") > 0 },
+            "закрыто ${n("closed")} (вернул ${n("closed_undone")})".takeIf { n("closed") > 0 },
+            "уточнено ${n("updated")} (${n("updated_undone")})".takeIf { n("updated") > 0 },
+            "людей ${n("people")} (${n("people_undone")})".takeIf { n("people") > 0 },
+            "вопросов ${n("asked")}: $ans".takeIf { n("asked") > 0 },
+        )
+        return if (parts.isEmpty()) null else "за неделю: " + parts.joinToString(" · ")
+    }
+
+    /** Частые «нет» автоматике (`no_reasons`): ««не дело» — 3»; пусто — "" (подсказка под строкой счётчика). */
+    fun automationNo(week: JSONObject?): String {
+        val a = week?.optJSONObject("automation")?.optJSONObject("all")?.optJSONArray("no_reasons") ?: return ""
+        return (0 until a.length()).mapNotNull { a.optJSONObject(it) }.filter { it.str("reason").isNotBlank() }
+            .joinToString("; ") { "«${it.str("reason")}» — ${it.optInt("n", 0)}" }
     }
 
     /**
@@ -454,6 +669,9 @@ object DelaViews {
         "telegram", "userbot" -> Mark("send", true, "Telegram")
         "bot" -> Mark("send", true, "ответ в Telegram")
         "mcp" -> Mark("chat", true, "Claude")
+        // Люди из телефонной книжки (dela_0019) и разборщик Круга — как `ORIGIN` веба.
+        "contacts" -> Mark("phone", true, "телефонная книжка")
+        "krug" -> Mark("circle", true, "разборщик Круга")
         "web" -> Mark("pen", false, "в вебе")
         "import" -> Mark("list", false, "перенос")
         else -> Mark("pen", false, "руками")

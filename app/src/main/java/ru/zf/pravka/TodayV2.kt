@@ -133,6 +133,8 @@ internal class TodayV2Actions(
     val mealPhoto: () -> Unit,
     val shabbat: () -> Unit,
     val lenta: (Lenta.Row) -> Unit,
+    /** Ответ вариантом «Подскажи» («Не для CRM», «Никто»), где кнопок не видно, — `suggestion.decide` с `option`. */
+    val answer: (Dela.Suggestion, DelaViews.Option) -> Unit = { sg, _ -> reject(sg, "") },
 )
 
 @Composable
@@ -639,7 +641,7 @@ private fun NewCard(c: TodayCards, wide: Boolean) {
         asks.take(NEW_MAX).forEachIndexed { i, sg ->
             if (i > 0) ListLine()
             val txt = DelaViews.sugText(sg, c.data.snap, c.data.todayKey)
-            val why = DelaViews.askWhy(sg, c.data.snap)
+            val why = DelaViews.askWhy(sg, c.data.snap) ?: DelaViews.heldLine(sg, null)?.takeIf { DelaViews.choiceOnly(sg) }
             val from = sg.batchTitle.ifBlank { DelaViews.mark(sg.source).word }
             Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -654,8 +656,24 @@ private fun NewCard(c: TodayCards, wide: Boolean) {
                     )
                 }
                 Spacer(Modifier.width(6.dp))
-                SmallKey(kv("check", Glyphs.Check), if (wide) "Да" else null, "Да: ${txt.title}", { c.act.accept(sg) }, soft = true)
-                SmallKey(kv("x", Glyphs.Close), null, "Нет: ${txt.title}", { c.onReject(sg) })
+                // Вопрос со своими ответами или выбором человека (аудит №1, №25): «Да» сервер не примет — ответ в Делах,
+                // где варианты кнопками. «Нет» — вариантом «нет» вопроса («Не для CRM», «Никто»), у человека без
+                // вариантов — «не для CRM» сразу, у остального — лист причины.
+                if (DelaViews.plainYes(sg, c.data.snap)) {
+                    SmallKey(kv("check", Glyphs.Check), if (wide) "Да" else null, "Да: ${txt.title}", { c.act.accept(sg) }, soft = true)
+                } else {
+                    SmallKey(kv("arrow-right", Glyphs.Forward), "Ответить", "Ответить в Делах: ${txt.title}", {
+                        if (sg.batchRef.isNotBlank()) c.nav.delaBatch(sg.batchRef) else c.nav.mode(Tab.TODOIST)
+                    }, soft = true)
+                }
+                val no = DelaViews.rejectOption(sg, c.data.snap)
+                SmallKey(kv("x", Glyphs.Close), null, "Нет: ${txt.title}", {
+                    when {
+                        no != null -> c.act.answer(sg, no)
+                        sg.kind == "person" && DelaViews.options(sg, c.data.snap) == null -> c.act.reject(sg, DelaViews.NOT_CRM)
+                        else -> c.onReject(sg)
+                    }
+                })
             }
         }
     }
