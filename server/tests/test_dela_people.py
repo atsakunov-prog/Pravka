@@ -412,6 +412,26 @@ def test_gender_of_first_names(dela):
     assert w["sure"] and str(w["best"]["id"]) == alexandra, w
 
 
+def test_different_names_with_shared_beginning_are_not_cases(dela):
+    """Падеж — продолжение основы только буквами окончаний (сквозной тест №25/№60, 15.10.2026): «Марина» — не «Мария»,
+    «Новик» — не «Новиков», «Антонина» — не «Антон». Падежи одного имени узнаются по-прежнему."""
+    from pravka_dela import people as pp
+    for a, b in (("марина", "мария"), ("марину", "мария"), ("новик", "новиков"), ("антонина", "антон"),
+                 ("василиса", "василий")):
+        assert not pp.same(a, b), (a, b)
+    for a, b in (("евгений", "евгением"), ("сергей", "сергеем"), ("дмитрий", "дмитрием"), ("мария", "марии"),
+                 ("мария", "марией"), ("марина", "марину"), ("наталья", "натальей"), ("соколов", "соколовым")):
+        assert pp.same(a, b), (a, b)
+    maria = person(dela, "sasha", "Мария")
+    w = store.view(dela, "sasha", "who", q="Марина (Бета)")
+    assert not w["sure"] and all(str(c["id"]) != maria for c in w["candidates"]), w
+    w = store.view(dela, "sasha", "who", q="Марией")
+    assert w["sure"] and str(w["best"]["id"]) == maria, w
+    novikov = person(dela, "sasha", "Пётр Новиков")
+    w = store.view(dela, "sasha", "who", q="Пётр Новик")
+    assert not (w["sure"] and str(w["best"]["id"]) == novikov), w
+
+
 def test_gender_dictionary_covers_every_full_name():
     from pravka_dela import people as pp
     assert {x for v in pp.DIMINUTIVE.values() for x in v} <= pp.MALE_FULL | pp.FEMALE_FULL
