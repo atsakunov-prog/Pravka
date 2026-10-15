@@ -43,6 +43,13 @@ class RaznoskaEngine(
     private val delaOn: suspend () -> Boolean,
     /** Места автопилота Засечки («дом», «Летово») — для напоминаний «когда приеду». */
     private val places: suspend () -> List<String> = { emptyList() },
+    /**
+     * Память правила кэша головы разбора (аудит №67, `RaznoskaCache`): кэш — только если прошлый разбор той же головы
+     * был меньше 55 минут назад. null — как было: голова под кэшем всегда.
+     */
+    private val cacheMemory: RaznoskaCache.Memory? = null,
+    /** Фоновая работа после разбора (обновить вид `context_index`): разбор её не ждёт. С завода — не делать. */
+    private val background: (suspend () -> Unit) -> Unit = {},
 ) {
 
     companion object {
@@ -107,6 +114,7 @@ class RaznoskaEngine(
             resolveProject = { named ->
                 todoistStore.resolveProject(named)?.let { p -> p.id to todoistStore.path(p) }
             },
+            cache = cacheMemory,
         )
         val split = result.getOrElse { e ->
             eventLog.add("разноска: разбор не вышел — ${e.message}")
@@ -146,15 +154,28 @@ class RaznoskaEngine(
         routes.load()
         val snap = delaStore.view.value
         val prepared = dictionary.prepare(transcript)
+        // Справочник людей — связанные с делами и команда, названные в наговоре сверх них — в хвост (аудит №67, вид
+        // context_index): голова под кэшем от наговора не зависит. Нет вида (старый сервер, первый запуск без сети) —
+        // каталог как был. Вид старше шести часов — после разбора обновится фоном; разбор его не ждёт.
+        val now = System.currentTimeMillis()
+        val cached = if (ContextIndex.FEATURE in snap.features) delaStore.viewsFlow.value[ContextIndex.PATH] else null
+        val index = cached?.takeIf { ContextIndex.usable(it.at, now) }?.let { ContextIndex.parse(it.data) }
+        val keep = index?.keepFor(snap)
+        val more = if (index != null && keep != null) Dela.promptMorePeople(snap, index.namedOutside(snap, prepared.text, keep)) else ""
         val result = claude.splitTasksDela(
             transcript = prepared.text,
             dictBlock = prepared.dictBlock,
-            catalogBlock = listOf(Dela.promptCatalog(snap), routes.promptBlock())
+            catalogBlock = listOf(Dela.promptCatalog(snap, keep), routes.promptBlock())
                 .filter { it.isNotBlank() }
                 .joinToString("\n\n"),
             snapshot = snap,
             places = runCatching { places() }.getOrDefault(emptyList()),
+            morePeople = more,
+            cache = cacheMemory,
         )
+        if (ContextIndex.FEATURE in snap.features && ContextIndex.stale(cached?.at, now)) {
+            background { refreshIndex() }
+        }
         val split = result.getOrElse { e ->
             eventLog.add("разноска: разбор не вышел — ${e.message}")
             return Result.failure(e)
@@ -444,11 +465,23 @@ class RaznoskaEngine(
         eventLog.add("разноска: маршрут запомнен — «${after.content.take(60)}» → ${after.projectName}")
     }
 
+    /**
+     * Вид `context_index` (аудит №67) — заново, если копия старше шести часов: связанные и ключи имён для головы
+     * разбора. Ошибка — тихо: разбор возьмёт прежний вид или каталог как был.
+     */
+    private suspend fun refreshIndex() {
+        val snap = delaStore.view.value
+        if (ContextIndex.FEATURE !in snap.features) return
+        if (!ContextIndex.stale(delaStore.viewsFlow.value[ContextIndex.PATH]?.at, System.currentTimeMillis())) return
+        delaSync.crmView(ContextIndex.PATH).onSuccess { eventLog.add("разноска: вид связанных людей обновлён") }
+    }
+
     /** Пока владелец говорит, каталог проектов и меток успевает обновиться. */
     suspend fun warmCatalog() {
         if (delaOn()) {
             runCatching { delaStore.load() }
             runCatching { delaSync.tick() }
+            runCatching { refreshIndex() }
             return
         }
         runCatching { todoistStore.load() }

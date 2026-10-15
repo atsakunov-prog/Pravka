@@ -44,6 +44,7 @@ import ru.zf.pravka.ui.KvNote
 import ru.zf.pravka.ui.KvSeg
 import ru.zf.pravka.ui.KvShape
 import ru.zf.pravka.ui.KvTabs
+import ru.zf.pravka.ui.KvSmallButton
 import ru.zf.pravka.ui.KvTone
 import ru.zf.pravka.ui.Look
 import ru.zf.pravka.ui.PaperCard
@@ -143,6 +144,23 @@ private fun AllSpend(app: PravkaApp) {
                 local?.let { (usd, routes) -> LocalCard(usd, routes) }
             }
             return@Column
+        }
+        // Защита от петли сервера (аудит №12): что стоит — строкой с «Продолжать» (операция claude.guard). Саше придёт и
+        // сообщение бота Ковчега; здесь — на случай, если Telegram молчит.
+        for (g in s.stopped) {
+            KvCallout(
+                SpendBook.guardLine(g),
+                tone = KvTone.WARN,
+                buttons = {
+                    KvSmallButton("Продолжать", primary = true, onClick = {
+                        scope.launch {
+                            val said = app.delaSend(listOf(SpendBook.guardOp(g.task)), "Продолжаю — час пороги втрое")
+                            ru.zf.pravka.ui.Feedback.toast(app, said)
+                            runCatching { app.claudeSpend.view() }.getOrNull()?.let { screen = SpendBook.screen(it) }
+                        }
+                    })
+                },
+            )
         }
         val key = SpendBook.PERIODS[period].first
         val p = s.periods.getValue(key)

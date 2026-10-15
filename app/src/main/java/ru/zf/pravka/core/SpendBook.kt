@@ -268,7 +268,27 @@ object SpendBook {
         val tipsNote: String,
         val tips: List<Tip>,
         val tipsSeen: Boolean,
+        /**
+         * Что на сервере Дел стоит защитой от петли (аудит №12, поле `guard.stopped` вида `spend`): задача, почему, с
+         * какого времени. Пусто — ничего не стоит (или сервер старый, поля нет).
+         */
+        val stopped: List<GuardStop> = emptyList(),
     )
+
+    /** Задача Дел, остановленная защитой от петли: «Продолжать» — операция `claude.guard` ([guardOp]). */
+    data class GuardStop(val task: String, val title: String, val why: String, val at: String)
+
+    /**
+     * «Продолжать» (аудит №12): снять остановку и час пороги втрое — владелец; сервер проверит сам. Только при поле
+     * `guard` вида: старый сервер операции не знает.
+     */
+    fun guardOp(task: String, opId: String = java.util.UUID.randomUUID().toString()): JSONObject =
+        JSONObject().put("op", "claude.guard").put("op_id", opId).put("action", "resume").put("task", task)
+
+    /** «Сервер: остановлено защитой — Правка словами: 31 вызов за 10 минут (порог 30) · с 14:05». */
+    fun guardLine(g: GuardStop): String =
+        "Сервер: остановлено защитой — " + g.title.ifBlank { g.task } + (if (g.why.isNotBlank()) ": " + g.why else "") +
+            (g.at.takeIf { it.length >= 16 }?.let { " · с " + it.substring(11, 16) } ?: "")
 
     /** Периоды экрана: ключ вида сервера → подпись. */
     val PERIODS = listOf("today" to "Сегодня", "week" to "7 дней", "month" to "30 дней")
@@ -337,6 +357,13 @@ object SpendBook {
                     it.optDouble("save_usd_month", 0.0), it.optString("risk"))
             },
             tipsSeen = t != null && !t.isNull("seen_at") && t.optString("seen_at").isNotBlank(),
+            stopped = o.optJSONObject("guard")?.optJSONArray("stopped").let { a ->
+                (0 until (a?.length() ?: 0)).mapNotNull { a!!.optJSONObject(it) }.mapNotNull { g ->
+                    val task = g.optString("task").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    GuardStop(task, g.optString("title").takeIf { it != "null" }.orEmpty(), g.optString("why").takeIf { it != "null" }.orEmpty(),
+                        g.optString("at").takeIf { it != "null" }.orEmpty())
+                }
+            },
         )
     }
 

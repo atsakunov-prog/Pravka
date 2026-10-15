@@ -619,6 +619,9 @@ class PravkaApp : Application() {
             delaSync = delaSync,
             delaOn = { delaOnServer() },
             places = { remindPlaces() },
+            // Кэш головы разбора — только когда прочитается (аудит №67): память в базе телефона.
+            cacheMemory = ru.zf.pravka.data.RaznoskaCacheFile(this),
+            background = { block -> appScope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { block() } } },
         )
     }
 

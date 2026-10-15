@@ -57,9 +57,10 @@ suspend fun ClaudeProvider.splitTasks(
     knownLabels: List<String>,
     // "Стеллар Групп / buy-side M&A" -> (id, путь как в каталоге)
     resolveProject: (String) -> Pair<String, String>?,
+    cache: ru.zf.pravka.core.RaznoskaCache.Memory? = null,
 ): Result<SplitResult> = withContext(Dispatchers.IO) {
     runCatchingApi {
-        val call = askSplit(PromptStore.PromptId.TASKS, transcript, dictBlock, catalogBlock)
+        val call = askSplit(PromptStore.PromptId.TASKS, transcript, dictBlock, catalogBlock, cache = cache)
         val (tasks, notes) = parseTasks(call.reply.text, knownLabels, resolveProject)
         call.result(tasks, notes)
     }
@@ -81,12 +82,16 @@ suspend fun ClaudeProvider.splitTasksDela(
     catalogBlock: String,
     snapshot: ru.zf.pravka.core.Dela.Snapshot,
     places: List<String> = emptyList(),
+    morePeople: String = "",
+    cache: ru.zf.pravka.core.RaznoskaCache.Memory? = null,
 ): Result<SplitResult> = withContext(Dispatchers.IO) {
     runCatchingApi {
         val call = askSplit(
             PromptStore.PromptId.TASKS_DELA, transcript, dictBlock, catalogBlock,
             placesBlock = ru.zf.pravka.core.DelaRemind.placesBlock(places),
             treeBlock = ru.zf.pravka.core.DelaPlace.block(),
+            morePeople = morePeople,
+            cache = cache,
         )
         val (tasks, notes) = parseTasksDela(call.reply.text, snapshot, places)
         call.result(tasks, notes.joinToString("\n") { it.text }, notes)
@@ -114,6 +119,8 @@ private suspend fun ClaudeProvider.askSplit(
     catalogBlock: String,
     placesBlock: String = "",
     treeBlock: String? = null,
+    morePeople: String = "",
+    cache: ru.zf.pravka.core.RaznoskaCache.Memory? = null,
 ): SplitCall {
     val apiKey = settings.apiKey()
     if (apiKey.isBlank()) {
@@ -129,10 +136,12 @@ private suspend fun ClaudeProvider.askSplit(
     }
     // Кэш (16.09.2026): правила и каталог проектов стабильны от наговора к
     // наговору — они голова под часовым кэшем; дата, словарь и сам наговор
-    // — хвост. Граница — {TODAY}: в заводском шаблоне он стоит после
+    // — хвост. Граница — строка с {TODAY}: в заводском шаблоне она стоит после
     // каталога. Если владелец в «Промптах» увёл словарь выше даты, голова
     // менялась бы каждый раз — тогда кэш не ставим, а не платим за запись.
-    val cut = template.indexOf("{TODAY}")
+    // С 15.10.2026 (аудит №67) граница — начало строки с {TODAY}: названные в наговоре люди вне справочника головы
+    // ([morePeople]) встают в хвост абзацем перед датой — голова от наговора не зависит.
+    val cut = ru.zf.pravka.core.RaznoskaCache.headCut(template)
     // {PLACES} — в голове под кэшем (места меняются редко), {NOW} — в хвосте
     // рядом с датой: «через час» и «в 11, если уже прошло» считаются от него.
     fun fill(s: String) = s
@@ -144,6 +153,7 @@ private suspend fun ClaudeProvider.askSplit(
     val headTemplate = if (cut > 0) template.substring(0, cut) else ""
     val head = fill(headTemplate)
     var tail = fill(if (cut > 0) template.substring(cut) else template)
+    if (morePeople.isNotBlank()) tail = morePeople.trim() + "\n\n" + tail
     tail = if (tail.contains(Prompts.PLACEHOLDER_INPUT)) {
         tail.replace(Prompts.PLACEHOLDER_INPUT, transcript)
     } else {
@@ -152,13 +162,19 @@ private suspend fun ClaudeProvider.askSplit(
         // Prompts.assemble().
         tail.trimEnd() + "\n\nНаговор:\n" + transcript
     }
+    // Голова под кэшем — только когда он прочитается (аудит №67, core/RaznoskaCache.kt): прошлый разбор с той же
+    // головой был меньше 55 минут назад. Одиночный разбор кэш не пишет — запись часового кэша стоит вдвое, а читать её
+    // некому. Без памяти ([cache] null) — как было: всегда.
+    val headOk = head.isNotBlank() && !headTemplate.contains(Prompts.PLACEHOLDER_DICT)
+    val headHash = ru.zf.pravka.core.RaznoskaCache.hash(head)
+    val started = System.currentTimeMillis()
+    val cacheOn = headOk && (cache == null || ru.zf.pravka.core.RaznoskaCache.decide(started, runCatching { cache.read() }.getOrNull(), headHash))
     val parts = Prompts.PromptParts(
         stablePrefix = head,
         dictPart = tail,
         afterInput = "",
-        cacheStableAlways = head.isNotBlank() && !headTemplate.contains(Prompts.PLACEHOLDER_DICT),
+        cacheStableAlways = cacheOn,
     )
-    val started = System.currentTimeMillis()
     val choice = settings.modelChoice(ModelRoute.RAZNOSKA)
     val reply = requestWithOneRetry(
         apiKey, choice.model, parts, "", null,
@@ -166,6 +182,7 @@ private suspend fun ClaudeProvider.askSplit(
         routeKey = ModelRoute.RAZNOSKA.key,
         paceChars = transcript.length,
     )
+    if (cache != null) runCatching { cache.write(ru.zf.pravka.core.RaznoskaCache.Last(started, headHash, cacheOn)) }
     return SplitCall(reply, choice.model, costUsd(choice.model, reply), started)
 }
 

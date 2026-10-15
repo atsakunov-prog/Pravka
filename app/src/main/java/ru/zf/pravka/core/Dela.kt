@@ -1735,8 +1735,12 @@ object Dela {
      * Справочник для промпта Разноски: проекты с алиасами, люди с короткими
      * именами и метки — вместо живого каталога Todoist и команды, вписанной в
      * промпт руками. Только имена: что они значат, написано в самом промпте.
+     *
+     * [keep] (аудит 15.10.2026, №67) — чьи строки ЛЮДИ класть: связанные с делами и команда (`ContextIndex.keepFor`),
+     * а не все 400 карточек (~20 тыс. знаков в голове каждого разбора). Названные в наговоре вне [keep] идут не сюда, а
+     * в хвост ([promptMorePeople]): голова под кэшем не должна зависеть от наговора. null — как было: все.
      */
-    fun promptCatalog(s: Snapshot, maxPeople: Int = 400): String {
+    fun promptCatalog(s: Snapshot, keep: Set<String>? = null, maxPeople: Int = 400): String {
         val sb = StringBuilder()
         val projects = s.liveProjects()
         if (projects.isNotEmpty()) {
@@ -1749,20 +1753,40 @@ object Dela {
                 sb.append('\n')
             }
         }
-        val people = s.livePeople().take(maxPeople)
+        val people = s.livePeople().let { all -> if (keep == null) all else all.filter { it.id in keep } }.take(maxPeople)
         if (people.isNotEmpty()) {
-            sb.append("\nЛЮДИ (person — короткое имя из списка; в скобках — полное и как ещё зовут):\n")
-            for (p in people) {
-                sb.append("— ").append(p.label)
-                val more = listOfNotNull(p.name.takeIf { it != p.label && it.isNotBlank() }) + p.aliases
-                if (more.isNotEmpty()) sb.append(" (").append(more.joinToString(", ")).append(')')
-                sb.append('\n')
-            }
+            sb.append(
+                if (keep == null) "\nЛЮДИ (person — короткое имя из списка; в скобках — полное и как ещё зовут):\n"
+                else "\nЛЮДИ — связанные с делами (person — короткое имя из списка; в скобках — полное и как ещё зовут; " +
+                    "названные в наговоре сверх этого списка — ниже, в «ЕЩЁ ЛЮДИ»; нет человека нигде — пиши имя, как названо):\n",
+            )
+            for (p in people) personLine(sb, p)
         }
         if (s.labels.isNotEmpty()) {
             sb.append("\nМЕТКИ (только свободные контексты из этого списка, новых не выдумывать):\n")
             sb.append(s.labels.joinToString(", ")).append('\n')
         }
+        return sb.toString().trim()
+    }
+
+    /** Строка человека в справочнике: «— короткое (полное, другие имена)». */
+    private fun personLine(sb: StringBuilder, p: Person) {
+        sb.append("— ").append(p.label)
+        val more = listOfNotNull(p.name.takeIf { it != p.label && it.isNotBlank() }) + p.aliases
+        if (more.isNotEmpty()) sb.append(" (").append(more.joinToString(", ")).append(')')
+        sb.append('\n')
+    }
+
+    /**
+     * Хвост разбора (аудит №67): люди, названные в наговоре, которых нет в голове ([promptCatalog] с keep), — той же
+     * строкой, что в справочнике, перед датой. Пусто — "": блока нет. Порядок — как в справочнике (по имени).
+     */
+    fun promptMorePeople(s: Snapshot, ids: Set<String>): String {
+        if (ids.isEmpty()) return ""
+        val people = s.livePeople().filter { it.id in ids }
+        if (people.isEmpty()) return ""
+        val sb = StringBuilder("ЕЩЁ ЛЮДИ — названы в наговоре, в справочнике выше их нет (person — так же, короткое имя):\n")
+        for (p in people) personLine(sb, p)
         return sb.toString().trim()
     }
 
