@@ -24,7 +24,7 @@ SELECT t.num, t.title, t.notes, t.status,
        w.num AS why_num, w.title AS why,
        -- Дерево целей (dela_0013): узел дерева (цель-состояние, в списках дел его нет) и ритм практики.
        coalesce(k.goal, false) AS goal, k.rhythm,
-       -- Дела внутри дела (dela_0024): «Зачем» — цель дерева (why_goal) или обычное дело, внутри которого это дело;
+       -- Дела внутри дела (dela_0030): «Зачем» — цель дерева (why_goal) или обычное дело, внутри которого это дело;
        -- pos — место среди соседей (дел с тем же «Зачем»).
        coalesce(wk.goal, false) AS why_goal, t.pos
 FROM tasks.tasks t

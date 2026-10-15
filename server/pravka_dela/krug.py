@@ -234,7 +234,7 @@ def tree(conn, user: str, today: dt.date) -> dict:
                 break
 
     def sort(items: list[dict], by_pos: bool = False) -> list[dict]:
-        # Дела внутри обычного дела — по месту среди соседей (pos, dela_0024; пусто — после, по номеру), как веб и
+        # Дела внутри обычного дела — по месту среди соседей (pos, dela_0030; пусто — после, по номеру), как веб и
         # телефон; под целями и направлениями места нет (его там не ставят — старое место вынутого дела не в счёт).
         if not by_pos:
             return sorted(items, key=lambda c: (ORDER[c["kind"]], c.get("num") or 0, c.get("name") or ""))
