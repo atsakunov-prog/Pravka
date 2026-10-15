@@ -950,8 +950,10 @@ def _auto(conn, user, s: dict, problems: list[str] | None = None, cache: dict | 
         if at and not conn.execute("SELECT %s >= crm.today() - %s AS ok", (at, AUTO_DAYS)).fetchone()["ok"]:
             why.append(f"{where} старше {AUTO_DAYS} дней")
         if kind != "create":
+            # goal — из v_tasks (строка Круга хозяина): цель дерева закрывает и правит только владелец (аудит №19).
             row = conn.execute(
-                "SELECT status, owner_id, (created_at AT TIME ZONE 'Europe/Moscow')::date AS made FROM tasks.tasks WHERE id = %s",
+                "SELECT status, owner_id, goal, (created_at AT TIME ZONE 'Europe/Moscow')::date AS made "
+                "FROM tasks.v_tasks WHERE id = %s",
                 (s.get("task_id"),),
             ).fetchone()
             if row is None:
@@ -960,6 +962,10 @@ def _auto(conn, user, s: dict, problems: list[str] | None = None, cache: dict | 
                 why.append("дело уже не открыто")
             elif row["owner_id"] != user:
                 why.append("дело чужое — решает его хозяин")
+            elif row["goal"]:
+                # Номера целей дерева — во входе разноски рядом с номерами дел («#N название»): одно неверное «close #N»
+                # молча закрыло бы цель владельца. Ждёт его; сам он закрывает цель как обычно (op_task_set не запрещает).
+                why.append("это цель дерева — " + ("закрывает" if kind == "close" else "правит") + " владелец")
             elif at and at < row["made"]:
                 why.append(f"дело заведено позже {of}")
     elif not why:
@@ -1104,7 +1110,7 @@ def _person_sug(conn, user, s: dict, payload: dict) -> dict:
             if not any(kw.values()):
                 continue
             w = people.who(conn, **kw)
-            if w["sure"] and w["best"]["how"] in ("номер", "telegram", "почта"):
+            if w["sure"] and w["best"]["how"] in people.KEY_HOWS:  # и ключ слитого дубля — его живая карточка (№23)
                 pid = w["best"]["id"]
                 break
     if pid:
@@ -1586,6 +1592,15 @@ def view_morning(conn, user, sphere=None, **_):
 NOW_IF = "focus_on = crm.today()"
 TODAY_IF = "due_date = crm.today()"
 LATE_IF = "due_date < crm.today()"
+# «Ждут от тебя без срока» и «жду больше недели» (аудит 15.10.2026, №5) — числами в шапке «Сейчас», рядом с
+# «просрочено N»: «Отбить» без срока и «Мониторить» без движения ни в «Сейчас», ни в «Сегодня» не попадают (решение
+# 13.10), а забыть о них нельзя — 10.10 владелец назвал «Отбить» «мега важными… первым делом». Сроков не выдумываем
+# (правило разбора «срок не назван — не придумывай»), только показываем. Одно правило в трёх местах: здесь, app.js
+# (owedNoDue, waitingStale), телефон (DelaViews, docs/dela-phone-21.md).
+OWED_NODUE_IF = "grp = 'owed' AND due_date IS NULL"
+WAITING_STALE_DAYS = 7
+WAITING_STALE_IF = (f"ball = 'waiting' AND waiting_since < crm.today() - {WAITING_STALE_DAYS} "
+                    "AND (nudge_on IS NULL OR nudge_on < crm.today())")
 OPEN_MINE = "status = 'open' AND owner_id = %s"
 TODAY_WHERE = f"{OPEN_MINE} AND {TODAY_IF}"
 TODAY_ORDER = " ORDER BY due_time NULLS LAST, created_at, num"
@@ -1607,6 +1622,9 @@ def view_today(conn, user, sphere=None, **_):
         "now_count": len(now),
         "now_max": NOW_MAX,
         "overdue_count": len(_list(conn, f"{OPEN_MINE} AND {LATE_IF}", [user], sphere)),
+        # №5: ждут от тебя без срока и жду больше недели — числами (цели не в счёт: _list их не берёт).
+        "owed_nodue_count": len(_list(conn, f"{OPEN_MINE} AND {OWED_NODUE_IF}", [user], sphere)),
+        "waiting_stale_count": len(_list(conn, f"{OPEN_MINE} AND {WAITING_STALE_IF}", [user], sphere)),
         "done_today": conn.execute(
             "SELECT count(*) AS n FROM tasks.tasks WHERE owner_id = %s AND status = 'done' "
             "AND (completed_at AT TIME ZONE 'Europe/Moscow')::date = crm.today()", (user,)).fetchone()["n"],
@@ -1740,10 +1758,7 @@ def view_week(conn, user, sphere=None, **_):
     s, sp = _sphere(sphere)
     return {
         "stale": _list(conn, f"{open_mine} AND (due_date < crm.today() - 14 OR updated_at < now() - interval '21 days')", [user], sphere),
-        "waiting_stale": _list(
-            conn,
-            f"{open_mine} AND ball = 'waiting' AND waiting_since < crm.today() - 7 AND (nudge_on IS NULL OR nudge_on < crm.today())",
-            [user], sphere),
+        "waiting_stale": _list(conn, f"{open_mine} AND {WAITING_STALE_IF}", [user], sphere),
         "no_next_step": conn.execute(
             "SELECT p.* FROM crm.projects p WHERE p.archived_at IS NULL AND p.owner_id = %s "
             "AND p.money_default IN ('paid', 'potential') AND NOT EXISTS (SELECT 1 FROM tasks.tasks t "
@@ -1754,8 +1769,79 @@ def view_week(conn, user, sphere=None, **_):
             "SELECT * FROM tasks.suggestions WHERE for_user = %s AND status = 'expired' AND decided_at > now() - interval '7 days'",
             (user,),
         ).fetchall(),
+        "automation": automation(conn, user),
         "sphere": s and sp[0],
     }
+
+
+# ── Счётчик откатов автоматики (аудит 15.10.2026, №29) ──────────────────────
+# Промпты обещают модели «ошибку вернёт одной кнопкой», а сколько раз владелец отменил, открыл снова или вернул
+# сделанное само, никто не считал: через месяц на вопрос «не слишком ли смело автоматика ставит и закрывает» не было бы
+# ответа. Считаем за неделю по источникам — из «Нового» (tasks.suggestions) и того, что с его делами и людьми сейчас,
+# без журнала crm.history. Уроки в Свод и кнопка «Не дело» (пп. 2–4 находки) — потом, когда счётчик покажет откаты.
+AUTO_DAYS_WEEK = 7
+AUTO_SOURCES = ("meeting", "telegram", "contacts", "krug")  # userbot — тот же Telegram; остальное — «other»
+AUTO_NO_TOP = 3
+
+
+def _auto_bucket() -> dict:
+    return {"created": 0, "created_undone": 0, "closed": 0, "closed_undone": 0, "updated": 0, "updated_undone": 0,
+            "people": 0, "people_undone": 0, "asked": 0, "yes": 0, "edited": 0, "no": 0, "expired": 0, "no_reasons": {}}
+
+
+def automation(conn, user, days: int = AUTO_DAYS_WEEK) -> dict:
+    """Что автоматика сделала сама за days дней и сколько из этого владелец вернул, и как он ответил на её вопросы.
+
+    - поставлено само (`заведено само`) / из них отменено — дело теперь cancelled;
+    - закрыто само / открыто снова — дело снова open («Вернуть»);
+    - уточнено само / «Вернуть» — комментарий-основание (result.comment_id) убран: «Вернуть» веба и телефона убирает его
+      вместе с полями (у уточнения самого основание есть всегда — без цитаты само не встаёт);
+    - людей заведено само / в архиве — карточка из result.person_id убрана («Вернуть» или слита);
+    - вопросы (решил человек или погасли): да, с правкой, нет (три частые причины), погасло. Решённое сервером без
+      человека («уже в CRM», «уже убран») — не вопрос.
+    Ответ — {days, all: {…}, sources: {meeting: {…}, telegram: {…}, …}} (только источники, где что-то было)."""
+    rows = conn.execute(
+        "SELECT s.kind, s.status, s.reason, s.decided_by, s.source, rt.status AS made_status, t.status AS task_status, "
+        "c.deleted_at IS NOT NULL AS comment_gone, pe.archived_at IS NOT NULL AS person_gone "
+        "FROM tasks.suggestions s "
+        "LEFT JOIN tasks.tasks rt ON rt.id = s.result_task_id "
+        "LEFT JOIN tasks.tasks t ON t.id = s.task_id "
+        "LEFT JOIN tasks.comments c ON c.id::text = s.result ->> 'comment_id' "
+        "LEFT JOIN crm.people pe ON pe.id::text = s.result ->> 'person_id' "
+        "WHERE s.for_user = %s AND s.status <> 'pending' AND s.decided_at > now() - make_interval(days => %s)",
+        (user, days)).fetchall()
+    out = {"days": days, "all": _auto_bucket(), "sources": {}}
+    for r in rows:
+        src = "telegram" if r["source"] == "userbot" else r["source"] if r["source"] in AUTO_SOURCES else "other"
+        b2 = out["sources"].setdefault(src, _auto_bucket())
+        for b in (out["all"], b2):
+            if r["status"] == "accepted" and r["reason"] == AUTO_CREATE_REASON:
+                b["created"] += 1
+                b["created_undone"] += r["made_status"] == "cancelled"
+            elif r["status"] == "accepted" and r["reason"] == AUTO_CLOSE_REASON:
+                b["closed"] += 1
+                b["closed_undone"] += r["task_status"] == "open"
+            elif r["status"] == "accepted" and r["reason"] == AUTO_UPDATE_REASON:
+                b["updated"] += 1
+                b["updated_undone"] += bool(r["comment_gone"])
+            elif r["status"] == "accepted" and r["reason"] == AUTO_PERSON_REASON:
+                b["people"] += 1
+                b["people_undone"] += bool(r["person_gone"])
+            elif r["status"] == "expired":
+                b["asked"] += 1
+                b["expired"] += 1
+            elif r["decided_by"] is not None:
+                b["asked"] += 1
+                key = {"accepted": "yes", "edited": "edited", "rejected": "no"}.get(r["status"])
+                if key:
+                    b[key] += 1
+                if key == "no":
+                    why = " ".join(str(r["reason"] or "").split()) or "без причины"
+                    b["no_reasons"][why] = b["no_reasons"].get(why, 0) + 1
+    for b in [out["all"], *out["sources"].values()]:
+        b["no_reasons"] = [{"reason": k, "n": n} for k, n in
+                           sorted(b["no_reasons"].items(), key=lambda kv: (-kv[1], kv[0]))[:AUTO_NO_TOP]]
+    return out
 
 
 def view_search(conn, user, q=None, status="open", **_):

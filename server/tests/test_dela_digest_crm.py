@@ -327,6 +327,20 @@ def test_family_by_surname_until_listed_even_for_team_users():
     assert listed["family"] == set() and digest_crm.is_work(listed, "papa")
 
 
+def test_merged_card_telegram_leads_to_live():
+    """Аудит №23: id и ник Telegram слитого дубля (живой они не достались — у неё свои) ведут в живую карточку; ключ,
+    который уже стоит у живой, слитый не перебивает; сам дубль в справочнике разноса не участвует."""
+    rows = [{"id": "me", "name": "Пётр Громов"},
+            {"id": "ivan", "name": "Иван Тестов", "telegram_id": 900002, "telegram_username": "ivan_t"},
+            {"id": "olga", "name": "Ольга Пробная", "telegram_id": 900003},
+            {"id": "dup", "name": "Ваня Тестов", "telegram_id": 900001, "telegram_username": "vanya", "merged_into": "ivan"},
+            {"id": "dup2", "name": "Оля", "telegram_id": 900003, "merged_into": "ivan"}]
+    ctx = digest_crm.build(rows, [], [], [], "me", [])
+    assert ctx["by_tg"] == {"900002": "ivan", "900003": "olga", "900001": "ivan"}
+    assert ctx["by_user"] == {"ivan_t": "ivan", "vanya": "ivan"}
+    assert "dup" not in ctx["people"] and all(not r.get("merged_into") for r in ctx["rows"])
+
+
 # ── Упоминание — не контакт; сделка записи — правилом базы (аудит 15.10.2026, №28, №3; dela_0022) ─────────────
 
 

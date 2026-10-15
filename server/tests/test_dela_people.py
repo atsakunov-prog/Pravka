@@ -488,3 +488,155 @@ def test_migration_20_over_live_people(admin_dsn):
     finally:
         with psycopg.connect(admin_dsn, autocommit=True) as a:
             a.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
+
+
+# ── Слияние переносит всё и только у владельца (аудит 15.10.2026, №23; dela_0023) ──────────────────────────────
+
+def test_person_merge_moves_team_meetings_questions_and_family(dela):
+    """Слияние переносит и то, чего прежний список не знал: команду сделки (по ней сотрудник видит клиента), участников
+    встречи, ждущие вопросы «Нового» (это он? и варианты кнопками) и семью в Своде; Telegram дубля, который живой не
+    достался (у неё свой), — по-прежнему ведёт в неё (who: «номер слитой карточки»)."""
+    from pravka_dela import people
+
+    pr = project(dela, "sasha", "ООО Ромашка")
+    live = person(dela, "sasha", "Иван Тестов", telegram_id=900002, telegram_username="ivan_test")
+    dup = person(dela, "sasha", "Ваня Тестов (Ромашка)", telegram_id=900001, telegram_username="vanya_t",
+                 phones=["+7 900 000-00-01"])
+    other = person(dela, "sasha", "Пётр Пробный")
+    d = ops(dela, "sasha", {"op": "deal.create", "data": {"project_id": str(pr), "name": "Кредит", "team_ids": [dup, other]}})[0]
+    assert d["ok"], d
+    with as_(dela, "sasha") as c:
+        m = c.execute("INSERT INTO crm.meetings (ref, started_at, owner_id, person_ids) VALUES ('901', now(), 'sasha', %s::uuid[]) "
+                      "RETURNING id", ([dup, other],)).fetchone()["id"]
+    q1 = ops(dela, "sasha", {"op": "suggestion.create", "suggestion": {
+        "for_user": "sasha", "kind": "person", "source": "telegram", "source_ref": "tgfind:x",
+        "payload": {"title": "Ваня Тестов", "person_id": dup, "ask": "Это он в Telegram?"}}})[0]["suggestion"]
+    q2 = ops(dela, "sasha", {"op": "suggestion.create", "suggestion": {
+        "for_user": "sasha", "kind": "create", "source": "meeting", "quote": "Ваня пришлёт расчёт",
+        "payload": {"title": "Ваня: расчёт", "person_name": "Ваня", "ask": "Кто это — Ваня?",
+                    "options": [{"label": "Ваня Тестов", "person_id": dup}, {"label": "Пётр Пробный", "person_id": other}]}}})[0]
+    assert q2["ok"] and q2["suggestion"]["status"] == "pending", q2
+    assert ops(dela, "sasha", {"op": "svod.set", "key": "people.family", "value": [other, dup], "author": "web"})[0]["ok"]
+
+    r = ops(dela, "sasha", {"op": "person.merge", "id": dup, "into": live})[0]
+    assert r["ok"], r
+    assert r["moved"] >= 5, r  # команда сделки, встреча, два вопроса, семья
+    assert "Ваня Тестов (Ромашка)" in r["row"]["aliases"] and r["row"]["phones"] == ["+7 900 000-00-01"]
+    assert r["row"]["telegram_id"] == 900002  # свой Telegram у живой не затирается
+    with as_(dela, "sasha") as c:
+        assert set(c.execute("SELECT team_ids::text[] AS t FROM crm.deals").fetchone()["t"]) == {live, other}
+        assert c.execute("SELECT person_ids::text[] AS p FROM crm.meetings WHERE id = %s", (m,)).fetchone()["p"] == [live, other]
+        p1 = c.execute("SELECT payload FROM tasks.suggestions WHERE id = %s", (q1["id"],)).fetchone()["payload"]
+        p2 = c.execute("SELECT payload FROM tasks.suggestions WHERE id = %s", (q2["suggestion"]["id"],)).fetchone()["payload"]
+        fam = c.execute("SELECT value, author FROM crm.svod WHERE key = 'people.family'").fetchone()
+    assert p1["person_id"] == live
+    assert [o.get("person_id") for o in p2["options"]] == [live, other]
+    assert fam["value"] == [other, live] and fam["author"] == "merge"
+    # Ключ дубля, которого живая не взяла (у неё свой Telegram), ведёт в неё; по имени дубль не кандидат.
+    for kw in ({"telegram_id": "900001"}, {"telegram": "@vanya_t"}):
+        w = store.view(dela, "sasha", "who", **kw)
+        assert w["sure"] and str(w["best"]["id"]) == live and w["best"]["how"] == people.MERGED_HOW, (kw, w)
+    w = store.view(dela, "sasha", "who", telegram_id="900002")
+    assert w["sure"] and w["best"]["how"] == "telegram"  # свой ключ живой — свой how
+    assert [str(c["id"]) for c in store.view(dela, "sasha", "who", q="Ваня Тестов")["candidates"]] == [live]
+
+
+def test_person_merge_only_owner_once_and_past_rls(dela):
+    """Склеивает людей только владелец; уже слитого второй раз не сливаем; дубль, заведённый другим пользователем, и
+    его дело, невидимые владельцу, переезжают мимо RLS; учётка Дел дубля — живой."""
+    live = person(dela, "sasha", "Иван Тестов")
+    dup = person(dela, "sasha", "Иван Тестов (2)")
+    no = ops(dela, "natasha", {"op": "person.merge", "id": dup, "into": live})[0]
+    assert not no["ok"] and "только владелец" in no["error"], no
+    assert ops(dela, "sasha", {"op": "person.merge", "id": dup, "into": live})[0]["ok"]
+    again = ops(dela, "sasha", {"op": "person.merge", "id": dup, "into": person(dela, "sasha", "Иван Новый")})[0]
+    assert not again["ok"] and "уже слит" in again["error"], again
+
+    # Дубль Наташи: его карточку и её дело о нём владелец не видит (RLS), а слияние переносит всё.
+    with as_(dela, "natasha") as c:
+        hers = str(c.execute("INSERT INTO crm.people (name, owner_id) VALUES ('Пётр Пробный', 'natasha') RETURNING id")
+                   .fetchone()["id"])
+    t = ops(dela, "natasha", {"op": "task.create", "task": {"title": "Позвонить Петру", "person_id": hers}})[0]
+    assert t["ok"], t
+    with as_(dela, "sasha") as c:
+        assert c.execute("SELECT 1 FROM crm.people WHERE id = %s", (hers,)).fetchone() is None  # не видит
+    r = ops(dela, "sasha", {"op": "person.merge", "id": hers, "into": live})[0]
+    assert r["ok"], r
+    with store.db.session(dela, "system", "t") as c:
+        assert str(c.execute("SELECT merged_into FROM crm.people WHERE id = %s", (hers,)).fetchone()["merged_into"]) == live
+        assert str(c.execute("SELECT person_id FROM tasks.tasks WHERE id = %s", (t["task"]["id"],)).fetchone()["person_id"]) == live
+
+    # Учётка: карточка пользователя Дел слита в другую — учётка переехала (crm.users.person_id меняет только system).
+    with store.db.session(dela, "system", "t") as c:
+        acc = str(c.execute("INSERT INTO crm.people (name, owner_id, user_id) VALUES ('Марина Учётная', 'sasha', 'marianna') "
+                            "RETURNING id").fetchone()["id"])
+        c.execute("UPDATE crm.users SET person_id = %s WHERE id = 'marianna'", (acc,))
+    card = person(dela, "sasha", "Марина Учётная-Тестова")
+    r = ops(dela, "sasha", {"op": "person.merge", "id": acc, "into": card})[0]
+    assert r["ok"] and r["row"]["user_id"] == "marianna", r
+    with store.db.session(dela, "system", "t") as c:
+        assert str(c.execute("SELECT person_id FROM crm.users WHERE id = 'marianna'").fetchone()["person_id"]) == card
+        assert c.execute("SELECT user_id FROM crm.people WHERE id = %s", (acc,)).fetchone()["user_id"] is None
+
+
+def test_merge_refs_cover_every_person_column(dela):
+    """Новая ссылка на человека — строка в REFS и в теле crm.person_merge: колонки с людьми в crm и tasks должны быть в
+    списке (тест ловит забытую колонку, как test_dela_api_scope — забытый путь)."""
+    from pravka_dela import people
+
+    known = {(t, c) for t, c, _ in people.REFS}
+    with store.db.session(dela, "system", "t") as c:
+        cols = c.execute(
+            "SELECT c.table_schema || '.' || c.table_name AS t, c.column_name AS c FROM information_schema.columns c "
+            "JOIN information_schema.tables tb ON tb.table_schema = c.table_schema AND tb.table_name = c.table_name "
+            "WHERE c.table_schema IN ('crm', 'tasks') AND tb.table_type = 'BASE TABLE' "
+            "AND (c.column_name LIKE %s OR c.column_name IN ('requested_by', 'team_ids', 'merged_into'))",
+            ("%person%",)).fetchall()
+    missing = {(r["t"], r["c"]) for r in cols} - known
+    assert not missing, missing
+
+
+def test_migration_23_over_live_people(admin_dsn):
+    """dela_0023 поверх Дел, где люди, сделки и встречи уже есть: миграция только заводит функции (данные не трогает),
+    после неё слияние владельцем переносит команду сделки и участников встречи."""
+    import secrets as _secrets
+    from urllib.parse import urlparse, urlunparse
+
+    import psycopg
+    from psycopg import sql
+
+    from pravka_dela import db as dela_db
+
+    name = f"pa_mig23_{_secrets.token_hex(4)}"
+    with psycopg.connect(admin_dsn, autocommit=True) as a:
+        a.execute(sql.SQL("CREATE DATABASE {} ENCODING 'UTF8' TEMPLATE template0").format(sql.Identifier(name)))
+    u = urlparse(admin_dsn)
+    url = urlunparse((u.scheme, u.netloc, "/" + name, "", "", ""))
+    try:
+        files = dict(dela_db._sql_files())
+        before = {k: v for k, v in files.items() if k.startswith("dela_") and k < "dela_0023.sql"}
+        with psycopg.connect(url, autocommit=True) as c:
+            c.execute("CREATE SCHEMA core")
+            c.execute("CREATE TABLE core.migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
+            dela_db.apply_pending(c, before)
+        with dela_db.session(url, "system", "test") as c:
+            c.execute("INSERT INTO crm.users (id, name, role) VALUES ('sasha', 'Саша', 'owner')")
+            live, dup = (c.execute("INSERT INTO crm.people (name, owner_id) VALUES (%s, 'sasha') RETURNING id", (n,))
+                         .fetchone()["id"] for n in ("Иван Тестов", "Ваня Тестов"))
+            pr = c.execute("INSERT INTO crm.projects (name, kind, sphere, owner_id) VALUES ('ООО Ромашка', 'client', 'work', "
+                           "'sasha') RETURNING id").fetchone()["id"]
+            c.execute("INSERT INTO crm.deals (project_id, name, team_ids) VALUES (%s, 'Кредит', %s)", (pr, [dup]))
+            c.execute("INSERT INTO crm.meetings (ref, started_at, owner_id, person_ids) VALUES ('5', now(), 'sasha', %s)", ([dup],))
+            seq = c.execute("SELECT max(seq) AS s FROM crm.people").fetchone()["s"]
+        with psycopg.connect(url, autocommit=True) as c:
+            assert dela_db.apply_pending(c, files)[0] == "dela_0023.sql"
+        with dela_db.session(url, "system", "test") as c:
+            assert c.execute("SELECT max(seq) AS s FROM crm.people").fetchone()["s"] == seq  # строки не тронуты
+        with dela_db.session(url, "sasha", "test") as c:
+            r = c.execute("SELECT crm.person_merge(%s, %s) AS r", (dup, live)).fetchone()["r"]
+            assert r["moved"] == 2, r
+            assert c.execute("SELECT team_ids FROM crm.deals").fetchone()["team_ids"] == [live]
+            assert c.execute("SELECT person_ids FROM crm.meetings").fetchone()["person_ids"] == [live]
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as a:
+            a.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))

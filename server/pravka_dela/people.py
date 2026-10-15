@@ -16,6 +16,7 @@ import re
 from functools import lru_cache
 from typing import Any
 
+import psycopg
 from psycopg.types.json import Jsonb
 
 from . import kovcheg_ui
@@ -327,38 +328,58 @@ def _word_score(qw: list[str], nw: list[str]) -> float:
     return best
 
 
-def who_rows(conn) -> list[dict]:
-    """Люди, среди которых ищет who: видимые человеку (RLS), живые — архив и слитые нет."""
-    return conn.execute(
-        "SELECT pe.id, pe.name, pe.short, pe.aliases, pe.phones, pe.emails, pe.telegram_id, pe.telegram_username, "
-        "pe.org_id, pe.role, pe.user_id, o.name AS org_name, o.aliases AS org_aliases "
-        "FROM crm.people pe LEFT JOIN crm.orgs o ON o.id = pe.org_id "
-        "WHERE pe.archived_at IS NULL AND pe.merged_into IS NULL"
-    ).fetchall()
+MERGED_HOW = "номер слитой карточки"  # ключ (номер, Telegram, почта) дубля, слитого в эту карточку (аудит №23)
+KEY_HOWS = ("номер", "telegram", "почта", MERGED_HOW)  # совпало железом, а не именем
+
+
+def who_rows(conn, with_merged: bool = False) -> list[dict]:
+    """Люди, среди которых ищет who: видимые человеку (RLS), живые — архив и слитые нет.
+
+    with_merged — и слитые дубли (merged_into) — только ради их ключей (аудит №23): слияние не переносит telegram_id, ник
+    и номер дубля, если у живой свои, а встреча, звонок или Telegram помнят ключ дубля. По имени слитые не участвуют."""
+    cols = ("pe.id, pe.name, pe.short, pe.aliases, pe.phones, pe.emails, pe.telegram_id, pe.telegram_username, "
+            "pe.org_id, pe.role, pe.user_id, pe.merged_into, o.name AS org_name, o.aliases AS org_aliases "
+            "FROM crm.people pe LEFT JOIN crm.orgs o ON o.id = pe.org_id ")
+    rows = conn.execute(f"SELECT {cols} WHERE pe.archived_at IS NULL AND pe.merged_into IS NULL").fetchall()
+    if with_merged:
+        rows += conn.execute(f"SELECT {cols} WHERE pe.merged_into IS NOT NULL").fetchall()
+    return rows
+
+
+def _key_how(p: dict, pk: str | None, telegram_id: Any, tg_user: str, mail: str) -> str:
+    """Чем карточка совпала железом: номер, Telegram, почта — или пусто."""
+    if pk and any(phone_key(x) == pk for x in p["phones"] or []):
+        return "номер"
+    if telegram_id and p["telegram_id"] and str(p["telegram_id"]) == str(telegram_id):
+        return "telegram"
+    if tg_user and norm(p["telegram_username"]).lstrip("@") == tg_user:
+        return "telegram"
+    if mail and mail in [norm(x) for x in p["emails"] or []]:
+        return "почта"
+    return ""
 
 
 def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any = None,
         telegram: str | None = None, email: str | None = None, limit: int = 5, rows: list[dict] | None = None) -> dict:
     """Кто это. Видимые человеку люди (RLS), живые: архив и слитые — нет.
 
+    Номер, Telegram и почта слитого дубля ведут в живую карточку (how «номер слитой карточки», аудит №23); по имени
+    слитые не участвуют — их имена слияние уже дописало живой.
+
     rows — уже прочитанные who_rows: дайджест узнаёт за раз десятки имён (digest_crm.py), и каждый раз читать всех
     людей заново незачем; правило узнавания то же."""
-    rows = who_rows(conn) if rows is None else rows
     pk = phone_key(phone)
     tg_user = norm(telegram).lstrip("@") if telegram else ""
     mail = norm(email) if email else ""
+    keyed = bool(pk or telegram_id or tg_user or mail)
+    rows = who_rows(conn, with_merged=keyed) if rows is None else rows
+    live = [p for p in rows if not p.get("merged_into")]
     q_name, hint = split_hint(q or "")
     scored = []
-    for p in rows:
-        s, how, alias_only = 0.0, "", False
-        if pk and any(phone_key(x) == pk for x in p["phones"] or []):
-            s, how = 1.0, "номер"
-        elif telegram_id and p["telegram_id"] and str(p["telegram_id"]) == str(telegram_id):
-            s, how = 1.0, "telegram"
-        elif tg_user and norm(p["telegram_username"]).lstrip("@") == tg_user:
-            s, how = 1.0, "telegram"
-        elif mail and mail in [norm(x) for x in p["emails"] or []]:
-            s, how = 1.0, "почта"
+    for p in live:
+        s, how, alias_only = 0.0, _key_how(p, pk, telegram_id, tg_user, mail), False
+        if how:
+            s = 1.0
         else:
             own, alias = _name_parts(q_name, p)
             if re.search(r"[a-z]", q_name):
@@ -379,6 +400,17 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
                     s -= 0.15
         if s > 0.3:
             scored.append((round(s, 2), how, alias_only, p))
+    if keyed:
+        # Ключ слитого дубля — его живая карточка (№23), если она видна и своим ключом уже не совпала.
+        by_id = {str(p["id"]): p for p in live}
+        hit = {str(t[3]["id"]) for t in scored if t[1] in KEY_HOWS}
+        for p in rows:
+            target = by_id.get(str(p.get("merged_into") or ""))
+            if target is None or str(target["id"]) in hit or not _key_how(p, pk, telegram_id, tg_user, mail):
+                continue
+            scored = [t for t in scored if str(t[3]["id"]) != str(target["id"])]
+            scored.append((1.0, MERGED_HOW, False, target))
+            hit.add(str(target["id"]))
     # При равных баллах своё имя — впереди чужого другого имени; дальше по имени и id — порядок не зависит от того, как
     # база отдала строки (кнопки «Кто это — X или Y?» не должны прыгать от запроса к запросу).
     scored.sort(key=lambda t: (-t[0], t[2], norm(t[3]["name"]), str(t[3]["id"])))
@@ -630,14 +662,22 @@ def op_person_add(conn, user, op, error, ignore: tuple = ()):
     return {"row": out, "changed": True, "skipped": skipped}
 
 
-# Где живут ссылки на человека: (таблица, колонка, массив ли).
+# Где живут ссылки на человека: (таблица, колонка или ключ, массив ли). Переносит их функция базы crm.person_merge
+# (dela_0023) — мимо RLS, все строки; список здесь — карта для читателя и тестов: новая ссылка на человека — строка тут
+# и в теле функции новой миграцией (аудит №23: до 15.10 слияние не знало встреч, команды сделки, вопросов и семьи).
 REFS = (
     ("tasks.tasks", "person_id", False),
     ("tasks.tasks", "requested_by", False),
     ("crm.deals", "lead_person_id", False),
     ("crm.deals", "source_person_id", False),
     ("crm.deals", "person_ids", True),
+    ("crm.deals", "team_ids", True),
     ("crm.interactions", "person_ids", True),
+    ("crm.meetings", "person_ids", True),
+    ("tasks.suggestions", "payload.person_id, payload.options[].person_id (только ждущие)", False),
+    ("crm.svod", "people.family", True),
+    ("crm.people", "merged_into", False),
+    ("crm.users", "person_id", False),
 )
 
 
@@ -645,50 +685,41 @@ def op_person_merge(conn, user, op, error):
     """Слить дубль в живую карточку: ссылки переезжают, имена и номера дописываются, дубль — в архив.
 
     Строки не удаляются (правило 8), поэтому дубль остаётся с merged_into: встреча или голос,
-    помнящие старый id, найдут живого через него.
+    помнящие старый id, найдут живого через него (и who — по его номеру, Telegram и почте).
+
+    С 15.10.2026 (аудит №23) склеивает людей только владелец Дел (закон 3), а ссылки переносит функция базы
+    crm.person_merge мимо RLS: до того UPDATE шли под правами сливающего, и невидимое ему (дело сотрудника, хронология
+    чужого проекта, сам дубль, заведённый другим) молча оставалось на дубле. Уже слитый дубль — отказ словами. Здесь —
+    имена и номера дубля живой (op_person_add: чужое имя другим именем не пишется — skipped, аудит №1).
     """
     dup, into = op.get("id"), op.get("into")
     if not dup or not into or str(dup) == str(into):
         raise error("слияние: нужны id дубля и into — живая карточка, и это разные люди")
-    a = conn.execute("SELECT * FROM crm.people WHERE id = %s", (dup,)).fetchone()
-    b = conn.execute("SELECT * FROM crm.people WHERE id = %s", (into,)).fetchone()
-    if a is None or b is None:
-        raise error("слияние: нет такого человека или нет прав")
-    if b["merged_into"] or b["archived_at"]:
-        raise error("слияние: живая карточка сама в архиве — сливать в неё нельзя")
-    if a["user_id"] and b["user_id"]:
-        raise error("слияние: оба — пользователи Дел, такое решает владелец руками")
-    moved = 0
-    for table, col, is_array in REFS:
-        if is_array:
-            n = conn.execute(
-                f"UPDATE {table} SET {col} = ARRAY(SELECT DISTINCT unnest(array_replace({col}, %s::uuid, %s::uuid))) "
-                f"WHERE %s::uuid = ANY({col})", (dup, into, dup),
-            ).rowcount
-        else:
-            n = conn.execute(f"UPDATE {table} SET {col} = %s WHERE {col} = %s", (into, dup)).rowcount
-        moved += n
+    owner = conn.execute("SELECT crm.owner_id() AS o").fetchone()["o"]
+    if user not in (owner, "system"):
+        raise error("слияние: склеивает людей только владелец Дел — скажи ему, кто это")
+    try:
+        with conn.transaction():
+            r = conn.execute("SELECT crm.person_merge(%s::uuid, %s::uuid) AS r", (str(dup), str(into))).fetchone()["r"]
+    except psycopg.errors.RaiseException as e:
+        raise error((e.diag.message_primary or str(e)).removeprefix("Дела: ")) from None
+    except psycopg.errors.InvalidTextRepresentation:
+        raise error("слияние: id — не номер карточки (uuid)") from None
+    a = r["dup"]
     add = {
         "aliases": [x for x in [a["name"], a["short"], *(a["aliases"] or [])] if x],
         "phones": a["phones"] or [], "emails": a["emails"] or [],
         "telegram_id": a["telegram_id"], "telegram_username": a["telegram_username"],
     }
-    skipped = op_person_add(conn, user, {"id": into, "add": add}, error, ignore=(dup,))["skipped"]
-    fill ={k: a[k] for k in ("org_id", "role", "birth_day", "birth_month", "birth_year", "note", "user_id")
-            if a[k] is not None and b[k] is None}
-    if a["user_id"]:
-        # user_id уникален: снять с дубля до того, как поставить живому.
-        conn.execute("UPDATE crm.people SET user_id = NULL WHERE id = %s", (dup,))
-        conn.execute("UPDATE crm.users SET person_id = %s WHERE id = %s", (into, a["user_id"]))
-    if fill:
-        cols = ", ".join(f"{k} = %s" for k in fill)
-        conn.execute(f"UPDATE crm.people SET {cols} WHERE id = %s", [*fill.values(), into])
-    conn.execute(
-        "UPDATE crm.people SET merged_into = %s, archived_at = coalesce(archived_at, now()) WHERE id = %s", (into, dup)
-    )
+    # Живая — тоже мимо RLS: владелец сливает и в карточку, заведённую другим (проверено базой выше). Сбой — точка
+    # сохранения операции откатит и прежнего пользователя (set_config откатывается с ней).
+    me = conn.execute("SELECT current_setting('dela.user', true) AS u").fetchone()["u"]
+    conn.execute("SELECT set_config('dela.user', 'system', true)")
+    skipped = op_person_add(conn, user, {"id": into, "add": add}, error)["skipped"]
     row = conn.execute("SELECT * FROM crm.people WHERE id = %s", (into,)).fetchone()
+    conn.execute("SELECT set_config('dela.user', %s, true)", (me or "",))
     # Имена дубля, которые так зовут кого-то ещё, живой не дописаны (№1) — сказать, а не потерять молча.
-    return {"row": row, "moved": moved, "skipped": skipped}
+    return {"row": row, "moved": r["moved"], "skipped": skipped}
 
 
 # ── Свод ────────────────────────────────────────────────────────────────

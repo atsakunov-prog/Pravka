@@ -27,6 +27,7 @@ const S = {
   treeMode: LS.get('treeMode', 'tree'), treeDir: LS.get('treeDir', null), treeF: null, // Дерево жизни: вид, направление, фильтры списка
   treeLevel: LS.get('treeLevel', null), // до какого уровня раскрыто дерево (кнопки 1–4, 0 — «Всё»)
   renamed: new Map(), // id «Зачем» → старые названия (Свод zachem.renamed, 13.10.2026)
+  merge: null, // «Это тот же, что…»: {from, to} — лист подтверждения слияния на странице человека (аудит №23)
 };
 // Три группы дел (владелец 10.10.2026): «есть дела, которые ждут меня — люди что-то спросили и ждут, они
 // мега важные… второе — что я сам придумал… третье — проверить, что мне люди должны». Вечером назвал их:
@@ -357,6 +358,13 @@ const inToday = (t) => isOpen(t) && isMine(t) && !t.goal && t.due_date === S.tod
 const todayTasks = () => all().filter((t) => inToday(t) && inSphere(t));
 /** Просрочено — как store.LATE_IF: своё открытое, срок прошёл. Живёт во «Всех делах», сверху. */
 const lateTasks = () => deeds().filter((t) => isLate(t) && isMine(t) && inSphere(t));
+/** «Ждут от тебя без срока» и «жду больше недели» (аудит 15.10.2026, №5) — как store.OWED_NODUE_IF и WAITING_STALE_IF:
+ *  «Отбить» без срока и «Мониторить», где человек молчит дольше WAITING_STALE_DAYS, а напоминание не назначено или
+ *  прошло. Сами ни в «Сейчас», ни в «Сегодня» не встают (сроков не выдумываем) — числами в шапке «Сейчас». */
+const WAITING_STALE_DAYS = 7;
+const owedNoDue = () => deeds().filter((t) => isOpen(t) && isMine(t) && inSphere(t) && grpOf(t) === 'owed' && !t.due_date);
+const waitingStale = () => deeds().filter((t) => isOpen(t) && isMine(t) && inSphere(t) && t.ball === 'waiting'
+  && t.waiting_since && D.diff(S.today, t.waiting_since) > WAITING_STALE_DAYS && (!t.nudge_on || t.nudge_on < S.today));
 /** Когда дело делать — для уровня «время» и сортировки: срок; «Сейчас» — сегодня (его взяли на сегодня);
  *  «мониторить» — к сроку или дню напоминания, что раньше. «Отбить» без срока с 13.10.2026 — без срока: само оно
  *  больше не «сегодня». Сделанное и без срока — null. */
@@ -796,6 +804,11 @@ function route() {
   if (kind === 'stats') return { kind: 'stats' };
   if (kind === 'inbox') return { kind: 'new' }; // старые закладки: «Входящие» теперь в «Новом»
   if (kind === 'week') return { kind: 'all' }; // 10.10.2026: «Неделя», «Предстоящее», «Жду» — во «Всех делах»
+  // «все встречи проекта / клиента →» из карточки (аудит №3): #/meetings/deal=<id>, #/meetings/client=<id>.
+  if (kind === 'meetings' && id) {
+    const m = /^(deal|client)=([\w-]+)$/.exec(decodeURIComponent(id));
+    if (m) return { kind, [m[1]]: m[2] };
+  }
   if (CRM_VIEWS[kind]) return { kind };
   // Главная — «Сейчас» (13.10.2026: Сейчас → Новое → Сегодня); незнакомый адрес — туда же.
   return { kind: VIEWS[kind] ? kind : 'now' };
@@ -1715,6 +1728,21 @@ function renderMain(r) {
 const doneTodayN = () => deeds().filter((t) => t.status === 'done' && isMine(t) && t.completed_at && MSK_DAY(t.completed_at).day === S.today).length;
 /** «просрочено 3» в шапке — ссылкой во «Все дела»: само просроченное ни в «Сейчас», ни в «Сегодня» не попадает. */
 const lateLink = () => { const n = lateTasks().length; return n ? el('a', { class: 'late link', href: '#/all', title: 'Просроченное — во «Всех делах», сверху' }, 'просрочено ' + n) : null; };
+/** Фильтр «Отбить — по людям» / «Мониторить — по людям»: заводской по id, свой — по группе; нет — «Все дела». */
+const scopeHref = (id, scope) => {
+  const f = filters().find((x) => x.id === id) || filters().find((x) => x.scope === scope && !pickOn(x.pick, x.levels || []));
+  return f ? '#/f/' + encodeURIComponent(f.id) : '#/all';
+};
+/** «ждут от тебя без срока: N · жду больше недели: M» в шапке «Сейчас» (аудит №5) — ссылками на фильтры по людям:
+ *  перед звонком человеку видно всё, что ему должен и что жду от него. Нуль — части нет. */
+const waitLinks = () => {
+  const owed = owedNoDue().length, stale = waitingStale().length;
+  return [owed ? el('a', { class: 'link', href: scopeHref('f-owed-people', 'owed'),
+    title: '«Отбить» без срока: человек ждёт ответа или дела, а срока нет — в «Сегодня» само не встанет' }, 'ждут от тебя без срока: ' + owed) : null,
+  stale ? el('a', { class: 'link', href: scopeHref('f-check-people', 'check'),
+    title: `«Мониторить»: ждёшь от человека дольше ${WAITING_STALE_DAYS} дней, напоминание не назначено — пора напомнить` },
+  'жду больше недели: ' + stale) : null];
+};
 
 /** «Сейчас» — главная страница (владелец 13.10.2026: «В делах давай разделим: Сейчас (то, что отметил) и Сегодня
  *  (с датой сегодня)», порядок — Сейчас → Новое → Сегодня). Блоки сверху вниз: что владелец сам взял на сегодня (до
@@ -1725,7 +1753,8 @@ function renderNow() {
   const taken = new Set(now.map((t) => t.id));
   const today = todayTasks().filter((t) => !taken.has(t.id));
   const done = doneTodayN();
-  return [head('Сейчас', [D.long(S.today).toLowerCase(), `в «Сейчас» ${now.length} из ${NOW_MAX}`, done ? 'закрыто ' + done : null, lateLink()]),
+  return [head('Сейчас', [D.long(S.today).toLowerCase(), `в «Сейчас» ${now.length} из ${NOW_MAX}`, done ? 'закрыто ' + done : null, lateLink(),
+    ...waitLinks()]),
     el('div', { class: 'body' },
       principleLine(),
       quickAdd({}, { placeholder: '«это в Сейчас», «П1 поставь, срок пятница», «Гуркин ждёт звонка — на сегодня»' }),
@@ -3155,11 +3184,54 @@ function renderPerson(id) {
       quickAdd({ person_id: id }, { label: `с человеком «${p.name}»`,
         placeholder: '«он теперь CFO в Бете», «созвонились, пришлёт модель в пятницу», «жду от него договор»' }),
       info.length ? el('div', { class: 'person-info' }, info) : null,
+      mergeRow(p),
       crmOn() && personDeals(id).length ? el('div', { class: 'pchips projs' }, el('span', { class: 'pc-label' }, 'Зачем'),
         personDeals(id).map(({ d, role }) => dealChip(d, role))) : null,
       secs.map(([t, items]) => (items.length ? groupBox(t, items.sort(sortTasks)) : null)),
       secs.every(([, i]) => !i.length) ? el('div', { class: 'empty' }, 'Открытых дел с ним нет.') : null,
       crmOn() && !p.user_id ? personCrmBlock(p) : null)];
+}
+
+/** «Это тот же, что…» (аудит 15.10.2026, №23; телефон — PersonNamesCard): найти карточку и после листа подтверждения
+ *  слить эту в неё (person.merge). Только владельцу: склеивает людей он (закон 3) — сервер держит то же правило
+ *  (crm.person_merge), остальным кнопки нет. Отмены у слияния нет: дела, проекты, встречи, хронология и ждущие вопросы
+ *  этой карточки переезжают, имена и номера дописываются, эта уходит в архив; поэтому лист говорит это словами, а
+ *  «Наоборот» оставляет эту и сливает в неё найденную. Слитая карточка — строкой «слит в …» со ссылкой на живую. */
+function mergeRow(p) {
+  if (p.merged_into) {
+    const live = person(p.merged_into);
+    return el('div', { class: 'merge-row faint' }, 'Слит в ', live ? el('a', { class: 'link', href: '#/h/' + live.id }, live.name) : 'другую карточку',
+      ' — дела и хронология теперь там.');
+  }
+  if (!S.me || S.me.role !== 'owner' || p.archived_at) return null;
+  const ask = S.merge && S.merge.from === p.id ? person(S.merge.to) : null;
+  if (ask) {
+    const run = async (a, b) => {
+      S.merge = null;
+      try {
+        const r = await op1({ op: 'person.merge', id: a.id, into: b.id });
+        const skipped = (r && r.skipped) || [];
+        toast(`Слито: «${a.name}» → «${b.name}»` + (skipped.length
+          ? `; не дописал другим именем: ${skipped.map((x) => `«${x.alias}» (так зовут ${x.name})`).join(', ')}` : ''));
+        go('#/h/' + b.id);
+      } catch (e) { fail(e); render(); }
+    };
+    return el('div', { class: 'merge-sheet' },
+      el('div', { class: 'ms-h' }, `Слить «${p.name}» в «${ask.name}»?`),
+      el('div', { class: 'ms-t' }, `Дела, проекты, встречи, хронология и ждущие вопросы «${p.name}» перейдут к «${ask.name}», имена `
+        + `и номера допишутся, «${p.name}» уйдёт в архив. Отменить нельзя.`),
+      el('div', { class: 'ms-acts' },
+        el('button', { class: 'btn small ok', onclick: () => run(p, ask) }, `Слить в «${ask.name}»`),
+        el('button', { class: 'btn small', onclick: () => run(ask, p) }, `Наоборот: оставить «${p.name}»`),
+        el('button', { class: 'btn small', onclick: () => { S.merge = null; render(); } }, 'Не сливать')));
+  }
+  // С завода — похожие: тот же кусок имени (фамилия, имя) в имени, коротком или другом имени.
+  const words = norm(p.name).split(/\s+/).filter((w) => w.length >= 3);
+  const near = () => livePeople().filter((x) => x.id !== p.id && !x.merged_into
+    && words.some((w) => [x.name, x.short, ...(x.aliases || [])].some((k) => k && norm(k).includes(w)))).slice(0, 14);
+  return el('div', { class: 'merge-row' }, el('button', { class: 'chip-btn', title: 'Это одна и та же карточка человека дважды — слить',
+    onclick: (e) => personSearchPop(e.currentTarget, { title: `«${p.name}» — это тот же, что…`, base: near, exclude: [p.id],
+      empty: 'Похожих не нашёл — набери имя', pick: (to) => { S.merge = { from: p.id, to }; render(); } }) }, 'Это тот же, что…'));
 }
 
 /** Общий поиск — сразу, по мере набора: клиенты и проекты справочника, проекты клиентов (сделки),
@@ -3515,6 +3587,25 @@ function autoBlock(auto, batch) {
         batch ? null : el('button', { class: 'chip-btn', onclick: () => { S.autoOpen = !S.autoOpen; render(); } }, open ? 'Свернуть' : 'Показать'))),
     open ? auto.map((s) => autoItem(s, seen)) : null);
 }
+/** Счётчик откатов автоматики за неделю (аудит 15.10.2026, №29) — строкой под «Сделано само»: что поставлено, закрыто,
+ *  уточнено и заведено само и сколько из этого ты отменил или вернул (в скобках), как ответил на её вопросы. Без него
+ *  через месяц не ответить, «не слишком ли смело автоматика ставит и закрывает». Считает сервер (вид week,
+ *  store.automation — без журнала); старый сервер поля не знает — строки нет. Частые «нет» — подсказкой. */
+function autoWeekLine() {
+  const v = crmGet('/api/view/week', 60000);
+  const b = v && v.automation && v.automation.all;
+  if (!b) return null;
+  const ans = [['yes', 'да'], ['edited', 'с правкой'], ['no', 'нет'], ['expired', 'погасло']].filter(([k]) => b[k]).map(([k, w]) => `${w} ${b[k]}`);
+  const parts = [b.created ? `поставлено само ${b.created} (отменил ${b.created_undone})` : null,
+    b.closed ? `закрыто ${b.closed} (вернул ${b.closed_undone})` : null,
+    b.updated ? `уточнено ${b.updated} (${b.updated_undone})` : null,
+    b.people ? `людей ${b.people} (${b.people_undone})` : null,
+    b.asked ? `вопросов ${b.asked}: ${ans.join(', ')}` : null].filter(Boolean);
+  if (!parts.length) return null;
+  const no = (b.no_reasons || []).map((x) => `«${x.reason}» — ${x.n}`).join('; ');
+  return el('div', { class: 'auto-week', title: 'В скобках — сколько из сделанного само ты отменил или вернул' + (no ? '. Частые «нет»: ' + no : '') },
+    'за неделю: ' + parts.join(' · '));
+}
 /** Откуда сделанное само — словами под заголовком: «по встречам и Telegram», «из Telegram и телефонной книжки». С
  *  15.10.2026 людей заводят и встречи (аудит №25): прежнее «люди — только из Telegram и телефона» стало неправдой. */
 function autoFrom(auto) {
@@ -3605,6 +3696,8 @@ function renderNew(batch) {
   if (feed.length) box.append(feedBlock(feed, from));
   const done = autoBlock(auto, batch);
   if (done) box.append(done);
+  const week = batch ? null : autoWeekLine();
+  if (week) box.append(week);
   if (!asks.length && !feed.length && !auto.length) {
     box.append(el('div', { class: 'empty' }, batch ? 'Эта пачка уже разобрана.' : 'Пусто. Новое появится, когда наговоришь или придёт со встречи и из Telegram.'));
   }
@@ -4770,6 +4863,18 @@ function sec(key, title, extra, ...kids) {
     title ? el('h2', { class: 'sec-h' }, title, extra || null) : null, kids);
 }
 const secN = (n) => (n ? el('span', { class: 'n' }, n) : null);
+/** «Встречи» карточки сделки и клиента (аудит 15.10.2026, №3): карточка сделки не видела ни одной из своих встреч —
+ *  только хронологию, куда запись встречи ложилась без сделки. Список — с сервера (вид deal или client: meetings,
+ *  meetings_n — встречи по карточке встречи, свежие сверху), строки — как на странице «Встречи» (meetRow), под ними —
+ *  «все встречи … →» на ту страницу с отбором. Видит только владелец встреч: команде поле пустое — блока нет. */
+function meetingsSec(v, href, what) {
+  const items = (v && v.meetings) || [];
+  if (!items.length) return null;
+  const n = v.meetings_n || items.length;
+  return sec('meetings', 'Встречи', secN(n), el('div', { class: 'rows mrows' }, items.slice(0, MEET_CARD).map(meetRow)),
+    el('a', { class: 'link meet-more', href }, `все встречи ${what}` + (n > MEET_CARD ? ` · ${n}` : '') + ' →'));
+}
+const MEET_CARD = 8; // в карточке — свежие; остальные — страницей «Встречи» с отбором
 
 /** Описание — поле, которое растёт по тексту и сохраняется, когда из него вышел. */
 function aboutBox(value, placeholder, save) {
@@ -4799,7 +4904,7 @@ function sideCol(title, list, { remove, add, mark, empty, note } = {}) {
 
 /** «+ человек» — поисковая строка, а не выпадающий список (владелец 09.10.2026): сразу видны свои (команда
  *  или люди этого клиента), набираешь — ищет среди всех по имени, компании, должности; нет такого — «Новый». */
-function personSearchPop(anchor, { title, base, exclude = [], pick, create }) {
+function personSearchPop(anchor, { title, base, exclude = [], pick, create, empty }) {
   setTimeout(() => {
     const q = el('input', { class: 'ps-q', placeholder: 'Имя, компания, должность…', autocomplete: 'off' });
     const list = el('div', { class: 'ps-list' });
@@ -4825,25 +4930,27 @@ function personSearchPop(anchor, { title, base, exclude = [], pick, create }) {
           .sort((a, b) => a[1] - b[1] || personName(a[0]).localeCompare(personName(b[0]), 'ru')).map(([x]) => x).slice(0, 14);
       }
       const typed = q.value.trim();
-      at = Math.min(at, Math.max(0, items.length - (typed ? 0 : 1)));
+      at = Math.min(at, Math.max(0, items.length - (typed && create ? 0 : 1)));
       list.replaceChildren(...[
         ...items.map((x, i) => el('button', { class: 'ps-item' + (i === at ? ' on' : ''), onmousedown: (e) => { e.preventDefault(); done(x); } },
           avatar(x), el('span', { class: 'ps-t' }, el('span', { class: 'ps-n' }, x.name),
             el('span', { class: 'ps-s' }, [x.short && x.short !== x.name ? x.short : null, x.role, orgLabel(x.org_id)?.name].filter(Boolean).join(' · '))))),
-        !items.length && !typed ? el('div', { class: 'ps-empty' }, 'Набери имя — найду среди всех людей') : null,
-        typed ? el('button', { class: 'ps-item ps-new' + (at === items.length ? ' on' : ''), onmousedown: (e) => { e.preventDefault(); closePop(); create(typed); } },
+        !items.length && !typed ? el('div', { class: 'ps-empty' }, empty || 'Набери имя — найду среди всех людей') : null,
+        !items.length && typed && !create ? el('div', { class: 'ps-empty' }, 'Никого не нашёл') : null,
+        // Без create («Это тот же, что…») — только выбор: нового человека здесь не заводят.
+        typed && create ? el('button', { class: 'ps-item ps-new' + (at === items.length ? ' on' : ''), onmousedown: (e) => { e.preventDefault(); closePop(); create(typed); } },
           icon('plus', 16), el('span', { class: 'ps-t' }, el('span', { class: 'ps-n' }, `Новый: «${typed}»`), el('span', { class: 'ps-s' }, 'завести в справочнике'))) : null,
       ].filter(Boolean));
     };
     const done = (x) => { closePop(); pick(x.id); };
     q.addEventListener('input', () => { at = 0; draw(); });
     q.addEventListener('keydown', (e) => {
-      const n = items.length + (q.value.trim() ? 1 : 0);
+      const n = items.length + (q.value.trim() && create ? 1 : 0);
       if (e.key === 'ArrowDown' && n) { e.preventDefault(); at = (at + 1) % n; draw(); }
       if (e.key === 'ArrowUp' && n) { e.preventDefault(); at = (at - 1 + n) % n; draw(); }
       if (e.key === 'Enter') {
         e.preventDefault();
-        if (at < items.length) done(items[at]); else if (q.value.trim()) { closePop(); create(q.value.trim()); }
+        if (at < items.length) done(items[at]); else if (q.value.trim() && create) { closePop(); create(q.value.trim()); }
       }
       if (e.key === 'Escape') { e.stopPropagation(); closePop(); }
     });
@@ -5051,7 +5158,9 @@ function renderClientCard(p, { picker, g, items, sub, star }) {
     .map((d) => dealTile({ ...d, project_name: p.name, ...(full.get(d.id) || {}) })),
   el('button', { class: 'dtile add', onclick: () => newDeal(p.id) }, icon('plus', 14), ' Зачем'));
   const archived = deals.length - live.length;
-  const nav = [['about', 'О клиенте'], ['deals', 'Зачем'], ['tasks', 'Дела'], ['timeline', 'Хронология'], money ? ['money', 'Деньги'] : null, ['files', 'Файлы']].filter(Boolean);
+  const meets = meetingsSec(v, '#/meetings/client=' + p.id, 'клиента');
+  const nav = [['about', 'О клиенте'], ['deals', 'Зачем'], ['tasks', 'Дела'], ['timeline', 'Хронология'], meets ? ['meetings', 'Встречи'] : null,
+    money ? ['money', 'Деньги'] : null, ['files', 'Файлы']].filter(Boolean);
   const pays = v ? v.payments || [] : [];
   return [head(p.name, sub, star, nav),
     el('div', { class: 'body card-body' },
@@ -5066,6 +5175,7 @@ function renderClientCard(p, { picker, g, items, sub, star }) {
       sec('tasks', 'Дела', secN(items.filter(isOpen).length), el('div', { class: 'toolbar' }, picker, doneToggle()),
         items.length ? grouped(items, g) : el('div', { class: 'empty' }, 'Дел нет. Следующий шаг — скажи в строке Claude.')),
       sec('timeline', 'Хронология', null, v ? timelineBlock('c:' + p.id, { items: v.timeline, entries: v.entries, pays: money ? pays : [], showDeal: true }) : loading()),
+      meets,
       money ? sec('money', 'Деньги', null, clientMoney(pays)) : null,
       sec('files', 'Файлы', secN((p.files || []).length), filesBlock(p, (set, msg) => projectSet(p, set, msg))))];
 }
@@ -5238,7 +5348,9 @@ function renderDeal(id) {
 
   const sub = [p ? el('a', { class: 'link', href: '#/p/' + p.id }, dot(p.id), ' ', p.name) : null, stageWord(d),
     d.fee_kop && money ? rubShort(d.fee_kop) : null, v && v.minutes_all ? el('span', { title: 'время из Засечки по делам проекта' }, icon('clock', 12), ' ' + dur(v.minutes_all)) : null];
-  const nav = [['about', 'О проекте'], ['tasks', 'Дела'], ['timeline', 'Хронология'], money ? ['money', 'Деньги'] : null, ['files', 'Файлы']].filter(Boolean);
+  const meets = meetingsSec(v, '#/meetings/deal=' + d.id, 'проекта');
+  const nav = [['about', 'О проекте'], ['tasks', 'Дела'], ['timeline', 'Хронология'], meets ? ['meetings', 'Встречи'] : null,
+    money ? ['money', 'Деньги'] : null, ['files', 'Файлы']].filter(Boolean);
   const body = el('div', { class: 'body card-body' },
     quickAdd({ project_id: d.project_id, deal_id: d.id }, { label: `с проектом «${d.name}»`,
       placeholder: '«подписали мандат», «добавь Наташу в команду», «Ольга — их CFO», «созвон: ждут модель к пятнице», «этого уже нет — закрой»' }),
@@ -5249,6 +5361,7 @@ function renderDeal(id) {
     sides,
     tasks,
     sec('timeline', 'Хронология', null, v ? timelineBlock('d:' + d.id, { items: v.timeline, entries: v.entries, pays: money ? pays : [] }) : loading()),
+    meets,
     moneySec,
     sec('files', 'Файлы', secN((d.files || []).length), filesBlock(d, (set, msg) => dealOp({ op: 'deal.set', id: d.id, set }).then((r) => r && msg && toast(msg)))));
   if (v && v.history.length) {
@@ -5486,10 +5599,16 @@ function meetGroups(items, by) {
 
 function renderMeetings() {
   const f = S.mt;
+  // Из карточки проекта или клиента («все встречи … →», аудит №3) — только его встречи: свои отборы страницы (сфера,
+  // клиент, человек) на это время не действуют, «✕» у отбора — снова вся страница.
+  const r = route();
+  const only = r.deal ? { key: 'deal_id', id: r.deal, name: S.deals.get(r.deal)?.name, word: 'проект' }
+    : r.client ? { key: 'project_id', id: r.client, name: project(r.client)?.name, word: 'клиент' } : null;
   const qs = new URLSearchParams({ sort: S.mtQ && f.sort === 'date' ? 'relevance' : f.sort });
-  if (f.sphere) qs.set('sphere', f.sphere);
-  if (f.client) qs.set('project_id', f.client);
-  if (f.person) qs.set('person_id', f.person);
+  if (only) qs.set(only.key, only.id);
+  if (f.sphere && !only) qs.set('sphere', f.sphere);
+  if (f.client && !only) qs.set('project_id', f.client);
+  if (f.person && !only) qs.set('person_id', f.person);
   if (f.arch) qs.set('archived', '1');
   if (S.mtQ.trim()) qs.set('q', S.mtQ.trim());
   const v = crmGet('/api/view/meetings?' + qs, 20000);
@@ -5513,15 +5632,20 @@ function renderMeetings() {
     none: 'Все клиенты', items: mClients, onPick: (x) => mtSave({ client: x || '' }) }), { empty: !f.client });
   const personSel = choiceBtn(mPeople.find((x) => x.v === f.person)?.title || 'все люди', (a) => choicePop(a, { title: 'Человек', current: f.person || null,
     none: 'Все люди', items: mPeople, onPick: (x) => mtSave({ person: x || '' }) }), { empty: !f.person });
-  const tb = el('div', { class: 'toolbar mt-top' }, search, spheres);
+  const onlyChip = only ? el('a', { class: 'chip-btn on', href: '#/meetings', title: 'Снять отбор — все встречи' },
+    `${only.word}: ${only.name || 'не виден'}`, ' ', icon('x', 12)) : null;
+  const tb = el('div', { class: 'toolbar mt-top' }, search, only ? onlyChip : spheres);
   const tb2 = el('div', { class: 'toolbar mt-tools' }, el('label', {}, 'Сортировать'), sel('sort', MT_SORT, 'Сортировка'),
-    el('label', {}, 'Группы'), sel('group', MT_GROUP, 'Группы'), clientSel, personSel,
+    el('label', {}, 'Группы'), sel('group', MT_GROUP, 'Группы'), only ? null : clientSel, only ? null : personSel,
     el('button', { class: 'chip-btn' + (f.arch ? ' on' : ''), onclick: () => mtSave({ arch: !f.arch }) }, 'И убранные'));
   if (!v) return [head('Встречи'), el('div', { class: 'body' }, tb, tb2, loading())];
   const items = v.items;
   const c = v.counts;
-  const sub = [plural(c.all, 'встреча', 'встречи', 'встреч'), c.minutes ? dur(c.minutes) : null,
-    c.unnamed ? el('span', { class: 'late' }, `ждут разбора: ${c.unnamed}`) : null, c.asks ? `с вопросом: ${c.asks}` : null];
+  // Счёт сервера — по всем встречам (для чипов сфер); под отбором проекта или клиента — его встречи.
+  const mins = items.reduce((a, m) => a + (m.duration_min || 0), 0);
+  const sub = only ? [plural(items.length, 'встреча', 'встречи', 'встреч'), mins ? dur(mins) : null]
+    : [plural(c.all, 'встреча', 'встречи', 'встреч'), c.minutes ? dur(c.minutes) : null,
+      c.unnamed ? el('span', { class: 'late' }, `ждут разбора: ${c.unnamed}`) : null, c.asks ? `с вопросом: ${c.asks}` : null];
   let body;
   if (!items.length) body = el('div', { class: 'empty' }, S.mtQ ? 'Не нашлось ни в названиях, ни в разговорах.'
     : c.all ? 'Под эти фильтры встреч нет.' : 'Встреч в базе пока нет: их присылает служба встреч (ZF-Meetings) — после её обновления сюда приедут все встречи разом.');

@@ -747,3 +747,119 @@ def test_automation_takes_single_live_deal_but_own_word_does_not(dela):
     t = ops(dela, "sasha", {"op": "task.create", "task": {"title": "Ромашка: подумать", "project_id": str(p)}})[0]["task"]
     assert t["deal_id"] is None
     assert "deal_steps" in store.FEATURES
+
+
+# ── Ждут без срока и жду больше недели — на виду (аудит 15.10.2026, №5) ──────────────────────────────────────
+
+def test_today_counts_owed_without_due_and_stale_waiting(dela):
+    """«Отбить» без срока и «Мониторить» без движения больше недели (напоминание не назначено или прошло) — числами в
+    виде today (шапка «Сейчас»); правило «жду» то же, что waiting_stale недели; цели, чужое и закрытое не в счёт."""
+    from pravka_dela import mcp_tools
+
+    today = db_today(dela)
+    d = lambda n: (today + dt.timedelta(days=n)).isoformat()  # noqa: E731
+    mk = lambda title, user="sasha", **kw: ops(dela, user, {"op": "task.create", "task": {"title": title, **kw}})[0]["task"]  # noqa: E731
+    mk("Ответить Ивану Тестову", ball="owed")
+    mk("Ответить к пятнице", ball="owed", due_date=d(2))
+    done = mk("Отвеченное", ball="owed")
+    assert ops(dela, "sasha", {"op": "task.done", "id": done["id"]})[0]["ok"]
+    mk("Цель: научиться отвечать", ball="owed", goal=True)
+    mk("Наташино без срока", user="natasha", ball="owed")
+    stale = {t: mk(t, ball="waiting", **kw)["id"] for t, kw in (
+        ("Жду договор", {}), ("Жду акт", {"nudge_on": d(-1)}), ("Жду счёт", {"nudge_on": d(1)}), ("Жду ответ", {}),
+        ("Цель: жду чуда", {"goal": True}))}
+    with store.db.session(dela, "system", "t") as c:
+        for t, since in (("Жду договор", -10), ("Жду акт", -9), ("Жду счёт", -10), ("Жду ответ", -3), ("Цель: жду чуда", -30)):
+            c.execute("UPDATE tasks.tasks SET waiting_since = %s WHERE id = %s", (d(since), stale[t]))
+    v = store.view(dela, "sasha", "today")
+    assert (v["owed_nodue_count"], v["waiting_stale_count"]) == (1, 2), v
+    assert {t["title"] for t in store.view(dela, "sasha", "week")["waiting_stale"]} == {"Жду договор", "Жду акт"}
+    txt = mcp_tools.view(dela, "today")
+    assert "Ждут от Саши без срока («Отбить»): 1" in txt and "Ждёт от людей больше недели" in txt and ": 2 " in txt, txt
+    assert store.view(dela, "natasha", "today")["owed_nodue_count"] == 1
+
+
+# ── Счётчик откатов автоматики за неделю (аудит 15.10.2026, №29) ─────────────────────────────────────────────
+
+def test_week_counts_what_automation_did_and_what_was_undone(dela):
+    """Завели само — отменил; закрыли само — открыл снова; уточнили само — «Вернуть» (основание убрано); завели человека
+    сам — в архив; вопросы: да, с правкой, нет (с причиной), погасло. Решённое сервером без человека — не вопрос."""
+    from pravka_dela import mcp_tools
+
+    today = db_today(dela).isoformat()
+
+    def sug(kind, source="meeting", auto=True, **kw):
+        payload = {"meeting_at": today, **kw.pop("payload", {}), **({"auto": True} if auto else {})}
+        r = ops(dela, "sasha", {"op": "suggestion.create", "suggestion": {
+            "for_user": "sasha", "kind": kind, "source": source, "quote": "так сказали", **kw, "payload": payload}})[0]
+        assert r["ok"], r
+        return r
+
+    made = sug("create", payload={"title": "Прислать расчёт"})
+    assert made["suggestion"]["reason"] == store.AUTO_CREATE_REASON
+    assert ops(dela, "sasha", {"op": "task.cancel", "id": made["task"]["id"]})[0]["ok"]
+    sug("create", source="telegram", payload={"title": "Ответить в чате"})
+    t1 = ops(dela, "sasha", {"op": "task.create", "task": {"title": "Договор с ООО Ромашка"}})[0]["task"]
+    closed = sug("close", task_id=t1["id"])
+    assert closed["suggestion"]["reason"] == store.AUTO_CLOSE_REASON
+    assert ops(dela, "sasha", {"op": "task.reopen", "id": t1["id"]})[0]["ok"]
+    t2 = ops(dela, "sasha", {"op": "task.create", "task": {"title": "Модель"}})[0]["task"]
+    upd = sug("update", task_id=t2["id"], payload={"title": "Модель к пятнице"})["suggestion"]
+    assert upd["reason"] == store.AUTO_UPDATE_REASON
+    back = upd["result"]
+    assert all(x["ok"] for x in ops(dela, "sasha", {"op": "task.set", "id": t2["id"], "set": back["was"]},
+                                    {"op": "comment.delete", "id": back["comment_id"]}))
+    man = sug("person", source="telegram", source_ref="tg:900010", payload={"person": {"name": "Пётр Пробный"}})["suggestion"]
+    assert man["reason"] == store.AUTO_PERSON_REASON
+    assert ops(dela, "sasha", {"op": "person.set", "id": man["result"]["person_id"], "set": {"archived_at": today + "T12:00:00+03:00"}})[0]["ok"]
+    yes = sug("create", auto=False, payload={"title": "Созвон", "ask": "Ставить?"})["suggestion"]
+    assert ops(dela, "sasha", {"op": "suggestion.decide", "id": yes["id"], "decision": "accept"})[0]["ok"]
+    edit = sug("create", auto=False, payload={"title": "Тизер", "ask": "Ставить?"})["suggestion"]
+    assert ops(dela, "sasha", {"op": "suggestion.decide", "id": edit["id"], "decision": "accept", "set": {"title": "Тизер на английском"}})[0]["ok"]
+    no = sug("create", source="krug", auto=False, payload={"title": "Купить полку", "ask": "Это быт?"})["suggestion"]
+    assert ops(dela, "sasha", {"op": "suggestion.decide", "id": no["id"], "decision": "reject", "reason": "не дело"})[0]["ok"]
+    sug("create", auto=False, payload={"title": "Старое", "ask": "Ставить?"}, expires_at="2020-01-01T00:00:00+03:00")
+    assert store.expire_suggestions(dela) == 1
+    # Решил сервер сам («уже в CRM») — не вопрос и не откат.
+    with store.db.session(dela, "system", "t") as c:
+        c.execute("INSERT INTO crm.people (name, owner_id) VALUES ('Ольга Смирнова', 'sasha')")
+    known = sug("person", auto=False, source_ref="meeting-person:ольга смирнова",
+                payload={"person": {"name": "Ольга Смирнова"}, "speaker": {"meeting_ref": "77"}})["suggestion"]
+    assert known["status"] == "accepted" and known["decided_by"] is None, known
+
+    a = store.view(dela, "sasha", "week")["automation"]
+    b = a["all"]
+    assert (b["created"], b["created_undone"], b["closed"], b["closed_undone"], b["updated"], b["updated_undone"],
+            b["people"], b["people_undone"]) == (2, 1, 1, 1, 1, 1, 1, 1), b
+    assert (b["asked"], b["yes"], b["edited"], b["no"], b["expired"]) == (4, 1, 1, 1, 1), b
+    assert b["no_reasons"] == [{"reason": "не дело", "n": 1}]
+    assert a["sources"]["telegram"]["created"] == 1 and a["sources"]["telegram"]["people_undone"] == 1
+    assert a["sources"]["meeting"]["created_undone"] == 1 and a["sources"]["krug"]["no"] == 1
+    txt = mcp_tools.view(dela, "week")
+    assert "поставлено само 2 (отменил 1) · закрыто 1 (вернул 1) · уточнено 1 (1) · людей 1 (1)" in txt, txt
+    assert "вопросов 4: да 1, с правкой 1, нет 1, погасло 1" in txt and "«не дело» — 1" in txt, txt
+
+
+# ── Цели дерева автоматика не трогает (аудит 15.10.2026, №19) ────────────────────────────────────────────────
+
+def test_automation_does_not_close_or_change_a_tree_goal(dela):
+    """«Закрыть» или «уточнить» с номером цели дерева не встаёт само, даже с auto: ждёт владельца с причиной в held.
+    Сам владелец цель закрывает как обычно."""
+    today = db_today(dela).isoformat()
+    goal = ops(dela, "sasha", {"op": "task.create", "task": {"title": "Сын уверенно считает до 20", "goal": True}})[0]["task"]
+    assert goal["goal"]
+
+    def ask(kind, **payload):
+        return ops(dela, "sasha", {"op": "suggestion.create", "suggestion": {
+            "for_user": "sasha", "kind": kind, "task_id": goal["id"], "source": "telegram", "quote": "сделали",
+            "payload": {"meeting_at": today, "auto": True, **payload}}})[0]
+
+    r = ask("close")
+    assert r["ok"] and r["suggestion"]["status"] == "pending" and "task" not in r, r
+    assert r["suggestion"]["payload"]["held"] == "это цель дерева — закрывает владелец"
+    u = ask("update", title="Сын уверенно считает до 100")["suggestion"]
+    assert u["status"] == "pending" and u["payload"]["held"] == "это цель дерева — правит владелец", u
+    with store.db.session(dela, "sasha", "t") as c:
+        assert c.execute("SELECT status, title FROM tasks.tasks WHERE id = %s", (goal["id"],)).fetchone() == {
+            "status": "open", "title": "Сын уверенно считает до 20"}
+    assert ops(dela, "sasha", {"op": "task.done", "id": goal["id"]})[0]["ok"]  # владелец закрывает сам

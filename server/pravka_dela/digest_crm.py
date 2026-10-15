@@ -133,7 +133,7 @@ def load(conn, owner: str) -> dict:
     sv = conn.execute("SELECT value FROM crm.svod WHERE owner_id = %s AND key = 'people.family'", (owner,)).fetchone()
     listed = sv["value"] if sv and isinstance(sv["value"], list) else None  # «Семья» звонков (docs/svod-phone.md, 3.5)
     return build(
-        rows=people.who_rows(conn),
+        rows=people.who_rows(conn, with_merged=True),  # ключи слитых дублей ведут в живую (аудит №23)
         orgs=conn.execute("SELECT id, name, aliases, kind FROM crm.orgs WHERE archived_at IS NULL").fetchall(),
         projects=conn.execute(
             "SELECT id, name, aliases, org_id, archived_at FROM crm.projects WHERE kind = 'client'").fetchall(),
@@ -153,6 +153,8 @@ def build(rows: list[dict], orgs: list[dict], projects: list[dict], deals: list[
     family_ids — пользователи Дел с флагом family; family_listed — список Свода people.family (None — его нет: тогда
     семья — ещё и однофамильцы владельца)."""
     sid = lambda v: str(v) if v not in (None, "") else None  # noqa: E731 — uuid из базы и строка из JSON — одно
+    merged = [p for p in rows if p.get("merged_into")]
+    rows = [p for p in rows if not p.get("merged_into")]
     people_by = {sid(p["id"]): p for p in rows}
     me = sid(me_person)
     me_org = sid((people_by.get(me) or {}).get("org_id"))
@@ -173,6 +175,17 @@ def build(rows: list[dict], orgs: list[dict], projects: list[dict], deals: list[
     by_tg = _unique((str(p["telegram_id"]), pid) for pid, p in people_by.items() if p.get("telegram_id"))
     by_user = _unique((people.norm(p["telegram_username"]).lstrip("@"), pid) for pid, p in people_by.items()
                       if p.get("telegram_username"))
+    # id и ник слитого дубля — его живая карточка (аудит №23: слияние не переносит их, если у живой свои), только если
+    # такой ключ не стоит у живой и ведёт в одну карточку.
+    live_tg = {str(p["telegram_id"]) for p in rows if p.get("telegram_id")}
+    live_user = {people.norm(p["telegram_username"]).lstrip("@") for p in rows if p.get("telegram_username")}
+    for k, pid in _unique((str(p["telegram_id"]), sid(p["merged_into"])) for p in merged if p.get("telegram_id")).items():
+        if pid in people_by and k not in live_tg:
+            by_tg[k] = pid
+    for k, pid in _unique((people.norm(p["telegram_username"]).lstrip("@"), sid(p["merged_into"])) for p in merged
+                          if p.get("telegram_username")).items():
+        if pid in people_by and k not in live_user:
+            by_user[k] = pid
     org_names = {sid(o["id"]): [o.get("name"), *(o.get("aliases") or [])] for o in orgs}
     return {
         "rows": rows, "people": people_by, "me": me, "me_org": me_org, "family": family,
