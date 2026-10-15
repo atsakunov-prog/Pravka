@@ -784,6 +784,8 @@ def op_svod_set(conn, user, op, error):
             value = kovcheg_ui.check(key, body, value)
         except kovcheg_ui.UiError as e:
             raise error(f"свод: {e}") from None
+    if key == PRIVACY_KEY:
+        value = _privacy_value(conn, owner, body, value, error)
     cur = conn.execute("SELECT rev FROM crm.svod WHERE owner_id = %s AND key = %s", (owner, key)).fetchone()
     base = op.get("base_rev")
     if base is not None and cur is not None and int(base) != cur["rev"]:
@@ -798,7 +800,46 @@ def op_svod_set(conn, user, op, error):
     ).fetchone()
     if row is None:
         raise error("свод: нет прав")
+    if key == PRIVACY_KEY:
+        # Переключатель поменялся — записи встреч владельца переписываются тут же, в той же транзакции: команда видит
+        # ровно то, что выбрано, без «догонит на следующей правке карточки».
+        return {"row": row, "touched": touch_owner_meetings(conn, owner)}
     return {"row": row}
+
+
+# ── Что видит команда (аудит №9, правило 26) ─────────────────────────────────
+
+PRIVACY_KEY = "privacy.team"
+PRIVACY_MEETINGS = ("fact", "summary")
+
+
+def _privacy_value(conn, owner: str, body, value, error) -> dict:
+    """Свод privacy.team — {"meetings": "fact" | "summary"}: пишет только сам владелец Дел (роль owner, не служба с его
+    токеном — открыть команде итоги встреч решает человек). Другие ключи и слова — отказ: кривое значение выглядело бы
+    выбором, а действовало бы как «только факт»."""
+    role = conn.execute("SELECT role FROM crm.users WHERE id = %s", (owner,)).fetchone()
+    actor = str(conn.execute("SELECT crm.actor() AS a").fetchone()["a"] or "")
+    if not role or role["role"] != "owner" or actor.startswith("svc:") or crm_me(conn) != owner:
+        raise error("свод: что видит команда (privacy.team) решает сам владелец Дел — не служба и не команда")
+    if body is not None or not isinstance(value, dict) or set(value) != {"meetings"} \
+            or value["meetings"] not in PRIVACY_MEETINGS:
+        raise error('свод: privacy.team — {"meetings": "fact"} (команда видит только факт встречи) '
+                    'или {"meetings": "summary"} (и итог с договорённостями)')
+    return value
+
+
+def crm_me(conn) -> str | None:
+    return conn.execute("SELECT crm.me() AS u").fetchone()["u"]
+
+
+def touch_owner_meetings(conn, owner: str) -> dict[str, int]:
+    """Записи всех встреч владельца с 01.09 — заново по их карточкам и переключателю (crm.meeting_touch). Ответ — счёт по
+    словам: {"обновлена": 12, "нечего": 30, …}."""
+    out: dict[str, int] = {}
+    for r in conn.execute("SELECT crm.meeting_touch(id) AS a FROM crm.meetings WHERE owner_id = %s "
+                          "AND started_at >= crm.meeting_touch_from() ORDER BY started_at, id", (owner,)).fetchall():
+        out[r["a"]] = out.get(r["a"], 0) + 1
+    return out
 
 
 def view_svod(conn, user, key=None, prefix=None, **_):

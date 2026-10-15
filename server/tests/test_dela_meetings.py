@@ -25,6 +25,12 @@ def ok(url, user, *items):
     return res
 
 
+def summary_mode(url):
+    """Команда видит из встреч и итог (Свод privacy.team = summary, аудит №9): старые тесты записи встречи проверяют, что
+    запись следует карточке, — а не что команда видит итог; режим «только факт» (с завода) — test_dela_privacy.py."""
+    ok(url, "sasha", {"op": "svod.set", "key": "privacy.team", "value": {"meetings": "summary"}, "author": "test"})
+
+
 def push(url, ref="215", user="sasha", **m):
     m = {"ref": ref, "url": f"https://meetings.example.org/m/{ref}", "started_at": "2026-10-12T11:56:00+03:00",
          "ended_at": "2026-10-12T12:43:00+03:00", "kind": "zoom", "title": "Регулярная по сделке",
@@ -199,7 +205,9 @@ def test_card_links_timeline_and_tasks_by_number_across_hosts(mt):
        {"op": "task.create", "task": {"title": "Перевыставить счёт", "source": "meeting",
                                       "source_ref": "https://meetings.example.org/m/215"}})
     card = store.view(url, "sasha", "meeting", ref="215", lines="none")
-    assert [i["summary"] for i in card["timeline"]] == ["Вектор: счета"]
+    # Владельцу запись встречи — с итогом с карточки (crm.v_interactions, аудит №9); в строке — то, что видит команда.
+    assert [(i["summary"], i["team_sees"]) for i in card["timeline"]] == [
+        ("Регулярная по сделке: Счёт перевыставить на новое юрлицо; модель — таблицы чувствительности.", "fact")]
     assert [t["title"] for t in card["tasks"]] == ["Перевыставить счёт"] and "lines" not in card
     win = store.view(url, "sasha", "meeting", id=m["id"], around=0)
     assert [x["n"] for x in win["lines"]] == [0, 1, 2, 3, 4]
@@ -612,6 +620,7 @@ def _live(url, ref=None):
 
 def test_meeting_record_follows_its_card(mt):
     url = mt["url"]
+    summary_mode(url)
     with dela_db.session(url, "system", "test") as c:
         c.execute("UPDATE crm.people SET user_id = 'natasha' WHERE id = %s", (mt["Наташа"],))  # Наташа — команда
     m = push(url, agreements=["Счёт перевыставить до пятницы", {"text": "Таблицы — к среде"}])
@@ -664,6 +673,7 @@ def test_meeting_record_waits_for_naming_even_with_client_hint(mt):
     встречу раньше, чем разбор её погасит (инцидент 09.10; проверка 15.10.2026). Разобрал — запись есть; сферу
     поставил сам владелец — тоже; живую запись новая расшифровка не гасит."""
     url = mt["url"]
+    summary_mode(url)
     with dela_db.session(url, "system", "test") as c:
         c.execute("INSERT INTO crm.project_access (project_id, user_id, role, granted_by) VALUES (%s, 'natasha', 'view', "
                   "'sasha')", (mt["project"],))
@@ -702,6 +712,7 @@ def test_meeting_record_waits_for_naming_even_with_client_hint(mt):
 def test_owner_hand_on_meeting_record(mt):
     """Убрал или поправил запись встречи сам владелец — замок touch: сервер её не трогает, «вернуть» — снова по карточке."""
     url = mt["url"]
+    summary_mode(url)
     m = push(url)
     _name(url, m["id"], client="Вектор", topic="счета")
     [r] = _live(url)
@@ -732,6 +743,7 @@ def test_old_service_record_is_not_a_second_truth(mt):
     import uuid
 
     url = mt["url"]
+    summary_mode(url)
     m = push(url)
     old = {"op": "interaction.add", "op_id": str(uuid.uuid4()), "data": {
         "at": "2026-10-12T11:56:00+03:00", "kind": "zoom", "summary": "Регулярная по сделке: итог службы",
@@ -865,6 +877,7 @@ def test_meetings_touch_command_counts_and_dry_writes_nothing(mt, tmp_path, caps
     """Разово после установки: записи встреч с 01.09 — по карточкам (догнать потерянные, взять сделку и людей, убрать
     личные). --dry — посчитать и ничего не записать."""
     url = mt["url"]
+    summary_mode(url)
     with dela_db.session(url, "sasha", "svc:test") as c:
         deal = c.execute("SELECT id FROM crm.deals WHERE project_id = %s", (mt["project"],)).fetchone()["id"]
 

@@ -3780,8 +3780,33 @@ function renderSettings() {
           el('div', { class: 'tile' }, el('div', { class: 'tl' }, 'Всего с 05.10'), el('div', { class: 'tv' }, usd(cost.total)))),
         el('div', { class: 'hint-line' }, [...Object.entries(cost.by || {}).map(([k, x]) => `${kinds[k] || k} ${usd(x)}`),
           ...Object.entries(cost.models || {}).map(([k, x]) => `${k.replace('claude-', '').replace(/-(\d)-(\d)$/, ' $1.$2')} ${usd(x)}`)].join(' · ') || 'Пока ничего.')) : null,
+      v.privacy && privacyOn() ? privacyBox(v.privacy) : null,
       v.ui ? el('div', { class: 'group' }, el('h2', {}, icon('menu', 17), 'Вид и меню', el('span', { class: 'gsub' }, 'всего Ковчега')),
         uiEditor(v)) : null)];
+}
+
+/** «Что видит команда» (аудит №9, правило 26 карты Дел) — только владельцу (сервер отдаёт privacy в /api/settings ему
+ *  одному): закон одной фразой и переключатель встреч — Свод privacy.team; записи встреч сервер переписывает сразу. */
+const TEAM_SEES = {
+  fact: ['Встречи: только факт', 'команда видит «Клиент: тема», когда, сколько и с кем — без итога и договорённостей'],
+  summary: ['Встречи: факт и итог', 'команда видит и итог встречи с договорённостями'],
+};
+function privacyBox(pv) {
+  const pick = async (val) => {
+    if (pv.meetings === val) return;
+    try {
+      const r = await op1({ op: 'svod.set', key: 'privacy.team', value: { meetings: val }, author: 'web',
+        reason: 'Настройки → Что видит команда' });
+      const n = ['обновлена', 'заведена'].reduce((a, k) => a + ((r.touched || {})[k] || 0), 0);
+      pv.meetings = val;
+      crmDirty(); toast(`${TEAM_SEES[val][0]} · записи встреч переписаны: ${n}`); render();
+    } catch (e) { fail(e); }
+  };
+  return el('div', { class: 'group' }, el('h2', {}, icon('lock', 17), 'Что видит команда'),
+    el('div', { class: 'hint-line' }, 'Команда видит работу по проекту: дела, клиента и сделку, людей клиента и факт касания. '
+      + 'Переписка Telegram, расшифровки, итоги встреч, пометки о людях и «Только тебе» — только ты.'),
+    el('div', { class: 'choices' }, Object.entries(TEAM_SEES).map(([val, [title, hint]]) =>
+      el('button', { class: 'choice' + (pv.meetings === val ? ' on' : ''), onclick: () => pick(val) }, el('b', {}, title), el('span', {}, hint)))));
 }
 
 // ── «Вид и меню» (Правка 5.0, этап 7, 14.10.2026): меню значка Ковчега и акцент — Свод ui.menu и ui.look, одни на
@@ -5047,12 +5072,22 @@ function tlLine(r, showDeal) {
       steps.length ? el('ul', { class: 'tl-steps' }, (open ? steps : steps.slice(0, 2)).map((x) => el('li', {}, x)),
         !open && steps.length > 2 ? el('li', { class: 'more' }, `ещё ${steps.length - 2}`) : null) : null,
       el('div', { class: 'tl-meta' }, [showDeal && i.deal_name, who.length && who.join(', '), i.duration_min && dur(i.duration_min),
-        i.source === 'meeting' && 'из встречи', dg && 'из дайджеста · видишь только ты',
+        i.source === 'meeting' && 'из встречи', dg && 'из дайджеста',
         // Упоминание (аудит №28): клиента назвали в сводке, а его чата в окне не было — в «контакт» не идёт.
         i.mention && 'упоминание — не контакт'].filter(Boolean).join(' · '),
+        // Закон приватности (аудит №9): приватная запись — «видишь только ты», запись встречи, где команда видит только
+        // факт, — «команде — без итога» (поля вида crm.v_interactions; старый сервер их не шлёт — пометки нет).
+        i.private || dg ? lockMark('видишь только ты') : i.team_sees === 'fact' ? lockMark('команде — без итога') : null,
       meeting ? el('a', { class: 'src', href: meeting, target: '_blank', rel: 'noopener noreferrer' }, ' встреча →') : null,
-      dg ? el('a', { class: 'src', href: '#/digest/' + encodeURIComponent(dg) }, ' сводка →') : null)),
-    el('button', { class: 'icon-btn tl-del', title: 'Убрать из хронологии', onclick: async () => {
+      dg ? el('a', { class: 'src', href: '#/digest/' + encodeURIComponent(dg) }, ' сводка →') : null,
+      // «Скрыть от команды» — своя общая запись (хозяин записи); вернуть нельзя — правило базы.
+      privacyOn() && !i.private && !dg && i.owner_id === S.me.user ? el('button', { class: 'link-btn', onclick: async () => {
+        if (!confirm('Скрыть запись от команды? Команда перестанет видеть эту запись. Вернуть нельзя.')) return;
+        await dealOp({ op: 'interaction.set', id: i.id, set: { private: true } });
+        toast('Запись видишь только ты');
+      } }, ' скрыть от команды') : null)),
+    // Запись встречи и пункт дайджеста убирает только их хозяин (аудит №9): сотруднику крестика нет — сервер откажет.
+    (i.source === 'meeting' || dg) && i.owner_id !== S.me.user ? null : el('button', { class: 'icon-btn tl-del', title: 'Убрать из хронологии', onclick: async () => {
       if (!confirm(dg ? 'Убрать запись из хронологии? Сводка останется в дайджесте, повтор её сюда не вернёт.'
         : 'Убрать запись из хронологии? Она останется в журнале.')) return;
       await dealOp({ op: 'interaction.delete', id: i.id });

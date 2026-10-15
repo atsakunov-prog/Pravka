@@ -865,7 +865,7 @@ def _card(conn, r: dict, with_lines: bool = True, around: int | None = None, raw
             "AND n BETWEEN %s AND %s ORDER BY n", (full["id"], lo, hi)).fetchall()
     # Что уже связано с этой встречей по её номеру: сводка в хронологии клиента и дела из её разбора.
     out["timeline"] = conn.execute(
-        "SELECT i.id, i.at, i.kind, i.summary, i.next_step, p.name AS project FROM crm.interactions i "
+        "SELECT i.id, i.at, i.kind, i.summary, i.next_step, i.team_sees, p.name AS project FROM crm.v_interactions i "
         "LEFT JOIN crm.projects p ON p.id = i.project_id "
         "WHERE i.deleted_at IS NULL AND crm.meeting_ref(i.source_ref) = %s ORDER BY i.at", (full["ref"],)).fetchall()
     out["tasks"] = conn.execute(

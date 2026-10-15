@@ -158,3 +158,107 @@ def test_task_journal_without_machine_notes_for_team(team):
     assert "МЕТКА-ЖУРНАЛ" not in repr(team_hist)
     assert [h["op"] for h in team_hist] == ["insert", "update"]  # правка одной заметкой — без строки
     assert "МЕТКА-ЖУРНАЛ-2" in repr(api.task_card(url, "sasha", t["id"])["history"])
+
+
+# ── №9: встреча — команде факт, итог и договорённости — владельцу ─────────────────────────────
+
+from test_dela_meetings import _live, _name, mt, push  # noqa: E402, F401  (фикстура и помощники встреч)
+
+FULL = "Вектор: счета: Счёт перевыставить на новое юрлицо; модель — таблицы чувствительности."
+AGREED = "Счёт перевыставить до пятницы"
+
+
+def _client_timeline(url, user, project_id):
+    return store.view(url, user, "client", project_id=str(project_id))["timeline"]
+
+
+def test_meeting_record_fact_for_team_summary_for_owner(mt, conn):
+    url = mt["url"]
+    with dela_db.session(url, "system", "test") as c:
+        c.execute("INSERT INTO crm.project_access (project_id, user_id, role, granted_by) VALUES (%s, 'natasha', 'view', "
+                  "'sasha')", (mt["project"],))
+    m = push(url, agreements=[AGREED])
+    _name(url, m["id"], client="Вектор", topic="счета")
+    [r] = _live(url)
+    assert (r["summary"], r["next_step"]) == ("Вектор: счета", None)  # с завода — только факт
+    mine = _client_timeline(url, "sasha", mt["project"])
+    assert [(i["summary"], i["next_step"], i["team_sees"]) for i in mine] == [(FULL, AGREED, "fact")]
+    assert mine[0]["source_ref"] == "https://meetings.example.org/m/215"
+    hers = _client_timeline(url, "natasha", mt["project"])
+    assert [(i["summary"], i["next_step"], i["source_ref"]) for i in hers] == [("Вектор: счета", None, None)]
+    # Вход сверки (токен владельца) и коннектор (life) — с итогом, как было.
+    assert [x["summary"] for x in store.view(url, "sasha", "timeline")["items"]] == [FULL]
+    assert conn.execute("SELECT summary, next_step, team_sees FROM life.interactions WHERE source = 'meeting'").fetchall() == [
+        (FULL, AGREED, "fact")]
+    # «Факт и итог» — записи переписаны тут же, Наташа видит итог; обратно — снова факт.
+    on = one(url, "sasha", {"op": "svod.set", "key": "privacy.team", "value": {"meetings": "summary"}, "author": "web"})
+    assert on["touched"].get("обновлена") == 1, on["touched"]
+    hers = _client_timeline(url, "natasha", mt["project"])
+    assert [(i["summary"], i["next_step"]) for i in hers] == [(FULL, AGREED)]
+    assert _client_timeline(url, "sasha", mt["project"])[0]["team_sees"] == "all"
+    one(url, "sasha", {"op": "svod.set", "key": "privacy.team", "value": {"meetings": "fact"}, "author": "web"})
+    assert [i["summary"] for i in _client_timeline(url, "natasha", mt["project"])] == ["Вектор: счета"]
+    # Решает сам владелец: служба с его токеном, команда и кривое значение — отказ словами.
+    svc = store.apply_ops(url, "sasha", [{"op": "svod.set", "key": "privacy.team", "value": {"meetings": "summary"}}],
+                          "app", "svc:meetings")["results"][0]
+    assert not svc["ok"] and "решает сам владелец" in svc["error"]
+    team_try = ops(url, "natasha", {"op": "svod.set", "key": "privacy.team", "value": {"meetings": "summary"}})[0]
+    assert not team_try["ok"]
+    crooked = ops(url, "sasha", {"op": "svod.set", "key": "privacy.team", "value": {"meetings": "all"}})[0]
+    assert not crooked["ok"] and "privacy.team" in crooked["error"]
+    assert [i["summary"] for i in _client_timeline(url, "natasha", mt["project"])] == ["Вектор: счета"]
+
+
+def test_owner_hand_on_meeting_record_is_his_text(mt):
+    """Запись под замком touch (владелец поправил её сам) — его текст и владельцу: карточкой встречи не подменяется."""
+    url = mt["url"]
+    m = push(url)
+    _name(url, m["id"], client="Вектор", topic="счета")
+    [r] = _live(url)
+    one(url, "sasha", {"op": "interaction.set", "id": str(r["id"]), "set": {"summary": "Вектор: моими словами"}})
+    mine = _client_timeline(url, "sasha", mt["project"])
+    assert [(i["summary"], i["team_sees"]) for i in mine] == [("Вектор: моими словами", "all")]
+
+
+def test_private_record_rules(team):
+    url = team["url"]
+    p = project(url, "sasha", "ООО Ромашка")
+    at = dt.datetime.now(dt.timezone.utc).isoformat()
+
+    def add(user, summary, **kw):
+        return one(url, user, {"op": "interaction.add", "data": {"at": at, "kind": "note", "summary": summary,
+                                                                  "project_id": str(p), "source": "web", **kw}})["row"]
+
+    a = add("sasha", "МЕТКА-ЗАП только мне", private=True)
+    b = add("sasha", "общая запись")
+    assert [i["summary"] for i in _client_timeline(url, "natasha", p)] == ["общая запись"]
+    one(url, "sasha", {"op": "interaction.set", "id": str(b["id"]), "set": {"private": True}})
+    assert _client_timeline(url, "natasha", p) == []
+    assert {i["team_sees"] for i in _client_timeline(url, "sasha", p)} == {"none"}
+    back = ops(url, "sasha", {"op": "interaction.set", "id": str(a["id"]), "set": {"private": False}})[0]
+    assert not back["ok"] and "приватность" in back["error"]
+    c = add("sasha", "ещё общая")
+    hide = ops(url, "natasha", {"op": "interaction.set", "id": str(c["id"]), "set": {"private": True}})[0]
+    assert not hide["ok"] and "только её хозяин" in hide["error"]
+    # Сотрудник по-прежнему правит общую запись (не встречу и не дайджест).
+    assert ops(url, "natasha", {"op": "interaction.set", "id": str(c["id"]), "set": {"summary": "поправила"}})[0]["ok"]
+
+
+def test_team_cannot_touch_meeting_record_and_home_takes_none(mt):
+    url = mt["url"]
+    with dela_db.session(url, "system", "test") as c:
+        c.execute("INSERT INTO crm.project_access (project_id, user_id, role, granted_by) VALUES (%s, 'natasha', 'edit', "
+                  "'sasha')", (mt["project"],))
+    m = push(url)
+    _name(url, m["id"], client="Вектор", topic="счета")
+    [r] = _live(url)
+    gone = ops(url, "natasha", {"op": "interaction.delete", "id": str(r["id"])})[0]
+    edit = ops(url, "natasha", {"op": "interaction.set", "id": str(r["id"]), "set": {"summary": "моё"}})[0]
+    assert not gone["ok"] and not edit["ok"]
+    assert [x["summary"] for x in _live(url)] == ["Вектор: счета"]
+    home = project(url, "sasha", "Семья", sphere="home", kind="personal")
+    bad = ops(url, "sasha", {"op": "interaction.add", "data": {"at": "2026-10-12T11:00:00+03:00", "kind": "meeting",
+                                                              "summary": "Семья: ужин", "project_id": str(home),
+                                                              "source": "meeting",
+                                                              "source_ref": "https://meetings.example.org/m/990"}})[0]
+    assert not bad["ok"] and "личный проект" in bad["error"]

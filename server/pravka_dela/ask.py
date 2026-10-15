@@ -442,7 +442,8 @@ def _deal_line(conn, d: dict) -> str:
 
 def _timeline_lines(conn, where: str, params: list) -> list[str]:
     rows = conn.execute(
-        "SELECT i.at, i.kind, i.summary, d.name AS deal FROM crm.interactions i LEFT JOIN crm.deals d ON d.id = i.deal_id "
+        # crm.v_interactions (аудит №9): Claude владельца видит итог встречи с карточки, Claude команды — что видит она.
+        "SELECT i.at, i.kind, i.summary, d.name AS deal FROM crm.v_interactions i LEFT JOIN crm.deals d ON d.id = i.deal_id "
         f"WHERE i.deleted_at IS NULL AND {where} ORDER BY i.at DESC LIMIT %s", [*params, TIMELINE_SHOWN]).fetchall()
     return [f"— {r['at'].astimezone(MSK).strftime('%d.%m')} {KIND_WORD.get(r['kind'], r['kind'])}: {_short(r['summary'], 160)}"
             + (f" · {r['deal']}" if r["deal"] else "") for r in rows] or ["(пусто)"]

@@ -283,7 +283,7 @@ def links(conn, user: str, ref: str) -> list[dict]:
         "SELECT i.id, i.summary, i.project_id, p.name AS project_name, i.deal_id, d.name AS deal_name, i.person_ids, "
         "ARRAY(SELECT pe.name FROM crm.people pe WHERE pe.id = ANY (i.person_ids) ORDER BY pe.name, pe.id) AS people, "
         "ARRAY(SELECT pe.id FROM crm.people pe WHERE pe.id = ANY (i.person_ids) ORDER BY pe.name, pe.id) AS people_ids "
-        "FROM crm.interactions i LEFT JOIN crm.projects p ON p.id = i.project_id LEFT JOIN crm.deals d ON d.id = i.deal_id "
+        "FROM crm.v_interactions i LEFT JOIN crm.projects p ON p.id = i.project_id LEFT JOIN crm.deals d ON d.id = i.deal_id "
         "WHERE i.owner_id = %s AND i.source = 'digest' AND i.deleted_at IS NULL AND split_part(i.source_ref, '#', 1) = %s "
         "ORDER BY i.created_at, i.id", (user, ref)).fetchall()
 

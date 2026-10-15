@@ -570,7 +570,8 @@ def decide(url: str, suggestion: str, decision: str, reason: str | None = None, 
 
 
 def note(url: str, summary: str, kind: str = "note", project: str | None = None, deal: str | None = None,
-         people: list[str] | None = None, next_step: str | None = None, at: str | None = None) -> str:
+         people: list[str] | None = None, next_step: str | None = None, at: str | None = None,
+         private: bool = False) -> str:
     try:
         with db.session(url, USER, via="mcp") as conn:
             pid = find_project(conn, project)["id"] if project else None
@@ -580,8 +581,12 @@ def note(url: str, summary: str, kind: str = "note", project: str | None = None,
         return f"Не записал: {e}"
     data = {"at": at or dt.datetime.now(dt.timezone.utc).isoformat(), "kind": kind, "summary": summary,
             "project_id": pid, "deal_id": did, "person_ids": pids, "next_step": next_step, "source": "manual"}
+    if private:
+        data["private"] = True  # аудит №9: запись «только Саше» — команда клиента её не увидит
     r = store.apply_ops(url, USER, [{"op": "interaction.add", "data": {k: v for k, v in data.items() if v is not None}}], via="mcp")["results"][0]
-    return "Записал в хронологию." if r["ok"] else f"Не записал: {r['error']}"
+    if not r["ok"]:
+        return f"Не записал: {r['error']}"
+    return "Записал в хронологию — только тебе: команда записи не увидит." if private else "Записал в хронологию."
 
 
 # ── Встречи (dela_0010, 12.10.2026) ────────────────────────────────────
@@ -1022,6 +1027,7 @@ def register(mcp, url: str) -> None:
 
     @mcp.tool()
     async def dela_note(summary: str, kind: str = "note", project: str | None = None, deal: str | None = None,
-                        people: list[str] | None = None, next_step: str | None = None, at: str | None = None) -> str:
-        """Запись в хронологию клиента и людей (бывший «Лог взаимодействий» Notion): звонок, встреча, переписка, заметка — не дело. kind: call, meeting, zoom, telegram, email, whatsapp, note, other. at — когда (ISO, пусто — сейчас)."""
-        return await run(dela.note, summary, kind, project, deal, people, next_step, at)
+                        people: list[str] | None = None, next_step: str | None = None, at: str | None = None,
+                        private: bool = False) -> str:
+        """Запись в хронологию клиента и людей (бывший «Лог взаимодействий» Notion): звонок, встреча, переписка, заметка — не дело. kind: call, meeting, zoom, telegram, email, whatsapp, note, other. at — когда (ISO, пусто — сейчас). private=true — «только Саше»: команда клиента запись не увидит (личное, оценки, пересказ переписки); снять потом нельзя. Команда видит работу по проекту — факт касания, а не личные каналы и оценки."""
+        return await run(dela.note, summary, kind, project, deal, people, next_step, at, private)

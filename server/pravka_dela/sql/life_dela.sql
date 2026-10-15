@@ -108,22 +108,37 @@ WHERE crm.sees_org(crm.owner_id(), o.id);
 COMMENT ON VIEW life.orgs IS 'Организации: клиенты, партнёры, фонды, банки.';
 
 DROP VIEW IF EXISTS life.interactions;
+-- Запись встречи (dela_0025, аудит №9): команде — факт, владельцу и Claude — итог и договорённости с карточки встречи
+-- (то же правило, что crm.v_interactions; вид от владельца базы — RLS не действует, поэтому встречи владельца — явно).
+-- team_sees — что из записи видит команда: none (приватная), fact (тут больше, чем в строке), all.
 CREATE VIEW life.interactions AS
-SELECT i.at, (i.at AT TIME ZONE 'Europe/Moscow')::date AS day, i.kind, i.summary, i.next_step, i.duration_min,
+SELECT i.at, (i.at AT TIME ZONE 'Europe/Moscow')::date AS day, i.kind,
+       CASE WHEN mt.title IS NOT NULL THEN mt.summary ELSE i.summary END AS summary,
+       CASE WHEN mt.title IS NOT NULL THEN mt.next_step ELSE i.next_step END AS next_step, i.duration_min,
        p.name AS project, d.name AS deal,
        ARRAY(SELECT coalesce(pe.short, pe.name) FROM crm.people pe WHERE pe.id = ANY (i.person_ids)) AS people,
        i.source, i.source_ref, i.id, i.project_id,
        -- Дайджест Telegram (dela_0018): пункт сводки у человека и клиента — source digest, ссылка на сводку — до «#».
        i.private, CASE WHEN i.source = 'digest' THEN split_part(i.source_ref, '#', 1) END AS digest_ref,
        -- Упоминание (dela_0022): клиент или человек назван в теме сводки, а его чата в окне нет — не контакт.
-       i.mention
+       i.mention,
+       CASE WHEN i.private THEN 'none'
+            WHEN mt.title IS NOT NULL AND (mt.summary IS DISTINCT FROM i.summary OR mt.next_step IS DISTINCT FROM i.next_step)
+            THEN 'fact' ELSE 'all' END AS team_sees
 FROM crm.interactions i
 LEFT JOIN crm.projects p ON p.id = i.project_id
 LEFT JOIN crm.deals d ON d.id = i.deal_id
+LEFT JOIN LATERAL (
+    SELECT t.title, t.summary, t.next_step
+      FROM crm.meetings m CROSS JOIN LATERAL crm.meeting_text(m) t
+     WHERE i.source = 'meeting' AND i.owner_id = crm.owner_id() AND m.owner_id = i.owner_id
+       AND crm.meeting_ref(coalesce(m.url, '/m/' || m.ref)) = crm.meeting_ref(i.source_ref)
+       AND m.started_at >= crm.meeting_touch_from() AND NOT ('touch' = ANY (m.locked))
+     ORDER BY m.chars_n DESC, m.id::text LIMIT 1) mt ON true
 WHERE i.deleted_at IS NULL
   AND (i.owner_id = crm.owner_id()
        OR (NOT i.private AND i.project_id IS NOT NULL AND crm.sees_project(crm.owner_id(), i.project_id)));
-COMMENT ON VIEW life.interactions IS 'Хронология контактов: звонки, встречи, переписка, заметки (бывший «Лог взаимодействий» Notion); source digest — пункты дайджеста Telegram (digest_ref — сводка, целиком — инструмент digest); mention — упоминание (клиента или человека назвали в теме сводки, а его чата в окне не было): в хронологии есть, контактом не считается.';
+COMMENT ON VIEW life.interactions IS 'Хронология контактов: звонки, встречи, переписка, заметки (бывший «Лог взаимодействий» Notion); source digest — пункты дайджеста Telegram (digest_ref — сводка, целиком — инструмент digest); mention — упоминание (клиента или человека назвали в теме сводки, а его чата в окне не было): в хронологии есть, контактом не считается. У записи встречи summary и next_step — итог и договорённости с карточки встречи (их видит только Саша); team_sees — что из записи видит команда: none — ничего (приватная: только Саше), fact — только название встречи, all — то же, что здесь. Приватное и то, чего команда не видит, людям не цитировать.';
 
 CREATE OR REPLACE VIEW life.suggestions AS
 SELECT s.kind, s.status, s.payload ->> 'title' AS title, s.payload, s.source, s.source_ref, s.quote,

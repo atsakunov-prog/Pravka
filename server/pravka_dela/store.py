@@ -112,7 +112,11 @@ PERSON_FIELDS = {
     "note", "archived_at",
 }
 ORG_FIELDS = {"name", "aliases", "kind", "note", "archived_at"}
-INTERACTION_FIELDS = {"at", "kind", "summary", "next_step", "project_id", "deal_id", "person_ids", "source", "source_ref", "duration_min"}
+# private (dela_0018, с 15.10.2026 и в операциях — аудит №9): interaction.add — запись сразу «только мне», interaction.set
+# private: true — «скрыть от команды» (только хозяин записи, снять нельзя — правило базы). Без флага privacy клиенты поле
+# не шлют: старый сервер отверг бы операцию целиком.
+INTERACTION_FIELDS = {"at", "kind", "summary", "next_step", "project_id", "deal_id", "person_ids", "source", "source_ref",
+                      "duration_min", "private"}
 PAYMENT_FIELDS = {"deal_id", "kind", "title", "amount_kop", "due_on", "invoiced_on", "paid_on", "cancelled_at", "note", "sent_to", "sent_via"}
 SUGGESTION_FIELDS = {"kind", "task_id", "payload", "source", "source_ref", "quote", "batch_ref", "batch_title", "dup_of", "for_user", "expires_at"}
 
@@ -535,9 +539,10 @@ SOURCE_HEAD = {"meeting": "Встреча", "telegram": "Telegram", "userbot": "
 
 
 def team_sees_meetings(conn) -> str:
-    """Что команда видит из встреч: fact — только факт (название, когда, с кем), summary — и итог с договорённостями.
-    Пакет dela-p2 (№9) кладёт правило в базу (crm.team_sees_meetings, Свод privacy.team); до него — fact."""
-    return "fact"
+    """Что команда видит из встреч владельца Дел: fact — только факт (название «Клиент: тема», когда, с кем), summary — и
+    итог с договорённостями. Правило одно — в базе (crm.team_sees_meetings, Свод privacy.team, аудит №9): по нему же
+    crm.meeting_touch пишет запись встречи."""
+    return conn.execute("SELECT crm.team_sees_meetings(crm.owner_id()) AS m").fetchone()["m"]
 
 
 def _same_text(a: Any, b: Any) -> bool:
@@ -1417,6 +1422,11 @@ def op_interaction_add(conn, user, op):
     карточке записи нет (личная, без клиента, двойник, убрана владельцем). Карточки нет — как раньше, но вторую живую
     запись той же встречи не заводим (одна на встречу — индекс dela_0021)."""
     d = op.get("data") or {}
+    if isinstance(d, dict) and d.get("source") == "meeting" and d.get("project_id"):
+        # Встреча в личный проект (семья, терапия) — не запись хронологии клиента (аудит №9: «независимо от ответа»).
+        pr = conn.execute("SELECT sphere FROM crm.projects WHERE id::text = %s", (str(d["project_id"]),)).fetchone()
+        if pr and pr["sphere"] == "home":
+            raise OpError("запись встречи в личный проект не ложится: личные встречи в хронологии не живут")
     ref = d.get("source_ref") if isinstance(d, dict) and d.get("source") == "meeting" else None
     if ref:
         m = conn.execute(

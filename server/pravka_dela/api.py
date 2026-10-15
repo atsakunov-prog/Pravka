@@ -538,6 +538,8 @@ def build(cfg: Config) -> Starlette:
         out = {"ok": True, "settings": info.get("settings") or {}, "claude": bool(cfg.anthropic_key), "routes": routes}
         if info.get("role") == "owner":
             out["cost"] = await anyio.to_thread.run_sync(llm.spent, url)
+            # «Что видит команда» (аудит №9): переключатель встреч — Свод privacy.team, правит только владелец.
+            out["privacy"] = {"meetings": await anyio.to_thread.run_sync(_team_sees, url)}
             # «Вид и меню» (этап 7): что сейчас действует, с какой версии Свода, и заводское — для «Вернуть заводское».
             # Сервисы — какие ключи этому вебу знакомы (адреса из настроек компа): редактор не даст поставить чужой.
             ui = await anyio.to_thread.run_sync(kovcheg_ui.effective, url)
@@ -622,6 +624,11 @@ def _user_info(url: str, user: str) -> dict:
         return {"name": user, "role": "member", "clients": "own", "money": False, "settings": {}, "telegram_id": None}
     return {"name": row["name"], "role": row["role"], "clients": row["clients"], "money": row["money"],
             "settings": row["settings"] or {}, "telegram_id": row["telegram_id"]}
+
+
+def _team_sees(url: str) -> str:
+    with db.session(url, "system", via="view") as conn:
+        return store.team_sees_meetings(conn)
 
 
 def task_card(url: str, user: str, ref: str) -> dict | None:
