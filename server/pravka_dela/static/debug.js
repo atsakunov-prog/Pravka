@@ -145,6 +145,10 @@ const DEBUG = (() => {
 
   // ── Снимок экрана данными ─────────────────────────────────────────────
   const txt = (node) => (node ? node.innerText || node.textContent || '' : '').replace(/\s+/g, ' ').trim();
+  /** Текст узла без [skip] внутри: на узком строка «Что не так?» стоит в листе карточки — её «№N · новых» в текст
+   *  карточки не идёт. */
+  const txtBut = (node, skip) => (!node || !skip || !node.contains(skip) ? txt(node)
+    : [...node.children].filter((n) => n !== skip).map((n) => txtBut(n, skip)).filter(Boolean).join(' '));
   /** Заголовок группы без числа, кнопок и пояснения: «Отбить», «Ромашка». */
   function headText(h) {
     if (!h) return '';
@@ -214,7 +218,7 @@ const DEBUG = (() => {
       const doneIn = safe(() => all().filter((k) => k.why_id === t.id && !isOpen(k) && !k.goal).length, 0);
       if (doneIn) f.inside_done = doneIn;
       return { kind: t.goal ? 'goal' : 'task', id: t.id, num: t.num, title: t.title, fields: f,
-        text: cut(txt(document.querySelector('section.card-pane')), 3000) || undefined };
+        text: cut(txtBut(document.querySelector('section.card-pane'), bar), 3000) || undefined };
     }
     const page = () => cut(txt(document.querySelector('main.list')), 4000);
     if (r.kind === 'deal') { const d = S.deals.get(r.id); return { kind: 'deal', id: r.id, title: d && d.name, fields: fieldsOf(d), text: page() }; }
@@ -373,11 +377,23 @@ const DEBUG = (() => {
     count.replaceChildren(...[last ? el('span', {}, '№' + last) : el('span', {}, 'записки'), n ? el('b', {}, ' · новых ' + n) : null].filter(Boolean));
   }
   /** Строка — под шапкой Ковчега, над колонками (и над страницами-двойниками): узел один на всю жизнь вкладки — текст и
-   *  фокус переживают перерисовку. */
+   *  фокус переживают перерисовку.
+   *
+   *  Узкий веб (≤ 900 px) с открытой карточкой (поезд 16.10.2026, проверка вагона 3): карточка там — лист поверх всего
+   *  экрана (`section.card-pane { position: fixed; inset: 0 }` в style.css), и строка под шапкой оказывалась под ним —
+   *  не видна и не нажимается. Закрыть карточку нельзя: снимок потерял бы открытое. Поэтому строка встаёт в сам лист —
+   *  сразу под его шапкой «← назад» (`.card-top`), нет её — первой. Смена ширины перерисовывает страницу сама
+   *  (слушатель NARROW в app.js зовёт `render` по имени — то есть эту обёртку), и строка переезжает обратно. */
   function mount() {
     if (!on()) { if (bar) bar.remove(); return; }
     if (!bar) build();
     paint();
+    const pane = NARROW.matches && (S.cardId || S.draft) ? $app.querySelector('section.card-pane') : null;
+    if (pane) {
+      const head = pane.querySelector('.card-top');
+      if (head) { if (head.nextSibling !== bar) head.after(bar); } else if (pane.firstChild !== bar) pane.prepend(bar);
+      return;
+    }
     const top = S.top && S.top.parentNode === $app ? S.top : null;
     if (top) { if (top.nextSibling !== bar) top.after(bar); } else if ($app.firstChild !== bar) $app.prepend(bar);
   }

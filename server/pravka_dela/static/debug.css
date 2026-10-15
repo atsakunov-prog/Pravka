@@ -32,6 +32,9 @@
   .dbg-bar { gap: 5px; padding: 4px 10px; }
   .dbg-bar input { font-size: 15px; } /* меньше 16 px — iOS увеличивал бы страницу при фокусе; 15 — как у полей Дел */
   .dbg-n b { display: none; }
+  /* Открытая карточка на узком — лист поверх всего экрана: строка стоит в нём под «← назад» (debug.js, mount) и, как
+     шапка листа, во всю его ширину — поверх полей карточки. */
+  section.card-pane .card > .dbg-bar { margin: 0 -16px; }
 }
 
 /* Страница #/debug */
