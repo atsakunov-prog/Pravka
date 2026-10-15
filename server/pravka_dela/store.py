@@ -23,7 +23,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from . import db, digest, insights, krug, meetings, people, phone, place, spend, twins, where, zasechka
+from . import db, digest, focus, insights, krug, meetings, people, phone, place, spend, twins, where, zasechka
 
 log = logging.getLogger("dela.store")
 
@@ -44,7 +44,10 @@ TASK_FIELDS = {
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
             "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
-            "privacy"]
+            "privacy", "context_index"]
+# «context_index» — контекст по делу (15.10.2026, аудит №13, №67; focus.py): вид context_index — кто связан с делами
+# (related) и ключи имён людей и проектов с таблицами матчера (контракт dela-context.json). По флагу служба встреч,
+# дайджест и телефон кладут в промпт связанных и названных, а не весь справочник; без флага — как раньше (все люди).
 # «privacy» — закон приватности (15.10.2026, аудит №8–11, правило 26; dela_0024–0028): comment.add и interaction.add/set
 # принимают private (комментарий «только мне», запись «скрыть от команды»); операции insight.add/set/delete и вид insights
 # («Только тебе»), поля insights у видов client, deal, dossier, meeting; строки хронологии — team_sees, итог встречи
@@ -2051,6 +2054,8 @@ phone.register(HANDLERS, VIEWS, OpError)
 spend.register(HANDLERS, VIEWS, OpError)
 # «Только тебе» (dela_0027, аудит №8–11; место этапа 6): наблюдения только владельцу — insight.*, вид insights.
 insights.register(HANDLERS, VIEWS, OpError)
+# Контекст по делу (аудит №13): вид context_index — связанные люди и ключи имён (focus.py).
+focus.register(VIEWS)
 
 
 def view(url: str, user: str, name: str, **params) -> dict:
