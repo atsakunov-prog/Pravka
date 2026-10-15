@@ -8,7 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Режим отладки Дел (15.10.2026, docs/dela-phone-debug.md, контракт — server/contract/dela-debug.json).
+ * Режим отладки Дел (15.10.2026, docs/dela-phone-24.md, контракт — server/contract/dela-debug.json).
  *
  * Владелец: «Давай сделаем в делах накопление багов. Прямо такой debug mode. Наверху где-то прямо текстбокс в
  * телефоне и в компе. И туда я просто накидываю баги, причём они идут с тем, что у меня сейчас на экране». Записка —

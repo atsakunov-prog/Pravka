@@ -482,7 +482,7 @@ class PravkaApp : Application() {
         }
     }
 
-    /** Режим отладки Дел: записки о багах с экраном данными (docs/dela-phone-debug.md, `data/DelaDebugSync.kt`). */
+    /** Режим отладки Дел: записки о багах с экраном данными (docs/dela-phone-24.md, `data/DelaDebugSync.kt`). */
     internal val delaDebug by lazy { ru.zf.pravka.data.DelaDebugSync(this) { eventLog.add(it) } }
 
     /** Команды Засечки из веба Дел: «Начать», «Стоп», «Поправить» с компьютера применяет телефон. */

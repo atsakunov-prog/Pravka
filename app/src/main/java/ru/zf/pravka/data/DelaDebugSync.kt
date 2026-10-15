@@ -12,7 +12,7 @@ import ru.zf.pravka.core.Dela
 import ru.zf.pravka.core.DelaDebug
 
 /**
- * Режим отладки Дел на телефоне (15.10.2026, docs/dela-phone-debug.md): записка о баге — операцией `debug.add` в
+ * Режим отладки Дел на телефоне (15.10.2026, docs/dela-phone-24.md): записка о баге — операцией `debug.add` в
  * очередь Дел (без сети ляжет потом; op_id и id записки защищают от повтора), список записок — видом `debug` сервера.
  * Правила снимка и операции — `core/DelaDebug.kt`, экран — `DelaDebugUi.kt`.
  *
