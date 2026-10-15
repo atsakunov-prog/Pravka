@@ -81,7 +81,9 @@ def test_me_for_narrow_token_is_look_only(dela, client):
         look = body["look"]
         assert "nav" not in look, name          # адреса сервисов — только владельцу в вебе
         assert isinstance(look["pages"], list)  # «Дом» берёт страницы-двойники отсюда
-        assert {"tokens", "menu", "pages", "domain", "icon", "icon_png"} <= set(look), (name, set(look))
+        assert {"tokens", "pages", "domain", "icon", "icon_png"} <= set(look), (name, set(look))
+        # Меню Ковчега — направления Круга владельца: узким не отдаём («Дом» читает его видом svod ui.*).
+        assert "menu" not in look, name
         assert body["kind"] == "service" and "people" in body["features"]
     # Владелец своим телефоном видит всё, как раньше.
     full = client.get("/api/me", headers=_h(dela, "телефон", kind="device")).json()

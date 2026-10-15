@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -61,6 +62,7 @@ def words(s: Any) -> list[str]:
     return [w for w in re.split(r"[^0-9a-zа-я]+", norm(s)) if w]
 
 
+@lru_cache(maxsize=65536)
 def stem(w: str) -> str:
     """Грубая основа для падежей: «соколовым» → «соколов». Короткие слова не режем."""
     for e in ENDINGS:
@@ -98,21 +100,11 @@ def translit(s: str) -> str:
     return "".join(out)
 
 
-def _fem(w: str) -> bool:
-    return w[-1:] in ("а", "я")
-
-
+@lru_cache(maxsize=65536)
 def same(a: str, b: str) -> bool:
     """Одно слово в разных падежах: основы равны или одна продолжает другую на 1–2 буквы
-    («евген» и «евгени» из «Евгений» и «Евгением»).
-
-    Род (аудит 15.10.2026, №22): два разных имени в именительном — женское и мужское («Евгения» и «Евгений»,
-    «Александра» и «Александр», «Валентина» и «Валентин») — не одно слово, хотя основа у них общая: иначе «Евгения
-    Соколова» уверенно находила карточку «Евгений Соколов». Падежные формы («Евгением», «Евгении») в справочнике имён
-    не значатся и сверяются основой, как раньше; варианты одного рода («Наталья» и «Наталия») — тоже одно имя."""
+    («евген» и «евгени» из «Евгений» и «Евгением»). Только морфология: род — отдельно (_gender_clash)."""
     na, nb = norm(a), norm(b)
-    if na != nb and na in FIRST_NAMES and nb in FIRST_NAMES and _fem(na) != _fem(nb):
-        return False
     sa, sb = (stem(x).replace("ь", "").replace("ъ", "") for x in (na, nb))
     if sa == sb:
         return len(sa) >= 3
@@ -123,26 +115,98 @@ def same(a: str, b: str) -> bool:
 FIRST_STEMS.update(stem(n) for n in FIRST_NAMES)
 
 
-def first_forms(w: str) -> set[str]:
-    """Имя и его полные формы: «женя» → {женя, евгений, евгения}; «женей» — тоже."""
+@lru_cache(maxsize=65536)
+def first_forms(w: str) -> frozenset[str]:
+    """Имя и его полные формы: «женя» → {женя, евгений, евгения}; «женей» — тоже.
+
+    Кэш (15.10.2026): who для имени одним словом сверяет его с каждой карточкой через все уменьшительные — на 450
+    карточках это около секунды на вызов, а форма имени от карточки не зависит."""
     w = norm(w)
     out = {w}
     for d, full in DIMINUTIVE.items():
         if same(w, d):
             out.add(d)
             out.update(full)
-    return out
+    return frozenset(out)
 
 
+@lru_cache(maxsize=65536)
 def same_first(a: str, b: str) -> bool:
     return any(same(x, y) for x in first_forms(a) for y in first_forms(b))
 
 
+@lru_cache(maxsize=65536)
 def is_first(w: str) -> bool:
     """Слово — имя, а не фамилия. Строго по основе: «Петрова» — не «Пётр», «Иванов» — не «Иван»
     (фамилии от имён часты, нестрогое сравнение принимало их за имена и теряло фамилию)."""
     w = norm(w)
     return w in FIRST_NAMES or stem(w) in FIRST_STEMS
+
+
+# ── Род (аудит 15.10.2026, №22) ─────────────────────────────────────────
+# «Евгения Соколова» уверенно находила карточку «Евгений Соколов»: основа у имён общая. Но запрет («разные имена»)
+# был слишком строг: «Александра», «Евгения», «Валентина» — это ещё и родительный и винительный от Александр, Евгений,
+# Валентин («у Александра Петрова»), и такие запросы перестали находить человека вовсе. Поэтому род — мягко: имя или
+# фамилия запроса другого рода, чем у карточки, — балл не выше GENDER_CAP («похоже»): карточка видна кандидатом, но
+# сама не ставится. Род имени — по справочнику полных форм (не по окончанию: «Илья» и «Валера» — мужские, «Любовь» —
+# женское), уменьшительное — по своим полным формам («Саша», «Женя», «Валя» — оба рода, не судим).
+MALE_FULL = frozenset({
+    "александр", "евгений", "валентин", "вячеслав", "святослав", "владислав", "михаил", "дмитрий", "сергей", "борис",
+    "роман", "алексей", "николай", "владимир", "павел", "петр", "константин", "андрей", "виктор", "георгий", "игорь",
+    "станислав", "анатолий", "валерий", "артем", "максим", "геннадий", "федор", "илья", "иван", "григорий", "василий",
+    "вениамин", "лев", "семен", "арсений", "вадим", "эдуард", "антон", "тимофей", "тимур", "олег", "юрий", "иосиф",
+    "яков"})
+FEMALE_FULL = frozenset({
+    "александра", "евгения", "валентина", "елена", "мария", "екатерина", "наталья", "наталия", "татьяна", "ольга",
+    "юлия", "анна", "ирина", "светлана", "валерия", "галина", "любовь", "надежда", "анастасия", "дарья", "ксения",
+    "виктория", "софья", "софия", "полина", "алена"})
+GENDER_CAP = 0.8  # ниже SURE: кандидат, но не уверенно
+
+# Фамилия: какого рода форма. У карточки — именительный; у запроса — любой падеж, поэтому только формы одного рода:
+# «Соколовой» — только женская, «Соколовым», «Соколове» — только мужская; «Соколова» и «Соколову» — обоих (родительный
+# и дательный мужской, именительный и винительный женской), по ним не судим.
+SURNAME_NOM = ((re.compile(r"(ов|ев|ин|ын|ский|цкий)$"), "m"), (re.compile(r"(ова|ева|ина|ына|ская|цкая)$"), "f"))
+SURNAME_ANY = ((re.compile(r"(ов|ев|ин|ын|ский|цкий)$"), "m"), (re.compile(r"(ов|ев|ин|ын)(ым|е)$"), "m"),
+               (re.compile(r"(ск|цк)(ого|ому|им|ом)$"), "m"),
+               (re.compile(r"(ов|ев|ин|ын)ой$"), "f"), (re.compile(r"(ск|цк)ую$"), "f"))
+
+
+@lru_cache(maxsize=4096)
+def name_gender(w: str) -> str | None:
+    """Род имени в именительном по справочнику: «m», «f» или None (не имя, оба рода, косвенный падеж)."""
+    w = norm(w)
+    if w in MALE_FULL:
+        return "m"
+    if w in FEMALE_FULL:
+        return "f"
+    full = DIMINUTIVE.get(w) or ()
+    g = {"m" if x in MALE_FULL else "f" if x in FEMALE_FULL else "?" for x in full}
+    return next(iter(g)) if len(g) == 1 and "?" not in g else None
+
+
+def _surname_gender(w: str, nominative: bool) -> str | None:
+    if len(w) < 4:
+        return None
+    for rx, g in SURNAME_NOM if nominative else SURNAME_ANY:
+        if rx.search(w):
+            return g
+    return None
+
+
+def _gender_clash(qw: list[str], nw: list[str]) -> bool:
+    """Совпавшие слова запроса и карточки — разного рода: имя («Евгения» и «Евгений», «Валерия» и «Валерий» через
+    «Валеру») или фамилия («Соколовой» и «Соколов»)."""
+    for a in qw:
+        for b in nw:
+            if is_first(a) or is_first(b):
+                ga, gb = name_gender(a), name_gender(b)
+                if ga and gb and ga != gb and a != b and same_first(a, b):
+                    return True
+            else:
+                ga, gb = _surname_gender(a, False), _surname_gender(b, True)
+                if ga and gb and ga != gb and same(a, b):
+                    return True
+    return False
 
 
 def _first_only(q: str) -> bool:
@@ -227,30 +291,39 @@ def _names_score(q: str, raw: list) -> float:
         nw = words(n)
         if not nw:
             continue
-        if len(qw) == len(nw) and all(same(a, b) for a, b in zip(qw, nw)):
-            best = max(best, 0.95)
-            continue
-        if len(qw) >= 2 and len(nw) >= 2:
-            for qf, ql in ((qw[0], qw[-1]), (qw[-1], qw[0])):
-                for nf, nl in ((nw[0], nw[-1]), (nw[-1], nw[0])):
-                    # Инициал вместо имени или фамилии — «a.komarov», «Dmitry L» из Zoom и почты.
-                    if len(qf) == 1 and nf.startswith(qf) and not is_first(ql) and same(ql, nl):
-                        best = max(best, 0.85)
-                        continue
-                    if len(ql) == 1 and nl.startswith(ql) and is_first(nf) and same_first(qf, nf):
-                        best = max(best, 0.85)
-                        continue
-                    if is_first(ql) or not same(ql, nl):
-                        continue
-                    best = max(best, 0.9 if same_first(qf, nf) else 0.5)
-        elif len(qw) == 1:
-            w = qw[0]
-            if not is_first(w) and any(same(w, b) for b in nw if not is_first(b)):
-                best = max(best, 0.6)
-            elif len(nw) == 1 and same_first(w, nw[0]):
-                best = max(best, 0.7)  # короткое имя человека («Женя») — само по себе имя
-            elif same_first(w, nw[0]):
-                best = max(best, 0.35)
+        s = _word_score(qw, nw)
+        if s > GENDER_CAP and _gender_clash(qw, nw):
+            s = GENDER_CAP  # другой род — «похоже», не уверенно (аудит 15.10.2026, №22)
+        best = max(best, s)
+    return best
+
+
+def _word_score(qw: list[str], nw: list[str]) -> float:
+    """Похожесть слов запроса на слова одного имени карточки (без рода)."""
+    if len(qw) == len(nw) and all(same(a, b) for a, b in zip(qw, nw)):
+        return 0.95
+    best = 0.0
+    if len(qw) >= 2 and len(nw) >= 2:
+        for qf, ql in ((qw[0], qw[-1]), (qw[-1], qw[0])):
+            for nf, nl in ((nw[0], nw[-1]), (nw[-1], nw[0])):
+                # Инициал вместо имени или фамилии — «a.komarov», «Dmitry L» из Zoom и почты.
+                if len(qf) == 1 and nf.startswith(qf) and not is_first(ql) and same(ql, nl):
+                    best = max(best, 0.85)
+                    continue
+                if len(ql) == 1 and nl.startswith(ql) and is_first(nf) and same_first(qf, nf):
+                    best = max(best, 0.85)
+                    continue
+                if is_first(ql) or not same(ql, nl):
+                    continue
+                best = max(best, 0.9 if same_first(qf, nf) else 0.5)
+    elif len(qw) == 1:
+        w = qw[0]
+        if not is_first(w) and any(same(w, b) for b in nw if not is_first(b)):
+            best = 0.6
+        elif len(nw) == 1 and same_first(w, nw[0]):
+            best = 0.7  # короткое имя человека («Женя») — само по себе имя
+        elif same_first(w, nw[0]):
+            best = 0.35
     return best
 
 
@@ -306,8 +379,9 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
                     s -= 0.15
         if s > 0.3:
             scored.append((round(s, 2), how, alias_only, p))
-    # При равных баллах своё имя — впереди чужого другого имени.
-    scored.sort(key=lambda t: (-t[0], t[2]))
+    # При равных баллах своё имя — впереди чужого другого имени; дальше по имени и id — порядок не зависит от того, как
+    # база отдала строки (кнопки «Кто это — X или Y?» не должны прыгать от запроса к запросу).
+    scored.sort(key=lambda t: (-t[0], t[2], norm(t[3]["name"]), str(t[3]["id"])))
     cands = [
         {"id": p["id"], "name": p["name"], "short": p["short"], "org": p["org_name"], "role": p["role"],
          "user_id": p["user_id"], "score": s, "how": how}
@@ -326,6 +400,23 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
 ADD_ARRAYS = ("aliases", "phones", "emails")
 
 
+def own_aliases(conn, pid, aliases: list, ignore: tuple = ()) -> tuple[list[str], list[dict]]:
+    """Другие имена, которые можно записать карточке pid (None — новой): без имён и коротких имён других живых
+    карточек. Ответ — (что писать, skipped [{alias, person_id, name}]). Одно правило для person.add и новой карточки
+    «Людей сами» и встреч (аудит 15.10.2026, №1)."""
+    aliases = [str(x).strip() for x in aliases or [] if str(x or "").strip()]
+    others = _owned_names(conn, pid, aliases, ignore)
+    keep, skipped = [], []
+    for x in aliases:
+        k = norm(x)
+        if k in others:
+            if all(norm(s["alias"]) != k for s in skipped):
+                skipped.append({"alias": x, "person_id": others[k]["id"], "name": others[k]["name"]})
+            continue
+        keep.append(x)
+    return keep, skipped
+
+
 def _owned_names(conn, pid, names: list[str], ignore: tuple = ()) -> dict[str, dict]:
     """Какие из names — имя или короткое имя ДРУГОЙ живой карточки (не архив, не слитая): {норма: та карточка}."""
     keys = sorted({norm(x) for x in names if norm(x)})
@@ -333,7 +424,7 @@ def _owned_names(conn, pid, names: list[str], ignore: tuple = ()) -> dict[str, d
         return {}
     rows = conn.execute(
         "SELECT id, name, short FROM crm.people WHERE archived_at IS NULL AND merged_into IS NULL "
-        "AND id <> %s AND NOT (id = ANY(%s::uuid[])) "
+        "AND id IS DISTINCT FROM %s::uuid AND NOT (id = ANY(%s::uuid[])) "
         "AND (replace(crm.norm(name), 'ё', 'е') = ANY(%s) OR replace(crm.norm(short), 'ё', 'е') = ANY(%s)) "
         "ORDER BY created_at, id",
         (pid, [str(x) for x in ignore], keys, keys),
@@ -451,8 +542,8 @@ def op_person_merge(conn, user, op, error):
         "phones": a["phones"] or [], "emails": a["emails"] or [],
         "telegram_id": a["telegram_id"], "telegram_username": a["telegram_username"],
     }
-    op_person_add(conn, user, {"id": into, "add": add}, error, ignore=(dup,))
-    fill = {k: a[k] for k in ("org_id", "role", "birth_day", "birth_month", "birth_year", "note", "user_id")
+    skipped = op_person_add(conn, user, {"id": into, "add": add}, error, ignore=(dup,))["skipped"]
+    fill ={k: a[k] for k in ("org_id", "role", "birth_day", "birth_month", "birth_year", "note", "user_id")
             if a[k] is not None and b[k] is None}
     if a["user_id"]:
         # user_id уникален: снять с дубля до того, как поставить живому.
@@ -465,7 +556,8 @@ def op_person_merge(conn, user, op, error):
         "UPDATE crm.people SET merged_into = %s, archived_at = coalesce(archived_at, now()) WHERE id = %s", (into, dup)
     )
     row = conn.execute("SELECT * FROM crm.people WHERE id = %s", (into,)).fetchone()
-    return {"row": row, "moved": moved}
+    # Имена дубля, которые так зовут кого-то ещё, живой не дописаны (№1) — сказать, а не потерять молча.
+    return {"row": row, "moved": moved, "skipped": skipped}
 
 
 # ── Свод ────────────────────────────────────────────────────────────────

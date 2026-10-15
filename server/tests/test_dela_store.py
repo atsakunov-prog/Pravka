@@ -655,4 +655,41 @@ def test_held_says_why_it_waits(dela, caplog):
     assert unknown["status"] == "pending" and unknown["payload"]["held"] == "не знаю проект «Неведомый проект»"
     # Автоматика спросила сама, имена узнались — причины нет: вопрос и есть причина.
     asked = _sug(dela, "Модель", {"ask": "Это Гамма?"}, auto=False)["suggestion"]
-    assert "held" not in asked["payload"]
+    assert asked["payload"]["held"] == ""  # пусто — сервер посмотрел имена, всё узнано (веб берёт его вердикт)
+
+
+def test_weak_first_name_is_not_a_pick_question(dela):
+    """«Маша» при пяти и больше Мариях с фамилией — совпало одно имя с полным (0,35): это «не знаю человека», а не
+    вопрос со случайными кнопками; «Да» — дело без человека, как раньше (проверка 15.10.2026)."""
+    for k, fam in enumerate(("Примерова", "Пробная", "Учебная", "Тестова", "Образцова", "Опытная")):
+        _person(dela, f"Мария {fam}")
+    s = _sug(dela, "Маша: прислать договор", {"person_name": "Маша"}, auto=False)["suggestion"]
+    p = s["payload"]
+    assert "pick" not in p and "options" not in p and "ask" not in p, p
+    assert p["held"] == "не знаю человека «Маша»", p
+    t = ops(dela, "sasha", {"op": "suggestion.decide", "id": s["id"], "decision": "accept"})[0]
+    assert t["ok"] and t["task"]["person_id"] is None, t
+
+
+def test_more_namesakes_than_buttons_ask_in_words(dela):
+    """Тёзок своим именем больше, чем кнопок (WHO_PICK_MAX): вопрос словами со всеми в счёте, без кнопок (нужного среди
+    трёх могло не быть, а «Поправить» у кнопок веб прячет); «Да» без человека — отказ, «Поправить» с человеком — да."""
+    ids = [_person(dela, f"Иван {fam}", short="Ваня") for fam in ("Тестов", "Пробный", "Учебный", "Опытный", "Образцов")]
+    s = _sug(dela, "Ваня: созвон", {"person_name": "Ваня"}, auto=False)["suggestion"]
+    p = s["payload"]
+    assert "pick" not in p and "options" not in p, p
+    assert p["ask"].startswith("Кто это — «Ваня»: ") and p["ask"].endswith(" или ещё 2?"), p["ask"]
+    assert p["held"].startswith("пятеро с именем «Ваня»: ") and p["held"].endswith(" и ещё 2"), p["held"]
+    no = ops(dela, "sasha", {"op": "suggestion.decide", "id": s["id"], "decision": "accept"})[0]
+    assert not no["ok"] and "«Поправить»" in no["error"], no
+    yes = ops(dela, "sasha", {"op": "suggestion.decide", "id": s["id"], "decision": "accept", "set": {"person_id": ids[4]}})[0]
+    assert yes["ok"] and str(yes["task"]["person_id"]) == ids[4], yes
+
+
+def test_surname_namesakes_are_a_real_question(dela):
+    """Одна фамилия у двоих (0,6 — настоящее совпадение): вопрос кнопками, а не «не знаю»."""
+    a = _person(dela, "Иван Петров")
+    b = _person(dela, "Анна Петрова")
+    p = _sug(dela, "Петров: счёт", {"person_name": "Петров"}, auto=False)["suggestion"]["payload"]
+    assert p["pick"] and {o.get("person_id") for o in p["options"]} >= {a, b}, p
+    assert p["held"].startswith("на «Петров» похожи: "), p["held"]

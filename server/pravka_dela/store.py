@@ -612,11 +612,18 @@ def op_suggestion_create(conn, user, op):
     # payload.held («двое с именем «Ваня»: …», «не знаю проект «Х»», «встреча старше 3 дней»), а у двусмысленного
     # человека — вопрос «Кто это — X или Y?» кнопками (_name_hold).
     kind = data.get("kind", "create")
-    problems = _name_hold(conn, kind, payload) if isinstance(payload, dict) else None
-    reason, held = _auto(conn, user, {**data, "kind": kind, "payload": payload if isinstance(payload, dict) else {}}, problems)
+    cache: dict = {}
+    problems = _name_hold(conn, kind, payload, cache) if isinstance(payload, dict) else None
+    reason, held = _auto(conn, user, {**data, "kind": kind, "payload": payload if isinstance(payload, dict) else {}},
+                         problems, cache)
     if isinstance(payload, dict):
         if held:
             payload["held"] = held
+        elif kind in ("create", "update"):
+            # Пустая строка — «сервер посмотрел имена, всё узнано»: веб берёт вердикт сервера, а не своё точное сравнение
+            # («Женя Соколов» сервер узнал уверенным who — веб не должен спрашивать «Кто это»). Нет ключа — предложение
+            # старого сервера, веб судит сам, как раньше.
+            payload["held"] = ""
         data["payload"] = Jsonb(payload)
     row = _insert(conn, "tasks.suggestions", data)
     if reason:
@@ -637,15 +644,32 @@ def op_suggestion_create(conn, user, op):
 
 # ── «Кто это — X или Y?» и почему ждёт (аудит 15.10.2026, №1) ───────────────
 
-_HOW_MANY = {2: "двое", 3: "трое", 4: "четверо", 5: "пятеро"}
+_HOW_MANY = {2: "двое", 3: "трое", 4: "четверо", 5: "пятеро", 6: "шестеро", 7: "семеро"}
 WHO_PICK_MAX = 3  # кандидатов кнопками; четвёртая — «Без человека» (OPTIONS_MAX)
+# Кандидат вопроса «Кто это — X или Y?» — только с настоящим совпадением: своё или другое имя, короткое имя, имя и
+# фамилия, одна фамилия (0,6 и выше — как порог вопроса о человеке со встречи, контракт §3.3). «Маша» против «Марии
+# Петровой» (0,35 — совпало одно имя с полным) — не выбор, а «не знаю человека»: иначе любое имя одним словом при двух
+# Мариях в справочнике становилось вопросом со случайными кнопками, а «Да» — отказом (проверка 15.10.2026).
+WHO_ASK_MIN = 0.6
+WHO_ALL = 1000  # соперников — всех: «8 с именем …» при обрезке limit врало
 
 
-def _person_rivals(conn, name: str) -> list[dict]:
-    """Двусмысленное имя: кандидаты people.who рядом с лучшим (ближе GAP), когда уверенного нет. Меньше двух — []:
-    одно слабое совпадение — это «не знаю», а не выбор."""
-    w = people.who(conn, q=name, limit=8)
-    c = w["candidates"]
+def _person_who(conn, name: str, cache: dict | None = None) -> dict:
+    """people.who по имени — один раз на операцию: на сотнях карточек вызов стоит около секунды, а предложение спрашивает
+    одно имя в _names, _person_rivals и _who_guard."""
+    if cache is not None and name in cache:
+        return cache[name]
+    w = people.who(conn, q=name, limit=WHO_ALL)
+    if cache is not None:
+        cache[name] = w
+    return w
+
+
+def _person_rivals(conn, name: str, cache: dict | None = None) -> list[dict]:
+    """Двусмысленное имя: кандидаты people.who не слабее WHO_ASK_MIN и рядом с лучшим (ближе GAP), когда уверенного нет.
+    Меньше двух — []: одно совпадение или только слабые — это «не знаю», а не выбор."""
+    w = _person_who(conn, name, cache)
+    c = [x for x in w["candidates"] if x["score"] >= WHO_ASK_MIN]
     if w["sure"] or len(c) < 2:
         return []
     close = [x for x in c if c[0]["score"] - x["score"] < people.GAP]
@@ -663,20 +687,25 @@ def _or_words(names: list[str]) -> str:
 
 def _who_ask(name: str, rivals: list[dict]) -> str:
     names = [str(c["name"]) for c in rivals[:WHO_PICK_MAX]]
+    more = len(rivals) - len(names)
+    if more > 0:
+        return f"Кто это — «{name}»: {', '.join(names)} или ещё {more}?"
     return f"Кто это — «{name}»: {_or_words(names)}?" if names else f"Кто это — «{name}»?"
 
 
 def _many_held(name: str, rivals: list[dict]) -> str:
     labels = [_cand_label(c) for c in rivals[:WHO_PICK_MAX]]
     more = len(rivals) - len(labels)
-    return (f"{_HOW_MANY.get(len(rivals), str(len(rivals)))} с именем «{name}»: {', '.join(labels)}"
-            + (f" и ещё {more}" if more > 0 else ""))
+    tail = ", ".join(labels) + (f" и ещё {more}" if more > 0 else "")
+    if all(c.get("how") in ("имя", "другое имя") for c in rivals):
+        return f"{_HOW_MANY.get(len(rivals), str(len(rivals)))} с именем «{name}»: {tail}"
+    return f"на «{name}» похожи: {tail}"
 
 
-def _name_state(conn, payload: dict) -> tuple[list[str], list[dict]]:
+def _name_state(conn, payload: dict, cache: dict | None = None) -> tuple[list[str], list[dict]]:
     """Что с именами предложения: узнан — молчим; не знаю, двое и больше — строкой. Ответ — (строки, кандидаты
     двусмысленного человека). Узнаёт тем же _names, что и принятие: что здесь «узнан», то при «Да» и встанет."""
-    ids = _names(conn, payload)
+    ids = _names(conn, payload, cache)
     out: list[str] = []
     rivals: list[dict] = []
     pn = payload.get("project_name")
@@ -688,7 +717,7 @@ def _name_state(conn, payload: dict) -> tuple[list[str], list[dict]]:
                    else f"не знаю проект «{pn}»")
     name = payload.get("person_name")
     if name and not payload.get("person_id") and "person_id" not in ids:
-        rivals = _person_rivals(conn, name)
+        rivals = _person_rivals(conn, name, cache)
         out.append(_many_held(name, rivals) if rivals else f"не знаю человека «{name}»")
     return out, rivals
 
@@ -710,18 +739,20 @@ def _person_options(kind: str, rivals: list[dict]) -> list[dict]:
     return out
 
 
-def _name_hold(conn, kind: str, payload: dict) -> list[str]:
+def _name_hold(conn, kind: str, payload: dict, cache: dict | None = None) -> list[str]:
     """Имена предложения «завести» или «уточнить» до записи: что не узналось — строками (уйдут в held), а у
     двусмысленного человека, если модель сама не спросила, — вопрос «Кто это — X или Y?» с кандидатами кнопками и
     pick (ответ — только кнопкой: «Да» оставило бы дело без человека). Модель спросила своё (ask или options) — её
-    вопрос не трогаем."""
+    вопрос не трогаем. Кандидатов больше, чем кнопок (WHO_PICK_MAX), — только вопрос словами, без кнопок: нужного
+    человека среди трёх случайных могло не оказаться, а «Поправить» у вопроса с кнопками веб прячет."""
     if kind not in ("create", "update"):
         return []
-    problems, rivals = _name_state(conn, payload)
+    problems, rivals = _name_state(conn, payload, cache)
     if rivals and not payload.get("ask") and not payload.get("options"):
-        payload["options"] = _person_options(kind, rivals)
-        payload["pick"] = True
         payload["ask"] = _who_ask(payload["person_name"], rivals)
+        if len(rivals) <= WHO_PICK_MAX:
+            payload["options"] = _person_options(kind, rivals)
+            payload["pick"] = True
     return problems
 
 
@@ -733,7 +764,7 @@ AUTO_PERSON_REASON = "человек заведён сам"
 AUTO_REASONS = (AUTO_CLOSE_REASON, AUTO_UPDATE_REASON, AUTO_CREATE_REASON, AUTO_PERSON_REASON)
 
 
-def _auto(conn, user, s: dict, problems: list[str] | None = None) -> tuple[str | None, str | None]:
+def _auto(conn, user, s: dict, problems: list[str] | None = None, cache: dict | None = None) -> tuple[str | None, str | None]:
     """Завести, закрыть и уточнить дело по свежей встрече или переписке автоматика может сама.
     Возвращает (причина решения, None) или (None, почему ждёт) — ждёт человека в «Новом» («Подскажи»). Почему —
     строкой held (аудит 15.10.2026, №1: до того сервер молчал, и вопрос висел без причины): имена, которые не узнались
@@ -765,7 +796,7 @@ def _auto(conn, user, s: dict, problems: list[str] | None = None) -> tuple[str |
         return None, None
     # Закрытию имена не нужны (дело уже есть); «завести» и «уточнить» без однозначного человека и проекта — мяч ушёл бы
     # «никому».
-    why = [] if kind == "close" else (problems if problems is not None else _name_state(conn, p)[0])
+    why = [] if kind == "close" else (problems if problems is not None else _name_state(conn, p, cache)[0])
     why = list(why)
     if p.get("auto") is True:
         where, of = ("встреча", "встречи") if s.get("source") == "meeting" else ("переписка", "переписки")
@@ -842,11 +873,12 @@ def op_suggestion_decide(conn, user, op):
     fix_raw = dict(op.get("set") or {})
     fix_kr = _krug_split(fix_raw)  # «Подскажи» разборщика Круга: направления и «Зачем» — поправкой при «Да»
     fix = {**_pick(fix_raw, TASK_FIELDS, "дело"), **fix_kr}
-    held = _who_guard(conn, s, payload, fix, op.get("option") is not None)
+    cache: dict = {}
+    held = _who_guard(conn, s, payload, fix, op.get("option") is not None, cache)
     task, back = None, {}
     if s["kind"] == "create":
         fields = {k: v for k, v in payload.items() if k in TASK_FIELDS | KRUG_FIELDS}
-        fields.update(_names(conn, payload))
+        fields.update(_names(conn, payload, cache))
         fields.update(fix)
         fields.setdefault("source", _task_source(s["source"]))
         fields.setdefault("source_ref", s["source_ref"])
@@ -856,7 +888,7 @@ def op_suggestion_decide(conn, user, op):
                 "task_id": task["id"], "text": f"Человек не поставлен: {held}"}})["comment"]["id"]}
     elif s["kind"] in ("close", "update"):
         fields = {k: v for k, v in payload.items() if k in TASK_FIELDS | KRUG_FIELDS}
-        fields.update(_names(conn, payload))  # «уточнить»: мяч перешёл к другому человеку — по имени
+        fields.update(_names(conn, payload, cache))  # «уточнить»: мяч перешёл к другому человеку — по имени
         if s["kind"] == "close":
             fields.setdefault("status", "done")
         fields.update(fix)
@@ -939,7 +971,9 @@ def _person_sug(conn, user, s: dict, payload: dict) -> dict:
         old = res["row"]["name"]
         if payload.get("rename") and d.get("name") and d["name"] != old:
             person_set(conn, user, {"id": pid, "set": {"name": d["name"]}})
-            people.op_person_add(conn, user, {"id": pid, "add": {"aliases": [old]}}, OpError)
+            more = people.op_person_add(conn, user, {"id": pid, "add": {"aliases": [old]}}, OpError)["skipped"]
+            if more:
+                out["skipped"] = [*(out.get("skipped") or []), *more]
             out["was_name"] = old
         return out
     if not d.get("name"):
@@ -947,10 +981,22 @@ def _person_sug(conn, user, s: dict, payload: dict) -> dict:
     where = {"telegram": "Telegram", "contacts": "телефонной книжки", "meeting": "встречи"}.get(s.get("source"), s.get("source"))
     org_id, org_made = _org_for(conn, user, payload.get("org_name"), payload.get("org_kind"), f"Заведена сама из {where}")
     data = {k: d[k] for k in PERSON_SUG_NEW if d.get(k) not in (None, "", [])}
+    skipped: list = []
+    if data.get("aliases"):
+        # Новая карточка — то же правило, что person.add (№1): имя или короткое имя другой живой карточки другим именем
+        # не пишем, иначе это имя перестанет узнаваться у обоих.
+        keep, skipped = people.own_aliases(conn, None, data["aliases"] if isinstance(data["aliases"], list) else [data["aliases"]])
+        if keep:
+            data["aliases"] = keep
+        else:
+            data.pop("aliases")
     if org_id:
         data["org_id"] = org_id
     row = person_create(conn, user, {"data": data})["row"]
-    return {"person_id": row["id"], "created": True, "org_id": org_id, "org_created": org_made}
+    out = {"person_id": row["id"], "created": True, "org_id": org_id, "org_created": org_made}
+    if skipped:
+        out["skipped"] = skipped
+    return out
 
 
 def _trace(conn, user, s: dict, task: dict | None, extra: str | None = None) -> str | None:
@@ -970,11 +1016,12 @@ def _trace(conn, user, s: dict, task: dict | None, extra: str | None = None) -> 
     return op_comment_add(conn, user, {"comment": {"task_id": task["id"], "text": f"{head}: {text}" if head else text}})["comment"]["id"]
 
 
-def _names(conn, payload: dict) -> dict:
+def _names(conn, payload: dict, cache: dict | None = None) -> dict:
     """Имена из автоматики («Алфавит», «Дмитрий Шерстобитов») — в id по справочнику.
 
     Встречи и юзербот не знают id: шлют project_name и person_name. Не нашлось
     или проект не виден принимающему — поле остаётся пустым, человек поправит.
+    cache — «кто это» по имени на одну операцию (_person_who).
     """
     out: dict = {}
     for key, col in (("project_name", "project_id"), ("person_name", "person_id")):
@@ -989,13 +1036,13 @@ def _names(conn, payload: dict) -> dict:
         elif col == "person_id":
             # Точного имени нет — «Женя Соколов» из встречи: то же узнавание, что у встреч и звонков,
             # но только уверенное (people.who видит лишь доступных человеку — RLS).
-            w = people.who(conn, q=name)
+            w = _person_who(conn, name, cache)
             if w["sure"]:
                 out[col] = w["best"]["id"]
     return out
 
 
-def _who_guard(conn, s: dict, payload: dict, fix: dict, by_option: bool) -> str | None:
+def _who_guard(conn, s: dict, payload: dict, fix: dict, by_option: bool, cache: dict | None = None) -> str | None:
     """«Да» без выбора не теряет человека (аудит 15.10.2026, №1): до того «Да» у предложения с двусмысленным именем
     заводило дело без человека — 14 дел из 14 с 08.10. Принять «завести» или «уточнить» без варианта и без
     set.person_id, когда имя двусмысленно (двое и больше) или вопрос ждёт выбора (pick), — отказ словами с кандидатами.
@@ -1004,11 +1051,12 @@ def _who_guard(conn, s: dict, payload: dict, fix: dict, by_option: bool) -> str 
     if s["kind"] not in ("create", "update") or "person_id" in fix or payload.get("person_id"):
         return None
     name = payload.get("person_name")
-    if not name or "person_id" in _names(conn, {"person_name": name}):
+    if not name or "person_id" in _names(conn, {"person_name": name}, cache):
         return None
-    rivals = _person_rivals(conn, name)
+    rivals = _person_rivals(conn, name, cache)
     if not by_option and (rivals or payload.get("pick")):
-        how = ("Ответь кнопкой или скажи Claude." if payload.get("options")
+        # «в вебе»: старый телефон кнопок-вариантов не умеет (option в decide не шлёт) — пусть знает, где ответить.
+        how = ("Ответь кнопкой в вебе или скажи Claude." if payload.get("options")
                else "Выбери человека в «Поправить» или скажи Claude." if s["kind"] == "create" else "Скажи Claude, кто это.")
         raise OpError(f"{_who_ask(name, rivals)} {how}")
     return _many_held(name, rivals) if rivals else None

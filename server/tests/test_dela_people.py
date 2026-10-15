@@ -358,19 +358,66 @@ def test_person_add_does_not_take_someone_elses_name(dela):
     assert "«Ваня» не дописал — так зовут Иван Тестов" in out, out
 
 
+def test_new_card_and_merge_do_not_take_someone_elses_name(dela):
+    """№1 для новой карточки «Людей сами» и слияния: чужое имя другим именем не пишется, а ответ говорит — skipped."""
+    a = person(dela, "sasha", "Иван Тестов", short="Ваня")
+    r = ops(dela, "sasha", {"op": "suggestion.create", "suggestion": {
+        "for_user": "sasha", "kind": "person", "source": "telegram", "source_ref": "tg:42", "quote": "пишет про счёт",
+        "payload": {"person": {"name": "Иван Новый", "aliases": ["Ваня", "Ivan Novy"], "telegram_id": 42}, "auto": True}}})[0]
+    res = r["suggestion"]["result"]
+    assert res["created"] and [(x["alias"], str(x["person_id"])) for x in res["skipped"]] == [("Ваня", a)], res
+    with as_(dela, "sasha") as c:
+        assert c.execute("SELECT aliases FROM crm.people WHERE id = %s", (res["person_id"],)).fetchone()["aliases"] == ["Ivan Novy"]
+    dup = person(dela, "sasha", "Ваня")  # дубль, которого зовут так же, как короткое имя живой карточки
+    m = ops(dela, "sasha", {"op": "person.merge", "id": dup, "into": str(res["person_id"])})[0]
+    assert m["ok"] and [x["alias"] for x in m["skipped"]] == ["Ваня"], m
+
+
 def test_gender_of_first_names(dela):
-    """«Евгения» и «Евгений» — два имени, а не падеж одного; падеж и вариант одного рода — по-прежнему он."""
+    """Род мягко (15.10.2026): имя или фамилия другого рода — кандидат «похоже», но не уверенно. «Евгения Соколова» — и
+    женщина, и родительный от «Евгений Соколов» («у Евгения Соколова»): его карточка видна, сама не ставится. Падеж и
+    вариант одного рода — по-прежнему уверенно."""
+    def score(w, pid):
+        return next((c["score"] for c in w["candidates"] if str(c["id"]) == pid), None)
+
     sokolov = person(dela, "sasha", "Евгений Соколов")
     w = store.view(dela, "sasha", "who", q="Евгения Соколова")
-    assert not (w["sure"] and str(w["best"]["id"]) == sokolov), w
+    assert not w["sure"] and str(w["best"]["id"]) == sokolov and w["best"]["how"] == "похоже", w
+    assert score(w, sokolov) == 0.8, w
+    w = store.view(dela, "sasha", "who", q="Евгении Соколовой")  # только женская форма фамилии
+    assert not w["sure"] and score(w, sokolov) == 0.8, w
     w = store.view(dela, "sasha", "who", q="Евгением Соколовым")
-    assert w["sure"] and str(w["best"]["id"]) == sokolov, w
+    assert w["sure"] and str(w["best"]["id"]) == sokolov and w["best"]["how"] == "имя", w
+    # Родительный мужского имени — он, кандидатом («у Александра Петрова»): раньше запрет терял его вовсе.
+    petrov = person(dela, "sasha", "Александр Петров", short="Александр")
+    w = store.view(dela, "sasha", "who", q="Александра Петрова")
+    assert str(w["best"]["id"]) == petrov and not w["sure"] and score(w, petrov) == 0.8, w
+    w = store.view(dela, "sasha", "who", q="Александра")
+    assert str(w["best"]["id"]) == petrov and not w["sure"], w
+    # Род — по справочнику, не по окончанию: «Валера» — мужское, и «Валерия» через него не становится «Валерием».
+    val = person(dela, "sasha", "Валерий Иванов")
+    w = store.view(dela, "sasha", "who", q="Валерия Иванова")
+    assert not w["sure"] and score(w, val) == 0.8, w
+    w = store.view(dela, "sasha", "who", q="Валера Иванов")
+    assert w["sure"] and str(w["best"]["id"]) == val, w
     nata = person(dela, "sasha", "Наталья Пробная")
     w = store.view(dela, "sasha", "who", q="Наталия Пробная")
     assert w["sure"] and str(w["best"]["id"]) == nata, w
     sasha_f = person(dela, "sasha", "Александра Тестова")
     w = store.view(dela, "sasha", "who", q="Александр Тестов")
     assert not (w["sure"] and str(w["best"]["id"]) == sasha_f), w
+    # Своя карточка того же рода, если есть, — точнее: «Александра Петрова» при живой Александре Петровой — она.
+    alexandra = person(dela, "sasha", "Александра Петрова")
+    w = store.view(dela, "sasha", "who", q="Александра Петрова")
+    assert w["sure"] and str(w["best"]["id"]) == alexandra, w
+
+
+def test_gender_dictionary_covers_every_full_name():
+    from pravka_dela import people as pp
+    assert {x for v in pp.DIMINUTIVE.values() for x in v} <= pp.MALE_FULL | pp.FEMALE_FULL
+    assert not pp.MALE_FULL & pp.FEMALE_FULL
+    assert (pp.name_gender("илья"), pp.name_gender("валера"), pp.name_gender("любовь"), pp.name_gender("саша")) == \
+        ("m", "m", "f", None)
 
 
 def test_connector_find_person_without_substring(dela):

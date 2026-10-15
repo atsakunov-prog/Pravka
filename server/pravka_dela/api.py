@@ -273,8 +273,10 @@ def build(cfg: Config) -> Starlette:
         ui = await anyio.to_thread.run_sync(kovcheg_ui.effective, url)
         if _scope(who):
             # Узкий токен службы (№4, 15.10.2026) выпущен на владельца, но он не владелец: только вид Ковчега — «Дому» нужны
-            # look.pages и меню. Без имени, роли, доступа, денег, настроек, telegram_id и адресов сервисов (nav).
-            look = {**{k: v for k, v in look_owner.items() if k != "nav"}, "tokens": ui["tokens"], "menu": ui["menu"],
+            # look.pages (меню он читает видом svod ui.*, своим правом). Без имени, роли, доступа, денег, настроек,
+            # telegram_id, адресов сервисов (nav) и меню: в нём направления Круга жизни владельца, а «Еде», «Спорту» и
+            # «Деньгам» ui.* не положен и видом.
+            look = {**{k: v for k, v in look_owner.items() if k != "nav"}, "tokens": ui["tokens"],
                     "pages": list(kovcheg_ui.PAGES)}
             return _json({"ok": True, "user": who.user, "kind": who.kind, "features": store.FEATURES, "look": look})
         info = await anyio.to_thread.run_sync(_user_info, url, who.user)

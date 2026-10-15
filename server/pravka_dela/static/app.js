@@ -3358,6 +3358,16 @@ const orWords = (names) => (names.length > 1 ? names.slice(0, -1).join(', ') + '
 function askWhy(s) {
   const p = s.payload || {};
   if (p.ask) return p.ask;
+  if (typeof p.held === 'string') {
+    // Сервер уже посмотрел имена (held есть, хоть пустой): его вердикт сильнее своего точного сравнения — «Женя Соколов»
+    // он узнаёт уверенным «кто это», а byName только точным именем. Спрашиваем то, что не узнал он.
+    const parts = p.held.split('; ');
+    if (p.project_name && !p.project_id && parts.some((x) => x.includes(`«${p.project_name}»`) && /проект/.test(x)))
+      return parts.find((x) => x.startsWith('не один проект')) ? `Какой проект — «${p.project_name}»?` : `Не знаю проект «${p.project_name}» — куда?`;
+    if (p.person_name && !p.person_id && parts.some((x) => x.includes(`«${p.person_name}»`) && !/проект/.test(x)))
+      return `Кто это — «${p.person_name}»?`;
+    return null;
+  }
   if (p.project_name && !p.project_id) {
     const r = byName([...S.projects.values()], p.project_name, PROJECT_TIERS);
     if (r.many.length) return `Какой проект — «${p.project_name}»: ${orWords(r.many.slice(0, 3).map((x) => x.name))}?`;
@@ -3375,8 +3385,10 @@ function askWhy(s) {
 function heldLine(s, q) {
   const p = s.payload || {};
   const nq = norm(q || '');
+  // Часть про имя, о котором уже спрашивает вопрос («Кто это — «X»?» и «не знаю человека «X»»), — повтор: не пишем.
+  const asked = (x) => [p.person_name, p.project_name].some((n) => n && x.includes(`«${n}»`) && nq.includes(norm(`«${n}»`)));
   const left = String(p.held || '').split('; ').map((x) => x.trim()).filter((x) => x && !nq.includes(norm(x))
-    && !(p.pick && p.person_name && x.includes(`«${p.person_name}»`)));
+    && !(p.pick && p.person_name && x.includes(`«${p.person_name}»`)) && !asked(x));
   return left.length ? 'Ждёт: ' + left.join('; ') : null;
 }
 const ASK_YES = { create: 'Поставить', close: 'Закрыть', update: 'Да, согласен', assign: 'Взять', person: 'Завести' };
@@ -4181,8 +4193,9 @@ function renderCard() {
   if (sug && !sug._src) {
     const b = (sug.payload || {}).ball || 'mine'; // в предложении группа одним ball: owed — «ждут от меня»
     sug._src = { ...(sug.payload || {}), ball: b === 'owed' ? 'mine' : b, owed: b === 'owed' };
-    const n = norm(sug._src.project_name);
-    const hit = n && [...S.projects.values()].find((p) => norm(p.name) === n || (p.aliases || []).some((a) => norm(a) === n));
+    // Проект — тем же правилом, что сервер и вопрос (byName): два проекта с одним именем — не первый попавшийся, а пусто,
+    // иначе «Принять» молча брало первый, хотя askWhy на той же карточке спрашивал «Какой проект — A или B?».
+    const hit = sug._src.project_id ? null : byName([...S.projects.values()], sug._src.project_name, PROJECT_TIERS).hit;
     if (hit) sug._src.project_id = hit.id;
   }
   const src = t || sug._src;
