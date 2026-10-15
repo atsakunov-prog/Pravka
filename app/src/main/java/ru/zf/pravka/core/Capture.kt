@@ -5,7 +5,7 @@ import org.json.JSONObject
 import ru.zf.pravka.core.Dela.str
 
 /**
- * Захват — «сказал → легло → вернётся» (шаг 0 петли этапа 4, 15.10.2026; задание — docs/dela-phone-22c.md, контракт —
+ * Захват — «сказал → легло → вернётся» (шаг 0 петли этапа 4, 15.10.2026; задание — docs/dela-phone-25.md, контракт —
  * server/contract/dela-capture.json, сервер — server/pravka_dela/capture.py).
  *
  * Владелец: «захват за три секунды, которому я доверяю… „напомни в 12 в Контуре отправить счёт“ — не знал, куда: в

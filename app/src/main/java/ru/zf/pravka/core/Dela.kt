@@ -117,7 +117,7 @@ object Dela {
          */
         val pos: Int = 0,
         /**
-         * Захват (шаг 0 петли, 15.10.2026, docs/dela-phone-22c.md, контракт — server/contract/dela-capture.json):
+         * Захват (шаг 0 петли, 15.10.2026, docs/dela-phone-25.md, контракт — server/contract/dela-capture.json):
          * вид дела. [KIND_REMIND] — напоминание («напомни в 12 в Контуре отправить счёт»): не дело, его нет в списках
          * дел — как целей; оно стоит на «Сегодня» в свой час и приходит уведомлением телефона. Владелец: «напоминание
          * — отдельно от кучи дел». Старый сервер поля не знает — всё [KIND_TASK].
@@ -1322,7 +1322,7 @@ object Dela {
     /** Идея живая (ещё не использована и не убрана). */
     const val IDEA_OPEN = "open"
 
-    /** Захват одной дверью (шаг 0 петли, docs/dela-phone-22c.md): `capture.say`, `capture.move`, поля `kind`, `back_on`. */
+    /** Захват одной дверью (шаг 0 петли, docs/dela-phone-25.md): `capture.say`, `capture.move`, поля `kind`, `back_on`. */
     const val FEATURE_CAPTURE = "capture"
 
     /** Сервер раскладывает моделью то, что правило не узнало (`lane: auto`). */
