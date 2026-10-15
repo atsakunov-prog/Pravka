@@ -60,7 +60,10 @@ def test_snapshot_and_view_only_own_phone(ph):
     # Первый снимок — знакомство, а не «поменяли на телефоне»: журнал пуст.
     assert v["edits"] == [] and v["pending"] == []
     # Марианна чужой телефон не видит и не может прислать снимок под его именем.
-    assert store.view(ph, "marianna", "phone") == {"devices": [], "device": None, "pending": [], "edits": [], "now": store.view(ph, "marianna", "phone")["now"]}
+    # Без поля now: два вызова на границе секунды давали разное время — тест падал через раз.
+    hers = store.view(ph, "marianna", "phone")
+    assert hers["now"] and {k: x for k, x in hers.items() if k != "now"} == {"devices": [], "device": None, "pending": [],
+                                                                            "edits": []}
     assert store.view(ph, "marianna", "phone", device=DEV)["device"] is None
     bad = run(ph, "marianna", snap(values={"z_gap_min": 0}))[0]
     assert not bad["ok"] and "другого человека" in bad["error"]
