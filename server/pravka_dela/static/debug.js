@@ -459,6 +459,8 @@ const DEBUG = (() => {
     // Список объектов («Новое» на экране, разговор, сделки) — строкой на запись, значения через « · », без id.
     const words = (v) => (Array.isArray(v) && v.length && v.every((x) => x && typeof x === 'object' && !Array.isArray(x))
       ? v.map((x) => Object.entries(x).filter(([k, y]) => k !== 'id' && y !== '' && y != null).map(([, y]) => (typeof y === 'object' ? json1(y) : String(y))).join(' · ')).join('\n')
+      // Список строк («Внутри» карточки по месту, правило 27) — строкой на пункт, а не JSON.
+      : Array.isArray(v) && v.length && v.every((x) => typeof x === 'string') ? v.join('\n')
       : typeof v === 'object' ? json1(v) : String(v));
     const kv = (k, v) => el('div', { class: 'dbg-kv' }, el('span', { class: 'k' }, k), el('span', { class: 'v' }, words(v)));
     out.push(kv('экран', [s.title, s.route, s.sub].filter(Boolean).join(' · ')));
