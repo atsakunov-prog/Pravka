@@ -3063,7 +3063,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                     runCatching { app.delaPlacesToServer() }
                     runCatching { app.delaSync.tick() }
                     // Напоминания (захват, 15.10.2026): догон, если будильник не прозвенел (телефон спал, система
-                    // отложила), и серверу — показывает ли телефон (бот ждёт 3 минуты или шлёт сразу).
+                    // отложила), и серверу — показывает ли телефон (бот ждёт 10 минут или шлёт сразу).
                     runCatching { app.reminders.syncSetting() }
                     runCatching { app.reminders.fire("тик") }
                 }

@@ -468,7 +468,7 @@ object Dela {
         val didOn: Boolean get() = FEATURE_DID in features
 
         /**
-         * Напоминание показывает телефон (`task.reminded {via: phone}`), бот — запасной через 3 минуты. Без флага
+         * Напоминание показывает телефон (`task.reminded {via: phone}`), бот — запасной через 10 минут. Без флага
          * телефон отметку показа не шлёт: старый сервер отверг бы её (там `task.reminded` шлёт только бот).
          */
         val remindPhoneOn: Boolean get() = FEATURE_REMIND_PHONE in features
@@ -1334,7 +1334,7 @@ object Dela {
     /** «Сказал — сделано»: `task.did`. */
     const val FEATURE_DID = "did"
 
-    /** Напоминание показывает телефон, бот — запасной через 3 минуты (`task.reminded {via: phone}`). */
+    /** Напоминание показывает телефон, бот — запасной через 10 минут (`task.reminded {via: phone}`). */
     const val FEATURE_REMIND_PHONE = "remind_phone"
 
     /** Что из [add] ещё нет в [have] (по [norm]: регистр, ё, форма номера не важны) — без повторов. */

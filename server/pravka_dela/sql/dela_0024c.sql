@@ -35,7 +35,7 @@ COMMENT ON COLUMN tasks.tasks.kind IS 'task — дело; remind — напом�
 COMMENT ON COLUMN tasks.tasks.back_on IS 'Дело «потом»: в этот день вернётся строкой «Вернулось» на «Сегодня». Не тронул за день — ночью уходит на ближайший понедельник (back_n + 1).';
 COMMENT ON COLUMN tasks.tasks.back_said IS 'Как сказано «когда вернуться»: «на неделе», «потом», «в январе» — для строки «ты сказал …».';
 COMMENT ON COLUMN tasks.tasks.back_n IS 'Сколько раз «Вернулось» уходило дальше само, не тронутым.';
-COMMENT ON COLUMN tasks.tasks.reminded_via IS 'Кто показал напоминание: phone — уведомление телефона, bot — бот Ковчега в Telegram (запасной, если телефон молчит 3 минуты).';
+COMMENT ON COLUMN tasks.tasks.reminded_via IS 'Кто показал напоминание: phone — уведомление телефона, bot — бот Ковчега в Telegram (запасной: шлёт, если телефон за 10 минут не отметил показ — remind.PHONE_GRACE_MIN).';
 
 CREATE INDEX tasks_back ON tasks.tasks (owner_id, back_on) WHERE status = 'open' AND back_on IS NOT NULL;
 CREATE INDEX tasks_kind_remind ON tasks.tasks (owner_id, remind_at) WHERE status = 'open' AND kind = 'remind';

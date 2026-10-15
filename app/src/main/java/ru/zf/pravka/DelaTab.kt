@@ -3999,7 +3999,7 @@ private fun RemindLine(f: Dela.Task, on: Boolean, places: List<String>, phone: B
     val today = LocalDate.now(zone)
     val at = DelaRemind.local(f.remindAt, zone)
     var custom by remember(f.id) { mutableStateOf(false) }
-    // Захват (15.10.2026): напоминание показывает телефон уведомлением — Telegram только запасной, через 3 минуты.
+    // Захват (15.10.2026): напоминание показывает телефон уведомлением — Telegram только запасной, через 10 минут.
     PaperHint(if (phone) "Напомнить уведомлением на телефоне" else "Напомнить в Telegram")
     DelaRemind.state(f, today, zone, phone).takeIf { it.isNotBlank() }?.let { PaperHint(it, MaterialTheme.colorScheme.primary) }
     ChipRow {
