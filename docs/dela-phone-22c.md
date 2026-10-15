@@ -1,7 +1,7 @@
 # Дела на телефоне — задание 22c (15.10.2026): захват — «сказал → легло → вернётся»
 
 > Шаг 0 петли этапа 4 (номер «22c» — до шага 1 петли с его заданием 22; главная сессия перенумерует при слиянии).
-> **Сервер и веб сделаны** в ветке `capture` (миграция `dela_0024c`, `server/pravka_dela/capture.py`, `did.py`,
+> **Сервер и веб сделаны** в ветке `capture` (миграция `dela_0032`, `server/pravka_dela/capture.py`, `did.py`,
 > `ideas.py`, правило 26 в `server/pravka_dela/CLAUDE.md`). Контракт — `server/contract/dela-capture.json`, общие случаи
 > правила — `server/contract/capture-cases.json`, страница для Саши — `server/contract/prompts/kuda-chto.md` (в APK она
 > уже ресурсом: каталог `server/contract/prompts` — источник ресурсов). Телефону — ниже.

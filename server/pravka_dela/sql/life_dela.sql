@@ -27,7 +27,7 @@ SELECT t.num, t.title, t.notes, t.status,
        -- Дела внутри дела (dela_0030): «Зачем» — цель дерева (why_goal) или обычное дело, внутри которого это дело;
        -- pos — место среди соседей (дел с тем же «Зачем»).
        coalesce(wk.goal, false) AS why_goal, t.pos,
-       -- Захват (dela_0024c): kind — task или remind (напоминание, в списках дел его нет); back_on — когда вернётся дело «потом».
+       -- Захват (dela_0032): kind — task или remind (напоминание, в списках дел его нет); back_on — когда вернётся дело «потом».
        t.kind, t.back_on
 FROM tasks.tasks t
 LEFT JOIN crm.projects p ON p.id = t.project_id

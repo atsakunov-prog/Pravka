@@ -38,7 +38,7 @@ TASK_FIELDS = {
     "title", "notes", "project_id", "deal_id", "owner_id", "ball", "owed", "person_id", "nudge_on", "requested_by",
     "due_date", "due_time", "estimate_min", "money", "want", "focus_on", "labels", "status",
     "source", "source_ref", "remind_at", "remind_place", "pos",
-    # Захват (dela_0024c, 15.10.2026): вид дела (task | remind — напоминание, не в списках дел) и «потом» — день возврата
+    # Захват (dela_0032, 15.10.2026): вид дела (task | remind — напоминание, не в списках дел) и «потом» — день возврата
     # и как сказано. Старый сервер этих полей не знает: телефон шлёт их, только увидев флаг capture в синке.
     "kind", "back_on", "back_said",
 }
@@ -50,7 +50,7 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug",
             "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
             "privacy", "context_index", "claude_guard", "nest", "debug", "capture", "capture_model", "ideas", "did",
             "remind_phone"]
-# Захват (шаг 0 петли, 15.10.2026, capture.py, dela_0024c; владелец: «захват за три секунды, которому я доверяю»):
+# Захват (шаг 0 петли, 15.10.2026, capture.py, dela_0032; владелец: «захват за три секунды, которому я доверяю»):
 # «capture» — операции capture.say (фраза одной дверью: правило за миллисекунды, иначе модель на сервере) и capture.move
 # (поправка одной кнопкой), вид capture?ref (итог), поля дела kind ('remind' — напоминание, в списках дел его нет),
 # back_on и back_said (дело «потом»), у вида today — reminders и back («Вернулось»), вид reminders. Без флага телефон
@@ -597,7 +597,7 @@ def _next_workday(conn) -> str:
 
 
 def _kind_norm(conn, before: dict | None, data: dict) -> dict:
-    """Напоминание (kind 'remind') — без своего срока, со временем или местом (захват, dela_0024c). Получило срок —
+    """Напоминание (kind 'remind') — без своего срока, со временем или местом (захват, dela_0032). Получило срок —
     это уже дело с напоминанием (kind 'task'); потеряло и время, и место — дело «потом» (вернётся завтра), а не
     напоминание ни о чём. Новое напоминание снимает «потом» и «Сейчас»: у него своё время."""
     after = {**(before or {}), **data}
@@ -1319,7 +1319,7 @@ def op_suggestion_decide(conn, user, op):
     if decision != "accept":
         raise OpError("решение: accept или reject")
     if s["kind"] == "capture":
-        # «Какой Иван?» захвата (dela_0024c, проверка 16.10.2026): тёзки в сказанном — запись без человека и вопрос
+        # «Какой Иван?» захвата (dela_0032, проверка 16.10.2026): тёзки в сказанном — запись без человека и вопрос
         # кнопками людей. Ответ — тот же capture.move person, что кнопка под строкой: заметка встаёт к человеку,
         # сделанное закрывает его обещание и пишет касание. «Да» без выбора — отказ словами (pick).
         named = (op.get("set") or {}).get("person_id") if isinstance(op.get("set"), dict) else None
@@ -1954,7 +1954,7 @@ def sync(url: str, user: str, since: int) -> dict:
         # Режим отладки (debug.py): включён ли, сколько записок ждут разбора — только владельцу; не владельцу поля нет.
         if (dbg := debug.for_sync(conn, user)) is not None:
             out["debug"] = jsonable(dbg)
-        # Идеи (dela_0024c): свои, по номеру изменения — телефону для карточек и подписи встречи «💡 2».
+        # Идеи (dela_0032): свои, по номеру изменения — телефону для карточек и подписи встречи «💡 2».
         got = ideas.for_sync(conn, user, lo)
         out["ideas"] = jsonable(got)
         top = max([top, *(r["seq"] for r in got)])
@@ -2335,7 +2335,7 @@ focus.register(VIEWS)
 # Режим отладки (dela_0031, 15.10.2026, правило 28): записки о багах с экраном данными — debug.add / debug.set, вид debug (debug.py).
 from . import debug  # noqa: E402  (свой модуль; импорт здесь — крючок одной строкой, ветку собирают в поезд с другими)
 debug.register(HANDLERS, VIEWS, FEATURES, OpError)
-# Захват (dela_0024c, шаг 0 петли): «позвонил X» (did.py), идеи (ideas.py), фраза одной дверью и поправка кнопкой
+# Захват (dela_0032, шаг 0 петли): «позвонил X» (did.py), идеи (ideas.py), фраза одной дверью и поправка кнопкой
 # (capture.py — его модуль тянет when → parse → store, поэтому он приходит сюда только при вызове).
 did.register(HANDLERS, OpError)
 ideas.register(HANDLERS, VIEWS, OpError)

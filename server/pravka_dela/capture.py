@@ -1375,7 +1375,7 @@ def _apply_one(conn, user: str, item: dict, ref: str, source: str, ctx: Ctx, i: 
     raise CaptureError(f"нет такой корзины: {b}")
 
 
-ASK_KIND = "capture"  # вопрос «Какой Иван?» в «Подскажи» (dela_0024c: kind capture)
+ASK_KIND = "capture"  # вопрос «Какой Иван?» в «Подскажи» (dela_0032: kind capture)
 
 
 def _ask_who(conn, user: str, item: dict, ref: str, i: int, now: dt.datetime) -> None:

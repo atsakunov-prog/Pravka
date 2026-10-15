@@ -1,4 +1,4 @@
--- Дела, миграция 24c (15.10.2026): захват — «сказал → легло → вернётся» (шаг 0 петли этапа 4).
+-- Дела, миграция 32 (15.10.2026): захват — «сказал → легло → вернётся» (шаг 0 петли этапа 4).
 --
 -- Владелец 15.10.2026: «Приоритет номер один… захват за три секунды, которому я доверяю. Сегодня я хотел „напомни в 12 в
 -- Контуре отправить счёт“ и не знал, куда: в календарь нельзя — Засечка примет за встречу; в Дела — утонет среди
@@ -18,7 +18,8 @@
 -- • crm.person_merge — переносит и crm.ideas.person_id (people.REFS).
 --
 -- Обратимо по смыслу: новые колонки с умолчаниями и новая таблица, лежащие строки не трогаются (старые дела — kind
--- 'task'). Номер — «24c», чтобы не столкнуться с шагом 1 петли (dela_0024); главная сессия перенумерует при слиянии.
+-- 'task'). В ветке capture файл звался dela_0024c.sql (чтобы не столкнуться с шагом 1 петли); номер — следующий
+-- свободный в сборке поезда 16.10.2026, после dela_0031 («Режим отладки»): 24–29 — «Приватность», 30 — дела внутри дела.
 
 SELECT set_config('dela.actor', 'svc:migrate', true), set_config('dela.via', 'system', true),
        set_config('dela.user', 'system', true);
@@ -227,7 +228,7 @@ BEGIN
     GET DIAGNOSTICS v_k = ROW_COUNT; v_n := v_n + v_k;
     UPDATE crm.meetings SET person_ids = crm.ids_swap(person_ids, p_dup, p_into) WHERE p_dup = ANY (person_ids);
     GET DIAGNOSTICS v_k = ROW_COUNT; v_n := v_n + v_k;
-    -- Идеи о человеке (dela_0024c): «идея: Ивану предложить…» живёт у живой карточки.
+    -- Идеи о человеке (dela_0032): «идея: Ивану предложить…» живёт у живой карточки.
     UPDATE crm.ideas SET person_id = p_into WHERE person_id = p_dup;
     GET DIAGNOSTICS v_k = ROW_COUNT; v_n := v_n + v_k;
     -- Ждущие вопросы «Нового»: «это он?» (payload.person_id) и варианты ответа кнопками (options[].person_id). Решённые
@@ -297,4 +298,4 @@ ALTER TABLE tasks.suggestions ADD CONSTRAINT suggestions_kind_check
 ALTER TABLE tasks.suggestions DROP CONSTRAINT suggestions_task_check;
 ALTER TABLE tasks.suggestions ADD CONSTRAINT suggestions_task_check
     CHECK (kind IN ('create', 'person', 'capture') OR task_id IS NOT NULL);
-COMMENT ON COLUMN tasks.suggestions.kind IS 'create — новое дело; close — предложить закрыть («отправил»); update — поправить; assign — предложить дело пользователю (Марианне — только с её согласия); person — новый человек из Telegram или телефонной книжки (dela_0019); capture — «какой Иван?» захвата (dela_0024c): тёзки в сказанном, ответ кнопкой человека (payload.capture — какая запись).';
+COMMENT ON COLUMN tasks.suggestions.kind IS 'create — новое дело; close — предложить закрыть («отправил»); update — поправить; assign — предложить дело пользователю (Марианне — только с её согласия); person — новый человек из Telegram или телефонной книжки (dela_0019); capture — «какой Иван?» захвата (dela_0032): тёзки в сказанном, ответ кнопкой человека (payload.capture — какая запись).';
