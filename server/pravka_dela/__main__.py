@@ -23,6 +23,7 @@
   zachem   «Зачем» по-человечески: propose [--limit N] [--now] --out файл; apply --file файл; rollback
   guard    защита от петли Claude (аудит №12): status — что стоит; on ЗАДАЧА — «Продолжать» (час пороги втрое);
            keep ЗАДАЧА — оставить остановленным (когда Telegram недоступен)
+  debug    режим отладки: list [--all], show N [--json] [--shot файл], set N статус ["ответ" | --answer-file f], on, off
 """
 
 from __future__ import annotations
@@ -706,6 +707,9 @@ def main(argv: list[str] | None = None) -> int:
     ks.add_argument("--user", default="sasha")
     ks.add_argument("--force", action="store_true", help="переписать записи Свода файлом")
     ks.set_defaults(fn=cmd_krug_seed)
+    from . import debug as debug_mod  # режим отладки: debug list | show N | set N статус «ответ» | on | off
+
+    debug_mod.add_cli(sub)
 
     args = ap.parse_args(argv)
     try:

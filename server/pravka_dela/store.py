@@ -1863,6 +1863,9 @@ def sync(url: str, user: str, since: int) -> dict:
         badge = spend.badge(conn, user)
         if badge is not None:
             out["spend"] = jsonable(badge)
+        # Режим отладки (debug.py): включён ли, сколько записок ждут разбора — только владельцу; не владельцу поля нет.
+        if (dbg := debug.for_sync(conn, user)) is not None:
+            out["debug"] = jsonable(dbg)
         out["seq"] = top
         out["today"] = conn.execute("SELECT crm.today() AS d").fetchone()["d"].isoformat()
     out["features"] = FEATURES
@@ -2223,6 +2226,9 @@ insights.register(HANDLERS, VIEWS, OpError)
 guard.register(HANDLERS, VIEWS, OpError)
 # Контекст по делу (аудит №13): вид context_index — связанные люди и ключи имён (focus.py).
 focus.register(VIEWS)
+# Режим отладки (dela_0024_debug, 15.10.2026): записки о багах с экраном данными — debug.add / debug.set, вид debug (debug.py).
+from . import debug  # noqa: E402  (свой модуль; импорт здесь — крючок одной строкой, ветку собирают в поезд с другими)
+debug.register(HANDLERS, VIEWS, FEATURES, OpError)
 
 
 def view(url: str, user: str, name: str, **params) -> dict:

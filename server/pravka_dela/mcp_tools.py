@@ -1196,6 +1196,14 @@ def register(mcp, url: str) -> None:
         """Одна сводка дайджеста Telegram целиком: окно, «Ждут тебя», «По работе», «Дом», «Прочее», что ушло в Дела, и в какие карточки CRM разнесены пункты (люди, клиенты, сделки). ref — из digests или из хронологии CRM («digest:2026-10-13T2000»; можно без «digest:»), last — последняя. Переписку целиком сервер не хранит — только сводку."""
         return await run(dela.digest_card, ref)
 
+    from pravka_dela import debug as dbg
+
+    @mcp.tool()
+    async def dela_debug(action: str = "list", note: str | None = None, status: str | None = None,
+                         answer: str | None = None, show_all: bool = False) -> str:
+        """Режим отладки Дел: записки Саши о багах логики, каждая — с тем, что было у него на экране (веб или телефон): маршрут, фильтры, открытая карточка полями, видимые строки списка (* — были в окне), и последние действия страницы — какие операции ушли, что он сказал Claude и что тот поменял, тосты, ошибки сети. action: list (по умолчанию — новые и взятые, свежие сверху; show_all=true — все), show (записка целиком — note: номер «12»), set (разбор: note, status — new, taken (взял), fixed (починено), not_bug (не баг), later (потом); answer — что нашёл и что сделал, текстом целиком: его видно Саше в вебе и на телефоне), on / off — включить или выключить строку «Что не так?» у Саши. Сначала разберись по живым данным (dela_task, dela_view), потом set."""
+        return await run(dbg.tool, dela.USER, action, note, status, answer, show_all)
+
     @mcp.tool()
     async def dela_note(summary: str, kind: str = "note", project: str | None = None, deal: str | None = None,
                         people: list[str] | None = None, next_step: str | None = None, at: str | None = None,

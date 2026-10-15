@@ -1,0 +1,234 @@
+"""Режим отладки Дел (debug.py, dela_0024_debug): записки владельца о багах с экраном данными.
+
+Записка ложится одна на повтор (op_id и id записки), видит её только владелец (не команда, не службы с его токеном, не
+узкие токены), вид — список и одна целиком, разбор — статус и ответ, текст и снимок не переписываются. Все данные
+выдуманные: репозиторий публичный.
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
+from pathlib import Path
+
+import psycopg
+import pytest
+from starlette.testclient import TestClient
+
+from pravka_dela import api, debug, store, tokens
+from pravka_dela import db as dela_db
+from pravka_dela.config import Config
+from test_dela_schema import dela  # noqa: F401  (фикстура)
+
+CONTRACT = json.loads((Path(__file__).resolve().parents[1] / "contract" / "dela-debug.json").read_text(encoding="utf-8"))
+
+SNAP = {"v": 1, "route": "#/today", "title": "Сегодня", "sub": "четверг, 16 октября",
+        "mode": {"sphere": "work", "levels": ["grp"]},
+        "card": {"kind": "task", "id": "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", "num": 57, "title": "Иван Тестов: прислать модель",
+                 "fields": {"срок": "16.10", "человек": "Иван Тестов", "проект": "Ромашка"}},
+        "rows": [{"id": "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", "num": 57, "title": "Иван Тестов: прислать модель",
+                  "group": "Мониторить", "due": "2026-10-16", "person": "Иван Тестов", "project": "Ромашка", "in_view": True}],
+        "rows_total": 1}
+ACTIONS = [{"at": "2026-10-16T10:14:40+03:00", "kind": "ask", "text": "перенеси Ивана на пятницу"},
+           {"at": "2026-10-16T10:14:52+03:00", "kind": "reply", "text": "Перенёс два дела на 17.10.", "data": {"changed": 2}}]
+
+
+def add(url, user="sasha", text="Сказал перенести Ивана — перенёс и Ромашку", via="web", actor=None, **note):
+    op = {"op": "debug.add", "op_id": str(uuid.uuid4()),
+          "note": {"text": text, "source": "web", "version": "app.js 16.10", "screen": "1280×800", "snapshot": SNAP,
+                   "actions": ACTIONS, **note}}
+    return store.apply_ops(url, user, [op], via, actor)["results"][0], op
+
+
+def test_add_numbers_and_keeps_screen(dela):
+    r1, _ = add(dela)
+    r2, _ = add(dela, text="Второе: «Сейчас» не обновилось", source="phone", screen="412×915 сложен")
+    assert r1["ok"] and r2["ok"], (r1, r2)
+    assert (r1["note"]["num"], r2["note"]["num"]) == (1, 2)
+    assert r1["note"]["status"] == "new" and r1["note"]["via"] == "web" and r1["note"]["has_shot"] is False
+    one = store.view(dela, "sasha", "debug", id="1")["note"]
+    assert one["snapshot"]["card"]["num"] == 57 and one["actions"][1]["kind"] == "reply"
+    assert one["version"] == "app.js 16.10" and one["screen"] == "1280×800"
+    assert "debug" in store.FEATURES and "debug.add" in store.HANDLERS and "debug" in store.VIEWS
+
+
+def test_repeat_is_harmless(dela):
+    """Телефон повторил пачку (ответ сервера потерялся): тот же op_id — тот же ответ; тот же id записки с новым op_id —
+    прежняя записка, второй не появляется."""
+    nid = str(uuid.uuid4())
+    r1, op = add(dela, id=nid)
+    again = store.apply_ops(dela, "sasha", [op], "app")["results"][0]
+    assert again == r1
+    r3, _ = add(dela, id=nid, text="другой текст той же записки")
+    assert r3["ok"] and r3.get("again") and r3["note"]["num"] == 1 and r3["note"]["text"] == r1["note"]["text"]
+    assert len(store.view(dela, "sasha", "debug")["items"]) == 1
+    bad, _ = add(dela, id="не-uuid")
+    assert not bad["ok"] and "не uuid" in bad["error"]
+
+
+def test_words_are_checked(dela):
+    r, _ = add(dela, text="   ")
+    assert not r["ok"] and "пустая" in r["error"]
+    r, _ = add(dela, source="telegram")
+    assert not r["ok"] and "web или phone" in r["error"]
+    # Будущее время устройства — миг приёма; кривой снимок — пустой объект; длинная версия — обрезана.
+    r, _ = add(dela, at="2099-01-01T00:00:00+03:00", snapshot=["не", "объект"], version="x" * 300)
+    assert r["ok"] and r["note"]["said_at"].startswith("20") and not r["note"]["said_at"].startswith("2099")
+    assert len(r["note"]["version"]) == debug.SHORT_MAX
+    assert store.view(dela, "sasha", "debug", id=str(r["note"]["num"]))["note"]["snapshot"] == {}
+
+
+def test_big_snapshot_is_cut_but_note_lands(dela):
+    rows = [{"id": str(uuid.uuid4()), "num": i, "title": "Дело " + "очень длинное " * 40} for i in range(2000)]
+    r, _ = add(dela, snapshot={**SNAP, "rows": rows, "rows_total": 2000}, actions=[{"kind": "op", "text": "x" * 9000}] * 150)
+    assert r["ok"], r
+    one = store.view(dela, "sasha", "debug", id=str(r["note"]["num"]))["note"]
+    assert one["snapshot"]["rows_cut"] and 0 < len(one["snapshot"]["rows"]) < 2000 and one["snapshot"]["title"] == "Сегодня"
+    assert len(json.dumps(one["snapshot"], ensure_ascii=False)) <= debug.SNAPSHOT_MAX
+    assert len(one["actions"]) == debug.ACTIONS_MAX and one["actions"][0]["cut"] and len(one["actions"][0]["text"]) <= 500
+
+
+def test_shot_only_image_data(dela):
+    good, _ = add(dela, shot="data:image/jpeg;base64," + "A" * 1000)
+    bad, _ = add(dela, shot="https://example.com/x.png")
+    assert good["note"]["has_shot"] and not bad["note"]["has_shot"]
+    one = store.view(dela, "sasha", "debug", id=str(bad["note"]["num"]))["note"]
+    assert one["shot"] is None and "shot_dropped" in one["snapshot"]
+    assert store.view(dela, "sasha", "debug", id=str(good["note"]["num"]))["note"]["shot"].startswith("data:image/jpeg")
+
+
+def test_only_owner_sees_and_writes(dela):
+    add(dela)
+    r, _ = add(dela, user="natasha")
+    assert not r["ok"] and "только владельцу" in r["error"]
+    with pytest.raises(store.OpError, match="только владельцу"):
+        store.view(dela, "natasha", "debug")
+    # RLS: прямой запрос команды строк не видит; синк команды — без поля debug.
+    with dela_db.session(dela, "natasha", via="app") as c:
+        assert c.execute("SELECT count(*) AS n FROM crm.debug_notes").fetchone()["n"] == 0
+    assert "debug" not in store.sync(dela, "natasha", 0)
+    # Строку на не-владельца не положит даже system (триггер), текст и снимок не переписываются.
+    with pytest.raises(psycopg.errors.RaiseException, match="только владельцу"):
+        with dela_db.session(dela, "system", "test") as c:
+            c.execute("INSERT INTO crm.debug_notes (owner_id, num, text, source) VALUES ('natasha', 99, 'x', 'web')")
+    with pytest.raises(psycopg.errors.RaiseException, match="не переписывают"):
+        with dela_db.session(dela, "sasha", via="app") as c:
+            c.execute("UPDATE crm.debug_notes SET text = 'другое' WHERE num = 1")
+
+
+def test_services_and_narrow_tokens_are_closed(dela):
+    add(dela)
+    cl = TestClient(api.build(Config(db_url=dela)))
+    h = lambda kind, name: {"Authorization": "Bearer " + tokens.issue(dela, "sasha", kind, name)}  # noqa: E731
+    op = {"op": "debug.add", "op_id": str(uuid.uuid4()), "note": {"text": "x", "source": "web"}}
+    for name in ("dengi", "eda", "sport", "dom"):  # узкие — белым списком путей и видов
+        assert cl.get("/api/view/debug", headers=h("service", name)).status_code == 403
+        assert cl.post("/api/ops", headers=h("service", name), json={"ops": [op]}).status_code == 403
+    svc = h("service", "meetings")  # служба с токеном владельца: вид — 403, операция — отказ словами
+    assert cl.get("/api/view/debug", headers=svc).status_code == 403
+    r = cl.post("/api/ops", headers=svc, json={"ops": [op]}).json()["results"][0]
+    assert not r["ok"] and "службе meetings" in r["error"]
+    phone = h("device", "fold")
+    assert cl.get("/api/view/debug", headers=phone).json()["items"][0]["num"] == 1
+    r = cl.post("/api/ops", headers=phone, json={"ops": [{**op, "op_id": str(uuid.uuid4())}]}).json()["results"][0]
+    assert r["ok"] and r["note"]["num"] == 2 and r["note"]["via"] == "app"
+
+
+def test_setting_in_me_and_sync(dela):
+    cl = TestClient(api.build(Config(db_url=dela)))
+    phone = {"Authorization": "Bearer " + tokens.issue(dela, "sasha", "device", "fold")}
+    assert store.sync(dela, "sasha", 0)["debug"] == {"on": False, "new": 0, "last": 0, "answered": None}
+    assert "debug" in cl.get("/api/me", headers=phone).json()["features"]
+    assert debug.tool(dela, "sasha", "on").startswith("Режим отладки включён")
+    assert cl.get("/api/me", headers=phone).json()["settings"]["debug"] is True
+    add(dela)
+    s = store.sync(dela, "sasha", 0)["debug"]
+    assert s["on"] and s["new"] == 1 and s["last"] == 1
+    # Не владелец включить себе может (это его настройка), но строки у него нет: поля в синке нет, вид закрыт.
+    store.apply_ops(dela, "natasha", [{"op": "user.settings", "settings": {"debug": True}}], "web")
+    assert "debug" not in store.sync(dela, "natasha", 0)
+    assert debug.tool(dela, "sasha", "off").startswith("Режим отладки выключен")
+    assert store.sync(dela, "sasha", 0)["debug"]["on"] is False
+
+
+def test_view_list_filters_and_one(dela):
+    for i in range(3):
+        add(dela, text=f"Записка {i + 1}")
+    store.apply_ops(dela, "sasha", [{"op": "debug.set", "id": "2", "status": "fixed", "answer": "Поправил."}], "web")
+    v = store.view(dela, "sasha", "debug")
+    assert [x["num"] for x in v["items"]] == [3, 2, 1] and v["counts"] == {"new": 2, "taken": 0, "fixed": 1, "not_bug": 0, "later": 0}
+    assert v["items"][0]["route"] == "#/today" and v["items"][0]["title"] == "Сегодня" and "snapshot" not in v["items"][0]
+    assert [x["num"] for x in store.view(dela, "sasha", "debug", status="open")["items"]] == [3, 1]
+    assert [x["num"] for x in store.view(dela, "sasha", "debug", status="fixed,later")["items"]] == [2]
+    assert [x["num"] for x in store.view(dela, "sasha", "debug", limit="1")["items"]] == [3]
+    one = store.view(dela, "sasha", "debug", id="№2")["note"]
+    assert one["answer"] == "Поправил." and one["snapshot"]["title"] == "Сегодня"
+    assert store.view(dela, "sasha", "debug", id=one["id"])["note"]["num"] == 2
+    with pytest.raises(store.OpError, match="нет записки"):
+        store.view(dela, "sasha", "debug", id="99")
+    with pytest.raises(store.OpError, match="статус"):
+        store.view(dela, "sasha", "debug", status="всякое")
+
+
+def test_set_status_and_answer(dela):
+    add(dela)
+    run = lambda **op: store.apply_ops(dela, "sasha", [{"op": "debug.set", **op}], "web")["results"][0]  # noqa: E731
+    r = run(id="1", status="taken")
+    assert r["ok"] and r["note"]["status"] == "taken" and r["note"]["status_by"] == "sasha" and r["note"]["status_at"]
+    r = run(id="1", status="не баг", answer="Так и задумано: «Сейчас» — до пяти.")
+    assert r["note"]["status"] == "not_bug" and r["note"]["answer"].startswith("Так и задумано")
+    assert not run(id="1")["ok"] and "поменять нечего" in run(id="1")["error"]
+    assert not run(id="1", status="закрыто")["ok"]
+    assert not run(id="7", status="fixed")["ok"]
+    rev = r["note"]["rev"]
+    assert run(id="1", status="not_bug")["note"]["rev"] == rev  # то же самое — без новой версии
+
+
+def test_claude_reads_and_answers(dela):
+    """Коннектор и командная строка — один вход (debug.tool): список, записка целиком словами, разбор от claude."""
+    add(dela)
+    add(dela, text="Вторая записка")
+    out = debug.tool(dela, "sasha", "list")
+    assert out.startswith("Записки отладки (новые и взятые): 2") and "№2" in out and "№1" in out
+    card = debug.tool(dela, "sasha", "show", "1")
+    assert "Что было на экране:" in card and "#57 Иван Тестов: прислать модель" in card and "срок: 16.10" in card
+    assert "reply: Перенёс два дела" in card and "перенеси Ивана на пятницу" in card
+    done = debug.tool(dela, "sasha", "set", "1", "починено", "Поправил разбор: человек — по точному имени.", via="cli")
+    assert done == "№1: починено · ответ записан"
+    one = store.view(dela, "sasha", "debug", id="1")["note"]
+    assert one["status_by"] == "claude" and one["answer"].startswith("Поправил")
+    assert "№1" not in debug.tool(dela, "sasha", "list") and "№1" in debug.tool(dela, "sasha", "list", show_all=True)
+    assert debug.tool(dela, "sasha", "show", "5").startswith("Не вышло")
+    assert debug.tool(dela, "sasha", "set", "2", "-", "только ответ").endswith("ответ записан")
+
+
+def test_migration_again_is_harmless(dela, cfg):
+    """Поезд веток переименует файл в свой номер: на копии, где он уже стоял под этим именем, второй прогон не падает."""
+    from importlib import resources
+
+    sql_text = (resources.files("pravka_dela") / "sql" / "dela_0024_debug.sql").read_text(encoding="utf-8")
+    add(dela)
+    with psycopg.connect(cfg.db_url, autocommit=True) as c:
+        with c.transaction():
+            c.execute(sql_text)
+    assert store.view(dela, "sasha", "debug")["items"][0]["num"] == 1
+
+
+def test_contract_matches_server(dela):
+    from test_dela_contract import fields
+
+    assert CONTRACT["features"]["flag"] in store.FEATURES
+    assert set(CONTRACT["ops"]) <= set(store.HANDLERS) and set(CONTRACT["views"]) <= set(store.VIEWS)
+    ex = json.loads(json.dumps(CONTRACT["ops"]["debug.add"]["example"]))
+    r = store.apply_ops(dela, "sasha", [ex], "app")["results"][0]
+    assert r["ok"], r
+    resp = {k: v for k, v in CONTRACT["ops"]["debug.add"]["response"].items()}
+    fields(resp, store.jsonable(r), "debug.add")
+    st = json.loads(json.dumps(CONTRACT["ops"]["debug.set"]["example"]))
+    st["id"] = str(r["note"]["num"])
+    assert store.apply_ops(dela, "sasha", [st], "app")["results"][0]["ok"]
+    fields({k: v for k, v in CONTRACT["views"]["debug"]["response_list"].items() if k != "ok"}, store.view(dela, "sasha", "debug"),
+           "вид debug")
+    fields({k: v for k, v in CONTRACT["views"]["debug"]["response_one"].items() if k != "ok"},
+           store.view(dela, "sasha", "debug", id=str(r["note"]["num"])), "вид debug?id")
+    fields(CONTRACT["sync"]["example"], store.sync(dela, "sasha", 0)["debug"], "синк debug")

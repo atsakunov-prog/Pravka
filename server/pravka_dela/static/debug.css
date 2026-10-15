@@ -1,0 +1,68 @@
+/* Режим отладки (15.10.2026, debug.js): строка «Что не так?» под шапкой Ковчега и страница #/debug. Хвостом style.css
+   (api.TAILS). Только токены общего вида Ковчега v2 — новых цветов нет: панель, линия, один акцент, «сбой» — --bad. */
+
+.dbg-bar {
+  flex: none; display: flex; align-items: center; gap: 6px; min-width: 0;
+  padding: 5px max(12px, env(safe-area-inset-right)) 5px max(12px, env(safe-area-inset-left));
+  background: var(--bg); border-bottom: 1px solid var(--line);
+}
+.dbg-ico { flex: none; display: inline-flex; color: var(--muted); }
+.dbg-bar input {
+  flex: 1; min-width: 0; height: 32px; padding: 4px 10px; font-size: 14px; border-radius: 7px;
+  background-color: var(--panel); border: 1px solid var(--line);
+}
+.dbg-bar input:disabled { color: var(--muted); }
+.dbg-btn {
+  flex: none; width: 32px; height: 32px; padding: 0; display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--icon);
+}
+.dbg-btn:hover:not(:disabled) { color: var(--text); background: var(--hover-2); }
+.dbg-btn:disabled { opacity: .5; cursor: default; }
+.dbg-btn .kv-i { color: inherit; }
+.dbg-bar.hearing .dbg-btn:not(.dbg-send) { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+/* «Записать» — акцентом и только когда есть что записать (как клавиша строки Claude). */
+.dbg-send { display: none; background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.dbg-send:hover:not(:disabled) { background: var(--accent); color: var(--accent-ink); filter: brightness(1.08); }
+.dbg-bar.has-text:not(.hearing) .dbg-send, .dbg-bar.busy .dbg-send { display: grid; }
+.dbg-n { flex: none; font-size: 12.5px; color: var(--muted); white-space: nowrap; text-decoration: none; padding: 0 2px; }
+.dbg-n b { font-weight: 600; color: var(--accent); }
+.dbg-n:hover { color: var(--text); }
+/* Телефонная ширина: строка в одну линию не съезжает — счётчик короче, поле забирает остальное. */
+@media (max-width: 900px) {
+  .dbg-bar { gap: 5px; padding: 4px 10px; }
+  .dbg-bar input { font-size: 15px; } /* меньше 16 px — iOS увеличивал бы страницу при фокусе; 15 — как у полей Дел */
+  .dbg-n b { display: none; }
+}
+
+/* Страница #/debug */
+.dbg-page .toolbar { margin: 10px 0 0; }
+.dbg-list { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; padding-bottom: 32px; }
+.dbg-item { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; min-width: 0; }
+.dbg-item.st-fixed, .dbg-item.st-not_bug { opacity: .78; }
+.dbg-top { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: 13px; }
+.dbg-top .num { font-size: 14px; }
+.dbg-text { margin-top: 4px; font-size: 15px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dbg-answer { margin-top: 6px; padding: 6px 10px; border-left: 2px solid var(--accent); background: var(--accent-soft);
+  border-radius: 0 7px 7px 0; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dbg-st { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.dbg-st .seg button { padding: 3px 9px; font-size: 13px; }
+.dbg-detail { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; min-width: 0; }
+.dbg-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; }
+.dbg-h { margin: 12px 0 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.dbg-kv { display: grid; grid-template-columns: minmax(90px, 160px) minmax(0, 1fr); gap: 8px; font-size: 13px; line-height: 1.45; padding: 1px 0; }
+.dbg-kv .k { color: var(--faint); overflow-wrap: anywhere; }
+.dbg-kv .v { overflow-wrap: anywhere; white-space: pre-wrap; }
+.dbg-rows, .dbg-acts { display: flex; flex-direction: column; font-size: 13px; line-height: 1.45; }
+.dbg-row { display: flex; flex-wrap: wrap; gap: 0 6px; padding: 2px 0; border-bottom: 1px solid var(--line-soft); overflow-wrap: anywhere; }
+.dbg-row .star { width: 12px; flex: none; color: var(--accent); }
+.dbg-row .num { color: var(--faint); font-variant-numeric: tabular-nums; }
+.dbg-row b { font-weight: 500; }
+.dbg-act { display: flex; flex-wrap: wrap; gap: 0 8px; padding: 3px 0; border-bottom: 1px solid var(--line-soft); overflow-wrap: anywhere; }
+.dbg-act .at { color: var(--faint); font-variant-numeric: tabular-nums; flex: none; }
+.dbg-act .kind { color: var(--muted); font-weight: 600; flex: none; }
+.dbg-act.k-error .kind, .dbg-act.k-op_fail .kind { color: var(--bad); }
+.dbg-act .v { flex: 1 1 200px; min-width: 0; }
+.dbg-act .data { flex-basis: 100%; font-size: 12px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+.dbg-raw { margin: 8px 0 0; padding: 8px 10px; max-height: 60vh; overflow: auto; font-size: 12px; line-height: 1.4;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 7px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dbg-shot { display: block; margin-top: 10px; max-width: min(100%, 420px); border: 1px solid var(--line); border-radius: 8px; }

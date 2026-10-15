@@ -63,6 +63,8 @@ APP_TABLES = {
     "crm.claude_tips": "SELECT, INSERT, UPDATE",
     # «Только тебе» (dela_0027): наблюдения только владельцу Дел; строки не удаляются (deleted_at), журнала нет.
     "crm.insights": "SELECT, INSERT, UPDATE",
+    # Режим отладки (dela_0024_debug): записки владельца о багах; не удаляются — разобранная уходит статусом.
+    "crm.debug_notes": "SELECT, INSERT, UPDATE",
 }
 # crm.v_interactions (dela_0025, аудит №9): хронология для показа — итог встречи владельцу с карточки, ссылка на веб
 # встреч только хозяину записи, team_sees.

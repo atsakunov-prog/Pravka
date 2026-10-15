@@ -89,6 +89,9 @@ STATIC = {
 # «Дайджест» (14.10.2026, digest.js) — тоже хвостом: страница #/digest — сводки, поиск и куда сводка разнесена в CRM.
 TAILS = {"app.js": ("twins.js", "day.js", "zasechka.js", "pravka.js", "phone.js", "spend.js", "digest.js"),
          "style.css": ("twins.css", "spend.css")}
+# Режим отладки (15.10.2026, debug.js и debug.css): строка «Что не так?» вверху страниц и страница #/debug — тоже хвостами.
+TAILS["app.js"] += ("debug.js",)
+TAILS["style.css"] += ("debug.css",)
 BRAND_MAX = 96 * 1024  # значок «Ковчега» уходит в /api/me строкой data: — большой картинке там не место
 
 
@@ -340,6 +343,8 @@ def build(cfg: Config) -> Starlette:
         name = request.path_params["name"]
         # Страницы-двойники (twins.py) — день, лента и диктовки владельца: его вебу и телефону, не службам с его токеном.
         if name in twins.VIEWS and who.kind == "service":
+            return _err(f"службе {who.name} этот вид не положен", 403)
+        if name == "debug" and who.kind == "service":  # записки отладки — экран владельца (debug.py), не службам
             return _err(f"службе {who.name} этот вид не положен", 403)
         if name == "when" and not _scope(who):
             # «Когда» в карточке дела (13.10.2026, when.py): фраза → срок и напоминание. Путь — вид, а не новый адрес:
