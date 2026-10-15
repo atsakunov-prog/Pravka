@@ -143,13 +143,45 @@ TWINS.pages.day = (() => {
     return T.card('tw-dg o4', ...kids);
   }
 
-  /** «Новое» — вопросы автоматики теми же строками, что «Подскажи» в Делах: свои кнопки, П-номера, «да» и «нет». */
+  /** «Новое» — вопросы автоматики теми же строками, что «Подскажи» в Делах: свои кнопки, П-номера, «да» и «нет». С флагом
+   *  asks (шаг 2 петли) — по фазе, та же очередь, что на главной Дел (asksQueue): до 15:00 — строка «к 15:00: N · к
+   *  вечеру: M», 15:00 — только сгорающее, вечером — группами, с пятницы 15:00 — «до понедельника тихо»; щелчок по
+   *  строке раскрывает всё до смены захода. */
   function newCard() {
+    if (asksOn()) return asksCard();
     const asks = sortedAsks(pendingSugs());
     if (!asks.length) return null;
     return T.card('tw-new o5', T.sec('inbox', 'Новое', { count: asks.length, hot: true, small: 'ждёт твоего да',
       link: asks.length > 4 ? 'все ' + asks.length : 'в Делах', href: '#/new' }),
     el('div', { class: 'group asks tw-asks' }, asks.slice(0, 4).map(askItem)));
+  }
+
+  function asksCard() {
+    const q = asksQueue();
+    S.asksShown = q.phase;
+    if (!q.total) return null;
+    const head = (small) => T.sec('inbox', 'Подскажи', { count: q.total, hot: true, small, link: 'все в «Новом»', href: '#/new' });
+    const fold = (text) => el('button', { class: 'asks-fold', onclick: asksExpand(q.phase) }, text, el('span', { class: 'faint' }, 'раскрыть'));
+    if (asksExpanded(q)) {
+      let left = q.max.evening;
+      const rows = [];
+      for (const g of q.groups) {
+        if (left <= 0) break;
+        const items = g.items.slice(0, left);
+        left -= items.length;
+        rows.push(el('div', { class: 'tw-asks-h' }, `${g.title} · ${g.items.length}`, g.urgent ? el('span', { class: 'warn' }, ' · сгорает ' + g.urgent) : null),
+          ...items.map(askItem));
+      }
+      const more = q.total - (q.max.evening - Math.max(left, 0));
+      return T.card('tw-new o5', head(q.phase === 'evening' ? 'по клиентам и людям' : 'раскрыто до ' + (q.next ? q.next.label : 'захода')),
+        el('div', { class: 'group asks tw-asks' }, rows), more > 0 ? el('div', { class: 'tw-ls' }, `ещё ${more} — в «Новом»`) : null);
+    }
+    if (q.phase === 'today' && q.urgent.length) {
+      return T.card('tw-new o5', head('сгорает сегодня'),
+        el('div', { class: 'group asks tw-asks' }, q.urgent.slice(0, q.max.today).map(askItem)),
+        q.rest ? fold('к вечеру: ' + q.rest) : null);
+    }
+    return T.card('tw-new o5', head(null), fold(asksFoldText(q)));
   }
 
   /** «Сегодня» — дела со сроком сегодня (кроме взятых в «Сейчас») и встречи дня по времени; завтрашнее — строкой. */

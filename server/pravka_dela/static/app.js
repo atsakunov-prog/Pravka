@@ -30,6 +30,8 @@ const S = {
   renamed: new Map(), // id «Зачем» → старые названия (Свод zachem.renamed, 13.10.2026)
   merge: null, // «Это тот же, что…»: {from, to} — лист подтверждения слияния на странице человека (аудит №23)
   ideas: new Map(), // идеи у клиента, человека, сделки (захват, 15.10.2026, dela_0032) — только свои, полем ideas синка
+  // «Подскажи» двумя заходами (шаг 2 петли): ритм и тишина из Свода; в какую фазу блок раскрыли щелчком; какая показана.
+  asksRhythm: null, quiet: null, asksOpen: null, asksShown: null,
 };
 // Три группы дел (владелец 10.10.2026): «есть дела, которые ждут меня — люди что-то спросили и ждут, они
 // мега важные… второе — что я сам придумал… третье — проверить, что мне люди должны». Вечером назвал их:
@@ -97,7 +99,11 @@ async function sync(full) {
   // Круг жизни: направления проектов (их наследуют дела) и справочник из Свода — только свои (RLS).
   if (d.full) S.krug.proj.clear();
   for (const k of d.krug || []) S.krug.proj.set(k.id, { directions: k.directions || [], why_id: k.why_id || null });
+  // Ритм очереди «Подскажи» и тишина (шаг 2 петли): записи Свода нет — заводское; полный синк начинает с него.
+  if (d.full || !S.asksRhythm) { S.asksRhythm = asksNorm(null); S.quiet = quietNorm(null); }
   for (const r of d.svod || []) {
+    if (r.key === 'asks.rhythm') S.asksRhythm = asksNorm(r.value);
+    if (r.key === 'day.quiet') S.quiet = quietNorm(r.value);
     const v = Array.isArray(r.value) ? r.value : [];
     if (r.key === 'krug.directions') S.krug.dirs = v.filter((x) => x && x.key).sort((a, b) => ((+a.pos || 0) % 12) - ((+b.pos || 0) % 12));
     if (r.key === 'krug.principles') S.krug.principles = v.map((x) => String(x).trim()).filter(Boolean);
@@ -533,6 +539,196 @@ const planOn = () => ((S.me && S.me.features) || []).includes('plan');
 const pendingSugs = () => [...S.sugs.values()].filter((s) => s.status === 'pending' && s.for_user === S.me.user && !isPlan(s));
 const planSugs = () => [...S.sugs.values()].filter((s) => s.status === 'pending' && s.for_user === S.me.user && isPlan(s))
   .sort((a, b) => ((a.payload || {}).order || 99) - ((b.payload || {}).order || 99));
+
+// ── «Подскажи» двумя заходами (шаг 2 петли этапа 4, 15.10.2026; сервер — asks.py, контракт dela-asks.json) ──────────
+// Саша: «два захода одной очереди „Подскажи“ на „Сегодня“: 15:04 — только сгорающее; 19:00 — остальное, по клиентам и
+// людям». Вопросы те же (pendingSugs) — меняется только КОГДА блок раскрыт и КАК сгруппирован: до 15:00 — строка «к 15:00:
+// N · к вечеру: M», 15:00 — только сгорающее, с вечернего захода — всё группами, с пятницы 15:00 — «до понедельника
+// тихо». Ничего не прячется насовсем: щелчок по строке раскрывает всё до смены фазы, «Новое» показывает всё всегда.
+// Правило — точная копия asks.py (фазы, Свод asks.rhythm и day.quiet поверх заводского по полю, порядок групп); таблицу
+// фаз контракта сервер сверяет со своим кодом, а заводское здесь — со своим (test_dela_asks.py). Срочность и предмет
+// ставит сервер при записи (payload.urgency, urgent_on, about). Без флага asks — блок по-старому.
+/* asks.rhythm_factory */ const ASKS_FACTORY = {"evening":"18:00","fri":"14:00","fri_winter":"13:30","winter":["11-15","01-15"],"today":"15:00","night_end":"05:00","today_max":5,"evening_max":7};
+/* day.quiet_factory */ const QUIET_FACTORY = {"v":1,"weekend":{"dow":5,"from":"15:00"}};
+const ASKS_KINDS = ['client', 'person', 'meeting', 'small']; // порядок групп вечером, как asks.KINDS
+const ASKS_SMALL = 'Мелочь';
+const ASKS_ELSE = 'Прочее';
+const asksOn = () => ((S.me && S.me.features) || []).includes('asks');
+const hmMin = (v) => { const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(String(v == null ? '' : v).trim()); return m ? +m[1] * 60 + +m[2] : null; };
+const hmStr = (min) => String(Math.floor(min / 60)).padStart(2, '0') + ':' + String(min % 60).padStart(2, '0');
+/** «ММ-ДД» — настоящий день (високосный год: «02-29» тоже день), как asks._md. */
+const mdOk = (v) => { const m = /^(\d{2})-(\d{2})$/.exec(String(v == null ? '' : v).trim()); if (!m) return false;
+  const d = new Date(Date.UTC(2028, +m[1] - 1, +m[2])); return d.getUTCMonth() === +m[1] - 1 && d.getUTCDate() === +m[2]; };
+/** Свод asks.rhythm поверх заводского по полю (как asks.norm): кривое поле — заводское, молча. */
+function asksNorm(v) {
+  const out = { ...ASKS_FACTORY, winter: [...ASKS_FACTORY.winter] };
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return out;
+  for (const k of ['evening', 'fri', 'fri_winter', 'today', 'night_end']) if (hmMin(v[k]) != null) out[k] = hmStr(hmMin(v[k]));
+  if (Array.isArray(v.winter) && v.winter.length === 2 && v.winter.every(mdOk)) out.winter = v.winter.map((x) => String(x).trim());
+  for (const k of ['today_max', 'evening_max']) if (Number.isInteger(v[k]) && v[k] >= 1 && v[k] <= 50) out[k] = v[k];
+  return out;
+}
+/** Свод day.quiet: очереди нужна только часть weekend ({dow 1…7, from} по полю; null — тишины нет), как asks.norm_quiet. */
+function quietNorm(v) {
+  const out = { weekend: { ...QUIET_FACTORY.weekend } };
+  if (!v || typeof v !== 'object' || Array.isArray(v) || !('weekend' in v)) return out;
+  const w = v.weekend;
+  if (w === null || w === false) return { weekend: null };
+  if (typeof w !== 'object' || Array.isArray(w)) return out;
+  if (Number.isInteger(w.dow) && w.dow >= 1 && w.dow <= 7) out.weekend.dow = w.dow;
+  if (hmMin(w.from) != null) out.weekend.from = hmStr(hmMin(w.from));
+  return out;
+}
+const asksRh = () => S.asksRhythm || asksNorm(null);
+const asksQt = () => S.quiet || quietNorm(null);
+/** «Сейчас» очереди: часы браузера; для проверки глазами — localStorage dela.asksAt (ISO, интерфейса нет). */
+const asksNow = () => { const a = LS.get('asksAt', null); const t = a ? Date.parse(a) : NaN; return Number.isFinite(t) ? t : Date.now(); };
+const mskAt = (day, min) => D.parse(day) - MSK_MS + min * 60e3; // миг «день, минута от полуночи» по Москве
+function asksWinter(rh, day) { const md = day.slice(5); const [lo, hi] = rh.winter; return lo <= hi ? md >= lo && md <= hi : md >= lo || md <= hi; }
+/** Вечерний заход дня — минуты по Москве или null (Сб–Вс): как asks.evening_at шага 1. */
+function eveningMin(rh, day) {
+  const wd = D.wd(day);
+  return wd > 4 ? null : hmMin(rh[wd < 4 ? 'evening' : asksWinter(rh, day) ? 'fri_winter' : 'fri']);
+}
+/** Тишина выходных: с weekend.dow weekend.from (Пт 15:00) до понедельника night_end — как asks.in_quiet. */
+function asksQuietAt(rh, q, ms) {
+  const w = q && q.weekend;
+  if (!w) return false;
+  const { day, hm } = msk(ms);
+  const pos = D.wd(day) * 1440 + hmMin(hm);
+  return pos >= (w.dow - 1) * 1440 + hmMin(w.from) || pos < hmMin(rh.night_end);
+}
+/** Фаза очереди в миг ms — как asks.phase: before | today | evening | quiet. */
+function asksPhaseAt(ms, rh = asksRh(), q = asksQt()) {
+  if (asksQuietAt(rh, q, ms)) return 'quiet';
+  const { day, hm } = msk(ms);
+  const min = hmMin(hm);
+  if (min < hmMin(rh.night_end)) return eveningMin(rh, D.add(day, -1)) != null ? 'evening' : 'quiet'; // хвост вчерашнего вечера
+  const ev = eveningMin(rh, day);
+  if (ev == null) return 'quiet';
+  if (min >= ev) return 'evening';
+  return min >= hmMin(rh.today) ? 'today' : 'before';
+}
+/** Ближайший заход после ms: {at, phase, label: «15:00» | «пн 15:00»} или null — как asks.next_start и when_word. */
+function asksNext(ms, rh = asksRh(), q = asksQt()) {
+  const first = msk(ms).day;
+  for (let k = 0; k < 9; k++) {
+    const day = D.add(first, k);
+    const ev = eveningMin(rh, day);
+    if (ev == null) continue;
+    const t = hmMin(rh.today);
+    for (const min of t < ev ? [t, ev] : [ev]) {
+      const at = mskAt(day, min);
+      const phase = at > ms ? asksPhaseAt(at, rh, q) : null;
+      if (phase === 'today' || phase === 'evening') return { at, phase, label: (k ? WD_SHORT[D.wd(day)] + ' ' : '') + hmStr(min) };
+    }
+  }
+  return null;
+}
+/** Сгорает в этот день: urgency today и urgent_on — этот день (как asks.is_urgent). Завтра тот же вопрос — вечерний. */
+const isUrgent = (s, day) => { const p = s.payload || {}; return p.urgency === 'today' && String(p.urgent_on || '') === day; };
+/** Предмет вопроса: payload.about от сервера; вопрос без штампа (до шага 2) — мелочь по пачке (как asks.about_of). */
+const aboutOf = (s) => {
+  const a = (s.payload || {}).about;
+  if (a && typeof a === 'object' && ASKS_KINDS.includes(a.kind)) return { kind: a.kind, id: a.id || null, title: String(a.title || '') };
+  return { kind: 'small', id: null, title: s.batch_title || ASKS_ELSE };
+};
+/** Название группы — свежее по id из синка (клиента переименовали после вопроса); title штампа — запас. */
+function asksTitle(a) {
+  if (a.kind === 'small') return ASKS_SMALL;
+  if (a.kind === 'client' && a.id && project(a.id)) return project(a.id).name;
+  if (a.kind === 'person' && a.id && person(a.id)) return personName(person(a.id));
+  return a.title || (a.kind === 'meeting' ? 'Встреча' : ASKS_ELSE);
+}
+/** Очередь «Подскажи» на сейчас — как asks.queue и вид asks: фаза, ближайший заход, группы в порядке экрана (со
+ *  сгорающим — первыми, дальше клиенты, люди, встречи, мелочь; внутри вида — кто дольше ждёт), в группе — сгорающее,
+ *  потом старые сверху; urgent — сгорающее в порядке групп; plan — число кандидатов «Сейчас на завтра» (их блок —
+ *  planBox шага 1, здесь только счёт). */
+function asksQueue() {
+  const ms = asksNow(), rh = asksRh(), q = asksQt();
+  const day = msk(ms).day;
+  const groups = new Map();
+  // Кто дольше ждёт — created_at синка (до секунды), равные — по id; простым сравнением строк, как сервер (не localeCompare).
+  const cmp = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
+  const list = pendingSugs().sort((a, b) => cmp(a.created_at, b.created_at) || cmp(String(a.id), String(b.id)));
+  for (const s of list) {
+    const a = aboutOf(s);
+    const key = a.kind === 'small' ? 'small' : a.kind + ':' + (a.id || a.title);
+    if (!groups.has(key)) groups.set(key, { kind: a.kind, id: a.kind === 'small' ? null : a.id, title: asksTitle(a), hot: [], cold: [], old: s.created_at });
+    const g = groups.get(key);
+    (isUrgent(s, day) ? g.hot : g.cold).push(s);
+  }
+  const order = [...groups.values()].sort((a, b) => (!a.hot.length - !b.hot.length)
+    || ASKS_KINDS.indexOf(a.kind) - ASKS_KINDS.indexOf(b.kind) || cmp(a.old, b.old));
+  const out = order.map((g) => ({ kind: g.kind, id: g.id, title: g.title, urgent: g.hot.length, items: [...g.hot, ...g.cold] }));
+  const urgent = order.flatMap((g) => g.hot);
+  return { phase: asksPhaseAt(ms, rh, q), next: asksNext(ms, rh, q), day, groups: out, urgent, total: list.length,
+    rest: list.length - urgent.length, plan: planSugs().length, max: { today: rh.today_max, evening: rh.evening_max } };
+}
+/** Свёрнутая строка очереди словами: «Подскажи · к 15:00: 1 · к вечеру: 6», в пятницу до захода — «к 14:00: 7»; после
+ *  «сгорающего» — «к вечеру: M»; в тишине — «Подскажи: N — до понедельника тихо». Нулевые части не пишутся. */
+function asksFoldText(q) {
+  if (q.phase === 'quiet') {
+    const till = q.next && !q.next.label.startsWith('пн ') ? 'до ' + q.next.label : 'до понедельника';
+    return `Подскажи: ${q.total} — ${till} тихо`;
+  }
+  const parts = q.phase === 'before' && q.next && q.next.phase === 'evening' ? [`к ${q.next.label}: ${q.total}`]
+    : [q.phase === 'before' && q.next && q.urgent.length ? `к ${q.next.label}: ${q.urgent.length}` : null, q.rest ? 'к вечеру: ' + q.rest : null];
+  return ['Подскажи', ...parts.filter(Boolean)].join(' · ');
+}
+/** Раскрыть очередь щелчком — до смены фазы (S.asksOpen хранит фазу, в которую раскрыли). */
+const asksExpand = (phase) => () => { S.asksOpen = phase; render(); };
+const asksExpanded = (q) => q.phase === 'evening' || S.asksOpen === q.phase;
+/** Значок группы: клиент — портфель, человек — инициалы, встреча — люди, мелочь — список. */
+function asksLead(g) {
+  if (g.kind === 'client') return icon('briefcase', 16);
+  if (g.kind === 'person') return g.id && person(g.id) ? avatar(person(g.id)) : icon('user', 16);
+  return icon(g.kind === 'meeting' ? 'users' : 'list', 16);
+}
+const asksHref = (g) => (!g.id ? null : g.kind === 'client' ? '#/p/' + g.id : g.kind === 'person' ? '#/h/' + g.id
+  : g.kind === 'meeting' ? '#/m/' + g.id : null);
+/** Строка «Подскажи» по фазе на главной «Сейчас»: свёрнута, сгорающее или всё группами. П-номера — по порядку экрана
+ *  (askItem кладёт их в S.sugOrder) — так их видит и Claude. */
+function asksPhased(q) {
+  const expand = asksExpand(q.phase);
+  if (asksExpanded(q)) return asksGrouped(q);
+  if (q.phase === 'today' && q.urgent.length) {
+    const shown = q.urgent.slice(0, q.max.today);
+    const box = asksBox(shown, { title: 'Подскажи', sub: 'сгорает сегодня — люди и договорённости сегодняшних встреч', n: false });
+    // Строка «к вечеру» — последней строкой той же панели (plate() кладёт её в .rows с вопросами).
+    if (q.rest) box.append(el('button', { class: 'asks-fold more', onclick: expand }, icon('help', 16), 'к вечеру: ' + q.rest, el('span', { class: 'faint' }, 'раскрыть')));
+    return [box, q.urgent.length > shown.length
+      ? el('a', { class: 'new-link', href: '#/new' }, icon('inbox', 17), `ещё сгорает ${q.urgent.length - shown.length} — в «Новом»`) : null];
+  }
+  return el('button', { class: 'asks-fold', onclick: expand, title: 'Раскрыть всё — до смены захода' },
+    tint(icon('help', 17), 'var(--warn)'), asksFoldText(q), el('span', { class: 'faint' }, 'раскрыть'));
+}
+/** Все вопросы группами (вечер или раскрыто щелчком): подзаголовок «Клиент · 2», до evening_max вопросов, дальше —
+ *  «ещё K — в «Новом»». «Поставить все» — как у прежнего блока: только если у показанных нет своих кнопок. */
+function asksGrouped(q) {
+  let left = q.max.evening;
+  const shown = [];
+  const parts = [];
+  for (const g of q.groups) {
+    if (left <= 0) break;
+    const items = g.items.slice(0, left);
+    left -= items.length;
+    shown.push(...items);
+    parts.push(el('div', { class: 'subgroup asks-g' }, groupHead('h3', g.title, g.items.length, { lead: () => asksLead(g), href: asksHref(g),
+      sub: g.urgent ? 'сгорает сегодня: ' + g.urgent : null }), el('div', { class: 'rows' }, items.map(askItem))));
+  }
+  const ids = shown.map((s) => s.id);
+  const more = q.total - shown.length;
+  const sub = q.phase === 'evening' ? 'по клиентам и людям' : 'раскрыто до ' + (q.next ? q.next.label : 'следующего захода');
+  // Панель — одни подгруппы (plate() их не оборачивает), «ещё K» — ссылкой под панелью, как «Всё «Новое»».
+  return [el('div', { class: 'group asks' },
+    el('h2', {}, tint(icon('help', 17), 'var(--warn)'), 'Подскажи', el('span', { class: 'gsub' }, sub),
+      ids.length > 1 && !shown.some(sugOptions) ? el('span', { class: 'act' },
+        el('button', { class: 'chip-btn', onclick: () => decide(ids, 'accept') }, 'Поставить все'), ' ',
+        el('button', { class: 'chip-btn', onclick: () => decide(ids, 'reject') }, 'Не надо все')) : null),
+    parts),
+  more > 0 ? el('a', { class: 'new-link', href: '#/new' }, icon('inbox', 17), `ещё ${more} — в «Новом»`) : null];
+}
 /** Закрытия и уточнения, которые сервер принял сам (store._auto: владелец 05.10 и 08.10.2026 — «спокойно
  *  закрывай и спокойно уточняй»), — за days дней, свежие сверху. Узнаются по причине решения: принятое руками
  *  предложение с payload.auto сюда не попадает. «Понятно» (seen_at) убирает их совсем: 06.10.2026 #268 висел
@@ -961,7 +1157,8 @@ async function boot() {
   await sync(true);
   render();
   // Пока человек набирает новое дело, фон только подтягивает данные, а не перерисовывает.
-  const refresh = () => sync().then(softRender).catch(() => {});
+  // Сеть пропала — фаза «Подскажи» всё равно меняется по часам (шаг 2 петли): 15:00 и вечерний заход видны и без синка.
+  const refresh = () => sync().then(softRender).catch(() => { if (S.asksShown && asksOn() && asksPhaseAt(asksNow()) !== S.asksShown) softRender(); });
   setInterval(() => { if (!document.hidden) refresh(); }, 30000);
   window.addEventListener('focus', refresh);
 }
@@ -1918,12 +2115,19 @@ function renderNow() {
 /** «Новое» на главной: «Подскажи» с кнопками, как в «Новом» (П-номера — те же, их видит Claude); остальное «Нового»
  *  (добавлено само, сделано само) — строкой-ссылкой: оно ответа не ждёт. Пусто совсем — блока нет. */
 function newBox() {
-  const asks = sortedAsks(pendingSugs());
   const since = Date.now() - FEED_DAYS * 86400e3;
   const fed = openMine().filter((t) => Date.parse(t.created_at) > since && !feedHidden().has(t.id)).length;
   const auto = autoDone(7).length;
   const rest = [fed ? `добавлено само за ${FEED_DAYS} дня: ${fed}` : null, auto ? `сделано само: ${auto}` : null].filter(Boolean).join(' · ');
   const link = (text) => el('a', { class: 'new-link', href: '#/new' }, icon('inbox', 17), text);
+  // Шаг 2 петли (флаг asks): блок раскрыт по фазе — до 15:00 строкой, 15:00 — сгорающее, вечером — всё группами.
+  if (asksOn()) {
+    const q = asksQueue();
+    S.asksShown = q.phase;
+    if (!q.total) return rest ? link('Новое: вопросов нет · ' + rest) : null;
+    return [asksPhased(q), rest ? link('Всё «Новое»: ' + rest) : null];
+  }
+  const asks = sortedAsks(pendingSugs());
   if (!asks.length) return rest ? link('Новое: вопросов нет · ' + rest) : null;
   return [asksBox(asks, { title: 'Новое', sub: 'подскажи — без тебя не поставлю', n: false }), rest ? link('Всё «Новое»: ' + rest) : null];
 }

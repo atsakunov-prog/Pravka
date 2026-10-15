@@ -23,8 +23,8 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from . import (db, did, digest, focus, guard, ideas, insights, krug, meetings, people, phone, place, spend, twins, where,
-               zasechka)
+from . import (asks, db, did, digest, focus, guard, ideas, insights, krug, meetings, people, phone, place, spend, twins,
+               where, zasechka)
 
 log = logging.getLogger("dela.store")
 
@@ -49,7 +49,13 @@ TASK_FIELDS = {
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
             "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
             "privacy", "context_index", "claude_guard", "nest", "debug", "capture", "capture_model", "ideas", "did",
-            "remind_phone", "speaker_link", "people_final", "plan"]
+            "remind_phone", "speaker_link", "people_final", "plan", "asks"]
+# «asks» — «Подскажи» двумя заходами (шаг 2 петли этапа 4, 15.10.2026, asks.py; контракт dela-asks.json): сервер при
+# записи вопроса ставит payload.urgency («today» — вопрос по сегодняшней встрече или служба сама сказала, с urgent_on —
+# днём сгорания; иначе «evening»), payload.about ({kind: client | person | meeting | small | plan, id?, title}); вид asks
+# (фаза, ближайший заход, группы в порядке экрана, «ждут от тебя», «Сейчас: x из y»; ?at= — миг); Свод asks.rhythm
+# (с полями шага 2: today 15:00, night_end 05:00, today_max 5, evening_max 7) и day.quiet (weekend — с Пт 15:00 тихо).
+# Без флага телефон и веб показывают «Подскажи» по-старому (все сразу, свежие сверху), Встречи и дайджест шлют списки.
 # «plan» — «Сейчас на завтра» (шаг 1 петли этапа 4, 15.10.2026, dela_0034, plan.py; контракт dela-plan.json): Пн–Чт в
 # 18:00 (Пт — 14:00, с 15.11 по 15.01 — 13:30, на понедельник) сервер кладёт в «Подскажи» до семи кандидатов правилом
 # (source plan, batch_ref plan:<день>, payload.for_date, why, from, basket), варианты «☆ На завтра» (focus_on будущим
@@ -1047,6 +1053,9 @@ def op_suggestion_create(conn, user, op):
             # («Женя Соколов» сервер узнал уверенным who — веб не должен спрашивать «Кто это»). Нет ключа — предложение
             # старого сервера, веб судит сам, как раньше.
             payload["held"] = ""
+        # Срочность и предмет (шаг 2 петли, asks.py): когда вопрос раскрыт на «Сегодня» и в какой группе. Повтор той же
+        # находки сюда не доходит (вернулся выше прежним) — не перештамповывается.
+        asks.stamp(conn, {**data, "kind": kind}, payload, lambda p: _names(conn, p, cache))
         data["payload"] = Jsonb(payload)
     row = _insert(conn, "tasks.suggestions", data)
     if reason:
@@ -2848,6 +2857,8 @@ HANDLERS["capture.move"] = _late("op_capture_move")
 VIEWS["capture"] = _late("view_capture")
 VIEWS["reminders"] = _late("view_reminders")
 VIEWS["kuda"] = _late("view_kuda")
+# «Подскажи» двумя заходами (шаг 2 петли): вид asks — фаза, группы, «ждут от тебя» (asks.py; штамп — op_suggestion_create).
+asks.register(VIEWS)
 
 
 def view(url: str, user: str, name: str, **params) -> dict:

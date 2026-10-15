@@ -227,7 +227,7 @@
    }
   },
   "asks.rhythm": {
-   "who": "пишут claude и владелец; читает сервер Дел (с шага 2 — ещё веб и телефон); шаг 2 дописывает свои поля",
+   "who": "пишут claude и владелец; читают сервер Дел, веб и телефон. План берёт отсюда evening, fri, fri_winter, winter (время прогона); поля шага 2 (today, night_end, today_max, evening_max — заходы «Подскажи») описаны в dela-asks.json",
    "factory": {
     "evening": "18:00",
     "fri": "14:00",
@@ -235,7 +235,11 @@
     "winter": [
      "11-15",
      "01-15"
-    ]
+    ],
+    "today": "15:00",
+    "night_end": "05:00",
+    "today_max": 5,
+    "evening_max": 7
    }
   }
  },

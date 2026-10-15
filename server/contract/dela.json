@@ -61,7 +61,7 @@
                "org.create", "org.set", "access.set", "interaction.add", "interaction.set",
                "capture.say", "capture.move", "idea.add", "idea.set", "task.did"],
   "views": ["morning", "new", "waiting", "person?person_id=", "quick", "now", "project?project_id=", "week", "search?q=", "krug", "tree?direction=&node=",
-            "capture?ref=", "reminders", "ideas"],
+            "capture?ref=", "reminders", "ideas", "asks?at="],
   "rules": [
     "op_id — uuid на операцию, телефон хранит его в очереди: повтор отдаёт прежний ответ, дублей нет.",
     "id нового дела телефон может создать сам (uuid) — офлайн-создание; номер num приходит с ответом.",

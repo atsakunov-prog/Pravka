@@ -941,6 +941,21 @@ a.src-mark:hover { color: var(--accent); }
 .plan-box .plan-marked .link { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; }
 .plan-box .plan-marked .kv-i { color: var(--accent); }
 .sug.plan .main > div:first-child .link { color: inherit; }
+/* «Подскажи» двумя заходами (шаг 2 петли): свёрнутая строка — щелчок раскрывает всё до смены захода; вечером вопросы
+   группами — подзаголовок «Клиент · 2» над своими вопросами. */
+.asks-fold {
+  margin-top: 16px; display: flex; align-items: center; gap: 8px; width: 100%; padding: 11px 16px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 10px; font: inherit; font-size: 14.5px; font-weight: 600; color: var(--text);
+  text-align: left; cursor: pointer;
+}
+.asks-fold:hover { border-color: var(--check); }
+.asks-fold .faint { margin-left: auto; color: var(--faint); font-size: 13px; font-weight: 400; }
+.asks-fold.more { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: none; font-size: 14px; font-weight: 500; }
+.asks-fold.more:hover { color: var(--accent); }
+.asks-fold.more > .kv-i { color: var(--icon); }
+.subgroup.asks-g > h3 .gsub { color: var(--warn); font-size: 13px; font-weight: 500; }
+/* «ещё K — в «Новом»» и «Всё «Новое»» — две ссылки подряд под панелью: не слипаются. */
+.new-link + .new-link { margin-left: 16px; }
 /* Встречи проекта и клиента (аудит №3) — строки как на странице «Встречи», «все встречи →» под ними. */
 .meet-more { display: inline-block; margin-top: 8px; font-size: 13.5px; }
 /* «Это тот же, что…» (аудит №23): кнопка владельцу и лист подтверждения слияния — словами, что уйдёт и куда. */
