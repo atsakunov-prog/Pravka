@@ -16,7 +16,7 @@ class CallRulesTest {
     private val family = CallRules.familyList(CallRules.FAMILY_DEFAULT)
     private val people = listOf(
         CallRules.Person(listOf("Иван Петров", "Иван"), listOf("+7 (916) 123-45-67"), client = "Бета Групп", projectId = "p-beta"),
-        CallRules.Person(listOf("Наташа Шепелина", "Наташа"), emptyList()),
+        CallRules.Person(listOf("Наташа Тестова", "Наташа"), emptyList()),
     )
 
     private fun call(name: String, number: String = "") = CallRules.Call(0L, 10 * 60_000L, name, number, outgoing = false)
@@ -28,7 +28,7 @@ class CallRulesTest {
         assertEquals("Звонок: Марианна", v.title)
         assertTrue(v.sure)
         assertEquals(CallRules.FAMILY, CallRules.verdict(call("Папа"), family, people, null).category)
-        assertEquals(CallRules.FAMILY, CallRules.verdict(call("Марианна Цакунова"), family, people, null).category)
+        assertEquals(CallRules.FAMILY, CallRules.verdict(call("Марианна Тестова"), family, people, null).category)
         assertEquals(CallRules.FAMILY, CallRules.verdict(call("Серёжа сын"), family, people, null).category)
         // «Мама» не цепляет «Маматова»: слово целиком или падеж, не любая приставка.
         assertEquals(CallRules.UNKNOWN, CallRules.verdict(call("Маматов Игорь"), family, emptyList(), null).category)
@@ -42,7 +42,7 @@ class CallRulesTest {
         assertEquals("Бета Групп", byNumber.client)
         assertEquals("p-beta", byNumber.project)
         // По имени контакта целиком.
-        val byName = CallRules.verdict(call("Наташа Шепелина"), family, people, null)
+        val byName = CallRules.verdict(call("Наташа Тестова"), family, people, null)
         assertEquals(CallRules.WORK, byName.category)
         assertEquals("", byName.client)
     }

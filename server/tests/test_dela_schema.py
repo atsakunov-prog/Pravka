@@ -175,7 +175,7 @@ def test_match_name_aliases_people_and_orgs(dela, conn):
         )
         c.execute(
             "INSERT INTO crm.people (name, short, aliases, owner_id, org_id) VALUES "
-            "('Тимофей', 'Тимофей', '{\"Тимофей Птиц\"}', 'sasha', %s), ('Марианна Цакунова', 'Марианна', '{}', 'sasha', NULL)",
+            "('Тимофей', 'Тимофей', '{\"Тимофей Птиц\"}', 'sasha', %s), ('Марианна Тестова', 'Марианна', '{}', 'sasha', NULL)",
             (org,),
         )
 
@@ -190,7 +190,7 @@ def test_match_name_aliases_people_and_orgs(dela, conn):
     assert m("додо пицца") == ("Додо", None)
     assert m("Птиц") == ("ПТИЦ", None)
     assert m("Тимофей Птиц") == ("ПТИЦ", "Тимофей")
-    assert m("Марианна Цакунова") == (None, "Марианна")
+    assert m("Марианна Тестова") == (None, "Марианна")
     assert m("Неизвестный") == (None, None)
 
 
