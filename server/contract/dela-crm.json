@@ -85,6 +85,52 @@
     "due_date": "2026-10-09",
     "source": "manual"
    }
+  },
+  {
+   "op": "comment.add",
+   "op_id": "<uuid>",
+   "comment": {
+    "task_id": "<task_id>",
+    "text": "Только мне: проверить их цифры",
+    "private": true
+   },
+   "_": "флаг privacy: комментарий «только мне» — видит только автор, журнала нет, приватность не снимается"
+  },
+  {
+   "op": "interaction.set",
+   "op_id": "<uuid>",
+   "id": "<interaction_id>",
+   "set": {
+    "private": true
+   },
+   "_": "флаг privacy: «скрыть от команды» — только хозяин записи; private: false у приватной — отказ словами"
+  },
+  {
+   "op": "insight.add",
+   "op_id": "<uuid>",
+   "insight": {
+    "kind": "note",
+    "text": "Сомневается в сроках — спросить ещё раз",
+    "person_ids": [
+     "<person_id>"
+    ],
+    "source": "phone"
+   },
+   "_": "флаг privacy: «Только тебе» — только владельцу Дел; kind — note или ключ разбора этапа 6"
+  },
+  {
+   "op": "insight.set",
+   "op_id": "<uuid>",
+   "id": "<insight_id>",
+   "set": {
+    "state": "seen"
+   },
+   "_": "«Видел» (seen), «Мимо» (dismissed), «Неверно» (wrong), «Пригодилось» (useful), «Перенёс» (moved)"
+  },
+  {
+   "op": "insight.delete",
+   "op_id": "<uuid>",
+   "id": "<insight_id>"
   }
  ],
  "sync_additions": {
@@ -433,7 +479,9 @@
       "deleted_at": null,
       "deal_name": "Альфа: фонды",
       "project_name": "Альфа Групп",
-      "mention": false
+      "mention": false,
+      "team_sees": "all",
+      "_": "team_sees (флаг privacy): что из записи видит команда — none (приватная), fact (только название встречи: итог и договорённости — владельцу с карточки встречи), all"
      }
     ],
     "meetings": [],
@@ -522,7 +570,38 @@
     "money": true,
     "owner": true,
     "entries": [],
-    "months": []
+    "months": [],
+    "insights": [
+     {
+      "id": "8d1c0f7a-3a1e-4c55-9a7e-2f6b0c1d9e40",
+      "kind": "note",
+      "text": "Сомневается в сроках — спросить ещё раз",
+      "quote": null,
+      "person_ids": [
+       "<person_id>"
+      ],
+      "project_id": "<project_id>",
+      "deal_id": null,
+      "org_id": null,
+      "meeting_id": null,
+      "at": "2026-10-15T12:00:00+03:00",
+      "at_sec": null,
+      "source": "web",
+      "source_ref": null,
+      "item_key": null,
+      "state": "new",
+      "author": "sasha",
+      "people": [
+       "Иван"
+      ],
+      "project_name": "Бета Групп",
+      "deal_name": null,
+      "org_name": null,
+      "meeting_title": null,
+      "meeting_ref": null,
+      "_": "«Только тебе» (dela_0027): видит только владелец; команде поле — []"
+     }
+    ]
    }
   },
   "deal": {
@@ -675,7 +754,9 @@
       "deleted_at": null,
       "deal_name": "Альфа: фонды",
       "project_name": "Альфа Групп",
-      "mention": false
+      "mention": false,
+      "team_sees": "all",
+      "_": "team_sees (флаг privacy): что из записи видит команда — none (приватная), fact (только название встречи: итог и договорённости — владельцу с карточки встречи), all"
      }
     ],
     "meetings": [],
@@ -704,7 +785,38 @@
     "money": true,
     "owner": true,
     "entries": [],
-    "minutes_all": null
+    "minutes_all": null,
+    "insights": [
+     {
+      "id": "8d1c0f7a-3a1e-4c55-9a7e-2f6b0c1d9e40",
+      "kind": "note",
+      "text": "Сомневается в сроках — спросить ещё раз",
+      "quote": null,
+      "person_ids": [
+       "<person_id>"
+      ],
+      "project_id": "<project_id>",
+      "deal_id": null,
+      "org_id": null,
+      "meeting_id": null,
+      "at": "2026-10-15T12:00:00+03:00",
+      "at_sec": null,
+      "source": "web",
+      "source_ref": null,
+      "item_key": null,
+      "state": "new",
+      "author": "sasha",
+      "people": [
+       "Иван"
+      ],
+      "project_name": "Бета Групп",
+      "deal_name": null,
+      "org_name": null,
+      "meeting_title": null,
+      "meeting_ref": null,
+      "_": "«Только тебе» (dela_0027): видит только владелец; команде поле — []"
+     }
+    ]
    }
   },
   "ties": {
@@ -914,7 +1026,9 @@
       "duration_min": null,
       "deleted_at": null,
       "deal_name": "Альфа: фонды",
-      "project_name": "Альфа Групп"
+      "project_name": "Альфа Групп",
+      "team_sees": "all",
+      "_": "team_sees (флаг privacy): что из записи видит команда — none (приватная), fact (только название встречи: итог и договорённости — владельцу с карточки встречи), all"
      }
     ],
     "deals": [
@@ -974,6 +1088,37 @@
       "last_move": "2026-10-05",
       "quiet_days": 0,
       "stale": false
+     }
+    ],
+    "insights": [
+     {
+      "id": "8d1c0f7a-3a1e-4c55-9a7e-2f6b0c1d9e40",
+      "kind": "note",
+      "text": "Сомневается в сроках — спросить ещё раз",
+      "quote": null,
+      "person_ids": [
+       "<person_id>"
+      ],
+      "project_id": "<project_id>",
+      "deal_id": null,
+      "org_id": null,
+      "meeting_id": null,
+      "at": "2026-10-15T12:00:00+03:00",
+      "at_sec": null,
+      "source": "web",
+      "source_ref": null,
+      "item_key": null,
+      "state": "new",
+      "author": "sasha",
+      "people": [
+       "Иван"
+      ],
+      "project_name": "Бета Групп",
+      "deal_name": null,
+      "org_name": null,
+      "meeting_title": null,
+      "meeting_ref": null,
+      "_": "«Только тебе» (dela_0027): видит только владелец; команде поле — []"
      }
     ]
    }
@@ -1044,6 +1189,42 @@
     }
    },
    "_": "Путь и статистика (05.10): очки только за доведённое, серия — дни с закрытым делом, суббота не рвёт. Уровень считает клиент по points.total: имена и пороги — THEMES и levelOf в server/pravka_dela/static/app.js; тема — users.settings.game_theme (torah | greek). days — 30 дней, здесь урезано до двух."
+  },
+  "insights": {
+   "request": "GET /api/view/insights?person_id=&project_id=&deal_id=&org_id=&meeting_id=&state=&limit=",
+   "response": {
+    "items": [
+     {
+      "id": "8d1c0f7a-3a1e-4c55-9a7e-2f6b0c1d9e40",
+      "kind": "note",
+      "text": "Сомневается в сроках — спросить ещё раз",
+      "quote": null,
+      "person_ids": [
+       "<person_id>"
+      ],
+      "project_id": "<project_id>",
+      "deal_id": null,
+      "org_id": null,
+      "meeting_id": null,
+      "at": "2026-10-15T12:00:00+03:00",
+      "at_sec": null,
+      "source": "web",
+      "source_ref": null,
+      "item_key": null,
+      "state": "new",
+      "author": "sasha",
+      "people": [
+       "Иван"
+      ],
+      "project_name": "Бета Групп",
+      "deal_name": null,
+      "org_name": null,
+      "meeting_title": null,
+      "meeting_ref": null,
+      "_": "«Только тебе» (dela_0027): видит только владелец; команде поле — []"
+     }
+    ]
+   }
   }
  },
  "ask": {
@@ -1287,6 +1468,25 @@
   "Хронология (interactions) в синк не входит: её дают виды client, deal, dossier; писать — interaction.add, убрать — interaction.delete (строка не удаляется, deleted_at).",
   "Стадии сделки: lead, proposal, mandate, active, closing, archive; закрыть — deal.set {outcome: won|lost|paused, lost_reason}; вернуть — deal.set {stage: active}. Следующий шаг сделки — её открытое дело (task.create с project_id и deal_id).",
   "Оплаты: payment.create {deal_id, kind, amount_kop, due_on}; payment.set {invoiced_on} — счёт выставлен, {paid_on} — деньги пришли, {cancelled_at} — не будет.",
-  "Источник: у дела (task.source) — manual (руками) или voice (голосом); phone для дела база не примет. У хронологии (interaction.source) — phone."
- ]
+  "Источник: у дела (task.source) — manual (руками) или voice (голосом); phone для дела база не примет. У хронологии (interaction.source) — phone.",
+  "Закон приватности (флаг privacy, 15.10.2026): машина из личных каналов (встречи, Telegram, телефонная книжка) пишет только в приватное — заметка и основание дела из них приходят приватным комментарием; в общее переносит только рука владельца. Без флага телефон полей private, операций insight.* и вида insights не шлёт: старый сервер отверг бы операцию целиком."
+ ],
+ "privacy": {
+  "_": "Пакет «Приватность» (15.10.2026, аудит №8–11, правило 26 карты Дел; флаг privacy). Команда видит работу по проекту, владелец — ещё и личные каналы и оценки. Телефону — docs/dela-phone-22.md.",
+  "sync": "comments[].private — приватные приходят только автору; people[] и orgs[] — поля по ярусу смотрящего (people[].tier: owner — всё; self — без пометок; work — без пометок и дня рождения; colleague — только имя, короткое имя, должность, компания; скрытое — null, [] и false), orgs[].note — владельцу и автору",
+  "views": "client, deal, dossier, meeting — поле insights («Только тебе», команде — []); строки timeline — team_sees, у записи встречи владельцу — итог и договорённости с карточки встречи, source_ref встречи не хозяину — null",
+  "ops": [
+   "comment.add + private",
+   "interaction.add + private",
+   "interaction.set {private: true} — только хозяин записи",
+   "insight.add / insight.set / insight.delete",
+   "svod.set privacy.team {meetings: fact|summary} — только владелец, ответ + touched"
+  ],
+  "refusals": [
+   "снять приватность комментария или записи — отказ словами",
+   "запись встречи и пункт дайджеста не хозяину — не правятся и не убираются",
+   "состав пользователей Дел на сделке меняет хозяин проекта (себя — каждый)",
+   "запись встречи (source meeting) в личный проект — отказ"
+  ]
+ }
 }

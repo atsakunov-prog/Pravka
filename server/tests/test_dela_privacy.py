@@ -404,3 +404,212 @@ def test_only_you_repeat_finding_and_home_meeting(mt):
         assert c.execute("SELECT deleted_at FROM crm.insights WHERE id = %s", (c_["id"],)).fetchone()["deleted_at"]
     bad = ops(url, "sasha", {"op": "insight.add", "insight": {**item, "item_key": "conflict-3"}})[0]
     assert not bad["ok"] and "личная встреча" in bad["error"]
+
+
+# ── Миграции поверх данных и разовый шаг privacy-fix ─────────────────────────────────────────
+
+
+def test_migration_privacy_over_data(admin_dsn):
+    """dela_0024–0028 поверх Дел, где уже есть люди, сделки, комментарии, записи встреч и команда: данные не меняются
+    (rev прежние), кроме событий доступа не-владельцам."""
+    import secrets as _secrets
+    from urllib.parse import urlparse, urlunparse
+
+    from psycopg import sql
+
+    name = f"pa_migpriv_{_secrets.token_hex(4)}"
+    with psycopg.connect(admin_dsn, autocommit=True) as a:
+        a.execute(sql.SQL("CREATE DATABASE {} ENCODING 'UTF8' TEMPLATE template0").format(sql.Identifier(name)))
+    u = urlparse(admin_dsn)
+    url = urlunparse((u.scheme, u.netloc, "/" + name, "", "", ""))
+    try:
+        files = dict(dela_db._sql_files())
+        before = {k: v for k, v in files.items() if k.startswith("dela_") and k < "dela_0024.sql"}
+        with psycopg.connect(url, autocommit=True) as c:
+            c.execute("CREATE SCHEMA core")
+            c.execute("CREATE TABLE core.migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
+            dela_db.apply_pending(c, before)
+        with dela_db.session(url, "system", "test") as c:
+            c.execute("INSERT INTO crm.users (id, name, role) VALUES ('sasha', 'Саша', 'owner')")
+            alena = c.execute("INSERT INTO crm.people (name, owner_id, traits) VALUES ('Алёна Тестова', 'sasha', 'черты') "
+                              "RETURNING id").fetchone()["id"]
+            c.execute("INSERT INTO crm.users (id, name, role, person_id, clients) VALUES ('alena', 'Алёна', 'member', %s, 'team')",
+                      (alena,))
+            pid = c.execute("INSERT INTO crm.projects (name, sphere, kind, owner_id) VALUES ('ООО Ромашка', 'work', 'client', "
+                            "'sasha') RETURNING id").fetchone()["id"]
+            c.execute("INSERT INTO crm.deals (project_id, name, stage, lead_person_id) VALUES (%s, 'Ромашка: модель', 'archive', %s)",
+                      (pid, alena))
+            tid = c.execute("INSERT INTO tasks.tasks (title, project_id, owner_id, created_by, notes, source) VALUES "
+                            "('Ромашка: договор', %s, 'sasha', 'sasha', 'заметка машины', 'telegram') RETURNING id",
+                            (pid,)).fetchone()["id"]
+            c.execute("INSERT INTO tasks.comments (task_id, author_id, text) VALUES (%s, 'sasha', 'Telegram: основание')", (tid,))
+            c.execute("INSERT INTO crm.interactions (at, kind, summary, next_step, project_id, source, source_ref, owner_id) "
+                      "VALUES (now(), 'meeting', 'Ромашка: модель: итог', 'договорились', %s, 'meeting', "
+                      "'https://meetings.example.org/m/5', 'sasha')", (pid,))
+            revs = {t: c.execute(f"SELECT array_agg(rev ORDER BY id) AS r FROM {t}").fetchone()["r"]
+                    for t in ("crm.people", "crm.deals", "tasks.tasks", "tasks.comments", "crm.interactions", "crm.users")}
+        with psycopg.connect(url, autocommit=True) as c:
+            got = dela_db.apply_pending(c, files)
+        assert got[:5] == ["dela_0024.sql", "dela_0025.sql", "dela_0026.sql", "dela_0027.sql", "dela_0028.sql"], got
+        with dela_db.session(url, "system", "test") as c:
+            for t, r in revs.items():
+                assert c.execute(f"SELECT array_agg(rev ORDER BY id) AS r FROM {t}").fetchone()["r"] == r, t
+            assert c.execute("SELECT private FROM tasks.comments").fetchone()["private"] is False
+            assert c.execute("SELECT summary FROM crm.interactions").fetchone()["summary"] == "Ромашка: модель: итог"
+            events = c.execute("SELECT user_id FROM crm.access_revoked WHERE project_id IS NULL").fetchall()
+            assert {e["user_id"] for e in events} == {"alena"}
+        # Сделка в архиве — Алёна клиента больше не видит (on_client), а черты о ней — не её (сессия суперпользователя:
+        # RLS не действует, проверяем правила функциями и ярусом вида).
+        with dela_db.session(url, "alena", "test") as c:
+            assert c.execute("SELECT crm.on_client('alena', %s) AS x", (pid,)).fetchone()["x"] is False
+            assert c.execute("SELECT traits FROM crm.v_people WHERE id = %s", (alena,)).fetchone()["traits"] is None
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as a:
+            a.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
+
+
+def test_privacy_fix_makes_old_bases_and_notes_private(team, capsys, tmp_path, monkeypatch):
+    """Разово после установки: прежние основания, «Это оно» и заметки машины — приватными; правленая руками заметка не
+    тронута; записи встреч — по переключателю; --dry ничего не пишет."""
+    from pravka_dela import __main__ as cli
+    from pravka_dela import privacy_fix
+
+    url = team["url"]
+    p = project(url, "sasha", "ООО Ромашка")
+    # Как было до пакета: общий комментарий-основание, заметка машины в деле, «Это оно» общим комментарием.
+    with dela_db.session(url, "sasha", "test") as c:
+        t1 = c.execute("INSERT INTO tasks.tasks (title, project_id, owner_id, created_by, notes, source) VALUES "
+                       "('Ответить', %s, 'sasha', 'sasha', 'пересказ переписки', 'telegram') RETURNING id", (p,)).fetchone()["id"]
+        t2 = c.execute("INSERT INTO tasks.tasks (title, project_id, owner_id, created_by, notes, source) VALUES "
+                       "('Прислать', %s, 'sasha', 'sasha', 'правил руками', 'telegram') RETURNING id", (p,)).fetchone()["id"]
+        base = c.execute("INSERT INTO tasks.comments (task_id, author_id, text) VALUES (%s, 'sasha', 'Встреча: основание') "
+                         "RETURNING id", (t1,)).fetchone()["id"]
+        merged = c.execute("INSERT INTO tasks.comments (task_id, author_id, text) VALUES (%s, 'sasha', "
+                           "'Telegram 15.10: слова переписки') RETURNING id", (t2,)).fetchone()["id"]
+        for tid, notes, status, extra in ((t1, "пересказ переписки", "accepted", {}), (t2, "иное от машины", "accepted", {})):
+            c.execute("INSERT INTO tasks.suggestions (for_user, kind, payload, source, status, decided_at, decided_by, "
+                      "result_task_id, created_by) VALUES ('sasha', 'create', %s, 'telegram', %s, now(), 'sasha', %s, 'sasha')",
+                      (store.Jsonb({"title": "x", "notes": notes}), status, tid))
+        c.execute("INSERT INTO tasks.suggestions (for_user, kind, task_id, payload, source, status, decided_at, decided_by, "
+                  "result, created_by, quote) VALUES ('sasha', 'close', %s, '{}', 'meeting', 'accepted', now(), 'sasha', %s, "
+                  "'sasha', 'основание')", (t1, store.Jsonb({"comment_id": str(base)})))
+        c.execute("INSERT INTO tasks.suggestions (for_user, kind, payload, source, status, decided_at, decided_by, reason, "
+                  "batch_title, created_by) VALUES ('sasha', 'create', '{}', 'telegram', 'rejected', now(), 'sasha', "
+                  "'уже есть: Прислать', 'Telegram 15.10', 'sasha')")
+    seq = store.sync(url, "natasha", 0)["seq"]
+    env = tmp_path / "dela.env"
+    env.write_text(f"DELA_DB_URL={url}\n", encoding="utf-8")
+    monkeypatch.delenv("DELA_DB_URL", raising=False)
+    assert cli.main(["--env", str(env), "privacy-fix", "--dry"]) == 0
+    said = capsys.readouterr().out
+    assert said.startswith("вхолостую") and "основания — приватными: 1 (и «Это оно»: 1)" in said, said
+    assert "в приватный комментарий: 1; правленые руками — не тронуты: 1" in said, said
+    with dela_db.session(url, "natasha", "test") as c:
+        assert len(c.execute("SELECT 1 FROM tasks.comments").fetchall()) == 2  # вхолостую — ничего не поменялось
+    out = privacy_fix.run(url)
+    assert (out["bases"], out["merged"], out["notes_moved"], out["notes_kept"]) == (1, 1, 1, 1)
+    with dela_db.session(url, "natasha", "test") as c:
+        assert c.execute("SELECT 1 FROM tasks.comments").fetchall() == []
+        notes = {r["title"]: r["notes"] for r in c.execute("SELECT title, notes FROM tasks.tasks").fetchall()}
+    assert notes == {"Ответить": None, "Прислать": "правил руками"}
+    with dela_db.session(url, "sasha", "test") as c:
+        texts = {r["text"] for r in c.execute("SELECT text FROM tasks.comments WHERE private").fetchall()}
+    assert texts == {"Встреча: основание", "Telegram 15.10: слова переписки", "Telegram: пересказ переписки"}
+    assert store.sync(url, "natasha", seq)["full"]  # событие доступа — полный синк
+
+
+# ── Тест-метла (контракт §5): ни одна метка приватного места не доходит до команды ─────────────────
+
+def _broom_world(team):
+    """По уникальной метке в каждом приватном месте (§1 закона). Ответ — (метки, что где лежит)."""
+    url = team["url"]
+    today = db_today(url).isoformat()
+    p = project(url, "sasha", "ООО Ромашка")
+    with dela_db.session(url, "system", "t") as c:
+        org = c.execute("INSERT INTO crm.orgs (name, owner_id, note) VALUES ('ООО Ромашка', 'sasha', 'МЕТКА-ОРГ-ПОМЕТКА') "
+                        "RETURNING id").fetchone()["id"]
+        c.execute("UPDATE crm.projects SET org_id = %s WHERE id = %s", (org, p))
+        ivan = c.execute(
+            "INSERT INTO crm.people (name, short, owner_id, org_id, traits, note, seeks, offers, source, birth_day, birth_month) "
+            "VALUES ('Иван Тестов', 'Иван', 'sasha', %s, 'МЕТКА-ЧЕРТЫ', 'МЕТКА-ПОМЕТКА', 'МЕТКА-ИЩЕТ', 'МЕТКА-ПРЕДЛАГАЕТ', "
+            "'МЕТКА-ОТКУДА', 29, 2) RETURNING id", (org,)).fetchone()["id"]
+        fam = c.execute("INSERT INTO crm.people (name, short, owner_id, phones, user_id) VALUES ('Марианна Тестова', "
+                        "'Марианна', 'sasha', '{+7 000 111-22-33}', 'marianna') RETURNING id").fetchone()["id"]
+        c.execute("UPDATE crm.users SET person_id = %s WHERE id = 'marianna'", (fam,))
+        # Пункт дайджеста Telegram — всегда приватная запись хронологии (dela_0018).
+        c.execute("INSERT INTO crm.interactions (at, kind, summary, project_id, person_ids, source, source_ref, owner_id, "
+                  "private) VALUES (now(), 'telegram', 'Telegram, окно: МЕТКА-ДАЙДЖЕСТ', %s, %s, 'digest', "
+                  "'digest:2026-10-15T1100#work-1', 'sasha', true)", (p, [ivan]))
+    d = deal(url, "sasha", p, "Ромашка: модель", lead_person_id=str(team["alena"]), person_ids=[str(ivan)],
+             fee_kop=987654321, my_view="МЕТКА-КАКВИЖУ")
+    # Заметка машины из Telegram — стала приватным комментарием.
+    s = sug(url, "create", "telegram", {"title": "Иван Тестов: прислать модель", "project_name": "ООО Ромашка",
+                                         "notes": "МЕТКА-ЗАМЕТКА-МАШИНЫ"}, quote="«пришлю»")
+    t1 = one(url, "sasha", {"op": "suggestion.decide", "id": s["id"], "decision": "accept"})["task"]
+    # Основание «закрыто само» из встречи.
+    t2 = one(url, "sasha", {"op": "task.create", "task": {"title": "Тизер", "project_id": str(p)}})["task"]
+    sug(url, "close", "meeting", {"meeting_at": today, "auto": True}, t2["id"], batch_title="Ромашка: статус",
+        quote="МЕТКА-ОСНОВАНИЕ тизер ушёл")
+    # «Только мне» — комментарий владельца.
+    one(url, "sasha", {"op": "comment.add", "comment": {"task_id": t2["id"], "text": "МЕТКА-ТОЛЬКО-МНЕ", "private": True}})
+    # Приватная запись хронологии.
+    one(url, "sasha", {"op": "interaction.add", "data": {"at": today + "T10:00:00+03:00", "kind": "note",
+                                                          "summary": "МЕТКА-ПРИВАТНАЯ-ЗАПИСЬ", "project_id": str(p),
+                                                          "source": "web", "private": True}})
+    # Встреча (только факт): итог и договорённости — владельцу.
+    m = push(url, ref="777", summary="МЕТКА-ИТОГ встречи", agreements=["МЕТКА-ДОГОВОР"])
+    _name(url, m["id"], client="ООО Ромашка", topic="модель")
+    # «Только тебе».
+    one(url, "sasha", {"op": "insight.add", "insight": {"text": "МЕТКА-ТТ-ТЕКСТ", "quote": "МЕТКА-ТТ-ЦИТАТА",
+                                                         "person_ids": [str(ivan)], "project_id": str(p)}})
+    marks = ["МЕТКА-ОРГ-ПОМЕТКА", "МЕТКА-ЧЕРТЫ", "МЕТКА-ПОМЕТКА", "МЕТКА-ИЩЕТ", "МЕТКА-ПРЕДЛАГАЕТ", "МЕТКА-ОТКУДА",
+             "+7 000 111-22-33", "МЕТКА-ДАЙДЖЕСТ", "МЕТКА-КАКВИЖУ", "МЕТКА-ЗАМЕТКА-МАШИНЫ", "МЕТКА-ОСНОВАНИЕ",
+             "МЕТКА-ТОЛЬКО-МНЕ", "МЕТКА-ПРИВАТНАЯ-ЗАПИСЬ", "МЕТКА-ИТОГ", "МЕТКА-ДОГОВОР", "МЕТКА-ТТ-ТЕКСТ",
+             "МЕТКА-ТТ-ЦИТАТА"]
+    return marks, {"project": p, "deal": d["id"], "ivan": ivan, "fam": fam, "tasks": [t1["id"], t2["id"]],
+                   "meeting": m["id"]}
+
+
+def _everything(url, user, marks, w) -> str:
+    """Всё, что API отдаёт человеку: синк, виды, карточки дел, Claude карточек (только строки контекста, без вызова),
+    ответы операций. Одной строкой — для поиска меток."""
+    out = [store.sync(url, user, 0)]
+    views = [("client", {"project_id": str(w["project"])}), ("deal", {"deal_id": str(w["deal"])}),
+             ("dossier", {"person_id": str(w["ivan"])}), ("pipeline", {}), ("clients", {}), ("ties", {}), ("timeline", {}),
+             ("person", {"person_id": str(w["ivan"])}), ("person", {"person_id": str(w["fam"])}), ("today", {}), ("all", {}),
+             ("meetings", {}), ("insights", {}), ("new", {}), ("week", {}), ("dictations", {}), ("money", {}),
+             ("meeting", {"id": str(w["meeting"])}), ("digest", {}), ("project", {"project_id": str(w["project"])})]
+    views += [("search", {"q": m, "status": "all"}) for m in marks] + [("who", {"q": m}) for m in marks]
+    views += [("who", {"phone": "+7 000 111-22-33"})]
+    for name, params in views:
+        try:
+            out.append(store.view(url, user, name, **params))
+        except store.OpError as e:
+            out.append(str(e))
+    tasks = [x["id"] for x in out[0]["tasks"]]
+    for tid in tasks:
+        out.append(api.task_card(url, user, tid))
+    with dela_db.session(url, user, via="ask") as conn:
+        for scope in ({"card": "client", "project_id": str(w["project"])}, {"card": "deal", "deal_id": str(w["deal"])},
+                      {"card": "person", "person_id": str(w["ivan"])}, {"card": "person", "person_id": str(w["fam"])}):
+            out.append(ask._card(conn, scope)[0])
+        for tid in tasks:
+            t = store.task_by(conn, tid)
+            out.append(ask._task_card(conn, url, user, t, db_today(url))[0])
+    out.append(ops(url, user, {"op": "person.set", "id": str(w["ivan"]), "set": {"role": "финдиректор"}},
+                   {"op": "person.add", "id": str(w["fam"]), "add": {"aliases": ["Марианна"]}},
+                   *({"op": "comment.add", "comment": {"task_id": tid, "text": "ок"}} for tid in tasks[:1])))
+    return repr(out)
+
+
+def test_broom_nothing_private_reaches_the_team(team):
+    marks, w = _broom_world(team)
+    url = team["url"]
+    for user in ("natasha", "alena"):
+        seen = _everything(url, user, marks, w)
+        leaked = [m for m in marks if m in seen]
+        assert not leaked, (user, leaked)
+        assert "987654321" not in seen or user == "natasha"  # деньги сделки — только кому открыты (у Наташи открыты)
+    # Владелец видит каждую метку там, где закон говорит «✓».
+    mine = _everything(url, "sasha", marks, w)
+    assert not [m for m in marks if m not in mine], [m for m in marks if m not in mine]

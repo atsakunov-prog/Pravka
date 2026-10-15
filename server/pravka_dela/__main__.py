@@ -18,6 +18,8 @@
   meetings  встречи: что с разбором; rename [--all | --ref N] — разобрать заново (замки владельца остаются);
             touch [--since 2026-09-01] [--dry] — записи встреч в хронологии и пачки «Нового» по карточкам (dela_0021)
   digest-relink [--dry]  сводки дайджеста заново по карточкам CRM: упоминание и сделка записи (dela_0022, разово)
+  privacy-fix [--dry] [--locked-private]  пакет «Приватность» по прежним данным: основания и заметки машины —
+            приватными, записи встреч — по переключателю, события доступа (dela_0024–0028, разово, после своей копии)
   zachem   «Зачем» по-человечески: propose [--limit N] [--now] --out файл; apply --file файл; rollback
 """
 
@@ -478,6 +480,16 @@ def cmd_digest_relink(args) -> int:
     return 0
 
 
+def cmd_privacy_fix(args) -> int:
+    """Пакет «Приватность» по прежним данным (аудит №8–11; privacy_fix.py). Перед запуском без --dry — своя копия базы
+    (правило 9): pravka-before-privacy.dump."""
+    from . import privacy_fix
+
+    cfg = config_mod.load(args.env)
+    print(privacy_fix.words(privacy_fix.run(cfg.db_url, dry=args.dry, locked_private=args.locked_private)))
+    return 0
+
+
 def cmd_zachem(args) -> int:
     """«Зачем» по-человечески (13.10.2026, zachem.py): предложения Claude — в файл, применить файл, вернуть как было.
     Перед apply — своя копия базы (правило 9): pravka-before-zachem-rename.dump."""
@@ -637,6 +649,12 @@ def main(argv: list[str] | None = None) -> int:
     dr = sub.add_parser("digest-relink", help="сводки дайджеста заново по карточкам CRM: упоминания и сделка записи")
     dr.add_argument("--dry", action="store_true", help="только посчитать, ничего не записывать")
     dr.set_defaults(fn=cmd_digest_relink)
+    pf = sub.add_parser("privacy-fix", help="пакет «Приватность» по прежним данным: основания и заметки машины — "
+                                            "приватными, записи встреч — по переключателю")
+    pf.add_argument("--dry", action="store_true", help="только посчитать, ничего не записывать")
+    pf.add_argument("--locked-private", action="store_true",
+                    help="записи встреч под замком владельца — скрыть от команды (только по «да» владельца)")
+    pf.set_defaults(fn=cmd_privacy_fix)
     zc = sub.add_parser("zachem", help="«Зачем» по-человечески: предложить, применить, вернуть")
     zc.add_argument("action", choices=["propose", "apply", "rollback"])
     zc.add_argument("--user", default="sasha")

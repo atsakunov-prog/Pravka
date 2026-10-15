@@ -43,7 +43,14 @@ TASK_FIELDS = {
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
-            "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps"]
+            "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
+            "privacy"]
+# «privacy» — закон приватности (15.10.2026, аудит №8–11, правило 26; dela_0024–0028): comment.add и interaction.add/set
+# принимают private (комментарий «только мне», запись «скрыть от команды»); операции insight.add/set/delete и вид insights
+# («Только тебе»), поля insights у видов client, deal, dossier, meeting; строки хронологии — team_sees, итог встречи
+# владельцу — с карточки встречи; люди и компании синка — поля по ярусу смотрящего (tier); Свод privacy.team (что команда
+# видит из встреч) — веб «Настройки». Без флага клиенты новых полей не шлют: старый сервер отверг бы операцию целиком и
+# запомнил отказ по op_id.
 # «deal_steps» — шаги и контакт сделки одним правилом (15.10.2026, аудит №2, №3, №7, №28; dela_0022): пока сделка у
 # клиента одна живая, его открытые дела без сделки — её шаги (next_task.via_client), записи без сделки — её хронология,
 # последний контакт — crm.deal_last_touch (упоминания не в счёт); payload.deal_name в предложениях встреч и дайджеста —
