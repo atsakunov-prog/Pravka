@@ -1047,15 +1047,27 @@ object DelaViews {
     }
 
     /** Строки карточки человека, как `renderPerson` веба: пустое не показывается. */
-    fun personInfo(p: Dela.Person, s: Dela.Snapshot): List<Pair<String, String>> {
+    /**
+     * Строки карточки человека — как веб. [marksApart] (флаг `privacy`, смотрящий видит карточку целиком, аудит №10) —
+     * пометки о человеке («День рождения», «Как часто», «Ищет», «Предлагает», «Характер», «Откуда», «Заметка») не здесь,
+     * а в [personMarks] — под «Только тебе» с замком: команда этого не видит.
+     */
+    fun personInfo(p: Dela.Person, s: Dela.Snapshot, marksApart: Boolean = false): List<Pair<String, String>> {
         val client = if (p.orgId.isNotBlank()) s.projects.values.firstOrNull { it.orgId == p.orgId } else null
-        val bd = if (p.birthDay > 0 && p.birthMonth in 1..12) "${p.birthDay} ${MONTHS[p.birthMonth - 1]}" + (if (p.birthYear > 0) " ${p.birthYear}" else "") else ""
-        return listOf(
+        val open = listOf(
             "Роль" to p.role,
             "Клиент" to client?.name.orEmpty(),
             "Телефон" to p.phones.joinToString(", "),
             "Почта" to p.emails.joinToString(", "),
             "Telegram" to p.telegram.takeIf { it.isNotBlank() }?.let { "@" + it.removePrefix("@") }.orEmpty(),
+        ).filter { it.second.isNotBlank() }
+        return if (marksApart) open else open + personMarks(p)
+    }
+
+    /** Пометки о человеке — то, что сервер отдаёт только видящему карточку целиком (`crm.v_people`, ярус `owner`). */
+    fun personMarks(p: Dela.Person): List<Pair<String, String>> {
+        val bd = if (p.birthDay > 0 && p.birthMonth in 1..12) "${p.birthDay} ${MONTHS[p.birthMonth - 1]}" + (if (p.birthYear > 0) " ${p.birthYear}" else "") else ""
+        return listOf(
             "День рождения" to bd,
             "Как часто" to (PERSON_CADENCE[p.cadence] ?: ""),
             "Ищет" to p.seeks,

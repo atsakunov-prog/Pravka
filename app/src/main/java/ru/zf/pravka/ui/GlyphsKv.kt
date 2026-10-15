@@ -103,6 +103,8 @@ object KvGlyphs {
         "image" to "M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM8.5 10.5a1.5 1.5 0 1 0 0-3a1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 19",
         "camera" to "M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1zM12 10a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7z",
         "gear" to gearPath(),
+        // Замок «только тебе» (15.10.2026, аудит №8–11) — слово в слово `lock` веба Дел.
+        "lock" to "M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3",
     )
 
     /**
@@ -120,7 +122,7 @@ object KvGlyphs {
         "Upload" to "upload", "Calendar" to "calendar", "Link" to "link", "Cloud" to "cloud", "Phone" to "phone",
         "Archive" to "archive", "Moon" to "moon", "ListLines" to "list", "Activity" to "activity", "Car" to "car",
         "ArrowUp" to "up", "Menu" to "menu", "Dollar" to "coin", "Error" to "alert", "Groups" to "users",
-        "Sunny" to "sun", "Rainy" to "rain", "Bedtime" to "moon", "Family" to "users",
+        "Sunny" to "sun", "Rainy" to "rain", "Bedtime" to "moon", "Family" to "users", "Lock" to "lock",
     )
 
     private val cache = HashMap<String, ImageVector>()

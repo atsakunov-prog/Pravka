@@ -1071,8 +1071,18 @@ fun DelaTab(
                     val p = snap.people[pg.id]
                     personScreen?.let { sc ->
                         screenBody(sc, "person", actions, tools.copy(onAdd = { title -> quickAdd(title, personId = pg.id) }, addLabel = "Новое дело про ${p?.label ?: "него"}…")) {
-                            // Карточка человека — строками веба: роль, клиент, телефон, почта, Telegram…
-                            if (p != null) for ((k, v) in DelaViews.personInfo(p, snap)) PaperHint("$k: $v", MaterialTheme.colorScheme.onSurface)
+                            // Карточка человека — строками веба: роль, клиент, телефон, почта, Telegram… Пометки о нём (аудит №10) —
+                            // видящему карточку целиком под «Только тебе» с замком: команда их не видит (сервер ей их не шлёт).
+                            val apart = p != null && snap.privacyOn && ru.zf.pravka.core.DelaCrm.personWhole(p, snap, app.delaStore.me)
+                            if (p != null) for ((k, v) in DelaViews.personInfo(p, snap, marksApart = apart)) PaperHint("$k: $v", MaterialTheme.colorScheme.onSurface)
+                            val marks = if (apart && p != null) DelaViews.personMarks(p) else emptyList()
+                            if (marks.isNotEmpty()) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                                    Icon(Glyphs.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(end = 4.dp).size(13.dp))
+                                    Text("Только тебе", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                                }
+                                for ((k, v) in marks) PaperHint("$k: $v", MaterialTheme.colorScheme.onSurface)
+                            }
                             // Проекты человека — плашками-ссылками со стороной (09.10.2026, п. 11 задания 9).
                             val his = if (crmOn) ru.zf.pravka.core.DelaCrm.personDeals(snap, pg.id) else emptyList()
                             if (his.isNotEmpty()) {
@@ -1183,8 +1193,10 @@ fun DelaTab(
             val notes = p.optString("notes").takeIf { it.isNotBlank() && it != "null" }
             val said = listOfNotNull(title, sg.quote.takeIf { it.isNotBlank() && it != title }?.let { "«$it»" }, notes).joinToString(" — ")
             val from = sg.batchTitle.ifBlank { DelaViews.mark(sg.source).word }
+            // Слова из переписки и встреч — только владельцу (аудит №8): комментарий приватный, команда дела его не видит.
+            val priv = snap.privacyOn && sg.source in Dela.PRIVATE_SOURCES
             scope.launch {
-                app.delaDo(listOf(Dela.commentOp(t.id, "$from: $said"), Dela.decideOp(sg.id, accept = false, reason = "уже есть: ${t.title}")))
+                app.delaDo(listOf(Dela.commentOp(t.id, "$from: $said", private = priv), Dela.decideOp(sg.id, accept = false, reason = "уже есть: ${t.title}")))
                 Feedback.toast(app, "Срослось с «${t.title.take(40)}»: слова — комментарием к делу")
             }
         }
@@ -3214,6 +3226,8 @@ internal fun DelaTaskSheet(
     var f by remember(task.id) { mutableStateOf(task) }
     var picking by remember { mutableStateOf("") }
     var comment by remember { mutableStateOf("") }
+    // «Только мне» у нового комментария (аудит №8): команда, которая видит дело, его не увидит. Только при флаге privacy.
+    var mineOnly by remember { mutableStateOf(false) }
     var history by remember { mutableStateOf<List<String>?>(null) }
     var historyNote by remember { mutableStateOf("") }
     // Откуда дело (`origin` у `/api/task`, 08.10.2026) — грузится вместе с карточкой; журнал — оттуда же, по кнопке.
@@ -3444,18 +3458,30 @@ internal fun DelaTaskSheet(
             Spacer(Modifier.height(4.dp))
             PaperHint("Комментарии")
             for (cm in comments) {
-                Text(
-                    (snap.users[cm.authorId]?.name ?: cm.authorId).ifBlank { "—" } + " · " + delaDate(cm.createdAt) + (if (cm.local) " ⏳" else "") + "\n" + cm.text,
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                // Приватный комментарий (аудит №8) — замок и «только тебе»: команда, которая видит дело, его не видит.
+                Row(verticalAlignment = Alignment.Top) {
+                    if (cm.private) Icon(Glyphs.Lock, contentDescription = "только тебе", tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 2.dp, end = 4.dp).size(12.dp))
+                    Text(
+                        (snap.users[cm.authorId]?.name ?: cm.authorId).ifBlank { "—" } + " · " + delaDate(cm.createdAt) +
+                            (if (cm.private) " · только тебе" else "") + (if (cm.local) " ⏳" else "") + "\n" + cm.text,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                PaperField(value = comment, onValueChange = { comment = it }, label = "Комментарий", singleLine = false, maxLines = 4, modifier = Modifier.weight(1f))
+                PaperField(value = comment, onValueChange = { comment = it }, label = if (mineOnly) "Комментарий — только мне" else "Комментарий",
+                    singleLine = false, maxLines = 4, modifier = Modifier.weight(1f))
                 GlyphButton(Glyphs.Send, "добавить комментарий", enabled = comment.isNotBlank(), onClick = {
                     val text = comment.trim()
+                    val mine = mineOnly && snap.privacyOn
                     comment = ""
-                    scope.launch { app.delaDo(listOf(Dela.commentOp(task.id, text))) }
+                    mineOnly = false
+                    scope.launch { app.delaDo(listOf(Dela.commentOp(task.id, text, private = mine))) }
                 })
+            }
+            if (snap.privacyOn) {
+                PaperToggle("Только мне", checked = mineOnly, onCheckedChange = { mineOnly = it }, hint = "команда, которая видит дело, комментария не увидит")
             }
             val h = history
             if (h == null) {

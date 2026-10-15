@@ -216,7 +216,8 @@ internal fun DelaTaskPane(
         }
         // История: заметки к делу и журнал правок сервера — по времени.
         val comments = snap.commentsOf(task.id)
-        val lines = comments.map { it.createdAt.take(16).replace('T', ' ') to it.text } +
+        // Приватный комментарий (аудит №8) — с пометкой: команда, которая видит дело, его не видит.
+        val lines = comments.map { it.createdAt.take(16).replace('T', ' ') to (if (it.private) "только тебе · " else "") + it.text } +
             journal.orEmpty().map { it.substringBefore(" · ") to it.substringAfter(" · ") }
         item(key = "history:h") {
             SectionHeader("история", trailing = lines.size.takeIf { it > 0 }?.toString())
@@ -483,7 +484,8 @@ private fun DelaTaskPaneV2(
         }
         // Журнал (`.eyebrow` и `.lr` холста): заметки к делу и правки сервера — по времени.
         val comments = snap.commentsOf(task.id)
-        val lines = comments.map { it.createdAt.take(16).replace('T', ' ') to it.text } +
+        // Приватный комментарий (аудит №8) — с пометкой: команда, которая видит дело, его не видит.
+        val lines = comments.map { it.createdAt.take(16).replace('T', ' ') to (if (it.private) "только тебе · " else "") + it.text } +
             journal.orEmpty().map { it.substringBefore(" · ") to it.substringAfter(" · ") }
         item(key = "journal") {
             PanelV2 {

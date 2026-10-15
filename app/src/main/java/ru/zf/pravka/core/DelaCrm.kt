@@ -204,11 +204,55 @@ object DelaCrm {
          * чата в окне не было. Запись — правда сводки, видна; «последний контакт» она не двигает (считает сервер).
          */
         val mention: Boolean = false,
+        /** Приватная запись (флаг `privacy`, аудит №9): видит только её хозяин; «скрыть от команды» — вернуть нельзя. */
+        val private: Boolean = false,
+        /**
+         * Что из записи видит команда (`crm.v_interactions`): `none` — приватная, `fact` — запись встречи, где команда видит
+         * только название, а хозяин — итог и договорённости с карточки встречи, `all`. "" — старый сервер.
+         */
+        val teamSees: String = "",
+        /** Хозяин записи: только он скрывает её от команды и убирает запись встречи и пункт дайджеста. */
+        val ownerId: String = "",
     ) {
         val day: String get() = at.take(10)
         val kindWord: String get() = IKIND[kind] ?: kind
         val fromDigest: Boolean get() = digestRef.isNotBlank()
     }
+
+    /**
+     * «Только тебе» (флаг `privacy`, `crm.insights`, место этапа 6): наблюдение владельца — заметка рукой, несостыковка,
+     * неуверенность, «кто за столом», что уточнить. Видит только владелец Дел; команде поле вида — `[]`. Названо не
+     * `Insight`: так называются вещи «Денег».
+     */
+    data class PrivateNote(
+        val id: String,
+        val kind: String = "note",
+        val text: String,
+        val quote: String = "",
+        val personIds: List<String> = emptyList(),
+        val projectId: String = "",
+        val dealId: String = "",
+        val meetingId: String = "",
+        val at: String = "",
+        val source: String = "",
+        val sourceRef: String = "",
+        val state: String = "new",
+        val people: List<String> = emptyList(),
+        val meetingTitle: String = "",
+        val local: Boolean = false,
+    ) {
+        /** «Мимо» и «Неверно» — свёрнуты строкой «ещё N». */
+        val off: Boolean get() = state in NOTE_OFF
+        val kindWord: String get() = NOTE_KIND[kind] ?: kind
+    }
+
+    /** Вид «Только тебе» словом (`INSIGHT_KIND` веба); незнакомый ключ этапа 6 — как есть. */
+    val NOTE_KIND = mapOf(
+        "note" to "заметка", "conflict" to "несостыковка", "numbers" to "цифры", "hedge" to "неуверенность", "self" to "о себе",
+        "objection" to "возражение", "table" to "кто за столом", "ask" to "уточнить", "bypass" to "в обход", "signal" to "сигнал",
+        "risk" to "риск", "mandate" to "мандат", "position" to "позиция", "personal" to "личное", "occasion" to "повод",
+    )
+    val NOTE_OFF = setOf("dismissed", "wrong")
 
     data class PersonRow(
         val id: String,
@@ -247,6 +291,8 @@ object DelaCrm {
         /** Встречи клиента (свежие сверху, до 50) и сколько их всего; команде — пусто (аудит №3). */
         val meetings: List<Meeting> = emptyList(),
         val meetingsN: Int = 0,
+        /** «Только тебе» клиента; null — старый сервер (поля нет): блока нет. */
+        val insights: List<PrivateNote>? = null,
     )
 
     data class DealView(
@@ -262,6 +308,8 @@ object DelaCrm {
         /** Встречи сделки по карточке встречи (свежие сверху, до 50) и сколько их всего; команде — пусто (аудит №3). */
         val meetings: List<Meeting> = emptyList(),
         val meetingsN: Int = 0,
+        /** «Только тебе» сделки; null — старый сервер. */
+        val insights: List<PrivateNote>? = null,
     )
 
     data class Tie(
@@ -290,7 +338,8 @@ object DelaCrm {
         val birthdays: List<Tie> get() = people.filter { (it.birthdayIn ?: 99) <= 14 }.sortedBy { it.birthdayIn }
     }
 
-    data class Dossier(val timeline: List<Interaction>, val deals: List<Deal>)
+    /** [insights] — «Только тебе» о человеке; null — старый сервер. */
+    data class Dossier(val timeline: List<Interaction>, val deals: List<Deal>, val insights: List<PrivateNote>? = null)
 
     // ------------------------------------------------------------ разбор
 
@@ -331,9 +380,25 @@ object DelaCrm {
             deletedAt = o.str("deleted_at"), dealName = o.str("deal_name"), projectName = o.str("project_name"),
             // Старый сервер поля не шлёт — ссылка на сводку та же: всё до «#» у записи из дайджеста.
             digestRef = o.str("digest_ref").ifBlank { if (o.str("source") == "digest") o.str("source_ref").substringBefore('#') else "" },
-            mention = o.bool("mention"),
+            mention = o.bool("mention"), private = o.bool("private"), teamSees = o.str("team_sees"), ownerId = o.str("owner_id"),
         )
     }
+
+    /** Строка `insights` видов client, deal, dossier, meeting. */
+    fun privateNote(o: JSONObject): PrivateNote? {
+        val id = o.str("id").ifBlank { return null }
+        val text = o.str("text").ifBlank { return null }
+        return PrivateNote(
+            id = id, kind = o.str("kind").ifBlank { "note" }, text = text, quote = o.str("quote"), personIds = o.strings("person_ids"),
+            projectId = o.str("project_id"), dealId = o.str("deal_id"), meetingId = o.str("meeting_id"), at = o.str("at"),
+            source = o.str("source"), sourceRef = o.str("source_ref"), state = o.str("state").ifBlank { "new" },
+            people = o.strings("people"), meetingTitle = o.str("meeting_title"),
+        )
+    }
+
+    /** Поле `insights` вида: нет поля — null (старый сервер, блока нет), пустое — пустой список. */
+    private fun insights(o: JSONObject): List<PrivateNote>? =
+        if (!o.has("insights") || o.isNull("insights")) null else objs(o, "insights").mapNotNull(::privateNote)
 
     /** Строка `meetings` вида сделки или клиента (`meetings._item` сервера). */
     fun meeting(o: JSONObject): Meeting? {
@@ -395,6 +460,7 @@ object DelaCrm {
         payments = objs(o, "payments").mapNotNull { Dela.payment(it) },
         meetings = meetings(o),
         meetingsN = o.int("meetings_n"),
+        insights = insights(o),
     )
 
     fun dealView(o: JSONObject): DealView = DealView(
@@ -408,6 +474,7 @@ object DelaCrm {
         minutesAll = o.intOrNull("minutes_all"),
         meetings = meetings(o),
         meetingsN = o.int("meetings_n"),
+        insights = insights(o),
     )
 
     /**
@@ -415,6 +482,40 @@ object DelaCrm {
      * отказывает, кнопка члену команды ни к чему. Роль — из `users[]` синка.
      */
     fun canMerge(s: Dela.Snapshot, me: String): Boolean = s.users[me]?.owner == true
+
+    /**
+     * Видит ли смотрящий карточку человека целиком (`personWhole` веба, аудит №10): ярус `owner` — владелец Дел или автор
+     * карточки. Старый сервер яруса не шлёт — по роли и автору. Только тогда — пометки «Только тебе», «Теплота» и «хаб»
+     * (у остальных сервер поля и не шлёт, а правку отвергнет).
+     */
+    fun personWhole(p: Dela.Person, s: Dela.Snapshot, me: String): Boolean =
+        if (p.tier.isNotBlank()) p.tier == "owner" else s.users[me]?.owner == true || (p.ownerId.isNotBlank() && p.ownerId == me)
+
+    /**
+     * Ставит ли смотрящий коллег на сделку этого клиента (аудит №11, `crm.grants_project`): владелец Дел или хозяин
+     * проекта. Старый сервер (без флага `privacy`) правила не знает — как раньше, всем.
+     */
+    fun grantsProject(s: Dela.Snapshot, me: String, projectId: String): Boolean =
+        !s.privacyOn || s.users[me]?.owner == true || s.projects[projectId]?.ownerId?.let { it.isNotBlank() && it == me } == true
+
+    /** Себя с команды сделки убрать можно всегда — по своей карточке пользователя Дел. */
+    fun isMe(s: Dela.Snapshot, me: String, personId: String): Boolean =
+        personId.isNotBlank() && (s.users[me]?.personId == personId || s.people[personId]?.userId == me)
+
+    /** Замок строки хронологии словами (`lockMark` веба): приватная или из дайджеста — «видишь только ты»; встреча фактом — «команде — без итога». */
+    fun lockWord(i: Interaction): String? = when {
+        i.private || i.fromDigest -> "видишь только ты"
+        i.teamSees == "fact" -> "команде — без итога"
+        else -> null
+    }
+
+    /** «Скрыть от команды» — своя общая запись (хозяин), не пункт дайджеста; только при флаге `privacy`. */
+    fun canHide(i: Interaction, me: String, privacyOn: Boolean): Boolean =
+        privacyOn && !i.private && !i.fromDigest && !i.local && i.ownerId.isNotBlank() && i.ownerId == me
+
+    /** Крестик «убрать»: запись встречи и пункт дайджеста — только их хозяину (сервер остальным откажет). */
+    fun canDelete(i: Interaction, me: String): Boolean =
+        !i.local && (!(i.source == "meeting" || i.fromDigest) || i.ownerId.isBlank() || i.ownerId == me)
 
     /** Встреч в карточке сделки и клиента — свежие; остальные — «все встречи · N» (`MEET_CARD` веба). */
     const val MEET_CARD = 8
@@ -483,7 +584,7 @@ object DelaCrm {
         today = o.str("today"),
     )
 
-    fun dossier(o: JSONObject): Dossier = Dossier(timeline(o), objs(o, "deals").mapNotNull(::deal))
+    fun dossier(o: JSONObject): Dossier = Dossier(timeline(o), objs(o, "deals").mapNotNull(::deal), insights(o))
 
     /** Строка журнала сделки: «05.10 14:20 · dev · стадия: мандат». */
     private fun historyLine(h: JSONObject): String {
@@ -675,6 +776,55 @@ object DelaCrm {
     /** Убрать запись: строка не удаляется, сервер ставит `deleted_at`. */
     fun interactionDeleteOp(id: String, opId: String = Dela.newId()): JSONObject = op("interaction.delete", opId).put("id", id)
 
+    /** «Скрыть от команды» (флаг `privacy`): запись становится приватной навсегда — снять сервер не даст. */
+    fun interactionHideOp(id: String, opId: String = Dela.newId()): JSONObject =
+        op("interaction.set", opId).put("id", id).put("set", JSONObject().put("private", true))
+
+    /**
+     * «+ только мне» (флаг `privacy`, `insight.add`): о ком — человек ([personIds]), клиент ([projectId]) или сделка
+     * ([projectId] + [dealId]). id выдаёт телефон — запись видна до ответа сервера.
+     */
+    fun noteAddOp(
+        text: String,
+        personIds: List<String> = emptyList(),
+        projectId: String = "",
+        dealId: String = "",
+        kind: String = "note",
+        id: String = Dela.newId(),
+        opId: String = Dela.newId(),
+    ): JSONObject {
+        val x = JSONObject().put("id", id).put("kind", kind).put("text", text.trim()).put("source", "phone")
+        if (personIds.isNotEmpty()) x.put("person_ids", Dela.arr(personIds.distinct()))
+        if (projectId.isNotBlank()) x.put("project_id", projectId)
+        if (dealId.isNotBlank()) x.put("deal_id", dealId)
+        return op("insight.add", opId).put("insight", x)
+    }
+
+    /** «Видел» (`seen`), «Мимо» (`dismissed`) — состояние «Только тебе». */
+    fun noteStateOp(id: String, state: String, opId: String = Dela.newId()): JSONObject =
+        op("insight.set", opId).put("id", id).put("set", JSONObject().put("state", state))
+
+    /** «Убрать» — сервер ставит `deleted_at`. */
+    fun noteDeleteOp(id: String, opId: String = Dela.newId()): JSONObject = op("insight.delete", opId).put("id", id)
+
+    /**
+     * «Только тебе» из кэша вида плюс своё из очереди: новая запись видна сразу (о ком — [match]), «Видел» и «Мимо»
+     * — сразу, убранная — уходит. Свежие сверху.
+     */
+    fun overlayNotes(list: List<PrivateNote>, ops: List<JSONObject>, match: (JSONObject) -> Boolean): List<PrivateNote> {
+        val gone = ops.filter { it.str("op") == "insight.delete" }.map { it.str("id") }.toSet()
+        val have = list.map { it.id }.toSet()
+        val mine = ops.filter { it.str("op") == "insight.add" }.mapNotNull { o ->
+            val x = o.optJSONObject("insight") ?: return@mapNotNull null
+            if (!match(x)) return@mapNotNull null
+            privateNote(x)?.copy(local = true)?.takeIf { it.id !in have }
+        }
+        val states = ops.filter { it.str("op") == "insight.set" }.associate { it.str("id") to it.optJSONObject("set")?.str("state").orEmpty() }
+        return (list + mine).filter { it.id !in gone }
+            .map { n -> states[n.id]?.takeIf { it.isNotBlank() }?.let { n.copy(state = it, local = true) } ?: n }
+            .sortedByDescending { it.at }
+    }
+
     /** Теплота и «хаб» человека. */
     fun personOp(personId: String, cadence: String? = null, hub: Boolean? = null, opId: String = Dela.newId()): JSONObject {
         val set = JSONObject()
@@ -760,13 +910,18 @@ object DelaCrm {
      */
     fun overlayTimeline(list: List<Interaction>, ops: List<JSONObject>, s: Dela.Snapshot, match: (Interaction) -> Boolean): List<Interaction> {
         val gone = ops.filter { it.str("op") == "interaction.delete" }.map { it.str("id") }.toSet()
+        // «Скрыть от команды» — замок сразу, до ответа сервера.
+        val hidden = ops.filter { it.str("op") == "interaction.set" && it.optJSONObject("set")?.optBoolean("private") == true }
+            .map { it.str("id") }.toSet()
         val have = list.map { it.id }.toSet()
         val mine = ops.filter { it.str("op") == "interaction.add" }.mapNotNull { o ->
             val d = o.optJSONObject("data") ?: return@mapNotNull null
             val i = interaction(d)?.copy(local = true) ?: return@mapNotNull null
             i.copy(dealName = s.deals[i.dealId]?.name.orEmpty(), projectName = s.projects[i.projectId]?.name.orEmpty())
         }.filter { it.id !in have && match(it) }
-        return (list + mine).filter { it.id !in gone }.sortedByDescending { it.at }
+        return (list + mine).filter { it.id !in gone }
+            .map { if (it.id in hidden && !it.private) it.copy(private = true, teamSees = "none") else it }
+            .sortedByDescending { it.at }
     }
 
     // ------------------------------------------------------------ проекты клиента

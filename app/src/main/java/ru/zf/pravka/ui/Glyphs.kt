@@ -194,6 +194,12 @@ object Glyphs {
     val Tag: ImageVector get() = pick("Tag") { sw -> glyph("Tag", sw, "M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z", "M7 7h.01") }
     val Calendar: ImageVector get() = pick("Calendar") { sw -> glyph("Calendar", sw, rect(3f, 4f, 18f, 18f, 2f), "M16 2v4M8 2v4M3 10h18") }
 
+    /**
+     * Замок «только тебе» (15.10.2026, аудит №8–11): приватный комментарий, запись хронологии, пометки о человеке,
+     * «Только тебе» — команда этого не видит. Не действие, а отметка: тот же замок, что `lock` веба.
+     */
+    val Lock: ImageVector get() = pick("Lock") { sw -> glyph("Lock", sw, rect(5f, 11f, 14f, 10f, 2f), "M8 11V7a4 4 0 0 1 8 0v4") }
+
     // ---- Настройки и «Ещё» ----
     val Key: ImageVector get() = pick("Key") { sw -> glyph("Key", sw, circle(7.5f, 15.5f, 4.5f), "M10.7 12.3L21 2M17 6l3 3M14.5 8.5l2.5 2.5") }
     val Link: ImageVector get() = pick("Link") { sw -> glyph("Link", sw, "M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7", "M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7") }

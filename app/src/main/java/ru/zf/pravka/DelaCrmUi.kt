@@ -90,6 +90,10 @@ internal class CrmUiState {
     var clientRelations by mutableStateOf(false)
     /** Убрать запись хронологии — с подтверждением: строка останется в журнале. */
     var deleting by mutableStateOf<Pair<DelaCrm.Interaction, List<String>>?>(null)
+    /** «Скрыть от команды» (аудит №9) — с подтверждением словами: вернуть нельзя. */
+    var hiding by mutableStateOf<Pair<DelaCrm.Interaction, List<String>>?>(null)
+    /** «Только тебе»: какой блок показывает свёрнутые «Мимо» и «Неверно» (ключ блока). */
+    var notesOpen by mutableStateOf("")
     /** «сводка →» у записи из дайджеста Telegram — ref сводки, открытой листом (`DigestRefSheet`); пусто — закрыто. */
     var digestRef by mutableStateOf("")
     /** Тап по плашке человека — «откуда он» и должность (`personPop` веба). */
@@ -188,6 +192,9 @@ internal class DelaCrmContext(
     /** Владелец Дел: только ему — склейка людей («Это тот же, что…», аудит №23; сервер остальным откажет). */
     val owner: Boolean get() = DelaCrm.canMerge(snap, me)
 
+    /** Сервер знает закон приватности (флаг `privacy`): замки, «скрыть от команды», «Только тебе». */
+    val privacy: Boolean get() = snap.privacyOn
+
     fun personName(id: String): String = snap.people[id]?.label.orEmpty()
 }
 
@@ -211,6 +218,8 @@ internal fun PeopleChips(
     /** Пометка вместо должности — «ведёт» у ведущего проекта. */
     mark: (Dela.Person) -> String = { "" },
     onTap: ((Dela.Person) -> Unit)? = null,
+    /** Кому из них крестик (аудит №11: не хозяину проекта — только себе); с завода — всем, если есть [onRemove]. */
+    canRemove: (Dela.Person) -> Boolean = { true },
 ) {
     val c = MaterialTheme.colorScheme
     PaperHint(title)
@@ -220,7 +229,7 @@ internal fun PeopleChips(
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.clip(RoundedCornerShape(50)).border(1.dp, c.outlineVariant, RoundedCornerShape(50))
-                    .clickable { if (onTap != null) onTap(p) else { ctx.ui.leadDeal = ""; ctx.ui.personFor = p.id } }.padding(start = 4.dp, end = if (onRemove != null) 2.dp else 12.dp, top = 3.dp, bottom = 3.dp),
+                    .clickable { if (onTap != null) onTap(p) else { ctx.ui.leadDeal = ""; ctx.ui.personFor = p.id } }.padding(start = 4.dp, end = if (onRemove != null && canRemove(p)) 2.dp else 12.dp, top = 3.dp, bottom = 3.dp),
             ) {
                 Avatar(p)
                 Spacer(Modifier.width(6.dp))
@@ -232,7 +241,7 @@ internal fun PeopleChips(
                     Text(" · " + p.role, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.widthIn(max = 120.dp))
                 }
-                if (onRemove != null) GlyphButton(Glyphs.Close, "убрать отсюда", onClick = { onRemove(p) }, size = 26.dp)
+                if (onRemove != null && canRemove(p)) GlyphButton(Glyphs.Close, "убрать отсюда", onClick = { onRemove(p) }, size = 26.dp)
             }
         }
         if (onAdd != null) {
@@ -841,17 +850,20 @@ internal fun LazyListScope.crmClientTop(ctx: DelaCrmContext, projectId: String) 
                 empty = "пока никого",
             )
             val teamIds = DelaCrm.clientTeam(copyDeals)
+            // Кого из команды ставить на проект — решает хозяин проекта (аудит №11): остальным «+ человек» нет.
+            val grants = DelaCrm.grantsProject(ctx.snap, ctx.me, projectId)
             PeopleChips(
                 ctx, "Команда", teamIds.mapNotNull { ctx.snap.people[it] },
                 onRemove = null,
-                onAdd = if (live.isNotEmpty()) ({
+                onAdd = if (live.isNotEmpty() && grants) ({
                     ctx.ui.addTo = AddTarget("Кто из команды", teamIds.toSet(), field = "team_ids", base = DelaCrm.teamPeople(ctx.snap).map { it.id },
                         teamDeals = live.map { it.id })
                 }) else null,
                 empty = if (live.isNotEmpty()) "никого" else "появится с проектом",
                 mark = { p -> if (live.any { it.leadPersonId == p.id }) "ведёт" else "" },
             )
-            if (live.size > 1) PaperHint("Команда — по всем живым проектам; убрать — в карточке проекта.")
+            if (!grants) PaperHint("Кого из команды ставить на проект — решает Саша.")
+            else if (live.size > 1) PaperHint("Команда — по всем живым проектам; убрать — в карточке проекта.")
         }
     }
     // Проекты (сделки) плитками: из ответа вида (с посчитанным), а пока его нет — из копии синка.
@@ -878,6 +890,14 @@ internal fun LazyListScope.crmClientBottom(ctx: DelaCrmContext, projectId: Strin
     item(key = "sec:timeline") {
         val items = DelaCrm.overlayTimeline(v?.timeline.orEmpty(), ctx.ops, ctx.snap) { it.projectId == projectId }
         TimelineBlock(ctx, "c:$projectId", items, if (money) pays else emptyList(), loaded = v != null, refresh = listOf(path), showDeal = true)
+    }
+    // «Только тебе» клиента (аудит №8–11, место этапа 6) — только владельцу и при флаге; старый сервер поля не шлёт.
+    v?.insights?.let { notes ->
+        if (ctx.owner && ctx.privacy) item(key = "sec:only-you") {
+            OnlyYouCard(ctx, "c:$projectId", notes, listOf(path),
+                mine = { x -> x.optString("project_id") == projectId && x.optString("deal_id").isBlank() },
+                add = { text -> DelaCrm.noteAddOp(text, projectId = projectId) })
+        }
     }
     if (money) item(key = "sec:money") { ClientMoney(ctx, pays, listOf(path)) }
     if (project != null) item(key = "sec:files") {
@@ -1010,8 +1030,12 @@ internal fun LazyListScope.crmDealPage(ctx: DelaCrmContext, dealId: String) {
                 },
             )
             val team = (listOf(d.leadPersonId) + d.teamIds).filter { it.isNotBlank() }.distinct()
+            // Состав команды правит хозяин проекта (аудит №11, `crm.grants_project`): остальным — убрать только себя, без
+            // «+ человек» и «Ведёт проект» (сервер откажет словами и сам). Старый сервер правила не знает — как раньше.
+            val grants = DelaCrm.grantsProject(ctx.snap, ctx.me, d.projectId)
             PeopleChips(
                 ctx, "Команда", team.mapNotNull { ctx.snap.people[it] },
+                canRemove = { p -> grants || DelaCrm.isMe(ctx.snap, ctx.me, p.id) },
                 onRemove = { p ->
                     val (go, back) = if (p.id == d.leadPersonId) {
                         DelaCrm.dealSetOp(d.id, JSONObject().put("lead_person_id", JSONObject.NULL)) to DelaCrm.dealSetOp(d.id, JSONObject().put("lead_person_id", d.leadPersonId))
@@ -1020,14 +1044,15 @@ internal fun LazyListScope.crmDealPage(ctx: DelaCrmContext, dealId: String) {
                     }
                     ctx.runUndoable(DelaCrm.Undoable(listOf(go), listOf(back), "${p.label} больше не в команде"), refreshDeal)
                 },
-                onAdd = {
+                onAdd = if (grants) ({
                     ctx.ui.addTo = AddTarget("Кто из команды", team.toSet(), dealId = d.id, field = "team_ids", ids = d.teamIds,
                         base = DelaCrm.teamPeople(ctx.snap).map { it.id }, leadEmpty = d.leadPersonId.isBlank())
-                },
-                empty = "никого — первый станет ведущим",
+                }) else null,
+                empty = if (grants) "никого — первый станет ведущим" else "никого",
                 mark = { p -> if (p.id == d.leadPersonId) "ведёт" else "" },
-                onTap = { p -> ctx.ui.leadDeal = if (p.id != d.leadPersonId) d.id else ""; ctx.ui.personFor = p.id },
+                onTap = { p -> ctx.ui.leadDeal = if (grants && p.id != d.leadPersonId) d.id else ""; ctx.ui.personFor = p.id },
             )
+            if (!grants) PaperHint("Кого из команды ставить на проект — решает Саша.")
         }
     }
     // Дела проекта: следующий шаг — его открытое дело (правило 12 сервера), из своей копии. Пока проект у клиента
@@ -1062,6 +1087,14 @@ internal fun LazyListScope.crmDealPage(ctx: DelaCrmContext, dealId: String) {
     item(key = "sec:timeline") {
         val items = DelaCrm.overlayTimeline(v?.timeline.orEmpty(), ctx.ops, ctx.snap) { it.dealId == dealId }
         TimelineBlock(ctx, "d:$dealId", items, if (money) pays else emptyList(), loaded = v != null, refresh = refreshDeal)
+    }
+    // «Только тебе» сделки — только владельцу и при флаге.
+    v?.insights?.let { notes ->
+        if (ctx.owner && ctx.privacy) item(key = "sec:only-you") {
+            OnlyYouCard(ctx, "d:$dealId", notes, refreshDeal,
+                mine = { x -> x.optString("deal_id") == dealId },
+                add = { text -> DelaCrm.noteAddOp(text, projectId = d.projectId, dealId = dealId) })
+        }
     }
     if (money) item(key = "sec:money") { DealMoney(ctx, d, pays, listOf(path)) }
     if (copy != null) item(key = "sec:files") {
@@ -1258,10 +1291,17 @@ private fun TlItem(ctx: DelaCrmContext, it: DelaCrm.Interaction, refresh: List<S
                 it.personIds.map { id -> ctx.personName(id) }.filter { n -> n.isNotBlank() }.takeIf { l -> l.isNotEmpty() }?.joinToString(", "),
                 it.durationMin?.takeIf { m -> m > 0 }?.let { m -> "$m мин" },
                 "из встречи".takeIf { _ -> it.source == "meeting" },
-                "из дайджеста · видишь только ты".takeIf { _ -> it.fromDigest },
+                "из дайджеста".takeIf { _ -> it.fromDigest },
                 // Аудит №28: клиента назвали в теме сводки, его чата в окне не было — запись видна, контактом не считается.
                 "упоминание — не контакт".takeIf { _ -> it.mention },
             ).joinToString(" · ")
+            // Закон приватности (аудит №9): приватная и из дайджеста — «видишь только ты», встреча фактом — «команде — без
+            // итога» (поля вида; старый сервер их не шлёт — у дайджеста как раньше).
+            val lock = DelaCrm.lockWord(it)
+            if (lock != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Glyphs.Lock, contentDescription = null, tint = c.primary, modifier = Modifier.padding(end = 3.dp).size(11.dp))
+                Text(lock, style = MaterialTheme.typography.bodySmall, color = c.primary)
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant, modifier = Modifier.weight(1f, fill = false))
                 if (it.sourceRef.startsWith("https://")) {
@@ -1283,7 +1323,11 @@ private fun TlItem(ctx: DelaCrmContext, it: DelaCrm.Interaction, refresh: List<S
                 }
             }
         }
-        if (!it.local) GlyphButton(Glyphs.Close, "убрать из хронологии", onClick = { ctx.ui.deleting = it to refresh }, size = 30.dp)
+        Column(horizontalAlignment = Alignment.End) {
+            // Запись встречи и пункт дайджеста убирает только их хозяин (аудит №9): остальным крестика нет — сервер откажет.
+            if (DelaCrm.canDelete(it, ctx.me)) GlyphButton(Glyphs.Close, "убрать из хронологии", onClick = { ctx.ui.deleting = it to refresh }, size = 30.dp)
+            if (DelaCrm.canHide(it, ctx.me, ctx.privacy)) GlyphButton(Glyphs.Lock, "скрыть от команды", onClick = { ctx.ui.hiding = it to refresh }, size = 30.dp)
+        }
     }
 }
 
@@ -1372,7 +1416,10 @@ internal fun LazyListScope.crmPersonBlock(ctx: DelaCrmContext, personId: String)
     val path = DelaCrm.dossierPath(personId)
     val v = ctx.data(path)?.let(DelaCrm::dossier)
     val p = ctx.snap.people[personId]
-    item(key = "crm:person") {
+    // «Теплота» и «хаб» — пометки владельца (аудит №10): только тому, кто видит карточку целиком; у остальных их и нет, а
+    // правку отвергнет база.
+    val whole = p == null || DelaCrm.personWhole(p, ctx.snap, ctx.me)
+    if (whole) item(key = "crm:person") {
         PaperCard(label = "связь", info = "Теплота — как часто напоминать о себе: по ней и последнему контакту человек попадает в «Связи». Хаб — через него идут темы.") {
             PaperHint("Теплота")
             ChipRow {
@@ -1407,6 +1454,14 @@ internal fun LazyListScope.crmPersonBlock(ctx: DelaCrmContext, personId: String)
     item(key = "crm:person:tl") {
         val items = DelaCrm.overlayTimeline(v?.timeline.orEmpty(), ctx.ops, ctx.snap) { personId in it.personIds }
         TimelineBlock(ctx, "h:$personId", items, emptyList(), loaded = v != null, refresh = listOf(path, DelaCrm.TIES), showDeal = true)
+    }
+    // «Только тебе» о человеке — только владельцу и при флаге.
+    v?.insights?.let { notes ->
+        if (ctx.owner && ctx.privacy) item(key = "crm:person:only-you") {
+            OnlyYouCard(ctx, "h:$personId", notes, listOf(path),
+                mine = { x -> x.optJSONArray("person_ids")?.let { a -> (0 until a.length()).any { a.optString(it) == personId } } == true },
+                add = { text -> DelaCrm.noteAddOp(text, personIds = listOf(personId)) })
+        }
     }
 }
 
@@ -1565,7 +1620,102 @@ internal fun CrmSheets(ctx: DelaCrmContext) {
             )
         }
     }
+    ui.hiding?.let { (i, refresh) ->
+        PaperSheet(
+            onDismiss = { ui.hiding = null },
+            title = "Скрыть от команды?",
+            icon = Glyphs.Lock,
+            subtitle = DelaAsk.ddmm(i.day, ctx.today) + " · " + i.kindWord,
+            footer = {
+                Spacer(Modifier.weight(1f))
+                PaperButton("Скрыть", icon = Glyphs.Lock, primary = true, onClick = {
+                    ui.hiding = null
+                    ctx.run(listOf(DelaCrm.interactionHideOp(i.id)), refresh, "Запись видишь только ты")
+                })
+            },
+        ) {
+            PaperHint(i.summary)
+            PaperHint("Команда перестанет видеть эту запись. Вернуть нельзя.")
+        }
+    }
     ui.digestRef.takeIf { it.isNotBlank() }?.let { DigestRefSheet(ctx, it) }
+}
+
+// ---------------------------------------------------------------- «Только тебе»
+
+/**
+ * «Только тебе» карточки (флаг `privacy`, аудит №8–11; `insightsSec` веба): наблюдения владельца — заметка рукой,
+ * несостыковка, неуверенность, «кто за столом», что уточнить. Видит только владелец Дел (команде сервер поле отдаёт
+ * пустым). Строка — дата, вид словом, текст, цитата мельче, откуда («встреча» / «сводка»); «Видел», «Мимо», «Убрать».
+ * «Мимо» и «Неверно» свёрнуты строкой «ещё N». [mine] — подходит ли своя неотправленная запись этой карточке.
+ */
+@Composable
+private fun OnlyYouCard(
+    ctx: DelaCrmContext,
+    key: String,
+    notes: List<DelaCrm.PrivateNote>,
+    refresh: List<String>,
+    mine: (JSONObject) -> Boolean,
+    add: (String) -> JSONObject,
+) {
+    val c = MaterialTheme.colorScheme
+    val all = DelaCrm.overlayNotes(notes, ctx.ops, mine)
+    val live = all.filter { !it.off }
+    val off = all.filter { it.off }
+    val open = ctx.ui.notesOpen == key
+    PaperCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Glyphs.Lock, contentDescription = null, tint = c.primary, modifier = Modifier.padding(end = 4.dp).size(14.dp))
+            Text("Только тебе" + if (live.isNotEmpty()) " · ${live.size}" else "", style = MaterialTheme.typography.labelLarge, color = c.primary)
+            Text(" · команда этого не видит", style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
+        }
+        if (all.isEmpty()) PaperHint("Пока пусто: что заметил, как оцениваешь, что уточнить — запиши ниже.")
+        live.forEachIndexed { i, n -> if (i > 0) RowRule(); NoteRow(ctx, n, refresh) }
+        if (off.isNotEmpty()) PaperTextButton(if (open) "свернуть" else "ещё ${off.size}", onClick = { ctx.ui.notesOpen = if (open) "" else key })
+        if (open) off.forEach { n -> RowRule(); NoteRow(ctx, n, refresh) }
+        OnlyYouAdd(ctx, refresh, add)
+    }
+}
+
+@Composable
+private fun NoteRow(ctx: DelaCrmContext, n: DelaCrm.PrivateNote, refresh: List<String>) {
+    val c = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        val from = when {
+            n.meetingId.isNotBlank() || n.source == "meeting" -> "встреча" + if (n.meetingTitle.isNotBlank()) " «${n.meetingTitle}»" else ""
+            n.source == "digest" -> "сводка"
+            else -> ""
+        }
+        Text(
+            listOf(n.at.take(10).takeIf { it.isNotBlank() }?.let { DelaAsk.ddmm(it, ctx.today) }.orEmpty(), n.kindWord, from)
+                .filter { it.isNotBlank() }.joinToString(" · ") + if (n.local) " ⏳" else "",
+            style = MaterialTheme.typography.bodySmall,
+            color = c.primary,
+        )
+        Text(n.text, style = MaterialTheme.typography.bodyMedium, color = if (n.off) c.onSurfaceVariant else Color.Unspecified)
+        if (n.quote.isNotBlank()) Text("«${n.quote}»", style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
+        if (n.people.isNotEmpty()) Text(n.people.joinToString(", "), style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
+        ChipRow {
+            if (n.state == "new") PaperChip("Видел", selected = false, onClick = { ctx.run(listOf(DelaCrm.noteStateOp(n.id, "seen")), refresh) })
+            if (!n.off) PaperChip("Мимо", selected = false, onClick = { ctx.run(listOf(DelaCrm.noteStateOp(n.id, "dismissed")), refresh, "Мимо — свернул") })
+            PaperChip("Убрать", selected = false, onClick = { ctx.run(listOf(DelaCrm.noteDeleteOp(n.id)), refresh, "Убрал") })
+        }
+    }
+}
+
+/** «+ только мне» под блоком «Только тебе»: запись о том, чья это карточка ([op] строит `insight.add`). */
+@Composable
+private fun OnlyYouAdd(ctx: DelaCrmContext, refresh: List<String>, op: (String) -> JSONObject) {
+    var text by remember { mutableStateOf("") }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        PaperField(value = text, onValueChange = { text = it }, placeholder = "+ только мне: что заметил, как оцениваю, что уточнить…",
+            singleLine = false, maxLines = 4, modifier = Modifier.weight(1f))
+        GlyphButton(Glyphs.Send, "записать только себе", enabled = text.isNotBlank(), onClick = {
+            val t = text.trim()
+            text = ""
+            ctx.run(listOf(op(t)), refresh, "Записал — видишь только ты")
+        })
+    }
 }
 
 /**

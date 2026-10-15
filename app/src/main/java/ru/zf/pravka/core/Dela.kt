@@ -257,6 +257,15 @@ object Dela {
          * человек в архиве, и все ссылки телефона на него — на этот id.
          */
         val mergedInto: String = "",
+        /**
+         * Как смотрящий видит карточку (флаг `privacy`, аудит №10, `crm.v_people`): `owner` — владелец Дел и автор
+         * карточки — всё; `self` — это он сам — без пометок; `work` — связан делом или сделкой — имена, компания,
+         * должность, контакты; `colleague` — виден лишь как пользователь Дел — имя, короткое имя, должность, компания.
+         * Скрытое сервер шлёт пустым. "" — старый сервер: яруса нет.
+         */
+        val tier: String = "",
+        /** Кто завёл карточку (`owner_id`): автор видит её целиком, как владелец Дел. */
+        val ownerId: String = "",
     ) {
         val label: String get() = short.ifBlank { name }
         val live: Boolean get() = archivedAt.isBlank() && mergedInto.isBlank()
@@ -281,6 +290,11 @@ object Dela {
         val rev: Int = 0,
         val seq: Long = 0,
         val local: Boolean = false,
+        /**
+         * Приватный комментарий (флаг `privacy`, аудит №8, `dela_0024`): «только мне», основание автоматики из Telegram и
+         * встреч, «Это оно» из личного канала. Сервер отдаёт его только автору; приватность не снимается.
+         */
+        val private: Boolean = false,
     )
 
     /** «Новое»: предложение автоматики. Задачи нет, пока человек не принял. */
@@ -407,6 +421,13 @@ object Dela {
 
         /** Сервер ставит место в дереве по номеру цели от разбора (`why_auto`, docs/dela-phone-15.md). */
         val placeOn: Boolean get() = FEATURE_PLACE in features
+
+        /**
+         * Закон приватности (аудит №8–11, docs/dela-phone-22.md): сервер принимает `private` у комментария и записи
+         * хронологии, `insight.*` («Только тебе»), шлёт ярус людей и `team_sees`. Без флага поле `private` старый сервер
+         * отверг бы с операцией целиком — телефон его не шлёт.
+         */
+        val privacyOn: Boolean get() = FEATURE_PRIVACY in features
 
         val empty: Boolean
             get() = tasks.isEmpty() && projects.isEmpty() && people.isEmpty() && suggestions.isEmpty()
@@ -570,7 +591,7 @@ object Dela {
             birthDay = o.int("birth_day"), birthMonth = o.int("birth_month"), userId = o.str("user_id"), local = o.bool("_local"),
             emails = o.strings("emails"), telegram = o.str("telegram_username"), birthYear = o.int("birth_year"),
             seeks = o.str("seeks"), offers = o.str("offers"), traits = o.str("traits"), source = o.str("source"), note = o.str("note"),
-            mergedInto = o.str("merged_into"),
+            mergedInto = o.str("merged_into"), tier = o.str("tier"), ownerId = o.str("owner_id"),
         )
     }
 
@@ -583,7 +604,7 @@ object Dela {
         .put("user_id", nul(p.userId)).put("emails", arr(p.emails)).put("telegram_username", nul(p.telegram))
         .put("birth_year", if (p.birthYear > 0) p.birthYear else JSONObject.NULL).put("seeks", nul(p.seeks))
         .put("offers", nul(p.offers)).put("traits", nul(p.traits)).put("source", nul(p.source)).put("note", nul(p.note))
-        .put("merged_into", nul(p.mergedInto))
+        .put("merged_into", nul(p.mergedInto)).put("tier", nul(p.tier)).put("owner_id", nul(p.ownerId))
         .apply { if (p.local) put("_local", true) }
 
     fun org(o: JSONObject): Org? {
@@ -598,13 +619,13 @@ object Dela {
         val id = o.str("id").ifBlank { return null }
         return Comment(
             id, o.str("task_id"), o.str("author_id"), o.str("text"), o.str("deleted_at"), o.str("created_at"),
-            o.int("rev"), o.long("seq"), o.bool("_local"),
+            o.int("rev"), o.long("seq"), o.bool("_local"), private = o.bool("private"),
         )
     }
 
     fun json(c: Comment): JSONObject = JSONObject().put("id", c.id).put("task_id", c.taskId).put("author_id", c.authorId)
         .put("text", c.text).put("deleted_at", nul(c.deletedAt)).put("created_at", nul(c.createdAt))
-        .put("rev", c.rev).put("seq", c.seq).apply { if (c.local) put("_local", true) }
+        .put("rev", c.rev).put("seq", c.seq).put("private", c.private).apply { if (c.local) put("_local", true) }
 
     fun suggestion(o: JSONObject): Suggestion? {
         val id = o.str("id").ifBlank { return null }
@@ -820,7 +841,7 @@ object Dela {
                     val task = find(c.str("task_id")) ?: continue
                     val id = c.str("id").ifBlank { op.str("op_id") }
                     if (comments.containsKey(id)) continue
-                    comments[id] = Comment(id, task.id, me, c.str("text"), createdAt = nowIso, local = true)
+                    comments[id] = Comment(id, task.id, me, c.str("text"), createdAt = nowIso, local = true, private = c.bool("private"))
                 }
                 "comment.delete" -> {
                     val c = comments[op.str("id")] ?: continue
@@ -1095,6 +1116,15 @@ object Dela {
      */
     const val FEATURE_GROUPS = "groups"
 
+    /** Закон приватности на сервере (15.10.2026, аудит №8–11, правило 26 карты Дел): см. [Snapshot.privacyOn]. */
+    const val FEATURE_PRIVACY = "privacy"
+
+    /**
+     * Личные каналы владельца (`store.PRIVATE_SOURCES`): из них машина пишет только в приватное. «Это оно» по
+     * предложению отсюда — приватным комментарием.
+     */
+    val PRIVATE_SOURCES = setOf("meeting", "telegram", "userbot", "contacts")
+
     /** Мяч «owed» — группа «Отбить» одним полем: так её называет автоматика, сервер пишет mine + `owed`. */
     const val OWED = "owed"
 
@@ -1216,9 +1246,15 @@ object Dela {
     fun statusOp(op: String, id: String, opId: String = newId()): JSONObject =
         JSONObject().put("op", op).put("op_id", opId).put("id", id)
 
-    fun commentOp(taskId: String, text: String, commentId: String = newId(), opId: String = newId()): JSONObject =
+    /**
+     * Комментарий к делу. [private] — «только мне» (аудит №8): поле уходит, только когда оно true, — и звать так
+     * можно только при флаге `privacy` ([Snapshot.privacyOn]): старый сервер отверг бы операцию с незнакомым полем
+     * целиком и запомнил отказ по op_id.
+     */
+    fun commentOp(taskId: String, text: String, commentId: String = newId(), opId: String = newId(), private: Boolean = false): JSONObject =
         JSONObject().put("op", "comment.add").put("op_id", opId)
-            .put("comment", JSONObject().put("id", commentId).put("task_id", taskId).put("text", text.trim()))
+            .put("comment", JSONObject().put("id", commentId).put("task_id", taskId).put("text", text.trim())
+                .apply { if (private) put("private", true) })
 
     fun decideOp(id: String, accept: Boolean, reason: String = "", set: JSONObject? = null, opId: String = newId()): JSONObject =
         JSONObject().put("op", "suggestion.decide").put("op_id", opId).put("id", id)
