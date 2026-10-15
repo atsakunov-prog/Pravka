@@ -283,6 +283,7 @@ fun DelaTab(
     val scope = app.appScope
 
     val views by app.delaStore.viewsFlow.collectAsState()
+    val debugInfo by app.delaDebug.info.collectAsState()
     val favs by app.delaStore.favsFlow.collectAsState()
     val filtersRaw by app.delaStore.filtersFlow.collectAsState()
     val filters = remember(filtersRaw) { DelaGroups.filters(filtersRaw) }
@@ -1432,6 +1433,40 @@ fun DelaTab(
             }
         }
     }
+    // Режим отладки (15.10.2026, DelaDebugUi.kt): что на экране вкладки — для записки «Что не так?» (core/DelaDebug.kt).
+    fun debugScreen(): ru.zf.pravka.core.DelaDebug.Screen {
+        val pg = page
+        val sc = when (pg) { is DelaPage.Project -> projectScreen; is DelaPage.Person -> personScreen; else -> screen }
+        val grp = HashMap<String, String>()
+        fun walk(ns: List<DelaGroups.Node>, up: String) {
+            for (n in ns) { val t = listOf(up, n.title).filter { it.isNotBlank() }.joinToString(" › "); n.items.forEach { grp.putIfAbsent(it.id, t) }; walk(n.children, t) }
+        }
+        sc?.nodes?.let { walk(it, "") }
+        sc?.groups?.forEach { g -> g.items.forEach { grp.putIfAbsent(it.id, g.title) } }
+        sc?.home?.let { h -> h.now.forEach { grp.putIfAbsent(it.id, "Сейчас") }; h.today.forEach { grp.putIfAbsent(it.id, "Сегодня") } }
+        val seen = seenRows.visible("t:").toSet()
+        val dealId = (pg as? DelaPage.Deal)?.id
+        val ids = sc?.ids ?: newParts?.ids ?: dealId?.let { d -> snap.tasks.values.filter { it.dealId == d && it.open }.sortedWith(Dela.ORDER).map { it.id } }.orEmpty()
+        return ru.zf.pravka.core.DelaDebug.Screen(
+            route = when (pg) {
+                is DelaPage.Person -> "page:person:${pg.id}"; is DelaPage.Project -> "page:project:${pg.id}"; is DelaPage.Deal -> "page:deal:${pg.id}"
+                null -> if (needle.isNotEmpty()) "search:$needle" else "nav:$nav" + if (newBatch.isNotEmpty()) "/$newBatch" else ""
+            },
+            title = askScreen?.title ?: sc?.title ?: navTitle(nav, view, filters),
+            sub = sc?.sub.orEmpty(),
+            mode = mapOf("sphere" to sphere, "show_done" to showDone, "levels" to sc?.levels?.joinToString(" › ") { it.title },
+                "pick" to sc?.pick?.title, "filter" to filters.firstOrNull { it.id == filterId }?.name, "search" to needle.ifBlank { null },
+                "look" to if (Look.v2) "v2" else "4.0", "wide" to wide, "side_on" to if (navColumn) cols.sideOn else null,
+                "pane_on" to if (wideNow) !paneHidden else null, "tree" to if (view == DelaViews.View.TREE) "$treeMode $treeDir".trim() else null),
+            rows = ids.map { ru.zf.pravka.core.DelaDebug.Row(it, it in seen, grp[it].orEmpty()) },
+            openTaskId = openTask?.id ?: paneTask?.id.orEmpty(),
+            pageKind = when (pg) { is DelaPage.Person -> "person"; is DelaPage.Project -> "project"; is DelaPage.Deal -> "deal"; null -> "" },
+            pageId = when (pg) { is DelaPage.Person -> pg.id; is DelaPage.Project -> pg.id; is DelaPage.Deal -> pg.id; null -> "" },
+            newIds = newParts?.asks?.map { it.id } ?: sc?.home?.asks?.map { it.id }.orEmpty(),
+            talk = ask.talk?.turns.orEmpty().map { t -> DelaAsk.memo(t, snap).let { ru.zf.pravka.core.DelaDebug.Said(it.optString("said"), it.optString("reply"), it.optString("done")) } },
+            claudeText = draft, claudeBusy = ask.running.isNotBlank(),
+        )
+    }
     val sayBar: @Composable (Modifier, Dela.Task?, Boolean) -> Unit = { barModifier, opened, coversList ->
         val openId = opened?.id.orEmpty()
         // «Для этого» — только у открытого своего или видимого дела (не цели) и с сервером, который знает дела внутри.
@@ -1496,6 +1531,7 @@ fun DelaTab(
         onSphere = { sphere = it },
         onClientOpen = { ids, open -> crm.setClientOpen(ids, open) },
         onSubmit = { drawerOpen = false },
+        onDebug = if (debugInfo != null && ru.zf.pravka.core.DelaDebug.FEATURE in snap.features) ({ drawerOpen = false; app.delaDebug.listOpen.value = true }) else null,
     )
     androidx.compose.runtime.CompositionLocalProvider(LocalSeenRows provides seenRows) {
     Box(Modifier.fillMaxSize()) {
@@ -1511,6 +1547,7 @@ fun DelaTab(
             DelaViews.headLine(sphereName.takeIf { sphere != "all" }, c.today, c.late, DelaGroups.doneToday(snap, me, today))
         }
         header(headSub) { sphereSheet = true }
+        DelaDebugBar(app, { debugScreen() })
         if (navColumn) {
             // Разворот вида v2 — как веб Дел (лист «Дела» холста): боковина разделов | список | карточка; строка
             // Claude — под всеми тремя, о деле, открытом справа (карточка спрятана — о делах на экране).
@@ -1671,7 +1708,8 @@ fun DelaTab(
             // Молния — сразу, как у строки: «Вернуть» той же полоской наверху вкладки.
             onNow = { actions.bolt(it) },
             // Микрофона у дела нет (поправки задания 10): та же строка Claude — над карточкой, с `open`.
-            say = if (link != null) ({ sayBar(Modifier, fresh, false) }) else null,
+            // Режим отладки (DelaDebugUi.kt): строка «Что не так?» — над строкой Claude карточки, когда режим включён.
+            say = if (link != null) ({ DelaDebugBar(app, { debugScreen() }); sayBar(Modifier, fresh, false) }) else null,
             // Дела внутри дела (15.10.2026): «Для этого» — лист нового дела с полями от этого; «Вложить в…» — выбор дела.
             onStep = if (fresh.open && !fresh.goal) ({ openTask = null; stepFor = fresh }) else null,
             onNest = if (DelaSteps.canNest(fresh, snap, me)) ({ openTask = null; nestFor = fresh }) else null,
@@ -1753,6 +1791,7 @@ fun DelaTab(
         }
     }
     CrmSheets(crm)
+    DelaDebugHost(app)
     // Боковая панель всегда в дереве: закрытая — пуста, а закрываясь,
     // успевает уехать (баг №1). Числа считаются, только пока она видна.
     run {

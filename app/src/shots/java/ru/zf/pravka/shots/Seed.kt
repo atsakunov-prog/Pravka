@@ -464,7 +464,7 @@ internal object Seed {
         // Круг (задание 14): проекты в Круге — направления и цель, на которой проект висит.
         fun krug(id: String, dir: String, why: String? = null) =
             JSONObject().put("id", id).put("kind", "project").put("directions", arr(dir)).put("why_id", why ?: JSONObject.NULL).put("seq", ++seq)
-        return JSONObject().put("ok", true).put("full", true).put("seq", seq).put("today", d(0)).put("features", arr("groups", "krug", "tree", "digest", "nest"))
+        return JSONObject().put("ok", true).put("full", true).put("seq", seq).put("today", d(0)).put("features", arr("groups", "krug", "tree", "digest", "nest", "debug"))
             .put("digest", digest())
             .put("krug", arr(krug("p-beta", "work", "t-83"), krug("p-orion", "work"), krug("p-home", "home"), krug("p-dacha", "home", "t-84"), krug("p-zf", "work")))
             .put("tasks", tasks).put("projects", projects).put("people", people).put("suggestions", suggestions)

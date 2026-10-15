@@ -206,7 +206,9 @@ def test_migration_again_is_harmless(dela, cfg):
     """Поезд веток переименует файл в свой номер: на копии, где он уже стоял под этим именем, второй прогон не падает."""
     from importlib import resources
 
-    sql_text = (resources.files("pravka_dela") / "sql" / "dela_0024_debug.sql").read_text(encoding="utf-8")
+    # Файл ищется по содержимому, а не по имени: при сборке поезда он получит свой номер.
+    sql_text = next(t for f in (resources.files("pravka_dela") / "sql").iterdir() if f.name.startswith("dela_")
+                    and "CREATE TABLE IF NOT EXISTS crm.debug_notes" in (t := f.read_text(encoding="utf-8")))
     add(dela)
     with psycopg.connect(cfg.db_url, autocommit=True) as c:
         with c.transaction():

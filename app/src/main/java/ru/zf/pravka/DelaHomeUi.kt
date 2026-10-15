@@ -551,6 +551,8 @@ internal class DelaSideActions(
     val onClientOpen: (Collection<String>, Boolean) -> Unit,
     /** Поиск отправлен клавишей: на сложенном шторка уезжает — находки под ней (как Enter в поиске веба). */
     val onSubmit: () -> Unit = {},
+    /** «Отладка» — записки режима отладки (DelaDebugUi.kt); null — пункта нет (не владелец или сервер старый). */
+    val onDebug: (() -> Unit)? = null,
 )
 
 /**
@@ -596,6 +598,7 @@ internal fun DelaSide(m: DelaSideModel, a: DelaSideActions, modifier: Modifier =
         for (v in m.views) {
             NavRow(viewIcon(v), v.title, selected = m.nav == v.key) { a.onNav(v.key) }
         }
+        a.onDebug?.let { open -> NavRow(Glyphs.Bug, "Отладка", selected = false, onClick = open) }
         if (m.filters.isNotEmpty()) {
             NavEyebrow("Фильтры")
             for (f in m.filters) {

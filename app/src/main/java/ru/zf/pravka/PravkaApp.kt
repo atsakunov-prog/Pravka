@@ -477,8 +477,13 @@ class PravkaApp : Application() {
             // Настройки телефона на сервере (14.10.2026): поле phone синка — правки с компьютера (PhoneRemoteSync).
             sync.listen { resp -> phoneRemote.onSync(resp) }
             sync.listen { resp -> claudeSpend.onSync(resp) }
+            // Режим отладки (15.10.2026): поле debug синка — рисовать ли строку «Что не так?» (DelaDebugSync).
+            sync.listen { resp -> delaDebug.onSync(resp) }
         }
     }
+
+    /** Режим отладки Дел: записки о багах с экраном данными (docs/dela-phone-debug.md, `data/DelaDebugSync.kt`). */
+    internal val delaDebug by lazy { ru.zf.pravka.data.DelaDebugSync(this) { eventLog.add(it) } }
 
     /** Команды Засечки из веба Дел: «Начать», «Стоп», «Поправить» с компьютера применяет телефон. */
     internal val zasechkaWeb: ru.zf.pravka.data.ZasechkaWebCommands by lazy {

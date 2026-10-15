@@ -331,6 +331,9 @@ class ScreenShots {
         // ---- Траты Claude (14.10.2026): значок «$» с красной меткой на «Сегодня» и экран «Claude: траты»
         if (want("sp")) spend()
 
+        // ---- Режим отладки Дел (15.10.2026): строка «Что не так?» вверху вкладки — сложенный и разворот, обе темы
+        if (want("dbg")) debugBar()
+
         // ---- режимы по одному (Правка 4.0): сложенный, целиком, разворот
         for ((g, tab) in listOf(
             "zasechka" to MainActivity.TAB_ZASECHKA,
@@ -908,6 +911,27 @@ class ScreenShots {
      * (общий итог, «Телефон» и «Сервер», советы, кэш и пачки, по дням) — на выдуманном виде сервера ([Seed.spendView]),
      * обе темы, оба экрана Fold; экран — ещё и высоким окном, чтобы видно было всё.
      */
+    /** Режим отладки (DelaDebugUi.kt): строка видна, когда поле debug синка говорит on (флаг debug — в Seed). */
+    private fun debugBar() {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        runBlocking { app.delaDebug.onSync(org.json.JSONObject().put("debug", org.json.JSONObject().put("on", true).put("new", 2).put("last", 12))) }
+        for (theme in listOf("light", "dark")) {
+            runBlocking { app.settings.setLookTheme(theme) }
+            settle(4)
+            for ((size, q) in listOf("folded" to OUTER, "wide" to INNER)) {
+                RuntimeEnvironment.setQualifiers(q)
+                val c = launch(MainActivity.TAB_TODOIST)
+                shot(c, "dbg-dela-$size-$theme")
+                close(c)
+            }
+        }
+        RuntimeEnvironment.setQualifiers(OUTER)
+        runBlocking {
+            app.settings.setLookTheme("system")
+            app.delaDebug.onSync(org.json.JSONObject())
+        }
+    }
+
     private fun spend() {
         val app = RuntimeEnvironment.getApplication() as PravkaApp
         runBlocking { app.claudeSpend.onSync(org.json.JSONObject().put("spend", Seed.spendBadge())) }

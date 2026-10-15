@@ -14,6 +14,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import ru.zf.pravka.core.Dela
+import ru.zf.pravka.core.DelaDebug
 
 /**
  * Дела на телефоне: копия сервера (`dela.json`) и очередь операций
@@ -301,6 +302,8 @@ class DelaStore(private val context: Context) {
         if (added > 0) {
             writeOutbox()
             publish()
+            // Режим отладки: что ушло операциями — в кольцо записки «Что не так?» (core/DelaDebug.kt, в памяти).
+            DelaDebug.noteOps(ops)
         }
     }
 

@@ -451,8 +451,15 @@ def cmd(args) -> int:
     import base64
     from pathlib import Path
 
+    import sys
+
     from . import config as config_mod, store
 
+    # Записка может нести эмодзи и всё что угодно: консоль в cp1251 упала бы на печати — непечатное заменяем «?».
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
     cfg = config_mod.load(args.env)
     user = _owner(cfg.db_url)
     if args.action in ("show", "set") and not args.note:
