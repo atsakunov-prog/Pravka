@@ -318,15 +318,36 @@ def line(x: dict) -> str:
 
 
 ROW_KEYS = ("group", "due", "person", "project", "why", "status", "meta")
+# Вложенность строки (правило 27; поезд 16.10.2026): веб и телефон шлют её данными — родитель, место, сколько внутри
+# открыто, отступ на экране, свёрнут ли родитель «Деревом».
+NEST_KEYS = ("depth", "in", "pos", "inside", "folded")
+
+
+def _nest(r: dict) -> list[str]:
+    """Вложенность словами: «внутри #12 …», «место 2», «внутри открыто 3 (свёрнуто)»."""
+    out = []
+    if r.get("in"):
+        out.append(f"внутри {r['in']}")
+    if r.get("pos") not in (None, "", 0):
+        out.append(f"место {r['pos']}")
+    if r.get("inside"):
+        out.append(f"внутри открыто {r['inside']}" + (" (свёрнуто)" if r.get("folded") else ""))
+    return out
 
 
 def _row(r: dict) -> str:
     if not isinstance(r, dict):
         return "  " + _one_line(r, 200)
     num = f"#{r['num']} " if r.get("num") else ""
-    parts = [str(r.get(k)) for k in ROW_KEYS if r.get(k) not in (None, "", [], {})]
-    rest = {k: v for k, v in r.items() if k not in (*ROW_KEYS, "num", "title", "id", "in_view") and v not in (None, "", [], {})}
-    return ("  " + ("* " if r.get("in_view") else "  ") + num + str(r.get("title") or r.get("id") or "?")
+    try:
+        depth = max(0, min(int(r.get("depth") or 0), 4))
+    except (TypeError, ValueError):
+        depth = 0
+    parts = _nest(r) + [str(r.get(k)) for k in ROW_KEYS if r.get(k) not in (None, "", [], {})]
+    rest = {k: v for k, v in r.items()
+            if k not in (*ROW_KEYS, *NEST_KEYS, "num", "title", "id", "in_view") and v not in (None, "", [], {})}
+    return ("  " + ("* " if r.get("in_view") else "  ") + "  " * depth + ("↳ " if depth else "") + num
+            + str(r.get("title") or r.get("id") or "?")
             + (" — " + " · ".join(parts) if parts else "") + (" " + _one_line(rest, 200) if rest else ""))
 
 
@@ -347,8 +368,17 @@ def snapshot_lines(s: dict) -> list[str]:
                    + str(card.get("title") or card.get("id") or ""))
         fields = card.get("fields") if isinstance(card.get("fields"), dict) else {}
         for k, v in fields.items():
-            if v not in (None, "", [], {}):
+            if v in (None, "", [], {}):
+                continue
+            # Список строк («Внутри» по месту, правило 27) — строкой на пункт, а не одной строкой JSON.
+            if isinstance(v, list) and all(isinstance(x, str) for x in v):
+                out.append(f"    {k}:")
+                out += [f"      {_one_line(x, 300)}" for x in v[:60]]
+            else:
                 out.append(f"    {k}: {_one_line(v, 400)}")
+        # Что карточка показывала текстом (веб: панель карточки или страница) — без него Claude видел бы только поля.
+        if card.get("text"):
+            out.append("    на экране текстом: " + _one_line(card["text"], 1500))
     if s.get("selected"):
         out.append("  выбрано галочками: " + _one_line(s["selected"], 400))
     rows = s.get("rows") if isinstance(s.get("rows"), list) else []
@@ -425,6 +455,9 @@ def tool(url: str, user: str, action: str = "list", note: str | None = None, sta
             x = r["note"]
             return f"№{x['num']}: {STATUS_WORD.get(x['status'], x['status'])}" + (" · ответ записан" if answer else "")
         if action == "on" or action == "off":
+            # Включает строку владельцу: не владельцу настройка ничего не дала бы (строки у него нет) — отказ словами.
+            with db.session(url, user, via=via) as conn:
+                _owner_only(conn, user, store.OpError)
             r = store.apply_ops(url, user, [{"op": "user.settings", "settings": {"debug": action == "on"}}], via=via,
                                 actor=user)["results"][0]
             return ("Режим отладки включён: строка «Что не так?» — вверху веба и вкладки Дел телефона (после синка)."
@@ -446,6 +479,7 @@ def add_cli(sub) -> None:
     p.add_argument("--answer-file", help="set: ответ из файла (длинный, с переносами)")
     p.add_argument("--json", action="store_true", help="show: записка как есть, JSON")
     p.add_argument("--shot", help="show: сохранить картинку экрана в этот файл")
+    p.add_argument("--user", help="от чьего имени (с завода — владелец Дел); не владельцу записки закрыты — так это и проверяют")
     p.set_defaults(fn=cmd)
 
 
@@ -464,7 +498,7 @@ def cmd(args) -> int:
     except (AttributeError, ValueError):
         pass
     cfg = config_mod.load(args.env)
-    user = _owner(cfg.db_url)
+    user = args.user or _owner(cfg.db_url)
     if args.action in ("show", "set") and not args.note:
         print("нужен номер записки")
         return 2

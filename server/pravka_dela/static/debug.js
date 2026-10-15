@@ -32,8 +32,8 @@ const DEBUG = (() => {
   // Слова статусов — владельца (16.10.2026: «новое / разбираю / починено / не баг / потом»), как debug.STATUS_WORD.
   const STATUS = { new: 'новое', taken: 'разбираю', fixed: 'починено', not_bug: 'не баг', later: 'потом' };
   const FILTERS = [['open', 'Новое и разбираю'], ['all', 'Все'], ['fixed', 'Починено'], ['not_bug', 'Не баг'], ['later', 'Потом']];
-  const KIND = { op: 'операция', op_fail: 'сервер не принял', ask: 'сказал Claude', parse: 'разбор', reply: 'Claude ответил',
-    toast: 'подсказка', error: 'ошибка', nav: 'переход', event: 'событие' };
+  const KIND = { op: 'операция', op_fail: 'сервер не принял', op_result: 'сервер сделал', ask: 'сказал Claude', parse: 'разбор',
+    reply: 'Claude ответил', toast: 'подсказка', error: 'ошибка', nav: 'переход', event: 'событие' };
 
   const owner = () => !!(S.me && S.me.role === 'owner' && (S.me.features || []).includes('debug'));
   /** Включён ли режим: свежее слово — синк (команда `debug on` с компа видна без перезагрузки), иначе /api/me. */
@@ -65,14 +65,29 @@ const DEBUG = (() => {
   // ── Кольцо событий: обёртки сети, Claude и подсказок ──────────────────
   const taskName = (id) => (S.tasks.get(id) || {}).title || (S.deals.get(id) || {}).name || (S.people.get(id) || {}).name
     || (S.projects.get(id) || {}).name || '';
+  const numTitle = (t) => (t.num ? '#' + t.num + ' ' : '') + cut(t.title || '', 80);
+  /** Вложенность словами (правило 27, поезд 16.10.2026): «внутрь «…»», «вынуть из дела», «место 2» — иначе в записке
+   *  только uuid в why_id, и «вложил — а оно не там» Claude не прочтёт. why_id на цель — это «Зачем», а не «внутрь». */
+  function nestWords(o) {
+    const s = o.op === 'task.set' ? o.set || {} : o.op === 'task.create' ? o.task || {} : {};
+    const out = [];
+    if ('why_id' in s && (o.op === 'task.set' || s.why_id)) {
+      const p = s.why_id ? S.tasks.get(s.why_id) : null;
+      out.push(!s.why_id ? 'вынуть из дела' : p && p.goal ? 'Зачем — цель «' + cut(p.title, 60) + '»' : 'внутрь «' + (p ? numTitle(p) : s.why_id) + '»');
+    }
+    if ('pos' in s) out.push(s.pos == null ? 'место снято' : 'место ' + s.pos);
+    return out.join(', ');
+  }
   function opWords(o) {
     const t = (o.task && o.task.title) || (o.data && (o.data.name || o.data.title || o.data.summary)) || (o.id ? taskName(o.id) : '')
       || (Array.isArray(o.ids) ? o.ids.map(taskName).filter(Boolean).slice(0, 3).join(', ') : '');
-    return (o.op || '?') + (t ? ' «' + cut(t, 80) + '»' : '');
+    const n = safe(() => nestWords(o), '');
+    return (o.op || '?') + (t ? ' «' + cut(t, 80) + '»' : '') + (n ? ' — ' + n : '');
   }
   function scopeShort(s) {
     if (!s) return undefined;
     return { title: s.title, card: s.card, open: s.open ? taskName(s.open) || s.open : undefined, kstati: s.kstati || undefined,
+      step: s.step || undefined, // «Для этого» (правило 27): всё сказанное — дела внутри открытого
       on_screen: (s.task_ids || []).length, in_view: (s.visible_ids || []).length, selected: (s.selected_ids || []).length || undefined,
       suggestions: (s.suggestion_ids || []).length || undefined, history: (s.history || []).length || undefined };
   }
@@ -81,7 +96,11 @@ const DEBUG = (() => {
       what: safe(() => describe(c), ''), status: c.status })),
       tasks: (d.tasks || []).map((t) => ({ id: t.id, num: t.num, title: t.title })),
       decided: d.decided && d.decided.length ? d.decided : undefined, crm: (d.crm || []).map((c) => c.what || c),
-      notes: d.notes && d.notes.length ? d.notes : undefined, errors: d.errors && d.errors.length ? d.errors : undefined };
+      notes: d.notes && d.notes.length ? d.notes : undefined, errors: d.errors && d.errors.length ? d.errors : undefined,
+      // Дела внутри дела (правило 27): что завёл внутри, чей срок поднял сервер, кому вернул — их reply пишет сервер.
+      steps: (d.steps || []).length ? d.steps.map((id) => taskName(id) || id) : undefined,
+      raised: (d.raised || []).length ? d.raised.map((r) => numTitle(r) + (r.moved ? ' → на сегодня' : '')) : undefined,
+      fell: (d.fell || []).length ? d.fell.map((r) => numTitle(r) + ' → срок ' + (r.due_date || 'снят')) : undefined };
   }
 
   const api0 = api;
@@ -102,7 +121,14 @@ const DEBUG = (() => {
   const ops0 = ops;
   ops = async function (items) { // eslint-disable-line no-global-assign
     for (const o of items) note('op', opWords(o), o);
-    try { return await ops0(items); } catch (e) { note('op_fail', e.message); throw e; }
+    let res;
+    try { res = await ops0(items); } catch (e) { note('op_fail', e.message); throw e; }
+    // Сделано последнее дело внутри — родитель поднялся (raised); дело снова открыто — родителю вернули срок (fell).
+    for (const r of res || []) {
+      if (r && r.raised) note('op_result', 'всё внутри сделано — поднят «' + numTitle(r.raised) + '»' + (r.raised.moved ? ', на сегодня' : ''), r.raised);
+      if (r && r.fell) note('op_result', 'родителю вернули срок: «' + numTitle(r.fell) + '» — ' + (r.fell.due_date || 'без срока'), r.fell);
+    }
+    return res;
   };
   const runJob0 = runJob;
   runJob = async function (path, body) { // eslint-disable-line no-global-assign
@@ -147,7 +173,18 @@ const DEBUG = (() => {
       if (t.status !== 'open') x.status = t.status;
       if (safe(() => isNow(t), false)) x.now = true;
       x.grp = safe(() => grpWord(t), undefined);
+      // Дела внутри дела (правило 27): родитель, место среди соседей, сколько внутри открыто — данными, не подписью.
+      const par = safe(() => parentOf(t), null);
+      if (par) x.in = numTitle(par);
+      if (t.pos != null) x.pos = t.pos;
+      const kids = safe(() => insideOf(t.id), []);
+      if (kids.length) x.inside = kids.length;
     }
+    // Отступ на экране («Деревом», дела внутри над родителем в «Сейчас», шаги к цели в дереве) и свёрнутый родитель.
+    const depth = +(row.style.getPropertyValue('--indent') || 0);
+    if (depth) x.depth = depth;
+    const fold = row.querySelector('.fold-btn:not(.none)');
+    if (fold && fold.getAttribute('aria-expanded') === 'false') x.folded = true;
     const meta = [...row.querySelectorAll('.chips > *')].map(txt).filter(Boolean).join(' · ');
     if (meta) x.meta = cut(meta, 300);
     if (S.sel.has(id)) x.selected = true;
@@ -168,6 +205,14 @@ const DEBUG = (() => {
       if (t.project_id) f.project_name = (project(t.project_id) || {}).name;
       const z = safe(() => zachemOf(t), null);
       if (z) f.zachem = z.title;
+      // Дела внутри дела (правило 27): внутри чего это дело и что внутри него — по месту, как блок «Внутри» карточки.
+      const par = safe(() => parentOf(t), null);
+      if (par) f.for = numTitle(par);
+      const kids = safe(() => insideOf(t.id), []);
+      if (kids.length) f.inside = kids.map((k, i) => (i + 1) + '. ' + numTitle(k) + (k.due_date ? ' · срок ' + k.due_date : '')
+        + (k.pos != null ? ' · pos ' + k.pos : ''));
+      const doneIn = safe(() => all().filter((k) => k.why_id === t.id && !isOpen(k) && !k.goal).length, 0);
+      if (doneIn) f.inside_done = doneIn;
       return { kind: t.goal ? 'goal' : 'task', id: t.id, num: t.num, title: t.title, fields: f,
         text: cut(txt(document.querySelector('section.card-pane')), 3000) || undefined };
     }
@@ -189,6 +234,8 @@ const DEBUG = (() => {
       side_hidden: S.sideHidden || undefined, card_hidden: S.cardHidden || undefined, narrow: NARROW.matches || undefined };
     if (CRM_VIEWS[r.kind] || r.kind === 'clients') Object.assign(m, { crm_list: S.crmList, crm_mine: S.crmMine || undefined, client_q: S.clientQ || undefined, client_arch: S.clientArch || undefined });
     if (r.kind === 'tree' || r.kind === 'krug') Object.assign(m, { tree_mode: S.treeMode, tree_dir: S.treeDir, tree_level: S.treeLevel, tree_filter: S.treeF || undefined });
+    // «Деревом» во «Всех делах» (правило 27): дела внутри — под родителем отступом, а не плоско перед ним.
+    if (r.kind === 'all' && safe(() => nestOn(), false)) m.all_tree = !!S.allTree;
     if (r.kind === 'meetings' || r.kind === 'meeting') m.meetings = S.mt;
     return m;
   }
@@ -219,7 +266,8 @@ const DEBUG = (() => {
       rows_total: rows.length ? total : undefined,
       deals: (sc.deal_ids || []).length ? sc.deal_ids.slice(0, 60).map((id) => ({ id, name: (S.deals.get(id) || {}).name,
         in_view: (sc.visible_deal_ids || []).includes(id) })) : undefined,
-      folds: part('folds', () => ({ closed: Object.keys(S.closed).filter((k) => S.closed[k]).slice(0, 60),
+      folds: part('folds', () => ({ closed: Object.keys(S.closed).filter((k) => S.closed[k]).slice(0, 60)
+        .map((k) => (k.startsWith('nest:') && S.tasks.has(k.slice(5)) ? 'внутри ' + numTitle(S.tasks.get(k.slice(5))) : k)),
         auto_open: S.autoOpen || undefined, client_open: [...S.clientOpen].map((id) => (project(id) || {}).name || id).slice(0, 30) })),
       new: part('new', () => (S.sugOrder || []).slice(0, 60).map((id, i) => {
         const g = S.sugs.get(id), w = g ? safe(() => sugText(g), {}) : {};
@@ -424,7 +472,9 @@ const DEBUG = (() => {
       out.push(el('div', { class: 'dbg-h' }, `Строки списка: ${s.rows.length}` + (s.rows_total > s.rows.length ? ` из ${s.rows_total}` : '') + ' · ★ — были в окне'));
       out.push(el('div', { class: 'dbg-rows' }, s.rows.map((r) => el('div', { class: 'dbg-row' + (r.in_view ? ' seen' : '') },
         el('span', { class: 'star' }, r.in_view ? '★' : ''), r.num ? el('span', { class: 'num' }, '#' + r.num) : null, el('b', {}, r.title || r.id),
-        el('span', { class: 'faint' }, ' ' + [r.group, r.grp, r.due, r.person, r.project, r.why, r.status, r.meta].filter(Boolean).join(' · '))))));
+        el('span', { class: 'faint' }, ' ' + [r.depth ? '↳'.repeat(Math.min(r.depth, 4)) : null, r.in ? 'внутри ' + r.in : null,
+          r.pos != null ? 'место ' + r.pos : null, r.inside ? 'внутри открыто ' + r.inside + (r.folded ? ' (свёрнуто)' : '') : null,
+          r.group, r.grp, r.due, r.person, r.project, r.why, r.status, r.meta].filter(Boolean).join(' · '))))));
     }
     const SKIP = new Set(['v', 'title', 'route', 'sub', 'mode', 'card', 'selected', 'rows', 'rows_total', 'kind']);
     for (const [k, v] of Object.entries(s)) if (!SKIP.has(k)) out.push(kv(k, v));

@@ -705,6 +705,37 @@ def test_broom_nothing_private_reaches_the_team(team):
     assert not [m for m in marks if m not in mine], [m for m in marks if m not in mine]
 
 
+def test_broom_debug_note_stays_with_owner(team):
+    """Поезд, вагон 3 (режим отладки, правило 28) поверх закона приватности (правило 26): записка «Что не так?» несёт
+    экран владельца целиком — здесь в её тексте, снимке и действиях все приватные метки метлы (как если бы он записал
+    с карточки клиента) и своя. Ни одна не доходит до команды — ни путями метлы, ни синком, ни видом debug, ни
+    коннектором, ни прямым запросом к таблице; владелец читает записку целиком."""
+    from pravka_dela import debug
+
+    marks, w = _broom_world(team)
+    url = team["url"]
+    shown = " · ".join(marks)
+    r = one(url, "sasha", {"op": "debug.add", "note": {
+        "text": "МЕТКА-ОТЛАДКА: сказал перенести Ивана — перенёс не то", "source": "web",
+        "snapshot": {"v": 1, "route": "#/c/" + str(w["project"]), "title": "ООО Ромашка",
+                     "card": {"kind": "client", "title": "ООО Ромашка", "text": shown},
+                     "rows": [{"id": str(w["tasks"][0]), "title": "Иван Тестов: прислать модель", "meta": shown}]},
+        "actions": [{"at": "2026-10-16T10:00:00+03:00", "kind": "reply", "text": shown}]}})
+    marks = [*marks, "МЕТКА-ОТЛАДКА"]
+    for user in ("natasha", "alena"):
+        seen = _everything(url, user, marks, w)
+        assert not [m for m in marks if m in seen], user
+        assert "debug" not in store.sync(url, user, 0)
+        with pytest.raises(store.OpError, match="только владельцу"):
+            store.view(url, user, "debug")
+        assert debug.tool(url, user, "list").startswith("Не вышло")
+        assert debug.tool(url, user, "show", str(r["note"]["num"])).startswith("Не вышло")
+        with as_(url, user) as c:
+            assert c.execute("SELECT count(*) AS n FROM crm.debug_notes").fetchone()["n"] == 0
+    card = debug.tool(url, "sasha", "show", str(r["note"]["num"]))
+    assert not [m for m in marks if m not in card], [m for m in marks if m not in card]
+
+
 def test_broom_with_nesting_team_sees_flat(team):
     """Поезд, вагон 2 (дела внутри дела, правило 27) поверх закона приватности (правило 26): Саша вложил дело клиента
     (его видит команда) в своё дело из личного проекта (команде не видно). У команды дело внутри стоит плоско — why_id,

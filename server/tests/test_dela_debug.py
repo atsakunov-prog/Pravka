@@ -114,6 +114,13 @@ def test_only_owner_sees_and_writes(dela):
     with pytest.raises(psycopg.errors.RaiseException, match="не переписывают"):
         with dela_db.session(dela, "sasha", via="app") as c:
             c.execute("UPDATE crm.debug_notes SET text = 'другое' WHERE num = 1")
+    # Коннектор и командная строка (один вход — debug.tool) под членом команды — тот же отказ, и включить строку он не
+    # может: не владельцу её нет (поезд 16.10.2026, приёмка).
+    for action in ("list", "on", "off"):
+        assert debug.tool(dela, "natasha", action).startswith("Не вышло: Отладка — только владельцу"), action
+    assert debug.tool(dela, "natasha", "show", "1").startswith("Не вышло")
+    assert debug.tool(dela, "natasha", "set", "1", "fixed", "чужой ответ").startswith("Не вышло")
+    assert store.view(dela, "sasha", "debug", id="1")["note"]["status"] == "new"
 
 
 def test_services_and_narrow_tokens_are_closed(dela):
@@ -207,6 +214,52 @@ def test_claude_reads_and_answers(dela):
     assert "№1" not in debug.tool(dela, "sasha", "list") and "№1" in debug.tool(dela, "sasha", "list", show_all=True)
     assert debug.tool(dela, "sasha", "show", "5").startswith("Не вышло")
     assert debug.tool(dela, "sasha", "set", "2", "-", "только ответ").endswith("ответ записан")
+
+
+def test_cli_as_owner_and_refuses_others(dela, tmp_path, monkeypatch, capsys):
+    """`python -m pravka_dela debug …` — от владельца (с завода), `--user X` — от X: члену команды — отказ словами и
+    код 1, записка не тронута."""
+    from pravka_dela import __main__ as cli
+
+    add(dela)
+    env = tmp_path / "dela.env"
+    env.write_text(f"DELA_DB_URL={dela}\n", encoding="utf-8")
+    monkeypatch.delenv("DELA_DB_URL", raising=False)
+    assert cli.main(["--env", str(env), "debug", "list"]) == 0
+    assert "№1" in capsys.readouterr().out
+    assert cli.main(["--env", str(env), "debug", "list", "--user", "natasha"]) == 1
+    assert "только владельцу" in capsys.readouterr().out
+    assert cli.main(["--env", str(env), "debug", "show", "1", "--json", "--user", "natasha"]) == 1
+    assert cli.main(["--env", str(env), "debug", "set", "1", "починено", "Чужой ответ.", "--user", "natasha"]) == 1
+    assert store.view(dela, "sasha", "debug", id="1")["note"]["status"] == "new"
+    capsys.readouterr()
+    assert cli.main(["--env", str(env), "debug", "set", "1", "разбираю", "Смотрю."]) == 0
+    assert capsys.readouterr().out.strip() == "№1: разбираю · ответ записан"
+
+
+def test_card_text_shows_nesting(dela):
+    """Поезд 16.10.2026 (правило 27): веб и телефон шлют вложенность данными — Claude читает её словами: отступ «↳»,
+    «внутри #12 …», место, сколько внутри открыто (и свёрнут ли родитель), «Внутри» карточки строкой на дело, вложить и
+    подъём родителя — в действиях."""
+    snap = {**SNAP, "mode": {"all_tree": True},
+            "card": {"kind": "task", "id": "p", "num": 12, "title": "Отправить термшит Ивану",
+                     "fields": {"inside": ["1. #14 Взять цифры · pos 1", "2. #13 Набросать драфт · pos 2"], "inside_done": 1}},
+            "rows": [{"id": "p", "num": 12, "title": "Отправить термшит Ивану", "inside": 2, "in_view": True},
+                     {"id": "k2", "num": 14, "title": "Взять цифры", "in": "#12 Отправить термшит Ивану", "pos": 1, "depth": 1,
+                      "in_view": True},
+                     {"id": "q", "num": 40, "title": "Свёрнутый родитель", "inside": 3, "folded": True, "in_view": False}],
+            "rows_total": 3}
+    acts = [{"at": "2026-10-16T10:14:40+03:00", "kind": "op",
+             "text": "task.set «Взять цифры» — внутрь «#12 Отправить термшит Ивану», место 1"},
+            {"at": "2026-10-16T10:15:00+03:00", "kind": "op_result",
+             "text": "всё внутри сделано — поднят «#12 Отправить термшит Ивану», на сегодня"}]
+    r, _ = add(dela, snapshot=snap, actions=acts)
+    card = debug.tool(dela, "sasha", "show", str(r["note"]["num"]))
+    assert "  * #12 Отправить термшит Ивану — внутри открыто 2" in card, card
+    assert "  *   ↳ #14 Взять цифры — внутри #12 Отправить термшит Ивану · место 1" in card, card
+    assert "#40 Свёрнутый родитель — внутри открыто 3 (свёрнуто)" in card, card
+    assert "    inside:\n      1. #14 Взять цифры · pos 1\n      2. #13 Набросать драфт · pos 2" in card, card
+    assert "op: task.set «Взять цифры» — внутрь «#12" in card and "op_result: всё внутри сделано" in card, card
 
 
 def test_migration_again_is_harmless(dela, cfg):
