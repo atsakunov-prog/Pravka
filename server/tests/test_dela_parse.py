@@ -136,3 +136,31 @@ def test_raznoska_rules_come_from_svod(dela):
     assert r["results"][0]["ok"], r
     assert parse.template(dela).endswith("ПРАВИЛО ТЮНЕРА: проверка.")
     assert "ПРАВИЛО ТЮНЕРА" not in parse.template()             # без url — запасной файл
+
+
+def test_catalog_keeps_related_and_named_only(dela):
+    """№67: каталог людей разбора — связанные с делами и названные в наговоре, а не все карточки (было ~20 тыс. знаков в
+    каждом разборе); имя из ответа модели узнаётся по всему справочнику."""
+    with parse.db.session(dela, "system", "test") as c:
+        ids = {}
+        for name in ("Немой Контакт", "Иван Тестов", "Пётр Связанный"):
+            ids[name] = c.execute("INSERT INTO crm.people (name, owner_id, created_at) VALUES "
+                                  "(%s, 'sasha', now() - interval '60 days') RETURNING id", (name,)).fetchone()["id"]
+        c.execute("INSERT INTO tasks.tasks (title, owner_id, created_by, person_id) VALUES ('Позвонить', 'sasha', 'sasha', %s)",
+                  (ids["Пётр Связанный"],))
+    seen = {}
+
+    def fake(system, user_text):
+        seen["system"] = system
+        return {"tasks": [{"title": "Написать немому", "notes": "", "project": "", "person": "Немой Контакт", "ball": "mine",
+                           "due": "", "estimate_min": 0, "money": "", "want": False, "labels": []}], "notes": []}
+
+    out = parse.run(dela, "sasha", "передать Ивану Тестову договор", {}, "", None, ask_fn=fake)
+    s = seen["system"]
+    assert "— Иван Тестов" in s and "— Пётр Связанный" in s and "Немой Контакт" not in s
+    assert "нет человека в списке — пиши имя, как названо" in s
+    assert out["tasks"][0]["person_id"] == str(ids["Немой Контакт"])
+    # Без keep — как было: все.
+    with parse.db.session(dela, "sasha", "test") as c:
+        text, index = parse.catalog(c)
+    assert "— Немой Контакт" in text and len(index["people"]) >= 3

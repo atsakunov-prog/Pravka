@@ -43,8 +43,15 @@ PLACE_KEY = "krug.place"      # Свод: блок «дерево жизни» �
 LESSONS_KEY = "krug.lessons"  # Свод: выводы из правок владельца (пишет tune раз в неделю)
 ACTOR = "svc:krug"            # так в журнале — место, которое выбрала модель
 REFRESH_EVERY = 300           # секунд между пересборками блока
-EXAMPLES = 40                 # правок и решений владельца в блок
+EXAMPLES = 40                 # правок и решений владельца — разборщику Круга (krug_auto, пачка раз в слот)
 FIXES = 25                    # из них — поправок автоматики и ответов на вопросы (они учат сильнее)
+# Блок «дерево жизни» едет в КАЖДЫЙ разбор: надиктовки (телефон и /api/parse), сверку встреч и окна дайджеста. 40
+# примеров и направления целиком («входит», «ещё», «примеры») — ~14 тыс. знаков на каждый вход (аудит №67). В блоке —
+# короче: 10 примеров (поправок и ответов до 6, своих до 4), выводов до 10, направление одной строкой. Разборщику Круга —
+# его прежние 40 (он работает пачкой раз в слот, и учится в первую очередь он).
+BLOCK_EXAMPLES = 10
+BLOCK_FIXES = 6
+BLOCK_LESSONS = 10
 HISTORY_DAYS = 180            # сколько журнала смотреть
 LESSONS_MAX = 20              # выводов в записи
 MSK = ZoneInfo("Europe/Moscow")
@@ -173,8 +180,18 @@ def tree_lines(rows: list[dict], known: list[dict]) -> list[str]:
     return out
 
 
+def dir_line(d: dict) -> str:
+    """Направление одной строкой для блока (аудит №67): «Название — формула (не сюда: …)». Что входит, «ещё» и примеры —
+    в Своде и у разборщика Круга; разбору хватает формулы и границы."""
+    no = d.get("excludes")
+    if isinstance(no, list):
+        no = "; ".join(str(x).strip().rstrip(".;") for x in no if str(x).strip())
+    return (f"{d.get('name') or d['key']}" + (f" — {d['formula']}" if d.get("formula") else "")
+            + (f" (не сюда: {no})" if no else ""))
+
+
 def dir_lines(known: list[dict]) -> list[str]:
-    """Направления коротко: формула, что входит, где граница, примеры (смысл и ключи разбору не нужны)."""
+    """Направления подробно: формула, что входит, где граница, примеры (смысл и ключи разбору не нужны)."""
     out = []
     for d in known:
         out.append(f"{d.get('name') or d['key']}" + (f" — {d['formula']}" if d.get("formula") else ""))
@@ -283,11 +300,13 @@ def _where(p: dict, path: dict, known: list[dict], titles: dict) -> str:
 
 
 def example_lines(url: str, owner: str, known: list[dict], rows: list[dict] | None = None,
-                  events: list[dict] | None = None) -> tuple[list[str], list[str]]:
-    """(поправки и ответы, поставленное самим) строками для промпта: «название»: где стояло — куда переставил."""
+                  events: list[dict] | None = None, total: int = EXAMPLES,
+                  fixes_max: int = FIXES) -> tuple[list[str], list[str]]:
+    """(поправки и ответы, поставленное самим) строками для промпта: «название»: где стояло — куда переставил.
+    total и fixes_max — сколько всего и сколько из них поправок (у блока — BLOCK_EXAMPLES, BLOCK_FIXES)."""
     events = learned(url, owner) if events is None else events
-    fixes = [e for e in events if e["kind"] != "own"][:FIXES]
-    own = [e for e in events if e["kind"] == "own"][:EXAMPLES - len(fixes)]
+    fixes = [e for e in events if e["kind"] != "own"][:fixes_max]
+    own = [e for e in events if e["kind"] == "own"][:total - len(fixes)]
     ids = {e["task"] for e in fixes + own} | {p.get("why") for e in fixes + own for p in (e.get("was") or {}, e.get("now") or {})}
     ids.discard(None)
     with db.session(url, owner, via="krug") as conn:
@@ -336,13 +355,15 @@ def block(url: str, owner: str) -> str:
     tree = tree_lines(rows, known)
     if not tree:
         return ""
-    fixes, own = example_lines(url, owner, known, rows)
+    # Короче, чем у разборщика Круга (аудит №67): 10 примеров, до 10 выводов, направление одной строкой.
+    fixes, own = example_lines(url, owner, known, rows, total=BLOCK_EXAMPLES, fixes_max=BLOCK_FIXES)
     parts = [HEAD,
              "КАК ВЛАДЕЛЕЦ РАСКЛАДЫВАЕТ (правила его разборщика Круга):\n" + rules_for_place(rules),
-             "НАПРАВЛЕНИЯ (что входит и где граница):\n" + "\n".join(dir_lines(known)),
+             "НАПРАВЛЕНИЯ (формула и граница):\n" + "\n".join(dir_line(d) for d in known),
              "ЦЕЛИ (номер и цель; отступ — подцель):\n" + "\n".join(tree)]
     if learnt:
-        parts.append("ВЫВОДЫ ИЗ ЕГО ПРАВОК (сильнее общих правил):\n" + "\n".join(f"- {x}" for x in learnt))
+        parts.append("ВЫВОДЫ ИЗ ЕГО ПРАВОК (сильнее общих правил):\n"
+                     + "\n".join(f"- {x}" for x in learnt[:BLOCK_LESSONS]))
     if fixes:
         parts.append("КАК ОН ПОПРАВЛЯЛ АВТОМАТИКУ (свежие сверху — сильнее общих правил):\n" + "\n".join(fixes))
     if own:

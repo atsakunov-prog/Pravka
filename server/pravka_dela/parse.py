@@ -21,7 +21,7 @@ import re
 import uuid
 from pathlib import Path
 
-from . import db, llm, remind, store
+from . import db, focus, llm, remind, store
 
 log = logging.getLogger("dela.parse")
 
@@ -94,13 +94,18 @@ def _norm(s: str | None) -> str:
     return re.sub(r"\s+", " ", (s or "").replace("ё", "е").replace("Ё", "Е").strip().lower())
 
 
-def catalog(conn) -> tuple[str, dict]:
-    """Справочник для промпта (как promptCatalog в Правке) и указатели имя → id."""
+def catalog(conn, keep: set[str] | None = None) -> tuple[str, dict]:
+    """Справочник для промпта (как promptCatalog в Правке) и указатели имя → id.
+
+    keep (аудит №67) — чьи строки ЛЮДИ класть в промпт: связанные с делами и названные в наговоре, а не все 400 карточек
+    (~20 тыс. знаков в каждом разборе). Указатель index — по ВСЕМ видимым людям: имя из ответа модели узнаётся по всему
+    справочнику. None — как было: все."""
     projects = conn.execute(
         "SELECT id, name, aliases, sphere, kind FROM crm.projects WHERE archived_at IS NULL ORDER BY name, id"
     ).fetchall()
     people = conn.execute(
-        "SELECT id, name, short, aliases FROM crm.people WHERE archived_at IS NULL ORDER BY coalesce(short, name), name, id"
+        # Из вида по ярусу (аудит №10): другие имена коллег (пользователей Дел) команде не видны и здесь.
+        "SELECT id, name, short, aliases FROM crm.v_people WHERE archived_at IS NULL ORDER BY coalesce(short, name), name, id"
     ).fetchall()
     labels = [r["name"] for r in conn.execute("SELECT name FROM tasks.labels ORDER BY name")]
     lines = []
@@ -110,10 +115,13 @@ def catalog(conn) -> tuple[str, dict]:
             more = f" ({', '.join(p['aliases'])})" if p["aliases"] else ""
             lines.append(f"— {p['name']}{more} · {'дом' if p['sphere'] == 'home' else 'работа'}"
                          + (" · клиент" if p["kind"] == "client" else ""))
-    if people:
+    shown = people if keep is None else [pe for pe in people if str(pe["id"]) in keep]
+    if shown:
         lines.append("")
-        lines.append("ЛЮДИ (person — короткое имя из списка; в скобках — полное и как ещё зовут):")
-        for pe in people:
+        lines.append("ЛЮДИ (person — короткое имя из списка; в скобках — полное и как ещё зовут):" if keep is None else
+                     "ЛЮДИ — связанные с делами и названные в наговоре (person — короткое имя из списка; в скобках — "
+                     "полное и как ещё зовут; нет человека в списке — пиши имя, как названо: Дела узнают сами):")
+        for pe in shown:
             label = pe["short"] or pe["name"]
             more = [x for x in [pe["name"] if pe["name"] != label else None, *pe["aliases"]] if x]
             lines.append(f"— {label}" + (f" ({', '.join(more)})" if more else ""))
@@ -257,7 +265,12 @@ def run(url: str, user: str, text: str, defaults: dict, key: str, proxy: str | N
     if len(text) > MAX_INPUT:
         raise ParseError(f"больше {MAX_INPUT} знаков — раздели на части")
     with db.session(url, user, via="parse") as conn:
-        cat, index = catalog(conn)
+        # Каталог людей — связанные и названные (аудит №67): связанные с делами за 90 дней, названные в наговоре тем же
+        # матчером, что у встреч и телефона (focus.py), человек по умолчанию. Узнаёт имена ответа index — по всем.
+        keep = set(focus.related(conn)) | focus.mentioned(conn, user, text)
+        if defaults and defaults.get("person_id"):
+            keep.add(str(defaults["person_id"]))
+        cat, index = catalog(conn, keep)
         clock = conn.execute(
             "SELECT crm.today() AS d, to_char(now() AT TIME ZONE 'Europe/Moscow', 'HH24:MI') AS hm").fetchone()
         today = clock["d"]

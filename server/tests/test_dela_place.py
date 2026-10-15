@@ -235,3 +235,39 @@ def test_tune_weekly_lessons(kr):
     assert body.startswith("- Покупки для спорта")
     # Выводы — в блоке для разборов.
     assert "ВЫВОДЫ ИЗ ЕГО ПРАВОК" in place.block(kr, "sasha")
+
+
+LONG_DIRS = [{"key": f"d{i}", "pos": i, "zone": "Я", "name": f"Направление {i}", "short": f"Н{i}",
+              "formula": f"Формула направления {i}.", "includes": [f"входит пункт {i}.{k} с подробным пояснением" for k in range(6)],
+              "excludes": [f"не сюда {i}"], "notes": f"ещё длинная заметка о направлении {i} " * 3,
+              "examples": [f"пример дела {i}.{k} с пояснением, почему здесь" for k in range(6)]} for i in range(9)]
+
+
+def test_block_is_short_but_krug_keeps_forty(kr, monkeypatch):
+    """№67: блок «дерево жизни» едет в каждый разбор — в нём до 10 примеров (поправок до 6), до 10 выводов, направление
+    одной строкой; блок вдвое короче прежнего; разборщик Круга по-прежнему получает свои 40 примеров."""
+    from pravka_dela import krug_auto
+
+    ok(kr, "sasha", {"op": "svod.set", "key": krug.DIRECTIONS_KEY, "value": LONG_DIRS, "author": "test"})
+    goals = [mk(kr, title=f"Цель {i}", goal=True, directions=[f"d{i % 9}"]) for i in range(5)]
+    for i in range(40):
+        t = mk(kr, title=f"Дело номер {i} с длинным названием для примера")
+        if i % 3 == 0:
+            t = mk(kr, title=f"Поставлено автоматикой {i} с длинным названием", why_auto=goals[0]["num"])
+        ok(kr, "sasha", {"op": "task.set", "id": t["id"], "set": {"why_id": goals[i % 5]["id"]}})
+    ok(kr, "sasha", {"op": "svod.set", "key": place.LESSONS_KEY, "body": "\n".join(f"- вывод {i}" for i in range(20)),
+                     "author": "test"})
+    new = place.block(kr, "sasha")
+    examples = [x for x in new.splitlines() if x.startswith("— «")]
+    assert 0 < len(examples) <= place.BLOCK_EXAMPLES
+    assert len([x for x in new.splitlines() if x.startswith("- вывод")]) == place.BLOCK_LESSONS
+    assert "входит:" not in new and "примеры:" not in new and "Направление 3 — Формула направления 3. (не сюда: не сюда 3)" in new
+    # Прежний блок — те же данные с прежними пределами и направлениями целиком.
+    monkeypatch.setattr(place, "BLOCK_EXAMPLES", place.EXAMPLES)
+    monkeypatch.setattr(place, "BLOCK_FIXES", place.FIXES)
+    monkeypatch.setattr(place, "BLOCK_LESSONS", 100)
+    monkeypatch.setattr(place, "dir_line", lambda d: "\n".join(place.dir_lines([d])))
+    old = place.block(kr, "sasha")
+    assert len(new) * 2 <= len(old), (len(new), len(old))
+    fixes, own = krug_auto.examples(kr, "sasha", krug.directions_of(kr, "sasha"))
+    assert 10 < len(fixes) + len(own) <= place.EXAMPLES  # у разборщика Круга — прежние до 40
