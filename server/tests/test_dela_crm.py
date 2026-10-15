@@ -333,8 +333,8 @@ def test_deal_timeline_takes_client_records_only_while_single(team):
     """№3: хронология сделки — её записи и, пока сделка у клиента одна живая, записи клиента без сделки: не из Notion и
     не раньше дня её заведения (у сделки из Notion — без границы). Вторая живая сделка — записи клиента уходят."""
     url = team["url"]
-    p = project(url, "sasha", "Сигма")
-    d = deal(url, "sasha", p, "Сигма: аудит", stage="active")
+    p = project(url, "sasha", "Омега")
+    d = deal(url, "sasha", p, "Омега: аудит", stage="active")
     _since(url, d["id"], "2026-10-01T10:00:00+03:00")
     # deal_id: None — запись именно клиента (без ключа сервер сам поставил бы сделку касания).
     _rec(url, summary="после заведения", at="2026-10-05T12:00:00+03:00", project_id=str(p), deal_id=None)
@@ -352,7 +352,7 @@ def test_deal_timeline_takes_client_records_only_while_single(team):
         c.execute("UPDATE crm.deals SET notion_id = 'https://notion.example.org/x' WHERE id = %s", (d["id"],))
     assert tl() == ["после заведения", "до заведения", "своя"]
     # Вторая живая сделка — записи клиента без сделки ничьи.
-    deal(url, "sasha", p, "Сигма: оценка")
+    deal(url, "sasha", p, "Омега: оценка")
     assert tl() == ["своя"]
 
 

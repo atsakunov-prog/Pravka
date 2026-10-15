@@ -471,7 +471,7 @@ def looks_first(w: str) -> bool:
 
 
 def bare_name(name: Any) -> tuple[str, str]:
-    """«Евгений Гуркин (экспо)» → («Евгений Гуркин», «экспо»): голое имя и подсказка в скобках."""
+    """«Иван Тестов (экспо)» → («Иван Тестов», «экспо»): голое имя и подсказка в скобках."""
     s = " ".join(str(name or "").split())
     m = re.search(r"\s*\(([^)]*)\)\s*$", s)
     return (s[: m.start()].strip(), m.group(1).strip()) if m else (s, "")
