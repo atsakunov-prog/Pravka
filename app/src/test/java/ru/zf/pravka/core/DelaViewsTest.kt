@@ -798,6 +798,13 @@ class DelaViewsTest {
         assertTrue(o[2].reject)
         assertEquals("Не надо", DelaViews.answerSaid(o[2]))
         assertEquals("Не надо: Не для CRM", DelaViews.answerSaid(DelaViews.Option(0, "Не для CRM", reject = true)))
+        // Вечером день плана — завтра: подпись сервера как есть. После полуночи он уже сегодня — «☆ На сегодня» (кнопка и
+        // тост), иначе в 8 утра «на завтра» прочтётся следующим днём; «✓ Уже сделал» и «Не надо» не меняются.
+        assertEquals(o, DelaViews.planOptions(o, today))
+        val morning = DelaViews.planOptions(o, tomorrow)
+        assertEquals(listOf("☆ На сегодня", "✓ Уже сделал", "Не надо"), morning.map { it.label })
+        assertEquals(tomorrow, morning[0].focusOn)
+        assertEquals("Ответ: ☆ На сегодня", DelaViews.answerSaid(morning[0]))
         assertEquals(listOf("☆ На завтра", "Не надо"), DelaViews.options(s.suggestions.getValue("c3"), s)!!.map { it.label })
         assertEquals(DelaViews.Mark("bolt", true, "план на завтра"), DelaViews.mark("plan"))
         // Пачка `plan:<день>` — та же: «Сегодня» и дайджест открывают её по batch_ref.

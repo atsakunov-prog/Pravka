@@ -2642,7 +2642,8 @@ internal fun AskRow(
     val txt = DelaViews.sugText(sg, snap, today)
     val q = if (plan) null else DelaViews.askWhy(sg, snap)
     val held = DelaViews.heldLine(sg, q)
-    val opts = DelaViews.options(sg, snap)
+    // У кандидата плана после полуночи «☆ На завтра» — уже «☆ На сегодня» (`planLabel` веба).
+    val opts = DelaViews.options(sg, snap)?.let { if (DelaViews.isPlan(sg)) DelaViews.planOptions(it, today) else it }
     val choice = DelaViews.choiceOnly(sg)
     // Вопрос разборщика Круга (`askItem` веба): предложенные направления горят, тап — поправить; «Да» — выбранное.
     // С деревом (13.10.2026) разборщик предлагает и цель (`why_id`, путь — `goal_path` в подсказке строкой ниже).

@@ -769,6 +769,19 @@ def _sug_line(s: dict, t: dict | None) -> str:
     """Предложение словами, как его показывает веб (sugText): завести, закрыть, уточнить, взять себе."""
     p = s.get("payload") or {}
     quote = f" — «{_short(s['quote'], 200)}»" if s.get("quote") else ""
+    if s.get("source") == "plan":
+        # Кандидат «Сейчас на завтра» (plan.py): не вопрос автоматики, а выбор Саши на день — день, почему, откуда и его
+        # кнопки. Без них «уточнить #180 Иван: » с пустыми подробностями — «первое из плана» или «П12 уже сделал» понять
+        # было не из чего.
+        day = p.get("for_date")
+        ref = f"#{t['num']} {t['title']}" if t else "дело не видно"
+        if t and t["status"] != "open":
+            ref += " (" + {"done": "уже сделано", "cancelled": "уже отменено"}.get(t["status"], t["status"]) + ")"
+        what = f"завести «{p.get('title') or ''}»" if s["kind"] == "create" else ref
+        opts = " / ".join(o["label"] for o in p.get("options") or [] if isinstance(o, dict) and o.get("label"))
+        return (f"в «Сейчас» на {store.day_label(day)}" if day else "в «Сейчас»") + f": {what}" \
+            + (f" — {p['why']}" if p.get("why") else "") + (f" ({p['from']})" if p.get("from") else "") \
+            + (f"; варианты: {opts}" if opts else "")
     if s["kind"] == "person":
         # Новый человек (dela_0019): кого завести или к кому дописать; принять — завести, отклонить — «не для CRM».
         return (f"человек: {p.get('title') or (p.get('person') or {}).get('name') or ''}"

@@ -24,8 +24,9 @@
   guard    защита от петли Claude (аудит №12): status — что стоит; on ЗАДАЧА — «Продолжать» (час пороги втрое);
            keep ЗАДАЧА — оставить остановленным (когда Telegram недоступен)
   debug    режим отладки: list [--all], show N [--json] [--shot файл], set N статус ["ответ" | --answer-file f], on, off
-  plan     «Сейчас на завтра»: [run] [--dry] [--for ДАТА] [--list] — кандидаты на завтра; snap [--day ДАТА] — снимок
-           «Сейчас» дня; status — последний прогон и снимки (служба делает всё это сама раз в минуту)
+  plan     «Сейчас на завтра»: без действия — только показать кандидатов на завтра (ничего не пишет); run [--dry]
+           [--for ДАТА] — записать (на день, где кандидаты уже были, — ничего); --list — и сами кандидаты; snap [--day
+           ДАТА] — снимок «Сейчас» дня; status — последний прогон и снимки (служба делает всё это сама раз в минуту)
 """
 
 from __future__ import annotations
@@ -546,7 +547,11 @@ def cmd_guard(args) -> int:
 
 
 def cmd_plan(args) -> int:
-    """«Сейчас на завтра» (шаг 1 петли, plan.py): прогон руками (--dry — только показать), снимок дня, состояние."""
+    """«Сейчас на завтра» (шаг 1 петли, plan.py): показать кандидатов, прогон руками (только явным run), снимок дня,
+    состояние.
+
+    Без действия — вхолостую: выкат велит звать plan на живой базе, и забытый --dry при действии run «с завода» положил
+    бы Саше кандидатов не в свой час. Писать — только plan run (и он на день, где кандидаты уже были, ничего не пишет)."""
     import datetime as dt
 
     from . import plan
@@ -561,10 +566,11 @@ def cmd_plan(args) -> int:
         snaps = ", ".join(d + " " + "/".join(v) for d, v in sorted((st.get("snaps") or {}).items()))
         print(f"последний прогон: {st.get('run_day') or '—'}; итог: {st.get('last') or '—'}; снимки: {snaps or '—'}")
         return 0
-    out = plan.run(cfg.db_url, dry=args.dry, for_date=dt.date.fromisoformat(args.for_date) if args.for_date else None)
+    dry = args.dry or args.action is None
+    out = plan.run(cfg.db_url, dry=dry, for_date=dt.date.fromisoformat(args.for_date) if args.for_date else None)
     if out.get("skipped"):
         print(out["skipped"])
-        return 1
+        return 0 if out.get("offered") else 1
     by: dict[str, int] = {}
     for x in out["items"]:
         by[x["basket"]] = by.get(x["basket"], 0) + 1
@@ -573,6 +579,8 @@ def cmd_plan(args) -> int:
           + f"на {out['label']}: кандидатов {len(out['items'])} из {out['limit']} ("
           + ", ".join(f"{b} {by[b]}" for b in plan.SHOW if b in by) + f"); встреч ~{out['meetings']} — возьми "
           f"{out['take']}; третий день в «Сейчас»: {len(out['stuck'])}"
+          + (f"; на этот день уже предложено {out['offered']} — run ничего не запишет" if out.get("dry") and out.get("offered")
+             else "; записать — plan run" if out.get("dry") and args.action is None else "")
           + ("" if out.get("dry") else f"; записано {out.get('made', 0)}, ошибок {len(out.get('errors') or [])}"))
     if args.list:
         for x in out["items"]:
@@ -747,11 +755,12 @@ def main(argv: list[str] | None = None) -> int:
     pf.add_argument("--locked-private", action="store_true",
                     help="записи встреч под замком владельца — скрыть от команды (только по «да» владельца)")
     pf.set_defaults(fn=cmd_privacy_fix)
-    pl = sub.add_parser("plan", help="«Сейчас на завтра»: прогон (--dry — показать), снимок дня, состояние")
-    pl.add_argument("action", nargs="?", choices=["run", "snap", "status"], default="run")
+    pl = sub.add_parser("plan", help="«Сейчас на завтра»: показать (без действия), прогон (run), снимок дня, состояние")
+    # Без действия — только показать: писать в базу — явным run (забытый --dry не кладёт Саше кандидатов).
+    pl.add_argument("action", nargs="?", choices=["run", "snap", "status"], default=None)
     pl.add_argument("--dry", action="store_true", help="run: только посчитать кандидатов, ничего не записывать")
-    pl.add_argument("--for", dest="for_date", help="run: на какой день (с завода — следующий будний)")
-    pl.add_argument("--list", action="store_true", help="run: и сами кандидаты строками (названия дел — личное)")
+    pl.add_argument("--for", dest="for_date", help="на какой день (с завода — следующий будний)")
+    pl.add_argument("--list", action="store_true", help="и сами кандидаты строками (названия дел — личное)")
     pl.add_argument("--day", help="snap: какой день (с завода — сегодня по Москве)")
     pl.set_defaults(fn=cmd_plan)
     zc = sub.add_parser("zachem", help="«Зачем» по-человечески: предложить, применить, вернуть")

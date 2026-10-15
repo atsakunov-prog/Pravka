@@ -451,6 +451,17 @@ object DelaViews {
         "отмечено ${p.marked.size} из $NOW_MAX",
     ).joinToString(" · ")
 
+    /** Подпись варианта, который ставит дело в «Сейчас» уже наступившего дня (`planLabel` веба). */
+    const val PLAN_TODAY = "☆ На сегодня"
+
+    /**
+     * Варианты кандидата так, как их видит владелец. Сервер подписывает «☆ На завтра» (её же читают старые клиенты —
+     * payload не трогаем), а после полуночи этот день — уже сегодня: шапка пачки «на сегодня, до 12:00», и кнопка тоже
+     * «☆ На сегодня», иначе в 8 утра «на завтра» прочтётся следующим днём. Тост ответа (`answerSaid`) берёт ту же подпись.
+     */
+    fun planOptions(opts: List<Option>, today: String): List<Option> =
+        opts.map { if (it.focusOn.isNotBlank() && it.focusOn <= today) it.copy(label = PLAN_TODAY) else it }
+
     /** Тост до запроса, когда шестое на день не встанет (`planRoom` веба); на сегодня — тот же, что у молнии. */
     fun planFull(p: Plan): String =
         if (!p.ahead) NOW_FULL else p.label.replaceFirstChar { it.uppercase() } + " уже пять — сначала убери одно"

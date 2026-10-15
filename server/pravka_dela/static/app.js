@@ -3905,9 +3905,15 @@ const ASK_YES = { create: 'Поставить', close: 'Закрыть', update:
  *  а не «Да / Не надо»; сервер без флага options их не примет — тогда как раньше. */
 const sugOptions = (s) => (((S.me && S.me.features) || []).includes('options') && Array.isArray((s.payload || {}).options)
   && s.payload.options.length >= 2 ? s.payload.options : null);
-async function answer(s, i) {
+/** Ответ вариантом; label — как кнопка подписана на экране (у плана после полуночи — «☆ На сегодня», а не подпись
+ *  сервера). Сам «Не надо» — без повтора: «Не надо: Не надо» было (как answerSaid телефона). */
+async function answer(s, i, label) {
   const o = s.payload.options[i];
-  try { await ops([{ op: 'suggestion.decide', id: s.id, option: i }]); toast((o.reject ? 'Не надо: ' : 'Ответ: ') + o.label); render(); } catch (e) { fail(e); render(); }
+  const said = label || o.label;
+  try {
+    await ops([{ op: 'suggestion.decide', id: s.id, option: i }]);
+    toast(o.reject ? (/^Не надо/.test(said) ? said : 'Не надо: ' + said) : 'Ответ: ' + said); render();
+  } catch (e) { fail(e); render(); }
 }
 /** «Сам допишу» у уточнения: своё слово — в заметку дела, а предложение уходит с этим ответом (урок автоматике). Пусто —
  *  просто «не надо». */
@@ -4165,6 +4171,11 @@ function planRoom(day) {
   toast(`${w[0].toUpperCase() + w.slice(1)} уже пять — сначала убери одно`);
   return false;
 }
+/** Подпись варианта плана на экране. Сервер пишет «☆ На завтра» (её же читают старые клиенты — payload не трогаем), а
+ *  после полуночи этот день — уже сегодня: шапка блока «на сегодня, до 12:00», и кнопка тоже «☆ На сегодня», иначе в
+ *  8 утра «на завтра» прочтётся следующим днём (так же DelaViews.planOptions телефона). */
+const PLAN_TODAY = '☆ На сегодня';
+const planLabel = (o) => (o.focus_on && o.focus_on <= S.today ? PLAN_TODAY : o.label);
 /** Кандидат «Сейчас на завтра»: дело, строка «почему · откуда», кнопки ответа сервера (☆ На завтра · ✓ Уже сделал · Не
  *  надо). П-номер — как у «Подскажи»: Claude понимает «П2 на завтра». «Принять всё» нет — отмечает Саша сам, до пяти. */
 function planItem(s) {
@@ -4173,15 +4184,15 @@ function planItem(s) {
   const t = s.task_id ? S.tasks.get(s.task_id) : null;
   if (t) S.order.push(t.id);
   const opts = sugOptions(s);
-  const tap = (i) => { if (opts[i].focus_on && !planRoom(opts[i].focus_on)) return; answer(s, i); };
+  const tap = (i) => { if (opts[i].focus_on && !planRoom(opts[i].focus_on)) return; answer(s, i, planLabel(opts[i])); };
   return el('div', { class: 'sug plan' },
     el('div', { class: 'main' },
       el('div', {}, el('span', { class: 'sug-n', title: 'Номер для Claude: «П' + S.sugOrder.length + ' на завтра»' }, 'П' + S.sugOrder.length),
         t ? el('a', { class: 'link', href: '#', onclick: (e) => { e.preventDefault(); openCard(t.id); } }, t.title) : p.title || ''),
       el('div', { class: 'hint' }, [p.why, p.from].filter(Boolean).join(' · '))),
     el('div', { class: 'acts opts' }, opts
-      ? opts.map((o, i) => el('button', { class: 'btn small' + (o.reject ? ' bad' : i === 0 ? ' ok' : ''), title: 'Ответить: ' + o.label,
-        onclick: () => tap(i) }, o.label))
+      ? opts.map((o, i) => el('button', { class: 'btn small' + (o.reject ? ' bad' : i === 0 ? ' ok' : ''), title: 'Ответить: ' + planLabel(o),
+        onclick: () => tap(i) }, planLabel(o)))
       : [el('button', { class: 'btn small ok', onclick: () => { if (planRoom(p.for_date)) decide([s.id], 'accept'); } }, 'В «Сейчас»'),
         el('button', { class: 'btn small bad', onclick: () => decide([s.id], 'reject', 'план: не надо') }, 'Не надо')]));
 }

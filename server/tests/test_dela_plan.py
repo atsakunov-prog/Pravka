@@ -162,7 +162,7 @@ def titles(out):
     return [x["title"] for x in out["items"]]
 
 
-def test_baskets_quota_and_order(world, dela):
+def test_baskets_quota_and_order(world, dela, monkeypatch):
     w = world
     out = build(dela, w["today"], w["tmrw"])
     baskets = [x["basket"] for x in out["items"]]
@@ -182,6 +182,15 @@ def test_baskets_quota_and_order(world, dela):
     assert why["Собрать отчёт"]["why"].endswith("переносится 2-й день")
     assert why["Записаться в бассейн"]["why"] == "направление «Здоровье» — закрытых дел ещё не было"
     assert why["Записаться в бассейн"]["from"] == "Круг жизни" and why["Решить следующий шаг: Лютик: аудит"]["from"] == "Воронка"
+    # «Откуда» — словами, а не кодом источника: незнакомый код — «руками», не сам код.
+    at_ = dt.datetime(2026, 10, 15, 12, tzinfo=MSK)
+    task = {"id": w["c_new"]["id"], "created_at": at_, "source": "manual"}
+    for src, word in (("plan", "план на завтра"), ("phone", "телефон"), ("user", "руками"), ("krug", "разборщик Круга"),
+                      ("contacts", "телефонная книжка"), ("userbot", "Telegram"), ("нечто", "руками")):
+        monkeypatch.setattr(plan.store, "task_origin", lambda c, t, s=src: {"kind": "suggestion", "source": s, "at": at_})
+        assert plan.from_line(None, {"basket": "owed", "task": task}) == f"{word} 15.10", src
+    monkeypatch.setattr(plan.store, "task_origin", lambda c, t: None)
+    assert plan.from_line(None, {"basket": "owed", "task": {**task, "source": "нечто"}}) == "руками 15.10"
 
 
 def test_nudge_and_no_krug_reserve(world, dela, monkeypatch):
@@ -264,14 +273,52 @@ def test_tick_runs_once_and_catches_up_late(dela, monkeypatch):
     again = plan.tick(dela, at(today, 19, 2))
     assert again is None or "run" not in again
     assert len(plan_sugs(dela)) == 3
-    # Прогон руками тем же днём — op_id те же: ничего нового.
-    plan.run(dela, at(today, 19, 3))
+    # Прогон руками тем же днём — пачка дня уже есть: ничего нового.
+    r = plan.run(dela, at(today, 19, 3))
+    assert r["skipped"].endswith("уже предложено 3 — второй прогон ничего не пишет") and r["offered"] == 3, r
     assert len(plan_sugs(dela)) == 3
     # Служба лежала: догонка — до четырёх часов после слота, позже — нет.
     with dela_db.session(dela, "system", "test") as c:
         c.execute("UPDATE crm.state SET value = value - 'run_day' WHERE key = 'plan'")
     assert "run" not in (plan.tick(dela, at(today, 23, 30)) or {})
-    assert plan.tick(dela, at(today, 22, 59))["run"]["made"] == 0  # кандидаты уже ждут — новых нет
+    late = plan.tick(dela, at(today, 22, 59))["run"]
+    assert "уже предложено 3" in late["skipped"], late  # кандидаты дня уже в базе — новых нет
+    assert len(plan_sugs(dela)) == 3
+    with dela_db.session(dela, "system", "t") as c:
+        st = c.execute("SELECT value FROM crm.state WHERE key = 'plan'").fetchone()["value"]
+    assert st["run_day"] == today.isoformat() and st["last"]["made"] == 3, "итог первого прогона не затёрт"
+
+
+def test_second_run_same_day_writes_nothing(world, dela, monkeypatch):
+    """Один прогон на день — правдой базы: второй plan.run на тот же день (руками, plan --for, служба упала между
+    записью кандидатов и памятью run_day) ничего не пишет, даже когда Саша часть уже решил, а подходящих дел больше семи
+    (blocked держит только ждущих, отказанных и дважды молчавших — без этого в пачке становилось 11)."""
+    w = world
+    tm = w["tmrw"]
+    first = plan.run(dela, at(w["today"], 19, 5), for_date=tm)
+    assert first["made"] == 7 and not first["errors"], first
+    # Саша ответил на часть: отметил, «не надо», одно дело закрыл — уборка его погасила.
+    assert decide(dela, sug_of(dela, w["o_mid"]["id"]), option=0)["ok"]
+    s = sug_of(dela, w["c_old"]["id"])
+    assert decide(dela, s, option=len(s["payload"]["options"]) - 1)["ok"]
+    ok(dela, "sasha", {"op": "task.done", "id": w["o_old"]["id"]})
+    assert plan.sweep(dela, at(w["today"], 20)) == 1
+    again = plan.run(dela, at(w["today"], 20, 30), for_date=tm)
+    assert again == {"skipped": f"на {store.day_label(tm)} уже предложено 7 — второй прогон ничего не пишет",
+                     "for_date": tm.isoformat(), "label": store.day_label(tm), "offered": 7}
+    assert len(plan_sugs(dela)) == 7 and store.view(dela, "sasha", "plan")["offered"] == 7
+    # Вхолостую — показывает, что предложил бы, и что на день уже предложено; ничего не пишет.
+    dry = plan.run(dela, at(w["today"], 20, 31), for_date=tm, dry=True)
+    assert dry["dry"] and dry["offered"] == 7 and dry["items"] and len(plan_sugs(dela)) == 7
+    # Служба перезапустилась между прогоном и памятью run_day: tick в окне догонки — тоже ничего.
+    monkeypatch.setattr(plan.asks, "evening_at", lambda rh, day: at(day, 19))
+    monkeypatch.setattr(plan, "next_day", lambda d: d + dt.timedelta(days=1))
+    got = plan.tick(dela, at(w["today"], 21))
+    assert "уже предложено 7" in got["run"]["skipped"], got
+    assert len(plan_sugs(dela)) == 7
+    # На другой день — свой прогон, как обычно.
+    nxt = plan.run(dela, at(w["today"], 21, 5), for_date=tm + dt.timedelta(days=1))
+    assert nxt.get("made") and not nxt.get("skipped"), nxt
 
 
 # ── 5. Ответы ────────────────────────────────────────────────────────────
@@ -313,6 +360,9 @@ def test_answers(world, dela):
     r = decide(dela, s, option=0)
     assert r["ok"] and str(r["task"]["deal_id"]) == str(w["quiet"]["id"]) and str(r["task"]["focus_on"]) == tm
     assert r["task"]["title"] == "Решить следующий шаг: Лютик: аудит"
+    # Дело из кандидата плана на следующий вечер придёт с «откуда: план на завтра …», а не «plan …».
+    with dela_db.session(dela, "sasha", via="t") as c:
+        assert plan.from_line(c, {"basket": "carry", "task": r["task"]}).startswith("план на завтра ")
     # Счёт автоматики и число «Нового» плана не видят.
     with dela_db.session(dela, "sasha", via="t") as c:
         assert store.automation(c, "sasha")["all"]["asked"] == 0
@@ -470,6 +520,26 @@ def test_view_plan(world, dela):
     assert set(c["features"]["example"]) <= set(store.FEATURES)
 
 
+def test_claude_sees_plan_candidates(world, dela):
+    """Строка Claude в вебе видит кандидатов П-номерами (planItem кладёт их в S.sugOrder): день, почему, откуда и кнопки —
+    иначе «первое из плана» или «П12 уже сделал» понять было не из чего («уточнить #180 Иван: » с пустыми подробностями)."""
+    from pravka_dela import ask
+
+    w = world
+    plan.run(dela, at(w["today"], 19, 5), for_date=w["tmrw"])
+    day = store.day_label(w["tmrw"])
+    s = sug_of(dela, w["o_old"]["id"])
+    with dela_db.session(dela, "sasha", via="t") as c:
+        t = c.execute("SELECT * FROM tasks.v_tasks WHERE id = %s", (w["o_old"]["id"],)).fetchone()
+    line = ask._sug_line(s, t)
+    assert line == (f"в «Сейчас» на {day}: #{t['num']} Ответить Петру — Пётр ждёт 6 дней ({s['payload']['from']}); "
+                    "варианты: ☆ На завтра / ✓ Уже сделал / Не надо"), line
+    deal = next(x for x in plan_sugs(dela) if x["payload"]["basket"] == "deal")
+    line = ask._sug_line(deal, None)
+    assert line.startswith(f"в «Сейчас» на {day}: завести «Решить следующий шаг: Лютик: аудит» — сделка без шага"), line
+    assert line.endswith("(Воронка); варианты: ☆ На завтра / Не надо"), line
+
+
 def test_capacity_from_meetings(dela):
     today = db_today(dela)
     tmrw = today + dt.timedelta(days=1)
@@ -506,20 +576,25 @@ def test_life_focus_on_and_now_days_for_reader(dela, cfg):
 
 
 def test_migration_over_data(admin_dsn):
-    """dela_0024 — поверх живых Дел с предложениями и делами (источник шире, таблица новая, UPDATE нет)."""
+    """Миграция плана (dela_0024 на день стройки) — поверх живых Дел с предложениями и делами (источник шире, таблица
+    новая, UPDATE нет). Файл ищется по тому, что он заводит (tasks.now_days), а не по номеру: при слиянии с другими
+    ветками номер сдвинется, и тест не должен тянуть за собой правку литералов."""
     import secrets as _secrets
     from urllib.parse import urlparse, urlunparse
 
     from psycopg import sql
 
-    name = f"pa_mig24_{_secrets.token_hex(4)}"
+    files = dict(dela_db._sql_files())
+    mine = [k for k, v in files.items() if k.startswith("dela_") and "CREATE TABLE tasks.now_days" in v]
+    assert len(mine) == 1, mine
+    mig = mine[0]
+    name = f"pa_migplan_{_secrets.token_hex(4)}"
     with psycopg.connect(admin_dsn, autocommit=True) as a:
         a.execute(sql.SQL("CREATE DATABASE {} ENCODING 'UTF8' TEMPLATE template0").format(sql.Identifier(name)))
     u = urlparse(admin_dsn)
     url = urlunparse((u.scheme, u.netloc, "/" + name, "", "", ""))
     try:
-        files = dict(dela_db._sql_files())
-        before = {k: v for k, v in files.items() if k.startswith("dela_") and k < "dela_0024.sql"}
+        before = {k: v for k, v in files.items() if k.startswith("dela_") and k < mig}
         with psycopg.connect(url, autocommit=True) as c:
             c.execute("CREATE SCHEMA core")
             c.execute("CREATE TABLE core.migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
@@ -531,7 +606,7 @@ def test_migration_over_data(admin_dsn):
             c.execute("INSERT INTO tasks.suggestions (for_user, kind, task_id, source, created_by) "
                       "VALUES ('sasha', 'update', %s, 'krug', 'sasha')", (tid,))
         with psycopg.connect(url, autocommit=True) as c:
-            assert dela_db.apply_pending(c, files)[0] == "dela_0024.sql"
+            assert dela_db.apply_pending(c, files)[0] == mig
         with dela_db.session(url, "system", "test") as c:
             c.execute("INSERT INTO tasks.suggestions (for_user, kind, task_id, source, created_by) "
                       "VALUES ('sasha', 'update', %s, 'plan', 'sasha')", (tid,))
@@ -568,4 +643,36 @@ def test_web_plan_block_text():
     now = fn("function renderNow()")
     assert now.index("newBox()") < now.index("planBox()"), "сначала ответить на вопросы, потом план"
     item = fn("function planItem(")
-    assert "S.sugOrder.push(s.id)" in item and "answer(s, i)" in item
+    assert "S.sugOrder.push(s.id)" in item and "answer(s, i, planLabel(opts[i]))" in item
+    # После полуночи день плана — уже сегодня: шапка «на сегодня, до 12:00», и кнопка «☆ На сегодня», а не «На завтра».
+    assert "const PLAN_TODAY = '☆ На сегодня'" in js and "o.focus_on <= S.today ? PLAN_TODAY : o.label" in js
+    assert "planLabel(o)))" in item, "подпись кнопки — planLabel, не подпись сервера"
+    # «Не надо» — тостом без повтора («Не надо: Не надо» было).
+    ans = fn("async function answer(")
+    assert "/^Не надо/.test(said) ? said : 'Не надо: ' + said" in ans
+
+
+def test_cli_plan_shows_unless_run(dela, tmp_path, capsys, monkeypatch):
+    """Команда plan без действия — только показать (выкат велит звать её на живой базе: забытый --dry не должен класть
+    Саше кандидатов); писать — явным plan run, и второй run на тот же день ничего не пишет."""
+    from pravka_dela import __main__ as cli
+
+    for i in range(3):
+        t = mk(dela, title=f"Ответить Тестову {i}", ball="owed")
+        aged(dela, t["id"], 4 + i)
+    env = tmp_path / "dela.env"
+    env.write_text(f"DELA_DB_URL={dela}\n", encoding="utf-8")
+    monkeypatch.delenv("DELA_DB_URL", raising=False)
+    assert cli.main(["--env", str(env), "plan"]) == 0
+    said = capsys.readouterr().out
+    assert said.startswith("вхолостую (ничего не записано): на ") and "кандидатов 3 из" in said, said
+    assert "; записать — plan run" in said and plan_sugs(dela) == []
+    assert cli.main(["--env", str(env), "plan", "run"]) == 0
+    said = capsys.readouterr().out
+    assert not said.startswith("вхолостую") and "записано 3, ошибок 0" in said, said
+    assert len(plan_sugs(dela)) == 3
+    assert cli.main(["--env", str(env), "plan", "run"]) == 0
+    assert "уже предложено 3 — второй прогон ничего не пишет" in capsys.readouterr().out
+    assert cli.main(["--env", str(env), "plan"]) == 0
+    assert "на этот день уже предложено 3 — run ничего не запишет" in capsys.readouterr().out
+    assert len(plan_sugs(dela)) == 3

@@ -199,6 +199,11 @@ OPTIONS_MAX = 4
 NOW_MAX = 5
 NOW_LOCK = 0x5E4A  # первый ключ замка «Сейчас» (второй — владелец): чужим замкам базы не мешает
 _NOW_WORD = {5: "пять", 6: "шесть", 7: "семь", 8: "восемь", 9: "девять"}
+# Дело «Сейчас» и плана — не напоминание (алиас дела в запросах — t). Шаг 0 петли (захват, dela_0024c) заводит
+# tasks.tasks.kind ('task' | 'remind') и убирает напоминания из списков (_list); при слиянии здесь станет
+# "t.kind = 'task'" — одной строкой, и тогда ни кандидаты «Сейчас на завтра» (plan.py: in_now, корзины, snap, отмеченное
+# вида plan), ни счёт «сделано x из y» (now_counts) напоминаний не увидят. До шага 0 колонки нет — условие пустое.
+DEED_KIND_IF = "TRUE"
 
 
 # Три группы дел (владелец 10.10.2026: «есть дела, которые ждут меня… второе — что я сам придумал… третье —
@@ -2468,7 +2473,7 @@ def now_counts(conn, user: str, day: Any) -> dict:
         "        OR (status = 'done' AND (completed_at AT TIME ZONE 'Europe/Moscow')::date = %(d)s::date))) "
         "SELECT count(*) AS total, count(*) FILTER (WHERE t.status = 'done' "
         "       AND (t.completed_at AT TIME ZONE 'Europe/Moscow')::date = %(d)s::date) AS done "
-        "FROM ids JOIN tasks.v_tasks t ON t.id = ids.id WHERE NOT t.goal",
+        f"FROM ids JOIN tasks.v_tasks t ON t.id = ids.id WHERE NOT t.goal AND {DEED_KIND_IF}",
         {"u": user, "d": str(day)[:10]}).fetchone()
     return {"total": row["total"], "done": row["done"]}
 

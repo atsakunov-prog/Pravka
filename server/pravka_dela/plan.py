@@ -6,8 +6,9 @@
 
 Как устроено (подробно — docs/dela-server.md, решение 21; контракт — server/contract/dela-plan.json):
 - **Слот** — время вечернего захода из asks.py (Свод asks.rhythm): Пн–Чт 19:00 на завтра, Пт 14:00 (с 15.11 по 15.01 —
-  13:30) на понедельник, Сб–Вс — ничего. Один прогон в день (crm.state plan.run_day); служба лежала — догонка 4 часа
-  (LATE). op_id — uuid5 от source_ref: повтор безвреден.
+  13:30) на понедельник, Сб–Вс — ничего. Один прогон в день: пачка plan:<день> уже в базе — второй прогон ничего не
+  пишет (`run`, под замком; память crm.state plan.run_day — только чтобы не звать его каждую минуту); служба лежала —
+  догонка 4 часа (LATE). op_id — uuid5 от source_ref.
 - **Кандидаты** (`candidates`) — свои открытые дела владельца, не цели; пять корзин (`BASKETS`), у каждой своя квота;
   места — по весам судьи (`PICK`), показ — `SHOW`. Не берутся: уже стоит на этот день, уже ждёт кандидат, «Не надо»
   за 3 дня, два прогона подряд без ответа — пауза 3 дня, третий день подряд в «Сейчас» — строка stuck, не кандидат.
@@ -43,6 +44,7 @@ SNAP_BACK = 3                      # пропущенные дни снимка 
 STATS_DAYS = 14
 HISTORY_DAYS = 30
 NS = uuid.UUID("5e4a2b1c-0d3e-4f5a-8b6c-7d8e9f0a1b2c")  # пространство uuid5 для op_id прогонов плана
+PLAN_LOCK = 0x5E4B                 # первый ключ замка прогона (второй — владелец), рядом с store.NOW_LOCK
 
 # Корзины: дело — в ПЕРВОЙ своей по этому порядку; места — по весам судьи (резерв Круга → обещания → сделка →
 # несделанное → «напомнить»), квоты не перетекают; на экране — сначала несделанное сегодня, Круг — последним.
@@ -178,7 +180,7 @@ def in_now(conn, owner: str, day: dt.date) -> list[dict]:
         "SELECT t.id, t.num, t.title, t.owed, t.ball, t.grp, t.created_at, t.source, t.source_ref, t.person_short, "
         f"t.due_date, t.focus_on, {CARRIED} AS carried "
         "FROM tasks.v_tasks t LEFT JOIN tasks.now_days n ON n.owner_id = %(o)s AND n.day = %(day)s::date AND n.task_id = t.id "
-        "WHERE t.owner_id = %(o)s AND t.status = 'open' AND NOT t.goal AND t.focus_on = %(day)s::date "
+        f"WHERE t.owner_id = %(o)s AND t.status = 'open' AND NOT t.goal AND {store.DEED_KIND_IF} AND t.focus_on = %(day)s::date "
         "ORDER BY t.owed DESC, t.created_at, t.num",
         {"o": owner, "day": day.isoformat(), "lo": _prev_lo(day).isoformat()}).fetchall()
 
@@ -252,7 +254,7 @@ TASK_COLS = ("t.id, t.num, t.title, t.owed, t.ball, t.grp, t.created_at, t.sourc
 
 def _pools(conn, owner: str, today: dt.date, for_date: dt.date, cfg: dict, now_rows: list[dict]) -> dict[str, list[dict]]:
     p = {"o": owner, "today": today.isoformat(), "for": for_date.isoformat()}
-    base = ("t.owner_id = %(o)s AND t.status = 'open' AND NOT t.goal "
+    base = (f"t.owner_id = %(o)s AND t.status = 'open' AND NOT t.goal AND {store.DEED_KIND_IF} "
             "AND t.focus_on IS DISTINCT FROM %(for)s::date")
     pools: dict[str, list[dict]] = {}
     # Резерв Круга: шаг к цели (своих открытых шагов нет), не «Отбить», не «жду», не в «Сейчас» сегодня (то — carry),
@@ -264,7 +266,7 @@ def _pools(conn, owner: str, today: dt.date, for_date: dt.date, cfg: dict, now_r
         "AND cardinality(t.dirs) > 0 ORDER BY t.created_at, t.num", p).fetchall()
     last = {r["dir"]: r["last"] for r in conn.execute(
         "SELECT t.dirs[1] AS dir, max((t.completed_at AT TIME ZONE 'Europe/Moscow')::date) AS last "
-        "FROM tasks.v_tasks t WHERE t.owner_id = %(o)s AND t.status = 'done' AND cardinality(t.dirs) > 0 "
+        f"FROM tasks.v_tasks t WHERE t.owner_id = %(o)s AND t.status = 'done' AND {store.DEED_KIND_IF} AND cardinality(t.dirs) > 0 "
         "AND t.completed_at > %(today)s::date - 400 GROUP BY 1", p).fetchall()}
     names = {d["key"]: d.get("name") or d["key"] for d in krug.directions(conn, owner)}
     pools["krug"] = []
@@ -392,8 +394,12 @@ def why_line(conn, owner: str, it: dict, today: dt.date, for_date: dt.date) -> s
     return " · ".join(parts)
 
 
-_FROM_SOURCE = {"voice": "сказал сам", "manual": "руками", "web": "руками", "meeting": "встреча", "telegram": "Telegram",
-                "bot": "ответ в Telegram", "mcp": "Claude", "import": "перенос"}
+# Откуда — словами Саши, а не кодом источника: дело, заведённое из кандидата плана, на следующий вечер пришло бы с
+# «откуда: plan 15.10». Незнакомый код — «руками» (запас), не сам код.
+_FROM_SOURCE = {"voice": "сказал сам", "manual": "руками", "web": "руками", "user": "руками", "meeting": "встреча",
+                "telegram": "Telegram", "userbot": "Telegram", "bot": "ответ в Telegram", "mcp": "Claude", "import": "перенос",
+                "plan": "план на завтра", "phone": "телефон", "krug": "разборщик Круга", "contacts": "телефонная книжка"}
+FROM_ELSE = "руками"
 
 
 def from_line(conn, it: dict) -> str:
@@ -413,8 +419,8 @@ def from_line(conn, it: dict) -> str:
             return (f"встреча «{name}» " if name else "встреча ") + (dm.strip() or _ddmm(o["at"]))
         if o["source"] in ("telegram", "userbot"):
             return f"Telegram {_ddmm(o['at'])}"
-        return f"{_FROM_SOURCE.get(o['source'], o['source'])} {_ddmm(o['at'])}"
-    return f"{_FROM_SOURCE.get(t.get('source'), 'руками')} {_ddmm(t['created_at'])}"
+        return f"{_FROM_SOURCE.get(o['source'], FROM_ELSE)} {_ddmm(o['at'])}"
+    return f"{_FROM_SOURCE.get(t.get('source'), FROM_ELSE)} {_ddmm(t['created_at'])}"
 
 
 def capacity(conn, owner: str, for_date: dt.date, cfg: dict) -> dict:
@@ -477,9 +483,22 @@ def build(conn, owner: str, today: dt.date, for_date: dt.date, cfg: dict, now: d
             "items": out, "stuck": got["stuck"], "ops": ops}
 
 
+def offered(conn, owner: str, for_date: dt.date) -> int:
+    """Сколько кандидатов уже предложено на этот день — пачка plan:<день> в любом статусе (ждёт, отмечено, «не надо»,
+    погасло)."""
+    return conn.execute("SELECT count(*) AS n FROM tasks.suggestions WHERE source = 'plan' AND for_user = %s "
+                        "AND batch_ref = %s", (owner, f"plan:{for_date.isoformat()}")).fetchone()["n"]
+
+
 def run(url: str, now: dt.datetime | None = None, dry: bool = False, for_date: dt.date | None = None) -> dict:
     """Прогон плана: кандидаты на for_date (с завода — следующий будний после сегодня) в «Подскажи». dry — только
-    посчитать и вернуть, ничего не писать (команда plan --dry)."""
+    посчитать и вернуть, ничего не писать (команда plan без run).
+
+    Один прогон на день — правдой базы, а не памятью tick: пачка этого дня уже есть (в любом статусе) — ничего не пишет и
+    отвечает skipped. Иначе второй прогон (plan run руками, plan --for на спланированный день, служба упала между записью
+    кандидатов и памятью run_day) добавлял к семи ещё: blocked() держит только ждущих, отказанных и дважды молчавших, а
+    предел семи считался заново. Прогоны одного владельца — по одному (замок PLAN_LOCK до конца записи): служба и команда
+    в одну секунду двух пачек не положат. made — сколько строк пачки легло, а не сколько op_id ответили «да»."""
     now = now or dt.datetime.now(dt.timezone.utc)
     today = now.astimezone(MSK).date()
     owner = _owner(url)
@@ -487,14 +506,22 @@ def run(url: str, now: dt.datetime | None = None, dry: bool = False, for_date: d
         return {"skipped": "нет владельца Дел"}
     fd = for_date or next_day(today)
     with db.session(url, owner, ACTOR, SOURCE) as conn:
+        if not dry:
+            conn.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s::text))", (PLAN_LOCK, owner))
+        before = offered(conn, owner, fd)
+        if before and not dry:
+            return {"skipped": f"на {label(fd)} уже предложено {before} — второй прогон ничего не пишет",
+                    "for_date": fd.isoformat(), "label": label(fd), "offered": before}
         out = build(conn, owner, today, fd, config(conn, owner), now)
-    if dry:
-        return {**out, "dry": True}
-    res = store.apply_ops(url, owner, out["ops"], SOURCE, ACTOR)["results"] if out["ops"] else []
+        if dry:
+            return {**out, "dry": True, "offered": before}
+        # Пишет apply_ops своей транзакцией; замок этой держится до конца — следующий прогон увидит уже записанное.
+        res = store.apply_ops(url, owner, out["ops"], SOURCE, ACTOR)["results"] if out["ops"] else []
+        made = offered(conn, owner, fd)
     bad = [r.get("error") for r in res if not r.get("ok")]
     if bad:
         log.warning("план: не записалось %d из %d: %s", len(bad), len(res), bad[0])
-    return {**out, "made": sum(1 for r in res if r.get("ok")), "errors": bad}
+    return {**out, "made": made, "errors": bad}
 
 
 # ── Уборка и снимок ─────────────────────────────────────────────────────
@@ -524,9 +551,9 @@ def snap(url: str, day: dt.date, owner: str | None = None) -> int:
     p = {"o": owner, "day": day.isoformat(), "lo": _prev_lo(day).isoformat()}
     with db.session(url, owner, ACTOR, SOURCE) as conn:
         return conn.execute(
-            "WITH ids AS (SELECT id FROM tasks.tasks WHERE owner_id = %(o)s AND focus_on = %(day)s::date "
-            "               AND (status = 'open' OR (status = 'done' "
-            "                    AND (completed_at AT TIME ZONE 'Europe/Moscow')::date = %(day)s::date)) "
+            f"WITH ids AS (SELECT t.id FROM tasks.tasks t WHERE t.owner_id = %(o)s AND t.focus_on = %(day)s::date "
+            f"               AND {store.DEED_KIND_IF} AND (t.status = 'open' OR (t.status = 'done' "
+            "                    AND (t.completed_at AT TIME ZONE 'Europe/Moscow')::date = %(day)s::date)) "
             "             UNION SELECT task_id FROM tasks.now_days WHERE owner_id = %(o)s AND day = %(day)s::date) "
             "INSERT INTO tasks.now_days AS x (owner_id, day, task_id, carried, from_plan, done, done_at) "
             f"SELECT %(o)s, %(day)s::date, t.id, {CARRIED}, "
@@ -588,11 +615,17 @@ def tick(url: str, now: dt.datetime | None = None) -> dict | None:
         snap(url, today, owner)  # «Сейчас» дня — до того, как кнопки «☆ На завтра» начнут его переносить
         out = run(url, now)
         st["run_day"] = today.isoformat()
-        st["last"] = {"at": now.isoformat(), "for_date": out.get("for_date"), "made": out.get("made", 0),
-                      "errors": len(out.get("errors") or []), "stuck": len(out.get("stuck") or [])}
         changed = True
-        did["run"] = st["last"]
-        log.info("план на %s: предложено %d", out.get("for_date"), out.get("made", 0))
+        if out.get("skipped"):
+            # Пачка дня уже в базе: служба перезапустилась между прогоном и записью памяти, или прогон был руками. Второй
+            # раз не предлагаем (run держит это базой), итог того прогона не затираем.
+            did["run"] = {"skipped": out["skipped"]}
+            log.info("план: %s", out["skipped"])
+        else:
+            st["last"] = {"at": now.isoformat(), "for_date": out.get("for_date"), "made": out.get("made", 0),
+                          "errors": len(out.get("errors") or []), "stuck": len(out.get("stuck") or [])}
+            did["run"] = st["last"]
+            log.info("план на %s: предложено %d", out.get("for_date"), out.get("made", 0))
     if changed:
         keep = {(today - dt.timedelta(days=k)).isoformat() for k in range(SNAP_BACK + 4)}
         st["snaps"] = {d: v for d, v in snaps.items() if d in keep}
@@ -675,8 +708,8 @@ def view_plan(conn, user, **_) -> dict:
     rows = conn.execute("SELECT status FROM tasks.suggestions WHERE source = 'plan' AND for_user = %s AND batch_ref = %s",
                         (user, batch)).fetchall()
     marked = conn.execute(
-        "SELECT id, num, title FROM tasks.v_tasks WHERE owner_id = %s AND status = 'open' AND NOT goal "
-        "AND focus_on = %s::date ORDER BY num", (user, fd)).fetchall()
+        f"SELECT t.id, t.num, t.title FROM tasks.v_tasks t WHERE t.owner_id = %s AND t.status = 'open' AND NOT t.goal "
+        f"AND {store.DEED_KIND_IF} AND t.focus_on = %s::date ORDER BY t.num", (user, fd)).fetchall()
     at = asks.evening_at(asks.rhythm(conn, user), run_day(fd))
     cap = capacity(conn, user, fd, cfg)
     return {
