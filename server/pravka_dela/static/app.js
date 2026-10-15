@@ -524,7 +524,15 @@ const scopeItems = (scope) => (scope === 'today' ? todayTasks()
   : deeds().filter((t) => isOpen(t) && isMine(t) && inSphere(t) && (scope === 'all' || grpOf(t) === scope)));
 const levelsOf = (key) => { const v = S.levels[key]; return Array.isArray(v) ? v.filter((x) => LEVELS[x]) : LEVELS_DEF[key] || ['grp']; };
 const levelsName = (levels) => (levels.length ? levels.map((l) => LEVELS[l]).join(' › ') : 'без групп');
-const pendingSugs = () => [...S.sugs.values()].filter((s) => s.status === 'pending' && s.for_user === S.me.user);
+// «Сейчас на завтра» (шаг 1 петли этапа 4, 15.10.2026; сервер — plan.py, контракт dela-plan.json): с 19:00 (Пт — 14:00,
+// с 15.11 по 15.01 — 13:30) сервер кладёт до семи кандидатов правилом — предложения с source plan, batch_ref plan:<день>,
+// payload.for_date, why, from. Это выбор Саши на завтра, а не вопрос автоматики: в «Подскажи», число «Нового» и «Поставить
+// все» они не входят — свой блок под «Подскажи» (planBox): сначала ответить на вопросы, потом план (судья §3.3).
+const isPlan = (s) => s.source === 'plan';
+const planOn = () => ((S.me && S.me.features) || []).includes('plan');
+const pendingSugs = () => [...S.sugs.values()].filter((s) => s.status === 'pending' && s.for_user === S.me.user && !isPlan(s));
+const planSugs = () => [...S.sugs.values()].filter((s) => s.status === 'pending' && s.for_user === S.me.user && isPlan(s))
+  .sort((a, b) => ((a.payload || {}).order || 99) - ((b.payload || {}).order || 99));
 /** Закрытия и уточнения, которые сервер принял сам (store._auto: владелец 05.10 и 08.10.2026 — «спокойно
  *  закрывай и спокойно уточняй»), — за days дней, свежие сверху. Узнаются по причине решения: принятое руками
  *  предложение с payload.auto сюда не попадает. «Понятно» (seen_at) убирает их совсем: 06.10.2026 #268 висел
@@ -1888,8 +1896,11 @@ function renderNow() {
   const taken = new Set([...now.map((t) => t.id), ...depth.keys()]);
   const today = todayTasks().filter((t) => !taken.has(t.id));
   const done = doneTodayN();
+  // «на завтра отмечено k» (шаг 1 петли): ближайший будущий день, на который дела уже отмечены заранее.
+  const ahead = all().filter((t) => isOpen(t) && isMine(t) && !t.goal && t.focus_on && t.focus_on > S.today);
+  const next = ahead.map((t) => t.focus_on).sort()[0];
   return [head('Сейчас', [D.long(S.today).toLowerCase(), `в «Сейчас» ${now.length} из ${NOW_MAX}`, done ? 'закрыто ' + done : null, lateLink(),
-    ...waitLinks()]),
+    ...waitLinks(), planOn() && next ? `${planWhen(next)} отмечено ${ahead.filter((t) => t.focus_on === next).length}` : null]),
     el('div', { class: 'body' },
       principleLine(),
       quickAdd({}, { placeholder: '«это в Сейчас», «П1 поставь, срок пятница», «Гуркин ждёт звонка — на сегодня»' }),
@@ -1900,6 +1911,7 @@ function renderNow() {
       remindBox(remindersToday()),
       backBox(backTasks()),
       newBox(),
+      planBox(),
       todayBox(today, taken.size))];
 }
 
@@ -3726,6 +3738,7 @@ const ORIGIN = {
   userbot: ['send', 'var(--plan)', 'Telegram'], bot: ['send', 'var(--plan)', 'ответ в Telegram'], mcp: ['chat', 'var(--plan)', 'Claude'],
   web: ['pen', 'var(--meta)', 'в вебе'], manual: ['pen', 'var(--meta)', 'руками'], import: ['list', 'var(--meta)', 'перенос'],
   krug: ['circle', 'var(--plan)', 'разборщик Круга'], contacts: ['phone', 'var(--plan)', 'телефонная книжка'],
+  plan: ['bolt', 'var(--plan)', 'план на завтра'],
 };
 const origin = (src) => ORIGIN[src] || ORIGIN.manual;
 /** Предложение, из которого вышло дело: пачка встречи или окна Telegram. */
@@ -4135,6 +4148,74 @@ function asksBox(asks, { title = 'Подскажи', sub = 'без тебя не
         el('button', { class: 'chip-btn', onclick: () => decide(ids, 'reject') }, 'Не надо все')) : null),
     asks.map(askItem));
 }
+
+/** На какой день план (for_date) словами от сегодня: «на завтра», «на понедельник», «на сегодня, до 12:00». */
+function planWhen(day) {
+  const n = D.diff(day, S.today);
+  if (n <= 0) return 'на сегодня, до 12:00';
+  if (n === 1) return 'на завтра';
+  return 'на ' + WD[D.wd(day)].replace(/а$/, 'у');
+}
+/** Отмеченное на день плана — свои открытые дела с focus_on этого дня (будущий день: в «Сейчас» встанут сами). */
+const planMarked = (day) => all().filter((t) => isOpen(t) && isMine(t) && !t.goal && t.focus_on === day);
+/** Шестое на день плана — тост до запроса (предел пяти на КАЖДЫЙ день держит и сервер — store._now_guard). */
+function planRoom(day) {
+  if (planMarked(day).length < NOW_MAX) return true;
+  const w = planWhen(day);
+  toast(`${w[0].toUpperCase() + w.slice(1)} уже пять — сначала убери одно`);
+  return false;
+}
+/** Кандидат «Сейчас на завтра»: дело, строка «почему · откуда», кнопки ответа сервера (☆ На завтра · ✓ Уже сделал · Не
+ *  надо). П-номер — как у «Подскажи»: Claude понимает «П2 на завтра». «Принять всё» нет — отмечает Саша сам, до пяти. */
+function planItem(s) {
+  S.sugOrder.push(s.id);
+  const p = s.payload || {};
+  const t = s.task_id ? S.tasks.get(s.task_id) : null;
+  if (t) S.order.push(t.id);
+  const opts = sugOptions(s);
+  const tap = (i) => { if (opts[i].focus_on && !planRoom(opts[i].focus_on)) return; answer(s, i); };
+  return el('div', { class: 'sug plan' },
+    el('div', { class: 'main' },
+      el('div', {}, el('span', { class: 'sug-n', title: 'Номер для Claude: «П' + S.sugOrder.length + ' на завтра»' }, 'П' + S.sugOrder.length),
+        t ? el('a', { class: 'link', href: '#', onclick: (e) => { e.preventDefault(); openCard(t.id); } }, t.title) : p.title || ''),
+      el('div', { class: 'hint' }, [p.why, p.from].filter(Boolean).join(' · '))),
+    el('div', { class: 'acts opts' }, opts
+      ? opts.map((o, i) => el('button', { class: 'btn small' + (o.reject ? ' bad' : i === 0 ? ' ok' : ''), title: 'Ответить: ' + o.label,
+        onclick: () => tap(i) }, o.label))
+      : [el('button', { class: 'btn small ok', onclick: () => { if (planRoom(p.for_date)) decide([s.id], 'accept'); } }, 'В «Сейчас»'),
+        el('button', { class: 'btn small bad', onclick: () => decide([s.id], 'reject', 'план: не надо') }, 'Не надо')]));
+}
+/** «Сейчас на завтра» (шаг 1 петли этапа 4) — на главной под «Подскажи» и сверху «Нового». Виден, пока есть ждущие
+ *  кандидаты или отмеченное заранее. Шапка — из вида plan: «сегодня сделано x из y · завтра встреч ~N — возьми K ·
+ *  отмечено k из 5»; строки «третий день в «Сейчас»» — ссылкой на карточку (разбить, отдать или убрать — там). Отмеченное
+ *  заранее — сверху строками с «×»: снять завтрашнее иначе негде (toggleNow знает только сегодня). */
+function planBox() {
+  if (!planOn()) return null;
+  const sugs = planSugs();
+  const v = crmGet('/api/view/plan', 60000);
+  const day = (sugs[0] && (sugs[0].payload || {}).for_date) || (v && v.for_date);
+  if (!day) return null;
+  const ahead = day > S.today;
+  const marked = planMarked(day);
+  if (!sugs.length && !(marked.length && ahead)) return null;
+  const when = planWhen(day);
+  const n = D.diff(day, S.today);
+  const dayWord = n <= 0 ? 'сегодня' : n === 1 ? 'завтра' : 'в ' + WD[D.wd(day)].replace(/а$/, 'у');
+  const same = v && v.for_date === day;
+  const sub = [same && v.today && v.today.total ? `сегодня сделано ${v.today.done} из ${v.today.total}` : null,
+    same && v.meetings != null ? `${dayWord} встреч ~${v.meetings} — возьми ${v.take}` : null,
+    `отмечено ${marked.length} из ${NOW_MAX}`].filter(Boolean).join(' · ');
+  const open = (id) => (e) => { e.preventDefault(); openCard(id); };
+  return el('div', { class: 'group plan-box' },
+    el('h2', {}, icon('bolt', 17), 'Сейчас ' + when, el('span', { class: 'gsub' }, sub)),
+    ((v && v.stuck) || []).map((x) => el('div', { class: 'hint-line' }, icon('alert', 14), `${plural(x.days, 'день', 'дня', 'дней')} в «Сейчас»: `,
+      el('a', { class: 'link', href: '#', onclick: open(x.id) }, x.title), ' — разбить, отдать или убрать?')),
+    ahead ? marked.map((t) => el('div', { class: 'plan-marked' }, icon('bolt', 14),
+      el('a', { class: 'link', href: '#', onclick: open(t.id) }, t.title),
+      el('button', { class: 'icon-btn', title: 'Убрать из «Сейчас» ' + when, 'aria-label': 'Убрать',
+        onclick: () => setFields([t.id], { focus_on: null }, 'Убрал из «Сейчас» ' + when) }, icon('x', 14)))) : null,
+    sugs.map(planItem));
+}
 function renderNew(batch) {
   const asks = sortedAsks(pendingSugs().filter((s) => !batch || s.batch_ref === batch));
   const from = sugByTask();
@@ -4144,17 +4225,24 @@ function renderNew(batch) {
   const auto = batch ? autoDone(365).filter((s) => s.batch_ref === batch) : autoDone(7);
   const box = el('div', { class: 'body' });
   if (batch) box.append(el('div', { class: 'toolbar' }, el('a', { class: 'chip-btn', href: '#/new' }, 'Всё «Новое»')));
+  // Пачка «Сейчас на завтра» (plan:<день>, ссылка дайджеста и телефона) — сам блок плана; без пачки — он же сверху.
+  const plan = !batch || batch.startsWith('plan:') ? planBox() : null;
+  if (batch && batch.startsWith('plan:')) {
+    box.append(plan || el('div', { class: 'empty' }, 'Кандидатов на этот день больше нет — отмеченное уже в «Сейчас».'));
+    return [head('Новое', ['Сейчас ' + planWhen(batch.slice(5))]), box];
+  }
   // Строка Claude: «первое поставь, срок пятница; второе не надо» — П-номера ниже те же, что видит он.
   box.append(quickAdd({}, { label: 'с новым', placeholder: asks.length
     ? '«П1 поставь, срок пятница; П2 не надо — делает Ольга»'
     : '«последние три — в Альфу», «полку — на субботу»' }));
+  if (plan) box.append(plan);
   if (asks.length) box.append(asksBox(asks));
   if (feed.length) box.append(feedBlock(feed, from));
   const done = autoBlock(auto, batch);
   if (done) box.append(done);
   const week = batch ? null : autoWeekLine();
   if (week) box.append(week);
-  if (!asks.length && !feed.length && !auto.length) {
+  if (!asks.length && !feed.length && !auto.length && !plan) {
     box.append(el('div', { class: 'empty' }, batch ? 'Эта пачка уже разобрана.' : 'Пусто. Новое появится, когда наговоришь или придёт со встречи и из Telegram.'));
   }
   return [head('Новое', [asks.length ? `подскажи: ${asks.length}` : 'вопросов нет',

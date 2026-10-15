@@ -49,7 +49,13 @@ TASK_FIELDS = {
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
             "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
             "privacy", "context_index", "claude_guard", "nest", "debug", "capture", "capture_model", "ideas", "did",
-            "remind_phone", "speaker_link", "people_final"]
+            "remind_phone", "speaker_link", "people_final", "plan"]
+# «plan» — «Сейчас на завтра» (шаг 1 петли этапа 4, 15.10.2026, dela_0024, plan.py; контракт dela-plan.json): Пн–Чт в
+# 19:00 (Пт — 14:00, с 15.11 по 15.01 — 13:30, на понедельник) сервер кладёт в «Подскажи» до семи кандидатов правилом
+# (source plan, batch_ref plan:<день>, payload.for_date, why, from, basket), варианты «☆ На завтра» (focus_on будущим
+# днём), «✓ Уже сделал» (флаг done — только у source plan), «Не надо»; в 12:00 следующего дня гаснут. Предел пяти —
+# на КАЖДЫЙ день (_now_guard): focus_on в синке бывает будущей датой. Вид plan — шапка блока и строка дайджеста 20:03.
+# Без флага веб и телефон блока не рисуют, дайджест строки не пишет; кандидаты старый клиент видит вопросами «Нового».
 # «speaker_link» — люди встречи: служба предлагает, кто говорит, с основаниями, решает код (этап 6 аудита, 15.10.2026,
 # Саша: «два независимых признака сошлись — привязать и показать в „Сделано само“; один — один вопрос с основаниями и
 # кнопками; признаки спорят — вопрос»). Предложение kind person, source meeting с payload.link (привязка: person_id и
@@ -178,8 +184,12 @@ SUGGESTION_FIELDS = {"kind", "task_id", "payload", "source", "source_ref", "quot
 SUGGESTION_TTL = dt.timedelta(days=7)
 # Что вариант ответа «Подскажи» (payload.options) может поменять — словарь payload: поля дела, имена, место в дереве.
 OPTION_FIELDS = (TASK_FIELDS | {"project_name", "person_name", "why_id", "directions", "why_auto", "note"}
-                 | {"new", "org_name", "rename", "person"}) - {  # у вопроса о человеке (kind person): «это он», «новый»,
-    "status", "source", "source_ref", "owner_id", "requested_by"}       # компания, что дописать (person — словарь)
+                 | {"new", "org_name", "rename", "person"}  # у вопроса о человеке (kind person): «это он», «новый»,
+                 | {"done"}) - {                             # компания, что дописать (person — словарь)
+    "status", "source", "source_ref", "owner_id", "requested_by"}
+# done — «✓ Уже сделал» у кандидатов «Сейчас на завтра» (шаг 1 петли, 15.10.2026): только флаг, в поля дела не идёт.
+# status варианту нарочно не дан — закрыть дело вариантом модели нельзя; флаг done закрывает дело только у предложений
+# source plan (их пишет правило, а не модель) — op_suggestion_decide, тест test_done_option_only_for_plan.
 OPTIONS_MAX = 4
 
 # «Сейчас» — дела, которые Саша обязан сделать сегодня (focus_on = сегодня), не больше пяти. До 06.10.2026
@@ -457,34 +467,49 @@ def _full(conn: psycopg.Connection, tid: Any) -> dict:
     return conn.execute("SELECT * FROM tasks.v_tasks WHERE id = %s", (tid,)).fetchone()
 
 
-def _now_guard(conn: psycopg.Connection, before: dict | None, after: dict) -> None:
-    """Дело встаёт в «Сейчас» владельца, а там уже NOW_MAX — отказ словами, а не шестое молча.
+WEEKDAYS = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
 
-    before — дело до операции (None — новое), after — каким оно станет. В «Сейчас» — открытое дело
-    с focus_on на сегодня (crm.today(), Москва). Предел проверяется, только когда дело туда ВХОДИТ:
-    правка уже стоящего (срок, заметка), снятие и закрытие его не трогают. Счёт — до записи и под
-    замком на владельца: телефон, веб и реплай в Telegram в одну секунду шестого не поставят.
-    Считается видимое работающему (RLS): чужие приватные дела владельца в счёт не попадут.
+
+def day_label(day: Any) -> str:
+    """«пт 17.10» — день словами для отказов и вопросов плана (шаг 1 петли)."""
+    d = day if isinstance(day, dt.date) else dt.date.fromisoformat(str(day)[:10])
+    return f"{WEEKDAYS[d.weekday()]} {d:%d.%m}"
+
+
+def _now_guard(conn: psycopg.Connection, before: dict | None, after: dict) -> None:
+    """Дело встаёт в «Сейчас» владельца на какой-то день, а там уже NOW_MAX — отказ словами, а не шестое молча.
+
+    before — дело до операции (None — новое), after — каким оно станет. В «Сейчас» дня — открытое дело
+    с focus_on на этот день (Москва). Предел — на КАЖДЫЙ день (шаг 1 петли этапа 4, 15.10.2026): с «Сейчас на завтра»
+    focus_on бывает будущей датой, и до того на завтра можно было отметить и десять. Прошедший день не проверяется —
+    там ничего не встаёт. Предел проверяется, только когда дело в день ВХОДИТ: правка уже стоящего (срок, заметка),
+    снятие и закрытие его не трогают. Счёт — до записи и под замком на владельца: телефон, веб и реплай в Telegram в
+    одну секунду шестого не поставят. Считается видимое работающему (RLS): чужие приватные дела владельца в счёт не
+    попадут. В отказе — день словами, если он не сегодня («в «Сейчас» на пт 17.10 уже пять дел…»).
     """
     if not after.get("focus_on") or (after.get("status") or "open") != "open":
         return
+    day = str(after.get("focus_on"))[:10]
     today = conn.execute("SELECT crm.today() AS d").fetchone()["d"].isoformat()
+    if day < today:
+        return
 
-    def in_now(t: dict | None) -> bool:
-        return bool(t) and (t.get("status") or "open") == "open" and str(t.get("focus_on") or "")[:10] == today
+    def in_day(t: dict | None) -> bool:
+        return bool(t) and (t.get("status") or "open") == "open" and str(t.get("focus_on") or "")[:10] == day
 
     owner = after.get("owner_id")
-    if not in_now(after) or (in_now(before) and before.get("owner_id") == owner):
+    if in_day(before) and before.get("owner_id") == owner:
         return
     conn.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s::text))", (NOW_LOCK, owner))
     rows = conn.execute(
-        "SELECT num, title FROM tasks.tasks WHERE owner_id = %s AND status = 'open' AND focus_on = crm.today() "
+        "SELECT num, title FROM tasks.tasks WHERE owner_id = %s AND status = 'open' AND focus_on = %s::date "
         "AND id IS DISTINCT FROM %s::uuid ORDER BY num",
-        (owner, str(before["id"]) if before else after.get("id")),
+        (owner, day, str(before["id"]) if before else after.get("id")),
     ).fetchall()
     if len(rows) >= NOW_MAX:
         names = "; ".join(f"#{r['num']} {r['title'] if len(r['title']) <= 40 else r['title'][:39] + '…'}" for r in rows)
-        raise OpError(f"в «Сейчас» уже {_NOW_WORD.get(len(rows), len(rows))} дел: {names} — сначала убери одно")
+        on = "" if day == today else f" на {day_label(day)}"
+        raise OpError(f"в «Сейчас»{on} уже {_NOW_WORD.get(len(rows), len(rows))} дел: {names} — сначала убери одно")
 
 
 # ── Дела внутри дела (15.10.2026) ───────────────────────────────────────
@@ -1716,6 +1741,13 @@ def op_suggestion_decide(conn, user, op):
         fields.update(_names(conn, payload, cache))  # «уточнить»: мяч перешёл к другому человеку — по имени
         if s["kind"] == "close":
             fields.setdefault("status", "done")
+        if s["source"] == "plan" and payload.get("done") is True:
+            # «✓ Уже сделал» у кандидата «Сейчас на завтра» (шаг 1 петли): это «сделал?» судьи — ответ Саши, а не
+            # автоматика (причина «ответ: ✓ Уже сделал», в «Сделано само» не попадает). Только у source plan: их пишет
+            # правило, а не модель; у остальных источников done в варианте ничего не закрывает (тест). Закрытое дело
+            # не должно числиться «Сейчас» завтра — focus_on из payload не кладём.
+            fields.pop("focus_on", None)
+            fields["status"] = "done"
         fields.update(fix)
         hidden = None
         if private and machine and not owners_notes:
@@ -1732,6 +1764,10 @@ def op_suggestion_decide(conn, user, op):
     elif s["kind"] == "assign":
         fields = {"owner_id": user, **fix}
         task = op_task_set(conn, user, {"id": s["task_id"], "set": fields})["task"]
+    if s["source"] == "plan":
+        # «Напомнить троим» (корзина nudge): дело на завтра заведено — трём «жду» напоминание на тот же день.
+        from . import plan
+        back.update(plan.accepted(conn, user, payload))
     edited = bool(fix) and any(not _same(payload.get(k), v) for k, v in fix.items())
     row = _update(conn, "tasks.suggestions", {"id": s["id"]}, {
         "status": "edited" if edited else "accepted",
@@ -2372,6 +2408,11 @@ def _list(conn, where: str, params: list, sphere: str | None = None, order: str 
                         [*params, *sp]).fetchall()
 
 
+# Число «Нового» — только вопросы автоматики: кандидаты «Сейчас на завтра» (source plan, шаг 1 петли) — выбор Саши на
+# завтра, а не находка; с 19:00 до 12:00 они подняли бы число на семь. Свой блок и свой счёт у них — вид plan.
+NEW_COUNT_IF = "for_user = %s AND status = 'pending' AND source <> 'plan'"
+
+
 def view_morning(conn, user, sphere=None, **_):
     open_mine = "status = 'open' AND owner_id = %s"
     return {
@@ -2379,9 +2420,7 @@ def view_morning(conn, user, sphere=None, **_):
         "today": _list(conn, f"{open_mine} AND ball = 'mine' AND due_date <= crm.today()", [user], sphere),
         "nudge": _list(conn, f"{open_mine} AND ball = 'waiting' AND (nudge_on <= crm.today() OR due_date <= crm.today())", [user], sphere),
         "from_others": _list(conn, f"{open_mine} AND created_by <> owner_id AND created_at > now() - interval '3 days'", [user], sphere),
-        "new_count": conn.execute(
-            "SELECT count(*) AS n FROM tasks.suggestions WHERE for_user = %s AND status = 'pending'", (user,)
-        ).fetchone()["n"],
+        "new_count": conn.execute(f"SELECT count(*) AS n FROM tasks.suggestions WHERE {NEW_COUNT_IF}", (user,)).fetchone()["n"],
     }
 
 
@@ -2406,6 +2445,34 @@ OWED_NODUE_IF = "grp = 'owed' AND due_date IS NULL"
 WAITING_STALE_DAYS = 7
 WAITING_STALE_IF = (f"ball = 'waiting' AND waiting_since < crm.today() - {WAITING_STALE_DAYS} "
                     "AND (nudge_on IS NULL OR nudge_on < crm.today())")
+# «Обещание горит» на день (шаг 1 петли этапа 4, 15.10.2026): «Отбить» со сроком не позже дня или без срока, но ждёт
+# уже OWED_HOT_DAYS дней к этому дню. Сроков не выдумываем (как OWED_NODUE_IF) — только решаем, что предложить. План
+# «Сейчас на завтра» (plan.py, корзина owed) зовёт его на завтрашний день, шаг 2 — на сегодня («ждут от тебя»). День —
+# SQL-выражением: «crm.today()» или «%s::date» с параметром.
+OWED_HOT_DAYS = 2
+
+
+def OWED_HOT_IF(day: str = "crm.today()") -> str:  # noqa: N802 — имя как у соседних правил, день — параметром
+    return (f"grp = 'owed' AND (due_date <= {day} OR (due_date IS NULL "
+            f"AND (created_at AT TIME ZONE 'Europe/Moscow')::date <= {day} - {OWED_HOT_DAYS}))")
+
+
+def now_counts(conn, user: str, day: Any) -> dict:
+    """«Сейчас: сделано x из y» за день (шаг 1 петли; шаг 2 берёт его для asks.now и строки дня 20:03). Дела дня — что
+    стоит в «Сейчас» на этот день (открытое, или закрытое в этот же день), и что снимок дня (tasks.now_days, plan.snap)
+    уже видел там: дело, перенесённое кнопкой «☆ На завтра», из счёта сегодняшнего дня не выпадает. Сделано — закрыто в
+    этот день по Москве. Цели дерева не в счёт."""
+    row = conn.execute(
+        "WITH ids AS (SELECT task_id AS id FROM tasks.now_days WHERE owner_id = %(u)s AND day = %(d)s::date "
+        "  UNION SELECT id FROM tasks.tasks WHERE owner_id = %(u)s AND focus_on = %(d)s::date AND (status = 'open' "
+        "        OR (status = 'done' AND (completed_at AT TIME ZONE 'Europe/Moscow')::date = %(d)s::date))) "
+        "SELECT count(*) AS total, count(*) FILTER (WHERE t.status = 'done' "
+        "       AND (t.completed_at AT TIME ZONE 'Europe/Moscow')::date = %(d)s::date) AS done "
+        "FROM ids JOIN tasks.v_tasks t ON t.id = ids.id WHERE NOT t.goal",
+        {"u": user, "d": str(day)[:10]}).fetchone()
+    return {"total": row["total"], "done": row["done"]}
+
+
 OPEN_MINE = "status = 'open' AND owner_id = %s"
 TODAY_WHERE = f"{OPEN_MINE} AND {TODAY_IF}"
 TODAY_ORDER = " ORDER BY due_time NULLS LAST, created_at, num"
@@ -2438,9 +2505,7 @@ def view_today(conn, user, sphere=None, **_):
         "done_today": conn.execute(
             "SELECT count(*) AS n FROM tasks.tasks WHERE owner_id = %s AND status = 'done' "
             "AND (completed_at AT TIME ZONE 'Europe/Moscow')::date = crm.today()", (user,)).fetchone()["n"],
-        "new_count": conn.execute(
-            "SELECT count(*) AS n FROM tasks.suggestions WHERE for_user = %s AND status = 'pending'", (user,)
-        ).fetchone()["n"],
+        "new_count": conn.execute(f"SELECT count(*) AS n FROM tasks.suggestions WHERE {NEW_COUNT_IF}", (user,)).fetchone()["n"],
     }
 
 
@@ -2575,8 +2640,11 @@ def view_week(conn, user, sphere=None, **_):
             "WHERE t.project_id = p.id AND t.status = 'open' AND t.ball = 'mine') ORDER BY p.money_default, p.name",
             (user,),
         ).fetchall(),
+        # Погасшее — решения автоматики без ответа; кандидаты «Сейчас на завтра» гаснут каждый день в 12:00 сами — у плана
+        # свой счёт (вид plan, stats).
         "expired": conn.execute(
-            "SELECT * FROM tasks.suggestions WHERE for_user = %s AND status = 'expired' AND decided_at > now() - interval '7 days'",
+            "SELECT * FROM tasks.suggestions WHERE for_user = %s AND status = 'expired' AND source <> 'plan' "
+            "AND decided_at > now() - interval '7 days'",
             (user,),
         ).fetchall(),
         "automation": automation(conn, user),
@@ -2624,7 +2692,8 @@ def automation(conn, user, days: int = AUTO_DAYS_WEEK) -> dict:
         "LEFT JOIN tasks.tasks t ON t.id = s.task_id "
         "LEFT JOIN tasks.comments c ON c.id::text = s.result ->> 'comment_id' "
         "LEFT JOIN crm.people pe ON pe.id::text = s.result ->> 'person_id' "
-        "WHERE s.for_user = %s AND s.status <> 'pending' AND s.decided_at > now() - make_interval(days => %s)",
+        "WHERE s.for_user = %s AND s.status <> 'pending' AND s.decided_at > now() - make_interval(days => %s) "
+        "AND s.source <> 'plan'",  # «Сейчас на завтра» — не автоматика, а выбор Саши: счёт у плана свой (вид plan)
         (user, days)).fetchall()
     out = {"days": days, "all": _auto_bucket(), "sources": {}}
     for r in rows:
@@ -2771,7 +2840,7 @@ VIEWS["kuda"] = _late("view_kuda")
 
 
 def view(url: str, user: str, name: str, **params) -> dict:
-    from . import crm, stats  # noqa: F401  CRM-виды и статистика (свои модули) встают в VIEWS при импорте
+    from . import crm, plan, stats  # noqa: F401  CRM-виды, «Сейчас на завтра» и статистика встают в VIEWS при импорте
     fn = VIEWS.get(name)
     if fn is None:
         raise OpError(f"нет такого вида: {name}")

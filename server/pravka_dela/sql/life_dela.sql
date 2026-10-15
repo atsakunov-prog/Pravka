@@ -28,7 +28,9 @@ SELECT t.num, t.title, t.notes, t.status,
        -- pos — место среди соседей (дел с тем же «Зачем»).
        coalesce(wk.goal, false) AS why_goal, t.pos,
        -- Захват (dela_0032): kind — task или remind (напоминание, в списках дел его нет); back_on — когда вернётся дело «потом».
-       t.kind, t.back_on
+       t.kind, t.back_on,
+       -- «Сейчас на завтра» (dela_0024): день «Сейчас» — сегодня, будущий (отмечено заранее) или прошедший (погас).
+       t.focus_on
 FROM tasks.tasks t
 LEFT JOIN crm.projects p ON p.id = t.project_id
 LEFT JOIN crm.deals d ON d.id = t.deal_id
@@ -38,7 +40,7 @@ LEFT JOIN tasks.krug k ON k.id = t.id AND k.kind = 'task' AND k.owner_id = crm.o
 LEFT JOIN tasks.tasks w ON w.id = k.why_id
 LEFT JOIN tasks.krug wk ON wk.id = k.why_id AND wk.kind = 'task'
 WHERE crm.sees_task(crm.owner_id(), t.project_id, t.owner_id);
-COMMENT ON VIEW life.tasks IS 'Дела владельца (сервис «Дела»). num — короткий номер «#57». status: open, done, cancelled. grp — группа дела, как Саша их видит: owed — «Отбить» (ждут от меня: person ждёт от Саши ответа или дела; первым делом), self — «Запустить» (сам придумал: mine и agenda), check — «Мониторить» (ждёт от person, ball waiting). ball: mine — моё, waiting — мяч у person, agenda — поднять при встрече с person; owed — флаг «ждут от меня». money — paid (оплата согласована), potential (развитие), none; пусто у задачи = как у проекта. project пусто — «Входящие». remind_at — когда напомнить в Telegram, remind_place — напомнить по приезду (место автопилота телефона), reminded_at — когда напоминание ушло. directions — направления Круга жизни (ключи Свода krug.directions: health, work…) с наследованием от «Зачем» и проекта; why_num и why — «Зачем»: цель, к которой ведёт это дело (why_goal true), или обычное дело, внутри которого оно лежит (why_goal false: дела внутри дела — обычные дела, pos — место среди соседей, 1 — первым); directions[1] — главное направление, у корня цепочки; остальные — метки. goal — узел дерева целей Круга жизни (цель-состояние, а не дело); rhythm — ритм практики (цель, которая повторяется). kind — task (дело) или remind (напоминание «напомни в 12 …»: не дело, своего срока нет — remind_at); back_on — день, когда дело «потом» вернётся на «Сегодня». Менять дела — инструментами dela_* (вложить — dela_change inside), не SQL.';
+COMMENT ON VIEW life.tasks IS 'Дела владельца (сервис «Дела»). num — короткий номер «#57». status: open, done, cancelled. grp — группа дела, как Саша их видит: owed — «Отбить» (ждут от меня: person ждёт от Саши ответа или дела; первым делом), self — «Запустить» (сам придумал: mine и agenda), check — «Мониторить» (ждёт от person, ball waiting). ball: mine — моё, waiting — мяч у person, agenda — поднять при встрече с person; owed — флаг «ждут от меня». money — paid (оплата согласована), potential (развитие), none; пусто у задачи = как у проекта. project пусто — «Входящие». remind_at — когда напомнить в Telegram, remind_place — напомнить по приезду (место автопилота телефона), reminded_at — когда напоминание ушло. directions — направления Круга жизни (ключи Свода krug.directions: health, work…) с наследованием от «Зачем» и проекта; why_num и why — «Зачем»: цель, к которой ведёт это дело (why_goal true), или обычное дело, внутри которого оно лежит (why_goal false: дела внутри дела — обычные дела, pos — место среди соседей, 1 — первым); directions[1] — главное направление, у корня цепочки; остальные — метки. goal — узел дерева целей Круга жизни (цель-состояние, а не дело); rhythm — ритм практики (цель, которая повторяется). kind — task (дело) или remind (напоминание «напомни в 12 …»: не дело, своего срока нет — remind_at); back_on — день, когда дело «потом» вернётся на «Сегодня». now — дело в «Сейчас» сегодня; focus_on — день «Сейчас»: будущий — Саша отметил заранее («Сейчас на завтра», кандидаты — life.suggestions с source plan), прошедший — погас; по дням что стояло и сделано — life.now_days. Менять дела — инструментами dela_* (вложить — dela_change inside), не SQL.';
 
 CREATE OR REPLACE VIEW life.projects AS
 SELECT p.name, p.aliases, p.sphere, p.kind, o.name AS org, p.owner_id AS owner, p.money_default, p.note, p.archived_at,
@@ -227,3 +229,12 @@ LEFT JOIN crm.orgs o ON o.id = i.org_id
 LEFT JOIN crm.meetings m ON m.id = i.meeting_id
 WHERE i.owner_id = crm.owner_id() AND i.deleted_at IS NULL;
 COMMENT ON VIEW life.insights IS 'Только Саше. Не цитировать в письмах, сообщениях и черновиках людям. «Только тебе» — его наблюдения о людях, клиентах, сделках и встречах: kind — вид (note — заметка; conflict — несостыковка, hedge — неуверенность, table — кто за столом, objection — возражение, signal — сигнал, ask — что уточнить и другие ключи разбора встреч и дайджеста), text и quote, people/client/deal/org/meeting — о ком, at_sec — секунда встречи, state: new, seen (видел), useful, dismissed (мимо), wrong (неверно), moved (перенёс). Записать — инструмент crm_private.';
+
+-- «Сейчас» по дням (dela_0024, plan.snap): что стояло в «Сейчас» дня и сделано ли. Только строки владельца — явным
+-- WHERE: вид принадлежит владельцу базы и RLS не подчиняется.
+CREATE OR REPLACE VIEW life.now_days AS
+SELECT n.day, t.num, t.title, n.done, n.carried, n.from_plan, n.first_seen, n.done_at, t.status, n.task_id
+FROM tasks.now_days n
+JOIN tasks.tasks t ON t.id = n.task_id
+WHERE n.owner_id = crm.owner_id();
+COMMENT ON VIEW life.now_days IS '«Сейчас» Саши по дням (снимок 11:00, 19:00 и 23:55 по Москве): какие дела стояли в «Сейчас» дня (или закрыты в этот день), done — сделано в этот день, carried — какой день подряд в «Сейчас» (третий — пора разбить, отдать или убрать), from_plan — взято из кандидатов «Сейчас на завтра» (life.suggestions, source plan). Дело, перенесённое на завтра, остаётся строкой и в своём дне. Сколько дней «Сейчас» стояло и какая доля сделана — отсюда (проверка недели: «Сейчас» в 4 из 5 будней, сделано не меньше половины отмеченного).';

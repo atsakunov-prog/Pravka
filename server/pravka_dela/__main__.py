@@ -24,6 +24,8 @@
   guard    защита от петли Claude (аудит №12): status — что стоит; on ЗАДАЧА — «Продолжать» (час пороги втрое);
            keep ЗАДАЧА — оставить остановленным (когда Telegram недоступен)
   debug    режим отладки: list [--all], show N [--json] [--shot файл], set N статус ["ответ" | --answer-file f], on, off
+  plan     «Сейчас на завтра»: [run] [--dry] [--for ДАТА] [--list] — кандидаты на завтра; snap [--day ДАТА] — снимок
+           «Сейчас» дня; status — последний прогон и снимки (служба делает всё это сама раз в минуту)
 """
 
 from __future__ import annotations
@@ -346,6 +348,18 @@ def cmd_serve(args) -> int:
     async def capture_loop():
         # Захват (capture.py, 15.10.2026): фразы, которые правило не узнало, ждут модели (pending) — capture.loop.
         await capture.loop(cfg.db_url, cfg.anthropic_key, cfg.claude_proxy)
+    async def rules_loop():
+        # Правила без Claude раз в минуту (шаг 1 петли этапа 4, 15.10.2026) — без условия на ключ: им он не нужен.
+        # «Сейчас на завтра» (plan.py): уборка кандидатов, снимок «Сейчас» (11:00, 19:00, 23:55) и в свой слот прогон.
+        # Шаг 6 добавит сюда же карточку недели ПОСЛЕ plan.tick (снимок 23:55 раньше мер дня) — у каждого свой try.
+        from . import plan
+
+        while True:
+            try:
+                await asyncio.to_thread(plan.tick, cfg.db_url)
+            except Exception:
+                log.exception("«Сейчас на завтра»")
+            await asyncio.sleep(60)
 
     async def main():
         server = uvicorn.Server(uvicorn.Config(
@@ -353,7 +367,7 @@ def cmd_serve(args) -> int:
             log_level="info", log_config=None, proxy_headers=False, server_header=False,
         ))
         await asyncio.gather(server.serve(), chores(), bridge_loop(), krug_loop(), meetings_loop(), spend_loop(),
-                             capture_loop())
+                             capture_loop(), rules_loop())
 
     log.info("Дела: слушаю %s:%d", cfg.listen_host, cfg.listen_port)
     asyncio.run(main())
@@ -531,6 +545,43 @@ def cmd_guard(args) -> int:
     return 0
 
 
+def cmd_plan(args) -> int:
+    """«Сейчас на завтра» (шаг 1 петли, plan.py): прогон руками (--dry — только показать), снимок дня, состояние."""
+    import datetime as dt
+
+    from . import plan
+
+    cfg = config_mod.load(args.env)
+    if args.action == "snap":
+        day = dt.date.fromisoformat(args.day) if args.day else dt.datetime.now(plan.MSK).date()
+        print(f"снимок «Сейчас» {day}: строк {plan.snap(cfg.db_url, day)}")
+        return 0
+    if args.action == "status":
+        st = plan._state(cfg.db_url)
+        snaps = ", ".join(d + " " + "/".join(v) for d, v in sorted((st.get("snaps") or {}).items()))
+        print(f"последний прогон: {st.get('run_day') or '—'}; итог: {st.get('last') or '—'}; снимки: {snaps or '—'}")
+        return 0
+    out = plan.run(cfg.db_url, dry=args.dry, for_date=dt.date.fromisoformat(args.for_date) if args.for_date else None)
+    if out.get("skipped"):
+        print(out["skipped"])
+        return 1
+    by: dict[str, int] = {}
+    for x in out["items"]:
+        by[x["basket"]] = by.get(x["basket"], 0) + 1
+    # Первая строка — только числа: её можно отдать в чат с живой базы (названия дел — личное).
+    print(("вхолостую (ничего не записано): " if out.get("dry") else "")
+          + f"на {out['label']}: кандидатов {len(out['items'])} из {out['limit']} ("
+          + ", ".join(f"{b} {by[b]}" for b in plan.SHOW if b in by) + f"); встреч ~{out['meetings']} — возьми "
+          f"{out['take']}; третий день в «Сейчас»: {len(out['stuck'])}"
+          + ("" if out.get("dry") else f"; записано {out.get('made', 0)}, ошибок {len(out.get('errors') or [])}"))
+    if args.list:
+        for x in out["items"]:
+            print(f"  [{x['basket']}] {x['title']} — {x['why']} ({x['from']})")
+        for x in out["stuck"]:
+            print(f"  [stuck] #{x['num']} {x['title']} — {x['days']}-й день")
+    return 0
+
+
 def cmd_zachem(args) -> int:
     """«Зачем» по-человечески (13.10.2026, zachem.py): предложения Claude — в файл, применить файл, вернуть как было.
     Перед apply — своя копия базы (правило 9): pravka-before-zachem-rename.dump."""
@@ -696,6 +747,13 @@ def main(argv: list[str] | None = None) -> int:
     pf.add_argument("--locked-private", action="store_true",
                     help="записи встреч под замком владельца — скрыть от команды (только по «да» владельца)")
     pf.set_defaults(fn=cmd_privacy_fix)
+    pl = sub.add_parser("plan", help="«Сейчас на завтра»: прогон (--dry — показать), снимок дня, состояние")
+    pl.add_argument("action", nargs="?", choices=["run", "snap", "status"], default="run")
+    pl.add_argument("--dry", action="store_true", help="run: только посчитать кандидатов, ничего не записывать")
+    pl.add_argument("--for", dest="for_date", help="run: на какой день (с завода — следующий будний)")
+    pl.add_argument("--list", action="store_true", help="run: и сами кандидаты строками (названия дел — личное)")
+    pl.add_argument("--day", help="snap: какой день (с завода — сегодня по Москве)")
+    pl.set_defaults(fn=cmd_plan)
     zc = sub.add_parser("zachem", help="«Зачем» по-человечески: предложить, применить, вернуть")
     zc.add_argument("action", choices=["propose", "apply", "rollback"])
     zc.add_argument("--user", default="sasha")

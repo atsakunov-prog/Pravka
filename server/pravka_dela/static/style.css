@@ -936,6 +936,11 @@ a.src-mark:hover { color: var(--accent); }
 .group.auto-done.folded .rows { display: none; }
 /* Счётчик откатов автоматики за неделю (аудит №29) — тихой строкой под «Сделано само». */
 .auto-week { margin: 8px 2px 0; font-size: 13px; color: var(--faint); }
+/* «Сейчас на завтра» (шаг 1 петли): отмеченное заранее — строками с «×» над кандидатами; кандидат — название ссылкой. */
+.plan-box .plan-marked { display: flex; align-items: center; gap: 8px; padding: 6px 16px; font-size: 14px; }
+.plan-box .plan-marked .link { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; }
+.plan-box .plan-marked .kv-i { color: var(--accent); }
+.sug.plan .main > div:first-child .link { color: inherit; }
 /* Встречи проекта и клиента (аудит №3) — строки как на странице «Встречи», «все встречи →» под ними. */
 .meet-more { display: inline-block; margin-top: 8px; font-size: 13.5px; }
 /* «Это тот же, что…» (аудит №23): кнопка владельцу и лист подтверждения слияния — словами, что уйдёт и куда. */
