@@ -703,3 +703,38 @@ def test_broom_nothing_private_reaches_the_team(team):
     # Владелец видит каждую метку там, где закон говорит «✓».
     mine = _everything(url, "sasha", marks, w)
     assert not [m for m in marks if m not in mine], [m for m in marks if m not in mine]
+
+
+def test_broom_with_nesting_team_sees_flat(team):
+    """Поезд, вагон 2 (дела внутри дела, правило 27) поверх закона приватности (правило 26): Саша вложил дело клиента
+    (его видит команда) в своё дело из личного проекта (команде не видно). У команды дело внутри стоит плоско — why_id,
+    why_title пусты, why_goal ложь; журнал Круга (вложил, вынул) карточка дела ей не отдаёт; название личного родителя
+    не доходит ни одним путём метлы — синк, виды, поиск, карточки, Claude карточек. Хозяин видит и вложение, и журнал."""
+    marks, w = _broom_world(team)
+    url = team["url"]
+    home = project(url, "sasha", "Личное", kind="personal", sphere="home")
+    parent = one(url, "sasha", {"op": "task.create", "task": {"title": "МЕТКА-РОДИТЕЛЬ-ЛИЧНОЕ", "project_id": str(home)}})["task"]
+    kid = str(w["tasks"][0])  # дело клиента из Telegram: команда его видит
+    one(url, "sasha", {"op": "task.set", "id": kid, "set": {"why_id": str(parent["id"])}})
+    marks = [*marks, "МЕТКА-РОДИТЕЛЬ-ЛИЧНОЕ"]
+    flat = 0
+    for user in ("natasha", "alena"):
+        seen = _everything(url, user, marks, w)
+        leaked = [m for m in marks if m in seen]
+        assert not leaked, (user, leaked)
+        with as_(url, user) as c:
+            r = c.execute("SELECT why_id, why_title, why_goal, steps_open FROM tasks.v_tasks WHERE id = %s", (kid,)).fetchone()
+        if r is None:
+            continue  # дело ему не видно вовсе — метлы хватает
+        flat += 1
+        assert (r["why_id"], r["why_title"], r["why_goal"]) == (None, None, False), (user, r)
+        hist = api.task_card(url, user, kid)["history"]
+        assert hist and all(h["entity"] == "tasks.tasks" for h in hist), user
+    assert flat, "дело клиента не видно никому из команды — проверка «плоско» ничего не проверила"
+    mine = _everything(url, "sasha", marks, w)
+    assert "МЕТКА-РОДИТЕЛЬ-ЛИЧНОЕ" in mine
+    with as_(url, "sasha") as c:
+        r = c.execute("SELECT why_id, why_title, why_goal FROM tasks.v_tasks WHERE id = %s", (kid,)).fetchone()
+    assert (str(r["why_id"]), r["why_title"], r["why_goal"]) == (str(parent["id"]), "МЕТКА-РОДИТЕЛЬ-ЛИЧНОЕ", False)
+    hist = api.task_card(url, "sasha", kid)["history"]
+    assert any(h["entity"] == "tasks.krug" and (h["after"] or {}).get("why_id") == str(parent["id"]) for h in hist)
