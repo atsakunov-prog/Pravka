@@ -190,10 +190,12 @@ def test_list_filters_sorts_and_finds_word_forms(mt):
 def test_card_links_timeline_and_tasks_by_number_across_hosts(mt):
     url = mt["url"]
     m = push(url)
+    # Запись хронологии, которую служба встреч написала сама на прежнем адресе (до 15.10; теперь её ведёт сервер, №6).
+    with dela_db.session(url, "sasha", "svc:meetings") as c:
+        c.execute("INSERT INTO crm.interactions (at, kind, summary, project_id, source, source_ref, owner_id) VALUES "
+                  "('2026-10-12T12:00:00+03:00', 'zoom', 'Вектор: счета', %s, 'meeting', "
+                  "'https://old-host.example.org:8443/m/215', 'sasha')", (mt["project"],))
     ok(url, "sasha",
-       {"op": "interaction.add", "data": {"at": "2026-10-12T12:00:00+03:00", "kind": "zoom", "summary": "Вектор: счета",
-                                          "project_id": str(mt["project"]), "source": "meeting",
-                                          "source_ref": "https://old-host.example.org:8443/m/215"}},
        {"op": "task.create", "task": {"title": "Перевыставить счёт", "source": "meeting",
                                       "source_ref": "https://meetings.example.org/m/215"}})
     card = store.view(url, "sasha", "meeting", ref="215", lines="none")
@@ -593,3 +595,304 @@ def test_claude_renames_client_of_both_kinds(mt):
     assert "уже другой клиент" in mcp_tools.client_rename(url, "Вектор Групп", "Ромашка")
     assert meetings.retitle("Вера: КП и смета", "Вера", "Новая заря") == "Новая заря: КП и смета"
     assert meetings.retitle("КП Веры", "Вера", "Новая заря") == "КП Веры"
+
+
+# ── Одна правда о встрече: запись в хронологии ведёт сервер по карточке (аудит 15.10.2026, №6, №43, №60; dela_0021) ──
+
+
+def _records(url, ref=None):
+    with dela_db.session(url, "sasha") as c:
+        rows = c.execute("SELECT * FROM crm.interactions WHERE source = 'meeting' ORDER BY created_at, id").fetchall()
+    return [r for r in rows if ref is None or (r["source_ref"] or "").endswith(f"/m/{ref}")]
+
+
+def _live(url, ref=None):
+    return [r for r in _records(url, ref) if r["deleted_at"] is None]
+
+
+def test_meeting_record_follows_its_card(mt):
+    url = mt["url"]
+    with dela_db.session(url, "system", "test") as c:
+        c.execute("UPDATE crm.people SET user_id = 'natasha' WHERE id = %s", (mt["Наташа"],))  # Наташа — команда
+    m = push(url, agreements=["Счёт перевыставить до пятницы", {"text": "Таблицы — к среде"}])
+    assert _live(url) == []  # не разобрана: рабочая ли и чей клиент — ещё не знаем
+    _name(url, m["id"], client="Вектор", deal="рефинансирование", topic="счета",
+          people=[{"name": "Олег Ветров", "person": "Олег Ветров"}, {"name": "Наташа", "person": ""},
+                  {"name": "Саша", "person": "Александр Саввин"}])
+    card = _card(url, m)
+    [r] = _live(url)
+    # Клиент, сделка и люди — с карточки (люди — без команды и без самого владельца), название — Дел.
+    assert (r["project_id"], str(r["deal_id"]), r["person_ids"]) == (mt["project"], card["deal_id"], [mt["Олег"]])
+    assert card["deal_id"] is not None
+    assert r["summary"] == "Вектор: счета: Счёт перевыставить на новое юрлицо; модель — таблицы чувствительности."
+    assert r["next_step"] == "Счёт перевыставить до пятницы; Таблицы — к среде"
+    assert (r["kind"], r["duration_min"], r["source_ref"], r["private"]) == (
+        "zoom", 47, "https://meetings.example.org/m/215", False)
+    assert [i["summary"] for i in card["timeline"]] == [r["summary"]]
+    # Владелец поменял клиента — запись следом (сделки у нового клиента нет — и в записи пусто).
+    alfa = project(url, "sasha", "Альфа")
+    ok(url, "sasha", {"op": "meeting.set", "id": m["id"], "set": {"project": "Альфа"}})
+    [r2] = _live(url)
+    assert (r2["id"], r2["project_id"], r2["deal_id"]) == (r["id"], alfa, None)
+    assert r2["summary"].startswith("Альфа: счета: ")
+    # Стала личной — запись убрана; снова рабочая — новая, убранная остаётся историей.
+    ok(url, "sasha", {"op": "meeting.set", "id": m["id"], "set": {"sphere": "home"}})
+    assert _live(url) == [] and _records(url)[0]["deleted_at"] is not None
+    ok(url, "sasha", {"op": "meeting.set", "id": m["id"], "set": {"sphere": "work"}})
+    assert len(_live(url)) == 1 and len(_records(url)) == 2
+    # Служебный проект — не клиент: записи нет.
+    project(url, "sasha", "ЗФ", kind="internal")
+    ok(url, "sasha", {"op": "meeting.set", "id": m["id"], "set": {"project": "ЗФ"}})
+    assert _live(url) == []
+    # Клиента переименовали — название Дел и запись следом; клиент перестал быть клиентом — запись уходит.
+    ok(url, "sasha", {"op": "meeting.set", "id": m["id"], "set": {"project": "Вектор"}})
+    ok(url, "sasha", {"op": "project.set", "id": mt["project"], "set": {"name": "Новый Вектор"}})
+    [r3] = _live(url)
+    assert r3["summary"].startswith("Новый Вектор: счета: ")
+    ok(url, "sasha", {"op": "project.set", "id": mt["project"], "set": {"kind": "internal"}})
+    assert _live(url) == []
+    # Убрали встречу из списка — и её запись.
+    ok(url, "sasha", {"op": "project.set", "id": mt["project"], "set": {"kind": "client"}})
+    assert len(_live(url)) == 1
+    ok(url, "sasha", {"op": "meeting.set", "id": m["id"], "set": {"archived": True}})
+    assert _live(url) == []
+
+
+def test_owner_hand_on_meeting_record(mt):
+    """Убрал или поправил запись встречи сам владелец — замок touch: сервер её не трогает, «вернуть» — снова по карточке."""
+    url = mt["url"]
+    m = push(url)
+    _name(url, m["id"], client="Вектор", topic="счета")
+    [r] = _live(url)
+    ok(url, "sasha", {"op": "interaction.delete", "id": str(r["id"])})
+    assert "touch" in _card(url, m)["locked"]
+    ok(url, "sasha", {"op": "meeting.set", "id": m["id"], "set": {"topic": "счета и залог"}})
+    push(url, summary="Новый итог.")  # служба прислала заново — запись не вернулась
+    assert _live(url) == []
+    # «Вернуть» (unlock touch) — снова по карточке.
+    ok(url, "sasha", {"op": "meeting.set", "id": m["id"], "unlock": ["touch"]})
+    assert "touch" not in _card(url, m)["locked"]
+    [r2] = _live(url)
+    assert r2["summary"] == "Вектор: счета и залог: Новый итог."
+    # Поправил запись руками — правка остаётся и после правки встречи.
+    ok(url, "sasha", {"op": "interaction.set", "id": str(r2["id"]), "set": {"summary": "Вектор: моими словами"}})
+    assert "touch" in _card(url, m)["locked"]
+    ok(url, "sasha", {"op": "meeting.set", "id": m["id"], "set": {"topic": "другое"}})
+    assert [x["summary"] for x in _live(url)] == ["Вектор: моими словами"]
+    # Личная встреча гаснет всегда — даже взятая в руки (точка №9).
+    ok(url, "sasha", {"op": "meeting.set", "id": m["id"], "set": {"sphere": "home"}})
+    assert _live(url) == []
+    bad = ops(url, "sasha", {"op": "meeting.set", "id": m["id"], "unlock": ["lunch"]})[0]
+    assert not bad["ok"] and "lunch" in bad["error"]
+
+
+def test_old_service_record_is_not_a_second_truth(mt):
+    """Старая служба встреч (без флага meeting_touch) шлёт запись сама: та же встреча — запись сервера, не дубль."""
+    import uuid
+
+    url = mt["url"]
+    m = push(url)
+    old = {"op": "interaction.add", "op_id": str(uuid.uuid4()), "data": {
+        "at": "2026-10-12T11:56:00+03:00", "kind": "zoom", "summary": "Регулярная по сделке: итог службы",
+        "project_id": str(mt["project"]), "person_ids": [str(mt["Олег"])], "source": "meeting",
+        "source_ref": "https://old-host.example.org:8443/m/215"}}
+    # Карточка ещё не разобрана — по ней записи нет: отказ словами, а не вторая правда.
+    r = ops(url, "sasha", old)[0]
+    assert not r["ok"] and "ведёт сервер" in r["error"], r
+    _name(url, m["id"], client="Вектор", topic="счета")
+    r = ops(url, "sasha", {**old, "op_id": str(uuid.uuid4())})[0]
+    assert r["ok"] and r["existing"] and r["row"]["summary"].startswith("Вектор: счета: "), r
+    assert len(_live(url)) == 1
+    # Встречи в базе ещё нет — запись как раньше, но вторая живая той же встречи — нет (одна на встречу).
+    data = {**old["data"], "source_ref": "https://meetings.example.org/m/999"}
+    first = ops(url, "sasha", {"op": "interaction.add", "data": data})[0]
+    again = ops(url, "sasha", {"op": "interaction.add", "data": {**data, "summary": "ещё раз"}})[0]
+    assert first["ok"] and again["ok"] and again["row"]["id"] == first["row"]["id"], (first, again)
+    assert len(_live(url, "999")) == 1
+    # Заметка владельца (не встреча) — как всегда.
+    assert ok(url, "sasha", {"op": "interaction.add", "data": {"at": "2026-10-12T15:00:00+03:00", "kind": "note",
+                                                              "summary": "Созвонились", "source": "web"}})
+
+
+def test_twins_keep_one_record_at_the_fuller(mt):
+    """Zoom и Plaud одной встречи: запись одна — у той, где больше текста; вторая настоящая встреча дня — своя."""
+    url = mt["url"]
+    a = push(url, ref="401", started_at="2026-10-13T10:00:00+03:00", ended_at="2026-10-13T10:40:00+03:00")
+    b = push(url, ref="402", kind="meeting", started_at="2026-10-13T10:02:00+03:00", ended_at="2026-10-13T10:41:00+03:00",
+             transcript=TRANSCRIPT + "\n[00:03:00] Олег Ветров: И ещё про залог, подробно и с цифрами.")
+    for x in (a, b):
+        _name(url, x["id"], client="Вектор", topic="счета")
+    assert [r["source_ref"] for r in _live(url)] == ["https://meetings.example.org/m/402"]
+    assert _live(url)[0]["kind"] == "meeting"
+    # Полную убрали из списка — запись переходит ко второй половине.
+    ok(url, "sasha", {"op": "meeting.set", "id": b["id"], "set": {"archived": True}})
+    assert [r["source_ref"] for r in _live(url)] == ["https://meetings.example.org/m/401"]
+    # Встреча днём с тем же клиентом, без пересечения, — своя запись.
+    c = push(url, ref="403", started_at="2026-10-13T15:00:00+03:00", ended_at="2026-10-13T15:30:00+03:00")
+    _name(url, c["id"], client="Вектор", topic="модель")
+    assert len(_live(url)) == 2
+
+
+def test_recognised_speaker_joins_without_renaming(mt):
+    """№60: служба узнала спикера (голос, ответ владельца) — встреча уходит с тем же текстом и person_id в raw.speakers:
+    он встаёт в участники без переразбора, гость с тем же именем уходит из гостей, запись хронологии — следом."""
+    url = mt["url"]
+    with dela_db.session(url, "sasha", via="app") as c:
+        petr, ivan = (c.execute("INSERT INTO crm.people (name, owner_id) VALUES (%s, 'sasha') RETURNING id", (n,)).fetchone()["id"]
+                      for n in ("Пётр Новиков", "Иван Тестов"))
+    m = push(url)
+    card = name_it(url, m["id"], client="Вектор", topic="счета",
+                   people=[{"name": "Олег Ветров", "person": "Олег Ветров"}, {"name": "Петя из банка", "person": ""}])
+    assert card["guests"] == ["Петя из банка"] and card["person_ids"] == [str(mt["Олег"])]
+    again = push(url, raw={"speakers": [{"label": "SPEAKER_02", "name": "Петя из банка", "person_id": str(petr)},
+                                        {"label": "SPEAKER_00", "name": "Саша", "person_id": str(mt["Саша"])}]})
+    assert not again["changed"] and again["named"]
+    after = store.view(url, "sasha", "meeting", id=m["id"], lines="none")
+    assert after["person_ids"] == [str(mt["Олег"]), str(petr)] and after["guests"] == []
+    assert after["named_at"] == card["named_at"]  # без переразбора
+    [r] = _live(url)
+    assert r["person_ids"] == [mt["Олег"], petr]
+    # Замок people — слово владельца: новый узнанный сам в участники не встаёт.
+    ok(url, "sasha", {"op": "meeting.set", "id": m["id"], "set": {"person_ids": [str(mt["Олег"])]}})
+    push(url, raw={"speakers": [{"label": "SPEAKER_03", "name": "Иван Тестов", "person_id": str(ivan)}]})
+    assert store.view(url, "sasha", "meeting", id=m["id"], lines="none")["person_ids"] == [str(mt["Олег"])]
+    # Встреча ещё не разобрана (разборщик не успел или его нет — тестовая копия Дел): узнанный — уже участник.
+    fresh = push(url, ref="216")
+    push(url, ref="216", raw={"speakers": [{"label": "SPEAKER_01", "name": "Иван Тестов", "person_id": str(ivan)}]})
+    got = store.view(url, "sasha", "meeting", id=fresh["id"], lines="none")
+    assert got["person_ids"] == [str(ivan)] and not got["named"]
+
+
+def test_meeting_batches_take_dela_title(mt):
+    """№43: пачка «Нового» встречи (любого статуса) живёт названием Дел — после разбора, правки владельца и
+    переименования клиента."""
+    url = mt["url"]
+    m = push(url)
+
+    def sug(title, **kw):
+        return {"op": "suggestion.create", "suggestion": {
+            "kind": "create", "source": "meeting", "source_ref": "https://meetings.example.org/m/215",
+            "batch_ref": "meeting:215", "batch_title": "Регулярная по сделке · 12.10", "quote": "…",
+            "payload": {"title": title}, **kw}}
+
+    a, b = (x["suggestion"] for x in ok(url, "sasha", sug("Перевыставить счёт"), sug("Таблицы чувствительности")))
+    ok(url, "sasha", {"op": "suggestion.decide", "id": b["id"], "decision": "reject"})
+
+    def titles():
+        with dela_db.session(url, "sasha") as c:
+            return {r["batch_title"] for r in c.execute(
+                "SELECT batch_title FROM tasks.suggestions WHERE batch_ref = 'meeting:215'").fetchall()}
+
+    assert titles() == {"Регулярная по сделке · 12.10"}
+    _name(url, m["id"], client="Вектор", topic="счета")
+    assert titles() == {"Вектор: счета · 12.10"}
+    ok(url, "sasha", {"op": "meeting.set", "id": m["id"], "set": {"topic": "залог"}})
+    assert titles() == {"Вектор: залог · 12.10"}
+    ok(url, "sasha", {"op": "project.set", "id": mt["project"], "set": {"name": "Новый Вектор"}})
+    assert titles() == {"Новый Вектор: залог · 12.10"}
+    # Сверка, пришедшая после разбора, — сразу с названием Дел.
+    late = ok(url, "sasha", sug("Позвонить в банк"))[0]["suggestion"]
+    assert late["batch_title"] == "Новый Вектор: залог · 12.10"
+
+
+def test_meetings_touch_command_counts_and_dry_writes_nothing(mt, tmp_path, capsys, monkeypatch):
+    """Разово после установки: записи встреч с 01.09 — по карточкам (догнать потерянные, взять сделку и людей, убрать
+    личные). --dry — посчитать и ничего не записать."""
+    url = mt["url"]
+    with dela_db.session(url, "sasha", "svc:test") as c:
+        deal = c.execute("SELECT id FROM crm.deals WHERE project_id = %s", (mt["project"],)).fetchone()["id"]
+
+        def card(ref, at, sphere="work", **kw):
+            return c.execute(
+                "INSERT INTO crm.meetings (ref, url, started_at, duration_min, owner_id, sphere, project_id, deal_id, label, "
+                "topic, title, person_ids, summary) VALUES (%s, %s, %s, 40, 'sasha', %s, %s, %s, 'Вектор', 'счета', "
+                "'Вектор: счета', %s, 'Итог.') RETURNING id",
+                (ref, f"https://meetings.example.org/m/{ref}", at, sphere, mt["project"], kw.get("deal"),
+                 kw.get("people", []))).fetchone()["id"]
+
+        card("601", "2026-09-10T11:00:00+03:00", deal=deal, people=[mt["Олег"]])  # потерянная сентябрьская
+        card("602", "2026-09-20T11:00:00+03:00")                                   # запись службы — без сделки и людей
+        card("603", "2026-09-25T11:00:00+03:00", sphere="home")                     # личная, а запись есть
+        card("604", "2026-08-20T11:00:00+03:00")                                   # архив до 01.09 — не трогаем
+        for ref, at in (("602", "2026-09-20T11:00:00+03:00"), ("603", "2026-09-25T11:00:00+03:00")):
+            c.execute("INSERT INTO crm.interactions (at, kind, summary, project_id, source, source_ref, owner_id) VALUES "
+                      "(%s, 'meeting', 'запись службы', %s, 'meeting', %s, 'sasha')",
+                      (at, mt["project"], f"https://old-host.example.org:8443/m/{ref}"))
+    before = [(r["id"], r["summary"], r["deleted_at"]) for r in _records(url)]
+    # Командой: вхолостую — числа словами, в базе ничего.
+    from pravka_dela import __main__ as cli
+
+    env = tmp_path / "dela.env"
+    env.write_text(f"DELA_DB_URL={url}\n", encoding="utf-8")
+    monkeypatch.delenv("DELA_DB_URL", raising=False)
+    assert cli.main(["--env", str(env), "meetings", "touch", "--dry"]) == 0
+    said = capsys.readouterr().out
+    assert said.startswith("вхолостую (ничего не записано): встреч с 2026-09-01: 3; записи в хронологии — создано 1, "
+                           "обновлено 1, убрано 1, без изменений 0"), said
+    assert [(r["id"], r["summary"], r["deleted_at"]) for r in _records(url)] == before
+    dry = meetings.touch_all(url, dry=True)
+    assert dry["dry"] and dry["meetings"] == 3, dry  # с 01.09
+    assert dry["actions"] == {"заведена": 1, "обновлена": 1, "убрана": 1}, dry
+    assert [(r["id"], r["summary"], r["deleted_at"]) for r in _records(url)] == before  # ничего не записано
+    real = meetings.touch_all(url)
+    assert real["actions"] == dry["actions"] and not real["dry"]
+    got = {r["source_ref"].rsplit("/", 1)[1]: r for r in _live(url)}
+    assert set(got) == {"601", "602"}
+    assert (got["601"]["deal_id"], got["601"]["person_ids"]) == (deal, [mt["Олег"]])
+    assert got["602"]["summary"] == "Вектор: счета: Итог."
+    assert meetings.touch_all(url)["actions"] == {"нечего": 3}  # повтор ничего не меняет
+
+
+def test_migration_21_over_meeting_records(admin_dsn):
+    """dela_0021 поверх Дел, где записи встреч уже есть: живые дубли одной встречи (разные адреса службы) разводятся до
+    уникального индекса, подпись — svc:migrate; прочие записи не тронуты; замок touch проходит проверку."""
+    import secrets as _secrets
+    from urllib.parse import urlparse, urlunparse
+
+    import psycopg
+    from psycopg import sql
+
+    name = f"pa_mig21_{_secrets.token_hex(4)}"
+    with psycopg.connect(admin_dsn, autocommit=True) as a:
+        a.execute(sql.SQL("CREATE DATABASE {} ENCODING 'UTF8' TEMPLATE template0").format(sql.Identifier(name)))
+    u = urlparse(admin_dsn)
+    url = urlunparse((u.scheme, u.netloc, "/" + name, "", "", ""))
+    try:
+        files = dict(dela_db._sql_files())
+        before = {k: v for k, v in files.items() if k.startswith("dela_") and k < "dela_0021.sql"}
+        with psycopg.connect(url, autocommit=True) as c:
+            c.execute("CREATE SCHEMA core")
+            c.execute("CREATE TABLE core.migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
+            dela_db.apply_pending(c, before)
+        with dela_db.session(url, "system", "test") as c:
+            c.execute("INSERT INTO crm.users (id, name, role) VALUES ('sasha', 'Саша', 'owner')")
+            pid = c.execute("INSERT INTO crm.projects (name, sphere, kind, owner_id) VALUES ('Вектор', 'work', 'client', 'sasha') "
+                            "RETURNING id").fetchone()["id"]
+            ids = [c.execute("INSERT INTO crm.interactions (at, kind, summary, project_id, source, source_ref, owner_id, created_at) "
+                             "VALUES ('2026-10-01T11:00:00+03:00', 'meeting', %s, %s, 'meeting', %s, 'sasha', %s) RETURNING id",
+                             (s, pid, src, at)).fetchone()["id"]
+                   for s, src, at in (("первая", "https://old-host.example.org:8443/m/77", "2026-10-01T12:00:00+03:00"),
+                                      ("дубль", "https://meetings.example.org/m/77", "2026-10-02T12:00:00+03:00"),
+                                      ("другая", "https://meetings.example.org/m/78", "2026-10-02T12:00:00+03:00"),
+                                      ("заметка", None, "2026-10-02T12:00:00+03:00"))]
+            mid = c.execute("INSERT INTO crm.meetings (ref, url, started_at, duration_min, owner_id, sphere, project_id, title) "
+                            "VALUES ('77', 'https://meetings.example.org/m/77', '2026-10-01T11:00:00+03:00', 30, 'sasha', "
+                            "'work', %s, 'Вектор: счета') RETURNING id", (pid,)).fetchone()["id"]
+            rev = {r["id"]: r["rev"] for r in c.execute("SELECT id, rev FROM crm.interactions").fetchall()}
+        with psycopg.connect(url, autocommit=True) as c:
+            assert dela_db.apply_pending(c, files)[0] == "dela_0021.sql"
+        with dela_db.session(url, "system", "test") as c:
+            got = {r["id"]: r for r in c.execute("SELECT * FROM crm.interactions").fetchall()}
+            hist = c.execute("SELECT actor FROM crm.history WHERE entity = 'crm.interactions' AND op = 'update'").fetchall()
+            assert got[ids[0]]["deleted_at"] is None and got[ids[1]]["deleted_at"] is not None
+            assert all(got[i]["rev"] == rev[i] for i in (ids[0], ids[2], ids[3]))  # прочие не тронуты
+            assert [h["actor"] for h in hist] == ["svc:migrate"]
+            # Запись по карточке — в ту же живую строку, второй живой той же встречи база не даст.
+            assert c.execute("SELECT crm.meeting_touch(%s) AS a", (mid,)).fetchone()["a"] == "обновлена"
+            c.execute("UPDATE crm.meetings SET locked = '{touch}' WHERE id = %s", (mid,))
+            with pytest.raises(psycopg.errors.UniqueViolation), c.transaction():
+                c.execute("INSERT INTO crm.interactions (at, kind, summary, source, source_ref, owner_id) VALUES "
+                          "(now(), 'meeting', 'ещё', 'meeting', 'https://x.example.org/m/77', 'sasha')")
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as a:
+            a.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))

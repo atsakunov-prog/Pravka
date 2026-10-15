@@ -43,7 +43,15 @@ TASK_FIELDS = {
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
-            "digest", "zasechka", "phone", "spend", "digest_crm", "people_new"]
+            "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch"]
+# «people_link» — назвал человека во встрече — он в CRM и сверен с Telegram (15.10.2026, аудит №25/№60): предложение kind
+# person, source meeting решает сервер (people.new_person: завести сам, вопрос кнопками, «уже убран»), повтор той же
+# находки (source_ref) — прежнее предложение в любом статусе, вариант ответа может нести person (что дописать: telegram_id,
+# ник, имена) — так «Люди сами» спрашивают «это он в Telegram?»; meeting.upsert сразу, без переразбора, ставит в
+# участники карточки узнанных службой спикеров (голос, ответ владельца). Без флага служба встреч людей не предлагает (старый
+# сервер завёл бы «Марию» из одного слова сам), а «Люди сами» не ищут карточки в Telegram.
+# «meeting_touch» — запись встречи в хронологии ведёт сервер по карточке встречи (dela_0021, №6): служба встреч свою
+# запись (crm_note) не шлёт; клиент, сделка, люди и название в записи — правда Дел, правки владельца доходят.
 # «svod» — Свод (crm.svod) в синке и операция svod.set; «people» — person.add / person.merge и вид who
 # (одна карточка человека, 06.10.2026). Без них телефон не шлёт этих операций.
 # «people_new» — люди сами (dela_0019, 14.10.2026): предложение kind = person — новый человек из Telegram или телефонной
@@ -105,8 +113,8 @@ SUGGESTION_FIELDS = {"kind", "task_id", "payload", "source", "source_ref", "quot
 SUGGESTION_TTL = dt.timedelta(days=7)
 # Что вариант ответа «Подскажи» (payload.options) может поменять — словарь payload: поля дела, имена, место в дереве.
 OPTION_FIELDS = (TASK_FIELDS | {"project_name", "person_name", "why_id", "directions", "why_auto", "note"}
-                 | {"new", "org_name", "rename"}) - {  # у вопроса о человеке (kind person): «это он», «новый», компания
-    "status", "source", "source_ref", "owner_id", "requested_by"}
+                 | {"new", "org_name", "rename", "person"}) - {  # у вопроса о человеке (kind person): «это он», «новый»,
+    "status", "source", "source_ref", "owner_id", "requested_by"}       # компания, что дописать (person — словарь)
 OPTIONS_MAX = 4
 
 # «Сейчас» — дела, которые Саша обязан сделать сегодня (focus_on = сегодня), не больше пяти. До 06.10.2026
@@ -571,6 +579,8 @@ def _options(payload) -> None:
         if not label or label in {x["label"] for x in out}:
             continue
         x = {"label": label, **{k: v for k, v in o.items() if k in OPTION_FIELDS and v != ""}}  # None и [] — «снять»
+        if "person" in x and not isinstance(x["person"], dict):
+            x.pop("person")  # что дописать человеку — только словарём («это он в Telegram?»: telegram_id, ник, имена)
         if o.get("reject"):
             x = {"label": label, "reject": True, **({"reason": str(o["reason"])[:200]} if o.get("reason") else {})}
         out.append(x)
@@ -590,15 +600,23 @@ def op_suggestion_create(conn, user, op):
     data.setdefault("for_user", db_owner(conn))
     data.setdefault("expires_at", dt.datetime.now(dt.timezone.utc) + SUGGESTION_TTL)
     data["created_by"] = user
+    _meeting_batch(conn, data)
     if data.get("source_ref") and data.get("kind") == "person":
-        # О человеке служба спрашивает один раз: повтор (служба перезапустилась до записи памяти) вернёт прежнее.
+        # О человеке служба спрашивает один раз: повтор (служба перезапустилась до записи памяти) вернёт прежнее — в
+        # любом статусе (15.10.2026, №25): ответ «Не для CRM» — тоже ответ, иначе вопрос о том же имени вставал бы
+        # заново после каждого «нет». Кроме погасшего без ответа при новом поводе (_new_occasion).
         same = conn.execute(
             "SELECT * FROM tasks.suggestions WHERE source_ref = %s AND kind = 'person' AND for_user = %s "
-            "AND status IN ('pending', 'accepted', 'edited') ORDER BY created_at DESC LIMIT 1",
+            "ORDER BY created_at DESC LIMIT 1",
             (data["source_ref"], data["for_user"]),
         ).fetchone()
-        if same:
+        if same and not _new_occasion(same, data, payload):
             return {"suggestion": same}
+    if data.get("kind") == "person" and data.get("source") == "meeting" and isinstance(payload, dict) \
+            and not payload.get("person_id"):
+        decided = _meeting_person(conn, user, data, payload)
+        if decided is not None:
+            return decided
     if data.get("source_ref") and data.get("kind", "create") == "create":
         # Повтор той же находки (встреча разобрана заново) не плодит дубль.
         same = conn.execute(
@@ -640,6 +658,117 @@ def op_suggestion_create(conn, user, op):
         title = (row["payload"] or {}).get("title") or row.get("quote") or row.get("kind")
         log.info("Новое: «%s» ждёт — %s", title, held)
     return {"suggestion": row}
+
+
+# ── Назвал человека во встрече — он в CRM (аудит 15.10.2026, №25/№60) ─────────
+
+def _new_occasion(prev: dict, data: dict, payload) -> bool:
+    """Погасший без ответа вопрос о человеке — не «нет навсегда» (этап 3 аудита, вопрос 1, ответ по умолчанию «а»):
+    при новом поводе его можно задать снова. Новый повод — другая встреча (payload.speaker.meeting_ref). Отказ кнопкой
+    («Не для CRM», «Нет») и ответ «да» запоминаются навсегда — их повтор возвращает прежнее."""
+    if prev["status"] != "expired" or data.get("source") != "meeting" or not isinstance(payload, dict):
+        return False
+    now = str((payload.get("speaker") or {}).get("meeting_ref") or "")
+    was = str(((prev["payload"] or {}).get("speaker") or {}).get("meeting_ref") or "")
+    return bool(now) and now != was
+
+
+def _meeting_batch(conn, data: dict) -> None:
+    """Пачка «Нового» встречи (batch_ref meeting:<ref>) — названием Дел, если встреча уже названа (аудит №43): служба
+    шлёт своё название, а разборщик Дел мог назвать её раньше, чем пришла сверка. Правило то же, что у
+    crm.meeting_batches_retitle (dela_0021): «<название Дел> · дд.мм»."""
+    ref = str(data.get("batch_ref") or "")
+    if not ref.startswith("meeting:") or not ref[8:]:
+        return
+    m = conn.execute(
+        "SELECT btrim(title) AS t, started_at FROM crm.meetings WHERE ref = %s AND nullif(btrim(title), '') IS NOT NULL "
+        "ORDER BY started_at DESC LIMIT 1", (ref[8:],)).fetchone()
+    if m:
+        data["batch_title"] = f"{m['t']} · {m['started_at'].astimezone(meetings.MSK):%d.%m}"
+
+
+def _meeting_of(conn, payload: dict, batch_title: str | None) -> tuple[str, str, str]:
+    """Встреча вопроса о человеке: (название, «дд.мм», «дд.мм.гггг») — название Дел и день по номеру встречи (№43),
+    иначе — из пачки службы («<название> · дд.мм»)."""
+    ref = str((payload.get("speaker") or {}).get("meeting_ref") or "").strip()
+    m = conn.execute(
+        "SELECT coalesce(nullif(btrim(title), ''), source_title) AS t, started_at FROM crm.meetings WHERE ref = %s "
+        "ORDER BY started_at DESC LIMIT 1", (ref,)).fetchone() if ref else None
+    if m and m["t"]:
+        day = m["started_at"].astimezone(meetings.MSK)
+        return m["t"], f"{day:%d.%m}", f"{day:%d.%m.%Y}"
+    head, _, dm = str(batch_title or "").rpartition(" · ")
+    return (head, dm.strip(), "") if head else (str(batch_title or ""), "", "")
+
+
+def _meeting_person(conn, user, data: dict, payload: dict) -> dict | None:
+    """Человек, которого служба встреч не узнала (kind person, source meeting, контракт §2.3 и §3.3): сервер сам решает
+    (people.new_person) — завести, спросить кнопками или ответить «уже убран». Ответ — готовый результат операции (уже
+    в CRM, уже убран) или None: дальше обычный путь — заведёт само (_auto) или будет ждать с вопросом.
+
+    Решает сервер, а не служба: узнавание людей одно (закон 3), и справочника имён у службы нет. Поэтому и вопрос
+    (ask, options, pick, held) строит сервер — свой вопрос службы здесь не нужен."""
+    d = dict(payload.get("person")) if isinstance(payload.get("person"), dict) else {}
+    raw_name = str(d.get("name") or payload.get("title") or "").strip()
+    if not raw_name:
+        raise OpError("человек со встречи: нужно имя")
+    v = people.new_person(conn, raw_name)
+    if v["verdict"] in ("known", "removed"):
+        known = v["known"]
+        res = {"person_id": known["id"], "created": False} if known else None
+        # Решил сервер, а не человек: decided_by пуст — очков за «разобрал Новое» (stats.py) это не даёт.
+        row = _insert(conn, "tasks.suggestions", {
+            **data, "payload": Jsonb(payload), "status": "accepted" if known else "rejected",
+            "reason": f"уже в CRM: {known['name']}" if known else f"уже убран в архив: {v['removed']['name']}",
+            "decided_by": None, "decided_at": dt.datetime.now(dt.timezone.utc),
+            **({"result": Jsonb(jsonable(res))} if res else {})})
+        log.info("Новое: человек со встречи «%s» — %s", raw_name, row["reason"])
+        return {"suggestion": row, **({"person": res} if res else {})}
+    title, dm, dmy = _meeting_of(conn, payload, data.get("batch_title"))
+    where = f"«{title}»{' ' + dm if dm else ''}" if title else ""
+    # Карточке — голое имя и откуда она; подпись в скобках — компания, если такая уже есть, иначе — заметкой (новую
+    # компанию из подписи спикера не заводим: «(экспо)» и «(терапевт)» — не компании).
+    d["name"] = v["name"]
+    if not d.get("source"):
+        d["source"] = f"встреча {dmy}: {title}" if dmy else (f"встреча: {title}" if title else "встреча")
+    if v["org_name"]:
+        payload["org_name"] = v["org_name"]
+    if v["note"]:
+        d["note"] = "; ".join(x for x in (d.get("note"), v["note"]) if x)
+    payload["person"] = d
+    payload.setdefault("where", f"встреча {where}" if where else "встреча")
+    for k in ("ask", "options", "pick", "held"):
+        payload.pop(k, None)
+    if v["verdict"] == "auto" and payload.get("auto") is True and user == data.get("for_user"):
+        if not data.get("quote"):
+            data["quote"] = f"Встреча {where}: «{raw_name}»" if where else f"Встреча: «{raw_name}»"
+        return None  # _auto заведёт сам: «человек заведён сам», в «Сделано само» с «Вернуть»
+    # Неясно — один вопрос кнопками. auto службы снимаем: вопрос — всегда вопрос.
+    payload.pop("auto", None)
+    at = f" на встрече {where}" if where else ""
+    cands = v["candidates"]
+    if cands:
+        labels = [_cand_label(c) for c in cands]
+        payload["ask"] = f"«{v['name']}»{at} — это {_or_words(labels)}?"
+        names = [str(c["name"]) for c in cands]
+        opts, seen = [], set()
+        for c, lab in zip(cands, labels):
+            # «Это Иван Петров»; два с одним именем — с компанией; и с ней одинаковые — номером.
+            text = "Это " + (str(c["name"]) if names.count(str(c["name"])) == 1 else lab)
+            if text in seen:
+                text = f"{text} · {len(opts) + 1}"
+            seen.add(text)
+            opts.append({"label": text[:80], "person_id": str(c["id"])})
+        payload["options"] = [*opts, {"label": "Новый человек", "new": True},
+                              {"label": "Не для CRM", "reject": True, "reason": "не для CRM"}]
+        payload["pick"] = True  # «Да» без выбора завело бы третьего «Ивана» — ответ только кнопкой
+    else:
+        payload["ask"] = f"Кто это{at} — «{v['name']}»?"
+        payload["options"] = [{"label": f"Завести «{v['name']}»"[:80], "new": True},
+                              {"label": "Не для CRM", "reject": True, "reason": "не для CRM"}]
+    payload["held"] = "; ".join(v["why"]) or "служба не просила завести само"
+    _options(payload)
+    return None
 
 
 # ── «Кто это — X или Y?» и почему ждёт (аудит 15.10.2026, №1) ───────────────
@@ -790,7 +919,10 @@ def _auto(conn, user, s: dict, problems: list[str] | None = None, cache: dict | 
         # Новый человек (14.10.2026, владелец согласился: «уверен — заводит сам»): только новая карточка и с основанием;
         # «это тот же человек?» — всегда вопрос: склеивает людей только владелец (LOGIC.md, закон 3). Свежесть не нужна —
         # человек не протухает, как дело из старой встречи.
-        ok = p.get("auto") is True and user == s.get("for_user") and s.get("quote") and not p.get("person_id")
+        # Вопрос — всегда вопрос (15.10.2026): со встречи сервер сам превращает неясное имя в «Кто это…?» (new_person), и
+        # auto службы его не перебивает.
+        ok = (p.get("auto") is True and user == s.get("for_user") and s.get("quote") and not p.get("person_id")
+              and not p.get("ask"))
         return (AUTO_PERSON_REASON, None) if ok else (None, None)
     if kind not in ("create", "close", "update"):
         return None, None
@@ -865,6 +997,10 @@ def op_suggestion_decide(conn, user, op):
     if decision != "accept":
         raise OpError("решение: accept или reject")
     if s["kind"] == "person":
+        if payload.get("pick") and op.get("option") is None:
+            # «Это X или Y?» («Иван» со встречи, два-три контакта в Telegram): «Да» без выбора завело бы нового человека
+            # или привязало не того — ответ только кнопкой.
+            raise OpError(f"{payload.get('ask') or 'Кто это?'} Ответь кнопкой в вебе или скажи Claude.")
         res = _person_sug(conn, user, s, payload)
         row = _update(conn, "tasks.suggestions", {"id": s["id"]}, {
             "status": "accepted", "reason": op.get("reason"), "decided_by": user,
@@ -921,20 +1057,17 @@ PERSON_SUG_NEW = ("name", "short", "aliases", "phones", "emails", "telegram_id",
 ORG_AUTO_KINDS = {"partner", "fund", "bank", "other"}
 
 
-def _org_key(name: Any) -> str:
-    """«Альфа-Банк» = «Альфа Банк», «Ромашка (группа)» = «Ромашка»: без знаков, пробелов и пояснения в скобках."""
-    return "".join(people.words(re.sub(r"\([^)]*\)", " ", str(name or ""))))
+_org_key = people.org_key  # «Альфа-Банк» = «Альфа Банк», «Ромашка (группа)» = «Ромашка» — одно правило с people
 
 
 def _org_for(conn, user, name: Any, kind: Any, note: str) -> tuple[Any, bool]:
     """Компания по имени: есть такая (имя или другое имя) — она, нет — новая. Ответ — (id, заведена ли сейчас)."""
     name = " ".join(str(name or "").split())[:120]
-    key = _org_key(name)
-    if not key:
+    if not _org_key(name):
         return None, False
-    for o in conn.execute("SELECT id, name, aliases FROM crm.orgs WHERE archived_at IS NULL ORDER BY created_at").fetchall():
-        if key in {_org_key(x) for x in [o["name"], *(o["aliases"] or [])]}:
-            return o["id"], False
+    o = people.org_named(conn, name)
+    if o:
+        return o["id"], False
     row = org_create(conn, user, {"data": {"name": name, "kind": kind if kind in ORG_AUTO_KINDS else "other", "note": note}})["row"]
     return row["id"], True
 
@@ -1109,12 +1242,50 @@ def deal_set(conn, user, op):
     return {"row": _shown_deal(conn, _deal_set(conn, user, op)["row"]["id"])}
 
 
+def op_interaction_add(conn, user, op):
+    """Запись хронологии. Запись встречи (source meeting) ведёт сервер по её карточке (meetings.touch, аудит №6,
+    флаг meeting_touch): старая служба встреч, которая шлёт её сама (crm_note), получает запись сервера — её карточка
+    уже в базе: клиент, сделка, люди и название оттуда, а не из голосования службы, — или отказ словами, если по
+    карточке записи нет (личная, без клиента, двойник, убрана владельцем). Карточки нет — как раньше, но вторую живую
+    запись той же встречи не заводим (одна на встречу — индекс dela_0021)."""
+    d = op.get("data") or {}
+    ref = d.get("source_ref") if isinstance(d, dict) and d.get("source") == "meeting" else None
+    if ref:
+        m = conn.execute(
+            "SELECT id FROM crm.meetings WHERE owner_id = %s AND crm.meeting_ref(coalesce(url, '/m/' || ref)) = "
+            "crm.meeting_ref(%s) ORDER BY chars_n DESC LIMIT 1", (user, ref)).fetchone()
+        if m:
+            meetings.touch(conn, m["id"])
+        have = conn.execute(
+            "SELECT * FROM crm.interactions WHERE source = 'meeting' AND deleted_at IS NULL AND owner_id = %s "
+            "AND crm.meeting_ref(source_ref) = crm.meeting_ref(%s)", (user, ref)).fetchone()
+        if have:
+            return {"row": have, "existing": True}
+        if m:
+            raise OpError("запись этой встречи в хронологии ведёт сервер по карточке встречи: по ней записи нет "
+                          "(личная, без клиента, двойник или убрана владельцем)")
+    return interaction_create(conn, user, op)
+
+
+def op_interaction_set(conn, user, op):
+    """Правка записи хронологии. Запись встречи поправил её хозяин — его слово сильнее карточки: встрече замок touch,
+    сервер эту запись больше не переписывает (meeting.set unlock touch — снова по карточке)."""
+    res = interaction_set(conn, user, op)
+    if res["row"]["source"] == "meeting":
+        meetings.lock_touch(conn, res["row"])
+    return res
+
+
 def op_interaction_delete(conn, user, op):
     row = conn.execute(
         "UPDATE crm.interactions SET deleted_at = now() WHERE id = %s AND deleted_at IS NULL RETURNING *", (op.get("id"),)
     ).fetchone()
     if not row:
         raise OpError("нет такой записи хронологии или её нельзя убрать")
+    if row["source"] == "meeting":
+        # Владелец убрал запись встречи — его слово сильнее автоматики: замок touch, сервер её больше не вернёт
+        # (meeting.set unlock touch — вернуть). Встречу видит только её владелец (RLS): чужая правка замка не ставит.
+        meetings.lock_touch(conn, row)
     return {"row": row}
 
 
@@ -1180,8 +1351,8 @@ HANDLERS: dict[str, Callable] = {
     "deal.set": deal_set,
     "access.set": op_access_set,
     "user.settings": op_user_settings,
-    "interaction.add": interaction_create,
-    "interaction.set": interaction_set,
+    "interaction.add": op_interaction_add,
+    "interaction.set": op_interaction_set,
     "interaction.delete": op_interaction_delete,
     "payment.create": payment_create,
     "payment.set": payment_set,

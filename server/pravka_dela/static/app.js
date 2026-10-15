@@ -3283,8 +3283,10 @@ function originMark(t, s) {
 function sugMark(s) {
   const [ic, col, word] = origin(s.source);
   const title = [s.batch_title || word, s.quote ? '«' + s.quote.slice(0, 200) + '»' : null].filter(Boolean).join('\n');
-  return /^https:\/\//.test(s.source_ref || '')
-    ? el('a', { class: 'src-mark', href: s.source_ref, target: '_blank', rel: 'noopener noreferrer', title, onclick: (e) => e.stopPropagation() }, tint(icon(ic, 16), col))
+  // Ссылка — встреча: у дела её адрес в source_ref, у вопроса о человеке со встречи (№25) — в payload.speaker.url.
+  const href = [s.source_ref, ((s.payload || {}).speaker || {}).url].find((u) => /^https:\/\//.test(u || ''));
+  return href
+    ? el('a', { class: 'src-mark', href, target: '_blank', rel: 'noopener noreferrer', title, onclick: (e) => e.stopPropagation() }, tint(icon(ic, 16), col))
     : el('span', { class: 'src-mark', title }, tint(icon(ic, 16), col));
 }
 /** Откуда дело — в карточке, сразу под названием: наговорка дословно или встреча и Telegram с цитатой (origin у
@@ -3388,7 +3390,9 @@ function heldLine(s, q) {
   // Часть про имя, о котором уже спрашивает вопрос («Кто это — «X»?» и «не знаю человека «X»»), — повтор: не пишем.
   const asked = (x) => [p.person_name, p.project_name].some((n) => n && x.includes(`«${n}»`) && nq.includes(norm(`«${n}»`)));
   const left = String(p.held || '').split('; ').map((x) => x.trim()).filter((x) => x && !nq.includes(norm(x))
-    && !(p.pick && p.person_name && x.includes(`«${p.person_name}»`)) && !asked(x));
+    && !(p.pick && p.person_name && x.includes(`«${p.person_name}»`)) && !asked(x)
+    // вопрос о человеке со встречи «Это A или B?» (№25) уже называет похожих — строка о них повторила бы его
+    && !(s.kind === 'person' && p.pick && x.startsWith('похожие уже есть')));
   return left.length ? 'Ждёт: ' + left.join('; ') : null;
 }
 const ASK_YES = { create: 'Поставить', close: 'Закрыть', update: 'Да, согласен', assign: 'Взять', person: 'Завести' };
@@ -3505,11 +3509,19 @@ function autoBlock(auto, batch) {
     np ? `завёл людей: ${np}` : null].filter(Boolean).join(', ');
   return el('div', { class: 'group auto-done' + (open ? '' : ' folded') },
     el('h2', {}, icon('check', 17), 'Сделано само', el('span', { class: 'n' }, auto.length),
-      el('span', { class: 'gsub' }, what + (np && np === auto.length ? ' из Telegram и телефона' : ' по встречам и Telegram')),
+      el('span', { class: 'gsub' }, what + ' ' + autoFrom(auto)),
       el('span', { class: 'act' },
         open && auto.length > 1 ? el('button', { class: 'chip-btn', title: 'Видел, согласен — убрать отсюда', onclick: () => seen(auto.map((s) => s.id)) }, 'Понятно, все') : null, ' ',
         batch ? null : el('button', { class: 'chip-btn', onclick: () => { S.autoOpen = !S.autoOpen; render(); } }, open ? 'Свернуть' : 'Показать'))),
     open ? auto.map((s) => autoItem(s, seen)) : null);
+}
+/** Откуда сделанное само — словами под заголовком: «по встречам и Telegram», «из Telegram и телефонной книжки». С
+ *  15.10.2026 людей заводят и встречи (аудит №25): прежнее «люди — только из Telegram и телефона» стало неправдой. */
+function autoFrom(auto) {
+  const has = (src) => auto.some((s) => s.source === src || (src === 'telegram' && s.source === 'userbot'));
+  const words = [has('meeting') ? 'встречам' : null, has('telegram') ? 'Telegram' : null, has('contacts') ? 'телефонной книжке' : null]
+    .filter(Boolean);
+  return words.length ? 'по ' + orWords(words).replace(' или ', ' и ') : '';
 }
 /** Человек, заведённый сам (dela_0019): «Понятно» — согласен; «Вернуть» — карточку в архив (и компанию, если её завели
  *  ради него и больше в ней никого нет). Строки не удаляются (правило 8) — архив и есть «как было». */
@@ -5563,13 +5575,20 @@ function renderMeeting(id) {
         : 'Назвал Claude' + (locks.length ? ` · ты поправил сам: ${locks.join(', ')} — это разбор больше не трогает` : '')),
     el('div', { class: 'mt-actions' },
       el('button', { class: 'chip-btn', title: 'Claude прочтёт встречу ещё раз; что ты поправил сам, останется', onclick: () => meetOp({ op: 'meeting.set', id, rename: true }, 'Отдал на разбор') }, 'Разобрать заново'),
-      locks.length ? el('button', { class: 'chip-btn', title: 'Снять твои правки и отдать всё разбору', onclick: () => meetOp({ op: 'meeting.set', id, unlock: v.locked, rename: true }, 'Всё — разбору') }, 'Вернуть всё разбору') : null,
+      locks.length ? el('button', { class: 'chip-btn', title: 'Снять твои правки и отдать всё разбору', onclick: () => meetOp({ op: 'meeting.set', id, unlock: (v.locked || []).filter((k) => k !== 'touch'), rename: true }, 'Всё — разбору') }, 'Вернуть всё разбору') : null,
       el('button', { class: 'chip-btn', onclick: () => set({ archived: !v.archived }, v.archived ? 'Вернул в список' : 'Убрал из списка') }, v.archived ? 'Вернуть в список' : 'Убрать из списка'),
       v.url ? el('a', { class: 'chip-btn', href: v.url, target: '_blank', rel: 'noopener' }, 'У службы встреч') : null));
   const agree = (v.agreements || []).map((a) => (typeof a === 'string' ? a : a.text || a.title || JSON.stringify(a)));
   const summary = sec('sum', 'Сводка', null,
     v.summary ? el('div', { class: 'rows' }, el('div', { class: 'msum' }, v.summary)) : el('div', { class: 'empty' }, 'Сводки служба не прислала.'),
     agree.length ? [el('div', { class: 'msub' }, 'Договорённости'), el('div', { class: 'rows' }, el('ul', { class: 'magree' }, agree.map((a) => el('li', {}, a))))] : null,
+    // Запись встречи в хронологии ведёт сервер по карточке (аудит №6, 15.10.2026); убрал или поправил её сам владелец —
+    // замок touch: сервер её больше не трогает. «Вернуть» — снова по карточке (meeting.set unlock touch).
+    (v.locked || []).includes('touch') ? el('div', { class: 'msub' },
+      v.timeline.length ? 'Запись в хронологии клиента ты поправил сам — по карточке её не меняю · ' : 'Убрано из хронологии клиента — ',
+      el('button', { class: 'link-btn', title: 'Запись встречи в хронологии клиента — снова по карточке встречи',
+        onclick: () => meetOp({ op: 'meeting.set', id, unlock: ['touch'] }, 'Запись в хронологии — снова по карточке') },
+        v.timeline.length ? 'вернуть по карточке' : 'вернуть')) : null,
     v.timeline.length ? el('div', { class: 'msub' }, 'В хронологии клиента') : null,
     v.timeline.length ? el('div', { class: 'rows' }, v.timeline.map((i) => el('div', { class: 'tl-row' },
       el('span', { class: 'tl-when' }, D.ddmm(i.at.slice(0, 10))), el('div', {}, i.summary, i.next_step ? el('div', { class: 'tl-next' }, i.next_step) : null),

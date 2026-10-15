@@ -15,7 +15,8 @@
   export-todoist  выгрузка Todoist по API (с комментариями) для переноса
   svod     Свод: list, get <ключ>, set <ключ> --file (промпты, словарь, правила — одна правда)
   krug-seed  Круг жизни: направления и принципы из файла владельца в Свод, направления проектам
-  meetings  встречи: что с разбором; rename [--all | --ref N] — разобрать заново (замки владельца остаются)
+  meetings  встречи: что с разбором; rename [--all | --ref N] — разобрать заново (замки владельца остаются);
+            touch [--since 2026-09-01] [--dry] — записи встреч в хронологии и пачки «Нового» по карточкам (dela_0021)
   zachem   «Зачем» по-человечески: propose [--limit N] [--now] --out файл; apply --file файл; rollback
 """
 
@@ -424,6 +425,21 @@ def cmd_meetings(args) -> int:
     from . import meetings_auto
 
     cfg = config_mod.load(args.env)
+    if args.action == "touch":
+        # Записи встреч в хронологии и пачки «Нового» — по карточкам (аудит №6, №43; dela_0021). Перед запуском без --dry
+        # — своя копия базы (правило 9): pravka-before-meetings-touch.dump.
+        from . import meetings
+
+        r = meetings.touch_all(cfg.db_url, since=args.since, dry=args.dry)
+        a = r["actions"]
+        same = {k: v for k, v in a.items() if k not in ("заведена", "обновлена", "убрана", "убрана у двойника")}
+        print(("вхолостую (ничего не записано): " if r["dry"] else "") +
+              f"встреч с {args.since}: {r['meetings']}; записи в хронологии — создано {a.get('заведена', 0)}, "
+              f"обновлено {a.get('обновлена', 0)}, убрано {a.get('убрана', 0) + a.get('убрана у двойника', 0)}, "
+              f"без изменений {sum(same.values())}"
+              + (f" ({', '.join(f'{k} {v}' for k, v in sorted(same.items()))})" if same else "")
+              + f"; пачек «Нового» с новым названием: {r['retitled']}")
+        return 0
     if args.action == "rename":
         n = meetings_auto.rename(cfg.db_url, everything=args.all, refs=args.ref)
         print(f"на разбор заново: {n} (замки владельца остаются; служба разберёт в ближайшие минуты)")
@@ -582,8 +598,10 @@ def main(argv: list[str] | None = None) -> int:
     sv.add_argument("--reason")
     sv.set_defaults(fn=cmd_svod)
 
-    mt = sub.add_parser("meetings", help="встречи: что с разбором; rename — разобрать заново")
-    mt.add_argument("action", nargs="?", choices=["status", "rename"], default="status")
+    mt = sub.add_parser("meetings", help="встречи: что с разбором; rename — разобрать заново; touch — записи в хронологии")
+    mt.add_argument("action", nargs="?", choices=["status", "rename", "touch"], default="status")
+    mt.add_argument("--since", default="2026-09-01", help="touch: встречи с этого дня (архив раньше 01.09 не трогается)")
+    mt.add_argument("--dry", action="store_true", help="touch: только посчитать, ничего не записывать")
     mt.add_argument("--all", action="store_true", help="rename: все встречи (замки владельца остаются)")
     mt.add_argument("--ref", action="append", help="rename: номер встречи у службы (можно несколько)")
     mt.set_defaults(fn=cmd_meetings)

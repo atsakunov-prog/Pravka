@@ -395,6 +395,137 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
     return {"best": cands[0] if cands else None, "sure": sure, "candidates": cands, "hint": hint or None}
 
 
+# ── Новый человек со встречи (аудит 15.10.2026, №25/№60) ──────────────────
+
+# Владелец: «Назвал человека в расшифровке… — он должен оказаться в CRM… Нет — карточка заводится (неясно — один вопрос в
+# „Подскажи“)». Решает сервер, а не служба встреч: узнавание людей одно (закон 3), и справочника имён у службы нет.
+ASK_MIN = 0.6  # похожий не слабее — вопрос «Это X?»; однофамилец с другим именем (0,5) — новый человек, не вопрос
+# Подписи, которые не имя человека: метки разметки, устройства, «участник 3» — с начала слова (тот же список, что у
+# службы встреч, worker/people.py GENERIC: она шум и не шлёт, здесь — страховка).
+NOISE = ("speaker", "спикер", "участник", "гость", "guest", "unknown", "неизвестн", "user", "zoom", "iphone", "ipad",
+         "android")
+NEW_ASK_MAX = 2  # «Это X» кнопками: два кандидата, «Новый человек» и «Не для CRM» — четыре кнопки (OPTIONS_MAX)
+# «Хоть одно слово — имя» для нового человека: FIRST_NAMES собран из уменьшительных (около ста имён) — «Кирилл Иванов»,
+# «Марина Орлова» и «Глеб Соколов» по нему не люди, и каждое такое имя со встречи стало бы вопросом. Здесь — частые
+# полные имена сверх него. Только для этой проверки: в who FIRST_NAMES отделяет имя от фамилии, и расширять его — менять
+# баллы узнавания (проверка 15.10: «Кирилл Иванов» против «Кирилл Петров» — 0,5, а с «кирилл» в FIRST_NAMES стало бы 0).
+MORE_FIRST = frozenset("""
+кирилл никита егор денис глеб марк матвей руслан артур ярослав филипп леонид аркадий всеволод даниил данила богдан
+тихон савва захар мирон лука елисей платон степан макар ростислав родион демид давид эмиль ренат рустам марат виталий
+герман игнат клим кузьма назар оскар прохор роберт тарас трофим феликс эрик ян альберт ефим иннокентий остап арсен
+алан армен тигран натан моисей
+марина оксана вера зоя алла инна лариса людмила нина регина диана алина кристина карина элина яна жанна маргарита
+ульяна василиса милана арина варвара злата эвелина ангелина алиса вероника елизавета ева майя нелли римма раиса
+таисия эльвира эмилия антонина зинаида клавдия лидия олеся снежана тамара фаина лилия белла дина лиана милена анжелика
+виолетта камила сара кира марьяна катерина дарина
+""".split())
+
+
+def looks_first(w: str) -> bool:
+    """Слово — имя человека (для нового человека со встречи): справочник who или частые полные имена (MORE_FIRST)."""
+    w = norm(w)
+    return is_first(w) or w in MORE_FIRST or stem(w) in MORE_FIRST
+
+
+def bare_name(name: Any) -> tuple[str, str]:
+    """«Евгений Гуркин (экспо)» → («Евгений Гуркин», «экспо»): голое имя и подсказка в скобках."""
+    s = " ".join(str(name or "").split())
+    m = re.search(r"\s*\(([^)]*)\)\s*$", s)
+    return (s[: m.start()].strip(), m.group(1).strip()) if m else (s, "")
+
+
+def noise(name: Any) -> bool:
+    """Не имя человека: нет букв, есть цифры, подпись устройства или разметки, одна буква. Почта — не шум."""
+    s = norm(name)
+    if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", s):
+        return False
+    if not re.search(r"[a-zа-я]", s) or re.search(r"\d", s):
+        return True
+    if any(re.search(r"(?<![a-zа-я])" + g, s) for g in NOISE):
+        return True
+    ws = words(s)
+    return len(ws) == 1 and len(ws[0]) < 2
+
+
+def org_key(name: Any) -> str:
+    """«Альфа-Банк» = «Альфа Банк», «Ромашка (группа)» = «Ромашка»: без знаков, пробелов и пояснения в скобках."""
+    return "".join(words(re.sub(r"\([^)]*\)", " ", str(name or ""))))
+
+
+def org_named(conn, name: Any) -> dict | None:
+    """Живая компания с таким именем или другим именем (по org_key) — или None. Одно правило для «Людей сами»
+    (store._org_for) и нового человека со встречи (подпись в скобках)."""
+    key = org_key(name)
+    if not key:
+        return None
+    for o in conn.execute("SELECT id, name, aliases FROM crm.orgs WHERE archived_at IS NULL ORDER BY created_at").fetchall():
+        if key in {org_key(x) for x in [o["name"], *(o["aliases"] or [])]}:
+            return o
+    return None
+
+
+def _named_like(n: str, p: dict) -> bool:
+    return any(norm(bare_name(x)[0]) == n for x in [p.get("name"), p.get("short"), *(p.get("aliases") or [])] if x)
+
+
+def new_person(conn, name: str) -> dict:
+    """Имя спикера встречи, которого служба не узнала: завести самому, спросить или «уже убран» (контракт §3.3).
+
+    verdict:
+    - «known» — «кто это» уверенно знает его (служба не успела узнать или карточку только что завели): это он, новой
+      карточки нет;
+    - «removed» — живой карточки с таким именем нет, а в архиве (не слитая) есть: владелец её убрал — больше не заводим;
+    - «ask» — вопрос: одно слово, больше четырёх слов, шум (цифры, «iPhone», «SPEAKER_03»), ни одного имени, латиница,
+      которую translit не делает русским именем, или похожие карточки от ASK_MIN (до NEW_ASK_MAX — кнопками «Это X»);
+    - «auto» — завести самому: 2–4 слова, хоть одно — имя (looks_first), похожих нет (однофамилец с другим именем — 0,5).
+    Подпись в скобках — компания, только если такая уже есть (org_named): org_id, org_name; иначе — заметкой note
+    («на встрече подписан «…»»), новую компанию из подписи спикера не заводим. «(2)» и «(iPhone)» от Zoom — не подпись.
+    Ответ — {verdict, name (голое), hint, org_id, org_name, note, why [строки held], candidates, known, removed}."""
+    bare, hint = bare_name(name)
+    if hint and noise(hint):
+        hint = ""  # «Иван Петров (2)» — второй вход Zoom того же человека, а не его компания
+    n = norm(bare)
+    ws = words(bare)
+    out: dict[str, Any] = {"verdict": "ask", "name": bare, "hint": hint, "org_id": None, "org_name": None, "note": None,
+                           "why": [], "candidates": [], "known": None, "removed": None}
+    w = who(conn, q=f"{bare} ({hint})" if hint else bare, limit=50)
+    if w["sure"] and w["best"]:
+        out.update(verdict="known", known=w["best"])
+        return out
+    near = [c for c in w["candidates"] if c["score"] >= ASK_MIN]
+    if n and not [c for c in near if c["score"] >= 0.95]:
+        gone = conn.execute(
+            "SELECT id, name, short, aliases FROM crm.people WHERE archived_at IS NOT NULL AND merged_into IS NULL "
+            "ORDER BY archived_at DESC, id").fetchall()
+        hit = next((p for p in gone if _named_like(n, p)), None)
+        if hit:
+            out.update(verdict="removed", removed={"id": hit["id"], "name": hit["name"]})
+            return out
+    why = out["why"]
+    if noise(bare):
+        why.append("не похоже на имя человека")
+    elif len(ws) == 1:
+        why.append("имя из одного слова")
+    elif len(ws) > 4:
+        why.append("больше четырёх слов")
+    else:
+        latin = bool(re.search(r"[a-z]", n))
+        if not any(looks_first(x) or (latin and looks_first(translit(x))) for x in ws):
+            why.append("латиница — как назвать, реши сам" if latin else "не похоже на имя человека")
+    if near:
+        out["candidates"] = near[:NEW_ASK_MAX]
+        why.append("похожие уже есть: " + ", ".join(c["name"] for c in near[:NEW_ASK_MAX + 1]))
+    if hint:
+        org = org_named(conn, hint)
+        if org:
+            out.update(org_id=org["id"], org_name=org["name"])
+        else:
+            out["note"] = f"на встрече подписан «{bare} ({hint})»"
+    if not why:
+        out["verdict"] = "auto"
+    return out
+
+
 # ── Операции ────────────────────────────────────────────────────────────
 
 ADD_ARRAYS = ("aliases", "phones", "emails")

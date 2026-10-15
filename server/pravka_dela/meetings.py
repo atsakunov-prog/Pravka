@@ -48,7 +48,9 @@ SPHERE_WORDS = {"work": "work", "рабочая": "work", "работа": "work"
 # Поле карточки — какой замок оно ставит, когда его правит владелец.
 LOCK_OF = {"title": "title", "topic": "topic", "label": "project", "project_id": "project", "deal_id": "project",
            "sphere": "sphere", "person_ids": "people", "guests": "people"}
-LOCKS = {"title", "topic", "project", "sphere", "people"}
+# touch (dela_0021) — не поле, а «запись встречи в хронологии — в руках владельца»: её убрал (interaction.delete) или
+# поправил (interaction.set) он сам, и сервер её больше не трогает; снимает meeting.set unlock touch.
+LOCKS = {"title", "topic", "project", "sphere", "people", "touch"}
 # Поля upsert, которые служба шлёт по имени; всё прочее — в сырьё как есть.
 UPSERT_KNOWN = {
     "ref", "source", "url", "started_at", "ended_at", "duration_min", "duration_sec", "kind", "title", "summary",
@@ -257,6 +259,86 @@ def _kind(v: Any) -> str:
     return k if k in KINDS else KIND_WORDS.get(k, "other")
 
 
+# ── Карточка поменялась — хронология и «Новое» следом (аудит 15.10.2026, №6, №43) ─────
+
+
+def touch(conn, mid) -> str:
+    """Запись встречи в хронологии — по её карточке (crm.meeting_touch, dela_0021): заводит, правит или убирает."""
+    return conn.execute("SELECT crm.meeting_touch(%s) AS a", (mid,)).fetchone()["a"]
+
+
+def retitle_batches(conn, mid) -> int:
+    """Пачка «Нового» этой встречи — названием Дел (crm.meeting_batches_retitle)."""
+    return conn.execute("SELECT crm.meeting_batches_retitle(%s) AS n", (mid,)).fetchone()["n"]
+
+
+def after_edit(conn, mid, titled: bool = True) -> None:
+    """После правки карточки: пачки «Нового» (если могло смениться название) и запись в хронологии."""
+    if titled:
+        retitle_batches(conn, mid)
+    touch(conn, mid)
+
+
+def lock_touch(conn, rec: dict) -> int:
+    """Владелец убрал или поправил запись встречи в хронологии — встрече замок touch: сервер её больше не трогает.
+    Встречу видит только её владелец (RLS): правка записи кем-то из команды замка не ставит."""
+    return conn.execute(
+        "UPDATE crm.meetings SET locked = array_append(locked, 'touch') "
+        "WHERE owner_id = %s AND crm.meeting_ref(coalesce(url, '/m/' || ref)) = crm.meeting_ref(%s) "
+        "AND NOT ('touch' = ANY (locked))", (rec["owner_id"], rec["source_ref"])).rowcount
+
+
+class _DryRun(Exception):
+    pass
+
+
+def touch_all(url: str, since: str = "2026-09-01", dry: bool = False) -> dict:
+    """Команда «meetings touch»: записи в хронологии и пачки «Нового» всех встреч с since — по их карточкам (разово после
+    установки dela_0021: догонит потерянные сентябрьские, возьмёт сделку и людей карточки, личную уберёт). dry — посчитать
+    и ничего не записать (всё в точке сохранения, которая откатывается)."""
+    from . import db
+
+    counts: dict[str, int] = {}
+    retitled = 0
+    with db.session(url, "system", "svc:meetings-touch", "system") as conn:
+        rows = conn.execute("SELECT id FROM crm.meetings WHERE (started_at AT TIME ZONE 'Europe/Moscow')::date >= %s::date "
+                            "ORDER BY started_at", (since,)).fetchall()
+        try:
+            with conn.transaction():
+                for r in rows:
+                    retitled += retitle_batches(conn, r["id"])
+                    a = touch(conn, r["id"])
+                    counts[a] = counts.get(a, 0) + 1
+                if dry:
+                    raise _DryRun
+        except _DryRun:
+            pass
+    return {"meetings": len(rows), "actions": counts, "retitled": retitled, "dry": dry}
+
+
+def _voice_into(conn, row: dict) -> dict:
+    """Служба узнала спикеров (голос, ответ владельца, имя — raw.speakers[].person_id, аудит №60): они — в участники
+    карточки сразу, без переразбора (платного разбора нет: _md5 от них не зависит), гость с тем же именем — из гостей.
+    До 15.10 участники пересчитывались только разбором, а новая привязка без нового текста его не будит — и человек,
+    про которого владелец ответил «это Иван Сидоров», в карточку встречи не попадал. Встреча ещё не разобрана — тоже: разбор
+    потом соберёт людей заново, начиная с них же (apply_names). Замок people — слово владельца: не трогаем."""
+    if "people" in (row["locked"] or []):
+        return row
+    me = owner_person(conn, row["owner_id"])
+    ids = list(row["person_ids"] or [])
+    guests = list(row["guests"] or [])
+    for v in voice_people(conn, row["id"]):
+        if v["id"] != me and v["id"] not in ids:
+            ids.append(v["id"])
+        if v["name"]:
+            keys = {norm(v["name"]), norm(people.bare_name(v["name"])[0])}
+            guests = [g for g in guests if norm(g) not in keys]
+    if ids == list(row["person_ids"] or []) and guests == list(row["guests"] or []):
+        return row
+    return conn.execute("UPDATE crm.meetings SET person_ids = %s, guests = %s WHERE id = %s RETURNING *",
+                        (ids, guests, row["id"])).fetchone()
+
+
 def _sphere(v: Any) -> str | None:
     return SPHERE_WORDS.get(str(v or "").strip().lower())
 
@@ -361,6 +443,8 @@ def op_upsert(conn, user, op, err):
         "ON CONFLICT (meeting_id) DO UPDATE SET transcript = coalesce(EXCLUDED.transcript, crm.meeting_raw.transcript), "
         "raw = EXCLUDED.raw, received_at = now()",
         (row["id"], transcript, Jsonb(raw), user))
+    row = _voice_into(conn, row)
+    after_edit(conn, row["id"], titled=False)  # итог и длительность — в запись хронологии; название тут не меняется
     return {"meeting": {"id": row["id"], "ref": row["ref"], "rev": row["rev"], "lines": row["lines_n"],
                         "changed": changed, "named": row["named_at"] is not None, "title": row["title"]}}
 
@@ -459,7 +543,9 @@ def apply_names(conn, row: dict, ans: dict, by: str) -> dict:
     fresh = row["started_at"] >= dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=QUESTION_DAYS)
     data["question"] = None if ans.get("sure", True) or not fresh else ((ans.get("question") or "").strip() or None)
     sets = ", ".join(f"{k} = %s" for k in data)
-    return conn.execute(f"UPDATE crm.meetings SET {sets} WHERE id = %s RETURNING *", [*data.values(), row["id"]]).fetchone()
+    out = conn.execute(f"UPDATE crm.meetings SET {sets} WHERE id = %s RETURNING *", [*data.values(), row["id"]]).fetchone()
+    after_edit(conn, out["id"])  # название Дел — пачкам «Нового», клиент, сделка и люди — записи в хронологии
+    return out
 
 
 # ── Правка владельцем ───────────────────────────────────────────────
@@ -579,6 +665,7 @@ def op_set(conn, user, op, err):
     sets = ", ".join(f"{k} = %s" for k in data)
     row = conn.execute(f"UPDATE crm.meetings SET {sets} WHERE id = %s RETURNING *", [*data.values(), row["id"]]).fetchone()
     also = _everywhere(conn, before, row) if op.get("everywhere") else 0
+    after_edit(conn, row["id"])
     return {"meeting": _card(conn, row, with_lines=False), "also": also}
 
 
@@ -608,6 +695,7 @@ def _everywhere(conn, before: dict, after: dict) -> int:
         title = retitle(r["title"], old, after["label"]) if "title" in locked else title_of(after["label"], r["topic"])
         conn.execute("UPDATE crm.meetings SET project_id = %s, label = %s, title = %s, locked = %s, question = NULL "
                      "WHERE id = %s", (after["project_id"], after["label"], title, sorted(locked), r["id"]))
+        after_edit(conn, r["id"])
     if after["project_id"]:
         conn.execute(
             "UPDATE crm.projects SET aliases = array_append(aliases, %s) WHERE id = %s AND crm.project_named(%s) IS NULL",

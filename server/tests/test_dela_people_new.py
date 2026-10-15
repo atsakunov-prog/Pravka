@@ -119,3 +119,174 @@ def test_rename_and_words_for_claude(dela):
     assert p["name"] == "Олег Новиков (Бета)" and "Олег Новиков" in p["aliases"]
     # Очков за решённое само нет; за ответ владельца — как за любой разбор «Нового».
     assert "people_new" in store.FEATURES
+
+
+# ── Назвал человека во встрече — он в CRM (аудит 15.10.2026, №25/№60) ─────────
+# Владелец: «Назвал человека в расшифровке… — он должен оказаться в CRM… Есть карточка — спикер привязан к ней. Нет —
+# карточка заводится (неясно — один вопрос в „Подскажи“)». Решает сервер (people.new_person). Люди — выдуманные.
+
+def meet_sug(name, key=None, meeting_ref="101", seconds=300, name_source="manual", auto=True, source=None):
+    """Предложение службы встреч по контракту §2.3 (как worker/people.py _person_op)."""
+    person = {"name": name, **({"source": source} if source else {})}
+    return {"op": "suggestion.create", "suggestion": {
+        "kind": "person", "source": "meeting", "source_ref": key or f"meeting-person:{name.lower()}",
+        "batch_ref": f"meeting:{meeting_ref}", "batch_title": "Альфа: фонды · 14.10",
+        "quote": f"Встреча «Альфа: фонды» 14.10: «{name}» — 5 мин речи (имя дал ты)",
+        "payload": {"title": name, "where": "встреча «Альфа: фонды» 14.10 · 5 мин речи · имя дал ты",
+                    "person": person, "speaker": {"meeting_ref": meeting_ref, "label": "SPEAKER_01", "seconds": seconds,
+                                                  "name_source": name_source,
+                                                  "url": f"https://meetings.example.org/m/{meeting_ref}"},
+                    **({"auto": True} if auto else {})}}}
+
+
+def people_named(url, name):
+    with store.db.session(url, "sasha", "t") as c:
+        return c.execute("SELECT * FROM crm.people WHERE name = %s ORDER BY created_at", (name,)).fetchall()
+
+
+def test_meeting_person_sure_is_created_itself(dela):
+    r = ops(dela, "sasha", meet_sug("Пётр Новиков"))[0]
+    assert r["ok"], r
+    s = r["suggestion"]
+    assert (s["status"], s["reason"]) == ("accepted", store.AUTO_PERSON_REASON) and s["result"]["created"], s
+    p = card(dela, s["result"]["person_id"])
+    assert (p["name"], p["source"], p["org_id"]) == ("Пётр Новиков", "встреча: Альфа: фонды", None)
+    # Служба сама сказала, откуда карточка, — её слово; подпись в скобках — компания, только если такая уже есть.
+    with store.db.session(dela, "sasha", "t") as c:
+        c.execute("INSERT INTO crm.orgs (name, kind, owner_id) VALUES ('Ромашка Капитал', 'fund', 'sasha')")
+    r = ops(dela, "sasha", meet_sug("Павел Орлов (Ромашка-Капитал)", source="встреча 14.10.2026: Альфа: фонды"))[0]
+    p = card(dela, r["suggestion"]["result"]["person_id"])
+    assert (p["name"], p["source"], p["org_name"], p["note"]) == (
+        "Павел Орлов", "встреча 14.10.2026: Альфа: фонды", "Ромашка Капитал", None)
+    # Подпись — не компания из справочника: новую компанию не заводим, подпись — заметкой.
+    r = ops(dela, "sasha", meet_sug("Кирилл Белов (экспо)"))[0]
+    p = card(dela, r["suggestion"]["result"]["person_id"])
+    assert (p["name"], p["org_id"], p["note"]) == ("Кирилл Белов", None, "на встрече подписан «Кирилл Белов (экспо)»")
+    # «(2)» от Zoom — второй вход того же человека, а не подпись; латиница, которая читается русским именем, — сама.
+    r = ops(dela, "sasha", meet_sug("Ivan Orlov (2)", name_source="zoom"))[0]
+    p = card(dela, r["suggestion"]["result"]["person_id"])
+    assert (r["suggestion"]["status"], p["name"], p["note"]) == ("accepted", "Ivan Orlov", None)
+    assert "people_link" in store.FEATURES and "meeting_touch" in store.FEATURES
+
+
+def test_meeting_person_unclear_is_one_question(dela):
+    r = ops(dela, "sasha", meet_sug("Мария"))[0]
+    s = r["suggestion"]
+    p = s["payload"]
+    assert s["status"] == "pending" and "auto" not in p, s
+    assert p["ask"] == "Кто это на встрече «Альфа: фонды» 14.10 — «Мария»?"
+    assert p["options"] == [{"label": "Завести «Мария»", "new": True},
+                            {"label": "Не для CRM", "reject": True, "reason": "не для CRM"}]
+    assert p["held"] == "имя из одного слова" and not p.get("pick")
+    # Та же «Мария» на другой встрече — тот же ключ (по имени): не второй вопрос.
+    again = ops(dela, "sasha", meet_sug("Мария", meeting_ref="103"))[0]["suggestion"]
+    assert again["id"] == s["id"]
+    # «Завести «Мария»» — карточка, откуда она — встреча.
+    r = ops(dela, "sasha", {"op": "suggestion.decide", "id": s["id"], "option": 0})[0]
+    assert r["ok"] and r["person"]["created"], r
+    assert card(dela, r["person"]["person_id"])["source"] == "встреча: Альфа: фонды"
+    # Что ещё неясно — тоже вопрос, со своей причиной; карточек не прибавилось.
+    why = {name: ops(dela, "sasha", meet_sug(name))[0]["suggestion"]["payload"]["held"] for name in (
+        "John Smith", "Отдел продаж", "Иван Петрович Сидоров Младший Пятый", "SPEAKER 03")}
+    assert why == {"John Smith": "латиница — как назвать, реши сам", "Отдел продаж": "не похоже на имя человека",
+                   "Иван Петрович Сидоров Младший Пятый": "больше четырёх слов",
+                   "SPEAKER 03": "не похоже на имя человека"}, why
+    assert not people_named(dela, "John Smith") and not people_named(dela, "Отдел продаж")
+    # Служба не просила завести само (нет auto) — тоже вопрос, а не молчаливое ожидание.
+    s = ops(dela, "sasha", meet_sug("Глеб Тихонов", auto=False))[0]["suggestion"]
+    assert s["status"] == "pending" and s["payload"]["ask"].endswith("— «Глеб Тихонов»?")
+
+
+def test_meeting_person_ambiguous_asks_with_candidates(dela):
+    with store.db.session(dela, "sasha", "t") as c:
+        c.execute("INSERT INTO crm.orgs (name, kind, owner_id) VALUES ('Альфа', 'other', 'sasha'), ('Бета', 'other', 'sasha')")
+        petrov, sidorov = (c.execute(
+            "INSERT INTO crm.people (name, short, org_id, owner_id) VALUES (%s, 'Иван', (SELECT id FROM crm.orgs WHERE name = %s), "
+            "'sasha') RETURNING id", (n, o)).fetchone()["id"] for n, o in (("Иван Петров", "Альфа"), ("Иван Сидоров", "Бета")))
+    s = ops(dela, "sasha", meet_sug("Иван", key="meeting-speaker:101:SPEAKER_04"))[0]["suggestion"]
+    p = s["payload"]
+    assert s["status"] == "pending" and p["pick"] is True, s
+    assert p["ask"] == "«Иван» на встрече «Альфа: фонды» 14.10 — это Иван Петров (Альфа) или Иван Сидоров (Бета)?"
+    assert [o["label"] for o in p["options"]] == ["Это Иван Петров", "Это Иван Сидоров", "Новый человек", "Не для CRM"]
+    assert [o.get("person_id") for o in p["options"][:2]] == [str(petrov), str(sidorov)]
+    # «Да» без выбора — отказ словами: третьего «Ивана» не заводим и не привязываем наугад.
+    r = ops(dela, "sasha", {"op": "suggestion.decide", "id": s["id"], "decision": "accept"})[0]
+    assert not r["ok"] and "Иван Петров (Альфа) или Иван Сидоров (Бета)" in r["error"] and "кнопкой" in r["error"], r
+    # «Это Иван Сидоров» — он; «Иван» — его своё короткое имя, другим именем не дописывается.
+    r = ops(dela, "sasha", {"op": "suggestion.decide", "id": s["id"], "option": 1})[0]
+    assert r["ok"] and str(r["person"]["person_id"]) == str(sidorov) and not r["person"]["created"], r
+    assert r["suggestion"]["result"]["person_id"] == str(sidorov)
+    assert "Иван" not in (card(dela, sidorov)["aliases"] or [])
+    assert len(people_named(dela, "Иван")) == 0
+
+
+def test_meeting_person_removed_known_and_repeat(dela):
+    with store.db.session(dela, "sasha", "t") as c:
+        c.execute("INSERT INTO crm.people (name, owner_id, archived_at) VALUES ('Глеб Архивов', 'sasha', now())")
+        olga = c.execute("INSERT INTO crm.people (name, owner_id) VALUES ('Ольга Смирнова', 'sasha') RETURNING id").fetchone()["id"]
+    # Владелец убрал карточку в архив — со встреч она не возвращается: сразу «нет» с причиной.
+    s = ops(dela, "sasha", meet_sug("Глеб Архивов"))[0]["suggestion"]
+    assert (s["status"], s["reason"]) == ("rejected", "уже убран в архив: Глеб Архивов"), s
+    assert s["decided_by"] is None  # решил сервер, не владелец: очков за разбор «Нового» нет
+    assert [p["archived_at"] is not None for p in people_named(dela, "Глеб Архивов")] == [True]
+    # «Кто это» уверенно знает — карточки не заводим, ответ — она.
+    r = ops(dela, "sasha", meet_sug("Ольга Смирнова"))[0]
+    assert (r["suggestion"]["status"], str(r["person"]["person_id"])) == ("accepted", str(olga)), r
+    assert len(people_named(dela, "Ольга Смирнова")) == 1
+    # «Не для CRM» — навсегда: повтор той же находки возвращает тот же отказ.
+    q = ops(dela, "sasha", meet_sug("Мария"))[0]["suggestion"]
+    ops(dela, "sasha", {"op": "suggestion.decide", "id": q["id"], "option": 1})
+    again = ops(dela, "sasha", meet_sug("Мария", meeting_ref="103"))[0]["suggestion"]
+    assert (again["id"], again["status"], again["reason"]) == (q["id"], "rejected", "не для CRM")
+    # Погасший без ответа — не «нет навсегда» (этап 3, ответ по умолчанию «а»): та же встреча — прежний, новая
+    # встреча — новый вопрос.
+    q = ops(dela, "sasha", meet_sug("Тамара"))[0]["suggestion"]
+    with store.db.session(dela, "system", "t") as c:
+        c.execute("UPDATE tasks.suggestions SET status = 'expired', decided_at = now() WHERE id = %s", (q["id"],))
+    assert ops(dela, "sasha", meet_sug("Тамара"))[0]["suggestion"]["id"] == q["id"]
+    fresh = ops(dela, "sasha", meet_sug("Тамара", meeting_ref="104"))[0]["suggestion"]
+    assert fresh["id"] != q["id"] and fresh["status"] == "pending"
+
+
+def test_option_person_dict_binds_telegram(dela):
+    """«Это он в Telegram?» («Люди сами», контракт §3.4): вариант ответа несёт person — что дописать в карточку."""
+    with store.db.session(dela, "sasha", "t") as c:
+        pid = c.execute("INSERT INTO crm.people (name, owner_id) VALUES ('Пётр Новиков', 'sasha') RETURNING id").fetchone()["id"]
+        mpid = c.execute("INSERT INTO crm.people (name, owner_id) VALUES ('Мария', 'sasha') RETURNING id").fetchone()["id"]
+    one = {"telegram_id": 900101, "telegram_username": "pnovikov", "aliases": ["Pyotr Novikov"]}
+    q = ops(dela, "sasha", person_sug(f"tgfind:{pid}", {
+        "title": "Пётр Новиков", "where": "Telegram: «Pyotr Novikov» (@pnovikov)", "person_id": str(pid), "person": one,
+        "ask": "Пётр Новиков в Telegram — это «Pyotr Novikov» (@pnovikov)?",
+        "options": [{"label": "Да", "person_id": str(pid), "person": one},
+                    {"label": "Нет", "reject": True, "reason": "не он в Telegram"}]}))[0]["suggestion"]
+    assert q["status"] == "pending" and q["payload"]["options"][0]["person"] == one
+    r = ops(dela, "sasha", {"op": "suggestion.decide", "id": q["id"], "option": 0})[0]
+    assert r["ok"] and not r["person"]["created"], r
+    p = card(dela, pid)
+    assert (p["telegram_id"], p["telegram_username"], p["aliases"]) == (900101, "pnovikov", ["Pyotr Novikov"])
+    # Два контакта — pick: «Да» без выбора не проходит; выбранный вариант заменяет payload.person целиком.
+    a, b = {"telegram_id": 900102, "telegram_username": "mkot"}, {"telegram_id": 900103}
+    q = ops(dela, "sasha", person_sug(f"tgfind:{mpid}", {
+        "title": "Мария", "person_id": str(mpid), "pick": True, "ask": "Мария в Telegram — это «Мария Котова» или «Мария Белова»?",
+        "options": [{"label": "Это «Мария Котова» (@mkot)", "person_id": str(mpid), "person": a},
+                    {"label": "Это «Мария Белова»", "person_id": str(mpid), "person": b},
+                    {"label": "Кривой", "person": "не словарь"},
+                    {"label": "Никто", "reject": True, "reason": "не он в Telegram"}]}))[0]["suggestion"]
+    assert "person" not in q["payload"]["options"][2]  # не словарь — выброшен
+    r = ops(dela, "sasha", {"op": "suggestion.decide", "id": q["id"], "decision": "accept"})[0]
+    assert not r["ok"] and "кнопкой" in r["error"]
+    assert ops(dela, "sasha", {"op": "suggestion.decide", "id": q["id"], "option": 0})[0]["ok"]
+    assert (card(dela, mpid)["telegram_id"], card(dela, mpid)["telegram_username"]) == (900102, "mkot")
+    # Повтор той же находки после ответа — прежнее предложение, без второго вопроса.
+    again = ops(dela, "sasha", person_sug(f"tgfind:{mpid}", {"title": "Мария", "person_id": str(mpid)}))[0]["suggestion"]
+    assert again["id"] == q["id"]
+
+
+def test_meeting_batch_takes_dela_title(dela):
+    """№43: пачка «Нового» встречи — названием Дел, если разборщик уже назвал встречу раньше, чем пришла сверка."""
+    with store.db.session(dela, "sasha", "t") as c:
+        c.execute("INSERT INTO crm.meetings (ref, started_at, owner_id, title) VALUES "
+                  "('101', '2026-10-14T11:00:00+03:00', 'sasha', 'Альфа: фонды и сроки')")
+    s = ops(dela, "sasha", meet_sug("Мария"))[0]["suggestion"]
+    assert s["batch_title"] == "Альфа: фонды и сроки · 14.10"
+    assert s["payload"]["ask"] == "Кто это на встрече «Альфа: фонды и сроки» 14.10 — «Мария»?"
