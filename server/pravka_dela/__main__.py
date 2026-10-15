@@ -708,7 +708,12 @@ def main(argv: list[str] | None = None) -> int:
     ks.set_defaults(fn=cmd_krug_seed)
 
     args = ap.parse_args(argv)
-    return args.fn(args)
+    try:
+        return args.fn(args)
+    except guard.Stopped as e:
+        # Защита от петли остановила Claude (zachem propose, spend advise…) — словами, а не трейсбеком (контракт §4.3).
+        print(str(e))
+        return 1
 
 
 if __name__ == "__main__":

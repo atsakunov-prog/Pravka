@@ -298,3 +298,25 @@ def test_day_watch_after_phone_put(dela):
     assert r["ok"], r
     caps = [a for a in guard.alerts_due(dela) if a["kind"] == "cap"]
     assert len(caps) == 1 and "$5,50 (порог $5)" in caps[0]["text"], caps
+
+
+def test_cli_says_stopped_in_words(dela, tmp_path, monkeypatch, capsys):
+    """Команды zachem propose и spend advise при сработавшей защите — ошибка словами и код 1, а не трейсбек (контракт
+    §4.3). Claude не зовём: обе дороги подменены остановкой."""
+    from pravka_dela import __main__ as cli
+    from pravka_dela import spend_advice, zachem
+
+    env = tmp_path / "dela.env"
+    env.write_text(f"DELA_DB_URL={dela}\nANTHROPIC_API_KEY=sk-test\n", encoding="utf-8")
+    monkeypatch.delenv("DELA_DB_URL", raising=False)
+
+    def stop(*_a, **_k):
+        raise guard.Stopped("*", "все задачи Дел: 81 вызов за 10 минут, порог 80")
+
+    monkeypatch.setattr(zachem, "propose", stop)
+    monkeypatch.setattr(spend_advice, "send", stop)
+    assert cli.main(["--env", str(env), "zachem", "propose", "--out", str(tmp_path / "z.json")]) == 1
+    assert cli.main(["--env", str(env), "spend", "advise", "--day", "2026-10-11"]) == 1
+    said = capsys.readouterr().out
+    assert said.count("Claude остановлен защитой от петли (все задачи Дел") == 2 and "Traceback" not in said, said
+    assert not (tmp_path / "z.json").exists()
