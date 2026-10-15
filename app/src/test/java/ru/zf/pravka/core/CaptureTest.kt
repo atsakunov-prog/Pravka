@@ -211,6 +211,8 @@ class CaptureTest {
             assertTrue(phrase, says.any { it.contains(phrase) })
         }
         assertTrue(rows.all { it.names.size == it.cells.size })
+        // Одна страница (16.10): что сказать — куда ляжет — что увидишь — когда вернётся — как поправить.
+        assertEquals(listOf("Что сказать", "Куда ляжет", "Что увидишь", "Когда вернётся", "Как поправить"), rows.first().names)
         assertEquals("Куда что", (blocks.first() as KudaChto.Block.Head).text)
         assertEquals(listOf("а " to false, "жирно" to true, " б" to false), KudaChto.spans("а **жирно** б"))
         assertNotNull(blocks.filterIsInstance<KudaChto.Block.Para>().firstOrNull { it.text.contains("Календарь — только встречи") })

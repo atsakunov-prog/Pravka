@@ -198,7 +198,7 @@ class CaptureDelaTest {
         assertTrue(CalendarRules.mark(mark, null))
         assertFalse(CalendarRules.mark(meeting, null))
         assertFalse("весь день — не отметка часа", CalendarRules.mark(ev("Отпуск", free = true, allDay = true), null))
-        assertFalse("чужой календарь не смотрим", CalendarRules.mark(ev("Боря — бассейн", free = true, primary = false), null))
+        assertFalse("чужой календарь не смотрим", CalendarRules.mark(ev("Петя Тестов — бассейн", free = true, primary = false), null))
         val rows = TodayAgenda.reminderRows(Dela.Snapshot(), "", today, start - 1, listOf(mark), msk)
         assertEquals("отметка", rows.single().sub)
         assertTrue(rows.single().mark)
