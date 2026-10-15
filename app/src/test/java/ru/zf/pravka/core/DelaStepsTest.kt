@@ -10,7 +10,7 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * Дела внутри дела (15.10.2026, docs/dela-phone-22.md) — то же правило, что сервер (`store.step_of`, `step_due`,
+ * Дела внутри дела (15.10.2026, docs/dela-phone-23.md) — то же правило, что сервер (`store.step_of`, `step_due`,
  * `_nest_rise`, тест `test_dela_nest.py`) и веб (`stepDue`, `stepChips`, `stepsFirst`, `nestForest`). Данные выдуманные.
  */
 class DelaStepsTest {

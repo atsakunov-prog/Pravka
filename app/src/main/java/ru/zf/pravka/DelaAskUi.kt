@@ -177,7 +177,7 @@ internal fun DelaSayBar(
     onSend: () -> Unit,
     modifier: Modifier = Modifier,
     /**
-     * «Для этого» над открытым делом (15.10.2026, docs/dela-phone-22.md, `cardSay` веба): null — чипа нет (дело не
+     * «Для этого» над открытым делом (15.10.2026, docs/dela-phone-23.md, `cardSay` веба): null — чипа нет (дело не
      * открыто, сервер без фичи nest), true — всё сказанное станет делами внутри открытого, false — обычная строка.
      */
     step: Boolean? = null,

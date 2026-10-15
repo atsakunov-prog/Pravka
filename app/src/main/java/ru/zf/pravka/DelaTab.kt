@@ -304,7 +304,7 @@ fun DelaTab(
     var projectFor by remember { mutableStateOf<List<Dela.Task>?>(null) }
     // «Сделано само» в «Новом» — свёрнуто, пока не попросили показать.
     var autoOpen by rememberSaveable { mutableStateOf(false) }
-    // Дела внутри дела (15.10.2026, docs/dela-phone-22.md): меню строки (долгое нажатие), «Для этого» — новое дело внутри
+    // Дела внутри дела (15.10.2026, docs/dela-phone-23.md): меню строки (долгое нажатие), «Для этого» — новое дело внутри
     // (лист нового дела с полями от родителя), «Вложить в…» — выбор дела.
     var rowMenu by remember { mutableStateOf<Dela.Task?>(null) }
     var stepFor by remember { mutableStateOf<Dela.Task?>(null) }

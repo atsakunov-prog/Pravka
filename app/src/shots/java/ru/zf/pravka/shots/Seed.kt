@@ -424,7 +424,7 @@ internal object Seed {
             task(83, "Бета — клиент надолго") { put("goal", true); put("directions", arr("work")) },
             task(84, "Дача готова к маю") { put("goal", true); put("directions", arr("home")) },
             task(86, "Новая цель без шагов") { put("goal", true); put("directions", arr("mind")) },
-            // Дела внутри дела (15.10.2026, задание 22): родитель «отбить», внутри — по месту (pos), вложенное вложенного.
+            // Дела внутри дела (15.10.2026, задание 23): родитель «отбить», внутри — по месту (pos), вложенное вложенного.
             task(90, "Бета: подготовить термшит и отправить Ивану") { put("project_id", "p-beta"); put("deal_id", "d-beta-refi"); put("owed", true); put("person_id", "pe-ivan"); put("due_date", d(0)); put("source", "web") },
             task(91, "Набросать драфт из расшифровки встречи") { put("project_id", "p-beta"); put("deal_id", "d-beta-refi"); put("why_id", "t-90"); put("due_date", d(0)); put("pos", 2); put("source", "web") },
             task(92, "Сверить цифры с моделью") { put("project_id", "p-beta"); put("deal_id", "d-beta-refi"); put("why_id", "t-90"); put("due_date", d(0)); put("pos", 1); put("source", "web") },
