@@ -70,7 +70,7 @@ APP_TABLES = {
 APP_VIEWS = ["tasks.v_tasks", "crm.v_deals", "crm.v_interactions", "crm.v_people", "crm.v_orgs"]
 APP_SEQUENCES = ["tasks.task_num"]
 # Архив жизни для страниц-двойников (dela_0016): не схема life, а узкие функции — с них снят PUBLIC, право — здесь.
-# Подъём родителя и его «Вернуть» (dela_0030, правило 26): пишут мимо RLS Круга — тоже только роли службы.
+# Подъём родителя и его «Вернуть» (dela_0030, правило 27): пишут мимо RLS Круга — тоже только роли службы.
 APP_FUNCTIONS = ["crm.life_rows(text, date, date)", "crm.life_ok()", "tasks.nest_rise(uuid)", "tasks.nest_fall(uuid)"]
 
 

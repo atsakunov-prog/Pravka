@@ -625,7 +625,7 @@ def _task_card(conn, url: str, user: str, t: dict, today: dt.date) -> tuple[list
                      + (" · метки: " + ", ".join(names.get(k, k) for k in (t.get("dirs") or [])[1:]) if len(t.get("dirs") or []) > 1 else ""))
         if t.get("goal"):
             lines.append("Это цель (узел дерева)" + (f", практика: {t['rhythm']}" if t.get("rhythm") else "") + ".")
-        # Дела внутри обычного дела (15.10.2026, правило 26) — не «шаги к цели»: у них место среди соседей (pos).
+        # Дела внутри обычного дела (15.10.2026, правило 27) — не «шаги к цели»: у них место среди соседей (pos).
         up_goal = bool(chain and chain[0].get("goal"))
         for title, pid, inside in (
                 ("Рядом шаги к той же цели" if up_goal else "Рядом — другие дела внутри того же дела", t.get("why_id"), not up_goal),

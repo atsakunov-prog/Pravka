@@ -13,7 +13,7 @@
 -- Только с единицы: ноль и минус веб считал бы настоящим местом («первым»), а телефон и дерево — «не задано», и порядок
 -- на устройствах разошёлся бы (сервер отказывает словами раньше, CHECK — страховка).
 --
--- Подъём родителя (правило 26): сделано последнее открытое дело внутри — родитель не закрывается, а поднимается на
+-- Подъём родителя (правило 27): сделано последнее открытое дело внутри — родитель не закрывается, а поднимается на
 -- сегодня. Делает это база (tasks.nest_rise), а не код под правами того, кто закрыл: «Зачем» видит только хозяин (Круг
 -- личный), и когда последнее дело внутри закрывала Наташа (дело Саши в общем проекте), родитель не поднимался — ей
 -- why_id не виден. «Вернуть» после «Сделано» (тост, «Вернуть» у Claude и у «Закрыто само», повторный тап на телефоне)
@@ -88,7 +88,7 @@ CREATE TABLE tasks.nest_raised (
     rose_to   date NOT NULL,
     at        timestamptz NOT NULL DEFAULT now()
 );
-COMMENT ON TABLE tasks.nest_raised IS 'Подъём родителя (правило 26): срок родителя до подъёма (was; пусто — был без срока) и на какой день поднят (rose_to). «Вернуть» дела внутри возвращает was, если срок с тех пор не правили. Пишут только tasks.nest_rise / nest_fall.';
+COMMENT ON TABLE tasks.nest_raised IS 'Подъём родителя (правило 27): срок родителя до подъёма (was; пусто — был без срока) и на какой день поднят (rose_to). «Вернуть» дела внутри возвращает was, если срок с тех пор не правили. Пишут только tasks.nest_rise / nest_fall.';
 ALTER TABLE tasks.nest_raised ENABLE ROW LEVEL SECURITY;
 
 -- Сделано дело [child]: если оно — последнее открытое внутри обычного дела, родитель поднимается — без срока или со
@@ -126,7 +126,7 @@ BEGIN
     RETURN jsonb_build_object('id', p.id, 'num', p.num, 'title', p.title, 'owner_id', p.owner_id, 'moved', moved,
                               'due_date', CASE WHEN moved THEN d ELSE p.due_date END);
 END $$;
-COMMENT ON FUNCTION tasks.nest_rise(uuid) IS 'Сделано последнее открытое дело внутри — родитель поднимается на сегодня (правило 26). Ответ: id, num, title, owner_id, moved, due_date родителя; иначе NULL.';
+COMMENT ON FUNCTION tasks.nest_rise(uuid) IS 'Сделано последнее открытое дело внутри — родитель поднимается на сегодня (правило 27). Ответ: id, num, title, owner_id, moved, due_date родителя; иначе NULL.';
 
 -- Дело [child] снова открыто («Вернуть» после «Сделано», повторный тап, «Вернуть» у «Закрыто само»): у родителя
 -- опять есть открытое внутри — подъём отменяется, если срок родителя с тех пор никто не правил (память цела). Ответ —
@@ -154,7 +154,7 @@ BEGIN
     UPDATE tasks.tasks SET due_date = m.was WHERE id = pid;  -- триггер nest_forget гасит память
     RETURN jsonb_build_object('id', p.id, 'num', p.num, 'title', p.title, 'owner_id', p.owner_id, 'due_date', m.was);
 END $$;
-COMMENT ON FUNCTION tasks.nest_fall(uuid) IS '«Вернуть» дела внутри: подъём родителя отменяется — срок, какой был до него, если его с тех пор не правили (правило 26). Ответ: id, num, title, owner_id, due_date родителя; иначе NULL.';
+COMMENT ON FUNCTION tasks.nest_fall(uuid) IS '«Вернуть» дела внутри: подъём родителя отменяется — срок, какой был до него, если его с тех пор не правили (правило 27). Ответ: id, num, title, owner_id, due_date родителя; иначе NULL.';
 
 -- Срок дела поменялся — память подъёма этого дела больше не про него: «Вернуть» срок не тронет.
 CREATE FUNCTION tasks.nest_forget() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
