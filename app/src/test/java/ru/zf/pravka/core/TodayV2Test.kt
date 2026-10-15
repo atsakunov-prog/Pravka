@@ -196,4 +196,75 @@ class TodayV2Test {
         val satNight = LocalDate.of(2026, 10, 17).atTime(22, 0).atZone(msk).toInstant().toEpochMilli()
         assertEquals(LocalDate.of(2026, 10, 23), ShabbatTimes.next(satNight, 55.7558, 37.6173, msk)!!.friday)
     }
+
+    // ---------------------------------------------------------------- «Подскажи» по фазам (docs/dela-phone-23.md)
+
+    /** Очередь на миг [local] по Москве: один вопрос сгорает в этот день (встреча), два — вечерние (клиент, Круг). */
+    private fun asksAt(local: String, hot: Boolean = true): Asks.Queue {
+        val day = local.take(10)
+        fun sg(id: String, created: String, payload: String, batch: String = "") =
+            Dela.Suggestion(id = id, forUser = "me", source = "meeting", createdAt = created, payload = payload, batchTitle = batch)
+        val list = listOfNotNull(
+            sg("h", "2026-10-15T11:00:00+03:00", """{"urgency":"today","urgent_on":"$day","about":{"kind":"person","title":"Мария"}}""").takeIf { hot },
+            sg("c", "2026-10-14T20:00:00+03:00", """{"urgency":"evening","about":{"kind":"client","id":"c1","title":"ООО Ромашка"}}"""),
+            sg("k", "2026-10-12T09:00:00+03:00", """{"urgency":"evening","about":{"kind":"small","title":"Место в дереве"}}""", "Круг жизни"),
+        )
+        val s = Dela.Snapshot(suggestions = list.associateBy { it.id }, features = setOf(Dela.FEATURE_ASKS))
+        val ms = java.time.LocalDateTime.parse(local).atZone(Asks.MSK).toInstant().toEpochMilli()
+        return Asks.queue(s, "me", ms, Asks.FACTORY, Asks.QUIET_FACTORY)
+    }
+
+    @Test
+    fun `Подскажи по фазам — свёрнуто, сгорающее, вечер группами, тихо`() {
+        // Чт до 15:00 — одна строка.
+        val before = Asks.card(asksAt("2026-10-15T10:00"), null, 4)!!
+        assertEquals(Asks.Mode.FOLD, before.mode)
+        assertEquals("Подскажи · к 15:00: 1 · к вечеру: 2", before.fold)
+        assertTrue(before.rows.isEmpty() && before.groups.isEmpty())
+        // 15:00 — только сгорающее, под ним «к вечеру».
+        val today = Asks.card(asksAt("2026-10-15T15:00"), null, 4)!!
+        assertEquals(Asks.Mode.URGENT, today.mode)
+        assertEquals("сгорает сегодня", today.sub)
+        assertEquals(listOf("h"), today.rows.map { it.id })
+        assertEquals("к вечеру: 2", today.fold)
+        assertEquals(3, today.count)
+        // 15:00 без сгорающего — строка «к вечеру».
+        val calm = Asks.card(asksAt("2026-10-15T15:00", hot = false), null, 4)!!
+        assertEquals(Asks.Mode.FOLD, calm.mode)
+        assertEquals("Подскажи · к вечеру: 2", calm.fold)
+        // С 18:00 — всё группами: сгорающее первым, потом клиент, мелочь.
+        val evening = Asks.card(asksAt("2026-10-15T18:00"), null, 4)!!
+        assertEquals(Asks.Mode.GROUPED, evening.mode)
+        assertEquals("по клиентам и людям", evening.sub)
+        assertEquals(listOf("Мария · 1", "ООО Ромашка · 1", "Мелочь · 1"), evening.groups.map { Asks.groupHead(it.first) })
+        assertEquals(0, evening.more)
+        // Ночь — хвост вечера.
+        assertEquals(Asks.Mode.GROUPED, Asks.card(asksAt("2026-10-16T01:30"), null, 4)!!.mode)
+        // Пт 14:00 — последний заход недели, полный; с 15:00 — тихо до понедельника.
+        assertEquals(Asks.Mode.GROUPED, Asks.card(asksAt("2026-10-16T14:00"), null, 4)!!.mode)
+        val quiet = Asks.card(asksAt("2026-10-16T15:00"), null, 4)!!
+        assertEquals(Asks.Mode.FOLD, quiet.mode)
+        assertEquals("Подскажи: 3 — до понедельника тихо", quiet.fold)
+    }
+
+    @Test
+    fun `раскрытое тапом — до смены фазы`() {
+        val before = asksAt("2026-10-15T10:00")
+        val open = Asks.card(before, before.openKey, 4)!!
+        assertEquals(Asks.Mode.GROUPED, open.mode)
+        assertEquals("раскрыто до 15:00", open.sub)
+        // Та же фаза позже — всё ещё раскрыто.
+        assertEquals(Asks.Mode.GROUPED, Asks.card(asksAt("2026-10-15T14:59"), before.openKey, 4)!!.mode)
+        // 15:00 — фаза сменилась: раскрытое утром гаснет, видно только сгорающее.
+        assertEquals(Asks.Mode.URGENT, Asks.card(asksAt("2026-10-15T15:00"), before.openKey, 4)!!.mode)
+        // Наутро та же фаза «до» — другой заход: снова свёрнуто.
+        val friday = asksAt("2026-10-16T10:00")
+        assertTrue(friday.openKey != before.openKey)
+        assertEquals(Asks.Mode.FOLD, Asks.card(friday, before.openKey, 4)!!.mode)
+        // Раскрыл «сгорающее» — до вечернего захода.
+        val today = asksAt("2026-10-15T15:10")
+        assertEquals("раскрыто до 18:00", Asks.card(today, today.openKey, 4)!!.sub)
+        // Тишина выходных — одна на все дни до понедельника.
+        assertEquals(asksAt("2026-10-16T16:00").openKey, asksAt("2026-10-18T22:00").openKey)
+    }
 }

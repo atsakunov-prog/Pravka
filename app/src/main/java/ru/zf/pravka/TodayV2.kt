@@ -31,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import ru.zf.pravka.core.Asks
 import ru.zf.pravka.core.DayProfile
 import ru.zf.pravka.core.Dela
 import ru.zf.pravka.core.DelaViews
@@ -96,7 +98,11 @@ internal class TodayV2Data(
     /** Последнее закрытое — когда ничего не идёт. */
     val last: ZasechkaStore.Entry?,
     val nowTasks: List<Dela.Task>,
-    val asks: List<Dela.Suggestion>,
+    /**
+     * «Подскажи» на «Сегодня» (`core/Asks.kt`, docs/dela-phone-23.md): с флагом `asks` у сервера — по фазе (до 15:00
+     * строкой, с 15:00 — сгорающее, вечером — группами, с Пт 15:00 — тихо), без него — прежний список «Нового».
+     */
+    val queue: Asks.Queue,
     val todayRows: List<TodayAgenda.Row>,
     val tomorrow: String,
     val snap: Dela.Snapshot,
@@ -195,6 +201,9 @@ internal fun TodayV2(
     var digestOpen by remember { mutableStateOf(false) }
     var rejecting by remember { mutableStateOf<Dela.Suggestion?>(null) }
     var showNav by remember { mutableStateOf(false) }
+    // «Подскажи», раскрытое тапом, — до смены фазы (`Asks.Queue.openKey`). Здесь, а не в карточке: сложил или разложил
+    // телефон — карточка переезжает в другую колонку, а раскрытое остаётся раскрытым.
+    var asksOpen by rememberSaveable { mutableStateOf<String?>(null) }
     val cards = TodayCards(
         data = data,
         weather = weather,
@@ -208,6 +217,8 @@ internal fun TodayV2(
         nav = nav,
         act = act,
         onReject = { rejecting = it },
+        asksOpen = asksOpen,
+        onAsksOpen = { asksOpen = it },
     )
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = twoPane()
@@ -257,6 +268,9 @@ private class TodayCards(
     val nav: TodayNav,
     val act: TodayV2Actions,
     val onReject: (Dela.Suggestion) -> Unit,
+    /** «Подскажи» раскрыто тапом в этой фазе (`Asks.Queue.openKey`); null — нет. */
+    val asksOpen: String?,
+    val onAsksOpen: (String) -> Unit,
 )
 
 // ---------------------------------------------------------------------------
@@ -759,70 +773,178 @@ private fun DigestEarlier(d: DigestNote, load: suspend (String) -> List<DigestNo
 
 // ---- Новое ----
 
-/** Сколько строк «Нового» на «Сегодня»; остальное — во вкладке Дел. */
+/** Сколько строк «Нового» на «Сегодня» без флага `asks`; остальное — во вкладке Дел. */
 private const val NEW_MAX = 4
 
 /**
- * «Новое» — то, что ждёт «да» владельца (`DelaViews.asks`, «Подскажи» вкладки
- * Дел): название, почему спрашивает или откуда; «да» — поставить как
- * предложено, «нет» — с причиной (материал промптов). Последней строкой —
- * «Сейчас на завтра» (docs/dela-phone-27.md): кандидаты на завтра четыре строки
- * «Нового» не занимают. Пусто и плана нет — карточки нет.
+ * «Подскажи» — то, что ждёт «да» владельца: название, почему спрашивает или откуда; «да» — поставить как предложено,
+ * «нет» — с причиной (материал промптов). С флагом `asks` у сервера (шаг 2 петли, docs/dela-phone-23.md) карточка
+ * раскрыта по фазе — раскладку решает `Asks.card` (под JVM-тестом), здесь только рисуется:
+ * - до 15:00, в тишине выходных и с 15:00 без сгорающего — одна строка «Подскажи · к 15:00: 1 · к вечеру: 6», тап —
+ *   раскрыть всё до смены фазы;
+ * - с 15:00 — только сгорающее (до `today_max`), под ним «к вечеру: M»;
+ * - вечером (или раскрыто) — всё группами «ООО Ромашка · 2» до `evening_max`, дальше «ещё K — в «Новом»».
+ * Без флага — как раньше: «Новое», четыре свежих сверху. Последней строкой — «Сейчас на завтра» (docs/dela-phone-27.md):
+ * кандидаты на завтра в «Подскажи» не входят. Вопросов нет и плана нет — карточки нет.
  */
 @Composable
 private fun NewCard(c: TodayCards, wide: Boolean) {
-    val t = LocalPravkaType.current
-    val asks = c.data.asks
+    val q = c.data.queue
     val plan = c.data.plan
-    if (asks.isEmpty() && plan == null) return
+    val card = Asks.card(q, c.asksOpen, NEW_MAX)
+    if (card == null && plan == null) return
+    val all = { c.nav.mode(Tab.TODOIST) }
     PaperCard {
-        if (asks.isNotEmpty()) {
-            SecHead(kv("inbox", Glyphs.Note), "Новое", asks.size, hot = true, small = "ждёт твоего да", link = if (asks.size > NEW_MAX) "все" else null, onLink = { c.nav.mode(Tab.TODOIST) })
-        }
-        asks.take(NEW_MAX).forEachIndexed { i, sg ->
-            if (i > 0) ListLine()
-            val txt = DelaViews.sugText(sg, c.data.snap, c.data.todayKey)
-            val why = DelaViews.askWhy(sg, c.data.snap) ?: DelaViews.heldLine(sg, null)?.takeIf { DelaViews.choiceOnly(sg) }
-            val from = sg.batchTitle.ifBlank { DelaViews.mark(sg.source).word }
-            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(txt.title, style = t.body.copy(fontSize = if (wide) 14.sp else 14.5.sp), color = Kv.text, maxLines = if (wide) 2 else 1, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        why ?: listOf(DelaViews.askYes(sg.kind).lowercase().let { if (sg.kind == "create") "новое дело" else it }, txt.hint, from)
-                            .filter { it.isNotBlank() }.joinToString(" · "),
-                        style = t.meta,
-                        color = if (why != null) Kv.warn else Kv.faint,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+        if (card != null) when (card.mode) {
+            Asks.Mode.LEGACY -> {
+                SecHead(kv("inbox", Glyphs.Note), "Новое", card.count, hot = true, small = card.sub, link = if (card.more > 0) "все" else null, onLink = all)
+                card.rows.forEachIndexed { i, sg ->
+                    if (i > 0) ListLine()
+                    AskRow(c, sg, wide)
                 }
-                Spacer(Modifier.width(6.dp))
-                // Вопрос со своими ответами или выбором человека (аудит №1, №25): «Да» сервер не примет — ответ в Делах,
-                // где варианты кнопками. «Нет» — вариантом «нет» вопроса («Никто» и т. п.), у остального — лист причины.
-                // У вопроса о человеке — всегда лист: «нет» там — навсегда (служба больше не спросит), а маленький «✕»
-                // легко задеть, и ушедший ответ из приложения не вернуть (проверка 15.10.2026).
-                if (DelaViews.plainYes(sg, c.data.snap)) {
-                    SmallKey(kv("check", Glyphs.Check), if (wide) "Да" else null, "Да: ${txt.title}", { c.act.accept(sg) }, soft = true)
-                } else {
-                    SmallKey(kv("arrow-right", Glyphs.Forward), "Ответить", "Ответить в Делах: ${txt.title}", {
-                        if (sg.batchRef.isNotBlank()) c.nav.delaBatch(sg.batchRef) else c.nav.mode(Tab.TODOIST)
-                    }, soft = true)
+            }
+            Asks.Mode.FOLD -> AsksFold(card.fold.orEmpty(), lead = true) { c.onAsksOpen(q.openKey) }
+            Asks.Mode.URGENT -> {
+                SecHead(kv("inbox", Glyphs.Note), "Подскажи", card.count, hot = true, small = card.sub, link = "все", onLink = all)
+                card.rows.forEachIndexed { i, sg ->
+                    if (i > 0) ListLine()
+                    AskRow(c, sg, wide)
                 }
-                val no = DelaViews.rejectOption(sg, c.data.snap)
-                SmallKey(kv("x", Glyphs.Close), null, "Нет: ${txt.title}", {
-                    when {
-                        sg.kind == "person" -> c.onReject(sg)
-                        no != null -> c.act.answer(sg, no)
-                        else -> c.onReject(sg)
+                if (card.more > 0) {
+                    ListLine()
+                    AsksMore("ещё сгорает ${card.more} — в «Новом»", all)
+                }
+                card.fold?.let {
+                    ListLine()
+                    AsksFold(it, lead = false) { c.onAsksOpen(q.openKey) }
+                }
+            }
+            Asks.Mode.GROUPED -> {
+                SecHead(kv("inbox", Glyphs.Note), "Подскажи", card.count, hot = true, small = card.sub, link = "все", onLink = all)
+                card.groups.forEachIndexed { gi, (g, items) ->
+                    AsksGroupHead(g, top = gi > 0)
+                    items.forEachIndexed { i, sg ->
+                        if (i > 0) ListLine()
+                        AskRow(c, sg, wide)
                     }
-                })
+                }
+                if (card.more > 0) {
+                    ListLine()
+                    AsksMore("ещё ${card.more} — в «Новом»", all)
+                }
             }
         }
         if (plan != null) {
-            if (asks.isNotEmpty()) ListLine()
+            if (card != null) ListLine()
             PlanRow(c, plan)
         }
     }
+}
+
+/** Один вопрос «Подскажи»: что предложено, почему или откуда; «Да» (или «Ответить» в Делах) и «Нет». */
+@Composable
+private fun AskRow(c: TodayCards, sg: Dela.Suggestion, wide: Boolean) {
+    val t = LocalPravkaType.current
+    val txt = DelaViews.sugText(sg, c.data.snap, c.data.todayKey)
+    val why = DelaViews.askWhy(sg, c.data.snap) ?: DelaViews.heldLine(sg, null)?.takeIf { DelaViews.choiceOnly(sg) }
+    val from = sg.batchTitle.ifBlank { DelaViews.mark(sg.source).word }
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(txt.title, style = t.body.copy(fontSize = if (wide) 14.sp else 14.5.sp), color = Kv.text, maxLines = if (wide) 2 else 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                why ?: listOf(DelaViews.askYes(sg.kind).lowercase().let { if (sg.kind == "create") "новое дело" else it }, txt.hint, from)
+                    .filter { it.isNotBlank() }.joinToString(" · "),
+                style = t.meta,
+                color = if (why != null) Kv.warn else Kv.faint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(6.dp))
+        // Вопрос со своими ответами или выбором человека (аудит №1, №25): «Да» сервер не примет — ответ в Делах,
+        // где варианты кнопками. «Нет» — вариантом «нет» вопроса («Никто» и т. п.), у остального — лист причины.
+        // У вопроса о человеке — всегда лист: «нет» там — навсегда (служба больше не спросит), а маленький «✕»
+        // легко задеть, и ушедший ответ из приложения не вернуть (проверка 15.10.2026).
+        if (DelaViews.plainYes(sg, c.data.snap)) {
+            SmallKey(kv("check", Glyphs.Check), if (wide) "Да" else null, "Да: ${txt.title}", { c.act.accept(sg) }, soft = true)
+        } else {
+            SmallKey(kv("arrow-right", Glyphs.Forward), "Ответить", "Ответить в Делах: ${txt.title}", {
+                if (sg.batchRef.isNotBlank()) c.nav.delaBatch(sg.batchRef) else c.nav.mode(Tab.TODOIST)
+            }, soft = true)
+        }
+        val no = DelaViews.rejectOption(sg, c.data.snap)
+        SmallKey(kv("x", Glyphs.Close), null, "Нет: ${txt.title}", {
+            when {
+                sg.kind == "person" -> c.onReject(sg)
+                no != null -> c.act.answer(sg, no)
+                else -> c.onReject(sg)
+            }
+        })
+    }
+}
+
+/**
+ * Свёрнутая очередь одной строкой: «Подскажи · к 15:00: 1 · к вечеру: 6» (или «к вечеру: M» под сгорающим) и
+ * «раскрыть» — тап раскрывает всё до смены фазы. [lead] — значок «Подскажи» слева (когда строка — вся карточка).
+ */
+@Composable
+private fun AsksFold(text: String, lead: Boolean, onOpen: () -> Unit) {
+    val t = LocalPravkaType.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(KvShape.Control))
+            .clickable(role = Role.Button, onClickLabel = "раскрыть «Подскажи»", onClick = onOpen)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (lead) {
+            Icon(kv("help", Glyphs.Ask), null, tint = Kv.warn, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(ru.zf.pravka.core.HeadLine.wrap(text), style = if (lead) t.body else t.meta, color = Kv.text, modifier = Modifier.weight(1f))
+        Spacer(Modifier.width(6.dp))
+        Text("раскрыть", style = t.label, color = Kv.accent, maxLines = 1)
+    }
+}
+
+/** Подзаголовок группы вечером: «ООО Ромашка · 2», сгорающее в ней — «· сгорает 1» тоном внимания. */
+@Composable
+private fun AsksGroupHead(g: Asks.Group, top: Boolean) {
+    val t = LocalPravkaType.current
+    val hot = Asks.groupUrgent(g)
+    Text(
+        androidx.compose.ui.text.buildAnnotatedString {
+            append(Asks.groupHead(g))
+            if (hot != null) {
+                pushStyle(androidx.compose.ui.text.SpanStyle(color = Kv.warn))
+                append(" · $hot")
+                pop()
+            }
+        },
+        style = t.caption,
+        color = Kv.faint,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(top = if (top) 8.dp else 0.dp, bottom = 2.dp),
+    )
+}
+
+/** «ещё K — в «Новом»» — тап во вкладку Дел, где «Новое» показывает всё всегда. */
+@Composable
+private fun AsksMore(text: String, onOpen: () -> Unit) {
+    val t = LocalPravkaType.current
+    Text(
+        text,
+        style = t.meta,
+        color = Kv.accent,
+        maxLines = 1,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(KvShape.Control))
+            .clickable(role = Role.Button, onClick = onOpen)
+            .padding(vertical = 6.dp),
+    )
 }
 
 /**
@@ -1010,7 +1132,9 @@ internal fun buildV2(
     val open = entries.firstOrNull { it.open }
     val last = if (open == null) entries.filter { !it.open && it.source != "gap" && it.end <= now }.maxByOrNull { it.end } else null
     val nowTasks = if (delaOn) TodayAgenda.now(snap, me, todayKey) else emptyList()
-    val asks = if (delaOn) DelaViews.asks(snap, me) else emptyList()
+    // «Подскажи» по фазе — по часам Москвы, Свод `asks.rhythm`/`day.quiet` (`core/Asks.kt`); минутный тик «Сегодня»
+    // пересобирает данные — фаза сменится сама. Без Дел — пустая копия: карточки нет.
+    val queue = Asks.queue(if (delaOn) snap else Dela.Snapshot(), me, now)
     // Кандидаты «Сейчас на завтра» в «Новое» не входят (`Dela.newOnes`) — у них одна строка внизу карточки.
     val plan = if (delaOn) DelaViews.plan(snap, me, todayKey, now)?.takeIf { it.visible } else null
     // Дело-созвон с часом и его событие в календаре (`gcal.py` ставит созвоны из Дел) — одной строкой: событием.
@@ -1058,7 +1182,7 @@ internal fun buildV2(
         ru.zf.pravka.core.MealGap.find(entries, app.foodStore.mealsFlow.value.map { it.ts }, now)
     } else null
     return TodayV2Data(
-        model, profile, lenta, open, last, nowTasks, asks, todayRows, tomorrow, snap, todayKey, tiles, delaOn, mealGap,
+        model, profile, lenta, open, last, nowTasks, queue, todayRows, tomorrow, snap, todayKey, tiles, delaOn, mealGap,
         reminders = reminders, back = back, plan = plan,
     )
 }

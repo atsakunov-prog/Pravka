@@ -36,6 +36,13 @@ object Svod {
     const val RAZNOSKA = "prompt.raznoska"
     /** Рацион владельца: продукты и блюда (`core/Ration.kt`), 13.10.2026. */
     const val FOOD_RATION = "food.ration"
+    /**
+     * Время заходов «Подскажи» и «Сейчас на завтра» (шаги 1–2 петли, 15.10.2026; `core/Asks.kt`): записи нет — заводское.
+     * Телефон только читает — пишут claude и владелец.
+     */
+    const val ASKS_RHYTHM = "asks.rhythm"
+    /** Тихие часы: очереди «Подскажи» — часть `weekend` (с Пт 15:00), Засечке — `daily` (шаг 4). Телефон читает. */
+    const val DAY_QUIET = "day.quiet"
 
     /** Отказ `base_rev`: «на сервере уже версии N» — не ошибка, а повод слить и послать снова. */
     private const val STALE_MARK = "на сервере уже версии"
