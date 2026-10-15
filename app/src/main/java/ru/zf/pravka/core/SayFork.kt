@@ -50,6 +50,19 @@ object SayFork {
         return Route(kind, text, o.optString("why").trim().takeIf { it != "null" }.orEmpty())
     }
 
+    /**
+     * Куда фразе при захвате (шаг 0 петли, 15.10.2026): правило сервера сильнее Сонета — узнало ([ruleDone]), значит
+     * легло, ответ развилки не нужен ([Way.RULE]); не узнало — дорога Сонета, а дорога «дела» — к серверу, если там
+     * модель захвата ([Way.SERVER]), иначе — прежняя Разноска телефона ([Way.PHONE]); остальное — своей дорогой.
+     */
+    enum class Way { RULE, SERVER, PHONE, ROUTE }
+
+    fun captureWay(ruleDone: Boolean, route: Route?, modelOn: Boolean): Way = when {
+        ruleDone -> Way.RULE
+        route?.kind == Kind.TASKS -> if (modelOn) Way.SERVER else Way.PHONE
+        else -> Way.ROUTE
+    }
+
     /** Сумма с рублями («640 р», «30 тысяч», «3200 ₽») или глагол денег рядом с числом. */
     private val MONEY = Regex(
         """(\d[\d\s]*(?:[.,]\d+)?\s*(?:₽|руб|р\.?(?:\s|$)|тыс))|((?:потратил|заплатил|оплатил|перевёл|перевел|скинул)\D{0,40}\d)""",

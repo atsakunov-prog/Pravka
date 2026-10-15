@@ -157,7 +157,7 @@ $raw
  * целиком, а не общей фразой. [context] — «Сейчас: … Идёт: …», хвост после
  * {NOW}: правила над ним стабильны и стоят под кэшем.
  */
-suspend fun ClaudeProvider.zasechkaFork(raw: String, context: String): Result<ZasechkaForkReply> =
+suspend fun ClaudeProvider.zasechkaFork(raw: String, context: String, capture: Boolean = false): Result<ZasechkaForkReply> =
     withContext(Dispatchers.IO) {
         runCatchingApi {
             val apiKey = settings.apiKey()
@@ -165,7 +165,9 @@ suspend fun ClaudeProvider.zasechkaFork(raw: String, context: String): Result<Za
                 throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
             }
             require(raw.isNotBlank()) { "Пустая фраза — развилке нечего решать." }
-            val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.ZASECHKA_FORK)
+            // Захват (15.10.2026): сервер Дел знает `capture` — дорога «дела» шире: заметка, идея, сделанное (не лента).
+            val rules = promptStore.effective(PromptStore.PromptId.ZASECHKA_FORK)
+            val template = Prompts.speakerNote(author()) + if (capture) ru.zf.pravka.core.prompts.PromptsZasechka.withCapture(rules) else rules
             val cut = template.indexOf("{NOW}")
             val head = if (cut > 0) template.substring(0, cut) else ""
             var tail = (if (cut > 0) template.substring(cut) else template).replace("{NOW}", context)
@@ -207,7 +209,7 @@ suspend fun ClaudeProvider.zasechkaFork(raw: String, context: String): Result<Za
  * модель, усилие и дорога (секунды на «З», ожидание, рубильник флуда) — развилки
  * «З» (`ModelRoute.ZASECHKA_FORK`): одна работа «понять, что за фраза».
  */
-suspend fun ClaudeProvider.sayFork(raw: String, context: String): Result<ZasechkaForkReply> =
+suspend fun ClaudeProvider.sayFork(raw: String, context: String, capture: Boolean = false): Result<ZasechkaForkReply> =
     withContext(Dispatchers.IO) {
         runCatchingApi {
             val apiKey = settings.apiKey()
@@ -215,7 +217,8 @@ suspend fun ClaudeProvider.sayFork(raw: String, context: String): Result<Zasechk
                 throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
             }
             require(raw.isNotBlank()) { "Пустая фраза — развилке нечего решать." }
-            val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.SAY_FORK)
+            val rules = promptStore.effective(PromptStore.PromptId.SAY_FORK)
+            val template = Prompts.speakerNote(author()) + if (capture) ru.zf.pravka.core.prompts.PromptsZasechka.withCapture(rules) else rules
             val cut = template.indexOf("{NOW}")
             val head = if (cut > 0) template.substring(0, cut) else ""
             var tail = (if (cut > 0) template.substring(cut) else template).replace("{NOW}", context)

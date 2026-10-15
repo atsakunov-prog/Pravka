@@ -238,7 +238,7 @@ object DelaKrug {
         val withSteps = s.tasks.values.filter { it.open && it.whyId.isNotBlank() }.map { it.whyId }.toHashSet()
         fun least(t: Dela.Task): Int = dirsOf(t, s, me).firstOrNull()?.let { mv[it]?.events } ?: 0
         return s.tasks.values.filter {
-            it.open && !it.goal && (me.isBlank() || it.ownerId == me) && Dela.inSphere(it, sphere) && !it.owed && it.ball != Dela.WAITING &&
+            it.open && it.deed && (me.isBlank() || it.ownerId == me) && Dela.inSphere(it, sphere) && !it.owed && it.ball != Dela.WAITING &&
                 !DelaGroups.isNow(it, today) && it.dueDate != today &&
                 (it.want || (it.whyId.isNotBlank() && it.id !in withSteps && towardGoal(it, s)))
         }.sortedWith(compareBy<Dela.Task>({ !it.want }, { least(it) }, { it.createdAt }, { it.num })).take(MINE_MAX)
@@ -291,7 +291,7 @@ object DelaKrug {
 
     fun treeModel(s: Dela.Snapshot, me: String, today: String): Tree {
         fun mine(t: Dela.Task) = me.isBlank() || t.ownerId == me
-        val open = s.tasks.values.filter { it.open && mine(it) }
+        val open = s.tasks.values.filter { it.open && !it.remind && mine(it) }
         val live = open.map { it.id }.toHashSet()
         fun parentKey(t: Dela.Task): String = when {
             t.whyId.isNotBlank() && t.whyId in live -> "t:" + t.whyId
@@ -416,7 +416,7 @@ object DelaKrug {
         val under = if (goal.isNotBlank()) below(s, goal) else null
         val order = DelaGroups.byTime(today)
         return s.tasks.values.filter {
-            it.open && !it.goal && (me.isBlank() || it.ownerId == me) && Dela.inSphere(it, sphere) &&
+            it.open && it.deed && (me.isBlank() || it.ownerId == me) && Dela.inSphere(it, sphere) &&
                 (dir.isBlank() || dir in dirsOf(it, s, me)) && (under == null || it.id in under) && (!onlyLoose || loose(it, s))
         }.map { t ->
             val g = upOf(t, s).drop(1).firstOrNull { !it.isProject }?.task

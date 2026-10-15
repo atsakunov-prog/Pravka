@@ -309,7 +309,15 @@ class RaznoskaEngine(
         val remindOn = delaStore.view.value.remindOn
         val groupsOn = delaStore.view.value.groupsOn
         val placeOn = delaStore.view.value.placeOn
-        for (t in keyed) ops += DelaPlace.withPlace(Dela.createOp(asDela(t, draft.id, remindOn, groupsOn), t.opId), t.whyAuto, placeOn)
+        // Захват (15.10.2026): сервер знает корзины — напоминание без срока ложится напоминанием, голое своё дело — «потом»
+        // (`CaptureFallback`), даже если фраза пошла прежней дорогой. С плашки чужого текста ([only] — отмеченное
+        // руками) «потом» не ставится: дел там бывает двадцать.
+        val captureOn = delaStore.view.value.captureOn
+        val today = java.time.LocalDate.now(java.time.ZoneId.of("Europe/Moscow")).toString()
+        for (t in keyed) {
+            val d = asDela(t, draft.id, remindOn, groupsOn).let { if (captureOn) CaptureFallback.apply(it, today, back = only == null) else it }
+            ops += DelaPlace.withPlace(Dela.createOp(d, t.opId), t.whyAuto, placeOn)
+        }
         val at = java.time.OffsetDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString()
         for ((i, n) in notes.withIndex()) {
             ops += Dela.noteOp(

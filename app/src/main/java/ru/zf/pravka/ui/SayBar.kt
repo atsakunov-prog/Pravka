@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,8 +53,15 @@ import androidx.compose.ui.unit.sp
 // Пилюля диктовки поверх приложений не меняется: это вид ВНУТРИ приложения.
 // Вид v2 (Правка 5.0) — `.say` холста: панель 48 с линией и клавиша-акцент.
 
-/** Итог: одна строка «Записал в ленту · 2», тап — список с карандашами. */
-class SayResult(val text: String, val onClick: () -> Unit)
+/**
+ * Итог: одна строка «Записал в ленту · 2», тап — список с карандашами. [chips] — поправка одним касанием под строкой
+ * (захват, 15.10.2026: «Напомню сегодня в 12:00: …» · «Это дело · Время · Отменить»): тогда строка — до двух строк,
+ * кнопки — рядом над полем. Кнопки отдаёт сервер, строка их только рисует.
+ */
+class SayResult(val text: String, val chips: List<SayChip> = emptyList(), val onClick: () -> Unit)
+
+/** Кнопка под итогом строки «сказать»; [strong] — главная (акцент). */
+class SayChip(val label: String, val onClick: () -> Unit, val strong: Boolean = false)
 
 /** Вопрос: одна строка и две клавиши — «да» и «сказать». */
 class SayQuestion(val text: String, val onYes: () -> Unit, val onSay: () -> Unit)
@@ -104,6 +113,17 @@ fun SayBar(
     val shape = RoundedCornerShape(if (v2) KvShape.Panel else if (tall) 32.dp else 31.dp)
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (error != null) ErrorPlate(error, onRetry = onRetry)
+        val chips = result?.chips.orEmpty()
+        if (chips.isNotEmpty() && !busy) {
+            // Поправка одним касанием — над строкой, под большим пальцем: «Это дело · Время · Отменить».
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                for (c in chips) SmallKey(null, c.label, c.label, c.onClick, soft = c.strong)
+            }
+        }
         Row(
             Modifier
                 .fillMaxWidth()
@@ -162,7 +182,8 @@ fun SayBar(
                         result.text,
                         style = t.input.copy(fontSize = 15.sp),
                         color = Ink.Text,
-                        maxLines = 1,
+                        // Строка захвата — «куда легло и когда вернётся»: обрезанная на «Напомню сегодня в…» теряет смысл.
+                        maxLines = if (result.chips.isNotEmpty()) 2 else 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.clickable(onClick = result.onClick),
                     )

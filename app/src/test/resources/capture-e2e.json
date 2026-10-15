@@ -1,0 +1,2004 @@
+{
+ "_": "Записанный прогон захвата дорогой телефона на тестовой копии Дел (выдуманные данные, $0 — только правило). Записан скриптом сквозной проверки шага 0 (вне репозитория); читает app/src/test/java/ru/zf/pravka/core/CaptureE2eTest.kt.",
+ "at": "2026-10-15T19:01:24.097823+00:00",
+ "me": "sasha",
+ "runs": [
+  {
+   "say": "напомни в 12 в Контуре отправить счёт",
+   "lane": "rule",
+   "from": "say",
+   "roundtrip_ms": 123,
+   "reply": {
+    "op_id": null,
+    "ok": true,
+    "capture": {
+     "ref": "c8c605c0-7f28-4f1b-a900-35af1f67d5f7",
+     "status": "done",
+     "text": "напомни в 12 в Контуре отправить счёт",
+     "at": "2026-10-15T22:01:21.361112+03:00",
+     "by": "rule",
+     "ms": 50,
+     "form": "Н",
+     "from": "say",
+     "head": "Напомню завтра в 12:00: отправить счёт в Контуре",
+     "items": [
+      {
+       "line": "Напомню завтра в 12:00: отправить счёт в Контуре",
+       "task": {
+        "id": "8dfeaf16-d0e9-42a0-abad-f723df231300",
+        "num": 182,
+        "ball": "mine",
+        "kind": "remind",
+        "owed": false,
+        "title": "Отправить счёт в Контуре",
+        "status": "open",
+        "back_on": null,
+        "deal_id": null,
+        "due_date": null,
+        "due_time": null,
+        "focus_on": null,
+        "back_said": null,
+        "person_id": null,
+        "remind_at": "2026-10-16T12:00:00+03:00",
+        "project_id": null,
+        "remind_place": null
+       },
+       "undo": [
+        {
+         "id": "8dfeaf16-d0e9-42a0-abad-f723df231300",
+         "op": "task.cancel"
+        }
+       ],
+       "chips": [
+        {
+         "move": "task",
+         "label": "Это дело"
+        },
+        {
+         "move": "time",
+         "label": "Время",
+         "options": [
+          {
+           "at": "hour",
+           "label": "через час"
+          },
+          {
+           "at": "evening",
+           "label": "вечером 19:00"
+          },
+          {
+           "at": "tomorrow",
+           "label": "завтра 9:00"
+          },
+          {
+           "at": "monday",
+           "label": "в пн 9:00"
+          }
+         ]
+        },
+        {
+         "move": "cancel",
+         "label": "Отменить"
+        }
+       ],
+       "title": "Отправить счёт в Контуре",
+       "bucket": "remind",
+       "fields": {
+        "kind": "remind",
+        "remind_at": "2026-10-16T12:00:00+03:00"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "say": "созвон с Женей завтра в 12:30",
+   "lane": "rule",
+   "from": "say",
+   "roundtrip_ms": 191,
+   "reply": {
+    "op_id": null,
+    "ok": true,
+    "capture": {
+     "ref": "d6c46b32-bc78-455f-8ebf-5d8a42cb50e4",
+     "status": "none",
+     "text": "созвон с Женей завтра в 12:30"
+    }
+   }
+  },
+  {
+   "say": "напомни, когда приеду домой, позвонить маме",
+   "lane": "auto",
+   "from": "d",
+   "roundtrip_ms": 106,
+   "reply": {
+    "op_id": "6d0f3a44-0cbb-4c62-9467-b8c982aa5ea4",
+    "ok": true,
+    "capture": {
+     "ref": "4b25469d-5b9d-4799-8fbd-22eb7e311c4d",
+     "status": "done",
+     "text": "напомни, когда приеду домой, позвонить маме",
+     "at": "2026-10-15T22:01:21.676392+03:00",
+     "by": "rule",
+     "ms": 31,
+     "form": "Н",
+     "from": "d",
+     "head": "Напомню, когда приедешь домой: позвонить маме",
+     "items": [
+      {
+       "line": "Напомню, когда приедешь домой: позвонить маме",
+       "task": {
+        "id": "e715e6d0-1df3-4559-8722-95ba503676f8",
+        "num": 183,
+        "ball": "mine",
+        "kind": "remind",
+        "owed": false,
+        "title": "Позвонить маме",
+        "status": "open",
+        "back_on": null,
+        "deal_id": null,
+        "due_date": null,
+        "due_time": null,
+        "focus_on": null,
+        "back_said": null,
+        "person_id": null,
+        "remind_at": null,
+        "project_id": null,
+        "remind_place": "Дом"
+       },
+       "undo": [
+        {
+         "id": "e715e6d0-1df3-4559-8722-95ba503676f8",
+         "op": "task.cancel"
+        }
+       ],
+       "chips": [
+        {
+         "move": "time",
+         "label": "Время",
+         "options": [
+          {
+           "at": "hour",
+           "label": "через час"
+          },
+          {
+           "at": "evening",
+           "label": "вечером 19:00"
+          },
+          {
+           "at": "tomorrow",
+           "label": "завтра 9:00"
+          },
+          {
+           "at": "monday",
+           "label": "в пн 9:00"
+          }
+         ]
+        },
+        {
+         "move": "cancel",
+         "label": "Отменить"
+        }
+       ],
+       "title": "Позвонить маме",
+       "bucket": "place",
+       "fields": {
+        "kind": "remind",
+        "remind_place": "Дом"
+       },
+       "place_words": "домой"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "say": "позвонить Ивану на неделе",
+   "lane": "auto",
+   "from": "d",
+   "roundtrip_ms": 209,
+   "reply": {
+    "op_id": "5f5f7266-f820-4796-80da-a2b6df4c3ef4",
+    "ok": true,
+    "capture": {
+     "ref": "f70105ec-dc04-4c5b-bd12-b45de565ab57",
+     "status": "done",
+     "text": "позвонить Ивану на неделе",
+     "at": "2026-10-15T22:01:21.782938+03:00",
+     "by": "rule",
+     "ms": 32,
+     "form": "П",
+     "from": "d",
+     "head": "Потом: позвонить Ивану · верну в пятницу 16.10",
+     "items": [
+      {
+       "line": "Потом: позвонить Ивану · верну в пятницу 16.10",
+       "task": {
+        "id": "13122bd7-5755-4803-8c08-2799a3649909",
+        "num": 184,
+        "ball": "mine",
+        "kind": "task",
+        "owed": false,
+        "title": "Позвонить Ивану",
+        "status": "open",
+        "back_on": "2026-10-16",
+        "deal_id": null,
+        "due_date": null,
+        "due_time": null,
+        "focus_on": null,
+        "back_said": "на неделе",
+        "person_id": "a2499592-79dc-4100-a39c-77c076654ba8",
+        "remind_at": null,
+        "project_id": null,
+        "remind_place": null
+       },
+       "undo": [
+        {
+         "id": "13122bd7-5755-4803-8c08-2799a3649909",
+         "op": "task.cancel"
+        }
+       ],
+       "chips": [
+        {
+         "move": "today",
+         "label": "Сегодня"
+        },
+        {
+         "move": "now",
+         "label": "В «Сейчас»"
+        },
+        {
+         "move": "cancel",
+         "label": "Отменить"
+        }
+       ],
+       "title": "Позвонить Ивану",
+       "bucket": "back",
+       "fields": {
+        "back_on": "2026-10-16",
+        "back_said": "на неделе",
+        "person_id": "a2499592-79dc-4100-a39c-77c076654ba8"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "say": "идея: предложить Ромашке косткаттинг",
+   "lane": "auto",
+   "from": "d",
+   "roundtrip_ms": 109,
+   "reply": {
+    "op_id": "1f838813-6b3c-4132-ad21-8b8423b5d49e",
+    "ok": true,
+    "capture": {
+     "ref": "c75e9bd4-bad1-45f2-bb87-38d2e49bc44c",
+     "status": "done",
+     "text": "идея: предложить Ромашке косткаттинг",
+     "at": "2026-10-15T22:01:21.992092+03:00",
+     "by": "rule",
+     "ms": 22,
+     "form": "И",
+     "from": "d",
+     "head": "Идея у ООО Ромашка: предложить Ромашке косткаттинг · покажу перед встречей",
+     "items": [
+      {
+       "line": "Идея у ООО Ромашка: предложить Ромашке косткаттинг · покажу перед встречей",
+       "text": "предложить Ромашке косткаттинг",
+       "undo": [
+        {
+         "id": "e944c6be-193c-4e47-acfa-2f9927b6b06d",
+         "op": "idea.set",
+         "set": {
+          "status": "dropped"
+         }
+        }
+       ],
+       "chips": [
+        {
+         "move": "task",
+         "label": "Это дело"
+        },
+        {
+         "move": "note",
+         "label": "Заметка"
+        },
+        {
+         "move": "cancel",
+         "label": "Отменить"
+        }
+       ],
+       "bucket": "idea",
+       "deal_id": "98521c33-9883-4c33-8363-b360f5e1191b",
+       "idea_id": "e944c6be-193c-4e47-acfa-2f9927b6b06d",
+       "project_id": "edf4c08b-c373-48e5-9de5-12f1f1cbe6da"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "say": "Иван сказал, бюджет будет в январе",
+   "lane": "auto",
+   "from": "d",
+   "roundtrip_ms": 109,
+   "reply": {
+    "op_id": "48e60749-5889-4d07-a233-c8f8e84ad996",
+    "ok": true,
+    "capture": {
+     "ref": "e5ac0ac1-16a0-46ac-bd39-2a780deba8ac",
+     "status": "done",
+     "text": "Иван сказал, бюджет будет в январе",
+     "at": "2026-10-15T22:01:22.101784+03:00",
+     "by": "rule",
+     "ms": 26,
+     "form": "З1",
+     "from": "d",
+     "head": "Заметка у Ивана Петрова: бюджет будет в январе · покажу перед встречей",
+     "items": [
+      {
+       "line": "Заметка у Ивана Петрова: бюджет будет в январе · покажу перед встречей",
+       "text": "бюджет будет в январе",
+       "undo": [
+        {
+         "id": "933033ff-a205-4f13-a713-a226c0e27a3a",
+         "op": "interaction.delete"
+        }
+       ],
+       "chips": [
+        {
+         "move": "task",
+         "label": "Это дело"
+        },
+        {
+         "move": "idea",
+         "label": "Идея"
+        },
+        {
+         "move": "cancel",
+         "label": "Отменить"
+        }
+       ],
+       "bucket": "note",
+       "note_id": "933033ff-a205-4f13-a713-a226c0e27a3a",
+       "summary": "Иван: бюджет будет в январе",
+       "person_id": "a2499592-79dc-4100-a39c-77c076654ba8",
+       "project_id": "edf4c08b-c373-48e5-9de5-12f1f1cbe6da",
+       "person_said": "Иван"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "say": "позвонил Ольге",
+   "lane": "auto",
+   "from": "d",
+   "roundtrip_ms": 306,
+   "reply": {
+    "op_id": "9f8a5a49-d62e-4b44-aed9-7e83ef95ce75",
+    "ok": true,
+    "capture": {
+     "ref": "cee525bf-cc3e-4642-bfe6-75179277e682",
+     "status": "done",
+     "text": "позвонил Ольге",
+     "at": "2026-10-15T22:01:22.211229+03:00",
+     "by": "rule",
+     "ms": 112,
+     "form": "С1",
+     "from": "d",
+     "head": "Сделано: позвонил Ольге · закрыл «Позвонить Ольге» · у Ольги в хронологии",
+     "items": [
+      {
+       "did": {
+        "line": "закрыл «Позвонить Ольге» · у Ольги в хронологии",
+        "skip": null,
+        "asked": [
+         "2939cde4-9dab-4a62-99d5-ce2692b8877a",
+         "fb2eb7ca-53a8-4415-97f7-a1bc2a482283"
+        ],
+        "touch": "7e7ca46d-93c0-47a3-bc09-f4837a66cbd7",
+        "closed": "46c211dd-924f-4df1-8ad4-7abee1d1e0a4",
+        "comment": "9aa1aad2-1b91-4000-8135-4b4c767c3801",
+        "created": null,
+        "closed_title": "Позвонить Ольге",
+        "touch_existing": null
+       },
+       "line": "Сделано: позвонил Ольге · закрыл «Позвонить Ольге» · у Ольги в хронологии",
+       "said": "позвонил Ольге",
+       "task": {
+        "id": "46c211dd-924f-4df1-8ad4-7abee1d1e0a4",
+        "num": 180,
+        "ball": "mine",
+        "kind": "task",
+        "owed": true,
+        "title": "Позвонить Ольге",
+        "status": "done",
+        "back_on": null,
+        "deal_id": null,
+        "due_date": null,
+        "due_time": null,
+        "focus_on": null,
+        "back_said": null,
+        "person_id": "2f645845-9df1-45d0-b680-de92c882e14c",
+        "remind_at": null,
+        "project_id": null,
+        "remind_place": null
+       },
+       "undo": [
+        {
+         "id": "46c211dd-924f-4df1-8ad4-7abee1d1e0a4",
+         "op": "task.reopen"
+        },
+        {
+         "id": "9aa1aad2-1b91-4000-8135-4b4c767c3801",
+         "op": "comment.delete"
+        },
+        {
+         "id": "7e7ca46d-93c0-47a3-bc09-f4837a66cbd7",
+         "op": "interaction.delete"
+        },
+        {
+         "id": "2939cde4-9dab-4a62-99d5-ce2692b8877a",
+         "op": "suggestion.decide",
+         "reason": "вернул",
+         "decision": "reject"
+        },
+        {
+         "id": "fb2eb7ca-53a8-4415-97f7-a1bc2a482283",
+         "op": "suggestion.decide",
+         "reason": "вернул",
+         "decision": "reject"
+        }
+       ],
+       "chips": [
+        {
+         "move": "keep_open",
+         "label": "Не закрывать"
+        },
+        {
+         "move": "cancel",
+         "label": "Отменить"
+        }
+       ],
+       "title": "Позвонил Ольге",
+       "bucket": "did",
+       "fields": {
+        "ball": "mine",
+        "person_id": "2f645845-9df1-45d0-b680-de92c882e14c"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "say": "купить магний",
+   "lane": "auto",
+   "from": "d",
+   "roundtrip_ms": 129,
+   "reply": {
+    "op_id": "5f9285aa-f3d0-4800-9351-25c8dbb10d09",
+    "ok": true,
+    "capture": {
+     "ref": "3327493e-809e-485f-a0cf-24b7f35107f6",
+     "status": "done",
+     "text": "купить магний",
+     "at": "2026-10-15T22:01:22.518130+03:00",
+     "by": "rule",
+     "ms": 31,
+     "form": "Г",
+     "from": "d",
+     "head": "Потом: купить магний · верну в пятницу 16.10",
+     "items": [
+      {
+       "line": "Потом: купить магний · верну в пятницу 16.10",
+       "task": {
+        "id": "1dc62783-862b-405b-9881-ea40c4db40bf",
+        "num": 185,
+        "ball": "mine",
+        "kind": "task",
+        "owed": false,
+        "title": "Купить магний",
+        "status": "open",
+        "back_on": "2026-10-16",
+        "deal_id": null,
+        "due_date": null,
+        "due_time": null,
+        "focus_on": null,
+        "back_said": null,
+        "person_id": null,
+        "remind_at": null,
+        "project_id": null,
+        "remind_place": null
+       },
+       "undo": [
+        {
+         "id": "1dc62783-862b-405b-9881-ea40c4db40bf",
+         "op": "task.cancel"
+        }
+       ],
+       "chips": [
+        {
+         "move": "today",
+         "label": "Сегодня"
+        },
+        {
+         "move": "now",
+         "label": "В «Сейчас»"
+        },
+        {
+         "move": "cancel",
+         "label": "Отменить"
+        }
+       ],
+       "title": "Купить магний",
+       "bucket": "back",
+       "fields": {
+        "back_on": "2026-10-16"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "say": "напомни через полчаса выключить духовку",
+   "lane": "auto",
+   "from": "d",
+   "roundtrip_ms": 220,
+   "reply": {
+    "op_id": "ea425e8b-9ac0-47ff-a303-5b7a08a747ec",
+    "ok": true,
+    "capture": {
+     "ref": "869167f6-a062-425b-98c5-dd2f270f0c03",
+     "status": "done",
+     "text": "напомни через полчаса выключить духовку",
+     "at": "2026-10-15T22:01:22.647834+03:00",
+     "by": "rule",
+     "ms": 32,
+     "form": "Н",
+     "from": "d",
+     "head": "Напомню сегодня в 22:31: выключить духовку",
+     "items": [
+      {
+       "line": "Напомню сегодня в 22:31: выключить духовку",
+       "task": {
+        "id": "e0867bae-bc40-4f0c-bbb6-53112f0e4cd1",
+        "num": 186,
+        "ball": "mine",
+        "kind": "remind",
+        "owed": false,
+        "title": "Выключить духовку",
+        "status": "open",
+        "back_on": null,
+        "deal_id": null,
+        "due_date": null,
+        "due_time": null,
+        "focus_on": null,
+        "back_said": null,
+        "person_id": null,
+        "remind_at": "2026-10-15T22:31:00+03:00",
+        "project_id": null,
+        "remind_place": null
+       },
+       "undo": [
+        {
+         "id": "e0867bae-bc40-4f0c-bbb6-53112f0e4cd1",
+         "op": "task.cancel"
+        }
+       ],
+       "chips": [
+        {
+         "move": "task",
+         "label": "Это дело"
+        },
+        {
+         "move": "time",
+         "label": "Время",
+         "options": [
+          {
+           "at": "hour",
+           "label": "через час"
+          },
+          {
+           "at": "evening",
+           "label": "вечером 19:00"
+          },
+          {
+           "at": "tomorrow",
+           "label": "завтра 9:00"
+          },
+          {
+           "at": "monday",
+           "label": "в пн 9:00"
+          }
+         ]
+        },
+        {
+         "move": "cancel",
+         "label": "Отменить"
+        }
+       ],
+       "title": "Выключить духовку",
+       "bucket": "remind",
+       "fields": {
+        "kind": "remind",
+        "remind_at": "2026-10-15T22:31:00+03:00"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "say": "повтор того же ref",
+   "lane": "auto",
+   "from": "say",
+   "reply": {
+    "op_id": "1d53cada-f990-4051-9f32-49af0a651005",
+    "ok": true,
+    "capture": {
+     "ref": "c8c605c0-7f28-4f1b-a900-35af1f67d5f7",
+     "status": "done",
+     "text": "напомни в 12 в Контуре отправить счёт",
+     "at": "2026-10-15T22:01:21.361112+03:00",
+     "by": "rule",
+     "ms": 50,
+     "form": "Н",
+     "from": "say",
+     "head": "Напомню завтра в 12:00: отправить счёт в Контуре",
+     "items": [
+      {
+       "line": "Напомню завтра в 12:00: отправить счёт в Контуре",
+       "task": {
+        "id": "8dfeaf16-d0e9-42a0-abad-f723df231300",
+        "num": 182,
+        "ball": "mine",
+        "kind": "remind",
+        "owed": false,
+        "title": "Отправить счёт в Контуре",
+        "status": "open",
+        "back_on": null,
+        "deal_id": null,
+        "due_date": null,
+        "due_time": null,
+        "focus_on": null,
+        "back_said": null,
+        "person_id": null,
+        "remind_at": "2026-10-16T12:00:00+03:00",
+        "project_id": null,
+        "remind_place": null
+       },
+       "undo": [
+        {
+         "id": "8dfeaf16-d0e9-42a0-abad-f723df231300",
+         "op": "task.cancel"
+        }
+       ],
+       "chips": [
+        {
+         "move": "task",
+         "label": "Это дело"
+        },
+        {
+         "move": "time",
+         "label": "Время",
+         "options": [
+          {
+           "at": "hour",
+           "label": "через час"
+          },
+          {
+           "at": "evening",
+           "label": "вечером 19:00"
+          },
+          {
+           "at": "tomorrow",
+           "label": "завтра 9:00"
+          },
+          {
+           "at": "monday",
+           "label": "в пн 9:00"
+          }
+         ]
+        },
+        {
+         "move": "cancel",
+         "label": "Отменить"
+        }
+       ],
+       "title": "Отправить счёт в Контуре",
+       "bucket": "remind",
+       "fields": {
+        "kind": "remind",
+        "remind_at": "2026-10-16T12:00:00+03:00"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "move": "time",
+   "at": "tomorrow",
+   "ref": "c8c605c0-7f28-4f1b-a900-35af1f67d5f7",
+   "reply": {
+    "op_id": "87075058-d840-40df-bf84-1951788914e8",
+    "ok": true,
+    "capture": {
+     "ref": "c8c605c0-7f28-4f1b-a900-35af1f67d5f7",
+     "status": "done",
+     "text": "напомни в 12 в Контуре отправить счёт",
+     "at": "2026-10-15T22:01:21.361112+03:00",
+     "by": "rule",
+     "ms": 50,
+     "form": "Н",
+     "from": "say",
+     "head": "Переложил: Напомню завтра в 9:00: отправить счёт в Контуре",
+     "items": [
+      {
+       "line": "Переложил: Напомню завтра в 9:00: отправить счёт в Контуре",
+       "task": {
+        "id": "8dfeaf16-d0e9-42a0-abad-f723df231300",
+        "num": 182,
+        "ball": "mine",
+        "kind": "remind",
+        "owed": false,
+        "title": "Отправить счёт в Контуре",
+        "status": "open",
+        "back_on": null,
+        "deal_id": null,
+        "due_date": null,
+        "due_time": null,
+        "focus_on": null,
+        "back_said": null,
+        "person_id": null,
+        "remind_at": "2026-10-16T09:00:00+03:00",
+        "project_id": null,
+        "remind_place": null
+       },
+       "undo": [
+        {
+         "id": "8dfeaf16-d0e9-42a0-abad-f723df231300",
+         "op": "task.cancel"
+        }
+       ],
+       "chips": [
+        {
+         "move": "task",
+         "label": "Это дело"
+        },
+        {
+         "move": "time",
+         "label": "Время",
+         "options": [
+          {
+           "at": "hour",
+           "label": "через час"
+          },
+          {
+           "at": "evening",
+           "label": "вечером 19:00"
+          },
+          {
+           "at": "tomorrow",
+           "label": "завтра 9:00"
+          },
+          {
+           "at": "monday",
+           "label": "в пн 9:00"
+          }
+         ]
+        },
+        {
+         "move": "cancel",
+         "label": "Отменить"
+        }
+       ],
+       "title": "Отправить счёт в Контуре",
+       "bucket": "remind",
+       "fields": {
+        "kind": "remind",
+        "remind_at": "2026-10-16T12:00:00+03:00"
+       }
+      }
+     ]
+    },
+    "item": {
+     "line": "Переложил: Напомню завтра в 9:00: отправить счёт в Контуре",
+     "task": {
+      "id": "8dfeaf16-d0e9-42a0-abad-f723df231300",
+      "num": 182,
+      "title": "Отправить счёт в Контуре",
+      "kind": "remind",
+      "status": "open",
+      "due_date": null,
+      "due_time": null,
+      "remind_at": "2026-10-16T09:00:00+03:00",
+      "remind_place": null,
+      "focus_on": null,
+      "back_on": null,
+      "back_said": null,
+      "person_id": null,
+      "project_id": null,
+      "deal_id": null,
+      "ball": "mine",
+      "owed": false
+     },
+     "undo": [
+      {
+       "id": "8dfeaf16-d0e9-42a0-abad-f723df231300",
+       "op": "task.cancel"
+      }
+     ],
+     "chips": [
+      {
+       "label": "Это дело",
+       "move": "task"
+      },
+      {
+       "label": "Время",
+       "move": "time",
+       "options": [
+        {
+         "label": "через час",
+         "at": "hour"
+        },
+        {
+         "label": "вечером 19:00",
+         "at": "evening"
+        },
+        {
+         "label": "завтра 9:00",
+         "at": "tomorrow"
+        },
+        {
+         "label": "в пн 9:00",
+         "at": "monday"
+        }
+       ]
+      },
+      {
+       "label": "Отменить",
+       "move": "cancel"
+      }
+     ],
+     "title": "Отправить счёт в Контуре",
+     "bucket": "remind",
+     "fields": {
+      "kind": "remind",
+      "remind_at": "2026-10-16T12:00:00+03:00"
+     }
+    }
+   }
+  },
+  {
+   "move": "now",
+   "at": null,
+   "ref": "3327493e-809e-485f-a0cf-24b7f35107f6",
+   "reply": {
+    "op_id": "986a0f41-9f55-4ede-9580-e8ca60f4eebe",
+    "ok": true,
+    "capture": {
+     "ref": "3327493e-809e-485f-a0cf-24b7f35107f6",
+     "status": "done",
+     "text": "купить магний",
+     "at": "2026-10-15T22:01:22.518130+03:00",
+     "by": "rule",
+     "ms": 31,
+     "form": "Г",
+     "from": "d",
+     "head": "Переложил: В «Сейчас» (2 из 5): купить магний",
+     "items": [
+      {
+       "line": "Переложил: В «Сейчас» (2 из 5): купить магний",
+       "task": {
+        "id": "1dc62783-862b-405b-9881-ea40c4db40bf",
+        "num": 185,
+        "ball": "mine",
+        "kind": "task",
+        "owed": false,
+        "title": "Купить магний",
+        "status": "open",
+        "back_on": null,
+        "deal_id": null,
+        "due_date": null,
+        "due_time": null,
+        "focus_on": "2026-10-15",
+        "back_said": null,
+        "person_id": null,
+        "remind_at": null,
+        "project_id": null,
+        "remind_place": null
+       },
+       "undo": [
+        {
+         "id": "1dc62783-862b-405b-9881-ea40c4db40bf",
+         "op": "task.cancel"
+        }
+       ],
+       "chips": [
+        {
+         "move": "today",
+         "label": "Сегодня"
+        },
+        {
+         "move": "back",
+         "label": "Потом"
+        },
+        {
+         "move": "cancel",
+         "label": "Отменить"
+        }
+       ],
+       "now_n": 2,
+       "title": "Купить магний",
+       "bucket": "now",
+       "fields": {
+        "back_on": "2026-10-16"
+       },
+       "now_full": false
+      }
+     ]
+    },
+    "item": {
+     "line": "Переложил: В «Сейчас» (2 из 5): купить магний",
+     "task": {
+      "id": "1dc62783-862b-405b-9881-ea40c4db40bf",
+      "num": 185,
+      "title": "Купить магний",
+      "kind": "task",
+      "status": "open",
+      "due_date": null,
+      "due_time": null,
+      "remind_at": null,
+      "remind_place": null,
+      "focus_on": "2026-10-15",
+      "back_on": null,
+      "back_said": null,
+      "person_id": null,
+      "project_id": null,
+      "deal_id": null,
+      "ball": "mine",
+      "owed": false
+     },
+     "undo": [
+      {
+       "id": "1dc62783-862b-405b-9881-ea40c4db40bf",
+       "op": "task.cancel"
+      }
+     ],
+     "chips": [
+      {
+       "label": "Сегодня",
+       "move": "today"
+      },
+      {
+       "label": "Потом",
+       "move": "back"
+      },
+      {
+       "label": "Отменить",
+       "move": "cancel"
+      }
+     ],
+     "title": "Купить магний",
+     "bucket": "now",
+     "fields": {
+      "back_on": "2026-10-16"
+     },
+     "now_n": 2,
+     "now_full": false
+    }
+   }
+  },
+  {
+   "move": "cancel",
+   "at": null,
+   "ref": "869167f6-a062-425b-98c5-dd2f270f0c03",
+   "reply": {
+    "op_id": "833ec878-9c34-411b-a3e0-41bece48ef30",
+    "ok": true,
+    "capture": {
+     "ref": "869167f6-a062-425b-98c5-dd2f270f0c03",
+     "status": "done",
+     "text": "напомни через полчаса выключить духовку",
+     "at": "2026-10-15T22:01:22.647834+03:00",
+     "by": "rule",
+     "ms": 32,
+     "form": "Н",
+     "from": "d",
+     "head": "Отменил: Напомню сегодня в 22:31: выключить духовку",
+     "items": [
+      {
+       "line": "Отменил: Напомню сегодня в 22:31: выключить духовку",
+       "task": {
+        "id": "e0867bae-bc40-4f0c-bbb6-53112f0e4cd1",
+        "num": 186,
+        "ball": "mine",
+        "kind": "remind",
+        "owed": false,
+        "title": "Выключить духовку",
+        "status": "open",
+        "back_on": null,
+        "deal_id": null,
+        "due_date": null,
+        "due_time": null,
+        "focus_on": null,
+        "back_said": null,
+        "person_id": null,
+        "remind_at": "2026-10-15T22:31:00+03:00",
+        "project_id": null,
+        "remind_place": null
+       },
+       "undo": [],
+       "chips": [],
+       "title": "Выключить духовку",
+       "bucket": "cancelled",
+       "fields": {
+        "kind": "remind",
+        "remind_at": "2026-10-15T22:31:00+03:00"
+       },
+       "was_line": "Напомню сегодня в 22:31: выключить духовку"
+      }
+     ]
+    },
+    "item": {
+     "line": "Отменил: Напомню сегодня в 22:31: выключить духовку",
+     "task": {
+      "id": "e0867bae-bc40-4f0c-bbb6-53112f0e4cd1",
+      "num": 186,
+      "ball": "mine",
+      "kind": "remind",
+      "owed": false,
+      "title": "Выключить духовку",
+      "status": "open",
+      "back_on": null,
+      "deal_id": null,
+      "due_date": null,
+      "due_time": null,
+      "focus_on": null,
+      "back_said": null,
+      "person_id": null,
+      "remind_at": "2026-10-15T22:31:00+03:00",
+      "project_id": null,
+      "remind_place": null
+     },
+     "undo": [],
+     "chips": [],
+     "title": "Выключить духовку",
+     "bucket": "cancelled",
+     "fields": {
+      "kind": "remind",
+      "remind_at": "2026-10-15T22:31:00+03:00"
+     },
+     "was_line": "Напомню сегодня в 22:31: выключить духовку"
+    }
+   }
+  },
+  {
+   "move": "keep_open",
+   "at": null,
+   "ref": "cee525bf-cc3e-4642-bfe6-75179277e682",
+   "reply": {
+    "op_id": "edfa585b-7df4-41b7-8c99-fcb5e73f5b63",
+    "ok": true,
+    "capture": {
+     "ref": "cee525bf-cc3e-4642-bfe6-75179277e682",
+     "status": "done",
+     "text": "позвонил Ольге",
+     "at": "2026-10-15T22:01:22.211229+03:00",
+     "by": "rule",
+     "ms": 112,
+     "form": "С1",
+     "from": "d",
+     "head": "Переложил: Сделано: позвонил Ольге · «Позвонить Ольге» оставил открытым · звонок в хронологии остался",
+     "items": [
+      {
+       "did": {
+        "line": "«Позвонить Ольге» оставил открытым · звонок в хронологии остался",
+        "skip": null,
+        "asked": [
+         "2939cde4-9dab-4a62-99d5-ce2692b8877a",
+         "fb2eb7ca-53a8-4415-97f7-a1bc2a482283"
+        ],
+        "touch": "7e7ca46d-93c0-47a3-bc09-f4837a66cbd7",
+        "closed": null,
+        "comment": "9aa1aad2-1b91-4000-8135-4b4c767c3801",
+        "created": null,
+        "closed_title": "Позвонить Ольге",
+        "touch_existing": null
+       },
+       "line": "Переложил: Сделано: позвонил Ольге · «Позвонить Ольге» оставил открытым · звонок в хронологии остался",
+       "said": "позвонил Ольге",
+       "task": {
+        "id": "46c211dd-924f-4df1-8ad4-7abee1d1e0a4",
+        "num": 180,
+        "ball": "mine",
+        "kind": "task",
+        "owed": true,
+        "title": "Позвонить Ольге",
+        "status": "done",
+        "back_on": null,
+        "deal_id": null,
+        "due_date": null,
+        "due_time": null,
+        "focus_on": null,
+        "back_said": null,
+        "person_id": "2f645845-9df1-45d0-b680-de92c882e14c",
+        "remind_at": null,
+        "project_id": null,
+        "remind_place": null
+       },
+       "undo": [
+        {
+         "id": "7e7ca46d-93c0-47a3-bc09-f4837a66cbd7",
+         "op": "interaction.delete"
+        },
+        {
+         "id": "2939cde4-9dab-4a62-99d5-ce2692b8877a",
+         "op": "suggestion.decide",
+         "reason": "вернул",
+         "decision": "reject"
+        },
+        {
+         "id": "fb2eb7ca-53a8-4415-97f7-a1bc2a482283",
+         "op": "suggestion.decide",
+         "reason": "вернул",
+         "decision": "reject"
+        }
+       ],
+       "chips": [
+        {
+         "move": "cancel",
+         "label": "Отменить"
+        }
+       ],
+       "title": "Позвонил Ольге",
+       "bucket": "did",
+       "fields": {
+        "ball": "mine",
+        "person_id": "2f645845-9df1-45d0-b680-de92c882e14c"
+       }
+      }
+     ]
+    },
+    "item": {
+     "did": {
+      "line": "«Позвонить Ольге» оставил открытым · звонок в хронологии остался",
+      "skip": null,
+      "asked": [
+       "2939cde4-9dab-4a62-99d5-ce2692b8877a",
+       "fb2eb7ca-53a8-4415-97f7-a1bc2a482283"
+      ],
+      "touch": "7e7ca46d-93c0-47a3-bc09-f4837a66cbd7",
+      "closed": null,
+      "comment": "9aa1aad2-1b91-4000-8135-4b4c767c3801",
+      "created": null,
+      "closed_title": "Позвонить Ольге",
+      "touch_existing": null
+     },
+     "line": "Переложил: Сделано: позвонил Ольге · «Позвонить Ольге» оставил открытым · звонок в хронологии остался",
+     "said": "позвонил Ольге",
+     "task": {
+      "id": "46c211dd-924f-4df1-8ad4-7abee1d1e0a4",
+      "num": 180,
+      "ball": "mine",
+      "kind": "task",
+      "owed": true,
+      "title": "Позвонить Ольге",
+      "status": "done",
+      "back_on": null,
+      "deal_id": null,
+      "due_date": null,
+      "due_time": null,
+      "focus_on": null,
+      "back_said": null,
+      "person_id": "2f645845-9df1-45d0-b680-de92c882e14c",
+      "remind_at": null,
+      "project_id": null,
+      "remind_place": null
+     },
+     "undo": [
+      {
+       "id": "7e7ca46d-93c0-47a3-bc09-f4837a66cbd7",
+       "op": "interaction.delete"
+      },
+      {
+       "id": "2939cde4-9dab-4a62-99d5-ce2692b8877a",
+       "op": "suggestion.decide",
+       "reason": "вернул",
+       "decision": "reject"
+      },
+      {
+       "id": "fb2eb7ca-53a8-4415-97f7-a1bc2a482283",
+       "op": "suggestion.decide",
+       "reason": "вернул",
+       "decision": "reject"
+      }
+     ],
+     "chips": [
+      {
+       "label": "Отменить",
+       "move": "cancel"
+      }
+     ],
+     "title": "Позвонил Ольге",
+     "bucket": "did",
+     "fields": {
+      "ball": "mine",
+      "person_id": "2f645845-9df1-45d0-b680-de92c882e14c"
+     }
+    }
+   }
+  },
+  {
+   "view": "c8c605c0-7f28-4f1b-a900-35af1f67d5f7",
+   "reply": {
+    "ok": true,
+    "capture": {
+     "ref": "c8c605c0-7f28-4f1b-a900-35af1f67d5f7",
+     "status": "done",
+     "text": "напомни в 12 в Контуре отправить счёт",
+     "at": "2026-10-15T22:01:21.361112+03:00",
+     "by": "rule",
+     "ms": 50,
+     "form": "Н",
+     "from": "say",
+     "head": "Переложил: Напомню завтра в 9:00: отправить счёт в Контуре",
+     "items": [
+      {
+       "line": "Переложил: Напомню завтра в 9:00: отправить счёт в Контуре",
+       "task": {
+        "id": "8dfeaf16-d0e9-42a0-abad-f723df231300",
+        "num": 182,
+        "ball": "mine",
+        "kind": "remind",
+        "owed": false,
+        "title": "Отправить счёт в Контуре",
+        "status": "open",
+        "back_on": null,
+        "deal_id": null,
+        "due_date": null,
+        "due_time": null,
+        "focus_on": null,
+        "back_said": null,
+        "person_id": null,
+        "remind_at": "2026-10-16T09:00:00+03:00",
+        "project_id": null,
+        "remind_place": null
+       },
+       "undo": [
+        {
+         "id": "8dfeaf16-d0e9-42a0-abad-f723df231300",
+         "op": "task.cancel"
+        }
+       ],
+       "chips": [
+        {
+         "move": "task",
+         "label": "Это дело"
+        },
+        {
+         "move": "time",
+         "label": "Время",
+         "options": [
+          {
+           "at": "hour",
+           "label": "через час"
+          },
+          {
+           "at": "evening",
+           "label": "вечером 19:00"
+          },
+          {
+           "at": "tomorrow",
+           "label": "завтра 9:00"
+          },
+          {
+           "at": "monday",
+           "label": "в пн 9:00"
+          }
+         ]
+        },
+        {
+         "move": "cancel",
+         "label": "Отменить"
+        }
+       ],
+       "title": "Отправить счёт в Контуре",
+       "bucket": "remind",
+       "fields": {
+        "kind": "remind",
+        "remind_at": "2026-10-16T12:00:00+03:00"
+       }
+      }
+     ]
+    }
+   }
+  }
+ ],
+ "sync": {
+  "full": true,
+  "seq": 638,
+  "today": "2026-10-15",
+  "features": [
+   "remind",
+   "svod",
+   "people",
+   "dictations",
+   "groups",
+   "where",
+   "krug",
+   "meetings",
+   "tree",
+   "place",
+   "options",
+   "digest",
+   "zasechka",
+   "phone",
+   "spend",
+   "digest_crm",
+   "people_new",
+   "people_link",
+   "meeting_touch",
+   "deal_steps",
+   "capture",
+   "capture_model",
+   "ideas",
+   "did",
+   "remind_phone"
+  ],
+  "tasks": [
+   {
+    "id": "1dc62783-862b-405b-9881-ea40c4db40bf",
+    "num": 185,
+    "title": "Купить магний",
+    "notes": null,
+    "project_id": null,
+    "deal_id": null,
+    "owner_id": "sasha",
+    "ball": "mine",
+    "person_id": null,
+    "waiting_since": null,
+    "nudge_on": null,
+    "requested_by": null,
+    "due_date": null,
+    "due_time": null,
+    "estimate_min": null,
+    "money": null,
+    "want": false,
+    "focus_on": "2026-10-15",
+    "labels": [],
+    "status": "open",
+    "source": "voice",
+    "source_ref": "capture:3327493e-809e-485f-a0cf-24b7f35107f6",
+    "created_by": "sasha",
+    "created_at": "2026-10-15T22:01:22+03:00",
+    "updated_at": "2026-10-15T22:01:23+03:00",
+    "completed_at": null,
+    "import_ref": null,
+    "rev": 2,
+    "seq": 633,
+    "remind_at": null,
+    "remind_place": null,
+    "reminded_at": null,
+    "owed": false,
+    "kind": "task",
+    "back_on": null,
+    "back_said": null,
+    "back_n": 0,
+    "reminded_via": null,
+    "money_eff": "none",
+    "sphere": "inbox",
+    "project_name": null,
+    "project_kind": null,
+    "deal_name": null,
+    "person_short": null,
+    "person_name": null,
+    "requested_by_short": null,
+    "overdue": null,
+    "now_": true,
+    "grp": "self",
+    "directions": [],
+    "why_id": null,
+    "krug_seq": null,
+    "dirs": [],
+    "why_num": null,
+    "why_title": null,
+    "steps_open": 0,
+    "goal": false,
+    "rhythm": null,
+    "no_steps": false
+   },
+   {
+    "id": "46c211dd-924f-4df1-8ad4-7abee1d1e0a4",
+    "num": 180,
+    "title": "Позвонить Ольге",
+    "notes": null,
+    "project_id": null,
+    "deal_id": null,
+    "owner_id": "sasha",
+    "ball": "mine",
+    "person_id": "2f645845-9df1-45d0-b680-de92c882e14c",
+    "waiting_since": null,
+    "nudge_on": null,
+    "requested_by": null,
+    "due_date": null,
+    "due_time": null,
+    "estimate_min": null,
+    "money": null,
+    "want": false,
+    "focus_on": null,
+    "labels": [],
+    "status": "open",
+    "source": "manual",
+    "source_ref": null,
+    "created_by": "sasha",
+    "created_at": "2026-10-15T22:01:21+03:00",
+    "updated_at": "2026-10-15T22:01:23+03:00",
+    "completed_at": null,
+    "import_ref": null,
+    "rev": 3,
+    "seq": 637,
+    "remind_at": null,
+    "remind_place": null,
+    "reminded_at": null,
+    "owed": true,
+    "kind": "task",
+    "back_on": null,
+    "back_said": null,
+    "back_n": 0,
+    "reminded_via": null,
+    "money_eff": "none",
+    "sphere": "inbox",
+    "project_name": null,
+    "project_kind": null,
+    "deal_name": null,
+    "person_short": "Ольга",
+    "person_name": "Ольга Смирнова",
+    "requested_by_short": null,
+    "overdue": null,
+    "now_": null,
+    "grp": "owed",
+    "directions": [],
+    "why_id": null,
+    "krug_seq": null,
+    "dirs": [],
+    "why_num": null,
+    "why_title": null,
+    "steps_open": 0,
+    "goal": false,
+    "rhythm": null,
+    "no_steps": false
+   },
+   {
+    "id": "e0867bae-bc40-4f0c-bbb6-53112f0e4cd1",
+    "num": 186,
+    "title": "Выключить духовку",
+    "notes": null,
+    "project_id": null,
+    "deal_id": null,
+    "owner_id": "sasha",
+    "ball": "mine",
+    "person_id": null,
+    "waiting_since": null,
+    "nudge_on": null,
+    "requested_by": null,
+    "due_date": null,
+    "due_time": null,
+    "estimate_min": null,
+    "money": null,
+    "want": false,
+    "focus_on": null,
+    "labels": [],
+    "status": "cancelled",
+    "source": "voice",
+    "source_ref": "capture:869167f6-a062-425b-98c5-dd2f270f0c03",
+    "created_by": "sasha",
+    "created_at": "2026-10-15T22:01:22+03:00",
+    "updated_at": "2026-10-15T22:01:23+03:00",
+    "completed_at": "2026-10-15T22:01:23+03:00",
+    "import_ref": null,
+    "rev": 2,
+    "seq": 635,
+    "remind_at": "2026-10-15T22:31:00+03:00",
+    "remind_place": null,
+    "reminded_at": null,
+    "owed": false,
+    "kind": "remind",
+    "back_on": null,
+    "back_said": null,
+    "back_n": 0,
+    "reminded_via": null,
+    "money_eff": "none",
+    "sphere": "inbox",
+    "project_name": null,
+    "project_kind": null,
+    "deal_name": null,
+    "person_short": null,
+    "person_name": null,
+    "requested_by_short": null,
+    "overdue": false,
+    "now_": null,
+    "grp": "self",
+    "directions": [],
+    "why_id": null,
+    "krug_seq": null,
+    "dirs": [],
+    "why_num": null,
+    "why_title": null,
+    "steps_open": 0,
+    "goal": false,
+    "rhythm": null,
+    "no_steps": false
+   },
+   {
+    "id": "93ddd1d9-7875-4522-b6a0-ba1c3439f472",
+    "num": 181,
+    "title": "Иван: прислать сверку",
+    "notes": null,
+    "project_id": null,
+    "deal_id": null,
+    "owner_id": "sasha",
+    "ball": "waiting",
+    "person_id": "a2499592-79dc-4100-a39c-77c076654ba8",
+    "waiting_since": "2026-10-15",
+    "nudge_on": null,
+    "requested_by": null,
+    "due_date": null,
+    "due_time": null,
+    "estimate_min": null,
+    "money": null,
+    "want": false,
+    "focus_on": null,
+    "labels": [],
+    "status": "open",
+    "source": "manual",
+    "source_ref": null,
+    "created_by": "sasha",
+    "created_at": "2026-10-15T22:01:21+03:00",
+    "updated_at": "2026-10-15T22:01:21+03:00",
+    "completed_at": null,
+    "import_ref": null,
+    "rev": 1,
+    "seq": 600,
+    "remind_at": null,
+    "remind_place": null,
+    "reminded_at": null,
+    "owed": false,
+    "kind": "task",
+    "back_on": null,
+    "back_said": null,
+    "back_n": 0,
+    "reminded_via": null,
+    "money_eff": "none",
+    "sphere": "inbox",
+    "project_name": null,
+    "project_kind": null,
+    "deal_name": null,
+    "person_short": "Иван",
+    "person_name": "Иван Петров",
+    "requested_by_short": null,
+    "overdue": null,
+    "now_": null,
+    "grp": "check",
+    "directions": [],
+    "why_id": null,
+    "krug_seq": null,
+    "dirs": [],
+    "why_num": null,
+    "why_title": null,
+    "steps_open": 0,
+    "goal": false,
+    "rhythm": null,
+    "no_steps": false
+   },
+   {
+    "id": "e715e6d0-1df3-4559-8722-95ba503676f8",
+    "num": 183,
+    "title": "Позвонить маме",
+    "notes": null,
+    "project_id": null,
+    "deal_id": null,
+    "owner_id": "sasha",
+    "ball": "mine",
+    "person_id": null,
+    "waiting_since": null,
+    "nudge_on": null,
+    "requested_by": null,
+    "due_date": null,
+    "due_time": null,
+    "estimate_min": null,
+    "money": null,
+    "want": false,
+    "focus_on": null,
+    "labels": [],
+    "status": "open",
+    "source": "voice",
+    "source_ref": "capture:4b25469d-5b9d-4799-8fbd-22eb7e311c4d",
+    "created_by": "sasha",
+    "created_at": "2026-10-15T22:01:21+03:00",
+    "updated_at": "2026-10-15T22:01:21+03:00",
+    "completed_at": null,
+    "import_ref": null,
+    "rev": 1,
+    "seq": 605,
+    "remind_at": null,
+    "remind_place": "Дом",
+    "reminded_at": null,
+    "owed": false,
+    "kind": "remind",
+    "back_on": null,
+    "back_said": null,
+    "back_n": 0,
+    "reminded_via": null,
+    "money_eff": "none",
+    "sphere": "inbox",
+    "project_name": null,
+    "project_kind": null,
+    "deal_name": null,
+    "person_short": null,
+    "person_name": null,
+    "requested_by_short": null,
+    "overdue": null,
+    "now_": null,
+    "grp": "self",
+    "directions": [],
+    "why_id": null,
+    "krug_seq": null,
+    "dirs": [],
+    "why_num": null,
+    "why_title": null,
+    "steps_open": 0,
+    "goal": false,
+    "rhythm": null,
+    "no_steps": false
+   },
+   {
+    "id": "8dfeaf16-d0e9-42a0-abad-f723df231300",
+    "num": 182,
+    "title": "Отправить счёт в Контуре",
+    "notes": null,
+    "project_id": null,
+    "deal_id": null,
+    "owner_id": "sasha",
+    "ball": "mine",
+    "person_id": null,
+    "waiting_since": null,
+    "nudge_on": null,
+    "requested_by": null,
+    "due_date": null,
+    "due_time": null,
+    "estimate_min": null,
+    "money": null,
+    "want": false,
+    "focus_on": null,
+    "labels": [],
+    "status": "open",
+    "source": "voice",
+    "source_ref": "capture:c8c605c0-7f28-4f1b-a900-35af1f67d5f7",
+    "created_by": "sasha",
+    "created_at": "2026-10-15T22:01:21+03:00",
+    "updated_at": "2026-10-15T22:01:23+03:00",
+    "completed_at": null,
+    "import_ref": null,
+    "rev": 2,
+    "seq": 631,
+    "remind_at": "2026-10-16T09:00:00+03:00",
+    "remind_place": null,
+    "reminded_at": null,
+    "owed": false,
+    "kind": "remind",
+    "back_on": null,
+    "back_said": null,
+    "back_n": 0,
+    "reminded_via": null,
+    "money_eff": "none",
+    "sphere": "inbox",
+    "project_name": null,
+    "project_kind": null,
+    "deal_name": null,
+    "person_short": null,
+    "person_name": null,
+    "requested_by_short": null,
+    "overdue": null,
+    "now_": null,
+    "grp": "self",
+    "directions": [],
+    "why_id": null,
+    "krug_seq": null,
+    "dirs": [],
+    "why_num": null,
+    "why_title": null,
+    "steps_open": 0,
+    "goal": false,
+    "rhythm": null,
+    "no_steps": false
+   },
+   {
+    "id": "13122bd7-5755-4803-8c08-2799a3649909",
+    "num": 184,
+    "title": "Позвонить Ивану",
+    "notes": null,
+    "project_id": null,
+    "deal_id": null,
+    "owner_id": "sasha",
+    "ball": "mine",
+    "person_id": "a2499592-79dc-4100-a39c-77c076654ba8",
+    "waiting_since": null,
+    "nudge_on": null,
+    "requested_by": null,
+    "due_date": null,
+    "due_time": null,
+    "estimate_min": null,
+    "money": null,
+    "want": false,
+    "focus_on": null,
+    "labels": [],
+    "status": "open",
+    "source": "voice",
+    "source_ref": "capture:f70105ec-dc04-4c5b-bd12-b45de565ab57",
+    "created_by": "sasha",
+    "created_at": "2026-10-15T22:01:21+03:00",
+    "updated_at": "2026-10-15T22:01:21+03:00",
+    "completed_at": null,
+    "import_ref": null,
+    "rev": 1,
+    "seq": 608,
+    "remind_at": null,
+    "remind_place": null,
+    "reminded_at": null,
+    "owed": false,
+    "kind": "task",
+    "back_on": "2026-10-16",
+    "back_said": "на неделе",
+    "back_n": 0,
+    "reminded_via": null,
+    "money_eff": "none",
+    "sphere": "inbox",
+    "project_name": null,
+    "project_kind": null,
+    "deal_name": null,
+    "person_short": "Иван",
+    "person_name": "Иван Петров",
+    "requested_by_short": null,
+    "overdue": null,
+    "now_": null,
+    "grp": "self",
+    "directions": [],
+    "why_id": null,
+    "krug_seq": null,
+    "dirs": [],
+    "why_num": null,
+    "why_title": null,
+    "steps_open": 0,
+    "goal": false,
+    "rhythm": null,
+    "no_steps": false
+   }
+  ],
+  "ideas": [
+   {
+    "id": "e944c6be-193c-4e47-acfa-2f9927b6b06d",
+    "owner_id": "sasha",
+    "text": "предложить Ромашке косткаттинг",
+    "project_id": "edf4c08b-c373-48e5-9de5-12f1f1cbe6da",
+    "person_id": null,
+    "deal_id": "98521c33-9883-4c33-8363-b360f5e1191b",
+    "status": "open",
+    "task_id": null,
+    "source": "voice",
+    "source_ref": "capture:c75e9bd4-bad1-45f2-bb87-38d2e49bc44c",
+    "created_at": "2026-10-15T22:01:22+03:00",
+    "updated_at": "2026-10-15T22:01:22+03:00",
+    "done_at": null,
+    "rev": 1,
+    "seq": 611
+   }
+  ],
+  "projects": [
+   {
+    "id": "edf4c08b-c373-48e5-9de5-12f1f1cbe6da",
+    "name": "ООО Ромашка",
+    "aliases": [],
+    "sphere": "work",
+    "kind": "client",
+    "org_id": "fd708dd7-5ea0-4ba2-bd35-96ae14f0ff57",
+    "owner_id": "sasha",
+    "money_default": "none",
+    "note": null,
+    "import_ref": null,
+    "archived_at": null,
+    "created_at": "2026-10-15T22:01:21+03:00",
+    "updated_at": "2026-10-15T22:01:21+03:00",
+    "rev": 1,
+    "seq": 595,
+    "status": null,
+    "folder_url": null,
+    "files": []
+   }
+  ],
+  "deals": [
+   {
+    "id": "98521c33-9883-4c33-8363-b360f5e1191b",
+    "project_id": "edf4c08b-c373-48e5-9de5-12f1f1cbe6da",
+    "name": "Ромашка: отчётность",
+    "stage": "active",
+    "outcome": null,
+    "lost_reason": null,
+    "closed_on": null,
+    "deal_type": null,
+    "lead_person_id": null,
+    "team_ids": [],
+    "person_ids": [],
+    "source_person_id": null,
+    "fee_kind": null,
+    "fee_kop": null,
+    "retainer_kop": null,
+    "success_pct": null,
+    "probability": null,
+    "expected_on": null,
+    "deadline": null,
+    "wheel": false,
+    "ball": null,
+    "next_step": null,
+    "my_view": null,
+    "ideas": null,
+    "log": null,
+    "notion_id": null,
+    "created_at": "2026-10-15T22:01:21+03:00",
+    "updated_at": "2026-10-15T22:01:21+03:00",
+    "rev": 1,
+    "seq": 596,
+    "description": null,
+    "folder_url": null,
+    "files": []
+   }
+  ],
+  "people": [
+   {
+    "id": "2f645845-9df1-45d0-b680-de92c882e14c",
+    "name": "Ольга Смирнова",
+    "short": "Ольга",
+    "aliases": [],
+    "org_id": null,
+    "role": null,
+    "phones": [],
+    "emails": [],
+    "telegram_id": null,
+    "telegram_username": null,
+    "birth_day": 20,
+    "birth_month": 10,
+    "birth_year": null,
+    "source": null,
+    "seeks": null,
+    "offers": null,
+    "traits": null,
+    "cadence": "quarter",
+    "hub": false,
+    "user_id": null,
+    "owner_id": "sasha",
+    "note": null,
+    "notion_id": null,
+    "archived_at": null,
+    "created_at": "2026-10-15T22:00:50+03:00",
+    "updated_at": "2026-10-15T22:00:50+03:00",
+    "rev": 2,
+    "seq": 23,
+    "merged_into": null
+   },
+   {
+    "id": "a2499592-79dc-4100-a39c-77c076654ba8",
+    "name": "Иван Петров",
+    "short": "Иван",
+    "aliases": [],
+    "org_id": "fd708dd7-5ea0-4ba2-bd35-96ae14f0ff57",
+    "role": null,
+    "phones": [],
+    "emails": [],
+    "telegram_id": null,
+    "telegram_username": null,
+    "birth_day": null,
+    "birth_month": null,
+    "birth_year": null,
+    "source": null,
+    "seeks": null,
+    "offers": null,
+    "traits": null,
+    "cadence": "month",
+    "hub": true,
+    "user_id": null,
+    "owner_id": "sasha",
+    "note": null,
+    "notion_id": null,
+    "archived_at": null,
+    "created_at": "2026-10-15T22:00:50+03:00",
+    "updated_at": "2026-10-15T22:01:21+03:00",
+    "rev": 3,
+    "seq": 597,
+    "merged_into": null
+   }
+  ],
+  "users": [
+   {
+    "id": "sasha",
+    "name": "Владелец",
+    "person_id": "c395d897-bdff-414c-8287-f20ccdc4fa83",
+    "role": "owner",
+    "clients": "own",
+    "sees_money": false,
+    "seq": 598
+   }
+  ]
+ },
+ "today_view": {
+  "reminders": [
+   {
+    "id": "e715e6d0-1df3-4559-8722-95ba503676f8",
+    "num": 183,
+    "title": "Позвонить маме",
+    "notes": null,
+    "project_id": null,
+    "deal_id": null,
+    "owner_id": "sasha",
+    "ball": "mine",
+    "person_id": null,
+    "waiting_since": null,
+    "nudge_on": null,
+    "requested_by": null,
+    "due_date": null,
+    "due_time": null,
+    "estimate_min": null,
+    "money": null,
+    "want": false,
+    "focus_on": null,
+    "labels": [],
+    "status": "open",
+    "source": "voice",
+    "source_ref": "capture:4b25469d-5b9d-4799-8fbd-22eb7e311c4d",
+    "created_by": "sasha",
+    "created_at": "2026-10-15T22:01:21+03:00",
+    "updated_at": "2026-10-15T22:01:21+03:00",
+    "completed_at": null,
+    "import_ref": null,
+    "rev": 1,
+    "seq": 605,
+    "remind_at": null,
+    "remind_place": "Дом",
+    "reminded_at": null,
+    "owed": false,
+    "kind": "remind",
+    "back_on": null,
+    "back_said": null,
+    "back_n": 0,
+    "reminded_via": null,
+    "money_eff": "none",
+    "sphere": "inbox",
+    "project_name": null,
+    "project_kind": null,
+    "deal_name": null,
+    "person_short": null,
+    "person_name": null,
+    "requested_by_short": null,
+    "overdue": null,
+    "now_": null,
+    "grp": "self",
+    "directions": [],
+    "why_id": null,
+    "krug_seq": null,
+    "dirs": [],
+    "why_num": null,
+    "why_title": null,
+    "steps_open": 0,
+    "goal": false,
+    "rhythm": null,
+    "no_steps": false
+   }
+  ],
+  "back": []
+ }
+}

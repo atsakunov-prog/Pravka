@@ -2,8 +2,11 @@ package ru.zf.pravka
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import ru.zf.pravka.core.Capture
 import ru.zf.pravka.core.DelaAsk
 import ru.zf.pravka.core.Fmt
 import ru.zf.pravka.core.SayFork
@@ -27,7 +30,10 @@ import ru.zf.pravka.trigger.listenForDelaReason
 // сразу, без плашки «ОК» — отменить можно во вкладке режима. Режим выключен в
 // профиле — фраза ложится в ленту, а не пропадает.
 
-/** Чем кончилась фраза: строка итога, куда её открыть, ответ Claude на вопрос; [ok] — записано. */
+/**
+ * Чем кончилась фраза: строка итога, куда её открыть, ответ Claude на вопрос; [ok] — записано. [capture] — итог захвата
+ * Дел (строка «куда легло и когда вернётся» и кнопки поправки — от сервера).
+ */
 internal class SayOutcome(
     val kind: SayFork.Kind,
     val text: String,
@@ -36,17 +42,43 @@ internal class SayOutcome(
     val ask: DelaAsk.Result? = null,
     val askScope: org.json.JSONObject? = null,
     val said: String = "",
+    val capture: Capture.Result? = null,
 )
 
 /**
  * Разобрать фразу [raw] строки «сказать»: развилка, потом дорога. [spoken] —
  * сказано голосом (источник записей — «voice», иначе «text»). [askScope] — что
  * видит Claude Дел, если это вопрос (дела «Сейчас» и «Сегодня» на экране).
+ *
+ * Захват (шаг 0 петли, 15.10.2026; владелец: «одна точка входа… Саша не выбирает, куда класть»): сервер Дел знает
+ * `capture` — правило сервера ($0, доли секунды) спрашивается ПАРАЛЛЕЛЬНО Сонету развилки. Узнало («напомни в 12…»,
+ * «идея: …», «Иван сказал, …», «позвонил Ольге», «… на неделе») — строка сервера, ответ Сонета выбрасывается. Нет —
+ * дорога Сонета, а дорога «дела» — туда же, к серверу (модель там, `lane: auto`), тем же ref: дважды не ляжет.
+ * [onPending] — «Записал — раскладываю», пока модель сервера думает.
  */
-internal suspend fun PravkaApp.sayToday(raw: String, spoken: Boolean, askScope: org.json.JSONObject): SayOutcome {
+internal suspend fun PravkaApp.sayToday(
+    raw: String,
+    spoken: Boolean,
+    askScope: org.json.JSONObject,
+    onPending: (String) -> Unit = {},
+): SayOutcome {
     val text = raw.trim()
     val source = if (spoken) "voice" else "text"
-    val route = sayRoute(text)
+    val ready = runCatching { captureReady() }.getOrDefault(false)
+    val ref = Capture.newRef()
+    val (prepared, hint) = if (ready) capturePrepare(text) else text to ""
+    val route = if (!ready) sayRoute(text) else {
+        // Сонет — в своей корутине приложения: узнало правило — его ответ просто не ждём (запрос HTTP отменой не
+        // прервать, а ждать его ради выброшенного ответа — секунда впустую).
+        val fork = appScope.async { sayRoute(text, capture = true) }
+        val rule = runCatching { capture.rule(prepared, ref, Capture.FROM_SAY, hint) }.getOrNull()
+        if (rule != null && rule.done) {
+            fork.cancel()
+            eventLog.add("сегодня: → захват правилом ${rule.form}: ${Capture.line(rule).take(100)}")
+            return captureOutcome(rule, text)
+        }
+        fork.await()
+    }
     eventLog.add("сегодня: → ${route.kind.word}: ${route.text}" + if (route.why.isNotBlank()) " (${route.why})" else "")
     val kind = when {
         route.kind == SayFork.Kind.FOOD && !profileStore.has(Profile.Mode.FOOD) -> SayFork.Kind.ENTRY
@@ -62,7 +94,10 @@ internal suspend fun PravkaApp.sayToday(raw: String, spoken: Boolean, askScope: 
             SayFork.Kind.ENTRY -> sayEntry(text, source)
             SayFork.Kind.COMMENT -> sayComment(said, text, source)
             SayFork.Kind.FOOD -> sayFood(said, source)
-            SayFork.Kind.TASKS -> sayTasks(said)
+            // Дела — одной дверью: сервер раскладывает сам (модель там), строка и кнопки — его. Сервер без модели
+            // захвата — прежняя Разноска телефона.
+            SayFork.Kind.TASKS -> if (SayFork.captureWay(false, route, ready && delaStore.view.value.captureModelOn) == SayFork.Way.SERVER) sayCapture(prepared, ref, hint, text, onPending)
+            else sayTasks(said)
             SayFork.Kind.BODY -> sayBody(said, source)
             SayFork.Kind.MONEY -> sayMoney(said)
             SayFork.Kind.ASK -> sayAsk(said, askScope)
@@ -76,11 +111,32 @@ internal suspend fun PravkaApp.sayToday(raw: String, spoken: Boolean, askScope: 
     }
 }
 
-/** Что за фраза: Сонет, а если он молчит или ответил не то — слова. */
-private suspend fun PravkaApp.sayRoute(text: String): SayFork.Route {
+/** Итог захвата — в строку «сказать»: строка сервера, кнопки поправки, открыть — Дела. */
+internal fun captureOutcome(r: Capture.Result, said: String): SayOutcome =
+    SayOutcome(
+        SayFork.Kind.TASKS, Capture.line(r), ok = r.status != Capture.Status.NONE, open = Tab.TODOIST, said = said,
+        capture = r.takeIf { it.status == Capture.Status.DONE || it.status == Capture.Status.ERROR },
+    )
+
+/**
+ * Дела одной дверью (`capture.say`, `lane: auto`): правило сервера, а не узнало — модель на сервере. Строка — его;
+ * без связи — «записал, разложу, как появится связь» (фраза в очереди на диске, итог придёт уведомлением).
+ */
+private suspend fun PravkaApp.sayCapture(text: String, ref: String, hint: String, said: String, onPending: (String) -> Unit): SayOutcome {
+    val o = capture.say(text, ref, Capture.FROM_SAY, hint) { p -> onPending(Capture.line(p)) }
+    return when {
+        o.refused.isNotBlank() -> SayOutcome(SayFork.Kind.TASKS, o.line, ok = false, open = Tab.TODOIST, said = said)
+        o.offline -> SayOutcome(SayFork.Kind.TASKS, o.line, ok = true, open = Tab.TODOIST, said = said)
+        o.result != null -> captureOutcome(o.result, said)
+        else -> SayOutcome(SayFork.Kind.TASKS, "Дела не ответили — фраза ушла, итог придёт уведомлением", ok = true, open = Tab.TODOIST, said = said)
+    }
+}
+
+/** Что за фраза: Сонет, а если он молчит или ответил не то — слова. [capture] — с дорогой захвата в правилах. */
+private suspend fun PravkaApp.sayRoute(text: String, capture: Boolean = false): SayFork.Route {
     val open = runCatching { zasechkaStore.openEntry() }.getOrNull()
     val last = if (open == null) runCatching { zasechkaStore.all().filter { !it.open }.maxByOrNull { it.end } }.getOrNull() else null
-    val reply = claudeProvider.sayFork(text, SayFork.context(System.currentTimeMillis(), open, last))
+    val reply = claudeProvider.sayFork(text, SayFork.context(System.currentTimeMillis(), open, last), capture)
         .onFailure { e -> if (e is CancellationException) throw e }
     reply.getOrNull()?.let { r ->
         runCatching { stats.recordAux(r.costUsd, r.tokensIn, r.tokensOut, route = ModelRoute.ZASECHKA_FORK.key) }
@@ -193,8 +249,79 @@ private suspend fun PravkaApp.sayAsk(text: String, scope: org.json.JSONObject): 
 // Строка на экране
 // ---------------------------------------------------------------------------
 
+/**
+ * «Куда что» — короткая страница для владельца (договор захвата, п. 6): файл `kuda-chto.md` из APK (тот же текст видит
+ * веб). Таблица на узком экране — карточками: фраза жирно, ниже «куда ляжет · когда вернётся · не то — нажми».
+ */
+@androidx.compose.runtime.Composable
+internal fun KudaSheet(onDismiss: () -> Unit) {
+    val text = androidx.compose.runtime.remember {
+        runCatching { ru.zf.pravka.core.prompts.SharedPrompts.read(ru.zf.pravka.core.KudaChto.FILE) }.getOrDefault("Страницы «куда что» в этой сборке нет.")
+    }
+    val blocks = androidx.compose.runtime.remember(text) { ru.zf.pravka.core.KudaChto.blocks(text) }
+    val t = ru.zf.pravka.ui.LocalPravkaType.current
+    fun rich(s: String) = androidx.compose.ui.text.buildAnnotatedString {
+        for ((part, bold) in ru.zf.pravka.core.KudaChto.spans(s)) {
+            if (bold) pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold))
+            append(part)
+            if (bold) pop()
+        }
+    }
+    ru.zf.pravka.ui.PaperSheet(onDismiss = onDismiss, title = "Куда что", subtitle = "говори в «Д» или «сказать» — разложу сам") {
+        for (b in blocks) when (b) {
+            is ru.zf.pravka.core.KudaChto.Block.Head -> if (b.text != "Куда что") {
+                androidx.compose.material3.Text(b.text, style = t.bodyStrong, color = ru.zf.pravka.ui.Ink.Text)
+            }
+            is ru.zf.pravka.core.KudaChto.Block.Para ->
+                androidx.compose.material3.Text(rich(b.text), style = t.meta.copy(fontSize = 13.5.sp, lineHeight = 19.sp), color = ru.zf.pravka.ui.Ink.Text)
+            is ru.zf.pravka.core.KudaChto.Block.Row -> androidx.compose.foundation.layout.Column {
+                androidx.compose.material3.Text(rich(b.cells.firstOrNull().orEmpty()), style = t.bodyStrong, color = ru.zf.pravka.ui.Ink.Text)
+                for ((k, cell) in b.cells.withIndex().drop(1)) {
+                    if (cell.isBlank()) continue
+                    val name = b.names.getOrNull(k).orEmpty().lowercase()
+                    androidx.compose.material3.Text(
+                        rich((if (name.isNotBlank()) "$name: " else "") + cell),
+                        style = t.meta.copy(fontSize = 13.sp, lineHeight = 18.sp),
+                        color = ru.zf.pravka.ui.Ink.Text.copy(alpha = 0.8f),
+                    )
+                }
+            }
+        }
+    }
+}
+
 /** Сколько итог стоит в строке, прежде чем она снова приглашает. */
 private const val RESULT_MS = 8_000L
+
+/**
+ * Итог захвата с кнопками держится дольше (spec-0 §7: 12 с): строку «куда легло» надо успеть прочитать и поправить;
+ * нажатие кнопки обновляет строку и таймер.
+ */
+private const val CAPTURE_RESULT_MS = 12_000L
+
+/**
+ * Кнопки под строкой захвата: сервер дал — рисуем; у «Время» — варианты часа вместо кнопок по тапу ([time]); в конце —
+ * «куда что» (страница для владельца). Нажатие — `capture.move`, ответ — новая строка на месте.
+ */
+internal fun captureChips(
+    r: Capture.Result,
+    time: Pair<Int, Capture.Chip>?,
+    onTime: (Pair<Int, Capture.Chip>?) -> Unit,
+    onMove: (Int, Capture.Chip, Capture.Option?) -> Unit,
+    onKuda: () -> Unit,
+): List<ru.zf.pravka.ui.SayChip> {
+    if (time != null) {
+        val (i, chip) = time
+        return chip.options.map { opt -> ru.zf.pravka.ui.SayChip(opt.label, { onTime(null); onMove(i, chip, opt) }) } +
+            ru.zf.pravka.ui.SayChip("‹", { onTime(null) })
+    }
+    return r.lineChips.map { (i, chip) ->
+        ru.zf.pravka.ui.SayChip(
+            chip.label + if (chip.options.isNotEmpty()) " ▾" else "",
+            { if (chip.options.isNotEmpty()) onTime(i to chip) else onMove(i, chip, null) },
+        )
+    } + ru.zf.pravka.ui.SayChip("куда что", onKuda)
+}
 
 /**
  * Строка «сказать» «Сегодня» v2 (`.say` холста): поле, картинка из галереи и
@@ -212,11 +339,35 @@ internal fun TodaySayBarV2(app: PravkaApp, nav: TodayNav, data: TodayV2Data, mod
     var out by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<SayOutcome?>(null) }
     var listening by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     var talk by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Talk?>(null) }
+    // Захват: «Записал — раскладываю», пока модель сервера думает; варианты «Время ▾»; страница «куда что».
+    var busyLabel by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("Разбираю") }
+    var timeChip by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Pair<Int, Capture.Chip>?>(null) }
+    var kuda by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     val routeBusy = ru.zf.pravka.ui.rememberRouteBusy(app.liveWork, "zasechka", "zasechka_fork")
-    androidx.compose.runtime.LaunchedEffect(out) {
+    androidx.compose.runtime.LaunchedEffect(out, timeChip) {
         if (out?.ok == true) {
-            kotlinx.coroutines.delay(RESULT_MS)
+            kotlinx.coroutines.delay(if (out?.capture != null) CAPTURE_RESULT_MS else RESULT_MS)
             out = null
+            timeChip = null
+        }
+    }
+    val move: (Int, Capture.Chip, Capture.Option?) -> Unit = { i, chip, opt ->
+        val cur = out?.capture
+        if (cur != null && !busy) {
+            busy = true
+            busyLabel = "Перекладываю"
+            app.appScope.launch {
+                val m = runCatching { app.capture.move(cur.ref, i, chip, opt) }.getOrNull()
+                busy = false
+                busyLabel = "Разбираю"
+                out = when {
+                    m == null -> SayOutcome(SayFork.Kind.TASKS, "Не вышло переложить — нет ответа Дел", ok = false, said = out?.said.orEmpty())
+                    m.refused.isNotBlank() -> SayOutcome(SayFork.Kind.TASKS, m.line, ok = false, open = Tab.TODOIST, said = out?.said.orEmpty())
+                    m.offline -> SayOutcome(SayFork.Kind.TASKS, "Переложу, как появится связь с Делами", ok = true, open = Tab.TODOIST)
+                    m.result != null -> captureOutcome(m.result, out?.said.orEmpty())
+                    else -> out
+                }
+            }
         }
     }
     // Что видит Claude Дел, если это вопрос: дела «Сейчас» и «Сегодня» на экране.
@@ -227,10 +378,12 @@ internal fun TodaySayBarV2(app: PravkaApp, nav: TodayNav, data: TodayV2Data, mod
         if (text.isBlank() || busy) return@run
         busy = true
         out = null
+        timeChip = null
         app.appScope.launch {
-            val o = runCatching { app.sayToday(text, spoken, askScope()) }
+            val o = runCatching { app.sayToday(text, spoken, askScope()) { busyLabel = "Записал — раскладываю" } }
                 .getOrElse { e -> SayOutcome(SayFork.Kind.ENTRY, "Не вышло: ${e.message ?: e.javaClass.simpleName}", ok = false, said = text) }
             busy = false
+            busyLabel = "Разбираю"
             val ask = o.ask
             if (ask != null && o.askScope != null) {
                 talk = Talk(o.askScope, turns = listOf(DelaAsk.Turn(o.said, ask)))
@@ -268,9 +421,18 @@ internal fun TodaySayBarV2(app: PravkaApp, nav: TodayNav, data: TodayV2Data, mod
         },
         listening = listening,
         busy = busy || routeBusy,
-        busyLabel = "Разбираю",
+        busyLabel = busyLabel,
         maxLines = 3,
-        result = o?.takeIf { it.ok }?.let { r -> ru.zf.pravka.ui.SayResult(r.text) { out = null; r.open?.let(nav.mode) } },
+        result = o?.takeIf { it.ok }?.let { r ->
+            val cap = r.capture
+            // Захват — строка сервера и его кнопки; тап по строке — само дело (одно) или Дела.
+            val chips = if (cap == null) emptyList() else captureChips(cap, timeChip, { timeChip = it }, move, { kuda = true })
+            ru.zf.pravka.ui.SayResult(r.text, chips) {
+                out = null
+                val id = cap?.let { Capture.firstTask(it) }.orEmpty()
+                if (id.isNotBlank()) nav.delaTask(id) else r.open?.let(nav.mode)
+            }
+        },
         error = o?.takeIf { !it.ok }?.text,
         onRetry = o?.takeIf { !it.ok }?.let { r -> { out = null; draft = ""; run(r.said, false) } },
         trailing = {
@@ -279,6 +441,7 @@ internal fun TodaySayBarV2(app: PravkaApp, nav: TodayNav, data: TodayV2Data, mod
         },
         modifier = modifier,
     )
+    if (kuda) KudaSheet { kuda = false }
     val tk = talk
     if (tk != null) {
         val snap = data.snap

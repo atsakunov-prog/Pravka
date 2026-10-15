@@ -311,6 +311,17 @@ internal fun PravkaAccessibilityService.onRaznoskaText(raw: String, review: Bool
     if (!scope.isActive) return
     rButton?.setBusy(true)
     scope.launch {
+        // Захват (шаг 0 петли, 15.10.2026): своя фраза «Д» — одной дверью на сервер, он раскладывает и отдаёт строку
+        // «куда легло и когда вернётся» с кнопками поправки. Чужой текст (дайджест, встреча, выделение) — прежней
+        // плашкой с отметками: там дел бывает двадцать, и не все свои. Сервер старый — прежняя Разноска целиком.
+        if (!review && runCatching { app.captureReady() }.getOrDefault(false)) {
+            val taken = runCatching { captureFromD(text) }.getOrElse { e ->
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                app.eventLog.add("захват «Д»: ${e.javaClass.simpleName}: ${e.message} — прежней Разноской")
+                false
+            }
+            if (taken) return@launch
+        }
         val result = runCatching { app.raznoskaEngine.split(text) }
             .getOrElse { e ->
                 if (e is kotlinx.coroutines.CancellationException) throw e
@@ -719,11 +730,17 @@ internal fun PravkaAccessibilityService.showRaznoskaMenu() {
         // отправки. Тап по ней открывает плашку, где их и подтверждают.
         val head = if (waiting > 0) "✓ Ждут отправки: " + raznCount(waiting)
         else "— неотправленных дел нет"
+        // Захват (15.10.2026): последнее сказанное — «Отменить» десять минут, как было у Разноски.
+        val last = LastCapture.fresh()
         rButton?.showMenu(
-            listOf(
+            listOfNotNull(
                 RaznoskaButtonController.MenuItem(head) {
                     val newest = app.raznoskaStore.pending().firstOrNull()
                     if (newest != null) showRaznoskaPlate(newest.id) else openTodoistTab()
+                },
+                last?.let { r ->
+                    val what = r.items.firstOrNull()?.title?.take(30).orEmpty().ifBlank { r.text.take(30) }
+                    RaznoskaButtonController.MenuItem("↩︎ Отменить «$what»") { undoLastCapture() }
                 },
                 RaznoskaButtonController.MenuItem("Открыть Дело") { openTodoistTab() },
                 // Баг или предложение — голосом, с любой кнопки (07.10.2026, `ServiceFeedback.kt`).

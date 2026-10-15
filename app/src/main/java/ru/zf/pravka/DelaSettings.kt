@@ -175,6 +175,44 @@ internal fun DelaServerSettings(app: PravkaApp) {
         }
     }
 
+    // Напоминания Дел уведомлением телефона (захват, 15.10.2026): «Сделано · Через час · Завтра» прямо в уведомлении;
+    // Telegram — запасной, через 3 минуты, если телефон молчит. Нельзя точно — честно, со словами, что разрешить.
+    if (backend == Settings.DELA_BACKEND_SERVER) {
+        val phoneOn by app.settings.remindPhoneFlow.collectAsState(initial = true)
+        val notifOn = remember(now) {
+            runCatching { androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled() }.getOrDefault(false)
+        }
+        val exact = remember(now) { ru.zf.pravka.trigger.ReminderAlarms.exact(context) }
+        PaperCard(
+            label = "напоминания",
+            info = "«Напомни в 12…» и «напомни, когда приеду домой…» приходят уведомлением телефона в свой час — с кнопками " +
+                "«Сделано · Через час · Завтра» — и стоят на «Сегодня». Бот в Telegram — запасной: шлёт, только если телефон " +
+                "за 3 минуты не отметил показ (выключен, без сети). Выключил здесь — напоминания снова шлёт только бот.",
+        ) {
+            ru.zf.pravka.ui.PaperToggle(
+                "Напоминания на телефоне",
+                checked = phoneOn,
+                onCheckedChange = { v -> app.appScope.launch { app.settings.setRemindPhone(v) } },
+                hint = app.reminders.stateWords(snap, phoneOn && notifOn),
+            )
+            if (phoneOn && !notifOn) {
+                PaperHint("Уведомления Правки запрещены — разреши их в настройках Android, иначе напоминания придут только ботом", MaterialTheme.colorScheme.error)
+            }
+            if (phoneOn && !exact && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                PaperHint("Будильник неточный: напоминание может опоздать на минуты", MaterialTheme.colorScheme.error)
+                PaperTextButton("Разрешить «Будильники и напоминания»", onClick = {
+                    runCatching {
+                        context.startActivity(
+                            android.content.Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                                .setData(android.net.Uri.parse("package:" + context.packageName))
+                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }.onFailure { e -> Feedback.toast(context, "Не открылось: ${e.message}") }
+                })
+            }
+        }
+    }
+
     if (askOut) {
         PaperAlert(
             onDismiss = { askOut = false },
@@ -212,7 +250,7 @@ private fun delaHint(l: DelaSync.Link, st: DelaSync.Status, queued: Int, snap: r
         }
         else -> parts += "ещё не обновлялось"
     }
-    parts += "дел ${snap.tasks.values.count { it.open && !it.goal }}"
+    parts += "дел ${snap.tasks.values.count { it.open && it.deed }}"
     if (queued > 0) parts += "в очереди $queued"
     return parts.joinToString(" · ")
 }

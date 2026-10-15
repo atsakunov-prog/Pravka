@@ -1,6 +1,7 @@
 package ru.zf.pravka.trigger
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import ru.zf.pravka.R
 import ru.zf.pravka.core.RaznoskaEngine
@@ -33,6 +34,33 @@ import ru.zf.pravka.ui.Haptics
 internal fun PravkaAccessibilityService.forkZasechka(text: String, source: String, spoken: Boolean) {
     zButton?.setBusy(true)
     scope.launch {
+        // Захват (шаг 0 петли, 15.10.2026): сервер Дел знает `capture` — его правило ($0) спрашивается параллельно
+        // Сонету развилки, как у «сказать»: «напомни, когда приеду домой…» в гарнитуру даёт то же, что в «Д». Узнало —
+        // строка сервера в пилюле «З», ответ Сонета не ждём; нет — дорога Сонета, а «дела» — к серверу тем же ref.
+        val ready = runCatching { app.captureReady() }.getOrDefault(false)
+        if (ready) {
+            val (prepared, hint) = app.capturePrepare(text)
+            val ref = ru.zf.pravka.core.Capture.newRef()
+            val fork = app.appScope.async { zasechkaRoute(text, capture = true) }
+            val rule = runCatching { captureRuleZ(text, ref, prepared, hint) }.getOrNull()
+            if (rule != null) {
+                fork.cancel()
+                zButton?.setBusy(false)
+                app.eventLog.add("засечка: → захват правилом ${rule.form}: ${ru.zf.pravka.core.Capture.line(rule).take(100)}")
+                Haptics.success(this@forkZasechka)
+                showCapture(CaptureFace.Z, rule)
+                if (spoken) say(ru.zf.pravka.core.Capture.spoken(rule))
+                return@launch
+            }
+            val route = fork.await()
+            if (route.kind == ZasechkaIntent.Kind.TASKS && app.delaStore.view.value.captureModelOn) {
+                app.eventLog.add("засечка: → дела — захватом на сервере")
+                captureFromZ(prepared, ref, hint, spoken)
+                return@launch
+            }
+            if (!applyZasechkaRoute(route, text, spoken)) recordZasechkaEntry(text, source)
+            return@launch
+        }
         val route = zasechkaRoute(text)
         if (!applyZasechkaRoute(route, text, spoken)) {
             recordZasechkaEntry(text, source)
@@ -40,9 +68,9 @@ internal fun PravkaAccessibilityService.forkZasechka(text: String, source: Strin
     }
 }
 
-/** Что это за фраза: Сонет, а если он молчит — слова. */
-private suspend fun PravkaAccessibilityService.zasechkaRoute(text: String): ZasechkaIntent.Route {
-    val reply = app.claudeProvider.zasechkaFork(text, forkContext())
+/** Что это за фраза: Сонет, а если он молчит — слова. [capture] — с дорогой захвата в правилах развилки. */
+private suspend fun PravkaAccessibilityService.zasechkaRoute(text: String, capture: Boolean = false): ZasechkaIntent.Route {
+    val reply = app.claudeProvider.zasechkaFork(text, forkContext(), capture)
         .onFailure { e -> if (e is CancellationException) throw e }
     reply.getOrNull()?.let { r ->
         runCatching {

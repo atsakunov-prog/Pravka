@@ -147,16 +147,21 @@ object DelaRemind {
         }
     }
 
-    /** Состояние напоминания словами — для карточки. Нет напоминания — пусто. */
-    fun state(t: Dela.Task, today: LocalDate, zone: ZoneId): String {
+    /**
+     * Состояние напоминания словами — для карточки. Нет напоминания — пусто. [phone] — напоминание показывает сам
+     * телефон (захват, 15.10.2026: флаг `remind_phone` сервера и тумблер «Напоминания на телефоне»), бот — запасной:
+     * «напомню на телефоне», показанное — «показал на телефоне» (`reminded_via`).
+     */
+    fun state(t: Dela.Task, today: LocalDate, zone: ZoneId, phone: Boolean = false): String {
+        val where = if (phone) "на телефоне" else "в Telegram"
         val sent = local(t.remindedAt, zone)
-        if (sent != null) return "отправлено в Telegram " + whenWords(sent, today)
+        if (sent != null) return (if (t.remindedVia == "phone") "показал на телефоне " else "отправлено в Telegram ") + whenWords(sent, today)
         if (t.remindAt.isNotBlank()) {
             val at = local(t.remindAt, zone) ?: return "напоминание: ${t.remindAt}"
             return (if (t.remindPlace.isNotBlank()) "приехал «${t.remindPlace}» — " else "") +
-                "напомню в Telegram " + whenWords(at, today)
+                "напомню $where " + whenWords(at, today)
         }
-        if (t.remindPlace.isNotBlank()) return "напомню в Telegram, когда приедешь: ${t.remindPlace}"
+        if (t.remindPlace.isNotBlank()) return "напомню $where, когда приедешь: ${t.remindPlace}"
         return ""
     }
 

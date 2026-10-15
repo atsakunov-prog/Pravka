@@ -271,6 +271,9 @@ internal object PhoneKnobs {
             flow = { app -> app.settings.todayMarksFlow.map { it.toList() } },
             write = { app, v -> app.settings.setTodayMarks((v as List<*>).map { it.toString() }.toSet()) }))
         add(bool("today", "today.state", "Сон, HRV и форма под днём", flow = { it.settings.todayStateFlow }) { app, v -> app.settings.setTodayState(v) })
+        // Захват (15.10.2026): напоминания Дел — уведомлением телефона, бот в Telegram — запасной через 3 минуты.
+        add(bool("today", "dela.remind_phone", "Напоминания Дел — уведомлением на телефоне", "выключено — шлёт только бот в Telegram",
+            flow = { it.settings.remindPhoneFlow }) { app, v -> app.settings.setRemindPhone(v) })
         add(int("today", "today.budget", "Бюджет месяца", 0, 99_999_999, unit = "₽", hint = "на личные траты; 0 — полосы на плашке Денег нет",
             flow = { app -> app.settings.moneyMonthBudgetFlow.map { it.coerceAtMost(Int.MAX_VALUE.toLong()).toInt() } }) { app, v -> app.settings.setMoneyMonthBudget(v.toLong()) })
         add(info("today", "today.calendars", "Календари в хронике", "список календарей есть только у телефона") { app ->

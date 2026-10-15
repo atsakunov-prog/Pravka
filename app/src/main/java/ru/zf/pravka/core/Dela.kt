@@ -116,8 +116,25 @@ object Dela {
          * 0 — не задано (после занумерованных, по времени заведения). Общее поле дела; уходит серверу только с фичей nest.
          */
         val pos: Int = 0,
+        /**
+         * Захват (шаг 0 петли, 15.10.2026, docs/dela-phone-22c.md, контракт — server/contract/dela-capture.json):
+         * вид дела. [KIND_REMIND] — напоминание («напомни в 12 в Контуре отправить счёт»): не дело, его нет в списках
+         * дел — как целей; оно стоит на «Сегодня» в свой час и приходит уведомлением телефона. Владелец: «напоминание
+         * — отдельно от кучи дел». Старый сервер поля не знает — всё [KIND_TASK].
+         */
+        val kind: String = KIND_TASK,
+        /** «Потом»: день, когда дело вернётся строкой «Вернулось» на «Сегодня» (не тронул — сервер ночью двигает на пн). */
+        val backOn: String = "",
+        /** Как сказано «когда вернуться» («на неделе») — строкой «ты сказал …». */
+        val backSaid: String = "",
+        /** Кто показал напоминание: phone | bot (ставит сервер). */
+        val remindedVia: String = "",
     ) {
         val open: Boolean get() = status == OPEN
+        /** Напоминание, а не дело ([kind] = [KIND_REMIND]): в списках дел его нет. */
+        val remind: Boolean get() = kind == KIND_REMIND
+        /** Дело в списках дел: не цель дерева и не напоминание — как `kind = 'task' AND NOT goal` сервера (`store._list`). */
+        val deed: Boolean get() = !goal && !remind
         /** Как человек называется в строке: короткое имя, иначе полное. */
         val who: String get() = personShort.ifBlank { personName }
         /** «#57», пока дело не дошло до сервера — «новое». */
@@ -386,6 +403,30 @@ object Dela {
         val owner: Boolean get() = role == "owner"
     }
 
+    /**
+     * Идея у клиента, человека, сделки (захват, 15.10.2026, ответ владельца 5а: «свой список „Идеи“ у клиента, человека
+     * и сделки»; `crm.ideas`, сервер — `ideas.py`). Не дело: «идея: предложить Ромашке косткаттинг» не засоряет
+     * «Запустить» и не тонет в хронологии. Видит только хозяин; телефон берёт их полем `ideas` синка.
+     */
+    data class Idea(
+        val id: String,
+        val text: String,
+        val projectId: String = "",
+        val personId: String = "",
+        val dealId: String = "",
+        /** open — живая; used — использована (или стала делом [taskId]); dropped — убрана. */
+        val status: String = IDEA_OPEN,
+        val taskId: String = "",
+        val source: String = "",
+        val createdAt: String = "",
+        val updatedAt: String = "",
+        val rev: Int = 0,
+        val seq: Long = 0,
+        val local: Boolean = false,
+    ) {
+        val open: Boolean get() = status == IDEA_OPEN
+    }
+
     /** Копия сервера на телефоне: всё, что видит владелец, плюс номер последнего изменения. */
     data class Snapshot(
         val seq: Long = 0,
@@ -408,7 +449,30 @@ object Dela {
          * проекта, а с 13.10.2026 — и цель, на которой проект висит. Только свои.
          */
         val krug: Map<String, KrugProject> = emptyMap(),
+        /** Идеи хозяина (поле `ideas` синка, захват 15.10.2026): у клиента, человека, сделки. */
+        val ideas: Map<String, Idea> = emptyMap(),
     ) {
+        /**
+         * Захват одной дверью (шаг 0 петли, 15.10.2026): `capture.say` / `capture.move`, вид `capture`, поля дела `kind`,
+         * `back_on`, `back_said`. Без флага телефон раскладывает прежней Разноской и полей захвата не шлёт.
+         */
+        val captureOn: Boolean get() = FEATURE_CAPTURE in features
+
+        /** Сервер раскладывает моделью то, что правило не узнало (`lane: auto`); без флага — только правило. */
+        val captureModelOn: Boolean get() = FEATURE_CAPTURE_MODEL in features
+
+        /** Сервер знает идеи (`idea.add`, `idea.set`, поле `ideas` синка). */
+        val ideasOn: Boolean get() = FEATURE_IDEAS in features
+
+        /** Сервер знает «сказал — сделано» (`task.did`). */
+        val didOn: Boolean get() = FEATURE_DID in features
+
+        /**
+         * Напоминание показывает телефон (`task.reminded {via: phone}`), бот — запасной через 3 минуты. Без флага
+         * телефон отметку показа не шлёт: старый сервер отверг бы её (там `task.reminded` шлёт только бот).
+         */
+        val remindPhoneOn: Boolean get() = FEATURE_REMIND_PHONE in features
+
         /** Сервер знает Круг жизни (поля `directions`, `why_id`): только тогда телефон их шлёт. */
         val krugOn: Boolean get() = FEATURE_KRUG in features
 
@@ -470,6 +534,17 @@ object Dela {
             payments.values.filter { it.dealId == dealId }.sortedWith(compareBy<Payment>({ it.dueOn.isBlank() }, { it.dueOn }))
         fun commentsOf(taskId: String): List<Comment> =
             comments.values.filter { it.taskId == taskId && it.deletedAt.isBlank() }.sortedBy { it.createdAt }
+
+        /**
+         * Живые идеи у клиента [projectId], человека [personId] или сделки [dealId] (`ideasOf` веба) — новые сверху.
+         * Всё пусто — все живые.
+         */
+        fun ideasFor(projectId: String = "", personId: String = "", dealId: String = ""): List<Idea> =
+            ideas.values.filter { x ->
+                x.open && ((projectId.isBlank() && personId.isBlank() && dealId.isBlank()) ||
+                    (projectId.isNotBlank() && x.projectId == projectId) || (personId.isNotBlank() && x.personId == personId) ||
+                    (dealId.isNotBlank() && x.dealId == dealId))
+            }.sortedByDescending { it.createdAt }
     }
 
     // ------------------------------------------------------------ JSON
@@ -514,6 +589,8 @@ object Dela {
             requestedByShort = o.str("requested_by_short"), local = o.bool("_local"),
             directions = o.strings("directions"), whyId = o.str("why_id"), whyNum = o.int("why_num"), whyTitle = o.str("why_title"),
             goal = o.bool("goal"), rhythm = o.str("rhythm"), noSteps = o.bool("no_steps"), pos = o.int("pos"),
+            kind = o.str("kind").ifBlank { KIND_TASK }, backOn = o.str("back_on").take(10), backSaid = o.str("back_said"),
+            remindedVia = o.str("reminded_via"),
         )
     }
 
@@ -535,6 +612,7 @@ object Dela {
         .put("why_num", if (t.whyNum > 0) t.whyNum else JSONObject.NULL).put("why_title", nul(t.whyTitle))
         .put("goal", t.goal).put("rhythm", nul(t.rhythm)).put("no_steps", t.noSteps)
         .put("pos", if (t.pos > 0) t.pos else JSONObject.NULL)
+        .put("kind", t.kind).put("back_on", nul(t.backOn)).put("back_said", nul(t.backSaid)).put("reminded_via", nul(t.remindedVia))
         .apply { if (t.local) put("_local", true) }
 
     fun project(o: JSONObject): Project? {
@@ -660,6 +738,21 @@ object Dela {
         .put("result", runCatching { JSONObject(s.result) }.getOrElse { JSONObject() })
         .apply { if (s.local) put("_local", true) }
 
+    fun idea(o: JSONObject): Idea? {
+        val id = o.str("id").ifBlank { return null }
+        return Idea(
+            id = id, text = o.str("text"), projectId = o.str("project_id"), personId = o.str("person_id"), dealId = o.str("deal_id"),
+            status = o.str("status").ifBlank { IDEA_OPEN }, taskId = o.str("task_id"), source = o.str("source"),
+            createdAt = o.str("created_at"), updatedAt = o.str("updated_at"), rev = o.int("rev"), seq = o.long("seq"),
+            local = o.bool("_local"),
+        )
+    }
+
+    fun json(x: Idea): JSONObject = JSONObject().put("id", x.id).put("text", x.text).put("project_id", nul(x.projectId))
+        .put("person_id", nul(x.personId)).put("deal_id", nul(x.dealId)).put("status", x.status).put("task_id", nul(x.taskId))
+        .put("source", nul(x.source)).put("created_at", nul(x.createdAt)).put("updated_at", nul(x.updatedAt))
+        .put("rev", x.rev).put("seq", x.seq).apply { if (x.local) put("_local", true) }
+
     fun user(o: JSONObject): User? {
         val id = o.str("id").ifBlank { return null }
         return User(
@@ -705,6 +798,7 @@ object Dela {
         .put("krug", JSONArray().apply {
             s.krug.forEach { (id, k) -> put(JSONObject().put("id", id).put("kind", "project").put("directions", arr(k.directions)).put("why_id", nul(k.whyId))) }
         })
+        .put("ideas", JSONArray().apply { s.ideas.values.forEach { put(json(it)) } })
 
     fun fromJson(o: JSONObject): Snapshot = Snapshot(
         seq = o.long("seq"),
@@ -722,6 +816,7 @@ object Dela {
         payments = rows(o, "payments", ::payment).associateBy { it.id },
         features = o.strings("features").toSet(),
         krug = rows(o, "krug") { k -> k.str("id").ifBlank { null }?.let { it to KrugProject(k.strings("directions"), k.str("why_id")) } }.toMap(),
+        ideas = rows(o, "ideas", ::idea).associateBy { it.id },
     )
 
     // ------------------------------------------------------------ синк
@@ -766,6 +861,7 @@ object Dela {
                 // сервер — флага нет, и телефон перестаёт слать то, чего тот не знает.
                 features = fresh.features,
                 krug = if (fresh.krug.isEmpty()) old.krug else old.krug + fresh.krug,
+                ideas = up(old.ideas, fresh.ideas) { it.rev.toLong() },
             )
         )
     }
@@ -823,6 +919,7 @@ object Dela {
         val krug = LinkedHashMap(s.krug)
         // Родитель до подъёма этой же очередью (дела внутри дела, 15.10.2026): «Вернуть» возвращает его срок офлайн.
         val raisedFrom = HashMap<String, Task>()
+        val ideas = LinkedHashMap(s.ideas)
         fun find(ref: String): Task? {
             tasks[ref]?.let { return it }
             val n = ref.trim().removePrefix("#").toIntOrNull() ?: return null
@@ -972,13 +1069,39 @@ object Dela {
                         phones = into.phones + dup.phones.filter { d -> into.phones.none { CallRules.digits(it) == CallRules.digits(d) } },
                         local = true,
                     )
+                    // Идеи дубля — к живой карточке, как переносит сервер (`crm.person_merge`, dela_0024c).
+                    for ((k, x) in ideas.entries.toList()) if (x.personId == dup.id) ideas[k] = x.copy(personId = into.id, local = true)
+                }
+                // Идея с телефона (карточка CRM, «В дело») — видна до ответа: id даёт телефон.
+                "idea.add" -> {
+                    val d = op.optJSONObject("idea") ?: continue
+                    val id = d.str("id").ifBlank { op.str("op_id") }
+                    if (id.isBlank() || ideas.containsKey(id)) continue
+                    ideas[id] = Idea(
+                        id = id, text = d.str("text"), projectId = d.str("project_id"), personId = d.str("person_id"),
+                        dealId = d.str("deal_id"), source = d.str("source"), createdAt = nowIso, updatedAt = nowIso, local = true,
+                    )
+                }
+                // «Использована», «Убрать», «В дело» — уходит из карточки сразу.
+                "idea.set" -> {
+                    val x = ideas[op.str("id")] ?: continue
+                    val set = op.optJSONObject("set") ?: continue
+                    ideas[x.id] = x.copy(
+                        text = if (set.has("text")) set.str("text").ifBlank { x.text } else x.text,
+                        status = if (set.has("status")) set.str("status").ifBlank { IDEA_OPEN } else x.status,
+                        taskId = if (set.has("task_id")) set.str("task_id") else x.taskId,
+                        projectId = if (set.has("project_id")) set.str("project_id") else x.projectId,
+                        personId = if (set.has("person_id")) set.str("person_id") else x.personId,
+                        dealId = if (set.has("deal_id")) set.str("deal_id") else x.dealId,
+                        updatedAt = nowIso, local = true,
+                    )
                 }
             }
         }
         return derive(
             s.copy(
                 tasks = tasks, comments = comments, suggestions = suggestions, deals = deals, payments = payments, people = people,
-                orgs = orgs, projects = projects, krug = krug,
+                orgs = orgs, projects = projects, krug = krug, ideas = ideas,
             )
         )
     }
@@ -1074,15 +1197,42 @@ object Dela {
                 }
                 "no_steps" -> out.copy(noSteps = f.bool(k))
                 "pos" -> out.copy(pos = if (f.isNull(k)) 0 else f.optInt(k, 0))
+                // Захват (15.10.2026): напоминание или дело и «потом» — день возврата и как сказано.
+                "kind" -> out.copy(kind = f.str(k).ifBlank { KIND_TASK })
+                "back_on" -> out.copy(backOn = f.str(k).take(10))
+                "back_said" -> out.copy(backSaid = f.str(k))
                 else -> out
             }
         }
+        out = kindNorm(out, today)
         if (out.ball == WAITING && t.ball != WAITING && out.waitingSince.isBlank()) out = out.copy(waitingSince = today)
         if (out.ball == WAITING && out.waitingSince.isBlank()) out = out.copy(waitingSince = today)
         if (out.ball != WAITING) out = out.copy(waitingSince = "")
         // Мяч ушёл к человеку — «отбить» гаснет сам (триггер `owed` сервера).
         if (out.ball == WAITING) out = out.copy(owed = false)
         return out.copy(updatedAt = nowIso)
+    }
+
+    /**
+     * Напоминание без своего срока — как `store._kind_norm` сервера (захват, dela_0024c): получило срок — это уже дело с
+     * напоминанием (`task`); потеряло и время, и место — дело «потом» (вернётся в следующий рабочий день), а не
+     * напоминание ни о чём; у живого напоминания нет «потом», часа срока и «Сейчас» — у него своё время. Поверх
+     * очереди — чтобы кнопка «Это дело» или «Сегодня» сразу увела строку туда, куда уведёт сервер.
+     */
+    fun kindNorm(t: Task, today: String): Task {
+        if (!t.remind) return t
+        return when {
+            t.dueDate.isNotBlank() -> t.copy(kind = KIND_TASK)
+            t.remindAt.isBlank() && t.remindPlace.isBlank() -> t.copy(kind = KIND_TASK, backOn = t.backOn.ifBlank { nextWorkday(today) })
+            else -> t.copy(backOn = "", backSaid = "", dueTime = "", focusOn = "")
+        }
+    }
+
+    /** Следующий рабочий день после [today] (пт–вс — понедельник): «потом» с завода (`capture.default_back`). */
+    fun nextWorkday(today: String): String {
+        var d = runCatching { LocalDate.parse(today.take(10)) }.getOrElse { return "" }.plusDays(1)
+        while (d.dayOfWeek.value >= 6) d = d.plusDays(1)
+        return d.toString()
     }
 
     // ------------------------------------------------------------ операции
@@ -1165,6 +1315,28 @@ object Dela {
     /** Мяч «owed» — группа «Отбить» одним полем: так её называет автоматика, сервер пишет mine + `owed`. */
     const val OWED = "owed"
 
+    /** Вид дела (захват, dela_0024c): дело или напоминание — оно не в списках дел, а на «Сегодня» в свой час. */
+    const val KIND_TASK = "task"
+    const val KIND_REMIND = "remind"
+
+    /** Идея живая (ещё не использована и не убрана). */
+    const val IDEA_OPEN = "open"
+
+    /** Захват одной дверью (шаг 0 петли, docs/dela-phone-22c.md): `capture.say`, `capture.move`, поля `kind`, `back_on`. */
+    const val FEATURE_CAPTURE = "capture"
+
+    /** Сервер раскладывает моделью то, что правило не узнало (`lane: auto`). */
+    const val FEATURE_CAPTURE_MODEL = "capture_model"
+
+    /** Идеи: `idea.add`, `idea.set`, поле `ideas` синка. */
+    const val FEATURE_IDEAS = "ideas"
+
+    /** «Сказал — сделано»: `task.did`. */
+    const val FEATURE_DID = "did"
+
+    /** Напоминание показывает телефон, бот — запасной через 3 минуты (`task.reminded {via: phone}`). */
+    const val FEATURE_REMIND_PHONE = "remind_phone"
+
     /** Что из [add] ещё нет в [have] (по [norm]: регистр, ё, форма номера не важны) — без повторов. */
     fun addNew(have: List<String>, add: List<String>, norm: (String) -> String): List<String> {
         val seen = have.filter { it.isNotBlank() }.map(norm).toHashSet()
@@ -1233,6 +1405,10 @@ object Dela {
         "rhythm" -> nul(t.rhythm)
         "no_steps" -> t.noSteps
         "pos" -> if (t.pos > 0) t.pos else JSONObject.NULL
+        // Захват (15.10.2026): в EDITABLE их нет — карточка их не правит; нужны для `was` у кнопок «Вернулось».
+        "kind" -> t.kind
+        "back_on" -> nul(t.backOn)
+        "back_said" -> nul(t.backSaid)
         else -> JSONObject.NULL
     }
 
@@ -1273,6 +1449,11 @@ object Dela {
             if (k == "ball" && v == MINE) continue
             task.put(k, v)
         }
+        // Захват (15.10.2026): вид и «потом» ставит только тот, кто видел флаг `capture` (`CaptureFallback`) — у дела
+        // по умолчанию их нет, и старый сервер незнакомых полей не увидит.
+        if (t.remind) task.put("kind", KIND_REMIND)
+        if (t.backOn.isNotBlank()) task.put("back_on", t.backOn)
+        if (t.backSaid.isNotBlank()) task.put("back_said", t.backSaid)
         if (t.source.isNotBlank()) task.put("source", t.source)
         if (t.sourceRef.isNotBlank()) task.put("source_ref", t.sourceRef)
         return JSONObject().put("op", "task.create").put("op_id", opId).put("task", task)
@@ -1396,7 +1577,13 @@ object Dela {
             "org.create" -> "организация «${op.optJSONObject("data")?.str("name").orEmpty().take(60)}»"
             "org.set" -> "организация «${s.orgs[op.str("id")]?.name?.take(60) ?: "?"}»"
             "project.set" -> "проект «${s.projects[op.str("id")]?.name?.take(60) ?: "?"}»"
-            "user.settings" -> "фильтры Дел"
+            "user.settings" -> if (op.optJSONObject("settings")?.has("remind_phone") == true) "напоминания на телефоне" else "фильтры Дел"
+            // Захват (15.10.2026): фраза одной дверью, поправка кнопкой, показ напоминания, идеи.
+            "capture.say" -> "фраза «${op.str("text").take(60)}»"
+            "capture.move" -> "поправка захвата"
+            "task.reminded" -> "отметка показа напоминания ${taskName(op.str("id"))}"
+            "idea.add" -> "идея «${op.optJSONObject("idea")?.str("text").orEmpty().take(60)}»"
+            "idea.set" -> "идея «${s.ideas[op.str("id")]?.text?.take(60) ?: "?"}»"
             else -> op.str("op")
         }
     }
@@ -1428,7 +1615,7 @@ object Dela {
 
     /** Мои открытые в сфере — без целей: цель не делают, к ней идут (дерево целей, 13.10.2026). */
     private fun mineOpen(s: Snapshot, me: String, sphere: String): List<Task> =
-        s.tasks.values.filter { it.open && !it.goal && (me.isBlank() || it.ownerId == me) && inSphere(it, sphere) }
+        s.tasks.values.filter { it.open && it.deed && (me.isBlank() || it.ownerId == me) && inSphere(it, sphere) }
 
 
     private fun le(date: String, today: String): Boolean = date.isNotBlank() && date <= today

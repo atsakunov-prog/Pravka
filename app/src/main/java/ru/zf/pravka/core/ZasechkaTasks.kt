@@ -50,7 +50,7 @@ object ZasechkaTasks {
         entries: List<ZasechkaStore.Entry>,
         now: Long,
     ): List<Dela.Task> {
-        val mine = s.tasks.values.filter { it.open && !it.goal && (me.isBlank() || it.ownerId == me) }
+        val mine = s.tasks.values.filter { it.open && it.deed && (me.isBlank() || it.ownerId == me) }
         val byId = mine.associateBy { it.id }
         val out = LinkedHashMap<String, Dela.Task>()
         fun add(t: Dela.Task?) {

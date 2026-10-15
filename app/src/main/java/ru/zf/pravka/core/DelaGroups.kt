@@ -70,8 +70,11 @@ object DelaGroups {
 
     private fun mine(me: String, t: Dela.Task) = me.isBlank() || t.ownerId == me
 
-    /** Своё открытое дело, не цель: цель не делают, к ней идут (дерево жизни) — её нет ни в одном списке дня. */
-    private fun deed(t: Dela.Task, me: String) = t.open && !t.goal && mine(me, t)
+    /**
+     * Своё открытое дело, не цель: цель не делают, к ней идут (дерево жизни) — её нет ни в одном списке дня. И не
+     * напоминание (захват, 15.10.2026): оно стоит на «Сегодня» в свой час ([remindersToday]), а не в куче дел.
+     */
+    private fun deed(t: Dela.Task, me: String) = t.open && t.deed && mine(me, t)
 
     /**
      * Молния «Сейчас» у дела есть (строка, карточка): своё открытое, не цель — как `isMine(t) && !t.goal` веба.
@@ -178,7 +181,53 @@ object DelaGroups {
 
     /** Сделано сегодня (по Москве): «закрыто M» в шапке «Сейчас» и «Сегодня». */
     fun doneToday(s: Dela.Snapshot, me: String, today: String): Int =
-        s.tasks.values.count { it.status == Dela.DONE && !it.goal && mine(me, it) && it.completedAt.isNotBlank() && mskDay(it.completedAt) == today }
+        s.tasks.values.count { it.status == Dela.DONE && it.deed && mine(me, it) && it.completedAt.isNotBlank() && mskDay(it.completedAt) == today }
+
+    // ------------------------------------------------------------ напоминания и «Вернулось» (захват, 15.10.2026)
+
+    /*
+     * Владелец 15.10.2026: «напоминание — отдельно от кучи дел: стоит на „Сегодня“ в своё время, приходит
+     * уведомлением телефона… после срабатывания — „Сделано / Через час / Завтра“ и исчезает». Одно правило в трёх
+     * местах: сервер (`capture.REMIND_TODAY_IF`, `BACK_IF`), веб (`isRemindToday`, `isBack` в app.js) и телефон — здесь,
+     * под `DelaGroupsTest`.
+     */
+
+    /**
+     * Напоминание на «Сегодня» (`isRemindToday` веба): открытое своё напоминание с мигом до конца сегодня (и прошедшее
+     * неотмеченное — «вчера 12:00 · не отмечено»), по месту без времени; плюс дело с напоминанием на сегодня, если его
+     * срок не сегодня (иначе оно и так в «Сегодня»).
+     */
+    fun isRemindToday(t: Dela.Task, me: String, today: String): Boolean {
+        if (!t.open || !mine(me, t) || t.goal) return false
+        if (t.remind) return if (t.remindAt.isNotBlank()) mskDay(t.remindAt) <= today else t.remindPlace.isNotBlank()
+        return t.remindAt.isNotBlank() && mskDay(t.remindAt) == today && t.dueDate != today
+    }
+
+    /** Миг напоминания в мс; нет времени (по месту) — в конец списка. */
+    fun remindMs(t: Dela.Task): Long =
+        runCatching { OffsetDateTime.parse(t.remindAt).toInstant().toEpochMilli() }.getOrDefault(Long.MAX_VALUE)
+
+    private val BY_REMIND: Comparator<Dela.Task> = compareBy<Dela.Task>({ remindMs(it) }, { it.num })
+
+    /** Напоминания на «Сегодня» по времени, по месту — в конце (`remindersToday` веба). */
+    fun remindersToday(s: Dela.Snapshot, me: String, today: String): List<Dela.Task> =
+        s.tasks.values.filter { isRemindToday(it, me, today) }.sortedWith(BY_REMIND)
+
+    /** «Все дела → Напоминания» (`remindersAll` веба, вид `reminders` сервера): все свои открытые напоминания. */
+    fun remindersAll(s: Dela.Snapshot, me: String): List<Dela.Task> =
+        s.tasks.values.filter { it.open && it.remind && mine(me, it) && !it.goal }.sortedWith(BY_REMIND)
+
+    /**
+     * «Вернулось» (`isBack` веба, `capture.BACK_IF`): своё открытое дело «потом» без срока, чей день возврата настал, не в
+     * «Сейчас». «Позвонить Ивану на неделе» — в пятницу здесь, а не на дне «Запустить».
+     */
+    fun isBack(t: Dela.Task, me: String, today: String): Boolean =
+        deed(t, me) && t.ball == Dela.MINE && !t.owed && t.dueDate.isBlank() && t.backOn.isNotBlank() &&
+            t.backOn <= today && !isNow(t, today)
+
+    /** «Вернулось» по дню возврата (`backTasks` веба). */
+    fun backToday(s: Dela.Snapshot, me: String, today: String): List<Dela.Task> =
+        s.tasks.values.filter { isBack(it, me, today) }.sortedWith(compareBy<Dela.Task>({ it.backOn }, { it.num }))
 
     private val MSK: ZoneId = ZoneId.of("Europe/Moscow")
 
@@ -546,7 +595,7 @@ object DelaGroups {
     fun scopeItems(s: Dela.Snapshot, me: String, today: String, sphere: String, scope: Scope): List<Dela.Task> = when (scope) {
         Scope.TODAY -> todayTasks(s, me, today, sphere)
         else -> s.tasks.values.filter {
-            it.open && !it.goal && mine(me, it) && Dela.inSphere(it, sphere) && (scope == Scope.ALL || grpOf(it).key == scope.key)
+            it.open && it.deed && mine(me, it) && Dela.inSphere(it, sphere) && (scope == Scope.ALL || grpOf(it).key == scope.key)
 
         }
     }

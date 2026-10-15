@@ -887,6 +887,8 @@ internal fun LazyListScope.crmClientBottom(ctx: DelaCrmContext, projectId: Strin
     val pays = DelaCrm.overlayPayments(v?.payments.orEmpty(), ctx.ops)
     // Встречи клиента (аудит №3) — только владельцу встреч: команде поле пустое, блока нет.
     if (v != null && v.meetings.isNotEmpty()) item(key = "sec:meetings") { MeetingsCard(ctx, "c:$projectId", v.meetings, v.meetingsN, "клиента") }
+    // Идеи у клиента (захват, 15.10.2026) — из копии синка: видны и без сети.
+    crmIdeas(ctx, "c:$projectId", ctx.snap.ideasFor(projectId = projectId))
     item(key = "sec:timeline") {
         val items = DelaCrm.overlayTimeline(v?.timeline.orEmpty(), ctx.ops, ctx.snap) { it.projectId == projectId }
         TimelineBlock(ctx, "c:$projectId", items, if (money) pays else emptyList(), loaded = v != null, refresh = listOf(path), showDeal = true)
@@ -1057,7 +1059,7 @@ internal fun LazyListScope.crmDealPage(ctx: DelaCrmContext, dealId: String) {
     }
     // Дела проекта: следующий шаг — его открытое дело (правило 12 сервера), из своей копии. Пока проект у клиента
     // один живой (solo, аудит №2), его шаги — и дела клиента без проекта: ниже группой «Дела клиента» (`renderDeal` веба).
-    val open = ctx.snap.tasks.values.filter { it.dealId == dealId && it.open && !it.goal }.sortedWith(Dela.ORDER)
+    val open = ctx.snap.tasks.values.filter { it.dealId == dealId && it.open && it.deed }.sortedWith(Dela.ORDER)
         .ifEmpty { DelaCrm.viewSteps(ctx.snap, v?.open.orEmpty().filter { it.dealId == dealId }) { it.dealId == dealId } }
     val viaClient = if (d.solo && !d.closed) {
         DelaCrm.clientSteps(ctx.snap, d.projectId).ifEmpty {
@@ -1084,6 +1086,8 @@ internal fun LazyListScope.crmDealPage(ctx: DelaCrmContext, dealId: String) {
     val pays = DelaCrm.overlayPayments(v?.payments ?: ctx.snap.paymentsOf(dealId), ctx.ops)
     // Встречи сделки по карточке встречи (аудит №3) — только владельцу встреч: команде поле пустое, блока нет.
     if (v != null && v.meetings.isNotEmpty()) item(key = "sec:meetings") { MeetingsCard(ctx, "d:$dealId", v.meetings, v.meetingsN, "проекта") }
+    // Идеи у проекта (захват, 15.10.2026).
+    crmIdeas(ctx, "d:$dealId", ctx.snap.ideasFor(dealId = dealId))
     item(key = "sec:timeline") {
         val items = DelaCrm.overlayTimeline(v?.timeline.orEmpty(), ctx.ops, ctx.snap) { it.dealId == dealId }
         TimelineBlock(ctx, "d:$dealId", items, if (money) pays else emptyList(), loaded = v != null, refresh = refreshDeal)
@@ -1222,6 +1226,32 @@ private fun TimelineBlock(
         }
         if (rows.size > DelaCrm.TL_SHOWN) {
             PaperTextButton(if (all) "Свернуть" else "Показать всё · ${rows.size}", onClick = { ctx.ui.tlAll = if (all) "" else key })
+        }
+    }
+}
+
+/**
+ * «Идеи (N)» карточки клиента, проекта и человека (захват, 15.10.2026; ответ владельца 5а — «свой список „Идеи“ у
+ * клиента, человека и сделки»; `ideaRow` веба): новые сверху, дата; «В дело» — дело «потом» с той же привязкой,
+ * «Использована», «Убрать» — с «Вернуть». Пусто или сервер идей не знает — блока нет.
+ */
+internal fun LazyListScope.crmIdeas(ctx: DelaCrmContext, key: String, ideas: List<Dela.Idea>) {
+    if (!ctx.snap.ideasOn || ideas.isEmpty()) return
+    item(key = "sec:ideas:$key") {
+        PaperCard(label = "Идеи · ${ideas.size}") {
+            ideas.forEachIndexed { i, x ->
+                if (i > 0) RowRule()
+                androidx.compose.foundation.layout.Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    Text(x.text, style = MaterialTheme.typography.bodyMedium)
+                    val day = x.createdAt.takeIf { it.isNotBlank() }?.let { DelaAsk.ddmm(ru.zf.pravka.core.DelaGroups.mskDay(it), ctx.today) }.orEmpty()
+                    if (day.isNotBlank()) PaperHint(day)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        PaperTextButton("В дело", onClick = { ctx.runUndoable(ru.zf.pravka.core.Ideas.toTask(x, ctx.today), emptyList()) })
+                        PaperTextButton("Использована", onClick = { ctx.runUndoable(ru.zf.pravka.core.Ideas.mark(x, ru.zf.pravka.core.Ideas.USED), emptyList()) })
+                        PaperTextButton("Убрать", onClick = { ctx.runUndoable(ru.zf.pravka.core.Ideas.mark(x, ru.zf.pravka.core.Ideas.DROPPED), emptyList()) })
+                    }
+                }
+            }
         }
     }
 }
@@ -1451,6 +1481,8 @@ internal fun LazyListScope.crmPersonBlock(ctx: DelaCrmContext, personId: String)
             }
         }
     }
+    // Идеи у человека (захват, 15.10.2026).
+    crmIdeas(ctx, "h:$personId", ctx.snap.ideasFor(personId = personId))
     item(key = "crm:person:tl") {
         val items = DelaCrm.overlayTimeline(v?.timeline.orEmpty(), ctx.ops, ctx.snap) { personId in it.personIds }
         TimelineBlock(ctx, "h:$personId", items, emptyList(), loaded = v != null, refresh = listOf(path, DelaCrm.TIES), showDeal = true)

@@ -185,6 +185,15 @@ class PravkaApp : Application() {
         // Настройки телефона на сервере (14.10.2026): следить за своими и раз в пять минут — пульс и правки с компьютера.
         phoneRemote.start()
         claudeSpend.start()
+        // Напоминания Дел уведомлением телефона (захват, 15.10.2026): следить за копией — будильник на ближайшее; тумблер
+        // «Напоминания на телефоне» поменялся — сказать серверу (бот ждёт или шлёт сразу) и переставить будильник.
+        reminders.start()
+        appScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            settings.remindPhoneFlow.drop(1).collect {
+                runCatching { reminders.syncSetting() }
+                runCatching { reminders.fire("тумблер") }
+            }
+        }
         // Сколько идёт запрос — в историю, а ход запроса — тому, кто его
         // показывает (20.09.2026). Та же одна точка на все дороги: здесь
         // известны и дорога, и модель с усилием, и длина входа.
@@ -485,6 +494,38 @@ class PravkaApp : Application() {
     /** Режим отладки Дел: записки о багах с экраном данными (docs/dela-phone-24.md, `data/DelaDebugSync.kt`). */
     internal val delaDebug by lazy { ru.zf.pravka.data.DelaDebugSync(this) { eventLog.add(it) } }
 
+    /**
+     * Напоминания Дел уведомлением телефона (захват, 15.10.2026, `trigger/Reminders.kt`): будильник на ближайшее,
+     * «Сделано · Через час · Завтра», отметка показа серверу — бот в Telegram только запасной.
+     */
+    val reminders: ru.zf.pravka.trigger.Reminders by lazy { ru.zf.pravka.trigger.Reminders(this) }
+
+    /**
+     * Захват одной дверью (шаг 0 петли, 15.10.2026, `data/CaptureClient.kt`): «сказать», «Д» и «З» шлют фразу серверу,
+     * он раскладывает и отдаёт строку «куда легло и когда вернётся» с кнопками поправки.
+     */
+    val capture: ru.zf.pravka.data.CaptureClient by lazy {
+        ru.zf.pravka.data.CaptureClient(delaStore, delaSync, appScope, { eventLog.add(it) }, { reminders.captureNotice(it) })
+    }
+
+    /**
+     * Открыта ли дверь захвата: Дела на своём сервере и в профиле, вход есть, сервер знает `capture`. Нет — прежняя
+     * дорога (Разноска на телефоне): старый сервер `capture.say` не знает и отверг бы её.
+     */
+    suspend fun captureReady(): Boolean =
+        delaOnServer() && profileStore.has(ru.zf.pravka.data.Profile.Mode.DELA) && delaSync.link.value != null &&
+            delaStore.view.value.captureOn
+
+    /**
+     * Фраза для захвата — через словарь телефона, как у Разноски: жёсткие замены чинят услышанные имена ДО сервера
+     * (правило сервера ищет людей по словам), остальное — подсказкой модели (`hint`). Сбой словаря — фраза как есть.
+     */
+    suspend fun capturePrepare(text: String): Pair<String, String> = runCatching {
+        val p = ru.zf.pravka.core.DictionaryApplier(dictionaryStore).prepare(text.trim())
+        runCatching { dictionaryStore.incrementHits(p.firedIds) }
+        p.text.ifBlank { text.trim() } to p.dictBlock
+    }.getOrDefault(text.trim() to "")
+
     /** Команды Засечки из веба Дел: «Начать», «Стоп», «Поправить» с компьютера применяет телефон. */
     internal val zasechkaWeb: ru.zf.pravka.data.ZasechkaWebCommands by lazy {
         ru.zf.pravka.data.ZasechkaWebCommands(
@@ -564,7 +605,10 @@ class PravkaApp : Application() {
         )
         if (ops.isEmpty()) return
         delaStore.enqueue(ops)
-        eventLog.add("дела: приехал «$place» — напоминаний в Telegram: ${ops.size}")
+        eventLog.add("дела: приехал «$place» — напоминаний по месту: ${ops.size}")
+        // Захват (15.10.2026): уведомление телефона — сразу, без круга через сервер: миг приезда уже в копии (очередь
+        // поверх), план видит его как любое напоминание по времени.
+        runCatching { reminders.fire("приезд") }
         // Дома сеть есть: отправить сейчас, а не через десять секунд тишины.
         runCatching { delaSync.pushNow(4_000L) }
     }

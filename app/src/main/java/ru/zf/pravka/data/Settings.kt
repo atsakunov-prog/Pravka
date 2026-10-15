@@ -159,6 +159,9 @@ class Settings(private val context: Context) {
         private val KEY_TODOIST_TOKEN = stringPreferencesKey("todoist_token")
         private val KEY_DELA_BACKEND = stringPreferencesKey("dela_backend")
         private val KEY_DELA_PLACES_SENT = stringPreferencesKey("dela_places_sent")
+        // Захват (15.10.2026): напоминания Дел — уведомлением телефона; что сервер уже знает об этом («1» / «0»).
+        private val KEY_REMIND_PHONE = booleanPreferencesKey("dela_remind_phone")
+        private val KEY_REMIND_PHONE_SENT = stringPreferencesKey("dela_remind_phone_sent")
 
         // Спорт: вкладка живёт кэшем intervals.icu, глубина - в днях.
         private val KEY_SPORT_DAYS = intPreferencesKey("sport_days")
@@ -1045,6 +1048,21 @@ class Settings(private val context: Context) {
     suspend fun delaPlacesSent(): String = context.dataStore.data.first()[KEY_DELA_PLACES_SENT].orEmpty()
     suspend fun setDelaPlacesSent(value: String) {
         context.dataStore.edit { it[KEY_DELA_PLACES_SENT] = value }
+    }
+
+    /**
+     * Напоминания Дел — уведомлением телефона (захват, 15.10.2026; владелец: «приходит уведомлением телефона, не
+     * только ботом в Telegram — там я почти не отвечаю»). С завода включено; выключил — телефон молчит, бот шлёт сразу.
+     */
+    val remindPhoneFlow = context.dataStore.data.map { it[KEY_REMIND_PHONE] ?: true }
+    suspend fun setRemindPhone(value: Boolean) {
+        context.dataStore.edit { it[KEY_REMIND_PHONE] = value }
+    }
+
+    /** Что сервер Дел уже знает (`user.settings.remind_phone.on`): «1», «0» или пусто — ещё не говорили. */
+    suspend fun remindPhoneSent(): String = context.dataStore.data.first()[KEY_REMIND_PHONE_SENT].orEmpty()
+    suspend fun setRemindPhoneSent(value: String) {
+        context.dataStore.edit { it[KEY_REMIND_PHONE_SENT] = value }
     }
 
     // Разноска: кнопка «Д» на экране. Включена по умолчанию - она и есть

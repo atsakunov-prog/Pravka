@@ -40,6 +40,9 @@ class DelaStore(private val context: Context) {
         /** Последние ответы CRM-видов (`/api/view/…`) — расходный кэш, как и копия. */
         const val VIEWS_FILE = "dela-views.json"
         private const val KEEP_NOTICES = 30
+        /** Ответов захвата в памяти: их ждут секунды, а не дни. */
+        private const val KEEP_CAPTURES = 20
+        private val CAPTURE_OPS = setOf("capture.say", "capture.move")
         /** Видов клиента, сделки и человека бывает много — храним свежие. */
         private const val KEEP_VIEWS = 60
         /**
@@ -319,6 +322,18 @@ class DelaStore(private val context: Context) {
     /** Есть ли ещё в очереди эта операция (не дошла до сервера). */
     fun isQueued(opId: String): Boolean = _queued.value.any { it.opId == opId }
 
+    private val captureReplies = LinkedHashMap<String, JSONObject>()
+    private val _captured = MutableStateFlow<Map<String, JSONObject>>(emptyMap())
+
+    /**
+     * Ответы сервера на операции захвата (`capture.say`, `capture.move`; шаг 0 петли, 15.10.2026) по op_id — целиком,
+     * с `ok`, `error` и `capture`: строка «куда легло» приходит в ответе той же операции очереди. Только в памяти,
+     * последние [KEEP_CAPTURES]: ждёт их тот, кто сейчас показывает строку (`CaptureClient`).
+     */
+    val captured: StateFlow<Map<String, JSONObject>> = _captured
+
+    fun captureReply(opId: String): JSONObject? = _captured.value[opId]
+
     /**
      * «Отменить» Разноски: операция, ещё не ушедшая на сервер, просто
      * снимается. true — сняли; false — она уже на сервере, отменять надо
@@ -349,6 +364,12 @@ class DelaStore(private val context: Context) {
             val id = r.optString("op_id").takeIf { it.isNotBlank() && it != "null" } ?: continue
             val q = byId[id] ?: continue
             done += id
+            if (q.op.optString("op") in CAPTURE_OPS) {
+                captureReplies.remove(id)
+                captureReplies[id] = r
+                while (captureReplies.size > KEEP_CAPTURES) captureReplies.remove(captureReplies.keys.first())
+                _captured.value = LinkedHashMap(captureReplies)
+            }
             val what = Dela.describe(q.op, _view.value)
             if (!r.optBoolean("ok", false)) {
                 // «На сервере уже версии N» у записи Свода — не отказ, а повод

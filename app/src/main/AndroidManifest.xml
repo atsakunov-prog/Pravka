@@ -17,6 +17,17 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Напоминания Дел уведомлением телефона (захват, 15.10.2026): «напомни в 12» звенит
+         в 12:00, а не на ближайшем пятиминутном тике службы. Точный будильник — USE_EXACT_ALARM
+         (Android 13+, выдаётся при установке; приложение личное, не Play Store), на Android 12 —
+         SCHEDULE_EXACT_ALARM (выдаёт владелец; нет — будильник неточный, и это сказано в
+         настройках Дел). После загрузки будильники системы пусты — догон и следующий ставит
+         BootReceiver. -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Keep the CPU awake during dictation so recognition doesn't stall if
          the device would otherwise doze. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -207,6 +218,24 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/zasechka_widget_info" />
+        </receiver>
+
+        <!-- Напоминания Дел (захват, 15.10.2026): будильник и кнопки уведомления «Сделано ·
+             Через час · Завтра». Наружу закрыт — сюда ходят только свои PendingIntent. -->
+        <receiver
+            android:name=".trigger.ReminderReceiver"
+            android:exported="false" />
+
+        <!-- Загрузка телефона и обновление приложения: догнать пропущенное напоминание и
+             поставить следующий будильник. exported=true нужен системе; слушает только
+             защищённые системные действия — чужое приложение их не пошлёт. -->
+        <receiver
+            android:name=".trigger.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
         </receiver>
 
         <activity

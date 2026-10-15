@@ -620,7 +620,9 @@ class ZasechkaButtonController(
         onOpen: (() -> Unit)? = null,
         ok: Boolean = true,
         holdMs: Long = ru.zf.pravka.core.PillLook.RESULT_HOLD_MS,
-    ) = pill.result(summary, ok, rows, footer, action, onOpen, holdMs)
+        /** Несколько кнопок (захват: «Это дело · Время · Отменить»); первая — и в самой строке. */
+        actions: List<DictationPill.ResultAction> = listOfNotNull(action),
+    ) = pill.result(summary, ok, rows, footer, action, onOpen, holdMs, actions = actions, inlineFirst = actions.size > 1)
 
     // ---- Long-press menu: a single column of amber pills ----
 

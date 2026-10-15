@@ -138,6 +138,12 @@ private const val LOOSE_GROUP = "0"
 private const val FILTER_NAV = "f:"
 /** Ветка «Просрочено» сверху «Всех дел»: у неё — «Перенести все». */
 private const val LATE_NODE = "late"
+/** Блок «Напоминания» внизу «Всех дел» (захват, 15.10.2026): напоминания — не дела, в уровнях их нет. */
+private const val REMIND_NODE = "reminders"
+
+/** Подпись блока напоминаний: куда они приходят — телефоном или ботом (как `remindBox` веба). */
+internal fun remindSub(snap: Dela.Snapshot): String =
+    if (snap.remindPhoneOn) "в своё время — уведомлением на телефоне" else "в своё время — ботом в Telegram"
 /**
  * Шторка разделов на сложенном (холст: ~252). Колонки разложенного — боковина, список, карточка — считает
  * `core/DelaColumns.kt`: ширины и «спрятана» помнит устройство (`dela-favs.json`, рядом с видом дерева).
@@ -686,6 +692,11 @@ fun DelaTab(
             val lateIds = late.map { it.id }.toSet()
             val lateNode = if (late.isEmpty()) emptyList()
             else listOf(DelaGroups.Node(LATE_NODE, "Просрочено", 0, null, late, sub = "срок прошёл — сделать, перенести или взять в «Сейчас»", late = true))
+            // Напоминания (захват, 15.10.2026) — не дела: в уровнях их нет, они внизу своим блоком, по времени
+            // (`remindersAll` веба). На «Сегодня» они стоят в свой час.
+            val reminders = if (pk != null) emptyList() else DelaGroups.remindersAll(snap, me)
+            val remindNode = if (reminders.isEmpty()) emptyList()
+            else listOf(DelaGroups.Node(REMIND_NODE, "Напоминания", 0, null, reminders, sub = remindSub(snap)))
             DelaScreen(
                 "Все дела",
                 listOfNotNull(
@@ -694,7 +705,7 @@ fun DelaTab(
                 ).joinToString(" · "),
                 nest = forest?.kids.orEmpty(),
                 nestTree = if (snap.nestOn) allTree else null,
-                nodes = lateNode + DelaGroups.nested(base.filter { it.id !in lateIds }, lv, snap, today),
+                nodes = lateNode + DelaGroups.nested(base.filter { it.id !in lateIds }, lv, snap, today) + remindNode,
                 levels = lv, levelKey = "all", saveScope = DelaGroups.Scope.ALL,
                 pick = pk, branches = lv.firstOrNull()?.let { DelaGroups.branches(every, it, snap, today) }.orEmpty(),
                 done = true, add = true, empty = if (pk != null) "У «${pk.title}» здесь дел нет." else "Пусто.",
@@ -746,7 +757,7 @@ fun DelaTab(
     val projectScreen: DelaScreen? = (page as? DelaPage.Project)?.let { pg ->
         val p = snap.projects[pg.id]
         val lv = levelsOf("project").filter { it != DelaGroups.Level.PROJECT }
-        val all = snap.tasks.values.filter { it.projectId == pg.id }
+        val all = snap.tasks.values.filter { it.projectId == pg.id && !it.remind }
         val every = all.filter { (showDone || it.open) && (dealFilter.isBlank() || it.dealId == dealFilter) }
         val pk = picks["project"]?.takeIf { DelaGroups.pickOn(it, lv) }
         val items = DelaGroups.picked(every, lv, pk, snap, today)
@@ -3653,10 +3664,12 @@ internal fun DelaTaskSheet(
         // «Напомнить ему» — только у «Мониторить»: день пнуть того, от кого жду; моё напоминание — ниже, в Telegram.
         if (f.ball == Dela.WAITING) DateLine("Напомнить ему", f.nudgeOn, today) { f = f.copy(nudgeOn = it) }
         val places by app.settings.autoPlacesFlow.collectAsState(initial = emptyMap())
+        val phoneRemind by app.settings.remindPhoneFlow.collectAsState(initial = true)
         RemindLine(
             f,
             on = snap.remindOn,
             places = places.values.map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { Dela.norm(it) },
+            phone = phoneRemind && snap.remindPhoneOn,
         ) { f = it }
 
         PaperHint("Сколько займёт")
@@ -3970,7 +3983,7 @@ private fun DateLine(label: String, value: String, today: LocalDate, onChange: (
  * правку целиком — поэтому без `remindOn` блока нет, только слова, почему.
  */
 @Composable
-private fun RemindLine(f: Dela.Task, on: Boolean, places: List<String>, onChange: (Dela.Task) -> Unit) {
+private fun RemindLine(f: Dela.Task, on: Boolean, places: List<String>, phone: Boolean = false, onChange: (Dela.Task) -> Unit) {
     if (!on) {
         PaperHint("Напоминания в Telegram появятся, когда сервер Дел обновится; сказанное «напомни…» пока ложится в заметки")
         return
@@ -3979,8 +3992,9 @@ private fun RemindLine(f: Dela.Task, on: Boolean, places: List<String>, onChange
     val today = LocalDate.now(zone)
     val at = DelaRemind.local(f.remindAt, zone)
     var custom by remember(f.id) { mutableStateOf(false) }
-    PaperHint("Напомнить в Telegram")
-    DelaRemind.state(f, today, zone).takeIf { it.isNotBlank() }?.let { PaperHint(it, MaterialTheme.colorScheme.primary) }
+    // Захват (15.10.2026): напоминание показывает телефон уведомлением — Telegram только запасной, через 3 минуты.
+    PaperHint(if (phone) "Напомнить уведомлением на телефоне" else "Напомнить в Telegram")
+    DelaRemind.state(f, today, zone, phone).takeIf { it.isNotBlank() }?.let { PaperHint(it, MaterialTheme.colorScheme.primary) }
     ChipRow {
         for (q in DelaRemind.quick(java.time.ZonedDateTime.now(zone))) {
             PaperChip(q.label, selected = f.remindAt == q.iso, onClick = { onChange(f.copy(remindAt = q.iso, remindPlace = "", remindedAt = "")) })

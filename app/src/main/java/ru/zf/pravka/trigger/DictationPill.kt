@@ -455,8 +455,13 @@ class DictationPill(
         val yes: (() -> Unit)? = null,
         /** Вопрос «да или нет»: вместо волны — крестик, «нет» (13.10.2026). */
         val no: (() -> Unit)? = null,
+        /**
+         * Итог с несколькими действиями, первое из которых — в самой строке (захват, 15.10.2026: «Напомню сегодня в
+         * 12:00…» · «Это дело» прямо в пилюле, «Время» и «Отменить» — в карточке по тапу или по кружку).
+         */
+        val inline: ResultAction? = null,
     ) {
-        val action: ResultAction? get() = if (ask) chip else actions.singleOrNull()
+        val action: ResultAction? get() = if (ask) chip else inline ?: actions.singleOrNull()
         val expandable: Boolean
             get() = if (ask) actions.size > 1 || summary.length > 72
             else rows.isNotEmpty() || actions.size > 1 || (actions.size == 1 && summary.length > 60)
@@ -907,10 +912,15 @@ class DictationPill(
         holdMs: Long = PillLook.RESULT_HOLD_MS,
         /** Несколько действий — таблетками внизу карточки; [action] — то же одним. */
         actions: List<ResultAction> = listOfNotNull(action),
+        /** Первое из нескольких действий — ещё и в самой строке (поправка захвата одним касанием). */
+        inlineFirst: Boolean = false,
     ): Boolean {
         resultSink?.let { sink -> runCatching { sink(ok, holdMs) } }
         return place(
-            ResultRequest(ru.zf.pravka.core.PillText.plain(summary), ok, rows, footer, actions, onOpen, holdMs, ask = false)
+            ResultRequest(
+                ru.zf.pravka.core.PillText.plain(summary), ok, rows, footer, actions, onOpen, holdMs, ask = false,
+                inline = if (inlineFirst && actions.size > 1) actions.first() else null,
+            )
         )
     }
 
@@ -1038,7 +1048,7 @@ class DictationPill(
             o.isClickable = true
         }
         val a = req.action
-        if (a != null && (!expandable || req.ask)) {
+        if (a != null && (!expandable || req.ask || req.inline != null)) {
             val chip = actionChip ?: TextView(service).apply {
                 setTextColor(PAPER)
                 textSize = 13.5f
@@ -1061,8 +1071,9 @@ class DictationPill(
                 hide()
                 a.onClick()
             }
-            // У обычного итога таблетка стоит на месте кружка; у вопроса кружок — «Сказать».
-            o?.visibility = if (req.ask) View.VISIBLE else View.GONE
+            // У обычного итога таблетка стоит на месте кружка; у вопроса кружок — «Сказать»; у итога с первой
+            // кнопкой в строке кружок — галочка вниз: остальные кнопки в карточке.
+            o?.visibility = if (req.ask || req.inline != null) View.VISIBLE else View.GONE
         } else {
             actionChip?.visibility = View.GONE
             o?.visibility = View.VISIBLE
@@ -1098,6 +1109,8 @@ class DictationPill(
             }
         } else {
             ao?.visibility = View.GONE
+            // Итог встал на место вопроса (тот переназначил кружок на «Сказать») — кружок снова раскрывает итог.
+            if (req.inline != null) o?.setOnClickListener(orbTap)
         }
     }
 

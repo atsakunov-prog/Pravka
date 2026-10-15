@@ -98,9 +98,9 @@ object DelaViews {
 
     private fun mine(s: Dela.Snapshot, me: String, t: Dela.Task): Boolean = me.isBlank() || t.ownerId == me
 
-    /** `openMine` веба: открытые мои в сфере («Входящие» — в любой), без целей — цель не делают, к ней идут. */
+    /** `openMine` веба: открытые мои в сфере («Входящие» — в любой), без целей — цель не делают, к ней идут — и без напоминаний (они на «Сегодня» в свой час). */
     fun openMine(s: Dela.Snapshot, me: String, sphere: String): List<Dela.Task> =
-        s.tasks.values.filter { it.open && !it.goal && mine(s, me, it) && Dela.inSphere(it, sphere) }
+        s.tasks.values.filter { it.open && it.deed && mine(s, me, it) && Dela.inSphere(it, sphere) }
 
     private fun isNow(t: Dela.Task, today: String) = t.focusOn == today
     private fun le(d: String, today: String) = d.isNotBlank() && d <= today
@@ -118,7 +118,7 @@ object DelaViews {
      * во всех сферах: пять на день, а не пять на сферу.
      */
     fun nowTasks(s: Dela.Snapshot, me: String, today: String): List<Dela.Task> =
-        s.tasks.values.filter { it.open && !it.goal && mine(s, me, it) && isNow(it, today) }.sortedWith(Dela.ORDER)
+        s.tasks.values.filter { it.open && it.deed && mine(s, me, it) && isNow(it, today) }.sortedWith(Dela.ORDER)
 
     /**
      * Влезут ли [ids] в «Сейчас» (`nowRoom` веба): уже стоящие не считаются
@@ -224,9 +224,9 @@ object DelaViews {
     /** Раздел страницы: заголовок веба и дела в его порядке. */
     data class Section(val title: String, val items: List<Dela.Task>)
 
-    /** «Все дела»: моё в сфере, с «Сделанными» по выбору. Целей нет — они в дереве и в поиске (13.10.2026). */
+    /** «Все дела»: моё в сфере, с «Сделанными» по выбору. Целей нет — они в дереве и в поиске (13.10.2026); напоминаний — тоже: они внизу своим блоком (захват, 15.10.2026). */
     fun list(s: Dela.Snapshot, me: String, sphere: String, showDone: Boolean): List<Dela.Task> =
-        s.tasks.values.filter { !it.goal && mine(s, me, it) && Dela.inSphere(it, sphere) && (showDone || it.open) }
+        s.tasks.values.filter { it.deed && mine(s, me, it) && Dela.inSphere(it, sphere) && (showDone || it.open) }
 
     /**
      * Поиск веба: каждое слово — где угодно в названии, заметках, имени проекта,
@@ -887,6 +887,8 @@ object DelaViews {
         // Напоминание в Telegram (06.10.2026): «⏰ 11:00», «⏰ завтра 09:00», «⏰ дом».
         // В вебе такой подписи ещё нет — задание серверу (docs/dela-server-remind.md) её просит.
         date(today)?.let { day -> out += DelaRemind.chip(t, day, java.time.ZoneId.systemDefault()) }
+        // «Потом» (захват, 15.10.2026, `taskRow` веба): «↩ пт 16.10» — когда дело вернётся само.
+        backChip(t, today)?.let { out += it }
         if (!on(By.PROJECT) && !onProjectPage) {
             out += if (t.projectId.isBlank()) NO_PROJECT else s.projects[t.projectId]?.name ?: t.projectName.ifBlank { "проект" }
         }
@@ -1044,7 +1046,7 @@ object DelaViews {
     /** Разделы страницы человека — заголовками веба. */
     fun personSections(s: Dela.Snapshot, personId: String): List<Section> {
         // `renderPerson` веба (10.10.2026): тремя группами. Его просьбы ко мне (`requested_by`) — тоже «отбить».
-        val his = s.tasks.values.filter { it.open && !it.goal && (it.personId == personId || it.requestedBy == personId) }
+        val his = s.tasks.values.filter { it.open && it.deed && (it.personId == personId || it.requestedBy == personId) }
 
         fun g(t: Dela.Task) = DelaGroups.grpOf(t)
         return listOf(
@@ -1110,6 +1112,15 @@ object DelaViews {
 
     /** «07.10», чужой год — «07.10.27». */
     fun ddmm(iso: String, today: String): String = DelaAsk.ddmm(iso, today)
+
+    /**
+     * Метка дела «потом» (захват, 15.10.2026, `taskRow` веба): «↩ пт 16.10» — день, когда оно вернётся строкой
+     * «Вернулось». У дела со сроком и у напоминания её нет: у них своё время.
+     */
+    fun backChip(t: Dela.Task, today: String): String? {
+        if (!t.open || t.backOn.isBlank() || t.dueDate.isNotBlank() || t.remind) return null
+        return "↩ " + WD_SHORT[weekday(t.backOn)] + " " + ddmm(t.backOn, today)
+    }
 
     /** «Понедельник, 5 октября» — подпись дня, как `D.long` веба. */
     fun longDate(iso: String): String {

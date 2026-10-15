@@ -535,7 +535,7 @@ object DelaCrm {
      */
     fun nextFor(s: Dela.Snapshot, dealId: String, projectId: String, solo: Boolean, fromView: NextTask?): NextTask? {
         fun row(t: Dela.Task, via: Boolean) = NextTask(t.id, t.num, t.title, t.dueDate, t.ownerId, t.ball, via)
-        val own = s.tasks.values.filter { it.dealId == dealId && !it.goal }
+        val own = s.tasks.values.filter { it.dealId == dealId && it.deed }
         own.filter { it.open }.sortedWith(Dela.ORDER).firstOrNull()?.let { return row(it, false) }
         if (solo && projectId.isNotBlank()) {
             clientSteps(s, projectId).firstOrNull()?.let { return row(it, true) }
@@ -556,7 +556,7 @@ object DelaCrm {
 
     /** Открытые дела клиента без сделки (не цели) — шаги его единственной живой сделки, ранние сверху. */
     fun clientSteps(s: Dela.Snapshot, projectId: String): List<Dela.Task> =
-        s.tasks.values.filter { it.open && !it.goal && it.projectId == projectId && it.dealId.isBlank() }.sortedWith(Dela.ORDER)
+        s.tasks.values.filter { it.open && it.deed && it.projectId == projectId && it.dealId.isBlank() }.sortedWith(Dela.ORDER)
 
     /**
      * Не дописанные имена (`skipped` ответа `person.add` и `person.merge`, аудит №1): другим именем не пишется то, что

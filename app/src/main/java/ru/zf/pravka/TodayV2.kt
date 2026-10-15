@@ -106,6 +106,13 @@ internal class TodayV2Data(
     val dela: Boolean,
     /** В ленте идёт или только что была «Еда», а в дневнике пусто (`MealGap`); null — подсказки нет. */
     val mealGap: ru.zf.pravka.core.MealGap.Gap? = null,
+    /**
+     * Напоминания в свой час и свои отметки календаря (захват, 15.10.2026, `TodayAgenda.reminderRows`): «12:00 ⏰
+     * Отправить счёт в Контуре», пора — «✓ · +1 ч · завтра».
+     */
+    val reminders: List<TodayAgenda.RemindRow> = emptyList(),
+    /** «Вернулось» — дела «потом», чей день настал (`TodayAgenda.backRows`). */
+    val back: List<TodayAgenda.BackRow> = emptyList(),
 )
 
 /** Числа плиток разложенного: еда, спорт, деньги, Шаббат. */
@@ -135,7 +142,39 @@ internal class TodayV2Actions(
     val lenta: (Lenta.Row) -> Unit,
     /** Ответ вариантом «Подскажи» («Не для CRM», «Никто»), где кнопок не видно, — `suggestion.decide` с `option`. */
     val answer: (Dela.Suggestion, DelaViews.Option) -> Unit = { sg, _ -> reject(sg, "") },
+    /** Кнопка напоминания на «Сегодня» — та же, что в уведомлении: «Сделано», «Через час», «Завтра». */
+    val remind: (taskId: String, ru.zf.pravka.trigger.Reminders.Act) -> Unit = { _, _ -> },
+    /** «Вернулось»: «В „Сейчас“», «Сегодня», «Ещё потом», «Сделано». */
+    val back: (taskId: String, BackTo) -> Unit = { _, _ -> },
 )
+
+/** Куда деть вернувшееся «потом» (`backBox` веба). */
+internal enum class BackTo(val label: String) { NOW("В «Сейчас»"), TODAY("Сегодня"), LATER("Ещё потом"), DONE("Сделано") }
+
+/**
+ * «Вернулось» → куда (`backBox` веба): в «Сейчас» и на сегодня — «потом» снимается; «Ещё потом» — на понедельник;
+ * «Сделано» — закрыть. Обычные операции очереди; что сказать — после ответа сервера и его словами.
+ */
+internal suspend fun backMove(app: PravkaApp, taskId: String, to: BackTo): String {
+    app.delaStore.load()
+    val snap = app.delaStore.view.value
+    val t = snap.tasks[taskId] ?: return "Дела уже нет"
+    val today = DayFacts.localDay(System.currentTimeMillis()).toString()
+    val me = app.delaSync.link.value?.user.orEmpty()
+    val clear = { o: org.json.JSONObject -> o.put("back_on", org.json.JSONObject.NULL).put("back_said", org.json.JSONObject.NULL) }
+    val (set, said) = when (to) {
+        BackTo.NOW -> {
+            if (!DelaViews.nowRoom(snap, me, today, listOf(t.id))) return DelaViews.NOW_FULL
+            clear(org.json.JSONObject().put("focus_on", today)) to "В «Сейчас»"
+        }
+        BackTo.TODAY -> clear(org.json.JSONObject().put("due_date", today)) to "Срок — сегодня"
+        BackTo.LATER -> TodayAgenda.backLater(today).let { d ->
+            org.json.JSONObject().put("back_on", d) to "Верну в понедельник ${DelaViews.ddmm(d, today)}"
+        }
+        BackTo.DONE -> return app.delaSend(listOf(Dela.statusOp("task.done", t.id)), "✓ ${t.title.take(40)}")
+    }
+    return app.delaSend(listOf(Dela.setOp(t.id, set, ru.zf.pravka.core.DelaGroups.was(t, set))), said)
+}
 
 @Composable
 internal fun TodayV2(
@@ -237,6 +276,9 @@ private fun FoldedBody(c: TodayCards, modifier: Modifier) {
         MealGapLine(c)
         c.weather?.takeIf { it.ahead.isNotEmpty() || it.hours.isNotEmpty() }?.let { WeatherCardV2(it, c.weatherOpen, c.onWeather) }
         if (c.data.dela) NowTasksCard(c, wide = false)
+        // Захват (15.10.2026): напоминания в свой час и «Вернулось» — под «Сейчас», как панели веба.
+        RemindCard(c)
+        BackCard(c)
         c.digest?.let { DigestCard(it, c.digestOpen, c.onDigest, onNew = { digestNew(c, it) }, onEarlier = c.act.earlier) }
         if (c.data.dela) NewCard(c, wide = false)
     }
@@ -266,6 +308,8 @@ private fun WideBody(c: TodayCards, modifier: Modifier) {
         ) {
             c.weather?.takeIf { it.ahead.isNotEmpty() || it.hours.isNotEmpty() }?.let { WeatherCardV2(it, c.weatherOpen, c.onWeather) }
             if (c.data.dela) NowTasksCard(c, wide = true)
+            RemindCard(c)
+            BackCard(c)
             c.digest?.let { DigestCard(it, c.digestOpen, c.onDigest, onNew = { digestNew(c, it) }, onEarlier = c.act.earlier) }
             if (c.data.dela) NewCard(c, wide = true)
             TodayAgendaCard(c)
@@ -464,6 +508,96 @@ private fun NowTasksCard(c: TodayCards, wide: Boolean) {
                     }
                 }
             }
+        }
+    }
+}
+
+// ---- Напоминания и «Вернулось» (захват, 15.10.2026) ----
+
+/**
+ * «Напоминания» — в свой час, отдельно от кучи дел (владелец: «напоминание — отдельно от кучи дел: стоит на „Сегодня“
+ * в своё время… после срабатывания — „Сделано / Через час / Завтра“ и исчезает»). Строка: время ⏰, что, подпись;
+ * пора — кнопки «✓ · +1 ч · завтра» (те же, что в уведомлении). Своя отметка календаря («Свободен») — строкой
+ * «отметка»: встречей её Засечка не считает. Пусто — карточки нет. Только сегодня.
+ */
+@Composable
+private fun RemindCard(c: TodayCards) {
+    val rows = c.data.reminders
+    if (!c.today || rows.isEmpty()) return
+    val t = LocalPravkaType.current
+    PaperCard {
+        SecHead(kv("clock", Glyphs.Bell), "Напоминания", rows.count { !it.mark }, small = remindSub(c.data.snap), link = "Дела", onLink = { c.nav.mode(Tab.TODOIST) })
+        rows.forEachIndexed { i, r ->
+            if (i > 0) ListLine()
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(KvShape.Control))
+                    .then(if (r.taskId != null) Modifier.clickable { c.nav.delaTask(r.taskId) } else Modifier)
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    r.whenText + if (r.mark) "" else " ⏰",
+                    style = t.time,
+                    color = if (r.due && !r.mark) Kv.accent else Kv.faint,
+                    maxLines = 2,
+                    modifier = Modifier.width(72.dp),
+                )
+                Column(Modifier.weight(1f)) {
+                    Text(r.title, style = t.label.copy(fontSize = 13.5.sp, fontWeight = FontWeight.Normal), color = Kv.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (r.sub.isNotBlank()) Text(r.sub, style = t.caption, color = Kv.faint, maxLines = 1)
+                }
+                val id = r.taskId
+                if (id != null && r.due) {
+                    SmallKey(kv("check", Glyphs.Check), null, "Сделано: ${r.title}", { c.act.remind(id, ru.zf.pravka.trigger.Reminders.Act.DONE) }, soft = true)
+                    SmallKey(null, "+1 ч", "Напомнить через час: ${r.title}", { c.act.remind(id, ru.zf.pravka.trigger.Reminders.Act.HOUR) })
+                    SmallKey(null, "завтра", "Напомнить завтра в 9:00: ${r.title}", { c.act.remind(id, ru.zf.pravka.trigger.Reminders.Act.TOMORROW) })
+                }
+            }
+        }
+    }
+}
+
+/**
+ * «Вернулось» — дела «потом», чей день настал («позвонить Ивану на неделе» → в пятницу здесь): «↩ Позвонить Ивану ·
+ * ты сказал «на неделе»», тап — выбор «В „Сейчас“ · Сегодня · Ещё потом · Сделано». Не тронул за день — сервер ночью
+ * двигает его на понедельник: ничего не пропадает.
+ */
+@Composable
+private fun BackCard(c: TodayCards) {
+    val rows = c.data.back
+    if (!c.today || rows.isEmpty()) return
+    val t = LocalPravkaType.current
+    var open by remember { mutableStateOf<TodayAgenda.BackRow?>(null) }
+    PaperCard {
+        SecHead(kv("refresh", Glyphs.Refresh), "Вернулось", rows.size, small = "ты отложил «потом» — пора решить")
+        rows.forEachIndexed { i, r ->
+            if (i > 0) ListLine()
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(KvShape.Control))
+                    .clickable(onClickLabel = "что с ним") { open = r }
+                    .padding(vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("↩", style = t.time, color = Kv.accent)
+                Column(Modifier.weight(1f)) {
+                    Text(r.title, style = t.label.copy(fontSize = 13.5.sp, fontWeight = FontWeight.Normal), color = Kv.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(r.sub, style = t.caption, color = Kv.faint, maxLines = 1)
+                }
+            }
+        }
+    }
+    open?.let { r ->
+        ru.zf.pravka.ui.PaperSheet(onDismiss = { open = null }, title = r.title, subtitle = r.sub) {
+            for (to in BackTo.entries) {
+                ru.zf.pravka.ui.PaperRow(title = to.label, onClick = { open = null; c.act.back(r.taskId, to) })
+            }
+            ru.zf.pravka.ui.PaperRow(title = "Открыть дело", onClick = { open = null; c.nav.delaTask(r.taskId) })
         }
     }
 }
@@ -826,6 +960,8 @@ internal fun buildV2(
     kcalGoal: Int,
     pOn: Boolean,
     zOn: Boolean,
+    /** Свои отметки календаря дня («Свободен», `CalendarRules.mark`) — строкой «отметка» в «Напоминаниях». */
+    marks: List<ru.zf.pravka.core.CalEvent> = emptyList(),
 ): TodayV2Data {
     val day = model.day
     val todayKey = DayFacts.localDay(now).toString()
@@ -840,10 +976,18 @@ internal fun buildV2(
     val last = if (open == null) entries.filter { !it.open && it.source != "gap" && it.end <= now }.maxByOrNull { it.end } else null
     val nowTasks = if (delaOn) TodayAgenda.now(snap, me, todayKey) else emptyList()
     val asks = if (delaOn) DelaViews.asks(snap, me) else emptyList()
-    val dueToday = if (delaOn) TodayAgenda.due(snap, me, dayKey, todayKey) else emptyList()
+    // Дело-созвон с часом и его событие в календаре (`gcal.py` ставит созвоны из Дел) — одной строкой: событием.
+    val dueToday = if (delaOn) TodayAgenda.dropTwinCalls(TodayAgenda.due(snap, me, dayKey, todayKey), calendar, model.dayStart) else emptyList()
     val dueTomorrow = if (delaOn) TodayAgenda.due(snap, me, day.plusDays(1).toString(), todayKey) else emptyList()
-    val todayRows = TodayAgenda.rows(dueToday, calendar, model.dayStart, now)
+    // Идеи к встрече (ответ 5а, захват 15.10.2026): «встреча · 💡 2» — у клиента или человека встречи есть живые идеи.
+    val ideasOn = delaOn && snap.ideasOn && snap.ideas.isNotEmpty()
+    val todayRows = TodayAgenda.rows(dueToday, calendar, model.dayStart, now) { e -> if (ideasOn) TodayAgenda.meetingIdeas(e, snap).size else 0 }
     val tomorrow = TodayAgenda.tomorrowLine(dueTomorrow, tomorrowCal)
+    // Захват (15.10.2026): напоминания в свой час (и свои отметки календаря), «Вернулось» — только на сегодня.
+    val isToday = dayKey == todayKey
+    // Без флага `capture` у сервера — по-старому: напоминаний отдельной карточкой нет (дело с напоминанием — в своём списке).
+    val reminders = if (isToday) TodayAgenda.reminderRows(if (delaOn && snap.captureOn) snap else Dela.Snapshot(), me, todayKey, now, marks) else emptyList()
+    val back = if (delaOn && isToday) TodayAgenda.backRows(snap, me, todayKey) else emptyList()
 
     // Спорт: минуты тренировок дня с часов и самая длинная из них словом; ниже — сон и форма.
     val done = app.sportStore.workoutsFlow.value.filter { ru.zf.pravka.data.dayKey(it.start) == dayKey }
@@ -878,5 +1022,6 @@ internal fun buildV2(
     } else null
     return TodayV2Data(
         model, profile, lenta, open, last, nowTasks, asks, todayRows, tomorrow, snap, todayKey, tiles, delaOn, mealGap,
+        reminders = reminders, back = back,
     )
 }

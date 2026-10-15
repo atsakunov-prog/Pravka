@@ -113,6 +113,19 @@ object CalendarRules {
         return if (watched == null) e.primary else e.calendar in watched
     }
 
+    /**
+     * Своя отметка в календаре, не встреча (захват, 15.10.2026; владелец: «в календарь нельзя — Засечка примет за
+     * встречу»; договор: «календарь — только встречи, личные отметки Засечка встречей не считает»). Правило одно и
+     * давнее: событие «Свободен» в ленту не идёт ([eligible] его не берёт). Новое — оно не пропадает: «Сегодня»
+     * показывает его строкой «отметка» в своё время, автопилот его не трогает. Правило «без участников — не встреча»
+     * не берём: «БЖЖ» и встречи вживую, которые владелец ставит себе сам, перестали бы начинаться сами.
+     */
+    fun mark(e: CalEvent, watched: Set<String>?): Boolean {
+        if (!e.free || e.allDay || e.declined || e.title.isBlank()) return false
+        if (e.end < e.start || e.end - e.start > MAX_MEETING_MS) return false
+        return if (watched == null) e.primary else e.calendar in watched
+    }
+
     /** Что за событие: встреча или занятие спортом со своим именем и категорией. */
     enum class Kind { MEETING, SPORT }
 

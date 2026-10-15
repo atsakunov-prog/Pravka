@@ -222,19 +222,23 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
     val reviewsSeenAt by app.settings.reviewsSeenAtFlow.collectAsState(initial = Long.MAX_VALUE)
     val reviewsNews = ru.zf.pravka.core.ReviewDigest.hasNews(reviewRuns, reviewsSeenAt)
 
-    // Календарь — раз в пять минут и при смене дня: чтение провайдера — не на главном потоке.
-    val calendar by produceState(emptyList<ru.zf.pravka.core.CalEvent>(), day, todayCals, autoCals) {
+    // Календарь — раз в пять минут и при смене дня: чтение провайдера — не на главном потоке. Встречи — отдельно от
+    // своих отметок («Свободен», захват 15.10.2026: `CalendarRules.mark`): отметка встречей не считается, но и не
+    // пропадает — она строкой «отметка» в «Напоминаниях» «Сегодня».
+    val calRead by produceState(emptyList<ru.zf.pravka.core.CalEvent>() to emptyList<ru.zf.pravka.core.CalEvent>(), day, todayCals, autoCals) {
         while (true) {
             val zone = ZoneId.systemDefault()
             val from = day.atStartOfDay(zone).toInstant().toEpochMilli()
             val watched = todayCals ?: autoCals
             value = withContext(Dispatchers.IO) {
-                runCatching { CalendarPilot.query(context, from, from + DayFacts.DAY) }.getOrDefault(emptyList())
-                    .filter { CalendarRules.eligible(it, watched) }
+                val all = runCatching { CalendarPilot.query(context, from, from + DayFacts.DAY) }.getOrDefault(emptyList())
+                all.filter { CalendarRules.eligible(it, watched) } to all.filter { CalendarRules.mark(it, watched) }
             }
             delay(5 * 60_000L)
         }
     }
+    val calendar = calRead.first
+    val calMarks = calRead.second
     // Погода — Open-Meteo, кэш час; без сети — последний кэш с «нет связи».
     val weather by produceState<ru.zf.pravka.data.WeatherStore.Result?>(null, day, city) {
         value = runCatching { app.weatherStore.today(city, day) }.getOrNull()
@@ -343,8 +347,8 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
                     .filter { CalendarRules.eligible(it, watched) }
             }
         }
-        val data = remember(model, entries, categories, snap, calendar, tomorrowCal, health, workouts, money, weather, onServer, me, kcalGoal, pOn, zOn) {
-            buildV2(app, model, entries, categories, snap, me, calendar, tomorrowCal, now, weather, onServer, kcalGoal, pOn, zOn)
+        val data = remember(model, entries, categories, snap, calendar, calMarks, tomorrowCal, health, workouts, money, weather, onServer, me, kcalGoal, pOn, zOn) {
+            buildV2(app, model, entries, categories, snap, me, calendar, tomorrowCal, now, weather, onServer, kcalGoal, pOn, zOn, marks = calMarks)
         }
         val act = TodayV2Actions(
             done = { t ->
@@ -366,6 +370,9 @@ private fun TodayBody(app: PravkaApp, nav: TodayNav) {
                 scope.launch { Feedback.toast(app, app.delaSend(listOf(Dela.answerOp(sg.id, o.index)), ru.zf.pravka.core.DelaViews.answerSaid(o))) }
             },
             stop = { app.appScope.launch { runCatching { app.zasechkaEngine.closeOpen() } } },
+            // Захват (15.10.2026): кнопки напоминания — те же, что в уведомлении телефона; «Вернулось» — как `backBox` веба.
+            remind = { id, a -> app.appScope.launch { Feedback.toast(app, app.reminders.act(id, a, "Сегодня")) } },
+            back = { id, to -> app.appScope.launch { Feedback.toast(app, backMove(app, id, to)) } },
             // «Раньше» у дайджеста — вид сервера за двое суток; без кэша и без журнала: это чужая переписка.
             mealVoice = { mealVoice(context) },
             mealPhoto = { nav.foodAction("photo") },
@@ -1161,7 +1168,7 @@ internal fun buildModel(
             tasksIn += DayAssembler.TaskIn(t.id, t.title, second, t.estimateMin, fixed)
         }
         // Закрытая цель — не дело дня (дерево жизни, 13.10.2026): в счёт «сделано» её нет.
-        val doneToday = snap.tasks.values.filter { it.status == Dela.DONE && !it.goal && it.completedAt.take(10) == dateKey && (me.isBlank() || it.ownerId == me) }
+        val doneToday = snap.tasks.values.filter { it.status == Dela.DONE && it.deed && it.completedAt.take(10) == dateKey && (me.isBlank() || it.ownerId == me) }
         delaTotal = list.size + doneToday.size
         delaDone = doneToday.size
         if ("dela" in marksOn) {
