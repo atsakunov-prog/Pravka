@@ -311,3 +311,133 @@ def test_claude_prices_come_from_svod(dela):
     assert llm.cost(usage, url=dela) == 5.0             # из Свода
     assert llm.cost({"model": "claude-opus-5-5-20260601", "input": 0, "output": 1_000_000}) == 25.0
     llm._svod.update(at=-llm.SVOD_EVERY, prices={})
+
+
+# ── Своё имя сильнее чужого другого имени, род, коннектор без подстроки (аудит 15.10.2026, №1, №22) ──────────────
+
+def test_own_short_beats_foreign_alias(dela):
+    """«Ваня» — короткое имя одного и другое имя второго (сверка контактов дописала): узнаётся тот, чьё это имя."""
+    a = person(dela, "sasha", "Иван Тестов", short="Ваня")
+    b = person(dela, "sasha", "Иван Пробный", aliases=["Ваня"])
+    w = store.view(dela, "sasha", "who", q="Ваня")
+    assert w["sure"] and str(w["best"]["id"]) == a, w
+    how = {str(c["id"]): c["how"] for c in w["candidates"]}
+    assert how[a] == "имя" and how[b] == "другое имя"
+    with as_(dela, "sasha") as c:
+        assert str(c.execute("SELECT person_id FROM crm.match_name('Ваня')").fetchone()["person_id"]) == a
+    # Одно другое имя без соперника — по-прежнему уверенно (имена из Telegram).
+    p = person(dela, "sasha", "Пётр Образцов", aliases=["Петруха Телеграм"])
+    w = store.view(dela, "sasha", "who", q="Петруха Телеграм")
+    assert w["sure"] and str(w["best"]["id"]) == p and w["best"]["how"] == "другое имя"
+
+
+def test_two_own_short_names_stay_ambiguous(dela):
+    person(dela, "sasha", "Иван Тестов", short="Ваня")
+    person(dela, "sasha", "Иван Сидоров", short="Ваня")
+    person(dela, "sasha", "Иван Пробный", aliases=["Ваня"])
+    assert not store.view(dela, "sasha", "who", q="Ваня")["sure"]
+    with as_(dela, "sasha") as c:
+        # Двое своим именем — никого, к другим именам не идём: одиночное другое имя не перебивает тёзок.
+        assert c.execute("SELECT person_id FROM crm.match_name('Ваня')").fetchone()["person_id"] is None
+
+
+def test_person_add_does_not_take_someone_elses_name(dela):
+    a = person(dela, "sasha", "Иван Тестов", short="Ваня")
+    c_ = person(dela, "sasha", "Иван Третий")
+    old = person(dela, "sasha", "Пётр Старый")
+    ops(dela, "sasha", {"op": "person.set", "id": old, "set": {"archived_at": "2026-10-01T00:00:00+03:00"}})
+    r = ops(dela, "sasha", {"op": "person.add", "id": c_, "add": {"aliases": ["ваня", "Ванечка", "Пётр Старый"]}})[0]
+    assert r["ok"] and r["changed"], r
+    assert r["row"]["aliases"] == ["Ванечка", "Пётр Старый"]  # архивная карточка имени не держит
+    assert [(s["alias"], str(s["person_id"]), s["name"]) for s in r["skipped"]] == [("ваня", a, "Иван Тестов")]
+    # «Ваня» по-прежнему узнаётся однозначно.
+    assert str(store.view(dela, "sasha", "who", q="Ваня")["best"]["id"]) == a
+    # Через коннектор — то же словами.
+    from pravka_dela import mcp_tools
+    out = mcp_tools.person(dela, "Иван Третий", also=["Ваня"])
+    assert "«Ваня» не дописал — так зовут Иван Тестов" in out, out
+
+
+def test_gender_of_first_names(dela):
+    """«Евгения» и «Евгений» — два имени, а не падеж одного; падеж и вариант одного рода — по-прежнему он."""
+    sokolov = person(dela, "sasha", "Евгений Соколов")
+    w = store.view(dela, "sasha", "who", q="Евгения Соколова")
+    assert not (w["sure"] and str(w["best"]["id"]) == sokolov), w
+    w = store.view(dela, "sasha", "who", q="Евгением Соколовым")
+    assert w["sure"] and str(w["best"]["id"]) == sokolov, w
+    nata = person(dela, "sasha", "Наталья Пробная")
+    w = store.view(dela, "sasha", "who", q="Наталия Пробная")
+    assert w["sure"] and str(w["best"]["id"]) == nata, w
+    sasha_f = person(dela, "sasha", "Александра Тестова")
+    w = store.view(dela, "sasha", "who", q="Александр Тестов")
+    assert not (w["sure"] and str(w["best"]["id"]) == sasha_f), w
+
+
+def test_connector_find_person_without_substring(dela):
+    from pravka_dela import mcp_tools
+
+    anna = person(dela, "sasha", "Анна Петрова")
+    with as_(dela, "sasha") as c:
+        try:
+            got = mcp_tools.find_person(c, "Петров")
+        except mcp_tools.NameError_ as e:
+            got = str(e)
+    # Раньше подстрока без границы слова отдавала её молча.
+    assert isinstance(got, str) and "не определился" in got and "Анна Петрова" in got, got
+    with as_(dela, "sasha") as c:
+        assert str(mcp_tools.find_person(c, "Анна Петрова")["id"]) == anna
+        assert str(mcp_tools.find_person(c, anna)["id"]) == anna  # и по id
+
+
+def test_connector_merge_only_by_exact_name_or_id(dela):
+    from pravka_dela import mcp_tools
+
+    live = person(dela, "sasha", "Евгений Соколов", org_id=org(dela, "sasha", "Ромашка-банк"))
+    dup = person(dela, "sasha", "Соколов Е. (банк)")
+    # Догадка who («Женя Соколов» — он) для слияния не годится: отмены у слияния нет.
+    assert mcp_tools.person(dela, "Соколов Е. (банк)", merge_into="Женя Соколов").startswith("Не вышло"), "into"
+    assert mcp_tools.person(dela, "Соколов Е.", merge_into="Евгений Соколов").startswith("Не вышло"), "dup"
+    with as_(dela, "sasha") as c:
+        assert c.execute("SELECT merged_into FROM crm.people WHERE id = %s", (dup,)).fetchone()["merged_into"] is None
+    out = mcp_tools.person(dela, dup, merge_into=live)
+    assert out.startswith("Слил"), out
+
+
+def test_migration_20_over_live_people(admin_dsn):
+    """dela_0020 поверх Дел, где люди уже есть: «Ваня» — короткое имя одного и другое имя второго. До миграции
+    crm.match_name не узнавал никого (два совпадения на равных), после — того, чьё это имя; данные не тронуты."""
+    import secrets as _secrets
+    from urllib.parse import urlparse, urlunparse
+
+    import psycopg
+    from psycopg import sql
+
+    from pravka_dela import db as dela_db
+
+    name = f"pa_mig20_{_secrets.token_hex(4)}"
+    with psycopg.connect(admin_dsn, autocommit=True) as a:
+        a.execute(sql.SQL("CREATE DATABASE {} ENCODING 'UTF8' TEMPLATE template0").format(sql.Identifier(name)))
+    u = urlparse(admin_dsn)
+    url = urlunparse((u.scheme, u.netloc, "/" + name, "", "", ""))
+    try:
+        files = dict(dela_db._sql_files())
+        before = {k: v for k, v in files.items() if k.startswith("dela_") and k < "dela_0020.sql"}
+        with psycopg.connect(url, autocommit=True) as c:
+            c.execute("CREATE SCHEMA core")
+            c.execute("CREATE TABLE core.migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
+            dela_db.apply_pending(c, before)
+        with dela_db.session(url, "system", "test") as c:
+            c.execute("INSERT INTO crm.users (id, name, role) VALUES ('sasha', 'Саша', 'owner')")
+            a_id = c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Иван Тестов', 'Ваня', 'sasha') "
+                             "RETURNING id").fetchone()["id"]
+            c.execute("INSERT INTO crm.people (name, aliases, owner_id) VALUES ('Иван Пробный', ARRAY['Ваня'], 'sasha')")
+            assert c.execute("SELECT person_id FROM crm.match_name('Ваня')").fetchone()["person_id"] is None
+            seq = c.execute("SELECT max(seq) AS s FROM crm.people").fetchone()["s"]
+        with psycopg.connect(url, autocommit=True) as c:
+            assert dela_db.apply_pending(c, files)[0] == "dela_0020.sql"
+        with dela_db.session(url, "system", "test") as c:
+            assert c.execute("SELECT person_id FROM crm.match_name('Ваня')").fetchone()["person_id"] == a_id
+            assert c.execute("SELECT max(seq) AS s FROM crm.people").fetchone()["s"] == seq  # строки не тронуты
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as a:
+            a.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))

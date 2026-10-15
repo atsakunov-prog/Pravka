@@ -98,10 +98,22 @@ def translit(s: str) -> str:
     return "".join(out)
 
 
+def _fem(w: str) -> bool:
+    return w[-1:] in ("а", "я")
+
+
 def same(a: str, b: str) -> bool:
     """Одно слово в разных падежах: основы равны или одна продолжает другую на 1–2 буквы
-    («евген» и «евгени» из «Евгений» и «Евгением»)."""
-    sa, sb = (stem(norm(x)).replace("ь", "").replace("ъ", "") for x in (a, b))
+    («евген» и «евгени» из «Евгений» и «Евгением»).
+
+    Род (аудит 15.10.2026, №22): два разных имени в именительном — женское и мужское («Евгения» и «Евгений»,
+    «Александра» и «Александр», «Валентина» и «Валентин») — не одно слово, хотя основа у них общая: иначе «Евгения
+    Соколова» уверенно находила карточку «Евгений Соколов». Падежные формы («Евгением», «Евгении») в справочнике имён
+    не значатся и сверяются основой, как раньше; варианты одного рода («Наталья» и «Наталия») — тоже одно имя."""
+    na, nb = norm(a), norm(b)
+    if na != nb and na in FIRST_NAMES and nb in FIRST_NAMES and _fem(na) != _fem(nb):
+        return False
+    sa, sb = (stem(x).replace("ь", "").replace("ъ", "") for x in (na, nb))
     if sa == sb:
         return len(sa) >= 3
     lo, hi = sorted((sa, sb), key=len)
@@ -186,14 +198,27 @@ def _hint_hit(hint: str, names: list[str]) -> bool:
 
 
 def _name_score(q: str, person: dict) -> float:
-    """Насколько текст q похож на имя человека: 1 — точное имя или другое имя, 0 — нет.
+    """Насколько текст q похож на имя человека: 1 — точное имя или другое имя, 0 — нет."""
+    return max(_name_parts(q, person))
 
-    Имя и фамилия сверяются парой в обоих порядках («Соколов Евгений» тоже он): фамилия — основой
+
+def _name_parts(q: str, person: dict) -> tuple[float, float]:
+    """Похожесть q отдельно на своё имя карточки (name, short) и на её другие имена (aliases).
+
+    Аудит 15.10.2026, №1: короткое имя сотрудника («Ваня») стало другим именем второй карточки из сверки контактов —
+    и узнавание по «Ване» встало для обоих. Своё имя сильнее чужого другого имени: who разводит такую ничью (sure), а
+    балл не меняется — одиночное совпадение другим именем (имя из Telegram) остаётся уверенным."""
+    own = [person.get("name"), person.get("short")]
+    return _names_score(q, own), _names_score(q, person.get("aliases") or [])
+
+
+def _names_score(q: str, raw: list) -> float:
+    """Имя и фамилия сверяются парой в обоих порядках («Соколов Евгений» тоже он): фамилия — основой
     (падеж не мешает), имя — через уменьшительные. Одно слово — фамилия средне, имя слабо.
     """
     if not q:
         return 0.0
-    names = [norm(n) for n in [person.get("name"), person.get("short"), *(person.get("aliases") or [])] if n]
+    names = [norm(n) for n in raw if n]
     if q in names:
         return 1.0
     qw = words(q)
@@ -252,7 +277,7 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
     q_name, hint = split_hint(q or "")
     scored = []
     for p in rows:
-        s, how = 0.0, ""
+        s, how, alias_only = 0.0, "", False
         if pk and any(phone_key(x) == pk for x in p["phones"] or []):
             s, how = 1.0, "номер"
         elif telegram_id and p["telegram_id"] and str(p["telegram_id"]) == str(telegram_id):
@@ -262,10 +287,13 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
         elif mail and mail in [norm(x) for x in p["emails"] or []]:
             s, how = 1.0, "почта"
         else:
-            s = _name_score(q_name, p)
+            own, alias = _name_parts(q_name, p)
             if re.search(r"[a-z]", q_name):
-                s = max(s, _name_score(translit(q_name), p))  # подпись из Zoom латиницей
-            how = "имя" if s >= 0.95 else "похоже"
+                o2, a2 = _name_parts(translit(q_name), p)  # подпись из Zoom латиницей
+                own, alias = max(own, o2), max(alias, a2)
+            s, alias_only = max(own, alias), alias > own
+            # how: «имя» — совпало своё имя или короткое имя карточки, «другое имя» — только её aliases.
+            how = ("другое имя" if alias_only else "имя") if s >= 0.95 else "похоже"
             orgs = [x for x in [p["org_name"], *(p["org_aliases"] or [])] if x]
             if s and hint:
                 # Компания или роль подтверждает — увереннее, а одно имя с ней («Дмитрий (финдир
@@ -277,14 +305,19 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
                 elif orgs:
                     s -= 0.15
         if s > 0.3:
-            scored.append((s, how, p))
-    scored.sort(key=lambda t: -t[0])
+            scored.append((round(s, 2), how, alias_only, p))
+    # При равных баллах своё имя — впереди чужого другого имени.
+    scored.sort(key=lambda t: (-t[0], t[2]))
     cands = [
         {"id": p["id"], "name": p["name"], "short": p["short"], "org": p["org_name"], "role": p["role"],
-         "user_id": p["user_id"], "score": round(s, 2), "how": how}
-        for s, how, p in scored[:limit]
+         "user_id": p["user_id"], "score": s, "how": how}
+        for s, how, _, p in scored[:limit]
     ]
-    sure = bool(cands) and cands[0]["score"] >= SURE and (len(cands) == 1 or cands[0]["score"] - cands[1]["score"] >= GAP)
+    sure = False
+    if scored and scored[0][0] >= SURE:
+        rivals = [t for t in scored[1:] if scored[0][0] - t[0] < GAP]
+        # Развязка (№1): лучший совпал своим name или short, а все, кто рядом, — только своим другим именем.
+        sure = not rivals or (scored[0][1] == "имя" and all(t[2] for t in rivals))
     return {"best": cands[0] if cands else None, "sure": sure, "candidates": cands, "hint": hint or None}
 
 
@@ -293,12 +326,37 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
 ADD_ARRAYS = ("aliases", "phones", "emails")
 
 
-def op_person_add(conn, user, op, error):
+def _owned_names(conn, pid, names: list[str], ignore: tuple = ()) -> dict[str, dict]:
+    """Какие из names — имя или короткое имя ДРУГОЙ живой карточки (не архив, не слитая): {норма: та карточка}."""
+    keys = sorted({norm(x) for x in names if norm(x)})
+    if not keys:
+        return {}
+    rows = conn.execute(
+        "SELECT id, name, short FROM crm.people WHERE archived_at IS NULL AND merged_into IS NULL "
+        "AND id <> %s AND NOT (id = ANY(%s::uuid[])) "
+        "AND (replace(crm.norm(name), 'ё', 'е') = ANY(%s) OR replace(crm.norm(short), 'ё', 'е') = ANY(%s)) "
+        "ORDER BY created_at, id",
+        (pid, [str(x) for x in ignore], keys, keys),
+    ).fetchall()
+    out: dict[str, dict] = {}
+    for r in rows:
+        for k in (norm(r["name"]), norm(r["short"])):
+            if k in keys:
+                out.setdefault(k, r)
+    return out
+
+
+def op_person_add(conn, user, op, error, ignore: tuple = ()):
     """Дописать человеку другие имена, номера, почту и Telegram — без затирания чужого.
 
     Встречи, звонки и дайджест знают только «ещё одно имя этого человека»: перезапись массива
     целиком (person.set) съела бы то, что дописал другой. Повтор — безвреден: что уже есть
     (с точностью до регистра и формы номера), не дублируется. Telegram ставится, только если пуст.
+
+    Другое имя, которое уже есть имя или короткое имя другой живой карточки, не дописывается (аудит 15.10.2026, №1:
+    сверка контактов дописала второй карточке короткое имя сотрудника — и «Ваня» перестал узнаваться у обоих). Ответ
+    говорит об этом в skipped: [{alias, person_id, name}] — кто так зовётся; старые клиенты поле не читают.
+    ignore — чьи имена не мешают: слияние дописывает живой карточке имя дубля, пока дубль ещё не убран.
     """
     pid = op.get("id")
     row = conn.execute(
@@ -312,6 +370,11 @@ def op_person_add(conn, user, op, error):
         raise error("человек: add — словарь")
     sets: dict[str, Any] = {}
     taken_names = {norm(row["name"]), norm(row["short"])}
+    new_aliases = data.get("aliases") or []
+    if isinstance(new_aliases, str):
+        new_aliases = [new_aliases]
+    others = _owned_names(conn, pid, [str(x) for x in new_aliases], ignore)
+    skipped: list[dict] = []
     for col in ADD_ARRAYS:
         new = data.get(col) or []
         if isinstance(new, str):
@@ -322,6 +385,11 @@ def op_person_add(conn, user, op, error):
         for x in new:
             x = str(x).strip()
             k = key(x)
+            if col == "aliases" and k in others and k not in seen:
+                o = others[k]
+                if all(norm(s["alias"]) != k for s in skipped):
+                    skipped.append({"alias": x, "person_id": o["id"], "name": o["name"]})
+                continue
             if x and k and k not in seen:
                 have.append(x)
                 seen.add(k)
@@ -332,12 +400,12 @@ def op_person_add(conn, user, op, error):
     if data.get("telegram_username") and not row["telegram_username"]:
         sets["telegram_username"] = str(data["telegram_username"]).lstrip("@")
     if not sets:
-        return {"row": row, "changed": False}
+        return {"row": row, "changed": False, "skipped": skipped}
     cols = ", ".join(f"{k} = %s" for k in sets)
     out = conn.execute(f"UPDATE crm.people SET {cols} WHERE id = %s RETURNING *", [*sets.values(), pid]).fetchone()
     if out is None:
         raise error("человек: нет прав менять")
-    return {"row": out, "changed": True}
+    return {"row": out, "changed": True, "skipped": skipped}
 
 
 # Где живут ссылки на человека: (таблица, колонка, массив ли).
@@ -383,7 +451,7 @@ def op_person_merge(conn, user, op, error):
         "phones": a["phones"] or [], "emails": a["emails"] or [],
         "telegram_id": a["telegram_id"], "telegram_username": a["telegram_username"],
     }
-    op_person_add(conn, user, {"id": into, "add": add}, error)
+    op_person_add(conn, user, {"id": into, "add": add}, error, ignore=(dup,))
     fill = {k: a[k] for k in ("org_id", "role", "birth_day", "birth_month", "birth_year", "note", "user_id")
             if a[k] is not None and b[k] is None}
     if a["user_id"]:

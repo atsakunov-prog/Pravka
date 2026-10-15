@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import uuid
 from typing import Any
 
 from . import db, krug, meetings, people, remind, store
@@ -126,20 +127,36 @@ def find_project(conn, name: str) -> dict:
     raise NameError_(f"проект «{name}» не определился: {cands}")
 
 
-def find_person(conn, name: str) -> dict:
+def find_person(conn, name: str, exact_only: bool = False) -> dict:
+    """Человек по имени — тем же правилом, что сервер (аудит 15.10.2026, №22): точное имя единственное (сначала своё
+    имя или короткое имя карточки, потом другое имя — как crm.match_name), потом уверенное people.who; иначе кандидаты
+    словами. Шага «подстрока полного имени» больше нет: «Петров» находил «Анну Петрову» частью чужого слова.
+    exact_only — для слияния: только точное единственное совпадение или id карточки, who не участвует (отмены у
+    слияния нет — склеить не тех хуже, чем переспросить)."""
+    rows = conn.execute(
+        "SELECT id, name, short, aliases FROM crm.people WHERE archived_at IS NULL AND merged_into IS NULL").fetchall()
+    try:
+        pid = str(uuid.UUID(str(name).strip()))
+    except ValueError:
+        pid = None
+    if pid:
+        hit = [r for r in rows if str(r["id"]) == pid]
+        if hit:
+            return hit[0]
     n = store_norm(name)
-    rows = conn.execute("SELECT id, name, short, aliases FROM crm.people WHERE archived_at IS NULL").fetchall()
-    exact = [r for r in rows if n in {store_norm(r["name"]), store_norm(r["short"]), *map(store_norm, r["aliases"])}]
+    own = [r for r in rows if n and n in {store_norm(r["name"]), store_norm(r["short"])}]
+    exact = own or [r for r in rows if n and n in set(map(store_norm, r["aliases"] or []))]
     if len(exact) == 1:
         return exact[0]
-    part = exact or [r for r in rows if n in store_norm(r["name"])]
-    if len(part) == 1:
-        return part[0]
+    if exact:
+        raise NameError_(f"человек «{name}» не определился: {', '.join(r['name'] for r in exact[:8])}")
+    if exact_only:
+        raise NameError_(f"человек «{name}» не определился: для слияния нужно точное имя карточки или её id")
     # «Женя Соколов», «Соколов из Ромашки» — то же узнавание, что у встреч и звонков (people.who).
     w = people.who(conn, q=name)
-    if w["sure"] and not exact:
+    if w["sure"]:
         return {"id": w["best"]["id"], "name": w["best"]["name"], "short": w["best"]["short"], "aliases": []}
-    cands = ", ".join(r["name"] for r in part[:8]) or ", ".join(c["name"] for c in w["candidates"]) or "нет похожих"
+    cands = ", ".join(c["name"] for c in w["candidates"]) or "нет похожих"
     raise NameError_(f"человек «{name}» не определился: {cands}")
 
 
@@ -647,8 +664,9 @@ def person(url: str, name: str, also: list[str] | None = None, phone: str | None
     """
     with db.session(url, USER, via="mcp") as conn:
         try:
-            p = find_person(conn, name)
-            into = find_person(conn, merge_into) if merge_into else None
+            # Слияние — только точное имя или id обеих карточек (№22): отмены у него нет.
+            p = find_person(conn, name, exact_only=bool(merge_into))
+            into = find_person(conn, merge_into, exact_only=True) if merge_into else None
         except NameError_ as e:
             return f"Не вышло: {e}"
     if into is not None:
@@ -667,6 +685,8 @@ def person(url: str, name: str, also: list[str] | None = None, phone: str | None
     bits = [f"другие имена: {', '.join(row['aliases']) or '—'}"]
     if row.get("phones"):
         bits.append(f"номера: {', '.join(row['phones'])}")
+    # Чужое имя не дописано (№1): так зовут другую живую карточку — иначе имя перестало бы узнаваться у обоих.
+    bits += [f"«{x['alias']}» не дописал — так зовут {x['name']}" for x in r.get("skipped") or []]
     return ("Записал. " if r.get("changed") else "Уже было. ") + f"{row['name']} — " + "; ".join(bits) + "."
 
 
@@ -817,7 +837,7 @@ def register(mcp, url: str) -> None:
     @mcp.tool()
     async def dela_person(name: str, also: list[str] | None = None, phone: str | None = None,
                           telegram: str | None = None, merge_into: str | None = None) -> str:
-        """Один человек на всю систему. name — как его называют («Женя Соколов», «Соколов из Ромашки»); also — его другие имена, чтобы встречи, звонки и разбор узнавали; phone — номер; telegram — @имя. merge_into — живая карточка, в которую слить эту (дубль уходит в архив, всё его переезжает). Неуверенное не трогает — вернёт кандидатов."""
+        """Один человек на всю систему. name — как его называют («Женя Соколов», «Соколов из Ромашки»); also — его другие имена, чтобы встречи, звонки и разбор узнавали; phone — номер; telegram — @имя. merge_into — живая карточка, в которую слить эту (дубль уходит в архив, всё его переезжает); при слиянии обе карточки — только точным именем, коротким или другим именем карточки или её id, без догадок. Неуверенное не трогает — вернёт кандидатов."""
         return await run(dela.person, name, also, phone, telegram, merge_into)
 
     @mcp.tool()

@@ -3336,17 +3336,48 @@ async function mergeInto(s, t) {
   } catch (e) { fail(e); render(); }
 }
 
+/** Кто назван именем — тем же правилом, что сервер (crm.match_name, dela_0020; аудит 15.10.2026, №1): живые карточки,
+ *  ярусами — у людей сначала своё имя или короткое имя, потом другое имя (у проектов имя и другие имена — один ярус).
+ *  Один на ярусе — он (hit); двое и больше — не узнан, many — кто они. До того веб брал первого попавшегося
+ *  (list.find) и молчал там, где сервер не узнавал. */
+const PERSON_TIERS = [(x) => [x.name, x.short], (x) => x.aliases || []];
+const PROJECT_TIERS = [(x) => [x.name, ...(x.aliases || [])]];
+function byName(list, name, tiers) {
+  const n = norm(name).replace(/\s+/g, ' ');
+  if (!n) return { hit: null, many: [] };
+  const live = list.filter((x) => !x.archived_at && !x.merged_into);
+  for (const tier of tiers) {
+    const got = live.filter((x) => tier(x).some((a) => a && norm(a).replace(/\s+/g, ' ') === n));
+    if (got.length === 1) return { hit: got[0], many: [] };
+    if (got.length > 1) return { hit: null, many: got };
+  }
+  return { hit: null, many: [] };
+}
+const orWords = (names) => (names.length > 1 ? names.slice(0, -1).join(', ') + ' или ' + names[names.length - 1] : names[0] || '');
 /** Почему предложение ждёт человека: вопрос самой автоматики или что не узналось по имени. */
-const byName = (list, name) => {
-  const n = norm(name);
-  return n && list.find((x) => [x.name, x.short, ...(x.aliases || [])].some((a) => a && norm(a) === n));
-};
 function askWhy(s) {
   const p = s.payload || {};
   if (p.ask) return p.ask;
-  if (p.project_name && !byName([...S.projects.values()], p.project_name)) return `Не знаю проект «${p.project_name}» — куда?`;
-  if (p.person_name && !byName([...S.people.values()], p.person_name)) return `Кто это — «${p.person_name}»?`;
+  if (p.project_name && !p.project_id) {
+    const r = byName([...S.projects.values()], p.project_name, PROJECT_TIERS);
+    if (r.many.length) return `Какой проект — «${p.project_name}»: ${orWords(r.many.slice(0, 3).map((x) => x.name))}?`;
+    if (!r.hit) return `Не знаю проект «${p.project_name}» — куда?`;
+  }
+  if (p.person_name && !p.person_id) {
+    const r = byName([...S.people.values()], p.person_name, PERSON_TIERS);
+    if (r.many.length) return `Кто это — «${p.person_name}»: ${orWords(r.many.slice(0, 3).map((x) => x.name))}?`;
+    if (!r.hit) return `Кто это — «${p.person_name}»?`;
+  }
   return null;
+}
+/** Почему не встало само — строкой сервера (payload.held: причины через «; »), без того, что уже сказал вопрос: у вопроса
+ *  сервера «Кто это — X или Y?» (pick) часть про это имя и есть вопрос. */
+function heldLine(s, q) {
+  const p = s.payload || {};
+  const nq = norm(q || '');
+  const left = String(p.held || '').split('; ').map((x) => x.trim()).filter((x) => x && !nq.includes(norm(x))
+    && !(p.pick && p.person_name && x.includes(`«${p.person_name}»`)));
+  return left.length ? 'Ждёт: ' + left.join('; ') : null;
 }
 const ASK_YES = { create: 'Поставить', close: 'Закрыть', update: 'Да, согласен', assign: 'Взять', person: 'Завести' };
 /** Варианты ответа кнопками (13.10.2026): у вопроса автоматики — её собственные ответы («Родительство» / «Комфортный быт»),
@@ -3371,6 +3402,7 @@ function askItem(s) {
   S.sugOrder.push(s.id);
   const twin = s.source === 'krug' ? null : twinOf(s);
   const q = askWhy(s);
+  const held = heldLine(s, q);
   // Свои ответы кнопками (13.10.2026) — есть варианты, нет ни «Да», ни переключателей.
   const opts = sugOptions(s);
   // «Уточнить» (не Круг): «Да, согласен» или «Сам допишу» — поле, его слово ляжет в заметку дела.
@@ -3396,6 +3428,7 @@ function askItem(s) {
     el('div', { class: 'src-line' }, sugMark(s), el('span', {}, s.batch_title || origin(s.source)[2])),
     el('div', { class: 'main' }, el('div', {}, el('span', { class: 'sug-n', title: 'Номер для Claude: «П' + S.sugOrder.length + ' прими»' }, 'П' + S.sugOrder.length), title),
       q ? el('div', { class: 'q' }, q) : null,
+      held ? el('div', { class: 'hint held' }, held) : null,
       hint ? el('div', { class: 'hint' }, hint) : null,
       krPick,
       add ? el('div', { class: 'add' }, add) : null,
@@ -4252,6 +4285,9 @@ function renderCard() {
         for (const k of ['notes', 'project_id', 'deal_id', 'ball', 'owed', 'person_id', 'due_date', 'nudge_on', 'estimate_min', 'money', 'labels', 'focus_on', 'want']) {
           if (src[k] !== undefined && src[k] !== null && src[k] !== '') set[k] = src[k];
         }
+        // Выбрал «Никто» у названного человека — так и скажем серверу: без этого «Да» при двусмысленном имени он
+        // отклонит («Кто это — X или Y?», аудит 15.10.2026, №1).
+        if (src.person_id === null && (sug.payload || {}).person_name) set.person_id = null;
         set.title = title.value.trim() || src.title;
         if (notes.value.trim()) set.notes = notes.value.trim();
         decide([sug.id], 'accept', null, set);

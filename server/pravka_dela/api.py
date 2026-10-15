@@ -25,6 +25,9 @@
 | POST /api/reminders/act | только бот Ковчега: {"telegram_id", "num", "action": done, snooze, tomorrow, "minutes"?} — кнопка под напоминанием от имени нажавшего |
 
 Бот ходит на 127.0.0.1:8102 мимо сайта-посредника: пути напоминаний в его список не нужны.
+
+Узким токенам служб («Деньги», «Еда», «Спорт», «Дом» — SCOPED) — только GET /api/me (вид Ковчега, без данных
+владельца), GET /api/view/<имя> и POST /api/ops с прежними проверками внутри; всё остальное — 403 (SCOPED_PATHS, 15.10.2026).
 """
 
 from __future__ import annotations
@@ -158,6 +161,18 @@ def _scope(who) -> dict | None:
     return SCOPED.get(who.name) if who and who.kind == "service" else None
 
 
+# Что узкому токену можно — белым списком путей (аудит 15.10.2026, №4). До того узкие токены сужал только SCOPED
+# внутри синка, операций, видов и настроек, а пути без проверки (разбор, правка словами, карточка дела по номеру,
+# /api/me) были им открыты с правами владельца: правка дел, людей и сделок и платный Claude. Теперь наоборот: всё, чего
+# нет здесь, — 403 одним местом (обёртка маршрутов в build); новый путь узким токенам закрыт сам. Внутри разрешённых —
+# прежние проверки SCOPED (какие виды, ключи Свода и операции). Пути — шаблоны маршрутов, как в Route.
+SCOPED_PATHS = frozenset({
+    ("GET", "/api/me"),           # «Дом»: look.pages; ответ узкому — только вид Ковчега (me)
+    ("GET", "/api/view/{name}"),  # svod — свои ключи (SCOPED.views, svod_prefix, svod_read)
+    ("POST", "/api/ops"),         # svod.set своих ключей, у «Дома» — spend.put (SCOPED.ops)
+})
+
+
 def _may_read(sc: dict, key: str) -> bool:
     return key.startswith(sc["svod_prefix"]) or key in sc.get("svod_read", ())
 
@@ -186,6 +201,14 @@ def build(cfg: Config) -> Starlette:
     look_owner, look_team = _look(cfg)
 
     async def auth(request: Request) -> tokens.Who | None:
+        # Кто это — один раз на запрос: обёртка маршрутов (guard) и сам обработчик спрашивают оба.
+        if "dela_who" in request.scope:
+            return request.scope["dela_who"]
+        who = await _auth(request)
+        request.scope["dela_who"] = who
+        return who
+
+    async def _auth(request: Request) -> tokens.Who | None:
         header = request.headers.get("authorization", "")
         if header.lower().startswith("bearer "):
             return await anyio.to_thread.run_sync(tokens.who, url, header[7:].strip())
@@ -195,6 +218,18 @@ def build(cfg: Config) -> Starlette:
         if request.method not in ("GET", "HEAD") and request.headers.get("x-dela") != "1":
             return None  # кука без нашего заголовка — запрос не с нашей страницы
         return await anyio.to_thread.run_sync(tokens.session_who, url, cookie)
+
+    def guard(path: str, endpoint):
+        """Белый список путей узких токенов (SCOPED_PATHS) — одна проверка на все /api/-маршруты, а не строка в каждом
+        обработчике: забытый путь закрыт сам. Без входа — дальше, обработчик ответит 401."""
+        async def guarded(request: Request):
+            who = await auth(request)
+            method = "GET" if request.method == "HEAD" else request.method
+            if _scope(who) and (method, path) not in SCOPED_PATHS:
+                return _err(f"службе {who.name} этот путь не положен", 403)
+            return await endpoint(request)
+        guarded.__name__ = getattr(endpoint, "__name__", "guarded")
+        return guarded
 
     async def health(request: Request):
         return _json({"ok": True, "service": "pravka-dela"})
@@ -233,11 +268,17 @@ def build(cfg: Config) -> Starlette:
         who = await auth(request)
         if not who:
             return _err("нужен вход", 401)
-        info = await anyio.to_thread.run_sync(_user_info, url, who.user)
-        owner = info.get("role") == "owner"
         # Вид и меню Ковчега из Свода (этап 7): токены — всем (вид у Ковчега один), меню — владельцу: в нём его
         # направления Круга жизни с подписями, а команде сервисов всё равно нет.
         ui = await anyio.to_thread.run_sync(kovcheg_ui.effective, url)
+        if _scope(who):
+            # Узкий токен службы (№4, 15.10.2026) выпущен на владельца, но он не владелец: только вид Ковчега — «Дому» нужны
+            # look.pages и меню. Без имени, роли, доступа, денег, настроек, telegram_id и адресов сервисов (nav).
+            look = {**{k: v for k, v in look_owner.items() if k != "nav"}, "tokens": ui["tokens"], "menu": ui["menu"],
+                    "pages": list(kovcheg_ui.PAGES)}
+            return _json({"ok": True, "user": who.user, "kind": who.kind, "features": store.FEATURES, "look": look})
+        info = await anyio.to_thread.run_sync(_user_info, url, who.user)
+        owner = info.get("role") == "owner"
         look = {**(look_owner if owner else look_team), "tokens": ui["tokens"]}
         if owner:
             # pages — страницы-двойники веба Дел для больших кнопок меню (kovcheg_ui.PAGES): нет страницы — нет кнопки.
@@ -249,8 +290,7 @@ def build(cfg: Config) -> Starlette:
         who = await auth(request)
         if not who:
             return _err("нужен вход", 401)
-        if _scope(who):
-            return _err(f"службе {who.name} синк не положен", 403)
+        # Узким токенам синк не положен — закрыт белым списком путей (guard, SCOPED_PATHS).
         try:
             since = int(request.query_params.get("since", "0"))
         except ValueError:
@@ -488,10 +528,8 @@ def build(cfg: Config) -> Starlette:
         who = await auth(request)
         if not who:
             return _err("нужен вход", 401)
-        # Узкие токены служб (Деньги, Еда, Спорт, «Дом») действуют от имени владельца — без этой проверки они видели бы его
-        # настройки и траты Claude (аудит трат 14.10.2026).
-        if _scope(who):
-            return _err(f"службе {who.name} настройки не положены", 403)
+        # Узкие токены служб (Деньги, Еда, Спорт, «Дом») действуют от имени владельца — без запрета они видели бы его
+        # настройки и траты Claude (аудит трат 14.10.2026). Запрет — белым списком путей (guard, SCOPED_PATHS).
         info = await anyio.to_thread.run_sync(_user_info, url, who.user)
         # Модель и глубина Claude — дороги владельца (llm.ROUTES, Свод models.dela), а не настройка человека (13.10.2026).
         routes = await anyio.to_thread.run_sync(lambda: {k: dict(zip(("model", "effort"), llm.route(url, k))) for k in llm.ROUTES})
@@ -548,25 +586,27 @@ def build(cfg: Config) -> Starlette:
             return _err("нет такого дела или оно не видно", 404)
         return _json({"ok": True, **out})
 
-    return Starlette(routes=[
-        Route("/health", health),
-        Route("/", page),
-        Route("/static/{name}", static),
-        Route("/auth/redeem", redeem, methods=["POST"]),
-        Route("/auth/logout", logout, methods=["POST"]),
-        Route("/api/me", me),
-        Route("/api/sync", sync),
-        Route("/api/ops", ops, methods=["POST"]),
-        Route("/api/view/{name}", view),
-        Route("/api/task/{ref}", task),
-        Route("/api/parse", parse_start, methods=["POST"]),
-        Route("/api/parse/{job}", parse_poll),
-        Route("/api/ask", ask_start, methods=["POST"]),
-        Route("/api/ask/{job}", parse_poll),  # задания общие с разбором
-        Route("/api/settings", settings),
-        Route("/api/reminders/due", reminders_due),
-        Route("/api/reminders/act", reminders_act, methods=["POST"]),
-    ])
+    routes = [
+        ("/health", health, None),
+        ("/", page, None),
+        ("/static/{name}", static, None),
+        ("/auth/redeem", redeem, ["POST"]),
+        ("/auth/logout", logout, ["POST"]),
+        ("/api/me", me, None),
+        ("/api/sync", sync, None),
+        ("/api/ops", ops, ["POST"]),
+        ("/api/view/{name}", view, None),
+        ("/api/task/{ref}", task, None),
+        ("/api/parse", parse_start, ["POST"]),
+        ("/api/parse/{job}", parse_poll, None),
+        ("/api/ask", ask_start, ["POST"]),
+        ("/api/ask/{job}", parse_poll, None),  # задания общие с разбором
+        ("/api/settings", settings, None),
+        ("/api/reminders/due", reminders_due, None),
+        ("/api/reminders/act", reminders_act, ["POST"]),
+    ]
+    # Каждый /api/-путь — через guard (белый список узких токенов): новый путь, добавленный сюда, закрыт им сам.
+    return Starlette(routes=[Route(p, guard(p, fn) if p.startswith("/api/") else fn, methods=m) for p, fn, m in routes])
 
 
 def _user_info(url: str, user: str) -> dict:

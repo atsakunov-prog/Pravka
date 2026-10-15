@@ -558,3 +558,101 @@ def test_now_today_and_overdue_apart(dela):
     assert "В «Сейчас» (отметил Саша): 2 из 5" in txt and "Просрочено: 1" in txt and "view=all" in txt, txt
     txt = mcp_tools.view(dela, "all")
     assert txt.index("Просрочено (срок прошёл) (1):") < txt.index("Сдать отчёт") < txt.index("Отбить"), txt
+
+
+# ── Двусмысленное имя: вопрос кнопками, причина видна, «Да» без выбора не теряет человека (аудит 15.10.2026, №1) ──
+
+def _person(url, name, **kw):
+    r = ops(url, "sasha", {"op": "person.create", "data": {"name": name, **kw}})[0]
+    assert r["ok"], r
+    return str(r["row"]["id"])
+
+
+def _sug(url, title, payload, at=None, auto=True, kind="create", **kw):
+    at = at or db_today(url)
+    return ops(url, "sasha", {"op": "suggestion.create", "suggestion": {
+        "for_user": "sasha", "kind": kind, "source": "meeting", "batch_ref": "meeting:21", "batch_title": "Ромашка: статус",
+        "quote": "Ваня пришлёт расчёт", **kw,
+        "payload": {"title": title, "meeting_at": at.isoformat(), **payload, **({"auto": True} if auto else {})}}})[0]
+
+
+def test_own_short_name_lets_suggestion_go_by_itself(dela):
+    """(а) «Ваня» — короткое имя A и другое имя B: предложение «завести» встаёт само и с A."""
+    a = _person(dela, "Иван Тестов", short="Ваня")
+    _person(dela, "Иван Пробный", aliases=["Ваня"])
+    r = _sug(dela, "Ваня: прислать расчёт", {"person_name": "Ваня", "ball": "waiting"})
+    assert r["ok"] and r["suggestion"]["status"] == "accepted" and r["suggestion"]["reason"] == store.AUTO_CREATE_REASON, r
+    assert str(r["task"]["person_id"]) == a
+
+
+def test_ambiguous_name_asks_who_with_buttons(dela):
+    """(б) «Ваня» — короткое имя у двоих: вопрос «Кто это — X или Y?» кнопками и «Без человека», причина — held;
+    «Да» без выбора — отказ словами; ответ кнопкой — дело с тем, кого выбрали."""
+    a = _person(dela, "Иван Тестов", short="Ваня", org_id=ops(dela, "sasha", {"op": "org.create", "data": {"name": "ООО Ромашка"}})[0]["row"]["id"])
+    b = _person(dela, "Иван Сидоров", short="Ваня")
+    r = _sug(dela, "Ваня: прислать расчёт", {"person_name": "Ваня", "ball": "waiting"})
+    s = r["suggestion"]
+    assert r["ok"] and s["status"] == "pending", r
+    p = s["payload"]
+    assert p["pick"] is True
+    assert p["ask"].startswith("Кто это — «Ваня»: ") and "Иван Тестов" in p["ask"] and "Иван Сидоров" in p["ask"], p["ask"]
+    assert p["held"].startswith("двое с именем «Ваня»: ") and "Иван Тестов (ООО Ромашка)" in p["held"], p["held"]
+    labels = [o["label"] for o in p["options"]]
+    assert sorted(labels[:2]) == ["Иван Сидоров", "Иван Тестов (ООО Ромашка)"] and labels[2] == "Без человека", labels
+    assert p["options"][2]["person_id"] is None and p["options"][2]["person_name"] is None
+    # «Да» без выбора (старый телефон, «Поставить») — отказ словами с кандидатами, предложение ждёт.
+    no = ops(dela, "sasha", {"op": "suggestion.decide", "id": s["id"], "decision": "accept"})[0]
+    assert not no["ok"] and no["error"].startswith("Кто это — «Ваня»: ") and "Ответь кнопкой" in no["error"], no
+    # Ответ кнопкой — дело с A.
+    i = next(k for k, o in enumerate(p["options"]) if o.get("person_id") == a)
+    t = ops(dela, "sasha", {"op": "suggestion.decide", "id": s["id"], "option": i})[0]
+    assert t["ok"] and str(t["task"]["person_id"]) == a, t
+    # «Без человека» — дело без человека, и это ответ, а не потеря.
+    s2 = _sug(dela, "Ваня: созвон", {"person_name": "Ваня"})["suggestion"]
+    t2 = ops(dela, "sasha", {"op": "suggestion.decide", "id": s2["id"], "option": 2})[0]
+    assert t2["ok"] and t2["task"]["person_id"] is None and "held" not in t2["suggestion"]["result"]
+    # Человек выбран правкой («Поправить» в вебе, Claude) — тоже можно.
+    s3 = _sug(dela, "Ваня: отчёт", {"person_name": "Ваня"})["suggestion"]
+    t3 = ops(dela, "sasha", {"op": "suggestion.decide", "id": s3["id"], "decision": "accept", "set": {"person_id": b}})[0]
+    assert t3["ok"] and str(t3["task"]["person_id"]) == b
+
+
+def test_model_question_kept_and_other_answer_leaves_task_without_person(dela):
+    """Модель спросила своё (про проект) — её вопрос и кнопки не трогаем, только held. Ответ на её вопрос при
+    двусмысленном человеке — дело без человека, почему — result.held и комментарий к делу."""
+    _person(dela, "Иван Тестов", short="Ваня")
+    _person(dela, "Иван Сидоров", short="Ваня")
+    project(dela, "sasha", "Альфа")
+    opts = [{"label": "Альфа", "project_name": "Альфа"}, {"label": "Без проекта", "project_name": None}]
+    s = _sug(dela, "Ваня: расчёт", {"person_name": "Ваня", "ask": "Это для Альфы?", "options": opts}, auto=False)["suggestion"]
+    p = s["payload"]
+    assert p["ask"] == "Это для Альфы?" and [o["label"] for o in p["options"]] == ["Альфа", "Без проекта"] and "pick" not in p
+    assert p["held"].startswith("двое с именем «Ваня»")
+    t = ops(dela, "sasha", {"op": "suggestion.decide", "id": s["id"], "option": 0})[0]
+    assert t["ok"] and t["task"]["person_id"] is None and t["task"]["project_name"] == "Альфа", t
+    res = t["suggestion"]["result"]
+    assert res["held"].startswith("двое с именем «Ваня»") and res["comment_id"]
+    with store.db.session(dela, "sasha", "t") as c:
+        txt = c.execute("SELECT text FROM tasks.comments WHERE id = %s", (res["comment_id"],)).fetchone()["text"]
+    assert txt.startswith("Человек не поставлен: двое с именем «Ваня»"), txt
+
+
+def test_held_says_why_it_waits(dela, caplog):
+    """(г) Не вышло само — причина в payload.held и строкой журнала, а не молча: «Сейчас» полно, старая встреча,
+    не знаю проект."""
+    today = db_today(dela)
+    for k in range(store.NOW_MAX):
+        assert ops(dela, "sasha", {"op": "task.create", "task": {"title": f"Срочное {k}", "focus_on": today.isoformat()}})[0]["ok"]
+    with caplog.at_level("INFO", logger="dela.store"):
+        r = _sug(dela, "Ещё одно срочное", {"focus_on": today.isoformat()})
+    s = r["suggestion"]
+    assert r["ok"] and s["status"] == "pending" and "task" not in r, r
+    assert s["payload"]["held"].startswith("само не встало: в «Сейчас» уже пять дел"), s["payload"]
+    assert any("Новое: «Ещё одно срочное» ждёт — само не встало" in m for m in caplog.messages), caplog.messages
+    old = _sug(dela, "Старое", {}, at=today - dt.timedelta(days=10))["suggestion"]
+    assert old["status"] == "pending" and old["payload"]["held"] == "встреча старше 3 дней"
+    unknown = _sug(dela, "Тизер", {"project_name": "Неведомый проект"})["suggestion"]
+    assert unknown["status"] == "pending" and unknown["payload"]["held"] == "не знаю проект «Неведомый проект»"
+    # Автоматика спросила сама, имена узнались — причины нет: вопрос и есть причина.
+    asked = _sug(dela, "Модель", {"ask": "Это Гамма?"}, auto=False)["suggestion"]
+    assert "held" not in asked["payload"]
