@@ -535,3 +535,51 @@ def test_team_access_only_while_deal_is_live_and_owner_decides_who(team):
     with dela_db.session(url, "system", "test") as c:
         c.execute("UPDATE crm.users SET clients = 'team' WHERE id = 'natasha'")
     assert store.sync(url, "natasha", nseq)["full"]
+
+
+def test_live_deal_crew_grows_only_by_project_owner(team):
+    """Проверка пакета (dela_0029): клиента открывает ЖИВАЯ сделка, поэтому не только смена состава, но и возврат из
+    архива и перенос к другому клиенту сделки, где стоит коллега, — решение хозяина проекта. Увести в архив — можно
+    (это сужение); свою сделку, где из пользователей Дел только он сам, — и вернуть, и перенести."""
+    url = team["url"]
+    with dela_db.session(url, "system", "test") as c:
+        boris = c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Борис Тестов', 'Борис', 'sasha') "
+                          "RETURNING id").fetchone()["id"]
+        c.execute("INSERT INTO crm.users (id, name, role, person_id, clients) VALUES ('boris', 'Борис', 'member', %s, 'team')",
+                  (boris,))
+    p = project(url, "sasha", "ООО Ромашка")
+    q = project(url, "sasha", "ООО Лютик")
+    mine = project(url, "natasha", "ООО Василёк")  # клиент, где хозяйка проекта — Наташа
+    deal(url, "sasha", p, "Ромашка: модель", lead_person_id=str(team["alena"]))  # держит Алёне клиента
+    crew = deal(url, "sasha", p, "Ромашка: оценка", lead_person_id=str(team["alena"]), team_ids=[str(boris)])
+    solo = deal(url, "sasha", p, "Ромашка: допработы", lead_person_id=str(team["alena"]))
+    own = deal(url, "sasha", p, "Ромашка: справка", lead_person_id=str(team["natasha"]))
+
+    def sees(user, pid):
+        with as_(url, user) as c:
+            return bool(c.execute("SELECT 1 FROM crm.projects WHERE id = %s", (pid,)).fetchone())
+
+    def set_(user, d, **kw):
+        return ops(url, user, {"op": "deal.set", "id": d["id"], "set": kw})[0]
+
+    assert sees("boris", p)
+    # (а) Возврат из архива: Алёна уводит сделку с Борисом в архив — можно; вернуть — нет, клиент Борису закрыт.
+    assert set_("alena", crew, stage="archive")["ok"]
+    assert not sees("boris", p)
+    bad = set_("alena", crew, stage="active")
+    assert not bad["ok"] and "решает хозяин проекта" in bad["error"], bad
+    assert not sees("boris", p)
+    # Свою сделку, где из команды только она, — и в архив, и обратно.
+    assert set_("alena", solo, stage="archive")["ok"] and set_("alena", solo, stage="active")["ok"]
+    # Саша возвращает — можно, у Бориса снова клиент.
+    assert set_("sasha", crew, stage="active")["ok"] and sees("boris", p)
+    # (б) Перенос к другому клиенту: Наташа (все клиенты, но не хозяйка) — нет ни со сделкой Бориса, ни со сделкой Алёны.
+    for d in (crew, solo):
+        bad = set_("natasha", d, project_id=str(q))
+        assert not bad["ok"] and "решает хозяин проекта" in bad["error"], bad
+    assert not sees("boris", q) and not sees("alena", q)
+    # Свою сделку переносит; к своему клиенту (она хозяйка проекта) — и с коллегой.
+    assert set_("natasha", own, project_id=str(q))["ok"]
+    assert set_("natasha", crew, project_id=str(mine))["ok"] and sees("boris", mine)
+    # Саша переносит дальше — можно.
+    assert set_("sasha", crew, project_id=str(q))["ok"] and sees("boris", q) and not sees("boris", mine)

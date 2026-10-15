@@ -244,6 +244,30 @@ def test_private_record_rules(team):
     assert ops(url, "natasha", {"op": "interaction.set", "id": str(c["id"]), "set": {"summary": "поправила"}})[0]["ok"]
 
 
+def test_hiding_meeting_record_keeps_owner_summary(mt, conn):
+    """«Скрыть от команды» у записи встречи — не правка текста: замка touch нет, владелец по-прежнему видит итог и
+    договорённости с карточки (хронология и коннектор), команда — ничего; правка текста — замок, как раньше."""
+    url = mt["url"]
+    with dela_db.session(url, "system", "test") as c:
+        c.execute("INSERT INTO crm.project_access (project_id, user_id, role, granted_by) VALUES (%s, 'natasha', 'view', "
+                  "'sasha')", (mt["project"],))
+    m = push(url, agreements=[AGREED])
+    _name(url, m["id"], client="Вектор", topic="счета")
+    [r] = _live(url)
+    one(url, "sasha", {"op": "interaction.set", "id": str(r["id"]), "set": {"private": True}})
+    mine = _client_timeline(url, "sasha", mt["project"])
+    assert [(i["summary"], i["next_step"], i["team_sees"]) for i in mine] == [(FULL, AGREED, "none")]
+    assert _client_timeline(url, "natasha", mt["project"]) == []
+    assert conn.execute("SELECT summary, next_step FROM life.interactions WHERE source = 'meeting'").fetchall() == [
+        (FULL, AGREED)]
+    with as_(url, "sasha") as c:
+        assert "touch" not in (c.execute("SELECT locked FROM crm.meetings WHERE id = %s", (m["id"],)).fetchone()["locked"] or [])
+    # Поправил текст — его слово: замок.
+    one(url, "sasha", {"op": "interaction.set", "id": str(r["id"]), "set": {"summary": "Вектор: моими словами"}})
+    with as_(url, "sasha") as c:
+        assert "touch" in c.execute("SELECT locked FROM crm.meetings WHERE id = %s", (m["id"],)).fetchone()["locked"]
+
+
 def test_team_cannot_touch_meeting_record_and_home_takes_none(mt):
     url = mt["url"]
     with dela_db.session(url, "system", "test") as c:
@@ -325,6 +349,36 @@ def test_own_card_contacts_yes_marks_no(cards):
     assert "МЕТКА" not in repr(added)
     with as_(url, "sasha") as c:
         assert c.execute("SELECT traits FROM crm.people WHERE id = %s", (me,)).fetchone()["traits"] == "МЕТКА-ОБ-АЛЁНЕ"
+
+
+def test_colleague_on_a_deal_is_still_a_colleague(cards):
+    """Проверка пакета (dela_0029): пользователь Дел, который ведёт видимую сделку или назван в видимом деле, коллегам —
+    только имя и должность: ни контактов, ни других имён в синке и карточке, «кто это» его по номеру и другому имени не
+    узнаёт, person.add не выдаёт, есть ли у него такой номер. Владельцу — всё; сам себя видит и по одной учётке."""
+    url, al, p = cards["url"], str(cards["alena"]), cards["project"]
+    with dela_db.session(url, "system", "t") as c:
+        c.execute("UPDATE crm.people SET aliases = '{Ольга Ласточкина}', emails = '{alena@example.org}', "
+                  "telegram_username = 'alena_test' WHERE id = %s", (al,))
+    deal(url, "sasha", p, "Ромашка: оценка", lead_person_id=al)
+    one(url, "sasha", {"op": "task.create", "task": {"title": "Ромашка: проверить", "project_id": str(p), "person_id": al}})
+    row = next(x for x in store.sync(url, "natasha", 0)["people"] if x["id"] == al)
+    assert (row["tier"], row["phones"], row["aliases"], row["emails"], row["telegram_username"]) == (
+        "colleague", [], [], [], None)
+    assert "000-00-01" not in repr(store.view(url, "natasha", "person", person_id=al))
+    for q in ({"phone": "+7 000 000-00-01"}, {"q": "Ольга Ласточкина"}, {"email": "alena@example.org"}):
+        assert al not in [x["id"] for x in store.view(url, "natasha", "who", **q)["candidates"]], q
+        assert store.view(url, "sasha", "who", **q)["best"]["id"] == al, q
+    # Есть ли у коллеги такой номер, другое имя или Telegram — ответ один и тот же.
+    probes = [ops(url, "natasha", {"op": "person.add", "id": al, "add": add})[0] for add in (
+        {"phones": ["+7 000 000-00-01"]}, {"phones": ["+7 000 999-99-99"]},
+        {"aliases": ["Ольга Ласточкина"]}, {"aliases": ["Пётр Иванович"]}, {"telegram_username": "x_test"})]
+    assert {(x["ok"], x.get("error")) for x in probes} == {(False, "человек: нет прав менять")}, probes
+    # Владелец видит всё; Алёна себя — сама (self); Наташа свою карточку, связанную лишь учёткой, — тоже как свою.
+    assert next(x for x in store.sync(url, "sasha", 0)["people"] if x["id"] == al)["phones"] == ["+7 000 000-00-01"]
+    assert next(x for x in store.sync(url, "alena", 0)["people"] if x["id"] == al)["tier"] == "self"
+    nat = str(cards["natasha"])
+    assert next(x for x in store.sync(url, "natasha", 0)["people"] if x["id"] == nat)["tier"] == "self"
+    assert next(x for x in store.sync(url, "alena", 0)["people"] if x["id"] == nat)["tier"] == "colleague"
 
 
 def test_people_by_themselves_note_is_only_where(cards):
@@ -410,7 +464,7 @@ def test_only_you_repeat_finding_and_home_meeting(mt):
 
 
 def test_migration_privacy_over_data(admin_dsn):
-    """dela_0024–0028 поверх Дел, где уже есть люди, сделки, комментарии, записи встреч и команда: данные не меняются
+    """dela_0024–0029 поверх Дел, где уже есть люди, сделки, комментарии, записи встреч и команда: данные не меняются
     (rev прежние), кроме событий доступа не-владельцам."""
     import secrets as _secrets
     from urllib.parse import urlparse, urlunparse
@@ -450,7 +504,8 @@ def test_migration_privacy_over_data(admin_dsn):
                     for t in ("crm.people", "crm.deals", "tasks.tasks", "tasks.comments", "crm.interactions", "crm.users")}
         with psycopg.connect(url, autocommit=True) as c:
             got = dela_db.apply_pending(c, files)
-        assert got[:5] == ["dela_0024.sql", "dela_0025.sql", "dela_0026.sql", "dela_0027.sql", "dela_0028.sql"], got
+        assert got[:6] == ["dela_0024.sql", "dela_0025.sql", "dela_0026.sql", "dela_0027.sql", "dela_0028.sql",
+                           "dela_0029.sql"], got
         with dela_db.session(url, "system", "test") as c:
             for t, r in revs.items():
                 assert c.execute(f"SELECT array_agg(rev ORDER BY id) AS r FROM {t}").fetchone()["r"] == r, t
@@ -516,6 +571,41 @@ def test_privacy_fix_makes_old_bases_and_notes_private(team, capsys, tmp_path, m
         texts = {r["text"] for r in c.execute("SELECT text FROM tasks.comments WHERE private").fetchall()}
     assert texts == {"Встреча: основание", "Telegram 15.10: слова переписки", "Telegram: пересказ переписки"}
     assert store.sync(url, "natasha", seq)["full"]  # событие доступа — полный синк
+
+
+def test_privacy_fix_finds_this_is_it_by_author_time_and_head(team):
+    """«Это оно» находится и когда дело потом переименовали, и без пачки у предложения (веб писал подпись источника,
+    телефон — свою); чужой комментарий той же минуты и общий текст владельца не трогаются; причина «уже есть» без
+    комментария рядом — списком."""
+    from pravka_dela import privacy_fix
+
+    url = team["url"]
+    p = project(url, "sasha", "ООО Ромашка")
+    with dela_db.session(url, "sasha", "test") as c:
+        t = c.execute("INSERT INTO tasks.tasks (title, project_id, owner_id, created_by) VALUES ('Тизер', %s, 'sasha', "
+                      "'sasha') RETURNING id", (p,)).fetchone()["id"]
+
+        def merge(source, title, text, batch=None, ago="0"):
+            c.execute("INSERT INTO tasks.suggestions (for_user, kind, payload, source, status, decided_at, decided_by, "
+                      "reason, batch_title, created_by) VALUES ('sasha', 'create', %s, %s, 'rejected', "
+                      "now() - %s::interval, 'sasha', 'уже есть: Тизер', %s, 'sasha')",
+                      (store.Jsonb({"title": title}), source, ago, batch))
+            if text:
+                return c.execute("INSERT INTO tasks.comments (task_id, author_id, text) VALUES (%s, 'sasha', %s) RETURNING id",
+                                 (t, text)).fetchone()["id"]
+
+        web = merge("meeting", "Прислать тизер", "встреча: Прислать тизер — «пришлю к пятнице»")  # веб без пачки
+        phone = merge("contacts", "Позвонить Ивану", "телефонная книжка: Позвонить Ивану")  # телефон без пачки
+        merge("telegram", "Ответить", None, ago="2 hours")  # комментарий убран — посмотреть глазами
+        own = c.execute("INSERT INTO tasks.comments (task_id, author_id, text) VALUES (%s, 'sasha', 'встреча: моё слово') "
+                        "RETURNING id", (t,)).fetchone()["id"]  # начало то же, названия предложения нет
+        c.execute("UPDATE tasks.tasks SET title = 'Тизер на английском' WHERE id = %s", (t,))  # переименовали потом
+    out = privacy_fix.run(url)
+    assert out["merged"] == 2 and [x["reason"] for x in out["merged_missed"]] == ["уже есть: Тизер"], out
+    with dela_db.session(url, "system", "test") as c:
+        got = {r["id"]: r["private"] for r in c.execute("SELECT id, private FROM tasks.comments").fetchall()}
+    assert (got[web], got[phone], got[own]) == (True, True, False)
+    assert "посмотри глазами (1)" in privacy_fix.words(out)
 
 
 # ── Тест-метла (контракт §5): ни одна метка приватного места не доходит до команды ─────────────────

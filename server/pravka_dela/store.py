@@ -1488,7 +1488,11 @@ def op_interaction_set(conn, user, op):
     """Правка записи хронологии. Запись встречи поправил её хозяин — его слово сильнее карточки: встрече замок touch,
     сервер эту запись больше не переписывает (meeting.set unlock touch — снова по карточке)."""
     res = interaction_set(conn, user, op)
-    if res["row"]["source"] == "meeting":
+    # «Скрыть от команды» (только private) — не правка текста: замка нет, запись и дальше следует карточке, и владелец
+    # видит итог с неё (вид crm.v_interactions подменяет только не под замком). С замком он видел бы в хронологии и в
+    # life.interactions одно «Клиент: тема» при «только факт» (проверка пакета «Приватность»); crm.meeting_touch поле
+    # private не трогает, команда запись уже не видит.
+    if res["row"]["source"] == "meeting" and not set(op.get("set") or {}) <= {"private"}:
         meetings.lock_touch(conn, res["row"])
     return res
 

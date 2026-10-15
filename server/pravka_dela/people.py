@@ -641,8 +641,11 @@ def op_person_add(conn, user, op, error, ignore: tuple = ()):
     ignore — чьи имена не мешают: слияние дописывает живой карточке имя дубля, пока дубль ещё не убран.
     """
     pid = op.get("id")
+    # Что уже есть — из вида по ярусу (проверка пакета «Приватность», аудит №10): по сырой строке ответ «ok, ничего не
+    # поменялось» против «нет прав менять» выдавал сотруднику, есть ли у коллеги такой номер, почта или другое имя. Кто
+    # вправе править (владелец, автор, сам человек, system), видит в виде те же контакты, что в таблице.
     row = conn.execute(
-        "SELECT id, name, short, aliases, phones, emails, telegram_id, telegram_username FROM crm.people WHERE id = %s",
+        "SELECT id, name, short, aliases, phones, emails, telegram_id, telegram_username FROM crm.v_people WHERE id = %s",
         (pid,),
     ).fetchone()
     if row is None:

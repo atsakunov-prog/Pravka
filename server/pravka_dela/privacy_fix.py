@@ -5,8 +5,10 @@
 сохранения, которая откатывается: числа те же, в базе ничего.
 
 1. Основания — приватными: комментарии-основания автоматики из личных каналов (id в result.comment_id у предложений
-   из meeting, telegram, userbot, contacts — «закрыто/уточнено само», «Человек не поставлен») и «Это оно» веба (текст
-   начинается с пачки такого предложения, автор — его адресат, предложение отклонено «уже есть: …»).
+   из meeting, telegram, userbot, contacts — «закрыто/уточнено само», «Человек не поставлен») и «Это оно» веба и
+   телефона (предложение такого источника отклонено «уже есть: …», комментарий его адресата лёг в ту же минуту и
+   начинается с «<пачка или подпись источника>: <название предложения>»; дело могли переименовать). Причина «уже есть»
+   без такого комментария — списком, посмотреть глазами.
 2. Заметки машины — дела, заведённые «завести» из Telegram (и из встреч при «только факт»), чья заметка совпадает с
    payload.notes предложения: заметка уходит приватным комментарием, у дела пусто (журнал — svc:privacy-fix). Заметку
    правили руками — не трогаем, только число.
@@ -54,6 +56,22 @@ def run(url: str, dry: bool = False, locked_private: bool = False) -> dict:
     return out
 
 
+# «Это оно» (веб — mergeInto в static/app.js, телефон — onMerge в DelaTab.kt) одним запросом пишет комментарий
+# «<откуда>: <название> — «<цитата>» — <заметка>» и отклоняет предложение причиной «уже есть: <название дела тогда>».
+# <откуда> — пачка предложения, а без неё — подпись источника: у веба SUG_FROM (иначе «Автоматика»), у телефона
+# DelaViews.mark(source).word. Название дела в причине — на тот день: дело могли переименовать.
+MERGE_HEADS = {"meeting": ("встреча", "Встреча"), "telegram": ("Telegram",), "userbot": ("Telegram",),
+               "contacts": ("телефонная книжка", "Телефонная книжка")}
+MERGE_ANY_HEAD = "Автоматика"
+
+
+def _merge_text(text: str, heads: list[str], title: str | None) -> bool:
+    """Комментарий — слова «Это оно» этого предложения: начинается с «<откуда>: », а дальше — с названия предложения
+    (если оно было)."""
+    t = _norm(text)
+    return any(t.startswith(_norm(f"{h}: {title}") if title else _norm(h) + ":") for h in heads)
+
+
 def _bases(conn) -> dict:
     """Шаг 1: основания и «Это оно» из личных каналов — приватными."""
     ids = conn.execute(
@@ -61,14 +79,29 @@ def _bases(conn) -> dict:
         " SELECT s.result ->> 'comment_id' FROM tasks.suggestions s"
         " WHERE s.source = ANY(%s) AND s.result ? 'comment_id' AND s.result ->> 'comment_id' IS NOT NULL) RETURNING c.id",
         (list(SOURCES),)).fetchall()
-    merged = conn.execute(
-        "UPDATE tasks.comments c SET private = true WHERE NOT c.private AND c.deleted_at IS NULL AND EXISTS ("
-        " SELECT 1 FROM tasks.suggestions s JOIN tasks.tasks t ON t.id = c.task_id"
-        " WHERE s.source = ANY(%s) AND s.status = 'rejected' AND s.reason = 'уже есть: ' || t.title"
-        "   AND c.author_id = s.for_user AND nullif(btrim(s.batch_title), '') IS NOT NULL"
-        "   AND left(c.text, length(s.batch_title) + 2) = s.batch_title || ': ') RETURNING c.id",
-        (list(SOURCES),)).fetchall()
-    return {"bases": len(ids), "merged": len(merged)}
+    # «Это оно» — по автору, времени и началу текста, без названия дела (проверка пакета: дело переименовали после «Это
+    # оно» или у предложения не было пачки — прежнее сравнение «уже есть: » || нынешнее название их не находило).
+    # Комментарий лёг тем же запросом, что решение: минута — с запасом на часы базы и службы.
+    sugs = conn.execute(
+        "SELECT s.id, s.source, s.for_user, s.decided_by, s.decided_at, s.reason, "
+        "nullif(btrim(s.batch_title), '') AS batch, nullif(btrim(s.payload ->> 'title'), '') AS title "
+        "FROM tasks.suggestions s WHERE s.source = ANY(%s) AND s.status = 'rejected' AND s.reason LIKE 'уже есть: %%' "
+        "AND s.decided_at IS NOT NULL ORDER BY s.decided_at, s.id", (list(SOURCES),)).fetchall()
+    hide: set = set()
+    missed: list[dict] = []
+    for s in sugs:
+        heads = [h for h in (s["batch"], *MERGE_HEADS.get(s["source"], ()), MERGE_ANY_HEAD) if h]
+        near = conn.execute(
+            "SELECT id, text, private FROM tasks.comments WHERE deleted_at IS NULL AND author_id IN (%s, %s) "
+            "AND created_at BETWEEN %s::timestamptz - interval '1 minute' AND %s::timestamptz + interval '1 minute'",
+            (s["for_user"], s["decided_by"] or s["for_user"], s["decided_at"], s["decided_at"])).fetchall()
+        hit = [c for c in near if _merge_text(c["text"], heads, s["title"])]
+        if not hit:
+            missed.append({"day": s["decided_at"].astimezone(meetings.MSK).strftime("%d.%m"), "reason": s["reason"]})
+        hide |= {c["id"] for c in hit if not c["private"]}
+    if hide:
+        conn.execute("UPDATE tasks.comments SET private = true WHERE id = ANY(%s) AND NOT private", (list(hide),))
+    return {"bases": len(ids), "merged": len(hide), "merged_missed": missed}
 
 
 def _notes(conn) -> dict:
@@ -121,10 +154,16 @@ def _meetings(conn, locked_private: bool) -> dict:
 def words(out: dict) -> str:
     """Итог словами для командной строки."""
     lines = [("вхолостую (ничего не записано): " if out["dry"] else "") + "privacy-fix:",
-             f"1. основания — приватными: {out['bases']} (и «Это оно»: {out['merged']})",
-             f"2. заметки машины ({', '.join(out['notes_sources'])}) — в приватный комментарий: {out['notes_moved']}; "
-             f"правленые руками — не тронуты: {out['notes_kept']}",
-             "3. записи встреч: " + (", ".join(f"{k} {v}" for k, v in sorted(out["meetings"].items())) or "нет встреч")]
+             f"1. основания — приватными: {out['bases']} (и «Это оно»: {out['merged']})"]
+    if out.get("merged_missed"):
+        # Причина «уже есть: …» есть, а комментария рядом по времени и с началом «<откуда>: » нет — посмотреть глазами
+        # (комментарий убран, написан позже или иначе); приватным он не стал.
+        miss = out["merged_missed"]
+        lines.append(f"   «Это оно» без комментария рядом — посмотри глазами ({len(miss)}): "
+                     + "; ".join(f"{x['day']} «{x['reason']}»" for x in miss[:10]) + ("; …" if len(miss) > 10 else ""))
+    lines += [f"2. заметки машины ({', '.join(out['notes_sources'])}) — в приватный комментарий: {out['notes_moved']}; "
+              f"правленые руками — не тронуты: {out['notes_kept']}",
+              "3. записи встреч: " + (", ".join(f"{k} {v}" for k, v in sorted(out["meetings"].items())) or "нет встреч")]
     if out["locked"]:
         lines.append(("   скрыты от команды" if out["locked_private"] else "   под замком — твой текст, команда видит целиком")
                      + f" ({len(out['locked'])}): " + "; ".join(f"{x['day']} «{x['title']}»" for x in out["locked"]))
