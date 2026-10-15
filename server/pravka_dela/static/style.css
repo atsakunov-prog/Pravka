@@ -1599,3 +1599,33 @@ a.pt-row:hover { color: var(--accent); text-decoration: none; }
 .step-status { padding: 2px 6px; font-size: 13px; }
 .nest-tree .task.step .title::before { content: none; }
 @media (hover: none) { .step-btn { opacity: .55; } }
+
+/* Захват (15.10.2026, шаг 0 петли): строка «куда легло и когда вернётся» и кнопки поправки под ней — их отдаёт сервер
+   (capture.py), веб только рисует. Напоминания — отдельной панелью в свой час, «Вернулось» — дела «потом». */
+.cap { margin: 2px 0 4px; }
+.cap-item { padding: 4px 0 6px; }
+.cap-item + .cap-item { border-top: 1px dashed var(--line-soft); }
+.cap-item.undone { opacity: .55; }
+.cap-line { display: block; width: 100%; border: 0; background: none; text-align: left; padding: 5px 8px; border-radius: 7px;
+  font-size: 14.5px; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
+button.cap-line:hover { background: var(--hover); }
+.cap-line.err { color: var(--bad); }
+.cap-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 8px 0; }
+.cap .kuda { font-size: 12.5px; margin: 4px 8px 0; color: var(--faint); }
+.kuda-box { max-width: min(720px, calc(100vw - 32px)); max-height: calc(70vh / var(--kv-zoom, 1)); overflow-y: auto; padding: 4px 6px; }
+.kuda-box h3 { font-size: 15px; margin: 6px 0; }
+.kuda-box p { font-size: 13.5px; line-height: 1.5; margin: 6px 0; }
+.kuda-table { overflow-x: auto; }
+.kuda-table table { border-collapse: collapse; font-size: 13px; }
+.kuda-table th, .kuda-table td { text-align: left; vertical-align: top; padding: 4px 8px; border-bottom: 1px solid var(--line-soft); }
+.rem-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 7px 10px; border-radius: 8px; }
+.rem-row + .rem-row { border-top: 1px solid var(--line-soft); }
+.rem-row.due .rem-at { color: var(--accent); font-weight: 600; }
+.rem-at { min-width: 64px; font-size: 13.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rem-title { flex: 1 1 220px; min-width: 0; border: 0; background: none; text-align: left; padding: 0; font-size: 14.5px; color: var(--text); overflow-wrap: anywhere; }
+.rem-title:hover { text-decoration: underline; text-decoration-color: var(--line); }
+.rem-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.m.back { color: var(--accent); }
+.idea-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 7px 10px; }
+.idea-row + .idea-row { border-top: 1px solid var(--line-soft); }
+.idea-text { flex: 1 1 260px; min-width: 0; font-size: 14.5px; overflow-wrap: anywhere; }

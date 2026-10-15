@@ -29,6 +29,7 @@ const S = {
   allTree: LS.get('allTree', false), cardStep: false, // «Все дела» деревом; строка карточки в режиме «Для этого» (15.10.2026)
   renamed: new Map(), // id «Зачем» → старые названия (Свод zachem.renamed, 13.10.2026)
   merge: null, // «Это тот же, что…»: {from, to} — лист подтверждения слияния на странице человека (аудит №23)
+  ideas: new Map(), // идеи у клиента, человека, сделки (захват, 15.10.2026, dela_0024c) — только свои, полем ideas синка
 };
 // Три группы дел (владелец 10.10.2026): «есть дела, которые ждут меня — люди что-то спросили и ждут, они
 // мега важные… второе — что я сам придумал… третье — проверить, что мне люди должны». Вечером назвал их:
@@ -83,7 +84,7 @@ const op1 = async (item) => (await ops([item]))[0];
 
 async function sync(full) {
   const d = await api('/api/sync?since=' + (full ? 0 : S.seq));
-  if (d.full) { S.tasks.clear(); S.projects.clear(); S.people.clear(); S.deals.clear(); S.sugs.clear(); S.orgs.clear(); S.pays.clear(); }
+  if (d.full) { S.tasks.clear(); S.projects.clear(); S.people.clear(); S.deals.clear(); S.sugs.clear(); S.orgs.clear(); S.pays.clear(); S.ideas.clear(); }
   for (const t of d.tasks) S.tasks.set(t.id, t);
   for (const p of d.projects) S.projects.set(p.id, p);
   for (const p of d.people) S.people.set(p.id, p);
@@ -91,6 +92,7 @@ async function sync(full) {
   for (const s of d.suggestions) S.sugs.set(s.id, s);
   for (const o of d.orgs || []) S.orgs.set(o.id, o);
   for (const x of d.payments || []) S.pays.set(x.id, x);
+  for (const x of d.ideas || []) S.ideas.set(x.id, x);
   S.labels = d.labels.map((l) => l.name);
   // Круг жизни: направления проектов (их наследуют дела) и справочник из Свода — только свои (RLS).
   if (d.full) S.krug.proj.clear();
@@ -154,10 +156,13 @@ function remindChip(t) {
   if (t.remind_at) return '⏰ ' + remindWords(t.remind_at);
   return t.remind_place ? '⏰ ' + t.remind_place : '';
 }
+/** Напоминания показывает телефон (захват, 15.10.2026: user.settings remind_phone) — бот в Telegram запасной. */
+const remindPhone = () => !!(S.me && S.me.settings && S.me.settings.remind_phone && S.me.settings.remind_phone.on);
 function remindState(t) {
-  if (t.reminded_at) return 'отправлено в Telegram ' + remindWords(t.reminded_at);
-  if (t.remind_at) return (t.remind_place ? `приехал «${t.remind_place}» — ` : '') + 'напомню в Telegram ' + remindWords(t.remind_at);
-  if (t.remind_place) return 'напомню в Telegram, когда приедешь: ' + t.remind_place;
+  const where = remindPhone() ? 'на телефоне' : 'в Telegram';
+  if (t.reminded_at) return (t.reminded_via === 'phone' ? 'показано на телефоне ' : 'отправлено в Telegram ') + remindWords(t.reminded_at);
+  if (t.remind_at) return (t.remind_place ? `приехал «${t.remind_place}» — ` : '') + `напомню ${where} ` + remindWords(t.remind_at);
+  if (t.remind_place) return `напомню ${where}, когда приедешь: ` + t.remind_place;
   return '';
 }
 
@@ -177,7 +182,10 @@ function sortTasks(a, b) {
     || a.num - b.num;
 }
 const all = () => [...S.tasks.values()];
-const openMine = () => all().filter((t) => isOpen(t) && isMine(t) && inSphere(t) && !t.goal);
+// Напоминание (захват, 15.10.2026, kind 'remind') — не дело: его нет в списках дел, как и целей дерева; оно стоит на
+// «Сейчас» и «Сегодня» в свой час (isRemindToday) и во «Всех делах» внизу, блоком «Напоминания». Как store._list.
+const isRemind = (t) => t.kind === 'remind';
+const openMine = () => all().filter((t) => isOpen(t) && isMine(t) && inSphere(t) && !t.goal && !isRemind(t));
 
 // ── Круг жизни (12.10.2026) и дерево жизни (13.10.2026) ─────────────────
 // Владелец: «каждое моё дело должно преследовать какое-то направление… просто направление и Круг жизни». Бриф 7.2
@@ -190,7 +198,7 @@ const openMine = () => all().filter((t) => isOpen(t) && isMine(t) && inSphere(t)
 const krugOn = () => S.krug.dirs.length > 0 && ((S.me && S.me.features) || []).includes('krug');
 const treeOn = () => krugOn() && ((S.me && S.me.features) || []).includes('tree');
 /** Дела — без целей: цель не делают, к ней идут (в списках дел целей нет). */
-const deeds = () => all().filter((t) => !t.goal);
+const deeds = () => all().filter((t) => !t.goal && !isRemind(t));
 const dirBy = (k) => S.krug.dirs.find((d) => d.key === k);
 const dirName = (k) => { const d = dirBy(k); return d ? d.short || d.name : k; };
 /** Цепочка вверх (как tasks.krug_dirs): само дело, его «Зачем» и выше; у звена без «Зачем» — проект дела (строка
@@ -437,10 +445,25 @@ function whyPop(anchor, t) {
 // «Новое» — вопросы автоматики; «Все дела» — всё открытое, с завода уровнями «Зачем › группы › время»; свои
 // сочетания — фильтрами на полке. «Предстоящее», «Жду» и «Неделя» ушли (10.10): их дела — во «Всех делах».
 const NOW_MAX = 5;
-const nowTasks = () => all().filter((t) => isOpen(t) && isMine(t) && isNow(t) && !t.goal);
+const nowTasks = () => all().filter((t) => isOpen(t) && isMine(t) && isNow(t) && !t.goal && !isRemind(t));
 /** На сегодня — как store.TODAY_IF: своё открытое дело со сроком ровно сегодня. Не сделал — завтра оно не здесь,
  *  а во «Всех делах», в «Просрочено». */
-const inToday = (t) => isOpen(t) && isMine(t) && !t.goal && t.due_date === S.today;
+const inToday = (t) => isOpen(t) && isMine(t) && !t.goal && !isRemind(t) && t.due_date === S.today;
+/** Напоминание на «Сегодня» — одно правило с сервером (capture.REMIND_TODAY_IF) и телефоном: открытое напоминание с
+ *  мигом до конца сегодня (и прошедшее неотмеченное), по месту без времени; плюс дело с напоминанием на сегодня, если
+ *  его срок не сегодня (иначе оно и так в «Сегодня»). */
+function isRemindToday(t) {
+  if (!isOpen(t) || !isMine(t) || t.goal) return false;
+  if (isRemind(t)) return t.remind_at ? msk(Date.parse(t.remind_at)).day <= S.today : !!t.remind_place;
+  return !!t.remind_at && msk(Date.parse(t.remind_at)).day === S.today && t.due_date !== S.today;
+}
+const remAt = (t) => (t.remind_at ? Date.parse(t.remind_at) : 9e15);
+const remindersToday = () => all().filter(isRemindToday).sort((a, b) => remAt(a) - remAt(b) || a.num - b.num);
+const remindersAll = () => all().filter((t) => isOpen(t) && isMine(t) && isRemind(t)).sort((a, b) => remAt(a) - remAt(b) || a.num - b.num);
+/** «Вернулось» — как capture.BACK_IF: своё открытое дело «потом» без срока, день возврата настал, не в «Сейчас». */
+const isBack = (t) => isOpen(t) && isMine(t) && !t.goal && !isRemind(t) && t.ball === 'mine' && !t.owed && !t.due_date
+  && !!t.back_on && t.back_on <= S.today && !isNow(t);
+const backTasks = () => all().filter(isBack).sort((a, b) => a.back_on.localeCompare(b.back_on) || a.num - b.num);
 const todayTasks = () => all().filter((t) => inToday(t) && inSphere(t));
 /** Просрочено — как store.LATE_IF: своё открытое, срок прошёл. Живёт во «Всех делах», сверху. */
 const lateTasks = () => deeds().filter((t) => isLate(t) && isMine(t) && inSphere(t));
@@ -889,6 +912,7 @@ function route() {
   // Дайджест Telegram (14.10.2026, digest.js): список и поиск, одна сводка — по ref (ссылка из хронологии CRM).
   if (kind === 'digest') return id ? { kind: 'digest', id: decodeURIComponent(id) } : { kind: 'digests' };
   if (kind === 'settings') return { kind: 'settings' };
+  if (kind === 'ideas') return { kind: 'ideas' }; // идеи у клиентов, людей, сделок (захват, 15.10.2026)
   if (kind === 'stats') return { kind: 'stats' };
   if (kind === 'inbox') return { kind: 'new' }; // старые закладки: «Входящие» теперь в «Новом»
   if (kind === 'week') return { kind: 'all' }; // 10.10.2026: «Неделя», «Предстоящее», «Жду» — во «Всех делах»
@@ -1483,6 +1507,7 @@ function renderSide(r) {
       groups,
       el('div', { class: 'side-foot' },
         navItem('#/stats', icon('chart', 17), 'Статистика', r.kind === 'stats'),
+        ideasOn() ? navItem('#/ideas', icon('flame', 17), 'Идеи', r.kind === 'ideas') : null,
         phoneOn() ? navItem('#/phone', icon('phone', 17), 'Телефон', r.kind === 'phone') : null,
         typeof digestOn === 'function' && digestOn() ? navItem('#/digest', icon('digest', 17), 'Дайджест', r.kind === 'digests' || r.kind === 'digest') : null,
         navItem('#/settings', icon('settings', 17), 'Настройки', r.kind === 'settings')),
@@ -1780,6 +1805,7 @@ function renderMain(r) {
   if (r.kind === 'digests' || r.kind === 'digest') return typeof renderDigest === 'function' ? renderDigest(r)
     : [head('Дайджест'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Страница дайджеста не загрузилась — сервер отдал app.js без digest.js. Обнови страницу; не помогло — сервер Дел старый.'))];
   if (r.kind === 'stats') return renderStats();
+  if (r.kind === 'ideas') return renderIdeas();
   if (r.kind === 'crm') return renderPipeline();
   if (r.kind === 'clients') return renderClients();
   if (r.kind === 'people') return renderPeople();
@@ -1816,7 +1842,8 @@ function renderMain(r) {
         el('div', { class: 'body' + (forest ? ' nest-tree' : '') }, quickAdd({}), tb, pickBar(every, lv, S.pick.all, setPick('all')),
           pickNote(items, S.pick.all, lv) || [
             late.length ? lateBox(late) : null,
-            rest.length ? nested(rest, lv) : late.length ? null : el('div', { class: 'empty' }, 'Пусто.')])];
+            rest.length ? nested(rest, lv) : late.length ? null : el('div', { class: 'empty' }, 'Пусто.')],
+          remindBox(remindersAll(), { title: 'Напоминания', sub: 'все — по времени; на «Сейчас» встают в свой день' }))];
     } finally { NEST = null; }
   }
   return [head('Дела'), el('div', { class: 'body' })];
@@ -1865,6 +1892,8 @@ function renderNow() {
         rowOpt: (t) => (depth.has(t.id) ? { indent: depth.get(t.id) } : {}),
         before: now.length ? null : el('div', { class: 'hint-line' },
           'Пусто. Возьми до пяти дел на сегодня — молния у дела или в карточке, галочки и «В «Сейчас»» внизу или «!сейчас» в строке.') }),
+      remindBox(remindersToday()),
+      backBox(backTasks()),
       newBox(),
       todayBox(today, taken.size))];
 }
@@ -1911,6 +1940,8 @@ function renderToday() {
     el('div', { class: 'body' },
       principleLine(),
       quickAdd({}, { placeholder: 'Скажи, что сделать: «Гуркин ждёт звонка по фонду», «это на завтра», «это мониторить»' }),
+      remindBox(remindersToday()),
+      backBox(backTasks()),
       el('div', { class: 'toolbar' }, levelsBar(lv, setLevels('today')), sphereSel(),
         el('button', { class: 'chip-btn', onclick: () => addFilter('today', lv, S.pick.today) }, 'Сохранить фильтр')),
       pickBar(every, lv, S.pick.today, setPick('today')),
@@ -2087,7 +2118,7 @@ function nowRoom(ids) {
 // в карточке и в панели выбранных одна отметка — молния; срок меняют «Когда» и «Перенести».
 /** Можно ли взять дело в «Сейчас» — своё открытое, не цель. У чужого и у цели молнии нет: кнопка, которая всегда
  *  отказывает, читается как поломка. */
-const canNow = (t) => isOpen(t) && isMine(t) && !t.goal;
+const canNow = (t) => isOpen(t) && isMine(t) && !t.goal && !isRemind(t);
 /** «Сейчас» у дела (13.10.2026, владелец: «Сейчас — то, что отметил»): отметил — взял на сегодня, не больше пяти
  *  (шестое не встаёт — nowRoom; предел держит и сервер, store._now_guard); снял — дело остаётся, где было. В операции
  *  ТОЛЬКО focus_on: ни взятие, ни снятие не трогают срок (тест сервера test_now_mark_leaves_due_alone читает и это). */
@@ -2123,6 +2154,9 @@ function taskRow(t, by, extra, opt = {}) {
   else if (due && !grouped_('date')) chips.push(m(due.cls, due.text));
   const rem = remindChip(t);
   if (rem) chips.push(m('remind', rem));
+  // Дело «потом» (захват, 15.10.2026): когда вернётся строкой «Вернулось» на «Сейчас»; напоминание — не дело.
+  if (isOpen(t) && t.back_on && !t.due_date && !isRemind(t)) chips.push(m('back', `↩ ${WD_SHORT[D.wd(t.back_on)]} ${D.ddmm(t.back_on)}`));
+  if (isRemind(t)) chips.push(m('remind', 'напоминание'));
   // «Зачем» — одно (13.10.2026): цель, проект клиента или проект; нет — не тупик, а вопрос: щелчок — выбрать.
   // Дело внутри другого дела (15.10.2026) — вместо «Зачем» подпись «для: <дело>» (stepChips ниже).
   const par = parentOf(t);
@@ -3099,7 +3133,8 @@ async function claudeSay(text, defaults, cont, card) {
     for (const t of d.tasks || []) S.tasks.set(t.id, t);
     // Ничего не сделал и не ответил — команда возвращается в поле: дополнить и отправить ещё раз, а не говорить
     // заново (08.10.2026: «нажимаю на микрофон, и всё стирается»).
-    const did = ['changed', 'tasks', 'decided', 'crm', 'notes', 'refs'].some((k) => (d[k] || []).length);
+    const did = ['changed', 'tasks', 'decided', 'crm', 'notes', 'refs'].some((k) => (d[k] || []).length)
+      || !!(d.capture && (d.capture.items || []).length); // захват: идея или заметка — тоже «сделал», хоть дел и нет
     if (!did && !d.reply) { if (one) S.cardSay[one.id] = text; else S.quickText = text; }
     if (one && (did || d.reply)) { S.kstati = false; S.cardStep = false; }
     talk.turns.push({ said: text, d });
@@ -3147,7 +3182,9 @@ function talkFeed(talk, { inCard = false } = {}) {
 /** Что сделано в реплике — коротко, для памяти разговора на сервере. */
 function turnMemo(t) {
   const d = t.d, out = [];
-  if (d.route === 'new') {
+  if (d.capture) {
+    out.push('разложил: ' + (d.capture.items || []).map((x) => x.line).join('; '));
+  } else if (d.route === 'new') {
     if ((d.tasks || []).length) out.push('завёл: ' + d.tasks.map((x) => x.title).join(', '));
     if ((d.notes || []).length) out.push('в хронологию: ' + d.notes.map((x) => x.summary).join('; '));
   } else {
@@ -3164,6 +3201,11 @@ function turnMemo(t) {
 /** Отмена реплики: правки дел — как было, заведённое — отменой, карточка — её «как было». */
 function turnUndo(d) {
   const back = [];
+  if (d.capture) {
+    // Захват: «Вернуть» реплики — undo каждой записи (дело — отменой, заметка — убрать, идея — убрать, сделанное — как было).
+    for (const x of d.capture.items || []) if (x.bucket !== 'cancelled') back.push(...(x.undo || []));
+    return back;
+  }
   if (d.route === 'new') {
     for (const t of d.tasks || []) back.push({ op: 'task.cancel', id: t.id });
     return back;
@@ -3183,7 +3225,9 @@ function turnView(t) {
   const d = t.d;
   const open = (id) => () => id && openCard(id);
   const items = [];
-  if (d.route === 'new') {
+  if (d.capture) {
+    items.push(captureBlock(t));
+  } else if (d.route === 'new') {
     const meta = (x) => [project(x.project_id)?.name,
       x.person_id ? ((grpOf(x) !== 'self' || x.ball === 'agenda' ? grpWord(x) + ' ' : '') + personName(person(x.person_id))) : null,
       x.due_date ? dueLabel(x).text : null, x.estimate_min ? x.estimate_min + ' мин' : null].filter(Boolean).join(' · ');
@@ -3227,13 +3271,183 @@ function turnView(t) {
         } }, dropped ? 'Вернуть принятое' : 'Вернуть')) : null);
 }
 
+// ── Захват: строка подтверждения и кнопки поправки (15.10.2026, шаг 0 петли) ──
+// Владелец: «захват за три секунды, которому я доверяю… „напомни в 12 в Контуре отправить счёт“ — не знал, куда».
+// Строка Claude — та же дверь, что «сказать» и «Д» на телефоне: раскладывает сервер (capture.py — правилом без Claude,
+// иначе разбором с корзинами), строку «куда легло и когда вернётся» и до трёх кнопок поправки отдаёт он же; веб
+// только рисует, нажатие — capture.move, ответ — новая строка на месте.
+function captureBlock(t) {
+  const cap = t.d.capture;
+  const items = cap.items || [];
+  const chip = (c, i) => el('button', { class: 'chip-btn', onclick: (e) => capMove(t, i, c, e.currentTarget) }, c.label + (c.options ? ' ▾' : ''));
+  return el('div', { class: 'cap' },
+    items.length > 1 ? el('div', { class: 'cr-sub' }, cap.head) : null,
+    cap.status === 'error' ? el('div', { class: 'cap-item' }, el('div', { class: 'cap-line err' }, cap.head),
+      el('div', { class: 'cap-chips' }, (cap.chips || []).map((c) => chip(c, -1)))) : null,
+    items.map((x, i) => {
+      const id = x.task && x.task.id;
+      return el('div', { class: 'cap-item' + (x.bucket === 'cancelled' ? ' undone' : '') },
+        el(id ? 'button' : 'div', { class: 'cap-line' + (x.bucket === 'error' ? ' err' : ''), onclick: id ? () => openCard(id) : null }, x.line),
+        (x.chips || []).length ? el('div', { class: 'cap-chips' }, x.chips.map((c) => chip(c, i))) : null);
+    }),
+    el('button', { class: 'link-btn kuda', onclick: (e) => kudaPop(e.currentTarget) }, 'куда что'));
+}
+async function capMove(t, i, c, anchor) {
+  if (c.options) {
+    popAt(anchor, c.options.map((o) => el('button', { onclick: () => { closePop(); capMove(t, i, { ...c, options: null, at: o.at }); } }, o.label)));
+    return;
+  }
+  try {
+    const r = await op1({ op: 'capture.move', ref: t.d.capture.ref, item: i, to: c.move,
+      ...(c.at ? { at: c.at } : {}), ...(c.person_id ? { person_id: c.person_id } : {}) });
+    t.d = { ...t.d, capture: r.capture };
+    render();
+  } catch (e) { fail(e); }
+}
+/** «Куда что» — короткая страница для Саши (contract/prompts/kuda-chto.md, вид kuda): таблица «говоришь — куда ляжет —
+ *  когда вернётся». Отдаёт сервер видом — своего адреса у страницы нет (закрытый список путей посредника). */
+async function kudaPop(anchor) {
+  try {
+    const d = await api('/api/view/kuda');
+    const box = el('div', { class: 'kuda-box' }, mdBlocks(d.text || ''));
+    popAt(anchor, [el('div', { class: 'pop-h' }, 'Куда что'), box]);
+  } catch (e) { fail(e); }
+}
+/** Маленький разбор Markdown страницы «куда что»: заголовки, абзацы, таблица, **жирный**. */
+function mdBlocks(text) {
+  const inline = (s) => s.split(/(\*\*[^*]+\*\*)/).map((x) => (x.startsWith('**') && x.endsWith('**') ? el('b', {}, x.slice(2, -2)) : x));
+  const out = [];
+  const lines = text.replace(/\r/g, '').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (!l.trim()) continue;
+    if (l.startsWith('#')) { out.push(el('h3', {}, l.replace(/^#+\s*/, ''))); continue; }
+    if (l.startsWith('|')) {
+      const rows = [];
+      while (i < lines.length && lines[i].startsWith('|')) { rows.push(lines[i]); i++; }
+      i--;
+      const cells = (r) => r.replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+      const body = rows.filter((r) => !/^\|\s*-/.test(r)).map(cells);
+      out.push(el('div', { class: 'kuda-table' }, el('table', {}, body.map((r, k) => el('tr', {}, r.map((c) => el(k ? 'td' : 'th', {}, inline(c))))))));
+      continue;
+    }
+    let para = l;
+    while (i + 1 < lines.length && lines[i + 1].trim() && !lines[i + 1].startsWith('#') && !lines[i + 1].startsWith('|')) { para += ' ' + lines[i + 1]; i++; }
+    out.push(el('p', {}, inline(para)));
+  }
+  return out;
+}
+
+/** «Напоминания» — в свой час, отдельно от кучи дел (захват, 15.10.2026; владелец: «напоминание — отдельно от кучи
+ *  дел: стоит на „Сегодня“ в своё время… после срабатывания — „Сделано / Через час / Завтра“ и исчезает»). */
+function remindWhen(t) {
+  if (!t.remind_at) return t.remind_place ? (/^(дом|дома|домой)$/i.test(t.remind_place.trim()) ? 'дома' : t.remind_place) : '';
+  const { day, hm } = msk(Date.parse(t.remind_at));
+  const h = hm.replace(/^0/, '');
+  if (day === S.today) return h;
+  if (day > S.today) return (D.diff(day, S.today) === 1 ? 'завтра ' : `${WD_SHORT[D.wd(day)]} ${D.ddmm(day)} `) + h;
+  return (D.diff(S.today, day) === 1 ? 'вчера ' : D.ddmm(day) + ' ') + h + ' · не отмечено';
+}
+function remindRow(t) {
+  const due = t.remind_at && Date.parse(t.remind_at) <= Date.now();
+  const btn = (label, title, fn) => el('button', { class: 'chip-btn', title, onclick: (e) => { e.stopPropagation(); fn(); } }, label);
+  return el('div', { class: 'rem-row' + (due ? ' due' : '') + (isRemind(t) ? '' : ' task') },
+    el('span', { class: 'rem-at' }, remindWhen(t), ' ⏰'),
+    el('button', { class: 'rem-title', onclick: () => openCard(t.id) }, t.title,
+      isRemind(t) ? null : el('span', { class: 'cr-meta' }, ' · дело' + (t.due_date ? ' на ' + dueLabel(t).text : ''))),
+    el('span', { class: 'rem-acts' },
+      btn('✓', 'Сделано', () => setFields([t.id], { status: 'done' }, 'Сделано: ' + t.title)),
+      btn('+1 ч', 'Напомнить через час', () => setFields([t.id], { remind_at: new Date(Date.now() + 3600e3).toISOString(), remind_place: null }, 'Напомню через час')),
+      btn('завтра', 'Завтра в 9:00', () => setFields([t.id], { remind_at: D.add(S.today, 1) + 'T09:00:00+03:00', remind_place: null }, 'Напомню завтра в 9:00'))));
+}
+function remindBox(list, { title = 'Напоминания', sub = null } = {}) {
+  if (!list.length) return null;
+  return el('div', { class: 'group grp-remind' },
+    groupHead('h2', title, list.length, { lead: () => icon('clock', 17), n: false,
+      sub: sub || (remindPhone() ? 'в своё время — уведомлением на телефоне' : 'в своё время — ботом в Telegram') }),
+    el('div', { class: 'rows' }, list.map(remindRow)));
+}
+/** «Вернулось» — дела «потом», чей день настал (захват: «позвонить Ивану на неделе» → в пятницу здесь). */
+function backBox(list) {
+  if (!list.length) return null;
+  const btn = (label, fn) => el('button', { class: 'chip-btn', onclick: (e) => { e.stopPropagation(); fn(); } }, label);
+  return el('div', { class: 'group grp-back' },
+    groupHead('h2', 'Вернулось', list.length, { lead: () => icon('refresh', 17), n: false, sub: 'ты отложил «потом» — пора решить' }),
+    el('div', { class: 'rows' }, list.map((t) => el('div', { class: 'rem-row back' },
+      el('span', { class: 'rem-at' }, '↩'),
+      el('button', { class: 'rem-title', onclick: () => openCard(t.id) }, t.title,
+        el('span', { class: 'cr-meta' }, ' · ' + (t.back_said ? `ты сказал «${t.back_said}»` : 'отложено') + (t.created_at ? ' ' + D.ddmm(MSK_DAY(t.created_at).day) : ''))),
+      el('span', { class: 'rem-acts' },
+        btn('В «Сейчас»', () => { if (nowRoom([t.id])) setFields([t.id], { focus_on: S.today, back_on: null, back_said: null }, 'В «Сейчас»'); }),
+        btn('Сегодня', () => setFields([t.id], { due_date: S.today, back_on: null, back_said: null }, 'Срок — сегодня')),
+        btn('Ещё потом', () => { const mon = D.next(0); setFields([t.id], { back_on: mon }, 'Верну ' + WD_SHORT[D.wd(mon)] + ' ' + D.ddmm(mon)); }),
+        btn('Сделано', () => setFields([t.id], { status: 'done' }, 'Сделано: ' + t.title)))))));
+}
+
+/** Идеи (захват, 15.10.2026, ответ владельца 5а: «свой список „Идеи“ у клиента, человека и сделки»): в карточках и
+ *  списком #/ideas. «В дело» — дело «потом» с той же привязкой, идея — использована и помнит дело. */
+const ideasOn = () => ((S.me && S.me.features) || []).includes('ideas');
+const ideasOf = (f) => [...S.ideas.values()].filter((x) => x.status === 'open' && (!f
+  || (f.project_id && x.project_id === f.project_id) || (f.person_id && x.person_id === f.person_id) || (f.deal_id && x.deal_id === f.deal_id)))
+  .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+async function ideaToTask(x) {
+  try {
+    let back = D.add(S.today, 1);
+    while (D.wd(back) >= 5) back = D.add(back, 1);
+    const task = { title: x.text.charAt(0).toUpperCase() + x.text.slice(1), back_on: back, source: 'web',
+      ...(x.project_id ? { project_id: x.project_id } : {}), ...(x.person_id ? { person_id: x.person_id } : {}), ...(x.deal_id ? { deal_id: x.deal_id } : {}) };
+    const r = await op1({ op: 'task.create', task });
+    await op1({ op: 'idea.set', id: x.id, set: { status: 'used', task_id: r.task.id } });
+    render();
+    toast('Дело «потом»: ' + r.task.title);
+  } catch (e) { fail(e); }
+}
+async function ideaSet(x, set, msg) {
+  try { await op1({ op: 'idea.set', id: x.id, set }); render(); toast(msg, () => op1({ op: 'idea.set', id: x.id, set: { status: 'open', task_id: null } })); } catch (e) { fail(e); }
+}
+function ideaRow(x, { where = false } = {}) {
+  const to = [x.project_id && project(x.project_id) ? project(x.project_id).name : null,
+    x.person_id && person(x.person_id) ? personName(person(x.person_id)) : null].filter(Boolean).join(' · ');
+  return el('div', { class: 'idea-row' },
+    el('div', { class: 'idea-text' }, x.text, where && to ? el('span', { class: 'cr-meta' }, ' · ' + to) : null,
+      el('span', { class: 'cr-meta' }, ' · ' + D.ddmm(MSK_DAY(x.created_at).day))),
+    el('span', { class: 'rem-acts' },
+      el('button', { class: 'chip-btn', onclick: () => ideaToTask(x) }, 'В дело'),
+      el('button', { class: 'chip-btn', onclick: () => ideaSet(x, { status: 'used' }, 'Идея использована') }, 'Использована'),
+      el('button', { class: 'chip-btn', onclick: () => ideaSet(x, { status: 'dropped' }, 'Идея убрана') }, 'Убрать')));
+}
+function ideasSec(f) {
+  if (!ideasOn()) return null;
+  const list = ideasOf(f);
+  if (!list.length) return null;
+  return sec('ideas', 'Идеи', secN(list.length), el('div', { class: 'rows' }, list.map((x) => ideaRow(x))),
+    el('a', { class: 'link meet-more', href: '#/ideas' }, 'все идеи →'));
+}
+function renderIdeas() {
+  const list = ideasOf(null);
+  const groups = new Map();
+  for (const x of list) {
+    const key = x.project_id && project(x.project_id) ? '1' + project(x.project_id).name
+      : x.person_id && person(x.person_id) ? '2' + personName(person(x.person_id)) : '3';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(x);
+  }
+  return [head('Идеи', ['у клиентов, людей и проектов', plural(list.length, 'идея', 'идеи', 'идей')]),
+    el('div', { class: 'body' },
+      quickAdd({}, { placeholder: '«идея: предложить Ромашке дашборд» — ляжет к клиенту' }),
+      list.length ? [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0], 'ru')).map(([k, xs]) => el('div', { class: 'group' },
+        el('h2', {}, k === '3' ? 'Ни к кому' : k.slice(1), el('span', { class: 'n' }, xs.length)),
+        el('div', { class: 'rows' }, xs.map((x) => ideaRow(x)))))
+        : el('div', { class: 'empty' }, 'Идей нет. Скажи «идея: …» в строке Claude или в «Д» на телефоне.'))];
+}
+
 // ── Проект, человек, поиск, «Новое» ───────────────────────────
 function renderProject(id) {
   const p = project(id);
   if (!p) return [head('Проект'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Нет такого проекта или он не виден.'))];
   const deals = [...S.deals.values()].filter((d) => d.project_id === id).sort((a, b) => (a.stage === 'archive') - (b.stage === 'archive') || a.name.localeCompare(b.name, 'ru'));
   const g = levelsOf('project').filter((x) => x !== 'project');
-  let every = all().filter((t) => t.project_id === id && (S.showDone || isOpen(t)));
+  let every = deeds().filter((t) => t.project_id === id && (S.showDone || isOpen(t)));
   if (S.dealFilter) every = every.filter((t) => t.deal_id === S.dealFilter);
   const items = picked(every, g, S.pick.project);
   const picker = [levelsBar(g, setLevels('project'), ['project']), pickBar(every, g, S.pick.project, setPick('project'))];
@@ -5014,7 +5228,7 @@ const clientDeals = (id) => [...S.deals.values()].filter((d) => d.project_id ===
  *  деле клиента. Сервер присылает своё слово (deal.solo) — ему и верим. */
 const dealSolo = (d) => (d.solo != null ? !!d.solo
   : d.stage !== 'archive' && clientDeals(d.project_id).filter((x) => x.stage !== 'archive').length === 1);
-const clientSteps = (d) => (dealSolo(d) ? all().filter((t) => !t.deal_id && t.project_id === d.project_id && isOpen(t) && !t.goal) : []);
+const clientSteps = (d) => (dealSolo(d) ? all().filter((t) => !t.deal_id && t.project_id === d.project_id && isOpen(t) && !t.goal && !isRemind(t)) : []);
 function toggleClientOpen(id) {
   if (S.clientOpen.has(id)) S.clientOpen.delete(id); else S.clientOpen.add(id);
   LS.set('clientOpen', [...S.clientOpen]);
@@ -5641,6 +5855,7 @@ function renderClientCard(p, { picker, g, items, sub, star }) {
         S.clientArch ? 'скрыть архив' : `и в архиве: ${archived}`) : null], tiles),
       sec('tasks', 'Дела', secN(items.filter(isOpen).length), el('div', { class: 'toolbar' }, picker, doneToggle()),
         items.length ? grouped(items, g) : el('div', { class: 'empty' }, 'Дел нет. Следующий шаг — скажи в строке Claude.')),
+      ideasSec({ project_id: p.id }),
       sec('timeline', 'Хронология', null, v ? timelineBlock('c:' + p.id, { items: v.timeline, entries: v.entries, pays: money ? pays : [], showDeal: true }) : loading()),
       insightsSec(v, { project_id: p.id }),
       meets,
@@ -5794,7 +6009,7 @@ function renderDeal(id) {
 
   // Дела: следующий шаг — открытое дело проекта; без него проект застынет. Пока проект у клиента один живой, его шаги —
   // и открытые дела клиента без проекта (аудит №2, то же правило у сервера): отдельной группой «Дела клиента».
-  const items = all().filter((t) => t.deal_id === d.id && (S.showDone || isOpen(t)));
+  const items = deeds().filter((t) => t.deal_id === d.id && (S.showDone || isOpen(t)));
   const open = items.filter(isOpen);
   const viaClient = clientSteps(d);
   const tasks = sec('tasks', 'Дела', [secN(open.length + viaClient.length), el('span', { class: 'act' }, doneToggle())],
@@ -5839,6 +6054,7 @@ function renderDeal(id) {
     stageRow,
     sides,
     tasks,
+    ideasSec({ deal_id: d.id }),
     sec('timeline', 'Хронология', null, v ? timelineBlock('d:' + d.id, { items: v.timeline, entries: v.entries, pays: money ? pays : [] }) : loading()),
     insightsSec(v, { project_id: d.project_id, deal_id: d.id }),
     meets,
@@ -5873,6 +6089,7 @@ function personCrmBlock(p) {
   return el('div', { class: 'crm-person' },
     el('div', { class: 'toolbar' }, el('label', {}, 'Теплота', cad), el('label', {}, hub, 'хаб — через него идут темы')),
     insightsSec(v, { person_ids: [p.id] }),
+    ideasSec({ person_id: p.id }),
     sec('timeline', 'Хронология', null, v ? timelineBlock('h:' + p.id, { items: v.timeline, showDeal: true }) : loading()));
 }
 
