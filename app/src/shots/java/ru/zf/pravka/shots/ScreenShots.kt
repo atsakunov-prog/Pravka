@@ -9,6 +9,12 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -51,7 +57,8 @@ import java.util.TimeZone
  * outer, tall, inner, overlay; t5 — только «Сегодня» вида v2 (быстро); z5 — только Засечка v2;
  * svod — меню и вид из Свода (этап 7); web — страница сервиса внутри приложения (шапка Ковчега,
  * заглушка вместо страницы); p5 — доводка 5.0 (подсказка еды, разделы веба Денег); sp — траты Claude (значок
- * на «Сегодня» с меткой советов и экран «Claude: траты»).
+ * на «Сегодня» с меткой советов и экран «Claude: траты»); panel — кнопки справа в заголовке плашки v2 и «Сервер
+ * ответил» (с проверкой, что слово видно целиком).
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -71,7 +78,7 @@ class ScreenShots {
 
     private val dir = File(System.getProperty("pravka.shotsDir") ?: "build/shots").also { it.mkdirs() }
 
-    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5, web, dcol. */
+    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5, web, dcol, panel. */
     private fun want(group: String): Boolean {
         val v = System.getProperty("pravka.shots").orEmpty()
         return v == "1" || v == "all" || v.split(',').map { it.trim() }.contains(group)
@@ -273,6 +280,98 @@ class ScreenShots {
         settle(20)
         c.get().window.decorView.captureRoboImage(File(dir, "kit-showcase.png").absolutePath)
         c.pause().stop().destroy()
+    }
+
+    /**
+     * Действие справа в заголовке плашки вида v2 (16.10.2026, записи 1–2 отладки): строка заголовка `PanelV2` — 24 dp,
+     * и кнопка словом сжималась в ней до 22 dp — «Понятно» над «Новым» на развороте читалось чёрточкой, так же
+     * «Показать» у «Сделано само». Три плашки: любая v2 с кнопкой «Понятно», «Сервер ответил» (время у строки, крестик —
+     * `ServerNotices`) и «Сделано само · 3» с двумя кнопками. Шириной правой колонки разворота 852 dp (~339 dp) и
+     * сложенным экраном 411 dp, обе темы; кроме картинки — проверка: каждое слово кнопки целиком (не обрезано по высоте,
+     * без многоточия, не ниже 14 dp). Без вкладки и данных приложения. Группа `panel`.
+     */
+    @Test
+    fun panel() {
+        if (!want("panel")) return
+        val zone = TimeZone.getDefault()
+        val msk = java.time.ZoneId.of("Europe/Moscow")
+        val at = java.time.ZonedDateTime.of(2026, 10, 14, 15, 25, 0, 0, msk).toInstant().toEpochMilli()
+        TimeZone.setDefault(TimeZone.getTimeZone(msk))
+        val notices = listOf(
+            ru.zf.pravka.core.DelaNotices.Notice(
+                at + 60_000,
+                ru.zf.pravka.core.DelaNotices.refused("«Да» на «Завести таблицу заказов»", "Уже решено раньше: принято 14.10 в 15:25 — повторять не нужно"),
+                true, "op-1",
+            ),
+            ru.zf.pravka.core.DelaNotices.Notice(at, "правка: «Позвонить Ивану Тестову»: срок меняли и с другой стороны — осталось твоё, прежнее в журнале дела", false, "op-2"),
+        )
+        val words = listOf("Понятно", "Понятно, все", "Свернуть")
+        val bad = mutableListOf<String>()
+        for ((screen, q, w) in listOf(Triple("wide", "w852dp-h900dp-420dpi", 339), Triple("folded", "w411dp-h900dp-420dpi", 0))) {
+            RuntimeEnvironment.setQualifiers(q)
+            for (theme in listOf(ru.zf.pravka.ui.Look.Theme.LIGHT, ru.zf.pravka.ui.Look.Theme.DARK)) {
+                ru.zf.pravka.ui.Look.theme = theme
+                val c = Robolectric.buildActivity(androidx.activity.ComponentActivity::class.java).setup()
+                c.get().setContent {
+                    ru.zf.pravka.ui.PravkaTheme {
+                        androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalMode provides ru.zf.pravka.ui.Modes.Dela) {
+                            androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize().background(ru.zf.pravka.ui.Kv.bg)) {
+                                androidx.compose.foundation.layout.Column(
+                                    (if (w > 0) androidx.compose.ui.Modifier.width(w.dp) else androidx.compose.ui.Modifier.fillMaxWidth()).padding(12.dp),
+                                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
+                                ) {
+                                    ru.zf.pravka.ui.PaperCard(
+                                        label = "плашка с кнопкой словом",
+                                        trailing = { ru.zf.pravka.ui.PaperTextButton("Понятно", onClick = {}) },
+                                    ) { ru.zf.pravka.ui.PaperHint("Кнопка справа — своей высоты, строка заголовка — 24 dp.") }
+                                    ru.zf.pravka.ServerNotices(notices, onClose = {})
+                                    ru.zf.pravka.ui.PaperCard(
+                                        label = "Сделано само · 3",
+                                        trailing = {
+                                            androidx.compose.foundation.layout.Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                                ru.zf.pravka.ui.PaperTextButton("Понятно, все", onClick = {})
+                                                ru.zf.pravka.ui.PaperTextButton("Свернуть", onClick = {})
+                                            }
+                                        },
+                                    ) { ru.zf.pravka.ui.PaperHint("закрыто 2 · уточнено 1 · из встреч") }
+                                }
+                            }
+                        }
+                    }
+                }
+                settle(20)
+                val name = "panel-$screen-${theme.key}"
+                c.get().window.decorView.captureRoboImage(File(dir, "$name.png").absolutePath)
+                val root = c.get().window.decorView.composeRoot()
+                val density = c.get().resources.displayMetrics.density
+                if (root == null) bad += "$name: нет Compose" else for (word in words) wordFits(root, word, density)?.let { bad += "$name: $it" }
+                c.pause().stop().destroy()
+            }
+        }
+        ru.zf.pravka.ui.Look.theme = ru.zf.pravka.ui.Look.Theme.SYSTEM
+        RuntimeEnvironment.setQualifiers(OUTER)
+        TimeZone.setDefault(zone)
+        org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())
+    }
+
+    /**
+     * Слово кнопки видно целиком: не обрезано по высоте, без многоточия, не ниже 14 dp. null — да, иначе что не так.
+     * Ширину не сверяем: под Robolectric `multiParagraph.width` — ширина места, а не текста.
+     */
+    private fun wordFits(root: ViewRootForTest, word: String, density: Float): String? {
+        val node = root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false).firstOrNull { n ->
+            n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == word } == true
+        } ?: return "«$word» нет на экране"
+        val res = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        node.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(res)
+        val l = res.firstOrNull() ?: return "«$word»: нет разметки текста"
+        val hDp = node.size.height / density
+        return when {
+            l.didOverflowHeight -> "«$word» обрезано по высоте: место ${l.size.height}, строка ${l.multiParagraph.height}"
+            l.lineCount > 0 && l.isLineEllipsized(0) -> "«$word» с многоточием"
+            hDp < 14f -> "«$word» высотой ${"%.1f".format(hDp)} dp"
+            else -> null
+        }
     }
 
     @Test

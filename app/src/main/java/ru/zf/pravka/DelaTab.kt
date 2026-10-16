@@ -69,6 +69,7 @@ import kotlinx.coroutines.launch
 import ru.zf.pravka.core.Asks
 import ru.zf.pravka.core.Dela
 import ru.zf.pravka.core.DelaRemind
+import ru.zf.pravka.core.DelaNotices
 import ru.zf.pravka.core.DelaAsk
 import ru.zf.pravka.core.DelaViews
 import ru.zf.pravka.core.DelaGroups
@@ -275,6 +276,35 @@ private class NewParts(
                 DelaViews.asks(snap, me), DelaViews.feed(snap, me, sphere, now), Dela.autoDone(snap, me, now),
                 plan = DelaViews.plan(snap, me, today, now)?.takeIf { it.visible },
             )
+    }
+}
+
+/**
+ * Плашка «Сервер ответил» — отказы и споры правок словами (`DelaStore.ack`): у строки время, справа крестик, как у
+ * «сделано» (отладка 16.10.2026, записи 1–2). Что показывать — `DelaNotices.visible`; снимок — `ScreenShots.panel`.
+ */
+@Composable
+internal fun ServerNotices(list: List<DelaNotices.Notice>, onClose: () -> Unit) {
+    PaperCard(
+        label = "сервер ответил",
+        trailing = { GlyphButton(Glyphs.Close, "убрать", onClick = onClose, size = 30.dp) },
+    ) {
+        for (n in list) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                Text(
+                    DelaNotices.stamp(n.at),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(end = 8.dp),
+                )
+                Text(
+                    n.text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (n.error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
     }
 }
 
@@ -625,7 +655,8 @@ fun DelaTab(
         scope.launch {
             app.delaStore.enqueue(ops)
             val sent = app.delaSync.pushNow(4_000L)
-            val refused = app.delaStore.noticesFor(ops).firstOrNull { it.error }
+            // Сказанный тостом отказ в плашке «Сервер ответил» не повторяется (`tell`, отладка 16.10.2026, запись 1).
+            val refused = app.delaStore.tell(ops)
             Feedback.toast(app, refused?.text ?: if (sent || link == null) said else "$said — уйдёт на сервер, когда будет связь")
         }
     }
@@ -1037,17 +1068,12 @@ fun DelaTab(
             }
         }
 
-        if (notices.isNotEmpty()) {
-            item(key = "notices") {
-                PaperCard(
-                    label = "сервер ответил",
-                    trailing = { PaperTextButton("Понятно", onClick = { scope.launch { app.delaStore.dismissNotices() } }) },
-                ) {
-                    for (n in notices.take(5)) {
-                        PaperHint(n.text, if (n.error) MaterialTheme.colorScheme.error else null)
-                    }
-                }
-            }
+        // «Сервер ответил» (отладка 16.10.2026, записи 1–2): отказ от 14.10 провисел здесь 41 час без времени, и владелец
+        // связал его со своим ответом через два дня, а «Понятно» на развороте сплющилось в чёрточку. Теперь у строки
+        // время, справа крестик, как у «сделано»; заметка старше суток и сказанная тостом сразу после тапа не видна.
+        val noticesNow = DelaNotices.visible(notices, now)
+        if (noticesNow.isNotEmpty()) {
+            item(key = "notices") { ServerNotices(noticesNow, onClose = { scope.launch { app.delaStore.dismissNotices() } }) }
         }
 
         // Шапка — как `head()` веба: «‹» на страницах, ☰ (боковая панель), заголовок и подзаголовок.

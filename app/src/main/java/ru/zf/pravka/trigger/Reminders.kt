@@ -204,11 +204,13 @@ class Reminders(private val app: PravkaApp) {
     /**
      * Кнопка напоминания — в уведомлении или строкой на «Сегодня»: «Сделано», «Через час», «Завтра» (9:00). Обычная
      * операция очереди: без связи ляжет и уйдёт сама, строка с «Сегодня» уходит сразу (очередь поверх копии).
-     * Возвращает слова для тоста.
+     * Возвращает слова для тоста. [toast] — их и правда покажут тостом: тогда отказ сервера в плашке «Сервер ответил»
+     * не повторяется (отладка 16.10.2026, запись 1); кнопка уведомления тоста не показывает — отказ остаётся в плашке.
      */
-    suspend fun act(taskId: String, act: Act, from: String): String = withContext(Dispatchers.IO) { actIo(taskId, act, from) }
+    suspend fun act(taskId: String, act: Act, from: String, toast: Boolean = true): String =
+        withContext(Dispatchers.IO) { actIo(taskId, act, from, toast) }
 
-    private suspend fun actIo(taskId: String, act: Act, from: String): String {
+    private suspend fun actIo(taskId: String, act: Act, from: String, toast: Boolean): String {
         cancel(taskId)
         app.delaStore.load()
         val t = app.delaStore.view.value.tasks[taskId] ?: return "Напоминания уже нет"
@@ -222,7 +224,7 @@ class Reminders(private val app: PravkaApp) {
         app.eventLog.add("напоминания: «${t.title.take(40)}» — ${act.name.lowercase()} ($from)")
         val sent = runCatching { app.delaSync.pushNow(4_000L) }.getOrDefault(false)
         runCatching { fire("кнопка") }
-        val refused = app.delaStore.noticesFor(listOf(op)).firstOrNull { it.error }
+        val refused = if (toast) app.delaStore.tell(listOf(op)) else app.delaStore.noticesFor(listOf(op)).firstOrNull { it.error }
         return refused?.text ?: if (sent) said else "$said — уйдёт на сервер, когда будет связь"
     }
 

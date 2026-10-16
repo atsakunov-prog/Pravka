@@ -180,7 +180,8 @@ internal class DelaCrmContext(
             // Тост — после ответа сервера и его словами (правило 6 карты): отказ («склеивает людей только владелец»)
             // или заметка ответа (««Ваня» не дописал — так зовут Иван Петров», аудит №1) — вместо «Имя дописано».
             // Только заметки своих операций: свежая чужая (фоновая отправка той же минуты) — не ответ на эту правку.
-            val said = app.delaStore.noticesFor(ops).firstOrNull()?.text
+            // Сказанное тостом в плашке «Сервер ответил» не повторяется (`tell`, отладка 16.10.2026).
+            val said = app.delaStore.tell(ops, errorsOnly = false)?.text
             if (done.isNotBlank() || said != null) Feedback.toast(app, said ?: if (sent) done else "$done — уйдёт, когда будет связь")
             if (sent) for (p in refresh.distinct()) app.delaSync.crmView(p)
         }

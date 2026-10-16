@@ -137,7 +137,7 @@ internal fun DelaDebugBar(app: PravkaApp, screen: () -> DelaDebug.Screen, modifi
             )
             val words = runCatching { app.delaDebug.send(op) }.getOrElse { "Не записал: ${it.message}" }
             // Отказ сервера — текст остаётся в поле: дописать и отправить ещё раз. Легло в очередь — поле пустое.
-            if (!words.startsWith("Сервер не принял") && !words.startsWith("Не записал")) {
+            if (!words.startsWith(ru.zf.pravka.core.DelaNotices.REFUSED) && !words.startsWith("Не записал")) {
                 text = ""
                 held = null
             }
