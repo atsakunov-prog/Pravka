@@ -340,8 +340,9 @@ def test_schema_fits_grammar():
 
 def test_task_card_sees_only_this_task_and_new_lands_next_to_it(dela):
     """Карточка дела (13.10.2026): строка «Что поправить в этом деле?» — Claude видит только это дело (поля, заметку
-    целиком, журнал, место в дереве, проект и клиента коротко); новое дело ложится рядом — тот же проект, сделка и
-    цель; факт — в хронологию клиента дела; модель — дорога «task» (одно место, Свод models.dela)."""
+    целиком, журнал, место в дереве, проект и клиента коротко); новое дело ложится рядом — к той же цели, проект — тот,
+    что назвал Claude (с 16.10.2026, запись 23), сделка дела — за ним; факт — в хронологию клиента дела; модель — дорога
+    «task» (одно место, Свод models.dela)."""
     from pravka_dela import krug, llm
 
     p, org, bank, olga, ivan, deal = _client(dela)
@@ -358,7 +359,7 @@ def test_task_card_sees_only_this_task_and_new_lands_next_to_it(dela):
     def fake(system, user_text):
         seen["user"] = user_text
         return empty_card(route="new", changes=[item(t["num"], notes_add="фонды просят цифры за 3 года")],
-                          create=[item(0, title="Запросить у Ольги отчётность")], card=[cd("note", text="Фонды просят цифры")],
+                          create=[item(0, title="Запросить у Ольги отчётность", project="Альфа")], card=[cd("note", text="Фонды просят цифры")],
                           reply="Дописал, завёл рядом и записал в хронологию.", _usage=None)
 
     def no_parse(*_):
@@ -439,3 +440,129 @@ def test_card_sees_meetings_with_agreements(dela):
     assert "Альфа: фонды: Обсудили фонды · договорились: Прислать тизер к пятнице; Созвон в среду" in ctx["screen"]
     ctx = ask.context(dela, "sasha", "что по сделке?", {"card": "deal", "deal_id": str(deal)})
     assert "Встречи по ней (свежие сверху):" in ctx["screen"]
+
+
+def _new(title, **kw):
+    """Новое дело в ответе Claude по схеме create: всё пусто, кроме сказанного."""
+    return {"title": title, "notes_add": "", "project": "", "person": "", "due": "", "ball": "", "now": "", "into": "",
+            "goal": False, **kw}
+
+
+def _task(url, tid):
+    with parse.db.session(url, "sasha", "t") as c:
+        return store.jsonable(c.execute("SELECT * FROM tasks.v_tasks WHERE id = %s", (tid,)).fetchone())
+
+
+def test_card_line_one_action_one_task(dela):
+    """Запись отладки 23 (16.10.2026): в карточке «Дожать Ивана…» Саша сказал «не дожать, а проверить интерес в
+    понедельник, и плюс Бету проговорить с ним» — Claude переименовал дело и дописал «Проговорить с ним Бету» в заметку.
+    Теперь «ОДНО ДЕЙСТВИЕ — ОДНО ДЕЛО»: промпт несёт правило (общий раздел, КАРТОЧКА ДЕЛА, КСТАТИ), create из карточки
+    ложится рядом — к тому же «Зачем», человек — названный, проект — только названный (сделка дела — за ним), срок — только
+    сказанный для него. Claude подменён ($0): проверяется проводка вокруг вызова. Имена выдуманные."""
+    from pravka_dela import krug
+
+    p, org, bank, olga, ivan, deal = _client(dela)
+    ops(dela, "sasha", [{"op": "svod.set", "key": krug.DIRECTIONS_KEY, "author": "test",
+                         "value": [{"key": "work", "pos": 3, "name": "Дело", "short": "Дело"}]}])
+    today = db_today(dela)
+    monday = today + dt.timedelta(days=7 - today.weekday())
+    goal = mk(dela, "Альфа растёт", goal=True, directions=["work"])
+    t = mk(dela, "Дожать Ивана (Альфа) до ответа по сделке", why_id=goal["id"], project_id=str(p), deal_id=str(deal),
+           notes="После встречи не ответил.", due_date=(today - dt.timedelta(days=7)).isoformat())
+    scope = {"card": "task", "open": t["id"]}
+    seen = {}
+
+    def run(said, answer, **sc):
+        def fake(system, user_text):
+            seen["system"], seen["user"] = system, user_text
+            return empty_card(**answer, _usage=None)
+
+        def no_parse(*_):
+            raise AssertionError("из карточки дела разбор надиктовки не зовём")
+
+        return ask.run(dela, "sasha", said, {**scope, **sc}, "", None, ask_fn=fake, parse_fn=no_parse)
+
+    # 1. Правка самого дела и отдельное действие «с ним» — дело рядом: тот же «Зачем», человек, проект и сделка дела.
+    out = run("надо Ивана не дожать, а проверить интерес в понедельник, и плюс Бету проговорить с ним", {
+        "changes": [item(t["num"], title="Проверить интерес Ивана (Альфа) к сделке", due=monday.isoformat())],
+        "create": [_new("Проговорить Бету с Иваном", person="Иван", project="Альфа")],
+        "reply": "Переименовал и поставил на понедельник; «Проговорить Бету с Иваном» — отдельным делом рядом."})
+    s = " ".join(seen["system"].split())  # промпт переносится по строкам — сверяем одной строкой
+    assert s.count("ОДНО ДЕЙСТВИЕ — ОДНО ДЕЛО") >= 5  # общий раздел, notes_add, create, КАРТОЧКА ДЕЛА, КСТАТИ
+    assert "Сомневаешься, дело это или заметка, — заводи дело" in s and "notes_add — только факт, цифра или условие" in s
+    assert "(сервер сам поставит его к тому же «Зачем», что у этого дела)" in s
+    assert "проект, сделка и цель возьмутся от этого дела сами" not in s
+    assert not out["errors"], out["errors"]
+    ch = out["changed"][0]
+    assert ch["after"] == {"title": "Проверить интерес Ивана (Альфа) к сделке", "due_date": monday.isoformat()}
+    assert "noted" not in ch  # заметку не трогал — кнопки «Это отдельное дело» нет
+    near = out["tasks"][0]
+    assert (near["title"], near["why_id"], near["person_id"], near["project_id"], near["deal_id"], near["due_date"]) == (
+        "Проговорить Бету с Иваном", goal["id"], str(ivan), str(p), str(deal), None)
+    assert _task(dela, t["id"])["notes"] == "После встречи не ответил."
+
+    # 2. Факт без своего действия — заметка, нового дела нет; у правки — noted (что дописано) для страховочной кнопки.
+    out = run("он в отпуске до 20-го", {"changes": [item(t["num"], notes_add="В отпуске до 20-го.")]}, kstati=True)
+    assert seen["user"].rstrip().endswith("КСТАТИ — Саша вдогонку к этому делу: он в отпуске до 20-го")
+    assert not out["errors"] and out["tasks"] == []
+    ch = out["changed"][0]
+    assert ch["noted"] == "В отпуске до 20-го." and ch["after"]["notes"] == "После встречи не ответил.\nВ отпуске до 20-го."
+
+    # 3. Два действия — два дела рядом; проект не назван — сервер его не ставит (ошибочный клиент открыл бы дело команде).
+    out = run("и ещё позвонить Ольге и отправить счёт", {
+        "create": [_new("Позвонить Ольге", person="Ольга"), _new("Отправить счёт Альфе", project="Альфа")]})
+    assert not out["errors"], out["errors"]
+    call, bill = out["tasks"]
+    assert (call["why_id"], call["person_id"], call["project_id"], call["deal_id"]) == (goal["id"], str(olga), None, None)
+    assert (bill["why_id"], bill["person_id"], bill["project_id"], bill["deal_id"]) == (goal["id"], None, str(p), str(deal))
+    assert len(_task(dela, t["id"])["notes"].splitlines()) == 2  # заметка дела — как после второй реплики
+
+
+def test_split_note_pack_is_accepted(dela):
+    """«Это отдельное дело» ($0, запись 23): веб и телефон шлют одной пачкой /api/ops task.create (дописанное названием,
+    «Зачем», клиент, сделка, человек дела) и task.set notes без дописанного, с was; «Вернуть» — отмена нового и заметка
+    как была. Сервер принимает пачку как есть."""
+    import uuid as _uuid
+
+    p, org, bank, olga, ivan, deal = _client(dela)
+    goal = mk(dela, "Альфа растёт", goal=True)
+    full = "После встречи не ответил.\nПроговорить с ним Бету."
+    t = mk(dela, "Проверить интерес Ивана", why_id=goal["id"], project_id=str(p), deal_id=str(deal), person_id=str(ivan),
+           notes=full)
+    nid = str(_uuid.uuid4())
+    pack = [{"op": "task.create", "task": {"id": nid, "title": "Проговорить с ним Бету", "source": "web", "why_id": goal["id"],
+                                           "project_id": str(p), "deal_id": str(deal), "person_id": str(ivan)}},
+            {"op": "task.set", "id": t["id"], "set": {"notes": "После встречи не ответил."}, "was": {"notes": full}}]
+    r = ops(dela, "sasha", pack)
+    assert all(x["ok"] for x in r) and not r[1].get("conflicts"), r
+    new = _task(dela, nid)
+    assert (new["why_id"], new["project_id"], new["deal_id"], new["person_id"], new["due_date"]) == (
+        goal["id"], str(p), str(deal), str(ivan), None)
+    assert _task(dela, t["id"])["notes"] == "После встречи не ответил."
+    back = [{"op": "task.cancel", "id": nid},
+            {"op": "task.set", "id": t["id"], "set": {"notes": full}, "was": {"notes": "После встречи не ответил."}}]
+    assert all(x["ok"] for x in ops(dela, "sasha", back))
+    assert _task(dela, nid)["status"] == "cancelled" and _task(dela, t["id"])["notes"] == full
+
+
+def test_web_split_note_button():
+    """Веб (запись 23): у правки, где Claude дописал заметку, — «Это отдельное дело»: одна пачка task.create + task.set
+    notes с was, тост с «Вернуть»; «Вернуть» реплики отменяет и отделённое; память реплики говорит о нём Claude."""
+    from pathlib import Path
+
+    js = (Path(store.__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
+
+    def fn(head: str) -> str:
+        body = js[js.index(head):]
+        return body[:body.index("\n}\n")]
+
+    pack = fn("function splitNoteOps(")
+    assert "op: 'task.create'" in pack and "set: { notes: cut || null }, was: { notes: x.notes || null }" in pack
+    assert "x.goal ? x.id : x.why_id" in pack and "['project_id', 'deal_id', 'person_id']" in pack
+    assert "op: 'task.cancel', id" in pack and "due_date" not in pack
+    row = fn("function splitRow(")
+    assert "'Это отдельное дело'" in row and "await ops(sp.ops)" in row and "toast('Отдельное дело: «'" in row
+    assert "await ops(sp.back)" in row
+    assert "if (c.noted) return" in fn("function notedOf(") and "lastIndexOf(n)" in fn("function noteCut(")
+    assert "splitRow(t, c)" in fn("function turnView(") and "turnUndo(d, t)" in fn("function turnView(")
+    assert "turn.split" in fn("function turnUndo(") and "'отдельным делом: '" in fn("function turnMemo(")

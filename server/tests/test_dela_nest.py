@@ -101,8 +101,8 @@ def test_before_this_goes_inside_not_to_notes(dela):
         t["id"], str(p), str(deal), str(ivan), today.isoformat())
     assert inside["focus_on"] is None  # «Сейчас» — только если сказал
     assert out["steps"] == [inside["id"]]
-    # Рядом — к той же цели, без срока родителя и без человека.
-    assert (near["why_id"], near["project_id"], near["due_date"], near["person_id"]) == (goal["id"], str(p), None, None)
+    # Рядом — к той же цели, без срока родителя и без человека; проект — только названный Claude (запись 23, 16.10.2026).
+    assert (near["why_id"], near["project_id"], near["due_date"], near["person_id"]) == (goal["id"], None, None, None)
     assert out["reply"] == ("Завёл для «Подготовить простой термшит и отправить Ивану»: «Набросать драфт из расшифровки встречи», "
                             "на сегодня. Ещё завёл рядом отдельное.")
     me = row(dela, t["id"])

@@ -3367,7 +3367,7 @@ function describe(c) {
     const who = 'person_id' in a ? personName(person(a.person_id)) : '';
     out.push('ball' in a || 'owed' in a ? grpWho(a, who) : 'человек' + (who ? ' ' + who : ''));
   }
-  if ('notes' in a) out.push('дописал заметку');
+  if ('notes' in a) { const n = notedOf(c); out.push('дописал заметку' + (n ? ': «' + (n.length > 80 ? n.slice(0, 80) + '…' : n) + '»' : '')); }
   // Куда положено (16.10.2026, правило 33): под цель, внутрь дела, прямо в направление, вынуто.
   if ('why_id' in a) {
     const w = a.why_id ? S.tasks.get(a.why_id) : null;
@@ -3384,6 +3384,78 @@ function describe(c) {
 }
 
 const DECIDED = { create: 'заведено', close: 'закрыто', update: 'уточнено', assign: 'взято себе' };
+
+// ── «Это отдельное дело» (16.10.2026, отладка, запись 23; правило 16 карты) ──
+// «…и плюс Бету проговорить с ним» Claude дописал в заметку дела, а это ещё одно дело: «я редко когда делаю комментарии
+// к делам, я в основном завожу дополнительные дела». Промпт теперь требует «одно действие — одно дело», а под правкой,
+// где Claude всё же дописал заметку, — страховочная кнопка без Claude ($0). Одно правило с телефоном (Dela.splitNoteOps).
+/** Что Claude дописал в заметку правкой: noted сервера; ответ старого сервера — хвост after.notes за before.notes. */
+function notedOf(c) {
+  const a = (c && c.after) || {};
+  if (!('notes' in a)) return '';
+  if (c.noted) return String(c.noted).trim();
+  const was = String(((c.before || {}).notes) || '').replace(/\s+$/, ''), now = String(a.notes || '');
+  return now.startsWith(was) ? now.slice(was.length).trim() : '';
+}
+/** Заметка без дописанного: последнее вхождение вырезано, стык — одной строкой; его в заметке нет — null (заметку не
+ *  трогаем: её успели поправить руками). */
+function noteCut(cur, noted) {
+  const c = String(cur || ''), n = String(noted || '').trim();
+  const i = n ? c.lastIndexOf(n) : -1;
+  if (i < 0) return null;
+  return [c.slice(0, i).replace(/\s+$/, ''), c.slice(i + n.length).replace(/^\s+/, '')].filter(Boolean).join('\n');
+}
+/** Название нового дела из дописанного: одной строкой, без точки в конце, с большой буквы. */
+function splitTitle(n) {
+  const s = String(n || '').replace(/\s+/g, ' ').trim().replace(/[\s.,;:]+$/, '');
+  return (s.charAt(0).toUpperCase() + s.slice(1)).slice(0, 300);
+}
+/** Пачка «Это отдельное дело» для правки c дела x (как оно сейчас): task.create — дописанное названием, «Зачем» дела (у
+ *  цели — её шагом), его клиент, сделка и человек — и task.set notes без дописанного, с was. back — «Вернуть». Срок не
+ *  ставим: сказан он был для самого дела (внутри дела-родителя сервер возьмёт срок родителя — правило 27). */
+function splitNoteOps(c, x) {
+  const n = notedOf(c);
+  const title = splitTitle(n);
+  if (!x || !title) return null;
+  const id = uuid();
+  const task = { id, title, source: 'web' };
+  const why = x.goal ? x.id : x.why_id;
+  if (why) task.why_id = why;
+  for (const k of ['project_id', 'deal_id', 'person_id']) if (x[k]) task[k] = x[k];
+  const cut = noteCut(x.notes, n);
+  const ops = [{ op: 'task.create', task }], back = [{ op: 'task.cancel', id }];
+  if (cut !== null) {
+    ops.push({ op: 'task.set', id: x.id, set: { notes: cut || null }, was: { notes: x.notes || null } });
+    back.push({ op: 'task.set', id: x.id, set: { notes: x.notes || null }, was: { notes: cut || null } });
+  }
+  return { id, title, ops, back };
+}
+/** Под правкой с дописанной заметкой — «Это отдельное дело»; после — «Отдельным делом: «…»» (открывает его). «Вернуть» —
+ *  тостом; «Вернуть» всей реплики отменяет и его (turnUndo). */
+function splitRow(turn, c) {
+  const made = (turn.split || {})[c.id];
+  if (made) return el('div', { class: 'cr-split' }, el('button', { type: 'button', class: 'link-btn', onclick: () => openCard(made.id) },
+    'Отдельным делом: «' + made.title + '»'));
+  if (turn.undone || !notedOf(c) || !S.tasks.get(c.id)) return null;
+  return el('div', { class: 'cr-split' }, el('button', { type: 'button', class: 'chip-btn',
+    title: 'Дописанное в заметку — отдельным делом рядом: тот же «Зачем», клиент, сделка и человек; из заметки уберу',
+    onclick: async (e) => {
+      const sp = splitNoteOps(c, S.tasks.get(c.id));
+      if (!sp) return;
+      e.currentTarget.disabled = true;
+      try {
+        await ops(sp.ops);
+        turn.split = { ...(turn.split || {}), [c.id]: { id: sp.id, title: sp.title } };
+        render();
+        toast('Отдельное дело: «' + sp.title + '»', async () => {
+          await ops(sp.back);
+          const left = { ...(turn.split || {}) };
+          delete left[c.id];
+          turn.split = left;
+        });
+      } catch (err) { render(); fail(err); }
+    } }, 'Это отдельное дело'));
+}
 
 // ── Разговор с Claude прямо под строкой (владелец 13.10.2026, заход Д) ─
 // «Строка вверху — „Саша, что ты хочешь спросить?“ (подпись с 16.10.2026 — «Добавь дело или скажи, что сделать»: запись
@@ -3580,15 +3652,18 @@ function turnMemo(t) {
     for (const x of d.decided || []) out.push(`П${x.n} ${x.decision === 'accept' ? DECIDED[x.kind] || 'принято' : 'отклонено'}`);
     for (const c of d.crm || []) out.push(c.what);
   }
+  const split = Object.values(t.split || {}); // «Это отдельное дело» (запись 23): Саша отделил дописанное делом
+  for (const s of split) out.push('отдельным делом: ' + s.title);
   if ((d.errors || []).length) out.push('не вышло: ' + d.errors.join('; '));
-  const ids = turnIds(d);
+  const ids = [...new Set([...turnIds(d), ...split.map((s) => s.id)])].slice(0, 20);
   return { said: t.said.slice(0, 600), reply: (d.reply || '').slice(0, 900),
     done: (out.join('; ') || 'ничего не менял').slice(0, 700) + (t.undone ? ' — Саша вернул всё это как было' : ''),
     ...(ids.length ? { ids } : {}) };
 }
 
-/** Отмена реплики: правки дел — как было, заведённое — отменой, карточка — её «как было». */
-function turnUndo(d) {
+/** Отмена реплики: правки дел — как было, заведённое — отменой, карточка — её «как было»; дело, отделённое кнопкой «Это
+ *  отдельное дело» (turn.split), — тоже отменой. */
+function turnUndo(d, turn) {
   const back = [];
   if (d.capture) {
     // Захват: «Вернуть» реплики — undo каждой записи (дело — отменой, заметка — убрать, идея — убрать, сделанное — как было).
@@ -3605,6 +3680,7 @@ function turnUndo(d) {
     if (c.status) back.push({ op: { open: 'task.reopen', done: 'task.done', cancelled: 'task.cancel' }[c.status[0]], id: c.id });
   }
   for (const t of [...(d.tasks || []), ...took.filter((x) => x.created)]) back.push({ op: 'task.cancel', id: t.id });
+  for (const s of Object.values((turn && turn.split) || {})) back.push({ op: 'task.cancel', id: s.id });
   for (const c of d.crm || []) back.push(...(c.undo || [])); // карточка: хронология, люди, сделки — как было
   return back;
 }
@@ -3635,8 +3711,9 @@ function turnView(t) {
         describe(x) ? el('div', { class: 'cr-meta' }, describe(x)) : null)
       : el('div', { class: 'cr-task' }, el('div', {}, `П${x.n} отклонено: ${sugTitle(x)}`),
         x.reason ? el('div', { class: 'cr-meta' }, x.reason) : null))));
-    items.push((d.changed || []).map((c) => el('button', { class: 'cr-task', onclick: open(c.id) },
-      el('div', {}, c.after?.title || c.title), el('div', { class: 'cr-meta' }, describe(c)))));
+    // Дописал заметку — под правкой «Это отдельное дело» (запись 23, splitRow).
+    items.push((d.changed || []).map((c) => [el('button', { class: 'cr-task', onclick: open(c.id) },
+      el('div', {}, c.after?.title || c.title), el('div', { class: 'cr-meta' }, describe(c))), splitRow(t, c)]));
     if ((d.tasks || []).length) items.push(el('div', { class: 'cr-sub' }, 'Новые:'));
     // Новое — где оно легло (16.10.2026, правило 33): «цель · под целью «…»», «внутри «…»», «в направлении …».
     const placeOfNew = (x) => {
@@ -3649,7 +3726,7 @@ function turnView(t) {
     if ((d.crm || []).length) items.push(el('div', { class: 'cr-sub' }, 'Проекты, люди, хронология:'));
     items.push((d.crm || []).map((c) => el('div', { class: 'cr-note' }, c.what)));
   }
-  const back = turnUndo(d);
+  const back = turnUndo(d, t);
   const dropped = (d.decided || []).some((x) => x.decision === 'reject');
   const nothing = !items.flat().length && !(d.errors || []).length && !(d.refs || []).length;
   return el('div', { class: 'cr-turn' + (t.undone ? ' undone' : '') },

@@ -688,6 +688,8 @@ button.cr-task:hover { background: var(--hover); }
 .cr-reply { font-size: 14.5px; margin: 0 8px 8px; line-height: 1.5; }
 .cr-sub { font-size: 12.5px; color: var(--faint); margin: 10px 8px 2px; font-weight: 600; }
 .cr-note { font-size: 14px; padding: 4px 10px; margin: 4px 8px; background: var(--panel-2); border-radius: 7px; }
+/* «Это отдельное дело» под правкой, где Claude дописал заметку (16.10.2026, запись 23). */
+.cr-split { margin: 0 8px 6px; font-size: 13px; }
 .cr-err {
   font-size: 13.5px; color: var(--bad); margin: 8px; padding: 8px 12px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere;
   background: color-mix(in srgb, var(--bad) 7%, var(--panel)); border: 1px solid color-mix(in srgb, var(--bad) 40%, var(--line));
