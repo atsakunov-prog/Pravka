@@ -9,7 +9,7 @@
 - **Слот** — время вечернего захода из asks.py (Свод asks.rhythm): Пн–Чт 18:00 на завтра, Пт 14:00 (с 15.11 по 15.01 —
   13:30) на понедельник, Сб–Вс — ничего. Один прогон в день: пачка plan:<день> уже в базе — второй прогон ничего не
   пишет (`run`, под замком; память crm.state plan.run_day — только чтобы не звать его каждую минуту); служба лежала —
-  догонка 4 часа (LATE). op_id — uuid5 от source_ref.
+  догонка Пн–Чт 4 часа (LATE), в пятницу — час и не позже свечей − 1 ч (`catch_until`). op_id — uuid5 от source_ref.
 - **Кандидаты** (`candidates`) — свои открытые дела владельца, не цели; пять корзин (`BASKETS`), у каждой своя квота;
   места — по весам судьи (`PICK`), показ — `SHOW`. Не берутся: уже стоит на этот день, уже ждёт кандидат, «Не надо»
   за 3 дня, два прогона подряд без ответа — пауза 3 дня, третий день подряд в «Сейчас» — строка stuck, не кандидат.
@@ -30,7 +30,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import asks, crm, db, krug, store
+from . import asks, crm, db, krug, sky, store
 from .meetings import MSK
 
 log = logging.getLogger("dela.plan")
@@ -42,9 +42,14 @@ SVOD_KEY = "plan.tomorrow"
 # Комп спал в слот — догоняем до 4 часов после него (Пн–Чт до 22:00), а не утром: утром кандидаты уже гаснут. С 15.10
 # заход Пн–Чт в 18:00, а не в 19:00; окно догонки сдвинулось вместе с ним, а не растянуто до прежних 23:00: Саша
 # перенёс заход раньше, потому что поздний вечер у него семейный, — пачке, опоздавшей больше чем на 4 часа, там тем
-# более не место; и LATE общий с пятницей (14:00 → 18:00, зимой 13:30 → 17:30) — пять часов увели бы её догонку ещё
-# на час за свечи.
+# более не место. Пятница — своё окно (FRI_LATE, catch_until), а не эти 4 часа.
 LATE = dt.timedelta(hours=4)
+# Пятница (поезд 16.10.2026, слово главной сессии — Шаббат): догонка не дольше часа после захода и не позже свечей − 1 ч,
+# что раньше. С общими 4 часами пятничная догонка заходила за свечи: 14:00 → 18:00 при свечах 17:09 (16.10), зимой
+# 13:30 → 17:30 при свечах 15:38 (18.12) — сервер клал бы кандидатов на понедельник уже в шаббат. Опоздала больше —
+# в эту пятницу кандидатов нет: понедельник Саша отметит сам, а плана на понедельник с субботы не бывает.
+FRI_LATE = dt.timedelta(hours=1)
+FRI_CANDLES = dt.timedelta(hours=1)
 SNAPS = (("11", 11, 0), ("18", 18, 0), ("2355", 23, 55))  # 18:00 — «Сейчас» дня до прогона (и в дни без прогона)
 SNAP_BACK = 3                      # пропущенные дни снимка — до трёх назад
 STATS_DAYS = 14
@@ -650,6 +655,21 @@ def _save(url: str, value: dict) -> None:
                      (STATE_KEY, Jsonb(value)))
 
 
+def catch_until(slot: dt.datetime, where: dict | None = None) -> dt.datetime:
+    """До какого мига догонять заход slot, если служба лежала: Пн–Чт — slot + LATE (4 ч); пятница — slot + FRI_LATE
+    (1 ч) или свечи − FRI_CANDLES (1 ч), что раньше. Свечи — sky.shabbat по месту where (Свод today.weather, как
+    «Сегодня»; нет — Москва). Заход сам позже свечей − 1 ч (кривое время в Своде) — окна нет: пятница без прогона."""
+    if slot.astimezone(MSK).weekday() != asks.FRIDAY:
+        return slot + LATE
+    end = slot + FRI_LATE
+    w = where or sky.DEFAULT_PLACE
+    day = slot.astimezone(MSK).date()
+    sh = sky.shabbat(dt.datetime(day.year, day.month, day.day, tzinfo=MSK), w["lat"], w["lon"])
+    if sh and sh.get("candles_at"):
+        end = min(end, dt.datetime.fromisoformat(sh["candles_at"]) - FRI_CANDLES)
+    return end
+
+
 def tick(url: str, now: dt.datetime | None = None) -> dict | None:
     """Раз в минуту из serve (rules_loop, без условия на ключ Claude): уборка, снимки дня и, в свой слот, прогон.
     Ответ — что сделано (None — ничего)."""
@@ -681,7 +701,8 @@ def tick(url: str, now: dt.datetime | None = None) -> dict | None:
         did["snap"] = today.isoformat()
     with db.session(url, owner, via=SOURCE) as conn:
         slot = asks.evening_at(asks.rhythm(conn, owner), today)
-    if slot and msk >= slot and msk - slot <= LATE and st.get("run_day") != today.isoformat():
+        where = sky.place(conn, owner) if slot and slot.weekday() == asks.FRIDAY else None
+    if slot and slot <= msk <= catch_until(slot, where) and st.get("run_day") != today.isoformat():
         snap(url, today, owner)  # «Сейчас» дня — до того, как кнопки «☆ На завтра» начнут его переносить
         out = run(url, now)
         st["run_day"] = today.isoformat()

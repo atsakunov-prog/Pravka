@@ -239,6 +239,53 @@ def test_rhythm_friday_and_candles():
     assert plan.next_day(dt.date(2026, 10, 18)) == dt.date(2026, 10, 19) and plan.run_day(dt.date(2026, 10, 19)) == dt.date(2026, 10, 16)
 
 
+def test_friday_catch_up_before_candles():
+    """Пятничная догонка (поезд 16.10.2026, Шаббат): служба лежала в заход — кандидатов на понедельник сервер кладёт не
+    дольше часа после захода и не позже свечей − 1 ч, что раньше; будни — 4 часа (Пн–Чт до 22:00). Каждая пятница
+    2026–2027 (Москва с завода), как тест «заход не позже свечей − 2 ч»."""
+    rh, _ = asks.norm(None)
+    thu = asks.evening_at(rh, dt.date(2026, 10, 15))
+    assert plan.catch_until(thu) == at(dt.date(2026, 10, 15), 22)
+    lat, lon = sky.DEFAULT_PLACE["lat"], sky.DEFAULT_PLACE["lon"]
+    day, margin = dt.date(2026, 1, 2), dt.timedelta(days=1)
+    while day.year < 2028:
+        slot = asks.evening_at(rh, day)
+        until = plan.catch_until(slot)
+        candles = dt.datetime.fromisoformat(sky.shabbat(at(day, 0), lat, lon)["candles_at"])
+        assert slot < until <= slot + dt.timedelta(hours=1), (day, until)
+        assert until <= candles - dt.timedelta(hours=1), (day, until, candles)
+        margin = min(margin, candles - until)
+        day += dt.timedelta(days=7)
+    assert margin >= dt.timedelta(hours=1)
+    # Время из Свода позже: 14:15 в декабре (свечи 15:38) — догонка до свечей − 1 ч, а не до 15:15; заход после свечей
+    # − 1 ч — окна нет вовсе.
+    dec = dt.date(2026, 12, 18)
+    candles = dt.datetime.fromisoformat(sky.shabbat(at(dec, 0), lat, lon)["candles_at"])
+    late, _ = asks.norm({"fri_winter": "14:15"})
+    assert plan.catch_until(asks.evening_at(late, dec)) == candles - dt.timedelta(hours=1) < at(dec, 15, 15)
+    slot = at(dec, 15)
+    assert plan.catch_until(slot) < slot
+    # Место — Свод today.weather (как «Сегодня»): в Иерусалиме свечи позже, чем в Москве в декабре.
+    jer = {"lat": 31.78, "lon": 35.22}
+    assert plan.catch_until(slot, jer) == slot + dt.timedelta(hours=1)
+
+
+def test_tick_friday_catches_up_before_candles(dela):
+    """tick в пятницу (18.12.2026: заход 13:30, свечи в Москве 15:38): догонка — до 14:30, позже прогона нет."""
+    fri = dt.date(2026, 12, 18)
+    assert (plan.tick(dela, at(fri, 14, 31)) or {}).get("run") is None
+    got = plan.tick(dela, at(fri, 14, 29))
+    assert got["run"]["for_date"] == "2026-12-21", got
+    # Свод: пятница в 14:15 — окно до свечей − 1 ч.
+    ok(dela, "sasha", {"op": "svod.set", "key": asks.SVOD_KEY, "value": {"fri_winter": "14:15"}, "author": "test"})
+    with dela_db.session(dela, "system", "test") as c:
+        c.execute("UPDATE crm.state SET value = value - 'run_day' WHERE key = 'plan'")
+    candles = dt.datetime.fromisoformat(sky.shabbat(at(fri, 0), sky.DEFAULT_PLACE["lat"], sky.DEFAULT_PLACE["lon"])["candles_at"])
+    edge = candles - dt.timedelta(hours=1)
+    assert (plan.tick(dela, edge + dt.timedelta(minutes=1)) or {}).get("run") is None
+    assert plan.tick(dela, edge - dt.timedelta(minutes=1))["run"]["for_date"] == "2026-12-21"
+
+
 def test_rhythm_from_svod(dela):
     ok(dela, "sasha", {"op": "svod.set", "key": asks.SVOD_KEY, "value": {"fri": "13:15", "evening": "кривое"}, "author": "test"})
     with dela_db.session(dela, "sasha", via="test") as c:
@@ -266,6 +313,8 @@ def test_friday_three_for_monday(dela):
 def test_tick_runs_once_and_catches_up_late(dela, monkeypatch):
     today = db_today(dela)
     monkeypatch.setattr(plan.asks, "evening_at", lambda rh, day: at(day, 18))
+    # Догонка будней — 4 часа в любой день прогона тестов (и в пятницу); пятница — test_friday_catch_up_before_candles.
+    monkeypatch.setattr(plan, "catch_until", lambda slot, where=None: slot + plan.LATE)
     for i in range(3):
         t = mk(dela, title=f"Ответить {i}", ball="owed")
         aged(dela, t["id"], 4)
@@ -314,6 +363,7 @@ def test_second_run_same_day_writes_nothing(world, dela, monkeypatch):
     assert dry["dry"] and dry["offered"] == 7 and dry["items"] and len(plan_sugs(dela)) == 7
     # Служба перезапустилась между прогоном и памятью run_day: tick в окне догонки — тоже ничего.
     monkeypatch.setattr(plan.asks, "evening_at", lambda rh, day: at(day, 18))
+    monkeypatch.setattr(plan, "catch_until", lambda slot, where=None: slot + plan.LATE)  # будни — и в пятницу тестов
     monkeypatch.setattr(plan, "next_day", lambda d: d + dt.timedelta(days=1))
     got = plan.tick(dela, at(w["today"], 21))
     assert "уже предложено 7" in got["run"]["skipped"], got
