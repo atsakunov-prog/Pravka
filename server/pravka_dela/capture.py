@@ -2027,8 +2027,10 @@ def prompt_parts(url: str, user: str, now: dt.datetime | None = None) -> dict:
 
 
 def _model_items(url: str, user: str, text: str, hint: str | None, key: str, proxy: str | None, ask_fn,
-                 now: dt.datetime) -> tuple[list[dict], dict, dict | None]:
-    """Модель на фразу: (корзины, указатели справочника, usage). ask_fn(head, user_text) — подмена Claude в тестах."""
+                 now: dt.datetime, quota: bool = False) -> tuple[list[dict], dict, dict | None]:
+    """Модель на фразу: (корзины, указатели справочника, usage). ask_fn(head, user_text) — подмена Claude в тестах.
+    quota — фраза идёт к модели первый раз мимо строки веба (фоновый разбор): у не-владельца это один разбор суточного
+    предела (guard.quota «parse»), сверх — guard.OverQuota до вызова."""
     from . import parse
 
     parts = prompt_parts(url, user, now)
@@ -2042,6 +2044,11 @@ def _model_items(url: str, user: str, text: str, hint: str | None, key: str, pro
         # «capture» (пороги — общие «*» Свода claude.caps). Стоит — guard.Stopped до вызова: платить нечего.
         cl = guard.client(url, key, proxy, ROUTE)
         ask_fn = lambda h, u: ask(cl, model, effort, h, u)  # noqa: E731
+    if quota and not guard.blocked(url, ROUTE):
+        # Суточный предел не-владельцу (аудит №12, правило 24; поезд 16.10.2026 — стык вагонов 1 и 4): «Д», «сказать»,
+        # «З» и «Повторить» Наташи и Алёны — разбор моделью на сервере, как /api/parse: один разбор user_day.parse на
+        # фразу. Владелец и службы — без предела (guard.quota сам). Защита стоит — предел не тратим: вызов и так не уйдёт.
+        guard.quota(url, user, "parse")
     try:
         data = ask_fn(parts["head"], user_text)
     except CaptureError as e:
@@ -2110,17 +2117,22 @@ def _retry_later(url: str, user: str, ref: str, tries: int, err: str) -> None:
 def _tick_one(url: str, r: dict, key: str, proxy: str | None, ask_fn) -> None:
     ref = r["id"][len(REF_PREFIX):]
     started = time.monotonic()
+    # Предел не-владельцу — один раз на фразу: не на повтор после сбоя сети (tries) и не на наговорку строки веба, которую
+    # доразбирает цикл (synced: строка уже взяла правку словами в api.ask_start). «Повторить» обнуляет tries — новый разбор.
+    first = not int(r.get("tries") or 0) and not r.get("synced")
     try:
-        data, parts, usage = _model_items(url, r["owner_id"], r["text"], r["capture_hint"], key, proxy, ask_fn, r["at"])
+        data, parts, usage = _model_items(url, r["owner_id"], r["text"], r["capture_hint"], key, proxy, ask_fn, r["at"],
+                                          quota=first)
         source = "web" if r["capture_from"] == "web" else "voice"
         lay_out(url, r["owner_id"], ref, r["text"], data, parts, source, r["at"].astimezone(MSK))
         log.info("захват моделью: %s — %.1f с, токены %s", _short(r["text"], 60), time.monotonic() - started, usage)
         with db.session(url, r["owner_id"], via="capture") as conn:
             conn.execute("UPDATE tasks.dictations SET capture_result = (capture_result - 'retry_at' - 'last_error') || %s "
                          "WHERE id = %s", (Jsonb({"ms": int((time.monotonic() - started) * 1000)}), r["id"]))
-    except (CaptureError, guard.Stopped) as e:
+    except (CaptureError, guard.Stopped, guard.OverQuota) as e:
         # Защита от петли стоит — «не разложил» её словами (что стоит и как включить), текст в Делах, «Повторить» —
-        # кнопкой; повтором каждые 5 с цикл её не долбит (поезд 16.10.2026: захват и защита вагона 1 вместе).
+        # кнопкой; повтором каждые 5 с цикл её не долбит (поезд 16.10.2026: захват и защита вагона 1 вместе). Сверх
+        # суточного предела не-владельцу — так же, словами предела; модель не звалась.
         _fail(url, r["owner_id"], ref, str(e))
     except Exception as e:  # noqa: BLE001 — сеть, ключ, лимит: человеку коротко, в журнал подробно
         tries = int(r.get("tries") or 0) + 1
@@ -2144,7 +2156,8 @@ def tick(url: str, key: str = "", proxy: str | None = None, ask_fn=None, limit: 
     взято."""
     with db.session(url, "system", via="capture") as conn:
         rows = conn.execute("SELECT id, owner_id, text, at, capture_from, capture_hint, "
-                            "coalesce((capture_result ->> 'tries')::int, 0) AS tries FROM tasks.dictations "
+                            "coalesce((capture_result ->> 'tries')::int, 0) AS tries, "
+                            "coalesce(capture_result ? 'sync_at', false) AS synced FROM tasks.dictations "
                             "WHERE capture = 'pending' AND coalesce((capture_result ->> 'sync_at')::timestamptz, "
                             "'-infinity') < now() - make_interval(mins => %s) "
                             "AND coalesce((capture_result ->> 'retry_at')::timestamptz, '-infinity') <= now() "

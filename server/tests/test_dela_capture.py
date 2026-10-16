@@ -717,6 +717,54 @@ def test_web_line_rule_outside_quota_and_once(dela, monkeypatch):
     assert ask.rule_first(dela, "sasha", "купить хлеб", {"title": "Сейчас"})["route"] == "capture"
 
 
+def test_model_quota_for_non_owner(dela, at):
+    """Поезд 16.10.2026 (стык вагонов 1 и 4, проверка): «Д», «сказать», «З» и «Повторить» не-владельца идут к модели
+    сервера фоновым разбором — это разбор суточного предела (user_day.parse, правило 24), один на фразу: повтор после
+    сбоя сети — не новый разбор. Сверх предела — «не разложил» словами предела, модель не зовётся; «Повторить» — снова
+    разбор. Владелец — без предела."""
+    from pravka_dela import guard
+
+    guard._caps.update(at=-guard.CAPS_EVERY, value=None)
+    seed(dela)
+    calls = []
+
+    def fake(h, u):
+        calls.append(u)
+        return _model(tasks=[{"title": "Разобрать разное"}])
+
+    def blip(h, u):
+        calls.append(u)
+        raise _conn_error()
+
+    def used(user="natasha"):
+        with dela_db.session(dela, "system", "test") as c:
+            row = c.execute("SELECT value FROM crm.state WHERE key = %s", (guard.QUOTA,)).fetchone()
+        return (((row or {}).get("value") or {}).get("users") or {}).get(user, {}).get("parse", 0)
+
+    cap = say(dela, "что-то длинное и непонятное про разное", user="natasha")
+    assert capture.tick(dela, ask_fn=blip) == 1 and used() == 1
+    with dela_db.session(dela, "system", "test") as c:
+        c.execute("UPDATE tasks.dictations SET capture_result = capture_result || jsonb_build_object('retry_at', "
+                  "now() - interval '1 second') WHERE id = %s", ("capture:" + cap["ref"],))
+    assert capture.tick(dela, ask_fn=fake) == 1 and used() == 1 and len(calls) == 2  # повтор после сбоя — не новый разбор
+    assert store.view(dela, "natasha", "capture", ref=cap["ref"])["capture"]["status"] == "done"
+    for _ in range(guard.caps(dela)["user_day"]["parse"] - 1):
+        guard.quota(dela, "natasha", "parse")
+    cap = say(dela, "ещё одна длинная непонятная фраза", user="natasha")
+    assert capture.tick(dela, ask_fn=fake) == 1 and len(calls) == 2  # сверх предела модель не звалась
+    got = store.view(dela, "natasha", "capture", ref=cap["ref"])["capture"]
+    assert got["status"] == "error" and "20 из 20 разборов" in got["error"] and got["head"].startswith("Не разложил: На сегодня")
+    assert [c["label"] for c in got["chips"]] == ["Повторить", "Дело потом"]
+    r = ops(dela, "natasha", {"op": "capture.move", "ref": cap["ref"], "item": -1, "to": "retry"})[0]
+    assert r["ok"] and r["capture"]["status"] == "pending"
+    capture.tick(dela, ask_fn=fake)
+    assert len(calls) == 2 and store.view(dela, "natasha", "capture", ref=cap["ref"])["capture"]["status"] == "error"
+    # Владелец: без предела.
+    own = say(dela, "что-то длинное и непонятное про разное")
+    assert capture.tick(dela, ask_fn=fake) == 1 and len(calls) == 3 and used("sasha") == 0
+    assert store.view(dela, "sasha", "capture", ref=own["ref"])["capture"]["status"] == "done"
+
+
 def test_rule_leaves_nesting_to_claude(dela, at):
     """Поезд 16.10.2026 (вагоны 2 и 4): слова вложенности — «вынуть … из …», «вложи … в …», «для этого …», «к делу про
     …» — правило захвата не берёт новым делом: строка веба отдаёт их Claude (ask.run: into, step), «Д» — модели."""
