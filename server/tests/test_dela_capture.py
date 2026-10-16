@@ -337,6 +337,51 @@ def test_model_waiting_and_owed_with_due_say_whose(dela, at):
     assert task(dela, got["items"][1]["task"]["id"])["title"] == "Прислать Ивану модель"
 
 
+def test_head_says_task_and_whose_note(dela, at):
+    """«Разложил N» говорит «дело» и чья заметка (отладка 16.10.2026, записи 6–7): «дело «потом», верну …» вместо «потом —
+    верну …», «заметка (Ольга Тестова): …» вместо голой «заметка: …» — имя в скобках, а не через «·»: «·» разделяет
+    записи (мелочь проверки к 565783ca). Фамилия первым словом заметки — с большой. Одна запись — прежняя строка."""
+    seed(dela)
+    cap = say(dela, "много всего разом")
+    capture.tick(dela, ask_fn=lambda h, u: _model(tasks=[{"title": "Подготовить счёт"}],
+                                                  notes=[{"text": "Подпишут в среду", "project": "", "person": "Ольга"}]))
+    got = store.view(dela, "sasha", "capture", ref=cap["ref"])["capture"]
+    assert [x["bucket"] for x in got["items"]] == ["back", "note"]
+    assert got["head"] == ("Разложил 2: дело «потом», верну в пятницу 16.10: подготовить счёт · "
+                           "заметка (Ольга Тестова): подпишут в среду")
+    assert got["items"][1]["whose"] == "Ольга Тестова"
+    assert got["items"][1]["line"] == "Заметка у Ольги Тестовой: подпишут в среду · в карточке"  # одна строка — как была
+    cap = say(dela, "ещё всего разом")
+    capture.tick(dela, ask_fn=lambda h, u: _model(
+        tasks=[{"title": "Подготовить договор", "back": "2026-10-20"}],
+        notes=[{"text": "Тестова подпишет в среду", "project": "", "person": "Ольга"},
+               {"text": "Бюджет утвердят в январе", "project": "ООО Ромашка", "person": ""},
+               {"text": "Договорились на пятницу", "project": "", "person": ""}]))
+    got = store.view(dela, "sasha", "capture", ref=cap["ref"])["capture"]
+    assert got["head"] == ("Разложил 4: дело «потом», верну вт: подготовить договор · "
+                           "заметка (Ольга Тестова): Тестова подпишет в среду · "
+                           "заметка (ООО Ромашка): бюджет утвердят в январе · заметка: договорились на пятницу")
+    assert got["head"].count(" · ") == 3  # «·» — только между записями
+
+
+def test_head_note_whose_after_twin_pick(dela, at):
+    """Тёзки: заметка легла без человека — «заметка: …»; выбрал кнопкой — у записи `whose`, голова говорит чья."""
+    ids = seed(dela, twin=True)
+    cap = say(dela, "много всего разом")
+    capture.tick(dela, ask_fn=lambda h, u: _model(tasks=[{"title": "Подготовить счёт"}], notes=[
+        {"text": "Иван сказал, что бюджет будет в январе", "project": "", "person": ""}]))
+    got = store.view(dela, "sasha", "capture", ref=cap["ref"])["capture"]
+    assert "whose" not in got["items"][1] and got["head"].endswith("· заметка: Иван сказал, что бюджет будет в январе")
+    with dela_db.session(dela, "sasha") as c:  # тёзки — как у правила: запись без человека и кнопка «Какой Иван ▾»
+        c.execute("UPDATE tasks.dictations SET capture_result = jsonb_set(capture_result, '{items,1,twins}', %s::jsonb) "
+                  "WHERE id = %s", (json.dumps([{"id": ids["ivan"], "name": "Иван Тестов", "short": "Иван"},
+                                                {"id": ids["ivan2"], "name": "Иван Петров", "short": "Иван"}]),
+                                    "capture:" + cap["ref"]))
+    got = move(dela, cap["ref"], "person", item=1, person_id=ids["ivan2"])
+    assert got["items"][1]["whose"] == "Иван Петров"
+    assert got["head"].endswith("· заметка (Иван Петров): Иван сказал, что бюджет будет в январе"), got["head"]
+
+
 def test_move_sees_task_as_it_is_now(dela, at):
     """Кнопка под строкой — с делом, каким оно стало: «Завтра» в уведомлении, потом «Это дело» — дело на завтра; сделанное
     кнопкой уведомления — пилюля словами отказывает (сквозной тест 15.10.2026)."""

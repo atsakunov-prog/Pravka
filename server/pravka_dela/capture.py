@@ -1293,20 +1293,29 @@ def chips_of(item: dict) -> list[dict]:
 
 def short_of(item: dict, now: dt.datetime) -> str:
     """Корзина коротко — для строки «Разложил 3: …»: куда и что («сделано: позвонил Ольге · на завтра: подготовить
-    договор»; проверка 16.10.2026: «Разложил 2: сделано · на завтра» не говорило, что именно)."""
+    договор»; проверка 16.10.2026: «Разложил 2: сделано · на завтра» не говорило, что именно).
+
+    Отладка 16.10.2026, записи 6–7: «Разложил 2: потом — верну пн: сказать …, что … · заметка: …» читалось как «записал в
+    карточку CRM, а не дело» — у «потом» не было слова «дело», у заметки — чья она. Теперь «дело «потом», верну пн: …» и
+    «заметка (Иван Тестов): …» — имя карточки без склонения (`whose` кладёт `_apply_one`) в скобках: знак «·» в голове
+    разделяет записи, и «заметка · Иван Тестов» читалась бы двумя записями (мелочь проверки к 565783ca). Первое слово
+    заметки — имя или фамилия её человека — остаётся с большой. Однострочные строки (`line_of`) не меняются."""
     b, t, today = item["bucket"], item.get("task") or {}, now.date()
     title = str((item.get("said") if b == "did" else None) or t.get("title") or item.get("title") or item.get("text") or "")
     who = re.match(r"^([^:]{1,40}):", t.get("title") or "")
     if who and b in ("day", "waiting", "owed", "agenda"):
         title = title[who.end():]
-    what = _short(_lowfirst(title.strip()), 40)
+    whose = str(item.get("whose") or "") if b == "note" else ""
+    what = _short(title.strip() if _named_first(title, whose) else _lowfirst(title.strip()), 40)
     if b == "remind":
         word = "напоминание " + when_say(remind.at_of(t["remind_at"]), now)
     elif b == "place":
         word = "напоминание по месту"
     elif b == "back" and t.get("back_on"):
         d = dt.date.fromisoformat(str(t["back_on"])[:10])
-        word = f"потом — верну {WD_SHORT[d.weekday()]}" if 1 < (d - today).days < 7 else "потом — " + back_say(d, today)
+        word = "дело «потом», " + (f"верну {WD_SHORT[d.weekday()]}" if 1 < (d - today).days < 7 else back_say(d, today))
+    elif b == "note" and whose:
+        word = f"заметка ({whose})"
     elif b in ("day", "task_remind") and t.get("due_date"):
         # Сквозной тест 15.10.2026: «Разложил 2: на день · жду» не говорил, когда и от кого, — а строка для того и есть.
         d = dt.date.fromisoformat(str(t["due_date"])[:10])
@@ -1325,6 +1334,19 @@ def short_of(item: dict, now: dt.datetime) -> str:
                 "waiting": "жду", "owed": "ждут от тебя", "agenda": "при встрече", "note": "заметка", "idea": "идея",
                 "did": "сделано", "cancelled": "отменено", "error": "не разложено"}.get(b, b)
     return f"{word}: {what}" if what and b not in ("cancelled", "error") else word
+
+
+def _named_first(text: str, name: str) -> bool:
+    """Первое слово текста — имя или фамилия человека (клиента) `name`: «Тестова подпишет…» у Ольги Тестовой."""
+    parts = str(text or "").split()
+    head = _n(parts[0].strip(_EDGE)) if parts else ""
+    return bool(head and name) and any(people.same(head, w) or people.same_first(head, w) for w in people.words(name))
+
+
+def _whose(conn, item: dict) -> str | None:
+    """Чья заметка — имя карточки человека, иначе клиента: для «Разложил N» (`short_of`)."""
+    row = _person_row(conn, item.get("person_id")) or _project_row(conn, item.get("project_id"))
+    return row["name"] if row else None
 
 
 def _snap(t: dict) -> dict:
@@ -1378,6 +1400,8 @@ def _apply_one(conn, user: str, item: dict, ref: str, source: str, ctx: Ctx, i: 
         row = store.op_interaction_add(conn, user, {"data": data})["row"]
         item["note_id"] = str(row["id"])
         item["undo"] = [{"op": "interaction.delete", "id": str(row["id"])}]
+        if whose := _whose(conn, item):
+            item["whose"] = whose
         return item
     if b == "idea":
         data = {"text": item["text"], "source": "web" if source == "web" else "voice", "source_ref": REF_PREFIX + ref}
@@ -1684,8 +1708,9 @@ def _move(conn, user, item: dict, to: str, op: dict, ctx: Ctx, ref: str, source:
             client = ctx.client_of(pid)
             set_ = {"person_ids": [pid], **({"project_id": client} if client else {})}
             _run(conn, user, {"op": "interaction.set", "id": item["note_id"], "set": set_})
-            return {**item, "person_id": pid, **({"project_id": client} if client else {}), "twins": None,
+            item = {**item, "person_id": pid, **({"project_id": client} if client else {}), "twins": None,
                     "undo": undo, "ask_id": None}
+            return {**item, "whose": _whose(conn, item)}
         # Сделанное: прежнее дело-основу (без человека) — отменить, и то же сказанное — заново с человеком: закроет его
         # обещание и запишет касание (как если бы тёзок не было).
         _undo_all(conn, user, {**item, "undo": undo})
