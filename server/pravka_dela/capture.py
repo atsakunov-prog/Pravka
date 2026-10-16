@@ -1425,16 +1425,21 @@ def _ask_who(conn, user: str, item: dict, ref: str, i: int, now: dt.datetime) ->
         ask_ = f"«{said}» — {_who_word(short)}?"
         title = f"Сделано: {said}"
         quote = said
+    from . import asks
+
     opts = [{"label": _short(c["name"] + (f" ({c['org']})" if c.get("org") else ""), 80), "person_id": c["id"]}
             for c in (item.get("twins") or [])[:3]]
-    row = store._insert(conn, "tasks.suggestions", {
-        "kind": ASK_KIND, "task_id": (item.get("task") or {}).get("id") if item["bucket"] == "did" else None,
-        "source": "user", "for_user": user, "created_by": user, "quote": quote,
-        "expires_at": dt.datetime.now(dt.timezone.utc) + store.SUGGESTION_TTL,
-        # «said:» — фраза владельца: в счётчике автоматики — sources.said, не all (как вопросы did.py).
-        "batch_ref": f"{did.SAID_PREFIX}capture-{ref}", "batch_title": f"Сказал · {now.astimezone(MSK):%d.%m}",
-        "payload": Jsonb({"ask": ask_, "title": title, "options": opts, "pick": True,
-                          "capture": {"ref": ref, "item": i}})})
+    data = {"kind": ASK_KIND, "task_id": (item.get("task") or {}).get("id") if item["bucket"] == "did" else None,
+            "source": "user", "for_user": user, "created_by": user, "quote": quote,
+            "expires_at": dt.datetime.now(dt.timezone.utc) + store.SUGGESTION_TTL,
+            # «said:» — фраза владельца: в счётчике автоматики — sources.said, не all (как вопросы did.py).
+            "batch_ref": f"{did.SAID_PREFIX}capture-{ref}", "batch_title": f"Сказал · {now.astimezone(MSK):%d.%m}"}
+    payload = {"ask": ask_, "title": title, "options": opts, "pick": True, "capture": {"ref": ref, "item": i}}
+    # Срочность и предмет «Подскажи» (шаг 2 петли; поезд 16.10.2026): вопрос идёт мимо store.op_suggestion_create — штамп
+    # здесь. Фраза самого Саши — вечер, как «это закрывает …?» did.py (ответ 3а); предмет — клиент сделанного дела, иначе
+    # человек по имени тёзок (asks.about).
+    asks.stamp(conn, data, payload, lambda p: store._names(conn, p, None))
+    row = store._insert(conn, "tasks.suggestions", {**data, "payload": Jsonb(payload)})
     item["ask_id"] = str(row["id"])
     item["undo"] = [*(item.get("undo") or []),
                     {"op": "suggestion.decide", "id": str(row["id"]), "decision": "reject", "reason": "вернул"}]

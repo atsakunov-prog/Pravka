@@ -309,10 +309,37 @@ def _meeting(conn, data: dict) -> dict | None:
                         "ORDER BY started_at DESC LIMIT 1", (ref[8:],)).fetchone()
 
 
+_BATCH_DAY = re.compile(r" · (\d{1,2})\.(\d{1,2})$")
+
+
+def _batch_day(data: dict, today: dt.date) -> dt.date | None:
+    """День встречи из названия пачки службы «<название> · дд.мм» (как store._meeting_of) — когда карточки встречи в Делах
+    ещё нет. Люди и спикеры встречи (поезд 16.10.2026: вагон 5, people.py и people_ident.py службы встреч) уходят в Дела
+    сразу после разбора, без payload.meeting_at, а сама встреча (meeting.upsert) — следующим кругом службы, когда у неё
+    не осталось работы; без этого вопрос о человеке сегодняшней встречи стоял бы вечерним. Год — ближайший не в будущем:
+    встреча уже прошла."""
+    if not str(data.get("batch_ref") or "").startswith("meeting:"):
+        return None
+    m = _BATCH_DAY.search(" ".join(str(data.get("batch_title") or "").split()))
+    if not m:
+        return None
+    for year in (today.year, today.year - 1):
+        try:
+            d = dt.date(year, int(m.group(2)), int(m.group(1)))
+        except ValueError:
+            continue
+        if d <= today:
+            return d
+    return None
+
+
 def urgency(data: dict, payload: dict, meeting: dict | None, today: dt.date) -> tuple[str, dt.date | None]:
     """(срочность, день сгорания). Круг и план — всегда вечер. Служба сказала сама (контракт этапа 3: срочность ставит
     служба) — её слово; today без даты — сегодня. Иначе today — вопрос по сегодняшней встрече (любой вид: завести,
-    уточнить, закрыть, человек): завтра те люди и договорённости уже не вспомнятся. Остальное — вечер."""
+    уточнить, закрыть, человек и спикер): завтра те люди и договорённости уже не вспомнятся. День встречи — payload.
+    meeting_at, иначе карточка встречи по batch_ref, иначе название пачки службы (_batch_day). Остальное — вечер: Telegram,
+    «Люди сами», и фраза самого Саши — «это закрывает …?» и «Какой Иван?» захвата (его ответ 3а: «похожих обещаний два и
+    больше — спросить вечером»)."""
     src = data.get("source")
     if src in ("krug", "plan"):
         return "evening", None
@@ -320,7 +347,8 @@ def urgency(data: dict, payload: dict, meeting: dict | None, today: dt.date) -> 
     if u in URGENCY:
         return (u, _day(payload.get("urgent_on")) or today) if u == "today" else (u, None)
     if src == "meeting":
-        d = _day(payload.get("meeting_at")) or (meeting["started_at"].astimezone(MSK).date() if meeting else None)
+        d = (_day(payload.get("meeting_at")) or (meeting["started_at"].astimezone(MSK).date() if meeting else None)
+             or _batch_day(data, today))
         if d == today:
             return "today", today
     return "evening", None
@@ -339,8 +367,9 @@ def _client(conn, ids: list) -> dict | None:
 def about(conn, data: dict, payload: dict, names=None, meeting: dict | None = None) -> dict:
     """Предмет вопроса — первым подошедшим: кандидат плана; Круг — мелочь «Место в дереве»; клиент (проект вопроса,
     узнанный по имени, проект дела у «уточнить» и «закрыть», клиент сделки, клиент встречи); человек (id, узнанное имя,
-    у вопроса о человеке — сама карточка или имя); встреча без клиента; остальное — мелочь. names — store._names
-    параметром (имена автоматики в id тем же правилом, что при «Да»), без кругового импорта."""
+    у вопроса о человеке — сама карточка или имя; не у спикера встречи; у «Какой Иван?» захвата — имя тёзок); встреча
+    без клиента; остальное — мелочь. names — store._names параметром (имена автоматики в id тем же правилом, что при
+    «Да»), без кругового импорта."""
     src, kind = data.get("source"), data.get("kind") or "create"
     if src == "plan":
         return {"kind": "plan", "title": data.get("batch_title") or "Сейчас на завтра"}
@@ -364,10 +393,24 @@ def about(conn, data: dict, payload: dict, names=None, meeting: dict | None = No
                          (pid,)).fetchone() if pid else None
         if r:
             return {"kind": "person", "id": str(r["id"]), "title": r["t"]}
+    # Спикер встречи (поезд 16.10.2026, вагон 5: payload.ident — store._meeting_speaker): предмет — встреча, кто на ней был
+    # (или её клиент выше), а не человек по названию: у вопроса о безымянном оно — метка «SPEAKER_01» или догадка
+    # «Ольга С.?», и до трёх вопросов одной встречи разошлись бы по своим «людям».
+    speaker = isinstance(payload.get("ident"), dict)
     person = payload.get("person") if isinstance(payload.get("person"), dict) else {}
-    for n in (payload.get("person_name"), person.get("name"), payload.get("title") if kind == "person" else None):
+    for n in (() if speaker else (payload.get("person_name"), person.get("name"),
+                                   payload.get("title") if kind == "person" else None)):
         if str(n or "").strip():
             return {"kind": "person", "title": " ".join(str(n).split())[:80]}
+    if kind == "capture":
+        # «Какой Иван?» захвата (поезд 16.10.2026, вагон 4; capture._ask_who): тёзки — один человек по имени, как его
+        # назвал Саша (короткое имя первой кнопки — capture._twin_short); какая карточка — решит ответ.
+        for o in payload.get("options") or []:
+            pid = _uid(o.get("person_id")) if isinstance(o, dict) else None
+            r = conn.execute("SELECT coalesce(nullif(btrim(short), ''), split_part(btrim(name), ' ', 1)) AS t "
+                             "FROM crm.people WHERE id = %s", (pid,)).fetchone() if pid else None
+            if r and str(r["t"] or "").strip():
+                return {"kind": "person", "title": str(r["t"]).strip()[:80]}
     if str(data.get("batch_ref") or "").startswith("meeting:"):
         return {"kind": "meeting", **({"id": str(meeting["id"])} if meeting else {}),
                 "title": data.get("batch_title") or "Встреча"}

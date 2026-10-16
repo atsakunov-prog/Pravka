@@ -405,3 +405,84 @@ def test_web_has_the_same_rule():
     assert "s.batch_title" in js[js.index("function asksTitle("):js.index("function asksQueue(")]
     # Подписи групп — те же слова, что у сервера (мелочь — одна группа).
     assert f"'{asks.SMALL}'" in js and re.search(r"KINDS = \['client', 'person', 'meeting', 'small'\]", js)
+
+
+# ── 6. Поезд 16.10.2026: срочность и предмет у новых видов вопросов поезда ──
+
+def test_train_meeting_people_and_speakers_burn_only_for_todays_meeting(dela):
+    """Люди и спикеры встречи (вагон 5: «кто это» по имени и вопрос о спикере с кандидатами, режим тени — до трёх на
+    встречу) уходят в Дела сразу после разбора, раньше самой встречи (meeting.upsert — следующим кругом службы), и
+    payload.meeting_at у них нет: день встречи — из названия пачки службы «… · дд.мм». Сгорает только вопрос о
+    сегодняшней встрече; спикер — в группе встречи (у безымянного «человек» — метка «S1»), не своим «человеком»; встреча
+    пришла с клиентом — оба в группе клиента, срочность прежняя."""
+    today = db_today(dela)
+    old = today - dt.timedelta(days=3)
+    romashka = project(dela, "sasha", "ООО Ромашка")
+    ivan = person(dela, "Иван Тестов", "Иван")
+
+    def named(ref, day, name):
+        return sug(dela, kind="person", source="meeting", source_ref=f"meeting-person:{ref}:{name}",
+                   batch_ref=f"meeting:{ref}", batch_title=f"Созвон · {day:%d.%m}", quote=f"Встреча «Созвон»: «{name}»",
+                   payload={"title": name, "person": {"name": name}, "speaker": {"meeting_ref": ref, "label": "S2"}})
+
+    a = named("701", today, "Пётр Незнакомый")
+    assert a["status"] == "pending" and a["payload"]["ask"], a["payload"]
+    assert (a["payload"]["urgency"], a["payload"]["urgent_on"]) == ("today", today.isoformat())
+    assert a["payload"]["about"] == {"kind": "person", "title": "Пётр Незнакомый"}
+    b = named("703", old, "Глеб Пробнов")
+    assert b["payload"]["urgency"] == "evening" and "urgent_on" not in b["payload"], "встреча не сегодня — вечер"
+    sp = sug(dela, kind="person", source="meeting", source_ref="speaker:701:S1", batch_ref="meeting:701",
+             batch_title=f"Созвон · {today:%d.%m}", quote="Встреча «Созвон»: S1",
+             payload={"title": "S1", "speaker": {"meeting_ref": "701", "label": "S1", "seconds": 300},
+                      "ident": {"label": "S1", "candidates": [{"person_id": str(ivan), "signs": [
+                          {"group": "speech", "strong": True, "text": "«Иван, добрый день»"}]}]}})
+    assert sp["status"] == "pending" and sp["payload"]["pick"], sp["payload"]
+    assert sp["payload"]["urgency"] == "today"
+    assert sp["payload"]["about"] == {"kind": "meeting", "title": f"Созвон · {today:%d.%m}"}, "спикер — не «человек» S1"
+    # Название без дня, кривой день, чужая пачка — дня нет, вечер (а не «сегодня» наугад).
+    for title, ref in (("Без дня", "meeting:704"), ("Кривое · 31.02", "meeting:705"), (f"Чат · {today:%d.%m}", "tg:1")):
+        s = sug(dela, kind="create", source="meeting", batch_ref=ref, batch_title=title, payload={"title": "x" + ref})
+        assert s["payload"]["urgency"] == "evening", title
+    # Встреча пришла в Дела с клиентом (meeting.upsert → after_edit → restamp_meeting): вопросы встречи — у клиента.
+    meeting(dela, "701", today, romashka, "Ромашка: бюджет")
+    with dela_db.session(dela, "sasha", via="test") as c:
+        rows = {str(r["id"]): r["payload"] for r in c.execute(
+            "SELECT id, payload FROM tasks.suggestions WHERE batch_ref = 'meeting:701'").fetchall()}
+    for sid in (str(a["id"]), str(sp["id"])):
+        assert rows[sid]["about"] == {"kind": "client", "id": str(romashka), "title": "ООО Ромашка"}
+        assert (rows[sid]["urgency"], rows[sid]["urgent_on"]) == ("today", today.isoformat())
+    v = store.view(dela, "sasha", "asks", at=at(today, 15, 30).isoformat())
+    assert v["urgent"] == 2 and v["groups"][0]["kind"] == "client" and v["groups"][0]["urgent"] == 2
+    assert {g["title"] for g in v["groups"][1:]} >= {"Глеб Пробнов"}
+
+
+def test_train_did_question_is_evening_and_about_its_person_or_client(dela):
+    """«Это закрывает …?» (вагон 4, did.py): фраза самого Саши — вечер (его ответ 3а: «похожих обещаний два и больше —
+    спросить вечером»); предмет — клиент дела, иначе его человек."""
+    romashka = project(dela, "sasha", "ООО Ромашка")
+    ivan = person(dela, "Иван Тестов", "Иван")
+    for title, extra in (("Позвонить Ивану по модели", {"project_id": str(romashka)}), ("Перезвонить Ивану про фонды", {})):
+        ok(dela, "sasha", {"op": "task.create", "task": {"title": title, "ball": "owed", "person_id": str(ivan), **extra}})
+    r = ok(dela, "sasha", {"op": "task.did", "task": {"title": "Позвонил Ивану", "person_id": str(ivan)},
+                           "said": "позвонил Ивану"})[0]
+    assert len(r["did"]["asked"]) == 2
+    with dela_db.session(dela, "sasha", via="test") as c:
+        got = {r_["title"]: r_["payload"] for r_ in c.execute(
+            "SELECT t.title, s.payload FROM tasks.suggestions s JOIN tasks.tasks t ON t.id = s.task_id "
+            "WHERE s.status = 'pending'").fetchall()}
+    assert {p["urgency"] for p in got.values()} == {"evening"}
+    assert got["Позвонить Ивану по модели"]["about"] == {"kind": "client", "id": str(romashka), "title": "ООО Ромашка"}
+    assert got["Перезвонить Ивану про фонды"]["about"] == {"kind": "person", "id": str(ivan), "title": "Иван"}
+
+
+def test_train_member_question_and_view_are_only_theirs(dela):
+    """Приватность (вагон 1, правило 26): предмет вопроса штампуется глазами того, кто его пишет (RLS сессии записи), —
+    клиент, которого сотруднику не открыли, не попадает в его группы и именем; вид asks — только свои вопросы: владелец
+    чужих не видит и наоборот."""
+    romashka = project(dela, "sasha", "ООО Ромашка")  # клиент владельца, сотруднику не открыт
+    s = sug(dela, user="natasha", for_user="natasha", payload={"title": "Про чужого клиента", "project_id": str(romashka)})
+    assert s["payload"]["about"]["kind"] != "client" and "Ромашка" not in json.dumps(s["payload"]["about"], ensure_ascii=False)
+    sug(dela, payload={"title": "Вопрос владельцу", "project_id": str(romashka)})
+    theirs, mine = store.view(dela, "natasha", "asks"), store.view(dela, "sasha", "asks")
+    assert (theirs["total"], mine["total"]) == (1, 1)
+    assert mine["groups"][0]["title"] == "ООО Ромашка" and "Ромашка" not in json.dumps(theirs["groups"], ensure_ascii=False)

@@ -494,6 +494,22 @@ def test_twins_task_has_no_person(dela, at):
     assert cap["items"][0]["bucket"] == "back" and task(dela, cap["items"][0]["task"]["id"])["person_id"] is None
 
 
+def test_twins_question_is_evening_about_the_name(dela, at):
+    """Поезд 16.10.2026 (вагоны 4 и 7): «Какой Иван?» идёт в «Подскажи» мимо suggestion.create — штамп шага 2 ставит
+    захват сам. Фраза самого Саши — вечер, как «это закрывает …?» did.py (ответ 3а); предмет — человек по имени тёзок
+    («Иван»), какая карточка — решит ответ; в виде asks — группа «Иван»."""
+    seed(dela, twin=True)
+    say(dela, "Иван сказал, бюджет будет в январе")
+    say(dela, "позвонил Ивану")
+    got = _asks(dela)
+    assert len(got) == 2 and {a["batch_ref"][:6] for a in got} == {"said:c"}
+    for a in got:
+        assert a["payload"]["urgency"] == "evening" and "urgent_on" not in a["payload"], a["payload"]
+        assert a["payload"]["about"] == {"kind": "person", "title": "Иван"}, a["payload"]
+    v = store.view(dela, "sasha", "asks")
+    assert [(g["kind"], g["title"], g["n"]) for g in v["groups"] if g["kind"] == "person"] == [("person", "Иван", 2)]
+
+
 def test_did_keep_open_and_cancel(dela, at):
     ids = seed(dela)
     cap = say(dela, "позвонил Ольге")
