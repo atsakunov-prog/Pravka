@@ -148,6 +148,16 @@ private const val LATE_NODE = "late"
 /** Блок «Напоминания» внизу «Всех дел» (захват, 15.10.2026): напоминания — не дела, в уровнях их нет. */
 private const val REMIND_NODE = "reminders"
 private const val REMIND_STALE_NODE = "reminders-stale"
+/** «Моё» под «Сегодня» (Круг жизни): что двигает жизнь без срока на сегодня. */
+private const val MINE_NODE = "mine"
+
+/**
+ * Подпись группы — пояснение (что это за группа: «отбить», «просрочено», «напоминания», «моё»), а не данные (дата у
+ * «Сегодня» / «Завтра», формула направления): пояснение уходит в долгое нажатие на заголовок (16.10.2026 вечер,
+ * запись 34), данные остаются строкой.
+ */
+private fun hintNode(n: DelaGroups.Node): Boolean =
+    n.sub.isNotBlank() && (n.grp != null || n.key == LATE_NODE || n.key == REMIND_NODE || n.key == REMIND_STALE_NODE || n.key == MINE_NODE)
 
 /** Подпись блока напоминаний: куда они приходят — телефоном или ботом (как `remindBox` веба). */
 internal fun remindSub(snap: Dela.Snapshot): String =
@@ -764,7 +774,7 @@ fun DelaTab(
             val pk = picks["today"]?.takeIf { DelaGroups.pickOn(it, lv) }
             val items = DelaGroups.picked(every, lv, pk, snap, today)
             val mineNode = if (mine.isEmpty()) emptyList()
-            else listOf(DelaGroups.Node("mine", "Моё", 0, null, mine, sub = "никто не ждёт — двигает жизнь; берёшься сегодня — в «Сейчас»"))
+            else listOf(DelaGroups.Node(MINE_NODE, "Моё", 0, null, mine, sub = "никто не ждёт — двигает жизнь; берёшься сегодня — в «Сейчас»"))
             // Без подзаголовка, как «Сейчас» (отладка 16.10.2026, запись 15): просроченное — строкой внизу.
             DelaScreen(
                 "Сегодня",
@@ -2475,8 +2485,9 @@ private fun LazyListScope.newView(
                         }
                     }
                 } else null,
+                // «без тебя не поставлю» — по долгому нажатию на заголовок (16.10.2026 вечер, запись 34).
+                hint = "без тебя не поставлю",
             ) {
-                Text("без тебя не поставлю", style = ru.zf.pravka.ui.LocalPravkaType.current.meta, color = mode.meta)
                 parts.asks.forEachIndexed { i, sg ->
                     RowRule()
                     AskRow(
@@ -2496,8 +2507,8 @@ private fun LazyListScope.newView(
         item(key = "n:feed") {
             val mode = ru.zf.pravka.ui.LocalMode.current
             val ty = ru.zf.pravka.ui.LocalPravkaType.current
-            PaperCard(label = "Поставил · ${parts.feed.size}") {
-                Text("откуда — значок справа, что сказано — в карточке", style = ty.meta, color = mode.meta)
+            // «откуда — значок справа…» — по долгому нажатию на заголовок (16.10.2026 вечер, запись 34).
+            PaperCard(label = "Поставил · ${parts.feed.size}", hint = "откуда — значок справа, что сказано — в карточке") {
                 for ((day, items) in DelaViews.feedDays(parts.feed, today, zone)) {
                     Text(day, style = ty.label, fontWeight = FontWeight.SemiBold, color = mode.label, modifier = Modifier.padding(top = 8.dp, bottom = 2.dp))
                     items.forEachIndexed { i, t ->
@@ -3051,12 +3062,17 @@ private fun LazyListScope.screenBody(
                 // «Просрочено» сверху «Всех дел» (13.10.2026): цветом беды и «Перенести все», строки — со всеми
                 // подписями: уровни его не называют.
                 val lateTop = n.key == LATE_NODE
+                // Пояснение группы («Отбить» — «люди ждут ответа…», «Просрочено» — «срок прошёл…») — не серой строкой под
+                // заголовком, а по долгому нажатию на него (16.10.2026 вечер, запись 34); дата у «Сегодня» / «Завтра» и
+                // формула направления — не пояснение, они остаются строкой.
+                val explain = hintNode(n)
                 // Опустевшая группа уходит, а ниже — подъезжают плавно (запись 30), не рывком под пальцем; при смене раздела
                 // группы появляются сразу, без растворения.
                 Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
                 PaperCard(
                     label = n.title.takeIf { it.isNotBlank() }?.let { "$it · ${n.items.size}" },
                     labelColor = if (n.late) (if (Look.v2) Kv.bad else ru.zf.pravka.ui.LocalMode.current.value) else null,
+                    hint = n.sub.takeIf { explain },
                     trailing = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             val est = n.items.filter { it.open }.sumOf { it.estimateMin }
@@ -3073,7 +3089,7 @@ private fun LazyListScope.screenBody(
                         }
                     },
                 ) {
-                    if (n.sub.isNotBlank()) PaperHint(n.sub)
+                    if (n.sub.isNotBlank() && !explain) PaperHint(n.sub)
                     // «Перенести все» — строкой под подписью, а не в заголовке: строка заголовка панели v2 низкая
                     // (24 dp), и кнопка в ней сжимается в черту.
                     if (lateTop && n.items.size > 1) Row {
@@ -3088,10 +3104,13 @@ private fun LazyListScope.screenBody(
     }
     for (g in sc.groups) {
         item(key = "$key:g:${g.key}") {
+            // Пояснение группы («отбить», «запустить», «мониторить») — по долгому нажатию на заголовок (запись 34).
+            val explain = DelaGroups.Grp.entries.any { it.sub == g.sub }
             PaperCard(
                 label = g.title.takeIf { it.isNotBlank() }?.let { "$it · ${g.items.size}" },
                 // Просроченное — без красного (DESIGN §11.7): тревогу несут кольцо и «просрочено N дн».
                 labelColor = if (g.late) ru.zf.pravka.ui.LocalMode.current.value else null,
+                hint = g.sub.takeIf { explain },
                 trailing = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         // Сумма оценок открытых дел группы — «1 ч 40 м» справа (`screens/06`).
@@ -3114,7 +3133,7 @@ private fun LazyListScope.screenBody(
                     }
                 },
             ) {
-                if (g.sub.isNotBlank()) PaperHint(g.sub)
+                if (g.sub.isNotBlank() && !explain) PaperHint(g.sub)
                 TaskRows(g.items, actions, by = sc.by, onProjectPage = onProjectPage)
             }
         }
@@ -3465,14 +3484,14 @@ private fun NodeRows(
     }
     val mode = ru.zf.pravka.ui.LocalMode.current
     n.children.forEachIndexed { i, c ->
-        Text(
-            "${c.title} · ${c.items.size}",
-            style = if (c.depth == 1) MaterialTheme.typography.labelLarge else MaterialTheme.typography.labelMedium,
-            color = if (c.late) mode.value else mode.label,
-            modifier = Modifier.padding(top = if (i > 0) 10.dp else 2.dp, start = if (c.depth > 1) 10.dp else 0.dp),
-        )
-        if (c.sub.isNotBlank() && c.grp != null) Text(c.sub, style = MaterialTheme.typography.bodySmall, color = mode.meta,
-            modifier = Modifier.padding(start = if (c.depth > 1) 10.dp else 0.dp))
+        // Пояснение группы — по долгому нажатию на её заголовок, а не серой строкой под ним (16.10.2026 вечер, запись 34).
+        ru.zf.pravka.ui.LongHint(c.sub.takeIf { c.grp != null }, Modifier.padding(top = if (i > 0) 10.dp else 2.dp, start = if (c.depth > 1) 10.dp else 0.dp)) {
+            Text(
+                "${c.title} · ${c.items.size}",
+                style = if (c.depth == 1) MaterialTheme.typography.labelLarge else MaterialTheme.typography.labelMedium,
+                color = if (c.late) mode.value else mode.label,
+            )
+        }
         Box(Modifier.padding(start = if (c.depth > 1) 10.dp else 0.dp)) { Column { NodeRows(c, actions, also, onProjectPage, nest = nest) } }
     }
 }

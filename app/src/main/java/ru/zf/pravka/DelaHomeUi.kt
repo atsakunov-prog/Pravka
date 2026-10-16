@@ -249,18 +249,21 @@ internal fun HomeBlock(
     trailing: (@Composable RowScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    // Подпись блока («отметил сам — сделать сегодня», «срок сегодня…») — пояснение: не серой строкой у заголовка, а по
+    // долгому нажатию на него (16.10.2026 вечер, запись 34: «я бы все пояснения всякие убрал»).
     if (!Look.v2) {
         PaperCard(
             label = "$title · $count",
             trailing = trailing?.let { tr -> { Row(verticalAlignment = Alignment.CenterVertically, content = tr) } },
+            hint = sub.takeIf { it.isNotBlank() },
         ) {
-            if (sub.isNotBlank()) PaperHint(sub)
             content()
         }
         return
     }
     val t = LocalPravkaType.current
     val shape = RoundedCornerShape(KvShape.Panel)
+    var hint by remember { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -273,18 +276,28 @@ internal fun HomeBlock(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(KvShape.Control))
-                .then(if (onTitle != null) Modifier.clickable(role = Role.Button, onClickLabel = "открыть раздел «$title»", onClick = onTitle) else Modifier)
+                .then(
+                    when {
+                        onTitle != null || sub.isNotBlank() -> Modifier.combinedClickable(
+                            role = Role.Button,
+                            onClickLabel = onTitle?.let { "открыть раздел «$title»" },
+                            onLongClickLabel = ru.zf.pravka.ui.LONG_HINT_LABEL.takeIf { sub.isNotBlank() },
+                            onClick = onTitle ?: {},
+                            onLongClick = if (sub.isNotBlank()) ({ hint = true }) else null,
+                        )
+                        else -> Modifier
+                    },
+                )
                 .padding(top = 2.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(icon, contentDescription = null, tint = Kv.icon, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
             Text(title, style = t.bodyStrong, color = Kv.text, maxLines = 1)
-            Spacer(Modifier.width(10.dp))
-            // Подпись — переносом, а не «…» (владелец 14.10.2026: «эти многоточия очень сильно не нравятся»).
-            Text(sub, style = t.meta, color = Kv.faint, modifier = Modifier.weight(1f))
+            Spacer(Modifier.weight(1f))
             if (onTitle != null) Icon(Glyphs.Forward, contentDescription = null, tint = Kv.faint, modifier = Modifier.size(16.dp))
             trailing?.invoke(this)
+            if (hint) ru.zf.pravka.ui.HintPopup(sub) { hint = false }
         }
         CompositionLocalProvider(LocalContentColor provides Kv.text) { content() }
     }
@@ -328,7 +341,10 @@ internal fun LazyListScope.homeView(
     item(key = "home:now") {
         // Плавно — когда «Сейчас» меняет высоту (сделанное отстояло своё, запись 30), «Сегодня» ниже подъезжает.
         Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
-        HomeBlock(Glyphs.Bolt, "Сейчас", h.now.size, sub = "отметил сам — сделать сегодня") {
+        HomeBlock(
+            Glyphs.Bolt, "Сейчас", h.now.size,
+            sub = "отметил сам — сделать сегодня" + if (h.now.size < DelaViews.NOW_MAX) "; ещё ${DelaViews.NOW_MAX - h.now.size} — молнией у дела или в его карточке" else "",
+        ) {
             if (h.now.isEmpty()) {
                 BlockNote("Пусто. Возьми до ${DelaViews.NOW_MAX} дел на сегодня — молния у дела или в его карточке, «!сейчас» в строке.")
             } else {
@@ -338,9 +354,7 @@ internal fun LazyListScope.homeView(
                     ru.zf.pravka.core.DelaSteps.stepsFirst(h.now + h.inner.map { it.first }, crm.snap), actions, today, nowBold = false,
                     indent = h.inner.associate { it.first.id to it.second },
                 )
-                if (h.now.size < DelaViews.NOW_MAX) {
-                    BlockNote("Ещё ${DelaViews.NOW_MAX - h.now.size} — молнией у дела или в его карточке", top = true)
-                }
+                // «Ещё N — молнией…» под делами снято (запись 34): сколько ещё взять — в пояснении «Сейчас».
             }
         }
         }

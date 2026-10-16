@@ -82,7 +82,7 @@ class ScreenShots {
 
     private val dir = File(System.getProperty("pravka.shotsDir") ?: "build/shots").also { it.mkdirs() }
 
-    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5, web, dcol, panel, m16, dbg, dball. */
+    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5, web, dcol, panel, m16, e16, dbg, dball. */
     private fun want(group: String): Boolean {
         val v = System.getProperty("pravka.shots").orEmpty()
         return v == "1" || v == "all" || v.split(',').map { it.trim() }.contains(group)
@@ -684,6 +684,9 @@ class ScreenShots {
         // ---- Мелочи отладки 16.10.2026: вкладка Дел на развороте 852×883 (как у владельца) и сложенном, обе темы
         if (want("m16")) dela16()
         if (want("m16")) dela16Agenda()
+        // ---- Отладка 16.10.2026 вечер (записи 27, 30, 32–35): «+» и микрофон в шапке, лист «Добавить дела», «Все группы ▾»,
+        // без «Группировать» и «Сделанные», пояснения по долгому нажатию, сделанное на месте, «+ проект»
+        if (want("e16")) dela16Evening()
 
         // ---- режимы по одному (Правка 4.0): сложенный, целиком, разворот
         for ((g, tab) in listOf(
@@ -1328,6 +1331,162 @@ class ScreenShots {
             .forEach { bad += "техническое число наверху: «$it»" }
         close(c)
         runBlocking { app.settings.setLookTheme("system") }
+        RuntimeEnvironment.setQualifiers(OUTER)
+        settle(4)
+        org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())
+    }
+
+    /**
+     * Вкладка Дел после записей отладки 16.10.2026 вечер — разворот 852×883 dp (как у владельца) и сложенный, обе темы,
+     * с проверками: в шапке за «Дела» — «+» и микрофон (запись 32); на «Сейчас», «Сегодня» и «Всех делах» нет серых
+     * пояснений под заголовками (34) — они всплывают по долгому нажатию; «Сегодня» — «Все группы ▾» вместо «Группировать»
+     * (35); «Все дела» — без «Группировать» и «Сделанные», «Все проекты ▾» в той же строке (33). Светлая тема: лист
+     * «Добавить дела» — фраза уходит в очередь операцией capture.say (32); флажок у дела — строка стоит на месте
+     * зачёркнутой и уходит через 4 с без касаний (30, сложенный); «+ проект» у клиента — deal.create (27, разворот).
+     * Захват — как у владельца: фичи capture и capture_model; сеть не ходит — фраза ждёт в очереди. Группа `e16`.
+     */
+    private fun dela16Evening() {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        val bad = mutableListOf<String>()
+        val before = runBlocking { app.delaStore.pending().map { it.opId } }.toSet()
+        val feats = org.json.JSONArray(listOf("groups", "krug", "tree", "digest", "nest", "debug", "capture", "capture_model"))
+        runBlocking { app.delaStore.applySync(Seed.delaResponse().put("features", feats), System.currentTimeMillis()) }
+        // Вход в Дела — как у владельца: Seed пишет файл входа после старта приложения, синк его ещё не прочёл.
+        @Suppress("UNCHECKED_CAST")
+        val linkFlow = ru.zf.pravka.data.DelaSync::class.java.getDeclaredField("_link").apply { isAccessible = true }
+            .get(app.delaSync) as kotlinx.coroutines.flow.MutableStateFlow<Any?>
+        val wasLink = linkFlow.value
+        linkFlow.value = ru.zf.pravka.data.DelaSync::class.java.getDeclaredMethod("readLink").apply { isAccessible = true }.invoke(app.delaSync)
+        fun nodes(c: ActivityController<MainActivity>) = roots(c).flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }
+        fun texts(c: ActivityController<MainActivity>) = nodes(c).flatMap { n -> n.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } }
+        fun descs(c: ActivityController<MainActivity>) = nodes(c).flatMap { it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty() }
+        // Пояснения, которых на экране больше нет (запись 34): они — в долгом нажатии на заголовок.
+        val explain = listOf(
+            "отметил сам — сделать сегодня", "что уже в «Сейчас» — выше", "люди ждут ответа или дела — первым делом",
+            "молнией у дела или в его карточке", "срок прошёл — сделать, перенести", "что должны мне — проверить", "сам придумал",
+        )
+        fun noExplain(c: ActivityController<MainActivity>, where: String) =
+            texts(c).filter { t -> explain.any { t.contains(it) } }.forEach { bad += "$where: пояснение на экране «$it»" }
+        fun queued(op: String) = runBlocking { app.delaStore.pending() }.map { it.op }.filter { it.optString("op") == op && it.optString("op_id") !in before }
+        RuntimeEnvironment.setQualifiers("w852dp-h883dp-420dpi")
+        close(launch(MainActivity.TAB_TODOIST)) // первый запуск вкладки рисует её без копии — прогреть
+        for (theme in listOf("light", "dark")) {
+            runBlocking { app.settings.setLookTheme(theme) }
+            settle(4)
+            for ((size, q) in listOf("wide" to "w852dp-h883dp-420dpi", "folded" to OUTER)) {
+                RuntimeEnvironment.setQualifiers(q)
+                val w = "$size $theme"
+                var c = launch(MainActivity.TAB_TODOIST)
+                shot(c, "e16-$size-$theme-1-now")
+                val d = descs(c)
+                if ("добавить дела" !in d || "наговорить дела" !in d) bad += "$w: в шапке нет «+» или микрофона"
+                noExplain(c, "$w «Сейчас»")
+                // Пояснение — по долгому нажатию на заголовок блока «Сейчас».
+                val long = nodes(c).firstOrNull { it.config.getOrNull(SemanticsActions.OnLongClick)?.label == ru.zf.pravka.ui.LONG_HINT_LABEL }
+                if (long == null) bad += "$w: у заголовков нет пояснения по долгому нажатию"
+                else if (theme == "light") {
+                    long.config[SemanticsActions.OnLongClick].action?.invoke()
+                    settle(6)
+                    screen("e16-$size-$theme-2-hint")
+                    // Подсказка — своим окном (Popup): под Robolectric его не рисует ни снимок экрана, ни снимок самого окна
+                    // (тот ждёт кадра на остановленном главном потоке и виснет) — проверяем, что окно с текстом есть.
+                    if (texts(c).none { it.startsWith("отметил сам") }) bad += "$w: пояснение «Сейчас» не всплыло"
+                }
+                close(c)
+                c = launch(MainActivity.TAB_TODOIST)
+                if (!tap(c, "Сегодня", exact = true)) bad += "$w: нет «Сегодня»"
+                else {
+                    shot(c, "e16-$size-$theme-3-today")
+                    val tx = texts(c)
+                    if ("Группировать" in tx) bad += "$w «Сегодня»: «Группировать» на месте"
+                    if (tx.none { it.startsWith("Все группы") }) bad += "$w «Сегодня»: нет «Все группы ▾»"
+                    noExplain(c, "$w «Сегодня»")
+                }
+                close(c)
+                c = launch(MainActivity.TAB_TODOIST)
+                if (!(tap(c, "Все дела") || tap(c, "Все", exact = true))) bad += "$w: нет «Все дела»"
+                else {
+                    shot(c, "e16-$size-$theme-4-all")
+                    val tx = texts(c)
+                    if ("Группировать" in tx) bad += "$w «Все дела»: «Группировать» на месте"
+                    if ("Сделанные" in tx) bad += "$w «Все дела»: «Сделанные» на экране"
+                    if (tx.none { it.startsWith("Все проекты") }) bad += "$w «Все дела»: нет «Все проекты ▾»"
+                    noExplain(c, "$w «Все дела»")
+                }
+                close(c)
+                if (theme == "light") {
+                    // «+» — лист «Добавить дела»: фраза уходит одной операцией захвата.
+                    c = launch(MainActivity.TAB_TODOIST)
+                    if (!tap(c, "добавить дела", exact = true)) bad += "$w: «+» не нажимается"
+                    else {
+                        screen("e16-$size-$theme-5-add")
+                        if (texts(c).none { it == ru.zf.pravka.core.DelaAdd.HINT }) bad += "$w: в листе нет «${ru.zf.pravka.core.DelaAdd.HINT}»"
+                        val said = "позвонить Ивану про модель $size, отправить Анне счёт до пятницы"
+                        if (typeTop(c, said) && tap(c, "Готово", exact = true)) {
+                            // Сеть не ходит (замок синка взят): ждём отказа ожидания очереди — 6 с настоящего времени.
+                            Thread.sleep(7_000)
+                            settle(20)
+                            screen("e16-$size-$theme-6-add-sent")
+                            val op = queued("capture.say").firstOrNull { it.optString("text").contains("модель $size") }
+                            if (op == null) bad += "$w: «+» не положил capture.say в очередь"
+                            else if (op.optString("lane") != "auto" || op.optString("from") != "say") bad += "$w: capture.say не той формы: $op"
+                        } else bad += "$w: в лист не набрать или нет «Готово»"
+                    }
+                    close(c)
+                }
+                if (theme == "light" && size == "folded") {
+                    // Флажок у дела: строка стоит на месте зачёркнутой, строки ниже не сдвигаются; уходит через 4 с без касаний.
+                    c = launch(MainActivity.TAB_TODOIST)
+                    val box = nodes(c).firstOrNull { it.config.getOrNull(SemanticsActions.OnClick)?.label == "сделано" }
+                    val title = box?.parent?.children?.firstNotNullOfOrNull { n -> n.config.getOrNull(SemanticsProperties.Text)?.firstOrNull()?.text }
+                    // Высоты строк по тексту: одинаковые слова («Сейчас» — вкладка и блок) — списком, по порядку.
+                    fun ys() = nodes(c).mapNotNull { n -> n.config.getOrNull(SemanticsProperties.Text)?.firstOrNull()?.text?.let { it to n.positionInRoot.y } }
+                        .groupBy({ it.first }, { it.second }).mapValues { (_, v) -> v.sorted() }
+                    if (box == null || title == null) bad += "$w: нет флажка у дела"
+                    else {
+                        val was = ys()
+                        box.config[SemanticsActions.OnClick].action?.invoke()
+                        settle(4)
+                        shot(c, "e16-$size-$theme-7-done-held")
+                        val now = ys()
+                        if (title !in now) bad += "$w: сделанное «$title» исчезло сразу"
+                        val moved = was.filter { (t, y) -> now[t]?.let { n -> n.size != y.size || n.zip(y).any { (a, b) -> kotlin.math.abs(a - b) > 1f } } == true }
+                        if (moved.isNotEmpty()) bad += "$w: после флажка сдвинулись строки: " + moved.keys.take(3).joinToString()
+                        Thread.sleep(4_500)
+                        settle(60)
+                        shot(c, "e16-$size-$theme-8-done-gone")
+                        if (title in ys()) bad += "$w: сделанное «$title» не ушло через 4 с"
+                    }
+                    close(c)
+                }
+                if (theme == "light" && size == "wide") {
+                    // «+ проект» у клиента: карточка клиента → лист «Новый проект» → deal.create в очереди, страница проекта.
+                    c = launch(MainActivity.TAB_TODOIST)
+                    if (tap(c, "Бета Групп")) {
+                        shot(c, "e16-$size-$theme-9-client")
+                        if (!tap(c, "+ проект", exact = true)) bad += "$w: в карточке клиента нет «+ проект»"
+                        else {
+                            screen("e16-$size-$theme-10-new-deal")
+                            if (typeTop(c, "Бета Групп: аудит 2027") && tap(c, "Завести", exact = true)) {
+                                settle(20)
+                                shot(c, "e16-$size-$theme-11-deal")
+                                val op = queued("deal.create").firstOrNull()
+                                if (op == null) bad += "$w: «+ проект» не положил deal.create"
+                                else if (op.optJSONObject("data")?.optString("name") != "Бета Групп: аудит 2027") bad += "$w: deal.create не то имя: $op"
+                            } else bad += "$w: в лист проекта не набрать или нет «Завести»"
+                        }
+                    } else bad += "$w: нет клиента в боковине"
+                    close(c)
+                }
+            }
+        }
+        // Очередь и копия — как были: дальше идут другие группы.
+        runBlocking {
+            for (q in app.delaStore.pending()) if (q.opId !in before) app.delaStore.dropQueued(q.opId)
+            app.delaStore.applySync(Seed.delaResponse(), System.currentTimeMillis())
+            app.settings.setLookTheme("system")
+        }
+        linkFlow.value = wasLink
         RuntimeEnvironment.setQualifiers(OUTER)
         settle(4)
         org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())

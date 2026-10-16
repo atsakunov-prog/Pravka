@@ -347,11 +347,17 @@ private fun SecHead(
     small: String? = null,
     link: String? = null,
     onLink: (() -> Unit)? = null,
+    /**
+     * Пояснение карточки («отмечено тобой», «срок и встречи на сегодня») — по долгому нажатию на заголовок, а не серой
+     * подписью рядом (16.10.2026 вечер, запись 34: «я бы все пояснения всякие убрал»). [small] — для данных (время и
+     * счёт дайджеста).
+     */
+    hint: String? = null,
 ) {
     val t = LocalPravkaType.current
     Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         if (icon != null) Icon(icon, null, tint = Kv.icon, modifier = Modifier.size(18.dp))
-        Text(title, style = t.bodyStrong, color = Kv.text, maxLines = 1)
+        ru.zf.pravka.ui.LongHint(hint) { Text(title, style = t.bodyStrong, color = Kv.text, maxLines = 1) }
         if (count != null && count > 0) Counter(count.toString(), hot = hot)
         // Подпись — переносом по словам, а не «…» (14.10.2026): у дайджеста в ней время и счёт чатов, обрезанные
         // они теряли смысл. Число держится за своё слово, как в шапке (`HeadLine.wrap`).
@@ -471,7 +477,7 @@ private fun NowTasksCard(c: TodayCards, wide: Boolean) {
     val t = LocalPravkaType.current
     val list = c.data.nowTasks
     PaperCard {
-        SecHead(kv("bolt", Glyphs.Bolt), "Сейчас", list.size, hot = true, small = "отмечено тобой", link = "Дела", onLink = { c.nav.mode(Tab.TODOIST) })
+        SecHead(kv("bolt", Glyphs.Bolt), "Сейчас", list.size, hot = true, hint = "отмечено тобой", link = "Дела", onLink = { c.nav.mode(Tab.TODOIST) })
         if (list.isEmpty()) {
             Text("Ничего не отмечено — «Сейчас» ставится в Делах.", style = t.meta, color = Kv.faint)
         }
@@ -542,7 +548,7 @@ private fun RemindCard(c: TodayCards) {
     if (!c.today || rows.isEmpty()) return
     val t = LocalPravkaType.current
     PaperCard {
-        SecHead(kv("clock", Glyphs.Bell), "Напоминания", rows.count { !it.mark }, small = remindSub(c.data.snap), link = "Дела", onLink = { c.nav.mode(Tab.TODOIST) })
+        SecHead(kv("clock", Glyphs.Bell), "Напоминания", rows.count { !it.mark }, hint = remindSub(c.data.snap), link = "Дела", onLink = { c.nav.mode(Tab.TODOIST) })
         rows.forEachIndexed { i, r ->
             if (i > 0) ListLine()
             Row(
@@ -588,7 +594,7 @@ private fun BackCard(c: TodayCards) {
     val t = LocalPravkaType.current
     var open by remember { mutableStateOf<TodayAgenda.BackRow?>(null) }
     PaperCard {
-        SecHead(kv("refresh", Glyphs.Refresh), "Вернулось", rows.size, small = "ты отложил «потом» — пора решить")
+        SecHead(kv("refresh", Glyphs.Refresh), "Вернулось", rows.size, hint = "ты отложил «потом» — пора решить")
         rows.forEachIndexed { i, r ->
             if (i > 0) ListLine()
             Row(
@@ -797,7 +803,7 @@ private fun NewCard(c: TodayCards, wide: Boolean) {
     PaperCard {
         if (card != null) when (card.mode) {
             Asks.Mode.LEGACY -> {
-                SecHead(kv("inbox", Glyphs.Note), "Новое", card.count, hot = true, small = card.sub, link = if (card.more > 0) "все" else null, onLink = all)
+                SecHead(kv("inbox", Glyphs.Note), "Новое", card.count, hot = true, hint = card.sub, link = if (card.more > 0) "все" else null, onLink = all)
                 card.rows.forEachIndexed { i, sg ->
                     if (i > 0) ListLine()
                     AskRow(c, sg, wide)
@@ -805,7 +811,7 @@ private fun NewCard(c: TodayCards, wide: Boolean) {
             }
             Asks.Mode.FOLD -> AsksFold(card.fold.orEmpty(), lead = true) { c.onAsksOpen(q.openKey) }
             Asks.Mode.URGENT -> {
-                SecHead(kv("inbox", Glyphs.Note), "Подскажи", card.count, hot = true, small = card.sub, link = "все", onLink = all)
+                SecHead(kv("inbox", Glyphs.Note), "Подскажи", card.count, hot = true, hint = card.sub, link = "все", onLink = all)
                 card.rows.forEachIndexed { i, sg ->
                     if (i > 0) ListLine()
                     AskRow(c, sg, wide)
@@ -820,7 +826,7 @@ private fun NewCard(c: TodayCards, wide: Boolean) {
                 }
             }
             Asks.Mode.GROUPED -> {
-                SecHead(kv("inbox", Glyphs.Note), "Подскажи", card.count, hot = true, small = card.sub, link = "все", onLink = all)
+                SecHead(kv("inbox", Glyphs.Note), "Подскажи", card.count, hot = true, hint = card.sub, link = "все", onLink = all)
                 card.groups.forEachIndexed { gi, (g, items) ->
                     AsksGroupHead(g, top = gi > 0)
                     items.forEachIndexed { i, sg ->
@@ -979,7 +985,7 @@ private fun TodayAgendaCard(c: TodayCards) {
     val t = LocalPravkaType.current
     val rows = c.data.todayRows
     PaperCard {
-        SecHead(kv("sun", Glyphs.Sunny), "Сегодня", rows.size, small = "срок и встречи на сегодня")
+        SecHead(kv("sun", Glyphs.Sunny), "Сегодня", rows.size, hint = "срок и встречи на сегодня")
         if (rows.isEmpty()) Text("Сроков и встреч на сегодня нет.", style = t.meta, color = Kv.faint)
         rows.forEachIndexed { i, r ->
             if (i > 0) ListLine()
@@ -1075,7 +1081,7 @@ private fun LentaCard(c: TodayCards, modifier: Modifier) {
             .border(1.dp, Kv.line, shape)
             .padding(start = 14.dp, end = 14.dp, top = 12.dp),
     ) {
-        SecHead(null, "Лента", small = "с вечера к утру")
+        SecHead(null, "Лента", hint = "с вечера к утру")
         if (rows.isEmpty()) {
             Text("Записей за этот день нет.", style = LocalPravkaType.current.meta, color = Kv.faint, modifier = Modifier.padding(bottom = 12.dp))
             return@Column

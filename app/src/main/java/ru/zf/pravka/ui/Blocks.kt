@@ -93,11 +93,16 @@ fun PaperCard(
     info: String? = null,
     /** Подпись рядом с заголовком мелко и бледно (`.sec small` веба): «12–19 октября», «2 приёма». Только v2. */
     note: String? = null,
+    /**
+     * Пояснение к заголовку — всплывает по долгому нажатию на него (`LongHint`, 16.10.2026 вечер, запись 34: серых
+     * подписей-пояснений под заголовками больше нет).
+     */
+    hint: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val mode = LocalMode.current
     if (Look.v2) {
-        PanelV2(label, labelColor, trailing, info, note, content)
+        PanelV2(label, labelColor, trailing, info, note, hint, content)
         return
     }
     Column(Modifier.fillMaxWidth()) {
@@ -106,12 +111,13 @@ fun PaperCard(
                 Modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    (label ?: "").uppercase(Locale.forLanguageTag("ru")),
-                    style = LocalPravkaType.current.overline,
-                    color = labelColor ?: mode.label,
-                    modifier = Modifier.weight(1f),
-                )
+                LongHint(hint, Modifier.weight(1f)) {
+                    Text(
+                        (label ?: "").uppercase(Locale.forLanguageTag("ru")),
+                        style = LocalPravkaType.current.overline,
+                        color = labelColor ?: mode.label,
+                    )
+                }
                 if (info != null) InfoDot(label ?: "Пояснение", info)
                 trailing?.invoke()
             }
@@ -137,6 +143,7 @@ private fun PanelV2(
     trailing: (@Composable () -> Unit)?,
     info: String?,
     note: String?,
+    hint: String?,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val shape = RoundedCornerShape(KvShape.Panel)
@@ -155,13 +162,14 @@ private fun PanelV2(
                     Modifier.fillMaxWidth().height(24.dp).padding(bottom = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        label.orEmpty().replaceFirstChar { it.uppercase() },
-                        style = LocalPravkaType.current.bodyStrong,
-                        color = labelColor ?: Kv.text,
-                        modifier = if (note.isNullOrBlank()) Modifier.weight(1f) else Modifier,
-                        maxLines = 1,
-                    )
+                    LongHint(hint, if (note.isNullOrBlank()) Modifier.weight(1f) else Modifier) {
+                        Text(
+                            label.orEmpty().replaceFirstChar { it.uppercase() },
+                            style = LocalPravkaType.current.bodyStrong,
+                            color = labelColor ?: Kv.text,
+                            maxLines = 1,
+                        )
+                    }
                     if (!note.isNullOrBlank()) {
                         // `.sec small`: сразу за заголовком, а не у правого края — справа место статусу и действию.
                         Text(
