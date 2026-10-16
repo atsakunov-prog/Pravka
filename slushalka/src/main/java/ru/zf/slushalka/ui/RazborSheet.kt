@@ -88,6 +88,8 @@ fun RazborSheet(
 
     var tab by remember { mutableStateOf(TAB_CARD) }
     var ordering by remember { mutableStateOf(false) }
+    // «За 15 / 30 / 60 минут» - одна вкладка, длина переключателем (v3, 17.10.2026)
+    var minutes by remember { mutableStateOf(15) }
     val list = rememberLazyListState()
 
     // Глава, где читатель, - с единицы, как у сервера.
@@ -99,7 +101,7 @@ fun RazborSheet(
         app = app,
         onClose = onClose,
         icon = if (ordering) null else Glyphs.Lightbulb,
-        title = if (ordering) "Разобрать заново" else "Разбор",
+        title = if (ordering) (if (r?.isOld == true) "Дополнить разбор" else "Разобрать заново") else "Разбор",
         subtitle = when {
             ordering || b == null || t == null -> null
             finished -> "${b.title} · дочитана"
@@ -125,10 +127,15 @@ fun RazborSheet(
         // Вкладки: постоянные и линзы, какие сервер положил под жанр книги.
         val tabs = buildList {
             add(Triple(TAB_CARD, "О книге", Glyphs.LibraryBooks))
-            if (r.summary15.isNotBlank()) add(Triple(TAB_SHORT, "За 15 минут", Glyphs.Headphones))
+            val sums = r.summaries
+            if (sums.isNotEmpty()) {
+                add(Triple(TAB_SHORT, if (sums.size > 1) "Пересказ" else "За ${sums.single().first} минут", Glyphs.Headphones))
+            }
             if (r.ideas.isNotEmpty()) add(Triple(TAB_IDEAS, "Идеи", Glyphs.Lightbulb))
+            if (r.quotes.isNotEmpty()) add(Triple(TAB_QUOTES, "Цитаты", Glyphs.FormatQuote))
             if (r.chapters.isNotEmpty()) add(Triple(TAB_CHAPTERS, "Главы", Glyphs.Toc))
             r.lenses.forEach { add(Triple(it.key, it.title, lensIcon(it.key))) }
+            if (!r.next.isEmpty) add(Triple(TAB_NEXT, "Дальше", Glyphs.MenuBook))
         }
         val current = tabs.firstOrNull { it.first == tab }?.first ?: TAB_CARD
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -146,12 +153,46 @@ fun RazborSheet(
             when (current) {
                 TAB_CARD -> item { CardPage(r) }
                 TAB_SHORT -> {
-                    if (r.audio.isNotBlank()) item { ClipControls(app, r.audio) }
-                    items(r.summary15.split('\n').map { it.trim() }.filter { it.isNotEmpty() }) { p ->
+                    val sums = r.summaries
+                    val (len, body) = sums.firstOrNull { it.first == minutes } ?: sums.first()
+                    if (sums.size > 1) {
+                        item {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                sums.forEach { (m, _) -> PaperChip("$m минут", selected = m == len) { minutes = m } }
+                            }
+                        }
+                    }
+                    // Звук - только у пятнадцатиминутки: 30 и 60 сервер не озвучивает (владелец, 17.10.2026).
+                    if (len == 15 && r.audio.isNotBlank()) item { ClipControls(app, r.audio) }
+                    items(body.split('\n').map { it.trim() }.filter { it.isNotEmpty() }) { p ->
                         Text(p, style = bookBody())
                     }
                 }
                 TAB_IDEAS -> items(r.ideas) { idea -> IdeaCard(idea, t, onGo) }
+                TAB_QUOTES -> items(r.quotes) { q ->
+                    PaperCard {
+                        PaperQuote(q.text, maxLines = 12)
+                        if (q.why.isNotBlank()) PaperNote(q.why, Modifier.padding(top = 4.dp))
+                        q.ref?.let { ref ->
+                            Row {
+                                Spacer(Modifier.weight(1f))
+                                MiniAction(Glyphs.AutoStories, "К месту · гл. ${ref.chapter}") { onGo(ref.at(t), ref.quote.isNotBlank()) }
+                            }
+                        }
+                    }
+                }
+                TAB_NEXT -> {
+                    if (r.next.library.isNotEmpty()) item { PaperLabel("Уже есть в библиотеке") }
+                    items(r.next.library) { (folder, why) ->
+                        // Книга по имени папки - тем же путём, что ссылка из веба «Книг» (MainActivity.folderAsked)
+                        PaperCard(onClick = { onClose(); app.state.requestFolder(folder) }) {
+                            Text(folder, style = MaterialTheme.typography.titleMedium)
+                            if (why.isNotBlank()) PaperNote(why, Modifier.padding(top = 4.dp))
+                        }
+                    }
+                    if (r.next.outside.isNotEmpty()) item { PaperLabel("Найти и скачать") }
+                    items(r.next.outside) { (author, title, why) -> WishCard(app, author, title, why) }
+                }
                 TAB_CHAPTERS -> items(r.chapters, key = { it.chapter }) { ch ->
                     ChapterCard(ch, here = !finished && ch.chapter == here, t, onGo)
                 }
@@ -175,7 +216,9 @@ fun RazborSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
-            if (app.razbor.canOrder(b)) MiniAction(Icons.Default.Refresh, "Разобрать заново") { ordering = true }
+            if (app.razbor.canOrder(b)) {
+                MiniAction(Icons.Default.Refresh, if (r.isOld) "Дополнить" else "Разобрать заново") { ordering = true }
+            }
         }
     }
 }
@@ -191,6 +234,8 @@ fun RazborOrderPanel(app: SlushalkaApp, book: Book, text: BookText) {
     val razbors by app.razbor.states.collectAsState()
     val order = orders[book.id]
     val again = razbors[book.id] != null
+    // Разбор до v3: заказ ещё раз посчитает у сервера только новое - дешевле и ничего готового не теряет
+    val add = razbors[book.id]?.isOld == true
     val coroutine = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -211,10 +256,15 @@ fun RazborOrderPanel(app: SlushalkaApp, book: Book, text: BookText) {
         return
     }
     Text(
-        "Сервер библиотеки прочтёт книгу целиком (${Settings.modelLabel(ru.zf.slushalka.ask.Models.OPUS_ID)}) " +
-            "и положит в её папку разбор: о книге, книга за 15 минут - текстом и голосом, идеи, " +
-            "линзы по жанру, «что было раньше» по главам - и полный справочник: главы, герои, " +
-            "связи, хронология.",
+        if (add) {
+            "Этот разбор сделан до 17.10. Сервер дочитает книгу и добавит новое: книгу за 30 и за 60 минут " +
+                "(текстом), лучшие цитаты, что читать дальше и линзу по жанру. Готовое не пересчитывается."
+        } else {
+            "Сервер библиотеки прочтёт книгу целиком (${Settings.modelLabel(ru.zf.slushalka.ask.Models.OPUS_ID)}) " +
+                "и положит в её папку разбор: о книге, книга за 15 минут - текстом и голосом, за 30 и за 60 " +
+                "минут - текстом, идеи, цитаты, что читать дальше, линзы по жанру, «что было раньше» по главам - " +
+                "и полный справочник: главы, герои, связи, хронология."
+        },
         style = bookBody(),
     )
     if (order?.failed == true) {
@@ -222,15 +272,16 @@ fun RazborOrderPanel(app: SlushalkaApp, book: Book, text: BookText) {
         PaperError("Прошлый заказ не вышел (${stamp(order.at)}): ${order.error.ifBlank { "сервер не сказал почему" }}")
     }
     Spacer(Modifier.height(12.dp))
-    val usd = remember(text) { app.razbor.estimate(text) }
+    val usd = remember(text, add) { if (add) app.razbor.estimateAdd(text) else app.razbor.estimate(text) }
     PaperButton(
         when {
             busy -> "Кладу заказ…"
+            add -> "Дополнить разбор · ≈ %.2f $".format(usd)
             again -> "Разобрать заново · ≈ %.2f $".format(usd)
             else -> "Разобрать книгу · ≈ %.2f $".format(usd)
         },
         icon = Glyphs.Lightbulb,
-        primary = !again,
+        primary = !again || add,
         enabled = !busy,
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -413,7 +464,47 @@ private fun LensCard(item: LensItem, text: BookText, onGo: (Int, Boolean) -> Uni
     }
 }
 
+/**
+ * Книга вне библиотеки из «Что читать дальше»: «Найти на Флибусте» кладёт в
+ * корень сервера файл заказа `Найти - <автор> - <название>.txt` - тот же, что
+ * понимает сортировщик (`booksorter\flibusta.py`): он найдёт книгу в каталоге,
+ * скачает и разложит в библиотеку, итог придёт владельцу в Telegram.
+ */
+@Composable
+private fun WishCard(app: SlushalkaApp, author: String, title: String, why: String) {
+    val wish = listOf(author, title).filter { it.isNotBlank() }.joinToString(" — ")
+    val coroutine = rememberCoroutineScope()
+    var state by remember(wish) { mutableStateOf<String?>(null) }
+    var busy by remember(wish) { mutableStateOf(false) }
+    PaperCard {
+        Text(wish, style = MaterialTheme.typography.titleMedium)
+        if (why.isNotBlank()) PaperNote(why, Modifier.padding(top = 4.dp))
+        Spacer(Modifier.height(8.dp))
+        when {
+            state != null -> PaperNote(state!!)
+            !app.settings.now().cloudReady -> PaperNote("Заказать можно, когда настроена домашняя библиотека")
+            else -> PaperButton("Найти на Флибусте", icon = Glyphs.CloudDownload, enabled = !busy) {
+                busy = true
+                coroutine.launch {
+                    val name = "Найти - " + wish.replace(Regex("[\\\\/:*?\"<>|—]+"), " ").replace(Regex("\\s+"), " ").trim().take(120) + ".txt"
+                    state = app.cloud.putText(name, wish + "\n").fold(
+                        { "Заказано: сервер найдёт и разложит книгу сам, итог придёт в Telegram" },
+                        { "Не вышло положить заказ: ${it.message ?: "нет связи с облаком"}" },
+                    )
+                    busy = false
+                }
+            }
+        }
+    }
+}
+
 private fun lensIcon(key: String) = when (key) {
+    "evenings" -> Glyphs.Bedtime
+    "practice" -> Glyphs.Tune
+    "check" -> Glyphs.ManageSearch
+    "forks" -> Glyphs.History
+    "themes" -> Glyphs.AutoAwesome
+    "discuss" -> Glyphs.Forum
     "finance" -> Glyphs.Timeline
     "myths" -> Glyphs.Psychology
     "world" -> Glyphs.TravelExplore
@@ -430,6 +521,8 @@ private const val TAB_CARD = "card"
 private const val TAB_SHORT = "short"
 private const val TAB_IDEAS = "ideas"
 private const val TAB_CHAPTERS = "chapters"
+private const val TAB_QUOTES = "quotes"
+private const val TAB_NEXT = "next"
 
 private fun stamp(ms: Long): String =
     if (ms <= 0) "—" else SimpleDateFormat("d.MM HH:mm", Locale("ru")).format(Date(ms))

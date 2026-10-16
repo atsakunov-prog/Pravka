@@ -72,6 +72,19 @@ data class LensItem(
     val verdict: String = "",
 )
 
+/** Цитата из разбора v3: сама цитата, чем хороша и где она - [ref] по её первым словам. */
+data class RazborQuote(val ref: RazborRef?, val text: String, val why: String)
+
+/**
+ * «Что читать дальше» (разбор v3): [library] - папки `Книги/` домашней
+ * библиотеки (сервер сверил, что они есть) с «почему»; [outside] - книги вне
+ * её, «Автор — Название» и «почему»: их можно заказать на Флибусте файлом
+ * заказа сервера.
+ */
+data class RazborNext(val library: List<Pair<String, String>>, val outside: List<Triple<String, String, String>>) {
+    val isEmpty: Boolean get() = library.isEmpty() && outside.isEmpty()
+}
+
 /** Линза разбора: свой угол зрения на книгу - деньги, наука, разговор с детьми. */
 data class Lens(val key: String, val title: String, val items: List<LensItem>) {
     /**
@@ -110,13 +123,32 @@ data class Razbor(
     val lenses: List<Lens>,
     /** К какому тексту сделан: так же, как у справочника. */
     val fit: GuideEngine.Fit,
+    /**
+     * «Книга за 30 и за 60 минут» (v3, 17.10.2026, владелец: «выбирать, сколько
+     * читать книгу. 15-30-60»): только текст, звука у них нет. У короткой книги
+     * сервер их не делает - часовой пересказ двухчасовой пьесы бессмыслен.
+     */
+    val summary30: String = "",
+    val summary60: String = "",
+    val quotes: List<RazborQuote> = emptyList(),
+    val next: RazborNext = RazborNext(emptyList(), emptyList()),
 ) {
     fun chapter(n: Int): RazborChapter? = chapters.firstOrNull { it.chapter == n }
+
+    /** Разбор до v3: заказ ещё раз посчитает только новое (30/60, цитаты, «дальше», линзы) - кнопка «Дополнить». */
+    val isOld: Boolean get() = version < VERSION
+
+    /** Пересказы, какие есть: минуты и текст. */
+    val summaries: List<Pair<Int, String>>
+        get() = listOf(15 to summary15, 30 to summary30, 60 to summary60).filter { it.second.isNotBlank() }
 
     val isEmpty: Boolean
         get() = card.about.isBlank() && chapters.isEmpty() && summary15.isBlank() && ideas.isEmpty() && lenses.isEmpty()
 
     companion object {
+
+        /** Версия разбора сервера, которую приложение показывает целиком. */
+        const val VERSION = 3
 
         /**
          * Линзы, которые лист умеет показать, - в этом порядке и под этими
@@ -124,6 +156,7 @@ data class Razbor(
          * линзу раньше, чем приложение научится её рисовать.
          */
         private val LENSES = listOf(
+            "evenings" to "Вечера: читать вслух",
             "finance" to "Деньги и экономика",
             "myths" to "Миф и факт",
             "world" to "Тем временем в мире",
@@ -133,6 +166,12 @@ data class Razbor(
             "kids.questions" to "Для разговора с детьми",
             "kids.words" to "Трудные слова",
             Lens.SCARY to "Что может напугать",
+            // v3, 17.10.2026: нон-фикшн, биографии, романы
+            "practice" to "Как применить",
+            "check" to "Проверка на прочность",
+            "forks" to "Развилки",
+            "themes" to "Темы",
+            "discuss" to "Вопросы для разговора",
         )
 
         /** null - не JSON или пустой разбор. */
@@ -181,6 +220,21 @@ data class Razbor(
                     if (items.isEmpty()) null else Lens(key, title, items)
                 },
                 fit = GuideEngine.Fit(o.optInt("chars", -1), o.optInt("главы", -1), o.optString("text")),
+                summary30 = o.optJSONObject("summary30")?.str("text").orEmpty(),
+                summary60 = o.optJSONObject("summary60")?.str("text").orEmpty(),
+                quotes = objects(o.optJSONArray("quotes")).mapNotNull { q ->
+                    q.str("text").takeIf { it.isNotBlank() }?.let { RazborQuote(RazborRef.of(q), it, q.str("why")) }
+                },
+                next = o.optJSONObject("next").let { n ->
+                    RazborNext(
+                        library = objects(n?.optJSONArray("library")).mapNotNull { x ->
+                            x.str("folder").takeIf { it.isNotBlank() }?.let { it to x.str("why") }
+                        },
+                        outside = objects(n?.optJSONArray("outside")).mapNotNull { x ->
+                            x.str("title").takeIf { it.isNotBlank() }?.let { Triple(x.str("author"), it, x.str("why")) }
+                        },
+                    )
+                },
             ).takeUnless { it.isEmpty }
         }.getOrNull()
 
@@ -202,6 +256,27 @@ data class Razbor(
                 "kids.questions" -> LensItem(ref, "", o.str("question"))
                 "kids.words" -> LensItem(ref, o.str("word"), o.str("explanation"))
                 Lens.SCARY -> LensItem(ref, "", o.str("what"))
+                // Вечер начинается с [ref] - «К месту» и есть «начать отсюда»; минуты вслух считает сервер.
+                "evenings" -> LensItem(
+                    ref, o.str("title"), "",
+                    lines(
+                        "Вслух" to o.optInt("minutes", 0).let { if (it > 0) "около $it мин" else "" },
+                        "На завтра" to o.str("teaser"),
+                        "Вопрос" to o.str("question"),
+                    ),
+                )
+                "practice" -> LensItem(
+                    ref, o.str("title"),
+                    strings(o.optJSONArray("steps")).mapIndexed { i, s -> "${i + 1}. $s" }.joinToString("\n"),
+                    lines("Когда помогает" to o.str("when"), "Когда нет" to o.str("limits")),
+                )
+                "check" -> LensItem(ref, o.str("claim"), o.str("evidence"), verdict = o.str("verdict"))
+                "forks" -> LensItem(
+                    ref, o.str("when"), o.str("situation"),
+                    lines("Выбор" to o.str("choice"), "Итог" to o.str("outcome"), "Себе" to o.str("lesson")),
+                )
+                "themes" -> LensItem(ref, o.str("theme"), o.str("text"))
+                "discuss" -> LensItem(ref, "", o.str("question"))
                 else -> null
             }?.takeIf { it.title.isNotBlank() || it.text.isNotBlank() || it.lines.isNotEmpty() }
         }
@@ -211,5 +286,9 @@ data class Razbor(
 
         private fun objects(arr: JSONArray?): List<JSONObject> =
             (0 until (arr?.length() ?: 0)).mapNotNull { arr!!.optJSONObject(it) }
+
+        /** Строки массива (шаги «Как применить»), пустые - мимо. */
+        private fun strings(arr: JSONArray?): List<String> =
+            (0 until (arr?.length() ?: 0)).map { arr!!.optString(it).trim() }.filter { it.isNotBlank() }
     }
 }

@@ -73,6 +73,12 @@ class ServerLibrary(
         val former: List<String> = emptyList(),
         /** Когда книга легла в библиотеку, секунды; 0 - сервер не сказал (поле `added`). */
         val added: Long = 0L,
+        /**
+         * Категория и теги (`booksorter\tags.py`, 17.10.2026): одна категория и 2–6 тегов из постоянных
+         * списков сервера; не размечена ещё - null и пусто.
+         */
+        val category: String? = null,
+        val tags: List<String> = emptyList(),
     ) {
         val audioBytes: Long get() = audio.sumOf { it.size }
 
@@ -328,6 +334,9 @@ class ServerLibrary(
                     other = entries(b.optJSONArray("other")),
                     former = formerOf(b),
                     added = b.optLong("added"),
+                    category = b.optString("category").trim().takeIf { !b.isNull("category") && it.isNotBlank() },
+                    tags = b.optJSONArray("tags")?.let { a -> (0 until a.length()).map { a.optString(it).trim() } }
+                        ?.filter { it.isNotBlank() }.orEmpty(),
                 ).let { book -> seriesOf(b)?.let { (name, num) -> book.copy(series = name, seriesNum = num) } ?: book }
             }
             return Index(
@@ -453,6 +462,8 @@ class ServerLibrary(
                 coverRemote = b.cover?.let { "$dir/$it" },
                 series = b.series,
                 seriesNum = b.seriesNum,
+                category = b.category,
+                tags = b.tags,
             )
         }
 

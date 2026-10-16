@@ -80,4 +80,19 @@ class ShelfGroupsTest {
         assertFalse(matchesShelfQuery(perel, null, "хокинг"))
         assertFalse(matchesShelfQuery(perel, null, "  "))
     }
+
+    // 17.10.2026: категории и теги сервера (tags.py) - группой «По категориям» и поиском по тегу
+    @Test
+    fun categoriesGroupInShelfOrderAndTagsAreSearchable() {
+        val sci = brief.copy(category = "Наука и техника", tags = listOf("физика", "космос", "научпоп"))
+        val sci2 = george1.copy(category = "Наука и техника", tags = listOf("дети 8–12", "космос"))
+        val psy = perel.copy(category = "Семья и отношения", tags = listOf("отношения", "секс"))
+        val g = groupShelf(listOf(sci, psy, azazel, sci2), Settings.GROUP_CATEGORY, series, surname)
+        assertEquals(listOf("Наука и техника", "Семья и отношения", null), g.map { it.title })
+        assertEquals(listOf(sci, sci2), g[0].books)
+        assertEquals(listOf(azazel), g[2].books)
+        assertTrue(matchesShelfQuery(sci, null, "космос"))
+        assertTrue(matchesShelfQuery(psy, null, "отношения"))
+        assertFalse(matchesShelfQuery(azazel, "Фандорин", "космос"))
+    }
 }

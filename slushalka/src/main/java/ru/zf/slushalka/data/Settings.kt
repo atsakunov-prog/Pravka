@@ -519,11 +519,14 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         const val GROUP_NONE = "none"
         const val GROUP_SERIES = "series"
         const val GROUP_AUTHOR = "author"
-        val GROUPS = listOf(GROUP_NONE, GROUP_SERIES, GROUP_AUTHOR)
+        // Категории сервера (tags.py, 17.10.2026, владелец: «категории книгам присвоим, чтобы можно было сортировать»)
+        const val GROUP_CATEGORY = "category"
+        val GROUPS = listOf(GROUP_NONE, GROUP_SERIES, GROUP_AUTHOR, GROUP_CATEGORY)
 
         fun groupLabel(v: String): String = when (v) {
             GROUP_NONE -> "Без групп"
             GROUP_AUTHOR -> "Авторы вместе"
+            GROUP_CATEGORY -> "По категориям"
             else -> "Серии вместе"
         }
 

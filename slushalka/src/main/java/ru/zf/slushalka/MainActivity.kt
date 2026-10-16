@@ -236,6 +236,14 @@ class MainActivity : ComponentActivity() {
             asking = true
         }
 
+        // «Что читать дальше» из разбора просит книгу по папке - дальше как ссылка из веба
+        val inner by state.folderRequest.collectAsState()
+        LaunchedEffect(inner) {
+            val f = inner ?: return@LaunchedEffect
+            state.requestFolder(null)
+            folderAsked.value = f
+        }
+
         // Ссылка из веба «Книг»: книга по имени папки. Полка и оглавление сервера при холодном старте приезжают не
         // сразу - перемена books/serverBooks перезапускает поиск; не нашлась и за DEEP_LINK_WAIT_MS - строка внизу.
         val folder by folderAsked.collectAsState()

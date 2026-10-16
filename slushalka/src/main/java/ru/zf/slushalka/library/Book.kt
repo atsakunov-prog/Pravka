@@ -85,6 +85,9 @@ data class Book(
     val series: String? = null,
     /** Номер в серии, как в книге: «3», «1.5»; null - без номера. */
     val seriesNum: String? = null,
+    /** Категория и теги из оглавления сервера (17.10.2026); у книги только на телефоне - нет. */
+    val category: String? = null,
+    val tags: List<String> = emptyList(),
     /**
      * Фамилия автора для сортировки - из разметки fb2/epub. null - не
      * смотрели, пустая строка - в файле её нет, полка угадает по имени.

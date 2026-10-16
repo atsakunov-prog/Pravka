@@ -133,6 +133,8 @@ object OneShelf {
             author = sb.author,
             series = serverSeries ?: b.series,
             seriesNum = if (serverSeries != null) sb.seriesNum else b.seriesNum,
+            category = sb.category,
+            tags = sb.tags,
             remoteDir = dir,
             coverRemote = sb.cover?.let { "$dir/$it" } ?: b.coverRemote,
         )

@@ -78,8 +78,10 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     `BookTalk.kt` (разговор о книге: темы, реплики; контекст — справочник и
     кусок текста, дочитанную — без барьера), разбор книги сервером —
     `Razbor.kt` (формат `слушалка-разбор.json`: карточка, главы с `before`,
-    `summary15`, идеи, линзы в общий вид `LensItem`, ссылки `RazborRef` с
-    `at(text)`) и `RazborEngine.kt` (чтение с сервера с копией
+    `summary15`, с v3 ещё `summary30/60` текстом, цитаты `RazborQuote`,
+    «дальше» `RazborNext`, идеи, линзы в общий вид `LensItem`, ссылки
+    `RazborRef` с `at(text)`; `isOld` — разбор до v3, «Дополнить») и
+    `RazborEngine.kt` (чтение с сервера с копией
     `data/RazborStore.kt`, заказ — `слушалка-разбор.заказ.json`, статус пишет
     сервер, слежение раз в минуту, на «готово» — перечитать разбор и
     справочник; цена — `estimateUsd`); справочник разбора сервера
@@ -153,7 +155,9 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     `AppState.fillSeries` — в фоне пачками, заодно фамилия автора
     `Book.authorKey`; у сервера — `series`/`series_index` в `index.json`
     (`ServerLibrary.seriesOf` понимает и объект, и список), его серия
-    главнее. Порядок — `Prefs.shelfSort` (заводской «Добавленные»: дата первой
+    главнее. Категория и теги сервера — `Book.category/tags` (17.10, из
+    `index.json`): группа `Settings.GROUP_CATEGORY`, поиск `matchesShelfQuery`.
+    Порядок — `Prefs.shelfSort` (заводской «Добавленные»: дата первой
     встречи — `data/AddedStore.kt`, `added.json`; `modified` сервера не годится —
     папка меняется от разметки и разбора; поле `added` сервера главнее), группы
     поверх порядка — `Prefs.shelfGroup` (серии / авторы / без групп),

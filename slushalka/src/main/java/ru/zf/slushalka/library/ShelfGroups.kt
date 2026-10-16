@@ -32,6 +32,7 @@ fun groupShelf(
     val keyOf: (Book) -> String? = when (by) {
         Settings.GROUP_SERIES -> { b -> series(b)?.name?.let(BookMeta::key)?.takeIf { it.isNotEmpty() } }
         Settings.GROUP_AUTHOR -> { b -> surname(b).trim().lowercase() }
+        Settings.GROUP_CATEGORY -> { b -> b.category?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } }
         else -> return listOf(ShelfGroup("loose", null, "", shown.filter { it.id != skipLoose }))
     }
     val members = shown.groupBy(keyOf)
@@ -58,6 +59,9 @@ fun groupShelf(
                 "s:$k", series(list.first())!!.name, note(list),
                 list.sortedBy { BookMeta.order(series(it)?.number) },
             )
+        } else if (by == Settings.GROUP_CATEGORY) {
+            // Внутри категории - тем же порядком полки: «Добавленные» остаются новыми сверху.
+            ShelfGroup("c:$k", list.first().category!!.trim(), note(list), list)
         } else {
             // Имя в заголовке - как оно чаще написано у его книг.
             val name = list.groupingBy { it.author.trim() }.eachCount().maxBy { it.value }.key
@@ -82,10 +86,16 @@ fun searchKey(s: String): String =
     s.lowercase().replace('ё', 'е').map { if (it.isLetterOrDigit()) it else ' ' }.joinToString("")
         .replace(Regex(" +"), " ").trim()
 
-/** Книга подходит под запрос: каждое его слово есть в названии, авторе, серии или имени папки. */
+/**
+ * Книга подходит под запрос: каждое его слово есть в названии, авторе, серии, имени папки, категории или
+ * тегах - «переговоры», «Древний мир», «подростки» находят книги по тегам сервера.
+ */
 fun matchesShelfQuery(book: Book, series: String?, query: String): Boolean {
     val words = searchKey(query).split(' ').filter { it.isNotBlank() }
     if (words.isEmpty()) return false
-    val hay = searchKey(listOf(book.title, book.author, series.orEmpty(), book.folderName).joinToString(" "))
+    val hay = searchKey(
+        (listOf(book.title, book.author, series.orEmpty(), book.folderName, book.category.orEmpty()) + book.tags)
+            .joinToString(" "),
+    )
     return words.all { it in hay }
 }

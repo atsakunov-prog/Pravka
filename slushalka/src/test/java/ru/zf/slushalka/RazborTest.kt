@@ -109,8 +109,53 @@ class RazborTest {
 
     @Test
     fun `прикидка цены - формулой сервера`() {
-        // Сервер называет ~1,9 $ для «Джорджа» (270 389 знаков, 33 главы).
-        assertEquals(1.91, RazborEngine.estimateUsd(270_389, 33), 0.02)
+        // Сервер (razbor.estimate, v3 пакетом) называет ~1,8 $ для «Джорджа» (270 389 знаков, 33 главы).
+        assertEquals(1.80, RazborEngine.estimateUsd(270_389, 33), 0.01)
+        // Дополнить «Недоросль» (101 806 знаков: 30 минут есть, 60 - нет) - 0,48 $, как в панели.
+        assertEquals(0.48, RazborEngine.estimateAddUsd(101_806), 0.01)
+        // Короткой книге пересказы 30/60 не делаются - и в цене их нет.
+        assertEquals(0.24, RazborEngine.estimateAddUsd(60_000), 0.01)
+    }
+
+    @Test
+    fun `разбор v3 - пересказы 30 и 60, цитаты, дальше, новые линзы`() {
+        val r = Razbor.parse(
+            """
+            {"версия": 3, "chars": 10, "главы": 2, "card": {"about": "о книге", "lens": "психология"},
+             "summary15": {"text": "пятнадцать", "audio": ""},
+             "summary30": {"text": "тридцать", "audio": ""},
+             "summary60": {"text": "шестьдесят", "audio": ""},
+             "quotes": [{"c": 2, "pos": 40, "q": "первые слова", "text": "Цитата целиком.", "why": "точно"},
+                        {"c": 1, "text": ""}],
+             "next": {"library": [{"folder": "Эрик Берн - Игры, в которые играют люди", "why": "продолжение"}],
+                      "outside": [{"author": "Ирвин Ялом", "title": "Лжец на кушетке", "why": "о терапии"}, {"title": ""}]},
+             "lenses": {
+               "practice": [{"c": 1, "pos": 0, "title": "Пауза", "steps": ["Остановиться", "", "Назвать чувство"],
+                             "when": "в ссоре", "limits": "не в панике"}],
+               "check": [{"c": 2, "pos": 5, "claim": "Воля кончается", "evidence": "не воспроизвелось", "verdict": "не подтвердилось"}],
+               "evenings": [{"c": 1, "pos": 0, "title": "Вечер первый", "teaser": "Завтра - дракон", "question": "Страшно?", "minutes": 17}]
+             }}
+            """.trimIndent(),
+        )!!
+        assertFalse(r.isOld)
+        assertEquals(listOf(15, 30, 60), r.summaries.map { it.first })
+        assertEquals("шестьдесят", r.summaries.last().second)
+        assertEquals(1, r.quotes.size)
+        assertEquals(RazborRef(2, 40, "первые слова"), r.quotes.single().ref)
+        assertEquals("Эрик Берн - Игры, в которые играют люди", r.next.library.single().first)
+        assertEquals(Triple("Ирвин Ялом", "Лжец на кушетке", "о терапии"), r.next.outside.single())
+        assertEquals(listOf("evenings", "practice", "check"), r.lenses.map { it.key })
+        val practice = r.lenses.first { it.key == "practice" }.items.single()
+        assertEquals("1. Остановиться\n2. Назвать чувство", practice.text)
+        assertEquals(listOf("Когда помогает" to "в ссоре", "Когда нет" to "не в панике"), practice.lines)
+        assertEquals("не подтвердилось", r.lenses.first { it.key == "check" }.items.single().verdict)
+        val evening = r.lenses.first { it.key == "evenings" }.items.single()
+        assertEquals("около 17 мин", evening.lines.first().second)
+        // Разбор v2 - старый: у него есть «Дополнить», а пересказ один.
+        val old = Razbor.parse(raw)!!
+        assertTrue(old.isOld)
+        assertEquals(listOf(15), old.summaries.map { it.first })
+        assertTrue(old.next.isEmpty)
     }
 
     @Test

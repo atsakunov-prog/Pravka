@@ -1539,6 +1539,14 @@ private fun BookSheet(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 if (book.author.isNotBlank()) Text(book.author, style = MaterialTheme.typography.bodyMedium)
+                // Категория и теги сервера (17.10.2026): видно, что за книга, не открывая её
+                (book.category ?: server?.category)?.let { cat ->
+                    Text(
+                        (listOf(cat) + book.tags.ifEmpty { server?.tags.orEmpty() }).joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
                 val facts = buildList {
                     if (server != null && server.audio.isNotEmpty()) {
                         add("звук ${formatSpan(server.audioMs.takeIf { it > 0 } ?: book.totalMs)} · " +

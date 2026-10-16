@@ -141,11 +141,14 @@ class RazborEngine(
     }
 
     /**
-     * Сколько заплатит сервер - его же формулой: книга один раз пишется в кэш
-     * (вход с надбавкой в четверть), восемь задач читают её из кэша, ответы -
-     * по цене выхода. Около 1,9 $ за «Джорджа», 3 $ за том Акунина.
+     * Сколько заплатит сервер - его же формулой (`razbor.estimate`): пакетом за
+     * полцены, книга один раз пишется в кэш на час, одиннадцать задач читают её
+     * из кэша, ответы - по числу глав и длине книги. «Бежим отсюда!» - ~1,5 $.
      */
     fun estimate(text: BookText): Double = estimateUsd(text.length, text.chapters.size)
+
+    /** Дополнить разбор до v3: книга заново в кэш, считаются только новые задачи (`razbor.estimate_add`). */
+    fun estimateAdd(text: BookText): Double = estimateAddUsd(text.length)
 
     /** Заказ книги на сервере, каким он там лежит; null - заказа нет (или сети). */
     suspend fun orderOf(book: Book): Order? {
@@ -210,13 +213,32 @@ class RazborEngine(
     }
 
     companion object {
-        /** Цена разбора по объёму текста и числу глав - см. [estimate]. */
+        /**
+         * Цена разбора по объёму текста и числу глав - см. [estimate]. Пакет:
+         * запись кэша на час - вдвое дороже входа, со скидкой пакета - ровно
+         * вход; чтение и выход - за полцены.
+         */
         fun estimateUsd(chars: Int, chapters: Int): Double {
             val m = Models.OPUS
             val bookTokens = chars / 2.2
-            val outTokens = 45_000.0 + 300.0 * chapters.coerceAtLeast(1)
-            return (bookTokens * (m.input * 1.25 + TASKS * m.cacheRead) + outTokens * m.output) / 1_000_000.0
+            val outTokens = 45_000.0 + outV3(chars) + 300.0 * chapters.coerceAtLeast(1)
+            return (bookTokens * (m.input + TASKS * m.cacheRead / 2) + outTokens * m.output / 2) / 1_000_000.0
         }
+
+        /** Дополнить v2 до v3: запись книги в кэш, четыре чтения, прибавка ответов v3. */
+        fun estimateAddUsd(chars: Int): Double {
+            val m = Models.OPUS
+            val bookTokens = chars / 2.2
+            return (bookTokens * (m.input + 4 * m.cacheRead / 2) + outV3(chars) * m.output / 2) / 1_000_000.0
+        }
+
+        /**
+         * Прибавка ответов v3, как у сервера (`razbor.out_v3`): цитаты, «дальше»,
+         * линза - ~12 тыс. токенов; пересказы 30 и 60 минут - только если книга
+         * слушается хотя бы втрое дольше (~850 знаков в минуту).
+         */
+        private fun outV3(chars: Int): Double =
+            12_000.0 + (if (chars >= 3 * 30 * 850) 16_000.0 else 0.0) + (if (chars >= 3 * 60 * 850) 34_000.0 else 0.0)
 
         /** Разбор в папке книги - рядом со справочником. */
         const val FILE = "слушалка-разбор.json"
@@ -232,8 +254,8 @@ class RazborEngine(
         /** Заказ моложе этого ждём; старше - брошен, можно заказывать заново. */
         const val ORDER_FRESH_MS = 6 * 3600_000L
 
-        /** Задач у разборщика сервера: столько раз книга читается из кэша. */
-        private const val TASKS = 8
+        /** Задач у разборщика сервера: столько раз книга читается из кэша (v3 - с пересказами 30/60, цитатами, «дальше»). */
+        private const val TASKS = 11
 
         private const val POLL_MS = 60_000L
         private const val WATCH_MS = 45 * 60_000L

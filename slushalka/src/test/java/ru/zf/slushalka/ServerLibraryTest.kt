@@ -41,6 +41,23 @@ class ServerLibraryTest {
     """.trimIndent()
 
     @Test
+    fun categoryAndTagsFromIndex() {
+        val idx = ServerLibrary.parse(
+            """{"books_dir": "Книги", "books": [
+                 {"folder": "Эрик Берн - Игры", "author": "Эрик Берн", "title": "Игры", "category": "Психология",
+                  "tags": ["общение", " ", "научпоп"]},
+                 {"folder": "Без тегов", "author": "", "title": "Без тегов", "category": null}]}""",
+        )
+        assertEquals("Психология", idx.books[0].category)
+        assertEquals(listOf("общение", "научпоп"), idx.books[0].tags)
+        assertEquals(null, idx.books[1].category)
+        assertEquals(emptyList<String>(), idx.books[1].tags)
+        val book = ServerLibrary.toBook(idx, idx.books[0], "Books", "content://tree")
+        assertEquals("Психология", book.category)
+        assertEquals(listOf("общение", "научпоп"), book.tags)
+    }
+
+    @Test
     fun parsesIndex() {
         val idx = ServerLibrary.parse(sample, fetchedAt = 42)
         assertEquals("Книги", idx.booksDir)

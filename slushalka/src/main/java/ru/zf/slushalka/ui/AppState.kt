@@ -688,6 +688,15 @@ class AppState(private val app: SlushalkaApp) {
         return true
     }
 
+    // Книга по имени папки изнутри приложения - «Что читать дальше» в разборе (17.10.2026): её открывает
+    // MainActivity тем же путём, что ссылку из веба «Книг» (folderAsked), с ожиданием полки и строкой «нет такой».
+    private val _folderRequest = MutableStateFlow<String?>(null)
+    val folderRequest: StateFlow<String?> = _folderRequest
+
+    fun requestFolder(folder: String?) {
+        _folderRequest.value = folder
+    }
+
     fun closeBook() {
         app.player.saveNow()
         _current.value = null
