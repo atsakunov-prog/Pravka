@@ -49,7 +49,11 @@ TASK_FIELDS = {
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
             "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
             "privacy", "context_index", "claude_guard", "nest", "debug", "capture", "capture_model", "ideas", "did",
-            "remind_phone", "speaker_link", "people_final", "plan", "asks"]
+            "remind_phone", "speaker_link", "people_final", "plan", "asks", "talk_answers"]
+# «talk_answers» — строка Claude кладёт куда сказано (16.10.2026, отладка, записи 21–22; правило 33, ask.py): у реплики
+# /api/ask scope.history принимает ids (дела, которые она завела и поправила; uuid, до 20) — Claude видит их свежими
+# хвостом; ответ несёт answers (до трёх кнопок ответа на вопрос Claude). Операций и полей синка флаг не добавляет:
+# телефон по нему решает, слать ли ids и рисовать ли кнопки (без флага — «Да / Нет» по «?» и старая память).
 # «asks» — «Подскажи» двумя заходами (шаг 2 петли этапа 4, 15.10.2026, asks.py; контракт dela-asks.json): сервер при
 # записи вопроса ставит payload.urgency («today» — вопрос по сегодняшней встрече или служба сама сказала, с urgent_on —
 # днём сгорания; иначе «evening»), payload.about ({kind: client | person | meeting | small | plan, id?, title}); вид asks

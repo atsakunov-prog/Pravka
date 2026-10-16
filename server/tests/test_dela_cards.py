@@ -323,7 +323,9 @@ def test_talk_history_and_no_parse_route(dela):
 def test_schema_fits_grammar():
     """У схемы ответа предел: 06.10.2026 с карточкой тремя массивами и полным create API ответил
     «compiled grammar is too large» (62 поля — нет, 52 — да). Новое поле — сначала проба на API.
-    15.10.2026: 54 — да (step у create и into у changes — булево и целое, проба на API Opus 5.5 прошла)."""
+    15.10.2026: 54 — да (step у create и into у changes — булево и целое, проба на API Opus 5.5 прошла).
+    16.10.2026 (записи 21–22): 56 — into строкой у changes и create, create.goal, answers; проба на API — по вопросу 1
+    тяжёлой полосы. Не пройдёт — ask() сам повторит со SCHEMA_LITE (54: без answers и goal), её держит этот же тест."""
     def count(node):
         if node.get("type") == "object":
             return sum(1 + count(v) for v in node["properties"].values())
@@ -331,7 +333,9 @@ def test_schema_fits_grammar():
             return count(node["items"])
         return 0
 
-    assert count(ask.SCHEMA) <= 54
+    assert count(ask.SCHEMA) <= 56  # проба на API — по вопросу 1 тяжёлой полосы
+    assert count(ask.SCHEMA_LITE) == 54  # запасная — та, что прошла пробу 15.10.2026
+    assert "answers" not in ask.SCHEMA_LITE["properties"] and "goal" not in ask.SCHEMA_LITE["properties"]["create"]["items"]["properties"]
 
 
 def test_task_card_sees_only_this_task_and_new_lands_next_to_it(dela):

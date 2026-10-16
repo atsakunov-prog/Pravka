@@ -21,6 +21,7 @@ const S = {
   cardHidden: LS.get('cardHidden', false), lastCard: null, // карточка справа спрятана язычком (14.10.2026); какая была открыта
   parse: null, quickText: '', // идёт разбор Claude; текст строки Claude — живёт, пока его не отдали (перерисовка его не стирает)
   cardSay: {}, kstati: false, whenText: {}, // строка Claude в карточке дела (по делу), «Кстати», строка «Когда» (13.10.2026)
+  talkReply: {}, listenReply: null, replyVoiced: null, // строка «Ответить Claude…» под свежей репликой (16.10.2026): текст по разговору
   selfOpen: null, selfText: {}, // «Сам допишу» у уточнения в «Подскажи»: какое открыто и что написано
   autoOpen: false, clientOpen: new Set(LS.get('clientOpen', [])), peopleQ: '', // «Сделано само» развёрнуто, клиенты со сделками, люди
   krug: { dirs: [], principles: [], proj: new Map() }, kpick: {}, // Круг жизни: направления и принципы (Свод), проекты в Круге; выбор в «Подскажи»
@@ -2603,7 +2604,8 @@ function treeOutline(m, dirs) {
       d.formula ? el('span', { class: 'gsub' }, d.formula) : null);
     return el('div', { class: 'group tree-dir' + (open ? '' : ' folded') }, dropTo(head, { dir: d.key }),
       open ? el('div', { class: 'rows tree-rows' }, m.kids(key).flatMap((c) => treeBranch(m, c, 0))) : null,
-      open && !m.kids(key).length ? el('div', { class: 'empty' }, 'Здесь пока ничего — цели заводятся в карточке дела («Сделать целью») или словами Claude.') : null);
+      // «…или словами Claude» — правда с 16.10.2026 (записи 21–22): строка Claude заводит цель (goal) и кладёт её куда скажешь.
+      open && !m.kids(key).length ? el('div', { class: 'empty' }, 'Здесь пока ничего — цели заводятся в карточке дела («Сделать целью») или словами Claude: «заведи цель … в направлении ' + d.name + '».') : null);
   });
 }
 /** Срок справа у дела в «Колонках» (16.10.2026, запись отладки 18: «справа от дела тоже писать, какие у них сроки»): коротко,
@@ -2638,13 +2640,14 @@ function treeCols(m, dirs) {
     const t = c.t;
     if (c.kind === 'goal') {
       const open = !isFolded(c.key, false);
-      const row = el('div', { class: 'col-goal' + (t.rhythm ? ' practice' : '') + (S.cardId === t.id ? ' open-now' : ''), style: '--indent:' + depth, onclick: () => openCard(t.id) },
+      // data-id — строка экрана для Claude и снимка отладки (16.10.2026, запись 21: на «Колонках» Claude видел «дел на экране 0»).
+      const row = el('div', { class: 'col-goal' + (t.rhythm ? ' practice' : '') + (S.cardId === t.id ? ' open-now' : ''), style: '--indent:' + depth, 'data-id': t.id, onclick: () => openCard(t.id) },
         m.kids(c.key).length ? el('button', { class: 'caret-btn', onclick: (e) => { e.stopPropagation(); setFolded(c.key, open); render(); } }, caret(open)) : el('span', { class: 'caret-btn none' }),
         el('span', { class: 'g-title' }, t.title),
         m.open(c.key) ? el('span', { class: 'g-n' }, m.open(c.key)) : null);
       return [dropTo(dragFrom(row, 'task', t.id), { goal: t.id }), ...(open ? m.kids(c.key).flatMap((x) => item(x, depth + 1)) : [])];
     }
-    const row = el('div', { class: 'col-task' + (inToday(t) ? ' today' : '') + (S.cardId === t.id ? ' open-now' : ''), style: '--indent:' + depth, onclick: () => openCard(t.id) },
+    const row = el('div', { class: 'col-task' + (inToday(t) ? ' today' : '') + (S.cardId === t.id ? ' open-now' : ''), style: '--indent:' + depth, 'data-id': t.id, onclick: () => openCard(t.id) },
       el('button', { class: 'tick mini', title: 'Сделано', onclick: (e) => { e.stopPropagation(); toggleDone([t]); } }), el('span', { class: 'c-t' }, t.title), colDue(t));
     return [dragFrom(row, 'task', t.id), ...m.kids(c.key).flatMap((x) => item(x, depth + 1))];
   };
@@ -3075,7 +3078,8 @@ function quickAdd(defaults, { placeholder = null, label = null, hint = null } = 
   const card = pageScope(defaults).card;
   const input = el('textarea', { id: 'quick', rows: 1, autocomplete: 'off', disabled: busy,
     'aria-label': 'Добавь дело — одно или несколько, разложу сам; можно и спросить или поправить то, что на экране' + (label ? ` (${label})` : ''),
-    placeholder: talk && talk.turns.length ? 'Добавь дело или продолжи разговор' : hint || (card ? 'Добавь дело или заметку — или скажи, что сделать' : SAY_HINT),
+    // Верхнее поле — всегда новый разговор (16.10.2026, записи 21–22): продолжение — строкой «Ответить Claude…» в ленте.
+    placeholder: hint || (card ? 'Добавь дело или заметку — или скажи, что сделать' : SAY_HINT),
     title: 'Одно или несколько дел — разложу сам. Ещё можно спросить или поручить: '
       + (placeholder || '«что сегодня важнее всего?», «все просроченные — на пятницу»') });
   input.value = S.quickText || '';
@@ -3296,6 +3300,7 @@ async function runJob(path, body) {
  *  сейчас на экране»): дела страницы сверху вниз — какие из них в окне прямо сейчас, какие выбраны
  *  галочками, какое открыто в карточке, — и в «Новом» предложения (П1, П2…). Дела берутся с самой
  *  страницы в миг отправки: что нарисовано, то и видно; S.order — запас, если строк в DOM нет. */
+const SCREEN_ROWS = 'main.list .task[data-id], main.list .tree-goal[data-id], main.list .col-goal[data-id], main.list .col-task[data-id]';
 function pageScope(defaults = {}) {
   const r = route();
   const p = r.kind === 'project' ? project(r.id) : null, h = r.kind === 'person' ? person(r.id) : null;
@@ -3306,7 +3311,9 @@ function pageScope(defaults = {}) {
       : r.kind === 'new' && r.batch ? `Новое: одна пачка — ${one?.batch_title || r.batch}`
         : r.kind === 'filter' ? 'Фильтр: ' + ((filters().find((f) => f.id === r.id) || {}).name || r.id)
           : (VIEWS[r.kind] || CRM_VIEWS[r.kind] || { title: 'Дела' }).title;
-  const rows = [...document.querySelectorAll('main.list .task[data-id]')];
+  // Строки дерева — тоже экран (16.10.2026, записи 21–22: на «Дереве жизни» в «Колонках» Claude видел «дел на экране 0» и
+  // отсылал перетаскивать руками): цели «Дерева» (.tree-goal), цели и дела «Колонок» (.col-goal, .col-task).
+  const rows = [...document.querySelectorAll(SCREEN_ROWS)];
   const uniq = (xs) => [...new Set(xs)];
   // В окне — между низом того, что липнет к верху колонки (вкладки разделов), и низом окна; строка, от которой
   // видна лишь кромка, не в счёт: её названия не видно.
@@ -3361,7 +3368,12 @@ function describe(c) {
     out.push('ball' in a || 'owed' in a ? grpWho(a, who) : 'человек' + (who ? ' ' + who : ''));
   }
   if ('notes' in a) out.push('дописал заметку');
-  if ('why_id' in a) out.push(a.why_id ? 'внутрь «' + ((S.tasks.get(a.why_id) || {}).title || 'дела') + '»' : 'вынул из дела');
+  // Куда положено (16.10.2026, правило 33): под цель, внутрь дела, прямо в направление, вынуто.
+  if ('why_id' in a) {
+    const w = a.why_id ? S.tasks.get(a.why_id) : null;
+    out.push(w ? (w.goal ? 'под цель «' : 'внутрь «') + w.title + '»' : a.why_id ? 'внутрь «дела»'
+      : (a.directions || []).length ? 'в направление ' + dirName(a.directions[0]) : 'вынул из дела');
+  } else if ((a.directions || []).length) out.push('в направление ' + dirName(a.directions[0]));
   if ('estimate_min' in a) out.push(a.estimate_min ? a.estimate_min + ' мин' : 'без оценки');
   if ('labels' in a) out.push(a.labels.length ? 'метки ' + a.labels.join(', ') : 'без меток');
   if (a.remind_at) out.push('напомню в Telegram ' + remindWords(a.remind_at));
@@ -3391,6 +3403,9 @@ function pageTalk() {
   }
   return S.talk;
 }
+/** Реплика Claude. cont — продолжение разговора (строка «Ответить Claude…» и кнопки ответа в ленте); без него верхнее поле
+ *  страницы начинает новый разговор (16.10.2026, записи отладки 21–22: «Да, ставь» уходило верхней строкой как продолжение —
+ *  неочевидно, а подпись «продолжи разговор» путала с «добавить дело»). Прежний разговор сворачивается под лентой. */
 async function claudeSay(text, defaults, cont, card) {
   if (S.parse) return;
   let talk;
@@ -3398,7 +3413,12 @@ async function claudeSay(text, defaults, cont, card) {
     talk = S.cardTalk && S.cardTalk.card.id === card.id ? S.cardTalk : { id: uuid(), card, turns: [] };
     S.cardTalk = talk;
   } else {
-    talk = pageTalk() || { id: uuid(), key: screenKey(), title: pageScope(defaults).title, defaults, turns: [] };
+    let cur = pageTalk();
+    if (cur && !cont) {
+      if (cur.turns.length) S.talkOld = [cur, ...(S.talkOld || [])].slice(0, 5);
+      cur = null;
+    }
+    talk = cur || { id: uuid(), key: screenKey(), title: pageScope(defaults).title, defaults, turns: [] };
     S.talk = talk;
   }
   const one = talk.card;
@@ -3461,13 +3481,92 @@ function talkFeed(talk, { inCard = false } = {}) {
       talk.turns.length ? el('span', { class: 'cr-meta' }, plural(talk.turns.length, 'реплика', 'реплики', 'реплик')) : null,
       talk.busy ? null : el('button', { class: 'link-btn', title: 'Закончить: следующий вопрос — с чистого листа', onclick: end }, 'Новый разговор')) : null,
     live && talk.busy ? el('div', { class: 'cr-turn pending' }, el('div', { class: 'cr-said' }, talk.busy), el('div', { class: 'cr-think' }, 'Claude думает…')) : null,
-    live ? [...talk.turns].reverse().map((t) => turnView(t)) : null,
+    // Под свежей репликой — кнопки ответа и своя строка «Ответить Claude…» (16.10.2026, записи 21–22).
+    live ? [...talk.turns].reverse().map((t, i) => (i === 0 && !talk.busy ? [turnView(t), talkReply(talk, inCard)] : turnView(t))) : null,
     old.map((o) => el('details', { class: 'tf-old' },
       el('summary', {}, 'Прошлый разговор · ' + (o.title || 'другой экран') + ' · ' + plural(o.turns.length, 'реплика', 'реплики', 'реплик')),
       [...o.turns].reverse().map((t) => turnView(t)))));
 }
 
-/** Что сделано в реплике — коротко, для памяти разговора на сервере. */
+/** Кнопки ответа на вопрос Claude: answers сервера (первым — его предложение); вопрос без них — «Да» и «Нет». Отменённая
+ *  («Вернуть») реплика кнопок не даёт. Одно правило с телефоном (DelaAsk.answersOf). */
+function talkAnswers(t) {
+  const d = t && !t.undone ? t.d : null;
+  if (!d) return [];
+  const got = (d.answers || []).map((a) => String(a || '').trim()).filter(Boolean).slice(0, 3);
+  return got.length ? got : /\?\s*$/.test(d.reply || '') ? ['Да', 'Нет'] : [];
+}
+/** Под свежей репликой разговора (16.10.2026, записи отладки 21–22; «Да, ставь» Саша набирал верхней строкой, а кнопок не
+ *  было): кнопки ответа и строка «Ответить Claude…» с микрофоном и стрелкой — продолжение этого же разговора (тот же
+ *  talk_id и history) на странице и в карточке дела. Кнопка — её текст следующей репликой (обычный вызов Claude: ~1,5 цента
+ *  тёплый). Микрофон — как у строки страницы: «стоп» кладёт текст в поле, отправляет Саша (запись отладки 12). */
+function talkReply(talk, inCard) {
+  const busy = !!S.parse;
+  const key = inCard ? 'card:' + talk.card.id : 'page';
+  const fid = inCard ? 'card-talk-reply' : 'talk-reply';
+  const card = inCard ? { id: talk.card.id } : null;
+  const send = (x) => {
+    const said = String(x || '').trim();
+    if (!said || S.parse) return;
+    S.talkReply[key] = '';
+    S.replyVoiced = null;
+    claudeSay(said, talk.defaults || {}, true, card);
+  };
+  const answers = talkAnswers(talk.turns[talk.turns.length - 1]);
+  const input = el('textarea', { id: fid, class: 'tr-input', rows: 1, disabled: busy, autocomplete: 'off',
+    placeholder: 'Ответить Claude…', 'aria-label': 'Ответить Claude — продолжение этого разговора' });
+  input.value = S.talkReply[key] || '';
+  const grow = () => { input.style.height = ''; if (input.scrollHeight > input.clientHeight + 2) input.style.height = Math.min(input.scrollHeight, 200) + 'px'; };
+  input.addEventListener('input', () => { S.talkReply[key] = input.value; box.classList.toggle('has-text', !!input.value.trim()); grow(); });
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(input.value); }
+    if (e.key === 'Escape') { e.preventDefault(); input.value = S.talkReply[key] = ''; box.classList.remove('has-text'); input.blur(); }
+  });
+  const hearing = !!(rec && S.listenReply === key);
+  const mic = el('button', { type: 'button', class: 'q-btn mic' + (hearing ? ' on' : ''), disabled: busy,
+    title: hearing ? 'Готово — текст встанет в поле' : 'Ответить голосом: нажми, говори, нажми ещё раз — текст встанет в поле',
+    'aria-label': hearing ? 'Закончить — текст встанет в поле' : 'Ответить голосом', 'aria-pressed': hearing ? 'true' : 'false',
+    onclick: () => {
+      if (hearing) { stopListening(); return; }
+      const base = input.value.trim();
+      S.listenReply = key;
+      const ok = listen((txt) => {
+        S.talkReply[key] = (base ? base + ' ' : '') + txt;
+        const i = document.getElementById(fid);
+        if (i) { i.value = S.talkReply[key]; i.dispatchEvent(new Event('input')); }
+      }, () => {
+        S.listenReply = null;
+        const x = (S.talkReply[key] || '').trim();
+        S.replyVoiced = x && x !== base ? key : null;
+        render();
+        if (x) voiceToField(fid);
+      });
+      if (!ok) S.listenReply = null;
+      render();
+    } }, icon(hearing ? 'stop' : 'mic', 18));
+  const box = el('div', { class: 'quick-box tr-box' + (hearing ? ' hearing' : '') + (input.value.trim() ? ' has-text' : '') },
+    input, mic, el('button', { type: 'button', class: 'q-btn send-btn', disabled: busy, title: busy ? 'Claude думает…' : 'Ответить Claude (Enter)',
+      'aria-label': 'Ответить Claude', onclick: () => send(input.value) }, icon('up', 18)));
+  setTimeout(grow);
+  return el('div', { class: 'talk-reply' },
+    answers.length ? el('div', { class: 'tr-answers' }, answers.map((a, i) => el('button', { type: 'button',
+      class: 'chip-btn tr-answer' + (i === 0 ? ' first' : ''), disabled: busy, title: 'Ответить Claude: «' + a + '»', onclick: () => send(a) }, a))) : null,
+    box,
+    hearing ? el('div', { class: 'claude-status listening' }, 'Слушаю — нажми микрофон ещё раз, текст встанет в поле.')
+      : S.replyVoiced === key && (S.talkReply[key] || '').trim() ? el('div', { class: 'claude-status' }, 'Текст в поле — поправь, если надо, и Enter.') : null);
+}
+
+/** Дела, которые реплика завела и поправила (16.10.2026, записи 21–22): сервер показывает их Claude свежими («ДЕЛА ИЗ
+ *  ЭТОГО РАЗГОВОРА»), иначе «да, ставь» во второй реплике не видел дела, заведённого первой (голова экрана кэшируется на
+ *  разговор). До 20 — как у сервера (ask.TALK_IDS). */
+function turnIds(d) {
+  const ids = [...(d.tasks || []).map((x) => x.id), ...(d.changed || []).map((c) => c.id),
+    ...(d.decided || []).map((x) => x.id), ...(d.steps || []),
+    ...((d.capture && d.capture.items) || []).map((x) => x.task && x.task.id)];
+  return [...new Set(ids.filter((x) => typeof x === 'string' && x))].slice(0, 20);
+}
+/** Что сделано в реплике — коротко, для памяти разговора на сервере: said, reply, done и ids. */
 function turnMemo(t) {
   const d = t.d, out = [];
   if (d.capture) {
@@ -3482,8 +3581,10 @@ function turnMemo(t) {
     for (const c of d.crm || []) out.push(c.what);
   }
   if ((d.errors || []).length) out.push('не вышло: ' + d.errors.join('; '));
+  const ids = turnIds(d);
   return { said: t.said.slice(0, 600), reply: (d.reply || '').slice(0, 900),
-    done: (out.join('; ') || 'ничего не менял').slice(0, 700) + (t.undone ? ' — Саша вернул всё это как было' : '') };
+    done: (out.join('; ') || 'ничего не менял').slice(0, 700) + (t.undone ? ' — Саша вернул всё это как было' : ''),
+    ...(ids.length ? { ids } : {}) };
 }
 
 /** Отмена реплики: правки дел — как было, заведённое — отменой, карточка — её «как было». */
@@ -3537,7 +3638,14 @@ function turnView(t) {
     items.push((d.changed || []).map((c) => el('button', { class: 'cr-task', onclick: open(c.id) },
       el('div', {}, c.after?.title || c.title), el('div', { class: 'cr-meta' }, describe(c)))));
     if ((d.tasks || []).length) items.push(el('div', { class: 'cr-sub' }, 'Новые:'));
-    items.push((d.tasks || []).map((x) => el('button', { class: 'cr-task', onclick: open(x.id) }, el('div', {}, x.title))));
+    // Новое — где оно легло (16.10.2026, правило 33): «цель · под целью «…»», «внутри «…»», «в направлении …».
+    const placeOfNew = (x) => {
+      const w = x.why_id ? S.tasks.get(x.why_id) : null;
+      return [x.goal ? 'цель' : null, w ? (w.goal ? 'под целью «' : 'внутри «') + w.title + '»'
+        : !x.why_id && (x.directions || []).length ? 'в направлении ' + dirName(x.directions[0]) : null].filter(Boolean).join(' · ');
+    };
+    items.push((d.tasks || []).map((x) => el('button', { class: 'cr-task', onclick: open(x.id) }, el('div', {}, x.title),
+      placeOfNew(x) ? el('div', { class: 'cr-meta' }, placeOfNew(x)) : null)));
     if ((d.crm || []).length) items.push(el('div', { class: 'cr-sub' }, 'Проекты, люди, хронология:'));
     items.push((d.crm || []).map((c) => el('div', { class: 'cr-note' }, c.what)));
   }

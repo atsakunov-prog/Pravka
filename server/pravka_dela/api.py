@@ -19,8 +19,8 @@
 | GET  /api/task/<id или номер> | дело с комментариями, журналом и откуда оно (origin) |
 | POST /api/parse | {"text", "project_id"?, "person_id"?} — Claude режет текст на дела и заводит их; ответ — номер задания |
 | GET  /api/parse/<номер> | run, пока думает; потом done с делами и заметками или error |
-| POST /api/ask | {"text", "scope": {"title", "task_ids", "visible_ids"?, "selected_ids"?, "open"?, "deal_ids"?, "visible_deal_ids"?, "focus"?, "project_id"?, "person_id"?, "deal_id"?, "card"?, "kstati"?, "step"?, "suggestion_ids"?, "history"?}} — Claude правит дела словами: видит страницу (что в окне, что выбрано, что открыто) и все свои открытые дела коротко, в «Новом» — и решает предложения на экране, в карточке (card: client, person, deal) — и её хронологию, людей, сделки; в карточке дела (card: task, open) — это дело (остальные свои открытые — только чтобы вложить его, into), kstati — мысль вдогонку к нему, step — «Для этого»: всё сказанное — новые дела внутри него (без ключа Claude — одно, названием как сказано); history — разговор в окне ответа (ask.py); ответ — номер задания |
-| GET  /api/ask/<номер> | как у разбора; done — что поменялось (changed: как было и стало), новые дела, решения по «Новому» (decided), ответ Claude |
+| POST /api/ask | {"text", "scope": {"title", "task_ids", "visible_ids"?, "selected_ids"?, "open"?, "deal_ids"?, "visible_deal_ids"?, "focus"?, "project_id"?, "person_id"?, "deal_id"?, "card"?, "kstati"?, "step"?, "suggestion_ids"?, "history"?}} — Claude правит дела словами: видит страницу (что в окне, что выбрано, что открыто) и все свои открытые дела коротко, в «Новом» — и решает предложения на экране, в карточке (card: client, person, deal) — и её хронологию, людей, сделки; в карточке дела (card: task, open) — это дело (остальные свои открытые — только чтобы вложить его, into), kstati — мысль вдогонку к нему, step — «Для этого»: всё сказанное — новые дела внутри него (без ключа Claude — одно, названием как сказано); history — разговор в окне ответа (ask.py; у реплики ids — дела, которые она завела и поправила: uuid, до 20, Claude видит их свежими, 16.10.2026); ответ — номер задания |
+| GET  /api/ask/<номер> | как у разбора; done — что поменялось (changed: как было и стало), новые дела, решения по «Новому» (decided), ответ Claude и до трёх кнопок ответа на его вопрос (answers, 16.10.2026) |
 | GET  /api/reminders/due | только бот Ковчега: напоминания, которым пора в Telegram (remind.py) |
 | POST /api/reminders/act | только бот Ковчега: {"telegram_id", "num", "action": done, snooze, tomorrow, "minutes"?} — кнопка под напоминанием от имени нажавшего |
 
@@ -181,6 +181,14 @@ SCOPED_PATHS = frozenset({
 
 def _may_read(sc: dict, key: str) -> bool:
     return key.startswith(sc["svod_prefix"]) or key in sc.get("svod_read", ())
+
+def _uuid_or_none(v) -> str | None:
+    """uuid строкой или None — для полей, где кривое значение пропускают, а не отказывают (память разговора)."""
+    try:
+        return str(uuid.UUID(str(v)))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
 
 def _json(data, status: int = 200) -> JSONResponse:
     return JSONResponse(data, status_code=status, headers={"Cache-Control": "no-store", **SECURITY})
@@ -524,8 +532,19 @@ def build(cfg: Config) -> Starlette:
         if talk:
             scope["talk_id"] = talk
         if isinstance(raw.get("history"), list):
-            scope["history"] = [{k: str(x.get(k) or "")[:2000] for k in ("said", "reply", "done")}
-                                for x in raw["history"][-ask.TALK_TURNS:] if isinstance(x, dict)]
+            # ids (16.10.2026, записи 21–22) — дела, которые реплика завела и поправила: Claude видит их свежими хвостом
+            # («ДЕЛА ИЗ ЭТОГО РАЗГОВОРА»), голова экрана под кэшем та же. Только uuid, до ask.TALK_IDS на реплику; чужое
+            # и невидимое отсеет RLS при чтении (ask._talk_rows). Кривой id — мимо, без отказа: это память разговора.
+            scope["history"] = []
+            for x in raw["history"][-ask.TALK_TURNS:]:
+                if not isinstance(x, dict):
+                    continue
+                turn = {k: str(x.get(k) or "")[:2000] for k in ("said", "reply", "done")}
+                ids = list(dict.fromkeys(i for i in (_uuid_or_none(v) for v in (x.get("ids") if isinstance(x.get("ids"), list)
+                                                                                   else [])[:ask.TALK_IDS * 2]) if i))
+                if ids:
+                    turn["ids"] = ids[:ask.TALK_IDS]
+                scope["history"].append(turn)
         now = time.monotonic()
         for k in [k for k, j in jobs.items() if now - j["at"] > JOB_TTL and j["status"] != "run"]:
             del jobs[k]

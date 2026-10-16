@@ -706,6 +706,16 @@ button.cr-task:hover { background: var(--hover); }
 .talk-feed .cr-turn { padding: 8px 0 10px; }
 .talk-feed .cr-said { margin: 2px 0 8px auto; }
 .talk-feed .cr-reply { margin: 0 2px 6px; line-height: 1.5; }
+/* Под свежей репликой (16.10.2026, записи отладки 21–22): кнопки ответа Claude и своя строка «Ответить Claude…» — продолжение
+   этого разговора; верхнее поле страницы начинает новый. Строка тише верхней: ниже, без «+», клавиши 36 px. */
+.talk-reply { padding: 2px 0 10px; border-bottom: 1px solid var(--line-soft); }
+.tr-answers { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.tr-answer { font-size: 13.5px; }
+.tr-answer.first { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.talk-reply .quick-box { padding: 3px 3px 3px 12px; }
+.talk-reply .quick-box textarea { padding: 7px 0; line-height: 20px; height: 34px; max-height: 200px; font-size: 14.5px; }
+.talk-reply .q-btn { width: 34px; height: 34px; }
+.talk-reply .claude-status { margin: 6px 2px 0; }
 .cr-refs { display: flex; flex-direction: column; margin: 2px 0 4px; border-left: 2px solid var(--accent-soft); padding-left: 6px; }
 .cr-ref > div:first-child { font-size: 14.5px; }
 .tf-old { border-top: 1px solid var(--line-soft); padding: 6px 0 2px; font-size: 13px; }

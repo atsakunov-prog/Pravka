@@ -25,8 +25,10 @@ from test_dela_schema import db_today, dela, project  # noqa: F401
 
 
 def cr(title, **kw):
-    """Новое дело в ответе Claude: всё пусто, кроме сказанного."""
-    return {"title": title, "notes_add": "", "project": "", "person": "", "due": "", "ball": "", "now": "", "step": False, **kw}
+    """Новое дело в ответе Claude: всё пусто, кроме сказанного. into — строкой (16.10.2026); старое step=True — шаг к
+    делу карточки — сервер понимает так же (записанные ответы)."""
+    return {"title": title, "notes_add": "", "project": "", "person": "", "due": "", "ball": "", "now": "", "into": "",
+            "goal": False, **kw}
 
 
 def row(url, tid, user="sasha"):
@@ -87,12 +89,12 @@ def test_before_this_goes_inside_not_to_notes(dela):
 
     def fake(system, user_text):
         seen["system"], seen["user"] = system, user_text
-        return empty_card(create=[cr("Набросать драфт из расшифровки встречи", step=True), cr("Отдельное рядом")],
+        return empty_card(create=[cr("Набросать драфт из расшифровки встречи", into=f"#{t['num']}"), cr("Отдельное рядом")],
                           reply="Ещё завёл рядом отдельное.", _usage=None)
 
     out = ask.run(dela, "sasha", "до этого надо из расшифровки встречи набросать драфт", {"card": "task", "open": t["id"]},
                   "", None, ask_fn=fake, parse_fn=no_parse)
-    assert "step — true, если открыто дело" in seen["system"] and "НЕ notes_add" in seen["system"]
+    assert "номер этого дела (раздел КАРТОЧКА ДЕЛА ниже)" in seen["system"] and "НЕ notes_add" in seen["system"]
     assert not out["errors"], out["errors"]
     inside, near = out["tasks"]
     assert (inside["why_id"], inside["project_id"], inside["deal_id"], inside["person_id"], inside["due_date"]) == (
@@ -609,7 +611,7 @@ def test_page_line_with_open_task_puts_before_this_inside(dela):
                   "", None, ask_fn=fake)
     made = out["tasks"][0]
     assert (made["why_id"], made["due_date"]) == (parent["id"], today.isoformat())
-    assert "ОТКРЫТО В КАРТОЧКЕ СПРАВА" in seen["user"] and "step — true, если открыто дело" in seen["system"]
+    assert "ОТКРЫТО В КАРТОЧКЕ СПРАВА" in seen["user"] and "номер этого дела (раздел КАРТОЧКА ДЕЛА ниже)" in seen["system"]
     assert out["reply"] == "Завёл для «Подготовить термшит»: «Набросать драфт», на сегодня." and out["steps"] == [made["id"]]
     # Ничего не открыто — step не вкладывает: обычное новое дело.
     out = ask.run(dela, "sasha", "x", {"task_ids": [other["id"]]}, "", None,
@@ -1112,3 +1114,155 @@ def test_service_suggestion_inside_takes_parent_fields(dela):
                                "set": {"person_id": None}}])[0]
     assert got["ok"], got
     assert (got["task"]["person_id"], got["task"]["due_date"]) == (None, later), got["task"]
+
+
+# ── Строка Claude кладёт куда сказано (16.10.2026, записи 21–22; правило 33) ─────
+
+
+def test_line_puts_new_goal_inside_goal_and_moves_old_into_it(dela):
+    """Запись 21–22: на «Дереве жизни» — «в „Расту в профессии“ поставь ещё „Учу испанский“, это большое направление, а
+    „Читаю по главе в день“ — в него». Было: голое дело и «сам вложить не могу — перетащи в дереве». Стало: create с into «#цели»
+    и goal — подцель внутри цели; changes с into «^1» — старое дело в новое того же ответа (правка ложится после
+    заведения); куда что легло, говорит сервер; строки дерева Claude видит с пометками «цель» и «под целью #N»."""
+    _dirs(dela)
+    top = mk(dela, "Расту в профессии", goal=True, directions=["work"])
+    old = mk(dela, "Читаю по главе в день", why_id=top["id"])
+    seen = {}
+
+    def fake(system, user_text):
+        seen["system"], seen["user"] = system, user_text
+        return empty_card(create=[cr("Учу испанский", into=f"#{top['num']}", goal=True)],
+                          changes=[item(old["num"], into="^1")], reply="Готово.", _usage=None)
+
+    out = ask.run(dela, "sasha", "в расту в профессии поставь ещё учу испанский — это большое направление, а читаю по главе в день в него",
+                  {"title": "Дерево жизни", "task_ids": [top["id"], old["id"]], "rule_tried": True}, "", None, ask_fn=fake)
+    assert not out["errors"], out["errors"]
+    new = out["tasks"][0]
+    assert (new["goal"], new["why_id"], new["project_id"]) == (True, top["id"], None)
+    assert row(dela, old["id"])["why_id"] == new["id"]
+    assert out["reply"] == "Завёл целью «Учу испанский» внутри «Расту в профессии». Переложил «Читаю по главе в день» в «Учу испанский». Готово."
+    assert "перетащ" not in out["reply"]
+    assert out["changed"][0]["before"]["why_id"] == top["id"] and out["changed"][0]["after"]["why_id"] == new["id"]
+    assert f"#{top['num']} Расту в профессии · цель" in seen["user"] and f"#{old['num']} Читаю по главе в день · под целью #{top['num']}" in seen["user"]
+    assert "Не отсылай Сашу делать руками" in seen["system"] and "правкой словами не ставится" not in seen["system"]
+
+
+def test_line_puts_task_under_goal_from_page_and_card(dela):
+    """changes с into «#цели» — со страницы и из карточки дела. В карточке ДРУГИЕ теперь и с целями (пометка «цель»):
+    «поставь это под цель про сделки» было некуда — ДРУГИЕ шли без целей."""
+    _dirs(dela)
+    goal = mk(dela, "Сделки закрываются", goal=True, directions=["work"])
+    a, b = mk(dela, "Позвонить Ивану Тестову"), mk(dela, "Собрать тизер для Ромашки")
+    out = ask.run(dela, "sasha", "звонок Ивану — к цели про сделки", {"title": "Сегодня", "task_ids": [a["id"]], "rule_tried": True}, "", None,
+                  ask_fn=lambda s, u: empty_card(changes=[item(a["num"], into=f"#{goal['num']}")], _usage=None))
+    assert not out["errors"] and row(dela, a["id"])["why_id"] == goal["id"]
+    assert out["reply"] == "Поставил «Позвонить Ивану Тестову» под цель «Сделки закрываются»."
+    seen = {}
+
+    def fake(system, user_text):
+        seen["user"] = user_text
+        return empty_card(changes=[item(b["num"], into=f"#{goal['num']}")], _usage=None)
+
+    out = ask.run(dela, "sasha", "поставь это под цель про сделки", {"card": "task", "open": b["id"]}, "", None, ask_fn=fake)
+    other = seen["user"].split("ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА")[1].split("КОМАНДА:")[0]
+    assert f"#{goal['num']} Сделки закрываются · цель" in other
+    assert not out["errors"] and row(dela, b["id"])["why_id"] == goal["id"]
+    # Слова вложенности карточки: цель, направление, ветка, «шаг к», «в рамках» — да; «до этого» само по себе — шаг к
+    # этому делу, список ему не нужен (хвост в 400 строк — ~$0,03–0,04 к вызову).
+    for said in ("это к цели про сделки", "переложи в направление Дело", "это ещё одна ветка", "это шаг к термшиту",
+                 "в рамках сделки с Ромашкой"):
+        assert ask.NEST_WORDS.search(said), said
+    for said in ("до этого надо набросать драфт", "сначала позвонить юристу", "перенеси целиком на пятницу"):
+        assert not ask.NEST_WORDS.search(said), said
+
+
+def test_line_into_direction_new_parent_and_out(dela):
+    """into «направление …» — прямо на направление (why_id null, directions [ключ], как бросок на колонку дерева); «^k» —
+    новое внутри нового этого же ответа (родитель ложится первым, даже если Claude назвал его вторым); «-» — вынуть.
+    «^k» по кругу и несуществующее — отказ словами, дело всё равно заводится."""
+    _dirs(dela)
+    goal = mk(dela, "Здоров", goal=True, directions=["health"])
+    a = mk(dela, "Купить кроссовки", why_id=goal["id"])
+    b = mk(dela, "Записаться к врачу")
+
+    def fake(system, user_text):
+        return empty_card(create=[cr("Собрать цифры", into="^3"), cr("Согласовать с Ольгой", into="^3"), cr("Подготовить КП Ромашке")],
+                          changes=[item(a["num"], into="-"), item(b["num"], into="направление Здоровье")], _usage=None)
+
+    out = ask.run(dela, "sasha", "x", {"title": "Все дела", "task_ids": [a["id"], b["id"]], "rule_tried": True}, "", None, ask_fn=fake)
+    assert not out["errors"], out["errors"]
+    kp, s1, s2 = out["tasks"]  # родитель — первым
+    assert kp["title"] == "Подготовить КП Ромашке" and s1["why_id"] == kp["id"] == s2["why_id"]
+    assert row(dela, a["id"])["why_id"] is None
+    rb = row(dela, b["id"])
+    assert rb["why_id"] is None and rb["directions"] == ["health"]
+    assert "Завёл внутри «Подготовить КП Ромашке»: «Собрать цифры», «Согласовать с Ольгой»." in out["reply"]
+    assert "Вынул «Купить кроссовки» из «Здоров»." in out["reply"] and "Переложил «Записаться к врачу» в направление Здоровье." in out["reply"]
+    # Новое — прямо в направление; цель без места — верхнего уровня, ответ говорит, где она.
+    out = ask.run(dela, "sasha", "x", {"title": "Все дела", "task_ids": [], "rule_tried": True}, "", None, ask_fn=lambda s, u: empty_card(
+        create=[cr("Пройти обследование", into="направление Здоровье"), cr("Учу испанский", goal=True)], _usage=None))
+    walk, spanish = out["tasks"]
+    assert (row(dela, walk["id"])["directions"], spanish["goal"], spanish["why_id"]) == (["health"], True, None)
+    assert "Завёл «Пройти обследование» в направление Здоровье." in out["reply"]
+    assert "Завёл целью «Учу испанский» — верхнего уровня, без направления" in out["reply"]
+    # По кругу и мимо: дела заводятся, места нет, почему — словами.
+    out = ask.run(dela, "sasha", "x", {"title": "Все дела", "task_ids": [], "rule_tried": True}, "", None, ask_fn=lambda s, u: empty_card(
+        create=[cr("Первое", into="^2"), cr("Второе", into="^1"), cr("Третье", into="^9")], _usage=None))
+    assert len(out["tasks"]) == 3 and any("по кругу" in e for e in out["errors"]) and any("нет 9-го нового" in e for e in out["errors"])
+    first, second = (next(t for t in out["tasks"] if t["title"] == x) for x in ("Первое", "Второе"))
+    assert first["why_id"] is None and second["why_id"] == first["id"]
+    # Цель в дело — нельзя (и новое дело-родитель того же ответа): словами, цель остаётся верхнего уровня.
+    out = ask.run(dela, "sasha", "x", {"title": "Все дела", "task_ids": [], "rule_tried": True}, "", None, ask_fn=lambda s, u: empty_card(
+        create=[cr("Дело-родитель"), cr("Подцель", into="^1", goal=True), cr("Ещё цель", into=f"#{b['num']}", goal=True)], _usage=None))
+    assert sum("цель кладут в цель или на направление" in e for e in out["errors"]) == 2, out["errors"]
+    assert all(t["why_id"] is None for t in out["tasks"])
+
+
+def test_line_into_foreign_refused_in_words(dela):
+    """Вкладывать можно только в своё (Круг личный): Коллега в общем проекте говорит «положи мою сверку в термшит Саши» —
+    отказ словами в errors, сверка остаётся где была, новое ложится само по себе."""
+    p = project(dela, "sasha", "Ромашка")
+    with parse.db.session(dela, "system", "t") as c:
+        c.execute("INSERT INTO crm.project_access (project_id, user_id, role, granted_by) VALUES (%s, 'natasha', 'edit', 'sasha')", (p,))
+    his = mk(dela, "Термшит Ромашке", project_id=str(p))
+    mine = store.apply_ops(dela, "natasha", [{"op": "task.create", "task": {"title": "Сверка коллеги", "project_id": str(p)}}],
+                           "web")["results"][0]["task"]
+    out = ask.run(dela, "natasha", "положи сверку в термшит", {"title": "Ромашка", "task_ids": [mine["id"], his["id"]], "rule_tried": True}, "", None,
+                  ask_fn=lambda s, u: empty_card(changes=[item(mine["num"], into=f"#{his['num']}")],
+                                                 create=[cr("Сверить цифры", into=f"#{his['num']}")], _usage=None))
+    assert sum("чужое дело: вкладывать можно только в своё" in e for e in out["errors"]) == 2, out["errors"]
+    assert row(dela, mine["id"], "natasha")["why_id"] is None and out["tasks"][0]["why_id"] is None
+    assert "Переложил" not in out["reply"] and "внутри" not in out["reply"]
+
+
+def test_web_line_sees_tree_and_continues_talk():
+    """Веб (16.10.2026, записи 21–22): экран для Claude и снимок отладки берут и строки дерева (цели «Дерева», цели и дела
+    «Колонок» — у них теперь data-id); память реплики несёт ids заведённого и поправленного; под свежей репликой —
+    кнопки answers («Да» / «Нет» по «?») и строка «Ответить Claude…» — продолжение разговора; верхнее поле начинает
+    новый разговор."""
+    from pathlib import Path
+
+    static = Path(store.__file__).parent / "static"
+    js, dbg = (static / "app.js").read_text(encoding="utf-8"), (static / "debug.js").read_text(encoding="utf-8")
+
+    def fn(head: str) -> str:
+        body = js[js.index(head):]
+        return body[:body.index("\n}\n")]
+
+    rows = js[js.index("const SCREEN_ROWS"):js.index("\n", js.index("const SCREEN_ROWS"))]
+    for sel in (".task[data-id]", ".tree-goal[data-id]", ".col-goal[data-id]", ".col-task[data-id]"):
+        assert sel in rows, sel
+    assert "document.querySelectorAll(SCREEN_ROWS)" in fn("function pageScope(")
+    assert "querySelectorAll(SCREEN_ROWS + ', main.list .rem-row[data-id]')" in dbg
+    cols = fn("function treeCols(")
+    assert "class: 'col-goal'" in cols and "class: 'col-task'" in cols and cols.count("'data-id': t.id") == 2
+    memo = fn("function turnMemo(")
+    assert "turnIds(d)" in memo and "ids" in memo
+    assert "...(d.steps || [])" in fn("function turnIds(") and "slice(0, 20)" in fn("function turnIds(")
+    assert "talkReply(talk, inCard)" in fn("function talkFeed(")
+    reply = fn("function talkReply(")
+    assert "'Ответить Claude…'" in reply and "talkAnswers(" in reply and "claudeSay(said, talk.defaults || {}, true, card)" in reply
+    assert "['Да', 'Нет']" in fn("function talkAnswers(") and "d.answers" in fn("function talkAnswers(")
+    say = fn("async function claudeSay(")
+    assert "if (cur && !cont)" in say and "S.talkOld = [cur" in say
+    assert "'Добавь дело или продолжи разговор'" not in js  # верхнее поле — всегда новый разговор
