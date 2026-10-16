@@ -33,7 +33,9 @@ const DEBUG = (() => {
   const STATUS = { new: 'новое', taken: 'разбираю', fixed: 'починено', not_bug: 'не баг', later: 'потом' };
   const FILTERS = [['open', 'Новое и разбираю'], ['all', 'Все'], ['fixed', 'Починено'], ['not_bug', 'Не баг'], ['later', 'Потом']];
   const KIND = { op: 'операция', op_fail: 'сервер не принял', op_result: 'сервер сделал', ask: 'сказал Claude', parse: 'разбор',
-    reply: 'Claude ответил', toast: 'подсказка', error: 'ошибка', nav: 'переход', event: 'событие' };
+    reply: 'Claude ответил', toast: 'подсказка', error: 'ошибка', nav: 'переход', event: 'событие',
+    // Со страниц соседних сервисов Ковчега (debugin.js, 16.10.2026): нажатия, запросы страницы, поля, формы, console.error.
+    click: 'нажал', net: 'запрос', change: 'поле', submit: 'форма', console: 'console.error' };
 
   const owner = () => !!(S.me && S.me.role === 'owner' && (S.me.features || []).includes('debug'));
   /** Включён ли режим: свежее слово — синк (команда `debug on` с компа видна без перезагрузки), иначе /api/me. */
@@ -520,6 +522,7 @@ const DEBUG = (() => {
       : Array.isArray(v) && v.length && v.every((x) => typeof x === 'string') ? v.join('\n')
       : typeof v === 'object' ? json1(v) : String(v));
     const kv = (k, v) => el('div', { class: 'dbg-kv' }, el('span', { class: 'k' }, k), el('span', { class: 'v' }, words(v)));
+    if (s.service || s.service_name) out.push(kv('служба', [s.service_name, s.service, s.url].filter(Boolean).join(' · ')));
     out.push(kv('экран', [s.title, s.route, s.sub].filter(Boolean).join(' · ')));
     if (s.mode) for (const [k, v] of Object.entries(s.mode)) out.push(kv(k, v));
     if (s.card) {
@@ -544,7 +547,7 @@ const DEBUG = (() => {
           + (a.plan ? `, кандидатов плана ${a.plan}` : '')].filter(Boolean).join(' · ')));
       for (const g of a.groups || []) out.push(kv(g.title || g.kind, `${g.n}` + (g.urgent ? ` (сгорает ${g.urgent})` : '')));
     }
-    const SKIP = new Set(['v', 'title', 'route', 'sub', 'mode', 'card', 'selected', 'rows', 'rows_total', 'kind', 'asks']);
+    const SKIP = new Set(['v', 'title', 'route', 'sub', 'mode', 'card', 'selected', 'rows', 'rows_total', 'kind', 'asks', 'service', 'service_name', 'url']);
     for (const [k, v] of Object.entries(s)) if (!SKIP.has(k)) out.push(kv(k, v));
     return out;
   }
@@ -570,11 +573,12 @@ const DEBUG = (() => {
   }
   function item(x) {
     const open = openId === x.id;
-    const where = [x.title, x.route].filter(Boolean).join(' · ');
+    const where = [x.title !== x.service ? x.title : null, x.route].filter(Boolean).join(' · '); // «Кино · Кино» — один раз
     return el('div', { class: 'dbg-item st-' + x.status + (open ? ' open' : '') },
       el('div', { class: 'dbg-top' },
         el('b', { class: 'num' }, '№' + x.num),
-        el('span', { class: 'faint' }, [when(x.said_at), x.source === 'phone' ? 'телефон' : 'веб', where].filter(Boolean).join(' · ')),
+        el('span', { class: 'faint' }, [when(x.said_at), x.source === 'phone' ? 'телефон' : x.service ? 'веб · ' + x.service : 'веб', where]
+          .filter(Boolean).join(' · ')),
         x.has_shot ? el('span', { class: 'faint' }, ' · картинка') : null),
       el('div', { class: 'dbg-text' }, x.text),
       x.answer ? el('div', { class: 'dbg-answer' }, el('span', { class: 'faint' }, 'Ответ' + (x.status_by ? ' (' + x.status_by + (x.status_at ? ', ' + when(x.status_at) : '') + ')' : '') + ': '), x.answer) : null,

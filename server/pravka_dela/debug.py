@@ -260,9 +260,11 @@ def view_debug(conn, user: str, err, id=None, status=None, limit=None, **_) -> d
         n = max(1, min(LIST_MAX, int(limit or 50)))
     except (TypeError, ValueError):
         raise err("Отладка: limit — число") from None
-    # В списке — снимок коротко: маршрут и заголовок, чтобы было видно, с какого экрана записка.
+    # В списке — снимок коротко: маршрут и заголовок, чтобы было видно, с какого экрана записка; со страницы соседнего
+    # сервиса Ковчега (debugin.js, 16.10.2026) — ещё и какой (`service`; записка самих Дел — null).
     items = conn.execute(
-        f"SELECT {COLUMNS}, snapshot->>'route' AS route, snapshot->>'title' AS title FROM crm.debug_notes "
+        f"SELECT {COLUMNS}, snapshot->>'route' AS route, snapshot->>'title' AS title, "
+        "coalesce(snapshot->>'service_name', snapshot->>'service') AS service FROM crm.debug_notes "
         "WHERE owner_id = %s AND (%s::text[] IS NULL OR status = ANY(%s::text[])) ORDER BY num DESC LIMIT %s",
         (user, want or None, want or None, n)).fetchall()
     return {"items": items, "on": on, "counts": counts}
@@ -308,7 +310,8 @@ def _one_line(v: Any, n: int = 300) -> str:
 def line(x: dict) -> str:
     """Записка строкой списка: «№12 15.10 21:40 · web · новое · Сегодня — текст»."""
     where = " · ".join(p for p in (x.get("title") or "", x.get("route") or "") if p)
-    head = f"№{x['num']} {_msk(x['said_at'])} · {x['source']}" + (f" {x['version']}" if x.get("version") else "") \
+    head = f"№{x['num']} {_msk(x['said_at'])} · {x['source']}" + (f" ({x['service']})" if x.get("service") else "") \
+        + (f" {x['version']}" if x.get("version") else "") \
         + f" · {STATUS_WORD.get(x['status'], x['status'])}" + (f" · {where}" if where else "") \
         + (" · картинка" if x.get("has_shot") else "")
     out = head + "\n    " + _one_line(x["text"], 600)
@@ -353,12 +356,28 @@ def _row(r: dict) -> str:
             + (" — " + " · ".join(parts) if parts else "") + (" " + _one_line(rest, 200) if rest else ""))
 
 
+# Списки строк снимка страницы соседнего сервиса Ковчега (общий слой kovcheg.js, 16.10.2026) — подписи словами.
+LIST_WORDS = {"in_view": "в окне (сверху вниз)", "lines": "тексты страницы сверху вниз", "open": "открыто поверх",
+              "fields": "поля", "errors": "снимок не собрал"}
+LIST_LINES = 1000
+
+
+def _service(s: dict) -> str:
+    """Откуда записка: «Деньги (dengi)» — страница соседнего сервиса Ковчега; записка самих Дел — пусто."""
+    name, key = str(s.get("service_name") or ""), str(s.get("service") or "")
+    return name + (f" ({key})" if key and key != name else "") if name else key
+
+
 def snapshot_lines(s: dict) -> list[str]:
-    """Снимок экрана читаемо: заголовок и маршрут, режим, карточка полями, строки списка (* — были в окне), прочее —
-    одной строкой JSON на ключ."""
+    """Снимок экрана читаемо: заголовок и маршрут, режим, карточка полями, строки списка (* — были в окне), списки строк
+    (страница службы Ковчега: тексты сверху вниз, что было в окне, поля) — строкой на пункт, прочее — одной строкой JSON
+    на ключ."""
     if not s:
         return ["  (снимка нет)"]
     out = []
+    if _service(s):
+        out.append(f"  служба: {_service(s)}" + (f" · {s['url']}" if s.get("url") else "")
+                   + (f" · пришла с {s['from']}" if s.get("from") else ""))
     if s.get("title") or s.get("route"):
         out.append(f"  экран: {s.get('title') or ''}" + (f"  [{s['route']}]" if s.get("route") else "")
                    + (f" — {s['sub']}" if s.get("sub") else ""))
@@ -381,7 +400,9 @@ def snapshot_lines(s: dict) -> list[str]:
         # Что карточка показывала текстом (веб: панель карточки или страница) — без него Claude видел бы только поля.
         if card.get("text"):
             out.append("    на экране текстом: " + _one_line(card["text"], 1500))
-    if s.get("selected"):
+    if s.get("kind") == "kovcheg" and isinstance(s.get("selected"), list) and all(isinstance(x, str) for x in s["selected"]):
+        out.append("  выбрано на странице: " + " · ".join(_one_line(x, 120) for x in s["selected"][:40]))
+    elif s.get("selected"):
         out.append("  выбрано галочками: " + _one_line(s["selected"], 400))
     rows = s.get("rows") if isinstance(s.get("rows"), list) else []
     if rows:
@@ -411,8 +432,15 @@ def snapshot_lines(s: dict) -> list[str]:
                 out.append(f"    {_one_line(g.get('title') or g.get('kind') or '', 120)} · {g.get('n') or 0}"
                            + (f" (сгорает {g['urgent']})" if g.get("urgent") else ""))
     for k, v in s.items():
-        if k in ("v", "title", "route", "sub", "mode", "card", "selected", "rows", "rows_total", "plan", "asks") \
-                or v in (None, "", [], {}):
+        if k in ("v", "title", "route", "sub", "mode", "card", "selected", "rows", "rows_total", "plan", "asks",
+                 "service", "service_name", "url", "from") or v in (None, "", [], {}):
+            continue
+        if isinstance(v, list) and all(isinstance(x, str) for x in v):
+            # Строкой на пункт: тексты страницы службы — до 40 тыс. знаков, одной строкой JSON их резало бы на 1500.
+            out.append(f"  {LIST_WORDS.get(k, k)}:")
+            out += [f"    {_one_line(x, 300)}" for x in v[:LIST_LINES]]
+            if len(v) > LIST_LINES:
+                out.append(f"    … ещё {len(v) - LIST_LINES}")
             continue
         out.append(f"  {k}: {_one_line(v, 1500)}")
     return out
@@ -433,7 +461,10 @@ def action_lines(a: list) -> list[str]:
 
 def card_text(v: dict) -> str:
     x = v["note"]
-    head = (f"Записка №{x['num']} — {_msk(x['said_at'])} · {x['source']}" + (f" {x['version']}" if x.get("version") else "")
+    snap = x["snapshot"] if isinstance(x.get("snapshot"), dict) else {}
+    svc = str(snap.get("service_name") or snap.get("service") or "")
+    head = (f"Записка №{x['num']} — {_msk(x['said_at'])} · {x['source']}" + (f" ({svc})" if svc else "")
+            + (f" {x['version']}" if x.get("version") else "")
             + (f" · экран {x['screen']}" if x.get("screen") else "") + f" · {STATUS_WORD.get(x['status'], x['status'])}"
             + (f" ({x['status_by']}, {_msk(x['status_at'])})" if x.get("status_at") else ""))
     out = [head, "", x["text"]]

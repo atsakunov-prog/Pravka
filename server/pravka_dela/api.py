@@ -94,6 +94,9 @@ TAILS = {"app.js": ("twins.js", "day.js", "zasechka.js", "pravka.js", "phone.js"
 # Режим отладки (15.10.2026, debug.js и debug.css): строка «Что не так?» вверху страниц и страница #/debug — тоже хвостами.
 TAILS["app.js"] += ("debug.js",)
 TAILS["style.css"] += ("debug.css",)
+# Записки со страниц соседних сервисов Ковчега (16.10.2026, правило 28): окно-приёмник #/debug-in и кука kv-debug для
+# их строки — тоже хвостом, после debug.js (берёт его DEBUG.on и значок жука).
+TAILS["app.js"] += ("debugin.js",)
 BRAND_MAX = 96 * 1024  # значок «Ковчега» уходит в /api/me строкой data: — большой картинке там не место
 
 

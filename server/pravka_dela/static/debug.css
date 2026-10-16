@@ -69,3 +69,15 @@
 .dbg-raw { margin: 8px 0 0; padding: 8px 10px; max-height: 60vh; overflow: auto; font-size: 12px; line-height: 1.4;
   background: var(--bg); border: 1px solid var(--line); border-radius: 7px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .dbg-shot { display: block; margin-top: 10px; max-width: min(100%, 420px); border: 1px solid var(--line); border-radius: 8px; }
+
+/* Окно-приёмник записок со страниц соседних сервисов Ковчега (#/debug-in, debugin.js, 16.10.2026): маленькое окно, одна
+   панель — откуда, текст, что с ним, «Закрыть». Те же токены. */
+.dbg-in { max-width: 460px; margin: 0 auto; padding: 20px 18px; display: flex; flex-direction: column; gap: 10px; }
+.dbg-in-h { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: 15px; }
+.dbg-in-h .faint { font-size: 13px; }
+.dbg-in-text { padding: 8px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; font-size: 14px;
+  line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; }
+.dbg-in-st { font-size: 15px; line-height: 1.45; color: var(--muted); }
+.dbg-in.st-done .dbg-in-st { color: var(--text); font-weight: 600; }
+.dbg-in.st-error .dbg-in-st { color: var(--bad); }
+.dbg-in-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; font-size: 13.5px; }

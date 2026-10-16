@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from pathlib import Path
 
@@ -399,3 +400,46 @@ def test_contract_matches_server(dela):
     fields({k: v for k, v in CONTRACT["views"]["debug"]["response_one"].items() if k != "ok"},
            store.view(dela, "sasha", "debug", id=str(r["note"]["num"])), "вид debug?id")
     fields(CONTRACT["sync"]["example"], store.sync(dela, "sasha", 0)["debug"], "синк debug")
+
+
+def test_note_from_kovcheg_service(dela):
+    """Со всех сервисов Ковчега (16.10.2026, правило 28): записка со страницы соседней службы — та же debug.add, source
+    web. Список называет службу, словами — строка «служба: …», а тексты страницы идут строкой на пункт: одной строкой JSON
+    их резало бы на 1500 знаках (снимок страницы службы — до 40 тыс. знаков)."""
+    ex = json.loads(json.dumps(CONTRACT["kovcheg"]["example"]))
+    ex["note"]["snapshot"]["lines"] = [f"строка {i} " + "текст " * 20 for i in range(200)]
+    r = store.apply_ops(dela, "sasha", [ex], "web")["results"][0]
+    assert r["ok"], r
+    item = store.view(dela, "sasha", "debug")["items"][0]
+    assert item["service"] == "Деньги" and item["source"] == "web"
+    assert "· web (Деньги)" in debug.line(item)
+    text = debug.card_text(store.view(dela, "sasha", "debug", id=str(r["note"]["num"])))
+    assert "web (Деньги)" in text.splitlines()[0]
+    assert "  служба: Деньги (dengi) · https://dengi.example.org/#/month/2026-10 · пришла с https://dengi.example.org" in text
+    assert "  тексты страницы сверху вниз:" in text and "    строка 199 текст" in text
+    assert "  в окне (сверху вниз):" in text and "    Такси · 1 200 ₽" in text
+    assert "  выбрано на странице: Октябрь · Бюджет" in text and "  выбрано галочками" not in text
+    assert "click: Разобрать" in text and "net: POST /api/razbor → 502, 30012 мс" in text and "console: razbor" in text
+    # Записка самих Дел — без службы, слова прежние.
+    add(dela)
+    first = store.view(dela, "sasha", "debug")["items"][0]
+    assert first["service"] is None and "(" not in debug.line(first).split("·")[1]
+
+
+def test_kovcheg_receiver_is_a_tail_without_addresses():
+    """Окно-приёмник #/debug-in (debugin.js) — хвост app.js после debug.js: нового пути HTTP нет. Записку берёт только от
+    своей window.opener и проверенного адреса, отвечает ей по её адресу; «готов» — без данных. Доменов в коде нет —
+    репозиторий публичный (адреса — look.domain и look.nav из настроек на компе)."""
+    tails = api.TAILS["app.js"]
+    assert tails.index("debugin.js") > tails.index("debug.js")
+    js = (Path(debug.__file__).parent / "static" / "debugin.js").read_text(encoding="utf-8")
+    assert "kovcheg.am" not in js and "netcraze" not in js
+    assert "e.source !== window.opener" in js and "if (!allowed(origin))" in js and "u.protocol !== location.protocol" in js
+    assert "reply.win.postMessage({ kv: 'debug-done', id: reply.id, ...o }, reply.origin)" in js
+    assert "window.opener.postMessage({ kv: 'debug-ready' }, '*')" in js and js.count("postMessage(") == 2
+    assert "op: 'debug.add'" in js and "source: 'web'" in js
+    clean = js.split("function cleanNote")[1].split("\n  }\n")[0]
+    assert not re.search(r"\bshot\b", clean)  # картинки со страницы службы не бывает
+    assert "'kv-debug='" in js and "setCookie(!!S.me && DEBUG.on())" in js
+    body = api._static("app.js").body.decode("utf-8")
+    assert body.index("const DEBUG = ") < body.index("const DEBUG_IN = ")
