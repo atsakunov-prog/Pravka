@@ -57,7 +57,7 @@ internal class DelaDebugSync(private val app: PravkaApp, private val log: (Strin
         val id = op.optJSONObject("note")?.optString("id").orEmpty()
         app.delaStore.enqueue(listOf(op))
         val sent = app.delaSync.pushNow(4_000L)
-        app.delaStore.noticesFor(listOf(op)).firstOrNull { it.error }?.let { return it.text }
+        app.delaStore.tell(listOf(op))?.let { return it.text }
         if (!sent || app.delaStore.isQueued(op.optString("op_id"))) return "🐞 Записал — уйдёт на сервер, когда будет связь"
         // Номер даёт сервер: очередь ответ не хранит — спрашиваем записку по её id.
         val num = runCatching { app.delaSync.rawView("debug?id=$id").optJSONObject("note")?.optInt("num") ?: 0 }.getOrDefault(0)

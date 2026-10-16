@@ -15,6 +15,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import ru.zf.pravka.core.Dela
 import ru.zf.pravka.core.DelaDebug
+import ru.zf.pravka.core.DelaNotices
+import ru.zf.pravka.core.DelaNotices.Notice
 
 /**
  * Дела на телефоне: копия сервера (`dela.json`) и очередь операций
@@ -30,7 +32,9 @@ import ru.zf.pravka.core.DelaDebug
  * сразу, до ответа сервера. Операция уходит из очереди, только когда сервер
  * на неё ответил: принял — следующий синк привезёт ту же строку с новым
  * `rev`; отказал (`ok: false` — формат или права, повтор не поможет) —
- * снимается и остаётся словами в [notices], а не исчезает молча.
+ * снимается и остаётся словами в [notices], а не исчезает молча. Заметка —
+ * `DelaNotices.Notice`: плашка «Сервер ответил» показывает её со временем сутки,
+ * если её уже не сказали тостом ([tell]; отладка 16.10.2026, записи 1–2).
  */
 class DelaStore(private val context: Context) {
 
@@ -66,12 +70,6 @@ class DelaStore(private val context: Context) {
     data class Queued(val op: JSONObject, val at: Long, val tries: Int = 0, val error: String = "") {
         val opId: String get() = op.optString("op_id")
     }
-
-    /**
-     * То, что владелец должен узнать словами: отказ сервера, спор правок. [opId] — чья это заметка: тост после отправки
-     * ([noticesFor]) показывает заметку своей операции, а не первую свежую из той же пачки (проверка 15.10.2026).
-     */
-    data class Notice(val at: Long, val text: String, val error: Boolean, val opId: String = "")
 
     private val mutex = Mutex()
     private val file: File get() = File(DataRoot.dir(context), FILE_NAME)
@@ -319,6 +317,27 @@ class DelaStore(private val context: Context) {
         return _notices.value.filter { it.opId in mine }.sortedByDescending { it.error }
     }
 
+    /**
+     * Заметка своих операций, которую сейчас скажут тостом ([errorsOnly] — только отказ), — и пометить её сказанной:
+     * плашка «Сервер ответил» её второй раз не покажет (отладка 16.10.2026, запись 1: с 15.10 отказ после тапа звучал
+     * тостом и тут же вставал в плашку). Нет такой — null, ничего не помечено.
+     */
+    suspend fun tell(ops: List<JSONObject>, errorsOnly: Boolean = true): Notice? {
+        val n = noticesFor(ops).firstOrNull { !errorsOnly || it.error } ?: return null
+        markShown(listOf(n))
+        return n
+    }
+
+    /** Заметки [told] сказаны тостом: в файле остаются, в плашке — нет. */
+    suspend fun markShown(told: List<Notice>) = mutex.withLock {
+        ensureLoaded()
+        val next = DelaNotices.markShown(notices, told)
+        if (next == notices) return@withLock
+        notices = next.toMutableList()
+        writeOutbox()
+        publish()
+    }
+
     /** Есть ли ещё в очереди эта операция (не дошла до сервера). */
     fun isQueued(opId: String): Boolean = _queued.value.any { it.opId == opId }
 
@@ -375,8 +394,11 @@ class DelaStore(private val context: Context) {
                 // «На сервере уже версии N» у записи Свода — не отказ, а повод
                 // слить своё со свежим: это делает SvodStore, владельцу шуметь незачем.
                 if (q.op.optString("op") == "svod.set" && ru.zf.pravka.core.Svod.isStale(r.optString("error"))) continue
-                notices.add(0, Notice(now, "Сервер не принял $what: ${r.optString("error").ifBlank { "без причины" }}", true, id))
-                DelaDebug.note("op_fail", "Сервер не принял $what: ${r.optString("error").ifBlank { "без причины" }}", now = now)
+                // «Не прошло: «Да» на «…» — …» (отладка 16.10.2026, запись 1): было «Сервер не принял принять предложение» —
+                // без того, на что отвечал, и без даты; владелец связал вчерашний отказ со своим сегодняшним ответом.
+                val text = DelaNotices.refused(what, r.optString("error"))
+                notices.add(0, Notice(now, text, true, id))
+                DelaDebug.note("op_fail", text, now = now)
                 continue
             }
             // Режим отладки (правило 27 сервера): сделано последнее дело внутри — родитель поднялся (raised); дело снова
@@ -424,6 +446,7 @@ class DelaStore(private val context: Context) {
         publish()
     }
 
+    /** Крестик плашки «Сервер ответил»: все заметки прочитаны. */
     suspend fun dismissNotices() = mutex.withLock {
         ensureLoaded()
         if (notices.isEmpty()) return@withLock
@@ -476,12 +499,7 @@ class DelaStore(private val context: Context) {
                         outbox += Queued(op, q.optLong("at"), q.optInt("tries"), q.optString("error"))
                     }
                 }
-                o.optJSONArray("notices")?.let { a ->
-                    for (i in 0 until a.length()) {
-                        val n = a.optJSONObject(i) ?: continue
-                        notices += Notice(n.optLong("at"), n.optString("text"), n.optBoolean("error"), n.optString("op_id"))
-                    }
-                }
+                notices += DelaNotices.fromJson(o.optJSONArray("notices"))
             }
             StoreFiles.readOrQuarantine(viewsFile) { JSONObject(it) }?.optJSONObject("views")?.let { v ->
                 for (k in v.keys()) {
@@ -522,9 +540,7 @@ class DelaStore(private val context: Context) {
             .put("ops", JSONArray().apply {
                 for (q in outbox) put(JSONObject().put("op", q.op).put("at", q.at).put("tries", q.tries).put("error", q.error))
             })
-            .put("notices", JSONArray().apply {
-                for (n in notices) put(JSONObject().put("at", n.at).put("text", n.text).put("error", n.error).put("op_id", n.opId))
-            })
+            .put("notices", DelaNotices.toJson(notices))
         val text = o.toString()
         withContext(Dispatchers.IO) { StoreFiles.writeAtomic(outboxFile, text) }
     }

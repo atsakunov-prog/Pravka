@@ -40,7 +40,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -631,8 +633,14 @@ fun PaperSheet(
     actions: @Composable RowScope.() -> Unit = {},
     footer: (@Composable RowScope.() -> Unit)? = null,
     scroll: Boolean = true,
+    /**
+     * Чей лист: другой ключ — тело с начала (16.10.2026, запись 10 отладки: карточка дела, открытая из «Места в
+     * дереве» другой карточки, оставалась прокрученной туда, где стояла прежняя). null — одна прокрутка на весь показ.
+     */
+    scrollKey: Any? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val bodyScroll = rememberSaveable(scrollKey, saver = ScrollState.Saver) { ScrollState(0) }
     // Правка 4.0 (DESIGN §11.7 BottomSheet, `screens/13`): лист — стекло
     // режима, верх 28, ручка 32×4 кремом @ .3, затемнение под ним .62.
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -678,7 +686,7 @@ fun PaperSheet(
                 Modifier
                     .fillMaxWidth()
                     .weight(1f, fill = false)
-                    .then(if (scroll) Modifier.verticalScroll(rememberScrollState()) else Modifier)
+                    .then(if (scroll) Modifier.verticalScroll(bodyScroll) else Modifier)
                     .padding(start = 20.dp, end = 20.dp, top = 6.dp, bottom = if (footer == null) 22.dp else 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 content = content,

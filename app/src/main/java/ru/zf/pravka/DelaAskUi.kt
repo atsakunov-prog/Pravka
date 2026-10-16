@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -91,33 +92,6 @@ internal class AskState {
 internal const val ASK_SCREEN = "screen"
 
 /**
- * Микрофон команды: тот же движок и пилюля, что у «Д» (`listenForDelaReason`),
- * текст — в поле. Сказанное вслух — решение (26.09): кончилась запись с
- * текстом — команда уходит сама, как в вебе.
- */
-@Composable
-internal fun AskMic(listening: Boolean, onListening: (Boolean) -> Unit, onText: (String) -> Unit, enabled: Boolean = true) {
-    val context = LocalContext.current
-    GlyphButton(
-        if (listening) Glyphs.Stop else Glyphs.Mic,
-        if (listening) "хватит слушать" else "сказать голосом",
-        tint = MaterialTheme.colorScheme.primary,
-        enabled = enabled,
-        onClick = {
-            val service = PravkaAccessibilityService.instance
-            when {
-                service == null -> Feedback.toast(context, context.getString(R.string.toast_no_service))
-                listening -> if (!service.finishDelaReason(keep = true)) onListening(false)
-                else -> onListening(service.listenForDelaReason { text ->
-                    onListening(false)
-                    onText(text)
-                })
-            }
-        },
-    )
-}
-
-/**
  * Что сейчас в окне (08.10.2026, docs/dela-phone-7.md, `pageScope` веба):
  * строки дел и плитки сделок отмечают, где они, — обрезанные окном списка
  * (`boundsInWindow`) и целиком. В миг отправки [visible] отдаёт те, от которых
@@ -157,18 +131,21 @@ internal fun Modifier.seen(key: String): Modifier {
 /**
  * Строка Claude внизу — одна на всю вкладку (08–09.10.2026, docs/dela-phone-7.md,
  * поправки задания 10): микрофон слева — нажал, говоришь сколько угодно, нажал
- * ещё раз — команда ушла; стрелка справа (пока поле пусто — приглушена). Пока
+ * ещё раз — текст в поле, отдаёт владелец стрелкой справа (16.10.2026, запись 12;
+ * пока поле пусто — стрелка приглушена). Пока
  * Claude думает — команда серым в поле и заливка слева направо, ничего не
- * вращается. Над строкой — о чём она: дела на экране, открытое дело или
- * карточка («Opus · видит карточку»); пока слушает — как закончить.
+ * вращается. Подпись над полем внутри стекла — только по делу: открытое дело
+ * («Скажи, что сделать с делом «…»» и «Для этого» за ним), «слушаю», «думает».
+ * Строк «что видит Claude» нет (отладка 16.10.2026, запись 17: «почему Claude видит
+ * экран и открытое дело — это вообще надо отовсюду убрать»): ни «…с делами на
+ * экране», ни «с карточкой · Opus · видит карточку». Что видит Claude, не
+ * поменялось — экран и открытое дело уходят в `scope`, как раньше.
  */
 @Composable
 internal fun DelaSayBar(
     value: String,
     onValueChange: (String) -> Unit,
     placeholder: String,
-    about: String,
-    card: Boolean,
     listening: Boolean,
     busy: Boolean,
     note: String,
@@ -177,11 +154,13 @@ internal fun DelaSayBar(
     onSend: () -> Unit,
     modifier: Modifier = Modifier,
     /**
-     * «Для этого» над открытым делом (15.10.2026, docs/dela-phone-23.md, `cardSay` веба): null — чипа нет (дело не
+     * «Для этого» у открытого дела (15.10.2026, docs/dela-phone-23.md, `cardSay` веба): null — чипа нет (дело не
      * открыто, сервер без фичи nest), true — всё сказанное станет делами внутри открытого, false — обычная строка.
      */
     step: Boolean? = null,
     onStep: () -> Unit = {},
+    /** Название открытого дела — в подписи «Для «…»: …», когда чип включён. */
+    taskTitle: String? = null,
 ) {
     val mode = ru.zf.pravka.ui.LocalMode.current
     val ty = ru.zf.pravka.ui.LocalPravkaType.current
@@ -198,16 +177,13 @@ internal fun DelaSayBar(
     }
     val shape = RoundedCornerShape(31.dp)
     Column(modifier.fillMaxWidth(), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)) {
+        val task = taskTitle?.takeIf { it.isNotBlank() }?.take(60)
         val head = when {
-            listening -> "Слушаю — говори сколько нужно. Нажми микрофон ещё раз — отдам Claude"
+            listening -> "Слушаю — говори сколько нужно. Нажми микрофон ещё раз — текст встанет в поле"
             busy -> "Claude думает… Можно уходить на другие разделы — изменения появятся сами"
-            step == true -> "Для этого: что назовёшь — заведу делами внутри"
-            else -> "Скажи, что сделать $about"
-        }
-        // «Для этого» — переключатель над строкой: «до этого надо X» становится делом внутри, а не заметкой (жалоба
-        // владельца 15.10.2026), и сервер ставит связь, проект и срок тем же правилом, что «Для этого» в карточке.
-        if (step != null && !listening && !busy) Row(Modifier.padding(start = 8.dp)) {
-            ru.zf.pravka.ui.PaperChip("Для этого", selected = step, onClick = onStep, icon = Glyphs.Plus)
+            step == true -> (task?.let { "Для «$it»" } ?: "Для этого") + ": что назовёшь — заведу делами внутри"
+            task != null -> "Скажи, что сделать с делом «$task»"
+            else -> null
         }
         Row(
             Modifier
@@ -224,7 +200,7 @@ internal fun DelaSayBar(
             // «Стоп» — в цвете Дел, без красного: это «готово», а не тревога.
             GlyphButton(
                 if (listening) Glyphs.Stop else Glyphs.Mic,
-                if (listening) "готово — отдать Claude" else "сказать голосом: нажми, говори, нажми ещё раз",
+                if (listening) "готово — текст в поле" else "сказать голосом: нажми, говори, нажми ещё раз",
                 onClick = onMic,
                 tint = if (listening) mode.value else mode.label,
                 size = 46.dp,
@@ -232,20 +208,24 @@ internal fun DelaSayBar(
             )
             // Над полем, внутри стекла, — о чём строка (или «слушаю», «думает») и что ответил Claude.
             Column(Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 8.dp)) {
-                Text(
-                    androidx.compose.ui.text.buildAnnotatedString {
-                        append(head)
-                        if (card && !listening && !busy) {
-                            pushStyle(androidx.compose.ui.text.SpanStyle(color = mode.meta))
-                            append(" · Opus · видит карточку")
-                            pop()
-                        }
-                    },
-                    style = ty.meta,
-                    color = mode.label,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                // «Для этого» — сразу за именем дела, внутри строки (отладка 16.10.2026, запись 2: чип стоял отдельной
+                // строкой над стеклом у левого края, под боковиной, и было «непонятно, к чему он относится»).
+                // Переключатель: «до этого надо X» становится делом внутри, а не заметкой (жалоба 15.10.2026), сервер
+                // ставит связь, проект и срок тем же правилом, что «Для этого» в карточке.
+                if (head != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        head,
+                        style = ty.meta,
+                        color = mode.label,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (step != null && !listening && !busy) {
+                        Spacer(Modifier.width(8.dp))
+                        ru.zf.pravka.ui.PaperChip("Для этого", selected = step, onClick = onStep, icon = Glyphs.Plus)
+                    }
+                }
                 if (note.isNotBlank()) Text(note, style = ty.meta, color = if (noteError) ru.zf.pravka.ui.Ink.Warn else mode.value)
                 BasicTextField(
                     value = value,
@@ -257,7 +237,8 @@ internal fun DelaSayBar(
                     modifier = Modifier.fillMaxWidth().padding(top = 2.dp).semantics { contentDescription = placeholder },
                     decorationBox = { inner ->
                         Box(contentAlignment = Alignment.CenterStart) {
-                            if (value.isEmpty()) Text(placeholder, style = ty.input, color = mode.placeholder, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            // Две строки: «Добавь дело или скажи, что сделать» на сложенном в одну не влезает (16.10.2026).
+                            if (value.isEmpty()) Text(placeholder, style = ty.input, color = mode.placeholder, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             inner()
                         }
                     },
@@ -300,7 +281,7 @@ internal fun TalkSheet(
         footer = {
             GlyphButton(
                 if (listening) Glyphs.Stop else Glyphs.Mic,
-                if (listening) "готово — отдать Claude" else "ответить голосом: нажми, говори, нажми ещё раз",
+                if (listening) "готово — текст в поле" else "ответить голосом: нажми, говори, нажми ещё раз",
                 tint = if (listening) mode.value else mode.label,
                 enabled = !busy,
                 onClick = {
@@ -310,11 +291,10 @@ internal fun TalkSheet(
                         listening -> if (!service.finishDelaReason(keep = true)) listening = false
                         else -> {
                             val base = talk.text.trim()
-                            listening = service.listenForDelaReason("Говори — нажми микрофон ещё раз, отдам Claude") { said ->
+                            // «Стоп» — текст в поле ответа, отдаёт владелец (16.10.2026, запись 12 отладки).
+                            listening = service.listenForDelaReason("Говори — нажми микрофон ещё раз, текст встанет в поле") { said ->
                                 listening = false
-                                val full = (base + " " + said.trim()).trim()
-                                onText(full)
-                                if (said.isNotBlank()) onSend(full)
+                                onText(DelaAsk.voiced(base, said))
                             }
                         }
                     }

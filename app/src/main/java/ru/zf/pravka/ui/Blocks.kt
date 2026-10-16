@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -173,7 +174,10 @@ private fun PanelV2(
                         )
                     }
                     if (info != null) InfoDot(label ?: "Пояснение", info)
-                    trailing?.invoke()
+                    // Действие справа — своей высоты, строка остаётся 24 dp (отладка 16.10.2026, записи 1–2): строка
+                    // ужимала кнопку словом (минимум 40) до 22 dp, и «Понятно» над «Новым» на развороте читалось
+                    // чёрточкой, «Показать» у «Сделано само» — так же.
+                    if (trailing != null) Box(Modifier.wrapContentHeight(unbounded = true), contentAlignment = Alignment.Center) { trailing() }
                 }
                 Spacer(Modifier.height(4.dp))
             }

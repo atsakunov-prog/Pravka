@@ -9,6 +9,13 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -51,7 +58,10 @@ import java.util.TimeZone
  * outer, tall, inner, overlay; t5 — только «Сегодня» вида v2 (быстро); z5 — только Засечка v2;
  * svod — меню и вид из Свода (этап 7); web — страница сервиса внутри приложения (шапка Ковчега,
  * заглушка вместо страницы); p5 — доводка 5.0 (подсказка еды, разделы веба Денег); sp — траты Claude (значок
- * на «Сегодня» с меткой советов и экран «Claude: траты»).
+ * на «Сегодня» с меткой советов и экран «Claude: траты»); panel — кнопки справа в заголовке плашки v2 и «Сервер
+ * ответил» (с проверкой, что слово видно целиком); m16 — мелочи отладки 16.10 (карточка справа открывает другое дело
+ * с шапки, язычок колонки тянется после удержания, «Для этого» у имени дела в строке Claude, хвост дня внизу
+ * «Сейчас» без чисел наверху — с проверками; вкладка Дел на развороте 852×883 и сложенном).
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -71,7 +81,7 @@ class ScreenShots {
 
     private val dir = File(System.getProperty("pravka.shotsDir") ?: "build/shots").also { it.mkdirs() }
 
-    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5, web, dcol. */
+    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5, web, dcol, panel, m16. */
     private fun want(group: String): Boolean {
         val v = System.getProperty("pravka.shots").orEmpty()
         return v == "1" || v == "all" || v.split(',').map { it.trim() }.contains(group)
@@ -275,6 +285,340 @@ class ScreenShots {
         c.pause().stop().destroy()
     }
 
+    /**
+     * Действие справа в заголовке плашки вида v2 (16.10.2026, записи 1–2 отладки): строка заголовка `PanelV2` — 24 dp,
+     * и кнопка словом сжималась в ней до 22 dp — «Понятно» над «Новым» на развороте читалось чёрточкой, так же
+     * «Показать» у «Сделано само». Три плашки: любая v2 с кнопкой «Понятно», «Сервер ответил» (время у строки, крестик —
+     * `ServerNotices`) и «Сделано само · 3» с двумя кнопками. Шириной правой колонки разворота 852 dp (~339 dp) и
+     * сложенным экраном 411 dp, обе темы; кроме картинки — проверка: каждое слово кнопки целиком (не обрезано по высоте,
+     * без многоточия, не ниже 14 dp). Без вкладки и данных приложения. Группа `panel`.
+     */
+    @Test
+    fun panel() {
+        if (!want("panel")) return
+        val zone = TimeZone.getDefault()
+        val msk = java.time.ZoneId.of("Europe/Moscow")
+        val at = java.time.ZonedDateTime.of(2026, 10, 14, 15, 25, 0, 0, msk).toInstant().toEpochMilli()
+        TimeZone.setDefault(TimeZone.getTimeZone(msk))
+        val notices = listOf(
+            ru.zf.pravka.core.DelaNotices.Notice(
+                at + 60_000,
+                ru.zf.pravka.core.DelaNotices.refused("«Да» на «Завести таблицу заказов»", "Уже решено раньше: принято 14.10 в 15:25 — повторять не нужно"),
+                true, "op-1",
+            ),
+            ru.zf.pravka.core.DelaNotices.Notice(at, "правка: «Позвонить Ивану Тестову»: срок меняли и с другой стороны — осталось твоё, прежнее в журнале дела", false, "op-2"),
+        )
+        val words = listOf("Понятно", "Понятно, все", "Свернуть")
+        val bad = mutableListOf<String>()
+        for ((screen, q, w) in listOf(Triple("wide", "w852dp-h900dp-420dpi", 339), Triple("folded", "w411dp-h900dp-420dpi", 0))) {
+            RuntimeEnvironment.setQualifiers(q)
+            for (theme in listOf(ru.zf.pravka.ui.Look.Theme.LIGHT, ru.zf.pravka.ui.Look.Theme.DARK)) {
+                ru.zf.pravka.ui.Look.theme = theme
+                val c = Robolectric.buildActivity(androidx.activity.ComponentActivity::class.java).setup()
+                c.get().setContent {
+                    ru.zf.pravka.ui.PravkaTheme {
+                        androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalMode provides ru.zf.pravka.ui.Modes.Dela) {
+                            androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize().background(ru.zf.pravka.ui.Kv.bg)) {
+                                androidx.compose.foundation.layout.Column(
+                                    (if (w > 0) androidx.compose.ui.Modifier.width(w.dp) else androidx.compose.ui.Modifier.fillMaxWidth()).padding(12.dp),
+                                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
+                                ) {
+                                    ru.zf.pravka.ui.PaperCard(
+                                        label = "плашка с кнопкой словом",
+                                        trailing = { ru.zf.pravka.ui.PaperTextButton("Понятно", onClick = {}) },
+                                    ) { ru.zf.pravka.ui.PaperHint("Кнопка справа — своей высоты, строка заголовка — 24 dp.") }
+                                    ru.zf.pravka.ServerNotices(notices, onClose = {})
+                                    ru.zf.pravka.ui.PaperCard(
+                                        label = "Сделано само · 3",
+                                        trailing = {
+                                            androidx.compose.foundation.layout.Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                                ru.zf.pravka.ui.PaperTextButton("Понятно, все", onClick = {})
+                                                ru.zf.pravka.ui.PaperTextButton("Свернуть", onClick = {})
+                                            }
+                                        },
+                                    ) { ru.zf.pravka.ui.PaperHint("закрыто 2 · уточнено 1 · из встреч") }
+                                }
+                            }
+                        }
+                    }
+                }
+                settle(20)
+                val name = "panel-$screen-${theme.key}"
+                c.get().window.decorView.captureRoboImage(File(dir, "$name.png").absolutePath)
+                val root = c.get().window.decorView.composeRoot()
+                val density = c.get().resources.displayMetrics.density
+                if (root == null) bad += "$name: нет Compose" else for (word in words) wordFits(root, word, density)?.let { bad += "$name: $it" }
+                c.pause().stop().destroy()
+            }
+        }
+        ru.zf.pravka.ui.Look.theme = ru.zf.pravka.ui.Look.Theme.SYSTEM
+        RuntimeEnvironment.setQualifiers(OUTER)
+        TimeZone.setDefault(zone)
+        org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())
+    }
+
+    /**
+     * Карточка справа на развороте (16.10.2026, запись 10 отладки): открыл другое дело — оно с шапки, а не прокрученным
+     * туда, где стояло прежнее (тап по узлу «Места в дереве» выглядел как «показывает случайное»). Прокрутить карточку
+     * дела «А» вниз, открыть «Б» — название «Б» видно сверху; вернуться к «А» — тоже с начала. Выдуманные дела, без
+     * вкладки. Группа `m16`.
+     */
+    @Test
+    fun paneScroll() {
+        if (!want("m16")) return
+        RuntimeEnvironment.setQualifiers("w852dp-h883dp-420dpi")
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        val notes = (1..30).joinToString(" ") { "Пункт $it: сверить цифры и написать Ивану Тестову." }
+        fun t(id: String, title: String) = ru.zf.pravka.core.Dela.Task(
+            id = id, title = title, ownerId = "me", notes = notes, createdAt = "2026-10-15T10:00:00+03:00",
+        )
+        val a = t("a", "Альфа: собрать смету пилота")
+        val b = t("b", "Бета Групп: сверка по договору")
+        val snap = ru.zf.pravka.core.Dela.Snapshot(tasks = mapOf(a.id to a, b.id to b))
+        val cur = androidx.compose.runtime.mutableStateOf(a)
+        val c = Robolectric.buildActivity(androidx.activity.ComponentActivity::class.java).setup()
+        c.get().setContent {
+            ru.zf.pravka.ui.PravkaTheme {
+                androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalMode provides ru.zf.pravka.ui.Modes.Dela) {
+                    androidx.compose.foundation.layout.Box(
+                        androidx.compose.ui.Modifier.width(339.dp).height(300.dp).background(ru.zf.pravka.ui.Kv.bg),
+                    ) {
+                        ru.zf.pravka.DelaTaskPane(
+                            app = app, task = cur.value, snap = snap, spentMs = 0L,
+                            onStart = {}, onEdit = {}, onDone = {}, onPerson = {}, onTask = { cur.value = it },
+                        )
+                    }
+                }
+            }
+        }
+        settle(20)
+        val root = c.get().window.decorView.composeRoot() ?: error("нет Compose")
+        // Верх названия без обрезки окном (boundsInRoot обрезан краем списка — у ушедшего вверх он 0).
+        fun top(title: String): Float? = root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false)
+            .firstOrNull { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == title } == true }?.positionInRoot?.y
+        val bad = mutableListOf<String>()
+        // Кадр снимается до чтения мест: под стоящими часами Robolectric список доводит раскладку только на отрисовке.
+        fun frame(name: String) = c.get().window.decorView.captureRoboImage(File(dir, "m16-pane-$name.png").absolutePath)
+        fun scrollDown() {
+            root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false)
+                .firstOrNull { it.config.getOrNull(SemanticsActions.ScrollBy) != null }
+                ?.config?.get(SemanticsActions.ScrollBy)?.action?.invoke(0f, 2000f)
+            settle(8)
+        }
+        scrollDown()
+        frame("1-a-scrolled")
+        if ((top(a.title) ?: 0f) >= 0f) bad += "карточка «А» не прокрутилась — проверять нечего"
+        cur.value = b
+        settle(8)
+        frame("2-b-opened")
+        top(b.title).let { if (it == null || it < 0f) bad += "«Б» открылось прокрученным: верх названия $it" }
+        scrollDown()
+        cur.value = a
+        settle(8)
+        frame("3-a-again")
+        top(a.title).let { if (it == null || it < 0f) bad += "«А» снова открылось прокрученным: верх названия $it" }
+        c.pause().stop().destroy()
+        RuntimeEnvironment.setQualifiers(OUTER)
+        org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())
+    }
+
+    /**
+     * Строка Claude внизу вкладки Дел (16.10.2026, отладка): «Для этого» — сразу за именем открытого дела, в той же
+     * строке стекла, а не отдельной строкой над ним у левого края (запись 2); подписей «что видит Claude» нет (запись
+     * 17); подпись поля — «Добавь дело или скажи, что сделать», целиком (запись 24); «слушаю» — «текст встанет в
+     * поле» (запись 12). Состояния: дело не открыто; открыто — чип выключен и включён («Для «…»: что назовёшь…»); слушает. Шириной разворота 852 dp (строка под тремя
+     * колонками) и сложенного 411 dp, обе темы. Проверка: чип правее начала подписи и на её высоте. Группа `m16`.
+     */
+    @Test
+    fun sayBar() {
+        if (!want("m16")) return
+        val title = "Бета Групп: сверка по договору к пятнице"
+        val bad = mutableListOf<String>()
+        for ((screen, q) in listOf("wide" to "w852dp-h883dp-420dpi", "folded" to "w411dp-h900dp-420dpi")) {
+            RuntimeEnvironment.setQualifiers(q)
+            for (theme in listOf(ru.zf.pravka.ui.Look.Theme.LIGHT, ru.zf.pravka.ui.Look.Theme.DARK)) {
+                ru.zf.pravka.ui.Look.theme = theme
+                val c = Robolectric.buildActivity(androidx.activity.ComponentActivity::class.java).setup()
+                c.get().setContent {
+                    ru.zf.pravka.ui.PravkaTheme {
+                        androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalMode provides ru.zf.pravka.ui.Modes.Dela) {
+                            androidx.compose.foundation.layout.Column(
+                                androidx.compose.ui.Modifier.fillMaxSize().background(ru.zf.pravka.ui.Kv.bg).padding(12.dp),
+                                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(14.dp),
+                            ) {
+                                @androidx.compose.runtime.Composable
+                                fun bar(step: Boolean?, task: String?, listening: Boolean = false, value: String = "") =
+                                    ru.zf.pravka.DelaSayBar(
+                                        value = value, onValueChange = {}, placeholder = ru.zf.pravka.core.DelaAsk.fieldHint(card = false),
+                                        listening = listening, busy = false, note = "", noteError = false,
+                                        onMic = {}, onSend = {}, step = step, taskTitle = task,
+                                    )
+                                bar(null, null)
+                                bar(false, title)
+                                bar(true, title)
+                                bar(false, title, listening = true, value = "купить магний")
+                            }
+                        }
+                    }
+                }
+                settle(20)
+                val name = "m16-saybar-$screen-${theme.key}"
+                c.get().window.decorView.captureRoboImage(File(dir, "$name.png").absolutePath)
+                val root = c.get().window.decorView.composeRoot() ?: error("нет Compose")
+                val nodes = root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false)
+                val head = nodes.firstOrNull { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text.contains("с делом «$title»") } == true }
+                val chip = nodes.firstOrNull { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == "Для этого" } == true }
+                when {
+                    head == null || chip == null -> bad += "$name: нет подписи с делом или чипа"
+                    chip.positionInRoot.x <= head.positionInRoot.x -> bad += "$name: чип левее подписи с делом"
+                    kotlin.math.abs(chip.boundsInRoot.center.y - head.boundsInRoot.center.y) > 30 * c.get().resources.displayMetrics.density ->
+                        bad += "$name: чип не в строке с делом (${chip.boundsInRoot} / ${head.boundsInRoot})"
+                }
+                if (nodes.none { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text.startsWith("Для «$title»") } == true }) {
+                    bad += "$name: включённый чип не называет дело"
+                }
+                // Запись 24: подпись поля — «Добавь дело или скажи, что сделать», целиком (две строки на сложенном), без имени.
+                val hint = ru.zf.pravka.core.DelaAsk.fieldHint(card = false)
+                val hintNode = nodes.firstOrNull { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == hint } == true }
+                if (hintNode == null) bad += "$name: нет подписи поля «$hint»" else {
+                    val res = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                    hintNode.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(res)
+                    res.firstOrNull()?.let { l -> if (l.lineCount > 0 && l.isLineEllipsized(l.lineCount - 1)) bad += "$name: подпись поля с многоточием" }
+                }
+                // Запись 12: «стоп» кладёт текст в поле — подпись «слушаю» так и говорит, «отдам Claude» нет.
+                if (nodes.none { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text.contains("текст встанет в поле") } == true }) {
+                    bad += "$name: «слушаю» не говорит, что текст встанет в поле"
+                }
+                // Запись 17: строк «что видит Claude» нет нигде — ни «на экране», ни «видит карточку».
+                nodes.flatMap { n -> n.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } }
+                    .filter { it.contains("видит") || it.contains("на экране") }
+                    .forEach { bad += "$name: осталась подпись «$it»" }
+                c.pause().stop().destroy()
+            }
+        }
+        ru.zf.pravka.ui.Look.theme = ru.zf.pravka.ui.Look.Theme.SYSTEM
+        RuntimeEnvironment.setQualifiers(OUTER)
+        org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())
+    }
+
+    /**
+     * Язычок колонки разворота 852 dp (16.10.2026, запись 9 отладки: «держу стрелку — колонки не двигаются»): настоящие
+     * касания в окно Compose — держит дольше долгого нажатия и ведёт вправо — боковина шире; ведёт сразу влево — уже;
+     * подержал и отпустил — ничего; тап — боковина спрятана. Карточка справа: держит и ведёт влево — шире. Выдуманные колонки без данных. Группа `m16`.
+     *
+     * Прежнюю беду (после удержания `combinedClickable` съедал движение) здесь не воспроизвести: таймер долгого нажатия
+     * Compose под Robolectric не срабатывает, и старый язычок тут тянулся. Новое решение считает удержание и по времени
+     * событий пальца — его снимок и проверяет; на телефоне — руками.
+     */
+    @Test
+    fun gripDrag() {
+        if (!want("m16")) return
+        RuntimeEnvironment.setQualifiers("w852dp-h883dp-420dpi")
+        val cols = androidx.compose.runtime.mutableStateOf(ru.zf.pravka.core.DelaColumns.State())
+        val c = Robolectric.buildActivity(androidx.activity.ComponentActivity::class.java).setup()
+        c.get().setContent {
+            ru.zf.pravka.ui.PravkaTheme {
+                androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalMode provides ru.zf.pravka.ui.Modes.Dela) {
+                    ru.zf.pravka.DelaColumnsRow(
+                        cols = cols.value,
+                        onCols = { cols.value = it },
+                        modifier = androidx.compose.ui.Modifier.fillMaxSize().background(ru.zf.pravka.ui.Kv.bg),
+                        side = { m -> androidx.compose.foundation.layout.Box(m.background(ru.zf.pravka.ui.Kv.side)) },
+                        list = { androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) },
+                        pane = { m -> androidx.compose.foundation.layout.Box(m.background(ru.zf.pravka.ui.Kv.panel)) },
+                    )
+                }
+            }
+        }
+        settle(20)
+        val view = c.get().window.decorView
+        val root = view.composeRoot() ?: error("нет Compose")
+        val density = c.get().resources.displayMetrics.density
+        fun center(what: String): androidx.compose.ui.geometry.Offset {
+            view.captureRoboImage(File(dir, "m16-grip-now.png").absolutePath) // раскладка — к отрисовке
+            val n = root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true)
+                .first { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(what) == true }
+            val loc = IntArray(2).also { (root as View).getLocationInWindow(it) }
+            return n.boundsInRoot.center + androidx.compose.ui.geometry.Offset(loc[0].toFloat(), loc[1].toFloat())
+        }
+        var t0 = 0L
+        fun touch(action: Int, at: androidx.compose.ui.geometry.Offset, afterMs: Long) {
+            looper.idleFor(Duration.ofMillis(afterMs))
+            val now = android.os.SystemClock.uptimeMillis()
+            if (action == android.view.MotionEvent.ACTION_DOWN) t0 = now
+            val e = android.view.MotionEvent.obtain(t0, now, action, at.x, at.y, 0)
+            view.dispatchTouchEvent(e)
+            e.recycle()
+            looper.idle()
+        }
+        /** Палец на язычке [what]: подержал [holdMs], повёл на [dxDp] пятью шагами, отпустил. */
+        fun gesture(what: String, holdMs: Long, dxDp: Float) {
+            val p = center(what)
+            touch(android.view.MotionEvent.ACTION_DOWN, p, 0)
+            var x = p.x
+            touch(android.view.MotionEvent.ACTION_MOVE, androidx.compose.ui.geometry.Offset(x, p.y), holdMs)
+            repeat(5) {
+                x += dxDp * density / 5
+                touch(android.view.MotionEvent.ACTION_MOVE, androidx.compose.ui.geometry.Offset(x, p.y), 16)
+            }
+            touch(android.view.MotionEvent.ACTION_UP, androidx.compose.ui.geometry.Offset(x, p.y), 16)
+            settle(8)
+            println("shots: язычок «$what», держал $holdMs мс, вёл $dxDp dp (${p.x / density} dp) → ${cols.value}")
+        }
+        val bad = mutableListOf<String>()
+        val side0 = ru.zf.pravka.core.DelaColumns.fit(852f, cols.value).side
+        // Держит 0,7 с (дольше долгого нажатия), ведёт вправо на 40 dp — сама запись 9.
+        gesture("Спрятать разделы", 700, 40f)
+        val side1 = cols.value.sideW ?: 0f
+        // Порог — не весь сдвиг: под стоящими часами Robolectric часть движений до списка не доходит (кадр раскладки
+        // между событиями), на телефоне колонка идёт за пальцем целиком. До 16.10 после удержания она не шла вовсе.
+        if (side1 < side0 + 8f) bad += "держал и вёл: боковина ${side0} → ${cols.value}"
+        view.captureRoboImage(File(dir, "m16-grip-1-held-dragged.png").absolutePath)
+        // Сразу ведёт влево на 30 dp — уже.
+        gesture("Спрятать разделы", 16, -30f)
+        val side2 = cols.value.sideW ?: 0f
+        if (side2 > side1 - 8f) bad += "вёл сразу: боковина ${side1} → ${cols.value}"
+        // Подержал и отпустил, не двигая, — ничего.
+        val before = cols.value
+        gesture("Спрятать разделы", 700, 0f)
+        if (cols.value != before) bad += "подержал и отпустил: ${before} → ${cols.value}"
+        // Карточка справа: держит и ведёт влево на 30 dp — шире (боковину сжимать некуда — её спрячем тапом ниже).
+        val pane0 = ru.zf.pravka.core.DelaColumns.fit(852f, cols.value).pane
+        gesture("Спрятать карточку", 700, -30f)
+        val pane1 = ru.zf.pravka.core.DelaColumns.fit(852f, cols.value).pane
+        if (pane1 < pane0 + 8f) bad += "карточка: держал и вёл влево — ${pane0} → ${pane1} (${cols.value})"
+        // Тап — боковина спрятана.
+        val p = center("Спрятать разделы")
+        touch(android.view.MotionEvent.ACTION_DOWN, p, 0)
+        touch(android.view.MotionEvent.ACTION_UP, p, 60)
+        settle(8)
+        if (cols.value.sideOn) bad += "тап не спрятал боковину: ${cols.value}"
+        view.captureRoboImage(File(dir, "m16-grip-2-tap-hidden.png").absolutePath)
+        c.pause().stop().destroy()
+        RuntimeEnvironment.setQualifiers(OUTER)
+        org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())
+    }
+
+    /**
+     * Слово кнопки видно целиком: не обрезано по высоте, без многоточия, не ниже 14 dp. null — да, иначе что не так.
+     * Ширину не сверяем: под Robolectric `multiParagraph.width` — ширина места, а не текста.
+     */
+    private fun wordFits(root: ViewRootForTest, word: String, density: Float): String? {
+        val node = root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false).firstOrNull { n ->
+            n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == word } == true
+        } ?: return "«$word» нет на экране"
+        val res = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        node.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(res)
+        val l = res.firstOrNull() ?: return "«$word»: нет разметки текста"
+        val hDp = node.size.height / density
+        return when {
+            l.didOverflowHeight -> "«$word» обрезано по высоте: место ${l.size.height}, строка ${l.multiParagraph.height}"
+            l.lineCount > 0 && l.isLineEllipsized(0) -> "«$word» с многоточием"
+            hDp < 14f -> "«$word» высотой ${"%.1f".format(hDp)} dp"
+            else -> null
+        }
+    }
+
     @Test
     fun shots() {
         pinEvening()
@@ -333,6 +677,9 @@ class ScreenShots {
 
         // ---- Режим отладки Дел (15.10.2026): строка «Что не так?» вверху вкладки — сложенный и разворот, обе темы
         if (want("dbg")) debugBar()
+
+        // ---- Мелочи отладки 16.10.2026: вкладка Дел на развороте 852×883 (как у владельца) и сложенном, обе темы
+        if (want("m16")) dela16()
 
         // ---- режимы по одному (Правка 4.0): сложенный, целиком, разворот
         for ((g, tab) in listOf(
@@ -911,6 +1258,63 @@ class ScreenShots {
      * (общий итог, «Телефон» и «Сервер», советы, кэш и пачки, по дням) — на выдуманном виде сервера ([Seed.spendView]),
      * обе темы, оба экрана Fold; экран — ещё и высоким окном, чтобы видно было всё.
      */
+    /**
+     * Вкладка Дел после мелочей отладки 16.10.2026 — разворот 852×883 dp (как у владельца: снимки записей) и сложенный,
+     * обе темы: «Сейчас» (шапка без чисел, хвосты «просрочено · ждут» мелкой строкой внизу — высоким окном видно всю
+     * страницу), строка внизу «Добавь дело…» и «Для этого» у имени дела справа; «Сегодня»; на сложенном — карточка дела
+     * листом со строкой о нём.
+     */
+    private fun dela16() {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        RuntimeEnvironment.setQualifiers("w852dp-h883dp-420dpi")
+        close(launch(MainActivity.TAB_TODOIST)) // первый запуск вкладки рисует её без копии — прогреть
+        for (theme in listOf("light", "dark")) {
+            runBlocking { app.settings.setLookTheme(theme) }
+            settle(4)
+            for ((size, q) in listOf("wide" to "w852dp-h883dp-420dpi", "wide-tall" to "w852dp-h1700dp-420dpi", "folded" to OUTER)) {
+                RuntimeEnvironment.setQualifiers(q)
+                val c = launch(MainActivity.TAB_TODOIST)
+                shot(c, "m16-$size-$theme-1-now")
+                if (size == "wide" && tap(c, "Для этого", exact = true)) shot(c, "m16-$size-$theme-2-for-this")
+                if (size != "wide-tall") {
+                    close(c)
+                    val t = launch(MainActivity.TAB_TODOIST)
+                    if (tap(t, "Сегодня", exact = true)) shot(t, "m16-$size-$theme-3-today")
+                    close(t)
+                } else close(c)
+                if (size == "folded") {
+                    val k = launch(MainActivity.TAB_TODOIST)
+                    if (tap(k, "Ольга: ответить про сроки")) screen("m16-$size-$theme-4-card")
+                    close(k)
+                }
+            }
+        }
+        // Проверка записи 15: окном во всю страницу «Сейчас» (ленивый список собирает только видимое) — хвост дня
+        // («просрочено N · ждут от тебя без срока · жду больше недели») ниже «Сегодня», сверху чисел нет.
+        runBlocking { app.settings.setLookTheme("light") }
+        RuntimeEnvironment.setQualifiers("w852dp-h4000dp-420dpi")
+        val c = launch(MainActivity.TAB_TODOIST)
+        shot(c, "m16-wide-whole-light-1-now")
+        val nodes = roots(c).flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }
+        fun y(text: (String) -> Boolean) = nodes.firstOrNull { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { text(it.text) } == true }?.positionInRoot?.y
+        val bad = mutableListOf<String>()
+        val late = y { it.startsWith("просрочено ") && it.endsWith("›") }
+        val owed = y { it.startsWith("ждут от тебя без срока") }
+        // «Сегодня» — заголовок блока на главной (ниже боковины с тем же словом): самый нижний.
+        val today = nodes.filter { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == "Сегодня" } == true }
+            .maxOfOrNull { it.positionInRoot.y }
+        if (late == null || owed == null) bad += "хвоста дня нет: просрочено $late, ждут $owed"
+        else if (today == null || late < today) bad += "хвост дня не внизу: просрочено на $late, «Сегодня» на $today"
+        nodes.flatMap { n -> n.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } }
+            .filter { it.contains(" из 5") || Regex("""\d+ (сегодня|просрочено)""").containsMatchIn(it) }
+            .forEach { bad += "техническое число наверху: «$it»" }
+        close(c)
+        runBlocking { app.settings.setLookTheme("system") }
+        RuntimeEnvironment.setQualifiers(OUTER)
+        settle(4)
+        org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())
+    }
+
     /** Режим отладки (DelaDebugUi.kt): строка видна, когда поле debug синка говорит on (флаг debug — в Seed). */
     private fun debugBar() {
         val app = RuntimeEnvironment.getApplication() as PravkaApp

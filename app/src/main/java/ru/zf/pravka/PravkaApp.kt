@@ -576,7 +576,8 @@ class PravkaApp : Application() {
         if (ops.isEmpty()) return said
         delaStore.enqueue(ops)
         val sent = delaSync.pushNow(4_000L)
-        val refused = delaStore.noticesFor(ops).firstOrNull { it.error }
+        // Отказ скажет тост вызвавшего — плашке «Сервер ответил» его не повторять (`tell`, отладка 16.10.2026, запись 1).
+        val refused = delaStore.tell(ops)
         return refused?.text ?: if (sent) said else "$said — уйдёт на сервер, когда будет связь"
     }
 

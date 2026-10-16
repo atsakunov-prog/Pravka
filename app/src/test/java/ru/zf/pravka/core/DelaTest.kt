@@ -362,6 +362,41 @@ class DelaTest {
         }
     }
 
+    /**
+     * Ответ в «Новом» словами плашки и тоста (отладка 16.10.2026, запись 1): было «принять предложение» — без того, на
+     * что отвечал; владелец связал вчерашний отказ со своим сегодняшним ответом. Теперь — кнопка и название вопроса.
+     */
+    @Test
+    fun describeDecisionNamesTheQuestion() {
+        val task = Dela.Task(id = "t1", title = "Бета Групп: сверка по договору", ownerId = "u1")
+        val create = Dela.Suggestion(id = "s1", kind = "create", payload = JSONObject().put("title", "Завести таблицу заказов").toString())
+        val person = Dela.Suggestion(
+            id = "s2", kind = "person",
+            payload = JSONObject().put("person", JSONObject().put("name", "Иван Тестов"))
+                .put("options", JSONArray().put(JSONObject().put("label", "Да, это он")).put(JSONObject().put("label", "Нет, не он").put("reject", true)))
+                .toString(),
+        )
+        val update = Dela.Suggestion(id = "s3", kind = "update", taskId = "t1", payload = JSONObject().put("title", "Сверка по договору к пятнице").toString())
+        val quoted = Dela.Suggestion(id = "s4", kind = "create", quote = "  позвонить Ольге  ")
+        val s = Dela.Snapshot(
+            tasks = mapOf("t1" to task),
+            suggestions = listOf(create, person, update, quoted).associateBy { it.id },
+        )
+        assertEquals("«Да» на «Завести таблицу заказов»", Dela.describe(Dela.decideOp("s1", accept = true), s))
+        assertEquals("«Не надо» на «Завести таблицу заказов»", Dela.describe(Dela.decideOp("s1", accept = false, reason = "не нужно"), s))
+        // Вопрос о человеке — кнопкой варианта и именем.
+        assertEquals("ответ «Нет, не он» на «Иван Тестов»", Dela.describe(Dela.answerOp("s2", 1), s))
+        // Уточнение и закрытие — самим делом, а не предложенным новым названием.
+        assertEquals("«Да» на «Бета Групп: сверка по договору»", Dela.describe(Dela.decideOp("s3", accept = true), s))
+        assertEquals("«Да» на «позвонить Ольге»", Dela.describe(Dela.decideOp("s4", accept = true), s))
+        // Вопроса уже нет в копии — честно «на вопрос», без пустых кавычек.
+        assertEquals("«Да» на вопрос", Dela.describe(Dela.decideOp("нет-такого", accept = true), s))
+        assertEquals("ответ на вопрос", Dela.describe(Dela.answerOp("нет-такого", 0), s))
+        // Длинное название — коротко.
+        val long = Dela.Suggestion(id = "s5", kind = "create", payload = JSONObject().put("title", "а".repeat(90)).toString())
+        assertEquals("«Да» на «${"а".repeat(60)}»", Dela.describe(Dela.decideOp("s5", accept = true), s.copy(suggestions = mapOf("s5" to long))))
+    }
+
     /** Ключи операции верхнего уровня и вложенного объекта — как в контракте (вложенные — подмножество). */
     private fun assertKeys(expected: JSONObject, actual: JSONObject) {
         val e = expected.keys().asSequence().toSet()

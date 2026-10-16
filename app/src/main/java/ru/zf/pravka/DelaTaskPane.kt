@@ -16,7 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -25,6 +25,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -106,7 +107,9 @@ internal fun DelaTaskPane(
             .onSuccess { c -> journal = c.history.map { historyPaneLine(it, snap) } }
             .onFailure { e -> journalNote = "журнал не прочитался: ${e.message}" }
     }
-    val listState = rememberLazyListState()
+    // Своя прокрутка у каждого дела (16.10.2026, запись 10 отладки): тап по узлу «Места в дереве», «Внутри» или «для: …»
+    // открывает дело с его шапки, а не прокрученным туда, где стояло прежнее, — иначе казалось, что дерево перескочило.
+    val listState = rememberSaveable(task.id, saver = LazyListState.Saver) { LazyListState() }
     LazyColumn(
         modifier = modifier.fillMaxSize().bottomFade().scrollFade(listState),
         state = listState,
@@ -355,7 +358,9 @@ private fun DelaTaskPaneV2(
             .onSuccess { c -> journal = c.history.map { historyPaneLine(it, snap) } }
             .onFailure { e -> journalNote = "журнал не прочитался: ${e.message}" }
     }
-    val listState = rememberLazyListState()
+    // Своя прокрутка у каждого дела (16.10.2026, запись 10 отладки): новое дело из дерева, «Внутри» или «для: …»
+    // открывается со своей шапки, а не прокрученным к дереву прежнего.
+    val listState = rememberSaveable(task.id, saver = LazyListState.Saver) { LazyListState() }
     LazyColumn(
         modifier = modifier.fillMaxSize().scrollFade(listState),
         state = listState,

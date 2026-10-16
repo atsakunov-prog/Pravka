@@ -402,10 +402,20 @@ class DelaViewsTest {
     }
 
     @Test
-    fun `подпись шапки - число впереди слова, просрочка раньше закрытого`() {
-        assertEquals("3 сегодня · 2 просрочено · 1 закрыто", DelaViews.headLine(null, today = 3, late = 2, done = 1))
-        assertEquals("0 сегодня", DelaViews.headLine(null, today = 0, late = 0, done = 0))
-        assertEquals("Работа · 4 сегодня · 5 закрыто", DelaViews.headLine("Работа", today = 4, late = 0, done = 5))
+    fun `хвост дня внизу - просрочено и ждут ссылками, нулей нет`() {
+        // Отладка 16.10.2026, запись 15: числа ушли из шапки и подзаголовка вниз страницы, мелкой строкой.
+        assertEquals(
+            listOf(
+                "просрочено 41" to DelaViews.Tail.LATE,
+                "ждут от тебя без срока: 22" to DelaViews.Tail.OWED,
+                "жду больше недели: 26" to DelaViews.Tail.STALE,
+            ),
+            DelaViews.tail(41, DelaViews.Waits(22, 26)),
+        )
+        assertEquals(listOf("жду больше недели: 1" to DelaViews.Tail.STALE), DelaViews.tail(0, DelaViews.Waits(0, 1)))
+        // «Сегодня» без «ждут» — только просрочка; всё ноль — строки нет.
+        assertEquals(listOf("просрочено 2" to DelaViews.Tail.LATE), DelaViews.tail(2, null))
+        assertEquals(emptyList<Pair<String, DelaViews.Tail>>(), DelaViews.tail(0, DelaViews.Waits(0, 0)))
     }
 
     // ------------------------------------------------------------ задание 21 (аудит 15.10.2026): вопросы кнопками

@@ -1591,7 +1591,20 @@ object Dela {
         return JSONObject().put("op", "interaction.add").put("op_id", opId).put("data", data)
     }
 
-    /** Операция словами — для журнала и для «сервер не принял: …». */
+    /**
+     * Чем назвать предложение в одной строке: у «завести» и вопроса о человеке — что предложено (название, имя), у
+     * «закрыть», «уточнить» и вопроса Круга — само дело; нет ни того, ни другого — цитата. Нет предложения в копии — "".
+     */
+    fun sugName(sg: Suggestion?, s: Snapshot): String {
+        if (sg == null) return ""
+        val p = sg.payloadObj()
+        val offered = listOf(p.str("title"), p.optJSONObject("person")?.str("name").orEmpty(), p.str("question"))
+        val task = s.tasks[sg.taskId]?.title.orEmpty()
+        val order = if (sg.kind == "create" || sg.kind == "person" || sg.kind == "capture") offered + task else listOf(task) + offered
+        return (order + sg.quote).map { it.trim() }.firstOrNull { it.isNotBlank() }.orEmpty()
+    }
+
+    /** Операция словами — для журнала и для «Не прошло: …» плашки «Сервер ответил». */
     fun describe(op: JSONObject, s: Snapshot): String {
         fun taskName(ref: String): String = s.task(ref)?.let { "«${it.title.take(60)}»" } ?: "дело"
         return when (op.str("op")) {
@@ -1602,10 +1615,16 @@ object Dela {
             "task.cancel" -> "отменить ${taskName(op.str("id"))}"
             "comment.add" -> "комментарий к ${taskName(op.optJSONObject("comment")?.str("task_id").orEmpty())}"
             "comment.delete" -> "убрать комментарий"
-            "suggestion.decide" -> if (op.has("option")) {
-                val label = s.suggestions[op.str("id")]?.payloadObj()?.optJSONArray("options")?.optJSONObject(op.optInt("option", -1))?.str("label")
-                if (label.isNullOrBlank()) "ответ на вопрос" else "ответ «${label.take(60)}»"
-            } else (if (op.str("decision") == "reject") "отклонить" else "принять") + " предложение"
+            // На что отвечал — словами кнопки и названием вопроса (отладка 16.10.2026, запись 1): было «принять
+            // предложение», и отказ «Сервер не принял принять предложение» не говорил, о каком вопросе речь.
+            "suggestion.decide" -> {
+                val sg = s.suggestions[op.str("id")]
+                val on = sugName(sg, s).takeIf { it.isNotBlank() }?.let { " на «${it.take(60)}»" } ?: " на вопрос"
+                if (op.has("option")) {
+                    val label = sg?.payloadObj()?.optJSONArray("options")?.optJSONObject(op.optInt("option", -1))?.str("label")
+                    (if (label.isNullOrBlank()) "ответ" else "ответ «${label.take(60)}»") + on
+                } else (if (op.str("decision") == "reject") "«Не надо»" else "«Да»") + on
+            }
             "suggestion.seen" -> "«понятно» у закрытого само"
             "dictation.add" -> "текст наговорки"
             "interaction.add" -> "заметка в хронологию"

@@ -29,9 +29,9 @@ class ReminderReceiver : BroadcastReceiver() {
             try {
                 when (action) {
                     ReminderAlarms.ACTION_FIRE -> app.reminders.fire("будильник")
-                    ACTION_DONE -> app.reminders.act(intent.getStringExtra(EXTRA_ID).orEmpty(), Reminders.Act.DONE, "уведомление")
-                    ACTION_HOUR -> app.reminders.act(intent.getStringExtra(EXTRA_ID).orEmpty(), Reminders.Act.HOUR, "уведомление")
-                    ACTION_TOMORROW -> app.reminders.act(intent.getStringExtra(EXTRA_ID).orEmpty(), Reminders.Act.TOMORROW, "уведомление")
+                    ACTION_DONE -> app.reminders.act(intent.getStringExtra(EXTRA_ID).orEmpty(), Reminders.Act.DONE, "уведомление", toast = false)
+                    ACTION_HOUR -> app.reminders.act(intent.getStringExtra(EXTRA_ID).orEmpty(), Reminders.Act.HOUR, "уведомление", toast = false)
+                    ACTION_TOMORROW -> app.reminders.act(intent.getStringExtra(EXTRA_ID).orEmpty(), Reminders.Act.TOMORROW, "уведомление", toast = false)
                 }
             } catch (e: Exception) {
                 runCatching { app.eventLog.add("напоминания: $action упало — ${e.javaClass.simpleName}: ${e.message}") }
