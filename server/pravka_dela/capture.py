@@ -315,9 +315,20 @@ def is_inf(n: str) -> bool:
     return n.endswith(("ть", "ться", "тись", "чь", "чься")) or n in _TI
 
 
-# Глаголы повестки и ожидания первым — не «моё»: «обсудить с…», «спросить…», «жду…» — разберёт модель.
+# Глаголы повестки и ожидания первым — не «моё»: «обсудить с…», «спросить…», «жду…» — правилом Пв (повестка, с
+# человеком) или моделью.
 AGENDA_FIRST = frozenset({"обсудить", "спросить", "поднять", "ждать", "дождаться"})
 AGENDA_WITH = {"уточнить": "у", "получить": "от", "узнать": "у"}
+# Повестка — правилом Пв (отладка 16.10.2026, запись 19: «не хватает тега, который бы добавлял в повестку… ключевые
+# слова: запиши в повестку, не забыть обсудить»). Повестка — дело с ball agenda и человеком (правило 17), новой
+# сущности нет: правило только узнаёт слова Саши и называет её словом «повестка».
+AGENDA_HEADS = tuple(tuple(x.split()) for x in ("запиши в повестку", "запиши на повестку", "добавь в повестку",
+                                                 "поставь в повестку", "занеси в повестку", "внеси в повестку",
+                                                 "в повестку", "на повестку"))
+AGENDA_MEET = tuple(tuple(x.split()) for x in ("при следующей встрече с", "при встрече с", "когда увижусь с",
+                                                "когда увижу"))
+AGENDA_VERBS = frozenset({"обсудить", "обговорить", "проговорить", "поговорить", "переговорить", "перетереть",
+                          "поднять", "спросить"})
 LEAD_FILLER = ("пожалуйста", "надо", "нужно", "мне", "бы", "что", "чтобы", "давай")
 PREPS = frozenset({"в", "во", "на", "к", "ко", "до", "с", "со", "у", "по", "о", "об", "за", "из", "от", "для", "при",
                    "около", "про", "без", "через"})
@@ -400,8 +411,11 @@ def one_thought(text: str) -> bool:
     # считалось двумя мыслями, и правило его не узнавало никогда).
     trig = _find_trigger(tt)
     skip = set(range(*trig)) if trig else set()
+    # «не забыть обсудить …», «не забыть купить …» — «забыть» после «не» не глагол дела (_strip_lead его и снимает; до
+    # мелочей 16.10.2026 такая фраза считалась двумя мыслями и всегда уходила модели).
     verbs = [i for i, t in enumerate(tt) if i not in skip and is_inf(t["n"])
-             and not (i > 0 and tt[i - 1]["n"] in ("чтобы", "что"))]
+             and not (i > 0 and tt[i - 1]["n"] in ("чтобы", "что"))
+             and not (t["n"] == "забыть" and i > 0 and tt[i - 1]["n"] == "не")]
     return len(verbs) <= 1
 
 
@@ -545,7 +559,7 @@ def _strip_lead(tt: list[dict]) -> list[dict]:
     while tt:
         if tt[0]["n"] in LEAD_FILLER:
             tt = tt[1:]
-        elif len(tt) > 1 and tt[0]["n"] == "не" and tt[1]["n"] == "забыть":
+        elif len(tt) > 1 and tt[0]["n"] == "не" and tt[1]["n"] in ("забыть", "забудь"):
             tt = tt[2:]
         else:
             break
@@ -1019,6 +1033,48 @@ def _task_people(item: dict, rest: list[dict], ctx: Ctx) -> dict:
     return item
 
 
+def _rule_agenda(tt: list[dict], ctx: Ctx) -> dict | None:
+    """Пв — повестка (мелочи 16.10.2026, запись 19): «запиши в повестку …», «в повестку с Ольгой: отпуск», «не забыть
+    обсудить с Иваном фонды», «обсудить / обговорить / поговорить / поднять с Иваном …», «спросить Ивана …», «уточнить у
+    Ивана …», «при (следующей) встрече с Ольгой …», «когда увижу Ивана, …» — дело в повестку (ball agenda) с этим
+    человеком, $0. Молчит (модели): человека нет или он не узнан уверенно (тёзки), двое людей, слова времени, «потом» и
+    «в сейчас» — так же, как модель решала раньше. Название — слова Саши («Обсудить с Иваном фонды»); без глагола —
+    «Обсудить с Иваном: тема»."""
+    base = _strip_lead(list(tt))
+    head = next((h for h in AGENDA_HEADS if _match(base, 0, h)), None)
+    meet = None if head else next((h for h in AGENDA_MEET if _match(base, 0, h)), None)
+    if head or meet:
+        rest = base[len(head or meet):]
+    elif base and (base[0]["n"] in AGENDA_VERBS or (base[0]["n"] == "уточнить" and len(base) > 1 and base[1]["n"] == "у")):
+        rest = base
+    else:
+        return None
+    if not rest or _back_words(rest) or _now_words(rest) or _when_edges(rest, 0, len(rest), ctx.now):
+        return None
+    who, a, b = ctx.find_person(rest)
+    if not who or "person" not in who:
+        return None
+    if ctx.find_person(rest[b:])[0]:
+        return None  # двое — чья повестка, решит модель
+    p = who["person"]
+    if _verb_start(rest) == 0:
+        title = _title(rest)
+    else:
+        cut = a - 1 if a > 0 and rest[a - 1]["n"] in _PERSON_PREPS else a
+        topic = rest[:cut] + rest[b:]
+        text = _text(topic).strip(" ,:-—")
+        if not text:
+            return None
+        # «при встрече с Ольгой поднять бюджет» — «Поднять бюджет» (с кем — человек дела); без глагола — «Обсудить с
+        # Ольгой: отпуск».
+        title = _title(topic) if _verb_start(_strip_lead(topic)) == 0 else f"Обсудить с {instrumental(p['short'] or p['name'])}: {text}"
+    item = {"bucket": "agenda", "form": "Пв", "title": title, "fields": {"ball": "agenda", "person_id": p["id"]}}
+    proj = ctx.project(_words_of(rest), only="client")
+    if proj:
+        item["fields"]["project_id"] = str(proj["id"])
+    return item
+
+
 def _rule_task(tt: list[dict], ctx: Ctx) -> dict | None:
     """П «… потом / на неделе», Д «сегодня … / в сейчас … / в пятницу …», Г голое «купить магний» — дело с глагола."""
     back = _back_words(tt)
@@ -1073,7 +1129,7 @@ def rule(conn, user: str, text: str, now: dt.datetime | None = None, ctx: Ctx | 
     if not tt:
         return None
     for form, fn in (("И", _rule_idea), ("З2", _rule_note), ("Н", _rule_remind), ("С1", _rule_did),
-                     ("З1", _rule_said), ("П", _rule_task)):
+                     ("З1", _rule_said), ("Пв", _rule_agenda), ("П", _rule_task)):
         got = fn(tt, ctx)
         if got:
             if form == "З1" and got["bucket"] == "did":
@@ -1225,7 +1281,8 @@ def _line_of(conn, item: dict, now: dt.datetime) -> str:
             return f"Жду от {genitive(name)}: {_lowfirst(body)} · неделя без ответа — на виду" if name else f"Жду: {what}"
         if b == "owed":
             return f"Ждёт от тебя {name}: {_lowfirst(body)} · в «Отбить»" if name else f"Ждут от тебя: {what} · в «Отбить»"
-        return f"При встрече с {instrumental(name)}: {_lowfirst(body)}" if name else f"При встрече: {what}"
+        # Слово Саши — «повестка» (запись 19; до 16.10.2026 строка писала «При встрече с …», и повестку не узнавали).
+        return f"В повестку с {instrumental(name)}: {_lowfirst(body)}" if name else f"В повестку: {what}"
     if b == "note":
         text = _short(item.get("text") or "", 100)
         if item.get("twins") and not item.get("person_id"):
@@ -1314,7 +1371,10 @@ def _chips_of(item: dict) -> list[dict]:
             return [_who_chip(item), cancel]
         d = item.get("did") or {}
         return ([{"label": "Не закрывать", "move": "keep_open"}] if d.get("closed") else []) + [cancel]
-    if b in ("waiting", "owed", "agenda"):
+    if b == "agenda":
+        # «Просто дело» — повестка не то (запись 19): дело Саши «потом», не повестка человека.
+        return [{"label": "Просто дело", "move": "mine"}, cancel]
+    if b in ("waiting", "owed"):
         return [cancel]
     if b == "error":
         return [{"label": "Повторить", "move": "retry"}, {"label": "Дело потом", "move": "back_task"}]
@@ -1355,13 +1415,18 @@ def short_of(item: dict, now: dt.datetime) -> str:
             word = f"жду от {genitive(who.group(1).strip())} {word}"
         elif b == "task_remind":
             word = "дело " + word
+    elif b == "agenda" and item.get("agenda_with"):
+        # «в повестку с Иваном Тестовым: обсудить фонды» — имя карточки (кладёт `_apply_one`), в «что» не повторяется.
+        p = item["agenda_with"]
+        word = f"в повестку с {instrumental(p['name'])}"
+        what = _short(_lowfirst(_without(title.strip(), p)), 40)
     elif b in ("waiting", "owed", "agenda") and who:
         name = who.group(1).strip()
         word = {"waiting": f"жду от {genitive(name)}", "owed": f"ждёт {name}",
-                "agenda": f"при встрече с {instrumental(name)}"}[b]
+                "agenda": f"в повестку с {instrumental(name)}"}[b]
     else:
         word = {"now": "в «Сейчас»", "today": "на сегодня", "day": "на день", "task_remind": "дело с напоминанием",
-                "waiting": "жду", "owed": "ждут от тебя", "agenda": "при встрече", "note": "заметка", "idea": "идея",
+                "waiting": "жду", "owed": "ждут от тебя", "agenda": "в повестку", "note": "заметка", "idea": "идея",
                 "did": "сделано", "cancelled": "отменено", "error": "не разложено"}.get(b, b)
     return f"{word}: {what}" if what and b not in ("cancelled", "error") else word
 
@@ -1419,6 +1484,9 @@ def _apply_one(conn, user: str, item: dict, ref: str, source: str, ctx: Ctx, i: 
             t = store.op_task_create(conn, user, {"task": fields})["task"]
         item["task"] = _snap(t)
         item["undo"] = [{"op": "task.cancel", "id": str(t["id"])}]
+        p = _person_row(conn, t.get("person_id")) if b == "agenda" else None
+        if p:
+            item["agenda_with"] = {"name": p["name"], "short": p["short"]}  # «Разложил N: в повестку с …»
         return item
     if b == "note":
         data = {"at": ctx.now.isoformat(), "kind": "note", "summary": (item.get("summary") or item.get("text") or "")[:2000],
@@ -1732,6 +1800,10 @@ def _move(conn, user, item: dict, to: str, op: dict, ctx: Ctx, ref: str, source:
                 set_["deal_id"] = None
             item = _set_task(conn, user, item, set_)
             return {**item, "client_auto": None}
+        if to == "mine":  # «Просто дело»: повестка не то — дело Саши «потом» (запись 19)
+            d = default_back(ctx.today, "")
+            item = _set_task(conn, user, item, {"kind": "task", "ball": "mine", "back_on": d.isoformat(), "back_said": None})
+            return {**item, "bucket": "back" if not item["task"].get("due_date") else "day", "agenda_with": None}
         if to == "time":
             at = _at_option(str(op.get("at") or "hour"), ctx.now)
             item = _set_task(conn, user, item, {"remind_at": remind.iso(at), "remind_place": None})

@@ -1710,14 +1710,40 @@ def _when_words(due, today: dt.date) -> str:
     return "на сегодня" if d == today else "на завтра" if d == today + dt.timedelta(days=1) else "на " + d.strftime("%d.%m")
 
 
+def group_said(t: dict) -> str:
+    """Повестка словами для reply (мелочи 16.10.2026, запись 19): «в повестку с Иваном Тестовым». В 12:23 Саша завёл
+    «Обсудить с … грантовое финансирование» — оно легло в повестку, а ответ сказал только «без срока», и повестки он не
+    увидел. Не повестка — пусто."""
+    if t.get("ball") != "agenda":
+        return ""
+    from . import capture
+
+    name = t.get("person_name") or t.get("person_short")
+    return f"в повестку с {capture.instrumental(name)}" if name else "в повестку"
+
+
+def _step_bit(x: dict, today: dt.date) -> str:
+    when, grp = _when_words(x.get("due_date"), today), group_said(x)
+    if grp:
+        when = grp if when == "без срока" else f"{when}, {grp}"
+    return f"«{x['title']}», {when}" + (", в «Сейчас»" if store._day(x.get("focus_on")) == today else "")
+
+
+def agenda_said(created: list[dict], made: list[dict]) -> str:
+    """Дела в повестку, заведённые не внутри дела (строка карточки, «завести» Claude): «Обсудить …» — в повестку с … —
+    строкой сервера: Claude группу в reply может не назвать (запись 19)."""
+    inside = {str(x["id"]) for x in made}
+    return " ".join(f"«{x['title']}» — {g}." for x in created if str(x["id"]) not in inside and (g := group_said(x)))
+
+
 def steps_said(parent: dict, made: list[dict], today: dt.date) -> str:
     """Строка reply о делах, заведённых внутри этого (сервер пишет её сам, Claude их в reply не называет): «Завёл для
     «…»: «…», на сегодня». «Шаг» — не имя сущности (владелец 15.10.2026: это обычные дела внутри дела). Не вложилось
-    (дело чужое — «Зачем» ставит только хозяин) — честно: заведено отдельным делом."""
+    (дело чужое — «Зачем» ставит только хозяин) — честно: заведено отдельным делом. Повестка — «в повестку с …»
+    вместо «без срока» (запись 19)."""
     if not made:
         return ""
-    bits = "; ".join(f"«{x['title']}», {_when_words(x.get('due_date'), today)}"
-                     + (", в «Сейчас»" if store._day(x.get("focus_on")) == today else "") for x in made)
+    bits = "; ".join(_step_bit(x, today) for x in made)
     if all(str(x.get("why_id") or "") == str(parent["id"]) for x in made):
         return f"Завёл для «{parent['title']}»: {bits}."
     return f"Завёл {bits} — отдельно: вложить в «{parent['title']}» может только его хозяин."
@@ -1883,8 +1909,8 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
     fell = [r["fell"] for r in results if r.get("ok") and r.get("fell")]
     # «Для этого»: строка сервера и есть ответ — «Готово.» модели к ней ничего не добавляет (проба 15.10.2026).
     said = (data.get("reply") or "").strip() if not (only and made) else ""
-    reply = " ".join(x for x in [steps_said(step["parent"], made, today) if step else "", raised_said(raised),
-                                 fell_said(fell, today), said, plain_note] if x)
+    reply = " ".join(x for x in [steps_said(step["parent"], made, today) if step else "", agenda_said(created, made),
+                                 raised_said(raised), fell_said(fell, today), said, plain_note] if x)
     return {"route": "edit", "reply": reply, "changed": undo, "tasks": created, "decided": done,
             "crm": crm_done, "notes": [], "errors": errors + smiss + miss + cmiss, "usage": usage, "refs": refs[:MAX_REFS],
             "model": (usage or {}).get("model") or model, "steps": [str(x["id"]) for x in made], "raised": raised,

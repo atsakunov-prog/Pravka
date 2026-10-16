@@ -277,7 +277,7 @@ def test_model_buckets_by_fields(dela, at):
     # Иван — из компании клиента ООО Ромашка: дело без проекта и цели встаёт к нему (запись 5), строка говорит, к кому.
     assert lines[3] == "Жду от Ивана Тестова: прислать модель · неделя без ответа — на виду · ООО Ромашка"
     assert lines[4] == "Ждёт от тебя Ольга Тестова: ответить · в «Отбить»"  # кто — уже в начале строки
-    assert lines[5] == "При встрече с Иваном Тестовым: обсудить фонды · ООО Ромашка"
+    assert lines[5] == "В повестку с Иваном Тестовым: обсудить фонды · ООО Ромашка"  # слово Саши (запись 19)
     assert task(dela, got["items"][6]["task"]["id"])["back_on"].isoformat() == "2026-10-20"
     assert str(got["items"][7].get("project_id")) == ids["romashka"]
     assert got["items"][8]["title"] == "Предложить дашборд"  # слова «идея» не было — дело
@@ -381,6 +381,36 @@ def test_head_note_whose_after_twin_pick(dela, at):
     got = move(dela, cap["ref"], "person", item=1, person_id=ids["ivan2"])
     assert got["items"][1]["whose"] == "Иван Петров"
     assert got["head"].endswith("· заметка (Иван Петров): Иван сказал, что бюджет будет в январе"), got["head"]
+
+
+# ── Повестка словами (мелочи 16.10.2026, запись 19) ───────────────────────
+
+
+def test_agenda_rule_twins_and_just_a_task(dela, at):
+    """Повестка правилом: тёзки — молчит (модели, как раньше); «Просто дело» — повестка не то: дело Саши «потом», не
+    повестка человека; в «Разложил N» — «в повестку с …» без повтора имени."""
+    ids = seed(dela, twin=True)
+    cap = say(dela, "обсудить с Иваном фонды")
+    assert cap["status"] == "pending", cap  # два Ивана — чья повестка, решит модель
+    cap = say(dela, "не забыть обсудить с Ольгой отпуск")
+    assert cap["by"] == "rule" and cap["form"] == "Пв" and cap["items"][0]["bucket"] == "agenda", cap
+    assert cap["head"] == "В повестку с Ольгой Тестовой: обсудить отпуск"
+    tid = cap["items"][0]["task"]["id"]
+    assert (task(dela, tid)["ball"], str(task(dela, tid)["person_id"])) == ("agenda", ids["olga"])
+    got = move(dela, cap["ref"], "mine")
+    t = task(dela, tid)
+    back = capture.default_back(db_today(dela), "")  # кнопка — по часам сервера, не фразы
+    assert (t["ball"], t["back_on"], str(t["person_id"])) == ("mine", back, ids["olga"])
+    assert got["head"] == f"Переложил: Потом: обсудить с Ольгой отпуск · {capture.back_say(back, db_today(dela))}"
+    assert [c["label"] for c in got["items"][0]["chips"]] == ["Сегодня", "В «Сейчас»", "Отменить"]
+    # Модель: повестка в «Разложил N» — «в повестку с Ольгой Тестовой: …», имя второй раз не повторяется.
+    cap = say(dela, "много всего разом")
+    capture.tick(dela, ask_fn=lambda h, u: _model(tasks=[
+        {"title": "Обсудить с Ольгой отпуск", "person": "Ольга", "ball": "agenda"}, {"title": "Купить магний"}]))
+    got = store.view(dela, "sasha", "capture", ref=cap["ref"])["capture"]
+    assert got["head"] == ("Разложил 2: в повестку с Ольгой Тестовой: обсудить отпуск · дело «потом», верну в пятницу "
+                           "16.10: купить магний"), got["head"]
+    assert [c["label"] for c in got["items"][0]["chips"]] == ["Просто дело", "Отменить"]
 
 
 # ── Клиент дела по человеку (отладка 16.10.2026, запись 5) ──────────────

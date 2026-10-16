@@ -800,3 +800,26 @@ def test_later_does_not_beat_parent_due(dela):
     goal = mk(dela, "Сделки закрываются", goal=True)
     g = row(dela, mk(dela, "Шаг к цели", why_id=goal["id"], back_on=back)["id"])
     assert (g["due_date"], g["back_on"]) == (None, back), g
+
+
+def test_agenda_reply_says_povestka(dela):
+    """Дело в повестку — ответ говорит «в повестку с …», а не только «без срока» (мелочи 16.10.2026, запись 19: дело
+    легло в повестку, а ответ сказал «без срока», и повестки Саша не увидел). Дело внутри — в строке «Завёл для …»,
+    отдельное — своей строкой сервера; не повестка — как было."""
+    with parse.db.session(dela, "system", "t") as c:
+        c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Иван Тестов', 'Иван', 'sasha')")
+    t = mk(dela, "Грант для фонда")
+
+    def fake(system, user_text):
+        return empty_card(create=[cr("Обсудить с Иваном грант", person="Иван", ball="agenda", step=True),
+                                  cr("Спросить Ивана про сроки", person="Иван", ball="agenda"),
+                                  cr("Собрать выписки", step=True)], _usage=None)
+
+    out = ask.run(dela, "sasha", "обсудить с Иваном грант и спросить про сроки", {"card": "task", "open": t["id"]}, "",
+                  None, ask_fn=fake)
+    assert [x["ball"] for x in out["tasks"]] == ["agenda", "agenda", "mine"], out["tasks"]
+    assert out["reply"].startswith("Завёл для «Грант для фонда»: «Обсудить с Иваном грант», в повестку с Иваном "
+                                   "Тестовым; «Собрать выписки», без срока."), out["reply"]
+    assert "«Спросить Ивана про сроки» — в повестку с Иваном Тестовым." in out["reply"]
+    assert ask.group_said({"ball": "agenda", "person_name": "Ольга Тестова"}) == "в повестку с Ольгой Тестовой"
+    assert ask.group_said({"ball": "waiting", "person_name": "Ольга Тестова"}) == ""
