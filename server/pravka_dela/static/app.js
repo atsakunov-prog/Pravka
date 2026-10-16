@@ -5956,6 +5956,7 @@ const INSIGHT_KIND = { note: 'заметка', conflict: 'несостыковк
   // Виды «Только тебе» сводки дайджеста (этап 6 аудита, 16.10.2026; digest.py кладёт их сюда же).
   cooling: 'остывает', unhappy: 'недоволен', pressure: 'давит', reason: 'повод написать', other: 'другое' };
 const INSIGHT_OFF = ['dismissed', 'wrong'];
+const RATED_SOURCES = ['meeting', 'digest'];   // пункты служб — их считает мерило (insights.RATE_SOURCES)
 async function insightOp(op, msg) {
   try { await op1(op); crmDirty(); if (msg) toast(msg); render(); } catch (e) { fail(e); }
 }
@@ -5973,6 +5974,10 @@ function insightRow(x) {
         x.state === 'useful' ? el('span', { class: 'faint' }, ' ✓ пригодилось')
           : el('button', { class: 'link-btn', onclick: () => insightOp({ op: 'insight.rate', id: x.id, rate: 'useful' }, 'Отметил: пригодилось') }, ' пригодилось'),
         INSIGHT_OFF.includes(x.state) ? null : el('button', { class: 'link-btn', onclick: () => insightOp({ op: 'insight.set', id: x.id, set: { state: 'dismissed' } }, 'Мимо — свернул') }, ' мимо'),
+        // «Неверно» — пункт разбора ошибся (16.10.2026): мерило выключает вид, где «неверно» больше 10 % оценённых. Только
+        // у пунктов служб (встречи, дайджест) — свою заметку владелец просто убирает.
+        x.state === 'wrong' ? el('span', { class: 'faint' }, ' ✗ неверно')
+          : RATED_SOURCES.includes(x.source) ? el('button', { class: 'link-btn', onclick: () => insightOp({ op: 'insight.rate', id: x.id, rate: 'wrong' }, 'Отметил: неверно — свернул') }, ' неверно') : null,
         el('button', { class: 'link-btn', onclick: () => insightOp({ op: 'insight.delete', id: x.id }, 'Убрал') }, ' убрать'))));
 }
 /** Блок «Только тебе» карточки: v — вид (client, deal, dossier, meeting) с полем insights; about — о ком новая запись. */

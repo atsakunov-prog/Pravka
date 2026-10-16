@@ -11,6 +11,8 @@
 - insight.set {id, set: {state?, text?, kind?, person_ids?, project_id?, deal_id?, org_id?}} — «Видел», «Мимо»,
   «Неверно», правка;
 - insight.delete {id} — убрать (deleted_at; строки не удаляются);
+- insight.retire {source, source_ref, keep: [item_key]} — служба разобрала заново (флаг lens, 16.10.2026): её неоценённые
+  пункты этого источника (state new), которых нет в keep, убираются — оценённое остаётся словом владельца;
 - вид insights?person_id|project_id|deal_id|org_id|meeting_id|state|limit, поле insights у видов client, deal, dossier и
   meeting (of). Команде — пусто: RLS «только владельцу» и правило строки (сотруднику insight.add — отказ базы словами).
 В синк не входит: телефон берёт «Только тебе» видами. Клиенты шлют операции только при флаге privacy.
@@ -160,6 +162,24 @@ def op_delete(conn, user: str, op: dict, err) -> dict:
     return {"insight": _one(conn, row["id"])}
 
 
+def op_retire(conn, user: str, op: dict, err) -> dict:
+    """Служба разобрала встречу заново (или прислала сводку повторно): прежние пункты её источника, которых в новом
+    наборе нет, — убрать, если владелец их не оценил (state new). Иначе в карточках копились бы устаревшие наблюдения,
+    а мерило считало бы лишнее. Оценённое («Пригодилось», «Мимо», «Неверно», «Видел») — слово владельца, остаётся (как
+    у дайджеста, digest._to_insights). Только источники служб (meeting, digest)."""
+    source, ref = str(op.get("source") or "").strip(), str(op.get("source_ref") or "").strip()
+    keep = op.get("keep")
+    if source not in RATE_SOURCES or not ref:
+        raise err("«Только тебе»: нужен source (meeting, digest) и source_ref")
+    if not isinstance(keep, list) or not all(isinstance(k, str) for k in keep):
+        raise err("«Только тебе»: keep — список ключей пунктов, которые остаются")
+    gone = conn.execute(
+        "UPDATE crm.insights SET deleted_at = now() WHERE owner_id = %s AND source = %s AND source_ref = %s "
+        "AND deleted_at IS NULL AND state = 'new' AND item_key IS NOT NULL AND NOT (item_key = ANY (%s)) RETURNING id",
+        (user, source, ref, keep)).fetchall()
+    return {"retired": len(gone)}
+
+
 def of(conn, where: str, params: list, limit: int = CARD_MAX) -> list[dict]:
     """Живые наблюдения карточки, свежие сверху (поле insights видов client, deal, dossier, meeting). Команде — []: RLS."""
     return conn.execute(SELECT + f"WHERE i.deleted_at IS NULL AND ({where}) ORDER BY i.at DESC, i.created_at DESC "
@@ -292,10 +312,11 @@ def register(handlers: dict, views: dict, err, features: list | None = None) -> 
     handlers["insight.set"] = lambda conn, user, op: op_set(conn, user, op, err)
     handlers["insight.delete"] = lambda conn, user, op: op_delete(conn, user, op, err)
     handlers["insight.rate"] = lambda conn, user, op: op_rate(conn, user, op, err)
+    handlers["insight.retire"] = lambda conn, user, op: op_retire(conn, user, op, err)
     views["insights"] = lambda conn, user, **p: view_insights(conn, user, err=err, **p)
     views["lens"] = lambda conn, user, **p: view_lens(conn, user, err=err, **p)
     # «lens» — этап 6 аудита (16.10.2026): у сводки дайджеста since, team, only_you (и «Только тебе» — в crm.insights),
-    # оценка insight.rate и вид lens; «rules» — Свод rules.dela с заводским текстом в виде svod и проверкой записи,
+    # оценка insight.rate, уборка прежних пунктов разобранной заново встречи insight.retire и вид lens; «rules» — Свод rules.dela с заводским текстом в виде svod и проверкой записи,
     # выключатель meetings.lens. Службы и веб по флагам знают, что сервер это умеет: старый ответил бы «нет такой операции».
     for f in ("lens", "rules"):
         if features is not None and f not in features:

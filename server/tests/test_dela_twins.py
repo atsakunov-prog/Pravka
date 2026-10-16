@@ -369,3 +369,25 @@ def test_life_rows_split_long_spans(day, dela):
     with dela_db.session(dela, "sasha") as c:
         got = life.rows(c, "entries", day - dt.timedelta(days=150), day)
     assert {e["id"] for e in got} == {99, 101, 102, 103, 104}
+
+
+def test_calls_view_reads_archive_for_digest(day, dela, clean):
+    """Звонки для разноски дайджеста (dela_0035): из архива по суткам и собеседникам, через crm.life_rows, только
+    владельцу; архив не читается — отказ словами, а не пустой список; флаг calls."""
+    store_events(clean, "phone:test", [ev("phone.day", day.isoformat(), {
+        "day": day.isoformat(), "screen_min": 120, "pickups": 40,
+        "callers": [{"who": "Ольга  Пробная", "min": 3}, {"who": "Иван Тестов", "min": 12.5}]})])
+    out = view(dela, "sasha", "calls", since=(day - dt.timedelta(days=7)).isoformat(), until=day.isoformat())
+    assert out["calls"] == [{"day": day.isoformat(), "who": "Иван Тестов", "minutes": 12.5},
+                            {"day": day.isoformat(), "who": "Ольга Пробная", "minutes": 3.0}]
+    assert [c["who"] for c in view(dela, "sasha", "calls")["calls"]] == ["Иван Тестов", "Ольга Пробная"]  # неделя до сегодня
+    with dela_db.session(dela, "sasha") as c:
+        got = [r["r"] for r in c.execute("SELECT crm.life_rows('calls', %s, %s) AS r", (day, day)).fetchall()]
+    assert {g["who"] for g in got} == {"Иван Тестов", "Ольга  Пробная"}
+    with pytest.raises(store.OpError, match="только владельцу"):
+        view(dela, "natasha", "calls")
+    with pytest.raises(store.OpError, match="не больше 31"):
+        view(dela, "sasha", "calls", since=(day - dt.timedelta(days=40)).isoformat(), until=day.isoformat())
+    with pytest.raises(store.OpError, match="дата"):
+        view(dela, "sasha", "calls", since="вчера")
+    assert "calls" in store.FEATURES

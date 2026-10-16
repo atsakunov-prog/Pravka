@@ -2889,7 +2889,7 @@ meetings.register(HANDLERS, VIEWS, OpError)
 digest.register(HANDLERS, VIEWS, OpError)
 # Страницы-двойники экранов телефона (dela_0016): команды Засечки телефону и виды day, zasechka, pravka, pogoda.
 zasechka.register(HANDLERS, OpError)
-twins.register(VIEWS, OpError)
+twins.register(VIEWS, OpError, FEATURES)  # и вид calls — звонки для разноски дайджеста (dela_0035, флаг calls)
 # Настройки телефона (dela_0015): снимок от телефона, правка с компьютера, вид phone (phone.py).
 phone.register(HANDLERS, VIEWS, OpError)
 # Книга трат Claude (dela_0017): итоги дней от телефона и сборщика «Дома», «советы прочитаны», вид spend (spend.py).

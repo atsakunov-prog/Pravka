@@ -381,7 +381,47 @@ def pair(takes: list[dict], cleans: list[dict]) -> list[dict]:
     return out
 
 
-def register(views: dict, err) -> None:
+# ── Звонки для разноски дайджеста (16.10.2026, этап 6 аудита; dela_0035) ──────────────────────────────────────────────
+# Служба дайджеста (токен владельца) кладёт во вход разноски блок ЗВОНКИ — с кем Саша говорил по телефону за окно и
+# неделю до него — и закрывает «позвонить …» звонком кодом. Источник — life.phone_calls (телефон, по суткам: день,
+# собеседник как записан в телефоне, минуты); роль службы Дел архив сама не видит — только crm.life_rows ветвью calls.
+CALLS_DAYS = 31          # дольше месяца разноске не нужно; с завода — неделя до конца отрезка
+
+
+def _date(v: Any, what: str, err) -> dt.date | None:
+    if v in (None, ""):
+        return None
+    try:
+        return dt.date.fromisoformat(str(v).strip()[:10])
+    except ValueError:
+        raise err(f"звонки: {what} — дата ГГГГ-ММ-ДД") from None
+
+
+def view_calls(conn, user: str, since=None, until=None, err=None, **_) -> dict:
+    """Вид calls?since&until — звонки по суткам [{day, who, minutes}] за отрезок (по Москве, включительно; с завода —
+    неделя до сегодня), не длиннее месяца. Только владельцу. Архив не читается — отказ словами, а не пустой список:
+    «(нет)» во входе разноски значило бы «не звонил», а это неправда."""
+    _owner(conn, user, err)
+    d2 = _date(until, "until", err) or _today(conn)
+    d1 = _date(since, "since", err) or d2 - dt.timedelta(days=7)
+    if d1 > d2 or (d2 - d1).days > CALLS_DAYS:
+        raise err(f"звонки: since…until — не больше {CALLS_DAYS} суток, since не позже until")
+    ok, why = life.available(conn)
+    if not ok:
+        raise err(f"звонки: {why}")
+    try:
+        got = life.rows(conn, "calls", d1, d2)
+    except life.NoArchive as e:
+        raise err(f"звонки: {e}") from None
+    calls = [{"day": str(r.get("day") or "")[:10], "who": " ".join(str(r.get("who") or "").split()),
+              "minutes": round(float(r.get("minutes") or 0), 1)} for r in got if r.get("who")]
+    return {"since": d1, "until": d2, "calls": sorted(calls, key=lambda c: (c["day"], c["who"]))}
+
+
+def register(views: dict, err, features: list | None = None) -> None:
+    views["calls"] = lambda conn, user, **p: view_calls(conn, user, err=err, **p)
+    if features is not None and "calls" not in features:
+        features.append("calls")   # вид calls (dela_0035): дайджест кладёт ЗВОНКИ во вход разноски
     views["day"] = lambda conn, user, **p: view_day(conn, user, err=err, **p)
     views["zasechka"] = lambda conn, user, **p: view_zasechka(conn, user, err=err, **p)
     views["pravka"] = lambda conn, user, **p: view_pravka(conn, user, err=err, **p)

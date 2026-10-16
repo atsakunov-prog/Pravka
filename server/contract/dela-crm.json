@@ -137,7 +137,16 @@
    "op_id": "<uuid>",
    "id": "<insight_id>",
    "rate": "useful",
-   "_": "флаг lens (16.10.2026, этап 6 аудита): кнопки «Пригодилось» (useful), «Мимо» (dismissed), «Неверно» (wrong), new — снять; вместо id — source (meeting, digest), source_ref и item_key пункта службы; мерило — вид lens (dela-digest.json, раздел only_you)"
+   "_": "флаг lens (16.10.2026, этап 6 аудита): кнопки «Пригодилось» (useful), «Мимо» (dismissed), «Неверно» (wrong), new — снять; вместо id — source (meeting, digest), source_ref и item_key пункта службы (кнопки в Telegram под «🔒 Только тебе» встреч и дайджеста: их ловит служба встреч, ключ — её lens.item_key или key пункта сводки); мерило — вид lens (dela-digest.json, раздел only_you)"
+  },
+  {
+   "op": "insight.retire",
+   "source": "meeting",
+   "source_ref": "215",
+   "keep": [
+    "<item_key>"
+   ],
+   "_": "флаг lens (16.10.2026): служба разобрала встречу заново — её пункты этого источника, которых нет в keep и которые владелец не оценил (state new), убираются (deleted_at); оценённое остаётся. Ответ — retired: сколько убрано. Только source meeting или digest"
   }
  ],
  "sync_additions": {
@@ -1512,7 +1521,7 @@
    "comment.add + private",
    "interaction.add + private",
    "interaction.set {private: true} — только хозяин записи",
-   "insight.add / insight.set / insight.delete; с флагом lens — insight.rate (оценка пункта) и вид lens (мерило «Только тебе»)",
+   "insight.add / insight.set / insight.delete; с флагом lens — insight.rate (оценка пункта), insight.retire (уборка неоценённых пунктов разобранной заново встречи) и вид lens (мерило «Только тебе»)",
    "svod.set privacy.team {meetings: fact|summary} — только владелец, ответ + touched"
   ],
   "refusals": [

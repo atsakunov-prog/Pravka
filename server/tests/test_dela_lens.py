@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -47,8 +48,12 @@ def test_factory_rules_text_is_whole_and_safe():
     assert text.startswith("ПРАВИЛА ДЕЛ САШИ — одни для всех разборов")
     assert re.findall(r"^(\d+)\. [А-ЯЁ]", text, re.M) == [str(n) for n in range(1, 16)]
     assert "{" not in text and "}" not in text
-    for name in ("Наташ", "Марианн", "Серёж", "Боря", "Борей"):
-        assert name not in text, name
+    # Имена команды и семьи публичный репозиторий не несёт и в тестах (урок пуша 16.10, план №71): здесь — отпечатки md5
+    # начала слова (5, 7, 5, 4, 5 букв), а не сами имена.
+    banned = {"e5d566147eeb50741b6a24a4d989c450", "fb7c09576891b36baa067c4948477ea1", "899d09b97f5ec30858dbc491fa1fdb42",
+              "be650be88404107eef70054133068699", "eeceddb3b79d6c7dee6b33c09912a53a"}
+    words = set(re.findall(r"[А-ЯЁ][а-яё]+", text))
+    assert not {w for w in words for n in (4, 5, 7) if hashlib.md5(w[:n].encode()).hexdigest() in banned}
     assert 10_000 < len(text) < rules.BODY_MAX
 
 
@@ -216,9 +221,11 @@ def test_insights_link_work_people_never_team_and_never_timeline(crm):
     """Пункт о рабочем человеке — к его карточке и клиенту (как «Ждут тебя»), о команде — ни к кому, сделка — по имени;
     в хронологию клиента «Только тебе» не идёт никогда; команда строк не видит."""
     url, ppl = crm["url"], crm["people"]
+    with dela_db.session(url, "sasha", via="test") as c:   # человек команды из справочника фикстуры — без имени в тексте
+        crew = c.execute("SELECT name FROM crm.people WHERE id = %s", (ppl["natasha"],)).fetchone()["name"]
     summary = {"waiting": [], "work": [], "only_you": [
         "cooling · Иван · Иван Соколов (Ромашка) · 13.10 11:20 · «вернусь позже» · сдвигает срок · позвонить · Модель · —",
-        "unhappy · Наталья · Наталья Ветрова (Финбюро) · 13.10 12:00 · «устала» · про команду · — · — · —",
+        f"unhappy · {crew.split()[0]} · {crew} · 13.10 12:00 · «устала» · про команду · — · — · —",
         "signal · Ольга · Ольга Лебедева · 13.10 13:00 · «ищем финансиста» · боль под услугу · созвон · — · финансирование",
     ]}
     r = put(url, window(summary=summary))
@@ -230,7 +237,7 @@ def test_insights_link_work_people_never_team_and_never_timeline(crm):
     assert got["cooling"]["deal_id"] == crm["deal"]  # «Модель» — живая сделка Ромашки
     assert got["unhappy"]["person_ids"] == [] and got["unhappy"]["project_id"] is None  # команда — не к карточке
     assert got["signal"]["person_ids"] == [] and got["signal"]["text"].endswith("(услуга: финансирование)")  # личная
-    # Карточка клиента — блок «Только тебе» владельцу; Наташе Ромашка открыта, но строк она не видит.
+    # Карточка клиента — блок «Только тебе» владельцу; команде (natasha) Ромашка открыта, но строк она не видит.
     card = store.view(url, "sasha", "client", project_id=str(crm["projects"]["Ромашка"]))
     assert [x["kind"] for x in card["insights"]] == ["cooling"]
     assert store.view(url, "natasha", "client", project_id=str(crm["projects"]["Ромашка"]))["insights"] == []
@@ -341,3 +348,28 @@ def test_features_and_contract_parts():
     rate = DIGEST["only_you"]["rate"]["example"]
     assert rate["op"] == "insight.rate" and rate["rate"] in insights.RATES
     assert DIGEST["only_you"]["rate"]["example"]["item_key"] == DIGEST["digest_object"]["example"]["summary"]["only_you"][0]["key"]
+
+
+def test_retire_drops_unrated_points_of_a_reparsed_meeting(crm):
+    """Встречу разобрали заново (служба встреч, lens.flush): прежние пункты, которых в новом разборе нет, убираются, если
+    владелец их не оценил; оценённые и пункты других встреч — на месте (insight.retire, флаг lens)."""
+    url = crm["url"]
+    with dela_db.session(url, "sasha", via="test", actor="svc:meetings") as c:
+        for key, ref, state in (("a", "215", "new"), ("b", "215", "useful"), ("c", "215", "new"), ("d", "216", "new")):
+            c.execute("INSERT INTO crm.insights (owner_id, kind, text, source, source_ref, item_key, state, author) "
+                      "VALUES ('sasha', 'hedge', 'пункт', 'meeting', %s, %s, %s, 'svc:meetings')", (ref, key, state))
+    r = ops(url, {"op": "insight.retire", "source": "meeting", "source_ref": "215", "keep": ["c"]})[0]
+    assert r["ok"] and r["retired"] == 1, r
+    with dela_db.session(url, "sasha", via="test") as c:
+        live = {x["item_key"] for x in c.execute("SELECT item_key FROM crm.insights WHERE deleted_at IS NULL").fetchall()}
+    assert live == {"b", "c", "d"}
+    assert ops(url, {"op": "insight.retire", "source": "meeting", "source_ref": "215", "keep": ["c"]})[0]["retired"] == 0
+    for bad in ({"op": "insight.retire", "source": "web", "source_ref": "215", "keep": []},
+                {"op": "insight.retire", "source": "meeting", "source_ref": "", "keep": []},
+                {"op": "insight.retire", "source": "meeting", "source_ref": "215", "keep": "c"}):
+        assert not ops(url, bad)[0]["ok"], bad
+    # Команда чужие пункты не убирает: RLS «своё» — у неё строк нет вовсе.
+    assert ops(url, {"op": "insight.retire", "source": "meeting", "source_ref": "216", "keep": []},
+               user="natasha", actor="natasha")[0].get("retired", 0) == 0
+    with dela_db.session(url, "sasha", via="test") as c:
+        assert c.execute("SELECT deleted_at FROM crm.insights WHERE item_key = 'd'").fetchone()["deleted_at"] is None
