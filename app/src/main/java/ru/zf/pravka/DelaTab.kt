@@ -3735,6 +3735,8 @@ internal fun DelaTaskSheet(
         onDismiss = onDismiss,
         title = title ?: if (isNew) "Новое дело" else "Дело",
         icon = Glyphs.Delo,
+        // Другое дело из «Места в дереве» или «Внутри» — с его шапки (16.10.2026, запись 10 отладки).
+        scrollKey = task.id,
         subtitle = if (existing) listOfNotNull(
             task.createdAt.take(10).takeIf { it.isNotBlank() }?.let { "заведено " + delaDate(it) },
             sourceName(task.source),

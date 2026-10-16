@@ -12,6 +12,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.unit.dp
@@ -58,7 +59,8 @@ import java.util.TimeZone
  * svod — меню и вид из Свода (этап 7); web — страница сервиса внутри приложения (шапка Ковчега,
  * заглушка вместо страницы); p5 — доводка 5.0 (подсказка еды, разделы веба Денег); sp — траты Claude (значок
  * на «Сегодня» с меткой советов и экран «Claude: траты»); panel — кнопки справа в заголовке плашки v2 и «Сервер
- * ответил» (с проверкой, что слово видно целиком).
+ * ответил» (с проверкой, что слово видно целиком); m16 — мелочи отладки 16.10 (карточка справа открывает другое дело
+ * с шапки — с проверкой).
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -78,7 +80,7 @@ class ScreenShots {
 
     private val dir = File(System.getProperty("pravka.shotsDir") ?: "build/shots").also { it.mkdirs() }
 
-    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5, web, dcol, panel. */
+    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5, web, dcol, panel, m16. */
     private fun want(group: String): Boolean {
         val v = System.getProperty("pravka.shots").orEmpty()
         return v == "1" || v == "all" || v.split(',').map { it.trim() }.contains(group)
@@ -351,6 +353,71 @@ class ScreenShots {
         ru.zf.pravka.ui.Look.theme = ru.zf.pravka.ui.Look.Theme.SYSTEM
         RuntimeEnvironment.setQualifiers(OUTER)
         TimeZone.setDefault(zone)
+        org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())
+    }
+
+    /**
+     * Карточка справа на развороте (16.10.2026, запись 10 отладки): открыл другое дело — оно с шапки, а не прокрученным
+     * туда, где стояло прежнее (тап по узлу «Места в дереве» выглядел как «показывает случайное»). Прокрутить карточку
+     * дела «А» вниз, открыть «Б» — название «Б» видно сверху; вернуться к «А» — тоже с начала. Выдуманные дела, без
+     * вкладки. Группа `m16`.
+     */
+    @Test
+    fun paneScroll() {
+        if (!want("m16")) return
+        RuntimeEnvironment.setQualifiers("w852dp-h883dp-420dpi")
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        val notes = (1..30).joinToString(" ") { "Пункт $it: сверить цифры и написать Ивану Тестову." }
+        fun t(id: String, title: String) = ru.zf.pravka.core.Dela.Task(
+            id = id, title = title, ownerId = "me", notes = notes, createdAt = "2026-10-15T10:00:00+03:00",
+        )
+        val a = t("a", "Альфа: собрать смету пилота")
+        val b = t("b", "Бета Групп: сверка по договору")
+        val snap = ru.zf.pravka.core.Dela.Snapshot(tasks = mapOf(a.id to a, b.id to b))
+        val cur = androidx.compose.runtime.mutableStateOf(a)
+        val c = Robolectric.buildActivity(androidx.activity.ComponentActivity::class.java).setup()
+        c.get().setContent {
+            ru.zf.pravka.ui.PravkaTheme {
+                androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalMode provides ru.zf.pravka.ui.Modes.Dela) {
+                    androidx.compose.foundation.layout.Box(
+                        androidx.compose.ui.Modifier.width(339.dp).height(300.dp).background(ru.zf.pravka.ui.Kv.bg),
+                    ) {
+                        ru.zf.pravka.DelaTaskPane(
+                            app = app, task = cur.value, snap = snap, spentMs = 0L,
+                            onStart = {}, onEdit = {}, onDone = {}, onPerson = {}, onTask = { cur.value = it },
+                        )
+                    }
+                }
+            }
+        }
+        settle(20)
+        val root = c.get().window.decorView.composeRoot() ?: error("нет Compose")
+        // Верх названия без обрезки окном (boundsInRoot обрезан краем списка — у ушедшего вверх он 0).
+        fun top(title: String): Float? = root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false)
+            .firstOrNull { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == title } == true }?.positionInRoot?.y
+        val bad = mutableListOf<String>()
+        // Кадр снимается до чтения мест: под стоящими часами Robolectric список доводит раскладку только на отрисовке.
+        fun frame(name: String) = c.get().window.decorView.captureRoboImage(File(dir, "m16-pane-$name.png").absolutePath)
+        fun scrollDown() {
+            root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false)
+                .firstOrNull { it.config.getOrNull(SemanticsActions.ScrollBy) != null }
+                ?.config?.get(SemanticsActions.ScrollBy)?.action?.invoke(0f, 2000f)
+            settle(8)
+        }
+        scrollDown()
+        frame("1-a-scrolled")
+        if ((top(a.title) ?: 0f) >= 0f) bad += "карточка «А» не прокрутилась — проверять нечего"
+        cur.value = b
+        settle(8)
+        frame("2-b-opened")
+        top(b.title).let { if (it == null || it < 0f) bad += "«Б» открылось прокрученным: верх названия $it" }
+        scrollDown()
+        cur.value = a
+        settle(8)
+        frame("3-a-again")
+        top(a.title).let { if (it == null || it < 0f) bad += "«А» снова открылось прокрученным: верх названия $it" }
+        c.pause().stop().destroy()
+        RuntimeEnvironment.setQualifiers(OUTER)
         org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())
     }
 
