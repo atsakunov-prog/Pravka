@@ -260,12 +260,21 @@ const DEBUG = (() => {
     const rows = [], seen = new Set();
     let total = 0;
     part('rows', () => {
-      // Строки дел и строки «Напоминания» / «Вернулось» (захват: .rem-row) — по порядку экрана.
+      // Строки дел и строки «Напоминания» / «Вернулось» (захват: .rem-row) — по порядку экрана. Строк захвата нет в
+      // pageScope (это не дела экрана для Claude), поэтому «в окне» у них — тем же правилом, что у строк дел: видно не
+      // меньше 60 % высоты между тем, что липнет к верху, и низом колонки.
+      const main = document.querySelector('main.list');
+      const top = safe(() => stuckBottom(), 0);
+      const bottom = Math.min(window.innerHeight, main ? main.getBoundingClientRect().bottom : window.innerHeight);
+      const inWin = (x) => { const b = x.getBoundingClientRect(); return b.height > 0 && Math.min(b.bottom, bottom) - Math.max(b.top, top) >= b.height * 0.6; };
       for (const row of document.querySelectorAll('main.list .task[data-id], main.list .rem-row[data-id]')) {
         if (seen.has(row.dataset.id)) continue;
         seen.add(row.dataset.id);
         total++;
-        if (rows.length < ROWS) rows.push(rowData(row, vis));
+        if (rows.length >= ROWS) continue;
+        const x = rowData(row, vis);
+        if (row.classList.contains('rem-row')) x.in_view = inWin(row);
+        rows.push(x);
       }
     });
     const s = {

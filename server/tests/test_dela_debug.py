@@ -286,6 +286,7 @@ def test_snapshot_shows_reminders_and_later(dela):
     static = Path(debug.__file__).parent / "static"
     js, app = (static / "debug.js").read_text(encoding="utf-8"), (static / "app.js").read_text(encoding="utf-8")
     assert "main.list .rem-row[data-id]" in js and "x.remind = 'напоминание '" in js and "x.back = 'потом · вернётся '" in js
+    assert "if (row.classList.contains('rem-row')) x.in_view = inWin(row);" in js  # «в окне» — тем же правилом, что строки дел
     assert "'data-id': t.id" in app[app.index("function remindRow("):app.index("function remindBox(")]
     assert "'data-id': t.id" in app[app.index("function backBox("):app.index("const ideasOn")]
 
