@@ -167,9 +167,12 @@ const DEBUG = (() => {
   function rowData(row, vis) {
     const id = row.dataset.id;
     const t = S.tasks.get(id);
-    const x = { id, num: t && t.num, title: t ? t.title : txt(row.querySelector('.title')), group: rowGroup(row) || undefined };
+    const x = { id, num: t && t.num, title: t ? t.title : txt(row.querySelector('.title, .rem-title')), group: rowGroup(row) || undefined };
     if (t) {
       if (t.due_date) x.due = t.due_date + (t.due_time ? ' ' + t.due_time : '');
+      // Захват (правило 29, поезд 16.10.2026): напоминание — не дело, в свой час или по месту; «потом» — день возврата.
+      if (t.kind === 'remind') x.remind = 'напоминание ' + (t.remind_at || (t.remind_place ? 'по месту «' + t.remind_place + '»' : ''));
+      else if (t.back_on && !t.due_date) x.back = 'потом · вернётся ' + t.back_on + (t.back_said ? ' («' + t.back_said + '»)' : '');
       const p = person(t.person_id), pr = project(t.project_id), z = safe(() => zachemOf(t), null);
       if (p) x.person = personName(p);
       if (pr) x.project = pr.name;
@@ -257,7 +260,8 @@ const DEBUG = (() => {
     const rows = [], seen = new Set();
     let total = 0;
     part('rows', () => {
-      for (const row of document.querySelectorAll('main.list .task[data-id]')) {
+      // Строки дел и строки «Напоминания» / «Вернулось» (захват: .rem-row) — по порядку экрана.
+      for (const row of document.querySelectorAll('main.list .task[data-id], main.list .rem-row[data-id]')) {
         if (seen.has(row.dataset.id)) continue;
         seen.add(row.dataset.id);
         total++;

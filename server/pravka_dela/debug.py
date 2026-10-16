@@ -317,7 +317,9 @@ def line(x: dict) -> str:
     return out
 
 
-ROW_KEYS = ("group", "due", "person", "project", "why", "status", "meta")
+# remind, back — захват (правило 29, поезд 16.10.2026): напоминание (kind remind, в свой час или по месту) и дело «потом»
+# (день возврата и как сказано) — словами в строке, а не хвостом JSON.
+ROW_KEYS = ("group", "due", "remind", "back", "person", "project", "why", "status", "meta")
 # Вложенность строки (правило 27; поезд 16.10.2026): веб и телефон шлют её данными — родитель, место, сколько внутри
 # открыто, отступ на экране, свёрнут ли родитель «Деревом».
 NEST_KEYS = ("depth", "in", "pos", "inside", "folded")

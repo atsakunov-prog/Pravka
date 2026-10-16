@@ -158,6 +158,10 @@ object DelaDebug {
         if (t == null) return o.put("title", "(дела нет в копии)").put("in_view", r.inView)
         o.putIf("num", t.num).put("title", t.title).putIf("group", r.group)
         if (t.dueDate.isNotBlank()) o.put("due", t.dueDate + if (t.dueTime.isNotBlank()) " " + t.dueTime else "")
+        // Захват (правило 29 сервера, поезд 16.10.2026): напоминание — не дело, в свой час или по месту; «потом» — день
+        // возврата и как сказано (как веб и `debug._row` сервера).
+        if (t.remind) o.put("remind", "напоминание " + t.remindAt.ifBlank { if (t.remindPlace.isNotBlank()) "по месту «${t.remindPlace}»" else "" })
+        else if (t.backOn.isNotBlank() && t.dueDate.isBlank()) o.put("back", "потом · вернётся ${t.backOn}" + if (t.backSaid.isNotBlank()) " («${t.backSaid}»)" else "")
         o.putIf("person", s.people[t.personId]?.label)
         o.putIf("project", s.projects[t.projectId]?.name)
         o.putIf("deal", s.deals[t.dealId]?.name)

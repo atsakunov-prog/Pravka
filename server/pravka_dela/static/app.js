@@ -3357,7 +3357,7 @@ function remindWhen(t) {
 function remindRow(t) {
   const due = t.remind_at && Date.parse(t.remind_at) <= Date.now();
   const btn = (label, title, fn) => el('button', { class: 'chip-btn', title, onclick: (e) => { e.stopPropagation(); fn(); } }, label);
-  return el('div', { class: 'rem-row' + (due ? ' due' : '') + (isRemind(t) ? '' : ' task') },
+  return el('div', { class: 'rem-row' + (due ? ' due' : '') + (isRemind(t) ? '' : ' task'), 'data-id': t.id },
     el('span', { class: 'rem-at' }, remindWhen(t), ' ⏰'),
     el('button', { class: 'rem-title', onclick: () => openCard(t.id) }, t.title,
       isRemind(t) ? null : el('span', { class: 'cr-meta' }, ' · дело' + (t.due_date ? ' на ' + dueLabel(t).text : ''))),
@@ -3379,7 +3379,7 @@ function backBox(list) {
   const btn = (label, fn) => el('button', { class: 'chip-btn', onclick: (e) => { e.stopPropagation(); fn(); } }, label);
   return el('div', { class: 'group grp-back' },
     groupHead('h2', 'Вернулось', list.length, { lead: () => icon('refresh', 17), n: false, sub: 'ты отложил «потом» — пора решить' }),
-    el('div', { class: 'rows' }, list.map((t) => el('div', { class: 'rem-row back' },
+    el('div', { class: 'rows' }, list.map((t) => el('div', { class: 'rem-row back', 'data-id': t.id },
       el('span', { class: 'rem-at' }, '↩'),
       el('button', { class: 'rem-title', onclick: () => openCard(t.id) }, t.title,
         el('span', { class: 'cr-meta' }, ' · ' + (t.back_said ? `ты сказал «${t.back_said}»` : 'отложено') + (t.created_at ? ' ' + D.ddmm(MSK_DAY(t.created_at).day) : ''))),

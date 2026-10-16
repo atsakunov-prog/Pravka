@@ -265,6 +265,31 @@ def test_card_text_shows_nesting(dela):
     assert "op: task.set «Взять цифры» — внутрь «#12" in card and "op_result: всё внутри сделано" in card, card
 
 
+def test_snapshot_shows_reminders_and_later(dela):
+    """Поезд 16.10.2026 (вагоны 3 и 4, правило 29): снимок несёт захват данными — у напоминания «напоминание <когда>», у
+    дела «потом» — день возврата и как сказано; строки «Напоминания» и «Вернулось» — тоже строки списка (веб собирает и
+    .rem-row, телефон — «Все дела → Напоминания»). Claude читает их словами, а не хвостом JSON; карточка — полями."""
+    snap = {**SNAP, "route": "#/all", "title": "Все дела",
+            "card": {"kind": "task", "id": "r", "num": 70, "title": "Отправить счёт в Контуре",
+                     "fields": {"kind": "remind", "remind_at": "2026-10-16T12:00:00+03:00"}},
+            "rows": [{"id": "b", "num": 71, "title": "Позвонить Ивану", "group": "Вернулось",
+                      "back": "потом · вернётся 2026-10-16 («на неделе»)", "in_view": True},
+                     {"id": "r", "num": 70, "title": "Отправить счёт в Контуре", "group": "Напоминания",
+                      "remind": "напоминание 2026-10-16T12:00:00+03:00", "in_view": True}],
+            "rows_total": 2}
+    r, _ = add(dela, snapshot=snap)
+    card = debug.tool(dela, "sasha", "show", str(r["note"]["num"]))
+    assert "#71 Позвонить Ивану — Вернулось · потом · вернётся 2026-10-16 («на неделе»)" in card, card
+    assert "#70 Отправить счёт в Контуре — Напоминания · напоминание 2026-10-16T12:00:00+03:00" in card, card
+    assert "    kind: remind" in card, card
+    # Веб: строки «Напоминания» и «Вернулось» с id, снимок их собирает и пишет remind / back.
+    static = Path(debug.__file__).parent / "static"
+    js, app = (static / "debug.js").read_text(encoding="utf-8"), (static / "app.js").read_text(encoding="utf-8")
+    assert "main.list .rem-row[data-id]" in js and "x.remind = 'напоминание '" in js and "x.back = 'потом · вернётся '" in js
+    assert "'data-id': t.id" in app[app.index("function remindRow("):app.index("function remindBox(")]
+    assert "'data-id': t.id" in app[app.index("function backBox("):app.index("const ideasOn")]
+
+
 def test_migration_again_is_harmless(dela, cfg):
     """Сборка поезда (16.10.2026) дала файлу номер 31 (в ветке — dela_0024_debug.sql): на копии, где он уже стоял под
     прежним именем, dela_0031 применится второй раз — и не падает, и записки целы."""
