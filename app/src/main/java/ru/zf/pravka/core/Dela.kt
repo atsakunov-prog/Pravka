@@ -505,7 +505,7 @@ object Dela {
         val planOn: Boolean get() = FEATURE_PLAN in features
 
         /**
-         * Сервер штампует вопросы срочностью и предметом (`payload.urgency`, `urgent_on`, `about`; docs/dela-phone-23.md):
+         * Сервер штампует вопросы срочностью и предметом (`payload.urgency`, `urgent_on`, `about`; docs/dela-phone-28.md):
          * «Подскажи» на «Сегодня» — двумя заходами по фазе (`core/Asks.kt`). Нет флага — как раньше, все сразу.
          */
         val asksOn: Boolean get() = FEATURE_ASKS in features
@@ -1396,7 +1396,7 @@ object Dela {
     const val PLAN_SOURCE = "plan"
 
     /**
-     * «Подскажи» двумя заходами (15.10.2026, шаг 2 петли, docs/dela-phone-23.md, контракт `server/contract/dela-asks.json`):
+     * «Подскажи» двумя заходами (15.10.2026, шаг 2 петли, docs/dela-phone-28.md, контракт `server/contract/dela-asks.json`):
      * сервер при записи вопроса ставит ему срочность («сегодня» — по сегодняшней встрече, иначе «вечер») и предмет
      * (клиент, человек, встреча, мелочь), а «Сегодня» раскрывает блок по часам Москвы (`core/Asks.kt`). Телефон ничего
      * нового не шлёт. Нет флага — блок «Новое» как раньше.

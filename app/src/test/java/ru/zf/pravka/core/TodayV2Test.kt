@@ -197,7 +197,7 @@ class TodayV2Test {
         assertEquals(LocalDate.of(2026, 10, 23), ShabbatTimes.next(satNight, 55.7558, 37.6173, msk)!!.friday)
     }
 
-    // ---------------------------------------------------------------- «Подскажи» по фазам (docs/dela-phone-23.md)
+    // ---------------------------------------------------------------- «Подскажи» по фазам (docs/dela-phone-28.md)
 
     /** Очередь на миг [local] по Москве: один вопрос сгорает в этот день (встреча), два — вечерние (клиент, Круг). */
     private fun asksAt(local: String, hot: Boolean = true): Asks.Queue {

@@ -12,7 +12,7 @@ import java.time.LocalDateTime
 import java.time.OffsetDateTime
 
 /**
- * «Подскажи» двумя заходами (шаг 2 петли, docs/dela-phone-23.md) против контракта с сервером
+ * «Подскажи» двумя заходами (шаг 2 петли, docs/dela-phone-28.md) против контракта с сервером
  * (`server/contract/dela-asks.json`): та же таблица фаз и тот же пример очереди, что проверяет сервер
  * (`tests/test_dela_asks.py`), — одно правило в трёх местах (сервер, веб, телефон). Данные выдуманные.
  */

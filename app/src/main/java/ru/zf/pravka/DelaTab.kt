@@ -386,7 +386,7 @@ fun DelaTab(
     val me = link?.user ?: app.delaStore.me
     val today = LocalDate.now().toString()
     val now = System.currentTimeMillis()
-    // «Подскажи» на главной «Сейчас» — по фазе, как на «Сегодня» и в вебе (шаг 2 петли, docs/dela-phone-23.md):
+    // «Подскажи» на главной «Сейчас» — по фазе, как на «Сегодня» и в вебе (шаг 2 петли, docs/dela-phone-28.md):
     // раскрытое тапом — до смены фазы (`Asks.Queue.openKey`); раз в минуту фаза сверяется с часами и блок
     // перерисовывается, только когда она сменилась (`refresh` веба) — минутного тика у вкладки нет и не нужно.
     var asksOpen by rememberSaveable { mutableStateOf<String?>(null) }
