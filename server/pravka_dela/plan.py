@@ -281,17 +281,20 @@ def _links(conn, owner: str) -> dict[str, tuple[str | None, bool]]:
         "SELECT id, why_id, goal FROM tasks.krug WHERE kind = 'task' AND owner_id = %s", (owner,)).fetchall()}
 
 
-def _ups(links: dict, tid: str) -> set[str]:
-    """Дела, внутри которых лежит это дело, — вверх по «Зачем» до цели (цель — не дело: «внутри цели» — шаг к ней)."""
-    out: set[str] = set()
+def _root(links: dict, tid: str) -> str:
+    """Корень семьи дел внутри дела — верхнее дело вверх по «Зачем» до цели (цель — не дело: «внутри цели» — шаг к ней,
+    два шага к одной цели — разные семьи); родителя нет — само дело. Одна семья — всё, что под одним корнем: родитель и
+    дело внутри, и соседи внутри одного родителя (проверка вагона 6, 16.10.2026)."""
+    root, seen = tid, {tid}
     x = links.get(tid, (None, False))[0]
-    while x and x not in out and len(out) < 60:
+    while x and x not in seen and len(seen) < 60:
         up = links.get(x)
         if up and up[1]:
             break
-        out.add(x)
+        root = x
+        seen.add(x)
         x = up[0] if up else None
-    return out
+    return root
 
 
 def _pools(conn, owner: str, today: dt.date, for_date: dt.date, cfg: dict, now_rows: list[dict],
@@ -388,21 +391,20 @@ def candidates(conn, owner: str, today: dt.date, for_date: dt.date, cfg: dict,
     limit = cfg["friday_max"] if (for_date - today).days > 1 else cfg["max"]
     # Из одной семьи дел внутри дела (правило 27) — один кандидат: отметил родителя — его открытые дела внутри встанут в
     # «Сейчас» над ним (в пять не считаются, renderNow / DelaSteps.inner), отметил дело внутри — это и есть первый шаг.
-    # Кто из семьи — решает порядок мест судьи (PICK), место в квоте не пропадает: берётся следующий в корзине.
+    # Семья — по корню (`_root`): родитель и дело внутри, и два дела внутри одного родителя — одно обещание, а не два
+    # места из семи. Кто из семьи — решает порядок мест судьи (PICK), место в квоте не пропадает: берётся следующий.
     picked: list[dict] = []
-    chosen: set[str] = set()   # выбранные дела
-    above: set[str] = set()    # и все, внутри чего они лежат
+    roots: set[str] = set()    # корни семей, из которых кандидат уже взят
     for b in PICK:
         n = 0
         for it in baskets[b]:
             if n >= cfg["quota"].get(b, 0) or len(picked) >= limit:
                 break
             if it["kind"] == "update":
-                ups = _ups(links, it["id"])
-                if it["id"] in above or ups & chosen:
+                root = _root(links, it["id"])
+                if root in roots:
                     continue
-                chosen.add(it["id"])
-                above |= ups
+                roots.add(root)
             picked.append(it)
             n += 1
     picked.sort(key=lambda it: SHOW.index(it["basket"]))

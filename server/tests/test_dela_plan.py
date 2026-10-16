@@ -729,11 +729,21 @@ def test_train_capture_reminders_and_later(dela):
 def test_train_nest_one_per_family(dela):
     """Стык с делами внутри дела (вагон 2, dela_0030, правило 27). Из семьи — один кандидат: родитель «Отбить» и дело
     внутри него, оба горящие, — одна строка (родитель: отметил его — дела внутри встанут в «Сейчас» над ним), место в
-    квоте берёт следующий. Резерв Круга — только шаг к цели: дело внутри дела, над которым цели нет, не резерв, хоть
-    направление оно и наследует; дело внутри дела, ведущего к цели, — резерв, и «почему» называет родителя («для «…»»)."""
+    квоте берёт следующий. Семья — по корню: два горящих «Отбить» внутри одного родителя (сам он не кандидат) — тоже
+    одна строка, а не два места из семи (проверка вагона 6). Резерв Круга — только шаг к цели: дело внутри дела, над
+    которым цели нет, не резерв, хоть направление оно и наследует; дело внутри дела, ведущего к цели, — резерв, и
+    «почему» называет родителя («для «…»»)."""
     today = db_today(dela)
     tm = today + dt.timedelta(days=1)
     ok(dela, "sasha", {"op": "svod.set", "key": krug.DIRECTIONS_KEY, "value": DIRS, "author": "test"})
+    # Соседи: родитель — своё дело (не «Отбить», без срока и не в «Сейчас» — сам не кандидат), внутри два горящих
+    # «Отбить», старше всех остальных (идут в корзине первыми).
+    bank = mk(dela, title="Договор с банком")
+    aged(dela, bank["id"], 12)
+    sib1 = mk(dela, title="Отбить банку по тарифам", ball="owed", why_id=bank["id"])
+    aged(dela, sib1["id"], 9)
+    sib2 = mk(dela, title="Отбить юристу по договору", ball="owed", why_id=bank["id"])
+    aged(dela, sib2["id"], 8)
     parent = mk(dela, title="Прислать договор Ивану", ball="owed")
     aged(dela, parent["id"], 6)
     inner = mk(dela, title="Набросать драфт договора", ball="owed", why_id=parent["id"])
@@ -756,7 +766,13 @@ def test_train_nest_one_per_family(dela):
     out = build(dela, today, tm)
     t = titles(out)
     assert "Прислать договор Ивану" in t and "Набросать драфт договора" not in t, t
+    assert "Отбить банку по тарифам" in t and "Отбить юристу по договору" not in t, "соседи внутри одного родителя — одна семья"
+    assert "Договор с банком" not in t, t
+    owed_items = [x for x in out["items"] if x["basket"] == "owed"]
+    assert len(owed_items) == 3, owed_items
     assert "Ответить Олегу" in t, "место в квоте «Отбить» не пропало — взят следующий"
+    sib = next(x for x in owed_items if x["title"] == "Отбить банку по тарифам")
+    assert sib["why"].endswith(" · для «Договор с банком»"), sib["why"]
     assert "Купить ящики для полки" not in t and "Разобрать полку" not in t and "Подготовиться к забегу" not in t
     krug_items = [x for x in out["items"] if x["basket"] == "krug"]
     assert [x["title"] for x in krug_items] == ["Купить кроссовки"], out["items"]
