@@ -418,7 +418,7 @@ class DelaSync(
             val clean = text.trim()
             if (clean.isEmpty()) throw DelaException("Скажи, что сделать с делами")
             if (clean.length > ru.zf.pravka.core.DelaAsk.MAX_INPUT) {
-                throw DelaException("Команда длиннее ${ru.zf.pravka.core.DelaAsk.MAX_INPUT} знаков — для длинной надиктовки «говори дела»")
+                throw DelaException("Команда длиннее ${ru.zf.pravka.core.DelaAsk.MAX_INPUT} знаков — длинную надиктовку отдай кнопке «Д»")
             }
             runCatching { sync("перед Claude") }
             val start = post(l, "api/ask", ru.zf.pravka.core.DelaAsk.request(clean, scope))

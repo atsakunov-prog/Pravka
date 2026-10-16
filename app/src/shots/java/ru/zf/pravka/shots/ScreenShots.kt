@@ -425,7 +425,7 @@ class ScreenShots {
     /**
      * Строка Claude внизу вкладки Дел (16.10.2026, отладка): «Для этого» — сразу за именем открытого дела, в той же
      * строке стекла, а не отдельной строкой над ним у левого края (запись 2); подписей «что видит Claude» нет (запись
-     * 17). Состояния: дело не открыто; открыто — чип выключен и включён («Для «…»: что назовёшь…»); слушает. Шириной разворота 852 dp (строка под тремя
+     * 17); подпись поля — «Добавь дело или скажи, что сделать», целиком (запись 24). Состояния: дело не открыто; открыто — чип выключен и включён («Для «…»: что назовёшь…»); слушает. Шириной разворота 852 dp (строка под тремя
      * колонками) и сложенного 411 dp, обе темы. Проверка: чип правее начала подписи и на её высоте. Группа `m16`.
      */
     @Test
@@ -448,7 +448,7 @@ class ScreenShots {
                                 @androidx.compose.runtime.Composable
                                 fun bar(step: Boolean?, task: String?, listening: Boolean = false, value: String = "") =
                                     ru.zf.pravka.DelaSayBar(
-                                        value = value, onValueChange = {}, placeholder = "Саша, говори дела",
+                                        value = value, onValueChange = {}, placeholder = ru.zf.pravka.core.DelaAsk.fieldHint(card = false),
                                         listening = listening, busy = false, note = "", noteError = false,
                                         onMic = {}, onSend = {}, step = step, taskTitle = task,
                                     )
@@ -475,6 +475,14 @@ class ScreenShots {
                 }
                 if (nodes.none { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text.startsWith("Для «$title»") } == true }) {
                     bad += "$name: включённый чип не называет дело"
+                }
+                // Запись 24: подпись поля — «Добавь дело или скажи, что сделать», целиком (две строки на сложенном), без имени.
+                val hint = ru.zf.pravka.core.DelaAsk.fieldHint(card = false)
+                val hintNode = nodes.firstOrNull { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == hint } == true }
+                if (hintNode == null) bad += "$name: нет подписи поля «$hint»" else {
+                    val res = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                    hintNode.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(res)
+                    res.firstOrNull()?.let { l -> if (l.lineCount > 0 && l.isLineEllipsized(l.lineCount - 1)) bad += "$name: подпись поля с многоточием" }
                 }
                 // Запись 17: строк «что видит Claude» нет нигде — ни «на экране», ни «видит карточку».
                 nodes.flatMap { n -> n.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } }

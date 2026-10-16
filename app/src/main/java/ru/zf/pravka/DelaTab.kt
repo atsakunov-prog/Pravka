@@ -332,7 +332,6 @@ fun DelaTab(
     val link by app.delaSync.link.collectAsState()
     val st by app.delaSync.status.collectAsState()
     val ribbon by app.zasechkaStore.entriesFlow.collectAsState()
-    val ownerName = app.profileStore.flow.collectAsState().value?.name
     val talking = ru.zf.pravka.ui.rememberRouteBusy(app.liveWork, "raznoska")
     val scope = app.appScope
 
@@ -1618,7 +1617,7 @@ fun DelaTab(
             taskTitle = opened?.title,
             value = draft,
             onValueChange = { draft = it; if (sayNote.isNotBlank() && !sayNoteError) sayNote = "" },
-            placeholder = ru.zf.pravka.core.PillHint.say(ownerName, "говори дела"),
+            placeholder = DelaAsk.fieldHint(card = askScreen?.card == true && opened == null),
             listening = sayListening,
             busy = ask.running.isNotBlank() || (link == null && talking),
             note = sayNote,

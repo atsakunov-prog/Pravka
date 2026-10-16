@@ -263,7 +263,8 @@ internal fun DelaSayBar(
                     modifier = Modifier.fillMaxWidth().padding(top = 2.dp).semantics { contentDescription = placeholder },
                     decorationBox = { inner ->
                         Box(contentAlignment = Alignment.CenterStart) {
-                            if (value.isEmpty()) Text(placeholder, style = ty.input, color = mode.placeholder, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            // Две строки: «Добавь дело или скажи, что сделать» на сложенном в одну не влезает (16.10.2026).
+                            if (value.isEmpty()) Text(placeholder, style = ty.input, color = mode.placeholder, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             inner()
                         }
                     },

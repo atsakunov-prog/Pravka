@@ -137,7 +137,7 @@ private fun ShowSayBar(decor: ModeDecor) {
     var text by remember { mutableStateOf("") }
     SayBar(text, { text = it }, "Саша, что у тебя?", {}, onMic = {}, cream = decor == ModeDecor.TODAY, trailing = { SayIcon(Glyphs.Camera, "фото", {}) })
     SayBar("Обед в кафе у дома", {}, "", {}, onMic = {})
-    SayBar("", {}, "Саша, говори дела", {}, onMic = {}, listening = true)
+    SayBar("", {}, "Добавь дело или скажи, что сделать", {}, onMic = {}, listening = true)
     SayBar("", {}, "", {}, onMic = {}, busy = true, busyLabel = "Причёсываю")
     SayBar("", {}, "", {}, onMic = {}, result = SayResult("Записал в ленту · 2") {})
     SayBar("", {}, "", {}, onMic = {}, question = SayQuestion("Обед с 13:25 — всё ещё обедаешь?", {}, {}))
