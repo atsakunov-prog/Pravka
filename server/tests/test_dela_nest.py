@@ -712,3 +712,91 @@ def test_connector_speaks_inside(dela):
     assert f"всё внутри сделано — теперь: #{parent['num']} «Подготовить термшит Ивану», на сегодня" in done, done
     back = mcp_tools.change(dela, str(n2), status="open")
     assert f"срок #{parent['num']} «Подготовить термшит Ивану» — снова без срока" in back, back
+
+
+# ── Поезд 16.10.2026: дела внутри дела (вагон 2) и захват (вагон 4) вместе ─────────────────────────────────
+
+
+def _remind_at(hours: int = 2) -> str:
+    return (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=hours)).isoformat(timespec="seconds")
+
+
+def test_v_tasks_one_view_nest_and_capture(dela):
+    """dela_0032 пересобирает tasks.v_tasks от ПОСЛЕДНЕЙ сборки (dela_0030), а не от dela_0013, как было в ветке захвата:
+    в одном виде и вложенность (pos, why_goal, steps_open), и захват (kind, back_on, back_said, back_n, reminded_via);
+    steps_open считает только дела — напоминание внутри (лечь так могло бы только мимо сервера) родителя не держит."""
+    parent = mk(dela, "Отправить термшит Ивану")
+    a = mk(dela, "Драфт", why_id=parent["id"], pos=1)
+    r = mk(dela, "Не забыть цифры", why_id=parent["id"])
+    with parse.db.session(dela, "sasha", "t") as c:
+        c.execute("UPDATE tasks.tasks SET kind = 'remind', remind_at = %s WHERE id = %s", (_remind_at(), r["id"]))
+        cols = {d.name for d in c.execute("SELECT * FROM tasks.v_tasks LIMIT 0").description}
+    assert {"pos", "why_goal", "steps_open", "kind", "back_on", "back_said", "back_n", "reminded_via"} <= cols, cols
+    p, x = row(dela, parent["id"]), row(dela, a["id"])
+    assert p["steps_open"] == 1 and x["pos"] == 1 and x["why_goal"] is False and x["kind"] == "task"
+    # Слияние людей (crm.person_merge в dela_0032) — тело от dela_0027: и «Только тебе», и идеи.
+    with parse.db.session(dela, "system", "t") as c:
+        body = c.execute("SELECT prosrc FROM pg_proc WHERE oid = 'crm.person_merge(uuid, uuid)'::regprocedure").fetchone()["prosrc"]
+    assert "crm.insights" in body and "crm.ideas" in body
+
+
+def test_reminder_inside_does_not_hold_or_raise_parent(dela):
+    """Подъём родителя (правило 27) — только по делам (tasks.nest_rise / nest_fall, dela_0032): открытое напоминание внутри
+    не держит родителя «внутри ещё открыто», сделанное напоминание его не поднимает, «Вернуть» напоминания срок ему не
+    возвращает. В dela_0030 открытых детей искали по виду строки Круга (krug.kind), а не дела."""
+    today = db_today(dela)
+    later = (today + dt.timedelta(days=7)).isoformat()
+    parent = mk(dela, "Отправить термшит Ивану", due_date=later)
+    a = mk(dela, "Драфт", why_id=parent["id"])
+    r = mk(dela, "Не забыть цифры", why_id=parent["id"])
+    with parse.db.session(dela, "sasha", "t") as c:  # мимо сервера (он так не вложит) — база всё равно права
+        c.execute("UPDATE tasks.tasks SET kind = 'remind', remind_at = %s WHERE id = %s", (_remind_at(), r["id"]))
+    got = ops(dela, "sasha", [{"op": "task.done", "id": r["id"]}])[0]
+    assert got["ok"] and "raised" not in got and row(dela, parent["id"])["due_date"] == later
+    assert ops(dela, "sasha", [{"op": "task.reopen", "id": r["id"]}])[0]["ok"]
+    last = ops(dela, "sasha", [{"op": "task.done", "id": a["id"]}])[0]
+    assert last["raised"]["moved"] is True and row(dela, parent["id"])["due_date"] == today.isoformat(), last
+    ops(dela, "sasha", [{"op": "task.done", "id": r["id"]}])
+    back = ops(dela, "sasha", [{"op": "task.reopen", "id": r["id"]}])[0]
+    assert back["ok"] and "fell" not in back and row(dela, parent["id"])["due_date"] == today.isoformat(), back
+
+
+def test_reminder_is_not_nested_and_nothing_goes_into_it(dela):
+    """Напоминание — не дело (захват): в дело оно не вкладывается, в него ничего не вкладывают — отказ словами; цель
+    дерева «Зачем» у напоминания можно; «Это дело» (kind task) — и вкладывай."""
+    parent = mk(dela, "Отправить термшит Ивану")
+    goal = mk(dela, "Сделки закрываются", goal=True)
+    rem = mk(dela, "Отправить счёт в Контуре", kind="remind", remind_at=_remind_at())
+    assert rem["kind"] == "remind"
+    r1 = ops(dela, "sasha", [{"op": "task.set", "id": rem["id"], "set": {"why_id": parent["id"]}}])[0]
+    assert not r1["ok"] and "напоминание не вкладывается в дело" in r1["error"], r1
+    r2 = ops(dela, "sasha", [{"op": "task.create", "task": {"title": "Сверить цифры", "why_id": rem["id"]}}])[0]
+    assert not r2["ok"] and "в напоминание дела не вкладываются" in r2["error"], r2
+    assert row(dela, rem["id"])["why_id"] is None
+    assert ops(dela, "sasha", [{"op": "task.set", "id": rem["id"], "set": {"why_id": goal["id"]}}])[0]["ok"]
+    r3 = ops(dela, "sasha", [{"op": "task.set", "id": rem["id"], "set": {"kind": "task", "why_id": parent["id"]}}])[0]
+    assert r3["ok"], r3
+    x = row(dela, rem["id"])
+    assert x["kind"] == "task" and x["why_id"] == parent["id"] and x["why_goal"] is False
+
+
+def test_later_does_not_beat_parent_due(dela):
+    """«Потом» (захват, back_on) не перебивает срок, унаследованный от родителя: новое дело внутри дела без своего срока,
+    но с днём возврата, берёт срок по правилу step_due, а «потом» снимается (store._back_inside). Родитель без срока —
+    «потом» остаётся; под целью — тоже (у цели срока нет)."""
+    today = db_today(dela)
+    later = (today + dt.timedelta(days=5)).isoformat()
+    back = (today + dt.timedelta(days=1)).isoformat()
+    dated = mk(dela, "Подписать договор", due_date=later)
+    child = mk(dela, "Запросить реквизиты", why_id=dated["id"], back_on=back, back_said="на неделе")
+    x = row(dela, child["id"])
+    assert (x["due_date"], x["back_on"], x["back_said"]) == (later, None, None), x
+    now_ = mk(dela, "Отправить счёт", focus_on=today.isoformat())
+    y = row(dela, mk(dela, "Сверить сумму", why_id=now_["id"], back_on=back)["id"])
+    assert (y["due_date"], y["back_on"]) == (today.isoformat(), None), y
+    loose = mk(dela, "Когда-нибудь")
+    z = row(dela, mk(dela, "Подумать", why_id=loose["id"], back_on=back)["id"])
+    assert (z["due_date"], z["back_on"]) == (None, back), z
+    goal = mk(dela, "Сделки закрываются", goal=True)
+    g = row(dela, mk(dela, "Шаг к цели", why_id=goal["id"], back_on=back)["id"])
+    assert (g["due_date"], g["back_on"]) == (None, back), g

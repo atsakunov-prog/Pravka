@@ -268,6 +268,14 @@ def _krug_own(conn, user: str, kind: str, obj: dict, kr: dict) -> None:
             goal = task_by(conn, ref)
             if not goal:
                 raise OpError("«зачем»: нет такого дела или оно не видно")
+            # Напоминание (захват, kind remind) — не дело (поезд 16.10.2026, вагоны 2 и 4): внутрь него ничего не
+            # кладут, и само оно в дело не вкладывается — иначе «внутри» показывало бы «не забыть» среди дел, а подъём
+            # родителя ждал бы его. «Для X напомни …» — дело с напоминанием внутри X, а не напоминание. Цель дерева
+            # «Зачем» у напоминания остаётся (место от разбора, place.write_auto).
+            if goal.get("kind") == "remind":
+                raise OpError("в напоминание дела не вкладываются: оно не дело, а «не забыть» в свой час")
+            if kind == "task" and obj.get("kind") == "remind" and not goal.get("goal"):
+                raise OpError("напоминание не вкладывается в дело: сначала сделай его делом («Это дело»)")
             data["why_id"] = goal["id"]
     for k in ("goal", "no_steps"):
         if k in kr:
@@ -617,6 +625,23 @@ def _kind_norm(conn, before: dict | None, data: dict) -> dict:
     return data
 
 
+def _back_inside(conn, data: dict, kr: dict) -> None:
+    """«Потом» (захват, back_on) не перебивает срок, унаследованный от родителя (поезд 16.10.2026, вагоны 2 и 4): новое
+    дело внутри дела (why_id — дело, не цель и не напоминание) без своего срока, но с днём возврата, берёт срок по правилу
+    step_due, если родитель его даёт (в «Сейчас», просрочен, на сегодня или на дату), и тогда «потом» снимается — дело
+    внутри вернётся вместе с родителем (подъём, правило 27), а не своей строкой «Вернулось». Родитель без срока —
+    «потом» остаётся. Корзину захвата выбирают до вложения (capture.from_model) — здесь последнее слово за родителем."""
+    if not data.get("back_on") or data.get("due_date") or kr.get("why_id") in (None, ""):
+        return
+    parent = task_by(conn, kr["why_id"])
+    if not parent or parent.get("goal") or parent.get("kind") == "remind":
+        return
+    due = step_due(parent, conn.execute("SELECT crm.today() AS d").fetchone()["d"])
+    if due:
+        data["due_date"] = due.isoformat()
+        data["back_on"] = data["back_said"] = None
+
+
 def op_task_create(conn, user, op):
     raw = dict(op.get("task") or {})
     kr = _krug_split(raw)
@@ -624,6 +649,7 @@ def op_task_create(conn, user, op):
     if "pos" in data:
         data["pos"] = _pos(data["pos"])
     _kind_norm(conn, None, data)
+    _back_inside(conn, data, kr)
     if not data.get("title"):
         raise OpError("у дела нет названия")
     if data.get("id"):

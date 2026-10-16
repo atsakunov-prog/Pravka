@@ -1517,7 +1517,7 @@ fun DelaTab(
     val sayBar: @Composable (Modifier, Dela.Task?, Boolean) -> Unit = { barModifier, opened, coversList ->
         val openId = opened?.id.orEmpty()
         // «Для этого» — только у открытого своего или видимого дела (не цели) и с сервером, который знает дела внутри.
-        val canStep = link != null && snap.nestOn && opened != null && opened.open && !opened.goal
+        val canStep = link != null && snap.nestOn && opened != null && opened.open && opened.deed
         DelaSayBar(
             step = if (canStep) sayStep else null,
             onStep = { sayStep = !sayStep },
@@ -1624,7 +1624,7 @@ fun DelaTab(
                         onNow = { shown?.let { actions.bolt(it) } },
                         onMove = { shown?.let { rescheduling = listOf(it) } },
                         // «Для этого» (15.10.2026): новое дело внутри — листом нового дела с полями от этого.
-                        onStep = { shown?.let { if (it.open && !it.goal) stepFor = it } },
+                        onStep = { shown?.let { if (it.open && it.deed) stepFor = it } },
                     )
                 },
             )
@@ -1758,7 +1758,7 @@ fun DelaTab(
             // Режим отладки (DelaDebugUi.kt): строка «Что не так?» — над строкой Claude карточки, когда режим включён.
             say = if (link != null) ({ DelaDebugBar(app, { debugScreen() }); sayBar(Modifier, fresh, false) }) else null,
             // Дела внутри дела (15.10.2026): «Для этого» — лист нового дела с полями от этого; «Вложить в…» — выбор дела.
-            onStep = if (fresh.open && !fresh.goal) ({ openTask = null; stepFor = fresh }) else null,
+            onStep = if (fresh.open && fresh.deed) ({ openTask = null; stepFor = fresh }) else null,
             onNest = if (DelaSteps.canNest(fresh, snap, me)) ({ openTask = null; nestFor = fresh }) else null,
         )
     }
@@ -1769,7 +1769,7 @@ fun DelaTab(
         val nestable = DelaSteps.canNest(t, snap, me)
         PaperSheet(onDismiss = { rowMenu = null }, title = t.title.take(80), icon = Glyphs.Delo,
             subtitle = par?.let { "для: " + it.title.take(60) }) {
-            if (t.open && !t.goal) PaperRow("Для этого…", onClick = { rowMenu = null; stepFor = t }, icon = Glyphs.Plus,
+            if (t.open && t.deed) PaperRow("Для этого…", onClick = { rowMenu = null; stepFor = t }, icon = Glyphs.Plus,
                 hint = "новое дело внутри этого: проект, человек и срок — от него")
             if (nestable) PaperRow("Вложить в…", onClick = { rowMenu = null; nestFor = t }, icon = Glyphs.Layers,
                 hint = "положить это дело внутрь другого")
@@ -3617,7 +3617,7 @@ internal fun DelaTaskSheet(
             )
         }
         // «Внутри» (15.10.2026): открытые дела внутри по месту — «сделано», карточка, раньше / позже; сделанные — числом.
-        if (existing && !task.goal) InsideBlock(app, task, snap, onOpen = onOpenTask?.let { go -> { c: Dela.Task -> go(pinNow(f), c) } })
+        if (existing && task.deed) InsideBlock(app, task, snap, onOpen = onOpenTask?.let { go -> { c: Dela.Task -> go(pinNow(f), c) } })
         DelaViews.origin(card?.origin)?.let { OriginPlate(it) }
         PaperField(value = f.notes, onValueChange = { f = f.copy(notes = it) }, label = "Заметки", singleLine = false, maxLines = 6)
 

@@ -12,6 +12,9 @@ package ru.zf.pravka.core
  * Остальное — как сказала Разноска. Только серверу с флагом `capture`: старый отверг бы незнакомые поля целиком.
  * [back] = false — дела с плашки чужого текста (встреча, дайджест: их бывает двадцать) «потом» не получают: иначе
  * завтра «Вернулось» утонуло бы в них; напоминание — напоминанием и там.
+ * Дело с «Зачем» ([Dela.Task.whyId] — внутри дела или под целью, поставленное человеком) «потом» тоже не получает: срок
+ * даёт родитель (правило 27 сервера, `store._back_inside`; поезд 16.10.2026 — вагоны 2 и 4), а «Вернулось» его
+ * развело бы с родителем.
  */
 object CaptureFallback {
 
@@ -26,7 +29,8 @@ object CaptureFallback {
         if (t.remindPlace.isNotBlank()) {
             return if (t.dueDate.isBlank()) t.copy(kind = Dela.KIND_REMIND, focusOn = "", backOn = "", backSaid = "") else t
         }
-        val bare = t.ball == Dela.MINE && !t.owed && t.dueDate.isBlank() && t.focusOn.isBlank() && t.backOn.isBlank()
+        val bare = t.ball == Dela.MINE && !t.owed && t.dueDate.isBlank() && t.focusOn.isBlank() && t.backOn.isBlank() &&
+            t.whyId.isBlank()
         return if (bare && back) t.copy(backOn = Dela.nextWorkday(today)) else t
     }
 }

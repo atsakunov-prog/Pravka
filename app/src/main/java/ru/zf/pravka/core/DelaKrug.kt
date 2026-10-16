@@ -235,7 +235,7 @@ object DelaKrug {
      */
     fun mine(s: Dela.Snapshot, me: String, today: String, sphere: String): List<Dela.Task> {
         val mv = movement(s, me, today)
-        val withSteps = s.tasks.values.filter { it.open && it.whyId.isNotBlank() }.map { it.whyId }.toHashSet()
+        val withSteps = s.tasks.values.filter { it.open && it.deed && it.whyId.isNotBlank() }.map { it.whyId }.toHashSet()
         fun least(t: Dela.Task): Int = dirsOf(t, s, me).firstOrNull()?.let { mv[it]?.events } ?: 0
         return s.tasks.values.filter {
             it.open && it.deed && (me.isBlank() || it.ownerId == me) && Dela.inSphere(it, sphere) && !it.owed && it.ball != Dela.WAITING &&

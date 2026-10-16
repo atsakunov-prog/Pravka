@@ -270,6 +270,8 @@ class CaptureDelaTest {
         assertEquals("", CaptureFallback.apply(t("w", ball = Dela.WAITING), today).backOn)
         assertEquals("", CaptureFallback.apply(t("o", owed = true), today).backOn)
         assertEquals("с плашки чужого текста — без «потом»", "", CaptureFallback.apply(t("p"), today, back = false).backOn)
+        // Поезд 16.10.2026 (вагоны 2 и 4): дело внутри дела — срок даёт родитель, «потом» его не перебивает.
+        assertEquals("дело внутри — без «потом»", "", CaptureFallback.apply(t("i").copy(whyId = "parent"), today).backOn)
         // В операцию — вид и день возврата (сервер с `capture` их знает).
         val op = Dela.createOp(CaptureFallback.apply(t("x", "Купить магний"), today), "op")
         assertEquals("2026-10-16", op.getJSONObject("task").getString("back_on"))

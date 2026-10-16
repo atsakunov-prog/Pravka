@@ -15,7 +15,12 @@
 -- • tasks.dictations.capture… — что захват сделал с наговоркой: правилом, ждёт модели, разложено моделью, сбой.
 -- • crm.ideas — идеи у клиента, человека, сделки (ответ 5а: своя маленькая сущность). Идеи — мысли владельца: видит
 --   только хозяин (как сводки дайджеста), команда не видит.
--- • crm.person_merge — переносит и crm.ideas.person_id (people.REFS).
+-- • crm.person_merge — переносит и crm.ideas.person_id (people.REFS); тело — от dela_0027 (вагон 1 поезда: и
+--   «Только тебе»), а не от dela_0023, как было в ветке: иначе захват молча снял бы перенос наблюдений.
+-- • tasks.v_tasks — пересобран от ПОСЛЕДНЕЙ сборки (dela_0030: pos через t.*, why_goal; правило 26 карты) — с kind,
+--   back_on, back_said через t.*; steps_open — только дела (напоминание внутри не держит родителя открытым).
+-- • tasks.nest_rise / nest_fall (dela_0030, правило 27) — только по делам: сделанное или вернувшееся напоминание
+--   родителя не поднимает и срок ему не возвращает, открытое напоминание внутри подъёму не мешает.
 --
 -- Обратимо по смыслу: новые колонки с умолчаниями и новая таблица, лежащие строки не трогаются (старые дела — kind
 -- 'task'). В ветке capture файл звался dela_0024c.sql (чтобы не столкнуться с шагом 1 петли); номер — следующий
@@ -121,6 +126,9 @@ CREATE POLICY own ON crm.ideas FOR ALL
     USING (crm.me() IN (owner_id, 'system')) WITH CHECK (crm.me() IN (owner_id, 'system'));
 
 -- ── Вид дела: новые колонки — пересборкой (вид на t.*), права — переносом (как в dela_0003, 0013) ──
+-- Тело — от последней сборки tasks.v_tasks (dela_0030, дела внутри дела: why_goal в хвосте, pos — через t.*): в ветке
+-- захват пересобирал вид от dela_0013 и молча снял бы why_goal, а с ним «Зачем — цель или дело» у веба, телефона и
+-- коннектора (поезд 16.10.2026, вагоны 2 и 4). Следующая пересборка — тоже от последней (правило 26 карты Дел).
 
 CREATE TEMP TABLE v_tasks_grants ON COMMIT DROP AS
     SELECT DISTINCT grantee FROM information_schema.role_table_grants
@@ -147,19 +155,23 @@ SELECT t.*,
        CASE WHEN t.owner_id = crm.me() THEN tasks.krug_dirs(t.id) ELSE '{}'::text[] END AS dirs,
        w.num AS why_num,
        w.title AS why_title,
+       -- Открытых дел внутри: напоминание (kind remind) — не дело, внутри его не считаем (захват, dela_0032).
        (SELECT count(*) FROM tasks.krug c JOIN tasks.tasks ct ON ct.id = c.id
-        WHERE c.why_id = t.id AND ct.status = 'open')::integer AS steps_open,
+        WHERE c.why_id = t.id AND ct.status = 'open' AND ct.kind = 'task')::integer AS steps_open,
        coalesce(k.goal, false) AS goal,
        k.rhythm,
-       coalesce(k.no_steps, false) AS no_steps
+       coalesce(k.no_steps, false) AS no_steps,
+       -- «Зачем» — цель дерева (true) или обычное дело, внутри которого это дело (false); без «Зачем» — false.
+       coalesce(wk.goal, false) AS why_goal
 FROM tasks.tasks t
 LEFT JOIN crm.projects p ON p.id = t.project_id
 LEFT JOIN crm.deals d ON d.id = t.deal_id
 LEFT JOIN crm.people pe ON pe.id = t.person_id
 LEFT JOIN crm.people rq ON rq.id = t.requested_by
 LEFT JOIN tasks.krug k ON k.id = t.id AND k.kind = 'task'
-LEFT JOIN tasks.tasks w ON w.id = k.why_id;
-COMMENT ON VIEW tasks.v_tasks IS 'Задача с наследованными деньгами, сферой проекта, именами людей, группой (owed — ждут от меня, self — сам, check — проверить) и Кругом хозяину: directions — свои направления, dirs — [главное, метки…], why — «Зачем», steps_open — открытых шагов к этому делу, goal — узел дерева целей (в списках дел его нет), rhythm — ритм практики, no_steps — под целью дел не заводят. kind — task или remind (напоминание: в списках дел его нет), back_on — день возврата дела «потом».';
+LEFT JOIN tasks.tasks w ON w.id = k.why_id
+LEFT JOIN tasks.krug wk ON wk.id = k.why_id AND wk.kind = 'task';
+COMMENT ON VIEW tasks.v_tasks IS 'Задача с наследованными деньгами, сферой проекта, именами людей, группой (owed — ждут от меня, self — сам, check — проверить) и Кругом хозяину: directions — свои направления, dirs — [главное, метки…], why — «Зачем» (дело-цель или дело, внутри которого это дело; why_goal — цель ли это), steps_open — открытых дел внутри (напоминания не в счёт), pos — место среди соседей, goal — узел дерева целей (в списках дел его нет), rhythm — ритм практики, no_steps — под целью дел не заводят. kind — task или remind (напоминание: в списках дел его нет), back_on — день возврата дела «потом», back_said — как сказано.';
 
 DO $$
 DECLARE
@@ -170,7 +182,7 @@ BEGIN
     END LOOP;
 END $$;
 
--- ── Слияние людей переносит и идеи (people.REFS; тело — как в dela_0023, плюс crm.ideas) ──
+-- ── Слияние людей переносит и идеи (people.REFS; тело — как в dela_0027, плюс crm.ideas) ──
 
 CREATE OR REPLACE FUNCTION crm.person_merge(p_dup uuid, p_into uuid) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = crm, pg_temp AS $$
@@ -227,6 +239,9 @@ BEGIN
     UPDATE crm.interactions SET person_ids = crm.ids_swap(person_ids, p_dup, p_into) WHERE p_dup = ANY (person_ids);
     GET DIAGNOSTICS v_k = ROW_COUNT; v_n := v_n + v_k;
     UPDATE crm.meetings SET person_ids = crm.ids_swap(person_ids, p_dup, p_into) WHERE p_dup = ANY (person_ids);
+    GET DIAGNOSTICS v_k = ROW_COUNT; v_n := v_n + v_k;
+    -- «Только тебе» (dela_0027): наблюдения о дубле — о живой.
+    UPDATE crm.insights SET person_ids = crm.ids_swap(person_ids, p_dup, p_into) WHERE p_dup = ANY (person_ids);
     GET DIAGNOSTICS v_k = ROW_COUNT; v_n := v_n + v_k;
     -- Идеи о человеке (dela_0032): «идея: Ивану предложить…» живёт у живой карточки.
     UPDATE crm.ideas SET person_id = p_into WHERE person_id = p_dup;
@@ -286,6 +301,70 @@ BEGIN
     UPDATE crm.people SET merged_into = p_into, archived_at = coalesce(archived_at, now()) WHERE id = p_dup;
     RETURN jsonb_build_object('dup', to_jsonb(v_dup), 'moved', v_n);
 END $$;
+COMMENT ON FUNCTION crm.person_merge(uuid, uuid) IS 'Слить дубль в живую карточку (аудит №23, dela_0023; dela_0027 — и «Только тебе»; dela_0032 — и идеи): только владелец Дел или system; все ссылки мимо RLS — дела (person_id, requested_by), сделки (ведёт, привёл, люди клиента, команда), хронология, участники встреч, «Только тебе» (crm.insights.person_ids), идеи (crm.ideas.person_id), ждущие вопросы «Нового» (person_id и варианты), Свод people.family, прежние дубли дубля, учётка Дел; пустые поля живой — из дубля; дубль — archived_at и merged_into. Ответ: {dup — строка дубля до слияния, moved — сколько строк переехало}. Имена и номера дубля дописывает people.op_person_merge.';
+
+-- ── Подъём родителя — только по делам (dela_0030, правило 27; поезд 16.10.2026, вагоны 2 и 4) ──
+-- Напоминание (kind remind) — не дело: «Сделано» у уведомления телефона или кнопка бота не поднимают родителя, «Вернуть»
+-- напоминания не возвращает ему срок, а открытое напоминание внутри не держит родителя «внутри ещё открыто» вечно (в
+-- dela_0030 открытых детей искали по tasks.krug.kind = 'task' — это вид строки Круга, а не дела). Вкладывать напоминание
+-- в дело сервер и так не даёт (store._krug_own); здесь — сама база, что бы ни лежало в данных. Права — прежние (CREATE OR
+-- REPLACE их не трогает: PUBLIC снят в dela_0030, роли службы — db.APP_FUNCTIONS).
+CREATE OR REPLACE FUNCTION tasks.nest_rise(child uuid) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = tasks, crm, pg_temp AS $$
+DECLARE
+    pid uuid;
+    p tasks.tasks;
+    d date := crm.today();
+    moved boolean;
+BEGIN
+    SELECT k.why_id INTO pid FROM tasks.krug k JOIN tasks.tasks c ON c.id = k.id
+    WHERE k.id = child AND k.kind = 'task' AND c.status = 'done' AND c.kind = 'task';
+    IF pid IS NULL OR EXISTS (SELECT 1 FROM tasks.krug WHERE id = pid AND goal) THEN
+        RETURN NULL;
+    END IF;
+    SELECT * INTO p FROM tasks.tasks WHERE id = pid FOR UPDATE;
+    IF p.id IS NULL OR p.status <> 'open' THEN
+        RETURN NULL;
+    END IF;
+    IF EXISTS (SELECT 1 FROM tasks.krug k JOIN tasks.tasks c ON c.id = k.id
+               WHERE k.why_id = pid AND k.kind = 'task' AND c.status = 'open' AND c.kind = 'task' AND NOT k.goal) THEN
+        RETURN NULL;
+    END IF;
+    moved := p.due_date IS NULL OR p.due_date > d;
+    IF moved THEN
+        UPDATE tasks.tasks SET due_date = d WHERE id = pid;  -- триггер nest_forget гасит прежнюю память
+        INSERT INTO tasks.nest_raised (parent_id, was, rose_to) VALUES (pid, p.due_date, d)
+        ON CONFLICT (parent_id) DO UPDATE SET was = EXCLUDED.was, rose_to = EXCLUDED.rose_to, at = now();
+    END IF;
+    RETURN jsonb_build_object('id', p.id, 'num', p.num, 'title', p.title, 'owner_id', p.owner_id, 'moved', moved,
+                              'due_date', CASE WHEN moved THEN d ELSE p.due_date END);
+END $$;
+COMMENT ON FUNCTION tasks.nest_rise(uuid) IS 'Сделано последнее открытое дело внутри — родитель поднимается на сегодня (правило 27). Считаются только дела: напоминание (kind remind) не поднимает и не держит (dela_0032). Ответ: id, num, title, owner_id, moved, due_date родителя; иначе NULL.';
+
+CREATE OR REPLACE FUNCTION tasks.nest_fall(child uuid) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = tasks, crm, pg_temp AS $$
+DECLARE
+    pid uuid;
+    m tasks.nest_raised;
+    p tasks.tasks;
+BEGIN
+    SELECT k.why_id INTO pid FROM tasks.krug k JOIN tasks.tasks c ON c.id = k.id
+    WHERE k.id = child AND k.kind = 'task' AND c.status = 'open' AND c.kind = 'task';
+    IF pid IS NULL THEN
+        RETURN NULL;
+    END IF;
+    SELECT * INTO m FROM tasks.nest_raised WHERE parent_id = pid FOR UPDATE;
+    IF m.parent_id IS NULL THEN
+        RETURN NULL;
+    END IF;
+    SELECT * INTO p FROM tasks.tasks WHERE id = pid FOR UPDATE;
+    IF p.status <> 'open' OR p.due_date IS DISTINCT FROM m.rose_to THEN
+        RETURN NULL;
+    END IF;
+    UPDATE tasks.tasks SET due_date = m.was WHERE id = pid;  -- триггер nest_forget гасит память
+    RETURN jsonb_build_object('id', p.id, 'num', p.num, 'title', p.title, 'owner_id', p.owner_id, 'due_date', m.was);
+END $$;
+COMMENT ON FUNCTION tasks.nest_fall(uuid) IS '«Вернуть» дела внутри: подъём родителя отменяется — срок, какой был до него, если его с тех пор не правили (правило 27). Только дела: вернувшееся напоминание срок не возвращает (dela_0032). Ответ: id, num, title, owner_id, due_date родителя; иначе NULL.';
 
 -- ── «Какой Иван?» — вопрос захвата в «Подскажи» (проверка 16.10.2026) ─────────
 -- Тёзки в сказанном («Иван сказал, …», «позвонил Ивану» при двух Иванах): запись ложится без человека, а кнопка под

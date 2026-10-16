@@ -62,26 +62,29 @@ object DelaSteps {
     /** Можно ли вкладывать в [parent] и вынимать из него: своё дело на сервере с Кругом, не ориентир (`no_steps`). */
     fun canLink(parent: Dela.Task, s: Dela.Snapshot, me: String): Boolean = s.krugOn && !parent.noSteps && mine(parent, me)
 
-    /** Вложить, вынуть, поменять место — только своё открытое дело, не цель (у цели своё «Зачем»). */
-    fun canNest(t: Dela.Task, s: Dela.Snapshot, me: String): Boolean = s.krugOn && t.open && !t.goal && mine(t, me)
+    /**
+     * Вложить, вынуть, поменять место — только своё открытое дело: не цель (у цели своё «Зачем») и не напоминание (захват:
+     * оно не дело — сервер его в дело не вкладывает и в него ничего не кладёт; [Dela.Task.deed]).
+     */
+    fun canNest(t: Dela.Task, s: Dela.Snapshot, me: String): Boolean = s.krugOn && t.open && t.deed && mine(t, me)
 
-    /** Дело, внутри которого это дело: «Зачем» — дело из копии, а не цель дерева (у цели своя подпись «зачем: …»). */
+    /** Дело, внутри которого это дело: «Зачем» — дело из копии, а не цель дерева (у цели своя подпись «зачем: …») и не напоминание. */
     fun parentOf(t: Dela.Task, s: Dela.Snapshot): Dela.Task? = parentIn(t, s.tasks)
 
     private fun parentIn(t: Dela.Task, tasks: Map<String, Dela.Task>): Dela.Task? =
-        t.whyId.takeIf { it.isNotBlank() && it != t.id }?.let { tasks[it] }?.takeIf { !it.goal }
+        t.whyId.takeIf { it.isNotBlank() && it != t.id }?.let { tasks[it] }?.takeIf { it.deed }
 
     /** Место среди соседей: `pos`, 0 — после занумерованных, по времени заведения (как сервер и веб). */
     val BY_POS: Comparator<Dela.Task> = compareBy<Dela.Task>({ it.pos <= 0 }, { it.pos }, { it.createdAt }, { it.num })
 
-    /** Открытые дела внутри (не подцели) — по месту; первое — «следующее» («сначала: …» у родителя). */
+    /** Открытые дела внутри (не подцели и не напоминания) — по месту; первое — «следующее» («сначала: …» у родителя). */
     fun insideOf(id: String, s: Dela.Snapshot): List<Dela.Task> = insideIn(id, s.tasks)
 
     private fun insideIn(id: String, tasks: Map<String, Dela.Task>): List<Dela.Task> =
-        tasks.values.filter { it.open && !it.goal && it.whyId == id && it.id != id }.sortedWith(BY_POS)
+        tasks.values.filter { it.open && it.deed && it.whyId == id && it.id != id }.sortedWith(BY_POS)
 
     /** Сделанных внутри — числом под «Внутри». */
-    fun doneInside(id: String, s: Dela.Snapshot): Int = s.tasks.values.count { it.status == Dela.DONE && !it.goal && it.whyId == id }
+    fun doneInside(id: String, s: Dela.Snapshot): Int = s.tasks.values.count { it.status == Dela.DONE && it.deed && it.whyId == id }
 
     private fun short(title: String): String = if (title.length > TITLE_MAX) title.take(TITLE_MAX - 1) + "…" else title
 
@@ -90,7 +93,7 @@ object DelaSteps {
 
     /** Вторая строка родителя: «сначала: <первое открытое внутри>» и сколько ещё; у цели — нет (у неё «цель · N шагов»). */
     fun firstLine(t: Dela.Task, s: Dela.Snapshot): String? {
-        if (!t.open || t.goal) return null
+        if (!t.open || !t.deed) return null
         val st = insideOf(t.id, s)
         if (st.isEmpty()) return null
         return "сначала: " + short(st[0].title) + if (st.size > 1) " (ещё ${st.size - 1})" else ""
@@ -203,9 +206,10 @@ object DelaSteps {
     /**
      * Сделано последнее открытое дело внутри (`_nest_rise` сервера): родитель — открытое дело, не цель — НЕ
      * закрывается, а поднимается: без срока или со сроком позже — на сегодня. [done] — уже сделанное (в [tasks] — тоже).
+     * Только дела: сделанное напоминание родителя не поднимает (`tasks.nest_rise` сервера, dela_0032).
      */
     fun risen(done: Dela.Task, tasks: Map<String, Dela.Task>, today: String): Rise? {
-        if (done.status != Dela.DONE) return null
+        if (done.status != Dela.DONE || !done.deed) return null
         val p = parentIn(done, tasks) ?: return null
         if (!p.open || insideIn(p.id, tasks).any { it.id != done.id }) return null
         val d = p.dueDate.take(10)
@@ -228,10 +232,10 @@ object DelaSteps {
         if (made.whyId == parent.id) "Завёл для «${short(parent.title)}»: «${short(made.title)}», ${dueWords(made.dueDate, today)}"
         else "Завёл «${short(made.title)}», ${dueWords(made.dueDate, today)} — отдельно: вложить в чужое дело нельзя"
 
-    /** Куда можно вложить [ids]: свои открытые дела, не цели и не ориентиры, кроме самих дел и того, что внутри них. */
+    /** Куда можно вложить [ids]: свои открытые дела, не цели, не напоминания и не ориентиры, кроме самих дел и того, что внутри них. */
     fun pool(s: Dela.Snapshot, me: String, ids: Collection<String>): List<Dela.Task> {
         val below = ids.flatMap { DelaKrug.below(s, it) }.toSet()
-        return s.tasks.values.filter { it.open && !it.goal && !it.noSteps && mine(it, me) && it.id !in below }
+        return s.tasks.values.filter { it.open && it.deed && !it.noSteps && mine(it, me) && it.id !in below }
             .sortedWith(compareBy(java.text.Collator.getInstance(java.util.Locale("ru"))) { it.title })
     }
 

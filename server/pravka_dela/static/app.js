@@ -241,13 +241,14 @@ function belowOf(id) {
 // Одно правило с сервером (store.step_of, step_due, _nest_rise) и телефоном (core/DelaSteps.kt). «Зачем» видит только
 // хозяин дела — у команды дела внутри стоят плоско, обычными делами.
 const nestOn = () => ((S.me && S.me.features) || []).includes('nest');
-/** Дело, внутри которого это дело (не цель: у цели своё «Зачем»). */
-const parentOf = (t) => { const p = t && t.why_id ? S.tasks.get(t.why_id) : null; return p && !p.goal ? p : null; };
+/** Дело, внутри которого это дело (не цель: у цели своё «Зачем»; не напоминание — оно не дело, захват 15.10.2026). */
+const parentOf = (t) => { const p = t && t.why_id ? S.tasks.get(t.why_id) : null; return p && !p.goal && !isRemind(p) ? p : null; };
 /** Место среди соседей: pos; пусто — после занумерованных, по времени заведения (как krug.tree и телефон). */
 const byPos = (a, b) => (a.pos == null) - (b.pos == null) || (a.pos || 0) - (b.pos || 0)
   || (a.created_at || '').localeCompare(b.created_at || '') || a.num - b.num;
-/** Открытые дела внутри — по месту; первое — «следующее» («сначала: …» у родителя). */
-const insideOf = (id) => all().filter((x) => x.why_id === id && isOpen(x) && !x.goal).sort(byPos);
+/** Открытые дела внутри — по месту; первое — «следующее» («сначала: …» у родителя). Напоминание — не дело: внутри его
+ *  не считаем (как steps_open и tasks.nest_rise сервера, dela_0032). */
+const insideOf = (id) => all().filter((x) => x.why_id === id && isOpen(x) && !x.goal && !isRemind(x)).sort(byPos);
 /** Срок нового дела внутри, если его не назвали (store.step_due): родитель в «Сейчас», просрочен или на сегодня —
  *  сегодня; позже — тот же; без срока — без срока. */
 const stepDue = (p) => (p.focus_on === S.today || (p.due_date && p.due_date <= S.today) ? S.today : p.due_date || null);
@@ -4603,17 +4604,18 @@ function stepChips(t) {
   const p = parentOf(t);
   if (p) out.push(el('a', { class: 'm link for', href: '#', title: 'Внутри дела «' + p.title + '» — открыть его', onclick: go(p.id) },
     'для: ' + shortTitle(p.title)));
-  if (isOpen(t) && !t.goal) {
+  if (isOpen(t) && !t.goal && !isRemind(t)) {
     const k = insideOf(t.id);
     if (k.length) out.push(el('a', { class: 'm link first', href: '#', title: 'Следующее дело внутри — открыть', onclick: go(k[0].id) },
       'сначала: ' + shortTitle(k[0].title) + (k.length > 1 ? ` (ещё ${k.length - 1})` : '')));
   }
   return out;
 }
-/** «Для этого» у строки: открытое дело, не цель (у чужого — заведётся рядом, вложить в чужое нельзя). */
-const canStep = (t) => isOpen(t) && !t.goal;
-/** Вложить, вынуть, поменять место — только своё дело в своё (правило базы: «зачем» — только своё дело). */
-const canNest = (t) => nestOn() && isMine(t) && !t.goal;
+/** «Для этого» у строки: открытое дело, не цель и не напоминание (у чужого — заведётся рядом, вложить в чужое нельзя). */
+const canStep = (t) => isOpen(t) && !t.goal && !isRemind(t);
+/** Вложить, вынуть, поменять место — только своё дело в своё (правило базы: «зачем» — только своё дело); напоминание
+ *  не вкладывается и в него не вкладывают (сервер — store._krug_own, словами). */
+const canNest = (t) => nestOn() && isMine(t) && !t.goal && !isRemind(t);
 
 /** «Для этого» у строки дела (15.10.2026, владелец: «и в карточке дела, и в обычном списке»): короткая строка ввода —
  *  тем же запросом, что строка карточки в режиме «Для этого» (scope.step): всё названное — дела внутри этого, само дело
@@ -4721,9 +4723,9 @@ function forLine(t) {
 /** «Внутри» в карточке (15.10.2026, владелец: «блок в карточке — „Внутри“»): открытые дела внутри по месту — флажок
  *  «сделано», название (карточка), срок, «раньше» / «позже»; сделанные — числом. Новое внутрь — строкой «Для этого». */
 function insideBox(t) {
-  if (t.goal) return null;
+  if (t.goal || isRemind(t)) return null;
   const kids = insideOf(t.id);
-  const done = all().filter((x) => x.why_id === t.id && x.status === 'done' && !x.goal).length;
+  const done = all().filter((x) => x.why_id === t.id && x.status === 'done' && !x.goal && !isRemind(x)).length;
   if (!kids.length && !done) return null;
   return el('div', { class: 'inside-box' },
     el('div', { class: 'place-h' }, 'Внутри', kids.length ? el('span', { class: 'n' }, String(kids.length)) : null),

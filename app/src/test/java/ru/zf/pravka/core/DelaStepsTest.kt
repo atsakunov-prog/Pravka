@@ -258,6 +258,27 @@ class DelaStepsTest {
     }
 
     @Test
+    fun `напоминание — не дело внутри — не вкладывается, не держит и не поднимает родителя, в «Вложить в…» его нет`() {
+        // Поезд 16.10.2026 (вагоны 2 и 4): как сервер — tasks.nest_rise / nest_fall и steps_open только по делам (dela_0032),
+        // store._krug_own не вкладывает напоминание и не кладёт в него; веб — insideOf, canNest, parentOf.
+        val parent = task("p") { it.copy(title = "Подготовить термшит", dueDate = "2026-10-20") }
+        val a = task("a") { it.copy(whyId = "p") }
+        val r = task("r") { it.copy(whyId = "p", kind = Dela.KIND_REMIND, remindAt = "2026-10-15T12:00:00+03:00") }
+        val loose = task("l") { it.copy(kind = Dela.KIND_REMIND, remindAt = "2026-10-15T19:00:00+03:00") }
+        val s = snap(parent, a, r, loose)
+        assertEquals(listOf("a"), DelaSteps.insideOf("p", s).map { it.id })
+        assertFalse("напоминание не вкладывают и не вынимают", DelaSteps.canNest(loose, s, "me"))
+        assertTrue(DelaSteps.canNest(a, s, "me"))
+        assertTrue("в «Вложить в…» напоминаний нет", DelaSteps.pool(s, "me", listOf("a")).none { it.remind })
+        assertNull("в напоминание ничего не кладут — оно не родитель", DelaSteps.parentOf(task("x") { it.copy(whyId = "l") }, s))
+        assertNull("«сначала: …» у напоминания нет", DelaSteps.firstLine(loose, s))
+        // Сделано напоминание — родитель как был; последнее ДЕЛО внутри — поднимает, хоть напоминание и открыто.
+        assertNull(DelaSteps.rise(r, s, today))
+        val up = DelaSteps.rise(a, s, today)
+        assertTrue(up != null && up.moved && up.parent.dueDate == today)
+    }
+
+    @Test
     fun `строка Claude над открытым делом — «Для этого» запросом карточки дела`() {
         val id = "11111111-2222-3333-4444-555555555555"
         val sc = DelaAsk.stepScope(id)

@@ -475,7 +475,7 @@ private fun DelaTaskPaneV2(
                             KvSmallKey(if (isNow) "Из «Сейчас»" else "В «Сейчас»", Glyphs.Bolt, kind = if (isNow) 1 else 0, onClick = onNow)
                         }
                         if (onMove != null) KvSmallKey("Перенести", Glyphs.Calendar, kind = 0, onClick = onMove)
-                        if (onStep != null && !task.goal) KvSmallKey("Для этого", Glyphs.Plus, kind = 0, onClick = onStep)
+                        if (onStep != null && task.deed) KvSmallKey("Для этого", Glyphs.Plus, kind = 0, onClick = onStep)
                         KvSmallKey("Начать", Glyphs.Play, kind = 0, onClick = onStart)
                     }
                     KvSmallKey("Карточка", Glyphs.Edit, kind = 0, onClick = onEdit)
@@ -484,7 +484,7 @@ private fun DelaTaskPaneV2(
         }
         // «Внутри» (15.10.2026, `insideBox` веба): открытые дела внутри по месту — тап открывает справа, квадрат — «сделано».
         val inside = ru.zf.pravka.core.DelaSteps.insideOf(task.id, snap)
-        if (inside.isNotEmpty() && !task.goal) {
+        if (inside.isNotEmpty() && task.deed) {
             item(key = "inside") {
                 PanelV2 {
                     Text("Внутри · ${inside.size}", style = ty.overline, color = Kv.faint)
