@@ -680,6 +680,27 @@ def test_web_line_without_key_rule_answers(dela):
     assert got["status"] == "done" and got["route"] == "capture" and got["capture"]["items"][0]["bucket"] == "back"
 
 
+def test_rule_leaves_nesting_to_claude(dela, at):
+    """Поезд 16.10.2026 (вагоны 2 и 4): слова вложенности — «вынуть … из …», «вложи … в …», «для этого …», «к делу про
+    …» — правило захвата не берёт новым делом: строка веба отдаёт их Claude (ask.run: into, step), «Д» — модели."""
+    seed(dela)
+    calls = []
+
+    def fake(system, message):
+        calls.append(message)
+        return {"route": "edit", "reply": "ок", "changes": [], "create": [], "suggestions": [], "card": [], "refs": []}
+
+    for text in ("вынуть звонок в банк из сверки за сентябрь", "положи звонок в банк в дело про сверку",
+                 "для этого позвонить в банк", "к делу про сверку: позвонить в банк"):
+        assert capture.nest_said(text), text
+        out = ask.run(dela, "sasha", text, {"title": "Сейчас"}, "", None, ask_fn=fake)
+        assert out["route"] == "edit", text
+        assert say(dela, text, lane="rule")["status"] == "none", text
+    assert len(calls) == 4
+    with dela_db.session(dela, "system", "t") as c:
+        assert not c.execute("SELECT 1 FROM tasks.tasks WHERE title ILIKE 'вынуть%%' OR title ILIKE 'положи%%'").fetchone()
+
+
 def test_narrow_tokens_cannot_capture(dela):
     client = TestClient(api.build(Config(db_url=dela)))
     for name in ("dengi", "eda", "dom"):
