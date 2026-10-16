@@ -367,7 +367,8 @@ def _client(conn, ids: list) -> dict | None:
 def about(conn, data: dict, payload: dict, names=None, meeting: dict | None = None) -> dict:
     """Предмет вопроса — первым подошедшим: кандидат плана; Круг — мелочь «Место в дереве»; клиент (проект вопроса,
     узнанный по имени, проект дела у «уточнить» и «закрыть», клиент сделки, клиент встречи); человек (id, узнанное имя,
-    у вопроса о человеке — сама карточка или имя; не у спикера встречи; у «Какой Иван?» захвата — имя тёзок); встреча
+    у вопроса о человеке — сама карточка или имя; не у спикера встречи; у «Какой Иван?» захвата — сам вопрос по имени
+    тёзок, без id); встреча
     без клиента; остальное — мелочь. names — store._names параметром (имена автоматики в id тем же правилом, что при
     «Да»), без кругового импорта."""
     src, kind = data.get("source"), data.get("kind") or "create"
@@ -404,13 +405,19 @@ def about(conn, data: dict, payload: dict, names=None, meeting: dict | None = No
             return {"kind": "person", "title": " ".join(str(n).split())[:80]}
     if kind == "capture":
         # «Какой Иван?» захвата (поезд 16.10.2026, вагон 4; capture._ask_who): тёзки — один человек по имени, как его
-        # назвал Саша (короткое имя первой кнопки — capture._twin_short); какая карточка — решит ответ.
+        # назвал Саша (короткое имя первой кнопки — capture._twin_short); какая карточка — решит ответ. Заголовок — сам
+        # вопрос «Какой Иван?» («Какая Ольга?»), а не голое «Иван» (проверка вагона 7): у карточки «Иван Тестов» короткое
+        # имя то же, и вечером «Иван · 1» стоял бы дважды — группа тёзок (без id) и группа карточки (по id) — и читался
+        # как разъехавшиеся группы. Решено по умолчанию — Саша меняет словом.
+        from .capture import _who_word  # круговой импорт: capture зовёт asks.stamp
+
         for o in payload.get("options") or []:
             pid = _uid(o.get("person_id")) if isinstance(o, dict) else None
             r = conn.execute("SELECT coalesce(nullif(btrim(short), ''), split_part(btrim(name), ' ', 1)) AS t "
                              "FROM crm.people WHERE id = %s", (pid,)).fetchone() if pid else None
             if r and str(r["t"] or "").strip():
-                return {"kind": "person", "title": str(r["t"]).strip()[:80]}
+                who = _who_word(str(r["t"]).strip()[:60])
+                return {"kind": "person", "title": who[:1].upper() + who[1:] + "?"}
     if str(data.get("batch_ref") or "").startswith("meeting:"):
         return {"kind": "meeting", **({"id": str(meeting["id"])} if meeting else {}),
                 "title": data.get("batch_title") or "Встреча"}
