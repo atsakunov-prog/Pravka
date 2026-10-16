@@ -92,33 +92,6 @@ internal class AskState {
 internal const val ASK_SCREEN = "screen"
 
 /**
- * Микрофон команды: тот же движок и пилюля, что у «Д» (`listenForDelaReason`),
- * текст — в поле. Сказанное вслух — решение (26.09): кончилась запись с
- * текстом — команда уходит сама, как в вебе.
- */
-@Composable
-internal fun AskMic(listening: Boolean, onListening: (Boolean) -> Unit, onText: (String) -> Unit, enabled: Boolean = true) {
-    val context = LocalContext.current
-    GlyphButton(
-        if (listening) Glyphs.Stop else Glyphs.Mic,
-        if (listening) "хватит слушать" else "сказать голосом",
-        tint = MaterialTheme.colorScheme.primary,
-        enabled = enabled,
-        onClick = {
-            val service = PravkaAccessibilityService.instance
-            when {
-                service == null -> Feedback.toast(context, context.getString(R.string.toast_no_service))
-                listening -> if (!service.finishDelaReason(keep = true)) onListening(false)
-                else -> onListening(service.listenForDelaReason { text ->
-                    onListening(false)
-                    onText(text)
-                })
-            }
-        },
-    )
-}
-
-/**
  * Что сейчас в окне (08.10.2026, docs/dela-phone-7.md, `pageScope` веба):
  * строки дел и плитки сделок отмечают, где они, — обрезанные окном списка
  * (`boundsInWindow`) и целиком. В миг отправки [visible] отдаёт те, от которых
@@ -158,7 +131,8 @@ internal fun Modifier.seen(key: String): Modifier {
 /**
  * Строка Claude внизу — одна на всю вкладку (08–09.10.2026, docs/dela-phone-7.md,
  * поправки задания 10): микрофон слева — нажал, говоришь сколько угодно, нажал
- * ещё раз — команда ушла; стрелка справа (пока поле пусто — приглушена). Пока
+ * ещё раз — текст в поле, отдаёт владелец стрелкой справа (16.10.2026, запись 12;
+ * пока поле пусто — стрелка приглушена). Пока
  * Claude думает — команда серым в поле и заливка слева направо, ничего не
  * вращается. Подпись над полем внутри стекла — только по делу: открытое дело
  * («Скажи, что сделать с делом «…»» и «Для этого» за ним), «слушаю», «думает».
@@ -205,7 +179,7 @@ internal fun DelaSayBar(
     Column(modifier.fillMaxWidth(), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)) {
         val task = taskTitle?.takeIf { it.isNotBlank() }?.take(60)
         val head = when {
-            listening -> "Слушаю — говори сколько нужно. Нажми микрофон ещё раз — отдам Claude"
+            listening -> "Слушаю — говори сколько нужно. Нажми микрофон ещё раз — текст встанет в поле"
             busy -> "Claude думает… Можно уходить на другие разделы — изменения появятся сами"
             step == true -> (task?.let { "Для «$it»" } ?: "Для этого") + ": что назовёшь — заведу делами внутри"
             task != null -> "Скажи, что сделать с делом «$task»"
@@ -226,7 +200,7 @@ internal fun DelaSayBar(
             // «Стоп» — в цвете Дел, без красного: это «готово», а не тревога.
             GlyphButton(
                 if (listening) Glyphs.Stop else Glyphs.Mic,
-                if (listening) "готово — отдать Claude" else "сказать голосом: нажми, говори, нажми ещё раз",
+                if (listening) "готово — текст в поле" else "сказать голосом: нажми, говори, нажми ещё раз",
                 onClick = onMic,
                 tint = if (listening) mode.value else mode.label,
                 size = 46.dp,
@@ -307,7 +281,7 @@ internal fun TalkSheet(
         footer = {
             GlyphButton(
                 if (listening) Glyphs.Stop else Glyphs.Mic,
-                if (listening) "готово — отдать Claude" else "ответить голосом: нажми, говори, нажми ещё раз",
+                if (listening) "готово — текст в поле" else "ответить голосом: нажми, говори, нажми ещё раз",
                 tint = if (listening) mode.value else mode.label,
                 enabled = !busy,
                 onClick = {
@@ -317,11 +291,10 @@ internal fun TalkSheet(
                         listening -> if (!service.finishDelaReason(keep = true)) listening = false
                         else -> {
                             val base = talk.text.trim()
-                            listening = service.listenForDelaReason("Говори — нажми микрофон ещё раз, отдам Claude") { said ->
+                            // «Стоп» — текст в поле ответа, отдаёт владелец (16.10.2026, запись 12 отладки).
+                            listening = service.listenForDelaReason("Говори — нажми микрофон ещё раз, текст встанет в поле") { said ->
                                 listening = false
-                                val full = (base + " " + said.trim()).trim()
-                                onText(full)
-                                if (said.isNotBlank()) onSend(full)
+                                onText(DelaAsk.voiced(base, said))
                             }
                         }
                     }

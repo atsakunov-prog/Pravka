@@ -9,6 +9,16 @@ import org.junit.Test
 class DelaSayTest {
 
     @Test
+    fun voicedJoinsTypedAndSaid() {
+        // Запись 12: «стоп» кладёт сказанное в поле к набранному — отправляет владелец сам.
+        assertEquals("купить магний", DelaAsk.voiced("", " купить магний "))
+        assertEquals("позвонить Ивану завтра в 11", DelaAsk.voiced("позвонить Ивану ", "завтра в 11"))
+        // Тишина — набранное как было.
+        assertEquals("позвонить Ивану", DelaAsk.voiced(" позвонить Ивану", "  "))
+        assertEquals("", DelaAsk.voiced("", ""))
+    }
+
+    @Test
     fun fieldHintSaysItIsForDeeds() {
         // Запись 24: «„Саша, что-то хочешь спросить“ сбивает — это просто поле для дел».
         assertEquals("Добавь дело или скажи, что сделать", DelaAsk.fieldHint(card = false))

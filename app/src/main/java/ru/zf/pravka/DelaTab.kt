@@ -1518,22 +1518,20 @@ fun DelaTab(
         draft = t
         runAsk(t, sc)
     }
-    fun sayMic(openId: String) {
+    fun sayMic() {
         val service = PravkaAccessibilityService.instance
         when {
             service == null -> Feedback.toast(app, app.getString(R.string.toast_no_service))
             link == null -> service.onRaznoskaTap()
-            // Второе нажатие — «готово»: сказанное придёт и уйдёт Claude. Пауза запись не кончает:
-            // движок держит одну сессию через паузы и сам поднимает её, если она оборвалась.
+            // Второе нажатие — «готово»: сказанное встанет в поле, отдаёт владелец стрелкой (16.10.2026, запись 12
+            // отладки). Пауза запись не кончает: движок держит одну сессию через паузы и сам поднимает оборвавшуюся.
             sayListening -> if (!service.finishDelaReason(keep = true)) sayListening = false
             else -> {
                 val base = draft.trim()
                 sayNote = ""
-                sayListening = service.listenForDelaReason("Говори — нажми микрофон ещё раз, отдам Claude") { said ->
+                sayListening = service.listenForDelaReason("Говори — нажми микрофон ещё раз, текст встанет в поле") { said ->
                     sayListening = false
-                    val full = (base + " " + said.trim()).trim()
-                    draft = full
-                    if (said.isNotBlank()) saySend(full, openId)
+                    draft = DelaAsk.voiced(base, said)
                 }
             }
         }
@@ -1622,7 +1620,7 @@ fun DelaTab(
             busy = ask.running.isNotBlank() || (link == null && talking),
             note = sayNote,
             noteError = sayNoteError,
-            onMic = { sayMic(openId) },
+            onMic = { sayMic() },
             onSend = { saySend(draft, openId) },
             modifier = barModifier
                 // Строка поверх списка — снизу окно кончается у неё (на развороте она под карточкой справа).

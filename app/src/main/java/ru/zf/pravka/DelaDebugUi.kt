@@ -154,12 +154,11 @@ internal fun DelaDebugBar(app: PravkaApp, screen: () -> DelaDebug.Screen, modifi
             else -> {
                 hold()
                 val base = text.trim()
-                listening = service.listenForDelaReason("Говори, что не так — нажми ещё раз, запишу") { said ->
+                // «Стоп» — текст в поле, записывает владелец стрелкой (16.10.2026, запись 12 отладки: «иногда хочу
+                // что-то подправить» — записки 11–13 ушли с ослышками, никем не увиденные).
+                listening = service.listenForDelaReason("Говори, что не так — нажми ещё раз, текст встанет в поле") { said ->
                     listening = false
-                    val full = (base + " " + said.trim()).trim()
-                    text = full
-                    // Сказанное вслух — записка (как строка Claude): ушла сразу.
-                    if (said.isNotBlank()) send(full)
+                    text = ru.zf.pravka.core.DelaAsk.voiced(base, said)
                 }
             }
         }
@@ -192,7 +191,7 @@ internal fun DelaDebugBar(app: PravkaApp, screen: () -> DelaDebug.Screen, modifi
         }
         GlyphButton(
             if (listening) Glyphs.Stop else Glyphs.Mic,
-            if (listening) "хватит слушать — записать" else "сказать голосом",
+            if (listening) "хватит слушать — текст в поле" else "сказать голосом",
             onClick = { mic() }, tint = if (listening) Kv.accent else Kv.icon, enabled = !sending, size = 36.dp,
         )
         if (text.isNotBlank() && !listening) GlyphButton(Glyphs.ArrowUp, "записать", onClick = { send(text) }, tint = Kv.accent, enabled = !sending, size = 36.dp)
