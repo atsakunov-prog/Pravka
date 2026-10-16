@@ -23,8 +23,8 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from . import (asks, db, did, digest, focus, guard, ideas, insights, krug, meetings, people, phone, place, spend, twins,
-               where, zasechka)
+from . import (asks, db, did, digest, focus, guard, ideas, insights, krug, meetings, nest, people, phone, place, spend,
+               twins, where, zasechka)
 
 log = logging.getLogger("dela.store")
 
@@ -530,46 +530,15 @@ def _now_guard(conn: psycopg.Connection, before: dict | None, after: dict) -> No
 # «вложенность одного в другое и показывать тоже в дереве», «это не отдельная сущность, а обычные дела, вложенные в
 # дело». Вложенное дело — обычное дело, у которого «Зачем» (why_id) — другое дело (не цель): свои поля, карточка, свои
 # вложенные, «Сейчас», напоминание. Порядок среди соседей — pos (dela_0030), петли и чужие дела не пускает база
-# (tasks.krug_rules). Одно правило в трёх местах: здесь (ask.py — строка Claude «Для этого», и она же без ключа Claude;
-# подъём родителя и его «Вернуть» — функции базы tasks.nest_rise / nest_fall через _nest_rise), веб (stepDue, stepChips,
+# (tasks.krug_rules). Одно правило в трёх местах: сервер (куда класть и что новое берёт от родителя — nest.py, его
+# зовёт op_task_create для всех входов; подъём родителя и его «Вернуть» — функции базы tasks.nest_rise / nest_fall
+# через _nest_rise), веб (stepDue, stepChips,
 # stepsFirst, nestForest в app.js) и телефон (core/DelaSteps.kt). «Шаг к цели» — только дело, у которого вверх по
 # «Зачем» есть цель (krug.toward_goal): дело внутри клиентского дела — не «Моё» и не цель для движения Круга.
 
 
-def _day(v) -> dt.date | None:
-    if isinstance(v, dt.datetime):
-        return v.date()
-    if isinstance(v, dt.date):
-        return v
-    try:
-        return dt.date.fromisoformat(str(v)[:10]) if v else None
-    except ValueError:
-        return None
-
-
-def step_due(parent: dict, today: dt.date) -> dt.date | None:
-    """Срок шага, когда его не назвали: дело в «Сейчас», просрочено или на сегодня — сегодня (до него надо успеть);
-    на будущую дату — тот же срок; без срока — без срока. Названный срок сильнее; «Сейчас» шагу — только если сказал."""
-    due = _day(parent.get("due_date"))
-    if _day(parent.get("focus_on")) == today or (due and due <= today):
-        return today
-    return due
-
-
-def step_of(parent: dict, user: str, today: dt.date) -> dict:
-    """Что новый шаг берёт от дела [parent]: «Зачем» — само дело (только хозяину: правило базы «„зачем“ — только своё
-    дело», Круг личный), проект, сделку и человека (у цели их нет — она живёт без проекта) и срок (step_due)."""
-    out: dict = {}
-    if not parent.get("goal"):
-        for k in ("project_id", "deal_id", "person_id"):
-            if parent.get(k):
-                out[k] = str(parent[k])
-    if parent.get("owner_id") == user:
-        out["why_id"] = str(parent["id"])
-    due = step_due(parent, today)
-    if due:
-        out["due_date"] = due.isoformat()
-    return out
+# Куда класть, срок дела внутри и что новое дело берёт от родителя — nest.py (16.10.2026): одно место для всех входов.
+# До него правило жило здесь (step_of, step_due) и копиями в ask.py и mcp_tools.
 
 
 def _nest_rise(conn, user: str, before: dict, after: dict) -> tuple[dict | None, dict | None]:
@@ -675,37 +644,39 @@ def _kind_norm(conn, before: dict | None, data: dict) -> dict:
     return data
 
 
-def _back_inside(conn, data: dict, kr: dict) -> None:
-    """«Потом» (захват, back_on) не перебивает срок, унаследованный от родителя (поезд 16.10.2026, вагоны 2 и 4): новое
-    дело внутри дела (why_id — дело, не цель и не напоминание) без своего срока, но с днём возврата, берёт срок по правилу
-    step_due, если родитель его даёт (в «Сейчас», просрочен, на сегодня или на дату), и тогда «потом» снимается — дело
-    внутри вернётся вместе с родителем (подъём, правило 27), а не своей строкой «Вернулось». Родитель без срока —
-    «потом» остаётся. Корзину захвата выбирают до вложения (capture.from_model) — здесь последнее слово за родителем."""
-    if not data.get("back_on") or data.get("due_date") or kr.get("why_id") in (None, ""):
-        return
+def _nest_parent(conn, data: dict, kr: dict) -> dict | None:
+    """Дело, внутри которого заводится новое (why_id операции — дело, не цель и не напоминание), — от него новое берёт
+    проект, сделку, человека и срок (nest.nest_fill). Напоминание никуда не вкладывается (_krug_own откажет словами) —
+    ему от родителя ничего не берём; «Зачем» новой целью (why_title) и место от модели разбора (why_auto) — цели."""
+    if data.get("kind") == "remind" or kr.get("why_id") in (None, "") or kr.get("goal") or kr.get("rhythm"):
+        return None  # новая цель (и практика) ничего от дела не берёт: её кладут в цель, а не в дело (krug_rules)
     parent = task_by(conn, kr["why_id"])
-    if not parent or parent.get("goal") or parent.get("kind") == "remind":
-        return
-    due = step_due(parent, conn.execute("SELECT crm.today() AS d").fetchone()["d"])
-    if due:
-        data["due_date"] = due.isoformat()
-        data["back_on"] = data["back_said"] = None
+    return parent if nest.deed(parent) else None
 
 
 def op_task_create(conn, user, op):
+    """Новое дело. С why_id на дело (дело внутри дела, правило 27) — от родителя по одному правилу для всех входов
+    (nest.nest_fill, вагон A поезда 16.10.2026): строка Claude, коннектор, захват, службы, «Новое», телефон. До того
+    наследовали только «Для этого» строки Claude и коннектор — каждый своей копией store.step_of, а остальные заводили
+    дело внутри голым. Названное сильнее: ключ в операции, хоть null, не трогаем. «Потом» не перебивает срок родителя
+    (поезд 16.10.2026, вагоны 2 и 4: корзину захвата выбирают до вложения — здесь последнее слово за родителем). Места
+    (pos) не назвали — в конец соседей (_nest_last, как у вложенного task.set). Свой id (uuid клиента) принимается: так
+    «^k» строки Claude — родитель и дела внутри него — ложатся одной пачкой apply_ops, родители первыми."""
     raw = dict(op.get("task") or {})
     kr = _krug_split(raw)
     data = _ball_norm(_pick(raw, TASK_FIELDS | {"id", "import_ref"}, "дело"))
     if "pos" in data:
         data["pos"] = _pos(data["pos"])
     _kind_norm(conn, None, data)
-    _back_inside(conn, data, kr)
     if not data.get("title"):
         raise OpError("у дела нет названия")
     if data.get("id"):
         have = conn.execute("SELECT id FROM tasks.tasks WHERE id = %s", (data["id"],)).fetchone()
         if have:  # тот же id уже создан: телефон повторил без op_id
             return {"task": _full(conn, have["id"])}
+    parent = _nest_parent(conn, data, kr)
+    if parent:
+        nest.nest_fill(data, parent, conn.execute("SELECT crm.today() AS d").fetchone()["d"])
     data.setdefault("owner_id", user)
     data["created_by"] = user
     _now_guard(conn, None, data)
@@ -713,7 +684,11 @@ def op_task_create(conn, user, op):
     row = _insert(conn, "tasks.tasks", data)
     if kr:
         _krug_write(conn, user, "task", row, kr)
-    return {"task": _full(conn, row["id"])}
+    full = _full(conn, row["id"])
+    if (parent and "pos" not in data and full.get("why_id") and not full.get("why_goal") and full.get("status") == "open"
+            and _nest_last(conn, full)):
+        full = _full(conn, row["id"])
+    return {"task": full}
 
 
 def op_task_set(conn, user, op):
@@ -1803,6 +1778,11 @@ def op_suggestion_decide(conn, user, op):
                 fields["deal_id"] = only
         fields.setdefault("source", _task_source(s["source"]))
         fields.setdefault("source_ref", s["source_ref"])
+        # Пустое поле автоматики — не слово Саши: дело внутри дела берёт его от родителя (nest.nest_fill в
+        # op_task_create, правило 27); пустое из «Поправить» — его слово, остаётся.
+        for k in nest.FILL_KEYS:
+            if k in fields and fields[k] is None and k not in fix:
+                del fields[k]
         task = op_task_create(conn, user, {"task": fields})["task"]
         if hide:
             head = _sug_head(s)

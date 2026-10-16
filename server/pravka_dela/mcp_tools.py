@@ -11,7 +11,7 @@
 место телефона («дом»): «напомни мне завтра в 10» из claude.ai доходит до бота Ковчега.
 
 Дела внутри дела (15.10.2026, правило 27): inside у dela_add и dela_change — номер дела, внутри которого (поля нового
-от родителя — store.step_of, как «Для этого» веба и телефона), inside="" — вынуть, pos — место среди соседей; why —
+от родителя — nest.nest_fill в store.op_task_create, как у всех входов), inside="" — вынуть, pos — место среди соседей; why —
 только цель дерева (номер или название обычного дела — отказ с подсказкой inside, а не новая цель с именем дела).
 Строка дела: «внутри #N …» у дела внутри, «внутри открыто N, сначала: …» у родителя; status=done последнего внутри —
 «всё внутри сделано — теперь: …» (raised), status=open — родителю прежний срок (fell).
@@ -632,20 +632,12 @@ def add(url: str, **fields) -> str:
     try:
         with db.session(url, USER, via="mcp") as conn:
             data = _resolve(conn, {k: v for k, v in fields.items() if v is not None})
-            # Дело внутри дела (inside, 15.10.2026): проект, сделка, человек и срок — от родителя тем же правилом, что
-            # «Для этого» в вебе и на телефоне (store.step_of: родитель в «Сейчас», просрочен или на сегодня — сегодня,
-            # позже — тот же срок, без срока — без); названное сильнее, сделка — только вместе с проектом родителя.
-            inside = data.pop("_inside", None)
-            if inside == "":
+            # Дело внутри дела (inside, 15.10.2026): проект, сделка, человек и срок — от родителя ставит сам сервер
+            # (store.op_task_create → nest.nest_fill, одно правило для всех входов с вагона A поезда 16.10.2026: родитель в
+            # «Сейчас», просрочен или на сегодня — сегодня, позже — тот же срок, без срока — без); названное сильнее
+            # (пустая строка — тоже слово: «без человека», «без срока»), сделка — только вместе с проектом родителя.
+            if data.pop("_inside", None) == "":
                 data.pop("why_id", None)  # новое дело и так ни в чём не лежит
-            if inside and data.get("why_id"):
-                parent = conn.execute("SELECT * FROM tasks.v_tasks WHERE id = %s", (data["why_id"],)).fetchone()
-                near = store.step_of(parent, USER, conn.execute("SELECT crm.today() AS d").fetchone()["d"])
-                for k in ("project_id", "person_id", "due_date"):
-                    if k not in data and near.get(k):
-                        data[k] = near[k]
-                if "deal_id" not in data and near.get("deal_id") and str(data.get("project_id")) == near.get("project_id"):
-                    data["deal_id"] = near["deal_id"]
     except store.OpError as e:
         return f"Не записал: {e}"
     data["source"] = "mcp"

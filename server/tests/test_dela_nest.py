@@ -17,7 +17,7 @@ from starlette.testclient import TestClient
 import psycopg
 import pytest
 
-from pravka_dela import api, ask, guard, parse, store, tokens
+from pravka_dela import api, ask, guard, nest, parse, store, tokens
 from pravka_dela.config import Config
 from test_dela_ask import _wait, item, mk
 from test_dela_cards import _client, cd, empty_card, ops
@@ -40,21 +40,34 @@ def no_parse(*_):
 
 def test_step_due_rule(dela):
     """Срок дела внутри, если не назвали: родитель в «Сейчас», просрочен или на сегодня — сегодня; на будущую дату — тот
-    же; без срока — без срока. То же правило — веб (stepDue) и телефон (DelaSteps.due)."""
+    же; без срока — без срока. То же правило — веб (stepDue) и телефон (DelaSteps.due). С 16.10.2026 одно место —
+    nest.py: копий store.step_of в ask.py и mcp_tools больше нет, store.step_of удалён."""
     today = db_today(dela)
     later = today + dt.timedelta(days=5)
-    assert store.step_due({"due_date": None, "focus_on": today}, today) == today
-    assert store.step_due({"due_date": today - dt.timedelta(days=3)}, today) == today
-    assert store.step_due({"due_date": today.isoformat()}, today) == today
-    assert store.step_due({"due_date": later}, today) == later
-    assert store.step_due({}, today) is None
-    assert store.step_due({"focus_on": today - dt.timedelta(days=1)}, today) is None  # вчерашнее «Сейчас» — не сегодня
-    near = store.step_of({"id": "x", "owner_id": "sasha", "project_id": "p", "deal_id": "d", "person_id": "h", "due_date": later},
-                         "sasha", today)
-    assert near == {"project_id": "p", "deal_id": "d", "person_id": "h", "why_id": "x", "due_date": later.isoformat()}
-    # У цели нет проекта, сделки и человека; у чужого дела «Зачем» не ставится (правило базы — только своё).
-    assert store.step_of({"id": "g", "owner_id": "sasha", "goal": True, "project_id": "p"}, "sasha", today) == {"why_id": "g"}
-    assert "why_id" not in store.step_of({"id": "x", "owner_id": "sasha"}, "natasha", today)
+    assert nest.step_due({"due_date": None, "focus_on": today}, today) == today
+    assert nest.step_due({"due_date": today - dt.timedelta(days=3)}, today) == today
+    assert nest.step_due({"due_date": today.isoformat()}, today) == today
+    assert nest.step_due({"due_date": later}, today) == later
+    assert nest.step_due({}, today) is None
+    assert nest.step_due({"focus_on": today - dt.timedelta(days=1)}, today) is None  # вчерашнее «Сейчас» — не сегодня
+    assert not hasattr(store, "step_of") and not hasattr(store, "step_due") and not hasattr(store, "_back_inside")
+    parent = {"id": "x", "owner_id": "sasha", "project_id": "p", "deal_id": "d", "person_id": "h", "due_date": later}
+    assert nest.nest_fill({}, parent, today) == {"project_id": "p", "deal_id": "d", "person_id": "h", "due_date": later.isoformat()}
+    # Названное сильнее, явная пустота — тоже слово; другой проект — без сделки родителя.
+    assert nest.nest_fill({"person_id": None, "due_date": "2099-01-01"}, parent, today) == {
+        "person_id": None, "due_date": "2099-01-01", "project_id": "p", "deal_id": "d"}
+    assert nest.nest_fill({"project_id": "q"}, parent, today) == {"project_id": "q", "person_id": "h", "due_date": later.isoformat()}
+    assert nest.nest_fill({"project_id": None}, parent, today) == {"project_id": None, "person_id": "h", "due_date": later.isoformat()}
+    # Унаследованный срок снимает «потом»; родитель без срока — «потом» остаётся.
+    got = nest.nest_fill({"back_on": "2099-01-01", "back_said": "потом"}, parent, today)
+    assert (got["back_on"], got["back_said"], got["due_date"]) == (None, None, later.isoformat())
+    assert nest.nest_fill({"back_on": "2099-01-01"}, {"id": "y"}, today) == {"back_on": "2099-01-01"}
+    # Цель и напоминание ничего не дают: у цели нет проекта, сделки, человека и срока, в напоминание не вкладывают.
+    assert nest.nest_fill({}, {**parent, "goal": True}, today) == {}
+    assert nest.nest_fill({}, {**parent, "kind": "remind"}, today) == {}
+    assert nest.nest_fill({}, None, today) == {}
+    # Ключи, которые телефон шлёт явным null (Dela.createOp, NEST_FILLED), — те же, что дополняет сервер.
+    assert nest.FILL_KEYS == ("project_id", "deal_id", "person_id", "due_date")
 
 
 def test_before_this_goes_inside_not_to_notes(dela):
@@ -360,7 +373,7 @@ def test_team_sees_inside_flat(dela):
 
 def test_web_uses_same_rules():
     """Веб — тем же правилом, что сервер и телефон: «Для этого» у строки и в карточке шлёт scope.step, срок по умолчанию —
-    stepDue (как store.step_due), строки списков идут одной точкой taskRows (дело внутри — перед родителем, «Деревом» —
+    stepDue (как nest.step_due), строки списков идут одной точкой taskRows (дело внутри — перед родителем, «Деревом» —
     под ним), «сначала: …» — первое по месту (pos)."""
     from pathlib import Path
 
@@ -729,7 +742,8 @@ def test_v_tasks_one_view_nest_and_capture(dela):
     a = mk(dela, "Драфт", why_id=parent["id"], pos=1)
     r = mk(dela, "Не забыть цифры", why_id=parent["id"])
     with parse.db.session(dela, "sasha", "t") as c:
-        c.execute("UPDATE tasks.tasks SET kind = 'remind', remind_at = %s WHERE id = %s", (_remind_at(), r["id"]))
+        # Напоминание без своего срока (_kind_norm): срок, унаследованный делом от родителя (nest_fill), снимаем.
+        c.execute("UPDATE tasks.tasks SET kind = 'remind', remind_at = %s, due_date = NULL WHERE id = %s", (_remind_at(), r["id"]))
         cols = {d.name for d in c.execute("SELECT * FROM tasks.v_tasks LIMIT 0").description}
     assert {"pos", "why_goal", "steps_open", "kind", "back_on", "back_said", "back_n", "reminded_via"} <= cols, cols
     p, x = row(dela, parent["id"]), row(dela, a["id"])
@@ -750,7 +764,8 @@ def test_reminder_inside_does_not_hold_or_raise_parent(dela):
     a = mk(dela, "Драфт", why_id=parent["id"])
     r = mk(dela, "Не забыть цифры", why_id=parent["id"])
     with parse.db.session(dela, "sasha", "t") as c:  # мимо сервера (он так не вложит) — база всё равно права
-        c.execute("UPDATE tasks.tasks SET kind = 'remind', remind_at = %s WHERE id = %s", (_remind_at(), r["id"]))
+        # Напоминание без своего срока (_kind_norm): срок, унаследованный делом от родителя (nest_fill), снимаем.
+        c.execute("UPDATE tasks.tasks SET kind = 'remind', remind_at = %s, due_date = NULL WHERE id = %s", (_remind_at(), r["id"]))
     got = ops(dela, "sasha", [{"op": "task.done", "id": r["id"]}])[0]
     assert got["ok"] and "raised" not in got and row(dela, parent["id"])["due_date"] == later
     assert ops(dela, "sasha", [{"op": "task.reopen", "id": r["id"]}])[0]["ok"]
@@ -782,8 +797,8 @@ def test_reminder_is_not_nested_and_nothing_goes_into_it(dela):
 
 def test_later_does_not_beat_parent_due(dela):
     """«Потом» (захват, back_on) не перебивает срок, унаследованный от родителя: новое дело внутри дела без своего срока,
-    но с днём возврата, берёт срок по правилу step_due, а «потом» снимается (store._back_inside). Родитель без срока —
-    «потом» остаётся; под целью — тоже (у цели срока нет)."""
+    но с днём возврата, берёт срок по правилу step_due, а «потом» снимается (nest.nest_fill в store.op_task_create; до
+    16.10.2026 — store._back_inside). Родитель без срока — «потом» остаётся; под целью — тоже (у цели срока нет)."""
     today = db_today(dela)
     later = (today + dt.timedelta(days=5)).isoformat()
     back = (today + dt.timedelta(days=1)).isoformat()
@@ -823,3 +838,277 @@ def test_agenda_reply_says_povestka(dela):
     assert "«Спросить Ивана про сроки» — в повестку с Иваном Тестовым." in out["reply"]
     assert ask.group_said({"ball": "agenda", "person_name": "Ольга Тестова"}) == "в повестку с Ольгой Тестовой"
     assert ask.group_said({"ball": "waiting", "person_name": "Ольга Тестова"}) == ""
+
+
+# ── Один решатель вложенности (16.10.2026, тяжёлая полоса, правка 01-nest; записи отладки 20–23) ─────────────────────
+# Владелец 15.10.2026: «чтобы я мог свободно делать nesting и говорить дела и они нормально подцеплялись». «Куда класть»
+# (nest.resolve, nest.rank) и «что берёт от родителя» (nest.nest_fill в store.op_task_create) — одно место для строки
+# Claude, захвата, перетаскивания и «Нового».
+
+
+def _dirs(url):
+    from pravka_dela import krug
+
+    ops(url, "sasha", [{"op": "svod.set", "key": krug.DIRECTIONS_KEY, "author": "test", "value": [
+        {"key": "health", "pos": 0, "name": "Здоровье", "short": "Здоровье"},
+        {"key": "work", "pos": 3, "name": "Дело", "short": "Дело", "aliases": ["Работа"]}]}])
+
+
+def test_resolve_number_new_direction_out(dela):
+    """nest.resolve — куда класть, из строки входа: «#N» (и «N») — своё открытое дело или цель; «^k» — k-е новое из этого
+    же ответа; «направление Здоровье» — прямо на направление (why_id null, directions [health]), как бросок на колонку
+    дерева; «-» — вынуть; «» — не трогать."""
+    _dirs(dela)
+    deal = mk(dela, "Подготовить КП Ромашке")
+    goal = mk(dela, "Осваиваю гончарное дело", goal=True, directions=["work"])
+    with parse.db.session(dela, "sasha", "t") as c:
+        got = nest.resolve(c, "sasha", f"#{deal['num']}")
+        assert got == {"kind": "task", "why_id": deal["id"], "sure": True, "num": deal["num"], "title": deal["title"]}
+        assert nest.resolve(c, "sasha", str(deal["num"]))["why_id"] == deal["id"]
+        g = nest.resolve(c, "sasha", f"#{goal['num']}")
+        assert (g["kind"], g["why_id"], g["sure"]) == ("goal", goal["id"], True)
+        # Цель — родитель и цели (подцель), и дела.
+        assert nest.resolve(c, "sasha", f"#{goal['num']}", child={"goal": True})["why_id"] == goal["id"]
+        assert nest.resolve(c, "sasha", "^1", made=["u-1", "u-2"]) == {"kind": "new", "why_id": "u-1", "sure": True}
+        assert nest.resolve(c, "sasha", " ^2 ", made=["u-1", "u-2"])["why_id"] == "u-2"
+        bad = nest.resolve(c, "sasha", "^3", made=["u-1"])
+        assert bad["sure"] is False and "нет 3-го нового" in bad["error"] and "why_id" not in bad
+        assert nest.resolve(c, "sasha", "направление Здоровье") == {
+            "kind": "direction", "why_id": None, "directions": ["health"], "sure": True}
+        assert nest.resolve(c, "sasha", "в направление «работа»")["directions"] == ["work"]  # другое имя направления
+        nope = nest.resolve(c, "sasha", "направление Космос")
+        assert nope["sure"] is False and "нет такого направления" in nope["error"]
+        assert nest.resolve(c, "sasha", "-") == {"kind": "out", "why_id": None, "sure": True}
+        assert nest.resolve(c, "sasha", "") == {"kind": "keep", "sure": True}
+        assert nest.resolve(c, "sasha", None) == {"kind": "keep", "sure": True}
+        assert "дела #999999 нет" in nest.resolve(c, "sasha", "#999999")["error"]
+
+
+def test_resolve_refuses_foreign_remind_closed_and_loop(dela):
+    """Отказы словами, а не молча и не ошибкой базы: чужое дело (Круг личный), закрытое, напоминание, ориентир, цель в
+    дело, в самого себя и по кругу (дело — внутри того, что вкладываем). Базу и так страхует krug_rules."""
+    hers = store.apply_ops(dela, "natasha", [{"op": "task.create", "task": {"title": "Сверка коллеги"}}], "web")["results"][0]["task"]
+    rem = mk(dela, "Отправить счёт", kind="remind", remind_at=_remind_at())
+    shut = mk(dela, "Старое")
+    ops(dela, "sasha", [{"op": "task.done", "id": shut["id"]}])
+    mark = mk(dela, "Ориентир", goal=True, no_steps=True)
+    top = mk(dela, "Договор с Ромашкой")
+    mid = mk(dela, "Запросить реквизиты", why_id=top["id"])
+    low = mk(dela, "Найти телефон бухгалтера", why_id=mid["id"])
+    loose = mk(dela, "Купить тетради")
+    with parse.db.session(dela, "sasha", "t") as c:
+        def err(into, **kw):
+            got = nest.resolve(c, "sasha", into, **kw)
+            assert got["sure"] is False and "why_id" not in got, got
+            return got["error"]
+
+        e = err(f"#{hers['num']}")
+        assert "не видно" in e or "чужое дело" in e, e  # чужое личное база не показывает, а видное — не своё
+        assert "закрыто" in err(f"#{shut['num']}")
+        assert "напоминание" in err(f"#{rem['num']}")
+        assert "ориентир" in err(f"#{mark['num']}")
+        assert "цель кладут в цель или на направление" in err(f"#{top['num']}", child={"goal": True})
+        assert "в самого себя" in err(f"#{top['num']}", child={"id": top["id"]})
+        assert "по кругу" in err(f"#{low['num']}", child={"id": top["id"]})
+        assert "по кругу" in err(f"#{mid['num']}", child={"id": top["id"]})
+        assert "в самого себя" in err("^1", made=[top["id"]], child={"id": top["id"]})
+        assert "цель кладут в цель" in err("договор с Ромашкой", child={"goal": True})  # словами цель в дело не ищем
+        # Соседняя ветка — можно.
+        assert nest.resolve(c, "sasha", f"#{low['num']}", child={"id": loose["id"]})["sure"]
+    # Дело в общем проекте видно члену команды, но «Зачем» — только своё.
+    p = project(dela, "sasha", "Ромашка")
+    with parse.db.session(dela, "system", "t") as c:
+        c.execute("INSERT INTO crm.project_access (project_id, user_id, role, granted_by) VALUES (%s, 'natasha', 'edit', 'sasha')", (p,))
+    shared = mk(dela, "Ромашка: акт сверки", project_id=str(p))
+    with parse.db.session(dela, "natasha", "t") as c:
+        got = nest.resolve(c, "natasha", f"#{shared['num']}")
+    assert not got["sure"] and "чужое дело" in got["error"]
+
+
+def test_rank_finds_parent_by_words(dela):
+    """nest.rank — родитель по словам (голос «к делу про сверку», кнопки «Вложить в…»): свои открытые дела, не цели и не
+    напоминания; доля общих основ (падеж не мешает, служебные — мимо), +0,2 тот же проект, +0,1 тот же человек, полное
+    вхождение названия — 1,0. Уверен — лучший от 0,6 и второй ниже хотя бы на 0,2; иначе до трёх кандидатов от 0,34."""
+    p, org, bank, olga, ivan, deal = _client(dela)
+    other = project(dela, "sasha", "Ромашка")
+    kp = mk(dela, "Подготовить КП Ромашке", project_id=str(other))
+    with_bank = mk(dela, "Сверка с банком")
+    sept = mk(dela, "Сверка за сентябрь")
+    mk(dela, "Сверка целей", goal=True)  # цель — не кандидат
+    mk(dela, "Сверка напомнить", kind="remind", remind_at=_remind_at())  # напоминание — не кандидат
+    ops(dela, "sasha", [{"op": "task.done", "id": mk(dela, "Сверка старая")["id"]}])  # закрытое — не кандидат
+    alfa = mk(dela, "Отправить договор", project_id=str(p), person_id=str(ivan))
+    roma = mk(dela, "Отправить договор", project_id=str(other))
+    with parse.db.session(dela, "sasha", "t") as c:
+        exact = nest.rank(c, "sasha", "Подготовить КП Ромашке")
+        assert exact["sure"] and exact["why_id"] == kp["id"] and exact["score"] == 1.0, exact
+        # Основы: «к делу про КП Ромашке» — служебные мимо, «сверку с банком» — падеж.
+        assert nest.rank(c, "sasha", "к делу про КП Ромашке")["why_id"] == kp["id"]
+        stems = nest.rank(c, "sasha", "сверку с банком")
+        assert stems["sure"] and stems["why_id"] == with_bank["id"], stems
+        assert [x["id"] for x in stems["cands"]] == [with_bank["id"], sept["id"]]
+        # Двусмысленно: «сверка» — два дела поровну → кандидаты, а не уверенно; цель, напоминание и закрытое — мимо.
+        two = nest.rank(c, "sasha", "сверка")
+        assert not two["sure"] and "why_id" not in two, two
+        assert {x["id"] for x in two["cands"]} == {with_bank["id"], sept["id"]}, two
+        # Проект решает ничью (+0,2); человек один — нет (+0,1 меньше запаса 0,2), но ставит своё дело первым.
+        tie = nest.rank(c, "sasha", "отправить договор")
+        assert not tie["sure"] and len(tie["cands"]) == 2
+        by_project = nest.rank(c, "sasha", "отправить договор", project_id=str(other))
+        assert by_project["sure"] and by_project["why_id"] == roma["id"] and by_project["score"] == 1.2, by_project
+        by_person = nest.rank(c, "sasha", "отправить договор", person_id=str(ivan))
+        assert not by_person["sure"] and by_person["cands"][0]["id"] == alfa["id"], by_person
+        # Ничего общего — пусто.
+        assert nest.rank(c, "sasha", "купить подарок для Пети") == {"sure": False, "cands": []}
+        assert nest.rank(c, "sasha", "к делу") == {"sure": False, "cands": []}
+    # Что кладём — само и всё внутри него — не кандидат (петля).
+    inner = mk(dela, "Сверка с банком: выписки", why_id=with_bank["id"])
+    with parse.db.session(dela, "sasha", "t") as c:
+        alone = nest.rank(c, "sasha", "сверку с банком", child_id=with_bank["id"])
+        assert alone["sure"] is False and [x["id"] for x in alone["cands"]] == [sept["id"]], alone
+        assert inner["id"] not in {x["id"] for x in alone["cands"]}
+        # resolve понимает слова тем же rank: уверенно — дело, иначе отказ с кандидатами.
+        hit = nest.resolve(c, "sasha", "к сверке за сентябрь")
+        assert (hit["kind"], hit["why_id"], hit["sure"], hit["by"]) == ("task", sept["id"], True, "words"), hit
+        many = nest.resolve(c, "sasha", "сверка", child={"project_id": None})
+        assert many["kind"] == "words" and not many["sure"] and "похоже на несколько дел" in many["error"], many
+        assert len(many["cands"]) >= 2 and "why_id" not in many
+        none = nest.resolve(c, "sasha", "купить подарок для Пети")
+        assert none["kind"] == "words" and none["cands"] == [] and "не нашёл" in none["error"] and "«#57»" in none["error"]
+        # Бонус проекта — от того, что кладём.
+        assert nest.resolve(c, "sasha", "отправить договор", child={"project_id": str(p)})["why_id"] == alfa["id"]
+
+
+def test_create_inside_deed_takes_parent_fields_named_wins(dela):
+    """task.create с why_id на ДЕЛО — от родителя проект, сделка, человек и срок (store.op_task_create → nest.nest_fill)
+    у любого входа: службы, захват, «Новое», телефон. Названное сильнее; явная пустота (null) — тоже слово: телефон шлёт
+    так очищенное поле; другой проект — без сделки родителя. Места не назвали — в конец соседей."""
+    p, org, bank, olga, ivan, deal = _client(dela)
+    other = project(dela, "sasha", "Ромашка")
+    today = db_today(dela)
+    later = (today + dt.timedelta(days=6)).isoformat()
+    parent = mk(dela, "Подготовить тизер для Альфы", project_id=str(p), deal_id=str(deal), person_id=str(ivan), due_date=later)
+    kid = mk(dela, "Собрать отчётность", why_id=parent["id"], source="meeting")
+    assert (kid["project_id"], kid["deal_id"], kid["person_id"], kid["due_date"], kid["why_id"]) == (
+        str(p), str(deal), str(ivan), later, parent["id"])
+    assert kid["focus_on"] is None  # «Сейчас» не наследуется
+    friday = (today + dt.timedelta(days=2)).isoformat()
+    named = mk(dela, "Сверить цифры с Ольгой", why_id=str(parent["num"]), person_id=str(olga), due_date=friday)
+    assert (named["person_id"], named["due_date"], named["deal_id"]) == (str(olga), friday, str(deal))
+    blank = mk(dela, "Прикинуть самому", why_id=parent["id"], person_id=None, due_date=None)
+    assert (blank["person_id"], blank["due_date"], blank["project_id"]) == (None, None, str(p))
+    moved = mk(dela, "Спросить в Ромашке", why_id=parent["id"], project_id=str(other))
+    assert (moved["project_id"], moved["deal_id"], moved["person_id"]) == (str(other), None, str(ivan))
+    # В конец соседей: сосед, заведённый «позже» (часы клиента впереди), не встаёт после нового — соседи нумеруются.
+    with parse.db.session(dela, "system", "t") as c:
+        c.execute("UPDATE tasks.tasks SET created_at = now() + interval '1 hour' WHERE id = %s", (kid["id"],))
+    last = mk(dela, "Отправить тизер", why_id=parent["id"])
+    with parse.db.session(dela, "sasha", "t") as c:
+        order = [r["title"] for r in c.execute(
+            "SELECT title FROM tasks.v_tasks WHERE why_id = %s AND status = 'open' ORDER BY pos NULLS LAST, created_at, num",
+            (parent["id"],)).fetchall()]
+    assert order[-1] == "Отправить тизер" and row(dela, last["id"])["pos"] == len(order), order
+    # Место названо — его и держим.
+    first = mk(dela, "Созвониться с Иваном", why_id=parent["id"], pos=1)
+    assert row(dela, first["id"])["pos"] == 1
+
+
+def test_create_under_goal_takes_nothing(dela):
+    """Родитель — цель дерева: ничего не наследуется (у цели нет проекта, сделки и человека; её срок — не срок шагов),
+    «Зачем» — цель. Напоминание в дело не вкладывается — отказ словами, как раньше. Новая цель под делом от него тоже
+    ничего не берёт (цель живёт без проекта, человека и срока родителя)."""
+    today = db_today(dela)
+    goal = mk(dela, "Сын хорошо знает русский", goal=True, due_date=today.isoformat())
+    step = mk(dela, "Купить прописи", why_id=goal["id"])
+    assert (step["why_id"], step["due_date"], step["project_id"], step["person_id"]) == (goal["id"], None, None, None)
+    parent = mk(dela, "Отправить термшит", due_date=today.isoformat())
+    bad = ops(dela, "sasha", [{"op": "task.create", "task": {"title": "Не забыть", "kind": "remind", "remind_at": _remind_at(),
+                                                               "why_id": parent["id"]}}])[0]
+    assert not bad["ok"] and "напоминание не вкладывается в дело" in bad["error"]
+    sub = ops(dela, "sasha", [{"op": "task.create", "task": {"title": "Подцель", "goal": True, "why_id": parent["id"]}}])[0]
+    assert sub["ok"] and sub["task"]["due_date"] is None, sub
+
+
+def test_new_parent_and_inside_one_batch(dela):
+    """«^k» строки Claude — родитель и дела внутри него одной пачкой apply_ops: task.create принимает свой id (uuid
+    клиента, to_ops даёт его заранее), родитель ложится первым, дети берут его поля и встают по порядку."""
+    import uuid as _uuid
+
+    p = project(dela, "sasha", "Ромашка")
+    today = db_today(dela)
+    later = (today + dt.timedelta(days=4)).isoformat()
+    made = [str(_uuid.uuid4()) for _ in range(3)]
+    with parse.db.session(dela, "sasha", "t") as c:
+        into = [nest.resolve(c, "sasha", "^1", made=made) for _ in range(2)]
+    assert all(x["sure"] and x["why_id"] == made[0] for x in into)
+    r = ops(dela, "sasha", [
+        {"op": "task.create", "task": {"id": made[0], "title": "Подготовить КП Ромашке", "project_id": str(p), "due_date": later}},
+        {"op": "task.create", "task": {"id": made[1], "title": "Собрать цифры", "why_id": into[0]["why_id"]}},
+        {"op": "task.create", "task": {"id": made[2], "title": "Согласовать с Ольгой", "why_id": into[1]["why_id"]}},
+    ])
+    assert all(x["ok"] for x in r), r
+    assert [x["task"]["id"] for x in r] == made
+    for x in r[1:]:
+        t = x["task"]
+        assert (t["why_id"], t["project_id"], t["due_date"]) == (made[0], str(p), later), t
+    assert row(dela, made[0])["steps_open"] == 2
+    with parse.db.session(dela, "sasha", "t") as c:
+        order = [str(x["id"]) for x in c.execute(
+            "SELECT id FROM tasks.v_tasks WHERE why_id = %s ORDER BY pos NULLS LAST, created_at, num", (made[0],)).fetchall()]
+    assert order == made[1:]  # по порядку пачки: первое — первым
+    # Повтор той же пачки (телефон без op_id) — те же дела, без дублей.
+    again = ops(dela, "sasha", [{"op": "task.create", "task": {"id": made[1], "title": "Собрать цифры", "why_id": made[0]}}])[0]
+    assert again["ok"] and again["task"]["id"] == made[1]
+    with parse.db.session(dela, "sasha", "t") as c:
+        assert c.execute("SELECT count(*) AS n FROM tasks.tasks WHERE title = 'Собрать цифры'").fetchone()["n"] == 1
+
+
+def test_card_dash_keeps_empty_and_near_inside_follows_parent(dela):
+    """Строка Claude в карточке: «-» у проекта, человека и срока дела внутри — явная пустота, сервер её не перебивает.
+    «Рядом» из карточки дела, которое само внутри другого дела, — тоже внутри того дела и берёт его поля (одно правило
+    для всех входов), а названное Claude сильнее; «-» у «рядом» — тоже пустота."""
+    p, org, bank, olga, ivan, deal = _client(dela)
+    today = db_today(dela)
+    later = (today + dt.timedelta(days=5)).isoformat()
+    top = mk(dela, "Закрыть сделку с Альфой", project_id=str(p), deal_id=str(deal), person_id=str(ivan), due_date=later)
+    t = mk(dela, "Подготовить тизер", why_id=top["id"])
+    out = ask.run(dela, "sasha", "x", {"card": "task", "open": t["id"]}, "", None,
+                  ask_fn=lambda s, u: empty_card(create=[cr("Самому подумать", step=True, project="-", person="-", due="-")],
+                                                 _usage=None))
+    a = out["tasks"][0]
+    assert (a["why_id"], a["project_id"], a["deal_id"], a["person_id"], a["due_date"]) == (t["id"], None, None, None, None)
+    out = ask.run(dela, "sasha", "x", {"card": "task", "open": t["id"]}, "", None,
+                  ask_fn=lambda s, u: empty_card(create=[cr("Позвонить фонду"), cr("Написать Ольге", person="Ольга Смирнова"),
+                                                         cr("Прикинуть без сроков", person="-", due="-")], _usage=None))
+    near, named, dash = out["tasks"]
+    assert (near["why_id"], near["project_id"], near["deal_id"], near["person_id"], near["due_date"]) == (
+        top["id"], str(p), str(deal), str(ivan), later)
+    assert (named["why_id"], named["person_id"]) == (top["id"], str(olga))
+    assert (dash["why_id"], dash["project_id"], dash["person_id"], dash["due_date"]) == (top["id"], str(p), None, None)
+
+
+def test_service_suggestion_inside_takes_parent_fields(dela):
+    """Дело внутри от службы («Новое»): пустое поле автоматики (null в payload) — не слово Саши, поле берётся от
+    родителя; пустое из «Поправить» — его слово, остаётся пустым."""
+    p, org, bank, olga, ivan, deal = _client(dela)
+    later = (db_today(dela) + dt.timedelta(days=3)).isoformat()
+    parent = mk(dela, "Подготовить тизер для Альфы", project_id=str(p), person_id=str(ivan), due_date=later)
+
+    def sug(title, **payload):
+        r = ops(dela, "system", [{"op": "suggestion.create", "suggestion": {
+            "for_user": "sasha", "kind": "create", "source": "meeting", "source_ref": f"meeting:{title}",
+            "batch_ref": "meeting:77", "batch_title": "Альфа: статус · 14.10",
+            "payload": {"title": title, "why_id": parent["id"], **payload}}}])[0]
+        assert r["ok"], r
+        return r["suggestion"]
+
+    s1 = sug("Собрать цифры для тизера", person_id=None, due_date=None, project_id=None)
+    got = ops(dela, "sasha", [{"op": "suggestion.decide", "id": str(s1["id"]), "decision": "accept"}])[0]
+    assert got["ok"], got
+    t1 = got["task"]
+    assert (t1["why_id"], t1["project_id"], t1["person_id"], t1["due_date"]) == (parent["id"], str(p), str(ivan), later), t1
+    s2 = sug("Сверить с юристом")
+    got = ops(dela, "sasha", [{"op": "suggestion.decide", "id": str(s2["id"]), "decision": "accept",
+                               "set": {"person_id": None}}])[0]
+    assert got["ok"], got
+    assert (got["task"]["person_id"], got["task"]["due_date"]) == (None, later), got["task"]

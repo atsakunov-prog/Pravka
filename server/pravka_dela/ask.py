@@ -71,7 +71,8 @@ Claude видит только это дело: поля, заметку цел�
 этом деле“ — он добавляет в комментарии вместо того, чтобы сделать новое дело. Нажимаю „Кстати“ — всё равно в
 комментарий… под делом должно быть „до этого“ / „для этого“ / „поправить это дело“». «До этого / сначала / для этого
 надо X» — новое дело create со step: true, а не notes_add: шаг связывается с делом («Зачем» — само дело, только
-хозяину), берёт его проект, сделку и человека и срок по правилу store.step_due. «Для этого» (scope.step) — свой режим
+хозяину), берёт его проект, сделку и человека и срок по правилу nest.nest_fill (одному на все входы: его же зовёт
+store.op_task_create). «Для этого» (scope.step) — свой режим
 строки карточки и строки дела в списках: всё названное — шаги, само дело не меняется; без Claude (нет ключа, задача
 стоит защитой от петли, не-владельцу кончился суточный предел) — шаг названием, как сказано (правило то же). О них
 reply пишет сервер одной строкой («Завёл для «…»: «…», на сегодня»); сделано последнее дело внутри — родитель поднимается (store._nest_rise), и reply говорит «всё внутри сделано — теперь: «…»».
@@ -91,7 +92,7 @@ import re
 import time
 import uuid
 
-from . import crm, db, guard, krug, llm, parse, people, remind, store
+from . import crm, db, guard, krug, llm, nest, parse, people, remind, store
 
 log = logging.getLogger("dela.ask")
 
@@ -935,9 +936,11 @@ def to_ops(data: dict, tasks: dict, index: dict, today: dt.date, defaults: dict,
     """Ответ Claude → операции Дел, «как было» для отмены, чего не получилось и какие из операций — шаги.
 
     now_ids — дела, уже стоящие в «Сейчас»: больше NOW_MAX туда не встанет (None — без счёта).
-    step — карточка дела (15.10.2026): {"near": store.step_of, "only": режим «Для этого»}; create со step: true (а в
-    режиме «Для этого» — любой) — шаг к этому делу: «Зачем», проект, сделка, человек и срок — от него, если Саша не
-    назвал своих. Последнее в ответе — номера операций-шагов (для строки reply).
+    step — карточка дела или открытое дело (15.10.2026): {"parent": дело, "why_id": его id, только хозяину (Круг
+    личный), "only": режим «Для этого»}; create со step: true (а в режиме «Для этого» — любой) — дело внутри: «Зачем» —
+    это дело, проект, сделка, человек и срок — от него по nest.nest_fill (вагон A поезда, 16.10.2026: одно правило со
+    store.op_task_create), если Саша не назвал своих; «-» — явная пустота, родитель её не перебивает. Последнее в
+    ответе — номера операций-шагов (для строки reply).
     pool — дела, в которые можно вложить (into): по умолчанию те же tasks; в карточке дела — и все свои открытые
     (если Claude их видел). Из pool в карточке дела правится только одно: вложить в это дело («вложи сюда X»).
     """
@@ -1002,28 +1005,29 @@ def to_ops(data: dict, tasks: dict, index: dict, today: dt.date, defaults: dict,
         miss += [f"«{x['title']}»: не нашёл {w}" for w in why]
         task = {**{k: v for k, v in set_.items() if v is not None}, "title": x["title"].strip(), "source": "web"}
         said = lambda k: (x.get(k) or "").strip()  # noqa: E731
+        # «-» у нового дела — явная пустота (null), а не «не назвал»: дело внутри дела (и «рядом» из карточки дела,
+        # которое само внутри другого) сервер дополняет полями родителя только там, где ключа нет (nest.nest_fill в
+        # store.op_task_create, 16.10.2026) — пропуск вернул бы проект, человека или срок, которые Саша убрал.
+        for k, keys in (("project", ("project_id", "deal_id")), ("person", ("person_id",)), ("due", ("due_date",))):
+            if said(k) == "-":
+                task.update(dict.fromkeys(keys))
         if step and (x.get("step") or step.get("only")):
-            # Шаг к делу карточки (15.10.2026): названное Сашей сильнее, остальное — от дела; «-» — не брать.
-            near = step.get("near") or {}
-            if said("project") != "-" and "project_id" not in task and near.get("project_id"):
-                task["project_id"] = near["project_id"]
-            if "deal_id" not in task and near.get("deal_id") and task.get("project_id") == near.get("project_id"):
-                task["deal_id"] = near["deal_id"]
-            if said("person") != "-" and "person_id" not in task and near.get("person_id"):
-                task["person_id"] = near["person_id"]
-            if not said("due") and near.get("due_date"):
-                task["due_date"] = near["due_date"]
-            if near.get("why_id"):
-                task["why_id"] = near["why_id"]
+            # Дело внутри дела карточки (15.10.2026): названное Сашей сильнее, остальное — от дела (nest.nest_fill —
+            # одно правило со store.op_task_create). Сервер при why_id на дело дополнит так же, а не-хозяину «Зачем»
+            # не поставить — проект и срок от дела берём здесь.
+            nest.nest_fill(task, step["parent"], today)
+            if step.get("why_id"):
+                task["why_id"] = step["why_id"]
             steps.append(len(ops))
         else:
             for k in ("project_id", "person_id"):
-                if k not in task and defaults.get(k) and not (k == "project_id" and said("project") == "-"):
+                if k not in task and defaults.get(k):  # «-» уже лёг ключом с null выше
                     task[k] = defaults[k]
             # На странице сделки новое дело — её следующий шаг, если проект тот же.
             if defaults.get("deal_id") and "deal_id" not in task and task.get("project_id") == defaults.get("project_id"):
                 task["deal_id"] = defaults["deal_id"]
-            # Из карточки дела новое ложится рядом — к той же цели дерева (у цели — её шагом).
+            # Из карточки дела новое ложится рядом — к той же цели дерева (у цели — её шагом); карточка дела внутри
+            # дела — внутри того же дела, с его человеком и сроком (сервер, nest.nest_fill), если Claude не назвал своих.
             if defaults.get("why_id"):
                 task["why_id"] = defaults["why_id"]
         if task.get("ball") in ("waiting", "agenda") and not task.get("person_id"):
@@ -1580,10 +1584,9 @@ def context(url: str, user: str, text: str, scope: dict) -> dict:
     shown = byid.get(opened) if opened else None
     # Открыто дело (15.10.2026, хвост «Для этого» у строки внизу вкладки телефона и у строки страницы веба с карточкой
     # справа): «до этого надо X» — дело внутри него, как в карточке дела, а не заметка или соседнее дело. То же правило
-    # связи и срока (store.step_of); строку о заведённом пишет сервер (steps_said). Старые телефоны шлют так же — open.
+    # связи и срока (nest.nest_fill); строку о заведённом пишет сервер (steps_said). Старые телефоны шлют так же — open.
     par = shown or focused
-    step = ({"parent": par, "near": store.step_of(par, user, today), "only": False}
-            if par and par["status"] == "open" and not par.get("goal") else None)
+    step = _step(par, user, False) if par and par["status"] == "open" and not par.get("goal") else None
     # П-номер — место на экране, а не в выборке: разобранное с другого устройства оставляет дырку,
     # и «третье» по-прежнему про третье сверху.
     by_sid = {str(s["id"]): s for s in srows}
@@ -1643,6 +1646,12 @@ def context(url: str, user: str, text: str, scope: dict) -> dict:
             "index": index, "today": today, "card": card, "now_ids": now_ids, "step": step}
 
 
+def _step(parent: dict, user: str, only: bool) -> dict:
+    """Дело внутри [parent] из строки Claude: что заводить внутри (to_ops) — сам родитель (от него nest.nest_fill),
+    «Зачем» — только хозяину (правило базы «„зачем“ — только своё дело», Круг личный), only — режим «Для этого»."""
+    return {"parent": parent, "why_id": str(parent["id"]) if parent.get("owner_id") == user else None, "only": only}
+
+
 def _task_context(url: str, user: str, text: str, scope: dict) -> dict:
     """Карточка дела (scope.card = "task"): Claude видит только это дело — без экрана и без остальных дел. Справочник
     и правила — тот же system, что у строки страницы (кэш общий у одной модели)."""
@@ -1694,8 +1703,8 @@ def _task_context(url: str, user: str, text: str, scope: dict) -> dict:
     tail += ["", head + text]
     system = (SYSTEM.replace("{REMIND}", remind_rules(url)).replace("{CATALOG}", cat)
               .replace("{PLACES}", remind.places_block(places)))
-    # Шаг к этому делу (15.10.2026): что он берёт от дела — одно правило store.step_of (веб и телефон — так же).
-    step = {"parent": t, "near": store.step_of(t, user, today), "only": bool(scope.get("step"))}
+    # Дело внутри этого (15.10.2026): что оно берёт от дела — одно правило nest.nest_fill (веб и телефон — так же).
+    step = _step(t, user, bool(scope.get("step")))
     return {"text": text, "system": system, "message": screen + "\n\n" + "\n".join(tail), "screen": screen,
             "tail": "\n".join(tail), "model": model, "effort": effort,
             "tasks": {t["num"]: t}, "focused": t, "sugs": {}, "targets": {}, "index": index, "today": today,
@@ -1704,7 +1713,7 @@ def _task_context(url: str, user: str, text: str, scope: dict) -> dict:
 
 def _when_words(due, today: dt.date) -> str:
     """Срок шага словами для reply: «на сегодня», «на завтра», «на 17.10», «без срока»."""
-    d = store._day(due)
+    d = nest.day_of(due)
     if not d:
         return "без срока"
     return "на сегодня" if d == today else "на завтра" if d == today + dt.timedelta(days=1) else "на " + d.strftime("%d.%m")
@@ -1726,7 +1735,7 @@ def _step_bit(x: dict, today: dt.date) -> str:
     when, grp = _when_words(x.get("due_date"), today), group_said(x)
     if grp:
         when = grp if when == "без срока" else f"{when}, {grp}"
-    return f"«{x['title']}», {when}" + (", в «Сейчас»" if store._day(x.get("focus_on")) == today else "")
+    return f"«{x['title']}», {when}" + (", в «Сейчас»" if nest.day_of(x.get("focus_on")) == today else "")
 
 
 def agenda_said(created: list[dict], made: list[dict]) -> str:
@@ -1819,7 +1828,7 @@ def run(url: str, user: str, text: str, scope: dict, key: str, proxy: str | None
     by_title = lambda s, u: {"route": "edit", "reply": "", "changes": [], "create": [{"title": plain_title, "step": True}]}  # noqa: E731
     if ask_fn is None:
         if only and (not key or scope.get("no_claude")):
-            # «Для этого» без Claude — шаг названием, как сказано, тем же правилом связи и срока (store.step_of): без
+            # «Для этого» без Claude — шаг названием, как сказано, тем же правилом связи и срока (nest.nest_fill): без
             # ключа или сверх суточного предела не-владельцу (api.ask_start ставит no_claude вместо ответа 429).
             plain = True
             ask_fn = by_title
