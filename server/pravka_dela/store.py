@@ -1636,12 +1636,53 @@ def _auto(conn, user, s: dict, problems: list[str] | None = None, cache: dict | 
     return (AUTO_CREATE_REASON if kind == "create" else AUTO_UPDATE_REASON), None
 
 
+# Как решено раньше — словами отказа повтора (отладка 16.10.2026).
+DECIDED_WORDS = {"accepted": "принято", "edited": "принято с правкой", "rejected": "отклонено", "expired": "закрыто само"}
+
+
+def _decided_again(s: dict, op: dict) -> dict:
+    """Решение по уже решённому вопросу «Нового» (отладка 16.10.2026, записи 1–2).
+
+    Второй тап «Да» или «Не надо» (телефон без связи шлёт очередь заново с новым op_id, экран отстал от синка, два
+    устройства) раньше получал отказ «предложение уже разобрано или не твоё», и телефон вешал над «Новым» красную
+    плашку «Сервер не принял …», хотя всё сделано. Тот же исход — не ошибка: ответ ok с already, ничего не меняем и
+    карточку второй раз не учим. Тот же исход — «Да» у принятого (и принятого с правкой), «Не надо» у отклонённого и
+    у погасшего самого (дела не будет — этого и хотели); у кнопки-варианта исход по его reject, а «Да» другим вариантом —
+    другой ответ (другой человек или проект): по причине, которую пишет первый ответ. С правкой (set) повтор не бывает
+    тем же — правку уже не применить. Иначе — отказ, который называет, как и когда решено."""
+    decision, reason = op.get("decision"), op.get("reason")
+    same_option = True
+    if op.get("option") is not None:
+        opts = (s["payload"] or {}).get("options")
+        opts = opts if isinstance(opts, list) else []
+        i = op.get("option")
+        if isinstance(i, int) and not isinstance(i, bool) and 0 <= i < len(opts) and isinstance(opts[i], dict):
+            label = str(opts[i].get("label") or "").strip()
+            if opts[i].get("reject"):
+                decision = "reject"
+            else:
+                decision = "accept"
+                same_option = (s["reason"] or None) == (reason or (f"ответ: {label}" if label else None))
+        else:
+            decision = None
+    was = {"accepted": "accept", "edited": "accept", "rejected": "reject", "expired": "reject"}.get(s["status"])
+    if decision and decision == was and not op.get("set") and same_option:
+        return {"suggestion": s, "already": True}
+    when = s["decided_at"].astimezone(meetings.MSK).strftime(" %d.%m в %H:%M") if s.get("decided_at") else ""
+    raise OpError(f"Уже решено раньше: {DECIDED_WORDS.get(s['status'], s['status'])}{when} — повторять не нужно")
+
+
 def op_suggestion_decide(conn, user, op):
-    s = conn.execute(
-        "SELECT * FROM tasks.suggestions WHERE id = %s AND status = 'pending' FOR UPDATE", (op.get("id"),)
-    ).fetchone()
+    try:
+        sid = str(uuid.UUID(str(op.get("id"))))
+    except ValueError:
+        raise OpError("Такого вопроса нет или он не твой") from None
+    # Без фильтра статуса (отладка 16.10.2026): решённое отвечает повтором (_decided_again), а не «нет такого».
+    s = conn.execute("SELECT * FROM tasks.suggestions WHERE id = %s FOR UPDATE", (sid,)).fetchone()
     if not s:
-        raise OpError("предложение уже разобрано или не твоё")
+        raise OpError("Такого вопроса нет или он не твой")  # нет вовсе или не видно (RLS: чужое «Новое»)
+    if s["status"] != "pending":
+        return _decided_again(s, op)
     decision = op.get("decision")
     payload = dict(s["payload"] or {})
     # Ответ кнопкой (13.10.2026, владелец: «Claude должен давать свои ответы кнопками, а не „Да / Не надо“»):
@@ -2284,6 +2325,12 @@ def _db_error(e: psycopg.Error) -> str:
     return msg + (f" ({d.message_detail})" if d.message_detail else "")
 
 
+def _refused(op: dict, op_id: Any, error: str) -> dict:
+    """Отказ одной операции — с тем, что это было и над чем (отладка 16.10.2026, записи 1–2): op и id ложатся и в
+    crm.ops_seen, так что журнал службы и разбор по op_id называют операцию, а не одну фразу ошибки."""
+    return {"op_id": op_id, "ok": False, "error": error, "op": op.get("op"), "id": jsonable(op.get("id"))}
+
+
 def apply_ops(url: str, user: str, ops: list[dict], via: str, actor: str | None = None) -> dict:
     """Пачка операций одной транзакцией, каждая — в своей точке сохранения.
 
@@ -2302,7 +2349,7 @@ def apply_ops(url: str, user: str, ops: list[dict], via: str, actor: str | None 
                     if not isinstance(op_id, str) or op_id.lower().startswith(("urn", "uuid")):
                         raise ValueError  # питон эти формы берёт, PostgreSQL — нет
                 except ValueError:
-                    results.append({"op_id": op_id, "ok": False, "error": "op_id — не uuid"})
+                    results.append(_refused(op, op_id, "op_id — не uuid"))
                     continue
                 seen = conn.execute("SELECT result FROM crm.ops_seen WHERE op_id = %s", (op_id,)).fetchone()
                 if seen:
@@ -2315,9 +2362,9 @@ def apply_ops(url: str, user: str, ops: list[dict], via: str, actor: str | None 
                 with conn.transaction():
                     res = {"op_id": op_id, "ok": True, **jsonable(handler(conn, user, op))}
             except OpError as e:
-                res = {"op_id": op_id, "ok": False, "error": str(e)}
+                res = _refused(op, op_id, str(e))
             except PERMANENT as e:
-                res = {"op_id": op_id, "ok": False, "error": _db_error(e)}
+                res = _refused(op, op_id, _db_error(e))
             if op_id:
                 conn.execute("INSERT INTO crm.ops_seen (op_id, user_id, result) VALUES (%s, %s, %s)", (op_id, user, Jsonb(res)))
             results.append(res)

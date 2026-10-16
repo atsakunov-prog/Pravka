@@ -97,8 +97,11 @@ def test_suggestion_accept_edit_reject(dela, conn):
     assert r1["task"]["source_ref"] == "meeting:42"
     assert r2["suggestion"]["status"] == "edited" and r2["task"]["ball"] == "waiting"
     assert r3["suggestion"]["status"] == "rejected" and r3["suggestion"]["reason"] == "это идея, не дело"
+    # Повтор того же решения — не ошибка (отладка 16.10.2026): ok с already, второго дела нет; другое решение — отказ.
     again = ops(dela, "sasha", {"op": "suggestion.decide", "id": a["id"], "decision": "accept"})[0]
-    assert not again["ok"]
+    assert again["ok"] and again["already"] and "task" not in again, again
+    other = ops(dela, "sasha", {"op": "suggestion.decide", "id": a["id"], "decision": "reject"})[0]
+    assert not other["ok"] and other["error"].startswith("Уже решено раньше: принято "), other
     # Чужое «Новое» не видно.
     assert store.view(dela, "natasha", "new")["count"] == 0
 

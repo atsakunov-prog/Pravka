@@ -335,7 +335,10 @@ def build(cfg: Config) -> Starlette:
         out = await anyio.to_thread.run_sync(lambda: store.apply_ops(url, who.user, items, who.via, who.actor))
         bad = [r for r in out["results"] if not r.get("ok")]
         if bad:
-            log.info("ops %s: %d из %d не приняты, первая: %s", who.name, len(bad), len(items), bad[0].get("error"))
+            # Какая операция и над чем (отладка 16.10.2026): одной фразой ошибки не понять, что повторил телефон.
+            what = " ".join(x for x in (str(bad[0].get("op") or ""), str(bad[0].get("id") or "")[:8]) if x)
+            log.info("ops %s: %d из %d не приняты, первая: %s: %s", who.name, len(bad), len(items), what or "?",
+                     bad[0].get("error"))
         return _json({"ok": True, **out})
 
     async def view(request: Request):
