@@ -4,7 +4,7 @@
 > номера 22–26 заняли «Замки и „Только тебе“» (22), дела внутри дела (23), режим отладки (24), захват (25) и люди встречи (26).
 
 > Шаг 1 петли этапа 4 аудита. **Сервер и веб сделаны** в ветке `loop-1` (`server/pravka_dela/plan.py`, `asks.py`,
-> `sql/dela_0034.sql`, веб — `planBox` / `planItem` в `server/pravka_dela/static/app.js`); правило 26 в
+> `sql/dela_0034.sql`, веб — `planBox` / `planItem` в `server/pravka_dela/static/app.js`); правило 30 в
 > `server/pravka_dela/CLAUDE.md`, контракт — `server/contract/dela-plan.json`. **Телефон — по этому заданию** (итог —
 > строкой «Сделано на телефоне» в конце и разделом в `docs/dela.md`). Что сервер уже делает и без телефона — ниже,
 > в «Совместимости».
