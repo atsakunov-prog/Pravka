@@ -184,7 +184,7 @@ def in_now(conn, owner: str, day: dt.date) -> list[dict]:
     """Открытые дела в «Сейчас» дня с тем, какой это день подряд (carried)."""
     return conn.execute(
         "SELECT t.id, t.num, t.title, t.owed, t.ball, t.grp, t.created_at, t.source, t.source_ref, t.person_short, "
-        f"t.due_date, t.focus_on, {CARRIED} AS carried "
+        f"t.due_date, t.focus_on, t.why_id, t.why_goal, t.why_title, {CARRIED} AS carried "
         "FROM tasks.v_tasks t LEFT JOIN tasks.now_days n ON n.owner_id = %(o)s AND n.day = %(day)s::date AND n.task_id = t.id "
         f"WHERE t.owner_id = %(o)s AND t.status = 'open' AND NOT t.goal AND {store.DEED_KIND_IF} AND t.focus_on = %(day)s::date "
         "ORDER BY t.owed DESC, t.created_at, t.num",
@@ -255,7 +255,8 @@ LIVE_DEAL = ("(EXISTS (SELECT 1 FROM crm.deals d WHERE d.id = t.deal_id AND d.st
 
 
 TASK_COLS = ("t.id, t.num, t.title, t.owed, t.ball, t.grp, t.created_at, t.source, t.source_ref, t.person_id, "
-             "t.person_short, t.due_date, t.focus_on, t.project_id, t.deal_id, t.waiting_since, t.dirs")
+             "t.person_short, t.due_date, t.focus_on, t.project_id, t.deal_id, t.waiting_since, t.dirs, t.why_id, "
+             "t.why_goal, t.why_title")
 
 # «Потом» (захват, back_on; поезд 16.10.2026, стык с шагом 0): Саша сам отложил дело — план его не подталкивает. Не
 # кандидат: (1) дело ещё отложено на день плана (back_on позже него), если только срок не горит к этому дню — срок сильнее
@@ -268,7 +269,28 @@ LATER_OK = ("NOT (t.back_on IS NOT NULL AND ((t.back_on > %(for)s::date AND (t.d
             "OR (t.ball = 'mine' AND NOT t.owed AND t.due_date IS NULL)))")
 
 
-def _pools(conn, owner: str, today: dt.date, for_date: dt.date, cfg: dict, now_rows: list[dict]) -> dict[str, list[dict]]:
+# Дела внутри дела (правило 27; поезд 16.10.2026, стык с вагоном 2). «Зачем» дела — цель дерева или обычное дело, внутри
+# которого оно лежит. Строки Круга хозяина: id → («Зачем», цель ли это).
+def _links(conn, owner: str) -> dict[str, tuple[str | None, bool]]:
+    return {str(r["id"]): (str(r["why_id"]) if r["why_id"] else None, bool(r["goal"])) for r in conn.execute(
+        "SELECT id, why_id, goal FROM tasks.krug WHERE kind = 'task' AND owner_id = %s", (owner,)).fetchall()}
+
+
+def _ups(links: dict, tid: str) -> set[str]:
+    """Дела, внутри которых лежит это дело, — вверх по «Зачем» до цели (цель — не дело: «внутри цели» — шаг к ней)."""
+    out: set[str] = set()
+    x = links.get(tid, (None, False))[0]
+    while x and x not in out and len(out) < 60:
+        up = links.get(x)
+        if up and up[1]:
+            break
+        out.add(x)
+        x = up[0] if up else None
+    return out
+
+
+def _pools(conn, owner: str, today: dt.date, for_date: dt.date, cfg: dict, now_rows: list[dict],
+           links: dict | None = None) -> dict[str, list[dict]]:
     p = {"o": owner, "today": today.isoformat(), "for": for_date.isoformat()}
     base = (f"t.owner_id = %(o)s AND t.status = 'open' AND NOT t.goal AND {store.DEED_KIND_IF} "
             f"AND t.focus_on IS DISTINCT FROM %(for)s::date AND {LATER_OK}")
@@ -282,6 +304,10 @@ def _pools(conn, owner: str, today: dt.date, for_date: dt.date, cfg: dict, now_r
         f"SELECT {TASK_COLS} FROM tasks.v_tasks t WHERE {base} AND t.why_id IS NOT NULL AND t.steps_open = 0 "
         "AND NOT t.owed AND t.ball <> 'waiting' AND t.focus_on IS DISTINCT FROM %(today)s::date "
         "AND cardinality(t.dirs) > 0 ORDER BY t.created_at, t.num", p).fetchall()
+    # Шаг к цели — вверх по «Зачем» есть цель (krug.toward_goal, как «Моё»): дело внутри обычного дела, над которым целей
+    # нет (драфт для договора клиенту), — не резерв Круга, хоть направление оно и наследует (поезд 16.10.2026).
+    toward = krug.toward_goal(links if links is not None else _links(conn, owner))
+    steps = [r for r in steps if str(r["id"]) in toward]
     last = {r["dir"]: r["last"] for r in conn.execute(
         "SELECT t.dirs[1] AS dir, max((t.completed_at AT TIME ZONE 'Europe/Moscow')::date) AS last "
         "FROM tasks.v_tasks t WHERE t.owner_id = %(o)s AND t.status = 'done' AND cardinality(t.dirs) > 0 "
@@ -320,7 +346,8 @@ def candidates(conn, owner: str, today: dt.date, for_date: dt.date, cfg: dict,
     """Кандидаты на for_date: {items: [...] в порядке показа, stuck: [...]}. Только правило, без записи."""
     now = now or dt.datetime.now(dt.timezone.utc)
     now_rows = in_now(conn, owner, today)
-    pools = _pools(conn, owner, today, for_date, cfg, now_rows)
+    links = _links(conn, owner)
+    pools = _pools(conn, owner, today, for_date, cfg, now_rows, links)
     stop = blocked(_history(conn, owner, today), now, cfg)
     stuck = [{"id": str(r["id"]), "num": r["num"], "title": r["title"], "days": r["carried"]}
              for r in now_rows if r["carried"] > cfg["carry_max"]]
@@ -354,12 +381,25 @@ def candidates(conn, owner: str, today: dt.date, for_date: dt.date, cfg: dict,
     baskets["nudge"] = [{"basket": "nudge", "kind": "create", "id": str(next(iter(people.values()))["id"]),
                          "nudge": list(people.values())}] if people else []
     limit = cfg["friday_max"] if (for_date - today).days > 1 else cfg["max"]
+    # Из одной семьи дел внутри дела (правило 27) — один кандидат: отметил родителя — его открытые дела внутри встанут в
+    # «Сейчас» над ним (в пять не считаются, renderNow / DelaSteps.inner), отметил дело внутри — это и есть первый шаг.
+    # Кто из семьи — решает порядок мест судьи (PICK), место в квоте не пропадает: берётся следующий в корзине.
     picked: list[dict] = []
+    chosen: set[str] = set()   # выбранные дела
+    above: set[str] = set()    # и все, внутри чего они лежат
     for b in PICK:
-        for it in baskets[b][:cfg["quota"].get(b, 0)]:
-            if len(picked) >= limit:
+        n = 0
+        for it in baskets[b]:
+            if n >= cfg["quota"].get(b, 0) or len(picked) >= limit:
                 break
+            if it["kind"] == "update":
+                ups = _ups(links, it["id"])
+                if it["id"] in above or ups & chosen:
+                    continue
+                chosen.add(it["id"])
+                above |= ups
             picked.append(it)
+            n += 1
     picked.sort(key=lambda it: SHOW.index(it["basket"]))
     return {"items": picked, "stuck": stuck, "limit": limit}
 
@@ -378,7 +418,19 @@ def _due_words(due: dt.date | None, today: dt.date, for_date: dt.date) -> str | 
     return f"срок {store.day_label(due)}"
 
 
+def _inside(t: dict) -> str | None:
+    """«для «Прислать договор»» — дело внутри обычного дела (правило 27): без родителя «Набросать драфт» не понять."""
+    return f"для «{t['why_title']}»" if t.get("why_id") and not t.get("why_goal") and t.get("why_title") else None
+
+
 def why_line(conn, owner: str, it: dict, today: dt.date, for_date: dt.date) -> str:
+    b = it["basket"]
+    if b in ("krug", "carry", "owed"):
+        return " · ".join(x for x in (_why(conn, owner, it, today, for_date), _inside(it["task"])) if x)
+    return _why(conn, owner, it, today, for_date)
+
+
+def _why(conn, owner: str, it: dict, today: dt.date, for_date: dt.date) -> str:
     b = it["basket"]
     if b == "deal":
         d = it["deal"]

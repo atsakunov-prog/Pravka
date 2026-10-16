@@ -676,6 +676,47 @@ def test_train_capture_reminders_and_later(dela):
     assert r["ok"] and str(r["task"]["focus_on"]) == tm.isoformat() and r["task"]["back_on"] is None, r
 
 
+def test_train_nest_one_per_family(dela):
+    """Стык с делами внутри дела (вагон 2, dela_0030, правило 27). Из семьи — один кандидат: родитель «Отбить» и дело
+    внутри него, оба горящие, — одна строка (родитель: отметил его — дела внутри встанут в «Сейчас» над ним), место в
+    квоте берёт следующий. Резерв Круга — только шаг к цели: дело внутри дела, над которым цели нет, не резерв, хоть
+    направление оно и наследует; дело внутри дела, ведущего к цели, — резерв, и «почему» называет родителя («для «…»»)."""
+    today = db_today(dela)
+    tm = today + dt.timedelta(days=1)
+    ok(dela, "sasha", {"op": "svod.set", "key": krug.DIRECTIONS_KEY, "value": DIRS, "author": "test"})
+    parent = mk(dela, title="Прислать договор Ивану", ball="owed")
+    aged(dela, parent["id"], 6)
+    inner = mk(dela, title="Набросать драфт договора", ball="owed", why_id=parent["id"])
+    aged(dela, inner["id"], 5)
+    other = mk(dela, title="Ответить Олегу", ball="owed")
+    aged(dela, other["id"], 4)
+    # Цели над ним нет — не резерв Круга (направление «Здоровье» своё у родителя, у дела внутри — по наследству).
+    free = mk(dela, title="Разобрать полку", directions=["health"])
+    aged(dela, free["id"], 20)
+    lone = mk(dela, title="Купить ящики для полки", why_id=free["id"])
+    aged(dela, lone["id"], 20)
+    # Цель → дело → дело внутри: внутреннее — шаг к цели (родитель с открытым делом внутри — нет).
+    g = mk(dela, title="Тело в форме", goal=True, directions=["health"])
+    prep = mk(dela, title="Подготовиться к забегу", why_id=g["id"])
+    shoes = mk(dela, title="Купить кроссовки", why_id=prep["id"])
+    aged(dela, shoes["id"], 2)
+    with dela_db.session(dela, "sasha", via="t") as c:
+        dirs = c.execute("SELECT dirs FROM tasks.v_tasks WHERE id = %s", (lone["id"],)).fetchone()["dirs"]
+    assert dirs and dirs[0] == "health", "направление дело внутри наследует — отсекает именно «шаг к цели»"
+    out = build(dela, today, tm)
+    t = titles(out)
+    assert "Прислать договор Ивану" in t and "Набросать драфт договора" not in t, t
+    assert "Ответить Олегу" in t, "место в квоте «Отбить» не пропало — взят следующий"
+    assert "Купить ящики для полки" not in t and "Разобрать полку" not in t and "Подготовиться к забегу" not in t
+    krug_items = [x for x in out["items"] if x["basket"] == "krug"]
+    assert [x["title"] for x in krug_items] == ["Купить кроссовки"], out["items"]
+    assert krug_items[0]["why"].endswith(" · для «Подготовиться к забегу»"), krug_items[0]["why"]
+    # Отметил родителя — открытое дело внутри в «Сейчас» завтра пойдёт с ним, отдельным кандидатом его нет и после.
+    plan.run(dela, at(today, 18, 5), for_date=tm)
+    assert decide(dela, sug_of(dela, parent["id"]), option=0)["ok"]
+    assert not [s for s in plan_sugs(dela) if str(s["task_id"]) == str(inner["id"])]
+
+
 def test_contract_and_svod_keys():
     c = json.loads((ROOT / "contract" / "dela-plan.json").read_text(encoding="utf-8"))
     assert c["features"]["flag"] == "plan" and "plan" in store.FEATURES
