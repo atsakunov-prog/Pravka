@@ -53,4 +53,65 @@ class DelaAskTest {
         assertTrue(DelaAsk.answersOf(DelaAsk.Turn("x", question, undone = true)).isEmpty())
         assertTrue(DelaAsk.answersOf(null).isEmpty())
     }
+
+    /**
+     * «Это отдельное дело» (16.10.2026, запись отладки 23; docs/dela-phone-29.md §3; `splitNoteOps` веба — одно правило):
+     * Claude дописал «Проговорить с ним Бету.» в заметку дела — кнопка заводит дело рядом (дописанное названием, «Зачем»,
+     * клиент, сделка и человек дела, без срока) и убирает дописанное из заметки, с `was`; «Вернуть» — наоборот.
+     */
+    @Test
+    fun `это отдельное дело — пачка create и notes с was, вернуть — наоборот`() {
+        val tid = Dela.newId()
+        val goal = Dela.newId()
+        val p = Dela.newId()
+        val d = Dela.newId()
+        val ivan = Dela.newId()
+        val r = DelaAsk.parse(JSONObject(
+            "{\"route\": \"edit\", \"reply\": \"Переименовал, в заметку дописал.\", \"changed\": [{\"id\": \"$tid\", \"num\": 283, " +
+                "\"title\": \"Дожать Ивана\", \"before\": {\"title\": \"Дожать Ивана\", \"notes\": \"После встречи не ответил.\"}, " +
+                "\"after\": {\"title\": \"Проверить интерес Ивана\", \"notes\": \"После встречи не ответил.\\nПроговорить с ним Бету.\"}, " +
+                "\"noted\": \"Проговорить с ним Бету.\"}]}",
+        ))
+        val ch = r.changed.single()
+        assertEquals("Проговорить с ним Бету.", DelaAsk.notedOf(ch))
+        assertTrue(DelaAsk.describe(ch, s).endsWith("дописал заметку: «Проговорить с ним Бету.»"))
+        // Старый сервер без noted — хвост заметки за прежней; заметку не трогал — пусто.
+        assertEquals("Проговорить с ним Бету.", DelaAsk.notedOf(ch.copy(noted = "")))
+        assertEquals("", DelaAsk.notedOf(ch.copy(after = JSONObject().put("title", "x"), noted = "")))
+
+        val t = Dela.Task(id = tid, title = "Проверить интерес Ивана", notes = "После встречи не ответил.\nПроговорить с ним Бету.",
+            projectId = p, dealId = d, personId = ivan, whyId = goal, dueDate = "2026-10-19")
+        val sp = Dela.splitNoteOps(DelaAsk.notedOf(ch), t)!!
+        assertEquals("Проговорить с ним Бету", sp.title)
+        val (create, set) = sp.ops
+        val task = create.getJSONObject("task")
+        assertEquals("task.create", create.getString("op"))
+        assertEquals(listOf(sp.id, "Проговорить с ним Бету", goal, p, d, ivan),
+            listOf("id", "title", "why_id", "project_id", "deal_id", "person_id").map { task.getString(it) })
+        assertFalse(task.has("due_date"))  // срок сказан для самого дела
+        assertEquals(listOf("task.set", tid), listOf(set.getString("op"), set.getString("id")))
+        assertEquals("После встречи не ответил.", set.getJSONObject("set").getString("notes"))
+        assertEquals(t.notes, set.getJSONObject("was").getString("notes"))
+        val (cancel, back) = sp.back
+        assertEquals(listOf("task.cancel", sp.id), listOf(cancel.getString("op"), cancel.getString("id")))
+        assertEquals(t.notes, back.getJSONObject("set").getString("notes"))
+
+        // Заметка — только дописанное: обратно пустая (null); дописанного в ней уже нет — заметку не трогаем.
+        val only = Dela.splitNoteOps("Проговорить с ним Бету.", t.copy(notes = "Проговорить с ним Бету."))!!
+        assertTrue(only.ops[1].getJSONObject("set").isNull("notes"))
+        assertEquals(1, Dela.splitNoteOps("Проговорить с ним Бету.", t.copy(notes = "Поправил руками."))!!.ops.size)
+        // У цели — её шагом; сервер без дерева — без why_id.
+        assertEquals(tid, Dela.splitNoteOps("позвонить Ольге", t.copy(goal = true, whyId = ""))!!.ops[0].getJSONObject("task").getString("why_id"))
+        assertFalse(Dela.splitNoteOps("позвонить Ольге", t, tree = false)!!.ops[0].getJSONObject("task").has("why_id"))
+        assertEquals("Позвонить Ольге", Dela.splitTitle("  позвонить   Ольге ;. "))
+        assertEquals(null, Dela.splitNoteOps(" . ", t))
+        assertEquals("а\nв", Dela.noteCut("а\nб\nв", "б"))
+
+        // Отделено — «Вернуть» реплики отменяет и его, память реплики говорит о нём Claude.
+        val turn = DelaAsk.Turn("…и плюс Бету проговорить с ним", r, split = mapOf(tid to sp))
+        assertTrue(DelaAsk.undoOps(turn).any { it.getString("op") == "task.cancel" && it.getString("id") == sp.id })
+        val memo = DelaAsk.memo(turn, s)
+        assertTrue(memo.getString("done").contains("отдельным делом: Проговорить с ним Бету"))
+        assertTrue(sp.id in (0 until memo.getJSONArray("ids").length()).map { memo.getJSONArray("ids").getString(it) })
+    }
 }

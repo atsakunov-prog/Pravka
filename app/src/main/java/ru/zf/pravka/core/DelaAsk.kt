@@ -158,7 +158,10 @@ object DelaAsk {
 
     fun request(text: String, scope: JSONObject): JSONObject = JSONObject().put("text", text.trim()).put("scope", scope)
 
-    /** Одна поправка Claude: как было (`before`) и стало (`after`), статус — парой [было, стало]. */
+    /**
+     * Одна поправка Claude: как было (`before`) и стало (`after`), статус — парой [было, стало]. [noted] — что Claude
+     * дописал в заметку (16.10.2026, запись 23; сервер шлёт `noted`): под такой правкой — «Это отдельное дело».
+     */
     data class Change(
         val id: String,
         val num: Int,
@@ -167,7 +170,20 @@ object DelaAsk {
         val after: JSONObject,
         val statusFrom: String = "",
         val statusTo: String = "",
+        val noted: String = "",
     )
+
+    /**
+     * Что Claude дописал в заметку правкой (`notedOf` веба): `noted` сервера; ответ старого сервера — хвост
+     * `after.notes` за `before.notes`. Заметку не трогал — пусто.
+     */
+    fun notedOf(c: Change): String {
+        if (!c.after.has("notes")) return ""
+        if (c.noted.isNotBlank()) return c.noted.trim()
+        val was = c.before.str("notes").trimEnd()
+        val now = c.after.str("notes")
+        return if (now.startsWith(was)) now.substring(was.length).trim() else ""
+    }
 
     data class Note(val summary: String, val projectId: String)
 
@@ -256,6 +272,7 @@ object DelaAsk {
                 after = c.optJSONObject("after") ?: JSONObject(),
                 statusFrom = st?.takeIf { it.length() == 2 }?.let { if (it.isNull(0)) "" else it.optString(0) }.orEmpty(),
                 statusTo = st?.takeIf { it.length() == 2 }?.let { if (it.isNull(1)) "" else it.optString(1) }.orEmpty(),
+                noted = c.str("noted"),
             )
         }
         val errors = o.optJSONArray("errors")?.let { a -> (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.isNotBlank() && it != "null" } } }.orEmpty()
@@ -340,6 +357,9 @@ object DelaAsk {
         return out
     }
 
+    /** «Вернуть» реплики: [undoOps] её ответа и отмена дел, отделённых кнопкой «Это отдельное дело» (`turnUndo` веба). */
+    fun undoOps(t: Turn): List<JSONObject> = undoOps(t.result) + t.split.values.map { Dela.statusOp("task.cancel", it.id) }
+
     /** Что поменялось — словами, как в вебе: «срок 07.10, в «Сейчас», жду Наташа». */
     fun describe(c: Change, s: Dela.Snapshot, today: String = s.today): String {
         val a = c.after
@@ -363,7 +383,7 @@ object DelaAsk {
             }
             out += DelaGroups.withWho(ball, if (a.optBoolean("owed", false)) Dela.OWED else a.str("ball"), who)
         }
-        if (a.has("notes")) out += "дописал заметку"
+        if (a.has("notes")) out += "дописал заметку" + notedOf(c).takeIf { it.isNotBlank() }?.let { n -> ": «" + (if (n.length > 80) n.take(80) + "…" else n) + "»" }.orEmpty()
         if (a.has("estimate_min")) out += if (a.isNull("estimate_min") || a.optInt("estimate_min", 0) == 0) "без оценки" else "${a.optInt("estimate_min")} мин"
         if (a.has("labels")) out += a.strings("labels").let { if (it.isEmpty()) "без меток" else "метки " + it.joinToString(", ") }
         when (c.statusTo) {
@@ -383,7 +403,13 @@ object DelaAsk {
      * Реплика разговора с Claude (docs/dela-phone-9.md, п. 12; `claudeSay` веба):
      * что сказано, что он ответил и сделал; [undone] — «Вернуть» уже нажато.
      */
-    data class Turn(val said: String, val result: Result, val undone: Boolean = false)
+    data class Turn(
+        val said: String,
+        val result: Result,
+        val undone: Boolean = false,
+        /** «Это отдельное дело» (запись 23): id правки → что отделено; «Вернуть» реплики отменяет и это. */
+        val split: Map<String, Dela.NoteSplit> = emptyMap(),
+    )
 
     /** Сколько прошлых реплик видит Claude (`TALK_KEEP` веба). */
     const val TALK_KEEP = 8
@@ -424,10 +450,11 @@ object DelaAsk {
             for (x in r.decided) out += "П${x.n} " + if (x.accept) DECIDED[x.kind] ?: "принято" else "отклонено"
             for (c in r.crm) out += c.what
         }
+        for (sp in t.split.values) out += "отдельным делом: " + sp.title
         if (r.errors.isNotEmpty()) out += "не вышло: " + r.errors.joinToString("; ")
         val done = out.joinToString("; ").ifBlank { "ничего не менял" }.take(700) + if (t.undone) " — Саша вернул всё это как было" else ""
         val memo = JSONObject().put("said", t.said.take(600)).put("reply", r.reply.take(900)).put("done", done)
-        val ids = turnIds(r)
+        val ids = (turnIds(r) + t.split.values.map { it.id }).filter { Dela.isUuid(it) }.distinct().take(TALK_IDS)
         if (ids.isNotEmpty()) memo.put("ids", JSONArray().apply { ids.forEach { put(it) } })
         return memo
     }

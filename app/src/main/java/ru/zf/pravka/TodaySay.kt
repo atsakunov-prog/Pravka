@@ -250,6 +250,19 @@ private suspend fun PravkaApp.sayAsk(text: String, scope: org.json.JSONObject): 
 // ---------------------------------------------------------------------------
 
 /**
+ * Пачка «Это отдельное дело» с «Сегодня» (16.10.2026, запись 23, docs/dela-phone-29.md §3) — сразу, как `hangSend`
+ * вкладки Дел: отказ сервера — тостом здесь же, без связи — уйдёт сама.
+ */
+private fun sendSplit(app: PravkaApp, ops: List<org.json.JSONObject>, said: String) {
+    app.appScope.launch {
+        app.delaStore.enqueue(ops)
+        val sent = app.delaSync.pushNow(4_000L)
+        val refused = app.delaStore.tell(ops)
+        ru.zf.pravka.ui.Feedback.toast(app, refused?.text ?: if (sent) said else "$said — уйдёт на сервер, когда будет связь")
+    }
+}
+
+/**
  * «Куда что» — короткая страница для владельца (договор захвата, п. 6): файл `kuda-chto.md` из APK (тот же текст видит
  * веб). Таблица на узком экране — карточками: фраза жирно, ниже «куда ляжет · что увидишь · когда вернётся · как
  * поправить» — подписями из шапки столбцов.
@@ -469,11 +482,25 @@ internal fun TodaySayBarV2(app: PravkaApp, nav: TodayNav, data: TodayV2Data, mod
                 val turn = cur.turns.getOrNull(i) ?: return@TalkSheet
                 talk = cur.copy(turns = cur.turns.mapIndexed { k, t -> if (k == i) t.copy(undone = true) else t })
                 app.appScope.launch {
-                    // Отмена — обычными операциями очереди с op_id, как во вкладке Дел.
-                    app.delaStore.enqueue(DelaAsk.undoOps(turn.result))
+                    // Отмена — обычными операциями очереди с op_id, как во вкладке Дел (с отделённым «Это отдельное дело»).
+                    app.delaStore.enqueue(DelaAsk.undoOps(turn))
                     val sent = app.delaSync.pushNow(4_000L)
                     ru.zf.pravka.ui.Feedback.toast(app, if (sent) "Вернул как было" else "Вернул как было — уйдёт на сервер, когда будет связь")
                 }
+            },
+            // «Это отдельное дело» (запись 23, docs/dela-phone-29.md §3) — как во вкладке Дел.
+            onSplit = { i, ch ->
+                val cur = talk ?: return@TalkSheet
+                val t0 = snap.tasks[ch.id] ?: return@TalkSheet
+                val sp = ru.zf.pravka.core.Dela.splitNoteOps(DelaAsk.notedOf(ch), t0, tree = snap.treeOn) ?: return@TalkSheet
+                talk = cur.copy(turns = cur.turns.mapIndexed { k, t -> if (k == i) t.copy(split = t.split + (ch.id to sp)) else t })
+                sendSplit(app, sp.ops, "Отдельное дело: «${sp.title.take(40)}»")
+            },
+            onUnsplit = { i, cid ->
+                val cur = talk ?: return@TalkSheet
+                val sp = cur.turns.getOrNull(i)?.split?.get(cid) ?: return@TalkSheet
+                talk = cur.copy(turns = cur.turns.mapIndexed { k, t -> if (k == i) t.copy(split = t.split - cid) else t })
+                sendSplit(app, sp.back, "Вернул: «${sp.title.take(40)}» — снова в заметке")
             },
         )
     }

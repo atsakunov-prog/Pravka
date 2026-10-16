@@ -1520,6 +1520,55 @@ object Dela {
         JSONObject().put("op", op).put("op_id", opId).put("id", id)
 
     /**
+     * «Это отдельное дело» (16.10.2026, отладка, запись 23; docs/dela-phone-29.md §3; `splitNoteOps` веба — одно правило):
+     * Claude дописал в заметку дела «Проговорить с ним Бету», а это ещё одно дело («я редко когда делаю комментарии к
+     * делам, я в основном завожу дополнительные дела»). [ops] — одной пачкой: `task.create` (дописанное названием, «Зачем»
+     * дела — у цели её шагом, его клиент, сделка и человек; срок не ставится — он был сказан для самого дела, а внутри
+     * дела-родителя сервер возьмёт срок родителя) и `task.set notes` без дописанного, с `was`; [back] — «Вернуть». Заметку
+     * успели поправить и дописанного в ней нет — только новое дело.
+     */
+    data class NoteSplit(val id: String, val title: String, val ops: List<JSONObject>, val back: List<JSONObject>)
+
+    /**
+     * Заметка без дописанного (`noteCut` веба): последнее вхождение вырезано, стык — одной строкой; пусто — "" (уйдёт
+     * null); его в заметке нет — null (заметку не трогаем).
+     */
+    fun noteCut(cur: String, noted: String): String? {
+        val n = noted.trim()
+        if (n.isEmpty()) return null
+        val i = cur.lastIndexOf(n)
+        if (i < 0) return null
+        return listOf(cur.substring(0, i).trimEnd(), cur.substring(i + n.length).trimStart()).filter { it.isNotEmpty() }.joinToString("\n")
+    }
+
+    /** Название нового дела из дописанного: одной строкой, без точки в конце, с большой буквы (`splitTitle` веба). */
+    fun splitTitle(noted: String): String {
+        val s = noted.replace(Regex("\\s+"), " ").trim().replace(Regex("[\\s.,;:]+$"), "")
+        return (s.take(1).uppercase() + s.drop(1)).take(300)
+    }
+
+    /** Пачка «Это отдельное дело» для дела [t] (как оно сейчас) и дописанного [noted]; нечего отделять — null. [tree] —
+     *  сервер знает «Зачем» (`Snapshot.treeOn`): иначе `why_id` не уходит. */
+    fun splitNoteOps(noted: String, t: Task, tree: Boolean = true, id: String = newId()): NoteSplit? {
+        val title = splitTitle(noted)
+        if (title.isEmpty()) return null
+        val task = JSONObject().put("id", id).put("title", title).put("source", "manual")
+        val why = if (t.goal) t.id else t.whyId
+        if (tree && why.isNotBlank()) task.put("why_id", why)
+        if (t.projectId.isNotBlank()) task.put("project_id", t.projectId)
+        if (t.dealId.isNotBlank()) task.put("deal_id", t.dealId)
+        if (t.personId.isNotBlank()) task.put("person_id", t.personId)
+        val ops = mutableListOf(JSONObject().put("op", "task.create").put("op_id", newId()).put("task", task))
+        val back = mutableListOf(statusOp("task.cancel", id))
+        val cut = noteCut(t.notes, noted)
+        if (cut != null) {
+            ops += setOp(t.id, JSONObject().put("notes", nul(cut)), JSONObject().put("notes", nul(t.notes)))
+            back += setOp(t.id, JSONObject().put("notes", nul(t.notes)), JSONObject().put("notes", nul(cut)))
+        }
+        return NoteSplit(id, title, ops, back)
+    }
+
+    /**
      * Комментарий к делу. [private] — «только мне» (аудит №8): поле уходит, только когда оно true, — и звать так
      * можно только при флаге `privacy` ([Snapshot.privacyOn]): старый сервер отверг бы операцию с незнакомым полем
      * целиком и запомнил отказ по op_id.
