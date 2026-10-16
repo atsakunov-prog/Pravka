@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import uuid
 from pathlib import Path
 
@@ -1008,6 +1009,70 @@ def test_web_line_edit_commands_go_to_claude(dela, at):
         out = ask.run(dela, "sasha", text, {"title": "Сейчас"}, "", None, ask_fn=fake)
         assert out["route"] == "edit", text
     assert len(calls) == 3
+
+
+def test_rule_first_with_open_card(dela, at, caplog):
+    """Отладка 16.10.2026, запись 14 (правка 04 тяжёлой полосы): «open» больше не в ask.RULE_SKIP. На широком экране
+    карточка справа открыта почти всегда, и «купить хлеб» из верхнего поля шло двумя вызовами Opus (строка и захват) —
+    около $0,1 и 10–20 с. Теперь простое дело при открытой карточке раскладывает правило ($0, без ключа), а фразу про
+    открытое дело — слова «сначала / до этого / ему / туда …», вложенность, правку в любом месте фразы, «сделано» без
+    человека, дело одним словом — по-прежнему Claude с карточкой. Без карточки — как раньше."""
+    seed(dela)
+    card = ops(dela, "sasha", {"op": "task.create", "task": {"title": "Подготовить термшит"}})[0]["task"]
+    scope = {"title": "Сейчас", "task_ids": [card["id"]], "open": card["id"]}
+    calls = []
+
+    def fake(system, message):
+        calls.append(message)
+        return {"route": "edit", "reply": "ок", "changes": [], "create": [], "suggestions": [], "card": [], "refs": []}
+
+    def boom(head, user_text):
+        raise AssertionError("захват моделью не нужен — правило")
+
+    with caplog.at_level(logging.INFO, logger="dela.ask"):
+        out = ask.run(dela, "sasha", "купить хлеб", scope, "", None, ask_fn=fake, parse_fn=boom)
+    assert out["route"] == "capture" and calls == [], "Opus не зовётся: ни строка, ни захват"
+    [item] = out["capture"]["items"]
+    assert item["bucket"] == "back" and out["tasks"][0]["title"] == "Купить хлеб"
+    assert out["tasks"][0]["why_id"] is None, "простое дело — не внутри открытого"
+    assert "правило при открытой карточке: back" in caplog.text
+
+    def count():
+        with dela_db.session(dela, "sasha") as c:
+            return c.execute("SELECT count(*) AS n FROM tasks.tasks").fetchone()["n"]
+
+    before = count()
+    for text, why in (("до этого надо набросать драфт", "слово «до этого»"), ("позвонить ему", "слово «ему»"),
+                      ("сначала позвонить юристу", "слово «сначала»"), ("туда же добавить выписку", "слово «туда»"),
+                      ("после этого отправить счёт", "слово «после этого»"), ("вложи в сверку", None),
+                      ("перенеси на пятницу", None), ("это в сейчас", None),  # и без карточки: EDIT_FIRST, SCREEN_WORDS
+                      ("надо перенести на пятницу", "правка «перенести»"), ("позвонить завтра", "дело одним словом"),
+                      ("напомни позвонить в 12", "дело одним словом"),
+                      ("сделано, отправил договор", "сделано без человека")):
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="dela"):
+            assert ask.rule_first(dela, "sasha", text, scope) is None, text
+        assert why is None or f"при открытой карточке молчит ({why})" in caplog.text, (text, caplog.text)
+    assert count() == before, "молчание правила ничего не пишет"
+    # Названный человек — обычная фраза: правило берёт и при открытой карточке.
+    got = ask.rule_first(dela, "sasha", "позвонить Ивану Тестову завтра", scope)
+    assert got and got["route"] == "capture" and got["tasks"][0]["title"] == "Позвонить Ивану Тестову"
+    # Без карточки — как раньше: строже правило не становится.
+    for text in ("позвонить завтра", "сделано, отправил договор"):
+        got = ask.rule_first(dela, "sasha", text, {"title": "Сейчас", "task_ids": [card["id"]]})
+        assert got and got["route"] == "capture", text
+    # Своя строка карточки дела — по-прежнему мимо правила.
+    assert ask.rule_first(dela, "sasha", "купить молоко", {"card": "task", "open": card["id"]}) is None
+
+    # Веб без ключа: при открытой карточке простое дело ложится правилом, фраза про карточку — отказ «нет ключа».
+    h = {"Authorization": f"Bearer {tokens.issue(dela, 'sasha', 'device', 'веб-открытая-карточка')}"}
+    client = TestClient(api.build(Config(db_url=dela)))
+    r = client.post("/api/ask", headers=h, json={"text": "купить молоко", "scope": {"title": "Сейчас", "open": card["id"]}})
+    assert r.status_code == 202, r.text
+    got = client.get(f"/api/ask/{r.json()['job']}", headers=h).json()
+    assert got["status"] == "done" and got["route"] == "capture" and got["capture"]["items"][0]["bucket"] == "back"
+    r = client.post("/api/ask", headers=h, json={"text": "позвонить ему", "scope": {"title": "Сейчас", "open": card["id"]}})
+    assert r.status_code == 422 and "нет ключа" in r.json()["error"]
 
 
 # ── Тёзки: вопрос в «Подскажи» (проверка 16.10.2026) ─────────────────────

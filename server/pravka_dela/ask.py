@@ -2140,7 +2140,11 @@ def fell_said(fell: list[dict], today: dt.date) -> str:
 # («напомни в 12 …», «позвонить Ивану на неделе», «идея: …», «Иван сказал …», «позвонил Ольге»), раскладывается без
 # Claude — и без ключа; route «new» от Claude — та же раскладка корзинами, что у телефона (capture.say_now).
 # rule_tried — правило уже молчало в api.ask_start (до суточного предела): второй раз его не спрашиваем.
-RULE_SKIP = ("history", "card", "project_id", "person_id", "deal_id", "selected_ids", "open", "focus", "step", "kstati",
+# «open» (карточка справа в вебе, строка внизу вкладки телефона при открытом деле) — не повод молчать (16.10.2026, запись
+# 14): на широком экране карточка открыта почти всегда, и «купить хлеб» шло двумя вызовами Opus (строка и захват) — около
+# $0,1 и 10–20 с. При открытой карточке правило только строже: OPEN_WORDS, вложенность, правка где угодно во фразе
+# (rule_first) и сомнение по корзине (capture.open_doubt) — молчит и отдаёт Claude с карточкой.
+RULE_SKIP = ("history", "card", "project_id", "person_id", "deal_id", "selected_ids", "focus", "step", "kstati",
              "rule_tried")
 # Строка веба — ещё и правка того, что на экране: «перенести на завтра», «закрыть все просроченные», «это в сейчас».
 # Такие команды правилу захвата не отдаём — иначе «перенести» стало бы новым делом. У «Д» на телефоне этой развилки нет:
@@ -2152,24 +2156,58 @@ EDIT_FIRST = frozenset("""перенести перенеси закрыть з�
 поставить поставь снять сними вернуть верни объединить объедини вложить вложи положи переложить переложи вынуть вынь
 засунуть засунь""".split())
 SCREEN_WORDS = re.compile(r"(?:^|\s)(?:это|эти|этих|этому|его|их|все|всё|просроченн\w*|выбранн\w*|#\d+|п\d+)(?:$|[\s,.!?:])", re.I)
+# Слова про открытое дело (строка при открытой карточке, 16.10.2026, запись 14): «сначала / перед этим / после этого …» —
+# шаг к нему или порядок, «позвонить ему», «с ней», «туда же», «тут» — его человек или само дело. С ними правило молчит:
+# Claude видит карточку и решает, новое ли это дело, дело внутри или правка открытого. Текст — без «ё» (как у SCREEN_WORDS).
+OPEN_WORDS = re.compile(
+    r"(?:^|[\s,.!?:;(«\"])(?:сначала|перед\s+этим|после\s+этого|до\s+этого|ему|ей|ним|ней|нему|него|нее|ее|им|он|она|оно|"
+    r"они|туда|сюда|тут|здесь|там|это|этому|этим|этом|этого|этой|этот|эта|эту)(?=$|[\s,.!?:;)»\"])")
+
+
+def open_words(text: str) -> str:
+    """Почему правило молчит при открытой карточке, словами для журнала; «» — можно. Слово про открытое дело
+    (OPEN_WORDS), вложенность (capture.NEST_SAID) или правка где угодно во фразе («надо перенести на пятницу» — не дело
+    «Перенести», а срок открытого; без карточки EDIT_FIRST смотрит только первое слово)."""
+    from . import capture
+
+    low = " ".join(text.lower().replace("ё", "е").split())
+    m = OPEN_WORDS.search(low)
+    if m:
+        return "слово «" + m.group(0).strip(" ,.!?:;(«\"") + "»"
+    if capture.nest_said(text):
+        return "вложенность"
+    edit = next((w for w in (x.strip(",.:;!?«»\"()") for x in low.split()) if w in EDIT_FIRST), None)
+    return f"правка «{edit}»" if edit else ""
 
 
 def rule_first(url: str, user: str, text: str, scope: dict, via: str = "web", actor: str | None = None) -> dict | None:
     """Правило захвата до Claude: в разговоре, в карточке, на странице проекта, человека или сделки и при выбранных
     делах — нет (там «это» и экран важнее); команда про экран («перенести…», «эти…», «все просроченные») — тоже нет.
+    При открытой карточке справа (scope.open, без своей строки карточки) — да, но строже: слова про открытое дело,
+    вложенность и правка в любом месте фразы (open_words), сомнение по корзине (capture.open_doubt) — нет.
     Узнало — ответ строки (route «capture»), нет — None."""
     if any(scope.get(k) for k in RULE_SKIP):
         return None
     words = text.lower().replace("ё", "е").split()
     if not words or words[0].strip(",.:!") in EDIT_FIRST or SCREEN_WORDS.search(text.lower().replace("ё", "е")):
         return None
-    got = store.apply_ops(url, user, [{"op": "capture.say", "text": text, "ref": str(uuid.uuid4()), "lane": "rule",
-                                       "from": "web"}], via, actor)["results"][0]
-    if not got.get("ok") or (got.get("capture") or {}).get("status") in (None, "none"):
-        return None
     from . import capture
 
+    opened = bool(scope.get("open"))
+    if opened:
+        why = open_words(text)
+        if why:
+            log.info("правило при открытой карточке молчит (%s)", why)
+            return None
+    op = {"op": "capture.say", "text": text, "ref": str(uuid.uuid4()), "lane": "rule", "from": "web"}
+    if opened:
+        op["open_card"] = True
+    got = store.apply_ops(url, user, [op], via, actor)["results"][0]
+    if not got.get("ok") or (got.get("capture") or {}).get("status") in (None, "none"):
+        return None
     cap = got["capture"]
+    if opened:
+        log.info("правило при открытой карточке: %s", ", ".join(str(x.get("bucket")) for x in cap.get("items") or []))
     tasks, notes = capture.rows_of(url, user, cap)
     return {"route": "capture", "reply": "", "answers": [], "changed": [], "decided": [], "crm": [], "tasks": tasks, "notes": notes,
             "errors": [x["error"] for x in cap.get("items") or [] if x.get("bucket") == "error"], "refs": [],

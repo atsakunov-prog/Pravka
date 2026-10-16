@@ -1138,6 +1138,21 @@ def rule(conn, user: str, text: str, now: dt.datetime | None = None, ctx: Ctx | 
     return None
 
 
+def open_doubt(got: dict) -> str | None:
+    """Строка веба при открытой карточке дела (`open_card` у capture.say — ставит только ask.rule_first; 16.10.2026,
+    запись 14): правило узнало фразу, но она, скорее всего, про открытое дело — тогда молчим, и её разбирает Claude с
+    карточкой. «Сделано, отправил» без человека — закрыть открытое, а не новое сделанное «Отправил»; дело одним словом
+    («позвонить завтра», «сделать в пятницу», «напомни позвонить в 12») — срок или напоминание открытого, а не дело
+    «Позвонить». Названный предмет или человек («купить хлеб», «позвонил Ивану») — обычная фраза, правило берёт. Сомнение
+    — молчим: лишний вызов Claude дешевле неверного дела. Ответ — почему молчим, словами для журнала; None — берём."""
+    for x in got.get("items") or []:
+        if x.get("bucket") == "did" and not (x.get("fields") or {}).get("person_id") and not x.get("twins"):
+            return "сделано без человека"
+        if x.get("bucket") in TASK_BUCKETS and len(str(x.get("title") or "").split()) < 2:
+            return "дело одним словом"
+    return None
+
+
 # ── Раскладка: корзина → операции, строка, кнопки ───────────────────────
 
 
@@ -1673,7 +1688,8 @@ def op_capture_say(conn, user, op):
 
     Правило узнало — записано сразу, ответ — строка и кнопки. Нет: lane «rule» (телефон параллельно спрашивает свою
     развилку) — ничего не пишем, status «none»; lane «auto» — наговорка ждёт модели (pending), строка «Записал —
-    раскладываю», фоновый разбор будится. Повтор с тем же ref — прежний итог."""
+    раскладываю», фоновый разбор будится. Повтор с тем же ref — прежний итог. open_card — строка веба при открытой
+    карточке дела (ask.rule_first): узнанное, что скорее про открытое дело, правило не берёт (open_doubt)."""
     from . import store
 
     text = " ".join(str(op.get("text") or "").split())
@@ -1693,6 +1709,11 @@ def op_capture_say(conn, user, op):
     started = time.monotonic()
     ctx = Ctx(conn, user, now)
     got = rule(conn, user, text, now, ctx)
+    if got is not None and op.get("open_card"):
+        why = open_doubt(got)
+        if why:
+            log.info("правило при открытой карточке молчит (%s): %s", why, _short(text, 60))
+            got = None
     source, dsource = _source(frm)
     hint = str(op.get("hint") or "")[:4000] or None
     if got is None and lane == "rule":
