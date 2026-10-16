@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -106,6 +107,8 @@ internal class CrmUiState {
     var peopleQuery by mutableStateOf("")
     /** «Переименовать» клиента — лист с новым именем (`prompt` веба); id проекта. */
     var renaming by mutableStateOf<String?>(null)
+    /** «+ проект» у клиента (16.10.2026 вечер, запись 27) — лист с названием «Клиент: тема»; id клиента. */
+    var newDealFor by mutableStateOf<String?>(null)
 }
 
 
@@ -593,6 +596,23 @@ private fun ClientRow(ctx: DelaCrmContext, cl: DelaCrm.Client, money: Boolean) {
             Text("и в архиве: ${deals.size - shown.size}", style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant,
                 modifier = Modifier.padding(start = 30.dp, bottom = 4.dp))
         }
+        // «+ проект» под проектами клиента (`cdeal add` веба; 16.10.2026 вечер, запись 27).
+        NewDealLine { ctx.ui.newDealFor = cl.id }
+    }
+}
+
+/** Строка «+ проект» под проектами клиента: тап — лист нового проекта. */
+@Composable
+private fun NewDealLine(onClick: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+            .padding(start = 30.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Glyphs.Plus, contentDescription = null, tint = c.primary, modifier = Modifier.size(14.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("проект", style = MaterialTheme.typography.bodyMedium, color = c.primary)
     }
 }
 
@@ -872,8 +892,12 @@ internal fun LazyListScope.crmClientTop(ctx: DelaCrmContext, projectId: String) 
         .map { DelaCrm.overlayDeal(it, ctx.ops, ctx.today) }
         .sortedWith(compareBy<DelaCrm.Deal>({ it.closed }, { Dela.STAGES.indexOf(it.stage) }, { it.name.lowercase() }))
     item(key = "sec:deals") {
-        PaperCard(label = "Проекты · ${deals.count { !it.closed }}") {
-            if (deals.isEmpty()) PaperHint("Проектов нет. Новый — скажи Claude внизу: «новый проект — финмодель».")
+        PaperCard(
+            label = "Проекты · ${deals.count { !it.closed }}",
+            // «+ проект» (16.10.2026 вечер, запись 27) — справа в заголовке, как «+ Зачем» у веба.
+            trailing = if (project != null) ({ PaperTextButton("+ проект", onClick = { ctx.ui.newDealFor = projectId }) }) else null,
+        ) {
+            if (deals.isEmpty()) PaperHint("Проектов нет.")
             deals.forEachIndexed { i, d -> if (i > 0) RowRule(); DealRow(ctx, d, money) }
         }
     }
@@ -1585,6 +1609,7 @@ internal fun CrmSheets(ctx: DelaCrmContext) {
         }
     }
     ui.renaming?.let { id -> ctx.snap.projects[id]?.let { RenameClientSheet(ctx, it) } }
+    ui.newDealFor?.let { id -> NewDealSheet(ctx, id) }
     ui.closing?.let { d ->
         var outcome by remember(d.id) { mutableStateOf("won") }
         var reason by remember(d.id) { mutableStateOf("") }
@@ -2031,6 +2056,56 @@ private fun RenameClientSheet(ctx: DelaCrmContext, p: Dela.Project) {
         PaperField(value = name, onValueChange = { name = it }, label = "Как теперь зовут")
         if (clash != null) PaperHint(clash.said)
         PaperHint("Новое имя — везде: дела, проекты, хронология и названия встреч. Старое останется другим именем клиента.")
+    }
+}
+
+/**
+ * «+ проект» у клиента (отладка 16.10.2026 вечер, запись 27: «у меня нет кнопки в проектах добавить новый проект») —
+ * `newDeal` веба: название «Клиент: тема», стадия — лид, операция `deal.create` той же очередью, что любая правка CRM.
+ * Проект виден сразу (id даёт телефон) — открывается его страница, как в вебе.
+ */
+@Composable
+private fun NewDealSheet(ctx: DelaCrmContext, clientId: String) {
+    val client = ctx.snap.projects[clientId]
+    var name by remember(clientId) { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(DelaCrm.newDealName(client?.name.orEmpty()), androidx.compose.ui.text.TextRange(DelaCrm.newDealName(client?.name.orEmpty()).length))) }
+    val title = name.text.trim()
+    val ready = title.isNotBlank() && title != DelaCrm.newDealName(client?.name.orEmpty()).trim()
+    val make = {
+        if (ready) {
+            ctx.ui.newDealFor = null
+            val id = Dela.newId()
+            ctx.run(
+                listOf(DelaCrm.dealCreateOp(id, clientId, title)),
+                listOf(DelaCrm.clientPath(clientId), DelaCrm.CLIENTS, DelaCrm.PIPELINE),
+                "Проект заведён: $title",
+            )
+            ctx.push(DelaPage.Deal(id))
+        }
+    }
+    PaperSheet(
+        onDismiss = { ctx.ui.newDealFor = null },
+        title = "Новый проект",
+        icon = Glyphs.Plus,
+        subtitle = client?.name,
+        footer = {
+            Spacer(Modifier.weight(1f))
+            PaperButton("Завести", icon = Glyphs.Plus, primary = true, enabled = ready, onClick = make)
+        },
+    ) {
+        val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+        androidx.compose.material3.OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = { Text("Название: «Клиент: тема»") },
+            singleLine = true,
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { make() }),
+            // Вид — как у `PaperField` (то же поле, только с курсором после «Клиент: »).
+            shape = RoundedCornerShape(if (ru.zf.pravka.ui.Look.v2) ru.zf.pravka.ui.KvShape.Control else 14.dp),
+            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.fillMaxWidth().focusRequester(focus),
+        )
+        androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     }
 }
 

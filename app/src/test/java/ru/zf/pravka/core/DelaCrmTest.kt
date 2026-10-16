@@ -795,4 +795,32 @@ class DelaCrmTest {
         assertFalse(DelaCrm.canMerge(s, "olga"))
         assertFalse(DelaCrm.canMerge(s, "nobody"))
     }
+
+    @Test
+    fun `«+ проект» у клиента — deal_create с id телефона, проект виден в копии сразу`() {
+        // Отладка 16.10.2026 вечер, запись 27: «нет кнопки в проектах добавить новый проект». Проект клиента — сделка CRM,
+        // `deal.create` из списка операций контракта, как `newDeal` веба: «Клиент: тема», стадия — лид.
+        assertTrue("deal.create" in part1.getJSONArray("ops_list").let { a -> (0 until a.length()).map { a.getString(it) } })
+        val s = snap()
+        val client = s.projects.values.first { it.kind == "client" }
+        assertEquals(client.name + ": ", DelaCrm.newDealName(client.name))
+        assertEquals("", DelaCrm.newDealName("  "))
+        val op = DelaCrm.dealCreateOp("d-new", client.id, "  ${client.name}: финмодель ", opId = "op-1")
+        assertEquals("deal.create", op.getString("op"))
+        assertEquals("op-1", op.getString("op_id"))
+        val data = op.getJSONObject("data")
+        assertEquals(setOf("id", "project_id", "name", "stage"), data.keys().asSequence().toSet())
+        assertEquals("${client.name}: финмодель", data.getString("name"))
+        assertEquals("lead", data.getString("stage"))
+        // Копия поверх очереди: проект у клиента сразу (страница проекта открывается до ответа), второй раз не встаёт.
+        val v = Dela.overlay(s, listOf(op, op), "sasha", today, nowIso)
+        val d = v.deals.getValue("d-new")
+        assertEquals(client.id, d.projectId)
+        assertEquals("lead", d.stage)
+        assertTrue(d.local)
+        assertFalse(d.closed)
+        assertEquals(1, v.allDealsOf(client.id).count { it.id == "d-new" })
+        assertTrue(DelaCrm.navDeals(v, client.id, today).any { it.deal.id == "d-new" && it.short == "финмодель" })
+        assertTrue(Dela.describe(op, s).contains("новый проект"))
+    }
 }

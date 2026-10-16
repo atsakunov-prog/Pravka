@@ -707,6 +707,23 @@ object DelaCrm {
     fun dealSetOp(dealId: String, set: JSONObject, opId: String = Dela.newId()): JSONObject =
         op("deal.set", opId).put("id", dealId).put("set", set)
 
+    /**
+     * «+ проект» у клиента (отладка 16.10.2026 вечер, запись 27: «нет кнопки в проектах добавить новый проект»): проект
+     * клиента — это сделка CRM, `deal.create {project_id, name, stage: lead}`, как `newDeal` веба. Id даёт телефон: сделка
+     * видна в копии сразу (`Dela.overlay`), страница проекта открывается до ответа сервера.
+     */
+    fun dealCreateOp(dealId: String, projectId: String, name: String, opId: String = Dela.newId()): JSONObject =
+        op("deal.create", opId).put(
+            "data",
+            JSONObject().put("id", dealId).put("project_id", projectId).put("name", name.trim()).put("stage", NEW_DEAL_STAGE),
+        )
+
+    /** С какой стадии начинается новый проект — лид, как у веба. */
+    const val NEW_DEAL_STAGE = "lead"
+
+    /** Подсказка имени нового проекта: «Клиент: » — дальше тема (`newDeal` веба: «Клиент: тема»). */
+    fun newDealName(clientName: String): String = clientName.trim().let { if (it.isBlank()) "" else "$it: " }
+
     /** Правка клиента (`project.set`): описание (`note`), статус, папка, файлы. */
     fun projectSetOp(projectId: String, set: JSONObject, opId: String = Dela.newId()): JSONObject =
         op("project.set", opId).put("id", projectId).put("set", set)

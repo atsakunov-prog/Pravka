@@ -628,6 +628,24 @@ private fun NavDealRow(d: ru.zf.pravka.core.DelaCrm.NavDeal, selected: Boolean, 
     }
 }
 
+/** «+ проект» под проектами клиента в боковине — тише проектов, акцентом, как «+» веба. */
+@Composable
+private fun NavAddRow(text: String, onClick: () -> Unit) {
+    val t = LocalPravkaType.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(7.dp))
+            .clickable(role = Role.Button, onClickLabel = "новый $text", onClick = onClick)
+            .padding(start = 30.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Glyphs.Plus, contentDescription = null, tint = Kv.accent, modifier = Modifier.size(12.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(text, style = t.body.copy(fontSize = 13.sp, lineHeight = 17.sp), color = Kv.accent, modifier = Modifier.weight(1f))
+    }
+}
+
 /** Что показывает боковина Дел — одно на разложенный (колонкой) и сложенный (шторкой). */
 internal class DelaSideModel(
     val nav: String,
@@ -660,6 +678,8 @@ internal class DelaSideActions(
     val onSubmit: () -> Unit = {},
     /** «Отладка» — записки режима отладки (DelaDebugUi.kt); null — пункта нет (не владелец или сервер старый). */
     val onDebug: (() -> Unit)? = null,
+    /** «+ проект» под проектами раскрытого клиента (16.10.2026 вечер, запись 27); null — без CRM. */
+    val onNewDeal: ((String) -> Unit)? = null,
 )
 
 /**
@@ -758,7 +778,10 @@ internal fun DelaSide(m: DelaSideModel, a: DelaSideActions, modifier: Modifier =
                         )
                     }
                 }
-                if (open) for (d in deals) NavDealRow(d, selected = d.deal.id == m.hereDeal) { a.onDeal(d.deal.id) }
+                if (open) {
+                    for (d in deals) NavDealRow(d, selected = d.deal.id == m.hereDeal) { a.onDeal(d.deal.id) }
+                    a.onNewDeal?.let { add -> NavAddRow("проект") { add(r.project.id) } }
+                }
             }
         }
         if (m.projects.favorites.isNotEmpty()) {

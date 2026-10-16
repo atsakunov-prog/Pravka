@@ -1018,6 +1018,14 @@ object Dela {
                     val d = deals[op.str("id")] ?: continue
                     deals[d.id] = applyDeal(d, op.optJSONObject("set") ?: continue, today)
                 }
+                // «+ проект» у клиента (16.10.2026 вечер, запись 27): сделка видна до ответа — id даёт телефон.
+                "deal.create" -> {
+                    val d = op.optJSONObject("data") ?: continue
+                    val id = d.str("id").takeIf { it.isNotBlank() } ?: continue
+                    val pid = d.str("project_id").takeIf { it.isNotBlank() } ?: continue
+                    if (deals.containsKey(id)) continue
+                    deals[id] = applyDeal(Deal(id = id, projectId = pid, name = d.str("name"), stage = d.str("stage").ifBlank { "lead" }, local = true), d, today)
+                }
                 "payment.set" -> {
                     val p = payments[op.str("id")] ?: continue
                     val set = op.optJSONObject("set") ?: continue
@@ -1630,6 +1638,7 @@ object Dela {
             "interaction.add" -> "заметка в хронологию"
             "interaction.delete" -> "убрать запись хронологии"
             "deal.set" -> "сделка «${s.deals[op.str("id")]?.name?.take(60) ?: "?"}»"
+            "deal.create" -> "новый проект «${op.optJSONObject("data")?.str("name").orEmpty().take(60)}»"
             "payment.set" -> "оплата по сделке «${s.payments[op.str("id")]?.let { s.deals[it.dealId]?.name }?.take(60) ?: "?"}»"
             "person.set" -> "человек «${s.people[op.str("id")]?.label ?: "?"}»"
             "person.add" -> "имена и номера человека «${s.people[op.str("id")]?.label ?: "?"}»"

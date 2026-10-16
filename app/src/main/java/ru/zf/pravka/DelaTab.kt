@@ -1667,6 +1667,7 @@ fun DelaTab(
         onClientOpen = { ids, open -> crm.setClientOpen(ids, open) },
         onSubmit = { drawerOpen = false },
         onDebug = if (debugInfo != null && ru.zf.pravka.core.DelaDebug.FEATURE in snap.features) ({ drawerOpen = false; app.delaDebug.listOpen.value = true }) else null,
+        onNewDeal = if (crmOn) ({ id -> drawerOpen = false; crmUi.newDealFor = id }) else null,
     )
     androidx.compose.runtime.CompositionLocalProvider(LocalSeenRows provides seenRows) {
     Box(Modifier.fillMaxSize()) {
