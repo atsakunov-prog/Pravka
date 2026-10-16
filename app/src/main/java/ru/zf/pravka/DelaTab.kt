@@ -1876,7 +1876,7 @@ fun DelaTab(
         }
     }
     // «Для этого»: привычный лист нового дела — название (текстом или голосом через «П»), а «Зачем», проект, сделка,
-    // человек и срок уже от родителя (`DelaSteps.draft`, правило сервера `store.step_of`).
+    // человек и срок уже от родителя (`DelaSteps.draft`, правило сервера `nest.nest_fill`).
     stepFor?.let { parent ->
         val draft = remember(parent.id) { DelaSteps.draft(parent, snap, me, today) }
         DelaTaskSheet(

@@ -1411,6 +1411,12 @@ object Dela {
     private val CREATE_FIELDS = EDITABLE + "money"
 
     /**
+     * Что новое дело внутри дела берёт от родителя на сервере, если в операции этого нет (`nest.FILL_KEYS`,
+     * docs/dela-phone-29.md §1).
+     */
+    private val NEST_FILLED = listOf("project_id", "deal_id", "person_id", "due_date")
+
+    /**
      * Время срока «9:30», «930», «18.00» — в «09:30»; не время — null. Сервер
      * хранит его как `time` и отдаёт «09:30:00»: сравниваем первые пять знаков.
      */
@@ -1492,6 +1498,11 @@ object Dela {
             if (k == "ball" && v == MINE) continue
             task.put(k, v)
         }
+        // Дело внутри дела (why_id): поле, очищенное в листе «Для этого», — явным null. Сервер с 16.10.2026
+        // (`nest.nest_fill` в `store.op_task_create`, docs/dela-phone-29.md §1) сам дополняет новое дело полями
+        // родителя, если их в операции нет: пропуск он принял бы за «не назвал» и вернул бы человека или срок, которые
+        // Саша убрал. Под целью сервер не дополняет — null там ничего не меняет; старый сервер null принимает как пустое.
+        if (t.whyId.isNotBlank()) for (k in NEST_FILLED) if (!task.has(k)) task.put(k, JSONObject.NULL)
         // Захват (15.10.2026): вид и «потом» ставит только тот, кто видел флаг `capture` (`CaptureFallback`) — у дела
         // по умолчанию их нет, и старый сервер незнакомых полей не увидит.
         if (t.remind) task.put("kind", KIND_REMIND)
