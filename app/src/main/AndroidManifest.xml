@@ -128,9 +128,14 @@
             android:name="com.google.mlkit.vision.DEPENDENCIES"
             android:value="barcode_ui" />
 
+        <!-- adjustResize (отладка 16.10.2026 вечер, запись 26): окно не сдвигается под клавиатуру — высоту клавиатуры
+             учитывает само приложение один раз (imePadding у корня MainActivity). Без режима система выбирала
+             adjustPan (у Compose нет «прокручиваемых» View) и сдвигала окно вверх, а строка «сказать» поднималась ещё и
+             своим imePadding: приложение уезжало высоко, между ним и клавиатурой — пустая полоса. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:windowSoftInputMode="adjustResize"
             android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

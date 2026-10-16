@@ -3,6 +3,7 @@ package ru.zf.pravka
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import android.os.Bundle
@@ -1050,7 +1051,12 @@ private fun MainScreen(
     }
     LaunchedEffect(navRoute) { ru.zf.pravka.core.ScreenDebug.noteNav(navRoute, navTitle) }
 
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    // Клавиатура — один раз и здесь (отладка 16.10.2026 вечер, запись 26): окно с `adjustResize` не сдвигается, а
+    // экраны кончаются над клавиатурой, как при старом «сжатии окна». imePadding у корня ПОГЛОЩАЕТ отступ клавиатуры:
+    // `imePadding()` строк «сказать» и `navigationBarsPadding()` ниже по дереву при открытой клавиатуре дают ноль, а
+    // без неё — как раньше. До этого окно ещё и сдвигала система (adjustPan по умолчанию), и строка «сказать»
+    // поднималась дважды: приложение уезжало высоко, между ним и клавиатурой оставалась пустая полоса.
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).imePadding()) {
         androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalKovcheg provides host) {
         // Переходы — растворением, 250 мс (DESIGN §10): экран не едет, а сменяется.
         androidx.compose.animation.AnimatedContent(
