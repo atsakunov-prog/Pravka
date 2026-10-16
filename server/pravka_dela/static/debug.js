@@ -296,6 +296,20 @@ const DEBUG = (() => {
         return { n: 'П' + (i + 1), id, kind: g && g.kind, source: g && g.source, title: w.title, hint: w.hint || undefined, status: g && g.status,
           day: g && g.source === 'plan' ? (g.payload || {}).for_date : undefined };
       })),
+      // «Подскажи» двумя заходами (шаг 2 петли, фича asks; поезд 16.10.2026): на главной «Сейчас» и #/day — фаза, ближайший
+      // заход, свёрнутая строка или «раскрыто», числа и группы очереди в порядке вечера; вопросы на экране — в «new».
+      // Свёрнуто — вопросов на экране нет, и без этого ключа записка «не вижу вопросов» была бы непонятна.
+      asks: part('asks', () => {
+        if (!asksOn() || !(r.kind === 'now' || (r.kind === 'twin' && r.page === 'day'))) return undefined;
+        const q = asksQueue();
+        if (!q.total) return undefined;
+        const open = asksExpanded(q);
+        const line = open ? undefined : q.phase === 'today' && q.urgent.length ? (q.rest ? 'к вечеру: ' + q.rest : undefined) : asksFoldText(q);
+        return { phase: q.phase, next: q.next ? q.next.label : undefined, open: open && q.phase !== 'evening' ? true : undefined,
+          line, total: q.total, urgent: q.urgent.length, rest: q.rest, plan: q.plan || undefined,
+          clock: LS.get('asksAt', null) || undefined,
+          groups: q.groups.slice(0, 20).map((g) => ({ kind: g.kind, title: g.title, n: g.items.length, urgent: g.urgent || undefined })) };
+      }),
       // «Сейчас на завтра» (planBox): шапка, «N дня в «Сейчас»», отмеченное заранее; кандидаты — в «new» П-номерами.
       plan: part('plan', () => {
         const b = document.querySelector('main.list .plan-box');
@@ -520,7 +534,16 @@ const DEBUG = (() => {
           r.pos != null ? 'место ' + r.pos : null, r.inside ? 'внутри открыто ' + r.inside + (r.folded ? ' (свёрнуто)' : '') : null,
           r.group, r.grp, r.due, r.person, r.project, r.why, r.status, r.meta].filter(Boolean).join(' · '))))));
     }
-    const SKIP = new Set(['v', 'title', 'route', 'sub', 'mode', 'card', 'selected', 'rows', 'rows_total', 'kind']);
+    // «Подскажи» по фазе (шаг 2 петли): строкой — фаза, заход, свёрнутая строка или «раскрыто», числа; группы — по строке
+    // (те же слова, что debug.snapshot_lines сервера и DelaDebug.snapshotLines телефона).
+    if (s.asks) {
+      const a = s.asks;
+      out.push(el('div', { class: 'dbg-h' }, '«Подскажи»: ' + [`фаза ${a.phase}` + (a.next ? `, следующий заход ${a.next}` : ''),
+        a.open ? 'раскрыто щелчком до смены фазы' : null, a.line, `всего ${a.total || 0}, сгорает ${a.urgent || 0}, к вечеру ${a.rest || 0}`
+          + (a.plan ? `, кандидатов плана ${a.plan}` : '')].filter(Boolean).join(' · ')));
+      for (const g of a.groups || []) out.push(kv(g.title || g.kind, `${g.n}` + (g.urgent ? ` (сгорает ${g.urgent})` : '')));
+    }
+    const SKIP = new Set(['v', 'title', 'route', 'sub', 'mode', 'card', 'selected', 'rows', 'rows_total', 'kind', 'asks']);
     for (const [k, v] of Object.entries(s)) if (!SKIP.has(k)) out.push(kv(k, v));
     return out;
   }

@@ -84,6 +84,12 @@ object DelaDebug {
          */
         val plan: DelaViews.Plan? = null,
         val planBatch: Boolean = false,
+        /**
+         * «Подскажи» по фазе на главной «Сейчас» (поезд 16.10.2026, шаг 2 петли — `Asks.homeCard`): очередь и что из неё
+         * на экране; null — блока нет. Свёрнуто — вопросов в [newIds] нет, поэтому фаза и строка идут в снимок отдельно.
+         */
+        val asks: Asks.Queue? = null,
+        val asksCard: Asks.Card? = null,
     )
 
     // ------------------------------------------------------------ последние операции
@@ -303,6 +309,7 @@ object DelaDebug {
                 .put("pending", p.items.size).putIf("title", p.title).putIf("batch", sc.planBatch)
                 .putIf("marked", p.marked.map { t -> (if (t.num > 0) "#${t.num} " else "") + t.title }))
         }
+        asksJson(sc.asks, sc.asksCard)?.let { o.put("asks", it) }
         o.putIf("quick_text", sc.claudeText).putIf("claude_busy", sc.claudeBusy)
         o.put("today", today).put("seq", s.seq).put("synced_at", s.syncedAt).putIf("build", build)
         if (events.isNotEmpty()) o.put("events", JSONArray(events.takeLast(EVENTS)))
@@ -310,6 +317,27 @@ object DelaDebug {
             queue.filterNot { it.optString("op").startsWith("debug.") }.take(30).forEach { put(shrink(it, 0)) }
         })
         return o
+    }
+
+    /**
+     * «Подскажи» в снимке — та же форма, что у веба (`asks` в debug.js, `contract/dela-debug.json`): фаза, ближайший
+     * заход, `open` — раскрыто тапом (вечером не пишется), `line` — свёрнутая строка как на экране, числа, кандидаты плана
+     * числом, группы в порядке вечера. Без флага `asks` у сервера или без вопросов — null (ключа нет).
+     */
+    fun asksJson(q: Asks.Queue?, card: Asks.Card?): JSONObject? {
+        if (q == null || !q.on || q.total == 0 || card == null) return null
+        val open = card.mode == Asks.Mode.GROUPED && q.phase != Asks.Phase.EVENING
+        val line = when (card.mode) {
+            Asks.Mode.FOLD, Asks.Mode.URGENT -> card.fold
+            else -> null
+        }
+        return JSONObject().put("phase", q.phase.key).putIf("next", q.next?.label).putIf("open", open).putIf("line", line)
+            .put("total", q.total).put("urgent", q.urgent.size).put("rest", q.rest).putIf("plan", q.plan)
+            .put("groups", JSONArray().apply {
+                q.groups.take(20).forEach { g ->
+                    put(JSONObject().put("kind", g.kind).put("title", g.title).put("n", g.n).putIf("urgent", g.urgent))
+                }
+            })
     }
 
     // ------------------------------------------------------------ действия
@@ -396,7 +424,7 @@ object DelaDebug {
     }
 
     private val ROW_SKIP = setOf("id", "num", "title", "in_view", "depth", "in", "pos", "inside", "folded")
-    private val SNAP_SKIP = setOf("v", "title", "route", "sub", "mode", "card", "selected", "rows", "rows_total", "kind", "plan")
+    private val SNAP_SKIP = setOf("v", "title", "route", "sub", "mode", "card", "selected", "rows", "rows_total", "kind", "plan", "asks")
 
     /**
      * Снимок записки словами — как `snapshot_lines` сервера (что видит Claude в `debug show`): экран, режим, открытое
@@ -445,6 +473,25 @@ object DelaDebug {
             out += "«Сейчас на завтра»" + (if (p.optBoolean("batch")) " (пачка)" else "") + ": " + p.optString("line") +
                 p.optString("title").let { if (it.isBlank()) "" else " · $it" }
             p.optJSONArray("marked")?.let { m -> for (i in 0 until m.length()) out += "  отмечено: " + m.optString(i) }
+        }
+        // «Подскажи» по фазе — теми же словами, что `snapshot_lines` сервера: фаза и заход, строка или «раскрыто», числа,
+        // группы строкой на группу (вопросы на экране — в «new» П-номерами).
+        s.optJSONObject("asks")?.let { a ->
+            val plan = a.optInt("plan")
+            out += "«Подскажи»: " + listOf(
+                "фаза ${a.optString("phase").ifBlank { "?" }}" + a.optString("next").let { if (it.isBlank()) "" else ", следующий заход $it" },
+                if (a.optBoolean("open")) "раскрыто щелчком до смены фазы" else "",
+                a.optString("line"),
+                "всего ${a.optInt("total")}, сгорает ${a.optInt("urgent")}, к вечеру ${a.optInt("rest")}" +
+                    (if (plan > 0) ", кандидатов плана $plan" else ""),
+            ).filter { it.isNotBlank() }.joinToString(" · ")
+            a.optJSONArray("groups")?.let { gs ->
+                for (i in 0 until gs.length()) {
+                    val g = gs.optJSONObject(i) ?: continue
+                    out += "  " + g.optString("title").ifBlank { g.optString("kind") } + " · " + g.optInt("n") +
+                        g.optInt("urgent").let { if (it > 0) " (сгорает $it)" else "" }
+                }
+            }
         }
         for (k in s.keys()) {
             if (k in SNAP_SKIP) continue

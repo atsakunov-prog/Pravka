@@ -331,6 +331,39 @@ def test_snapshot_shows_plan_block(dela):
     assert st.index("if (isPlan(s)) return") < st.index("return { title: 'Уточнить: ' + ref")
 
 
+def test_snapshot_shows_asks_block(dela):
+    """Поезд 16.10.2026 (вагоны 3 и 7, правило 28 и абзац «Подскажи двумя заходами» к правилу 15): «Подскажи» по фазе в
+    снимке — фаза, ближайший заход, свёрнутая строка или «раскрыто», числа и группы. Свёрнуто — вопросов на экране нет
+    (new пуст), и без этой строки записка «где вопросы?» Claude была бы непонятна. Форма одна у веба и телефона."""
+    snap = {**SNAP, "route": "#/now", "title": "Сейчас",
+            "asks": {"phase": "before", "next": "15:00", "line": "Подскажи · к 15:00: 1 · к вечеру: 6", "total": 7,
+                     "urgent": 1, "rest": 6, "plan": 3, "clock": "2026-10-15T10:00:00+03:00",
+                     "groups": [{"kind": "client", "title": "ООО Ромашка", "n": 2, "urgent": 1},
+                                {"kind": "person", "title": "Иван", "n": 1}, {"kind": "small", "title": "Мелочь", "n": 4}]}}
+    r, _ = add(dela, snapshot=snap)
+    card = debug.tool(dela, "sasha", "show", str(r["note"]["num"]))
+    assert ("  «Подскажи»: фаза before, следующий заход 15:00 · Подскажи · к 15:00: 1 · к вечеру: 6 · всего 7, сгорает 1, "
+            "к вечеру 6, кандидатов плана 3") in card, card
+    assert "    ООО Ромашка · 2 (сгорает 1)" in card and "    Иван · 1" in card and "    Мелочь · 4" in card, card
+    assert "  asks: " not in card, "блок — словами, не одной строкой JSON"
+    opened = {**snap, "asks": {**snap["asks"], "open": True, "line": None}}
+    r, _ = add(dela, snapshot=opened, source="phone")
+    card = debug.tool(dela, "sasha", "show", str(r["note"]["num"]))
+    assert "  «Подскажи»: фаза before, следующий заход 15:00 · раскрыто щелчком до смены фазы · всего 7" in card, card
+    # Контракт снимка описывает каждый ключ блока (веб и телефон шлют одну форму).
+    words = CONTRACT["snapshot"]["asks"]
+    for k in [*snap["asks"], "open"]:
+        assert f"{k} — " in words or f", {k}" in words or f"{k}," in words, k
+    for k in snap["asks"]["groups"][0]:
+        assert k in words, k
+    # Веб: снимок берёт очередь у того же правила, что рисует блок (asksQueue, asksFoldText, asksExpanded), и только на
+    # главной «Сейчас» и двойнике «Сегодня».
+    js = (Path(debug.__file__).parent / "static" / "debug.js").read_text(encoding="utf-8")
+    part = js[js.index("asks: part('asks'"):js.index("plan: part('plan'")]
+    for name in ("asksOn()", "asksQueue()", "asksFoldText(q)", "asksExpanded(q)", "r.kind === 'now'", "r.page === 'day'"):
+        assert name in part, name
+
+
 def test_migration_again_is_harmless(dela, cfg):
     """Сборка поезда (16.10.2026) дала файлу номер 31 (в ветке — dela_0024_debug.sql): на копии, где он уже стоял под
     прежним именем, dela_0031 применится второй раз — и не падает, и записки целы."""

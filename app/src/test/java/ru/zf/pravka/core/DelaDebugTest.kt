@@ -261,6 +261,55 @@ class DelaDebugTest {
     }
 
     @Test
+    fun `«Подскажи» в снимке — фаза, свёрнутая строка или «раскрыто», группы`() {
+        // Поезд 16.10.2026 (вагоны 3 и 7, шаг 2 петли): свёрнуто — вопросов в «new» нет, поэтому фаза, строка и группы —
+        // ключом asks, той же формой, что у веба (contract/dela-debug.json); Claude читает их словами.
+        val day = "2026-10-15"
+        fun sg(id: String, created: String, payload: String, source: String = "meeting") =
+            Dela.Suggestion(id = id, forUser = "me", source = source, createdAt = created, payload = payload)
+        val s = Dela.Snapshot(
+            suggestions = listOf(
+                sg("h", "${day}T09:00:00+03:00", """{"urgency":"today","urgent_on":"$day","about":{"kind":"client","id":"k1","title":"ООО Ромашка"}}"""),
+                sg("c", "${day}T08:00:00+03:00", """{"urgency":"evening","about":{"kind":"person","title":"Иван Тестов"}}"""),
+                sg("p", "${day}T08:30:00+03:00", "{}", source = Dela.PLAN_SOURCE),
+            ).associateBy { it.id },
+            features = setOf(Dela.FEATURE_ASKS),
+        )
+        val at = OffsetDateTime.parse("${day}T10:00:00+03:00").toInstant().toEpochMilli()
+        val q = Asks.queue(s, "me", at, Asks.FACTORY, Asks.QUIET_FACTORY)
+        val folded = Asks.homeCard(q, null)!!
+        val o = DelaDebug.snapshot(
+            DelaDebug.Screen("nav:now", "Сейчас", newIds = folded.shown.map { it.id }, asks = q, asksCard = folded), s, day, "")
+        val a = o.getJSONObject("asks")
+        assertEquals("before", a.getString("phase"))
+        assertEquals("15:00", a.getString("next"))
+        assertEquals("Подскажи · к 15:00: 1 · к вечеру: 1", a.getString("line"))
+        assertFalse(a.has("open"))
+        assertEquals(listOf(2, 1, 1, 1), listOf(a.getInt("total"), a.getInt("urgent"), a.getInt("rest"), a.getInt("plan")))
+        val g = a.getJSONArray("groups")
+        assertEquals("ООО Ромашка", g.getJSONObject(0).getString("title"))
+        assertEquals(1, g.getJSONObject(0).getInt("urgent"))
+        assertFalse("свёрнуто — вопросов на экране нет", o.has("new"))
+        val words = DelaDebug.snapshotLines(o).joinToString("\n")
+        assertTrue(words, words.contains("«Подскажи»: фаза before, следующий заход 15:00 · Подскажи · к 15:00: 1 · к вечеру: 1 · " +
+            "всего 2, сгорает 1, к вечеру 1, кандидатов плана 1"))
+        assertTrue(words, words.contains("  ООО Ромашка · 1 (сгорает 1)"))
+        assertTrue(words, words.contains("  Иван Тестов · 1"))
+        assertFalse(words, words.contains("asks: {"))
+        // Раскрыто тапом — «open», строки нет; вопросы на экране — в «new» П-номерами.
+        val opened = Asks.homeCard(q, q.openKey)!!
+        val o2 = DelaDebug.snapshot(
+            DelaDebug.Screen("nav:now", "Сейчас", newIds = opened.shown.map { it.id }, asks = q, asksCard = opened), s, day, "")
+        assertTrue(o2.getJSONObject("asks").getBoolean("open"))
+        assertFalse(o2.getJSONObject("asks").has("line"))
+        assertEquals(2, o2.getJSONArray("new").length())
+        // Без флага у сервера — блок по-старому, ключа нет.
+        val legacy = Asks.queue(s.copy(features = emptySet()), "me", at, Asks.FACTORY, Asks.QUIET_FACTORY)
+        assertFalse(DelaDebug.snapshot(
+            DelaDebug.Screen("nav:now", "Сейчас", asks = legacy, asksCard = Asks.homeCard(legacy, null)), s, day, "").has("asks"))
+    }
+
+    @Test
     fun `главная — «Сегодня» подгруппами, дело внутри прямо перед родителем, «Сейчас» с делами внутри над родителем`() {
         // Поезд 16.10.2026, проверка вагона 3: дело внутри получило срок «сегодня» от родителя — на экране оно в подгруппе
         // родителя прямо перед ним (DelaHomeUi: DelaGroups.nested по группе, внутри — TaskRows со stepsFirst).

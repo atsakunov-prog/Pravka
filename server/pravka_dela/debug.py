@@ -396,8 +396,23 @@ def snapshot_lines(s: dict) -> list[str]:
                    + _one_line(p.get("head") or p.get("line") or "", 300) + (f" · {p['title']}" if p.get("title") else ""))
         out += [f"    {_one_line(x, 300)}" for x in (p.get("stuck") or [])[:20]]
         out += [f"    отмечено: {_one_line(x, 300)}" for x in (p.get("marked") or [])[:20]]
+    # «Подскажи» двумя заходами (шаг 2 петли, asks.py; поезд 16.10.2026): фаза и заход, свёрнутая строка или «раскрыто»,
+    # числа, группы в порядке вечера; вопросы на экране — в «new» П-номерами. Свёрнуто — на экране их нет вовсе, и записка
+    # «где вопросы?» без этой строки Claude не понять.
+    a = s.get("asks") if isinstance(s.get("asks"), dict) else None
+    if a:
+        bits = [f"фаза {a.get('phase') or '?'}" + (f", следующий заход {a['next']}" if a.get("next") else ""),
+                "раскрыто щелчком до смены фазы" if a.get("open") else "", _one_line(a.get("line") or "", 200),
+                f"всего {a.get('total') or 0}, сгорает {a.get('urgent') or 0}, к вечеру {a.get('rest') or 0}"
+                + (f", кандидатов плана {a['plan']}" if a.get("plan") else "")]
+        out.append("  «Подскажи»: " + " · ".join(b for b in bits if b))
+        for g in (a.get("groups") or [])[:20]:
+            if isinstance(g, dict):
+                out.append(f"    {_one_line(g.get('title') or g.get('kind') or '', 120)} · {g.get('n') or 0}"
+                           + (f" (сгорает {g['urgent']})" if g.get("urgent") else ""))
     for k, v in s.items():
-        if k in ("v", "title", "route", "sub", "mode", "card", "selected", "rows", "rows_total", "plan") or v in (None, "", [], {}):
+        if k in ("v", "title", "route", "sub", "mode", "card", "selected", "rows", "rows_total", "plan", "asks") \
+                or v in (None, "", [], {}):
             continue
         out.append(f"  {k}: {_one_line(v, 1500)}")
     return out

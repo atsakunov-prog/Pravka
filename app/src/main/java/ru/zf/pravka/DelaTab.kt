@@ -682,6 +682,7 @@ fun DelaTab(
                     plan = DelaViews.plan(snap, me, today, now)?.takeIf { it.visible },
                     card = asksCard,
                     onOpen = { asksOpen = queue.openKey },
+                    queue = queue,
                 ),
                 late = DelaGroups.lateTasks(snap, me, today, sphere).size,
                 waits = waits,
@@ -1576,6 +1577,9 @@ fun DelaTab(
             // «Сейчас на завтра» на экране: пачка плана или строка во «Новом» и на главной (поезд 16.10.2026).
             plan = newParts?.plan ?: homeSc?.plan,
             planBatch = newParts?.planBatch == true,
+            // «Подскажи» по фазе на главной (поезд 16.10.2026, шаг 2 петли): свёрнутое в снимке — фазой и строкой.
+            asks = homeSc?.queue,
+            asksCard = homeSc?.card,
         )
     }
     val sayBar: @Composable (Modifier, Dela.Task?, Boolean) -> Unit = { barModifier, opened, coversList ->
