@@ -41,6 +41,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.animation.animateContentSize
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -326,7 +328,23 @@ fun DelaTab(
     openNav: String? = null,
     onNavHandled: () -> Unit = {},
 ) {
-    val snap by app.delaStore.view.collectAsState()
+    val snapLive by app.delaStore.view.collectAsState()
+    // Сделанное флажком стоит на месте (отладка 16.10.2026 вечер, запись 30: «текст в колонке прыгает… промахиваюсь и
+    // кликаю на другое», `core/DelaLinger.kt`): списки считают его по копии до касания, строка — сделанной, зачёркнутой.
+    // Уходит через 4 с без касаний списка или при смене экрана. [touch] — миг последнего касания: не состояние, чтобы
+    // каждое касание не перерисовывало вкладку.
+    var held by remember { mutableStateOf(mapOf<String, Dela.Task>()) }
+    val touch = remember { longArrayOf(0L) }
+    val snap = remember(snapLive, held) { ru.zf.pravka.core.DelaLinger.view(snapLive, held) }
+    LaunchedEffect(held.isNotEmpty()) {
+        if (held.isEmpty()) return@LaunchedEffect
+        while (true) {
+            val left = ru.zf.pravka.core.DelaLinger.left(touch[0], System.currentTimeMillis())
+            if (left <= 0L) break
+            delay(left)
+        }
+        held = emptyMap()
+    }
     val queued by app.delaStore.queued.collectAsState()
     val notices by app.delaStore.noticesFlow.collectAsState()
     val link by app.delaSync.link.collectAsState()
@@ -499,6 +517,8 @@ fun DelaTab(
     }
     // «Назад» листает страницы Дел (как история веба), пока они есть.
     androidx.activity.compose.BackHandler(enabled = pages.isNotEmpty()) { pages = pages.dropLast(1) }
+    // Другой экран — сделанное, что стояло на месте (запись 30), уходит сразу: «при следующем обновлении экрана».
+    LaunchedEffect(nav, pages, sphere, query, newBatch) { held = emptyMap() }
 
     /**
      * Команда Claude: одна за раз. Из строки внизу ([cont] = false) — новый
@@ -562,11 +582,15 @@ fun DelaTab(
     // Карточка справа спрятана (только вид v2 разложенного; у «Вида 4.0» разворот как был).
     val paneHidden = wideNow && Look.v2 && !cols.paneOn
     // Открытое справа дело; не выбрано — первое из дел дня: сначала «Сейчас», потом «Сегодня» («отбить» — выше).
+    // Справа — дело как оно есть (сделанное флажком — «Дело · сделано» с «Вернуть в работу»), хотя список держит его
+    // открытым на месте (запись 30): первое из дел дня остаётся тем же делом, а не прыгает на следующее.
     val paneTask: Dela.Task? = if (!wideNow) null
-    else paneId?.let { snap.tasks[it] } ?: DelaGroups.dayOrdered(snap, me, today, sphere).firstOrNull()
+    else (paneId?.let { snap.tasks[it] } ?: DelaGroups.dayOrdered(snap, me, today, sphere).firstOrNull())?.let { snapLive.tasks[it.id] ?: it }
     val actions = DelaActions(
         // Карточка спрятана, а дело тронули — колонка выезжает с ним: тап по делу и значит «покажи его».
-        open = {
+        open = { t0 ->
+            // Карточка — живого дела: у стоящей на месте сделанной строки (запись 30) — уже сделанного.
+            val it = snapLive.tasks[t0.id] ?: t0
             if (wideNow) {
                 paneId = it.id
                 if (paneHidden) saveCols(cols.copy(paneOn = true))
@@ -582,10 +606,15 @@ fun DelaTab(
                 }
             }
         },
-        done = { t ->
+        done = { t0 ->
+            // Строка, стоящая на месте сделанной (запись 30), — список держит её открытой копией: решает живое дело.
+            // Закрыл — держим на месте; вернул в работу — держать незачем.
+            val t = snapLive.tasks[t0.id] ?: t0
+            touch[0] = System.currentTimeMillis()
+            held = ru.zf.pravka.core.DelaLinger.tap(held, t)
             // Сделано последнее дело внутри (15.10.2026): родитель не закрывается, а поднимается — сервер (и копия поверх
             // очереди) ставит его на сегодня; тост говорит, что теперь.
-            val up = if (t.open && snap.nestOn) DelaSteps.rise(t, snap, today) else null
+            val up = if (t.open && snapLive.nestOn) DelaSteps.rise(t, snapLive, today) else null
             scope.launch {
                 app.delaDo(listOf(Dela.statusOp(if (t.open) "task.done" else "task.reopen", t.id)))
                 Feedback.toast(app, if (t.open) "✓ ${t.title.take(40)}" + (up?.let { " · " + DelaSteps.riseWords(it) } ?: "") else "Дело снова открыто")
@@ -625,6 +654,7 @@ fun DelaTab(
         step = { stepFor = it },
         folded = nestFolded,
         fold = { id -> scope.launch { app.delaStore.setGroup("nf:$id", if (id in nestFolded) "0" else "1") } },
+        held = remember(held, snapLive) { ru.zf.pravka.core.DelaLinger.doneHere(held, snapLive) },
     )
 
     // Дерево жизни: вид, направление и свёрнутые ветки помнит устройство (как браузер у веба), фильтры
@@ -960,7 +990,16 @@ fun DelaTab(
         // (владелец 14.10.2026: «слишком рано начинается растворение в средней колонке… может, вообще его убрать?»;
         // подтвердил — убрать совсем): у средней колонки разворота v2 растворения нет ни снизу, ни сверху.
         modifier = listModifier.fillMaxSize().then(if (navColumn) Modifier else Modifier.bottomFade().scrollFade(listState))
-            .onGloballyPositioned { seenRows.top = it.boundsInWindow().top },
+            .onGloballyPositioned { seenRows.top = it.boundsInWindow().top }
+            // Касание списка — сделанное ещё постоит на месте (запись 30): палец рядом, строки не двигаем.
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                        if (e.changes.any { it.pressed }) touch[0] = System.currentTimeMillis()
+                    }
+                }
+            },
         state = listState,
         // Разворот v2: слева колонка разделов — поля списка поуже, иначе карточкам дел не хватит ширины.
         // Колонка спрятана — с её стороны место под язычок в доке, чтобы он не лёг на карточки.
@@ -2286,6 +2325,11 @@ internal class DelaActions(
     /** «Деревом»: свёрнутые родители и плюсик свернуть / раскрыть (помнит устройство). */
     val folded: Set<String> = emptySet(),
     val fold: (String) -> Unit = {},
+    /**
+     * Сделанные флажком строки, которые стоят на месте (16.10.2026 вечер, запись 30, `core/DelaLinger.kt`): в списке —
+     * прежняя открытая копия, рисуется сделанной; повторный тап — «Вернуть в работу».
+     */
+    val held: Set<String> = emptySet(),
 )
 
 /** «обновлено 20:42 · в очереди 2» или причина целиком — молчаливая очередь читается как поломка. */
@@ -2989,6 +3033,9 @@ private fun LazyListScope.screenBody(
                 // «Просрочено» сверху «Всех дел» (13.10.2026): цветом беды и «Перенести все», строки — со всеми
                 // подписями: уровни его не называют.
                 val lateTop = n.key == LATE_NODE
+                // Опустевшая группа уходит, а ниже — подъезжают плавно (запись 30), не рывком под пальцем; при смене раздела
+                // группы появляются сразу, без растворения.
+                Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
                 PaperCard(
                     label = n.title.takeIf { it.isNotBlank() }?.let { "$it · ${n.items.size}" },
                     labelColor = if (n.late) (if (Look.v2) Kv.bad else ru.zf.pravka.ui.LocalMode.current.value) else null,
@@ -3016,6 +3063,7 @@ private fun LazyListScope.screenBody(
                         PaperTextButton("Перенести все", icon = Glyphs.Calendar, onClick = { tools.onReschedule(n.items) })
                     }
                     NodeRows(n, actions, if (lateTop) emptySet() else also, onProjectPage, sc.indent, sc.nest)
+                }
                 }
             }
         }
@@ -3439,6 +3487,28 @@ internal fun TaskRows(
     /** «Деревом» (15.10.2026): родитель → дела внутри; пусто — плоско, дело внутри прямо перед родителем. */
     nest: Map<String, List<Dela.Task>> = emptyMap(),
 ) {
+    // Ушла строка (сделанное отстояло своё, запись 30) — карточка сжимается плавно, а не рывком.
+    Column(Modifier.fillMaxWidth().animateContentSize()) {
+        TaskRowsBody(list, actions, today, by, onProjectPage, extra, also, indent, inTree, note, onLong, nowBold, nest)
+    }
+}
+
+@Composable
+private fun TaskRowsBody(
+    list: List<Dela.Task>,
+    actions: DelaActions,
+    today: String,
+    by: DelaViews.By?,
+    onProjectPage: Boolean,
+    extra: (Dela.Task) -> List<String>,
+    also: Set<DelaViews.By>,
+    indent: Map<String, Int>,
+    inTree: Boolean,
+    note: (Dela.Task) -> String,
+    onLong: ((Dela.Task) -> Unit)?,
+    nowBold: Boolean,
+    nest: Map<String, List<Dela.Task>>,
+) {
     if (nest.isNotEmpty()) {
         DelaSteps.lines(list, nest, actions.folded).forEachIndexed { i, ln ->
             if (i > 0) RowRule()
@@ -3502,6 +3572,10 @@ internal fun TaskRow(
     val lateDays = if (t.open && t.dueDate.isNotBlank() && t.dueDate < today)
         runCatching { java.time.temporal.ChronoUnit.DAYS.between(LocalDate.parse(t.dueDate.take(10)), LocalDate.parse(today)).toInt() }.getOrDefault(0) else 0
     val picked = v2 && actions.selectedId == t.id
+    // Сделана флажком только что и стоит на месте (16.10.2026 вечер, запись 30): строка — прежняя открытая копия, рисуем
+    // её сделанной. Ширины и строки не меняются (клавиши — пустым местом той же ширины, «сделано» в подписи не дописываем),
+    // иначе название переносилось бы по-другому и строка всё равно прыгала бы.
+    val heldDone = t.open && t.id in actions.held
     Column(
         Modifier.fillMaxWidth().seen("t:" + t.id).padding(start = (minOf(depth, 6) * 16).dp)
             .then(if (picked) Modifier.clip(RoundedCornerShape(7.dp)).background(Kv.accentSoft) else Modifier),
@@ -3538,7 +3612,7 @@ internal fun TaskRow(
                 // «+» — «Для этого»: лист нового дела внутри этого, поля от него (тот же, что «Для этого…» в меню
                 // строки). У цели, напоминания и где вкладка «+» не даёт — пусто той же ширины, строки стоят ровно.
                 actions.step?.let { step ->
-                    if (DelaSteps.canStep(t)) {
+                    if (DelaSteps.canStep(t) && !heldDone) {
                         Icon(
                             Glyphs.Plus,
                             contentDescription = "Для этого",
@@ -3554,7 +3628,7 @@ internal fun TaskRow(
                 // а оно двигало срок — дело уезжало на завтра и пропадало). Горит у дела в «Сейчас»; тап —
                 // в «Сейчас» или из него, сразу, срок не трогается. У чужого дела и у цели молнии нет (её
                 // нельзя нажать) — на её месте пусто той же ширины, чтобы флажки строк стояли ровно.
-                if (DelaGroups.canNow(t, actions.me)) {
+                if (DelaGroups.canNow(t, actions.me) && !heldDone) {
                     val on = DelaGroups.isNow(t, today)
                     Icon(
                         Glyphs.Bolt,
@@ -3568,18 +3642,20 @@ internal fun TaskRow(
                 }
             }
             Box(
-                Modifier.size(if (v2) 40.dp else 44.dp).clip(if (v2) RoundedCornerShape(KvShape.Control) else CircleShape).clickable { actions.done(t) },
+                Modifier.size(if (v2) 40.dp else 44.dp).clip(if (v2) RoundedCornerShape(KvShape.Control) else CircleShape)
+                    .clickable(onClickLabel = if (t.open && !heldDone) "сделано" else "вернуть в работу") { actions.done(t) },
                 contentAlignment = Alignment.Center,
             ) {
+                val closed = !t.open || heldDone
                 val box = if (v2) 18.dp else 22.dp
                 val shape = if (v2) RoundedCornerShape(5.dp) else CircleShape
                 Box(
                     Modifier
                         .size(box)
                         .clip(shape)
-                        .then(if (!t.open) Modifier.background(mode.key) else Modifier)
+                        .then(if (closed) Modifier.background(mode.key) else Modifier)
                         .then(
-                            if (!t.open && v2) Modifier
+                            if (closed && v2) Modifier
                             else Modifier.groupRing(
                                 DelaGroups.grpOf(t), t.ball == Dela.AGENDA,
                                 if (v2) (if (lateDays > 0) 2.dp else 1.5.dp) else if (lateDays > 0) 2.5.dp else 2.dp,
@@ -3591,15 +3667,18 @@ internal fun TaskRow(
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (!t.open) Icon(Glyphs.Check, contentDescription = "закрыто", tint = if (v2) Kv.accentInk else ru.zf.pravka.ui.Ink.KeyIcon, modifier = Modifier.size(if (v2) 13.dp else 14.dp))
+                    if (closed) Icon(Glyphs.Check, contentDescription = "закрыто", tint = if (v2) Kv.accentInk else ru.zf.pravka.ui.Ink.KeyIcon, modifier = Modifier.size(if (v2) 13.dp else 14.dp))
                 }
             }
             Column(Modifier.weight(1f).padding(start = 2.dp)) {
                 Text(
                     // В дереве жизни ступень видна отступом, стрелка у каждой строки была бы шумом.
                     (if (depth > 0 && !inTree) "↳ " else "") + t.title,
-                    style = ty.bodyL.copy(fontWeight = if (nowBold && t.open && t.focusOn == today) FontWeight.SemiBold else ty.bodyL.fontWeight),
-                    color = if (t.open) ru.zf.pravka.ui.Ink.Text else mode.meta,
+                    style = ty.bodyL.copy(
+                        fontWeight = if (nowBold && t.open && t.focusOn == today) FontWeight.SemiBold else ty.bodyL.fontWeight,
+                        textDecoration = if (heldDone) androidx.compose.ui.text.style.TextDecoration.LineThrough else null,
+                    ),
+                    color = if (t.open && !heldDone) ru.zf.pravka.ui.Ink.Text else mode.meta,
                 )
                 val live = t.id == actions.running
                 // «Олег ждёт 3 дн» — ярче остальных: люди ждут (`taskRow` веба, `value` полужирным).
@@ -3660,8 +3739,11 @@ internal fun TaskRow(
                 }
                 if (note.isNotBlank()) Text(note, style = ty.label.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic), color = ru.zf.pravka.ui.Ink.PlanText)
             }
-            // ▶ (или стоп) — запись в Засечке; микрофон — команда Claude про это дело.
-            if (actions.starting == t.id) {
+            // ▶ (или стоп) — запись в Засечке; микрофон — команда Claude про это дело. Стоящая на месте сделанная — пустое
+            // место той же ширины (запись 30).
+            if (heldDone) {
+                if (!actions.compact || t.id == actions.running) Spacer(Modifier.size(40.dp))
+            } else if (actions.starting == t.id) {
                 Text("…", style = ty.body, color = mode.tint, modifier = Modifier.size(40.dp).padding(10.dp))
             } else if (t.open && t.id == actions.running) {
                 ru.zf.pravka.ui.StopKey(onClick = { actions.stop() }, description = "остановить в ленте")

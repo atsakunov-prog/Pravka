@@ -326,6 +326,8 @@ internal fun LazyListScope.homeView(
     onPlan: (String) -> Unit = {},
 ) {
     item(key = "home:now") {
+        // Плавно — когда «Сейчас» меняет высоту (сделанное отстояло своё, запись 30), «Сегодня» ниже подъезжает.
+        Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
         HomeBlock(Glyphs.Bolt, "Сейчас", h.now.size, sub = "отметил сам — сделать сегодня") {
             if (h.now.isEmpty()) {
                 BlockNote("Пусто. Возьми до ${DelaViews.NOW_MAX} дел на сегодня — молния у дела или в его карточке, «!сейчас» в строке.")
@@ -340,6 +342,7 @@ internal fun LazyListScope.homeView(
                     BlockNote("Ещё ${DelaViews.NOW_MAX - h.now.size} — молнией у дела или в его карточке", top = true)
                 }
             }
+        }
         }
     }
     // Строка вопроса — та же, что в «Новом»; П-номер — место на экране (h.asks — в порядке показа).
@@ -430,6 +433,7 @@ internal fun LazyListScope.homeView(
         item(key = "home:plan") { PlanLine(DelaViews.planLine(p), onClick = { onPlan(p.batch) }) }
     }
     item(key = "home:today") {
+        Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
         HomeBlock(
             Glyphs.Sunny, "Сегодня", h.today.size,
             sub = "срок сегодня" + if (h.taken > 0) " · что уже в «Сейчас» — выше" else "",
@@ -445,6 +449,7 @@ internal fun LazyListScope.homeView(
                     TaskRows(n.items, actions, today, by = DelaViews.By.GRP)
                 }
             }
+        }
         }
     }
 }
