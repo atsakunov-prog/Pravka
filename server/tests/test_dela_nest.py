@@ -413,6 +413,26 @@ def test_web_uses_same_rules():
     # «Шаг» — не имя сущности (владелец 15.10.2026): ни в кнопках, ни в подписях новых мест.
     for name in ("function stepChips(", "function stepPop(", "function insideBox(", "function forLine(", "function nestPop("):
         assert "шаг" not in fn(name).lower().replace("шага, шагов", ""), name
+    # «Место в дереве» — дерево вниз (16.10.2026, записи 3 и 10 отладки; телефон — DelaKrug.place, rows): под обычным делом
+    # — его дела внутри тем же insideOf, что «Внутри» (решение 15.10 «здесь не повторяем» снято), два уровня и предел
+    # строк, соседи вместе с самим делом; напоминаний нет ни в строках, ни в «дальше»; у каждой строки место под значок
+    # .pt-mark одной ширины — иначе дело цели вставало правее последней подцели (запись 10).
+    pb = fn("function placeBlock(")
+    assert "insideOf(x.id)" in pb and "pt-mark" in pb and "здесь не повторяем" not in pb
+    assert "PLACE_SIBS" in pb and "PLACE_DOWN" in pb and "level.slice(0, PLACE_SIBS - 1), level[at]" in pb
+    assert "!isRemind(s)" in pb and "m.open(c.key) > 0" in pb and "'направление · '" in pb
+    assert "const PLACE_SIBS = 8, PLACE_DOWN = 12;" in js
+    import re
+
+    css = (Path(store.__file__).parent / "static" / "style.css").read_text(encoding="utf-8")
+    mark = re.search(r"^\.pt-mark \{([^}]*)\}", css, re.M).group(1)
+    assert "display: inline-block" in mark and "width: 17px" in mark and "flex: none" in mark
+    assert ".me-dot" not in css and ".sib-dot" not in css and ".pt-n {" in css
+    # Честное время разборщика Круга (не «в ближайшие полчаса»): то же расписание, что krug_auto.is_slot и телефон.
+    slot = fn("function isKrugSlot(")
+    assert "if (h === 0) return m === 0;" in slot and "if (h < 8) return false;" in slot and "D.wd(day) < 5" in slot
+    assert "ближайшие полчаса" not in js.replace("а «в ближайшие полчаса» — неправда", "")
+    assert "nowhereNext(t)" in pb and "krugAt()" in fn("function nowhereNext(")
 
 
 # ── Найденное при проверке пакета (15.10.2026, ночь) ─────────────────────

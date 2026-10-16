@@ -2708,7 +2708,7 @@ function renderTree() {
   return [head('Дерево жизни'),
   el('div', { class: 'body tree tree-mode-' + mode }, principleLine(), bar, body,
     none.length && !S.treeDir && mode !== 'list' ? groupBox('Без направления', none.filter((c) => c.kind === 'task').map((c) => c.t).sort(byTime),
-      { sub: 'разборщик предложит цель в ближайшие полчаса — или перетащи на цель сам' }) : null)];
+      { sub: 'разборщик Круга посмотрит ' + krugAt() + ' — или перетащи на цель сам' }) : null)];
 }
 
 // ── Страница «Круг жизни»: девять направлений обзором ─────────────────────
@@ -2762,7 +2762,7 @@ function renderKrug() {
   // блоком «Движение за неделю». Шапка — одно название: «9 направлений · 126 целей» видно и так.
   const box = el('div', { class: 'body krug' }, principleLine(),
     zones.map(({ z, dirs }) => el('div', { class: 'krug-zone' }, z ? el('h3', { class: 'zone-h' }, z) : null, el('div', { class: 'krug-cards' }, dirs.map(card)))));
-  if (none.length) box.append(groupBox('Без направления', none.sort(byTime), { sub: 'разборщик предложит цель в ближайшие полчаса — или выбери сам' }));
+  if (none.length) box.append(groupBox('Без направления', none.sort(byTime), { sub: 'разборщик Круга посмотрит ' + krugAt() + ' — или выбери сам' }));
   box.append(el('div', { class: 'krug-zone krug-dial' }, el('h3', { class: 'zone-h' }, 'Движение за неделю'),
     el('div', { class: 'krug-top' }, dialSvg(mv), el('div', { class: 'dial-note' },
       'Точка на оси — движение за неделю: закрытое дело — одно событие, цель — три. Состояние многоугольником появится с первой оценкой месяца.',
@@ -5422,33 +5422,123 @@ function cardSay(t, { stepOnly = false } = {}) {
     talkFeed(S.cardTalk && S.cardTalk.card.id === t.id ? S.cardTalk : null, { inCard: true }));
 }
 
+// ── Разборщик Круга: когда посмотрит (16.10.2026) ─────────────────────────
+// «Разборщик предложит место сам» без «когда» читалось как «никогда», а «в ближайшие полчаса» — неправда ночью и в
+// выходные (отладка 16.10.2026). Расписание — krug_auto.is_slot сервера (слово владельца 12.10.2026); телефон —
+// DelaKrug.isKrugSlot / nextKrugSlot.
+/** Слот разборщика: day — день по Москве, min — минута от полуночи. Будни — :00 и :30 с 8:00 до 23:30, выходные — :00
+ *  с 8:00 до 23:00, каждый день 00:00; ночью (01:00–07:59) слотов нет. */
+function isKrugSlot(day, min) {
+  const h = Math.floor(min / 60), m = min % 60;
+  if (m !== 0 && m !== 30) return false;
+  if (h === 0) return m === 0;
+  if (h < 8) return false;
+  return m === 0 || D.wd(day) < 5;
+}
+/** Ближайший слот ПОСЛЕ этой минуты (ms — миг, время — московское): будний 09:07 → 09:30, суббота 10:10 → 11:00,
+ *  01:00 → 08:00. Ровно на слоте — следующий: пачка этого уже ушла. */
+function nextKrugSlot(ms) {
+  const n = msk(ms);
+  let day = n.day, min = Math.ceil((+n.hm.slice(0, 2) * 60 + +n.hm.slice(3, 5) + 1) / 30) * 30;
+  for (let i = 0; i < 100; i++) {
+    if (min >= 1440) { min -= 1440; day = D.add(day, 1); }
+    if (isKrugSlot(day, min)) break;
+    min += 30;
+  }
+  return { day, hm: String(Math.floor(min / 60)).padStart(2, '0') + ':' + String(min % 60).padStart(2, '0') };
+}
+/** «в 09:30» — когда разборщик Круга посмотрит дело без места. */
+const krugAt = (ms = Date.now()) => 'в ' + nextKrugSlot(ms).hm;
+/** «Ни цели, ни направления» — что будет дальше, честно (как DelaKrug.nowhereNext телефона): о деле, про которое
+ *  разборщик уже спросил, ответ ждёт в «Новом»; напоминания, дела сделок и клиентов он не берёт (krug_auto.candidates);
+ *  остальное посмотрит в ближайший слот. */
+function nowhereNext(t) {
+  const asked = [...S.sugs.values()].some((s) => s.task_id === t.id && s.source === 'krug' && s.status === 'pending');
+  const client = t.project_id && (project(t.project_id) || {}).kind === 'client';
+  return 'Ни цели, ни направления: ' + (asked ? 'разборщик Круга уже спросил, куда его, — ответь в «Новом» или задай «Зачем».'
+    : isRemind(t) ? 'напоминания разборщик Круга не раскладывает — задай «Зачем», если нужно.'
+      : t.deal_id || client ? 'дела сделок и клиентов разборщик Круга не берёт — задай «Зачем» сам.'
+        : `разборщик Круга посмотрит ${krugAt()} — или задай «Зачем».`);
+}
+
+/** Сколько соседей дела видно в «Месте в дереве» (само дело — всегда, на своём месте) и сколько строк под ним (два
+ *  уровня); дальше — «рядом ещё N» и «и ещё N». Как DelaKrug.PLACE_SIBS / PLACE_DOWN телефона. */
+const PLACE_SIBS = 8, PLACE_DOWN = 12;
+
 /** Место дела в дереве жизни (владелец 13.10.2026: «в каждом деле должно быть это дерево и его место в нём, чтобы
- *  я понимал, зачем я это делаю и что будет дальше, когда я это сделаю»): направление, цели над делом лесенкой,
- *  само дело среди соседних шагов, его шаги — и строка «дальше». */
+ *  я понимал, зачем я это делаю и что будет дальше, когда я это сделаю»): «направление · …», предки сверху, на уровне
+ *  родителя — соседи вместе с самим делом в порядке «Дерева» (цели по номеру, проекты, дела по времени, у родителя-дела —
+ *  по месту), под делом — что внутри него, и строка «дальше».
+ *  16.10.2026 (записи 3 и 10 отладки: «показывать не только то, что выше, но и текущее дерево дел ниже текущего дела»;
+ *  тап по уровням — «случайные вещи»): строки ровными ступенями — у каждой своё место под значок (.pt-mark: цель — ромб,
+ *  дело — квадратик, само дело — заливкой, проект — ▣), иначе дело цели вставало правее последней подцели и читалось её
+ *  ребёнком; под делом — два уровня, не больше PLACE_DOWN строк: у цели — подцели, проекты и дела, у обычного дела — его
+ *  дела внутри (insideOf: тот же список и порядок, что «Внутри» ниже, где флажки и порядок; решение 15.10 «здесь не
+ *  повторяем» снято); у свёрнутых — сколько внутри (.pt-n). Только цели и дела: напоминаний нет (правило 29). Одно
+ *  правило с телефоном — DelaKrug.place (rows). */
 function placeBlock(t) {
   const up = upOf(t).slice(1);
   const main = dirsOf(t)[0];
   const chain = up.slice().reverse();
   const parent = up[0];
   const goalOf = (x) => x && x.kind !== 'project' ? x : null;
-  const rows = [el('div', { class: 'pt-row pt-dir', style: '--d:0' }, main ? (dirBy(main) || {}).name || main : 'без направления',
-    (t.directions || []).filter((k) => k !== main).length ? el('span', { class: 'faint' }, ' · метки: ' + (t.directions || []).filter((k) => k !== main).map(dirName).join(', ')) : null)];
-  chain.forEach((x, i) => rows.push(x.kind === 'project'
-    ? el('a', { class: 'pt-row pt-proj', style: '--d:' + (i + 1), href: '#/p/' + x.id }, '▣ ' + ((project(x.id) || {}).name || 'проект'))
-    : el('a', { class: 'pt-row pt-goal' + (x.rhythm ? ' practice' : ''), style: '--d:' + (i + 1), href: '#', onclick: (e) => { e.preventDefault(); openCard(x.id); } },
-      x.title, x.rhythm ? el('span', { class: 'faint' }, ' · ' + x.rhythm) : null)));
-  const d = chain.length + 1;
-  const sibs = goalOf(parent) ? stepsOf(parent.id).filter((s) => s.id !== t.id).sort((a, b) => (b.goal ? 1 : 0) - (a.goal ? 1 : 0) || byTime(a, b)) : [];
-  rows.push(el('div', { class: 'pt-row pt-me', style: '--d:' + d }, t.goal ? null : el('span', { class: 'me-dot' }), t.title));
-  const link = (s, dd, cls) => el('a', { class: 'pt-row ' + cls, style: '--d:' + dd, href: '#', onclick: (e) => { e.preventDefault(); openCard(s.id); } },
-    s.goal ? null : el('span', { class: 'sib-dot' }), s.title);
-  // У цели — её шаги и подцели; у дела его дела внутри — в блоке «Внутри» ниже (15.10.2026), здесь не повторяем.
-  const kids = t.goal ? stepsOf(t.id).sort((a, b) => (b.goal ? 1 : 0) - (a.goal ? 1 : 0) || byTime(a, b)) : [];
-  kids.slice(0, 12).forEach((s) => rows.push(link(s, d + 1, 'pt-kid')));
-  if (kids.length > 12) rows.push(el('div', { class: 'pt-row faint', style: '--d:' + (d + 1) }, 'и ещё ' + (kids.length - 12)));
-  sibs.slice(0, 6).forEach((s) => rows.push(link(s, d, 'pt-sib')));
-  if (sibs.length > 6) rows.push(el('div', { class: 'pt-row faint', style: '--d:' + d }, 'рядом ещё ' + (sibs.length - 6)));
-  // «Дальше»: что изменится, когда это сделаешь.
+  const m = treeModel();
+  // Дети узла: у обычного дела — его открытые дела внутри по месту; у цели и проекта — как в «Дереве» (проект — если под
+  // ним есть открытое).
+  const items = (key) => {
+    const x = key.startsWith('t:') ? S.tasks.get(key.slice(2)) : null;
+    if (x && !x.goal) return insideOf(x.id).filter(isMine).map((c) => ({ kind: 'task', t: c, key: 't:' + c.id }));
+    return m.kids(key).filter((c) => c.kind !== 'project' || m.open(c.key) > 0);
+  };
+  // У свёрнутого узла — что внутри, прямыми детьми: «3 внутри» (одни дела) или «2 подцели, 1 дело».
+  const inside = (key) => {
+    const k = items(key);
+    if (!k.length) return null;
+    const g = k.filter((c) => c.kind === 'goal').length, p = k.filter((c) => c.kind === 'project').length, n = k.length - g - p;
+    return !g && !p ? n + ' внутри' : [g ? plural(g, 'подцель', 'подцели', 'подцелей') : null,
+      p ? plural(p, 'проект', 'проекта', 'проектов') : null, n ? plural(n, 'дело', 'дела', 'дел') : null].filter(Boolean).join(', ');
+  };
+  const mark = (kind) => el('span', { class: 'pt-mark' + (kind ? ' ' + kind : ''), 'aria-hidden': 'true' }, kind === 'project' ? '▣' : null);
+  const more = (words) => (words ? el('span', { class: 'pt-n' }, ' · ' + words) : null);
+  // Проект — «›» и страница проекта, а не карточка.
+  const projRow = (id, d, cls, words) => el('a', { class: 'pt-row pt-proj ' + cls, style: '--d:' + d, href: '#/p/' + id, title: 'Страница проекта' },
+    mark('project'), el('span', { class: 'pt-t' }, ((project(id) || {}).name || 'проект') + ' ›', more(words)));
+  const taskRow = (x, d, cls, words) => el('a', { class: 'pt-row ' + (x.goal ? 'pt-goal' : 'pt-deed') + ' ' + cls + (x.rhythm ? ' practice' : ''),
+    style: '--d:' + d, href: '#', 'data-id': x.id, onclick: (e) => { e.preventDefault(); openCard(x.id); } },
+  mark(x.goal ? 'goal' : 'deed'), el('span', { class: 'pt-t' }, x.title, x.goal && x.rhythm ? el('span', { class: 'faint' }, ' · ' + x.rhythm) : null, more(words)));
+  const node = (c, d, cls, words) => (c.kind === 'project' ? projRow(c.p.id, d, cls, words) : taskRow(c.t, d, cls, words));
+  const labels = (t.directions || []).filter((k) => k !== main);
+  // Шапка — «направление · Дело», а не голое «Дело»: направление «Дело» сливалось с подписью карточки (запись 10).
+  const rows = [el('div', { class: 'pt-row pt-dir', style: '--d:0' }, main ? 'направление · ' + ((dirBy(main) || {}).name || main) : 'без направления',
+    labels.length ? el('span', { class: 'faint' }, ' · метки: ' + labels.map(dirName).join(', ')) : null)];
+  chain.forEach((x, i) => rows.push(x.kind === 'project' ? projRow(x.id, i + 1, 'pt-up', null) : taskRow(x, i + 1, 'pt-up', null)));
+  const d = chain.length + 1, meKey = 't:' + t.id;
+  // Уровень родителя. У дела прямо на направлении соседей нет — их видно в «Дереве», здесь было бы всё направление.
+  let level = !parent ? [] : items(parent.kind === 'project' ? 'p:' + parent.id : 't:' + parent.id);
+  // Само дело не в дереве (сделано, родитель закрыт) — всё равно на своём месте, первым.
+  if (!level.some((c) => c.key === meKey)) level = [{ kind: t.goal ? 'goal' : 'task', t, key: meKey }, ...level];
+  const at = level.findIndex((c) => c.key === meKey);
+  const shown = level.length <= PLACE_SIBS ? level : at < PLACE_SIBS ? level.slice(0, PLACE_SIBS) : [...level.slice(0, PLACE_SIBS - 1), level[at]];
+  for (const c of shown) {
+    if (c.key !== meKey) { rows.push(node(c, d, 'pt-sib', inside(c.key))); continue; }
+    rows.push(el('div', { class: 'pt-row pt-me', style: '--d:' + d, 'data-id': t.id, 'aria-current': 'true' },
+      mark(t.goal ? 'goal' : 'deed'), el('span', { class: 'pt-t' }, t.title)));
+    // Под делом — два уровня: первый целиком (до предела), второй — у тех, чьи дети влезают целиком; остальные свёрнуты.
+    const l1 = items(meKey), down = l1.slice(0, PLACE_DOWN);
+    let room = PLACE_DOWN - down.length;
+    for (const k of down) {
+      const l2 = items(k.key), open = l2.length > 0 && l2.length <= room;
+      rows.push(node(k, d + 1, 'pt-kid', open ? null : inside(k.key)));
+      if (!open) continue;
+      room -= l2.length;
+      for (const k2 of l2) rows.push(node(k2, d + 2, 'pt-kid', inside(k2.key)));
+    }
+    if (l1.length > down.length) rows.push(el('div', { class: 'pt-row pt-rest', style: '--d:' + (d + 1) }, mark(null), 'и ещё ' + (l1.length - down.length)));
+  }
+  if (level.length > shown.length) rows.push(el('div', { class: 'pt-row pt-rest', style: '--d:' + d }, mark(null), 'рядом ещё ' + (level.length - shown.length)));
+  // «Дальше»: что изменится, когда это сделаешь. Напоминание — не шаг и не дело внутри (правило 29): его не считаем.
+  const sibs = goalOf(parent) ? stepsOf(parent.id).filter((s) => s.id !== t.id && !isRemind(s)) : [];
+  const kids = t.goal ? stepsOf(t.id).filter((s) => !isRemind(s)) : [];
   const g = goalOf(parent), gg = g ? goalOf(upOf(g)[1]) : null;
   let next;
   if (t.goal) {
@@ -5470,7 +5560,7 @@ function placeBlock(t) {
     const pg = goalOf(upOf(parent)[1]);
     next = `Двигает проект «${(project(parent.id) || {}).name || ''}»` + (pg ? ` — а он ведёт к «${pg.title}»` : '');
   } else {
-    next = main ? 'Висит прямо на направлении — «без зачем». Повесь на цель, и будет видно, куда это ведёт.' : 'Ни цели, ни направления: разборщик предложит место сам, или задай «Зачем».';
+    next = main ? 'Висит прямо на направлении — «без зачем». Повесь на цель, и будет видно, куда это ведёт.' : nowhereNext(t);
   }
   return el('div', { class: 'place' }, rows, el('div', { class: 'pt-next' }, next));
 }
