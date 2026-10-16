@@ -3553,8 +3553,9 @@ function renderPerson(id) {
   row('Почта', (p.emails || []).join(', '));
   row('Telegram', p.telegram_username ? '@' + p.telegram_username : null);
   // Как к нему обращаться (dela_0033, этап 6 аудита): ставит обучение после твоего «да» спикеру встречи — только в пустое;
-  // поправить — щелчком (или строкой Claude). У команды не ведём.
-  if (!p.user_id) info.push(el('span', {}, 'Обращение'), el('span', {}, el('button', { class: 'link-btn' + (p.address ? '' : ' faint'),
+  // поправить — щелчком (или строкой Claude). У команды не ведём. Ярус colleague (закон приватности, правило 26) поля не
+  // получает, как и других имён, — строки нет, а не «не знаю» поверх скрытого.
+  if (!p.user_id && p.tier !== 'colleague') info.push(el('span', {}, 'Обращение'), el('span', {}, el('button', { class: 'link-btn' + (p.address ? '' : ' faint'),
     title: 'Как к нему обращаться — поправить', onclick: () => {
       const v = prompt('Как к нему обращаться? Например: «вы, Иван Петрович» или «ты, Оля»', p.address || '');
       if (v !== null) personSet(p, { address: v.trim() || null }, `${personName(p)}: ` + (v.trim() || 'обращение снято'));

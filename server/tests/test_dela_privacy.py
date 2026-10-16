@@ -381,6 +381,35 @@ def test_colleague_on_a_deal_is_still_a_colleague(cards):
     assert next(x for x in store.sync(url, "alena", 0)["people"] if x["id"] == nat)["tier"] == "colleague"
 
 
+def test_speakers_address_learning_and_foreign_mail_by_tier(cards):
+    """Поезд, вагон 5 (люди встречи, правило 25; dela_0033) поверх закона приватности (правило 26): обращение address —
+    по ярусу, как другие имена (сотрудник видит его у человека клиента, у коллеги — нет); учит карточку только владелец;
+    «почта карточки «X»» у person.add — только по видимой смотрящему почте: почту коллеги, скрытую ярусом, ответ не
+    выдаёт. Владельцу — всё, как в ветке speakers."""
+    url, ivan, al = cards["url"], str(cards["ivan"]), str(cards["alena"])
+    with dela_db.session(url, "system", "t") as c:
+        c.execute("UPDATE crm.people SET address = 'вы, Иван Петрович' WHERE id = %s", (ivan,))
+        c.execute("UPDATE crm.people SET address = 'ты, Алёна', emails = '{alena@example.org}' WHERE id = %s", (al,))
+        petr = c.execute("INSERT INTO crm.people (name, owner_id, org_id) VALUES ('Пётр Тестов', 'sasha', %s) "
+                         "RETURNING id", (cards["org"],)).fetchone()["id"]
+    nat = {x["id"]: x for x in store.sync(url, "natasha", 0)["people"]}
+    assert (nat[ivan]["tier"], nat[ivan]["address"]) == ("work", "вы, Иван Петрович")
+    assert (nat[al]["tier"], nat[al]["address"]) == ("colleague", None)
+    assert "ты, Алёна" not in repr(store.view(url, "natasha", "person", person_id=al))
+    assert next(x for x in store.sync(url, "sasha", 0)["people"] if x["id"] == al)["address"] == "ты, Алёна"
+    # Учит карточку только владелец (служба встреч — его токеном): отказы обучения называют чужие подписи и почты.
+    bad = ops(url, "natasha", {"op": "person.learn", "id": ivan, "address": "ты, Ваня"})[0]
+    assert not bad["ok"] and "только владельцу" in bad["error"], bad
+    # Почта коллеги, скрытая ярусом, — ответ сотруднику её владельца не называет (как номер и другое имя, dela_0029).
+    r = ops(url, "natasha", {"op": "person.add", "id": ivan, "add": {"emails": ["alena@example.org"]}})[0]
+    assert "Алёна" not in repr(r) and not r.get("refused"), r
+    # Владельцу та же почта видна — «почта карточки «Алёна Юристова»», в карточку не пишется.
+    r = one(url, "sasha", {"op": "person.add", "id": str(petr), "add": {"emails": ["alena@example.org"]}})
+    assert [x["why"] for x in r["refused"]] == ["почта карточки «Алёна Юристова»"], r
+    with as_(url, "sasha") as c:
+        assert c.execute("SELECT emails FROM crm.people WHERE id = %s", (petr,)).fetchone()["emails"] == []
+
+
 def test_people_by_themselves_note_is_only_where(cards):
     """«Люди сами» старой службы клали в пометку «<откуда>. <почему>» — в карточку идёт только «откуда»."""
     url = cards["url"]

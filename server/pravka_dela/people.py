@@ -653,12 +653,14 @@ def _owned_names(conn, pid, names: list[str], ignore: tuple = ()) -> dict[str, d
 
 def foreign_emails(conn, pid, keys: list[str], ignore: tuple = ()) -> dict[str, dict]:
     """Какие из почт keys (нормой) уже лежат в ДРУГОЙ живой карточке (не архив, не слитая): {почта: та карточка}.
-    Почта — железо «кто это» (1,0): у двух карточек она сделала бы обе неуверенными (этап 6 аудита, 15.10.2026)."""
+    Почта — железо «кто это» (1,0): у двух карточек она сделала бы обе неуверенными (этап 6 аудита, 15.10.2026).
+    Почты — из crm.v_people, по ярусу смотрящего (поезд, вагон 5, поверх аудита №10): отказ «почта карточки «X»» по сырой
+    строке выдал бы сотруднику почту коллеги, которую закон приватности ему не показывает. Владельцу и system вид — всё."""
     keys = sorted({k for k in keys if k})
     if not keys:
         return {}
     rows = conn.execute(
-        "SELECT id, name, emails FROM crm.people WHERE archived_at IS NULL AND merged_into IS NULL "
+        "SELECT id, name, emails FROM crm.v_people WHERE archived_at IS NULL AND merged_into IS NULL "
         "AND id IS DISTINCT FROM %s::uuid AND NOT (id = ANY(%s::uuid[])) "
         "AND EXISTS (SELECT 1 FROM unnest(emails) e WHERE lower(btrim(e)) = ANY(%s)) ORDER BY created_at, id",
         (pid, [str(x) for x in ignore], keys),
@@ -949,7 +951,13 @@ def learn(conn, user, pid, raw: Any, error) -> dict:
       ADDRESS_MAX — мимо.
     - Подпись Zoom: другим именем — по правилам _signature.
     Ответ — {row, changed, wrote: {emails, address, aliases}, refused: [{field, value, why, person_id?, name?}],
-    skipped} (skipped — как у person.add: чужое имя). Слитая карточка — учится живая, в архиве — отказ словами."""
+    skipped} (skipped — как у person.add: чужое имя). Слитая карточка — учится живая, в архиве — отказ словами.
+    Только владелец Дел или system (служба встреч — его токеном); другим — отказ словами."""
+    owner = conn.execute("SELECT crm.owner_id() AS o").fetchone()["o"]
+    if user not in (owner, "system"):
+        # Учит карточку только «да» владельца (служба встреч ходит его токеном). И закон приватности (правило 26, поезд,
+        # вагон 5): отказы обучения называют чужие подписи и почты команды, которые сотруднику не видны.
+        raise error("обучение карточки — только владельцу Дел: учит его «да» спикеру встречи")
     data = learn_data(raw)
     card = conn.execute("SELECT * FROM crm.people WHERE id = %s", (pid,)).fetchone()
     if card is not None and card["merged_into"]:
