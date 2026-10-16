@@ -876,8 +876,8 @@ private fun MainScreen(
                                 onOpenHandled = { delaOpen = null },
                                 openNav = delaNav,
                                 onNavHandled = { delaNav = null },
-                                header = { sub, onSub ->
-                                    TabHeader(title = "Дела", onBack = modeBack, titleExtra = sub, onTitleExtra = onSub, actions = delaActions)
+                                header = { sub, onSub, lead ->
+                                    TabHeader(title = "Дела", onBack = modeBack, titleExtra = sub, onTitleExtra = onSub, actions = delaActions, lead = lead)
                                 },
                             )
                         } else {

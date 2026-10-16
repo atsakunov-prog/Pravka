@@ -504,16 +504,21 @@ fun KovchegHeader(
     onTitleDouble: (() -> Unit)? = null,
     onBack: (() -> Unit)? = null,
     actions: (@Composable RowScope.() -> Unit)? = null,
+    /**
+     * Клавиши сразу за названием (16.10.2026 вечер, запись 32: «новое дело должно быть высоко — рядом с „Дела“ наверху
+     * плюс и микрофон»): не у правого края со статистикой и шестерёнкой, а рядом с названием. null — шапка как была.
+     */
+    lead: (@Composable RowScope.() -> Unit)? = null,
 ) {
     // Строка «Что не так?» (режим отладки, с 16.10.2026 на всех экранах) — под шапкой: одно место на все экраны вида
     // v2 («Сегодня», режимы, «Телефон», настройки, страницы сервисов). Её нет — шапка ровно как была.
     val bar = LocalScreenBar.current
     if (bar == null) {
-        KovchegHeaderRow(title, modifier, subtitle, onSubtitle, onTitle, onTitleDouble, onBack, actions)
+        KovchegHeaderRow(title, modifier, subtitle, onSubtitle, onTitle, onTitleDouble, onBack, actions, lead)
         return
     }
     Column(modifier.fillMaxWidth()) {
-        KovchegHeaderRow(title, Modifier, subtitle, onSubtitle, onTitle, onTitleDouble, onBack, actions)
+        KovchegHeaderRow(title, Modifier, subtitle, onSubtitle, onTitle, onTitleDouble, onBack, actions, lead)
         bar(title, subtitle)
     }
 }
@@ -528,6 +533,7 @@ private fun KovchegHeaderRow(
     onTitleDouble: (() -> Unit)?,
     onBack: (() -> Unit)?,
     actions: (@Composable RowScope.() -> Unit)?,
+    lead: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val t = LocalPravkaType.current
     Row(
@@ -542,9 +548,11 @@ private fun KovchegHeaderRow(
         }
         KovchegMark()
         Spacer(Modifier.width(10.dp))
-        Column(
-            Modifier
-                .weight(1f)
+        // С клавишами за названием — название своей ширины, клавиши сразу за ним, остальное место — пустое до значков
+        // справа; название длиннее места ужимается (переносится), а клавиши не уезжают за край.
+        val titleModifier = if (lead == null) Modifier.weight(1f) else Modifier
+        val titleBlock: @Composable (Modifier) -> Unit = { m -> Column(
+            m
                 .clip(RoundedCornerShape(KvShape.Control))
                 .then(
                     if (onTitle != null || onTitleDouble != null) Modifier.combinedClickable(
@@ -580,6 +588,12 @@ private fun KovchegHeaderRow(
                         .then(if (onSubtitle != null) Modifier.clickable(role = Role.DropdownList, onClick = onSubtitle) else Modifier),
                 )
             }
+        } }
+        if (lead == null) titleBlock(titleModifier)
+        else Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+            titleBlock(Modifier.weight(1f, fill = false))
+            Spacer(Modifier.width(6.dp))
+            lead()
         }
         if (actions != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp), content = actions)
     }

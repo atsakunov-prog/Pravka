@@ -16,6 +16,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -320,7 +321,7 @@ fun DelaTab(
      * Шапка режима (Правка 4.0): её рисует вкладка, потому что второй тон
      * шапки — сфера («Все сферы ⌄», `screens/06`), а сфера живёт здесь.
      */
-    header: @Composable (sphere: String, onSphere: () -> Unit) -> Unit = { _, _ -> },
+    header: @Composable (sphere: String, onSphere: () -> Unit, lead: @Composable RowScope.() -> Unit) -> Unit = { _, _, _ -> },
     /**
      * Раздел, который открыть сразу (меню Ковчега: «CRM» — `crm`). «new/<batch_ref>» — «Новое» одной
      * пачкой, как `#/new/<batch_ref>` веба (дайджест на «Сегодня» → «Открыть «Новое»»).
@@ -412,6 +413,10 @@ fun DelaTab(
         onNavHandled()
     }
     var newTask by remember { mutableStateOf(false) }
+    // Название, с которым открыть ручную форму («Руками…» в листе «Добавить дела» — набранное не теряется).
+    var newTaskTitle by remember { mutableStateOf("") }
+    // Лист «Добавить дела» (16.10.2026 вечер, запись 32): 0 — закрыт, 1 — «+» (набрать), 2 — микрофон (сразу диктовка).
+    var addSheet by remember { mutableIntStateOf(0) }
     var editingSuggestion by remember { mutableStateOf<Dela.Suggestion?>(null) }
     var rejecting by remember { mutableStateOf<Dela.Suggestion?>(null) }
     var starting by remember { mutableStateOf("") }
@@ -1058,7 +1063,6 @@ fun DelaTab(
                             searching = !searching
                         },
                     )
-                    GlyphButton(Glyphs.Plus, "новое дело руками", onClick = { newTask = true })
                 }
                 if (bad) {
                     // Ошибка синка — причиной целиком, как и раньше (железное правило 6).
@@ -1718,7 +1722,11 @@ fun DelaTab(
         // Подпись шапки — сфера («Все сферы ⌄»), тап — выбор сферы. Сводки дня «6 сегодня · 2 просрочено · 1 закрыто»
         // (14.10.2026) больше нет (отладка 16.10.2026, запись 15: «зачем мне эта информация наверху»): просроченное и
         // «ждут» — мелкой строкой внизу «Сейчас» и «Сегодня».
-        header(sphereName) { sphereSheet = true }
+        // «+» и микрофон — сразу за «Дела» в шапке (запись 32): «+» — лист «Добавить дела», долгое нажатие — ручная форма;
+        // микрофон — тот же лист с диктовкой движком «Д».
+        header(sphereName, { sphereSheet = true }) {
+            DelaAddKeys(onAdd = { addSheet = 1 }, onManual = { newTaskTitle = ""; newTask = true }, onMic = { addSheet = 2 })
+        }
         DelaDebugBar(app, { debugScreen() })
         if (navColumn) {
             // Разворот вида v2 — как веб Дел (лист «Дела» холста): боковина разделов | список | карточка; строка
@@ -2163,8 +2171,17 @@ fun DelaTab(
             },
         )
     }
+    if (addSheet != 0) {
+        DelaAddSheet(
+            app,
+            listenFirst = addSheet == 2,
+            onDismiss = { addSheet = 0 },
+            onManual = { typed -> addSheet = 0; newTaskTitle = typed; newTask = true },
+            onOpenTask = { id -> addSheet = 0; snapLive.tasks[id]?.let { actions.open(it) } },
+        )
+    }
     if (newTask) {
-        val blank = remember { Dela.Task(id = Dela.newId(), title = "", ownerId = me, source = "manual") }
+        val blank = remember { Dela.Task(id = Dela.newId(), title = newTaskTitle, ownerId = me, source = "manual") }
         DelaTaskSheet(
             app = app,
             task = blank,

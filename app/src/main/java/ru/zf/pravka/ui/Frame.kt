@@ -131,6 +131,8 @@ fun TabHeader(
     titleExtra: String? = null,
     onTitleExtra: (() -> Unit)? = null,
     actions: (@Composable RowScope.() -> Unit)? = null,
+    /** Клавиши сразу за названием (Дела: «+» и микрофон, 16.10.2026 вечер, запись 32); в «Виде 4.0» — первыми справа. */
+    lead: (@Composable RowScope.() -> Unit)? = null,
 ) {
     if (Look.v2) {
         // Вид v2 (план §3): значок Ковчега вместо монеты и «‹» режима.
@@ -141,9 +143,11 @@ fun TabHeader(
             onBack = onBack,
             actions = actions,
             modifier = Modifier.statusBarsPadding(),
+            lead = lead,
         )
         return
     }
+    val acts: (@Composable RowScope.() -> Unit)? = if (lead == null) actions else ({ lead(); actions?.invoke(this) })
     val decor = LocalModeDecor.current
     val bar = LocalScreenBar.current
     Column {
@@ -154,7 +158,7 @@ fun TabHeader(
             subtitle = titleExtra ?: subtitle,
             onSubtitle = onTitleExtra,
             glyph = glyph,
-            actions = actions,
+            actions = acts,
             modifier = Modifier.statusBarsPadding(),
         )
         // Строка отладки — под шапкой и в «Виде 4.0» (у вида v2 её ставит `KovchegHeader`).
