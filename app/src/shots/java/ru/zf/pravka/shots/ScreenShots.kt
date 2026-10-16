@@ -60,7 +60,7 @@ import java.util.TimeZone
  * заглушка вместо страницы); p5 — доводка 5.0 (подсказка еды, разделы веба Денег); sp — траты Claude (значок
  * на «Сегодня» с меткой советов и экран «Claude: траты»); panel — кнопки справа в заголовке плашки v2 и «Сервер
  * ответил» (с проверкой, что слово видно целиком); m16 — мелочи отладки 16.10 (карточка справа открывает другое дело
- * с шапки — с проверкой).
+ * с шапки, язычок колонки тянется после удержания — с проверками).
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -416,6 +416,104 @@ class ScreenShots {
         settle(8)
         frame("3-a-again")
         top(a.title).let { if (it == null || it < 0f) bad += "«А» снова открылось прокрученным: верх названия $it" }
+        c.pause().stop().destroy()
+        RuntimeEnvironment.setQualifiers(OUTER)
+        org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())
+    }
+
+    /**
+     * Язычок колонки разворота 852 dp (16.10.2026, запись 9 отладки: «держу стрелку — колонки не двигаются»): настоящие
+     * касания в окно Compose — держит дольше долгого нажатия и ведёт вправо — боковина шире; ведёт сразу влево — уже;
+     * подержал и отпустил — ничего; тап — боковина спрятана. Карточка справа: держит и ведёт влево — шире. Выдуманные колонки без данных. Группа `m16`.
+     *
+     * Прежнюю беду (после удержания `combinedClickable` съедал движение) здесь не воспроизвести: таймер долгого нажатия
+     * Compose под Robolectric не срабатывает, и старый язычок тут тянулся. Новое решение считает удержание и по времени
+     * событий пальца — его снимок и проверяет; на телефоне — руками.
+     */
+    @Test
+    fun gripDrag() {
+        if (!want("m16")) return
+        RuntimeEnvironment.setQualifiers("w852dp-h883dp-420dpi")
+        val cols = androidx.compose.runtime.mutableStateOf(ru.zf.pravka.core.DelaColumns.State())
+        val c = Robolectric.buildActivity(androidx.activity.ComponentActivity::class.java).setup()
+        c.get().setContent {
+            ru.zf.pravka.ui.PravkaTheme {
+                androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalMode provides ru.zf.pravka.ui.Modes.Dela) {
+                    ru.zf.pravka.DelaColumnsRow(
+                        cols = cols.value,
+                        onCols = { cols.value = it },
+                        modifier = androidx.compose.ui.Modifier.fillMaxSize().background(ru.zf.pravka.ui.Kv.bg),
+                        side = { m -> androidx.compose.foundation.layout.Box(m.background(ru.zf.pravka.ui.Kv.side)) },
+                        list = { androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) },
+                        pane = { m -> androidx.compose.foundation.layout.Box(m.background(ru.zf.pravka.ui.Kv.panel)) },
+                    )
+                }
+            }
+        }
+        settle(20)
+        val view = c.get().window.decorView
+        val root = view.composeRoot() ?: error("нет Compose")
+        val density = c.get().resources.displayMetrics.density
+        fun center(what: String): androidx.compose.ui.geometry.Offset {
+            view.captureRoboImage(File(dir, "m16-grip-now.png").absolutePath) // раскладка — к отрисовке
+            val n = root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true)
+                .first { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(what) == true }
+            val loc = IntArray(2).also { (root as View).getLocationInWindow(it) }
+            return n.boundsInRoot.center + androidx.compose.ui.geometry.Offset(loc[0].toFloat(), loc[1].toFloat())
+        }
+        var t0 = 0L
+        fun touch(action: Int, at: androidx.compose.ui.geometry.Offset, afterMs: Long) {
+            looper.idleFor(Duration.ofMillis(afterMs))
+            val now = android.os.SystemClock.uptimeMillis()
+            if (action == android.view.MotionEvent.ACTION_DOWN) t0 = now
+            val e = android.view.MotionEvent.obtain(t0, now, action, at.x, at.y, 0)
+            view.dispatchTouchEvent(e)
+            e.recycle()
+            looper.idle()
+        }
+        /** Палец на язычке [what]: подержал [holdMs], повёл на [dxDp] пятью шагами, отпустил. */
+        fun gesture(what: String, holdMs: Long, dxDp: Float) {
+            val p = center(what)
+            touch(android.view.MotionEvent.ACTION_DOWN, p, 0)
+            var x = p.x
+            touch(android.view.MotionEvent.ACTION_MOVE, androidx.compose.ui.geometry.Offset(x, p.y), holdMs)
+            repeat(5) {
+                x += dxDp * density / 5
+                touch(android.view.MotionEvent.ACTION_MOVE, androidx.compose.ui.geometry.Offset(x, p.y), 16)
+            }
+            touch(android.view.MotionEvent.ACTION_UP, androidx.compose.ui.geometry.Offset(x, p.y), 16)
+            settle(8)
+            println("shots: язычок «$what», держал $holdMs мс, вёл $dxDp dp (${p.x / density} dp) → ${cols.value}")
+        }
+        val bad = mutableListOf<String>()
+        val side0 = ru.zf.pravka.core.DelaColumns.fit(852f, cols.value).side
+        // Держит 0,7 с (дольше долгого нажатия), ведёт вправо на 40 dp — сама запись 9.
+        gesture("Спрятать разделы", 700, 40f)
+        val side1 = cols.value.sideW ?: 0f
+        // Порог — не весь сдвиг: под стоящими часами Robolectric часть движений до списка не доходит (кадр раскладки
+        // между событиями), на телефоне колонка идёт за пальцем целиком. До 16.10 после удержания она не шла вовсе.
+        if (side1 < side0 + 8f) bad += "держал и вёл: боковина ${side0} → ${cols.value}"
+        view.captureRoboImage(File(dir, "m16-grip-1-held-dragged.png").absolutePath)
+        // Сразу ведёт влево на 30 dp — уже.
+        gesture("Спрятать разделы", 16, -30f)
+        val side2 = cols.value.sideW ?: 0f
+        if (side2 > side1 - 8f) bad += "вёл сразу: боковина ${side1} → ${cols.value}"
+        // Подержал и отпустил, не двигая, — ничего.
+        val before = cols.value
+        gesture("Спрятать разделы", 700, 0f)
+        if (cols.value != before) bad += "подержал и отпустил: ${before} → ${cols.value}"
+        // Карточка справа: держит и ведёт влево на 30 dp — шире (боковину сжимать некуда — её спрячем тапом ниже).
+        val pane0 = ru.zf.pravka.core.DelaColumns.fit(852f, cols.value).pane
+        gesture("Спрятать карточку", 700, -30f)
+        val pane1 = ru.zf.pravka.core.DelaColumns.fit(852f, cols.value).pane
+        if (pane1 < pane0 + 8f) bad += "карточка: держал и вёл влево — ${pane0} → ${pane1} (${cols.value})"
+        // Тап — боковина спрятана.
+        val p = center("Спрятать разделы")
+        touch(android.view.MotionEvent.ACTION_DOWN, p, 0)
+        touch(android.view.MotionEvent.ACTION_UP, p, 60)
+        settle(8)
+        if (cols.value.sideOn) bad += "тап не спрятал боковину: ${cols.value}"
+        view.captureRoboImage(File(dir, "m16-grip-2-tap-hidden.png").absolutePath)
         c.pause().stop().destroy()
         RuntimeEnvironment.setQualifiers(OUTER)
         org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())

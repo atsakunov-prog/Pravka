@@ -6,9 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,6 +41,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -57,12 +57,16 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.input.pointer.PointerInputScope
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -865,6 +869,11 @@ private val GRIP_ZONE_H = 76.dp
  * анимацией): пока она открыта, язычок стоит по середине щели между ней и списком, ушла — прижат к краю экрана,
  * крупнее, и зона касания заходит на список. Шеврон смотрит, куда поедет колонка. Жеста от края нет — он спорит
  * с системным «назад».
+ *
+ * Палец — одно решение `core/GripGesture.kt` (отладка 16.10.2026, запись 9: «держу стрелку — колонки не
+ * двигаются»): у `combinedClickable` после долгого нажатия (foundation 1.9.4) движение до отпускания съедалось, и
+ * `draggable` рядом отменял протяжку — вибрация была, колонка стояла. Шторка разделов на сложенном ([drag] = null) —
+ * на прежнем `combinedClickable`: протяжки у неё нет.
  */
 @Composable
 internal fun ColumnGrip(
@@ -891,33 +900,36 @@ internal fun ColumnGrip(
         else -> RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp)
     }
     val haptic = LocalHapticFeedback.current
-    val density = LocalDensity.current
+    // Жест живёт дольше перерисовки, а `grab(edge)` в DelaColumnsRow отдаёт новый GripDrag на каждой: читать свежие.
+    val dragNow by rememberUpdatedState(drag)
+    val toggleNow by rememberUpdatedState(onToggle)
     Box(
         modifier
             .offset(x = if (start) x else -x)
             .size(zone, GRIP_ZONE_H)
-            .combinedClickable(
-                role = Role.Button,
-                onClickLabel = label,
-                // Удержание — отклик пальцу «держу, можно тянуть»; отпустил не сдвинув — колонка остаётся как была.
-                onLongClick = if (drag != null) ({ haptic.performHapticFeedback(HapticFeedbackType.LongPress) }) else null,
-                onClick = onToggle,
-            )
             .then(
-                if (drag == null) Modifier
-                else Modifier.draggable(
-                    rememberDraggableState { d -> drag.onDrag(with(density) { (if (start) d else -d).toDp() }.value) },
-                    Orientation.Horizontal,
-                    onDragStarted = { drag.onStart() },
-                    onDragStopped = { drag.onEnd() },
-                ),
+                if (drag == null) Modifier.combinedClickable(role = Role.Button, onClickLabel = label, onClick = onToggle)
+                else Modifier.pointerInput(start) {
+                    gripPointer(
+                        sign = if (start) 1f else -1f,
+                        drag = { dragNow },
+                        onToggle = { toggleNow() },
+                        // Удержание — отклик пальцу «держу, можно тянуть»; отпустил не сдвинув — колонка как была.
+                        onHeld = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
+                    )
+                },
             )
             .semantics {
                 contentDescription = label
-                if (drag != null && open) customActions = listOf(
-                    CustomAccessibilityAction("Шире") { drag.onStep(DelaColumns.STEP); true },
-                    CustomAccessibilityAction("Уже") { drag.onStep(-DelaColumns.STEP); true },
-                )
+                if (drag != null) {
+                    // Тап для чтения с экрана — руками: `pointerInput` его не объявляет (у `combinedClickable` был сам).
+                    role = Role.Button
+                    onClick(label) { toggleNow(); true }
+                    if (open) customActions = listOf(
+                        CustomAccessibilityAction("Шире") { drag.onStep(DelaColumns.STEP); true },
+                        CustomAccessibilityAction("Уже") { drag.onStep(-DelaColumns.STEP); true },
+                    )
+                }
             },
         contentAlignment = when {
             !docked -> Alignment.Center
@@ -947,6 +959,60 @@ internal fun ColumnGrip(
                     .rotate(if (left) 180f else 0f),
             )
         }
+    }
+}
+
+/**
+ * Палец на язычке разворота — по `GripGesture`: тап, удержание (вибрация), протяжка сразу или после удержания.
+ * [sign] — куда шире колонка: у боковины слева палец вправо (+1), у карточки справа — влево (−1). Жест оборвался
+ * посреди протяжки (сложили телефон, ушли с экрана) — `onEnd` всё равно: иначе `held` в DelaColumnsRow залипнет.
+ */
+private suspend fun PointerInputScope.gripPointer(
+    sign: Float,
+    drag: () -> GripDrag?,
+    onToggle: () -> Unit,
+    onHeld: () -> Unit,
+) = awaitEachGesture {
+    val down = awaitFirstDown(requireUnconsumed = false)
+    val g = ru.zf.pravka.core.GripGesture(slop = viewConfiguration.touchSlop.toDp().value)
+    val longAt = down.uptimeMillis + viewConfiguration.longPressTimeoutMillis
+    var now = down.uptimeMillis
+    var ended = false
+    fun act(a: ru.zf.pravka.core.GripGesture.Act) {
+        when (a) {
+            ru.zf.pravka.core.GripGesture.Act.Held -> onHeld()
+            is ru.zf.pravka.core.GripGesture.Act.Start -> drag()?.let { it.onStart(); it.onDrag(sign * a.dx) }
+            is ru.zf.pravka.core.GripGesture.Act.Drag -> drag()?.onDrag(sign * a.dx)
+            ru.zf.pravka.core.GripGesture.Act.End -> drag()?.onEnd()
+            ru.zf.pravka.core.GripGesture.Act.Toggle -> onToggle()
+            ru.zf.pravka.core.GripGesture.Act.None -> {}
+        }
+    }
+    try {
+        while (true) {
+            // Пока палец стоит — ждём событие не дольше, чем до долгого нажатия; вышло время — «держу».
+            val ev = if (g.waiting) {
+                val left = longAt - now
+                if (left <= 0) null else withTimeoutOrNull(left) { awaitPointerEvent() }
+            } else awaitPointerEvent()
+            if (ev == null) {
+                act(g.longPress())
+                continue
+            }
+            val ch = ev.changes.firstOrNull { it.id == down.id } ?: continue
+            now = ch.uptimeMillis
+            if (!ch.pressed) {
+                ended = true
+                act(g.up(longHeld = ch.uptimeMillis >= longAt))
+                break
+            }
+            val d = ch.positionChange()
+            act(g.move(d.x.toDp().value, d.y.toDp().value))
+            // Протяжка — наша: движение не отдаём ни списку, ни системе.
+            if (g.dragging) ch.consume()
+        }
+    } finally {
+        if (!ended) act(g.cancel())
     }
 }
 
