@@ -171,6 +171,52 @@ class DelaDebugTest {
         assertFalse(r.getJSONArray("rows").getJSONObject(0).has("in"))
     }
 
+    /**
+     * Поезд 16.10.2026 (правило 29 сервера, проверка вагона 4): «Все дела → Напоминания» и «Вернулось» — строки снимка.
+     * У напоминания — «напоминание <миг или по месту>», у дела «потом» без срока — «потом · вернётся <день> («как сказано»)»;
+     * дело со сроком — не «потом». Словами в «Отладке» — то же.
+     */
+    @Test
+    fun `захват в снимке — напоминания и «потом» строками remind и back`() {
+        val s = Dela.Snapshot(
+            tasks = listOf(
+                Dela.Task(id = "r1", num = 70, title = "Отправить счёт в Контуре", ownerId = "me", kind = Dela.KIND_REMIND,
+                    remindAt = "2026-10-16T12:00:00+03:00"),
+                Dela.Task(id = "r2", num = 71, title = "Позвонить маме", ownerId = "me", kind = Dela.KIND_REMIND, remindPlace = "Дом"),
+                Dela.Task(id = "b1", num = 72, title = "Позвонить Ивану", ownerId = "me", backOn = today, backSaid = "на неделе"),
+                Dela.Task(id = "b2", num = 73, title = "Купить магний", ownerId = "me", backOn = "2026-10-19"),
+                Dela.Task(id = "d1", num = 74, title = "Сверка за сентябрь", ownerId = "me", backOn = today, dueDate = today),
+            ).associateBy { it.id },
+            features = setOf(DelaDebug.FEATURE, "capture"),
+        )
+        val o = DelaDebug.snapshot(
+            DelaDebug.Screen("nav:all", "Все дела",
+                rows = listOf(DelaDebug.Row("r1", true, "Напоминания"), DelaDebug.Row("r2", false, "Напоминания"),
+                    DelaDebug.Row("b1", true, "Вернулось"), DelaDebug.Row("b2", true, "Запустить"), DelaDebug.Row("d1", true, "Запустить"))),
+            s, today, "",
+        )
+        val rows = o.getJSONArray("rows")
+        val r1 = rows.getJSONObject(0)
+        assertEquals("напоминание 2026-10-16T12:00:00+03:00", r1.getString("remind"))
+        assertEquals("Напоминания", r1.getString("group"))
+        assertTrue(r1.getBoolean("in_view"))
+        assertFalse("у напоминания нет ни срока, ни «потом»", r1.has("due") || r1.has("back"))
+        val r2 = rows.getJSONObject(1)
+        assertEquals("напоминание по месту «Дом»", r2.getString("remind"))
+        assertFalse(r2.getBoolean("in_view"))
+        val b1 = rows.getJSONObject(2)
+        assertEquals("потом · вернётся $today («на неделе»)", b1.getString("back"))
+        assertEquals("Вернулось", b1.getString("group"))
+        assertFalse(b1.has("remind"))
+        assertEquals("потом · вернётся 2026-10-19", rows.getJSONObject(3).getString("back"))
+        val d1 = rows.getJSONObject(4)
+        assertFalse("со сроком — не «потом»", d1.has("back") || d1.has("remind"))
+        assertEquals(today, d1.getString("due"))
+        val words = DelaDebug.snapshotLines(o).joinToString("\n")
+        assertTrue(words, words.contains("#70 Отправить счёт в Контуре — ") && words.contains("напоминание 2026-10-16T12:00:00+03:00"))
+        assertTrue(words, words.contains("напоминание по месту «Дом»") && words.contains("потом · вернётся $today («на неделе»)"))
+    }
+
     @Test
     fun `главная — «Сегодня» подгруппами, дело внутри прямо перед родителем, «Сейчас» с делами внутри над родителем`() {
         // Поезд 16.10.2026, проверка вагона 3: дело внутри получило срок «сегодня» от родителя — на экране оно в подгруппе
