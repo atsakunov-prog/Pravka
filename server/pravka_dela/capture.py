@@ -366,6 +366,50 @@ DID_PAST = frozenset([b + e for b in _PAST_BASE for e in ("", "а", "и")]
 SENT_PAST = frozenset([b + e for b in ("прислал", "отправил", "ответил", "подписал", "оплатил", "скинул", "перевел",
                                         "переслал", "вернул") for e in ("", "а", "и")] + ["перевела"])
 
+# «Сказать / передать / напомнить Ивану, что …» (отладка 16.10.2026, записи 6–7; переделка по замечаниям проверяющего,
+# eve-review.md, вместо коммитов 565783ca и fedf0ea9). После глагола сообщения, адресата и «что / чтобы» идёт
+# содержание — то, что сказать, а не срок дела. Правило искало «когда» и «потом» по краям ВСЕЙ фразы и вырезало день из
+# содержания: «сказать Ивану, что Ольга уезжает на следующей неделе» ложилось «Потом: сказать Ивану что Ольга уезжает ·
+# верну в понедельник», «передать Ольге, что договор подпишут через неделю» — сроком через неделю, и этих слов в названии
+# уже не было. Ветка узкая (проверяющий: первая версия ловила «написать отчёт, чтобы сдать в пятницу» и теряла срок):
+# только когда СРАЗУ за глаголом — адресат (человек справочника в дательном или роль: «бухгалтеру»), а «что / чтобы» —
+# сразу за ним (между ними — разве что «когда»: «сказать Ивану завтра, что …»). «Написать» и «ответить» — только с
+# человеком справочника: «написать отчёт», «ответить на письмо» — обычные дела. «Чтобы» после прямого дополнения
+# («передать Ольге документы, чтобы она подписала в пятницу») — цель, а не содержание: правило прежнее, срок и человек
+# берутся, как раньше. Дательный впереди («Ивану сказать, что …») — по-прежнему модели.
+SAY_TO = frozenset({"сказать", "передать", "напомнить", "написать", "сообщить", "предупредить", "ответить", "объяснить",
+                    "рассказать"})
+SAY_PERSON_ONLY = frozenset({"написать", "ответить"})
+SAY_ACC = frozenset({"предупредить"})   # «предупредить Ивана, что …» — адресат в винительном
+CLAUSE = frozenset({"что", "чтобы"})
+SELF = frozenset({"мне", "себе", "себя", "меня"})
+SAY_VERB_WITHIN = 5   # глагол сообщения — в первых пяти словах после вводных («завтра сказать Ивану …», «надо …»)
+SAY_GAP = 6           # между адресатом и «что» — не длиннее «когда» в шесть слов («на следующей неделе в 12»)
+DAT_END = ("у", "ю", "е", "и", "ой", "ей")   # Ивану, Игорю, Ольге, Марии, Тестовой
+ACC_END = ("а", "я", "у", "ю")               # Ивана, Игоря, Ольгу, Марию
+# Роль вместо имени — в дательном («сказать бухгалтеру») и, для «предупредить», в винительном.
+SAY_ROLES = frozenset("""бухгалтеру бухгалтерше бухгалтерии юристу юристам директору гендиректору финдиректору финдиру
+руководителю начальнику секретарю менеджеру помощнику помощнице ассистенту водителю курьеру нотариусу врачу клиенту
+клиентам партнеру партнерам подрядчику поставщику арендодателю команде коллегам всем маме папе жене мужу сыну дочке
+дочери брату сестре бабушке дедушке няне учителю учительнице тренеру""".split())
+SAY_ROLES_ACC = frozenset("""бухгалтера бухгалтершу бухгалтерию юриста юристов директора гендиректора финдиректора
+руководителя начальника секретаря менеджера помощника помощницу ассистента водителя курьера нотариуса врача клиента
+клиентов партнера партнеров подрядчика поставщика арендодателя команду коллег всех маму папу жену мужа сына дочку дочь
+брата сестру бабушку дедушку няню учителя учительницу тренера""".split())
+# Иной день внутри «что …» — по вопросу 2 Саши (16.10.2026, ответ «а»): не позже дня, когда вернулось бы «потом», — дело
+# на сегодня (успеть сказать до него), позже — «потом», как было; слова остаются в названии. «До / к <день>» внутри
+# «что / чтобы …» — срок дела (проверяющий: «оставлять сроком»). Голый час без дня («в 3 экземплярах») — не день.
+SAY_DAY_WORD = re.compile(r"сегодня|завтра|недел|понедельник|вторник|сред[уаеы]|четверг|пятниц|суббот|воскресен|выходн|"
+                          r"\b(?:пн|вт|ср|чт|пт|сб|вс)\b|"
+                          r"конц[уае]|через|январ|феврал|март|апрел|ма[йяе]|июн|июл|август|сентябр|октябр|ноябр|декабр|"
+                          r"\d{1,2}[./]\d{1,2}|\d{4}-\d{2}-\d{2}")
+DEADLINE_PREPS = frozenset({"до", "к", "ко"})
+# Кто во фразе говорит («Иван сказал, что …») — его заметку отсев «содержание дела» не режет никогда (проверяющий:
+# «Иван сказал, что бюджет утвердят в январе — передать Ольге» — заметка у Ивана настоящая).
+SAID_BY = (SPEECH - SPEECH_TASK) | frozenset({"передал", "передала", "передали", "ответил", "ответила", "ответили",
+                                               "предупредил", "предупредила", "объяснил", "объяснила", "сообщили",
+                                               "написали", "рассказали", "говорили"})
+
 
 # Вложенность (правило 27; поезд 16.10.2026 — вагоны 2 и 4 вместе): «вынь / вынуть … из …», «вложи / положи / переложи
 # … в …», «для этого …», «до этого …», «внутри / внутрь дела (этого, него, #N, «…»)», «это шаг к …», «к делу про / о …
@@ -589,6 +633,88 @@ def _title(tt: list[dict]) -> str:
     return _cap(" ".join(t["w"] for t in tt))
 
 
+def _addressee(tt: list[dict], i: int, verb: str, ctx: Ctx) -> tuple[int, str | None] | None:
+    """Адресат сразу за глаголом сообщения: (где кончается, id человека или None — роль или тёзки); не адресат — None.
+    Человек справочника — в дательном («Ивану», «Ольге Тестовой»; у «предупредить» — в винительном: «Ивана»), иначе
+    роль («бухгалтеру»). У «написать» и «ответить» — только человек: «написать отчёт», «ответить на письмо» — дела."""
+    if i >= len(tt):
+        return None
+    n = tt[i]["n"]
+    ends = ACC_END if verb in SAY_ACC else DAT_END
+    if n.endswith(ends) and ctx.maybe_name(n):
+        if i + 1 < len(tt) and not tt[i]["comma"] and tt[i + 1]["n"].endswith(ends):
+            got = ctx.person([n, tt[i + 1]["n"]])
+            if got and "person" in got:
+                return i + 2, got["person"]["id"]
+        got = ctx.person([n])
+        if got:
+            return i + 1, got["person"]["id"] if "person" in got else None
+    if verb not in SAY_PERSON_ONLY and n in (SAY_ROLES_ACC if verb in SAY_ACC else SAY_ROLES):
+        return i + 1, None
+    return None
+
+
+def _time_only(tt: list[dict], now: dt.datetime) -> bool:
+    """Слова между адресатом и «что» — только «когда» («завтра», «на неделе», «в сейчас»): без предмета и без цели."""
+    words = _words_of(tt)
+    if not words or len(words) > SAY_GAP or any(t["comma"] for t in tt[:-1]):
+        return False
+    if _when_try(words, now):
+        return True
+    seqs = [tuple(s.split()) for s in BACK_SOON + BACK_WEEK + ("через месяц",)] + [("в", m) for m in MONTHS_LOC]
+    return tuple(words) in set(seqs) | {("когда-нибудь",)} | set(NOW_WORDS)
+
+
+def _said_clause(tt: list[dict], ctx: Ctx, within: int = SAY_VERB_WITHIN) -> dict | None:
+    """«сказать Ивану, что …»: {verb — где глагол, at — где «что / чтобы», person — кому (id или None)}; иначе None.
+    Глагол сообщения (SAY_TO) — в первых `within` словах после вводных («мне», «надо», «не забыть»): так ловится и
+    «завтра сказать Ивану, что …». Сразу за ним — адресат (`_addressee`), за адресатом — «что / чтобы» (запятая не
+    нужна: распознавание её часто не ставит) или «когда» и потом «что». «Напомнить мне / себе, что …» — не «сказать
+    другому»; содержание пустое — тоже нет."""
+    lead = _strip_lead(list(tt))
+    off = len(tt) - len(lead)
+    v = next((i for i, t in enumerate(lead[:within]) if t["n"] in SAY_TO), None)
+    if v is None:
+        return None
+    v += off
+    if v + 1 >= len(tt) or tt[v + 1]["n"] in SELF:
+        return None
+    got = _addressee(tt, v + 1, tt[v]["n"], ctx)
+    if not got:
+        return None
+    j, person = got
+    at = next((k for k in range(j, min(len(tt), j + SAY_GAP + 1)) if tt[k]["n"] in CLAUSE), None)
+    if at is None or at + 1 >= len(tt) or (at > j and not _time_only(tt[j:at], ctx.now)):
+        return None
+    return {"verb": v, "at": at, "person": person}
+
+
+def _said_day(body: list[dict], now: dt.datetime) -> tuple[dt.date, bool] | None:
+    """День внутри «что …»: (день, сказан ли он сроком «до / к …»); нет дня — None. Первый слева кусок «когда» с
+    названным днём (голый час — не день: «в 3 экземплярах»); прошедший — не день."""
+    words = _words_of(body)
+    for a in range(len(words)):
+        for k in range(min(5, len(words) - a), 0, -1):
+            chunk = words[a:a + k]
+            if any(t["comma"] for t in body[a:a + k - 1]) or not SAY_DAY_WORD.search(" ".join(chunk)):
+                continue
+            got = _when_try(chunk, now)
+            if not got:
+                continue
+            s = got["set"]
+            d = s.get("due_date") or (remind.at_of(s["remind_at"]).date().isoformat() if s.get("remind_at") else None)
+            if not d or dt.date.fromisoformat(d) < now.date():
+                continue
+            return dt.date.fromisoformat(d), chunk[0] in DEADLINE_PREPS or bool(got.get("by_deadline"))
+    return None
+
+
+def _said_title(head_title: str, body: list[dict]) -> str:
+    """«Сказать Ивану» + «что Ольга уезжает на следующей неделе» → «Сказать Ивану, что Ольга уезжает на следующей
+    неделе»: содержание — слово в слово, с запятыми."""
+    return f"{head_title}, {_text(body)}"
+
+
 def _agenda(tt: list[dict]) -> bool:
     if not tt:
         return False
@@ -762,16 +888,29 @@ def _remind_title(rest: list[dict]) -> str | None:
 
 
 def _rule_remind(tt: list[dict], ctx: Ctx) -> dict | None:
-    """Н1 «напомни + когда» и Н2 «напомни + место»."""
+    """Н1 «напомни + когда» и Н2 «напомни + место». «Напомни сказать Ивану, что встреча в пятницу» — миг и место
+    только вне «что …» (`_said_clause`), содержание — в название слово в слово: «в пятницу» — что сказать, а не когда
+    напомнить (было: «напомню в пт 9:00: сказать Ивану что встреча»); человек — кому сказать."""
     trig = _find_trigger(tt)
+    said = _said_clause(tt, ctx)
+    cut = said["at"] if said else len(tt)
     place = _find_place(tt, ctx.places, trig[1] if trig else None)
+    if place and place["start"] >= cut:
+        place = None   # «сказать Ивану, что когда приеду домой, позвоню» — место из содержания, не напоминания
     if not trig and not place:
         return None
     skip: set[int] = set(range(*trig)) if trig else set()
+
+    def parts() -> tuple[str | None, list[dict], list[dict]]:
+        """Название, голова (до «что») и содержание: голова — правилом, содержание — слово в слово."""
+        idx = [i for i in range(len(tt)) if i not in skip]
+        head, body = [tt[i] for i in idx if i < cut], [tt[i] for i in idx if i >= cut]
+        title = _remind_title(head)
+        return (_said_title(title, body) if title and body else title), head, body
+
     if place:
         skip |= set(range(place["start"], place["end"]))
-        rest = [t for i, t in enumerate(tt) if i not in skip]
-        title = _remind_title(rest)
+        title, head, body = parts()
         if not title:
             return None
         word, prep = place["word"], place["prep"]
@@ -783,38 +922,37 @@ def _rule_remind(tt: list[dict], ctx: Ctx) -> dict | None:
         else:
             # Места нет у телефона — как сказано («к маме», «в Москве»), без выдуманного именительного падежа (проверка
             # 16.10.2026: «когда приеду к маме» давало место «мам», «в Москве» — «москв»), и честно: телефон его не знает.
-            said = f"{prep} {word}" if prep else word
+            where = f"{prep} {word}" if prep else word
             if _n(word) not in HOME and ctx.maybe_name(_n(word)):
                 return None  # «когда приеду к Ивану» — человек, а не место: модели
-            item = {"bucket": "place", "title": title, "fields": {"kind": "remind", "remind_place": said},
-                    "place_words": said, "place_verb": place.get("verb") or "приедешь",
-                    "warn": f"место «{said}» телефон не знает: добавь его в автопилоте"}
+            item = {"bucket": "place", "title": title, "fields": {"kind": "remind", "remind_place": where},
+                    "place_words": where, "place_verb": place.get("verb") or "приедешь",
+                    "warn": f"место «{where}» телефон не знает: добавь его в автопилоте"}
         # Человек и клиент — как у дела (сквозной тест 15.10.2026: «… договор для Ромашки» ложилось без клиента, а
         # «… отправить Ивану договор» — без Ивана, и «отправил договор Ивану» потом не гасило напоминание).
-        return _task_people(item, rest, ctx)
+        return _said_people(item, head, body, ctx)
     lo, hi = trig
-    after = _when_edges(tt, hi, len(tt), ctx.now, at_start=True, at_end=True)
-    before = _when_edges(tt, 0, lo, ctx.now, at_start=True, at_end=False) if lo > 0 else []
+    after = _when_edges(tt, hi, cut if cut > hi else len(tt), ctx.now, at_start=True, at_end=True)
+    before = _when_edges(tt, 0, min(lo, cut), ctx.now, at_start=True, at_end=False) if min(lo, cut) > 0 else []
     chunks = after + before
     got = None
     if len(chunks) >= 2:
-        merged = sorted(chunks, key=lambda c: c[0])[:2]
+        merged = sorted(chunks, key=lambda ch: ch[0])[:2]
         both = _when_try([t["n"] for a, b, _ in merged for t in tt[a:b]], ctx.now)
-        got = both or max(chunks, key=lambda c: c[1] - c[0])[2]
-        used = merged if both else [max(chunks, key=lambda c: c[1] - c[0])]
+        got = both or max(chunks, key=lambda ch: ch[1] - ch[0])[2]
+        used = merged if both else [max(chunks, key=lambda ch: ch[1] - ch[0])]
     elif chunks:
         got, used = chunks[0][2], chunks[:1]
     else:
         used = []
     for a, b, _ in used:
         skip |= set(range(a, b))
-    rest = [t for i, t in enumerate(tt) if i not in skip]
-    title = _remind_title(rest)
+    title, head, body = parts()
     if not title:
         return None
     at = _remind_at(got, ctx.now)
-    return _task_people({"bucket": "remind", "title": title, "fields": {"kind": "remind", "remind_at": remind.iso(at)}},
-                        rest, ctx)
+    return _said_people({"bucket": "remind", "title": title, "fields": {"kind": "remind", "remind_at": remind.iso(at)}},
+                        head, body, ctx)
 
 
 def _rule_idea(tt: list[dict], ctx: Ctx) -> dict | None:
@@ -1033,6 +1171,22 @@ def _task_people(item: dict, rest: list[dict], ctx: Ctx) -> dict:
     return item
 
 
+def _said_people(item: dict, head: list[dict], body: list[dict], ctx: Ctx) -> dict:
+    """Как `_task_people`, но у «сказать Ивану, что …» человек — только из головы (кому сказать, а не о ком), клиент —
+    из головы, иначе по содержанию («передать Ивану, что Ромашка подписала договор»). Без содержания — ровно
+    `_task_people`."""
+    _task_people(item, head, ctx)
+    return _body_client(item, body, ctx)
+
+
+def _body_client(item: dict, body: list[dict], ctx: Ctx) -> dict:
+    if body and "project_id" not in item["fields"]:
+        proj = ctx.project(_words_of(body), only="client")
+        if proj:
+            item["fields"]["project_id"] = str(proj["id"])
+    return item
+
+
 def _rule_agenda(tt: list[dict], ctx: Ctx) -> dict | None:
     """Пв — повестка (мелочи 16.10.2026, запись 19): «запиши в повестку …», «в повестку с Ольгой: отпуск», «не забыть
     обсудить с Иваном фонды», «обсудить / обговорить / поговорить / поднять с Иваном …», «спросить Ивана …», «уточнить у
@@ -1075,8 +1229,40 @@ def _rule_agenda(tt: list[dict], ctx: Ctx) -> dict | None:
     return item
 
 
+def _said_task(tt: list[dict], said: dict, ctx: Ctx) -> dict | None:
+    """«сказать Ивану, что …»: форму, срок и человека (кому сказать) решает голова до «что» тем же правилом дела;
+    содержание — в название слово в слово, его «потом» и «в сейчас» — то, что сказать. Голова не дело с глагола —
+    None (модели). Человек — только из головы (кому, а не о ком: «сказать бухгалтеру, что Ольга уезжает» — без Ольги),
+    клиент — из головы, иначе по всему содержанию. День внутри «что …» у голого дела (Г) — вопрос 2 Саши: «до / к
+    <день>» — срок; иной день не позже возврата «потом» — дело на сегодня (успеть сказать до него, в тот же день —
+    поздно); позже или нет дня — «потом», как было."""
+    at = said["at"]
+    head, body = tt[:at], tt[at:]
+    item = _rule_task(head, ctx)   # в голове «что» нет — сюда второй раз не придёт
+    if not item:
+        return None
+    item["title"] = _said_title(item["title"], body)
+    fields = _body_client(item, body, ctx)["fields"]   # человек — уже из головы (`_rule_task`)
+    if item.get("form") == "Г":
+        got = _said_day(body, ctx.now)
+        if got:
+            d, deadline = got
+            if deadline or d <= dt.date.fromisoformat(fields["back_on"]):
+                due = d if deadline else ctx.today
+                fields.pop("back_on", None)
+                fields["due_date"] = due.isoformat()
+                item.update(bucket="today" if due == ctx.today else "day", form="Д")
+                if deadline:
+                    item["by_deadline"] = True
+    return item
+
+
 def _rule_task(tt: list[dict], ctx: Ctx) -> dict | None:
-    """П «… потом / на неделе», Д «сегодня … / в сейчас … / в пятницу …», Г голое «купить магний» — дело с глагола."""
+    """П «… потом / на неделе», Д «сегодня … / в сейчас … / в пятницу …», Г голое «купить магний» — дело с глагола.
+    «Сказать Ивану, что …» — голова до «что» отдельно (`_said_task`)."""
+    said = _said_clause(tt, ctx)
+    if said:
+        return _said_task(tt, said, ctx)
     back = _back_words(tt)
     if back:
         said, a, b = back
@@ -2017,6 +2203,53 @@ def _said_off(text: str, ctx: Ctx, person_id: str) -> tuple[str, str | None]:
     return (rest, m.group("who")) if rest else (text, None)
 
 
+def _say_bodies(data: dict, ctx: Ctx) -> list[list[str]]:
+    """Содержание «что …» дел модели, чьё название начинается с глагола сообщения и адресата («Сказать Ивану, что Ольга
+    уезжает…»; тот же разбор, что у правила, — `_said_clause`, глагол первым словом): слова содержания каждого."""
+    out = []
+    for t in data.get("tasks") or []:
+        tt = tokens(" ".join(str(t.get("title") or "").split()))
+        said = _said_clause(tt, ctx, within=1)
+        if said:
+            out.append([w for x in tt[said["at"] + 1:] for w in people.words(x["w"])])
+    return out
+
+
+def _say_body_note(note: str, bodies: list[list[str]]) -> bool:
+    """Заметка повторяет содержание одного из этих дел: не меньше трёх значимых слов (от трёх букв), и каждое по основе
+    есть в его «что …». Порог — все слова, а не доля."""
+    ws = [w for w in people.words(note) if len(w) >= 3]
+    if len(ws) < 3:
+        return False
+    for body in bodies:
+        stems = {people.stem(x) for x in body}
+        if all(people.stem(w) in stems or any(people.same(w, x) for x in body) for w in ws):
+            return True
+    return False
+
+
+def _speakers(text: str, ctx: Ctx) -> tuple[set[str], bool]:
+    """Кто во фразе говорит: «Иван сказал, что …», «как сообщила Ольга Тестова», «Иван пишет…» — id карточек рядом с
+    глаголом речи (SAID_BY: слово-два до него или после). Второе — глагол речи есть, а кто — не узнали (местоимение,
+    тёзки, человека нет в справочнике): тогда отсев «содержание дела» не режет ничего."""
+    tt = tokens(text)
+    ids: set[str] = set()
+    unknown = False
+    for i, t in enumerate(tt):
+        if t["n"] not in SAID_BY:
+            continue
+        found = False
+        for a, b in ((i - 2, i), (i - 1, i), (i + 1, i + 3), (i + 1, i + 2)):
+            if a < 0 or b > len(tt) or a >= b:
+                continue
+            got = ctx.person(_words_of(tt[a:b]))
+            if got and "person" in got:
+                ids.add(str(got["person"]["id"]))
+                found = True
+        unknown = unknown or not found
+    return ids, unknown
+
+
 def _model_date(s: str, today: dt.date) -> dt.date | None:
     try:
         d = dt.date.fromisoformat(str(s or "").strip()[:10])
@@ -2114,6 +2347,17 @@ def from_model(data: dict, index: dict, text: str, ctx: Ctx, places: list[str], 
             continue
         back = _model_date(t.get("back") or "", today) or default_back(today, "")
         items.append({"bucket": "back", "title": title, "fields": {**fields, "back_on": back.isoformat()}})
+    # Заметка = содержание дела (отладка 16.10.2026, записи 6–7; по замечаниям проверяющего, eve-review.md): «сказать
+    # Ивану, что Ольга уезжает на следующей неделе» модель клала делом у Ивана (верно) И заметкой «Ольга уезжает на
+    # следующей неделе» у Ольги, и Саша прочёл это как «записал в карточку CRM, а не дело». Такую заметку не кладём, только
+    # если всё сразу: (1) дело этого же ответа начинается с глагола сообщения и адресата («Сказать / передать / напомнить
+    # Ивану, что …»), (2) все значимые слова заметки — из его «что …», (3) заметка не у того, кто во фразе «сказал /
+    # сообщил / написал / говорит» (и не у его клиента без человека): «Иван сказал, что бюджет утвердят в январе —
+    # передать Ольге» — заметка у Ивана настоящая, её не режем никогда; глагол речи есть, а кто — не узнали, — не режем
+    # ничего. «Проверить в понедельник, что смета будет готова» — не сообщение: заметка «Смета будет готова в
+    # понедельник» остаётся.
+    bodies = _say_bodies(data, ctx) if data.get("notes") else []
+    speakers: tuple[set[str], bool] | None = None
     for n in data.get("notes") or []:
         text_ = " ".join(str(n.get("text") or "").split())
         if not text_:
@@ -2123,6 +2367,13 @@ def from_model(data: dict, index: dict, text: str, ctx: Ctx, places: list[str], 
         said_by = None
         if person:
             text_, said_by = _said_off(text_, ctx, str(person))
+        if bodies and not said_by and _say_body_note(text_, bodies):
+            speakers = speakers or _speakers(text or "", ctx)
+            ids, unknown = speakers
+            theirs = (str(person) in ids) if person else bool(pid) and str(pid) in {ctx.client_of(x) for x in ids}
+            if not unknown and not theirs:
+                log.info("захват: заметка = содержание дела, не кладу: %s", _short(text_, 60))
+                continue
         item = {"bucket": "note", "text": text_}
         if said_by:
             item.update(summary=f"{_cap(said_by)}: {text_}", person_said=said_by)

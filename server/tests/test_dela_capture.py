@@ -165,6 +165,91 @@ def test_rule_stays_silent(dela, case):
         assert capture.rule(c, "sasha", case["say"], NOWS["a"]) is None, case["why"]
 
 
+def test_said_content_is_not_due(dela):
+    """«Сказать / передать / напомнить Ивану, что …» (отладка 16.10.2026, записи 6–7; переделка по замечаниям
+    проверяющего, eve-review.md): после глагола, адресата и «что / чтобы» — то, что сказать. Форму, срок и человека решает
+    голова до «что», содержание — в название слово в слово; день внутри «что …» у голого дела — вопрос 2 Саши. Ветка —
+    только с адресатом сразу за глаголом: «написать отчёт, чтобы …», «передать Ольге документы, чтобы …», «ответить на
+    письмо, чтобы …» — прежнее правило со сроком и человеком."""
+    ids = seed(dela)
+    now = NOWS["a"]   # чт 15.10: «потом» вернётся в пт 16.10
+    with dela_db.session(dela, "sasha") as c:
+        def one(s, at=now):
+            got = capture.rule(c, "sasha", s, at)
+            assert got, s
+            return got["form"], got["items"][0]
+
+        # «потом» и день внутри «что …» — содержание; запятой распознавание могло не поставить
+        form, it = one("сказать Ивану что Ольга уезжает потом")
+        assert form == "Г" and it["title"] == "Сказать Ивану, что Ольга уезжает потом"
+        assert it["fields"]["back_on"] == "2026-10-16" and "back_said" not in it["fields"]
+        # «когда» головы — срок дела, хоть и между адресатом и «что»; содержание целиком
+        form, it = one("сказать Ивану на неделе, что Ольга уезжает")
+        assert form == "П" and it["fields"]["back_said"] == "на неделе" and it["title"] == "Сказать Ивану, что Ольга уезжает"
+        form, it = one("в сейчас сказать Ивану, что встреча в пятницу")
+        assert it["bucket"] == "now" and it["title"] == "Сказать Ивану, что встреча в пятницу"
+        # человек — кому сказать, а не о ком; роль — дело без человека
+        _, it = one("сказать Ольге, что Иван уезжает в понедельник")
+        assert it["fields"]["person_id"] == ids["olga"] and it["bucket"] == "back"   # пн позже возврата — «потом»
+        _, it = one("сказать бухгалтеру, что Ольга уезжает в понедельник")
+        assert "person_id" not in it["fields"] and it["title"] == "Сказать бухгалтеру, что Ольга уезжает в понедельник"
+        _, it = one("предупредить Ольгу, что встреча переносится на понедельник")   # у «предупредить» — винительный
+        assert it["fields"]["person_id"] == ids["olga"] and it["title"].startswith("Предупредить Ольгу, что")
+        # клиент — и из содержания, если голова его не назвала
+        _, it = one("передать Ивану, что Ромашка подписала договор в понедельник")
+        assert it["fields"]["project_id"] == ids["romashka"] and it["fields"]["person_id"] == ids["ivan"]
+        # вопрос 2: день в «что …» не позже возврата «потом» — дело на сегодня (в день возврата сказать уже поздно)
+        form, it = one("напомнить Ивану, что договор надо подписать завтра")
+        assert form == "Д" and it["bucket"] == "today" and it["fields"]["due_date"] == "2026-10-15"
+        assert "back_on" not in it["fields"] and it["title"] == "Напомнить Ивану, что договор надо подписать завтра"
+        _, it = one("сказать бухгалтеру, что Ольга уезжает завтра")
+        assert it["bucket"] == "today" and "person_id" not in it["fields"]
+        fri = NOWS["c"]   # пт 16.10: «потом» вернётся в пн 19.10
+        _, it = one("сказать Ивану, что Ольга уезжает в понедельник", fri)
+        assert it["bucket"] == "today" and it["fields"]["due_date"] == "2026-10-16"
+        _, it = one("сказать Ивану, что Ольга уезжает во вторник", fri)
+        assert it["bucket"] == "back" and it["fields"]["back_on"] == "2026-10-19"
+        # «до / к <день>» в «что / чтобы …» — срок; голый час — не день
+        form, it = one("сказать Ивану, чтобы прислал отчёт до среды")
+        assert form == "Д" and it["fields"]["due_date"] == "2026-10-21" and it.get("by_deadline")
+        assert it["title"] == "Сказать Ивану, чтобы прислал отчёт до среды"
+        _, it = one("сказать Ивану, что договор в 3 экземплярах")
+        assert it["bucket"] == "back" and it["title"] == "Сказать Ивану, что договор в 3 экземплярах"
+        # «написать» и «ответить» — только человеку: «написать бухгалтеру, что …» — прежнее правило (слова — как раньше)
+        _, it = one("написать Ивану, что договор готов")
+        assert it["title"] == "Написать Ивану, что договор готов" and it["fields"]["person_id"] == ids["ivan"]
+        _, it = one("написать бухгалтеру, что счёт оплачен")
+        assert it["title"] == "Написать бухгалтеру что счёт оплачен"
+        # цель «чтобы …» после прямого дополнения и не человеку: срок, человек и клиент — как раньше
+        for s, due, who in (("написать отчёт, чтобы сдать в пятницу", "2026-10-16", None),
+                            ("написать договор, чтобы подписать в среду", "2026-10-21", None),
+                            ("передать Ольге документы, чтобы она подписала в пятницу", "2026-10-16", "olga"),
+                            ("ответить на письмо, чтобы Иван успел до пятницы", "2026-10-16", "ivan")):
+            form, it = one(s)
+            assert form == "Д" and it["fields"]["due_date"] == due, s
+            assert it["fields"].get("person_id") == (ids[who] if who else None), s
+        # «напомни …»: миг — вне «что …», содержание в названии целиком; человек — кому сказать
+        form, it = one("напомни завтра сказать Ивану, что встреча переносится на пятницу")
+        assert form == "Н" and same_at(it["fields"]["remind_at"], "2026-10-16T09:00:00+03:00")
+        assert it["title"] == "Сказать Ивану, что встреча переносится на пятницу" and it["fields"]["person_id"] == ids["ivan"]
+        form, it = one("сказать Ивану, что встреча в пятницу, напомни в 12")
+        assert form == "Н" and same_at(it["fields"]["remind_at"], "2026-10-15T12:00:00+03:00")
+        assert it["title"] == "Сказать Ивану, что встреча в пятницу"
+        # как раньше: дательный впереди — модели, вложенность молчит, «напомни мне, что …» правило не берёт
+        for s in ("Ивану сказать, что Ольга уезжает на следующей неделе", "сказать Ивану, что для этого нужен паспорт",
+                  "напомни мне, что завтра встреча"):
+            assert capture.rule(c, "sasha", s, now) is None, s
+        ctx = capture.Ctx(c, "sasha", now)
+        # не «сказать другому»: себе, без адресата, прямое дополнение, «ответить на …», чужая речь
+        for s in ("напомнить мне, что встреча в пятницу", "напомнить себе, что договор завтра", "проверить, что внутри коробки",
+                  "Иван сказал, что смета будет к пятнице", "написать отчёт, чтобы сдать в пятницу",
+                  "передать Ольге документы, чтобы она подписала в пятницу", "ответить на письмо, чтобы Иван успел",
+                  "написать бухгалтеру, что счёт оплачен", "сказать Пете, что Ольга уезжает"):
+            assert capture._said_clause(capture.tokens(s), ctx) is None, s
+        got = capture._said_clause(capture.tokens("надо бы завтра сказать Ивану Тестову, что договор готов"), ctx)
+        assert got["at"] == 6 and got["person"] == ids["ivan"]
+
+
 def test_back_on_table():
     for c in CASES["back_on"]["cases"]:
         got = capture.default_back(dt.date.fromisoformat(c["today"]), c["said"])
@@ -318,6 +403,76 @@ def test_model_note_without_said_prefix(dela, at):
     capture.tick(dela, ask_fn=lambda h, u: _model(notes=[{"text": "Иван хочет скидку", "project": "", "person": "Иван"}]))
     got = store.view(dela, "sasha", "capture", ref=cap["ref"])["capture"]
     assert got["items"][0]["line"] == "Заметка у Ивана Тестова: Иван хочет скидку · в карточке"
+
+
+def test_model_say_to_is_one_task(dela, at, caplog):
+    """«Ивану сказать, что Ольга уезжает…» — одно дело у Ивана. Модель, как вживую, кладёт ещё и заметку с тем же текстом
+    — у Ольги, у самого Ивана, без человека: это содержание дела, а не факт, — их нет (отладка 16.10.2026, записи 6–7:
+    лишняя заметка у второго человека читалась как «записал в CRM, а не дело»). Настоящий факт той же фразы остаётся."""
+    ids = seed(dela)
+    ref = str(uuid.uuid4())
+    cap = say(dela, "ивану сказать, что ольга уезжает на следующей неделе и встречи будут через неделю", ref=ref)
+    assert cap["status"] == "pending"  # первым — человек в дательном: правило отдаёт модели
+    title = "Сказать Ивану, что Ольга уезжает на следующей неделе и встречи будут через неделю"
+    with caplog.at_level(logging.INFO, logger="dela.capture"):
+        capture.tick(dela, ask_fn=lambda h, u: _model(
+            tasks=[{"title": title, "person": "Иван"}],
+            notes=[{"text": "Ольга уезжает на следующей неделе, встречи будут через неделю", "project": "", "person": "Ольга"},
+                   {"text": "Ольга уезжает на следующей неделе", "project": "", "person": "Иван"},
+                   {"text": "Встречи будут через неделю", "project": "ООО Ромашка", "person": ""},
+                   {"text": "Ольга вернётся в ноябре", "project": "", "person": "Ольга"}]))
+    assert caplog.text.count("заметка = содержание дела, не кладу") == 3
+    got = store.view(dela, "sasha", "capture", ref=ref)["capture"]
+    assert [x["bucket"] for x in got["items"]] == ["back", "note"]
+    t = task(dela, got["items"][0]["task"]["id"])
+    assert t["title"] == title and str(t["person_id"]) == ids["ivan"] and t["back_on"].isoformat() == "2026-10-16"
+    assert got["items"][1]["text"] == "Ольга вернётся в ноябре"   # факт, а не «что сказать», — заметкой, как был
+    with dela_db.session(dela, "sasha") as c:
+        rows = c.execute("SELECT summary FROM crm.interactions WHERE source_ref LIKE %s", (f"capture:{ref}:%",)).fetchall()
+    assert [r["summary"] for r in rows] == ["Ольга вернётся в ноябре"]
+
+
+def test_model_said_note_stays(dela, at):
+    """Отрицательный случай проверяющего (eve-review.md, «блокирует» к 565783ca): «Иван сказал, что бюджет утвердят в
+    январе — передать Ольге» — дело «Передать Ольге, что …» несёт все слова заметки, но заметка у Ивана — его слова, факт:
+    она ложится (хронология и «последний контакт» Ивана), как и запись у его клиента без человека. Глагол речи есть, а
+    кто сказал — не узнали («он сказал…»): не режем ничего. «Проверить в понедельник, что смета будет готова» — не
+    сообщение: заметка «Смета будет готова в понедельник» остаётся."""
+    ids = seed(dela)
+    send = "Передать Ольге, что бюджет утвердят в январе"
+    ref = str(uuid.uuid4())
+    cap = say(dela, "Иван сказал, что бюджет утвердят в январе — передать Ольге", ref=ref)
+    assert cap["status"] == "pending"  # факт и дело одной фразой — модели
+    capture.tick(dela, ask_fn=lambda h, u: _model(
+        tasks=[{"title": send, "person": "Ольга"}],
+        notes=[{"text": "Бюджет утвердят в январе", "project": "", "person": "Иван"},
+               {"text": "Бюджет утвердят в январе", "project": "ООО Ромашка", "person": ""},
+               {"text": "Бюджет утвердят в январе", "project": "", "person": "Ольга"}]))
+    got = store.view(dela, "sasha", "capture", ref=ref)["capture"]
+    assert [x["bucket"] for x in got["items"]] == ["back", "note", "note"]   # у Ольги — содержание дела: нет
+    assert task(dela, got["items"][0]["task"]["id"])["title"] == send
+    with dela_db.session(dela, "sasha") as c:
+        rows = c.execute("SELECT summary, person_ids, project_id, source FROM crm.interactions WHERE source_ref LIKE %s "
+                         "ORDER BY source_ref", (f"capture:{ref}:%",)).fetchall()
+    assert [[str(x) for x in r["person_ids"] or []] for r in rows] == [[ids["ivan"]], []]
+    assert all(str(r["project_id"]) == ids["romashka"] and r["source"] == "raznoska" for r in rows)
+    assert rows[0]["summary"] == "Бюджет утвердят в январе"
+    # кто сказал — не узнали: заметки остаются все
+    cap = say(dela, "он сказал, что бюджет утвердят в январе — передать Ольге")
+    capture.tick(dela, ask_fn=lambda h, u: _model(
+        tasks=[{"title": send, "person": "Ольга"}],
+        notes=[{"text": "Бюджет утвердят в январе", "project": "", "person": "Ольга"}]))
+    got = store.view(dela, "sasha", "capture", ref=cap["ref"])["capture"]
+    assert [x["bucket"] for x in got["items"]] == ["back", "note"]
+    # не сообщение — заметка остаётся; слова заметки не все в «что …» — тоже
+    cap = say(dela, "много всего разом")
+    capture.tick(dela, ask_fn=lambda h, u: _model(
+        tasks=[{"title": "Проверить в понедельник, что смета будет готова", "due": "2026-10-19"},
+               {"title": send, "person": "Ольга"}],
+        notes=[{"text": "Смета будет готова в понедельник", "project": "", "person": "Ольга"},
+               {"text": "Бюджет будет в январе", "project": "", "person": "Ольга"}]))
+    got = store.view(dela, "sasha", "capture", ref=cap["ref"])["capture"]
+    assert [x["bucket"] for x in got["items"]] == ["day", "back", "note", "note"]
 
 
 def test_model_waiting_and_owed_with_due_say_whose(dela, at):
