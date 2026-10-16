@@ -680,6 +680,43 @@ def test_web_line_without_key_rule_answers(dela):
     assert got["status"] == "done" and got["route"] == "capture" and got["capture"]["items"][0]["bucket"] == "back"
 
 
+def test_web_line_rule_outside_quota_and_once(dela, monkeypatch):
+    """Поезд 16.10.2026 (захват поверх суточного предела вагона 1): фраза, которую узнаёт правило, раскладывается и у
+    не-владельца, чей предел правок словами кончился, — Claude не зовётся, считать нечего; и предел она не тратит.
+    Не узнало — 429, как было. С ключом правило спрашивают один раз: ask.run второй раз его не зовёт (rule_tried)."""
+    from pravka_dela import guard
+
+    guard._caps.update(at=-guard.CAPS_EVERY, value=None)
+    h = {"Authorization": f"Bearer {tokens.issue(dela, 'natasha', 'device', 'телефон-наташи-захват')}"}
+    for _ in range(40):
+        guard.quota(dela, "natasha", "ask")
+    seen = {}
+
+    def fake_run(url, user, text, scope, key, proxy, via="web", actor=None, **_):
+        seen["scope"] = scope
+        return {"route": "edit", "reply": "ок", "changed": [], "tasks": [], "decided": [], "crm": [], "notes": [], "errors": []}
+
+    with TestClient(api.build(Config(db_url=dela, anthropic_key="sk-test"))) as client:
+        r = client.post("/api/ask", headers=h, json={"text": "купить магний", "scope": {"title": "Сейчас"}})
+        assert r.status_code == 202, r.text
+        got = client.get(f"/api/ask/{r.json()['job']}", headers=h).json()
+        assert got["status"] == "done" and got["route"] == "capture" and got["capture"]["items"][0]["bucket"] == "back"
+        r = client.post("/api/ask", headers=h, json={"text": "перенеси всё на завтра", "scope": {"title": "Сейчас"}})
+        assert r.status_code == 429 and "40 из 40" in r.json()["error"]
+    # Владелец: не узнало — Claude (ask.run) с пометкой rule_tried; с ней ask.run правило второй раз не спрашивает.
+    monkeypatch.setattr(ask, "run", fake_run)
+    own = {"Authorization": f"Bearer {tokens.issue(dela, 'sasha', 'device', 'веб-захват')}"}
+    with TestClient(api.build(Config(db_url=dela, anthropic_key="sk-test"))) as client:
+        jid = client.post("/api/ask", headers=own, json={"text": "перенеси всё на завтра", "scope": {"title": "Сейчас"}}).json()["job"]
+        for _ in range(50):
+            if client.get(f"/api/ask/{jid}", headers=own).json()["status"] != "run":
+                break
+    assert seen["scope"]["rule_tried"] is True
+    monkeypatch.undo()
+    assert ask.rule_first(dela, "sasha", "купить хлеб", {"title": "Сейчас", "rule_tried": True}) is None
+    assert ask.rule_first(dela, "sasha", "купить хлеб", {"title": "Сейчас"})["route"] == "capture"
+
+
 def test_rule_leaves_nesting_to_claude(dela, at):
     """Поезд 16.10.2026 (вагоны 2 и 4): слова вложенности — «вынуть … из …», «вложи … в …», «для этого …», «к делу про
     …» — правило захвата не берёт новым делом: строка веба отдаёт их Claude (ask.run: into, step), «Д» — модели."""

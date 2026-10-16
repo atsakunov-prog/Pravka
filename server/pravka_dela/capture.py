@@ -38,7 +38,7 @@ from pathlib import Path
 
 from psycopg.types.json import Jsonb
 
-from . import db, llm, people, remind, when
+from . import db, guard, llm, people, remind, when
 
 log = logging.getLogger("dela.capture")
 
@@ -2038,7 +2038,9 @@ def _model_items(url: str, user: str, text: str, hint: str | None, key: str, pro
         if not key:
             raise CaptureError("Claude не настроен: нет ключа в dela.env — сказанное с «напомни», «идея», «потом» "
                                "разложу и так")
-        cl = parse.client(key, proxy)
+        # Защита от петли (аудит №12, правило 24 карты): каждый вызов Claude у Дел — через guard.client; задача
+        # «capture» (пороги — общие «*» Свода claude.caps). Стоит — guard.Stopped до вызова: платить нечего.
+        cl = guard.client(url, key, proxy, ROUTE)
         ask_fn = lambda h, u: ask(cl, model, effort, h, u)  # noqa: E731
     try:
         data = ask_fn(parts["head"], user_text)
@@ -2116,7 +2118,9 @@ def _tick_one(url: str, r: dict, key: str, proxy: str | None, ask_fn) -> None:
         with db.session(url, r["owner_id"], via="capture") as conn:
             conn.execute("UPDATE tasks.dictations SET capture_result = (capture_result - 'retry_at' - 'last_error') || %s "
                          "WHERE id = %s", (Jsonb({"ms": int((time.monotonic() - started) * 1000)}), r["id"]))
-    except CaptureError as e:
+    except (CaptureError, guard.Stopped) as e:
+        # Защита от петли стоит — «не разложил» её словами (что стоит и как включить), текст в Делах, «Повторить» —
+        # кнопкой; повтором каждые 5 с цикл её не долбит (поезд 16.10.2026: захват и защита вагона 1 вместе).
         _fail(url, r["owner_id"], ref, str(e))
     except Exception as e:  # noqa: BLE001 — сеть, ключ, лимит: человеку коротко, в журнал подробно
         tries = int(r.get("tries") or 0) + 1
@@ -2203,8 +2207,8 @@ def say_now(url: str, user: str, text: str, frm: str, key: str, proxy: str | Non
     now = dt.datetime.now(MSK)
     try:
         data, parts, _usage = _model_items(url, user, text, None, key, proxy, ask_fn, now)
-    except CaptureError as e:
-        _fail(url, user, ref, str(e))
+    except (CaptureError, guard.Stopped) as e:
+        _fail(url, user, ref, str(e))  # строка веба (api.run_ask) скажет Stopped словами; цикл её не подхватит
         raise
     out = lay_out(url, user, ref, text, data, parts, "web" if frm == "web" else "voice", now, via, actor, defaults)
     out["usage"] = _usage

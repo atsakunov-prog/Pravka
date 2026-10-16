@@ -9,8 +9,8 @@
 Как устроено (контракт пакета «Деньги» §4):
 - client(url, key, proxy, task) — клиент Anthropic в обёртке: messages.create / stream, beta.messages.create / stream,
   messages.batches.create — логические вызовы, каждый считается для задачи (её имя — то же, что `what` в llm.account:
-  ask, task, parse, when, krug, meetings, krug_tune, spend_advice, zachem); retrieve, results, cancel пачек бесплатны и
-  не считаются, повторы SDK внутри вызова — тоже (их держит max_retries). Порог задачи превышен — стоит эта задача;
+  ask, task, parse, when, krug, meetings, krug_tune, spend_advice, zachem, capture); retrieve, results, cancel пачек
+  бесплатны и не считаются, повторы SDK внутри вызова — тоже (их держит max_retries). Порог задачи превышен — стоит эта задача;
   порог «всего» — стоят все задачи Дел. Сработал — Stopped (словами: какая задача, сколько за какое окно, порог) и
   одно сообщение владельцу ботом Ковчега (crm.state claude_alerts; забирает служба встреч из /api/reminders/due и
   отмечает claude.alert_sent). Новая дорога к Anthropic мимо guard.client — нельзя (правило 24 карты; тест ловит).
@@ -72,6 +72,7 @@ FACTORY: dict = {
 TASK_WORDS = {"ask": "строка Claude и разговор", "task": "Claude карточки дела", "parse": "разбор надиктовки",
               "when": "«Когда»", "krug": "разборщик Круга", "meetings": "разборщик встреч",
               "krug_tune": "недельные выводы дерева", "spend_advice": "советник трат", "zachem": "«Зачем»",
+              "capture": "захват («сказать», «Д», «З», строка веба)",
               ALL: "все задачи Дел"}
 
 

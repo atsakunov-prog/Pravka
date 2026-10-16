@@ -489,16 +489,6 @@ def build(cfg: Config) -> Starlette:
         raw = body.get("scope") if isinstance(body.get("scope"), dict) else {}
         # «Для этого» (15.10.2026) работает и без ключа: дело внутри заводится названием, как сказано (ask.run).
         step_only = raw.get("card") == "task" and bool(raw.get("step"))
-        # Суточный предел не-владельцу (аудит №12): 40 правок словами в сутки по Москве.
-        no_claude = False
-        try:
-            await anyio.to_thread.run_sync(claude_guard.quota, url, who.user, "ask")
-        except claude_guard.OverQuota as e:
-            if not step_only:
-                return _err(str(e), 429)
-            # «Для этого» сверх предела — не отказ, а дело названием без Claude, как без ключа (правило 27: «работает
-            # и без Claude»; стык вагонов поезда 16.10 — предел не должен отнимать то, что работает без ключа).
-            no_claude = True
         scope: dict = {"title": str(raw.get("title") or "")[:200]}
         try:
             for k in ("task_ids", "visible_ids", "selected_ids"):  # экран: дела страницы, в окне, выбранные
@@ -521,8 +511,6 @@ def build(cfg: Config) -> Starlette:
             # «Для этого» (15.10.2026): всё сказанное — новые дела внутри этого, само дело не меняется.
             if raw.get("step"):
                 scope["step"] = True
-                if no_claude:
-                    scope["no_claude"] = True  # ставит только сервер: из raw это поле не берётся
         # Разговор в окне ответа (09.10.2026): веб шлёт его с каждой репликой, а сюда он не доходил — Claude не видел,
         # о чём спрашивал (13.10.2026). Только строки: что сказал, что ответил, что сделано (ask._history режет длину).
         # Разговор под строкой (13.10.2026): его номер — экран разговора один на все реплики (кэш, ask._snapshot).
@@ -535,15 +523,28 @@ def build(cfg: Config) -> Starlette:
         now = time.monotonic()
         for k in [k for k, j in jobs.items() if now - j["at"] > JOB_TTL and j["status"] != "run"]:
             del jobs[k]
-        if not cfg.anthropic_key and not step_only:
-            # Захват (15.10.2026): «напомни в 12 …», «позвонить Ивану на неделе» раскладывает правило — без Claude и без
-            # ключа; остальное без ключа — отказ словами, как раньше («Для этого» без ключа — названием, ask.run).
+        if not step_only:
+            # Захват (15.10.2026): «напомни в 12 …», «позвонить Ивану на неделе» раскладывает правило — без Claude, без
+            # ключа и вне суточного предела не-владельцу: Claude не зовётся — считать нечего (поезд 16.10.2026, стык
+            # захвата и предела вагона 1 — как у «Для этого»). Не узнало: без ключа — отказ словами, как раньше; с
+            # ключом — Claude, и ask.run второй раз правило не спрашивает (rule_tried ставит только сервер).
             got = await anyio.to_thread.run_sync(lambda: ask.rule_first(url, who.user, text, scope, who.via, who.actor))
-            if not got:
+            if got:
+                jid = secrets.token_urlsafe(12)
+                jobs[jid] = {"user": who.user, "status": "done", "at": now, "result": store.jsonable(got)}
+                return _json({"ok": True, "job": jid}, 202)
+            if not cfg.anthropic_key:
                 return _err("Claude не настроен: нет ключа в dela.env", 422)
-            jid = secrets.token_urlsafe(12)
-            jobs[jid] = {"user": who.user, "status": "done", "at": now, "result": store.jsonable(got)}
-            return _json({"ok": True, "job": jid}, 202)
+            scope["rule_tried"] = True
+        # Суточный предел не-владельцу (аудит №12): 40 правок словами в сутки по Москве — когда дело дошло до Claude.
+        try:
+            await anyio.to_thread.run_sync(claude_guard.quota, url, who.user, "ask")
+        except claude_guard.OverQuota as e:
+            if not step_only:
+                return _err(str(e), 429)
+            # «Для этого» сверх предела — не отказ, а дело названием без Claude, как без ключа (правило 27: «работает
+            # и без Claude»; стык вагонов поезда 16.10 — предел не должен отнимать то, что работает без ключа).
+            scope["no_claude"] = True  # ставит только сервер: из raw это поле не берётся
         if not slots:
             slots.append(anyio.CapacityLimiter(2))
         jid = secrets.token_urlsafe(12)
