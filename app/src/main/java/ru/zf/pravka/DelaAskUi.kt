@@ -320,6 +320,14 @@ internal fun TalkSheet(
             if (i > 0) RowRule()
             TurnView(t, snap, onOpen = onOpen, onUndo = { onUndo(i) })
         }
+        // Под свежей репликой — кнопки ответа (16.10.2026, записи отладки 21–22; над строкой «Ответить Claude…»
+        // внизу листа): ответы сервера, а вопрос без них — «Да» и «Нет». Кнопка — её текст следующей репликой.
+        val answers = if (busy) emptyList() else DelaAsk.answersOf(talk.turns.lastOrNull())
+        if (answers.isNotEmpty()) {
+            ru.zf.pravka.ui.ChipRow(Modifier.padding(top = 6.dp)) {
+                answers.forEach { a -> ru.zf.pravka.ui.PaperChip(a, selected = false, onClick = { onSend(a) }) }
+            }
+        }
         if (busy) {
             if (talk.turns.isNotEmpty()) RowRule()
             Said(talk.busy)
