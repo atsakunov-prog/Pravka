@@ -7,7 +7,7 @@
 > Шаг 2 петли этапа 4 аудита. **Сервер и веб сделаны** в ветке `loop-2` (`server/pravka_dela/asks.py` — фазы, штамп,
 > очередь, вид `asks`; `store.op_suggestion_create` штампует вопрос при записи; веб — `asksPhaseAt`, `asksNext`,
 > `asksQueue`, `asksFoldText`, `asksPhased` в `server/pravka_dela/static/app.js` и `asksCard` в `static/day.js`); абзац
-> «Подскажи на «Сегодня» — двумя заходами» к правилу 15 в `server/pravka_dela/CLAUDE.md`, решение 22 в
+> «Подскажи на «Сегодня» — двумя заходами» к правилу 15 в `server/pravka_dela/CLAUDE.md`, решение 23 в
 > `docs/dela-server.md`, контракт — `server/contract/dela-asks.json`. **Телефон — по этому заданию** (итог — строкой
 > «Сделано на телефоне» в конце и в разделе шага 2 в `docs/dela.md`).
 
