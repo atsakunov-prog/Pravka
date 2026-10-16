@@ -618,6 +618,10 @@ a.h-kind:hover { color: var(--accent); }
   background: var(--panel); border: 1px solid var(--line); border-radius: 10px; transition: border-color .15s, box-shadow .15s;
 }
 .say .quick-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+/* «+» слева в строке страницы (16.10.2026, запись отладки 14): знак «здесь добавляют дела», не кнопка; стоит у первой строки. */
+.quick .quick-box { padding-left: 8px; }
+.q-plus { flex: none; align-self: flex-start; height: 42px; width: 26px; display: grid; place-items: center; color: var(--faint); cursor: text; position: relative; z-index: 1; }
+.quick-box:focus-within .q-plus, .quick-box.has-text .q-plus { color: var(--accent); }
 .say .quick-box textarea {
   flex: 1; min-width: 0; resize: none; border: 0; background: none; padding: 9px 0; line-height: 24px;
   height: 42px; max-height: 320px; overflow-y: hidden; display: block; font-size: 15px; color: var(--text); box-shadow: none; border-radius: 0;

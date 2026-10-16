@@ -45,3 +45,19 @@ def test_now_and_today_head_is_just_the_title():
     assert "lateLink()" in tail and "...waitLinks()" in tail and "class: 'tail-line'" in tail
     css = (STATIC / "style.css").read_text(encoding="utf-8")
     assert ".tail-line {" in css and ".tail-line a.late" in css
+
+
+def test_page_line_is_the_add_field_with_plus_and_mic_on_the_right():
+    """Запись 14 (владелец: «нигде нет плюса… очень высоко текстбокс типа „добавить дело“ и справа микрофончик, чтобы
+    сразу несколько дел добавлять»): это та же строка — вверху каждой страницы, под заголовком и девизом; слева тихий «+»
+    (знак, не кнопка), справа клавиша: пусто — микрофон, с текстом — «отдать». Раскладывает захват: новых путей нет."""
+    qa = fn("function quickAdd(")
+    assert "el('label', { class: 'q-plus', for: 'quick', 'aria-hidden': 'true' }, icon('plus', 18))" in qa
+    assert "}, plus, input, micBtn, sendBtn);" in qa, "«+» слева, микрофон и «отдать» — справа"
+    # Строка встаёт под девизом на любой странице, где её не положили сами (listColumn).
+    lc = fn("function listColumn(")
+    assert "motto.after(say)" in lc
+    # Тот же вход, что был: /api/ask (правило захвата → Claude → capture.say_now), ответ «куда легло» — captureBlock.
+    assert "runJob('/api/ask'" in fn("async function claudeSay(") and "captureBlock(t)" in JS
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    assert ".q-plus {" in css
