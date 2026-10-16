@@ -351,7 +351,7 @@ def test_service_sample_runs_through_ops(sp):
     sample = json.loads(SAMPLE.read_text(encoding="utf-8"))
     with dela_db.session(url, "sasha", "t") as c:
         orgs = {n: c.execute("INSERT INTO crm.orgs (name, kind, owner_id) VALUES (%s, 'other', 'sasha') RETURNING id",
-                             (n,)).fetchone()["id"] for n in ("Пицца", "Бета")}
+                             (n,)).fetchone()["id"] for n in ("Гамма", "Бета")}
         orgs["Альфа Банк"] = sp["org"]["Альфа Банк"]
         ids = {}
         for key, p in sample["people"].items():
@@ -377,12 +377,12 @@ def test_service_sample_runs_through_ops(sp):
     res = one(url, {"op": "suggestion.decide", "id": s["id"], "option": 1})["suggestion"]["result"]
     assert res["created"] and res["by_owner"] is True and res["learned"]["wrote"]["address"] == "ты, Оля"
     assert (card(url, res["person_id"])["name"], card(url, res["person_id"])["org_name"]) == ("Ольга", "Бета")
-    # Один признак (учётка): вопрос «Это Глеб Сорокин?»; «да» — почта учётки в карточку.
+    # Один признак (учётка): вопрос «Это Глеб Пробнов?»; «да» — почта учётки в карточку.
     s = one(url, cases["one_sign"])["suggestion"]
     assert s["status"] == "pending" and s["payload"]["held"] == "один признак — нужен твой ответ" and s["payload"]["pick"]
     res = one(url, {"op": "suggestion.decide", "id": s["id"], "option": 0})["suggestion"]["result"]
-    assert res["learned"]["wrote"]["emails"] == ["gleb@sorokin.test"], res
-    assert card(url, ids["{gleb}"])["emails"] == ["gleb@sorokin.test"]
+    assert res["learned"]["wrote"]["emails"] == ["gleb@probnov.test"], res
+    assert card(url, ids["{gleb}"])["emails"] == ["gleb@probnov.test"]
 
 
 TRANSCRIPT = """[00:00:05] SPEAKER_00: Добрый день, коллеги.

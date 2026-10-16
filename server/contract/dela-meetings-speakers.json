@@ -2,10 +2,10 @@
  "_": "Образец нагрузки службы встреч для раздела speaker_link (dela-meetings.json): «Сделано само», спор и один признак — как их собирает служба своим кодом (tests/test_speakers_contract.py Встреч). Тест Дел (test_dela_speakers.py) прогоняет его через apply_ops. {…} — карточки (people: что завести), {dm}/{dmy} — день встречи, {url} — адрес веба встреч. Имена выдуманные.",
  "people": {
   "{vlad}": {
-   "name": "Владимир Горохов",
-   "org": "Пицца",
+   "name": "Владимир Макетов",
+   "org": "Гамма",
    "emails": [
-    "v.g@pizza.test"
+    "v.m@gamma.test"
    ]
   },
   "{olga}": {
@@ -14,7 +14,7 @@
    "short": "Ольга"
   },
   "{gleb}": {
-   "name": "Глеб Сорокин",
+   "name": "Глеб Пробнов",
    "org": null
   }
  },
@@ -28,11 +28,11 @@
      "source": "meeting",
      "source_ref": "meeting-speaker:1:S4",
      "batch_ref": "meeting:1",
-     "batch_title": "Пицца: бюджет · {dm}",
-     "quote": "Встреча «Пицца: бюджет» {dm}: S4 — Владимир Горохов (речь + учётка Zoom)",
+     "batch_title": "Гамма: бюджет · {dm}",
+     "quote": "Встреча «Гамма: бюджет» {dm}: S4 — Владимир Макетов (речь + учётка Zoom)",
      "payload": {
-      "title": "Владимир Горохов",
-      "where": "встреча «Пицца: бюджет» {dm} · 7 мин речи",
+      "title": "Владимир Макетов",
+      "where": "встреча «Гамма: бюджет» {dm} · 7 мин речи",
       "speaker": {
        "meeting_ref": "1",
        "label": "S4",
@@ -42,10 +42,10 @@
       },
       "ident": {
        "label": "S4",
-       "company": "Пицца",
+       "company": "Гамма",
        "role": "финдир",
        "address": "вы, Владимир",
-       "why": "Владимир Г.: почта учётки Zoom v.g@pizza.test — в карточке",
+       "why": "Владимир М.: почта учётки Zoom v.m@gamma.test — в карточке",
        "candidates": [
         {
          "person_id": "{vlad}",
@@ -53,7 +53,7 @@
           {
            "group": "account",
            "strong": true,
-           "text": "почта учётки Zoom v.g@pizza.test — в карточке"
+           "text": "почта учётки Zoom v.m@gamma.test — в карточке"
           },
           {
            "group": "speech",
@@ -142,9 +142,9 @@
      "source_ref": "meeting-speaker:3:S0",
      "batch_ref": "meeting:3",
      "batch_title": "Созвон · {dm}",
-     "quote": "Встреча «Созвон» {dm}: S0 — Глеб С.? (5 мин речи)",
+     "quote": "Встреча «Созвон» {dm}: S0 — Глеб П.? (5 мин речи)",
      "payload": {
-      "title": "Глеб С.?",
+      "title": "Глеб П.?",
       "where": "встреча «Созвон» {dm} · 5 мин речи",
       "speaker": {
        "meeting_ref": "3",
@@ -155,7 +155,7 @@
       },
       "ident": {
        "label": "S0",
-       "why": "Глеб С.: подпись Zoom «Глеб Сорокин» (1,00)",
+       "why": "Глеб П.: подпись Zoom «Глеб Пробнов» (1,00)",
        "candidates": [
         {
          "person_id": "{gleb}",
@@ -163,16 +163,16 @@
           {
            "group": "account",
            "strong": true,
-           "text": "подпись Zoom «Глеб Сорокин» (1,00)"
+           "text": "подпись Zoom «Глеб Пробнов» (1,00)"
           }
          ]
         }
        ],
        "learn": {
         "{gleb}": {
-         "zoom_name": "Глеб Сорокин",
+         "zoom_name": "Глеб Пробнов",
          "emails": [
-          "gleb@sorokin.test"
+          "gleb@probnov.test"
          ]
         }
        }
