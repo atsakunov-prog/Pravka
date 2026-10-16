@@ -84,3 +84,16 @@ def test_no_claude_sees_line_and_krug_tree_heads_are_short():
     assert "return [head('Дерево жизни')," in tr and "plural(" not in tr
     assert "'Перетащи дело на цель — поменяешь «Зачем»'" in tr
     assert ".krug-dial {" in css
+
+
+def test_tree_columns_show_due_on_the_right():
+    """Запись 18 (владелец: «в Дереве жизни… справа от дела тоже писать, какие у них сроки»): в «Колонках» у дела справа —
+    срок коротко, как в списках (dueLabel): просроченное — дата цветом беды, сегодня — акцентом, «потом» — «↩ …»."""
+    cd = fn("function colDue(")
+    assert "dueLabel(t)" in cd and "D.ddmm(t.due_date)" in cd and "t.back_on && !isRemind(t)" in cd
+    row = fn("function treeCols(")
+    assert "el('span', { class: 'c-t' }, t.title), colDue(t))" in row
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    due = css[css.index(".col-task .col-due {"):]
+    assert "white-space: nowrap" in due[:due.index("}")] and "margin-left: auto" in due[:due.index("}")]
+    assert ".col-task .col-due.late { color: var(--bad)" in css and ".col-task.today .c-t" in css

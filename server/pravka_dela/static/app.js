@@ -2599,7 +2599,20 @@ function treeOutline(m, dirs) {
       open && !m.kids(key).length ? el('div', { class: 'empty' }, 'Здесь пока ничего — цели заводятся в карточке дела («Сделать целью») или словами Claude.') : null);
   });
 }
-/** «Колонки»: девять направлений рядом, в каждой — цели лесенкой, проекты и дела коротко; перетаскивай между ними. */
+/** Срок справа у дела в «Колонках» (16.10.2026, запись отладки 18: «справа от дела тоже писать, какие у них сроки»): коротко,
+ *  как в списках — «сегодня», «завтра», «пн 19.10», «19.11»; просроченное — «13.10» цветом беды (сколько дней — в подсказке:
+ *  колонка узкая), «потом» без срока — тихое «↩ пт 16.10». Без срока — ничего. */
+function colDue(t) {
+  const due = dueLabel(t);
+  if (due) {
+    const late = due.cls === 'late';
+    return el('span', { class: 'col-due' + (due.cls ? ' ' + due.cls : ''), title: late ? `срок прошёл ${D.diff(S.today, t.due_date)} дн. назад` : 'срок' },
+      late ? D.ddmm(t.due_date) : due.text);
+  }
+  if (isOpen(t) && t.back_on && !isRemind(t)) return el('span', { class: 'col-due back', title: 'потом — вернётся в этот день' }, `↩ ${WD_SHORT[D.wd(t.back_on)]} ${D.ddmm(t.back_on)}`);
+  return null;
+}
+/** «Колонки»: девять направлений рядом, в каждой — цели лесенкой, проекты и дела коротко (срок — справа); перетаскивай между ними. */
 function treeCols(m, dirs) {
   const item = (c, depth) => {
     if (c.kind === 'project') {
@@ -2620,7 +2633,7 @@ function treeCols(m, dirs) {
       return [dropTo(dragFrom(row, 'task', t.id), { goal: t.id }), ...(open ? m.kids(c.key).flatMap((x) => item(x, depth + 1)) : [])];
     }
     const row = el('div', { class: 'col-task' + (inToday(t) ? ' today' : '') + (S.cardId === t.id ? ' open-now' : ''), style: '--indent:' + depth, onclick: () => openCard(t.id) },
-      el('button', { class: 'tick mini', title: 'Сделано', onclick: (e) => { e.stopPropagation(); toggleDone([t]); } }), el('span', {}, t.title));
+      el('button', { class: 'tick mini', title: 'Сделано', onclick: (e) => { e.stopPropagation(); toggleDone([t]); } }), el('span', { class: 'c-t' }, t.title), colDue(t));
     return [dragFrom(row, 'task', t.id), ...m.kids(c.key).flatMap((x) => item(x, depth + 1))];
   };
   return el('div', { class: 'tree-cols' }, dirs.map((d) => {
