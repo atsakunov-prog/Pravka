@@ -29,7 +29,7 @@ SELECT t.num, t.title, t.notes, t.status,
        coalesce(wk.goal, false) AS why_goal, t.pos,
        -- Захват (dela_0032): kind — task или remind (напоминание, в списках дел его нет); back_on — когда вернётся дело «потом».
        t.kind, t.back_on,
-       -- «Сейчас на завтра» (dela_0024): день «Сейчас» — сегодня, будущий (отмечено заранее) или прошедший (погас).
+       -- «Сейчас на завтра» (dela_0034): день «Сейчас» — сегодня, будущий (отмечено заранее) или прошедший (погас).
        t.focus_on
 FROM tasks.tasks t
 LEFT JOIN crm.projects p ON p.id = t.project_id
@@ -230,7 +230,7 @@ LEFT JOIN crm.meetings m ON m.id = i.meeting_id
 WHERE i.owner_id = crm.owner_id() AND i.deleted_at IS NULL;
 COMMENT ON VIEW life.insights IS 'Только Саше. Не цитировать в письмах, сообщениях и черновиках людям. «Только тебе» — его наблюдения о людях, клиентах, сделках и встречах: kind — вид (note — заметка; conflict — несостыковка, hedge — неуверенность, table — кто за столом, objection — возражение, signal — сигнал, ask — что уточнить и другие ключи разбора встреч и дайджеста), text и quote, people/client/deal/org/meeting — о ком, at_sec — секунда встречи, state: new, seen (видел), useful, dismissed (мимо), wrong (неверно), moved (перенёс). Записать — инструмент crm_private.';
 
--- «Сейчас» по дням (dela_0024, plan.snap): что стояло в «Сейчас» дня и сделано ли. Только строки владельца — явным
+-- «Сейчас» по дням (dela_0034, plan.snap): что стояло в «Сейчас» дня и сделано ли. Только строки владельца — явным
 -- WHERE: вид принадлежит владельцу базы и RLS не подчиняется.
 CREATE OR REPLACE VIEW life.now_days AS
 SELECT n.day, t.num, t.title, n.done, n.carried, n.from_plan, n.first_seen, n.done_at, t.status, n.task_id

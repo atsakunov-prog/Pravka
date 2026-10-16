@@ -1,7 +1,7 @@
 # Дела на телефоне — задание 22 (15.10.2026): «Сейчас на завтра»
 
 > Шаг 1 петли этапа 4 аудита. **Сервер и веб сделаны** в ветке `loop-1` (`server/pravka_dela/plan.py`, `asks.py`,
-> `sql/dela_0024.sql`, веб — `planBox` / `planItem` в `server/pravka_dela/static/app.js`); правило 26 в
+> `sql/dela_0034.sql`, веб — `planBox` / `planItem` в `server/pravka_dela/static/app.js`); правило 26 в
 > `server/pravka_dela/CLAUDE.md`, контракт — `server/contract/dela-plan.json`. **Телефон — по этому заданию** (итог —
 > строкой «Сделано на телефоне» в конце и разделом в `docs/dela.md`). Что сервер уже делает и без телефона — ниже,
 > в «Совместимости».

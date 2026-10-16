@@ -50,7 +50,7 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug",
             "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
             "privacy", "context_index", "claude_guard", "nest", "debug", "capture", "capture_model", "ideas", "did",
             "remind_phone", "speaker_link", "people_final", "plan"]
-# «plan» — «Сейчас на завтра» (шаг 1 петли этапа 4, 15.10.2026, dela_0024, plan.py; контракт dela-plan.json): Пн–Чт в
+# «plan» — «Сейчас на завтра» (шаг 1 петли этапа 4, 15.10.2026, dela_0034, plan.py; контракт dela-plan.json): Пн–Чт в
 # 18:00 (Пт — 14:00, с 15.11 по 15.01 — 13:30, на понедельник) сервер кладёт в «Подскажи» до семи кандидатов правилом
 # (source plan, batch_ref plan:<день>, payload.for_date, why, from, basket), варианты «☆ На завтра» (focus_on будущим
 # днём), «✓ Уже сделал» (флаг done — только у source plan), «Не надо»; в 12:00 следующего дня гаснут. Предел пяти —

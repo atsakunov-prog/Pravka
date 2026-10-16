@@ -67,7 +67,7 @@ APP_TABLES = {
     "crm.debug_notes": "SELECT, INSERT, UPDATE",
     # Идеи у клиента, человека, сделки (dela_0032, захват): только хозяину; не удаляются — dropped.
     "crm.ideas": "SELECT, INSERT, UPDATE",
-    # Снимок «Сейчас» по дням (dela_0024, plan.snap): только владельцу; строки не удаляются.
+    # Снимок «Сейчас» по дням (dela_0034, plan.snap): только владельцу; строки не удаляются.
     "tasks.now_days": "SELECT, INSERT, UPDATE",
 }
 # crm.v_interactions (dela_0025, аудит №9): хронология для показа — итог встречи владельцу с карточки, ссылка на веб

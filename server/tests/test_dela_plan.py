@@ -1,4 +1,4 @@
-"""«Сейчас на завтра» (шаг 1 петли этапа 4, 15.10.2026, dela_0024, plan.py, asks.py): предел пяти на каждый день,
+"""«Сейчас на завтра» (шаг 1 петли этапа 4, 15.10.2026, dela_0034, plan.py, asks.py): предел пяти на каждый день,
 корзины кандидатов, пятница, один прогон в день, ответы кнопками, уборка, снимок «Сейчас», вид plan, контракт.
 
 Люди и компании — выдуманные («Иван Тестов», «ООО Ромашка»). «Сегодня» — db_today (crm.today(), Москва); время прогона —
@@ -584,16 +584,17 @@ def test_life_focus_on_and_now_days_for_reader(dela, cfg):
 
 
 def test_migration_over_data(admin_dsn):
-    """Миграция плана (dela_0024 на день стройки) — поверх живых Дел с предложениями и делами (источник шире, таблица
-    новая, UPDATE нет). Файл ищется по тому, что он заводит (tasks.now_days), а не по номеру: при слиянии с другими
-    ветками номер сдвинется, и тест не должен тянуть за собой правку литералов."""
+    """Миграция плана (dela_0034; в ветке — dela_0024) — поверх живых Дел с предложениями и делами (источник шире,
+    таблица новая, UPDATE нет). Файл ищется по тому, что он заводит (tasks.now_days), а не по номеру: при слиянии с
+    другими ветками номер сдвигался (поезд 16.10.2026 — 34), и тест не тянет за собой правку литералов. Применённая
+    второй раз, она не падает и снимка не теряет (повтор безвреден)."""
     import secrets as _secrets
     from urllib.parse import urlparse, urlunparse
 
     from psycopg import sql
 
     files = dict(dela_db._sql_files())
-    mine = [k for k, v in files.items() if k.startswith("dela_") and "CREATE TABLE tasks.now_days" in v]
+    mine = [k for k, v in files.items() if k.startswith("dela_") and "CREATE TABLE IF NOT EXISTS tasks.now_days" in v]
     assert len(mine) == 1, mine
     mig = mine[0]
     name = f"pa_migplan_{_secrets.token_hex(4)}"
@@ -620,6 +621,13 @@ def test_migration_over_data(admin_dsn):
                       "VALUES ('sasha', 'update', %s, 'plan', 'sasha')", (tid,))
             c.execute("INSERT INTO tasks.now_days (owner_id, day, task_id) VALUES ('sasha', crm.today(), %s)", (tid,))
             assert c.execute("SELECT count(*) AS n FROM tasks.suggestions").fetchone()["n"] == 2
+        # Второй раз (копия, где файл уже стоял) — без ошибки, снимок и источник plan на месте.
+        with psycopg.connect(url, autocommit=True) as c:
+            with c.transaction():
+                c.execute(files[mig])
+        with dela_db.session(url, "system", "test") as c:
+            assert c.execute("SELECT count(*) AS n FROM tasks.now_days").fetchone()["n"] == 1
+            assert c.execute("SELECT count(*) AS n FROM tasks.suggestions WHERE source = 'plan'").fetchone()["n"] == 1
     finally:
         with psycopg.connect(admin_dsn, autocommit=True) as a:
             a.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
