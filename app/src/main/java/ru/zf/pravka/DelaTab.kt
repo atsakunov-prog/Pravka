@@ -110,7 +110,7 @@ import ru.zf.pravka.ui.scrollFade
 // «Задание телефону», пункт 3). Центр системы — ежедневный и еженедельный
 // разбор («Утро», «Неделя»), а не ввод: ввода у владельца и так в избытке
 // (321 задача из сентябрьских встреч лежала без дела). Поэтому вкладка
-// открывается на «Утре», а ввод — та же пилюля «говори дела», что у «Д».
+// открывается на «Утре», а ввод — та же строка, что у «Д» (подпись с 16.10.2026 — «Добавь дело или скажи, что сделать»).
 //
 // Всё считается из копии на телефоне (`DelaStore.view`) — вкладка открывается
 // мгновенно и работает без сети; правка ложится в очередь и видна сразу.
@@ -3865,19 +3865,30 @@ internal fun DelaTaskSheet(
                 if (g == DelaGroups.Grp.OWED && !snap.groupsOn && onDrop == null && !task.owed) continue
                 PaperChip(g.title, selected = grp == g, onClick = { f = DelaGroups.withGrp(f, g) })
             }
+            // «В повестку» (16.10.2026, запись отладки 19; правило 32 карты Дел): та же группа «Запустить», мяч `agenda` —
+            // обсудить с человеком при встрече. Человека нет — сразу выбор человека (повестки без него не бывает).
+            val ag = f.ball == Dela.AGENDA
+            PaperChip(
+                if (ag) "повестка" + (snap.people[f.personId]?.label?.let { " · $it" } ?: "") else "В повестку",
+                selected = ag,
+                onClick = {
+                    f = DelaGroups.toggleAgenda(f)
+                    if (!ag && f.personId.isBlank()) picking = "person"
+                },
+            )
         }
         PaperRow(
             title = snap.people[f.personId]?.label ?: "без человека",
             hint = when (grp) {
                 DelaGroups.Grp.OWED -> "Кто ждёт"
                 DelaGroups.Grp.CHECK -> "От кого жду"
-                else -> if (f.ball == Dela.AGENDA) "При встрече с" else "Человек"
+                else -> if (f.ball == Dela.AGENDA) "Повестка с" else "Человек"
             },
             icon = Glyphs.Phone,
             onClick = { picking = "person" },
         )
         if ((f.ball == Dela.WAITING || f.ball == Dela.AGENDA) && f.personId.isBlank()) {
-            PaperHint("Без человека «мониторить» и «при встрече» некого ждать — выбери человека.", MaterialTheme.colorScheme.error)
+            PaperHint(if (f.ball == Dela.AGENDA) "Повестка — с кем обсудить? Выбери человека." else "Без человека «мониторить» некого ждать — выбери человека.", MaterialTheme.colorScheme.error)
         }
         // Кто просил — как в вебе («Его просьбы ко мне»): строкой, если есть.
         if (f.requestedBy.isNotBlank()) {

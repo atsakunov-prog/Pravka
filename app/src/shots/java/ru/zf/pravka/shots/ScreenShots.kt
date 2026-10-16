@@ -680,6 +680,7 @@ class ScreenShots {
 
         // ---- Мелочи отладки 16.10.2026: вкладка Дел на развороте 852×883 (как у владельца) и сложенном, обе темы
         if (want("m16")) dela16()
+        if (want("m16")) dela16Agenda()
 
         // ---- режимы по одному (Правка 4.0): сложенный, целиком, разворот
         for ((g, tab) in listOf(
@@ -1308,6 +1309,51 @@ class ScreenShots {
         nodes.flatMap { n -> n.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } }
             .filter { it.contains(" из 5") || Regex("""\d+ (сегодня|просрочено)""").containsMatchIn(it) }
             .forEach { bad += "техническое число наверху: «$it»" }
+        close(c)
+        runBlocking { app.settings.setLookTheme("system") }
+        RuntimeEnvironment.setQualifiers(OUTER)
+        settle(4)
+        org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())
+    }
+
+    /**
+     * Повестка (16.10.2026, запись отладки 19; правило 32 карты Дел): разворот 852 dp высоким окном, светлая. Дело с
+     * Иваном на «Сейчас» → тап по человеку в карточке справа → страница Ивана со своим списком «Повестка: обсудить при
+     * встрече» (дело повестки не повторяется в «Запустить: о нём и с ним») → дело повестки справа: сверху «Повестка»,
+     * строка «Повестка с» → «Карточка» — лист, в группе горит «повестка · Иван». Выдуманные дела Seed. Группа `m16`.
+     */
+    private fun dela16Agenda() {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        runBlocking { app.settings.setLookTheme("light") }
+        settle(4)
+        RuntimeEnvironment.setQualifiers("w852dp-h1700dp-420dpi")
+        val c = launch(MainActivity.TAB_TODOIST)
+        val bad = mutableListOf<String>()
+        fun texts() = roots(c).flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }
+            .flatMap { n -> n.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } }
+        val agenda = "Иван: обсудить продление договора"
+        val opened = tap(c, "Иван: созвон по бюджету IV квартала")
+        if (opened) shot(c, "m16-agenda-1-task")
+        when {
+            !opened -> bad += "нет дела «Иван: созвон…» на «Сейчас»"
+            !tap(c, "Иван ›") -> bad += "в карточке справа не нажимается человек «Иван ›»"
+            else -> {
+                shot(c, "m16-agenda-2-person")
+                val t = texts()
+                if (t.none { it.startsWith("Повестка: обсудить при встрече") }) bad += "на странице Ивана нет списка «Повестка»"
+                if (t.count { it == agenda } != 1) bad += "дело повестки на странице Ивана — ${t.count { it == agenda }} раз(а), ждали один"
+                if (!tap(c, agenda)) bad += "не открывается дело повестки"
+                else {
+                    shot(c, "m16-agenda-3-pane")
+                    val p = texts()
+                    if (p.none { it == "Повестка" } || p.none { it.startsWith("Повестка с") }) bad += "в карточке справа нет «Повестка» / «Повестка с»: " + p.filter { it.startsWith("Повест") }
+                    if (tap(c, "Карточка", exact = true)) {
+                        screen("m16-agenda-4-sheet")
+                        if (texts().none { it.startsWith("повестка · Иван") }) bad += "в листе карточки не горит «повестка · Иван»: " + texts().filter { it.contains("овестк") }
+                    } else bad += "нет кнопки «Карточка»"
+                }
+            }
+        }
         close(c)
         runBlocking { app.settings.setLookTheme("system") }
         RuntimeEnvironment.setQualifiers(OUTER)

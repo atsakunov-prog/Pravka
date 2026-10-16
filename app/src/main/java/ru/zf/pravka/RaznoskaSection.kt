@@ -634,7 +634,7 @@ private fun taskMeta(task: ParsedTask): String {
     when (task.ball) {
         ru.zf.pravka.core.Dela.OWED -> parts.add("отбить: " + task.personName.ifBlank { "ждут" })
         ru.zf.pravka.core.Dela.WAITING -> parts.add("жду: " + task.personName.ifBlank { "?" })
-        ru.zf.pravka.core.Dela.AGENDA -> parts.add("при встрече: " + task.personName.ifBlank { "?" })
+        ru.zf.pravka.core.Dela.AGENDA -> parts.add("повестка: " + task.personName.ifBlank { "?" })
         else -> if (task.personName.isNotBlank()) parts.add("для: " + task.personName)
     }
     if (task.estimateMin > 0) parts.add("${task.estimateMin} мин")

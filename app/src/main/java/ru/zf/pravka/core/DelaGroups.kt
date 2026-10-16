@@ -54,6 +54,18 @@ object DelaGroups {
         Grp.SELF -> t.copy(ball = if (t.ball == Dela.AGENDA) Dela.AGENDA else Dela.MINE, owed = false)
     }
 
+    /**
+     * «В повестку» карточки (16.10.2026, запись отладки 19; правило 32 карты Дел, контракт dela.json «Повестка»): та же
+     * группа «Запустить», мяч `agenda` — обсудить с человеком при встрече или звонке; ещё раз — обратно в своё (`mine`).
+     * Повестки без человека не бывает: человек не выбран — карточка сперва открывает выбор человека.
+     */
+    fun toggleAgenda(t: Dela.Task): Dela.Task =
+        if (t.ball == Dela.AGENDA) t.copy(ball = Dela.MINE) else t.copy(ball = Dela.AGENDA, owed = false)
+
+    /** Группа и человек одной строкой (`grpWho` веба): «повестка · Иван», «мониторить Иван». */
+    fun withWho(word: String, ball: String, who: String): String =
+        word + if (who.isBlank()) "" else (if (ball == Dela.AGENDA) " · " else " ") + who
+
     /** Поля операции для группы — `grpSet` веба: `{ball, owed}`. */
     fun grpSet(t: Dela.Task, g: Grp): JSONObject = withGrp(t, g).let { JSONObject().put("ball", it.ball).put("owed", it.owed) }
 
@@ -274,7 +286,8 @@ object DelaGroups {
     /**
      * Вторая строка вместо «мяча» (`taskRow` веба): «Отбить» — «Гуркин ждёт 3 дн»
      * (дни — с того дня, как дело завели; без человека — «ждут»), «Мониторить» —
-     * «жду Наташу 5 дн» (с `waiting_since`), повестка — «при встрече с Ольгой»,
+     * «жду Ольгу 5 дн» (с `waiting_since`), повестка — «повестка · Ольга» (словом Саши
+     * с 16.10.2026, запись отладки 19; до того «при встрече с Ольгой»),
      * «Запустить» с человеком — «@Ольга» (если люди не названы заголовком).
      * [strong] — «отбить»: ярче остальных.
      */
@@ -289,7 +302,7 @@ object DelaGroups {
             val w = if (t.waitingSince.isNotBlank()) DelaViews.days(t.waitingSince, today) else 0L
             Wait("жду" + (if (who.isNotBlank()) " $who" else "") + if (w > 0) " $w дн" else "", strong = false)
         }
-        t.ball == Dela.AGENDA -> Wait("при встрече" + if (who.isNotBlank()) " с $who" else "", strong = false)
+        t.ball == Dela.AGENDA -> Wait("повестка" + if (who.isNotBlank() && !personGrouped) " · $who" else "", strong = false)
         who.isNotBlank() && !personGrouped -> Wait("@$who", strong = false)
         else -> null
     }

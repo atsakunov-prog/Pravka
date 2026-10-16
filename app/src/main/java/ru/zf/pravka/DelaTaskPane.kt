@@ -378,7 +378,8 @@ private fun DelaTaskPaneV2(
                     )
                     Spacer(Modifier.weight(1f))
                     Text(
-                        if (task.ball == Dela.AGENDA) "При встрече" else g.title,
+                        // Повестка — словом Саши (16.10.2026, запись отладки 19): «Повестка», а не «Запустить».
+                        if (task.ball == Dela.AGENDA && g != ru.zf.pravka.core.DelaGroups.Grp.OWED) "Повестка" else g.title,
                         style = ty.meta,
                         color = if (g == ru.zf.pravka.core.DelaGroups.Grp.OWED) Kv.warn else Kv.faint,
                         fontWeight = if (g == ru.zf.pravka.core.DelaGroups.Grp.OWED) androidx.compose.ui.text.font.FontWeight.SemiBold else null,
@@ -414,7 +415,7 @@ private fun DelaTaskPaneV2(
                     when {
                         g == ru.zf.pravka.core.DelaGroups.Grp.OWED -> add(Triple("Ждёт", wait ?: "ждут", false))
                         task.ball == Dela.WAITING -> add(Triple("Жду от", wait ?: "жду", false))
-                        task.ball == Dela.AGENDA -> add(Triple("При встрече", who.ifBlank { "человек не выбран" }, false))
+                        task.ball == Dela.AGENDA -> add(Triple("Повестка с", who.ifBlank { "человек не выбран" }, false))
                         who.isNotBlank() -> add(Triple("Человек", who, false))
                     }
                     val d = runCatching { LocalDate.parse(task.dueDate.take(10)) }.getOrNull()
@@ -446,7 +447,7 @@ private fun DelaTaskPaneV2(
                 Column(Modifier.padding(top = 8.dp)) {
                     props.forEachIndexed { i, (k, v, warn) ->
                         if (i > 0) ru.zf.pravka.ui.Hairline()
-                        val person = k in setOf("Ждёт", "Жду от", "При встрече", "Человек") && task.personId.isNotBlank()
+                        val person = k in setOf("Ждёт", "Жду от", "Повестка с", "Человек") && task.personId.isNotBlank()
                         Column(
                             Modifier
                                 .fillMaxWidth()

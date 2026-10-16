@@ -389,8 +389,24 @@ class DelaViewsTest {
         assertEquals("фонды", info["Ищет"])
         assertFalse(info.containsKey("Заметка"))
         val sec = DelaViews.personSections(s, p.id)
-        assertEquals(listOf("Отбить: ждёт от меня", "Запустить: о нём и с ним", "Мониторить: жду от него"), sec.map { it.title })
-        assertEquals(1, sec[2].items.size)
+        assertEquals(listOf("Отбить: ждёт от меня", "Повестка: обсудить при встрече", "Запустить: о нём и с ним", "Мониторить: жду от него"), sec.map { it.title })
+        assertEquals(1, sec[3].items.size)
+    }
+
+    @Test
+    fun `человек — повестка своим списком, не в «Запустить»`() {
+        // 16.10.2026, запись отладки 19 (правило 32 карты Дел): дела agenda с ним — «Повестка», как view_person.agenda.
+        val pid = snap().people.keys.single()
+        val s = snap(
+            task("ag") { it.copy(ball = Dela.AGENDA, personId = pid) },
+            task("mine") { it.copy(personId = pid) },
+            task("agDone") { it.copy(ball = Dela.AGENDA, personId = pid, status = Dela.DONE) },
+        )
+        val sec = DelaViews.personSections(s, pid).associate { it.title to it.items.map { t -> t.id } }
+        assertEquals(listOf("ag"), sec["Повестка: обсудить при встрече"])
+        assertFalse("ag" in sec.getValue("Запустить: о нём и с ним"))
+        assertTrue("mine" in sec.getValue("Запустить: о нём и с ним"))
+        assertEquals(listOf("ag"), Dela.person(s, pid).agenda.map { it.id })
     }
 
     @Test

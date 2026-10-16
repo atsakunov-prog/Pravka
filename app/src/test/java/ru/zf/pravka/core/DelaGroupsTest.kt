@@ -229,13 +229,30 @@ class DelaGroupsTest {
     }
 
     @Test
+    fun `В повестку — мяч agenda в той же группе, ещё раз — своё`() {
+        // Правило 32 карты Дел, контракт dela.json «Повестка»: переключатель карточки — task.set {ball: agenda}.
+        val owed = task("a") { it.copy(owed = true, personId = "p-1") }
+        val on = DelaGroups.toggleAgenda(owed)
+        assertEquals(Dela.AGENDA, on.ball)
+        assertFalse(on.owed)
+        assertEquals(DelaGroups.Grp.SELF, DelaGroups.grpOf(on))
+        assertEquals(Dela.MINE, DelaGroups.toggleAgenda(on).ball)
+        // Группа и человек одной строкой — как grpWho веба.
+        assertEquals("повестка · Иван", DelaGroups.withWho("повестка", Dela.AGENDA, "Иван"))
+        assertEquals("мониторить Иван", DelaGroups.withWho("мониторить", Dela.WAITING, "Иван"))
+        assertEquals("повестка", DelaGroups.withWho("повестка", Dela.AGENDA, ""))
+    }
+
+    @Test
     fun `вторая строка — кто ждёт и сколько`() {
         val owed = task("a") { it.copy(owed = true, createdAt = "2026-10-07T09:00:00+03:00") }
         assertEquals(DelaGroups.Wait("Олег ждёт 3 дн", true), DelaGroups.wait(owed, "Олег", today, false))
         assertEquals("ждут 3 дн", DelaGroups.wait(owed, "", today, false)!!.text)
         val check = task("b") { it.copy(ball = Dela.WAITING, waitingSince = "2026-10-05") }
         assertEquals("жду Олег 5 дн", DelaGroups.wait(check, "Олег", today, false)!!.text)
-        assertEquals("при встрече с Олег", DelaGroups.wait(task("c") { it.copy(ball = Dela.AGENDA) }, "Олег", today, false)!!.text)
+        // Повестка — словом Саши (16.10.2026, запись отладки 19): «повестка · Олег»; список уже по людям — одно слово.
+        assertEquals("повестка · Олег", DelaGroups.wait(task("c") { it.copy(ball = Dela.AGENDA) }, "Олег", today, false)!!.text)
+        assertEquals("повестка", DelaGroups.wait(task("c") { it.copy(ball = Dela.AGENDA) }, "Олег", today, true)!!.text)
         assertEquals("@Олег", DelaGroups.wait(task("d"), "Олег", today, false)!!.text)
         assertNull(DelaGroups.wait(task("e"), "Олег", today, true))
     }

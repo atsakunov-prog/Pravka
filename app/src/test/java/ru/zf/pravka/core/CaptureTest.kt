@@ -71,9 +71,28 @@ class CaptureTest {
         assertFalse(picked.has("at"))
         // Каждое «куда» кнопки — из словаря контракта.
         val tos = contract().getJSONObject("move").getJSONObject("to").keys().asSequence().toSet()
-        for (to in listOf("cancel", "task", "time", "remind", "today", "now", "back", "idea", "note", "person", "keep_open", "retry", "back_task")) {
+        for (to in listOf("cancel", "task", "time", "remind", "today", "now", "back", "idea", "note", "person", "keep_open", "retry", "back_task",
+            "no_client", "mine")) {
             assertTrue(to, to in tos)
         }
+    }
+
+    @Test
+    fun `«Без клиента» и «Просто дело» — кнопки сервера как есть`() {
+        // 16.10.2026: клиент дела по человеку (правило 31) и повестка (правило 32) — новых кнопок телефон не рисует сам:
+        // строка и до трёх кнопок — из ответа, нажатие — capture.move с тем «куда», что прислал сервер.
+        fun cap(bucket: String, line: String, vararg chips: Pair<String, String>) = Capture.parse(JSONObject().put("ref", "r").put("status", "done")
+            .put("items", JSONArray().put(JSONObject().put("bucket", bucket).put("line", line).put("chips", JSONArray().apply {
+                for ((l, m) in chips) put(JSONObject().put("label", l).put("move", m))
+            }))))!!
+        val client = cap("back", "Дело на пн 19.10: попросить Ивана прислать информацию · Бета Групп",
+            "В «Сейчас»" to "now", "Без клиента" to "no_client", "Отменить" to "cancel")
+        assertEquals(listOf("В «Сейчас»", "Без клиента", "Отменить"), client.lineChips.map { it.second.label })
+        assertEquals("no_client", Capture.moveFor("r", 0, client.items.single().chips[1]).getString("to"))
+        val agenda = cap("agenda", "В повестку с Иваном Тестовым: обсудить фонды", "Просто дело" to "mine", "Отменить" to "cancel")
+        assertEquals("В повестку с Иваном Тестовым: обсудить фонды", Capture.line(agenda))
+        assertEquals("mine", Capture.moveFor("r", 0, agenda.items.single().chips[0]).getString("to"))
+        assertTrue(agenda.items.single().chips[1].cancel)
     }
 
     // ------------------------------------------------------------ ответы

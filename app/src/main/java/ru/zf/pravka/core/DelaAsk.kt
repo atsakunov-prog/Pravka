@@ -340,7 +340,7 @@ object DelaAsk {
                 a.has("ball") -> BALL[a.str("ball")] ?: a.str("ball")
                 else -> "человек"
             }
-            out += ball + if (who.isNotBlank()) " $who" else ""
+            out += DelaGroups.withWho(ball, if (a.optBoolean("owed", false)) Dela.OWED else a.str("ball"), who)
         }
         if (a.has("notes")) out += "дописал заметку"
         if (a.has("estimate_min")) out += if (a.isNull("estimate_min") || a.optInt("estimate_min", 0) == 0) "без оценки" else "${a.optInt("estimate_min")} мин"
@@ -353,8 +353,8 @@ object DelaAsk {
         return out.joinToString(", ")
     }
 
-    /** Группа словами (`grpWord` веба): слов «мяч», «моё», «повестка» нет с 10.10.2026. */
-    private val BALL = mapOf(Dela.OWED to "отбить", Dela.MINE to "запустить", Dela.WAITING to "мониторить", Dela.AGENDA to "при встрече")
+    /** Группа словами (`grpWord` веба): слов «мяч» и «моё» нет с 10.10.2026; повестка — «повестка» (с 16.10.2026, запись 19). */
+    private val BALL = mapOf(Dela.OWED to "отбить", Dela.MINE to "запустить", Dela.WAITING to "мониторить", Dela.AGENDA to "повестка")
 
     // ------------------------------------------------------------ разговор (09.10.2026)
 

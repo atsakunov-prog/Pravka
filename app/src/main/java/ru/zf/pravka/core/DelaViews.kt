@@ -738,7 +738,7 @@ object DelaViews {
                         v("due_date").takeIf { it.isNotBlank() }?.let { d ->
                             "срок " + (t?.dueDate?.takeIf { it.isNotBlank() }?.let { ddmm(it, today) + " → " } ?: "") + ddmm(d, today)
                         },
-                        if (ball.isNotBlank()) (BALL_WORD[ball] ?: ball) + if (person.isNotBlank()) " $person" else ""
+                        if (ball.isNotBlank()) DelaGroups.withWho(BALL_WORD[ball] ?: ball, ball, person)
                         else person.takeIf { it.isNotBlank() }?.let { "человек: $it" },
                     ).joinToString(" · "),
                     v("note"),
@@ -1214,29 +1214,33 @@ object DelaViews {
             if (was.has("due_date")) "срок " + (if (wasDue.isNotBlank()) ddmm(wasDue, today) + " → " else "") + (if (due.isNotBlank()) ddmm(due, today) else "без срока") else null,
             if (was.has("ball") || was.has("owed") || was.has("person_id")) {
                 val ball = if (r.optBoolean("owed", false)) Dela.OWED else v(r, "ball")
-                (BALL_WORD[ball] ?: ball) + if (person.isNotBlank()) " $person" else ""
+                DelaGroups.withWho(BALL_WORD[ball] ?: ball, ball, person)
             } else null,
         ).joinToString(" · ")
     }
 
     /**
      * Группа словом — `grpWord` веба (10.10.2026: слов «мяч», «моё», «повестка» в
-     * группах нет): «owed» — «отбить», ждём от человека — «мониторить», повестка —
-     * «при встрече», своё — «запустить».
+     * группах нет): «owed» — «отбить», ждём от человека — «мониторить», своё — «запустить»; повестка — «повестка»
+     * (словом Саши с 16.10.2026, запись отладки 19: отметка внутри «Запустить», не группа; до того «при встрече»).
      */
-    private val BALL_WORD = mapOf(Dela.OWED to "отбить", Dela.MINE to "запустить", Dela.WAITING to "мониторить", Dela.AGENDA to "при встрече")
+    private val BALL_WORD = mapOf(Dela.OWED to "отбить", Dela.MINE to "запустить", Dela.WAITING to "мониторить", Dela.AGENDA to "повестка")
 
     // ------------------------------------------------------------ человек
 
     /** Разделы страницы человека — заголовками веба. */
     fun personSections(s: Dela.Snapshot, personId: String): List<Section> {
         // `renderPerson` веба (10.10.2026): тремя группами. Его просьбы ко мне (`requested_by`) — тоже «отбить».
+        // «Повестка» — свой список (16.10.2026, запись отладки 19; правило 32 карты Дел): открытые дела `agenda` с ним, как
+        // `view_person.agenda` сервера; из «Отбить» и «Запустить» они уходят, чтобы не стоять дважды.
         val his = s.tasks.values.filter { it.open && it.deed && (it.personId == personId || it.requestedBy == personId) }
 
         fun g(t: Dela.Task) = DelaGroups.grpOf(t)
+        fun ag(t: Dela.Task) = t.ball == Dela.AGENDA && t.personId == personId
         return listOf(
-            Section("Отбить: ждёт от меня", his.filter { g(it) == DelaGroups.Grp.OWED || (it.requestedBy == personId && g(it) == DelaGroups.Grp.SELF) }),
-            Section("Запустить: о нём и с ним", his.filter { g(it) == DelaGroups.Grp.SELF && it.requestedBy != personId }),
+            Section("Отбить: ждёт от меня", his.filter { !ag(it) && (g(it) == DelaGroups.Grp.OWED || (it.requestedBy == personId && g(it) == DelaGroups.Grp.SELF)) }),
+            Section("Повестка: обсудить при встрече", his.filter { ag(it) }),
+            Section("Запустить: о нём и с ним", his.filter { !ag(it) && g(it) == DelaGroups.Grp.SELF && it.requestedBy != personId }),
             Section("Мониторить: жду от него", his.filter { g(it) == DelaGroups.Grp.CHECK }),
         )
     }
