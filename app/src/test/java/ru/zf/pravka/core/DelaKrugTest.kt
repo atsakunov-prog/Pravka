@@ -309,6 +309,169 @@ class DelaKrugTest {
         assertTrue(DelaKrug.place(task("x"), snap(task("x")), today).next.startsWith("Ни цели, ни направления"))
     }
 
+    // ---- «Место в дереве» строками (16.10.2026, записи 3 и 10 отладки): ровные ступени, дела внутри и у обычного дела
+
+    private fun at(depth: Int, rows: List<DelaKrug.PlaceRow>) = rows.filter { it.depth == depth }.map { it.text }
+
+    @Test
+    fun `место в дереве — соседи-дела на той же глубине, что соседи-цели, само дело среди них, под ним его дела`() {
+        // Как цель записи 10: у верхней цели четыре подцели и два дела прямо на ней. Открыта третья подцель.
+        val top = task("top") { it.copy(title = "Альфа растёт", num = 1, goal = true, directions = listOf("work")) }
+        val earn = task("earn") { it.copy(title = "Альфа зарабатывает", num = 2, goal = true, whyId = "top") }
+        val more = task("more") { it.copy(title = "Больше заказов", num = 3, goal = true, whyId = "earn") }
+        val leads = task("leads") { it.copy(title = "Новые заказчики", num = 3, goal = true, whyId = "top") }
+        val price = task("price") { it.copy(title = "Понятные тарифы", num = 4, goal = true, whyId = "top") }
+        val team = task("team") { it.copy(title = "Сильный отдел", num = 5, goal = true, whyId = "top") }
+        val call = task("call") { it.copy(title = "Ответ от Беты", whyId = "top", createdAt = "2026-10-02T10:00:00+03:00") }
+        val sverka = task("sverka") { it.copy(title = "Сверка с Гаммой", whyId = "top", createdAt = "2026-10-03T10:00:00+03:00") }
+        val tariff = task("tariff") { it.copy(title = "Новый тариф", whyId = "price", createdAt = "2026-10-04T10:00:00+03:00") }
+        val offer = task("offer") { it.copy(title = "Разослать оффер", whyId = "price", createdAt = "2026-10-05T10:00:00+03:00") }
+        val s = snap(top, earn, more, leads, price, team, call, sverka, tariff, offer)
+        val rows = DelaKrug.place(price, s, today).rows
+        assertEquals(listOf(DelaKrug.Role.UP to "Альфа растёт"), rows.filter { it.depth == 1 }.map { it.role to it.text })
+        // Уровень родителя: цели по номеру, потом дела цели — на ОДНОЙ глубине; само дело — на своём месте среди них.
+        assertEquals(listOf("Альфа зарабатывает", "Новые заказчики", "Понятные тарифы", "Сильный отдел", "Ответ от Беты", "Сверка с Гаммой"), at(2, rows))
+        val me = rows.single { it.role == DelaKrug.Role.ME }
+        assertEquals(2, me.depth)
+        assertEquals(DelaKrug.Mark.ME, me.mark)
+        // У каждой строки свой значок: цель — ромб, дело — кружок; дела цели не «прилипают» к последней подцели.
+        assertEquals(listOf(DelaKrug.Mark.DEED, DelaKrug.Mark.DEED), rows.filter { it.text in setOf("Ответ от Беты", "Сверка с Гаммой") }.map { it.mark })
+        assertEquals(DelaKrug.Mark.GOAL, rows.single { it.text == "Сильный отдел" }.mark)
+        // Под самим делом — его дела, сразу под ним и глубже на ступень.
+        val i = rows.indexOf(me)
+        assertEquals(listOf("Новый тариф" to 3, "Разослать оффер" to 3), rows.subList(i + 1, i + 3).map { it.text to it.depth })
+        assertEquals("Сильный отдел", rows[i + 3].text)
+        // Свёрнутый сосед говорит, что внутри; пустой — молчит.
+        assertEquals("1 подцель", rows.single { it.text == "Альфа зарабатывает" }.more?.words)
+        assertNull(rows.single { it.text == "Новые заказчики" }.more)
+        // У верхней цели (родителя нет) соседей не видно — само дело и его дерево на два уровня.
+        val topRows = DelaKrug.place(top, s, today).rows
+        assertEquals(listOf("Альфа растёт"), at(1, topRows))
+        assertEquals(listOf("Альфа зарабатывает", "Больше заказов", "Новые заказчики", "Понятные тарифы", "Новый тариф", "Разослать оффер",
+            "Сильный отдел", "Ответ от Беты", "Сверка с Гаммой"), topRows.filter { it.role == DelaKrug.Role.KID }.map { it.text })
+        assertEquals(listOf(2, 3), topRows.filter { it.text in setOf("Альфа зарабатывает", "Больше заказов") }.map { it.depth })
+    }
+
+    @Test
+    fun `место в дереве — у обычного дела его дела внутри по pos и их дети, предел 12 и «и ещё N»`() {
+        // Запись 3: «показывать и текущее дерево дел ниже текущего дела» — и у обычного дела, не только у цели.
+        val g = task("g") { it.copy(title = "Ремонт к зиме", goal = true, directions = listOf("home")) }
+        val p = task("p") { it.copy(title = "Окна", whyId = "g") }
+        val second = task("k2") { it.copy(title = "Вызвать мастера", whyId = "p", pos = 2) }
+        val first = task("k1") { it.copy(title = "Замерить окна", whyId = "p", pos = 1) }
+        val third = task("k3") { it.copy(title = "Купить уплотнитель", whyId = "p", pos = 3) }
+        val deep = task("k1a") { it.copy(title = "Найти рулетку", whyId = "k1", pos = 1) }
+        val deep2 = task("k1b") { it.copy(title = "Записать размеры", whyId = "k1", pos = 2) }
+        val deeper = task("k1a1") { it.copy(title = "Спросить у соседа", whyId = "k1a") }
+        val ping = task("ping") { it.copy(title = "Напомнить про окна", whyId = "p", kind = Dela.KIND_REMIND) }
+        val s = snap(g, p, second, first, third, deep, deep2, deeper, ping)
+        val pl = DelaKrug.place(p, s, today)
+        val i = pl.rows.indexOfFirst { it.role == DelaKrug.Role.ME }
+        assertEquals(
+            listOf("Замерить окна" to 3, "Найти рулетку" to 4, "Записать размеры" to 4, "Вызвать мастера" to 3, "Купить уплотнитель" to 3),
+            pl.rows.drop(i + 1).map { it.text to it.depth },
+        )
+        // Глубже двух уровней не идём — третий уровень числом.
+        assertEquals("1 внутри", pl.rows.single { it.text == "Найти рулетку" }.more?.words)
+        // Напоминание — не дело внутри: ни в строках, ни в «дальше».
+        assertTrue(pl.rows.none { it.text == "Напомнить про окна" })
+        // Дело внутри дела: соседи — по pos, а не по времени.
+        assertEquals(listOf("Замерить окна", "Вызвать мастера", "Купить уплотнитель"), at(3, DelaKrug.place(second, s, today).rows))
+        assertEquals(listOf("k1", "k3"), DelaKrug.place(second, s, today).sibs.map { it.id })
+
+        // Четырнадцать внутри — двенадцать строк и «и ещё 2»; второй уровень, который не влез целиком, — свёрнут числом.
+        val big = task("big") { it.copy(title = "Переезд", whyId = "g") }
+        val many = (1..14).map { n -> task("m$n") { it.copy(title = "Коробка $n", whyId = "big", pos = n) } }
+        val inner = (1..3).map { n -> task("m1-$n") { it.copy(title = "Мелочь $n", whyId = "m1", pos = n) } }
+        val sb = snap(*(listOf(g, big) + many + inner).toTypedArray())
+        val rows = DelaKrug.place(big, sb, today).rows
+        val kids = rows.filter { it.role == DelaKrug.Role.KID }
+        assertEquals((1..12).map { "Коробка $it" }, kids.map { it.text })
+        assertEquals("3 внутри", kids.first().more?.words)
+        assertEquals(DelaKrug.PlaceRow(3, DelaKrug.Role.REST, DelaKrug.Mark.NONE, "и ещё 2"), rows.last())
+        // Одиннадцать внутри — у первого три, а места на втором уровне одно: свёрнут, остальные строки целы.
+        val sb2 = snap(*(listOf(g, big) + many.take(11) + inner).toTypedArray())
+        val rows2 = DelaKrug.place(big, sb2, today).rows
+        assertEquals(11, rows2.count { it.role == DelaKrug.Role.KID })
+        assertTrue(rows2.none { it.role == DelaKrug.Role.REST })
+        // Шесть внутри — у первого три, влезают целиком: 9 строк ниже.
+        val rows3 = DelaKrug.place(big, snap(*(listOf(g, big) + many.take(6) + inner).toTypedArray()), today).rows
+        assertEquals(listOf("Коробка 1", "Мелочь 1", "Мелочь 2", "Мелочь 3", "Коробка 2"), rows3.filter { it.role == DelaKrug.Role.KID }.take(5).map { it.text })
+    }
+
+    @Test
+    fun `место в дереве — у свёрнутых что внутри, соседей до восьми, само дело видно всегда`() {
+        val g = task("g") { it.copy(title = "Здоровая семья", goal = true, directions = listOf("health")) }
+        val sub = task("sub") { it.copy(title = "Спорт", num = 2, goal = true, whyId = "g") }
+        val subA = task("subA") { it.copy(title = "Бег", num = 3, goal = true, whyId = "sub") }
+        val subB = task("subB") { it.copy(title = "Плавание", num = 4, goal = true, whyId = "sub") }
+        val subD = task("subD") { it.copy(title = "Купить кроссовки", whyId = "sub") }
+        val box = task("box") { it.copy(title = "Аптечка", whyId = "g", createdAt = "2026-10-01T09:00:00+03:00") }
+        val boxIn = (1..3).map { n -> task("b$n") { it.copy(title = "Купить $n", whyId = "box", pos = n) } }
+        val deeds = (1..9).map { n -> task("d$n") { it.copy(title = "Дело $n", whyId = "g", createdAt = "2026-10-0${n}T10:00:00+03:00") } }
+        val s = snap(*(listOf(g, sub, subA, subB, subD, box) + boxIn + deeds).toTypedArray())
+        // Открыто последнее дело цели — десятое среди соседей: первые семь, оно само и «рядом ещё N».
+        val rows = DelaKrug.place(deeds.last(), s, today).rows
+        val level = rows.filter { it.depth == 2 }
+        assertEquals(DelaKrug.PLACE_SIBS + 1, level.size)
+        assertEquals(listOf("Спорт", "Аптечка", "Дело 1", "Дело 2", "Дело 3", "Дело 4", "Дело 5", "Дело 9", "рядом ещё 3"), level.map { it.text })
+        assertEquals(DelaKrug.Role.ME, level[7].role)
+        assertEquals("2 подцели, 1 дело", level[0].more?.words)
+        assertEquals("3 внутри", level[1].more?.words)
+        assertNull(level[2].more)
+        assertEquals("1 подцель, 2 проекта, 5 дел", DelaKrug.Inside(1, 2, 5).words)
+    }
+
+    @Test
+    fun `место в дереве — проект строкой-переходом, напоминаний нет`() {
+        val top = task("top") { it.copy(title = "Альфа растёт", goal = true, directions = listOf("work")) }
+        val client = task("client") { it.copy(title = "Термшит Альфе", projectId = "p-a") }
+        val other = task("other") { it.copy(title = "Счёт Альфе", projectId = "p-a", createdAt = "2026-10-02T10:00:00+03:00") }
+        val step = task("step") { it.copy(title = "План на квартал", whyId = "top") }
+        val ping = task("ping") { it.copy(title = "Напомнить про план", whyId = "top", kind = Dela.KIND_REMIND) }
+        val s = snap(top, client, other, step, ping, krug = mapOf("p-a" to Dela.KrugProject(whyId = "top")))
+        val pc = DelaKrug.place(client, s, today)
+        // Проект в цепочке — строкой со значком проекта, тап ведёт на его страницу (projectId), не в карточку.
+        val proj = pc.rows.single { it.mark == DelaKrug.Mark.PROJECT }
+        assertEquals(DelaKrug.PlaceRow(2, DelaKrug.Role.UP, DelaKrug.Mark.PROJECT, "Альфа", projectId = "p-a"), proj)
+        // Соседи по проекту — на уровне самого дела.
+        assertEquals(listOf("Термшит Альфе", "Счёт Альфе"), at(3, pc.rows))
+        // У цели проект — ребёнок со значком проекта и числом дел; напоминания нет нигде.
+        val pg = DelaKrug.place(top, s, today)
+        val kid = pg.rows.single { it.mark == DelaKrug.Mark.PROJECT }
+        assertEquals("p-a" to DelaKrug.Role.KID, kid.projectId to kid.role)
+        assertTrue(pg.rows.none { it.text == "Напомнить про план" })
+        assertEquals(listOf("step"), pg.kids.map { it.id })
+        assertEquals("Под целью 1 шаг", pg.next)
+        assertEquals("Это последний открытый шаг к цели «Альфа растёт»", DelaKrug.place(step, s, today).next)
+    }
+
+    @Test
+    fun `разборщик Круга — ближайший слот по Москве и честное «дальше» у дела без места`() {
+        fun t(s: String) = java.time.LocalDateTime.parse(s)
+        // 15.10.2026 — четверг, 17.10 — суббота, 18.10 — воскресенье.
+        assertEquals(t("2026-10-15T09:30"), DelaKrug.nextKrugSlot(t("2026-10-15T09:07")))
+        assertEquals(t("2026-10-17T11:00"), DelaKrug.nextKrugSlot(t("2026-10-17T10:10")))
+        assertEquals(t("2026-10-15T08:00"), DelaKrug.nextKrugSlot(t("2026-10-15T01:00")))
+        // Ровно на слоте — следующий; поздно вечером — полночь; в выходные полчаса нет.
+        assertEquals(t("2026-10-15T10:00"), DelaKrug.nextKrugSlot(t("2026-10-15T09:30:20")))
+        assertEquals(t("2026-10-16T00:00"), DelaKrug.nextKrugSlot(t("2026-10-15T23:40")))
+        assertEquals(t("2026-10-19T00:00"), DelaKrug.nextKrugSlot(t("2026-10-18T23:05")))
+        assertEquals(t("2026-10-18T08:00"), DelaKrug.nextKrugSlot(t("2026-10-18T00:00")))
+        assertFalse(DelaKrug.isKrugSlot(t("2026-10-17T10:30")))
+        assertEquals("в 09:30", DelaKrug.krugAt(t("2026-10-15T09:07")))
+        val bare = task("bare") { it.copy(title = "Позвонить Ивану") }
+        assertEquals(
+            "Ни цели, ни направления: разборщик Круга посмотрит в 09:30 — или задай «Зачем».",
+            DelaKrug.place(bare, snap(bare), today, at = t("2026-10-15T09:07")).next,
+        )
+        // Дела сделок разборщик не берёт (`krug_auto.candidates`), о спрошенном ответ ждёт в «Новом».
+        val deal = bare.copy(dealId = "d1")
+        assertTrue(DelaKrug.place(deal, snap(deal), today, at = t("2026-10-15T09:07")).next.contains("не берёт"))
+        val asked = snap(bare).copy(suggestions = mapOf("s1" to Dela.Suggestion(id = "s1", kind = "update", taskId = "bare", source = "krug")))
+        assertTrue(DelaKrug.place(bare, asked, today, at = t("2026-10-15T09:07")).next.contains("уже спросил"))
+    }
+
     @Test
     fun `строка — направления, «зачем», цель и практика, в дереве и у чужого — тише`() {
         val goal = task("goal") { it.copy(title = "Уверенно считает до 20", goal = true, directions = listOf("education")) }

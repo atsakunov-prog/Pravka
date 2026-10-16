@@ -2,6 +2,7 @@ package ru.zf.pravka.core
 
 import java.text.Collator
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.util.Locale
 import kotlin.math.sqrt
 import org.json.JSONArray
@@ -469,12 +470,93 @@ object DelaKrug {
         else -> Hang(null, "")
     }
 
+    // ------------------------------------------------------------ разборщик Круга: когда посмотрит
+
+    private val MSK: java.time.ZoneId = java.time.ZoneId.of("Europe/Moscow")
+
+    /** Сейчас по Москве — расписание разборщика живёт по Москве, а не по часам телефона. */
+    fun mskNow(): LocalDateTime = LocalDateTime.now(MSK)
+
+    /**
+     * Слот разборщика Круга (`krug_auto.is_slot` сервера; расписание — слово владельца 12.10.2026): будни — :00 и :30
+     * с 8:00 до 23:30, выходные — :00 с 8:00 до 23:00, и каждый день 00:00. Ночью (01:00–07:59) слотов нет.
+     */
+    fun isKrugSlot(t: LocalDateTime): Boolean {
+        if (t.minute != 0 && t.minute != 30) return false
+        if (t.hour == 0) return t.minute == 0
+        if (t.hour < 8) return false
+        return t.minute == 0 || t.dayOfWeek.value <= 5
+    }
+
+    /**
+     * Ближайший слот разборщика ПОСЛЕ этой минуты (время — московское): будний 09:07 → 09:30, суббота 10:10 → 11:00,
+     * 01:00 → 08:00. Ровно на слоте — следующий: пачка этого уже ушла.
+     */
+    fun nextKrugSlot(now: LocalDateTime): LocalDateTime {
+        var t = now.withSecond(0).withNano(0).plusMinutes(1)
+        t = when {
+            t.minute == 0 || t.minute == 30 -> t
+            t.minute < 30 -> t.withMinute(30)
+            else -> t.withMinute(0).plusHours(1)
+        }
+        repeat(100) {
+            if (isKrugSlot(t)) return t
+            t = t.plusMinutes(30)
+        }
+        return t
+    }
+
+    /** «в 09:30» — когда разборщик Круга посмотрит дело без места (16.10.2026: вместо «предложит сам» / «в ближайшие полчаса»). */
+    fun krugAt(now: LocalDateTime): String = nextKrugSlot(now).let { String.format(Locale.ROOT, "в %02d:%02d", it.hour, it.minute) }
+
     // ------------------------------------------------------------ место дела
+
+    /** Сколько соседей открытого дела видно в «Месте в дереве» (само дело — всегда, в их порядке). */
+    const val PLACE_SIBS = 8
+
+    /** Сколько строк ниже открытого дела (два уровня); дальше — «и ещё N». */
+    const val PLACE_DOWN = 12
+
+    /** Роль строки «Места в дереве»: выше дела, сосед, само дело, внутри него, «и ещё N». */
+    enum class Role { UP, SIB, ME, KID, REST }
+
+    /** Значок строки — у каждой строки своё место под него, чтобы ступени не плыли: цель, дело, само дело, проект. */
+    enum class Mark { GOAL, DEED, ME, PROJECT, NONE }
+
+    /** Что внутри свёрнутого узла — прямые дети: подцели, проекты, дела. */
+    data class Inside(val goals: Int = 0, val projects: Int = 0, val deeds: Int = 0) {
+        val total: Int get() = goals + projects + deeds
+
+        /** «3 внутри» (одни дела) или «2 подцели, 1 дело». */
+        val words: String
+            get() = if (goals == 0 && projects == 0) "$deeds внутри" else listOfNotNull(
+                goals.takeIf { it > 0 }?.let { plural(it, "подцель", "подцели", "подцелей") },
+                projects.takeIf { it > 0 }?.let { plural(it, "проект", "проекта", "проектов") },
+                deeds.takeIf { it > 0 }?.let { plural(it, "дело", "дела", "дел") },
+            ).joinToString(", ")
+    }
+
+    /**
+     * Строка «Места в дереве»: глубина (0 — направление в шапке), роль, значок, текст; дело или цель — [task],
+     * проект — [projectId] (тап открывает его страницу, а не карточку); [more] — у свёрнутого узла, что внутри.
+     */
+    data class PlaceRow(
+        val depth: Int,
+        val role: Role,
+        val mark: Mark,
+        val text: String,
+        val task: Dela.Task? = null,
+        val projectId: String = "",
+        val more: Inside? = null,
+    )
 
     /**
      * Место дела в дереве (`placeBlock` веба): главное направление и метки, цели и проект
      * над делом сверху вниз ([chain]), шаги дела (цели первыми), соседние шаги той же цели
-     * и строка «дальше» — что изменится, когда это сделаешь.
+     * и строка «дальше» — что изменится, когда это сделаешь. Рисуется строками [rows]
+     * (16.10.2026, записи 3 и 10 отладки): предки, уровень родителя — соседи вместе с самим
+     * делом в их порядке, под делом — то, что внутри него, на два уровня. [kids] и [sibs] —
+     * для строки «дальше».
      */
     data class Place(
         val main: String,
@@ -483,17 +565,27 @@ object DelaKrug {
         val kids: List<Dela.Task>,
         val sibs: List<Dela.Task>,
         val next: String,
+        val rows: List<PlaceRow> = emptyList(),
     )
 
-    fun place(t: Dela.Task, s: Dela.Snapshot, today: String, me: String = ""): Place {
+    /**
+     * [at] — московское время сейчас: дело без места честно говорит, когда разборщик Круга его посмотрит
+     * ([nextKrugSlot]); null — без времени.
+     */
+    fun place(t: Dela.Task, s: Dela.Snapshot, today: String, me: String = "", at: LocalDateTime? = null): Place {
         val up = upOf(t, s).drop(1)
         val main = dirsOf(t, s, me).firstOrNull().orEmpty()
         val parent = up.firstOrNull()
         val order = compareBy<Dela.Task> { !it.goal }.then(DelaGroups.byTime(today))
         val g = parent?.task
-        val sibs = if (g != null) steps(s, g.id).filter { it.id != t.id }.sortedWith(order) else emptyList()
-        // У цели — её шаги и подцели; дела внутри обычного дела — блоком «Внутри» карточки (15.10.2026), здесь не повторяем.
-        val kids = if (t.goal) steps(s, t.id).sortedWith(order) else emptyList()
+        // Напоминание — не шаг и не дело внутри (правило 29): в «Месте в дереве» его нет (16.10.2026; `steps` его
+        // ещё не отсеивает — вагон E плана).
+        val sibs = if (g != null) {
+            steps(s, g.id).filter { it.id != t.id && !it.remind }
+                .sortedWith(if (g.goal) order else compareBy<Dela.Task> { !it.goal }.then(DelaSteps.BY_POS))
+        } else emptyList()
+        // У цели — её шаги и подцели (для «дальше»); дела внутри обычного дела — строками [rows] и блоком «Внутри».
+        val kids = if (t.goal) steps(s, t.id).filter { !it.remind }.sortedWith(order) else emptyList()
         // Цель над целью: у дела-цели её «Зачем», проект не в счёт.
         val gg = g?.let { upOf(it, s).getOrNull(1)?.task }
         val next = when {
@@ -522,9 +614,99 @@ object DelaKrug {
                 "Двигает проект «${s.projects[parent.projectId]?.name.orEmpty()}»" + (pg?.let { " — а он ведёт к «${it.title}»" } ?: "")
             }
             main.isNotBlank() -> "Висит прямо на направлении — «без зачем». Повесь на цель, и будет видно, куда это ведёт."
-            else -> "Ни цели, ни направления: разборщик предложит место сам, или задай «Зачем»."
+            else -> nowhereNext(t, s, at)
         }
-        return Place(main, t.directions.filter { it != main }, up.asReversed(), kids, sibs, next)
+        val chain = up.asReversed()
+        return Place(main, t.directions.filter { it != main }, chain, kids, sibs, next, rows(t, s, today, me, chain, parent))
+    }
+
+    /**
+     * «Ни цели, ни направления» — что будет дальше, честно (16.10.2026, запись 5 отладки: «предложит сам» без
+     * времени читалось как «никогда»). Разборщик Круга (`krug_auto.candidates` сервера) не берёт напоминания, дела
+     * сделок и дела клиентов; о деле, про которое уже спросил, — ответ ждёт в «Новом»; остальное смотрит в ближайший слот.
+     */
+    private fun nowhereNext(t: Dela.Task, s: Dela.Snapshot, at: LocalDateTime?): String {
+        val head = "Ни цели, ни направления: "
+        val asked = s.suggestions.values.any { it.taskId == t.id && it.source == "krug" && it.status == "pending" }
+        val client = t.projectId.isNotBlank() && s.projects[t.projectId]?.kind == "client"
+        return head + when {
+            asked -> "разборщик Круга уже спросил, куда его, — ответь в «Новом» или задай «Зачем»."
+            t.remind -> "напоминания разборщик Круга не раскладывает — задай «Зачем», если нужно."
+            t.dealId.isNotBlank() || client -> "дела сделок и клиентов разборщик Круга не берёт — задай «Зачем» сам."
+            at != null -> "разборщик Круга посмотрит ${krugAt(at)} — или задай «Зачем»."
+            else -> "разборщик Круга посмотрит в ближайший слот — или задай «Зачем»."
+        }
+    }
+
+    /**
+     * Строки «Места в дереве» (16.10.2026, записи 3 и 10 отладки). Предки сверху; на уровне родителя — соседи ВМЕСТЕ
+     * с самим делом в их порядке (как в «Дереве»: цели по номеру, проекты, дела по времени, у родителя-дела — по
+     * `pos`), до [PLACE_SIBS], само дело видно всегда; под делом — то, что внутри (у цели — подцели, проекты и дела,
+     * у обычного дела — его дела внутри), на два уровня и не больше [PLACE_DOWN] строк, дальше — «и ещё N». Узел,
+     * который не раскрыт, несёт [Inside]. Дети — одной картой [treeModel] за проход; напоминаний в ней нет. До 16.10
+     * у дела его дела внутри здесь не повторялись (решение 15.10 «в „Внутри“ — и хватит»): владелец просит видеть
+     * и дерево ниже дела — «Внутри» с флажками и порядком остаётся, дерево — для того, чтобы ходить.
+     */
+    private fun rows(t: Dela.Task, s: Dela.Snapshot, today: String, me: String, chain: List<Up>, parent: Up?): List<PlaceRow> {
+        val m = treeModel(s, me, today)
+        fun items(key: String): List<Item> = m.kids(key).filter { it.kind != Kind.PROJECT || m.open(it.key) > 0 }
+        fun inside(key: String): Inside? {
+            val k = items(key)
+            return Inside(k.count { it.kind == Kind.GOAL }, k.count { it.kind == Kind.PROJECT }, k.count { it.kind == Kind.TASK })
+                .takeIf { it.total > 0 }
+        }
+        fun projectName(id: String) = s.projects[id]?.name ?: "проект"
+        fun goalText(x: Dela.Task) = x.title + if (x.goal && x.rhythm.isNotBlank()) " · ${x.rhythm}" else ""
+        fun row(c: Item, depth: Int, role: Role, more: Inside?): PlaceRow = when (c.kind) {
+            Kind.PROJECT -> PlaceRow(depth, role, Mark.PROJECT, c.project?.name ?: projectName(c.key.drop(2)), projectId = c.key.drop(2), more = more)
+            Kind.GOAL -> PlaceRow(depth, role, Mark.GOAL, goalText(c.task!!), task = c.task, more = more)
+            Kind.TASK -> PlaceRow(depth, role, Mark.DEED, c.task!!.title, task = c.task, more = more)
+        }
+        val out = mutableListOf<PlaceRow>()
+        chain.forEachIndexed { i, x ->
+            val task = x.task
+            out += if (task == null) PlaceRow(i + 1, Role.UP, Mark.PROJECT, projectName(x.projectId), projectId = x.projectId)
+            else PlaceRow(i + 1, Role.UP, if (task.goal) Mark.GOAL else Mark.DEED, goalText(task), task = task)
+        }
+        val d = chain.size + 1
+        val meKey = "t:" + t.id
+        // Уровень родителя: у дела прямо на направлении соседей нет — их видно в «Дереве», здесь было бы всё направление.
+        val parentKey = when {
+            parent == null -> null
+            parent.task != null -> "t:" + parent.task.id
+            else -> "p:" + parent.projectId
+        }
+        var level = parentKey?.let(::items).orEmpty()
+        // Само дело не в дереве (сделано, родитель закрыт) — всё равно на своём месте, первым.
+        if (level.none { it.key == meKey }) level = listOf(Item(if (t.goal) Kind.GOAL else Kind.TASK, meKey, task = t)) + level
+        val at = level.indexOfFirst { it.key == meKey }
+        val shown = when {
+            level.size <= PLACE_SIBS -> level
+            at < PLACE_SIBS -> level.take(PLACE_SIBS)
+            else -> level.take(PLACE_SIBS - 1) + level[at]
+        }
+        for (c in shown) {
+            if (c.key != meKey) {
+                out += row(c, d, Role.SIB, inside(c.key))
+                continue
+            }
+            out += PlaceRow(d, Role.ME, Mark.ME, t.title, task = t)
+            // Под делом — два уровня: первый целиком (до предела), второй — у тех, чьи дети влезают целиком.
+            val l1 = items(meKey)
+            val down = l1.take(PLACE_DOWN)
+            var room = PLACE_DOWN - down.size
+            for (k in down) {
+                val l2 = items(k.key)
+                val open = l2.isNotEmpty() && l2.size <= room
+                out += row(k, d + 1, Role.KID, if (open) null else inside(k.key))
+                if (!open) continue
+                room -= l2.size
+                for (k2 in l2) out += row(k2, d + 2, Role.KID, inside(k2.key))
+            }
+            if (l1.size > down.size) out += PlaceRow(d + 1, Role.REST, Mark.NONE, "и ещё ${l1.size - down.size}")
+        }
+        if (level.size > shown.size) out += PlaceRow(d, Role.REST, Mark.NONE, "рядом ещё ${level.size - shown.size}")
+        return out
     }
 
     /** Подпись цели в строке (`taskRow` веба): «практика · ежедневно», «цель · 3 шага» или просто «цель». */

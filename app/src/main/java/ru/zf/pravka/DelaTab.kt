@@ -3873,7 +3873,7 @@ internal fun DelaTaskSheet(
         if (krugHere && existing) {
             val live = snap.copy(tasks = snap.tasks + (f.id to f))
             PlaceBlock(
-                f, DelaKrug.place(f, live, today.toString(), krugMe), krugDirs, snap,
+                f, DelaKrug.place(f, live, today.toString(), krugMe, DelaKrug.mskNow()), krugDirs, snap,
                 onTask = { to -> onOpenTask?.invoke(pinNow(f), to) },
                 onProject = { id -> onOpenProject?.invoke(id) },
             )
