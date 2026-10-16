@@ -621,6 +621,8 @@ fun DelaTab(
         compact = wideNow && Look.v2 && !paneHidden,
         // Долгое нажатие (15.10.2026): меню дела — «Для этого», «Вложить в…», «Вынуть», «Раньше» / «Позже».
         menu = { rowMenu = it },
+        // «+» у строки (16.10.2026, как в вебе): сразу лист «Для этого», без меню — «Вложить» и порядок там же, где были.
+        step = { stepFor = it },
         folded = nestFolded,
         fold = { id -> scope.launch { app.delaStore.setGroup("nf:$id", if (id in nestFolded) "0" else "1") } },
     )
@@ -2271,12 +2273,15 @@ internal class DelaActions(
     /** Дело, открытое справа на развороте: строка подсвечена (`.li.sel` холста). "" — никакое. */
     val selectedId: String = "",
     /**
-     * Короткая строка (разворот вида v2, `.li` холста): только квадрат и слова. Молния и ▶ — в карточке справа,
-     * куда строка и ведёт: в средней колонке на них уходила половина ширины, и названия ломались по слову.
+     * Короткая строка (разворот вида v2, `.li` холста): ▶ — в карточке справа, куда строка и ведёт: в средней колонке
+     * на неё и молнию уходила половина ширины, и названия ломались по слову. С 16.10.2026 «+» и молния — и у короткой
+     * строки (Саша: «в вебе есть + и молния около каждого дела… а в телефоне нет»), клавишами чуть меньше.
      */
     val compact: Boolean = false,
     /** Долгое нажатие на строку (15.10.2026): меню дела — «Для этого», «Вложить в…», «Вынуть», «Раньше» / «Позже». */
     val menu: ((Dela.Task) -> Unit)? = null,
+    /** «+» у строки (16.10.2026, как «+» строки веба): «Для этого» — лист нового дела внутри; null — «+» нет. */
+    val step: ((Dela.Task) -> Unit)? = null,
     /** «Деревом»: свёрнутые родители и плюсик свернуть / раскрыть (помнит устройство). */
     val folded: Set<String> = emptySet(),
     val fold: (String) -> Unit = {},
@@ -3520,7 +3525,30 @@ internal fun TaskRow(
             } else if (nested) {
                 Spacer(Modifier.size(28.dp))
             }
-            if (t.open && !actions.compact) {
+            if (t.open) {
+                // «+» и молния — у каждой строки, как `.lead` строки веба (16.10.2026, Саша: «в вебе теперь есть + и
+                // молния около каждого дела, очень удобно. А в телефоне нет»): и на развороте v2, где строка короткая
+                // (там до этого молния жила только в карточке справа, «+» — только в меню долгого нажатия). Короткой
+                // строке — клавиши чуть меньше (28 вместо 30): ▶ у неё по-прежнему в карточке.
+                val key = if (actions.compact) 28.dp else 30.dp
+                val pad = if (actions.compact) 5.dp else 6.dp
+                val keyShape = if (v2) RoundedCornerShape(KvShape.Control) else CircleShape
+                val idle = if (v2) Kv.check else mode.meta.copy(alpha = 0.45f)
+                // «+» — «Для этого»: лист нового дела внутри этого, поля от него (тот же, что «Для этого…» в меню
+                // строки). У цели, напоминания и где вкладка «+» не даёт — пусто той же ширины, строки стоят ровно.
+                actions.step?.let { step ->
+                    if (DelaSteps.canStep(t)) {
+                        Icon(
+                            Glyphs.Plus,
+                            contentDescription = "Для этого",
+                            tint = idle,
+                            modifier = Modifier.size(key).clip(keyShape)
+                                .clickable(onClickLabel = "завести дело внутри этого") { step(t) }.padding(pad),
+                        )
+                    } else {
+                        Spacer(Modifier.size(key))
+                    }
+                }
                 // Молния «Сейчас» (14.10.2026, вместо солнца «на сегодня / на завтра»: его принимали за «Сейчас»,
                 // а оно двигало срок — дело уезжало на завтра и пропадало). Горит у дела в «Сейчас»; тап —
                 // в «Сейчас» или из него, сразу, срок не трогается. У чужого дела и у цели молнии нет (её
@@ -3530,12 +3558,12 @@ internal fun TaskRow(
                     Icon(
                         Glyphs.Bolt,
                         contentDescription = if (on) "Из «Сейчас»" else "В «Сейчас»",
-                        tint = if (v2) (if (on) Kv.accent else Kv.check) else if (on) mode.value else mode.meta.copy(alpha = 0.45f),
-                        modifier = Modifier.size(30.dp).clip(if (v2) RoundedCornerShape(KvShape.Control) else CircleShape)
-                            .clickable(onClickLabel = if (on) "убрать из «Сейчас»" else "взять в «Сейчас»") { actions.bolt(t) }.padding(6.dp),
+                        tint = if (on) (if (v2) Kv.accent else mode.value) else idle,
+                        modifier = Modifier.size(key).clip(keyShape)
+                            .clickable(onClickLabel = if (on) "убрать из «Сейчас»" else "взять в «Сейчас»") { actions.bolt(t) }.padding(pad),
                     )
                 } else {
-                    Spacer(Modifier.size(30.dp))
+                    Spacer(Modifier.size(key))
                 }
             }
             Box(
