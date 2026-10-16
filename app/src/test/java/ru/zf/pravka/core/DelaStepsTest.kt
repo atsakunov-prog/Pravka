@@ -284,4 +284,21 @@ class DelaStepsTest {
         val sc = DelaAsk.stepScope(id)
         assertEquals(listOf("task", id, true), listOf(sc.getString("card"), sc.getString("open"), sc.getBoolean("step")))
     }
+
+    @Test
+    fun `«+» у строки — у открытого дела, своего и чужого, у цели, напоминания и сделанного нет, молния — только у своего`() {
+        // 16.10.2026: «+» и молния у каждой строки, как `.lead` веба (`canStep`, `canNow`). Дела выдуманные.
+        val mine = task("a") { it.copy(title = "Отправить Ивану Тестову договор") }
+        val alien = mine.copy(id = "b", ownerId = "colleague")
+        val goal = task("g") { it.copy(goal = true, title = "Альфа растёт") }
+        val remind = task("r") { it.copy(kind = Dela.KIND_REMIND, remindAt = "2026-10-15T12:00:00+03:00") }
+        val done = mine.copy(id = "d", status = Dela.DONE)
+        val cancelled = mine.copy(id = "c", status = Dela.CANCELLED)
+        assertEquals(listOf(true, true, false, false, false, false), listOf(mine, alien, goal, remind, done, cancelled).map(DelaSteps::canStep))
+        // Молния — по-прежнему только у своего открытого дела: у чужого на её месте пусто той же ширины.
+        assertEquals(listOf(true, false), listOf(mine, alien).map { DelaGroups.canNow(it, "me") })
+        // «+» у чужого дела ведёт в тот же лист: дело внутри получает проект и сделку, но не «Зачем» (правило базы).
+        assertEquals("", DelaSteps.draft(alien, snap(alien), "me", today).whyId)
+        assertEquals("a", DelaSteps.draft(mine, snap(mine), "me", today).whyId)
+    }
 }

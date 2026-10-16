@@ -1269,6 +1269,7 @@ class ScreenShots {
         val app = RuntimeEnvironment.getApplication() as PravkaApp
         RuntimeEnvironment.setQualifiers("w852dp-h883dp-420dpi")
         close(launch(MainActivity.TAB_TODOIST)) // первый запуск вкладки рисует её без копии — прогреть
+        val bad = mutableListOf<String>()
         for (theme in listOf("light", "dark")) {
             runBlocking { app.settings.setLookTheme(theme) }
             settle(4)
@@ -1276,6 +1277,12 @@ class ScreenShots {
                 RuntimeEnvironment.setQualifiers(q)
                 val c = launch(MainActivity.TAB_TODOIST)
                 shot(c, "m16-$size-$theme-1-now")
+                // «+» и молния у строк (16.10.2026, Саша: «в вебе есть + и молния около каждого дела… а в телефоне нет»):
+                // и на развороте, где строка короткая. Подписи значков есть только у строк — у клавиш карточки их нет.
+                val descs = roots(c).flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }
+                    .flatMap { it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty() }
+                if (descs.none { it == "Для этого" }) bad += "$size $theme: у строк нет «+»"
+                if (descs.none { it == "В «Сейчас»" || it == "Из «Сейчас»" }) bad += "$size $theme: у строк нет молнии"
                 if (size == "wide" && tap(c, "Для этого", exact = true)) shot(c, "m16-$size-$theme-2-for-this")
                 if (size != "wide-tall") {
                     close(c)
@@ -1287,6 +1294,14 @@ class ScreenShots {
                     val k = launch(MainActivity.TAB_TODOIST)
                     if (tap(k, "Ольга: ответить про сроки")) screen("m16-$size-$theme-4-card")
                     close(k)
+                    // «+» у строки — сразу лист «Для этого» (новое дело внутри), без меню.
+                    val p = launch(MainActivity.TAB_TODOIST)
+                    if (!tap(p, "Для этого", exact = true)) bad += "$size $theme: «+» у строки не нажимается"
+                    else if (roots(p).flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }
+                            .flatMap { n -> n.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } }
+                            .none { it.startsWith("Для: ") }) bad += "$size $theme: «+» не открыл лист «Для этого»"
+                    else screen("m16-$size-$theme-5-plus")
+                    close(p)
                 }
             }
         }
@@ -1298,7 +1313,6 @@ class ScreenShots {
         shot(c, "m16-wide-whole-light-1-now")
         val nodes = roots(c).flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }
         fun y(text: (String) -> Boolean) = nodes.firstOrNull { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { text(it.text) } == true }?.positionInRoot?.y
-        val bad = mutableListOf<String>()
         val late = y { it.startsWith("просрочено ") && it.endsWith("›") }
         val owed = y { it.startsWith("ждут от тебя без срока") }
         // «Сегодня» — заголовок блока на главной (ниже боковины с тем же словом): самый нижний.
