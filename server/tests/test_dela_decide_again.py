@@ -111,7 +111,9 @@ def test_yes_after_no_is_refused_with_when(dela):
     decide(dela, s, decision="reject", reason="не дело")
     at(dela, s)
     r = decide(dela, s, decision="accept")
-    assert not r["ok"] and r["error"] == "Уже решено раньше: отклонено 16.10 в 09:05 — повторять не нужно", r
+    # Другой исход — тап не применён, и так и сказано; «повторять не нужно» читалось бы как «уже сделано» (мелочи 16.10).
+    assert not r["ok"] and r["error"] == ("Уже решено раньше: отклонено 16.10 в 09:05 — этот ответ не принят: нужно — "
+                                          "заведи или поправь дело сам"), r
     r = decide(dela, s, option=0)  # вариантов нет — не тот же исход
     assert not r["ok"] and r["error"].startswith("Уже решено раньше: отклонено"), r
     assert titled(dela, "Вера Тестова: счёт") == 0
@@ -120,16 +122,20 @@ def test_yes_after_no_is_refused_with_when(dela):
     decide(dela, y, decision="accept")
     at(dela, y, "2026-10-15 21:30:00+00")
     r = decide(dela, y, decision="reject")
-    assert not r["ok"] and r["error"] == "Уже решено раньше: принято 16.10 в 00:30 — повторять не нужно", r
+    assert not r["ok"] and r["error"] == ("Уже решено раньше: принято 16.10 в 00:30 — этот ответ не принят: передумал — "
+                                          "поправь само дело"), r
     assert row(dela, y)["status"] == "accepted"
-    # Погасшее само: «Да» — отказ «закрыто само» (дела нет, и тап его не заведёт); «Не надо» — тот же исход.
+    # Погасший вопрос: «Да» — отказ «погас сам, без ответа» (дела нет, и тап его не заведёт), а не «закрыто само» —
+    # так зовётся дело, которое закрыла автоматика; «Не надо» — тот же исход.
     old = one(dela, {"op": "suggestion.create", "suggestion": {
         "for_user": "sasha", "kind": "create", "source": "userbot", "payload": {"title": "Старое"},
         "expires_at": "2020-01-01T00:00:00+03:00"}}, user="system")["suggestion"]
     assert store.expire_suggestions(dela) == 1
     at(dela, old, "2026-10-16 00:00:00+00")
     r = decide(dela, old, decision="accept")
-    assert not r["ok"] and r["error"] == "Уже решено раньше: закрыто само 16.10 в 03:00 — повторять не нужно", r
+    assert not r["ok"] and r["error"] == ("Вопрос погас сам 16.10 в 03:00, без ответа — этот ответ не принят: нужно — "
+                                          "заведи или поправь дело сам"), r
+    assert "закрыто само" not in r["error"]
     r = decide(dela, old, decision="reject")
     assert r["ok"] and r["already"], r
     assert row(dela, old)["status"] == "expired" and titled(dela, "Старое") == 0
@@ -139,12 +145,30 @@ def test_yes_with_set_on_decided_is_refused(dela):
     s = sug(dela, "Иван Тестов: договор", ball="mine")
     t = decide(dela, s, decision="accept")["task"]
     r = decide(dela, s, decision="accept", set={"ball": "waiting"})
+    # Тот же исход, но с правкой — её уже не применить: хвост «повторять не нужно» и что правка не легла.
     assert not r["ok"] and r["error"].startswith("Уже решено раньше: принято "), r
+    assert r["error"].endswith(" — повторять не нужно, правка не применена: поправь само дело"), r
     with dela_db.session(dela, "sasha", "t") as c:
         assert c.execute("SELECT ball FROM tasks.tasks WHERE id = %s", (t["id"],)).fetchone()["ball"] == "mine"
     # Пустая правка (коннектор шлёт set: {}) — не правка.
     r = decide(dela, s, decision="accept", set={})
     assert r["ok"] and r["already"], r
+    # У «Не надо» правки нет: «Не надо» с set у отклонённого — тот же исход, ok already.
+    n = sug(dela, "Ольга Тестова: письмо")
+    decide(dela, n, decision="reject")
+    r = decide(dela, n, decision="reject", set={"ball": "waiting"})
+    assert r["ok"] and r["already"], r
+
+
+def test_close_refusal_points_to_return(dela):
+    """«Не надо» после «Да» у закрытия дела — «Вернуть» у дела: так отменяют закрытие (мелочи 16.10)."""
+    t = one(dela, {"op": "task.create", "task": {"title": "Ольга Тестова: акт"}})["task"]
+    c = one(dela, {"op": "suggestion.create", "suggestion": {
+        "for_user": "sasha", "kind": "close", "task_id": str(t["id"]), "source": "meeting", "payload": {}}},
+        user="system")["suggestion"]
+    assert decide(dela, c, decision="accept")["ok"]
+    r = decide(dela, c, decision="reject")
+    assert not r["ok"] and r["error"].endswith(" — этот ответ не принят: передумал — «Вернуть» у дела"), r
 
 
 def test_person_answer_again_does_not_teach_twice(sp):
@@ -185,6 +209,18 @@ def test_foreign_or_missing_suggestion_is_not_yours(dela):
         user="marianna")["suggestion"]
     r = decide(dela, m, user="marianna", decision="accept")
     assert not r["ok"] and r["error"] == "Такого вопроса нет или он не твой", r
+    # Уже решённый Сашей вопрос чужим не открывается и повтором (замечание проверки к 8a4a34c6): ветка без фильтра
+    # статуса не отдаёт им ни already, ни «Уже решено раньше» — строка не видна (RLS), ответ тот же, строка не тронута.
+    for q in (s, m):
+        assert decide(dela, q, decision="accept")["ok"]
+        before = row(dela, q)
+        for who in ("natasha", "marianna"):
+            for decision in ("accept", "reject"):
+                r = decide(dela, q, user=who, decision=decision)
+                assert not r["ok"] and r["error"] == "Такого вопроса нет или он не твой", (who, decision, r)
+        after = row(dela, q)
+        assert (after["status"], after["rev"], after["decided_at"], after["decided_by"]) == (
+            before["status"], before["rev"], before["decided_at"], before["decided_by"])
 
 
 def test_refusal_names_op_and_id_and_replays_by_op_id(dela, caplog):

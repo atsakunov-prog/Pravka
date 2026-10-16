@@ -1636,8 +1636,26 @@ def _auto(conn, user, s: dict, problems: list[str] | None = None, cache: dict | 
     return (AUTO_CREATE_REASON if kind == "create" else AUTO_UPDATE_REASON), None
 
 
-# Как решено раньше — словами отказа повтора (отладка 16.10.2026).
-DECIDED_WORDS = {"accepted": "принято", "edited": "принято с правкой", "rejected": "отклонено", "expired": "закрыто само"}
+# Как решено раньше — словами отказа повтора (отладка 16.10.2026). Погасший вопрос — «погас сам, без ответа», а не
+# «закрыто само»: «Закрыто само» — дело, которое закрыла автоматика (accepted + AUTO_CLOSE_REASON), и Саша прочёл бы
+# «дело закрыли за меня» (мелочи 16.10.2026, замечание проверки к 8a4a34c6).
+DECIDED_WORDS = {"accepted": "принято", "edited": "принято с правкой", "rejected": "отклонено"}
+
+
+def decided_words(s: dict, same: bool) -> str:
+    """Отказ повтора словами: как и когда решено и что с этим тапом. Хвост «— повторять не нужно» — только при том же
+    исходе (тот же ответ, но с правкой: её уже не применить); другой исход — «этот ответ не принят» и где поправить:
+    тап не применён, а «повторять не нужно» читалось как «уже сделано» (мелочи 16.10.2026)."""
+    when = s["decided_at"].astimezone(meetings.MSK).strftime(" %d.%m в %H:%M") if s.get("decided_at") else ""
+    st = s["status"]
+    head = (f"Вопрос погас сам{when}, без ответа" if st == "expired"
+            else f"Уже решено раньше: {DECIDED_WORDS.get(st, st)}{when}")
+    if same:
+        return head + " — повторять не нужно, правка не применена: поправь само дело"
+    if st in ("accepted", "edited"):
+        fix = "«Вернуть» у дела" if s.get("kind") == "close" else "поправь само дело"
+        return head + f" — этот ответ не принят: передумал — {fix}"
+    return head + " — этот ответ не принят: нужно — заведи или поправь дело сам"
 
 
 def _decided_again(s: dict, op: dict) -> dict:
@@ -1649,7 +1667,7 @@ def _decided_again(s: dict, op: dict) -> dict:
     карточку второй раз не учим. Тот же исход — «Да» у принятого (и принятого с правкой), «Не надо» у отклонённого и
     у погасшего самого (дела не будет — этого и хотели); у кнопки-варианта исход по его reject, а «Да» другим вариантом —
     другой ответ (другой человек или проект): по причине, которую пишет первый ответ. С правкой (set) повтор не бывает
-    тем же — правку уже не применить. Иначе — отказ, который называет, как и когда решено."""
+    тем же — правку уже не применить. Иначе — отказ, который называет, как и когда решено (`decided_words`)."""
     decision, reason = op.get("decision"), op.get("reason")
     same_option = True
     if op.get("option") is not None:
@@ -1666,10 +1684,10 @@ def _decided_again(s: dict, op: dict) -> dict:
         else:
             decision = None
     was = {"accepted": "accept", "edited": "accept", "rejected": "reject", "expired": "reject"}.get(s["status"])
-    if decision and decision == was and not op.get("set") and same_option:
+    same = bool(decision) and decision == was and same_option
+    if same and (not op.get("set") or decision == "reject"):  # у «Не надо» правки нет — set ему ничего не значит
         return {"suggestion": s, "already": True}
-    when = s["decided_at"].astimezone(meetings.MSK).strftime(" %d.%m в %H:%M") if s.get("decided_at") else ""
-    raise OpError(f"Уже решено раньше: {DECIDED_WORDS.get(s['status'], s['status'])}{when} — повторять не нужно")
+    raise OpError(decided_words(s, same))
 
 
 def op_suggestion_decide(conn, user, op):
