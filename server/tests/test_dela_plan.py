@@ -621,7 +621,7 @@ def test_life_focus_on_and_now_days_for_reader(dela, cfg):
     tmrw = today + dt.timedelta(days=1)
     mk(dela, title="На завтра заранее", focus_on=tmrw.isoformat())
     mk(dela, title="Сейчас сегодня", focus_on=today.isoformat())
-    mk(dela, user="natasha", title="Наташино в Сейчас", focus_on=today.isoformat())
+    mk(dela, user="natasha", title="Дело команды в Сейчас", focus_on=today.isoformat())
     plan.snap(dela, today)
     with dela_db.session(dela, "system", "t") as c:  # строка снимка не владельца — в life её не видно
         nid = c.execute("SELECT id FROM tasks.tasks WHERE owner_id = 'natasha'").fetchone()["id"]
