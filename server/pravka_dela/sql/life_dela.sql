@@ -102,7 +102,7 @@ SELECT pe.name, pe.short, pe.aliases, o.name AS org, pe.role, pe.phones, pe.emai
            AND (i.owner_id = crm.owner_id()
                 OR (NOT i.private AND i.project_id IS NOT NULL AND crm.sees_project(crm.owner_id(), i.project_id)))) AS last_contact,
        pe.id, pe.org_id,
-       -- Как к человеку обращаются (dela_0024, этап 6 аудита): «вы, Иван Петрович». В конце — CREATE OR REPLACE
+       -- Как к человеку обращаются (dela_0033, этап 6 аудита): «вы, Иван Петрович». В конце — CREATE OR REPLACE
        -- добавляет колонку только последней.
        pe.address
 FROM crm.people pe

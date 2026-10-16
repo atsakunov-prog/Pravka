@@ -3552,7 +3552,7 @@ function renderPerson(id) {
   row('Телефон', (p.phones || []).join(', '));
   row('Почта', (p.emails || []).join(', '));
   row('Telegram', p.telegram_username ? '@' + p.telegram_username : null);
-  // Как к нему обращаться (dela_0024, этап 6 аудита): ставит обучение после твоего «да» спикеру встречи — только в пустое;
+  // Как к нему обращаться (dela_0033, этап 6 аудита): ставит обучение после твоего «да» спикеру встречи — только в пустое;
   // поправить — щелчком (или строкой Claude). У команды не ведём.
   if (!p.user_id) info.push(el('span', {}, 'Обращение'), el('span', {}, el('button', { class: 'link-btn' + (p.address ? '' : ' faint'),
     title: 'Как к нему обращаться — поправить', onclick: () => {

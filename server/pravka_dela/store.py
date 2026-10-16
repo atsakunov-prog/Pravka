@@ -58,7 +58,7 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug",
 # службы (живые видимые карточки, у кнопки — свои основания, «▶ послушать» — payload.speaker.clip_url), а не из «кто это»
 # по имени. Ответ владельца учит карточку (ident.learn: почта, обращение, подпись Zoom — people.learn); «Сделано само» не
 # учит. person.learn — то же обучение после «да» вне «Подскажи» (веб встреч, «Уточнить»); поле карточки address
-# (dela_0024) — как к человеку обращаются; вид people_day — с кем был контакт в день встречи (основание вопроса). Без флага
+# (dela_0033) — как к человеку обращаются; вид people_day — с кем был контакт в день встречи (основание вопроса). Без флага
 # служба шлёт людей, как раньше (people_link): старый сервер link и ident не понял бы и спросил бы по имени.
 # «people_final» — одна правда о людях встречи (этап 6 аудита, п. 5 Саши): raw.people_final в meeting.upsert — люди встречи
 # определены службой (разбор и сверка кодом); участники карточки — привязанные из raw.speakers, гости — неподтверждённые с
@@ -164,7 +164,7 @@ DEAL_FIELDS = {
 PERSON_FIELDS = {
     "name", "short", "aliases", "org_id", "role", "phones", "emails", "telegram_id", "telegram_username",
     "birth_day", "birth_month", "birth_year", "source", "seeks", "offers", "traits", "cadence", "hub",
-    "note", "archived_at", "address",  # address — как обращаться (dela_0024, этап 6 аудита)
+    "note", "archived_at", "address",  # address — как обращаться (dela_0033, этап 6 аудита)
 }
 ORG_FIELDS = {"name", "aliases", "kind", "note", "archived_at"}
 # private (dela_0018, с 15.10.2026 и в операциях — аудит №9): interaction.add — запись сразу «только мне», interaction.set

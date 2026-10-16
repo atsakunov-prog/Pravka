@@ -808,7 +808,7 @@ def op_person_merge(conn, user, op, error):
     conn.execute("SELECT set_config('dela.user', 'system', true)")
     skipped = op_person_add(conn, user, {"id": into, "add": add}, error)["skipped"]
     if a.get("address"):
-        # Как к нему обращаются (dela_0024) — пустое у живой берёт из дубля, как компанию и должность crm.person_merge.
+        # Как к нему обращаются (dela_0033) — пустое у живой берёт из дубля, как компанию и должность crm.person_merge.
         conn.execute("UPDATE crm.people SET address = %s WHERE id = %s AND nullif(btrim(address), '') IS NULL",
                      (a["address"], into))
     row = conn.execute("SELECT * FROM crm.people WHERE id = %s", (into,)).fetchone()
