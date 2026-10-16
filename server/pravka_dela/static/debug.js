@@ -380,8 +380,9 @@ const DEBUG = (() => {
       hearing = false;
       const said = (input ? input.value : text).trim();
       paint();
-      // Как у строки Claude: второе нажатие сразу записывает (настройка «Голос» — иначе текст ждёт Enter).
-      if (said && said !== base && voiceAuto()) send();
+      // «Стоп» — текст в поле, записывает человек — Enter или стрелкой (16.10.2026, запись отладки 12: «во всех микрофонах…
+      // иногда хочу что-то подправить»; до того второе нажатие сразу записывало, как строка Claude с галочкой voiceAuto).
+      if (said && input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
     });
     if (!ok) hearing = false;
     paint();
@@ -409,8 +410,8 @@ const DEBUG = (() => {
     bar.classList.toggle('has-text', !!(input && input.value.trim()));
     input.disabled = sending;
     micBtn.replaceChildren(icon(hearing ? 'stop' : 'mic', 17));
-    micBtn.title = hearing ? 'Готово — записать' : 'Сказать голосом: нажми, говори, нажми ещё раз';
-    micBtn.setAttribute('aria-label', hearing ? 'Закончить и записать' : 'Сказать голосом');
+    micBtn.title = hearing ? 'Готово — текст встанет в поле' : 'Сказать голосом: нажми, говори, нажми ещё раз — текст встанет в поле';
+    micBtn.setAttribute('aria-label', hearing ? 'Закончить — текст встанет в поле' : 'Сказать голосом');
     micBtn.setAttribute('aria-pressed', hearing ? 'true' : 'false');
     sendBtn.disabled = sending;
     const n = info && info.new, last = info && info.last;

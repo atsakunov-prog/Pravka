@@ -3072,7 +3072,8 @@ function quickAdd(defaults, { placeholder = null, label = null, hint = null } = 
     'Enter или стрелка — разложу сам (можно несколько сразу) · Shift+Enter — новая строка · Alt+Enter — одно дело как написано: ',
     '+проект  @человек  *метка  !отбить  !мониторить  !хочу  !15м · сегодня, завтра, в пятницу, 12.10');
   const status = busy && !S.parse.card ? el('div', { class: 'claude-status' }, 'Разбираю… Можно уходить на другие страницы — всё появится само.')
-    : rec && S.listenQuick ? el('div', { class: 'claude-status listening' }, 'Слушаю — говори сколько нужно. Нажми микрофон ещё раз — отдам Claude.') : null;
+    : rec && S.listenQuick ? el('div', { class: 'claude-status listening' }, 'Слушаю — говори сколько нужно. Нажми микрофон ещё раз — текст встанет в поле.')
+      : S.quickVoiced && (S.quickText || '').trim() ? el('div', { class: 'claude-status' }, 'Текст в поле — поправь, если надо, и Enter.') : null;
   const ac = el('div', { class: 'ac hidden' });
   let acState = null; // {kind, q, start, items, at}
 
@@ -3150,7 +3151,7 @@ function quickAdd(defaults, { placeholder = null, label = null, hint = null } = 
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeAc(); return; }
     }
     if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) setTimeout(updateAc);
-    if (e.key === 'Escape') { input.value = S.quickText = ''; update(); input.blur(); e.stopPropagation(); return; }
+    if (e.key === 'Escape') { input.value = S.quickText = ''; S.quickVoiced = false; update(); input.blur(); e.stopPropagation(); return; }
     if (e.key !== 'Enter' || e.shiftKey) return;
     e.preventDefault();
     if (e.altKey) addOne(); // Alt+Enter — одно дело, как «+»
@@ -3163,13 +3164,16 @@ function quickAdd(defaults, { placeholder = null, label = null, hint = null } = 
   const sendBtn = el('button', { type: 'button', class: 'q-btn send-btn' + (busy ? ' busy' : ''), disabled: busy,
     title: !S.me.claude ? 'Claude на сервере ещё не настроен' : busy ? 'Claude думает…' : 'Отдать Claude (Enter)',
     'aria-label': 'Отдать Claude', onclick: () => claudeParse(input, defaults) }, icon('up', 20));
-  // Микрофон: нажал — слушаю (сказанное дописывается в поле), нажал ещё раз — ушло Claude. Браузер сам
-  // закрывает распознавание в паузе (Chrome на телефоне — почти сразу) — listen открывает его снова: 08.10.2026
-  // так команда уходила посреди фразы, а второе нажатие начинало новую запись в пустом поле — «всё стирается».
+  // Микрофон: нажал — слушаю (сказанное дописывается в поле), нажал ещё раз — текст стоит в поле, отправляет человек
+  // (16.10.2026, запись отладки 12: «во всех микрофонах… нажимаю стоп — это просто ставится в текстбокс, дальше я сам
+  // нажимаю отправить, потому что иногда хочу что-то подправить»; до того, с 08.10, второе нажатие сразу отдавало Claude —
+  // галочка «Голоса» voiceAuto снята). Браузер сам закрывает распознавание в паузе (Chrome на телефоне — почти сразу) —
+  // listen открывает его снова: 08.10.2026 так команда уходила посреди фразы, а второе нажатие начинало новую запись в
+  // пустом поле — «всё стирается».
   const hearing = !!(rec && S.listenQuick);
   const micBtn = el('button', { type: 'button', class: 'q-btn mic' + (hearing ? ' on' : ''), disabled: busy,
-    title: hearing ? 'Готово — отдать Claude' : 'Сказать голосом: нажми, говори, нажми ещё раз',
-    'aria-label': hearing ? 'Закончить и отдать Claude' : 'Сказать голосом', 'aria-pressed': hearing ? 'true' : 'false',
+    title: hearing ? 'Готово — текст встанет в поле' : 'Сказать голосом: нажми, говори, нажми ещё раз — текст встанет в поле',
+    'aria-label': hearing ? 'Закончить — текст встанет в поле' : 'Сказать голосом', 'aria-pressed': hearing ? 'true' : 'false',
     onclick: () => {
       if (hearing) { stopListening(); return; }
       const base = input.value.trim();
@@ -3182,8 +3186,9 @@ function quickAdd(defaults, { placeholder = null, label = null, hint = null } = 
         S.listenQuick = false;
         const q = document.getElementById('quick');
         const said = (q ? q.value : S.quickText).trim();
-        if (said && said !== base && voiceAuto()) claudeSay(said, defaults);
-        else render();
+        S.quickVoiced = !!said && said !== base;
+        render();
+        if (said) voiceToField('quick');
       });
       if (!ok) S.listenQuick = false;
       render();
@@ -3205,9 +3210,20 @@ function quickAdd(defaults, { placeholder = null, label = null, hint = null } = 
 // ── Голос: распознавание браузера (Chrome — по-русски, сразу), своего сервера не нужно ──
 const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null; // одна запись на страницу
-const HOLD_QUIET = 45000; // забыл нажать второй раз — через столько тишины отдаём сами
+const HOLD_QUIET = 45000; // забыл нажать второй раз — через столько тишины запись кончается сама (текст — в поле)
 function stopListening() { if (rec) { rec.byUser = true; try { rec.stop(); } catch (e) { /* уже стоит */ } } }
-/** Слушать: onText — текст по ходу речи, onDone — итог, когда человек нажал микрофон ещё раз.
+/** «Стоп» — текст в поле, отправляет человек (запись отладки 12, 16.10.2026): после перерисовки — фокус в поле и курсор в
+ *  конец, чтобы сразу поправить и нажать Enter. Сам ничего не отправляет. */
+function voiceToField(id) {
+  setTimeout(() => {
+    const i = document.getElementById(id);
+    if (!i || i.disabled) return;
+    i.focus();
+    const n = i.value.length;
+    try { i.setSelectionRange(n, n); } catch (e) { /* поле без выделения */ }
+  });
+}
+/** Слушать: onText — текст по ходу речи, onDone — итог, когда человек нажал микрофон ещё раз (итог кладут в поле — не шлют).
  *  Владелец 08.10.2026: «нажимаю на микрофон, говорю, ещё раз нажимаю» — итог по паузе (было до того)
  *  обрывал команду на полуслове. Браузер сам закрывает распознавание в паузе (Chrome на телефоне — почти
  *  сразу) — открываем его снова и дописываем к сказанному. */
@@ -3383,6 +3399,7 @@ async function claudeSay(text, defaults, cont, card) {
   talk.busy = text;
   S.parse = { text, card: one ? one.id : null };
   if (one) S.cardSay[one.id] = ''; else S.quickText = '';
+  S.quickVoiced = false; S.cardVoiced = null;
   render();
   try {
     const d = await runJob('/api/ask', { text, scope });
@@ -4504,7 +4521,6 @@ function renderNew(batch) {
 }
 
 // ── Настройки: Claude (у человека на сервере), голос (на этом устройстве), траты (владельцу) ──
-const voiceAuto = () => LS.get('voiceAuto', true);
 const EFFORT_INFO = {
   low: ['Быстро', 'обычные правки: сроки, люди, проекты'],
   medium: ['Вдумчиво', 'много дел сразу или сложная команда'],
@@ -4531,9 +4547,6 @@ function renderSettings() {
       if (String(cur) === String(val)) return;
       if (local) { LS.set(key, local(val)); toast('Сохранил: ' + title); render(); } else save({ [key]: val }, title);
     } }, el('b', {}, title), el('span', {}, hint))));
-  const auto = el('input', { type: 'checkbox' });
-  auto.checked = voiceAuto();
-  auto.addEventListener('change', () => { LS.set('voiceAuto', auto.checked); render(); });
   const cost = v.cost;
   const kinds = { ask: 'строка и разговор', parse: 'разбор надиктовки', task: 'карточка дела', when: '«Когда»', krug: 'разборщик Круга', meetings: 'разборщик встреч', zachem: '«Зачем»' };
   return [head('Настройки', ['Claude в Делах, голос и траты' + (v.ui ? ', вид и меню Ковчега' : '')]),
@@ -4545,9 +4558,8 @@ function renderSettings() {
           .filter(([k]) => (v.routes || {})[k]).map(([k, w]) => `${w}: ${modelWord(v.routes[k])}`).join(' · ')),
         el('div', { class: 'hint-line faint' }, 'Модель и глубину выбирает владелец — одной записью Свода models.dela.')),
       el('div', { class: 'group' }, el('h2', {}, icon('mic', 17), 'Голос', el('span', { class: 'gsub' }, 'на этом устройстве')),
-        el('div', { class: 'hint-line' }, 'Нажми микрофон — говори сколько нужно, хоть с паузами — нажми ещё раз.'),
-        el('label', { class: 'set-check' }, auto, 'Второе нажатие сразу отдаёт Claude', el('span', { class: 'faint' }, ' — иначе текст ждёт в поле стрелку справа или Enter')),
-        el('div', { class: 'hint-line' }, 'Речь распознаёт браузер (Chrome — и на телефоне). На компьютере можно диктовать и Wispr Flow прямо в поле.')),
+        el('div', { class: 'hint-line' }, 'Нажми микрофон — говори сколько нужно, хоть с паузами — нажми ещё раз: текст встанет в поле, поправь, если надо, и отправь сам — Enter или стрелкой.'),
+        el('div', { class: 'hint-line' }, 'Речь распознаёт браузер (Chrome — и на телефоне). На этом компьютере можно диктовать и Диктовкой прямо в поле — Ctrl+Shift+Space.')),
       el('div', { class: 'group' }, el('h2', {}, icon('flame', 17), 'Путь: очки, серия, уровень'),
         el('div', { class: 'hint-line' }, 'Очки — только за доведённое: закрыл, отменил ненужное, разобрал «Новое». Карточка пути — вверху боковой панели, подробно — «Статистика».'),
         choices('game_theme', { torah: ['Тора', '42 стоянки странствий, серия — манна; суббота не рвёт'], greek: ['Греция', 'подвиги Геракла и путь Одиссея, серия — огонь Прометея'] }, s.game_theme || 'torah')),
@@ -5163,10 +5175,11 @@ function cardSay(t, { stepOnly = false } = {}) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
     if (e.key === 'Escape') { e.preventDefault(); input.value = S.cardSay[t.id] = ''; box.classList.remove('has-text'); input.blur(); }
   });
+  // «Стоп» — текст в поле, отправляет человек (запись отладки 12), как у строки страницы.
   const hearing = !!(rec && S.listenCard);
   const mic = el('button', { type: 'button', class: 'q-btn mic' + (hearing ? ' on' : ''), disabled: busy,
-    title: hearing ? 'Готово — отдать Claude' : 'Сказать голосом: нажми, говори, нажми ещё раз',
-    'aria-label': hearing ? 'Закончить и отдать Claude' : 'Сказать голосом', 'aria-pressed': hearing ? 'true' : 'false',
+    title: hearing ? 'Готово — текст встанет в поле' : 'Сказать голосом: нажми, говори, нажми ещё раз — текст встанет в поле',
+    'aria-label': hearing ? 'Закончить — текст встанет в поле' : 'Сказать голосом', 'aria-pressed': hearing ? 'true' : 'false',
     onclick: () => {
       if (hearing) { stopListening(); return; }
       const base = input.value.trim();
@@ -5178,7 +5191,9 @@ function cardSay(t, { stepOnly = false } = {}) {
       }, () => {
         S.listenCard = false;
         const x = (S.cardSay[t.id] || '').trim();
-        if (x && x !== base && voiceAuto()) claudeSay(x, {}, false, { id: t.id, kstati: k, step: st }); else render();
+        S.cardVoiced = x && x !== base ? t.id : null;
+        render();
+        if (x) voiceToField('card-say');
       });
       if (!ok) S.listenCard = false;
       render();
@@ -5201,7 +5216,8 @@ function cardSay(t, { stepOnly = false } = {}) {
       : 'Для этого: что назовёшь — заведу делами внутри этого') : 'Кстати: Claude сам решит — дописать к делу или завести рядом') : null, sBtn, kBtn),
     box,
     mine ? el('div', { class: 'claude-status' }, stepOnly ? 'Завожу…' : 'Claude думает над этим делом…')
-      : hearing ? el('div', { class: 'claude-status listening' }, 'Слушаю — нажми микрофон ещё раз, и отдам Claude.') : null,
+      : hearing ? el('div', { class: 'claude-status listening' }, 'Слушаю — нажми микрофон ещё раз, текст встанет в поле.')
+        : S.cardVoiced === t.id && (S.cardSay[t.id] || '').trim() ? el('div', { class: 'claude-status' }, 'Текст в поле — поправь, если надо, и Enter.') : null,
     talkFeed(S.cardTalk && S.cardTalk.card.id === t.id ? S.cardTalk : null, { inCard: true }));
 }
 

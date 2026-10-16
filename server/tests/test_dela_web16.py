@@ -97,3 +97,27 @@ def test_tree_columns_show_due_on_the_right():
     due = css[css.index(".col-task .col-due {"):]
     assert "white-space: nowrap" in due[:due.index("}")] and "margin-left: auto" in due[:due.index("}")]
     assert ".col-task .col-due.late { color: var(--bad)" in css and ".col-task.today .c-t" in css
+
+
+def test_mic_stop_puts_text_in_the_field_everywhere():
+    """Запись 12 (владелец: «во всех микрофонах — нажимаю стоп, и это просто ставится в текстбокс, дальше я сам нажимаю
+    отправить, потому что иногда хочу что-то подправить»): у строки страницы, строки карточки дела и «Что не так?» итог
+    распознавания встаёт в поле с курсором в конце; отправляет человек. Галочки «Второе нажатие сразу отдаёт Claude» нет."""
+    dbg = (STATIC / "debug.js").read_text(encoding="utf-8")
+    assert "voiceAuto" not in JS.replace("галочка «Голоса» voiceAuto снята", "") and "voiceAuto()" not in dbg
+    assert "'Второе нажатие сразу отдаёт Claude'" not in JS
+    for head, field in (("function quickAdd(", "voiceToField('quick')"), ("function cardSay(", "voiceToField('card-say')")):
+        body = fn(head)
+        done = body[body.index("const ok = listen("):]
+        done = done[:done.index("if (!ok)")]
+        assert field in done and "claudeSay(" not in done, head
+        assert "текст встанет в поле" in body and "отдам Claude" not in body, head
+    mic = dbg[dbg.index("  function mic()"):]
+    mic = mic[:mic.index("\n  }\n")]
+    done = mic[mic.index("const ok = listen("):]
+    assert "send()" not in done and "input.focus()" in done
+    vf = fn("function voiceToField(")
+    assert "i.focus()" in vf and "setSelectionRange(n, n)" in vf and "claudeSay" not in vf
+    # Голос в «Настройках»: что делает «стоп», и Диктовка компьютера вместо Wispr Flow.
+    st = fn("function renderSettings()")
+    assert "текст встанет в поле" in st and "Wispr" not in st and "Ctrl+Shift+Space" in st
