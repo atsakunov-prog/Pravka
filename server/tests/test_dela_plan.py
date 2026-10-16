@@ -633,6 +633,49 @@ def test_migration_over_data(admin_dsn):
             a.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
 
 
+# ── 9. Поезд 16.10.2026: стыки с другими вагонами ────────────────────────
+
+def test_train_capture_reminders_and_later(dela):
+    """Стык с захватом (вагон 4, dela_0032, правило 29). Напоминание — не дело: ни в одной корзине (store.DEED_KIND_IF).
+    «Потом» план не подталкивает: дело, отложенное дальше дня плана, — не кандидат, если срок не горит (срок сильнее
+    «потом»); «Вернулось» (своё, не «Отбить», без срока, с днём возврата) — не кандидат: у него свой вопрос на экране; а
+    вернувшееся «Отбить» — кандидат, и «☆ На завтра» снимает с него «потом». Закрытое напоминание — движение направления,
+    как у Круга (krug.movement): «направление стоит» план тогда не пишет."""
+    today = db_today(dela)
+    tm = today + dt.timedelta(days=1)
+    ok(dela, "sasha", {"op": "svod.set", "key": krug.DIRECTIONS_KEY, "value": DIRS, "author": "test"})
+    rem = mk(dela, title="Напомни: отправить счёт", kind="remind", ball="owed", remind_at=at(tm, 12).isoformat())
+    aged(dela, rem["id"], 5)
+    later = mk(dela, title="Ответить Олегу потом", ball="owed", back_on=(today + dt.timedelta(days=5)).isoformat())
+    aged(dela, later["id"], 5)
+    burning = mk(dela, title="Счёт до завтра", ball="owed", due_date=tm.isoformat(),
+                 back_on=(today + dt.timedelta(days=5)).isoformat())
+    back_owed = mk(dela, title="Ответить Глебу", ball="owed", back_on=today.isoformat())
+    aged(dela, back_owed["id"], 5)
+    g = mk(dela, title="Тело в форме", goal=True, directions=["health"])
+    returned = mk(dela, title="Купить коврик", why_id=g["id"], back_on=today.isoformat())
+    aged(dela, returned["id"], 10)
+    step = mk(dela, title="Сделать зарядку", why_id=g["id"])
+    aged(dela, step["id"], 1)
+    with dela_db.session(dela, "sasha", via="t") as c:
+        kinds = dict(c.execute("SELECT title, kind FROM tasks.tasks WHERE id = %s", (rem["id"],)).fetchone() or {})
+    assert kinds.get("kind") == "remind", "напоминание осталось напоминанием (время есть, срока нет)"
+    out = build(dela, today, tm)
+    t = titles(out)
+    assert "Напомни: отправить счёт" not in t
+    assert "Ответить Олегу потом" not in t and "Купить коврик" not in t
+    assert "Счёт до завтра" in t and "Ответить Глебу" in t and "Сделать зарядку" in t, t
+    # Закрытое напоминание в «Здоровье» — движение: резерва Круга нет.
+    doc = mk(dela, title="Напомни: записаться к врачу", kind="remind", remind_at=at(today, 9).isoformat(),
+             directions=["health"])
+    ok(dela, "sasha", {"op": "task.done", "id": doc["id"]})
+    assert not [x for x in build(dela, today, tm)["items"] if x["basket"] == "krug"]
+    # «☆ На завтра» у вернувшегося «Отбить» — в «Сейчас» на завтра, «потом» снят (как «В «Сейчас»» у «Вернулось»).
+    plan.run(dela, at(today, 18, 5), for_date=tm)
+    r = decide(dela, sug_of(dela, back_owed["id"]), option=0)
+    assert r["ok"] and str(r["task"]["focus_on"]) == tm.isoformat() and r["task"]["back_on"] is None, r
+
+
 def test_contract_and_svod_keys():
     c = json.loads((ROOT / "contract" / "dela-plan.json").read_text(encoding="utf-8"))
     assert c["features"]["flag"] == "plan" and "plan" in store.FEATURES

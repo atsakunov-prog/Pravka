@@ -257,22 +257,34 @@ LIVE_DEAL = ("(EXISTS (SELECT 1 FROM crm.deals d WHERE d.id = t.deal_id AND d.st
 TASK_COLS = ("t.id, t.num, t.title, t.owed, t.ball, t.grp, t.created_at, t.source, t.source_ref, t.person_id, "
              "t.person_short, t.due_date, t.focus_on, t.project_id, t.deal_id, t.waiting_since, t.dirs")
 
+# «Потом» (захват, back_on; поезд 16.10.2026, стык с шагом 0): Саша сам отложил дело — план его не подталкивает. Не
+# кандидат: (1) дело ещё отложено на день плана (back_on позже него), если только срок не горит к этому дню — срок сильнее
+# «потом», как в «Сегодня»; (2) дело «Вернулось» — своё, не «Отбить», без срока, с днём возврата (capture.BACK_IF): у него
+# свой вопрос на экране в день возврата («В «Сейчас» · Сегодня · Ещё потом · Сделано»), нетронутое ночью уходит на
+# понедельник (capture.back_shift) — второй вопрос о том же вечером был бы «подталкиванием по нескольку раз».
+# Вернувшиеся «Отбить» и «жду» в «Вернулось» не попадают — кандидаты как все. «Несделанное сегодня» (carry) правило
+# не трогает: дело в «Сейчас» Саша поставил сам («В «Сейчас»» у «Вернулось» «потом» снимает).
+LATER_OK = ("NOT (t.back_on IS NOT NULL AND ((t.back_on > %(for)s::date AND (t.due_date IS NULL OR t.due_date > %(for)s::date)) "
+            "OR (t.ball = 'mine' AND NOT t.owed AND t.due_date IS NULL)))")
+
 
 def _pools(conn, owner: str, today: dt.date, for_date: dt.date, cfg: dict, now_rows: list[dict]) -> dict[str, list[dict]]:
     p = {"o": owner, "today": today.isoformat(), "for": for_date.isoformat()}
     base = (f"t.owner_id = %(o)s AND t.status = 'open' AND NOT t.goal AND {store.DEED_KIND_IF} "
-            "AND t.focus_on IS DISTINCT FROM %(for)s::date")
+            f"AND t.focus_on IS DISTINCT FROM %(for)s::date AND {LATER_OK}")
     pools: dict[str, list[dict]] = {}
     # Резерв Круга: шаг к цели (своих открытых шагов нет), не «Отбить», не «жду», не в «Сейчас» сегодня (то — carry),
     # из направления, где за krug_idle_days не закрыто ни одного дела по главному направлению (dirs[1], как
-    # krug.movement). Старше — раньше.
+    # krug.movement). Старше — раньше. Простой — тем же правилом, что движение Круга: закрытое напоминание захвата —
+    # движение (krug.movement и дерево его считают; поезд 16.10.2026), иначе план писал бы «направление стоит 16 дней»
+    # там, где Круг показывает движение.
     steps = conn.execute(
         f"SELECT {TASK_COLS} FROM tasks.v_tasks t WHERE {base} AND t.why_id IS NOT NULL AND t.steps_open = 0 "
         "AND NOT t.owed AND t.ball <> 'waiting' AND t.focus_on IS DISTINCT FROM %(today)s::date "
         "AND cardinality(t.dirs) > 0 ORDER BY t.created_at, t.num", p).fetchall()
     last = {r["dir"]: r["last"] for r in conn.execute(
         "SELECT t.dirs[1] AS dir, max((t.completed_at AT TIME ZONE 'Europe/Moscow')::date) AS last "
-        f"FROM tasks.v_tasks t WHERE t.owner_id = %(o)s AND t.status = 'done' AND {store.DEED_KIND_IF} AND cardinality(t.dirs) > 0 "
+        "FROM tasks.v_tasks t WHERE t.owner_id = %(o)s AND t.status = 'done' AND cardinality(t.dirs) > 0 "
         "AND t.completed_at > %(today)s::date - 400 GROUP BY 1", p).fetchall()}
     names = {d["key"]: d.get("name") or d["key"] for d in krug.directions(conn, owner)}
     pools["krug"] = []

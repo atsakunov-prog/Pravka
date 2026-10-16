@@ -1897,7 +1897,7 @@ function renderNow() {
   const today = todayTasks().filter((t) => !taken.has(t.id));
   const done = doneTodayN();
   // «на завтра отмечено k» (шаг 1 петли): ближайший будущий день, на который дела уже отмечены заранее.
-  const ahead = all().filter((t) => isOpen(t) && isMine(t) && !t.goal && t.focus_on && t.focus_on > S.today);
+  const ahead = deeds().filter((t) => isOpen(t) && isMine(t) && t.focus_on && t.focus_on > S.today);
   const next = ahead.map((t) => t.focus_on).sort()[0];
   return [head('Сейчас', [D.long(S.today).toLowerCase(), `в «Сейчас» ${now.length} из ${NOW_MAX}`, done ? 'закрыто ' + done : null, lateLink(),
     ...waitLinks(), planOn() && next ? `${planWhen(next)} отмечено ${ahead.filter((t) => t.focus_on === next).length}` : null]),
@@ -4163,7 +4163,7 @@ function planWhen(day) {
   return 'на ' + WD[D.wd(day)].replace(/а$/, 'у');
 }
 /** Отмеченное на день плана — свои открытые дела с focus_on этого дня (будущий день: в «Сейчас» встанут сами). */
-const planMarked = (day) => all().filter((t) => isOpen(t) && isMine(t) && !t.goal && t.focus_on === day);
+const planMarked = (day) => deeds().filter((t) => isOpen(t) && isMine(t) && t.focus_on === day);
 /** Шестое на день плана — тост до запроса (предел пяти на КАЖДЫЙ день держит и сервер — store._now_guard). */
 function planRoom(day) {
   if (planMarked(day).length < NOW_MAX) return true;

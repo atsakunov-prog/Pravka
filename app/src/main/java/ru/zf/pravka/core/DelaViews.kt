@@ -427,9 +427,12 @@ object DelaViews {
     /** Погас по сроку (`expires_at`), хоть синк ещё не привёз `expired`: в 12:00 кандидат на сегодня уже не нужен. */
     private fun planGone(sg: Dela.Suggestion, now: Long): Boolean = ms(sg.expiresAt).let { it in 1..now }
 
-    /** Отмеченное на [day] — свои открытые дела не-цели с `focus_on` этого дня (`planMarked` веба), во всех сферах. */
+    /**
+     * Отмеченное на [day] — свои открытые дела (не цели и не напоминания захвата — `deed`, как `nowTasks`) с `focus_on`
+     * этого дня (`planMarked` веба, `store.DEED_KIND_IF` сервера), во всех сферах.
+     */
     fun planMarked(s: Dela.Snapshot, me: String, day: String): List<Dela.Task> =
-        s.tasks.values.filter { it.open && !it.goal && mine(s, me, it) && it.focusOn == day }.sortedWith(Dela.ORDER)
+        s.tasks.values.filter { it.open && it.deed && mine(s, me, it) && it.focusOn == day }.sortedWith(Dela.ORDER)
 
     private val WD_ACC = listOf("понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье")
 
