@@ -21,6 +21,8 @@ DEFAULT_ENV_FILE = r"C:\ProgramData\ZF-Dela\secrets\dela.env"
 _NAV_ICON = re.compile(r"^[a-z][a-zA-Z0-9]{0,23}$")
 _NAV_URL = re.compile(r"^(/|https?://[^\s\"'<>]+)$")
 _NAV_KEY = re.compile(r"^[a-z][a-z0-9_-]{0,23}$")
+_FROM_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_FROM_ORIGIN = re.compile(r"^https?://[a-z0-9.-]+(?::\d{1,5})?$")
 
 
 def parse_nav(text: str) -> tuple[tuple[str, str, str, str], ...]:
@@ -43,6 +45,20 @@ def parse_nav(text: str) -> tuple[tuple[str, str, str, str], ...]:
     return tuple(out)
 
 
+def parse_debug_from(text: str) -> tuple[str, ...]:
+    """С каких страниц окно-приёмник Дел (#/debug-in, static/debugin.js) берёт записки отладки (16.10.2026, правило 28):
+    имена служб (`kino` — тогда `kino.<родитель Дел>`, ровно одним уровнем) и точные адреса
+    (`https://kino.example.org:8443`) через «;», «,» или пробел; список заменяет заводской целиком. Пусто — заводские
+    имена служб (debug.KOVCHEG_FROM). Адреса — только здесь, в настройке на компе: репозиторий публичный. Кривое молча
+    пропускается."""
+    out = []
+    for part in re.split(r"[;,\s]+", (text or "").strip().lower()):
+        part = part.rstrip("/")
+        if (_FROM_LABEL.match(part) or _FROM_ORIGIN.match(part)) and part not in out:
+            out.append(part)
+    return tuple(out)
+
+
 @dataclass(frozen=True)
 class Config:
     db_url: str
@@ -61,6 +77,8 @@ class Config:
     # компе (картинка семейная, в публичный репозиторий её не кладём). Пусто — в шапке только «Дела».
     nav: tuple[tuple[str, str, str, str], ...] = ()
     brand_icon: str = ""
+    # Режим отладки со страниц служб Ковчега: откуда окно-приёмник берёт записки (parse_debug_from). Пусто — заводское.
+    debug_from: tuple[str, ...] = ()
 
     @property
     def app_role(self) -> str:
@@ -99,4 +117,5 @@ def load(env_file: str | None = None) -> Config:
         claude_proxy=get("DELA_CLAUDE_PROXY", "http://127.0.0.1:11809"),
         nav=parse_nav(get("DELA_NAV")),
         brand_icon=get("DELA_BRAND_ICON"),
+        debug_from=parse_debug_from(get("DELA_DEBUG_FROM")),
     )

@@ -50,6 +50,12 @@ ACTIONS_MAX = 100        # событий в записке
 ACTION_MAX = 4000        # знаков одного события
 SHOT_MAX = 400_000       # знаков строки data:image/… (телефон жмёт до ~150 КБ)
 LIST_MAX = 200
+# Записки со страниц соседних служб Ковчега (16.10.2026): окно-приёмник Дел (static/debugin.js) берёт их только с
+# `<имя>.<родитель Дел>` ровно одним уровнем, где имя — отсюда (или из DELA_DEBUG_FROM на компе). Это имена страниц
+# служб, а не адреса: «Дом» (и напрямую через роутер — dom), Встречи, Деньги, Спорт, Еда, Дети, Книги (панель — не
+# книги по WebDAV), Кино, VPN, Шаббат. Облако и книги по WebDAV, медиатека, архив под тем же доменом сюда не входят: .html
+# оттуда открывается страницей, а записки читают и выполняют сессии Claude на компе.
+KOVCHEG_FROM = ("home", "dom", "meetings", "dengi", "sport", "eda", "deti", "knigi", "kino", "vpn", "shabbat")
 AHEAD_SECONDS = 300      # часы устройства впереди — не ошибка, но и не «завтра»
 MSK = dt.timezone(dt.timedelta(hours=3))  # в Москве нет перевода часов — как phone.py
 COLUMNS = ("id, num, said_at, text, source, version, screen, status, answer, status_by, status_at, via, created_at, "

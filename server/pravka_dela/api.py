@@ -52,7 +52,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import ask, db, kovcheg_ui, llm, parse, remind, store, tokens, twins, when
+from . import ask, db, debug, kovcheg_ui, llm, parse, remind, store, tokens, twins, when
 from . import guard as claude_guard  # защита от петли (аудит №12); имя guard у API — обёртка маршрутов
 from .config import Config
 
@@ -140,10 +140,12 @@ def _look(cfg: Config) -> tuple[dict, dict]:
     только Дела. Это не защита (у каждого сервиса свой вход), а чтобы Наташе и Алёне не мешали чужие ссылки.
     `icon_png` — значок Ковчега для телефона: в публичном репозитории его нет, он приходит отсюда. У сервиса — ещё
     `key`, ключ в меню Свода (ui.menu, этап 7): по нему меню находит адрес. Меню и токены вида — в `me` на каждый
-    запрос (kovcheg_ui.effective): правка владельца видна сразу, без перезапуска службы."""
+    запрос (kovcheg_ui.effective): правка владельца видна сразу, без перезапуска службы. `debug_from` — владельцу: с каких
+    страниц служб окно-приёмник режима отладки берёт записки (DELA_DEBUG_FROM, иначе debug.KOVCHEG_FROM; правило 28)."""
     base = {"domain": _cookie_domain(cfg.public_url), "icon": _brand_icon(cfg.brand_icon),
             "icon_png": _brand_png(cfg.brand_icon), "nav": []}
-    owner = {**base, "nav": [{"name": n, "icon": i, "url": u, "key": k} for n, i, u, k in cfg.nav]}
+    owner = {**base, "nav": [{"name": n, "icon": i, "url": u, "key": k} for n, i, u, k in cfg.nav],
+             "debug_from": list(cfg.debug_from or debug.KOVCHEG_FROM)}
     return owner, base
 
 
@@ -288,7 +290,7 @@ def build(cfg: Config) -> Starlette:
             # look.pages (меню он читает видом svod ui.*, своим правом). Без имени, роли, доступа, денег, настроек,
             # telegram_id, адресов сервисов (nav) и меню: в нём направления Круга жизни владельца, а «Еде», «Спорту» и
             # «Деньгам» ui.* не положен и видом.
-            look = {**{k: v for k, v in look_owner.items() if k != "nav"}, "tokens": ui["tokens"],
+            look = {**{k: v for k, v in look_owner.items() if k not in ("nav", "debug_from")}, "tokens": ui["tokens"],
                     "pages": list(kovcheg_ui.PAGES)}
             return _json({"ok": True, "user": who.user, "kind": who.kind, "features": store.FEATURES, "look": look})
         info = await anyio.to_thread.run_sync(_user_info, url, who.user)

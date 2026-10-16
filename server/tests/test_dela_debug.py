@@ -18,7 +18,7 @@ from starlette.testclient import TestClient
 
 from pravka_dela import api, debug, store, tokens
 from pravka_dela import db as dela_db
-from pravka_dela.config import Config
+from pravka_dela.config import Config, parse_debug_from
 from test_dela_schema import dela  # noqa: F401  (фикстура)
 
 CONTRACT = json.loads((Path(__file__).resolve().parents[1] / "contract" / "dela-debug.json").read_text(encoding="utf-8"))
@@ -428,13 +428,21 @@ def test_note_from_kovcheg_service(dela):
 
 def test_kovcheg_receiver_is_a_tail_without_addresses():
     """Окно-приёмник #/debug-in (debugin.js) — хвост app.js после debug.js: нового пути HTTP нет. Записку берёт только от
-    своей window.opener и проверенного адреса, отвечает ей по её адресу; «готов» — без данных. Доменов в коде нет —
-    репозиторий публичный (адреса — look.domain и look.nav из настроек на компе)."""
+    своей window.opener и страницы службы (look.debug_from — имена служб ровно одним уровнем под родителем Дел), отвечает
+    ей по её адресу; «готов» — без данных. Доменов в коде нет — репозиторий публичный. Поведение (таблица allowed и
+    cleanNote, окно, тосты) гоняет прогон в Edge на компе владельца (скрипт рядом с общим слоем, не в репозитории)."""
     tails = api.TAILS["app.js"]
-    assert tails.index("debugin.js") > tails.index("debug.js")
+    # Последним: его ветка окна-приёмника (IN) не зовёт обёртки render и sync, поставленные после него, — хвост после
+    # debugin.js тихо не работал бы в этом окне.
+    assert tails[-1] == "debugin.js" and tails.index("debugin.js") > tails.index("debug.js")
     js = (Path(debug.__file__).parent / "static" / "debugin.js").read_text(encoding="utf-8")
     assert "kovcheg.am" not in js and "netcraze" not in js
-    assert "e.source !== window.opener" in js and "if (!allowed(origin))" in js and "u.protocol !== location.protocol" in js
+    assert "e.source !== window.opener" in js and "u.protocol !== location.protocol" in js
+    # Откуда — проверяется в окне (вход есть или список служб с прошлого входа) и, если сказать было нельзя, перед записью.
+    assert "&& !allowed(origin)) { fail(" in js and "if (!allowed(from))" in js.split("async function flush")[1]
+    allowed = js.split("function allowed")[1].split("\n  }\n")[0]
+    assert "look.debug_from" in allowed and "look.nav" not in allowed  # в nav бывают внешние ссылки и медиатека
+    assert "from.includes(host.slice(0, -d.length - 1))" in allowed     # имя ровно одним уровнем, не «всё под доменом»
     assert "reply.win.postMessage({ kv: 'debug-done', id: reply.id, ...o }, reply.origin)" in js
     assert "window.opener.postMessage({ kv: 'debug-ready' }, '*')" in js and js.count("postMessage(") == 2
     assert "op: 'debug.add'" in js and "source: 'web'" in js
@@ -443,3 +451,23 @@ def test_kovcheg_receiver_is_a_tail_without_addresses():
     assert "'kv-debug='" in js and "setCookie(!!S.me && DEBUG.on())" in js
     body = api._static("app.js").body.decode("utf-8")
     assert body.index("const DEBUG = ") < body.index("const DEBUG_IN = ")
+
+
+def test_kovcheg_from_in_me_only_for_owner(dela, tmp_path):
+    """Откуда окно-приёмник берёт записки (16.10.2026, правило 28): владельцу в /api/me — look.debug_from, заводские имена
+    служб (debug.KOVCHEG_FROM) или настройка на компе DELA_DEBUG_FROM (имена и точные адреса); команде и узким токенам —
+    нет. Файловых адресов (облако и книги по WebDAV, медиатека, архив) в заводском списке нет: .html оттуда — не страница
+    службы, а записки читают и выполняют сессии Claude на компе."""
+    assert not {"webdav", "books", "media", "archive", "server", "dela"} & set(debug.KOVCHEG_FROM)
+    assert all("." not in x for x in debug.KOVCHEG_FROM)   # имя — ровно один уровень
+    assert parse_debug_from("kino; Dengi ,https://kino.example.org:8443/ y.z bad/path ftp://a.b a.b kino") == (
+        "kino", "dengi", "https://kino.example.org:8443")
+    owner = {"Authorization": "Bearer " + tokens.issue(dela, "sasha", "device", "шапка")}
+    team = {"Authorization": "Bearer " + tokens.issue(dela, "natasha", "device", "шапка-наташи")}
+    narrow = {"Authorization": "Bearer " + tokens.issue(dela, "sasha", "service", "dom")}
+    cl = TestClient(api.build(Config(db_url=dela, public_url="https://dela.example.test")))
+    assert cl.get("/api/me", headers=owner).json()["look"]["debug_from"] == list(debug.KOVCHEG_FROM)
+    assert "debug_from" not in cl.get("/api/me", headers=team).json()["look"]
+    assert "debug_from" not in cl.get("/api/me", headers=narrow).json()["look"]
+    own = TestClient(api.build(Config(db_url=dela, debug_from=("kino", "http://127.0.0.1:8291"))))
+    assert own.get("/api/me", headers=owner).json()["look"]["debug_from"] == ["kino", "http://127.0.0.1:8291"]
