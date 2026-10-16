@@ -317,6 +317,11 @@ def test_snapshot_shows_plan_block(dela):
     assert ("  «Сейчас на завтра» (пачка): Сейчас на понедельник: предложено 3 · отмечено 1 из 5 · Сейчас на пн 19.10 · "
             "встреч ~3 — возьми 3") in card, card
     assert "    отмечено: #61 Иван Тестов: прислать договор" in card, card
+    # Контракт снимка описывает обе формы plan и поля кандидата в new (проверка вагона 6).
+    words = CONTRACT["snapshot"]["plan"]
+    for k in [*web["plan"], *phone["plan"]]:
+        assert f"{k} — " in words, k
+    assert all(k in CONTRACT["snapshot"]["new"] for k in web["new"][0]), CONTRACT["snapshot"]["new"]
     # Веб: снимок собирает блок плана (planBox) и кандидата словами planItem, а не «Уточнить: …».
     static = Path(debug.__file__).parent / "static"
     js, app = (static / "debug.js").read_text(encoding="utf-8"), (static / "app.js").read_text(encoding="utf-8")
