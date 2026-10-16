@@ -1619,14 +1619,6 @@ fun DelaTab(
             value = draft,
             onValueChange = { draft = it; if (sayNote.isNotBlank() && !sayNoteError) sayNote = "" },
             placeholder = ru.zf.pravka.core.PillHint.say(ownerName, "говори дела"),
-            about = when {
-                opened != null -> "с делом «${opened.title.take(60)}»"
-                askScreen?.card == true -> "с карточкой"
-                view == DelaViews.View.NEW && page == null -> "с новым"
-                page == null && view == null && filterId == null -> "со сделками на экране"
-                else -> "с делами на экране"
-            },
-            card = askScreen?.card == true && opened == null,
             listening = sayListening,
             busy = ask.running.isNotBlank() || (link == null && talking),
             note = sayNote,

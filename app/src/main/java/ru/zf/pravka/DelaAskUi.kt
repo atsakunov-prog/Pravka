@@ -160,16 +160,18 @@ internal fun Modifier.seen(key: String): Modifier {
  * поправки задания 10): микрофон слева — нажал, говоришь сколько угодно, нажал
  * ещё раз — команда ушла; стрелка справа (пока поле пусто — приглушена). Пока
  * Claude думает — команда серым в поле и заливка слева направо, ничего не
- * вращается. Над строкой — о чём она: дела на экране, открытое дело или
- * карточка («Opus · видит карточку»); пока слушает — как закончить.
+ * вращается. Подпись над полем внутри стекла — только по делу: открытое дело
+ * («Скажи, что сделать с делом «…»» и «Для этого» за ним), «слушаю», «думает».
+ * Строк «что видит Claude» нет (отладка 16.10.2026, запись 17: «почему Claude видит
+ * экран и открытое дело — это вообще надо отовсюду убрать»): ни «…с делами на
+ * экране», ни «с карточкой · Opus · видит карточку». Что видит Claude, не
+ * поменялось — экран и открытое дело уходят в `scope`, как раньше.
  */
 @Composable
 internal fun DelaSayBar(
     value: String,
     onValueChange: (String) -> Unit,
     placeholder: String,
-    about: String,
-    card: Boolean,
     listening: Boolean,
     busy: Boolean,
     note: String,
@@ -201,12 +203,13 @@ internal fun DelaSayBar(
     }
     val shape = RoundedCornerShape(31.dp)
     Column(modifier.fillMaxWidth(), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)) {
+        val task = taskTitle?.takeIf { it.isNotBlank() }?.take(60)
         val head = when {
             listening -> "Слушаю — говори сколько нужно. Нажми микрофон ещё раз — отдам Claude"
             busy -> "Claude думает… Можно уходить на другие разделы — изменения появятся сами"
-            step == true -> (taskTitle?.takeIf { it.isNotBlank() }?.let { "Для «${it.take(60)}»" } ?: "Для этого") +
-                ": что назовёшь — заведу делами внутри"
-            else -> "Скажи, что сделать $about"
+            step == true -> (task?.let { "Для «$it»" } ?: "Для этого") + ": что назовёшь — заведу делами внутри"
+            task != null -> "Скажи, что сделать с делом «$task»"
+            else -> null
         }
         Row(
             Modifier
@@ -235,16 +238,9 @@ internal fun DelaSayBar(
                 // строкой над стеклом у левого края, под боковиной, и было «непонятно, к чему он относится»).
                 // Переключатель: «до этого надо X» становится делом внутри, а не заметкой (жалоба 15.10.2026), сервер
                 // ставит связь, проект и срок тем же правилом, что «Для этого» в карточке.
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                if (head != null) Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        androidx.compose.ui.text.buildAnnotatedString {
-                            append(head)
-                            if (card && !listening && !busy) {
-                                pushStyle(androidx.compose.ui.text.SpanStyle(color = mode.meta))
-                                append(" · Opus · видит карточку")
-                                pop()
-                            }
-                        },
+                        head,
                         style = ty.meta,
                         color = mode.label,
                         maxLines = 2,
