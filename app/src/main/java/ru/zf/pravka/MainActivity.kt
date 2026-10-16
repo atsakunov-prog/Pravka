@@ -1019,6 +1019,37 @@ private fun MainScreen(
     }
     val host = ru.zf.pravka.ui.KovchegHost(toggle = { menuOpen = !menuOpen }, isOpen = menuOpen, news = news, icon = brand)
 
+    // Режим отладки на всех экранах (16.10.2026, docs/dela-phone-24.md): каждому экрану — строка «Что не так?» под
+    // шапкой со своим маршрутом (`DebugScreen`), переходы между экранами — в действия записки. Вкладка Дел на своём
+    // сервере рисует свою строку со снимком Дел — общей там нет.
+    val delaOnServer by app.delaServer.collectAsState()
+    val bodyPartName = BODY_PART_NAMES.getOrNull(bodyPart)
+    val atOf: (ru.zf.pravka.core.ServicePage?, Page?, Tab) -> ru.zf.pravka.core.ScreenDebug.At? = { w, p, t ->
+        val stack = pages.map(::pageKey)
+        ru.zf.pravka.core.ScreenDebug.at(
+            tab = screenKey(t),
+            pages = when {
+                p == null -> emptyList()
+                stack.lastOrNull() == pageKey(p) -> stack
+                else -> listOf(pageKey(p))
+            },
+            web = w?.name,
+            delaOwn = delaOnServer,
+            mode = buildMap {
+                if (w != null) put("url", ru.zf.pravka.core.ScreenDebug.url(w.url))
+                if (p == null && w == null && (t == Tab.SPORT || t == Tab.FOOD)) put("body_part", if (t == Tab.FOOD) "Еда" else bodyPartName)
+            },
+        )
+    }
+    val navRoute = web?.let { "web:${it.name}" } ?: page?.let { "app:page:" + pageKey(it) } ?: ("app:" + screenKey(tab))
+    val navTitle = when (val p = page) {
+        null -> web?.name ?: if (tab == Tab.TODOIST) "Дела" else stringResource(tab.titleRes)
+        is Page.ModeSettings -> p.group.title
+        is Page.Cost -> "Claude: траты"
+        is Page.Service -> if (ru.zf.pravka.ui.Look.v2 && (p.tab == Tab.MORE || p.tab == Tab.SETTINGS)) "Телефон" else stringResource(p.tab.titleRes)
+    }
+    LaunchedEffect(navRoute) { ru.zf.pravka.core.ScreenDebug.noteNav(navRoute, navTitle) }
+
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalKovcheg provides host) {
         // Переходы — растворением, 250 мс (DESIGN §10): экран не едет, а сменяется.
@@ -1032,30 +1063,37 @@ private fun MainScreen(
             contentKey = { (w, p, t) -> w?.let { "web:" + it.url } ?: p?.toString() ?: if (t in ring) "ring" else t.name },
             label = "screen",
         ) { (w, p, t) ->
-            when {
-                w != null -> ServiceWebScreen(app, w, onClose = { web = null })
-                p != null -> PageScreen(
-                    app, p, pop, openCost,
-                    openService = { pages = pages + Page.Service(it) },
-                    openGroup = { g -> pages = pages + Page.ModeSettings(g) },
-                    openMode = { m -> openMode(m) },
-                    serviceEnabled = serviceEnabled,
-                    onOpenAccessibilitySettings = onOpenAccessibilitySettings,
-                    dictionaryStore = dictionaryStore,
-                    historyLog = historyLog,
-                    dictMiner = dictMiner,
-                    promptStore = promptStore,
-                    dictationExport = dictationExport,
-                    onDictationExport = { dictationExport = it },
-                    onLifeExport = { lifeExport = true },
-                )
-                t in ring -> RingPager(ring, t, onSettle = { tab = it }) { rt ->
-                    if (rt == Tab.TODAY) TodayScreen(app, todayNav) else modeScreen(rt)
+            // Карусель — своим маршрутом на каждую страницу пейджера (ниже), остальное — здесь.
+            DebugScreen(app, if (w == null && p == null && t in ring) null else atOf(w, p, t)) {
+                when {
+                    w != null -> ServiceWebScreen(app, w, onClose = { web = null })
+                    p != null -> PageScreen(
+                        app, p, pop, openCost,
+                        openService = { pages = pages + Page.Service(it) },
+                        openGroup = { g -> pages = pages + Page.ModeSettings(g) },
+                        openMode = { m -> openMode(m) },
+                        serviceEnabled = serviceEnabled,
+                        onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                        dictionaryStore = dictionaryStore,
+                        historyLog = historyLog,
+                        dictMiner = dictMiner,
+                        promptStore = promptStore,
+                        dictationExport = dictationExport,
+                        onDictationExport = { dictationExport = it },
+                        onLifeExport = { lifeExport = true },
+                    )
+                    t in ring -> RingPager(ring, t, onSettle = { tab = it }) { rt ->
+                        DebugScreen(app, atOf(null, null, rt)) {
+                            if (rt == Tab.TODAY) TodayScreen(app, todayNav) else modeScreen(rt)
+                        }
+                    }
+                    else -> modeScreen(t)
                 }
-                else -> modeScreen(t)
             }
         }
         }
+        // Лист «Отладка» (номер в строке «Что не так?») — один на приложение; во вкладке Дел его держит она сама.
+        if (!(web == null && page == null && tab == Tab.TODOIST && delaOnServer)) DelaDebugHost(app)
         // Пуши выключены — говорим сверху, а не в глубине настроек автопилота.
         if (!notifEnabled) {
             Box(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 92.dp)) {
@@ -1232,6 +1270,34 @@ private fun WideCap(content: @Composable () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Box(Modifier.fillMaxHeight().widthIn(max = 640.dp)) { content() }
     }
+}
+
+/** Экран режима в маршруте снимка «Что не так?» (`app:<экран>`, docs/dela-phone-24.md). */
+private fun screenKey(tab: Tab): String = when (tab) {
+    Tab.TODOIST -> ru.zf.pravka.core.ScreenDebug.DELA
+    else -> tab.name.lowercase()
+}
+
+/** Страница поверх экрана в маршруте снимка: «phone», «settings:dela», «cost», «reviews»… */
+private fun pageKey(p: Page): String = when (p) {
+    is Page.Cost -> "cost"
+    is Page.ModeSettings -> "settings:" + p.group.name.lowercase()
+    is Page.Service -> if (ru.zf.pravka.ui.Look.v2 && (p.tab == Tab.MORE || p.tab == Tab.SETTINGS)) "phone" else p.tab.name.lowercase()
+}
+
+/** Части «Тела» (`BodyTabs`: `BODY_SPORT`…`BODY_FOOD`) словами — в режим снимка. */
+private val BODY_PART_NAMES = listOf("Спорт", "Путь", "Журнал", "Еда")
+
+/**
+ * Строка «Что не так?» для экрана (режим отладки, с 16.10.2026 на всех экранах — docs/dela-phone-24.md): шапка экрана
+ * ставит её из `LocalScreenBar`; [at] — маршрут и режим экрана, null — строки нет (вкладка Дел рисует свою).
+ */
+@Composable
+private fun DebugScreen(app: PravkaApp, at: ru.zf.pravka.core.ScreenDebug.At?, content: @Composable () -> Unit) {
+    val bar: (@Composable (String, String?) -> Unit)? = remember(at) {
+        at?.let { a -> @Composable { title: String, sub: String? -> ScreenDebugBar(app, a, title, sub) } }
+    }
+    androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalScreenBar provides bar, content = content)
 }
 
 /** Ключ экрана в меню Ковчега — чтобы подсветить, где мы. */

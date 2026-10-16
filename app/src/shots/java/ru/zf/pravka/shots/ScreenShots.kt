@@ -61,7 +61,8 @@ import java.util.TimeZone
  * на «Сегодня» с меткой советов и экран «Claude: траты»); panel — кнопки справа в заголовке плашки v2 и «Сервер
  * ответил» (с проверкой, что слово видно целиком); m16 — мелочи отладки 16.10 (карточка справа открывает другое дело
  * с шапки, язычок колонки тянется после удержания, «Для этого» у имени дела в строке Claude, хвост дня внизу
- * «Сейчас» без чисел наверху — с проверками; вкладка Дел на развороте 852×883 и сложенном).
+ * «Сейчас» без чисел наверху — с проверками; вкладка Дел на развороте 852×883 и сложенном); dbg — режим отладки
+ * (строка Дел; dball — только «Что не так?» на всех экранах: «Сегодня», Засечка, Деньги, Дела, с проверками).
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -81,7 +82,7 @@ class ScreenShots {
 
     private val dir = File(System.getProperty("pravka.shotsDir") ?: "build/shots").also { it.mkdirs() }
 
-    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5, web, dcol, panel, m16. */
+    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5, web, dcol, panel, m16, dbg, dball. */
     private fun want(group: String): Boolean {
         val v = System.getProperty("pravka.shots").orEmpty()
         return v == "1" || v == "all" || v.split(',').map { it.trim() }.contains(group)
@@ -677,6 +678,8 @@ class ScreenShots {
 
         // ---- Режим отладки Дел (15.10.2026): строка «Что не так?» вверху вкладки — сложенный и разворот, обе темы
         if (want("dbg")) debugBar()
+        // ---- «Что не так?» на всех экранах (16.10.2026): «Сегодня», Засечка, Деньги и Дела — разворот 852×883 и сложенный
+        if (want("dbg") || want("dball")) debugAll()
 
         // ---- Мелочи отладки 16.10.2026: вкладка Дел на развороте 852×883 (как у владельца) и сложенном, обе темы
         if (want("m16")) dela16()
@@ -1394,6 +1397,62 @@ class ScreenShots {
             app.settings.setLookTheme("system")
             app.delaDebug.onSync(org.json.JSONObject())
         }
+    }
+
+    /**
+     * «Что не так?» на всех экранах (16.10.2026, docs/dela-phone-24.md): строка под шапкой «Сегодня», Засечки и Денег
+     * (общая, `ScreenDebugBar`) и во вкладке Дел (своя, со снимком Дел) — разворот 852×883 dp, как у владельца, и
+     * сложенный, светлая тема. Проверки: строка на каждом экране ровно одна (у Дел — не две); общий снимок читает экран
+     * из семантики — шапку видно, самой строки в нём нет; режим выключен — строки нет нигде. Группа `dbg` (или `dball`).
+     */
+    private fun debugAll() {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        fun bars(c: ActivityController<MainActivity>) = roots(c).flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }
+            .count { it.config.getOrNull(SemanticsProperties.TestTag) == ru.zf.pravka.core.ScreenDebug.BAR_TAG }
+        val screens = listOf("today" to null, "zasechka" to MainActivity.TAB_ZASECHKA, "money" to MainActivity.TAB_MONEY, "dela" to MainActivity.TAB_TODOIST)
+        val sizes = listOf("wide" to "w852dp-h883dp-420dpi", "folded" to OUTER)
+        val bad = mutableListOf<String>()
+        runBlocking {
+            app.settings.setLookTheme("light")
+            app.delaDebug.onSync(org.json.JSONObject().put("debug", org.json.JSONObject().put("on", true).put("new", 2).put("last", 12)))
+        }
+        close(launch(MainActivity.TAB_TODOIST))   // первый запуск вкладки Дел рисует её без копии — прогреть
+        for ((size, q) in sizes) {
+            RuntimeEnvironment.setQualifiers(q)
+            for ((name, tab) in screens) {
+                val c = launch(tab)
+                // Кадр — до чтения: дерево семантики читается по разметке (строка читает его по касанию, разметка готова).
+                shot(c, "dball-$name-$size")
+                val n = bars(c)
+                if (n != 1) bad += "$name/$size: строк «Что не так?» $n, а не одна"
+                if (name != "dela") {
+                    val view = c.get().window.decorView.composeRoot() as View
+                    val rows = ru.zf.pravka.ScreenRead.rows(view)
+                    val snap = ru.zf.pravka.core.ScreenDebug.snapshot(ru.zf.pravka.core.ScreenDebug.At("app:$name"), name, null, rows)
+                    println("shots: dball $name/$size — строк ${rows.size}, в окне ${rows.count { it.inView }}, снимок ${snap.toString().length} знаков; первые: " +
+                        rows.take(6).joinToString(" | ") { it.text })
+                    if (rows.none { it.inView }) bad += "$name/$size: снимок не видит экрана"
+                    if (rows.any { it.text.contains("Что не так") || it.text.contains("Режим отладки") }) bad += "$name/$size: строка отладки попала в снимок"
+                }
+                close(c)
+            }
+        }
+        runBlocking { app.delaDebug.onSync(org.json.JSONObject().put("debug", org.json.JSONObject().put("on", false))) }
+        for ((size, q) in sizes) {
+            RuntimeEnvironment.setQualifiers(q)
+            for ((name, tab) in screens) {
+                val c = launch(tab)
+                bars(c).takeIf { it > 0 }?.let { bad += "$name/$size: режим выключен, а строк $it" }
+                close(c)
+            }
+        }
+        RuntimeEnvironment.setQualifiers(OUTER)
+        runBlocking {
+            app.settings.setLookTheme("system")
+            app.delaDebug.onSync(org.json.JSONObject())
+        }
+        settle(4)
+        org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())
     }
 
     private fun spend() {

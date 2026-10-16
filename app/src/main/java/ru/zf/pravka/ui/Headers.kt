@@ -505,6 +505,30 @@ fun KovchegHeader(
     onBack: (() -> Unit)? = null,
     actions: (@Composable RowScope.() -> Unit)? = null,
 ) {
+    // Строка «Что не так?» (режим отладки, с 16.10.2026 на всех экранах) — под шапкой: одно место на все экраны вида
+    // v2 («Сегодня», режимы, «Телефон», настройки, страницы сервисов). Её нет — шапка ровно как была.
+    val bar = LocalScreenBar.current
+    if (bar == null) {
+        KovchegHeaderRow(title, modifier, subtitle, onSubtitle, onTitle, onTitleDouble, onBack, actions)
+        return
+    }
+    Column(modifier.fillMaxWidth()) {
+        KovchegHeaderRow(title, Modifier, subtitle, onSubtitle, onTitle, onTitleDouble, onBack, actions)
+        bar(title, subtitle)
+    }
+}
+
+@Composable
+private fun KovchegHeaderRow(
+    title: String,
+    modifier: Modifier,
+    subtitle: String?,
+    onSubtitle: (() -> Unit)?,
+    onTitle: (() -> Unit)?,
+    onTitleDouble: (() -> Unit)?,
+    onBack: (() -> Unit)?,
+    actions: (@Composable RowScope.() -> Unit)?,
+) {
     val t = LocalPravkaType.current
     Row(
         modifier

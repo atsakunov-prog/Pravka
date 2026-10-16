@@ -145,17 +145,31 @@ fun TabHeader(
         return
     }
     val decor = LocalModeDecor.current
-    ModeHeader(
-        title = title,
-        decor = decor,
-        onBack = onBack,
-        subtitle = titleExtra ?: subtitle,
-        onSubtitle = onTitleExtra,
-        glyph = glyph,
-        actions = actions,
-        modifier = Modifier.statusBarsPadding(),
-    )
+    val bar = LocalScreenBar.current
+    Column {
+        ModeHeader(
+            title = title,
+            decor = decor,
+            onBack = onBack,
+            subtitle = titleExtra ?: subtitle,
+            onSubtitle = onTitleExtra,
+            glyph = glyph,
+            actions = actions,
+            modifier = Modifier.statusBarsPadding(),
+        )
+        // Строка отладки — под шапкой и в «Виде 4.0» (у вида v2 её ставит `KovchegHeader`).
+        bar?.invoke(title, titleExtra ?: subtitle)
+    }
 }
+
+/**
+ * Строка «Что не так?» под шапкой экрана (режим отладки, docs/dela-phone-24.md, с 16.10.2026 — на всех экранах):
+ * её ставит шапка (`KovchegHeader`, в «Виде 4.0» — `TabHeader`), а что это за экран и куда записка, знает
+ * `MainActivity` — она и даёт строку каждому экрану. [title] и [sub] — что написано в шапке. null — строки нет:
+ * вкладка Дел рисует свою (со снимком Дел), витрина и окна поверх чужих приложений — без неё. Режим выключен — строка
+ * сама ничего не рисует.
+ */
+val LocalScreenBar = compositionLocalOf<(@Composable (title: String, sub: String?) -> Unit)?> { null }
 
 /**
  * Меню Ковчега для шапок (план §3): открыть или закрыть его, открыто ли оно и

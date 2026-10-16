@@ -557,6 +557,8 @@ private fun TodayFolded(
                 onTitle = { if (forced) forced = false else showNav = !showNav },
                 onTitleDouble = { showNav = false; forced = !forced },
             )
+            // «Вид 4.0»: шапки Ковчега нет — строка отладки (режим отладки, docs/dela-phone-24.md) встаёт сверху сама.
+            else ru.zf.pravka.ui.LocalScreenBar.current?.invoke("Сегодня", null)
             Box(
                 Modifier.fillMaxWidth().onSizeChanged { sz ->
                     val old = headPx
@@ -795,6 +797,7 @@ private fun TodayWide(
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
     // Вид v2: шапка Ковчега во всю ширину над обеими колонками.
     if (v2) TodayHeaderV2(model, now, dayOffset, nav, head, onTitle = { setDay(0) }, onTitleDouble = {})
+    else ru.zf.pravka.ui.LocalScreenBar.current?.invoke("Сегодня", null)
     Row(Modifier.fillMaxSize()) {
         // Слева — обзор: день с ‹ ›, погода, плашки, круг, плашка времени.
         Column(
