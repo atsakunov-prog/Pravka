@@ -61,3 +61,26 @@ def test_page_line_is_the_add_field_with_plus_and_mic_on_the_right():
     assert "runJob('/api/ask'" in fn("async function claudeSay(") and "captureBlock(t)" in JS
     css = (STATIC / "style.css").read_text(encoding="utf-8")
     assert ".q-plus {" in css
+
+
+def test_no_claude_sees_line_and_krug_tree_heads_are_short():
+    """Записи 16–17 (владелец: «наверху много всего… почему „Claude видит экран и открытое дело“ — это вообще надо отовсюду
+    убрать… сам круг жизни давай поставим вниз, а сначала направления»). Подписи нет ни над строкой страницы, ни в
+    карточке дела (там — только в «Для этого» и «Кстати»); что Claude видит, не поменялось — pageScope тот же."""
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    for bit in ("class: 'say-h'", "class: 'say-model'", "'Claude видит только это дело'", "`Claude видит экран",
+                "'Claude видит экран '", "card-scope"):
+        assert bit not in JS, bit
+    assert ".say-h" not in css and ".say-model" not in css
+    cs = fn("function cardSay(")
+    assert "st || k ? el('label'" in cs
+    assert "if (S.cardId && S.tasks.has(S.cardId)) scope.open = S.cardId;" in fn("function pageScope("), "контекст Claude прежний"
+    # Круг: девиз → направления по зонам → «Без направления» → циферблат последним; шапка — одно название.
+    kr = fn("function renderKrug()")
+    assert kr.index("'krug-zone'") < kr.index("'Без направления'") < kr.index("dialSvg(mv)")
+    assert "'Движение за неделю'" in kr and "return [head('Круг жизни'), box];" in kr
+    # Дерево: шапка без чисел, «перетащи дело на цель» — всплывающей подсказкой.
+    tr = fn("function renderTree()")
+    assert "return [head('Дерево жизни')," in tr and "plural(" not in tr
+    assert "'Перетащи дело на цель — поменяешь «Зачем»'" in tr
+    assert ".krug-dial {" in css

@@ -2656,7 +2656,6 @@ function renderTree() {
   const mode = TREE_MODES[S.treeMode] ? S.treeMode : 'tree';
   const m = treeModel();
   const dirs = S.krug.dirs.filter((d) => !S.treeDir || d.key === S.treeDir);
-  const goals = all().filter((x) => isOpen(x) && isMine(x) && x.goal).length;
   const dirSel = choiceBtn(S.treeDir ? dirName(S.treeDir) : 'Все направления', (a) => choicePop(a, { title: 'Направление', current: S.treeDir || null,
     none: 'Все направления', items: S.krug.dirs.map((d) => ({ v: d.key, title: d.name, note: d.zone || '', keys: [d.short, d.formula].filter(Boolean) })),
     onPick: (v) => { S.treeDir = v; LS.set('treeDir', S.treeDir); render(); } }), { empty: !S.treeDir });
@@ -2676,8 +2675,9 @@ function renderTree() {
       [1, 2, 3, 4, 0].map((n) => el('button', { class: 'chip-btn' + (S.treeLevel === n ? ' on' : ''), onclick: level(n) }, n ? String(n) : 'Всё'))) : null);
   const none = m.kids('d:').filter((c) => c.kind !== 'project');
   const body = mode === 'cols' ? treeCols(m, dirs) : mode === 'list' ? treeList() : treeOutline(m, dirs);
-  return [head('Дерево жизни', [plural(deeds().filter((t) => isOpen(t) && isMine(t)).length, 'дело', 'дела', 'дел'), plural(goals, 'цель', 'цели', 'целей'),
-    mode !== 'list' ? 'перетащи дело на цель — поменяешь «Зачем»' : null]),
+  // Шапка — одно название (записи отладки 16–17: «наверху много всего»); «перетащи дело на цель» — подсказкой при наведении.
+  if (mode !== 'list') for (const x of [body].flat()) x.title = x.title || 'Перетащи дело на цель — поменяешь «Зачем»';
+  return [head('Дерево жизни'),
   el('div', { class: 'body tree tree-mode-' + mode }, principleLine(), bar, body,
     none.length && !S.treeDir && mode !== 'list' ? groupBox('Без направления', none.filter((c) => c.kind === 'task').map((c) => c.t).sort(byTime),
       { sub: 'разборщик предложит цель в ближайшие полчаса — или перетащи на цель сам' }) : null)];
@@ -2729,14 +2729,17 @@ function renderKrug() {
         c.t.title, m.open(c.key) ? el('span', { class: 'g-n' }, m.open(c.key)) : null))) : el('div', { class: 'kc-f faint' }, 'Целей пока нет.')), { dir: d.key });
   };
   const none = m.kids('d:').filter((c) => c.kind === 'task').map((c) => c.t);
+  // Записи отладки 16–17 (16.10.2026, владелец: «наверху много всего… сам круг жизни давай поставим вниз, а сначала сами
+  // направления»): сверху — девиз и строка, сразу направления по зонам, «Без направления», циферблат — последним
+  // блоком «Движение за неделю». Шапка — одно название: «9 направлений · 126 целей» видно и так.
   const box = el('div', { class: 'body krug' }, principleLine(),
-    el('div', { class: 'krug-top' }, dialSvg(mv), el('div', { class: 'dial-note' },
-      'Точка на оси — движение за неделю: закрытое дело — одно событие, цель — три. Состояние многоугольником появится с первой оценкой месяца.',
-      el('a', { class: 'link', href: '#/tree' }, 'Дерево жизни целиком'))),
     zones.map(({ z, dirs }) => el('div', { class: 'krug-zone' }, z ? el('h3', { class: 'zone-h' }, z) : null, el('div', { class: 'krug-cards' }, dirs.map(card)))));
   if (none.length) box.append(groupBox('Без направления', none.sort(byTime), { sub: 'разборщик предложит цель в ближайшие полчаса — или выбери сам' }));
-  return [head('Круг жизни', [plural(S.krug.dirs.length, 'направление', 'направления', 'направлений'),
-    plural(all().filter((x) => isOpen(x) && isMine(x) && x.goal).length, 'цель', 'цели', 'целей')]), box];
+  box.append(el('div', { class: 'krug-zone krug-dial' }, el('h3', { class: 'zone-h' }, 'Движение за неделю'),
+    el('div', { class: 'krug-top' }, dialSvg(mv), el('div', { class: 'dial-note' },
+      'Точка на оси — движение за неделю: закрытое дело — одно событие, цель — три. Состояние многоугольником появится с первой оценкой месяца.',
+      el('a', { class: 'link', href: '#/tree' }, 'Дерево жизни целиком')))));
+  return [head('Круг жизни'), box];
 }
 
 // ── Действия ────────────────────────────────────────────────────────────
@@ -3041,9 +3044,6 @@ function acItems(kind, q) {
 const SAY_HINT = 'Добавь дело или скажи, что сделать';
 function quickAdd(defaults, { placeholder = null, label = null, hint = null } = {}) {
   const busy = !!S.parse;
-  // О чём строка: открытое дело, карточка (клиент, проект, человек) или дела на экране.
-  const opened = S.cardId && S.tasks.get(S.cardId);
-  const about = opened ? `с делом «${opened.title}»` : label || 'с делами на экране';
   // Строка — разговор (заход Д, 13.10.2026): спросить, поручить, надиктовать новые дела; ответ — лентой под ней.
   const talk = pageTalk();
   // В карточке клиента, проекта, человека сказанное ложится и заметкой к ней (Claude видит карточку целиком).
@@ -3176,15 +3176,14 @@ function quickAdd(defaults, { placeholder = null, label = null, hint = null } = 
       render();
     } }, icon(hearing ? 'stop' : 'mic', 20));
   if (input.value) setTimeout(grow);
-  // Над строкой — о чём она; в карточке клиента, проекта, человека — что Claude (Opus) видит её целиком.
-  const say = el('label', { class: 'say-h', for: 'quick' }, el('span', {}, opened ? `Claude видит экран и открытое дело «${opened.title}»` : 'Claude видит экран ' + about),
-    card ? el('span', { class: 'say-model', title: 'В карточке Claude видит её целиком: проекты, людей, команду, описание, хронологию — и правит их' }, 'Opus · видит карточку') : null);
+  // Над строкой подписи нет (16.10.2026, записи отладки 16–17, владелец: «почему „Claude видит экран и открытое дело“ — это
+  // вообще надо отовсюду убрать»): она появлялась, стоило открыть карточку, и толкала поле вниз. Что видит Claude, не
+  // поменялось — экран считается в миг отправки (pageScope), объяснение — в «Настройках».
   // Запись отладки 14 (16.10.2026, владелец: «нигде нет плюса… очень высоко какой-то текстбокс типа „добавить дело“ и справа
   // микрофончик, чтобы сразу несколько дел добавлять»): слева в поле — тихий «+», знак, а не кнопка (щелчок ставит курсор).
   const plus = el('label', { class: 'q-plus', for: 'quick', 'aria-hidden': 'true' }, icon('plus', 18));
   const box = el('div', { class: 'quick-box' + (busy ? ' busy' : '') + (hearing ? ' hearing' : '') + (input.value.trim() ? ' has-text' : '') }, plus, input, micBtn, sendBtn);
-  return el('div', { class: 'quick say' + (card || opened ? ' card-scope' : '') },
-    say,
+  return el('div', { class: 'quick say' },
     el('div', { class: 'quick-wrap' }, box, ac),
     status, preview, help,
     talkFeed(talk));
@@ -5183,9 +5182,10 @@ function cardSay(t, { stepOnly = false } = {}) {
     title: st ? 'Вернуть строку к правке дела' : 'Что надо сделать до этого или для этого — заведу делом внутри этого',
     onclick: () => { S.cardStep = !S.cardStep; S.kstati = false; render(); focusSay(); } }, 'Для этого');
   return el('div', { class: 'say card-say' + (k ? ' kstati-on' : '') + (st ? ' step-on' : '') },
-    el('div', { class: 'cs-h' }, el('label', { for: 'card-say' }, st ? (stepOnly ? 'Для этого: заведу внутри — названием, как написано (Claude не настроен)'
-      : 'Для этого: что назовёшь — заведу делами внутри этого') : k ? 'Кстати: Claude сам решит — дописать к делу или завести рядом'
-      : 'Claude видит только это дело'), sBtn, kBtn),
+    // Подпись — только в режимах «Для этого» и «Кстати»; в обычном её нет (записи отладки 16–17: «Claude видит…» —
+    // «отовсюду убрать»): что строка про это дело, говорит само поле «Что поправить в этом деле?».
+    el('div', { class: 'cs-h' }, st || k ? el('label', { for: 'card-say' }, st ? (stepOnly ? 'Для этого: заведу внутри — названием, как написано (Claude не настроен)'
+      : 'Для этого: что назовёшь — заведу делами внутри этого') : 'Кстати: Claude сам решит — дописать к делу или завести рядом') : null, sBtn, kBtn),
     box,
     mine ? el('div', { class: 'claude-status' }, stepOnly ? 'Завожу…' : 'Claude думает над этим делом…')
       : hearing ? el('div', { class: 'claude-status listening' }, 'Слушаю — нажми микрофон ещё раз, и отдам Claude.') : null,
