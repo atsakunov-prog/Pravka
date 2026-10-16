@@ -60,7 +60,8 @@ import java.util.TimeZone
  * заглушка вместо страницы); p5 — доводка 5.0 (подсказка еды, разделы веба Денег); sp — траты Claude (значок
  * на «Сегодня» с меткой советов и экран «Claude: траты»); panel — кнопки справа в заголовке плашки v2 и «Сервер
  * ответил» (с проверкой, что слово видно целиком); m16 — мелочи отладки 16.10 (карточка справа открывает другое дело
- * с шапки, язычок колонки тянется после удержания — с проверками).
+ * с шапки, язычок колонки тянется после удержания, «Для этого» у имени дела в строке Claude — с проверками; вкладка
+ * Дел на развороте 852×883 и сложенном).
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -422,6 +423,69 @@ class ScreenShots {
     }
 
     /**
+     * Строка Claude внизу вкладки Дел (16.10.2026, отладка): «Для этого» — сразу за именем открытого дела, в той же
+     * строке стекла, а не отдельной строкой над ним у левого края (запись 2). Состояния: дело не открыто; открыто —
+     * чип выключен и включён («Для «…»: что назовёшь…»); слушает. Шириной разворота 852 dp (строка под тремя
+     * колонками) и сложенного 411 dp, обе темы. Проверка: чип правее начала подписи и на её высоте. Группа `m16`.
+     */
+    @Test
+    fun sayBar() {
+        if (!want("m16")) return
+        val title = "Бета Групп: сверка по договору к пятнице"
+        val bad = mutableListOf<String>()
+        for ((screen, q) in listOf("wide" to "w852dp-h883dp-420dpi", "folded" to "w411dp-h900dp-420dpi")) {
+            RuntimeEnvironment.setQualifiers(q)
+            for (theme in listOf(ru.zf.pravka.ui.Look.Theme.LIGHT, ru.zf.pravka.ui.Look.Theme.DARK)) {
+                ru.zf.pravka.ui.Look.theme = theme
+                val c = Robolectric.buildActivity(androidx.activity.ComponentActivity::class.java).setup()
+                c.get().setContent {
+                    ru.zf.pravka.ui.PravkaTheme {
+                        androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalMode provides ru.zf.pravka.ui.Modes.Dela) {
+                            androidx.compose.foundation.layout.Column(
+                                androidx.compose.ui.Modifier.fillMaxSize().background(ru.zf.pravka.ui.Kv.bg).padding(12.dp),
+                                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(14.dp),
+                            ) {
+                                @androidx.compose.runtime.Composable
+                                fun bar(step: Boolean?, task: String?, listening: Boolean = false, value: String = "") =
+                                    ru.zf.pravka.DelaSayBar(
+                                        value = value, onValueChange = {}, placeholder = "Саша, говори дела",
+                                        about = if (task != null) "с делом «$task»" else "с делами на экране",
+                                        card = false, listening = listening, busy = false, note = "", noteError = false,
+                                        onMic = {}, onSend = {}, step = step, taskTitle = task,
+                                    )
+                                bar(null, null)
+                                bar(false, title)
+                                bar(true, title)
+                                bar(false, title, listening = true, value = "купить магний")
+                            }
+                        }
+                    }
+                }
+                settle(20)
+                val name = "m16-saybar-$screen-${theme.key}"
+                c.get().window.decorView.captureRoboImage(File(dir, "$name.png").absolutePath)
+                val root = c.get().window.decorView.composeRoot() ?: error("нет Compose")
+                val nodes = root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false)
+                val head = nodes.firstOrNull { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text.contains("с делом «$title»") } == true }
+                val chip = nodes.firstOrNull { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == "Для этого" } == true }
+                when {
+                    head == null || chip == null -> bad += "$name: нет подписи с делом или чипа"
+                    chip.positionInRoot.x <= head.positionInRoot.x -> bad += "$name: чип левее подписи с делом"
+                    kotlin.math.abs(chip.boundsInRoot.center.y - head.boundsInRoot.center.y) > 30 * c.get().resources.displayMetrics.density ->
+                        bad += "$name: чип не в строке с делом (${chip.boundsInRoot} / ${head.boundsInRoot})"
+                }
+                if (nodes.none { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text.startsWith("Для «$title»") } == true }) {
+                    bad += "$name: включённый чип не называет дело"
+                }
+                c.pause().stop().destroy()
+            }
+        }
+        ru.zf.pravka.ui.Look.theme = ru.zf.pravka.ui.Look.Theme.SYSTEM
+        RuntimeEnvironment.setQualifiers(OUTER)
+        org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())
+    }
+
+    /**
      * Язычок колонки разворота 852 dp (16.10.2026, запись 9 отладки: «держу стрелку — колонки не двигаются»): настоящие
      * касания в окно Compose — держит дольше долгого нажатия и ведёт вправо — боковина шире; ведёт сразу влево — уже;
      * подержал и отпустил — ничего; тап — боковина спрятана. Карточка справа: держит и ведёт влево — шире. Выдуманные колонки без данных. Группа `m16`.
@@ -597,6 +661,9 @@ class ScreenShots {
 
         // ---- Режим отладки Дел (15.10.2026): строка «Что не так?» вверху вкладки — сложенный и разворот, обе темы
         if (want("dbg")) debugBar()
+
+        // ---- Мелочи отладки 16.10.2026: вкладка Дел на развороте 852×883 (как у владельца) и сложенном, обе темы
+        if (want("m16")) dela16()
 
         // ---- режимы по одному (Правка 4.0): сложенный, целиком, разворот
         for ((g, tab) in listOf(
@@ -1175,6 +1242,42 @@ class ScreenShots {
      * (общий итог, «Телефон» и «Сервер», советы, кэш и пачки, по дням) — на выдуманном виде сервера ([Seed.spendView]),
      * обе темы, оба экрана Fold; экран — ещё и высоким окном, чтобы видно было всё.
      */
+    /**
+     * Вкладка Дел после мелочей отладки 16.10.2026 — разворот 852×883 dp (как у владельца: снимки записей) и сложенный,
+     * обе темы: «Сейчас» (шапка без чисел, хвосты «просрочено · ждут» мелкой строкой внизу — высоким окном видно всю
+     * страницу), строка внизу «Добавь дело…» и «Для этого» у имени дела справа; «Сегодня»; на сложенном — карточка дела
+     * листом со строкой о нём.
+     */
+    private fun dela16() {
+        val app = RuntimeEnvironment.getApplication() as PravkaApp
+        RuntimeEnvironment.setQualifiers("w852dp-h883dp-420dpi")
+        close(launch(MainActivity.TAB_TODOIST)) // первый запуск вкладки рисует её без копии — прогреть
+        for (theme in listOf("light", "dark")) {
+            runBlocking { app.settings.setLookTheme(theme) }
+            settle(4)
+            for ((size, q) in listOf("wide" to "w852dp-h883dp-420dpi", "wide-tall" to "w852dp-h1700dp-420dpi", "folded" to OUTER)) {
+                RuntimeEnvironment.setQualifiers(q)
+                val c = launch(MainActivity.TAB_TODOIST)
+                shot(c, "m16-$size-$theme-1-now")
+                if (size == "wide" && tap(c, "Для этого", exact = true)) shot(c, "m16-$size-$theme-2-for-this")
+                if (size != "wide-tall") {
+                    close(c)
+                    val t = launch(MainActivity.TAB_TODOIST)
+                    if (tap(t, "Сегодня", exact = true)) shot(t, "m16-$size-$theme-3-today")
+                    close(t)
+                } else close(c)
+                if (size == "folded") {
+                    val k = launch(MainActivity.TAB_TODOIST)
+                    if (tap(k, "Ольга: ответить про сроки")) screen("m16-$size-$theme-4-card")
+                    close(k)
+                }
+            }
+        }
+        runBlocking { app.settings.setLookTheme("system") }
+        RuntimeEnvironment.setQualifiers(OUTER)
+        settle(4)
+    }
+
     /** Режим отладки (DelaDebugUi.kt): строка видна, когда поле debug синка говорит on (флаг debug — в Seed). */
     private fun debugBar() {
         val app = RuntimeEnvironment.getApplication() as PravkaApp

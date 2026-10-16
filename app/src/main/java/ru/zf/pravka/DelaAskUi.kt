@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -177,11 +178,13 @@ internal fun DelaSayBar(
     onSend: () -> Unit,
     modifier: Modifier = Modifier,
     /**
-     * «Для этого» над открытым делом (15.10.2026, docs/dela-phone-23.md, `cardSay` веба): null — чипа нет (дело не
+     * «Для этого» у открытого дела (15.10.2026, docs/dela-phone-23.md, `cardSay` веба): null — чипа нет (дело не
      * открыто, сервер без фичи nest), true — всё сказанное станет делами внутри открытого, false — обычная строка.
      */
     step: Boolean? = null,
     onStep: () -> Unit = {},
+    /** Название открытого дела — в подписи «Для «…»: …», когда чип включён. */
+    taskTitle: String? = null,
 ) {
     val mode = ru.zf.pravka.ui.LocalMode.current
     val ty = ru.zf.pravka.ui.LocalPravkaType.current
@@ -201,13 +204,9 @@ internal fun DelaSayBar(
         val head = when {
             listening -> "Слушаю — говори сколько нужно. Нажми микрофон ещё раз — отдам Claude"
             busy -> "Claude думает… Можно уходить на другие разделы — изменения появятся сами"
-            step == true -> "Для этого: что назовёшь — заведу делами внутри"
+            step == true -> (taskTitle?.takeIf { it.isNotBlank() }?.let { "Для «${it.take(60)}»" } ?: "Для этого") +
+                ": что назовёшь — заведу делами внутри"
             else -> "Скажи, что сделать $about"
-        }
-        // «Для этого» — переключатель над строкой: «до этого надо X» становится делом внутри, а не заметкой (жалоба
-        // владельца 15.10.2026), и сервер ставит связь, проект и срок тем же правилом, что «Для этого» в карточке.
-        if (step != null && !listening && !busy) Row(Modifier.padding(start = 8.dp)) {
-            ru.zf.pravka.ui.PaperChip("Для этого", selected = step, onClick = onStep, icon = Glyphs.Plus)
         }
         Row(
             Modifier
@@ -232,20 +231,31 @@ internal fun DelaSayBar(
             )
             // Над полем, внутри стекла, — о чём строка (или «слушаю», «думает») и что ответил Claude.
             Column(Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 8.dp)) {
-                Text(
-                    androidx.compose.ui.text.buildAnnotatedString {
-                        append(head)
-                        if (card && !listening && !busy) {
-                            pushStyle(androidx.compose.ui.text.SpanStyle(color = mode.meta))
-                            append(" · Opus · видит карточку")
-                            pop()
-                        }
-                    },
-                    style = ty.meta,
-                    color = mode.label,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                // «Для этого» — сразу за именем дела, внутри строки (отладка 16.10.2026, запись 2: чип стоял отдельной
+                // строкой над стеклом у левого края, под боковиной, и было «непонятно, к чему он относится»).
+                // Переключатель: «до этого надо X» становится делом внутри, а не заметкой (жалоба 15.10.2026), сервер
+                // ставит связь, проект и срок тем же правилом, что «Для этого» в карточке.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        androidx.compose.ui.text.buildAnnotatedString {
+                            append(head)
+                            if (card && !listening && !busy) {
+                                pushStyle(androidx.compose.ui.text.SpanStyle(color = mode.meta))
+                                append(" · Opus · видит карточку")
+                                pop()
+                            }
+                        },
+                        style = ty.meta,
+                        color = mode.label,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (step != null && !listening && !busy) {
+                        Spacer(Modifier.width(8.dp))
+                        ru.zf.pravka.ui.PaperChip("Для этого", selected = step, onClick = onStep, icon = Glyphs.Plus)
+                    }
+                }
                 if (note.isNotBlank()) Text(note, style = ty.meta, color = if (noteError) ru.zf.pravka.ui.Ink.Warn else mode.value)
                 BasicTextField(
                     value = value,

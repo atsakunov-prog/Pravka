@@ -1615,6 +1615,7 @@ fun DelaTab(
         DelaSayBar(
             step = if (canStep) sayStep else null,
             onStep = { sayStep = !sayStep },
+            taskTitle = opened?.title,
             value = draft,
             onValueChange = { draft = it; if (sayNote.isNotBlank() && !sayNoteError) sayNote = "" },
             placeholder = ru.zf.pravka.core.PillHint.say(ownerName, "говори дела"),
