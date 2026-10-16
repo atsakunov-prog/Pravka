@@ -515,7 +515,7 @@ object DelaViews {
         listOf(sg.sourceRef, sg.payloadObj().optJSONObject("speaker")?.str("url").orEmpty()).firstOrNull { it.startsWith("https://") }
 
     /**
-     * «▶ послушать» спикера встречи (`clipOf` веба, 15.10.2026 — добавка к людям встречи, docs/dela-phone-22.md): 5–8 с
+     * «▶ послушать» спикера встречи (`clipOf` веба, 15.10.2026 — добавка к людям встречи, docs/dela-phone-26.md): 5–8 с
      * его голоса на странице Встреч за её паролем, `payload.speaker.clip_url` — и у вопроса «кто это», и у заведённого
      * само со встречи. Открывается браузером, как ссылка на встречу ([sugLink]). Только `https://` без пробелов (сервер
      * другое и так не пропустит); нет — null.

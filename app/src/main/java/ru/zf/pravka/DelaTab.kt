@@ -2536,7 +2536,7 @@ internal fun AskRow(
         if (held != null) Text(held, style = ty.label, color = mode.label)
         if (txt.hint.isNotBlank()) Text(txt.hint, style = ty.label, color = mode.meta)
         if (txt.add.isNotBlank()) Text("+ ${txt.add}", style = ty.label, color = mode.label)
-        // «▶ послушать» спикера встречи (`clipOf` веба, docs/dela-phone-22.md): 5–8 с его голоса — страница Встреч
+        // «▶ послушать» спикера встречи (`clipOf` веба, docs/dela-phone-26.md): 5–8 с его голоса — страница Встреч
         // браузером, как ссылка на встречу выше (вход — паролем Встреч, браузер его помнит).
         val voice = DelaViews.clipLink(sg)
         if (voice != null) PaperTextButton("Послушать", icon = Glyphs.Play, onClick = { openBrowser(context, voice) })
