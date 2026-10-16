@@ -814,7 +814,8 @@ fun DelaTab(
                 nodes = lateNode + DelaGroups.nested(base.filter { it.id !in lateIds }, lv, snap, today) + remindNode,
                 levels = lv, levelKey = "all", saveScope = DelaGroups.Scope.ALL,
                 pick = pk, branches = lv.firstOrNull()?.let { DelaGroups.branches(every, it, snap, today) }.orEmpty(),
-                done = true, add = true, empty = if (pk != null) "У «${pk.title}» здесь дел нет." else "Пусто.",
+                // «Сделанные» — не чипом на экране (запись 33), а в листе «Сфера» шапки (тап по «Все сферы ⌄»).
+                done = false, add = true, empty = if (pk != null) "У «${pk.title}» здесь дел нет." else "Пусто.",
             )
         }
         // Круг жизни (`renderKrug` веба, 13.10.2026): обзор — циферблат девяти направлений и карточки по зонам
@@ -1854,6 +1855,9 @@ fun DelaTab(
                 selected = SPHERES.indexOfFirst { it.first == sphere }.coerceAtLeast(0),
                 onSelect = { sphere = SPHERES[it].first; sphereSheet = false },
             )
+            // «Сделанные» во «Всех делах» (и на страницах проектов, в поиске) — здесь, а не чипом на экране (16.10.2026
+            // вечер, запись 33: «убрать „Сделанные“… чтобы компактнее»): возможность осталась, место на экране — нет.
+            PaperToggle("Показывать сделанные", checked = showDone, onCheckedChange = { showDone = it })
         }
     }
 
@@ -2996,13 +3000,20 @@ private fun LazyListScope.screenBody(
         item(key = "$key:tools") {
             PaperCard {
                 extra?.invoke(this)
-                // Уровни (`levelsBar` веба): «Группировать: проекты › группы › время»; тап — выбрать
-                // уровень или «—» (убирает его и всё после). Следующий пустой — «＋».
+                // Уровни (`levelsBar` веба): «проекты › группы › время»; тап — выбрать уровень или «—» (убирает его
+                // и всё после). Следующий пустой — «＋». С 16.10.2026 вечер (записи 33 и 35: «убрать слово
+                // „Группировать“… „Все проекты“ поставить в строчку вместо него — компактнее») — одной строкой:
+                // первым выбор ветки «Все проекты ▾» / «Все группы ▾» («Только: …» и «✕»), за ним уровни, без подписи.
                 val lk = sc.levelKey
                 if (lk != null) {
                     ChipRow {
-                        Text("Группировать", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.align(Alignment.CenterVertically))
+                        val first = sc.levels.firstOrNull()
+                        if (first != null) {
+                            val p = sc.pick
+                            PaperChip(if (p != null) "Только: ${p.title}" else first.allOf + " ▾", selected = p != null,
+                                onClick = { tools.onPickOpen(lk, sc.branches, first) })
+                            if (p != null) PaperChip("✕ показать все", selected = false, onClick = { tools.onPick(lk, null) })
+                        }
                         for (i in 0 until minOf(DelaGroups.MAX_LEVELS, sc.levels.size + 1)) {
                             val lv = sc.levels.getOrNull(i)
                             PaperChip(
@@ -3015,16 +3026,6 @@ private fun LazyListScope.screenBody(
                         sc.nestTree?.let { on -> PaperChip("Деревом", selected = on, onClick = tools.onNestTree) }
                         val save = sc.saveScope
                         if (save != null) PaperChip("Сохранить фильтр", selected = false, onClick = { tools.onSaveFilter(save) })
-                    }
-                    // «Все люди ▾» / «Только: Наташа» и крестик «показать все» (`pickBar` веба).
-                    val first = sc.levels.firstOrNull()
-                    if (first != null) {
-                        ChipRow {
-                            val p = sc.pick
-                            PaperChip(if (p != null) "Только: ${p.title}" else first.allOf + " ▾", selected = p != null,
-                                onClick = { tools.onPickOpen(lk, sc.branches, first) })
-                            if (p != null) PaperChip("✕ показать все", selected = false, onClick = { tools.onPick(lk, null) })
-                        }
                     }
                 }
                 if (sc.done || sc.groupKey != null) {
