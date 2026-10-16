@@ -180,13 +180,15 @@ def ask(cl, system: str, user_text: str) -> dict:
 
 
 def to_ops(data: dict, index: dict, defaults: dict, source: str, places: list[str] | None = None,
-           ref: str | None = None) -> list[dict]:
+           ref: str | None = None, client_of=None) -> list[dict]:
     """Ответ Claude — в операции Дел. Имена — в id по справочнику; не нашлось — пусто.
 
     Напоминание — как у телефона (parseTasksDela): время — местное «ГГГГ-ММ-ДД ЧЧ:ММ» по
     Москве в timestamptz; место — только из мест телефона (places), иное не теряется, а
     ложится строкой в заметки дела. ref — метка наговорки (source_ref дел, у заметок — ref:номер),
-    по ней «Новое» показывает, что из сказанного куда попало.
+    по ней «Новое» показывает, что из сказанного куда попало. client_of(person_id) — клиент дела по
+    человеку (`people.task_client`, отладка 16.10.2026, запись 5): дело без проекта, цели и сделки
+    встаёт к единственному клиенту своего человека, как в захвате.
     """
     ops = []
     for t in data.get("tasks") or []:
@@ -238,6 +240,10 @@ def to_ops(data: dict, index: dict, defaults: dict, source: str, places: list[st
         # Место в дереве жизни (13.10.2026, place.py): номер цели — серверу, он проверит и поставит сам.
         if isinstance(t.get("goal"), int) and t["goal"] > 0:
             task["why_auto"] = t["goal"]
+        if client_of and person and not any(task.get(k) or defaults.get(k) for k in ("project_id", "why_auto", "deal_id", "why_id")):
+            client = client_of(str(person))
+            if client:
+                task["project_id"] = client
         ops.append({"op": "task.create", "task": task})
     for i, n in enumerate(data.get("notes") or []):
         text = (n.get("text") or "").strip()
@@ -303,7 +309,20 @@ def run(url: str, user: str, text: str, defaults: dict, key: str, proxy: str | N
     llm.account(url, "parse", llm.cost(usage, MODEL, url), (usage or {}).get("model") or MODEL, usage=usage)
     # Наговорка — строкой рядом с делами: «Новое» показывает, что сказано и куда что попало.
     ref = f"parse:{uuid.uuid4()}"
-    ops = to_ops(data, index, defaults or {}, source, places, ref)
+    from . import digest_crm, people
+
+    with db.session(url, user, via="parse") as conn:
+        # Клиент дела по человеку (запись 5) — глазами говорящего (RLS), справочник дайджеста — один раз на разбор.
+        box: dict = {}
+
+        def client_of(pid: str) -> str | None:
+            if pid not in box:
+                if "digest" not in box:
+                    box["digest"] = digest_crm.load(conn, user)
+                box[pid] = people.task_client(conn, user, pid, box["digest"])
+            return box[pid]
+
+        ops = to_ops(data, index, defaults or {}, source, places, ref, client_of)
     if ops:
         ops.insert(0, {"op": "dictation.add", "dictation": {"id": ref, "text": text, "source": {"app": "phone", "web": "web"}.get(via, "bot")}})
     res = store.apply_ops(url, user, ops, via, actor) if ops else {"results": []}

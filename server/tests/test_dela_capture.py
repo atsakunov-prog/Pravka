@@ -274,9 +274,10 @@ def test_model_buckets_by_fields(dela, at):
     assert task(dela, ids["call_olga"])["status"] == "done"
     lines = [x["line"] for x in got["items"]]
     assert lines[1].startswith("Дело на завтра: подготовить договор · напомню сегодня в 18:00")
-    assert lines[3] == "Жду от Ивана Тестова: прислать модель · неделя без ответа — на виду"
+    # Иван — из компании клиента ООО Ромашка: дело без проекта и цели встаёт к нему (запись 5), строка говорит, к кому.
+    assert lines[3] == "Жду от Ивана Тестова: прислать модель · неделя без ответа — на виду · ООО Ромашка"
     assert lines[4] == "Ждёт от тебя Ольга Тестова: ответить · в «Отбить»"  # кто — уже в начале строки
-    assert lines[5] == "При встрече с Иваном Тестовым: обсудить фонды"
+    assert lines[5] == "При встрече с Иваном Тестовым: обсудить фонды · ООО Ромашка"
     assert task(dela, got["items"][6]["task"]["id"])["back_on"].isoformat() == "2026-10-20"
     assert str(got["items"][7].get("project_id")) == ids["romashka"]
     assert got["items"][8]["title"] == "Предложить дашборд"  # слова «идея» не было — дело
@@ -328,8 +329,8 @@ def test_model_waiting_and_owed_with_due_say_whose(dela, at):
         {"title": "Прислать Ивану модель", "person": "Иван", "ball": "owed", "due": "2026-10-21"},
         {"title": "Подготовить договор для Ольги", "person": "Ольга", "ball": "owed", "due": "2026-10-16"}]))
     got = store.view(dela, "sasha", "capture", ref=cap["ref"])["capture"]
-    assert [x["line"] for x in got["items"]] == ["Жду от Ивана Тестова: прислать отчёт · на завтра",
-                                                  "Ждёт от тебя Иван Тестов: прислать модель · на среду 21.10",
+    assert [x["line"] for x in got["items"]] == ["Жду от Ивана Тестова: прислать отчёт · на завтра · ООО Ромашка",
+                                                  "Ждёт от тебя Иван Тестов: прислать модель · на среду 21.10 · ООО Ромашка",
                                                   "Ждёт от тебя Ольга Тестова: подготовить договор · на завтра"]
     assert got["head"] == ("Разложил 3: жду от Ивана на завтра: прислать отчёт · на среду 21.10: прислать Ивану модель · "
                            "на завтра: подготовить договор для Ольги")
@@ -380,6 +381,105 @@ def test_head_note_whose_after_twin_pick(dela, at):
     got = move(dela, cap["ref"], "person", item=1, person_id=ids["ivan2"])
     assert got["items"][1]["whose"] == "Иван Петров"
     assert got["head"].endswith("· заметка (Иван Петров): Иван сказал, что бюджет будет в январе"), got["head"]
+
+
+# ── Клиент дела по человеку (отладка 16.10.2026, запись 5) ──────────────
+
+
+def _beta(url, ids: dict) -> dict:
+    """Пётр Сидоров из «Альфа Холдинг» (не клиент), его открытое дело — у клиента «Бета Групп»: компания клиента не
+    даёт, а его дела — дают (как запись 5: компания в карточке — не клиент, все дела — у одного клиента)."""
+    alfa = ops(url, "sasha", {"op": "org.create", "data": {"name": "Альфа Холдинг"}})[0]["row"]["id"]
+    ids["petr"] = ops(url, "sasha", {"op": "person.create", "data": {"name": "Пётр Сидоров", "short": "Пётр",
+                                                                     "org_id": alfa}})[0]["row"]["id"]
+    ids["beta"] = str(project(url, "sasha", "Бета Групп"))
+    ids["petr_task"] = ops(url, "sasha", {"op": "task.create", "task": {
+        "title": "Пётр: прислать презентацию", "ball": "waiting", "person_id": ids["petr"], "project_id": ids["beta"]}})[0]["task"]["id"]
+    return ids
+
+
+def test_model_task_gets_person_client_and_no_client_button(dela, at):
+    """Дело модели без проекта и цели, у человека один клиент — клиент ставится правилом ($0): по компании (Иван —
+    ООО Ромашка) и по его открытым делам (Пётр — «Бета Групп»). Строка говорит «· Клиент», вторая кнопка — «Без
+    клиента», она снимает клиента одним касанием."""
+    ids = _beta(dela, seed(dela))
+    cap = say(dela, "много всего разом")
+    capture.tick(dela, ask_fn=lambda h, u: _model(tasks=[
+        {"title": "Попросить Петра прислать информацию", "person": "Пётр", "due": "2026-10-20"},
+        {"title": "Позвонить Ивану", "person": "Иван"}]))
+    got = store.view(dela, "sasha", "capture", ref=cap["ref"])["capture"]
+    first, second = got["items"]
+    assert str(task(dela, first["task"]["id"])["project_id"]) == ids["beta"] and first["client_auto"] == ids["beta"]
+    assert first["line"] == "На вторник 20.10: попросить Петра прислать информацию · Бета Групп"
+    assert [c["label"] for c in first["chips"]] == ["В «Сейчас»", "Без клиента", "Отменить"]
+    assert str(task(dela, second["task"]["id"])["project_id"]) == ids["romashka"]
+    assert second["line"].endswith(" · ООО Ромашка") and [c["label"] for c in second["chips"]] == [
+        "Сегодня", "Без клиента", "Отменить"]
+    got = move(dela, cap["ref"], "no_client", item=0)
+    item = got["items"][0]
+    assert task(dela, item["task"]["id"])["project_id"] is None and not item.get("client_auto")
+    assert item["line"] == "Переложил: На вторник 20.10: попросить Петра прислать информацию"
+    assert [c["label"] for c in item["chips"]] == ["В «Сейчас»", "Потом", "Отменить"]
+    r = ops(dela, "sasha", {"op": "capture.move", "ref": cap["ref"], "item": 0, "to": "no_client"})[0]
+    assert not r["ok"] and "клиента ставил не захват" in r["error"], r
+
+
+def test_person_client_rule_stays_silent(dela, at):
+    """Не ставит: модель назвала цель или проект; у человека два клиента; напоминание (не дело); человек — команда
+    (пользователь Дел) или сам владелец."""
+    ids = _beta(dela, seed(dela))
+    # Второй клиент у Петра — его дела у двух клиентов: не угадываем.
+    ops(dela, "sasha", {"op": "task.create", "task": {"title": "Пётр: счёт", "person_id": ids["petr"],
+                                                       "project_id": ids["romashka"]}})
+    cap = say(dela, "много всего разом")
+    capture.tick(dela, ask_fn=lambda h, u: _model(tasks=[
+        {"title": "Позвонить Петру", "person": "Пётр"},
+        {"title": "Позвонить Ивану про цель", "person": "Иван", "goal": 777},
+        {"title": "Позвонить Ивану про Бету", "person": "Иван", "project": "Бета Групп"},
+        {"title": "Позвонить Ивану", "person": "Иван", "remind_at": "2026-10-15 18:00"}]))
+    got = store.view(dela, "sasha", "capture", ref=cap["ref"])["capture"]
+    assert [x["bucket"] for x in got["items"]] == ["back", "back", "back", "remind"]
+    projects = [task(dela, x["task"]["id"])["project_id"] for x in got["items"]]
+    assert projects[0] is None and projects[1] is None and str(projects[2]) == ids["beta"] and projects[3] is None
+    assert not any(x.get("client_auto") for x in got["items"])
+    assert not any(" · ООО Ромашка" in x["line"] or "Без клиента" in str(x["chips"]) for x in got["items"])
+    # Команда: Иван — человек пользователя Дел (коллега), его дела — не дела клиента; владелец сам — тоже.
+    with dela_db.session(dela, "system", "test") as c:
+        c.execute("UPDATE crm.users SET person_id = %s WHERE id = 'natasha'", (ids["ivan"],))
+        c.execute("UPDATE crm.users SET person_id = %s WHERE id = 'sasha'", (ids["olga"],))
+        c.execute("UPDATE crm.people SET org_id = (SELECT org_id FROM crm.people WHERE id = %s) WHERE id = %s",
+                  (ids["ivan"], ids["olga"]))
+    cap = say(dela, "позвонить Ивану на неделе")
+    t = task(dela, cap["items"][0]["task"]["id"])
+    assert t["project_id"] is None and cap["items"][0]["line"] == "Потом: позвонить Ивану · верну в пятницу 16.10"
+    cap = say(dela, "позвонить Ольге на неделе")
+    assert task(dela, cap["items"][0]["task"]["id"])["project_id"] is None
+
+
+def test_person_client_sees_only_what_the_speaker_sees(dela, at):
+    """Правило — глазами того, кто говорит (RLS): коллеге без доступа к клиенту клиент не ставится, и её дело не уходит
+    к команде клиента; с правом смотреть — тоже нет (дело в нём не легло бы); с правом править — ставится."""
+    ids = seed(dela)
+    # Ивана коллега видит через дело клиента, когда ей открыт клиент (crm.person_linked); без доступа — не видит вовсе.
+    ops(dela, "sasha", {"op": "task.create", "task": {"title": "Иван: подписать акт", "ball": "waiting",
+                                                       "person_id": ids["ivan"], "project_id": ids["romashka"]}})
+    cap = say(dela, "позвонить Ивану на неделе", user="natasha")
+    item = cap["items"][0]
+    assert item["bucket"] == "back" and not item.get("client_auto"), item
+    with dela_db.session(dela, "natasha") as c:
+        t = c.execute("SELECT project_id, owner_id FROM tasks.v_tasks WHERE id = %s", (item["task"]["id"],)).fetchone()
+    assert t["project_id"] is None and t["owner_id"] == "natasha"
+    for role, expect in (("view", None), ("edit", ids["romashka"])):
+        with dela_db.session(dela, "system", "test") as c:
+            c.execute("DELETE FROM crm.project_access WHERE user_id = 'natasha'")
+            c.execute("INSERT INTO crm.project_access (project_id, user_id, role, granted_by) VALUES (%s, 'natasha', %s, "
+                      "'sasha')", (ids["romashka"], role))
+        cap = say(dela, "позвонить Ивану на неделе", user="natasha")
+        item = cap["items"][0]
+        assert item["bucket"] == "back" and str(item["task"]["person_id"]) == ids["ivan"], (role, item)  # Иван узнан
+        with dela_db.session(dela, "natasha") as c:
+            got = c.execute("SELECT project_id FROM tasks.v_tasks WHERE id = %s", (item["task"]["id"],)).fetchone()
+        assert (str(got["project_id"]) if got["project_id"] else None) == expect, role
 
 
 def test_move_sees_task_as_it_is_now(dela, at):

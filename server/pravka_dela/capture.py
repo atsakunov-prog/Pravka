@@ -420,6 +420,7 @@ class Ctx:
         self._places = None
         self._digest = None
         self._who: dict[str, dict] = {}
+        self._task_client: dict[str, str | None] = {}
 
     @property
     def rows(self):
@@ -509,6 +510,14 @@ class Ctx:
 
         got = digest_crm._person_clients(self.digest, str(person_id))
         return got[0] if len(got) == 1 else None
+
+    def task_client(self, person_id: str) -> str | None:
+        """Клиент дела по человеку (`people.task_client`, запись 5): то же, что client_of, плюс единственный клиент его
+        открытых дел; семья, команда, владелец — никого. На фразу — один раз на человека."""
+        key = str(person_id)
+        if key not in self._task_client:
+            self._task_client[key] = people.task_client(self.conn, self.user, key, self.digest)
+        return self._task_client[key]
 
 
 # ── Правило ─────────────────────────────────────────────────────────────
@@ -1158,7 +1167,19 @@ def _remind_what(conn, t: dict, what: str) -> str:
 def line_of(conn, item: dict, now: dt.datetime) -> str:
     """Строка подтверждения корзины (spec-0 §2.5): «Напомню сегодня в 12:00: отправить счёт в Контуре». Обещает только
     то, что правда случится (проверка 16.10.2026): заметка — «в карточке» (у встречи телефон показывает только идеи),
-    идея без адреса — «в списке «Идеи»», вопрос о похожих и тёзках — «в «Подскажи»» (он встаёт туда сразу)."""
+    идея без адреса — «в списке «Идеи»», вопрос о похожих и тёзках — «в «Подскажи»» (он встаёт туда сразу). Клиента
+    поставило правило по человеку (`client_auto`, запись 5) — в конце «· Клиент»: видно, к кому легло, и кнопка
+    «Без клиента» рядом."""
+    line = _line_of(conn, item, now)
+    client = item.get("client_auto")
+    if client and item["bucket"] in TASK_BUCKETS and str((item.get("task") or {}).get("project_id") or "") == str(client):
+        pr = _project_row(conn, client)
+        if pr:
+            line += f" · {pr['name']}"
+    return line
+
+
+def _line_of(conn, item: dict, now: dt.datetime) -> str:
     today = now.date()
     b = item["bucket"]
     t = item.get("task") or {}
@@ -1258,7 +1279,16 @@ def _who_chip(item: dict) -> dict:
 def chips_of(item: dict) -> list[dict]:
     """До трёх кнопок поправки одним касанием (spec-0 §2.6): подпись и куда переложить (capture.move). Первая — частая
     поправка: пилюля «Д» и «З» показывает в строке только её (у напоминания — «Время ▾»: «в 9», сказанное в 10:30, —
-    это сегодня 21:00, а не завтра утром)."""
+    это сегодня 21:00, а не завтра утром). Клиента поставило правило (`client_auto`) — вторая кнопка «Без клиента»
+    (телефон берёт до трёх: первая частая, «Без клиента», «Отменить»)."""
+    out = _chips_of(item)
+    if item.get("client_auto") and item["bucket"] in TASK_BUCKETS and item.get("task"):
+        cancel = [c for c in out if c["move"] == "cancel"]
+        out = [c for c in out if c["move"] != "cancel"][:1] + [{"label": "Без клиента", "move": "no_client"}] + cancel
+    return out
+
+
+def _chips_of(item: dict) -> list[dict]:
     b = item["bucket"]
     cancel = {"label": "Отменить", "move": "cancel"}
     if b == "remind":
@@ -1481,6 +1511,25 @@ def _close_ask(conn, user: str, item: dict, pid: str, skip: str | None) -> None:
                  (user, Jsonb(store.jsonable({"person_id": pid})), sid))
 
 
+CLIENT_FREE = ("project_id", "deal_id", "why_auto", "why_id")  # что-то из этого есть — место дела уже названо
+
+
+def _auto_client(item: dict, ctx: Ctx) -> dict:
+    """Дело без проекта, без цели и без сделки, у человека один клиент — клиент ставится правилом ($0; отладка
+    16.10.2026, запись 5, ответ Саши «а»): `people.task_client`. Только дело (напоминание — не дело и клиенту не
+    нужно; сделанное пишет касание своим правилом, did.py). Видно в строке («· Клиент») и снимается кнопкой «Без
+    клиента» (`client_auto` у записи). Приватность — обычная правила проектов: дело клиента видит команда с доступом к
+    нему (поэтому только один клиент, и не у семьи и команды)."""
+    f = item.get("fields") or {}
+    if (item.get("bucket") not in TASK_BUCKETS or f.get("kind") == "remind" or not f.get("person_id")
+            or any(f.get(k) for k in CLIENT_FREE)):
+        return item
+    client = ctx.task_client(str(f["person_id"]))
+    if not client:
+        return item
+    return {**item, "fields": {**f, "project_id": client}, "client_auto": client}
+
+
 def apply(conn, user: str, items: list[dict], ref: str, source: str, ctx: Ctx) -> list[dict]:
     """Корзины → записи в Делах, каждая своей точкой сохранения: упавшая не роняет соседей. У каждой — строка и кнопки."""
     from . import store
@@ -1490,6 +1539,7 @@ def apply(conn, user: str, items: list[dict], ref: str, source: str, ctx: Ctx) -
         item = dict(item)
         try:
             with conn.transaction():
+                item = _auto_client(item, ctx)
                 item = _apply_one(conn, user, item, ref, source, ctx, i)
                 if item.get("twins") and not _has_person(item) and item["bucket"] in ("note", "did"):
                     _ask_who(conn, user, item, ref, i, ctx.now)
@@ -1674,6 +1724,14 @@ def _move(conn, user, item: dict, to: str, op: dict, ctx: Ctx, ref: str, source:
                 raise CaptureError("дело уже " + ("сделано" if fresh["status"] == "done" else "отменено")
                                    + " — поправь в самом деле")
         clear_back = {"back_on": None, "back_said": None}
+        if to == "no_client":  # клиента поставило правило по человеку (запись 5) — снять одним касанием
+            if not item.get("client_auto"):
+                raise CaptureError("клиента ставил не захват — поправь в самом деле")
+            set_ = {"project_id": None}
+            if item["task"].get("deal_id"):
+                set_["deal_id"] = None
+            item = _set_task(conn, user, item, set_)
+            return {**item, "client_auto": None}
         if to == "time":
             at = _at_option(str(op.get("at") or "hour"), ctx.now)
             item = _set_task(conn, user, item, {"remind_at": remind.iso(at), "remind_place": None})

@@ -53,6 +53,30 @@ def test_parse_makes_tasks_and_notes(dela):
     assert out["errors"] == []
 
 
+def test_parse_sets_person_client(dela):
+    """Дело без проекта, цели и сделки, у человека один клиент — клиент правилом (отладка 16.10.2026, запись 5), как в
+    захвате: по компании человека; модель назвала проект или цель — правило молчит; два клиента — тоже."""
+    beta = project(dela, "sasha", "Бета Групп")
+    alfa = project(dela, "sasha", "Альфа Холдинг")
+    with parse.db.session(dela, "system", "test") as c:
+        org = c.execute("INSERT INTO crm.orgs (name, owner_id) VALUES ('Бета Групп', 'sasha') RETURNING id").fetchone()["id"]
+        c.execute("UPDATE crm.projects SET org_id = %s WHERE id = %s", (org, beta))
+        c.execute("INSERT INTO crm.people (name, short, org_id, owner_id) VALUES ('Иван Тестов', 'Иван', %s, 'sasha')", (org,))
+        c.execute("INSERT INTO crm.people (name, short, owner_id) VALUES ('Ольга Тестова', 'Ольга', 'sasha')")
+    row = lambda title, **kw: {"title": title, "notes": "", "project": "", "person": "", "ball": "mine", "due": "",  # noqa: E731
+                               "estimate_min": 0, "money": "", "want": False, "labels": [], **kw}
+    out = parse.run(dela, "sasha", "…", {}, "", None, ask_fn=lambda s, u: {"tasks": [
+        row("Позвонить Ивану", person="Иван"), row("Ивану про Альфу", person="Иван", project="Альфа Холдинг"),
+        row("Ивану про цель", person="Иван", goal=777), row("Позвонить Ольге", person="Ольга")], "notes": []})
+    a, b, c_, d = out["tasks"]
+    assert a["project_id"] == str(beta) and b["project_id"] == str(alfa)
+    assert c_["project_id"] is None and d["project_id"] is None and out["errors"] == []
+    # По умолчанию у страницы есть проект — он и стоит.
+    out = parse.run(dela, "sasha", "…", {"project_id": str(alfa)}, "", None,
+                    ask_fn=lambda s, u: {"tasks": [row("Позвонить Ивану", person="Иван")], "notes": []})
+    assert out["tasks"][0]["project_id"] == str(alfa)
+
+
 def test_parse_defaults_and_speaker(dela):
     p = project(dela, "natasha", "Дельта")
     hidden = project(dela, "sasha", "Секретный клиент")

@@ -1137,3 +1137,55 @@ def view_svod(conn, user, key=None, prefix=None, **_):
 
 def view_who(conn, user, q=None, phone=None, telegram_id=None, telegram=None, email=None, **_):
     return who(conn, q=q, phone=phone, telegram_id=telegram_id, telegram=telegram, email=email)
+
+
+# ── Клиент дела по его человеку (отладка 16.10.2026, запись 5) ─────────────
+
+TASK_CLIENT_DAYS = 90  # «его открытые дела» — заведённые или тронутые за 90 дней
+
+
+def task_client(conn, user: str, person_id: Any, digest: dict | None = None) -> str | None:
+    """Клиент для дела, у которого нет ни проекта, ни цели, ни сделки, — по его человеку, правилом ($0).
+
+    Запись 5 (16.10.2026): «попросить Ивана прислать информацию во вторник» легло без клиента и без цели — «без
+    направления», хотя все открытые дела Ивана — у одного клиента, а компания в его карточке — не клиент. Ответ Саши —
+    вариант «а»: ставить клиента сразу, в строке захвата видно «· Клиент» и кнопка «Без клиента».
+
+    Одна правда с дайджестом и звонками: сначала `digest_crm._person_clients` (живой клиент компании человека, иначе
+    клиенты живых сделок, где он со стороны клиента), один — он, два — никого (не угадываем); пусто — единственный
+    живой клиент среди открытых дел этого человека за TASK_CLIENT_DAYS. Владелец, семья (`digest_crm` — флаг и Свод
+    `people.family`), команда (пользователь Дел или человек своей компании) — никого: их дела — не дела клиента. Всё —
+    глазами пишущего (RLS сессии): чужого клиента правило не видит и не ставит. `digest` — справочник `digest_crm.load`
+    (захват держит его на фразу)."""
+    from . import digest_crm
+
+    if not person_id:
+        return None
+    pid = str(person_id)
+    d = digest if digest is not None else digest_crm.load(conn, user)
+    p = d["people"].get(pid)
+    if not p or pid == d["me"] or pid in d["family"]:
+        return None
+    if d["me_org"] and str(p.get("org_id") or "") == d["me_org"]:
+        return None
+    if conn.execute("SELECT EXISTS (SELECT 1 FROM crm.users WHERE person_id = %s) "
+                    "OR EXISTS (SELECT 1 FROM crm.people WHERE id = %s AND user_id IS NOT NULL) AS team",
+                    (pid, pid)).fetchone()["team"]:
+        return None
+    got = digest_crm._person_clients(d, pid)
+    if len(got) > 1:
+        return None
+    if got:
+        client = got[0]
+    else:
+        rows = conn.execute(
+            "SELECT DISTINCT t.project_id FROM tasks.tasks t JOIN crm.projects p ON p.id = t.project_id "
+            "WHERE t.person_id = %s AND t.status = 'open' AND t.kind = 'task' AND p.kind = 'client' "
+            "AND p.archived_at IS NULL AND greatest(t.created_at, t.updated_at) > now() - make_interval(days => %s) LIMIT 2",
+            (pid, TASK_CLIENT_DAYS)).fetchall()
+        if len(rows) != 1:
+            return None
+        client = str(rows[0]["project_id"])
+    # Клиента видно, а писать в него нельзя (у коллеги доступ «смотреть») — не ставим: иначе дело не легло бы вовсе.
+    ok = conn.execute("SELECT crm.edits_task(%s, %s::uuid, %s) AS ok", (user, client, user)).fetchone()["ok"]
+    return client if ok else None
