@@ -167,8 +167,9 @@ def test_put_refuses_in_words_and_cleans(dela):
                                "family": ["", "Купить молоко"], "secret": ["чужое"]}})
     assert r["ok"], r
     got = store.view(dela, "sasha", "digest", ref="digest:clean")["digest"]
-    assert got["summary"] == {"waiting": [{"chat": "", "who": "Иван", "what": "ждёт ответа"}], "work": [],
-                              "family": ["Купить молоко"], "other": ""}
+    # С 16.10.2026 (этап 6 аудита) у пункта «Ждут тебя» всегда since, у сводки — team и only_you (пусто — пусто).
+    assert got["summary"] == {"waiting": [{"chat": "", "who": "Иван", "what": "ждёт ответа", "since": ""}], "work": [],
+                              "team": [], "family": ["Купить молоко"], "other": "", "only_you": []}
     assert got["label"] == "пн 12.10, 22:00" and got["dela"] is None
     assert got["text"] == "Ждут тебя\n• Иван: ждёт ответа\n\nДом\n• Купить молоко"
 

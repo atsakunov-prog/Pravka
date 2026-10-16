@@ -2895,7 +2895,7 @@ phone.register(HANDLERS, VIEWS, OpError)
 # Книга трат Claude (dela_0017): итоги дней от телефона и сборщика «Дома», «советы прочитаны», вид spend (spend.py).
 spend.register(HANDLERS, VIEWS, OpError)
 # «Только тебе» (dela_0027, аудит №8–11; место этапа 6): наблюдения только владельцу — insight.*, вид insights.
-insights.register(HANDLERS, VIEWS, OpError)
+insights.register(HANDLERS, VIEWS, OpError, FEATURES)  # и флаги lens, rules (этап 6 аудита, 16.10.2026)
 # Защита от петли Claude (аудит №12, guard.py): «Продолжать» / «Оставить» и «сообщение отправлено».
 guard.register(HANDLERS, VIEWS, OpError)
 # Контекст по делу (аудит №13): вид context_index — связанные люди и ключи имён (focus.py).

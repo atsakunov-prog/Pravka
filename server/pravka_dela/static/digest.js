@@ -27,12 +27,17 @@ const DIGEST = (() => {
     return who ? `${who} (${chat})` : chat;
   }
 
-  /** Разделы сводки из пунктов: «Ждут тебя» первым, потом «По работе», «Дом», «Прочее» — как DigestNote телефона. */
+  /** Разделы сводки из пунктов: «Ждут тебя» первым, потом «По работе», «Команда», «Дом», «Прочее» — как DigestNote
+   *  телефона и Telegram. С 16.10.2026 (этап 6 аудита): у «Ждут тебя» — с какого дня ждёт (since), «Команда» — что команда
+   *  пообещала и к какому сроку. «Только тебе» здесь нет — своим блоком ниже (onlyYou), как отдельным сообщением в Telegram. */
   function blocks(g) {
     const s = g.summary || {};
     const out = [];
-    if ((s.waiting || []).length) out.push(el('span', { class: 'tw-eyebrow' }, 'Ждут тебя'), ...s.waiting.map((w) => el('p', {}, el('b', {}, where(w)), w.what ? ' ' + w.what : '')));
+    if ((s.waiting || []).length) out.push(el('span', { class: 'tw-eyebrow' }, 'Ждут тебя'), ...s.waiting.map((w) => el('p', {}, el('b', {}, where(w)), w.what ? ' ' + w.what : '',
+      w.since ? el('span', { class: 'faint' }, ' — ждёт с ' + w.since) : null)));
     if ((s.work || []).length) out.push(el('span', { class: 'tw-eyebrow' }, 'По работе'), ...s.work.map((w) => el('p', {}, w.topic ? el('b', {}, w.topic) : null, w.topic && w.text ? ' ' : '', w.text || '')));
+    if ((s.team || []).length) out.push(el('span', { class: 'tw-eyebrow' }, 'Команда'), ...s.team.map((t) => el('p', {}, t.who ? el('b', {}, t.who) : null, t.who && t.what ? ' — ' : '', t.what || '',
+      t.due ? el('span', { class: 'faint' }, ', ' + t.due) : null)));
     if ((s.family || []).length) out.push(el('span', { class: 'tw-eyebrow' }, 'Дом'), ...s.family.map((x) => el('p', {}, x)));
     if (s.other) out.push(el('span', { class: 'tw-eyebrow' }, 'Прочее'), el('p', {}, s.other));
     if (!out.length) out.push(el('p', {}, g.text || 'Ничего, что ждёт тебя.'));
@@ -45,6 +50,40 @@ const DIGEST = (() => {
     const bits = [n.created ? 'поставлено ' + n.created : null, n.asks ? 'вопросов ' + n.asks : null, n.close ? 'закрыть ' + n.close : null,
       n.update ? 'уточнить ' + n.update : null, n.closed ? 'закрыто само ' + n.closed : null, n.updated ? 'уточнено само ' + n.updated : null].filter(Boolean);
     return 'В Дела: ' + (bits.join(', ') || 'новых дел нет') + '.';
+  }
+
+  // «Только тебе» (этап 6 аудита, 16.10.2026): выводы о людях и сделках — только владельцу, своим блоком, не в «Скопировать».
+  // Неделя в тени: у пункта «Пригодилось», «Мимо» и «Неверно» — insight.rate по строке crm.insights (сервер кладёт туда
+  // пункты сводки); через 4 недели мерило (вид lens) скажет, какой вид выключить строкой Свода meetings.lens.
+  const KIND = { cooling: 'остывает', unhappy: 'недоволен', pressure: 'давит', signal: 'сигнал продажи', objection: 'возражение',
+    conflict: 'несостыковка', reason: 'повод написать' };
+  const RATE = [['useful', 'Пригодилось'], ['dismissed', 'Мимо'], ['wrong', 'Неверно']];
+
+  async function rate(ins, to) {
+    try { await op1({ op: 'insight.rate', id: ins.id, rate: ins.state === to ? 'new' : to }); crmDirty(); render(); } catch (e) { fail(e); }
+  }
+
+  function mineRow(o, ins) {
+    const head = [o.who, o.chat && o.chat !== o.who ? '(' + o.chat + ')' : null, o.at].filter(Boolean).join(' ');
+    const extra = [o.deal ? 'сделка: ' + o.deal : null, o.service ? 'услуга: ' + o.service : null].filter(Boolean).join(' · ');
+    return el('div', { class: 'ins-row' + (ins && ins.state === 'new' ? ' new' : '') },
+      el('div', { class: 'tl-when' }, KIND[o.kind] || o.kind || '—'),
+      el('div', { class: 'tl-what' },
+        el('div', { class: 'tl-head' }, head ? el('b', {}, head) : null, o.quote ? ' «' + o.quote + '»' : ''),
+        o.why ? el('div', {}, o.why) : null,
+        o.do ? el('div', {}, el('span', { class: 'faint' }, 'Сделать: '), o.do) : null,
+        extra ? el('div', { class: 'faint' }, extra) : null,
+        ins ? el('div', { class: 'tl-meta' }, RATE.map(([k, word]) => el('button', { class: 'link-btn' + (ins.state === k ? ' on' : ''),
+          title: ins.state === k ? 'снять оценку' : null, onclick: () => rate(ins, k) }, (ins.state === k ? '✓ ' : ' ') + word))) : null));
+  }
+
+  function onlyYou(g, list) {
+    const items = (g.summary || {}).only_you || [];
+    if (!items.length) return null;
+    const by = new Map((list || []).map((x) => [x.item_key, x]));
+    return el('section', { class: 'group panel' }, el('h2', {}, icon('lock', 17), 'Только тебе', el('span', { class: 'n' }, items.length),
+      el('span', { class: 'gsub' }, 'выводы о людях и сделках — не для пересылки; оцени: пригодилось или мимо')),
+    el('div', { class: 'only-you' }, el('div', { class: 'rows tl-rows' }, items.map((o) => mineRow(o, by.get(o.key))))));
   }
 
   const counts = (g) => [g.chats ? plural(g.chats, 'чат', 'чата', 'чатов') : null, g.msgs ? plural(g.msgs, 'сообщение', 'сообщения', 'сообщений') : null]
@@ -85,6 +124,7 @@ const DIGEST = (() => {
           el('div', { class: 'tw-dgb open dg-one' }, blocks(g)),
           line ? el('div', { class: 'faint pad' }, line, g.dela && g.dela.batch
             ? [' ', el('a', { href: '#/new/' + enc(g.dela.batch) }, 'это «Новое» →')] : null) : null),
+        onlyYou(g, v.insights),
         el('section', { class: 'group panel' }, el('h2', {}, icon('users', 17), 'В карточках CRM',
           el('span', { class: 'n' }, (v.crm || []).length || ''), el('span', { class: 'gsub' }, 'видишь только ты')), crmBox(v.crm, g.label)))];
   }
@@ -102,7 +142,8 @@ const DIGEST = (() => {
         el('div', { class: 'title' }, g.label),
         el('div', { class: 'chips' }, [counts(g) ? el('span', {}, counts(g)) : null,
           (s.waiting || []).length ? el('span', { class: 'tag' }, 'ждут ответа: ' + s.waiting.length) : null,
-          (s.work || []).length ? el('span', {}, 'по работе: ' + s.work.length) : null].filter(Boolean)),
+          (s.work || []).length ? el('span', {}, 'по работе: ' + s.work.length) : null,
+          (s.only_you || []).length ? el('span', {}, 'только тебе: ' + s.only_you.length) : null].filter(Boolean)),
         g.snippet ? el('div', { class: 'mhits' }, el('div', {}, g.snippet)) : el('div', { class: 'next' }, short(first, 220))));
   }
 

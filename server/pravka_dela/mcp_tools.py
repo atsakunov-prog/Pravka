@@ -1022,6 +1022,16 @@ def digest_card(url: str, ref: str | None = None) -> str:
             where = ", ".join(n for n in [*(x.get("people") or []), x.get("project_name") or "",
                                           x.get("deal_name") or ""] if n)
             out.append(f"  {where}: {x['summary'][:200]}")
+    # «Только тебе» (этап 6 аудита, 16.10.2026): в текст сводки не входит (его пересылают) — отдельным блоком, с оценкой.
+    mine = (d.get("summary") or {}).get("only_you") or []
+    if mine:
+        state = {x.get("item_key"): x.get("state") for x in v.get("insights") or []}
+        out += ["", "Только тебе (видит только Саша; людям не цитировать):"]
+        for o in mine:
+            head = " ".join(x for x in (o.get("kind") or "", o.get("who") or "", o.get("at") or "") if x)
+            tail = f" · оценка: {state[o.get('key')]}" if state.get(o.get("key")) not in (None, "new") else ""
+            out.append(f"  {head}: «{o.get('quote') or ''}» — {o.get('why') or ''}"
+                       + (f" Сделать: {o['do']}" if o.get("do") else "") + tail)
     return "\n".join(out)
 
 

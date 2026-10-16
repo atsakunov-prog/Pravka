@@ -189,8 +189,114 @@ def view_insights(conn, user: str, person_id=None, project_id=None, deal_id=None
     return {"items": of(conn, " AND ".join(where), params, n)}
 
 
-def register(handlers: dict, views: dict, err) -> None:
+# ── Мерило «Только тебе» (16.10.2026, этап 6 аудита, раздел 10.2 п. 8–9; слово владельца «да. Делай») ──────────────
+#
+# Неделя в тени: у каждого пункта «Только тебе» (разбор встречи, сводка дайджеста) — кнопки «Пригодилось» и «Мимо»
+# (и «Неверно» — пункт ошибся). Через 4 недели — мерило по виду: «неверно» больше 10 % или «пригодилось» меньше 30 %
+# оценённых — вид выключается строкой Свода meetings.lens (rules.py) без выката. Оценка — состояние строки crm.insights
+# (useful / dismissed / wrong; «снять» — new), операция insight.rate: кнопка в Telegram знает не id строки, а ключ
+# пункта своей службы (source, source_ref, item_key) — по нему и находит. Счёт — вид lens.
+
+RATES = ("useful", "dismissed", "wrong", "new")
+RATE_SOURCES = ("meeting", "digest")
+SHADOW_DAYS = 7          # неделя в тени — от первого пункта источника
+MEASURE_DAYS = 28        # мерило — через 4 недели
+RATED_MIN = 5            # меньше оценок у вида — судить рано, а не «выключить»
+WRONG_MAX = 0.10
+USEFUL_MIN = 0.30
+
+
+def op_rate(conn, user: str, op: dict, err) -> dict:
+    """Кнопка у пункта «Только тебе»: rate — useful («Пригодилось»), dismissed («Мимо»), wrong («Неверно») или new
+    (снять оценку). Пункт — id строки или ключ службы: source (meeting, digest), source_ref (номер встречи у службы, ref
+    сводки), item_key. Убранный пункт не оценивается; та же оценка — без записи."""
+    rate = str(op.get("rate") or "")
+    if rate not in RATES:
+        raise err(f"«Только тебе»: оценка — {', '.join(RATES)}")
+    if op.get("id"):
+        row = conn.execute("SELECT id, state, deleted_at FROM crm.insights WHERE id = %s",
+                           (_uuid(op["id"], "id", err),)).fetchone()
+    else:
+        source, ref, key = (str(op.get(k) or "").strip() for k in ("source", "source_ref", "item_key"))
+        if source not in RATE_SOURCES or not key:
+            raise err("«Только тебе»: нужен id или source (meeting, digest), source_ref и item_key пункта")
+        row = conn.execute(
+            "SELECT id, state, deleted_at FROM crm.insights WHERE owner_id = %s AND source = %s "
+            "AND coalesce(source_ref, '') = %s AND item_key = %s", (user, source, ref, key)).fetchone()
+    if not row:
+        raise err("«Только тебе»: нет такого пункта")
+    if row["deleted_at"] is not None:
+        raise err("«Только тебе»: пункт уже убран — оценивать нечего")
+    if row["state"] != rate:
+        conn.execute("UPDATE crm.insights SET state = %s WHERE id = %s", (rate, row["id"]))
+    return {"insight": _one(conn, row["id"]), "changed": row["state"] != rate}
+
+
+def _verdict(n_rated: int, useful: int, wrong: int, age_days: int) -> str:
+    """Что мерило говорит о виде: тень (первая неделя), копим (до 4 недель), мало оценок, выключить, держим."""
+    if age_days < SHADOW_DAYS:
+        return "shadow"
+    if age_days < MEASURE_DAYS:
+        return "collect"
+    if n_rated < RATED_MIN:
+        return "few"
+    return "off" if wrong / n_rated > WRONG_MAX or useful / n_rated < USEFUL_MIN else "keep"
+
+
+VERDICT_WORD = {"shadow": "неделя в тени", "collect": "копим оценки", "few": "мало оценок", "off": "выключить",
+                "keep": "держим"}
+
+
+def view_lens(conn, user: str, err=Exception, **_) -> dict:
+    """Вид lens — счёт «Только тебе» по источнику и виду: пунктов, оценено, пригодилось, мимо, неверно, доли от
+    оценённых, с какого дня копится (первый пункт источника) и что говорит мерило; suggest_off — виды к выключению в
+    форме meetings.lens; lens — сам выключатель сейчас. Только владельцу Дел: «Только тебе» — его."""
+    from . import rules  # здесь: rules — модуль Свода, ему insights не нужен
+
+    role = conn.execute("SELECT role FROM crm.users WHERE id = %s", (user,)).fetchone()
+    if not role or role["role"] != "owner":
+        raise err("«Только тебе» — только владельцу Дел")
+    rows = conn.execute(
+        "SELECT source, kind, count(*) AS n, count(*) FILTER (WHERE state = 'useful') AS useful, "
+        "count(*) FILTER (WHERE state = 'dismissed') AS dismissed, count(*) FILTER (WHERE state = 'wrong') AS wrong, "
+        "count(*) FILTER (WHERE state IN ('seen', 'moved')) AS seen, min(created_at) AS first, max(created_at) AS last "
+        "FROM crm.insights WHERE owner_id = %s AND deleted_at IS NULL AND source = ANY (%s) "
+        "GROUP BY source, kind ORDER BY source, count(*) DESC, kind", (user, list(RATE_SOURCES))).fetchall()
+    starts = {r["source"]: r["first"] for r in conn.execute(
+        "SELECT source, min(created_at) AS first FROM crm.insights WHERE owner_id = %s AND source = ANY (%s) "
+        "GROUP BY source", (user, list(RATE_SOURCES))).fetchall()}
+    now = conn.execute("SELECT now() AS t").fetchone()["t"]
+    lens = rules.lens(conn, user)
+    kinds, off = [], []
+    for r in rows:
+        rated = r["useful"] + r["dismissed"] + r["wrong"]
+        age = (now - starts[r["source"]]).days
+        v = _verdict(rated, r["useful"], r["wrong"], age)
+        if v == "off":
+            off.append(f"{r['source']}:{r['kind']}")
+        kinds.append({
+            "source": r["source"], "kind": r["kind"], "n": r["n"], "rated": rated, "useful": r["useful"],
+            "dismissed": r["dismissed"], "wrong": r["wrong"], "seen": r["seen"],
+            "useful_pct": round(100 * r["useful"] / rated) if rated else None,
+            "wrong_pct": round(100 * r["wrong"] / rated) if rated else None,
+            "since": starts[r["source"]], "days": age, "last": r["last"],
+            "verdict": v, "word": VERDICT_WORD[v], "is_off": rules.is_off(lens, r["source"], r["kind"]),
+        })
+    return {"kinds": kinds, "suggest_off": off, "lens": lens,
+            "rule": {"shadow_days": SHADOW_DAYS, "measure_days": MEASURE_DAYS, "rated_min": RATED_MIN,
+                     "wrong_max_pct": round(100 * WRONG_MAX), "useful_min_pct": round(100 * USEFUL_MIN)}}
+
+
+def register(handlers: dict, views: dict, err, features: list | None = None) -> None:
     handlers["insight.add"] = lambda conn, user, op: op_add(conn, user, op, err)
     handlers["insight.set"] = lambda conn, user, op: op_set(conn, user, op, err)
     handlers["insight.delete"] = lambda conn, user, op: op_delete(conn, user, op, err)
+    handlers["insight.rate"] = lambda conn, user, op: op_rate(conn, user, op, err)
     views["insights"] = lambda conn, user, **p: view_insights(conn, user, err=err, **p)
+    views["lens"] = lambda conn, user, **p: view_lens(conn, user, err=err, **p)
+    # «lens» — этап 6 аудита (16.10.2026): у сводки дайджеста since, team, only_you (и «Только тебе» — в crm.insights),
+    # оценка insight.rate и вид lens; «rules» — Свод rules.dela с заводским текстом в виде svod и проверкой записи,
+    # выключатель meetings.lens. Службы и веб по флагам знают, что сервер это умеет: старый ответил бы «нет такой операции».
+    for f in ("lens", "rules"):
+        if features is not None and f not in features:
+            features.append(f)

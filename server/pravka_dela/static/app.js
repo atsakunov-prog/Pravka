@@ -5952,7 +5952,9 @@ const MEET_CARD = 8; // в карточке — свежие; остальные
 // (этап 6). «Видел», «Мимо», «Убрать»; «Мимо» и «Неверно» свёрнуты строкой «ещё N». Только при флаге privacy.
 const INSIGHT_KIND = { note: 'заметка', conflict: 'несостыковка', numbers: 'цифры', hedge: 'неуверенность', self: 'о себе',
   objection: 'возражение', table: 'кто за столом', ask: 'уточнить', bypass: 'в обход', signal: 'сигнал', risk: 'риск',
-  mandate: 'мандат', position: 'позиция', personal: 'личное', occasion: 'повод' };
+  mandate: 'мандат', position: 'позиция', personal: 'личное', occasion: 'повод',
+  // Виды «Только тебе» сводки дайджеста (этап 6 аудита, 16.10.2026; digest.py кладёт их сюда же).
+  cooling: 'остывает', unhappy: 'недоволен', pressure: 'давит', reason: 'повод написать', other: 'другое' };
 const INSIGHT_OFF = ['dismissed', 'wrong'];
 async function insightOp(op, msg) {
   try { await op1(op); crmDirty(); if (msg) toast(msg); render(); } catch (e) { fail(e); }
@@ -5967,6 +5969,9 @@ function insightRow(x) {
       x.quote ? el('div', { class: 'ins-quote' }, '«' + x.quote + '»') : null,
       el('div', { class: 'tl-meta' }, (x.people || []).join(', '), from,
         x.state === 'new' ? el('button', { class: 'link-btn', onclick: () => insightOp({ op: 'insight.set', id: x.id, set: { state: 'seen' } }) }, ' видел') : null,
+        // «Пригодилось» — мерило недели в тени и четырёх недель (этап 6 аудита; вид lens, insight.rate).
+        x.state === 'useful' ? el('span', { class: 'faint' }, ' ✓ пригодилось')
+          : el('button', { class: 'link-btn', onclick: () => insightOp({ op: 'insight.rate', id: x.id, rate: 'useful' }, 'Отметил: пригодилось') }, ' пригодилось'),
         INSIGHT_OFF.includes(x.state) ? null : el('button', { class: 'link-btn', onclick: () => insightOp({ op: 'insight.set', id: x.id, set: { state: 'dismissed' } }, 'Мимо — свернул') }, ' мимо'),
         el('button', { class: 'link-btn', onclick: () => insightOp({ op: 'insight.delete', id: x.id }, 'Убрал') }, ' убрать'))));
 }

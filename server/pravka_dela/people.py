@@ -19,7 +19,7 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-from . import kovcheg_ui
+from . import kovcheg_ui, rules
 
 # Уменьшительное → полные имена. Только то, что реально встречается в речи и контактах;
 # неоднозначные (Саша, Женя, Валя) — к обоим полным.
@@ -1066,6 +1066,10 @@ def op_svod_set(conn, user, op, error):
             raise error(f"свод: {e}") from None
     if key == PRIVACY_KEY:
         value = _privacy_value(conn, owner, body, value, error)
+    if key in (rules.KEY, rules.LENS_KEY):
+        # Общие правила дел и выключатель «Только тебе» (этап 6 аудита, rules.py): пишет владелец — сам или claude по его
+        # слову; службы с его токеном их только читают. Проверка — до записи: кривое не ляжет.
+        body, value = rules.check_set(conn, owner, key, body, value, author, error)
     cur = conn.execute("SELECT rev FROM crm.svod WHERE owner_id = %s AND key = %s", (owner, key)).fetchone()
     base = op.get("base_rev")
     if base is not None and cur is not None and int(base) != cur["rev"]:
@@ -1132,7 +1136,12 @@ def view_svod(conn, user, key=None, prefix=None, **_):
     elif prefix:
         q += " AND key LIKE %s"
         params.append(prefix.replace("%", "") + "%")
-    return {"items": conn.execute(q + " ORDER BY key", params).fetchall()}
+    items = conn.execute(q + " ORDER BY key", params).fetchall()
+    if key == rules.KEY and not items:
+        # Правил в Своде ещё нет — заводской текст записью с factory и rev 0 (rules.py): службам компа не нужен клон
+        # репозитория, а пустой ответ не выглядит «правил нет».
+        items = [rules.factory_record(user)]
+    return {"items": items}
 
 
 def view_who(conn, user, q=None, phone=None, telegram_id=None, telegram=None, email=None, **_):

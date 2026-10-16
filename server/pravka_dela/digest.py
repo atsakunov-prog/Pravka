@@ -23,18 +23,25 @@ Claude здесь не участвует: сводка уже готова, с�
 (sources: название, личный или группа, id в Telegram, кто писал). Разнос не удался — сводка всё равно ложится: телефону
 она нужна и без карточек. Сводки ищутся и читаются видом digest (q, since, until, person_id, project_id) — им же
 пользуются веб (#/digest) и коннектор claude.ai (инструменты digests и digest, mcp_tools.py).
+
+С 16.10.2026 (этап 6 аудита, слово владельца «да. Делай», флаг lens) сводка несёт ещё since у «Ждут тебя», «Команду»
+(team) и «Только тебе» (only_you) — выводы о людях и сделках. «Только тебе» видит только владелец: в простой текст
+сводки (его копируют и пересылают) и в хронологию клиента оно не идёт, а ложится ещё строками crm.insights — с
+состоянием для кнопок «Пригодилось / Мимо / Неверно» (insight.rate) и мерила (вид lens, insights.py).
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import logging
+import re
 import uuid
 from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import digest_crm, people
+from . import digest_crm, insights, people
 from .meetings import MSK
 
 log = logging.getLogger("pravka_dela.digest")
@@ -52,6 +59,13 @@ SNIPPET_MAX = 400
 COUNTS = ("created", "asks", "close", "update", "closed", "updated")
 WD = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 COLUMNS = "id, ref, started_at, ended_at, label, chats, msgs, summary, text, dela, created_at, updated_at, rev, seq"
+# «Только тебе» (этап 6 аудита): до пяти пунктов у модели — с запасом; поля строки модели по порядку.
+ONLY_YOU_MAX = 10
+ONLY_YOU_FIELD = 600
+ONLY_YOU_FIELDS = ("kind", "who", "chat", "at", "quote", "why", "do", "deal", "service")
+KEY_OK = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")  # ключ пункта от службы (кнопки в Telegram) — латиница и цифры
+KIND_OK = re.compile(r"^[a-z][a-z0-9_]{0,23}$")      # как crm.insights.kind
+AT_OK = re.compile(r"^\d{1,2}\.\d{1,2}(?:\s+\d{1,2}:\d{2})?$")  # «ДД.ММ ЧЧ:ММ» пункта «Только тебе»
 
 
 def is_owner(conn, user: str) -> bool:
@@ -85,11 +99,62 @@ def _count(v: Any, what: str, err) -> int | None:
         raise err(f"дайджест: {what} — число") from None
 
 
+def _key_of(*parts: str) -> str:
+    """Ключ пункта «Только тебе» — по сути пункта (вид, кто, когда, цитата): та же сводка, присланная заново, даёт те же
+    ключи, и оценка владельца («Пригодилось», «Мимо») остаётся у своего пункта."""
+    return "oy-" + hashlib.md5("|".join(people.norm(p or "") for p in parts).encode()).hexdigest()[:12]
+
+
+def parse_only_you(x: Any) -> dict | None:
+    """Пункт «Только тебе» сводки → поля. Служба шлёт строку модели «kind · who · chat · at · «quote» · why · do · deal ·
+    service» (объектом схема не прошла предел грамматики API, проба 15.10) или уже разобранный объект. Цитата в «ёлочках»
+    может сама нести « · » — её собираем до закрывающей «»»; лишние части — в why. Пустое поле — «—». Не разобралось —
+    вся строка в why: пункт не теряется, просто без полей."""
+    if isinstance(x, dict):
+        row = {f: _s(x.get(f), ONLY_YOU_FIELD) for f in ONLY_YOU_FIELDS}
+        row["quote"] = row["quote"].strip("«»\"").strip()
+        key = _s(x.get("key"), 40)
+    elif isinstance(x, str) and x.strip():
+        parts = [p.strip() for p in " ".join(x.split()).split(" · ")]
+        if len(parts) < 5:
+            return {**{f: "" for f in ONLY_YOU_FIELDS}, "why": _s(x, ONLY_YOU_FIELD), "key": _key_of(x)}
+        # Название чата само бывает с « · » («Бета Групп · сделка»): цитату ищем по «ёлочке», время — перед ней,
+        # чат — всё между «кто» и временем. Цитаты нет — время по виду «ДД.ММ ЧЧ:ММ», иначе — по порядку полей.
+        q = next((i for i, p in enumerate(parts) if i >= 3 and p.startswith("«")), None)
+        if q is None:
+            q = next((i + 1 for i, p in enumerate(parts) if i >= 3 and AT_OK.match(p)), 4)
+        head, rest = [parts[0], parts[1], " · ".join(parts[2:q - 1]), parts[q - 1]], parts[q:]
+        if not rest:
+            rest = [""]
+        quote = rest.pop(0)
+        if quote.startswith("«") and not quote.endswith("»"):
+            while rest and not quote.endswith("»"):
+                quote += " · " + rest.pop(0)
+        tail = rest[-3:] if len(rest) > 4 else rest[1:]
+        why = " · ".join(rest[: len(rest) - 3]) if len(rest) > 4 else (rest[0] if rest else "")
+        vals = [*head, quote.strip("«»").strip(), why, *tail]
+        row = {f: _s(v, ONLY_YOU_FIELD) for f, v in zip(ONLY_YOU_FIELDS, vals + [""] * len(ONLY_YOU_FIELDS))}
+        key = ""
+    else:
+        return None
+    row = {f: ("" if v in ("—", "-", "–") else v) for f, v in row.items()}
+    row["kind"] = row["kind"].lower()
+    if not any(row.values()):
+        return None
+    row["key"] = key if key and KEY_OK.match(key) else _key_of(row["kind"], row["who"], row["at"], row["quote"] or row["why"])
+    return row
+
+
 def norm_summary(s: Any, err) -> dict:
-    """Сводка пунктами — ровно те разделы, что пишет служба (auto.SUMMARY_SCHEMA); чужие ключи не храним: телефон
-    рисует по этим четырём, и незнакомый раздел молча бы пропал на экране, а в базе выглядел бы показанным."""
+    """Сводка пунктами — ровно те разделы, что пишет служба (auto.SUMMARY_SCHEMA); чужие ключи не храним: незнакомый
+    раздел молча пропал бы на экране, а в базе выглядел бы показанным.
+
+    С 16.10.2026 (этап 6 аудита, слово владельца «да. Делай») — ещё три поля, которые до того молча пропадали:
+    since у «Ждут тебя» (с какого дня ждёт), team — «Команда» (что команда ЗФ пообещала и к какому сроку) и only_you —
+    «Только тебе» (выводы о людях и сделках, видит только владелец: в простой текст сводки не идут — его копируют и
+    пересылают; пункты ещё и в crm.insights — op_put). Старый телефон рисует прежние четыре раздела и новых не видит."""
     if not isinstance(s, dict):
-        raise err("дайджест: summary — объект {waiting, work, family, other}")
+        raise err("дайджест: summary — объект {waiting, work, team, family, other, only_you}")
 
     def rows(key: str, fields: tuple[str, ...]) -> list[dict]:
         v = s.get(key) or []
@@ -106,11 +171,21 @@ def norm_summary(s: Any, err) -> dict:
     family = s.get("family") or []
     if not isinstance(family, list):
         raise err("дайджест: summary.family — список строк")
+    mine = s.get("only_you") or []
+    if not isinstance(mine, list):
+        raise err("дайджест: summary.only_you — список строк «вид · кто · чат · когда · «цитата» · …»")
+    only_you: list[dict] = []
+    for x in mine[:ONLY_YOU_MAX]:
+        row = parse_only_you(x)
+        if row and row["key"] not in {r["key"] for r in only_you}:
+            only_you.append(row)
     return {
-        "waiting": rows("waiting", ("chat", "who", "what")),
+        "waiting": rows("waiting", ("chat", "who", "what", "since")),
         "work": rows("work", ("topic", "text")),
+        "team": rows("team", ("who", "what", "due")),
         "family": [t for t in (_s(x) for x in family[:ITEMS_MAX]) if t],
         "other": _s(s.get("other"), OTHER_MAX),
+        "only_you": only_you,
     }
 
 
@@ -147,17 +222,31 @@ def dela_line(d: dict | None) -> str:
     return "В Дела: " + (", ".join(bits) if bits else "новых дел нет") + "."
 
 
+def waiting_line(w: dict) -> str:
+    """«Кто (чат): что — ждёт с 06.10» — как в Telegram (auto.render): с какого дня ждёт, если служба знает."""
+    s = f"{where_of(w)}: {w['what']}" if w.get("what") else where_of(w)
+    return f"{s} — ждёт с {w['since']}" if w.get("since") else s
+
+
+def team_line(t: dict) -> str:
+    """«Кто — что, срок» строки «Команда»."""
+    s = " — ".join(x for x in (t.get("who"), t.get("what")) if x)
+    return f"{s}, {t['due']}" if t.get("due") else s
+
+
 def text_of(summary: dict, dela: dict | None = None) -> str:
     """Сводка простым текстом: разделы с пунктами, «Прочее» строкой, «В Дела». Телефону — запас и «скопировать»;
-    рисует он по пунктам (summary), чтобы разделы были заголовками его вида."""
+    рисует он по пунктам (summary), чтобы разделы были заголовками его вида. «Только тебе» сюда не входит никогда:
+    текст копируют и пересылают (в Telegram оно уходит отдельным сообщением — ответ владельца 15.10, вариант б)."""
     parts = []
     if summary.get("waiting"):
-        parts.append("Ждут тебя\n" + "\n".join(
-            f"• {where_of(w)}: {w['what']}" if w.get("what") else f"• {where_of(w)}" for w in summary["waiting"]))
+        parts.append("Ждут тебя\n" + "\n".join(f"• {waiting_line(w)}" for w in summary["waiting"]))
     if summary.get("work"):
         parts.append("По работе\n" + "\n".join(
             f"• {w['topic']}: {w['text']}" if w.get("topic") and w.get("text") else f"• {w.get('topic') or w.get('text')}"
             for w in summary["work"]))
+    if summary.get("team"):
+        parts.append("Команда\n" + "\n".join(f"• {team_line(t)}" for t in summary["team"]))
     if summary.get("family"):
         parts.append("Дом\n" + "\n".join(f"• {x}" for x in summary["family"]))
     if summary.get("other"):
@@ -215,7 +304,97 @@ def op_put(conn, user: str, op: dict, err) -> dict:
         "RETURNING id, ref, label, rev, seq, ended_at, sources",
         [user, ref, *data.values()]).fetchone()
     return {"digest": {k: row[k] for k in ("id", "ref", "label", "rev", "seq")},
-            "crm": _to_crm(conn, user, row, summary)}
+            "crm": _to_crm(conn, user, row, summary),
+            "insights": _to_insights(conn, user, row, summary, err)}
+
+
+# ── «Только тебе» сводки — в crm.insights (этап 6 аудита, 16.10.2026) ─────────
+#
+# Пункты «Только тебе» живут в сводке (их рисуют веб и телефон) и ещё строками crm.insights — одним хранилищем
+# наблюдений владельца со встречами: там у пункта состояние (кнопки «Пригодилось», «Мимо», «Неверно» — insight.rate),
+# по нему считается мерило недели в тени и четырёх недель (вид lens), и пункт о рабочем человеке или клиенте виден в его
+# карточке блоком «Только тебе». Всё это — только владельцу (RLS crm.insights и правило строки), как и сама сводка.
+# Ключ строки — (digest, ref сводки, ключ пункта): повтор той же сводки не плодит строк и оценку не сбрасывает.
+
+
+def _at_of(at: str, ended: dt.datetime) -> dt.datetime:
+    """«ДД.ММ ЧЧ:ММ» пункта — время по Москве в году окна (дата позже конца окна — прошлый год: окно через Новый год).
+    Не разобралось — конец окна."""
+    m = re.match(r"^\s*(\d{1,2})\.(\d{1,2})(?:\.\d{2,4})?(?:,?\s+(\d{1,2}):(\d{2}))?", at or "")
+    e = ended.astimezone(MSK)
+    if not m:
+        return ended
+    try:
+        t = dt.datetime(e.year, int(m[2]), int(m[1]), int(m[3] or 0), int(m[4] or 0), tzinfo=MSK)
+    except ValueError:
+        return ended
+    return t.replace(year=e.year - 1) if t > e + dt.timedelta(days=1) else t
+
+
+def insight_text(o: dict) -> str:
+    """Строка наблюдения: «Кто (чат): чем важно. Сделать: что. Сделка: …; услуга: …» — подпись в карточке без полей
+    сводки (кто — и тогда, когда человека не узнали)."""
+    who = where_of({"who": o.get("who") or "", "chat": o.get("chat") or ""})
+    body = " ".join(x for x in (o.get("why") or "", f"Сделать: {o['do']}" if o.get("do") else "") if x)
+    tail = "; ".join(x for x in (f"сделка: {o['deal']}" if o.get("deal") else "",
+                                 f"услуга: {o['service']}" if o.get("service") else "") if x)
+    s = f"{who}: {body}" if who and body else who or body
+    s = f"{s} ({tail})" if tail else s
+    return (s or o.get("quote") or "—")[:2000]
+
+
+def _team(ctx: dict, pid: str) -> bool:
+    """Свой: пользователь Дел или человек компании владельца. О команде «Только тебе» не пишет (rules.dela п. 12) — и к
+    их карточкам пункт не пристёгивается, даже если модель ошиблась."""
+    p = ctx["people"].get(pid) or {}
+    org = str(p["org_id"]) if p.get("org_id") else None
+    return bool(p.get("user_id")) or bool(org and org == ctx["me_org"])
+
+
+def _about(conn, ctx: dict, o: dict, sources: list[dict]) -> dict:
+    """О ком пункт: рабочий человек и клиент — тем же узнаванием, что «Ждут тебя» (digest_crm.resolve: чат, кто, только
+    уверенно; семья и личные — никто), сделка — по точному имени среди живых (у клиента или одна на всё). Команда — мимо."""
+    persons, clients, why, _ = digest_crm.resolve(ctx, "waiting", {"chat": o.get("chat") or "", "who": o.get("who") or ""},
+                                                  sources)
+    out: dict = {"person_ids": [p for p in persons if not _team(ctx, p)]}
+    project = clients[0] if len(clients) == 1 else None
+    if o.get("deal"):
+        q = ("SELECT id, project_id FROM crm.deals WHERE stage <> 'archive' AND lower(btrim(name)) = lower(btrim(%s))"
+             + (" AND project_id = %s" if project else ""))
+        hits = conn.execute(q, [o["deal"], project] if project else [o["deal"]]).fetchall()
+        if len(hits) == 1:
+            out["deal_id"], project = str(hits[0]["id"]), str(hits[0]["project_id"])
+    if project:
+        out["project_id"] = project
+    return out
+
+
+def _to_insights(conn, user: str, row: dict, summary: dict, err) -> dict:
+    """Пункты «Только тебе» сводки — строками crm.insights (source digest) своей точкой сохранения: не вышло — сводка
+    всё равно ложится, в ответе — почему. Пропавший из присланной заново сводки пункт без оценки убирается; оценённый
+    остаётся — это слово владельца для мерила. Ответ службе — ключ и id строки каждого пункта (кнопки в Telegram)."""
+    items = summary.get("only_you") or []
+    try:
+        with conn.transaction():
+            ctx = digest_crm.load(conn, user) if items else None
+            sources = row["sources"] if isinstance(row.get("sources"), list) else []
+            got, keys = [], []
+            for o in items:
+                ins = {"kind": o["kind"] if KIND_OK.match(o.get("kind") or "") else "other", "text": insight_text(o),
+                       "quote": o.get("quote") or None, "at": _at_of(o.get("at") or "", row["ended_at"]).isoformat(),
+                       "source": "digest", "source_ref": row["ref"], "item_key": o["key"],
+                       **_about(conn, ctx, o, sources)}
+                r = insights.op_add(conn, user, {"insight": ins}, err)["insight"]
+                got.append({"key": o["key"], "id": str(r["id"]), "state": r["state"], "gone": r["deleted_at"] is not None})
+                keys.append(o["key"])
+            gone = conn.execute(
+                "UPDATE crm.insights SET deleted_at = now() WHERE owner_id = %s AND source = 'digest' AND source_ref = %s "
+                "AND deleted_at IS NULL AND state = 'new' AND NOT (item_key = ANY (%s)) RETURNING id",
+                (user, row["ref"], keys)).fetchall()
+            return {"items": got, "retired": len(gone)}
+    except Exception as e:  # noqa: BLE001 — «Только тебе» в карточках не должно ронять сводку
+        log.exception("дайджест %s: «Только тебе» в crm.insights не легло", row["ref"])
+        return {"error": type(e).__name__}
 
 
 def _to_crm(conn, user: str, row: dict, summary: dict) -> dict:
@@ -265,7 +444,10 @@ def snippet(text: str, q: str, summary: dict | None = None) -> str:
         lines = [*(f"{w.get('who') or ''} ({w['chat']}): {w.get('what') or ''}" if w.get("chat") and w.get("chat") != w.get("who")
                    else f"{w.get('who') or ''}: {w.get('what') or ''}" for w in s.get("waiting") or []),
                  *(f"{w.get('topic') or ''}: {w.get('text') or ''}" for w in s.get("work") or []),
-                 *(s.get("family") or []), s.get("other") or ""]
+                 *(team_line(t) for t in s.get("team") or []),
+                 *(s.get("family") or []), s.get("other") or "",
+                 # «Только тебе» тоже ищется: вид digest — только владельцу (кто, «цитата», чем важно).
+                 *(f"{o.get('who') or ''}: «{o.get('quote') or ''}» — {o.get('why') or ''}" for o in s.get("only_you") or [])]
     else:
         lines = (text or "").splitlines()
     stems = [people.stem(w) for w in people.words(q) if len(w) >= 3]
@@ -308,7 +490,9 @@ def view_digest(conn, user: str, days=None, limit=None, id=None, ref=None, q=Non
         row = conn.execute(f"SELECT {COLUMNS} FROM crm.digests WHERE owner_id = %s AND {where}", (user, key)).fetchone()
         if not row:
             raise err("нет такого дайджеста")
-        return {"digest": row, "crm": links(conn, user, row["ref"])}
+        # «Только тебе» сводки строками crm.insights — с состоянием (кнопки «Пригодилось / Мимо»), по ключу пункта.
+        mine = insights.of(conn, "i.source = 'digest' AND i.source_ref = %s", [row["ref"]], ONLY_YOU_MAX * 2)
+        return {"digest": row, "crm": links(conn, user, row["ref"]), "insights": mine}
     try:
         days = min(DAYS_MAX, max(1, int(days or DAYS)))
         limit = min(LIMIT_MAX, max(1, int(limit or LIMIT)))

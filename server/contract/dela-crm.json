@@ -131,6 +131,13 @@
    "op": "insight.delete",
    "op_id": "<uuid>",
    "id": "<insight_id>"
+  },
+  {
+   "op": "insight.rate",
+   "op_id": "<uuid>",
+   "id": "<insight_id>",
+   "rate": "useful",
+   "_": "флаг lens (16.10.2026, этап 6 аудита): кнопки «Пригодилось» (useful), «Мимо» (dismissed), «Неверно» (wrong), new — снять; вместо id — source (meeting, digest), source_ref и item_key пункта службы; мерило — вид lens (dela-digest.json, раздел only_you)"
   }
  ],
  "sync_additions": {
@@ -1505,7 +1512,7 @@
    "comment.add + private",
    "interaction.add + private",
    "interaction.set {private: true} — только хозяин записи",
-   "insight.add / insight.set / insight.delete",
+   "insight.add / insight.set / insight.delete; с флагом lens — insight.rate (оценка пункта) и вид lens (мерило «Только тебе»)",
    "svod.set privacy.team {meetings: fact|summary} — только владелец, ответ + touched"
   ],
   "refusals": [
