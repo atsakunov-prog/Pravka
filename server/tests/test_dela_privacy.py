@@ -736,6 +736,34 @@ def test_broom_debug_note_stays_with_owner(team):
     assert not [m for m in marks if m not in card], [m for m in marks if m not in card]
 
 
+def test_broom_ideas_stay_with_owner(team):
+    """Поезд, вагон 4 (захват, правило 29) поверх закона приватности (правило 26): идеи (crm.ideas) — мысли владельца о
+    клиенте, человеке, сделке, видит только хозяин. Идеи Саши у клиента, его человека и сделки — и заведённая голосом
+    («идея: …» правилом захвата) — не доходят до команды ни одним путём метлы (синк, виды, карточки, Claude карточек), ни
+    видом ideas, ни прямым запросом к таблице; владелец видит их в синке и в виде ideas. Своя идея сотрудника — только
+    ему: ни коллеге, ни владельцу Дел (RLS «только своё»)."""
+    marks, w = _broom_world(team)
+    url = team["url"]
+    for f in ({"project_id": str(w["project"])}, {"person_id": str(w["ivan"])}, {"deal_id": str(w["deal"])}):
+        one(url, "sasha", {"op": "idea.add", "idea": {"text": "МЕТКА-ИДЕЯ-" + next(iter(f)), **f}})
+    said = one(url, "sasha", {"op": "capture.say", "text": "идея: Ромашке МЕТКА-ИДЕЯ-ГОЛОС на квартал", "ref": "broom-idea",
+                              "lane": "rule", "from": "d"})["capture"]
+    assert [x["bucket"] for x in said["items"]] == ["idea"], said
+    mine = ["МЕТКА-ИДЕЯ-project_id", "МЕТКА-ИДЕЯ-person_id", "МЕТКА-ИДЕЯ-deal_id", "МЕТКА-ИДЕЯ-ГОЛОС"]
+    theirs = one(url, "natasha", {"op": "idea.add", "idea": {"text": "МЕТКА-ИДЕЯ-НАТАШИ", "project_id": str(w["project"])}})
+    assert theirs["idea"]["owner_id"] == "natasha"
+    for user in ("natasha", "alena"):
+        seen = _everything(url, user, [*marks, *mine], w) + repr(store.view(url, user, "ideas", status="all"))
+        assert not [m for m in [*marks, *mine] if m in seen], user
+        with as_(url, user) as c:
+            assert c.execute("SELECT count(*) AS n FROM crm.ideas WHERE owner_id = 'sasha'").fetchone()["n"] == 0, user
+    assert "МЕТКА-ИДЕЯ-НАТАШИ" in repr(store.view(url, "natasha", "ideas"))
+    assert "МЕТКА-ИДЕЯ-НАТАШИ" not in repr(store.view(url, "alena", "ideas")) + repr(store.sync(url, "alena", 0))
+    own = repr(store.sync(url, "sasha", 0)) + repr(store.view(url, "sasha", "ideas"))
+    assert not [m for m in mine if m not in own], [m for m in mine if m not in own]
+    assert "МЕТКА-ИДЕЯ-НАТАШИ" not in own
+
+
 def test_broom_with_nesting_team_sees_flat(team):
     """Поезд, вагон 2 (дела внутри дела, правило 27) поверх закона приватности (правило 26): Саша вложил дело клиента
     (его видит команда) в своё дело из личного проекта (команде не видно). У команды дело внутри стоит плоско — why_id,
