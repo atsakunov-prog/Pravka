@@ -2064,17 +2064,17 @@ function renderMain(r) {
   return [head('Дела'), el('div', { class: 'body' })];
 }
 
-/** Сколько закрыто сегодня (по Москве) — в шапку «Сейчас» и «Сегодня». */
+/** Сколько закрыто сегодня (по Москве): пустое «Сегодня» говорит «всё закрыто», а не «дел нет». */
 const doneTodayN = () => deeds().filter((t) => t.status === 'done' && isMine(t) && t.completed_at && MSK_DAY(t.completed_at).day === S.today).length;
-/** «просрочено 3» в шапке — ссылкой во «Все дела»: само просроченное ни в «Сейчас», ни в «Сегодня» не попадает. */
+/** «просрочено 3» внизу «Сейчас» и «Сегодня» — ссылкой во «Все дела»: само просроченное ни туда, ни туда не попадает. */
 const lateLink = () => { const n = lateTasks().length; return n ? el('a', { class: 'late link', href: '#/all', title: 'Просроченное — во «Всех делах», сверху' }, 'просрочено ' + n) : null; };
 /** Фильтр «Отбить — по людям» / «Мониторить — по людям»: заводской по id, свой — по группе; нет — «Все дела». */
 const scopeHref = (id, scope) => {
   const f = filters().find((x) => x.id === id) || filters().find((x) => x.scope === scope && !pickOn(x.pick, x.levels || []));
   return f ? '#/f/' + encodeURIComponent(f.id) : '#/all';
 };
-/** «ждут от тебя без срока: N · жду больше недели: M» в шапке «Сейчас» (аудит №5) — ссылками на фильтры по людям:
- *  перед звонком человеку видно всё, что ему должен и что жду от него. Нуль — части нет. */
+/** «ждут от тебя без срока: N · жду больше недели: M» (аудит №5) — ссылками на фильтры по людям: перед звонком
+ *  человеку видно всё, что ему должен и что жду от него. Нуль — части нет. */
 const waitLinks = () => {
   const owed = owedNoDue().length, stale = waitingStale().length;
   return [owed ? el('a', { class: 'link', href: scopeHref('f-owed-people', 'owed'),
@@ -2083,11 +2083,20 @@ const waitLinks = () => {
     title: `«Мониторить»: ждёшь от человека дольше ${WAITING_STALE_DAYS} дней, напоминание не назначено — пора напомнить` },
   'жду больше недели: ' + stale) : null];
 };
+/** Хвосты дня — одной мелкой строкой в самом низу «Сейчас» и «Сегодня»: «просрочено N · ждут от тебя без срока: N · жду
+ *  больше недели: M» ссылками. Запись отладки 15 (16.10.2026, владелец: «очень много технического… пятница 16 октября,
+ *  сейчас 0 из 5, закрыто 8, просрочено 41, ждут без срока — мне зачем вся эта информация?»): шапка — одно название, сверху —
+ *  девиз, поле «Добавь дело», «Сейчас», «Сегодня». Дата, «N из 5» и «закрыто» ушли совсем (отмеченное на завтра — в блоке
+ *  плана, закрытое — в «Статистике»); ссылки и фильтры те же. Всё ноль — строки нет. */
+function tailLine() {
+  const xs = [lateLink(), ...waitLinks()].filter(Boolean);
+  return xs.length ? el('div', { class: 'tail-line' }, xs.map((x, i) => [i ? el('span', { class: 'sep', 'aria-hidden': 'true' }, ' · ') : null, x])) : null;
+}
 
 /** «Сейчас» — главная страница (владелец 13.10.2026: «В делах давай разделим: Сейчас (то, что отметил) и Сегодня
  *  (с датой сегодня)», порядок — Сейчас → Новое → Сегодня). Блоки сверху вниз: что владелец сам взял на сегодня (до
  *  пяти, во всех сферах сразу); вопросы автоматики с теми же кнопками, что в «Новом»; дела со сроком сегодня, кроме
- *  уже взятых в «Сейчас». Просроченное сюда само не попадает — в шапке только его число ссылкой во «Все дела». */
+ *  уже взятых в «Сейчас». Просроченное сюда само не попадает — внизу только его число ссылкой во «Все дела» (tailLine). */
 function renderNow() {
   const now = nowTasks().sort(byTime);
   // Дела внутри дел из «Сейчас» (15.10.2026: «Для этого» у дела в «Сейчас» ставит дело внутри на сегодня, а не в
@@ -2097,12 +2106,8 @@ function renderNow() {
   const depth = new Map(inner.map(([t, d]) => [t.id, d]));
   const taken = new Set([...now.map((t) => t.id), ...depth.keys()]);
   const today = todayTasks().filter((t) => !taken.has(t.id));
-  const done = doneTodayN();
-  // «на завтра отмечено k» (шаг 1 петли): ближайший будущий день, на который дела уже отмечены заранее.
-  const ahead = deeds().filter((t) => isOpen(t) && isMine(t) && t.focus_on && t.focus_on > S.today);
-  const next = ahead.map((t) => t.focus_on).sort()[0];
-  return [head('Сейчас', [D.long(S.today).toLowerCase(), `в «Сейчас» ${now.length} из ${NOW_MAX}`, done ? 'закрыто ' + done : null, lateLink(),
-    ...waitLinks(), planOn() && next ? `${planWhen(next)} отмечено ${ahead.filter((t) => t.focus_on === next).length}` : null]),
+  // Шапка — одно название (запись отладки 15): «на завтра отмечено k» — в блоке плана («отмечено k из 5»), хвосты — внизу.
+  return [head('Сейчас'),
     el('div', { class: 'body' },
       principleLine(),
       quickAdd({}, { placeholder: '«это в Сейчас», «П1 поставь, срок пятница», «Иван ждёт звонка — на сегодня»' }),
@@ -2114,7 +2119,8 @@ function renderNow() {
       backBox(backTasks()),
       newBox(),
       planBox(),
-      todayBox(today, taken.size))];
+      todayBox(today, taken.size),
+      tailLine())];
 }
 
 /** «Новое» на главной: «Подскажи» с кнопками, как в «Новом» (П-номера — те же, их видит Claude); остальное «Нового»
@@ -2162,7 +2168,7 @@ function renderToday() {
   const mine = mineTasks();
   const done = doneTodayN();
   const n = newCount();
-  return [head('Сегодня', [D.long(S.today).toLowerCase(), every.length ? 'со сроком сегодня ' + every.length : null, done ? 'закрыто ' + done : null, lateLink()]),
+  return [head('Сегодня'), // одно название, хвосты — внизу (запись отладки 15)
     el('div', { class: 'body' },
       principleLine(),
       quickAdd({}, { placeholder: '«Иван ждёт звонка по фонду», «это на завтра», «это мониторить»' }),
@@ -2174,7 +2180,8 @@ function renderToday() {
       pickNote(items, S.pick.today, lv)
         || (items.length ? nested(items, lv) : el('div', { class: 'empty' }, done ? 'Со сроком на сегодня всё закрыто.' : 'Со сроком на сегодня дел нет.')),
       mine.length ? groupBox('Моё', mine, { cls: 'grp-mine', sub: 'никто не ждёт — двигает жизнь; берёшься сегодня — в «Сейчас»', lead: () => icon('user', 17) }, lv) : null,
-      n ? el('a', { class: 'new-link', href: '#/new' }, icon('inbox', 17), 'Новое из встреч и чатов: ' + plural(n, 'вопрос', 'вопроса', 'вопросов')) : null)];
+      n ? el('a', { class: 'new-link', href: '#/new' }, icon('inbox', 17), 'Новое из встреч и чатов: ' + plural(n, 'вопрос', 'вопроса', 'вопросов')) : null,
+      tailLine())];
 }
 
 /** Сохранённый фильтр: что показать и уровни. Поменял — «Сохранить» запишет, «Как было» — вернёт. */

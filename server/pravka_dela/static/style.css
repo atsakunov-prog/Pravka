@@ -419,6 +419,13 @@ a.h-kind:hover { color: var(--accent); }
 .h-sub a.late { color: var(--bad); }
 .h-sub a.late:hover { text-decoration: underline; }
 .h-sub .pdot { margin-right: 4px; vertical-align: -3px; color: var(--icon); }
+/* Хвосты дня внизу «Сейчас» и «Сегодня» (16.10.2026, запись отладки 15: в шапке они читались техническим шумом) —
+   одна тихая строка ссылками; «просрочено» — цветом беды, как было в шапке. */
+.tail-line { margin: 18px 2px 8px; font-size: 13px; color: var(--faint); }
+.tail-line .sep { color: var(--sep); }
+.tail-line .link { color: var(--accent); }
+.tail-line a.late { color: var(--bad); }
+.tail-line a:hover { text-decoration: underline; }
 .h-extra { display: inline-flex; align-self: center; }
 .star.on { color: var(--accent); }
 .star.on .kv-i { fill: currentColor; }
