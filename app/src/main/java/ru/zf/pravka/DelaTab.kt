@@ -1549,6 +1549,9 @@ fun DelaTab(
             newIds = newParts?.asks?.map { it.id } ?: sc?.home?.asks?.map { it.id }.orEmpty(),
             talk = ask.talk?.turns.orEmpty().map { t -> DelaAsk.memo(t, snap).let { ru.zf.pravka.core.DelaDebug.Said(it.optString("said"), it.optString("reply"), it.optString("done")) } },
             claudeText = draft, claudeBusy = ask.running.isNotBlank(),
+            // «Сейчас на завтра» на экране: пачка плана или строка во «Новом» и на главной (поезд 16.10.2026).
+            plan = newParts?.plan ?: homeSc?.plan,
+            planBatch = newParts?.planBatch == true,
         )
     }
     val sayBar: @Composable (Modifier, Dela.Task?, Boolean) -> Unit = { barModifier, opened, coversList ->

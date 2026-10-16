@@ -388,8 +388,16 @@ def snapshot_lines(s: dict) -> list[str]:
         total = s.get("rows_total") or len(rows)
         out.append(f"  строки списка ({len(rows)}" + (f" из {total}" if total != len(rows) else "") + "; * — в окне):")
         out += [_row(r) for r in rows]
+    # «Сейчас на завтра» (план, правило 30): веб — шапка блока, «N дня в «Сейчас»» и отмеченное заранее; телефон — строка
+    # плана и отмеченное. Кандидаты — в «new» П-номерами (у них «почему · откуда» и день).
+    p = s.get("plan") if isinstance(s.get("plan"), dict) else None
+    if p:
+        out.append("  «Сейчас на завтра»" + (" (пачка)" if p.get("batch") else "") + ": "
+                   + _one_line(p.get("head") or p.get("line") or "", 300) + (f" · {p['title']}" if p.get("title") else ""))
+        out += [f"    {_one_line(x, 300)}" for x in (p.get("stuck") or [])[:20]]
+        out += [f"    отмечено: {_one_line(x, 300)}" for x in (p.get("marked") or [])[:20]]
     for k, v in s.items():
-        if k in ("v", "title", "route", "sub", "mode", "card", "selected", "rows", "rows_total") or v in (None, "", [], {}):
+        if k in ("v", "title", "route", "sub", "mode", "card", "selected", "rows", "rows_total", "plan") or v in (None, "", [], {}):
             continue
         out.append(f"  {k}: {_one_line(v, 1500)}")
     return out

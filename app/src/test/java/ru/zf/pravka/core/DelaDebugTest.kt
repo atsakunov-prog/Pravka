@@ -218,6 +218,49 @@ class DelaDebugTest {
     }
 
     @Test
+    fun `«Сейчас на завтра» в снимке — строка плана, отмеченное и кандидаты со «почему · откуда»`() {
+        // Поезд 16.10.2026 (вагоны 3 и 6, правила 28 и 30): пачка plan:<день> — кандидаты П-номерами, строка плана и
+        // отмеченное заранее; Claude читает их словами, а не хвостом JSON.
+        val day = "2026-10-19"
+        val p = JSONObject().put("basket", "owed").put("for_date", day).put("focus_on", day).put("order", 1)
+            .put("why", "Пётр ждёт 6 дней").put("from", "руками 10.10")
+            .put("options", JSONArray().put(JSONObject().put("label", "☆ На понедельник").put("focus_on", day)))
+        val s = Dela.Snapshot(
+            tasks = listOf(
+                Dela.Task(id = "a", num = 60, title = "Ответить Петру", ownerId = "me"),
+                Dela.Task(id = "m", num = 61, title = "Иван Тестов: прислать договор", ownerId = "me", focusOn = day),
+            ).associateBy { it.id },
+            suggestions = listOf(
+                Dela.Suggestion(id = "c1", forUser = "me", kind = "update", taskId = "a", payload = p.toString(), source = "plan",
+                    batchRef = "plan:$day", batchTitle = "Сейчас на пн 19.10 · встреч ~3 — возьми 3", status = "pending",
+                    expiresAt = "${day}T12:00:00+03:00"),
+            ).associateBy { it.id },
+            features = setOf(DelaDebug.FEATURE, Dela.FEATURE_OPTIONS, Dela.FEATURE_PLAN),
+        )
+        val now = OffsetDateTime.parse("2026-10-16T14:05:00+03:00").toInstant().toEpochMilli()
+        val plan = DelaViews.plan(s, "me", today, now, day = day)!!
+        val o = DelaDebug.snapshot(
+            DelaDebug.Screen("nav:new/plan:$day", "Сейчас на понедельник — кандидаты, отметить до пяти", newIds = listOf("c1"),
+                plan = plan, planBatch = true),
+            s, today, "",
+        )
+        val j = o.getJSONObject("plan")
+        assertEquals("Сейчас на понедельник: предложено 1 · отмечено 1 из 5", j.getString("line"))
+        assertTrue(j.getBoolean("batch"))
+        assertEquals("#61 Иван Тестов: прислать договор", j.getJSONArray("marked").getString(0))
+        val c = o.getJSONArray("new").getJSONObject(0)
+        assertEquals("Ответить Петру", c.getString("title"))
+        assertEquals("Пётр ждёт 6 дней · руками 10.10", c.getString("hint"))
+        assertEquals(day, c.getString("day"))
+        val words = DelaDebug.snapshotLines(o).joinToString("\n")
+        assertTrue(words, words.contains("«Сейчас на завтра» (пачка): Сейчас на понедельник: предложено 1 · отмечено 1 из 5"))
+        assertTrue(words, words.contains("  отмечено: #61 Иван Тестов: прислать договор"))
+        assertFalse(words, words.contains("plan: {"))
+        // Без блока на экране — ключа нет.
+        assertFalse(DelaDebug.snapshot(DelaDebug.Screen("nav:now", "Сейчас"), s, today, "").has("plan"))
+    }
+
+    @Test
     fun `главная — «Сегодня» подгруппами, дело внутри прямо перед родителем, «Сейчас» с делами внутри над родителем`() {
         // Поезд 16.10.2026, проверка вагона 3: дело внутри получило срок «сегодня» от родителя — на экране оно в подгруппе
         // родителя прямо перед ним (DelaHomeUi: DelaGroups.nested по группе, внутри — TaskRows со stepsFirst).

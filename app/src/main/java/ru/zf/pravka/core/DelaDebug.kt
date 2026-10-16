@@ -78,6 +78,12 @@ object DelaDebug {
         /** Строка Claude: набранное и думает ли он. */
         val claudeText: String = "",
         val claudeBusy: Boolean = false,
+        /**
+         * «Сейчас на завтра» на экране (поезд 16.10.2026, стык с планом): строкой на главной и в «Новом» или пачкой
+         * `plan:<день>` ([planBatch] — тогда кандидаты в [newIds] П-номерами); null — блока нет.
+         */
+        val plan: DelaViews.Plan? = null,
+        val planBatch: Boolean = false,
     )
 
     // ------------------------------------------------------------ последние операции
@@ -284,12 +290,19 @@ object DelaDebug {
                 val g = s.suggestions[id]
                 val p = runCatching { JSONObject(g?.payload ?: "{}") }.getOrDefault(JSONObject())
                 put(JSONObject().put("n", "П${i + 1}").put("id", id).putIf("kind", g?.kind).putIf("source", g?.source)
-                    .putIf("title", p.optString("title").ifBlank { s.tasks[g?.taskId]?.title.orEmpty() }).putIf("status", g?.status))
+                    .putIf("title", p.optString("title").ifBlank { s.tasks[g?.taskId]?.title.orEmpty() }).putIf("status", g?.status)
+                    // Кандидат плана — со «почему · откуда» и днём, как на экране (`AskRow(plan = true)`).
+                    .apply { if (g != null && DelaViews.isPlan(g)) putIf("hint", DelaViews.sugText(g, s, today).hint).putIf("day", DelaViews.planDay(g)) })
             }
         })
         if (sc.talk.isNotEmpty()) o.put("talk", JSONArray().apply {
             sc.talk.takeLast(8).forEach { put(JSONObject().put("said", it.said.take(600)).put("reply", it.reply.take(900)).put("done", it.done.take(700))) }
         })
+        sc.plan?.let { p ->
+            o.put("plan", JSONObject().put("line", DelaViews.planLine(p)).put("for_date", p.forDate).put("offered", p.offered)
+                .put("pending", p.items.size).putIf("title", p.title).putIf("batch", sc.planBatch)
+                .putIf("marked", p.marked.map { t -> (if (t.num > 0) "#${t.num} " else "") + t.title }))
+        }
         o.putIf("quick_text", sc.claudeText).putIf("claude_busy", sc.claudeBusy)
         o.put("today", today).put("seq", s.seq).put("synced_at", s.syncedAt).putIf("build", build)
         if (events.isNotEmpty()) o.put("events", JSONArray(events.takeLast(EVENTS)))
@@ -383,7 +396,7 @@ object DelaDebug {
     }
 
     private val ROW_SKIP = setOf("id", "num", "title", "in_view", "depth", "in", "pos", "inside", "folded")
-    private val SNAP_SKIP = setOf("v", "title", "route", "sub", "mode", "card", "selected", "rows", "rows_total", "kind")
+    private val SNAP_SKIP = setOf("v", "title", "route", "sub", "mode", "card", "selected", "rows", "rows_total", "kind", "plan")
 
     /**
      * Снимок записки словами — как `snapshot_lines` сервера (что видит Claude в `debug show`): экран, режим, открытое
@@ -426,6 +439,12 @@ object DelaDebug {
                     (if (r.optInt("depth") > 0) "↳ " else "") + (r.optInt("num").takeIf { it > 0 }?.let { "#$it " } ?: "") +
                     r.optString("title").ifBlank { r.optString("id") } + (nest + rest).joinToString(" · ").let { if (it.isBlank()) "" else " — $it" }
             }
+        }
+        // «Сейчас на завтра» — строкой и отмеченным заранее (кандидаты — в «new» П-номерами).
+        s.optJSONObject("plan")?.let { p ->
+            out += "«Сейчас на завтра»" + (if (p.optBoolean("batch")) " (пачка)" else "") + ": " + p.optString("line") +
+                p.optString("title").let { if (it.isBlank()) "" else " · $it" }
+            p.optJSONArray("marked")?.let { m -> for (i in 0 until m.length()) out += "  отмечено: " + m.optString(i) }
         }
         for (k in s.keys()) {
             if (k in SNAP_SKIP) continue

@@ -293,8 +293,16 @@ const DEBUG = (() => {
         auto_open: S.autoOpen || undefined, client_open: [...S.clientOpen].map((id) => (project(id) || {}).name || id).slice(0, 30) })),
       new: part('new', () => (S.sugOrder || []).slice(0, 60).map((id, i) => {
         const g = S.sugs.get(id), w = g ? safe(() => sugText(g), {}) : {};
-        return { n: 'П' + (i + 1), id, kind: g && g.kind, source: g && g.source, title: w.title, hint: w.hint || undefined, status: g && g.status };
+        return { n: 'П' + (i + 1), id, kind: g && g.kind, source: g && g.source, title: w.title, hint: w.hint || undefined, status: g && g.status,
+          day: g && g.source === 'plan' ? (g.payload || {}).for_date : undefined };
       })),
+      // «Сейчас на завтра» (planBox): шапка, «N дня в «Сейчас»», отмеченное заранее; кандидаты — в «new» П-номерами.
+      plan: part('plan', () => {
+        const b = document.querySelector('main.list .plan-box');
+        if (!b) return undefined;
+        const lines = (sel) => [...b.querySelectorAll(sel)].map(txt).filter(Boolean);
+        return { head: txt(b.querySelector('h2')), stuck: lines('.hint-line'), marked: lines('.plan-marked') };
+      }),
       talk: part('talk', () => (S.talk && S.talk.turns.length ? S.talk.turns.slice(-8).map(turnMemo) : undefined)),
       card_talk: part('card_talk', () => (S.cardTalk && S.cardTalk.turns.length ? S.cardTalk.turns.slice(-8).map(turnMemo) : undefined)),
       claude_busy: S.parse ? S.parse.text : undefined,

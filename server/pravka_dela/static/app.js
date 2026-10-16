@@ -3690,6 +3690,9 @@ function sugText(s) {
   }
   // «Какой Иван?» захвата (kind capture): тёзки в сказанном — запись ждёт человека; ответ — кнопками людей.
   if (s.kind === 'capture') return { title: p.title || s.quote || '', hint: '' };
+  // Кандидат «Сейчас на завтра»: само дело и «почему · откуда» — как planItem, а не «Уточнить: …» (снимок отладки).
+  if (isPlan(s)) return { title: s.task_id ? (S.tasks.get(s.task_id) || {}).title || 'дело не видно' : p.title || '',
+    hint: [p.why, p.from].filter(Boolean).join(' · ') };
   if (s.kind === 'create') {
     return { title: p.title || s.quote || '',
       hint: [grpWord(p), p.project_name, p.person_name, p.due_date && 'срок ' + D.ddmm(p.due_date)].filter(Boolean).join(' · ') };

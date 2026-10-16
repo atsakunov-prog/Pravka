@@ -291,6 +291,41 @@ def test_snapshot_shows_reminders_and_later(dela):
     assert "'data-id': t.id" in app[app.index("function backBox("):app.index("const ideasOn")]
 
 
+def test_snapshot_shows_plan_block(dela):
+    """Поезд 16.10.2026 (вагоны 3 и 6, правила 28 и 30): блок «Сейчас на завтра» в снимке — веб шлёт шапку блока,
+    «N дня в «Сейчас»» и отмеченное заранее, телефон — строку плана и отмеченное; кандидаты — в «new» П-номерами со
+    «почему · откуда» и днём. Claude читает это словами, а не хвостом JSON."""
+    web = {**SNAP, "route": "#/now", "title": "Сейчас",
+           "plan": {"head": "Сейчас на завтра сегодня сделано 2 из 4 · завтра встреч ~3 — возьми 3 · отмечено 1 из 5",
+                    "stuck": ["3 дня в «Сейчас»: Собрать отчёт — разбить, отдать или убрать?"],
+                    "marked": ["Иван Тестов: прислать договор"]},
+           "new": [{"n": "П1", "id": "s1", "kind": "update", "source": "plan", "title": "Ответить Петру",
+                    "hint": "Пётр ждёт 6 дней · руками 10.10", "status": "pending", "day": "2026-10-19"}]}
+    r, _ = add(dela, snapshot=web)
+    card = debug.tool(dela, "sasha", "show", str(r["note"]["num"]))
+    assert "  «Сейчас на завтра»: Сейчас на завтра сегодня сделано 2 из 4 · завтра встреч ~3 — возьми 3 · отмечено 1 из 5" in card, card
+    assert "    3 дня в «Сейчас»: Собрать отчёт — разбить, отдать или убрать?" in card, card
+    assert "    отмечено: Иван Тестов: прислать договор" in card, card
+    assert "Пётр ждёт 6 дней · руками 10.10" in card and "2026-10-19" in card, card
+    assert "  plan: " not in card, "блок — словами, не одной строкой JSON"
+    phone = {**SNAP, "route": "nav:new/plan:2026-10-19", "title": "Сейчас на понедельник — кандидаты, отметить до пяти",
+             "plan": {"line": "Сейчас на понедельник: предложено 3 · отмечено 1 из 5", "for_date": "2026-10-19",
+                      "offered": 3, "pending": 2, "title": "Сейчас на пн 19.10 · встреч ~3 — возьми 3", "batch": True,
+                      "marked": ["#61 Иван Тестов: прислать договор"]}}
+    r, _ = add(dela, snapshot=phone, source="phone")
+    card = debug.tool(dela, "sasha", "show", str(r["note"]["num"]))
+    assert ("  «Сейчас на завтра» (пачка): Сейчас на понедельник: предложено 3 · отмечено 1 из 5 · Сейчас на пн 19.10 · "
+            "встреч ~3 — возьми 3") in card, card
+    assert "    отмечено: #61 Иван Тестов: прислать договор" in card, card
+    # Веб: снимок собирает блок плана (planBox) и кандидата словами planItem, а не «Уточнить: …».
+    static = Path(debug.__file__).parent / "static"
+    js, app = (static / "debug.js").read_text(encoding="utf-8"), (static / "app.js").read_text(encoding="utf-8")
+    assert "document.querySelector('main.list .plan-box')" in js and "lines('.plan-marked')" in js
+    st = app[app.index("function sugText("):app.index("function autoWords(")]
+    assert "if (isPlan(s)) return" in st and "[p.why, p.from]" in st
+    assert st.index("if (isPlan(s)) return") < st.index("return { title: 'Уточнить: ' + ref")
+
+
 def test_migration_again_is_harmless(dela, cfg):
     """Сборка поезда (16.10.2026) дала файлу номер 31 (в ветке — dela_0024_debug.sql): на копии, где он уже стоял под
     прежним именем, dela_0031 применится второй раз — и не падает, и записки целы."""
