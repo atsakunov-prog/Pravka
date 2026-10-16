@@ -348,7 +348,7 @@ object DelaViews {
     // ------------------------------------------------------------ «Сейчас на завтра»
 
     /*
-     * «Сейчас на завтра» (15.10.2026, шаг 1 петли этапа 4, docs/dela-phone-22.md; `planBox` веба, сервер — `plan.py`,
+     * «Сейчас на завтра» (15.10.2026, шаг 1 петли этапа 4, docs/dela-phone-27.md; `planBox` веба, сервер — `plan.py`,
      * контракт `server/contract/dela-plan.json`). Владелец (ответ 1а): «с 19:00 в „Подскажи“ до семи кандидатов „Сейчас на
      * завтра“, у каждого — почему и откуда; отмечаю до пяти»; тем же вечером заход Пн–Чт — 18:00 (сервер, `asks.py`).
      * Кандидаты — обычные предложения (`source = plan`, `batch_ref plan:<день>`), но это выбор владельца на завтра, а не
@@ -586,7 +586,7 @@ object DelaViews {
     /**
      * Вариант ответа кнопкой (`payload.options`): номер, подпись и «нет» ли это (`reject`). [focusOn] — на какой день
      * вариант ставит дело в «Сейчас» («☆ На завтра» кандидата плана: шестое на тот день ловится до запроса), [done] —
-     * «✓ Уже сделал» (закрывает дело только у кандидата плана, docs/dela-phone-22.md).
+     * «✓ Уже сделал» (закрывает дело только у кандидата плана, docs/dela-phone-27.md).
      */
     data class Option(val index: Int, val label: String, val reject: Boolean, val focusOn: String = "", val done: Boolean = false)
 
@@ -699,7 +699,7 @@ object DelaViews {
         }
         // «Какой Иван?» захвата (kind capture, `sugText` веба): тёзки в сказанном — запись ждёт человека, ответ — кнопками.
         if (sg.kind == "capture") return SugText(v("title").ifBlank { sg.quote }, "")
-        // Кандидат «Сейчас на завтра» (`planItem` веба, docs/dela-phone-22.md): само дело, без «Уточнить:», и под ним
+        // Кандидат «Сейчас на завтра» (`planItem` веба, docs/dela-phone-27.md): само дело, без «Уточнить:», и под ним
         // «почему · откуда» словами сервера — их и спрашивал владелец («у каждого — почему и откуда»).
         if (sg.source == Dela.PLAN_SOURCE) {
             val title = if (sg.kind == "create") v("title").ifBlank { sg.quote } else s.tasks[sg.taskId]?.title ?: "дело не видно"
@@ -876,7 +876,7 @@ object DelaViews {
         // Люди из телефонной книжки (dela_0019) и разборщик Круга — как `ORIGIN` веба.
         "contacts" -> Mark("phone", true, "телефонная книжка")
         "krug" -> Mark("circle", true, "разборщик Круга")
-        // Кандидат «Сейчас на завтра» (docs/dela-phone-22.md): правило сервера, молния (`ORIGIN.plan` веба).
+        // Кандидат «Сейчас на завтра» (docs/dela-phone-27.md): правило сервера, молния (`ORIGIN.plan` веба).
         "plan" -> Mark("bolt", true, "план на завтра")
         "web" -> Mark("pen", false, "в вебе")
         "import" -> Mark("list", false, "перенос")

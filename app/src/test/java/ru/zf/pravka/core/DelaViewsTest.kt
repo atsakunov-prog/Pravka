@@ -709,7 +709,7 @@ class DelaViewsTest {
         assertNull("всё по нулям — строки нет", DelaViews.automationLine(JSONObject().put("automation", JSONObject().put("all", JSONObject()))))
     }
 
-    // ------------------------------------------------------------ задание 22 (шаг 1 петли): «Сейчас на завтра»
+    // ------------------------------------------------------------ задание 27 (шаг 1 петли): «Сейчас на завтра»
 
     private val tomorrow = "2026-10-06"
     private val planOn = setOf(Dela.FEATURE_OPTIONS, Dela.FEATURE_PLAN)

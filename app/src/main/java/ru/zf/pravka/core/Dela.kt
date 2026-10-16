@@ -501,7 +501,7 @@ object Dela {
          */
         val privacyOn: Boolean get() = FEATURE_PRIVACY in features
 
-        /** Сервер кладёт кандидатов «Сейчас на завтра» (`source = plan`, docs/dela-phone-22.md): свой блок, не «Новое». */
+        /** Сервер кладёт кандидатов «Сейчас на завтра» (`source = plan`, docs/dela-phone-27.md): свой блок, не «Новое». */
         val planOn: Boolean get() = FEATURE_PLAN in features
 
         val empty: Boolean
@@ -985,7 +985,7 @@ object Dela {
                     val reject = if (opt != null) opt.optBoolean("reject", false) else op.str("decision") == "reject"
                     val reason = op.str("reason").ifBlank { opt?.let { o -> if (reject) o.str("reason").ifBlank { o.str("label") } else "ответ: " + o.str("label") }.orEmpty() }
                     suggestions[sg.id] = sg.copy(status = if (reject) "rejected" else "accepted", reason = reason, decidedAt = nowIso, local = true)
-                    // Ответ виден на деле сразу, как его решит сервер (docs/dela-phone-22.md): вариант с `focus_on` ставит
+                    // Ответ виден на деле сразу, как его решит сервер (docs/dela-phone-27.md): вариант с `focus_on` ставит
                     // дело в «Сейчас» своего дня («☆ На завтра» — и «отмечено k из 5» растёт до синка, а шестое ловится
                     // ещё до запроса); «✓ Уже сделал» (`done`, сервер слушает его ТОЛЬКО у кандидата плана) закрывает
                     // дело; старое «Да» у кандидата плана — `focus_on` из его payload. Новое дело (`create`) — синком:
@@ -1380,7 +1380,7 @@ object Dela {
     const val FEATURE_DICTATIONS = "dictations"
 
     /**
-     * «Сейчас на завтра» (15.10.2026, шаг 1 петли, docs/dela-phone-22.md, контракт `server/contract/dela-plan.json`):
+     * «Сейчас на завтра» (15.10.2026, шаг 1 петли, docs/dela-phone-27.md, контракт `server/contract/dela-plan.json`):
      * Пн–Чт с 18:00 (Пт — 14:00) сервер кладёт до семи кандидатов правилом — предложения с [PLAN_SOURCE], `batch_ref
      * plan:<день>`. Нет флага — телефон ведёт себя по-старому: блока нет, ждущее (если вдруг есть) — в «Новом».
      */
@@ -1671,7 +1671,7 @@ object Dela {
 
     /**
      * Неразобранные предложения владельцу — «Новое». Счётчик — только они. Кандидаты «Сейчас на завтра»
-     * ([PLAN_SOURCE], docs/dela-phone-22.md) — не вопросы автоматики, а выбор владельца на завтра: у сервера с
+     * ([PLAN_SOURCE], docs/dela-phone-27.md) — не вопросы автоматики, а выбор владельца на завтра: у сервера с
      * планом их нет ни в «Подскажи», ни в числе «Нового» (`store.NEW_COUNT_IF`), ни в «Поставить все» — свой блок
      * (`DelaViews.plan`). Без флага [FEATURE_PLAN] — как раньше.
      */

@@ -1178,7 +1178,7 @@ internal fun buildModel(
                 marks += DayAssembler.MarkIn(at, DayAssembler.Source.DELA, "Сделано: ${t.title}", "dela:task:${t.id}")
             }
             // Новое из встреч, почты и Telegram — пачкой: одна отметка на пачку. Кандидаты «Сейчас на завтра»
-            // (docs/dela-phone-22.md) — не новое извне, а план правилом: в хронику дня они не идут.
+            // (docs/dela-phone-27.md) — не новое извне, а план правилом: в хронику дня они не идут.
             snap.suggestions.values
                 .filter { it.createdAt.take(10) == dateKey && (me.isBlank() || it.forUser == me) && it.kind == "create" && it.source != Dela.PLAN_SOURCE }
                 .groupBy { it.batchRef.ifBlank { it.id } }

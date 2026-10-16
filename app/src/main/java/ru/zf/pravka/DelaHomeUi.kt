@@ -113,7 +113,7 @@ internal class Home(
      * отступом, в предел пяти не считаются; в «Сегодня» ниже их нет.
      */
     val inner: List<Pair<Dela.Task, Int>> = emptyList(),
-    /** «Сейчас на завтра» (docs/dela-phone-22.md): строкой под «Новым», тап — пачка кандидатов; null — строки нет. */
+    /** «Сейчас на завтра» (docs/dela-phone-27.md): строкой под «Новым», тап — пачка кандидатов; null — строки нет. */
     val plan: DelaViews.Plan? = null,
 )
 
@@ -415,7 +415,7 @@ private fun GroupHead(text: String, top: Boolean) {
 private fun NewLine(text: String, onClick: () -> Unit) = LinkLine(kv("inbox", Glyphs.Groups), text, onClick)
 
 /**
- * Строка «Сейчас на завтра: предложено 7 · отмечено 2 из 5 ›» (docs/dela-phone-22.md) — в «Сейчас» Дел под «Новым» и
+ * Строка «Сейчас на завтра: предложено 7 · отмечено 2 из 5 ›» (docs/dela-phone-27.md) — в «Сейчас» Дел под «Новым» и
  * сверху «Нового»: молния, слова, стрелка; тап — пачка кандидатов. Акцентом: это выбор на завтра, а не справка.
  */
 @Composable
