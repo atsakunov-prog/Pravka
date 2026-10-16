@@ -202,42 +202,31 @@ internal fun DelaTabsV2(tabs: List<DelaTabItem>, selected: String, onSelect: (St
     }
 }
 
-/** «просрочено 2 — во «Всех делах» ›» (`lateLink` веба): само просроченное ни в «Сейчас», ни в «Сегодня» не встаёт. */
-@Composable
-internal fun LateLink(n: Int, onClick: () -> Unit) {
-    val t = LocalPravkaType.current
-    val ink = if (Look.v2) Kv.bad else ru.zf.pravka.ui.LocalMode.current.value
-    Text(
-        "просрочено $n — во «Всех делах» ›",
-        style = t.label.copy(fontWeight = FontWeight.SemiBold),
-        color = ink,
-        modifier = Modifier
-            .padding(top = 2.dp)
-            .clip(RoundedCornerShape(KvShape.Tag))
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(vertical = 6.dp),
-    )
-}
-
 /**
- * «ждут от тебя без срока: 3 · жду больше недели: 2» (аудит 15.10.2026, №5; `waitLinks` веба) — под «просрочено N»
- * в шапке «Сейчас». Цвет — обычный акцент, не «беда»: это не просрочка, а то, о чём нельзя забыть. Ноль — части нет.
+ * Хвост дня мелкой строкой внизу «Сейчас» и «Сегодня» (`DelaViews.tail`; отладка 16.10.2026, запись 15 — до этого
+ * «просрочено N» и «ждут от тебя без срока / жду больше недели» стояли крупно наверху, над делами): ссылками —
+ * просроченное во «Все дела» (цветом беды, без жирного), «ждут» и «жду» — фильтры по людям (акцентом). Строкой с
+ * переносом: на узком экране части уходят вниз, а не сжимаются.
  */
 @Composable
-internal fun WaitLinks(w: DelaViews.Waits, onOwed: () -> Unit, onStale: () -> Unit) {
+internal fun TailLinks(parts: List<Pair<String, DelaViews.Tail>>, onTail: (DelaViews.Tail) -> Unit) {
+    if (parts.isEmpty()) return
     val t = LocalPravkaType.current
-    val ink = if (Look.v2) Kv.accent else ru.zf.pravka.ui.LocalMode.current.label
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        val parts = DelaViews.waitWords(w)
-        parts.forEachIndexed { i, word ->
-            if (i > 0) Text(" · ", style = t.label, color = ink)
+    val mode = ru.zf.pravka.ui.LocalMode.current
+    androidx.compose.foundation.layout.FlowRow(Modifier.padding(start = 6.dp, top = 6.dp)) {
+        parts.forEachIndexed { i, (word, kind) ->
+            if (i > 0) Text(" · ", style = t.meta, color = if (Look.v2) Kv.faint else mode.meta, modifier = Modifier.padding(vertical = 6.dp))
             Text(
                 "$word ›",
-                style = t.label.copy(fontWeight = FontWeight.SemiBold),
-                color = ink,
+                style = t.meta,
+                color = when {
+                    kind == DelaViews.Tail.LATE -> if (Look.v2) Kv.bad else mode.value
+                    Look.v2 -> Kv.accent
+                    else -> mode.label
+                },
                 modifier = Modifier
                     .clip(RoundedCornerShape(KvShape.Tag))
-                    .clickable(role = Role.Button, onClick = if (word.startsWith("ждут")) onOwed else onStale)
+                    .clickable(role = Role.Button) { onTail(kind) }
                     .padding(vertical = 6.dp),
             )
         }

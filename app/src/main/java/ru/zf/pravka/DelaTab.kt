@@ -689,16 +689,12 @@ fun DelaTab(
             val inner = if (snap.nestOn) DelaSteps.inner(nowList, snap) else emptyList()
             val taken = nowList.map { it.id }.toSet() + inner.map { it.first.id }
             val rest = DelaGroups.todayByGroups(snap, me, today, sphere, taken)
-            val done = DelaGroups.doneToday(snap, me, today)
             val queue = remember(snap, me, asksTick) { Asks.queue(snap, me, System.currentTimeMillis()) }
             val asksCard = Asks.homeCard(queue, asksOpen)
+            // Подзаголовка нет (отладка 16.10.2026, запись 15): дата, «в «Сейчас» N из 5» и «закрыто» — техническое;
+            // просроченное и «ждут» — мелкой строкой внизу (`DelaViews.tail`), сколько ещё взять — в блоке «Сейчас».
             DelaScreen(
                 "Сейчас",
-                listOfNotNull(
-                    DelaViews.longDate(today),
-                    "в «Сейчас» ${nowList.size} из ${DelaViews.NOW_MAX}",
-                    "закрыто $done".takeIf { done > 0 },
-                ).joinToString(" · "),
                 principle = principle,
                 taskIds = DelaSteps.stepsFirst(nowList + inner.map { it.first }, snap).map { it.id } + rest.map { it.id },
                 home = Home(
@@ -732,13 +728,9 @@ fun DelaTab(
             val items = DelaGroups.picked(every, lv, pk, snap, today)
             val mineNode = if (mine.isEmpty()) emptyList()
             else listOf(DelaGroups.Node("mine", "Моё", 0, null, mine, sub = "никто не ждёт — двигает жизнь; берёшься сегодня — в «Сейчас»"))
+            // Без подзаголовка, как «Сейчас» (отладка 16.10.2026, запись 15): просроченное — строкой внизу.
             DelaScreen(
                 "Сегодня",
-                listOfNotNull(
-                    DelaViews.longDate(today),
-                    "со сроком сегодня ${every.size}".takeIf { every.isNotEmpty() },
-                    "закрыто $done".takeIf { done > 0 },
-                ).joinToString(" · "),
                 principle = principle,
                 nodes = DelaGroups.nested(items, lv, snap, today) + mineNode,
                 levels = lv, levelKey = "today", saveScope = DelaGroups.Scope.TODAY,
@@ -1135,14 +1127,14 @@ fun DelaTab(
                     )
                 }
             }
-            // Под разделами — дата, «со сроком сегодня N», «закрыто M» (`head()` веба), принцип дня и «просрочено N»
-            // ссылкой во «Все дела»: само просроченное ни в «Сейчас», ни в «Сегодня» не попадает. На «Сейчас» вида v2
-            // числа уже в шапке экрана — здесь только принцип и просрочка.
+            // Под разделами — принцип дня (и подзаголовок Круга и Дерева). С 16.10.2026 (отладка, запись 15: «очень
+            // много технического — зачем мне эта информация наверху») у «Сейчас» и «Сегодня» сверху только принцип:
+            // дата, «N из 5», «закрыто», «просрочено N» и «ждут без срока» сняты — просроченное и «ждут» мелкой
+            // строкой внизу страницы («tail:routine»), само просроченное по-прежнему живёт во «Всех делах».
             val headed = view == DelaViews.View.NOW || view == DelaViews.View.TODAY || view == DelaViews.View.KRUG || view == DelaViews.View.TREE
             if (headed && screen != null) {
-                val showSub = !(Look.v2 && view == DelaViews.View.NOW)
-                val waits = screen.waits?.takeIf { it.any }
-                if (showSub || screen.principle.isNotBlank() || screen.late > 0 || waits != null) item(key = "today:head") {
+                val showSub = screen.sub.isNotBlank()
+                if (showSub || screen.principle.isNotBlank()) item(key = "today:head") {
                     Column(Modifier.padding(start = 6.dp)) {
                         if (showSub) Text(
                             screen.sub,
@@ -1155,14 +1147,6 @@ fun DelaTab(
                             style = ru.zf.pravka.ui.LocalPravkaType.current.body.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
                             color = ru.zf.pravka.ui.Ink.PlanText,
                             modifier = Modifier.padding(top = 4.dp),
-                        )
-                        if (screen.late > 0) LateLink(screen.late) { go(DelaViews.View.ALL.key) }
-                        // Аудит №5: «Отбить» без срока и «Мониторить» без движения — числами, тапом — фильтр по людям
-                        // (свой с той же группой или заводской), перед звонком видно всё, что должен и чего жду.
-                        if (waits != null) WaitLinks(
-                            waits,
-                            onOwed = { go(DelaGroups.scopeFilter(filters, "f-owed-people", DelaGroups.Scope.OWED)?.let { FILTER_NAV + it.id } ?: DelaViews.View.ALL.key) },
-                            onStale = { go(DelaGroups.scopeFilter(filters, "f-check-people", DelaGroups.Scope.CHECK)?.let { FILTER_NAV + it.id } ?: DelaViews.View.ALL.key) },
                         )
                     }
                 }
@@ -1484,6 +1468,24 @@ fun DelaTab(
                 }
             }
         }
+        // Хвост дня — мелкой строкой в самом низу «Сейчас» и «Сегодня» (отладка 16.10.2026, запись 15): просрочено ·
+        // ждут от тебя без срока · жду больше недели — ссылками (аудит №5: перед звонком видно, что должен и чего
+        // жду); фильтр — свой с той же группой или заводской.
+        val tailOf = screen
+        val tail = if (page == null && tailOf != null && needle.isEmpty() && filterId == null &&
+            (view == DelaViews.View.NOW || view == DelaViews.View.TODAY)
+        ) DelaViews.tail(tailOf.late, tailOf.waits) else emptyList()
+        if (tail.isNotEmpty()) item(key = "tail:routine") {
+            TailLinks(tail) { kind ->
+                go(
+                    when (kind) {
+                        DelaViews.Tail.LATE -> DelaViews.View.ALL.key
+                        DelaViews.Tail.OWED -> DelaGroups.scopeFilter(filters, "f-owed-people", DelaGroups.Scope.OWED)?.let { FILTER_NAV + it.id } ?: DelaViews.View.ALL.key
+                        DelaViews.Tail.STALE -> DelaGroups.scopeFilter(filters, "f-check-people", DelaGroups.Scope.CHECK)?.let { FILTER_NAV + it.id } ?: DelaViews.View.ALL.key
+                    },
+                )
+            }
+        }
 
         if (snap.empty && link != null) {
             item { ru.zf.pravka.ui.EmptyState("Копия пустая — нажми «синк» вверху", icon = Glyphs.Refresh) }
@@ -1671,13 +1673,10 @@ fun DelaTab(
     val covered = drawerOpen && sideModel != null && !wide
     Column(Modifier.fillMaxSize().then(if (covered) Modifier.clearAndSetSemantics {} else Modifier)) {
         val sphereName = if (sphere == "all") "Все сферы" else SPHERES.firstOrNull { it.first == sphere }?.second.orEmpty()
-        // Подпись шапки вида v2 — сводка дня «3 сегодня · 2 просрочено · 1 закрыто» (`DelaViews.headLine`); сфера —
-        // словом впереди, когда выбрана не «Всё»; тап по подписи — выбор сферы, как раньше. Вид 4.0 — сфера, как был.
-        val headSub = if (Look.v4) sphereName else {
-            val c = DelaViews.counts(snap, me, today, sphere, now)
-            DelaViews.headLine(sphereName.takeIf { sphere != "all" }, c.today, c.late, DelaGroups.doneToday(snap, me, today))
-        }
-        header(headSub) { sphereSheet = true }
+        // Подпись шапки — сфера («Все сферы ⌄»), тап — выбор сферы. Сводки дня «6 сегодня · 2 просрочено · 1 закрыто»
+        // (14.10.2026) больше нет (отладка 16.10.2026, запись 15: «зачем мне эта информация наверху»): просроченное и
+        // «ждут» — мелкой строкой внизу «Сейчас» и «Сегодня».
+        header(sphereName) { sphereSheet = true }
         DelaDebugBar(app, { debugScreen() })
         if (navColumn) {
             // Разворот вида v2 — как веб Дел (лист «Дела» холста): боковина разделов | список | карточка; строка

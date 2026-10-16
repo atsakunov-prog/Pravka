@@ -60,8 +60,8 @@ import java.util.TimeZone
  * заглушка вместо страницы); p5 — доводка 5.0 (подсказка еды, разделы веба Денег); sp — траты Claude (значок
  * на «Сегодня» с меткой советов и экран «Claude: траты»); panel — кнопки справа в заголовке плашки v2 и «Сервер
  * ответил» (с проверкой, что слово видно целиком); m16 — мелочи отладки 16.10 (карточка справа открывает другое дело
- * с шапки, язычок колонки тянется после удержания, «Для этого» у имени дела в строке Claude — с проверками; вкладка
- * Дел на развороте 852×883 и сложенном).
+ * с шапки, язычок колонки тянется после удержания, «Для этого» у имени дела в строке Claude, хвост дня внизу
+ * «Сейчас» без чисел наверху — с проверками; вкладка Дел на развороте 852×883 и сложенном).
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -1289,9 +1289,30 @@ class ScreenShots {
                 }
             }
         }
+        // Проверка записи 15: окном во всю страницу «Сейчас» (ленивый список собирает только видимое) — хвост дня
+        // («просрочено N · ждут от тебя без срока · жду больше недели») ниже «Сегодня», сверху чисел нет.
+        runBlocking { app.settings.setLookTheme("light") }
+        RuntimeEnvironment.setQualifiers("w852dp-h4000dp-420dpi")
+        val c = launch(MainActivity.TAB_TODOIST)
+        shot(c, "m16-wide-whole-light-1-now")
+        val nodes = roots(c).flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }
+        fun y(text: (String) -> Boolean) = nodes.firstOrNull { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { text(it.text) } == true }?.positionInRoot?.y
+        val bad = mutableListOf<String>()
+        val late = y { it.startsWith("просрочено ") && it.endsWith("›") }
+        val owed = y { it.startsWith("ждут от тебя без срока") }
+        // «Сегодня» — заголовок блока на главной (ниже боковины с тем же словом): самый нижний.
+        val today = nodes.filter { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == "Сегодня" } == true }
+            .maxOfOrNull { it.positionInRoot.y }
+        if (late == null || owed == null) bad += "хвоста дня нет: просрочено $late, ждут $owed"
+        else if (today == null || late < today) bad += "хвост дня не внизу: просрочено на $late, «Сегодня» на $today"
+        nodes.flatMap { n -> n.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } }
+            .filter { it.contains(" из 5") || Regex("""\d+ (сегодня|просрочено)""").containsMatchIn(it) }
+            .forEach { bad += "техническое число наверху: «$it»" }
+        close(c)
         runBlocking { app.settings.setLookTheme("system") }
         RuntimeEnvironment.setQualifiers(OUTER)
         settle(4)
+        org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())
     }
 
     /** Режим отладки (DelaDebugUi.kt): строка видна, когда поле debug синка говорит on (флаг debug — в Seed). */
