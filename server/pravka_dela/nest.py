@@ -153,21 +153,27 @@ def score(said: str, title: str, said_keys: list[str] | None = None) -> float:
     return _share(said_keys if said_keys is not None else _keys(said), _keys(title))
 
 
-def rank(conn, user: str, said: str, project_id=None, person_id=None, child_id: str | None = None) -> dict:
+def rank(conn, user: str, said: str, project_id=None, person_id=None, child_id: str | None = None,
+         only_person: str | None = None, waiting: bool | None = None) -> dict:
     """Родитель по словам — среди своих открытых дел (не целей и не напоминаний; RLS — глазами того, кто кладёт).
 
     Оценка — score, плюс PROJECT_BONUS за тот же проект и PERSON_BONUS за того же человека (только у дела с хоть одним
     общим словом: проект сам по себе родителя не делает). Ответ: sure, у уверенного — why_id, num, title, score; cands —
     до CANDS_MAX кандидатов от CAND_MIN, лучший первым ({id, num, title, score}). child_id — что кладём: само дело и всё
-    внутри него не кандидаты (петля)."""
+    внутри него не кандидаты (петля). only_person — только дела этого человека, без бонуса за него (захват, вагон B:
+    «у человека уже есть похожее открытое дело» — кнопка «Внутрь «…»», отладка 16.10, запись 5: бонус там у всех,
+    и «Отправить модель» стало бы дублем «Отправить договор Ивану»); waiting — только «жду от него» (True) или только
+    не они (False): встречное дело — не дубль."""
     keys = _keys(said)
     if not keys:  # одни служебные слова («к делу») — искать нечего
         return {"sure": False, "cands": []}
     rows = conn.execute(
         "SELECT t.id, t.num, t.title, t.project_id, t.person_id FROM tasks.tasks t "
         "LEFT JOIN tasks.krug k ON k.id = t.id AND k.kind = 'task' "
-        "WHERE t.owner_id = %s AND t.status = 'open' AND t.kind = 'task' AND NOT coalesce(k.goal, false)",
-        (user,)).fetchall()
+        "WHERE t.owner_id = %s AND t.status = 'open' AND t.kind = 'task' AND NOT coalesce(k.goal, false)"
+        + (" AND t.person_id = %s" if only_person else "")
+        + ("" if waiting is None else " AND (t.ball = 'waiting') = %s"),
+        (user, *([str(only_person)] if only_person else []), *([] if waiting is None else [bool(waiting)]))).fetchall()
     scored = []
     for r in rows:
         if child_id and str(r["id"]) == str(child_id):
@@ -179,10 +185,14 @@ def rank(conn, user: str, said: str, project_id=None, person_id=None, child_id: 
             s += PROJECT_BONUS
         if person_id and r["person_id"] and str(r["person_id"]) == str(person_id):
             s += PERSON_BONUS
-        scored.append((round(s, 3), r))
-    scored.sort(key=lambda x: (-x[0], x[1]["num"]))
+        # При равной оценке первым — дело, чьё название сказанное покрывает полнее: на «сверку» «Сверка с банком» (1 из 2
+        # основ) раньше «Иван: прислать сверку» (1 из 3) — кнопок «В «…»» у захвата две (вагон B, 16.10.2026).
+        tk = _keys(r["title"])
+        cover = sum(1 for t in tk if any(_hit(k, t) for k in keys)) / len(tk) if tk else 0.0
+        scored.append((round(s, 3), cover, r))
+    scored.sort(key=lambda x: (-x[0], -x[1], x[2]["num"]))
     top = []
-    for s, r in scored:
+    for s, _cover, r in scored:
         if s + _EPS < CAND_MIN or len(top) >= CANDS_MAX:
             break
         if child_id and _below(conn, str(r["id"]), str(child_id)):

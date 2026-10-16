@@ -306,7 +306,7 @@ def _model(tasks=(), notes=(), ideas=()):
     def task_(title, **kw):
         base = {"title": title, "notes": "", "project": "", "person": "", "ball": "mine", "due": "", "due_time": "",
                 "remind_at": "", "remind_place": "", "estimate_min": 0, "money": "", "want": False, "labels": [], "goal": 0,
-                "now": False, "back": "", "done": False}
+                "now": False, "back": "", "done": False, "inside": ""}
         return {**base, **kw}
     return {"tasks": [task_(**t) for t in tasks], "notes": list(notes), "ideas": list(ideas),
             "_usage": {"model": "claude-opus-5-5", "input": 100, "output": 20, "cache_write": 0, "cache_read": 0}}
@@ -566,7 +566,11 @@ def test_agenda_rule_twins_and_just_a_task(dela, at):
     got = store.view(dela, "sasha", "capture", ref=cap["ref"])["capture"]
     assert got["head"] == ("Разложил 2: в повестку с Ольгой Тестовой: обсудить отпуск · дело «потом», верну в пятницу "
                            "16.10: купить магний"), got["head"]
-    assert [c["label"] for c in got["items"][0]["chips"]] == ["Просто дело", "Отменить"]
+    # То же открытое дело у Ольги уже есть (выше — «Просто дело»): первой кнопкой — «Внутрь «…»» к нему (вагон B, дубль
+    # записи 5), остальное — как у повестки. Тот же тик разложил и ждущую «обсудить с Иваном фонды» тем же ответом —
+    # двумя потоками: легла она раньше — похожих дел у Ольги два, и «Внутрь» не предлагается (не уверен — не советуем).
+    labels = [c["label"] for c in got["items"][0]["chips"]]
+    assert labels[-2:] == ["Просто дело", "Отменить"] and (len(labels) == 2 or labels[0] == "Внутрь «Обсудить с Ольгой отпуск»"), labels
 
 
 # ── Клиент дела по человеку (отладка 16.10.2026, запись 5) ──────────────
@@ -741,7 +745,7 @@ def test_capture_schema_fits_grammar():
         return 0
 
     s = capture.schema()
-    assert count(s) <= 52 and {"now", "back", "done"} <= set(s["properties"]["tasks"]["items"]["required"])
+    assert count(s) <= 52 and {"now", "back", "done", "inside"} <= set(s["properties"]["tasks"]["items"]["required"])
     assert "ideas" in s["required"]
 
 
@@ -1345,3 +1349,323 @@ def test_model_two_phrases_at_once(dela, at):
     assert capture.tick(dela, ask_fn=slow) == 2
     assert len(seen) == 2  # два разбора разом — вторая фраза не ждёт первую
     assert all(store.view(dela, "sasha", "capture", ref=r)["capture"]["status"] == "done" for r in refs)
+
+
+# ── Вложенность голосом (вагон B, 16.10.2026; train\logic\PLAN.md §2.1–2.4, §5.1) ──────────
+#
+# Саша 15.10: «чтобы я мог свободно делать nesting и говорить дела и они нормально подцеплялись». «Д», «сказать» и «З»
+# идут захватом: модель отмечает inside («», «^k» или слова родителя), родителя ищет сервер (nest.resolve, nest.rank),
+# сначала nest_fill, потом корзина. Ответы модели — подменённые ($0). Засев — выдуманный (PLAN §5.1).
+
+
+def _nest_seed(url) -> dict:
+    """seed() захвата и дела §5.1: «Договор с Ромашкой» (у клиента, со сроком через 10 дней), «Подготовить КП Ромашке»,
+    «Сверка с банком» и «Сверка за сентябрь» (на «сверку» — двусмысленно), «Закрыть сделку с Альфой», цель дерева."""
+    ids = seed(url)
+    due = db_today(url) + dt.timedelta(days=10)
+    for key, title, kw in (("contract", "Договор с Ромашкой", {"project_id": ids["romashka"], "due_date": due.isoformat()}),
+                           ("kp", "Подготовить КП Ромашке", {"project_id": ids["romashka"]}),
+                           ("bank", "Сверка с банком", {}), ("sept", "Сверка за сентябрь", {}),
+                           ("alfa", "Закрыть сделку с Альфой", {}), ("goal", "Расту в профессии", {"goal": True})):
+        t = ops(url, "sasha", {"op": "task.create", "task": {"title": title, **kw}})[0]["task"]
+        ids[key], ids[key + "#"] = str(t["id"]), t["num"]
+    ids["due"] = due
+    return ids
+
+
+def _laid(url, text, data, frm="d", edit_fn=None):
+    """Фраза из «Д» → наговорка ждёт модели → подменённый ответ (data) → итог захвата."""
+    cap = say(url, text, frm=frm)
+    assert cap["status"] == "pending", cap  # правило молчит: вложенность — модели
+    assert capture.tick(url, ask_fn=lambda h, u: data, edit_fn=edit_fn) == 1
+    return store.view(url, "sasha", "capture", ref=cap["ref"])["capture"]
+
+
+def _on(d: dt.date, today: dt.date) -> str:
+    day = capture.day_on(d, today)
+    return day[0].lower() + day[1:]
+
+
+def test_nest_said_and_edit_words_leave_rule_silent(dela):
+    """Признаки вложенности §2.1 — правило молчит (модель отметит inside); одиночные «в рамках проекта», «для Пети» и
+    «положить ключи в сейф» — правилом, как раньше. Правка существующего («вынь …», «положи X в Y», «это шаг к …») —
+    edit_said: из «Д» её разбирает строка Claude."""
+    ids = _nest_seed(dela)
+    with dela_db.session(dela, "sasha") as c:
+        for text in ("для договора с Ромашкой сначала запросить реквизиты", "это часть сверки с банком",
+                     "внутри подготовки КП: собрать цифры", "сначала позвонить в банк, потом сверка",
+                     "положить звонок в банк в дело про сверку за сентябрь", "положить звонок в банк в сверку за сентябрь",
+                     "вынуть звонок в банк из сверки за сентябрь", "это шаг к закрытию сделки с Альфой"):
+            assert capture.rule(c, "sasha", text, NOWS["a"]) is None, text
+        for text in ("отправить КП в рамках проекта Ромашка", "купить подарок для Пети", "положить ключи в сейф"):
+            got = capture.rule(c, "sasha", text, NOWS["a"])
+            assert got and got["items"][0]["bucket"] == "back", text
+        for text in ("вынь звонок в банк из сверки", "надо положи это в сверку", "переложи звонок в банк в дело про сверку",
+                     "положить звонок в банк в «Сверка с банком»", "это шаг к закрытию сделки с Альфой",
+                     "это часть сверки с банком"):
+            assert capture.edit_said(text, c, "sasha"), text
+        assert capture.edit_said("положить звонок в банк в сверку за сентябрь", c, "sasha")  # nest.rank узнаёт дело
+        assert not capture.edit_said("положить звонок в банк в сверку за сентябрь")  # без базы — только явное «в дело»
+        for text in ("положить ключи в сейф", "вложить деньги в фонд", "вынуть ключи из сумки", "купить подарок для Пети",
+                     "к делу про сверку: позвонить в банк", "для договора с Ромашкой сначала запросить реквизиты"):
+            assert not capture.edit_said(text, c, "sasha"), text
+    assert {"вложить", "вложи", "положить", "положи", "переложить", "переложи", "вынуть", "вынь", "засунь"} <= ask.EDIT_FIRST
+    assert {"step", "kstati"} <= set(ask.RULE_SKIP)
+    assert ids["contract"]
+
+
+def test_nest_inside_by_words_takes_parent_due_and_moves(dela, at):
+    """§5.1 п. 1: «для договора с Ромашкой сначала запросить реквизиты» — дело внутри «Договор с Ромашкой», срок и
+    клиент — от него; строка «Внутри «…»: …», кнопки «Вынуть» · «Другое ▾» · «Отменить». «Вынуть» — само по себе (срок
+    остаётся), «Другое ▾» (into, at = id) — внутрь другого похожего."""
+    ids = _nest_seed(dela)
+    got = _laid(dela, "для договора с Ромашкой сначала запросить реквизиты", _model(tasks=[
+        {"title": "Запросить реквизиты", "project": "ООО Ромашка", "inside": "договор с Ромашкой"}]))
+    x = got["items"][0]
+    assert x["bucket"] == "day" and x["nest"]["kind"] == "task" and x["nest"]["why_id"] == ids["contract"], x
+    assert x["line"] == f"Внутри «Договор с Ромашкой»: запросить реквизиты · {_on(ids['due'], NOWS['a'].date())}", x["line"]
+    t = task(dela, x["task"]["id"])
+    assert (str(t["why_id"]), t["due_date"], str(t["project_id"]), t["back_on"]) == (ids["contract"], ids["due"], ids["romashka"], None)
+    labels = [c["label"] for c in x["chips"]]
+    assert labels == ["Вынуть", "Другое", "Отменить"], labels
+    other = x["chips"][1]
+    assert other["move"] == "into" and ids["kp"] in [o["at"] for o in other["options"]]
+    assert ids["contract"] not in [o["at"] for o in other["options"]]
+    out = move(dela, got["ref"], "out")
+    t = task(dela, x["task"]["id"])
+    assert t["why_id"] is None and t["due_date"] == ids["due"], t  # вынули — срок свой, остаётся
+    assert out["head"].startswith("Переложил: На ") and "Внутри" not in out["head"], out["head"]
+    assert [c["label"] for c in out["items"][0]["chips"]][0] == "Вложить в…"
+    into = move(dela, got["ref"], "into", at=ids["kp"])
+    assert str(task(dela, x["task"]["id"])["why_id"]) == ids["kp"]
+    assert into["head"].startswith("Переложил: Внутри «Подготовить КП Ромашке»: запросить реквизиты"), into["head"]
+    bad = ops(dela, "sasha", {"op": "capture.move", "ref": got["ref"], "item": 0, "to": "into", "at": ids["goal"] + "x"})[0]
+    assert not bad["ok"] and "не понял" in bad["error"]
+
+
+def test_nest_three_steps_in_order(dela, at):
+    """§5.1 п. 2: «внутри «подготовить КП Ромашке»: собрать цифры, согласовать с Ольгой, отправить» — три дела внутри,
+    места 1–3 по порядку сказанного, клиент — от КП, «потом» нет (вернутся с КП). Голова — «Завёл 3 внутри «…»: …»."""
+    ids = _nest_seed(dela)
+    got = _laid(dela, "внутри «подготовить КП Ромашке»: собрать цифры, согласовать с Ольгой, отправить", _model(tasks=[
+        {"title": "Собрать цифры", "inside": "подготовить КП Ромашке"},
+        {"title": "Согласовать с Ольгой", "person": "Ольга", "inside": "подготовить КП Ромашке"},
+        {"title": "Отправить", "inside": "подготовить КП Ромашке"}]))
+    assert got["head"] == "Завёл 3 внутри «Подготовить КП Ромашке»: собрать цифры, согласовать с Ольгой, отправить", got["head"]
+    rows = [task(dela, x["task"]["id"]) for x in got["items"]]
+    assert [x["bucket"] for x in got["items"]] == ["inside"] * 3
+    assert [str(r["why_id"]) for r in rows] == [ids["kp"]] * 3
+    assert [r["pos"] for r in rows] == [1, 2, 3]
+    assert all(str(r["project_id"]) == ids["romashka"] and r["back_on"] is None and r["due_date"] is None for r in rows)
+    assert str(rows[1]["person_id"]) == ids["olga"]  # названное сильнее (у КП человека нет)
+    assert got["items"][0]["line"] == "Внутри «Подготовить КП Ромашке»: собрать цифры"
+
+
+def test_nest_two_candidates_stand_apart_with_buttons(dela, at):
+    """§5.1 п. 3: «к делу про сверку: позвонить в банк» при двух сверках — дело стоит отдельно, «— к какому делу?»,
+    кнопки «В «Сверка с банком»» · «В «Сверка за сентябрь»» · «Отменить»; кнопка кладёт внутрь выбранного."""
+    ids = _nest_seed(dela)
+    got = _laid(dela, "к делу про сверку: позвонить в банк", _model(tasks=[{"title": "Позвонить в банк", "inside": "сверка"}]))
+    x = got["items"][0]
+    assert x["bucket"] == "back" and x["line"] == "Потом: позвонить в банк · верну в пятницу 16.10 — к какому делу?", x["line"]
+    assert task(dela, x["task"]["id"])["why_id"] is None
+    assert [c["label"] for c in x["chips"]] == ["В «Сверка с банком»", "В «Сверка за сентябрь»", "Отменить"]
+    assert x["chips"][1]["move"] == f"into:{ids['sept']}"
+    after = move(dela, got["ref"], f"into:{ids['sept']}")
+    assert str(task(dela, x["task"]["id"])["why_id"]) == ids["sept"]
+    assert after["head"].startswith("Переложил: Внутри «Сверка за сентябрь»: позвонить в банк"), after["head"]
+    assert [c["label"] for c in after["items"][0]["chips"]][:1] == ["Вынуть"]
+
+
+def test_nest_first_then_and_apart(dela, at):
+    """§5.1 п. 5 и §2.3: «сначала позвонить Ивану, потом отправить ему договор» — X внутри Y (Y — новое дело того же
+    ответа, ложится первым), строка «Позвонить Ивану → потом «…»», кнопка «Отдельно» разделяет (X — «потом» само по
+    себе). Человек и клиент — от родителя, где не названы."""
+    ids = _nest_seed(dela)
+    got = _laid(dela, "сначала позвонить Ивану, потом отправить ему договор", _model(tasks=[
+        {"title": "Позвонить Ивану", "person": "Иван", "inside": "^2"},
+        {"title": "Отправить Ивану договор", "person": "Иван"}]))
+    x, y = got["items"]
+    assert x["line"] == "Позвонить Ивану → потом «Отправить Ивану договор»", x["line"]
+    assert [c["label"] for c in x["chips"]] == ["Отдельно", "Отменить"]
+    tx, ty = task(dela, x["task"]["id"]), task(dela, y["task"]["id"])
+    assert str(tx["why_id"]) == str(ty["id"]) and tx["back_on"] is None and tx["due_date"] is None
+    assert str(ty["project_id"]) == ids["romashka"] and str(tx["project_id"]) == ids["romashka"]  # клиент Ивана — и внутри
+    apart = move(dela, got["ref"], "out", item=0)
+    tx = task(dela, x["task"]["id"])
+    assert tx["why_id"] is None and tx["back_on"] is not None  # отдельно — «потом», а не плоско без дня
+    assert apart["items"][0]["line"].startswith("Переложил: Потом: позвонить Ивану"), apart["items"][0]["line"]
+    back = apart["items"][0]["chips"][0]
+    assert back["label"] == "Вложить в…" and back["options"][0]["at"] == str(ty["id"])  # вернуть — одной кнопкой
+
+
+def test_nest_before_this_inside_new_parent(dela, at):
+    """§5.1 п. 8: «по Альфе: подготовить тизер, до этого собрать отчётность» — отчётность внутри тизера (родитель сказан
+    первым — «Внутри «…»»), кнопка «Отдельно»."""
+    _nest_seed(dela)
+    got = _laid(dela, "по Альфе: подготовить тизер, до этого собрать отчётность", _model(tasks=[
+        {"title": "Подготовить тизер"}, {"title": "Собрать отчётность", "inside": "^1"}]))
+    p_, k = got["items"]
+    assert k["line"] == "Внутри «Подготовить тизер»: собрать отчётность", k["line"]
+    assert [c["label"] for c in k["chips"]] == ["Отдельно", "Отменить"]
+    assert str(task(dela, k["task"]["id"])["why_id"]) == str(p_["task"]["id"])
+
+
+def test_nest_reminder_becomes_task_inside_and_raises_parent(dela, at):
+    """§5.1 п. 12: «для сверки завтра в 10 напомни позвонить в банк» — не напоминание, а дело с напоминанием внутри
+    сверки (напоминание не вкладывается); сделано — родитель поднимается на сегодня."""
+    ids = _nest_seed(dela)
+    got = _laid(dela, "для сверки завтра в 10 напомни позвонить в банк", _model(tasks=[
+        {"title": "Позвонить в банк", "due": "2026-10-16", "remind_at": "2026-10-16 10:00", "inside": "сверка с банком"}]))
+    x = got["items"][0]
+    assert x["bucket"] == "task_remind", x
+    assert x["line"] == "Внутри «Сверка с банком»: позвонить в банк · на завтра · напомню завтра в 10:00", x["line"]
+    t = task(dela, x["task"]["id"])
+    assert (t["kind"], str(t["why_id"]), t["due_date"].isoformat()) == ("task", ids["bank"], "2026-10-16")
+    assert same_at(t["remind_at"], "2026-10-16T10:00:00+03:00")
+    done = ops(dela, "sasha", {"op": "task.done", "id": x["task"]["id"]})[0]
+    assert done["ok"] and done.get("raised"), done  # всё внутри сделано — сверка поднялась
+    assert task(dela, ids["bank"])["due_date"] == db_today(dela)
+
+
+def test_nest_parent_due_beats_later_and_no_due_means_inside(dela, at):
+    """«Потом» не перебивает срок родителя (поезд, §1.4 п. 3): у договора срок — дело внутри берёт его, back модели
+    мимо; у сверки срока нет — дело внутри без срока и без «потом» (корзина inside: вернётся с родителем)."""
+    ids = _nest_seed(dela)
+    got = _laid(dela, "много про договор и сверку", _model(tasks=[
+        {"title": "Запросить реквизиты", "back": "2026-10-20", "inside": "договор с Ромашкой"},
+        {"title": "Выгрузить выписку", "inside": "сверка с банком"}]))
+    a, b = (task(dela, x["task"]["id"]) for x in got["items"])
+    assert (a["due_date"], a["back_on"], str(a["why_id"])) == (ids["due"], None, ids["contract"])
+    assert (b["due_date"], b["back_on"], str(b["why_id"])) == (None, None, ids["bank"])
+    assert [x["bucket"] for x in got["items"]] == ["day", "inside"]
+    assert got["items"][1]["line"] == "Внутри «Сверка с банком»: выгрузить выписку"
+
+
+def test_nest_not_found_stands_apart_with_put_into(dela, at):
+    """Родителя по словам нет — дело отдельно, «— дела «…» не нашёл, завёл отдельно», первая кнопка «Вложить в… ▾» —
+    дела того же клиента."""
+    ids = _nest_seed(dela)
+    got = _laid(dela, "к делу про отчёт для налоговой: собрать акты", _model(tasks=[
+        {"title": "Собрать акты", "project": "ООО Ромашка", "inside": "отчёт для налоговой"}]))
+    x = got["items"][0]
+    assert x["line"].endswith("— дела «отчёт для налоговой» не нашёл, завёл отдельно"), x["line"]
+    assert task(dela, x["task"]["id"])["why_id"] is None
+    first = x["chips"][0]
+    assert first["label"] == "Вложить в…" and {ids["contract"], ids["kp"]} <= {o["at"] for o in first["options"]}
+
+
+def test_nest_rule_flat_gets_into_button_and_twin(dela, at):
+    """§5.1 п. 9: «запросить реквизиты для договора с Ромашкой» — правило кладёт плоско («потом»), а у хвоста «для …»
+    уверенное дело — первой кнопкой «В «Договор с Ромашкой»»; она кладёт внутрь, срок — от договора, «потом» снимается.
+    Контроль: «купить подарок для Пети» — кнопки прежние. У человека уже есть похожее открытое дело (дубль, запись 5) —
+    «Внутрь «…»»; «сегодня отправить Ивану модель» при «Отправить договор Ивану» — не дубль."""
+    ids = _nest_seed(dela)
+    cap = say(dela, "запросить реквизиты для договора с Ромашкой")
+    x = cap["items"][0]
+    assert cap["by"] == "rule" and x["bucket"] == "back" and task(dela, x["task"]["id"])["why_id"] is None
+    assert [c["label"] for c in x["chips"]] == ["В «Договор с Ромашкой»", "Сегодня", "Отменить"]
+    assert x["line"] == "Потом: запросить реквизиты для договора с Ромашкой · верну в пятницу 16.10"  # строка обычная
+    got = move(dela, cap["ref"], f"into:{ids['contract']}")
+    t = task(dela, x["task"]["id"])
+    assert (str(t["why_id"]), t["due_date"], t["back_on"]) == (ids["contract"], ids["due"], None)
+    assert got["head"].startswith("Переложил: Внутри «Договор с Ромашкой»: запросить реквизиты"), got["head"]
+    gift = say(dela, "купить подарок для Пети")
+    assert [c["label"] for c in gift["items"][0]["chips"]] == ["Сегодня", "В «Сейчас»", "Отменить"]
+    # «в рамках проекта Ромашка» — клиент, а не родитель: дела Ромашки по имени клиента «уверенными» не становятся.
+    kp = say(dela, "отправить КП в рамках проекта Ромашка")
+    assert [c["label"] for c in kp["items"][0]["chips"]] == ["Сегодня", "В «Сейчас»", "Отменить"], kp["items"][0]["chips"]
+    olga = say(dela, "позвонить Ольге на неделе")
+    assert olga["by"] == "rule" and olga["items"][0]["chips"][0]["label"] == "Внутрь «Позвонить Ольге»", olga["items"][0]
+    assert olga["items"][0]["chips"][0]["move"] == f"into:{ids['call_olga']}"
+    ivan = say(dela, "сегодня отправить Ивану модель")
+    assert not any(c["label"].startswith("Внутрь") for c in ivan["items"][0]["chips"]), ivan["items"][0]["chips"]
+
+
+def test_nest_edit_words_from_d_go_to_claude_line(dela, at):
+    """§5.1 п. 7 и п. 11 из «Д»: «вынь …», «положи X в Y» — правка существующего: строка Claude (ask.run со scope
+    «Сегодня» — Claude видит все открытые дела), модель захвата не зовётся; строка — ответ сервера, «Отменить» — как
+    было. Claude решил, что это новые дела, — раскладывает модель захвата в ту же наговорку."""
+    ids = _nest_seed(dela)
+    call = ops(dela, "sasha", {"op": "task.create", "task": {"title": "Позвонить в банк", "why_id": ids["bank"]}})[0]["task"]
+    seen = []
+
+    def edit(into):
+        def fake(system, message):
+            seen.append(message)
+            return {"route": "edit", "reply": "", "changes": [{"num": call["num"], "title": "", "notes_add": "",
+                                                               "project": "", "deal": "", "person": "", "due": "",
+                                                               "due_time": "", "ball": "", "now": "", "estimate_min": 0,
+                                                               "labels_add": [], "labels_remove": [], "status": "",
+                                                               "into": into}],
+                    "create": [], "suggestions": [], "card": [], "refs": []}
+        return fake
+
+    def no_model(h, u):
+        raise AssertionError("правку существующего модель захвата не разбирает")
+
+    cap = say(dela, "вынь звонок в банк из сверки")
+    assert cap["status"] == "pending"
+    assert capture.tick(dela, ask_fn=no_model, edit_fn=edit("-")) == 1
+    got = store.view(dela, "sasha", "capture", ref=cap["ref"])["capture"]
+    assert got["status"] == "done" and got["by"] == "claude", got
+    assert "КОМАНДА: вынь звонок в банк из сверки" in seen[0] and "ДРУГИЕ МОИ ОТКРЫТЫЕ ДЕЛА" in seen[0]
+    assert "Вынул «Позвонить в банк» из «Сверка с банком»." in got["head"], got["head"]
+    assert task(dela, call["id"])["why_id"] is None
+    assert [c["label"] for c in got["items"][0]["chips"]] == ["Отменить"]
+    # «Положи его в дело про сверку за сентябрь» — «его» — сказанное прямо перед этим (память разговора строки Claude).
+    cap2 = say(dela, "положи его в дело про сверку за сентябрь")
+    assert capture.tick(dela, ask_fn=no_model, edit_fn=edit(f"#{ids['sept#']}")) == 1
+    assert str(task(dela, call["id"])["why_id"]) == ids["sept"]
+    assert "РАЗГОВОР" in seen[-1] and "вынь звонок в банк из сверки" in seen[-1], seen[-1][-600:]
+    undone = move(dela, cap2["ref"], "cancel")
+    assert task(dela, call["id"])["why_id"] is None and undone["head"].startswith("Отменил:"), undone["head"]
+    move(dela, cap["ref"], "cancel")
+    assert str(task(dela, call["id"])["why_id"]) == ids["bank"]
+    # Claude: это новые дела — раскладывает модель захвата, своей наговорки строка не заводит.
+    cap = say(dela, "положи деньги на телефон")
+    capture.tick(dela, ask_fn=lambda h, u: _model(tasks=[{"title": "Положить деньги на телефон"}]),
+                 edit_fn=lambda s, m: {"route": "new", "reply": "", "changes": [], "create": [], "suggestions": [],
+                                       "card": [], "refs": []})
+    got = store.view(dela, "sasha", "capture", ref=cap["ref"])["capture"]
+    assert got["by"] == "model" and got["items"][0]["bucket"] == "back", got
+    with dela_db.session(dela, "sasha") as c:
+        assert c.execute("SELECT count(*) AS n FROM tasks.dictations WHERE text = 'положи деньги на телефон'").fetchone()["n"] == 1
+    # Строка веба такие фразы в захват не шлёт: у неё ask.run и так впереди (EDIT_FIRST).
+    assert ask.rule_first(dela, "sasha", "положить звонок в банк в дело про сверку", {"title": "Сейчас"}) is None
+
+
+def test_nest_inside_in_parse_to_ops(dela):
+    """/api/parse и старая Разноска (parse.to_ops): inside — тот же nest.resolve; «^k» — родитель первым, свой id;
+    неясное — само по себе (кнопок там нет); поля от родителя — сервер (nest_fill в op_task_create)."""
+    from pravka_dela import parse
+
+    ids = _nest_seed(dela)
+    data = {"tasks": [{"title": "Собрать отчётность", "inside": "^2"}, {"title": "Подготовить тизер"},
+                      {"title": "Запросить реквизиты", "inside": "договор с Ромашкой"},
+                      {"title": "Позвонить в банк", "inside": "сверка"}], "notes": []}
+    with dela_db.session(dela, "sasha") as c:
+        got = parse.to_ops(data, {"projects": {}, "people": {}, "labels": set()}, {}, "web", conn=c, user="sasha")
+    by = {o["task"]["title"]: o["task"] for o in got}
+    order = [o["task"]["title"] for o in got]
+    assert order.index("Подготовить тизер") < order.index("Собрать отчётность")  # родитель — первым
+    assert by["Собрать отчётность"]["why_id"] == by["Подготовить тизер"]["id"]
+    assert by["Запросить реквизиты"]["why_id"] == ids["contract"] and "why_id" not in by["Позвонить в банк"]
+    res = store.apply_ops(dela, "sasha", got, "web")["results"]
+    assert all(r["ok"] for r in res), res
+    req = next(r["task"] for r in res if r["task"]["title"] == "Запросить реквизиты")
+    assert task(dela, req["id"])["due_date"] == ids["due"]
+    # Без сессии — как раньше: inside не читается.
+    assert all("why_id" not in o["task"] for o in parse.to_ops(data, {"projects": {}, "people": {}, "labels": set()}, {}, "web"))
+
+
+def test_nest_twin_is_not_the_opposite_task(dela, at):
+    """«Внутрь «…»» — только к своему же делу: встречное (жду от Ивана сверку ↔ прислать Ивану сверку) — не дубль
+    (replay захвата 16.10: такие пары давали кнопку); своё к «ждёт от тебя» — дубль (один и тот же звонок)."""
+    ids = _nest_seed(dela)
+    got = _laid(dela, "много всего про Ивана", _model(tasks=[
+        {"title": "Прислать Ивану сверку", "person": "Иван", "ball": "owed"},
+        {"title": "Иван: прислать сверку", "person": "Иван", "ball": "waiting", "due": "2026-10-20"}]))
+    a, b = got["items"]
+    assert not any(c["label"].startswith("Внутрь") for c in a["chips"]), a["chips"]  # встречное к «жду от Ивана»
+    assert b["chips"][0] == {"label": "Внутрь «Иван: прислать сверку»", "move": f"into:{ids['ivan_sverka']}"}, b["chips"]

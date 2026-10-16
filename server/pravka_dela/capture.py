@@ -421,6 +421,11 @@ SAID_BY = (SPEECH - SPEECH_TASK) | frozenset({"передал", "передал�
 # «проверить, что внутри коробки», «в рамках проекта Ромашка отправить КП», «купить бумагу для дела», «приступить к делу
 # завтра», «часть того счёта оплатить» правило берёт как обычно (проверка вагона 4: иначе они шли платной модели за
 # 3–13 с вместо 0,1 с). Родитель по названию голосом — вагон B (train\logic\PLAN.md §2).
+#
+# Вагон B (16.10.2026, тяжёлая полоса, правка 06; train\logic\PLAN.md §2.1): признаки «дело внутри названного дела»
+# голосом — «для X сначала …», «сначала a, потом b», «это часть X», «внутри X: a, b» — правило тоже не берёт: модель
+# отметит inside, родителя по словам найдёт сервер (nest.resolve). Одиночные «в рамках проекта», «для Пети» —
+# по-прежнему правилом (плоско), а если у хвоста «для / к / по / в рамках X» есть уверенное дело — кнопка «В «X»».
 _NEST_OBJ = r"(?:дела|этого|этому|него|нее|них|#\d+)"
 NEST_SAID = re.compile(
     r"(?:^|[\s,.:;!(«\"])(?:"
@@ -430,9 +435,58 @@ NEST_SAID = re.compile(
     r"|внутр[иь]\s+" + _NEST_OBJ + r"|в\s+рамках\s+(?:дела|этого)"
     r"|(?:к\s+делу|для\s+дела)\s+(?:про|о|об|#\d+)"
     r"|часть\s+(?:(?:того|этого)\s+дела|дела\s+(?:про|о|об))"
+    r"|для\s+\S.*?\s+сначала|сначала\s+\S.*?\s+потом|это\s+част[ьи]"
     r")(?=$|[\s,.:;!)»\"])"
     r"|(?:внутр[иь]|к\s+делу|для\s+дела|часть\s+(?:(?:того|этого)\s+)?дела)\s*[«\"]"
+    r"|внутр[иь]\s+[^:«\"]{2,80}:"
     r")")
+
+# Правка УЖЕ заведённого дела словами вложенности (вагон B, PLAN §2.1 и §1.4 п. 7): «вынь звонок в банк из сверки»,
+# «положи звонок в банк в дело про сверку», «переложи …», «это шаг к закрытию сделки с Альфой» — не новое дело. Из «Д»,
+# «сказать» и «З» такая фраза идёт строкой Claude (ask.run со scope «Сегодня» — там видны все открытые дела), а не
+# моделью захвата: та знает только новые дела. Повелительное «вынь / вложи / положи / переложи / засунь» — команда
+# всегда (как в NEST_SAID). Неопределённое «вынуть … из», «вложить / переложить / засунуть / положить … в» — только
+# когда куда (откуда) — дело: «в дело …», «в «…»», «из дела …», «внутрь» или то, что nest.rank узнаёт среди открытых
+# дел. «Положить ключи в сейф», «вложить деньги в фонд» — обычные дела (правило, иначе модель захвата). Первым словом
+# после вводных («надо», «пожалуйста»); «это шаг к …», «это часть …» — тоже правка.
+EDIT_HEAD = frozenset({"вынь", "выньте", "вложи", "вложите", "положи", "положите", "переложи", "переложите", "засунь",
+                       "засуньте"})
+EDIT_INF = {"вынуть": ("из",), "вложить": ("в", "во"), "переложить": ("в", "во"), "засунуть": ("в", "во"),
+            "положить": ("в", "во")}
+EDIT_LEAD = frozenset({"надо", "нужно", "пожалуйста", "давай", "мне", "бы", "это", "его", "ее", "их"})
+_INTO_TASK = re.compile(r"\s(?:в|во|из)\s+(?:дел[оауе]\b|[«\"]|#\d)")
+
+
+def edit_said(text: str, conn=None, user: str | None = None) -> bool:
+    """Фраза — правка существующего дела словами вложенности (EDIT_HEAD, EDIT_INF, «это шаг к …»): из «Д», «сказать»
+    и «З» её разбирает строка Claude (`_edit_by_ask`), правило захвата молчит. conn и user — для «… в Y»: узнаёт ли
+    nest.rank Y среди открытых дел; без них — только явное «в дело / в «…» / внутрь»."""
+    s = _n(" ".join(str(text or "").split()))
+    tt = tokens(s)
+    i = 0
+    while i < len(tt) and tt[i]["n"] in EDIT_LEAD - {"это"}:
+        i += 1
+    if i + 2 < len(tt) and tt[i]["n"] == "это" and (tt[i + 1]["n"].startswith("шаг") and tt[i + 2]["n"] in ("к", "ко")
+                                                    or tt[i + 1]["n"] in ("часть", "части")):
+        return True
+    while i < len(tt) and tt[i]["n"] in EDIT_LEAD:
+        i += 1
+    if i >= len(tt):
+        return False
+    w, rest = tt[i]["n"], [t["n"] for t in tt[i + 1:]]
+    if w in EDIT_HEAD:
+        return True
+    preps = EDIT_INF.get(w)
+    if not preps or len(rest) < 2:
+        return False
+    if (w != "вынуть" and "внутрь" in rest) or _INTO_TASK.search(" " + s + " "):
+        return True
+    cut = max((k for k, x in enumerate(rest) if x in preps), default=None)
+    if cut is None or cut + 1 >= len(rest) or conn is None or user is None:
+        return False
+    from . import nest
+
+    return bool(nest.rank(conn, user, " ".join(rest[cut + 1:]))["cands"])
 
 
 def nest_said(text: str) -> bool:
@@ -1308,7 +1362,7 @@ def _rule_task(tt: list[dict], ctx: Ctx) -> dict | None:
 def rule(conn, user: str, text: str, now: dt.datetime | None = None, ctx: Ctx | None = None) -> dict | None:
     """Правило ($0): одна мысль известной формы — {"form", "items": [одна корзина]}; иначе None (молчит — модели)."""
     s = " ".join(str(text or "").split())
-    if not s or not one_thought(s) or nest_said(s):
+    if not s or not one_thought(s) or nest_said(s) or edit_said(s, conn, user):
         return None
     ctx = ctx or Ctx(conn, user, now or dt.datetime.now(MSK))
     tt = tokens(s)
@@ -1342,7 +1396,9 @@ def open_doubt(got: dict) -> str | None:
 # ── Раскладка: корзина → операции, строка, кнопки ───────────────────────
 
 
-TASK_BUCKETS = ("remind", "place", "now", "today", "day", "back", "task_remind", "waiting", "owed", "agenda")
+TASK_BUCKETS = ("remind", "place", "now", "today", "day", "back", "task_remind", "waiting", "owed", "agenda", "inside")
+# Дело, а не напоминание: в него можно вкладывать (вагон B); inside — дело внутри другого без своего срока.
+DEED_BUCKETS = ("now", "today", "day", "back", "task_remind", "waiting", "owed", "agenda", "inside")
 MAX_LINE = 160
 
 
@@ -1421,13 +1477,78 @@ def _remind_what(conn, t: dict, what: str) -> str:
     return _short(f"{who} — {body}", 110)
 
 
+def _nested(item: dict) -> dict | None:
+    """Дело легло внутрь другого (вагон B): nest записи — task, goal или new, и дело правда есть."""
+    nest_ = item.get("nest") or {}
+    if nest_.get("kind") in ("task", "goal", "new") and item.get("bucket") in DEED_BUCKETS and item.get("task"):
+        return nest_
+    return None
+
+
+def _nest_tail(conn, item: dict, now: dt.datetime) -> str:
+    """Когда дело внутри: « · на пятницу 16.10 · в 15:00», « · в «Сейчас» (2 из 5)», « · напомню завтра в 10:00»,
+    « · жду от Ивана Тестова»; без своего срока — ничего (вернётся с родителем)."""
+    b, t, today = item["bucket"], item.get("task") or {}, now.date()
+    if b == "now":
+        return " · на сегодня" if item.get("now_full") else f" · в «Сейчас» ({item.get('now_n') or 1} из 5)"
+    out = ""
+    if t.get("due_date") and b in ("today", "day", "task_remind", "waiting", "owed", "agenda"):
+        day = day_on(dt.date.fromisoformat(str(t["due_date"])[:10]), today)
+        out = " · " + day[0].lower() + day[1:]
+        if t.get("due_time"):
+            out += f" · {'к' if item.get('by_deadline') else 'в'} {str(t['due_time'])[:5].lstrip('0') or '0:00'}"
+    if t.get("remind_at"):
+        out += f" · напомню {when_say(remind.at_of(t['remind_at']), now)}"
+    elif t.get("remind_place"):
+        out += f" · напомню, когда приедешь {_place_words(t['remind_place'], None)}"
+    if b == "back" and t.get("back_on"):
+        out += " · " + back_say(dt.date.fromisoformat(str(t["back_on"])[:10]), today)
+    if b in ("waiting", "owed", "agenda"):
+        p = _person_row(conn, t.get("person_id"))
+        if p:
+            out += {"waiting": f" · жду от {genitive(p['name'])}", "owed": f" · ждёт {p['name']}",
+                    "agenda": f" · в повестку с {instrumental(p['name'])}"}[b]
+    return out
+
+
+def _nest_line(conn, item: dict, now: dt.datetime) -> str | None:
+    """Строка дела внутри (§2.4): «Внутри «КП Ромашке»: собрать цифры · на пятницу 16.10»; «сначала X, потом Y» —
+    «Позвонить Ивану → потом «Отправить Ивану договор»» (родитель сказан позже); цель — «Под целью «…»: …»."""
+    nest_ = _nested(item)
+    if not nest_:
+        return None
+    t = item["task"]
+    what = _short(_lowfirst(t.get("title") or item.get("title") or ""), 100)
+    where = _short(nest_.get("title") or "", 60)
+    tail = _nest_tail(conn, item, now)
+    if nest_["kind"] == "new" and nest_.get("after"):
+        return f"{_cap(what)} → потом «{where}»{tail}"
+    return f"{'Под целью' if nest_['kind'] == 'goal' else 'Внутри'} «{where}»: {what}{tail}"
+
+
+def _nest_said(item: dict, line: str) -> str:
+    """Дело стоит отдельно, хотя родителя сказали: неясно — «… — к какому делу?», не нашёл — «… — дела «сверка» не нашёл,
+    завёл отдельно», отказ решателя — его словами."""
+    nest_ = item.get("nest") or {}
+    if item.get("bucket") not in DEED_BUCKETS:
+        return line
+    if nest_.get("kind") == "ask":
+        return f"{line} — к какому делу?"
+    if nest_.get("kind") == "none":
+        err = nest_.get("error")
+        if err:
+            return f"{line} — {err}" + ("" if "отдельно" in err else " — завёл отдельно")
+        return f"{line} — дела «{_short(nest_.get('said') or '', 40)}» не нашёл, завёл отдельно"
+    return line
+
+
 def line_of(conn, item: dict, now: dt.datetime) -> str:
     """Строка подтверждения корзины (spec-0 §2.5): «Напомню сегодня в 12:00: отправить счёт в Контуре». Обещает только
     то, что правда случится (проверка 16.10.2026): заметка — «в карточке» (у встречи телефон показывает только идеи),
     идея без адреса — «в списке «Идеи»», вопрос о похожих и тёзках — «в «Подскажи»» (он встаёт туда сразу). Клиента
     поставило правило по человеку (`client_auto`, запись 5) — в конце «· Клиент»: видно, к кому легло, и кнопка
     «Без клиента» рядом."""
-    line = _line_of(conn, item, now)
+    line = _nest_line(conn, item, now) or _nest_said(item, _line_of(conn, item, now))
     client = item.get("client_auto")
     if client and item["bucket"] in TASK_BUCKETS and str((item.get("task") or {}).get("project_id") or "") == str(client):
         pr = _project_row(conn, client)
@@ -1519,6 +1640,10 @@ def _line_of(conn, item: dict, now: dt.datetime) -> str:
         return f"Отменил: {_short(was, 120)}"
     if b == "error":
         return f"Не разложил: {item.get('error')}"
+    if b == "edit":  # правка строкой Claude («вынь …», «положи X в Y» из «Д»): ответ сервера и Claude
+        return item.get("reply") or "Поправил"
+    if b == "inside":  # дело внутри без своего срока, когда родитель не известен строке (не бывает: см. _nest_line)
+        return f"Внутри: {what}"
     return what
 
 
@@ -1534,12 +1659,41 @@ def _who_chip(item: dict) -> dict:
                         for c in (item.get("twins") or [])[:3]]}
 
 
+def _nest_chips(item: dict, base: list[dict]) -> list[dict]:
+    """Кнопки вложенности (вагон B, PLAN §2.4) поверх обычных. Внутри уверенно — «Вынуть» (out) · «Другое ▾» (into, до
+    четырёх похожих, at = id) · «Отменить»; новый родитель из этой же фразы — «Отдельно» (out) · «Отменить»; неясно —
+    «В «A»» · «В «B»» (into:<id>) · «Отменить»; не нашёл — «Вложить в… ▾» (дела того же проекта) первой кнопкой;
+    плоское дело правила с уверенным хвостом «для / к / по X» или с похожим открытым делом того же человека — «В «X»» /
+    «Внутрь «…»» первой кнопкой. Телефон рисует их как есть (Capture.moveOp шлёт to и at)."""
+    if item.get("bucket") not in DEED_BUCKETS or not item.get("task"):
+        return base
+    cancel = [c for c in base if c["move"] == "cancel"] or [{"label": "Отменить", "move": "cancel"}]
+    first = [c for c in base if c["move"] != "cancel"][:1]
+    nest_ = item.get("nest") or {}
+    kind = nest_.get("kind")
+    opts = lambda cs: [{"label": _short(c["title"], 40), "at": c["id"]} for c in cs[:NEAR_MAX]]  # noqa: E731
+    if kind in ("task", "goal"):
+        others = [c for c in nest_.get("cands") or [] if c["id"] != nest_.get("why_id")]
+        return ([{"label": "Вынуть", "move": "out"}]
+                + ([{"label": "Другое", "move": "into", "options": opts(others)}] if others else []) + cancel)
+    if kind == "new":
+        return [{"label": "Отдельно", "move": "out"}] + cancel
+    if kind == "ask" and nest_.get("cands"):
+        return [{"label": f"В «{_short(c['title'], 28)}»", "move": f"into:{c['id']}"} for c in nest_["cands"][:2]] + cancel
+    if kind in ("none", "out") and nest_.get("cands"):
+        return [{"label": "Вложить в…", "move": "into", "options": opts(nest_["cands"])}] + first + cancel
+    hint = item.get("into_hint")
+    if hint:
+        return [{"label": f"{hint.get('word') or 'В'} «{_short(hint['title'], 28)}»", "move": f"into:{hint['id']}"}] + first + cancel
+    return base
+
+
 def chips_of(item: dict) -> list[dict]:
     """До трёх кнопок поправки одним касанием (spec-0 §2.6): подпись и куда переложить (capture.move). Первая — частая
     поправка: пилюля «Д» и «З» показывает в строке только её (у напоминания — «Время ▾»: «в 9», сказанное в 10:30, —
     это сегодня 21:00, а не завтра утром). Клиента поставило правило (`client_auto`) — вторая кнопка «Без клиента»
     (телефон берёт до трёх: первая частая, «Без клиента», «Отменить»)."""
-    out = _chips_of(item)
+    out = _nest_chips(item, _chips_of(item))
     if item.get("client_auto") and item["bucket"] in TASK_BUCKETS and item.get("task"):
         cancel = [c for c in out if c["move"] == "cancel"]
         out = [c for c in out if c["move"] != "cancel"][:1] + [{"label": "Без клиента", "move": "no_client"}] + cancel
@@ -1579,6 +1733,10 @@ def _chips_of(item: dict) -> list[dict]:
         return [cancel]
     if b == "error":
         return [{"label": "Повторить", "move": "retry"}, {"label": "Дело потом", "move": "back_task"}]
+    if b == "edit":  # правка строкой Claude из «Д»: «Отменить» — всё, что она поменяла, как было
+        return [cancel] if item.get("undo") else []
+    if b == "inside":
+        return [cancel]
     return []
 
 
@@ -1592,6 +1750,12 @@ def short_of(item: dict, now: dt.datetime) -> str:
     разделяет записи, и «заметка · Иван Тестов» читалась бы двумя записями (мелочь проверки к 565783ca). Первое слово
     заметки — имя или фамилия её человека — остаётся с большой. Однострочные строки (`line_of`) не меняются."""
     b, t, today = item["bucket"], item.get("task") or {}, now.date()
+    nest_ = _nested(item)
+    if nest_:  # «внутри «КП Ромашке»: собрать цифры» (вагон B)
+        word = ("под целью «" if nest_["kind"] == "goal" else "внутри «") + _short(nest_.get("title") or "", 30) + "»"
+        return f"{word}: {_short(_lowfirst(str(t.get('title') or item.get('title') or '').strip()), 40)}"
+    if b == "edit":
+        return "правка: " + _short(item.get("reply") or "", 60)
     title = str((item.get("said") if b == "did" else None) or t.get("title") or item.get("title") or item.get("text") or "")
     who = re.match(r"^([^:]{1,40}):", t.get("title") or "")
     if who and b in ("day", "waiting", "owed", "agenda"):
@@ -1799,13 +1963,120 @@ def _auto_client(item: dict, ctx: Ctx) -> dict:
     return {**item, "fields": {**f, "project_id": client}, "client_auto": client}
 
 
-def apply(conn, user: str, items: list[dict], ref: str, source: str, ctx: Ctx) -> list[dict]:
-    """Корзины → записи в Делах, каждая своей точкой сохранения: упавшая не роняет соседей. У каждой — строка и кнопки."""
+def _create_order(items: list[dict]) -> list[int]:
+    """Порядок записи: родитель «^k» — раньше своих детей («сначала X, потом Y» — Y раньше X), остальное — как сказано."""
+    order: list[int] = []
+    left = list(range(len(items)))
+    while left:
+        ready = [i for i in left if not ((items[i].get("nest") or {}).get("kind") == "new"
+                                         and items[i]["nest"].get("at") in left)]
+        ready = ready or left[:1]  # по кругу (from_model такого не отдаёт) — как сказано
+        for i in ready:
+            order.append(i)
+            left.remove(i)
+    return order
+
+
+def _unnest(item: dict, ctx: Ctx, error: str) -> dict:
+    """Родитель «^k» не лёг (ошибка записи) — дело ложится отдельно, почему — в строке."""
+    nest_ = item.get("nest") or {}
+    fields = {k: v for k, v in (item.get("fields") or {}).items() if k != "why_id"}
+    item = {**item, "fields": fields, "nest": {"kind": "none", "said": nest_.get("said") or "", "error": error, "cands": []}}
+    if item["bucket"] == "inside":
+        item["bucket"] = "back"
+        fields["back_on"] = default_back(ctx.today).isoformat()
+    return item
+
+
+HINT_PREPS = (("для",), ("к",), ("ко",), ("по",), ("в", "рамках"))
+
+
+def _tail_hint(conn, user: str, item: dict, ctx: Ctx) -> dict | None:
+    """Правило положило дело плоско, а хвост названия — «для / к / по / в рамках X» — уверенно узнаётся среди открытых
+    дел (nest.rank): кнопка «В «X»» вместо одной из кнопок (вагон B, PLAN §2.4). «Купить подарок для Пети» — дела «Петя»
+    нет, кнопки нет. Имена людей и клиентов из хвоста не ищем: «… для Ивана» — человек дела, «в рамках проекта Ромашка» —
+    его клиент, а не родитель (иначе любое дело Ромашки стало бы «уверенным»)."""
+    from . import nest
+
+    tt = tokens(item.get("title") or "")
+    for a in range(len(tt) - 1, 0, -1):
+        prep = next((p for p in HINT_PREPS if _match(tt, a, p)), None)
+        if not prep:
+            continue
+        said = " ".join(t["n"] for t in tt[a + len(prep):] if not ctx.person([t["n"]]) and not ctx.project([t["n"]]))
+        got = nest.rank(conn, user, said, (item.get("task") or {}).get("project_id"),
+                        (item.get("task") or {}).get("person_id"), str(item["task"]["id"]))
+        return {"id": got["why_id"], "num": got["num"], "title": got["title"], "word": "В"} if got["sure"] else None
+    return None
+
+
+def _person_twin(conn, user: str, item: dict, ctx: Ctx) -> dict | None:
+    """У человека дела уже есть открытое дело с теми же основами слов, не встречное (отладка 16.10, запись 5: дубль к
+    делу того же человека): кнопка «Внутрь «…»» — новое встанет шагом внутрь того, проект и место — от него. Имя самого
+    человека основой не считается: «Позвонить Ивану» и «Отправить Ивану договор» — не дубли. Решает nest.rank (только
+    дела этого человека)."""
+    from . import nest
+
+    t = item.get("task") or {}
+    pid = t.get("person_id")
+    if not pid:
+        return None
+    p = _person_row(conn, pid)
+    names = [w for w in people.words(f"{p['name']} {p.get('short') or ''}") if len(w) >= 3] if p else []
+    said = " ".join(w for w in people.words(t.get("title") or "") if not any(people.same(w, x) for x in names))
+    # Встречные дела — не дубли (правило 17): «Ждёт от тебя Иван: прислать модель» и «Иван: прислать модель» (жду от
+    # него) — сквозной захвата, replay 16.10: такие пары давали «Внутрь «…»». «Позвонить Ольге» (ждёт от тебя) и
+    # «позвонить Ольге на неделе» (своё) — один звонок: дубль.
+    got = nest.rank(conn, user, said, None, None, str(t["id"]), only_person=str(pid), waiting=t.get("ball") == "waiting")
+    if not got["sure"]:
+        return None
+    return {"id": got["why_id"], "num": got["num"], "title": got["title"], "word": "Внутрь"}
+
+
+def _number_kids(conn, items: list[dict]) -> None:
+    """Два и больше новых дела внутри одного родителя из одной фразы — места 1, 2, 3… по порядку (как «Раньше» /
+    «Позже»): заведены одним запросом с одним временем, и без номеров порядок держался бы только на номерах дел."""
     from . import store
 
-    out = []
-    for i, item in enumerate(items):
-        item = dict(item)
+    by: dict[str, int] = {}
+    for x in items:
+        tid, why = (x.get("task") or {}).get("id"), (x.get("fields") or {}).get("why_id")
+        if tid and why and (x.get("nest") or {}).get("kind") in ("task", "new"):
+            by[str(why)] = by.get(str(why), 0) + 1
+    for why, n in by.items():
+        if n < 2:
+            continue
+        try:
+            with conn.transaction():
+                kids = conn.execute(
+                    "SELECT t.id, t.pos FROM tasks.krug k JOIN tasks.tasks t ON t.id = k.id WHERE k.why_id = %s "
+                    "AND k.kind = 'task' AND NOT k.goal AND t.status = 'open' ORDER BY t.pos NULLS LAST, t.created_at, t.num",
+                    (why,)).fetchall()
+                for k, row in enumerate(kids, 1):
+                    if row["pos"] != k:
+                        store._update(conn, "tasks.tasks", {"id": row["id"]}, {"pos": k})
+        except Exception:  # noqa: BLE001 — места — удобство, не запись: дела уже легли
+            log.exception("захват: места дел внутри")
+
+
+def apply(conn, user: str, items: list[dict], ref: str, source: str, ctx: Ctx, hints: bool = False) -> list[dict]:
+    """Корзины → записи в Делах, каждая своей точкой сохранения: упавшая не роняет соседей. У каждой — строка и кнопки.
+    Родитель «^k» ложится раньше своих детей (вагон B); не лёг — дети отдельно. hints — фраза разложена правилом: у
+    плоского дела ищется «В «X»» по хвосту названия (`_tail_hint`); «Внутрь «…»» к похожему делу того же человека —
+    у любого плоского дела (`_person_twin`)."""
+    from . import store
+
+    items = [dict(x) for x in items]
+    out: list = [None] * len(items)
+    laid: dict[int, str] = {}
+    for i in _create_order(items):
+        item = items[i]
+        nest_ = item.get("nest") or {}
+        if nest_.get("kind") == "new":
+            if nest_.get("at") not in laid:
+                item = _unnest(item, ctx, f"«{nest_.get('title') or ''}» не легло — завёл отдельно")
+            else:
+                item["nest"] = {**nest_, "after": nest_["at"] > i}
         try:
             with conn.transaction():
                 item = _auto_client(item, ctx)
@@ -1816,9 +2087,21 @@ def apply(conn, user: str, items: list[dict], ref: str, source: str, ctx: Ctx) -
             item = {"bucket": "error", "error": str(e), "title": item.get("title") or item.get("text"), "was": item}
         except store.PERMANENT as e:
             item = {"bucket": "error", "error": store._db_error(e), "title": item.get("title") or item.get("text"), "was": item}
+        if item["bucket"] in DEED_BUCKETS and (item.get("task") or {}).get("id"):
+            laid[i] = str(item["task"]["id"])
+            if not (item.get("fields") or {}).get("why_id"):
+                try:
+                    with conn.transaction():
+                        hint = (_tail_hint(conn, user, item, ctx) if hints else None) or _person_twin(conn, user, item, ctx)
+                    if hint:
+                        item["into_hint"] = hint
+                except Exception:  # noqa: BLE001 — кнопка-подсказка, не запись: дело уже легло
+                    log.exception("захват: подсказка «В «…»»")
+        out[i] = item
+    _number_kids(conn, out)
+    for item in out:
         item["line"] = line_of(conn, item, ctx.now)
         item["chips"] = chips_of(item) if item["bucket"] != "error" else []
-        out.append(item)
     return out
 
 
@@ -1828,6 +2111,11 @@ def head_of(items: list[dict], now: dt.datetime) -> str:
         return "Ничего не разложил"
     if len(items) == 1:
         return items[0]["line"]
+    # Все легли внутрь одного дела (вагон B, §2.4): «Завёл 3 внутри «КП Ромашке»: собрать цифры, согласовать, отправить».
+    nests = [_nested(x) for x in items]
+    if all(nests) and len({n.get("why_id") for n in nests}) == 1 and nests[0]["kind"] != "new":
+        whats = ", ".join(_short(_lowfirst(str(x["task"].get("title") or "")), 40) for x in items)
+        return f"Завёл {len(items)} внутри «{_short(nests[0].get('title') or '', 60)}»: {whats}"
     return f"Разложил {len(items)}: " + " · ".join(short_of(x, now) for x in items)
 
 
@@ -1913,7 +2201,7 @@ def op_capture_say(conn, user, op):
         WAKE.set()
         row = conn.execute("SELECT * FROM tasks.dictations WHERE id = %s", (did_,)).fetchone()
         return {"capture": _result(row)}
-    items = apply(conn, user, got["items"], ref, source, ctx)
+    items = apply(conn, user, got["items"], ref, source, ctx, hints=True)
     res = {"by": "rule", "form": got["form"], "ms": int((time.monotonic() - started) * 1000),
            "head": head_of(items, now), "items": items, "from": frm, "at": now.isoformat()}
     conn.execute("UPDATE tasks.dictations SET capture = 'rule', capture_result = %s, capture_from = %s, capture_hint = %s "
@@ -1980,6 +2268,64 @@ def _undo_all(conn, user, item: dict) -> None:
             log.info("захват: отмена %s — %s", o.get("op"), e)
 
 
+def _bucket_of(t: dict, today: dt.date) -> str:
+    """Корзина дела по его полям — после «Вынуть» / «В «X»» (дело могло получить срок родителя или потерять его)."""
+    if t.get("kind") == "remind":
+        return "remind" if t.get("remind_at") else "place"
+    due = str(t.get("due_date") or "")[:10]
+    if due and (t.get("remind_at") or t.get("remind_place")):
+        return "task_remind"
+    if str(t.get("focus_on") or "")[:10] == today.isoformat():
+        return "now"
+    if due:
+        return "today" if due == today.isoformat() else "day"
+    if t.get("ball") in ("waiting", "agenda"):
+        return t["ball"]
+    if t.get("owed"):
+        return "owed"
+    return "back" if t.get("back_on") else "inside"
+
+
+def _move_nest(conn, user, item: dict, to: str, op: dict, ctx: Ctx) -> dict:
+    """«Вынуть» / «Отдельно» (out) — why_id null; дело без срока и без «потом» — «потом» (вернётся само, а не потеряется
+    плоским без дня). «В «X»», «Другое ▾», «Вложить в… ▾» (into с at, into:<id>) — why_id X (nest.resolve: своё, открытое,
+    не напоминание, без петли) и срок от X, если своего нет (nest.step_due; «потом» тогда снимается) — §2.4."""
+    from . import nest, store
+
+    tid = str(item["task"]["id"])
+    row = store.task_by(conn, tid)
+    nest_ = item.get("nest") or {}
+    pool = [*(nest_.get("cands") or []), *([item["into_hint"]] if item.get("into_hint") else [])]
+    if to == "out":
+        if not row.get("why_id") and not row.get("why_goal"):
+            raise CaptureError("дело и так само по себе")
+        set_ = {"why_id": None}
+        if not row.get("due_date") and not row.get("back_on") and str(row.get("focus_on") or "")[:10] != ctx.today.isoformat():
+            set_["back_on"] = default_back(ctx.today).isoformat()
+        item = _set_task(conn, user, item, set_)
+        was = {"id": nest_.get("why_id"), "num": nest_.get("num"), "title": nest_.get("title")} if nest_.get("why_id") else None
+        cands = [c for c in [was, *pool] if c and c.get("id")]
+        return {**item, "bucket": _bucket_of(item["task"], ctx.today), "into_hint": None,
+                "nest": {"kind": "out", "said": nest_.get("said") or "", "cands": cands} if cands else None}
+    target = str(op.get("at") or "") if to == "into" else to[len("into:"):]
+    par = store.task_by(conn, target) if target else None
+    if not par:
+        raise CaptureError("такого дела нет или оно не видно — куда класть, не понял")
+    got = nest.resolve(conn, user, f"#{par['num']}", [], {"id": tid})
+    if not got.get("sure"):
+        raise CaptureError(got.get("error") or "туда не положить")
+    set_ = {"why_id": got["why_id"]}
+    if not row.get("due_date") and nest.deed(par):
+        due = nest.step_due(par, ctx.today)
+        if due:
+            set_.update(due_date=due.isoformat(), back_on=None, back_said=None)
+    item = _set_task(conn, user, item, set_)
+    cands = [c for c in pool if c.get("id") and str(c["id"]) != str(par["id"])]
+    return {**item, "bucket": _bucket_of(item["task"], ctx.today), "into_hint": None,
+            "nest": {"kind": got["kind"], "why_id": str(par["id"]), "num": par["num"], "title": par["title"],
+                     "said": nest_.get("said") or "", "cands": cands}}
+
+
 def _move(conn, user, item: dict, to: str, op: dict, ctx: Ctx, ref: str, source: str, i: int) -> dict:
     from . import did, store
 
@@ -1999,6 +2345,8 @@ def _move(conn, user, item: dict, to: str, op: dict, ctx: Ctx, ref: str, source:
                 raise CaptureError("дело уже " + ("сделано" if fresh["status"] == "done" else "отменено")
                                    + " — поправь в самом деле")
         clear_back = {"back_on": None, "back_said": None}
+        if to in ("out", "into") or to.startswith("into:"):
+            return _move_nest(conn, user, item, to, op, ctx)
         if to == "no_client":  # клиента поставило правило по человеку (запись 5) — снять одним касанием
             if not item.get("client_auto"):
                 raise CaptureError("клиента ставил не захват — поправь в самом деле")
@@ -2258,20 +2606,189 @@ def _model_date(s: str, today: dt.date) -> dt.date | None:
     return d if today < d <= today + dt.timedelta(days=366) else None
 
 
+NEAR_MAX = 4  # «Другое ▾» и «Вложить в… ▾» — до четырёх дел
+
+
+def _near(conn, user: str, project_id=None, person_id=None, exclude: set | None = None, limit: int = NEAR_MAX) -> list[dict]:
+    """Свои открытые дела того же проекта (нет проекта — того же человека), свежие первыми: варианты «Вложить в… ▾»,
+    когда родителя по словам не нашли, и добор «Другое ▾» к похожим (nest.rank). Не цели и не напоминания."""
+    if (not project_id and not person_id) or limit <= 0:
+        return []
+    col, val = ("project_id", project_id) if project_id else ("person_id", person_id)
+    rows = conn.execute(
+        f"SELECT id, num, title FROM tasks.v_tasks WHERE owner_id = %s AND status = 'open' AND kind = 'task' "
+        f"AND NOT goal AND {col} = %s ORDER BY created_at DESC, num DESC LIMIT %s",
+        (user, str(val), limit + len(exclude or ()))).fetchall()
+    out = [{"id": str(r["id"]), "num": r["num"], "title": r["title"]} for r in rows if str(r["id"]) not in (exclude or set())]
+    return out[:limit]
+
+
+def _nest_of(inside: str, made: list[str], n: int, fields: dict, ctx: Ctx) -> dict | None:
+    """inside дела из ответа модели → куда класть (nest.resolve глазами говорящего): {"kind": task | goal | new | ask
+    | none | direction, "said", …}; «» и «-» — None (само по себе). У уверенного — why_id, title, num и cands («Другое ▾»:
+    другие похожие и дела того же проекта); неясно — cands (два-три похожих, кнопки «В «…»»); не нашёл — error и cands
+    того же проекта («Вложить в… ▾»)."""
+    from . import nest
+
+    got = nest.resolve(ctx.conn, ctx.user, inside, made,
+                       {"id": made[n], "project_id": fields.get("project_id"), "person_id": fields.get("person_id")})
+    kind = got.get("kind")
+    if got.get("sure"):
+        if kind in ("keep", "out"):
+            return None
+        if kind == "direction":
+            return {"kind": "direction", "said": inside, "directions": got["directions"]}
+        if kind == "new":
+            return {"kind": "new", "said": inside, "why_id": got["why_id"]}
+        others = [c for c in got.get("cands") or [] if c["id"] != got["why_id"]]
+        more = _near(ctx.conn, ctx.user, fields.get("project_id"), fields.get("person_id"),
+                     {got["why_id"], *(c["id"] for c in others)}, NEAR_MAX - len(others))
+        return {"kind": kind, "said": inside, "why_id": got["why_id"], "num": got.get("num"), "title": got.get("title"),
+                "cands": [{k: c[k] for k in ("id", "num", "title")} for c in others + more][:NEAR_MAX]}
+    if got.get("cands"):
+        return {"kind": "ask", "said": inside, "cands": [{k: c[k] for k in ("id", "num", "title")} for c in got["cands"]]}
+    near = _near(ctx.conn, ctx.user, fields.get("project_id"), fields.get("person_id"))
+    return {"kind": "none", "said": inside, "error": None if kind == "words" else got.get("error"), "cands": near}
+
+
+def _model_task(s: dict, par: dict | None, ctx: Ctx, places: list[str]) -> dict:
+    """Одно дело ответа модели → корзина. par — родитель (строка дела или поля нового родителя этого же ответа): сначала
+    nest_fill, потом корзина (правило 27; вагон B). Без родителя — прежние корзины, слово в слово."""
+    t, title, ball, today = s["t"], s["title"], s["ball"], ctx.today
+    fields = dict(s["fields"])
+    nest_ = s.get("nest")
+    if t.get("done"):
+        return {"bucket": "did", "title": title, "said": title,
+                "fields": {"ball": "waiting" if ball == "waiting" else "mine",
+                           **{k: v for k, v in fields.items() if k in ("person_id", "project_id", "notes")}}}
+    fields["ball"] = ball
+    due = (t.get("due") or "").strip()
+    due_d = None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", due):
+        try:
+            due_d = dt.date.fromisoformat(due)
+        except ValueError:
+            due_d = None
+    due_time = remind.norm_time(t.get("due_time")) if due_d else None
+    at = remind.local_iso(t.get("remind_at"))
+    said_place = (t.get("remind_place") or "").strip()
+    place = "" if at else remind.match_place(said_place, places)
+    if nest_ and nest_["kind"] == "direction":
+        fields["directions"] = nest_["directions"]
+    if par is not None and nest_ and nest_["kind"] in ("task", "goal", "new"):
+        return _nested_task(title, fields, nest_, par, t, ball, due_d, due_time, at, place, said_place, today)
+    if at or place:
+        at_t = remind.at_of(at) if at else None
+        at_d = at_t.date() if at_t else None
+        # Свой срок — только другой день или другой час, чем у напоминания. «в 12 … не забыть»: модель ставит и
+        # срок с часом 12:00, и напоминание в 12:00 — это один миг, то есть напоминание, а не дело в куче
+        # (сквозной тест 15.10.2026: легло «Дело на завтра … напомню завтра в 12:00»).
+        same = bool(at_t) and due_d == at_d and (not due_time or due_time == at_t.strftime("%H:%M"))
+        own_due = due_d and not same
+        if place and not own_due:
+            return _with_nest({"bucket": "place", "title": title,
+                               "fields": {**fields, "kind": "remind", "remind_place": place}}, nest_)
+        if at and not own_due:
+            return _with_nest({"bucket": "remind", "title": title,
+                               "fields": {**fields, "kind": "remind", "remind_at": at}}, nest_)
+        fields.update({"remind_at": at} if at else {"remind_place": place})
+        fields["due_date"] = due_d.isoformat()
+        if due_time:
+            fields["due_time"] = due_time
+        return _with_nest({"bucket": "task_remind", "title": title, "fields": fields}, nest_)
+    if said_place:
+        fields["notes"] = (fields.get("notes", "") + "\n" + remind.place_note(said_place)).strip()
+    if t.get("now") and ball in ("mine", "owed"):
+        return _with_nest({"bucket": "now", "title": title, "fields": {**fields, "focus_on": today.isoformat()}}, nest_)
+    if due_d:
+        fields["due_date"] = due_d.isoformat()
+        if due_time:
+            fields["due_time"] = due_time
+        return _with_nest({"bucket": "today" if due_d == today else "day", "title": title, "fields": fields}, nest_)
+    if ball in ("waiting", "owed", "agenda"):
+        return _with_nest({"bucket": ball, "title": title, "fields": fields}, nest_)
+    back = _model_date(t.get("back") or "", today) or default_back(today, "")
+    return _with_nest({"bucket": "back", "title": title, "fields": {**fields, "back_on": back.isoformat()}}, nest_)
+
+
+def _with_nest(item: dict, nest_: dict | None) -> dict:
+    """Дело стоит отдельно, хоть inside и было сказано: неясно (ask) или не нашёл (none) — для строки и кнопок."""
+    if nest_ and nest_["kind"] in ("ask", "none"):
+        item["nest"] = nest_
+    return item
+
+
+def _nested_task(title: str, fields: dict, nest_: dict, par: dict, t: dict, ball: str, due_d, due_time, at: str,
+                 place: str, said_place: str, today: dt.date) -> dict:
+    """Дело внутри родителя: «Зачем» — родитель, сказанное — своё (срок, время, «Сейчас», напоминание), остальное —
+    nest_fill (проект, сделка, человек, срок родителя), и только потом корзина. Напоминание — дело с напоминанием
+    внутри: день — день напоминания (сказан), у места — срок родителя. Своего срока нет и у родителя нет — корзина
+    inside («потом» не ставим: дело вернётся с родителем); «потом» модель назвала сама — так и есть."""
+    from . import nest
+
+    fields["why_id"] = nest_["why_id"]
+    fields.pop("why_auto", None)
+    if due_d:
+        fields["due_date"] = due_d.isoformat()
+        if due_time:
+            fields["due_time"] = due_time
+    if at or place:
+        if at:
+            fields["remind_at"] = at
+            if not due_d:
+                fields["due_date"] = remind.at_of(at).date().isoformat()
+        else:
+            fields["remind_place"] = place
+        nest.nest_fill(fields, par, today)
+        return {"bucket": "task_remind" if fields.get("due_date") else "inside", "title": title, "fields": fields,
+                "nest": nest_}
+    if said_place:
+        fields["notes"] = (fields.get("notes", "") + "\n" + remind.place_note(said_place)).strip()
+    now = bool(t.get("now")) and ball in ("mine", "owed")
+    if now:
+        fields["focus_on"] = today.isoformat()
+    nest.nest_fill(fields, par, today)
+    if now:
+        bucket = "now"
+    elif fields.get("due_date"):
+        bucket = "today" if str(fields["due_date"])[:10] == today.isoformat() else "day"
+    elif ball in ("waiting", "owed", "agenda"):
+        bucket = ball
+    else:
+        back = _model_date(t.get("back") or "", today)
+        if back:
+            fields["back_on"] = back.isoformat()
+        bucket = "back" if back else "inside"
+    return {"bucket": bucket, "title": title, "fields": fields, "nest": nest_}
+
+
 def from_model(data: dict, index: dict, text: str, ctx: Ctx, places: list[str], defaults: dict | None = None) -> list[dict]:
     """Ответ модели → корзины. Корзину выбирает код по полям, не модель (spec-0 §2.2):
     done — сделано; напоминание без своего срока (или срок — день напоминания без часа) — remind; напоминание и свой
     срок — дело с напоминанием; now — «Сейчас»; срок — на день; waiting / owed / agenda без срока — свои группы;
-    остальное — «потом» (back из слов модели или правилом). Идея без слова «идея» — дело «потом»."""
+    остальное — «потом» (back из слов модели или правилом). Идея без слова «идея» — дело «потом».
+
+    Вложенность голосом (вагон B, 16.10.2026; PLAN §2.1–2.4): inside дела — «» (само по себе), «^k» (k-е дело этого же
+    ответа — новый родитель) или слова родителя — решает nest.resolve (одно место с строкой Claude). Сначала родитель и
+    nest_fill (проект, сделка, человек и срок от родителя; названное сильнее), потом корзина: «потом» не перебивает
+    срок родителя, дело внутри без своего срока — корзина inside (вернётся с родителем, не своей строкой «Вернулось»).
+    Напоминание с родителем — дело с напоминанием внутри (task_remind): само напоминание не вкладывается. Родитель
+    словами неясен (два похожих) — дело стоит отдельно, кнопки «В «A»» / «В «B»»; не нашёл — отдельно, «Вложить в…»."""
     from . import parse
 
     items: list[dict] = []
     today = ctx.today
     defaults = defaults or {}
     idea_said = bool(IDEA_WORD.search(text or ""))
-    for t in data.get("tasks") or []:
-        title = " ".join(str(t.get("title") or "").split())[:500]
+    tasks_in = [t for t in data.get("tasks") or [] if isinstance(t, dict)]
+    titles = [" ".join(str(t.get("title") or "").split())[:500] for t in tasks_in]
+    # Свои id новым заранее: «^k» ссылается на новое из этого же ответа, родитель ложится раньше детей (apply).
+    made = [str(uuid.uuid4()) if title else "" for title in titles]
+    specs: list[dict | None] = []
+    for n, t in enumerate(tasks_in):
+        title = titles[n]
         if not title:
+            specs.append(None)
             continue
         fields: dict = {}
         pid = parse._one(index, "projects", t.get("project") or "") or defaults.get("project_id")
@@ -2293,60 +2810,59 @@ def from_model(data: dict, index: dict, text: str, ctx: Ctx, places: list[str], 
             fields["estimate_min"] = int(t["estimate_min"])
         if isinstance(t.get("goal"), int) and t["goal"] > 0:
             fields["why_auto"] = t["goal"]
-        if t.get("done"):
-            items.append({"bucket": "did", "title": title, "said": title,
-                          "fields": {"ball": "waiting" if ball == "waiting" else "mine",
-                                     **{k: v for k, v in fields.items() if k in ("person_id", "project_id", "notes")}}})
-            continue
-        fields["ball"] = ball
-        due = (t.get("due") or "").strip()
-        due_d = None
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", due):
-            try:
-                due_d = dt.date.fromisoformat(due)
-            except ValueError:
-                due_d = None
-        due_time = remind.norm_time(t.get("due_time")) if due_d else None
-        at = remind.local_iso(t.get("remind_at"))
-        said_place = (t.get("remind_place") or "").strip()
-        place = "" if at else remind.match_place(said_place, places)
-        if at or place:
-            at_t = remind.at_of(at) if at else None
-            at_d = at_t.date() if at_t else None
-            # Свой срок — только другой день или другой час, чем у напоминания. «в 12 … не забыть»: модель ставит и
-            # срок с часом 12:00, и напоминание в 12:00 — это один миг, то есть напоминание, а не дело в куче
-            # (сквозной тест 15.10.2026: легло «Дело на завтра … напомню завтра в 12:00»).
-            same = bool(at_t) and due_d == at_d and (not due_time or due_time == at_t.strftime("%H:%M"))
-            own_due = due_d and not same
-            if place and not own_due:
-                items.append({"bucket": "place", "title": title,
-                              "fields": {**fields, "kind": "remind", "remind_place": place}})
-                continue
-            if at and not own_due:
-                items.append({"bucket": "remind", "title": title, "fields": {**fields, "kind": "remind", "remind_at": at}})
-                continue
-            fields.update({"remind_at": at} if at else {"remind_place": place})
-            fields["due_date"] = due_d.isoformat()
-            if due_time:
-                fields["due_time"] = due_time
-            items.append({"bucket": "task_remind", "title": title, "fields": fields})
-            continue
-        if said_place:
-            fields["notes"] = (fields.get("notes", "") + "\n" + remind.place_note(said_place)).strip()
-        if t.get("now") and ball in ("mine", "owed"):
-            items.append({"bucket": "now", "title": title, "fields": {**fields, "focus_on": today.isoformat()}})
-            continue
-        if due_d:
-            fields["due_date"] = due_d.isoformat()
-            if due_time:
-                fields["due_time"] = due_time
-            items.append({"bucket": "today" if due_d == today else "day", "title": title, "fields": fields})
-            continue
-        if ball in ("waiting", "owed", "agenda"):
-            items.append({"bucket": ball, "title": title, "fields": fields})
-            continue
-        back = _model_date(t.get("back") or "", today) or default_back(today, "")
-        items.append({"bucket": "back", "title": title, "fields": {**fields, "back_on": back.isoformat()}})
+        spec = {"n": n, "t": t, "title": title, "fields": fields, "ball": ball, "person": person}
+        if not t.get("done"):
+            inside = " ".join(str(t.get("inside") or "").split())
+            if inside:
+                spec["nest"] = _nest_of(inside, made, n, fields, ctx)
+        specs.append(spec)
+    # «^k» — номер дела ответа: родитель должен быть делом этого же ответа (не сделанным и не пустым).
+    for s in specs:
+        nest_ = (s or {}).get("nest")
+        if nest_ and nest_["kind"] == "new":
+            k = made.index(nest_["why_id"]) if nest_["why_id"] in made else -1
+            par = specs[k] if 0 <= k < len(specs) else None
+            if not par or par["t"].get("done") or k == s["n"]:
+                s["nest"] = {"kind": "none", "said": nest_["said"], "error": f"«{nest_['said']}»: в этом ответе нет "
+                                                                              "такого дела — завёл отдельно"}
+            else:
+                nest_["at"], nest_["title"] = k, par["title"]
+    # Родители — раньше детей (сначала nest_fill от родителя, потом корзина ребёнка); по кругу — отдельно.
+    built: dict[int, dict] = {}
+    waiting = [s for s in specs if s]
+    while waiting:
+        ready = [s for s in waiting if not ((s.get("nest") or {}).get("kind") == "new" and s["nest"]["at"] not in built)]
+        if not ready:
+            s = waiting[0]
+            s["nest"] = {"kind": "none", "said": s["nest"]["said"], "error": "«внутри» по кругу — завёл отдельно"}
+            ready = [s]
+        for s in ready:
+            par = None
+            nest_ = s.get("nest") or {}
+            if nest_.get("kind") == "new":
+                pb = built[nest_["at"]]
+                if pb["bucket"] not in DEED_BUCKETS or (pb.get("fields") or {}).get("kind") == "remind":
+                    s["nest"] = {"kind": "none", "said": nest_["said"],
+                                 "error": f"«{nest_['title']}» — напоминание, в него не вкладывают — завёл отдельно"}
+                else:
+                    pb.setdefault("fields", {})["id"] = made[nest_["at"]]
+                    par = pb["fields"]
+            elif nest_.get("kind") in ("task", "goal"):
+                from . import store
+
+                par = store.task_by(ctx.conn, nest_["why_id"])
+                if not par:
+                    s["nest"] = {"kind": "none", "said": nest_["said"], "error": "родителя не видно — завёл отдельно"}
+            built[s["n"]] = _model_task(s, par, ctx, places)
+            waiting.remove(s)
+    at_item: dict[int, int] = {}
+    for n in sorted(built):
+        at_item[n] = len(items)
+        items.append(built[n])
+    for x in items:
+        nest_ = x.get("nest")
+        if nest_ and nest_.get("kind") == "new":
+            nest_["at"] = at_item[nest_["at"]]
     # Заметка = содержание дела (отладка 16.10.2026, записи 6–7; по замечаниям проверяющего, eve-review.md): «сказать
     # Ивану, что Ольга уезжает на следующей неделе» модель клала делом у Ивана (верно) И заметкой «Ольга уезжает на
     # следующей неделе» у Ольги, и Саша прочёл это как «записал в карточку CRM, а не дело». Такую заметку не кладём, только
@@ -2555,13 +3071,93 @@ def _retry_later(url: str, user: str, ref: str, tries: int, err: str) -> None:
                      "WHERE id = %s AND capture = 'pending'", (tries, pause, err[:200], REF_PREFIX + ref))
 
 
-def _tick_one(url: str, r: dict, key: str, proxy: str | None, ask_fn) -> None:
+def _last_capture(url: str, user: str, ref: str, at: dt.datetime) -> list[dict]:
+    """Что этот человек сказал захвату прямо перед этим (не раньше UNDO_MIN минут до этой фразы) — одной репликой
+    разговора для строки Claude: «вынь это из сверки» сразу после «позвонить в банк» — «это» и есть то дело
+    (`history.ids` — правило 33): заведённое и поправленное той фразой, кроме отменённого."""
+    with db.session(url, user, via="capture") as conn:
+        row = conn.execute(
+            "SELECT text, capture_result FROM tasks.dictations WHERE owner_id = %s AND id LIKE %s AND id <> %s "
+            "AND capture IN ('rule', 'model') AND at <= %s AND at > %s - make_interval(mins => %s) ORDER BY at DESC LIMIT 1",
+            (user, REF_PREFIX + "%", REF_PREFIX + ref, at, at, UNDO_MIN)).fetchone()
+    if not row:
+        return []
+    res = row["capture_result"] or {}
+    ids: list[str] = []
+    for x in res.get("items") or []:
+        if x.get("bucket") == "cancelled":
+            continue
+        got = [(x.get("task") or {}).get("id"), *[c.get("id") for c in x.get("changed") or []], *(x.get("task_ids") or [])]
+        ids += [str(i) for i in got if i and str(i) not in ids]
+    if not ids:
+        return []
+    return [{"said": row["text"], "reply": res.get("head") or "", "done": res.get("head") or "", "ids": ids[:20]}]
+
+
+EDIT_BY = "claude"  # итог захвата — строкой Claude (правка существующего: «вынь …», «положи X в Y»)
+
+
+def _edit_by_ask(url: str, r: dict, key: str, proxy: str | None, edit_fn, first: bool) -> bool:
+    """«Вынь …», «положи X в Y», «это шаг к …» из «Д», «сказать», «З» (вагон B, PLAN §2.1): правка существующего — не
+    новое дело. Разбирает строка Claude (ask.run) со scope «Сегодня»: в «ДРУГИХ» видны все свои открытые дела с номерами,
+    «это» — сказанное захвату прямо перед этим (`_last_capture`). Итог — в ту же наговорку: строка — ответ сервера и
+    Claude («Вынул «…» из «…».»), «Отменить» — «как было» всех правок. Claude решил, что это новые дела (route new), — False:
+    дальше обычная модель захвата (разбор строкой веба здесь не нужен — у наговорки свой ref и свои кнопки)."""
+    from . import ask, store
+
+    ref, user = r["id"][len(REF_PREFIX):], r["owner_id"]
+    if first and edit_fn is None and key and not guard.blocked(url, "ask"):
+        guard.quota(url, user, "ask")  # не-владельцу — одна правка словами суточного предела на фразу
+    scope = {"title": "Сегодня", "capture": ref}
+    hist = _last_capture(url, user, ref, r["at"])
+    if hist:
+        scope["history"] = hist
+    try:
+        out = ask.run(url, user, r["text"], scope, key, proxy, via="capture", ask_fn=edit_fn)
+    except ask.AskError as e:
+        raise CaptureError(str(e)) from None
+    if out.get("route") == "new":
+        return False
+    undo: list[dict] = []
+    for c in out.get("changed") or []:
+        if c.get("before"):
+            undo.append({"op": "task.set", "id": c["id"], "set": c["before"]})
+        if c.get("status"):
+            undo.append({"op": {"open": "task.reopen", "done": "task.done", "cancelled": "task.cancel"}[c["status"][0]],
+                         "id": c["id"]})
+    undo += [{"op": "task.cancel", "id": str(t["id"])} for t in out.get("tasks") or []]
+    errs = [str(e) for e in out.get("errors") or [] if e]
+    line = " ".join((out.get("reply") or "").split()) or ("Ничего не поправил" if not undo else "Поправил")
+    if errs:
+        line += " Не вышло: " + errs[0]
+    item = {"bucket": "edit", "said": r["text"], "reply": _short(line, 300),
+            "changed": [{k: c.get(k) for k in ("id", "num", "title")} for c in out.get("changed") or []],
+            "task_ids": [str(t["id"]) for t in out.get("tasks") or []], "undo": undo, "errors": errs,
+            "answers": out.get("answers") or []}
+    item["line"] = item["reply"]
+    item["chips"] = chips_of(item)
+    res = {"by": EDIT_BY, "head": item["line"], "items": [item], "at": r["at"].astimezone(MSK).isoformat()}
+    with db.session(url, user, via="capture") as conn:
+        conn.execute("UPDATE tasks.dictations SET capture = 'model', capture_result = capture_result || %s WHERE id = %s",
+                     (Jsonb(store.jsonable(res)), r["id"]))
+    log.info("захват — правка строкой Claude: %s → %s", _short(r["text"], 60), _short(line, 80))
+    return True
+
+
+def _tick_one(url: str, r: dict, key: str, proxy: str | None, ask_fn, edit_fn=None) -> None:
     ref = r["id"][len(REF_PREFIX):]
     started = time.monotonic()
     # Предел не-владельцу — один раз на фразу: не на повтор после сбоя сети (tries) и не на наговорку строки веба, которую
     # доразбирает цикл (synced: строка уже взяла правку словами в api.ask_start). «Повторить» обнуляет tries — новый разбор.
     first = not int(r.get("tries") or 0) and not r.get("synced")
     try:
+        # Правка существующего словами вложенности (вагон B): из «Д», «сказать», «З» — строкой Claude, а не моделью
+        # захвата. Строка веба (from web) сюда такие фразы не шлёт: у неё ask.run и так впереди.
+        if r.get("capture_from") != "web":
+            with db.session(url, r["owner_id"], via="capture") as conn:
+                edit = edit_said(r["text"], conn, r["owner_id"])
+            if edit and _edit_by_ask(url, r, key, proxy, edit_fn, first):
+                return
         data, parts, usage = _model_items(url, r["owner_id"], r["text"], r["capture_hint"], key, proxy, ask_fn, r["at"],
                                           quota=first)
         source = "web" if r["capture_from"] == "web" else "voice"
@@ -2589,12 +3185,13 @@ def _tick_one(url: str, r: dict, key: str, proxy: str | None, ask_fn) -> None:
               + (f" (повторял {tries - 1} раза)" if tries > 1 else ""))
 
 
-def tick(url: str, key: str = "", proxy: str | None = None, ask_fn=None, limit: int = 4, workers: int = WORKERS) -> int:
+def tick(url: str, key: str = "", proxy: str | None = None, ask_fn=None, limit: int = 4, workers: int = WORKERS,
+         edit_fn=None) -> int:
     """Фоновый разбор ждущих наговорок (pending): старые первыми, до двух разом. Каждая — модель, раскладка, итог в виде
     capture. Сбой сети, таймаут, 5xx и «перегружен» — наговорка ждёт дальше и повторяется через 5, 15, 45 с; не прошло —
     error словами. Отказ, не JSON, нет ключа — error сразу (текст — в наговорке, «Повторить» и «Дело потом» — кнопками).
     Перезапуск службы посреди разбора безвреден: наговорка так и ждёт и доразберётся в следующий тик. Ответ — сколько
-    взято."""
+    взято. edit_fn(system, message) — подмена Claude строки (правка словами вложенности, `_edit_by_ask`) в тестах."""
     with db.session(url, "system", via="capture") as conn:
         rows = conn.execute("SELECT id, owner_id, text, at, capture_from, capture_hint, "
                             "coalesce((capture_result ->> 'tries')::int, 0) AS tries, "
@@ -2608,10 +3205,10 @@ def tick(url: str, key: str = "", proxy: str | None = None, ask_fn=None, limit: 
         from concurrent.futures import ThreadPoolExecutor
 
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="capture") as pool:
-            list(pool.map(lambda r: _tick_one(url, r, key, proxy, ask_fn), rows))
+            list(pool.map(lambda r: _tick_one(url, r, key, proxy, ask_fn, edit_fn), rows))
     else:
         for r in rows:
-            _tick_one(url, r, key, proxy, ask_fn)
+            _tick_one(url, r, key, proxy, ask_fn, edit_fn)
     return len(rows)
 
 

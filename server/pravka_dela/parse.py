@@ -179,8 +179,50 @@ def ask(cl, system: str, user_text: str) -> dict:
     return data
 
 
+def _insides(data: dict, conn, user: str | None) -> tuple[list[str], dict[int, dict]]:
+    """inside дел ответа (вагон B, 16.10.2026; схема захвата — raznoska-capture.schema.json; общая схема разбора его пока
+    не несёт) → куда класть: тот же nest.resolve, что у строки Claude и захвата. Ответ — свои id новым по порядку (для
+    «^k») и {номер дела: {"why_id"} или {"directions"}}; неясное и ненайденное — само по себе (вопрос кнопками — у
+    захвата, здесь кнопок нет)."""
+    from . import nest
+
+    tasks_in = [t for t in data.get("tasks") or [] if isinstance(t, dict)]
+    made = [str(uuid.uuid4()) if (t.get("title") or "").strip() else "" for t in tasks_in]
+    out: dict[int, dict] = {}
+    if conn is None or not user:
+        return made, out
+    for n, t in enumerate(tasks_in):
+        said = " ".join(str(t.get("inside") or "").split())
+        if not said or not made[n] or t.get("done"):
+            continue
+        got = nest.resolve(conn, user, said, made, {"id": made[n]})
+        if not got.get("sure"):
+            log.info("разбор: «%s» — куда, не понял (%s), само по себе", title_of(t), got.get("error") or "")
+        elif got["kind"] in ("task", "goal", "new") and got.get("why_id"):
+            out[n] = {"why_id": got["why_id"]}
+        elif got["kind"] == "direction":
+            out[n] = {"directions": got["directions"]}
+    return made, out
+
+
+def title_of(t: dict) -> str:
+    return " ".join(str(t.get("title") or "").split())[:60]
+
+
+def _parents_first(ops: list[dict]) -> list[dict]:
+    """task.create с why_id на новое из этой же пачки — после него (по кругу — как есть: база откажет словами)."""
+    left, out, ids = list(ops), [], {o["task"].get("id") for o in ops if o["task"].get("id")}
+    while left:
+        ready = [o for o in left if o["task"].get("why_id") not in ids or o["task"]["why_id"] in {x["task"].get("id") for x in out}]
+        ready = ready or left[:1]
+        for o in ready:
+            out.append(o)
+            left.remove(o)
+    return out
+
+
 def to_ops(data: dict, index: dict, defaults: dict, source: str, places: list[str] | None = None,
-           ref: str | None = None, client_of=None) -> list[dict]:
+           ref: str | None = None, client_of=None, conn=None, user: str | None = None) -> list[dict]:
     """Ответ Claude — в операции Дел. Имена — в id по справочнику; не нашлось — пусто.
 
     Напоминание — как у телефона (parseTasksDela): время — местное «ГГГГ-ММ-ДД ЧЧ:ММ» по
@@ -188,14 +230,21 @@ def to_ops(data: dict, index: dict, defaults: dict, source: str, places: list[st
     ложится строкой в заметки дела. ref — метка наговорки (source_ref дел, у заметок — ref:номер),
     по ней «Новое» показывает, что из сказанного куда попало. client_of(person_id) — клиент дела по
     человеку (`people.task_client`, отладка 16.10.2026, запись 5): дело без проекта, цели и сделки
-    встаёт к единственному клиенту своего человека, как в захвате.
+    встаёт к единственному клиенту своего человека, как в захвате. conn и user — inside дел (вагон B):
+    родитель — nest.resolve глазами говорящего, «^k» — новое из этого же ответа (родители — первыми);
+    поля от родителя дополнит store.op_task_create (nest.nest_fill).
     """
     ops = []
-    for t in data.get("tasks") or []:
+    made, inside = _insides(data, conn, user)
+    parents = {v["why_id"] for v in inside.values() if v.get("why_id")}
+    for n, t in enumerate(x for x in data.get("tasks") or [] if isinstance(x, dict)):
         title = (t.get("title") or "").strip()
         if not title:
             continue
         task = {"title": title, "source": source, **({"source_ref": ref} if ref else {})}
+        if made[n] in parents:
+            task["id"] = made[n]
+        task.update(inside.get(n) or {})
         notes = (t.get("notes") or "").strip()
         pid = _one(index, "projects", t.get("project") or "") or defaults.get("project_id")
         if pid:
@@ -245,6 +294,8 @@ def to_ops(data: dict, index: dict, defaults: dict, source: str, places: list[st
             if client:
                 task["project_id"] = client
         ops.append({"op": "task.create", "task": task})
+    # Родители — раньше своих детей (одна пачка apply_ops): «сначала X, потом Y» — Y раньше X.
+    ops = _parents_first(ops)
     for i, n in enumerate(data.get("notes") or []):
         text = (n.get("text") or "").strip()
         if not text:
@@ -322,7 +373,7 @@ def run(url: str, user: str, text: str, defaults: dict, key: str, proxy: str | N
                 box[pid] = people.task_client(conn, user, pid, box["digest"])
             return box[pid]
 
-        ops = to_ops(data, index, defaults or {}, source, places, ref, client_of)
+        ops = to_ops(data, index, defaults or {}, source, places, ref, client_of, conn=conn, user=user)
     if ops:
         ops.insert(0, {"op": "dictation.add", "dictation": {"id": ref, "text": text, "source": {"app": "phone", "web": "web"}.get(via, "bot")}})
     res = store.apply_ops(url, user, ops, via, actor) if ops else {"results": []}
