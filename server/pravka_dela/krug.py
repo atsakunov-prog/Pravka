@@ -190,17 +190,20 @@ def tree(conn, user: str, today: dt.date) -> dict:
     размечен в Круге); нет и там — прямо на направлении («без зачем»). Без направления вовсе — в none.
 
     Для коннектора Claude и вида tree; веб и телефон строят то же дерево сами из синка (treeModel, DelaKrug.tree).
+    Напоминание (захват, kind remind, правило 29) — не дело: открытым в дереве его нет и в «открытых» узла оно не
+    считается, даже с «Зачем»-целью (её ставит модель захвата); сделанное — движение, как в movement. Одно правило с вебом
+    (treeModel) и телефоном (DelaKrug.treeModel: !it.remind).
     """
     since = today - dt.timedelta(days=MOVE_DAYS - 1)
     rows = conn.execute(
-        "SELECT id, num, title, status, goal, rhythm, no_steps, why_id, dirs, project_id, project_name, deal_name, "
+        "SELECT id, num, title, status, kind, goal, rhythm, no_steps, why_id, dirs, project_id, project_name, deal_name, "
         "due_date, owed, ball, want, pos FROM tasks.v_tasks WHERE owner_id = %s AND (status = 'open' "
         "OR (status = 'done' AND (completed_at AT TIME ZONE 'Europe/Moscow')::date >= %s)) ORDER BY num",
         (user, since)).fetchall()
     projects = {r["id"]: r for r in conn.execute(
         "SELECT p.id, p.name, p.kind, k.directions, k.why_id FROM tasks.krug k JOIN crm.projects p ON p.id = k.id "
         "WHERE k.kind = 'project' AND k.owner_id = %s AND p.archived_at IS NULL", (user,)).fetchall()}
-    live = {r["id"]: r for r in rows if r["status"] == "open"}
+    live = {r["id"]: r for r in rows if r["status"] == "open" and r["kind"] == "task"}
 
     def parent(r: dict, kind: str) -> tuple:
         if r.get("why_id") in live:

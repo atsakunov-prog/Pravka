@@ -293,6 +293,24 @@ def test_view_krug_overview_tree_and_life_view(kr, conn):
     assert row == (["parenting"], "Хорошо знает математику", False)
 
 
+def test_reminder_under_goal_not_in_tree(kr):
+    """Поезд 16.10.2026 (проверка вагона 4): напоминание (захват, kind remind) — не дело, и в «Дереве жизни» его нет,
+    даже с «Зачем»-целью (её ставит модель захвата): ни узлом, ни в «открытых» цели и направления — как у телефона
+    (DelaKrug.treeModel: !it.remind) и веба (treeModel: !isRemind). Дело под той же целью — на месте."""
+    goal = mk(kr, title="Сделки закрываются сами", goal=True, directions=["Дело"])
+    rem = mk(kr, title="Напомнить про сверку", why_id=goal["id"], kind="remind",
+             remind_at=f"{db_today(kr).isoformat()}T23:30:00+03:00")
+    step = mk(kr, title="Отправить термшит", why_id=goal["id"])
+    assert rem["kind"] == "remind" and rem["why_id"] == goal["id"]
+    node = store.view(kr, "sasha", "tree", node=str(goal["num"]))["node"]
+    assert node["open"] == 1 and [c["title"] for c in node.get("children", [])] == ["Отправить термшит"]
+    work = store.view(kr, "sasha", "tree", direction="work")["directions"][0]
+    assert work["open"] == 1
+    kids = next(d for d in store.view(kr, "sasha", "krug")["directions"] if d["key"] == "work")
+    assert kids["open"] == 1 and [g["open"] for g in kids["goals"]] == [1]
+    assert step["id"] != rem["id"]
+
+
 def test_direction_follows_why(kr):
     """Владелец 13.10.2026: выбрал «Зачем» — направление ставится само по ветке цели; руками направления правятся
     по-прежнему. Прежнее своё главное (дело висело прямо на направлении) не остаётся меткой из чужой ветки."""

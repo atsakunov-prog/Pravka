@@ -2239,7 +2239,9 @@ function taskRow(t, by, extra, opt = {}) {
  *  'd:<ключ>' — направление ('d:' — без направления). Место дела — «Зачем»; нет — проект, если он в Круге; нет —
  *  главное направление («без зачем»). */
 function treeModel() {
-  const open = all().filter((t) => isOpen(t) && isMine(t));
+  // Напоминание (захват, правило 29) — не дело: в дереве его нет и в «открытых» узла оно не считается, даже с «Зачем»-целью;
+  // сделанное — движение, как у сервера (krug.tree) и телефона (DelaKrug.treeModel).
+  const open = all().filter((t) => isOpen(t) && isMine(t) && !isRemind(t));
   const live = new Set(open.map((t) => t.id));
   const parentKey = (t) => {
     if (t.why_id && live.has(t.why_id)) return 't:' + t.why_id;
