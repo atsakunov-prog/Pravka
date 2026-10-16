@@ -814,6 +814,8 @@ a.crumb:hover { color: var(--accent); text-decoration: none; }
 .quick-dates { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 8px; }
 .quick-dates .chip-btn { font-size: 13px; padding: 3px 9px; }
 .grp-pick .chip-btn { flex: 1 1 auto; }
+/* «В повестку» (16.10.2026, запись отладки 19) — отметка внутри «Запустить», не четвёртая группа: не тянется. */
+.grp-pick .ag-pick { flex: 0 1 auto; margin-left: 6px; }
 /* «Когда» (13.10.2026): что стоит сейчас, строка словами, как понято — до сохранения, и подсказки кнопками. */
 .when-now { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13.5px; padding: 6px 8px 0; color: var(--text); }
 .when-now.faint { color: var(--faint); }
@@ -1336,6 +1338,7 @@ textarea.about { width: 100%; min-height: 60px; resize: none; overflow: hidden; 
 .col-task .col-due.late { color: var(--bad); font-weight: 500; }
 .col-task .col-due.today { color: var(--accent); }
 .col-task .col-due.back { color: var(--faint); }
+.col-task .col-due.agenda { color: var(--muted); }
 .tick.mini { width: 15px; height: 15px; margin: 0 4px 0 0; border-radius: 4px; }
 .tick.mini::after { left: 4px; top: 1px; width: 3.5px; height: 7.5px; }
 /* Место дела в карточке: лесенка от направления до дела, соседние шаги и «дальше». */

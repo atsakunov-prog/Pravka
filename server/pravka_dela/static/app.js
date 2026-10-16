@@ -42,8 +42,11 @@ const GRP_SUB = { owed: 'люди ждут ответа или дела — пе
 // Значок группы в её заголовке (макет 13.10.2026): отбить — стрелка ответа, запустить — «играть», мониторить — глаз.
 const GRP_ICON = { owed: 'reply', self: 'play', check: 'eye' };
 const grpOf = (t) => (t.owed || t.ball === 'owed' ? 'owed' : t.ball === 'waiting' ? 'check' : 'self');
-/** Группа словами — в «что поменялось» и подсказках «Нового». */
-const grpWord = (a) => ({ owed: 'отбить', check: 'мониторить', self: a.ball === 'agenda' ? 'при встрече' : 'запустить' })[grpOf(a)];
+/** Группа словами — в «что поменялось» и подсказках «Нового». Повестка (ball agenda) — словом Саши «повестка» (с 16.10.2026,
+ *  запись отладки 19; до того «при встрече»): группа та же — «Запустить», «повестка» — отметка внутри неё. */
+const grpWord = (a) => ({ owed: 'отбить', check: 'мониторить', self: a.ball === 'agenda' ? 'повестка' : 'запустить' })[grpOf(a)];
+/** Группа и человек одной строкой: «повестка · Иван» (контракт dela.json, правило «Повестка»), «мониторить Иван». */
+const grpWho = (a, who) => grpWord(a) + (who ? (a.ball === 'agenda' && grpOf(a) === 'self' ? ' · ' : ' ') + who : '');
 /** Группа → поля дела. Повестка, ставшая «Запустить», остаётся повесткой: это тоже «Запустить». */
 const grpSet = (t, g) => (g === 'owed' ? { ball: 'mine', owed: true } : g === 'check' ? { ball: 'waiting', owed: false }
   : { ball: t && t.ball === 'agenda' ? 'agenda' : 'mine', owed: false });
@@ -2422,7 +2425,11 @@ function taskRow(t, by, extra, opt = {}) {
     const w = t.waiting_since ? D.diff(S.today, t.waiting_since) : 0;
     chips.push(m('ball-waiting', 'жду' + (name ? ' ' + name : '') + (w > 0 ? ` ${w} дн` : '')));
   } else if (t.ball === 'agenda') {
-    chips.push(m('ball-agenda', 'при встрече' + (name ? ' с ' + name : '')));
+    // Повестка (16.10.2026, запись отладки 19: «не хватает тега, который бы добавлял в повестку»): «повестка · Иван» —
+    // ссылкой на карточку человека, там свой список «Повестка». Список уже по людям — одно слово.
+    const nm = grouped_('person') ? '' : name || t.person_short || '';
+    chips.push(who && nm ? el('a', { class: 'm ball-agenda link', href: '#/h/' + who.id, title: 'Повестка — обсудить при встрече; открыть человека', onclick: stop }, 'повестка · ' + nm)
+      : m('ball-agenda', 'повестка' + (nm ? ' · ' + nm : '')));
   } else if (who && !grouped_('person')) {
     chips.push(el('a', { class: 'm link', href: '#/h/' + who.id, onclick: stop }, '@' + personName(who)));
   }
@@ -2604,12 +2611,17 @@ function treeOutline(m, dirs) {
  *  колонка узкая), «потом» без срока — тихое «↩ пт 16.10». Без срока — ничего. */
 function colDue(t) {
   const due = dueLabel(t);
+  // Повестка (запись отладки 19 — Саша смотрел как раз «Колонки»): без срока — тихое «повестка» на месте срока, со сроком —
+  // в подсказке; с кем — в подсказке (колонка узкая).
+  const agWho = personName(person(t.person_id)) || t.person_short || '';
+  const ag = isOpen(t) && t.ball === 'agenda' ? 'повестка' + (agWho ? ' · ' + agWho : '') : '';
   if (due) {
     const late = due.cls === 'late';
-    return el('span', { class: 'col-due' + (due.cls ? ' ' + due.cls : ''), title: late ? `срок прошёл ${D.diff(S.today, t.due_date)} дн. назад` : 'срок' },
+    return el('span', { class: 'col-due' + (due.cls ? ' ' + due.cls : ''), title: (late ? `срок прошёл ${D.diff(S.today, t.due_date)} дн. назад` : 'срок') + (ag ? ' · ' + ag : '') },
       late ? D.ddmm(t.due_date) : due.text);
   }
-  if (isOpen(t) && t.back_on && !isRemind(t)) return el('span', { class: 'col-due back', title: 'потом — вернётся в этот день' }, `↩ ${WD_SHORT[D.wd(t.back_on)]} ${D.ddmm(t.back_on)}`);
+  if (isOpen(t) && t.back_on && !isRemind(t)) return el('span', { class: 'col-due back', title: 'потом — вернётся в этот день' + (ag ? ' · ' + ag : '') }, `↩ ${WD_SHORT[D.wd(t.back_on)]} ${D.ddmm(t.back_on)}`);
+  if (ag) return el('span', { class: 'col-due agenda', title: ag + ' — обсудить при встрече' }, 'повестка');
   return null;
 }
 /** «Колонки»: девять направлений рядом, в каждой — цели лесенкой, проекты и дела коротко (срок — справа); перетаскивай между ними. */
@@ -3346,7 +3358,7 @@ function describe(c) {
   if (a.deal_id) out.push('сделка ' + (S.deals.get(a.deal_id)?.name || '?'));
   if ('ball' in a || 'owed' in a || 'person_id' in a) {
     const who = 'person_id' in a ? personName(person(a.person_id)) : '';
-    out.push(('ball' in a || 'owed' in a ? grpWord(a) : 'человек') + (who ? ' ' + who : ''));
+    out.push('ball' in a || 'owed' in a ? grpWho(a, who) : 'человек' + (who ? ' ' + who : ''));
   }
   if ('notes' in a) out.push('дописал заметку');
   if ('why_id' in a) out.push(a.why_id ? 'внутрь «' + ((S.tasks.get(a.why_id) || {}).title || 'дела') + '»' : 'вынул из дела');
@@ -3505,7 +3517,7 @@ function turnView(t) {
     items.push(captureBlock(t));
   } else if (d.route === 'new') {
     const meta = (x) => [project(x.project_id)?.name,
-      x.person_id ? ((grpOf(x) !== 'self' || x.ball === 'agenda' ? grpWord(x) + ' ' : '') + personName(person(x.person_id))) : null,
+      x.person_id ? (grpOf(x) !== 'self' || x.ball === 'agenda' ? grpWho(x, personName(person(x.person_id))) : personName(person(x.person_id))) : null,
       x.due_date ? dueLabel(x).text : null, x.estimate_min ? x.estimate_min + ' мин' : null].filter(Boolean).join(' · ');
     if ((d.tasks || []).length) items.push(el('div', { class: 'cr-sub' }, 'Записал:'));
     items.push((d.tasks || []).map((x) => el('button', { class: 'cr-task', onclick: open(x.id) }, el('div', {}, x.title),
@@ -3806,9 +3818,13 @@ function renderPerson(id) {
   if (!p) return [head('Человек'), el('div', { class: 'body' }, el('div', { class: 'empty' }, 'Нет такого человека или он не виден.'))];
   const open = all().filter((t) => isOpen(t));
   const his = open.filter((t) => t.person_id === id || t.requested_by === id);
+  // «Повестка» — свой список (16.10.2026, запись отладки 19; правило 32 карты Дел): открытые дела ball agenda с ним — тем
+  // же правилом, что вид person (поле agenda); из «Отбить» и «Запустить» они уходят, чтобы не стоять дважды.
+  const ag = (t) => t.ball === 'agenda' && t.person_id === id;
   const secs = [
-    ['Отбить: ждёт от меня', his.filter((t) => grpOf(t) === 'owed' || (t.requested_by === id && grpOf(t) === 'self'))],
-    ['Запустить: о нём и с ним', his.filter((t) => grpOf(t) === 'self' && t.requested_by !== id)],
+    ['Отбить: ждёт от меня', his.filter((t) => !ag(t) && (grpOf(t) === 'owed' || (t.requested_by === id && grpOf(t) === 'self')))],
+    ['Повестка: обсудить при встрече', his.filter(ag), 'person'],
+    ['Запустить: о нём и с ним', his.filter((t) => !ag(t) && grpOf(t) === 'self' && t.requested_by !== id)],
     ['Мониторить: жду от него', his.filter((t) => grpOf(t) === 'check')],
   ];
   const info = [];
@@ -3848,7 +3864,7 @@ function renderPerson(id) {
       mergeRow(p),
       crmOn() && personDeals(id).length ? el('div', { class: 'pchips projs' }, el('span', { class: 'pc-label' }, 'Зачем'),
         personDeals(id).map(({ d, role }) => dealChip(d, role))) : null,
-      secs.map(([t, items]) => (items.length ? groupBox(t, items.sort(sortTasks)) : null)),
+      secs.map(([t, items, by]) => (items.length ? groupBox(t, items.sort(sortTasks), {}, by) : null)),
       secs.every(([, i]) => !i.length) ? el('div', { class: 'empty' }, 'Открытых дел с ним нет.') : null,
       crmOn() && !p.user_id ? personCrmBlock(p) : null)];
 }
@@ -3963,7 +3979,7 @@ function sugText(s) {
   // Уточнение: что поменяется в деле; подробности (note) при принятии лягут комментарием.
   const what = [p.title ? `название: «${p.title}»` : null,
     p.due_date ? 'срок ' + (t?.due_date ? D.ddmm(t.due_date) + ' → ' : '') + D.ddmm(p.due_date) : null,
-    p.ball ? grpWord(p) + (p.person_name ? ' ' + p.person_name : '') : (p.person_name ? 'человек: ' + p.person_name : null)]
+    p.ball ? grpWho(p, p.person_name) : (p.person_name ? 'человек: ' + p.person_name : null)]
     .filter(Boolean).join(' · ');
   return { title: 'Уточнить: ' + ref, hint: what, add: p.note || null };
 }
@@ -3973,7 +3989,7 @@ function autoWords(s) {
   return [
     'title' in was ? `название: «${r.title}»` : null,
     'due_date' in was ? 'срок ' + (was.due_date ? D.ddmm(was.due_date) + ' → ' : '') + (r.due_date ? D.ddmm(r.due_date) : 'без срока') : null,
-    'ball' in was || 'owed' in was || 'person_id' in was ? grpWord(r) + (p.person_name ? ' ' + p.person_name : '') : null,
+    'ball' in was || 'owed' in was || 'person_id' in was ? grpWho(r, p.person_name) : null,
   ].filter(Boolean).join(' · ');
 }
 // Пачки — по дате встречи, свежие сверху; без даты — по времени появления.
@@ -5331,11 +5347,20 @@ function renderCard() {
   notes.addEventListener('change', () => save('notes', notes.value.trim() || null));
   // Группа — три кнопки (10.10.2026): «Отбить», «Запустить», «Мониторить»; человек — кто ждёт или от кого жду.
   const g = grpOf(src);
+  const setGrp = (set) => { if (t) setFields([t.id], set); else { Object.assign(src, set); render(); } };
+  // «В повестку» (16.10.2026, запись отладки 19; правило 32): та же группа «Запустить», ball agenda — обсудить с человеком
+  // при встрече или звонке. Повестки без человека не бывает: человека нет — сперва выбор, потом в повестку одним касанием.
+  const onAg = src.ball === 'agenda';
+  const agSet = (pid) => (onAg ? { ball: 'mine' } : { ball: 'agenda', owed: false, ...(pid ? { person_id: pid } : {}) });
+  const agBtn = (!t || isOpen(t)) ? el('button', { class: 'chip-btn ag-pick' + (onAg ? ' on' : ''), 'aria-pressed': onAg ? 'true' : 'false',
+    title: onAg ? 'Убрать из повестки — дело останется в «Запустить»' : 'Обсудить с человеком при встрече или звонке',
+    onclick: (e) => {
+      if (onAg || src.person_id) { setGrp(agSet()); return; }
+      choicePop(e.currentTarget, { title: 'Повестка — с кем обсудить?', items: personItems(people.filter((p) => p.id !== S.me.person_id && p.user_id !== S.me.user)),
+        onPick: (v) => { if (v) setGrp(agSet(v)); } }); // с самим собой повестки не бывает
+    } }, onAg ? 'повестка' + (who0 ? ' · ' + personName(who0) : '') : 'В повестку') : null;
   const grpPick = el('div', { class: 'quick-dates grp-pick' }, Object.entries(GRP).map(([k, l]) =>
-    el('button', { class: 'chip-btn' + (g === k ? ' on' : ''), onclick: () => {
-      const set = grpSet(src, k);
-      if (t) setFields([t.id], set); else { Object.assign(src, set); render(); }
-    } }, l)));
+    el('button', { class: 'chip-btn' + (g === k ? ' on' : ''), onclick: () => setGrp(grpSet(src, k)) }, l)), agBtn);
 
   // Свойства — строка на поле: подпись слева, значение справа и переносится внутри своей строки; тонкая линия — у каждой
   // строки (владелец 13.10.2026: «строки наезжают, разделители пропадают» — была одна сетка на всё, без строк).
@@ -5357,7 +5382,7 @@ function renderCard() {
   const props = el('div', { class: 'props' },
     row('Зачем', zachem),
     row('Группа', grpPick),
-    row({ owed: 'Кто ждёт', check: 'От кого жду' }[g] || 'Человек', personSel),
+    row({ owed: 'Кто ждёт', check: 'От кого жду' }[g] || (src.ball === 'agenda' ? 'Повестка с' : 'Человек'), personSel),
     row('Когда', ...whenRow(src, t)),
     g === 'check' ? row('Напомнить ему', ...nudge()) : null,
     row('Минут', minutes),

@@ -121,3 +121,43 @@ def test_mic_stop_puts_text_in_the_field_everywhere():
     # Голос в «Настройках»: что делает «стоп», и Диктовка компьютера вместо Wispr Flow.
     st = fn("function renderSettings()")
     assert "текст встанет в поле" in st and "Wispr" not in st and "Ctrl+Shift+Space" in st
+
+
+def test_agenda_word_mark_person_list_and_card_toggle():
+    """Запись 19 (владелец: «не хватает тега, который бы добавлял в повестку»; правило 32 карты Дел, контракт dela.json
+    «Повестка»): повестка — та же группа «Запустить» с ball agenda, а на экране — словом Саши. У дела — «повестка · Иван»
+    ссылкой на человека (в «Колонках» — тихое «повестка» на месте срока), в карточке человека — свой список «Повестка»
+    (из «Отбить» и «Запустить» такие дела уходят), в карточке дела — переключатель «В повестку»: без человека — сперва
+    выбор человека. Нового поля нет — ball, person_id, person_short из синка."""
+    assert "a.ball === 'agenda' ? 'повестка' : 'запустить'" in JS and "'при встрече'" not in JS
+    assert "const grpWho = (a, who) =>" in JS
+    row = fn("function taskRow(")
+    assert "'повестка · ' + nm" in row and "href: '#/h/' + who.id" in row and "t.person_short" in row
+    assert "'при встрече'" not in row
+    cd = fn("function colDue(")
+    assert "'col-due agenda'" in cd and "t.ball === 'agenda'" in cd
+    person = fn("function renderPerson(")
+    assert "const ag = (t) => t.ball === 'agenda' && t.person_id === id;" in person
+    assert person.index("'Отбить: ждёт от меня'") < person.index("'Повестка: обсудить при встрече'") < person.index("'Запустить: о нём и с ним'")
+    assert "his.filter((t) => !ag(t) && grpOf(t) === 'self'" in person
+    card = fn("function renderCard(")
+    assert "'В повестку'" in card and "{ ball: 'agenda', owed: false, ...(pid ? { person_id: pid } : {}) }" in card
+    assert "onAg ? { ball: 'mine' }" in card, "ещё раз — обратно в своё"
+    assert "choicePop(e.currentTarget, { title: 'Повестка — с кем обсудить?'" in card, "без человека — сперва выбор"
+    assert "src.ball === 'agenda' ? 'Повестка с' : 'Человек'" in card
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    assert ".grp-pick .ag-pick {" in css and ".col-task .col-due.agenda {" in css
+
+
+def test_capture_chips_are_the_servers_whatever_the_move():
+    """Клиент дела по человеку (правило 31: «Без клиента» — move no_client) и повестка (правило 32: «Просто дело» — move
+    mine) — новые кнопки строки «куда легло». Веб их не знает поимённо и знать не должен: подпись и «куда» — из ответа
+    сервера (chips), нажатие — capture.move с тем же to. Значит, новым ходам веб готов без правки — это и проверяем."""
+    import json
+    cb, mv = fn("function captureBlock("), fn("async function capMove(")
+    assert "c.label + (c.options ? ' ▾' : '')" in cb and "(x.chips || []).length ? el('div', { class: 'cap-chips' }, x.chips.map((c) => chip(c, i)))" in cb
+    assert "op: 'capture.move', ref: t.d.capture.ref, item: i, to: c.move," in mv
+    for move in ("no_client", "mine"):
+        assert f"'{move}'" not in cb + mv, "кнопки не перечисляются в вебе"
+    contract = json.loads((STATIC.parents[1] / "contract" / "dela-capture.json").read_text(encoding="utf-8"))
+    assert {"no_client", "mine"} <= set(contract["move"]["to"])
