@@ -1,0 +1,7 @@
+pravka=3.0.890
+versionName=3.0.890
+apk=pravka-debug.apk
+versionCode=890
+commit=a2dbad86b8f2f1c7b59076ab045aabd8919501aa
+branch=pravka
+builtAt=2026-10-16T20:52Z
