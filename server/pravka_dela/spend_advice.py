@@ -12,6 +12,8 @@ dela-spend.json), прошлые недели и прошлые советы. Н
 
 Как платим: Opus 5.5, глубина medium явно (его «по умолчанию» — medium, но правило — писать), Message Batches −50 %:
 советы не срочные. Пачка не кончилась за 6 ч — отмена, советы подождут неделю. Трат за неделю нет — ни запроса.
+Отправку отказали (нет денег, связь; 17.10.2026) — следующая попытка не раньше RETRY_GAP, а не на каждом тике до
+конца окна LATE: защита от петли считает попытки (порог 4 за 10 минут), и советник встал бы «петлёй».
 Траты самого советника — в ту же книгу (llm.account, задача spend_advice). Замер 14.10.2026 на тестовой книге (пачкой):
 вход 5,4 тыс. токенов, выход с размышлениями 2,9 тыс. — $0,039 за неделю, ~$0,17 в месяц; пачка вернулась за 2,5 мин.
 
@@ -28,7 +30,7 @@ import time
 
 from psycopg.types.json import Jsonb
 
-from . import db, llm, spend
+from . import db, guard, llm, spend
 from .meetings import MSK
 
 log = logging.getLogger("dela.spend_advice")
@@ -41,6 +43,7 @@ MAX_TOKENS = 12000
 SLOT_WEEKDAY, SLOT_HOUR, SLOT_MIN = 6, 21, 30   # воскресенье 21:30 по Москве
 LATE = dt.timedelta(hours=6)  # комп спал в слот — догоняем в тот же вечер, а не через неделю
 BATCH_MAX_AGE = 6 * 3600
+RETRY_GAP = 900              # отправку отказали — следующая через 15 минут: 4 в час при пороге 10 за час
 TIPS_MAX = 5
 WEEKS_BACK = 3               # для сравнения: три прошлые недели по каждой задаче
 
@@ -268,7 +271,6 @@ def tick(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
     if st.get("batch"):
         b = st["batch"]
         if client is None:
-            from . import guard
             client = guard.client(url, key, proxy, TASK)
         info = client.messages.batches.retrieve(b["id"])
         if info.processing_status != "ended":
@@ -298,12 +300,16 @@ def tick(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
     week = week_start(s.date())
     if not key or st.get("week") == week.isoformat() or now.astimezone(MSK) - s > LATE:
         return None
-    return send(url, key, proxy, s.date(), client=client, state=st)
+    if now.timestamp() < float(st.get("retry_at") or 0):
+        return None  # прошлую отправку отказали — ждём RETRY_GAP
+    return send(url, key, proxy, s.date(), client=client, state=st, now=now)
 
 
 def send(url: str, key: str, proxy: str | None, last_day: dt.date, client=None, state: dict | None = None,
-         batch: bool = True) -> dict | None:
-    """Собрать сводку недели, кончившейся last_day, и отправить советнику (пачкой; batch=False — сразу, для пробы)."""
+         batch: bool = True, now: dt.datetime | None = None) -> dict | None:
+    """Собрать сводку недели, кончившейся last_day, и отправить советнику (пачкой; batch=False — сразу, для пробы).
+    Пачку отказали — {"error": словами}, в состоянии retry_at: тик повторит не раньше RETRY_GAP."""
+    now = now or dt.datetime.now(dt.timezone.utc)
     st = state if state is not None else _state(url)
     week = week_start(last_day)
     owner = _owner(url)
@@ -312,7 +318,6 @@ def send(url: str, key: str, proxy: str | None, last_day: dt.date, client=None, 
         _save(url, {**st, "week": week.isoformat(), "last": {"week": week.isoformat(), "skipped": "трат нет"}})
         return None
     if client is None:
-        from . import guard
         client = guard.client(url, key, proxy, TASK)  # защита от петли (аудит №12)
     p = params(f)
     if not batch:
@@ -321,7 +326,15 @@ def send(url: str, key: str, proxy: str | None, last_day: dt.date, client=None, 
         out = apply(url, owner, week, msg, f["total"], batch=False)
         _save(url, {**st, "week": week.isoformat(), "last": {"week": week.isoformat(), "direct": True, **out}})
         return out
-    b = client.messages.batches.create(requests=[{"custom_id": "spend-advice", "params": p}])
+    try:
+        b = client.messages.batches.create(requests=[{"custom_id": "spend-advice", "params": p}])
+    except guard.Stopped:
+        raise
+    except Exception as e:  # noqa: BLE001 — отказ Anthropic или сеть: неделя не отмечена, попытка через RETRY_GAP
+        why = guard.reason(e)
+        _save(url, {**st, "retry_at": now.timestamp() + RETRY_GAP, "last": {"week": week.isoformat(), "error": why}})
+        log.warning("советы по тратам: пачка не ушла — %s; следующая попытка через %d мин", why, RETRY_GAP // 60)
+        return {"error": why}
     _save(url, {**st, "week": week.isoformat(),
                 "batch": {"id": b.id, "at": time.time(), "week": week.isoformat(), "owner": owner, "week_usd": f["total"]}})
     log.info("советы по тратам: неделя %s ($%.2f) — советнику, пачка %s", week, f["total"], b.id)

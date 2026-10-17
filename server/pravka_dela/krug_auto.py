@@ -13,6 +13,9 @@
   смотрел в этом виде и о которых ещё не спрашивал. Нет таких — ни одного запроса, ни цента.
 - Есть — один запрос Opus в Message Batches (−50 %, обычно минуты). Пачка в работе — крутится следующими
   тиками; не кончилась за два часа — отмена и тот же запрос напрямую.
+- Отправка не вышла (17.10.2026: кончились деньги — тик повторял бы её каждую минуту до конца слота, а защита от
+  петли считает попытки) — следующая попытка в том же слоте не раньше RETRY_GAP, отказ словами — в last.error.
+  Не вышел запрос напрямую или ответ не разобрался — пачка снимается, дела уйдут следующим слотом.
 - Ответ: уверен — цель («Зачем») ставится сама, а если ни одна цель не подходит — направление (дело висит на
   нём «без зачем»); от имени владельца со службой svc:krug в журнале. Не уверен — вопрос в «Подскажи» (правило
   Дел №5: «уверен — поставил, не уверен — подскажи»). Цели сам не заводит («Узлы создаёт Саша»), под целью с
@@ -37,7 +40,7 @@ from zoneinfo import ZoneInfo
 
 from psycopg.types.json import Jsonb
 
-from . import db, krug, llm, place
+from . import db, guard, krug, llm, place
 
 log = logging.getLogger("dela.krug")
 
@@ -46,6 +49,7 @@ EFFORT = "low"  # разметка по готовому справочнику;
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 STATE_KEY = "krug_auto"
 BATCH_MAX_AGE = 2 * 3600  # пачка не кончилась за два часа — тот же запрос напрямую
+RETRY_GAP = 300  # отправка отказана — в том же слоте не чаще раза в 5 минут (порог защиты — 6 за 10 минут)
 MAX_TASKS = 80  # за один запрос; остальные — следующим слотом
 ASKED_DAYS = 14  # о деле уже спрашивали (вопрос висит, отклонён или погас) — не переспрашивать
 SEEN_MAX = 2000  # сколько просмотренных дел помнить (id → версия); старое выпадает
@@ -369,7 +373,6 @@ def tick(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
     if not owner or not key:
         return None
     if client is None:
-        from . import guard
         client = guard.client(url, key, proxy, "krug")  # защита от петли (аудит №12): стоит — тик пропускается
 
     if st.get("batch"):
@@ -383,10 +386,19 @@ def tick(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
                 client.messages.batches.cancel(b["id"])
             except Exception:  # noqa: BLE001
                 log.warning("Круг: пачку %s отменить не вышло", b["id"])
-            msg = client.beta.messages.create(**b["params"], betas=[FALLBACK_BETA], fallbacks="default")
-            usd = _account(url, msg, batch=False)
+            try:
+                msg = client.beta.messages.create(**b["params"], betas=[FALLBACK_BETA], fallbacks="default")
+                usd = _account(url, msg, batch=False)
+                items = _parse(msg)
+            except guard.Stopped:
+                raise
+            except Exception as e:  # noqa: BLE001 — иначе тот же запрос напрямую на каждом тике: пачку снять
+                why = guard.reason(e)
+                _save(url, {**st, "batch": None, "last": {"slot": b["slot"], "direct": True, "error": why}})
+                log.warning("Круг: пачка застряла, напрямую не вышло — %s; дела уйдут следующим слотом", why)
+                return {"error": why}
             seen = {**(st.get("seen") or {}), **(b.get("looked") or {})}  # отправленное — просмотрено
-            out = apply(url, owner, b["slot"], _parse(msg), krug.directions_of(url, owner), seen)
+            out = apply(url, owner, b["slot"], items, krug.directions_of(url, owner), seen)
             _save(url, {**st, "seen": seen, "batch": None, "last": {"slot": b["slot"], "direct": True, "usd": round(usd, 4), **out}})
             log.info("Круг: пачка застряла — напрямую: поставил %d, спросил %d ($%.3f)", out["set"], out["asked"], usd)
             return out
@@ -396,8 +408,15 @@ def tick(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
             _save(url, {**st, "batch": None, "last": {"slot": b["slot"], "error": res.result.type if res else "пусто"}})
             return {"error": True}
         usd = _account(url, res.result.message, batch=True)
+        try:
+            items = _parse(res.result.message)
+        except (RuntimeError, ValueError) as e:
+            # Ответ оплачен и уже в книге; не снять пачку — каждый тик заново читал бы её и снова писал бы траты.
+            _save(url, {**st, "batch": None, "last": {"slot": b["slot"], "error": str(e)[:200]}})
+            log.warning("Круг: ответ пачки %s не разобрался — %s", b["id"], e)
+            return {"error": True}
         seen = {**(st.get("seen") or {}), **(b.get("looked") or {})}  # отправленное — просмотрено
-        out = apply(url, owner, b["slot"], _parse(res.result.message), krug.directions_of(url, owner), seen)
+        out = apply(url, owner, b["slot"], items, krug.directions_of(url, owner), seen)
         _save(url, {**st, "seen": seen, "batch": None, "last": {"slot": b["slot"], "usd": round(usd, 4), **out}})
         log.info("Круг: поставил %d, спросил %d ($%.3f)", out["set"], out["asked"], usd)
         return out
@@ -407,6 +426,8 @@ def tick(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
     # Слот уже отработан — или служба поднялась посреди ночи: старый слот не догоняем.
     if st.get("slot") == key_ or now.astimezone(MSK) - slot > dt.timedelta(minutes=29):
         return None
+    if now.timestamp() < float(st.get("retry_at") or 0):
+        return None  # прошлую отправку отказали — ждём RETRY_GAP
     with db.session(url, owner, via="krug") as conn:
         known = krug.directions(conn, owner)
         tasks = candidates(conn, owner, st.get("seen")) if known else []
@@ -417,7 +438,15 @@ def tick(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
         _save(url, {**st, "slot": key_})
         return None
     p = params(system_prompt(known, rules_text), user_prompt(tasks, open_goals, examples(url, owner, known), known, learnt), known)
-    b = client.messages.batches.create(requests=[{"custom_id": "krug", "params": p}])
+    try:
+        b = client.messages.batches.create(requests=[{"custom_id": "krug", "params": p}])
+    except guard.Stopped:
+        raise
+    except Exception as e:  # noqa: BLE001 — отказ Anthropic или сеть: слот не отработан, попытка через RETRY_GAP
+        why = guard.reason(e)
+        _save(url, {**st, "retry_at": now.timestamp() + RETRY_GAP, "last": {"slot": key_, "error": why}})
+        log.warning("Круг: пачка не ушла — %s; следующая попытка через %d мин", why, RETRY_GAP // 60)
+        return {"error": why}
     looked = {str(t["id"]): version(t) for t in tasks}  # ответ про дело не пришёл — всё равно не слать его снова
     _save(url, {**st, "slot": key_, "batch": {"id": b.id, "at": time.time(), "slot": key_, "params": p, "n": len(tasks),
                                               "looked": looked}})

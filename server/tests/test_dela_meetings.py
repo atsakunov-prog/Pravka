@@ -323,6 +323,54 @@ def test_namer_sends_unnamed_once_names_and_respects_owner(mt):
     assert "«Вектор: моё название темы»" in fb.sent[1][0]["params"]["system"][0]["text"]
 
 
+class NoMoney(Exception):
+    """Как anthropic.BadRequestError 17.10.2026: на счёте нет денег."""
+
+    status_code = 400
+
+    def __init__(self):
+        super().__init__("Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': "
+                         "'Your credit balance is too low to access the Anthropic API.'}}")
+
+
+class RefusingBatches(FakeBatches):
+    def __init__(self, answers):
+        super().__init__(answers)
+        self.tries, self.broke = 0, True
+
+    def create(self, requests):
+        self.tries += 1
+        if self.broke:
+            raise NoMoney()
+        return super().create(requests)
+
+
+def test_namer_waits_after_refused_batch(mt):
+    """17.10.2026: деньги кончились — тик повторял отказанную пачку каждую минуту, защита от петли (считает попытки)
+    насчитала 7 за 10 минут и остановила разборщика на 6 часов. Отказ — запомнить и ждать MIN_GAP; guard не будится."""
+    from pravka_dela import guard
+
+    url = mt["url"]
+    guard._caps.update(at=-guard.CAPS_EVERY, value=None)
+    guard._errors.clear()
+    a = push(url, ref="501")
+    fb = RefusingBatches({str(a["id"]): ans(client="Вектор", topic="счёт")})
+    cl = guard.wrap(NS(messages=NS(batches=fb)), url, "meetings")  # настоящий счёт попыток, Claude подменён
+    out = meetings_auto.tick(url, "key", None, now=1000.0, client=cl)
+    assert out == {"error": "на счёте Anthropic нет денег"} and fb.tries == 1
+    assert meetings_auto.status(url)["last"]["error"] == "на счёте Anthropic нет денег"
+    # Десять минут тиков раз в минуту: попытки — на 0-й, 5-й и 10-й минуте, а не на каждой.
+    for t in range(1060, 1601, 60):
+        meetings_auto.tick(url, "key", None, now=float(t), client=cl)
+    assert fb.tries == 3
+    assert guard.status(url)["hits_hour"] == 3 and not guard.blocked(url, "meetings")
+    # Деньги вернулись — следующая попытка уходит пачкой.
+    fb.broke = False
+    assert meetings_auto.tick(url, "key", None, now=1700.0, client=cl) is None  # ещё MIN_GAP с прошлой попытки
+    assert meetings_auto.tick(url, "key", None, now=1900.0, client=cl) == {"sent": 1} and fb.tries == 4
+    assert not guard.blocked(url, "meetings")
+
+
 def test_namer_skips_stale_answers_and_marks_failures(mt):
     url = mt["url"]
     a = push(url, ref="401")

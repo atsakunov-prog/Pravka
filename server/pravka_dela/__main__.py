@@ -320,7 +320,8 @@ def cmd_serve(args) -> int:
 
     async def meetings_loop():
         # Разборщик встреч (meetings_auto.py): раз в минуту — досмотреть пачку или, если есть неразобранные
-        # встречи, отправить новую. Нечего разбирать — ни запроса.
+        # встречи, отправить новую. Нечего разбирать — ни запроса. Отправку отказали — tick помнит это сам и
+        # повторит через MIN_GAP, а не на следующем круге (17.10.2026: иначе защита от петли видит «петлю»).
         from . import meetings_auto
 
         while cfg.anthropic_key:
@@ -643,6 +644,9 @@ def cmd_spend(args) -> int:
         print("нет ключа Claude в dela.env")
         return 2
     out = spend_advice.send(cfg.db_url, cfg.anthropic_key, cfg.claude_proxy, last, batch=not args.direct)
+    if out and out.get("error"):
+        print(f"советнику не отправилось: {out['error']}")
+        return 1
     print(out or "трат за неделю нет — советнику нечего смотреть")
     return 0
 

@@ -13,6 +13,9 @@
   системном блоке с кэшем: он одинаков у всех запросов пачки.
 - Ответ ложится в карточку (meetings.apply_names), кроме того, что владелец поправил руками (locked). Встречу
   успели прислать заново с другим содержанием — ответ про старое не кладётся, её разберёт следующая пачка.
+- Отправка пачки не вышла (нет денег, ключ, связь) — время попытки и отказ словами в состоянии (sent_at, last.error),
+  следующая — через MIN_GAP, а не на следующем тике: 17.10.2026 кончились деньги, тик повторял отказанную пачку
+  каждую минуту, и защита от петли (считает попытки) остановила разборщика на 6 часов.
 - Учится на правках владельца: встречи, где он сам назвал клиента, тему или название, — примерами в запрос.
 - Людей встречи не угадывает, когда их уже определила служба встреч (этап 6 аудита, флаг people_final: raw.people_final
   и raw.speakers): строка «ЛЮДИ ВСТРЕЧИ» в запросе, а ответ модели о людях apply_names не читает. Без поля (старая
@@ -29,7 +32,7 @@ from zoneinfo import ZoneInfo
 
 from psycopg.types.json import Jsonb
 
-from . import db, llm, meetings
+from . import db, guard, llm, meetings
 
 log = logging.getLogger("dela.meetings")
 
@@ -39,7 +42,7 @@ STATE_KEY = "meetings_auto"
 PROMPT_KEY = "prompt.meetings"
 BATCH_MAX = 100          # встреч в пачке
 BATCH_MAX_AGE = 3 * 3600  # пачка не кончилась за три часа — отмена, встречи уйдут следующей
-MIN_GAP = 300            # секунд между пачками: свежая встреча ждёт не дольше пяти минут плюс сама пачка
+MIN_GAP = 300            # секунд между пачками (и после отказанной): свежая встреча ждёт не дольше пяти минут плюс пачка
 CACHE_MIN = 10           # с какой пачки справочник метить для кэша
 EXCERPT = 14000          # знаков расшифровки в запрос: начала хватает на клиента, тему и участников
 TAIL = 2500              # и конец — там договорённости и прощание по именам
@@ -357,7 +360,6 @@ def tick(url: str, key: str, proxy: str | None, now: float | None = None, client
     if not owner or not key:
         return None
     if client is None:
-        from . import guard
         client = guard.client(url, key, proxy, "meetings")  # защита от петли (аудит №12): стоит — тик пропускается
 
     if st.get("batch"):
@@ -386,7 +388,15 @@ def tick(url: str, key: str, proxy: str | None, now: float | None = None, client
             return None
         system = system_blocks(rules(conn, owner), catalog(conn, owner), examples(conn, owner), len(todo))
         reqs = [{"custom_id": str(m["id"]), "params": params(system, user_prompt(conn, m))} for m in todo]
-    b = client.messages.batches.create(requests=reqs)
+    try:
+        b = client.messages.batches.create(requests=reqs)
+    except guard.Stopped:
+        raise  # стоит защитой: вызова не было, тик пропускается (__main__)
+    except Exception as e:  # noqa: BLE001 — отказ Anthropic или сеть: следующая попытка через MIN_GAP, не через минуту
+        why = guard.reason(e)
+        _save(url, {**st, "sent_at": now, "last": {"error": why, "at": now, "n": len(reqs)}})
+        log.warning("встречи: пачка из %d не ушла — %s; следующая попытка через %d мин", len(reqs), why, MIN_GAP // 60)
+        return {"error": why}
     _save(url, {**st, "sent_at": now, "batch": {"id": b.id, "at": now, "n": len(reqs),
                                                 "md5": {str(m["id"]): m["content_md5"] for m in todo}}})
     log.info("встречи: %d на разбор — пачка %s", len(reqs), b.id)

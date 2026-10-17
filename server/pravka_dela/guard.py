@@ -23,12 +23,18 @@
 - Сторож суммы дня (watch_day, зовёт spend.watch после каждой строки книги): сумма дня всего, по службе и задаче против
   claude.caps.day — только сообщение, не остановка (сумма дня бывает плановой).
 - Суточный предел не-владельцу (quota): 40 правок словами и 20 разборов в сутки по Москве (claude.caps.user_day).
+- Отказы Anthropic (17.10.2026): считается попытка, а не успех — это защита, так и остаётся. Но сообщение о стопе
+  говорит, сколько из этих попыток Anthropic отказал и чем (reason: «на счёте Anthropic нет денег», «нет связи»…):
+  17.10 кончились деньги, разборщик встреч повторял отказанную пачку каждую минуту и встал «петлёй», хотя петли в коде
+  не было. Отказы помнятся в процессе (подсказка владельцу, не учёт). Сами разборщики после отказа ждут: встречи —
+  MIN_GAP (5 мин), Круг — RETRY_GAP (5 мин в своём слоте), недельные выводы и советник — 15 минут.
 """
 
 from __future__ import annotations
 
 import copy
 import datetime as dt
+import html
 import logging
 import time
 import uuid
@@ -93,6 +99,65 @@ def _calls(n: int) -> str:
 
 def _usd(v: float) -> str:
     return f"${int(v)}" if float(v) == int(v) else f"${v:.2f}".replace(".", ",")
+
+
+# ── Отказы Anthropic ───────────────────────────────────────────────────
+
+def reason(e: BaseException) -> str:
+    """Отказ Anthropic словами — владельцу в сообщение и разборщикам в last.error. Без импорта SDK: по коду ответа и
+    имени класса (anthropic.BadRequestError, APIConnectionError…), остальное — первой строкой текста."""
+    text = " ".join(str(e).split())
+    low, kind = text.lower(), type(e).__name__
+    code = getattr(e, "status_code", None)
+    if "credit balance" in low:
+        return "на счёте Anthropic нет денег"
+    if code == 401:
+        return "ключ Anthropic не принят"
+    if code == 403:
+        return "ключу Anthropic это запрещено"
+    if code == 429:
+        return "Anthropic просит реже (лимит запросов)"
+    if code == 529 or "overloaded" in low:
+        return "Anthropic перегружен"
+    if isinstance(code, int) and code >= 500:
+        return f"сбой на стороне Anthropic ({code})"
+    if "Timeout" in kind or "Connection" in kind:
+        return "нет связи с Anthropic"
+    return f"{kind}: {text[:160]}" if text else kind
+
+
+ERRORS_KEEP = 3600            # отказы старше часа сообщению не нужны: окна порогов — 10 минут и час
+_errors: dict[str, list[tuple[float, str]]] = {}  # задача → [(когда, отказ словами)] — в процессе, не в базе
+
+
+def note_error(task: str, e: BaseException, now: float | None = None) -> None:
+    """Вызов задачи task ушёл и получил отказ (зовёт обёртка клиента). Память процесса: сообщению о стопе подсказка."""
+    now = time.time() if now is None else now
+    keep = [x for x in _errors.get(task, []) if now - x[0] < ERRORS_KEEP][-50:]
+    _errors[task] = [*keep, (now, reason(e))]
+
+
+def _fails(key: str, now: float, sec: int) -> tuple[int, str]:
+    """Сколько отказов у задачи (ALL — у всех) за последние sec секунд и последний из них словами. Тики разборщиков —
+    в разных потоках: обход по снимку (list(...) под GIL), списки задач не правятся, а заменяются (note_error)."""
+    got = sorted(x for k, xs in list(_errors.items()) if key in (ALL, k) for x in xs if now - x[0] < sec)
+    return len(got), (got[-1][1] if got else "")
+
+
+def _cause(key: str, now: float, sec: int, n: int) -> str:
+    """Строка сообщения о стопе: сколько из n вызовов окна Anthropic отказал и чем. Отказаны все ушедшие (n-й не ушёл —
+    его не пустили) — значит, не петля в коде, а повторы после отказа; так и сказать. Отказов нет — пусто. Подсказка не
+    должна ронять рубильник: любой сбой здесь — пустая строка."""
+    try:
+        bad, last = _fails(key, now, sec)
+    except Exception:  # noqa: BLE001
+        log.exception("защита от петли: отказы для сообщения")
+        return ""
+    if not bad:
+        return ""
+    times = "раза" if 2 <= bad % 10 <= 4 and not 12 <= bad % 100 <= 14 else "раз"
+    tail = " — это не петля в коде, а повторы после отказа" if bad >= n - 1 else ""
+    return f"Из них Anthropic отказал {bad} {times}: {last}{tail}"
 
 
 # ── Пороги ─────────────────────────────────────────────────────────────
@@ -230,6 +295,7 @@ def hit(url: str, task: str, now: float | None = None) -> None:
     now = time.time() if now is None else now
     c = caps(url)
     stop: tuple[str, str] | None = None
+    cause = ""
     with db.session(url, "system", "svc:guard", "claude") as conn:
         st = _load(conn, STATE, _blank())
         hits = [h for h in st["hits"] if isinstance(h, list) and len(h) == 2 and now - float(h[0]) < 3600]
@@ -248,14 +314,15 @@ def hit(url: str, task: str, now: float | None = None) -> None:
                     n = sum(1 for x in seen if now - x < sec)
                     if n > cap * times:
                         why = f"{TASK_WORDS.get(key, key)}: {_calls(n)} за {word}, порог {int(cap * times)}"
-                        stopped[key] = {"why": why, "at": now, "asked_at": now}
+                        cause = _cause(key, now, sec, n)
+                        stopped[key] = {"why": why, "at": now, "asked_at": now, **({"cause": cause} if cause else {})}
                         stop = (key, why)
                         break
                 if stop:
                     break
             if stop:
-                text = (f"⛔ <b>Дела</b> · защита от петли\n{stop[1]}.\nЗадача стоит, деньги не тратятся.\n"
-                        "<i>↩️ продолжать?</i>")
+                text = (f"⛔ <b>Дела</b> · защита от петли\n{stop[1]}.\n" + (f"{html.escape(cause)}.\n" if cause else "")
+                        + "Задача стоит, деньги не тратятся.\n<i>↩️ продолжать?</i>")
                 _alert(conn, "guard", stop[0], text, _guard_buttons(stop[0]), now)
                 log.warning("защита от петли: стоит %s — %s", stop[0], stop[1])
             else:
@@ -289,29 +356,38 @@ PREFIXES = frozenset({"messages", "beta", "beta.messages", "messages.batches", "
 
 
 class Guarded:
-    """Тонкая обёртка: проверка до вызова, дальше — тот же объект SDK; всё прочее — насквозь."""
+    """Тонкая обёртка: проверка до вызова, дальше — тот же объект SDK; всё прочее — насквозь. Отказ ушедшего вызова —
+    в failed (подсказка сообщению о стопе) и дальше как был."""
 
-    def __init__(self, inner, check, path: str = ""):
-        self._inner, self._check, self._path = inner, check, path
+    def __init__(self, inner, check, path: str = "", failed=None):
+        self._inner, self._check, self._path, self._failed = inner, check, path, failed
 
     def __getattr__(self, name: str):
         val = getattr(self._inner, name)
         path = f"{self._path}.{name}" if self._path else name
         if path in COUNTED and callable(val):
-            check = self._check
+            check, failed = self._check, self._failed
 
             def counted(*a, **k):
                 check()
-                return val(*a, **k)
+                try:
+                    return val(*a, **k)
+                except Exception as e:
+                    if failed:
+                        try:
+                            failed(e)
+                        except Exception:  # noqa: BLE001 — подсказка не заменяет собой настоящий отказ
+                            log.exception("защита от петли: запомнить отказ")
+                    raise
 
             return counted
         if path in PREFIXES:
-            return Guarded(val, self._check, path)
+            return Guarded(val, self._check, path, self._failed)
         return val
 
 
 def wrap(inner, url: str, task: str) -> Guarded:
-    return Guarded(inner, lambda: hit(url, task))
+    return Guarded(inner, lambda: hit(url, task), failed=lambda e: note_error(task, e))
 
 
 def client(url: str, key: str, proxy: str | None, task: str) -> Guarded:
@@ -413,7 +489,8 @@ def alerts_due(url: str, public_url: str = "", now: float | None = None) -> list
             asked = float(s.get("asked_at") or s.get("at") or now)
             if now - asked >= float(c["ask_again_hours"]) * 3600 and now - float(s.get("again_at") or 0) >= 24 * 3600:
                 text = (f"⛔ <b>Дела</b> · защита от петли\n{TASK_WORDS.get(k, k)}: всё ещё стоит с "
-                        f"{_hm(float(s.get('at') or now))} — {s.get('why') or ''}.\n<i>↩️ продолжать?</i>")
+                        f"{_hm(float(s.get('at') or now))} — {s.get('why') or ''}.\n"
+                        + (f"{html.escape(s['cause'])}.\n" if s.get("cause") else "") + "<i>↩️ продолжать?</i>")
                 _alert(conn, "guard", k, text, _guard_buttons(k), now)
                 s["asked_at"], s["again_at"] = now, now
                 changed = True
@@ -512,8 +589,8 @@ def status_of(conn, now: float | None = None) -> dict:
     now = time.time() if now is None else now
     row = conn.execute("SELECT value FROM crm.state WHERE key = %s", (STATE,)).fetchone()
     st = (row or {}).get("value") or {}
-    stopped = [{"task": k, "title": TASK_WORDS.get(k, k), "why": v.get("why"), "at": _iso(float(v.get("at") or now))}
-               for k, v in (st.get("stopped") or {}).items()]
+    stopped = [{"task": k, "title": TASK_WORDS.get(k, k), "why": v.get("why"), "cause": v.get("cause"),
+                "at": _iso(float(v.get("at") or now))} for k, v in (st.get("stopped") or {}).items()]
     relax = [{"task": k, "title": TASK_WORDS.get(k, k), "until": _iso(float(v))}
              for k, v in (st.get("relax") or {}).items() if float(v) > now]
     hour = [h for h in st.get("hits") or [] if now - float(h[0]) < 3600]

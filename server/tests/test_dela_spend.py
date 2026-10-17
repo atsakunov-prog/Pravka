@@ -275,6 +275,39 @@ def test_advice_weekly_batch_red_dot_and_seen(dela):
     assert store.sync(dela, "sasha", 0)["spend"]["tips"]["unseen"] is False
 
 
+class NoMoney(Exception):
+    status_code = 400
+
+    def __init__(self):
+        super().__init__("Your credit balance is too low to access the Anthropic API.")
+
+
+def test_advice_refused_waits_instead_of_every_tick(dela):
+    """Отказанную отправку советник не повторяет каждую минуту до конца окна LATE (защита от петли считает попытки,
+    порог 4 за 10 минут): следующая — через RETRY_GAP; неделя не отмечена, пока пачка не ушла."""
+    d = today(dela)
+    put(dela, [row(d, usd=2.0, usd_list=2.0)])
+    b = FakeBatches(ANSWER)
+    tries = []
+
+    def refuse(requests):
+        tries.append(1)
+        raise NoMoney()
+
+    b.create = refuse
+    cl = NS(messages=NS(batches=b))
+    later = spend_advice.slot(dt.datetime.now(MSK)) + dt.timedelta(days=7)
+    assert spend_advice.tick(dela, "key", None, later, cl) == {"error": "на счёте Anthropic нет денег"}
+    for m in range(1, 15):
+        assert spend_advice.tick(dela, "key", None, later + dt.timedelta(minutes=m), cl) is None
+    assert len(tries) == 1
+    assert spend_advice.tick(dela, "key", None, later + dt.timedelta(minutes=15), cl) == {"error": "на счёте Anthropic нет денег"}
+    assert len(tries) == 2
+    del b.create
+    out = spend_advice.tick(dela, "key", None, later + dt.timedelta(minutes=30), cl)
+    assert out and out["sent"] and len(b.sent) == 1
+
+
 def test_advice_dry_message_only_numbers(dela):
     d = today(dela)
     put(dela, [row(d, usd=1.0, usd_list=1.0)])

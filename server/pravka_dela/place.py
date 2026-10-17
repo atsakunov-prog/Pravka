@@ -35,7 +35,7 @@ from zoneinfo import ZoneInfo
 
 from psycopg.types.json import Jsonb
 
-from . import db, krug, llm
+from . import db, guard, krug, llm
 
 log = logging.getLogger("dela.place")
 
@@ -407,6 +407,9 @@ TUNE_KEY = "krug_tune"  # crm.state: неделя, до какого мига п
 TUNE_MODEL = "claude-opus-5-5"
 TUNE_EFFORT = "medium"
 TUNE_BATCH_MAX_AGE = 6 * 3600
+# Отправку отказали (нет денег, связь; 17.10.2026) — следующая через 15 минут, а не на каждом тике до конца окна в 6 ч:
+# защита от петли считает попытки (krug_tune — 4 за 10 минут, 10 за час), 4 в час её не будят.
+TUNE_RETRY_GAP = 900
 
 TUNE_RULES = """Ты ведёшь короткий список выводов о том, как владелец раскладывает свои дела по дереву жизни. Список
 читают все, кто заводит его дела (разбор надиктовки, встреч, переписки), — рядом с общими правилами, деревом целей и
@@ -507,7 +510,6 @@ def tune(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
     if st.get("batch"):
         b = st["batch"]
         if client is None:
-            from . import guard
             client = guard.client(url, key, proxy, "krug_tune")
         info = client.messages.batches.retrieve(b["id"])
         if info.processing_status != "ended":
@@ -523,7 +525,13 @@ def tune(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
         if res is None or res.result.type != "succeeded":
             _save(url, {**st, "batch": None, "last": {"week": b["week"], "error": res.result.type if res else "пусто"}})
             return {"error": True}
-        out = tune_apply(url, b["owner"], res.result.message)
+        try:
+            out = tune_apply(url, b["owner"], res.result.message)
+        except (RuntimeError, ValueError) as e:
+            # Ответ оплачен и уже в книге; не снять пачку — каждый тик читал бы её заново и снова писал бы траты.
+            _save(url, {**st, "batch": None, "last": {"week": b["week"], "error": str(e)[:200]}})
+            log.warning("Круг: выводы из правок не разобрались — %s", e)
+            return {"error": True}
         _save(url, {**st, "batch": None, "since": b["until"], "last": {"week": b["week"], **out}})
         log.info("Круг: выводы из правок — %d ($%.3f)", out["lessons"], out["usd"])
         return out
@@ -531,6 +539,8 @@ def tune(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
     week = slot.strftime("%Y-%m-%d")
     if st.get("week") == week or now.astimezone(MSK) - slot > dt.timedelta(hours=6) or not key:
         return None
+    if now.timestamp() < float(st.get("retry_at") or 0):
+        return None  # прошлую отправку отказали — ждём TUNE_RETRY_GAP
     with db.session(url, "system", via="krug") as conn:
         owner = conn.execute("SELECT crm.owner_id() AS id").fetchone()["id"]
     since = dt.datetime.fromisoformat(st["since"]) if st.get("since") else now - dt.timedelta(days=7)
@@ -540,9 +550,16 @@ def tune(url: str, key: str, proxy: str | None, now: dt.datetime | None = None, 
         _save(url, {**st, "week": week, "since": until})
         return None
     if client is None:
-        from . import guard
         client = guard.client(url, key, proxy, "krug_tune")  # защита от петли (аудит №12)
-    b = client.messages.batches.create(requests=[{"custom_id": "krug-tune", "params": p}])
+    try:
+        b = client.messages.batches.create(requests=[{"custom_id": "krug-tune", "params": p}])
+    except guard.Stopped:
+        raise
+    except Exception as e:  # noqa: BLE001 — отказ Anthropic или сеть: неделя не отмечена, попытка через TUNE_RETRY_GAP
+        why = guard.reason(e)
+        _save(url, {**st, "retry_at": now.timestamp() + TUNE_RETRY_GAP, "last": {"week": week, "error": why}})
+        log.warning("Круг: выводы из правок не ушли — %s; следующая попытка через %d мин", why, TUNE_RETRY_GAP // 60)
+        return {"error": why}
     _save(url, {**st, "week": week, "batch": {"id": b.id, "at": time.time(), "week": week, "owner": owner, "until": until}})
     log.info("Круг: правки за неделю — на выводы, пачка %s", b.id)
     return {"sent": True}

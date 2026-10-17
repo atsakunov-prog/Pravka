@@ -107,6 +107,57 @@ def test_nothing_to_do_costs_nothing(kr):
     assert krug_auto.tick(kr, "key", None, at("2026-10-13T03:00"), cl) is None and b.sent == []
 
 
+class NoMoney(Exception):
+    status_code = 400
+
+    def __init__(self):
+        super().__init__("Your credit balance is too low to access the Anthropic API.")
+
+
+class RefusingBatches(FakeBatches):
+    """Отправка отказана (17.10.2026: кончились деньги), пока broke; запрос напрямую — тоже."""
+
+    def __init__(self, answer):
+        super().__init__(answer)
+        self.tries, self.direct, self.broke = 0, 0, True
+
+    def create(self, requests):
+        self.tries += 1
+        if self.broke:
+            raise NoMoney()
+        return super().create(requests)
+
+    def cancel(self, bid):
+        self.status = "canceling"
+
+
+def test_refused_send_waits_in_slot_and_stuck_batch_is_dropped(kr, monkeypatch):
+    """Отказанную пачку тик не повторяет каждую минуту до конца слота (защита от петли считает попытки): следующая —
+    через RETRY_GAP. Застрявшая пачка, которую и напрямую не вышло, снимается — а не тот же запрос на каждом тике."""
+    mk(kr, title="Театр")
+    b = RefusingBatches([])
+
+    def direct(**k):
+        b.direct += 1
+        raise NoMoney()
+
+    cl = NS(messages=NS(batches=b), beta=NS(messages=NS(create=direct)))
+    assert krug_auto.tick(kr, "key", None, at("2026-10-12T20:31"), cl) == {"error": "на счёте Anthropic нет денег"}
+    for m in range(32, 36):
+        assert krug_auto.tick(kr, "key", None, at(f"2026-10-12T20:{m}"), cl) is None
+    assert b.tries == 1
+    assert krug_auto.tick(kr, "key", None, at("2026-10-12T20:36"), cl) == {"error": "на счёте Anthropic нет денег"}
+    assert b.tries == 2
+    b.broke = False
+    assert krug_auto.tick(kr, "key", None, at("2026-10-12T20:41"), cl) == {"sent": 1} and b.tries == 3
+    # Пачка застряла дольше BATCH_MAX_AGE, напрямую — отказ: пачка снята, дело уйдёт следующим слотом.
+    monkeypatch.setattr(krug_auto, "BATCH_MAX_AGE", -1)
+    out = krug_auto.tick(kr, "key", None, at("2026-10-12T20:42"), cl)
+    assert out == {"error": "на счёте Anthropic нет денег"} and b.direct == 1
+    assert krug_auto.tick(kr, "key", None, at("2026-10-12T20:43"), cl) is None and b.direct == 1  # не на каждом тике
+    assert krug_auto.tick(kr, "key", None, at("2026-10-12T21:00"), cl) == {"sent": 1}  # «Театр» не просмотрен
+
+
 def test_schema_enum_is_owner_keys(kr):
     s = krug_auto.schema(DIRS)
     item = s["properties"]["items"]["items"]["properties"]

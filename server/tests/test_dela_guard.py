@@ -19,8 +19,10 @@ from test_dela_schema import dela  # noqa: F401  (фикстура)
 def fresh_caps():
     """Пороги — заводские в начале каждого теста (кэш Свода в процессе)."""
     guard._caps.update(at=-guard.CAPS_EVERY, value=None)
+    guard._errors.clear()
     yield
     guard._caps.update(at=-guard.CAPS_EVERY, value=None)
+    guard._errors.clear()
 
 
 class FakeAnthropic:
@@ -102,6 +104,62 @@ def test_task_threshold_stops_that_task_once(dela):
     for i in range(29):
         guard.hit(dela, "when", now + i * 60)  # 29 вызовов за полчаса — меньше 40 за 10 минут
     assert not guard.blocked(dela, "when")
+
+
+class Refused(Exception):
+    def __init__(self, text: str, code: int | None = None):
+        super().__init__(text)
+        if code is not None:
+            self.status_code = code
+
+
+class APIConnectionError(Exception):
+    """Имя — как у SDK: reason узнаёт отказ по имени класса, SDK не импортирует."""
+
+
+def test_refusals_named_in_stop_message_and_counting_unchanged(dela):
+    """17.10.2026: кончились деньги — «разборщик встреч: 7 вызовов за 10 минут» без слова о причине. Считать попытки
+    защита продолжает (это защита), но сообщение говорит, что Anthropic отказывал и чем."""
+    f = FakeAnthropic()
+
+    def no_money(**k):
+        f.calls.append("batches.create")
+        raise Refused("Error code: 400 - Your credit balance is too low to access the Anthropic API.", 400)
+
+    f.messages.batches.create = no_money
+    c = guard.wrap(f, dela, "meetings")
+    for _ in range(6):
+        with pytest.raises(Refused):
+            c.messages.batches.create(requests=[])
+    with pytest.raises(guard.Stopped) as e:
+        c.messages.batches.create(requests=[])
+    assert "разборщик встреч: 7 вызовов за 10 минут, порог 6" in str(e.value) and len(f.calls) == 6
+    [al] = guard.alerts_due(dela)
+    assert ("Из них Anthropic отказал 6 раз: на счёте Anthropic нет денег — это не петля в коде, а повторы после "
+            "отказа.") in al["text"] and "Задача стоит, деньги не тратятся." in al["text"]
+    [st] = guard.status(dela)["stopped"]
+    assert st["cause"].startswith("Из них Anthropic отказал 6 раз")
+    # Повтор вопроса через 6 часов — с той же причиной.
+    again = guard.alerts_due(dela, "", time.time() + 6 * 3600 + 10)
+    assert any("на счёте Anthropic нет денег" in a["text"] and "всё ещё стоит" in a["text"] for a in again)
+    # Без отказов — без строки о них: петля так петля.
+    now = time.time()
+    for i in range(4):
+        guard.hit(dela, "zachem", now + i)
+    with pytest.raises(guard.Stopped):
+        guard.hit(dela, "zachem", now + 4)
+    z = [a for a in guard.alerts_due(dela) if a["task"] == "zachem"][0]
+    assert "Anthropic отказал" not in z["text"]
+
+
+def test_reason_in_words():
+    assert guard.reason(Refused("Your credit balance is too low", 400)) == "на счёте Anthropic нет денег"
+    assert guard.reason(Refused("invalid x-api-key", 401)) == "ключ Anthropic не принят"
+    assert guard.reason(Refused("rate_limit_error", 429)) == "Anthropic просит реже (лимит запросов)"
+    assert guard.reason(Refused("overloaded_error", 529)) == "Anthropic перегружен"
+    assert guard.reason(Refused("api_error", 500)) == "сбой на стороне Anthropic (500)"
+    assert guard.reason(APIConnectionError("Connection error.")) == "нет связи с Anthropic"
+    assert guard.reason(ValueError("что-то\n  своё")) == "ValueError: что-то своё"
 
 
 def test_total_stops_every_task(dela):

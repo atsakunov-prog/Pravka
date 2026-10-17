@@ -237,6 +237,52 @@ def test_tune_weekly_lessons(kr):
     assert "ВЫВОДЫ ИЗ ЕГО ПРАВОК" in place.block(kr, "sasha")
 
 
+class NoMoney(Exception):
+    status_code = 400
+
+    def __init__(self):
+        super().__init__("Your credit balance is too low to access the Anthropic API.")
+
+
+def test_tune_refused_waits_and_broken_answer_drops_batch(kr):
+    """Отказанную отправку выводов тик не повторяет каждую минуту шесть часов подряд (защита от петли считает попытки):
+    следующая — через TUNE_RETRY_GAP. Ответ, который не разобрался, снимает пачку: иначе каждый тик читал бы её заново
+    и снова писал бы траты."""
+    g = tree(kr)
+    moved = mk(kr, title="Купить протеин", why_auto=g["food"]["num"])
+    ok(kr, "sasha", {"op": "task.set", "id": moved["id"], "set": {"why_id": g["protein"]["id"]}})
+    b = FakeBatches({"lessons": ["вывод"], "note": "n"})
+    tries = []
+
+    def refuse(requests):
+        tries.append(1)
+        raise NoMoney()
+
+    b.create = refuse
+    cl = NS(messages=NS(batches=b))
+    later = place.tune_slot(dt.datetime.now(MSK)) + dt.timedelta(days=7)
+    assert place.tune(kr, "key", None, later, cl) == {"error": "на счёте Anthropic нет денег"}
+    for m in range(1, 15):
+        assert place.tune(kr, "key", None, later + dt.timedelta(minutes=m), cl) is None
+    assert len(tries) == 1
+    assert place.tune(kr, "key", None, later + dt.timedelta(minutes=15), cl) == {"error": "на счёте Anthropic нет денег"}
+    assert len(tries) == 2
+    del b.create  # деньги вернулись — снова метод класса
+    assert place.tune(kr, "key", None, later + dt.timedelta(minutes=30), cl) == {"sent": True} and len(b.sent) == 1
+    # Ответ оборван — траты записаны, пачка снята, неделя отмечена: следующий тик ничего не делает.
+    b.status = "ended"
+    real = b.results
+
+    def cut(bid):
+        res = next(real(bid))
+        res.result.message.stop_reason = "max_tokens"
+        return iter([res])
+
+    b.results = cut
+    assert place.tune(kr, "key", None, later + dt.timedelta(minutes=31), cl) == {"error": True}
+    assert place.tune(kr, "key", None, later + dt.timedelta(minutes=32), cl) is None and len(b.sent) == 1
+
+
 LONG_DIRS = [{"key": f"d{i}", "pos": i, "zone": "Я", "name": f"Направление {i}", "short": f"Н{i}",
               "formula": f"Формула направления {i}.", "includes": [f"входит пункт {i}.{k} с подробным пояснением" for k in range(6)],
               "excludes": [f"не сюда {i}"], "notes": f"ещё длинная заметка о направлении {i} " * 3,
