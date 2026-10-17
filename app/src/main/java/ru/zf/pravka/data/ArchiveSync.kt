@@ -44,6 +44,11 @@ import ru.zf.pravka.core.ArchiveEvents
  * (`dictation-events.log`) только дописываются — их читаем с места, где
  * остановились, а не целиком.
  *
+ * Обратная дорога (13.10.2026) — `POST /sync`: что записал кто-то другой.
+ * Диктовки компа — копией для экрана ([Pull]); еда — правдой сервера
+ * ([Merge], docs/eda-server.md): приёмы с компа забираются перед отправкой,
+ * в том же проходе, и своя неотправленная правка сильнее чужой.
+ *
  * Куда и с чем — адрес и токен из QR команды `pair` на компе, в закрытой
  * памяти (`DataRoot.secrets`): с базой не едут.
  */
@@ -145,6 +150,15 @@ internal class ArchiveSync(
         }
     }
 
+    /**
+     * Экран режима открыт (вкладка «Еда»): забрать чужое и отдать своё. Забор сам себя
+     * держит не чаще раза в минуту, отправка — только изменившееся.
+     */
+    fun refresh(domain: Domain) {
+        if (_link.value == null) return
+        scope.launch(Dispatchers.IO) { runCatching { sync("экран", setOf(domain)) } }
+    }
+
     /** Тик службы: всё целиком — то, что не дошло раньше, и журналы Правки; потом — забрать чужое. */
     suspend fun tick() {
         if (_link.value == null) return
@@ -183,6 +197,78 @@ internal class ArchiveSync(
 
     fun register(p: Pull) {
         synchronized(pulls) { pulls.removeAll { it.name == p.name }; pulls += p }
+    }
+
+    // ------------------------------------------------------------ двусторонние виды
+
+    /**
+     * Вид, у которого правда — на сервере, а телефон — одно из окон (еда, 13.10.2026,
+     * docs/eda-server.md). В отличие от [Pull], чужое забирается ПЕРЕД отправкой, в том же
+     * проходе и под теми же квитанциями. Порядок — не вкус: «Отправить всё заново» стирает
+     * квитанции, и без забора телефон отправил бы свои старые снимки новым `at` поверх правок
+     * с компа. Курсор — в квитанциях же: он и отпечатки забранного ложатся одной записью.
+     *
+     * [apply] кладёт записи `{kind, key, op, data?, at, device}`; второй аргумент — квитанция
+     * записи по (вид, ключ): отпечаток отправленного, «del» — отправлено удаление, null —
+     * ничего. Ответ — что вписать в квитанции (вид, ключ → отпечаток своего снимка после забора)
+     * и сколько поменялось у телефона.
+     */
+    class Merge(
+        val name: String,
+        val domain: Domain,
+        val kinds: List<String>,
+        val active: () -> Boolean,
+        val apply: suspend (List<JSONObject>, (String, String) -> String?) -> Taken,
+    )
+
+    class Taken(val sent: Map<Pair<String, String>, String>, val changed: Int)
+
+    private val merges = mutableListOf<Merge>()
+    /** Когда забирали двусторонний вид — под [mutex] прохода. */
+    private val mergedAt = HashMap<String, Long>()
+
+    fun register(m: Merge) {
+        synchronized(merges) { merges.removeAll { it.name == m.name }; merges += m }
+    }
+
+    /**
+     * Забрать чужое по [m] внутри прохода: не чаще раза в минуту, если не [force]. Сеть
+     * подвела или запись не легла — курсор стоит, следующий проход возьмёт то же.
+     */
+    private suspend fun merge(m: Merge, l: Link, ledger: Ledger, force: Boolean) {
+        if (!m.active()) return
+        val now = System.currentTimeMillis()
+        if (!force && now - (mergedAt[m.name] ?: 0L) < PULL_EVERY_MS) return
+        mergedAt[m.name] = now
+        val body = JSONObject()
+            .put("device", deviceId())
+            .put("profile", sources.profile ?: "")
+            .put("kinds", JSONArray().apply { m.kinds.forEach { put(it) } })
+            .put("since", ledger.cursors[m.name].orEmpty())
+        val reply = runCatching { post(l.url, l.token, body, "sync") }.getOrElse { e ->
+            val msg = why(e)
+            val waiting = msg.contains("забрать можно только")
+            if (!waiting && _pullState.value[m.name]?.error != msg) log("архив: забрать ${m.name} — $msg")
+            setPull(m.name) { it.copy(error = if (waiting) "" else msg, waiting = waiting) }
+            return
+        }
+        val arr = reply.optJSONArray("records") ?: JSONArray()
+        val records = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+        val taken = if (records.isEmpty()) Taken(emptyMap(), 0) else runCatching {
+            m.apply(records) { kind, key -> ledger.kinds[kind]?.get(key) }
+        }.getOrElse { e ->
+            val msg = "не легло — ${e.javaClass.simpleName}: ${e.message}"
+            log("архив: забрать ${m.name} — $msg")
+            setPull(m.name) { it.copy(error = msg) }
+            return
+        }
+        for ((k, hash) in taken.sent) ledger.kind(k.first)[k.second] = hash
+        reply.optString("cursor").takeIf { it.isNotBlank() }?.let { ledger.cursors[m.name] = it }
+        // Сразу на диск: забранное уже в сторе, и квитанции должны знать о нём, даже если
+        // отправка ниже оборвётся.
+        ledger.write(ledgerFile)
+        setPull(m.name) { PullState(lastOk = now, got = it.got + taken.changed) }
+        if (taken.changed > 0) log("архив: забрал ${m.name} — ${taken.changed}")
     }
 
     /**
@@ -241,19 +327,25 @@ internal class ArchiveSync(
         // И чужое — заново целиком: базу на компе собирали с нуля — курсоры тоже не годятся.
         pullMutex.withLock { withContext(Dispatchers.IO) { runCatching { pullFile.delete() }; pulledAt.clear() } }
         log("архив: отправляю всё заново")
-        sync("всё заново", Domain.entries.toSet())
+        // Двусторонние виды — сначала забрать целиком (квитанций и курсора больше нет): иначе
+        // свои старые снимки ушли бы поверх правок с компа.
+        sync("всё заново", Domain.entries.toSet(), forceMerge = true)
         val names = synchronized(pulls) { pulls.map { it.name } }
         for (n in names) runCatching { pull(n, force = true) }
     }
 
     // ------------------------------------------------------------ проход
 
-    suspend fun sync(why: String, domains: Set<Domain>): Unit = withContext(Dispatchers.IO) {
+    suspend fun sync(why: String, domains: Set<Domain>, forceMerge: Boolean = false): Unit = withContext(Dispatchers.IO) {
         val l = _link.value ?: return@withContext
         if (!mutex.tryLock()) return@withContext  // идёт проход — он заберёт и это
         try {
             _status.value = _status.value.copy(running = true)
             val ledger = Ledger.read(ledgerFile)
+            // Сначала — чужое у двусторонних видов: дальше разница считается уже по нему.
+            val two = synchronized(merges) { merges.filter { it.domain in domains } }
+            for (m in two) runCatching { merge(m, l, ledger, forceMerge) }
+                .onFailure { log("архив: забрать ${m.name} — ${it.javaClass.simpleName}: ${it.message}") }
             val clock = ArchiveEvents.Clock()
             // Одно «когда» на проход: порядок внутри него держит seq.
             val at = clock.iso(System.currentTimeMillis())
@@ -531,6 +623,8 @@ internal class ArchiveSync(
         val offsets: MutableMap<String, Long> = mutableMapOf(),
         var lastOk: Long = 0L,
         var sent: Long = 0L,
+        /** Курсоры забора двусторонних видов ([Merge]): стёрли квитанции — забор с начала. */
+        val cursors: MutableMap<String, String> = mutableMapOf(),
     ) {
         fun kind(k: String): MutableMap<String, String> = kinds.getOrPut(k) { mutableMapOf() }
 
@@ -538,6 +632,7 @@ internal class ArchiveSync(
             val o = JSONObject().put("v", 1).put("lastOk", lastOk).put("sent", sent)
             o.put("kinds", JSONObject().apply { for ((k, m) in kinds) put(k, JSONObject(m as Map<*, *>)) })
             o.put("offsets", JSONObject().apply { for ((k, v) in offsets) put(k, v) })
+            if (cursors.isNotEmpty()) o.put("cursors", JSONObject().apply { for ((k, v) in cursors) put(k, v) })
             StoreFiles.writeAtomic(f, o.toString())
         }
 
@@ -554,6 +649,7 @@ internal class ArchiveSync(
                         }
                     }
                     o.optJSONObject("offsets")?.let { os -> for (k in os.keys()) l.offsets[k] = os.getLong(k) }
+                    o.optJSONObject("cursors")?.let { cs -> for (k in cs.keys()) l.cursors[k] = cs.optString(k) }
                     l
                 }.getOrElse { Ledger() }  // не разобрался — пошлём всё заново, сервер не удвоит
             }
@@ -569,7 +665,7 @@ internal class ArchiveSync(
         /** Забор не чаще раза в минуту: экран «Правка» открывают часто, тик — раз в пять минут. */
         private const val PULL_EVERY_MS = 60_000L
         const val PAIR_PREFIX = "pravka-archive:"
-        private const val GONE = "del"
+        private const val GONE = ArchiveEvents.GONE
         private const val JOURNAL_KIND = "pravka.journal"
         private const val POKE_QUIET_MS = 10_000L
         private const val BATCH_EVENTS = 400

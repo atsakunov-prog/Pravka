@@ -170,7 +170,7 @@ internal fun FoodDiaryCardV2(
             KvListRow(
                 title = if (wide) kind.replaceFirstChar { it.uppercase() } else mealList(meal),
                 titleWeight = if (wide) FontWeight.SemiBold else FontWeight.Normal,
-                sub = if (wide) null else "$kind · " + macros(meal.protein, meal.fat, meal.carbs),
+                sub = if (wide) null else listOfNotNull(kind, macros(meal.protein, meal.fat, meal.carbs), fromPc(meal)).joinToString(" · "),
                 lead = mealTimeFormat.format(Date(meal.ts)),
                 value = "${Fmt.num(meal.kcal)} ккал",
                 valueSmall = true,
@@ -180,7 +180,7 @@ internal fun FoodDiaryCardV2(
                 below = {
                     if (wide) {
                         Text(mealList(meal), style = LocalPravkaType.current.body.copy(fontSize = 13.sp, lineHeight = 18.sp), color = Kv.muted, modifier = Modifier.padding(top = 3.dp))
-                        Text(macros(meal.protein, meal.fat, meal.carbs), style = LocalPravkaType.current.meta, color = Kv.faint, modifier = Modifier.padding(top = 2.dp))
+                        Text(listOfNotNull(macros(meal.protein, meal.fat, meal.carbs), fromPc(meal)).joinToString(" · "), style = LocalPravkaType.current.meta, color = Kv.faint, modifier = Modifier.padding(top = 2.dp))
                     }
                     if (open) {
                         MealDetails(app, meal)

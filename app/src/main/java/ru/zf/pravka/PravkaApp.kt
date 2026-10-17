@@ -4,6 +4,7 @@ import android.app.Application
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -174,6 +175,33 @@ class PravkaApp : Application() {
             svodStore.view.collect {
                 ru.zf.pravka.ui.Look.tokens(ru.zf.pravka.core.Kovcheg.tokens(ru.zf.pravka.core.Svod.value(ru.zf.pravka.core.Kovcheg.LOOK_KEY)))
             }
+        }
+        // Цели еды и веса — запись Свода `food.goals` (docs/eda-server.md, часть 2): поправили в
+        // «Еде» на компе — ручки телефона (их кэш) следом, полоски и «осталось» видят сразу.
+        appScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            svodStore.view
+                .map { ru.zf.pravka.core.FoodGoals.parse(ru.zf.pravka.core.Svod.value(ru.zf.pravka.core.FoodGoals.KEY)) }
+                .distinctUntilChanged()
+                .collect { g -> if (g != null) runCatching { applyFoodGoals(g) } }
+        }
+        // Правила блока и справочник упражнений — записи Свода `sport.rules` и `sport.exercises`
+        // (docs/eda-server.md, часть 3): правит «Спорт» на компе, телефон читает поверх замороженных.
+        // Не на главном потоке: справочник — десятки килобайт JSON.
+        appScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            svodStore.view
+                .map {
+                    val sv = ru.zf.pravka.core.Svod.current
+                    sv[ru.zf.pravka.core.SportSvod.RULES]?.let { e -> e.value to e.updatedAt } to sv[ru.zf.pravka.core.SportSvod.EXERCISES]?.value
+                }
+                .distinctUntilChanged()
+                .collect { (rules, book) ->
+                    // Записей нет (не владелец, Спорт выключен) — сторы спорта не будим.
+                    if (rules == null && book == null) return@collect
+                    runCatching {
+                        planStore.useSvodRules(rules?.first?.let { ru.zf.pravka.core.SportSvod.rules(ru.zf.pravka.core.Svod.parseJson(it), rules.second) })
+                    }.onFailure { eventLog.add("свод: правила блока не легли — ${it.message}") }
+                    runCatching { exerciseBook.useSvod(book) }
+                }
         }
         // Режим отладки: транспорт пишет каждый запрос к Claude целиком в
         // свой лог, пока тумблер включён (Настройки → Общее).
@@ -804,6 +832,19 @@ class PravkaApp : Application() {
             // Обратная дорога (Правка 5.0, этап 5): диктовки компьютера — для экрана «Правка».
             s.register(ru.zf.pravka.data.ArchiveSync.Pull(ru.zf.pravka.data.PcDictations.PULL, ru.zf.pravka.data.PcDictations.KINDS) { recs ->
                 pcDictations.apply(recs)
+            })
+            // Еда — правда на сервере (docs/eda-server.md): приёмы с компа забираются перед
+            // каждой отправкой, своя неотправленная правка сильнее (`core/FoodSync.kt`).
+            val food = ru.zf.pravka.core.FoodSync.KIND
+            s.register(ru.zf.pravka.data.ArchiveSync.Merge(
+                name = "food",
+                domain = ArchiveDomain.FOOD,
+                kinds = listOf(food),
+                active = { profileStore.has(ru.zf.pravka.data.Profile.Mode.FOOD) },
+            ) { recs, sent ->
+                val (plan, days) = foodEngine.fromServer(recs) { key -> sent(food, key) }
+                if (days.isNotEmpty()) appScope.launch(kotlinx.coroutines.Dispatchers.IO) { foodEngine.syncDays(days) }
+                ru.zf.pravka.data.ArchiveSync.Taken(plan.sent.mapKeys { food to it.key }, plan.changed)
             })
         }
     }

@@ -6,7 +6,9 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.flow.first
 import ru.zf.pravka.core.CallRules
+import ru.zf.pravka.core.FoodGoals
 import ru.zf.pravka.core.Svod
 import ru.zf.pravka.data.ModelRoute
 import ru.zf.pravka.data.PromptStore
@@ -200,7 +202,96 @@ internal suspend fun PravkaApp.svodSeedTexts(): Map<String, Pair<String?, String
         asset(ru.zf.pravka.data.RationBook.ASSET)?.takeIf { ru.zf.pravka.core.Ration.parse(it)?.empty == false }
             ?.let { out[Svod.FOOD_RATION] = null to it }
     }
+    // Правила блока и справочник упражнений — замороженные на телефоне, если записей ещё нет
+    // (docs/eda-server.md, часть 3). Это блок владельца — только у него, как рацион.
+    if (profileStore.owner && profileStore.has(ru.zf.pravka.data.Profile.Mode.SPORT)) {
+        ru.zf.pravka.core.SportSvod.rulesValue(planStore.frozenRules(), java.time.LocalDate.now().toString())
+            ?.let { out[ru.zf.pravka.core.SportSvod.RULES] = null to it.toString() }
+        exerciseBook.localText()?.let { out[ru.zf.pravka.core.SportSvod.EXERCISES] = null to it }
+    }
+    // Цели еды и веса — свои ручки, если записи ещё нет (docs/eda-server.md, часть 2).
+    if (profileStore.has(ru.zf.pravka.data.Profile.Mode.FOOD)) {
+        val t = settings.foodTargets()
+        out[FoodGoals.KEY] = null to FoodGoals.value(
+            null, t.kcal, t.protein, t.fat, t.carbs, settings.goalWeightFlow.first(), java.time.LocalDate.now().toString(),
+        ).toString()
+    }
     return out
+}
+
+// ---- Цели еды и веса — Свод food.goals (docs/eda-server.md, часть 2) ----
+
+/**
+ * Запись Свода → ручки телефона (они — её кэш): цели поправили на компе — полоски еды,
+ * «осталось» и цель веса видят их сразу, без сети — последнее известное. Свои
+ * неотправленные правки Свод уже показывает поверх серверного (`SvodStore.publish`),
+ * поэтому здесь своё не затирается.
+ */
+internal suspend fun PravkaApp.applyFoodGoals(g: FoodGoals.Goals) {
+    val t = settings.foodTargets()
+    if (t.kcal != g.kcal || t.protein != g.protein || t.fat != g.fat || t.carbs != g.carbs) {
+        settings.setFoodTargets(g.kcal, g.protein, g.fat, g.carbs)
+    }
+    g.weightRound?.let { if (it != settings.goalWeightFlow.first()) settings.setGoalWeight(it) }
+    if (g.weightBy != settings.goalWeightByFlow.first()) settings.setGoalWeightBy(g.weightBy)
+}
+
+/**
+ * Правка владельца — «Настройки → Тело» и «Посчитать от веса»: в Свод последним словом
+ * (без `base_rev`), потом в ручки. Сначала Свод: иначе сверка увидела бы прежнюю запись и
+ * вернула бы ручки назад до того, как своя правка встала в очередь.
+ */
+internal suspend fun PravkaApp.saveFoodGoals(kcal: Int, protein: Int, fat: Int, carbs: Int) {
+    // Те же рамки, что у ручек: иначе в Своде лежало бы одно, а на телефоне — другое.
+    val k = kcal.coerceIn(800, 6000)
+    val p = protein.coerceIn(0, 400)
+    val f = fat.coerceIn(0, 300)
+    val c = carbs.coerceIn(0, 800)
+    putFoodGoals(k, p, f, c, settings.goalWeightFlow.first(), "цели еды — Настройки → Тело")
+    settings.setFoodTargets(k, p, f, c)
+}
+
+/** Цель веса ползунком во «Спорте» — тем же путём: Свод, потом ручка. */
+internal suspend fun PravkaApp.saveGoalWeight(kg: Int) {
+    val w = kg.coerceIn(40, 200)
+    val t = settings.foodTargets()
+    putFoodGoals(t.kcal, t.protein, t.fat, t.carbs, w, "цель веса — Спорт")
+    settings.setGoalWeight(w)
+}
+
+private suspend fun PravkaApp.putFoodGoals(kcal: Int, protein: Int, fat: Int, carbs: Int, weight: Int, reason: String) {
+    val v = FoodGoals.value(Svod.obj(FoodGoals.KEY), kcal, protein, fat, carbs, weight, java.time.LocalDate.now().toString())
+    runCatching { svodStore.set(FoodGoals.KEY, value = v.toString(), author = "phone", reason = reason) }
+        .onFailure { eventLog.add("свод: цели еды не встали в очередь — ${it.message}") }
+}
+
+/** Откуда цели — строкой в настройках: «молчаливая механика читается как поломка». */
+internal fun PravkaApp.foodGoalsSource(view: SvodStore.View): String {
+    val queued = view.pending.any { it.key == FoodGoals.KEY }
+    val e = view.entries.firstOrNull { it.key == FoodGoals.KEY }
+    return when {
+        queued && svodOn() -> "Своя правка уходит на сервер Дел"
+        queued -> "Своя правка — сервер Дел не подключён, держу на телефоне"
+        e != null -> "С сервера Дел · версия ${e.rev}" + (if (e.author == "eda") " · правили в «Еде» на компе" else "")
+        svodOn() -> "На сервере целей ещё нет — отдам свои с ближайшим синком"
+        else -> "Только на телефоне — сервер Дел не подключён"
+    }
+}
+
+/**
+ * Откуда правила блока или справочник упражнений ([key] — `sport.rules` или
+ * `sport.exercises`): запись Свода с версией, засев в пути или замороженное на телефоне.
+ */
+internal fun PravkaApp.sportSvodSource(view: SvodStore.View, key: String, frozen: String): String {
+    val e = view.entries.firstOrNull { it.key == key }
+    val seeding = view.pending.any { it.key == key }
+    return when {
+        e != null -> "С сервера Дел · версия ${e.rev}" + (if (e.author == "sport") " · правили в «Спорте» на компе" else "") +
+            (e.updatedAt.takeIf { it.length >= 10 }?.let { " · ${it.substring(8, 10)}.${it.substring(5, 7)}" } ?: "")
+        seeding && svodOn() -> "$frozen — отдаю на сервер Дел, дальше их правит «Спорт» на компе"
+        svodOn() -> "$frozen — на сервере записи нет, отдам с ближайшим синком"
+        else -> "$frozen — сервер Дел не подключён"
+    }
 }
 
 /**

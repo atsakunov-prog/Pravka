@@ -21,8 +21,10 @@ import org.json.JSONObject
 //   светофор колена, правило отмены и текст страниц блока прозой. До
 //   12.10.2026 они раз в сутки приезжали со страницы блока в Notion (Сонет
 //   вынимал числа из прозы); Notion владелец убрал, и правила здесь
-//   ЗАМОРОЖЕНЫ на последнем полученном: светофор и тренер читают их как
-//   раньше, обновлять их больше нечем.
+//   ЗАМОРОЖЕНЫ на последнем полученном. С 13.10.2026 правда о них — запись
+//   Свода `sport.rules` (правит служба «Спорт» на компе, docs/eda-server.md,
+//   часть 3): она ложится поверх замороженных ([useSvodRules]), а замороженные
+//   остаются в файле — ими телефон засевает Свод и живёт без записи.
 //
 // Календарь — КЭШ: потерять не страшно, отрастёт. Но пустой ответ сюда не
 // пишется — на даче интернета нет, и вкладка должна показывать вчерашнее
@@ -237,7 +239,29 @@ class PlanStore(private val context: Context) {
     val daysFlow: StateFlow<List<PlanDay>> = _daysFlow
 
     private val _rulesFlow = MutableStateFlow(Rules())
+    /** Правила, по которым работают светофор и тренер: запись Свода, нет её — замороженные. */
     val rulesFlow: StateFlow<Rules> = _rulesFlow
+
+    /** Замороженные правила из `plan.json` — то, что лежит в файле и уходит засевом в Свод. */
+    @Volatile private var frozen = Rules()
+    /** Правила из Свода (`sport.rules`); null — записи нет или она не читается. */
+    @Volatile private var svodRules: Rules? = null
+
+    /** Правила из Свода, а не замороженные с телефона, — строка в настройках «Спорта». */
+    val rulesFromSvod: Boolean get() = svodRules != null
+
+    /** Свои замороженные правила — засев `sport.rules`, когда записи ещё нет. */
+    suspend fun frozenRules(): Rules = mutex.withLock { ensureLoaded(); frozen }
+
+    /**
+     * Запись Свода `sport.rules` поверх замороженных (null — снова свои). В файл не
+     * пишется: замороженное — запас без сети и без записи, его не стирать.
+     */
+    suspend fun useSvodRules(rules: Rules?) = mutex.withLock {
+        if (rules == svodRules) return@withLock
+        svodRules = rules
+        if (loaded || rules != null) _rulesFlow.value = rules ?: frozen
+    }
 
     @Volatile private var eventsAt = 0L
     fun eventsFetchedAt(): Long = eventsAt
@@ -277,11 +301,12 @@ class PlanStore(private val context: Context) {
         persist()
     }
 
-    /** Положить правила целиком. Живого писателя нет — пользуются снимки экранов. */
+    /** Положить замороженные правила целиком. Живого писателя нет — пользуются снимки экранов. */
     suspend fun setRules(rules: Rules) = mutex.withLock {
         ensureLoaded()
         if (!rules.known) return@withLock
-        _rulesFlow.value = rules
+        frozen = rules
+        _rulesFlow.value = svodRules ?: rules
         persist()
     }
 
@@ -344,9 +369,10 @@ class PlanStore(private val context: Context) {
         loaded = true
         if (parsed != null) {
             _daysFlow.value = parsed.first
-            _rulesFlow.value = parsed.second
+            frozen = parsed.second
             eventsAt = parsed.third
         }
+        _rulesFlow.value = svodRules ?: frozen
     }
 
     private fun persist() {
@@ -375,7 +401,8 @@ class PlanStore(private val context: Context) {
                 )
             }
         )
-        val r = _rulesFlow.value
+        // В файл — замороженные, а не действующие: запись Свода живёт в кэше Свода.
+        val r = frozen
         put(
             "rules",
             JSONObject().apply {

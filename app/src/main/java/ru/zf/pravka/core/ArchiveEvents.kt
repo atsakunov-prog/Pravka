@@ -34,6 +34,9 @@ import ru.zf.pravka.data.ZasechkaStore
  */
 object ArchiveEvents {
 
+    /** Отметка квитанции «телефон отправил удаление» (`ArchiveSync`, забор чужого — `FoodSync`). */
+    const val GONE = "del"
+
     /** Одна порция архива: вид, ключ внутри вида и снимок записи целиком. */
     data class Item(val kind: String, val key: String, val data: JSONObject) {
         val hash: String by lazy { hashOf(data) }
@@ -184,6 +187,12 @@ object ArchiveEvents {
 
     // ------------------------------------------------------------------ Еда
 
+    /**
+     * Приём пищи. `origin` — только у чужого приёма («pc» — записан на компе,
+     * docs/eda-server.md): телефон, поправив его, возвращает поле серверу, а у своих
+     * приёмов ключа нет вовсе — их отпечатки те же, что до 13.10, и повторной
+     * отправки всего дневника не случается.
+     */
     fun meal(m: FoodStore.Meal, clock: Clock): Item =
         Item("food.meal", "f${m.id}", obj(
             "id" to m.id,
@@ -216,7 +225,7 @@ object ArchiveEvents {
                 "kcal" to m.kcal, "protein_g" to m.protein, "fat_g" to m.fat,
                 "carbs_g" to m.carbs, "fiber_g" to m.fiber, "grams" to m.grams,
             ),
-        ))
+        ).apply { if (m.origin.isNotBlank()) put("origin", m.origin) })
 
     fun norms(all: List<Micronutrients.Nutrient>): Item =
         Item("food.norms", "all", obj(

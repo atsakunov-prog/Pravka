@@ -62,7 +62,7 @@ internal object PhoneKnobs {
     private const val WHY_HANDS = "плавающие кнопки — только в руках: какие и где стоят, подбирают на живом экране"
     private const val WHY_KEYS = "ключи и токены не уезжают с телефона — видно только, есть ли они"
     private const val WHY_PERM = "разрешение выдаёт только сам телефон — в его настройках"
-    private const val WHY_GOALS = "цели еды и веса — запись Свода food.goals: их правит «Еда» на компе, телефон возьмёт её по заданию docs/eda-server.md"
+    private const val WHY_GOALS = "цели еды и веса — запись Свода food.goals: их правит «Еда» на компе, телефон читает её и пишет туда свои ручки"
 
     val GROUPS: List<PhoneGroup> = listOf(
         PhoneGroup("models", "Модели", "какая модель и с каким усилием на каждой дороге; ночной разбор", "claude") { v ->

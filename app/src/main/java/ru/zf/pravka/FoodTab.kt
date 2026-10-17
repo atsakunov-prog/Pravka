@@ -116,6 +116,9 @@ internal fun FoodTab(
     val context = LocalContext.current
     val store = app.foodStore
     val meals by store.mealsFlow.collectAsState()
+    // Записанное на компе — сюда же (docs/eda-server.md): вкладку открыли — забрать с
+    // сервера, не дожидаясь пятиминутного тика (сам забор — не чаще раза в минуту).
+    LaunchedEffect(Unit) { app.archiveSync.refresh(ru.zf.pravka.data.ArchiveSync.Domain.FOOD) }
     val targetKcal by app.settings.foodKcalFlow.collectAsState(initial = 0)
     val targetProtein by app.settings.foodProteinFlow.collectAsState(initial = 0)
     val targetFat by app.settings.foodFatFlow.collectAsState(initial = 0)
@@ -838,12 +841,17 @@ internal fun mealList(meal: FoodStore.Meal): String =
 
 internal fun macros(p: Int, f: Int, c: Int) = "Б $p · Ж $f · У $c"
 
-private fun sourceWord(source: String): String? = when (source) {
-    "photo" -> "по фото"
-    "barcode" -> "по штрихкоду"
-    "voice" -> "голосом"
+private fun sourceWord(meal: FoodStore.Meal): String? = when {
+    // Записано на компе (docs/eda-server.md) — это и есть источник, важнее «как».
+    fromPc(meal) != null -> fromPc(meal)
+    meal.source == "photo" -> "по фото"
+    meal.source == "barcode" -> "по штрихкоду"
+    meal.source == "voice" -> "голосом"
     else -> null
 }
+
+/** «с компа» у приёма, записанного службой «Еда» на домашнем компе; свой — null. */
+internal fun fromPc(meal: FoodStore.Meal): String? = if (meal.origin == "pc") "с компа" else null
 
 /**
  * Разобранный, но не записанный приём (Правка 4.0, `screens/10`): «Ужин:
@@ -876,7 +884,7 @@ private fun MealCard(
         Text(mealTitle(meal), style = ty.bodyStrong.copy(fontSize = ty.bodyL.fontSize, lineHeight = ty.bodyL.lineHeight),
             color = ru.zf.pravka.ui.Ink.TextStrong)
         Text(
-            listOfNotNull("≈ ${ru.zf.pravka.core.Fmt.num(meal.kcal)} ккал", macros(meal.protein, meal.fat, meal.carbs), sourceWord(meal.source))
+            listOfNotNull("≈ ${ru.zf.pravka.core.Fmt.num(meal.kcal)} ккал", macros(meal.protein, meal.fat, meal.carbs), sourceWord(meal))
                 .joinToString(" · "),
             style = ty.meta,
             color = mode.meta,
@@ -971,7 +979,7 @@ private fun MealRow(
             Text(mealTimeFormat.format(Date(meal.ts)), style = ty.time, color = mode.meta, modifier = Modifier.width(56.dp))
             Column(Modifier.weight(1f)) {
                 Text(mealTitle(meal), style = ty.bodyL, color = ru.zf.pravka.ui.Ink.Text)
-                Text(macros(meal.protein, meal.fat, meal.carbs), style = ty.meta, color = mode.meta)
+                Text(listOfNotNull(macros(meal.protein, meal.fat, meal.carbs), fromPc(meal)).joinToString(" · "), style = ty.meta, color = mode.meta)
             }
             Spacer(Modifier.width(10.dp))
             Text(ru.zf.pravka.core.Fmt.num(meal.kcal), style = ty.valueS, color = ru.zf.pravka.ui.Ink.TextStrong)
@@ -1331,7 +1339,8 @@ internal fun BodyFoodSettings(app: PravkaApp) {
 
     val saveTargets: () -> Unit = {
         app.appScope.launch {
-            app.settings.setFoodTargets(
+            // Правда — запись Свода `food.goals` (docs/eda-server.md): правка уходит туда.
+            app.saveFoodGoals(
                 kcalText.toIntOrNull() ?: kcal,
                 proteinText.toIntOrNull() ?: protein,
                 fatText.toIntOrNull() ?: fat,
@@ -1339,13 +1348,15 @@ internal fun BodyFoodSettings(app: PravkaApp) {
             )
         }
     }
+    val svodView by app.svodStore.view.collectAsState()
 
     Column(verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap)) {
         PaperCard(
             label = "цели на день",
             info = "«Посчитать от веса» берёт настоящий вес из intervals.icu: Миффлин-Сан-Жеор " +
                 "при умеренной активности, белок 1,8 г/кг, жиры 0,9 г/кг, углеводы — остаток. " +
-                "Посчитанное ложится в поля — проверь и сохрани.",
+                "Посчитанное ложится в поля — проверь и сохрани. Цели живут на сервере Дел " +
+                "(запись food.goals): их видит и правит «Еда» на компе, сохранённое здесь уходит туда.",
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 NumberField("Ккал", kcalText, Modifier.weight(1f)) { kcalText = it }
@@ -1376,6 +1387,8 @@ internal fun BodyFoodSettings(app: PravkaApp) {
                 Spacer(Modifier.weight(1f))
                 PaperButton("Сохранить", primary = true, onClick = saveTargets)
             }
+            Spacer(Modifier.height(6.dp))
+            PaperHint(app.foodGoalsSource(svodView))
         }
 
         PaperCard(label = "куда уходит еда") {

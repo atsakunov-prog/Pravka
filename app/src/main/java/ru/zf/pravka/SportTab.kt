@@ -2450,9 +2450,11 @@ private fun GoalsCard(
     val bestHang = remember(gtgDays) { app.strengthStore.bestHang() }
     val tsb = health.firstOrNull()?.tsb ?: 0.0
 
-    val deadline = "2026-10-31"
+    // Срок — из записи Свода `food.goals.weight_by` (его ставят на компе); нет — конец октября, как было.
+    val goalBy by app.settings.goalWeightByFlow.collectAsState(initial = "")
+    val deadline = goalBy.ifBlank { "2026-10-31" }
     val today = dayKey(now)
-    val weeksLeft = remember(today) {
+    val weeksLeft = remember(today, deadline) {
         val days = runCatching {
             val f = SimpleDateFormat("yyyy-MM-dd", Locale.US)
             ((f.parse(deadline)!!.time - f.parse(today)!!.time) / 86_400_000L).toInt()
@@ -3170,9 +3172,11 @@ internal fun BodySportSettings(app: PravkaApp) {
                 valueText = "${goalSlider.toInt()} кг",
                 value = goalSlider,
                 onValueChange = { goalSlider = it },
-                onValueChangeFinished = { app.appScope.launch { app.settings.setGoalWeight(goalSlider.toInt()) } },
+                // Правда — запись Свода `food.goals` (docs/eda-server.md): ползунок пишет туда.
+                onValueChangeFinished = { app.appScope.launch { app.saveGoalWeight(goalSlider.toInt()) } },
                 valueRange = 65f..95f,
-                info = "К ней меряет дорогу карточка «Цели».",
+                info = "К ней меряет дорогу карточка «Цели». Цель живёт на сервере Дел вместе с целями еды " +
+                    "(запись food.goals) — её видит и правит «Еда» на компе.",
             )
             PaperToggle(
                 title = "Тренировка приехала — уведомление",
@@ -3238,7 +3242,10 @@ internal fun BodySportSettings(app: PravkaApp) {
             }
         }
 
-        PaperCard(label = "правила блока", info = "Последние сохранённые правила блока: до 12.10.2026 они приезжали со страницы блока в Notion, теперь заморожены. Светофор и тренер работают на них.") {
+        val svodView by app.svodStore.view.collectAsState()
+        PaperCard(label = "правила блока", info = "Правила блока живут на сервере Дел (запись sport.rules) — их правит «Спорт» на компе, телефон читает. Записи нет — действуют последние, что приехали из Notion до 12.10.2026 (заморожены на телефоне, ими телефон и засевает сервер). Светофор и тренер работают на действующих.") {
+            PaperHint(app.sportSvodSource(svodView, ru.zf.pravka.core.SportSvod.RULES, "Замороженные на телефоне"))
+            Spacer(Modifier.height(6.dp))
             if (rules.known) {
                 Text(rules.blockTitle.ifBlank { "Блок" }, style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(6.dp))
@@ -3278,21 +3285,25 @@ internal fun BodySportSettings(app: PravkaApp) {
             }
         }
 
-        // Справочник упражнений: семя из сборки и последний живой справочник,
-        // прочитанный из Notion до 12.10.2026. Отсюда видно, ЧЕМ сейчас
-        // матчатся строки плана — и почему «Суставы сверху вниз» вдруг без техники.
+        // Справочник упражнений: запись Свода (правит «Спорт» на компе), а без неё — семя
+        // из сборки и последний живой справочник, прочитанный из Notion до 12.10.2026.
+        // Отсюда видно, ЧЕМ сейчас матчатся строки плана — и почему «Суставы сверху
+        // вниз» вдруг без техники.
         val bookVersion by app.exerciseBook.versionFlow.collectAsState()
         PaperCard(
             label = "справочник упражнений",
-            info = "Последний живой справочник, сохранённый до 12.10.2026, или файл сборки, " +
-                "если он новее. Обновить справочник — пересобрать файл сборки " +
-                "(tools/gen_reference.py); голосовые имена движений — тоже оттуда.",
+            info = "Справочник живёт на сервере Дел (запись sport.exercises) — его правит «Спорт» на компе. " +
+                "Записи нет — последний живой справочник, сохранённый до 12.10.2026, или файл сборки, " +
+                "если он новее; им телефон и засевает сервер. Голосовые имена движений, которых нет в записи, — из файла сборки.",
         ) {
             val book = app.exerciseBook
             val zaryadka = remember(bookVersion) { book.ofBlock("Зарядка") }
             Text(
-                if (book.fromLive) "Последний живой, прочитан " + bookStampFormat.format(Date(book.fetchedAt))
-                else "Файл сборки от ${book.snapshotDate().ifBlank { "—" }}",
+                when {
+                    book.fromSvod -> app.sportSvodSource(svodView, ru.zf.pravka.core.SportSvod.EXERCISES, "Свой справочник телефона")
+                    book.fromLive -> "Последний живой, прочитан " + bookStampFormat.format(Date(book.fetchedAt))
+                    else -> "Файл сборки от ${book.snapshotDate().ifBlank { "—" }}"
+                },
                 style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.height(4.dp))

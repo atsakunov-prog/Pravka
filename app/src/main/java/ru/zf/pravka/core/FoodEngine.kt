@@ -370,6 +370,48 @@ class FoodEngine(
         "КБЖУ: ${meal.kcal} ккал · Б${meal.protein} Ж${meal.fat} У${meal.carbs}" +
             (if (meal.shortList.isBlank()) "" else " — ${meal.shortList}")
 
+    // ---- С сервера ----
+
+    /**
+     * Приёмы с сервера (docs/eda-server.md): записанное и поправленное на компе ложится тем
+     * же путём, что своё, — сумма дня, «осталось», неделя, витамины, приписка к ленте. Что
+     * класть, решает `FoodSync.plan` (своя неотправленная правка сильнее). [sent] — квитанция
+     * архива по ключу записи. Второе в ответе — дни, чей итог надо донести в intervals:
+     * это отдельный шаг ([syncDays]), забор идёт внутри прохода архива и чужой сети не ждёт.
+     */
+    suspend fun fromServer(records: List<org.json.JSONObject>, sent: (String) -> String?): Pair<FoodSync.Plan, Set<String>> {
+        val before = store.load().associateBy { it.id }
+        val plan = FoodSync.plan(records, before, sent, ArchiveEvents.Clock())
+        if (plan.broken.isNotEmpty()) eventLog.add("еда: с сервера не читается — ${plan.broken.take(3).joinToString("; ")}")
+        if (plan.kept.isNotEmpty()) eventLog.add("еда: с сервера ${plan.kept.size} — своя правка ещё не ушла, она сильнее")
+        if (plan.changed == 0) return plan to emptySet()
+        // Прежняя строка «КБЖУ: …» в ленте относилась к прежнему приёму — сначала снять её.
+        for (id in plan.put.map { it.id } + plan.gone) {
+            val old = before[id] ?: continue
+            runCatching { stripRibbonLine(old, ribbonLine(old)) }
+        }
+        store.applyRemote(plan.put, plan.gone)
+        for (m in plan.put) if (m.confirmed) runCatching { annotateRibbon(m) }
+        val days = LinkedHashSet<String>()
+        for (m in plan.put) {
+            days += dayKey(m.ts)
+            before[m.id]?.let { days += dayKey(it.ts) }
+        }
+        for (id in plan.gone) before[id]?.let { days += dayKey(it.ts) }
+        eventLog.add(
+            "еда: с сервера — " + listOfNotNull(
+                plan.put.size.takeIf { it > 0 }?.let { "записано или поправлено $it" },
+                plan.gone.size.takeIf { it > 0 }?.let { "убрано $it" },
+            ).joinToString(", ")
+        )
+        return plan to days
+    }
+
+    /** Итоги дней — в intervals после забора с сервера (пуш перетирающий: сумма дня заново). */
+    suspend fun syncDays(days: Collection<String>) {
+        for (d in days) runCatching { syncDay(d) }
+    }
+
     // ---- Правка руками ----
 
     suspend fun replaceItems(mealId: Long, items: List<MealItem>) {

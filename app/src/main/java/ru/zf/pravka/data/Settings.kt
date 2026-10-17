@@ -178,6 +178,7 @@ class Settings(private val context: Context) {
         private val KEY_T_ENABLED = booleanPreferencesKey("t_enabled")
         private val KEY_REST_SEC = intPreferencesKey("rest_timer_sec")
         private val KEY_GOAL_WEIGHT = intPreferencesKey("body_goal_weight")
+        private val KEY_GOAL_WEIGHT_BY = stringPreferencesKey("body_goal_weight_by")
         private val KEY_SPORT_NOTIFY = booleanPreferencesKey("sport_notify_arrived")
         private val KEY_MODE_ICONS = booleanPreferencesKey("mode_icons_on_buttons")
         private val KEY_Z_FACE = booleanPreferencesKey("z_face_running")
@@ -1139,10 +1140,20 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_REST_SEC] = value.coerceIn(30, 300) }
     }
 
-    /** Цель веса, кг — карточка «цели» меряет дорогу к ней. */
+    /**
+     * Цель веса, кг — карточка «цели» меряет дорогу к ней. Правда — запись Свода
+     * `food.goals` (docs/eda-server.md): ручка здесь — кэш, её пишет и Свод, а
+     * правка владельца уходит туда (`PravkaApp.saveGoalWeight`).
+     */
     val goalWeightFlow = context.dataStore.data.map { it[KEY_GOAL_WEIGHT] ?: GOAL_WEIGHT_DEFAULT }
     suspend fun setGoalWeight(value: Int) {
         context.dataStore.edit { it[KEY_GOAL_WEIGHT] = value.coerceIn(40, 200) }
+    }
+
+    /** К какому дню цель веса (ГГГГ-ММ-ДД, `food.goals.weight_by`); пусто — срока нет. Ручки у телефона нет. */
+    val goalWeightByFlow = context.dataStore.data.map { it[KEY_GOAL_WEIGHT_BY].orEmpty() }
+    suspend fun setGoalWeightBy(value: String) {
+        context.dataStore.edit { if (value.isBlank()) it.remove(KEY_GOAL_WEIGHT_BY) else it[KEY_GOAL_WEIGHT_BY] = value }
     }
 
     /** Уведомление, когда часы прислали тренировку: вердикт по правилам + feel. */
@@ -1645,6 +1656,9 @@ class Settings(private val context: Context) {
     )
 
     data class Targets(val kcal: Int, val protein: Int, val fat: Int, val carbs: Int)
+
+    // Цели еды — кэш записи Свода `food.goals` (docs/eda-server.md): их пишет и Свод
+    // (`PravkaApp.applyFoodGoals`), а правка владельца уходит туда (`PravkaApp.saveFoodGoals`).
 
     suspend fun setFoodTargets(kcal: Int, protein: Int, fat: Int, carbs: Int) {
         context.dataStore.edit {

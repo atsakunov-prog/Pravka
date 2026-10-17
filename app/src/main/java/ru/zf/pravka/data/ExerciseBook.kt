@@ -22,8 +22,12 @@ import org.json.JSONObject
 //   Notion владелец убрал, и этот файл ЗАМОРОЖЕН на последнем чтении: в нём
 //   движения, которых нет в семени («Суставы сверху вниз», «Осанка: …»).
 //   Он побеждает семя, пока не старше его: пересобранный с новым снимком
-//   `exercises.json` — единственная дорога обновить справочник — иначе так и
-//   прятался бы за замороженным файлом.
+//   `exercises.json` — иначе так и прятался бы за замороженным файлом.
+//
+//   ЗАПИСЬ СВОДА `sport.exercises` (13.10.2026, docs/eda-server.md, часть 3) —
+//   справочник, который правит служба «Спорт» на компе. Есть — побеждает оба
+//   файла ([useSvod]); нет — телефон кладёт туда то, что действует у него
+//   ([localText], засев), и работает по файлам.
 //
 // Главное здесь не хранение, а СОПОСТАВЛЕНИЕ. Список движений конечный и
 // известен заранее, поэтому «гоблет четыре по десять шестнадцать» разбирается
@@ -150,6 +154,16 @@ class ExerciseBook(private val context: Context?) {
     @Volatile var fetchedAt: Long = 0L
         private set
 
+    /** Слой файлов — семя или последний живой: что действует без записи Свода. */
+    @Volatile private var local: Snapshot? = null
+    /** Запись Свода `sport.exercises`, разобранная; null — нет её или не читается. */
+    @Volatile private var svod: Snapshot? = null
+    @Volatile private var svodText: String? = null
+    @Volatile private var filesRead = false
+
+    /** Справочник — запись Свода (правит «Спорт» на компе), а не файлы телефона. */
+    val fromSvod: Boolean get() = svod != null
+
     private val _versionFlow = MutableStateFlow(0)
     /** Растёт, когда справочник прочитан с диска, — вкладка пересобирает списки. */
     val versionFlow: StateFlow<Int> = _versionFlow
@@ -158,7 +172,7 @@ class ExerciseBook(private val context: Context?) {
     val loaded: Boolean get() = items.isNotEmpty()
     fun snapshotDate(): String = snapshot
     /** Справочник — последний живой (замороженный), а не семя из сборки. */
-    val fromLive: Boolean get() = fetchedAt > 0L
+    val fromLive: Boolean get() = !fromSvod && fetchedAt > 0L
 
     /** Последний живой справочник; null без Android-контекста (JVM-тесты). */
     private val liveFile: File? get() = context?.let { File(DataRoot.dir(it), LIVE_FILE) }
@@ -178,7 +192,7 @@ class ExerciseBook(private val context: Context?) {
     }
 
     suspend fun load(): List<Exercise> {
-        if (items.isNotEmpty()) return items
+        if (filesRead) return items
         val ctx = context ?: return items
         val file = liveFile ?: return items
         val (asset, live) = withContext(Dispatchers.IO) {
@@ -193,15 +207,49 @@ class ExerciseBook(private val context: Context?) {
         // Последний живой справочник побеждает семя, если он не пуст и не
         // старше снимка в сборке: пустой файл не должен оставить вкладку без
         // справочника, а новый снимок в APK — прятаться за замороженным файлом.
-        val chosen = live?.takeIf { liveWins(it, asset) } ?: asset
-        if (chosen != null) {
-            items = mergeSeed(chosen.items)
-            snapshot = chosen.snapshot
-            fetchedAt = chosen.fetchedAt
-            byAlias = buildIndex(items)
-            _versionFlow.value = _versionFlow.value + 1
-        }
+        local = live?.takeIf { liveWins(it, asset) } ?: asset
+        filesRead = true
+        publish()
         return items
+    }
+
+    /**
+     * Запись Свода `sport.exercises` (текст JSON, вид `exercises.json`) поверх файлов;
+     * null — снова файлы. Пустая или нечитаемая запись справочник не стирает:
+     * действуют файлы.
+     */
+    fun useSvod(text: String?) {
+        if (text == svodText) return
+        svodText = text
+        svod = text?.let { t -> runCatching { parse(JSONObject(t)) }.getOrNull() }?.takeIf { it.items.isNotEmpty() }
+        publish()
+    }
+
+    /** Действующий слой — в справочник: Свод, нет его — файлы. Ни того, ни другого — как было. */
+    private fun publish() {
+        val chosen = svod ?: local ?: return
+        items = mergeSeed(chosen.items)
+        snapshot = chosen.snapshot
+        fetchedAt = if (chosen === svod) 0L else chosen.fetchedAt
+        byAlias = buildIndex(items)
+        _versionFlow.value = _versionFlow.value + 1
+    }
+
+    /**
+     * Текст справочника, который действует у телефона без Свода (последний живой или
+     * файл сборки), — им телефон засевает `sport.exercises`, когда записи ещё нет.
+     */
+    suspend fun localText(): String? = withContext(Dispatchers.IO) {
+        val ctx = context ?: return@withContext null
+        val assetText = runCatching { ctx.assets.open(ASSET).bufferedReader().use { it.readText() } }.getOrNull()
+        val liveText = liveFile?.takeIf { it.isFile }?.let { f -> runCatching { f.readText() }.getOrNull() }
+        val asset = assetText?.let { t -> runCatching { parse(JSONObject(t)) }.getOrNull() }
+        val live = liveText?.let { t -> runCatching { parse(JSONObject(t)) }.getOrNull() }
+        when {
+            live != null && liveText != null && liveWins(live, asset) -> liveText
+            asset != null && asset.items.isNotEmpty() -> assetText
+            else -> null
+        }
     }
 
     /** Даты снимков — «yyyy-MM-dd», поэтому сравниваются строкой. */

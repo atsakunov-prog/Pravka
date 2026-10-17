@@ -61,6 +61,12 @@ class FoodStore(private val context: Context) {
         val ribbonSynced: Boolean = false,
         val costUsd: Double = 0.0,
         val model: String = "",
+        /**
+         * Откуда приём, если не с этого телефона: «pc» — служба «Еда» на домашнем
+         * компе (docs/eda-server.md). Пусто — свой. Вкладка пишет «с компа» вместо
+         * источника, архив получает поле назад, если телефон правил чужой приём.
+         */
+        val origin: String = "",
     ) {
         val kcal: Int get() = items.sumOf { it.kcal }
         val protein: Int get() = items.sumOf { it.protein }
@@ -212,6 +218,27 @@ class FoodStore(private val context: Context) {
         write(_mealsFlow.value.map { if (it.id == id) it.copy(ribbonSynced = true) else it })
     }
 
+    /**
+     * Приёмы с сервера (docs/eda-server.md): записанное или поправленное на компе
+     * ложится целиком поверх своего с тем же id, удалённое там — уходит ([gone]).
+     * Что класть, решает `core/FoodSync.kt` (своя неотправленная правка сильнее);
+     * здесь — одна запись дневника на весь забор. Снимок удалённого приёма — свой
+     * файл телефона (у приёмов с компа снимка нет), он уходит вместе с приёмом, как
+     * при удалении руками.
+     */
+    suspend fun applyRemote(put: List<Meal>, gone: Collection<Long>) = mutex.withLock {
+        ensureLoaded()
+        if (put.isEmpty() && gone.isEmpty()) return@withLock
+        val byId = LinkedHashMap<Long, Meal>()
+        for (m in _mealsFlow.value) byId[m.id] = m
+        val photos = gone.mapNotNull { id -> byId.remove(id)?.photo?.takeIf { it.isNotBlank() } }
+        for (m in put) byId[m.id] = m
+        // allowEmpty: на компе удалили последний приём — это решение владельца, а не
+        // поломка чтения (её заслон в архиве ловит раньше: пустой ответ сюда не доходит).
+        write(byId.values.toList(), allowEmpty = gone.isNotEmpty())
+        if (photos.isNotEmpty()) DiskWriter.post { photos.forEach { runCatching { File(photoDir(), it).delete() } } }
+    }
+
     suspend fun delete(id: Long) = mutex.withLock {
         ensureLoaded()
         val gone = _mealsFlow.value.firstOrNull { it.id == id }
@@ -316,6 +343,7 @@ class FoodStore(private val context: Context) {
                 put("ribbon", m.ribbonSynced)
                 put("cost", m.costUsd)
                 put("model", m.model)
+                if (m.origin.isNotBlank()) put("origin", m.origin)
                 put(
                     "items",
                     JSONArray().apply {
@@ -396,6 +424,7 @@ class FoodStore(private val context: Context) {
                     ribbonSynced = o.optBoolean("ribbon", false),
                     costUsd = o.optDouble("cost", 0.0),
                     model = o.optString("model"),
+                    origin = o.optString("origin"),
                 )
             )
         }
