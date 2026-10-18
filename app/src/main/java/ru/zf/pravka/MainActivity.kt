@@ -378,6 +378,14 @@ class MainActivity : ComponentActivity() {
         // прочли папку пустой и записали бы эту пустоту поверх базы.
         if (ru.zf.pravka.data.DataRoot.refreshAccess(this)) ru.zf.pravka.data.DataRoot.restart(this)
         maybeAskNotifications()
+        // Открыл Правку — забрать с сервера команды веба (Засечка с компа, правки дел) сразу, а не ждать тика вкладки
+        // Дел (записка отладки 25, 18.10.2026: «открыл телефон после правок в Засечке — ничего не меняется»).
+        // Не чаще раза в минуту: возвраты из других приложений не должны дёргать сеть каждый раз.
+        (application as? PravkaApp)?.let { app ->
+            if (System.currentTimeMillis() - app.delaSync.status.value.lastOk > 60_000) {
+                app.appScope.launch { runCatching { app.delaSync.sync("открыл Правку") } }
+            }
+        }
     }
 
     override fun onPause() {

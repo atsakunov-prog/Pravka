@@ -364,7 +364,9 @@ const TWINS = (() => {
   async function command(kind, args) {
     try {
       const [r] = await ops([{ op: 'zasechka.cmd', cmd: { kind, args, at: new Date(now()).toISOString() } }]);
-      toast('Ушло телефону — ' + CMD_WORD[kind] + ': ждёт, пока он возьмёт');
+      // Сколько ждать — честно (записка отладки 25, 18.10.2026): телефон берёт команды раз в ~5 минут и сразу, как
+      // открыли Правку.
+      toast('Ушло телефону — ' + CMD_WORD[kind] + ': возьмёт за 5 минут или сразу, как откроешь Правку');
       drop('zasechka'); drop('day');
       render();
       return r;
@@ -384,7 +386,7 @@ const TWINS = (() => {
     return el('div', { class: 'tw-cmds' }, list.map((c) => {
       const what = CMD_WORD[c.kind] + (c.args && c.args.title ? ` «${c.args.title}»` : c.args && c.args.set && c.args.set.title ? ` → «${c.args.set.title}»` : '');
       const at = msk(Date.parse(c.said_at)).hm;
-      const word = { wait: 'ждёт телефона', taken: 'телефон взял', done: 'сделано телефоном', refused: 'телефон не стал',
+      const word = { wait: 'ждёт телефона · до 5 мин', taken: 'телефон взял', done: 'сделано телефоном', refused: 'телефон не стал',
         expired: 'не взята — устарела', cancelled: 'снята' }[c.status] || c.status;
       return el('div', { class: 'tw-cmd ' + c.status },
         el('span', { class: 'st' }, word), el('span', { class: 'wh' }, `${what} · ${at}`),
