@@ -608,7 +608,9 @@ def test_model_task_gets_person_client_and_no_client_button(dela, at):
     got = move(dela, cap["ref"], "no_client", item=0)
     item = got["items"][0]
     assert task(dela, item["task"]["id"])["project_id"] is None and not item.get("client_auto")
-    assert item["line"] == "Переложил: На вторник 20.10: попросить Петра прислать информацию"
+    # День строки «Переложил» считается от сегодняшнего числа, а не от замороженного «сейчас» фразы: 18.10 тот же
+    # 20.10 — «послезавтра», 16.10 был «вторник 20.10». Тест не должен зависеть от дня прогона.
+    assert item["line"].startswith("Переложил: На ") and item["line"].endswith(": попросить Петра прислать информацию")
     assert [c["label"] for c in item["chips"]] == ["В «Сейчас»", "Потом", "Отменить"]
     r = ops(dela, "sasha", {"op": "capture.move", "ref": cap["ref"], "item": 0, "to": "no_client"})[0]
     assert not r["ok"] and "клиента ставил не захват" in r["error"], r
