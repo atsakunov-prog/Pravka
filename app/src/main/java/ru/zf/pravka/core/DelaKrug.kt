@@ -247,11 +247,17 @@ object DelaKrug {
 
     // ------------------------------------------------------------ дерево
 
-    /** Что за узел: цель, проект в Круге или дело. Порядок — порядок детей узла (`treeModel` веба). */
-    enum class Kind { GOAL, PROJECT, TASK }
+    /**
+     * Что за узел: цель, проект в Круге (клиент), проект клиента (сделка — только строкой «Дерева», записка отладки 28) или
+     * дело. Порядок — порядок детей узла (`treeModel` веба).
+     */
+    enum class Kind { GOAL, PROJECT, DEAL, TASK }
 
-    /** Узел дерева; [key] — «t:<id>» у цели и дела, «p:<id>» у проекта. */
-    data class Item(val kind: Kind, val key: String, val task: Dela.Task? = null, val project: Dela.Project? = null)
+    /** Узел дерева; [key] — «t:<id>» у цели и дела, «p:<id>» у проекта, «q:<id>» у сделки клиента. */
+    data class Item(
+        val kind: Kind, val key: String, val task: Dela.Task? = null, val project: Dela.Project? = null,
+        val deal: Dela.Deal? = null,
+    )
 
     fun dirKey(key: String): String = "d:$key"
 
@@ -330,6 +336,7 @@ object DelaKrug {
             val r = a.kind.compareTo(b.kind)
             if (r != 0) r else when (a.kind) {
                 Kind.PROJECT -> collator.compare(a.project?.name.orEmpty(), b.project?.name.orEmpty())
+                Kind.DEAL -> collator.compare(a.deal?.name.orEmpty(), b.deal?.name.orEmpty())  // в модели их нет — только строки
                 Kind.GOAL -> (a.task?.num ?: 0).compareTo(b.task?.num ?: 0)
                 // Дела внутри обычного дела — по месту среди соседей (15.10.2026, `pos`), как сервер и веб.
                 Kind.TASK -> if (DelaSteps.parentOf(a.task!!, s) != null) DelaSteps.BY_POS.compare(a.task, b.task!!) else order.compare(a.task, b.task!!)
@@ -349,21 +356,47 @@ object DelaKrug {
      * открытыми делами, дело — строкой, его шаги под ним видны всегда. [folded] — свёрнута ли
      * ветка (что запомнил человек; не помнит — [foldedByDefault]). Глубже 12 не идёт.
      */
-    fun outline(m: Tree, key: String, folded: (String) -> Boolean, depth: Int = 0): List<Row> {
+    fun outline(m: Tree, key: String, folded: (String) -> Boolean, depth: Int = 0, deals: Map<String, Dela.Deal> = emptyMap()): List<Row> {
         val out = mutableListOf<Row>()
         val seen = HashSet<String>()
-        fun walk(k: String, d: Int) {
-            if (d > 12) return
+        lateinit var walk: (String, Int) -> Unit
+        fun emit(c: Item, d: Int) {
+            if (!seen.add(c.key)) return
+            if (c.kind == Kind.PROJECT && m.open(c.key) == 0) return
+            val open = c.kind == Kind.TASK || !folded(c.key)
+            out += Row(c, d, open, m.kids(c.key).isNotEmpty())
+            if (open) walk(c.key, d + 1)
+        }
+        walk = walk@{ k, d ->
+            if (d > 12) return@walk
+            // Под клиентом — его проекты (сделки), под ними их дела; без проекта — прямо под клиентом (записка отладки
+            // 28, 18.10.2026: «в дереве не показываются проекты под клиентами»; `clientKids` веба). Проект в архиве —
+            // его дела под клиентом.
+            val pid = k.removePrefix("p:").takeIf { k.startsWith("p:") && deals.isNotEmpty() }
+            if (pid == null) { m.kids(k).forEach { emit(it, d) }; return@walk }
+            val groups = LinkedHashMap<String, MutableList<Item>>()
+            val plain = mutableListOf<Item>()
             for (c in m.kids(k)) {
-                if (!seen.add(c.key)) continue
-                if (c.kind == Kind.PROJECT && m.open(c.key) == 0) continue
-                val open = c.kind == Kind.TASK || !folded(c.key)
-                out += Row(c, d, open, m.kids(c.key).isNotEmpty())
-                if (open) walk(c.key, d + 1)
+                val dl = c.task?.dealId?.takeIf { c.kind == Kind.TASK && it.isNotBlank() }?.let { deals[it] }
+                if (dl != null && !dl.closed && dl.projectId == pid) groups.getOrPut(dl.id) { mutableListOf() } += c else plain += c
             }
+            for (id in groups.keys.sortedWith(compareBy(collator) { deals.getValue(it).name })) {
+                val dl = deals.getValue(id)
+                val dk = "q:$id"
+                val open = !folded(dk)
+                out += Row(Item(Kind.DEAL, dk, deal = dl), d, open, true)
+                if (open) groups.getValue(id).forEach { emit(it, d + 1) }
+            }
+            plain.forEach { emit(it, d) }
         }
         walk(key, depth)
         return out
+    }
+
+    /** Имя проекта клиента в «Дереве» без имени клиента впереди: «Альфа: продажа склада» → «продажа склада». */
+    fun dealShort(name: String, client: String): String {
+        val i = name.indexOf(": ")
+        return if (i > 0 && client.lowercase().startsWith(name.take(i).lowercase().take(5))) name.substring(i + 2) else name
     }
 
     /** Кнопки уровней дерева: 1…[TREE_LEVELS] и «Всё» (0). */
@@ -659,6 +692,8 @@ object DelaKrug {
         fun goalText(x: Dela.Task) = x.title + if (x.goal && x.rhythm.isNotBlank()) " · ${x.rhythm}" else ""
         fun row(c: Item, depth: Int, role: Role, more: Inside?): PlaceRow = when (c.kind) {
             Kind.PROJECT -> PlaceRow(depth, role, Mark.PROJECT, c.project?.name ?: projectName(c.key.drop(2)), projectId = c.key.drop(2), more = more)
+            // Сделка в «Месте в дереве» не появляется: её строит только outline «Дерева» (записка 28).
+            Kind.DEAL -> PlaceRow(depth, role, Mark.PROJECT, c.deal?.name.orEmpty(), more = more)
             Kind.GOAL -> PlaceRow(depth, role, Mark.GOAL, goalText(c.task!!), task = c.task, more = more)
             Kind.TASK -> PlaceRow(depth, role, Mark.DEED, c.task!!.title, task = c.task, more = more)
         }

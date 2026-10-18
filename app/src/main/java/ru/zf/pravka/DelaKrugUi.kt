@@ -265,6 +265,8 @@ internal class TreeUi(
     val onHangTask: (Dela.Task) -> Unit,
     val onHangProject: (Dela.Project) -> Unit,
     val onProject: (String) -> Unit,
+    /** Тап по проекту клиента (сделке) под клиентом — его страница (записка отладки 28). */
+    val onDeal: (String) -> Unit = {},
 )
 
 /**
@@ -360,7 +362,7 @@ private fun TreeDirCard(d: DelaKrug.Direction, m: DelaKrug.Tree, ui: TreeUi, act
         }
         if (d.formula.isNotBlank()) Text(d.formula, style = ty.label.copy(fontStyle = FontStyle.Italic), color = mode.label)
         if (open) {
-            val rows = DelaKrug.outline(m, key, ui.folded)
+            val rows = DelaKrug.outline(m, key, ui.folded, deals = actions.snap.deals)
             if (rows.isEmpty()) PaperHint("Здесь пока ничего — цели заводятся в карточке дела («Сделать целью») или словами Claude.")
             for (r in rows) TreeLine(r, m, ui, actions)
         }
@@ -421,6 +423,23 @@ private fun TreeLine(r: DelaKrug.Row, m: DelaKrug.Tree, ui: TreeUi, actions: Del
                 if (mv > 0) Text(" +$mv", style = ty.meta, color = mode.label)
             }
         }
+        // Проект клиента (сделка) под клиентом — записка отладки 28: плюсик сворачивает, имя — его страница.
+        DelaKrug.Kind.DEAL -> {
+            val dl = c.deal ?: return
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(start = STEP * r.depth).clip(RoundedCornerShape(10.dp))
+                    .clickable { ui.onFold(c.key, r.expanded) }.padding(vertical = 4.dp),
+            ) {
+                Caret(r.expanded, true) { ui.onFold(c.key, r.expanded) }
+                Text(
+                    "◦ " + DelaKrug.dealShort(dl.name, actions.snap.projects[dl.projectId]?.name.orEmpty()),
+                    style = ty.body,
+                    color = mode.label,
+                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).clickable { ui.onDeal(dl.id) },
+                )
+            }
+        }
     }
 }
 
@@ -447,7 +466,7 @@ private fun TreeColumns(dirs: List<DelaKrug.Direction>, m: DelaKrug.Tree, ui: Tr
                 }
                 RowRule()
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                    val rows = DelaKrug.outline(m, key, ui.folded)
+                    val rows = DelaKrug.outline(m, key, ui.folded, deals = actions.snap.deals)
                     if (rows.isEmpty()) Text("пусто", style = ty.meta, color = mode.meta, modifier = Modifier.padding(top = 6.dp))
                     for (r in rows) ColumnLine(r, m, ui, actions)
                 }
@@ -491,6 +510,12 @@ private fun ColumnLine(r: DelaKrug.Row, m: DelaKrug.Tree, ui: TreeUi, actions: D
                 Caret(r.expanded, true) { ui.onFold(c.key, r.expanded) }
                 Text("▣ " + p?.name.orEmpty(), style = ty.label, color = mode.label, modifier = Modifier.weight(1f))
                 Text(m.open(c.key).toString(), style = ty.meta, color = mode.value)
+            }
+            DelaKrug.Kind.DEAL -> {
+                Caret(r.expanded, true) { ui.onFold(c.key, r.expanded) }
+                val dl = c.deal
+                Text("◦ " + dl?.let { DelaKrug.dealShort(it.name, actions.snap.projects[it.projectId]?.name.orEmpty()) }.orEmpty(),
+                    style = ty.label, color = mode.label, modifier = Modifier.weight(1f))
             }
             DelaKrug.Kind.TASK -> {
                 Box(Modifier.size(28.dp).clip(CircleShape).clickable { t?.let(actions.done) }, contentAlignment = Alignment.Center) {

@@ -1524,6 +1524,7 @@ fun DelaTab(
                         onHangTask = { hangTask = it },
                         onHangProject = { hangProject = it },
                         onProject = { id -> push(DelaPage.Project(id)) },
+                        onDeal = { id -> push(DelaPage.Deal(id)) },
                     ),
                     actions,
                 )

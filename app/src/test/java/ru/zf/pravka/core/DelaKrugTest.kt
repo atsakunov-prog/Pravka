@@ -216,6 +216,23 @@ class DelaKrugTest {
     }
 
     @Test
+    fun `под клиентом — его проекты, под ними их дела, без проекта — прямо под клиентом`() {
+        // Записка отладки 28 (18.10.2026): «в дереве не показываются проекты под клиентами — просто дела под клиентом».
+        val g = task("g") { it.copy(goal = true, directions = listOf("health")) }
+        val inDeal = task("in-deal") { it.copy(projectId = "p-a", dealId = "d1") }
+        val plain = task("plain") { it.copy(projectId = "p-a") }
+        val s = snap(g, inDeal, plain, krug = mapOf("p-a" to Dela.KrugProject(whyId = "g")))
+        val m = DelaKrug.treeModel(s, "me", today)
+        val deals = mapOf("d1" to Dela.Deal(id = "d1", projectId = "p-a", name = "Альфа: продажа склада"))
+        val rows = DelaKrug.outline(m, "d:health", { false }, deals = deals)
+        assertEquals(listOf("t:g" to 0, "p:p-a" to 1, "q:d1" to 2, "t:in-deal" to 3, "t:plain" to 2), rows.map { it.item.key to it.depth })
+        assertEquals(DelaKrug.Kind.DEAL, rows[2].item.kind)
+        assertEquals("продажа склада", DelaKrug.dealShort("Альфа: продажа склада", "Альфа Групп"))
+        // Без сделок — как было: дела прямо под клиентом.
+        assertEquals(listOf("t:g", "p:p-a", "t:in-deal", "t:plain"), DelaKrug.outline(m, "d:health", { false }).map { it.item.key })
+    }
+
+    @Test
     fun `ветки — проекты свёрнуты с завода, пустой проект не виден, уровни сворачивают до своего`() {
         val g = task("g") { it.copy(goal = true, directions = listOf("health")) }
         val inProj = task("in-proj") { it.copy(projectId = "p-a") }

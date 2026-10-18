@@ -2610,6 +2610,29 @@ function goalHead(m, c, depth, open, toggle) {
   return dropTo(dragFrom(row, 'task', t.id), { goal: t.id });
 }
 /** Ветка «Дерева»: цель (плюсиком), проект (свёрнут), дело (строкой дела) — и всё, что под ними. */
+/** Под клиентом в «Дереве» — его проекты (сделки), под ними их дела; дела без проекта — прямо под клиентом (записка
+ *  отладки 28, 18.10.2026: «в дереве не показываются проекты под клиентами — просто дела под клиентом»). Модель дерева
+ *  (treeModel) не меняется: группировка — только при рисовании ветки клиента. Проект в архиве — его дела под клиентом. */
+function clientKids(m, c, depth) {
+  const groups = new Map(), plain = [];
+  for (const x of m.kids(c.key)) {
+    const d = x.kind === 'task' && x.t.deal_id ? S.deals.get(x.t.deal_id) : null;
+    if (d && d.stage !== 'archive' && d.project_id === c.p.id) {
+      if (!groups.has(d.id)) groups.set(d.id, { d, items: [] });
+      groups.get(d.id).items.push(x);
+    } else plain.push(x);
+  }
+  // «Альфа: продажа склада» под «Альфа Групп» — без имени клиента впереди.
+  const short = (d) => { const i = d.name.indexOf(': '); return i > 0 && c.p.name.toLowerCase().startsWith(d.name.slice(0, i).toLowerCase().slice(0, 5)) ? d.name.slice(i + 2) : d.name; };
+  const deals = [...groups.values()].sort((a, b) => a.d.name.localeCompare(b.d.name, 'ru')).flatMap(({ d, items }) => {
+    const key = 'q:' + d.id, open = !isFolded(key, false);
+    const head = el('div', { class: 'tree-proj tree-deal' + (open ? '' : ' folded'), style: '--indent:' + (depth + 1), title: 'Проект клиента: ' + d.name },
+      el('button', { class: 'caret-btn', onclick: () => { setFolded(key, open); render(); } }, caret(open)),
+      el('span', { class: 'st-dot st-' + d.stage }), el('a', { class: 'link', href: '#/d/' + d.id }, short(d)), el('span', { class: 'g-n' }, items.length));
+    return [head, ...(open ? items.flatMap((x) => treeBranch(m, x, depth + 2)) : [])];
+  });
+  return [...deals, ...plain.flatMap((x) => treeBranch(m, x, depth + 1))];
+}
 function treeBranch(m, c, depth) {
   if (c.kind === 'task') {
     const row = dropTo(dragFrom(taskRow(c.t, ['dir'], null, { indent: depth, tree: true }), 'task', c.t.id), { nest: c.t.id });
@@ -2624,7 +2647,7 @@ function treeBranch(m, c, depth) {
       el('button', { class: 'caret-btn', onclick: () => { setFolded(c.key, open); render(); } }, caret(open)),
       dot(c.p.id), el('a', { class: 'link', href: '#/p/' + c.p.id }, c.p.name), el('span', { class: 'g-n' }, n),
       m.moved(c.key) ? el('span', { class: 'g-mv' }, '+' + m.moved(c.key)) : null);
-    return [dragFrom(head, 'project', c.p.id), ...(open ? m.kids(c.key).flatMap((x) => treeBranch(m, x, depth + 1)) : [])];
+    return [dragFrom(head, 'project', c.p.id), ...(open ? clientKids(m, c, depth) : [])];
   }
   const open = !isFolded(c.key, false);
   return [goalHead(m, c, depth, open, () => { setFolded(c.key, open); render(); }),
