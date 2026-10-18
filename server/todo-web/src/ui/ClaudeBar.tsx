@@ -68,6 +68,21 @@ export function ClaudeBar() {
   useEffect(() => {
     feed.current?.scrollTo({ top: feed.current.scrollHeight, behavior: 'smooth' });
   }, [turns]);
+  // Другой экран — другой разговор (как у прежнего веба): Claude видит новый экран, а не тянет старую память.
+  useEffect(() => {
+    setOpen(false);
+    if (!turns.some((t) => t.busy)) {
+      setTurns([]);
+      setTalkId(uuid());
+    }
+  }, [r.view, r.id]);
+  useEffect(() => {
+    const on = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest?.('.claude, .pop, .scrim')) setOpen(false);
+    };
+    addEventListener('mousedown', on);
+    return () => removeEventListener('mousedown', on);
+  }, []);
   const title = (() => {
     if (r.view === 'project') return 'Проект: ' + (S.projects.get(r.id || '')?.name || '');
     if (r.view === 'deal') return 'Сделка: ' + (S.deals.get(r.id || '')?.name || '');

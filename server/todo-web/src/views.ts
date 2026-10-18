@@ -43,8 +43,20 @@ export function byDue(a: Task, b: Task): number {
 
 // ── Виды ────────────────────────────────────────────────────────────────
 
+/** Лежит ли дело в дереве целей: под целью само или внутри дела, которое под целью. У такого дела место уже есть —
+ *  во «Входящих» (неразобранное) его нет, как нет там задач проекта. */
+export function underGoal(t: Task): boolean {
+  let x: Task | undefined = t;
+  for (let i = 0; i < 20 && x; i++) {
+    if (!x.why_id) return false;
+    if (x.why_goal) return true;
+    x = S.tasks.get(x.why_id);
+  }
+  return false;
+}
+
 export function inbox(): Task[] {
-  return listed().filter((t) => !t.project_id && mine(t)).sort(byPos);
+  return listed().filter((t) => !t.project_id && mine(t) && !underGoal(t)).sort(byPos);
 }
 
 export function nowList(): Task[] {
@@ -126,7 +138,7 @@ export function counts(): { inbox: number; today: number; now: number; byProject
   for (const t of S.tasks.values()) {
     if (!isListed(t)) continue;
     const me = mine(t);
-    if (!t.project_id && me) inboxN++;
+    if (!t.project_id && me && !underGoal(t)) inboxN++;
     if (me && t.due_date && t.due_date <= S.today) todayN++;
     if (me && t.focus_on === S.today) nowN++;
     if (t.deal_id) byDeal.set(t.deal_id, (byDeal.get(t.deal_id) || 0) + 1);

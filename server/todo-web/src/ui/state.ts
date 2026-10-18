@@ -22,10 +22,17 @@ export const UI = {
   search: false,
   sel: new Set<Id>(),
   sideMobile: false,
-  sideOff: localStorage.getItem('todo.sideOff') === '1',
+  sideOff: (() => {
+    try {
+      return localStorage.getItem('todo.sideOff') === '1';
+    } catch {
+      return false;
+    }
+  })(),
   bell: false,
   claudeOpen: true,
   dialog: null as null | { kind: string; data?: any },
+  focus: null as Id | null, // строка под клавиатурой (J/K, стрелки)
 };
 
 export function openTask(id: Id, edit = false, comment = false) {

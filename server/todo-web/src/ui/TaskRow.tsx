@@ -9,7 +9,7 @@ import { childrenOf } from '../views.ts';
 import { Icon } from './icons.tsx';
 import { openPop } from './pop.tsx';
 import { Scheduler } from './pickers.tsx';
-import { openTask } from './state.ts';
+import { openTask, UI } from './state.ts';
 import { TaskMenu } from './TaskMenu.tsx';
 
 export interface RowOpts {
@@ -131,7 +131,7 @@ export function TaskRow({ t, opts = {} }: { t: Task; opts?: RowOpts }) {
   };
   return (
     <div ref={ref} data-id={t.id}
-      className={cls('task', opts.selected && 'sel', leaving && 'done-anim', t.status !== 'open' && 'closed',
+      className={cls('task', opts.selected && 'sel', UI.focus === t.id && 'focus', leaving && 'done-anim', t.status !== 'open' && 'closed',
         d?.mark === 'before' && 'drop-before', d?.mark === 'after' && 'drop-after', d?.mark === 'into' && 'drop-into')}
       style={{ marginLeft: (opts.depth || 0) * 28, ...(dx ? { transform: `translateX(${dx}px)`, transition: 'none' } : {}) }}
       draggable={!!d && t.status === 'open'}

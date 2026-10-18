@@ -2,13 +2,15 @@
 import { useEffect, useState } from 'react';
 import { ApiError, api } from '../api.ts';
 import { go, projectColor, useMobile, useRoute } from '../lib.ts';
-import { dropToast, S, syncSoon, toasts, useStore } from '../store.ts';
+import { completeTask, dropToast, emit, S, setTask, syncSoon, toasts, useStore } from '../store.ts';
+import { Scheduler } from './pickers.tsx';
+import { TaskMenu } from './TaskMenu.tsx';
 import { search } from '../views.ts';
 import { BulkBar, ProjectDialog } from './Bulk.tsx';
 import { ClaudeBar } from './ClaudeBar.tsx';
 import { Editor } from './Editor.tsx';
 import { Icon, TodayIcon } from './icons.tsx';
-import { PopHost, closePop, popOpen } from './pop.tsx';
+import { PopHost, closePop, openPop, popOpen } from './pop.tsx';
 import { SideContent } from './Sidebar.tsx';
 import { closeDialog, closeQuick, closeTask, openQuick, openTask, toggleSide, UI } from './state.ts';
 import { TaskModal } from './TaskModal.tsx';
@@ -153,9 +155,36 @@ function useKeys(setSearch: (v: boolean) => void) {
         else if (UI.sel.size) { UI.sel.clear(); syncSoon(); }
         return;
       }
-      if (UI.task || UI.quick) return;
+      if (UI.task || UI.quick || popOpen()) return;
+      // Строка под клавиатурой: ↓/J, ↑/K — по списку; Enter — открыть; E — выполнить; T — срок; 1–4 — приоритет;
+      // X — выделить; . — меню задачи (как у Todoist).
+      const rows = [...document.querySelectorAll('.main .task[data-id]')] as HTMLElement[];
+      const at = rows.findIndex((x) => x.dataset.id === UI.focus);
+      const ft = UI.focus ? S.tasks.get(UI.focus) : undefined;
+      const moveTo = (i: number) => {
+        const row = rows[Math.max(0, Math.min(rows.length - 1, i))];
+        if (!row) return;
+        UI.focus = row.dataset.id!;
+        row.scrollIntoView({ block: 'nearest' });
+        emit();
+      };
+      if (k === 'arrowdown' || k === 'j' || k === 'о') { e.preventDefault(); moveTo(at + 1); return; }
+      if (k === 'arrowup' || k === 'k' || k === 'л') { e.preventDefault(); moveTo(at < 0 ? 0 : at - 1); return; }
+      if (ft && at >= 0) {
+        const row = rows[at];
+        if (k === 'enter') { e.preventDefault(); openTask(ft.id); return; }
+        if (k === 'e' || k === 'у') { e.preventDefault(); completeTask(ft, e.shiftKey).catch(() => {}); moveTo(at + 1 < rows.length ? at + 1 : at - 1); return; }
+        if (['1', '2', '3', '4'].includes(k)) { e.preventDefault(); setTask(ft, { priority: +k }).catch(() => {}); return; }
+        if (k === 't' || k === 'е') {
+          e.preventDefault();
+          openPop(row, (close) => <Scheduler value={ft as any} close={close} onPick={(v) => setTask(ft, v as any, 'Срок поменял')} />, { cls: 'sched' });
+          return;
+        }
+        if (k === 'x' || k === 'ч') { e.preventDefault(); if (UI.sel.has(ft.id)) UI.sel.delete(ft.id); else UI.sel.add(ft.id); emit(); return; }
+        if (k === '.' || k === 'ю') { e.preventDefault(); openPop(row, (close) => <TaskMenu t={ft} close={close} />); return; }
+      }
       if (k === 'q' || k === 'й' || k === 'a' || k === 'ф') { e.preventDefault(); openQuick(defaultsFor()); }
-      else if (k === '/' || k === 'f' || k === 'а' || k === '.') { e.preventDefault(); setSearch(true); }
+      else if (k === '/' || k === 'f' || k === 'а') { e.preventDefault(); setSearch(true); }
       else if (k === 'm' || k === 'ь') { e.preventDefault(); toggleSide(); }
       else if (k === 'g' || k === 'п') { g = true; clearTimeout(gTimer); gTimer = window.setTimeout(() => (g = false), 1200); }
     };
