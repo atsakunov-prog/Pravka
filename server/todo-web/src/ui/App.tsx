@@ -7,16 +7,18 @@ import { Scheduler } from './pickers.tsx';
 import { TaskMenu } from './TaskMenu.tsx';
 import { search } from '../views.ts';
 import { BulkBar, ProjectDialog } from './Bulk.tsx';
+import { BugLine } from './BugLine.tsx';
 import { ClaudeBar } from './ClaudeBar.tsx';
+import { Dictate } from './Dictate.tsx';
 import { Editor } from './Editor.tsx';
 import { Icon, TodayIcon } from './icons.tsx';
 import { PopHost, closePop, openPop, popOpen } from './pop.tsx';
 import { SideContent } from './Sidebar.tsx';
-import { closeDialog, closeQuick, closeTask, openQuick, openTask, toggleSide, UI } from './state.ts';
+import { closeDialog, closeQuick, closeTask, openDictate, openQuick, openTask, toggleSide, UI } from './state.ts';
 import { TaskModal } from './TaskModal.tsx';
 import { Checkbox, Meta } from './TaskRow.tsx';
 import {
-  DealView, DoneView, FilterDialog, FiltersPage, FilterView, GoalView, InboxView, LabelView, NowView, Page, PersonView, ProjectView,
+  DealView, DoneView, FilterDialog, FiltersPage, FilterView, GoalView, InboxView, LabelView, NowView, Page, PersonView, ProjectView, SearchView,
   TodayView, TreeView, UpcomingView,
 } from './Views.tsx';
 
@@ -119,6 +121,7 @@ function Body() {
     case 'goal': return <GoalView id={id!} key={id} />;
     case 'done': return <DoneView />;
     case 'browse': return <BrowseView />;
+    case 'search': return <SearchView q={id || ''} key="search" />;
     case 'task': return <NowView />;
     default: return <NowView />;
   }
@@ -151,11 +154,13 @@ function useKeys(setSearch: (v: boolean) => void) {
         if (popOpen()) closePop();
         else if (UI.quick) closeQuick();
         else if (UI.dialog) closeDialog();
+        else if (UI.dictate) openDictate(false);
         else if (UI.task) closeTask();
         else if (UI.sel.size) { UI.sel.clear(); syncSoon(); }
         return;
       }
-      if (UI.task || UI.quick || popOpen()) return;
+      if (UI.task || UI.quick || UI.dictate || popOpen()) return;
+      if ((k === 'q' || k === 'й') && e.shiftKey) { e.preventDefault(); openDictate(); return; }
       // Строка под клавиатурой: ↓/J, ↑/K — по списку; Enter — открыть; E — выполнить; T — срок; 1–4 — приоритет;
       // X — выделить; . — меню задачи (как у Todoist).
       const rows = [...document.querySelectorAll('.main .task[data-id]')] as HTMLElement[];
@@ -184,7 +189,12 @@ function useKeys(setSearch: (v: boolean) => void) {
         if (k === '.' || k === 'ю') { e.preventDefault(); openPop(row, (close) => <TaskMenu t={ft} close={close} />); return; }
       }
       if (k === 'q' || k === 'й' || k === 'a' || k === 'ф') { e.preventDefault(); openQuick(defaultsFor()); }
-      else if (k === '/' || k === 'f' || k === 'а') { e.preventDefault(); setSearch(true); }
+      else if (k === '/' || k === 'f' || k === 'а') {
+        e.preventDefault();
+        const box = document.getElementById('side-search') as HTMLInputElement | null;
+        if (box && box.offsetParent) box.focus();
+        else setSearch(true);
+      }
       else if (k === 'm' || k === 'ь') { e.preventDefault(); toggleSide(); }
       else if (k === 'g' || k === 'п') { g = true; clearTimeout(gTimer); gTimer = window.setTimeout(() => (g = false), 1200); }
     };
@@ -242,7 +252,6 @@ export function App() {
       const t = [...S.tasks.values()].find((x) => String(x.num) === r.id || x.id === r.id);
       if (t) openTask(t.id);
     }
-    if (r.view === 'search') { setSearch(true); history.replaceState(null, '', '#/now'); }
   }, [r.view, r.id, S.ready]);
   if (err) return <Login msg={err} />;
   if (!S.ready) return <Login msg="Загружаю дела…" />;
@@ -254,6 +263,7 @@ export function App() {
       {UI.sideMobile ? <div className="side-scrim" onClick={toggleSide} /> : null}
       <aside className="side"><SideContent /></aside>
       <main className="main">
+        <BugLine />
         {UI.sideOff && !mobile ? <button className="icon-btn" style={{ position: 'fixed', top: 12, left: 12, zIndex: 6 }} onClick={toggleSide} title="Показать панель (M)"><Icon name="sidebar" size={20} /></button> : null}
         <Body />
       </main>
@@ -271,6 +281,7 @@ export function App() {
       {searchOpen ? <SearchModal close={() => setSearch(false)} /> : null}
       {UI.dialog?.kind === 'filter' ? <FilterDialog f={UI.dialog.data} close={closeDialog} /> : null}
       {UI.dialog?.kind === 'project' ? <ProjectDialog close={closeDialog} /> : null}
+      {UI.dictate ? <Dictate close={() => openDictate(false)} /> : null}
       <BulkBar />
       <PopHost />
       <Toasts />

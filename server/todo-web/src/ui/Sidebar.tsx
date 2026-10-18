@@ -1,13 +1,13 @@
 // Боковая панель Todoist: я и колокольчик, «Добавить задачу», Поиск, виды, Избранное, наше «Дерево жизни»,
 // «Мои проекты» (клиенты, под ними сделки — подпроекты), внизу — CRM и старый веб.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { dealShort, go, initials, projectColor, useRoute } from '../lib.ts';
 import { S, saveTodo, setTask, todoSettings, useStore } from '../store.ts';
 import { counts, dirName, goalChildren, liveDeals, projectsSorted } from '../views.ts';
 import { Bell, bellCount } from './Bell.tsx';
 import { Icon, TodayIcon } from './icons.tsx';
 import { openPop } from './pop.tsx';
-import { openDialog, openQuick, toggleSide, UI } from './state.ts';
+import { openDialog, openDictate, openQuick, toggleSide, UI } from './state.ts';
 import { draggingId } from './TaskList.tsx';
 
 function Item({ href, icon, label, count, on, sub, onDropTask, tw }: {
@@ -64,7 +64,8 @@ export function SideContent() {
       </div>
       <div className="side-scroll">
         <button className="side-add" onClick={() => openQuick()}><span className="plus"><Icon name="plus" size={16} sw={2} /></span>Добавить задачу</button>
-        <Item href="#/search" icon={<Icon name="search" size={20} />} label="Поиск" on={at('search')} />
+        <button className="side-add dict" onClick={() => openDictate()}><span className="plus"><Icon name="mic" size={16} sw={2} /></span>Надиктовать задачи</button>
+        <SideSearch />
         <Item href="#/now" icon={<Icon name="bolt" size={20} />} label="Сейчас" count={c.now} on={at('now') || r.view === ''} onDropTask={(id) => { const t = S.tasks.get(id); if (t) setTask(t, { focus_on: S.today }, 'В «Сейчас»').catch(() => {}); }} />
         <Item href="#/inbox" icon={<Icon name="inbox" size={20} />} label="Входящие" count={c.inbox} on={at('inbox')} onDropTask={move(null)} />
         <Item href="#/today" icon={<TodayIcon day={+(S.today || '00').slice(8, 10)} size={20} />} label="Сегодня" count={c.today} on={at('today')} onDropTask={(id) => { const t = S.tasks.get(id); if (t) setTask(t, { due_date: S.today }, 'Срок — сегодня').catch(() => {}); }} />
@@ -126,6 +127,31 @@ export function SideContent() {
         <a href="/" title="Прежний веб Дел">Старые Дела</a>
       </div>
     </>
+  );
+}
+
+/** Поиск полем слева (слово Саши 19.10: «слева должен быть поиск»): печатаешь — справа список найденного. */
+function SideSearch() {
+  const r = useRoute();
+  const [q, setQ] = useState(r.view === 'search' ? r.id || '' : '');
+  useEffect(() => {
+    if (r.view !== 'search') setQ('');
+  }, [r.view]);
+  const goQ = (v: string) => {
+    const h = '#/search/' + encodeURIComponent(v);
+    if (location.hash.startsWith('#/search')) {
+      history.replaceState(null, '', h);
+      dispatchEvent(new HashChangeEvent('hashchange'));
+    } else location.hash = h;
+  };
+  return (
+    <label className="side-search">
+      <Icon name="search" size={18} />
+      <input id="side-search" value={q} placeholder="Поиск" autoComplete="off"
+        onChange={(e) => { setQ(e.target.value); goQ(e.target.value); }}
+        onKeyDown={(e) => { if (e.key === 'Escape') { setQ(''); (e.target as HTMLInputElement).blur(); if (r.view === 'search') history.back(); } }} />
+      {q ? <button className="icon-btn sm" onClick={(e) => { e.preventDefault(); setQ(''); if (r.view === 'search') history.back(); }}><Icon name="x" size={14} /></button> : <span className="kbd">/</span>}
+    </label>
   );
 }
 

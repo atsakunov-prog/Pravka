@@ -7,7 +7,7 @@ import { crmUrl, dealShort, go, projectColor, STAGE } from '../lib.ts';
 import { op1, ops, S, saveNowOrder, saveTodo, setTask, todoSettings, toast, useStore } from '../store.ts';
 import type { Id, Task } from '../types.ts';
 import {
-  byPos, completedRecent, dayList, dealTasks, dirName, goalChildren, goalDir, goalTasks, goals, inbox, isListed, labelTasks,
+  byPos, completedRecent, dayList, search as searchAll, dealTasks, dirName, goalChildren, goalDir, goalTasks, goals, inbox, isListed, labelTasks,
   listed, liveDeals, nowList, overdue, personTasks, projectTasks, sectionsOf, upcomingDays, whyPath,
 } from '../views.ts';
 import { filterCtx } from './ctx.ts';
@@ -15,7 +15,7 @@ import { DisplayMenu, groupTasks, sortTasks, viewOpts } from './Display.tsx';
 import { Icon, TodayIcon } from './icons.tsx';
 import { openPop } from './pop.tsx';
 import { ColorPicker, Scheduler } from './pickers.tsx';
-import { openDialog, openQuick } from './state.ts';
+import { openDialog, openDictate, openQuick } from './state.ts';
 import { TaskList, reorder, draggingId, setDragId } from './TaskList.tsx';
 import { Checkbox, Meta } from './TaskRow.tsx';
 import { openTask } from './state.ts';
@@ -39,6 +39,7 @@ export function Page({ title, icon, sub, actions, children, crumbs, wide }: {
       <div className={'topbar' + (stuck ? ' stuck' : '')}>
         <MobileMenuButton />
         <div className="crumbs">{stuck ? <span className="tb-title">{title}</span> : crumbs}</div>
+        <button className="icon-btn m-only" onClick={() => openDictate()} aria-label="Надиктовать задачи"><Icon name="mic" size={22} /></button>
         {actions}
       </div>
       <div className={'view' + (wide ? ' wide' : '')}>
@@ -685,7 +686,32 @@ export function DoneView() {
   );
 }
 
-// ── Поиск (страницей) ────────────────────────────────────────────────────
+// ── Поиск (страницей; поле — слева в боковой панели) ────────────────────
+
+export function SearchView({ q }: { q: string }) {
+  useStore();
+  const res = searchAll(q);
+  const n = res.tasks.length + res.projects.length + res.people.length;
+  return (
+    <Page title={q ? <>Поиск: «{q}»</> : 'Поиск'} crumbs="Поиск" sub={q ? <span>{n ? 'нашлось ' + plural(n, 'совпадение', 'совпадения', 'совпадений') : 'ничего не нашлось'}</span> : <span>Печатай в поле слева</span>}>
+      {res.projects.length ? (
+        <div className="sect"><div className="sect-h">Проекты</div>
+          {res.projects.map((p) => <a key={p.id} className="fl-row" href={'#/project/' + p.id}><span className="hash" style={{ color: projectColor(p) }}>#</span>{p.name}</a>)}
+        </div>
+      ) : null}
+      {res.people.length ? (
+        <div className="sect"><div className="sect-h">Люди</div>
+          {res.people.map((p) => <a key={p.id} className="fl-row" href={'#/person/' + p.id}><Icon name="user" size={18} />{p.name}</a>)}
+        </div>
+      ) : null}
+      {res.tasks.length ? (
+        <div className="sect"><div className="sect-h">Задачи<span className="n">{res.tasks.length}</span></div>
+          <TaskList tasks={res.tasks} rowOpts={{ showProject: true }} nest={false} />
+        </div>
+      ) : null}
+    </Page>
+  );
+}
 
 export function TodayCount() {
   return <TodayIcon day={+S.today.slice(8, 10)} />;

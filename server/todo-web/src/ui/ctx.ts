@@ -16,6 +16,7 @@ export function quickCtx(): Ctx {
     sections: [...S.sections.values()].filter((s) => !s.archived).map((s) => ({ id: s.id, name: s.name, project_id: s.project_id })),
     labels: S.labels.map((l) => l.name),
     people: [...S.people.values()].filter((p) => !p.merged_into).map((p) => ({ id: p.id, name: p.name, short: p.short })),
+    places: ((S.me?.settings?.places as string[]) || []).filter(Boolean),
   };
 }
 

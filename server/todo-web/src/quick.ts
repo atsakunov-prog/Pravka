@@ -13,7 +13,7 @@
 import { addDays, addMonths, daysInMonth, mondayOf, nextWeekday, weekday, ymd } from './dates.ts';
 import type { Recur } from './types.ts';
 
-export type TokKind = 'date' | 'project' | 'section' | 'label' | 'priority' | 'person' | 'deadline' | 'desc' | 'now';
+export type TokKind = 'date' | 'project' | 'section' | 'label' | 'priority' | 'person' | 'deadline' | 'desc' | 'now' | 'remind';
 
 export interface Tok {
   start: number;
@@ -36,6 +36,7 @@ export interface Ctx {
   sections: Named[]; // project_id
   labels: string[];
   people: Named[];
+  places?: string[]; // места напоминаний с телефона («дом», «Летово») — «!дома»
 }
 
 export interface When {
@@ -58,6 +59,8 @@ export interface Parsed extends Partial<When> {
   deadline?: string | null;
   notes?: string | null;
   now?: boolean;
+  remind_when?: { date: string | null; time: string }; // «!15:00», «!завтра в 9» — день решает тот, кто заводит
+  remind_place?: string | null; // «!дома»
 }
 
 // ── Слова ────────────────────────────────────────────────────────────────
@@ -551,6 +554,31 @@ export function parseQuick(text: string, ctx: Ctx, opts: { dates?: boolean } = {
         else out.now = true;
         take(i, i + m[0].length, m[2] ? 'priority' : 'now');
         i += m[0].length - 1;
+        continue;
+      }
+      // Напоминание (наше, у Todoist «!» — тоже напоминание): «!дома» — место телефона, «!15:00», «!в 9», «!завтра в 9».
+      const rest = body.slice(i + 1);
+      const word = (rest.match(/^[^\s#@%+{}!]+/) || [''])[0].toLowerCase().replace(/ё/g, 'е');
+      const place = (ctx.places || []).find((p) => {
+        const n = p.toLowerCase().replace(/ё/g, 'е');
+        return word === n || (word.startsWith(n) && word.length - n.length <= 2);
+      });
+      if (word && place) {
+        out.remind_place = place;
+        take(i, i + 1 + word.length, 'remind');
+        i += word.length;
+        continue;
+      }
+      const ws = words(body, i + 1).slice(0, 4);
+      for (let k = ws.length; k >= 1; k--) {
+        if (ws[0].start !== i + 1) break;
+        const w = parseWhen(body.slice(ws[0].start, ws[k - 1].end), ctx);
+        if (w && w.due_time && !w.recur) {
+          out.remind_when = { date: /^(в|at|к)$/i.test(ws[0].w) || /^\d/.test(ws[0].w) || PART_OF_DAY[ws[0].w] ? null : w.due_date, time: w.due_time };
+          take(i, ws[k - 1].end, 'remind');
+          i = ws[k - 1].end - 1;
+          break;
+        }
       }
     }
   }

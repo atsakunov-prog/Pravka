@@ -33,6 +33,7 @@ export const UI = {
   claudeOpen: true,
   dialog: null as null | { kind: string; data?: any },
   focus: null as Id | null, // строка под клавиатурой (J/K, стрелки)
+  dictate: false, // окно «Надиктовать задачи»
 };
 
 export function openTask(id: Id, edit = false, comment = false) {
@@ -64,6 +65,10 @@ export function toggleSide() {
       /* без хранилища — до перезагрузки */
     }
   }
+  emit();
+}
+export function openDictate(on = true) {
+  UI.dictate = on;
   emit();
 }
 export function openDialog(kind: string, data?: any) {

@@ -135,6 +135,17 @@ svg { flex: none; }
 
 .side-add { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 6px; margin: 2px 0 2px; border-radius: 6px; color: var(--accent-text); font-weight: 600; font-size: 14px; width: 100%; }
 .side-add:hover { background: var(--hover); }
+.side-add.dict { color: var(--fg); font-weight: 500; }
+.side-add.dict .plus { background: var(--accent-soft); color: var(--accent-text); }
+.side-search { display: flex; align-items: center; gap: 6px; height: 34px; margin: 4px 0 6px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--fg2); }
+.side-search:focus-within { border-color: var(--border-h); color: var(--fg); }
+.side-search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font-size: 14px; }
+.side-search .kbd { font-size: 11px; color: var(--fg3); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; }
+.bugline { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 14px; background: var(--warn-bg); color: var(--warn-fg); border-bottom: 1px solid var(--div); position: sticky; top: 0; z-index: 6; }
+.bugline input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font-size: 13px; color: var(--fg); }
+.bugline input::placeholder { color: var(--warn-fg); opacity: .8; }
+.bugline a { font-size: 12px; color: var(--warn-fg); text-decoration: underline; white-space: nowrap; }
+.bugline ~ div .topbar { top: 34px; }
 .side-add .plus { width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; }
 
 .nav-item { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 6px; border-radius: 6px; color: var(--fg); font-size: 14px; width: 100%; text-align: left; position: relative; }
@@ -506,3 +517,5 @@ svg { flex: none; }
   .swipe-bg.l { background: var(--d-week); justify-content: flex-end; }
 }
 @media (min-width: 751px) { .side-scrim { display: none; } }
+.ed-foot > span:first-child { flex: 1; min-width: 0; }
+.ed-foot .proj-pick { max-width: 100%; }

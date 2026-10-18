@@ -59,7 +59,20 @@ export function TaskModal() {
   const [ask, setAsk] = useState('');
   const [talk, setTalk] = useState<{ said: string; reply?: string; busy?: boolean }[]>([]);
   const comRef = useRef<HTMLTextAreaElement>(null);
+  const [tl, setTl] = useState<any[] | null>(null);
   const tid = t?.id;
+  // Последнее с клиентом (из прежних Дел): хронология CRM сделки или клиента — три свежих записи, чтобы не ходить
+  // в CRM за контекстом. Готовые виды сервера deal и client (RLS решает, что видно).
+  const tlDeal = t?.deal_id || null, tlProj = t?.project_id || null;
+  useEffect(() => {
+    setTl(null);
+    const p = tlProj ? S.projects.get(tlProj) : null;
+    const q = tlDeal ? '/api/view/deal?deal_id=' + tlDeal : p?.kind === 'client' ? '/api/view/client?project_id=' + tlProj : null;
+    if (!q) return;
+    let live = true;
+    api<any>(q).then((d) => { if (live) setTl((d.timeline || []).filter((x: any) => !x.deleted_at).slice(0, 3)); }).catch(() => live && setTl([]));
+    return () => { live = false; };
+  }, [tlDeal, tlProj]);
   useEffect(() => {
     setCard(null);
     setTalk([]);
@@ -279,6 +292,27 @@ export function TaskModal() {
                 </div>
               ) : null}
             </div>
+            {ball === 'waiting' ? (
+              <div className="tm-row">
+                <div className="tm-lbl">Пнуть{t.waiting_since ? <span style={{ fontWeight: 400 }}>жду с {shortDate(t.waiting_since, today)}</span> : null}</div>
+                <button className={'tm-val' + (t.nudge_on ? '' : ' muted')} style={t.nudge_on && t.nudge_on <= today ? { color: 'var(--d-over)' } : undefined}
+                  onClick={(e) => openPop(e.currentTarget, (close) => <Scheduler deadline value={{ due_date: t.nudge_on ?? null, due_time: null, recur: null, due_rule: null }} close={close}
+                    onPick={(v) => setTask(t, { nudge_on: v.due_date }, v.due_date ? 'Пнуть — ' + shortDate(v.due_date, today) : 'Без напоминания пнуть')} />, { cls: 'sched' })}>
+                  <Icon name="bell" size={16} />{t.nudge_on ? dueWords(t.nudge_on, today) : 'Когда напомнить пнуть'}
+                </button>
+              </div>
+            ) : null}
+            {tl && tl.length ? (
+              <div className="tm-row">
+                <div className="tm-lbl">Последнее {deal ? 'по сделке' : 'с клиентом'}</div>
+                {tl.map((x, i) => (
+                  <div key={x.id || i} className="tm-path" style={{ marginBottom: 6 }}>
+                    <b>{shortDate(String(x.at).slice(0, 10), today)}</b> · {x.summary}
+                    {x.next_step ? <div style={{ color: 'var(--fg3)' }}>дальше: {x.next_step}</div> : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <div className="tm-row">
               <div className="tm-lbl">Зачем — место в дереве</div>
               <button className={'tm-val' + (path.length ? '' : ' muted')} onClick={(e) => openPop(e.currentTarget, (close) => <GoalPicker task={t} value={t.why_id ?? null} close={close} onPick={(id) => setTask(t, { why_id: id }, id ? 'Положил под цель' : 'Убрал из дерева')} />)}>

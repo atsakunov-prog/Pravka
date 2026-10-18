@@ -97,3 +97,26 @@ test('поле срока планировщика', () => {
   assert.equal(parseWhen('каждый пн', ctx)?.recur?.every, 'week');
   assert.equal(parseWhen('купить хлеб', ctx), null);
 });
+
+test('фразы владельца 19.10: завтра, послезавтра, через неделю, в пн, в понедельник', () => {
+  const d = (s: string) => q('Отчёт ' + s).due_date;
+  assert.equal(d('завтра'), '2026-10-20');
+  assert.equal(d('послезавтра'), '2026-10-21');
+  assert.equal(d('через неделю'), '2026-10-26');
+  assert.equal(d('в пн'), '2026-10-19'); // в понедельник сказано «в пн» — сегодня, как у Todoist
+  assert.equal(d('в понедельник'), '2026-10-19');
+  assert.equal(d('во вторник'), '2026-10-20');
+  assert.equal(d('через 2 недели'), '2026-11-02');
+});
+
+test('напоминание: !время и !место', () => {
+  const c = { ...ctx, places: ['дом', 'Летово'] };
+  const a = parseQuick('Отправить счёт завтра !15:00', c);
+  assert.deepEqual([a.due_date, a.remind_when, a.title], ['2026-10-20', { date: null, time: '15:00' }, 'Отправить счёт']);
+  const b = parseQuick('Позвонить !завтра в 9', c);
+  assert.deepEqual(b.remind_when, { date: '2026-10-20', time: '09:00' });
+  assert.equal(b.due_date, undefined); // напоминание — не срок
+  const h = parseQuick('Повесить полку !дома', c);
+  assert.deepEqual([h.remind_place, h.title], ['дом', 'Повесить полку']);
+  assert.equal(parseQuick('Сделать !сейчас', c).now, true);
+});

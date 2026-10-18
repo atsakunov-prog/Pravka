@@ -1,7 +1,7 @@
 // Строка задачи — анатомия Todoist: круглая галочка цвета приоритета, название, серое описание, строка меты
 // (срок цветом близости, повтор, дедлайн, внутри, комментарии, метки, человек), справа — проект; при наведении — кнопки.
 import { useRef, useState, type DragEvent, type PointerEvent as RPE } from 'react';
-import { deadlineWords, dueWords, dueTone, nowHm } from '../dates.ts';
+import { deadlineWords, diffDays, dueWords, dueTone, nowHm } from '../dates.ts';
 import { cls, dealShort, labelColor, personName, projectColor } from '../lib.ts';
 import { completeTask, ops, S, setTask } from '../store.ts';
 import type { Task } from '../types.ts';
@@ -78,7 +78,10 @@ export function Meta({ t, showProject, hideDate }: { t: Task; showProject?: bool
   if (t.person_id) {
     const who = personName(t.person_id);
     const w = t.ball === 'waiting' ? 'жду: ' : t.ball === 'agenda' ? 'обсудить: ' : '';
-    items.push(<span key="p" className="m"><Icon name="user" size={12} />{w}{who}</span>);
+    // Сколько жду (waiting_since) и пора ли пнуть (nudge_on) — из прежних Дел: у Todoist этого нет.
+    const days = t.ball === 'waiting' && t.waiting_since ? diffDays(today, t.waiting_since) : 0;
+    items.push(<span key="p" className="m"><Icon name="user" size={12} />{w}{who}{days >= 2 ? ` · ${days} дн.` : ''}</span>);
+    if (t.ball === 'waiting' && t.nudge_on && t.nudge_on <= today) items.push(<span key="n" className="m d-over"><Icon name="bell" size={12} />пнуть</span>);
   }
   for (const l of t.labels || []) items.push(<span key={'l' + l} className="m lbl-chip" style={{ color: labelColor(l) }}><Icon name="tag" size={12} />{l}</span>);
   if (t.why_id && t.why_goal && t.why_title) items.push(<span key="w" className="m" title="Зачем"><Icon name="target" size={12} />{t.why_title}</span>);

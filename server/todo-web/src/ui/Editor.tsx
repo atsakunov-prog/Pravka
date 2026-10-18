@@ -2,7 +2,7 @@
 // Тот же редактор — окном (Q, «+») и в строке списка («Добавить задачу»).
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { uuid } from '../api.ts';
-import { shortDate, dueWords, deadlineWords, dueTone } from '../dates.ts';
+import { addDays, deadlineWords, dueTone, dueWords, nowHm, shortDate } from '../dates.ts';
 import { dealShort, labelColor, personName, projectColor } from '../lib.ts';
 import { parseQuick, recurWords, type Parsed } from '../quick.ts';
 import { ops, S } from '../store.ts';
@@ -12,7 +12,7 @@ import { quickCtx } from './ctx.ts';
 import { Icon, PrioFlag } from './icons.tsx';
 import { openPop } from './pop.tsx';
 import { GoalPicker, LabelPicker, PersonPicker, PriorityMenu, ProjectPicker, Scheduler, type DueVal, type Place } from './pickers.tsx';
-import type { QuickDefaults } from './state.ts';
+import { openDictate, type QuickDefaults } from './state.ts';
 
 interface Manual {
   due?: DueVal;
@@ -81,13 +81,21 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
   const why = man.why_id !== undefined ? man.why_id : defaults.why_id ?? null;
   const now = parsed.now || man.now || defaults.focus_on === S.today;
   const notes = [parsed.notes, desc.trim()].filter(Boolean).join('\n') || null;
+  // «!15:00» без дня — в день срока; срока нет — сегодня, а если время прошло — завтра.
+  const rw = parsed.remind_when;
+  const remindDay = rw ? rw.date || due.due_date || (rw.time > nowHm() ? S.today : addDays(S.today, 1)) : null;
+  const remindAt = rw && remindDay ? `${remindDay}T${rw.time}:00+03:00` : null;
+  const remindPlace = parsed.remind_place || null;
 
   // Подсказки при наборе #, /, @, %, +
   const before = text.slice(0, caret);
-  const trig = before.match(/(^|\s)([#@%+/])([^\s#@%+/]*)$/);
+  // Набранное после знака — поиск, хоть с пробелами («#Альфа Г»): список живёт, пока что-то совпадает.
+  const tm = before.match(/(?:^|\s)([#@%+/])([^#@%+/\n]{0,40})$/);
+  const trig = tm ? { ch: tm[1], part: tm[2] } : null;
   const sugg: Sugg[] = useMemo(() => {
     if (!trig) return [];
-    const [, , ch, part] = trig;
+    const { ch, part } = trig;
+    if ((ch === '@' || ch === '%') && /\s/.test(part)) return [];
     const n = part.toLowerCase().replace(/ё/g, 'е');
     const ok = (s: string) => s.toLowerCase().replace(/ё/g, 'е').includes(n);
     if (ch === '#') {
@@ -108,12 +116,12 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
     }
     return [...S.people.values()].filter((p) => !p.merged_into && (ok(p.name) || ok(p.short || '')))
       .slice(0, 8).map((p) => ({ label: p.name, insert: p.short || p.name, icon: <Icon name="user" size={16} /> }));
-  }, [trig?.[0], place.project_id]);
+  }, [trig?.ch, trig?.part, place.project_id]);
   const showSugg = sugg.length > 0 && !!trig;
 
   const pickSugg = (s: Sugg) => {
     if (!trig) return;
-    const start = caret - trig[3].length;
+    const start = caret - trig.part.length;
     const next = text.slice(0, start) + s.insert + ' ' + text.slice(caret);
     setText(next);
     const c = start + s.insert.length + 1;
@@ -133,6 +141,8 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
       };
       if (due.recur && due.due_date) Object.assign(task, { recur: due.recur, due_rule: due.due_rule || recurWords(due.recur) });
       if (now) task.focus_on = S.today;
+      if (remindAt) task.remind_at = remindAt;
+      if (remindPlace) task.remind_place = remindPlace;
       if (why) task.why_id = why;
       return { op: 'task.create', task };
     };
@@ -207,15 +217,21 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
         {chip('why', <Icon name="target" size={16} />, whyTask ? whyTask.title : null, 'Зачем',
           (el) => openPop(el, (close) => <GoalPicker value={why} close={close} onPick={(id) => setMan({ ...man, why_id: id })} />),
           () => setMan({ ...man, why_id: null }))}
+        {remindAt || remindPlace ? (
+          <span className="chip set"><Icon name="alarm" size={16} />{remindPlace ? 'напомню: ' + remindPlace : 'напомню ' + (remindDay === S.today ? '' : dueWords(remindDay!, S.today) + ' ') + rw!.time}</span>
+        ) : null}
         <button className={'chip' + (now ? ' set' : '')} onClick={() => setMan({ ...man, now: !now })} style={now ? { color: 'var(--accent-text)', borderColor: 'var(--accent)' } : undefined}>
           <Icon name="bolt" size={16} />Сейчас
         </button>
       </div>
       <div className="ed-foot">
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+        <button className="icon-btn sm" title="Надиктовать много задач (Shift+Q)" onClick={() => { onClose(); openDictate(); }}><Icon name="mic" size={18} /></button>
         <button className="proj-pick" onClick={(e) => openPop(e.currentTarget, (close) => <ProjectPicker value={place} close={close} onPick={(p) => setMan({ ...man, place: p })} />)}>
           {proj ? <span className="hash" style={{ color: projectColor(proj) }}>#</span> : <Icon name="inbox" size={16} />}
           <span>{placeLabel}</span><Icon name="chevD" size={14} />
         </button>
+        </span>
         <span style={{ display: 'flex', gap: 8 }}>
           <button className="btn sec" onClick={onClose}>Отмена</button>
           <button className="btn pri" disabled={!can} onClick={submit}>Добавить задачу</button>

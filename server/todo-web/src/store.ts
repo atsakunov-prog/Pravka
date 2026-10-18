@@ -25,7 +25,16 @@ export const S = {
   ready: false,
   offline: false,
   version: 0,
+  debug: null as null | { on: boolean; new: number; last: number },
 };
+
+// Последние действия страницы — для записки «Что не так?» (как у прежнего веба: что ушло операциями, что сказал Claude,
+// тосты и ошибки). Только в памяти, 40 последних.
+export const trail: { at: string; kind: string; text: string; data?: unknown }[] = [];
+export function log(kind: string, text: string, data?: unknown) {
+  trail.push({ at: new Date().toISOString(), kind, text: text.slice(0, 500), ...(data !== undefined ? { data } : {}) });
+  if (trail.length > 40) trail.shift();
+}
 
 const subs = new Set<() => void>();
 let queued = false;
@@ -59,6 +68,7 @@ export const toasts: Toast[] = [];
 let toastN = 0;
 export function toast(text: string, undo?: () => void, error = false) {
   const t = { id: ++toastN, text, undo, error };
+  log(error ? 'error' : 'toast', text);
   toasts.push(t);
   if (toasts.length > 3) toasts.shift();
   emit();
@@ -97,6 +107,7 @@ export async function sync(full = false): Promise<void> {
     }
   }
   S.features = d.features || S.features;
+  if (d.debug !== undefined) S.debug = d.debug;
   S.seq = d.seq;
   S.today = d.today;
   S.offline = false;
@@ -150,6 +161,7 @@ function optimistic(o: Op) {
 
 export async function ops(items: Op[], { quiet = false } = {}): Promise<any[]> {
   for (const o of items) optimistic(o);
+  log('ops', items.map((o) => o.op + (o.id ? ' ' + String(o.id).slice(0, 8) : '')).join(', '), items.slice(0, 5));
   emit();
   let d: any;
   try {

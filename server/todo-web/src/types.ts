@@ -15,6 +15,8 @@ export interface Task {
   owed?: boolean;
   person_id: Id | null;
   requested_by: Id | null;
+  waiting_since?: string | null;
+  nudge_on?: string | null;
   due_date: string | null;
   due_time: string | null;
   estimate_min: number | null;
