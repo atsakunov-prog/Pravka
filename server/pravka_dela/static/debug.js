@@ -189,7 +189,7 @@ const DEBUG = (() => {
       const kids = safe(() => insideOf(t.id), []);
       if (kids.length) x.inside = kids.length;
     }
-    // Отступ на экране («Деревом», дела внутри над родителем в «Сейчас», шаги к цели в дереве) и свёрнутый родитель.
+    // Отступ на экране («Деревом», дела внутри под родителем в «Сейчас», шаги к цели в дереве) и свёрнутый родитель.
     const depth = +(row.style.getPropertyValue('--indent') || 0);
     if (depth) x.depth = depth;
     const fold = row.querySelector('.fold-btn:not(.none)');

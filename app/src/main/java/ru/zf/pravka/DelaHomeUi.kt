@@ -115,7 +115,7 @@ internal class Home(
     val fed: Int,
     val auto: Int,
     /**
-     * Дела внутри дел из «Сейчас» с глубиной (15.10.2026, `DelaSteps.inner`, `renderNow` веба): прямо над родителем
+     * Дела внутри дел из «Сейчас» с глубиной (15.10.2026, `DelaSteps.inner`, `renderNow` веба): прямо под родителем
      * отступом, в предел пяти не считаются; в «Сегодня» ниже их нет.
      */
     val inner: List<Pair<Dela.Task, Int>> = emptyList(),
@@ -348,7 +348,7 @@ internal fun LazyListScope.homeView(
             if (h.now.isEmpty()) {
                 BlockNote("Пусто. Возьми до ${DelaViews.NOW_MAX} дел на сегодня — молния у дела или в его карточке, «!сейчас» в строке.")
             } else {
-                // Жирным здесь не выделяем: весь блок — «Сейчас». Дела внутри — прямо над родителем, отступом.
+                // Жирным здесь не выделяем: весь блок — «Сейчас». Дела внутри — прямо под родителем, отступом.
                 if (h.inner.isEmpty()) TaskRows(h.now, actions, today, nowBold = false)
                 else TaskRows(
                     ru.zf.pravka.core.DelaSteps.stepsFirst(h.now + h.inner.map { it.first }, crm.snap), actions, today, nowBold = false,

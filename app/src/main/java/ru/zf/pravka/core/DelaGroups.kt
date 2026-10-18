@@ -451,7 +451,7 @@ object DelaGroups {
      * самих дел. Ключ ветки — путь от корня, чтобы списку было за что держаться.
      * Дело внутри дела (15.10.2026) — в ветке своего верхнего предка из этого же списка
      * ([DelaSteps.topIn]), кроме уровня «время»: иначе «Отбить» и «Запустить» растащили бы
-     * его от родителя, и «прямо перед родителем» (`DelaSteps.stepsFirst`) не вышло бы.
+     * его от родителя, и «прямо под родителем» (`DelaSteps.stepsFirst`) не вышло бы.
      */
     fun nested(items: List<Dela.Task>, levels: List<Level>, s: Dela.Snapshot, today: String, depth: Int = 0, path: String = ""): List<Node> {
         val sorted = items.sortedWith(byTime(today))

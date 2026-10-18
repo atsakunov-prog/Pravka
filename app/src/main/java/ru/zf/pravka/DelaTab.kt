@@ -232,7 +232,7 @@ private data class DelaScreen(
     val waits: DelaViews.Waits? = null,
     /**
      * «Деревом» (15.10.2026, `nestForest` веба): родитель → дела внутри него из того же списка; группы собраны из
-     * корней, дела внутри идут за родителем отступом. Пусто — плоско (дело внутри — прямо перед родителем).
+     * корней, дела внутри идут за родителем отступом. Пусто — плоско (дело внутри — прямо под родителем).
      */
     val nest: Map<String, List<Dela.Task>> = emptyMap(),
     /** Переключатель «Деревом» над списком: null — его нет, true / false — включён ли. */
@@ -732,7 +732,7 @@ fun DelaTab(
         view == DelaViews.View.NOW -> {
             val waits = remember(snap, me, today, sphere) { DelaViews.waits(snap, me, today, sphere, now) }
             val nowList = DelaGroups.nowOrdered(snap, me, today)
-            // Дела внутри дел из «Сейчас» (15.10.2026, `renderNow` веба): над родителем, в «Сегодня» не повторяются.
+            // Дела внутри дел из «Сейчас» (15.10.2026, `renderNow` веба; с 18.10 — под родителем, записка 39): в «Сегодня» не повторяются.
             val inner = if (snap.nestOn) DelaSteps.inner(nowList, snap) else emptyList()
             val taken = nowList.map { it.id }.toSet() + inner.map { it.first.id }
             val rest = DelaGroups.todayByGroups(snap, me, today, sphere, taken)
@@ -1601,10 +1601,10 @@ fun DelaTab(
         val seen = seenRows.visible("t:").toSet()
         // Строки по порядку экрана — как их рисуют NodeRows и TaskRows (поезд 16.10.2026, вложенность правила 27):
         // «Деревом» — родитель, под ним дела внутри отступом (свёрнутое не раскрывается), плоско — дело внутри прямо
-        // перед родителем (`DelaSteps.stepsFirst`), на главной — дела внутри дел из «Сейчас» над родителем отступом, а
+        // под родителем (`DelaSteps.stepsFirst`), на главной — дела внутри дел из «Сейчас» под родителем отступом, а
         // «Сегодня» — подгруппами «Отбить / Запустить / Мониторить» (`DelaDebug.homeRows`).
         // Раньше дела внутри «Деревом» шли в снимке хвостом после всех строк, без отступа, а плоский порядок — до
-        // перестановки «перед родителем»: записка «вложил — а оно не там» показывала Claude не тот экран.
+        // перестановки к родителю: записка «вложил — а оно не там» показывала Claude не тот экран.
         val rows = ArrayList<ru.zf.pravka.core.DelaDebug.Row>()
         fun row(t: Dela.Task, group: String, depth: Int = 0, folded: Boolean = false) {
             rows += ru.zf.pravka.core.DelaDebug.Row(t.id, t.id in seen, group, depth, folded)
@@ -1621,7 +1621,7 @@ fun DelaTab(
         }
         val homeSc = sc?.home
         when {
-            // Главная — как её рисует DelaHomeUi: «Сейчас» с делами внутри над родителем, «Сегодня» — тремя подгруппами.
+            // Главная — как её рисует DelaHomeUi: «Сейчас» с делами внутри под родителем, «Сегодня» — тремя подгруппами.
             homeSc != null -> rows += ru.zf.pravka.core.DelaDebug.homeRows(homeSc.now, homeSc.inner, homeSc.today, snap, today, seen)
             sc != null -> {
                 sc.nodes?.let { walk(it, "", sc.indent, sc.nest) }
@@ -3521,7 +3521,7 @@ internal fun TaskRows(
     onLong: ((Dela.Task) -> Unit)? = null,
     /** Жирным — дело в «Сейчас»; в самом блоке «Сейчас» это шум — там false. */
     nowBold: Boolean = true,
-    /** «Деревом» (15.10.2026): родитель → дела внутри; пусто — плоско, дело внутри прямо перед родителем. */
+    /** «Деревом» (15.10.2026): родитель → дела внутри; пусто — плоско, дело внутри прямо под родителем. */
     nest: Map<String, List<Dela.Task>> = emptyMap(),
 ) {
     // Ушла строка (сделанное отстояло своё, запись 30) — карточка сжимается плавно, а не рывком.
@@ -3555,7 +3555,7 @@ private fun TaskRowsBody(
         }
         return
     }
-    // Плоский список (15.10.2026): дело внутри другого — прямо перед родителем, если оба здесь (`stepsFirst` веба).
+    // Плоский список (15.10.2026): дело внутри другого — прямо под родителем, если оба здесь (`stepsFirst` веба).
     val rows = if (indent.isEmpty() && !inTree) DelaSteps.stepsFirst(list, actions.snap) else list
     rows.forEachIndexed { i, t ->
         if (i > 0) RowRule()

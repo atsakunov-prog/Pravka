@@ -360,7 +360,7 @@ def test_team_sees_inside_flat(dela):
 
 def test_web_uses_same_rules():
     """Веб — тем же правилом, что сервер и телефон: «Для этого» у строки и в карточке шлёт scope.step, срок по умолчанию —
-    stepDue (как store.step_due), строки списков идут одной точкой taskRows (дело внутри — перед родителем, «Деревом» —
+    stepDue (как store.step_due), строки списков идут одной точкой taskRows (дело внутри — под родителем, «Деревом» —
     под ним), «сначала: …» — первое по месту (pos)."""
     from pathlib import Path
 
@@ -381,7 +381,7 @@ def test_web_uses_same_rules():
     assert "lone" in sf and "[...sibs].sort(byPos)" in sf
     ns = fn("function nested(")
     assert "const top = lv === 'date' ? null : topIn(items);" in ns and "levelKey(top ? top(t) : t, lv)" in ns
-    # Главная «Сейчас»: дела внутри дел из «Сейчас» — над родителем отступом, в «Сегодня» ниже не повторяются.
+    # Главная «Сейчас»: дела внутри дел из «Сейчас» — под родителем отступом, в «Сегодня» ниже не повторяются.
     rn = fn("function renderNow(")
     assert "innerOf(now)" in rn and "...depth.keys()" in rn and "rowOpt" in rn
     # «Зачем» — только цель дерева (у дела внутри — своя сделка или проект, иначе «Зачем» родителя); выбор целей —

@@ -106,7 +106,7 @@ class DelaStepsTest {
     }
 
     @Test
-    fun `плоский список — дело внутри прямо перед родителем, «Деревом» — родитель, под ним по месту, свёрнутое не раскрыто`() {
+    fun `плоский список — дело внутри прямо под родителем, «Деревом» — родитель, под ним по месту, свёрнутое не раскрыто`() {
         val a = task("a")
         val parent = task("p")
         val b = task("b")
@@ -114,7 +114,8 @@ class DelaStepsTest {
         val first = task("f") { it.copy(whyId = "p", pos = 1) }
         val sub = task("ss") { it.copy(whyId = "s") }
         val alone = task("x") { it.copy(whyId = "not-here") }
-        assertEquals(listOf("a", "f", "ss", "s", "p", "b", "x"), DelaSteps.stepsFirst(listOf(a, parent, b, step, alone, sub, first)).map { it.id })
+        // Записка отладки 39 (18.10.2026): дело внутри над родителем читалось как «внутри дела выше» — теперь под ним.
+        assertEquals(listOf("a", "p", "f", "s", "ss", "b", "x"), DelaSteps.stepsFirst(listOf(a, parent, b, step, alone, sub, first)).map { it.id })
         // Родителя в списке нет — дело на своём месте.
         assertEquals(listOf("a", "s", "b"), DelaSteps.stepsFirst(listOf(a, step, b)).map { it.id })
         // Кривой круг «Зачем» никого не теряет.
@@ -214,7 +215,7 @@ class DelaStepsTest {
         assertEquals("a", DelaSteps.topIn(listOf(a, x))(a).id)
         val nodes = DelaGroups.nested(listOf(p, a, b, x), listOf(DelaGroups.Level.GRP), s, today)
         assertEquals(listOf(setOf("p", "a", "b"), setOf("x")), nodes.map { n -> n.items.map { it.id }.toSet() })
-        assertEquals(listOf("b", "a", "p"), DelaSteps.stepsFirst(nodes[0].items, s).map { it.id })
+        assertEquals(listOf("p", "b", "a"), DelaSteps.stepsFirst(nodes[0].items, s).map { it.id })
         // «Время» — по своему сроку: дело внутри на сегодня, родитель — в пятницу.
         val pd = p.copy(dueDate = "2026-10-20")
         val ad = a.copy(dueDate = today)
@@ -223,7 +224,7 @@ class DelaStepsTest {
     }
 
     @Test
-    fun `главная «Сейчас» — дела внутри дела из «Сейчас» над ним, по месту, с глубиной`() {
+    fun `главная «Сейчас» — дела внутри дела из «Сейчас» под ним, по месту, с глубиной`() {
         val now1 = task("now1") { it.copy(focusOn = today) }
         val in1 = task("in1") { it.copy(whyId = "now1", pos = 2) }
         val in2 = task("in2") { it.copy(whyId = "now1", pos = 1) }
@@ -231,7 +232,7 @@ class DelaStepsTest {
         val done = task("done") { it.copy(whyId = "now1", status = Dela.DONE) }
         val s = snap(now1, in1, in2, deep, done)
         assertEquals(listOf("in2" to 1, "deep" to 2, "in1" to 1), DelaSteps.inner(listOf(now1), s).map { it.first.id to it.second })
-        assertEquals(listOf("deep", "in2", "in1", "now1"), DelaSteps.stepsFirst(listOf(now1, in2, deep, in1), s).map { it.id })
+        assertEquals(listOf("now1", "in2", "deep", "in1"), DelaSteps.stepsFirst(listOf(now1, in2, deep, in1), s).map { it.id })
     }
 
     @Test

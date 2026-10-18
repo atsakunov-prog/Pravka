@@ -262,8 +262,9 @@ const insideOf = (id) => all().filter((x) => x.why_id === id && isOpen(x) && !x.
  *  сегодня; позже — тот же; без срока — без срока. */
 const stepDue = (p) => (p.focus_on === S.today || (p.due_date && p.due_date <= S.today) ? S.today : p.due_date || null);
 const shortTitle = (s, n = 40) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
-/** В одном плоском списке дело внутри — прямо перед своим родителем (вложенное вложенного — перед ним). Дела внутри
- *  одного дела, чьего родителя в списке нет, — подряд и по месту (pos), там, где стоит первое из них. */
+/** В одном плоском списке дело внутри — прямо под своим родителем (вложенное вложенного — под ним). Дела внутри
+ *  одного дела, чьего родителя в списке нет, — подряд и по месту (pos), там, где стоит первое из них. До 18.10.2026
+ *  дело внутри стояло НАД родителем, и «↳» читалось как «внутри дела выше» (записка отладки 39); имя осталось. */
 function stepsFirst(items) {
   const ids = new Set(items.map((t) => t.id));
   const under = (t) => t.why_id && t.why_id !== t.id && ids.has(t.why_id);
@@ -274,7 +275,7 @@ function stepsFirst(items) {
   }
   if (!kids.size && ![...lone.values()].some((v) => v.length > 1)) return items;
   const out = [], placed = new Set();
-  const place = (t) => { if (placed.has(t.id)) return; placed.add(t.id); for (const c of (kids.get(t.id) || []).sort(byPos)) place(c); out.push(t); };
+  const place = (t) => { if (placed.has(t.id)) return; placed.add(t.id); out.push(t); for (const c of (kids.get(t.id) || []).sort(byPos)) place(c); };
   for (const t of items) {
     if (under(t)) continue;
     const sibs = lone.get(t.why_id);
@@ -285,7 +286,7 @@ function stepsFirst(items) {
 }
 /** Верхний предок дела среди дел этого же списка (само дело — если его родителя в списке нет). По нему уровни
  *  группировки кладут дело внутри туда же, где родитель (15.10.2026): иначе «Отбить» и «Запустить» растащили бы их,
- *  и «прямо перед родителем» не вышло бы. */
+ *  и «прямо под родителем» не вышло бы. */
 function topIn(items) {
   const by = new Map(items.map((t) => [t.id, t]));
   return (t) => {
@@ -2103,7 +2104,7 @@ function tailLine() {
 function renderNow() {
   const now = nowTasks().sort(byTime);
   // Дела внутри дел из «Сейчас» (15.10.2026: «Для этого» у дела в «Сейчас» ставит дело внутри на сегодня, а не в
-  // «Сейчас»): открытые — прямо над родителем в блоке «Сейчас», отступом; в предел пяти не считаются и в «Сегодня»
+  // «Сейчас»): открытые — прямо под родителем в блоке «Сейчас», отступом; в предел пяти не считаются и в «Сегодня»
   // ниже не повторяются. Одно правило с телефоном (DelaSteps.inner, «Сейчас» вкладки).
   const inner = nestOn() ? innerOf(now) : [];
   const depth = new Map(inner.map(([t, d]) => [t.id, d]));
@@ -2323,7 +2324,7 @@ function groupBox(title, items, opts = {}, by) {
 
 /** «Деревом» во «Всех делах» (15.10.2026): родитель → дела внутри него из того же списка — на время отрисовки вида. */
 let NEST = null;
-/** Строки дел одного списка. Плоско — дело внутри стоит прямо перед своим родителем («Сейчас», «Сегодня», группы);
+/** Строки дел одного списка. Плоско — дело внутри стоит прямо под своим родителем («Сейчас», «Сегодня», группы);
  *  «Деревом» — родитель, под ним отступом дела внутри по месту, плюсик сворачивает (помнит браузер). */
 function taskRows(items, by, chips, rowOpt) {
   if (!NEST) return stepsFirst(items).map((t) => taskRow(t, by, chips && chips(t), rowOpt ? rowOpt(t) : {}));

@@ -310,9 +310,10 @@ class DelaDebugTest {
     }
 
     @Test
-    fun `главная — «Сегодня» подгруппами, дело внутри прямо перед родителем, «Сейчас» с делами внутри над родителем`() {
+    fun `главная — «Сегодня» подгруппами, дело внутри прямо под родителем, «Сейчас» с делами внутри под родителем`() {
         // Поезд 16.10.2026, проверка вагона 3: дело внутри получило срок «сегодня» от родителя — на экране оно в подгруппе
-        // родителя прямо перед ним (DelaHomeUi: DelaGroups.nested по группе, внутри — TaskRows со stepsFirst).
+        // родителя прямо под ним (DelaHomeUi: DelaGroups.nested по группе, внутри — TaskRows со stepsFirst; до записки
+        // отладки 39, 18.10.2026, — над ним).
         val s0 = nest()
         val s = s0.copy(tasks = s0.tasks + listOf(
             Dela.Task(id = "o", num = 40, title = "Ответить Ивану", ownerId = "me", owed = true, personId = "h", dueDate = today),
@@ -321,19 +322,19 @@ class DelaDebugTest {
         val p = s.tasks.getValue("p")
         val k2 = s.tasks.getValue("k2")
         val rows = DelaDebug.homeRows(listOf(s.tasks.getValue("n")), emptyList(), listOf(p, s.tasks.getValue("o"), k2), s, today, setOf("p"))
-        assertEquals(listOf("n", "o", "k2", "p"), rows.map { it.id })
+        assertEquals(listOf("n", "o", "p", "k2"), rows.map { it.id })
         assertEquals(listOf("Сейчас", "Сегодня › Отбить", "Сегодня › Запустить", "Сегодня › Запустить"), rows.map { it.group })
-        assertTrue(rows.last().inView)
-        assertFalse(rows[2].inView)
-        // «Сейчас»: дела внутри дел из «Сейчас» — над родителем отступом (DelaSteps.inner, как DelaHomeUi).
+        assertTrue(rows[2].inView)
+        assertFalse(rows.last().inView)
+        // «Сейчас»: дела внутри дел из «Сейчас» — под родителем отступом (DelaSteps.inner, как DelaHomeUi).
         val now = DelaDebug.homeRows(listOf(p), listOf(k2 to 1), emptyList(), s, today)
-        assertEquals(listOf("k2" to 1, "p" to 0), now.map { it.id to it.depth })
+        assertEquals(listOf("p" to 0, "k2" to 1), now.map { it.id to it.depth })
         // В снимке — тем же порядком, с подгруппой и вложенностью.
         val o = DelaDebug.snapshot(DelaDebug.Screen("nav:home", "Сейчас", rows = rows), s, today, "")
         val r = o.getJSONArray("rows")
-        assertEquals("Сегодня › Запустить", r.getJSONObject(2).getString("group"))
-        assertEquals("#12 Отправить термшит Ивану", r.getJSONObject(2).getString("in"))
-        assertEquals(2, r.getJSONObject(3).getInt("inside"))
+        assertEquals("Сегодня › Запустить", r.getJSONObject(3).getString("group"))
+        assertEquals("#12 Отправить термшит Ивану", r.getJSONObject(3).getString("in"))
+        assertEquals(2, r.getJSONObject(2).getInt("inside"))
     }
 
     @Test
