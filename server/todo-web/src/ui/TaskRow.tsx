@@ -5,7 +5,7 @@ import { deadlineWords, dueWords, dueTone, nowHm } from '../dates.ts';
 import { cls, dealShort, labelColor, personName, projectColor } from '../lib.ts';
 import { completeTask, ops, S, setTask } from '../store.ts';
 import type { Task } from '../types.ts';
-import { childrenOf } from '../views.ts';
+import { childrenOf, commentCount } from '../views.ts';
 import { Icon } from './icons.tsx';
 import { openPop } from './pop.tsx';
 import { Scheduler } from './pickers.tsx';
@@ -52,7 +52,7 @@ export function Meta({ t, showProject, hideDate }: { t: Task; showProject?: bool
   const today = S.today;
   const kids = childrenOf(t.id);
   const kidsDone = kids.filter((k) => k.status === 'done').length;
-  const comments = [...S.comments.values()].filter((c) => c.task_id === t.id && !c.deleted_at).length;
+  const comments = commentCount(t.id);
   const proj = t.project_id ? S.projects.get(t.project_id) : null;
   const items = [];
   if (t.due_date && hideDate && t.due_time) {

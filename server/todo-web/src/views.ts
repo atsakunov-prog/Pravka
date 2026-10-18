@@ -17,8 +17,31 @@ export function listed(): Task[] {
 /** Дело внутри дела: родитель — обычное дело (не цель дерева). */
 export const parentOf = (t: Task): Id | null => (t.why_id && !t.why_goal ? t.why_id : null);
 
+// Индексы — раз на изменение памяти (S.version), а не на каждую строку: на настоящих данных тысячи дел и комментариев,
+// а строка задачи спрашивает «сколько внутри» и «сколько комментариев» — без индекса это перебор всего на каждую строку.
+let idxAt = -1;
+let kidsIdx = new Map<Id, Task[]>();
+let comIdx = new Map<Id, number>();
+function idx() {
+  if (idxAt === S.version) return;
+  idxAt = S.version;
+  kidsIdx = new Map();
+  comIdx = new Map();
+  for (const x of S.tasks.values()) {
+    if (!x.why_id || x.why_goal || x.goal || (x.kind ?? 'task') !== 'task') continue;
+    const arr = kidsIdx.get(x.why_id);
+    if (arr) arr.push(x);
+    else kidsIdx.set(x.why_id, [x]);
+  }
+  for (const c of S.comments.values()) if (!c.deleted_at) comIdx.set(c.task_id, (comIdx.get(c.task_id) || 0) + 1);
+}
 export function childrenOf(id: Id): Task[] {
-  return [...S.tasks.values()].filter((x) => x.why_id === id && !x.why_goal && (x.kind ?? 'task') === 'task' && !x.goal);
+  idx();
+  return kidsIdx.get(id) || [];
+}
+export function commentCount(id: Id): number {
+  idx();
+  return comIdx.get(id) || 0;
 }
 
 // ── Порядок ─────────────────────────────────────────────────────────────
