@@ -95,14 +95,15 @@ def cd(do, **kw):
             "remove": False, "new": False, "people": [], **kw}
 
 
-def test_now_holds_five(dela):
+def test_now_takes_more_than_five(dela):
+    """Записка отладки 8 (18.10.2026): предела «Сейчас» нет — Claude ставит и шестое, и седьмое, не отказывая."""
     today = db_today(dela).isoformat()
     for i in range(4):
         mk(dela, f"Сейчас {i}", focus_on=today)
     a, b = mk(dela, "Пятое"), mk(dela, "Шестое")
 
     def fake(system, user_text):
-        assert "В «Сейчас» сегодня: 4 из 5." in user_text
+        assert "В «Сейчас» сегодня: 4." in user_text
         return empty_card(changes=[item(a["num"], now="on"), item(b["num"], now="on")],
                           create=[item(0, title="Седьмое", now="on")], _usage=None)
 
@@ -111,9 +112,9 @@ def test_now_holds_five(dela):
     with parse.db.session(dela, "sasha", "t") as c:
         now = {r["title"] for r in c.execute("SELECT title FROM tasks.tasks WHERE focus_on = crm.today()")}
         made = c.execute("SELECT focus_on FROM tasks.tasks WHERE title = 'Седьмое'").fetchone()
-    assert len(now) == 5 and "Пятое" in now and "Шестое" not in now
-    assert made and made["focus_on"] is None
-    assert sum("уже 5" in e for e in out["errors"]) == 2
+    assert len(now) == 7 and {"Пятое", "Шестое", "Седьмое"} <= now
+    assert made and made["focus_on"] is not None
+    assert not any("уже 5" in e for e in out["errors"])
 
 
 def _client(url):

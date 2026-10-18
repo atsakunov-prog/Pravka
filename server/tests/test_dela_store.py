@@ -395,31 +395,23 @@ def test_reminded_by_bot_for_task_its_user_cannot_see(dela):
     assert res[0]["ok"] and not res[1]["ok"]
 
 
-def test_now_holds_five_on_the_server(dela, conn):
-    """«Сейчас» — не больше пяти держит сервер: шестое отказывает словами из любого клиента
-    (коннектор claude.ai, реплай в Telegram, телефон), а не встаёт молча (06.10.2026, LOGIC.md §11)."""
+def test_now_has_no_limit(dela, conn):
+    """С 06.10 по 18.10.2026 сервер не пускал шестое в «Сейчас» из любого клиента. Записка отладки 8 (Саша): «надо иметь
+    возможность добавлять больше, чем 5» — теперь встаёт шестое и дальше, из веба, коннектора и правкой; max вида —
+    сколько клиенты показывают сверху."""
     today = conn.execute("SELECT crm.today()").fetchone()[0].isoformat()
     five = [ops(dela, "sasha", {"op": "task.create", "task": {"title": f"Сейчас {i}", "focus_on": today}}, via="web")[0]
             for i in range(5)]
     assert all(r["ok"] for r in five), five
     sixth = ops(dela, "sasha", {"op": "task.create", "task": {"title": "Шестое", "focus_on": today}}, via="mcp")[0]
-    assert not sixth["ok"] and "уже пять" in sixth["error"] and "Сейчас 0" in sixth["error"]
-    # Без «Сейчас» дело заводится спокойно, а поставить его туда шестым — нельзя.
+    assert sixth["ok"], sixth
     later = ops(dela, "sasha", {"op": "task.create", "task": {"title": "Потом"}}, via="mcp")[0]["task"]
-    r = ops(dela, "sasha", {"op": "task.set", "id": later["id"], "set": {"focus_on": today}}, via="mcp")[0]
-    assert not r["ok"] and "сначала убери одно" in r["error"]
-    # Правка стоящего в «Сейчас» и его закрытие предел не трогают; место освободилось — встаёт.
+    assert ops(dela, "sasha", {"op": "task.set", "id": later["id"], "set": {"focus_on": today}}, via="mcp")[0]["ok"]
     first = five[0]["task"]
-    assert ops(dela, "sasha", {"op": "task.set", "id": first["id"], "set": {"notes": "уточнение"}})[0]["ok"]
     assert ops(dela, "sasha", {"op": "task.done", "id": first["id"]})[0]["ok"]
-    assert ops(dela, "sasha", {"op": "task.set", "id": later["id"], "set": {"focus_on": today}})[0]["ok"]
-    # Вернуть закрытое с сегодняшним focus_on — тоже вход в «Сейчас»: шестым не встаёт.
-    r = ops(dela, "sasha", {"op": "task.reopen", "id": first["id"]})[0]
-    assert not r["ok"] and "уже пять" in r["error"]
-    # Вчерашнее «Сейчас» в счёт не идёт, у другого человека — своё «Сейчас».
-    yesterday = (dt.date.fromisoformat(today) - dt.timedelta(days=1)).isoformat()
-    assert ops(dela, "sasha", {"op": "task.create", "task": {"title": "Вчерашнее", "focus_on": yesterday}})[0]["ok"]
-    assert ops(dela, "natasha", {"op": "task.create", "task": {"title": "Наташино", "focus_on": today}})[0]["ok"]
+    assert ops(dela, "sasha", {"op": "task.reopen", "id": first["id"]})[0]["ok"]
+    now = store.view(dela, "sasha", "now")
+    assert len(now["items"]) == 7 and now["max"] == store.NOW_MAX
 
 
 def test_now_mark_leaves_due_alone(dela):
@@ -656,16 +648,11 @@ def test_held_says_why_it_waits(dela, caplog):
     """(г) Не вышло само — причина в payload.held и строкой журнала, а не молча: «Сейчас» полно, старая встреча,
     не знаю проект."""
     today = db_today(dela)
-    for k in range(store.NOW_MAX):
-        assert ops(dela, "sasha", {"op": "task.create", "task": {"title": f"Срочное {k}", "focus_on": today.isoformat()}})[0]["ok"]
+    # «Сейчас» полно больше не повод (предела нет с 18.10.2026, записка отладки 8) — остались старая встреча и проект.
     with caplog.at_level("INFO", logger="dela.store"):
-        r = _sug(dela, "Ещё одно срочное", {"focus_on": today.isoformat()})
-    s = r["suggestion"]
-    assert r["ok"] and s["status"] == "pending" and "task" not in r, r
-    assert s["payload"]["held"].startswith("само не встало: в «Сейчас» уже пять дел"), s["payload"]
-    assert any("Новое: «Ещё одно срочное» ждёт — само не встало" in m for m in caplog.messages), caplog.messages
-    old = _sug(dela, "Старое", {}, at=today - dt.timedelta(days=10))["suggestion"]
+        old = _sug(dela, "Старое", {}, at=today - dt.timedelta(days=10))["suggestion"]
     assert old["status"] == "pending" and old["payload"]["held"] == "встреча старше 3 дней"
+    assert any("Новое: «Старое» ждёт — встреча старше 3 дней" in m for m in caplog.messages), caplog.messages
     unknown = _sug(dela, "Тизер", {"project_name": "Неведомый проект"})["suggestion"]
     assert unknown["status"] == "pending" and unknown["payload"]["held"] == "не знаю проект «Неведомый проект»"
     # Автоматика спросила сама, имена узнались — причины нет: вопрос и есть причина.

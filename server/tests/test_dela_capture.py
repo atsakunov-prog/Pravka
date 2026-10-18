@@ -786,7 +786,7 @@ def test_move_back_today_now_and_back(dela, at):
     t = task(dela, tid)
     assert t["due_date"] == today and t["back_on"] is None
     now = move(dela, cap["ref"], "now")
-    assert task(dela, tid)["focus_on"] == today and now["items"][0]["line"] == "Переложил: В «Сейчас» (1 из 5): купить магний"
+    assert task(dela, tid)["focus_on"] == today and now["items"][0]["line"] == "Переложил: В «Сейчас» (1-е): купить магний"
     move(dela, cap["ref"], "back")
     t = task(dela, tid)
     assert t["back_on"] and t["due_date"] is None and t["focus_on"] is None
@@ -872,7 +872,9 @@ def test_did_keep_open_and_cancel(dela, at):
                          (cap["items"][0]["did"]["touch"],)).fetchone()["deleted_at"]
 
 
-def test_now_full_falls_back_to_today(dela, at):
+def test_now_words_go_to_now_even_past_five(dela, at):
+    """«в сейчас …» кладёт в «Сейчас» и шестым: предела нет с 18.10.2026 (записка отладки 8). До того полное «Сейчас»
+    отправляло дело на сегодня со словами «места нет»."""
     seed(dela)
     today = db_today(dela)
     at(dt.datetime(today.year, today.month, today.day, 10, 30, tzinfo=capture.MSK))  # «Сейчас» — день сервера
@@ -880,8 +882,8 @@ def test_now_full_falls_back_to_today(dela, at):
         ops(dela, "sasha", {"op": "task.create", "task": {"title": f"Дело {i}", "focus_on": db_today(dela).isoformat()}})
     cap = say(dela, "в сейчас разобрать почту")
     it = cap["items"][0]
-    assert it["bucket"] == "now" and it["line"] == "В «Сейчас» места нет — на сегодня: разобрать почту"
-    assert task(dela, it["task"]["id"])["due_date"] == db_today(dela)
+    assert it["bucket"] == "now" and not it.get("now_full")
+    assert task(dela, it["task"]["id"])["focus_on"] == db_today(dela)
 
 
 # ── Напоминание — отдельно от кучи ──────────────────────────────────────

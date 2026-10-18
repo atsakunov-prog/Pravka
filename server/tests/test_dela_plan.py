@@ -74,32 +74,22 @@ def decide(url, s, **kw):
     return ops(url, "sasha", {"op": "suggestion.decide", "id": str(s["id"]), **kw})[0]
 
 
-# ── 1. Предел пяти — на каждый день ─────────────────────────────────────
+# ── 1. «Сейчас» без предела (записка отладки 8, 18.10.2026) ───────────
 
-def test_now_limit_is_per_day(dela):
+def test_now_has_no_limit_any_day(dela):
+    """До 18.10.2026 сервер не пускал шестое в «Сейчас» дня — и сегодня, и на будущие дни («Сейчас на завтра»).
+    Записка отладки 8: класть сколько угодно, сверху видно пять, — шестое и дальше встают на любой день."""
     today = db_today(dela)
-    tmrw, yday = today + dt.timedelta(days=1), today - dt.timedelta(days=1)
+    tmrw = today + dt.timedelta(days=1)
     for i in range(5):
         mk(dela, title=f"Сегодня {i}", focus_on=today.isoformat())
-    # Пять на сегодня не мешают завтрашним.
-    for i in range(5):
         mk(dela, title=f"Завтра {i}", focus_on=tmrw.isoformat())
     r = ops(dela, "sasha", {"op": "task.create", "task": {"title": "Шестое завтра", "focus_on": tmrw.isoformat()}})[0]
-    assert not r["ok"] and f"на {store.day_label(tmrw)} уже пять дел" in r["error"] and "сначала убери одно" in r["error"]
+    assert r["ok"], r
     extra = mk(dela, title="Лишнее")
-    r = ops(dela, "sasha", {"op": "task.set", "id": extra["id"], "set": {"focus_on": tmrw.isoformat()}})[0]
-    assert not r["ok"] and "уже пять дел" in r["error"]
-    # Сегодня — прежние слова, без дня.
-    r = ops(dela, "sasha", {"op": "task.set", "id": extra["id"], "set": {"focus_on": today.isoformat()}})[0]
-    assert not r["ok"] and r["error"].startswith("в «Сейчас» уже пять дел")
-    # Правка уже стоящего на завтра проходит; прошедший день не проверяется.
-    t = store.view(dela, "sasha", "search", q="Завтра 3")["items"][0]
-    assert ops(dela, "sasha", {"op": "task.set", "id": t["id"], "set": {"title": "Завтра 3 — уточнил"}})[0]["ok"]
-    for i in range(6):
-        mk(dela, title=f"Вчера {i}", focus_on=yday.isoformat())
-    # Снял одно с завтра — место есть.
-    assert ops(dela, "sasha", {"op": "task.set", "id": t["id"], "set": {"focus_on": None}})[0]["ok"]
-    assert ops(dela, "sasha", {"op": "task.set", "id": extra["id"], "set": {"focus_on": tmrw.isoformat()}})[0]["ok"]
+    assert ops(dela, "sasha", {"op": "task.set", "id": extra["id"], "set": {"focus_on": today.isoformat()}})[0]["ok"]
+    now = store.view(dela, "sasha", "now")
+    assert len(now["items"]) == 6 and now["max"] == store.NOW_MAX
 
 
 # ── 2. Корзины ───────────────────────────────────────────────────────────
@@ -399,11 +389,12 @@ def test_answers(world, dela):
     s = sug_of(dela, w["c_old"]["id"])
     r = decide(dela, s, option=len(s["payload"]["options"]) - 1)
     assert r["ok"] and r["suggestion"]["status"] == "rejected" and r["suggestion"]["reason"] == "план: не надо"
-    # Шестое на завтра — отказ словами с днём (пять уже: стоявшее, два отмеченных и два поставленных руками).
+    # Шестое на завтра встаёт (предела нет с 18.10.2026, записка отладки 8): пять уже — стоявшее, два отмеченных и два
+    # поставленных руками.
     for k in range(2):
         mk(dela, title=f"Руками на завтра {k}", focus_on=tm)
     r = decide(dela, sug_of(dela, w["c_owed"]["id"]), option=0)
-    assert not r["ok"] and f"на {store.day_label(w['tmrw'])} уже пять дел" in r["error"]
+    assert r["ok"] and str(r["task"]["focus_on"]) == tm, r
     # Сделка: create — дело со сделкой и клиентом, сразу на завтра.
     for k in range(2):
         ok(dela, "sasha", {"op": "task.set", "id": store.view(dela, "sasha", "search", q=f"Руками на завтра {k}")["items"][0]["id"],

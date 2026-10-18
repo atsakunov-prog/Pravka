@@ -63,8 +63,8 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug",
 # «plan» — «Сейчас на завтра» (шаг 1 петли этапа 4, 15.10.2026, dela_0034, plan.py; контракт dela-plan.json): Пн–Чт в
 # 18:00 (Пт — 14:00, с 15.11 по 15.01 — 13:30, на понедельник) сервер кладёт в «Подскажи» до семи кандидатов правилом
 # (source plan, batch_ref plan:<день>, payload.for_date, why, from, basket), варианты «☆ На завтра» (focus_on будущим
-# днём), «✓ Уже сделал» (флаг done — только у source plan), «Не надо»; в 12:00 следующего дня гаснут. Предел пяти —
-# на КАЖДЫЙ день (_now_guard): focus_on в синке бывает будущей датой. Вид plan — шапка блока и строка дайджеста 20:03.
+# днём), «✓ Уже сделал» (флаг done — только у source plan), «Не надо»; в 12:00 следующего дня гаснут. Предела пяти в
+# «Сейчас» с 18.10.2026 нет (записка отладки 8). Вид plan — шапка блока и строка дайджеста 20:03.
 # Без флага веб и телефон блока не рисуют, дайджест строки не пишет; кандидаты старый клиент видит вопросами «Нового».
 # «speaker_link» — люди встречи: служба предлагает, кто говорит, с основаниями, решает код (этап 6 аудита, 15.10.2026,
 # Саша: «два независимых признака сошлись — привязать и показать в „Сделано само“; один — один вопрос с основаниями и
@@ -202,13 +202,12 @@ OPTION_FIELDS = (TASK_FIELDS | {"project_name", "person_name", "why_id", "direct
 # source plan (их пишет правило, а не модель) — op_suggestion_decide, тест test_done_option_only_for_plan.
 OPTIONS_MAX = 4
 
-# «Сейчас» — дела, которые Саша обязан сделать сегодня (focus_on = сегодня), не больше пяти. До 06.10.2026
-# предел держали только веб, ask.py и телефон, а коннектор claude.ai, реплай в Telegram и любой клиент API
-# ставили шестое молча (LOGIC.md §11). Теперь его держит сервер — одно место для всех; клиенты считают
-# сами лишь ради подсказки до запроса.
+# «Сейчас» — дела, которые Саша сам взял на сегодня (focus_on = сегодня). С 06.10 по 18.10.2026 сервер держал предел
+# пять (шестое — отказ словами, _now_guard). Записка отладки 8 (Саша, 16.10): «надо иметь возможность добавлять больше,
+# чем 5… перетянуть, и верхние опять будут показываться… «Показать все»». Теперь предела нет нигде: NOW_MAX — сколько
+# дел веб и телефон показывают сверху, остальное — под «Показать все»; порядок — users.settings.now_order (Саша тянет
+# строки, веб и телефон пишут его через user.settings), без него — по времени.
 NOW_MAX = 5
-NOW_LOCK = 0x5E4A  # первый ключ замка «Сейчас» (второй — владелец): чужим замкам базы не мешает
-_NOW_WORD = {5: "пять", 6: "шесть", 7: "семь", 8: "восемь", 9: "девять"}
 # Дело «Сейчас» и плана — не напоминание (алиас дела в запросах — t). Захват (шаг 0 петли, dela_0032, правило 29) завёл
 # tasks.tasks.kind ('task' | 'remind') и убрал напоминания из списков (_list); поезд 16.10.2026 — одной строкой: ни
 # кандидаты «Сейчас на завтра» (plan.py: in_now, корзины, snap, отмеченное вида plan), ни счёт «сделано x из y»
@@ -491,42 +490,6 @@ def day_label(day: Any) -> str:
     return f"{WEEKDAYS[d.weekday()]} {d:%d.%m}"
 
 
-def _now_guard(conn: psycopg.Connection, before: dict | None, after: dict) -> None:
-    """Дело встаёт в «Сейчас» владельца на какой-то день, а там уже NOW_MAX — отказ словами, а не шестое молча.
-
-    before — дело до операции (None — новое), after — каким оно станет. В «Сейчас» дня — открытое дело
-    с focus_on на этот день (Москва). Предел — на КАЖДЫЙ день (шаг 1 петли этапа 4, 15.10.2026): с «Сейчас на завтра»
-    focus_on бывает будущей датой, и до того на завтра можно было отметить и десять. Прошедший день не проверяется —
-    там ничего не встаёт. Предел проверяется, только когда дело в день ВХОДИТ: правка уже стоящего (срок, заметка),
-    снятие и закрытие его не трогают. Счёт — до записи и под замком на владельца: телефон, веб и реплай в Telegram в
-    одну секунду шестого не поставят. Считается видимое работающему (RLS): чужие приватные дела владельца в счёт не
-    попадут. В отказе — день словами, если он не сегодня («в «Сейчас» на пт 17.10 уже пять дел…»).
-    """
-    if not after.get("focus_on") or (after.get("status") or "open") != "open":
-        return
-    day = str(after.get("focus_on"))[:10]
-    today = conn.execute("SELECT crm.today() AS d").fetchone()["d"].isoformat()
-    if day < today:
-        return
-
-    def in_day(t: dict | None) -> bool:
-        return bool(t) and (t.get("status") or "open") == "open" and str(t.get("focus_on") or "")[:10] == day
-
-    owner = after.get("owner_id")
-    if in_day(before) and before.get("owner_id") == owner:
-        return
-    conn.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s::text))", (NOW_LOCK, owner))
-    rows = conn.execute(
-        "SELECT num, title FROM tasks.tasks WHERE owner_id = %s AND status = 'open' AND focus_on = %s::date "
-        "AND id IS DISTINCT FROM %s::uuid ORDER BY num",
-        (owner, day, str(before["id"]) if before else after.get("id")),
-    ).fetchall()
-    if len(rows) >= NOW_MAX:
-        names = "; ".join(f"#{r['num']} {r['title'] if len(r['title']) <= 40 else r['title'][:39] + '…'}" for r in rows)
-        on = "" if day == today else f" на {day_label(day)}"
-        raise OpError(f"в «Сейчас»{on} уже {_NOW_WORD.get(len(rows), len(rows))} дел: {names} — сначала убери одно")
-
-
 # ── Дела внутри дела (15.10.2026) ───────────────────────────────────────
 # Владелец: «Пишу „до этого надо из расшифровки встречи набросать драфт“ в „Что поправить в этом деле“ — он добавляет
 # в комментарии вместо того, чтобы сделать новое дело… Под делом должно быть „до этого“ / „для этого“ / „поправить это
@@ -683,7 +646,6 @@ def op_task_create(conn, user, op):
         nest.nest_fill(data, parent, conn.execute("SELECT crm.today() AS d").fetchone()["d"])
     data.setdefault("owner_id", user)
     data["created_by"] = user
-    _now_guard(conn, None, data)
     _ensure_labels(conn, data.get("labels"))
     row = _insert(conn, "tasks.tasks", data)
     if kr:
@@ -718,7 +680,6 @@ def op_task_set(conn, user, op):
     conflicts = sorted(k for k in changes if k in was and not _same(cur.get(k), was[k]) and not _same(cur.get(k), changes[k]))
     if changes.get("project_id") and cur.get("goal") and kr.get("goal") is not False:
         raise OpError("цель живёт без проекта: её текст видит только хозяин (сначала сделай её обычным делом)")
-    _now_guard(conn, cur, {**cur, **changes})
     _ensure_labels(conn, changes.get("labels"))
     row = _update(conn, "tasks.tasks", {"id": cur["id"]}, changes)
     if row is None:
@@ -2498,7 +2459,7 @@ def view_morning(conn, user, sphere=None, **_):
 # срок сегодня или прошёл, «Сейчас» телефона, «отбить» без срока, «мониторить», где пора напомнить, — и в нём тонуло
 # то, что владелец сам взял на день. Теперь три правила, одно на сервер, веб (app.js: isNow, inToday, isLate) и
 # телефон (этап 4 «Правки 5.0», задание отдельно):
-# - «Сейчас» (NOW_IF) — только то, что владелец отметил сам: focus_on = сегодня, не больше NOW_MAX (_now_guard);
+# - «Сейчас» (NOW_IF) — только то, что владелец отметил сам: focus_on = сегодня, сколько угодно (с 18.10.2026);
 # - «Сегодня» (TODAY_IF) — свои открытые дела со сроком ровно сегодня: без просроченного и без «ждут» без срока;
 # - просроченное (LATE_IF) само ни туда, ни туда не попадает — оно во «Всех делах» (view_all), группой сверху.
 # В «Сегодня» — три группы по приоритету (GROUPS), в группе выше срок со временем, потом кто дольше ждёт.
@@ -2674,7 +2635,7 @@ def view_quick(conn, user, sphere=None, **_):
 
 
 def view_now(conn, user, sphere=None, **_):
-    """«Сейчас» — только то, что владелец отметил сам на сегодня (focus_on), не больше NOW_MAX. Срок тут ни при чём:
+    """«Сейчас» — только то, что владелец отметил сам на сегодня (focus_on); max — сколько показывать сверху. Срок тут ни при чём:
     дело со сроком сегодня, но без отметки, — в «Сегодня»."""
     return {"items": _list(conn, f"{OPEN_MINE} AND {NOW_IF}", [user], sphere), "max": NOW_MAX}
 

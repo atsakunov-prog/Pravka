@@ -1486,11 +1486,11 @@ def _nested(item: dict) -> dict | None:
 
 
 def _nest_tail(conn, item: dict, now: dt.datetime) -> str:
-    """Когда дело внутри: « · на пятницу 16.10 · в 15:00», « · в «Сейчас» (2 из 5)», « · напомню завтра в 10:00»,
+    """Когда дело внутри: « · на пятницу 16.10 · в 15:00», « · в «Сейчас» (2-е)» (с 18.10.2026 без «из 5»: предела нет), « · напомню завтра в 10:00»,
     « · жду от Ивана Тестова»; без своего срока — ничего (вернётся с родителем)."""
     b, t, today = item["bucket"], item.get("task") or {}, now.date()
     if b == "now":
-        return " · на сегодня" if item.get("now_full") else f" · в «Сейчас» ({item.get('now_n') or 1} из 5)"
+        return " · на сегодня" if item.get("now_full") else f" · в «Сейчас» ({item.get('now_n') or 1}-е)"
     out = ""
     if t.get("due_date") and b in ("today", "day", "task_remind", "waiting", "owed", "agenda"):
         day = day_on(dt.date.fromisoformat(str(t["due_date"])[:10]), today)
@@ -1571,7 +1571,7 @@ def _line_of(conn, item: dict, now: dt.datetime) -> str:
     if b == "now":
         if item.get("now_full"):
             return f"В «Сейчас» места нет — на сегодня: {what}"
-        return f"В «Сейчас» ({item.get('now_n') or 1} из 5): {what}"
+        return f"В «Сейчас» ({item.get('now_n') or 1}-е): {what}"
     if b in ("today", "day"):
         d = dt.date.fromisoformat(str(t.get("due_date"))[:10])
         tail = ""
