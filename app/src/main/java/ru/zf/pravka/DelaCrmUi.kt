@@ -107,6 +107,10 @@ internal class CrmUiState {
     var peopleQuery by mutableStateOf("")
     /** «Переименовать» клиента — лист с новым именем (`prompt` веба); id проекта. */
     var renaming by mutableStateOf<String?>(null)
+    /** Новое название проекта (сделки) — тап по названию на его странице (записка отладки 38); id сделки. */
+    var renamingDeal by mutableStateOf<String?>(null)
+    /** «+ дело» у проекта (записка отладки 37) — лист с названием нового дела; id сделки. */
+    var newTaskInDeal by mutableStateOf<String?>(null)
     /** «+ проект» у клиента (16.10.2026 вечер, запись 27) — лист с названием «Клиент: тема»; id клиента. */
     var newDealFor by mutableStateOf<String?>(null)
 }
@@ -152,6 +156,8 @@ internal class DelaCrmContext(
     val offerUndo: (said: String, back: List<JSONObject>, refresh: List<String>) -> Unit = { _, _, _ -> },
     /** Пилюли карточки: пролистать список к разделу по ключу (`sec:about`, `sec:tasks`…). */
     val scrollTo: (String) -> Unit = {},
+    /** Новое дело с проектом и сделкой (`quickAdd` вкладки: «!отбить», «!сейчас» понимает) — «+ дело» у проекта. */
+    val addTask: (title: String, projectId: String, dealId: String) -> Unit = { _, _, _ -> },
 ) {
     fun data(path: String): JSONObject? = views[path]?.data
 
@@ -815,7 +821,13 @@ internal fun LazyListScope.crmClientTop(ctx: DelaCrmContext, projectId: String) 
     val live = copyDeals.filter { !it.closed }
     item(key = "crm:client") {
         PaperCard {
-            Text(project?.name ?: "клиент не найден", style = MaterialTheme.typography.titleMedium)
+            // Тап по названию — переименовать (записка отладки 38, 18.10.2026: «клик по названию давал бы возможность
+            // редактировать»); тот же лист, что у пилюли «Переименовать» в «О клиенте».
+            Text(
+                project?.name ?: "клиент не найден",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = if (project != null) Modifier.clickable(onClickLabel = "переименовать") { ctx.ui.renaming = projectId } else Modifier,
+            )
             if (project != null && project.aliases.isNotEmpty()) PaperHint("ещё зовут: " + project.aliases.joinToString(", "))
             Freshness(ctx, path)
             CardPills(ctx, listOfNotNull("sec:about" to "О клиенте", "sec:deals" to "Проекты", "sec:tasks" to "Дела", "sec:timeline" to "Хронология",
@@ -975,7 +987,12 @@ internal fun LazyListScope.crmDealPage(ctx: DelaCrmContext, dealId: String) {
                 // Монета — портфель, не воронка (п. 4 задания 9).
                 Icon(Glyphs.Layers, contentDescription = "проект", tint = ru.zf.pravka.ui.LocalMode.current.label, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text(d.name + if (d.local) " ⏳" else "", style = MaterialTheme.typography.titleMedium)
+                // Тап по названию — переименовать (записка отладки 38, 18.10.2026).
+                Text(
+                    d.name + if (d.local) " ⏳" else "",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.clickable(onClickLabel = "переименовать") { ctx.ui.renamingDeal = d.id },
+                )
             }
             PaperRow(
                 title = d.projectName.ifBlank { ctx.snap.projects[d.projectId]?.name ?: "клиент" },
@@ -1093,7 +1110,12 @@ internal fun LazyListScope.crmDealPage(ctx: DelaCrmContext, dealId: String) {
         }
     } else emptyList()
     item(key = "sec:tasks") {
-        PaperCard(label = "Дела · ${open.size + viaClient.size}") {
+        PaperCard(
+            label = "Дела · ${open.size + viaClient.size}",
+            // «+ дело» (записка отладки 37, 18.10.2026: «в проекте нужно сделать добавление дела, а то нет нигде
+            // кнопки») — справа в заголовке, как «+ проект» у клиента; дело встаёт с проектом и клиентом.
+            trailing = if (!d.closed) ({ PaperTextButton("+ дело", onClick = { ctx.ui.newTaskInDeal = d.id }) }) else null,
+        ) {
             if (open.isNotEmpty()) TaskRows(open, ctx.actions)
             if (viaClient.isNotEmpty()) {
                 PaperHint("Дела клиента — без проекта: пока проект у клиента один, это его шаги")
@@ -1610,6 +1632,8 @@ internal fun CrmSheets(ctx: DelaCrmContext) {
         }
     }
     ui.renaming?.let { id -> ctx.snap.projects[id]?.let { RenameClientSheet(ctx, it) } }
+    ui.renamingDeal?.let { id -> ctx.snap.deals[id]?.let { RenameDealSheet(ctx, it) } }
+    ui.newTaskInDeal?.let { id -> ctx.snap.deals[id]?.let { NewTaskInDealSheet(ctx, it) } }
     ui.newDealFor?.let { id -> NewDealSheet(ctx, id) }
     ui.closing?.let { d ->
         var outcome by remember(d.id) { mutableStateOf("won") }
@@ -2057,6 +2081,63 @@ private fun RenameClientSheet(ctx: DelaCrmContext, p: Dela.Project) {
         PaperField(value = name, onValueChange = { name = it }, label = "Как теперь зовут")
         if (clash != null) PaperHint(clash.said)
         PaperHint("Новое имя — везде: дела, проекты, хронология и названия встреч. Старое останется другим именем клиента.")
+    }
+}
+
+/**
+ * Новое название проекта (сделки) — тап по названию на его странице (записка отладки 38, 18.10.2026: «клик по названию
+ * давал бы возможность редактировать»). Пустое или то же — просто закрыть; иначе `deal.set {name}` и «Вернуть».
+ */
+@Composable
+private fun RenameDealSheet(ctx: DelaCrmContext, d: Dela.Deal) {
+    var name by remember(d.id) { mutableStateOf(d.name) }
+    PaperSheet(
+        onDismiss = { ctx.ui.renamingDeal = null },
+        title = "Название проекта",
+        icon = Glyphs.Edit,
+        subtitle = d.name,
+        footer = {
+            Spacer(Modifier.weight(1f))
+            PaperButton("Сохранить", icon = Glyphs.Edit, primary = true, onClick = {
+                ctx.ui.renamingDeal = null
+                val n = name.trim()
+                if (n.isNotEmpty() && n != d.name) ctx.runUndoable(
+                    DelaCrm.Undoable(
+                        listOf(DelaCrm.dealSetOp(d.id, JSONObject().put("name", n))),
+                        listOf(DelaCrm.dealSetOp(d.id, JSONObject().put("name", d.name))),
+                        "Название: $n",
+                    ),
+                    listOf(DelaCrm.dealPath(d.id), DelaCrm.clientPath(d.projectId), DelaCrm.CLIENTS, DelaCrm.PIPELINE),
+                )
+            })
+        },
+    ) {
+        PaperField(value = name, onValueChange = { name = it }, label = "Как называется")
+    }
+}
+
+/**
+ * «+ дело» у проекта (записка отладки 37, 18.10.2026): название — и дело встаёт с этим проектом и его клиентом, как
+ * «Новое дело в проект…» на странице клиента (`quickAdd`: «!отбить», «!мониторить», «!сейчас» понимает). Пусто — закрыть.
+ */
+@Composable
+private fun NewTaskInDealSheet(ctx: DelaCrmContext, d: Dela.Deal) {
+    var title by remember(d.id) { mutableStateOf("") }
+    val make = {
+        ctx.ui.newTaskInDeal = null
+        if (title.isNotBlank()) ctx.addTask(title.trim(), d.projectId, d.id)
+    }
+    PaperSheet(
+        onDismiss = { ctx.ui.newTaskInDeal = null },
+        title = "Новое дело",
+        icon = Glyphs.Plus,
+        subtitle = d.name,
+        footer = {
+            Spacer(Modifier.weight(1f))
+            PaperButton("Завести", icon = Glyphs.Plus, primary = true, enabled = title.isNotBlank(), onClick = make)
+        },
+    ) {
+        PaperField(value = title, onValueChange = { title = it }, label = "Что сделать")
     }
 }
 

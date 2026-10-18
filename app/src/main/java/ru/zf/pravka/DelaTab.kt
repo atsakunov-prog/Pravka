@@ -992,6 +992,7 @@ fun DelaTab(
         clientOpen = clientOpen,
         scrollTo = scrollTo,
         offerUndo = { said, back, refresh -> undoOffer = UndoOffer(said, back, refresh) },
+        addTask = { title, projectId, dealId -> quickAdd(title, projectId = projectId, dealId = dealId) },
     )
 
     var sphereSheet by remember { mutableStateOf(false) }
