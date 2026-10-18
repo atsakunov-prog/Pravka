@@ -11,6 +11,7 @@
 |---|---|
 | GET  /health | жив ли |
 | GET  / , /static/… | веб (одна страница) |
+| GET  /t | новый веб в виде Todoist (19.10.2026; сборка server/todo-web → static/todo.*) |
 | POST /auth/redeem, /auth/logout | вход по приглашению, выход |
 | GET  /api/me | кто я; look — шапка веба: домен общей куки темы, значок «Ковчега», соседние сервисы (только владельцу), меню Ковчега (menu, только владельцу) и токены вида (tokens) из Свода ui.menu / ui.look — нет записи или кривая, заводские (kovcheg_ui.py) |
 | GET  /api/sync?since=N | всё изменившееся после N (телефон, веб); владельцу — ещё zasechka: команды Засечки из веба, ждущие телефона (zasechka.py) |
@@ -82,6 +83,11 @@ STATIC = {
     # ушла вместе с ним). Свой файл, а не Google Fonts: CSP Дел чужих шрифтов не пускает. Меняется раз в годы —
     # кэш на месяц, иначе телефон тянул бы 50 КБ при каждом открытии.
     "golos.woff2": "font/woff2",
+    # Новый веб Дел в виде Todoist (19.10.2026, /t): сборка server/todo-web — постоянные имена, без хеша (закрытый
+    # список путей сайта-посредника на Aeza; правка списка — один раз, а не на каждую сборку).
+    "todo.html": "text/html; charset=utf-8",
+    "todo.js": "text/javascript; charset=utf-8",
+    "todo.css": "text/css; charset=utf-8",
 }
 # Страницы-двойники экранов телефона (twins.py, 14.10.2026) — свои файлы, но отдаются хвостом app.js и style.css: список
 # путей сайта-посредника у владельца закрытый, и новый файл в static/ был бы ещё одной правкой на Aeza. Своих адресов у
@@ -261,6 +267,9 @@ def build(cfg: Config) -> Starlette:
 
     async def static(request: Request):
         return _static(request.path_params["name"])
+
+    async def todo_page(request: Request):
+        return _static("todo.html")
 
     async def redeem(request: Request):
         if request.headers.get("x-dela") != "1":
@@ -667,6 +676,7 @@ def build(cfg: Config) -> Starlette:
         ("/health", health, None),
         ("/", page, None),
         ("/static/{name}", static, None),
+        ("/t", todo_page, None),
         ("/auth/redeem", redeem, ["POST"]),
         ("/auth/logout", logout, ["POST"]),
         ("/api/me", me, None),
