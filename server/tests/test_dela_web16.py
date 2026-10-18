@@ -37,7 +37,8 @@ def test_now_and_today_head_is_just_the_title():
     now, today = fn("function renderNow()"), fn("function renderToday()")
     assert "head('Сейчас')," in now and "head('Сегодня')," in today
     for body in (now, today):
-        assert "D.long(S.today)" not in body and "'закрыто '" not in body and "NOW_MAX" not in body
+        # Счёта «k из 5» в шапке нет; NOW_MAX в «Сейчас» с 18.10.2026 — только сколько строк сверху (записка 8).
+        assert "D.long(S.today)" not in body and "'закрыто '" not in body and "из ${NOW_MAX}" not in body and "из ' + NOW_MAX" not in body
         assert body.rstrip().endswith("tailLine())];"), "хвосты — последней строкой страницы"
     # Порядок сверху: девиз, поле, «Сейчас», …, «Сегодня».
     assert now.index("principleLine()") < now.index("quickAdd(") < now.index("groupBox('Сейчас'") < now.index("todayBox(")

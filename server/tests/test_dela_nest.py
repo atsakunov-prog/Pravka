@@ -398,7 +398,9 @@ def test_web_uses_same_rules():
     assert "const top = lv === 'date' ? null : topIn(items);" in ns and "levelKey(top ? top(t) : t, lv)" in ns
     # Главная «Сейчас»: дела внутри дел из «Сейчас» — под родителем отступом, в «Сегодня» ниже не повторяются.
     rn = fn("function renderNow(")
-    assert "innerOf(now)" in rn and "...depth.keys()" in rn and "rowOpt" in rn
+    assert "innerOf(now)" in rn and "innerOf(every)" in rn and "rowOpt" in rn
+    # Записка отладки 8 (18.10.2026): свой порядок, сверху NOW_MAX, остальное — «Показать все»; строку «Сейчас» тянут.
+    assert "sort(byNowOrder)" in rn and "every.slice(0, NOW_MAX)" in rn and "drop: { now: t.id }" in rn and "Показать все" in rn
     # «Зачем» — только цель дерева (у дела внутри — своя сделка или проект, иначе «Зачем» родителя); выбор целей —
     # только цели; движение Круга — без «родителей»; «Моё» — шаги к целям (krug.toward_goal).
     zo = fn("function zachemOf(")

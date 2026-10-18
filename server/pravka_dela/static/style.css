@@ -1689,3 +1689,6 @@ button.cap-line:hover { background: var(--hover); }
 .idea-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 7px 10px; }
 .idea-row + .idea-row { border-top: 1px solid var(--line-soft); }
 .idea-text { flex: 1 1 260px; min-width: 0; font-size: 14.5px; overflow-wrap: anywhere; }
+
+/* «Показать все» в «Сейчас» (записка отладки 8, 18.10.2026): под пятью строками, слева, как подпись блока. */
+.grp-now .now-more { margin: 6px 0 10px 12px; }

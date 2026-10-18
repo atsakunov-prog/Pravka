@@ -462,7 +462,31 @@ function whyPop(anchor, t) {
 // - просроченное само ни туда, ни туда не попадает: оно во «Всех делах», группой «Просрочено» сверху.
 // «Новое» — вопросы автоматики; «Все дела» — всё открытое, с завода уровнями «Зачем › группы › время»; свои
 // сочетания — фильтрами на полке. «Предстоящее», «Жду» и «Неделя» ушли (10.10): их дела — во «Всех делах».
+// «Сейчас» без предела с 18.10.2026 (записка отладки 8: «добавлять больше, чем 5… перетянуть, и верхние будут
+// показываться… «Показать все»»): NOW_MAX — сколько дел видно сверху, остальное — под «Показать все»; порядок —
+// как Саша тянул строки (users.settings.now_order, телефон — тем же полем), не названные там — после, по времени.
 const NOW_MAX = 5;
+const nowOrder = () => { const o = (S.me.settings || {}).now_order; return Array.isArray(o) ? o : []; };
+const byNowOrder = (a, b) => {
+  const o = nowOrder(), ia = o.indexOf(a.id), ib = o.indexOf(b.id);
+  return (ia < 0) - (ib < 0) || (ia < 0 ? byTime(a, b) : ia - ib);
+};
+/** Новый порядок «Сейчас»: сразу на экране, потом на сервер (настройка человека, как фильтры). */
+async function saveNowOrder(ids) {
+  S.me.settings = { ...(S.me.settings || {}), now_order: ids };
+  render();
+  try { await op1({ op: 'user.settings', settings: { now_order: ids } }); } catch (e) { fail(e); }
+}
+/** Дело бросили на строку «Сейчас» — встаёт перед ней; дело не из «Сейчас» — заодно в «Сейчас» (только своё). */
+function nowDrop(id, before) {
+  const t = S.tasks.get(id);
+  if (!t || id === before) return;
+  if (!isNow(t)) { if (!canNow(t)) { toast('В «Сейчас» встают только свои открытые дела'); return; } toggleNow([id]); }
+  const ids = nowTasks().sort(byNowOrder).map((x) => x.id).filter((x) => x !== id);
+  const at = ids.indexOf(before);
+  ids.splice(at < 0 ? ids.length : at, 0, id);
+  saveNowOrder(ids);
+}
 const nowTasks = () => all().filter((t) => isOpen(t) && isMine(t) && isNow(t) && !t.goal && !isRemind(t));
 /** На сегодня — как store.TODAY_IF: своё открытое дело со сроком ровно сегодня. Не сделал — завтра оно не здесь,
  *  а во «Всех делах», в «Просрочено». */
@@ -2109,13 +2133,17 @@ function tailLine() {
  *  пяти, во всех сферах сразу); вопросы автоматики с теми же кнопками, что в «Новом»; дела со сроком сегодня, кроме
  *  уже взятых в «Сейчас». Просроченное сюда само не попадает — внизу только его число ссылкой во «Все дела» (tailLine). */
 function renderNow() {
-  const now = nowTasks().sort(byTime);
+  // Порядок — Сашин (перетаскиванием, users.settings.now_order), сверху NOW_MAX, остальное — «Показать все»
+  // (записка отладки 8, 18.10.2026: предела нет).
+  const every = nowTasks().sort(byNowOrder);
+  const now = S.nowAll ? every : every.slice(0, NOW_MAX);
+  const hidden = every.length - now.length;
   // Дела внутри дел из «Сейчас» (15.10.2026: «Для этого» у дела в «Сейчас» ставит дело внутри на сегодня, а не в
-  // «Сейчас»): открытые — прямо под родителем в блоке «Сейчас», отступом; в предел пяти не считаются и в «Сегодня»
+  // «Сейчас»): открытые — прямо под родителем в блоке «Сейчас», отступом; в счёт сверху не идут и в «Сегодня»
   // ниже не повторяются. Одно правило с телефоном (DelaSteps.inner, «Сейчас» вкладки).
   const inner = nestOn() ? innerOf(now) : [];
   const depth = new Map(inner.map(([t, d]) => [t.id, d]));
-  const taken = new Set([...now.map((t) => t.id), ...depth.keys()]);
+  const taken = new Set([...every.map((t) => t.id), ...(nestOn() ? innerOf(every) : []).map(([t]) => t.id)]);
   const today = todayTasks().filter((t) => !taken.has(t.id));
   // Шапка — одно название (запись отладки 15): «на завтра отмечено k» — в блоке плана («отмечено k из 5»), хвосты — внизу.
   return [head('Сейчас'),
@@ -2123,9 +2151,12 @@ function renderNow() {
       principleLine(),
       quickAdd({}, { placeholder: '«это в Сейчас», «П1 поставь, срок пятница», «Иван ждёт звонка — на сегодня»' }),
       groupBox('Сейчас', [...now, ...inner.map(([t]) => t)], { cls: 'grp-now', n: false, sub: 'отметил сам — сделать сегодня', lead: () => icon('bolt', 17),
-        rowOpt: (t) => (depth.has(t.id) ? { indent: depth.get(t.id) } : {}),
+        // Строку дела «Сейчас» бросили на другую — встаёт перед ней (записка 8); дела внутри — как везде: внутрь.
+        rowOpt: (t) => (depth.has(t.id) ? { indent: depth.get(t.id) } : { drop: { now: t.id } }),
         before: now.length ? null : el('div', { class: 'hint-line' },
-          'Пусто. Возьми до пяти дел на сегодня — молния у дела или в карточке, галочки и «В «Сейчас»» внизу или «!сейчас» в строке.') }),
+          'Пусто. Возьми дела на сегодня — молния у дела или в карточке, галочки и «В «Сейчас»» внизу или «!сейчас» в строке.'),
+        after: every.length > NOW_MAX ? el('button', { class: 'chip-btn now-more', type: 'button', onclick: () => { S.nowAll = !S.nowAll; render(); } },
+          S.nowAll ? 'Свернуть до ' + NOW_MAX : 'Показать все · ещё ' + hidden) : null }),
       remindBox(remindersToday()),
       backBox(backTasks()),
       newBox(),
@@ -2326,7 +2357,7 @@ function groupBox(title, items, opts = {}, by) {
     opts.sum && !opts.act ? el('span', { class: 'sum' }, opts.sum) : null,
     opts.act ? el('span', { class: 'act' }, opts.act) : opts.late && items.length > 1 ? el('span', { class: 'act' },
       el('button', { class: 'chip-btn', onclick: (e) => reschedulePop(e.currentTarget, items.map((t) => t.id)) }, 'Перенести все')) : null) : null;
-  return el('div', { class: 'group' + (opts.cls ? ' ' + opts.cls : '') }, h, opts.before || null, taskRows(items, by, opts.chips, opts.rowOpt));
+  return el('div', { class: 'group' + (opts.cls ? ' ' + opts.cls : '') }, h, opts.before || null, taskRows(items, by, opts.chips, opts.rowOpt), opts.after || null);
 }
 
 /** «Деревом» во «Всех делах» (15.10.2026): родитель → дела внутри него из того же списка — на время отрисовки вида. */
@@ -2334,7 +2365,9 @@ let NEST = null;
 /** Строки дел одного списка. Плоско — дело внутри стоит прямо под своим родителем («Сейчас», «Сегодня», группы);
  *  «Деревом» — родитель, под ним отступом дела внутри по месту, плюсик сворачивает (помнит браузер). */
 function taskRows(items, by, chips, rowOpt) {
-  if (!NEST) return stepsFirst(items).map((t) => taskRow(t, by, chips && chips(t), rowOpt ? rowOpt(t) : {}));
+  // Тянуть дело можно в любом списке (записка отладки 20, 18.10.2026): на другое дело — внутрь него (nestInto: только
+  // своё в своё, не в своё же вложенное); у строки «Сейчас» своя цель — встать перед ней (rowOpt drop).
+  if (!NEST) return stepsFirst(items).map((t) => { const o = rowOpt ? rowOpt(t) : {}; return dropTo(dragFrom(taskRow(t, by, chips && chips(t), o), 'task', t.id), o.drop || { nest: t.id }); });
   const out = [];
   const walk = (t, depth, seen) => {
     const kids = (NEST.get(t.id) || []).filter((c) => !seen.has(c.id));
@@ -2348,14 +2381,8 @@ function taskRows(items, by, chips, rowOpt) {
   return out;
 }
 
-/** «Сейчас» — не больше пяти: шестое не встаёт, пока не убрал одно (владелец, 06.10.2026). */
-function nowRoom(ids) {
-  const have = new Set(nowTasks().map((t) => t.id));
-  const add = ids.filter((id) => !have.has(id)).length;
-  if (have.size + add <= NOW_MAX) return true;
-  toast(`В «Сейчас» уже ${have.size} из ${NOW_MAX}` + (add > 1 ? ` — влезет ещё ${Math.max(0, NOW_MAX - have.size)}` : ' — сначала убери одно'));
-  return false;
-}
+/** Место в «Сейчас» есть всегда: с 18.10.2026 предела нет (записка отладки 8; до того — пять, с 06.10.2026). */
+function nowRoom() { return true; }
 // Солнца «на сегодня / на завтра» (toggleToday, 10.10–14.10.2026) больше нет. Владелец 14.10.2026: «Если нажимаю на
 // „сейчас“, то дело пропадает и не ставится в сейчас… Надо оставить только сейчас». Солнце у строки принимали за
 // «Сейчас», а у дела со сроком сегодня оно ставило срок на завтра и снимало «Сейчас» — дело уезжало. Теперь у строки,
@@ -2463,7 +2490,7 @@ function taskRow(t, by, extra, opt = {}) {
   el('div', { class: 'lead' }, canStep(t) ? el('button', { class: 'now-btn step-btn', title: 'Для этого — завести дело внутри; вложить, вынуть, порядок',
     'aria-label': 'Для этого', onclick: (e) => { e.stopPropagation(); stepPop(e.currentTarget, t); } }, icon('plus', 18)) : null,
   canNow(t)
-    ? el('button', { class: 'now-btn' + (now ? ' on' : ''), title: now ? 'Из «Сейчас» — срок не меняется' : `В «Сейчас» — до ${NOW_MAX} дел`,
+    ? el('button', { class: 'now-btn' + (now ? ' on' : ''), title: now ? 'Из «Сейчас» — срок не меняется' : 'В «Сейчас» на сегодня',
       'aria-label': now ? 'Из «Сейчас»' : 'В «Сейчас»', 'aria-pressed': now ? 'true' : 'false',
       onclick: (e) => { e.stopPropagation(); toggleNow([t.id]); } }, icon('bolt', 18))
     : el('span', { class: 'now-btn off', 'aria-hidden': 'true' })),
@@ -2549,7 +2576,8 @@ function dropTo(node, target) {
   return node;
 }
 async function moveTo(kind, id, target) {
-  if (target.nest) { if (kind === 'task') nestInto([id], target.nest); return; } // «Деревом»: дело на дело — внутрь
+  if (target.nest) { if (kind === 'task') nestInto([id], target.nest); return; } // дело на дело — внутрь
+  if (target.now) { if (kind === 'task') nowDrop(id, target.now); return; }      // на строку «Сейчас» — перед ней
   const goal = target.goal ? S.tasks.get(target.goal) : null;
   if (kind === 'project') {
     if (!goal) return toast('Проект вешается на цель, а не прямо на направление');
@@ -4632,12 +4660,9 @@ function planWhen(day) {
 }
 /** Отмеченное на день плана — свои открытые дела с focus_on этого дня (будущий день: в «Сейчас» встанут сами). */
 const planMarked = (day) => deeds().filter((t) => isOpen(t) && isMine(t) && t.focus_on === day);
-/** Шестое на день плана — тост до запроса (предел пяти на КАЖДЫЙ день держит и сервер — store._now_guard). */
-function planRoom(day) {
-  if (planMarked(day).length < NOW_MAX) return true;
-  const w = planWhen(day);
-  toast(`${w[0].toUpperCase() + w.slice(1)} уже пять — сначала убери одно`);
-  return false;
+/** Место на день плана есть всегда: предела «Сейчас» нет с 18.10.2026 (записка отладки 8). */
+function planRoom() {
+  return true;
 }
 /** Подпись варианта плана на экране. Сервер пишет «☆ На завтра» (её же читают старые клиенты — payload не трогаем), а
  *  после полуночи этот день — уже сегодня: шапка блока «на сегодня, до 12:00», и кнопка тоже «☆ На сегодня», иначе в
@@ -4683,7 +4708,7 @@ function planBox() {
   const same = v && v.for_date === day;
   const sub = [same && v.today && v.today.total ? `сегодня сделано ${v.today.done} из ${v.today.total}` : null,
     same && v.meetings != null ? `${dayWord} встреч ~${v.meetings} — возьми ${v.take}` : null,
-    `отмечено ${marked.length} из ${NOW_MAX}`].filter(Boolean).join(' · ');
+    `отмечено ${marked.length}`].filter(Boolean).join(' · ');
   const open = (id) => (e) => { e.preventDefault(); openCard(id); };
   return el('div', { class: 'group plan-box' },
     el('h2', {}, icon('bolt', 17), 'Сейчас ' + when, el('span', { class: 'gsub' }, sub)),
@@ -5679,7 +5704,7 @@ function renderCard() {
       // «Сейчас» — отметка владельца (13.10.2026): только своё и не цель, сразу, срок не трогает. Солнца
       // «На сегодня» / «На завтра» нет с 14.10.2026 — срок ставит строка «Когда» ниже.
       canNow(t) ? el('button', { class: 'btn' + (isNow(t) ? ' on' : ''), 'aria-pressed': isNow(t) ? 'true' : 'false',
-        title: isNow(t) ? 'Убрать из «Сейчас» — срок не меняется' : `Взять в «Сейчас» на сегодня — до ${NOW_MAX} дел`, onclick: () => toggleNow([t.id]) },
+        title: isNow(t) ? 'Убрать из «Сейчас» — срок не меняется' : 'Взять в «Сейчас» на сегодня', onclick: () => toggleNow([t.id]) },
       icon('bolt', 17), isNow(t) ? 'Из «Сейчас»' : 'В «Сейчас»') : null,
       canNest(t) && !parentOf(t) ? el('button', { class: 'btn', title: 'Положить это дело внутрь другого', onclick: (e) => nestPop(e.currentTarget, [t.id]) },
         icon('list', 17), 'Вложить в…') : null,
