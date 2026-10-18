@@ -10,7 +10,7 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * Дела внутри дела (15.10.2026, docs/dela-phone-23.md) — то же правило, что сервер (`store.step_of`, `step_due`,
+ * Дела внутри дела (15.10.2026, docs/dela-phone-23.md) — то же правило, что сервер (`nest.nest_fill`, `step_due`,
  * `_nest_rise`, тест `test_dela_nest.py`) и веб (`stepDue`, `stepChips`, `stepsFirst`, `nestForest`). Данные выдуманные.
  */
 class DelaStepsTest {
@@ -61,6 +61,14 @@ class DelaStepsTest {
         assertEquals("p", op.getString("why_id"))
         assertEquals(today, op.getString("due_date"))
         assertFalse(op.has("pos")) // место не задано — и не шлётся
+        // Очищенное в листе «Для этого» — явным null: сервер (`nest.nest_fill`, 16.10.2026, docs/dela-phone-32.md §1)
+        // дополняет новое дело внутри полями родителя, если их в операции нет, и вернул бы человека и срок, которые Саша
+        // убрал.
+        val cleared = Dela.createOp(d.copy(personId = "", dueDate = "")).getJSONObject("task")
+        assertTrue(cleared.has("person_id") && cleared.isNull("person_id") && cleared.has("due_date") && cleared.isNull("due_date"))
+        assertEquals(listOf("p-a", "d-a"), listOf(cleared.getString("project_id"), cleared.getString("deal_id")))
+        // Без «Зачем» — как раньше: пустое не шлётся вовсе.
+        assertFalse(Dela.createOp(d.copy(whyId = "", personId = "")).getJSONObject("task").has("person_id"))
         val goal = task("g") { it.copy(goal = true, dueDate = "2026-10-30") }
         val g = DelaSteps.draft(goal, snap(goal), "me", today)
         assertEquals(listOf("g", "", "", "", "2026-10-30"), listOf(g.whyId, g.projectId, g.dealId, g.personId, g.dueDate))

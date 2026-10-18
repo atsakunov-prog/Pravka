@@ -1429,6 +1429,12 @@ object Dela {
     private val CREATE_FIELDS = EDITABLE + "money"
 
     /**
+     * Что новое дело внутри дела берёт от родителя на сервере, если в операции этого нет (`nest.FILL_KEYS`,
+     * docs/dela-phone-32.md §1).
+     */
+    private val NEST_FILLED = listOf("project_id", "deal_id", "person_id", "due_date")
+
+    /**
      * Время срока «9:30», «930», «18.00» — в «09:30»; не время — null. Сервер
      * хранит его как `time` и отдаёт «09:30:00»: сравниваем первые пять знаков.
      */
@@ -1510,6 +1516,11 @@ object Dela {
             if (k == "ball" && v == MINE) continue
             task.put(k, v)
         }
+        // Дело внутри дела (why_id): поле, очищенное в листе «Для этого», — явным null. Сервер с 16.10.2026
+        // (`nest.nest_fill` в `store.op_task_create`, docs/dela-phone-32.md §1) сам дополняет новое дело полями
+        // родителя, если их в операции нет: пропуск он принял бы за «не назвал» и вернул бы человека или срок, которые
+        // Саша убрал. Под целью сервер не дополняет — null там ничего не меняет; старый сервер null принимает как пустое.
+        if (t.whyId.isNotBlank()) for (k in NEST_FILLED) if (!task.has(k)) task.put(k, JSONObject.NULL)
         // Захват (15.10.2026): вид и «потом» ставит только тот, кто видел флаг `capture` (`CaptureFallback`) — у дела
         // по умолчанию их нет, и старый сервер незнакомых полей не увидит.
         if (t.remind) task.put("kind", KIND_REMIND)
@@ -1525,6 +1536,55 @@ object Dela {
 
     fun statusOp(op: String, id: String, opId: String = newId()): JSONObject =
         JSONObject().put("op", op).put("op_id", opId).put("id", id)
+
+    /**
+     * «Это отдельное дело» (16.10.2026, отладка, запись 23; docs/dela-phone-32.md §3; `splitNoteOps` веба — одно правило):
+     * Claude дописал в заметку дела «Проговорить с ним Бету», а это ещё одно дело («я редко когда делаю комментарии к
+     * делам, я в основном завожу дополнительные дела»). [ops] — одной пачкой: `task.create` (дописанное названием, «Зачем»
+     * дела — у цели её шагом, его клиент, сделка и человек; срок не ставится — он был сказан для самого дела, а внутри
+     * дела-родителя сервер возьмёт срок родителя) и `task.set notes` без дописанного, с `was`; [back] — «Вернуть». Заметку
+     * успели поправить и дописанного в ней нет — только новое дело.
+     */
+    data class NoteSplit(val id: String, val title: String, val ops: List<JSONObject>, val back: List<JSONObject>)
+
+    /**
+     * Заметка без дописанного (`noteCut` веба): последнее вхождение вырезано, стык — одной строкой; пусто — "" (уйдёт
+     * null); его в заметке нет — null (заметку не трогаем).
+     */
+    fun noteCut(cur: String, noted: String): String? {
+        val n = noted.trim()
+        if (n.isEmpty()) return null
+        val i = cur.lastIndexOf(n)
+        if (i < 0) return null
+        return listOf(cur.substring(0, i).trimEnd(), cur.substring(i + n.length).trimStart()).filter { it.isNotEmpty() }.joinToString("\n")
+    }
+
+    /** Название нового дела из дописанного: одной строкой, без точки в конце, с большой буквы (`splitTitle` веба). */
+    fun splitTitle(noted: String): String {
+        val s = noted.replace(Regex("\\s+"), " ").trim().replace(Regex("[\\s.,;:]+$"), "")
+        return (s.take(1).uppercase() + s.drop(1)).take(300)
+    }
+
+    /** Пачка «Это отдельное дело» для дела [t] (как оно сейчас) и дописанного [noted]; нечего отделять — null. [tree] —
+     *  сервер знает «Зачем» (`Snapshot.treeOn`): иначе `why_id` не уходит. */
+    fun splitNoteOps(noted: String, t: Task, tree: Boolean = true, id: String = newId()): NoteSplit? {
+        val title = splitTitle(noted)
+        if (title.isEmpty()) return null
+        val task = JSONObject().put("id", id).put("title", title).put("source", "manual")
+        val why = if (t.goal) t.id else t.whyId
+        if (tree && why.isNotBlank()) task.put("why_id", why)
+        if (t.projectId.isNotBlank()) task.put("project_id", t.projectId)
+        if (t.dealId.isNotBlank()) task.put("deal_id", t.dealId)
+        if (t.personId.isNotBlank()) task.put("person_id", t.personId)
+        val ops = mutableListOf(JSONObject().put("op", "task.create").put("op_id", newId()).put("task", task))
+        val back = mutableListOf(statusOp("task.cancel", id))
+        val cut = noteCut(t.notes, noted)
+        if (cut != null) {
+            ops += setOp(t.id, JSONObject().put("notes", nul(cut)), JSONObject().put("notes", nul(t.notes)))
+            back += setOp(t.id, JSONObject().put("notes", nul(t.notes)), JSONObject().put("notes", nul(cut)))
+        }
+        return NoteSplit(id, title, ops, back)
+    }
 
     /**
      * Комментарий к делу. [private] — «только мне» (аудит №8): поле уходит, только когда оно true, — и звать так

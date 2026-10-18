@@ -19,7 +19,7 @@ from test_dela_schema import db_today, dela, project  # noqa: F401
 def item(num, **kw):
     """Запись правки, как её вернёт Claude: всё пусто, кроме сказанного."""
     base = {"num": num, "title": "", "notes_add": "", "project": "", "deal": "", "person": "", "due": "", "due_time": "",
-            "ball": "", "now": "", "estimate_min": 0, "labels_add": [], "labels_remove": [], "status": "", "into": 0}
+            "ball": "", "now": "", "estimate_min": 0, "labels_add": [], "labels_remove": [], "status": "", "into": ""}
     return {**base, **kw}
 
 
@@ -288,6 +288,7 @@ def test_schema_is_strict():
             walk(node["items"])
 
     walk(ask.SCHEMA)
+    walk(ask.SCHEMA_LITE)  # запасная (16.10.2026) — тоже строгая
 
 
 def test_talk_screen_is_one_cached_head(dela):
@@ -355,3 +356,153 @@ def test_cache_write_is_priced_by_ttl():
     assert abs(llm.cost(u) - (100 * 4 + 10 * 20 + 6000 * 5 + 24000 * 8) / 1e6) < 1e-9
     old = NS(model="claude-opus-5-5", usage=NS(input_tokens=1, output_tokens=1, cache_creation_input_tokens=50, cache_read_input_tokens=0))
     assert llm.usage_of(old, "x")["cache_write"] == 50 and "cache_write_1h" not in llm.usage_of(old, "x")
+
+
+# ── Строка Claude: место в дереве, дела разговора, кнопки ответа (16.10.2026, записи 21–22) ─────
+
+
+def _v(url, tid, user="sasha"):
+    with parse.db.session(url, user, "t") as c:
+        return c.execute("SELECT * FROM tasks.v_tasks WHERE id = %s", (tid,)).fetchone()
+
+
+def test_task_line_marks_goal_and_place(dela):
+    """Строка дела для Claude несёт место в дереве: «цель» (у практики — ритм), «под целью #N», «внутри #N». Без этого
+    Claude на «Дереве жизни» не видел структуры и отсылал перетаскивать руками (запись 21)."""
+    g = mk(dela, "Бегаю", goal=True, rhythm="3 раза в неделю")
+    d = mk(dela, "Купить кроссовки", why_id=g["id"])
+    i = mk(dela, "Выбрать размер", why_id=d["id"])
+    today = db_today(dela)
+    rg, rd, ri = (_v(dela, x["id"]) for x in (g, d, i))
+    assert ask._task_line(rg, today).startswith(f"#{g['num']} Бегаю · цель · практика: 3 раза в неделю")
+    assert "Входящие" not in ask._task_line(rg, today)  # у цели проекта нет — и «Входящие» про неё неправда
+    assert ask._task_line(rd, today).startswith(f"#{d['num']} Купить кроссовки · под целью #{g['num']}")
+    assert ask._task_line(ri, today, short=True).startswith(f"#{i['num']} Выбрать размер · внутри #{d['num']}")
+    plain = ask._task_line(_v(dela, mk(dela, "Само по себе")["id"]), today)
+    assert "цель" not in plain and "внутри" not in plain
+
+
+def test_talk_sees_its_own_tasks_fresh_with_cached_head(dela):
+    """Запись 22: «Да, ставь» — тот же разговор, голова экрана из кэша (25787 + 13368 токенов первой реплики), а дела,
+    заведённого первой репликой, в ней нет — «мне пока не видно». Теперь реплика шлёт ids заведённого и поправленного,
+    сервер кладёт их свежими в ХВОСТ («ДЕЛА ИЗ ЭТОГО РАЗГОВОРА»): голова та же (кэш цел), а в новое можно вложить. То же
+    в карточке дела. Кнопки answers доходят до ответа run — только под вопросом."""
+    top = mk(dela, "Расту в профессии", goal=True)
+    old = mk(dela, "Читаю по главе в день", why_id=top["id"])
+    scope = {"title": "Дерево жизни", "task_ids": [top["id"], old["id"]], "talk_id": "t-heavy-21", "rule_tried": True}
+    one = ask.context(dela, "sasha", "поставь учу испанский в расту в профессии", scope)
+
+    def first(system, user_text):
+        return {"route": "edit", "reply": "Переложить «Читаю по главе в день» внутрь?", "changes": [], "suggestions": [], "card": [],
+                "create": [{"title": "Учу испанский", "notes_add": "", "project": "", "person": "", "due": "", "ball": "", "now": "",
+                            "into": f"#{top['num']}", "goal": True}],
+                "answers": ["Да, переложи", "  Нет  ", "", 5, "Только его", "Четвёртое лишнее"], "_usage": None}
+
+    out = ask.run(dela, "sasha", "поставь учу испанский в расту в профессии", scope, "", None, ask_fn=first)
+    new = out["tasks"][0]
+    assert out["answers"] == ["Да, переложи", "Нет", "Только его"]
+    assert out["reply"] == "Завёл целью «Учу испанский» внутри «Расту в профессии». Переложить «Читаю по главе в день» внутрь?"
+    hist = [{"said": "поставь учу испанский в расту в профессии", "reply": out["reply"], "done": "завёл: Учу испанский", "ids": [new["id"]]}]
+    two = ask.context(dela, "sasha", "Да, переложи", {**scope, "history": hist})
+    assert two["screen"] == one["screen"] and "Учу испанский" not in two["screen"]  # голова — из кэша, как была
+    block = two["tail"].split("ДЕЛА ИЗ ЭТОГО РАЗГОВОРА")[1].split("РАЗГОВОР —")[0]
+    assert f"#{new['num']} Учу испанский · цель · под целью #{top['num']}" in block
+    assert new["num"] in two["tasks"]
+    out = ask.run(dela, "sasha", "Да, переложи", {**scope, "history": hist}, "", None,
+                  ask_fn=lambda s, u: {"route": "edit", "reply": "Переложил.", "changes": [item(old["num"], into=f"#{new['num']}")],
+                                       "create": [], "answers": ["Ещё?"], "_usage": None})
+    assert not out["errors"] and str(_v(dela, old["id"])["why_id"]) == new["id"]
+    assert out["answers"] == []  # ответ без вопроса — без кнопок
+    # Карточка дела: те же дела разговора — хвостом, их можно и править, и класть в них.
+    x = mk(dela, "Слушаю подкаст на испанском")
+    ctx = ask.context(dela, "sasha", "и это туда же", {"card": "task", "open": x["id"], "talk_id": "c-heavy-21", "history": hist})
+    assert f"#{new['num']} Учу испанский" in ctx["tail"] and new["num"] in ctx["tasks"] and new["num"] in ctx["pool"]
+    assert f"#{new['num']}" not in ctx["screen"]
+    out = ask.run(dela, "sasha", "и это туда же", {"card": "task", "open": x["id"], "history": hist}, "", None,
+                  ask_fn=lambda s, u: {"route": "edit", "reply": "", "changes": [item(x["num"], into=f"#{new['num']}")],
+                                       "create": [], "_usage": None})
+    assert not out["errors"] and str(_v(dela, x["id"])["why_id"]) == new["id"]
+    assert out["reply"] == "Поставил «Слушаю подкаст на испанском» под цель «Учу испанский»."
+    # Чужое и невидимое RLS не отдаёт: id из Входящих коллеги в разговоре Саши — мимо.
+    hers = store.apply_ops(dela, "natasha", [{"op": "task.create", "task": {"title": "Личное коллеги"}}], "web")["results"][0]["task"]
+    ctx = ask.context(dela, "sasha", "x", {"title": "Сегодня", "task_ids": [], "rule_tried": True,
+                                           "history": [{"said": "a", "reply": "", "done": "", "ids": [hers["id"], "не uuid"]}]})
+    assert "Личное коллеги" not in ctx["message"] and "ДЕЛА ИЗ ЭТОГО РАЗГОВОРА" not in ctx["message"]
+
+
+def test_api_history_ids_only_uuid_and_twenty(dela, monkeypatch):
+    """API: у реплики history — ещё ids (дела, которые она завела и поправила): только uuid, не больше 20; кривые —
+    мимо без отказа (это память разговора), реплика без ids — без ключа."""
+    import uuid as uu
+
+    t = mk(dela, "Сверка с банком")
+    seen = {}
+
+    def fake_run(url, user, text, scope, key, proxy, via="web", actor=None, **_):
+        seen["scope"] = scope
+        return {"route": "edit", "reply": "ок", "answers": [], "changed": [], "tasks": [], "decided": [], "crm": [], "notes": [],
+                "errors": []}
+
+    monkeypatch.setattr(ask, "run", fake_run)
+    h = {"Authorization": f"Bearer {tokens.issue(dela, 'sasha', 'device', 'веб-разговор')}"}
+    ids = [str(uu.uuid4()) for _ in range(25)]
+    hist = [{"said": "заведи", "reply": "Завёл.", "done": "завёл: x", "ids": ["nope", 7, None, ids[0], ids[0], *ids[1:]]},
+            {"said": "и ещё", "reply": "", "done": "", "ids": "не список"}]
+    with TestClient(api.build(Config(db_url=dela, anthropic_key="sk-test"))) as client:
+        jid = client.post("/api/ask", headers=h, json={"text": "да", "scope": {"task_ids": [t["id"]], "history": hist}}).json()["job"]
+        assert _wait(client, h, jid)["reply"] == "ок"
+    got = seen["scope"]["history"]
+    assert got[0]["ids"] == ids[:20] and "ids" not in got[1]
+    assert set(got[1]) == {"said", "reply", "done"}
+
+
+def test_schema_refused_retries_with_lite(monkeypatch, caplog):
+    """56 полей схемы API может не принять (06.10.2026: «compiled grammar is too large»). Тогда — один повтор с
+    SCHEMA_LITE (54: без answers и create.goal) и строка в журнал «схема не прошла»; час дальше — сразу запасная. Другой
+    400 не повторяем."""
+    import logging
+    from types import SimpleNamespace as NS
+
+    monkeypatch.setitem(ask._LITE, "until", 0.0)
+    schemas = []
+
+    class Bad(Exception):
+        status_code = 400
+
+    class Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get_final_message(self):
+            return NS(stop_reason="end_turn", model="claude-opus-5-5", content=[NS(type="text", text='{"route": "edit", "reply": "ок"}')],
+                      usage=NS(input_tokens=10, output_tokens=5, cache_creation_input_tokens=0, cache_read_input_tokens=0))
+
+    def stream(**kw):
+        sc = kw["output_config"]["format"]["schema"]
+        schemas.append(sc)
+        if sc is ask.SCHEMA:
+            raise Bad("Error code: 400 - {'error': {'message': 'compiled grammar is too large'}}")
+        return Stream()
+
+    cl = NS(beta=NS(messages=NS(stream=stream)))
+    with caplog.at_level(logging.WARNING, logger="dela.ask"):
+        data = ask.ask(cl, "СПРАВОЧНИК", "ХВОСТ", "claude-opus-5-5", "low", prefix="ЭКРАН")
+    assert data["reply"] == "ок" and schemas == [ask.SCHEMA, ask.SCHEMA_LITE] and "схема не прошла" in caplog.text
+    ask.ask(cl, "СПРАВОЧНИК", "ХВОСТ", "claude-opus-5-5", "low")
+    assert schemas[-1] is ask.SCHEMA_LITE and len(schemas) == 3  # час — сразу запасная, без лишнего отказа
+    # Другой 400 (не схема) — не повторяем: ошибка как есть.
+    monkeypatch.setitem(ask._LITE, "until", 0.0)
+
+    def other(**kw):
+        raise Bad("Error code: 400 - prompt is too long")
+
+    cl = NS(beta=NS(messages=NS(stream=other)))
+    try:
+        ask.ask(cl, "С", "Х", "claude-opus-5-5", "low")
+        raise AssertionError("должно было упасть")
+    except Bad:
+        pass
+    assert ask._LITE["until"] == 0.0

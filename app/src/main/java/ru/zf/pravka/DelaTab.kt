@@ -1939,7 +1939,7 @@ fun DelaTab(
         }
     }
     // «Для этого»: привычный лист нового дела — название (текстом или голосом через «П»), а «Зачем», проект, сделка,
-    // человек и срок уже от родителя (`DelaSteps.draft`, правило сервера `store.step_of`).
+    // человек и срок уже от родителя (`DelaSteps.draft`, правило сервера `nest.nest_fill`).
     stepFor?.let { parent ->
         val draft = remember(parent.id) { DelaSteps.draft(parent, snap, me, today) }
         DelaTaskSheet(
@@ -2178,11 +2178,27 @@ fun DelaTab(
                 val turn = talk.turns.getOrNull(i) ?: return@TalkSheet
                 ask.talk = talk.copy(turns = talk.turns.mapIndexed { k, t -> if (k == i) t.copy(undone = true) else t })
                 scope.launch {
-                    // Отмена — обычными операциями очереди с op_id: дошли не сразу — уйдут сами.
-                    app.delaStore.enqueue(DelaAsk.undoOps(turn.result))
+                    // Отмена — обычными операциями очереди с op_id: дошли не сразу — уйдут сами. Отделённое кнопкой
+                    // «Это отдельное дело» — тоже отменой (`DelaAsk.undoOps(turn)`).
+                    app.delaStore.enqueue(DelaAsk.undoOps(turn))
                     val sent = app.delaSync.pushNow(4_000L)
                     Feedback.toast(app, if (sent) "Вернул как было" else "Вернул как было — уйдёт на сервер, когда будет связь")
                 }
+            },
+            // «Это отдельное дело» (16.10.2026, запись 23, docs/dela-phone-32.md §3): дописанное в заметку — делом рядом,
+            // одной пачкой и сразу (`hangSend`: отказ сервера — тостом здесь же), «Вернуть» — у строки в реплике.
+            onSplit = { i, ch ->
+                val cur = ask.talk ?: return@TalkSheet
+                val t0 = snap.tasks[ch.id] ?: return@TalkSheet
+                val sp = Dela.splitNoteOps(DelaAsk.notedOf(ch), t0, tree = snap.treeOn) ?: return@TalkSheet
+                ask.talk = cur.copy(turns = cur.turns.mapIndexed { k, t -> if (k == i) t.copy(split = t.split + (ch.id to sp)) else t })
+                hangSend(sp.ops, "Отдельное дело: «${sp.title.take(40)}»")
+            },
+            onUnsplit = { i, cid ->
+                val cur = ask.talk ?: return@TalkSheet
+                val sp = cur.turns.getOrNull(i)?.split?.get(cid) ?: return@TalkSheet
+                ask.talk = cur.copy(turns = cur.turns.mapIndexed { k, t -> if (k == i) t.copy(split = t.split - cid) else t })
+                hangSend(sp.back, "Вернул: «${sp.title.take(40)}» — снова в заметке")
             },
         )
     }
@@ -3978,7 +3994,7 @@ internal fun DelaTaskSheet(
         if (krugHere && existing) {
             val live = snap.copy(tasks = snap.tasks + (f.id to f))
             PlaceBlock(
-                f, DelaKrug.place(f, live, today.toString(), krugMe), krugDirs, snap,
+                f, DelaKrug.place(f, live, today.toString(), krugMe, DelaKrug.mskNow()), krugDirs, snap,
                 onTask = { to -> onOpenTask?.invoke(pinNow(f), to) },
                 onProject = { id -> onOpenProject?.invoke(id) },
             )

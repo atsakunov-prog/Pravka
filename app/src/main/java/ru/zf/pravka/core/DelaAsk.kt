@@ -134,7 +134,7 @@ object DelaAsk {
     /**
      * «Для этого» у строки Claude над открытым делом (15.10.2026, docs/dela-phone-23.md; `stepPop` и `cardSay` веба —
      * тот же запрос): карточка дела `card: task`, `open` — дело, `step` — всё сказанное становится новыми делами внутри
-     * него (проект, сделка, человек и срок — от него, `store.step_of`), само дело не меняется. Работает и без ключа
+     * него (проект, сделка, человек и срок — от него, `nest.nest_fill`), само дело не меняется. Работает и без ключа
      * Claude на сервере — одно дело названием, как сказано. Только серверу с фичей nest: старый такого режима не знает.
      */
     fun stepScope(taskId: String): JSONObject =
@@ -158,7 +158,10 @@ object DelaAsk {
 
     fun request(text: String, scope: JSONObject): JSONObject = JSONObject().put("text", text.trim()).put("scope", scope)
 
-    /** Одна поправка Claude: как было (`before`) и стало (`after`), статус — парой [было, стало]. */
+    /**
+     * Одна поправка Claude: как было (`before`) и стало (`after`), статус — парой [было, стало]. [noted] — что Claude
+     * дописал в заметку (16.10.2026, запись 23; сервер шлёт `noted`): под такой правкой — «Это отдельное дело».
+     */
     data class Change(
         val id: String,
         val num: Int,
@@ -167,7 +170,20 @@ object DelaAsk {
         val after: JSONObject,
         val statusFrom: String = "",
         val statusTo: String = "",
+        val noted: String = "",
     )
+
+    /**
+     * Что Claude дописал в заметку правкой (`notedOf` веба): `noted` сервера; ответ старого сервера — хвост
+     * `after.notes` за `before.notes`. Заметку не трогал — пусто.
+     */
+    fun notedOf(c: Change): String {
+        if (!c.after.has("notes")) return ""
+        if (c.noted.isNotBlank()) return c.noted.trim()
+        val was = c.before.str("notes").trimEnd()
+        val now = c.after.str("notes")
+        return if (now.startsWith(was)) now.substring(was.length).trim() else ""
+    }
 
     data class Note(val summary: String, val projectId: String)
 
@@ -214,6 +230,8 @@ object DelaAsk {
         val model: String,
         val crm: List<Crm> = emptyList(),
         val decided: List<Decided> = emptyList(),
+        /** Кнопки ответа на вопрос Claude (`answers`, 16.10.2026, флаг `talk_answers`): до трёх, первым — его предложение. */
+        val answers: List<String> = emptyList(),
     ) {
         /** Дела, которых коснулся Claude: поправленные и новые (решённые предложения — в [decided]). */
         val count: Int get() = changed.size + tasks.size
@@ -254,6 +272,7 @@ object DelaAsk {
                 after = c.optJSONObject("after") ?: JSONObject(),
                 statusFrom = st?.takeIf { it.length() == 2 }?.let { if (it.isNull(0)) "" else it.optString(0) }.orEmpty(),
                 statusTo = st?.takeIf { it.length() == 2 }?.let { if (it.isNull(1)) "" else it.optString(1) }.orEmpty(),
+                noted = c.str("noted"),
             )
         }
         val errors = o.optJSONArray("errors")?.let { a -> (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.isNotBlank() && it != "null" } } }.orEmpty()
@@ -270,7 +289,26 @@ object DelaAsk {
                 Crm(c.str("what").trim(), if (u == null) emptyList() else (0 until u.length()).mapNotNull { u.optJSONObject(it) })
             }.filter { it.what.isNotBlank() || it.undo.isNotEmpty() },
             decided = decided,
+            answers = o.optJSONArray("answers")?.let { a ->
+                (0 until a.length()).mapNotNull { i -> (a.opt(i) as? String)?.trim()?.replace(SPACES, " ")?.take(ANSWER_CHARS)?.takeIf { it.isNotBlank() } }
+            }.orEmpty().take(MAX_ANSWERS),
         )
+    }
+
+    /** Сколько кнопок ответа и сколько знаков в каждой — как у сервера (`ask.MAX_ANSWERS`, `ANSWER_CHARS`). */
+    const val MAX_ANSWERS = 3
+    const val ANSWER_CHARS = 60
+    private val SPACES = Regex("\\s+")
+
+    /**
+     * Кнопки под свежей репликой (16.10.2026, записи отладки 21–22; `talkAnswers` веба — одно правило): ответы сервера
+     * (`answers`), а вопрос без них (старый сервер или Claude не дал) — «Да» и «Нет». Отменённая реплика кнопок не даёт.
+     * Кнопка — её текст следующей репликой того же разговора (`withHistory`), обычный вызов Claude.
+     */
+    fun answersOf(t: Turn?): List<String> {
+        if (t == null || t.undone) return emptyList()
+        if (t.result.answers.isNotEmpty()) return t.result.answers
+        return if (t.result.reply.trimEnd().endsWith("?")) listOf("Да", "Нет") else emptyList()
     }
 
     /**
@@ -319,6 +357,9 @@ object DelaAsk {
         return out
     }
 
+    /** «Вернуть» реплики: [undoOps] её ответа и отмена дел, отделённых кнопкой «Это отдельное дело» (`turnUndo` веба). */
+    fun undoOps(t: Turn): List<JSONObject> = undoOps(t.result) + t.split.values.map { Dela.statusOp("task.cancel", it.id) }
+
     /** Что поменялось — словами, как в вебе: «срок 07.10, в «Сейчас», жду Наташа». */
     fun describe(c: Change, s: Dela.Snapshot, today: String = s.today): String {
         val a = c.after
@@ -342,7 +383,7 @@ object DelaAsk {
             }
             out += DelaGroups.withWho(ball, if (a.optBoolean("owed", false)) Dela.OWED else a.str("ball"), who)
         }
-        if (a.has("notes")) out += "дописал заметку"
+        if (a.has("notes")) out += "дописал заметку" + notedOf(c).takeIf { it.isNotBlank() }?.let { n -> ": «" + (if (n.length > 80) n.take(80) + "…" else n) + "»" }.orEmpty()
         if (a.has("estimate_min")) out += if (a.isNull("estimate_min") || a.optInt("estimate_min", 0) == 0) "без оценки" else "${a.optInt("estimate_min")} мин"
         if (a.has("labels")) out += a.strings("labels").let { if (it.isEmpty()) "без меток" else "метки " + it.joinToString(", ") }
         when (c.statusTo) {
@@ -362,7 +403,13 @@ object DelaAsk {
      * Реплика разговора с Claude (docs/dela-phone-9.md, п. 12; `claudeSay` веба):
      * что сказано, что он ответил и сделал; [undone] — «Вернуть» уже нажато.
      */
-    data class Turn(val said: String, val result: Result, val undone: Boolean = false)
+    data class Turn(
+        val said: String,
+        val result: Result,
+        val undone: Boolean = false,
+        /** «Это отдельное дело» (запись 23): id правки → что отделено; «Вернуть» реплики отменяет и это. */
+        val split: Map<String, Dela.NoteSplit> = emptyMap(),
+    )
 
     /** Сколько прошлых реплик видит Claude (`TALK_KEEP` веба). */
     const val TALK_KEEP = 8
@@ -375,8 +422,21 @@ object DelaAsk {
         else "отклонено" + (x.title.ifBlank { x.what }.takeIf { it.isNotBlank() }?.let { ": $it" } ?: "")
 
     /**
+     * Дела, которые реплика завела и поправила (16.10.2026, записи отладки 21–22; `turnIds` веба): сервер показывает их
+     * Claude свежими («ДЕЛА ИЗ ЭТОГО РАЗГОВОРА»), иначе «да, ставь» следующей реплики не находило заведённого. Только
+     * uuid, без повторов, до [TALK_IDS] — как у сервера.
+     */
+    fun turnIds(r: Result): List<String> =
+        (r.tasks.map { it.id } + r.changed.map { it.id } + r.decided.map { it.id })
+            .filter { Dela.isUuid(it) }.distinct().take(TALK_IDS)
+
+    /** Дел с одной реплики в памяти разговора — как `ask.TALK_IDS` сервера. */
+    const val TALK_IDS = 20
+
+    /**
      * Что сделано репликой — коротко, для памяти разговора на сервере (`turnMemo`
-     * веба): `{said, reply, done}`; вернул — «Саша вернул всё это как было».
+     * веба): `{said, reply, done, ids}`; вернул — «Саша вернул всё это как было».
+     * ids — заведённое и поправленное ([turnIds]); старый сервер поле молча не заметит.
      */
     fun memo(t: Turn, s: Dela.Snapshot): JSONObject {
         val r = t.result
@@ -390,9 +450,13 @@ object DelaAsk {
             for (x in r.decided) out += "П${x.n} " + if (x.accept) DECIDED[x.kind] ?: "принято" else "отклонено"
             for (c in r.crm) out += c.what
         }
+        for (sp in t.split.values) out += "отдельным делом: " + sp.title
         if (r.errors.isNotEmpty()) out += "не вышло: " + r.errors.joinToString("; ")
         val done = out.joinToString("; ").ifBlank { "ничего не менял" }.take(700) + if (t.undone) " — Саша вернул всё это как было" else ""
-        return JSONObject().put("said", t.said.take(600)).put("reply", r.reply.take(900)).put("done", done)
+        val memo = JSONObject().put("said", t.said.take(600)).put("reply", r.reply.take(900)).put("done", done)
+        val ids = (turnIds(r) + t.split.values.map { it.id }).filter { Dela.isUuid(it) }.distinct().take(TALK_IDS)
+        if (ids.isNotEmpty()) memo.put("ids", JSONArray().apply { ids.forEach { put(it) } })
+        return memo
     }
 
     /**

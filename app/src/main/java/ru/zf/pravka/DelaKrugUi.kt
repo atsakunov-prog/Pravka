@@ -194,8 +194,9 @@ internal fun LazyListScope.krugOverview(
     if (none.isNotEmpty()) {
         item(key = "krug:none") {
             PaperCard(label = "Без направления · ${none.size}") {
+                // Честное время (16.10.2026): «в ближайшие полчаса» ночью и в выходные обещало то, чего не будет.
                 PaperHint(
-                    "разборщик предложит место в ближайшие полчаса" + if (onHang != null) " — или повесь сам: долгое нажатие на дело" else "",
+                    "разборщик Круга посмотрит ${DelaKrug.krugAt(DelaKrug.mskNow())}" + if (onHang != null) " — или повесь сам: долгое нажатие на дело" else "",
                 )
                 TaskRows(none, actions, onLong = onHang)
             }
@@ -328,7 +329,7 @@ internal fun LazyListScope.treeView(
         if (none.isNotEmpty()) {
             item(key = "tree:none") {
                 PaperCard(label = "Без направления · ${none.size}") {
-                    PaperHint("разборщик предложит цель в ближайшие полчаса — или повесь на цель сам: долгое нажатие")
+                    PaperHint("разборщик Круга посмотрит ${DelaKrug.krugAt(DelaKrug.mskNow())} — или повесь на цель сам: долгое нажатие")
                     TaskRows(none, actions, onLong = ui.onHangTask)
                 }
             }
@@ -560,10 +561,27 @@ private fun GoalPickLine(text: String, more: String, goal: Boolean, selected: Bo
 
 // ---------------------------------------------------------------- место в дереве
 
+/** Место под значок у каждой строки «Места в дереве»: текст глубины d всегда начинается с d·[STEP] + [MARK]. */
+private val MARK = 18.dp
+
+/** Ромб цели в «Месте в дереве». */
+private val Diamond = androidx.compose.foundation.shape.GenericShape { size, _ ->
+    moveTo(size.width / 2f, 0f)
+    lineTo(size.width, size.height / 2f)
+    lineTo(size.width / 2f, size.height)
+    lineTo(0f, size.height / 2f)
+    close()
+}
+
+/** Глубже — уже не сдвигаем (цепочка длиннее десяти — патология, текст не должен уехать за край). */
+private const val PLACE_DEPTH_MAX = 10
+
 /**
- * «Место в дереве» карточки дела (`placeBlock` веба): направление мелко капслоком › цели
- * лесенкой (тап — карточка цели; проект — ▣ с переходом) › само дело жирно, под ним его
- * шаги, рядом соседние шаги той же цели; ниже — строка «дальше».
+ * «Место в дереве» карточки дела (`placeBlock` веба): «направление · …» мелко капслоком, дальше строки
+ * [DelaKrug.Place.rows] ровными ступенями (16.10.2026, записи 3 и 10 отладки): предки, на уровне родителя — соседи
+ * вместе с самим делом (жирно, заливкой), под ним — что внутри на два уровня, у свёрнутых — «· 3 внутри». У каждой
+ * строки своё место под значок (цель — ромб, дело — кружок, проект — ▣), поэтому дело цели не «прилипает» к последней
+ * подцели. Тап по цели или делу — его карточка, по проекту (›) — страница проекта; ниже — строка «дальше».
  */
 @Composable
 internal fun PlaceBlock(
@@ -577,40 +595,19 @@ internal fun PlaceBlock(
     val mode = LocalMode.current
     val ty = LocalPravkaType.current
     val shape = RoundedCornerShape(16.dp)
+    val ru = Locale.forLanguageTag("ru")
     Column(Modifier.fillMaxWidth().glass(shape, mode.glass).padding(horizontal = 12.dp, vertical = 10.dp)) {
         Text("МЕСТО В ДЕРЕВЕ", style = ty.overline, color = mode.meta)
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+            // «Направление · Дело», а не голое «ДЕЛО»: направление «Дело» сливалось с подписью «Дело» карточки (запись 10).
             Text(
-                (if (p.main.isNotBlank()) dirs.firstOrNull { it.key == p.main }?.name ?: p.main else "без направления").uppercase(Locale.forLanguageTag("ru")),
+                (if (p.main.isNotBlank()) "направление · " + (dirs.firstOrNull { it.key == p.main }?.name ?: p.main) else "без направления").uppercase(ru),
                 style = ty.overline,
                 color = mode.label,
             )
             if (p.labels.isNotEmpty()) Text(" · метки: " + DelaKrug.names(p.labels, dirs), style = ty.meta, color = mode.meta)
         }
-        p.chain.forEachIndexed { i, x ->
-            val task = x.task
-            if (task == null) {
-                PlaceLine(i + 1, onClick = { onProject(x.projectId) }) {
-                    Text("▣ " + (snap.projects[x.projectId]?.name ?: "проект"), style = ty.body, color = mode.label)
-                }
-            } else {
-                PlaceLine(i + 1, onClick = { onTask(task) }) {
-                    Text(task.title + if (task.rhythm.isNotBlank()) " · ${task.rhythm}" else "", style = ty.body, color = Ink.Text)
-                }
-            }
-        }
-        val d = p.chain.size + 1
-        PlaceLine(d, onClick = null) {
-            if (!t.goal) {
-                Box(Modifier.padding(horizontal = 2.dp).size(8.dp).clip(CircleShape).background(mode.value))
-                Spacer(Modifier.width(6.dp))
-            }
-            Text(t.title, style = ty.bodyStrong, color = Ink.TextStrong)
-        }
-        for (s in p.kids.take(12)) StepLine(s, d + 1, onTask)
-        if (p.kids.size > 12) PlaceLine(d + 1, onClick = null) { Text("и ещё ${p.kids.size - 12}", style = ty.meta, color = mode.meta) }
-        for (s in p.sibs.take(6)) StepLine(s, d, onTask)
-        if (p.sibs.size > 6) PlaceLine(d, onClick = null) { Text("рядом ещё ${p.sibs.size - 6}", style = ty.meta, color = mode.meta) }
+        for (r in p.rows) PlaceRowLine(r, snap, onTask, onProject)
         Text(
             p.next,
             style = ty.label.copy(fontStyle = FontStyle.Italic),
@@ -621,22 +618,75 @@ internal fun PlaceBlock(
 }
 
 @Composable
-private fun StepLine(s: Dela.Task, depth: Int, onTask: (Dela.Task) -> Unit) {
+private fun PlaceRowLine(r: DelaKrug.PlaceRow, snap: Dela.Snapshot, onTask: (Dela.Task) -> Unit, onProject: (String) -> Unit) {
     val mode = LocalMode.current
-    PlaceLine(depth, onClick = { onTask(s) }) {
-        if (!s.goal) {
-            Box(Modifier.padding(horizontal = 3.dp).size(6.dp).clip(CircleShape).border(1.dp, mode.label, CircleShape))
-            Spacer(Modifier.width(6.dp))
+    val ty = LocalPravkaType.current
+    val task = r.task
+    val click: (() -> Unit)? = when {
+        r.role == DelaKrug.Role.ME || r.role == DelaKrug.Role.REST -> null
+        r.mark == DelaKrug.Mark.PROJECT -> {
+            {
+                // Переходы по дереву — в действия записки «Что не так?» (запись 10: порядок тапов пришлось восстанавливать).
+                ru.zf.pravka.core.DelaDebug.note("nav", "Место в дереве → проект «${snap.projects[r.projectId]?.name ?: r.text}»")
+                onProject(r.projectId)
+            }
         }
-        Text(s.title, style = LocalPravkaType.current.body, color = Ink.TextSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        task != null -> {
+            {
+                ru.zf.pravka.core.DelaDebug.note("nav", "Место в дереве → «${task.title.take(80)}»" + if (task.goal) " (цель)" else "")
+                onTask(task)
+            }
+        }
+        else -> null
+    }
+    val (style, color) = when (r.role) {
+        DelaKrug.Role.ME -> ty.bodyStrong to Ink.TextStrong
+        DelaKrug.Role.UP -> ty.body to (if (r.mark == DelaKrug.Mark.PROJECT) mode.label else Ink.Text)
+        DelaKrug.Role.REST -> ty.meta to mode.meta
+        else -> ty.body to (if (r.mark == DelaKrug.Mark.PROJECT) mode.label else Ink.TextSecondary)
+    }
+    // Значок — у первой строки текста, а не посередине переноса: иначе у длинного названия он съезжал к соседям.
+    val line = with(androidx.compose.ui.platform.LocalDensity.current) {
+        style.lineHeight.takeIf { it.isSp }?.toDp() ?: style.fontSize.takeIf { it.isSp }?.toDp()?.times(1.3f) ?: 20.dp
+    }
+    Row(
+        verticalAlignment = Alignment.Top,
+        modifier = Modifier.fillMaxWidth().padding(start = STEP * minOf(r.depth, PLACE_DEPTH_MAX)).clip(RoundedCornerShape(8.dp))
+            .then(if (click != null) Modifier.clickable(onClick = click) else Modifier).padding(vertical = 3.dp),
+    ) {
+        Box(Modifier.width(MARK).height(line), contentAlignment = Alignment.CenterStart) { PlaceMark(r) }
+        Text(
+            androidx.compose.ui.text.buildAnnotatedString {
+                append(r.text)
+                // Свёрнутый узел — бледно, сколько внутри: «· 3 внутри», «· 2 подцели, 1 дело».
+                r.more?.let {
+                    pushStyle(androidx.compose.ui.text.SpanStyle(color = mode.meta, fontSize = ty.meta.fontSize))
+                    append("  · " + it.words)
+                    pop()
+                }
+                // Проект открывает страницу в списке, а не карточку — стрелкой.
+                if (r.mark == DelaKrug.Mark.PROJECT) append(" ›")
+            },
+            style = style,
+            color = color,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
+/** Значок строки в своих 18 dp: цель — ромб контуром, дело — кружок контуром, само дело — заливкой своей формы, проект — ▣. */
 @Composable
-private fun PlaceLine(depth: Int, onClick: (() -> Unit)?, content: @Composable () -> Unit) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().padding(start = STEP * minOf(depth, 8)).clip(RoundedCornerShape(8.dp))
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(vertical = 3.dp),
-    ) { content() }
+private fun PlaceMark(r: DelaKrug.PlaceRow) {
+    val mode = LocalMode.current
+    val diamond = Diamond
+    val pad = Modifier.padding(start = 2.dp)
+    when (r.mark) {
+        DelaKrug.Mark.GOAL -> Box(pad.size(9.dp).border(1.2.dp, mode.label, diamond))
+        DelaKrug.Mark.DEED -> Box(pad.padding(start = 1.5.dp).size(6.dp).clip(CircleShape).border(1.dp, mode.label, CircleShape))
+        DelaKrug.Mark.ME -> if (r.task?.goal == true) Box(pad.size(10.dp).clip(diamond).background(mode.value))
+        else Box(pad.size(8.dp).clip(CircleShape).background(mode.value))
+        DelaKrug.Mark.PROJECT -> Text("▣", style = LocalPravkaType.current.meta, color = mode.label, modifier = pad)
+        DelaKrug.Mark.NONE -> Unit
+    }
 }

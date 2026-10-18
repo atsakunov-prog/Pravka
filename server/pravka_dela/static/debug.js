@@ -99,6 +99,7 @@ const DEBUG = (() => {
       tasks: (d.tasks || []).map((t) => ({ id: t.id, num: t.num, title: t.title })),
       decided: d.decided && d.decided.length ? d.decided : undefined, crm: (d.crm || []).map((c) => c.what || c),
       notes: d.notes && d.notes.length ? d.notes : undefined, errors: d.errors && d.errors.length ? d.errors : undefined,
+      answers: d.answers && d.answers.length ? d.answers : undefined, // кнопки ответа под вопросом (16.10.2026)
       // Дела внутри дела (правило 27): что завёл внутри, чей срок поднял сервер, кому вернул — их reply пишет сервер.
       steps: (d.steps || []).length ? d.steps.map((id) => taskName(id) || id) : undefined,
       raised: (d.raised || []).length ? d.raised.map((r) => numTitle(r) + (r.moved ? ' → на сегодня' : '')) : undefined,
@@ -169,7 +170,8 @@ const DEBUG = (() => {
   function rowData(row, vis) {
     const id = row.dataset.id;
     const t = S.tasks.get(id);
-    const x = { id, num: t && t.num, title: t ? t.title : txt(row.querySelector('.title, .rem-title')), group: rowGroup(row) || undefined };
+    const x = { id, num: t && t.num, title: t ? t.title : txt(row.querySelector('.title, .rem-title, .g-title, .c-t')), group: rowGroup(row) || undefined };
+    if (t && t.goal) x.goal = true; // цель дерева (строки «Дерева» и «Колонок», 16.10.2026)
     if (t) {
       if (t.due_date) x.due = t.due_date + (t.due_time ? ' ' + t.due_time : '');
       // Захват (правило 29, поезд 16.10.2026): напоминание — не дело, в свой час или по месту; «потом» — день возврата.
@@ -269,7 +271,9 @@ const DEBUG = (() => {
       const top = safe(() => stuckBottom(), 0);
       const bottom = Math.min(window.innerHeight, main ? main.getBoundingClientRect().bottom : window.innerHeight);
       const inWin = (x) => { const b = x.getBoundingClientRect(); return b.height > 0 && Math.min(b.bottom, bottom) - Math.max(b.top, top) >= b.height * 0.6; };
-      for (const row of document.querySelectorAll('main.list .task[data-id], main.list .rem-row[data-id]')) {
+      // Строки дерева (16.10.2026, записи 21–22) — тот же экран, что видит Claude (SCREEN_ROWS в app.js): цели «Дерева»,
+      // цели и дела «Колонок».
+      for (const row of document.querySelectorAll(SCREEN_ROWS + ', main.list .rem-row[data-id]')) {
         if (seen.has(row.dataset.id)) continue;
         seen.add(row.dataset.id);
         total++;

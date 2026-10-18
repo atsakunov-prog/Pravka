@@ -22,10 +22,11 @@
           "goal": {"type": "integer"},
           "now": {"type": "boolean"},
           "back": {"type": "string"},
-          "done": {"type": "boolean"}
+          "done": {"type": "boolean"},
+          "inside": {"type": "string"}
         },
         "required": ["title", "notes", "project", "person", "ball", "due", "due_time", "remind_at", "remind_place",
-                     "estimate_min", "money", "want", "labels", "goal", "now", "back", "done"],
+                     "estimate_min", "money", "want", "labels", "goal", "now", "back", "done", "inside"],
         "additionalProperties": false
       }
     },

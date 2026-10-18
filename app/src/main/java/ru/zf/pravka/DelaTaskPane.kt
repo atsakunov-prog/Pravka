@@ -217,7 +217,7 @@ internal fun DelaTaskPane(
         val dirs = ru.zf.pravka.core.DelaKrug.directions()
         if (ru.zf.pravka.core.DelaKrug.on(snap, dirs) && (me.isBlank() || task.ownerId.isBlank() || task.ownerId == me)) {
             item(key = "place") {
-                PlaceBlock(task, ru.zf.pravka.core.DelaKrug.place(task, snap, today.toString(), me), dirs, snap, onTask, onProject)
+                PlaceBlock(task, ru.zf.pravka.core.DelaKrug.place(task, snap, today.toString(), me, ru.zf.pravka.core.DelaKrug.mskNow()), dirs, snap, onTask, onProject)
             }
         }
         // История: заметки к делу и журнал правок сервера — по времени.
@@ -406,7 +406,12 @@ private fun DelaTaskPaneV2(
                     if (isNow) KvTag("в «Сейчас»", accent = true)
                     for (l in task.labels) KvTag(l)
                     // Дело внутри другого (15.10.2026): «для: <дело>» — тап открывает его справа.
-                    ru.zf.pravka.core.DelaSteps.parentOf(task, snap)?.let { par -> KvTag("для: " + par.title.take(40), accent = true, onClick = { onTask(par) }) }
+                    ru.zf.pravka.core.DelaSteps.parentOf(task, snap)?.let { par ->
+                        KvTag("для: " + par.title.take(40), accent = true, onClick = {
+                            ru.zf.pravka.core.DelaDebug.note("nav", "для: → «${par.title.take(80)}»")
+                            onTask(par)
+                        })
+                    }
                 }
                 // Свойства — строками через тонкую линию (`.set` холста): подпись мелко, значение строкой.
                 val who = snap.people[task.personId]?.label ?: task.who
@@ -505,7 +510,10 @@ private fun DelaTaskPaneV2(
                                 },
                                 contentAlignment = Alignment.Center,
                             ) { Box(Modifier.size(16.dp).clip(RoundedCornerShape(5.dp)).border(1.5.dp, Kv.check, RoundedCornerShape(5.dp))) }
-                            Column(Modifier.weight(1f).clip(RoundedCornerShape(KvShape.Tag)).clickable { onTask(k) }.padding(vertical = 6.dp)) {
+                            Column(Modifier.weight(1f).clip(RoundedCornerShape(KvShape.Tag)).clickable {
+                                ru.zf.pravka.core.DelaDebug.note("nav", "Внутри → «${k.title.take(80)}»")
+                                onTask(k)
+                            }.padding(vertical = 6.dp)) {
                                 Text(k.title, style = ty.body.copy(fontSize = 14.sp), color = Kv.text,
                                     fontWeight = if (i == 0) androidx.compose.ui.text.font.FontWeight.SemiBold else null)
                                 ru.zf.pravka.core.DelaViews.due(k, iso)?.let { Text(it.text, style = ty.meta, color = Kv.faint) }
@@ -519,7 +527,7 @@ private fun DelaTaskPaneV2(
         val dirs = ru.zf.pravka.core.DelaKrug.directions()
         if (ru.zf.pravka.core.DelaKrug.on(snap, dirs) && (me.isBlank() || task.ownerId.isBlank() || task.ownerId == me)) {
             item(key = "place") {
-                PlaceBlock(task, ru.zf.pravka.core.DelaKrug.place(task, snap, iso, me), dirs, snap, onTask, onProject)
+                PlaceBlock(task, ru.zf.pravka.core.DelaKrug.place(task, snap, iso, me, ru.zf.pravka.core.DelaKrug.mskNow()), dirs, snap, onTask, onProject)
             }
         }
         // Журнал (`.eyebrow` и `.lr` холста): заметки к делу и правки сервера — по времени.

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
@@ -62,7 +63,8 @@ import java.util.TimeZone
  * ответил» (с проверкой, что слово видно целиком); m16 — мелочи отладки 16.10 (карточка справа открывает другое дело
  * с шапки, язычок колонки тянется после удержания, «Для этого» у имени дела в строке Claude, хвост дня внизу
  * «Сейчас» без чисел наверху — с проверками; вкладка Дел на развороте 852×883 и сложенном); dbg — режим отладки
- * (строка Дел; dball — только «Что не так?» на всех экранах: «Сегодня», Засечка, Деньги, Дела, с проверками).
+ * (строка Дел; dball — только «Что не так?» на всех экранах: «Сегодня», Засечка, Деньги, Дела, с проверками); place —
+ * «Место в дереве» карточки дела одним блоком (предки, соседи, дерево ниже дела — с проверкой ступеней).
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -82,7 +84,7 @@ class ScreenShots {
 
     private val dir = File(System.getProperty("pravka.shotsDir") ?: "build/shots").also { it.mkdirs() }
 
-    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5, web, dcol, panel, m16, e16, dbg, dball. */
+    /** -Pshots=all или через запятую: outer, tall, inner, overlay, t5, z5, web, dcol, panel, m16, e16, dbg, dball, place. */
     private fun want(group: String): Boolean {
         val v = System.getProperty("pravka.shots").orEmpty()
         return v == "1" || v == "all" || v.split(',').map { it.trim() }.contains(group)
@@ -284,6 +286,98 @@ class ScreenShots {
         settle(20)
         c.get().window.decorView.captureRoboImage(File(dir, "kit-showcase.png").absolutePath)
         c.pause().stop().destroy()
+    }
+
+    /**
+     * «Место в дереве» (16.10.2026, записи 3 и 10 отладки): ровные ступени на выдуманной цели «Альфа растёт» — подцели,
+     * дела прямо на цели, открытая подцель со своими делами, свёрнутые с числом, дело внутри дела со своими делами.
+     * Без вкладки и данных приложения — только блок: шириной правой колонки разворота 852 dp (`DelaColumns.fit` даёт
+     * ~339 dp) и сложенным экраном 411 dp, высоким окном — все три блока целиком; обе темы. Кроме картинки — проверка
+     * ступеней: текст строки глубины d — с d·14 dp от одного края у всех строк (цель, дело, само дело, «и ещё N»). Группа
+     * `place`.
+     */
+    @Test
+    fun place() {
+        if (!want("place")) return
+        val today = "2026-10-16"
+        fun t(id: String, title: String, f: (ru.zf.pravka.core.Dela.Task) -> ru.zf.pravka.core.Dela.Task = { it }) =
+            f(ru.zf.pravka.core.Dela.Task(id = id, title = title, ownerId = "me", createdAt = "2026-10-01T10:00:00+03:00"))
+        val tasks = listOf(
+            t("top", "Альфа растёт") { it.copy(num = 1, goal = true, directions = listOf("work")) },
+            t("earn", "Выручка Альфы растёт") { it.copy(num = 2, goal = true, whyId = "top") },
+            t("fees", "Договоры подписываются вовремя") { it.copy(num = 3, goal = true, whyId = "earn") },
+            t("leads", "Растёт число заказов") { it.copy(num = 4, goal = true, whyId = "top") },
+            t("price", "Тарифы понятны клиентам") { it.copy(num = 5, goal = true, whyId = "top") },
+            t("team", "Отдел работает без ручного управления") { it.copy(num = 6, goal = true, whyId = "top") },
+            t("p1", "Пересчитать тарифы на новый год") { it.copy(whyId = "price", createdAt = "2026-10-02T10:00:00+03:00") },
+            t("p2", "Разослать оффер трём клиентам") { it.copy(whyId = "price", createdAt = "2026-10-03T10:00:00+03:00") },
+            t("p2a", "Собрать список адресов") { it.copy(whyId = "p2", pos = 1) },
+            t("p2b", "Согласовать текст письма") { it.copy(whyId = "p2", pos = 2) },
+            t("p2b1", "Показать черновик Ольге") { it.copy(whyId = "p2b") },
+            t("d1", "Иван Тестов: прислать смету пилота и сроки") { it.copy(whyId = "top", createdAt = "2026-10-04T10:00:00+03:00") },
+            t("d2", "Бета Групп: сверка по договору") { it.copy(whyId = "top", createdAt = "2026-10-05T10:00:00+03:00") },
+        )
+        val snap = ru.zf.pravka.core.Dela.Snapshot(
+            tasks = tasks.associateBy { it.id },
+            features = setOf(ru.zf.pravka.core.Dela.FEATURE_KRUG, ru.zf.pravka.core.Dela.FEATURE_TREE),
+        )
+        val dirs = listOf(ru.zf.pravka.core.DelaKrug.Direction("work", 3, "Дело", "Дело", "", "Мир"))
+        val at = java.time.LocalDateTime.parse("2026-10-16T09:55")
+        // Строки трёх блоков: по ним — проверка ступеней (запись 10: дело цели вставало правее последней подцели).
+        val rows = listOf("price", "top", "p2").flatMap { ru.zf.pravka.core.DelaKrug.place(snap.tasks.getValue(it), snap, today, "me", at).rows }
+        val bad = mutableListOf<String>()
+        for ((screen, q, w) in listOf(Triple("wide", "w852dp-h1700dp-420dpi", 339), Triple("folded", "w411dp-h1700dp-420dpi", 0))) {
+            RuntimeEnvironment.setQualifiers(q)
+            for (theme in listOf(ru.zf.pravka.ui.Look.Theme.LIGHT, ru.zf.pravka.ui.Look.Theme.DARK)) {
+                ru.zf.pravka.ui.Look.theme = theme
+                val c = Robolectric.buildActivity(androidx.activity.ComponentActivity::class.java).setup()
+                c.get().setContent {
+                    ru.zf.pravka.ui.PravkaTheme {
+                        androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalMode provides ru.zf.pravka.ui.Modes.Dela) {
+                            androidx.compose.foundation.layout.Box(
+                                androidx.compose.ui.Modifier.fillMaxSize().background(ru.zf.pravka.ui.Kv.bg),
+                            ) {
+                                androidx.compose.foundation.layout.Column(
+                                    (if (w > 0) androidx.compose.ui.Modifier.width(w.dp) else androidx.compose.ui.Modifier.fillMaxWidth())
+                                        .verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(12.dp),
+                                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
+                                ) {
+                                    // Открытая подцель (как в записи 10), верхняя цель целиком и дело внутри дела.
+                                    for (id in listOf("price", "top", "p2")) {
+                                        val x = snap.tasks.getValue(id)
+                                        ru.zf.pravka.PlaceBlock(x, ru.zf.pravka.core.DelaKrug.place(x, snap, today, "me", at), dirs, snap, {}, {})
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                settle(20)
+                val name = "place-$screen-${theme.key}"
+                c.get().window.decorView.captureRoboImage(File(dir, "$name.png").absolutePath)
+                // Ровные ступени: текст строки глубины d начинается с d·14 dp от одного края — у цели, дела, «я» и «и ещё N»
+                // одинаково (место под значок 18 dp есть у каждой строки).
+                val root = c.get().window.decorView.composeRoot()
+                val density = c.get().resources.displayMetrics.density
+                if (root == null) bad += "$name: нет Compose" else {
+                    val texts = root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false).mapNotNull { n ->
+                        n.config.getOrNull(SemanticsProperties.Text)?.joinToString("") { it.text }?.let { it to n }
+                    }
+                    val base = mutableListOf<Pair<String, Float>>()
+                    for (r in rows) {
+                        val hits = texts.filter { (t, _) -> t == r.text || t.startsWith(r.text + "  · ") || t == r.text + " ›" }
+                        if (hits.isEmpty()) bad += "$name: строки «${r.text}» нет"
+                        for ((_, n) in hits) base += r.text to n.boundsInRoot.left / density - r.depth * 14f
+                    }
+                    val edge = base.minOfOrNull { it.second } ?: 0f
+                    for ((t, b) in base) if (b - edge > 1f) bad += "$name: «$t» правее своей ступени на ${"%.1f".format(b - edge)} dp"
+                }
+                c.pause().stop().destroy()
+            }
+        }
+        ru.zf.pravka.ui.Look.theme = ru.zf.pravka.ui.Look.Theme.SYSTEM
+        RuntimeEnvironment.setQualifiers(OUTER)
+        org.junit.Assert.assertTrue(bad.joinToString("; "), bad.isEmpty())
     }
 
     /**

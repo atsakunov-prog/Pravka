@@ -268,6 +268,12 @@ internal fun TalkSheet(
     onDismiss: () -> Unit,
     onOpen: (String) -> Unit,
     onUndo: (Int) -> Unit,
+    /**
+     * «Это отдельное дело» у правки, где Claude дописал заметку (16.10.2026, запись 23; docs/dela-phone-32.md §3):
+     * номер реплики и правка; пачку собирает `Dela.splitNoteOps`, шлёт вкладка. [onUnsplit] — «Вернуть» отделённого.
+     */
+    onSplit: (Int, DelaAsk.Change) -> Unit = { _, _ -> },
+    onUnsplit: (Int, String) -> Unit = { _, _ -> },
 ) {
     val mode = ru.zf.pravka.ui.LocalMode.current
     val ty = ru.zf.pravka.ui.LocalPravkaType.current
@@ -318,7 +324,15 @@ internal fun TalkSheet(
     ) {
         talk.turns.forEachIndexed { i, t ->
             if (i > 0) RowRule()
-            TurnView(t, snap, onOpen = onOpen, onUndo = { onUndo(i) })
+            TurnView(t, snap, onOpen = onOpen, onUndo = { onUndo(i) }, onSplit = { ch -> onSplit(i, ch) }, onUnsplit = { id -> onUnsplit(i, id) })
+        }
+        // Под свежей репликой — кнопки ответа (16.10.2026, записи отладки 21–22; над строкой «Ответить Claude…»
+        // внизу листа): ответы сервера, а вопрос без них — «Да» и «Нет». Кнопка — её текст следующей репликой.
+        val answers = if (busy) emptyList() else DelaAsk.answersOf(talk.turns.lastOrNull())
+        if (answers.isNotEmpty()) {
+            ru.zf.pravka.ui.ChipRow(Modifier.padding(top = 6.dp)) {
+                answers.forEach { a -> ru.zf.pravka.ui.PaperChip(a, selected = false, onClick = { onSend(a) }) }
+            }
         }
         if (busy) {
             if (talk.turns.isNotEmpty()) RowRule()
@@ -346,9 +360,19 @@ private fun Said(text: String) {
     }
 }
 
-/** Реплика (`turnView` веба): что сказал, ответ, что сделано, ошибки и «Вернуть». Номеров дел нет. */
+/**
+ * Реплика (`turnView` веба): что сказал, ответ, что сделано, ошибки и «Вернуть». Номеров дел нет. Под правкой, где Claude
+ * дописал заметку, — «Это отдельное дело» (запись 23), после — «Отдельным делом: «…»» с «Вернуть».
+ */
 @Composable
-private fun TurnView(t: DelaAsk.Turn, snap: Dela.Snapshot, onOpen: (String) -> Unit, onUndo: () -> Unit) {
+private fun TurnView(
+    t: DelaAsk.Turn,
+    snap: Dela.Snapshot,
+    onOpen: (String) -> Unit,
+    onUndo: () -> Unit,
+    onSplit: (DelaAsk.Change) -> Unit = {},
+    onUnsplit: (String) -> Unit = {},
+) {
     val r = t.result
     val mode = ru.zf.pravka.ui.LocalMode.current
     val ty = ru.zf.pravka.ui.LocalPravkaType.current
@@ -362,6 +386,13 @@ private fun TurnView(t: DelaAsk.Turn, snap: Dela.Snapshot, onOpen: (String) -> U
     for (ch in r.changed) {
         val title = ch.after.optString("title").takeIf { ch.after.has("title") && it.isNotBlank() } ?: ch.title
         AskLine(title, DelaAsk.describe(ch, snap)) { onOpen(ch.id) }
+        val made = t.split[ch.id]
+        if (made != null) Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) { AskLine("Отдельным делом: «${made.title}»", "") { onOpen(made.id) } }
+            if (!t.undone) PaperTextButton("Вернуть", icon = Glyphs.Undo, onClick = { onUnsplit(ch.id) })
+        } else if (!t.undone && DelaAsk.notedOf(ch).isNotBlank() && snap.tasks[ch.id] != null) {
+            ru.zf.pravka.ui.PaperChip("Это отдельное дело", selected = false, onClick = { onSplit(ch) }, icon = Glyphs.Plus)
+        }
     }
     if (r.tasks.isNotEmpty()) {
         PaperHint(if (r.isNew) "Записал:" else "Новые:")
