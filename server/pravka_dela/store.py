@@ -24,7 +24,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from . import (asks, db, did, digest, focus, guard, ideas, insights, krug, meetings, nest, people, phone, place, spend,
-               twins, where, zasechka)
+               todo, twins, where, zasechka)
 
 log = logging.getLogger("dela.store")
 
@@ -41,6 +41,9 @@ TASK_FIELDS = {
     # Захват (dela_0032, 15.10.2026): вид дела (task | remind — напоминание, не в списках дел) и «потом» — день возврата
     # и как сказано. Старый сервер этих полей не знает: телефон шлёт их, только увидев флаг capture в синке.
     "kind", "back_on", "back_said",
+    # Вид Todoist (dela_0036, 19.10.2026, todo.py): приоритет p1…p4, дедлайн, повтор (слова и правило), раздел проекта.
+    # Старые клиенты их не шлют: телефон — только увидев флаг todo в синке.
+    "priority", "deadline", "due_rule", "recur", "section_id",
 }
 # reminded_at в TASK_FIELDS нет: его ставит только сервер (task.reminded от бота или телефона, показавшего уведомление).
 
@@ -49,7 +52,10 @@ TASK_FIELDS = {
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
             "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
             "privacy", "context_index", "claude_guard", "nest", "debug", "capture", "capture_model", "ideas", "did",
-            "remind_phone", "speaker_link", "people_final", "plan", "asks", "talk_answers"]
+            "remind_phone", "speaker_link", "people_final", "plan", "asks", "talk_answers", "todo"]
+# «todo» — Дела в виде Todoist (dela_0036, 19.10.2026, todo.py; новый веб /t): у дела priority (1 — p1 … 4 — без
+# приоритета), deadline, due_rule + recur (повтор: выполнение переносит срок, forever: true у task.done — закрыть
+# насовсем), done_count, section_id; синк — ещё sections; операции section.create / section.set; у проекта — color.
 # «talk_answers» — строка Claude кладёт куда сказано (16.10.2026, отладка, записи 21–22; правило 33, ask.py): у реплики
 # /api/ask scope.history принимает ids (дела, которые она завела и поправила; uuid, до 20) — Claude видит их свежими
 # хвостом; ответ несёт answers (до трёх кнопок ответа на вопрос Claude). Операций и полей синка флаг не добавляет:
@@ -170,7 +176,8 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug",
 # Токен службы бота Ковчега (python -m pravka_dela token --name kovcheg): только он забирает
 # «что пора» и отмечает отправку (remind.py, task.reminded).
 REMIND_BOT = "kovcheg"
-PROJECT_FIELDS = {"name", "aliases", "sphere", "kind", "org_id", "money_default", "note", "archived_at", "status", "folder_url", "files"}
+PROJECT_FIELDS = {"name", "aliases", "sphere", "kind", "org_id", "money_default", "note", "archived_at", "status", "folder_url", "files",
+                  "color"}
 DEAL_FIELDS = {
     "project_id", "name", "stage", "deal_type", "lead_person_id", "person_ids", "fee_kop", "deadline",
     "wheel", "ball", "next_step", "my_view", "ideas", "log",
@@ -634,6 +641,7 @@ def op_task_create(conn, user, op):
     data = _ball_norm(_pick(raw, TASK_FIELDS | {"id", "import_ref"}, "дело"))
     if "pos" in data:
         data["pos"] = _pos(data["pos"])
+    todo.norm(conn, None, data, OpError)
     _kind_norm(conn, None, data)
     if not data.get("title"):
         raise OpError("у дела нет названия")
@@ -666,6 +674,17 @@ def op_task_set(conn, user, op):
     changes = _ball_norm(_pick(raw, TASK_FIELDS, "дело"))
     if "pos" in changes:
         changes["pos"] = _pos(changes["pos"])
+    todo.norm(conn, cur, changes, OpError)
+    # Повторяющееся дело (dela_0036): «сделано» переносит срок на следующий раз, дело остаётся открытым — у всех клиентов
+    # (старый телефон шлёт тот же task.done). forever — «Выполнить навсегда»; повтор кончился (until) — закрывается.
+    recurred = None
+    if (changes.get("status") == "done" and cur.get("status") == "open" and cur.get("recur") and not op.get("forever")
+            and "recur" not in changes):
+        roll = todo.done_recurring(conn, cur, conn.execute("SELECT crm.today() AS d").fetchone()["d"])
+        if roll:
+            changes.pop("status")
+            changes.update(roll)
+            recurred = roll["due_date"]
     # Вложили в другое дело или вынули (why_id сменился), а места не назвали — прежнее место было среди прежних
     # соседей: оно уходит, дело встаёт в конец новых соседей (иначе «Вложить в…» ставило его первым, и «сначала: …»
     # у нового родителя показывало его; _nest_last ниже). Одно правило для веба, телефона, Claude и коннектора — здесь.
@@ -690,12 +709,13 @@ def op_task_set(conn, user, op):
     if moved and full.get("why_id") and not full.get("why_goal") and full.get("status") == "open" and _nest_last(conn, full):
         full = _full(conn, row["id"])
     raised, fell = _nest_rise(conn, user, cur, full)
-    return {"task": full, "conflicts": conflicts, **({"raised": raised} if raised else {}), **({"fell": fell} if fell else {})}
+    return {"task": full, "conflicts": conflicts, **({"raised": raised} if raised else {}), **({"fell": fell} if fell else {}),
+            **({"recurred": recurred} if recurred else {})}
 
 
 def _status(status):
     def handler(conn, user, op):
-        return op_task_set(conn, user, {"id": op.get("id"), "set": {"status": status}})
+        return op_task_set(conn, user, {"id": op.get("id"), "set": {"status": status}, "forever": op.get("forever")})
 
     return handler
 
@@ -2024,6 +2044,8 @@ def _project_krug(fn, key: str):
     def handler(conn, user, op):
         raw = dict(op.get(key) or {})
         kr = _krug_split(raw)
+        if "color" in raw:
+            todo.color_check(raw["color"], OpError)  # палитра Todoist по имени (dela_0036)
         res = fn(conn, user, {**op, key: raw})
         if kr:
             _krug_write(conn, user, "project", res["row"], kr)
@@ -2259,6 +2281,9 @@ HANDLERS: dict[str, Callable] = {
     "suggestion.seen": op_suggestion_seen,
     "suggestion.undo": op_suggestion_undo,
     "dictation.add": op_dictation_add,
+    # Разделы проекта (dela_0036, todo.py).
+    "section.create": lambda conn, user, op: todo.op_section_create(conn, user, op, OpError),
+    "section.set": lambda conn, user, op: todo.op_section_set(conn, user, op, OpError),
 }
 
 # Ошибки базы, которые повтор не исправит: формат, права, правила.
@@ -2345,6 +2370,8 @@ SYNC_TABLES = {
     # самом деле). Только свои (RLS).
     "krug": "SELECT id, kind, directions, why_id, seq FROM tasks.krug WHERE kind = 'project' AND seq > %s",
     "projects": "SELECT * FROM crm.projects WHERE seq > %s",
+    # Разделы проектов (dela_0036): видны тем, кто видит проект (RLS); архивные тоже едут — клиент их прячет.
+    "sections": "SELECT * FROM tasks.sections WHERE seq > %s",
     "deals": "SELECT * FROM crm.v_deals WHERE seq > %s",
     "payments": "SELECT * FROM crm.payments WHERE seq > %s",
     # Люди и компании — поля по тому, кто смотрит (аудит №10, dela_0026): пометки владельца, черты, «ищет / предлагает»,

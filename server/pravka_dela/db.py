@@ -35,6 +35,8 @@ APP_TABLES = {
     "tasks.dictations": "SELECT, INSERT, UPDATE",
     # Круг жизни: направления и «Зачем» — только хозяину (dela_0009); строка не удаляется, пустеет.
     "tasks.krug": "SELECT, INSERT, UPDATE",
+    # Разделы проектов (dela_0036, вид Todoist): не удаляются — archived.
+    "tasks.sections": "SELECT, INSERT, UPDATE",
     "crm.tokens": "SELECT, INSERT, UPDATE",
     "crm.sessions": "SELECT, INSERT, UPDATE, DELETE",
     "crm.login_requests": "SELECT, INSERT, UPDATE, DELETE",
