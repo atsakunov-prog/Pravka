@@ -558,11 +558,11 @@ def test_now_today_and_overdue_apart(dela):
 
     # Коннектор claude.ai говорит то же словами: «Сейчас» отдельно, просроченное — числом и во «Всех делах».
     txt = mcp_tools.view(dela, "now")
-    assert "Взял сам" in txt and "В «Сейчас» 2 из 5" in txt and "Срок сегодня" not in txt, txt
+    assert "Взял сам" in txt and "В «Сейчас» 2: предела нет" in txt and "Срок сегодня" not in txt, txt
     txt = mcp_tools.view(dela, "today")
     assert "Срок сегодня" in txt and "Взял сам" not in txt and "Сдать отчёт" not in txt, txt
     assert "в «Сейчас»" in [x for x in txt.splitlines() if "Взял и срок сегодня" in x][0], txt
-    assert "В «Сейчас» (отметил Саша): 2 из 5" in txt and "Просрочено: 1" in txt and "view=all" in txt, txt
+    assert "В «Сейчас» (отметил Саша): 2 — " in txt and "Просрочено: 1" in txt and "view=all" in txt, txt
     txt = mcp_tools.view(dela, "all")
     assert txt.index("Просрочено (срок прошёл) (1):") < txt.index("Сдать отчёт") < txt.index("Отбить"), txt
 
