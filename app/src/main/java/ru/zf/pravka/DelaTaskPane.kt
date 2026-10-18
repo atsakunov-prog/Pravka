@@ -1,5 +1,7 @@
 package ru.zf.pravka
 
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -131,7 +133,7 @@ internal fun DelaTaskPane(
                             .padding(horizontal = 14.dp, vertical = 8.dp),
                     )
                 }
-                Text(task.title, style = ty.titleL, color = Ink.TextStrong)
+                EditableTitle(app, task, ty.titleL, Ink.TextStrong)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (task.open) GhostKey("Начать в Засечке", onStart, icon = Glyphs.Play)
                     Spacer(Modifier.width(10.dp))
@@ -385,12 +387,7 @@ private fun DelaTaskPaneV2(
                         fontWeight = if (g == ru.zf.pravka.core.DelaGroups.Grp.OWED) androidx.compose.ui.text.font.FontWeight.SemiBold else null,
                     )
                 }
-                Text(
-                    task.title,
-                    style = ty.bodyStrong.copy(fontSize = 17.sp, lineHeight = 22.sp),
-                    color = Kv.text,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
+                EditableTitle(app, task, ty.bodyStrong.copy(fontSize = 17.sp, lineHeight = 22.sp), Kv.text, Modifier.padding(top = 6.dp))
                 // Метки (`.tag` холста): проект — акцентом и ссылкой на страницу, сделка, «в «Сейчас»», свои.
                 val project = snap.projects[task.projectId]?.name ?: task.projectName.takeIf { task.projectId.isNotBlank() }.orEmpty()
                 val deal = snap.deals[task.dealId]?.name.orEmpty()
@@ -624,4 +621,60 @@ private fun KvSmallKey(text: String, icon: androidx.compose.ui.graphics.vector.I
             maxLines = 1,
         )
     }
+}
+
+/**
+ * Название дела, которое правится на месте (записки отладки 4 и 31, 18.10.2026: «поправить само дело прямо на экране, а
+ * не входя в карточку»; «нажимаю на дело — в правой колонке его редактировать»): тап — поле тем же шрифтом, «Готово» на
+ * клавиатуре или уход из поля — `task.set {title}` с `was`; пусто или то же — как было. Закрытое дело — просто текст.
+ */
+@Composable
+private fun EditableTitle(
+    app: PravkaApp,
+    task: Dela.Task,
+    style: androidx.compose.ui.text.TextStyle,
+    color: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier,
+) {
+    var editing by remember(task.id) { mutableStateOf(false) }
+    if (!editing || !task.open) {
+        Text(
+            task.title,
+            style = style,
+            color = color,
+            modifier = if (task.open) modifier.clickable(onClickLabel = "поправить название") { editing = true } else modifier,
+        )
+        return
+    }
+    var value by remember(task.id) {
+        mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(task.title, androidx.compose.ui.text.TextRange(task.title.length)))
+    }
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    var focused by remember { mutableStateOf(false) }
+    val commit = {
+        if (editing) {
+            editing = false
+            val t = value.text.trim()
+            if (t.isNotEmpty() && t != task.title) app.appScope.launch {
+                app.delaDo(listOf(Dela.setOp(task.id, org.json.JSONObject().put("title", t), org.json.JSONObject().put("title", task.title))))
+            }
+        }
+    }
+    androidx.compose.foundation.text.BasicTextField(
+        value = value,
+        // Название — одной строкой смысла: перенос из диктовки или вставки — пробелом.
+        onValueChange = { value = it.copy(text = it.text.replace('\n', ' ')) },
+        textStyle = style.copy(color = color),
+        cursorBrush = androidx.compose.ui.graphics.SolidColor(color),
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+            capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Sentences,
+            imeAction = androidx.compose.ui.text.input.ImeAction.Done,
+        ),
+        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { commit() }),
+        modifier = modifier.fillMaxWidth().focusRequester(focus).onFocusChanged { f ->
+            if (focused && !f.isFocused) commit()
+            focused = f.isFocused
+        },
+    )
+    LaunchedEffect(Unit) { focus.requestFocus() }
 }
