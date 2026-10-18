@@ -139,6 +139,33 @@ class DelaStore(private val context: Context) {
         enqueue(listOf(op))
     }
 
+    private val _nowOrder = MutableStateFlow<List<String>>(emptyList())
+    /**
+     * Порядок «Сейчас» (записка отладки 8, 18.10.2026; `settings.now_order` из `/api/me`, как фильтры): Саша тянет
+     * строки — порядок здесь сразу и в очередь (`user.settings`), веб видит тот же.
+     */
+    val nowOrderFlow: StateFlow<List<String>> = _nowOrder
+
+    /** Что сказал сервер: своё неотправленное (в очереди `user.settings`) не перетирается. */
+    suspend fun setServerNowOrder(a: JSONArray?) = mutex.withLock {
+        ensureLoaded()
+        if (outbox.any { it.op.optString("op") == "user.settings" }) return@withLock
+        val list = a?.let { x -> (0 until x.length()).mapNotNull { i -> x.optString(i).takeIf { it.isNotBlank() } } }.orEmpty()
+        if (list == _nowOrder.value) return@withLock
+        _nowOrder.value = list
+        writePrefs()
+    }
+
+    /** Свой порядок «Сейчас»: виден сразу, на сервер — операцией очереди. */
+    suspend fun saveNowOrder(ids: List<String>, op: JSONObject) {
+        mutex.withLock {
+            ensureLoaded()
+            _nowOrder.value = ids
+            writePrefs()
+        }
+        enqueue(listOf(op))
+    }
+
     private val _clientOpen = MutableStateFlow<Set<String>>(emptySet())
     /**
      * Клиенты, у которых проекты раскрыты — в ☰ и в «Клиентах» (`S.clientOpen`
@@ -180,6 +207,7 @@ class DelaStore(private val context: Context) {
             .put("groups", JSONObject().apply { for ((k, v) in _groups.value) put(k, v) })
             .put("clientOpen", JSONArray().apply { _clientOpen.value.sorted().forEach { put(it) } })
             .apply { _filters.value?.let { put("filters", it) } }
+            .put("nowOrder", JSONArray().apply { _nowOrder.value.forEach { put(it) } })
             .toString()
         withContext(Dispatchers.IO) { StoreFiles.writeAtomic(favsFile, text) }
     }
@@ -520,6 +548,9 @@ class DelaStore(private val context: Context) {
                 }
                 o.optJSONObject("groups")?.let { g -> _groups.value = g.keys().asSequence().associateWith { g.optString(it) } }
                 _filters.value = o.optJSONArray("filters")
+                o.optJSONArray("nowOrder")?.let { a ->
+                    _nowOrder.value = (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.isNotBlank() } }
+                }
                 o.optJSONArray("clientOpen")?.let { a ->
                     _clientOpen.value = (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.isNotBlank() } }.toSet()
                 }

@@ -1,5 +1,12 @@
 package ru.zf.pravka
 
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
+
 import ru.zf.pravka.ui.glass
 
 import ru.zf.pravka.ui.bottomFade
@@ -368,6 +375,8 @@ fun DelaTab(
     val debugInfo by app.delaDebug.info.collectAsState()
     val favs by app.delaStore.favsFlow.collectAsState()
     val filtersRaw by app.delaStore.filtersFlow.collectAsState()
+    // Порядок «Сейчас» (записка отладки 8): как Саша тянул строки, с сервера и своей правкой.
+    val nowOrder by app.delaStore.nowOrderFlow.collectAsState()
     val filters = remember(filtersRaw) { DelaGroups.filters(filtersRaw) }
 
     // Раздел — ключ веба: now, today, new, all; CRM — crm, clients, ties. Первым — «Сейчас» (13.10.2026).
@@ -731,7 +740,7 @@ fun DelaTab(
         // «Сейчас» — главная (13.10.2026, `renderNow` веба): своими блоками, у модели — только дела в порядке показа.
         view == DelaViews.View.NOW -> {
             val waits = remember(snap, me, today, sphere) { DelaViews.waits(snap, me, today, sphere, now) }
-            val nowList = DelaGroups.nowOrdered(snap, me, today)
+            val nowList = DelaGroups.nowOrdered(snap, me, today, nowOrder)
             // Дела внутри дел из «Сейчас» (15.10.2026, `renderNow` веба; с 18.10 — под родителем, записка 39): в «Сегодня» не повторяются.
             val inner = if (snap.nestOn) DelaSteps.inner(nowList, snap) else emptyList()
             val taken = nowList.map { it.id }.toSet() + inner.map { it.first.id }
@@ -756,6 +765,8 @@ fun DelaTab(
                     card = asksCard,
                     onOpen = { asksOpen = queue.openKey },
                     queue = queue,
+                    // Строку «Сейчас» перетянули (записка 8) — новый порядок: сразу на экране и в очередь на сервер.
+                    reorder = { ids -> scope.launch { app.delaStore.saveNowOrder(ids, DelaGroups.nowOrderOp(ids)) } },
                 ),
                 late = DelaGroups.lateTasks(snap, me, today, sphere).size,
                 waits = waits,
@@ -2615,7 +2626,7 @@ private fun LazyListScope.planBlock(
         val mode = ru.zf.pravka.ui.LocalMode.current
         val ty = ru.zf.pravka.ui.LocalPravkaType.current
         val marked = p?.marked.orEmpty()
-        PaperCard(label = "Отметь до пяти · отмечено ${marked.size} из ${DelaViews.NOW_MAX}") {
+        PaperCard(label = "Отметь на день · отмечено ${marked.size}") {
             Text(
                 listOfNotNull(
                     p?.let { DelaViews.planToday(view, it) }?.takeIf { it.isNotBlank() },
@@ -3540,10 +3551,16 @@ internal fun TaskRows(
     nowBold: Boolean = true,
     /** «Деревом» (15.10.2026): родитель → дела внутри; пусто — плоско, дело внутри прямо под родителем. */
     nest: Map<String, List<Dela.Task>> = emptyMap(),
+    /**
+     * Перетаскивание (записки отладки 8 и 40, 18.10.2026: «при долгом нажатии перетаскивать дела», «Сейчас» —
+     * порядок): строки верхнего уровня тянутся долгим нажатием; отпустил — (id, новое место среди них). Отпустил,
+     * не сдвинув, — меню дела, как раньше. null — строки не тянутся.
+     */
+    reorder: ((String, Int) -> Unit)? = null,
 ) {
     // Ушла строка (сделанное отстояло своё, запись 30) — карточка сжимается плавно, а не рывком.
     Column(Modifier.fillMaxWidth().animateContentSize()) {
-        TaskRowsBody(list, actions, today, by, onProjectPage, extra, also, indent, inTree, note, onLong, nowBold, nest)
+        TaskRowsBody(list, actions, today, by, onProjectPage, extra, also, indent, inTree, note, onLong, nowBold, nest, reorder)
     }
 }
 
@@ -3562,6 +3579,7 @@ private fun TaskRowsBody(
     onLong: ((Dela.Task) -> Unit)?,
     nowBold: Boolean,
     nest: Map<String, List<Dela.Task>>,
+    reorder: ((String, Int) -> Unit)? = null,
 ) {
     if (nest.isNotEmpty()) {
         DelaSteps.lines(list, nest, actions.folded).forEachIndexed { i, ln ->
@@ -3574,9 +3592,85 @@ private fun TaskRowsBody(
     }
     // Плоский список (15.10.2026): дело внутри другого — прямо под родителем, если оба здесь (`stepsFirst` веба).
     val rows = if (indent.isEmpty() && !inTree) DelaSteps.stepsFirst(list, actions.snap) else list
+    if (reorder == null) {
+        rows.forEachIndexed { i, t ->
+            if (i > 0) RowRule()
+            TaskRow(t, actions, today, by, onProjectPage, extra(t), also, indent[t.id] ?: 0, inTree, note(t), onLong?.let { f -> { f(t) } }, nowBold)
+        }
+        return
+    }
+    // Тянется строка верхнего уровня вместе со своими делами внутри (блок); место — по половине соседнего блока.
+    var dragId by remember { mutableStateOf<String?>(null) }
+    var dragDy by remember { mutableStateOf(0f) }
+    val heights = remember { androidx.compose.runtime.mutableStateMapOf<String, Int>() }
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val latestRows by androidx.compose.runtime.rememberUpdatedState(rows)
+    val finish: (String, Float) -> Unit = { id, dy ->
+        val blocks = LinkedHashMap<String, Int>()
+        var cur: String? = null
+        for (r in latestRows) {
+            val h = heights[r.id] ?: 0
+            if ((indent[r.id] ?: 0) == 0) { cur = r.id; blocks[r.id] = h } else cur?.let { blocks[it] = (blocks[it] ?: 0) + h }
+        }
+        val ids = blocks.keys.toList()
+        val from = ids.indexOf(id)
+        var to = from
+        var left = dy
+        if (from >= 0 && dy > 0) {
+            var k = from + 1
+            while (k < ids.size && left > blocks.getValue(ids[k]) / 2f) { left -= blocks.getValue(ids[k]); to = k; k++ }
+        } else if (from >= 0 && dy < 0) {
+            var k = from - 1
+            while (k >= 0 && -left > blocks.getValue(ids[k]) / 2f) { left += blocks.getValue(ids[k]); to = k; k-- }
+        }
+        if (from >= 0 && to != from) reorder(id, to)
+    }
     rows.forEachIndexed { i, t ->
         if (i > 0) RowRule()
-        TaskRow(t, actions, today, by, onProjectPage, extra(t), also, indent[t.id] ?: 0, inTree, note(t), onLong?.let { f -> { f(t) } }, nowBold)
+        val top = (indent[t.id] ?: 0) == 0
+        val dragging = t.id == dragId
+        val gesture = if (!top) null else Modifier.pointerInput(t.id) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                val long = awaitLongPressOrCancellation(down.id) ?: return@awaitEachGesture
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                dragId = t.id
+                dragDy = 0f
+                var moved = false
+                var released = false
+                var total = 0f
+                try {
+                    while (true) {
+                        val ev = awaitPointerEvent()
+                        val ch = ev.changes.firstOrNull { it.id == long.id } ?: break
+                        if (!ch.pressed) { ch.consume(); released = true; break }
+                        val d = ch.positionChange().y
+                        if (d != 0f) {
+                            total += d
+                            if (!moved && kotlin.math.abs(total) > viewConfiguration.touchSlop) moved = true
+                            if (moved) dragDy = total
+                            ch.consume()
+                        }
+                    }
+                } finally {
+                    val dy = dragDy
+                    dragId = null
+                    dragDy = 0f
+                    if (released && moved) finish(t.id, dy) else if (released) actions.menu?.invoke(t)
+                }
+            }
+        }
+        Box(
+            Modifier.fillMaxWidth().zIndex(if (dragging) 1f else 0f)
+                .onGloballyPositioned { heights[t.id] = it.size.height }
+                .graphicsLayer {
+                    translationY = if (dragging) dragDy else 0f
+                    shadowElevation = if (dragging) 8f else 0f
+                },
+        ) {
+            TaskRow(t, actions, today, by, onProjectPage, extra(t), also, indent[t.id] ?: 0, inTree, note(t), onLong?.let { f -> { f(t) } }, nowBold,
+                drag = gesture)
+        }
     }
 }
 
@@ -3611,6 +3705,8 @@ internal fun TaskRow(
     fold: Boolean? = null,
     /** Строка «Деревом»: «для: …» и «сначала: …» не нужны — вложенность видна отступом. */
     nested: Boolean = false,
+    /** Жест перетаскивания (TaskRows с reorder): долгое нажатие — его, тап — карточка; меню зовёт сам жест. */
+    drag: Modifier? = null,
 ) {
     // Правка 4.0 (DESIGN §11.7 TaskRow в Делах, `screens/06`): кольцо 22 в
     // зоне 44, «Кто: действие» до двух строк, вторая строка — подписи веба;
@@ -3639,7 +3735,9 @@ internal fun TaskRow(
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(if (v2) 7.dp else 12.dp))
                 .then(
                     // Долгое нажатие — своё у места (дерево жизни: «Куда повесить»), иначе меню дела (15.10.2026).
-                    (onLong ?: actions.menu?.let { m -> { m(t) } })?.let { long -> Modifier.combinedClickable(onClick = { actions.open(t) }, onLongClick = long) }
+                    // Тянущаяся строка (записки 8 и 40): тап — карточка, долгое нажатие — жест [drag] (он же зовёт меню).
+                    if (drag != null) Modifier.clickable { actions.open(t) }.then(drag)
+                    else (onLong ?: actions.menu?.let { m -> { m(t) } })?.let { long -> Modifier.combinedClickable(onClick = { actions.open(t) }, onLongClick = long) }
                         ?: Modifier.clickable { actions.open(t) },
                 )
                 .padding(vertical = 4.dp),

@@ -302,6 +302,8 @@ class DelaSync(
                 val settings = me.optJSONObject("settings") ?: JSONObject()
                 store.setServerFilters(settings.optJSONArray("filters"))
             }
+            // Порядок «Сейчас» (записка отладки 8, 18.10.2026) — там же, в настройках человека; старый сервер — пусто.
+            store.setServerNowOrder(me.optJSONObject("settings")?.optJSONArray("now_order"))
             keepNav(me)
             keepIcon(me)
         }.onFailure { e -> log("дела: /api/me (фильтры, меню Ковчега) — ${why(e)}") }

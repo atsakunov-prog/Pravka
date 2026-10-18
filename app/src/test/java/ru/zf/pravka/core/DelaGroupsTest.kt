@@ -212,12 +212,12 @@ class DelaGroupsTest {
     }
 
     @Test
-    fun `молния — своё открытое в Сейчас, шестое не встаёт, снять — срок не трогать`() {
+    fun `молния — своё открытое в Сейчас, шестое тоже встаёт, снять — срок не трогать`() {
+        // Записка отладки 8 (18.10.2026): предела «Сейчас» нет — шестое встаёт, как первое.
         val five = (1..5).map { i -> task("n$i") { it.copy(focusOn = today) } }
         val s = snap(*five.toTypedArray(), task("sixth"), task("foreign") { it.copy(ownerId = "lena") }, task("goal") { it.copy(goal = true) })
-        val (full, why) = DelaGroups.toggleNow(s.tasks.getValue("sixth"), s, "me", today)
-        assertNull(full)
-        assertEquals(DelaViews.NOW_FULL, why)
+        val (sixth, _) = DelaGroups.toggleNow(s.tasks.getValue("sixth"), s, "me", today)
+        assertEquals(today, sixth!!.optString("focus_on"))
         assertNull(DelaGroups.toggleNow(s.tasks.getValue("foreign"), s, "me", today).first)
         assertNull(DelaGroups.toggleNow(s.tasks.getValue("goal"), s, "me", today).first)
         val (off, said) = DelaGroups.toggleNow(s.tasks.getValue("n1") , s, "me", today)
@@ -255,6 +255,23 @@ class DelaGroupsTest {
         assertEquals("повестка", DelaGroups.wait(task("c") { it.copy(ball = Dela.AGENDA) }, "Олег", today, true)!!.text)
         assertEquals("@Олег", DelaGroups.wait(task("d"), "Олег", today, false)!!.text)
         assertNull(DelaGroups.wait(task("e"), "Олег", today, true))
+    }
+
+    @Test
+    fun `сейчас — в порядке, как тянул Саша, остальное по времени, перетаскивание ставит на место`() {
+        // Записка отладки 8 (18.10.2026): порядок «Сейчас» — settings.now_order, веб и телефон одним полем.
+        val a = task("a") { it.copy(focusOn = today, dueTime = "09:00") }
+        val b = task("b") { it.copy(focusOn = today, dueTime = "10:00") }
+        val c = task("c") { it.copy(focusOn = today, dueTime = "11:00") }
+        val s = snap(a, b, c)
+        assertEquals(listOf("a", "b", "c"), DelaGroups.nowOrdered(s, "me", today).map { it.id })
+        assertEquals(listOf("c", "a", "b"), DelaGroups.nowOrdered(s, "me", today, listOf("c")).map { it.id })
+        assertEquals(listOf("b", "c", "a"), DelaGroups.nowOrdered(s, "me", today, listOf("b", "gone", "c", "a")).map { it.id })
+        assertEquals(listOf("c", "a", "b"), DelaGroups.moveIn(listOf("a", "b", "c"), "c", 0))
+        assertEquals(listOf("b", "c", "a"), DelaGroups.moveIn(listOf("a", "b", "c"), "a", 2))
+        val op = DelaGroups.nowOrderOp(listOf("c", "a"), "op1")
+        assertEquals("user.settings", op.getString("op"))
+        assertEquals("[\"c\",\"a\"]", op.getJSONObject("settings").getJSONArray("now_order").toString())
     }
 
     @Test

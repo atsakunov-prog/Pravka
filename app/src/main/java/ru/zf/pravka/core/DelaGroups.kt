@@ -115,9 +115,26 @@ object DelaGroups {
     fun todayTasks(s: Dela.Snapshot, me: String, today: String, sphere: String): List<Dela.Task> =
         s.tasks.values.filter { inToday(it, me, today) && Dela.inSphere(it, sphere) }
 
-    /** «Сейчас» по времени (`nowTasks().sort(byTime)` веба): пять на день во всех сферах сразу, а не на сферу. */
-    fun nowOrdered(s: Dela.Snapshot, me: String, today: String): List<Dela.Task> =
-        s.tasks.values.filter { deed(it, me) && isNow(it, today) }.sortedWith(byTime(today))
+    /**
+     * «Сейчас» во всех сферах сразу (`nowTasks().sort(byNowOrder)` веба): в порядке, как Саша тянул строки ([order] —
+     * `settings.now_order`, записка отладки 8, 18.10.2026), не названные там — после, по времени.
+     */
+    fun nowOrdered(s: Dela.Snapshot, me: String, today: String, order: List<String> = emptyList()): List<Dela.Task> {
+        val at = order.withIndex().associate { (i, id) -> id to i }
+        return s.tasks.values.filter { deed(it, me) && isNow(it, today) }
+            .sortedWith(compareBy<Dela.Task> { at[it.id] ?: Int.MAX_VALUE }.then(byTime(today)))
+    }
+
+    /** Порядок «Сейчас» на сервер (`saveNowOrder` веба): `user.settings` сливает верхний уровень — только now_order. */
+    fun nowOrderOp(ids: List<String>, opId: String = Dela.newId()): JSONObject =
+        JSONObject().put("op", "user.settings").put("op_id", opId)
+            .put("settings", JSONObject().put("now_order", JSONArray().apply { ids.forEach { put(it) } }))
+
+    /** Новый порядок «Сейчас»: [id] встаёт на место [to] среди [ids] (перетаскивание строки). */
+    fun moveIn(ids: List<String>, id: String, to: Int): List<String> {
+        val rest = ids.filter { it != id }
+        return rest.toMutableList().apply { add(to.coerceIn(0, rest.size), id) }
+    }
 
     /** Просроченное по времени (`lateTasks` веба): число у «Всех дел», «просрочено N» в шапке, группа сверху. */
     fun lateTasks(s: Dela.Snapshot, me: String, today: String, sphere: String): List<Dela.Task> =

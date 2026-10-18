@@ -64,9 +64,10 @@ object DelaViews {
     }
 
     /**
-     * «Сейчас» — дела, которые обязан сделать сегодня, не больше пяти (владелец,
-     * 06.10.2026). Шестое не встаёт ни молнией, ни из карточки: веб и правка
-     * словами на сервере (`ask.NOW_MAX`) держат то же число.
+     * «Сейчас» — дела, которые Саша сам взял на сегодня. С 06.10 по 18.10.2026 больше пяти не вставало; записка
+     * отладки 8 (Саша: «добавлять больше, чем 5… перетянуть, и верхние будут показываться… «Показать все»») — предела
+     * нет ни здесь, ни на сервере: NOW_MAX — сколько видно сверху, остальное раскрывает «Показать все», порядок —
+     * `settings.now_order` (Саша тянет строки долгим нажатием, веб — мышью).
      */
     const val NOW_MAX = 5
 
@@ -124,10 +125,8 @@ object DelaViews {
      * Влезут ли [ids] в «Сейчас» (`nowRoom` веба): уже стоящие не считаются
      * дважды. false — было бы шестое; ответ владельцу — [NOW_FULL].
      */
-    fun nowRoom(s: Dela.Snapshot, me: String, today: String, ids: Collection<String>): Boolean {
-        val have = nowTasks(s, me, today).map { it.id }.toSet()
-        return have.size + ids.toSet().count { it !in have } <= NOW_MAX
-    }
+    @Suppress("UNUSED_PARAMETER")
+    fun nowRoom(s: Dela.Snapshot, me: String, today: String, ids: Collection<String>): Boolean = true  // предела нет (18.10.2026)
 
     /** «Поставили другие» за три дня (`fromOthers` веба): моё, заведённое не мной. */
     fun fromOthers(s: Dela.Snapshot, me: String, sphere: String, now: Long): List<Dela.Task> =
@@ -396,8 +395,8 @@ object DelaViews {
         /** Виден, пока есть ждущие кандидаты или отмеченное заранее (`planBox` веба). */
         val visible: Boolean get() = items.isNotEmpty() || (ahead && marked.isNotEmpty())
 
-        /** Шестое на этот день не встанет — предел пяти на КАЖДЫЙ день держит и сервер (`store._now_guard`). */
-        val room: Boolean get() = marked.size < NOW_MAX
+        /** Место на этот день есть всегда: предела «Сейчас» нет с 18.10.2026 (записка отладки 8). */
+        val room: Boolean get() = true
     }
 
     /**
@@ -454,7 +453,7 @@ object DelaViews {
      */
     fun planLine(p: Plan): String = "Сейчас ${p.label}: " + listOfNotNull(
         "предложено ${p.offered}".takeIf { p.items.isNotEmpty() },
-        "отмечено ${p.marked.size} из $NOW_MAX",
+        "отмечено ${p.marked.size}",
     ).joinToString(" · ")
 
     /** Подпись варианта, который ставит дело в «Сейчас» уже наступившего дня (`planLabel` веба). */

@@ -131,6 +131,10 @@ internal class Home(
     val onOpen: () -> Unit = {},
     /** Очередь, из которой разложен [card], — снимку «Что не так?» (фаза, строка, группы; поезд 16.10.2026). */
     val queue: Asks.Queue? = null,
+    /**
+     * Новый порядок «Сейчас» — Саша перетянул строку (записка отладки 8, 18.10.2026): ids всех дел «Сейчас» по порядку.
+     */
+    val reorder: (List<String>) -> Unit = {},
 )
 
 /** Значок набора Ковчега по имени веба; нет такого — запасной штрих приложения. */
@@ -341,20 +345,37 @@ internal fun LazyListScope.homeView(
     item(key = "home:now") {
         // Плавно — когда «Сейчас» меняет высоту (сделанное отстояло своё, запись 30), «Сегодня» ниже подъезжает.
         Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
+        // Предела нет (записка отладки 8, 18.10.2026): сверху NOW_MAX, остальное — «Показать все»; порядок — Сашин.
+        var all by remember { mutableStateOf(false) }
+        val shown = if (all) h.now else h.now.take(DelaViews.NOW_MAX)
         HomeBlock(
             Glyphs.Bolt, "Сейчас", h.now.size,
-            sub = "отметил сам — сделать сегодня" + if (h.now.size < DelaViews.NOW_MAX) "; ещё ${DelaViews.NOW_MAX - h.now.size} — молнией у дела или в его карточке" else "",
+            sub = "отметил сам — сделать сегодня; порядок — долгим нажатием и тяни",
         ) {
             if (h.now.isEmpty()) {
-                BlockNote("Пусто. Возьми до ${DelaViews.NOW_MAX} дел на сегодня — молния у дела или в его карточке, «!сейчас» в строке.")
+                BlockNote("Пусто. Возьми дела на сегодня — молния у дела или в его карточке, «!сейчас» в строке.")
             } else {
                 // Жирным здесь не выделяем: весь блок — «Сейчас». Дела внутри — прямо под родителем, отступом.
-                if (h.inner.isEmpty()) TaskRows(h.now, actions, today, nowBold = false)
+                val inner = if (h.inner.isEmpty()) emptyList() else ru.zf.pravka.core.DelaSteps.inner(shown, crm.snap)
+                // Тянуть можно дела «Сейчас» (не их дела внутри): долгое нажатие и вести; отпустил на месте — меню дела.
+                val reorder: (String, Int) -> Unit = { id, to ->
+                    h.reorder(DelaGroups.moveIn(h.now.map { it.id }, id, to))
+                }
+                if (inner.isEmpty()) TaskRows(shown, actions, today, nowBold = false, reorder = reorder)
                 else TaskRows(
-                    ru.zf.pravka.core.DelaSteps.stepsFirst(h.now + h.inner.map { it.first }, crm.snap), actions, today, nowBold = false,
-                    indent = h.inner.associate { it.first.id to it.second },
+                    ru.zf.pravka.core.DelaSteps.stepsFirst(shown + inner.map { it.first }, crm.snap), actions, today, nowBold = false,
+                    indent = inner.associate { it.first.id to it.second }, reorder = reorder,
                 )
-                // «Ещё N — молнией…» под делами снято (запись 34): сколько ещё взять — в пояснении «Сейчас».
+                if (h.now.size > DelaViews.NOW_MAX) {
+                    Text(
+                        if (all) "Свернуть до ${DelaViews.NOW_MAX}" else "Показать все · ещё ${h.now.size - DelaViews.NOW_MAX}",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 4.dp).clip(RoundedCornerShape(8.dp))
+                            .clickable(onClickLabel = if (all) "свернуть" else "показать все дела «Сейчас»") { all = !all }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                    )
+                }
             }
         }
         }

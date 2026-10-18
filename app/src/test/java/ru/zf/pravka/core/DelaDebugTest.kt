@@ -245,7 +245,7 @@ class DelaDebugTest {
             s, today, "",
         )
         val j = o.getJSONObject("plan")
-        assertEquals("Сейчас на понедельник: предложено 1 · отмечено 1 из 5", j.getString("line"))
+        assertEquals("Сейчас на понедельник: предложено 1 · отмечено 1", j.getString("line"))
         assertTrue(j.getBoolean("batch"))
         assertEquals("#61 Иван Тестов: прислать договор", j.getJSONArray("marked").getString(0))
         val c = o.getJSONArray("new").getJSONObject(0)
@@ -253,7 +253,7 @@ class DelaDebugTest {
         assertEquals("Пётр ждёт 6 дней · руками 10.10", c.getString("hint"))
         assertEquals(day, c.getString("day"))
         val words = DelaDebug.snapshotLines(o).joinToString("\n")
-        assertTrue(words, words.contains("«Сейчас на завтра» (пачка): Сейчас на понедельник: предложено 1 · отмечено 1 из 5"))
+        assertTrue(words, words.contains("«Сейчас на завтра» (пачка): Сейчас на понедельник: предложено 1 · отмечено 1"))
         assertTrue(words, words.contains("  отмечено: #61 Иван Тестов: прислать договор"))
         assertFalse(words, words.contains("plan: {"))
         // Без блока на экране — ключа нет.

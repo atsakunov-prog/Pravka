@@ -141,15 +141,14 @@ class DelaViewsTest {
     }
 
     @Test
-    fun `сейчас — шестое не встаёт, уже стоящее не считается дважды`() {
+    fun `сейчас — шестое встаёт (предела нет с 18_10), уже стоящее не считается дважды`() {
         val five = (1..5).map { i -> task("n$i") { it.copy(focusOn = today) } }
         val s = snap(*five.toTypedArray(), task("sixth"), task("old") { it.copy(focusOn = "2026-10-04") },
             task("closed") { it.copy(focusOn = today, status = Dela.DONE) }, task("foreign") { it.copy(focusOn = today, ownerId = "natasha") })
         // Вчерашняя отметка, закрытое и чужое — не в «Сейчас».
         assertEquals(5, DelaViews.nowTasks(s, "sasha", today).size)
-        assertFalse(DelaViews.nowRoom(s, "sasha", today, listOf("sixth")))
+        assertTrue(DelaViews.nowRoom(s, "sasha", today, listOf("sixth")))
         assertTrue(DelaViews.nowRoom(s, "sasha", today, listOf("n1")))
-        assertEquals("В «Сейчас» уже 5 — сначала убери одно", DelaViews.NOW_FULL)
         // «Сейчас» — на день, а не на сферу: дом и работа делят те же пять.
         val home = s.copy(tasks = s.tasks.mapValues { (_, t) -> if (t.id == "n1") t.copy(sphere = "home") else t })
         assertEquals(5, DelaViews.nowTasks(home, "sasha", today).size)
@@ -804,7 +803,7 @@ class DelaViewsTest {
         assertTrue(p.visible)
         assertTrue(p.ahead)
         assertTrue(p.room)
-        assertEquals("Сейчас на завтра: предложено 4 · отмечено 1 из 5", DelaViews.planLine(p))
+        assertEquals("Сейчас на завтра: предложено 4 · отмечено 1", DelaViews.planLine(p))
         // Не вопросы автоматики: в «Подскажи», числе «Нового» и «Поставить все» их нет (`store.NEW_COUNT_IF`).
         assertEquals(listOf("q1"), DelaViews.asks(s, "sasha").map { it.id })
         assertEquals(1, DelaViews.newCount(s, "sasha", "all", now))
@@ -866,7 +865,7 @@ class DelaViewsTest {
         val q = DelaViews.plan(answered, "sasha", today, now)!!
         assertTrue(q.items.isEmpty())
         assertTrue(q.visible)
-        assertEquals("Сейчас на завтра: отмечено 1 из 5", DelaViews.planLine(q))
+        assertEquals("Сейчас на завтра: отмечено 1", DelaViews.planLine(q))
         // Ничего не отмечено и ждать нечего — не виден.
         assertFalse(DelaViews.plan(planSnap(planOn, listOf(a), listOf(cand("c1", 1, task = "a", status = "rejected"))), "sasha", today, now)!!.visible)
         assertNull(DelaViews.plan(planSnap(planOn, listOf(a), emptyList()), "sasha", today, now))
@@ -897,12 +896,9 @@ class DelaViewsTest {
         assertEquals("", Dela.overlay(s, listOf(Dela.answerOp("c1", 2)), "sasha", today, nowIso).tasks.getValue("a").focusOn)
         val oldYes = Dela.overlay(s, listOf(Dela.decideOp("c1", accept = true)), "sasha", today, nowIso)
         assertEquals(tomorrow, oldYes.tasks.getValue("a").focusOn)
-        // Пять на завтра — шестое не встаёт, тост до запроса (сервер держит то же: store._now_guard).
+        // Пять на завтра — шестое тоже встаёт: предела нет с 18.10.2026 (записка отладки 8).
         val full = DelaViews.plan(planSnap(planOn, five + a, listOf(cand("c1", 1, task = "a"))), "sasha", today, now)!!
-        assertFalse(full.room)
-        assertEquals("На завтра уже пять — сначала убери одно", DelaViews.planFull(full))
-        val todayFull = DelaViews.plan(planSnap(planOn, listOf(a), listOf(cand("c1", 1, task = "a", day = today))), "sasha", today, now)!!
-        assertEquals(DelaViews.NOW_FULL, DelaViews.planFull(todayFull))
+        assertTrue(full.room)
     }
 
     @Test
