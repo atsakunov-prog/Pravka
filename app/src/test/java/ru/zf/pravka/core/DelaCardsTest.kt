@@ -225,6 +225,16 @@ class DelaCardsTest {
     }
 
     @Test
+    fun `люди — по фамилии, компания в скобках не в счёт, одно слово как есть`() {
+        // Записка отладки 36 (18.10.2026): «в людях все сортируются по именам, а должны по фамилиям».
+        val names = listOf("Иван Петров (Бета)", "Анна Яковлева", "Наташа", "Борис Абрамов")
+        assertEquals(
+            listOf("Борис Абрамов", "Наташа", "Иван Петров (Бета)", "Анна Яковлева"),
+            names.map { Dela.Person(id = it, name = it) }.sortedBy { it.sortKey }.map { it.name },
+        )
+    }
+
+    @Test
     fun `люди сделки и команда — крестик и плюс видны сразу`() {
         val s = snap()
         val op = DelaCrm.dealPeopleOp(dModel, "team_ids", listOf(nata, ivan, ivan))

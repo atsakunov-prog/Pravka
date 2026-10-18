@@ -1041,7 +1041,8 @@ object DelaCrm {
             }
             groups.getOrPut(key) { Triple(title, if (p.userId.isBlank()) ol?.clientId.orEmpty() else "", mutableListOf()) }.third += p
         }
-        return groups.entries.sortedBy { it.key }.map { (k, g) -> PeopleGroup(k, g.first, g.second, g.third.sortedBy { it.name.lowercase() }) }
+        // Внутри компании — по фамилии (записка отладки 36, 18.10.2026).
+        return groups.entries.sortedBy { it.key }.map { (k, g) -> PeopleGroup(k, g.first, g.second, g.third.sortedBy { it.sortKey }) }
     }
 
     /** Правка человека: откуда он (`org_id`), должность и что ещё ([set] — поля сервера). */

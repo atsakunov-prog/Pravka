@@ -185,6 +185,12 @@ const inSphere = (t) => !S.sphere || sphereOf(t) === S.sphere || sphereOf(t) ===
 const isLate = (t) => isOpen(t) && t.due_date && t.due_date < S.today;
 const isNow = (t) => t.focus_on === S.today;
 const personName = (p) => (p ? p.short || p.name : '');
+/** Порядок людей — по фамилии (записка отладки 36, 18.10.2026): «Имя Фамилия (Компания)» → «фамилия имя», компания не
+ *  в счёт; одно слово — как есть. Телефон — Dela.Person.sortKey, то же правило. */
+const surnameKey = (p) => {
+  const w = ((p && p.name) || '').split('(')[0].trim().split(/\s+/).filter(Boolean);
+  return (w.length >= 2 ? [...w.slice(1), w[0]] : w).join(' ').toLowerCase();
+};
 function sortTasks(a, b) {
   return (a.due_date || '9999').localeCompare(b.due_date || '9999')
     || (a.due_time || '99').localeCompare(b.due_time || '99')
@@ -2243,7 +2249,7 @@ function levelKey(t, lv) {
   if (lv === 'person') {
     const p = person(t.person_id);
     const org = p && orgLabel(p.org_id);
-    return p ? ['1' + personName(p) + '\u0001' + p.id, personName(p), { id: p.id, href: '#/h/' + p.id, lead: () => avatar(p), full: p.name,
+    return p ? ['1' + surnameKey(p) + '\u0001' + personName(p) + '\u0001' + p.id, personName(p), { id: p.id, href: '#/h/' + p.id, lead: () => avatar(p), full: p.name,
       note: [p.short && p.short !== p.name ? p.name : null, p.role, org && org.name].filter(Boolean).join(' · '),
       find: [...personKeys(p), p.role, org && org.name].filter(Boolean) }] : ['9', 'Без человека', { find: ['без человека'] }];
   }
@@ -5789,7 +5795,7 @@ function renderPeople() {
     el('button', { class: 'chip-btn', title: 'Откуда он, должность', onclick: (e) => { e.stopPropagation(); personPop(e.currentTarget, x); } }, 'откуда…'));
   const boxes = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0], 'ru')).map(([, g]) =>
     el('div', { class: 'group' }, el('h2', {}, g.href ? el('a', { class: 'link', href: g.href }, g.title) : g.title,
-      el('span', { class: 'n' }, g.items.length)), g.items.sort((a, b) => a.name.localeCompare(b.name, 'ru')).map(row)));
+      el('span', { class: 'n' }, g.items.length)), g.items.sort((a, b) => surnameKey(a).localeCompare(surnameKey(b), 'ru')).map(row)));
   return [head('Люди', [plural(list.length, 'человек', 'человека', 'человек'), 'по компаниям: команда, клиенты, другие организации']),
     el('div', { class: 'body' },
       quickAdd({}, { label: 'с людьми', placeholder: '«Иван теперь CFO в Бете», «Ольга ушла из Альфы», «заведи Петра Сидорова из Гаммы, юрист»' }),

@@ -291,6 +291,16 @@ object Dela {
     ) {
         val label: String get() = short.ifBlank { name }
         val live: Boolean get() = archivedAt.isBlank() && mergedInto.isBlank()
+
+        /**
+         * Порядок в списках людей — по фамилии (записка отладки 36, 18.10.2026: «в людях все сортируются по именам, а
+         * должны по фамилиям»). Карточки зовутся «Имя Фамилия (Компания)»: компания в скобках не в счёт, второе слово и
+         * дальше — фамилия, потом имя; одно слово («Наташа») — как есть. `surnameKey` веба — то же правило.
+         */
+        val sortKey: String get() {
+            val w = name.substringBefore('(').trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+            return (if (w.size >= 2) w.drop(1) + w[0] else w).joinToString(" ").lowercase()
+        }
     }
 
     data class Org(

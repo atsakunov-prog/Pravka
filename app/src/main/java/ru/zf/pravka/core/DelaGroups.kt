@@ -387,7 +387,8 @@ object DelaGroups {
         Level.PERSON -> s.people[t.personId]?.let { p ->
             val org = DelaCrm.orgLabel(s, p.orgId)?.name.orEmpty()
             Key(
-                "1" + p.label + "\u0001" + p.id, p.label, id = p.id, full = p.name,
+                // Ключ — по фамилии (записка 36), заголовок — как зовут.
+                "1" + p.sortKey + "\u0001" + p.label + "\u0001" + p.id, p.label, id = p.id, full = p.name,
                 note = listOf(p.name.takeIf { p.short.isNotBlank() && p.short != p.name }.orEmpty(), p.role, org).filter { it.isNotBlank() }.joinToString(" · "),
                 find = (listOf(p.name, p.short) + p.aliases + listOf(p.role, org)).filter { it.isNotBlank() },
                 personId = p.id,

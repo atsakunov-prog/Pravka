@@ -274,10 +274,10 @@ class DelaGroupsTest {
         assertEquals(listOf("Просрочено"), tree[1].children.single().children.map { it.title })
         assertEquals(listOf("Без срока"), tree[2].children.single().children.map { it.title })
         assertEquals(listOf("a1", "a2", "b1", "x"), DelaGroups.flat(tree).map { it.id })
-        // Две «Наташи» — две ветки, и в заголовках полные имена.
+        // Две «Наташи» — две ветки, и в заголовках полные имена; порядок — по фамилии (записка отладки 36).
         val people = DelaGroups.nested(all, listOf(DelaGroups.Level.PERSON), s, today)
-        assertEquals(listOf("Наталья Синицына", "Наталья Грачёва", "Без человека"), people.map { it.title })
-        assertEquals(listOf("h-1", "h-2", null), people.map { it.personId })
+        assertEquals(listOf("Наталья Грачёва", "Наталья Синицына", "Без человека"), people.map { it.title })
+        assertEquals(listOf("h-2", "h-1", null), people.map { it.personId })
     }
 
     @Test
