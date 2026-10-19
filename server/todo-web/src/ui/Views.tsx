@@ -48,7 +48,7 @@ export function Page({ title, icon, sub, actions, children, crumbs, wide }: {
         {actions}
       </div>
       <div className={'view' + (wide ? ' wide' : '')}>
-        <h1 className="view-h">{icon}{title}</h1>
+        <h1 className="view-h">{icon}<span className="vt">{title}</span></h1>
         {sub ? <div className="view-sub">{sub}</div> : null}
         {children}
       </div>
@@ -340,6 +340,21 @@ function StatusPanel({ pid }: { pid: Id }) {
   );
 }
 
+/** «Поделиться» (как в шапке Todoist): ссылка на проект — системным «Поделиться» телефона, иначе в буфер. Доступ
+ *  команды к проекту даётся в CRM, не здесь. */
+async function shareProject(p: { id: Id; name: string }) {
+  const url = location.origin + '/t#/project/' + p.id;
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: p.name, url });
+      return;
+    }
+  } catch {
+    return; // передумал в окне «Поделиться»
+  }
+  navigator.clipboard?.writeText(url).then(() => toast('Ссылка на проект скопирована')).catch(() => {});
+}
+
 export function ProjectView({ id }: { id: Id }) {
   useStore();
   const p = S.projects.get(id);
@@ -363,8 +378,9 @@ export function ProjectView({ id }: { id: Id }) {
   );
   const actions = (
     <>
-      <button className={'tb-btn' + (UI.pstat ? ' on' : '')} title="Статус проекта (I)" onClick={togglePstat}><Icon name="target" size={20} /><span className="d-only">Статус</span></button>
+      <button className="tb-btn" title="Поделиться" onClick={() => shareProject(p)}><Icon name="users" size={20} /><span className="d-only">Поделиться</span></button>
       <DisplayBtn vkey={vkey} />
+      <button className={'tb-btn' + (UI.pstat ? ' on' : '')} title="Статус проекта (I)" onClick={togglePstat}><Icon name="target" size={20} /><span className="d-only">Статус</span></button>
       <button className="tb-btn" onClick={(e) => openPop(e.currentTarget, (close) => (
         <div>
           <button className="mi" onClick={() => { close(); openQuick({ project_id: id }); }}><Icon name="plus" size={18} />Добавить задачу</button>

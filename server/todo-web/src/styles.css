@@ -184,6 +184,7 @@ svg { flex: none; }
 .view { max-width: 800px; margin: 0 auto; padding: 0 55px 120px; }
 .view.wide { max-width: none; padding: 0 32px 120px; }
 .view-h { font-size: 26px; font-weight: 700; line-height: 35px; margin: 0 0 4px; letter-spacing: -.3px; display: flex; align-items: center; gap: 10px; }
+.view-h .vt { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
 .view-sub { color: var(--fg2); font-size: 13px; margin-bottom: 16px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .view-sub .dot { color: var(--fg3); }
 .view-desc { color: var(--fg2); font-size: 13px; margin: 0 0 12px; white-space: pre-wrap; }
@@ -529,13 +530,23 @@ svg { flex: none; }
 /* ── Телефон ────────────────────────────────────────────────────────── */
 .bottom-nav, .fab, .m-only { display: none; }
 @media (max-width: 750px) {
-  .side { position: fixed; z-index: 60; inset: 0 auto 0 0; width: min(86vw, 320px); box-shadow: var(--sh2); margin-left: 0; transition: transform .25s var(--ease); }
+  /* Телефон — как приложение Todoist для Android (нижняя навигация, «+», быстрый ввод листом снизу), а шапка, панель и
+     строка — по его вебу на узком экране (19.10): шапка 56, значки 32; панель 280 выезжает поверх без затемнения,
+     0.3s cubic-bezier(0.4, 0, 0.2, 1); кружок задачи 24, строка с описанием ~64. */
+  .side { position: fixed; z-index: 60; inset: 0 auto 0 0; width: 280px; max-width: 86vw; box-shadow: var(--sh2); margin-left: 0; transition: transform .3s cubic-bezier(0.4, 0, 0.2, 1); }
   .app.side-off .side, .app .side { transform: translateX(-105%); }
   .app.side-m .side { transform: none; }
-  .side-scrim { position: fixed; inset: 0; background: var(--overlay); z-index: 59; }
+  .side-scrim { position: fixed; inset: 0; background: transparent; z-index: 59; } /* без затемнения, тап мимо — закрыть */
   .view { padding: 0 16px 160px; }
-  .topbar { height: 52px; padding: 0 6px; }
-  .view-h { font-size: 24px; }
+  .topbar { height: 56px; padding: 0 8px; gap: 2px; }
+  .topbar .tb-btn { width: 32px; padding: 0; justify-content: center; position: relative; }
+  .topbar .tb-btn .vb-n { position: absolute; top: 0; right: -2px; }
+  .view-h { font-size: 24px; font-weight: 700; line-height: 30px; }
+  .view-h .vt { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .view-h .vt > .hash, .view-h .vt > svg { margin-right: 8px; vertical-align: -2px; }
+  .task { padding: 10px 0; min-height: 48px; }
+  .cb { width: 28px; height: 28px; margin: -2px 2px 0 -4px; }
+  .cb i { width: 24px; height: 24px; }
   .task .grip, .task:hover .tacts { display: none; }
   .task .tw { left: -22px; }
   .task:hover .tw { left: -22px; }
