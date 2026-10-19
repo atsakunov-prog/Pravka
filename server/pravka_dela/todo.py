@@ -168,6 +168,13 @@ def norm(conn, cur: dict | None, data: dict, err) -> dict:
     elif cur and cur.get("recur") and "due_date" in data and not data["due_date"]:
         # Сняли срок у повторяющегося — повтор уходит вместе с ним (у Todoist «без срока» снимает и повтор).
         data["recur"], data["due_rule"] = None, None
+    if "done_count" in data:
+        # Счётчик раз — только вниз: «Отменить» выполнение повтора (книга выполнений снимет последний раз, dela_0037).
+        # Вверх его двигает только сервер, выполняя повтор: иначе выполнения можно было бы дописать руками.
+        n = _int(data["done_count"], 0, 1_000_000)
+        if n is None or cur is None or n > (cur.get("done_count") or 0):
+            raise err("done_count — только вниз: «Отменить» выполнение повтора")
+        data["done_count"] = n
     # Раздел — в проекте дела.
     sec_id = data.get("section_id", cur.get("section_id") if cur else None)
     if "section_id" in data and data["section_id"]:
@@ -199,6 +206,30 @@ def done_recurring(conn, cur: dict, today: dt.date) -> dict | None:
     if cur.get("remind_at") and cur.get("due_date"):
         out["remind_at"] = cur["remind_at"] + (nxt - cur["due_date"])
     return out
+
+
+def reset_inside(conn, task_id) -> tuple[list[str], int]:
+    """Повтор выполнен — сделанные дела внутри снова открыты, как у Todoist (выполненные подзадачи сбрасываются; их
+    сроки не двигаются; слово Саши 19.10: «давай как тудуист все делать»). Вглубь — по Кругу (дела внутри дел внутри).
+    Выполнение остаётся в книге выполнений: сброс идёт с dela.keep_done = on (dela_0037), очки не пропадают.
+    Ответ — (кого открыли, сколько всего дел внутри, кроме отменённых) для тоста «Выполнено и снова добавлено…»."""
+    rows = conn.execute(
+        """
+        WITH RECURSIVE inside AS (
+            SELECT k.id FROM tasks.krug k WHERE k.why_id = %s AND k.kind = 'task' AND NOT k.goal
+            UNION
+            SELECT k.id FROM tasks.krug k JOIN inside i ON k.why_id = i.id WHERE k.kind = 'task' AND NOT k.goal
+        )
+        SELECT t.id, t.status FROM inside i JOIN tasks.tasks t ON t.id = i.id WHERE t.kind = 'task' AND t.status <> 'cancelled'
+        """,
+        (task_id,),
+    ).fetchall()
+    done = [r["id"] for r in rows if r["status"] == "done"]
+    if done:
+        conn.execute("SELECT set_config('dela.keep_done', 'on', true)")
+        conn.execute("UPDATE tasks.tasks SET status = 'open' WHERE id = ANY(%s)", (done,))
+        conn.execute("SELECT set_config('dela.keep_done', '', true)")
+    return [str(x) for x in done], len(rows)
 
 
 def op_section_create(conn, user, op, err):

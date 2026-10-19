@@ -59,6 +59,9 @@ def test_productivity_by_day_and_project(dela):
     a, b, c = mk("Раз", project_id=str(p["id"])), mk("Два", project_id=str(p["id"])), mk("Без проекта")
     old = mk("Позавчера")
     run(*({"op": "task.done", "id": x["id"]} for x in (a, b, c, old)))
+    # закрытое напоминание — движение Круга, но не очки и не «Продуктивность»
+    rem = mk("Напомни: позвонить", kind="remind", remind_at=(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)).isoformat())
+    run({"op": "task.done", "id": rem["id"]})
     with store.db.session(dela, "sasha", "t") as conn:
         conn.execute("UPDATE tasks.tasks SET completed_at = completed_at - interval '2 days' WHERE id = %s", (old["id"],))
     store.apply_ops(dela, "natasha", [{"op": "task.create", "task": {"title": "Чужое дело"}}], "web")

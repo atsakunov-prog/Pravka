@@ -44,6 +44,8 @@ TASK_FIELDS = {
     # Вид Todoist (dela_0036, 19.10.2026, todo.py): приоритет p1…p4, дедлайн, повтор (слова и правило), раздел проекта.
     # Старые клиенты их не шлют: телефон — только увидев флаг todo в синке.
     "priority", "deadline", "due_rule", "recur", "section_id",
+    # Книга выполнений (dela_0037): счётчик раз повтора — только вниз, «Отменить» выполнение (todo.norm).
+    "done_count",
 }
 # reminded_at в TASK_FIELDS нет: его ставит только сервер (task.reminded от бота или телефона, показавшего уведомление).
 
@@ -700,17 +702,30 @@ def op_task_set(conn, user, op):
     if changes.get("project_id") and cur.get("goal") and kr.get("goal") is not False:
         raise OpError("цель живёт без проекта: её текст видит только хозяин (сначала сделай её обычным делом)")
     _ensure_labels(conn, changes.get("labels"))
+    # restore — «Отменить» выполнение повтора возвращает сброшенные дела внутри (dela_0037): выполнение то же, что и было,
+    # — книга выполнений не трогается (dela.keep_done), время выполнения — прежнее, из книги; родителя не поднимаем.
+    restore = bool(op.get("restore")) and "status" in changes and changes["status"] != cur.get("status")
+    if restore and changes["status"] == "done":
+        last = conn.execute("SELECT max(at) AS at FROM tasks.done_log WHERE task_id = %s AND kind = 'done'", (cur["id"],)).fetchone()
+        if last and last["at"]:
+            changes["completed_at"] = last["at"]
+    if restore:
+        conn.execute("SELECT set_config('dela.keep_done', 'on', true)")
     row = _update(conn, "tasks.tasks", {"id": cur["id"]}, changes)
+    if restore:
+        conn.execute("SELECT set_config('dela.keep_done', '', true)")
     if row is None:
         raise OpError("это дело можно только смотреть")
     if kr:
         _krug_write(conn, user, "task", row, kr)
+    # Повтор выполнен — сделанные дела внутри снова открыты, как у Todoist (todo.reset_inside); очки остаются в книге.
+    reset, subtasks = todo.reset_inside(conn, cur["id"]) if recurred else ([], 0)
     full = _full(conn, row["id"])
     if moved and full.get("why_id") and not full.get("why_goal") and full.get("status") == "open" and _nest_last(conn, full):
         full = _full(conn, row["id"])
-    raised, fell = _nest_rise(conn, user, cur, full)
+    raised, fell = (None, None) if restore else _nest_rise(conn, user, cur, full)
     return {"task": full, "conflicts": conflicts, **({"raised": raised} if raised else {}), **({"fell": fell} if fell else {}),
-            **({"recurred": recurred} if recurred else {})}
+            **({"recurred": recurred} if recurred else {}), **({"reset": reset, "subtasks": subtasks} if reset else {})}
 
 
 def _status(status):

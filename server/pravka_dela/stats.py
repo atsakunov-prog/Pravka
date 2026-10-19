@@ -6,7 +6,9 @@
 - отменил ненужное — 2: чистка завала тоже работа;
 - разобрал предложение «Нового» сам (принял, поправил, отклонил) — 2.
 Заводить дела бесплатно: награда за планирование кормила бы построение систем вместо дела.
-Всё считается из самих дел и предложений, отдельно не копится — «Вернуть» снимает очки само.
+Выполнения — из книги выполнений (tasks.done_log, dela_0037, как журнал у Todoist): каждое выполнение и повтора (он
+остаётся открытым), и дела внутри, которое повтор снова открыл, — засчитано; «Вернуть» снимает очки само (база убирает
+строку). Отменённое и разобранное — из самих дел и предложений.
 
 Серия — дни подряд с хотя бы одним закрытым делом. Суббота серию не рвёт (в Шаббат манна не
 падает), а закрытое в субботу засчитывается. Сегодня без дел — серия жива до полуночи.
@@ -31,11 +33,11 @@ def _events(conn, user: str) -> list[dict]:
     """Каждое засчитанное действие: день, вид, очки и чем было дело."""
     return conn.execute(
         f"""
-        SELECT (t.completed_at {MSK})::date AS day, 'done' AS kind,
-               {DONE} + CASE WHEN t.focus_on = (t.completed_at {MSK})::date OR t.owed
-                                OR t.due_date <= (t.completed_at {MSK})::date THEN {PROMISED} ELSE 0 END AS pts,
-               t.project_id, t.source, t.due_date, (t.completed_at {MSK})::date AS at_day
-        FROM tasks.tasks t WHERE t.owner_id = %(u)s AND t.status = 'done' AND t.completed_at IS NOT NULL AND t.kind = 'task'
+        SELECT (l.at {MSK})::date AS day, 'done' AS kind,
+               {DONE} + CASE WHEN l.focus_on = (l.at {MSK})::date OR l.owed
+                                OR l.due_date <= (l.at {MSK})::date THEN {PROMISED} ELSE 0 END AS pts,
+               l.project_id, l.source, l.due_date, (l.at {MSK})::date AS at_day
+        FROM tasks.done_log l WHERE l.owner_id = %(u)s AND l.task_kind = 'task'
         UNION ALL
         SELECT (t.updated_at {MSK})::date, 'cancelled', {CANCEL}, t.project_id, t.source, NULL, NULL
         FROM tasks.tasks t WHERE t.owner_id = %(u)s AND t.status = 'cancelled' AND t.kind = 'task'
@@ -121,8 +123,8 @@ def view_productivity(conn, user, **_):
     today = conn.execute("SELECT crm.today() AS d").fetchone()["d"]
     rows = conn.execute(
         f"""
-        SELECT (t.completed_at {MSK})::date AS day, t.project_id, count(*) AS n
-        FROM tasks.tasks t WHERE t.owner_id = %s AND t.status = 'done' AND t.completed_at IS NOT NULL AND t.kind = 'task'
+        SELECT (l.at {MSK})::date AS day, l.project_id, count(*) AS n
+        FROM tasks.done_log l WHERE l.owner_id = %s AND l.task_kind = 'task'
         GROUP BY 1, 2 ORDER BY 1
         """,
         (user,),

@@ -208,13 +208,20 @@ export async function completeTask(t: Task, forever = false) {
   const res = await ops([{ op: 'task.done', id: t.id, ...(forever ? { forever: true } : {}) }]);
   const r = res[0];
   if (r?.recurred) {
-    // Повтор: «Задача выполнена», ниже «Следующий раз: …» (и сброшенные дела внутри, когда сервер их пришлёт — reset).
-    // «Отменить» возвращает срок, «Сейчас», напоминание и снова отмечает сброшенное. Счётчик раз сервер не отдаёт.
-    const back: Record<string, unknown> = { due_date: t.due_date, focus_on: t.focus_on ?? null };
+    // Повтор: «Задача выполнена», ниже «Следующий раз: …» и, если повтор снова открыл сделанное внутри (reset, как у
+    // Todoist), — «Выполнено и снова добавлено N подзадач». «Отменить» возвращает срок, «Сейчас», напоминание и счётчик
+    // раз (книга выполнений снимет этот раз), а сброшенное внутри — снова сделанным (restore: выполнение то же, без дубля).
+    const back: Record<string, unknown> = { due_date: t.due_date, focus_on: t.focus_on ?? null, done_count: t.done_count ?? 0 };
     if (t.remind_at) back.remind_at = t.remind_at;
     const reset: string[] = r.reset || [];
+    for (const id of reset) {
+      const x = S.tasks.get(id);
+      if (x) S.tasks.set(id, { ...x, status: 'open', completed_at: null }); // экран — сразу, синк подтвердит
+    }
+    if (reset.length) emit();
     const sub = [T.next(r.recurred, S.today), ...(reset.length ? [T.reset(reset.length, r.subtasks ?? reset.length)] : [])];
-    toast(T.done(), () => ops([{ op: 'task.set', id: t.id, set: back }, ...reset.map((id) => ({ op: 'task.set', id, set: { status: 'done' } }))]).catch(() => {}), false, sub);
+    toast(T.done(), () => ops([{ op: 'task.set', id: t.id, set: back },
+      ...reset.map((id) => ({ op: 'task.set', id, set: { status: 'done' }, restore: true }))]).catch(() => {}), false, sub);
   } else {
     toast(T.done(), () => ops([{ op: 'task.reopen', id: t.id }]).catch(() => {}));
   }

@@ -5,20 +5,23 @@ import { placeName } from '../lib.ts';
 import { useState } from 'react';
 import { plural } from '../dates.ts';
 import { PALETTE } from '../lib.ts';
-import { emit, op1, ops, S, toast, useStore } from '../store.ts';
+import { emit, op1, ops, S, syncSoon, toast, useStore } from '../store.ts';
 import type { Task } from '../types.ts';
 import { Icon, PrioFlag } from './icons.tsx';
 import { openPop } from './pop.tsx';
 import { LabelPicker, PriorityMenu, ProjectPicker, Scheduler } from './pickers.tsx';
 import { UI } from './state.ts';
 
-/** Выполнить выбранные: «N задач выполнено»; «Отменить» у обычного — снова открыто, у повтора — прежний срок. */
+/** Выполнить выбранные: «N задач выполнено»; «Отменить» у обычного — снова открыто, у повтора — прежний срок и счётчик,
+ *  а сброшенное повтором внутри — снова сделанным (restore, без дубля в книге выполнений). */
 function doneAll(ts: Task[]) {
   ops(ts.map((t) => ({ op: 'task.done', id: t.id }))).then((res) => {
-    const back = ts.map((t, i) => (res[i]?.recurred
-      ? { op: 'task.set', id: t.id, set: { due_date: t.due_date, focus_on: t.focus_on ?? null, ...(t.remind_at ? { remind_at: t.remind_at } : {}) } }
-      : { op: 'task.reopen', id: t.id }));
+    const back = ts.flatMap((t, i) => (res[i]?.recurred
+      ? [{ op: 'task.set', id: t.id, set: { due_date: t.due_date, focus_on: t.focus_on ?? null, done_count: t.done_count ?? 0, ...(t.remind_at ? { remind_at: t.remind_at } : {}) } },
+        ...((res[i].reset || []) as string[]).map((id) => ({ op: 'task.set', id, set: { status: 'done' }, restore: true }))]
+      : [{ op: 'task.reopen', id: t.id }]));
     toast(T.done(ts.length), () => ops(back).catch(() => {}));
+    syncSoon().catch(() => {}); // сброшенное повтором внутри — открыть на экране
   }).catch(() => {});
 }
 

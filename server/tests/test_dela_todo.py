@@ -168,3 +168,50 @@ def test_project_color_from_palette(dela):
     assert row["color"] == "berry_red"
     assert "палитры" in bad(dela, "sasha", {"op": "project.set", "id": str(alpha), "set": {"color": "#ff0000"}})
     assert one(dela, "sasha", {"op": "project.set", "id": str(alpha), "set": {"color": None}})["row"]["color"] is None
+
+
+def test_recurring_resets_done_inside_like_todoist_and_points_stay(dela):
+    """Повтор выполнен — сделанные дела внутри (и вглубь) снова открыты, сроки их не двигаются; выполнение остаётся в
+    книге выполнений (dela_0037): очки за них не пропадают. «Отменить» возвращает и срок, и сделанное внутри — без
+    второй строки в книге. Слово Саши 19.10: «давай как тудуист все делать»."""
+    from pravka_dela import stats  # noqa: F401  вид stats встаёт при импорте
+    today = db_today(dela)
+    mk = lambda **t: one(dela, "sasha", {"op": "task.create", "task": t})["task"]  # noqa: E731
+    p = mk(title="Утренняя рутина", due_date=today.isoformat(), due_rule="каждый день", recur={"every": "day"})
+    a = mk(title="Зарядка", why_id=str(p["id"]), due_date=today.isoformat())
+    b = mk(title="Душ", why_id=str(p["id"]))
+    g = mk(title="Растяжка", why_id=str(a["id"]))
+    for x in (a, g):
+        one(dela, "sasha", {"op": "task.done", "id": str(x["id"])})
+    def when():
+        with store.db.session(dela, "sasha", "t") as conn:
+            rows = conn.execute("SELECT id, completed_at FROM tasks.tasks WHERE id = ANY(%s)", ([a["id"], g["id"]],)).fetchall()
+        return {str(r["id"]): r["completed_at"] for r in rows}
+
+    done_at = when()
+    pts = lambda: store.view(dela, "sasha", "stats")["days"][-1]  # noqa: E731
+    assert pts()["done"] == 2
+    res = one(dela, "sasha", {"op": "task.done", "id": str(p["id"])})
+    assert res["recurred"] == (today + dt.timedelta(days=1)).isoformat()
+    assert sorted(res["reset"]) == sorted([str(a["id"]), str(g["id"])]) and res["subtasks"] == 3
+    with store.db.session(dela, "sasha", "t") as conn:
+        st = {str(r["id"]): r for r in conn.execute("SELECT id, status, due_date, completed_at FROM tasks.tasks WHERE id = ANY(%s)",
+                                                     ([a["id"], b["id"], g["id"]],)).fetchall()}
+    assert all(r["status"] == "open" and r["completed_at"] is None for r in st.values())
+    assert st[str(a["id"])]["due_date"] == today  # срок не двигается, как у Todoist
+    assert pts()["done"] == 3  # два дела внутри и сам повтор — очки на месте
+    # «Отменить»: срок и счётчик родителя назад, дела внутри — снова сделаны, книга без дублей
+    undo = [{"op": "task.set", "id": str(p["id"]), "set": {"due_date": today.isoformat(), "focus_on": None, "done_count": 0}}]
+    undo += [{"op": "task.set", "id": i, "set": {"status": "done"}, "restore": True} for i in res["reset"]]
+    out = store.apply_ops(dela, "sasha", undo, "web")["results"]
+    assert all(r["ok"] for r in out), out
+    assert out[0]["task"]["due_date"] == today.isoformat() and out[0]["task"]["done_count"] == 0
+    assert pts()["done"] == 2  # минус выполнение повтора, дела внутри — те же два
+    with store.db.session(dela, "sasha", "t") as conn:
+        back = conn.execute("SELECT count(*) AS n FROM tasks.tasks WHERE id = ANY(%s) AND status = 'done'", ([a["id"], g["id"]],)).fetchone()["n"]
+    assert back == 2 and when() == done_at  # время выполнения — прежнее, из книги
+    # счётчик вверх руками — нельзя
+    assert "только вниз" in bad(dela, "sasha", {"op": "task.set", "id": str(p["id"]), "set": {"done_count": 5}})
+    # «Вернуть» по-прежнему снимает очки
+    one(dela, "sasha", {"op": "task.reopen", "id": str(a["id"])})
+    assert pts()["done"] == 1

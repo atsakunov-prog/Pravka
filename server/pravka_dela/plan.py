@@ -316,10 +316,10 @@ def _pools(conn, owner: str, today: dt.date, for_date: dt.date, cfg: dict, now_r
     # нет (драфт для договора клиенту), — не резерв Круга, хоть направление оно и наследует (поезд 16.10.2026).
     toward = krug.toward_goal(links if links is not None else _links(conn, owner))
     steps = [r for r in steps if str(r["id"]) in toward]
-    last = {r["dir"]: r["last"] for r in conn.execute(
-        "SELECT t.dirs[1] AS dir, max((t.completed_at AT TIME ZONE 'Europe/Moscow')::date) AS last "
-        "FROM tasks.v_tasks t WHERE t.owner_id = %(o)s AND t.status = 'done' AND cardinality(t.dirs) > 0 "
-        "AND t.completed_at > %(today)s::date - 400 GROUP BY 1", p).fetchall()}
+    last = {r["dir"]: r["last"] for r in conn.execute(  # по книге выполнений (dela_0037): и повторы, и сброшенное
+        "SELECT t.dirs[1] AS dir, max((l.at AT TIME ZONE 'Europe/Moscow')::date) AS last "
+        "FROM tasks.done_log l JOIN tasks.v_tasks t ON t.id = l.task_id WHERE l.owner_id = %(o)s AND cardinality(t.dirs) > 0 "
+        "AND l.at > %(today)s::date - 400 GROUP BY 1", p).fetchall()}
     names = {d["key"]: d.get("name") or d["key"] for d in krug.directions(conn, owner)}
     pools["krug"] = []
     for r in steps:

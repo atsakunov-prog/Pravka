@@ -115,9 +115,10 @@ def movement(conn, user: str, today: dt.date) -> dict[str, dict]:
     сдвинулась.
     """
     since = today - dt.timedelta(days=MOVE_DAYS - 1)
+    # По книге выполнений (dela_0037): каждое выполнение — и повтора, и дела внутри, которое повтор снова открыл.
     rows = conn.execute(
-        "SELECT t.id, t.dirs, t.goal FROM tasks.v_tasks t WHERE t.owner_id = %s AND t.status = 'done' "
-        "AND (t.completed_at AT TIME ZONE 'Europe/Moscow')::date >= %s", (user, since)).fetchall()
+        "SELECT t.id, t.dirs, t.goal FROM tasks.done_log l JOIN tasks.v_tasks t ON t.id = l.task_id "
+        "WHERE l.owner_id = %s AND (l.at AT TIME ZONE 'Europe/Moscow')::date >= %s", (user, since)).fetchall()
     out: dict[str, dict] = {}
     for r in rows:
         if not r["dirs"]:
