@@ -377,6 +377,19 @@ svg { flex: none; }
 .pstat-week i { display: block; width: 100%; max-width: 18px; min-height: 2px; border-radius: 3px; background: var(--accent); }
 .pstat-week .today b { color: var(--accent-text); }
 .tb-btn.on { color: var(--accent-text); }
+/* «Продуктивность»: цели с сериями, столбики кусками проектов */
+.dialog.prod { width: 520px; }
+.dialog.prod h3 { display: flex; align-items: center; }
+.prod-goals { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.prod-h { font-size: 14px; font-weight: 700; color: var(--fg); margin-top: 4px; }
+.prod-num { font-size: 28px; font-weight: 700; } .prod-num span { font-size: 16px; color: var(--fg3); font-weight: 400; }
+.prod-bars { display: flex; gap: 8px; align-items: flex-end; height: 130px; }
+.prod-bars > div { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 3px; font-size: 11px; color: var(--fg2); min-width: 0; }
+.prod-bars .stack { width: 100%; max-width: 30px; min-height: 2px; display: flex; flex-direction: column-reverse; border-radius: 4px; overflow: hidden; background: var(--div); }
+.prod-bars .stack i { display: block; width: 100%; }
+.prod-bars b { font-weight: 400; white-space: nowrap; }
+.prod-edit { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--div); padding-top: 10px; }
+@media (max-width: 750px) { .prod-goals { grid-template-columns: 1fr; } }
 @media (max-width: 750px) { .pstat { grid-template-columns: 1fr; gap: 14px; } }
 /* «Быстрое добавление»: списки чипов, перетаскиваются */
 .qs-zone { border: 1px dashed var(--border); border-radius: 8px; padding: 4px; min-height: 40px; }

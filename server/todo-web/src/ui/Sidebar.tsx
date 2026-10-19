@@ -174,6 +174,7 @@ function MeMenu({ close }: { close: () => void }) {
   return (
     <div>
       <div className="mh">{S.me?.name}</div>
+      <button className="mi" onClick={() => { close(); openDialog('prod'); }}><Icon name="target" size={18} />Продуктивность<span className="r">O P</span></button>
       <button className="mi" onClick={() => { close(); go('done'); }}><Icon name="done" size={18} />Выполнено</button>
       <div className="msep" />
       <div className="mh">Тема</div>

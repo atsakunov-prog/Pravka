@@ -31,7 +31,7 @@ export function taskAct(k: string, shift: boolean): TaskAct | null {
   return null;
 }
 
-export type GlobalAct = 'quick' | 'dictate' | 'search' | 'side' | 'go' | 'undo' | 'next' | 'prev' | 'status';
+export type GlobalAct = 'quick' | 'dictate' | 'search' | 'side' | 'go' | 'open' | 'undo' | 'next' | 'prev' | 'status';
 
 /** Действие без задачи (или если у задачи в фокусе такой клавиши нет). */
 export function globalAct(k: string, shift: boolean): GlobalAct | null {
@@ -40,6 +40,7 @@ export function globalAct(k: string, shift: boolean): GlobalAct | null {
   if (k === '/' || k === 'f') return 'search';
   if (k === 'm') return 'side';
   if (k === 'g') return 'go';
+  if (k === 'o') return 'open'; // O и вторая клавиша — окна (O P — «Продуктивность»)
   if (k === 'z') return 'undo';
   if (k === 'i') return 'status'; // статус проекта (Insights)
   if (k === 'arrowdown' || k === 'j') return 'next';
@@ -49,6 +50,9 @@ export function globalAct(k: string, shift: boolean): GlobalAct | null {
 
 /** Вторая клавиша после G: G T — «Сегодня», G I — «Входящие», G U — «Предстоящее», G V — «Фильтры и метки»,
  *  G C — «Выполнено» (у нас ещё G D), G N и G H — «Сейчас». */
+/** Окна после O, как у Todoist: O P — «Продуктивность». */
+export const OPEN: Record<string, string> = { p: 'prod' };
+
 export const GO: Record<string, string> = {
   i: 'inbox', t: 'today', u: 'upcoming', v: 'filters', c: 'done', d: 'done', n: 'now', h: 'now',
 };

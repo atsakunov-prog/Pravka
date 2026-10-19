@@ -114,4 +114,28 @@ def view_stats(conn, user, **_):
     }
 
 
-store.VIEWS.update({"stats": view_stats})
+def view_productivity(conn, user, **_):
+    """«Продуктивность», как у Todoist (опись поведения Todoist §12.5): выполненное по дням и проектам — всё, с первого
+    выполнения. Цели дня и недели, серии, выходные и отпуск — личные настройки, их считает веб (todo-web/src/prod.ts):
+    так серия пересчитывается сразу, как только человек поменял цель. Карма у Todoist своя, у Дел — очки (вид stats)."""
+    today = conn.execute("SELECT crm.today() AS d").fetchone()["d"]
+    rows = conn.execute(
+        f"""
+        SELECT (t.completed_at {MSK})::date AS day, t.project_id, count(*) AS n
+        FROM tasks.tasks t WHERE t.owner_id = %s AND t.status = 'done' AND t.completed_at IS NOT NULL AND t.kind = 'task'
+        GROUP BY 1, 2 ORDER BY 1
+        """,
+        (user,),
+    ).fetchall()
+    days: dict[dt.date, dict[str, int]] = defaultdict(dict)
+    for r in rows:
+        days[r["day"]][str(r["project_id"]) if r["project_id"] else ""] = r["n"]
+    return {
+        "today": today,
+        "days": [{"day": d, "by_project": p} for d, p in sorted(days.items())],
+        "total": sum(r["n"] for r in rows),
+        "since": min(days) if days else None,
+    }
+
+
+store.VIEWS.update({"stats": view_stats, "productivity": view_productivity})

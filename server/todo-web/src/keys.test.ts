@@ -1,7 +1,7 @@
 // Горячие клавиши в обеих раскладках — пары из таблицы клавиш Todoist (19.10): node --experimental-strip-types --test.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { GO, globalAct, keyName, taskAct } from './keys.ts';
+import { GO, globalAct, keyName, OPEN, taskAct } from './keys.ts';
 
 test('русская буква — латинская на той же клавише', () => {
   const pairs: [string, string][] = [['й', 'q'], ['е', 't'], ['у', 'e'], ['н', 'y'], ['д', 'l'], ['м', 'v'], ['ч', 'x'], ['о', 'j'],
@@ -48,4 +48,7 @@ test('общие клавиши и переходы G', () => {
     assert.equal(GO[keyName(en)], view, 'g ' + en);
     assert.equal(GO[keyName(ru)], view, 'п ' + ru);
   }
+  // O P = Щ З — «Продуктивность»
+  assert.equal(globalAct(keyName('щ'), false), 'open');
+  assert.equal(OPEN[keyName('з')], 'prod');
 });

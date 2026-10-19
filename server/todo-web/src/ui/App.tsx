@@ -8,8 +8,9 @@ import { TaskMenu } from './TaskMenu.tsx';
 import { matchCommands, type Cmd } from '../commands.ts';
 import { setDeadline, setDue, setPlace, setPrio } from './acts.ts';
 import { QuickSettingsDialog } from './QuickSettings.tsx';
+import { ProductivityDialog } from './Productivity.tsx';
 import type { Task } from '../types.ts';
-import { GO, globalAct, keyName, taskAct } from '../keys.ts';
+import { GO, globalAct, keyName, OPEN, taskAct } from '../keys.ts';
 import { search } from '../views.ts';
 import { BulkBar, ProjectDialog } from './Bulk.tsx';
 import { BugLine } from './BugLine.tsx';
@@ -74,6 +75,7 @@ function SearchModal({ close }: { close: () => void }) {
     else if (c.id === 'add:filter') openDialog('filter');
     else if (c.id === 'view:side') toggleSide();
     else if (c.id === 'set:quick') openDialog('quick');
+    else if (c.id === 'win:prod') openDialog('prod');
   };
   // Плоский список для ↑↓ и Enter: проекты, люди, дела, потом команды.
   const items: { key: string; run: () => void }[] = [
@@ -178,6 +180,7 @@ function Body() {
 function useKeys(setSearch: (v: boolean) => void) {
   useEffect(() => {
     let g = false;
+    let o = false;
     let gTimer = 0;
     const undo = (e: KeyboardEvent) => {
       const last = [...toasts].reverse().find((t) => t.undo);
@@ -195,6 +198,11 @@ function useKeys(setSearch: (v: boolean) => void) {
       if (g) {
         g = false;
         if (GO[k]) { e.preventDefault(); go(GO[k]); }
+        return;
+      }
+      if (o) {
+        o = false;
+        if (OPEN[k]) { e.preventDefault(); openDialog(OPEN[k]); }
         return;
       }
       if (k === 'escape') {
@@ -265,6 +273,7 @@ function useKeys(setSearch: (v: boolean) => void) {
         case 'undo': undo(e); break;
         case 'status': if (location.hash.startsWith('#/project/')) { e.preventDefault(); togglePstat(); } break;
         case 'go': g = true; clearTimeout(gTimer); gTimer = window.setTimeout(() => (g = false), 1200); break;
+        case 'open': o = true; clearTimeout(gTimer); gTimer = window.setTimeout(() => (o = false), 1200); break;
       }
     };
     addEventListener('keydown', on);
@@ -353,6 +362,7 @@ export function App() {
       {UI.dialog?.kind === 'filter' ? <FilterDialog f={UI.dialog.data} close={closeDialog} /> : null}
       {UI.dialog?.kind === 'project' ? <ProjectDialog close={closeDialog} /> : null}
       {UI.dialog?.kind === 'quick' ? <QuickSettingsDialog close={closeDialog} /> : null}
+      {UI.dialog?.kind === 'prod' ? <ProductivityDialog close={closeDialog} /> : null}
       {UI.dictate ? <Dictate close={() => openDictate(false)} /> : null}
       <BulkBar />
       <PopHost />
