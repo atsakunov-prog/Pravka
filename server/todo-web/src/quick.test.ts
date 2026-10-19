@@ -109,6 +109,98 @@ test('фразы владельца 19.10: завтра, послезавтра,
   assert.equal(d('через 2 недели'), '2026-11-02');
 });
 
+// Ожидания — из разбора кода Todoist 19.10 (опись todoist-behavior.md, раздел 3). Где модель повтора фразу не держит —
+// фраза остаётся в названии целиком, без срока: не узнать лучше, чем узнать неправильно.
+test('восемь ошибок 19.10: теперь верно или остаётся в названии', () => {
+  const none = (s: string) => {
+    const p = q(s);
+    assert.deepEqual([p.due_date, p.recur, p.title], [undefined, undefined, s], s);
+  };
+  none('Отчёт каждый 3 понедельник'); // у Todoist — 3-й пн месяца; было «каждое 3-е число»
+  none('Отчёт каждый последний пн'); // последний пн месяца; было «разово сегодня»
+  const a = q('Взносы каждое 2 апреля'); // раз в год с ближайшего 2 апреля: сервер шагает год от даты срока
+  assert.deepEqual([a.recur, a.due_date, a.title], [{ every: 'year', n: 1 }, '2027-04-02', 'Взносы']);
+  const b = q('Созвон по будням в 10');
+  assert.deepEqual([b.recur, b.due_time, b.due_rule, b.title], [{ every: 'workday', n: 1 }, '10:00', 'по будням в 10', 'Созвон']);
+  const c = q('Уборка каждые 2 недели по пт');
+  assert.deepEqual([c.recur, c.due_date, c.title], [{ every: 'week', n: 2, days: [5] }, '2026-10-23', 'Уборка']);
+  const d = q('Купить 3 дня до 8 марта'); // разовая дата со сдвигом
+  assert.deepEqual([d.due_date, d.recur, d.title], ['2027-03-05', null, 'Купить']);
+  const e = q('Курс каждый день в течение 3 недель');
+  assert.deepEqual([e.recur, e.due_date, e.title], [{ every: 'day', n: 1, until: '2026-11-09' }, '2026-10-19', 'Курс']);
+  const f = q('Курс каждый день с 5 по 10 ноября');
+  assert.deepEqual([f.recur, f.due_date, f.title], [{ every: 'day', n: 1, until: '2026-11-10' }, '2026-11-05', 'Курс']);
+});
+
+test('переписывания перед разбором', () => {
+  const d = (s: string) => q('Отчёт ' + s).due_date;
+  const r = (s: string) => q('Отчёт ' + s).recur;
+  // числа словами, «несколько», «пару»
+  assert.equal(d('через три дня'), '2026-10-22');
+  assert.equal(d('через две недели'), '2026-11-02');
+  assert.equal(d('через несколько дней'), '2026-10-22');
+  assert.equal(d('через пару дней'), '2026-10-21');
+  assert.equal(q('Встреча в два часа').title, 'Встреча в два часа'); // 2:00 или 14:00 — не гадаем
+  // будни и дни недели
+  assert.deepEqual(r('пн-пт'), { every: 'workday', n: 1 });
+  assert.deepEqual(r('с понедельника по пятницу'), { every: 'workday', n: 1 });
+  assert.deepEqual(r('в будние дни'), { every: 'workday', n: 1 });
+  assert.deepEqual([r('в 10 по будням'), q('Отчёт в 10 по будням').due_time], [{ every: 'workday', n: 1 }, '10:00']);
+  assert.deepEqual(r('по понедельникам и четвергам'), { every: 'week', n: 1, days: [1, 4] });
+  assert.deepEqual(r('по выходным'), { every: 'week', n: 1, days: [6, 7] });
+  assert.deepEqual(r('каждые 2 пятницы'), { every: 'week', n: 2, days: [5] });
+  // частота
+  assert.deepEqual(r('раз в месяц'), { every: 'month', n: 1 });
+  assert.deepEqual(r('раз в две недели'), { every: 'week', n: 2 });
+  assert.deepEqual(r('дважды в месяц'), { every: 'day', n: 15 });
+  assert.deepEqual(r('после 3 недель'), { every: 'week', n: 3, from: 'done' });
+  assert.equal(q('Стрижка после 3 недель').due_rule, 'после 3 недель');
+  // начало, середина, конец; когда-нибудь; следующий месяц; число месяца
+  assert.equal(d('в начале ноября'), '2026-11-01');
+  assert.equal(d('середина ноября'), '2026-11-15');
+  assert.equal(d('к середине ноября'), '2026-11-15');
+  assert.equal(d('в конце ноября'), '2026-11-30');
+  assert.equal(d('в конце февраля'), '2027-02-28');
+  assert.equal(d('в конце месяца'), '2026-10-31');
+  assert.equal(d('когда-нибудь'), '2026-12-19'); // +2 месяца, как у Todoist
+  assert.equal(d('в следующем месяце'), '2026-11-19'); // +1 месяц
+  assert.equal(d('25 число'), '2026-10-25');
+  assert.equal(d('до 5 числа'), '2026-11-05');
+  // праздники
+  assert.equal(d('в день победы'), '2027-05-09');
+  assert.equal(d('к новому году'), '2027-01-01');
+  assert.equal(d('на рождество'), '2027-01-07');
+  assert.equal(d('в канун нового года'), '2026-12-31');
+  assert.equal(d('ко дню знаний'), '2027-09-01');
+  assert.equal(q('Поздравить с новым годом').title, 'Поздравить с новым годом'); // поздравление — не срок
+  // часы — от «сейчас» (12:00)
+  assert.deepEqual([q('Перезвонить через час').due_date, q('Перезвонить через час').due_time], ['2026-10-19', '13:00']);
+  assert.equal(q('Перезвонить через полчаса').due_time, '12:30');
+  // подсветка и название — по исходным словам
+  const p = q('Созвон по будням в 10 #Бета');
+  assert.deepEqual(p.tokens.filter((t) => t.kind === 'date').map((t) => 'Созвон по будням в 10 #Бета'.slice(t.start, t.end)), ['по будням в 10']);
+  assert.equal(parseWhen('по будням', ctx)?.recur?.every, 'workday');
+  assert.equal(parseWhen('в день победы', ctx)?.due_date, '2027-05-09');
+});
+
+test('сознательно не узнаём: N-й и последний день недели, разовый промежуток', () => {
+  for (const s of ['Отчёт каждый третий понедельник', 'Отчёт каждый 3-й пн месяца', 'Отчёт в последнюю пятницу',
+    'Отчёт каждый последний пн в 10', 'Отпуск с 5 по 10 ноября']) {
+    const p = q(s);
+    assert.deepEqual([p.due_date, p.due_time, p.title], [undefined, undefined, s], s);
+  }
+  assert.equal(parseWhen('каждый последний пн', ctx), null);
+  // а время рядом с обычным днём недели — по-прежнему время
+  assert.deepEqual([q('Созвон в 10 пн').due_date, q('Созвон в 10 пн').due_time], ['2026-10-19', '10:00']);
+});
+
+test('«следующий X» — как в /t, а не как у Todoist (решение за владельцем, опись раздел 3)', () => {
+  const thu = { ...ctx, today: '2026-10-22' }, sun = { ...ctx, today: '2026-10-25' };
+  assert.equal(parseQuick('Созвон в следующий вторник', thu).due_date, '2026-10-27'); // Todoist: 03.11
+  assert.equal(parseQuick('Созвон в следующий понедельник', sun).due_date, '2026-10-26'); // Todoist: 02.11
+  assert.equal(parseQuick('Дрова на выходных', sun).due_date, '2026-10-25'); // Todoist: 31.10
+});
+
 test('напоминание: !время и !место', () => {
   const c = { ...ctx, places: ['дом', 'Летово'] };
   const a = parseQuick('Отправить счёт завтра !15:00', c);
