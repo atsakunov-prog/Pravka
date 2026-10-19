@@ -255,6 +255,18 @@ def test_todoist_api_export_feeds_import(tmp_path):
     assert loaded["projects"][0]["inbox"] and loaded["comments"][0]["content"] == "созвонились"
 
 
+def test_todo_page_and_its_offline_worker(dela):
+    """/t без сети (19.10.2026): воркер каркаса — тем же путём /t с ?sw=1 (закрытый список путей сайта-посредника), скриптом
+    и без кэша — браузер сверяет его сам; своего адреса в static у воркера нет."""
+    client = TestClient(api.build(Config(db_url=dela, public_url="http://test")))
+    page = client.get("/t")
+    assert page.status_code == 200 and page.headers["content-type"].startswith("text/html") and "/static/todo.js" in page.text
+    sw = client.get("/t?sw=1")
+    assert sw.status_code == 200 and sw.headers["content-type"].startswith("text/javascript")
+    assert sw.headers["cache-control"] == "no-cache" and "dela-t-" in sw.text and "'/static/todo.js'" in sw.text
+    assert client.get("/static/todo-sw.js").status_code == 404
+
+
 def test_web_invite_cookie_and_forgery_guard(dela):
     client = TestClient(api.build(Config(db_url=dela, public_url="http://test")))
     assert "Дела" in client.get("/").text and client.get("/static/app.js").status_code == 200

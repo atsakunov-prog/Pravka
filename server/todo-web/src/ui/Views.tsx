@@ -1,5 +1,6 @@
 // Виды: Сейчас, Входящие, Сегодня, Предстоящее, проект (разделы, сделки, доска), сделка, метка, фильтр, человек,
 // дерево целей, выполненные.
+import { uuid } from '../api.ts';
 import { CalendarView } from './Calendar.tsx';
 import { LEVEL_NAME, projStatus } from '../projstatus.ts';
 import type { Chain } from '../order.ts';
@@ -45,6 +46,7 @@ export function Page({ title, icon, sub, actions, children, crumbs, wide }: {
       <div className={'topbar' + (stuck ? ' stuck' : '')}>
         <MobileMenuButton />
         <div className="crumbs">{stuck ? <span className="tb-title">{title}</span> : crumbs}</div>
+        <NetPill />
         <button className="icon-btn m-only" onClick={() => openDictate()} aria-label="Надиктовать задачи"><Icon name="mic" size={22} /></button>
         {actions}
       </div>
@@ -54,6 +56,21 @@ export function Page({ title, icon, sub, actions, children, crumbs, wide }: {
         {children}
       </div>
     </div>
+  );
+}
+
+/** Сеть в шапке: «Нет сети · 3 правки ждут», при сети с очередью — «Отправляю 3…»; всё ушло — гаснет. */
+function NetPill() {
+  useStore();
+  const n = S.queue;
+  if (!S.offline && !n) return null;
+  const waits = n ? plural(n, 'правка ждёт', 'правки ждут', 'правок ждут') : '';
+  const text = S.offline ? 'Нет сети' + (n ? ' · ' + waits : '') : `Отправляю ${n}…`;
+  return (
+    <span className={'net-pill' + (S.offline ? ' off' : '')} role="status"
+      title={S.offline ? 'Дела — из копии в браузере; правки уйдут сами, когда появится сеть' : 'Правки уходят на сервер'}>
+      <Icon name={S.offline ? 'cloudOff' : 'sync'} size={14} />{text}
+    </span>
   );
 }
 
@@ -296,7 +313,7 @@ function AddSection({ pid, pos }: { pid: Id; pos: number }) {
   const [name, setName] = useState('');
   if (!on) return <div className="add-sect" onClick={() => setOn(true)}><span>Добавить раздел</span></div>;
   const save = () => {
-    if (name.trim()) op1({ op: 'section.create', data: { project_id: pid, name: name.trim(), pos } }).catch(() => {});
+    if (name.trim()) op1({ op: 'section.create', data: { id: uuid(), project_id: pid, name: name.trim(), pos } }).catch(() => {});
     setOn(false);
     setName('');
   };

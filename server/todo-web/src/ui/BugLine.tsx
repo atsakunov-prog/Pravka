@@ -47,7 +47,7 @@ export function BugLine() {
         snapshot: snapshot(), actions: trail.slice(-30) } });
       setText('');
       log('debug', said);
-      toast(`Записка №${r.note?.num ?? '?'} — в очереди, с экраном`);
+      toast(r.queued ? 'Записка с экраном уйдёт, когда появится сеть' : `Записка №${r.note?.num ?? '?'} — в очереди, с экраном`);
     } catch {
       /* тост ошибки уже показан */
     } finally {

@@ -1,8 +1,13 @@
-// Память веба: всё, что отдаёт /api/sync, по номеру изменения. Правки — операциями /api/ops (как у телефона и Claude):
-// сначала в памяти (экран отзывается сразу, как у Todoist), потом на сервер; отказ сервера — откат синком и подсказка.
+// Память веба: всё, что отдаёт /api/sync, по номеру изменения, и её копия в браузере (IndexedDB) — открывается и без
+// сети. Правки — операциями /api/ops (как у телефона и Claude): сначала на экран и в очередь (экран отзывается сразу,
+// как у Todoist), потом на сервер, когда есть сеть; отказ сервера — откат синком и тост.
 
 import { useSyncExternalStore } from 'react';
-import { ApiError, api, uuid } from './api.ts';
+import { ApiError, api, inApp, uuid } from './api.ts';
+import { cacheLoad, cacheSave, type Mem, type Meta } from './cache.ts';
+import { cacheDrop, idbOpen, idbQueue } from './idb.ts';
+import { applyEffects, effectsOf, mskToday, type Maps, type Op } from './local.ts';
+import { flushOnce, memStore, unreachable, type Flushed, type Queued, type QueueStore, type Result } from './outbox.ts';
 import { T } from './toastText.ts';
 import type { Comment, Deal, Direction, Id, Me, Person, Project, Section, Suggestion, Task, TodoSettings } from './types.ts';
 
@@ -25,6 +30,7 @@ export const S = {
   dirs: [] as Direction[],
   ready: false,
   offline: false,
+  queue: 0, // правок ждут отправки (шапка: «Нет сети · 3 правки ждут»)
   version: 0,
   debug: null as null | { on: boolean; new: number; last: number },
 };
@@ -86,6 +92,96 @@ export function dropToast(id: number) {
 }
 export const fail = (e: unknown) => toast(e instanceof Error ? e.message : String(e), undefined, true);
 
+// ── База в браузере и очередь правок (19.10.2026, как у Todoist) ─────────
+// Копия синка лежит в IndexedDB (cache.ts): открыл — экран сразу из неё, потом догон «после seq». Правка сначала
+// ложится в очередь (outbox.ts) и сразу меняет экран (local.ts), потом уходит, когда есть сеть: при открытии, при
+// возвращении на вкладку, по событию online, после каждой правки и раз в минуту, пока страница открыта.
+
+let db: IDBDatabase | null = null;
+let box: QueueStore = memStore();
+let pending: Queued[] = []; // правки этой вкладки, что ещё не ушли: их след — поверх каждого синка
+const awaited = new Set<string>(); // op_id, ответа на которые ждёт вызвавший ops() — отказ он покажет сам
+const got = new Map<string, Result>();
+const maps = (): Maps => ({ tasks: S.tasks, sections: S.sections, projects: S.projects, comments: S.comments });
+const reapply = () => {
+  for (const q of pending) if (q.fx) applyEffects(maps(), q.fx);
+};
+
+const dirty = new Set<string>();
+let saveT: ReturnType<typeof setTimeout> | null = null;
+/** Сохранить копию через секунду (поменялись names); saveNow — сразу (вкладку прячут, телефон может её закрыть). */
+export function saveSoon(...names: string[]) {
+  names.forEach((n) => dirty.add(n));
+  if (!saveT) saveT = setTimeout(saveNow, 1000);
+}
+export function saveNow() {
+  if (saveT) clearTimeout(saveT);
+  saveT = null;
+  if (!db || !S.me) return;
+  const names = [...dirty];
+  dirty.clear();
+  cacheSave(db, S as unknown as Mem, names).catch((e) => log('error', 'копия в браузере не легла: ' + String(e)));
+}
+const ALL = ['tasks', 'projects', 'deals', 'people', 'orgs', 'sections', 'sugs', 'comments', 'users'];
+
+/** Открытие страницы: копия из браузера — на экран сразу, потом вход и догон. Ответ — текст для экрана входа или ''. */
+export async function boot(): Promise<string> {
+  db = await idbOpen();
+  if (db) box = idbQueue(db);
+  let cached: Meta | null = null;
+  if (db) {
+    try {
+      cached = await cacheLoad(db, S as unknown as Mem);
+    } catch (e) {
+      log('error', 'копия в браузере не прочиталась: ' + String(e));
+    }
+  }
+  if (cached) {
+    pending = await box.all(cached.user).catch(() => []);
+    reapply();
+    if (S.today < mskToday()) S.today = mskToday(); // копия вчерашняя, а сервер без сети не скажет
+    S.queue = pending.length;
+    S.offline = !navigator.onLine;
+    S.ready = true;
+    log('cache', `копия от ${cached.at}, seq ${cached.seq}, в очереди ${pending.length}`);
+    emit();
+  }
+  try {
+    const me = await api<Me>('/api/me');
+    const changed = !!cached && me.user !== cached.user;
+    if (changed) {
+      for (const m of [S.tasks, S.projects, S.deals, S.people, S.orgs, S.sections, S.sugs, S.comments, S.users, S.krugProj]) m.clear();
+      pending = await box.all(me.user).catch(() => []);
+    }
+    S.me = me;
+    await sync(!cached || changed);
+    refresh();
+    return '';
+  } catch (e) {
+    const st = e instanceof ApiError ? e.status : -1;
+    if (cached && unreachable(st)) {
+      S.offline = true; // без сети: работаем с копией, правки — в очередь
+      emit();
+      return '';
+    }
+    if (st === 401) {
+      // Вход кончился — копию из браузера долой (очередь остаётся: уйдёт, когда этот человек войдёт снова).
+      if (db && cached) await cacheDrop(db, cached.user).catch(() => {});
+      return inApp() ? 'Правка не подключена к Делам: Настройки → Дела → подключить по QR с компа.' : 'Вход — по ссылке-приглашению. Открой её на этом устройстве один раз.';
+    }
+    if (cached) {
+      fail(e);
+      return '';
+    }
+    return 'Не открылось: ' + (e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** Отправить очередь и догнать сервер — при возвращении на вкладку, по online и раз в минуту. */
+export function refresh(): Promise<void> {
+  return pump().then(() => syncSoon()).catch(() => {});
+}
+
 // ── Синк ─────────────────────────────────────────────────────────────────
 
 export async function sync(full = false): Promise<void> {
@@ -115,6 +211,10 @@ export async function sync(full = false): Promise<void> {
   S.today = d.today;
   S.offline = false;
   S.ready = true;
+  reapply(); // правки, что ещё не ушли, — поверх того, что прислал сервер
+  const names: Record<string, unknown[]> = { tasks: d.tasks, projects: d.projects, deals: d.deals, people: d.people, orgs: d.orgs,
+    sections: d.sections, sugs: d.suggestions, comments: d.comments, users: d.users };
+  saveSoon(...(d.full ? ALL : Object.keys(names).filter((k) => names[k]?.length)));
   emit();
 }
 
@@ -123,7 +223,7 @@ export function syncSoon(full = false): Promise<void> {
   if (!syncing) {
     syncing = sync(full)
       .catch((e) => {
-        if (e instanceof ApiError && e.status === 0) {
+        if (e instanceof ApiError && unreachable(e.status)) {
           S.offline = true;
           emit();
         } else throw e;
@@ -137,53 +237,128 @@ export function syncSoon(full = false): Promise<void> {
 
 // ── Правки ───────────────────────────────────────────────────────────────
 
-export type Op = Record<string, any> & { op: string };
+export type { Op };
 
-const OPEN_FIELDS = ['status', 'completed_at'];
-
-/** Правка дела в памяти — до ответа сервера: экран отзывается сразу. */
-function optimistic(o: Op) {
-  if (o.op === 'task.create' && o.task?.id) {
-    const t = o.task;
-    const now = new Date().toISOString();
-    S.tasks.set(t.id, {
-      num: 0, notes: null, project_id: null, deal_id: null, owner_id: S.me?.user || '', ball: 'mine', person_id: null,
-      requested_by: null, due_date: null, due_time: null, estimate_min: null, focus_on: null, labels: [], status: 'open',
-      source: 'web', source_ref: null, created_by: S.me?.user || '', created_at: now, updated_at: now, completed_at: null,
-      remind_at: null, remind_place: null, pos: null, priority: 4, kind: 'task', ...t, _pending: true,
-    } as Task);
-  }
-  const cur = o.id ? S.tasks.get(o.id) : undefined;
-  if (!cur) return;
-  if (o.op === 'task.set') S.tasks.set(cur.id, { ...cur, ...o.set });
-  if (o.op === 'task.done' && !(cur.recur && !o.forever)) S.tasks.set(cur.id, { ...cur, status: 'done', completed_at: new Date().toISOString() });
-  if (o.op === 'task.reopen') S.tasks.set(cur.id, { ...cur, status: 'open', completed_at: null });
-  if (o.op === 'task.cancel') S.tasks.set(cur.id, { ...cur, status: 'cancelled', completed_at: new Date().toISOString() });
-  void OPEN_FIELDS;
+/** Как назвать правку в тосте отказа: «выполнение «Купить хлеб»». */
+function opWords(o: Op): string {
+  const kind: Record<string, string> = { 'task.create': 'новая задача', 'task.set': 'правка', 'task.done': 'выполнение', 'task.reopen': 'возврат',
+    'task.cancel': 'удаление', 'comment.add': 'комментарий', 'section.create': 'новый раздел', 'section.set': 'раздел',
+    'project.create': 'новый проект', 'project.set': 'проект', 'user.settings': 'настройки', 'debug.add': 'записка' };
+  const title = (o.id && S.tasks.get(String(o.id))?.title) || o.task?.title || o.data?.name || (o.id && S.sections.get(String(o.id))?.name) || '';
+  return (kind[o.op] || o.op) + (title ? ` «${String(title).slice(0, 60)}»` : '');
 }
 
-export async function ops(items: Op[], { quiet = false } = {}): Promise<any[]> {
-  for (const o of items) optimistic(o);
-  log('ops', items.map((o) => o.op + (o.id ? ' ' + String(o.id).slice(0, 8) : '')).join(', '), items.slice(0, 5));
+/** Правка из очереди не встала, а того, кто её делал, уже нет (ушла позже, без сети): не терять молча — тост, след в
+ *  записке «Что не так?» (владельцу в режиме отладки) и в последних действиях. Сервер — правда: потом полный синк. */
+function lateReject(q: Queued, r: Result) {
+  const what = opWords(q.op);
+  const why = r.error || 'сервер не принял';
+  toast(`Не встало: ${what} — ${why}`, undefined, true);
+  log('error', `очередь: не встало ${q.op.op} — ${why}`, { op: q.op, at: q.at, tries: q.tries });
+  if (S.debug?.on && q.op.op !== 'debug.add') {
+    ops([{ op: 'debug.add', note: { id: uuid(), text: `Правка из очереди не встала: ${what} — ${why}`, source: 'web', version: 'todo-web',
+      screen: location.hash || '#/now', snapshot: { v: 1, app: 'todo-web', kind: 'outbox', route: location.hash || '#/now', op: q.op, error: why,
+        queued_at: q.at, tries: q.tries }, actions: trail.slice(-30) } }], { quiet: true }).catch(() => {});
+  }
+}
+
+/** Один проход очереди (по одному за раз — и между вкладками, если браузер умеет locks). */
+async function flushStep(): Promise<void> {
+  const user = S.me?.user;
+  if (!user) return;
+  const run = () => flushOnce(box, user, (items) => api('/api/ops', { ops: items }));
+  const locks = (navigator as Navigator & { locks?: LockManager }).locks;
+  const f: Flushed = locks ? await locks.request('dela-outbox', run) : await run();
+  for (const [id, { q, r }] of f.results) {
+    if (awaited.has(id)) got.set(id, r);
+    if (!r.ok) continue;
+    if (r.task) S.tasks.set((r.task as Task).id, r.task as Task);
+    if (r.comment) S.comments.set((r.comment as Comment).id, r.comment as Comment);
+    if (r.row && q.op.op.startsWith('section.')) S.sections.set((r.row as Section).id, r.row as Section);
+    if (r.row && q.op.op.startsWith('project.')) S.projects.set((r.row as Project).id, r.row as Project);
+  }
+  if (f.results.size) {
+    pending = pending.filter((q) => !f.results.has(q.op_id));
+    reapply();
+    saveSoon('tasks', 'sections', 'projects', 'comments');
+  }
+  S.queue = f.left;
+  if (f.offline) S.offline = true;
+  else if (f.results.size) S.offline = false;
+  if (f.auth) log('error', 'очередь ждёт входа (401)');
+  for (const { q, r } of f.rejected) if (!awaited.has(q.op_id)) lateReject(q, r);
   emit();
+  if (f.rejected.length) await syncSoon(true).catch(() => {});
+  else if (f.results.size) syncSoon().catch(() => {});
+}
+
+let chain: Promise<void> = Promise.resolve();
+/** Отправить очередь: проходы встают друг за другом, правка, положенная до вызова, уйдёт в этом или прежнем проходе. */
+export function pump(): Promise<void> {
+  chain = chain.then(flushStep, flushStep).catch((e) => log('error', 'очередь: ' + String(e)));
+  return chain;
+}
+
+/** Правки: сразу на экран и в очередь, потом на сервер. Есть сеть — ответ сервера как раньше (отказ — исключение и тост);
+ *  нет — ответ «ждёт» (queued) с тем, что знаем сами (recurred — новый срок повтора), и правка уйдёт сама.
+ *  online — только при сети, мимо очереди (надиктовка: её разбирает сервер, без сети ей нечего делать). */
+export async function ops(items: Op[], { quiet = false, online = false } = {}): Promise<any[]> {
+  log('ops', items.map((o) => o.op + (o.id ? ' ' + String(o.id).slice(0, 8) : '')).join(', '), items.slice(0, 5));
+  if (online) return direct(items, quiet);
+  const now = new Date().toISOString();
+  const ctx = { user: S.me?.user || '', today: S.today, now };
+  const qs: Queued[] = [];
+  const extra: (Record<string, unknown> | undefined)[] = [];
+  for (const o of items) {
+    const e = effectsOf(o, maps(), ctx);
+    applyEffects(maps(), e.fx);
+    qs.push({ user: ctx.user, op_id: uuid(), op: o, at: now, tries: 0, fx: e.fx });
+    extra.push(e.extra);
+  }
+  pending.push(...qs);
+  S.queue += qs.length;
+  for (const q of qs) awaited.add(q.op_id);
+  emit();
+  saveSoon('tasks', 'sections', 'projects', 'comments');
+  try {
+    await box.add(qs);
+  } catch (e) {
+    // IndexedDB отказала (место кончилось): правка всё равно уйдёт — из памяти этой вкладки
+    log('error', 'очередь в браузере не легла: ' + String(e));
+    box = memStore();
+    await box.add(qs);
+  }
+  await pump();
+  const res = qs.map((q, i) => got.get(q.op_id) ?? { op_id: q.op_id, ok: true, queued: true, ...extra[i] });
+  for (const q of qs) {
+    awaited.delete(q.op_id);
+    got.delete(q.op_id);
+  }
+  const bad = res.filter((r) => !r.ok);
+  if (bad.length) {
+    const e = new Error(bad[0].error + (bad.length > 1 ? ` (и ещё ${bad.length - 1})` : ''));
+    if (!quiet) fail(e);
+    throw e;
+  }
+  return res;
+}
+
+/** Мимо очереди — только при сети (надиктовка). */
+async function direct(items: Op[], quiet: boolean): Promise<any[]> {
   let d: any;
   try {
     d = await api('/api/ops', { ops: items.map((o) => ({ op_id: uuid(), ...o })) });
   } catch (e) {
-    await syncSoon(true).catch(() => {});
-    if (!quiet) fail(e);
-    throw e;
+    const err = e instanceof ApiError && unreachable(e.status) ? new ApiError('нет сети — это работает только с сетью', 0) : e;
+    if (!quiet) fail(err);
+    throw err;
   }
-  for (const r of d.results) {
-    if (r.ok && r.task) S.tasks.set(r.task.id, r.task);
-    if (r.ok && r.row && items.find((o) => o.op.startsWith('section.'))) S.sections.set(r.row.id, r.row);
-  }
+  for (const r of d.results) if (r.ok && r.task) S.tasks.set(r.task.id, r.task);
   emit();
-  const bad = d.results.filter((r: any) => !r.ok);
   syncSoon().catch(() => {});
+  const bad = d.results.filter((r: any) => !r.ok);
   if (bad.length) {
     const e = new Error(bad[0].error + (bad.length > 1 ? ` (и ещё ${bad.length - 1})` : ''));
-    await syncSoon(true).catch(() => {});
     if (!quiet) fail(e);
     throw e;
   }

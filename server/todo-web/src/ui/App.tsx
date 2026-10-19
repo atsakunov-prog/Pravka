@@ -1,8 +1,8 @@
 // Каркас: боковая панель и вид, окна поверх, тосты, горячие клавиши Todoist, на телефоне — нижняя панель и «+».
 import { useEffect, useState } from 'react';
-import { ApiError, api, inApp } from '../api.ts';
+import { api } from '../api.ts';
 import { go, projectColor, useMobile, useRoute } from '../lib.ts';
-import { completeSoon, dropToast, emit, S, setTask, syncSoon, toasts, useStore } from '../store.ts';
+import { boot, completeSoon, dropToast, emit, refresh, S, saveNow, setTask, syncSoon, toasts, useStore } from '../store.ts';
 import { LabelPicker, PriorityMenu, ProjectPicker, Scheduler } from './pickers.tsx';
 import { TaskMenu } from './TaskMenu.tsx';
 import { matchCommands, type Cmd } from '../commands.ts';
@@ -306,14 +306,9 @@ export function App() {
         history.replaceState(null, '', location.pathname + '#/now');
         try { await api('/auth/redeem', { code: m[1] }); } catch { /* ссылка уже использована — может, вход жив */ }
       }
-      try {
-        S.me = await api('/api/me');
-        await syncSoon(true);
-      } catch (e) {
-        setErr(e instanceof ApiError && e.status === 401
-          ? (inApp() ? 'Правка не подключена к Делам: Настройки → Дела → подключить по QR с компа.' : 'Вход — по ссылке-приглашению. Открой её на этом устройстве один раз.')
-          : 'Не открылось: ' + (e instanceof Error ? e.message : String(e)));
-      }
+      // Своя копия из браузера — на экран сразу (и без сети), потом вход и догон «после seq» (store.boot).
+      const why = await boot();
+      if (why) setErr(why);
     })();
     try {
       const t = localStorage.getItem('todo.theme');
@@ -321,11 +316,24 @@ export function App() {
       const a = localStorage.getItem('todo.accent');
       if (a && a !== 'todoist') document.documentElement.dataset.accent = a;
     } catch { /* без хранилища — тема системы */ }
-    // Фон: синк раз в 30 с и при возвращении на вкладку.
-    const timer = setInterval(() => { if (!document.hidden && S.ready) syncSoon().catch(() => {}); }, 30000);
-    const vis = () => { if (!document.hidden && S.ready) syncSoon().catch(() => {}); };
+    // Фон, как у Todoist: очередь и догон раз в минуту, пока страница открыта, при возвращении на вкладку и сразу, как
+    // появилась сеть; спрятали вкладку — копию в браузер сразу (телефон может закрыть её в любой момент).
+    const tick = () => { if (!document.hidden && S.ready) refresh(); };
+    const timer = setInterval(tick, 60000);
+    const vis = () => { if (document.hidden) saveNow(); else tick(); };
+    const on = () => { if (S.ready) refresh(); };
+    const off = () => { S.offline = true; emit(); };
     document.addEventListener('visibilitychange', vis);
-    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', vis); };
+    addEventListener('online', on);
+    addEventListener('offline', off);
+    addEventListener('pagehide', saveNow);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', vis);
+      removeEventListener('online', on);
+      removeEventListener('offline', off);
+      removeEventListener('pagehide', saveNow);
+    };
   }, []);
   useEffect(() => {
     if (r.view === 'task' && r.id && S.ready) {

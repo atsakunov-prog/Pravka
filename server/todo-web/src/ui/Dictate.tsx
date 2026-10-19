@@ -51,7 +51,7 @@ export function Dictate({ close }: { close: () => void }) {
     const ref = uuid();
     log('dictate', said);
     try {
-      const res = await ops([{ op: 'capture.say', text: said, ref, lane: 'auto', from: 'web' }], { quiet: true });
+      const res = await ops([{ op: 'capture.say', text: said, ref, lane: 'auto', from: 'web' }], { quiet: true, online: true });
       let c: Cap = res[0].capture;
       setCap(c);
       for (let i = 0; c.status === 'pending' && i < 120; i++) {

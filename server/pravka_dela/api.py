@@ -11,7 +11,7 @@
 |---|---|
 | GET  /health | жив ли |
 | GET  / , /static/… | веб (одна страница) |
-| GET  /t | новый веб в виде Todoist (19.10.2026; сборка server/todo-web → static/todo.*) |
+| GET  /t | новый веб в виде Todoist (19.10.2026; сборка server/todo-web → static/todo.*); /t?sw=1 — его воркер без сети |
 | POST /auth/redeem, /auth/logout | вход по приглашению, выход |
 | GET  /api/me | кто я; look — шапка веба: домен общей куки темы, значок «Ковчега», соседние сервисы (только владельцу), меню Ковчега (menu, только владельцу) и токены вида (tokens) из Свода ui.menu / ui.look — нет записи или кривая, заводские (kovcheg_ui.py) |
 | GET  /api/sync?since=N | всё изменившееся после N (телефон, веб); владельцу — ещё zasechka: команды Засечки из веба, ждущие телефона (zasechka.py) |
@@ -269,6 +269,11 @@ def build(cfg: Config) -> Starlette:
         return _static(request.path_params["name"])
 
     async def todo_page(request: Request):
+        # /t?sw=1 — воркер каркаса /t без сети (static/todo-sw.js, 19.10.2026): отдельного пути у него нет — список
+        # путей сайта-посредника на Aeza закрытый, а /t в нём уже есть. Не кэшировать: браузер сверяет воркер сам.
+        if request.query_params.get("sw") == "1":
+            body = (resources.files(__package__) / "static" / "todo-sw.js").read_bytes()
+            return Response(body, media_type="text/javascript; charset=utf-8", headers={"Cache-Control": "no-cache", **SECURITY})
         return _static("todo.html")
 
     async def redeem(request: Request):
