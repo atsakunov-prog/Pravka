@@ -415,10 +415,12 @@ function matchDate(ws: W[], i: number, today: string): DateHit | null {
   if (THIS.test(w) && b) {
     const wd = wdOf(b);
     if (wd !== null) return { len: 2, date: nextWeekday(today, wd, true) };
-    if (/^(выходн(ые|ых)|weekend)$/.test(b)) return { len: 2, date: weekday(today) >= 5 ? today : nextWeekday(today, 5) };
+    if (/^(выходн(ые|ых)|weekend)$/.test(b)) return { len: 2, date: nextWeekday(today, 5, true) };
     return null;
   }
-  if (/^(выходн(ые|ых)|weekend)$/.test(w)) return { len: 1, date: weekday(today) >= 5 ? today : nextWeekday(today, 5) };
+  // На выходных — ближайшая суббота: в субботу сегодня, в воскресенье — через 6 дней, как у Todoist (слово владельца
+  // 19.10: выходные в воскресенье уже кончаются, дело на них — следующие).
+  if (/^(выходн(ые|ых)|weekend)$/.test(w)) return { len: 1, date: nextWeekday(today, 5, true) };
   // конец месяца, в конце ноября, в конце года
   if (/^(конец|конце|конца|концу|end)$/.test(w) && b) {
     const x = b === 'of' ? c ?? '' : b;
