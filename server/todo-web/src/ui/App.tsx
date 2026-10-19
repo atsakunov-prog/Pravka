@@ -6,6 +6,7 @@ import { completeTask, dropToast, emit, S, setTask, syncSoon, toasts, useStore }
 import { LabelPicker, PriorityMenu, ProjectPicker, Scheduler } from './pickers.tsx';
 import { TaskMenu } from './TaskMenu.tsx';
 import { matchCommands, type Cmd } from '../commands.ts';
+import { setDeadline, setDue, setPlace, setPrio } from './acts.ts';
 import type { Task } from '../types.ts';
 import { GO, globalAct, keyName, taskAct } from '../keys.ts';
 import { search } from '../views.ts';
@@ -31,7 +32,7 @@ function Toasts() {
     <div className="toasts">
       {toasts.map((t) => (
         <div key={t.id} className={'toast' + (t.error ? ' err' : '')}>
-          <span>{t.text}</span>
+          <span>{t.text}{t.sub?.map((x) => <span key={x} className="sub">{x}</span>)}</span>
           {t.undo ? <button onClick={() => { t.undo!(); dropToast(t.id); }}>Отменить</button> : null}
           <button className="x" onClick={() => dropToast(t.id)}><Icon name="x" size={16} /></button>
         </div>
@@ -226,19 +227,19 @@ function useKeys(setSearch: (v: boolean) => void) {
             completeTask(ft, act === 'done-forever').catch(() => {});
             moveTo(at + 1 < rows.length ? at + 1 : at - 1);
             break;
-          case 'prio1': case 'prio2': case 'prio3': case 'prio4': setTask(ft, { priority: +act.slice(4) }).catch(() => {}); break;
-          case 'date': pop((close) => <Scheduler tasks={[ft]} value={ft as any} close={close} onPick={(v) => setTask(ft, v as any, 'Срок поменял')} />, 'sched'); break;
+          case 'prio1': case 'prio2': case 'prio3': case 'prio4': setPrio(ft, +act.slice(4)); break;
+          case 'date': pop((close) => <Scheduler tasks={[ft]} value={ft as any} close={close} onPick={(v) => setDue(ft, v)} />, 'sched'); break;
           case 'date-clear': if (ft.due_date) setTask(ft, { due_date: null, due_time: null, recur: null, due_rule: null }, 'Срок снят').catch(() => {}); break;
           case 'deadline':
             pop((close) => <Scheduler mode="deadline" dueOf={ft.due_date} value={{ due_date: ft.deadline ?? null, due_time: null, recur: null, due_rule: null }} close={close}
-              onPick={(v) => setTask(ft, { deadline: v.due_date }, v.due_date ? 'Дедлайн поменял' : 'Дедлайн снят')} />, 'sched');
+              onPick={(v) => setDeadline(ft, v.due_date)} />, 'sched');
             break;
           case 'deadline-clear': if (ft.deadline) setTask(ft, { deadline: null }, 'Дедлайн снят').catch(() => {}); break;
-          case 'prio': pop((close) => <PriorityMenu value={ft.priority ?? 4} close={close} onPick={(p) => setTask(ft, { priority: p })} />); break;
+          case 'prio': pop((close) => <PriorityMenu value={ft.priority ?? 4} close={close} onPick={(p) => setPrio(ft, p)} />); break;
           case 'labels': pop(() => <LabelPicker value={ft.labels || []} onPick={(l) => setTask(ft, { labels: l })} />); break;
           case 'move':
             pop((close) => <ProjectPicker value={{ project_id: ft.project_id, deal_id: ft.deal_id, section_id: ft.section_id ?? null }} close={close}
-              onPick={(p) => setTask(ft, { project_id: p.project_id, deal_id: p.deal_id, section_id: p.section_id }, 'Переместил')} />);
+              onPick={(p) => setPlace(ft, p)} />);
             break;
           case 'select': if (UI.sel.has(ft.id)) UI.sel.delete(ft.id); else UI.sel.add(ft.id); emit(); break;
           case 'menu': pop((close) => <TaskMenu t={ft} close={close} />); break;

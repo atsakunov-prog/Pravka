@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { uuid } from '../api.ts';
 import { addDays, deadlineWords, dueTone, dueWords, nowHm, shortDate } from '../dates.ts';
-import { dealShort, labelColor, personName, projectColor } from '../lib.ts';
+import { dealShort, labelColor, personName, placeName, projectColor } from '../lib.ts';
 import { cutTokens, parseQuick, recurWords, type Parsed, type TokKind } from '../quick.ts';
-import { ops, S } from '../store.ts';
+import { ops, S, toast } from '../store.ts';
+import { T } from '../toastText.ts';
 import { reorder } from './TaskList.tsx';
 import type { Id, Recur } from '../types.ts';
 import { byPos, liveDeals, parentOf, projectsSorted, sectionsOf } from '../views.ts';
@@ -157,7 +158,11 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
     setMan({});
     if (!keepOpen) onClose();
     else requestAnimationFrame(() => ref.current?.focus());
-    await ops(items).catch(() => {});
+    const ok = await ops(items).then(() => true, () => false);
+    if (ok) {
+      const ids = items.map((x) => (x.task as { id: string }).id);
+      toast(T.added(placeName(place), ids.length), () => ops(ids.map((id) => ({ op: 'task.cancel', id }))).catch(() => {}));
+    }
     // «Добавить задачу выше / ниже» из меню дела: новое встаёт рядом с тем делом (как перетаскивание)
     const near = defaults.near ? S.tasks.get(defaults.near.id) : null;
     const made = items.length === 1 ? S.tasks.get((items[0].task as { id: string }).id) : null;

@@ -2,7 +2,8 @@
 // сортировка), Фильтр (срок, дедлайн, приоритет, метка) — у каждого вида свои, личные (crm.users.settings.todo.views).
 // Правила без React — viewopts.ts.
 import { dueWords } from '../dates.ts';
-import { saveTodo, S, todoSettings } from '../store.ts';
+import { saveTodo, S, toast, todoSettings } from '../store.ts';
+import { T } from '../toastText.ts';
 import type { Task } from '../types.ts';
 import { byDue, byPos } from '../views.ts';
 import { dealShort, projectName } from '../lib.ts';
@@ -105,7 +106,7 @@ export function DisplayMenu({ vkey, opts, board = true, groups = true }: { vkey:
       {sel('Приоритет', opts.fprio, 'all', [['all', 'Все'], ['1', 'Приоритет 1'], ['2', 'Приоритет 2'], ['3', 'Приоритет 3'], ['4', 'Приоритет 4']], (v) => set({ fprio: v }))}
       {sel('Метка', opts.flabel || '', '', [['', 'Все'], ...S.labels.map((l) => [l.name, l.name] as [string, string])], (v) => set({ flabel: v || undefined }))}
       <div className="msep" />
-      <button className="mi" onClick={() => saveViewOpts(vkey, {})}><Icon name="x" size={16} />Сбросить</button>
+      <button className="mi" onClick={() => { saveViewOpts(vkey, {}); toast(T.viewReset, () => saveViewOpts(vkey, opts)); }}><Icon name="x" size={16} />Сбросить</button>
     </div>
   );
 }

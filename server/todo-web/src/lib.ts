@@ -61,6 +61,12 @@ export const taskLink = (t: Task) => `${location.origin}/t#/task/${t.num}`;
 // ── Имена ────────────────────────────────────────────────────────────────
 
 export const projectName = (id: Id | null | undefined) => (id ? S.projects.get(id)?.name || '…' : 'Входящие');
+/** Куда легло дело — для тостов: «Входящие», «Альфа», «Альфа / Договоры», «Альфа / фонды» (сделка). */
+export function placeName(p: { project_id: Id | null; deal_id?: Id | null; section_id?: Id | null }): string {
+  if (p.deal_id) return projectName(p.project_id) + ' / ' + dealShort(p.deal_id);
+  const s = p.section_id ? S.sections.get(p.section_id)?.name : null;
+  return projectName(p.project_id) + (s ? ' / ' + s : '');
+}
 export const dealName = (id: Id | null | undefined) => (id ? S.deals.get(id)?.name || '…' : '');
 export function personName(id: Id | null | undefined): string {
   if (!id) return '';

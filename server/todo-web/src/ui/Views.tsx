@@ -1,7 +1,9 @@
 // Виды: Сейчас, Входящие, Сегодня, Предстоящее, проект (разделы, сделки, доска), сделка, метка, фильтр, человек,
 // дерево целей, выполненные.
+import { setDue, setPlace } from './acts.ts';
+import { T } from '../toastText.ts';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { addDays, dayHead, MONTHS_NOM, mondayOf, plural, shortDate, WD, WD_SHORT, weekday } from '../dates.ts';
+import { addDays, dayHead, MONTHS_NOM, mondayOf, plural, WD, WD_SHORT, weekday } from '../dates.ts';
 import { compile, FilterError, runFilter } from '../filter.ts';
 import { crmUrl, dealShort, go, projectColor, STAGE } from '../lib.ts';
 import { op1, ops, S, saveNowOrder, saveTodo, setTask, todoSettings, toast, useStore } from '../store.ts';
@@ -125,7 +127,7 @@ export function NowView() {
           let i = ids.indexOf(target.id);
           if (m === 'after') i++;
           ids.splice(i, 0, d.id);
-          if (d.focus_on !== S.today) setTask(d, { focus_on: S.today }).catch(() => {});
+          if (d.focus_on !== S.today) setTask(d, { focus_on: S.today }, 'В «Сейчас»').catch(() => {});
           saveNowOrder(ids).catch(() => {});
         } }}
         empty={<Empty icon="bolt" big="Сейчас пусто" text="Отметь молнией то, чем займёшься сегодня: в меню задачи, в окне задачи или «!сейчас» в строке." />} />
@@ -161,10 +163,10 @@ export function TodayView() {
       const items = over.map((t) => ({ op: 'task.set', id: t.id, set }));
       const back = over.map((t) => ({ op: 'task.set', id: t.id, set: v.due_date ? { due_date: t.due_date }
         : { due_date: t.due_date, due_time: t.due_time ?? null, ...(t.recur ? { recur: t.recur, due_rule: t.due_rule } : {}) } }));
-      ops(items).then(() => toast(`${v.due_date ? 'Перенёс' : 'Снял срок:'} ${plural(over.length, 'задачу', 'задачи', 'задач')}`, () => ops(back).catch(() => {}))).catch(() => {});
+      ops(items).then(() => toast(v.due_date ? T.rescheduled(v.due_date, S.today) : 'Снял срок: ' + plural(over.length, 'задача', 'задачи', 'задач'), () => ops(back).catch(() => {}))).catch(() => {});
     }} />
   ), { cls: 'sched' });
-  const dropToday = { nest: false, onDrop: (d: Task) => { if (d.due_date !== S.today) setTask(d, { due_date: S.today }, 'Срок — сегодня').catch(() => {}); } };
+  const dropToday = { nest: false, onDrop: (d: Task) => { if (d.due_date !== S.today) setDue(d, { due_date: S.today }); } };
   return (
     <Page title="Сегодня" crumbs="Сегодня" sub={n ? <span><Icon name="done" size={14} /> {plural(n, 'задача', 'задачи', 'задач')}</span> : null}>
       {over.length ? (
@@ -210,7 +212,7 @@ export function UpcomingView() {
   const moveTo = (day: string) => {
     const d = draggingId() && S.tasks.get(draggingId()!);
     setDropDay(null);
-    if (d && d.due_date !== day) setTask(d, { due_date: day }, 'Срок — ' + shortDate(day, S.today)).catch(() => {});
+    if (d && d.due_date !== day) setDue(d, { due_date: day });
   };
   return (
     <Page title="Предстоящее" crumbs="Предстоящее">
@@ -244,7 +246,7 @@ export function UpcomingView() {
             {dayHead(day, S.today).map((x, i) => <span key={i} className={i ? 'rest' : ''}>{i ? <span className="dot">· </span> : null}{x}</span>)}
           </div>
           <TaskList tasks={tasks} rowOpts={{ showProject: true, hideDate: true }} nest={false} add={{ due_date: day }}
-            drop={{ nest: false, onDrop: (d) => { if (d.due_date !== day) setTask(d, { due_date: day }, 'Срок — ' + shortDate(day, S.today)).catch(() => {}); } }} />
+            drop={{ nest: false, onDrop: (d) => { if (d.due_date !== day) setDue(d, { due_date: day }); } }} />
         </div>
       ))}
       <button className="btn sec" style={{ margin: '16px 0' }} onClick={() => setDays(days + 21)}>Показать ещё три недели</button>
@@ -263,7 +265,7 @@ function SectionHead({ s, count, collapsed, toggle }: { s: { id: string; name: s
       onDrop={(e) => {
         e.preventDefault();
         const d = draggingId() && S.tasks.get(draggingId()!);
-        if (d && d.section_id !== s.id) setTask(d, { section_id: s.id, project_id: s.project_id, deal_id: null }, 'Переложил в «' + s.name + '»').catch(() => {});
+        if (d && d.section_id !== s.id) setPlace(d, { project_id: s.project_id, section_id: s.id });
       }}>
       <button className="tw" onClick={toggle}><Icon name={collapsed ? 'chevR' : 'chevD'} size={16} /></button>
       {edit ? (
@@ -348,14 +350,14 @@ export function ProjectView({ id }: { id: Id }) {
     return (
       <Page title={title} crumbs="Мои проекты /" sub={header} actions={actions} wide>
         <div className="board">
-          <BoardCol title="Без раздела" tasks={shown(loose, o)} add={{ project_id: id }} onDropTask={(d) => setTask(d, { section_id: null, project_id: id, deal_id: null }).catch(() => {})} />
+          <BoardCol title="Без раздела" tasks={shown(loose, o)} add={{ project_id: id }} onDropTask={(d) => setPlace(d, { project_id: id })} />
           {secs.map((s) => (
             <BoardCol key={s.id} title={s.name} tasks={shown(own.filter((t) => t.section_id === s.id), o)} add={{ project_id: id, section_id: s.id }}
-              onDropTask={(d) => setTask(d, { section_id: s.id, project_id: id, deal_id: null }).catch(() => {})} />
+              onDropTask={(d) => setPlace(d, { project_id: id, section_id: s.id })} />
           ))}
           {deals.map((d) => (
             <BoardCol key={d.id} title={dealShort(d.id)} icon="deal" tasks={shown(dealTasks(d.id), o)} add={{ project_id: id, deal_id: d.id }}
-              onDropTask={(x) => setTask(x, { deal_id: d.id, project_id: id, section_id: null }).catch(() => {})} />
+              onDropTask={(x) => setPlace(x, { project_id: id, deal_id: d.id })} />
           ))}
           <div className="col"><AddSection pid={id} pos={secs.length + 1} /></div>
         </div>

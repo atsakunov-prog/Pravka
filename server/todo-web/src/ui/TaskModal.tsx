@@ -1,6 +1,7 @@
 // Окно задачи — как у Todoist: слева название, описание, подзадачи, комментарии; справа — проект, срок, дедлайн,
 // приоритет, метки, напоминание. Наше: клиент и сделка (ссылкой в CRM), человек, «Зачем» с путём по дереву,
 // «Сейчас», история, откуда дело, и вопрос Claude про это дело.
+import { setDeadline, setDue, setPlace, setPrio } from './acts.ts';
 import { useEffect, useRef, useState } from 'react';
 import { api, runJob, uuid } from '../api.ts';
 import { deadlineWords, dueWords, shortDate } from '../dates.ts';
@@ -210,7 +211,7 @@ export function TaskModal() {
             <div className="tm-row">
               <div className="tm-lbl">Проект</div>
               <button className="tm-val" onClick={(e) => openPop(e.currentTarget, (close) => <ProjectPicker value={{ project_id: t.project_id, deal_id: t.deal_id, section_id: t.section_id ?? null }} close={close}
-                onPick={(p) => setTask(t, { project_id: p.project_id, deal_id: p.deal_id, section_id: p.section_id }, 'Переместил')} />)}>
+                onPick={(p) => setPlace(t, p)} />)}>
                 {proj ? <span className="hash" style={{ color: projectColor(proj) }}>#</span> : <Icon name="inbox" size={16} />}
                 {proj ? proj.name : 'Входящие'}{deal ? ' / ' + dealShort(deal.id) : ''}{t.section_name ? ' / ' + t.section_name : ''}
               </button>
@@ -218,7 +219,7 @@ export function TaskModal() {
             <div className="tm-sep" />
             <div className="tm-row">
               <div className="tm-lbl">Срок</div>
-              <button className={'tm-val' + (t.due_date ? '' : ' muted')} onClick={(e) => openPop(e.currentTarget, (close) => <Scheduler tasks={[t]} value={t as any} close={close} onPick={(v) => setTask(t, v as any, 'Срок поменял')} />, { cls: 'sched' })}>
+              <button className={'tm-val' + (t.due_date ? '' : ' muted')} onClick={(e) => openPop(e.currentTarget, (close) => <Scheduler tasks={[t]} value={t as any} close={close} onPick={(v) => setDue(t, v)} />, { cls: 'sched' })}>
                 <Icon name="calendar" size={16} />
                 {t.due_date ? `${dueWords(t.due_date, today)}${t.due_time ? ' ' + t.due_time.slice(0, 5) : ''}` : 'Без срока'}
                 {t.recur ? <span style={{ color: 'var(--fg2)', display: 'inline-flex', alignItems: 'center', gap: 3 }}><Icon name="repeat" size={14} />{t.due_rule || recurWords(t.recur)}</span> : null}
@@ -226,13 +227,13 @@ export function TaskModal() {
             </div>
             <div className="tm-row">
               <div className="tm-lbl">Дедлайн</div>
-              <button className={'tm-val' + (t.deadline ? '' : ' muted')} onClick={(e) => openPop(e.currentTarget, (close) => <Scheduler mode="deadline" dueOf={t.due_date} value={{ due_date: t.deadline ?? null, due_time: null, recur: null, due_rule: null }} close={close} onPick={(v) => setTask(t, { deadline: v.due_date })} />, { cls: 'sched' })}>
+              <button className={'tm-val' + (t.deadline ? '' : ' muted')} onClick={(e) => openPop(e.currentTarget, (close) => <Scheduler mode="deadline" dueOf={t.due_date} value={{ due_date: t.deadline ?? null, due_time: null, recur: null, due_rule: null }} close={close} onPick={(v) => setDeadline(t, v.due_date)} />, { cls: 'sched' })}>
                 <Icon name="deadline" size={16} />{t.deadline ? deadlineWords(t.deadline, today) + ' · ' + shortDate(t.deadline, today) : 'Без дедлайна'}
               </button>
             </div>
             <div className="tm-row">
               <div className="tm-lbl">Приоритет</div>
-              <button className="tm-val" onClick={(e) => openPop(e.currentTarget, (close) => <PriorityMenu value={t.priority ?? 4} close={close} onPick={(p) => setTask(t, { priority: p })} />)}>
+              <button className="tm-val" onClick={(e) => openPop(e.currentTarget, (close) => <PriorityMenu value={t.priority ?? 4} close={close} onPick={(p) => setPrio(t, p)} />)}>
                 <PrioFlag p={t.priority ?? 4} size={16} />P{t.priority ?? 4}
               </button>
             </div>
@@ -265,9 +266,9 @@ export function TaskModal() {
                 <button className={'tm-val' + (deal ? '' : ' muted')} onClick={(e) => openPop(e.currentTarget, (close) => (
                   <div>
                     <div className="mh">Сделка клиента</div>
-                    <button className="mi" onClick={() => { close(); setTask(t, { deal_id: null }); }}><Icon name="x" size={16} />Без сделки</button>
+                    <button className="mi" onClick={() => { close(); setPlace(t, { project_id: t.project_id, deal_id: null }); }}><Icon name="x" size={16} />Без сделки</button>
                     {liveDeals(proj.id).map((d) => (
-                      <button key={d.id} className={'mi' + (d.id === t.deal_id ? ' act' : '')} onClick={() => { close(); setTask(t, { deal_id: d.id, section_id: null }); }}>
+                      <button key={d.id} className={'mi' + (d.id === t.deal_id ? ' act' : '')} onClick={() => { close(); setPlace(t, { project_id: t.project_id, deal_id: d.id }); }}>
                         <Icon name="deal" size={16} />{dealShort(d.id)}<span className="r">{STAGE[d.stage] || d.stage}</span>
                       </button>
                     ))}

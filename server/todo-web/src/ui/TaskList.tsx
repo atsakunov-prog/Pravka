@@ -1,7 +1,9 @@
 // Список задач: подзадачи под родителем (дела внутри дела), свернуть, перетащить (порядок, внутрь, в другой раздел),
 // «Добавить задачу» внизу — редактором в строке.
 import { useState, type DragEvent } from 'react';
-import { ops, S } from '../store.ts';
+import { before, ops, S, toast } from '../store.ts';
+import { placeName } from '../lib.ts';
+import { T } from '../toastText.ts';
 import type { Id, Task } from '../types.ts';
 import { byPos, parentOf } from '../views.ts';
 import { Editor } from './Editor.tsx';
@@ -27,7 +29,7 @@ export const setDragId = (id: Id | null) => {
 };
 
 /** Порядок по месту: перенумеровать соседей 1…n, отправить только изменившиеся. */
-export async function reorder(siblings: Task[], moved: Task, target: Task | null, mark: Mark, extra: Record<string, unknown> = {}) {
+export async function reorder(siblings: Task[], moved: Task, target: Task | null, mark: Mark, extra: Record<string, unknown> = {}, said?: string) {
   const list = siblings.filter((x) => x.id !== moved.id);
   let i = target ? list.findIndex((x) => x.id === target.id) : list.length;
   if (i < 0) i = list.length;
@@ -40,7 +42,11 @@ export async function reorder(siblings: Task[], moved: Task, target: Task | null
     if (x.pos !== k + 1) set.pos = k + 1;
     if (Object.keys(set).length) items.push({ op: 'task.set', id: x.id, set });
   }
-  if (items.length) await ops(items).catch(() => {});
+  if (!items.length) return;
+  // Отмена — прежние места и поля (как перетащил, так и вернул)
+  const back = items.map((o) => ({ op: 'task.set', id: o.id, set: before(S.tasks.get(o.id) || moved, o.set) }));
+  const ok = await ops(items).then(() => true, () => false);
+  if (ok && said) toast(said, () => ops(back).catch(() => {}));
 }
 
 export function defaultDrop(all: Task[]) {
@@ -48,7 +54,8 @@ export function defaultDrop(all: Task[]) {
     if (mark === 'into') {
       if (target.id === d.id) return;
       const kids = all.filter((x) => parentOf(x) === target.id).sort(byPos);
-      await reorder(kids, d, null, 'after', { why_id: target.id, project_id: target.project_id, deal_id: target.deal_id, section_id: target.section_id ?? null });
+      await reorder(kids, d, null, 'after', { why_id: target.id, project_id: target.project_id, deal_id: target.deal_id, section_id: target.section_id ?? null },
+        T.moved('«' + target.title + '»'));
       return;
     }
     const parent = parentOf(target);
@@ -58,7 +65,7 @@ export function defaultDrop(all: Task[]) {
     if ((d.section_id ?? null) !== (target.section_id ?? null) || d.project_id !== target.project_id || d.deal_id !== target.deal_id) {
       Object.assign(extra, { project_id: target.project_id, deal_id: target.deal_id, section_id: target.section_id ?? null });
     }
-    await reorder(sibs, d, target, mark, extra);
+    await reorder(sibs, d, target, mark, extra, 'project_id' in extra ? T.moved(placeName(target)) : T.reordered);
   };
 }
 

@@ -1,9 +1,10 @@
 // Строка задачи — анатомия Todoist: круглая галочка цвета приоритета, название, серое описание, строка меты
 // (срок цветом близости, повтор, дедлайн, внутри, комментарии, метки, человек), справа — проект; при наведении — кнопки.
+import { setDue } from './acts.ts';
 import { useRef, useState, type DragEvent, type PointerEvent as RPE } from 'react';
 import { deadlineWords, diffDays, dueWords, dueTone, nowHm } from '../dates.ts';
 import { cls, dealShort, labelColor, personName, projectColor } from '../lib.ts';
-import { completeTask, ops, S, setTask } from '../store.ts';
+import { completeTask, ops, S } from '../store.ts';
 import type { Task } from '../types.ts';
 import { childrenOf, commentCount } from '../views.ts';
 import { Icon } from './icons.tsx';
@@ -128,7 +129,7 @@ export function TaskRow({ t, opts = {} }: { t: Task; opts?: RowOpts }) {
       setLeaving(true);
       completeTask(t).catch(() => {});
     } else if (dx < -w * 0.3 && ref.current) {
-      openPop(ref.current, (close) => <Scheduler tasks={[t]} value={t as any} close={close} onPick={(v) => setTask(t, v as any, 'Срок поменял')} />, { cls: 'sched' });
+      openPop(ref.current, (close) => <Scheduler tasks={[t]} value={t as any} close={close} onPick={(v) => setDue(t, v)} />, { cls: 'sched' });
     }
     setDx(0);
   };
@@ -169,7 +170,7 @@ export function TaskRow({ t, opts = {} }: { t: Task; opts?: RowOpts }) {
       {t.status === 'open' ? (
         <div className="tacts d-only" onClick={(e) => e.stopPropagation()}>
           <button className="icon-btn sm" title="Изменить" onClick={() => openTask(t.id, true)}><Icon name="pencil" size={18} /></button>
-          <button className="icon-btn sm" title="Срок" onClick={(e) => openPop(e.currentTarget, (close) => <Scheduler tasks={[t]} value={t as any} close={close} onPick={(v) => setTask(t, v as any, 'Срок поменял')} />, { cls: 'sched' })}><Icon name="calendar" size={18} /></button>
+          <button className="icon-btn sm" title="Срок" onClick={(e) => openPop(e.currentTarget, (close) => <Scheduler tasks={[t]} value={t as any} close={close} onPick={(v) => setDue(t, v)} />, { cls: 'sched' })}><Icon name="calendar" size={18} /></button>
           <button className="icon-btn sm" title="Комментарий" onClick={() => openTask(t.id, false, true)}><Icon name="comment" size={18} /></button>
           <button className="icon-btn sm" title="Ещё" onClick={(e) => openPop(e.currentTarget, (close) => <TaskMenu t={t} close={close} />)}><Icon name="more" size={18} /></button>
         </div>

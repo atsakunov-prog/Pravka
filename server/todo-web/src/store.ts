@@ -3,6 +3,7 @@
 
 import { useSyncExternalStore } from 'react';
 import { ApiError, api, uuid } from './api.ts';
+import { T } from './toastText.ts';
 import type { Comment, Deal, Direction, Id, Me, Person, Project, Section, Suggestion, Task, TodoSettings } from './types.ts';
 
 export const S = {
@@ -61,18 +62,20 @@ export function useStore(): number {
 export interface Toast {
   id: number;
   text: string;
+  sub?: string[]; // строки ниже — «Следующий раз: …» у повтора
   undo?: () => void;
   error?: boolean;
 }
 export const toasts: Toast[] = [];
 let toastN = 0;
-export function toast(text: string, undo?: () => void, error = false) {
-  const t = { id: ++toastN, text, undo, error };
+/** Тост снизу слева; с «Отменить» висит 10 с, как у Todoist (умолчание его библиотеки), без — 4 с. */
+export function toast(text: string, undo?: () => void, error = false, sub?: string[]) {
+  const t = { id: ++toastN, text, sub, undo, error };
   log(error ? 'error' : 'toast', text);
   toasts.push(t);
   if (toasts.length > 3) toasts.shift();
   emit();
-  setTimeout(() => dropToast(t.id), undo ? 7000 : 4000);
+  setTimeout(() => dropToast(t.id), undo ? 10000 : 4000);
 }
 export function dropToast(id: number) {
   const i = toasts.findIndex((t) => t.id === id);
@@ -205,11 +208,15 @@ export async function completeTask(t: Task, forever = false) {
   const res = await ops([{ op: 'task.done', id: t.id, ...(forever ? { forever: true } : {}) }]);
   const r = res[0];
   if (r?.recurred) {
-    const was = { due_date: t.due_date, done_count: t.done_count ?? 0, focus_on: t.focus_on };
-    toast('Готово, следующий раз — ' + r.recurred.split('-').reverse().slice(0, 2).join('.'), () =>
-      ops([{ op: 'task.set', id: t.id, set: { due_date: was.due_date, focus_on: was.focus_on } }]).catch(() => {}));
+    // Повтор: «Задача выполнена», ниже «Следующий раз: …» (и сброшенные дела внутри, когда сервер их пришлёт — reset).
+    // «Отменить» возвращает срок, «Сейчас», напоминание и снова отмечает сброшенное. Счётчик раз сервер не отдаёт.
+    const back: Record<string, unknown> = { due_date: t.due_date, focus_on: t.focus_on ?? null };
+    if (t.remind_at) back.remind_at = t.remind_at;
+    const reset: string[] = r.reset || [];
+    const sub = [T.next(r.recurred, S.today), ...(reset.length ? [T.reset(reset.length, r.subtasks ?? reset.length)] : [])];
+    toast(T.done(), () => ops([{ op: 'task.set', id: t.id, set: back }, ...reset.map((id) => ({ op: 'task.set', id, set: { status: 'done' } }))]).catch(() => {}), false, sub);
   } else {
-    toast('Задача выполнена', () => ops([{ op: 'task.reopen', id: t.id }]).catch(() => {}));
+    toast(T.done(), () => ops([{ op: 'task.reopen', id: t.id }]).catch(() => {}));
   }
 }
 

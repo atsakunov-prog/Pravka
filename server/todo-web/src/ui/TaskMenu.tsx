@@ -11,6 +11,8 @@ import { Icon, PrioFlag } from './icons.tsx';
 import { closePop, openPop } from './pop.tsx';
 import { GoalPicker, LabelPicker, PersonPicker, postponeTasks, ProjectPicker, QUICK_LOOK, quickHint, Scheduler } from './pickers.tsx';
 import { openQuick, openTask } from './state.ts';
+import { setDeadline, setDue, setPlace } from './acts.ts';
+import { T } from '../toastText.ts';
 
 /** Напоминание в день и час (Москва), как в карточке задачи. */
 function RemindPicker({ t, close }: { t: Task; close: () => void }) {
@@ -67,21 +69,21 @@ export function TaskMenu({ t, close }: { t: Task; close: () => void }) {
               if (o.key === 'postpone') {
                 close();
                 postponeTasks([t]);
-              } else if (o.date) set({ due_date: o.date }, 'Срок — ' + (o.key === 'today' || o.key === 'tomorrow' ? o.label.toLowerCase() : shortDate(o.date, today)));
+              } else if (o.date) set({ due_date: o.date }, T.due(o.date, today));
               else set({ due_date: null, due_time: null, recur: null, due_rule: null }, 'Срок снят');
             }}><Icon name={QUICK_LOOK[o.key][0]} size={20} /></button>
         ))}
-        <button title="Другой срок…" onClick={() => sub((c) => <Scheduler tasks={[t]} value={t as any} close={c} onPick={(v) => setTask(t, v as any, 'Срок поменял')} />, 'sched')}><Icon name="more" size={20} /></button>
+        <button title="Другой срок…" onClick={() => sub((c) => <Scheduler tasks={[t]} value={t as any} close={c} onPick={(v) => setDue(t, v)} />, 'sched')}><Icon name="more" size={20} /></button>
       </div>
       <div className="mh">Приоритет<span className="r">Y</span></div>
       <div className="prio-row">
         {[1, 2, 3, 4].map((p) => (
-          <button key={p} className={(t.priority ?? 4) === p ? 'on' : ''} title={'Приоритет ' + p} onClick={() => set({ priority: p })}><PrioFlag p={p} /></button>
+          <button key={p} className={(t.priority ?? 4) === p ? 'on' : ''} title={'Приоритет ' + p} onClick={() => set({ priority: p }, T.priority(p))}><PrioFlag p={p} /></button>
         ))}
       </div>
       <div className="msep" />
       <button className="mi" onClick={() => sub((c) => <Scheduler mode="deadline" dueOf={t.due_date} value={{ due_date: t.deadline ?? null, due_time: null, recur: null, due_rule: null }} close={c}
-        onPick={(v) => setTask(t, { deadline: v.due_date }, v.due_date ? 'Дедлайн — ' + shortDate(v.due_date, today) : 'Дедлайн снят')} />, 'sched')}>
+        onPick={(v) => setDeadline(t, v.due_date)} />, 'sched')}>
         <Icon name="deadline" size={18} />Дедлайн<span className="r">D</span></button>
       <button className="mi" onClick={() => sub((c) => <RemindPicker t={t} close={c} />)}><Icon name="alarm" size={18} />Напоминание</button>
       <button className="mi" onClick={() => sub(() => <LabelPicker value={t.labels || []} onPick={(l) => setTask(t, { labels: l })} />)}><Icon name="tag" size={18} />Метки<span className="r">L</span></button>
@@ -90,21 +92,22 @@ export function TaskMenu({ t, close }: { t: Task; close: () => void }) {
       <button className="mi" onClick={() => { close(); openQuick({ project_id: t.project_id, deal_id: t.deal_id, why_id: t.id }); }}><Icon name="sub" size={18} />Добавить подзадачу</button>
       <div className="msep" />
       <button className="mi" onClick={() => sub((c) => <ProjectPicker value={{ project_id: t.project_id, deal_id: t.deal_id, section_id: t.section_id ?? null }} close={c}
-        onPick={(p) => setTask(t, { project_id: p.project_id, deal_id: p.deal_id, section_id: p.section_id }, 'Переместил')} />)}><Icon name="door" size={18} />Переместить в…<span className="r">V</span></button>
+        onPick={(p) => setPlace(t, p)} />)}><Icon name="door" size={18} />Переместить в…<span className="r">V</span></button>
       <button className="mi" onClick={() => {
         close();
         const copy: Record<string, unknown> = { title: t.title, notes: t.notes, project_id: t.project_id, deal_id: t.deal_id, due_date: t.due_date, due_time: t.due_time,
           priority: t.priority ?? 4, labels: t.labels, person_id: t.person_id, section_id: t.section_id ?? null, deadline: t.deadline ?? null };
         if (t.recur) Object.assign(copy, { recur: t.recur, due_rule: t.due_rule });
-        op1({ op: 'task.create', task: { id: crypto.randomUUID(), ...copy } }).then(() => toast('Дублировал')).catch(() => {});
+        const id = crypto.randomUUID();
+        op1({ op: 'task.create', task: { id, ...copy } }).then(() => toast('Дублировал', () => ops([{ op: 'task.cancel', id }]).catch(() => {}))).catch(() => {});
       }}><Icon name="copy" size={18} />Дублировать</button>
       <button className="mi" onClick={() => { close(); navigator.clipboard?.writeText(taskLink(t)).then(() => toast('Ссылка скопирована')); }}><Icon name="link" size={18} />Копировать ссылку</button>
       {t.project_id ? <a className="mi" href={crmUrl(t.deal_id ? 'd' : 'p', t.deal_id || t.project_id)} target="_blank" rel="noreferrer" onClick={close}><Icon name="deal" size={18} />Карточка в CRM</a> : null}
-      {t.recur ? <button className="mi" onClick={() => { close(); ops([{ op: 'task.done', id: t.id, forever: true }]).then(() => toast('Выполнено навсегда')).catch(() => {}); }}><Icon name="done" size={18} />Выполнить навсегда<span className="r">Shift E</span></button> : null}
+      {t.recur ? <button className="mi" onClick={() => { close(); ops([{ op: 'task.done', id: t.id, forever: true }]).then(() => toast('Выполнено навсегда', () => ops([{ op: 'task.reopen', id: t.id }]).catch(() => {}))).catch(() => {}); }}><Icon name="done" size={18} />Выполнить навсегда<span className="r">Shift E</span></button> : null}
       <div className="msep" />
       <button className="mi danger" onClick={() => {
         close();
-        ops([{ op: 'task.cancel', id: t.id }]).then(() => toast('Задача удалена', () => ops([{ op: 'task.reopen', id: t.id }]).catch(() => {}))).catch(() => {});
+        ops([{ op: 'task.cancel', id: t.id }]).then(() => toast(T.deleted(), () => ops([{ op: 'task.reopen', id: t.id }]).catch(() => {}))).catch(() => {});
       }}><Icon name="trash" size={18} />Удалить</button>
     </div>
   );

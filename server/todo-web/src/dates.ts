@@ -79,10 +79,21 @@ export function nowHm(): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+/** Форма множественного числа по-русски — одна на весь веб, как у Todoist (4 формы): 0 — 1, 21, 101…; 1 — 2–4, 22–24…;
+ *  2 — 5–20, 25–30, 11–14, 111…; 3 — дробное. */
+export function pluralForm(n: number): 0 | 1 | 2 | 3 {
+  if (!Number.isInteger(n)) return 3;
+  const m10 = Math.abs(n) % 10, m100 = Math.abs(n) % 100;
+  if (m10 === 1 && m100 !== 11) return 0;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 1;
+  return 2;
+}
+/** Фраза из четырёх форм с {n}: plural4(3, ['{n} задача выполнена', '{n} задачи выполнено', '{n} задач выполнено', …]). */
+export function plural4(n: number, forms: [string, string, string, string]): string {
+  return forms[pluralForm(n)].replace('{n}', String(n));
+}
 export function plural(n: number, one: string, few: string, many: string): string {
-  const m10 = n % 10, m100 = n % 100;
-  const w = m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
-  return `${n} ${w}`;
+  return `${n} ${[one, few, many, few][pluralForm(n)]}`;
 }
 
 /** Дедлайн: обратный отсчёт за неделю («осталось 3 дня»), иначе дата. */

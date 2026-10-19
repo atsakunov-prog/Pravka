@@ -1,5 +1,6 @@
 // Боковая панель Todoist: я и колокольчик, «Добавить задачу», Поиск, виды, Избранное, наше «Дерево жизни»,
 // «Мои проекты» (клиенты, под ними сделки — подпроекты), внизу — CRM и старый веб.
+import { setDue, setPlace } from './acts.ts';
 import { useEffect, useState } from 'react';
 import { dealShort, go, initials, projectColor, useRoute } from '../lib.ts';
 import { S, saveTodo, setTask, todoSettings, useStore } from '../store.ts';
@@ -40,7 +41,7 @@ export function SideContent() {
   const toggle = (k: string) => saveTodo({ collapsed: { ...coll, [k]: !coll[k] } }).catch(() => {});
   const move = (pid: string | null, deal: string | null = null) => (id: string) => {
     const t = S.tasks.get(id);
-    if (t) setTask(t, { project_id: pid, deal_id: deal, section_id: null }, 'Переместил').catch(() => {});
+    if (t) setPlace(t, { project_id: pid, deal_id: deal });
   };
   const favItems = fav.map((k) => {
     const [kind, id] = [k.slice(0, 1), k.slice(2)];
@@ -68,7 +69,7 @@ export function SideContent() {
         <SideSearch />
         <Item href="#/now" icon={<Icon name="bolt" size={20} />} label="Сейчас" count={c.now} on={at('now') || r.view === ''} onDropTask={(id) => { const t = S.tasks.get(id); if (t) setTask(t, { focus_on: S.today }, 'В «Сейчас»').catch(() => {}); }} />
         <Item href="#/inbox" icon={<Icon name="inbox" size={20} />} label="Входящие" count={c.inbox} on={at('inbox')} onDropTask={move(null)} />
-        <Item href="#/today" icon={<TodayIcon day={+(S.today || '00').slice(8, 10)} size={20} />} label="Сегодня" count={c.today} on={at('today')} onDropTask={(id) => { const t = S.tasks.get(id); if (t) setTask(t, { due_date: S.today }, 'Срок — сегодня').catch(() => {}); }} />
+        <Item href="#/today" icon={<TodayIcon day={+(S.today || '00').slice(8, 10)} size={20} />} label="Сегодня" count={c.today} on={at('today')} onDropTask={(id) => { const t = S.tasks.get(id); if (t) setDue(t, { due_date: S.today }); }} />
         <Item href="#/upcoming" icon={<Icon name="upcoming" size={20} />} label="Предстоящее" on={at('upcoming')} />
         <Item href="#/filters" icon={<Icon name="filters" size={20} />} label="Фильтры и метки" on={at('filters') || at('filter') || at('label')} />
         <Item href="#/done" icon={<Icon name="done" size={20} />} label="Выполнено" on={at('done')} />

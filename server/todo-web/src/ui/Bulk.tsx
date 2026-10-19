@@ -1,5 +1,7 @@
 // Несколько выбранных задач (Ctrl/Shift+клик) — панель снизу, как у Todoist: срок, переместить, метки, приоритет,
 // «Сейчас», выполнить, удалить. И окно нового проекта.
+import { T } from '../toastText.ts';
+import { placeName } from '../lib.ts';
 import { useState } from 'react';
 import { plural } from '../dates.ts';
 import { PALETTE } from '../lib.ts';
@@ -9,6 +11,16 @@ import { Icon, PrioFlag } from './icons.tsx';
 import { openPop } from './pop.tsx';
 import { LabelPicker, PriorityMenu, ProjectPicker, Scheduler } from './pickers.tsx';
 import { UI } from './state.ts';
+
+/** Выполнить выбранные: «N задач выполнено»; «Отменить» у обычного — снова открыто, у повтора — прежний срок. */
+function doneAll(ts: Task[]) {
+  ops(ts.map((t) => ({ op: 'task.done', id: t.id }))).then((res) => {
+    const back = ts.map((t, i) => (res[i]?.recurred
+      ? { op: 'task.set', id: t.id, set: { due_date: t.due_date, focus_on: t.focus_on ?? null, ...(t.remind_at ? { remind_at: t.remind_at } : {}) } }
+      : { op: 'task.reopen', id: t.id }));
+    toast(T.done(ts.length), () => ops(back).catch(() => {}));
+  }).catch(() => {});
+}
 
 export function BulkBar() {
   useStore();
@@ -27,14 +39,14 @@ export function BulkBar() {
       background: 'var(--raised)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--sh2)', padding: '6px 8px', maxWidth: 'calc(100vw - 16px)', flexWrap: 'wrap' }}>
       <span style={{ fontWeight: 600, padding: '0 8px' }}>{plural(ts.length, 'задача', 'задачи', 'задач')}</span>
       <button className="tb-btn" onClick={(e) => openPop(e.currentTarget, (close) => <Scheduler tasks={ts} value={{ due_date: null, due_time: null, recur: null, due_rule: null }} close={close}
-        onPick={(v) => each(() => ({ due_date: v.due_date, ...(v.due_date ? {} : { due_time: null }) }), 'Срок поменял')} />, { cls: 'sched' })}><Icon name="calendar" size={18} />Срок</button>
+        onPick={(v) => each(() => ({ due_date: v.due_date, ...(v.due_date ? {} : { due_time: null }) }), T.due(v.due_date, S.today))} />, { cls: 'sched' })}><Icon name="calendar" size={18} />Срок</button>
       <button className="tb-btn" onClick={(e) => openPop(e.currentTarget, (close) => <ProjectPicker value={{ project_id: null, deal_id: null, section_id: null }} close={close}
-        onPick={(p) => each(() => ({ project_id: p.project_id, deal_id: p.deal_id, section_id: p.section_id }), 'Переместил')} />)}><Icon name="door" size={18} />Переместить</button>
+        onPick={(p) => each(() => ({ project_id: p.project_id, deal_id: p.deal_id, section_id: p.section_id }), T.moved(placeName(p), ts.length))} />)}><Icon name="door" size={18} />Переместить</button>
       <button className="tb-btn" onClick={(e) => openPop(e.currentTarget, () => <LabelPicker value={[]} onPick={(l) => each((t) => ({ labels: [...new Set([...(t.labels || []), ...l])] }), 'Метки добавил')} />)}><Icon name="tag" size={18} />Метки</button>
-      <button className="tb-btn" onClick={(e) => openPop(e.currentTarget, (close) => <PriorityMenu value={4} close={close} onPick={(p) => each(() => ({ priority: p }), 'Приоритет поменял')} />)}><PrioFlag p={2} size={18} />Приоритет</button>
+      <button className="tb-btn" onClick={(e) => openPop(e.currentTarget, (close) => <PriorityMenu value={4} close={close} onPick={(p) => each(() => ({ priority: p }), T.priority(p))} />)}><PrioFlag p={2} size={18} />Приоритет</button>
       <button className="tb-btn" onClick={() => each(() => ({ focus_on: S.today }), 'В «Сейчас»')}><Icon name="bolt" size={18} />Сейчас</button>
-      <button className="tb-btn" onClick={() => { const ids = ts.map((t) => t.id); ops(ids.map((id) => ({ op: 'task.done', id }))).then(() => toast('Выполнено: ' + ids.length, () => ops(ids.map((id) => ({ op: 'task.reopen', id }))).catch(() => {}))).catch(() => {}); clear(); }}><Icon name="done" size={18} />Выполнить</button>
-      <button className="tb-btn" style={{ color: 'var(--p1)' }} onClick={() => { const ids = ts.map((t) => t.id); ops(ids.map((id) => ({ op: 'task.cancel', id }))).then(() => toast('Удалено: ' + ids.length, () => ops(ids.map((id) => ({ op: 'task.reopen', id }))).catch(() => {}))).catch(() => {}); clear(); }}><Icon name="trash" size={18} /></button>
+      <button className="tb-btn" onClick={() => { doneAll(ts); clear(); }}><Icon name="done" size={18} />Выполнить</button>
+      <button className="tb-btn" style={{ color: 'var(--p1)' }} onClick={() => { const ids = ts.map((t) => t.id); ops(ids.map((id) => ({ op: 'task.cancel', id }))).then(() => toast(T.deleted(ids.length), () => ops(ids.map((id) => ({ op: 'task.reopen', id }))).catch(() => {}))).catch(() => {}); clear(); }}><Icon name="trash" size={18} /></button>
       <button className="icon-btn" title="Снять выбор (Esc)" onClick={clear}><Icon name="x" size={18} /></button>
     </div>
   );

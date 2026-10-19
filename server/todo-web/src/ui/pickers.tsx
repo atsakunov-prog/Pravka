@@ -1,8 +1,9 @@
 // Меню выбора: срок (планировщик Todoist), приоритет, проект, метки, человек, цель.
 import { useMemo, useState } from 'react';
-import { addMonths, daysInMonth, MONTHS_NOM, plural, shortDate, WD, WD_SHORT, weekday, ymd } from '../dates.ts';
+import { addMonths, daysInMonth, MONTHS_NOM, shortDate, WD, WD_SHORT, weekday, ymd } from '../dates.ts';
 import { parseWhen, recurWords, type When } from '../quick.ts';
 import { deadlineOptions, dueOptions, postponed, type QuickKey } from '../schedule.ts';
+import { T } from '../toastText.ts';
 import { ops, S, setTask, toast } from '../store.ts';
 import type { Id, Recur, Task } from '../types.ts';
 import { dealShort, PALETTE, projectColor } from '../lib.ts';
@@ -38,12 +39,12 @@ export function postponeTasks(ts: Task[]) {
   const today = S.today;
   const moves = ts.map((t) => ({ t, to: postponed(t, today) }));
   if (moves.length === 1) {
-    setTask(moves[0].t, moves[0].to, 'Отложил на ' + shortDate(moves[0].to.due_date, today)).catch(() => {});
+    setTask(moves[0].t, moves[0].to, T.rescheduled(moves[0].to.due_date, today)).catch(() => {});
     return;
   }
   const back = moves.map(({ t }) => ({ op: 'task.set', id: t.id, set: { due_date: t.due_date, due_time: t.due_time ?? null } }));
   ops(moves.map(({ t, to }) => ({ op: 'task.set', id: t.id, set: to })))
-    .then(() => toast('Отложил ' + plural(moves.length, 'задачу', 'задачи', 'задач'), () => ops(back).catch(() => {})))
+    .then(() => toast(T.rescheduled(null, today), () => ops(back).catch(() => {})))
     .catch(() => {});
 }
 
