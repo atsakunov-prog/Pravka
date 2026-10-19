@@ -5,7 +5,8 @@ import { dueWords } from '../dates.ts';
 import { saveTodo, S, toast, todoSettings } from '../store.ts';
 import { T } from '../toastText.ts';
 import type { Task } from '../types.ts';
-import { byDue, byPos } from '../views.ts';
+import type { Chain } from '../order.ts';
+import { sorted } from '../views.ts';
 import { dealShort, projectName } from '../lib.ts';
 import { filterTasks, type ViewOpts } from '../viewopts.ts';
 import { Icon } from './icons.tsx';
@@ -21,20 +22,22 @@ export function saveViewOpts(key: string, v: ViewOpts) {
   saveTodo({ views: all } as any).catch(() => {});
 }
 
-export function sortTasks(ts: Task[], sort: ViewOpts['sort']): Task[] {
-  const a = [...ts];
-  if (sort === 'date') return a.sort(byDue);
-  if (sort === 'priority') return a.sort((x, y) => (x.priority ?? 4) - (y.priority ?? 4) || byDue(x, y));
-  if (sort === 'name') return a.sort((x, y) => x.title.localeCompare(y.title, 'ru'));
-  if (sort === 'added') return a.sort((x, y) => y.created_at.localeCompare(x.created_at));
-  if (sort === 'deadline') return a.sort((x, y) => (x.deadline || '9999').localeCompare(y.deadline || '9999') || byDue(x, y));
-  if (sort === 'project') return a.sort((x, y) => projectName(x.project_id).localeCompare(projectName(y.project_id), 'ru') || byPos(x, y));
-  return a.sort(byPos);
+/** Выбранная сортировка — цепочкой Todoist (order.ts). «Вручную» — ручной порядок; «по дате добавления» — новые сверху
+ *  (переключателя направления у нас нет, а свежее нужнее; разворачивается только первый признак). base — порядок вида
+ *  по умолчанию, когда сортировка не выбрана (у фильтра — приоритет, срок…). */
+export function sortTasks(ts: Task[], sort: ViewOpts['sort'], base: Chain = 'project'): Task[] {
+  if (sort === 'date') return sorted(ts, 'date');
+  if (sort === 'priority') return sorted(ts, 'priority');
+  if (sort === 'name') return sorted(ts, 'name');
+  if (sort === 'added') return sorted(ts, 'added', true);
+  if (sort === 'deadline') return sorted(ts, 'deadline');
+  if (sort === 'project') return sorted(ts, 'byProject');
+  return sorted(ts, base);
 }
 
 /** Что показать: фильтр вида, потом его сортировка. */
-export function shown(ts: Task[], o: ViewOpts): Task[] {
-  return sortTasks(filterTasks(ts, o, S.today), o.sort);
+export function shown(ts: Task[], o: ViewOpts, base: Chain = 'project'): Task[] {
+  return sortTasks(filterTasks(ts, o, S.today), o.sort, base);
 }
 
 export function groupTasks(ts: Task[], group: ViewOpts['group']): { key: string; title: string; tasks: Task[] }[] {

@@ -1,5 +1,6 @@
 // Виды: Сейчас, Входящие, Сегодня, Предстоящее, проект (разделы, сделки, доска), сделка, метка, фильтр, человек,
 // дерево целей, выполненные.
+import type { Chain } from '../order.ts';
 import { setDue, setPlace } from './acts.ts';
 import { T } from '../toastText.ts';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
@@ -75,11 +76,11 @@ const Empty = ({ icon = 'done', big, text }: { icon?: string; big: string; text?
 );
 
 /** Список со «Видом»: сортировка, группировка, выполненные внизу. */
-function Displayed({ tasks, vkey, add, showProject, nest = true, manualDrop }: {
-  tasks: Task[]; vkey: string; add?: any; showProject?: boolean; nest?: boolean; manualDrop?: boolean;
+function Displayed({ tasks, vkey, add, showProject, nest = true, manualDrop, base = 'project' }: {
+  tasks: Task[]; vkey: string; add?: any; showProject?: boolean; nest?: boolean; manualDrop?: boolean; base?: Chain;
 }) {
   const o = viewOpts(vkey);
-  const sorted = shown(tasks, o);
+  const sorted = shown(tasks, o, base); // base — порядок вида без выбранной сортировки (у метки — как у фильтра)
   const groups = groupTasks(sorted, o.group);
   const manual = (!o.sort || o.sort === 'manual') && (!o.group || o.group === 'none');
   return (
@@ -465,7 +466,7 @@ export function LabelView({ name }: { name: string }) {
   const vkey = 'label:' + name;
   return (
     <Page title={<><Icon name="tag" size={24} />{name}</>} crumbs="Фильтры и метки /" actions={<><DisplayBtn vkey={vkey} board={false} /><button className="tb-btn" onClick={(e) => openPop(e.currentTarget, (close) => <div><FavItem k={'l:' + name} close={close} /></div>)}><Icon name="more" size={20} /></button></>}>
-      <Displayed tasks={labelTasks(name)} vkey={vkey} add={{ labels: [name] }} showProject manualDrop={false} />
+      <Displayed tasks={labelTasks(name)} vkey={vkey} add={{ labels: [name] }} showProject manualDrop={false} base="filter" />
     </Page>
   );
 }
@@ -523,7 +524,7 @@ export function FilterView({ id }: { id: string }) {
       </>}>
       {err ? <div className="form"><div className="err">Не понял запрос: {err}</div></div> : null}
       {blocks.map((b, i) => {
-        const ts = shown(b.tasks, { ...o, sort: o.sort === 'manual' || !o.sort ? 'date' : o.sort });
+        const ts = shown(b.tasks, o, 'filter');
         return (
           <div key={i} className="sect">
             {blocks.length > 1 ? <div className="sect-h">{b.title}<span className="n">{ts.length}</span></div> : null}

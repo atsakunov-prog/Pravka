@@ -2,7 +2,8 @@
 // (как Todoist и как прежний веб): открывается мгновенно и без сети.
 
 import { addDays, diffDays, nowHm } from './dates.ts';
-import { S, nowOrder } from './store.ts';
+import { orderBy, type Chain, type OrderCtx } from './order.ts';
+import { S, nowOrder, todoSettings } from './store.ts';
 import type { Deal, Id, Project, Section, Task } from './types.ts';
 
 export const isOpen = (t: Task) => t.status === 'open';
@@ -52,17 +53,30 @@ export function byPos(a: Task, b: Task): number {
   return pa - pb || a.created_at.localeCompare(b.created_at);
 }
 
-/** Умный порядок Todoist для «Сегодня»: время → приоритет → дедлайн → порядок → создание. */
-export function smart(a: Task, b: Task): number {
-  const ta = a.due_time || '99', tb = b.due_time || '99';
-  return ta.localeCompare(tb) || (a.priority ?? 4) - (b.priority ?? 4)
-    || (a.deadline || '9999').localeCompare(b.deadline || '9999') || byPos(a, b);
+// Порядок Todoist (order.ts): проект — как в боковой панели (Входящие первыми), внутри проекта — без раздела, разделы,
+// сделки; дерево — по местам родителей. Раз на изменение памяти.
+let ctxAt = -1;
+let ctx: OrderCtx;
+export function orderCtx(): OrderCtx {
+  if (ctxAt === S.version) return ctx;
+  ctxAt = S.version;
+  const proj = new Map(projectsSorted((todoSettings() as { porder?: Id[] }).porder).map((p, i) => [p.id, i + 1]));
+  const deals = new Map([...S.deals.values()].sort((a, b) => a.name.localeCompare(b.name, 'ru')).map((d, i) => [d.id, i]));
+  ctx = {
+    project: (id) => (id ? proj.get(id) ?? 1e6 : 0),
+    section: (t) => (t.section_id ? S.sections.get(t.section_id)?.pos ?? 1e5 : t.deal_id ? 1e6 + (deals.get(t.deal_id) ?? 0) : -1),
+    parent: (t) => (parentOf(t) ? S.tasks.get(parentOf(t)!) : undefined),
+  };
+  return ctx;
 }
-
-/** По дате, без даты — в конце. */
-export function byDue(a: Task, b: Task): number {
-  return (a.due_date || '9999').localeCompare(b.due_date || '9999') || smart(a, b);
+/** Список в порядке цепочки Todoist (новый массив). */
+export function sorted(ts: Task[], chain: Chain, desc = false): Task[] {
+  return [...ts].sort(orderBy(chain, orderCtx(), desc));
 }
+/** Порядок дня (как у «Сегодня») — для сравнения по одному. */
+export const smart = (a: Task, b: Task): number => orderBy('day', orderCtx())(a, b);
+/** По сроку, без срока — в конце. */
+export const byDue = (a: Task, b: Task): number => orderBy('date', orderCtx())(a, b);
 
 // ── Виды ────────────────────────────────────────────────────────────────
 
@@ -79,7 +93,7 @@ export function underGoal(t: Task): boolean {
 }
 
 export function inbox(): Task[] {
-  return listed().filter((t) => !t.project_id && mine(t) && !underGoal(t)).sort(byPos);
+  return sorted(listed().filter((t) => !t.project_id && mine(t) && !underGoal(t)), 'project');
 }
 
 export function nowList(): Task[] {
@@ -88,18 +102,18 @@ export function nowList(): Task[] {
     const i = order.indexOf(id);
     return i < 0 ? 1e6 : i;
   };
-  return listed().filter((t) => t.focus_on === S.today && mine(t)).sort((a, b) => at(a.id) - at(b.id) || smart(a, b));
+  const day = orderBy('day', orderCtx());
+  return listed().filter((t) => t.focus_on === S.today && mine(t)).sort((a, b) => at(a.id) - at(b.id) || day(a, b));
 }
 
 /** Просроченное — срок раньше сегодняшнего дня (сегодняшнее с прошедшим временем стоит в «Сегодня», красным). */
 export function overdue(): Task[] {
-  return listed().filter((t) => mine(t) && t.due_date && t.due_date < S.today).sort(byDue);
+  return sorted(listed().filter((t) => mine(t) && t.due_date && t.due_date < S.today), 'overdue');
 }
 export { nowHm };
 
 export function dayList(day: string): Task[] {
-  return listed().filter((t) => mine(t) && (t.due_date === day || (t.deadline === day && t.due_date !== day && !(t.due_date && t.due_date < day))))
-    .sort(smart);
+  return sorted(listed().filter((t) => mine(t) && (t.due_date === day || (t.deadline === day && t.due_date !== day && !(t.due_date && t.due_date < day)))), 'day');
 }
 
 export function upcomingDays(from: string, n: number): { day: string; tasks: Task[] }[] {
@@ -114,23 +128,23 @@ export function upcomingDays(from: string, n: number): { day: string; tasks: Tas
   const out = [];
   for (let i = 0; i < n; i++) {
     const day = addDays(from, i);
-    out.push({ day, tasks: (by.get(day) || []).sort(smart) });
+    out.push({ day, tasks: sorted(by.get(day) || [], 'day') });
   }
   return out;
 }
 
 export function projectTasks(pid: Id): Task[] {
-  return listed().filter((t) => t.project_id === pid && !t.deal_id).sort(byPos);
+  return sorted(listed().filter((t) => t.project_id === pid && !t.deal_id), 'project');
 }
 export function dealTasks(did: Id): Task[] {
-  return listed().filter((t) => t.deal_id === did).sort(byPos);
+  return sorted(listed().filter((t) => t.deal_id === did), 'project');
 }
 export function labelTasks(name: string): Task[] {
   const n = name.toLowerCase();
-  return listed().filter((t) => (t.labels || []).some((l) => l.toLowerCase() === n)).sort((a, b) => (a.priority ?? 4) - (b.priority ?? 4) || byDue(a, b));
+  return sorted(listed().filter((t) => (t.labels || []).some((l) => l.toLowerCase() === n)), 'filter');
 }
 export function personTasks(pid: Id): Task[] {
-  return listed().filter((t) => t.person_id === pid || t.requested_by === pid).sort(byDue);
+  return sorted(listed().filter((t) => t.person_id === pid || t.requested_by === pid), 'date');
 }
 
 export function sectionsOf(pid: Id): Section[] {
@@ -175,8 +189,7 @@ export function search(q: string): { tasks: Task[]; projects: Project[]; people:
   if (!n) return { tasks: [], projects: [], people: [] };
   const has = (s?: string | null) => (s || '').toLowerCase().replace(/ё/g, 'е').includes(n);
   return {
-    tasks: [...S.tasks.values()].filter((t) => !t.goal && (has(t.title) || has(t.notes)))
-      .sort((a, b) => Number(!isOpen(a)) - Number(!isOpen(b)) || byDue(a, b)).slice(0, 80),
+    tasks: sorted([...S.tasks.values()].filter((t) => !t.goal && (has(t.title) || has(t.notes))), 'search').slice(0, 80),
     projects: [...S.projects.values()].filter((p) => has(p.name)).slice(0, 10),
     people: [...S.people.values()].filter((p) => !p.merged_into && (has(p.name) || has(p.short))).slice(0, 10),
   };
@@ -207,7 +220,7 @@ export function goalChildren(id: Id | null, dir?: string): Task[] {
 }
 /** Дела, висящие прямо на цели (не цели). */
 export function goalTasks(id: Id): Task[] {
-  return listed().filter((t) => t.why_id === id && t.why_goal).sort(byDue);
+  return sorted(listed().filter((t) => t.why_id === id && t.why_goal), 'date');
 }
 /** Цепочка «Зачем» вверх: цель › цель › … */
 export function whyPath(t: Task): Task[] {
