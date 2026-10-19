@@ -12,6 +12,7 @@ export interface QuickDefaults {
   labels?: string[];
   person_id?: Id | null;
   priority?: number;
+  near?: { id: Id; mark: 'before' | 'after' }; // «Добавить задачу выше / ниже» из меню дела
 }
 
 export const UI = {
@@ -36,7 +37,14 @@ export const UI = {
   dictate: false, // окно «Надиктовать задачи»
 };
 
+/** Недавно открытые дела — для «Недавнего» в Ctrl+K (как у Todoist), в памяти вкладки. */
+export const recentTasks: Id[] = [];
+
 export function openTask(id: Id, edit = false, comment = false) {
+  const was = recentTasks.indexOf(id);
+  if (was >= 0) recentTasks.splice(was, 1);
+  recentTasks.unshift(id);
+  recentTasks.length = Math.min(recentTasks.length, 8);
   UI.task = id;
   UI.taskEdit = edit;
   UI.taskComment = comment;

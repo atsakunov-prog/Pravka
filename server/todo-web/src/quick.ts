@@ -971,6 +971,18 @@ export function parseQuick(text: string, ctx: Ctx, opts: { dates?: boolean } = {
   return out;
 }
 
+/** Строка без распознанного вида kind — крестик «Убрать» на чипе быстрого ввода: «Позвонить завтра p1» без приоритета →
+ *  «Позвонить завтра». У метки — только она (word — имя метки). Пробелы на стыках схлопываются. */
+export function cutTokens(text: string, parsed: Parsed, kind: TokKind, word?: string): string {
+  const low = (s: string) => s.toLowerCase().replace(/ё/g, 'е');
+  const drop = parsed.tokens.filter((t) => t.kind === kind && (word === undefined || low(text.slice(t.start + 1, t.end)) === low(word)))
+    .sort((a, b) => b.start - a.start);
+  if (!drop.length) return text;
+  let s = text;
+  for (const t of drop) s = s.slice(0, t.start) + s.slice(t.end);
+  return s.replace(/[ \t]{2,}/g, ' ').replace(/^[ \t]+|[ \t]+$/gm, '');
+}
+
 function firstName(x: Named): string[] {
   const parts = (x.name || '').split(/\s+/);
   return parts.length > 1 ? [parts[0]] : [];

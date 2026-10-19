@@ -1,7 +1,7 @@
 // Разбор быстрого ввода: node --experimental-strip-types --test src/*.test.ts (npm test). Имена — выдуманные.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { parseQuick, parseWhen, type Ctx } from './quick.ts';
+import { cutTokens, parseQuick, parseWhen, type Ctx } from './quick.ts';
 
 // Понедельник, 19 октября 2026.
 const ctx: Ctx = {
@@ -209,6 +209,19 @@ test('«на выходных» — ближайшая суббота: в суб
     assert.equal(parseQuick(s, sat).due_date, '2026-10-24', s);
     assert.equal(q(s).due_date, '2026-10-24', s); // в понедельник — эта суббота
   }
+});
+
+test('крестик «Убрать» на чипе вырезает распознанное из строки (иначе строка распознала бы снова)', () => {
+  const cut = (s: string, kind: Parameters<typeof cutTokens>[2], word?: string) => cutTokens(s, q(s), kind, word);
+  assert.equal(cut('Позвонить завтра p1 @звонок', 'priority'), 'Позвонить завтра @звонок');
+  assert.equal(cut('Позвонить завтра в 15 p1', 'date'), 'Позвонить p1');
+  assert.equal(cut('Купить @дорога хлеб @звонок', 'label', 'звонок'), 'Купить @дорога хлеб');
+  assert.equal(cut('Купить @дорога хлеб @звонок', 'label', 'дорога'), 'Купить хлеб @звонок');
+  assert.equal(cut('Тизер {25 окт} +Иван', 'deadline'), 'Тизер +Иван');
+  assert.equal(cut('Тизер {25 окт} +Иван', 'person'), 'Тизер {25 окт}');
+  assert.equal(cut('Сделать !сейчас', 'now'), 'Сделать');
+  assert.equal(cut('Просто текст', 'date'), 'Просто текст');
+  assert.equal(q(cut('Позвонить завтра p1', 'priority')).priority, undefined);
 });
 
 test('напоминание: !время и !место', () => {

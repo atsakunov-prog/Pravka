@@ -5,6 +5,8 @@ import { go, projectColor, useMobile, useRoute } from '../lib.ts';
 import { completeTask, dropToast, emit, S, setTask, syncSoon, toasts, useStore } from '../store.ts';
 import { LabelPicker, PriorityMenu, ProjectPicker, Scheduler } from './pickers.tsx';
 import { TaskMenu } from './TaskMenu.tsx';
+import { matchCommands, type Cmd } from '../commands.ts';
+import type { Task } from '../types.ts';
 import { GO, globalAct, keyName, taskAct } from '../keys.ts';
 import { search } from '../views.ts';
 import { BulkBar, ProjectDialog } from './Bulk.tsx';
@@ -15,7 +17,7 @@ import { Editor } from './Editor.tsx';
 import { Icon, TodayIcon } from './icons.tsx';
 import { PopHost, closePop, openPop, popOpen } from './pop.tsx';
 import { SideContent } from './Sidebar.tsx';
-import { closeDialog, closeQuick, closeTask, openDictate, openQuick, openTask, toggleSide, UI } from './state.ts';
+import { closeDialog, closeQuick, closeTask, openDialog, openDictate, openQuick, openTask, recentTasks, toggleSide, UI } from './state.ts';
 import { TaskModal } from './TaskModal.tsx';
 import { Checkbox, Meta } from './TaskRow.tsx';
 import {
@@ -49,33 +51,73 @@ function QuickModal() {
   );
 }
 
+/** Ctrl+K — как у Todoist: поиск и команды одним списком, группами, у команды — её клавиша. ↑↓ — выбор, Enter — выполнить. */
 function SearchModal({ close }: { close: () => void }) {
   useStore();
   const [q, setQ] = useState('');
+  const [hi, setHi] = useState(0);
   const res = search(q);
-  const recent = [...S.tasks.values()].filter((t) => t.status === 'open' && !t.goal).sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 6);
+  const open = [...S.tasks.values()].filter((t) => t.status === 'open' && !t.goal);
+  const seen = recentTasks.map((id) => S.tasks.get(id)).filter((t): t is Task => !!t && t.status === 'open');
+  const recent = [...seen, ...open.filter((t) => !seen.includes(t)).sort((a, b) => b.updated_at.localeCompare(a.updated_at))].slice(0, 6);
   const tasks = q ? res.tasks : recent;
+  const cmds = matchCommands(q);
+  const run = (c: Cmd) => {
+    close();
+    const [kind, what] = c.id.split(':');
+    if (kind === 'go') go(what);
+    else if (c.id === 'add:task') openQuick({});
+    else if (c.id === 'add:dictate') openDictate();
+    else if (c.id === 'add:project') openDialog('project');
+    else if (c.id === 'add:filter') openDialog('filter');
+    else if (c.id === 'view:side') toggleSide();
+  };
+  // Плоский список для ↑↓ и Enter: проекты, люди, дела, потом команды.
+  const items: { key: string; run: () => void }[] = [
+    ...res.projects.map((p) => ({ key: 'p' + p.id, run: () => { close(); go('project/' + p.id); } })),
+    ...res.people.map((p) => ({ key: 'h' + p.id, run: () => { close(); go('person/' + p.id); } })),
+    ...tasks.map((t) => ({ key: 't' + t.id, run: () => { close(); openTask(t.id); } })),
+    ...cmds.map((c) => ({ key: 'c' + c.id, run: () => run(c) })),
+  ];
+  const at = Math.min(hi, items.length - 1);
+  const cls = (key: string) => (items[at]?.key === key ? ' act' : '');
+  const groups = [...new Set(cmds.map((c) => c.group))];
   return (
     <div className="scrim" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
       <div className="search-box">
-        <input autoFocus placeholder="Поиск задач, проектов, людей" value={q} onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Escape') close(); if (e.key === 'Enter' && tasks[0]) { close(); openTask(tasks[0].id); } }} />
+        <input autoFocus placeholder="Поиск и команды: задачи, проекты, люди, «сегодня», «добавить проект»" value={q} onChange={(e) => { setQ(e.target.value); setHi(0); }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') close();
+            if (e.key === 'ArrowDown') { e.preventDefault(); setHi((at + 1) % Math.max(items.length, 1)); }
+            if (e.key === 'ArrowUp') { e.preventDefault(); setHi((at - 1 + items.length) % Math.max(items.length, 1)); }
+            if (e.key === 'Enter' && items[at]) { e.preventDefault(); items[at].run(); }
+          }} />
         <div className="res">
-          {!q ? <div className="mh">Недавние</div> : null}
           {res.projects.map((p) => (
-            <button key={p.id} className="mi" onClick={() => { close(); go('project/' + p.id); }}><span className="hash" style={{ color: projectColor(p) }}>#</span>{p.name}</button>
+            <button key={p.id} className={'mi' + cls('p' + p.id)} onClick={() => { close(); go('project/' + p.id); }}><span className="hash" style={{ color: projectColor(p) }}>#</span>{p.name}</button>
           ))}
           {res.people.map((p) => (
-            <button key={p.id} className="mi" onClick={() => { close(); go('person/' + p.id); }}><Icon name="user" size={18} />{p.name}</button>
+            <button key={p.id} className={'mi' + cls('h' + p.id)} onClick={() => { close(); go('person/' + p.id); }}><Icon name="user" size={18} />{p.name}</button>
           ))}
-          {q && (res.projects.length || res.people.length) && tasks.length ? <div className="msep" /> : null}
+          {tasks.length ? <div className="mh">{q ? 'Задачи' : 'Недавнее'}</div> : null}
           {tasks.map((t) => (
-            <div key={t.id} className="task" style={{ borderBottom: 0, padding: '6px 8px', borderRadius: 6 }} onClick={() => { close(); openTask(t.id); }}>
+            <div key={t.id} className={'task' + cls('t' + t.id)} style={{ borderBottom: 0, padding: '6px 8px', borderRadius: 6 }} onClick={() => { close(); openTask(t.id); }}>
               <Checkbox t={t} />
               <div className="tbody"><div className="ttl">{t.title}</div><Meta t={t} showProject /></div>
             </div>
           ))}
-          {q && !tasks.length && !res.projects.length && !res.people.length ? <div className="mh">Ничего не нашлось</div> : null}
+          {groups.map((g) => (
+            <div key={g}>
+              <div className="mh">{g}</div>
+              {cmds.filter((c) => c.group === g).map((c) => (
+                <button key={c.id} className={'mi' + cls('c' + c.id)} onClick={() => run(c)}>
+                  <Icon name={c.id.startsWith('add') ? 'plus' : c.id.startsWith('go') ? 'chevR' : 'sidebar'} size={18} />{c.label}
+                  {c.keys ? <span className="r">{c.keys}</span> : null}
+                </button>
+              ))}
+            </div>
+          ))}
+          {q && !items.length ? <div className="mh">Ничего не нашлось</div> : null}
         </div>
       </div>
     </div>

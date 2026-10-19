@@ -11,7 +11,8 @@ import {
   listed, liveDeals, nowList, overdue, personTasks, projectTasks, sectionsOf, upcomingDays, whyPath,
 } from '../views.ts';
 import { filterCtx } from './ctx.ts';
-import { DisplayMenu, groupTasks, sortTasks, viewOpts } from './Display.tsx';
+import { DisplayMenu, groupTasks, shown, viewOpts } from './Display.tsx';
+import { viewLabel } from '../viewopts.ts';
 import { Icon, TodayIcon } from './icons.tsx';
 import { openPop } from './pop.tsx';
 import { ColorPicker, Scheduler } from './pickers.tsx';
@@ -57,11 +58,12 @@ function MobileMenuButton() {
 }
 
 function DisplayBtn({ vkey, board, groups }: { vkey: string; board?: boolean; groups?: boolean }) {
-  const o = viewOpts(vkey);
+  // Подпись — как у Todoist: «Отсортировано по…», «Сгруппировано по…», «Свой вид»; рядом — сколько настроек изменено.
+  const { text, n } = viewLabel(viewOpts(vkey));
   return (
-    <button className="tb-btn" onClick={(e) => openPop(e.currentTarget, () => <DisplayMenu vkey={vkey} opts={viewOpts(vkey)} board={board} groups={groups} />)}>
-      <Icon name="sliders" size={20} /><span className="d-only">Вид</span>
-      {o.layout || o.group || o.sort || o.done ? <span style={{ width: 6, height: 6, borderRadius: 3, background: 'var(--p2)' }} /> : null}
+    <button className="tb-btn" title={text} onClick={(e) => openPop(e.currentTarget, () => <DisplayMenu vkey={vkey} opts={viewOpts(vkey)} board={board} groups={groups} />)}>
+      <Icon name="sliders" size={20} /><span className="d-only">{text}</span>
+      {n ? <span className="vb-n">{n}</span> : null}
     </button>
   );
 }
@@ -75,7 +77,7 @@ function Displayed({ tasks, vkey, add, showProject, nest = true, manualDrop }: {
   tasks: Task[]; vkey: string; add?: any; showProject?: boolean; nest?: boolean; manualDrop?: boolean;
 }) {
   const o = viewOpts(vkey);
-  const sorted = sortTasks(tasks, o.sort);
+  const sorted = shown(tasks, o);
   const groups = groupTasks(sorted, o.group);
   const manual = (!o.sort || o.sort === 'manual') && (!o.group || o.group === 'none');
   return (
@@ -346,13 +348,13 @@ export function ProjectView({ id }: { id: Id }) {
     return (
       <Page title={title} crumbs="Мои проекты /" sub={header} actions={actions} wide>
         <div className="board">
-          <BoardCol title="Без раздела" tasks={sortTasks(loose, o.sort)} add={{ project_id: id }} onDropTask={(d) => setTask(d, { section_id: null, project_id: id, deal_id: null }).catch(() => {})} />
+          <BoardCol title="Без раздела" tasks={shown(loose, o)} add={{ project_id: id }} onDropTask={(d) => setTask(d, { section_id: null, project_id: id, deal_id: null }).catch(() => {})} />
           {secs.map((s) => (
-            <BoardCol key={s.id} title={s.name} tasks={sortTasks(own.filter((t) => t.section_id === s.id), o.sort)} add={{ project_id: id, section_id: s.id }}
+            <BoardCol key={s.id} title={s.name} tasks={shown(own.filter((t) => t.section_id === s.id), o)} add={{ project_id: id, section_id: s.id }}
               onDropTask={(d) => setTask(d, { section_id: s.id, project_id: id, deal_id: null }).catch(() => {})} />
           ))}
           {deals.map((d) => (
-            <BoardCol key={d.id} title={dealShort(d.id)} icon="deal" tasks={sortTasks(dealTasks(d.id), o.sort)} add={{ project_id: id, deal_id: d.id }}
+            <BoardCol key={d.id} title={dealShort(d.id)} icon="deal" tasks={shown(dealTasks(d.id), o)} add={{ project_id: id, deal_id: d.id }}
               onDropTask={(x) => setTask(x, { deal_id: d.id, project_id: id, section_id: null }).catch(() => {})} />
           ))}
           <div className="col"><AddSection pid={id} pos={secs.length + 1} /></div>
@@ -366,10 +368,10 @@ export function ProjectView({ id }: { id: Id }) {
       {grouped ? <Displayed tasks={[...own, ...deals.flatMap((d) => dealTasks(d.id))]} vkey={vkey} add={{ project_id: id }} /> : (
         <>
           <div className="sect">
-            <TaskList tasks={sortTasks(loose, o.sort)} add={{ project_id: id }} drop={{}} nest={!o.sort || o.sort === 'manual'} />
+            <TaskList tasks={shown(loose, o)} add={{ project_id: id }} drop={{}} nest={!o.sort || o.sort === 'manual'} />
           </div>
           {secs.map((s, i) => {
-            const ts = sortTasks(own.filter((t) => t.section_id === s.id), o.sort);
+            const ts = shown(own.filter((t) => t.section_id === s.id), o);
             return (
               <div key={s.id}>
                 {i === 0 ? <AddSection pid={id} pos={0} /> : null}
@@ -383,7 +385,7 @@ export function ProjectView({ id }: { id: Id }) {
           })}
           {!secs.length ? <AddSection pid={id} pos={1} /> : null}
           {deals.map((d) => {
-            const ts = sortTasks(dealTasks(d.id), o.sort);
+            const ts = shown(dealTasks(d.id), o);
             return (
               <div key={d.id} className="sect">
                 <div className="sect-h">
@@ -519,7 +521,7 @@ export function FilterView({ id }: { id: string }) {
       </>}>
       {err ? <div className="form"><div className="err">Не понял запрос: {err}</div></div> : null}
       {blocks.map((b, i) => {
-        const ts = sortTasks(b.tasks, o.sort === 'manual' || !o.sort ? 'date' : o.sort);
+        const ts = shown(b.tasks, { ...o, sort: o.sort === 'manual' || !o.sort ? 'date' : o.sort });
         return (
           <div key={i} className="sect">
             {blocks.length > 1 ? <div className="sect-h">{b.title}<span className="n">{ts.length}</span></div> : null}
