@@ -1,6 +1,6 @@
 // Каркас: боковая панель и вид, окна поверх, тосты, горячие клавиши Todoist, на телефоне — нижняя панель и «+».
 import { useEffect, useState } from 'react';
-import { ApiError, api } from '../api.ts';
+import { ApiError, api, inApp } from '../api.ts';
 import { go, projectColor, useMobile, useRoute } from '../lib.ts';
 import { completeTask, dropToast, emit, S, setTask, syncSoon, toasts, useStore } from '../store.ts';
 import { Scheduler } from './pickers.tsx';
@@ -232,7 +232,9 @@ export function App() {
         S.me = await api('/api/me');
         await syncSoon(true);
       } catch (e) {
-        setErr(e instanceof ApiError && e.status === 401 ? 'Вход — по ссылке-приглашению. Открой её на этом устройстве один раз.' : 'Не открылось: ' + (e instanceof Error ? e.message : String(e)));
+        setErr(e instanceof ApiError && e.status === 401
+          ? (inApp() ? 'Правка не подключена к Делам: Настройки → Дела → подключить по QR с компа.' : 'Вход — по ссылке-приглашению. Открой её на этом устройстве один раз.')
+          : 'Не открылось: ' + (e instanceof Error ? e.message : String(e)));
       }
     })();
     try {

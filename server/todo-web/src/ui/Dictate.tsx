@@ -2,7 +2,7 @@
 // capture.say): правило узнало — легло сразу, иначе Claude по промпту разбора надиктовки (Свод prompt.raznoska) с
 // корзинами — дело, напоминание, «потом», заметка в хронологию, идея, «сделано». Итог — строками, у каждой «Вернуть».
 import { useEffect, useRef, useState } from 'react';
-import { api, uuid } from '../api.ts';
+import { api, inApp, uuid } from '../api.ts';
 import { log, ops, S, syncSoon, toast } from '../store.ts';
 import { Icon } from './icons.tsx';
 import { canSpeak, useSpeech } from './speech.ts';
@@ -89,7 +89,8 @@ export function Dictate({ close }: { close: () => void }) {
             {!cap ? (
               <textarea ref={ta} className="ed-desc" style={{ fontSize: 15, lineHeight: '22px', minHeight: 120 }} value={text}
                 placeholder={canSpeak() ? 'Говори — пишу. Сколько угодно дел подряд, с паузами: «позвонить Ивану завтра, Ольге — счёт Альфе к пятнице, купить магний…»'
-                  : 'Пиши или диктуй Диктовкой (Ctrl+Shift+Space): сколько угодно дел подряд — разложу сам'}
+                  : inApp() ? 'Нажми микрофон на клавиатуре и говори сколько угодно дел подряд — разложу сам'
+                    : 'Пиши или диктуй Диктовкой (Ctrl+Shift+Space): сколько угодно дел подряд — разложу сам'}
                 onChange={(e) => { setText(e.target.value); base.current = e.target.value; }}
                 onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } if (e.key === 'Escape') close(); }} />
             ) : (

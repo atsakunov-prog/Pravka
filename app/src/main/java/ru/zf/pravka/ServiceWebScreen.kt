@@ -85,7 +85,16 @@ internal fun openService(context: Context, page: ServicePage, inBrowser: Boolean
 
 /** Страница сервиса целиком: шапка Ковчега, тонкая полоска загрузки акцентом, сама страница. */
 @Composable
-internal fun ServiceWebScreen(app: PravkaApp, page: ServicePage, onClose: () -> Unit) {
+internal fun ServiceWebScreen(
+    app: PravkaApp,
+    page: ServicePage,
+    onClose: () -> Unit,
+    /** Мостик в страницу: только у Дел ([DelaWebBridge]) — имя `window.<…>` и как его сделать для живой страницы. */
+    bridge: Pair<String, (ServiceWebPage) -> Any>? = null,
+    /** Перейти на этот адрес страницы (дело из уведомления — `…/t#/task/<id>`), потом [onGone]. */
+    goTo: String? = null,
+    onGone: () -> Unit = {},
+) {
     val context = LocalContext.current
     val nav by app.delaSync.services.collectAsState()
     val link by app.delaSync.link.collectAsState()
@@ -102,7 +111,7 @@ internal fun ServiceWebScreen(app: PravkaApp, page: ServicePage, onClose: () -> 
     val preview = LocalInspectionMode.current
     val bg = Kv.bg.toArgb()
     val web = remember(page.url, gen) {
-        if (preview) null else ServiceWebPool.obtain(context, page, rules, Look.dark, bg, lastUrl)
+        if (preview) null else ServiceWebPool.obtain(context, page, rules, Look.dark, bg, lastUrl, bridge)
     }
     if (web != null) {
         LaunchedEffect(web.gone) {
@@ -126,6 +135,12 @@ internal fun ServiceWebScreen(app: PravkaApp, page: ServicePage, onClose: () -> 
         // Тема приложения → кука темы и сама страница (общий слой Ковчега переключается без перезагрузки).
         val dark = Look.dark
         LaunchedEffect(web, dark) { web.theme(dark) }
+        LaunchedEffect(web, goTo) {
+            if (goTo != null) {
+                web.go(goTo)
+                onGone()
+            }
+        }
         FilePicker(web)
         WebLifecycle(web)
     }

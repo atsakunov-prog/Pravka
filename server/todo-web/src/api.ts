@@ -9,8 +9,22 @@ export class ApiError extends Error {
   }
 }
 
+// Внутри Правки (телефон, 19.10.2026): страница Дел открыта в WebView приложения, и вход — токеном телефона, который
+// Правка отдаёт только странице Дел своего сервера (мостик PravkaDela, core/DelaWeb.kt приложения). Ни куки, ни ссылки
+// входа не нужно; токен не хранится в странице — берётся у приложения на каждый запрос.
+const bridge = (): { token?: () => string } | undefined => (globalThis as any).PravkaDela;
+export const inApp = () => !!bridge() || /PravkaApp/.test(navigator.userAgent);
+function appToken(): string {
+  try {
+    return bridge()?.token?.() || '';
+  } catch {
+    return '';
+  }
+}
+
 export async function api<T = any>(path: string, body?: unknown): Promise<T> {
-  const opt: RequestInit = { credentials: 'same-origin', headers: { 'X-Dela': '1' } };
+  const tok = appToken();
+  const opt: RequestInit = { credentials: 'same-origin', headers: tok ? { Authorization: 'Bearer ' + tok } : { 'X-Dela': '1' } };
   if (body !== undefined) {
     opt.method = 'POST';
     (opt.headers as Record<string, string>)['Content-Type'] = 'application/json';

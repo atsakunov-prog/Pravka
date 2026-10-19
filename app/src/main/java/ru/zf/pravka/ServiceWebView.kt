@@ -51,8 +51,17 @@ internal class ServiceWebPage private constructor(
     val page: ServicePage,
     private val wrapper: MutableContextWrapper,
     @Volatile var rules: ServiceWeb.Rules,
+    /** Мостик в страницу (`window.<имя>`): только у страницы Дел — токен телефона ([ru.zf.pravka.core.DelaWeb]). */
+    private val bridge: Pair<String, (ServiceWebPage) -> Any>? = null,
 ) {
     lateinit var view: WebView
+        private set
+
+    /**
+     * Адрес главной рамки — для мостика: его методы зовутся не с главного потока, а состояние Compose ([current])
+     * читать оттуда незачем. Обновляется при каждом начале загрузки и смене адреса в истории.
+     */
+    @Volatile var mainUrl: String? = null
         private set
 
     /** Загрузка 0…100; 100 — полоска не видна. */
@@ -263,6 +272,8 @@ internal class ServiceWebPage private constructor(
         v.webViewClient = Client()
         v.webChromeClient = Chrome()
         v.setDownloadListener { url, ua, disposition, mime, _ -> ServiceWebLinks.download(v.context, url, ua, disposition, mime) }
+        // До первой загрузки: мостик виден странице с первого кадра. Что и кому он отдаёт — решает сам мостик по mainUrl.
+        bridge?.let { (name, make) -> v.addJavascriptInterface(make(this), name) }
         load(start)
     }
 
@@ -284,6 +295,7 @@ internal class ServiceWebPage private constructor(
         override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
             error = null
             current = url
+            mainUrl = url
             if (url != null) loading = url
         }
 
@@ -329,7 +341,10 @@ internal class ServiceWebPage private constructor(
 
         override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
             canBack = view.canGoBack()
-            if (url != null) current = url
+            if (url != null) {
+                current = url
+                mainUrl = url
+            }
         }
 
         override fun onReceivedError(view: WebView, request: WebResourceRequest, err: WebResourceError) {
@@ -389,8 +404,11 @@ internal class ServiceWebPage private constructor(
     }
 
     companion object {
-        fun create(host: Context, page: ServicePage, rules: ServiceWeb.Rules, dark: Boolean, bg: Int, start: String): ServiceWebPage {
-            val p = ServiceWebPage(page, MutableContextWrapper(host), rules)
+        fun create(
+            host: Context, page: ServicePage, rules: ServiceWeb.Rules, dark: Boolean, bg: Int, start: String,
+            bridge: Pair<String, (ServiceWebPage) -> Any>? = null,
+        ): ServiceWebPage {
+            val p = ServiceWebPage(page, MutableContextWrapper(host), rules, bridge)
             p.build(dark, bg, start)
             return p
         }
@@ -416,7 +434,10 @@ internal object ServiceWebPool {
     private val pages = LinkedHashMap<String, ServiceWebPage>()
 
     /** Страница сервиса [page]: живая — она же (с новыми правилами), нет — новая с адреса [start] или главной. */
-    fun obtain(host: Context, page: ServicePage, rules: ServiceWeb.Rules, dark: Boolean, bg: Int, start: String?): ServiceWebPage {
+    fun obtain(
+        host: Context, page: ServicePage, rules: ServiceWeb.Rules, dark: Boolean, bg: Int, start: String?,
+        bridge: Pair<String, (ServiceWebPage) -> Any>? = null,
+    ): ServiceWebPage {
         val key = page.url
         pages.remove(key)?.let { old ->
             if (!old.gone) {
@@ -427,7 +448,7 @@ internal object ServiceWebPool {
             old.destroy()
         }
         val from = start?.takeIf { rules.inside(it) } ?: page.url
-        val p = ServiceWebPage.create(host, page, rules, dark, bg, from)
+        val p = ServiceWebPage.create(host, page, rules, dark, bg, from, bridge)
         pages[key] = p
         while (pages.size > KEEP) pages.remove(pages.keys.first())?.destroy()
         return p

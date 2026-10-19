@@ -877,7 +877,21 @@ private fun MainScreen(
                         // У своего сервера шапку рисует вкладка: вторым тоном
                         // в ней сфера (макет 06 — «Дела Все сферы ⌄»).
                         val onServer by app.delaServer.collectAsState()
-                        if (onServer) {
+                        // Дела в виде Todoist (19.10.2026, core/DelaWeb.kt): сервер умеет /t и владелец не выключил
+                        // новый вид — вкладка показывает страницу сервера внутри Правки; иначе — прежняя родная вкладка.
+                        val delaWebWanted by app.settings.delaWebFlow.collectAsState(initial = true)
+                        val delaLink by app.delaSync.link.collectAsState()
+                        val delaSnap by app.delaStore.view.collectAsState()
+                        val delaBase = delaLink?.url
+                        if (delaBase != null && ru.zf.pravka.core.DelaWeb.show(onServer, true, delaSnap.features, delaWebWanted)) {
+                            DelaWebTab(
+                                app,
+                                base = delaBase,
+                                openTaskId = delaOpen,
+                                onOpenHandled = { delaOpen = null; delaNav = null },
+                                onClose = modeBack ?: toToday,
+                            )
+                        } else if (onServer) {
                             DelaTab(
                                 app,
                                 openTaskId = delaOpen,

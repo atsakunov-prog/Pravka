@@ -158,6 +158,7 @@ class Settings(private val context: Context) {
         private val KEY_ICU_KEY = stringPreferencesKey("icu_api_key")
         private val KEY_TODOIST_TOKEN = stringPreferencesKey("todoist_token")
         private val KEY_DELA_BACKEND = stringPreferencesKey("dela_backend")
+        private val KEY_DELA_WEB = booleanPreferencesKey("dela_web")
         private val KEY_DELA_PLACES_SENT = stringPreferencesKey("dela_places_sent")
         // Захват (15.10.2026): напоминания Дел — уведомлением телефона; что сервер уже знает об этом («1» / «0»).
         private val KEY_REMIND_PHONE = booleanPreferencesKey("dela_remind_phone")
@@ -1039,6 +1040,13 @@ class Settings(private val context: Context) {
     suspend fun delaBackend(): String = delaBackendFlow.first()
     suspend fun setDelaBackend(value: String) {
         context.dataStore.edit { it[KEY_DELA_BACKEND] = value }
+    }
+
+    // Дела в виде Todoist (19.10.2026, core/DelaWeb.kt): вкладка «Дела» — страница /t сервера внутри Правки. С завода
+    // включено (слово владельца «новый веб и в телефоне»); выключить — прежняя родная вкладка, дорога назад.
+    val delaWebFlow = context.dataStore.data.map { it[KEY_DELA_WEB] ?: true }
+    suspend fun setDelaWeb(value: Boolean) {
+        context.dataStore.edit { it[KEY_DELA_WEB] = value }
     }
 
     /**

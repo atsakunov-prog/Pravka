@@ -519,3 +519,5 @@ svg { flex: none; }
 @media (min-width: 751px) { .side-scrim { display: none; } }
 .ed-foot > span:first-child { flex: 1; min-width: 0; }
 .ed-foot .proj-pick { max-width: 100%; }
+/* Внутри Правки: шапка Ковчега и «назад» — у приложения, разделы — вкладкой «Обзор» внизу; своё меню не нужно. */
+.in-app .topbar button[aria-label="Меню"] { display: none; }

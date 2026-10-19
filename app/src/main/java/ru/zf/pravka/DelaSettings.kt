@@ -107,6 +107,27 @@ internal fun DelaServerSettings(app: PravkaApp) {
         }
     }
 
+    // Дела в виде Todoist (19.10.2026, core/DelaWeb.kt): вкладка — страница сервера внутри Правки или прежняя родная.
+    if (backend == Settings.DELA_BACKEND_SERVER) {
+        val web by app.settings.delaWebFlow.collectAsState(initial = true)
+        val hasWeb = ru.zf.pravka.core.DelaWeb.FEATURE in snap.features
+        PaperCard(
+            label = "вид вкладки «Дела»",
+            info = "Новый — как Todoist: та же страница, что на компе (Сейчас, Входящие, Сегодня, Предстоящее, проекты, " +
+                "дерево, Claude), правка сервера видна сразу. Прежний — родная вкладка Правки, дорога назад.",
+        ) {
+            Segments(
+                options = listOf("Новый (как Todoist)", "Прежний"),
+                selected = if (web) 0 else 1,
+                onSelect = { i -> app.appScope.launch { app.settings.setDelaWeb(i == 0) } },
+            )
+            if (web && !hasWeb) {
+                Spacer(Modifier.height(6.dp))
+                PaperHint("Сервер Дел ещё без нового вида — пока показываю прежний.", MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+
     PaperCard(
         label = "сервер дел",
         info = "Адрес и токен — из QR, который печатает на компе python -m pravka_dela pair. Хранятся в закрытой " +
