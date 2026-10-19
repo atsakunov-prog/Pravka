@@ -103,6 +103,13 @@ test('ответ потерялся — правка ушла снова тем 
   assert.equal([...S.tasks.values()].filter((t) => t.title === 'Отправить счёт').length, 1);
 });
 
+test('сервер позади копии (база из резервной) — полный синк, а не «ничего нового»', async () => {
+  srv.tasks = new Map([['t9', { id: 't9', num: 9, title: 'Из резервной копии', status: 'open', seq: 3 }]]);
+  srv.seq = 3;
+  await refresh();
+  assert.deepEqual([[...S.tasks.keys()], S.seq], [['t9'], 3]);
+});
+
 test('при сети отказ — как раньше: исключение тому, кто правил, и сервер — правда', async () => {
   await assert.rejects(ops([{ op: 'task.set', id: 'нет-такого', set: { title: 'x' } }], { quiet: true }), /нет такого дела/);
   assert.equal(S.queue, 0);

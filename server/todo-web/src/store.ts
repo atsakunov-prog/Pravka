@@ -186,6 +186,9 @@ export function refresh(): Promise<void> {
 
 export async function sync(full = false): Promise<void> {
   const d = await api<any>('/api/sync?since=' + (full ? 0 : S.seq));
+  // Сервер позади копии (база поднята из резервной, тестовая копия пересоздана) — «после seq» ничего не придёт, а копия
+  // так и жила бы старой: берём всё заново.
+  if (!full && !d.full && typeof d.seq === 'number' && d.seq < S.seq) return sync(true);
   if (d.full) {
     for (const m of [S.tasks, S.projects, S.deals, S.people, S.orgs, S.sections, S.sugs, S.comments, S.users, S.krugProj]) m.clear();
   }
