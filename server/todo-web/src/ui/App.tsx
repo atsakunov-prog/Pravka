@@ -19,7 +19,7 @@ import { Editor } from './Editor.tsx';
 import { Icon, TodayIcon } from './icons.tsx';
 import { PopHost, closePop, openPop, popOpen } from './pop.tsx';
 import { SideContent } from './Sidebar.tsx';
-import { closeDialog, closeQuick, closeTask, openDialog, openDictate, openQuick, openTask, recentTasks, toggleSide, UI } from './state.ts';
+import { closeDialog, closeQuick, closeTask, openDialog, openDictate, openQuick, openTask, recentTasks, toggleSide, togglePstat, UI } from './state.ts';
 import { TaskModal } from './TaskModal.tsx';
 import { Checkbox, Meta } from './TaskRow.tsx';
 import {
@@ -263,6 +263,7 @@ function useKeys(setSearch: (v: boolean) => void) {
         }
         case 'side': e.preventDefault(); toggleSide(); break;
         case 'undo': undo(e); break;
+        case 'status': if (location.hash.startsWith('#/project/')) { e.preventDefault(); togglePstat(); } break;
         case 'go': g = true; clearTimeout(gTimer); gTimer = window.setTimeout(() => (g = false), 1200); break;
       }
     };

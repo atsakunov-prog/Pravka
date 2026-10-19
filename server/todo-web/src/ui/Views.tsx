@@ -1,10 +1,11 @@
 // Виды: Сейчас, Входящие, Сегодня, Предстоящее, проект (разделы, сделки, доска), сделка, метка, фильтр, человек,
 // дерево целей, выполненные.
+import { LEVEL_NAME, projStatus } from '../projstatus.ts';
 import type { Chain } from '../order.ts';
 import { setDue, setPlace } from './acts.ts';
 import { T } from '../toastText.ts';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { addDays, dayHead, MONTHS_NOM, mondayOf, plural, WD, WD_SHORT, weekday } from '../dates.ts';
+import { addDays, dayHead, MONTHS_NOM, mondayOf, plural, pluralForm, WD, WD_SHORT, weekday } from '../dates.ts';
 import { compile, FilterError, runFilter } from '../filter.ts';
 import { crmUrl, dealShort, go, projectColor, STAGE } from '../lib.ts';
 import { op1, ops, S, saveNowOrder, saveTodo, setTask, todoSettings, toast, useStore } from '../store.ts';
@@ -19,7 +20,7 @@ import { viewLabel } from '../viewopts.ts';
 import { Icon, TodayIcon } from './icons.tsx';
 import { openPop } from './pop.tsx';
 import { ColorPicker, Scheduler } from './pickers.tsx';
-import { openDialog, openDictate, openQuick } from './state.ts';
+import { openDialog, openDictate, openQuick, togglePstat, UI } from './state.ts';
 import { TaskList, reorder, draggingId, setDragId } from './TaskList.tsx';
 import { Checkbox, Meta } from './TaskRow.tsx';
 import { openTask } from './state.ts';
@@ -309,6 +310,36 @@ function AddSection({ pid, pos }: { pid: Id; pos: number }) {
   );
 }
 
+/** «Статус проекта» (Insights у Todoist, опись §10.2): статус и что его портит, прогресс, сделанное за неделю. Правило — projstatus.ts. */
+function StatusPanel({ pid }: { pid: Id }) {
+  const st = projStatus([...S.tasks.values()].filter((t) => t.project_id === pid), S.today);
+  const max = Math.max(1, ...st.week.map((w) => w.n));
+  return (
+    <div className="pstat">
+      <div>
+        <div className="pstat-h">Статус</div>
+        <div className={'pstat-level ' + st.level}>{LEVEL_NAME[st.level]}</div>
+        {st.spoilers.length ? <div className="pstat-sub">{plural(st.spoilers.length, 'задача', 'задачи', 'задач')} {pluralForm(st.spoilers.length) === 0 ? 'портит' : 'портят'} статус:</div> : <div className="pstat-sub">Ничего не горит</div>}
+        {st.spoilers.slice(0, 5).map((t) => <button key={t.id} className="pstat-task" onClick={() => openTask(t.id)}>{t.title}</button>)}
+      </div>
+      <div>
+        <div className="pstat-h">Прогресс</div>
+        <div className="pstat-bar"><i style={{ width: st.progress.pct + '%' }} /></div>
+        <div className="pstat-sub">{st.progress.pct}% · сделано {st.progress.done} из {st.progress.total}</div>
+      </div>
+      <div>
+        <div className="pstat-h">Выполнено</div>
+        <div className="pstat-sub">На этой неделе: {st.weekDone}</div>
+        <div className="pstat-week">
+          {st.week.map((w) => (
+            <div key={w.day} className={w.day === S.today ? 'today' : ''}><span>{w.n || ''}</span><i style={{ height: Math.round((w.n / max) * 40) }} /><b>{WD_SHORT[weekday(w.day)]}</b></div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ProjectView({ id }: { id: Id }) {
   useStore();
   const p = S.projects.get(id);
@@ -332,6 +363,7 @@ export function ProjectView({ id }: { id: Id }) {
   );
   const actions = (
     <>
+      <button className={'tb-btn' + (UI.pstat ? ' on' : '')} title="Статус проекта (I)" onClick={togglePstat}><Icon name="target" size={20} /><span className="d-only">Статус</span></button>
       <DisplayBtn vkey={vkey} />
       <button className="tb-btn" onClick={(e) => openPop(e.currentTarget, (close) => (
         <div>
@@ -350,6 +382,7 @@ export function ProjectView({ id }: { id: Id }) {
   if (o.layout === 'board') {
     return (
       <Page title={title} crumbs="Мои проекты /" sub={header} actions={actions} wide>
+        {UI.pstat ? <StatusPanel pid={id} /> : null}
         <div className="board">
           <BoardCol title="Без раздела" tasks={shown(loose, o)} add={{ project_id: id }} onDropTask={(d) => setPlace(d, { project_id: id })} />
           {secs.map((s) => (
@@ -368,6 +401,7 @@ export function ProjectView({ id }: { id: Id }) {
   const grouped = o.group && o.group !== 'none';
   return (
     <Page title={title} crumbs="Мои проекты /" sub={header} actions={actions}>
+      {UI.pstat ? <StatusPanel pid={id} /> : null}
       {grouped ? <Displayed tasks={[...own, ...deals.flatMap((d) => dealTasks(d.id))]} vkey={vkey} add={{ project_id: id }} /> : (
         <>
           <div className="sect">

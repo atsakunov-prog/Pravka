@@ -31,7 +31,7 @@ export function taskAct(k: string, shift: boolean): TaskAct | null {
   return null;
 }
 
-export type GlobalAct = 'quick' | 'dictate' | 'search' | 'side' | 'go' | 'undo' | 'next' | 'prev';
+export type GlobalAct = 'quick' | 'dictate' | 'search' | 'side' | 'go' | 'undo' | 'next' | 'prev' | 'status';
 
 /** Действие без задачи (или если у задачи в фокусе такой клавиши нет). */
 export function globalAct(k: string, shift: boolean): GlobalAct | null {
@@ -41,6 +41,7 @@ export function globalAct(k: string, shift: boolean): GlobalAct | null {
   if (k === 'm') return 'side';
   if (k === 'g') return 'go';
   if (k === 'z') return 'undo';
+  if (k === 'i') return 'status'; // статус проекта (Insights)
   if (k === 'arrowdown' || k === 'j') return 'next';
   if (k === 'arrowup' || k === 'k') return 'prev';
   return null;

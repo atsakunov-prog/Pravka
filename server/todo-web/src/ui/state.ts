@@ -35,7 +35,24 @@ export const UI = {
   dialog: null as null | { kind: string; data?: any },
   focus: null as Id | null, // строка под клавиатурой (J/K, стрелки)
   dictate: false, // окно «Надиктовать задачи»
+  pstat: (() => {
+    try {
+      return localStorage.getItem('todo.pstat') === '1';
+    } catch {
+      return false;
+    }
+  })(), // панель «Статус проекта» (I, как Insights у Todoist)
 };
+
+export function togglePstat() {
+  UI.pstat = !UI.pstat;
+  try {
+    localStorage.setItem('todo.pstat', UI.pstat ? '1' : '0');
+  } catch {
+    /* без памяти — только на эту вкладку */
+  }
+  emit();
+}
 
 /** Недавно открытые дела — для «Недавнего» в Ctrl+K (как у Todoist), в памяти вкладки. */
 export const recentTasks: Id[] = [];
