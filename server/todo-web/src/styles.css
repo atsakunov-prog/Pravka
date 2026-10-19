@@ -217,8 +217,6 @@ svg { flex: none; }
 .task.drop-before::before { top: -1px; }
 .task.drop-after::after { bottom: -1px; }
 .task.drop-into { box-shadow: inset 0 0 0 2px var(--accent); }
-.task.done-anim { animation: fadeout .35s var(--ease) forwards .25s; }
-@keyframes fadeout { to { opacity: 0; transform: translateX(8px); } }
 .task .grip { position: absolute; left: -28px; top: 8px; width: 24px; height: 24px; display: grid; place-items: center; color: var(--fg3); opacity: 0; cursor: grab; }
 .task:hover .grip { opacity: 1; }
 .task .tw { position: absolute; left: -28px; top: 8px; width: 24px; height: 24px; display: grid; place-items: center; color: var(--fg3); border-radius: 4px; }
@@ -240,6 +238,14 @@ svg { flex: none; }
 .cb.done.p3 i { background: var(--p3); border-color: var(--p3); }
 .cb.done i svg { animation: checkmarkshow .3s var(--ease); }
 @keyframes checkmarkshow { 0% { transform: scale(1.7); opacity: .1; } 50% { transform: scale(.7); } 100% { transform: scale(1); opacity: 1; } }
+/* Выполнение как у Todoist (замер 19.10): с ~77 мс от нажатия галочка проявляется 150 мс cubic-bezier(0.4, 0, 1, 1),
+   заливка кружка и сама галочка — по 250 мс linear; строка уходит через 290 мс (store.completeSoon). */
+.cb.tick i { animation: cbfill .25s linear .06s both; }
+.cb.tick i svg { animation: cbshow .15s cubic-bezier(0.4, 0, 1, 1) .06s both; }
+.cb.tick i svg path { stroke-dasharray: 15; animation: cbdraw .25s linear .06s both; }
+@keyframes cbfill { from { background: transparent; } }
+@keyframes cbshow { from { opacity: 0; } }
+@keyframes cbdraw { from { stroke-dashoffset: 15; } to { stroke-dashoffset: 0; } }
 .cb.none i { visibility: hidden; }
 
 .tbody { flex: 1; min-width: 0; padding-right: 8px; }
@@ -429,8 +435,10 @@ svg { flex: none; }
 .sched-foot input[type=time] { border: 1px solid var(--border); border-radius: 6px; height: 28px; padding: 0 6px; background: var(--raised); }
 
 /* ── Тосты ──────────────────────────────────────────────────────────── */
-.toasts { position: fixed; left: 24px; bottom: 24px; z-index: 90; display: flex; flex-direction: column; gap: 8px; }
-.toast { display: flex; align-items: center; gap: 16px; min-width: 280px; max-width: 480px; padding: 12px 16px; border-radius: 8px; background: #282828; color: #fff; box-shadow: var(--sh-toast); font-size: 13px; animation: pop .2s var(--ease); }
+/* Тост как у Todoist (замер 19.10): снизу слева в 16 пкс от краёв, ширина по содержимому, высота 53, #282828, белый текст,
+   скругление 10, тень 0 10px 20px / 0 6px 6px; с «Отменить» висит 10 с (store.toast). */
+.toasts { position: fixed; left: 16px; bottom: 16px; z-index: 90; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.toast { display: flex; align-items: center; gap: 16px; max-width: 480px; padding: 16px; border-radius: 10px; background: #282828; color: #fff; box-shadow: var(--sh-toast); font-size: 14px; line-height: 21px; animation: pop .2s var(--ease); }
 .toast.err { background: #8f2a1f; }
 .toast .sub { display: block; color: #bbb; font-size: 12px; margin-top: 2px; } /* «Следующий раз: …» у повтора */
 .toast button { color: #ff9f97; font-weight: 600; }

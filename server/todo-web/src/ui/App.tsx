@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { ApiError, api, inApp } from '../api.ts';
 import { go, projectColor, useMobile, useRoute } from '../lib.ts';
-import { completeTask, dropToast, emit, S, setTask, syncSoon, toasts, useStore } from '../store.ts';
+import { completeSoon, dropToast, emit, S, setTask, syncSoon, toasts, useStore } from '../store.ts';
 import { LabelPicker, PriorityMenu, ProjectPicker, Scheduler } from './pickers.tsx';
 import { TaskMenu } from './TaskMenu.tsx';
 import { matchCommands, type Cmd } from '../commands.ts';
@@ -234,7 +234,7 @@ function useKeys(setSearch: (v: boolean) => void) {
         switch (act) {
           case 'open': openTask(ft.id); break;
           case 'done': case 'done-forever':
-            completeTask(ft, act === 'done-forever').catch(() => {});
+            completeSoon(ft, act === 'done-forever');
             moveTo(at + 1 < rows.length ? at + 1 : at - 1);
             break;
           case 'prio1': case 'prio2': case 'prio3': case 'prio4': setPrio(ft, +act.slice(4)); break;

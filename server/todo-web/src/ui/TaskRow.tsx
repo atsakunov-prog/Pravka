@@ -4,7 +4,7 @@ import { setDue } from './acts.ts';
 import { useRef, useState, type DragEvent, type PointerEvent as RPE } from 'react';
 import { deadlineWords, diffDays, dueWords, dueTone, nowHm } from '../dates.ts';
 import { cls, dealShort, labelColor, personName, projectColor } from '../lib.ts';
-import { completeTask, ops, S } from '../store.ts';
+import { completeSoon, ops, S, ticking } from '../store.ts';
 import type { Task } from '../types.ts';
 import { childrenOf, commentCount } from '../views.ts';
 import { Icon } from './icons.tsx';
@@ -33,15 +33,16 @@ export interface RowOpts {
 
 export function Checkbox({ t, onDone }: { t: Task; onDone?: () => void }) {
   const p = t.priority ?? 4;
+  const tick = ticking.has(t.id); // заливается: строка уйдёт через 290 мс (store.completeSoon)
   const done = t.status !== 'open';
   return (
-    <button className={cls('cb', p < 4 && 'p' + p, done && 'done')} aria-label={done ? 'Вернуть в работу' : 'Выполнить'}
+    <button className={cls('cb', p < 4 && 'p' + p, (done || tick) && 'done', tick && 'tick')} aria-label={done ? 'Вернуть в работу' : 'Выполнить'}
       onClick={(e) => {
         e.stopPropagation();
         if (done) ops([{ op: 'task.reopen', id: t.id }]).catch(() => {});
         else {
           onDone?.();
-          completeTask(t, e.shiftKey).catch(() => {});
+          completeSoon(t, e.shiftKey);
         }
       }}>
       <i><Icon name="checkSm" size={14} sw={2} /></i>
@@ -101,7 +102,6 @@ export function Meta({ t, showProject, hideDate }: { t: Task; showProject?: bool
 
 export function TaskRow({ t, opts = {} }: { t: Task; opts?: RowOpts }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [leaving, setLeaving] = useState(false);
   const [dx, setDx] = useState(0);
   const sw = useRef<{ x: number; y: number; id: number; on: boolean } | null>(null);
   const d = opts.drag;
@@ -126,8 +126,7 @@ export function TaskRow({ t, opts = {} }: { t: Task; opts?: RowOpts }) {
     if (!s?.on) return;
     const w = ref.current?.offsetWidth || 300;
     if (dx > w * 0.3) {
-      setLeaving(true);
-      completeTask(t).catch(() => {});
+      completeSoon(t);
     } else if (dx < -w * 0.3 && ref.current) {
       openPop(ref.current, (close) => <Scheduler tasks={[t]} value={t as any} close={close} onPick={(v) => setDue(t, v)} />, { cls: 'sched' });
     }
@@ -135,7 +134,7 @@ export function TaskRow({ t, opts = {} }: { t: Task; opts?: RowOpts }) {
   };
   return (
     <div ref={ref} data-id={t.id}
-      className={cls('task', opts.selected && 'sel', UI.focus === t.id && 'focus', leaving && 'done-anim', t.status !== 'open' && 'closed',
+      className={cls('task', opts.selected && 'sel', UI.focus === t.id && 'focus', t.status !== 'open' && 'closed',
         d?.mark === 'before' && 'drop-before', d?.mark === 'after' && 'drop-after', d?.mark === 'into' && 'drop-into')}
       style={{ marginLeft: (opts.depth || 0) * 28, ...(dx ? { transform: `translateX(${dx}px)`, transition: 'none' } : {}) }}
       draggable={!!d && t.status === 'open'}
@@ -161,7 +160,7 @@ export function TaskRow({ t, opts = {} }: { t: Task; opts?: RowOpts }) {
           <Icon name={opts.collapsed ? 'chevR' : 'chevD'} size={16} />
         </button>
       ) : null}
-      <Checkbox t={t} onDone={() => setLeaving(true)} />
+      <Checkbox t={t} />
       <div className="tbody">
         <div className="ttl">{t.title}</div>
         {t.notes ? <div className="tdesc">{t.notes.split('\n')[0]}</div> : null}

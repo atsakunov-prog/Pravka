@@ -204,9 +204,28 @@ export async function setTask(t: Task, set: Record<string, unknown>, said?: stri
   if (said) toast(said, () => ops([{ op: 'task.set', id: t.id, set: was }]).catch(() => {}));
 }
 
+/** Дела, у которых кружок уже заливается, а строка ещё на месте (см. completeSoon). */
+export const ticking = new Set<Id>();
+
+/** Выполнение, как у Todoist (замер 19.10): кружок сразу заливается и рисует галочку, строка уходит через 290 мс — без
+ *  сворачивания, просто исчезает; дольше — кажется, что тормозит. Один путь для кружка, свайпа и клавиши E. */
+export function completeSoon(t: Task, forever = false) {
+  if (ticking.has(t.id)) return;
+  ticking.add(t.id);
+  emit();
+  setTimeout(() => {
+    ticking.delete(t.id);
+    completeTask(t, forever).catch(() => {});
+  }, 290);
+}
+
 export async function completeTask(t: Task, forever = false) {
+  const recurring = !!t.recur && !forever;
+  // Обычному делу — тост сразу, вместе с уходом строки (у Todoist ~0,3 с от нажатия), не дожидаясь ответа сервера.
+  if (!recurring) toast(T.done(), () => ops([{ op: 'task.reopen', id: t.id }]).catch(() => {}));
   const res = await ops([{ op: 'task.done', id: t.id, ...(forever ? { forever: true } : {}) }]);
   const r = res[0];
+  if (!recurring) return;
   if (r?.recurred) {
     // Повтор: «Задача выполнена», ниже «Следующий раз: …» и, если повтор снова открыл сделанное внутри (reset, как у
     // Todoist), — «Выполнено и снова добавлено N подзадач». «Отменить» возвращает срок, «Сейчас», напоминание и счётчик
@@ -223,6 +242,7 @@ export async function completeTask(t: Task, forever = false) {
     toast(T.done(), () => ops([{ op: 'task.set', id: t.id, set: back },
       ...reset.map((id) => ({ op: 'task.set', id, set: { status: 'done' }, restore: true }))]).catch(() => {}), false, sub);
   } else {
+    // повтор кончился (until позади) — дело закрыто как обычное
     toast(T.done(), () => ops([{ op: 'task.reopen', id: t.id }]).catch(() => {}));
   }
 }
