@@ -218,7 +218,7 @@ export function TaskModal() {
             <div className="tm-sep" />
             <div className="tm-row">
               <div className="tm-lbl">Срок</div>
-              <button className={'tm-val' + (t.due_date ? '' : ' muted')} onClick={(e) => openPop(e.currentTarget, (close) => <Scheduler value={t as any} close={close} onPick={(v) => setTask(t, v as any, 'Срок поменял')} />, { cls: 'sched' })}>
+              <button className={'tm-val' + (t.due_date ? '' : ' muted')} onClick={(e) => openPop(e.currentTarget, (close) => <Scheduler tasks={[t]} value={t as any} close={close} onPick={(v) => setTask(t, v as any, 'Срок поменял')} />, { cls: 'sched' })}>
                 <Icon name="calendar" size={16} />
                 {t.due_date ? `${dueWords(t.due_date, today)}${t.due_time ? ' ' + t.due_time.slice(0, 5) : ''}` : 'Без срока'}
                 {t.recur ? <span style={{ color: 'var(--fg2)', display: 'inline-flex', alignItems: 'center', gap: 3 }}><Icon name="repeat" size={14} />{t.due_rule || recurWords(t.recur)}</span> : null}
@@ -226,7 +226,7 @@ export function TaskModal() {
             </div>
             <div className="tm-row">
               <div className="tm-lbl">Дедлайн</div>
-              <button className={'tm-val' + (t.deadline ? '' : ' muted')} onClick={(e) => openPop(e.currentTarget, (close) => <Scheduler deadline value={{ due_date: t.deadline ?? null, due_time: null, recur: null, due_rule: null }} close={close} onPick={(v) => setTask(t, { deadline: v.due_date })} />, { cls: 'sched' })}>
+              <button className={'tm-val' + (t.deadline ? '' : ' muted')} onClick={(e) => openPop(e.currentTarget, (close) => <Scheduler mode="deadline" dueOf={t.due_date} value={{ due_date: t.deadline ?? null, due_time: null, recur: null, due_rule: null }} close={close} onPick={(v) => setTask(t, { deadline: v.due_date })} />, { cls: 'sched' })}>
                 <Icon name="deadline" size={16} />{t.deadline ? deadlineWords(t.deadline, today) + ' · ' + shortDate(t.deadline, today) : 'Без дедлайна'}
               </button>
             </div>
@@ -296,7 +296,7 @@ export function TaskModal() {
               <div className="tm-row">
                 <div className="tm-lbl">Пнуть{t.waiting_since ? <span style={{ fontWeight: 400 }}>жду с {shortDate(t.waiting_since, today)}</span> : null}</div>
                 <button className={'tm-val' + (t.nudge_on ? '' : ' muted')} style={t.nudge_on && t.nudge_on <= today ? { color: 'var(--d-over)' } : undefined}
-                  onClick={(e) => openPop(e.currentTarget, (close) => <Scheduler deadline value={{ due_date: t.nudge_on ?? null, due_time: null, recur: null, due_rule: null }} close={close}
+                  onClick={(e) => openPop(e.currentTarget, (close) => <Scheduler mode="date" value={{ due_date: t.nudge_on ?? null, due_time: null, recur: null, due_rule: null }} close={close}
                     onPick={(v) => setTask(t, { nudge_on: v.due_date }, v.due_date ? 'Пнуть — ' + shortDate(v.due_date, today) : 'Без напоминания пнуть')} />, { cls: 'sched' })}>
                   <Icon name="bell" size={16} />{t.nudge_on ? dueWords(t.nudge_on, today) : 'Когда напомнить пнуть'}
                 </button>

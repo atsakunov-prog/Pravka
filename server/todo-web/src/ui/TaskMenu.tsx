@@ -1,11 +1,12 @@
 // Меню задачи — по правой кнопке и «…»: быстрые сроки, приоритет, «Сейчас», переместить, метки, дублировать, ссылка, удалить.
-import { addDays, mondayOf, nextWeekday, weekday } from '../dates.ts';
+import { shortDate } from '../dates.ts';
+import { dueOptions } from '../schedule.ts';
 import { crmUrl, taskLink } from '../lib.ts';
 import { op1, ops, S, setTask, toast } from '../store.ts';
 import type { Task } from '../types.ts';
 import { Icon, PrioFlag } from './icons.tsx';
 import { closePop, openPop } from './pop.tsx';
-import { GoalPicker, LabelPicker, PersonPicker, ProjectPicker, Scheduler } from './pickers.tsx';
+import { GoalPicker, LabelPicker, PersonPicker, postponeTasks, ProjectPicker, QUICK_LOOK, quickHint, Scheduler } from './pickers.tsx';
 import { openQuick, openTask } from './state.ts';
 
 export function TaskMenu({ t, close }: { t: Task; close: () => void }) {
@@ -14,7 +15,6 @@ export function TaskMenu({ t, close }: { t: Task; close: () => void }) {
     close();
     setTask(t, v, said).catch(() => {});
   };
-  const sat = weekday(today) >= 5 ? addDays(today, 7 - weekday(today) + 5) : nextWeekday(today, 5);
   const anchor = () => document.querySelector(`[data-id="${t.id}"]`) || document.body;
   const sub = (render: (close: () => void) => React.ReactNode, cls?: string) => {
     const a = anchor();
@@ -31,12 +31,18 @@ export function TaskMenu({ t, close }: { t: Task; close: () => void }) {
       <div className="msep" />
       <div className="mh">Срок</div>
       <div className="date-row">
-        <button title="Сегодня" style={{ color: 'var(--d-today)' }} onClick={() => set({ due_date: today }, 'Срок — сегодня')}><Icon name="calendar" size={20} /></button>
-        <button title="Завтра" style={{ color: 'var(--d-tom)' }} onClick={() => set({ due_date: addDays(today, 1) }, 'Срок — завтра')}><Icon name="sun" size={20} /></button>
-        <button title="На выходных" style={{ color: 'var(--d-weekend)' }} onClick={() => set({ due_date: sat }, 'Срок — выходные')}><Icon name="home" size={20} /></button>
-        <button title="Следующая неделя" style={{ color: 'var(--d-week)' }} onClick={() => set({ due_date: addDays(mondayOf(today), 7) }, 'Срок — следующая неделя')}><Icon name="upcoming" size={20} /></button>
-        <button title="Без срока" style={{ color: 'var(--fg2)' }} onClick={() => set({ due_date: null, due_time: null, recur: null, due_rule: null }, 'Срок снят')}><Icon name="x" size={20} /></button>
-        <button title="Другой срок…" onClick={() => sub((c) => <Scheduler value={t as any} close={c} onPick={(v) => setTask(t, v as any, 'Срок поменял')} />, 'sched')}><Icon name="more" size={20} /></button>
+        {/* те же варианты, что в планировщике, по правилам Todoist (schedule.ts) */}
+        {dueOptions(today, [t]).map((o) => (
+          <button key={o.key} title={o.label + (o.date ? ' — ' + quickHint(o.key, o.date, today) : '')} style={{ color: QUICK_LOOK[o.key][1] }}
+            onClick={() => {
+              if (o.key === 'postpone') {
+                close();
+                postponeTasks([t]);
+              } else if (o.date) set({ due_date: o.date }, 'Срок — ' + (o.key === 'today' || o.key === 'tomorrow' ? o.label.toLowerCase() : shortDate(o.date, today)));
+              else set({ due_date: null, due_time: null, recur: null, due_rule: null }, 'Срок снят');
+            }}><Icon name={QUICK_LOOK[o.key][0]} size={20} /></button>
+        ))}
+        <button title="Другой срок…" onClick={() => sub((c) => <Scheduler tasks={[t]} value={t as any} close={c} onPick={(v) => setTask(t, v as any, 'Срок поменял')} />, 'sched')}><Icon name="more" size={20} /></button>
       </div>
       <div className="mh">Приоритет</div>
       <div className="prio-row">

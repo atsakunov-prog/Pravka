@@ -182,7 +182,7 @@ function useKeys(setSearch: (v: boolean) => void) {
         if (['1', '2', '3', '4'].includes(k)) { e.preventDefault(); setTask(ft, { priority: +k }).catch(() => {}); return; }
         if (k === 't' || k === 'е') {
           e.preventDefault();
-          openPop(row, (close) => <Scheduler value={ft as any} close={close} onPick={(v) => setTask(ft, v as any, 'Срок поменял')} />, { cls: 'sched' });
+          openPop(row, (close) => <Scheduler tasks={[ft]} value={ft as any} close={close} onPick={(v) => setTask(ft, v as any, 'Срок поменял')} />, { cls: 'sched' });
           return;
         }
         if (k === 'x' || k === 'ч') { e.preventDefault(); if (UI.sel.has(ft.id)) UI.sel.delete(ft.id); else UI.sel.add(ft.id); emit(); return; }

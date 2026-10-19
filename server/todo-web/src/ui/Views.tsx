@@ -153,11 +153,13 @@ export function TodayView() {
   const [openOver, setOpenOver] = useState(true);
   const n = over.length + today.length;
   const reschedule = (el: HTMLElement) => openPop(el, (close) => (
-    <Scheduler value={{ due_date: null, due_time: null, recur: null, due_rule: null }} close={close} onPick={(v) => {
-      if (!v.due_date) return;
-      const items = over.map((t) => ({ op: 'task.set', id: t.id, set: { due_date: v.due_date } }));
-      const back = over.map((t) => ({ op: 'task.set', id: t.id, set: { due_date: t.due_date } }));
-      ops(items).then(() => toast(`Перенёс ${plural(over.length, 'задачу', 'задачи', 'задач')}`, () => ops(back).catch(() => {}))).catch(() => {});
+    <Scheduler tasks={over} value={{ due_date: null, due_time: null, recur: null, due_rule: null }} close={close} onPick={(v) => {
+      // «Без срока» снимает и время, а у повторяющегося сервер снимает и повтор — отмена возвращает всё
+      const set = v.due_date ? { due_date: v.due_date } : { due_date: null, due_time: null };
+      const items = over.map((t) => ({ op: 'task.set', id: t.id, set }));
+      const back = over.map((t) => ({ op: 'task.set', id: t.id, set: v.due_date ? { due_date: t.due_date }
+        : { due_date: t.due_date, due_time: t.due_time ?? null, ...(t.recur ? { recur: t.recur, due_rule: t.due_rule } : {}) } }));
+      ops(items).then(() => toast(`${v.due_date ? 'Перенёс' : 'Снял срок:'} ${plural(over.length, 'задачу', 'задачи', 'задач')}`, () => ops(back).catch(() => {}))).catch(() => {});
     }} />
   ), { cls: 'sched' });
   const dropToday = { nest: false, onDrop: (d: Task) => { if (d.due_date !== S.today) setTask(d, { due_date: S.today }, 'Срок — сегодня').catch(() => {}); } };

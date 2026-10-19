@@ -26,7 +26,7 @@ export function BulkBar() {
     <div style={{ position: 'fixed', left: '50%', transform: 'translateX(-50%)', bottom: 76, zIndex: 45, display: 'flex', alignItems: 'center', gap: 4,
       background: 'var(--raised)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--sh2)', padding: '6px 8px', maxWidth: 'calc(100vw - 16px)', flexWrap: 'wrap' }}>
       <span style={{ fontWeight: 600, padding: '0 8px' }}>{plural(ts.length, 'задача', 'задачи', 'задач')}</span>
-      <button className="tb-btn" onClick={(e) => openPop(e.currentTarget, (close) => <Scheduler value={{ due_date: null, due_time: null, recur: null, due_rule: null }} close={close}
+      <button className="tb-btn" onClick={(e) => openPop(e.currentTarget, (close) => <Scheduler tasks={ts} value={{ due_date: null, due_time: null, recur: null, due_rule: null }} close={close}
         onPick={(v) => each(() => ({ due_date: v.due_date, ...(v.due_date ? {} : { due_time: null }) }), 'Срок поменял')} />, { cls: 'sched' })}><Icon name="calendar" size={18} />Срок</button>
       <button className="tb-btn" onClick={(e) => openPop(e.currentTarget, (close) => <ProjectPicker value={{ project_id: null, deal_id: null, section_id: null }} close={close}
         onPick={(p) => each(() => ({ project_id: p.project_id, deal_id: p.deal_id, section_id: p.section_id }), 'Переместил')} />)}><Icon name="door" size={18} />Переместить</button>

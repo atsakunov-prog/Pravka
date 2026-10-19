@@ -1,8 +1,9 @@
 // Меню выбора: срок (планировщик Todoist), приоритет, проект, метки, человек, цель.
 import { useMemo, useState } from 'react';
-import { addDays, addMonths, daysInMonth, MONTHS_NOM, mondayOf, nextWeekday, shortDate, WD, WD_SHORT, weekday, ymd } from '../dates.ts';
+import { addMonths, daysInMonth, MONTHS_NOM, plural, shortDate, WD, WD_SHORT, weekday, ymd } from '../dates.ts';
 import { parseWhen, recurWords, type When } from '../quick.ts';
-import { S } from '../store.ts';
+import { deadlineOptions, dueOptions, postponed, type QuickKey } from '../schedule.ts';
+import { ops, S, setTask, toast } from '../store.ts';
 import type { Id, Recur, Task } from '../types.ts';
 import { dealShort, PALETTE, projectColor } from '../lib.ts';
 import { goalDir, goals, liveDeals, projectsSorted, sectionsOf, whyPath, dirName } from '../views.ts';
@@ -18,14 +19,47 @@ export interface DueVal {
   due_rule: string | null;
 }
 
-export function Scheduler({ value, onPick, close, deadline }: { value: DueVal; onPick: (v: DueVal) => void; close: () => void; deadline?: boolean }) {
+/** Вид быстрого варианта срока: значок и цвет — общие у планировщика и меню дела. */
+export const QUICK_LOOK: Record<QuickKey, [string, string]> = {
+  today: ['calendar', 'var(--d-today)'], tomorrow: ['sun', 'var(--d-tom)'], later: ['upcoming', 'var(--d-week)'],
+  weekend: ['home', 'var(--d-weekend)'], nextweekend: ['home', 'var(--d-weekend)'], nextweek: ['upcoming', 'var(--d-week)'],
+  postpone: ['chevR', 'var(--fg2)'], none: ['x', 'var(--fg2)'],
+};
+
+/** Подпись справа у варианта: день недели, у дальних — ещё и число. */
+export function quickHint(key: QuickKey, date: string | null, today: string): string {
+  if (!date) return '';
+  const wd = WD_SHORT[weekday(date)];
+  return key === 'today' || key === 'tomorrow' || key === 'later' ? wd : wd + ' ' + shortDate(date, today);
+}
+
+/** «Отложить» у дел: каждому свой следующий срок (schedule.postponed), отмена — тостом. */
+export function postponeTasks(ts: Task[]) {
   const today = S.today;
+  const moves = ts.map((t) => ({ t, to: postponed(t, today) }));
+  if (moves.length === 1) {
+    setTask(moves[0].t, moves[0].to, 'Отложил на ' + shortDate(moves[0].to.due_date, today)).catch(() => {});
+    return;
+  }
+  const back = moves.map(({ t }) => ({ op: 'task.set', id: t.id, set: { due_date: t.due_date, due_time: t.due_time ?? null } }));
+  ops(moves.map(({ t, to }) => ({ op: 'task.set', id: t.id, set: to })))
+    .then(() => toast('Отложил ' + plural(moves.length, 'задачу', 'задачи', 'задач'), () => ops(back).catch(() => {})))
+    .catch(() => {});
+}
+
+/** Планировщик. mode: due — срок (время, повтор); deadline — дедлайн дела, dueOf — его срок (варианты считаются от
+ *  него); date — просто день («пнуть»). tasks — для каких дел (у нового дела нет: тогда сравнивается value). */
+export function Scheduler({ value, onPick, close, mode = 'due', tasks, dueOf }: {
+  value: DueVal; onPick: (v: DueVal) => void; close: () => void; mode?: 'due' | 'deadline' | 'date'; tasks?: Task[]; dueOf?: string | null;
+}) {
+  const today = S.today;
+  const dateOnly = mode !== 'due';
   const [text, setText] = useState('');
   const [month, setMonth] = useState((value.due_date || today).slice(0, 7));
   const [time, setTime] = useState(value.due_time?.slice(0, 5) || '');
   const parsed: When | null = text.trim() ? parseWhen(text, quickCtx()) : null;
   const pick = (v: Partial<DueVal>) => {
-    onPick({ due_date: value.due_date, due_time: deadline ? null : time || null, recur: value.recur, due_rule: value.due_rule, ...v });
+    onPick({ due_date: value.due_date, due_time: dateOnly ? null : time || null, recur: value.recur, due_rule: value.due_rule, ...v });
     close();
   };
   const day = (d: string | null) => pick({ due_date: d, ...(d ? {} : { due_time: null, recur: null, due_rule: null }), ...(value.recur && d ? { recur: null, due_rule: null } : {}) });
@@ -34,15 +68,13 @@ export function Scheduler({ value, onPick, close, deadline }: { value: DueVal; o
     for (const t of S.tasks.values()) if (t.status === 'open' && t.due_date) m.set(t.due_date, (m.get(t.due_date) || 0) + 1);
     return m;
   }, []);
-  const sat = weekday(today) >= 5 ? today : nextWeekday(today, 5);
-  const nextMon = addDays(mondayOf(today), 7);
-  const quick: [string, string, string, string, string | null][] = [
-    ['Сегодня', 'calendar', 'var(--d-today)', WD_SHORT[weekday(today)], today],
-    ['Завтра', 'sun', 'var(--d-tom)', WD_SHORT[weekday(addDays(today, 1))], addDays(today, 1)],
-    ...(weekday(today) < 5 ? [['На выходных', 'sun', 'var(--d-weekend)', 'сб ' + shortDate(sat, today), sat] as [string, string, string, string, string]] : []),
-    ['Следующая неделя', 'upcoming', 'var(--d-week)', 'пн ' + shortDate(nextMon, today), nextMon],
-    ['Без срока', 'x', 'var(--fg2)', '', null],
-  ];
+  // Быстрые варианты — по правилам Todoist (schedule.ts): какие видны, зависит от дня и от выбранных дел.
+  const quick: { key: string; label: string; icon: string; color: string; right: string; run: () => void }[] = mode === 'deadline'
+    ? deadlineOptions(today, dueOf ?? null, value.due_date).map((o) => ({ key: o.label, label: o.label, icon: o.date ? 'deadline' : 'x', color: 'var(--fg2)',
+      right: o.date ? quickHint('nextweek', o.date, today) : '', run: () => day(o.date) }))
+    : dueOptions(today, tasks?.length ? tasks : [{ due_date: value.due_date, recur: mode === 'due' ? value.recur : null }], !tasks?.length && mode === 'due')
+      .map((o) => ({ key: o.key, label: o.label, icon: QUICK_LOOK[o.key][0], color: QUICK_LOOK[o.key][1], right: quickHint(o.key, o.date, today),
+        run: o.key === 'postpone' ? () => { close(); postponeTasks(tasks || []); } : () => day(o.date) }));
   const y = +month.slice(0, 4), m = +month.slice(5, 7);
   const first = ymd(y, m, 1);
   const lead = weekday(first);
@@ -58,21 +90,21 @@ export function Scheduler({ value, onPick, close, deadline }: { value: DueVal; o
   return (
     <div>
       <div className="sched-in">
-        <input autoFocus placeholder={deadline ? 'Дедлайн: «25 окт», «пятница»' : 'Введите срок: «завтра в 15», «каждый пн»'} value={text}
+        <input autoFocus placeholder={mode === 'deadline' ? 'Дедлайн: «25 окт», «пятница»' : mode === 'date' ? 'День: «25 окт», «пятница»' : 'Введите срок: «завтра в 15», «каждый пн»'} value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && parsed) {
               e.preventDefault();
               if (parsed.clear) day(null);
-              else pick({ due_date: parsed.due_date, due_time: deadline ? null : parsed.due_time ?? (time || null), recur: deadline ? null : parsed.recur, due_rule: deadline ? null : parsed.due_rule });
+              else pick({ due_date: parsed.due_date, due_time: dateOnly ? null : parsed.due_time ?? (time || null), recur: dateOnly ? null : parsed.recur, due_rule: dateOnly ? null : parsed.due_rule });
             }
           }} />
         {text.trim() ? <div className="hint">{parsed ? (parsed.clear ? 'Без срока' : `${parsed.due_date ? shortDate(parsed.due_date, today) + ', ' + WD[weekday(parsed.due_date)] : ''}${parsed.due_time ? ' в ' + parsed.due_time : ''}${parsed.recur ? ' · ' + (parsed.due_rule || recurWords(parsed.recur)) : ''}`) : 'Не понял — попробуй «завтра», «25 окт», «каждый пн»'}</div> : null}
       </div>
       <div className="sched-q">
-        {quick.map(([label, icon, color, right, d]) => (
-          <button key={label} className="mi" onClick={() => day(d)}>
-            <span style={{ color }}><Icon name={icon} size={20} /></span>{label}<span className="r">{right}</span>
+        {quick.map((o) => (
+          <button key={o.key} className="mi" onClick={o.run}>
+            <span style={{ color: o.color }}><Icon name={o.icon} size={20} /></span>{o.label}<span className="r">{o.right}</span>
           </button>
         ))}
       </div>
@@ -94,7 +126,7 @@ export function Scheduler({ value, onPick, close, deadline }: { value: DueVal; o
           ) : <span key={'e' + i} />)}
         </div>
       </div>
-      {deadline ? null : (
+      {dateOnly ? null : (
         <div className="sched-foot">
           <input type="time" value={time} onChange={(e) => setTime(e.target.value)} onBlur={() => value.due_date && time !== (value.due_time || '').slice(0, 5) && pick({ due_time: time || null })} title="Время" />
           {time ? <button className="btn ghost" onClick={() => { setTime(''); pick({ due_time: null }); }}>Без времени</button> : null}

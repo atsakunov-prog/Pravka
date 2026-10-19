@@ -205,7 +205,7 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
           (el) => openPop(el, (close) => <PriorityMenu value={priority} close={close} onPick={(p) => setMan({ ...man, priority: p })} />),
           () => setMan({ ...man, priority: 4 }))}
         {chip('dl', <Icon name="deadline" size={16} />, deadline ? deadlineWords(deadline, S.today) : null, 'Дедлайн',
-          (el) => openPop(el, (close) => <Scheduler deadline value={{ due_date: deadline, due_time: null, recur: null, due_rule: null }} close={close}
+          (el) => openPop(el, (close) => <Scheduler mode="deadline" dueOf={due.due_date} value={{ due_date: deadline, due_time: null, recur: null, due_rule: null }} close={close}
             onPick={(v) => setMan({ ...man, deadline: v.due_date })} />, { cls: 'sched' }),
           () => setMan({ ...man, deadline: null }))}
         {chip('lb', <Icon name="tag" size={16} />, labels.length ? labels.join(', ') : null, 'Метки',
