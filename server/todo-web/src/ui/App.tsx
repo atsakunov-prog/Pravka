@@ -3,8 +3,9 @@ import { useEffect, useState } from 'react';
 import { ApiError, api, inApp } from '../api.ts';
 import { go, projectColor, useMobile, useRoute } from '../lib.ts';
 import { completeTask, dropToast, emit, S, setTask, syncSoon, toasts, useStore } from '../store.ts';
-import { Scheduler } from './pickers.tsx';
+import { LabelPicker, PriorityMenu, ProjectPicker, Scheduler } from './pickers.tsx';
 import { TaskMenu } from './TaskMenu.tsx';
+import { GO, globalAct, keyName, taskAct } from '../keys.ts';
 import { search } from '../views.ts';
 import { BulkBar, ProjectDialog } from './Bulk.tsx';
 import { BugLine } from './BugLine.tsx';
@@ -127,27 +128,28 @@ function Body() {
   }
 }
 
-/** Горячие клавиши Todoist: Q — новая задача, / или F — поиск, M — панель, G+I/T/U/N/V — виды, Esc — закрыть. */
+/** Горячие клавиши Todoist — и в русской раскладке (keys.ts): Q — новая задача, / или F — поиск, M — панель, Z — отмена,
+ *  G и вторая клавиша — виды, Esc — закрыть; на задаче в фокусе — Enter, E, T, D, Y, L, V, X, 1–4, «.», Shift+G. */
 function useKeys(setSearch: (v: boolean) => void) {
   useEffect(() => {
     let g = false;
     let gTimer = 0;
+    const undo = (e: KeyboardEvent) => {
+      const last = [...toasts].reverse().find((t) => t.undo);
+      if (last) { e.preventDefault(); last.undo!(); dropToast(last.id); }
+    };
     const on = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
+      const k = keyName(e.key);
       if (e.ctrlKey || e.metaKey || e.altKey) {
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setSearch(true); }
-        if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'я')) {
-          const last = [...toasts].reverse().find((t) => t.undo);
-          if (last) { e.preventDefault(); last.undo!(); dropToast(last.id); }
-        }
+        if ((e.ctrlKey || e.metaKey) && k === 'k') { e.preventDefault(); setSearch(true); }
+        if ((e.ctrlKey || e.metaKey) && k === 'z') undo(e);
         return;
       }
-      const k = e.key.toLowerCase();
       if (g) {
         g = false;
-        const to: Record<string, string> = { i: 'inbox', ш: 'inbox', t: 'today', е: 'today', u: 'upcoming', г: 'upcoming', n: 'now', т: 'now', v: 'filters', м: 'filters', h: 'now', р: 'now', d: 'done', в: 'done' };
-        if (to[k]) { e.preventDefault(); go(to[k]); }
+        if (GO[k]) { e.preventDefault(); go(GO[k]); }
         return;
       }
       if (k === 'escape') {
@@ -160,9 +162,7 @@ function useKeys(setSearch: (v: boolean) => void) {
         return;
       }
       if (UI.task || UI.quick || UI.dictate || popOpen()) return;
-      if ((k === 'q' || k === 'й') && e.shiftKey) { e.preventDefault(); openDictate(); return; }
-      // Строка под клавиатурой: ↓/J, ↑/K — по списку; Enter — открыть; E — выполнить; T — срок; 1–4 — приоритет;
-      // X — выделить; . — меню задачи (как у Todoist).
+      // Строка под клавиатурой: ↓/J, ↑/K — по списку; дальше — действия над ней (keys.taskAct).
       const rows = [...document.querySelectorAll('.main .task[data-id]')] as HTMLElement[];
       const at = rows.findIndex((x) => x.dataset.id === UI.focus);
       const ft = UI.focus ? S.tasks.get(UI.focus) : undefined;
@@ -173,30 +173,53 @@ function useKeys(setSearch: (v: boolean) => void) {
         row.scrollIntoView({ block: 'nearest' });
         emit();
       };
-      if (k === 'arrowdown' || k === 'j' || k === 'о') { e.preventDefault(); moveTo(at + 1); return; }
-      if (k === 'arrowup' || k === 'k' || k === 'л') { e.preventDefault(); moveTo(at < 0 ? 0 : at - 1); return; }
-      if (ft && at >= 0) {
-        const row = rows[at];
-        if (k === 'enter') { e.preventDefault(); openTask(ft.id); return; }
-        if (k === 'e' || k === 'у') { e.preventDefault(); completeTask(ft, e.shiftKey).catch(() => {}); moveTo(at + 1 < rows.length ? at + 1 : at - 1); return; }
-        if (['1', '2', '3', '4'].includes(k)) { e.preventDefault(); setTask(ft, { priority: +k }).catch(() => {}); return; }
-        if (k === 't' || k === 'е') {
-          e.preventDefault();
-          openPop(row, (close) => <Scheduler tasks={[ft]} value={ft as any} close={close} onPick={(v) => setTask(ft, v as any, 'Срок поменял')} />, { cls: 'sched' });
-          return;
-        }
-        if (k === 'x' || k === 'ч') { e.preventDefault(); if (UI.sel.has(ft.id)) UI.sel.delete(ft.id); else UI.sel.add(ft.id); emit(); return; }
-        if (k === '.' || k === 'ю') { e.preventDefault(); openPop(row, (close) => <TaskMenu t={ft} close={close} />); return; }
-      }
-      if (k === 'q' || k === 'й' || k === 'a' || k === 'ф') { e.preventDefault(); openQuick(defaultsFor()); }
-      else if (k === '/' || k === 'f' || k === 'а') {
+      const act = ft && at >= 0 ? taskAct(k, e.shiftKey) : null;
+      if (ft && act) {
         e.preventDefault();
-        const box = document.getElementById('side-search') as HTMLInputElement | null;
-        if (box && box.offsetParent) box.focus();
-        else setSearch(true);
+        const row = rows[at];
+        const pop = (render: (close: () => void) => React.ReactNode, cls?: string) => openPop(row, render, cls ? { cls } : undefined);
+        switch (act) {
+          case 'open': openTask(ft.id); break;
+          case 'done': case 'done-forever':
+            completeTask(ft, act === 'done-forever').catch(() => {});
+            moveTo(at + 1 < rows.length ? at + 1 : at - 1);
+            break;
+          case 'prio1': case 'prio2': case 'prio3': case 'prio4': setTask(ft, { priority: +act.slice(4) }).catch(() => {}); break;
+          case 'date': pop((close) => <Scheduler tasks={[ft]} value={ft as any} close={close} onPick={(v) => setTask(ft, v as any, 'Срок поменял')} />, 'sched'); break;
+          case 'date-clear': if (ft.due_date) setTask(ft, { due_date: null, due_time: null, recur: null, due_rule: null }, 'Срок снят').catch(() => {}); break;
+          case 'deadline':
+            pop((close) => <Scheduler mode="deadline" dueOf={ft.due_date} value={{ due_date: ft.deadline ?? null, due_time: null, recur: null, due_rule: null }} close={close}
+              onPick={(v) => setTask(ft, { deadline: v.due_date }, v.due_date ? 'Дедлайн поменял' : 'Дедлайн снят')} />, 'sched');
+            break;
+          case 'deadline-clear': if (ft.deadline) setTask(ft, { deadline: null }, 'Дедлайн снят').catch(() => {}); break;
+          case 'prio': pop((close) => <PriorityMenu value={ft.priority ?? 4} close={close} onPick={(p) => setTask(ft, { priority: p })} />); break;
+          case 'labels': pop(() => <LabelPicker value={ft.labels || []} onPick={(l) => setTask(ft, { labels: l })} />); break;
+          case 'move':
+            pop((close) => <ProjectPicker value={{ project_id: ft.project_id, deal_id: ft.deal_id, section_id: ft.section_id ?? null }} close={close}
+              onPick={(p) => setTask(ft, { project_id: p.project_id, deal_id: p.deal_id, section_id: p.section_id }, 'Переместил')} />);
+            break;
+          case 'select': if (UI.sel.has(ft.id)) UI.sel.delete(ft.id); else UI.sel.add(ft.id); emit(); break;
+          case 'menu': pop((close) => <TaskMenu t={ft} close={close} />); break;
+          case 'in-project': go(ft.deal_id ? 'deal/' + ft.deal_id : ft.project_id ? 'project/' + ft.project_id : 'inbox'); break;
+        }
+        return;
       }
-      else if (k === 'm' || k === 'ь') { e.preventDefault(); toggleSide(); }
-      else if (k === 'g' || k === 'п') { g = true; clearTimeout(gTimer); gTimer = window.setTimeout(() => (g = false), 1200); }
+      switch (globalAct(k, e.shiftKey)) {
+        case 'next': e.preventDefault(); moveTo(at + 1); break;
+        case 'prev': e.preventDefault(); moveTo(at < 0 ? 0 : at - 1); break;
+        case 'dictate': e.preventDefault(); openDictate(); break;
+        case 'quick': e.preventDefault(); openQuick(defaultsFor()); break;
+        case 'search': {
+          e.preventDefault();
+          const box = document.getElementById('side-search') as HTMLInputElement | null;
+          if (box && box.offsetParent) box.focus();
+          else setSearch(true);
+          break;
+        }
+        case 'side': e.preventDefault(); toggleSide(); break;
+        case 'undo': undo(e); break;
+        case 'go': g = true; clearTimeout(gTimer); gTimer = window.setTimeout(() => (g = false), 1200); break;
+      }
     };
     addEventListener('keydown', on);
     return () => removeEventListener('keydown', on);
