@@ -1,5 +1,6 @@
 // Виды: Сейчас, Входящие, Сегодня, Предстоящее, проект (разделы, сделки, доска), сделка, метка, фильтр, человек,
 // дерево целей, выполненные.
+import { CalendarView } from './Calendar.tsx';
 import { LEVEL_NAME, projStatus } from '../projstatus.ts';
 import type { Chain } from '../order.ts';
 import { setDue, setPlace } from './acts.ts';
@@ -395,12 +396,21 @@ export function ProjectView({ id }: { id: Id }) {
     </>
   );
   const title = <><span className="hash" style={{ color: projectColor(p), fontSize: 24 }}>#</span>{p.name}</>;
+  if (o.layout === 'calendar') {
+    // календарь — все дела проекта и его сделок, с фильтром вида (сортировка в календаре — время)
+    return (
+      <Page title={title} crumbs="Мои проекты /" sub={header} actions={actions} wide>
+        {UI.pstat ? <StatusPanel pid={id} /> : null}
+        <CalendarView tasks={shown([...S.tasks.values()].filter((t) => t.project_id === id && !t.goal && (t.kind ?? 'task') === 'task'), o)} o={o} add={{ project_id: id }} />
+      </Page>
+    );
+  }
   if (o.layout === 'board') {
     return (
       <Page title={title} crumbs="Мои проекты /" sub={header} actions={actions} wide>
         {UI.pstat ? <StatusPanel pid={id} /> : null}
         <div className="board">
-          <BoardCol title="Без раздела" tasks={shown(loose, o)} add={{ project_id: id }} onDropTask={(d) => setPlace(d, { project_id: id })} />
+          <BoardCol title="(Без раздела)" tasks={shown(loose, o)} add={{ project_id: id }} onDropTask={(d) => setPlace(d, { project_id: id })} />
           {secs.map((s) => (
             <BoardCol key={s.id} title={s.name} tasks={shown(own.filter((t) => t.section_id === s.id), o)} add={{ project_id: id, section_id: s.id }}
               onDropTask={(d) => setPlace(d, { project_id: id, section_id: s.id })} />
@@ -466,7 +476,16 @@ function BoardCol({ title, tasks, add, icon, onDropTask }: { title: string; task
       style={over ? { background: 'var(--hover)', borderRadius: 10 } : undefined}>
       <div className="col-h">{icon ? <Icon name={icon} size={16} /> : null}{title}<span className="n">{tasks.length || ''}</span></div>
       {tasks.map((t) => (
-        <div key={t.id} className="card" data-id={t.id} draggable onDragStart={(e) => { e.dataTransfer.setData('text/x-task', t.id); setDragId(t.id); }} onDragEnd={() => setDragId(null)}
+        <div key={t.id} className="card" data-id={t.id} draggable
+          onDragStart={(e) => {
+            // снимок для переноса — с наклоном 2°, как у Todoist; сама карточка остаётся на месте блёклой
+            const el = e.currentTarget;
+            e.dataTransfer.setData('text/x-task', t.id);
+            setDragId(t.id);
+            el.classList.add('tilt');
+            setTimeout(() => { el.classList.remove('tilt'); el.classList.add('dragging'); }, 0);
+          }}
+          onDragEnd={(e) => { e.currentTarget.classList.remove('tilt', 'dragging'); setDragId(null); }}
           onClick={() => openTask(t.id)}>
           <Checkbox t={t} />
           <div className="tbody"><div className="ttl">{t.title}</div>{t.notes ? <div className="tdesc">{t.notes}</div> : null}<Meta t={t} /></div>

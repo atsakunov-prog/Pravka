@@ -462,12 +462,60 @@ svg { flex: none; }
 .day-h.drop { box-shadow: inset 0 -2px 0 var(--accent); }
 
 /* ── Доска ──────────────────────────────────────────────────────────── */
-.board { display: flex; gap: 8px; align-items: flex-start; overflow-x: auto; padding-bottom: 24px; }
-.col { width: 260px; flex: none; }
-.col-h { height: 44px; display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 14px; padding: 0 4px; }
-.col-h .n { color: var(--fg3); font-weight: 400; font-size: 12px; }
-.card { background: var(--raised); border: 1px solid var(--div); border-radius: 10px; padding: 10px; margin-bottom: 8px; cursor: pointer; display: flex; gap: 6px; }
+/* Доска как у Todoist (замер 19.10, окно 1400×900): колонка 286 со скруглением 10, заголовок 14/700 и число 13 серым;
+   карточка 260 — отступ 10, скругление 10, рамка 1 пкс rgba(0,0,0,.12), тень 0 2px 4px rgba(0,0,0,.04), между карточками 10;
+   при переносе карточка наклонена на 2°. */
+.board { display: flex; gap: 0; align-items: flex-start; overflow-x: auto; padding-bottom: 24px; }
+.col { width: 286px; flex: none; padding: 0 13px; border-radius: 10px; }
+.col-h { height: 44px; display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 14px; padding: 0; }
+.col-h .n { color: #808080; font-weight: 400; font-size: 13px; }
+.card { background: var(--raised); border: 1px solid rgba(0, 0, 0, .12); border-radius: 10px; padding: 10px; margin-bottom: 10px; cursor: pointer; display: flex; gap: 6px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, .04); }
 .card:hover { box-shadow: 0 2px 8px rgba(0, 0, 0, .1); }
+.card.tilt { transform: rotate(2deg); }
+.card.dragging { opacity: .4; }
+.card .tdesc { font-size: 12px; color: var(--fg2); }
+/* Календарь как у Todoist (замер 19.10, окно 1400×900): «Октябрь 2026», стрелки и «Сегодня»; шапка дней — сегодня белым на
+   красном круге 14/600; ряд «Весь день»; час — 68 пкс; блоки дел по времени; красная линия «сейчас» с временем у шкалы. */
+.cal-view { margin-top: 4px; }
+.cal-bar { display: flex; align-items: center; justify-content: space-between; height: 40px; margin-bottom: 6px; }
+.cal-bar b { font-size: 16px; font-weight: 700; }
+.cal-nav { display: flex; align-items: center; gap: 4px; }
+.cal-nav .btn { height: 28px; padding: 0 10px; }
+.calw { border: 1px solid var(--div); border-radius: 10px; overflow: hidden; }
+.calw-row { display: grid; }
+.calw-head { border-bottom: 1px solid var(--div); }
+.calw-dh { display: flex; align-items: center; justify-content: center; gap: 6px; height: 44px; font-size: 13px; color: var(--fg2); border-left: 1px solid var(--div); }
+.calw-dh b { font-size: 14px; font-weight: 600; color: var(--fg); min-width: 28px; height: 28px; border-radius: 14px; display: grid; place-items: center; }
+.calw-dh.today b { background: var(--accent-btn); color: #fff; }
+.calw-allday { border-bottom: 1px solid var(--div); min-height: 34px; }
+.calw-gutter { font-size: 11px; color: var(--fg3); padding: 8px 6px 0 0; text-align: right; }
+.calw-ad { border-left: 1px solid var(--div); padding: 3px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.calw-body { max-height: calc(100vh - 290px); min-height: 320px; overflow-y: auto; }
+.calw-scale { position: relative; }
+.calw-scale span { position: absolute; right: 6px; transform: translateY(-50%); font-size: 11px; color: var(--fg3); }
+.calw-scale span.now { color: var(--accent-btn); font-weight: 600; background: var(--bg); z-index: 2; }
+.calw-col { position: relative; border-left: 1px solid var(--div); min-width: 0;
+  background-image: linear-gradient(to bottom, var(--div) 1px, transparent 1px); background-size: 100% 68px; }
+.calw-block { position: absolute; display: block; overflow: hidden; text-align: left; font-size: 12px; line-height: 16px; padding: 2px 6px;
+  border-radius: 6px; background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--p4); color: var(--fg); }
+.calw-block .t, .cal-chip .t { color: var(--fg2); margin-right: 4px; font-variant-numeric: tabular-nums; }
+.calw-block:hover, .cal-chip:hover { background: var(--menu-h); }
+.calw-block.ghost, .cal-chip.ghost { opacity: .55; border-style: dashed; }
+.calw-block.done, .cal-chip.done { text-decoration: line-through; color: var(--fg3); }
+.calw-now { position: absolute; left: 0; right: 0; height: 2px; background: var(--accent-btn); z-index: 3; pointer-events: none; }
+.calw-now::before { content: ""; position: absolute; left: -5px; top: -4px; width: 10px; height: 10px; border-radius: 5px; background: var(--accent-btn); }
+.cal-chip { display: block; width: 100%; text-align: left; font-size: 12px; line-height: 18px; padding: 1px 6px; border-radius: 4px; background: var(--bg2);
+  border-left: 3px solid var(--p4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.calm { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border: 1px solid var(--div); border-radius: 10px; overflow: hidden; }
+.calm-wd { font-size: 12px; color: var(--fg2); text-align: center; padding: 6px 0; border-bottom: 1px solid var(--div); }
+.calm-cell { min-height: 108px; border-top: 1px solid var(--div); border-left: 1px solid var(--div); padding: 4px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.calm-cell:nth-child(7n + 1) { border-left: 0; }
+.calm-cell.out b { color: var(--fg3); }
+.calm-cell b { font-size: 13px; font-weight: 600; width: 24px; height: 24px; border-radius: 12px; display: grid; place-items: center; }
+.calm-cell b.today { background: var(--accent-btn); color: #fff; }
+.calm-cell .more { font-size: 11px; color: var(--fg3); padding-left: 6px; }
+@media (max-width: 750px) { .calw-dh span { display: none; } .calw-block .t { display: none; } .calm-cell { min-height: 72px; } }
 .card .tbody { padding: 0; }
 
 /* ── Колокольчик: «Новое» от автоматики ─────────────────────────────── */

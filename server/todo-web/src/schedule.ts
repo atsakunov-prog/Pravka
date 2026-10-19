@@ -77,6 +77,19 @@ export function nextDue(r: Recur, due: string | null, today: string): string {
   return nxt;
 }
 
+/** Будущие разы повтора после срока и до to включительно — для календаря («Будущие повторы» у Todoist). Шаг — тот же,
+ *  что у сервера; «каждые!» (от выполнения) вперёд не знает, когда выполнят, — их разы считаются от срока. Конец
+ *  повтора (until) соблюдается; не больше limit разов. */
+export function occurrences(r: Recur, due: string, to: string, limit = 400): string[] {
+  const rule = { ...r, n: r.n ?? 1 };
+  const out: string[] = [];
+  for (let d = step(rule, due, due); d <= to && out.length < limit; d = step(rule, d, due)) {
+    if (r.until && d > r.until) break;
+    out.push(d);
+  }
+  return out;
+}
+
 /** Следующий раз после d. anchor — исходный срок: от него число месяца и неделя отсчёта «каждые 2 недели по пн». */
 function step(r: Recur & { n: number }, d: string, anchor: string): string {
   const n = r.n;

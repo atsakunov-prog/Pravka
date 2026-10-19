@@ -6,7 +6,10 @@ import { addDays, mondayOf } from './dates.ts';
 import type { Task } from './types.ts';
 
 export interface ViewOpts {
-  layout?: 'list' | 'board';
+  layout?: 'list' | 'board' | 'calendar';
+  calMode?: '3d' | 'week' | 'month'; // календарь: 3 дня, неделя (с завода), месяц
+  calRepeats?: boolean; // будущие разы повторов
+  calColor?: 'priority' | 'project'; // раскраска блоков
   group?: 'none' | 'date' | 'added' | 'deadline' | 'priority' | 'label' | 'project';
   sort?: 'manual' | 'date' | 'added' | 'deadline' | 'priority' | 'name' | 'project';
   done?: boolean;

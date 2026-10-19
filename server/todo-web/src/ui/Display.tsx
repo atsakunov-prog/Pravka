@@ -87,17 +87,24 @@ export function DisplayMenu({ vkey, opts, board = true, groups = true }: { vkey:
         <>
           <div className="dm-h">Раскладка</div>
           <div style={{ display: 'flex', gap: 6, padding: '4px 8px 8px' }}>
-            {([['list', 'list', 'Список'], ['board', 'board', 'Доска']] as const).map(([v, ic, w]) => (
+            {([['list', 'list', 'Список'], ['board', 'board', 'Доска'], ['calendar', 'calendar', 'Календарь']] as const).map(([v, ic, w]) => (
               <button key={v} className="chip" style={(opts.layout || 'list') === v ? { borderColor: 'var(--accent)', color: 'var(--accent-text)', flex: 1, justifyContent: 'center' } : { flex: 1, justifyContent: 'center' }}
                 onClick={() => set({ layout: v })}><Icon name={ic} size={16} />{w}</button>
             ))}
           </div>
         </>
       ) : null}
+      {opts.layout === 'calendar' ? (
+        <>
+          {sel('Режим', opts.calMode, 'week', [['3d', '3 дня'], ['week', 'Неделя'], ['month', 'Месяц']], (v) => set({ calMode: v }))}
+          <label className="mi" style={{ justifyContent: 'space-between' }}>Будущие повторы<input type="checkbox" checked={!!opts.calRepeats} onChange={(e) => set({ calRepeats: e.target.checked })} /></label>
+          {sel('Раскраска', opts.calColor, 'priority', [['priority', 'По приоритету'], ['project', 'По проекту']], (v) => set({ calColor: v }))}
+        </>
+      ) : null}
       <label className="mi" style={{ justifyContent: 'space-between' }}>Выполненные задачи<input type="checkbox" checked={!!opts.done} onChange={(e) => set({ done: e.target.checked })} /></label>
       <div className="msep" />
       <div className="dm-h">Сортировать</div>
-      {groups ? sel('Группировка', opts.group, 'none', [['none', 'Нет'], ['date', 'По сроку'], ['added', 'По дате добавления'], ['deadline', 'По дедлайну'],
+      {groups && opts.layout !== 'calendar' ? sel('Группировка', opts.group, 'none', [['none', 'Нет'], ['date', 'По сроку'], ['added', 'По дате добавления'], ['deadline', 'По дедлайну'],
         ['priority', 'По приоритету'], ['label', 'По метке'], ['project', 'По проекту']], (v) => set({ group: v })) : null}
       {sel('Сортировка', opts.sort, 'manual', [['manual', 'Вручную'], ['date', 'По сроку'], ['added', 'По дате добавления'], ['deadline', 'По дедлайну'],
         ['priority', 'По приоритету'], ['name', 'По алфавиту'], ['project', 'По проекту']], (v) => set({ sort: v }))}
