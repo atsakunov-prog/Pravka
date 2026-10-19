@@ -362,6 +362,10 @@ svg { flex: none; }
 .mh .r { float: right; color: var(--fg3); font-weight: 400; }
 /* «Отображение»: подписи блоков 13/600, число изменённых настроек у кнопки */
 .dm-h { font-size: 13px; font-weight: 600; padding: 8px 8px 4px; }
+/* «Быстрое добавление»: списки чипов, перетаскиваются */
+.qs-zone { border: 1px dashed var(--border); border-radius: 8px; padding: 4px; min-height: 40px; }
+.qs-row { cursor: grab; }
+.qs-check { flex-direction: row !important; align-items: center; gap: 8px !important; font-weight: 400 !important; color: var(--fg) !important; font-size: 13px !important; }
 .vb-n { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent-soft); color: var(--accent-text); font-size: 11px; font-weight: 600; display: grid; place-items: center; }
 /* Меню задачи — как у Todoist: 252 пкс, скругление 10, мягкая тень; пункт 32, текст 13 (.mi) */
 .pop:has(.task-menu) { width: 252px; min-width: 252px; border-radius: 10px; box-shadow: 0 0 8px rgba(0, 0, 0, .12); }

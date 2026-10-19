@@ -5,7 +5,8 @@ import { uuid } from '../api.ts';
 import { addDays, deadlineWords, dueTone, dueWords, nowHm, shortDate } from '../dates.ts';
 import { dealShort, labelColor, personName, placeName, projectColor } from '../lib.ts';
 import { cutTokens, parseQuick, recurWords, type Parsed, type TokKind } from '../quick.ts';
-import { ops, S, toast } from '../store.ts';
+import { ops, S, toast, todoSettings } from '../store.ts';
+import { visibleChips, type Feature, type QuickPrefs } from '../quickprefs.ts';
 import { T } from '../toastText.ts';
 import { reorder } from './TaskList.tsx';
 import type { Id, Recur } from '../types.ts';
@@ -14,7 +15,7 @@ import { quickCtx } from './ctx.ts';
 import { Icon, PrioFlag } from './icons.tsx';
 import { openPop } from './pop.tsx';
 import { GoalPicker, LabelPicker, PersonPicker, PriorityMenu, ProjectPicker, Scheduler, type DueVal, type Place } from './pickers.tsx';
-import { openDictate, type QuickDefaults } from './state.ts';
+import { openDialog, openDictate, type QuickDefaults } from './state.ts';
 
 interface Manual {
   due?: DueVal;
@@ -66,6 +67,8 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
   const [caret, setCaret] = useState(0);
   const [hi, setHi] = useState(0);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const descRef = useRef<HTMLTextAreaElement>(null);
+  const [descWanted, setDescWanted] = useState(false);
   const ctx = useMemo(() => quickCtx(), []);
   const parsed = useMemo(() => parseQuick(text, ctx), [text, ctx]);
   // Крестик на чипе распознанного (как «Убрать» у Todoist): вырезать его слова из строки — иначе строка распознает снова.
@@ -180,12 +183,16 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickSugg(sugg[Math.min(hi, sugg.length - 1)]); return; }
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+    if (e.key === 'ArrowDown' && !e.shiftKey) { e.preventDefault(); setDescWanted(true); requestAnimationFrame(() => descRef.current?.focus()); }
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); }
   };
 
+  // Настройки быстрого ввода (как у Todoist): порядок и видимость чипов, подписи, описание всегда открыто.
+  const prefs = (todoSettings() as { quick?: QuickPrefs }).quick;
+  const descOpen = prefs?.description_shown !== false || descWanted || !!desc; // иначе — по ↓, как у Todoist
   const chip = (key: string, icon: React.ReactNode, label: string | null, placeholder: string, onClick: (el: HTMLElement) => void, clear?: () => void) => (
-    <button key={key} className={'chip' + (label ? ' set' : '')} onClick={(e) => onClick(e.currentTarget)}>
-      {icon}{label || placeholder}
+    <button key={key} className={'chip' + (label ? ' set' : '')} title={label ? undefined : placeholder} onClick={(e) => onClick(e.currentTarget)}>
+      {icon}{label || (prefs?.labels_shown === false ? null : placeholder)}
       {label && clear ? <span className="x" onClick={(e) => { e.stopPropagation(); clear(); }}><Icon name="x" size={12} /></span> : null}
     </button>
   );
@@ -194,6 +201,33 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
   const placeLabel = place.deal_id ? `${proj?.name || ''} / ${dealShort(place.deal_id)}`
     : proj ? proj.name + (place.section_id ? ' / ' + (S.sections.get(place.section_id)?.name || '') : '') : 'Входящие';
   const whyTask = why ? S.tasks.get(why) : null;
+  const has = (f: Feature) => (f === 'due' ? !!due.due_date : f === 'priority' ? priority < 4 : f === 'deadline' ? !!deadline : f === 'labels' ? labels.length > 0
+    : f === 'person' ? !!person : f === 'why' ? !!why : f === 'now' ? !!now : false);
+  const chips: Record<Feature, () => React.ReactNode> = {
+    project: () => null, // проект — внизу слева, не чипом
+    due: () => (chip('due', <Icon name="calendar" size={16} style={{ color: due.due_date ? `var(--${dueTone(due.due_date, S.today).slice(0)})` : undefined }} />, dueLabel ? dueLabel + (due.recur ? ' ↻' : '') : null, 'Срок',
+          (el) => openPop(el, (close) => <Scheduler value={due} close={close} onPick={(v) => setMan({ ...man, due: v })} />, { cls: 'sched' }),
+          () => { cut('date'); setMan({ ...man, due: { due_date: null, due_time: null, recur: null, due_rule: null } }); })),
+    priority: () => (chip('pr', <PrioFlag p={priority} size={16} />, priority < 4 ? 'P' + priority : null, 'Приоритет',
+          (el) => openPop(el, (close) => <PriorityMenu value={priority} close={close} onPick={(p) => setMan({ ...man, priority: p })} />),
+          () => { cut('priority'); setMan({ ...man, priority: 4 }); })),
+    deadline: () => (chip('dl', <Icon name="deadline" size={16} />, deadline ? deadlineWords(deadline, S.today) : null, 'Дедлайн',
+          (el) => openPop(el, (close) => <Scheduler mode="deadline" dueOf={due.due_date} value={{ due_date: deadline, due_time: null, recur: null, due_rule: null }} close={close}
+            onPick={(v) => setMan({ ...man, deadline: v.due_date })} />, { cls: 'sched' }),
+          () => { cut('deadline'); setMan({ ...man, deadline: null }); })),
+    labels: () => ((labels.length ? labels : [null]).map((l) => chip('lb:' + (l ?? ''), <Icon name="tag" size={16} />, l, 'Метки',
+          (el) => openPop(el, () => <LabelPicker value={labels} onPick={(x) => setMan({ ...man, labels: x })} />),
+          () => { cut('label', l!); setMan({ ...man, labels: labels.filter((x) => x !== l) }); }))),
+    person: () => (chip('ps', <Icon name="user" size={16} />, person ? personName(person) : null, 'Человек',
+          (el) => openPop(el, (close) => <PersonPicker value={person} close={close} onPick={(id) => setMan({ ...man, person_id: id })} />),
+          () => { cut('person'); setMan({ ...man, person_id: null }); })),
+    why: () => (chip('why', <Icon name="target" size={16} />, whyTask ? whyTask.title : null, 'Зачем',
+          (el) => openPop(el, (close) => <GoalPicker value={why} close={close} onPick={(id) => setMan({ ...man, why_id: id })} />),
+          () => setMan({ ...man, why_id: null }))),
+    now: () => (<button key="now" title="Сейчас" className={'chip' + (now ? ' set' : '')} onClick={() => (parsed.now ? cut('now') : setMan({ ...man, now: !now }))} style={now ? { color: 'var(--accent-text)', borderColor: 'var(--accent)' } : undefined}>
+          <Icon name="bolt" size={16} />{now || prefs?.labels_shown !== false ? 'Сейчас' : null}
+        </button>),
+  };
 
   return (
     <div className={'editor' + (inline ? ' inline' : '')} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}>
@@ -201,8 +235,10 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
         <HighlightInput value={text} onChange={(v) => { setText(v); setHi(0); }} parsed={parsed} onKeyDown={onKey} inputRef={ref}
           placeholder={inline ? 'Название задачи' : 'Например: позвонить Ивану завтра в 15 #Альфа p1'}
           onCaret={() => setCaret(ref.current?.selectionStart ?? text.length)} />
-        <textarea className="ed-desc" rows={1} placeholder="Описание" value={desc} onChange={(e) => setDesc(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); } }} />
+        {descOpen ? (
+          <textarea ref={descRef} className="ed-desc" rows={1} placeholder="Описание" value={desc} onChange={(e) => setDesc(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); } }} />
+        ) : null}
         {showSugg ? (
           <div className="pop" style={{ position: 'absolute', left: 8, top: '100%', zIndex: 80 }}>
             {sugg.map((s, i) => (
@@ -214,37 +250,16 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
         ) : null}
       </div>
       <div className="ed-chips">
-        {chip('due', <Icon name="calendar" size={16} style={{ color: due.due_date ? `var(--${dueTone(due.due_date, S.today).slice(0)})` : undefined }} />, dueLabel ? dueLabel + (due.recur ? ' ↻' : '') : null, 'Срок',
-          (el) => openPop(el, (close) => <Scheduler value={due} close={close} onPick={(v) => setMan({ ...man, due: v })} />, { cls: 'sched' }),
-          () => { cut('date'); setMan({ ...man, due: { due_date: null, due_time: null, recur: null, due_rule: null } }); })}
-        {chip('pr', <PrioFlag p={priority} size={16} />, priority < 4 ? 'P' + priority : null, 'Приоритет',
-          (el) => openPop(el, (close) => <PriorityMenu value={priority} close={close} onPick={(p) => setMan({ ...man, priority: p })} />),
-          () => { cut('priority'); setMan({ ...man, priority: 4 }); })}
-        {chip('dl', <Icon name="deadline" size={16} />, deadline ? deadlineWords(deadline, S.today) : null, 'Дедлайн',
-          (el) => openPop(el, (close) => <Scheduler mode="deadline" dueOf={due.due_date} value={{ due_date: deadline, due_time: null, recur: null, due_rule: null }} close={close}
-            onPick={(v) => setMan({ ...man, deadline: v.due_date })} />, { cls: 'sched' }),
-          () => { cut('deadline'); setMan({ ...man, deadline: null }); })}
-        {/* метки — каждая своим чипом, как у Todoist («Убрать метку») */}
-        {(labels.length ? labels : [null]).map((l) => chip('lb:' + (l ?? ''), <Icon name="tag" size={16} />, l, 'Метки',
-          (el) => openPop(el, () => <LabelPicker value={labels} onPick={(x) => setMan({ ...man, labels: x })} />),
-          () => { cut('label', l!); setMan({ ...man, labels: labels.filter((x) => x !== l) }); }))}
-        {chip('ps', <Icon name="user" size={16} />, person ? personName(person) : null, 'Человек',
-          (el) => openPop(el, (close) => <PersonPicker value={person} close={close} onPick={(id) => setMan({ ...man, person_id: id })} />),
-          () => { cut('person'); setMan({ ...man, person_id: null }); })}
-        {chip('why', <Icon name="target" size={16} />, whyTask ? whyTask.title : null, 'Зачем',
-          (el) => openPop(el, (close) => <GoalPicker value={why} close={close} onPick={(id) => setMan({ ...man, why_id: id })} />),
-          () => setMan({ ...man, why_id: null }))}
+        {visibleChips(prefs, text.trim().length > 0, has).map((f) => chips[f]())}
         {remindAt || remindPlace ? (
           <span className="chip set"><Icon name="alarm" size={16} />{remindPlace ? 'напомню: ' + remindPlace : 'напомню ' + (remindDay === S.today ? '' : dueWords(remindDay!, S.today) + ' ') + rw!.time}
             <span className="x" title="Убрать напоминание" onClick={() => cut('remind')}><Icon name="x" size={12} /></span></span>
         ) : null}
-        <button className={'chip' + (now ? ' set' : '')} onClick={() => (parsed.now ? cut('now') : setMan({ ...man, now: !now }))} style={now ? { color: 'var(--accent-text)', borderColor: 'var(--accent)' } : undefined}>
-          <Icon name="bolt" size={16} />Сейчас
-        </button>
       </div>
       <div className="ed-foot">
         <span style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
         <button className="icon-btn sm" title="Надиктовать много задач (Shift+Q)" onClick={() => { onClose(); openDictate(); }}><Icon name="mic" size={18} /></button>
+        <button className="icon-btn sm" title="Настройки быстрого добавления" onClick={() => openDialog('quick')}><Icon name="sliders" size={16} /></button>
         <button className="proj-pick" onClick={(e) => openPop(e.currentTarget, (close) => <ProjectPicker value={place} close={close} onPick={(p) => setMan({ ...man, place: p })} />)}>
           {proj ? <span className="hash" style={{ color: projectColor(proj) }}>#</span> : <Icon name="inbox" size={16} />}
           <span>{placeLabel}</span><Icon name="chevD" size={14} />

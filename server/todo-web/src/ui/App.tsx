@@ -7,6 +7,7 @@ import { LabelPicker, PriorityMenu, ProjectPicker, Scheduler } from './pickers.t
 import { TaskMenu } from './TaskMenu.tsx';
 import { matchCommands, type Cmd } from '../commands.ts';
 import { setDeadline, setDue, setPlace, setPrio } from './acts.ts';
+import { QuickSettingsDialog } from './QuickSettings.tsx';
 import type { Task } from '../types.ts';
 import { GO, globalAct, keyName, taskAct } from '../keys.ts';
 import { search } from '../views.ts';
@@ -72,6 +73,7 @@ function SearchModal({ close }: { close: () => void }) {
     else if (c.id === 'add:project') openDialog('project');
     else if (c.id === 'add:filter') openDialog('filter');
     else if (c.id === 'view:side') toggleSide();
+    else if (c.id === 'set:quick') openDialog('quick');
   };
   // Плоский список для ↑↓ и Enter: проекты, люди, дела, потом команды.
   const items: { key: string; run: () => void }[] = [
@@ -349,6 +351,7 @@ export function App() {
       {searchOpen ? <SearchModal close={() => setSearch(false)} /> : null}
       {UI.dialog?.kind === 'filter' ? <FilterDialog f={UI.dialog.data} close={closeDialog} /> : null}
       {UI.dialog?.kind === 'project' ? <ProjectDialog close={closeDialog} /> : null}
+      {UI.dialog?.kind === 'quick' ? <QuickSettingsDialog close={closeDialog} /> : null}
       {UI.dictate ? <Dictate close={() => openDictate(false)} /> : null}
       <BulkBar />
       <PopHost />

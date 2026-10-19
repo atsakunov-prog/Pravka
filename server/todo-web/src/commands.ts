@@ -3,7 +3,7 @@
 
 export interface Cmd {
   id: string;
-  group: 'Переходы' | 'Добавить' | 'Вид';
+  group: 'Переходы' | 'Добавить' | 'Вид' | 'Настройки';
   label: string;
   keys?: string;
   also?: string; // другие слова для поиска
@@ -22,6 +22,7 @@ export const COMMANDS: Cmd[] = [
   { id: 'add:project', group: 'Добавить', label: 'Добавить проект', also: 'новый' },
   { id: 'add:filter', group: 'Добавить', label: 'Добавить фильтр', also: 'новый' },
   { id: 'view:side', group: 'Вид', label: 'Боковая панель — показать или скрыть', keys: 'M', also: 'меню' },
+  { id: 'set:quick', group: 'Настройки', label: 'Быстрое добавление', also: 'настройки чипы ввод' },
 ];
 
 const low = (s: string) => s.toLowerCase().replace(/ё/g, 'е');
