@@ -68,8 +68,6 @@ class Config:
     phone_url: str = ""
     logs: Path = Path(r"C:\Bot\ZFbot\logs\dela")
     data: Path = Path(r"C:\ProgramData\ZF-Dela")
-    # Мост из Todoist до переезда телефона: токен — забирать новые задачи; пусто — моста нет.
-    todoist_token: str = ""
     # Разбор текста Claude (кнопка рядом с «+»): ключ и xray бота — из России API закрыт.
     anthropic_key: str = ""
     claude_proxy: str = "http://127.0.0.1:11809"
@@ -112,7 +110,6 @@ def load(env_file: str | None = None) -> Config:
         phone_url=get("DELA_PHONE_URL").rstrip("/"),
         logs=Path(get("DELA_LOGS", r"C:\Bot\ZFbot\logs\dela")),
         data=Path(get("DELA_DATA", r"C:\ProgramData\ZF-Dela")),
-        todoist_token=get("DELA_TODOIST_TOKEN"),
         anthropic_key=get("ANTHROPIC_API_KEY"),
         claude_proxy=get("DELA_CLAUDE_PROXY", "http://127.0.0.1:11809"),
         nav=parse_nav(get("DELA_NAV")),

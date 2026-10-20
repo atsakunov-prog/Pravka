@@ -10,6 +10,7 @@ import datetime as dt
 import json
 from types import SimpleNamespace
 
+import pytest
 from starlette.testclient import TestClient
 
 from pravka_dela import api, importer, mcp_tools, tokens
@@ -190,69 +191,36 @@ def test_import_dry_and_apply_idempotent(dela, tmp_path):
         assert k == {"role": "CFO", "aliases": ["Коля", "Николай"]}
 
 
-def test_todoist_bridge_takes_only_new(dela):
-    import httpx
-
-    from pravka_dela import bridge, store
-
-    p = project(dela, "sasha", "Дельта", aliases=["Дельта ООО"])
-    with mcp_tools.db.session(dela, "system", "t") as c:
-        c.execute("INSERT INTO crm.people (name, short, aliases, owner_id) VALUES ('Пётр Сомов', 'Пётр', '{}', 'sasha')")
-    bridge.save_decisions(dela, {"label_people": {"петя": "Пётр"}, "title_people": {}, "personal_project": None,
-                                 "birthdays": {"a3": {"person": "Пётр", "day": 1, "month": 1}}})
-
-    def handler(request):
-        path = request.url.path.rsplit("/", 1)[-1]
-        data = {
-            "projects": [{"id": "pi", "name": "Inbox", "inbox_project": True}, {"id": "pd", "name": "Дельта ООО"}],
-            "tasks": [
-                {"id": "a1", "content": "Пётр: прислать счёт", "project_id": "pd", "labels": ["жду", "петя"],
-                 "priority": 4, "due": {"date": "2026-10-06"}},
-                {"id": "a2", "content": "Купить марки", "project_id": "pi", "labels": ["быстр"], "priority": 1},
-                {"id": "a3", "content": "Поздравить Петра", "project_id": "pi", "labels": [], "priority": 1},
-            ],
-        }[path]
-        return httpx.Response(200, json={"results": data, "next_cursor": None})
-
-    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        data = bridge.fetch("t" * 40, client)
-    assert sorted(bridge.pull_new(dela, data)) == ["Купить марки", "Пётр: прислать счёт"]
-    # Уже перенесённое закрыли в Делах — мост его не воскрешает и не дублирует.
-    tid = importer.sid("task", "todoist", "a1")
-    store.apply_ops(dela, "sasha", [{"op": "task.done", "id": tid}], via="app")
-    assert bridge.pull_new(dela, data) == []
-    with mcp_tools.db.session(dela, "system", "t") as c:
-        t = c.execute("SELECT * FROM tasks.v_tasks WHERE id = %s", (tid,)).fetchone()
-        assert (t["status"], t["project_id"], t["person_short"], t["ball"], t["money"]) == ("done", p, "Пётр", "waiting", "paid")
-        assert c.execute("SELECT estimate_min, project_id FROM tasks.tasks WHERE title = 'Купить марки'").fetchone() == {"estimate_min": 10, "project_id": None}
-
-
-def test_todoist_api_export_feeds_import(tmp_path):
-    import httpx
-
-    from pravka_dela import bridge
-
-    def handler(request):
-        path = request.url.path.rsplit("/", 1)[-1]
-        if path == "comments":
-            return httpx.Response(200, json={"results": [{"id": "c1", "content": "созвонились", "posted_at": "2026-09-06T10:00:00Z"}]})
-        data = {
-            "projects": [{"id": "pi", "name": "Inbox", "inbox_project": True}, {"id": "p1", "name": "Альфа"}],
-            "tasks": [{"id": "a1", "content": "Коля: договор", "project_id": "p1", "labels": ["жду"], "priority": 4,
-                       "due": {"date": "2026-10-06", "is_recurring": False}, "note_count": 1, "added_at": "2026-09-01T10:00:00Z"}],
-            "labels": [{"name": "жду"}],
-        }[path]
-        return httpx.Response(200, json={"results": data, "next_cursor": None})
-
-    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        data = bridge.export("t" * 40, client)
-    assert data["labels"] == ["жду"] and data["comments"][0]["task_id"] == "a1"
+def test_todoist_api_file_feeds_import(tmp_path):
+    """Выгрузка Todoist в форме API v1 (так лежит todoist-api.json на компе с 19.10.2026: метки списком, комментарии
+    отдельно) читается переносом так же, как снимок коннектора. Сам мост и выгрузка из Todoist убраны 20.10.2026 —
+    «мы ничего через тудуист не делаем уже»."""
+    data = {
+        "projects": [{"id": "pi", "name": "Inbox", "inbox_project": True}, {"id": "p1", "name": "Альфа"}],
+        "tasks": [{"id": "a1", "content": "Коля: договор", "project_id": "p1", "labels": ["жду"], "priority": 4,
+                   "due": {"date": "2026-10-06", "is_recurring": False}, "note_count": 1, "added_at": "2026-09-01T10:00:00Z"}],
+        "labels": ["жду"],
+        "comments": [{"id": "c1", "task_id": "a1", "content": "созвонились", "posted_at": "2026-09-06T10:00:00Z"}],
+    }
     f = tmp_path / "api.json"
     f.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     loaded = importer.load_todoist(f)
     t = loaded["tasks"][0]
     assert (t["priority"], t["due"], t["project"]) == ("p1", "2026-10-06", "p1")
     assert loaded["projects"][0]["inbox"] and loaded["comments"][0]["content"] == "созвонились"
+
+
+def test_todoist_bridge_is_gone():
+    """Мост из Todoist убран (20.10.2026): ни модуля, ни токена в настройках, ни команды выгрузки — строка
+    DELA_TODOIST_TOKEN в dela.env ничего не включает."""
+    import importlib.util
+
+    from pravka_dela import __main__ as cli
+
+    assert importlib.util.find_spec("pravka_dela.bridge") is None
+    assert not hasattr(Config(db_url="x"), "todoist_token")
+    with pytest.raises(SystemExit):
+        cli.main(["export-todoist", "--out", "x.json"])
 
 
 def test_todo_page_and_its_offline_worker(dela):
@@ -332,7 +300,7 @@ def test_every_module_compiles_and_cli_parses():
 
     root = pathlib.Path(cli.__file__).parent
     assert compileall.compile_dir(str(root), quiet=1, force=True, legacy=False)
-    for argv in (["migrate", "--help"], ["import", "--help"], ["invite", "--help"], ["export-todoist", "--help"]):
+    for argv in (["migrate", "--help"], ["import", "--help"], ["invite", "--help"]):
         try:
             cli.main(argv)
         except SystemExit as e:

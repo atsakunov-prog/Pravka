@@ -11,8 +11,7 @@
   family   кто в семье для «Где мы» (карта Правки): видит точки семьи и делится своей
   invite   одноразовая ссылка входа в веб для пользователя
   revoke   отозвать токены по имени
-  import   перенос из Todoist, Notion и ленты (сухой прогон по умолчанию)
-  export-todoist  выгрузка Todoist по API (с комментариями) для переноса
+  import   перенос из снимков Todoist, Notion и ленты (сухой прогон по умолчанию)
   svod     Свод: list, get <ключ>, set <ключ> --file (промпты, словарь, правила — одна правда)
   krug-seed  Круг жизни: направления и принципы из файла владельца в Свод, направления проектам
   meetings  встречи: что с разбором; rename [--all | --ref N] — разобрать заново (замки владельца остаются);
@@ -255,18 +254,6 @@ def cmd_serve(args) -> int:
         return 2
     _logging(cfg)
 
-    async def bridge_loop():
-        # До переезда телефона: новые задачи Todoist — в Дела, раз в 10 минут.
-        from . import bridge
-
-        while cfg.todoist_token:
-            try:
-                data = await asyncio.to_thread(bridge.fetch, cfg.todoist_token)
-                await asyncio.to_thread(bridge.pull_new, cfg.db_url, data)
-            except Exception as e:
-                log.warning("мост Todoist: %s", e)
-            await asyncio.sleep(600)
-
     async def chores():
         # Один раз: прежний учёт трат Claude Дел — в книгу строками «до книги» (spend.backfill, 14.10.2026).
         try:
@@ -368,7 +355,7 @@ def cmd_serve(args) -> int:
             api.build(cfg), host=cfg.listen_host, port=cfg.listen_port,
             log_level="info", log_config=None, proxy_headers=False, server_header=False,
         ))
-        await asyncio.gather(server.serve(), chores(), bridge_loop(), krug_loop(), meetings_loop(), spend_loop(),
+        await asyncio.gather(server.serve(), chores(), krug_loop(), meetings_loop(), spend_loop(),
                              capture_loop(), rules_loop())
 
     log.info("Дела: слушаю %s:%d", cfg.listen_host, cfg.listen_port)
@@ -392,20 +379,6 @@ def cmd_import_log(args) -> int:
     out = Path(args.report or "notion-log-report.md")
     out.write_text(text, encoding="utf-8")
     print(f"отчёт: {out}" + ("" if args.apply else " (сухой прогон: база не тронута, --apply — записать)"))
-    return 0
-
-
-def cmd_export_todoist(args) -> int:
-    """Выгрузка Todoist по API в файл — для переноса с комментариями. Токен — из dela.env."""
-    from . import bridge
-
-    cfg = config_mod.load(args.env)
-    if not cfg.todoist_token:
-        print("DELA_TODOIST_TOKEN в dela.env пуст — выгружать нечем")
-        return 1
-    data = bridge.export(cfg.todoist_token)
-    Path(args.out).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"Todoist: проектов {len(data['projects'])}, задач {len(data['tasks'])}, комментариев {len(data['comments'])} — {args.out}")
     return 0
 
 
@@ -728,10 +701,6 @@ def main(argv: list[str] | None = None) -> int:
     il.add_argument("--apply", action="store_true")
     il.add_argument("--report")
     il.set_defaults(fn=cmd_import_log)
-
-    e = sub.add_parser("export-todoist")
-    e.add_argument("--out", required=True)
-    e.set_defaults(fn=cmd_export_todoist)
 
     sv = sub.add_parser("svod", help="Свод: промпты, словарь, правила")
     sv.add_argument("action", choices=["list", "get", "set"])

@@ -19,9 +19,11 @@
        SID restricted: писать может только в свои папки, C:\Bot ей закрыт,
        server.env архива она не видит;
     6. брандмауэр: порт 8102 только от роутера;
-    7. перенос из Todoist, Notion и ленты (если в -Import лежат выгрузки и
-       решения владельца; токен Todoist — по желанию: с ним перенос берёт и
-       комментарии, а мост забирает новые задачи до переезда телефона);
+    7. исторический перенос из снимков Todoist, Notion и ленты — только если в
+       -Import лежат выгрузки и решения владельца, без вопросов; уже
+       перенесённое не трогает. Токена Todoist установщик больше не спрашивает:
+       мост из Todoist убран из кода (20.10.2026, «мы ничего через тудуист не
+       делаем уже»);
     8. запуск, /health, самопроверка; перезапуск архива;
     9. встречи: токен службы и мягкий перезапуск обработчика — задачи из
        разборов поедут в «Новое»; токен бота Ковчега (kovcheg) — напоминания дел
@@ -190,30 +192,19 @@ with psycopg.connect(dsn, autocommit=True) as c:
         Py 'Круг жизни' @('-m', 'pravka_dela', '--env', $DelaEnv, 'krug-seed', '--file', $krugSeed)
     } else { Ok "Круг жизни: файла $krugSeed нет — без засева" }
 
-    Step '5/9 Перенос из Todoist, Notion и ленты'
+    # Исторический перенос (03.10.2026) из снимков на компе: Todoist, Notion, лента. Повтор безвреден — уже
+    # перенесённое не трогается. Токена Todoist не спрашиваем и Todoist не выгружаем: мост убран из кода (20.10.2026,
+    # «мы ничего через тудуист не делаем уже»); строка DELA_TODOIST_TOKEN в dela.env, если осталась, ничего не включает.
+    Step '5/9 Перенос из снимков Todoist, Notion и ленты'
     $decisions = Join-Path $Import 'decisions.json'
-    if (Test-Path -LiteralPath $decisions) {
-        $dela = Read-Env $DelaEnv
-        if (-not $dela['DELA_TODOIST_TOKEN']) {
-            Write-Host '   Токен Todoist (Todoist → Настройки → Интеграции → Разработчик → API-токен).'
-            Write-Host '   С ним перенос возьмёт и комментарии, а новые задачи с телефона будут доезжать в Дела до переезда Правки.'
-            Write-Host '   Просто Enter — перенести по снимку без комментариев, моста не будет (можно запустить скрипт ещё раз).'
-            $sec = Read-Host '   Токен' -AsSecureString
-            $tok = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)).Trim()
-            if ($tok) { Set-EnvLine $DelaEnv 'DELA_TODOIST_TOKEN' $tok; Ok "токен Todoist записан ($($tok.Substring(0, 4))…)" }
-        }
-        $source = Join-Path $Import 'todoist-snapshot.json'
-        if ((Read-Env $DelaEnv)['DELA_TODOIST_TOKEN']) {
-            $api = Join-Path $Import 'todoist-api.json'
-            Py 'выгрузка Todoist' @('-m', 'pravka_dela', '--env', $DelaEnv, 'export-todoist', '--out', $api)
-            $source = $api
-        }
-        Py 'перенос' @('-m', 'pravka_dela', '--env', $DelaEnv, 'import', '--apply', '--todoist', $source,
+    $snapshot  = Join-Path $Import 'todoist-snapshot.json'
+    if ((Test-Path -LiteralPath $decisions) -and (Test-Path -LiteralPath $snapshot)) {
+        Py 'перенос' @('-m', 'pravka_dela', '--env', $DelaEnv, 'import', '--apply', '--todoist', $snapshot,
             '--notion', $Import, '--clients', (Join-Path $Import 'ledger-clients.json'), '--plan', $decisions,
             '--report', (Join-Path $Import 'report-apply.md'))
         Ok "отчёт переноса — $(Join-Path $Import 'report-apply.md')"
     } else {
-        Warn "в $Import нет decisions.json — перенос пропущен"
+        Ok "в $Import нет decisions.json и todoist-snapshot.json — перенос пропущен"
     }
 
     Step '6/9 Служба ZF-Dela'
